@@ -896,8 +896,174 @@ def obtain(path: str, server_command: list[str], log_path: str):
         )
 
 
+# --- AVX-512 off ---------------------------------------------------------------
+#
+# momwire's results must not depend on whether the CPU has AVX-512. Two
+# libraries momwire runs on pick AVX-512 code at run time on a CPU that has
+# it, and both move last bits:
+#
+# * numpy's ufuncs: exp, log, tan, the inverse trig and hyperbolic functions,
+#   log1p / expm1 / log2 / log10 / exp2 and cbrt differ from libm under
+#   AVX-512 (sin, cos, sqrt, hypot and the complex functions do not);
+# * OpenBLAS's DYNAMIC_ARCH builds (numpy's and SciPy's bundled libraries)
+#   select their SkylakeX kernels, which round an LU differently from the
+#   Haswell kernels every AVX2 CPU without AVX-512 runs.
+#
+# AVX-512 buys momwire nothing today (its own builds stop at avx2, and the
+# LU measured no gain), so on an AVX-512 CPU the entry points momwire owns
+# turn both off before anything imports numpy: NPY_DISABLE_CPU_FEATURES names
+# numpy's AVX-512 dispatch targets, and OPENBLAS_CORETYPE=Haswell holds every
+# OpenBLAS in the process to the kernels an AVX2 CPU runs. On a CPU without
+# AVX-512 nothing is set, so nothing there can move; and a value the user
+# exported is never replaced (an empty NPY_DISABLE_CPU_FEATURES, or a named
+# OPENBLAS_CORETYPE, is how to ask for the AVX-512 paths back). Only the
+# process's environment is touched: a library user who imports numpy before
+# momwire has already chosen, and for them the code-level spellings (libm's
+# pow, float_power, ...) remain the guarantee.
+
+NPY_DISABLE_ENV = "NPY_DISABLE_CPU_FEATURES"
+NPY_ENABLE_ENV = "NPY_ENABLE_CPU_FEATURES"
+OPENBLAS_CORETYPE_ENV = "OPENBLAS_CORETYPE"
+OPENBLAS_CORETYPE = "Haswell"
+
+# numpy's AVX-512 dispatch targets, in the two vocabularies its releases have
+# used. A name the installed numpy does not dispatch earns an ImportWarning
+# (ignored by default, an error under `-W error`), so the list is chosen by
+# version: numpy 2.4 regrouped x86 into microarchitecture levels (X86_V4 is
+# AVX-512's), 2.3 added AVX512_SPR to the per-feature list, and anything older
+# dispatches the per-feature names without it.
+_NPY_AVX512_V24 = ("X86_V4", "AVX512_ICL", "AVX512_SPR")
+_NPY_AVX512_V23 = (
+    "AVX512F",
+    "AVX512CD",
+    "AVX512_KNL",
+    "AVX512_KNM",
+    "AVX512_SKX",
+    "AVX512_CLX",
+    "AVX512_CNL",
+    "AVX512_ICL",
+    "AVX512_SPR",
+)
+_NPY_AVX512_OLD = _NPY_AVX512_V23[:-1]
+
+
+def cpu_has_avx512() -> bool:
+    """Whether this CPU (and its OS) runs AVX-512F code, asked without numpy.
+
+    Linux reads the kernel's flags, Windows asks ``IsProcessorFeaturePresent``
+    (``PF_AVX512F_INSTRUCTIONS_AVAILABLE``, 41), macOS ``hw.optional.avx512f``.
+    Anything else, or any failure to ask, is False: the answer only ever adds
+    a pin, so "don't know" must mean "leave the process alone".
+    """
+    import sys
+
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/cpuinfo", encoding="ascii", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("flags"):
+                        return "avx512f" in line.split()
+        except OSError:
+            return False
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(41))
+        except (AttributeError, OSError):
+            return False
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+
+            value = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(value))
+            libc = ctypes.CDLL(None)
+            failed = libc.sysctlbyname(
+                b"hw.optional.avx512f", ctypes.byref(value), ctypes.byref(size), None, 0
+            )
+        except (AttributeError, OSError):
+            return False
+        return failed == 0 and bool(value.value)
+    return False
+
+
+def _numpy_version() -> str | None:
+    """The installed numpy's version, from its metadata: importing numpy
+    would read the very variables this is about to set."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:
+        return None
+    try:
+        return version("numpy")
+    except (PackageNotFoundError, ValueError):
+        return None
+
+
+def numpy_avx512_features(numpy_version: str | None) -> str:
+    """The NPY_DISABLE_CPU_FEATURES value naming every AVX-512 target the
+    given numpy release dispatches; both vocabularies when the version is
+    unknown (a frozen bundle without metadata), which costs only the ignored
+    ImportWarning for the names that release does not know."""
+    parts = []
+    for piece in (numpy_version or "").split(".")[:2]:
+        digits = ""
+        for ch in piece:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        parts.append(int(digits))
+    if len(parts) < 2:
+        names = _NPY_AVX512_V24 + _NPY_AVX512_V23[:-2]
+    elif tuple(parts) >= (2, 4):
+        names = _NPY_AVX512_V24
+    elif tuple(parts) >= (2, 3):
+        names = _NPY_AVX512_V23
+    else:
+        names = _NPY_AVX512_OLD
+    return " ".join(names)
+
+
+def cpu_env(environ=None, *, avx512: bool | None = None) -> dict[str, str]:
+    """The variables :func:`pin_cpu_env` would add to ``environ``: none on a
+    CPU without AVX-512, and never one ``environ`` already has.
+
+    numpy refuses to start when both NPY_DISABLE_CPU_FEATURES and
+    NPY_ENABLE_CPU_FEATURES are set, so a user's ENABLE list is left to
+    speak for itself.
+    """
+    environ = os.environ if environ is None else environ
+    if not (cpu_has_avx512() if avx512 is None else avx512):
+        return {}
+    added = {}
+    if NPY_DISABLE_ENV not in environ and NPY_ENABLE_ENV not in environ:
+        added[NPY_DISABLE_ENV] = numpy_avx512_features(_numpy_version())
+    if OPENBLAS_CORETYPE_ENV not in environ:
+        added[OPENBLAS_CORETYPE_ENV] = OPENBLAS_CORETYPE
+    return added
+
+
+def pin_cpu_env(environ=None) -> dict[str, str]:
+    """Turn AVX-512 off for numpy and OpenBLAS (see the block above), in
+    ``environ`` (default ``os.environ``, so the process and every child it
+    starts read it). Returns what was added. Call it before anything imports
+    numpy; afterwards it reaches only child processes."""
+    environ = os.environ if environ is None else environ
+    added = cpu_env(environ)
+    environ.update(added)
+    return added
+
+
 __all__ = [
     "BUILD_VERSION_MODULE",
+    "NPY_DISABLE_ENV",
+    "NPY_ENABLE_ENV",
+    "OPENBLAS_CORETYPE",
+    "OPENBLAS_CORETYPE_ENV",
     "RENDEZVOUS_HOST",
     "SPAWN_TIMEOUT",
     "SUN_PATH_MAX",
@@ -907,11 +1073,15 @@ __all__ = [
     "address_suffix",
     "bundle_dist_versions",
     "connect",
+    "cpu_env",
+    "cpu_has_avx512",
     "digest",
     "dist_version",
     "filename_basis",
     "momwire_version",
+    "numpy_avx512_features",
     "obtain",
+    "pin_cpu_env",
     "publish_rendezvous",
     "read_rendezvous",
     "runtime_dir",

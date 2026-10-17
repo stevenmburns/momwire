@@ -256,6 +256,20 @@ the Python command serves it. The other formulations stay Python. The
 existing Windows `momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is
 unchanged.
 
+### The same answer with or without AVX-512
+
+numpy and OpenBLAS switch to AVX-512 code on a processor that has it, and
+that code rounds differently in the last bits. momwire's own entry points
+(the `momwire-nec5`/`momwire-nec42`/`momwire-nec2c-shared` commands and the
+servers they start, the Windows drop-in, the Linux razor-2p program and the
+test suite) turn it off on such a processor, by setting
+`NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` before numpy
+loads, so a printout does not depend on which processor wrote it. A value
+you set yourself is left alone, and on a processor without AVX-512 nothing
+is set. A program that imports numpy itself and then momwire has already
+chosen; call `momwire_serve_client.pin_cpu_env()` before importing numpy
+there, or set the two variables in its environment.
+
 ## Test
 
 ```bash

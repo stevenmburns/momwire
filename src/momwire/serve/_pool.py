@@ -90,6 +90,8 @@ import threading
 import time
 from dataclasses import replace
 
+import momwire_serve_client as _mech
+
 # The pool's size override: unset = the automatic cap, ``0`` = no pool (the
 # in-process, one-lock server), ``N`` = at most N workers.
 WORKERS_ENV = "MOMWIRE_SERVE_WORKERS"
@@ -522,12 +524,18 @@ class WorkerPool:
             kwargs = {}
             if sys.platform == "win32":
                 kwargs["creationflags"] = _CREATE_NO_WINDOW
+            # AVX-512 off in the worker before it imports numpy, whatever
+            # started this server (momwire_serve_client.pin_cpu_env): on a CPU
+            # without AVX-512, or with the variables already set, this adds
+            # nothing.
+            env = dict(os.environ if self.env is None else self.env)
+            _mech.pin_cpu_env(env)
             proc = subprocess.Popen(
                 self.command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=self.env,
+                env=env,
                 close_fds=True,
                 **kwargs,
             )

@@ -484,7 +484,13 @@ int run_python(const std::string &home, const std::string &code) {
         VERSION +
         "':\n"
         "    raise SystemExit('momwire-razor2p ' + '" +
-        VERSION + "' + ': the momwire beside it is ' + str(_v))\n";
+        VERSION + "' + ': the momwire beside it is ' + str(_v))\n"
+        // AVX-512 off for the embedded numpy and SciPy, before momwire imports
+        // them: the launcher's own pin (momwire_serve_client.pin_cpu_env).
+        // The static OpenBLAS build_openblas.sh makes carries no AVX-512
+        // kernels at all; the Windows build's release DLL does, and reads
+        // its core type at load, before this line can set one.
+        "getattr(_msc, 'pin_cpu_env', lambda: None)()\n";
     if (py.p_PyRun_SimpleString(check.c_str()) != 0) std::exit(3);
     const std::string startup = env("MW_EXE_PYSTARTUP");
     if (!startup.empty())

@@ -217,6 +217,25 @@ edit is ~12-28 s instead of ~48 s.
 After moving the submodule pointer, assume the built extension is stale and
 rebuild before trusting any local solve.
 
+## AVX-512 is off at every entry point — measure with it off
+
+numpy's ufuncs (exp, log, the inverse trig and hyperbolics, cbrt, ...) and
+OpenBLAS's SkylakeX kernels round differently under AVX-512. On Rocketlake
+they moved 21 of the 108 golden printouts (every one a network deck, BLAS the
+bulk of it). So `momwire_serve_client.pin_cpu_env` sets
+`NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` on an AVX-512 CPU
+(nothing on any other) in the thin clients, the frozen `entry.py`, the pool's
+worker env, the standalone exe's embedded Python, `scripts/golden_printouts.py`
+and `tests/conftest.py`; `standalone/build_openblas.sh` leaves SKYLAKEX out of
+`DYNAMIC_LIST`. With all of that, Rocketlake moves 1 of 108 (the
+`synthetic_ld5_virtual` bspline cancellation crumb).
+
+The trap: a scratch script that imports numpy itself is NOT pinned, so a
+Rocketlake measurement taken with one moves against a Haswell or Skylake one
+for a reason that is not the change under test. Put
+`import momwire_serve_client; momwire_serve_client.pin_cpu_env()` above the
+numpy import, or export the two variables. A `momwire` import does not pin.
+
 ## Quadrature: `n_qp_pair` is not a converged default
 
 `n_qp_pair=4` entered in the first bspline commit ("straight-wire first cut")

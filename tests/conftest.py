@@ -30,7 +30,15 @@ Groups are inert outside xdist: a serial run ignores them entirely.
 import os
 import sys
 
+import momwire_serve_client as _mech
 import pytest as _pytest
+
+# AVX-512 off for the whole session (momwire_serve_client.pin_cpu_env), here
+# at import, before any test module imports numpy, and in `os.environ` so
+# every xdist worker and every subprocess a test starts inherits it: a gate's
+# answer must not depend on whether the box running it has AVX-512. On a CPU
+# without AVX-512 this sets nothing. tests/test_avx512_off.py checks it took.
+_mech.pin_cpu_env()
 
 
 _SOMM_CACHE_TMP: list = []

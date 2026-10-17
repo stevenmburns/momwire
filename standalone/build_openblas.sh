@@ -11,6 +11,20 @@
 # executable's LU is SciPy's to the bit, and the C++ route and the embedded
 # Python both run on it (`sys._mw_host_lapack`).
 #
+# ONE DEPARTURE from SciPy's flags: DYNAMIC_LIST leaves out SKYLAKEX (and so,
+# by OpenBLAS's own fallbacks in driver/others/dynamic.c, COOPERLAKE and
+# SAPPHIRERAPIDS too): on an AVX-512 CPU the library runs its HASWELL kernels,
+# the ones every AVX2 CPU without AVX-512 runs. AVX-512 bought no LU speed
+# here (the 10-12 microbench), and its kernels round differently: on
+# Rocketlake they moved 21 of the 108 golden printouts, every one a network
+# deck. Without SKYLAKEX in the list the library cannot select those kernels
+# by detection or by OPENBLAS_CORETYPE, so the executable's answer does not
+# depend on whether the CPU has AVX-512. On a CPU without AVX-512 nothing
+# changes: the kernels it detects are all still in the list. SciPy's own
+# library (the launcher's) is held to the same kernels by the
+# OPENBLAS_CORETYPE=Haswell `momwire_serve_client.pin_cpu_env` exports on an
+# AVX-512 CPU.
+#
 # Every global symbol the archive defines is then renamed `mwx_<name>`
 # (`objcopy --redefine-syms`, references inside the archive included), so the
 # executable's copy can never bind to, or be bound by, the OpenBLAS builds
@@ -26,7 +40,7 @@ git checkout -q "$COMMIT"
 git clean -qfdx
 CFLAGS="-fvisibility=protected -Wno-uninitialized" make -j"$(nproc)" \
     BUFFERSIZE=20 DYNAMIC_ARCH=1 QUIET_MAKE=1 USE_OPENMP=0 NUM_THREADS=64 \
-    DYNAMIC_LIST="PRESCOTT NEHALEM SANDYBRIDGE HASWELL SKYLAKEX" BINARY=64 \
+    DYNAMIC_LIST="PRESCOTT NEHALEM SANDYBRIDGE HASWELL" BINARY=64 \
     TARGET=PRESCOTT NOFORTRAN=1 NO_SHARED=1 > "$W/build.log" 2>&1
 ARCHIVE=$(ls libopenblas*.a | head -1)
 nm -g --defined-only "$ARCHIVE" 2>/dev/null |
