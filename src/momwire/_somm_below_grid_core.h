@@ -33,8 +33,13 @@ constexpr double SPACING_FILL[3] = {2.0, 8.0, 1.0};
 struct Region {
     double r0 = 0, dr = 0, th0 = 0, dth = 0;  // th in radians
     int64_t n_r = 0, n_th = 0;
+    // `filled`: the region is in the table (`_ensure_for` named it). On a
+    // lazy grid (momwire#1512) that is all it says: `have` (n_r * n_th, C
+    // order) marks the nodes whose values are in, the rest read NaN. An
+    // empty `have` is the eager table's: every node in iff `filled`.
     bool filled = false;
     std::vector<cd> vals;  // (4, n_r, n_th) C order; NaN while unfilled
+    std::vector<uint8_t> have;
 };
 
 struct Key {
@@ -47,6 +52,7 @@ struct Key {
 struct Grid {
     Key key;
     bool blended = false;
+    bool lazy = false;  // exact, with node masks: nodes filled as the census names them
     cd k_m;
     double lam_m = 0, r1_max = 0, r1_cap = 0, r_break = 0, r_near = 0;
     double th_min = 0, th_band_floor_hi = 0, th_band_lo_hi = 0, th_band_hi = 0, th_split = 0;
@@ -79,8 +85,17 @@ class Source {
     // `get_grid_below(eps_t, k2, r1_max, omega, mu, spacing=...)`.
     virtual Grid &get(cd eps_t, double k2, double r1_max, double omega, double mu,
                       const double spacing[3]) = 0;
-    // `grid._ensure_for(mx_r1, mn_th, mx_th)`: every region it names filled.
+    // `grid._ensure_for(mx_r1, mn_th, mx_th)`: every region it names filled
+    // (on a lazy grid: in the table, its nodes still to come).
     virtual void ensure_for(Grid &g, double mx_r1, double mn_th, double mx_th) = 0;
+    // A lazy grid's nodes of `need` (a mask per region, n_r * n_th) that lie
+    // in filled regions, filled; nodes of regions not in the table stay NaN,
+    // as the eager table's whole region does. A grid with no masks has every
+    // node of its filled regions already.
+    virtual void fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need) {
+        static_cast<void>(g);
+        static_cast<void>(need);
+    }
 };
 
 // The process's grid source: nullptr until one is installed (the buried fill

@@ -16,6 +16,7 @@
 #include "_somm_below_grid_core.h"
 #include "_leggauss_table.h"
 #include "_accel_somm_proj_inline.h"
+#include "_somm_proj_core.h"
 
 // MSVC builds every TU /fp:fast (setup.py), which may fuse and reassociate.
 // This TU is numpy's elementwise arithmetic spelled one IEEE operation at a
@@ -1584,7 +1585,9 @@ std::string Front::prepare_compose(int64_t n_qp_sommerfeld) {
     n_qp_rem = remainder_qp(obs_pts.data(), 2 * n, seg_p0.data(), src_r.data(), ns, ground_z,
                             n_qp_sommerfeld, REMAINDER_QP_CAP, REMAINDER_QP_C);
     r1_max = max_image_distance(seg_p0.data(), src_r.data(), ns, ground_z);
-    grid = &somm_core::get_grid(eps_t, k, r1_max, omega, MU);
+    // The lazy view (momwire#1512): its nodes are filled below, once the
+    // census of the windows' reads has named them.
+    grid = &somm_core::get_grid_lazy(eps_t, k, r1_max, omega, MU);
     std::vector<double> xq, wq;
     if (!leggauss(n_qp_rem, xq, wq)) return "remainder-order";
     const size_t q = static_cast<size_t>(n_qp_rem);
@@ -1632,6 +1635,35 @@ std::string Front::prepare_compose(int64_t n_qp_sommerfeld) {
         shape0, nr, nth));
     const std::vector<cd> far = somm_core::far_pack(g);
     somm_proj::set_far(*grid_view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    // Collect, then fill: every window projects path points against the
+    // remainder's source nodes (`field_proj_batch`), so the reads are the
+    // census of the bit-distinct path points against `rem_src` (a read does
+    // not depend on the observer's tangent). The view's nodes they name are
+    // filled before any window runs.
+    std::vector<double> pts;
+    {
+        std::vector<int64_t> first;
+        std::unordered_map<std::string, int64_t> seen;
+        seen.reserve(2 * n);
+        for (size_t o = 0; o < 2 * n; o++) {
+            const std::string key(reinterpret_cast<const char *>(&obs_pts[3 * o]), 3 * sizeof(double));
+            if (seen.emplace(key, static_cast<int64_t>(o)).second)
+                pts.insert(pts.end(), obs_pts.begin() + 3 * o, obs_pts.begin() + 3 * o + 3);
+        }
+    }
+    std::vector<std::vector<uint8_t>> need(n_reg);
+    somm_proj::NodeMarks marks;
+    marks.n_reg = n_reg;
+    for (size_t r = 0; r < n_reg; r++) {
+        need[r].assign(static_cast<size_t>(g.regions[r].n_r * g.regions[r].n_th), 0);
+        marks.m[r] = need[r].data();
+        marks.nR[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_r);
+        marks.nTh[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_th);
+    }
+    somm_core::field_proj_nodes(*grid_view, static_cast<std::ptrdiff_t>(pts.size() / 3),
+                                static_cast<std::ptrdiff_t>(ns * q), pts.data(), rem_src.data(),
+                                ground_z, marks);
+    somm_core::ensure_nodes(g, need);
     return "";
 }
 

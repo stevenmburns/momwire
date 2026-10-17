@@ -47,9 +47,12 @@ void iv_surfaces(cd eps_t, double k2, double omega, double mu, const double *r1,
 // `SommerfeldGridBelow(eps_t, k2, r1_max, omega=, mu=, seed=, spacing=)`;
 // `eager` false is `SommerfeldGridBelowBlended`'s lattice (every region
 // deferred).
+// `lazy` (momwire#1512): the regions `eager` would fill are put in the table
+// with no node filled, and every region carries a node mask; the nodes come
+// from `Source::fill_nodes` as the readers' census names them.
 std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega, double mu,
                                 const double spacing[3], bool eager, const Grid *seed,
-                                uintptr_t cancel_flag);
+                                uintptr_t cancel_flag, bool lazy = false);
 
 // `SommerfeldGridBelow._fill_region(idx)`, exact.
 void fill_region(Grid &g, int idx, uintptr_t cancel_flag);

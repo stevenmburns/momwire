@@ -38,6 +38,7 @@
 
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
+#include "_somm_grid_core.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -330,6 +331,9 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
             somm_core::field_proj_batch(*c.grid, c.n_reg, m_u, s_src, w_pts, w_tans,
                                         c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
                                         proj_.data(), in.cancel_flag, true);
+        if (somm_core::lazy_check())
+            somm_core::check_read(proj_.data(), static_cast<size_t>(m_u * s_src),
+                                  c.proj ? "the below compose window" : "the above compose window");
         reserve(mom_, static_cast<size_t>(m_u * n_seg * 2));
         somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
         reserve(q_, static_cast<size_t>(nb * n));
