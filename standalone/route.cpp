@@ -31,7 +31,7 @@ long long largest_solve(const std::string &latin1_text, bool open_end) {
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
     for (const nec5::Prepared &p : r.prepared)
-        if (p.front) n = std::max<long long>(n, p.front->n_basis);
+        if (nec5::razor_part(p).front) n = std::max<long long>(n, nec5::razor_part(p).front->n_basis);
     return n;
 }
 

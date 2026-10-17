@@ -632,7 +632,7 @@ py::dict razor_front_build(py::dict kw, int64_t chunk_elems) {
 // mesh and the structure counts, and on request the solved coefficients.
 
 py::dict seam_kwargs(const mw::nec5::Prepared &p) {
-    const mw::razor::FrontInputs &in = p.inputs;
+    const mw::razor::FrontInputs &in = mw::nec5::razor_part(p).inputs;
     py::dict kw;
     py::list wires, npe;
     for (size_t w = 0; w < in.wire_points.size(); w++) {
@@ -709,7 +709,8 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
                                      py::make_tuple(pc.points[3], pc.points[4], pc.points[5])));
     for (const auto &g : m.junctions) {
         py::list members;
-        for (const auto &e : g) members.append(end_label(e));
+        for (const auto &e : g)
+            members.append(py::make_tuple(e.first, e.second == mw::nec5::End::start ? "start" : "end"));
         junctions.append(members);
     }
     static const char *spell[] = {"gap", "node", "virtual"};
@@ -811,7 +812,7 @@ py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
         py::dict pd;
         pd["kwargs"] = seam_kwargs(p);
         pd["mesh"] = seam_mesh(p);
-        const mw::razor::Front &f = *p.front;
+        const mw::razor::Front &f = *mw::nec5::razor_part(p).front;
         pd["cols"] = np2(f.cols, f.n_basis, f.n_ports);
         pd["ties"] = ties_list(f);
         if (solve && !p.unsolved) {

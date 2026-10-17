@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
             // A buried deck the fill cannot finish here (no below table)
             // is kept unsolved, its route "declined": never solved.
             if (r.prepared[k].unsolved) continue;
-            const mw::razor::Front &front = *r.prepared[k].front;
+            const mw::razor::Front &front = *mw::nec5::razor_part(r.prepared[k]).front;
             const int64_t n = front.n_basis, m = front.n_ports;
             std::vector<mw::cd> X(static_cast<size_t>(n * m));
             const int info = mw::razor::solve_ports(front, ctx, lp, X.data(), 0);

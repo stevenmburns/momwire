@@ -40,7 +40,6 @@ namespace nec5 {
 
 namespace {
 
-using razor::End;
 
 // An exception Python lets escape: `_shell.main`'s last line of defence
 // reports it as "INTERNAL ERROR IN MOMWIRE ENGINE - <kind>: <message>".
@@ -2143,7 +2142,7 @@ double wire_loss_power(const razor::Front &fr, const std::vector<cd> &coeffs, do
 
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
-    const razor::Front &fr = *p.front;
+    const razor::Front &fr = *razor_part(p).front;
     const PortState st = port_state(deck, p, s, np);
     // `coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)`
     const int64_t nc = p.mesh.n_columns(), ns = static_cast<int64_t>(p.mesh.sites.size());
@@ -3252,7 +3251,7 @@ void check_scope(const Deck &run) { (void)run; }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
              const NumpyLinalg &np) {
-    const razor::Front &front = *p.front;
+    const razor::Front &front = *razor_part(p).front;
     Solved s;
     s.n_basis = front.n_basis;
     s.n_ports = front.n_ports;
@@ -3338,7 +3337,7 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
                         Deck step = a.deck;
                         step.frequency_mhz = a.deck.frequencies_mhz[j];
                         runs.push_back(finish(step, p, sol, np, arrays));
-                        p.front.reset();
+                        razor_part(p).front.reset();
                         solved[static_cast<std::size_t>(o.prepared_index)] = Solved();
                     } else {
                         runs.push_back(finish(a.kind == Answer::multi ? a.runs[j] : a.deck, p,

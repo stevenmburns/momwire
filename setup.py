@@ -388,6 +388,7 @@ _ACCEL_HEADERS = [
     # (scripts/gen_leggauss_header.py), read by the front half.
     "src/momwire/_leggauss_table.h",
     "src/momwire/_nec5_deck_core.h",
+    "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
@@ -515,10 +516,13 @@ _ACCEL_SOURCES = [
     # beyond parsing, and nothing calls them on the default path.
     "src/momwire/_nec5_deck_core.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
-    # The NEC-5 seam's structure half for razor-2p (unit 2b): the scope
-    # ladder, the mesh and the ports, deck -> RazorSolver's arguments,
-    # Python-free; `_accel_razor_solve.cpp` binds it. Its own TU: O(N)
-    # geometry, and nothing calls it on the default path.
+    # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh
+    # and the ports, for any basis (`_nec5_seam_core.cpp`), and razor-2p's
+    # answers to what a basis decides, deck -> RazorSolver's arguments
+    # (`_nec5_razor_seam_core.cpp`, momwire#1517 step 0); Python-free, and
+    # `_accel_razor_solve.cpp` binds them. Their own TUs: O(N) geometry, and
+    # nothing calls them on the default path.
+    "src/momwire/_nec5_seam_core.cpp",
     "src/momwire/_nec5_razor_seam_core.cpp",
     # The run half and the printout writer for razor-2p (unit 3a): deck text
     # to the printout's bytes, Python-free. Nothing binds it yet (the
