@@ -289,6 +289,15 @@ def _both(monkeypatch, seen, kw):
     return ref, py, z_py, solver, cx
 
 
+def _all_lanes_match(got, want) -> bool:
+    """`lanes_match` through a readout's nesting (one array per wire)."""
+    if isinstance(want, (list, tuple)):
+        return len(got) == len(want) and all(
+            _all_lanes_match(g, w) for g, w in zip(got, want, strict=True)
+        )
+    return lanes_match(got, want)
+
+
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_the_front_half_is_the_python_front_half_to_the_bit(monkeypatch, capture, name):
     ctx = razor._cxx_context()
@@ -312,14 +321,16 @@ def test_the_front_half_is_the_python_front_half_to_the_bit(monkeypatch, capture
     # already had the constructor build one (it resolves on the mesh).
     assert fc.differences(solver._cached_geometry, solver._cxx_geom) == []
 
-    if WIN32 and CASES[name].get("ground_model") == "sommerfeld":
+    if WIN32:
         # Windows needs no bit-compatibility: under MSVC's /fp:fast the core's
-        # Sommerfeld fill and the extension's (the same text, other TUs) may
-        # round differently, so there the derived lane tolerance applies.
+        # fill and the extension's (the same text, other TUs) may round
+        # differently -- the Sommerfeld cases since the cores' Sommerfeld
+        # port, the exact-kernel radius steps since the buried port -- so
+        # there the derived lane tolerance applies.
         assert lanes_match(solver._cxx_z, z_py)
         assert lanes_match(cx.coeffs, py.coeffs)
         assert lanes_match(cx.y, py.y)
-        assert lanes_match(
+        assert _all_lanes_match(
             solver.currents_at_knots(cx.coeffs[:, 0]),
             ref.currents_at_knots(py.coeffs[:, 0]),
         )
