@@ -1832,5 +1832,192 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The image term above a ground (momwire#1517 step 3)
+// ---------------------------------------------------------------------------
+void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                      const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
+                      double eps, double mu, const ImageGround &gr, double swept_mem_mb,
+                      const nec5::NumpyLinalg &np) {
+    if (np.dgemm == nullptr || np.dgemv == nullptr || np.ddot == nullptr)
+        throw FrontNotPorted("no real BLAS for the image weights");
+    const int d = fp.degree, nd = d + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> a_row;
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) a_row.push_back(radius_per_wire[w]);
+    Segs real, img;
+    real.l = g.seg_l;
+    real.r = g.seg_r;
+    img.l = g.seg_l;
+    img.r = g.seg_r;
+    for (int64_t s = 0; s < N; s++) {  // `mirror_positions`: 2 * ground_z - z
+        img.l[3 * s + 2] = 2.0 * gr.ground_z - g.seg_l[3 * s + 2];
+        img.r[3 * s + 2] = 2.0 * gr.ground_z - g.seg_r[3 * s + 2];
+    }
+    EK ek;  // `_ek_spec(geom, mirror=True)`: one joint label (momwire#1368)
+    if (fp.extended_kernel) {
+        ek.on = true;
+        ek.group_i.assign(static_cast<size_t>(N), 0);
+        ek.group_j.assign(static_cast<size_t>(N), 0);
+        bool all_eq = true;
+        for (double v : a_row) all_eq = all_eq && v == a_row[0];
+        if (!all_eq) {
+            ek.b_kind = EK::per_col;
+            ek.b_j = a_row;
+        }
+    }
+    // `mirror_tangents(src_t)`: (tx, ty, -tz), and its transpose's strides
+    std::vector<double> mt(g.tangents);
+    for (int64_t s = 0; s < N; s++)
+        for (int c = 0; c < 3; c++) mt[3 * s + c] = g.tangents[3 * s + c] * (c == 2 ? -1.0 : 1.0);
+    // `weights_fn(i0, i1)`: (w_A, w_Phi), (i1 - i0, N) C order
+    const auto weights = [&](int64_t i0, int64_t i1, std::vector<cdouble> &wA, std::vector<cdouble> &wP) {
+        const int64_t m = i1 - i0;
+        std::vector<double> td(static_cast<size_t>(m * N));
+        dmatmul(np, &g.tangents[3 * static_cast<size_t>(i0)], m, 3, 3, 1, mt.data(), N, 1, 3, td.data());
+        wA.resize(td.size());
+        wP.resize(td.size());
+        for (size_t q = 0; q < td.size(); q++) {
+            if (gr.compose) {
+                wA[q] = nec5::replay::np_cmul(gr.c2, cdouble(td[q], 0.0));
+                wP[q] = gr.c2;
+            } else {
+                wA[q] = cdouble(td[q], 0.0);
+                wP[q] = cdouble(1.0, 0.0);
+            }
+        }
+    };
+    nd::array_t<std::complex<double>> Za =
+        borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis), static_cast<nd::ssize_t>(n_basis)});
+    const CI sa = borrow(b.supp_seg, {static_cast<nd::ssize_t>(n_basis), nd});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
+    std::vector<int64_t> all_n(static_cast<size_t>(n_basis));
+    for (int64_t m = 0; m < n_basis; m++) all_n[static_cast<size_t>(m)] = m;
+    const auto touching = [&](int64_t lo, int64_t hi) {
+        std::vector<int64_t> out;
+        for (int64_t m = 0; m < n_basis; m++)
+            for (int q = 0; q < nd; q++) {
+                const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + q)];
+                if (sg >= lo && sg < hi) {
+                    out.push_back(m);
+                    break;
+                }
+            }
+        return out;
+    };
+    const auto assemble = [&](const Block &J, const std::vector<cdouble> &wA, const std::vector<cdouble> &wP,
+                              const std::vector<int64_t> &mi, const std::vector<int64_t> &ni, int64_t i0, int64_t i1,
+                              int64_t j0, int64_t j1) {
+        using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
+        const CC Jw = borrow(J, {nd, nd, static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
+        const CC wa = borrow(wA, {static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
+        const CC wp = borrow(wP, {static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
+        const CI ma = borrow(mi, {static_cast<nd::ssize_t>(mi.size())});
+        const CI na = borrow(ni, {static_cast<nd::ssize_t>(ni.size())});
+        assemble_Z_bspline_weighted_windowed(Jw, sa, pa, wa, wp, ma, na, i0, i1, j0, j1, omega, eps, mu,
+                                             std::complex<double>(-1.0, 0.0), Za, 0, nd::none(), false);
+    };
+    const auto range = [](int64_t lo, int64_t hi) {
+        std::vector<size_t> v;
+        for (int64_t q = lo; q < hi; q++) v.push_back(static_cast<size_t>(q));
+        return v;
+    };
+    // the sweep: `mb_rows(swept_mem_mb, (d+1)^2 N 16 + 2 N 16)`
+    const int64_t row_bytes = static_cast<int64_t>(nd * nd) * N * 16 + 2 * N * 16;
+    int64_t chunk;
+    if (swept_mem_mb == std::floor(swept_mem_mb))
+        chunk = std::max<int64_t>(1, (static_cast<int64_t>(swept_mem_mb) * 1024 * 1024) / row_bytes);
+    else
+        chunk = std::max<int64_t>(
+            1, static_cast<int64_t>(std::floor((swept_mem_mb * 1024 * 1024) / static_cast<double>(row_bytes))));
+    for (int64_t i0 = 0; i0 < N; i0 += chunk) {
+        const int64_t i1 = std::min(i0 + chunk, N);
+        const std::vector<size_t> rows = range(i0, i1);
+        std::vector<double> a_sub(a_row.begin() + i0, a_row.begin() + i1);
+        const Block J = offedge(real.take(rows), img, a_sub, fp.k, d, fp.n_qp_pair, ek_cut(ek, &rows, nullptr),
+                                fp.ladder);
+        std::vector<cdouble> wA, wP;
+        weights(i0, i1, wA, wP);
+        assemble(J, wA, wP, touching(i0, i1), all_n, i0, i1, 0, N);
+    }
+    // the near-image fixup (`_near_image_edge_blocks`), wire order
+    std::vector<double> t01, w01;
+    gl01(fp.n_qp_same_edge, t01, w01);
+    const size_t q = t01.size();
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const WireGeometry &pw = g.per_wire[w];
+        const double a_w = radius_per_wire[w];
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+            const std::vector<double> &arc = pw.edge_arc_edges[e];
+            const double h = g.seg_l[3 * static_cast<size_t>(s0) + 2] - gr.ground_z;
+            const double atol = std::max(a_w, 1e-12);
+            bool flat = true;
+            for (int64_t s = s0; s < s1; s++)
+                for (double z : {g.seg_l[3 * static_cast<size_t>(s) + 2], g.seg_r[3 * static_cast<size_t>(s) + 2]}) {
+                    const double v = z - gr.ground_z;
+                    if (!(std::fabs(v - h) <= atol + 0.0 * std::fabs(h))) flat = false;
+                }
+            if (!flat || h <= 0.0) continue;
+            const double two_h = 2.0 * h;
+            double delta = arc[1] - arc[0];
+            for (size_t i = 1; i + 1 < arc.size(); i++) delta = std::min(delta, arc[i + 1] - arc[i]);
+            if (delta <= 0.5 * two_h) continue;
+            const double a_eff = std::sqrt(a_w * a_w + two_h * two_h);
+            const size_t n = arc.size() - 1;
+            const std::vector<size_t> rows = range(s0, s1);
+            std::vector<double> a_sub(a_row.begin() + s0, a_row.begin() + s1);
+            const Block J_edge = offedge(real.take(rows), img.take(rows), a_sub, fp.k, d, fp.n_qp_pair,
+                                         ek_cut(ek, &rows, &rows), fp.ladder);
+            // `_near_image_analytic_block`: static + reg at a_eff, no EK
+            if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform grazing edge");
+            const double hh = arc[1] - arc[0];
+            const nd::array_t<double> A_st = seg_seg_static_moments_bspline_uniform(hh, a_eff, n, d, 0, 0);
+            std::vector<double> s_q(n * q), u_q(n * q), w_q(n * q);
+            for (size_t i = 0; i < n; i++) {
+                const double hs = arc[i + 1] - arc[i];
+                for (size_t j = 0; j < q; j++) {
+                    s_q[i * q + j] = arc[i] + t01[j] * hs;
+                    u_q[i * q + j] = (t01[j] * hs) * 1.0;
+                    w_q[i * q + j] = (w01[j] * hs) * 1.0;
+                }
+            }
+            const CF sq = borrow(s_q, {static_cast<nd::ssize_t>(n * q)});
+            const nd::array_t<double> R = reg_distance_table(sq, sq, a_eff * a_eff);
+            std::vector<double> wu(static_cast<size_t>(nd) * n * q);
+            for (int p = 0; p < nd; p++)
+                for (size_t i = 0; i < n * q; i++) {
+                    const double u = u_q[i];
+                    const double up = p == 0 ? 1.0 : p == 1 ? u : p == 2 ? u * u : std::pow(u, p);
+                    wu[static_cast<size_t>(p) * n * q + i] = w_q[i] * up;
+                }
+            const CF wua = borrow(wu, {nd, static_cast<nd::ssize_t>(n), static_cast<nd::ssize_t>(q)});
+            const std::vector<double> kv{fp.k};
+            const CF ka = borrow(kv, {1});
+            const CF Rv = CF::borrow(R.buffer());
+            const nd::array_t<std::complex<double>> A_reg = seg_seg_reg_moments_bspline_swept(Rv, wua, ka);
+            Block corr(static_cast<size_t>(nd * nd) * n * n);
+            const double *st = A_st.data();
+            const std::complex<double> *rg = A_reg.data();
+            for (size_t t = 0; t < corr.size(); t++) {
+                const cdouble an(st[t] + rg[t].real(), 0.0 + rg[t].imag());
+                corr[t] = cdouble(an.real() - J_edge[t].real(), an.imag() - J_edge[t].imag());
+            }
+            std::vector<cdouble> wA, wP;
+            weights(s0, s1, wA, wP);
+            std::vector<cdouble> wAs(n * n), wPs(n * n);
+            for (size_t i = 0; i < n; i++)
+                for (size_t j = 0; j < n; j++) {
+                    wAs[i * n + j] = wA[i * static_cast<size_t>(N) + static_cast<size_t>(s0) + j];
+                    wPs[i * n + j] = wP[i * static_cast<size_t>(N) + static_cast<size_t>(s0) + j];
+                }
+            const std::vector<int64_t> e_idx = touching(s0, s1);
+            assemble(corr, wAs, wPs, e_idx, e_idx, s0, s1, s0, s1);
+        }
+    }
+}
+
 }  // namespace bspline
 }  // namespace mw

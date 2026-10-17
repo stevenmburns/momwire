@@ -170,7 +170,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         return b;
     };
     // step 1's scope (momwire#1517): free space; ground is step 3
-    if (in.has_ground) return decline("bspline-ground");
+    // step 3a: a perfect ground; the Sommerfeld composition is step 3b
+    if (in.has_ground && in.ground_eps_given) return decline("bspline-sommerfeld");
     auto fr = std::make_shared<BSplineFront>();
     fr->args = wire_args(in);
     try {
@@ -179,8 +180,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->geom = bspline::build_geometry(fr->args.polylines, fr->args.n_per_edge);
         fr->radii = fr->args.radius;
         if (!fr->args.radius_per_wire) fr->radii.assign(fr->args.polylines.size(), fr->args.radius[0]);
-        fr->basis = bspline::build_basis(fr->geom, fr->args.polylines, fr->args.junctions, fr->radii, false,
-                                         0.0, 2);
+        fr->basis = bspline::build_basis(fr->geom, fr->args.polylines, fr->args.junctions, fr->radii, in.has_ground,
+                                         in.ground_z, 2);
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
         return decline(std::string("bspline-") + e.what());
@@ -221,6 +222,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     fr->omega = (2.0 * 3.141592653589793) * freq;
     fr->k = fr->omega / fr->c;
     fr->extended_kernel = in.extended_kernel;
+    fr->has_ground = in.has_ground;
+    fr->ground_z = in.ground_z;
     part.front = std::move(fr);
     return b;
 }
