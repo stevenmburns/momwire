@@ -1038,6 +1038,14 @@ def main() -> int:
         print(f"ERROR: no such executable: {exe}", file=sys.stderr)
         return 2
 
+    # AVX-512 off for every child this smoke starts, the module side's
+    # `python -m momwire.eznec` above all: the frozen engine pins it itself
+    # (entry.py), and the two sides must answer in one regime to be compared
+    # byte for byte. GitHub's Windows runners can have AVX-512.
+    import momwire_serve_client
+
+    momwire_serve_client.pin_cpu_env()
+
     work = Path("smoke-out")
     work.mkdir(exist_ok=True)
 
