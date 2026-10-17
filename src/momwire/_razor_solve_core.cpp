@@ -203,6 +203,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     auto vt1 = c_view<cd, 2>(t1_.data(), {nb, n});
     const bool compose = image && in.compose;
     if (compose) {
+        STUDY_T("win.assemble_t1_weighted");
         const Compose &c = in.comp;
         assemble_t1_weighted(view<const cd, 2>(vm0), view<const cd, 2>(vm1), in.s_a, in.s_b,
                              in.h_a, in.h_b, in.fall_a, in.fall_b, c.sig_a, c.sig_b,
@@ -212,6 +213,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
                              /* WINDOW_RULE_CONSTANT_MIRROR */ 1, c.eps_t, c.ground_z, c.c2,
                              c_view<const int64_t, 1>(obs_row_.data(), {nb * np}), vt1);
     } else {
+        STUDY_T("win.assemble_t1");
         assemble_t1(view<const cd, 2>(vm0), view<const cd, 2>(vm1), in.s_a, in.s_b, in.h_a,
                     in.h_b, in.fall_a, in.fall_b, row_slice(in.tans, lo * np, hi * np),
                     src.td_a, src.td_b, slice1(in.wts, lo * np, hi * np), in.n_path,
@@ -276,6 +278,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         m0w = c_view<const cd, 2>(m0c_.data(), {n_need, n_seg});
     }
     if (!in.unfused) {
+        STUDY_T("win.t2_rows");
         t2_rows(dst, &t1c, m0w, m0k,
                 c_view<const int64_t, 1>(plus_.data(), {nb}),
                 c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
@@ -283,6 +286,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     } else {
         // T2 alone, then `np.multiply(c_A, t1)`, `np.divide(t2, c_Phi)`,
         // `np.subtract(t1, t2)`, elementwise in that order.
+        STUDY_T("win.t2_rows_unfused+elem");
         t2_rows(dst, nullptr, m0w, m0k,
                 c_view<const int64_t, 1>(plus_.data(), {nb}),
                 c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
@@ -339,6 +343,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         reserve(mom_, static_cast<size_t>(m_u * n_seg * 2));
         somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
         reserve(q_, static_cast<size_t>(nb * n));
+        STUDY_T("win.q_rows+add");
         q_rows(c_view<const cd, 3>(mom_.data(), {m_u, n_seg, 2}),
                c_view<const int64_t, 1>(q_row_.data(), {m_obs}), in.s_a, in.s_b, in.h_a,
                in.h_b, in.fall_a, in.fall_b, c.sig_a, c.sig_b,
@@ -349,6 +354,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         counters.compose_windows++;
     }
     if (image) {
+        STUDY_T("win.image_subtract");
         // `out[lo:hi] -= rows`: one complex subtraction per entry.
         cd *z = z_.data();
         const cd *im = img_.data();
@@ -386,7 +392,7 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
 void SolveContext::fill(const SolveInputs &in) { fill(in, nullptr); }
 
 void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &between) {
-    STUDY_T("razor.fill_part");
+    STUDY_T(in.k_complex ? "razor.fill_part_below" : "razor.fill_part_above");
     const auto t0 = std::chrono::steady_clock::now();
     const ptrdiff_t n = in.s_a.shape(0);
     const char *who = "razor_solve";
