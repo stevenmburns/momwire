@@ -167,11 +167,10 @@ static py::array_t<std::complex<double>> reflected_field_batch_impl(
 }
 
 // The lazy grids' census (momwire#1512): a mask per region (n_r, n_th) of
-// the nodes the reads of `remainder_field_proj_batch` over obs x src take --
-// both of its loops go through `pair_geometry`, `proj_r1_theta` and the
-// address `proj_address` gives (the lanes' `stencil_lanes` is that address
-// lane by lane) -- or, `reflected`, those of `reflected_field_batch` at
-// `points` (E; with magnetic, H's six offset points), likewise.
+// the nodes the reads of `remainder_field_proj_batch` over obs x src take,
+// or those of `reflected_field_batch` at `points` (E; with magnetic, H's six
+// offset points). Both are the cores' own (`somm_core::field_proj_nodes`,
+// `somm_core::reflected_field_nodes`), the one copy the executable runs.
 static std::vector<py::array_t<uint8_t>> census_masks(
     const somm_proj::GridView &G, size_t n_reg, somm_proj::NodeMarks &marks) {
     std::vector<py::array_t<uint8_t>> masks;
@@ -204,19 +203,9 @@ static std::vector<py::array_t<uint8_t>> remainder_field_proj_nodes(
         reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
     somm_proj::NodeMarks marks;
     std::vector<py::array_t<uint8_t>> masks = census_masks(G, reg_vals.size(), marks);
-    const py::ssize_t M = obs.shape(0), S = src.shape(0);
-    const double *o = obs.data(), *sp = src.data();
     py::gil_scoped_release release;
-    for (py::ssize_t m = 0; m < M; ++m)
-        for (py::ssize_t n = 0; n < S; ++n) {
-            double dx, dy, rho, hh, r1, theta, fr, ft;
-            int i0, j0;
-            somm_proj::pair_geometry(ground_z, o[3 * m], o[3 * m + 1], o[3 * m + 2], sp[3 * n],
-                                     sp[3 * n + 1], sp[3 * n + 2], dx, dy, rho, hh);
-            somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
-            const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
-            marks.mark(reg, i0, j0);
-        }
+    somm_core::field_proj_nodes(G, obs.shape(0), src.shape(0), obs.data(), src.data(), ground_z,
+                                marks);
     return masks;
 }
 
