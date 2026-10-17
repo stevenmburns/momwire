@@ -3,6 +3,7 @@
 #include "_nec5_razor_seam_core.h"
 #include "_nec5_bspline_seam_core.h"
 #include "_bspline_front_core.h"
+#include "_bspline_fill_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -1068,6 +1069,25 @@ py::list bspline_front_geometry(py::bytes latin1) {
             py::array_t<cd> Bc({nb, n_p});
             for (size_t q = 0; q < B.size(); q++) Bc.mutable_data()[q] = cd(B[q], 0.0);
             entry["port_cols"] = Bc;
+            // the free-space fill (proto): `_build_J_blocks(geom, k)`
+            if (!in.has_ground) {
+                mw::bspline::FillParams fp;
+                const double c = 1.0 / std::sqrt(8.8541878188e-12 * 1.25663706127e-6);
+                const double freq = c / in.wavelength;
+                const double omega = (2.0 * 3.141592653589793) * freq;
+                fp.k = omega / c;
+                fp.degree = 2;
+                fp.n_qp_pair = 8;
+                fp.ladder = mw::bspline::default_ladder(8);
+                fp.n_qp_same_edge = 4;
+                fp.extended_kernel = in.extended_kernel;
+                const std::vector<std::complex<double>> J = mw::bspline::build_J_blocks(g, radii, fp);
+                py::array_t<cd> Ja({static_cast<ptrdiff_t>(3), static_cast<ptrdiff_t>(3),
+                                    static_cast<ptrdiff_t>(g.n_segs_total),
+                                    static_cast<ptrdiff_t>(g.n_segs_total)});
+                std::copy(J.begin(), J.end(), Ja.mutable_data());
+                entry["J"] = Ja;
+            }
         } catch (const mw::bspline::FrontValueError &e) {
             entry["basis_raised"] = py::make_tuple("ValueError", e.what());
         } catch (const mw::bspline::FrontNotPorted &e) {

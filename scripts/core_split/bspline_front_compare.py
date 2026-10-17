@@ -104,6 +104,16 @@ def main():
                         )
                         d += fc.differences(B, entry["port_cols"], "port_cols")
                         d += fc.differences(kcl_con, entry["basis"][2], "kcl_con")
+                        if "J" in entry:
+                            J = solver._build_J_blocks(geom, solver.k)
+                            dj = fc.differences(J, entry["J"], "J")
+                            if dj and J.shape == entry["J"].shape:
+                                diff = np.argwhere(J != entry["J"])
+                                dj.append(
+                                    f"J: {len(diff)} entries differ, first {diff[0].tolist()}"
+                                )
+                            d += dj
+                            counts["J-compared"] += 1
                         cols, _v = solver._node_gap_columns(_wbg, supp.shape[0])
                         d += fc.differences(
                             cols, entry["node_gap_cols"], "node_gap_cols"
