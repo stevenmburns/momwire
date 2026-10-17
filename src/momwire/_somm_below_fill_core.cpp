@@ -19,13 +19,26 @@
 #include <set>
 #include <sstream>
 #include <tuple>
-#include <unistd.h>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#include <process.h>  // _getpid: MSVC has no <unistd.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace somm_below {
 
 namespace {
+
+// The process id (`os.getpid()` in Python's anchor rotation).
+inline long long this_pid() {
+#if defined(_WIN32)
+    return static_cast<long long>(_getpid());
+#else
+    return static_cast<long long>(getpid());
+#endif
+}
 
 constexpr double PI = 3.141592653589793;
 constexpr double C_LIGHT = 299792458.0;     // `_constants.C_LIGHT`
@@ -925,7 +938,7 @@ class FillSource : public Source {
         const size_t n = plan.rungs.size();
         std::vector<Grid *> out(n, nullptr);
         const double k2 = anchor_k2();
-        const long long start_ll = (static_cast<long long>(getpid()) - plan.n0) % static_cast<long long>(n);
+        const long long start_ll = (static_cast<long long>(this_pid()) - plan.n0) % static_cast<long long>(n);
         const size_t start = static_cast<size_t>(start_ll < 0 ? start_ll + static_cast<long long>(n) : start_ll);
         for (size_t step = 0; step < n; step++) {
             const size_t j = (start + step) % n;
