@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <string>
@@ -223,14 +224,30 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     fr->extended_kernel = in.extended_kernel;
     fr->has_ground = in.has_ground;
     fr->ground_z = in.ground_z;
-    // the Sommerfeld composition (`ground_model="sommerfeld"`): served where
-    // `_remainder_qp_pairs` lists no raised pair (its O(N) short-circuit);
-    // the graded pair correction is not ported
+    // the Sommerfeld composition (`ground_model="sommerfeld"`)
     fr->compose = in.has_ground && in.ground_eps_given;
+    if (fr->compose) {
+        // `_Z_sommerfeld_remainder`'s own check (a ValueError in the fill)
+        double zl = INFINITY, zr = INFINITY;
+        for (int64_t q = 0; q < fr->geom.n_segs_total; q++) {
+            zl = std::min(zl, fr->geom.seg_l[3 * static_cast<size_t>(q) + 2]);
+            zr = std::min(zr, fr->geom.seg_r[3 * static_cast<size_t>(q) + 2]);
+        }
+        const double zmin = std::min(zl, zr) - fr->ground_z;
+        if (zmin < -1e-12) {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "%.3g", zmin);
+            b.kind = Built::raised;
+            b.error_kind = "ValueError";
+            b.message = std::string("ground_model='sommerfeld' requires every wire at or above ground_z (min "
+                                    "height above plane: ") +
+                        buf + ")";
+            return b;
+        }
+    }
     fr->ground_eps_r = in.ground_eps_r;
     fr->ground_sigma = in.ground_sigma;
-    if (fr->compose && !bspline::remainder_pairs_cleared(fr->geom, fr->ground_z, 3))
-        return decline("bspline-sommerfeld-grazing");
+
     part.front = std::move(fr);
     return b;
 }

@@ -83,7 +83,7 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
         // `Z -= remainder.evaluate(supp_seg, polys)`
         if (fr.compose)
             bspline::subtract_sommerfeld_remainder(Z, fr.geom, fr.basis, fr.ground_z, eps_t, fr.k, fr.omega,
-                                                   BSPLINE_MU, 3);
+                                                   BSPLINE_MU, 3, np);
     }
     // `_apply_loading(Z)`: the distributed series loading, last
     if (fr.loading.active()) {

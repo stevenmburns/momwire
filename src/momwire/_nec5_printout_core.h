@@ -331,6 +331,9 @@ cd np_cdiv(cd a, cd b);
 double np_pairwise(const double *a, int64_t n);
 // `a.sum()` of a 1-D complex array.
 cd np_csum(const std::vector<cd> &a);
+// `CDOUBLE_pairwise_sum` over `n` complex values at stride 1: the two real
+// sums a reduction adds to its first element (`np.add.reduceat`).
+void np_cpairwise(const cd *a, int64_t n, double &rr, double &ri);
 // numpy's `interp(x, xp, fp)` over `n` points.
 double np_interp(double x, const double *xp, const double *fp, int64_t n);
 // `np.linspace(a, b, num)` for 3-vectors (`num >= 2`), appended to `out`.

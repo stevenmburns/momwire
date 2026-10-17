@@ -7,6 +7,7 @@
 #include "_exact_kernel_coaxial_core.h"
 #include "_razor_exact_core.h"
 #include "_somm_grid_core.h"
+#include "_somm_pairs_core.h"
 #include "_somm_remainder_core.h"
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
@@ -19,7 +20,9 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <map>
+#include <set>
 #include <stdexcept>
 
 namespace mw {
@@ -408,12 +411,12 @@ void dmatmul(const nec5::NumpyLinalg &np, const double *a, int64_t m, int64_t n,
     const int64_t os_m = p, os_p = 1;  // a fresh C-ordered result
     const bool i1b = blasable(a0, a1, n) || blasable(a1, a0, m);
     const bool i2b = blasable(b0, b1, p) || blasable(b1, b0, n);
-    if (!i1b || !i2b || n == 1) throw FrontNotPorted("a real product numpy does not hand BLAS");
+    if (n == 1) throw FrontNotPorted("a real product numpy does not hand BLAS");
     if (m == 1 && p == 1) {
         out[0] = 0.0 + np.ddot(n, a, a1, b, b0);  // `DOUBLE_dot`: sum += ddot
         return;
     }
-    if (m == 1 && blasable(a1, 1, 1)) {  // vector @ matrix: gemv on b's transpose
+    if (m == 1 && i2b && blasable(a1, 1, 1)) {  // vector @ matrix: gemv on b's transpose
         int order;
         int64_t lda;
         if (blasable(b1, b0, n)) {
@@ -426,7 +429,7 @@ void dmatmul(const nec5::NumpyLinalg &np, const double *a, int64_t m, int64_t n,
         np.dgemv(order, CB_T, n, p, 1.0, b, lda, a, a1, 0.0, out, os_p);
         return;
     }
-    if (p == 1 && blasable(b0, 1, 1)) {  // matrix @ vector
+    if (p == 1 && i1b && blasable(b0, 1, 1)) {  // matrix @ vector
         int order;
         int64_t lda;
         if (blasable(a0, a1, n)) {
@@ -439,7 +442,7 @@ void dmatmul(const nec5::NumpyLinalg &np, const double *a, int64_t m, int64_t n,
         np.dgemv(order, CB_T, n, m, 1.0, a, lda, b, b0, 0.0, out, os_m);
         return;
     }
-    if (m == 1 || p == 1) throw FrontNotPorted("a real product numpy does not hand BLAS");
+    if (m == 1 || p == 1 || !i1b || !i2b) throw FrontNotPorted("a real product numpy does not hand BLAS");
     int t1, t2;
     int64_t lda, ldb;
     if (blasable(a0, a1, n)) {
@@ -2071,9 +2074,861 @@ bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_so
     return static_cast<int64_t>(std::ceil(REMAINDER_GRADED_C * bound)) <= n_qp_sommerfeld;
 }
 
+// ---------------------------------------------------------------------------
+// The Sommerfeld remainder's raised pairs (momwire#1517 step 3c):
+// `_remainder_qp_pairs`, `_remainder_pair_correction` on the graded route
+// (`_remainder_graded.pair_moments`), numpy's arithmetic replayed
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr int64_t REMAINDER_QP_CAP = 192;          // `_REMAINDER_QP_CAP`
+constexpr double REMAINDER_GRADED_EDGE_TOL = 1e-9;  // `_REMAINDER_GRADED_EDGE_TOL`
+constexpr double GRADED_SIGMA = 0.25;               // `_remainder_graded.SIGMA`
+constexpr int64_t GRADED_N_PANEL = 8;               // `N_PANEL`
+constexpr double GRADED_SCALE_FLOOR = 1e-6;         // `SCALE_FLOOR`
+constexpr int64_t PAIR_SCATTER_CHUNK = int64_t(1) << 15;
+
+// numpy's NaN-propagating maximum / minimum, and `np.clip`.
+inline double npmax(double a, double b) { return (a != a) ? a : (b != b) ? b : (a >= b ? a : b); }
+inline double npmin(double a, double b) { return (a != a) ? a : (b != b) ? b : (a <= b ? a : b); }
+inline double npclip(double x, double lo, double hi) { return npmin(npmax(x, lo), hi); }
+// `einsum("ij,ij->i")` over three contiguous components: numpy's two-lane
+// loop, the third term into the first lane (measured: (a0 b0 + a2 b2) + a1 b1),
+// and over two strided ones in order
+inline double edot3(const double *a, const double *b) { return (a[0] * b[0] + a[2] * b[2]) + a[1] * b[1]; }
+inline double edot2(double ax, double ay, double bx, double by) { return (0.0 + ax * bx) + ay * by; }
+inline double vnorm3(double x, double y, double z) { return std::sqrt((x * x + y * y) + z * z); }
+
+struct V3 {
+    double x = 0, y = 0, z = 0;
+};
+
+// `_roots01(a, b, c)`: (task, u) of the real roots in (0, 1)
+void roots01(const std::vector<double> &a, const std::vector<double> &b, const std::vector<double> &c,
+             std::vector<int64_t> &ko, std::vector<double> &uo) {
+    const size_t n = a.size();
+    std::vector<int64_t> kl, kq;
+    std::vector<double> ul, r1, r2;
+    for (size_t i = 0; i < n; i++) {
+        const double scale = (std::fabs(a[i]) + std::fabs(b[i])) + std::fabs(c[i]);
+        const bool lin = std::fabs(a[i]) <= 1e-14 * scale;
+        if (lin) {
+            if (std::fabs(b[i]) > 0.0) {
+                kl.push_back(static_cast<int64_t>(i));
+                ul.push_back(-c[i] / b[i]);
+            }
+            continue;
+        }
+        const double disc = b[i] * b[i] - (4.0 * a[i]) * c[i];
+        if (!(disc >= 0.0)) continue;
+        const double sq = std::sqrt(disc);
+        const double bb = b[i];
+        const double q = -0.5 * (bb + (bb >= 0.0 ? sq : -sq));
+        kq.push_back(static_cast<int64_t>(i));
+        r1.push_back(q / a[i]);
+        r2.push_back(q != 0.0 ? c[i] / q : std::nan(""));
+    }
+    const auto keep = [&](int64_t k, double u) {
+        if (std::isfinite(u) && u > 0.0 && u < 1.0) {
+            ko.push_back(k);
+            uo.push_back(u);
+        }
+    };
+    for (size_t t = 0; t < kl.size(); t++) keep(kl[t], ul[t]);
+    for (size_t t = 0; t < kq.size(); t++) keep(kq[t], r1[t]);
+    for (size_t t = 0; t < kq.size(); t++) keep(kq[t], r2[t]);
+}
+
+struct Lattice {  // `_lattice(grid)`
+    double th_split = 0;
+    std::vector<double> breaks;
+    struct Row {
+        double r0, dr;
+        int64_t n_r;
+        double lo, hi;
+        bool upper;
+    };
+    std::vector<Row> rows;
+};
+
+Lattice lattice_of(const somm_core::Grid &g) {
+    Lattice L;
+    L.th_split = 30.0 * (M_PI / 180.0);  // math.radians(_SOMM_TH_SPLIT_DEG)
+    const double rb = g.r_break, rn = g.r_near, r1 = g.r1_max;
+    const double bounds[3][2] = {{0.0, rb}, {rb, rn}, {rn, r1}};
+    for (size_t idx = 0; idx < g.regions.size(); idx++) {
+        const auto &reg = g.regions[idx];
+        L.rows.push_back({reg.r0, reg.dr, reg.n_r, bounds[idx / 2][0], bounds[idx / 2][1], idx % 2 == 1});
+    }
+    for (double r : {rb, rn})
+        if (0.0 < r && r < r1) L.breaks.push_back(r);
+    return L;
+}
+
+// `_crossings(P, C, D, gz, lattice)`: (task, u) where the pair (P, C + u D)
+// crosses an interpolant seam
+void crossings(const std::vector<V3> &P, const std::vector<V3> &C, const std::vector<V3> &D, double gz,
+               const Lattice &lat, std::vector<int64_t> &task, std::vector<double> &root) {
+    const size_t T = P.size();
+    std::vector<double> h0x(T), h0y(T), hdx(T), hdy(T), c0(T), c1(T), hh0(T), hdd(T), h0d(T);
+    for (size_t i = 0; i < T; i++) {
+        h0x[i] = P[i].x - C[i].x;
+        h0y[i] = P[i].y - C[i].y;
+        hdx[i] = -D[i].x;
+        hdy[i] = -D[i].y;
+        c0[i] = (P[i].z - gz) + (C[i].z - gz);
+        c1[i] = D[i].z;
+        hh0[i] = edot2(h0x[i], h0y[i], h0x[i], h0y[i]);
+        hdd[i] = edot2(hdx[i], hdy[i], hdx[i], hdy[i]);
+        h0d[i] = edot2(h0x[i], h0y[i], hdx[i], hdy[i]);
+    }
+    const double t2 = std::pow(std::tan(lat.th_split), 2.0);
+    {
+        std::vector<double> a(T), b(T), c(T);
+        for (size_t i = 0; i < T; i++) {
+            a[i] = c1[i] * c1[i] - t2 * hdd[i];
+            b[i] = (2.0 * c0[i]) * c1[i] - (2.0 * t2) * h0d[i];
+            c[i] = c0[i] * c0[i] - t2 * hh0[i];
+        }
+        roots01(a, b, c, task, root);
+    }
+    std::vector<double> A(T), Bq(T), C0(T), r_lo(T), r_hi(T);
+    for (size_t i = 0; i < T; i++) {
+        A[i] = hdd[i] + c1[i] * c1[i];
+        Bq[i] = 2.0 * h0d[i] + (2.0 * c0[i]) * c1[i];
+        C0[i] = hh0[i] + c0[i] * c0[i];
+        const double us = npclip(A[i] > 0.0 ? -Bq[i] / (2.0 * A[i]) : 0.0, 0.0, 1.0);
+        const auto r2 = [&](double uu) { return ((A[i] * uu) * uu + Bq[i] * uu) + C0[i]; };
+        r_lo[i] = std::sqrt(npmax(r2(us), 0.0));
+        r_hi[i] = std::sqrt(npmax(npmax(r2(0.0), r2(1.0)), 0.0));
+    }
+    for (double r : lat.breaks) {
+        std::vector<double> c(T);
+        for (size_t i = 0; i < T; i++) c[i] = C0[i] - r * r;
+        roots01(A, Bq, c, task, root);
+    }
+    for (const auto &row : lat.rows) {
+        std::vector<int64_t> own;
+        std::vector<double> kk;
+        for (size_t i = 0; i < T; i++) {
+            const double a_lo = npmax(r_lo[i], row.lo), a_hi = npmin(r_hi[i], row.hi);
+            const double k0 = npmax(std::ceil((a_lo - row.r0) / row.dr), 1.0);
+            const double k1 = npmin(std::floor((a_hi - row.r0) / row.dr), static_cast<double>(row.n_r - 1));
+            const double nn = npmax(k1 - k0 + 1.0, 0.0);
+            const int64_t n = static_cast<int64_t>(nn);
+            for (int64_t t = 0; t < n; t++) {
+                own.push_back(static_cast<int64_t>(i));
+                kk.push_back(k0 + static_cast<double>(t));
+            }
+        }
+        if (own.empty()) continue;
+        std::vector<double> a(own.size()), b(own.size()), c(own.size());
+        for (size_t t = 0; t < own.size(); t++) {
+            const size_t i = static_cast<size_t>(own[t]);
+            const double rr = row.r0 + kk[t] * row.dr;
+            a[t] = A[i];
+            b[t] = Bq[i];
+            c[t] = C0[i] - rr * rr;
+        }
+        std::vector<int64_t> k;
+        std::vector<double> u;
+        roots01(a, b, c, k, u);
+        for (size_t t = 0; t < k.size(); t++) {
+            const size_t i = static_cast<size_t>(own[static_cast<size_t>(k[t])]);
+            const double rho = std::hypot(h0x[i] + u[t] * hdx[i], h0y[i] + u[t] * hdy[i]);
+            const double th = std::atan2(c0[i] + u[t] * c1[i], rho);
+            const bool in_band = row.upper ? (th > lat.th_split) : (th <= lat.th_split);
+            if (in_band) {
+                task.push_back(static_cast<int64_t>(i));
+                root.push_back(u[t]);
+            }
+        }
+    }
+}
+
+// `_panels(task, bp, scale, sigma)`: (owner, x0, x1), stable by owner
+void panels(std::vector<int64_t> task, std::vector<double> bp, std::vector<double> scale,
+            std::vector<int64_t> &own_o, std::vector<double> &x0_o, std::vector<double> &x1_o) {
+    const size_t n = task.size();
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; i++) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t x, size_t y) {
+        if (task[x] != task[y]) return task[x] < task[y];
+        return bp[x] < bp[y];
+    });
+    std::vector<int64_t> t2;
+    std::vector<double> b2, s2;
+    for (size_t r = 0; r < n; r++) {
+        const size_t i = order[r];
+        const bool first = r == 0 || task[i] != task[order[r - 1]] || bp[i] != bp[order[r - 1]];
+        if (first) {
+            t2.push_back(task[i]);
+            b2.push_back(bp[i]);
+            s2.push_back(scale[i]);
+        } else {
+            s2.back() = std::min(s2.back(), scale[i]);  // `np.minimum.reduceat`
+        }
+    }
+    std::vector<double> a, b, da, db, L;
+    std::vector<int64_t> t;
+    for (size_t r = 0; r + 1 < t2.size(); r++) {
+        if (t2[r + 1] != t2[r]) continue;
+        const double len = b2[r + 1] - b2[r];
+        if (!(len > 0.0)) continue;
+        a.push_back(b2[r]);
+        b.push_back(b2[r + 1]);
+        da.push_back(s2[r]);
+        db.push_back(s2[r + 1]);
+        t.push_back(t2[r]);
+        L.push_back(len);
+    }
+    std::vector<double> anchor, direc, length, delta;
+    std::vector<int64_t> owner;
+    const size_t m = L.size();
+    for (size_t i = 0; i < m; i++)
+        if (da[i] >= L[i] && db[i] >= L[i]) {
+            anchor.push_back(a[i]);
+            direc.push_back(1.0);
+            length.push_back(L[i]);
+            delta.push_back(INFINITY);
+            owner.push_back(t[i]);
+        }
+    for (size_t i = 0; i < m; i++)
+        if (!(da[i] >= L[i] && db[i] >= L[i])) {
+            anchor.push_back(a[i]);
+            direc.push_back(1.0);
+            length.push_back(0.5 * L[i]);
+            delta.push_back(da[i]);
+            owner.push_back(t[i]);
+        }
+    for (size_t i = 0; i < m; i++)
+        if (!(da[i] >= L[i] && db[i] >= L[i])) {
+            anchor.push_back(b[i]);
+            direc.push_back(-1.0);
+            length.push_back(0.5 * L[i]);
+            delta.push_back(db[i]);
+            owner.push_back(t[i]);
+        }
+    const double inv_log = std::log(1.0 / GRADED_SIGMA);  // math.log(1.0 / sigma)
+    std::vector<int64_t> own;
+    std::vector<double> x0, x1;
+    for (size_t i = 0; i < anchor.size(); i++) {
+        const int64_t K =
+            delta[i] >= length[i] ? 0 : static_cast<int64_t>(std::ceil(std::log(length[i] / delta[i]) / inv_log));
+        for (int64_t k = 0; k <= K; k++) {
+            const double far = length[i] * std::pow(GRADED_SIGMA, static_cast<double>(k));
+            const double near = k == K ? 0.0 : far * GRADED_SIGMA;
+            const double lo = direc[i] > 0.0 ? near : -far;
+            const double hi = direc[i] > 0.0 ? far : -near;
+            own.push_back(owner[i]);
+            x0.push_back(anchor[i] + lo);
+            x1.push_back(anchor[i] + hi);
+        }
+    }
+    std::vector<size_t> srt(own.size());
+    for (size_t i = 0; i < srt.size(); i++) srt[i] = i;
+    std::stable_sort(srt.begin(), srt.end(), [&](size_t x, size_t y) { return own[x] < own[y]; });
+    own_o.clear();
+    x0_o.clear();
+    x1_o.clear();
+    for (size_t i : srt) {
+        own_o.push_back(own[i]);
+        x0_o.push_back(x0[i]);
+        x1_o.push_back(x1[i]);
+    }
+}
+
+// `_seg_dist(P, A, D)`: (distance, t raw)
+inline double seg_dist(const V3 &P, const V3 &A, const V3 &D, double &traw) {
+    const double d[3] = {D.x, D.y, D.z};
+    const double pa[3] = {P.x - A.x, P.y - A.y, P.z - A.z};
+    const double dd = edot3(d, d);
+    traw = dd > 0.0 ? edot3(pa, d) / dd : 0.0;
+    const double t = npclip(traw, 0.0, 1.0);
+    return vnorm3(P.x - (A.x + t * D.x), P.y - (A.y + t * D.y), P.z - (A.z + t * D.z));
+}
+
+inline V3 mirror(const V3 &p, double gz) { return {p.x, p.y, 2.0 * gz - p.z}; }
+
+struct GradedCtx {
+    const Geometry &g;
+    double gz, k;
+    const somm_proj::GridView &view;
+    Lattice lat;
+    std::vector<double> xg, wg;  // `leggauss(N_PANEL)`
+    int d1;
+    V3 at(const std::vector<double> &a, int64_t s) const {
+        return {a[3 * static_cast<size_t>(s)], a[3 * static_cast<size_t>(s) + 1], a[3 * static_cast<size_t>(s) + 2]};
+    }
+};
+
+// `_inner_moments`: v (n_o, d1) for one block of outer nodes
+void inner_moments(const GradedCtx &c, const std::vector<V3> &obs, const std::vector<V3> &t_obs,
+                   const std::vector<V3> &A_o, const std::vector<V3> &D_o, const std::vector<V3> &t_src,
+                   const std::vector<double> &Lj_o, std::vector<cdouble> &v) {
+    const size_t n_o = obs.size();
+    std::vector<V3> mobs(n_o);
+    std::vector<double> traw(n_o);
+    for (size_t i = 0; i < n_o; i++) {
+        mobs[i] = mirror(obs[i], c.gz);
+        (void)seg_dist(mobs[i], A_o[i], D_o[i], traw[i]);
+    }
+    std::vector<int64_t> kx;
+    std::vector<double> ux;
+    crossings(obs, A_o, D_o, c.gz, c.lat, kx, ux);
+    std::vector<int64_t> tid;
+    std::vector<double> tv;
+    for (size_t i = 0; i < n_o; i++) {
+        tid.push_back(static_cast<int64_t>(i));
+        tv.push_back(0.0);
+    }
+    for (size_t i = 0; i < n_o; i++) {
+        tid.push_back(static_cast<int64_t>(i));
+        tv.push_back(1.0);
+    }
+    for (size_t i = 0; i < n_o; i++)
+        if (traw[i] > 0.0 && traw[i] < 1.0) {
+            tid.push_back(static_cast<int64_t>(i));
+            tv.push_back(traw[i]);
+        }
+    for (size_t t = 0; t < kx.size(); t++) {
+        tid.push_back(kx[t]);
+        tv.push_back(ux[t]);
+    }
+    std::vector<double> scale(tid.size());
+    for (size_t t = 0; t < tid.size(); t++) {
+        const size_t i = static_cast<size_t>(tid[t]);
+        const V3 spt{A_o[i].x + tv[t] * D_o[i].x, A_o[i].y + tv[t] * D_o[i].y, A_o[i].z + tv[t] * D_o[i].z};
+        const double r1 = vnorm3(mobs[i].x - spt.x, mobs[i].y - spt.y, mobs[i].z - spt.z);
+        scale[t] = npmax(r1 / Lj_o[i], GRADED_SCALE_FLOOR);
+    }
+    std::vector<int64_t> p_own;
+    std::vector<double> p0, p1;
+    panels(tid, tv, scale, p_own, p0, p1);
+    // `ptr = np.searchsorted(p_own, np.arange(n_o + 1))`
+    std::vector<int64_t> ptr(n_o + 1);
+    for (size_t m = 0; m <= n_o; m++)
+        ptr[m] = static_cast<int64_t>(std::lower_bound(p_own.begin(), p_own.end(), static_cast<int64_t>(m)) -
+                                      p_own.begin());
+    std::vector<double> ob(3 * n_o), tob(3 * n_o), ao(3 * n_o), dvo(3 * n_o), tso(3 * n_o);
+    for (size_t i = 0; i < n_o; i++) {
+        const V3 *src[5] = {&obs[i], &t_obs[i], &A_o[i], &D_o[i], &t_src[i]};
+        std::vector<double> *dst[5] = {&ob, &tob, &ao, &dvo, &tso};
+        for (int q = 0; q < 5; q++) {
+            (*dst[q])[3 * i] = src[q]->x;
+            (*dst[q])[3 * i + 1] = src[q]->y;
+            (*dst[q])[3 * i + 2] = src[q]->z;
+        }
+    }
+    v.assign(n_o * static_cast<size_t>(c.d1), cdouble(0.0, 0.0));
+    somm_core::remainder_graded_inner(c.view, c.gz, c.k, ob.data(), tob.data(), ao.data(), dvo.data(), tso.data(),
+                                      Lj_o.data(), ptr.data(), static_cast<std::ptrdiff_t>(n_o), p0.data(), p1.data(),
+                                      c.xg.data(), c.wg.data(), static_cast<std::ptrdiff_t>(c.xg.size()), c.d1,
+                                      v.data(), 0);
+}
+
+// `_chunk_moments`: Jf (npair, d1, d1) for pairs (I[n] <= J[n])
+struct ChunkTrace {
+    std::vector<int64_t> o_pair;
+    std::vector<double> s_o, w_o;
+    std::vector<cdouble> v;
+};
+std::vector<cdouble> chunk_moments(const GradedCtx &c, const std::vector<int64_t> &I, const std::vector<int64_t> &J,
+                                   ChunkTrace *trace = nullptr) {
+    const Geometry &g = c.g;
+    const size_t npair = I.size();
+    const int d1 = c.d1;
+    std::vector<V3> oA(npair), oD(npair), sA(npair), sD(npair), mA(npair), mD(npair);
+    std::vector<double> Li(npair), Lj(npair);
+    for (size_t n = 0; n < npair; n++) {
+        const V3 l = c.at(g.seg_l, I[n]), r = c.at(g.seg_r, I[n]);
+        oA[n] = l;
+        oD[n] = {r.x - l.x, r.y - l.y, r.z - l.z};
+        const V3 sl = c.at(g.seg_l, J[n]), sr = c.at(g.seg_r, J[n]);
+        sA[n] = sl;
+        sD[n] = {sr.x - sl.x, sr.y - sl.y, sr.z - sl.z};
+        Li[n] = g.h_per_seg[static_cast<size_t>(I[n])];
+        Lj[n] = g.h_per_seg[static_cast<size_t>(J[n])];
+        mA[n] = mirror(oA[n], c.gz);
+        mD[n] = {oD[n].x, oD[n].y, -oD[n].z};
+    }
+    std::vector<int64_t> pid;
+    std::vector<double> sv;
+    std::vector<uint8_t> kind_seg;
+    std::vector<V3> anchor;
+    const auto add = [&](int64_t p, double s, bool kind, V3 an) {
+        pid.push_back(p);
+        sv.push_back(s);
+        kind_seg.push_back(kind ? 1 : 0);
+        anchor.push_back(an);
+    };
+    for (size_t n = 0; n < npair; n++) add(static_cast<int64_t>(n), 0.0, true, V3{});
+    for (size_t n = 0; n < npair; n++) add(static_cast<int64_t>(n), 1.0, true, V3{});
+    std::vector<double> sdd(npair), t0(npair), alpha(npair);
+    for (size_t n = 0; n < npair; n++) {
+        const double s[3] = {sD[n].x, sD[n].y, sD[n].z};
+        const double w[3] = {mA[n].x - sA[n].x, mA[n].y - sA[n].y, mA[n].z - sA[n].z};
+        const double md[3] = {mD[n].x, mD[n].y, mD[n].z};
+        sdd[n] = edot3(s, s);
+        t0[n] = edot3(w, s) / sdd[n];
+        alpha[n] = edot3(md, s) / sdd[n];
+    }
+    for (double edge : {0.0, 1.0})
+        for (size_t n = 0; n < npair; n++) {
+            const bool moving = std::fabs(alpha[n]) > 1e-12;
+            const double s_e = moving ? (edge - t0[n]) / alpha[n] : -1.0;
+            if (s_e > 0.0 && s_e < 1.0) add(static_cast<int64_t>(n), s_e, true, V3{});
+        }
+    for (size_t n = 0; n < npair; n++) {
+        const double md[3] = {mD[n].x, mD[n].y, mD[n].z};
+        const double s[3] = {sD[n].x, sD[n].y, sD[n].z};
+        const double w0[3] = {mA[n].x - sA[n].x, mA[n].y - sA[n].y, mA[n].z - sA[n].z};
+        const double aa = edot3(md, md), bb = edot3(md, s);
+        const double den = aa * sdd[n] - bb * bb;
+        const bool skew = den > (1e-12 * aa) * sdd[n];
+        const double s_c = skew ? (bb * edot3(s, w0) - sdd[n] * edot3(md, w0)) / den : -1.0;
+        if (s_c > 0.0 && s_c < 1.0) add(static_cast<int64_t>(n), s_c, true, V3{});
+    }
+    for (int e = 0; e < 2; e++) {
+        std::vector<V3> E(npair);
+        for (size_t n = 0; n < npair; n++)
+            E[n] = e == 0 ? sA[n] : V3{sA[n].x + sD[n].x, sA[n].y + sD[n].y, sA[n].z + sD[n].z};
+        std::vector<int64_t> kk;
+        std::vector<double> uu;
+        crossings(E, oA, oD, c.gz, c.lat, kk, uu);
+        for (size_t t = 0; t < kk.size(); t++) add(kk[t], uu[t], false, E[static_cast<size_t>(kk[t])]);
+    }
+    std::vector<double> scale(pid.size());
+    for (size_t t = 0; t < pid.size(); t++) {
+        const size_t n = static_cast<size_t>(pid[t]);
+        const V3 mpt{mA[n].x + sv[t] * mD[n].x, mA[n].y + sv[t] * mD[n].y, mA[n].z + sv[t] * mD[n].z};
+        double tr;
+        const double d_seg = seg_dist(mpt, sA[n], sD[n], tr);
+        const double d_pt = vnorm3(mpt.x - anchor[t].x, mpt.y - anchor[t].y, mpt.z - anchor[t].z);
+        scale[t] = npmax((kind_seg[t] ? d_seg : d_pt) / Li[n], GRADED_SCALE_FLOOR);
+    }
+    std::vector<int64_t> o_pan;
+    std::vector<double> x0, x1;
+    panels(pid, sv, scale, o_pan, x0, x1);
+    // `_nodes`
+    const size_t ng = c.xg.size();
+    std::vector<int64_t> o_pair;
+    std::vector<double> s_o, w_o;
+    for (size_t p = 0; p < o_pan.size(); p++) {
+        const double half = 0.5 * (x1[p] - x0[p]);
+        for (size_t q = 0; q < ng; q++) {
+            o_pair.push_back(o_pan[p]);
+            s_o.push_back(x0[p] + half * (c.xg[q] + 1.0));
+            w_o.push_back(half * c.wg[q]);
+        }
+    }
+    const size_t n_o = o_pair.size();
+    std::vector<V3> obs(n_o), t_obs(n_o), A_o(n_o), D_o(n_o), t_src(n_o);
+    std::vector<double> Lj_o(n_o);
+    for (size_t i = 0; i < n_o; i++) {
+        const size_t n = static_cast<size_t>(o_pair[i]);
+        obs[i] = {oA[n].x + s_o[i] * oD[n].x, oA[n].y + s_o[i] * oD[n].y, oA[n].z + s_o[i] * oD[n].z};
+        t_obs[i] = c.at(g.tangents, I[n]);
+        t_src[i] = c.at(g.tangents, J[n]);
+        A_o[i] = sA[n];
+        D_o[i] = sD[n];
+        Lj_o[i] = Lj[n];
+    }
+    std::vector<cdouble> v(n_o * static_cast<size_t>(d1));
+    for (size_t b0 = 0; b0 < n_o; b0 += 2048) {  // `OUTER_BLOCK`
+        const size_t b1 = std::min(n_o, b0 + 2048);
+        const auto sl = [&](const auto &x) { return std::vector<typename std::decay_t<decltype(x)>::value_type>(x.begin() + b0, x.begin() + b1); };
+        std::vector<cdouble> vb;
+        inner_moments(c, sl(obs), sl(t_obs), sl(A_o), sl(D_o), sl(t_src), sl(Lj_o), vb);
+        std::copy(vb.begin(), vb.end(), v.begin() + static_cast<std::ptrdiff_t>(b0 * static_cast<size_t>(d1)));
+    }
+    if (trace != nullptr) *trace = ChunkTrace{o_pair, s_o, w_o, v};
+    // wo = (li_n * w_o)[:, None] * u_o[:, None] ** powers, then
+    // `np.add.reduceat(wo[:, :, None] * v[:, None, :], starts, axis=0)`: each
+    // entry its pair's first node plus numpy's pairwise sum of the rest
+    std::vector<cdouble> out(npair * static_cast<size_t>(d1 * d1), cdouble(0.0, 0.0));
+    size_t i = 0;
+    std::vector<cdouble> col;
+    while (i < n_o) {
+        size_t e = i + 1;
+        while (e < n_o && o_pair[e] == o_pair[i]) e++;
+        const size_t n = static_cast<size_t>(o_pair[i]);
+        const double li = Li[n];
+        cdouble *dst = &out[n * static_cast<size_t>(d1 * d1)];
+        for (int p = 0; p < d1; p++)
+            for (int P = 0; P < d1; P++) {
+                col.clear();
+                for (size_t r = i; r < e; r++) {
+                    const double u = li * s_o[r];
+                    const double wo = (li * w_o[r]) * std::pow(u, static_cast<double>(p));
+                    col.push_back(nec5::replay::np_cmul(cdouble(wo, 0.0), v[r * static_cast<size_t>(d1) + P]));
+                }
+                cdouble o = col[0];
+                if (col.size() > 1) {
+                    double rr, ri;
+                    nec5::replay::np_cpairwise(col.data() + 1, static_cast<int64_t>(col.size() - 1), rr, ri);
+                    o = cdouble(o.real() + rr, o.imag() + ri);
+                }
+                dst[p * d1 + P] = o;
+            }
+        i = e;
+    }
+    return out;
+}
+
+// `_remainder_graded.pair_moments`: Jf (n, d1, d1) for pairs (I[n], J[n])
+std::vector<cdouble> graded_pair_moments(const GradedCtx &c, const std::vector<int64_t> &I, const std::vector<int64_t> &J) {
+    const size_t n = I.size();
+    const int d1 = c.d1;
+    std::vector<cdouble> out(n * static_cast<size_t>(d1 * d1), cdouble(0.0, 0.0));
+    if (n == 0) return out;
+    int64_t mx = 0;
+    for (size_t t = 0; t < n; t++) mx = std::max(mx, std::max(I[t], J[t]));
+    std::vector<int64_t> key(n);
+    for (size_t t = 0; t < n; t++) key[t] = std::min(I[t], J[t]) * (mx + 1) + std::max(I[t], J[t]);
+    std::vector<int64_t> ukey(key);
+    std::sort(ukey.begin(), ukey.end());
+    ukey.erase(std::unique(ukey.begin(), ukey.end()), ukey.end());
+    std::vector<int64_t> Iu(ukey.size()), Ju(ukey.size());
+    for (size_t t = 0; t < ukey.size(); t++) {
+        Iu[t] = ukey[t] / (mx + 1);
+        Ju[t] = ukey[t] % (mx + 1);
+    }
+    std::vector<cdouble> Jf(ukey.size() * static_cast<size_t>(d1 * d1));
+    for (size_t c0 = 0; c0 < Iu.size(); c0 += 256) {  // `PAIR_CHUNK`
+        const size_t c1 = std::min(Iu.size(), c0 + 256);
+        const std::vector<int64_t> ii(Iu.begin() + c0, Iu.begin() + c1), jj(Ju.begin() + c0, Ju.begin() + c1);
+        const std::vector<cdouble> part = chunk_moments(c, ii, jj);
+        std::copy(part.begin(), part.end(), Jf.begin() + static_cast<std::ptrdiff_t>(c0 * static_cast<size_t>(d1 * d1)));
+    }
+    for (size_t t = 0; t < n; t++) {
+        const size_t u = static_cast<size_t>(std::lower_bound(ukey.begin(), ukey.end(), key[t]) - ukey.begin());
+        const cdouble *src = &Jf[u * static_cast<size_t>(d1 * d1)];
+        cdouble *dst = &out[t * static_cast<size_t>(d1 * d1)];
+        const bool fwd = I[t] <= J[t];
+        for (int p = 0; p < d1; p++)
+            for (int P = 0; P < d1; P++) dst[p * d1 + P] = fwd ? src[p * d1 + P] : src[P * d1 + p];
+    }
+    return out;
+}
+
+// `_remainder_pair_moments(geom, obs_segs, [src], q, grid)[:, 0]`: (no, d1, d1)
+std::vector<cdouble> pair_moments_fixed(const Geometry &g, const somm_proj::GridView &view, double gz, double k,
+                                        int d1, const std::vector<int64_t> &obs_segs, int64_t src, int64_t q) {
+    std::vector<double> xg, wg, tq;
+    if (!razor::leggauss(q, xg, wg)) throw FrontNotPorted("a remainder order past the frozen rules");
+    for (double x : xg) tq.push_back(0.5 * (x + 1.0));
+    const auto side = [&](const std::vector<int64_t> &segs, std::vector<double> &nodes, std::vector<double> &tang,
+                          std::vector<double> &W) {
+        const size_t ns = segs.size();
+        nodes.assign(ns * static_cast<size_t>(q) * 3, 0.0);
+        tang.assign(ns * 3, 0.0);
+        W.assign(static_cast<size_t>(d1) * ns * static_cast<size_t>(q), 0.0);
+        for (size_t i = 0; i < ns; i++) {
+            const size_t s = static_cast<size_t>(segs[i]);
+            const double h = g.h_per_seg[s];
+            for (int cc = 0; cc < 3; cc++) tang[3 * i + cc] = g.tangents[3 * s + cc];
+            for (int64_t j = 0; j < q; j++) {
+                for (int cc = 0; cc < 3; cc++)
+                    nodes[(i * static_cast<size_t>(q) + static_cast<size_t>(j)) * 3 + cc] =
+                        g.seg_l[3 * s + cc] + tq[static_cast<size_t>(j)] * (g.seg_r[3 * s + cc] - g.seg_l[3 * s + cc]);
+                const double u = h * tq[static_cast<size_t>(j)];
+                const double w = (0.5 * h) * wg[static_cast<size_t>(j)];
+                for (int p = 0; p < d1; p++)
+                    W[(static_cast<size_t>(p) * ns + i) * static_cast<size_t>(q) + static_cast<size_t>(j)] =
+                        w * std::pow(u, static_cast<double>(p));
+            }
+        }
+    };
+    std::vector<double> no_, to_, wo_, ns_, ts_, ws_;
+    side(obs_segs, no_, to_, wo_);
+    side({src}, ns_, ts_, ws_);
+    const auto pseudo = [&](size_t n, std::vector<int64_t> &loc, std::vector<double> &poly) {
+        loc.assign(n * static_cast<size_t>(d1) * static_cast<size_t>(d1), 0);
+        poly.assign(n * static_cast<size_t>(d1 * d1 * d1), 0.0);
+        for (size_t s = 0; s < n; s++)
+            for (int p = 0; p < d1; p++) {
+                const size_t m = s * static_cast<size_t>(d1) + static_cast<size_t>(p);
+                for (int a = 0; a < d1; a++) loc[m * static_cast<size_t>(d1) + static_cast<size_t>(a)] = static_cast<int64_t>(s);
+                poly[(m * static_cast<size_t>(d1) + 0) * static_cast<size_t>(d1) + static_cast<size_t>(p)] = 1.0;
+            }
+    };
+    const size_t no = obs_segs.size();
+    std::vector<int64_t> lo_, ls_;
+    std::vector<double> po_, ps_;
+    pseudo(no, lo_, po_);
+    pseudo(1, ls_, ps_);
+    // the binding's `same_array` test: the symmetric route when every pair of
+    // halves is the same bytes
+    const auto same = [](const auto &x, const auto &y) {
+        return x.size() == y.size() && std::memcmp(x.data(), y.data(), x.size() * sizeof(x[0])) == 0;
+    };
+    const bool symmetric = same(no_, ns_) && same(to_, ts_) && same(wo_, ws_) && same(lo_, ls_) && same(po_, ps_);
+    const std::ptrdiff_t nI = static_cast<std::ptrdiff_t>(no) * d1, nJ = d1;
+    std::vector<cdouble> Qb(static_cast<size_t>(nI * nJ));
+    somm_core::remainder_bspline_Q(view, gz, k, no_.data(), to_.data(), wo_.data(), static_cast<std::ptrdiff_t>(no),
+                                   ns_.data(), ts_.data(), ws_.data(), 1, q, d1, lo_.data(), po_.data(), nI, ls_.data(),
+                                   ps_.data(), nJ, symmetric, 0, Qb.data(), 0);
+    // out.reshape(no, d1, 1, d1).transpose(0, 2, 1, 3)[:, 0]
+    std::vector<cdouble> out(no * static_cast<size_t>(d1 * d1));
+    for (size_t o = 0; o < no; o++)
+        for (int p = 0; p < d1; p++)
+            for (int P = 0; P < d1; P++)
+                out[(o * static_cast<size_t>(d1) + static_cast<size_t>(p)) * static_cast<size_t>(d1) + static_cast<size_t>(P)] =
+                    Qb[(o * static_cast<size_t>(d1) + static_cast<size_t>(p)) * static_cast<size_t>(nJ) + static_cast<size_t>(P)];
+    return out;
+}
+
+}  // namespace
+
+// `_quadrature.remainder_qp_pairs` (+ `_remainder_qp_pairs`' symmetrise,
+// dilate and per-pair max): the raised pairs (I, J, Q), sorted by I then J.
+void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const nec5::NumpyLinalg &np,
+                            std::vector<int64_t> &I, std::vector<int64_t> &J, std::vector<int64_t> &Q) {
+    I.clear();
+    J.clear();
+    Q.clear();
+    const int64_t n = g.n_segs_total;
+    if (n == 0) return;
+    if (remainder_pairs_cleared(g, gz, base)) return;
+    std::vector<double> tq, wg;
+    remainder_rule(base, tq, wg);
+    const std::vector<double> obs = remainder_nodes(g, tq);
+    const int64_t nn = static_cast<int64_t>(tq.size());
+    const std::ptrdiff_t M = static_cast<std::ptrdiff_t>(n * nn);
+    std::vector<double> mir_l(3 * static_cast<size_t>(n)), d(3 * static_cast<size_t>(n)), dd(static_cast<size_t>(n)),
+        lengths(static_cast<size_t>(n));
+    for (int64_t s = 0; s < n; s++) {
+        double mr[3];
+        for (int c = 0; c < 3; c++) {
+            mir_l[3 * s + c] = g.seg_l[3 * s + c];
+            mr[c] = g.seg_r[3 * s + c];
+        }
+        mir_l[3 * s + 2] = 2.0 * gz - g.seg_l[3 * s + 2];
+        mr[2] = 2.0 * gz - g.seg_r[3 * s + 2];
+        for (int c = 0; c < 3; c++) d[3 * s + c] = mr[c] - mir_l[3 * s + c];
+        dd[s] = edot3(&d[3 * s], &d[3 * s]);
+        lengths[s] = vnorm3(g.seg_r[3 * s] - g.seg_l[3 * s], g.seg_r[3 * s + 1] - g.seg_l[3 * s + 1],
+                            g.seg_r[3 * s + 2] - g.seg_l[3 * s + 2]);
+    }
+    const double c = REMAINDER_GRADED_C, edge_tol = REMAINDER_GRADED_EDGE_TOL;
+    std::vector<std::vector<somm_core::QpHit>> hits;
+    std::vector<unsigned char> unsure;
+    somm_core::remainder_qp_pairs_scan(obs.data(), M, nn, mir_l.data(), d.data(), dd.data(), lengths.data(), n, base,
+                                       REMAINDER_QP_CAP, c, edge_tol, hits, unsure);
+    std::vector<int64_t> I0, J0, Q0;
+    for (int64_t j = 0; j < n; j++)
+        for (const auto &h : hits[static_cast<size_t>(j)]) {
+            I0.push_back(h.row);
+            J0.push_back(j);
+            Q0.push_back(h.q);
+        }
+    // the numpy body for every source the scan could not decide
+    for (int64_t j = 0; j < n; j++) {
+        if (!unsure[static_cast<size_t>(j)]) continue;
+        if (lengths[j] <= 0.0 || !(dd[j] > 0.0)) continue;
+        std::vector<double> ap(3 * static_cast<size_t>(M)), tr(static_cast<size_t>(M));
+        for (std::ptrdiff_t o = 0; o < M; o++)
+            for (int cc = 0; cc < 3; cc++) ap[3 * o + cc] = obs[3 * o + cc] - mir_l[3 * j + cc];
+        // `ap @ d[j]`: numpy's matrix-vector product
+        dmatmul(np, ap.data(), M, 3, 3, 1, &d[3 * j], 1, 1, 0, tr.data());
+        std::vector<double> rmin(static_cast<size_t>(n), INFINITY);
+        bool any = false;
+        for (std::ptrdiff_t o = 0; o < M; o++) {
+            const double t_raw = tr[o] / dd[j];
+            const bool interior = t_raw > -edge_tol && t_raw < 1.0 + edge_tol;
+            if (!interior) continue;
+            any = true;
+            const double t = npclip(t_raw, 0.0, 1.0);
+            const double dist = vnorm3(obs[3 * o] - (mir_l[3 * j] + t * d[3 * j]),
+                                       obs[3 * o + 1] - (mir_l[3 * j + 1] + t * d[3 * j + 1]),
+                                       obs[3 * o + 2] - (mir_l[3 * j + 2] + t * d[3 * j + 2]));
+            const size_t sg = static_cast<size_t>(o / nn);
+            rmin[sg] = npmin(rmin[sg], dist);
+        }
+        if (!any) continue;
+        for (int64_t s = 0; s < n; s++) {
+            const double r = rmin[static_cast<size_t>(s)];
+            const bool hit = std::isfinite(r);
+            const double ratio = (hit && r > 0.0) ? lengths[j] / r : 0.0;
+            const double need = ratio > 0.0 ? std::ceil(c * ratio) : 0.0;
+            int64_t qv = static_cast<int64_t>(npmin(npmax(need, static_cast<double>(base)), static_cast<double>(REMAINDER_QP_CAP)));
+            if (hit && r <= 0.0) qv = REMAINDER_QP_CAP;
+            if (qv > base) {
+                I0.push_back(s);
+                J0.push_back(j);
+                Q0.push_back(qv);
+            }
+        }
+    }
+    if (I0.empty()) return;
+    // `np.lexsort((J, I))`, then symmetrised
+    std::vector<int64_t> Is(I0), Js(J0), Qs(Q0);
+    Is.insert(Is.end(), J0.begin(), J0.end());
+    Js.insert(Js.end(), I0.begin(), I0.end());
+    Qs.insert(Qs.end(), Q0.begin(), Q0.end());
+    // `_pair_max`: the distinct pairs, sorted by I then J, each its largest Q
+    const auto pair_max = [n](const std::vector<int64_t> &a, const std::vector<int64_t> &b, const std::vector<int64_t> &qv,
+                              std::vector<int64_t> &oa, std::vector<int64_t> &ob, std::vector<int64_t> &oq) {
+        std::map<int64_t, int64_t> m;
+        for (size_t t = 0; t < a.size(); t++) {
+            const int64_t kkey = a[t] * n + b[t];
+            auto it = m.find(kkey);
+            if (it == m.end())
+                m[kkey] = std::max<int64_t>(0, qv[t]);
+            else
+                it->second = std::max(it->second, qv[t]);
+        }
+        oa.clear();
+        ob.clear();
+        oq.clear();
+        for (const auto &kv : m) {
+            oa.push_back(kv.first / n);
+            ob.push_back(kv.first % n);
+            oq.push_back(kv.second);
+        }
+    };
+    // `_segment_touch_lists`: segments sharing an endpoint (within 1e-9 of the longest), each with itself
+    double lmax = 0.0;
+    for (int64_t s = 0; s < n; s++) lmax = std::max(lmax, lengths[s]);
+    const double tol = 1e-9 * std::max(lmax, 1e-300);
+    std::vector<std::set<int64_t>> touch(static_cast<size_t>(n));
+    for (int64_t s = 0; s < n; s++) touch[s].insert(s);
+    {
+        std::vector<std::pair<double, int64_t>> ends;  // by x, sweep
+        for (int64_t s = 0; s < n; s++) {
+            ends.push_back({g.seg_l[3 * s], 2 * s});
+            ends.push_back({g.seg_r[3 * s], 2 * s + 1});
+        }
+        std::sort(ends.begin(), ends.end());
+        const auto pt = [&](int64_t e) {
+            const std::vector<double> &src = (e % 2 == 0) ? g.seg_l : g.seg_r;
+            const int64_t s = e / 2;
+            return V3{src[3 * s], src[3 * s + 1], src[3 * s + 2]};
+        };
+        for (size_t a = 0; a < ends.size(); a++)
+            for (size_t b = a + 1; b < ends.size() && ends[b].first - ends[a].first <= tol; b++) {
+                const V3 p = pt(ends[a].second), q2 = pt(ends[b].second);
+                const double dx = p.x - q2.x, dy = p.y - q2.y, dz = p.z - q2.z;
+                if (std::sqrt((dx * dx + dy * dy) + dz * dz) <= tol) {
+                    const int64_t sa = ends[a].second / 2, sb = ends[b].second / 2;
+                    if (sa != sb) {
+                        touch[sa].insert(sb);
+                        touch[sb].insert(sa);
+                    }
+                }
+            }
+    }
+    // dilate: rows, then columns (`_csr_expand` + `_pair_max` each)
+    std::vector<int64_t> a1, b1, q1;
+    {
+        std::vector<int64_t> ea, eb, eq;
+        for (size_t t = 0; t < Is.size(); t++)
+            for (int64_t m : touch[Is[t]]) {
+                ea.push_back(m);
+                eb.push_back(Js[t]);
+                eq.push_back(Qs[t]);
+            }
+        pair_max(ea, eb, eq, a1, b1, q1);
+    }
+    {
+        std::vector<int64_t> ea, eb, eq;
+        for (size_t t = 0; t < a1.size(); t++)
+            for (int64_t m : touch[b1[t]]) {
+                ea.push_back(a1[t]);
+                eb.push_back(m);
+                eq.push_back(q1[t]);
+            }
+        pair_max(ea, eb, eq, I, J, Q);
+    }
+}
+
+// `_remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)` on the
+// graded route: Q += P (Jf_graded - Jf_base) P over each pair's wings
+void remainder_pair_correction(std::vector<cdouble> &Qm, const Geometry &g, const Basis &b, double gz, double k,
+                               const somm_proj::GridView &view, const somm_core::Grid &grid,
+                               const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
+                               const nec5::NumpyLinalg &np) {
+    const int d1 = b.degree + 1;
+    const int64_t n_seg = g.n_segs_total, n_basis = b.n_basis;
+    GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+    if (!razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg)) throw FrontNotPorted("no graded rule");
+    std::vector<cdouble> dJ = graded_pair_moments(ctx, I, J);
+    // runs by J (stable), each against the base order
+    std::vector<size_t> grp(I.size());
+    for (size_t t = 0; t < grp.size(); t++) grp[t] = t;
+    std::stable_sort(grp.begin(), grp.end(), [&](size_t x, size_t y) { return J[x] < J[y]; });
+    const size_t dd2 = static_cast<size_t>(d1 * d1);
+    for (size_t r0 = 0; r0 < grp.size();) {
+        size_t r1 = r0 + 1;
+        while (r1 < grp.size() && J[grp[r1]] == J[grp[r0]]) r1++;
+        std::vector<int64_t> obs;
+        for (size_t t = r0; t < r1; t++) obs.push_back(I[grp[t]]);
+        const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], base);
+        for (size_t t = r0; t < r1; t++)
+            for (size_t e = 0; e < dd2; e++) {
+                cdouble &x = dJ[grp[t] * dd2 + e];
+                x = nec5::replay::c_sub(x, lo[(t - r0) * dd2 + e]);
+            }
+        r0 = r1;
+    }
+    // `_segment_wing_table`: per segment its real wings (flat basis*d1+wing)
+    std::vector<std::vector<int64_t>> wings(static_cast<size_t>(n_seg));
+    for (int64_t m = 0; m < n_basis; m++)
+        for (int a = 0; a < d1; a++) {
+            bool real = false;
+            for (int p = 0; p < d1; p++) real = real || b.polys[static_cast<size_t>((m * d1 + a) * d1 + p)] != 0.0;
+            if (real) wings[static_cast<size_t>(b.supp_seg[static_cast<size_t>(m * d1 + a)])].push_back(m * d1 + a);
+        }
+    size_t width = 0;
+    for (const auto &w : wings) width = std::max(width, w.size());
+    // pw[s, x, p]: polys[m_of, a_of, p] * valid (a padded slot: polys[0, 0, p] * 0)
+    const auto pw = [&](int64_t s, size_t x, int p) {
+        const auto &w = wings[static_cast<size_t>(s)];
+        if (x < w.size()) return b.polys[static_cast<size_t>(w[x] * d1 + p)] * 1.0;
+        return b.polys[static_cast<size_t>(p)] * 0.0;
+    };
+    const auto m_of = [&](int64_t s, size_t x) -> int64_t {
+        const auto &w = wings[static_cast<size_t>(s)];
+        return x < w.size() ? w[x] / d1 : 0;
+    };
+    const size_t W = width;
+    for (size_t c0 = 0; c0 < I.size(); c0 += static_cast<size_t>(PAIR_SCATTER_CHUNK)) {
+        const size_t c1 = std::min(I.size(), c0 + static_cast<size_t>(PAIR_SCATTER_CHUNK));
+        // contrib = einsum("kup,kpP,kvP->kuv", pw[I], dJ, pw[J]), as numpy's
+        // bmm path runs it: T = dJ^T-view @ pwI^T (numpy's matmul per batch),
+        // then T-view @ pwJ^T
+        for (size_t kk = c0; kk < c1; kk++) {
+            const int64_t si = I[kk], sj = J[kk];
+            std::vector<cdouble> bI(static_cast<size_t>(d1) * W), bJ(static_cast<size_t>(d1) * W);
+            for (int p = 0; p < d1; p++)
+                for (size_t x = 0; x < W; x++) {
+                    bI[static_cast<size_t>(p) * W + x] = cdouble(pw(si, x, p), 0.0);
+                    bJ[static_cast<size_t>(p) * W + x] = cdouble(pw(sj, x, p), 0.0);
+                }
+            const cdouble *dk = &dJ[kk * dd2];
+            std::vector<cdouble> T(static_cast<size_t>(d1) * W);  // (P, u) C order
+            nec5::replay::np_matmul(np, nec5::Op{dk, d1, d1, 1, d1}, nec5::Op{bI.data(), d1, static_cast<int64_t>(W), static_cast<int64_t>(W), 1},
+                                    T.data(), static_cast<int64_t>(W), 1);
+            std::vector<cdouble> out(W * W);
+            nec5::replay::np_matmul(np, nec5::Op{T.data(), static_cast<int64_t>(W), d1, 1, static_cast<int64_t>(W)},
+                                    nec5::Op{bJ.data(), d1, static_cast<int64_t>(W), static_cast<int64_t>(W), 1}, out.data(),
+                                    static_cast<int64_t>(W), 1);
+            const auto &wi = wings[static_cast<size_t>(si)];
+            const auto &wj = wings[static_cast<size_t>(sj)];
+            for (size_t u = 0; u < W; u++)
+                for (size_t v = 0; v < W; v++) {
+                    if (u >= wi.size() || v >= wj.size()) continue;  // keep: both wings real
+                    cdouble &qq = Qm[static_cast<size_t>(m_of(si, u) * n_basis + m_of(sj, v))];
+                    qq = nec5::replay::c_add(qq, out[u * W + v]);
+                }
+        }
+    }
+}
+
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                                    double ground_z, cdouble eps_t, double k, double omega, double mu,
-                                   int64_t n_qp_sommerfeld) {
+                                   int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np) {
     const int nd = b.degree + 1;
     const int64_t N = g.n_segs_total, n_basis = b.n_basis;
     std::vector<double> tq, wg;
@@ -2114,11 +2969,81 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
                                                           r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
     const std::vector<cdouble> far = somm_core::far_pack(G0);
     somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    // `_remainder_qp_pairs`: the pairs raised above the base order
+    std::vector<int64_t> pI, pJ, pQ;
+    remainder_raised_pairs(g, ground_z, n_qp_sommerfeld, np, pI, pJ, pQ);
     std::vector<cdouble> Q(static_cast<size_t>(n_basis * n_basis));
     somm_core::remainder_bspline_Q(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, nodes.data(),
                                    g.tangents.data(), W.data(), N, q, nd, b.supp_seg.data(), b.polys.data(),
                                    n_basis, b.supp_seg.data(), b.polys.data(), n_basis, true, 0, Q.data(), 0);
+    if (!pI.empty()) remainder_pair_correction(Q, g, b, ground_z, k, view, G0, pI, pJ, n_qp_sommerfeld, np);
     for (size_t t = 0; t < Z.size(); t++) Z[t] = cdouble(Z[t].real() - Q[t].real(), Z[t].imag() - Q[t].imag());
+}
+
+void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,
+                      int64_t j, std::vector<int64_t> &o_pair, std::vector<double> &s_o, std::vector<double> &w_o,
+                      std::vector<cdouble> &v) {
+    const size_t n_reg = grid.regions.size();
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cdouble *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = grid.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    somm_proj::GridView view = somm_proj::build_grid_view(grid.r1_max, grid.r_break, 30.0 * (M_PI / 180.0),
+                                                          grid.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+    const std::vector<cdouble> far = somm_core::far_pack(grid);
+    somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+    razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg);
+    ChunkTrace tr;
+    (void)chunk_moments(ctx, {std::min(i, j)}, {std::max(i, j)}, &tr);
+    o_pair = tr.o_pair;
+    s_o = tr.s_o;
+    w_o = tr.w_o;
+    v = tr.v;
+}
+
+void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
+                        const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
+                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed) {
+    const size_t n_reg = grid.regions.size();
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cdouble *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = grid.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    somm_proj::GridView view = somm_proj::build_grid_view(grid.r1_max, grid.r_break, 30.0 * (M_PI / 180.0),
+                                                          grid.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+    const std::vector<cdouble> far = somm_core::far_pack(grid);
+    somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+    razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg);
+    graded = graded_pair_moments(ctx, I, J);
+    fixed.clear();
+    for (size_t t = 0; t < I.size(); t++) {
+        const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], base);
+        fixed.insert(fixed.end(), lo.begin(), lo.end());
+    }
 }
 
 }  // namespace bspline
