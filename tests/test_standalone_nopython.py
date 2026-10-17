@@ -10,9 +10,10 @@ unreadable deck, an unwritable printout or `.GMO`, a deck that refuses or
 raises, and what the build does with a deck its C++ route declines (a named
 refusal) or a C++ exception (the INTERNAL ERROR printout).
 
-The executable needs a static OpenBLAS and a CMake build that no CI lane
-makes, so this module runs only when MOMWIRE_RAZOR2P_STANDALONE_EXE names one.
-The launcher it is compared with is this environment's.
+The executable needs a static OpenBLAS and a CMake build, which only the
+`standalone` workflow's Linux job makes, so this module runs only when
+MOMWIRE_RAZOR2P_STANDALONE_EXE names one. The launcher it is compared with is
+this environment's.
 """
 
 from __future__ import annotations
@@ -104,7 +105,13 @@ def test_no_python_anywhere_in_the_executable():
     ldd = subprocess.run(["ldd", EXE], capture_output=True, text=True, check=True)
     assert "python" not in ldd.stdout.lower(), ldd.stdout
     blob = Path(EXE).read_bytes().lower()
-    for word in (b"libpython", b"pyconfig", b"py_initialize", b"site-packages", b"python"):
+    for word in (
+        b"libpython",
+        b"pyconfig",
+        b"py_initialize",
+        b"site-packages",
+        b"python",
+    ):
         assert word not in blob, word
 
 
@@ -119,7 +126,13 @@ def test_a_deck_answers_as_the_launcher(deck, tmp_path):
 
 @pytest.mark.parametrize(
     "argv",
-    [["only-one.nec"], ["a.nec", "b.out", "c"], ["-", "-"], ["x.nec", "-"], ["-version"]],
+    [
+        ["only-one.nec"],
+        ["a.nec", "b.out", "c"],
+        ["-", "-"],
+        ["x.nec", "-"],
+        ["-version"],
+    ],
     ids=["one argument", "three arguments", "streaming", "streaming out", "version"],
 )
 def test_the_command_line_edges(argv, tmp_path):
@@ -172,9 +185,7 @@ def test_an_unreadable_deck(deck, tmp_path):
     ids=["no such directory", "a directory"],
 )
 def test_an_unwritable_printout(out, tmp_path):
-    _same(
-        *_both([DIPOLE.name, out], tmp_path, prepare=lambda d: (d / "sub").mkdir())
-    )
+    _same(*_both([DIPOLE.name, out], tmp_path, prepare=lambda d: (d / "sub").mkdir()))
 
 
 def test_an_unwritable_gmo(tmp_path):
@@ -197,7 +208,10 @@ def test_a_declined_deck_is_refused_by_name(tmp_path):
     r = subprocess.run([EXE, str(BURIED), str(out)], capture_output=True, check=False)
     assert r.returncode == 0 and r.stdout == b""
     text = out.read_bytes()
-    assert b" ***** NEC ERROR - not served by this build: a wire below a finite ground" in text
+    assert (
+        b" ***** NEC ERROR - not served by this build: a wire below a finite ground"
+        in text
+    )
     assert text.startswith(b"1\r\n momwire ")
 
 
@@ -205,7 +219,10 @@ def test_a_declined_deck_is_refused_by_name(tmp_path):
     "fail, line",
     [
         ("alloc", "INTERNAL ERROR IN MOMWIRE ENGINE - MemoryError: std::bad_alloc"),
-        ("runtime", "INTERNAL ERROR IN MOMWIRE ENGINE - RuntimeError: injected by MW_EXE_FAIL"),
+        (
+            "runtime",
+            "INTERNAL ERROR IN MOMWIRE ENGINE - RuntimeError: injected by MW_EXE_FAIL",
+        ),
     ],
 )
 def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):

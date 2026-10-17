@@ -458,11 +458,13 @@ def test_the_core_declines_what_the_attributes_cannot_see():
         )["decline"]
         == "below-plane"
     )
+    # A duplicated wire is served since momwire#1512 step 4: the front drops
+    # the copy (`drop_duplicated_wires`) as Python does.
     assert (
         acc.razor_front_build(dict(kw, wires=[DIPOLE[0], DIPOLE[0]], nsegs=21))[
             "decline"
         ]
-        == "duplicated-wire"
+        is None
     )
     assert acc.razor_front_build(dict(kw, feeds=[(0.5, 1.0, 1)]))["decline"] == (
         "malformed-args"

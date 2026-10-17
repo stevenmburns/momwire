@@ -266,6 +266,17 @@ def _one_thread():
     return threadpool_limits(limits=1)
 
 
+@pytest.fixture(autouse=True)
+def _one_blas_thread_everywhere(monkeypatch):
+    """Every byte comparison here at one thread on BOTH sides: the driver's
+    environment (it inherits ours, and tests/test_momwire.py exports a width of
+    8 when it is collected) and this process's library."""
+    for k, v in _ONE_THREAD.items():
+        monkeypatch.setenv(k, v)
+    with _one_thread():
+        yield
+
+
 def _read_deck(path):
     """The fixture deck as RazorSolver's keyword arguments (razor-2p)."""
     kw = dict(
