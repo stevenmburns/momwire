@@ -1496,9 +1496,9 @@ std::vector<std::string> split_notes(const Deck &d) {
     return notes;
 }
 
-SeamResult razor_seam(const std::string &text) {
+SeamResult razor_seam(const std::string &text, bool open_end) {
     SeamResult r;
-    StreamRead s = read_stream(text);
+    StreamRead s = read_stream(text, open_end);
     r.chained = s.chained;
     r.route = SeamResult::served;
     auto stop = [&r](const RunOutcome &o) {

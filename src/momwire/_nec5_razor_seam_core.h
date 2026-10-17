@@ -215,8 +215,9 @@ struct SeamResult {
 };
 
 // The whole seam, deck text to the solver's arguments: `_shell.render`'s
-// nec5 path up to each structure's solve.
-SeamResult razor_seam(const std::string &latin1_text);
+// nec5 path up to each structure's solve. `open_end`: the text is a
+// stream's piece (`split_structures`' open_end, momwire#1512).
+SeamResult razor_seam(const std::string &latin1_text, bool open_end = false);
 
 // One structure's deck (already read) through `_serve.refusal`: "" when in
 // scope, else the sentence; `declined` names a decline instead.

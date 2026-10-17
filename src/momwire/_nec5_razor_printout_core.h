@@ -161,11 +161,12 @@ struct RunArrays {
 // The whole of `momwire-nec5-razor-2p` for one deck file's bytes. Never
 // throws for a deck: whatever Python would print, this prints, or it
 // declines. `arrays`, when given, collects every finished run's arrays in
-// execution order.
+// execution order. `open_end`: the text is a stream's piece (momwire#1512,
+// `_shell._stream_piece`): a structure NX ends it prints without RUN TIME.
 PrintoutResult razor_printout(const std::string &latin1_text, const std::string &basis,
                               const EngineStamp &stamp, razor::SolveContext &ctx,
                               const razor::Lapack &lapack, const NumpyLinalg &np,
-                              std::vector<RunArrays> *arrays = nullptr);
+                              std::vector<RunArrays> *arrays = nullptr, bool open_end = false);
 
 // `_printout.engine_stamp(basis)`: line 2, at most 79 columns.
 std::string engine_stamp(const std::string &basis, const EngineStamp &stamp);

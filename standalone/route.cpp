@@ -26,8 +26,8 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
-long long largest_solve(const std::string &latin1_text) {
-    const nec5::SeamResult r = nec5::razor_seam(latin1_text);
+long long largest_solve(const std::string &latin1_text, bool open_end) {
+    const nec5::SeamResult r = nec5::razor_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
     for (const nec5::Prepared &p : r.prepared)
@@ -57,7 +57,9 @@ void dump_arrays(const std::string &dir, const std::vector<nec5::RunArrays> &arr
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason, bool *failed,
-            std::string *failure_kind, std::string *failure_message, std::string *raised_kind) {
+            std::string *failure_kind, std::string *failure_message, std::string *raised_kind,
+            bool open_end, bool *served) {
+    if (served) *served = false;
     razor::Lapack lp;
     lp.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     lp.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
@@ -72,8 +74,9 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     stamp.variant = variant;
     razor::SolveContext ctx;
     std::vector<nec5::RunArrays> arrays;
-    const nec5::PrintoutResult r = nec5::razor_printout(latin1_text, "razor-2p", stamp, ctx, lp, np,
-                                                        arrays_dir.empty() ? nullptr : &arrays);
+    const nec5::PrintoutResult r =
+        nec5::razor_printout(latin1_text, "razor-2p", stamp, ctx, lp, np,
+                             arrays_dir.empty() ? nullptr : &arrays, open_end);
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;
         if (failed) *failed = r.cxx_failed;
@@ -83,6 +86,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     }
     printout = r.printout;
     if (raised_kind) *raised_kind = r.raised_kind;
+    if (served) *served = r.seam == nec5::SeamResult::served && r.raised_kind.empty();
     if (!arrays_dir.empty()) dump_arrays(arrays_dir, arrays);
     return true;
 }

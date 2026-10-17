@@ -5,7 +5,8 @@
 # run on the runner: the launcher-layer contract tests
 # (tests/test_standalone_nopython.py) and every fixture deck answered byte for
 # byte as this environment's `momwire-nec5-razor-2p` answers it
-# (scripts/core_split/exe_compare.py --standalone), at one thread. The full
+# (scripts/core_split/exe_compare.py --standalone), at one thread, and
+# SimNEC's streaming call through pipes (stream_compare.py). The full
 # corpus and harvest gates stay on the fleet (they need decks the repo does
 # not carry).
 #
@@ -26,6 +27,7 @@ on:
       - "src/**"
       - "scripts/core_split/exe_compare.py"
       - "scripts/core_split/printout_compare.py"
+      - "scripts/core_split/stream_compare.py"
       - "scripts/core_split/nx_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
@@ -38,6 +40,7 @@ on:
       - "src/**"
       - "scripts/core_split/exe_compare.py"
       - "scripts/core_split/printout_compare.py"
+      - "scripts/core_split/stream_compare.py"
       - "scripts/core_split/nx_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
@@ -128,6 +131,26 @@ jobs:
             --exe build-avx2/momwire-razor2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
             scripts/core_split/nx_decks
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+          MOMWIRE_BELOW_ANCHORS: "off"
+      # SimNEC's streaming call, `- -` (momwire#1512): the A4 stream decks
+      # written to both engines' stdin structure by structure, each printout
+      # read up to its NX echo before the next is written, and all at once;
+      # byte for byte against the launcher's streaming mode, and that against
+      # its own file form.
+      - name: streaming call, as the launcher (avx2 and sse2, anchors off)
+        run: |
+          python scripts/core_split/stream_compare.py exe-linux-stream-avx2.jsonl \
+            --exe build-avx2/momwire-razor2p-standalone \
+            --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
+            scripts/core_split/nx_decks/simnec_stream_*.nec
+          MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/stream_compare.py \
+            exe-linux-stream-sse2.jsonl \
+            --exe build-sse2/momwire-razor2p-standalone \
+            --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
+            scripts/core_split/nx_decks/simnec_stream_*.nec
         env:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"

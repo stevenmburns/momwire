@@ -3272,9 +3272,9 @@ Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &l
 PrintoutResult razor_printout(const std::string &text, const std::string &basis,
                               const EngineStamp &stamp, razor::SolveContext &ctx,
                               const razor::Lapack &lapack, const NumpyLinalg &np,
-                              std::vector<RunArrays> *arrays) {
+                              std::vector<RunArrays> *arrays, bool open_end) {
     PrintoutResult out;
-    SeamResult r = razor_seam(text);
+    SeamResult r = razor_seam(text, open_end);
     out.seam = r.route;
     if (r.route == SeamResult::declined) {
         out.reason = r.message;
@@ -3317,7 +3317,9 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
             const StructureOutcome &so = r.structures[k];
             const Answer &a = s.answers[k];
             const std::string echo = echo_of(s, k, text);
-            const bool last = !s.chained || k + 1 == n_structures;
+            // a structure NX closes never closes the run (`_render_chain`)
+            const bool last = !s.chained ||
+                              (k + 1 == n_structures && !s.structures[k].ends_on_nx());
             std::vector<RunDataC> runs;
             for (std::size_t j = 0; j < so.runs.size() && !stopped; j++) {
                 const RunOutcome &o = so.runs[j];

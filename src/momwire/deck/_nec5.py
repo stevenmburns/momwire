@@ -44,6 +44,8 @@ from .model import DistributedRLC, LoadSpec
 __all__ = [
     "parse_nec5",
     "split_structures",
+    "ends_on_nx",
+    "next_structure",
     "Nec5Structure",
     "Nec5Deck",
     "Nec5Node",
@@ -1846,7 +1848,9 @@ def _mnemonic(line: str) -> str:
     return tokens[0][:2].upper() if tokens else ""
 
 
-def split_structures(text: str) -> list[Nec5Structure] | None:
+def split_structures(
+    text: str, *, open_end: bool = False
+) -> list[Nec5Structure] | None:
     """An ``NX``-chained stream's structures, in order, or ``None`` when the
     text carries no ``NX`` before its ``EN`` (every EZNEC deck), which keeps
     the one-structure path exactly as it was.
@@ -1858,6 +1862,10 @@ def split_structures(text: str) -> list[Nec5Structure] | None:
     runs into one engine call: each run's deck, ``NX`` between them, ``EN``
     after the last. Everything after ``EN`` is not this stream, as in a
     single deck.
+
+    ``open_end`` is the streaming mode's (momwire#1512): the text is the
+    part of a stream read so far, so an ``NX`` that ends it opens a
+    structure still to come rather than an empty one to refuse as truncated.
     """
     structures: list[Nec5Structure] = []
     body: list[str] = []
@@ -1875,11 +1883,43 @@ def split_structures(text: str) -> list[Nec5Structure] | None:
         # stream, so the missing structure is kept (empty) for its parse to
         # refuse as truncated; with no NX at all it is a one-structure deck,
         # and the None below hands it to the one-structure path unchanged.
-        if body or (structures and structures[-1].terminator is not None):
+        # An open end keeps nothing after its last NX but what was read.
+        if body or (
+            not open_end and structures and structures[-1].terminator is not None
+        ):
             structures.append(Nec5Structure("".join(body), None))
-    if len(structures) < 2:
+    if not any(ends_on_nx(s) for s in structures):
         return None
     return structures
+
+
+def ends_on_nx(structure: Nec5Structure) -> bool:
+    """Whether ``NX`` closed this structure (another follows it), not
+    ``EN`` or the end of the text."""
+    return structure.terminator is not None and _mnemonic(structure.terminator) == "NX"
+
+
+def next_structure(text: str, *, final: bool) -> tuple[int, str] | None:
+    """Where the first structure of a stream being read ends: ``(end,
+    mnemonic)``, the offset just past the first complete ``NX`` or ``EN``
+    line of ``text`` and which of the two it is, or ``None`` while no
+    complete line is one (momwire#1512's streaming mode).
+
+    A line is complete once a line break follows it, by the breaks
+    :meth:`str.splitlines` reads, so the structure cut here is the one
+    :func:`split_structures` would cut from the whole stream. ``final``: the
+    text is all there will be, so its last line is complete without a break.
+    """
+    end = 0
+    for line in text.splitlines(keepends=True):
+        end += len(line)
+        complete = final or line != line.splitlines()[0]
+        if not complete:
+            return None
+        mnemonic = _mnemonic(line)
+        if mnemonic in ("NX", "EN"):
+            return end, mnemonic
+    return None
 
 
 def parse_nec5(text: str) -> Nec5Deck:
