@@ -9,7 +9,8 @@ arrays are compared byte for byte (`front_compare.differences`). Units:
 `_wire_spec.drop_duplicated_wires` (the dedup and its refusals),
 `_build_geometry`, `_build_basis_polynomials` (supp_seg, polys, kcl_A,
 the wire knots), the port spec (`junctions`, `node_gaps`, `feeds` as the
-constructor normalises them) and `_node_gap_columns`. Exit 1 on any mismatch.
+constructor normalises them), `_node_gap_columns` and `_port_columns`
+(the delta-gap source vectors and the constraint rows). Exit 1 on any mismatch.
 """
 
 from __future__ import annotations
@@ -98,6 +99,11 @@ def main():
                             list(solver.feeds),
                         )
                         d += fc.differences(spec, tuple(entry["spec"]), "spec")
+                        B, kcl_con = solver._port_columns(
+                            geom, knots, _wbg, supp.shape[0], kcl
+                        )
+                        d += fc.differences(B, entry["port_cols"], "port_cols")
+                        d += fc.differences(kcl_con, entry["basis"][2], "kcl_con")
                         cols, _v = solver._node_gap_columns(_wbg, supp.shape[0])
                         d += fc.differences(
                             cols, entry["node_gap_cols"], "node_gap_cols"

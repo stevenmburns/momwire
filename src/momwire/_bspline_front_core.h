@@ -114,6 +114,9 @@ struct Basis {
     // the end (-1: none), which a node gap's column names
     std::vector<int64_t> start_dir, end_dir;
     std::vector<bool> grounded_junction;
+    // per wire, (basis j of its knot vector, global basis index) per kept
+    // basis: `wire_basis_global`'s mapping
+    std::vector<std::vector<std::pair<int64_t, int64_t>>> wire_globals;
 };
 
 // `ground_z` given or not; `radii` per wire (the conductor's, for the
@@ -135,6 +138,14 @@ void check_ports(const WireArgs &args);
 // `_node_gap_columns`: (n_basis, n_gaps) row-major, the sigma-signed unit
 // indicator of each named member's directional basis.
 std::vector<double> node_gap_columns(const WireArgs &args, const Basis &b);
+
+// `_port_columns`' B for the seam's ports, (n_basis, n_feeds + n_gaps)
+// row-major, real (numpy's complex128 holds +0 imaginary parts): each gap
+// feed's delta-gap source vector (`_build_source_vector`, the point model,
+// v_m = Phi_m(s_f) with the wire-end clip), then the node-gap columns. The
+// constraint rows are `b.kcl_A` (no junction ports). A feed off its wire's
+// knot range throws FrontNotPorted (Python raises there).
+std::vector<double> port_columns(const WireArgs &args, const Geometry &g, const Basis &b);
 
 }  // namespace bspline
 }  // namespace mw

@@ -1063,6 +1063,11 @@ py::list bspline_front_geometry(py::bytes latin1) {
                 ngs.append(py::make_tuple(g2.wire, g2.at_start ? "start" : "end", cd(0.0, 0.0)));
             for (const auto &f : wa.feeds) fs.append(py::make_tuple(f.wire, f.arc, cd(0.0, 0.0)));
             entry["spec"] = py::make_tuple(js, ngs, fs);
+            const std::vector<double> B = mw::bspline::port_columns(wa, g, bs);
+            const ptrdiff_t n_p = static_cast<ptrdiff_t>(wa.feeds.size() + wa.node_gaps.size());
+            py::array_t<cd> Bc({nb, n_p});
+            for (size_t q = 0; q < B.size(); q++) Bc.mutable_data()[q] = cd(B[q], 0.0);
+            entry["port_cols"] = Bc;
         } catch (const mw::bspline::FrontValueError &e) {
             entry["basis_raised"] = py::make_tuple("ValueError", e.what());
         } catch (const mw::bspline::FrontNotPorted &e) {

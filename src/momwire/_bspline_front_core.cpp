@@ -369,6 +369,7 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
     const double *V = d == 1 ? V1 : d == 2 ? V2 : V3;
     const int W = d + 1;
     std::vector<std::vector<std::pair<int64_t, double>>> junction_dirs(junctions.size());
+    b.wire_globals.resize(g.per_wire.size());
     int64_t m_global = 0;
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         const WireGeometry &pw = g.per_wire[w];
@@ -457,6 +458,7 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
             }
         }
         for (const Kept &kb : kept) {
+            b.wire_globals[w].push_back({kb.j, m_global});
             const int64_t seg_lo = std::max<int64_t>(0, kb.j - d);
             const int64_t seg_hi = std::min<int64_t>(N, kb.j + 1);
             for (int a = 0; a < W; a++) {
@@ -582,6 +584,53 @@ std::vector<double> node_gap_columns(const WireArgs &args, const Basis &b) {
         cols[static_cast<size_t>(m) * n_g + p] = gp.at_start ? 1.0 : -1.0;
     }
     return cols;
+}
+
+std::vector<double> port_columns(const WireArgs &args, const Geometry &g, const Basis &b) {
+    (void)g;
+    const int d = b.degree;
+    const size_t n_f = args.feeds.size(), n_g = args.node_gaps.size(), n_p = n_f + n_g;
+    std::vector<double> B(static_cast<size_t>(b.n_basis) * n_p, 0.0);
+    for (size_t f = 0; f < n_f; f++) {
+        const int64_t wi = args.feeds[f].wire;
+        const std::vector<double> &knots = b.wire_knots[static_cast<size_t>(wi)];
+        double s_f = args.feeds[f].arc;
+        // the wire-end clip
+        const double s_lo = knots[static_cast<size_t>(d)], s_hi = knots[knots.size() - d - 1];
+        const double slack = 1e-9 * std::max(s_hi - s_lo, 1.0);
+        if (s_lo - slack <= s_f && s_f < s_lo)
+            s_f = s_lo;
+        else if (s_hi < s_f && s_f <= s_hi + slack)
+            s_f = s_hi;
+        // `_bspline_design_matrix_dense([s_f], knots, d)[0]`
+        const int64_t n = static_cast<int64_t>(knots.size()) - d - 1;
+        if (!std::isfinite(s_f) || s_f < knots[static_cast<size_t>(d)] || s_f > knots[static_cast<size_t>(n)])
+            throw FrontNotPorted("a feed off its wire's knots");
+        int64_t ell = search_right(knots, s_f) - 1;
+        ell = std::min(std::max<int64_t>(ell, d), n - 1);
+        double h[4] = {1.0, 0.0, 0.0, 0.0}, hh[4];
+        for (int j = 1; j <= d; j++) {
+            for (int c = 0; c < j; c++) hh[c] = h[c];
+            h[0] = 0.0;
+            for (int nn = 1; nn <= j; nn++) {
+                const double xb = knots[static_cast<size_t>(ell + nn)];
+                const double xa = knots[static_cast<size_t>(ell + nn - j)];
+                const bool same = xb == xa;
+                const double wgt = hh[nn - 1] / (xb - xa);
+                h[nn - 1] = same ? h[nn - 1] : h[nn - 1] + wgt * (xb - s_f);
+                h[nn] = same ? 0.0 : wgt * (s_f - xa);
+            }
+        }
+        std::vector<double> row(static_cast<size_t>(n), 0.0);
+        for (int c = 0; c <= d; c++) row[static_cast<size_t>(ell - d + c)] = h[c];
+        for (const auto &jm : b.wire_globals[static_cast<size_t>(wi)])
+            B[static_cast<size_t>(jm.second) * n_p + f] = row[static_cast<size_t>(jm.first)];
+    }
+    const std::vector<double> gc = node_gap_columns(args, b);
+    for (int64_t m = 0; m < b.n_basis; m++)
+        for (size_t q = 0; q < n_g; q++)
+            B[static_cast<size_t>(m) * n_p + n_f + q] = gc[static_cast<size_t>(m) * n_g + q];
+    return B;
 }
 
 }  // namespace bspline
