@@ -88,6 +88,13 @@ CORE_SOURCES = (
     "_razor_crossing_core.cpp",
     # The near-field remainder over a finite ground (S4).
     "_somm_field_core.cpp",
+    # bs2's NEC-5 seam, front half, fill and run half (momwire#1517 step 1):
+    # deck text to printout bytes for the B-spline basis, linked into
+    # `nec5_bspline_printout_driver.cpp`.
+    "_nec5_bspline_seam_core.cpp",
+    "_bspline_front_core.cpp",
+    "_bspline_fill_core.cpp",
+    "_nec5_bspline_printout_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -175,6 +182,7 @@ def driver(accel, tmp_path_factory):
         "nec5_deck_driver",
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
+        "nec5_bspline_printout_driver",
         "exact_kernel_coaxial_driver",
         "bspline_core_driver",
     )
@@ -1074,3 +1082,106 @@ def test_the_bspline_kernels_in_cxx_alone_are_the_extensions(driver, accel, tmp_
     ):
         assert ref.size > 0
         assert (tmp_path / f"drv_{name}.bin").read_bytes() == ref.tobytes(), name
+
+
+BSPLINE_KCL_SYM_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_kcl_sym"
+BSPLINE_CHUNKED_DECKS = SPLIT / "bspline_chunked_decks"
+
+
+def _bspline_printouts(driver, decks, tmp_path):
+    """bs2's driver against `_shell.render(text, basis="bspline")` over
+    `decks`, both on one BLAS thread: every printed deck byte for byte, and
+    every finished run's arrays. Returns (counts, decline reasons)."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+    os.environ.update(_ONE_THREAD)
+    try:
+        answers = pc.run_driver(
+            driver[0]["nec5_bspline_printout_driver"],
+            decks,
+            tmp_path,
+            basis="bspline",
+            arrays=True,
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    counts, reasons = {}, {}
+    with _one_thread():
+        for path, ans in zip(decks, answers, strict=True):
+            if ans["route"] == "declined":
+                reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
+                continue
+            key = ans["seam"] + ("|frame" if ans["raised"] else "")
+            counts[key] = counts.get(key, 0) + 1
+            py_runs = []
+            ref = pc.python_printout(
+                path.read_bytes().decode("latin-1"), basis="bspline", runs=py_runs
+            )
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
+            if ans["raised"]:
+                continue
+            assert len(ans["runs"]) == len(py_runs), path
+            for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
+                for name in pc.ARRAYS:
+                    mine = np.ascontiguousarray(py[name], dtype=np.complex128)
+                    assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
+                counts["runs"] = counts.get("runs", 0) + 1
+    return counts, reasons
+
+
+def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
+    """momwire#1517 step 1: every NEC deck in tests/fixtures through bs2's
+    whole chain in a process with no Python -- the reader, the seam with the
+    cut spelling, the front half, the dense fill, the KCL Schur solve, the
+    spline readouts and sampler, the run half and the writer. Every deck it
+    prints is, byte for byte, what `_shell.render(text, basis="bspline")`
+    prints, and every finished run carries Python's Y, coefficients and port
+    vectors. What it declines is steps 2-3's (ground, wire loading, the
+    exact kernel "auto" would engage), by name, and nothing else."""
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    # Not vacuous: results, refusals and the INTERNAL ERROR frame all print.
+    assert counts.get("served", 0) >= 80 and counts.get("refused", 0) >= 100, counts
+    assert counts.get("raised|frame", 0) >= 3, counts
+    assert counts.get("runs", 0) >= 100, counts
+    assert set(reasons) <= {
+        "front:bspline-ground",
+        "front:bspline-loading",
+        "front:bspline-exact-kernel",
+    }, reasons
+
+
+def test_an_exactly_symmetric_kcl_system_takes_scipys_symmetric_solver(
+    driver, tmp_path
+):
+    """`scipy.linalg.solve` detects an exactly symmetric complex system and
+    solves it with zsytrf + zsytrs rather than getrf + getrs: two decks whose
+    KCL Schur system comes out bit-symmetric print as Python's."""
+    decks = sorted(BSPLINE_KCL_SYM_DECKS.glob("*.nec"))
+    assert len(decks) == 2
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 2 and not reasons, (counts, reasons)
+
+
+@pytest.mark.slow
+def test_the_chunked_fill_decks_print_as_python(driver, tmp_path):
+    """Past the dense tensor's `swept_mem_mb` budget (1,402 and 1,500
+    segments) both sides take the chunked fill (`_compute_Z_dense_chunked`):
+    observer windows into the windowed assembler, then each edge's same-edge
+    correction in windows. One deck carries a near-field request."""
+    decks = sorted(BSPLINE_CHUNKED_DECKS.glob("*.nec"))
+    assert len(decks) == 2
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 2 and not reasons, (counts, reasons)

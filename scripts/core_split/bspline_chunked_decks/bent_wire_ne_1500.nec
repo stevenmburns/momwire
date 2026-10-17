@@ -1,0 +1,14 @@
+CM One long wire with a bend, 1500 segments (bs2's chunked fill)
+CM
+CM ! Written by EZNEC/Pro+ v. 7.0 in NEC-5 format.
+CE
+GW 1,900,0.,-30.,10.,0.,30.,10.,.001
+GW 2,600,0.,30.,10.,0.,30.,50.,.001
+GE 0,-1
+FR 0,1,0,0,3.5
+GN -1
+EX 4,1,450,0,1.414214,0.
+PQ 0
+NE 0,1,1,5,5.,0.,10.,0.,0.,1.
+RP 0,1,37,1000,90.,0.,0.,10.,0.
+EN

@@ -64,6 +64,14 @@ PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
 BASIS = "razor-2p"
 DRIVER = "nec5_razor_printout_driver"
+# momwire#1517 step 1: `--basis bspline` builds bs2's driver,
+# which also links the bspline front, fill and engine TUs.
+BSPLINE_SOURCES = (
+    "_nec5_bspline_seam_core.cpp",
+    "_bspline_front_core.cpp",
+    "_bspline_fill_core.cpp",
+    "_nec5_bspline_printout_core.cpp",
+)
 
 
 def _decks(args):
@@ -170,7 +178,7 @@ def _standalone_test_module():
     return mod
 
 
-def build_driver(out_dir: Path) -> Path:
+def build_driver(out_dir: Path, basis: str = "razor-2p") -> Path:
     """The driver, from the core TUs alone, with the loaded variant's flags
     (the standalone test's compile)."""
     from momwire import _accel
@@ -192,7 +200,15 @@ def build_driver(out_dir: Path) -> Path:
         "-I",
         str(ROOT / "extern" / "xsf" / "include"),
     ]
-    sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{DRIVER}.cpp"]
+    driver = DRIVER
+    extra = ()
+    if basis == "bspline":
+        driver, extra = "nec5_bspline_printout_driver", BSPLINE_SOURCES
+    sources = (
+        [PKG / s for s in t.CORE_SOURCES]
+        + [PKG / s for s in extra]
+        + [SPLIT / f"{driver}.cpp"]
+    )
     procs, objects = [], []
     for src in sources:
         obj = out_dir / (src.stem + ".o")
@@ -203,7 +219,7 @@ def build_driver(out_dir: Path) -> Path:
         _, err = proc.communicate()
         if proc.returncode:
             raise SystemExit(f"{shlex.join(cmd)}\n{err}")
-    exe = out_dir / DRIVER
+    exe = out_dir / driver
     cmd = [*cxx, *objects, *link_args, "-ldl", "-o", str(exe)]
     run = subprocess.run(cmd, capture_output=True, text=True)
     if run.returncode:
@@ -287,6 +303,11 @@ def main(argv=None):
         driver = Path(args[k + 1])
         del args[k : k + 2]
     golden = None
+    basis = BASIS
+    if "--basis" in args:
+        k = args.index("--basis")
+        basis = args[k + 1]
+        del args[k : k + 2]
     arrays = "--arrays" in args
     if arrays:
         args.remove("--arrays")
@@ -319,7 +340,7 @@ def main(argv=None):
         labels = [str(d) for d in decks]
     if driver is None:
         (work / "build").mkdir()
-        driver = build_driver(work / "build")
+        driver = build_driver(work / "build", basis)
     # `--below-bridge` (momwire#1512, until the below table is ported): the
     # Python route renders every deck FIRST, and the below/below grids it
     # filled are handed to the driver (`MW_TEST_BELOW_TABLES`), so a buried
@@ -329,10 +350,10 @@ def main(argv=None):
         import buried_z_compare as bz  # noqa: PLC0415 - the gate's own dumper
 
         for d in decks:  # fills the grids; the comparison renders again
-            python_printout(d.read_bytes().decode("latin-1"))
+            python_printout(d.read_bytes().decode("latin-1"), basis=basis)
         bz.dump_below_grids(work / "bridge")
         os.environ["MW_TEST_BELOW_TABLES"] = str(work / "bridge")
-    answers = run_driver(driver, decks, work / "out", arrays=arrays)
+    answers = run_driver(driver, decks, work / "out", basis=basis, arrays=arrays)
     runs_compared = 0
 
     counts, declined, mismatches = Counter(), Counter(), 0
@@ -349,9 +370,9 @@ def main(argv=None):
                 if golden is not None:
                     from golden_printouts import golden_path, mask_stamp  # noqa: PLC0415
 
-                    ref = golden_path(label, BASIS).read_bytes().decode("latin-1")
+                    ref = golden_path(label, basis).read_bytes().decode("latin-1")
                     mine = mask_stamp(
-                        ans["printout"].decode("latin-1").replace("\r\n", "\n"), BASIS
+                        ans["printout"].decode("latin-1").replace("\r\n", "\n"), basis
                     )
                     same = ref == mine
                     if not same:
@@ -362,7 +383,7 @@ def main(argv=None):
                 else:
                     py_runs = [] if arrays else None
                     ref = python_printout(
-                        deck.read_bytes().decode("latin-1"), runs=py_runs
+                        deck.read_bytes().decode("latin-1"), basis=basis, runs=py_runs
                     )
                     same = ref == ans["printout"]
                     if not same:

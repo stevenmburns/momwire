@@ -1,6 +1,9 @@
 #include "_accel_common.h"
 #include "_mw_binding.h"
 #include "_nec5_razor_seam_core.h"
+#include "_nec5_bspline_seam_core.h"
+#include "_bspline_front_core.h"
+#include "_bspline_fill_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -36,6 +39,18 @@ void *capsule_pointer(const py::dict &capi, const char *name) {
     void *fn = PyCapsule_GetPointer(p, PyCapsule_GetName(p));
     if (fn == nullptr) throw py::error_already_set();
     return fn;
+}
+
+// momwire#1517 step 1: SciPy's symmetric pair, for bs2's KCL
+// Schur solve (`scipy.linalg.solve`'s structure detection).
+const mw::bspline::SymLapack &scipy_sym_lapack() {
+    static mw::bspline::SymLapack lp;
+    if (lp.sytrf == nullptr) {
+        py::dict capi = py::module_::import("scipy.linalg.cython_lapack").attr("__pyx_capi__");
+        lp.sytrf = reinterpret_cast<mw::bspline::zsytrf_fn>(capsule_pointer(capi, "zsytrf"));
+        lp.sytrs = reinterpret_cast<mw::bspline::zsytrs_fn>(capsule_pointer(capi, "zsytrs"));
+    }
+    return lp;
 }
 
 const mw::razor::Lapack &scipy_lapack() {
@@ -835,6 +850,322 @@ py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
     return out;
 }
 
+// momwire#1517 step 1: the bspline seam's structure half,
+// test-facing, as `nec5_razor_seam` is razor's: the route, each run's
+// outcome, and per preparation BSplineSolver's keyword arguments (spelled as
+// `construct_solver` spells them) and the mesh.
+py::dict bspline_kwargs(const mw::nec5::Prepared &p) {
+    const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
+    py::dict kw;
+    py::list wires, npe, feeds;
+    for (size_t w = 0; w < in.n_per_edge.size(); w++) {
+        py::array_t<double> a({static_cast<ptrdiff_t>(2), static_cast<ptrdiff_t>(3)});
+        std::copy(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6, a.mutable_data());
+        wires.append(a);
+        py::list c;
+        c.append(in.n_per_edge[w]);
+        npe.append(c);
+    }
+    kw["wires"] = wires;
+    kw["n_per_edge_per_wire"] = npe;
+    for (const auto &f : in.feeds) feeds.append(py::make_tuple(f.wire, f.arc, cd(0.0, 0.0)));
+    kw["feeds"] = feeds;
+    kw["wavelength"] = in.wavelength;
+    if (!in.radius_per_wire) {
+        kw["wire_radius"] = in.radius[0];
+    } else {
+        py::list r;
+        for (double v : in.radius) r.append(v);
+        kw["wire_radius"] = r;
+    }
+    kw["cancel"] = py::none();
+    if (!in.node_gaps.empty()) {
+        py::list gaps;
+        for (const auto &g : in.node_gaps)
+            gaps.append(py::make_tuple(g.wire, g.end == mw::nec5::End::start ? "start" : "end",
+                                       cd(0.0, 0.0)));
+        kw["node_gaps"] = gaps;
+    }
+    if (in.junctions.empty()) {
+        kw["junctions"] = py::none();
+    } else {
+        py::list js;
+        for (const auto &g : in.junctions) {
+            py::list members;
+            for (const auto &e : g)
+                members.append(py::make_tuple(e.first, e.second == mw::nec5::End::start ? "start" : "end"));
+            js.append(members);
+        }
+        kw["junctions"] = js;
+    }
+    if (in.extended_kernel) kw["extended_kernel"] = true;
+    if (in.has_conductivity) {
+        py::array_t<double> a(static_cast<ptrdiff_t>(in.conductivity.size()));
+        std::copy(in.conductivity.begin(), in.conductivity.end(), a.mutable_data());
+        kw["wire_conductivity"] = a;
+    }
+    if (in.has_rlc) {
+        py::object rlc_type = py::module_::import("momwire._wire_loading").attr("DistributedRLC");
+        py::list rlc;
+        for (const auto &e : in.rlc) {
+            if (e.kind == 0)
+                rlc.append(py::none());
+            else
+                rlc.append(rlc_type(e.kind == 1 ? "series" : "parallel", e.r, e.l, e.c));
+        }
+        kw["distributed_rlc"] = rlc;
+    }
+    if (in.has_ground) kw["ground_z"] = in.ground_z;
+    if (in.ground_eps_given) {
+        kw["ground_eps"] = py::make_tuple(in.ground_eps_r, in.ground_sigma);
+        kw["ground_model"] = "sommerfeld";
+    }
+    kw["exact_kernel"] = "auto";
+    return kw;
+}
+
+py::dict nec5_bspline_seam(py::bytes latin1) {
+    const std::string text = latin1;
+    mw::nec5::SeamResult r;
+    {
+        py::gil_scoped_release release;
+        r = mw::nec5::bspline_seam(text);
+    }
+    static const char *route[] = {"served", "refused", "raised", "declined"};
+    static const char *run[] = {"prepared", "shared", "refused", "raised", "declined"};
+    py::dict out;
+    out["route"] = route[r.route];
+    out["message"] = r.message;
+    out["error_kind"] = r.error_kind;
+    py::list structures;
+    for (const auto &so : r.structures) {
+        py::list runs;
+        for (const auto &o : so.runs) {
+            py::dict x;
+            x["kind"] = run[o.kind];
+            x["message"] = o.message;
+            x["error_kind"] = o.error_kind;
+            x["prepared"] = o.prepared_index;
+            runs.append(x);
+        }
+        structures.append(runs);
+    }
+    out["structures"] = structures;
+    py::list prepared;
+    for (const auto &p : r.prepared) {
+        py::dict pd;
+        pd["kwargs"] = bspline_kwargs(p);
+        pd["mesh"] = seam_mesh(p);
+        prepared.append(pd);
+    }
+    out["prepared"] = prepared;
+    return out;
+}
+
+// momwire#1517 step 1: the bspline front half's geometry for a
+// deck's preparations (`_bspline_front_core.h`), test-facing.
+py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
+                                std::vector<uintptr_t> blas,
+                                std::vector<std::vector<double>> samples, double chunk_mb) {
+    const std::string text = latin1;
+    const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
+    py::list out;
+    for (const auto &p : r.prepared) {
+        const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
+        mw::bspline::WireArgs wa;
+        for (size_t w = 0; w < in.n_per_edge.size(); w++) {
+            wa.polylines.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
+            wa.n_per_edge.push_back({in.n_per_edge[w]});
+        }
+        wa.radius = in.radius;
+        wa.radius_per_wire = in.radius_per_wire;
+        wa.has_conductivity = in.has_conductivity;
+        wa.conductivity = in.conductivity;
+        wa.has_rlc = in.has_rlc;
+        for (const auto &e : in.rlc) wa.rlc.push_back({e.kind, e.r, e.l, e.c});
+        for (const auto &f : in.feeds) wa.feeds.push_back({f.wire, f.arc});
+        for (const auto &g : in.node_gaps) wa.node_gaps.push_back({g.wire, g.end == mw::nec5::End::start});
+        wa.junctions_given = !in.junctions.empty();
+        for (const auto &g : in.junctions) {
+            std::vector<std::pair<int64_t, bool>> mm;
+            for (const auto &e : g) mm.push_back({e.first, e.second == mw::nec5::End::start});
+            wa.junctions.push_back(mm);
+        }
+        py::dict entry;
+        entry["kwargs"] = bspline_kwargs(p);
+        mw::bspline::WireDedup dd;
+        try {
+            dd = mw::bspline::drop_duplicated_wires(wa);
+            mw::bspline::check_ports(wa);
+        } catch (const mw::bspline::FrontValueError &e) {
+            entry["raised"] = py::make_tuple("ValueError", e.what());
+            out.append(entry);
+            continue;
+        } catch (const mw::bspline::FrontNotPorted &e) {
+            entry["declined"] = e.what();
+            out.append(entry);
+            continue;
+        }
+        if (dd.active) {
+            py::list kept, removed;
+            for (int64_t w : dd.kept) kept.append(w);
+            for (const auto &r : dd.removed) removed.append(py::make_tuple(r.copy, r.twin, r.reversed));
+            entry["dedup"] = py::make_tuple(dd.n_input, py::tuple(kept), py::tuple(removed));
+        } else {
+            entry["dedup"] = py::none();
+        }
+        const mw::bspline::Geometry g = mw::bspline::build_geometry(wa.polylines, wa.n_per_edge);
+        auto arr = [](const std::vector<double> &v, bool rows3) {
+            const ptrdiff_t n = static_cast<ptrdiff_t>(v.size());
+            py::array_t<double> a = rows3 ? py::array_t<double>({n / 3, static_cast<ptrdiff_t>(3)})
+                                          : py::array_t<double>(n);
+            std::copy(v.begin(), v.end(), a.mutable_data());
+            return a;
+        };
+        py::dict d;
+        py::list per_wire;
+        for (const auto &wg : g.per_wire) {
+            py::dict x;
+            x["seg_l"] = arr(wg.seg_l, true);
+            x["seg_r"] = arr(wg.seg_r, true);
+            x["tangents"] = arr(wg.tangents, true);
+            x["h_per_seg"] = arr(wg.h_per_seg, false);
+            py::list eo, ea;
+            for (int64_t v : wg.edge_offsets) eo.append(v);
+            for (const auto &e : wg.edge_arc_edges) ea.append(arr(e, false));
+            x["edge_offsets"] = eo;
+            x["edge_arc_edges"] = ea;
+            x["arc_at_knot"] = arr(wg.arc_at_knot, false);
+            x["n_total"] = wg.n_total;
+            per_wire.append(x);
+        }
+        py::list so;
+        for (int64_t v : g.seg_offsets) so.append(v);
+        d["per_wire"] = per_wire;
+        d["seg_offsets"] = so;
+        d["n_segs_total"] = g.n_segs_total;
+        d["h_per_seg"] = arr(g.h_per_seg, false);
+        d["tangents"] = arr(g.tangents, true);
+        d["seg_l"] = arr(g.seg_l, true);
+        d["seg_r"] = arr(g.seg_r, true);
+        entry["geom"] = d;
+        try {
+            std::vector<double> radii = wa.radius;
+            if (!wa.radius_per_wire) radii.assign(wa.polylines.size(), wa.radius[0]);
+            const mw::bspline::Basis bs = mw::bspline::build_basis(
+                g, wa.polylines, wa.junctions, radii, in.has_ground, in.ground_z, 2);
+            const ptrdiff_t nb = static_cast<ptrdiff_t>(bs.n_basis), W = 3;
+            py::array_t<int64_t> ss({nb, W});
+            std::copy(bs.supp_seg.begin(), bs.supp_seg.end(), ss.mutable_data());
+            py::array_t<double> pp({nb, W, W});
+            std::copy(bs.polys.begin(), bs.polys.end(), pp.mutable_data());
+            py::array_t<double> ka({static_cast<ptrdiff_t>(bs.n_kcl), nb});
+            std::copy(bs.kcl_A.begin(), bs.kcl_A.end(), ka.mutable_data());
+            py::list knots;
+            for (const auto &k : bs.wire_knots) knots.append(arr(k, false));
+            entry["basis"] = py::make_tuple(ss, pp, ka, knots);
+            const std::vector<double> gc = mw::bspline::node_gap_columns(wa, bs);
+            py::array_t<double> gcol({nb, static_cast<ptrdiff_t>(wa.node_gaps.size())});
+            std::copy(gc.begin(), gc.end(), gcol.mutable_data());
+            entry["node_gap_cols"] = gcol;
+            py::list js, ngs, fs;
+            for (const auto &g2 : wa.junctions) {
+                py::list mm;
+                for (const auto &m : g2) mm.append(py::make_tuple(m.first, m.second ? "start" : "end"));
+                js.append(mm);
+            }
+            for (const auto &g2 : wa.node_gaps)
+                ngs.append(py::make_tuple(g2.wire, g2.at_start ? "start" : "end", cd(0.0, 0.0)));
+            for (const auto &f : wa.feeds) fs.append(py::make_tuple(f.wire, f.arc, cd(0.0, 0.0)));
+            entry["spec"] = py::make_tuple(js, ngs, fs);
+            const std::vector<double> B = mw::bspline::port_columns(wa, g, bs);
+            const ptrdiff_t n_p = static_cast<ptrdiff_t>(wa.feeds.size() + wa.node_gaps.size());
+            py::array_t<cd> Bc({nb, n_p});
+            for (size_t q = 0; q < B.size(); q++) Bc.mutable_data()[q] = cd(B[q], 0.0);
+            entry["port_cols"] = Bc;
+            // the free-space fill (proto): `_build_J_blocks(geom, k)`
+            if (!in.has_ground) {
+                mw::bspline::FillParams fp;
+                const double c = 1.0 / std::sqrt(8.8541878188e-12 * 1.25663706127e-6);
+                const double freq = c / in.wavelength;
+                const double omega = (2.0 * 3.141592653589793) * freq;
+                fp.k = omega / c;
+                fp.degree = 2;
+                fp.n_qp_pair = 8;
+                fp.ladder = mw::bspline::default_ladder(8);
+                fp.n_qp_same_edge = 4;
+                fp.extended_kernel = in.extended_kernel;
+                const std::vector<std::complex<double>> J = mw::bspline::build_J_blocks(g, radii, fp);
+                py::array_t<cd> Ja({static_cast<ptrdiff_t>(3), static_cast<ptrdiff_t>(3),
+                                    static_cast<ptrdiff_t>(g.n_segs_total),
+                                    static_cast<ptrdiff_t>(g.n_segs_total)});
+                std::copy(J.begin(), J.end(), Ja.mutable_data());
+                entry["J"] = Ja;
+                if (chunk_mb > 0) {
+                    const std::vector<std::complex<double>> Zc = mw::bspline::compute_Z_chunked(
+                        g, bs, radii, fp, omega, 8.8541878188e-12, 1.25663706127e-6, chunk_mb);
+                    py::array_t<cd> Zca({nb, nb});
+                    std::copy(Zc.begin(), Zc.end(), Zca.mutable_data());
+                    entry["Z_chunked"] = Zca;
+                }
+                if (syrk_addr != 0) {
+                    const std::vector<std::complex<double>> Z = mw::bspline::assemble_Z(
+                        J, bs, g, omega, 8.8541878188e-12, 1.25663706127e-6,
+                        reinterpret_cast<mw::bspline::dsyrk_fn>(syrk_addr));
+                    py::array_t<cd> Za({nb, nb});
+                    std::copy(Z.begin(), Z.end(), Za.mutable_data());
+                    entry["Z"] = Za;
+                    if (blas.size() == 4) {
+                        mw::nec5::NumpyLinalg npl;
+                        npl.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+                        npl.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+                        npl.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+                        npl.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+                        const int64_t n_p = static_cast<int64_t>(wa.feeds.size() + wa.node_gaps.size());
+                        const mw::bspline::PortSolve ps = mw::bspline::solve_ports(
+                            Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl, &scipy_sym_lapack());
+                        entry["solve_info"] = ps.info;
+                        if (ps.info == 0) {
+                            py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
+                            for (int64_t i = 0; i < bs.n_basis; i++)
+                                for (int64_t j = 0; j < n_p; j++)
+                                    Xa.mutable_data()[i * n_p + j] =
+                                        ps.X[static_cast<size_t>(ps.x_c_order ? i * n_p + j : j * bs.n_basis + i)];
+                            py::array_t<cd> Ya({static_cast<ptrdiff_t>(n_p), static_cast<ptrdiff_t>(n_p)});
+                            std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
+                            entry["X"] = Xa;
+                            entry["Y"] = Ya;
+                            // the readouts on coeffs = X[:, 0]
+                            std::vector<std::complex<double>> c0(static_cast<size_t>(bs.n_basis));
+                            for (int64_t m = 0; m < bs.n_basis; m++) c0[static_cast<size_t>(m)] = ps.X[static_cast<size_t>(ps.x_c_order ? m * n_p : m)];
+                            auto lists = [](const std::vector<std::vector<std::complex<double>>> &v) {
+                                py::list l;
+                                for (const auto &a : v) {
+                                    py::array_t<cd> x(static_cast<ptrdiff_t>(a.size()));
+                                    std::copy(a.begin(), a.end(), x.mutable_data());
+                                    l.append(x);
+                                }
+                                return l;
+                            };
+                            entry["knot_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, nullptr, false));
+                            if (!samples.empty()) {
+                                entry["sample_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, false));
+                                entry["sample_slopes"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, true));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (const mw::bspline::FrontValueError &e) {
+            entry["basis_raised"] = py::make_tuple("ValueError", e.what());
+        } catch (const mw::bspline::FrontNotPorted &e) {
+            entry["basis_declined"] = e.what();
+        }
+        out.append(entry);
+    }
+    return out;
+}
+
 }  // namespace
 
 void register_razor_solve(py::module_ &m) {
@@ -892,6 +1223,15 @@ void register_razor_solve(py::module_ &m) {
           },
           "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
           "beyond the table).");
+    m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
+          py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
+          py::arg("samples") = std::vector<std::vector<double>>(), py::arg("chunk_mb") = 0.0,
+          "TEST HOOK (momwire#1517 step 1): per bspline preparation, its "
+          "BSplineSolver keyword arguments and the C++ front half's geometry.");
+    m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
+          "TEST HOOK (momwire#1517 step 1): the NEC-5 seam's structure half "
+          "for bspline in C++: the route, each run's outcome, and per "
+          "preparation BSplineSolver's keyword arguments and the mesh.");
     m.attr("nec5_razor_seam_proto") = true;
     m.def("nec5_razor_seam", &nec5_razor_seam, py::arg("latin1"), py::arg("solve") = false,
           "TEST HOOK: the NEC-5 seam's structure half for razor-2p in C++ "
