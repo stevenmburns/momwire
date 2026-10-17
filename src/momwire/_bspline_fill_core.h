@@ -70,6 +70,23 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
                           double eps, double mu, double swept_mem_mb);
 
+// The image term of an above-ground fill (`_accumulate_Z_image_chunked`
+// over `PotentialGround.weight_windows()`): observer windows of the
+// real-against-mirrored-source moments into the weighted windowed assembler
+// with scale -1, then the near-image analytic fixup of every grazing
+// horizontal edge (momwire#631). PEC (`compose` false: w_A the mirrored
+// tangent dot, w_Phi 1) or the Sommerfeld composition's exact-image half
+// (w_A = C2 times it, w_Phi = C2). The tangent dot is numpy's real gemm.
+struct ImageGround {
+    double ground_z = 0;
+    bool compose = false;
+    cdouble c2{1.0, 0.0};
+};
+void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                      const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
+                      double eps, double mu, const ImageGround &gr, double swept_mem_mb,
+                      const nec5::NumpyLinalg &np);
+
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).
 using dsyrk_fn = nec5::cblas_dsyrk_fn;

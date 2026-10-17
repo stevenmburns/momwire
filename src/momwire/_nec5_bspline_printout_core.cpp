@@ -64,6 +64,12 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     // `_add_exact_kernel_correction` (after the fill, before the loading)
     if (fr.exact_kernel)
         bspline::add_exact_correction(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
+    // the ground's image term (`_accumulate_Z_image_chunked`)
+    if (fr.has_ground) {
+        bspline::ImageGround gr;
+        gr.ground_z = fr.ground_z;
+        bspline::accumulate_image(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, gr, 256.0, np);
+    }
     // `_apply_loading(Z)`: the distributed series loading, last
     if (fr.loading.active()) {
         BSplineFront &mf = const_cast<BSplineFront &>(fr);
