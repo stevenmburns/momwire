@@ -387,6 +387,156 @@ std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double>
     return J;
 }
 
+namespace {
+
+// numpy's real `@` for one (m, n) @ (n, p) product of C-ordered or
+// transposed operands (strides in elements), as `DOUBLE_matmul` dispatches
+// it: ddot for a scalar result, dgemv for a vector-matrix / matrix-vector
+// product, dgemm otherwise. Only the shapes the loading Gram forms (n = 3,
+// every operand blasable).
+constexpr int CB_ROW = 101, CB_COL = 102, CB_NO = 111, CB_T = 112;
+bool blasable(int64_t s1, int64_t s2, int64_t d2) { return s2 == 1 && s1 >= d2; }
+
+void dmatmul(const nec5::NumpyLinalg &np, const double *a, int64_t m, int64_t n, int64_t a0, int64_t a1,
+             const double *b, int64_t p, int64_t b0, int64_t b1, double *out) {
+    const int64_t os_m = p, os_p = 1;  // a fresh C-ordered result
+    const bool i1b = blasable(a0, a1, n) || blasable(a1, a0, m);
+    const bool i2b = blasable(b0, b1, p) || blasable(b1, b0, n);
+    if (!i1b || !i2b || n == 1) throw FrontNotPorted("a real product numpy does not hand BLAS");
+    if (m == 1 && p == 1) {
+        out[0] = 0.0 + np.ddot(n, a, a1, b, b0);  // `DOUBLE_dot`: sum += ddot
+        return;
+    }
+    if (m == 1 && blasable(a1, 1, 1)) {  // vector @ matrix: gemv on b's transpose
+        int order;
+        int64_t lda;
+        if (blasable(b1, b0, n)) {
+            order = CB_COL;
+            lda = b1;
+        } else {
+            order = CB_ROW;
+            lda = b0;
+        }
+        np.dgemv(order, CB_T, n, p, 1.0, b, lda, a, a1, 0.0, out, os_p);
+        return;
+    }
+    if (p == 1 && blasable(b0, 1, 1)) {  // matrix @ vector
+        int order;
+        int64_t lda;
+        if (blasable(a0, a1, n)) {
+            order = CB_COL;
+            lda = a0;
+        } else {
+            order = CB_ROW;
+            lda = a1;
+        }
+        np.dgemv(order, CB_T, n, m, 1.0, a, lda, b, b0, 0.0, out, os_m);
+        return;
+    }
+    if (m == 1 || p == 1) throw FrontNotPorted("a real product numpy does not hand BLAS");
+    int t1, t2;
+    int64_t lda, ldb;
+    if (blasable(a0, a1, n)) {
+        t1 = CB_NO;
+        lda = a0;
+    } else {
+        t1 = CB_T;
+        lda = a1;
+    }
+    if (blasable(b0, b1, p)) {
+        t2 = CB_NO;
+        ldb = b0;
+    } else {
+        t2 = CB_T;
+        ldb = b1;
+    }
+    if (a == b && m == p && a0 == b1 && a1 == b0 && t1 != t2) throw FrontNotPorted("the real syrk case");
+    np.dgemm(CB_ROW, t1, t2, m, p, n, 1.0, a, lda, b, ldb, 0.0, out, os_m);
+}
+
+}  // namespace
+
+Triplets loading_gram(const Geometry &g, const Basis &b, const nec5::NumpyLinalg &np) {
+    if (np.dgemm == nullptr || np.dgemv == nullptr || np.ddot == nullptr)
+        throw FrontNotPorted("no real BLAS for the loading Gram");
+    const int nd = b.degree + 1;
+    const int64_t n_poly = nd;
+    // segment -> [(basis, wing)], in the order the dict first meets each
+    std::vector<int64_t> order;
+    std::map<int64_t, std::vector<std::pair<int64_t, int>>> seg_map;
+    for (int64_t m = 0; m < b.n_basis; m++)
+        for (int a = 0; a < nd; a++) {
+            bool nz = false;
+            for (int q = 0; q < nd; q++)
+                nz = nz || b.polys[static_cast<size_t>((m * nd + a) * nd + q)] != 0.0;
+            if (!nz) continue;
+            const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + a)];
+            auto it = seg_map.find(sg);
+            if (it == seg_map.end()) {
+                order.push_back(sg);
+                seg_map[sg].push_back({m, a});
+            } else {
+                it->second.push_back({m, a});
+            }
+        }
+    Triplets t;
+    for (int64_t sg : order) {
+        const auto &entries = seg_map[sg];
+        const double hs = g.h_per_seg[static_cast<size_t>(sg)];
+        // H[p, q] = np.float_power(hs, p + q + 1) / (p + q + 1)
+        std::vector<double> H(static_cast<size_t>(n_poly * n_poly));
+        for (int64_t p = 0; p < n_poly; p++)
+            for (int64_t q = 0; q < n_poly; q++) {
+                const double e = static_cast<double>(p + q + 1);
+                H[static_cast<size_t>(p * n_poly + q)] = std::pow(hs, e) / e;
+            }
+        const int64_t ne = static_cast<int64_t>(entries.size());
+        std::vector<double> C(static_cast<size_t>(ne * n_poly));
+        for (int64_t i = 0; i < ne; i++)
+            for (int64_t q = 0; q < n_poly; q++)
+                C[static_cast<size_t>(i * n_poly + q)] =
+                    b.polys[static_cast<size_t>((entries[i].first * nd + entries[i].second) * nd + q)];
+        // `C @ H @ C.T`
+        std::vector<double> CH(static_cast<size_t>(ne * n_poly)), M(static_cast<size_t>(ne * ne));
+        dmatmul(np, C.data(), ne, n_poly, n_poly, 1, H.data(), n_poly, n_poly, 1, CH.data());
+        dmatmul(np, CH.data(), ne, n_poly, n_poly, 1, C.data(), ne, 1, n_poly, M.data());
+        // `np.searchsorted(seg_offsets, s, side="right") - 1`
+        const int64_t w =
+            static_cast<int64_t>(std::upper_bound(g.seg_offsets.begin(), g.seg_offsets.end(), sg) -
+                                 g.seg_offsets.begin()) - 1;
+        for (int64_t i = 0; i < ne; i++)
+            for (int64_t j = 0; j < ne; j++) {
+                t.rows.push_back(entries[i].first);
+                t.cols.push_back(entries[j].first);
+                t.vals.push_back(M[static_cast<size_t>(i * ne + j)]);
+                t.wire.push_back(w);
+            }
+    }
+    return t;
+}
+
+void add_wire_scaled(std::vector<cdouble> &Z, int64_t n_basis, const Triplets &t,
+                     const std::vector<cdouble> &z_wire) {
+    for (size_t q = 0; q < t.vals.size(); q++) {
+        const cdouble v = nec5::replay::np_cmul(z_wire[static_cast<size_t>(t.wire[q])], cdouble(t.vals[q], 0.0));
+        cdouble &z = Z[static_cast<size_t>(t.rows[q] * n_basis + t.cols[q])];
+        z = nec5::replay::c_add(z, v);
+    }
+}
+
+double wire_loss_power(const Triplets &t, const std::vector<cdouble> &coeffs,
+                       const std::vector<cdouble> &z_wire, size_t n_wires) {
+    std::vector<double> per_wire(n_wires, 0.0);
+    for (size_t q = 0; q < t.vals.size(); q++) {
+        const size_t w = static_cast<size_t>(t.wire[q]);
+        const cdouble a = coeffs[static_cast<size_t>(t.rows[q])], bb = coeffs[static_cast<size_t>(t.cols[q])];
+        const double re = nec5::replay::np_cmul(std::conj(a), bb).real();
+        const double contrib = ((0.5 * z_wire[w].real()) * re) * t.vals[q];
+        per_wire[w] += contrib;
+    }
+    return nec5::replay::np_pairwise(per_wire.data(), static_cast<int64_t>(n_wires));
+}
+
 bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb) {
     const int64_t nd = degree + 1;
     return nd * nd * n_segs * n_segs * 16 <= (swept_mem_mb << 20);

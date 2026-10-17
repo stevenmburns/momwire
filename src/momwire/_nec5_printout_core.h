@@ -124,9 +124,22 @@ using zgesvx_fn = void (*)(const char *fact, const char *trans, const int *n, co
 using cblas_dsyrk_fn = void (*)(int order, int uplo, int trans, np_int n, np_int k, double alpha,
                                 const double *a, np_int lda, double beta, double *c, np_int ldc);
 
+// numpy's real matmul (`DOUBLE_matmul`): `scipy_cblas_dgemm64_`,
+// `scipy_cblas_dgemv64_` and `scipy_cblas_ddot64_`.
+using cblas_dgemm_fn = void (*)(int order, int trans_a, int trans_b, np_int m, np_int n, np_int k,
+                                double alpha, const double *a, np_int lda, const double *b, np_int ldb,
+                                double beta, double *c, np_int ldc);
+using cblas_dgemv_fn = void (*)(int order, int trans, np_int m, np_int n, double alpha, const double *a,
+                                np_int lda, const double *x, np_int incx, double beta, double *y,
+                                np_int incy);
+using cblas_ddot_fn = double (*)(np_int n, const double *x, np_int incx, const double *y, np_int incy);
+
 struct NumpyLinalg {
-    // null: an engine whose fill needs it declines (razor-2p's does not)
+    // null: an engine whose fill needs them declines (razor-2p's does not)
     cblas_dsyrk_fn dsyrk = nullptr;
+    cblas_dgemm_fn dgemm = nullptr;
+    cblas_dgemv_fn dgemv = nullptr;
+    cblas_ddot_fn ddot = nullptr;
     cblas_zgemm_fn zgemm = nullptr;
     cblas_zgemv_fn zgemv = nullptr;
     cblas_zdotu_sub_fn zdotu_sub = nullptr;

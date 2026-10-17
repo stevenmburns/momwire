@@ -24,8 +24,10 @@
 //     else declines (kept for the gates, never solved).
 #pragma once
 
+#include "_bspline_fill_core.h"
 #include "_bspline_front_core.h"
 #include "_nec5_seam_core.h"
+#include "_razor_wire_loading_core.h"
 
 #include <cstdint>
 #include <memory>
@@ -86,6 +88,12 @@ struct BSplineFront {
     // `self.c`, `self.omega`, `self.k` as the constructor forms them
     double c = 0, omega = 0, k = 0;
     bool extended_kernel = false;
+    // `configure_loading`'s `wire_conductivity` / `distributed_rlc` per
+    // solved wire (`_loading_active` is `loading.active()`), and the loading
+    // Gram, built on the first solve (`_cached_loading_gram`)
+    razor::WireLoading loading;
+    bool has_gram = false;
+    bspline::Triplets gram;
 };
 
 struct BSplinePrepared final : EnginePrepared {

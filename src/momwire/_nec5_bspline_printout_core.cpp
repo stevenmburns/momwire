@@ -61,6 +61,16 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     } else {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
+    // `_apply_loading(Z)`: the distributed series loading, last
+    if (fr.loading.active()) {
+        BSplineFront &mf = const_cast<BSplineFront &>(fr);
+        if (!mf.has_gram) {
+            mf.gram = bspline::loading_gram(fr.geom, fr.basis, np);
+            mf.has_gram = true;
+        }
+        bspline::add_wire_scaled(Z, fr.basis.n_basis, fr.gram,
+                                 razor::series_impedance_per_wire(fr.omega, fr.radii, fr.loading));
+    }
     const bspline::PortSolve ps =
         bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack_, np,
                              &sym_);
@@ -147,13 +157,15 @@ std::unique_ptr<CurrentSampler> BSplinePrintoutEngine::sampler(const Prepared &p
     return std::unique_ptr<CurrentSampler>(new SplineSampler(front_of(p), coeffs));
 }
 
-// Unloaded (a loaded deck declines in the seam): `(0.0, per_wire)`.
+// `wire_loss_power(coeffs, omega)[0]`: 0.0 when unloaded; no jacket term
+// (the NEC-5 seam never jackets a wire).
 double BSplinePrintoutEngine::wire_loss_power(const Prepared &p, const std::vector<cd> &coeffs,
                                               double omega) const {
-    (void)p;
-    (void)coeffs;
-    (void)omega;
-    return 0.0;
+    const BSplineFront &fr = front_of(p);
+    if (!fr.loading.active()) return 0.0;
+    if (!fr.has_gram) throw PrintoutDecline{"bspline: the loss read before the solve"};
+    return bspline::wire_loss_power(fr.gram, coeffs, razor::series_impedance_per_wire(omega, fr.radii, fr.loading),
+                                    fr.args.polylines.size());
 }
 
 double BSplinePrintoutEngine::solver_omega(const Prepared &p) const { return front_of(p).omega; }

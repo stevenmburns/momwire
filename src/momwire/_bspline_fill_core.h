@@ -106,6 +106,26 @@ std::vector<std::vector<cdouble>> spline_readout(const Basis &b, const Geometry 
                                                  const std::vector<std::vector<double>> *s_array,
                                                  bool derivative);
 
+// `_overlap_triplets(geom, supp_seg, polys, polys)` (`_loading_gram`): per
+// shared segment, in the order Python's dict meets them, the closed-form
+// `C @ H @ C.T` on numpy's real BLAS (`np.dgemm` / `dgemv` / `ddot`), COO
+// with duplicates, tagged by wire.
+struct Triplets {
+    std::vector<int64_t> rows, cols, wire;
+    std::vector<double> vals;
+};
+Triplets loading_gram(const Geometry &g, const Basis &b, const nec5::NumpyLinalg &np);
+
+// `_add_wire_scaled(Z, triplets, z_wire)`: `np.add.at(Z, (rows, cols),
+// z_wire[wire] * vals)` into a C-ordered (n_basis, n_basis) Z.
+void add_wire_scaled(std::vector<cdouble> &Z, int64_t n_basis, const Triplets &t,
+                     const std::vector<cdouble> &z_wire);
+
+// `wire_loss_power(coeffs, omega)[0]` without a jacket: ½ Σ Re Z'_w ·
+// Re(conj(c_r) c_c) · val, `np.add.at` per wire, then the pairwise sum.
+double wire_loss_power(const Triplets &t, const std::vector<cdouble> &coeffs,
+                       const std::vector<cdouble> &z_wire, size_t n_wires);
+
 // `BSplineSolver.pair_order_ladder` for a free-space deck: the default
 // ladder's tiers below `n_qp_pair`, normalised.
 std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair);

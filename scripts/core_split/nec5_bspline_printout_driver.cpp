@@ -90,6 +90,12 @@ int main(int argc, char **argv) {
     mw::nec5::NumpyLinalg np;
     np.dsyrk = reinterpret_cast<mw::nec5::cblas_dsyrk_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dsyrk64_", "cblas_dsyrk64_"}));
+    np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_dgemm64_", "cblas_dgemm64_"}));
+    np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_dgemv64_", "cblas_dgemv64_"}));
+    np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_ddot64_", "cblas_ddot64_"}));
     np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zgemm64_", "cblas_zgemm64_"}));
     np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(
