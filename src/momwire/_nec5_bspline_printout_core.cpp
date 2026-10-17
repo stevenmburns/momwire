@@ -58,7 +58,7 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     // else the chunked fill
     std::vector<cd> Z;
     if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
-        const std::vector<cd> J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
+        const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
         Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
     } else {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);

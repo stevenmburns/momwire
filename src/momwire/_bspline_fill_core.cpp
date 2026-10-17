@@ -21,6 +21,7 @@
 #include <cmath>
 #include <map>
 #include <stdexcept>
+#include <type_traits>
 
 namespace mw {
 namespace bspline {
@@ -30,9 +31,8 @@ namespace {
 using CF = nd::array_t<double, nd::array::c_style | nd::array::forcecast>;
 using CI = nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast>;
 
-template <class T>
-nd::array_t<T, nd::array::c_style | nd::array::forcecast> borrow(const std::vector<T> &v,
-                                                                 std::vector<nd::ssize_t> shape) {
+template <class C, class T = std::remove_const_t<std::remove_pointer_t<decltype(std::declval<const C &>().data())>>>
+nd::array_t<T, nd::array::c_style | nd::array::forcecast> borrow(const C &v, std::vector<nd::ssize_t> shape) {
     nd::Buffer b;
     b.ptr = const_cast<T *>(v.data());
     b.ndim = static_cast<int>(shape.size());
@@ -128,7 +128,7 @@ EK ek_cut(const EK &ek, const std::vector<size_t> *rows, const std::vector<size_
     return o;
 }
 
-using Block = std::vector<cdouble>;  // (nd, nd, Ni, Nj) C order
+using Block = CArray;  // (nd, nd, Ni, Nj) C order
 
 Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows, double k, int d,
               int64_t n_qp, const EK &ek, const Ladder &ladder_in);
@@ -144,8 +144,9 @@ void place(Block &out, size_t Ni, size_t Nj, const Block &sub, const std::vector
                         sub[((static_cast<size_t>(p) * nd + q) * ri.size() + a) * cj.size() + b];
 }
 
+// the kernel's output as it is (no copy)
 Block from_nd(const nd::array_t<std::complex<double>> &a) {
-    return Block(a.data(), a.data() + a.size());
+    return Block::adopt(a);
 }
 
 // `_seg_seg_full_moments_offedge`, real k.
@@ -296,7 +297,7 @@ std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair) {
     return out;
 }
 
-std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
+CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
                                     const FillParams &fp) {
     const int d = fp.degree, nd = d + 1;
     const size_t N = static_cast<size_t>(g.n_segs_total);
@@ -311,9 +312,9 @@ std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double>
             slices.push_back({static_cast<size_t>(g.seg_offsets[w] + eo[e]),
                               static_cast<size_t>(g.seg_offsets[w] + eo[e + 1])});
     }
-    std::vector<cdouble> J;
+    Block J;
     if (slices.size() == 1 && slices[0].first == 0 && slices[0].second == N) {
-        J.assign(static_cast<size_t>(nd * nd) * N * N, cdouble(0.0, 0.0));
+        J = Block(static_cast<size_t>(nd * nd) * N * N);
     } else {
         Segs s;
         s.l = g.seg_l;
@@ -696,14 +697,14 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                     borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
                 const CF stw = CF::borrow(A_st_w.buffer());
                 const nd::array_t<std::complex<double>> corr = same_edge_corr_combine(stw, regw, Jw);
-                accumulate(Block(corr.data(), corr.data() + corr.size()), r0, r1, s0, s1, touching(r0, r1), e_idx);
+                accumulate(Block::adopt(corr), r0, r1, s0, s1, touching(r0, r1), e_idx);
             }
         }
     }
     return Z;
 }
 
-std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, const Geometry &g,
+std::vector<cdouble> assemble_Z(const CArray &J, const Basis &b, const Geometry &g,
                                 double omega, double eps, double mu, dsyrk_fn syrk) {
     const int d = b.degree, nd = d + 1;
     const int64_t N = g.n_segs_total;
@@ -1346,7 +1347,8 @@ class BaseRows {
         Blk b;
         b.nr = static_cast<int64_t>(rows.size());
         b.nc = static_cast<int64_t>(cols.size());
-        b.v = offedge(si, sj, a_rows, fp_.k, fp_.degree, fp_.n_qp_pair, ekc, fp_.ladder);
+        const Block o = offedge(si, sj, a_rows, fp_.k, fp_.degree, fp_.n_qp_pair, ekc, fp_.ladder);
+        b.v.assign(o.begin(), o.end());
         return b;
     }
 
