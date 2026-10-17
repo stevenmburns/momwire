@@ -463,10 +463,13 @@ struct BelowStencil {
 
 // Stage 2: inline SommerfeldGridBelow.eval(r1, theta) up to the table read.
 // `theta` is the RAW atan2(hh, rho); the clamp is here.
-static inline void below_stencil(const somm_proj::GridView &G, double th_min,
-                                 double th_band_floor_hi, double th_band_lo_hi,
-                                 double th_band_hi, double r1, double theta,
-                                 BelowStencil &st) {
+// The address alone (region, axis offsets, first stencil node): the one
+// copy, which `below_stencil` reads through and the lazy grid's census
+// (`below_field_proj_nodes`) marks from.
+static inline int below_address(const somm_proj::GridView &G, double th_min,
+                                double th_band_floor_hi, double th_band_lo_hi,
+                                double th_band_hi, double r1, double theta,
+                                double &fr, double &ft, int &i0, int &j0) {
     if (theta < th_min) theta = th_min;
     else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;
@@ -503,12 +506,23 @@ static inline void below_stencil(const somm_proj::GridView &G, double th_min,
     // (to 5 with momwire#1064).
     const int zone = r1c <= G.r_break ? 0 : (r1c <= G.r_near ? 5 : 10);
     const int reg = zone + band;
-    const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
-    const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
-    int i0 = (int)std::floor(fr) - 1;
-    int j0 = (int)std::floor(ft) - 1;
+    fr = (r1c - G.rr0[reg]) / G.rdr[reg];
+    ft = (theta - G.rth0[reg]) / G.rdth[reg];
+    i0 = (int)std::floor(fr) - 1;
+    j0 = (int)std::floor(ft) - 1;
     if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
     if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
+    return reg;
+}
+
+static inline void below_stencil(const somm_proj::GridView &G, double th_min,
+                                 double th_band_floor_hi, double th_band_lo_hi,
+                                 double th_band_hi, double r1, double theta,
+                                 BelowStencil &st) {
+    double fr, ft;
+    int i0, j0;
+    const int reg = below_address(G, th_min, th_band_floor_hi, th_band_lo_hi,
+                                  th_band_hi, r1, theta, fr, ft, i0, j0);
     somm_proj::lagrange4(fr - i0, st.wr);
     somm_proj::lagrange4(ft - j0, st.wt);
     st.nth = G.nTh[reg];
@@ -883,6 +897,71 @@ static py::tuple below_six_integrals_batch(
         MW_THROW_IF_ABORTED();
     }
     return py::make_tuple(vals, tail, head, conv, accel, sconv);
+}
+
+// The lazy below grid's census (momwire#1512): per region a (n_r, n_th)
+// uint8 mask of the nodes `remainder_field_proj_batch_below`'s reads over
+// obs x src take -- its own stages: `below_pair_geometry`, `below_pair_r1`,
+// libm's atan2, `below_address` (the lanes' stencil is that address lane by
+// lane) -- in `past` for a pair `_zero_past_cap` zeroes at `r1_cap` (numpy's
+// hypot, then the root, as it classifies) and in `kept` otherwise; and the
+// batch's extremes (max R1, min and max theta), the same floats.
+static py::tuple remainder_field_proj_nodes_below(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src, double ground_z,
+    double r1_cap, double th_min, double th_band_floor_hi, double th_band_lo_hi,
+    double th_band_hi, double r1_max, double r_break, double th_split, double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals) {
+    if (obs.ndim() != 2 || obs.shape(1) != 3 || src.ndim() != 2 || src.shape(1) != 3)
+        throw std::runtime_error("obs/src arrays must have shape (*, 3)");
+    const somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+    const size_t n_reg = reg_vals.size();
+    somm_proj::NodeMarks kept, past;
+    kept.n_reg = past.n_reg = n_reg;
+    std::vector<py::array_t<uint8_t>> km, pm;
+    for (size_t r = 0; r < n_reg; r++) {
+        py::array_t<uint8_t> a({G.nR[r], G.nTh[r]}), b({G.nR[r], G.nTh[r]});
+        std::fill(a.mutable_data(), a.mutable_data() + G.nR[r] * G.nTh[r], uint8_t(0));
+        std::fill(b.mutable_data(), b.mutable_data() + G.nR[r] * G.nTh[r], uint8_t(0));
+        kept.m[r] = a.mutable_data();
+        past.m[r] = b.mutable_data();
+        kept.nR[r] = past.nR[r] = static_cast<std::ptrdiff_t>(G.nR[r]);
+        kept.nTh[r] = past.nTh[r] = static_cast<std::ptrdiff_t>(G.nTh[r]);
+        km.push_back(a);
+        pm.push_back(b);
+    }
+    const py::ssize_t M = obs.shape(0), S = src.shape(0);
+    const double *o = obs.data(), *sp = src.data();
+    double mx_r1 = 0.0, mn_th = 0.5 * M_PI, mx_th = 0.0;
+    {
+        py::gil_scoped_release release;
+        using namespace mw568_below;
+        for (py::ssize_t m = 0; m < M; ++m)
+            for (py::ssize_t n = 0; n < S; ++n) {
+                double dx, dy, rho, hh, fr, ft;
+                int i0, j0;
+                below_pair_geometry(ground_z, o[3 * m], o[3 * m + 1], o[3 * m + 2], sp[3 * n],
+                                    sp[3 * n + 1], sp[3 * n + 2], dx, dy, rho, hh);
+                const double r1 = below_pair_r1(rho, hh);
+                const double th = std::atan2(hh, rho);
+                if (r1 > mx_r1) mx_r1 = r1;
+                if (th < mn_th) mn_th = th;
+                if (th > mx_th) mx_th = th;
+                const int reg = below_address(G, th_min, th_band_floor_hi, th_band_lo_hi,
+                                              th_band_hi, r1, th, fr, ft, i0, j0);
+                // `_zero_past_cap`: np.hypot, then np.sqrt(rho * rho + hh * hh)
+                // against the cap (no contraction: -ffp-contract=off).
+                (std::sqrt(rho * rho + hh * hh) > r1_cap ? past : kept).mark(reg, i0, j0);
+            }
+    }
+    return py::make_tuple(km, pm, mx_r1, mn_th, mx_th);
 }
 
 // `remainder_field_proj_below` in C++: obs/t_obs (M,3), src/t_src (S,3),
@@ -2736,6 +2815,17 @@ void register_mw568(py::module_ &m) {
     // momwire#1441 step 3: the tail integrand runs four nodes at a time;
     // `lanes=False` is the scalar walk it is gated against, bit for bit.
     m.attr("below_six_lanes_1441") = true;
+    m.def("remainder_field_proj_nodes_below", &remainder_field_proj_nodes_below,
+          "The lazy below grid's census (momwire#1512): (kept, past, mx_r1, "
+          "mn_th, mx_th) -- per region (n_r, n_th) uint8 masks of the nodes "
+          "remainder_field_proj_batch_below's reads over obs x src take, a "
+          "pair past `r1_cap` (as _zero_past_cap classifies it) in `past`, and "
+          "the batch's extremes.",
+          py::arg("obs"), py::arg("src"), py::arg("ground_z"), py::arg("r1_cap"),
+          py::arg("th_min"), py::arg("th_band_floor_hi"), py::arg("th_band_lo_hi"),
+          py::arg("th_band_hi"), py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"));
     m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
           "Interpolated + projected below/below remainder table — the complex-"
           "wavenumber TWIN of remainder_field_proj_batch (which carries a "

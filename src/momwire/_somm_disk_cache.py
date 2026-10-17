@@ -704,11 +704,28 @@ def note_seen(tag: str, value: tuple) -> list:
 
 
 def note_mutated(obj) -> None:
-    """Re-write a tracked grid after it filled more of itself."""
+    """Re-write a tracked grid after it filled more of itself. A grid with a
+    `merge_stored` (a lazy grid, momwire#1512) writes the union of itself and
+    what is stored now: another process may have filled other nodes since,
+    and a node's value is the fill's whoever filled it."""
     entry = _TRACKED.get(obj)
     if entry is None or not enabled():
         return
     try:
-        _store(entry[0], entry[1], obj)
+        merge = getattr(obj, "merge_stored", None)
+        out = obj if merge is None else merge(_load(entry[0], entry[1]))
+        _store(entry[0], entry[1], out)
     except Exception:  # noqa: BLE001 — a lost re-write costs one lazy refill later
         pass
+
+
+def stored_copy(obj):
+    """What is stored now for a tracked grid (another process's latest), or
+    None. Never an error."""
+    entry = _TRACKED.get(obj)
+    if entry is None or not enabled():
+        return None
+    try:
+        return _load(entry[0], entry[1])
+    except Exception:  # noqa: BLE001 — the disk is an optimization
+        return None

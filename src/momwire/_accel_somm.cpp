@@ -704,15 +704,10 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                 // dx/dy/rho/hh and `proj_core`'s r1, theta (clamped) and g.
                 for (int b = 0; b < nq4; ++b) {
                     const py::ssize_t n = n0 + b;
-                    dx[b] = ox - sx[n];
-                    dy[b] = oy - sy[n];
-                    rho[b] = std::hypot(dx[b], dy[b]);
-                    const double hh = (oz - ground_z) + (sz[n] - ground_z);
-                    r1[b] = std::sqrt(rho[b] * rho[b] + hh * hh);
-                    double theta = std::atan2(hh, rho[b]);
-                    if (theta < 0.0) theta = 0.0;
-                    else if (theta > G.half_pi) theta = G.half_pi;
-                    th[b] = theta;
+                    double hh;
+                    somm_proj::pair_geometry(ground_z, ox, oy, oz, sx[n], sy[n], sz[n],
+                                             dx[b], dy[b], rho[b], hh);
+                    somm_proj::proj_r1_theta(G, rho[b], hh, r1[b], th[b]);
                     const cd g = std::polar(1.0 / r1[b], -k * r1[b]);
                     gre[b] = g.real();
                     gim[b] = g.imag();
@@ -799,6 +794,88 @@ static py::array_t<std::complex<double>> reflected_field_batch_impl(
                                        ground_z, k, out.mutable_data());
     }
     return out;
+}
+
+// The lazy grids' census (momwire#1512): a mask per region (n_r, n_th) of
+// the nodes the reads of `remainder_field_proj_batch` over obs x src take --
+// both of its loops go through `pair_geometry`, `proj_r1_theta` and the
+// address `proj_address` gives (the lanes' `stencil_lanes` is that address
+// lane by lane) -- or, `reflected`, those of `reflected_field_batch` at
+// `points` (E; with magnetic, H's six offset points), likewise.
+static std::vector<py::array_t<uint8_t>> census_masks(
+    const somm_proj::GridView &G, size_t n_reg, somm_proj::NodeMarks &marks) {
+    std::vector<py::array_t<uint8_t>> masks;
+    marks.n_reg = n_reg;
+    for (size_t r = 0; r < n_reg; r++) {
+        py::array_t<uint8_t> a({G.nR[r], G.nTh[r]});
+        std::fill(a.mutable_data(), a.mutable_data() + G.nR[r] * G.nTh[r], uint8_t(0));
+        marks.m[r] = a.mutable_data();
+        marks.nR[r] = static_cast<std::ptrdiff_t>(G.nR[r]);
+        marks.nTh[r] = static_cast<std::ptrdiff_t>(G.nTh[r]);
+        masks.push_back(a);
+    }
+    return masks;
+}
+
+static std::vector<py::array_t<uint8_t>> remainder_field_proj_nodes(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src, double ground_z,
+    double r1_max, double r_break, double th_split, double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals) {
+    if (obs.ndim() != 2 || obs.shape(1) != 3 || src.ndim() != 2 || src.shape(1) != 3)
+        throw std::runtime_error("obs/src arrays must have shape (*, 3)");
+    const somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+    somm_proj::NodeMarks marks;
+    std::vector<py::array_t<uint8_t>> masks = census_masks(G, reg_vals.size(), marks);
+    const py::ssize_t M = obs.shape(0), S = src.shape(0);
+    const double *o = obs.data(), *sp = src.data();
+    py::gil_scoped_release release;
+    for (py::ssize_t m = 0; m < M; ++m)
+        for (py::ssize_t n = 0; n < S; ++n) {
+            double dx, dy, rho, hh, r1, theta, fr, ft;
+            int i0, j0;
+            somm_proj::pair_geometry(ground_z, o[3 * m], o[3 * m + 1], o[3 * m + 2], sp[3 * n],
+                                     sp[3 * n + 1], sp[3 * n + 2], dx, dy, rho, hh);
+            somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
+            const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
+            marks.mark(reg, i0, j0);
+        }
+    return masks;
+}
+
+static std::vector<py::array_t<uint8_t>> reflected_field_nodes_impl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> points,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_mid, double ground_z,
+    bool magnetic, double step, double r1_max, double r_break, double th_split, double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals) {
+    if (points.ndim() != 2 || points.shape(1) != 3 || src_mid.ndim() != 2 ||
+        src_mid.shape(1) != 3)
+        throw std::runtime_error("points and src_mid must be (*, 3)");
+    const somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+    somm_proj::NodeMarks marks;
+    std::vector<py::array_t<uint8_t>> masks = census_masks(G, reg_vals.size(), marks);
+    const py::ssize_t n = points.shape(0), s = src_mid.shape(0);
+    py::gil_scoped_release release;
+    if (magnetic)
+        somm_core::reflected_h_field_nodes(G, n, points.data(), s, src_mid.data(), ground_z, step,
+                                           marks);
+    else
+        somm_core::reflected_field_nodes(G, n, points.data(), s, src_mid.data(), ground_z, marks);
+    return masks;
 }
 
 // Fully-fused b-spline Galerkin Sommerfeld remainder (Phase 4b, stage 2):
@@ -1377,6 +1454,22 @@ void register_somm(py::module_ &m) {
           py::arg("mu"), py::arg("step"), py::arg("r1_max"), py::arg("r_break"),
           py::arg("th_split"), py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
           py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"));
+    m.def("remainder_field_proj_nodes", &remainder_field_proj_nodes,
+          "The lazy grids' census (momwire#1512): per region a (n_r, n_th) "
+          "uint8 mask of the nodes remainder_field_proj_batch's reads over "
+          "obs x src take (its own geometry and stencil address). The grid "
+          "as remainder_field_proj_batch takes it, without `far`.",
+          py::arg("obs"), py::arg("src"), py::arg("ground_z"), py::arg("r1_max"),
+          py::arg("r_break"), py::arg("th_split"), py::arg("r_near"), py::arg("reg_r0"),
+          py::arg("reg_dr"), py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));
+    m.def("reflected_field_nodes", &reflected_field_nodes_impl,
+          "The lazy grids' census of reflected_field_batch (momwire#1512): the "
+          "nodes its reads at `points` take (with magnetic, H's six offset "
+          "points), a (n_r, n_th) uint8 mask per region.",
+          py::arg("points"), py::arg("src_mid"), py::arg("ground_z"), py::arg("magnetic"),
+          py::arg("step"), py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"));
     m.def("somm_proj_lanes_built", []() { return (bool)MW_SOMM_LANES; },
           "Whether this build has remainder_field_proj_batch's AVX2 lanes "
           "(perf item 9); without them `lanes=True` runs the per-pair loop.");

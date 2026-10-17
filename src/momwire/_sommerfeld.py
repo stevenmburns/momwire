@@ -1029,6 +1029,7 @@ class SommerfeldGrid:
         mu=_MU0,
         cancel_flag=0,
         lattice_eps=None,
+        lazy=False,
     ):
         self.eps_t = complex(eps_t)
         # The eps the LATTICE is keyed to (spacings via |k1|); the surfaces are
@@ -1124,6 +1125,10 @@ class SommerfeldGrid:
             ]
 
         self._regions = []
+        if lazy:
+            # momwire#1512: the lattice with no node filled. `fill_nodes`
+            # evaluates the nodes a census names, at this rtol.
+            self._rtol = rtol
         for reg_idx, (r0, r1, dr, th0, th1, dth) in enumerate(layout):
             n_r = max(int(np.ceil((r1 - r0) / dr)) + 1, 4)
             n_th = int(round((th1 - th0) / dth)) + 1
@@ -1136,6 +1141,26 @@ class SommerfeldGrid:
                 # layout comment).
                 rr = rr.copy()
                 rr[0, :] = self._r0_fill
+            if lazy:
+                self._regions.append(
+                    {
+                        "r0": r0,
+                        "dr": dr,
+                        "n_r": n_r,
+                        "th0": np.radians(th0),
+                        "dth": np.radians(dth),
+                        "n_th": n_th,
+                        "vals": np.full(
+                            (len(_SURF_KEYS), n_r, n_th), np.nan, dtype=np.complex128
+                        ),
+                        # Each node's (R1, theta) as the eager fill evaluates
+                        # it, and which nodes hold their value.
+                        "node_r": rr,
+                        "node_th": tt,
+                        "have": np.zeros((n_r, n_th), dtype=bool),
+                    }
+                )
+                continue
             surf = iv_surfaces_direct(
                 self.eps_t,
                 self.k2,
@@ -1245,6 +1270,80 @@ class SommerfeldGrid:
                 for s, key in enumerate(_SURF_KEYS)
             ]
         )
+
+    # --- the lazy master (momwire#1512) --------------------------------
+
+    def missing(self, need):
+        """Per region, the nodes of `need` (bool (n_r, n_th) masks, None
+        for a region asked nothing) this grid does not hold yet; None when it
+        holds them all. A grid built eagerly holds every node."""
+        out, any_missing = [], False
+        for reg, nd in zip(self._regions, need, strict=True):
+            have = reg.get("have")
+            if nd is None or have is None:
+                out.append(None)
+                continue
+            m = np.asarray(nd, dtype=bool) & ~have
+            any_missing = any_missing or bool(m.any())
+            out.append(m)
+        return out if any_missing else None
+
+    def fill_nodes(self, need, cancel_flag=0):
+        """Fill the nodes of `need` this lazy grid does not hold, in place:
+        `iv_surfaces_direct` at each node's own (R1, theta), the eager fill's
+        values bit for bit (a node's value is its own arithmetic, so which
+        nodes share the call moves nothing). Returns how many were filled."""
+        miss = self.missing(need)
+        if miss is None:
+            return 0
+        at, rr, tt = [], [], []
+        for idx, (reg, m) in enumerate(zip(self._regions, miss, strict=True)):
+            if m is None or not m.any():
+                continue
+            ii, jj = np.nonzero(m)
+            at.append((idx, ii, jj))
+            rr.append(reg["node_r"][ii, jj])
+            tt.append(reg["node_th"][ii, jj])
+        surf = iv_surfaces_direct(
+            self.eps_t,
+            self.k2,
+            np.concatenate(rr),
+            np.concatenate(tt),
+            rtol=self._rtol,
+            omega=self.omega,
+            mu=self.mu,
+            cancel_flag=cancel_flag,
+        )
+        o = 0
+        for idx, ii, jj in at:
+            reg = self._regions[idx]
+            n = ii.size
+            for s_i, key in enumerate(_SURF_KEYS):
+                reg["vals"][s_i, ii, jj] = surf[key][o : o + n]
+            reg["have"][ii, jj] = True
+            o += n
+        return o
+
+    def take_nodes(self, other):
+        """The nodes `other` (the same lattice, e.g. this master as another
+        process stored it) holds and this grid does not, copied in. Returns
+        how many; 0 when `other` is not this lattice."""
+        if other is None or len(other._regions) != len(self._regions):
+            return 0
+        n = 0
+        for a, b in zip(self._regions, other._regions, strict=True):
+            if a["vals"].shape != b["vals"].shape:
+                return 0
+        for a, b in zip(self._regions, other._regions, strict=True):
+            have_b = b.get("have")
+            if have_b is None:
+                have_b = np.ones(b["vals"].shape[1:], dtype=bool)
+            m = have_b & ~a["have"]
+            if m.any():
+                a["vals"][:, m] = b["vals"][:, m]
+                a["have"] |= m
+                n += int(m.sum())
+        return n
 
     def scaled_to(self, k2, omega, mu):
         """A physical-units copy of this grid rescaled to another
@@ -1605,41 +1704,158 @@ def _somm_eps_rungs(eps_t: complex):
     return complex(re, -lo_im), complex(re, -hi_im), float(t)
 
 
+def lazy_grids() -> bool:
+    """`MOMWIRE_SOMM_LAZY` (momwire#1512): on unless 0 / off / false / no.
+    Off, a lazy request is served the whole grid (the eager fill's work; the
+    values are the same either way)."""
+    return os.environ.get("MOMWIRE_SOMM_LAZY", "").strip().lower() not in _LAZY_OFF
+
+
+_LAZY_OFF = ("0", "off", "false", "no")
+
+
+def lazy_check() -> bool:
+    """`MOMWIRE_SOMM_LAZY_CHECK` set (not 0): every lazy read is checked
+    finite after the read (`check_read`). With every node not filled reading
+    NaN, a node a census missed cannot go unseen: the proof that a census is
+    complete. Off in normal runs."""
+    v = os.environ.get("MOMWIRE_SOMM_LAZY_CHECK", "").strip()
+    return v not in ("", "0")
+
+
+# What `check_read` checked, per reader: (reads, values). Reported at exit in
+# the check mode (a check that ran over nothing proves nothing), and read by
+# the tests.
+LAZY_CHECKED: dict = {}
+
+
+def _report_checked():
+    import sys
+
+    for who, (reads, n) in sorted(LAZY_CHECKED.items()):
+        print(
+            f"MOMWIRE_SOMM_LAZY_CHECK ok: {who}: {reads} reads, {n} values finite",
+            file=sys.stderr,
+        )
+
+
+def check_read(values, who):
+    """`lazy_check`'s test: raise if a lazy read produced a non-finite value."""
+    if not LAZY_CHECKED:
+        import atexit
+
+        atexit.register(_report_checked)
+    reads, n = LAZY_CHECKED.get(who, (0, 0))
+    LAZY_CHECKED[who] = (reads + 1, n + int(np.size(values)))
+    if not np.all(np.isfinite(values)):
+        raise RuntimeError(
+            f"MOMWIRE_SOMM_LAZY_CHECK: {who} read a non-finite value "
+            "(a node its census did not name)"
+        )
+
+
 def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
     """The normalized master for one ladder rung on one lattice, cached in
-    `_NORM_CACHE` under (rung, r1 bucket, lattice rung). A cancelled fill
-    raises SolveAborted out of the constructor before the insert."""
+    `_NORM_CACHE` under (rung, r1 bucket, lattice rung).
+
+    Lazy (momwire#1512): the master is its lattice, and its nodes are filled
+    as views ask for them (`_ensure_master`). The disk level (momwire#1224)
+    sits under this one: a fresh process starts from every node another
+    process stored, bit for bit."""
     nkey = ("above", rung, r1b_wl, lattice_eps)
     master = _NORM_CACHE.get(nkey)
     if master is None:
         _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
-        # The disk level (momwire#1224) sits under this one: a fresh process
-        # reads the master another process filled, bit for bit.
-        master = _somm_disk_cache.fetch_or_fill(
-            nkey,
-            lambda: SommerfeldGrid(
-                rung,
-                _K2_REF,
-                r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
-                omega=_K2_REF * _C_LIGHT,
-                mu=_MU0,
-                cancel_flag=cancel_flag,
-                lattice_eps=lattice_eps,
-            ),
+        master = SommerfeldGrid(
+            rung,
+            _K2_REF,
+            r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
+            omega=_K2_REF * _C_LIGHT,
+            mu=_MU0,
+            cancel_flag=cancel_flag,
+            lattice_eps=lattice_eps,
+            lazy=True,
         )
+        stored = _somm_disk_cache.fetch(nkey)
+        if stored is not None:
+            master.take_nodes(stored)
+        else:
+            _somm_disk_cache.STATS["misses"] += _somm_disk_cache.enabled()
         _NORM_CACHE[nkey] = master
     return master
 
 
-def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
+def _ensure_master(nkey, master, need, cancel_flag=0):
+    """The nodes of `need` the master does not hold: first from the store
+    (another process may have filled them since this one read it), then
+    filled, then the file written back with the union (merge-on-write: a
+    node's value is the fill's whoever filled it). A write is a unique
+    temporary renamed into place, so racing writers can lose each other's
+    newest nodes from the file -- refilled on demand -- and never mix bytes."""
+    if master.missing(need) is None:
+        return
+    if master.take_nodes(_somm_disk_cache.fetch(nkey)) and master.missing(need) is None:
+        return
+    master.fill_nodes(need, cancel_flag)
+    if _somm_disk_cache.enabled():
+        master.take_nodes(_somm_disk_cache.fetch(nkey))
+        _somm_disk_cache.store(nkey, master)
+
+
+def _all_nodes(grid):
+    return [np.ones(r["vals"].shape[1:], dtype=bool) for r in grid._regions]
+
+
+def _view_of(lo, hi, t, eps_t, k2, omega, mu):
+    """`get_grid`'s view: the pair's blend at the exact eps_t (or the one
+    rung), then `scaled_to` -- whole tables, elementwise, so a node's value
+    is the same whatever the masters held around it."""
+    master = lo if hi is None else lo.blend(hi, t, eps_t)
+    return master.scaled_to(k2, omega, mu)
+
+
+def ensure_nodes(grid, need, cancel_flag=0):
+    """Fill a lazy view's nodes of `need` (`get_grid(..., lazy=True)`): the
+    two rung masters' same nodes (`_ensure_master`), then the view's blend
+    and scale, recomputed into its tables IN PLACE (a reader may hold them).
+    A grid that is not a lazy view holds every node already."""
+    src = getattr(grid, "_lazy_src", None)
+    if src is None:
+        return
+    miss = grid.missing(need)
+    if miss is None:
+        return
+    keys, masters, t, eps_t = src
+    for nkey, m in zip(keys, masters, strict=True):
+        _ensure_master(nkey, m, miss, cancel_flag)
+    lo = masters[0]
+    hi = masters[1] if len(masters) > 1 else None
+    fresh = _view_of(lo, hi, t, eps_t, grid.k2, grid.omega, grid.mu)
+    for reg, new in zip(grid._regions, fresh._regions, strict=True):
+        reg["vals"][...] = new["vals"]
+    for idx, reg in enumerate(grid._regions):
+        have = lo._regions[idx]["have"].copy()
+        if hi is not None:
+            have &= hi._regions[idx]["have"]
+        reg["have"] = have
+
+
+def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
     """Cached `SommerfeldGrid` for (eps_t, k2, r1_max, omega, mu).
 
     Two-level FIFO-bounded module cache: frequency-independent normalized
-    masters (filled once per (ladder rung, r1-bucket, lattice rung)) and a
-    cheap per-(eps_t, k2, omega, mu) view — the rung pair's blend at the
-    exact eps_t, rescaled — see the cache note above. A cancelled fill
-    raises SolveAborted out of the constructor before either cache insert,
-    so no partial grid is ever cached.
+    masters (one per (ladder rung, r1-bucket, lattice rung)) and a cheap
+    per-(eps_t, k2, omega, mu) view — the rung pair's blend at the exact
+    eps_t, rescaled — see the cache note above. A cancelled fill raises
+    SolveAborted before the view is cached, so no partial view is ever
+    served.
+
+    `lazy` (momwire#1512): the view holds only the nodes asked so far (the
+    rest read NaN) and the caller names the nodes its reads take
+    (`proj_census`, `reflected_census`) to `ensure_nodes` before reading.
+    A lazy view is its own cache entry; every other caller gets the whole
+    grid, as before. The masters are shared: filled node by node, so what a
+    lazy reader filled is not filled again for the whole grid.
     """
     # Cap (in wavelengths, #157) before bucketing so every geometry beyond
     # the cap keys to the same capped grid instead of minting a distinct
@@ -1650,6 +1866,7 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     r1b_wl = _somm_r1_bucket_wl(min(r1_wl, _SOMM_R1_CAP_LAMBDA))
     eps_t = complex(eps_t)
     lo, hi, t = _somm_eps_rungs(eps_t)
+    lazy = bool(lazy) and lazy_grids()
     # The leading regime discriminator (momwire#553 U2): the below/below
     # family tabulates a DIFFERENT surface family, over a different
     # divide-out, on a lattice keyed to a different wavelength — and it
@@ -1660,14 +1877,73 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     # bound and one eviction rule. The view is keyed on the EXACT eps_t
     # when it is a blend and on the rung when it is one (momwire#902).
     key = ("above", lo if lo == hi else eps_t, k2, r1b_wl, float(omega), float(mu))
+    if lazy:
+        key = key + ("lazy",)
     grid = _GRID_CACHE.get(key)
     if grid is None:
         # The pair's lattice is its demanding rung's (the larger |Im|).
-        master = _norm_master(lo, r1b_wl, hi, cancel_flag)
+        keys = [("above", lo, r1b_wl, hi)]
+        masters = [_norm_master(lo, r1b_wl, hi, cancel_flag)]
         if lo != hi:
-            other = _norm_master(hi, r1b_wl, hi, cancel_flag)
-            master = master.blend(other, t, eps_t)
+            keys.append(("above", hi, r1b_wl, hi))
+            masters.append(_norm_master(hi, r1b_wl, hi, cancel_flag))
+        if not lazy:
+            for nkey, m in zip(keys, masters, strict=True):
+                _ensure_master(nkey, m, _all_nodes(m), cancel_flag)
+        grid = _view_of(
+            masters[0], masters[1] if lo != hi else None, t, eps_t, k2, omega, mu
+        )
+        if lazy:
+            grid._lazy_src = (tuple(keys), tuple(masters), t, eps_t)
+            for idx, reg in enumerate(grid._regions):
+                have = masters[0]._regions[idx]["have"].copy()
+                if lo != hi:
+                    have &= masters[1]._regions[idx]["have"]
+                reg["have"] = have
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
-        grid = master.scaled_to(k2, omega, mu)
         _GRID_CACHE[key] = grid
     return grid
+
+
+def _census_args(grid):
+    """`grid_cpp_args` without the far pack: what a census takes."""
+    args = grid_cpp_args(grid)
+    return args[:9]
+
+
+def proj_census(grid, obs, src, ground_z):
+    """The nodes `remainder_field_proj` reads over obs x src take, as a bool
+    mask per region (momwire#1512), from the accelerator's census
+    (`remainder_field_proj_nodes`: the kernel's own pair geometry and stencil
+    address). Observers repeated to the bit are taken once (a read does not
+    depend on the observer's tangent). None without the accelerator."""
+    if _acc is None or not hasattr(_acc, "remainder_field_proj_nodes"):
+        return None
+    obs = np.ascontiguousarray(obs, dtype=np.float64)
+    if obs.shape[0] > 1:
+        obs = np.unique(obs.view(np.dtype((np.void, 24))), axis=0).view(np.float64)
+        obs = np.ascontiguousarray(obs.reshape(-1, 3))
+    masks = _acc.remainder_field_proj_nodes(
+        obs,
+        np.ascontiguousarray(src, dtype=np.float64),
+        float(ground_z),
+        *_census_args(grid),
+    )
+    return [np.asarray(m, dtype=bool) for m in masks]
+
+
+def reflected_census(grid, points, src_mid, ground_z, magnetic, step):
+    """The nodes `reflected_field_batch`'s reads at `points` take (H: its six
+    offset points), a bool mask per region (momwire#1512). None without the
+    accelerator."""
+    if _acc is None or not hasattr(_acc, "reflected_field_nodes"):
+        return None
+    masks = _acc.reflected_field_nodes(
+        np.ascontiguousarray(points, dtype=np.float64),
+        np.ascontiguousarray(src_mid, dtype=np.float64),
+        float(ground_z),
+        bool(magnetic),
+        float(step),
+        *_census_args(grid),
+    )
+    return [np.asarray(m, dtype=bool) for m in masks]

@@ -169,7 +169,10 @@ def test_a_cold_fill_tripped_after_its_first_batch_makes_no_further_one(
     monkeypatch, cold_memory, engine
 ):
     """On the base of this change the fill ran every remaining batch (4 at this
-    deck) and the solve finished: nothing in the fill read the token."""
+    deck) and the solve finished: nothing in the fill read the token. The
+    eager table's regions (MOMWIRE_SOMM_LAZY=0): razor's lazy table fills a
+    window's nodes in one batch, `test_an_aborted_lazy_node_fill_*` below."""
+    monkeypatch.setenv("MOMWIRE_SOMM_LAZY", "0")
     tok = CancelToken()
     rec = _count_batches(monkeypatch, tok, when="after")
     s = _MAKE[engine](**hub_deck(n_radials=4), cancel=tok)
@@ -198,6 +201,7 @@ def test_not_cancelled_a_cold_fill_makes_several_batches(
 ):
     """The control: with no trip the same cold solve makes several batch
     calls, so the count of 1 above is the poll."""
+    monkeypatch.setenv("MOMWIRE_SOMM_LAZY", "0")
     rec = _count_batches(monkeypatch)
     z = _MAKE[engine](**hub_deck(n_radials=4), cancel=CancelToken()).compute_impedance()
     assert rec["calls"] >= 3
@@ -223,6 +227,8 @@ def test_an_aborted_fill_leaves_no_partial_grid_in_memory_or_on_disk(
     store = tmp_path / "store"
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "1")
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(store))
+    # The eager table's region fills (the lazy table: the test after this).
+    monkeypatch.setenv("MOMWIRE_SOMM_LAZY", "0")
 
     with monkeypatch.context() as m:
         tok = CancelToken()
@@ -247,6 +253,35 @@ def test_an_aborted_fill_leaves_no_partial_grid_in_memory_or_on_disk(
     z_ref = _z("razor")  # an uninterrupted cold run
     assert np.array_equal(z_after, z_ref), (z_after, z_ref)
     assert np.array_equal(z_warm, z_ref), (z_warm, z_ref)
+
+
+def test_an_aborted_lazy_node_fill_holds_no_node_and_the_next_solve_is_whole(
+    monkeypatch, cold_memory, tmp_path
+):
+    """momwire#1512: razor's below table is lazy -- its regions join without
+    their nodes and a window's census nodes are filled in one batch. Tripped
+    as that batch starts, the batch raises, no node is marked held (an
+    aborted fill leaves the nodes NaN, so the next read fills them), and the
+    next solve, memory warm and disk on, is bit-identical to an uninterrupted
+    cold run."""
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "1")
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path / "store"))
+    with monkeypatch.context() as m:
+        tok = CancelToken()
+        rec = _count_batches(m, tok, when="before")
+        s = _MAKE["razor"](**hub_deck(n_radials=4), cancel=tok)
+        with pytest.raises(SolveAborted):
+            s.compute_impedance()
+        assert rec["calls"] == 1 and rec["kernel_raised"]
+    lazy = [g for k, g in cold_memory.items() if k[0] == "below" and k[-1] == "lazy"]
+    assert len(lazy) == 1
+    for reg in lazy[0]._regions:
+        assert not reg["have"].any()
+        assert np.all(np.isnan(reg["vals"]))
+    z_after = _z("razor")
+    cold_memory.clear()
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path / "fresh"))
+    assert np.array_equal(z_after, _z("razor"))
 
 
 def test_an_aborted_lazy_band_region_stays_unfilled(monkeypatch, cold_memory):
