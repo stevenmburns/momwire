@@ -3192,6 +3192,7 @@ cd np_cmul(cd a, cd b) { return nec5::np_cmul(a, b); }
 cd np_cdiv(cd a, cd b) { return nec5::np_cdiv(a, b); }
 double np_pairwise(const double *a, int64_t n) { return nec5::np_pairwise(a, n); }
 cd np_csum(const std::vector<cd> &a) { return nec5::np_csum(a); }
+void np_cpairwise(const cd *a, int64_t n, double &rr, double &ri) { nec5::np_cpairwise(a, n, rr, ri); }
 double np_interp(double x, const double *xp, const double *fp, int64_t n) {
     return nec5::np_interp(x, xp, fp, n);
 }
