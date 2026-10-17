@@ -990,16 +990,25 @@ def cpu_has_avx512() -> bool:
 
 
 def _numpy_version() -> str | None:
-    """The installed numpy's version, from its metadata: importing numpy
-    would read the very variables this is about to set."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-    except ImportError:
+    """The version of the numpy an ``import numpy`` would load, from the
+    ``numpy-<version>.dist-info`` beside it, or None when that cannot be
+    told. Neither imported (it would read the very variables this is about
+    to set) nor asked of ``importlib.metadata``, whose import alone costs a
+    thin client ~25 ms: this is a directory listing, in import order."""
+    import sys
+
+    for entry in sys.path:
+        try:
+            names = os.listdir(entry or ".")
+        except OSError:
+            continue
+        if "numpy" not in names:
+            continue
+        for name in names:
+            if name.startswith("numpy-") and name.endswith(".dist-info"):
+                return name[len("numpy-") : -len(".dist-info")]
         return None
-    try:
-        return version("numpy")
-    except (PackageNotFoundError, ValueError):
-        return None
+    return None
 
 
 def numpy_avx512_features(numpy_version: str | None) -> str:

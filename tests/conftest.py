@@ -38,7 +38,15 @@ import pytest as _pytest
 # every xdist worker and every subprocess a test starts inherits it: a gate's
 # answer must not depend on whether the box running it has AVX-512. On a CPU
 # without AVX-512 this sets nothing. tests/test_avx512_off.py checks it took.
-_mech.pin_cpu_env()
+if _mech.pin_cpu_env() and "numpy" in sys.modules:
+    # Something (a plugin, a root conftest) loaded numpy first: the variables
+    # reach subprocesses but not this process, whose in-process gates would
+    # then run AVX-512 numpy and OpenBLAS. Loud, not a quiet half-pin.
+    raise _pytest.UsageError(
+        "numpy was imported before tests/conftest.py could turn AVX-512 off "
+        "(momwire_serve_client.pin_cpu_env); export NPY_DISABLE_CPU_FEATURES "
+        "and OPENBLAS_CORETYPE yourself, or find the early importer"
+    )
 
 
 _SOMM_CACHE_TMP: list = []
