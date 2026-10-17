@@ -121,9 +121,12 @@ class BSplineSeamEngine final : public SeamEngine {
     void check_can_host(const Deck &d, const Prepared &p, bool has_ground) const override;
     void solver_arguments(const Deck &d, Prepared &p, bool has_ground) const override;
     Built build(Prepared &p) const override;
+    // TEST HOOK (momwire#1517 step 4): build the front of a buried deck the
+    // fill does not serve yet, for the stage gates
+    bool partial_buried = false;
 };
 
-SeamResult bspline_seam(const std::string &latin1_text, bool open_end = false);
+SeamResult bspline_seam(const std::string &latin1_text, bool open_end = false, bool partial_buried = false);
 
 }  // namespace nec5
 }  // namespace mw
