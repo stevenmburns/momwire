@@ -45,14 +45,21 @@ never produce it — it is machinery only the thin client speaks.
 
 import sys
 
-from momwire.deck._solver import (
+import momwire_serve_client
+
+# AVX-512 off before the imports below bring numpy in: the frozen engine is
+# its own interpreter (EZNEC, the native client and the resident pool all
+# start THIS exe), so this line is the bundle's one chance to set it.
+momwire_serve_client.pin_cpu_env()
+
+from momwire.deck._solver import (  # noqa: E402 - after the AVX-512 pin
     basis_from_program_name,
     dialect_from_program_name,
     nec4_basis_from_program_name,
 )
-from momwire.eznec import _serve
-from momwire.eznec._shell import main
-from momwire.serve._pool import WORKER_FLAG
+from momwire.eznec import _serve  # noqa: E402 - after the AVX-512 pin
+from momwire.eznec._shell import main  # noqa: E402 - after the AVX-512 pin
+from momwire.serve._pool import WORKER_FLAG  # noqa: E402 - after the AVX-512 pin
 
 MARKER = "eznec-"
 

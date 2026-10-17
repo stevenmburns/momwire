@@ -460,6 +460,9 @@ def _write_all(fd: int, data: bytes) -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     engine, want_version, want_selftest, idle_timeout = split_argv(argv)
+    # AVX-512 off before the server this client may start imports numpy:
+    # the answer must not depend on whether the CPU has it.
+    _mech.pin_cpu_env()
 
     # Before ANY of the three exits below, because all three depend on it: the
     # probe must refuse a typo'd basis the way the stock engine does, the

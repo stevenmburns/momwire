@@ -294,4 +294,9 @@ if __name__ == "__main__":
     os.environ["MOMWIRE_SOMM_CACHE"] = "0"
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    # AVX-512 off, as every entry point and the test session have it: the
+    # corpus must not depend on whether the CPU has it.
+    import momwire_serve_client
+
+    momwire_serve_client.pin_cpu_env()
     sys.exit(main())

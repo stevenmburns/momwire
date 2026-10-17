@@ -281,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
     (momwire#1395)."""
     args = list(sys.argv[1:] if argv is None else argv)
     prog = sys.argv[0] if argv is None else "momwire-eznec-client"
+    # AVX-512 off before any child (server, one-shot, stream) imports numpy:
+    # the answer must not depend on whether the CPU has it.
+    _mech.pin_cpu_env()
 
     if args == ["-version"]:
         print(probe_version())
