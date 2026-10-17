@@ -1678,6 +1678,82 @@ double np_interp(double x, const double *xp, const double *fp, int64_t n) {
     return r;
 }
 
+// `element_currents(coeffs)` (subdiv 1, `_ElementCurrents`): per wire the knots
+// along its edges (each edge an np.linspace, later edges without their first
+// knot), the element midpoints `0.5 * (k1 + k0)` and moments
+// `(0.5 * (I1 + I0))[:, None] * (k1 - k0)`.
+void element_moments(const std::vector<WireWalk> &walk, const std::vector<std::vector<cd>> &knot_i,
+                     std::vector<double> &mid, std::vector<cd> &moment) {
+    for (std::size_t w = 0; w < walk.size(); w++) {
+        std::vector<double> knots;
+        const std::vector<double> &poly = walk[w].polyline;
+        const std::vector<int64_t> &npe = walk[w].npe;
+        for (std::size_t e = 0; e < npe.size(); e++) {
+            std::vector<double> seg;
+            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] + 1, seg);
+            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
+        }
+        const std::vector<cd> &cur = knot_i[static_cast<std::size_t>(w)];
+        const std::size_t n_el = knots.size() / 3 - 1;
+        if (cur.size() != n_el + 1) throw std::logic_error("knot currents and knots disagree");
+        for (std::size_t e = 0; e < n_el; e++) {
+            const double *k0 = &knots[3 * e], *k1 = &knots[3 * e + 3];
+            const cd el = np_cmul(cd(0.5, 0.0), c_add(cur[e + 1], cur[e]));  // `0.5 * (...)`
+            for (int c = 0; c < 3; c++) {
+                mid.push_back(0.5 * (k1[c] + k0[c]));
+                moment.push_back(c_mul_real(el, k1[c] - k0[c]));
+            }
+        }
+    }
+}
+
+// `element_currents(coeffs, subdiv=8)`: each edge split 8 ways (linspace),
+// the arc along the chords (`norm3` steps, `np.cumsum`), the current there by
+// the basis' sampler (razor: `np.interp` of the knot currents), and the
+// elements' midpoints, moments, nodes and steps.
+ElementCurrents element_currents_sub(const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
+                                     int64_t subdiv) {
+    ElementCurrents el;
+    for (std::size_t w = 0; w < walk.size(); w++) {
+        std::vector<double> knots;
+        const std::vector<double> &poly = walk[w].polyline;
+        const std::vector<int64_t> &npe = walk[w].npe;
+        for (std::size_t e = 0; e < npe.size(); e++) {
+            std::vector<double> seg;
+            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] * subdiv + 1, seg);
+            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
+        }
+        const std::size_t nk = knots.size() / 3;
+        std::vector<double> arcs(nk, 0.0);
+        double run = 0.0;
+        for (std::size_t q = 1; q < nk; q++) {
+            const double dx = knots[3 * q] - knots[3 * q - 3], dy = knots[3 * q + 1] - knots[3 * q - 2],
+                         dz = knots[3 * q + 2] - knots[3 * q - 1];
+            const double step = std::sqrt((dx * dx + dy * dy) + dz * dz);
+            run = q == 1 ? step : run + step;
+            arcs[q] = run;
+        }
+        // a dropped copy: zeros (momwire#1042); else the basis' own samples
+        const std::vector<cd> cur =
+            walk[w].solved < 0 ? std::vector<cd>(nk, cd(0.0, 0.0)) : sampler.at(w, walk[w], arcs);
+        std::vector<cd> element(nk - 1);
+        for (std::size_t q = 0; q + 1 < nk; q++) {
+            element[q] = np_cmul(cd(0.5, 0.0), c_add(cur[q + 1], cur[q]));
+            for (int c = 0; c < 3; c++) {
+                el.mid.push_back(0.5 * (knots[3 * q + 3 + c] + knots[3 * q + c]));
+                el.moment.push_back(c_mul_real(element[q], knots[3 * q + 3 + c] - knots[3 * q + c]));
+            }
+        }
+        el.nodes.insert(el.nodes.end(), knots.begin(), knots.end());
+        for (std::size_t q = 0; q < nk; q++) {
+            const cd in = q == 0 ? cd(0.0, 0.0) : element[q - 1];
+            const cd out = q + 1 == nk ? cd(0.0, 0.0) : element[q];
+            el.delta.push_back(c_sub(in, out));
+        }
+    }
+    return el;
+}
+
 // `_element_fields(points, elements, k, radius, magnetic)`: the mixed-potential
 // E (or H), every element sum over axis 1 in numpy's order (from the first
 // term, in sequence).
@@ -1842,15 +1918,15 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
 // GD's from its medium -- one expression, at the solver's own omega):
 // `field + (C2 * image + remainder)`, C2's product numpy's fused one.
 NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
-                      const std::vector<std::vector<cd>> &knot_i, const Prepared &p, bool pec,
-                      bool compose) {
+                      const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
+                      const Prepared &p, bool pec, bool compose) {
     const std::vector<double> points = near_points(rq);
     const double k = 2.0 * 3.141592653589793 / p.wavelength;
     double radius = p.mesh.pieces.empty() ? 0.0 : p.mesh.pieces[0].radius;
     for (const SeamPiece &piece : p.mesh.pieces)
         if (piece.radius < radius) radius = piece.radius;  // Python's `min`
     if (p.mesh.pieces.empty()) throw Decline{"a near field with no wire"};
-    const Elements el = engine.element_currents(p, knot_i, 8);
+    const Elements el = element_currents_sub(walk, sampler, 8);
     std::vector<cd> field = element_fields(points, el, k, radius, rq.magnetic);
     if (pec || compose) {
         Elements img = el;
@@ -2240,11 +2316,19 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     // `near_fields=tuple(_near_field(...) for request if NE / NH)`: free
     // space, GN 1's image, or the composing ground's `C2 image + remainder`
     // (GN 0 / GN 2, and GD's medium over its PEC-image currents).
-    for (const Request &rq : deck.requests)
-        if (rq.kind == Request::near_field)
-            data.near_fields.push_back(std::make_shared<NearBlockC>(
-                near_block(rq, engine, knots, p, deck.ground.kind == Ground::perfect,
-                           p.has_medium)));
+    {
+        bool any_near = false;
+        for (const Request &rq : deck.requests) any_near = any_near || rq.kind == Request::near_field;
+        if (any_near) {
+            const std::vector<WireWalk> walk = engine.wire_walk(p);
+            const std::unique_ptr<CurrentSampler> sampler = engine.sampler(p, coeffs, knots);
+            for (const Request &rq : deck.requests)
+                if (rq.kind == Request::near_field)
+                    data.near_fields.push_back(std::make_shared<NearBlockC>(
+                        near_block(rq, engine, walk, *sampler, p, deck.ground.kind == Ground::perfect,
+                                   p.has_medium)));
+        }
+    }
     bool any_rp = false;
     for (const Request &rq : deck.requests) any_rp = any_rp || rq.kind == Request::far_field;
     if (any_rp) {
@@ -2255,7 +2339,7 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
             fg = FarGround::refl;
         std::vector<double> mid;
         std::vector<cd> moment;
-        engine.element_moments(p, knots, mid, moment);
+        element_moments(engine.wire_walk(p), knots, mid, moment);
         for (const Request &rq : deck.requests)
             if (rq.kind == Request::far_field)
                 data.patterns.push_back(pattern_block(

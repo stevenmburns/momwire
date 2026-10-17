@@ -78,14 +78,9 @@ std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::ve
     return out;
 }
 
-// `element_currents`' walk (momwire#1042): the caller's wires, a dropped copy
-// over its twin's polyline (reversed when it runs the other way), with its
-// per-edge counts alike. `solved` is -1 for a dropped copy.
-struct WireWalk {
-    std::vector<double> polyline;  // (n_points, 3)
-    std::vector<int64_t> npe;
-    int64_t solved = -1;
-};
+// `element_currents`' walk (momwire#1042) over razor's front: the caller's
+// wires, a dropped copy over its twin's polyline (reversed when it runs the
+// other way), with its per-edge counts alike.
 std::vector<WireWalk> wire_walk(const razor::Front &fr) {
     std::vector<WireWalk> out;
     const int64_t n = fr.has_dedup ? fr.n_input_wires : fr.n_wires;
@@ -122,69 +117,22 @@ const double *arc_of(const razor::Front &fr, int64_t w) {
     return fr.arc_at_knot.data() + fr.seg_offsets[w] + w;
 }
 
-// `RazorSolver.element_currents(coeffs)` (subdiv 1): per wire the knots
-// along its edges (each edge an np.linspace, later edges without their first
-// knot), the element midpoints `0.5 * (k1 + k0)` and moments
-// `(0.5 * (I1 + I0))[:, None] * (k1 - k0)`.
-void element_moments(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
-                     std::vector<double> &mid, std::vector<cd> &moment) {
-    const std::vector<WireWalk> walk = wire_walk(fr);
-    for (std::size_t w = 0; w < walk.size(); w++) {
-        std::vector<double> knots;
-        const std::vector<double> &poly = walk[w].polyline;
-        const std::vector<int64_t> &npe = walk[w].npe;
-        for (std::size_t e = 0; e < npe.size(); e++) {
-            std::vector<double> seg;
-            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] + 1, seg);
-            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
-        }
-        const std::vector<cd> &cur = knot_i[static_cast<std::size_t>(w)];
-        const std::size_t n_el = knots.size() / 3 - 1;
-        if (cur.size() != n_el + 1) throw std::logic_error("knot currents and knots disagree");
-        for (std::size_t e = 0; e < n_el; e++) {
-            const double *k0 = &knots[3 * e], *k1 = &knots[3 * e + 3];
-            const cd el = np_cmul(cd(0.5, 0.0), c_add(cur[e + 1], cur[e]));  // `0.5 * (...)`
-            for (int c = 0; c < 3; c++) {
-                mid.push_back(0.5 * (k1[c] + k0[c]));
-                moment.push_back(c_mul_real(el, k1[c] - k0[c]));
-            }
-        }
-    }
-}
-
-// `element_currents(coeffs, subdiv=8)`: each edge split 8 ways (linspace),
-// the arc along the chords (`norm3` steps, `np.cumsum`), the current there by
-// `np.interp` of the knot currents (real and imaginary apart, then
-// `Ire + 1j * Iim`), and the elements' midpoints, moments, nodes and steps.
-ElementCurrents element_currents_sub(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
-                              int64_t subdiv) {
-    ElementCurrents el;
-    const std::vector<WireWalk> walk = wire_walk(fr);
-    for (std::size_t w = 0; w < walk.size(); w++) {
-        std::vector<double> knots;
-        const std::vector<double> &poly = walk[w].polyline;
-        const std::vector<int64_t> &npe = walk[w].npe;
-        for (std::size_t e = 0; e < npe.size(); e++) {
-            std::vector<double> seg;
-            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] * subdiv + 1, seg);
-            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
-        }
-        const std::size_t nk = knots.size() / 3;
-        std::vector<double> arcs(nk, 0.0);
-        double run = 0.0;
-        for (std::size_t q = 1; q < nk; q++) {
-            const double dx = knots[3 * q] - knots[3 * q - 3], dy = knots[3 * q + 1] - knots[3 * q - 2],
-                         dz = knots[3 * q + 2] - knots[3 * q - 1];
-            const double step = std::sqrt((dx * dx + dy * dy) + dz * dz);
-            run = q == 1 ? step : run + step;
-            arcs[q] = run;
-        }
-        std::vector<cd> cur(nk, cd(0.0, 0.0));  // a dropped copy: zeros (momwire#1042)
-        const int64_t s = walk[w].solved;
+// razor's sampler (`RazorSolver.currents_at_knots(coeffs, arcs)`): numpy's
+// `interp` of the knot currents at the subdivided arcs, real and imaginary
+// parts apart, then `Ire + 1j * Iim`.
+class RazorSampler final : public CurrentSampler {
+  public:
+    RazorSampler(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i)
+        : fr_(fr), knot_i_(knot_i) {}
+    std::vector<cd> at(std::size_t w, const WireWalk &ww, const std::vector<double> &arcs) const override {
+        const razor::Front &fr = fr_;
+        const std::size_t nk = arcs.size();
+        std::vector<cd> cur(nk, cd(0.0, 0.0));
+        const int64_t s = ww.solved;
         const int64_t a0 = s < 0 ? 0 : fr.seg_offsets[static_cast<std::size_t>(s)] + s;
         const int64_t na = s < 0 ? 0 : fr.seg_offsets[static_cast<std::size_t>(s) + 1] - fr.seg_offsets[static_cast<std::size_t>(s)] + 1;
         const double *arc = &fr.arc_at_knot[static_cast<std::size_t>(a0)];
-        const std::vector<cd> &kc = knot_i[w];
+        const std::vector<cd> &kc = knot_i_[w];
         std::vector<double> re(kc.size()), im(kc.size());
         for (std::size_t q = 0; q < kc.size(); q++) {
             re[q] = kc[q].real();
@@ -196,23 +144,13 @@ ElementCurrents element_currents_sub(const razor::Front &fr, const std::vector<s
             const cd j_ii = np_cmul(cd(0.0, 1.0), cd(ii, 0.0));  // `1j * Iim`
             cur[q] = cd(ir + j_ii.real(), 0.0 + j_ii.imag());
         }
-        std::vector<cd> element(nk - 1);
-        for (std::size_t q = 0; q + 1 < nk; q++) {
-            element[q] = np_cmul(cd(0.5, 0.0), c_add(cur[q + 1], cur[q]));
-            for (int c = 0; c < 3; c++) {
-                el.mid.push_back(0.5 * (knots[3 * q + 3 + c] + knots[3 * q + c]));
-                el.moment.push_back(c_mul_real(element[q], knots[3 * q + 3 + c] - knots[3 * q + c]));
-            }
-        }
-        el.nodes.insert(el.nodes.end(), knots.begin(), knots.end());
-        for (std::size_t q = 0; q < nk; q++) {
-            const cd in = q == 0 ? cd(0.0, 0.0) : element[q - 1];
-            const cd out = q + 1 == nk ? cd(0.0, 0.0) : element[q];
-            el.delta.push_back(c_sub(in, out));
-        }
+        return cur;
     }
-    return el;
-}
+
+  private:
+    const razor::Front &fr_;
+    const std::vector<std::vector<cd>> knot_i_;
+};
 
 // `RazorSolver.wire_loss_power(coeffs, omega)[0]` (momwire#1501's hypot):
 // each segment's end currents from the wings (`np.add.at` in entry order),
@@ -311,16 +249,14 @@ std::vector<std::vector<cd>> RazorPrintoutEngine::current_slopes(
     return slopes;
 }
 
-void RazorPrintoutEngine::element_moments(const Prepared &p,
-                                          const std::vector<std::vector<cd>> &knots,
-                                          std::vector<double> &mid, std::vector<cd> &moment) const {
-    nec5::element_moments(*razor_part(p).front, knots, mid, moment);
+std::vector<WireWalk> RazorPrintoutEngine::wire_walk(const Prepared &p) const {
+    return nec5::wire_walk(*razor_part(p).front);
 }
 
-ElementCurrents RazorPrintoutEngine::element_currents(const Prepared &p,
-                                                      const std::vector<std::vector<cd>> &knots,
-                                                      int64_t subdiv) const {
-    return element_currents_sub(*razor_part(p).front, knots, subdiv);
+std::unique_ptr<CurrentSampler> RazorPrintoutEngine::sampler(
+    const Prepared &p, const std::vector<cd> &coeffs, const std::vector<std::vector<cd>> &knots) const {
+    (void)coeffs;
+    return std::unique_ptr<CurrentSampler>(new RazorSampler(*razor_part(p).front, knots));
 }
 
 double RazorPrintoutEngine::wire_loss_power(const Prepared &p, const std::vector<cd> &coeffs,
