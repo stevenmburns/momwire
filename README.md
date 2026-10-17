@@ -230,6 +230,32 @@ deadlock). Without `libomp` installed, the accelerator can't load and momwire
 warns and falls back to the slower pure-Python path. On Linux the system
 `libgomp` covers this, so no extra step is needed.
 
+### The razor-2p engine on Linux, without Python
+
+Each release also carries **`momwire-nec5-razor2p-linux-x86_64.tar.gz`**:
+the razor-2p NEC-5 engine (`momwire-nec5-razor-2p`) as one native program,
+with no Python in it. You do not need Python, pip or momwire installed. Its
+printouts are byte for byte the Python command's.
+
+```bash
+tar -xzf momwire-nec5-razor2p-linux-x86_64.tar.gz
+cd momwire-nec5-razor2p-linux-x86_64
+./momwire-nec5-razor2p-linux -version
+./momwire-nec5-razor2p-linux deck.nec deck.out   # EZNEC's and SimNEC's form
+./momwire-nec5-razor2p-linux - - < chain.nec     # SimNEC's streaming form
+```
+
+For SimNEC, point the NEC-5 engine setting at `momwire-nec5-razor2p-linux`
+in that folder. Keep the folder's three programs together:
+`momwire-nec5-razor2p-linux` runs the `-avx2` build on a processor with AVX2
+and FMA, and the `-sse2` build on any other 64-bit x86 processor. It needs
+64-bit x86 Linux with glibc 2.28 or newer (RHEL/Alma 8, Debian 10, Ubuntu
+18.10 and later); everything else is built in. A deck it does not serve yet
+is refused in the printout by name ("not served by this build: ..."), and
+the Python command serves it. The other formulations stay Python. The
+existing Windows `momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is
+unchanged.
+
 ## Test
 
 ```bash

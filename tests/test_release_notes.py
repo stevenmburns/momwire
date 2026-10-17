@@ -58,3 +58,12 @@ def test_the_drop_in_still_attaches_to_the_release():
     text = (WORKFLOWS / ATTACHES_ONLY).read_text()
     assert "softprops/action-gh-release" in text
     assert "files: momwire-eznec-windows.zip" in text
+
+
+def test_the_linux_executable_attaches_to_the_release():
+    """momwire#1512's Linux artifact rides the same release, as an attach
+    only: built and gated on every run, attached on a pushed tag."""
+    text = (WORKFLOWS / "standalone.yml").read_text()
+    assert "softprops/action-gh-release" in text
+    assert "files: momwire-nec5-razor2p-linux-x86_64.tar.gz" in text
+    assert 'tags: ["v*"]' in text
