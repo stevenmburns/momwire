@@ -343,7 +343,9 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
         // half never computed. Few edges only: a deck of many short edges
         // saves little and would pay a call per edge.
         if (slices.size() <= OFFEDGE_SPLIT_MAX_EDGES) {
-            J = Block(static_cast<size_t>(nd * nd) * N * N);
+            // every entry written below: off-edge blocks here, the same-edge
+            // ones by the overwrite that follows
+            J = Block(static_cast<size_t>(nd * nd) * N * N, false);
             for (const auto &sl : slices) {
                 std::vector<size_t> rows, cols;
                 for (size_t q = sl.first; q < sl.second; q++) rows.push_back(q);
