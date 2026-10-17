@@ -391,6 +391,11 @@ _ACCEL_HEADERS = [
     # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
     # (scripts/gen_leggauss_header.py), read by the front half.
     "src/momwire/_leggauss_table.h",
+    # pybind11's array vocabulary without Python, its numpy seam, and the
+    # B-spline core's entry points (momwire#1517 step 0).
+    "src/momwire/_mw_nd.h",
+    "src/momwire/_mw_nd_binding.h",
+    "src/momwire/_bspline_core.h",
     "src/momwire/_nec5_deck_core.h",
     "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
@@ -410,6 +415,10 @@ _ACCEL_HEADERS = [
 _ACCEL_SOURCES = [
     "src/momwire/_accelerators.cpp",
     "src/momwire/_accel_bspline.cpp",
+    # The B-spline kernels with no Python in their signatures or includes
+    # (momwire#1517 step 0); `_accel_bspline.cpp` is their binding. The
+    # extension TU's kernel text, moved verbatim, over `_mw_nd.h`'s arrays.
+    "src/momwire/_bspline_core.cpp",
     "src/momwire/_accel_sinusoidal.cpp",
     "src/momwire/_accel_somm.cpp",
     # The Sommerfeld near-field remainder (`_field_point`), one spelled

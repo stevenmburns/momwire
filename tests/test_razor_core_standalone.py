@@ -58,6 +58,9 @@ CORE_SOURCES = (
     # The B-spline basis' exact kernel: the coaxial pair moments and their
     # row windows (momwire#1517 step 0), the extension's 1410 text.
     "_exact_kernel_coaxial_core.cpp",
+    # The B-spline kernels (momwire#1517 step 0): the extension's bspline
+    # TU's text over `_mw_nd.h`'s arrays.
+    "_bspline_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -173,6 +176,7 @@ def driver(accel, tmp_path_factory):
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
         "exact_kernel_coaxial_driver",
+        "bspline_core_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -206,6 +210,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_razor_front_core.h" in seen, "the front half's core was not built"
     assert "_nec5_deck_core.h" in seen, "the deck reader's core was not built"
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
+    assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -1032,3 +1037,40 @@ def test_the_coaxial_exact_kernel_in_cxx_alone_is_the_extensions(
         assert (tmp_path / f"drv_{name}.bin").read_bytes() == ref, name
     counts = (tmp_path / "drv_counts.txt").read_text().split()
     assert counts == [str(rows.evaluated), str(rows.cached)]
+
+
+def test_the_bspline_kernels_in_cxx_alone_are_the_extensions(driver, accel, tmp_path):
+    """The B-spline kernels' core (`_bspline_core.h`, momwire#1517 step 0)
+    built from the core TUs alone, on the default host (memory from `new`,
+    no GIL): a bent two-wire segment set's off-edge moments, by the lane path
+    where this variant builds it and by the per-pair walk, and a uniform
+    edge's static table, byte for byte the extension's."""
+    exe = driver[0]["bspline_core_driver"]
+    a, k, max_d, h, N = 1e-3, 2.0 * np.pi / 7.0, 2, 0.11, 9
+    t = np.linspace(0.0, 1.0, 8)[:, None]
+    leg1 = np.array([0.0, 0.0, 0.0]) + t * np.array([0.7, 0.0, 0.0])
+    leg2 = np.array([0.7, 0.0, 0.0]) + t * np.array([0.3, 0.0, 0.6])
+    pts = np.concatenate([leg1, leg2[1:]])
+    seg_l = np.ascontiguousarray(pts[:-1])
+    seg_r = np.ascontiguousarray(pts[1:])
+    gl_t, gl_w = np.polynomial.legendre.leggauss(4)
+    gl_t = 0.5 * (gl_t + 1.0)
+    gl_w = 0.5 * gl_w
+    for name, v in (("seg_l", seg_l), ("seg_r", seg_r), ("gl_t", gl_t), ("gl_w", gl_w)):
+        np.ascontiguousarray(v, dtype=np.float64).tofile(tmp_path / f"{name}.bin")
+    (tmp_path / "params.txt").write_text(f"{a!r} {k!r} {max_d} {h!r} {N}\n")
+    run = subprocess.run([str(exe), str(tmp_path)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+
+    def full(reference):
+        return accel.seg_seg_full_moments_bspline(
+            seg_l, seg_r, seg_l, seg_r, a * a, k, max_d, gl_t, gl_w, reference
+        )
+
+    for name, ref in (
+        ("full", full(False)),
+        ("full_ref", full(True)),
+        ("static", accel.seg_seg_static_moments_bspline_uniform(h, a, N, max_d)),
+    ):
+        assert ref.size > 0
+        assert (tmp_path / f"drv_{name}.bin").read_bytes() == ref.tobytes(), name

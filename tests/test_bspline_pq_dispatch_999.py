@@ -122,7 +122,8 @@ def test_the_flattening_does_not_come_back():
     gate and the #988 importorskip guard."""
     import momwire
 
-    src = pathlib.Path(momwire.__file__).parent / "_accel_bspline.cpp"
+    # the kernels' text (`_accel_bspline.cpp`'s until momwire#1517 step 0)
+    src = pathlib.Path(momwire.__file__).parent / "_bspline_core.cpp"
     code = re.sub(r"//[^\n]*", "", src.read_text())
     assert not re.search(r"\bp\s*\*\s*\d+\s*\+\s*q\b", code), (
         "a flattened (p, q) dispatch is back; index the two independently"

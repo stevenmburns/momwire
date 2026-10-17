@@ -59,7 +59,9 @@ N_DEGREE_SWITCHES = 25
 def _source() -> str:
     import momwire
 
-    return (pathlib.Path(momwire.__file__).parent / "_accel_bspline.cpp").read_text()
+    # The kernels' text, which `_accel_bspline.cpp` held until the core /
+    # binding split (momwire#1517 step 0) and its core holds since.
+    return (pathlib.Path(momwire.__file__).parent / "_bspline_core.cpp").read_text()
 
 
 def test_no_degree_switch_still_stops_at_two():

@@ -108,6 +108,14 @@ struct view {
     T &operator()(ptrdiff_t i, ptrdiff_t j, ptrdiff_t k) const {
         return at(i * st[0] + (j * st[1] + k * st[2]));
     }
+    T &operator()(ptrdiff_t i, ptrdiff_t j, ptrdiff_t k, ptrdiff_t l) const {
+        return at(i * st[0] + (j * st[1] + (k * st[2] + l * st[3])));
+    }
+    T &operator()(ptrdiff_t i, ptrdiff_t j, ptrdiff_t k, ptrdiff_t l, ptrdiff_t m) const {
+        return at(i * st[0] + (j * st[1] + (k * st[2] + (l * st[3] + m * st[4]))));
+    }
+    // A 1-D proxy's `[i]`, which is its `(i)`.
+    T &operator[](ptrdiff_t i) const { return at(i * st[0]); }
 
   private:
     T &at(ptrdiff_t byte_offset) const {
