@@ -103,7 +103,9 @@ set(MW_CORE_SOURCES
 # runtime at all (`omp simd` stays: -fopenmp-simd / MSVC's simd no-ops), so a
 # one-thread answer never initialises the OpenMP runtime (route.h).
 if(MSVC)
-  set(MW_CORE_FLAGS /O2 /arch:AVX2 /fp:fast /std:c++17)
+  # M_PI for every TU (as setup.py): a core's first standard header can come
+  # before `_mw_core.h` defines _USE_MATH_DEFINES.
+  set(MW_CORE_FLAGS /O2 /arch:AVX2 /fp:fast /std:c++17 /D_USE_MATH_DEFINES=)
   set(MW_OMP_FLAG /openmp:llvm)
 else()
   set(MW_CORE_FLAGS -O3 -fopenmp-simd -mavx2 -mfma -fno-math-errno -ffp-contract=off
@@ -147,7 +149,7 @@ else()
   endif()
 endif()
 if(MSVC)
-  target_compile_options(${MW_EXE} PRIVATE /O2 /std:c++17 /openmp:llvm)
+  target_compile_options(${MW_EXE} PRIVATE /O2 /std:c++17 /openmp:llvm /D_USE_MATH_DEFINES=)
 else()
   # -ffp-contract=off: the launcher's .GMO grid is numpy's arithmetic
   target_compile_options(${MW_EXE} PRIVATE -O2 -fopenmp -ffp-contract=off)
