@@ -71,6 +71,14 @@
 #define MW_LANES_AVX512 1
 #elif MW_LANES_HAVE_AVX2
 #define MW_LANES_AVX2 1
+#elif defined(MW_STUDY_SSE2_LANES) && defined(__SSE2__) && !defined(_MSC_VER)
+// STUDY (proto/razor-sse2-study): the baseline build gets the portable
+// backend at W = 4 (GCC's SLP turns each lane map into two SSE2 ops), with
+// fmadd UNFUSED -- a*b + c, exactly mw_fma::fma in this build -- so a lane
+// still computes its scalar walk's bits.
+#define MW_LANES_PORTABLE 1
+#define MW_LANES_PORTABLE_WIDTH 4
+#define MW_LANES_SSE2_UNFUSED 1
 #endif
 
 #if defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512) || \
@@ -88,7 +96,8 @@
 #if ((defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512)) &&            \
      !defined(_MSC_VER)) ||                                              \
     (defined(MW_LANES_PORTABLE) &&                                       \
-     (defined(__FMA__) || defined(__ARM_FEATURE_FMA)) && !defined(_MSC_VER))
+     (defined(__FMA__) || defined(__ARM_FEATURE_FMA)) && !defined(_MSC_VER)) || \
+    defined(MW_LANES_SSE2_UNFUSED)
 #define MW_LANES_FMA_EXACT 1
 #else
 #define MW_LANES_FMA_EXACT 0
@@ -322,8 +331,13 @@ MW_LANES_INLINE vd mul(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] * b.v[l]); }
 MW_LANES_INLINE vd div(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] / b.v[l]); }
 MW_LANES_INLINE vd sqrt(vd a) { MW_LANES_MAP_(vd, std::sqrt(a.v[l])); }
 MW_LANES_INLINE vd floor(vd a) { MW_LANES_MAP_(vd, std::floor(a.v[l])); }
+#if defined(MW_LANES_SSE2_UNFUSED)
+MW_LANES_INLINE vd fmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, a.v[l] * b.v[l] + c.v[l]); }
+MW_LANES_INLINE vd fnmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, -a.v[l] * b.v[l] + c.v[l]); }
+#else
 MW_LANES_INLINE vd fmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, std::fma(a.v[l], b.v[l], c.v[l])); }
 MW_LANES_INLINE vd fnmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, std::fma(-a.v[l], b.v[l], c.v[l])); }
+#endif
 MW_LANES_INLINE vd neg(vd a) { MW_LANES_MAP_(vd, -a.v[l]); }
 MW_LANES_INLINE vd min(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] < b.v[l] ? a.v[l] : b.v[l]); }
 MW_LANES_INLINE vd max(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] > b.v[l] ? a.v[l] : b.v[l]); }
