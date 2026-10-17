@@ -394,6 +394,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_deck_core.h",
     "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
+    "src/momwire/_nec5_printout_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
     "src/momwire/_somm_proj_core.h",
@@ -533,10 +534,14 @@ _ACCEL_SOURCES = [
     # nothing calls them on the default path.
     "src/momwire/_nec5_seam_core.cpp",
     "src/momwire/_nec5_razor_seam_core.cpp",
-    # The run half and the printout writer for razor-2p (unit 3a): deck text
-    # to the printout's bytes, Python-free. Nothing binds it yet (the
-    # standalone driver is its caller); it is built here so every platform's
-    # toolchain compiles it. Its own TU: nothing calls it on the default path.
+    # The run half and the printout writer (unit 3a): deck text to the
+    # printout's bytes, Python-free, for any basis (`_nec5_printout_core.cpp`),
+    # and razor-2p's answers to what the solver is asked
+    # (`_nec5_razor_printout_core.cpp`, momwire#1517 step 0). Nothing binds
+    # them yet (the standalone driver is their caller); they are built here so
+    # every platform's toolchain compiles them. Their own TUs: nothing calls
+    # them on the default path.
+    "src/momwire/_nec5_printout_core.cpp",
     "src/momwire/_nec5_razor_printout_core.cpp",
     # WIRE loading for that C++ path (LD 5 skin effect through the vendored
     # xsf's `cyl_bessel_ie`, scipy.special.ive's own code; LD 2 / LD 3
