@@ -197,6 +197,9 @@ if sys.platform == "win32":
     # keeps contraction inside a single expression only) is the follow-up.
     # /std:c++17: every extension is C++17 (the near-interface pair already
     # was, momwire#680). MSVC's default is C++14.
+    # /D_USE_MATH_DEFINES= (empty, the same text as the headers' own
+    # #define): M_PI for every TU, including the Python-free cores, whose
+    # first standard header can come before `_mw_core.h` (momwire#1512).
     extra_compile_args = [
         "/O2",
         "/arch:AVX2",
@@ -204,6 +207,7 @@ if sys.platform == "win32":
         "/fp:fast",
         "/MP",
         "/std:c++17",
+        "/D_USE_MATH_DEFINES=",
     ]
     extra_link_args = []
 elif sys.platform == "darwin":
