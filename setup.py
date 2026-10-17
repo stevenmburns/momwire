@@ -3,6 +3,7 @@ import os
 import platform
 import subprocess
 import sys
+import sysconfig
 import warnings
 
 from pybind11.setup_helpers import ParallelCompile, Pybind11Extension
@@ -219,6 +220,18 @@ elif sys.platform == "darwin":
     # -lmvec (no vectorized libm on macOS); the libmvec `declare simd` block in
     # _accelerators.cpp is #ifdef'd off under __APPLE__. delocate vendors the
     # libomp dylib into the wheel (the -rpath below points the extension at it).
+    #
+    # std::filesystem (the Python-free cores' Sommerfeld grid stores,
+    # momwire#1512) is available from macOS 10.15; python.org's universal2
+    # build targets 10.13, so an editable or sdist build there would fail to
+    # compile the extension and fall back to pure Python. Raise the target to
+    # 10.15 where it is lower; the wheels already build for 14.0
+    # (pyproject.toml's cibuildwheel environment).
+    _target = os.environ.get("MACOSX_DEPLOYMENT_TARGET") or str(
+        sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET") or ""
+    )
+    if tuple(int(p) for p in _target.split(".")[:2] if p.isdigit()) < (10, 15):
+        os.environ["MACOSX_DEPLOYMENT_TARGET"] = "10.15"
     _libomp = os.environ.get("LIBOMP_PREFIX", "/opt/homebrew/opt/libomp")
     extra_compile_args = [
         "-O3",
