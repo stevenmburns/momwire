@@ -22,6 +22,11 @@
 #include <unordered_map>
 #include <vector>
 
+// The sheet's fixed-width cell sums (MW_SHEET_FIXED below) mirror an
+// mw_fma::fma chain, so the x86-64 baseline build may run them on the lane
+// layer's unfused portable backend and keep its bits (_lanes.h). Only this
+// TU opts in.
+#define MW_LANES_BASELINE_UNFUSED 1
 #include "_lanes.h"
 
 #ifdef _OPENMP
@@ -530,8 +535,10 @@ static inline void cell_sum(const double *blk, const double *wr,
 #if MW_LANES_SIMD && MW_LANES_FUSED
 #define MW_SHEET_FIXED 1
 // ND doubles in ND / W lane-layer vectors (momwire#1372). `fmadd` is W
-// independent fused multiply-adds, one per lane, each rounding exactly as
-// `std::fma` does on that lane's operands, so a lane is the scalar chain.
+// independent multiply-adds, one per lane, each rounding exactly as the
+// walk's `mw_fma::fma` does on that lane's operands (fused where the build
+// has FMA, a*b + c on the x86-64 baseline's unfused portable backend), so a
+// lane is the scalar chain.
 // Spelled in vectors because GCC 11, left to vectorise the plain loops at a
 // fixed width, spilled the inner sums to the stack and gathered across j,
 // which was barely faster than the generic loop. A width the backend's W does
