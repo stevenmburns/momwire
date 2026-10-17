@@ -389,5 +389,103 @@ std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, c
     return std::vector<cdouble>(Z.data(), Z.data() + Z.size());
 }
 
+PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
+                      int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
+                      const razor::Lapack &lp, const nec5::NumpyLinalg &np) {
+    using nec5::Op;
+    PortSolve out;
+    const size_t nb = static_cast<size_t>(n_b), np_ = static_cast<size_t>(n_p), nc = static_cast<size_t>(n_c);
+    // `lu_factor`: Z's Fortran copy
+    std::vector<cdouble> zf(nb * nb);
+    for (size_t i = 0; i < nb; i++)
+        for (size_t j = 0; j < nb; j++) zf[j * nb + i] = Z[i * nb + j];
+    razor::SolveContext ctx;
+    ctx.set_z(zf.data(), static_cast<ptrdiff_t>(n_b));
+    // B as numpy holds it: complex128, C order (`np.hstack`)
+    std::vector<cdouble> Bc(nb * np_);
+    for (size_t q = 0; q < Bc.size(); q++) Bc[q] = cdouble(B[q], 0.0);
+    std::vector<cdouble> Xc(nb * np_);  // the result, C order
+    if (n_c == 0) {
+        // `_lu_solve(Z, V)`: V's Fortran copy, solved in place
+        std::vector<cdouble> x(nb * np_);
+        for (size_t i = 0; i < nb; i++)
+            for (size_t j = 0; j < np_; j++) x[j * nb + i] = Bc[i * np_ + j];
+        out.info = ctx.lu_solve(lp, x.data(), static_cast<int>(n_p));
+        if (out.info != 0) return out;
+        for (size_t i = 0; i < nb; i++)
+            for (size_t j = 0; j < np_; j++) Xc[i * np_ + j] = x[j * nb + i];
+        out.Y.assign(np_ * np_, cdouble(0.0, 0.0));
+        nec5::replay::np_matmul(np, Op{Bc.data(), n_p, n_b, 1, n_p}, Op{x.data(), n_b, n_p, 1, n_b},
+                                out.Y.data(), n_p, 1);
+        out.X = Xc;
+        return out;
+    }
+    // rhs = [V | A^T], F order
+    const size_t nr = np_ + nc;
+    std::vector<cdouble> sol(nb * nr);
+    for (size_t i = 0; i < nb; i++) {
+        for (size_t j = 0; j < np_; j++) sol[j * nb + i] = Bc[i * np_ + j];
+        for (size_t c = 0; c < nc; c++) sol[(np_ + c) * nb + i] = cdouble(kcl[c * nb + i], 0.0);
+    }
+    out.info = ctx.lu_solve(lp, sol.data(), static_cast<int>(nr));
+    if (out.info != 0) return out;
+    const cdouble *W = sol.data(), *X = sol.data() + np_ * nb;  // F views
+    // `kcl_A @ X`, `kcl_A @ W`: the float operand cast to a complex C copy
+    std::vector<cdouble> Ac(nc * nb);
+    for (size_t q = 0; q < Ac.size(); q++) Ac[q] = cdouble(kcl[q], 0.0);
+    std::vector<cdouble> AX(nc * nc), AW(nc * np_);
+    nec5::replay::np_matmul(np, Op{Ac.data(), n_c, n_b, n_b, 1}, Op{X, n_b, n_c, 1, n_b}, AX.data(), n_c, 1);
+    nec5::replay::np_matmul(np, Op{Ac.data(), n_c, n_b, n_b, 1}, Op{W, n_b, n_p, 1, n_b}, AW.data(), n_p, 1);
+    // `scipy.linalg.solve(AX, AW)`
+    std::vector<cdouble> Lam(nc * np_);
+    if (n_c == 1) {
+        if (AX[0] == cdouble(0.0, 0.0)) {
+            out.info = 1;
+            return out;
+        }
+        for (size_t j = 0; j < np_; j++) Lam[j] = nec5::replay::np_cdiv(AW[j], AX[0]);
+    } else {
+        // general: no exact zero triangle, no exact symmetry (else scipy
+        // detects a structure and takes another factorization)
+        bool lower0 = true, upper0 = true, sym = true, herm = true;
+        for (size_t i = 0; i < nc; i++)
+            for (size_t j = 0; j < nc; j++) {
+                const cdouble a = AX[i * nc + j], at = AX[j * nc + i];
+                if (i > j && a != cdouble(0.0, 0.0)) lower0 = false;
+                if (i < j && a != cdouble(0.0, 0.0)) upper0 = false;
+                if (a != at) sym = false;
+                if (a != std::conj(at)) herm = false;
+            }
+        if (lower0 || upper0 || sym || herm) throw FrontNotPorted("a structured KCL system");
+        std::vector<cdouble> af(nc * nc), bf(nc * np_);
+        for (size_t i = 0; i < nc; i++) {
+            for (size_t j = 0; j < nc; j++) af[j * nc + i] = AX[i * nc + j];
+            for (size_t j = 0; j < np_; j++) bf[j * nc + i] = AW[i * np_ + j];
+        }
+        razor::SolveContext small;
+        small.set_z(af.data(), static_cast<ptrdiff_t>(n_c));
+        if (small.lu_solve(lp, bf.data(), static_cast<int>(n_p)) != 0) {
+            out.info = 1;
+            return out;
+        }
+        for (size_t i = 0; i < nc; i++)
+            for (size_t j = 0; j < np_; j++) Lam[i * np_ + j] = bf[j * nc + i];
+    }
+    // `W - X @ Lam`
+    std::vector<cdouble> XL(nb * np_);
+    nec5::replay::np_matmul(np, Op{X, n_b, n_c, 1, n_b}, Op{Lam.data(), n_c, n_p, n_p, 1}, XL.data(), n_p, 1);
+    for (size_t i = 0; i < nb; i++)
+        for (size_t j = 0; j < np_; j++) {
+            const cdouble w = W[j * nb + i], xl = XL[i * np_ + j];
+            Xc[i * np_ + j] = cdouble(w.real() - xl.real(), w.imag() - xl.imag());
+        }
+    // `Y = B.T @ X`
+    out.Y.assign(np_ * np_, cdouble(0.0, 0.0));
+    nec5::replay::np_matmul(np, Op{Bc.data(), n_p, n_b, 1, n_p}, Op{Xc.data(), n_b, n_p, n_p, 1},
+                            out.Y.data(), n_p, 1);
+    out.X = Xc;
+    return out;
+}
+
 }  // namespace bspline
 }  // namespace mw

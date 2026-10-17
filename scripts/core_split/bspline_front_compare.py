@@ -59,12 +59,22 @@ def main():
             os.path.dirname(np.__file__), "..", "numpy.libs", "libscipy_openblas64_*"
         )
     )
-    syrk = ctypes.cast(ctypes.CDLL(lib[0]).scipy_cblas_dsyrk64_, ctypes.c_void_p).value
+    npl = ctypes.CDLL(lib[0])
+    syrk = ctypes.cast(npl.scipy_cblas_dsyrk64_, ctypes.c_void_p).value
+    blas = [
+        ctypes.cast(getattr(npl, f), ctypes.c_void_p).value
+        for f in (
+            "scipy_cblas_zgemm64_",
+            "scipy_cblas_zgemv64_",
+            "scipy_cblas_zdotu_sub64_",
+            "scipy_zgesv_64_",
+        )
+    ]
     counts, mismatches = Counter(), 0
     for path in _decks(sys.argv[1:]):
         text = path.read_bytes().decode("latin-1")
         for k, entry in enumerate(
-            acc.bspline_front_geometry(text.encode("latin-1"), syrk)
+            acc.bspline_front_geometry(text.encode("latin-1"), syrk, blas)
         ):
             try:
                 solver = BSplineSolver(**entry["kwargs"])
@@ -130,6 +140,24 @@ def main():
                             Z = solver._assemble_Z(J, supp, polys, geom)
                             d += fc.differences(Z, entry["Z"], "Z")
                             counts["Z-compared"] += 1
+                            from momwire import _lapack
+
+                            Bp, kcon = solver._port_columns(
+                                geom, knots, _wbg, supp.shape[0], kcl
+                            )
+                            try:
+                                Xp = solver._solve_with_kcl_ports(Z.copy(), Bp, kcon)
+                                Yp = _lapack.matmul(Bp.T, Xp)
+                                d += fc.differences(
+                                    np.ascontiguousarray(Xp), entry["X"], "X"
+                                )
+                                d += fc.differences(
+                                    np.ascontiguousarray(Yp), entry["Y"], "Y"
+                                )
+                                counts["solve-compared"] += 1
+                            except np.linalg.LinAlgError:
+                                if entry.get("solve_info", 0) == 0:
+                                    d.append("solve: Python singular, C++ not")
                         cols, _v = solver._node_gap_columns(_wbg, supp.shape[0])
                         d += fc.differences(
                             cols, entry["node_gap_cols"], "node_gap_cols"

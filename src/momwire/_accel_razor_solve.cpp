@@ -952,7 +952,8 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
 
 // PROTOTYPE (momwire#1517 step 1): the bspline front half's geometry for a
 // deck's preparations (`_bspline_front_core.h`), test-facing.
-py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr) {
+py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
+                                std::vector<uintptr_t> blas) {
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1094,6 +1095,25 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr) {
                     py::array_t<cd> Za({nb, nb});
                     std::copy(Z.begin(), Z.end(), Za.mutable_data());
                     entry["Z"] = Za;
+                    if (blas.size() == 4) {
+                        mw::nec5::NumpyLinalg npl;
+                        npl.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+                        npl.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+                        npl.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+                        npl.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+                        const int64_t n_p = static_cast<int64_t>(wa.feeds.size() + wa.node_gaps.size());
+                        const mw::bspline::PortSolve ps = mw::bspline::solve_ports(
+                            Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl);
+                        entry["solve_info"] = ps.info;
+                        if (ps.info == 0) {
+                            py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
+                            std::copy(ps.X.begin(), ps.X.end(), Xa.mutable_data());
+                            py::array_t<cd> Ya({static_cast<ptrdiff_t>(n_p), static_cast<ptrdiff_t>(n_p)});
+                            std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
+                            entry["X"] = Xa;
+                            entry["Y"] = Ya;
+                        }
+                    }
                 }
             }
         } catch (const mw::bspline::FrontValueError &e) {
@@ -1164,7 +1184,7 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
           "beyond the table).");
     m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
-          py::arg("syrk_addr") = 0,
+          py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
           "PROTOTYPE HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
