@@ -40,8 +40,14 @@ def build_driver(out: Path) -> Path:
     sys.path.insert(0, str(SPLIT))
     import printout_compare as pc  # noqa: PLC0415 - its Linux flags
 
+    from momwire import _accel  # noqa: PLC0415
+
     t = pc._standalone_test_module()
-    compile_args, link_args, _avx2 = t._linux_flags()
+    compile_args, link_args, avx2_only = t._linux_flags()
+    # The loaded variant's flags, as printout_compare's driver takes them: an
+    # sse2 extension is compared with an sse2 driver, never an avx2 one.
+    if _accel.acc is not None and _accel.acc.__name__.endswith("_sse2"):
+        compile_args = [a for a in compile_args if a not in avx2_only]
     exe = out / "somm_grid_driver"
     cmd = [
         *shlex.split(os.environ.get("CXX", "g++")),
