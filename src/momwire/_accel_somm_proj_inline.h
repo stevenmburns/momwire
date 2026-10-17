@@ -307,24 +307,43 @@ static void far_continue(const GridView &G, double r1, double theta, cd surf[4])
 // |dx|, |dy|, and dx, dy merely change sign; hh is one commutative add), so
 // one call serves the (m, n) AND (n, m) projections of a node pair
 // (`sommerfeld_remainder_bspline_Q`'s symmetric route).
-static inline void proj_core(const GridView &G, double k, double rho, double hh,
-                             cd surf[4], cd &g) {
-    const double r1 = std::sqrt(rho * rho + hh * hh);
-
-    // --- inline SommerfeldGrid.eval(r1, theta) ---
-    double theta = std::atan2(hh, rho);
+// `proj_core`'s pair geometry: R1 and the clamped theta from (rho, hh).
+static inline void proj_r1_theta(const GridView &G, double rho, double hh,
+                                 double &r1, double &theta) {
+    r1 = std::sqrt(rho * rho + hh * hh);
+    theta = std::atan2(hh, rho);
     if (theta < 0.0) theta = 0.0; else if (theta > G.half_pi) theta = G.half_pi;
+}
+
+// `proj_core`'s table address for a query at (r1, clamped theta): the
+// region, the fractional offsets on its axes, and the first node (i0, j0)
+// of the 4x4 stencil the read takes. The one copy of the address: the read
+// below and the lazy grids' census (`field_proj_nodes`, `reflected_*_nodes`)
+// both call it, so the nodes a census names are the nodes a read takes.
+static inline int proj_address(const GridView &G, double r1, double theta,
+                               double &fr, double &ft, int &i0, int &j0) {
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // the edge; see below
     const int reg = (r1c <= G.r_break)
                         ? (theta <= G.th_split ? 0 : 1)
                         : (r1c <= G.r_near ? (theta <= G.th_split ? 2 : 3)
                                            : (theta <= G.th_split ? 4 : 5));
-    const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
-    const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
-    int i0 = (int)std::floor(fr) - 1;
-    int j0 = (int)std::floor(ft) - 1;
+    fr = (r1c - G.rr0[reg]) / G.rdr[reg];
+    ft = (theta - G.rth0[reg]) / G.rdth[reg];
+    i0 = (int)std::floor(fr) - 1;
+    j0 = (int)std::floor(ft) - 1;
     if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
     if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
+    return reg;
+}
+
+static inline void proj_core(const GridView &G, double k, double rho, double hh,
+                             cd surf[4], cd &g) {
+    // --- inline SommerfeldGrid.eval(r1, theta) ---
+    double r1, theta;
+    proj_r1_theta(G, rho, hh, r1, theta);
+    double fr, ft;
+    int i0, j0;
+    const int reg = proj_address(G, r1, theta, fr, ft, i0, j0);
     double wr[4], wt[4];
     lagrange4(fr - i0, wr);
     lagrange4(ft - j0, wt);
@@ -371,6 +390,17 @@ static inline cd proj_project(const GridView &G, double dx, double dy,
            toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
 }
 
+// `proj_one`'s pair geometry: the horizontal offsets and distance, and the
+// image height sum (observer and source heights over the ground added).
+static inline void pair_geometry(double ground_z, double ox, double oy, double oz,
+                                 double sx, double sy, double sz, double &dx,
+                                 double &dy, double &rho, double &hh) {
+    dx = ox - sx;
+    dy = oy - sy;
+    rho = std::hypot(dx, dy);
+    hh = (oz - ground_z) + (sz - ground_z);
+}
+
 // Interpolated + projected smooth-remainder field for ONE (observer, source)
 // pair: t_obs . F(r_obs, r_src) . t_src. `sux/suy/sthsrc/stzsrc` are the
 // source tangent's horizontal-unit / horizontal-magnitude / vertical parts
@@ -386,15 +416,33 @@ static inline cd proj_one(
     double ox, double oy, double oz, double tox, double toy, double toz,
     double sx, double sy, double sz, double sux, double suy, double sthsrc,
     double stzsrc) {
-    const double dx = ox - sx;
-    const double dy = oy - sy;
-    const double rho = std::hypot(dx, dy);
-    const double hh = (oz - ground_z) + (sz - ground_z);
+    double dx, dy, rho, hh;
+    pair_geometry(ground_z, ox, oy, oz, sx, sy, sz, dx, dy, rho, hh);
     cd surf[4], g;
     proj_core(G, k, rho, hh, surf, g);
     return proj_project(G, dx, dy, rho, surf, g, tox, toy, toz, sux, suy,
                         sthsrc, stzsrc);
 }
+
+// A lazy grid's census (momwire#1512): one byte per node of each region's
+// (n_r, n_th) lattice, set where a read's 4x4 stencil takes the node. The
+// readers' census functions walk their pairs with the readers' own geometry
+// and `proj_address` (or the below twin's address), so the marks are the
+// reads; the grid then fills the marked nodes before the read runs.
+struct NodeMarks {
+    uint8_t *m[MAX_REGIONS] = {};
+    std::ptrdiff_t nR[MAX_REGIONS] = {}, nTh[MAX_REGIONS] = {};
+    size_t n_reg = 0;
+    inline void mark(int reg, int i0, int j0) {
+        uint8_t *p = m[reg] + (std::ptrdiff_t)i0 * nTh[reg] + j0;
+        for (int i = 0; i < 4; ++i, p += nTh[reg]) {
+            p[0] = 1;
+            p[1] = 1;
+            p[2] = 1;
+            p[3] = 1;
+        }
+    }
+};
 
 // Decompose a tangent (tx,ty,tz) into (horizontal unit x,y; horizontal
 // magnitude; vertical), matching remainder_field_proj's th_src/ux/uy/tz_src.

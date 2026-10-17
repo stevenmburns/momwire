@@ -96,10 +96,13 @@ struct BelowStencil {
 
 // Stage 2: inline SommerfeldGridBelow.eval(r1, theta) up to the table read.
 // `theta` is the RAW atan2(hh, rho); the clamp is here.
-static inline void below_stencil(const somm_proj::GridView &G, double th_min,
-                                 double th_band_floor_hi, double th_band_lo_hi,
-                                 double th_band_hi, double r1, double theta,
-                                 BelowStencil &st) {
+// The address alone (region, axis offsets, first stencil node): the one
+// copy, which `below_stencil` reads through and the lazy grid's census
+// (`below_field_proj_nodes`) marks from.
+static inline int below_address(const somm_proj::GridView &G, double th_min,
+                                double th_band_floor_hi, double th_band_lo_hi,
+                                double th_band_hi, double r1, double theta,
+                                double &fr, double &ft, int &i0, int &j0) {
     if (theta < th_min) theta = th_min;
     else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;
@@ -136,12 +139,23 @@ static inline void below_stencil(const somm_proj::GridView &G, double th_min,
     // (to 5 with momwire#1064).
     const int zone = r1c <= G.r_break ? 0 : (r1c <= G.r_near ? 5 : 10);
     const int reg = zone + band;
-    const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
-    const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
-    int i0 = (int)std::floor(fr) - 1;
-    int j0 = (int)std::floor(ft) - 1;
+    fr = (r1c - G.rr0[reg]) / G.rdr[reg];
+    ft = (theta - G.rth0[reg]) / G.rdth[reg];
+    i0 = (int)std::floor(fr) - 1;
+    j0 = (int)std::floor(ft) - 1;
     if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
     if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
+    return reg;
+}
+
+static inline void below_stencil(const somm_proj::GridView &G, double th_min,
+                                 double th_band_floor_hi, double th_band_lo_hi,
+                                 double th_band_hi, double r1, double theta,
+                                 BelowStencil &st) {
+    double fr, ft;
+    int i0, j0;
+    const int reg = below_address(G, th_min, th_band_floor_hi, th_band_lo_hi,
+                                  th_band_hi, r1, theta, fr, ft, i0, j0);
     somm_proj::lagrange4(fr - i0, st.wr);
     somm_proj::lagrange4(ft - j0, st.wt);
     st.nth = G.nTh[reg];
@@ -611,6 +625,42 @@ void below_field_proj_batch(const somm_proj::GridView &G, size_t n_reg, double t
         if (row_r1[it] > mx_r1) mx_r1 = row_r1[it];
         if (row_thlo[it] < mn_th) mn_th = row_thlo[it];
         if (row_thhi[it] > mx_th) mx_th = row_thhi[it];
+    }
+    mx_r1_out = mx_r1;
+    mn_th_out = mn_th;
+    mx_th_out = mx_th;
+}
+
+void below_field_proj_nodes(const somm_proj::GridView &G, double th_min, double th_band_floor_hi,
+                            double th_band_lo_hi, double th_band_hi, std::ptrdiff_t M,
+                            std::ptrdiff_t S, const double *obs, const double *src,
+                            double ground_z, double r1_cap, somm_proj::NodeMarks &kept,
+                            somm_proj::NodeMarks &past, double &mx_r1_out, double &mn_th_out,
+                            double &mx_th_out) {
+    using namespace mw568_below;
+    // Every pair the batch reads, through its own stages: the geometry
+    // (`below_pair_geometry`), R1 (`below_pair_r1`), libm's atan2 and the
+    // address `below_stencil` reads at (`below_address`; the lanes' stencil
+    // is the same address lane by lane). The extremes are the batch's, with
+    // its comparisons from its starting values. A pair `_zero_past_cap`
+    // zeroes (`below_past_cap`) is marked in `past`, the rest in `kept`.
+    double mx_r1 = 0.0, mn_th = 0.5 * M_PI, mx_th = 0.0;
+    for (std::ptrdiff_t m = 0; m < M; ++m) {
+        const double ox = obs[3 * m], oy = obs[3 * m + 1], oz = obs[3 * m + 2];
+        for (std::ptrdiff_t n = 0; n < S; ++n) {
+            double dx, dy, rho, hh, fr, ft;
+            int i0, j0;
+            below_pair_geometry(ground_z, ox, oy, oz, src[3 * n], src[3 * n + 1], src[3 * n + 2],
+                                dx, dy, rho, hh);
+            const double r1 = below_pair_r1(rho, hh);
+            const double th = std::atan2(hh, rho);
+            if (r1 > mx_r1) mx_r1 = r1;
+            if (th < mn_th) mn_th = th;
+            if (th > mx_th) mx_th = th;
+            const int reg = below_address(G, th_min, th_band_floor_hi, th_band_lo_hi, th_band_hi,
+                                          r1, th, fr, ft, i0, j0);
+            (below_past_cap(rho, hh, r1_cap) ? past : kept).mark(reg, i0, j0);
+        }
     }
     mx_r1_out = mx_r1;
     mn_th_out = mn_th;

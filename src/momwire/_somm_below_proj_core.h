@@ -24,4 +24,22 @@ void below_field_proj_batch(const somm_proj::GridView &G, size_t n_reg, double t
 // Whether the held-modulus divide-out (glibc's cexp split) is this libm's.
 bool below_cexp_split_ok();
 
+// `_zero_past_cap`'s test for one pair of `below_pair_geometry`'s (rho, hh):
+// numpy's hypot then the root, past the cap. One copy, for the zeroing and
+// the lazy grid's census.
+inline bool below_past_cap(double rho, double hh, double r1_cap) {
+    return std::sqrt(rho * rho + hh * hh) > r1_cap;
+}
+
+// The lazy below grid's census of `below_field_proj_batch` (momwire#1512):
+// every node its reads take, marked in `past` for a pair `_zero_past_cap`
+// would zero at `r1_cap` and in `kept` otherwise, and the batch's extremes
+// (max R1, min and max theta), the same floats it reduces.
+void below_field_proj_nodes(const somm_proj::GridView &G, double th_min, double th_band_floor_hi,
+                            double th_band_lo_hi, double th_band_hi, std::ptrdiff_t M,
+                            std::ptrdiff_t S, const double *obs, const double *src,
+                            double ground_z, double r1_cap, somm_proj::NodeMarks &kept,
+                            somm_proj::NodeMarks &past, double &mx_r1, double &mn_th,
+                            double &mx_th);
+
 }  // namespace somm_core

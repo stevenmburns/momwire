@@ -30,6 +30,11 @@ struct GridRegion {  // one of `SommerfeldGrid._regions`
     double th0 = 0, dth = 0;  // radians
     int64_t n_th = 0;
     std::vector<cd> vals;  // (4, n_r, n_th), C order: IrhoV, IzV, IrhoH, IphiH
+    // The layout's theta lattice in degrees (a node's theta is
+    // np.radians(th0_deg + dth_deg * j)), and which nodes hold their value
+    // (n_r * n_th, C order; a node not held reads NaN). momwire#1512.
+    double th0_deg = 0, dth_deg = 0;
+    std::vector<uint8_t> have;
 };
 
 struct Grid {  // `SommerfeldGrid`
@@ -37,11 +42,22 @@ struct Grid {  // `SommerfeldGrid`
     double k2 = 0, omega = 0, mu = 0;
     double r1_max = 0, r_break = 0, r_near = 0, r0_fill = 0;
     std::vector<GridRegion> regions;
+    bool lazy = false;  // built by layout_grid: nodes filled as asked
 };
 
-// `SommerfeldGrid(eps_t, k2, r1_max, rtol, omega, mu, lattice_eps=...)`.
+// `SommerfeldGrid(eps_t, k2, r1_max, rtol, omega, mu, lattice_eps=...)`:
+// `layout_grid` then every node.
 Grid fill_grid(cd eps_t, double k2, double r1_max, double rtol, double omega, double mu,
                cd lattice_eps);
+
+// The lazy grid (momwire#1512): the constructor's lattice with no node
+// filled (values NaN, masks clear), and the nodes of `need` (a mask per
+// region, n_r * n_th; an empty mask asks nothing there) filled in place by
+// `iv_surfaces_direct` at `rtol`. A node's value is its own arithmetic, so it
+// is the eager fill's bit for bit whichever nodes share the call. Returns
+// how many nodes were filled.
+Grid layout_grid(cd eps_t, double k2, double r1_max, double omega, double mu, cd lattice_eps);
+size_t fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need, double rtol);
 
 // `SommerfeldGrid.blend` / `.scaled_to`.
 Grid blend(const Grid &a, const Grid &b, double t, cd eps_t);
@@ -49,8 +65,27 @@ Grid scaled_to(const Grid &g, double k2, double omega, double mu);
 
 // `_sommerfeld.get_grid(eps_t, k2, r1_max, omega, mu)`, with this process's
 // own memo of masters and views (the in-process caches' role; values are
-// the fill's either way).
+// the fill's either way). Every node filled.
 const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu);
+
+// The same view with only the nodes asked so far filled (momwire#1512): a
+// reader takes its census of the nodes it will read (`field_proj_nodes`,
+// `reflected_field_nodes`, ...) into a mask per region of the view, and
+// `ensure_nodes` fills them -- the two rung masters' same nodes first (from
+// the store when another run filled them, else the fill, then written back),
+// then the view's blend and scale, node by node. Views and masters live in
+// this process's memo, so the reference stays valid. MOMWIRE_SOMM_LAZY=0
+// fills every node at once (the eager fill's work, the same values).
+const Grid &get_grid_lazy(cd eps_t, double k2, double r1_max, double omega, double mu);
+bool lazy_grids();  // MOMWIRE_SOMM_LAZY: on unless 0 / off / false / no
+void ensure_nodes(const Grid &view, const std::vector<std::vector<uint8_t>> &need);
+
+// MOMWIRE_SOMM_LAZY_CHECK set (not 0): every lazy reader's output is checked
+// finite after the read and the process aborts on a non-finite value -- with
+// every node not filled reading NaN, a node the census missed cannot go
+// unseen. The proof that a census is complete; off in normal runs.
+bool lazy_check();
+void check_read(const cd *v, size_t n, const char *who);
 
 // `_sommerfeld.far_cpp_pack(grid)`: `_far_constants` in `_FAR_PACK_ORDER`
 // (eps, k1, c2, c1k, ap, res_fv, g2k1, k2), empty for free space. numpy's

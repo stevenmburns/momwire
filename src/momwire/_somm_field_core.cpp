@@ -28,10 +28,8 @@ void field_at(const somm_proj::GridView &G, double x, double y, double z, std::p
     for (std::ptrdiff_t s = 0; s < n_src; ++s) {
         const double *m = src_mid + 3 * s;
         const cd *p = src_moment + 3 * s;
-        const double dx = x - m[0];
-        const double dy = y - m[1];
-        const double rho = std::hypot(dx, dy);
-        const double hh = (z - ground_z) + (m[2] - ground_z);
+        double dx, dy, rho, hh;
+        somm_proj::pair_geometry(ground_z, x, y, z, m[0], m[1], m[2], dx, dy, rho, hh);
         cd surf[4], g;
         somm_proj::proj_core(G, k, rho, hh, surf, g);
         const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
@@ -55,7 +53,52 @@ void field_at(const somm_proj::GridView &G, double x, double y, double z, std::p
     e[2] = az;
 }
 
+// `field_at`'s reads at one point, marked (`proj_core`'s address).
+void field_at_nodes(const somm_proj::GridView &G, double x, double y, double z,
+                    std::ptrdiff_t n_src, const double *src_mid, double ground_z,
+                    somm_proj::NodeMarks &marks) {
+    for (std::ptrdiff_t s = 0; s < n_src; ++s) {
+        const double *m = src_mid + 3 * s;
+        double dx, dy, rho, hh, r1, theta, fr, ft;
+        int i0, j0;
+        somm_proj::pair_geometry(ground_z, x, y, z, m[0], m[1], m[2], dx, dy, rho, hh);
+        somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
+        const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
+        marks.mark(reg, i0, j0);
+    }
+}
+
+// `reflected_h_field`'s six offset points about q, as it forms them.
+inline void h_offsets(const double *q, double step, double pts[6][3]) {
+    for (int axis = 0; axis < 3; ++axis)
+        for (int side = 0; side < 2; ++side) {
+            double shift[3] = {0.0, 0.0, 0.0};
+            shift[axis] = (side == 0 ? 1.0 : -1.0) * step;
+            for (int c = 0; c < 3; ++c) pts[2 * axis + side][c] = q[c] + shift[c];
+        }
+}
+
 }  // namespace
+
+void reflected_field_nodes(const somm_proj::GridView &G, std::ptrdiff_t n_pts, const double *points,
+                           std::ptrdiff_t n_src, const double *src_mid, double ground_z,
+                           somm_proj::NodeMarks &marks) {
+    for (std::ptrdiff_t i = 0; i < n_pts; ++i) {
+        const double *q = points + 3 * i;
+        field_at_nodes(G, q[0], q[1], q[2], n_src, src_mid, ground_z, marks);
+    }
+}
+
+void reflected_h_field_nodes(const somm_proj::GridView &G, std::ptrdiff_t n_pts,
+                             const double *points, std::ptrdiff_t n_src, const double *src_mid,
+                             double ground_z, double step, somm_proj::NodeMarks &marks) {
+    for (std::ptrdiff_t i = 0; i < n_pts; ++i) {
+        double pts[6][3];
+        h_offsets(points + 3 * i, step, pts);
+        for (int f = 0; f < 6; ++f)
+            field_at_nodes(G, pts[f][0], pts[f][1], pts[f][2], n_src, src_mid, ground_z, marks);
+    }
+}
 
 void reflected_field(const somm_proj::GridView &G, std::ptrdiff_t n_pts, const double *points,
                      std::ptrdiff_t n_src, const double *src_mid, const cd *src_moment,
@@ -79,13 +122,11 @@ void reflected_h_field(const somm_proj::GridView &G, std::ptrdiff_t n_pts, const
     for (std::ptrdiff_t i = 0; i < n_pts; ++i) {
         const double *q = points + 3 * i;
         cd f[6][3];
-        for (int axis = 0; axis < 3; ++axis)
-            for (int side = 0; side < 2; ++side) {
-                double shift[3] = {0.0, 0.0, 0.0};
-                shift[axis] = (side == 0 ? 1.0 : -1.0) * step;
-                field_at(G, q[0] + shift[0], q[1] + shift[1], q[2] + shift[2], n_src, src_mid,
-                         src_moment, ground_z, k, f[2 * axis + side]);
-            }
+        double pts[6][3];
+        h_offsets(q, step, pts);
+        for (int p = 0; p < 6; ++p)
+            field_at(G, pts[p][0], pts[p][1], pts[p][2], n_src, src_mid, src_moment, ground_z, k,
+                     f[p]);
         cd d_e[3][3];
         for (int axis = 0; axis < 3; ++axis)
             for (int c = 0; c < 3; ++c) {
