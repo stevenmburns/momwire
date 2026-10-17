@@ -7,6 +7,7 @@
 #include "_exact_kernel_coaxial_core.h"
 #include "_razor_exact_core.h"
 #include "_somm_grid_core.h"
+#include "_somm_proj_core.h"
 #include "_somm_below_remainder_inline.h"
 #include "_somm_below_fill_core.h"
 #include "_field_galerkin_inline.h"
@@ -3210,6 +3211,40 @@ Block reg_moments_cplx(const std::vector<double> &arc, double a_w, cdouble k, in
     return out;
 }
 
+// `_seg_seg_reg_moments(arc, a, k, max_d, n_qp, ek=...)` at a real k: the
+// whole edge's R table and the swept kernel (its EK twin under the extended
+// kernel), the length-1 k axis off. (nd, nd, n, n) C order.
+Block reg_moments_real(const std::vector<double> &arc, double a_w, double k, int d, int64_t n_qp, bool ek) {
+    const int nd = d + 1;
+    std::vector<double> t01, w01;
+    gl01(n_qp, t01, w01);
+    const size_t q = t01.size(), n = arc.size() - 1;
+    std::vector<double> s_q(n * q), u_q(n * q), w_q(n * q);
+    for (size_t i = 0; i < n; i++) {
+        const double hs = arc[i + 1] - arc[i];
+        for (size_t j = 0; j < q; j++) {
+            s_q[i * q + j] = arc[i] + t01[j] * hs;
+            u_q[i * q + j] = (t01[j] * hs) * 1.0;
+            w_q[i * q + j] = (w01[j] * hs) * 1.0;
+        }
+    }
+    const CF sq = borrow(s_q, {static_cast<nd::ssize_t>(n * q)});
+    const nd::array_t<double> R = reg_distance_table(sq, sq, a_w * a_w);
+    std::vector<double> wu(static_cast<size_t>(nd) * n * q);
+    for (int p = 0; p < nd; p++)
+        for (size_t i = 0; i < n * q; i++) {
+            const double u = u_q[i];
+            const double up = p == 0 ? 1.0 : p == 1 ? u : p == 2 ? u * u : std::pow(u, static_cast<double>(p));
+            wu[static_cast<size_t>(p) * n * q + i] = w_q[i] * up;
+        }
+    const CF wua = borrow(wu, {nd, static_cast<nd::ssize_t>(n), static_cast<nd::ssize_t>(q)});
+    const std::vector<double> kv{k};
+    const CF ka = borrow(kv, {1});
+    const CF Rv = CF::borrow(R.buffer());
+    return Block::adopt(ek ? seg_seg_reg_moments_bspline_swept_ek(Rv, wua, ka, a_w)
+                           : seg_seg_reg_moments_bspline_swept(Rv, wua, ka));
+}
+
 // `numpy.searchsorted`-free `_schedule.runs`: a sorted index set's runs
 std::vector<std::pair<int64_t, int64_t>> index_runs(const std::vector<int64_t> &idx) {
     std::vector<std::pair<int64_t, int64_t>> out;
@@ -3224,11 +3259,18 @@ std::vector<std::pair<int64_t, int64_t>> index_runs(const std::vector<int64_t> &
 
 }  // namespace
 
-void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
-                               const std::vector<double> &radius_per_wire, const FillParams &fp, cdouble k,
-                               const std::vector<int64_t> &seg_idx, bool mirror, cdouble eps, double scale,
-                               bool weighted, cdouble weight, double omega, double mu, double ground_z,
-                               int64_t swept_mem_mb, const nec5::NumpyLinalg &np) {
+namespace {
+
+// `_accumulate_Z_subset_chunked` at a real k with a real eps (the above
+// medium, `ek` the above-ground spec cut to the subset or off) or a complex
+// k with a complex eps~ (the lower medium, no extended kernel).
+template <class K, class E>
+void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                       const std::vector<double> &radius_per_wire, const FillParams &fp, K k,
+                       const std::vector<int64_t> &seg_idx, bool mirror, E eps, double scale, bool weighted,
+                       cdouble weight, double omega, double mu, double ground_z, int64_t swept_mem_mb,
+                       const nec5::NumpyLinalg &np, const EK &ek) {
+    constexpr bool CPLX = std::is_same<K, cdouble>::value;
     const int d = fp.degree, nd = d + 1;
     const int64_t N = g.n_segs_total, n_basis = b.n_basis;
     std::vector<double> a_row;  // `_seg_radius`
@@ -3275,8 +3317,12 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
             if (scale != 1.0)
                 for (cdouble &v : J_win) v = cdouble(v.real() * scale, v.imag() * scale);
             const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
-            assemble_Z_bspline_windowed_cplx_eps(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0,
-                                                 nd::none(), false);
+            if constexpr (CPLX)
+                assemble_Z_bspline_windowed_cplx_eps(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0,
+                                                     nd::none(), false);
+            else
+                assemble_Z_bspline_windowed(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0, nd::none(),
+                                            false);
             return;
         }
         // w_A = weight * (tangents[i0:i1] @ src_t[j0:j1].T), w_Phi = weight
@@ -3289,15 +3335,18 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
         const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
         const CC wa = borrow(wA, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
         const CC wp = borrow(wP, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
-        assemble_Z_bspline_weighted_windowed_cplx_eps(Jw, sa, pa, wa, wp, mi, ni, i0, i1, j0, j1, omega, eps, mu,
-                                                      cdouble(scale, 0.0), Za, 0, nd::none(), false);
+        if constexpr (CPLX)
+            assemble_Z_bspline_weighted_windowed_cplx_eps(Jw, sa, pa, wa, wp, mi, ni, i0, i1, j0, j1, omega, eps, mu,
+                                                          cdouble(scale, 0.0), Za, 0, nd::none(), false);
+        else
+            assemble_Z_bspline_weighted_windowed(Jw, sa, pa, wa, wp, mi, ni, i0, i1, j0, j1, omega, eps, mu,
+                                                 cdouble(scale, 0.0), Za, 0, nd::none(), false);
     };
     const auto range = [](int64_t lo, int64_t hi) {
         std::vector<size_t> v;
         for (int64_t q = lo; q < hi; q++) v.push_back(static_cast<size_t>(q));
         return v;
     };
-    const EK no_ek;
     // the sweep: every (observer chunk x source run) window
     const std::vector<std::pair<int64_t, int64_t>> runs = index_runs(seg_idx);
     const int64_t n_sub = static_cast<int64_t>(seg_idx.size());
@@ -3310,8 +3359,9 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
             const std::vector<double> a_sub(a_row.begin() + c0, a_row.begin() + c1);
             for (const auto &srun : runs) {
                 const std::vector<size_t> cols = range(srun.first, srun.second);
-                accumulate(offedge(real.take(rows), src.take(cols), a_sub, k, d, fp.n_qp_pair, no_ek, fp.ladder), c0,
-                           c1, srun.first, srun.second);
+                accumulate(offedge(real.take(rows), src.take(cols), a_sub, k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
+                                   fp.ladder),
+                           c0, c1, srun.first, srun.second);
             }
         }
     if (mirror) return;
@@ -3328,11 +3378,19 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
             const size_t n = arc.size() - 1;
             if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
             const double h = arc[1] - arc[0];
-            const nd::array_t<double> A_st = seg_seg_static_moments_bspline_uniform(h, a_w, n, d, 0, 0);
-            const Block A_reg = reg_moments_cplx(arc, a_w, k, d, fp.n_qp_same_edge);
+            // `_EK_SAME_EDGE` with the extended kernel on this block
+            const nd::array_t<double> A_st = ek.on ? seg_seg_static_moments_bspline_uniform_ek(h, a_w, n, d, a_w, 0)
+                                                   : seg_seg_static_moments_bspline_uniform(h, a_w, n, d, 0, 0);
+            Block A_reg;
+            if constexpr (CPLX) {
+                A_reg = reg_moments_cplx(arc, a_w, k, d, fp.n_qp_same_edge);
+            } else {
+                A_reg = reg_moments_real(arc, a_w, k, d, fp.n_qp_same_edge, ek.on);
+            }
             const std::vector<size_t> rows = range(s0, s1);
             const std::vector<double> a_sub(a_row.begin() + s0, a_row.begin() + s1);
-            const Block J_edge = offedge(real.take(rows), real.take(rows), a_sub, k, d, fp.n_qp_pair, no_ek, fp.ladder);
+            const Block J_edge =
+                offedge(real.take(rows), real.take(rows), a_sub, k, d, fp.n_qp_pair, ek_cut(ek, &rows, &rows), fp.ladder);
             // corr = (A_st + A_reg) - J_edge
             Block corr(A_reg.size(), false);
             const double *st = A_st.data();
@@ -3344,6 +3402,18 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
         }
     }
 }
+
+}  // namespace
+
+void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                               const std::vector<double> &radius_per_wire, const FillParams &fp, cdouble k,
+                               const std::vector<int64_t> &seg_idx, bool mirror, cdouble eps, double scale,
+                               bool weighted, cdouble weight, double omega, double mu, double ground_z,
+                               int64_t swept_mem_mb, const nec5::NumpyLinalg &np) {
+    accumulate_subset(Z, g, b, radius_per_wire, fp, k, seg_idx, mirror, eps, scale, weighted, weight, omega, mu,
+                      ground_z, swept_mem_mb, np, EK());
+}
+
 
 namespace {
 
@@ -3403,18 +3473,23 @@ BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps,
 std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
-                                 const nec5::NumpyLinalg &np) {
+                                 const nec5::NumpyLinalg &np, bool stop_before_cross) {
     const int d = fp.degree, nd = d + 1;
     const int64_t N = g.n_segs_total, n_basis = b.n_basis;
-    for (uint8_t v : b.below_wire)
-        if (!v) throw FrontNotPorted("buried-mixed");
     const BuriedMedium bm = buried_medium(eps_r, sigma, omega, eps, fp.k);
     const double gz = ground_z;
-    // `plan_buried` on a wholly-below deck: every segment below, none above
-    std::vector<int64_t> b_idx(static_cast<size_t>(N));
-    for (int64_t s2 = 0; s2 < N; s2++) b_idx[static_cast<size_t>(s2)] = s2;
+    // `plan_buried`: the media per segment, the pair classes' index sets
+    std::vector<uint8_t> below(static_cast<size_t>(N), 0);
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t s2 = g.seg_offsets[w]; s2 < g.seg_offsets[w + 1]; s2++)
+            below[static_cast<size_t>(s2)] = b.below_wire[w];
+    std::vector<int64_t> a_idx, b_idx;
+    for (int64_t s2 = 0; s2 < N; s2++) (below[static_cast<size_t>(s2)] ? b_idx : a_idx).push_back(s2);
+    const bool crossing = !a_idx.empty() && !b.crossing.empty();
+    if (!a_idx.empty() && !crossing) throw FrontNotPorted("buried-transmitted");
     const int64_t q = std::max<int64_t>(n_qp_sommerfeld, 6);  // `n_qp_buried_field`
-    std::vector<double> obs_b, t_b, W_b;
+    std::vector<double> obs_a, t_a, W_a, obs_b, t_b, W_b;
+    buried_nodes(g, a_idx, q, nd, obs_a, t_a, W_a);
     buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
     const size_t n_obs = obs_b.size() / 3;
     // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
@@ -3438,13 +3513,119 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     const double floor = (0.05 - 2.0 * (0.05 / 3.0)) * (PI_ / 180.0);
     if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
     if (th_min < floor) throw FrontNotPorted("buried-grazing-refusal");
+    // the above/above sizing (`max_image_distance` over the above segments)
+    double r1_above = 0.0;
+    if (!a_idx.empty()) {
+        std::vector<double> la, ra;
+        for (int64_t s2 : a_idx)
+            for (int c = 0; c < 3; c++) {
+                la.push_back(g.seg_l[3 * static_cast<size_t>(s2) + c]);
+                ra.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
+            }
+        r1_above = razor::max_image_distance(la.data(), ra.data(), a_idx.size(), gz);
+    }
 
-    // the two moment blocks in the medium, chunked (`accumulate_Z_subset_chunked`)
+    // the direct and image blocks, each in its own medium, chunked
+    // (`accumulate_Z_subset_chunked`): the above ones at k_p with the
+    // above-ground extended kernel (`_ek_spec_above`: below segments -1)
     std::vector<cdouble> Z(static_cast<size_t>(n_basis * n_basis), cdouble(0.0, 0.0));
-    accumulate_subset_chunked(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, false, bm.eps_m, 1.0, false,
-                              cdouble(0.0, 0.0), omega, mu, gz, swept_mem_mb, np);
-    accumulate_subset_chunked(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, true, bm.eps_m, -1.0, true, bm.a_m,
-                              omega, mu, gz, swept_mem_mb, np);
+    accumulate_subset(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, false, bm.eps_m, 1.0, false, cdouble(0.0, 0.0),
+                      omega, mu, gz, swept_mem_mb, np, EK());
+    if (!a_idx.empty()) {
+        EK ek;
+        if (fp.extended_kernel) {
+            ek.on = true;
+            ek.group_i.assign(static_cast<size_t>(N), 0);
+            for (int64_t s2 = 0; s2 < N; s2++)
+                if (below[static_cast<size_t>(s2)]) ek.group_i[static_cast<size_t>(s2)] = -1;
+            ek.group_j = ek.group_i;
+            std::vector<double> a_row;
+            for (size_t w = 0; w < g.per_wire.size(); w++)
+                for (int64_t s2 = 0; s2 < g.per_wire[w].n_total; s2++) a_row.push_back(radius_per_wire[w]);
+            bool all_eq = true;
+            for (double v : a_row) all_eq = all_eq && v == a_row[0];
+            if (!all_eq) {
+                ek.b_kind = EK::per_col;
+                ek.b_j = a_row;
+            }
+        }
+        accumulate_subset(Z, g, b, radius_per_wire, fp, bm.k_p, a_idx, false, eps, 1.0, false, cdouble(0.0, 0.0),
+                          omega, mu, gz, swept_mem_mb, np, ek);
+        accumulate_subset(Z, g, b, radius_per_wire, fp, bm.k_p, a_idx, true, eps, -1.0, true, bm.c2, omega, mu, gz,
+                          swept_mem_mb, np, ek);
+    }
+    accumulate_subset(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, true, bm.eps_m, -1.0, true, bm.a_m, omega, mu, gz,
+                      swept_mem_mb, np, EK());
+
+    std::vector<int64_t> pos_a(static_cast<size_t>(N), -1), pos(static_cast<size_t>(N), -1);
+    for (size_t i = 0; i < a_idx.size(); i++) pos_a[static_cast<size_t>(a_idx[i])] = static_cast<int64_t>(i);
+    for (size_t i = 0; i < b_idx.size(); i++) pos[static_cast<size_t>(b_idx[i])] = static_cast<int64_t>(i);
+    const size_t Q = static_cast<size_t>(q);
+    // the above/above remainder, field form (`_field_galerkin_block` over
+    // `remainder_field_proj` on the above grid)
+    if (!a_idx.empty()) {
+        const somm_core::Grid &G0 = somm_core::get_grid(bm.eps_t, bm.k_p, r1_above, omega, mu);
+        const size_t n_reg = G0.regions.size();
+        if (n_reg > somm_proj::MAX_REGIONS) throw FrontNotPorted("a grid layout past the view's regions");
+        double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+            dth[somm_proj::MAX_REGIONS];
+        const cdouble *vals[somm_proj::MAX_REGIONS];
+        std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+        for (size_t r = 0; r < n_reg; r++) {
+            const somm_core::GridRegion &reg = G0.regions[r];
+            r0[r] = reg.r0;
+            dr[r] = reg.dr;
+            th0[r] = reg.th0;
+            dth[r] = reg.dth;
+            vals[r] = reg.vals.data();
+            shape0[r] = 4;
+            nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+            nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+        }
+        somm_proj::GridView view = somm_proj::build_grid_view(G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near,
+                                                              r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+        const std::vector<cdouble> far = somm_core::far_pack(G0);
+        somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+        const int64_t n_a = static_cast<int64_t>(a_idx.size());
+        const int64_t chunk = std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_a * q * q, 1));
+        const size_t S = static_cast<size_t>(n_a) * Q;
+        for (int64_t i0 = 0; i0 < n_a; i0 += chunk) {
+            const int64_t i1 = std::min(i0 + chunk, n_a);
+            const size_t m = static_cast<size_t>(i1 - i0) * Q;
+            std::vector<cdouble> proj(m * S);
+            somm_core::field_proj_batch(view, n_reg, static_cast<std::ptrdiff_t>(m), static_cast<std::ptrdiff_t>(S),
+                                        &obs_a[3 * static_cast<size_t>(i0) * Q], &t_a[3 * static_cast<size_t>(i0) * Q],
+                                        obs_a.data(), t_a.data(), gz, bm.k_p, proj.data(), 0, true);
+            std::vector<double> W_rows(static_cast<size_t>(nd) * m);
+            for (int p = 0; p < nd; p++)
+                std::copy(W_a.begin() + (static_cast<std::ptrdiff_t>(p) * n_a + i0) * q,
+                          W_a.begin() + (static_cast<std::ptrdiff_t>(p) * n_a + i1) * q,
+                          W_rows.begin() + static_cast<std::ptrdiff_t>(p) * (i1 - i0) * q);
+            mw_fg::Args args;
+            args.pj = proj.data();
+            args.wo = W_rows.data();
+            args.ws = W_a.data();
+            args.pl = b.polys.data();
+            args.ss = b.supp_seg.data();
+            args.po = pos_a.data();
+            args.ps = pos_a.data();
+            args.P = nd;
+            args.nc = i1 - i0;
+            args.q = q;
+            args.ns = n_a;
+            args.nb = n_basis;
+            args.A = nd;
+            args.i0 = i0;
+            args.q_rows = n_basis;
+            args.Qp = Z.data();
+            args.sr = n_basis;
+            args.sc = 1;
+            args.fused = true;
+            args.scale = -1.0;
+            args.lanes = true;
+            mw_fg::assemble(args);
+        }
+    }
 
     // the below/below remainder, field form, each unordered pair once
     // (`_field_galerkin_block_symmetric`)
@@ -3462,9 +3643,6 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     rem.k_m = bm.k_m;
     const int64_t n_b = static_cast<int64_t>(b_idx.size());
     const int64_t chunk = std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q * q, 1));
-    std::vector<int64_t> pos(static_cast<size_t>(N), -1);
-    for (int64_t i = 0; i < n_b; i++) pos[static_cast<size_t>(b_idx[static_cast<size_t>(i)])] = i;
-    const size_t Q = static_cast<size_t>(q);
     for (int64_t i0 = 0; i0 < n_b; i0 += chunk) {
         const int64_t i1 = std::min(i0 + chunk, n_b);
         const size_t m = static_cast<size_t>(i1 - i0) * Q, S = static_cast<size_t>(n_b - i0) * Q;
@@ -3519,8 +3697,9 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         args.lanes = true;
         mw_fg::assemble(args);
     }
+    // the crossing serve (`_crossing_fill`, momwire#524 phase 2): step 4b
+    if (crossing && !stop_before_cross) throw FrontNotPorted("buried-crossing-fill");
     return Z;
 }
-
 }  // namespace bspline
 }  // namespace mw
