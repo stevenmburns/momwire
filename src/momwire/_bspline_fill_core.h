@@ -87,6 +87,22 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
                       double eps, double mu, const ImageGround &gr, double swept_mem_mb,
                       const nec5::NumpyLinalg &np);
 
+// `_remainder_qp_pairs`' O(N) short-circuit (`_quadrature.
+// remainder_qp_pairs` at the graded route's c = 4, base `n_qp_sommerfeld`):
+// true when it proves no segment pair is raised above the base order. A
+// deck it cannot clear takes the per-pair scan and, where pairs are listed,
+// the graded pair correction (not ported: such a deck declines).
+bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_sommerfeld);
+
+// `Z -= _Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)` on a deck
+// `remainder_pairs_cleared` clears: the remainder's source nodes and
+// moment weights at `n_qp_sommerfeld`, the eager grid
+// (`_below_interface.somm_grid`, sized by `max_image_distance`) and the
+// fused kernel (`somm_core::remainder_bspline_Q`, the symmetric route).
+void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                                   double ground_z, cdouble eps_t, double k, double omega, double mu,
+                                   int64_t n_qp_sommerfeld);
+
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).
 using dsyrk_fn = nec5::cblas_dsyrk_fn;

@@ -407,6 +407,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
     "src/momwire/_somm_proj_core.h",
+    "src/momwire/_somm_remainder_core.h",
     "src/momwire/_somm_grid_core.h",
     "src/momwire/_accel_somm_proj_py.h",
 ]
@@ -437,6 +438,9 @@ _ACCEL_SOURCES = [
     # S3: the remainder's projection and moment reduction, likewise
     # (`_accel_somm.cpp` / `_accel_mw568.cpp` bind them).
     "src/momwire/_somm_proj_core.cpp",
+    # The B-spline remainder block's kernel (momwire#1517 step 3);
+    # `_accel_somm.cpp` binds it.
+    "src/momwire/_somm_remainder_core.cpp",
     # The below/below remainder's projection, Python-free (momwire#1512 B2):
     # the kernel `remainder_field_proj_batch_below` binds, moved verbatim.
     "src/momwire/_somm_below_proj_core.cpp",

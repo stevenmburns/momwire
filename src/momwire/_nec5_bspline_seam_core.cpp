@@ -170,8 +170,7 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         return b;
     };
     // step 1's scope (momwire#1517): free space; ground is step 3
-    // step 3a: a perfect ground; the Sommerfeld composition is step 3b
-    if (in.has_ground && in.ground_eps_given) return decline("bspline-sommerfeld");
+
     auto fr = std::make_shared<BSplineFront>();
     fr->args = wire_args(in);
     try {
@@ -224,6 +223,14 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     fr->extended_kernel = in.extended_kernel;
     fr->has_ground = in.has_ground;
     fr->ground_z = in.ground_z;
+    // the Sommerfeld composition (`ground_model="sommerfeld"`): served where
+    // `_remainder_qp_pairs` lists no raised pair (its O(N) short-circuit);
+    // the graded pair correction is not ported
+    fr->compose = in.has_ground && in.ground_eps_given;
+    fr->ground_eps_r = in.ground_eps_r;
+    fr->ground_sigma = in.ground_sigma;
+    if (fr->compose && !bspline::remainder_pairs_cleared(fr->geom, fr->ground_z, 3))
+        return decline("bspline-sommerfeld-grazing");
     part.front = std::move(fr);
     return b;
 }
