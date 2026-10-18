@@ -34,8 +34,13 @@
 # the launcher-layer contract tests, and every fixture deck and NX chain
 # against this environment's launcher -- within PRINTOUT_RTOL_WIN32
 # (exe_compare.py --rtol win32), since Windows needs no bit-compatibility.
-# Uploaded as a workflow artifact only: nothing here touches a release or
-# momwire-eznec-windows.zip.
+# Built with the MSVC 14.44 toolset and signed (eznec-dropin.yml's signing
+# mode: the real certificate on a tag or an azure_sign dispatch, a
+# self-signed rehearsal otherwise), with a win7 folder of the sse2 builds
+# carrying Microsoft's app-local UCRT, every binary through the freeze's
+# Windows 7 import gate. Zipped as momwire-nec5-windows-x64.zip and attached
+# to the release on a pushed tag (`release-windows`), as a PREVIEW;
+# momwire-eznec-windows.zip is untouched.
 #
 # `macos-nopython` (momwire#1559): the no-Python builds under Apple clang on
 # macos-15 arm64, razor-2p and bs2, one variant each (`legacy`, what
@@ -46,12 +51,20 @@
 # Never signed or notarised (Steve, 2026-10-18): the linker's ad-hoc
 # signature, checked here. Gated as windows-nopython is: the contract tests,
 # and every fixture deck and NX chain against this environment's launcher,
-# within PRINTOUT_RTOL_MACOS (exe_compare.py --rtol macos). Uploaded as a
-# workflow artifact only (momwire-nec5-macos-arm64.tar.gz): no release.
+# within PRINTOUT_RTOL_MACOS (exe_compare.py --rtol macos). The tarball,
+# momwire-nec5-macos-arm64.tar.gz, is attached to the release on a pushed
+# tag (`release-macos`), as a PREVIEW.
 name: standalone
 
 on:
+  # `azure_sign` proves the REAL certificate on demand, as eznec-dropin.yml's
+  # does: windows-nopython then signs with it (a SIGNTEST zip, no release).
   workflow_dispatch:
+    inputs:
+      azure_sign:
+        description: "Sign the Windows executables with the REAL Azure certificate (no tag, no release)"
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     paths:
@@ -403,9 +416,9 @@ jobs:
             --launcher venv\Scripts\momwire-nec5-razor-2p.exe --workers 2 `
             tests/fixtures/razor_printout_3a tests/fixtures/eznec
 
-  # The no-Python executables on Windows (momwire#1558): MSVC, razor-2p and
-  # bs2, avx2 and sse2, against SciPy's OpenBLAS DLL. A workflow artifact
-  # only (see the header).
+  # The no-Python executables on Windows (momwire#1558): MSVC 14.44, razor-2p
+  # and bs2, avx2 and sse2, against SciPy's OpenBLAS DLL, signed, with a
+  # Windows 7 folder: the preview release asset (see the header).
   windows-nopython:
     runs-on: windows-latest
     timeout-minutes: 150
@@ -424,60 +437,187 @@ jobs:
           python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$env:OB_VERSION" -d obwhl
           python -m zipfile -e (Get-ChildItem obwhl\*.whl).FullName ob
           Get-Item ob\scipy_openblas32\lib\libscipy_openblas.dll | Select-Object FullName, Length
+      # The Python reference the gates compare with: the user's own momwire,
+      # built by whatever toolset setuptools finds, as a pip install is.
       - name: momwire environment
         shell: pwsh
         run: |
           python -m venv venv
           venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
           venv\Scripts\python -m pip install -q -e ".[test]"
-      - name: configure + build (MSVC, four executables)
+      # EVERY executable is built with the MSVC 14.44 toolset, as
+      # eznec-dropin.yml's Win7 leg is: from 14.5x on, MSVCP140.dll imports
+      # CopyFile2, CreateFile2 and GetSystemTimePreciseAsFileTime, none of
+      # which Windows 7 has (that leg's run 38427318212 failed its import gate
+      # on exactly that), and a runtime older than the toolset that compiled
+      # the code is unsupported. One toolset for all four builds, so the
+      # Windows 7 folder's sse2 programs are the very sse2 builds the gates
+      # below run. Ninja, so the build takes the compiler this puts on PATH.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: '14.44'
+      - name: configure + build (MSVC 14.44, four executables)
         shell: pwsh
         run: |
+          python -m pip install -q ninja
+          $banner = (cmd /c "cl 2>&1" | Select-Object -First 1)
+          $banner
+          if ($banner -notmatch 'Version 19\.44\.') { throw "cl is not the 14.44 toolset: $banner" }
           $dll = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
           foreach ($b in 'razor2p', 'bs2') {
             foreach ($v in 'avx2', 'sse2') {
-              cmake -S standalone -B "build-$b-$v" -A x64 -DMW_EXE_NO_PYTHON=ON `
+              cmake -S standalone -B "build-$b-$v" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON `
                 "-DMW_EXE_BASIS=$b" "-DMW_EXE_VARIANT=$v" "-DMW_OPENBLAS_LIB=$dll" -DMW_BLAS_PREFIX=scipy_
               if ($LASTEXITCODE) { exit 1 }
-              cmake --build "build-$b-$v" --config Release -- /m
+              cmake --build "build-$b-$v"
               if ($LASTEXITCODE) { exit 1 }
             }
           }
-      # One directory: the four executables under their release names, the
-      # OpenBLAS DLL, the VC++ runtime (VS's redist) and LLVM's OpenMP runtime
-      # (the copy the loader resolves, as scripts/eznec_freeze/build.py
-      # bundles it).
+      # THE SIGNING MODE, decided once, as eznec-dropin.yml decides it (#711;
+      # that file says why each step is the way it is):
+      #
+      #   azure     -- pushed tags and azure_sign dispatches: the real
+      #                certificate, its chain checked as a hard gate.
+      #   rehearsal -- every other run: self-signed, chain check waived, and
+      #                never on a tag.
+      #
+      # No unsigned mode on any CI path.
+      - name: Decide the signing mode
+        shell: pwsh
+        env:
+          AZURE_SIGN: ${{ inputs.azure_sign }}
+        run: |
+          $mode = if ($env:GITHUB_REF_TYPE -eq 'tag' -or $env:AZURE_SIGN -eq 'true') { 'azure' } else { 'rehearsal' }
+          "MOMWIRE_SIGN_MODE=$mode" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Rehearsal signing certificate (self-signed, never on tags)
+        if: env.MOMWIRE_SIGN_MODE == 'rehearsal'
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire standalone rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: actions/setup-dotnet@v6
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        with:
+          dotnet-version: '8.0'
+      - name: Install the Artifact Signing dlib (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -OutFile nuget.exe
+          & ./nuget.exe install Microsoft.ArtifactSigning.Client -Version 1.0.128 -x -OutputDirectory packages
+          $dlib = Get-ChildItem packages -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+                  Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found in Microsoft.ArtifactSigning.Client" }
+          "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Write the Artifact Signing metadata (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        shell: pwsh
+        run: |
+          $meta = [ordered]@{
+            Endpoint               = "https://wus2.codesigning.azure.net"
+            CodeSigningAccountName = "momwire"
+            CertificateProfileName = "momwire-public-trust"
+            ExcludeCredentials     = @(
+              "ManagedIdentityCredential", "WorkloadIdentityCredential",
+              "SharedTokenCacheCredential", "VisualStudioCredential",
+              "VisualStudioCodeCredential", "AzureCliCredential",
+              "AzurePowerShellCredential", "AzureDeveloperCliCredential",
+              "InteractiveBrowserCredential")
+          }
+          $meta | ConvertTo-Json | Out-File metadata.json -Encoding utf8
+          "MOMWIRE_SIGN_METADATA=$((Resolve-Path metadata.json).Path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # Before staging, so every copy carries the signature and every gate
+      # below runs signed bytes. The AZURE_* credentials exist in azure mode
+      # only, as in eznec-dropin.yml.
+      - name: sign the four executables
+        env:
+          AZURE_TENANT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_SECRET || '' }}
+        run: >-
+          python standalone/sign_windows.py
+          build-razor2p-avx2/momwire-razor2p-standalone.exe build-razor2p-sse2/momwire-razor2p-standalone.exe
+          build-bs2-avx2/momwire-bs2-standalone.exe build-bs2-sse2/momwire-bs2-standalone.exe
+      # The zip's tree: the four programs under their release names with the
+      # DLLs they load beside them -- SciPy's OpenBLAS, the 14.44 toolset's own
+      # VC++ runtime and LLVM's OpenMP runtime (the System32 copy, as
+      # scripts/eznec_freeze/build.py bundles it, and as that freeze's Win7 leg
+      # ships it through the same import gate) -- and win7\, the two sse2
+      # programs with the same DLLs plus Microsoft's app-local Universal C
+      # Runtime from the Windows SDK (on Windows 10 and 11 the system's own
+      # copy wins, so it is harmless there).
       - name: stage
         shell: pwsh
         run: |
           $D = "dist\momwire-nec5-windows-x64"
-          New-Item -ItemType Directory -Force $D | Out-Null
+          $W7 = "$D\win7"
+          New-Item -ItemType Directory -Force $W7 | Out-Null
           foreach ($b in 'razor2p', 'bs2') {
             foreach ($v in 'avx2', 'sse2') {
-              Copy-Item "build-$b-$v\Release\momwire-$b-standalone.exe" "$D\momwire-nec5-$b-$v.exe"
+              Copy-Item "build-$b-$v\momwire-$b-standalone.exe" "$D\momwire-nec5-$b-$v.exe"
             }
+            Copy-Item "build-$b-sse2\momwire-$b-standalone.exe" "$W7\momwire-nec5-$b-sse2.exe"
           }
-          Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll $D
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
-          foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$($crt.FullName)\$f" $D }
-          Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" $D
-          Get-ChildItem $D | Select-Object Name, Length
-      # The directory alone: a PATH of System32 only, so each executable
-      # finds every DLL it needs beside it.
-      - name: run from the staged directory
+          $crt = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+          $ucrt = Join-Path $env:UniversalCRTSdkDir "Redist\$($env:UCRTVersion)\ucrt\DLLs\x64"
+          if (-not (Test-Path "$ucrt\ucrtbase.dll")) {
+            $ucrt = (Get-ChildItem "$env:UniversalCRTSdkDir\Redist\*\ucrt\DLLs\x64\ucrtbase.dll" | Sort-Object FullName | Select-Object -Last 1).DirectoryName
+          }
+          "VC++ runtime: $crt"; "app-local UCRT: $ucrt"
+          foreach ($dir in $D, $W7) {
+            Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll $dir
+            foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$crt\$f" $dir }
+            Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" $dir
+          }
+          Copy-Item "$ucrt\*.dll" $W7
+          Copy-Item standalone\release\README-windows.txt "$D\README.txt"
+          Get-ChildItem -Recurse $D | Select-Object FullName, Length, @{n='version';e={$_.VersionInfo.FileVersion}}
+      # Windows 7: no runner can run it, so the only check is the one the
+      # freeze's Win7 leg uses -- every PE file's import and delay-import
+      # tables against what Windows 7 SP1 provides (curated; see the script).
+      - name: Windows 7 import gate (every binary in the zip)
+        shell: pwsh
+        run: |
+          python -m pip install -q pefile
+          python scripts/eznec_freeze/scan_win7_imports.py dist\momwire-nec5-windows-x64
+          if ($LASTEXITCODE) { exit 1 }
+      # Each program carries the signature, the win7 copies included; in azure
+      # mode the chain must verify (sign.py checked the built files already).
+      - name: signatures in the staged tree
+        shell: pwsh
+        run: |
+          foreach ($e in Get-ChildItem -Recurse dist\momwire-nec5-windows-x64 -Filter *.exe) {
+            $s = Get-AuthenticodeSignature $e.FullName
+            "$($e.FullName): $($s.Status) $($s.SignerCertificate.Subject)"
+            if (-not $s.SignerCertificate) { throw "$($e.Name) is not signed" }
+            if ($env:MOMWIRE_SIGN_MODE -eq 'azure' -and $s.Status -ne 'Valid') { throw "$($e.Name): $($s.Status)" }
+          }
+      # The tree alone: a PATH of System32 only, so each program finds every
+      # DLL it needs beside it; a deck and a SimNEC stream each.
+      - name: run from the staged tree
         shell: pwsh
         run: |
           $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
           $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
+          $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
           $env:PATH = "$env:SystemRoot\System32"
-          foreach ($e in Get-ChildItem "$D\*.exe") {
+          foreach ($e in Get-ChildItem -Recurse $D -Filter *.exe) {
             & $e.FullName -version
-            & $e.FullName $deck "$env:RUNNER_TEMP\$($e.BaseName).out"
+            $out = "$env:RUNNER_TEMP\$($e.Directory.Name)-$($e.BaseName).out"
+            & $e.FullName $deck $out
             if ($LASTEXITCODE) { exit 1 }
-            $line = (Get-Content "$env:RUNNER_TEMP\$($e.BaseName).out")[1]
-            "$($e.Name): $line"
-            if (Select-String -Quiet "NEC ERROR" "$env:RUNNER_TEMP\$($e.BaseName).out") { exit 1 }
+            "$($e.Directory.Name)\$($e.Name): $((Get-Content $out)[1])"
+            if (Select-String -Quiet "NEC ERROR" $out) { exit 1 }
+            cmd /c "`"$($e.FullName)`" - - < `"$stream`" > `"$out.stream`""
+            if ($LASTEXITCODE) { exit 1 }
+            $n = (Select-String -Pattern 'INPUT LINE .* NX ' "$out.stream").Count
+            "  stream: $n structures"
+            if ($n -lt 1) { exit 1 }
           }
       - name: contract tests (razor-2p and bs2)
         shell: pwsh
@@ -522,11 +662,44 @@ jobs:
           name: standalone-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: exe-win-*.jsonl
           if-no-files-found: ignore
+      # The name rides on the ZIP FILE, as eznec-dropin.yml's does: canonical
+      # only on a pushed tag; a dispatch with the real certificate is a
+      # SIGNTEST, and every other run a SELFSIGNED-rehearsal, so an unzipped
+      # run artifact can never pass for a release download.
+      - name: name and zip
+        shell: pwsh
+        run: |
+          $stem = 'momwire-nec5-windows-x64'
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { $stem }
+                  elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { "$stem-SIGNTEST" }
+                  else { "$stem-SELFSIGNED-rehearsal" }
+          "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Compress-Archive -Path dist\momwire-nec5-windows-x64 -DestinationPath "dist\$base.zip"
       - uses: actions/upload-artifact@v7
         with:
-          name: momwire-nec5-windows-x64
-          path: dist/momwire-nec5-windows-x64
+          name: ${{ env.BUNDLE }}
+          path: dist/${{ env.BUNDLE }}.zip
           if-no-files-found: error
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
+
+  # The Windows zip, on a pushed tag only (release-linux's guard), and only
+  # from a green windows-nopython: the build, the Win7 import gate, the
+  # signatures and every gate above are that job.
+  release-windows:
+    name: attach the Windows executables to the release (preview)
+    needs: windows-nopython
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-windows-x64
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: momwire-nec5-windows-x64.zip
+          fail_on_unmatched_files: true
 
   macos-nopython:
     runs-on: macos-15
@@ -626,3 +799,21 @@ jobs:
           name: momwire-nec5-macos-arm64
           path: dist/momwire-nec5-macos-arm64.tar.gz
           if-no-files-found: error
+
+  # The macOS tarball, on a pushed tag only, from a green macos-nopython
+  # (its gates are that job). Ad-hoc signed only, as decided (the header).
+  release-macos:
+    name: attach the macOS executables to the release (preview)
+    needs: macos-nopython
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-macos-arm64
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: momwire-nec5-macos-arm64.tar.gz
+          fail_on_unmatched_files: true

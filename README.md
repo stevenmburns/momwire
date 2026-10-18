@@ -257,11 +257,25 @@ in the printout by name ("not served by this build: ..."), and the Python
 command serves it. The other formulations stay Python. The existing Windows
 `momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is unchanged.
 
-### The NEC-5 engines on macOS, without Python (CI build)
+### The NEC-5 engines on Windows, without Python (preview)
 
-The `standalone` workflow also builds the same two engines for Apple silicon
-(macOS 14 or later, arm64), as the artifact
-**`momwire-nec5-macos-arm64.tar.gz`**. It is not a release asset yet. The
+**Preview:** each release from 0.79.0 also carries
+**`momwire-nec5-windows-x64.zip`**, the same two engines as native Windows
+programs, signed with momwire's certificate. The zip holds
+`momwire-nec5-razor2p-avx2.exe` and `momwire-nec5-bs2-avx2.exe` for a
+processor with AVX2, the `-sse2` pair for any other 64-bit x86 processor, and
+a `win7` folder with the sse2 pair built to run on Windows 7 SP1. The zip's
+README.txt says which to use. The DLLs they load ship beside them, so nothing
+needs installing; keep each folder together. A deck an engine does not serve
+yet is refused in the printout by name, as on Linux. The EZNEC drop-in,
+`momwire-eznec-windows.zip`, is unchanged and is still the supported way to
+run momwire under EZNEC on Windows.
+
+### The NEC-5 engines on macOS, without Python (preview)
+
+**Preview:** each release from 0.79.0 also carries the same two engines for
+Apple silicon (macOS 14 or later, arm64), as
+**`momwire-nec5-macos-arm64.tar.gz`**. The
 math library is the system's Accelerate, the one numpy and SciPy use on a
 Mac, and the OpenMP runtime is built in, so nothing ships beside the two
 programs. Their printouts match the Python commands' on the same Mac.
