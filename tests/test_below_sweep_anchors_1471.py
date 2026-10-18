@@ -664,8 +664,12 @@ def test_a_sweep_of_the_issues_deck_counts_its_fills_and_keeps_its_impedance(
     assert sb.SWEEP_STATS["exact_regions_on_blended"] == 0
     blended_nodes = sb.SWEEP_STATS["direct_nodes"]
 
-    # The same five frequencies from exact fills.
+    # The same five frequencies from exact fills, whole: bs2 reads its below
+    # table lazily (momwire#1517), so a lazy exact fill is a fraction of the
+    # whole grid the anchors are sized like, and the budget below is counted
+    # in whole fills.
     monkeypatch.setenv(sb.ENV_ANCHORS, "off")
+    monkeypatch.setenv("MOMWIRE_SOMM_LAZY", "off")
     sm._GRID_CACHE.clear()
     for k in sb.SWEEP_STATS:
         sb.SWEEP_STATS[k] = 0
