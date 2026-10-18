@@ -6,7 +6,7 @@
 #     docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux_2_28_x86_64 \
 #         standalone/build_release_linux.sh OPENBLAS_DIR OUT_DIR
 #
-# -> OUT_DIR/momwire-nec5-razor2p-linux-x86_64.tar.gz, which unpacks to one
+# -> OUT_DIR/momwire-nec5-linux-x86_64.tar.gz, which unpacks to one
 # directory holding two engines, each a command and its two builds:
 #
 #   momwire-nec5-razor2p-linux        razor-2p: picks the build this CPU runs
@@ -27,7 +27,7 @@ OB=$(realpath -m "${1:?usage: build_release_linux.sh OPENBLAS_DIR OUT_DIR}")
 OUT=$(realpath -m "${2:?usage: build_release_linux.sh OPENBLAS_DIR OUT_DIR}")
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NAME=momwire-nec5-razor2p-linux
-PKG=$NAME-x86_64
+PKG=momwire-nec5-linux-x86_64
 
 # cmake and ninja from the image's CPython when the image has none
 if ! command -v cmake > /dev/null || ! command -v ninja > /dev/null; then
