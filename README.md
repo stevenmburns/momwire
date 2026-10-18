@@ -257,6 +257,34 @@ in the printout by name ("not served by this build: ..."), and the Python
 command serves it. The other formulations stay Python. The existing Windows
 `momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is unchanged.
 
+### The NEC-5 engines on macOS, without Python (CI build)
+
+The `standalone` workflow also builds the same two engines for Apple silicon
+(macOS 14 or later, arm64), as the artifact
+**`momwire-nec5-macos-arm64.tar.gz`**. It is not a release asset yet. The
+math library is the system's Accelerate, the one numpy and SciPy use on a
+Mac, and the OpenMP runtime is built in, so nothing ships beside the two
+programs. Their printouts match the Python commands' on the same Mac.
+
+They are ad-hoc signed only: no Developer ID and no notarisation. A tarball
+fetched with `curl` and unpacked with `tar` carries no quarantine flag and
+runs as it is:
+
+```bash
+curl -LO <URL of momwire-nec5-macos-arm64.tar.gz>
+tar -xzf momwire-nec5-macos-arm64.tar.gz
+cd momwire-nec5-macos-arm64
+./momwire-nec5-razor2p-macos -version
+./momwire-nec5-bs2-macos deck.nec deck.out
+```
+
+A copy downloaded through a web browser is quarantined, and macOS refuses to
+open it until the flag is cleared from the whole folder:
+
+```bash
+xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
+```
+
 ### The same answer with or without AVX-512
 
 numpy and OpenBLAS switch to AVX-512 code on a processor that has it, and

@@ -36,6 +36,18 @@
 # (exe_compare.py --rtol win32), since Windows needs no bit-compatibility.
 # Uploaded as a workflow artifact only: nothing here touches a release or
 # momwire-eznec-windows.zip.
+#
+# `macos-nopython` (momwire#1559): the no-Python builds under Apple clang on
+# macos-15 arm64, razor-2p and bs2, one variant each (`legacy`, what
+# setup.py's darwin branch builds), against Accelerate -- the BLAS and LAPACK
+# numpy's and SciPy's macOS wheels link, reached at the same entry points
+# (standalone/blas_accelerate_*.c) -- and Homebrew's libomp linked in from
+# its static archive, so the executables load nothing but the system's.
+# Never signed or notarised (Steve, 2026-10-18): the linker's ad-hoc
+# signature, checked here. Gated as windows-nopython is: the contract tests,
+# and every fixture deck and NX chain against this environment's launcher,
+# within PRINTOUT_RTOL_MACOS (exe_compare.py --rtol macos). Uploaded as a
+# workflow artifact only (momwire-nec5-macos-arm64.tar.gz): no release.
 name: standalone
 
 on:
@@ -514,4 +526,103 @@ jobs:
         with:
           name: momwire-nec5-windows-x64
           path: dist/momwire-nec5-windows-x64
+          if-no-files-found: error
+
+  macos-nopython:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # setup.py's darwin branch links the same keg (LIBOMP_PREFIX)
+      - name: libomp
+        run: |
+          brew install libomp
+          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+      - name: momwire environment
+        run: |
+          python -m venv venv
+          venv/bin/python -m pip install -q -U pip setuptools wheel pybind11
+          venv/bin/python -m pip install -q -e ".[test]"
+          # the library the executables follow: Accelerate, in both
+          venv/bin/python -c "import numpy, scipy, momwire; numpy.show_config(); scipy.show_config(); print('variant', momwire.accelerator_variant)"
+      - name: configure + build (Apple clang, two executables)
+        run: |
+          for b in razor2p bs2; do
+            cmake -S standalone -B build-$b -DMW_EXE_NO_PYTHON=ON -DMW_EXE_BASIS=$b -DCMAKE_BUILD_TYPE=Release
+            cmake --build build-$b -j 3
+          done
+      # Every Mach-O file in the directory: what it loads (the system's
+      # libraries only) and its signature (the linker's ad-hoc one; nothing
+      # here signs or notarises).
+      - name: stage
+        run: |
+          D=dist/momwire-nec5-macos-arm64
+          mkdir -p $D
+          cp build-razor2p/momwire-razor2p-standalone $D/momwire-nec5-razor2p-macos
+          cp build-bs2/momwire-bs2-standalone $D/momwire-nec5-bs2-macos
+          cp standalone/release/README-macos.txt $D/README.txt
+          for f in $D/*; do
+            file -b "$f" | grep -q Mach-O || continue
+            echo "== $f"
+            otool -L "$f"
+            if otool -L "$f" | tail -n +2 | grep -v -E "^[[:space:]]*(/System/Library/|/usr/lib/)"; then
+              echo "::error::$f loads a library outside the system's"; exit 1
+            fi
+            codesign -dv "$f" 2>&1
+            codesign -dv "$f" 2>&1 | grep -q "Signature=adhoc" || { echo "::error::$f has no ad-hoc signature"; exit 1; }
+            codesign -v "$f"
+          done
+          tar -C dist -czf dist/momwire-nec5-macos-arm64.tar.gz momwire-nec5-macos-arm64
+      # The tarball as a user unpacks it (README-macos.txt's steps)
+      - name: run from the unpacked tarball
+        run: |
+          mkdir -p "$RUNNER_TEMP/u" && tar -C "$RUNNER_TEMP/u" -xzf dist/momwire-nec5-macos-arm64.tar.gz
+          D="$RUNNER_TEMP/u/momwire-nec5-macos-arm64"
+          for e in "$D"/momwire-nec5-*-macos; do
+            "$e" -version
+            "$e" tests/fixtures/razor_printout_3a/node_gap_two_sources.nec "$RUNNER_TEMP/$(basename $e).out"
+            sed -n 2p "$RUNNER_TEMP/$(basename $e).out"
+            if grep -q "NEC ERROR" "$RUNNER_TEMP/$(basename $e).out"; then exit 1; fi
+            "$e" - - < scripts/core_split/nx_decks/simnec_stream_2281566.nec > "$RUNNER_TEMP/stream.out"
+            echo "stream: $(grep -c "INPUT LINE .* NX " "$RUNNER_TEMP/stream.out") structures"
+          done
+      - name: contract tests (razor-2p and bs2)
+        run: |
+          D=$PWD/dist/momwire-nec5-macos-arm64
+          export PATH=$PWD/venv/bin:$PATH OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+          MOMWIRE_RAZOR2P_STANDALONE_EXE=$D/momwire-nec5-razor2p-macos venv/bin/python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          MOMWIRE_RAZOR2P_STANDALONE_EXE=$D/momwire-nec5-bs2-macos MOMWIRE_STANDALONE_BASIS=bspline \
+            venv/bin/python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+      # Every fixture deck and the NX chains, as the launcher answers them,
+      # within PRINTOUT_RTOL_MACOS; a deck a build does not serve refused by
+      # name.
+      - name: every fixture deck and the NX chains (razor-2p and bs2)
+        run: |
+          D=$PWD/dist/momwire-nec5-macos-arm64
+          export PATH=$PWD/venv/bin:$PATH OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+          fail=0
+          for b in razor2p bs2; do
+            extra=""; L=$PWD/venv/bin/momwire-nec5-razor-2p
+            if [ $b = bs2 ]; then extra="--basis bspline scripts/core_split/bs2_stream_decks"; L=$PWD/venv/bin/momwire-nec5-bspline; fi
+            echo "=== $b"
+            venv/bin/python scripts/core_split/exe_compare.py exe-mac-$b.jsonl --standalone --rtol macos \
+              --exe $D/momwire-nec5-$b-macos --launcher $L --workers 3 $extra tests/fixtures scripts/core_split/nx_decks || fail=1
+          done
+          exit $fail
+      - name: upload the comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: exe-mac-*.jsonl
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: momwire-nec5-macos-arm64
+          path: dist/momwire-nec5-macos-arm64.tar.gz
           if-no-files-found: error

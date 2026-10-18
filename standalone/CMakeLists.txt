@@ -32,6 +32,14 @@
 #         -DMW_OPENBLAS_LIB=.../scipy_openblas32/lib/libscipy_openblas.dll \
 #         -DMW_BLAS_PREFIX=scipy_
 #   cmake --build build --config Release
+#
+# macOS, no-Python (momwire#1559): Apple clang on arm64, against Accelerate
+# (the library numpy's and SciPy's macOS wheels link; no MW_OPENBLAS_LIB) and
+# Homebrew's libomp (`brew install libomp`; LIBOMP_PREFIX or
+# MW_LIBOMP_PREFIX names another keg), one variant (`legacy`):
+#
+#   cmake -S standalone -B build -DMW_EXE_NO_PYTHON=ON -DMW_EXE_BASIS=razor2p|bs2
+#   cmake --build build
 cmake_minimum_required(VERSION 3.20)
 project(momwire_razor2p LANGUAGES CXX)
 
@@ -64,9 +72,21 @@ endif()
 # Sommerfeld lanes (momwire#1441 step 3) follow the flags, as in the
 # extension: __m256d under avx2, two __m128d under sse2. One variant per
 # build for now; the in-process choice comes with the Windows work (#1512).
-set(MW_EXE_VARIANT "avx2" CACHE STRING "C++ core variant: avx2 or sse2")
-set_property(CACHE MW_EXE_VARIANT PROPERTY STRINGS avx2 sse2)
-if(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
+# macOS (momwire#1559) has one: `legacy`, the unsuffixed extension setup.py's
+# darwin branch builds (no AVX flag on either arch), and the label
+# `momwire.accelerator_variant` stamps on its printouts.
+if(APPLE)
+  set(_mw_variant_default "legacy")
+else()
+  set(_mw_variant_default "avx2")
+endif()
+set(MW_EXE_VARIANT "${_mw_variant_default}" CACHE STRING "C++ core variant: avx2, sse2 or (macOS) legacy")
+set_property(CACHE MW_EXE_VARIANT PROPERTY STRINGS avx2 sse2 legacy)
+if(APPLE)
+  if(NOT MW_EXE_VARIANT STREQUAL "legacy")
+    message(FATAL_ERROR "MW_EXE_VARIANT on macOS is legacy (setup.py's darwin branch)")
+  endif()
+elseif(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
   message(FATAL_ERROR "MW_EXE_VARIANT must be avx2 or sse2")
 endif()
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
@@ -76,15 +96,26 @@ set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
 option(MW_EXE_STATIC_GOMP "link libgomp statically (Linux)" OFF)
 set(MW_DEFAULT_PYTHON_HOME "" CACHE PATH "momwire environment used when MOMWIRE_PYTHON_HOME is unset")
 set(MW_LIBPYTHON "" CACHE STRING "Python library opened for the fallback (default: this Python's)")
+# macOS, no-Python (momwire#1559): the BLAS and LAPACK are Accelerate's, the
+# library numpy and SciPy link on macOS 14+ arm64 (both wheels' __config__),
+# reached through blas_accelerate_*.c under the prefix `mwa_`; nothing ships
+# beside the executable for it. MW_OPENBLAS_LIB is then unused.
+set(MW_ACCELERATE OFF)
+if(APPLE AND MW_EXE_NO_PYTHON)
+  set(MW_ACCELERATE ON)
+  enable_language(C)
+endif()
 # The static OpenBLAS's symbol prefix (blas.h): build_openblas.sh's `mwx_` on
 # Linux; a Windows static library needs none (no interposition there).
 if(WIN32)
   set(_mw_prefix_default "")
+elseif(MW_ACCELERATE)
+  set(_mw_prefix_default "mwa_")
 else()
   set(_mw_prefix_default "mwx_")
 endif()
 set(MW_BLAS_PREFIX "${_mw_prefix_default}" CACHE STRING "symbol prefix of MW_OPENBLAS_LIB")
-if(NOT MW_OPENBLAS_LIB)
+if(NOT MW_OPENBLAS_LIB AND NOT MW_ACCELERATE)
   message(FATAL_ERROR "set MW_OPENBLAS_LIB to an mwx_-prefixed static OpenBLAS")
 endif()
 # Windows, no-Python (momwire#1558): MW_OPENBLAS_LIB may name the OpenBLAS DLL
@@ -128,7 +159,24 @@ endif()
 if(NOT MW_EXE_NO_PYTHON)
   find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 endif()
-if(NOT MSVC)
+if(APPLE)
+  # Apple clang has no OpenMP runtime: Homebrew's libomp, as setup.py's
+  # darwin branch takes it (LIBOMP_PREFIX), passed through the driver with
+  # -Xpreprocessor. Linked from its static archive where the keg has one, so
+  # nothing ships beside the executable for it.
+  set(MW_LIBOMP_PREFIX "$ENV{LIBOMP_PREFIX}" CACHE PATH "Homebrew libomp prefix (macOS)")
+  if(NOT MW_LIBOMP_PREFIX)
+    set(MW_LIBOMP_PREFIX "/opt/homebrew/opt/libomp")
+  endif()
+  if(EXISTS "${MW_LIBOMP_PREFIX}/lib/libomp.a")
+    set(MW_LIBOMP_LIB "${MW_LIBOMP_PREFIX}/lib/libomp.a")
+  elseif(EXISTS "${MW_LIBOMP_PREFIX}/lib/libomp.dylib")
+    set(MW_LIBOMP_LIB "${MW_LIBOMP_PREFIX}/lib/libomp.dylib")
+  else()
+    message(FATAL_ERROR "no libomp under ${MW_LIBOMP_PREFIX} (brew install libomp)")
+  endif()
+  message(STATUS "OpenMP: ${MW_LIBOMP_LIB}")
+elseif(NOT MSVC)
   # MSVC takes /openmp:llvm on the compile line (setup.py's runtime); its
   # FindOpenMP answer is plain /openmp (vcomp), a second runtime.
   find_package(OpenMP REQUIRED COMPONENTS CXX)
@@ -213,12 +261,22 @@ if(MSVC)
   endif()
   set(MW_OMP_FLAG /openmp:llvm)
 else()
-  set(MW_CORE_FLAGS -O3 -fopenmp-simd -fno-math-errno -ffp-contract=off
-      -fno-strict-overflow -fvisibility=hidden)
+  if(APPLE)
+    # Apple's driver takes OpenMP options only through -Xpreprocessor
+    set(MW_CORE_FLAGS -O3 "SHELL:-Xpreprocessor -fopenmp-simd" -fno-math-errno -ffp-contract=off
+        -fno-strict-overflow -fvisibility=hidden)
+  else()
+    set(MW_CORE_FLAGS -O3 -fopenmp-simd -fno-math-errno -ffp-contract=off
+        -fno-strict-overflow -fvisibility=hidden)
+  endif()
   if(MW_EXE_VARIANT STREQUAL "avx2")
     list(APPEND MW_CORE_FLAGS -mavx2 -mfma)
   endif()
-  set(MW_OMP_FLAG -fopenmp)
+  if(APPLE)
+    set(MW_OMP_FLAG "SHELL:-Xpreprocessor -fopenmp" -I${MW_LIBOMP_PREFIX}/include)
+  else()
+    set(MW_OMP_FLAG -fopenmp)
+  endif()
 endif()
 add_library(mw_core OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
@@ -278,9 +336,14 @@ if(MSVC)
   target_compile_options(${MW_EXE} PRIVATE /O2 /std:c++17 /openmp:llvm /D_USE_MATH_DEFINES=)
 else()
   # -ffp-contract=off: the launcher's .GMO grid is numpy's arithmetic
-  target_compile_options(${MW_EXE} PRIVATE -O2 -fopenmp -ffp-contract=off)
+  target_compile_options(${MW_EXE} PRIVATE -O2 ${MW_OMP_FLAG} -ffp-contract=off)
 endif()
-target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB})
+if(MW_ACCELERATE)
+  target_sources(${MW_EXE} PRIVATE blas_accelerate_lp64.c blas_accelerate_ilp64.c)
+  target_link_libraries(${MW_EXE} PRIVATE "-framework Accelerate")
+else()
+  target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB})
+endif()
 if(MSVC AND MW_EXE_NO_PYTHON AND MW_OPENBLAS_DLL)
   # The Windows release (momwire#1558): the OpenBLAS DLL ships beside the
   # executable (SciPy's, scipy-openblas32; MW_BLAS_PREFIX=scipy_), and is
@@ -297,6 +360,12 @@ elseif(MSVC)
       /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.lib
       /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib
       /NODEFAULTLIB:python3.lib)
+  endif()
+elseif(APPLE)
+  target_link_libraries(${MW_EXE} PRIVATE "${MW_LIBOMP_LIB}")
+  if(MW_LIBOMP_LIB MATCHES "\\.dylib$")
+    # the dylib ships beside the executable
+    set_target_properties(${MW_EXE} PROPERTIES BUILD_RPATH "@executable_path" INSTALL_RPATH "@executable_path")
   endif()
 elseif(MW_EXE_STATIC_GOMP)
   # Compiled -fopenmp (above), linked without it: the archive, not -lgomp.
@@ -316,7 +385,9 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(${MW_EXE} PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
 endif()
 
-if(MW_EXE_NO_PYTHON)
+if(MW_ACCELERATE)
+  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, Accelerate")
+elseif(MW_EXE_NO_PYTHON)
   message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, OpenBLAS ${MW_OPENBLAS_LIB}")
 else()
   message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")

@@ -42,7 +42,8 @@ what this build does not serve yet.
 ``--rtol R`` (the Windows gate, momwire#1558): a printout that is not the
 reference's bytes may still pass, within R by `printout_tolerance.ratio` --
 the same text, and every number within R of its neighbourhood's magnitude
-or one printed digit off. ``--rtol win32`` is PRINTOUT_RTOL_WIN32 below.
+or one printed digit off. ``--rtol win32`` is PRINTOUT_RTOL_WIN32 below,
+``--rtol macos`` PRINTOUT_RTOL_MACOS (momwire#1559).
 Each such deck records its ratio, and the summary prints the worst. The
 python-against-launcher check stays byte for byte: those are one Python.
 """
@@ -89,6 +90,18 @@ ARRAYS = pc.ARRAYS
 # so the gate is the worst case of both with 12x headroom: 1e-13, ~450 eps,
 # eight decades below the printed digits' 1e-5.
 PRINTOUT_RTOL_WIN32 = 1e-13
+
+# The same on macOS (momwire#1559): the no-Python executables, Apple clang,
+# against Python on the same Mac, both on Accelerate (the executables call
+# the entry points numpy's and SciPy's wheels do, blas_accelerate_*.c).
+# DERIVED as the Windows bar was, over every fixture deck and NX chain at one
+# thread on macos-15 arm64 (standalone.yml run 39121557059, measured at a
+# loose 1e-3): razor-2p 380 of 380 byte-identical; bs2 382 of 383, the other
+# a gyrator network (net_gyrator_on_phantom_pinned) at a ratio of 8.11e-19.
+# Never against x86's printouts, which round differently. 12x headroom on
+# the one measured runner; a runner whose Accelerate rounds differently will
+# say so here first, and the bar is re-measured rather than widened by hand.
+PRINTOUT_RTOL_MACOS = 1e-17
 
 # Decks whose printouts carry a number that is ill-posed BY CONSTRUCTION, so
 # no tolerance on it means anything: under --rtol they must match in
@@ -193,7 +206,8 @@ def main(argv=None):
         args.remove("--standalone")
     rtol = _arg(args, "--rtol")
     if rtol is not None:
-        rtol = PRINTOUT_RTOL_WIN32 if rtol == "win32" else float(rtol)
+        named = {"win32": PRINTOUT_RTOL_WIN32, "macos": PRINTOUT_RTOL_MACOS}
+        rtol = named[rtol] if rtol in named else float(rtol)
     worst_ratio, within, ill_posed = 0.0, 0, 0
     if exe is None:
         raise SystemExit("--exe EXE is required")
