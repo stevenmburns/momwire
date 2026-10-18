@@ -397,7 +397,8 @@ std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polyline
 Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
                   const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
                   const std::vector<double> &radii, bool has_ground, double ground_z,
-                  int degree, bool lower_medium) {
+                  int degree, bool lower_medium,
+                  const std::vector<std::pair<int64_t, bool>> &gap_members) {
     const int d = degree;
     if (d < 1 || d > 3) throw FrontNotPorted("degree");
     Basis b;
@@ -568,9 +569,24 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
     }
     b.n_basis = m_global;
     b.grounded_junction = grounded_junction;
+    // `_node_gap_crossing_junctions`: the grounded junctions a node gap
+    // names, with a wire below the interface, that are crossing junctions
+    // (momwire#1282): each keeps its KCL row (`_kcl_row_junctions`)
+    b.gap_crossing.assign(junctions.size(), false);
+    {
+        bool any_below = false;
+        for (uint8_t v : b.below_wire) any_below = any_below || v != 0;
+        if (has_ground && any_below && !gap_members.empty())
+            for (int64_t j : b.crossing) {
+                if (!grounded_junction[static_cast<size_t>(j)]) continue;
+                for (const auto &m : junctions[static_cast<size_t>(j)])
+                    for (const auto &gm : gap_members)
+                        if (m == gm) b.gap_crossing[static_cast<size_t>(j)] = true;
+            }
+    }
     std::vector<size_t> rows;
     for (size_t j = 0; j < junctions.size(); j++)
-        if (!grounded_junction[j]) rows.push_back(j);
+        if (!grounded_junction[j] || b.gap_crossing[j]) rows.push_back(j);
     b.n_kcl = static_cast<int64_t>(rows.size());
     b.kcl_A.assign(static_cast<size_t>(b.n_kcl * b.n_basis), 0.0);
     for (size_t r = 0; r < rows.size(); r++)
@@ -664,7 +680,7 @@ std::vector<double> node_gap_columns(const WireArgs &args, const Basis &b) {
     for (size_t p = 0; p < n_g; p++) {
         const auto &gp = args.node_gaps[p];
         const size_t j = end_to_junction.at({gp.wire, gp.at_start});
-        if (b.grounded_junction[j])
+        if (b.grounded_junction[j] && !b.gap_crossing[j])
             throw FrontValueError("node_gaps[" + std::to_string(p) + "]: junction " +
                                   std::to_string(j) +
                                   " is grounded \xe2\x80\x94 a series gap between a wire and the "

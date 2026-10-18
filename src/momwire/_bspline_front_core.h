@@ -123,6 +123,10 @@ struct Basis {
     // `_crossing_junctions`' census before its scope checks
     std::vector<uint8_t> below_wire;
     std::vector<int64_t> crossing;
+    // `_node_gap_crossing_junctions` (momwire#1282, #1569): the crossing
+    // junctions a node gap names, grounded by geometry but given a KCL row
+    // and served a gap (per junction, true when so)
+    std::vector<bool> gap_crossing;
 };
 
 // `ground_z` given or not; `radii` per wire (the conductor's, for the
@@ -134,7 +138,8 @@ struct Basis {
 Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
                   const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
                   const std::vector<double> &radii, bool has_ground, double ground_z,
-                  int degree = 2, bool lower_medium = false);
+                  int degree = 2, bool lower_medium = false,
+                  const std::vector<std::pair<int64_t, bool>> &gap_members = {});
 
 // The constructor's port spec after the duplicate drop, in its order:
 // `feeds` (at least one entry unless node gaps drive), then

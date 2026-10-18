@@ -1053,9 +1053,11 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
         try {
             std::vector<double> radii = wa.radius;
             if (!wa.radius_per_wire) radii.assign(wa.polylines.size(), wa.radius[0]);
+            std::vector<std::pair<int64_t, bool>> gap_members;
+            for (const auto &gp : wa.node_gaps) gap_members.emplace_back(gp.wire, gp.at_start);
             const mw::bspline::Basis bs = mw::bspline::build_basis(
                 g, wa.polylines, wa.junctions, radii, in.has_ground, in.ground_z, 2,
-                in.has_ground && in.ground_eps_given);
+                in.has_ground && in.ground_eps_given, gap_members);
             const ptrdiff_t nb = static_cast<ptrdiff_t>(bs.n_basis), W = 3;
             py::array_t<int64_t> ss({nb, W});
             std::copy(bs.supp_seg.begin(), bs.supp_seg.end(), ss.mutable_data());

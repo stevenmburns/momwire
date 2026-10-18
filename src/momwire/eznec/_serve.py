@@ -128,9 +128,12 @@ addresses are one port, as NEC-5's own prints of Dan AC6LA's deck say
 (``1,-1`` and ``6,-1``, 70.787 − j0.696 Ω both).  razor drives it as a delta
 gap on its one tent across the node; the B-spline and sinusoidal-Galerkin
 families as a node gap with the junction's continuity imposed
-(:func:`_crossing_spelling`).  A crossing node where three or more wires meet
-refuses by name, and so does the point-matched sinusoidal family, which
-places no gap on a node at all.  Every OTHER node in the plane where wires
+(:func:`_crossing_spelling`).  Under ONE rising wire with several buried
+wires ending on the node (radials starting at a vertical's base) the source
+is served too, as the node port on the named wire on every knot basis
+(momwire#1569); a node with more than one rising wire refuses by name, and so
+does the point-matched sinusoidal family, which places no gap on a node at
+all.  Every OTHER node in the plane where wires
 meet is #151's grounded junction and still refuses.
 
 The address picks the spelling one card at a time, and neither #504 U4 nor
