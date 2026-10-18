@@ -120,7 +120,9 @@ licensed engine's own convergence path at the 0.01 % level — it converges
 *along* NEC-5's trajectory, not merely to its endpoint. Node gaps
 (momwire#603), the extended kernel, contact over the Sommerfeld ground
 (momwire#624), buried wires and the crossing junction are all served; what
-the row still refuses — a feed at a junction of three or more wire ends, a
+the row still refuses — a feed named by arclength (`feeds=`) at a junction
+of three or more wire ends (a deck's node address serves a source on a
+crossing node under one rising wire at any member count, since 0.79), a
 wire crossing the interface mid-span rather than at a junction, ground
 contact combined with buried wires, the extended kernel on a buried deck
 (`bspline` serves it above ground and keeps the reduced kernel on the buried
