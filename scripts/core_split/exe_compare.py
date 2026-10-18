@@ -38,6 +38,13 @@ refuses or raises on must print the launcher's bytes; a deck it declines
 (route ``refused:<why>``) must be a refusal printout saying "not served by
 this build", and is counted, by reason, as an expected refusal -- the list of
 what this build does not serve yet.
+
+``--rtol R`` (the Windows gate, momwire#1558): a printout that is not the
+reference's bytes may still pass, within R by `printout_tolerance.ratio` --
+the same text, and every number within R of its neighbourhood's magnitude
+or one printed digit off. ``--rtol win32`` is PRINTOUT_RTOL_WIN32 below.
+Each such deck records its ratio, and the summary prints the worst. The
+python-against-launcher check stays byte for byte: those are one Python.
 """
 
 from __future__ import annotations
@@ -56,8 +63,39 @@ SPLIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SPLIT))
 
 import printout_compare as pc  # noqa: E402
+import printout_tolerance as pt  # noqa: E402
 
 ARRAYS = pc.ARRAYS
+
+# The no-Python executables' printouts against Python's on Windows (MSVC
+# /fp:fast against numpy), by printout_tolerance.ratio. DERIVED, not chosen
+# (momwire#1558), as tests/_lane_gate.py's LANE_RTOL_WIN32 was: measured on
+# the Windows builder (MSVC 14.44, i5-1240P, one thread) over every fixture
+# deck and NX chain, 380 decks for razor-2p and 383 for bs2, in avx2 and sse2
+# (1526 printouts; the rest of each set byte-identical):
+#
+#   razor-2p avx2  27 not byte-identical, worst 1.11e-15 (nx_somm_free_network)
+#   razor-2p sse2   5                     worst 1.65e-16
+#   bs2 avx2       27                     worst 1.94e-16
+#   bs2 sse2       18                     worst 1.54e-16
+#
+# Every one is cancellation noise beside a large neighbour (a 1e10-ohm open
+# load's imaginary part, a network row's zero), a few eps of the number it
+# was computed with. The gate is the worst case with 9x headroom: 1e-14,
+# ~45 eps, five decades below the printed precision.
+PRINTOUT_RTOL_WIN32 = 1e-14
+
+# Decks whose printouts carry a number that is ill-posed BY CONSTRUCTION, so
+# no tolerance on it means anything: under --rtol they must match in
+# everything but numbers (`ratio` is not None), and are counted apart.
+ILL_POSED = {
+    # NT with every admittance zero: the port's impedance is a division by
+    # zero, printed as +-1e17 of noise either side
+    "dipole_nt_all_zero.deck": "a port impedance that divides by zero",
+    # an exactly circular pattern (axial ratio 1.00000): the tilt angle of a
+    # circle is undefined, and each side prints its own
+    "dipole_rp_crossed_quadrature.deck": "the tilt of a circular polarization",
+}
 HOOK = SPLIT / "exe_arrays_hook.py"
 
 
@@ -148,6 +186,10 @@ def main(argv=None):
     standalone = "--standalone" in args
     if standalone:
         args.remove("--standalone")
+    rtol = _arg(args, "--rtol")
+    if rtol is not None:
+        rtol = PRINTOUT_RTOL_WIN32 if rtol == "win32" else float(rtol)
+    worst_ratio, within, ill_posed = 0.0, 0, 0
     if exe is None:
         raise SystemExit("--exe EXE is required")
     # One count for every side, or neither set: "auto", the executable's own
@@ -209,10 +251,24 @@ def main(argv=None):
                         problems.append("the launcher printed this build's refusal")
                 else:
                     for name in ("exe",) if standalone else ("exe", "fallback"):
-                        if a[name] != ref:
-                            problems.append(
-                                f"{name}: " + pc.first_difference(ref, a[name])
-                            )
+                        if a[name] == ref:
+                            continue
+                        q = None if rtol is None else pt.ratio(ref, a[name])
+                        if q is not None:
+                            rec[f"{name}_ratio"] = q
+                            if deck.name in ILL_POSED:
+                                rec["ill_posed"] = ILL_POSED[deck.name]
+                                ill_posed += 1
+                                continue
+                            worst_ratio = max(worst_ratio, q)
+                            if q <= rtol:
+                                within += 1
+                                continue
+                        problems.append(
+                            f"{name}: "
+                            + ("" if q is None else f"ratio {q:.3g} > {rtol:g}; ")
+                            + pc.first_difference(ref, a[name])
+                        )
                 # In auto mode the two routes run at different counts by design
                 # (the C++ route by size, the fallback at the launcher's
                 # default), and the LU's last bits follow the count: arrays are
@@ -264,6 +320,12 @@ def main(argv=None):
         f"runs whose arrays were compared, C++ vs fallback ({', '.join(ARRAYS)}): {runs_compared}"
     )
     print(f"compared against: {'launcher + python' if launcher else 'python'}")
+    if rtol is not None:
+        print(
+            f"printouts not byte-identical but within rtol {rtol:g}: {within}; "
+            f"worst ratio {worst_ratio:.3g}; ill-posed by construction "
+            f"(numbers not compared): {ill_posed}"
+        )
     print(f"mismatches {mismatches}")
     return 1 if mismatches else 0
 
