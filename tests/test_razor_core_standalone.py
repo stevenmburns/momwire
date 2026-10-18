@@ -1159,7 +1159,8 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     transmitted blocks, step 4c), a geometry Python refuses by medium
     (its sentence not yet ported) and the exact kernel's radius-step cross
     job, by name, and nothing else. A one-radius crossing node is served
-    (step 4b); a two-radius one and a node gap on one are declined."""
+    (step 4b), a node gap on one included (its KCL row, momwire#1282 /
+    #1569); a two-radius one is declined."""
     # The wholly-buried decks have their own test below (their Python fills
     # are the slow ones), so this one keeps its pre-step-4 time.
     decks = [
@@ -1175,7 +1176,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
-        "front:bspline-buried-crossing-gap",
         "front:bspline-buried-two-radius",
         "front:bspline-buried-mixed",
         "front:bspline-buried-refusal-crossing",

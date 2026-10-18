@@ -180,8 +180,10 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->geom = bspline::build_geometry(fr->args.polylines, fr->args.n_per_edge);
         fr->radii = fr->args.radius;
         if (!fr->args.radius_per_wire) fr->radii.assign(fr->args.polylines.size(), fr->args.radius[0]);
+        std::vector<std::pair<int64_t, bool>> gap_members;
+        for (const auto &gp : fr->args.node_gaps) gap_members.emplace_back(gp.wire, gp.at_start);
         fr->basis = bspline::build_basis(fr->geom, fr->args.polylines, fr->args.junctions, fr->radii, in.has_ground,
-                                         in.ground_z, 2, in.has_ground && in.ground_eps_given);
+                                         in.ground_z, 2, in.has_ground && in.ground_eps_given, gap_members);
         // a wire below the interface (momwire#1517 step 4): the buried fill,
         // wholly below so far (step 4a); a crossing junction's ports are its
         // own (`_node_gap_crossing_junctions`), so before the port columns
@@ -194,15 +196,11 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
                 for (uint8_t v : fr->basis.below_wire)
                     if (!v) return decline("bspline-buried-mixed");
             } else {
-                // a two-radius node (antennaknobs plan U5), and a node gap on
-                // a crossing node (its KCL row, momwire#1282): not yet
+                // a two-radius node (antennaknobs plan U5): not yet. A node
+                // gap on a crossing node keeps the junction's KCL row
+                // (`build_basis`' `gap_crossing`, momwire#1282 / #1569).
                 for (double r : fr->radii)
                     if (r != fr->radii[0]) return decline("bspline-buried-two-radius");
-                for (const auto &gp : fr->args.node_gaps)
-                    for (int64_t j : cj)
-                        for (const auto &m : fr->args.junctions[static_cast<size_t>(j)])
-                            if (m.first == gp.wire && m.second == gp.at_start)
-                                return decline("bspline-buried-crossing-gap");
             }
         }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
