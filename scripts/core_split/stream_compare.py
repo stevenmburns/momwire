@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import select
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -76,6 +78,26 @@ def pieces(data: bytes) -> list[bytes]:
     return [p.encode("latin-1") for p in out]
 
 
+def _chunks(proc) -> queue.Queue:
+    """Windows: `select` takes only sockets there, so a pipe is read by a
+    thread of its own, one queue item per read and b"" at the end. Started on
+    the first read; the same chunks `os.read` returns on POSIX."""
+    q = getattr(proc, "_mw_chunks", None)
+    if q is None:
+        q = proc._mw_chunks = queue.Queue()
+        fd = proc.stdout.fileno()
+
+        def pump():
+            while True:
+                chunk = os.read(fd, 65536)
+                q.put(chunk)
+                if not chunk:
+                    return
+
+        threading.Thread(target=pump, daemon=True).start()
+    return q
+
+
 def _read_until(proc, buf: bytearray, timeout: float) -> str:
     """Read stdout until it ends on an NX echo ("nx"), or closes ("eof")."""
     fd = proc.stdout.fileno()
@@ -86,10 +108,16 @@ def _read_until(proc, buf: bytearray, timeout: float) -> str:
         left = deadline - time.monotonic()
         if left <= 0:
             return "timeout"
-        ready, _, _ = select.select([fd], [], [], left)
-        if not ready:
-            continue
-        chunk = os.read(fd, 65536)
+        if sys.platform == "win32":
+            try:
+                chunk = _chunks(proc).get(timeout=left)
+            except queue.Empty:
+                continue
+        else:
+            ready, _, _ = select.select([fd], [], [], left)
+            if not ready:
+                continue
+            chunk = os.read(fd, 65536)
         if not chunk:
             return "eof"
         buf += chunk

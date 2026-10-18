@@ -10,10 +10,12 @@ unreadable deck, an unwritable printout or `.GMO`, a deck that refuses or
 raises, and what the build does with a deck its C++ route declines (a named
 refusal) or a C++ exception (the INTERNAL ERROR printout).
 
-The executable needs a static OpenBLAS and a CMake build, which only the
-`standalone` workflow's Linux job makes, so this module runs only when
-MOMWIRE_RAZOR2P_STANDALONE_EXE names one. The launcher it is compared with is
-this environment's.
+The executable needs its OpenBLAS and a CMake build, which only the
+`standalone` workflow's Linux and Windows jobs make, so this module runs only
+when MOMWIRE_RAZOR2P_STANDALONE_EXE names one. The launcher it is compared
+with is this environment's. On Windows (momwire#1558) the build is MSVC's,
+with SciPy's OpenBLAS DLL beside it, held to the same bytes: the launcher
+layer is text, and these decks print the same digits on both sides.
 """
 
 from __future__ import annotations
@@ -35,8 +37,8 @@ EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
 BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor-2p")
 
 pytestmark = pytest.mark.skipif(
-    not EXE or sys.platform == "win32",
-    reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a built (Linux) executable",
+    not EXE,
+    reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a built executable",
 )
 
 DIPOLE = FIXTURES / "razor_printout_3a" / "node_gap_two_sources.nec"
@@ -104,9 +106,48 @@ def _same(exe, ref, de, dl):
     assert _files(de) == _files(dl)
 
 
+def _pe_imports(path: str) -> list[str]:
+    """The DLLs a Windows executable names in its import and delay-import
+    tables, read from the PE file itself (a bare runner has no dumpbin)."""
+    import struct
+
+    data = Path(path).read_bytes()
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    n_sections = struct.unpack_from("<H", data, pe + 6)[0]
+    opt = pe + 24
+    sections = opt + struct.unpack_from("<H", data, pe + 20)[0]
+
+    def offset(rva):
+        for k in range(n_sections):
+            s = sections + 40 * k
+            vsize, va, _, raw = struct.unpack_from("<IIII", data, s + 8)
+            if va <= rva < va + max(vsize, 1):
+                return rva - va + raw
+        raise ValueError(rva)
+
+    names = []
+    # (data directory, descriptor size, offset of its name RVA): the import
+    # table and the delay-import table (the OpenBLAS DLL is delay-loaded)
+    for entry, size, name_at in ((1, 20, 12), (13, 32, 4)):
+        rva = struct.unpack_from("<I", data, opt + 112 + 8 * entry)[0]
+        if not rva:
+            continue
+        o = offset(rva)
+        while name_rva := struct.unpack_from("<I", data, o + name_at)[0]:
+            n = offset(name_rva)
+            names.append(data[n : data.index(b"\0", n)].decode("ascii"))
+            o += size
+    return names
+
+
 def test_no_python_anywhere_in_the_executable():
-    ldd = subprocess.run(["ldd", EXE], capture_output=True, text=True, check=True)
-    assert "python" not in ldd.stdout.lower(), ldd.stdout
+    if sys.platform == "win32":
+        dlls = _pe_imports(EXE)
+        assert dlls, "no imports read"
+        assert not any("python" in d.lower() for d in dlls), dlls
+    else:
+        ldd = subprocess.run(["ldd", EXE], capture_output=True, text=True, check=True)
+        assert "python" not in ldd.stdout.lower(), ldd.stdout
     blob = Path(EXE).read_bytes().lower()
     for word in (
         b"libpython",
@@ -268,7 +309,9 @@ def test_an_unwritable_gmo(tmp_path):
         prepare=lambda d: (d / "x.GMO").mkdir(),
     )
     _same(exe, ref, de, dl)
-    assert b"IsADirectoryError" in (de / "x.out").read_bytes()
+    # opening a directory to write is EISDIR on POSIX, EACCES on Windows
+    kind = b"PermissionError" if sys.platform == "win32" else b"IsADirectoryError"
+    assert kind in (de / "x.out").read_bytes()
 
 
 @pytest.mark.parametrize(
