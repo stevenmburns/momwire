@@ -22,6 +22,16 @@
 # check against an installed momwire; the launcher layer is C++
 # (launcher.cpp), and a deck the C++ route declines is a refusal printout
 # naming why. No Python is needed to configure or build it.
+#
+# Windows, no-Python (momwire#1558): MSVC, against SciPy's OpenBLAS DLL from
+# the scipy-openblas32 wheel, named directly (an import library is made from
+# its exports, below) and shipped beside the executable:
+#
+#   cmake -S standalone -B build -A x64 -DMW_EXE_NO_PYTHON=ON \
+#         -DMW_EXE_BASIS=razor2p|bs2 -DMW_EXE_VARIANT=avx2|sse2 \
+#         -DMW_OPENBLAS_LIB=.../scipy_openblas32/lib/libscipy_openblas.dll \
+#         -DMW_BLAS_PREFIX=scipy_
+#   cmake --build build --config Release
 cmake_minimum_required(VERSION 3.20)
 project(momwire_razor2p LANGUAGES CXX)
 
@@ -76,6 +86,43 @@ endif()
 set(MW_BLAS_PREFIX "${_mw_prefix_default}" CACHE STRING "symbol prefix of MW_OPENBLAS_LIB")
 if(NOT MW_OPENBLAS_LIB)
   message(FATAL_ERROR "set MW_OPENBLAS_LIB to an mwx_-prefixed static OpenBLAS")
+endif()
+# Windows, no-Python (momwire#1558): MW_OPENBLAS_LIB may name the OpenBLAS DLL
+# itself (SciPy's, from the scipy-openblas32 wheel). Its own `.lib` is a MinGW
+# import library, which MSVC links but cannot delay-load, so the import
+# library is made here from the DLL's export table, in MSVC's short-import
+# form: `dumpbin /exports` to a .def, `lib /def` to the .lib.
+if(MSVC AND MW_OPENBLAS_LIB MATCHES "\\.[dD][lL][lL]$")
+  get_filename_component(_mw_tools "${CMAKE_LINKER}" DIRECTORY)
+  find_program(MW_DUMPBIN dumpbin HINTS "${_mw_tools}" REQUIRED)
+  get_filename_component(MW_OPENBLAS_DLL "${MW_OPENBLAS_LIB}" NAME)
+  get_filename_component(_mw_blas_stem "${MW_OPENBLAS_LIB}" NAME_WE)
+  execute_process(COMMAND "${MW_DUMPBIN}" /nologo /exports "${MW_OPENBLAS_LIB}"
+                  OUTPUT_VARIABLE _mw_exports RESULT_VARIABLE _mw_rc)
+  if(NOT _mw_rc EQUAL 0)
+    message(FATAL_ERROR "dumpbin /exports ${MW_OPENBLAS_LIB} failed")
+  endif()
+  # "  ordinal hint RVA      name" rows
+  string(REGEX MATCHALL "\n +[0-9]+ +[0-9A-F]+ [0-9A-F]+ [A-Za-z_][A-Za-z0-9_@]*" _mw_rows "${_mw_exports}")
+  set(_mw_def "LIBRARY ${MW_OPENBLAS_DLL}\nEXPORTS\n")
+  foreach(_row IN LISTS _mw_rows)
+    string(REGEX REPLACE ".* ([^ ]+)$" "\\1" _sym "${_row}")
+    string(APPEND _mw_def "    ${_sym}\n")
+  endforeach()
+  list(LENGTH _mw_rows _mw_n)
+  if(_mw_n LESS 100)
+    message(FATAL_ERROR "${MW_OPENBLAS_LIB}: only ${_mw_n} exports read")
+  endif()
+  set(_mw_implib "${CMAKE_CURRENT_BINARY_DIR}/${_mw_blas_stem}.lib")
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/${_mw_blas_stem}.def" "${_mw_def}")
+  execute_process(COMMAND "${CMAKE_AR}" /nologo /machine:x64
+                          "/def:${CMAKE_CURRENT_BINARY_DIR}/${_mw_blas_stem}.def" "/out:${_mw_implib}"
+                  RESULT_VARIABLE _mw_rc OUTPUT_QUIET)
+  if(NOT _mw_rc EQUAL 0)
+    message(FATAL_ERROR "lib /def for ${MW_OPENBLAS_DLL} failed")
+  endif()
+  message(STATUS "${MW_OPENBLAS_DLL}: ${_mw_n} exports, import library ${_mw_implib}")
+  set(MW_OPENBLAS_LIB "${_mw_implib}")
 endif()
 
 if(NOT MW_EXE_NO_PYTHON)
@@ -234,7 +281,15 @@ else()
   target_compile_options(${MW_EXE} PRIVATE -O2 -fopenmp -ffp-contract=off)
 endif()
 target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB})
-if(MSVC)
+if(MSVC AND MW_EXE_NO_PYTHON AND MW_OPENBLAS_DLL)
+  # The Windows release (momwire#1558): the OpenBLAS DLL ships beside the
+  # executable (SciPy's, scipy-openblas32; MW_BLAS_PREFIX=scipy_), and is
+  # delay-loaded, so main() sets its thread count and core type before its
+  # load-time constructor reads them (momwire_razor2p.cpp,
+  # `blas_env_before_load`), and `-version` answers without loading it.
+  target_link_options(${MW_EXE} PRIVATE /DELAYLOAD:${MW_OPENBLAS_DLL})
+  target_link_libraries(${MW_EXE} PRIVATE delayimp)
+elseif(MSVC)
   if(NOT MW_EXE_NO_PYTHON)
     # pyconfig.h asks MSVC to link pythonXY.lib on its own (#pragma comment);
     # this executable must never link it (it loads the DLL for the fallback).
