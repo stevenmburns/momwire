@@ -246,18 +246,54 @@ void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdi
     // `pair_geometry`, `proj_r1_theta` and the address `proj_address` gives,
     // the lanes' through `stencil_lanes`, which is the same address lane by
     // lane), marked at its stencil.
-    for (std::ptrdiff_t m = 0; m < M; ++m) {
-        const double ox = obs[3 * m], oy = obs[3 * m + 1], oz = obs[3 * m + 2];
-        for (std::ptrdiff_t n = 0; n < S; ++n) {
-            double dx, dy, rho, hh, r1, theta, fr, ft;
-            int i0, j0;
-            somm_proj::pair_geometry(ground_z, ox, oy, oz, src[3 * n], src[3 * n + 1],
-                                     src[3 * n + 2], dx, dy, rho, hh);
-            somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
-            const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
-            marks.mark(reg, i0, j0);
+    auto rows = [&](std::ptrdiff_t m_lo, std::ptrdiff_t m_hi, somm_proj::NodeMarks &mk) {
+        for (std::ptrdiff_t m = m_lo; m < m_hi; ++m) {
+            const double ox = obs[3 * m], oy = obs[3 * m + 1], oz = obs[3 * m + 2];
+            for (std::ptrdiff_t n = 0; n < S; ++n) {
+                double dx, dy, rho, hh, r1, theta, fr, ft;
+                int i0, j0;
+                somm_proj::pair_geometry(ground_z, ox, oy, oz, src[3 * n], src[3 * n + 1],
+                                         src[3 * n + 2], dx, dy, rho, hh);
+                somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
+                const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
+                mk.mark(reg, i0, j0);
+            }
         }
+    };
+#ifdef _OPENMP
+    // Over the threads the projection itself runs on (the 0.79.0 pre-tag
+    // sweep: serial, a census over tens of millions of pairs cost as much as
+    // the fill it saved). Each thread marks its own copy of the masks, OR-ed
+    // in after: a mask is a set, so the partition moves nothing.
+    const int nt = omp_get_max_threads();
+    if (nt > 1 && M > 1 && static_cast<double>(M) * static_cast<double>(S) >= 65536.0) {
+        std::vector<std::vector<uint8_t>> own(static_cast<size_t>(nt) * marks.n_reg);
+        #pragma omp parallel num_threads(nt)
+        {
+            const int t = omp_get_thread_num();
+            somm_proj::NodeMarks mk;
+            mk.n_reg = marks.n_reg;
+            for (size_t r = 0; r < marks.n_reg; ++r) {
+                std::vector<uint8_t> &b = own[t * marks.n_reg + r];
+                b.assign(static_cast<size_t>(marks.nR[r] * marks.nTh[r]), 0);
+                mk.m[r] = b.data();
+                mk.nR[r] = marks.nR[r];
+                mk.nTh[r] = marks.nTh[r];
+            }
+            #pragma omp for schedule(dynamic, 1)
+            for (std::ptrdiff_t m = 0; m < M; ++m) rows(m, m + 1, mk);
+        }
+        for (size_t r = 0; r < marks.n_reg; ++r) {
+            const size_t len = static_cast<size_t>(marks.nR[r] * marks.nTh[r]);
+            for (int t = 0; t < nt; ++t) {
+                const uint8_t *b = own[t * marks.n_reg + r].data();
+                for (size_t q = 0; q < len; ++q) marks.m[r][q] |= b[q];
+            }
+        }
+        return;
     }
+#endif
+    rows(0, M, marks);
 }
 
 void moment_reduce(const std::complex<double> *proj, const double *W,

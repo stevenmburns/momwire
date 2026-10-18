@@ -3596,7 +3596,11 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
             const somm_proj::GridView cv = somm_proj::build_grid_view(
                 G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
             const std::ptrdiff_t na = static_cast<std::ptrdiff_t>(obs_a.size() / 3);
-            somm_core::field_proj_nodes(cv, na, na, obs_a.data(), obs_a.data(), gz, marks);
+            if (somm_core::census_pays(static_cast<double>(na) * static_cast<double>(na),
+                                       somm_core::unfilled_nodes(G0)))
+                somm_core::field_proj_nodes(cv, na, na, obs_a.data(), obs_a.data(), gz, marks);
+            else
+                need = somm_core::all_nodes_of(G0);  // the census would cost more than it saves
             somm_core::ensure_nodes(G0, need);
         }
         double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
