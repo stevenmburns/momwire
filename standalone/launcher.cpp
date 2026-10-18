@@ -4,6 +4,7 @@
 #include "_nec5_deck_core.h"
 
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -310,6 +311,37 @@ bool stdin_paths(std::vector<std::string> &out) {
     return true;
 }
 
+#if defined(_WIN32)
+// `str(Path(p))` on Windows (momwire#1558): `\` and `/` both separate, the
+// printed separator is `\`, and a drive (`C:`) or a UNC prefix (`\\server`)
+// is part of the root. `.` parts drop, `..` stay, as on POSIX.
+std::string path_str(const std::string &p) {
+    auto is_sep = [](char c) { return c == '/' || c == '\\'; };
+    std::string root;
+    std::size_t i = 0;
+    if (p.size() >= 2 && p[1] == ':' && std::isalpha(static_cast<unsigned char>(p[0]))) {
+        root = p.substr(0, 2);
+        i = 2;
+    }
+    if (i < p.size() && is_sep(p[i])) {
+        // two separators, not three, at the very start: a UNC path
+        const bool unc = i == 0 && p.size() >= 2 && is_sep(p[1]) && (p.size() == 2 || !is_sep(p[2]));
+        root += unc ? "\\\\" : "\\";
+        while (i < p.size() && is_sep(p[i])) i++;
+    }
+    std::vector<std::string> parts;
+    while (i < p.size()) {
+        std::size_t j = i;
+        while (j < p.size() && !is_sep(p[j])) j++;
+        const std::string part = p.substr(i, j - i);
+        if (!part.empty() && part != ".") parts.push_back(part);
+        i = j + 1;
+    }
+    std::string out = root;
+    for (std::size_t k = 0; k < parts.size(); k++) out += (k ? "\\" : "") + parts[k];
+    return out.empty() ? "." : out;
+}
+#else
 std::string path_str(const std::string &p) {
     std::string root;
     std::size_t i = 0;
@@ -329,6 +361,7 @@ std::string path_str(const std::string &p) {
     for (std::size_t k = 0; k < parts.size(); k++) out += (k ? "/" : "") + parts[k];
     return out.empty() ? "." : out;
 }
+#endif
 
 std::string close_deck(const std::string &latin1) {
     for (const std::string &line : nec5::latin1_splitlines(latin1)) {
@@ -349,7 +382,11 @@ std::string close_deck(const std::string &latin1) {
 }
 
 std::string gmo_path(const std::string &printout_path) {
+#if defined(_WIN32)
+    const std::size_t sep = printout_path.find_last_of("/\\");  // ntpath.splitext
+#else
     const std::size_t sep = printout_path.rfind('/');
+#endif
     const std::size_t dot = printout_path.rfind('.');
     const long long sep_i = sep == std::string::npos ? -1 : static_cast<long long>(sep);
     if (dot != std::string::npos && static_cast<long long>(dot) > sep_i) {

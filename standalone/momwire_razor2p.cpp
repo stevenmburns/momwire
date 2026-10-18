@@ -62,6 +62,7 @@
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
+#include <intrin.h>
 #else
 #include <dirent.h>
 #include <sched.h>
@@ -315,9 +316,31 @@ std::string installed_version(const std::string &home) {
 
 // --- the C++ route's preconditions ------------------------------------------
 
+#if defined(_WIN32) && MW_EXE_NO_PYTHON
+// CPUID and XGETBV, asked directly (momwire#1558): IsProcessorFeaturePresent
+// knows PF_AVX2_INSTRUCTIONS_AVAILABLE (40) and PF_AVX512F (41) only from
+// Windows 10, and answers FALSE for an id it does not know, so on Windows 7
+// an AVX2 CPU would read as baseline. `xcr0_bits` are the register states the
+// OS saves (XCR0), which the instructions need as much as the CPU bits.
+bool cpuid_has(int leaf7_ebx_bit, unsigned long long xcr0_bits, bool needs_fma) {
+    int r[4];
+    __cpuid(r, 0);
+    if (r[0] < 7) return false;
+    __cpuid(r, 1);
+    const bool osxsave = (r[2] >> 27) & 1, avx = (r[2] >> 28) & 1, fma = (r[2] >> 12) & 1;
+    if (!osxsave || !avx || (needs_fma && !fma)) return false;
+    if ((_xgetbv(0) & xcr0_bits) != xcr0_bits) return false;
+    __cpuidex(r, 7, 0);
+    return (r[1] >> leaf7_ebx_bit) & 1;
+}
+#endif
+
 // Whether this CPU has AVX2 and FMA (`momwire._accel`'s avx2 test).
 bool cpu_has_avx2() {
-#if defined(_WIN32)
+#if defined(_WIN32) && MW_EXE_NO_PYTHON
+    return cpuid_has(5 /* AVX2 */, 0x6 /* SSE, AVX state */, true);
+#elif defined(_WIN32)
+    // `momwire._accel` asks the same, and the hybrid build must agree with it
     return IsProcessorFeaturePresent(40 /* PF_AVX2_INSTRUCTIONS_AVAILABLE */) != 0;
 #elif defined(__x86_64__) || defined(__i386__)
     __builtin_cpu_init();
@@ -815,6 +838,10 @@ std::string not_served(std::string why) {
     return "not served by this build: " + why;
 }
 
+// What a failed allocation reports: libstdc++'s what(), spelled out so the
+// MSVC build (whose what() is "bad allocation") prints the same line.
+const char *const BAD_ALLOC = "std::bad_alloc";
+
 std::string internal_error_reason(const std::string &kind, const std::string &message) {
     return "INTERNAL ERROR IN MOMWIRE ENGINE - " + kind + ": " + message;
 }
@@ -825,8 +852,17 @@ void report_internal_error(const std::string &deck, const std::string &out,
                            const std::string &reason) {
     std::string text;
     const bool readable = read_deck(deck, text);
-    if (write_file(out, refusal(readable ? &text : nullptr, reason)) != 0)
+    if (write_file(out, refusal(readable ? &text : nullptr, reason)) != 0) {
+#if defined(_WIN32)
+        // Python's print(): CRLF on a Windows stdout. By here the OpenBLAS
+        // DLL has loaded, and stdout has been found in binary mode after it
+        // (the MinGW-built DLL shares this process's UCRT), so the mode is
+        // set rather than assumed (momwire#1558).
+        std::fflush(stdout);
+        _setmode(_fileno(stdout), _O_TEXT);
+#endif
         std::printf("%s %s\n", UNABLE_TO_OPEN, out.c_str());
+    }
 }
 
 // `_shell.render` for a deck's text, through the C++ route: the printout's
@@ -923,8 +959,8 @@ int run_deck(const std::string &deck, const std::string &out, bool en_optional,
         return 0;
     } catch (const ml::PyError &e) {
         report_internal_error(deck, out, internal_error_reason(e.kind, e.message));
-    } catch (const std::bad_alloc &e) {
-        report_internal_error(deck, out, internal_error_reason("MemoryError", e.what()));
+    } catch (const std::bad_alloc &) {
+        report_internal_error(deck, out, internal_error_reason("MemoryError", BAD_ALLOC));
     } catch (const std::exception &e) {
         report_internal_error(deck, out, internal_error_reason("RuntimeError", e.what()));
     } catch (...) {
@@ -952,8 +988,8 @@ std::string stream_piece(const std::string &piece, bool cut_at_nx, int forced_th
         return printout;
     } catch (const ml::PyError &e) {
         return refusal(&piece, internal_error_reason(e.kind, e.message));
-    } catch (const std::bad_alloc &e) {
-        return refusal(&piece, internal_error_reason("MemoryError", e.what()));
+    } catch (const std::bad_alloc &) {
+        return refusal(&piece, internal_error_reason("MemoryError", BAD_ALLOC));
     } catch (const std::exception &e) {
         return refusal(&piece, internal_error_reason("RuntimeError", e.what()));
     } catch (...) {
@@ -1036,9 +1072,29 @@ int stream(int forced_threads) {
     return 0;
 }
 
+#if defined(_WIN32)
+// The Windows build's OpenBLAS is the DLL SciPy's wheels bundle, beside the
+// executable and DELAY-LOADED (CMakeLists.txt), so this runs before its load
+// -time constructor reads its environment -- what the Linux build's numbered
+// constructor (`one_blas_thread_at_load`) does for the static archive: the
+// pool starts at one thread, and `set_threads` grows it only on a route that
+// wants more. On an AVX-512 CPU it also holds the library to the Haswell
+// kernels every AVX2 CPU runs, as `momwire_serve_client.pin_cpu_env` holds
+// the launcher's (the Linux archive leaves SKYLAKEX out of its build; SciPy's
+// DLL does not). A value the caller exported is never replaced.
+void blas_env_before_load() {
+    if (env("OPENBLAS_NUM_THREADS").empty()) set_env("OPENBLAS_NUM_THREADS", "1");
+    if (env("OPENBLAS_CORETYPE").empty() && cpuid_has(16 /* AVX512F */, 0xe6, false))
+        set_env("OPENBLAS_CORETYPE", "Haswell");
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+    blas_env_before_load();
+#endif
     std::vector<std::string> args(argv + 1, argv + argc);
     if (args.size() == 1 && args[0] == "-version") {
         std::printf("%s\n", probe_version().c_str());
