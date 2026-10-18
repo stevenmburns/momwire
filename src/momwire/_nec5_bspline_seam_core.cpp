@@ -187,9 +187,23 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         // own (`_node_gap_crossing_junctions`), so before the port columns
         for (uint8_t v : fr->basis.below_wire) fr->buried = fr->buried || v != 0;
         if (fr->buried && !partial_buried) {
-            if (!fr->basis.crossing.empty()) return decline("bspline-buried-crossing");
-            for (uint8_t v : fr->basis.below_wire)
-                if (!v) return decline("bspline-buried-mixed");
+            const auto &cj = fr->basis.crossing;
+            if (cj.empty()) {
+                // wires on both sides with no crossing node: the transmitted
+                // blocks (step 4c)
+                for (uint8_t v : fr->basis.below_wire)
+                    if (!v) return decline("bspline-buried-mixed");
+            } else {
+                // a two-radius node (antennaknobs plan U5), and a node gap on
+                // a crossing node (its KCL row, momwire#1282): not yet
+                for (double r : fr->radii)
+                    if (r != fr->radii[0]) return decline("bspline-buried-two-radius");
+                for (const auto &gp : fr->args.node_gaps)
+                    for (int64_t j : cj)
+                        for (const auto &m : fr->args.junctions[static_cast<size_t>(j)])
+                            if (m.first == gp.wire && m.second == gp.at_start)
+                                return decline("bspline-buried-crossing-gap");
+            }
         }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
@@ -222,7 +236,6 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
     // segment is shorter than 3 radii (free space serves it)
     fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
-    if (fr->exact_kernel && fr->buried) return decline("bspline-buried-exact-kernel");
     if (fr->exact_kernel && bspline::exact_kernel_has_cross_job(fr->geom, fr->radii))
         return decline("bspline-exact-kernel-radius-step");
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,

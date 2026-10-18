@@ -119,3 +119,57 @@ def test_the_buried_blocks_before_the_crossing_serve_are_pythons(monkeypatch):
             compared += 1
     # crossing decks (one- and two-radius, loaded), a rod, and a wholly-buried one
     assert compared >= len(DECKS), compared
+
+
+def test_the_crossing_serve_is_pythons():
+    """Step 4b: the whole buried Z of a crossing deck, the crossing serve
+    included (the cross block's split fill, its ends and corner, the self
+    completions), bit for bit against `compute_Z_operator_buried` with the
+    loading off: one-radius crossing decks, one of them through the ACA."""
+    blas = _blas()
+    import numpy
+
+    lib = ctypes.CDLL(
+        sorted(
+            glob.glob(
+                str(Path(numpy.__file__).parent.parent / "numpy.libs" / "*openblas64*")
+            )
+        )[0]
+    )
+
+    def sym(*names):
+        for n in names:
+            if hasattr(lib, n):
+                return ctypes.cast(getattr(lib, n), ctypes.c_void_p).value
+        pytest.skip(f"no {names[0]} in numpy's OpenBLAS")
+
+    blas += [
+        sym("scipy_cblas_zgemm64_", "cblas_zgemm64_"),
+        sym("scipy_cblas_zgemv64_", "cblas_zgemv64_"),
+        sym("scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"),
+        sym("scipy_cblas_zdotc_sub64_", "cblas_zdotc_sub64_"),
+    ]
+    compared = 0
+    for path in (
+        FIX / "eznec_split_1281" / "thr_n21.nec",
+        FIX / "eznec_fr_step_1508" / "b01_buried_xq.nec",
+        FIX / "bspline_printout_crossing" / "aca_vertical_screen.nec",
+    ):
+        raw = path.read_bytes()
+        entries = acc.bspline_front_geometry(raw)
+        stages = acc.bspline_buried_stages(raw, blas, True)
+        for entry, st in zip(entries, stages, strict=False):
+            if not st:
+                continue
+            assert "stopped" not in st, (path, st.get("stopped"))
+            s = BSplineSolver(**entry["kwargs"])
+            s._apply_loading = lambda Z, **_k: Z
+            g = s._build_geometry()
+            supp, polys, *_ = s._build_basis_polynomials(g)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                Zp = np.ascontiguousarray(s._compute_Z_operator(g, supp, polys))
+            Zc = np.asarray(st["Z"], dtype=np.complex128).reshape(Zp.shape)
+            assert np.array_equal(Zp.view(np.uint64), Zc.view(np.uint64)), path
+            compared += 1
+    assert compared >= 3, compared

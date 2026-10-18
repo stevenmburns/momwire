@@ -149,6 +149,7 @@ if(MW_EXE_BASIS STREQUAL "bs2")
     ${MW_SRC}/_somm_pairs_core.cpp
     ${MW_SRC}/_bspline_front_core.cpp
     ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
 endif()
@@ -184,7 +185,8 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
   somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
-  offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym)  # bs2's (momwire#1517)
+  offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym  # bs2's (momwire#1517)
+  mw_fg=mws_fg)  # the field-form assembler's inline text: one copy per runtime
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
