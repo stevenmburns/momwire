@@ -3317,7 +3317,7 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
             if (scale != 1.0)
                 for (cdouble &v : J_win) v = cdouble(v.real() * scale, v.imag() * scale);
             const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
-            if constexpr (CPLX)
+            if constexpr (std::is_same<E, cdouble>::value)
                 assemble_Z_bspline_windowed_cplx_eps(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0,
                                                      nd::none(), false);
             else
@@ -3335,7 +3335,7 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
         const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
         const CC wa = borrow(wA, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
         const CC wp = borrow(wP, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
-        if constexpr (CPLX)
+        if constexpr (std::is_same<E, cdouble>::value)
             assemble_Z_bspline_weighted_windowed_cplx_eps(Jw, sa, pa, wa, wp, mi, ni, i0, i1, j0, j1, omega, eps, mu,
                                                           cdouble(scale, 0.0), Za, 0, nd::none(), false);
         else
