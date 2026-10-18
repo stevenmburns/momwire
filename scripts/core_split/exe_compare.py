@@ -69,21 +69,26 @@ ARRAYS = pc.ARRAYS
 
 # The no-Python executables' printouts against Python's on Windows (MSVC
 # /fp:fast against numpy), by printout_tolerance.ratio. DERIVED, not chosen
-# (momwire#1558), as tests/_lane_gate.py's LANE_RTOL_WIN32 was: measured on
-# the Windows builder (MSVC 14.44, i5-1240P, one thread) over every fixture
-# deck and NX chain, 380 decks for razor-2p and 383 for bs2, in avx2 and sse2
-# (1526 printouts; the rest of each set byte-identical):
+# (momwire#1558), as tests/_lane_gate.py's LANE_RTOL_WIN32 was: measured over
+# every fixture deck and NX chain, 380 decks for razor-2p and 383 for bs2, in
+# avx2 and sse2, at one thread, on two machines (3052 printouts; the rest of
+# each set byte-identical). Not byte-identical / worst ratio:
 #
-#   razor-2p avx2  27 not byte-identical, worst 1.11e-15 (nx_somm_free_network)
-#   razor-2p sse2   5                     worst 1.65e-16
-#   bs2 avx2       27                     worst 1.94e-16
-#   bs2 sse2       18                     worst 1.54e-16
+#                  Windows builder           windows-latest
+#                  (MSVC 14.44, i5-1240P)    (standalone.yml run 39096316098)
+#   razor-2p avx2  27 / 1.11e-15             3 / 6.2e-18
+#   razor-2p sse2   5 / 1.65e-16            29 / 1.42e-15
+#   bs2 avx2       27 / 2.25e-16            29 / 8.37e-15
+#   bs2 sse2       18 / 1.54e-16            28 / 2.52e-16
 #
 # Every one is cancellation noise beside a large neighbour (a 1e10-ohm open
-# load's imaginary part, a network row's zero), a few eps of the number it
-# was computed with. The gate is the worst case with 9x headroom: 1e-14,
-# ~45 eps, five decades below the printed precision.
-PRINTOUT_RTOL_WIN32 = 1e-14
+# load's imaginary part, a network row's zero); the worst, 8.37e-15, is a
+# gyrator network (wl_ld5_tag0_nt_gyrator_free_0185), whose conditioning
+# multiplies the few eps the rest show. Which decks move depends on the
+# machine (the runner and the builder disagree on which variant is noisier),
+# so the gate is the worst case of both with 12x headroom: 1e-13, ~450 eps,
+# eight decades below the printed digits' 1e-5.
+PRINTOUT_RTOL_WIN32 = 1e-13
 
 # Decks whose printouts carry a number that is ill-posed BY CONSTRUCTION, so
 # no tolerance on it means anything: under --rtol they must match in
