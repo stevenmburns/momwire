@@ -65,5 +65,5 @@ def test_the_linux_executable_attaches_to_the_release():
     only: built and gated on every run, attached on a pushed tag."""
     text = (WORKFLOWS / "standalone.yml").read_text()
     assert "softprops/action-gh-release" in text
-    assert "files: momwire-nec5-razor2p-linux-x86_64.tar.gz" in text
+    assert "files: momwire-nec5-linux-x86_64.tar.gz" in text
     assert 'tags: ["v*"]' in text

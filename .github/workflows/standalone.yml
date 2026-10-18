@@ -2,7 +2,7 @@
 # and bs2's no-Python build beside it (momwire#1517 Phase A).
 #
 # `linux-artifact`: the Linux release artifact (momwire#1512),
-# momwire-nec5-razor2p-linux-x86_64.tar.gz -- the no-Python build
+# momwire-nec5-linux-x86_64.tar.gz -- the no-Python build
 # (MW_EXE_NO_PYTHON) in avx2 and sse2 against the static OpenBLAS pinned to
 # SciPy's build (standalone/build_openblas.sh), and the script that picks one
 # by CPU -- built in the manylinux_2_28 image the wheels are built in
@@ -96,8 +96,8 @@ jobs:
       - name: run on glibc 2.28 (AlmaLinux 8)
         run: |
           docker run --rm -v "$PWD:/io:ro" -w /tmp almalinux:8 sh -ec '
-            tar -xzf /io/dist/momwire-nec5-razor2p-linux-x86_64.tar.gz
-            cd momwire-nec5-razor2p-linux-x86_64
+            tar -xzf /io/dist/momwire-nec5-linux-x86_64.tar.gz
+            cd momwire-nec5-linux-x86_64
             ldd --version | head -1
             ldd momwire-nec5-razor2p-linux-avx2
             ./momwire-nec5-razor2p-linux -version
@@ -124,8 +124,8 @@ jobs:
             echo "bs2 stream: $(grep -c "INPUT LINE .* NX " /tmp/bs2-stream.out) structures"'
       - uses: actions/upload-artifact@v7
         with:
-          name: momwire-nec5-razor2p-linux-x86_64
-          path: dist/momwire-nec5-razor2p-linux-x86_64.tar.gz
+          name: momwire-nec5-linux-x86_64
+          path: dist/momwire-nec5-linux-x86_64.tar.gz
           if-no-files-found: error
 
   # A pushed tag only: a workflow_dispatch with a tag picked in the ref
@@ -142,10 +142,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: momwire-nec5-razor2p-linux-x86_64
+          name: momwire-nec5-linux-x86_64
       - uses: softprops/action-gh-release@v3
         with:
-          files: momwire-nec5-razor2p-linux-x86_64.tar.gz
+          files: momwire-nec5-linux-x86_64.tar.gz
           fail_on_unmatched_files: true
 
   linux:
@@ -175,11 +175,11 @@ jobs:
       # every gate is of the bytes a tag ships.
       - uses: actions/download-artifact@v8
         with:
-          name: momwire-nec5-razor2p-linux-x86_64
+          name: momwire-nec5-linux-x86_64
       - name: the release build (avx2 and sse2)
         run: |
-          tar -xzf momwire-nec5-razor2p-linux-x86_64.tar.gz
-          R=momwire-nec5-razor2p-linux-x86_64
+          tar -xzf momwire-nec5-linux-x86_64.tar.gz
+          R=momwire-nec5-linux-x86_64
           for v in avx2 sse2; do
             mkdir -p build-$v
             cp $R/momwire-nec5-razor2p-linux-$v build-$v/momwire-razor2p-standalone
@@ -190,7 +190,7 @@ jobs:
       # forced sse2, each the very binary's bytes.
       - name: the picking script
         run: |
-          R=momwire-nec5-razor2p-linux-x86_64
+          R=momwire-nec5-linux-x86_64
           D=tests/fixtures/razor_printout_3a/node_gap_two_sources.nec
           test "$($R/momwire-nec5-razor2p-linux -version)" = "$(build-avx2/momwire-razor2p-standalone -version)"
           $R/momwire-nec5-razor2p-linux $D via-script.out
