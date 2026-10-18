@@ -3947,9 +3947,9 @@ class BSplineSolver(
             return M
         return M + remainder.evaluate(supp_seg, polys)
 
-    def _somm_grid(self, eps_t, r1_max):
+    def _somm_grid(self, eps_t, r1_max, lazy=False):
         return _below_interface.somm_grid(
-            eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag
+            eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag, lazy=lazy
         )
 
     def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t, restrict=None):
