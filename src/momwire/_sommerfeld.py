@@ -1911,6 +1911,41 @@ def _census_args(grid):
     return args[:9]
 
 
+# Whether a reader's census is worth taking (the 0.79.0 pre-tag sweep: on a
+# ground screen, a surface radial fan and a whip over Sommerfeld ground, the
+# census of tens of millions of pairs cost more than the fill it saved, and
+# up to 1.85x the v0.78.1 wall). A census costs per pair it reads (~25 ns:
+# the pair geometry and the stencil address, measured on Skylake and
+# Rocketlake) and saves at most the fill of the nodes the view's masters do
+# not hold (0.14 ms a node at the cheapest measured, 2.7 ms at the dearest).
+# Where it would cost over half of that, the reader asks every node instead:
+# the eager fill, the same values. `somm_core::census_pays` is the same rule.
+_CENSUS_S_PER_PAIR = 2.5e-8
+_FILL_S_PER_NODE_MIN = 1.5e-4
+_CENSUS_SHARE = 0.5
+
+
+def unfilled_nodes(grid):
+    """The nodes a lazy view's masters do not hold yet, counted per master
+    (0 for a grid that is not a lazy view: it holds them all)."""
+    src = getattr(grid, "_lazy_src", None)
+    if src is None:
+        return 0
+    return sum(
+        int((~reg["have"]).sum())
+        for m in src[1]
+        for reg in m._regions
+        if reg.get("have") is not None
+    )
+
+
+def census_pays(n_pairs, unfilled):
+    return (
+        float(n_pairs) * _CENSUS_S_PER_PAIR
+        < _CENSUS_SHARE * float(unfilled) * _FILL_S_PER_NODE_MIN
+    )
+
+
 def proj_census(grid, obs, src, ground_z):
     """The nodes `remainder_field_proj` reads over obs x src take, as a bool
     mask per region (momwire#1512), from the accelerator's census
@@ -1923,6 +1958,8 @@ def proj_census(grid, obs, src, ground_z):
     if obs.shape[0] > 1:
         obs = np.unique(obs.view(np.dtype((np.void, 24))), axis=0).view(np.float64)
         obs = np.ascontiguousarray(obs.reshape(-1, 3))
+    if not census_pays(obs.shape[0] * np.shape(src)[0], unfilled_nodes(grid)):
+        return _all_nodes(grid)  # the census would cost more than it saves
     masks = _acc.remainder_field_proj_nodes(
         obs,
         np.ascontiguousarray(src, dtype=np.float64),
@@ -1938,6 +1975,9 @@ def reflected_census(grid, points, src_mid, ground_z, magnetic, step):
     accelerator."""
     if _acc is None or not hasattr(_acc, "reflected_field_nodes"):
         return None
+    n_pairs = np.shape(points)[0] * np.shape(src_mid)[0] * (6 if magnetic else 1)
+    if not census_pays(n_pairs, unfilled_nodes(grid)):
+        return _all_nodes(grid)  # the census would cost more than it saves
     masks = _acc.reflected_field_nodes(
         np.ascontiguousarray(points, dtype=np.float64),
         np.ascontiguousarray(src_mid, dtype=np.float64),

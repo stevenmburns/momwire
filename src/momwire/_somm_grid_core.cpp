@@ -990,6 +990,26 @@ void ensure_nodes(const Grid &view, const std::vector<std::vector<uint8_t>> &nee
     ensure_view(*v, need);
 }
 
+std::size_t unfilled_nodes(const Grid &view) {
+    std::lock_guard<std::mutex> lock(g_memo_mu);
+    const View *v = view_of(view);
+    if (v == nullptr) return 0;  // not a lazy view: every node held
+    std::size_t n = 0;
+    for (size_t r = 0; r < v->g.regions.size(); r++) {
+        const std::vector<uint8_t> &a = v->lo->g.regions[r].have;
+        const std::vector<uint8_t> *b = v->hi != nullptr ? &v->hi->g.regions[r].have : nullptr;
+        for (size_t q = 0; q < a.size(); q++) n += !a[q] + (b != nullptr && !(*b)[q]);
+    }
+    return n;
+}
+
+bool census_pays(double n_pairs, std::size_t unfilled) {
+    const double CENSUS_S_PER_PAIR = 2.5e-8, FILL_S_PER_NODE_MIN = 1.5e-4, SHARE = 0.5;
+    return n_pairs * CENSUS_S_PER_PAIR < SHARE * static_cast<double>(unfilled) * FILL_S_PER_NODE_MIN;
+}
+
+std::vector<std::vector<uint8_t>> all_nodes_of(const Grid &view) { return all_nodes(view); }
+
 const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu) {
     std::lock_guard<std::mutex> lock(g_memo_mu);
     View &v = make_view(eps_t, k2, r1_max, omega, mu);

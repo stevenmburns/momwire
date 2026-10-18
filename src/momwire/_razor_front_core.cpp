@@ -1661,9 +1661,13 @@ std::string Front::prepare_compose(int64_t n_qp_sommerfeld) {
         marks.nR[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_r);
         marks.nTh[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_th);
     }
-    somm_core::field_proj_nodes(*grid_view, static_cast<std::ptrdiff_t>(pts.size() / 3),
-                                static_cast<std::ptrdiff_t>(ns * q), pts.data(), rem_src.data(),
-                                ground_z, marks);
+    const double n_pairs = static_cast<double>(pts.size() / 3) * static_cast<double>(ns * q);
+    if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(g)))
+        somm_core::field_proj_nodes(*grid_view, static_cast<std::ptrdiff_t>(pts.size() / 3),
+                                    static_cast<std::ptrdiff_t>(ns * q), pts.data(), rem_src.data(),
+                                    ground_z, marks);
+    else
+        need = somm_core::all_nodes_of(g);  // the census would cost more than it saves
     somm_core::ensure_nodes(g, need);
     return "";
 }

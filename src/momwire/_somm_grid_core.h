@@ -80,6 +80,17 @@ const Grid &get_grid_lazy(cd eps_t, double k2, double r1_max, double omega, doub
 bool lazy_grids();  // MOMWIRE_SOMM_LAZY: on unless 0 / off / false / no
 void ensure_nodes(const Grid &view, const std::vector<std::vector<uint8_t>> &need);
 
+// Whether a reader's census is worth taking (the 0.79.0 pre-tag sweep): a
+// census costs per PAIR it reads (~25 ns: the pair geometry and the stencil
+// address), and saves at most the fill of the nodes the view's masters do not
+// hold yet (`unfilled_nodes`: from 0.14 ms a node, the cheapest measured, to
+// 2.7 ms). Where the census would cost over half that saving, the reader
+// asks every node instead (`all_nodes_of`) -- the eager fill, the same
+// values. `_sommerfeld.census_pays` is the same rule, the same constants.
+std::size_t unfilled_nodes(const Grid &view);
+bool census_pays(double n_pairs, std::size_t unfilled);
+std::vector<std::vector<uint8_t>> all_nodes_of(const Grid &view);
+
 // MOMWIRE_SOMM_LAZY_CHECK set (not 0): every lazy reader's output is checked
 // finite after the read and the process aborts on a non-finite value -- with
 // every node not filled reading NaN, a node the census missed cannot go
