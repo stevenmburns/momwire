@@ -123,9 +123,3 @@ the count for every deck.
   it alone.
 - **A chain of related decks**: stream it through one process (`- -`)
   rather than launching the program once per deck.
-
-## Known gap
-
-In 0.79.0 the bs2 program declines a source on a buried crossing node by
-name (`bspline-buried-crossing-gap`), while the razor-2p program and the
-Python bs2 engine serve it.
