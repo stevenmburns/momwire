@@ -146,7 +146,9 @@ def test_no_python_anywhere_in_the_executable():
         assert dlls, "no imports read"
         assert not any("python" in d.lower() for d in dlls), dlls
     else:
-        ldd = subprocess.run(["ldd", EXE], capture_output=True, text=True, check=True)
+        # macOS (momwire#1559) has otool where Linux has ldd
+        tool = ["otool", "-L"] if sys.platform == "darwin" else ["ldd"]
+        ldd = subprocess.run([*tool, EXE], capture_output=True, text=True, check=True)
         assert "python" not in ldd.stdout.lower(), ldd.stdout
     blob = Path(EXE).read_bytes().lower()
     for word in (

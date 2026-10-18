@@ -66,6 +66,9 @@
 #else
 #include <dirent.h>
 #include <sched.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 #if !MW_EXE_NO_PYTHON
 #include <dlfcn.h>
 #endif
@@ -179,6 +182,14 @@ int physical_cores() {
         off += p->Size;
     }
     return cores > 0 ? cores : hardware_threads();
+#elif defined(__APPLE__)
+    // macOS (momwire#1559): no affinity masks and no SMT on Apple silicon;
+    // the kernel's count of physical cores
+    int cores = 0;
+    std::size_t len = sizeof cores;
+    if (sysctlbyname("hw.physicalcpu", &cores, &len, nullptr, 0) != 0 || cores <= 0)
+        return hardware_threads();
+    return cores;
 #else
     cpu_set_t set;
     if (sched_getaffinity(0, sizeof set, &set) != 0) return hardware_threads();

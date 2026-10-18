@@ -5,7 +5,8 @@
 // symbol of the static archive so it cannot meet the copies numpy and scipy
 // load into the same process). A Windows executable has no such interposition
 // (a static library's symbols never bind to a DLL's), so its build may leave
-// the names bare: -DMW_BLAS_PREFIX= (empty).
+// the names bare: -DMW_BLAS_PREFIX= (empty). On macOS (momwire#1559) the
+// names are `mwa_`, defined by blas_accelerate_*.c over Accelerate.
 #pragma once
 
 #include <complex>
