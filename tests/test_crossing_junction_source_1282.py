@@ -238,18 +238,24 @@ def test_a_lone_wire_ending_in_the_plane_is_still_a_ground_contact():
         assert site.contact and not site.crossing and site.spelling == "gap"
 
 
-def test_a_crossing_node_of_three_wires_refuses_naming_why():
-    """A second buried wire ending on the node: K = 3, and the source would
-    sit between the named wire and the other two together."""
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+def test_a_crossing_node_of_three_wires_is_the_node_port_on_the_named_wire(basis):
+    """A second buried wire ending on the node: K = 3 (momwire#1569, the
+    slant layout's shape). Served as the node port on the named wire -- an
+    arclength cannot name the branch -- on every knot basis, razor
+    included; the source one segment up converges onto it under refinement
+    (scratch/1569-crossing-gap/README.md)."""
     text = _deck("dan_end1").replace(
         "GE -1,-1", "GW 7,2,0.,0.,0.,.5,0.,-.0254,1.02616E-3\nGE -1,-1"
     )
-    with pytest.raises(_serve.ServeRefusal) as caught:
-        _serve.serve(parse_nec5(text), basis="bspline")
-    message = str(caught.value)
-    assert "momwire#1282" in message
-    assert "3 wires meet (1 above the ground, 2 buried)" in message
-    assert "IN the ground plane; a series source at a grounded" not in message
+    solver_class = BSplineSolver if basis == "bspline" else RazorSolver
+    mesh, site = _site(text, solver_class)
+    assert site.crossing and site.spelling == "node"
+    (group,) = [g for g in mesh.junctions if (site.piece, site.end) in g]
+    assert len(group) == 3
+    z = _serve.serve(parse_nec5(text), basis=basis).sources[0].impedance
+    assert np.isfinite(z) and z.real > 0.0
 
 
 _PEC_POLYLINES = [

@@ -1113,27 +1113,28 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                         else
                             plane++;
                     }
-                    if (!(members->size() == 2 && above == 1 && below == 1)) {
+                    if (!(above == 1 && plane == 0 && members->size() >= 2)) {
                         const long long count = static_cast<long long>(members->size());
                         if (above > 0 && below > 0)
                             throw Refusal{
                                 at_of(at) + " puts a series source on a crossing junction in the "
                                 "ground plane where " + std::to_string(count) + " wires meet (" +
                                 std::to_string(above) + " above the ground, " + std::to_string(below) +
-                                " buried). A source on a crossing node is served where ONE wire "
-                                "rises from it and ONE buried wire ends on it (momwire#1282); with " +
-                                std::to_string(count) + " wires it would sit between the named wire "
-                                "and the other " + std::to_string(count - 1) +
-                                " together, which has no measured spelling at a crossing node. "
-                                "Bring ONE buried wire up to the node (join the others to it at "
-                                "depth, the buried-hub spelling) under ONE rising wire, or put the "
-                                "source on the rising wire one segment up"};
+                                " buried). A source on a crossing node is served under ONE wire "
+                                "rising from it (momwire#1282, momwire#1569); with " +
+                                std::to_string(above) + " rising wires it would sit between the "
+                                "named wire and the others together, which has no measured spelling "
+                                "at a crossing node. Join the rising wires above the ground, or put "
+                                "the source on the rising wire one segment up"};
                         throw Refusal{at_of(at) +
                                       " addresses a node where several wires meet IN the "
                                       "ground plane; a series source at a grounded junction is "
                                       "not served at this seam"};
                     }
-                    site.spelling = basis.crossing_node_spelling ? SeamSite::node : SeamSite::gap;
+                    // momwire#1569: at three or more members an arclength
+                    // cannot name the branch, so it is the node port
+                    site.spelling = basis.crossing_node_spelling || members->size() >= 3 ? SeamSite::node
+                                                                                 : SeamSite::gap;
                     site.piece = pi;
                     site.end = start ? SeamSite::at_start : SeamSite::at_end;
                     site.sign = start ? 1.0 : -1.0;

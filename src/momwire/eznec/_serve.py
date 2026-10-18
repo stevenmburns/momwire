@@ -799,18 +799,19 @@ _REFUSE_NEAR_FIELD_BELOW = (
 # momwire#1282: a series source ON a crossing junction's node is served for
 # the two-member junction (one wire rising, one buried wire ending on it),
 # where the node is one through-current path and the address names it through
-# either member.  At K >= 3 the source would sit between the named member and
-# the other K - 1 together - a node port no basis has a measured answer for at
-# a crossing - so it refuses, and names the two spellings that serve.
+# either member. momwire#1569: and under ONE rising wire with several buried
+# wires ending on the node (radials starting at a vertical's base), as the
+# source on the rising wire at the node -- the source a deck writes one
+# segment up converges onto it under refinement, on bspline and razor alike
+# (scratch/1569-crossing-gap/README.md). More than one rising wire refuses.
 _REFUSE_CROSSING_FAN = (
     "{at} puts a series source on a crossing junction in the ground plane "
     "where {count} wires meet ({above} above the ground, {below} buried). A "
-    "source on a crossing node is served where ONE wire rises from it and ONE "
-    "buried wire ends on it (momwire#1282); with {count} wires it would sit "
-    "between the named wire and the other {others} together, which has no "
-    "measured spelling at a crossing node. Bring ONE buried wire up to the "
-    "node (join the others to it at depth, the buried-hub spelling) under ONE "
-    "rising wire, or put the source on the rising wire one segment up"
+    "source on a crossing node is served under ONE wire rising from it "
+    "(momwire#1282, momwire#1569); with {above} rising wires it would sit "
+    "between the named wire and the others together, which has no measured "
+    "spelling at a crossing node. Join the rising wires above the ground, or "
+    "put the source on the rising wire one segment up"
 )
 # The point-matched sinusoidal family places a gap at a segment centre and
 # never on a node (its `knot_feeds` refusal), and the crossing node is where
@@ -2569,10 +2570,10 @@ def _crossing_site(
     one port — :func:`_assign_columns` gives the second the first's column
     with the weight KCL fixes, exactly as at any other two-wire junction.
 
-    More members are refused by name.  A source at a node of K >= 3 sits
-    between the named wire and the other K - 1 together; razor refuses that
-    node port in the ground plane, and no basis has a measured answer for it
-    at a crossing node.
+    Under ONE rising wire with K - 1 >= 2 buried wires ending on the node
+    (momwire#1569) it is the node port on the named wire: the source a deck
+    writes one segment up the rising wire converges onto it under refinement,
+    on bspline and razor alike. More than one rising wire is refused by name.
     """
     at = Nec5Node(tag=tag, node=node)
     members = next(group for group in mesh.junctions if (piece_index, which) in group)
@@ -2587,7 +2588,9 @@ def _crossing_site(
         return "in-plane"
 
     sides = sorted(_side(m) for m in members)
-    if sides != ["above", "below"]:
+    if not (
+        sides.count("above") == 1 and sides.count("in-plane") == 0 and len(sides) >= 2
+    ):
         if "above" in sides and "below" in sides:
             raise ServeRefusal(
                 _REFUSE_CROSSING_FAN.format(
@@ -2605,7 +2608,9 @@ def _crossing_site(
         )
     return _Site(
         at=at,
-        spelling=spelling,
+        # at three or more members an arclength cannot name the branch the
+        # source is in, so it is the node port on the named (rising) wire
+        spelling="node" if len(members) >= 3 else spelling,
         piece=piece_index,
         end=which,
         sign=1.0 if which == "start" else -1.0,

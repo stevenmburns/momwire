@@ -580,15 +580,6 @@ REFUSALS = {
         feeds=[],
         node_gaps=[(1, "start", 1.0)],
     ),
-    "node_gap_crossing_fan": dict(
-        wires=_SLANT,
-        n_per_edge_per_wire=[[8], [8], [8]],
-        feeds=[],
-        node_gaps=[(0, "start", 1.0)],
-        ground_z=0.0,
-        ground_eps=(13.0, 0.005),
-        ground_model="sommerfeld",
-    ),
     "feed_range": dict(feeds=[(3, 1.0, 1.0)]),
     "feed_wire_index_range": dict(feed_wire_index=4),
     "no_ports": dict(feeds=[]),
@@ -638,9 +629,10 @@ def test_a_refusal_is_the_python_refusal_word_for_word(monkeypatch, name):
     assert str(got.value) == expected[1]
 
 
-def test_a_gap_at_a_buried_hubs_crossing_node_is_not_refused_by_the_core():
-    """momwire#1569: the core's node-gap check exempts a two-member crossing
-    node as `RazorSolver` does (`_node_gap_crossing_groups`). The buried fill
+def test_a_gap_at_a_crossing_node_is_not_refused_by_the_core():
+    """momwire#1569: the core's node-gap check exempts a crossing node (the
+    buried hub's two members, the slant's three) as `RazorSolver` does
+    (`_node_gap_crossing_groups`). The buried fill
     is the Python route's in-process, so the core declines it by name, after
     the check -- where it used to refuse the gap as a grounded end."""
     kw = {
@@ -655,10 +647,12 @@ def test_a_gap_at_a_buried_hubs_crossing_node_is_not_refused_by_the_core():
         "ground_model": "sommerfeld",
     }
     kw.pop("feed_arclength", None)
-    assert acc.razor_front_build(kw) == {"decline": "buried-fill"}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        RazorSolver(**kw)
+    for wires, counts in ((_HUB, [[8], [2], [8], [8]]), (_SLANT, [[8], [8], [8]])):
+        kw.update(wires=wires, n_per_edge_per_wire=counts)
+        assert acc.razor_front_build(kw) == {"decline": "buried-fill"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            RazorSolver(**kw)
 
 
 # --- ties (momwire#1262) ---------------------------------------------------

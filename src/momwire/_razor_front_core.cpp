@@ -1459,25 +1459,16 @@ std::string Front::build(const FrontInputs &in_raw) {
             if (g.grounded)
                 for (auto &e : g.ends) grounded_members.insert(e);
         // momwire#1569 (`RazorSolver._node_gap_crossing_groups`): a CROSSING
-        // node is grounded by geometry, not shorted to the plane; at two
-        // members (one rising, one buried) the gap is its one through tent,
-        // served. `crossing` is `_crossing_junctions` over the same detected
-        // groups (`refuse_buried_geometry`), empty without a buried wire.
+        // node is grounded by geometry, not shorted to the plane; the gap is
+        // the named member's share of its through tents, served. `crossing`
+        // is `_crossing_junctions` over the same detected groups
+        // (`refuse_buried_geometry`), empty without a buried wire.
         for (size_t i = 0; i < node_gaps.size(); i++) {
             const std::pair<int64_t, End> member(node_gaps[i].wire, node_gaps[i].end);
             const size_t j = end_to_junction.at(member);
             const bool on_crossing = grounded_members.count(member) &&
                                      std::find(crossing.begin(), crossing.end(), j) != crossing.end();
-            if (on_crossing && groups_[j].ends.size() == 2) continue;
-            if (on_crossing)
-                value_error("node_gaps[" + std::to_string(i) + "]: the source sits at the " +
-                            end_name(node_gaps[i].end) + " of wire " + std::to_string(node_gaps[i].wire) +
-                            ", on a node in the ground plane where " +
-                            std::to_string(groups_[j].ends.size()) +
-                            " wires meet, some above the ground and some buried. A source there is "
-                            "served where exactly two wires meet: one rising and one buried. Join "
-                            "the buried wires to one short buried wire that runs up to the node (a "
-                            "buried hub), or move the source one segment up the rising wire");
+            if (on_crossing) continue;
             if (grounded_members.count(member))
                 value_error("node_gaps[" + std::to_string(i) + "]: the source sits where the " +
                             end_name(node_gaps[i].end) + " of wire " +
