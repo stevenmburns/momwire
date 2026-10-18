@@ -10,9 +10,10 @@ read the raw grounded flag and refused it as a grounded end.
   port is the delta gap on the same through tent, so it is the serve layer's
   answer (`feeds` at the node) to the bit. Under refinement razor converges
   onto bspline and onto NEC-5 (scratch/1569-crossing-gap/README.md).
-* slant (radials starting at the base): three or more wires, refused by
-  name until the policy is decided -- bspline's API serves it, the serve
-  layer refuses it.
+* slant (radials starting at the base): three or more wires, served too
+  (Steve, 10-18), after the check in scratch/1569-crossing-gap/README.md:
+  the source one segment up converges onto the node source under
+  refinement, and razor and bspline reach the same limit.
 * a grounded end with nothing buried keeps its refusal, in words a deck user
   can act on.
 """
@@ -66,18 +67,12 @@ def test_the_hub_gap_agrees_with_bspline_at_the_working_mesh():
     assert abs(z_r - z_b) / abs(z_b) < 0.03, (z_r, z_b)
 
 
-def test_a_three_wire_crossing_gap_is_refused_in_deck_words():
-    with pytest.raises(ValueError) as exc:
-        RazorSolver(
-            wires=SLANT,
-            n_per_edge_per_wire=[[8], [8], [8]],
-            feeds=[],
-            node_gaps=[(0, "start", 1.0)],
-            **BASE,
-        )
-    msg = str(exc.value)
-    assert "3 wires meet" in msg and "buried hub" in msg and "one segment up" in msg
-    assert "feeds=" not in msg
+def test_a_three_wire_crossing_gap_is_served_and_agrees_with_bspline():
+    counts = [[20], [20], [20]]
+    z_r = _z(RazorSolver, SLANT, counts, feeds=[], node_gaps=[(0, "start", 1.0)])
+    z_b = _z(BSplineSolver, SLANT, counts, feeds=[], node_gaps=[(0, "start", 1.0)])
+    # 4.3 % at 20 segments a wire, 2.2 % at 40, 1.1 % at 80: first order
+    assert abs(z_r - z_b) / abs(z_b) < 0.06, (z_r, z_b)
 
 
 def test_a_grounded_end_keeps_its_refusal_in_deck_words():
