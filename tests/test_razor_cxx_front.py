@@ -52,6 +52,20 @@ BASE = dict(
     wire_radius=0.002, wavelength=22.0, nec5_quadrature=True, exact_kernel="auto"
 )
 
+# A buried-hub vertical (momwire#1569) and its slant twin, whose radials
+# start at the base itself: a three-wire crossing node.
+_HUB = [
+    [(0.0, 0.0, 0.0), (0.0, 0.0, 5.0)],
+    [(0.0, 0.0, 0.0), (0.0, 0.0, -0.1)],
+    [(0.0, 0.0, -0.1), (5.0, 0.0, -0.1)],
+    [(0.0, 0.0, -0.1), (-5.0, 0.0, -0.1)],
+]
+_SLANT = [
+    [(0.0, 0.0, 0.0), (0.0, 0.0, 5.0)],
+    [(0.0, 0.0, 0.0), (5.0, 0.0, -0.1)],
+    [(0.0, 0.0, 0.0), (-5.0, 0.0, -0.1)],
+]
+
 CASES = {
     "free": dict(wires=DIPOLE, nsegs=21, feed_arclength=5.0),
     "free_midpoint": dict(wires=DIPOLE, nsegs=21),
@@ -566,6 +580,15 @@ REFUSALS = {
         feeds=[],
         node_gaps=[(1, "start", 1.0)],
     ),
+    "node_gap_crossing_fan": dict(
+        wires=_SLANT,
+        n_per_edge_per_wire=[[8], [8], [8]],
+        feeds=[],
+        node_gaps=[(0, "start", 1.0)],
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    ),
     "feed_range": dict(feeds=[(3, 1.0, 1.0)]),
     "feed_wire_index_range": dict(feed_wire_index=4),
     "no_ports": dict(feeds=[]),
@@ -613,6 +636,29 @@ def test_a_refusal_is_the_python_refusal_word_for_word(monkeypatch, name):
         pytest.fail(f"the core did not refuse: {out.get('decline')!r}")
     assert type(got.value) is expected[0]
     assert str(got.value) == expected[1]
+
+
+def test_a_gap_at_a_buried_hubs_crossing_node_is_not_refused_by_the_core():
+    """momwire#1569: the core's node-gap check exempts a two-member crossing
+    node as `RazorSolver` does (`_node_gap_crossing_groups`). The buried fill
+    is the Python route's in-process, so the core declines it by name, after
+    the check -- where it used to refuse the gap as a grounded end."""
+    kw = {
+        **BASE,
+        **CASES["free"],
+        "wires": _HUB,
+        "n_per_edge_per_wire": [[8], [2], [8], [8]],
+        "feeds": [],
+        "node_gaps": [(0, "start", 1.0 + 0j)],
+        "ground_z": 0.0,
+        "ground_eps": (13.0, 0.005),
+        "ground_model": "sommerfeld",
+    }
+    kw.pop("feed_arclength", None)
+    assert acc.razor_front_build(kw) == {"decline": "buried-fill"}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        RazorSolver(**kw)
 
 
 # --- ties (momwire#1262) ---------------------------------------------------

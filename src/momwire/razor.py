@@ -1543,6 +1543,31 @@ def _same_stamp(a, b) -> bool:
     return a[0] is b[0] and a[1] == b[1] and a[2] == b[2] and a[3] is b[3]
 
 
+# momwire#1569: a source on a crossing node of three or more wires (the
+# slant layout: a vertical over radials that start at the node) is NOT served
+# by policy until Steve decides between serving it everywhere and refusing it
+# everywhere; the EZNEC/SimNEC serve layer refuses it (`_REFUSE_CROSSING_FAN`).
+# True only to MEASURE what razor would give (scratch/1569-crossing-gap).
+_SERVE_CROSSING_FAN_GAP = False
+
+
+def _node_gap_crossing_fan(i, w_i, end_i, group):
+    """razor's sentence for a source on a crossing node of three or more
+    wires (momwire#1569): the EZNEC/SimNEC serve layer's
+    `_REFUSE_CROSSING_FAN`, said to the solver's caller. Served at two
+    wires (one rising, one buried); at more, no basis has a measured answer
+    yet, so it is refused rather than guessed."""
+    k = len(group["ends"])
+    return (
+        f"node_gaps[{i}]: the source sits at the {end_i} of wire {w_i}, on a "
+        f"node in the ground plane where {k} wires meet, some above the ground "
+        "and some buried. A source there is served where exactly two wires "
+        "meet: one rising and one buried. Join the buried wires to one short "
+        "buried wire that runs up to the node (a buried hub), or move the "
+        "source one segment up the rising wire"
+    )
+
+
 class RazorSolver(
     _exact_kernel_seam.ExactKernelOption,
     _ElementCurrents,
@@ -2281,14 +2306,36 @@ class RazorSolver(
             node_gaps, [list(g["ends"]) for g in groups], len(self.wires_polylines)
         )
         grounded_members = {end for g in groups if g["grounded"] for end in g["ends"]}
+        crossing = self._node_gap_crossing_groups(groups, grounded_members)
         for i, (w_i, end_i, _v) in enumerate(self.node_gaps):
+            j = next(
+                (
+                    j
+                    for j, g in enumerate(groups)
+                    if (w_i, end_i) in map(tuple, g["ends"])
+                ),
+                None,
+            )
+            if j in crossing and (
+                len(groups[j]["ends"]) == 2 or _SERVE_CROSSING_FAN_GAP
+            ):
+                # momwire#1569: a CROSSING node is grounded by geometry, not
+                # shorted to the plane. `_build_geometry` gives it the
+                # free-space topology (momwire#813), so the gap's column is
+                # its one through tent: the series EMF between the rising
+                # wire and the buried one, as bspline serves it (#1282).
+                continue
+            if j in crossing:
+                raise ValueError(_node_gap_crossing_fan(i, w_i, end_i, groups[j]))
             if (w_i, end_i) in grounded_members:
                 raise ValueError(
-                    f"node_gaps[{i}]: the {end_i} of wire {w_i} stands in the "
-                    "ground plane, and a grounded end's tent is already the "
-                    "series path between that wire and the plane (momwire#151"
-                    " grounds the node through the image) — drive it with "
-                    "feeds= at that end instead"
+                    f"node_gaps[{i}]: the source sits where the {end_i} of wire "
+                    f"{w_i} meets the ground plane. That end is already "
+                    "connected to the ground (momwire#151), so a source there "
+                    "would be in series with the ground itself, which is not "
+                    "served. Move the source one segment along the wire from "
+                    "the ground, or connect the wire to the ground through a "
+                    "short wire and put the source on that"
                 )
 
         # ---- wire loading, the house API (momwire#427) -------------------
@@ -2423,6 +2470,23 @@ class RazorSolver(
 
     # ------------------------------------------------------------------
     # geometry
+
+    def _node_gap_crossing_groups(self, groups, grounded_members):
+        """The CROSSING groups a node gap names (momwire#1569): bspline's
+        `_node_gap_crossing_junctions` over razor's detected groups. Empty
+        unless a gap names a grounded member and some wire is buried, so no
+        other deck reaches the crossing scope (and its refusals) from here."""
+        named = {(w, e) for w, e, _v in self.node_gaps}
+        if not (named & grounded_members) or self.ground_z is None:
+            return frozenset()
+        if _medium_spec.BELOW not in self._wire_media():
+            return frozenset()
+        candidates = {
+            j
+            for j, g in enumerate(groups)
+            if g["grounded"] and set(map(tuple, g["ends"])) & named
+        }
+        return frozenset(candidates & set(self._crossing_junctions()))
 
     def _grounded_junction_ends(self):
         """The ``(wire, "start"|"end")`` pairs in a junction whose shared

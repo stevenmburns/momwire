@@ -1,0 +1,12 @@
+CM GN 2: a vertical over a buried hub, fed at its base (momwire#1569). The node at z = 0 joins the vertical and a short buried stub: a two-wire crossing node, served
+CE
+GW 1 8 0 0 0 0 0 5.0 0.003
+GW 2 2 0 0 0 0 0 -0.1 0.003
+GW 3 8 0 0 -0.1 5.0 0 -0.1 0.003
+GW 4 8 0 0 -0.1 -5.0 0 -0.1 0.003
+GE -1
+GN 2 0 0 0 13.0 0.005
+FR 0 1 0 0 14.0 0
+EX 0 1 -1 0 1 0
+XQ
+EN

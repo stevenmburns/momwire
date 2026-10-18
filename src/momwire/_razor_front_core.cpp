@@ -1458,14 +1458,36 @@ std::string Front::build(const FrontInputs &in_raw) {
         for (auto &g : groups_)
             if (g.grounded)
                 for (auto &e : g.ends) grounded_members.insert(e);
-        for (size_t i = 0; i < node_gaps.size(); i++)
-            if (grounded_members.count({node_gaps[i].wire, node_gaps[i].end}))
-                value_error("node_gaps[" + std::to_string(i) + "]: the " +
+        // momwire#1569 (`RazorSolver._node_gap_crossing_groups`): a CROSSING
+        // node is grounded by geometry, not shorted to the plane; at two
+        // members (one rising, one buried) the gap is its one through tent,
+        // served. `crossing` is `_crossing_junctions` over the same detected
+        // groups (`refuse_buried_geometry`), empty without a buried wire.
+        for (size_t i = 0; i < node_gaps.size(); i++) {
+            const std::pair<int64_t, End> member(node_gaps[i].wire, node_gaps[i].end);
+            const size_t j = end_to_junction.at(member);
+            const bool on_crossing = grounded_members.count(member) &&
+                                     std::find(crossing.begin(), crossing.end(), j) != crossing.end();
+            if (on_crossing && groups_[j].ends.size() == 2) continue;
+            if (on_crossing)
+                value_error("node_gaps[" + std::to_string(i) + "]: the source sits at the " +
+                            end_name(node_gaps[i].end) + " of wire " + std::to_string(node_gaps[i].wire) +
+                            ", on a node in the ground plane where " +
+                            std::to_string(groups_[j].ends.size()) +
+                            " wires meet, some above the ground and some buried. A source there is "
+                            "served where exactly two wires meet: one rising and one buried. Join "
+                            "the buried wires to one short buried wire that runs up to the node (a "
+                            "buried hub), or move the source one segment up the rising wire");
+            if (grounded_members.count(member))
+                value_error("node_gaps[" + std::to_string(i) + "]: the source sits where the " +
                             end_name(node_gaps[i].end) + " of wire " +
-                            std::to_string(node_gaps[i].wire) + " stands in the ground plane, and a grounded end's tent is already "
-                            "the series path between that wire and the plane (momwire#151 "
-                            "grounds the node through the image) \xe2\x80\x94 drive it with feeds= "
-                            "at that end instead");
+                            std::to_string(node_gaps[i].wire) +
+                            " meets the ground plane. That end is already connected to the ground "
+                            "(momwire#151), so a source there would be in series with the ground "
+                            "itself, which is not served. Move the source one segment along the "
+                            "wire from the ground, or connect the wire to the ground through a "
+                            "short wire and put the source on that");
+        }
     }
 
     // The ports.
