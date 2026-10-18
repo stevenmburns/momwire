@@ -431,9 +431,18 @@ capability statements rather than deck errors:
   the buried wire instead (`EX 0,6,-1`) gives the same answer. That matches
   the licensed engine, which prints the same impedance for both. Every knot
   engine serves it (`bspline`, `bspline-d1`, `razor-2p`,
-  `sinusoidal-galerkin`). A node where three or more wires meet refuses by
-  name, citing #1282. The point-matched `sinusoidal` engine refuses it by
-  design: it places a source only at a segment centre, and the only
+  `sinusoidal-galerkin`). *Since 0.79 (momwire#1569)* the node may also be
+  where several buried wires meet the one wire rising from it: radials
+  starting at a vertical's base, say. With more than two wires at the node
+  an address cannot say which branch the source sits in, so the source is
+  the node port on the named rising wire, between that wire and the buried
+  wires together. Checked on `bspline` and `razor-2p`, the same source
+  written one segment up the rising wire converges onto it under
+  refinement, and the licensed engine reaches the same limit. A node with
+  **more than one rising wire** still refuses by name; the sentence says to
+  join the rising wires above the ground, or to put the source on the
+  rising wire one segment up. The point-matched `sinusoidal` engine refuses
+  a crossing-node source by design: it places a source only at a segment centre, and the only
   segment-centre spelling of this source is a segment straddling the
   interface, which is not a well-posed feed — NEC-4.2, whose sources are
   segment-centred too, refuses it or solves it wrong. A node in the plane where
@@ -471,6 +480,16 @@ portal's printouts agree with the engine's element for element at the
 sub-percent level, and the in-house razor-blade formulation
 (`razor-2p`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
+
+## The standalone executables
+
+Each release since 0.79 also carries the razor-2p and bs2 engines as native
+programs with no Python in them, for Linux and, as previews, for Windows and
+macOS. They write the Python engines' printouts, one process per
+run, and SimNEC's streaming call works with them.
+[The standalone executables](/reference/standalone/) covers the downloads,
+which program to run, and the thread count. Under EZNEC on Windows, this
+drop-in is still the supported route.
 
 ## From a source checkout
 
