@@ -756,8 +756,9 @@ def refuse_out_of_scope(
         )
 
 
-def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag):
-    """The above/above Sommerfeld remainder grid, sized to `r1_max`."""
+def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False):
+    """The above/above Sommerfeld remainder grid, sized to `r1_max`; `lazy`
+    the view whose nodes its reader names (`_sommerfeld.get_grid`)."""
     return _sommerfeld.get_grid(
         eps_t,
         k,
@@ -765,7 +766,24 @@ def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag):
         omega=omega,
         mu=mu,
         cancel_flag=cancel_flag,
+        lazy=lazy,
     )
+
+
+def lazy_above_grid(somm_grid_fn, eps_t, r1_max, obs, ground_z, cancel_flag):
+    """The above/above remainder grid with only the nodes its reads over
+    `obs` x `obs` take (momwire#1512, razor's `field_windows` pattern; bs2's
+    above remainder since momwire#1517): the lazy view, its census, the
+    nodes filled. Every node holds the value the whole grid's does, so the
+    remainder is the same floats; without the census kernel, the whole grid."""
+    grid = somm_grid_fn(eps_t, r1_max, lazy=True)
+    if getattr(grid, "_lazy_src", None) is None:
+        return grid
+    need = _sommerfeld.proj_census(grid, obs, obs, ground_z)
+    if need is None:
+        return somm_grid_fn(eps_t, r1_max)
+    _sommerfeld.ensure_nodes(grid, need, cancel_flag)
+    return grid
 
 
 # momwire#1187: the plan counts a pair as INSIDE the cap up to this relative
@@ -1474,7 +1492,11 @@ def compute_Z_operator_buried(
 
     # --- the three field-form blocks -----------------------------------
     if a_idx.size:
-        grid_above = somm_grid_fn(eps_t, plan["r1_above"])
+        # The lazy view (momwire#1517): the nodes the above remainder reads
+        # over every above node pair, a superset of any `rows=` restriction's.
+        grid_above = lazy_above_grid(
+            somm_grid_fn, eps_t, plan["r1_above"], obs_a, gz, cancel_flag
+        )
 
         def proj_aa(o, to, s, ts):
             return _sommerfeld.remainder_field_proj(
@@ -1508,6 +1530,9 @@ def compute_Z_operator_buried(
         mu=mu,
         cancel_flag=cancel_flag,
         spacing=_sommerfeld_below._SOMM_BELOW_SPACING_FILL,
+        # its one reader (`remainder_field_proj_below`) is census-aware
+        # (momwire#1512): the lazy table, as razor's below remainder reads it
+        lazy=True,
     )
 
     def proj_bb(o, to, s, ts):

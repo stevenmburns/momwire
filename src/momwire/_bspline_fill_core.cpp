@@ -3565,9 +3565,40 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     // the above/above remainder, field form (`_field_galerkin_block` over
     // `remainder_field_proj` on the above grid)
     if (!a_idx.empty()) {
-        const somm_core::Grid &G0 = somm_core::get_grid(bm.eps_t, bm.k_p, r1_above, omega, mu);
+        // the lazy view (momwire#1512): only the nodes the remainder reads
+        // over every above node pair, as `lazy_above_grid` fills them
+        const somm_core::Grid &G0 = somm_core::get_grid_lazy(bm.eps_t, bm.k_p, r1_above, omega, mu);
         const size_t n_reg = G0.regions.size();
         if (n_reg > somm_proj::MAX_REGIONS) throw FrontNotPorted("a grid layout past the view's regions");
+        {
+            std::vector<std::vector<uint8_t>> need(n_reg);
+            double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+                dth[somm_proj::MAX_REGIONS];
+            const cdouble *vals[somm_proj::MAX_REGIONS];
+            std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+            somm_proj::NodeMarks marks;
+            marks.n_reg = n_reg;
+            for (size_t r = 0; r < n_reg; r++) {
+                const somm_core::GridRegion &reg = G0.regions[r];
+                r0[r] = reg.r0;
+                dr[r] = reg.dr;
+                th0[r] = reg.th0;
+                dth[r] = reg.dth;
+                vals[r] = reg.vals.data();
+                shape0[r] = 4;
+                nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+                nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+                need[r].assign(static_cast<size_t>(reg.n_r * reg.n_th), 0);
+                marks.m[r] = need[r].data();
+                marks.nR[r] = nr[r];
+                marks.nTh[r] = nth[r];
+            }
+            const somm_proj::GridView cv = somm_proj::build_grid_view(
+                G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+            const std::ptrdiff_t na = static_cast<std::ptrdiff_t>(obs_a.size() / 3);
+            somm_core::field_proj_nodes(cv, na, na, obs_a.data(), obs_a.data(), gz, marks);
+            somm_core::ensure_nodes(G0, need);
+        }
         double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
             dth[somm_proj::MAX_REGIONS];
         const cdouble *vals[somm_proj::MAX_REGIONS];
