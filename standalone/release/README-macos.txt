@@ -1,6 +1,6 @@
 momwire-nec5-macos-arm64: two of momwire's NEC-5 engines as native macOS
 programs for Apple silicon, with no Python in them (momwire#1559). This is a
-CI build, not a release.
+preview release asset.
 
     ./momwire-nec5-razor2p-macos DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
     ./momwire-nec5-razor2p-macos - -                     (SimNEC's streaming form)
