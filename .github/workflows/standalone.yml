@@ -25,6 +25,17 @@
 # rather than required: what that job requires is the build and the launcher
 # contract (tests/test_standalone_exe.py). Windows identity is measured on
 # the Windows builder.
+#
+# `windows-nopython` (momwire#1558): the no-Python builds under MSVC,
+# razor-2p and bs2, avx2 and sse2, against SciPy's own OpenBLAS DLL
+# (scipy-openblas32, the build SciPy's Windows wheels bundle), which ships
+# beside them, delay-loaded; with the VC++ runtime and the LLVM OpenMP
+# runtime beside them too, so the directory needs nothing installed. Gated:
+# the launcher-layer contract tests, and every fixture deck and NX chain
+# against this environment's launcher -- within PRINTOUT_RTOL_WIN32
+# (exe_compare.py --rtol win32), since Windows needs no bit-compatibility.
+# Uploaded as a workflow artifact only: nothing here touches a release or
+# momwire-eznec-windows.zip.
 name: standalone
 
 on:
@@ -379,3 +390,128 @@ jobs:
             --exe build-exe\Release\momwire-razor2p.exe `
             --launcher venv\Scripts\momwire-nec5-razor-2p.exe --workers 2 `
             tests/fixtures/razor_printout_3a tests/fixtures/eznec
+
+  # The no-Python executables on Windows (momwire#1558): MSVC, razor-2p and
+  # bs2, avx2 and sse2, against SciPy's OpenBLAS DLL. A workflow artifact
+  # only (see the header).
+  windows-nopython:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      OB_VERSION: "0.3.31.22.1"  # scipy-openblas32: the build SciPy bundles
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: SciPy's OpenBLAS (scipy-openblas32)
+        shell: pwsh
+        run: |
+          python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$env:OB_VERSION" -d obwhl
+          python -m zipfile -e (Get-ChildItem obwhl\*.whl).FullName ob
+          Get-Item ob\scipy_openblas32\lib\libscipy_openblas.dll | Select-Object FullName, Length
+      - name: momwire environment
+        shell: pwsh
+        run: |
+          python -m venv venv
+          venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
+          venv\Scripts\python -m pip install -q -e ".[test]"
+      - name: configure + build (MSVC, four executables)
+        shell: pwsh
+        run: |
+          $dll = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              cmake -S standalone -B "build-$b-$v" -A x64 -DMW_EXE_NO_PYTHON=ON `
+                "-DMW_EXE_BASIS=$b" "-DMW_EXE_VARIANT=$v" "-DMW_OPENBLAS_LIB=$dll" -DMW_BLAS_PREFIX=scipy_
+              if ($LASTEXITCODE) { exit 1 }
+              cmake --build "build-$b-$v" --config Release -- /m
+              if ($LASTEXITCODE) { exit 1 }
+            }
+          }
+      # One directory: the four executables under their release names, the
+      # OpenBLAS DLL, the VC++ runtime (VS's redist) and LLVM's OpenMP runtime
+      # (the copy the loader resolves, as scripts/eznec_freeze/build.py
+      # bundles it).
+      - name: stage
+        shell: pwsh
+        run: |
+          $D = "dist\momwire-nec5-windows-x64"
+          New-Item -ItemType Directory -Force $D | Out-Null
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              Copy-Item "build-$b-$v\Release\momwire-$b-standalone.exe" "$D\momwire-nec5-$b-$v.exe"
+            }
+          }
+          Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll $D
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
+          foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$($crt.FullName)\$f" $D }
+          Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" $D
+          Get-ChildItem $D | Select-Object Name, Length
+      # The directory alone: a PATH of System32 only, so each executable
+      # finds every DLL it needs beside it.
+      - name: run from the staged directory
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
+          $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
+          $env:PATH = "$env:SystemRoot\System32"
+          foreach ($e in Get-ChildItem "$D\*.exe") {
+            & $e.FullName -version
+            & $e.FullName $deck "$env:RUNNER_TEMP\$($e.BaseName).out"
+            if ($LASTEXITCODE) { exit 1 }
+            $line = (Get-Content "$env:RUNNER_TEMP\$($e.BaseName).out")[1]
+            "$($e.Name): $line"
+            if (Select-String -Quiet "NEC ERROR" "$env:RUNNER_TEMP\$($e.BaseName).out") { exit 1 }
+          }
+      - name: contract tests (razor-2p and bs2)
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-razor2p-avx2.exe"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-bs2-avx2.exe"
+          $env:MOMWIRE_STANDALONE_BASIS = "bspline"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
+      # Every fixture deck and the NX chains, as the launcher answers them,
+      # within PRINTOUT_RTOL_WIN32; a deck a build does not serve refused by
+      # name. sse2 against the launcher on the extension's sse2 variant.
+      - name: every fixture deck and the NX chains (razor-2p and bs2, avx2 and sse2)
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              if ($v -eq 'sse2') { $env:MOMWIRE_FORCE_VARIANT = 'sse2' } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
+              $extra = @()
+              $L = "$PWD\venv\Scripts\momwire-nec5-razor-2p.exe"
+              if ($b -eq 'bs2') { $extra = @('--basis', 'bspline', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bspline.exe" }
+              "=== $b $v"
+              venv\Scripts\python scripts/core_split/exe_compare.py "exe-win-$b-$v.jsonl" --standalone --rtol win32 `
+                --exe "$D\momwire-nec5-$b-$v.exe" --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      - name: upload the comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: exe-win-*.jsonl
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: momwire-nec5-windows-x64
+          path: dist/momwire-nec5-windows-x64
+          if-no-files-found: error
