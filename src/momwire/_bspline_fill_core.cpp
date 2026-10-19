@@ -3736,9 +3736,52 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     // the crossing serve (`_crossing_fill`, momwire#524 phase 2): the cross
     // block's split fill and the self completions, on a one-radius deck
     if (crossing && !stop_before_cross) {
-        for (double r : radius_per_wire)
-            if (r != radius_per_wire[0]) throw FrontNotPorted("buried-two-radius");
-        crossing_serve(Z, g, b, radius_per_wire[0], bm, gz, omega, mu, eps, a_idx, b_idx, np, stages);
+        // `_two_radius_crossing` (antennaknobs plan U5): with radii that
+        // differ, `crossing_side_radii(media, radii, crossing_above_member(
+        // ...))` -- the above member at the node's radius and the buried
+        // side's one radius; the axes take the smaller (`ctx.a_wire`)
+        double rmin = radius_per_wire[0], rmax = radius_per_wire[0];
+        for (double r : radius_per_wire) {
+            rmin = std::min(rmin, r);
+            rmax = std::max(rmax, r);
+        }
+        if (rmax - rmin > 0.0) {
+            int64_t above_member = -1;
+            if (b.crossing.size() == 1)
+                for (size_t w = 0; w < b.below_wire.size() && above_member < 0; w++)
+                    if (!b.below_wire[w] &&
+                        (b.start_status[w] == b.crossing[0] || b.end_status[w] == b.crossing[0]))
+                        above_member = static_cast<int64_t>(w);
+            double side_r[2] = {0.0, 0.0};
+            for (int side = 0; side < 2; side++) {
+                if (side == 0 && above_member >= 0) {
+                    side_r[0] = radius_per_wire[static_cast<size_t>(above_member)];
+                    continue;
+                }
+                bool have = false;
+                double lo = 0.0, hi = 0.0;
+                for (size_t w = 0; w < b.below_wire.size(); w++) {
+                    if ((b.below_wire[w] != 0) != (side == 1)) continue;
+                    const double r = radius_per_wire[w];
+                    if (!have) {
+                        lo = hi = r;
+                        side_r[side] = r;
+                        have = true;
+                    } else {
+                        lo = std::min(lo, r);
+                        hi = std::max(hi, r);
+                    }
+                }
+                // a spread within one side: Python's NotImplementedError
+                if (hi - lo > 0.0) throw FrontNotPorted("buried-two-radius-spread");
+            }
+            // several crossing nodes at two radii: refused (plan U9)
+            if (b.crossing.size() > 1) throw FrontNotPorted("buried-two-radius-nodes");
+            crossing_serve(Z, g, b, std::min(side_r[0], side_r[1]), bm, gz, omega, mu, eps, a_idx, b_idx, np,
+                           stages, side_r[0], side_r[1]);
+        } else {
+            crossing_serve(Z, g, b, radius_per_wire[0], bm, gz, omega, mu, eps, a_idx, b_idx, np, stages);
+        }
     }
     return Z;
 }
