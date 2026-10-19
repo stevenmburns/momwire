@@ -679,12 +679,23 @@ def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
     medium at a range (the LOWER MEDIUM line) with the average gain, rows
     past the horizon over a perfect ground, a whole sphere and a second card
     in free space, a loaded inverted V at a range with negative theta -- and
-    is compared byte for byte by the corpus test above."""
+    is compared byte for byte by the corpus test above.
+
+    Except the two-card deck, which the deck core now declines as a
+    "sequence" (momwire 0.79.2): its second RP runs on the standing solution
+    and NEC-5 (x13) echoes it between the two patterns, which the Python
+    sequence reading prints and the C++ core does not yet."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    decks = sorted(RP_DECKS.glob("*.nec"))
-    assert len(decks) == 4
+    every = sorted(RP_DECKS.glob("*.nec"))
+    assert len(every) == 4
+    sequence = RP_DECKS / "rp_free_sphere_two_cards.nec"
+    decks = [p for p in every if p != sequence]
+    (declined,) = pc.run_driver(
+        driver[0]["nec5_razor_printout_driver"], [sequence], tmp_path
+    )
+    assert declined["route"] == "declined", declined["route"]
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     for path, ans in zip(decks, answers, strict=True):
         assert (ans["route"], ans["seam"], ans["raised"]) == (
