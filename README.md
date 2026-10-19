@@ -267,9 +267,10 @@ processor with AVX2, the `-sse2` pair for any other 64-bit x86 processor, and
 a `win7` folder with the sse2 pair built to run on Windows 7 SP1. The zip's
 README.txt says which to use. The DLLs they load ship beside them, so nothing
 needs installing; keep each folder together. A deck an engine does not serve
-yet is refused in the printout by name, as on Linux. The EZNEC drop-in,
-`momwire-eznec-windows.zip`, is unchanged and is still the supported way to
-run momwire under EZNEC on Windows.
+yet is refused in the printout by name, as on Linux. The drop-in,
+[`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip)
+(named `momwire-eznec-windows.zip` before 0.80.0), is still the supported
+way to run momwire under EZNEC, SimNEC or 4nec2 on Windows.
 
 ### The NEC-5 engines on macOS, without Python (preview)
 

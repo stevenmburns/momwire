@@ -153,9 +153,9 @@ def test_the_default_stamp_is_the_four_fields_in_order():
 
 def test_the_basis_field_is_the_name_that_was_threaded():
     """Verbatim, deprecated spellings included: what a bug report needs is
-    which exe answered, and ``razor-nec5`` is a name a shipped launcher
-    carries (``build.py``'s ``SHIPPED_VARIANTS``) even though it resolves to
-    the same solver ``razor-2p`` does."""
+    which exe answered, and ``razor-nec5`` is a name a launcher copy can
+    carry (the bundle shipped one until momwire#1583) even though it
+    resolves to the same solver ``razor-2p`` does."""
     for basis in ("bspline", "razor-2p", "razor-nec5", "hmatrix"):
         assert engine_stamp(basis).split()[2] == basis
 
@@ -198,7 +198,7 @@ def test_no_extension_loaded_stamps_none(monkeypatch):
 
 
 def test_an_unnamed_basis_still_stamps_four_fields():
-    """The empty launcher suffix is reachable — ``momwire-eznec-.exe`` is a
+    """The empty launcher suffix is reachable — ``momwire-nec5-.exe`` is a
     copy a user can make, and it travels verbatim so the deck refuses by name
     rather than being rounded off to the default (``entry.py::basis_for``).
     A blank field there would silently make the stamp a three-field line."""

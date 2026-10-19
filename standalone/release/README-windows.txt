@@ -1,8 +1,9 @@
 momwire-nec5-windows-x64 (PREVIEW): two of momwire's NEC-5 engines as native
 Windows programs, with no Python in them (momwire#1558).
 
-This is a preview. The EZNEC drop-in, momwire-eznec-windows.zip, is unchanged
-and is still the supported way to run momwire under EZNEC on Windows.
+This is a preview. The drop-in, momwire-windows.zip, is still the
+supported way to run momwire under EZNEC, SimNEC or 4nec2 on
+Windows.
 
 The engines are razor-2p (what the Python command `momwire-nec5-razor-2p`
 answers) and bs2, momwire's default B-spline formulation (what

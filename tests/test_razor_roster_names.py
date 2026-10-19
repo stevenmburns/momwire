@@ -85,8 +85,8 @@ def test_razor_names_are_roster_entries_but_not_nec2_front_door_entries():
     """A roster name is served by the dialect whose grid it can land on.
 
     Both razor names stay in `deck.BASES` -- the NEC-5 dialect addresses
-    knots and serves them, and the drop-in zip ships `momwire-eznec-razor-2p`
-    (momwire#819) -- and neither is in `deck.NEC2_BASES`, the portal's banner
+    knots and serves them, and the drop-in zip ships `momwire-nec5-razor-2p`
+    (momwire#819, renamed in #1295/#1583) -- and neither is in `deck.NEC2_BASES`, the portal's banner
     table, the thin client's roster copy, or `[project.scripts]` as a
     `momwire-nec2c-*` command (momwire#821). The two nec2c scripts shipped
     from v0.36.1 to v0.46.0; a host still pointing at a copy is told why at

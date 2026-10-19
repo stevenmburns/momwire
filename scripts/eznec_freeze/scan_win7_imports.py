@@ -40,7 +40,7 @@ ALLOW-LIST, and why each entry is safe:
 * ``AddDllDirectory`` / ``RemoveDllDirectory`` / ``SetDefaultDllDirectories``:
   Windows 7 SP1 has them with KB2533623, which the README requires.
 
-Usage: ``python scripts/eznec_freeze/scan_win7_imports.py dist/momwire-eznec``
+Usage: ``python scripts/eznec_freeze/scan_win7_imports.py dist/momwire``
 """
 
 from __future__ import annotations

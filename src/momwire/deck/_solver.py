@@ -165,8 +165,8 @@ BASES = MappingProxyType(
             MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
         ),
         # DEPRECATED spelling of `razor-2p`, kept because it shipped: in the
-        # EZNEC drop-in's launcher names (`momwire-eznec-razor-nec5`, which
-        # momwire#819 keeps beside the current spelling) and in antennaknobs'
+        # EZNEC drop-in's launcher names (`momwire-eznec-razor-nec5`,
+        # momwire#819, until momwire#1583 dropped it) and in antennaknobs'
         # CLI roster.
         #
         # The rename is about the CLAIM the name makes, not about any host

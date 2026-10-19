@@ -182,9 +182,10 @@ SimNEC that absolute path (one without spaces is safest). Its `-version` probe
 answers `NEC5momwire.<major>.<minor>`. These commands run the same warm engine
 as the EZNEC drop-in, so a run after the first answers in milliseconds, and
 SimNEC's N-port measurement (one run block per port in a single deck) is served
-as NEC-5 serves it. On Windows without Python, the EZNEC drop-in zip ships
-`momwire-nec5.exe` and `momwire-nec5-razor-2p.exe`, the same names it tells
-EZNEC's NEC-5 slot to use.
+as NEC-5 serves it. On Windows without Python, the drop-in zip,
+[`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip),
+ships `momwire-nec5.exe` and `momwire-nec5-razor-2p.exe`, the same names it
+tells EZNEC's NEC-5 slot to use.
 
 ## The version probe
 

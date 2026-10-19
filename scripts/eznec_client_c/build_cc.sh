@@ -21,7 +21,7 @@
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
-out=${1:-momwire-eznec}
+out=${1:-momwire-nec5}
 cc=${CC:-cc}
 python=${PYTHON:-python3}
 

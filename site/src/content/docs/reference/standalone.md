@@ -92,9 +92,9 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 
 ## How they differ from the EZNEC drop-in
 
-The EZNEC drop-in, [`momwire-eznec-windows.zip`](/reference/eznec-nec5/#setting-it-up),
-is unchanged and is still the supported way to run momwire under EZNEC on
-Windows. The two are built for different launch patterns:
+The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up)
+(named `momwire-eznec-windows.zip` before 0.80.0), is still the supported way
+to run momwire under EZNEC, SimNEC or 4nec2 on Windows. The two are built for different launch patterns:
 
 - A standalone program is **a new process per run**, with no Python to
   start, so it answers the first run of a session quickly.

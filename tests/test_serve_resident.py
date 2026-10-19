@@ -231,7 +231,7 @@ def test_only_windows_logs_where_its_openmp_runtime_came_from(monkeypatch):
     assert _resident.OMP_LINE not in log.getvalue(), "the line is win32-only"
 
     monkeypatch.setattr(sys, "platform", "win32")
-    bundled = r"C:\Program Files\momwire-eznec\_internal\libomp140.x86_64.dll"
+    bundled = r"C:\Program Files\momwire\_internal\libomp140.x86_64.dll"
     monkeypatch.setattr(_resident, "_omp_runtime_path", lambda: bundled)
     log = io.StringIO()
     _resident._configure(log, [])

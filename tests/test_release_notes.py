@@ -52,12 +52,14 @@ def test_the_drop_in_still_attaches_to_the_release():
 
     Deleting the release job outright would also satisfy the test above, and
     would silently stop shipping the Windows drop-in that
-    ``releases/latest/download/momwire-eznec-windows.zip`` — the link the site
-    hands EZNEC users — resolves to.
+    ``releases/latest/download/momwire-windows.zip`` — the link the site
+    hands EZNEC, SimNEC and 4nec2 users — resolves to (``momwire-eznec-
+    windows.zip`` until momwire#1583).
     """
     text = (WORKFLOWS / ATTACHES_ONLY).read_text()
     assert "softprops/action-gh-release" in text
-    assert "files: momwire-eznec-windows.zip" in text
+    assert "files: momwire-windows.zip" in text
+    assert "files: momwire-windows-win7.zip" in text
 
 
 def test_the_linux_executable_attaches_to_the_release():
