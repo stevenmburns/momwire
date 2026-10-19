@@ -126,3 +126,35 @@ def test_the_seam_hook_names_every_read_kind():
     for path, kind in ((stepped, "stepped"), (sequence, "sequence")):
         answer = acc.nec5_razor_seam(path.read_bytes())
         assert [s["read"] for s in answer["structures"]] == [kind], path
+
+
+RP_NE_ONE = FIXTURE.with_name("rp_ne_one_xq.nec")
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_an_rp_and_an_ne_before_one_xq_keep_the_single_run_reading(basis):
+    """momwire#1579's scope: RP then NE before ONE XQ already worked in 0.79
+    (Dan), and is read as it was -- one run, not a sequence: the echo runs
+    through XQ before the tables, the near field before the pattern, one of
+    each. Only the repeated shape above is read as a sequence."""
+    from momwire.eznec import _serve
+
+    text = RP_NE_ONE.read_text()
+    assert _serve.split_sequence(text) is None
+    out = render(text, basis=basis)
+    assert "NEC ERROR" not in out
+    assert out.count("RADIATION PATTERNS") == 1
+    assert out.count("NEAR ELECTRIC FIELDS") == 1
+    assert out.index("INPUT LINE  7  XQ") < out.index("NEAR ELECTRIC FIELDS")
+    assert out.index("NEAR ELECTRIC FIELDS") < out.index("RADIATION PATTERNS")
+
+
+def test_the_cxx_core_reads_one_xq_as_one_run_and_the_repeat_as_a_sequence():
+    from momwire import _accel
+
+    acc = _accel.acc
+    if acc is None or not hasattr(acc, "nec5_razor_seam"):
+        pytest.skip("no accelerator with the C++ seam loaded")
+    for path, kind in ((RP_NE_ONE, "single"), (RP_NE, "sequence")):
+        answer = acc.nec5_razor_seam(path.read_bytes())
+        assert [s["read"] for s in answer["structures"]] == [kind], path
