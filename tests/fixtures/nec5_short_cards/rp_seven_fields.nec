@@ -1,0 +1,9 @@
+CM A short RP (Dan AC6LA's "RP 0 91 1 1000 -90 0 2"): the NEC-5 engine reads the missing trailing fields as 0 (momwire 0.79.2)
+CE
+GW 1 21 0 -2.5 6 0 2.5 6 0.001
+GE 0
+GN 2 0 0 0 13 0.005
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28 0
+RP 0 91 1 1000 -90 0 2
+EN

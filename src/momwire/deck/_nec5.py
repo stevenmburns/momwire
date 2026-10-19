@@ -595,32 +595,19 @@ _REFUSED_BY_NAME = MappingProxyType(
     }
 )
 
-# The number of fields each card must carry.  EZNEC writes every field of
-# every card it emits, so this dialect does no blank-field defaulting: a
-# short card is a deck this front-end did not come from and refuses rather
-# than zero-fills (the exceptions are GD/GN 0's trailing complex mu and LD
-# 5's trailing real mu, both of which the measured grammar lets default to
-# 1; GE's second field, momwire#1116 — see `_ge`; and EX's imaginary drive,
-# momwire#1230 — see `_ex`).  GN and LD are absent
-# because their length depends on a field read before this table — GN's on
-# its first field (bare for -1 and 1, media-carrying for 0 and 2, checked in
-# `_gn`), LD's on its TYPE (4 needs R and X, 5 does not need mu) — and are
-# checked in `_ld`.
-_MIN_FIELDS = MappingProxyType(
-    {
-        "GW": 9,
-        "GE": 1,
-        "GD": 6,
-        "EX": 5,
-        "TL": 10,
-        "NT": 10,
-        "FR": 5,
-        "PQ": 1,
-        "RP": 8,
-        "NE": 10,
-        "NH": 10,
-    }
-)
+# A short card reads its missing trailing fields as 0, as the NEC-5 engine
+# does (momwire 0.79.2: measured black-box on x13 against the same card with
+# the fields written as zeros, for GW, GD, EX, TL, NT, FR, PQ, RP, NE, NH, LD
+# 0/1/4/5 and GN 2 -- identical printouts every time; `Card.f` / `Card.i`
+# already read an absent field as 0).  EZNEC's own writer omits fields too
+# (its `RP 0 181 1 1000 90. 0. -1. 0. 0.`), so a short card is not a sign of
+# a foreign deck.  Two floors stay: GE's (a GE with no field at all is
+# refused, momwire#1116 -- the bare one-field GE is served, the zero-field
+# one not, until the condition EZNEC writes it under is known) and GW's (a
+# wire missing its radius reads it as 0, and the engine stops on it with an
+# input data error).  A finite GN missing its permittivity is refused in
+# `_gn`: the engine reads it as 0 and answers NaN.
+_MIN_FIELDS = MappingProxyType({"GE": 1, "GW": 9})
 
 # EX kinds the dialect emits: 4 (elementary current source) 47/49 captures,
 # 0 (voltage source) 2/49.  Every other NEC excitation — incident plane
@@ -1103,11 +1090,11 @@ class _Nec5Parser:
             # it identical to GN 0 to every printed digit.  EZNEC emits only
             # GN 0, but the spelling is recorded so a byte-gated printout can
             # echo the card the deck actually wrote.
-            if len(card.values) < 6:
+            if len(card.values) < 5:
                 raise DeckError(
-                    f"GN {code} carries {len(card.values)} fields; a finite ground "
-                    f"needs at least 6 (the media payload's epsilon and sigma sit in "
-                    f"fields 5 and 6)"
+                    f"GN {code} carries {len(card.values)} fields; a finite "
+                    f"ground needs its relative permittivity (field 5): the "
+                    f"NEC-5 engine reads a missing one as 0 and answers NaN"
                 )
             self._sommerfeld_file(card)
             self.ground = Nec5SommerfeldGround(
@@ -1206,19 +1193,6 @@ class _Nec5Parser:
                 f"impedance at the deck's own frequency - momwire#1085), LD 2 / "
                 f"LD 3 (per-unit-length RLC - momwire#1088), LD 4 (fixed "
                 f"impedance) or LD 5 (wire conductivity)"
-            )
-        minimum = 7 if kind in (0, 1) else 6
-        if len(card.values) < minimum:
-            noun = (
-                "resistance, inductance and capacitance"
-                if kind in (0, 1)
-                else "resistance and reactance"
-            )
-            raise DeckError(
-                f"LD {kind} carries {len(card.values)} fields and needs at least "
-                f"{minimum} (tag, LDTAGF, LDTAGT, {noun}); EZNEC and antennaknobs "
-                f"alike write every field of every LD card, so this dialect does "
-                f"no blank-field defaulting"
             )
         at, printed_location = self._load_address(card, 1)
         end_code = card.i(3)
@@ -1352,13 +1326,6 @@ class _Nec5Parser:
         """
         kind = card.i(0)
         name = f"LD {kind}"
-        if len(card.values) < 7:
-            raise DeckError(
-                f"{name} carries {len(card.values)} fields and needs at least 7 "
-                f"(type, tag, from, thru, R', L', C'); EZNEC writes every field "
-                f"of every card it emits, so this dialect does no blank-field "
-                f"defaulting"
-            )
         tag, first, last = card.i(1), card.i(2), card.i(3)
         r, l, c = card.f(4), card.f(5), card.f(6)  # noqa: E741 — NEC's field name
         if c != 0.0:
@@ -1437,13 +1404,6 @@ class _Nec5Parser:
         not only an inferred one — the same "absent means default" the LD
         4 branch above does NOT get (its R/X pair is never optional).
         """
-        if len(card.values) < 5:
-            raise DeckError(
-                f"LD 5 carries {len(card.values)} fields and needs at least 5 "
-                f"(type, tag, from, thru, sigma); EZNEC writes every field of "
-                f"every card it emits, so this dialect does no blank-field "
-                f"defaulting"
-            )
         tag, first, last = card.i(1), card.i(2), card.i(3)
         sigma = card.f(4)
         if sigma <= 0.0:
@@ -1709,8 +1669,7 @@ class _Nec5Parser:
             raise DeckError(
                 f"{card.mnemonic} carries {written} "
                 f"{'field' if written == 1 else 'fields'} and needs at least "
-                f"{minimum}; EZNEC writes every field of every card it emits, so "
-                f"this dialect does no blank-field defaulting"
+                f"{minimum}"
             )
         handler = {
             "GW": self._gw,

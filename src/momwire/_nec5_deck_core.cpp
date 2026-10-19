@@ -521,10 +521,9 @@ const std::map<std::string, std::string> &refused_by_name() {
 }
 
 int min_fields(const std::string &mnemonic) {
-    static const std::map<std::string, int> table = {
-        {"GW", 9}, {"GE", 1}, {"GD", 6}, {"EX", 5}, {"TL", 10}, {"NT", 10},
-        {"FR", 5}, {"PQ", 1}, {"RP", 8}, {"NE", 10}, {"NH", 10},
-    };
+    // `_MIN_FIELDS`: a short card reads its missing trailing fields as 0, as
+    // the NEC-5 engine does (momwire 0.79.2); GE and GW keep their floors
+    static const std::map<std::string, int> table = {{"GE", 1}, {"GW", 9}};
     auto it = table.find(mnemonic);
     return it == table.end() ? -1 : it->second;
 }
@@ -751,10 +750,10 @@ struct Parser {
             return;
         }
         if (code == Int(0) || code == Int(2)) {
-            if (card.values.size() < 6)
+            if (card.values.size() < 5)
                 deck_error("GN " + S(code) + " carries " + std::to_string(card.values.size()) +
-                           " fields; a finite ground needs at least 6 (the media payload's "
-                           "epsilon and sigma sit in fields 5 and 6)");
+                           " fields; a finite ground needs its relative permittivity (field 5): "
+                           "the NEC-5 engine reads a missing one as 0 and answers NaN");
             sommerfeld_file(card);
             Ground g;
             g.kind = Ground::sommerfeld;
@@ -829,16 +828,6 @@ struct Parser {
                        "LD 1 (series / parallel RLC, evaluated to an impedance at the deck's "
                        "own frequency - momwire#1085), LD 2 / LD 3 (per-unit-length RLC - "
                        "momwire#1088), LD 4 (fixed impedance) or LD 5 (wire conductivity)");
-        bool rlc = kind == Int(0) || kind == Int(1);
-        std::size_t minimum = rlc ? 7 : 6;
-        if (card.values.size() < minimum)
-            deck_error("LD " + S(kind) + " carries " + std::to_string(card.values.size()) +
-                       " fields and needs at least " + std::to_string(minimum) +
-                       " (tag, LDTAGF, LDTAGT, " +
-                       (rlc ? "resistance, inductance and capacitance"
-                            : "resistance and reactance") +
-                       "); EZNEC and antennaknobs alike write every field of every LD card, "
-                       "so this dialect does no blank-field defaulting");
         std::pair<Node, Int> at = load_address(card, 1);
         Int end_code = card.i(3);
         LoadSpec spec;
@@ -923,11 +912,6 @@ struct Parser {
     void ld23(const Card &card) {
         Int kind = card.i(0);
         std::string name = "LD " + S(kind);
-        if (card.values.size() < 7)
-            deck_error(name + " carries " + std::to_string(card.values.size()) +
-                       " fields and needs at least 7 (type, tag, from, thru, R', L', C'); "
-                       "EZNEC writes every field of every card it emits, so this dialect "
-                       "does no blank-field defaulting");
         Int tag = card.i(1);
         Int first = card.i(2);
         Int last = card.i(3);
@@ -961,11 +945,6 @@ struct Parser {
     }
 
     void ld5(const Card &card) {
-        if (card.values.size() < 5)
-            deck_error("LD 5 carries " + std::to_string(card.values.size()) +
-                       " fields and needs at least 5 (type, tag, from, thru, sigma); EZNEC "
-                       "writes every field of every card it emits, so this dialect does no "
-                       "blank-field defaulting");
         Int tag = card.i(1);
         Int first = card.i(2);
         Int last = card.i(3);
@@ -1195,9 +1174,7 @@ struct Parser {
             std::size_t written = c.values.size();
             deck_error(mn + " carries " + std::to_string(written) + " " +
                        (written == 1 ? "field" : "fields") + " and needs at least " +
-                       std::to_string(minimum) +
-                       "; EZNEC writes every field of every card it emits, so this dialect "
-                       "does no blank-field defaulting");
+                       std::to_string(minimum));
         }
         if (mn == "GW") return gw(c);
         if (mn == "GE") return ge(c);
