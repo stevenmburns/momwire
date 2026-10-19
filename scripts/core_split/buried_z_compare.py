@@ -26,10 +26,9 @@ line per solve; a summary on stdout; exit status 1 on any mismatch.
 `MOMWIRE_BELOW_ANCHORS` is whatever the environment says, on both sides.
 The C++ side reads its below/below tables through the test bridge (the grids
 the Python route filled, `dump_below_grids`), or with ``--fill`` fills them
-itself (B5). Unset, it is off (momwire#1535), and every table is exact on both
-sides whatever ran before. An opted-in whole-corpus run (``auto``) would not
-compare like with like: Python's sweep state carries from deck to deck in one
-process and the C++ side's does not.
+itself (B5); a whole-corpus run wants MOMWIRE_BELOW_ANCHORS=off, since Python's
+sweep state carries from deck to deck in one process and the C++ side's does
+not.
 """
 
 from __future__ import annotations
