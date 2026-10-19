@@ -366,6 +366,9 @@ _ACCEL_HEADERS = [
     # The core/binding split: the Python-free preamble, the numpy -> view
     # seam, and the razor core's interface.
     "src/momwire/_mw_core.h",
+    # MOMWIRE_TIMES's stage tally: the grid cores, the LU
+    # paths and the printout core count into it; `_accelerators.cpp` reads it.
+    "src/momwire/_mw_times.h",
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",

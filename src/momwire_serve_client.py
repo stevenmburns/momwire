@@ -443,6 +443,96 @@ GMO_FRAME_START = b"\x00GMO\r\n"
 GMO_FRAME_END = b"\x00\r\n"
 GMO_SUFFIX = ".GMO"
 
+# MOMWIRE_TIMES=1: per-stage timing, asked for by the user. A launcher that
+# has it set sends TIMES_REQUEST ahead of everything else in the request, and
+# the engine answers with TIMES_FRAME_START, its `times:` line, TIMES_FRAME_END
+# ahead of everything else in the answer (the `.GMO` frame and the printout
+# follow as before). A request without the line is answered exactly as before.
+TIMES_REQUEST = b"\x00TIMES\n"
+TIMES_FRAME_START = b"\x00TIMES\r\n"
+TIMES_FRAME_END = b"\x00\r\n"
+TIMES_ENV = "MOMWIRE_TIMES"
+
+# The `times:` line's cells, in order: each `<name>_ms`, milliseconds.
+TIMES_CELLS = (
+    "start",
+    "load",
+    "seam",
+    "ground",
+    "fill",
+    "factor",
+    "rp",
+    "near",
+    "run",
+    "printout",
+    "write",
+)
+
+
+def times_requested(environ=None) -> bool:
+    """``MOMWIRE_TIMES`` set to anything but ``""`` / 0 / off / false / no."""
+    env = os.environ if environ is None else environ
+    value = env.get(TIMES_ENV, "").strip().lower()
+    return value not in ("", "0", "off", "false", "no")
+
+
+def times_line(
+    route: str,
+    cells: dict,
+    *,
+    total_ms: float,
+    threads: int,
+    runs: int,
+    counts: dict,
+) -> str:
+    """The ``times:`` line every momwire NEC-5 engine writes on stderr under
+    MOMWIRE_TIMES, the standalone executables' (``_mw_times.h``) to the key:
+    ``route``, ``threads`` and ``runs``, then every ``<cell>_ms`` of
+    :data:`TIMES_CELLS` (0 where a route has no such stage), ``other_ms`` (what
+    no stage claimed) and ``total_ms`` -- so the cells and ``other_ms`` add up
+    to ``total_ms`` -- and how the ground tables were obtained:
+    ``ground_built``, ``ground_disk``, ``ground_blended``."""
+    parts = [f"times: route={route} threads={int(threads)} runs={int(runs)}"]
+    claimed = 0.0
+    for name in TIMES_CELLS:
+        value = float(cells.get(name, 0.0))
+        claimed += value
+        parts.append(f"{name}_ms={value:.3f}")
+    parts.append(f"other_ms={max(total_ms - claimed, 0.0):.3f}")
+    parts.append(f"total_ms={total_ms:.3f}")
+    for name in ("built", "disk", "blended"):
+        parts.append(f"ground_{name}={int(counts.get(name, 0))}")
+    return " ".join(parts)
+
+
+def parse_times_line(line: str) -> dict:
+    """A ``times:`` line's cells: ``route`` a string, every other value a
+    number (``*_ms`` floats, the counts ints)."""
+    head, _, rest = line.strip().partition(" ")
+    if head != "times:":
+        raise ValueError(f"not a times line: {line!r}")
+    out: dict = {}
+    for item in rest.split():
+        key, _, value = item.partition("=")
+        if key == "route":
+            out[key] = value
+        elif key.endswith("_ms"):
+            out[key] = float(value)
+        else:
+            out[key] = int(value)
+    return out
+
+
+def split_times(answer: bytes) -> tuple[bytes | None, bytes]:
+    """``(times line, rest)`` from a resident engine's answer bytes; ``None``
+    when the answer carries no times frame (as :func:`split_answer`)."""
+    if not answer.startswith(TIMES_FRAME_START):
+        return None, answer
+    end = answer.find(TIMES_FRAME_END, len(TIMES_FRAME_START))
+    if end < 0:
+        raise ValueError("the resident engine's times frame never closed")
+    return answer[len(TIMES_FRAME_START) : end], answer[end + len(TIMES_FRAME_END) :]
+
 
 def split_answer(answer: bytes) -> tuple[bytes | None, bytes]:
     """``(gmo, printout)`` from a resident engine's answer bytes.

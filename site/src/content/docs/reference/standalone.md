@@ -123,3 +123,58 @@ the count for every deck.
   it alone.
 - **A chain of related decks**: stream it through one process (`- -`)
   rather than launching the program once per deck.
+
+## Where the time goes
+
+Set the environment variable `MOMWIRE_TIMES=1` to see how long each part of
+a run takes. It is off unless you set it, and it changes no result. With it
+set, two things change:
+
+- The printout's timing lines carry measured seconds, in the places NEC-5
+  prints them: `FILL=` and `FACTOR=` under `- - - MATRIX TIMING - - -` for
+  each run that solves a matrix, and `RUN TIME =` at the end. Without the
+  variable momwire prints zeros there.
+- Each answer writes one `times:` line on standard error, with every stage
+  in milliseconds:
+
+```text
+times: route=cxx threads=4 runs=1 start_ms=2.378 load_ms=0.000 seam_ms=0.478 ground_ms=9.752 fill_ms=50.326 factor_ms=1.209 rp_ms=0.022 near_ms=0.000 run_ms=0.062 printout_ms=0.371 write_ms=0.067 other_ms=0.195 total_ms=64.860 ground_built=4 ground_disk=0 ground_blended=1
+```
+
+| key | what it counts |
+|---|---|
+| `start_ms` | from the operating system starting the program to its first line of code (the standalone programs) |
+| `load_ms` | loading Python and momwire (the Python engines, and a standalone program's fallback) |
+| `seam_ms` | reading the deck and building the structure |
+| `ground_ms` | the Sommerfeld ground tables; `ground_built`, `ground_disk` and `ground_blended` count tables computed, read from the disk cache, and interpolated from others |
+| `fill_ms`, `factor_ms` | the matrix fill, and the LU factorisation and solve |
+| `rp_ms`, `near_ms`, `run_ms` | the radiation pattern, the near fields, and the rest of each run (currents, power) |
+| `printout_ms`, `write_ms` | writing the printout's text, and writing the file |
+| `other_ms`, `total_ms` | what no stage claims, and the whole; the stages and `other_ms` add up to `total_ms` |
+
+The keys are always present and always in this order, so a script can split
+on spaces and `=`. A stage the run does not have reads 0. In SimNEC's
+streaming form each structure writes its own line. On Linux `start_ms` is
+only good to about 10 ms, which is how finely the system records when a
+program started.
+
+`FILL=` leaves out the ground tables, which `ground_ms` reports. They are
+built the first time a ground is used and kept in a disk cache afterwards,
+so the first run on a soil can be much slower than the next.
+
+To time runs that SimNEC or EZNEC starts, set the variable on the command
+line that starts that program, so that the engine inherits it. On a Mac:
+
+```bash
+MOMWIRE_TIMES=1 /Applications/SimNEC.app/Contents/MacOS/SimNEC
+```
+
+On Windows, type `set MOMWIRE_TIMES=1` in a Command Prompt and start the
+program from that same window. The printout's timing lines then show in the
+program's NEC output, and the `times:` lines go to the terminal you started
+it from, if the program passes the engine's standard error through.
+
+The Python commands (`momwire-nec5-razor-2p`, `momwire-nec5-bspline` and the
+others) honour the same variable and write the same line. On those, warm
+runs answered by the resident engine report `route=resident`, and
+`other_ms` includes starting or reaching that engine.

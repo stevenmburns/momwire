@@ -346,3 +346,69 @@ def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):
     # the header's engine stamp is the executable's; the rest is the frame
     assert got.split(b"\r\n")[2:] == want.read_bytes().split(b"\r\n")[2:]
     assert line.encode() in got
+
+
+# --- MOMWIRE_TIMES -------------------------------------------------------------
+
+TIMED_BURIED = FIXTURES / "momwire_times" / "buried_radials.nec"
+
+
+@pytest.mark.parametrize("deck", [DIPOLE, TIMED_BURIED], ids=["dipole", "buried"])
+def test_momwire_times_is_honoured_as_the_launcher_honours_it(deck, tmp_path):
+    """MOMWIRE_TIMES=1: the executable and the launcher each fill MATRIX
+    TIMING and RUN TIME with measured seconds and write one `times:` line on
+    stderr; every other byte is the untimed printout's. Off, they write the
+    zeros (the corpus gates hold that)."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    off = tmp_path / "off"
+    off.mkdir()
+    shutil.copy(deck, off / deck.name)
+    subprocess.run([EXE, deck.name, "x.out"], cwd=off, check=True, capture_output=True)
+    untimed = (off / "x.out").read_bytes().decode("latin-1")
+    assert tc.printout_timing(untimed) == ([(0.0, 0.0)], [0.0])
+
+    for name, prog in (("exe", EXE), ("launcher", _launcher())):
+        d = tmp_path / name
+        d.mkdir()
+        shutil.copy(deck, d / deck.name)
+        run = subprocess.run(
+            [prog, deck.name, "x.out"],
+            cwd=d,
+            env=dict(os.environ, MOMWIRE_TIMES="1"),
+            capture_output=True,
+            check=False,
+        )
+        assert run.returncode == 0, run.stderr
+        printout = (d / "x.out").read_bytes().decode("latin-1")
+        assert tc.zero_timing(printout) == untimed, name
+        (line,) = tc.times_lines(run.stderr)
+        assert line["runs"] == 1 and line["fill_ms"] > 0.0, (name, line)
+        ((fill, factor),), (run_time,) = tc.printout_timing(printout)
+        assert fill > 0.0 or line["fill_ms"] < 0.5, (name, line)
+        assert fill + factor <= run_time + 1e-3, name
+        assert run_time * 1e3 <= line["total_ms"] + 1.0, (name, line)
+        if name == "exe":
+            assert line["route"] == "cxx" and line["start_ms"] > 0.0, line
+            assert abs(fill * 1e3 - line["fill_ms"]) <= 0.5 + 1e-9, line
+
+
+def test_momwire_times_streams_a_line_per_structure(tmp_path):
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    run = subprocess.run(
+        [EXE, "-", "-"],
+        cwd=tmp_path,
+        input=_ONE + _ONE,
+        env=dict(os.environ, MOMWIRE_TIMES="1"),
+        capture_output=True,
+        check=False,
+    )
+    assert run.returncode == 0
+    lines = tc.times_lines(run.stderr)
+    assert [c["route"] for c in lines] == ["stream", "stream"]
+    assert lines[0]["start_ms"] > 0.0 and lines[1]["start_ms"] == 0.0
+    fills, runs = tc.printout_timing(run.stdout)
+    assert len(fills) == 2 and runs == []

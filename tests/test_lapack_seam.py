@@ -692,7 +692,7 @@ def test_fake_host_products_skip_what_the_host_cannot_take(fake_host2):
 # Where the NEC-5 run path forms its dense complex products, by module and
 # function; each must reach them through `_lapack.matmul` only.
 PRODUCT_SITES = {
-    "eznec/_serve.py": ("_port_state", "_multi_drive_state", "_finish"),
+    "eznec/_serve.py": ("_port_state", "_multi_drive_state", "_finish_run"),
     "razor.py": ("RazorSolver.compute_port_solution",),
     "bspline.py": ("BSplineSolver.compute_port_solution",),
     "sinusoidal_galerkin.py": (

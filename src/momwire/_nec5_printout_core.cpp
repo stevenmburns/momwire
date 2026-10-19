@@ -12,6 +12,7 @@
 #include "_razor_front_core.h"
 #include "_somm_field_core.h"
 #include "_somm_grid_core.h"
+#include "_mw_times.h"
 #include "_accel_somm_proj_inline.h"
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and
@@ -650,6 +651,8 @@ struct RunDataC {  // `RunData`, for the decks this unit prints
     std::vector<PortRowC> connections;  // STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS
     bool has_network_loss = false;
     double network_loss = 0;
+    // MATRIX TIMING's two cells: 0 unless MOMWIRE_TIMES is on (`_mw_times.h`)
+    double fill_seconds = 0, factor_seconds = 0;
 };
 
 // `_ratio`
@@ -2344,6 +2347,7 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         bool any_near = false;
         for (const Request &rq : deck.requests) any_near = any_near || rq.kind == Request::near_field;
         if (any_near) {
+            const mw_times::Scope timed(mw_times::near_field);
             const std::vector<WireWalk> walk = engine.wire_walk(p);
             const std::unique_ptr<CurrentSampler> sampler = engine.sampler(p, coeffs, knots);
             for (const Request &rq : deck.requests)
@@ -2356,6 +2360,7 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     bool any_rp = false;
     for (const Request &rq : deck.requests) any_rp = any_rp || rq.kind == Request::far_field;
     if (any_rp) {
+        const mw_times::Scope timed(mw_times::far_field);
         FarGround fg = FarGround::free;
         if (deck.ground.kind == Ground::perfect)
             fg = FarGround::pec;
@@ -2611,9 +2616,10 @@ Lines loading(const RunDataC &data, bool allocate = true) {
     return lines;
 }
 
-Lines timing() {
+Lines timing(const RunDataC &data) {
     return {sp(32) + "- - - MATRIX TIMING - - -", "",
-            sp(24) + "FILL=" + f(0.0, 9, 3) + " SEC.,  FACTOR=" + f(0.0, 9, 3) + " SEC."};
+            sp(24) + "FILL=" + f(data.fill_seconds, 9, 3) + " SEC.,  FACTOR=" +
+                f(data.factor_seconds, 9, 3) + " SEC."};
 }
 
 const Lines PORT_COLUMNS = {
@@ -2829,7 +2835,7 @@ void tail_sections(Lines &body, const RunDataC &first) {
     blanks(body, 3);
     add(body, loading(first));
     blanks(body, 3);
-    add(body, timing());
+    add(body, timing(first));
     blanks(body, 3);
     if (!first.networks.empty()) {
         add(body, network_data(first));
@@ -2837,9 +2843,11 @@ void tail_sections(Lines &body, const RunDataC &first) {
     }
 }
 
+// RUN TIME: the seconds since the process started when MOMWIRE_TIMES is on,
+// else 0 (`mw_times::run_seconds`).
 Lines closing_lines(bool closing) {
     if (!closing) return {};
-    return {"", " RUN TIME =" + f(0.0, 10, 3)};
+    return {"", " RUN TIME =" + f(mw_times::run_seconds(), 10, 3)};
 }
 
 // `render_printout`
@@ -2895,7 +2903,7 @@ std::string render_stepped_printout(const Deck &deck, const std::string &echo_te
         blanks(body, 3);
         add(body, loading(data, k == 0));
         blanks(body, 3);
-        add(body, timing());
+        add(body, timing(data));
         blanks(body, 3);
         if (!data.networks.empty()) {
             add(body, network_data(data));
@@ -3094,7 +3102,10 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
                         const EngineStamp &stamp, PrintoutEngine &engine, const NumpyLinalg &np,
                         std::vector<RunArrays> *arrays, bool open_end) {
     PrintoutResult out;
-    SeamResult r = seam(text, engine.seam(), open_end);
+    SeamResult r = [&] {
+        const mw_times::Scope timed(mw_times::seam);
+        return seam(text, engine.seam(), open_end);
+    }();
     out.seam = r.route;
     if (r.route == SeamResult::declined) {
         out.reason = r.message;
@@ -3122,13 +3133,36 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
     try {
         std::vector<Solved> solved(r.prepared.size());
         std::vector<bool> have(r.prepared.size(), false);
+        // MOMWIRE_TIMES: each solve's fill and factor seconds, printed in the
+        // MATRIX TIMING of the run that paid for them (a run sharing an
+        // earlier run's solve paid nothing)
+        std::vector<double> fill_s(r.prepared.size(), 0.0), factor_s(r.prepared.size(), 0.0);
         auto solution = [&](long long index) -> const Solved & {
             const std::size_t i = static_cast<std::size_t>(index);
             if (!have[i]) {
-                solved[i] = engine.solve(r.prepared[i], np);
+                const double f0 = mw_times::ms_of(mw_times::fill);
+                const double k0 = mw_times::ms_of(mw_times::factor);
+                {
+                    const mw_times::Scope timed(mw_times::fill);
+                    solved[i] = engine.solve(r.prepared[i], np);
+                }
+                fill_s[i] = (mw_times::ms_of(mw_times::fill) - f0) / 1000.0;
+                factor_s[i] = (mw_times::ms_of(mw_times::factor) - k0) / 1000.0;
                 have[i] = true;
             }
             return solved[i];
+        };
+        auto timed_finish = [&](const Deck &run, Prepared &p, const Solved &sol, std::size_t i) {
+            RunDataC data;
+            {
+                const mw_times::Scope timed(mw_times::run);
+                data = finish(run, p, sol, np, arrays, engine);
+            }
+            mw_times::count_run();
+            data.fill_seconds = fill_s[i];
+            data.factor_seconds = factor_s[i];
+            fill_s[i] = factor_s[i] = 0.0;
+            return data;
         };
         const std::size_t n_structures = s.chained ? s.structures.size() : 1;
         std::string printed;
@@ -3156,18 +3190,20 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
                         // the next frequency is solved; its front released
                         Deck step = a.deck;
                         step.frequency_mhz = a.deck.frequencies_mhz[j];
-                        runs.push_back(finish(step, p, sol, np, arrays, engine));
+                        runs.push_back(
+                            timed_finish(step, p, sol, static_cast<std::size_t>(o.prepared_index)));
                         engine.release(p);
                         solved[static_cast<std::size_t>(o.prepared_index)] = Solved();
                     } else {
-                        runs.push_back(finish(a.kind == Answer::multi ? a.runs[j] : a.deck, p,
-                                              sol, np, arrays, engine));
+                        runs.push_back(timed_finish(a.kind == Answer::multi ? a.runs[j] : a.deck, p,
+                                                    sol, static_cast<std::size_t>(o.prepared_index)));
                     }
                 }
             }
             if (stopped) break;
             if (so.runs.empty() || so.runs.back().kind == RunOutcome::declined)
                 throw std::logic_error("a declined run reached the writer");
+            const mw_times::Scope timed(mw_times::render);
             if (a.kind == Answer::multi)
                 printed += render_multi_printout(a.deck, echo, runs, basis, stamp, last);
             else if (a.kind == Answer::stepped)
@@ -3204,6 +3240,7 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
         return out;
     }
     out.route = PrintoutResult::printed;
+    const mw_times::Scope timed(mw_times::render);
     out.printout = printout_bytes(utf8);
     return out;
 }

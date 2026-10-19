@@ -10,6 +10,13 @@
 # the EZNEC drop-in and plain scripts. setdefault keeps a caller's own
 # values; a process that loaded NumPy first is unaffected (antennaknobs,
 # which does, sets the same three at the top of its own package).
+# MOMWIRE_TIMES: when the package started importing, the one-shot engine's
+# `load_ms` (`momwire._times`). One clock read; nothing else happens here.
+from time import perf_counter as _perf_counter
+
+_IMPORT_T0 = _perf_counter()
+del _perf_counter
+
 import os as _os
 
 for _k, _v in (

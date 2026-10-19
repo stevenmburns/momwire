@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time as _time
 
 import momwire_serve_client as _mech
 
@@ -275,6 +276,37 @@ def _stream(basis: str | None) -> int:
         return 2
 
 
+def _report_times(line: bytes | None, started: float, wrote: float) -> None:
+    """MOMWIRE_TIMES: the resident engine's ``times:`` line, with this
+    launcher's own printout write and its whole wall time, on stderr."""
+    done = _time.perf_counter()
+    cells: dict = {}
+    head = {"threads": 0, "runs": 0}
+    counts: dict = {}
+    if line is not None:
+        served = _mech.parse_times_line(line.decode("latin-1"))
+        for key, value in served.items():
+            if key.endswith("_ms") and key[:-3] in _mech.TIMES_CELLS:
+                cells[key[:-3]] = value
+            elif key.startswith("ground_"):
+                counts[key[len("ground_") :]] = value
+            elif key in head:
+                head[key] = value
+    cells["write"] = cells.get("write", 0.0) + (done - wrote) * 1e3
+    print(
+        _mech.times_line(
+            "resident",
+            cells,
+            total_ms=(done - started) * 1e3,
+            threads=head["threads"],
+            runs=head["runs"],
+            counts=counts,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """The process entry point. Returns 0, except for a ``-`` that is not
     SimNEC's streaming call (``- -``), which is refused with 2
@@ -317,18 +349,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     dialect = "nec4" if is_nec4 else "nec5"
 
+    timed = _mech.times_requested()
     try:
+        started = _time.perf_counter()
         with open(deck_path, "rb") as handle:
             deck_bytes = handle.read()
         if en_optional:
             deck_bytes = _mech.EN_OPTIONAL_REQUEST + deck_bytes
+        if timed:
+            deck_bytes = _mech.TIMES_REQUEST + deck_bytes
         answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT, dialect)
+        line, answer = _mech.split_times(answer)
         gmo, printout = _mech.split_answer(answer)
+        wrote = _time.perf_counter()
         if gmo is not None:
             with open(_mech.gmo_path(printout_path), "wb") as handle:
                 handle.write(gmo)
         with open(printout_path, "wb") as handle:
             handle.write(printout)
+        if timed:
+            _report_times(line, started, wrote)
         return 0
     except Exception:  # noqa: BLE001 - the served lane is an optimisation; any failure falls through to one-shot
         pass

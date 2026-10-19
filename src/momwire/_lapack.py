@@ -127,12 +127,15 @@ fuses too, whatever loop the embedded numpy would have taken.
 from __future__ import annotations
 
 import ctypes
+import functools
 import sys
 import warnings
 
 import numpy as np
 import scipy.linalg
 from scipy.linalg import LinAlgWarning
+
+from . import _times
 
 ABI = 2
 #: Every table version this module reads: ABI 1 (the LU pair only) and ABI 2
@@ -299,11 +302,25 @@ def _square(a):
     return a.ndim == 2 and a.shape[0] == a.shape[1] and a.shape[0] > 0
 
 
+def _factor_stage(fn):
+    """``fn`` in MOMWIRE_TIMES's ``factor`` stage (:mod:`momwire._times`; a
+    no-op when nothing is timed). Its warnings name the caller's line as
+    before: they carry one more level for this frame."""
+
+    @functools.wraps(fn)
+    def timed(*args, **kwargs):
+        with _times.stage("factor"):
+            return fn(*args, **kwargs)
+
+    return timed
+
+
 # ---------------------------------------------------------------------------
 # scipy.linalg.lu_factor / lu_solve
 # ---------------------------------------------------------------------------
 
 
+@_factor_stage
 def lu_factor(a, overwrite_a=False, check_finite=True):
     """``scipy.linalg.lu_factor``, on the host's getrf when one is published."""
     a1 = np.asarray(a)
@@ -325,11 +342,12 @@ def lu_factor(a, overwrite_a=False, check_finite=True):
         warnings.warn(
             f"Diagonal number {info} is exactly zero. Singular matrix.",
             LinAlgWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
     return a1, ipiv - 1
 
 
+@_factor_stage
 def lu_solve(lu_and_piv, b, trans=0, overwrite_b=False, check_finite=True):
     """``scipy.linalg.lu_solve``, on the host's getrs when one is published."""
     lu, piv = lu_and_piv
@@ -383,6 +401,7 @@ def lu_solve(lu_and_piv, b, trans=0, overwrite_b=False, check_finite=True):
 # ---------------------------------------------------------------------------
 
 
+@_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
     published."""
@@ -419,7 +438,7 @@ def solve(a, b):
         warnings.warn(
             f"An ill-conditioned matrix detected: rcond = {rcond:.6g}.",
             LinAlgWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
     return x.reshape(b0.shape)
 
@@ -456,6 +475,7 @@ def _solve_slices(fns, a, b, dtype):
     return out
 
 
+@_factor_stage
 def solve_stacked(a, b):
     """``numpy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
     published."""
