@@ -90,3 +90,21 @@ def test_a_later_run_that_changes_a_load_is_refused_by_name():
         ]
     )
     assert "NEC ERROR" in out and "run 2 carries LD" in out
+
+
+RP_NE = FIXTURE.with_name("rp_ne_two_runs.nec")
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_an_rp_and_an_ne_before_each_xq_print_one_of_each_per_run(basis):
+    """momwire#1579 (Ward AE6TY's two-excitation deck): RP then NE before the
+    same XQ, twice. NE-5 runs the RP on the spot and the NE on the solution
+    standing after it, so each run prints its pattern and then its near
+    field; it was "4 executed runs and 2 answers"."""
+    out = render(RP_NE.read_text(), basis=basis)
+    assert "NEC ERROR" not in out
+    assert out.count("RADIATION PATTERNS") == 2
+    assert out.count("NEAR ELECTRIC FIELDS") == 2
+    assert out.count("ANTENNA INPUT PARAMETERS") == 2
+    first = out.index("RADIATION PATTERNS")
+    assert first < out.index("NEAR ELECTRIC FIELDS") < out.index("INPUT LINE 12")

@@ -543,6 +543,19 @@ CASES = {
         runs("FR 0,3,0,0,7.,.1", "XQ", "EX 4,2,3,0,1.,0.", "XQ"),
         "parsed",
     ),
+    # momwire#1579: an NE on the standing solution after an RP, per XQ
+    "rp then ne per xq": (
+        runs(
+            "RP 0 3 2 1000 0 0 45 90",
+            "NE 0 1 1 3 1 1 6 0 0 0.5",
+            "XQ",
+            "EX 4,2,3,0,1.,0.",
+            "RP 0 3 2 1000 0 0 45 90",
+            "NE 0 1 1 3 1 1 6 0 0 0.5",
+            "XQ",
+        ),
+        "parsed",
+    ),
     "a sequence run changes a load": (
         runs("XQ", "FR 0,2,0,0,7.,.1", "LD 4,2,3,0,50.,0.", "XQ"),
         "parsed",

@@ -990,6 +990,7 @@ class SequenceGroup:
 
 
 _SEQUENCE_CARDS = _RUN_CARDS | {"FR"}
+_REQUEST_CARDS = frozenset({"RP", "NE", "NH", "XQ"})
 _REFUSE_SEQUENCE_CHANGES = (
     "run {run} carries {card}: a deck whose later runs change their "
     "frequency, sources and requests (FR, EX, RP, NE, NH, PQ) is served, each "
@@ -1019,7 +1020,12 @@ def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
         cards[k].mnemonic == "FR" and cards[k].i(1) > 1 for k in groups[0]
     )
     later_fr = any(cards[k].mnemonic == "FR" for g in groups[1:] for k in g)
-    if not (first_steps or later_fr):
+    # a run of requests alone (an RP, NE or NH on the standing solution,
+    # momwire#1579), which no XQ-block reading prints in its place
+    requests_alone = any(
+        all(cards[k].mnemonic in _REQUEST_CARDS for k in g) for g in groups[1:]
+    )
+    if not (first_steps or later_fr or requests_alone):
         return None
     for run, group in enumerate(groups[1:], start=2):
         for k in group:
