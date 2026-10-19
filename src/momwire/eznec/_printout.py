@@ -1074,8 +1074,12 @@ def execution_groups(cards: list[Card]) -> tuple[list[list[int]], list[int]]:
 
     The deck is a program read top to bottom. An ``RP`` runs on the spot,
     always; an ``XQ`` runs when something changed since the last run, and is
-    otherwise a no-op echoed with what follows; every other card is a
-    change. Each run takes the ``FR`` in force when it runs."""
+    otherwise a no-op echoed with what follows. An ``NE`` / ``NH`` runs on the
+    spot too when nothing changed since the last run -- it reads the
+    solution standing (momwire#1579: Ward AE6TY's ``RP .. NE .. XQ`` per
+    excitation, the NE printed after the pattern) -- and is otherwise a
+    request the next run answers. Every other card is a change. Each run
+    takes the ``FR`` in force when it runs."""
     groups: list[list[int]] = []
     pending: list[int] = []
     changed = True
@@ -1083,11 +1087,16 @@ def execution_groups(cards: list[Card]) -> tuple[list[list[int]], list[int]]:
         if card.mnemonic in _STRUCTURE_TERMINATORS:
             break
         pending.append(k)
-        if card.mnemonic == "RP" or (card.mnemonic == "XQ" and changed):
+        m = card.mnemonic
+        if (
+            m == "RP"
+            or (m == "XQ" and changed)
+            or (m in ("NE", "NH") and not changed and groups)
+        ):
             groups.append(pending)
             pending = []
             changed = False
-        elif card.mnemonic != "XQ":
+        elif m not in ("XQ", "NE", "NH"):
             changed = True
     return groups, pending
 

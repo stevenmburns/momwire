@@ -1526,8 +1526,8 @@ std::string stepping_refusal(const std::string &deck_text, bool multi_run) {
 }
 
 // `_serve.split_sequence`'s reading, up to the solve: 1 when the deck is
-// read as a program (a later run carries an FR, or the first run steps and
-// another follows), 0 when not, -1 with `why` when a later run changes a
+// read as a program (a later run carries an FR, the first run steps and
+// another follows, or a later run is requests alone), 0 when not, -1 with `why` when a later run changes a
 // structural card (`_printout.execution_groups` for the runs).
 int sequence_read(const std::string &deck_text, std::string &why) {
     std::vector<Card> cards;
@@ -1549,22 +1549,31 @@ int sequence_read(const std::string &deck_text, std::string &why) {
         const std::string &m = cards[k].mnemonic;
         if (m == "EN" || m == "NX") break;
         pending.push_back(k);
-        if (m == "RP" || (m == "XQ" && changed)) {
+        const bool request = m == "NE" || m == "NH";
+        if (m == "RP" || (m == "XQ" && changed) || (request && !changed && !groups.empty())) {
             groups.push_back(pending);
             pending.clear();
             changed = false;
-        } else if (m != "XQ") {
+        } else if (m != "XQ" && !request) {
             changed = true;
         }
     }
     if (groups.size() < 2) return 0;
-    bool first_steps = false, later_fr = false;
+    bool first_steps = false, later_fr = false, requests_alone = false;
+    for (std::size_t g = 1; g < groups.size(); ++g) {
+        bool alone = true;
+        for (std::size_t k : groups[g]) {
+            const std::string &m = cards[k].mnemonic;
+            alone = alone && (m == "RP" || m == "NE" || m == "NH" || m == "XQ");
+        }
+        requests_alone = requests_alone || alone;
+    }
     for (std::size_t k : groups[0])
         if (cards[k].mnemonic == "FR" && Int(1) < cards[k].i(1)) first_steps = true;
     for (std::size_t g = 1; g < groups.size(); ++g)
         for (std::size_t k : groups[g])
             if (cards[k].mnemonic == "FR") later_fr = true;
-    if (!first_steps && !later_fr) return 0;
+    if (!first_steps && !later_fr && !requests_alone) return 0;
     static const char *kSeq[] = {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR"};
     for (std::size_t g = 1; g < groups.size(); ++g)
         for (std::size_t k : groups[g]) {
