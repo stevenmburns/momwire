@@ -1,0 +1,8 @@
+CM refusal coverage (momwire 0.80.0), synthetic: no wire declares tag
+CE
+GW 1,11,0.,-2.5,5.,0.,2.5,5.,.001
+GE 0,-1
+FR 0,1,0,0,30.
+EX 0,9,6,0,1.,0.
+RP 0,1,1,1000,90.,0.,0.,0.
+EN
