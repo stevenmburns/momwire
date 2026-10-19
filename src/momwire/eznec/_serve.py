@@ -1022,13 +1022,13 @@ def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
     )
     later_fr = any(cards[k].mnemonic == "FR" for g in groups[1:] for k in g)
     # a run of requests alone (an RP, NE or NH on the standing solution,
-    # momwire#1579), which no XQ-block reading prints in its place -- when a
-    # later run also changes something (the repeated RP + NE per XQ). With one
-    # XQ (every later run requests alone) the deck keeps the reading 0.79
-    # served it with, which Dan confirmed works (momwire#1579's scope note);
-    # x13 echoes such a deck in the sequence order instead.
-    alone = [all(cards[k].mnemonic in _REQUEST_CARDS for k in g) for g in groups[1:]]
-    requests_alone = any(alone) and not all(alone)
+    # momwire#1579), which no XQ-block reading prints in its place: NEC-5
+    # (x13) echoes the cards after it and prints its table after the run
+    # before it, one XQ or several (Steve, 10-19: NEC-5's order, Dan's
+    # lastConstructedNEC shape included)
+    requests_alone = any(
+        all(cards[k].mnemonic in _REQUEST_CARDS for k in g) for g in groups[1:]
+    )
     if not (first_steps or later_fr or requests_alone):
         return None
     for run, group in enumerate(groups[1:], start=2):

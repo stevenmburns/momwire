@@ -132,29 +132,33 @@ RP_NE_ONE = FIXTURE.with_name("rp_ne_one_xq.nec")
 
 
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
-def test_an_rp_and_an_ne_before_one_xq_keep_the_single_run_reading(basis):
-    """momwire#1579's scope: RP then NE before ONE XQ already worked in 0.79
-    (Dan), and is read as it was -- one run, not a sequence: the echo runs
-    through XQ before the tables, the near field before the pattern, one of
-    each. Only the repeated shape above is read as a sequence."""
+def test_an_rp_and_an_ne_before_one_xq_print_in_nec5s_order(basis):
+    """RP then NE before ONE XQ (Dan's lastConstructedNEC shape) prints in
+    NEC-5's (x13's) order, as the repeated shape does (Steve, 10-19; 0.79 put
+    the near field before the pattern): the echo stops at the RP, the run's
+    tables and pattern print, then the NE is echoed and its near field read
+    from the standing solution, then the XQ is echoed. One of each."""
     from momwire.eznec import _serve
 
     text = RP_NE_ONE.read_text()
-    assert _serve.split_sequence(text) is None
+    assert _serve.split_sequence(text) is not None
     out = render(text, basis=basis)
     assert "NEC ERROR" not in out
     assert out.count("RADIATION PATTERNS") == 1
     assert out.count("NEAR ELECTRIC FIELDS") == 1
-    assert out.index("INPUT LINE  7  XQ") < out.index("NEAR ELECTRIC FIELDS")
-    assert out.index("NEAR ELECTRIC FIELDS") < out.index("RADIATION PATTERNS")
+    assert out.count("ANTENNA INPUT PARAMETERS") == 1
+    pattern = out.index("RADIATION PATTERNS")
+    ne = out.index("INPUT LINE  6  NE")
+    assert pattern < ne < out.index("NEAR ELECTRIC FIELDS")
+    assert out.index("NEAR ELECTRIC FIELDS") < out.index("INPUT LINE  7  XQ")
 
 
-def test_the_cxx_core_reads_one_xq_as_one_run_and_the_repeat_as_a_sequence():
+def test_the_cxx_core_declines_both_rp_ne_shapes_as_sequences():
     from momwire import _accel
 
     acc = _accel.acc
     if acc is None or not hasattr(acc, "nec5_razor_seam"):
         pytest.skip("no accelerator with the C++ seam loaded")
-    for path, kind in ((RP_NE_ONE, "single"), (RP_NE, "sequence")):
+    for path, kind in ((RP_NE_ONE, "sequence"), (RP_NE, "sequence")):
         answer = acc.nec5_razor_seam(path.read_bytes())
         assert [s["read"] for s in answer["structures"]] == [kind], path
