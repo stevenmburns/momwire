@@ -73,6 +73,10 @@ def test_on_fills_the_timing_lines_and_moves_nothing_else(
     assert factor * 1e3 <= line["factor_ms"] + 0.5
     assert fill + factor <= run_time + 1e-3
     assert run_time * 1e3 <= line["total_ms"] + 1.0
+    # the environment at the top, five phase lines a run, RUN TIME's WALL CLOCK
+    (env,), phases, wall = tc.timed_extras(on)
+    assert phases == 5 and wall == 1
+    assert env[0].startswith("MOMWIRE_THREADS = ") and env[4].startswith("VARIANT = ")
 
 
 def test_a_stepping_fr_times_each_frequency(tmp_path, capsys, monkeypatch):
@@ -85,6 +89,7 @@ def test_a_stepping_fr_times_each_frequency(tmp_path, capsys, monkeypatch):
     (line,) = tc.times_lines(err)
     fills, runs = tc.printout_timing(on)
     assert len(fills) == line["runs"] == 3 and len(runs) == 1
+    assert tc.timed_extras(on)[1:] == (15, 1)
     assert sum(f for f, _ in fills) * 1e3 == pytest.approx(line["fill_ms"], abs=1.5)
 
 

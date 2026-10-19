@@ -561,6 +561,7 @@ from ._printout import (
     PortRow,
     PowerBudget,
     RunData,
+    RunPhases,
     WireCurrentRow,
     execution_groups,
     post_ge_cards,
@@ -4941,6 +4942,8 @@ def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
 
     Under MOMWIRE_TIMES (:mod:`momwire._times`) it is the ``run`` stage, and
     the first run of a preparation carries its solve's MATRIX TIMING."""
+    times = _times.current()
+    before = None if times is None else times.snapshot()
     with _times.stage("run"):
         data = _finish_run(deck, prepared)
     _times.count_run()
@@ -4951,7 +4954,28 @@ def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
             factor_seconds=prepared.factor_seconds,
         )
         prepared.fill_seconds = prepared.factor_seconds = 0.0
+    if times is not None:
+        data = replace(data, phases=_phases(times, before[0]))
     return data
+
+
+def _phases(times, before: dict) -> RunPhases:
+    """The run's MOMWIRE_TIMES phase lines: the ground tables counted since
+    the previous run (its preparation's included) and this run's readouts."""
+    ms, counts = times.snapshot()
+    mark_ms, mark_counts = times.mark
+    times.mark = (ms, counts)
+    return RunPhases(
+        ground_seconds=(ms["ground"] - mark_ms["ground"]) / 1e3,
+        ground_built=counts["built"] - mark_counts["built"],
+        ground_disk=counts["disk"] - mark_counts["disk"],
+        ground_blended=counts["blended"] - mark_counts["blended"],
+        fill_threads=_times.fill_threads(),
+        factor_threads=_times.factor_threads(),
+        solution_seconds=(ms["run"] - before["run"]) / 1e3,
+        rp_seconds=(ms["rp"] - before["rp"]) / 1e3,
+        near_seconds=(ms["near"] - before["near"]) / 1e3,
+    )
 
 
 def _in_stage(name: str, build):

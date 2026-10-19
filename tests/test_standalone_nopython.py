@@ -389,6 +389,9 @@ def test_momwire_times_is_honoured_as_the_launcher_honours_it(deck, tmp_path):
         assert fill > 0.0 or line["fill_ms"] < 0.5, (name, line)
         assert fill + factor <= run_time + 1e-3, name
         assert run_time * 1e3 <= line["total_ms"] + 1.0, (name, line)
+        (env,), phases, wall = tc.timed_extras(printout)
+        assert (phases, wall) == (5, 1), name
+        assert env[3].startswith("THREADS = "), (name, env)
         if name == "exe":
             assert line["route"] == "cxx" and line["start_ms"] > 0.0, line
             assert abs(fill * 1e3 - line["fill_ms"]) <= 0.5 + 1e-9, line

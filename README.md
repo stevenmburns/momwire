@@ -306,8 +306,13 @@ Every NEC-5 engine, the standalone programs and the Python commands alike,
 reports its timing when the environment variable `MOMWIRE_TIMES=1` is set.
 It is off by default and changes no result. With it set, the printout's
 `FILL=`/`FACTOR=` (under MATRIX TIMING) and `RUN TIME =` lines carry measured
-seconds in NEC-5's places instead of zeros, and each answer writes one line
-on standard error with every stage in milliseconds:
+seconds in NEC-5's places instead of zeros. The printout also gains the
+environment in effect at the top (threads, build, anchors mode, ground table
+cache) and, under each MATRIX TIMING, the run's phases: the ground tables
+(computed, read from the disk cache, or anchor-blended), the fill and factor
+with their thread counts, the solution, and the far and near fields. Each
+answer also writes one line on standard error with every stage in
+milliseconds:
 
 ```text
 times: route=cxx threads=4 runs=1 start_ms=2.378 load_ms=0.000 seam_ms=0.478 ground_ms=9.752 fill_ms=50.326 factor_ms=1.209 rp_ms=0.022 near_ms=0.000 run_ms=0.062 printout_ms=0.371 write_ms=0.067 other_ms=0.195 total_ms=64.860 ground_built=4 ground_disk=0 ground_blended=1

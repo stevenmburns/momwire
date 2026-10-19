@@ -1285,6 +1285,8 @@ class FillSource : public Source {
 
 }  // namespace
 
+std::string anchor_mode_from_env() { return anchor_mode_env(); }
+
 std::shared_ptr<Source> fill_source(const std::string &anchors) {
     return std::make_shared<FillSource>(anchors);
 }

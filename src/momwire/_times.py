@@ -78,6 +78,8 @@ class Times:
         self._last = now
         self._acc = _cxx()
         self._cxx_last = (0.0, 0.0, 0, 0, 0)
+        # where the last run's ground tables were counted to (`_serve._finish`)
+        self.mark = (dict.fromkeys(self.ms, 0.0), dict.fromkeys(self.counts, 0))
         if self._acc is not None:
             self._acc.stage_times_begin()
 
@@ -104,6 +106,11 @@ class Times:
 
     def settle(self) -> None:
         self._switch(self._cur)
+
+    def snapshot(self) -> tuple[dict, dict]:
+        """The tally now: ``(ms per stage, ground counts)``, copies."""
+        self.settle()
+        return dict(self.ms), dict(self.counts)
 
     def elapsed_ms(self, name: str) -> float:
         self.settle()
@@ -141,6 +148,25 @@ def default_threads() -> int:
     except ValueError:
         forced = 0
     return forced if forced > 0 else (os.cpu_count() or 1)
+
+
+def _env_threads(name: str) -> int:
+    try:
+        n = int(os.environ.get(name, "") or 0)
+    except ValueError:
+        n = 0
+    return n if n > 0 else default_threads()
+
+
+def fill_threads() -> int:
+    """The OpenMP threads the fill runs on (OMP_NUM_THREADS, else the default)."""
+    return _env_threads("OMP_NUM_THREADS")
+
+
+def factor_threads() -> int:
+    """The OpenBLAS threads the LU runs on (OPENBLAS_NUM_THREADS, else the
+    default)."""
+    return _env_threads("OPENBLAS_NUM_THREADS")
 
 
 def current() -> Times | None:

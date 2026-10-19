@@ -53,6 +53,7 @@ it now answers.
 from __future__ import annotations
 
 import functools
+import os
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -780,6 +781,24 @@ class GroundMedium:
 
 
 @dataclass(frozen=True)
+class RunPhases:
+    """One run's phase lines under MATRIX TIMING, printed only under
+    MOMWIRE_TIMES (:mod:`momwire._times`): the ground tables counted since
+    the previous run and how they were obtained, the fill's and the factor's
+    threads, and the run's own readouts."""
+
+    ground_seconds: float = 0.0
+    ground_built: int = 0
+    ground_disk: int = 0
+    ground_blended: int = 0
+    fill_threads: int = 0
+    factor_threads: int = 0
+    solution_seconds: float = 0.0
+    rp_seconds: float = 0.0
+    near_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
 class RunData:
     """Everything a full printout needs that the deck does not already say.
 
@@ -835,6 +854,8 @@ class RunData:
     fill_seconds: float = 0.0
     factor_seconds: float = 0.0
     run_seconds: float = 0.0
+    # MOMWIRE_TIMES only (None otherwise, and then nothing is printed)
+    phases: RunPhases | None = None
 
 
 # ==========================================================================
@@ -1340,12 +1361,63 @@ def _load_row(row: LoadRow) -> str:
 
 
 def _timing(data: RunData) -> list[str]:
-    return [
+    lines = [
         _TIMING_HEADING,
         "",
         " " * 24
         + f"FILL={data.fill_seconds:9.3f}"
         + f" SEC.,  FACTOR={data.factor_seconds:9.3f} SEC.",
+    ]
+    if data.phases is not None:
+        lines += _phase_lines(data, data.phases)
+    return lines
+
+
+def _phase_lines(data: RunData, ph: RunPhases) -> list[str]:
+    """MOMWIRE_TIMES: the run's phases, as the licensed engine's timed build
+    prints its own (the standalone executables print the same text)."""
+    pad = " " * 24
+
+    def ms(seconds: float) -> int:
+        return round(seconds * 1e3)
+
+    return [
+        pad
+        + f"GROUND TABLES={ph.ground_seconds:9.3f} SEC.  (BUILT {ph.ground_built}, "
+        + f"FROM DISK CACHE {ph.ground_disk}, ANCHOR-BLENDED {ph.ground_blended})",
+        pad
+        + f"FILL: {ms(data.fill_seconds)} msec ({ph.fill_threads} threads) "
+        + f"FACTOR: {ms(data.factor_seconds)} msec ({ph.factor_threads} threads)",
+        pad + f"SOLUTION (PORTS+CURRENTS+POWER)={ph.solution_seconds:9.3f} SEC.",
+        pad + f"RADIATED FIELD (RP)={ph.rp_seconds:9.3f} SEC.",
+        pad + f"NEAR FIELD (NE/NH)={ph.near_seconds:9.3f} SEC.",
+    ]
+
+
+def _times_environment() -> list[str]:
+    """MOMWIRE_TIMES only: the environment in effect, at the top of the
+    printout (the standalone executables print the same text); nothing when
+    it is off."""
+    from .. import _somm_disk_cache, _sommerfeld_below, _times
+
+    if _times.current() is None:
+        return []
+
+    def var(name: str) -> str:
+        return f"  {name} = {os.environ.get(name) or '(NOT SET)'}"
+
+    cache = str(_somm_disk_cache.cache_dir()) if _somm_disk_cache.enabled() else "OFF"
+    return [
+        " " * 30 + "- - - MOMWIRE_TIMES ENVIRONMENT - - -",
+        "",
+        var("MOMWIRE_THREADS"),
+        var("OMP_NUM_THREADS"),
+        var("OPENBLAS_NUM_THREADS"),
+        f"  THREADS = {_times.fill_threads()} (FILL), {_times.factor_threads()} (FACTOR)",
+        f"  VARIANT = {_accelerator_variant()}",
+        f"  MOMWIRE_BELOW_ANCHORS = {_sommerfeld_below.anchor_mode()}",
+        f"  GROUND TABLE CACHE = {cache}",
+        *_blank(_SECTION_GAP),
     ]
 
 
@@ -1705,6 +1777,10 @@ def _closing(seconds: float, *, closing: bool) -> list[str]:
     deck)."""
     if not closing:
         return []
+    from .. import _times
+
+    if _times.current() is not None:  # MOMWIRE_TIMES: measured, and says so
+        return ["", f"{_RUN_TIME_LABEL}{seconds:10.3f} SEC. (WALL CLOCK)"]
     return ["", f"{_RUN_TIME_LABEL}{seconds:10.3f}"]
 
 
@@ -1758,6 +1834,7 @@ def render_multi_printout(
         raise ValueError(f"{len(blocks)} executed runs and {len(runs)} answers")
     first = runs[0]
     body: list[str] = []
+    body += _times_environment()
     body += _structure_specification(deck, first)
     body += _blank(_STRUCTURE_GAP)
     body += [_card_echo(i, c) for i, c in blocks[0]]
@@ -1833,6 +1910,7 @@ def render_sequence_printout(
     terminator = _terminator(cards)
     first = runs[0].answers[0]
     body: list[str] = []
+    body += _times_environment()
     body += _structure_specification(deck, first)
     body += _blank(_STRUCTURE_GAP)
     allocate = True
@@ -1904,6 +1982,7 @@ def render_stepped_printout(
     run_at = next(k for k, (_, c) in enumerate(numbered) if c.mnemonic in ("RP", "XQ"))
     first = runs[0]
     body: list[str] = []
+    body += _times_environment()
     body += _structure_specification(deck, first)
     body += _blank(_STRUCTURE_GAP)
     body += [_card_echo(i, c) for i, c in numbered[: run_at + 1]]
@@ -1963,6 +2042,7 @@ def render_printout(
     cards = _post_ge_cards(deck.source_text)
     terminator = _terminator(cards)
     body: list[str] = []
+    body += _times_environment()
     body += _structure_specification(deck, data)
     body += _blank(_STRUCTURE_GAP)
     body += [
