@@ -140,6 +140,10 @@ def _answer_lines(text: str, echo: str | None, path: str, out: list[str]) -> boo
         # momwire#1508: the one run at each frequency (the deck carries them)
         out.append(f"{path} = stepped")
         dump(deck, f"{path}.deck", out)
+    elif layout == "sequence":
+        # momwire 0.79.2: the deck read as a program (`_serve.split_sequence`)
+        out.append(f"{path} = sequence")
+        dump(deck, f"{path}.deck", out)
     elif layout == "multi":
         out.append(f"{path} = multi")
         dump(deck, f"{path}.deck", out)

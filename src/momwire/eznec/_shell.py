@@ -74,6 +74,7 @@ from ..deck._nec5 import (
     Nec5Structure,
     ends_on_nx,
     next_structure,
+    parse_nec5,
     parse_nec5_shared,
     split_structures,
 )
@@ -368,6 +369,16 @@ def _print(
     """One structure's printout in the layout its answers came in:
     ``"single"``, ``"multi"`` (momwire#1237's ``XQ`` blocks) or
     ``"stepped"`` (momwire#1508's stepping ``FR``)."""
+    if layout == "sequence":
+        (sequence,) = answers
+        return _printout.render_sequence_printout(
+            deck,
+            sequence.runs,
+            sequence.tail,
+            basis=basis,
+            closing=closing,
+            run_seconds=run_seconds,
+        )
     if layout == "multi":
         return _printout.render_multi_printout(
             deck, answers, basis=basis, closing=closing, run_seconds=run_seconds
@@ -415,6 +426,16 @@ def _answer(
         return _printout.render_refusal(echo, str(exc), basis=basis)
     if echo_text is not None:
         deck = replace(deck, source_text=echo_text)
+    # momwire 0.79.2: a deck whose frequency changes between its runs, or
+    # whose first run steps it and another run follows, read as the licensed
+    # NEC-5 reads it (`_serve.split_sequence`), before the one-run and
+    # multi-run readings below, which it replaces for exactly those decks.
+    try:
+        sequence = _serve.split_sequence(text)
+    except _serve.ServeRefusal as exc:
+        return _printout.render_refusal(echo, str(exc), basis=basis)
+    if sequence is not None:
+        return _answer_sequence(deck, *sequence, echo=echo, basis=basis)
     try:
         if split_failure is not None:
             raise split_failure
@@ -449,6 +470,57 @@ def _answer(
     except _serve.ServeRefusal as exc:
         return _printout.render_refusal(echo, str(exc), basis=basis)
     return deck, [data], "single"
+
+
+class _Sequence:
+    """A sequence deck's answers (`_answer_sequence`): its runs and the
+    cards echoed after the last, with the seconds the chain sums."""
+
+    def __init__(self, runs: list[_printout.SequenceRun], tail: list[int]):
+        self.runs = runs
+        self.tail = tail
+        self.run_seconds = sum(
+            getattr(d, "run_seconds", 0.0) for run in runs for d in run.answers
+        )
+
+
+def _answer_sequence(deck, groups, tail, *, echo: str, basis: str):
+    """Each run of a sequence deck (`_serve.split_sequence`) solved at the
+    frequency in force: a run that carries an ``FR`` (and the first) over
+    its whole list, a run that does not at the last frequency the run
+    before it solved, as the licensed NEC-5 leaves it after a loop."""
+    runs: list[_printout.SequenceRun] = []
+    last: float | None = None
+    try:
+        for group in groups:
+            try:
+                deck_g = parse_nec5(group.text)
+            except DeckError as exc:
+                return _printout.render_refusal(echo, str(exc), basis=basis)
+            if group.full:
+                freqs = deck_g.frequencies_mhz or (deck_g.frequency_mhz,)
+            else:
+                freqs = (last,)
+            # one sweep state per run: the runs' decks differ
+            shared: dict = {}
+            answers = tuple(
+                _serve.serve(
+                    replace(deck_g, frequency_mhz=f), basis=basis, shared=shared
+                )
+                for f in freqs
+            )
+            last = freqs[-1]
+            runs.append(
+                _printout.SequenceRun(
+                    cards=group.cards,
+                    answers=answers,
+                    full=group.full,
+                    requests_only=not group.full and not group.sources,
+                )
+            )
+    except _serve.ServeRefusal as exc:
+        return _printout.render_refusal(echo, str(exc), basis=basis)
+    return deck, [_Sequence(runs, tail)], "sequence"
 
 
 def _stepping_refusal(deck: Nec5Deck, *, multi_run: bool) -> str | None:

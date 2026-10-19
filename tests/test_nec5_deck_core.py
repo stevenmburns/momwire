@@ -525,7 +525,27 @@ CASES = {
     ),
     "a later run changes the frequency": (
         runs("XQ 0", "FR 0,1,0,0,7.", "XQ 0"),
+        "parsed",  # read as a program since 0.79.2 (stream view: sequence)
+    ),
+    "a later run changes a load": (
+        runs("XQ 0", "LD 4,2,3,0,50.,0.", "XQ 0"),
         "parsed",  # the parse accepts it; the seam's split refuses (stream view)
+    ),
+    # momwire 0.79.2: a deck read as a program (Dan AC6LA's 4nec2 cards), and
+    # a sequence whose later run changes a structural card
+    "fr after xq": (
+        DIPOLE.replace(
+            "EN\n", "XQ\nFR 0 6 0 0 3.5 0.1\nRP 0 1 181 1000 -82 0 0 2\nEN\n"
+        ),
+        "parsed",
+    ),
+    "a stepping run then a source change": (
+        runs("FR 0,3,0,0,7.,.1", "XQ", "EX 4,2,3,0,1.,0.", "XQ"),
+        "parsed",
+    ),
+    "a sequence run changes a load": (
+        runs("XQ", "FR 0,2,0,0,7.,.1", "LD 4,2,3,0,50.,0.", "XQ"),
+        "parsed",
     ),
     "a later run changes a card the upper-case of which leaves latin-1": (
         "CM\nCE\n" + GW1 + "GE 0\nXQ\n\xb5x 1\nXQ\nEN\n",
@@ -632,7 +652,7 @@ def test_the_stream_cases_reach_every_answer_kind():
             sign, word, rest = m.groups()
             kind = "raised" if sign == "!" else word
             kinds.add(kind)
-            if kind == "refused" and "XQ block 2 carries FR" in bytes.fromhex(
+            if kind == "refused" and "XQ block 2 carries LD" in bytes.fromhex(
                 rest
             ).decode("utf-8"):
                 kinds.add("split refusal")
@@ -641,6 +661,7 @@ def test_the_stream_cases_reach_every_answer_kind():
     assert {
         "single",
         "multi",
+        "sequence",
         "refused",
         "raised",
         "split refusal",

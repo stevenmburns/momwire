@@ -1,0 +1,11 @@
+CM 4nec2-style control cards: FR after XQ starts a new frequency loop (momwire 0.79.2)
+CE
+GW 1 21 0 -20 10 0 20 10 0.001
+GE 0
+GN 2 0 0 0 13 0.005
+EX 0 1 11 0 1 0
+FR 0 0 0 0 3.68 0
+XQ
+FR 0 6 0 0 3.5 0.1
+RP 0 1 181 1000 -82 0 0 2
+EN

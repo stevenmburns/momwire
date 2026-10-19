@@ -562,6 +562,8 @@ from ._printout import (
     PowerBudget,
     RunData,
     WireCurrentRow,
+    execution_groups,
+    post_ge_cards,
 )
 from .._vec3 import norm3
 
@@ -972,6 +974,87 @@ def split_runs(text: str) -> list[str] | None:
         xq = [ln for ln in block if ln[:2].upper() == "XQ"] or ["XQ 0"]
         out.append("\n".join([*head, *common, *own, xq[0], "EN"]) + "\n")
     return out
+
+
+@dataclass(frozen=True)
+class SequenceGroup:
+    """One run of a sequence deck (:func:`split_sequence`): the single-run
+    deck that answers it, the post-``GE`` cards it echoes, whether it starts
+    a new frequency loop (``full``: the first run, or one carrying an
+    ``FR``) and whether it writes its own sources."""
+
+    text: str
+    cards: tuple[int, ...]
+    full: bool
+    sources: bool
+
+
+_SEQUENCE_CARDS = _RUN_CARDS | {"FR"}
+_REFUSE_SEQUENCE_CHANGES = (
+    "run {run} carries {card}: a deck whose later runs change their "
+    "frequency, sources and requests (FR, EX, RP, NE, NH, PQ) is served, each "
+    "run at the FR in force, as the licensed NEC-5 reads it; every run reuses "
+    "the first run's structure, ground and loads, so a run that changes one "
+    "of those is refused rather than silently ignored"
+)
+
+
+def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
+    """A deck read as the licensed NEC-5 reads it, a program top to bottom
+    (momwire 0.79.2): its runs (:func:`_printout.execution_groups`) and the
+    cards echoed after the last, when the deck needs that reading -- a later
+    run carries an ``FR``, or the first run steps the frequency and another
+    run follows it. ``None`` otherwise, which keeps every other deck on the
+    path it always took.
+
+    Each run's deck is the deck through ``GE``, the first run's structural
+    cards (ground, loads, lines), the ``FR`` in force, the sources in force
+    (the latest run that wrote ``EX``) and the run's own requests. A later
+    run that changes anything else refuses by name."""
+    cards = post_ge_cards(text)
+    groups, tail = execution_groups(cards)
+    if len(groups) < 2:
+        return None
+    first_steps = any(
+        cards[k].mnemonic == "FR" and cards[k].i(1) > 1 for k in groups[0]
+    )
+    later_fr = any(cards[k].mnemonic == "FR" for g in groups[1:] for k in g)
+    if not (first_steps or later_fr):
+        return None
+    for run, group in enumerate(groups[1:], start=2):
+        for k in group:
+            if cards[k].mnemonic not in _SEQUENCE_CARDS:
+                raise ServeRefusal(
+                    _REFUSE_SEQUENCE_CHANGES.format(run=run, card=cards[k].mnemonic)
+                )
+    lines = text.splitlines()
+    ge = next(i for i, ln in enumerate(lines) if ln[:2].upper() == "GE")
+    head = lines[: ge + 1]
+    common = [
+        cards[k].raw for k in groups[0] if cards[k].mnemonic not in _SEQUENCE_CARDS
+    ]
+    out: list[SequenceGroup] = []
+    fr: str | None = None
+    sources: list[str] = []
+    for r, group in enumerate(groups):
+        own = [cards[k] for k in group]
+        frs = [c.raw for c in own if c.mnemonic == "FR"]
+        if frs:
+            fr = frs[-1]
+        exs = [c.raw for c in own if c.mnemonic == "EX"]
+        if exs:
+            sources = exs
+        requests = [c.raw for c in own if c.mnemonic in ("RP", "NE", "NH", "PQ")]
+        body = [*head, *common, *([fr] if fr is not None else []), *sources, *requests]
+        out.append(
+            SequenceGroup(
+                text="\n".join([*body, "XQ", "EN"]) + "\n",
+                cards=tuple(group),
+                full=r == 0 or bool(frs),
+                sources=bool(exs),
+            )
+        )
+    return out, tail
 
 
 def refusal(deck: Nec5Deck) -> str | None:

@@ -42,6 +42,10 @@ FREE_SPACE = (
     "p14_xnda1003",
     "p15_fr_first",
     "p17_ld5",
+    # momwire 0.79.2: a deck read as a program -- a source change after the
+    # sweep runs at its last frequency; a second RP prints its pattern there
+    "p11_ex_change",
+    "p18_two_rp",
 )
 # Over GN 2 with buried radials: a cold Sommerfeld fill per frequency, ~6 s.
 BURIED = tuple(
@@ -295,8 +299,6 @@ def test_every_frequency_is_solved_in_this_process(monkeypatch):
         ("p10_ne", "needs an XQ or RP after it"),
         ("p10c_ne_fr_first", "needs an XQ or RP after it"),
         ("p16_no_xq", "needs an XQ or RP after it"),
-        ("p11_ex_change", "served in a deck with one run"),
-        ("p18_two_rp", "RP follows the card that runs"),
     ],
 )
 def test_what_nec5_answers_differently_is_refused_by_name(name, says):

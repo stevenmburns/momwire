@@ -1428,6 +1428,14 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
             so.runs.push_back(o);
             stop(o);
             stopped = true;
+        } else if (a.kind == Answer::sequence) {
+            // a deck read as a program (momwire 0.79.2): Python's, declined
+            RunOutcome o;
+            o.kind = RunOutcome::declined;
+            o.message = "sequence";
+            so.runs.push_back(o);
+            stop(o);
+            stopped = true;
         } else if (a.kind == Answer::stepped) {
             // A stepping FR (momwire#1508): `_answer` serves
             // `replace(deck, frequency_mhz=f)` for each frequency in turn,

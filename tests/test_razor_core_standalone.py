@@ -1176,6 +1176,8 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
+        # a deck read as a program (momwire 0.79.2): Python serves it
+        "sequence",
         "front:bspline-buried-two-radius-spread",
         "front:bspline-buried-two-radius-nodes",
         "front:bspline-buried-mixed",

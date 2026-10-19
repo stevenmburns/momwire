@@ -1525,6 +1525,64 @@ std::string stepping_refusal(const std::string &deck_text, bool multi_run) {
     return "";
 }
 
+// `_serve.split_sequence`'s reading, up to the solve: 1 when the deck is
+// read as a program (a later run carries an FR, or the first run steps and
+// another follows), 0 when not, -1 with `why` when a later run changes a
+// structural card (`_printout.execution_groups` for the runs).
+int sequence_read(const std::string &deck_text, std::string &why) {
+    std::vector<Card> cards;
+    bool seen_ge = false;
+    for (const std::string &line : latin1_splitlines(deck_text)) {
+        Card card;
+        if (!read_card(line, card)) continue;
+        if (!seen_ge) {
+            seen_ge = card.mnemonic == "GE";
+            continue;
+        }
+        cards.push_back(card);
+        if (card.mnemonic == "EN") break;
+    }
+    std::vector<std::vector<std::size_t>> groups;
+    std::vector<std::size_t> pending;
+    bool changed = true;
+    for (std::size_t k = 0; k < cards.size(); ++k) {
+        const std::string &m = cards[k].mnemonic;
+        if (m == "EN" || m == "NX") break;
+        pending.push_back(k);
+        if (m == "RP" || (m == "XQ" && changed)) {
+            groups.push_back(pending);
+            pending.clear();
+            changed = false;
+        } else if (m != "XQ") {
+            changed = true;
+        }
+    }
+    if (groups.size() < 2) return 0;
+    bool first_steps = false, later_fr = false;
+    for (std::size_t k : groups[0])
+        if (cards[k].mnemonic == "FR" && Int(1) < cards[k].i(1)) first_steps = true;
+    for (std::size_t g = 1; g < groups.size(); ++g)
+        for (std::size_t k : groups[g])
+            if (cards[k].mnemonic == "FR") later_fr = true;
+    if (!first_steps && !later_fr) return 0;
+    static const char *kSeq[] = {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR"};
+    for (std::size_t g = 1; g < groups.size(); ++g)
+        for (std::size_t k : groups[g]) {
+            bool ok = false;
+            for (const char *c : kSeq) ok = ok || cards[k].mnemonic == c;
+            if (!ok) {
+                why = "run " + std::to_string(g + 1) + " carries " + cards[k].mnemonic +
+                      ": a deck whose later runs change their frequency, sources and requests "
+                      "(FR, EX, RP, NE, NH, PQ) is served, each run at the FR in force, as the "
+                      "licensed NEC-5 reads it; every run reuses the first run's structure, "
+                      "ground and loads, so a run that changes one of those is refused rather "
+                      "than silently ignored";
+                return -1;
+            }
+        }
+    return 1;
+}
+
 Answer answer(const std::string &text, const std::string *echo_text) {
     Answer a;
     std::vector<std::string> runs;
@@ -1550,6 +1608,17 @@ Answer answer(const std::string &text, const std::string *echo_text) {
         return stop(parsed[0].kind, parsed[0].message, parsed[0].kind == ErrorKind::deck_error);
     Deck deck = std::move(parsed[0].deck);
     if (echo_text) deck.source_text = utf8(*echo_text);
+    {
+        // `_answer`'s sequence reading (momwire 0.79.2), before the split
+        std::string why;
+        const int seq = sequence_read(text, why);
+        if (seq < 0) return stop(ErrorKind::serve_refusal, why, true);
+        if (seq > 0) {
+            a.kind = Answer::sequence;
+            a.deck = std::move(deck);
+            return a;
+        }
+    }
     if (split_failed)
         return stop(split_failure.kind, split_failure.what(),
                     split_failure.kind == ErrorKind::serve_refusal);
@@ -1862,6 +1931,10 @@ std::string dump_stream(const std::string &text) {
             break;
         case Answer::stepped:
             o.s += q + " = stepped\n";
+            dump_deck_into(o, a.deck, q + ".deck");
+            break;
+        case Answer::sequence:
+            o.s += q + " = sequence\n";
             dump_deck_into(o, a.deck, q + ".deck");
             break;
         case Answer::multi:
