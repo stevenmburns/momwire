@@ -17,6 +17,10 @@
  *      always pass two paths, and 4nec2 runs its engine as
  *      `ENGINE.exe < nec2d.tmp`, the two paths on stdin (momwire#1488).
  *
+ * SimNEC's streaming call, `- -`, is the exception to all three: stdin and
+ * stdout ARE its channels, so the engine runs on this process's own, and
+ * its exit status is this one's (`streamed`, momwire 0.79.2).
+ *
  * THE 4NEC2 FRONT END (momwire#1488).  With no arguments, and a NEC-5-slot
  * name, and stdin not a terminal, the first two lines of stdin are the deck
  * and printout paths (surrounding whitespace, CR included, stripped;
@@ -1141,7 +1145,7 @@ static int compose_command_line(char *out, size_t cap, char *const args[])
 #endif
 
 static proc_t launch(const char *exe, char *const args[], const char *log_path,
-                     int detached)
+                     int detached, int keep_stdin)
 {
 #ifdef _WIN32
     char command[PATH_CAP * 4];
@@ -1150,6 +1154,7 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
     PROCESS_INFORMATION info;
     HANDLE null_in = INVALID_HANDLE_VALUE;
     HANDLE log = INVALID_HANDLE_VALUE;
+    HANDLE stdin_dup = INVALID_HANDLE_VALUE;
     DWORD flags = CREATE_NO_WINDOW;
 
     if (compose_command_line(command, sizeof command, args) != 0) {
@@ -1185,6 +1190,16 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
     startup.cb = sizeof startup;
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = null_in;
+    if (keep_stdin) {
+        /* The streaming call (`- -`): the engine reads THIS process's stdin,
+         * duplicated inheritable (a pipe SimNEC handed over need not be). */
+        HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+        if (in != NULL && in != INVALID_HANDLE_VALUE &&
+            DuplicateHandle(GetCurrentProcess(), in, GetCurrentProcess(), &stdin_dup, 0,
+                            TRUE, DUPLICATE_SAME_ACCESS)) {
+            startup.hStdInput = stdin_dup;
+        }
+    }
     if (log != INVALID_HANDLE_VALUE) {
         startup.hStdOutput = log;
         startup.hStdError = log;
@@ -1282,10 +1297,16 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
         if (log != INVALID_HANDLE_VALUE) {
             CloseHandle(log);
         }
+        if (stdin_dup != INVALID_HANDLE_VALUE) {
+            CloseHandle(stdin_dup);
+        }
         return NO_PROC;
     }
     CloseHandle(info.hThread);
     CloseHandle(null_in);
+    if (stdin_dup != INVALID_HANDLE_VALUE) {
+        CloseHandle(stdin_dup);
+    }
     if (log != INVALID_HANDLE_VALUE) {
         CloseHandle(log);
     }
@@ -1306,7 +1327,7 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
     if (detached) {
         setsid();
     }
-    null_in = open("/dev/null", O_RDONLY);
+    null_in = keep_stdin ? -1 : open("/dev/null", O_RDONLY);
     if (null_in >= 0) {
         dup2(null_in, 0);
         if (null_in > 2) {
@@ -1720,7 +1741,7 @@ static proc_t spawn_daemon(const setup_t *setup)
         args[n++] = (char *)"nec4";
     }
     args[n] = NULL;
-    return launch(setup->engine, args, setup->log_path, 1);
+    return launch(setup->engine, args, setup->log_path, 1, 0);
 }
 
 /* Rungs 1 and 2: a connected socket, starting the server if nobody answers.
@@ -1932,7 +1953,7 @@ static int one_shot(const setup_t *setup, const char *deck_path,
     args[n++] = (char *)printout_path;
     args[n] = NULL;
 
-    child = launch(setup->engine, args, NULL, 0);
+    child = launch(setup->engine, args, NULL, 0, 0);
     if (child == NO_PROC) {
         return -1;
     }
@@ -1943,6 +1964,75 @@ static int one_shot(const setup_t *setup, const char *deck_path,
         return -1;
     }
     return 0;
+}
+
+/* The child's exit status, waiting as long as it runs (-1 if unreadable). */
+static int wait_forever(proc_t child)
+{
+#ifdef _WIN32
+    DWORD status = 0;
+    if (WaitForSingleObject(child, INFINITE) != WAIT_OBJECT_0) {
+        return -1;
+    }
+    if (!GetExitCodeProcess(child, &status)) {
+        return -1;
+    }
+    return (int)status;
+#else
+    for (;;) {
+        int status = 0;
+        pid_t seen = waitpid(child, &status, 0);
+        if (seen == child) {
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (seen < 0 && errno != EINTR) {
+            return -1;
+        }
+    }
+#endif
+}
+
+/* SimNEC's streaming call, `- -` (momwire#1395, momwire#1512): decks on
+ * stdin, each structure's printout on stdout as soon as its NX is read,
+ * until stdin closes.  The resident protocol is one deck per connection, so
+ * this is the one-shot engine run with THIS process's stdin and stdout and
+ * waited for as long as SimNEC holds it -- no daemon, no timeout.  stdout is
+ * the channel here, not a file, so the engine's exit status is this one's,
+ * and an engine that cannot start is named on stdout with a non-zero exit
+ * (0.79.1 wrote a printout to a file named "-" and exited 0, silently). */
+static int streamed(const setup_t *setup)
+{
+    char *args[8];
+    int n = 0;
+    proc_t child;
+    int status;
+
+    if (!file_exists(setup->engine)) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - no engine at %s\n",
+               setup->engine);
+        return 1;
+    }
+    args[n++] = (char *)setup->engine;
+    if (setup->named_basis) {
+        args[n++] = (char *)"--basis";
+        args[n++] = (char *)setup->basis;
+    }
+    if (setup->nec4) {
+        args[n++] = (char *)"--dialect";
+        args[n++] = (char *)"nec4";
+    }
+    args[n++] = (char *)"-";
+    args[n++] = (char *)"-";
+    args[n] = NULL;
+    fflush(stdout);
+    child = launch(setup->engine, args, NULL, 0, 1);
+    if (child == NO_PROC) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - %s\n", g_reason);
+        return 1;
+    }
+    status = wait_forever(child);
+    forget_process(child);
+    return status < 0 ? 1 : status;
 }
 
 /* Rung 4: the file is the only channel there is.
@@ -2013,6 +2103,13 @@ int main(int argc, char **argv)
     } else if (argc != 3) {
         printf("%s\n", ARGUMENT_ERROR_OUTPUT);
         return 0;
+    } else if (strcmp(argv[1], "-") == 0 && strcmp(argv[2], "-") == 0) {
+        /* The engine's path and the basis are what the stream needs; a
+         * runtime directory `plan` cannot make is the daemon's problem, and
+         * no daemon is involved here. */
+        memset(&setup, 0, sizeof setup);
+        (void)plan(&setup, argv[0]);
+        return streamed(&setup);
     } else {
         deck_path = argv[1];
         printout_path = argv[2];

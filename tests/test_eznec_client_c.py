@@ -986,3 +986,50 @@ def test_rung_four_names_an_unwritable_printout_on_stdout(client_exe, tmp_path):
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
+
+
+STREAM_DECK = REPO / "scripts" / "core_split" / "nx_decks" / "simnec_stream_2281566.nec"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", [NEC5_NAME, CLIENT_NAME])
+def test_the_streaming_call_streams_through_the_engine(client_exe, tmp_path, name):
+    """SimNEC's ``- -`` (momwire#1395, #1512): decks on stdin, printouts on
+    stdout, the engine's own answer byte for byte. 0.79.1's launcher read the
+    two dashes as file names, wrote a printout to a file named ``-`` and
+    exited 0 with stdout empty (momwire 0.79.2)."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(name,))
+    room = _room()
+    deck = STREAM_DECK.read_bytes()
+    try:
+        oracle = subprocess.run(
+            [sys.executable, str(ENTRY), "-", "-"],
+            input=deck,
+            capture_output=True,
+            timeout=300,
+        )
+        proc = _run(bundle, name, ["-", "-"], room, stdin=deck, cwd=tmp_path)
+        assert proc.returncode == oracle.returncode, proc.stderr
+        assert proc.stdout == oracle.stdout.decode(errors="replace")
+        assert "INPUT LINE" in proc.stdout and len(proc.stdout) > 10_000
+        assert not (tmp_path / "-").exists()
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+def test_the_streaming_call_without_an_engine_says_so_and_fails(client_exe, tmp_path):
+    """No engine: named on stdout (the stream's channel) with a non-zero exit,
+    never a silent exit 0."""
+    bundle = _bundle(client_exe, None, names=(NEC5_NAME,))
+    room = _room()
+    try:
+        proc = _run(bundle, NEC5_NAME, ["-", "-"], room, stdin=b"", cwd=tmp_path)
+        assert proc.returncode != 0
+        assert "MOMWIRE ENGINE UNAVAILABLE" in proc.stdout
+        assert not (tmp_path / "-").exists()
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
