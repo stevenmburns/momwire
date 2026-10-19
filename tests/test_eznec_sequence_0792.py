@@ -19,6 +19,7 @@ import pytest
 from momwire.eznec._shell import render
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nec5_sequence" / "fr_after_xq.nec"
+FIXTURES = Path(__file__).parent / "fixtures"
 HEAD = "\n".join(
     [
         "CM probe",
@@ -98,7 +99,7 @@ RP_NE = FIXTURE.with_name("rp_ne_two_runs.nec")
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
 def test_an_rp_and_an_ne_before_each_xq_print_one_of_each_per_run(basis):
     """momwire#1579 (Ward AE6TY's two-excitation deck): RP then NE before the
-    same XQ, twice. NE-5 runs the RP on the spot and the NE on the solution
+    same XQ, twice. NEC-5 runs the RP on the spot and the NE on the solution
     standing after it, so each run prints its pattern and then its near
     field; it was "4 executed runs and 2 answers"."""
     out = render(RP_NE.read_text(), basis=basis)
@@ -108,3 +109,20 @@ def test_an_rp_and_an_ne_before_each_xq_print_one_of_each_per_run(basis):
     assert out.count("ANTENNA INPUT PARAMETERS") == 2
     first = out.index("RADIATION PATTERNS")
     assert first < out.index("NEAR ELECTRIC FIELDS") < out.index("INPUT LINE 12")
+
+
+def test_the_seam_hook_names_every_read_kind():
+    """The C++ seam's test hook names a structure's read through a table
+    indexed by `Answer::Kind`; it stopped at "multi", so a stepped or sequence
+    deck read past its end -- garbage on Linux, a segfault on macOS arm64
+    that hung the xdist worker (0.79.2)."""
+    from momwire import _accel
+
+    acc = _accel.acc
+    if acc is None or not hasattr(acc, "nec5_razor_seam"):
+        pytest.skip("no accelerator with the C++ seam loaded")
+    stepped = FIXTURES / "bspline_printout_buried" / "ab_dipole_loaded.nec"
+    sequence = FIXTURES / "eznec_fr_step_1508" / "p07_two_fr.nec"
+    for path, kind in ((stepped, "stepped"), (sequence, "sequence")):
+        answer = acc.nec5_razor_seam(path.read_bytes())
+        assert [s["read"] for s in answer["structures"]] == [kind], path

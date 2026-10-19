@@ -799,7 +799,12 @@ py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
         r = mw::nec5::razor_seam(text);
     }
     static const char *route[] = {"served", "refused", "raised", "declined"};
-    static const char *read[] = {"refused", "raised", "single", "multi"};
+    // one name per `Answer::Kind`, in its order: a kind past the end of this
+    // table read out of bounds (stepped and sequence did, and macOS arm64
+    // faulted on it, 0.79.2)
+    static const char *read[] = {"refused", "raised", "single", "multi", "stepped", "sequence"};
+    static_assert(sizeof(read) / sizeof(read[0]) == mw::nec5::Answer::sequence + 1,
+                  "a name for every Answer::Kind");
     static const char *run[] = {"prepared", "shared", "refused", "raised", "declined"};
     py::dict out;
     out["route"] = route[r.route];
