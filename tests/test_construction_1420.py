@@ -1,7 +1,8 @@
 """momwire#1420 step 5: per-call construction checks without O(wires^2) or
 per-wire numpy round trips.
 
-* ``_serve._phantom_tags`` stops at the first test that settles a wire (too
+* ``_serve._phantom_tags_geometric`` (``_phantom_tags``' geometric half,
+  momwire#1580) stops at the first test that settles a wire (too
   long; or an endpoint nearer than the larger clearance floor) instead of
   measuring every endpoint pair; it is held to the full scan, kept as
   ``_phantom_tags_full``, on every fixture deck and on random decks with
@@ -74,13 +75,13 @@ def test_phantom_tags_match_the_full_scan():
     found = 0
     for deck in decks:
         for lam in (0.5, 21.3, 80.0, 1e4):
-            got = _serve._phantom_tags(deck, lam)
+            got = _serve._phantom_tags_geometric(deck, lam)
             assert got == _full(deck, lam)
             found += bool(got)
     rng = np.random.default_rng(1420)
     for _ in range(600):
         deck, lam = _phantom_deck(rng)
-        got = _serve._phantom_tags(deck, lam)
+        got = _serve._phantom_tags_geometric(deck, lam)
         assert got == _full(deck, lam)
         found += bool(got)
     assert found >= 50  # the phantom branch itself is reached
@@ -93,8 +94,8 @@ def test_phantom_tags_take_the_full_scan_on_non_finite(monkeypatch):
     monkeypatch.setattr(
         _serve, "_phantom_tags_full", lambda *a: calls.append(1) or real(*a)
     )
-    _serve._phantom_tags(deck, math.nan)
-    _serve._phantom_tags(deck, math.inf)
+    _serve._phantom_tags_geometric(deck, math.nan)
+    _serve._phantom_tags_geometric(deck, math.inf)
     assert len(calls) == 2
 
 
@@ -186,4 +187,4 @@ def test_a_seeded_floor_fails_the_phantom_gate(monkeypatch):
     lam = 20.0
     assert _full(deck, lam) == frozenset()
     with pytest.raises(AssertionError):
-        assert _serve._phantom_tags(deck, lam) == _full(deck, lam)
+        assert _serve._phantom_tags_geometric(deck, lam) == _full(deck, lam)
