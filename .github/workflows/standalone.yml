@@ -103,6 +103,15 @@ on:
       - "setup.py"
       - ".github/workflows/standalone.yml"
 
+# Every comparison here is byte for byte (or within a derived tolerance)
+# between two processes, the executable and the launcher, sharing a cache
+# directory across workers. The below table's sweep anchors (momwire#1471, on
+# `auto` by default) make a buried sweep's current-table digits depend on
+# which frequencies the seen list already holds, so the gates pin exact
+# tables; the anchors themselves are gated by tests/test_below_sweep_anchors_1471.py.
+env:
+  MOMWIRE_BELOW_ANCHORS: "off"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
   cancel-in-progress: true
@@ -269,10 +278,10 @@ jobs:
           OMP_NUM_THREADS: "1"
           MOMWIRE_FORCE_VARIANT: sse2
       # The NX-chained decks (momwire#1512): Ward's 99-structure chain and its
-      # cut, and SimNEC's A4 stream decks. The below table's anchors are off
-      # by default (momwire#1535), so a chain swept in frequency prints the
-      # same bytes whatever ran before it; no environment needed.
-      - name: NX chains, as the launcher (avx2)
+      # cut, and SimNEC's A4 stream decks. Anchors off (the workflow's env): a
+      # chain swept in frequency engages them, and their seen-state depends
+      # on history.
+      - name: NX chains, as the launcher (avx2, anchors off)
         run: |
           python scripts/core_split/exe_compare.py exe-linux-nx.jsonl --standalone \
             --exe build-avx2/momwire-razor2p-standalone \
@@ -286,7 +295,7 @@ jobs:
       # read up to its NX echo before the next is written, and all at once;
       # byte for byte against the launcher's streaming mode, and that against
       # its own file form.
-      - name: streaming call, as the launcher (avx2 and sse2)
+      - name: streaming call, as the launcher (avx2 and sse2, anchors off)
         run: |
           python scripts/core_split/stream_compare.py exe-linux-stream-avx2.jsonl \
             --exe build-avx2/momwire-razor2p-standalone \
