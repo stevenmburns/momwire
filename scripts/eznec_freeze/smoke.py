@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Eleven gates, derived from the seam's own contract (momwire#497 U1):
+Twelve gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -115,6 +115,11 @@ Eleven gates, derived from the seam's own contract (momwire#497 U1):
    (``GE 0 0 1``).  The printout must equal the module's one-shot in the
    basis the name claims, and the ``.GMO`` must equal Ward AE6TY's sample
    (``tests/fixtures/4nec2_example3/``) byte for byte.
+12. **SimNEC's streaming call** (momwire#1395, #1512) -- each NEC-5
+   launcher run as ``<launcher> - -`` with a captured SimNEC stream on
+   stdin: stdout must be the module's own ``main(["-", "-"])`` answer to the
+   same bytes, the exit 0, and no file named ``-`` left behind (0.79.1's
+   launcher wrote one and exited 0 with stdout empty, momwire 0.79.2).
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -922,6 +927,58 @@ def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+STREAM_DECK = REPO / "scripts" / "core_split" / "nx_decks" / "simnec_stream_2281566.nec"
+
+
+def _gate_stream(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 12 -- SimNEC's streaming call, ``- -`` (momwire#1395, #1512)."""
+    failures = 0
+    deck = STREAM_DECK.read_bytes()
+    for stem in _nec5_launchers():
+        launcher = exe.with_name(f"{stem}{exe.suffix}")
+        if not launcher.is_file():
+            continue  # gate 9 names a missing launcher
+        room = work / f"stream-{stem}"
+        shutil.rmtree(room, ignore_errors=True)
+        room.mkdir(parents=True)
+        result = subprocess.run(
+            [str(launcher), "-", "-"],
+            input=deck,
+            capture_output=True,
+            timeout=600,
+            env=env,
+            cwd=room,
+        )
+        basis = stem.partition("nec5-")[2] or None
+        module = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys;from momwire.eznec._shell import main;"
+                f"kw = {{'basis': {basis!r}}} if {basis!r} else {{}};"
+                "sys.exit(main(['-', '-'], **kw))",
+            ],
+            input=deck,
+            capture_output=True,
+            timeout=600,
+        )
+        if result.returncode != 0 or (room / "-").exists():
+            print(
+                f"FAIL {launcher.name} (- -): exit {result.returncode}, "
+                f"a file named '-': {(room / '-').exists()}"
+            )
+            failures += 1
+        elif result.stdout != module.stdout or b"INPUT LINE" not in result.stdout:
+            print(f"FAIL {launcher.name} (- -): stdout is not the module's stream")
+            failures += 1
+        else:
+            print(
+                f"ok   {launcher.name} (- -): {result.stdout.count(b'NX ')} structures "
+                f"streamed, stdout = the module's"
+            )
+    return failures
+
+
 def _licensed_nec4_impedance() -> complex:
     """The licensed NEC-4.2's feed-point Z for gate 10's deck, read out of its
     committed printout (``tests/fixtures/eznec_nec42/printouts/``)."""
@@ -1074,6 +1131,7 @@ def main() -> int:
         failures += _gate_nec5(exe, work, env)
         failures += _gate_nec4(exe, work, env)
         failures += _gate_4nec2(exe, work, env)
+        failures += _gate_stream(exe, work, env)
     finally:
         stop(room)
 
