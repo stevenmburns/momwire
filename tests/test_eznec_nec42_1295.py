@@ -154,6 +154,7 @@ def test_the_name_picks_the_slot_and_the_basis(prog, dialect, basis):
         ("momwire-eznec.exe", "nec5", _serve.BASIS),
         ("momwire-eznec-razor-2p.exe", "nec5", "razor-2p"),
         ("momwire-eznec-engine.exe", "nec5", _serve.BASIS),
+        ("momwire-engine.exe", "nec5", _serve.BASIS),
     ],
 )
 def test_the_frozen_entry_reads_the_slot_off_its_name(prog, dialect, basis):
@@ -176,8 +177,8 @@ def test_the_engine_one_shot_takes_the_slot_as_a_leading_flag(monkeypatch):
         ),
     )
     for argv in (
-        ["momwire-eznec-engine.exe", "--dialect", "nec4", "--basis", "pulse"],
-        ["momwire-eznec-engine.exe", "--basis", "pulse", "--dialect", "nec4"],
+        ["momwire-engine.exe", "--dialect", "nec4", "--basis", "pulse"],
+        ["momwire-engine.exe", "--basis", "pulse", "--dialect", "nec4"],
     ):
         assert entry.run([*argv, "EZ.NEC", "NEC.OUT"]) == 0
         assert seen == {

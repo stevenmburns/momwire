@@ -4,8 +4,8 @@
 and writes the README.txt beside them.  The freeze itself runs only on the
 Windows lane (`eznec-dropin.yml`), so the roster and the README's table are
 gated here, from the same constants the copy loop reads (momwire#1295
-phase 4: `momwire-nec5*` / `momwire-nec42*` primary, `momwire-eznec*`
-deprecated but still shipped).
+phase 4: `momwire-nec5*` / `momwire-nec42*`; the deprecated `momwire-eznec*`
+names were dropped in momwire#1583).
 """
 
 from __future__ import annotations
@@ -51,19 +51,22 @@ def _resolved(stem: str) -> tuple[str, str]:
     return dialect, _serve.BASIS if suffix is None else suffix
 
 
-def test_the_bundle_ships_seven_launchers_in_three_families():
+def test_the_bundle_ships_four_launchers_in_two_families():
+    """momwire#1583 dropped the three deprecated `momwire-eznec*` names; the
+    signing post-condition's "all N executables" is this count plus one."""
     build = _build()
     stems = build.launcher_stems()
-    assert len(stems) == len(set(stems)) == 7
+    assert len(stems) == len(set(stems)) == 4
     assert set(build.NEC5_LAUNCHERS) == {"momwire-nec5", "momwire-nec5-razor-2p"}
     assert set(build.NEC4_LAUNCHERS) == {"momwire-nec42", "momwire-nec42-sinusoidal"}
-    deprecated = set(stems) - set(build.NEC5_LAUNCHERS) - set(build.NEC4_LAUNCHERS)
-    assert deprecated == {
-        "momwire-eznec",
-        "momwire-eznec-razor-2p",
-        "momwire-eznec-razor-nec5",
-    }
+    assert set(stems) == {*build.NEC5_LAUNCHERS, *build.NEC4_LAUNCHERS}
+    assert not any("eznec" in stem for stem in stems)
+    assert build.ENGINE_NAME == "momwire-engine"
     assert build.ENGINE_NAME not in stems
+    assert build.NAME == "momwire"
+    assert build.LAUNCHER in stems
+    # The smoke's gate 4 reads SHIPPED_VARIANTS as the copies of LAUNCHER.
+    assert build.SHIPPED_VARIANTS == ("razor-2p",)
 
 
 def test_every_launcher_answers_the_slot_and_basis_its_family_claims():
@@ -78,25 +81,11 @@ def test_every_launcher_answers_the_slot_and_basis_its_family_claims():
     assert _resolved("momwire-nec42-sinusoidal") == ("nec4", "sinusoidal")
 
 
-def test_a_deprecated_name_answers_exactly_as_its_successor():
-    """Deprecated in prose only: each old name resolves to the same dialect
-    and the same solver entry as the primary name the README equates it
-    with (``razor-nec5`` and ``razor-2p`` are two spellings of one entry)."""
+def test_the_engine_name_selects_no_basis():
+    """``momwire-engine`` carries neither marker, so the frozen engine started
+    under its own name serves the default; the launchers say ``--basis``."""
     build = _build()
-    pairs = {build.NAME: build.DEPRECATED_SUCCESSORS[""]}
-    pairs.update(
-        {
-            f"{build.NAME}-{b}": build.DEPRECATED_SUCCESSORS[b]
-            for b in build.SHIPPED_VARIANTS
-        }
-    )
-    assert set(build.DEPRECATED_SUCCESSORS) == {"", *build.SHIPPED_VARIANTS}
-    for old, new in pairs.items():
-        assert new in build.NEC5_LAUNCHERS, (old, new)
-        old_dialect, old_basis = _resolved(old)
-        new_dialect, new_basis = _resolved(new)
-        assert old_dialect == new_dialect == "nec5", (old, new)
-        assert BASES[old_basis] == BASES[new_basis], (old, new)
+    assert _resolved(build.ENGINE_NAME) == ("nec5", _serve.BASIS)
 
 
 def test_the_primary_names_are_also_console_scripts():
@@ -139,11 +128,11 @@ def test_the_readme_table_has_one_row_per_shipped_executable():
     assert sorted(rows) == sorted(
         f"{s}.exe" for s in (*build.launcher_stems(), build.ENGINE_NAME)
     )
-    assert "momwire-eznec 9.9.9 " in text
-    assert "DEPRECATED" in text
-    for stem in ("momwire-eznec", "momwire-eznec-razor-2p", "momwire-eznec-razor-nec5"):
-        (row,) = [ln for ln in text.splitlines() if ln.startswith(f"  {stem}.exe ")]
-        assert row.split()[1] == "=", row
+    assert text.startswith("momwire 9.9.9 ")
+    # Not an EZNEC-only bundle: every host it serves is named up front.
+    head = text.split("SIGNING:", 1)[0]
+    for host in ("EZNEC", "SimNEC", "4nec2"):
+        assert host in head, host
     for basis in (*build.NEC5_KNOWN_BASES, *build.NEC4_KNOWN_BASES):
         assert basis in text, basis
     # The table and the lists are generated: hold them to the README's own
@@ -183,3 +172,34 @@ def test_only_the_win7_readme_states_the_win7_prerequisites():
         pass
     else:
         raise AssertionError("an unknown bundle target must refuse")
+
+
+def test_the_readme_says_which_names_changed():
+    """momwire#1583: anyone with an old engine path finds the new name."""
+    build = _build()
+    text = build.readme_text("9.9.9", "SIGNING: this build is unsigned.", ".exe")
+    assert "NAMES CHANGED IN 0.80.0" in text
+    for old, new in (
+        ("momwire-eznec-windows.zip", "momwire-windows.zip"),
+        ("momwire-eznec-windows-win7.zip", "momwire-windows-win7.zip"),
+        ("momwire-eznec-engine.exe", "momwire-engine.exe"),
+        ("momwire-eznec.exe", "momwire-nec5.exe"),
+        ("momwire-eznec-razor-2p.exe", "momwire-nec5-razor-2p.exe"),
+        ("momwire-eznec-razor-nec5.exe", "momwire-nec5-razor-2p.exe"),
+    ):
+        (row,) = [ln for ln in text.splitlines() if f" {old} " in ln]
+        assert row.rstrip().endswith(new), row
+    # Outside that paragraph the old names do not appear at all.
+    rest = text.split("The momwire-nec5 and momwire-nec42 launcher names", 1)[1]
+    assert "momwire-eznec" not in rest
+
+
+def test_the_first_run_note_reads_as_dan_worded_it():
+    """momwire#1583 item 4, line for line."""
+    build = _build()
+    lines = build.readme_text("9.9.9", "SIGNING: unsigned.", ".exe").splitlines()
+    at = lines.index('FIRST RUN (if you did not "unblock" as described above):')
+    assert lines[at + 1] == 'Windows will show "Windows protected your PC", and you'
+    assert lines[at + 2] == (
+        'have to click "More info" and then "Run anyway". Nothing is wrong'
+    )

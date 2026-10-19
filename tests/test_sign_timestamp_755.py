@@ -73,7 +73,7 @@ def faked(monkeypatch):
     return install
 
 
-PATHS = [Path("momwire-eznec.exe"), Path("momwire-eznec-engine.exe")]
+PATHS = [Path("momwire-nec5.exe"), Path("momwire-engine.exe")]
 
 
 def test_a_signed_and_timestamped_build_passes(faked, monkeypatch):

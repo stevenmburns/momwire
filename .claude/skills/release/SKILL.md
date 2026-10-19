@@ -72,12 +72,13 @@ Publishing). Every step below was learned the hard way; do them in order.
 ## The signed drop-in (momwire#711)
 
 The same tag also triggers `eznec-dropin`, which Authenticode-signs the
-frozen engine and the compiled launcher `momwire-eznec.exe`, then copies
-the launcher once per name in `launcher_stems()` in
-`scripts/eznec_freeze/build.py` (today seven: `momwire-nec5[-razor-2p]`,
-`momwire-nec42[-sinusoidal]`, and the deprecated `momwire-eznec-razor-2p` /
-`-razor-nec5` beside `momwire-eznec` itself) with Azure Artifact Signing
-before zipping them. Non-tag builds sign with a throwaway self-signed cert,
+frozen engine `momwire-engine.exe` and the compiled launcher
+`momwire-nec5.exe`, then copies the launcher once per other name in
+`launcher_stems()` in `scripts/eznec_freeze/build.py` (today four in all:
+`momwire-nec5[-razor-2p]` and `momwire-nec42[-sinusoidal]`; the deprecated
+`momwire-eznec*` names were dropped in momwire#1583) with Azure Artifact
+Signing before zipping them into `momwire-windows.zip` (folder `momwire\`)
+and `momwire-windows-win7.zip`. Non-tag builds sign with a throwaway self-signed cert,
 so a tag is the ONLY time the real certificate is exercised.
 
 **Before tagging**, confirm the credential has not expired — an expired
@@ -104,9 +105,10 @@ chain verified
 signature present on all N executables
 ```
 
-where N is `len(SHIPPED_VARIANTS) + 2` — the engine, the default launcher,
-and one copy per shipped variant — so **4** as of v0.48.0. The number moves
-whenever a launcher variant is added (#817 took it from 2 to 4); a count
+where N is `len(launcher_stems()) + 1` — every launcher plus the engine —
+so **5** as of v0.80.0. The number moves whenever a launcher name is added
+or dropped (#817 took it from 2 to 4, #1295 phase 4 to 8, #1583 back down
+to 5 when the three deprecated `momwire-eznec*` launchers went); a count
 below the current one means a copy arrived unsigned and the build already
 failed on it, so read the line for the count you expect rather than the
 one written here.

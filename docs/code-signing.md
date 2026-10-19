@@ -1,6 +1,6 @@
 # Code signing the EZNEC drop-in
 
-How the EZNEC drop-in's executables (`momwire-eznec-engine.exe` and the
+How the EZNEC drop-in's executables (`momwire-engine.exe` and the
 launchers, `momwire-nec5.exe` and its siblings) get an Authenticode
 signature, how to set the Azure side up from nothing, and how to rotate the credential before it strands a
 release. Landed in momwire#711 on 2026-08-29.
@@ -23,7 +23,7 @@ edited predicates this replaces).
 
 | Trigger | Mode | Chain check | Bundle name | Release attach |
 | --- | --- | --- | --- | --- |
-| pushed tag `v*` | azure | hard gate | `momwire-eznec-windows.zip` | yes |
+| pushed tag `v*` | azure | hard gate | `momwire-windows.zip` (and `momwire-windows-win7.zip`) | yes |
 | dispatch, `azure_sign=true` | azure | hard gate | `…-SIGNTEST.zip` | no |
 | dispatch **on a tag ref** | azure | hard gate | `…-SIGNTEST.zip` | **no** — the release job requires a push event, so a signing test can never replace a published asset |
 | anything else | rehearsal | waived | `…-SELFSIGNED-rehearsal.zip` | no |

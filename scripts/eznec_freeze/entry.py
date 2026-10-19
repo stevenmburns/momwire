@@ -1,7 +1,7 @@
 """PyInstaller entry point for the packaged EZNEC drop-in executable.
 
 The frozen program is :mod:`momwire.eznec`'s process shell and nothing else:
-``momwire-eznec <deck> <printout>``, the same two-argument protocol EZNEC
+``momwire-engine <deck> <printout>``, the same two-argument protocol EZNEC
 Pro+ v7 uses to launch its external NEC-5 console engine.  A separate script
 (rather than ``-m momwire.eznec``) exists only because PyInstaller wants a
 file to trace from.
@@ -10,12 +10,11 @@ file to trace from.
 the command line — it sends two positional paths and nothing else — so the
 basis cannot be a flag, and `_shell.main`'s own contract says it must not
 become one.  What EZNEC does give the user is a file picker for the engine
-path, so the choice rides on the filename:
-
-    momwire-eznec.exe                 the default, degree-2 B-spline
-    momwire-eznec-razor-2p.exe        the tent basis with razor-blade path
-                                      testing, at NEC-5's two-point rule
-    momwire-eznec-razor-nec5.exe      the deprecated spelling of razor-2p
+path, so the choice rides on the filename: ``momwire-eznec-<basis>.exe``
+names ``<basis>``, and a name without the marker serves the default.  Those
+were the shipped names until the native launchers took them (momwire#718
+phase 3), and the launchers themselves were dropped in momwire#1583; the rule
+stays, for a renamed copy of this exe.
 
 This is momwire#528's spelling, not a second one — the same rule, through the
 same owner (`basis_from_program_name`), with ``eznec-`` as the marker where
@@ -63,11 +62,13 @@ from momwire.serve._pool import WORKER_FLAG  # noqa: E402 - after the AVX-512 pi
 
 MARKER = "eznec-"
 
-# The frozen exe's own name once the native client takes the
-# ``momwire-eznec[-<basis>]`` names (momwire#718 phase 3): the bundle ships
-# ONE ``momwire-eznec-engine``, and this segment is consumed exactly as the
-# thin client consumes ``client`` — the plain name selects nothing, a renamed
-# copy still names its basis.
+# The frozen exe's own segment once the native client took the launcher
+# names (momwire#718 phase 3): the bundle shipped ONE ``momwire-eznec-engine``,
+# and this segment is consumed exactly as the thin client consumes ``client``
+# — the plain name selects nothing, a renamed copy still names its basis.
+# Since momwire#1583 the engine ships as ``momwire-engine``, which carries no
+# marker at all and so selects the default the same way; the launchers always
+# say ``--basis``.
 ENGINE_SEGMENT = "engine"
 
 # The launcher's one-shot rung for a run whose paths came from stdin

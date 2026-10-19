@@ -332,6 +332,9 @@ def test_a_consumed_segment_obeys_the_thin_clients_rule_at_the_owner(prog, expec
         # still names its basis (the consumed ``engine`` segment).
         ("momwire-eznec-engine.exe", _serve.BASIS),
         ("Momwire-Eznec-Engine-Razor-Nec5.exe", "razor-nec5"),
+        # The engine's name since momwire#1583 carries no marker at all.
+        ("momwire-engine.exe", _serve.BASIS),
+        ("C:\\momwire\\Momwire-Engine.EXE", _serve.BASIS),
     ],
 )
 def test_the_frozen_entry_point_defaults_only_when_no_basis_was_named(prog, expected):
@@ -411,7 +414,7 @@ def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
             seen.update(argv=argv, basis=basis, dialect=dialect) or 0
         ),
     )
-    argv = ["momwire-eznec-engine.exe", "--basis", "razor-nec5", "deck.nec", "out.txt"]
+    argv = ["momwire-engine.exe", "--basis", "razor-nec5", "deck.nec", "out.txt"]
     assert entry.run(argv) == 0
     assert seen == {
         "argv": ["deck.nec", "out.txt"],
@@ -441,13 +444,13 @@ def test_the_stdin_allowance_rides_the_one_shot_as_a_leading_flag(monkeypatch, f
             seen.update(argv=argv, basis=basis, en_optional=en_optional) or 0
         ),
     )
-    assert entry.run(["momwire-eznec-engine.exe", *flags, "d.inp", "d.out"]) == 0
+    assert entry.run(["momwire-engine.exe", *flags, "d.inp", "d.out"]) == 0
     assert seen == {
         "argv": ["d.inp", "d.out"],
         "basis": "razor-2p",
         "en_optional": True,
     }
-    assert entry.run(["momwire-eznec-engine.exe", "d.inp", "--en-optional"]) == 0
+    assert entry.run(["momwire-engine.exe", "d.inp", "--en-optional"]) == 0
     assert seen["argv"] == ["d.inp", "--en-optional"]
     assert seen["en_optional"] is False
 

@@ -9,7 +9,7 @@ dist/
 .pytest_cache/
 *.py~
 # A local eznec_freeze build leaves both beside the repo root.
-momwire-eznec-engine.spec
+momwire-engine.spec
 smoke-out/
 # The frozen bundle's baked version (momwire#1277).  build.py writes it under
 # build/ (already ignored above) and never into src/; this line is the belt in

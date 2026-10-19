@@ -2,7 +2,7 @@
 
 Usage::
 
-    python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec[.exe]
+    python scripts/eznec_freeze/smoke.py dist/momwire/momwire-nec5[.exe]
 
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
@@ -24,7 +24,7 @@ Twelve gates, derived from the seam's own contract (momwire#497 U1):
    claims** (momwire#593).  The basis rides on the filename, so this is the
    gate that makes the bundle's shape a fact rather than an intention.
 5. **The engine is beside the launcher** — a bundle whose
-   ``momwire-eznec-engine`` is missing is a launcher with nothing to spawn,
+   ``momwire-engine`` is missing is a launcher with nothing to spawn,
    and every other gate would still pass through the rung-4 refusal or not
    at all.
 6. **Residency** — the launcher really goes resident: two launches, ONE
@@ -92,8 +92,8 @@ Twelve gates, derived from the seam's own contract (momwire#497 U1):
    ``build.py``'s ``NEC5_LAUNCHERS`` are present, answer ``-version`` with
    exit 0 and ``NEC5momwire.<maj>.<min>`` (SimNEC's configure probe), and
    serve in the basis read past ``nec5-``.  One family for both hosts: SimNEC
-   picks the deck syntax from ``nec5`` in the path, which the deprecated
-   ``momwire-eznec`` names do not carry, and EZNEC reads no name at all.
+   picks the deck syntax from ``nec5`` in the path, and EZNEC reads no name
+   at all.
 10. **The NEC-4.2 names** (momwire#1295) — ``build.py``'s ``NEC4_LAUNCHERS``
    are present and serve a deck EZNEC's External NEC-4.2 slot actually wrote
    (``tests/fixtures/eznec_nec42/``): byte-identical to the module run in the
@@ -170,7 +170,7 @@ EXAMPLE3 = REPO / "tests" / "fixtures" / "4nec2_example3"
 # client's ENGINE_NAME, restated here rather than imported because gate 5 is
 # about a FILE being there and a name read out of the thing being gated would
 # certify itself.
-ENGINE_STEM = "momwire-eznec-engine"
+ENGINE_STEM = "momwire-engine"
 
 # LLVM's OpenMP runtime, which both Windows extensions link because setup.py
 # builds them with `/openmp:llvm`.  Restated here for gate 5's reason: read out
@@ -197,7 +197,7 @@ def _build_module():
 
 
 def _shipped_variants() -> tuple[str, ...]:
-    """``build.py``'s deprecated ``momwire-eznec-<basis>`` copies."""
+    """``build.py``'s ``<launcher>-<basis>`` copies of the compiled launcher."""
     return _build_module().SHIPPED_VARIANTS
 
 
@@ -707,10 +707,10 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     default = default_out.read_bytes()
 
     # Keyed off the exe's OWN stem, so the marker's hyphen count is the exe's
-    # business and not this loop's: `momwire-eznec` -> `razor-nec5`, and a
+    # business and not this loop's: `momwire-nec5` -> `razor-2p`, and a
     # rename of the bundle does not silently reslice the basis.  Casefolded
     # for the same reason `basis_from_program_name` is — this loop has to read
-    # the name the way the exe reads it, or a `Momwire-Eznec-Razor-Nec5.exe`
+    # the name the way the exe reads it, or a `Momwire-Nec5-Razor-2p.exe`
     # that serves correctly is failed here for a casing the exe ignored.
     #
     # The ENGINE is excluded by name, not by luck: it sits in this folder

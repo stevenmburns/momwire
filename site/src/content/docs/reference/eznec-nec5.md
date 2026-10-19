@@ -11,13 +11,13 @@ that process.
 ## Setting it up
 
 1. Download
-   [`momwire-eznec-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-eznec-windows.zip)
+   [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip)
    from the latest release.
 2. Before extracting, right-click the zip, choose Properties, tick
    **Unblock** and click OK. That clears the download mark on every file
    inside at once.
 3. Extract it into **a folder of its own**, for example
-   `C:\momwire-eznec\` (the zip already contains a `momwire-eznec` folder).
+   `C:\momwire\` (the zip already contains a `momwire` folder).
    Not into EZNEC's own folders, and not over a previous release.
    **Keep the folder together**: the exe needs the `_internal` runtime
    beside it, and a lone copied-out `.exe` is the one way a correct
@@ -30,9 +30,27 @@ That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
 
+### Names changed in 0.80.0
+
+Earlier releases used names that said "eznec". The same zip serves SimNEC
+and 4nec2 too, so 0.80.0 dropped it. If an engine path points at an old
+name, change it to the new one:
+
+| Before 0.80.0 | From 0.80.0 |
+| --- | --- |
+| `momwire-eznec-windows.zip` | `momwire-windows.zip` |
+| `momwire-eznec-windows-win7.zip` | `momwire-windows-win7.zip` |
+| folder `momwire-eznec\` | folder `momwire\` |
+| `momwire-eznec-engine.exe` | `momwire-engine.exe` |
+| `momwire-eznec.exe` (removed) | `momwire-nec5.exe` |
+| `momwire-eznec-razor-2p.exe` (removed) | `momwire-nec5-razor-2p.exe` |
+| `momwire-eznec-razor-nec5.exe` (removed) | `momwire-nec5-razor-2p.exe` |
+
+The `momwire-nec5` and `momwire-nec42` launcher names are unchanged.
+
 ### Updating to a new release
 
-Delete the `momwire-eznec` folder entirely, then extract the new zip in its
+Delete the `momwire` folder entirely, then extract the new zip in its
 place. The path stays the same, so EZNEC's setting does not change.
 
 Never extract a new release over an old one. Extracting replaces the files
@@ -42,7 +60,7 @@ libraries.
 
 - If Windows says a file is in use while you delete the folder, that is the
   resident engine described below. Wait fifteen minutes for it to retire, or
-  end `momwire-eznec-engine.exe` in Task Manager.
+  end `momwire-engine.exe` in Task Manager.
 - Line 2 of every `NEC5.OUT` names the engine that answered, for example
   ` momwire 0.69.0 bspline avx2`. If it ends in `(stale: 0.66.0)`, the
   folder holds files from an older release: delete it and extract the
@@ -92,12 +110,7 @@ EZNEC's External NEC-4.2 slot:
 momwire-nec42.exe             the default — degree-2 B-spline (bs2)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
-The old names, deprecated — still shipped, still identical:
-momwire-eznec.exe             = momwire-nec5.exe
-momwire-eznec-razor-2p.exe    = momwire-nec5-razor-2p.exe
-momwire-eznec-razor-nec5.exe  = momwire-nec5-razor-2p.exe
-
-momwire-eznec-engine.exe      the compute engine the launchers run
+momwire-engine.exe            the compute engine the launchers run
 ```
 
 The name picks the deck dialect as well as the basis, so a `momwire-nec42`
@@ -143,13 +156,12 @@ engine logs an `ExtendedKernelDefault` advisory instead of refusing. On
 above-ground wires; the buried wires use the reduced kernel, and the advisory
 says so.
 
-**The `momwire-eznec` names are deprecated.** They are what earlier releases
-said to point EZNEC at, and they still ship and answer exactly as before —
-same engine, same warm server, same printout. An engine path typed once and
-forgotten keeps working. Point new setups at the `momwire-nec5` names, which
-also work in SimNEC.
+**The `momwire-eznec` launchers are gone** (0.80.0). They were what earlier
+releases said to point EZNEC at; point that path at the `momwire-nec5` name
+in the table [above](#names-changed-in-0800) instead, which answers
+identically and also works in SimNEC.
 
-Point EZNEC at a **launcher**, never at `momwire-eznec-engine.exe` — the
+Point EZNEC at a **launcher**, never at `momwire-engine.exe` — the
 engine answers correctly either way, but naming it directly gives up the
 warm start above for nothing.
 
@@ -159,10 +171,8 @@ with razor-blade path testing at NEC-5's two-point rule — the formulation
 NEC-5 itself uses.
 
 `razor-nec5` is the **deprecated spelling** of the same basis (#785/#794). It
-runs the same engine and answers identically, and `momwire-eznec-razor-nec5.exe`
-still ships because an EZNEC engine path is a string typed once and forgotten;
-dropping the name would break those installs silently. Point new setups at
-`momwire-nec5-razor-2p.exe`.
+runs the same engine and answers identically; the zip stopped shipping a
+launcher named for it in 0.80.0. Use `momwire-nec5-razor-2p.exe`.
 
 ### Reproduction is not accuracy
 
@@ -250,8 +260,7 @@ NEC-4.2 slot:  bspline  bspline-d1  hmatrix  arrayblock  sinusoidal
 
 The `momwire-nec5` names are also what
 [SimNEC's NEC-5 engine setting](/reference/portal-usage/#simnecs-nec-5-engine)
-needs, since SimNEC reads `nec5` in the path. A deprecated
-`momwire-eznec-<basis>.exe` copy still works in EZNEC, as it always did.
+needs, since SimNEC reads `nec5` in the path.
 
 The NEC-4.2 launchers carry `nec42` for the same reason: SimNEC recognises an
 engine by `nec42` in its name, as it does `nec5`, so `momwire-nec42.exe` is

@@ -1,5 +1,6 @@
 /*
- * momwire-eznec[-<basis>] -- the EZNEC drop-in engine at native launch speed.
+ * momwire-nec5[-<basis>] / momwire-nec42[-<basis>] -- the Windows drop-in's
+ * launcher, the engine at native launch speed.
  *
  * momwire#718 phase 3.  EZNEC Pro+ v7 launches its external NEC-5 console
  * engine once per calculation as `engine.exe <deck> <printout>`, and the
@@ -47,10 +48,10 @@
  * "as slow as today" and never "the engine is broken":
  *
  *   1. a warm daemon answers -- milliseconds;
- *   2. nobody listening -- spawn `momwire-eznec-engine --serve` under the
+ *   2. nobody listening -- spawn `momwire-engine --serve` under the
  *      lock and poll-connect while it pays the cold import once;
  *   3. the resident path fails ANYWHERE (spawn, timeout, socket death, an
- *      empty answer) -- run `momwire-eznec-engine` as a one-shot child,
+ *      empty answer) -- run `momwire-engine` as a one-shot child,
  *      which is correct at today's speed;
  *   4. even that fails -- write a printout carrying a named NEC ERROR line,
  *      and still exit 0.
@@ -170,10 +171,10 @@ typedef int lock_t;
 
 /* The one spawn target a deployed bundle has: there is no system Python on a
  * user's box, so the daemon is the bundle's own frozen exe (#718 D3).  The
- * `engine` segment is consumed by its own entry the way `client` is here, so
- * this plain name selects the default basis and `--basis` is the only thing
- * that moves it. */
-#define ENGINE_NAME "momwire-eznec-engine" EXE_SUFFIX
+ * name carries no basis marker, so it selects the default basis and
+ * `--basis` is the only thing that moves it.  `momwire-eznec-engine` until
+ * momwire#1583 (0.80.0). */
+#define ENGINE_NAME "momwire-engine" EXE_SUFFIX
 
 /* One warm server per formulation per install, and the idle policy is part
  * of that identity -- so the number below is not a tunable, it is a hash

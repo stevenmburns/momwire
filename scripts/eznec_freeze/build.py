@@ -1,15 +1,14 @@
-"""Build the EZNEC drop-in bundle: native launchers plus one frozen engine.
+"""Build the Windows drop-in bundle: native launchers plus one frozen engine.
 
 Run from the repo root, in an environment where momwire (this checkout) and
 pyinstaller are installed::
 
     python scripts/eznec_freeze/build.py
 
-Produces ``dist/momwire-eznec/`` containing the launchers EZNEC and SimNEC
-point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec42[-<basis>][.exe]``
-and the deprecated ``momwire-eznec[-<basis>][.exe]`` -- the single frozen
-``momwire-eznec-engine[.exe]`` they run, and that engine's ``_internal``
-runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
+Produces ``dist/momwire/`` containing the launchers EZNEC, SimNEC and 4nec2
+point at -- ``momwire-nec5[-<basis>][.exe]`` and ``momwire-nec42[-<basis>][.exe]``
+-- the single frozen ``momwire-engine[.exe]`` they run, and that engine's
+``_internal`` runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
 the engine needs its runtime beside it in turn.
 
 Two programs and not one, since momwire#718 phase 3.  The launcher is
@@ -40,18 +39,22 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CLIENT_SOURCE = HERE.parent / "eznec_client_c"
 
-# The bundle directory, and the name the native launcher is COMPILED as before
-# every other launcher is copied from it.  Since momwire#1295 phase 4 that
-# launcher name is a deprecated one (`DEPRECATED_SUCCESSORS`), but it stays the
-# compiled one: the zip, the workflow's `dist/momwire-eznec/...` paths and the
-# smoke's argument all spell it, and every launcher is the same bytes anyway.
-NAME = "momwire-eznec"
+# The bundle directory: the zip's one top-level folder, and the workflow's
+# `dist/momwire/...` paths.  `momwire-eznec` until momwire#1583 (0.80.0), when
+# the bundle stopped naming one host of the three it serves.
+NAME = "momwire"
 
-# The one frozen program, under the name its own entry point consumes
-# (`entry.py`'s ENGINE_SEGMENT, and the launcher's ENGINE_NAME).  PyInstaller
-# builds `dist/<engine name>/`; the directory is renamed to NAME below so the
-# bundle, the zip and the workflow keep the path they have always had.
-ENGINE_NAME = f"{NAME}-engine"
+# The one frozen program (the launcher's ENGINE_NAME, restated in smoke.py).
+# PyInstaller builds `dist/<engine name>/`; the directory is renamed to NAME
+# below.  `momwire-eznec-engine` until momwire#1583: its name carries no
+# basis marker, so the plain name selects the default and `--basis` is the
+# only thing that moves it.
+ENGINE_NAME = "momwire-engine"
+
+# The name the native launcher is COMPILED as before every other launcher is
+# copied from it -- the first NEC-5 name, and the smoke's argument.  Every
+# launcher is the same bytes, so which one is compiled is bookkeeping.
+LAUNCHER = "momwire-nec5"
 
 # The PRIMARY launcher names (momwire#1295 phase 4): one family per EZNEC
 # slot, named for the slot rather than for the host.  `momwire-nec5[-<basis>]`
@@ -83,37 +86,15 @@ NEC4_LAUNCHERS = {
     "momwire-nec42-sinusoidal": "the sinusoidal basis, point matched",
 }
 
-# The DEPRECATED names: the `momwire-eznec[-<basis>]` launchers every release
-# before the NEC-4.2 slot shipped (momwire#593), still shipped and still
-# answering exactly as they did.  Deprecated in the README and the docs ONLY,
-# never in behaviour: an EZNEC engine path is a string a user typed once and
-# forgot, and dropping or changing a name would break those installs
-# silently -- a launcher is ~31 KB, the cheapest possible way not to.
-#
-# No printout note says so, deliberately.  The launcher forwards a deck to a
-# warm server keyed by BASIS, not by name, so `momwire-eznec.exe` and
-# `momwire-nec5.exe` share one server and the engine cannot tell which name
-# launched it; the only channel that knows is the launcher, and teaching it to
-# say so would change a deprecated name's printout -- the opposite of
-# "answering exactly as they did" -- for a note EZNEC users never read.
-#
-# `SHIPPED_VARIANTS` are the bases copied as `momwire-eznec-<basis>` beside
-# the default `momwire-eznec` the launcher is COMPILED as (`NAME`); the smoke
-# reads this tuple to gate them.  TWO SPELLINGS OF ONE BASIS, not two bases
-# (momwire#817): `razor-2p` is the roster's long-term name and `razor-nec5`
-# its deprecated spelling (#785/#794); both resolve through
-# `basis_from_program_name` to the same engine and answer identically.
-SHIPPED_VARIANTS = ("razor-2p", "razor-nec5")
-
-# What each deprecated name now IS, for the README's table: the primary name
-# that answers identically.  Keyed by the SHIPPED_VARIANTS entry, so a variant
-# added without one fails the build here rather than shipping an unlabelled
-# row.
-DEPRECATED_SUCCESSORS = {
-    "": "momwire-nec5",
-    "razor-2p": "momwire-nec5-razor-2p",
-    "razor-nec5": "momwire-nec5-razor-2p",
-}
+# The bases copied as `<LAUNCHER>-<basis>` beside the compiled launcher,
+# derived from the NEC-5 table so the two cannot disagree; the smoke reads
+# this tuple to gate them (its gate 4).  The deprecated `momwire-eznec[-<basis>]`
+# launchers that used to be these copies were dropped in momwire#1583 (0.80.0).
+SHIPPED_VARIANTS = tuple(
+    stem.removeprefix(f"{LAUNCHER}-")
+    for stem in NEC5_LAUNCHERS
+    if stem.startswith(f"{LAUNCHER}-")
+)
 
 # The README's lists of bases a copy can name, per slot.  Restated rather
 # than read from `momwire.deck` because this script must not import the
@@ -180,16 +161,15 @@ def win7_prerequisites(ucrt_bundled: bool) -> str:
         "    Windows Update has it).\n"
         f"{ucrt}"
         "\n"
-        "On Windows 10 or 11, use the regular momwire-eznec-windows.zip instead.\n"
+        "On Windows 10 or 11, use the regular momwire-windows.zip instead.\n"
         "\n"
     )
 
 
 def launcher_stems() -> tuple[str, ...]:
-    """Every launcher the bundle ships, by file stem: the primary families
-    first, then the deprecated names.  The engine is not a launcher."""
-    deprecated = (NAME, *(f"{NAME}-{b}" for b in SHIPPED_VARIANTS))
-    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS, *deprecated)
+    """Every launcher the bundle ships, by file stem: the NEC-5 family, then
+    the NEC-4.2 one.  The engine is not a launcher."""
+    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS)
 
 
 # The version this freeze bakes into the bundle (momwire#1277), as a top-level
@@ -334,20 +314,12 @@ def launcher_table(suffix: str) -> str:
     cannot ship without a row or get a row without shipping.  ``suffix`` is
     the executable suffix of the OS the bundle was built on.
     """
-    deprecated = {NAME: DEPRECATED_SUCCESSORS[""]}
-    deprecated.update(
-        {f"{NAME}-{b}": DEPRECATED_SUCCESSORS[b] for b in SHIPPED_VARIANTS}
-    )
     blocks = (
         (
-            "EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:",
+            "NEC-5 (EZNEC's External NEC-5, SimNEC's NEC-5, 4nec2's NEC-5):",
             NEC5_LAUNCHERS,
         ),
-        ("EZNEC's External NEC-4.2 slot:", NEC4_LAUNCHERS),
-        (
-            "The old names, DEPRECATED - still shipped, still identical:",
-            {n: f"= {successor}{suffix}" for n, successor in deprecated.items()},
-        ),
+        ("NEC-4.2 (EZNEC's External NEC-4.2):", NEC4_LAUNCHERS),
         (
             "And the engine itself, which is not a launcher:",
             {ENGINE_NAME: "the compute engine the launchers run"},
@@ -394,27 +366,44 @@ def readme_text(
     nec4_known = _wrap_bases(NEC4_KNOWN_BASES, "  NEC-4.2 slot:  ")
     win7 = win7_prerequisites(ucrt_bundled) if target == "win7" else ""
     return (
-        f"momwire-eznec {release} — momwire standing in for the external\n"
-        "NEC-5 and NEC-4.2 engines EZNEC Pro+ v7 launches, and for SimNEC's\n"
-        "NEC-5 engine.\n"
+        f"momwire {release} — momwire as a NEC-5 or NEC-4.2 engine for the\n"
+        "antenna programs that run an external one: EZNEC Pro+ v7 (External\n"
+        "NEC-5 and External NEC-4.2), SimNEC (its NEC-5 engine) and 4nec2\n"
+        "(its NEC-5 package).  The program writes a deck, runs the engine,\n"
+        "and reads back the printout; momwire answers in its place.\n"
         "\n"
         f"{signing_note}\n"
         "\n"
         f"{win7}"
-        "INSTALL INTO A FOLDER OF ITS OWN.  The zip holds a momwire-eznec\\\n"
-        "folder; extract it somewhere dedicated, e.g. C:\\momwire-eznec\\ -\n"
-        "NOT into EZNEC's Docs folder, and NOT over a previous release.\n"
+        "NAMES CHANGED IN 0.80.0.  Earlier releases used names that said\n"
+        '"eznec".  If your program\'s engine path points at an old name,\n'
+        "change it to the new one:\n"
+        "\n"
+        "  zip     momwire-eznec-windows.zip       -> momwire-windows.zip\n"
+        "          momwire-eznec-windows-win7.zip  -> momwire-windows-win7.zip\n"
+        "  folder  momwire-eznec\\                  -> momwire\\\n"
+        "  engine  momwire-eznec-engine.exe        -> momwire-engine.exe\n"
+        "  REMOVED momwire-eznec.exe               -> use momwire-nec5.exe\n"
+        "  REMOVED momwire-eznec-razor-2p.exe      -> use momwire-nec5-razor-2p.exe\n"
+        "  REMOVED momwire-eznec-razor-nec5.exe    -> use momwire-nec5-razor-2p.exe\n"
+        "\n"
+        "The momwire-nec5 and momwire-nec42 launcher names are unchanged.\n"
+        "\n"
+        "INSTALL INTO A FOLDER OF ITS OWN.  The zip holds a momwire\\ folder;\n"
+        "extract it somewhere dedicated, e.g. C:\\momwire\\ - NOT into your\n"
+        "antenna program's own folder, and NOT over a previous release.  (For\n"
+        "4nec2, see INSTALLING FOR 4NEC2 below, which is the exception.)\n"
         "\n"
         "FOR EVERY NEW RELEASE: delete that folder ENTIRELY, extract the new\n"
-        "zip in its place, and leave EZNEC's engine path unchanged.  Never\n"
-        "extract over an old install: that leaves the old release's files\n"
+        "zip in its place, and leave your program's engine path unchanged.\n"
+        "Never extract over an old install: that leaves the old release's files\n"
         "behind (libraries in _internal among them), mixed in with the new\n"
         "ones.  If it happens anyway, line 2 of the printout ends in\n"
         "'(stale: <old version>)' - delete the folder and extract again.\n"
         "\n"
         "If Windows says a file is in use while you delete the folder, that\n"
         "is the resident engine (see WHY IT IS FAST below).  Wait 15 minutes\n"
-        "for it to retire, or end momwire-eznec-engine.exe in Task Manager.\n"
+        "for it to retire, or end momwire-engine.exe in Task Manager.\n"
         "\n"
         "BEFORE EXTRACTING: right-click the downloaded zip, Properties, tick\n"
         '"Unblock", OK - then extract.  That clears the mark-of-the-web on every\n'
@@ -422,8 +411,9 @@ def readme_text(
         "and the files keep their original dates instead of the download's.\n"
         "(Thanks to Dan AC6LA for the tip.)\n"
         "\n"
-        'FIRST RUN (if you extracted first): Windows will show "Windows protected your PC", and you\n'
-        'have to click "More info" and then "Run anyway".  Nothing is wrong\n'
+        'FIRST RUN (if you did not "unblock" as described above):\n'
+        'Windows will show "Windows protected your PC", and you\n'
+        'have to click "More info" and then "Run anyway". Nothing is wrong\n'
         "with the download.  That screen is SmartScreen saying this file has no\n"
         'REPUTATION yet — click "More info" and it names the publisher, because\n'
         "the signature above is valid and Windows is reading it.  Reputation is\n"
@@ -431,39 +421,31 @@ def readme_text(
         'each release; the certificate that would skip the wait outright ("EV")\n'
         "is not one the signing service used here issues.\n"
         "\n"
-        "In EZNEC, choose the external engine you want - External NEC-5 or\n"
-        "External NEC-4.2 - and point its engine path at a LAUNCHER from the\n"
-        "matching family below, in this folder.  The name picks the deck\n"
-        "dialect, so a momwire-nec42 name belongs in the NEC-4.2 slot and a\n"
-        "momwire-nec5 name in the NEC-5 slot.  Keep the folder together: a\n"
-        "launcher runs the engine beside it, and the engine needs its\n"
-        "_internal runtime beside IT.\n"
+        "Point your program's engine setting at a LAUNCHER from the matching\n"
+        "family below, in this folder.  The name picks the deck dialect: a\n"
+        "momwire-nec5 name answers a NEC-5 engine setting and a momwire-nec42\n"
+        "name a NEC-4.2 one.  In EZNEC that means choosing External NEC-5 or\n"
+        "External NEC-4.2 and setting its engine path; SimNEC and 4nec2 are\n"
+        "below.  Keep the folder together: a launcher runs the engine beside\n"
+        "it, and the engine needs its _internal runtime beside IT.\n"
         "\n"
         f"{launcher_table(suffix)}\n"
         "\n"
-        "Point EZNEC at a launcher, never at momwire-eznec-engine: the engine\n"
+        "Point your program at a launcher, never at momwire-engine: the engine\n"
         "is what the launchers run, and naming it directly gives up the warm\n"
         "start below for nothing.\n"
-        "\n"
-        "THE OLD NAMES.  Earlier releases told you to point EZNEC's NEC-5\n"
-        "slot at the momwire-eznec names.  Those names are DEPRECATED; they\n"
-        "still ship and answer exactly as before: momwire-eznec.exe is\n"
-        "momwire-nec5.exe, and momwire-eznec-razor-2p.exe and\n"
-        "momwire-eznec-razor-nec5.exe are both momwire-nec5-razor-2p.exe.  An\n"
-        "engine path you typed once and forgot keeps working.  New setups\n"
-        "should use the momwire-nec5 names, which work in SimNEC as well.\n"
         "\n"
         "WHY IT IS FAST.  A launcher keeps a warm engine RESIDENT — started on\n"
         "the first calculation, retired after 15 idle minutes — so every launch\n"
         "after the first costs milliseconds instead of the engine's own\n"
-        "start-up.  EZNEC launches the engine once per frequency point, so that\n"
-        "is most of a sweep.  If anything about the resident path fails, the\n"
+        "start-up.  A program launches the engine once per frequency point, so\n"
+        "that is most of a sweep.  If anything about the resident path fails, the\n"
         "launcher runs the engine directly instead: the same answer, at the old\n"
         "speed.\n"
         "\n"
-        "THE FIRST CALCULATION IS THE SLOW ONE, and EZNEC shows nothing while\n"
-        "it happens: several seconds, once, to start that engine.  It is not a\n"
-        "hang — wait for it and every calculation after it is the fast one.\n"
+        "THE FIRST CALCULATION IS THE SLOW ONE, and your program shows nothing\n"
+        "while it happens: several seconds, once, to start that engine.  It is\n"
+        "not a hang — wait for it and every calculation after it is the fast one.\n"
         "You meet it again after the engine retires, so a pause for thought\n"
         "longer than 15 minutes buys one more slow calculation.\n"
         "\n"
@@ -484,12 +466,11 @@ def readme_text(
         "\n"
         "SIMNEC.  Point SimNEC's NEC-5 engine setting at momwire-nec5.exe or\n"
         "momwire-nec5-razor-2p.exe.  SimNEC decides which deck syntax to write\n"
-        "from the engine's NAME, which must contain nec5, so the old\n"
-        "momwire-eznec names will not do there.  Same engine, same warm start;\n"
-        "a path with no spaces in it is safest.  SimNEC recognises a NEC-4.2\n"
-        "engine by nec42 in its name, which is why the NEC-4.2 launchers\n"
-        "carry it; a copy named with just nec4 still answers the NEC-4.2\n"
-        "slot in EZNEC.\n"
+        "from the engine's NAME, which must contain nec5, as both of these\n"
+        "do.  Same engine, same warm start; a path with no spaces in it is\n"
+        "safest.  SimNEC recognises a NEC-4.2 engine by nec42 in its name,\n"
+        "which is why the NEC-4.2 launchers carry it; a copy named with just\n"
+        "nec4 still answers the NEC-4.2 slot in EZNEC.\n"
         "\n"
         "4NEC2.  The momwire-nec5 launchers also answer 4nec2's NEC-5 package.\n"
         "4nec2 runs its engine with the two file names on its input\n"
@@ -502,7 +483,7 @@ def readme_text(
         "INSTALLING FOR 4NEC2.  This assumes 4nec2's NEC-5 package (the\n"
         "NEC5CL_x13 setup with Edit_inp.exe and Edit_out.exe) is installed\n"
         "and working; install it first if it is not.  Then:\n"
-        "  1. Copy the WHOLE CONTENTS of this momwire-eznec folder - every\n"
+        "  1. Copy the WHOLE CONTENTS of this momwire folder - every\n"
         "     .exe and the _internal folder, not the .zip itself - into\n"
         "     4nec2's exe folder (e.g. C:\\4nec2\\exe).  They share no names\n"
         "     with 4nec2's own files.  A launcher copied there ALONE does not\n"
@@ -689,10 +670,9 @@ def main() -> int:
     if result.returncode != 0:
         return result.returncode
 
-    # PyInstaller named the directory after the program; the BUNDLE keeps the
-    # name it has always had, so the zip layout, the workflow's
-    # `dist/momwire-eznec/...` paths and every published instruction survive
-    # the flip untouched.  Renaming the outer directory is safe because a
+    # PyInstaller named the directory after the program; the BUNDLE is named
+    # NAME, which is the zip's top-level folder and the workflow's
+    # `dist/momwire/...` paths.  Renaming the outer directory is safe because a
     # one-dir exe finds `_internal` relative to ITSELF, never to a recorded
     # path.
     built = Path("dist") / ENGINE_NAME
@@ -706,9 +686,10 @@ def main() -> int:
         print(f"ERROR: no {ENGINE_NAME} executable in {bundle}", file=sys.stderr)
         return 1
 
-    # The launcher, compiled into the bundle under the DEFAULT EZNEC-facing
-    # name.  Its suffix is the engine's: one OS, one spelling of "executable".
-    exe = bundle / f"{NAME}{engine.suffix}"
+    # The launcher, compiled into the bundle under LAUNCHER, the default
+    # NEC-5 name.  Its suffix is the engine's: one OS, one spelling of
+    # "executable".
+    exe = bundle / f"{LAUNCHER}{engine.suffix}"
     returncode = _build_client(exe)
     if returncode != 0:
         print(
@@ -740,10 +721,10 @@ def main() -> int:
     # copies, and is therefore a different and larger number by design. The
     # two do not disagree and must not be made to agree: the launcher
     # variants are byte-identical copies of `exe` (verified on the v0.44.0
-    # release — momwire-eznec.exe and momwire-eznec-razor-nec5.exe share
-    # SHA256 111B8A48…, 192,768 bytes), so there are two DISTINCT signed
-    # artifacts across EIGHT shipped files since momwire#1295 phase 4: seven
-    # launchers (`launcher_stems()`) plus the engine. The distinct
+    # release — two launcher names shared SHA256 111B8A48…, 192,768 bytes),
+    # so there are two DISTINCT signed artifacts across FIVE shipped files
+    # since momwire#1583 dropped the three deprecated names: four launchers
+    # (`launcher_stems()`) plus the engine. The distinct
     # count stays 2 however many variants ship, which is the whole point of
     # copying a signed binary rather than signing each one.
     signed = signer.sign_if_configured([engine, exe])
@@ -771,12 +752,9 @@ def main() -> int:
     # through Compress-Archive and Explorer, and a link that arrives as a
     # 0-byte stub is a broken engine that looks like a present one.
     variants = []
-    for basis in SHIPPED_VARIANTS:
-        variant = exe.with_name(f"{NAME}-{basis}{exe.suffix}")
-        shutil.copy2(exe, variant)
-        variants.append(variant)
-        print(f"variant: {variant.name}")
-    for stem in (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS):
+    for stem in launcher_stems():
+        if stem == LAUNCHER:
+            continue
         variant = exe.with_name(f"{stem}{exe.suffix}")
         shutil.copy2(exe, variant)
         variants.append(variant)
@@ -794,7 +772,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
-        # The engine and the default launcher were signed directly; the
+        # The engine and the compiled launcher were signed directly; the
         # variants are the copies just asserted. FILES, not distinct
         # binaries — this counts the far side of the variant copy, where
         # sign.py's gates counted the near side. See the note at the

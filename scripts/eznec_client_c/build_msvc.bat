@@ -22,7 +22,7 @@ setlocal enabledelayedexpansion
 
 set "HERE=%~dp0"
 set "OUT=%~1"
-if "%OUT%"=="" set "OUT=momwire-eznec.exe"
+if "%OUT%"=="" set "OUT=momwire-nec5.exe"
 if "%PYTHON%"=="" set "PYTHON=python"
 
 set "VERSION="

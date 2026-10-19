@@ -1,19 +1,22 @@
 name: eznec-dropin
 
-# Build the packaged Windows bundle for EZNEC's external-engine slot: the
-# native launchers EZNEC and SimNEC point at (momwire-nec5[-<basis>].exe,
-# momwire-nec42[-<basis>].exe and the deprecated momwire-eznec[-<basis>].exe:
-# one compiled client copied per name, build.py's launcher_stems()) plus the ONE frozen engine they run
-# (momwire-eznec-engine.exe — momwire.eznec under PyInstaller, one-dir; the
-# one-file form is disqualified, it self-extracts on every launch and EZNEC
-# launches once per frequency point, sitting-4 measured 17 s vs 1.3 s).
+# Build the packaged Windows bundle for the external-engine slots of EZNEC,
+# SimNEC and 4nec2: the native launchers they point at
+# (momwire-nec5[-<basis>].exe and momwire-nec42[-<basis>].exe: one compiled
+# client copied per name, build.py's launcher_stems()) plus the ONE frozen
+# engine they run (momwire-engine.exe — momwire.eznec under PyInstaller,
+# one-dir; the one-file form is disqualified, it self-extracts on every
+# launch and EZNEC launches once per frequency point, sitting-4 measured 17 s
+# vs 1.3 s).
 # Smoke-gated byte-for-byte against the unfrozen module — including that the
 # launcher really keeps the engine warm — zipped, and attached to the GitHub
 # Release on tags.
 #
-# The zip keeps a version-less name (momwire-eznec-windows.zip) so
-# .../releases/latest/download/momwire-eznec-windows.zip is a stable link —
-# the site's reference/eznec-nec5 page points there.
+# The zip keeps a version-less name (momwire-windows.zip) so
+# .../releases/latest/download/momwire-windows.zip is a stable link —
+# the site's reference/eznec-nec5 page points there.  It was
+# momwire-eznec-windows.zip, with a momwire-eznec folder, until momwire#1583
+# (0.80.0).
 #
 # Triggers mirror wheels.yml: push to main is the post-merge canary (freeze
 # breakage is Windows/PyInstaller-specific, invisible to per-PR Linux CI),
@@ -299,14 +302,14 @@ jobs:
       # on Linux with sh-script engine shims, which cannot run here, so the
       # smoke's residency gate (two launches, one spawned daemon) is what says
       # the fast path works on the OS it ships to.
-      - run: python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec.exe
+      - run: python scripts/eznec_freeze/smoke.py dist/momwire/momwire-nec5.exe
       # The ONLY Windows 7 check before a user runs it: there is no Win7
       # runner, so the smoke above proves the freeze, not Win7. Fails on any
       # import of an API Windows 7 SP1 lacks outside the allow-list. Its
       # function list is curated, not exhaustive -- see the script.
       - name: Windows 7 import gate (win7)
         if: matrix.target == 'win7'
-        run: python scripts/eznec_freeze/scan_win7_imports.py dist/momwire-eznec
+        run: python scripts/eznec_freeze/scan_win7_imports.py dist/momwire
       # One name, computed once, used by the zip, the upload, and (on tags)
       # the release job's download. A tag keeps the canonical name the
       # release job asks for by name; anything else is a rehearsal build and
@@ -320,7 +323,7 @@ jobs:
       # repo is public, so run artifacts are downloadable by anyone -- the
       # name is the only thing standing between a passer-by and a
       # self-signed binary that looks official.
-      # The canonical literal `momwire-eznec-windows` also appears in the
+      # The canonical literal `momwire-windows` also appears in the
       # release job below (download name + files:) — deliberately NOT plumbed
       # through a job output: tests/test_release_notes.py pins the release
       # job's literal as the public download contract, so the three sites
@@ -330,20 +333,20 @@ jobs:
       # ON a tag ref is a signing test, not a release build, and must not
       # produce release-look-alike bytes (#711 retro-review).
       #
-      # The Win7 leg's canonical name is momwire-eznec-windows-win7, and its
+      # The Win7 leg's canonical name is momwire-windows-win7, and its
       # rehearsal names carry the same -win7 infix, so neither leg's artifact
       # can be mistaken for the other's.
       - name: Name the bundle
         shell: pwsh
         run: |
-          $stem = if ($env:MOMWIRE_BUNDLE_TARGET -eq 'win7') { 'momwire-eznec-windows-win7' } else { 'momwire-eznec-windows' }
+          $stem = if ($env:MOMWIRE_BUNDLE_TARGET -eq 'win7') { 'momwire-windows-win7' } else { 'momwire-windows' }
           $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { $stem }
                   elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { "$stem-SIGNTEST" }
                   else { "$stem-SELFSIGNED-rehearsal" }
           "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Zip the bundle
         shell: pwsh
-        run: Compress-Archive -Path dist/momwire-eznec -DestinationPath "$env:BUNDLE.zip"
+        run: Compress-Archive -Path dist/momwire -DestinationPath "$env:BUNDLE.zip"
       # Rehearsal bundles expire in a week: they exist to be fetched off a
       # test run while that run is topical, not to accumulate a 90-day shelf
       # of self-signed executables.
@@ -422,7 +425,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: momwire-eznec-windows
+          name: momwire-windows
       - uses: softprops/action-gh-release@v3
         with:
           # NO generate_release_notes here, and that asymmetry is the point:
@@ -443,7 +446,7 @@ jobs:
           #   this job first -> it creates the release bodyless; wheels then
           #                    updates, and the same pre-pend mechanism runs
           #                    against an EMPTY body, which is just the notes.
-          files: momwire-eznec-windows.zip
+          files: momwire-windows.zip
       # The Win7 bundle (momwire#1456) is best-effort on a release, and comes
       # AFTER the standard zip is attached so that nothing on this path can
       # hold that zip back: attached when its leg is green, skipped (the step
@@ -452,10 +455,10 @@ jobs:
         id: win7
         continue-on-error: true
         with:
-          name: momwire-eznec-windows-win7
+          name: momwire-windows-win7
       - uses: softprops/action-gh-release@v3
         if: steps.win7.outcome == 'success'
         continue-on-error: true
         with:
-          files: momwire-eznec-windows-win7.zip
+          files: momwire-windows-win7.zip
           fail_on_unmatched_files: true

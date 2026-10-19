@@ -40,7 +40,7 @@
 # carrying Microsoft's app-local UCRT, every binary through the freeze's
 # Windows 7 import gate. Zipped as momwire-nec5-windows-x64.zip and attached
 # to the release on a pushed tag (`release-windows`), as a PREVIEW;
-# momwire-eznec-windows.zip is untouched.
+# momwire-windows.zip is untouched.
 #
 # `macos-nopython` (momwire#1559): the no-Python builds under Apple clang on
 # macos-15 arm64, razor-2p and bs2, one variant each (`legacy`, what
