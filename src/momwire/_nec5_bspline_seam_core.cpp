@@ -196,11 +196,10 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
                 for (uint8_t v : fr->basis.below_wire)
                     if (!v) return decline("bspline-buried-mixed");
             } else {
-                // a two-radius node (antennaknobs plan U5): not yet. A node
-                // gap on a crossing node keeps the junction's KCL row
-                // (`build_basis`' `gap_crossing`, momwire#1282 / #1569).
-                for (double r : fr->radii)
-                    if (r != fr->radii[0]) return decline("bspline-buried-two-radius");
+                // a two-radius node (antennaknobs plan U5) and a node gap on
+                // a crossing node keep the junction's KCL row (`build_basis`'
+                // `gap_crossing`, momwire#1282 / #1569); the two-radius
+                // blocks are `crossing_serve`'s
             }
         }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);

@@ -576,6 +576,13 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
     {
         bool any_below = false;
         for (uint8_t v : b.below_wire) any_below = any_below || v != 0;
+        // a TWO-RADIUS crossing deck (`_two_radius_crossing`, antennaknobs
+        // plan U5) closes every crossing junction with its KCL row
+        bool spread = false;
+        for (double r : radii) spread = spread || r != radii[0];
+        if (has_ground && any_below && spread)
+            for (int64_t j : b.crossing)
+                if (grounded_junction[static_cast<size_t>(j)]) b.gap_crossing[static_cast<size_t>(j)] = true;
         if (has_ground && any_below && !gap_members.empty())
             for (int64_t j : b.crossing) {
                 if (!grounded_junction[static_cast<size_t>(j)]) continue;

@@ -22,15 +22,18 @@ struct CrossingStages {
     std::vector<cdouble> t_main, t_ab, completions;
 };
 
-// `compute_Z_operator_buried`'s crossing branch on a ONE-radius deck: the
+// `compute_Z_operator_buried`'s crossing branch: on a one-radius deck the
 // cross block `t` (above rows x below columns), `Z -= t; Z -= t.T`, then the
-// self completions accumulated into Z. `a_idx` / `b_idx` the above / below
-// segments. Throws FrontNotPorted for what is not ported (a far block the
+// self completions accumulated into Z; at a TWO-RADIUS node (`a_below` > 0,
+// antennaknobs plan U5) the two blocks at their radii, `Z -= t_above; Z -=
+// t_below.T`, and the two-radius completions, `a_wire` then the smaller
+// radius (the axes'). `a_idx` / `b_idx` the above / below segments. Throws FrontNotPorted for what is not ported (a far block the
 // split factors by ACA).
 void crossing_serve(std::vector<cdouble> &Z, const Geometry &g, const Basis &b, double a_wire,
                     const BuriedMedium &bm, double ground_z, double omega, double mu, double eps,
                     const std::vector<int64_t> &a_idx, const std::vector<int64_t> &b_idx,
-                    const nec5::NumpyLinalg &np, CrossingStages *stages = nullptr);
+                    const nec5::NumpyLinalg &np, CrossingStages *stages = nullptr,
+                    double a_above = 0.0, double a_below = 0.0);
 
 }  // namespace bspline
 }  // namespace mw

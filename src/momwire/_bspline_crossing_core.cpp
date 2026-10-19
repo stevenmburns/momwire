@@ -376,6 +376,7 @@ std::array<cx::CSR, 4> row_weights_of(const cx::Axis &ax, const std::vector<int6
 // One direct spec: (iA, iB) node subsets of the two axes.
 struct Spec {
     std::vector<int64_t> iA, iB;
+    bool coarse = false;  // a small far block, on the coarse axes
 };
 
 // `_sandwich_dense(A, B, iA, iB, K, k2sq, out=t)`: the left products and the
@@ -650,13 +651,17 @@ void far_block(const nec5::NumpyLinalg &np, const cx::Axis &A, const cx::Axis &B
 
 // `_main_split(ctx, a_idx, b_idx, A, B, ...)` without the restriction: the
 // partition, the direct groups through one memo, c1 * t_main.
-std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis &B, const std::vector<int64_t> &a_idx,
-                           const std::vector<int64_t> &b_idx, cx::BlockEval &be, double gz, double k_p, cd c1,
-                           double a_wire, const nec5::NumpyLinalg &np) {
+// `Ac` / `Bc` are the coarse axes (`axis_data(coarse=True)`): the dense ones
+// at one radius, rebuilt at the block's radius at a two-radius node.
+std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis &B, const cx::Axis &Ac,
+                           const cx::Axis &Bc, const std::vector<int64_t> &a_idx, const std::vector<int64_t> &b_idx,
+                           cx::BlockEval &be, double gz, double k_p, cd c1, double a_wire,
+                           const nec5::NumpyLinalg &np) {
     const std::vector<Cluster> TA = segment_tree(g, a_idx), TB = segment_tree(g, b_idx);
     std::vector<std::pair<int, int>> far, near;
     block_tree(TA, TB, far, near);
     const auto runA = runs_of(A), runB = runs_of(B);
+    const auto runAc = runs_of(Ac), runBc = runs_of(Bc);
     auto segs_of = [](const Cluster &c, const std::vector<int64_t> &idx) {
         std::vector<int64_t> s;
         for (int64_t i : c.idx) s.push_back(idx[static_cast<size_t>(i)]);
@@ -671,8 +676,9 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
     // the far blocks ride the coarse axes, the same sampling as the dense
     // ones at these knobs (`axis_data(coarse=True, share_from=)`)
     for (const auto &pr : far) {
-        Spec sp{nodes_of(A, runA, segs_of(TA[static_cast<size_t>(pr.first)], a_idx)),
-                nodes_of(B, runB, segs_of(TB[static_cast<size_t>(pr.second)], b_idx))};
+        Spec sp{nodes_of(Ac, runAc, segs_of(TA[static_cast<size_t>(pr.first)], a_idx)),
+                nodes_of(Bc, runBc, segs_of(TB[static_cast<size_t>(pr.second)], b_idx))};
+        sp.coarse = true;
         if (sp.iA.empty() || sp.iB.empty()) continue;
         const double na = static_cast<double>(sp.iA.size()), nb = static_cast<double>(sp.iB.size());
         if (na * nb > ACA_COST_GUARD * (na + nb))
@@ -685,11 +691,12 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
         std::vector<std::vector<double>> keep;
         std::vector<ni_eval::NodePair> pairs;
         for (const Spec &sp : direct) {
+            const cx::Axis &SA = sp.coarse ? Ac : A, &SB = sp.coarse ? Bc : B;
             std::vector<double> pa, pb;
             for (int64_t i : sp.iA)
-                for (int q = 0; q < 3; q++) pa.push_back(A.nodes[3 * static_cast<size_t>(i) + q] - (q == 2 ? gz : 0.0));
+                for (int q = 0; q < 3; q++) pa.push_back(SA.nodes[3 * static_cast<size_t>(i) + q] - (q == 2 ? gz : 0.0));
             for (int64_t i : sp.iB)
-                for (int q = 0; q < 3; q++) pb.push_back(B.nodes[3 * static_cast<size_t>(i) + q] - (q == 2 ? gz : 0.0));
+                for (int q = 0; q < 3; q++) pb.push_back(SB.nodes[3 * static_cast<size_t>(i) + q] - (q == 2 ? gz : 0.0));
             keep.push_back(std::move(pa));
             keep.push_back(std::move(pb));
         }
@@ -715,10 +722,11 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
         std::vector<double> re, z, zp;
         for (size_t k = start; k < stop; k++) {
             const Spec &sp = direct[k];
+            const cx::Axis &SA = sp.coarse ? Ac : A, &SB = sp.coarse ? Bc : B;
             for (int64_t ia : sp.iA)
                 for (int64_t ib : sp.iB) {
-                    const double *pa = &A.nodes[3 * static_cast<size_t>(ia)];
-                    const double *pb = &B.nodes[3 * static_cast<size_t>(ib)];
+                    const double *pa = &SA.nodes[3 * static_cast<size_t>(ia)];
+                    const double *pb = &SB.nodes[3 * static_cast<size_t>(ib)];
                     const double rho = std::hypot(pa[0] - pb[0], pa[1] - pb[1]);
                     re.push_back(std::hypot(rho, a_wire));
                     z.push_back(pa[2] - gz);
@@ -734,7 +742,7 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
             KX[j] = cd(k2sq * KV[j].real() + KD[j].real(), k2sq * KV[j].imag() + KD[j].imag());
         size_t off = 0;
         for (size_t k = start; k < stop; k++) {
-            sandwich(A, B, direct[k], &K[off], KU, KX, KW, KV, t);
+            sandwich(direct[k].coarse ? Ac : A, direct[k].coarse ? Bc : B, direct[k], &K[off], KU, KX, KW, KV, t);
             off += direct[k].iA.size() * direct[k].iB.size();
         }
         start = stop;
@@ -742,7 +750,7 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
     // the large far blocks: coarse axes, low-rank ACA per kernel
     if (!far_aca.empty() && (np.ddot == nullptr || np.zdotc_sub == nullptr))
         throw FrontNotPorted("no BLAS for the crossing ACA");
-    for (const Spec &sp : far_aca) far_block(np, A, B, sp, be, gz, a_wire, k2sq, t);
+    for (const Spec &sp : far_aca) far_block(np, Ac, Bc, sp, be, gz, a_wire, k2sq, t);
     for (cd &v : t) v = np_cmul(c1, v);
     return t;
 }
@@ -852,9 +860,13 @@ std::vector<cd> ends_to_nodes(cd mjk, double a2, const std::vector<double> &obs,
 
 // `_bnd_and_corner(ax, k, a_wire, gz, mirror)` and `_CompletionScatter.add`
 // for one family pass, into E_r / E_c.
+// `a_col`: the radius of the column term (the family's line observers), `a_wire`
+// the row term's and the corner's (point tests at the node): one radius but at
+// a two-radius node (`self_completions_two_radius`, whose second
+// `_bnd_and_corner` call is the column term's alone).
 void bnd_and_corner(const cx::Axis &ax, cd k, double a_wire, double gz, bool mirror, cd beta,
                     const nec5::NumpyLinalg &np, const std::vector<int64_t> &posL, const std::vector<int64_t> &Lu,
-                    std::vector<cd> &E_r, std::vector<cd> &E_c) {
+                    std::vector<cd> &E_r, std::vector<cd> &E_c, double a_col = -1.0) {
     const int64_t n = ax.n_basis;
     const int64_t E = static_cast<int64_t>(ax.ends.size());
     if (E == 0) return;
@@ -893,7 +905,8 @@ void bnd_and_corner(const cx::Axis &ax, cd k, double a_wire, double gz, bool mir
             Gee[static_cast<size_t>(i * E + j)] = g_of_r(mjk, std::sqrt(a2 + ((d0 * d0 + d2 * d2) + d1 * d1)));
         }
     const std::vector<cd> Gt = ends_to_nodes(mjk, a2, ptE, src, Fsp);  // (E, n)
-    const std::vector<cd> Gs = ends_to_nodes(mjk, a2, pe, pts, Fsp);   // (E, n)
+    const std::vector<cd> Gs =
+        ends_to_nodes(mjk, a_col < 0.0 ? a2 : a_col * a_col, pe, pts, Fsp);  // (E, n)
     using nec5::Op;
     // row_term = -(sf.T @ Gt) (L, n); col_term = -(Gs.T @ sf) (n, L);
     // corner = (sf.T @ Gee) @ sf (L, L)
@@ -936,8 +949,12 @@ void bnd_and_corner(const cx::Axis &ax, cd k, double a_wire, double gz, bool mir
 }
 
 // `self_completions(ctx, ax_b, ax_a, out=Z)`
+// At a two-radius node (`a_below` > 0): `self_completions_two_radius`, every
+// row term and corner at `a_below`, each family's column term at its own
+// radius (`a_above` for the above family).
 void self_completions(std::vector<cd> &dest, const cx::Axis &B, const cx::Axis &A, const BuriedMedium &bm,
-                      double a_wire, double gz, double omega, double eps0, const nec5::NumpyLinalg &np) {
+                      double a_wire, double gz, double omega, double eps0, const nec5::NumpyLinalg &np,
+                      double a_above = 0.0, double a_below = 0.0) {
     const int64_t n = B.n_basis;
     std::set<int64_t> lu;
     for (const cx::Axis *ax : {&B, &A})
@@ -963,8 +980,16 @@ void self_completions(std::vector<cd> &dest, const cx::Axis &B, const cx::Axis &
         const cd beta_img = py_quot(wgt, den);
         // the medium's own k (k_p a Python float: its product with -1j)
         const cd kk = fam == 0 ? k : cd(bm.k_p, 0.0);
-        bnd_and_corner(ax, kk, a_wire, gz, false, beta_dir, np, posL, Lu, E_r, E_c);
-        bnd_and_corner(ax, kk, a_wire, gz, true, cd(-beta_img.real(), -beta_img.imag()), np, posL, Lu, E_r, E_c);
+        if (a_below > 0.0) {
+            const double a_line = fam == 0 ? a_below : a_above;
+            const double a_col = a_line != a_below ? a_line : -1.0;
+            bnd_and_corner(ax, kk, a_below, gz, false, beta_dir, np, posL, Lu, E_r, E_c, a_col);
+            bnd_and_corner(ax, kk, a_below, gz, true, cd(-beta_img.real(), -beta_img.imag()), np, posL, Lu, E_r,
+                           E_c, a_col);
+        } else {
+            bnd_and_corner(ax, kk, a_wire, gz, false, beta_dir, np, posL, Lu, E_r, E_c);
+            bnd_and_corner(ax, kk, a_wire, gz, true, cd(-beta_img.real(), -beta_img.imag()), np, posL, Lu, E_r, E_c);
+        }
     }
     // `flush`: E_c[L, :] = 0; dest[L, :] += E_r; dest[:, L] += E_c
     for (int64_t i = 0; i < nL; i++)
@@ -985,19 +1010,72 @@ void self_completions(std::vector<cd> &dest, const cx::Axis &B, const cx::Axis &
 
 void crossing_serve(std::vector<cdouble> &Z, const Geometry &g, const Basis &b, double a_wire, const BuriedMedium &bm,
                     double ground_z, double omega, double mu, double eps, const std::vector<int64_t> &a_idx,
-                    const std::vector<int64_t> &b_idx, const nec5::NumpyLinalg &np, CrossingStages *stages) {
+                    const std::vector<int64_t> &b_idx, const nec5::NumpyLinalg &np, CrossingStages *stages,
+                    double a_above, double a_below) {
     const int64_t n = b.n_basis;
     const double gz = ground_z;
     const cx::Axis A = axis_of(g, b, a_idx, gz, a_wire), B = axis_of(g, b, b_idx, gz, a_wire);
     // `_c1_moment`: -1j * omega * mu / (4.0 * pi), CPython's arithmetic
     const cd c1 = py_quot(py_prod(py_prod(cd(-0.0, -1.0), cd(omega, 0.0)), cd(mu, 0.0)), cd(4.0 * M_PI, 0.0));
+    XCtx xc{gz, c1};
+    if (a_below > 0.0) {
+        // A TWO-RADIUS node (`cross_complete_blocks_two_radius`, antennaknobs
+        // plan U5): the below rows' block at `a_below` (one-radius, read by
+        // column), the above rows' main sandwich and source ends at
+        // `a_above`, their point tests at the node and the corner at
+        // `a_below`; `Z -= t_above; Z -= t_below.T`.
+        std::vector<cd> t_below;
+        {
+            // `cross_complete_block_split(ctx_below)`: its own memo, its
+            // coarse axes at `a_below`
+            cx::BlockEval be;
+            be.ev.k_p = bm.k_p;
+            be.ev.k_m = bm.k_m;
+            be.ev.n_threads = physical_threads();
+            const cx::Axis Ac = axis_of(g, b, a_idx, gz, a_below), Bc = axis_of(g, b, b_idx, gz, a_below);
+            t_below = main_split(g, A, B, Ac, Bc, a_idx, b_idx, be, gz, bm.k_p, c1, a_below, np);
+            const Corner corner{&A, &B, gz, a_below, bm.k_p, bm.k_m, c1};
+            cx::add_end_terms<Raise>(xc, be, a_below, A, B, true, t_below, corner);
+        }
+        std::vector<cd> t_above;
+        {
+            cx::BlockEval be;
+            be.ev.k_p = bm.k_p;
+            be.ev.k_m = bm.k_m;
+            be.ev.n_threads = physical_threads();
+            const cx::Axis Ac = axis_of(g, b, a_idx, gz, a_above), Bc = axis_of(g, b, b_idx, gz, a_above);
+            t_above = main_split(g, A, B, Ac, Bc, a_idx, b_idx, be, gz, bm.k_p, c1, a_above, np);
+            // the source ends at `a_above` (no corner, no test ends) ...
+            cx::add_end_terms<Raise>(xc, be, a_above, A, B, true, t_above, cx::NoCorner(), false, true);
+            // ... the test ends and the corner at `a_below`, a fresh memo
+            cx::BlockEval be2;
+            be2.ev.k_p = bm.k_p;
+            be2.ev.k_m = bm.k_m;
+            be2.ev.n_threads = physical_threads();
+            const Corner corner{&A, &B, gz, a_below, bm.k_p, bm.k_m, c1};
+            cx::add_end_terms<Raise>(xc, be2, a_below, A, B, true, t_above, corner, true, false);
+        }
+        if (stages) stages->t_ab = t_above;
+        for (size_t q = 0; q < Z.size(); q++) Z[q] = c_sub(Z[q], t_above[q]);
+        for (int64_t i = 0; i < n; i++)
+            for (int64_t j = 0; j < n; j++) {
+                cd &z = Z[static_cast<size_t>(i * n + j)];
+                z = c_sub(z, t_below[static_cast<size_t>(j * n + i)]);
+            }
+        if (stages) {
+            std::vector<cd> only(static_cast<size_t>(n * n), cd(0.0, 0.0));
+            self_completions(only, B, A, bm, a_wire, gz, omega, eps, np, a_above, a_below);
+            stages->completions = only;
+        }
+        self_completions(Z, B, A, bm, a_wire, gz, omega, eps, np, a_above, a_below);
+        return;
+    }
     cx::BlockEval be;
     be.ev.k_p = bm.k_p;
     be.ev.k_m = bm.k_m;
     be.ev.n_threads = physical_threads();
-    std::vector<cd> t = main_split(g, A, B, a_idx, b_idx, be, gz, bm.k_p, c1, a_wire, np);
+    std::vector<cd> t = main_split(g, A, B, A, B, a_idx, b_idx, be, gz, bm.k_p, c1, a_wire, np);
     if (stages) stages->t_main = t;
-    XCtx xc{gz, c1};
     const Corner corner{&A, &B, gz, a_wire, bm.k_p, bm.k_m, c1};
     cx::add_end_terms<Raise>(xc, be, a_wire, A, B, true, t, corner);
     if (stages) stages->t_ab = t;

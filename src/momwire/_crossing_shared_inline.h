@@ -387,9 +387,13 @@ struct NoCorner {
 // scattered into t (nR x nC, row-major).
 // `corner(E_r, posLA, nC)` adds the designed corner into E_r ((|LA|, nC)
 // row-major, R's live rows) after both loops, before the scatter.
+// `row_ends` / `col_ends` (`_ends_and_corner`'s `test_ends` / `source_ends`):
+// either loop skipped, its live set still the axis's (a two-radius node runs
+// the two loops at two radii, `cross_complete_blocks_two_radius`).
 template <class P, class CX, class CornerFn = NoCorner>
 void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, const Axis &C,
-                   bool r_above, std::vector<cd> &t, const CornerFn &corner = CornerFn()) {
+                   bool r_above, std::vector<cd> &t, const CornerFn &corner = CornerFn(),
+                   bool row_ends = true, bool col_ends = true) {
     const int64_t nR = R.n_basis, nC = C.n_basis;
     auto live = [](const Axis &ax) {
         std::set<int64_t> s;
@@ -407,7 +411,8 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
     const cd neg_c1(-c.c1.real(), -c.c1.imag());
     // Row loop: R's ends against C's line.
     {
-        const std::vector<EndVec> evs = end_vectors<P>(c, be, a_wire, R.ends, C, r_above);
+        const std::vector<EndVec> evs =
+            row_ends ? end_vectors<P>(c, be, a_wire, R.ends, C, r_above) : std::vector<EndVec>();
         // Columns split over the team; each entry takes the ends' rank-1
         // terms in end order, as the serial loop adds them.
         const int nt = team(be, evs.size() * static_cast<size_t>(nC));
@@ -437,7 +442,8 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
     }
     // Column loop: C's ends against R's line (W, then V).
     {
-        const std::vector<EndVec> evs = end_vectors<P>(c, be, a_wire, C.ends, R, !r_above);
+        const std::vector<EndVec> evs =
+            col_ends ? end_vectors<P>(c, be, a_wire, C.ends, R, !r_above) : std::vector<EndVec>();
         // Rows split over the team (E_r's rows LA and E_c's rows apart);
         // each entry takes the ends' terms in end order, as serially.
         const int64_t nLA = static_cast<int64_t>(LA.size());
