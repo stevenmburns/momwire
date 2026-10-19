@@ -1559,15 +1559,19 @@ int sequence_read(const std::string &deck_text, std::string &why) {
         }
     }
     if (groups.size() < 2) return 0;
-    bool first_steps = false, later_fr = false, requests_alone = false;
+    bool first_steps = false, later_fr = false, any_alone = false, all_alone = true;
     for (std::size_t g = 1; g < groups.size(); ++g) {
         bool alone = true;
         for (std::size_t k : groups[g]) {
             const std::string &m = cards[k].mnemonic;
             alone = alone && (m == "RP" || m == "NE" || m == "NH" || m == "XQ");
         }
-        requests_alone = requests_alone || alone;
+        any_alone = any_alone || alone;
+        all_alone = all_alone && alone;
     }
+    // requests alone count only beside a later run that changes something
+    // (momwire#1579's repeated shape); one XQ keeps the 0.79 reading
+    const bool requests_alone = any_alone && !all_alone;
     for (std::size_t k : groups[0])
         if (cards[k].mnemonic == "FR" && Int(1) < cards[k].i(1)) first_steps = true;
     for (std::size_t g = 1; g < groups.size(); ++g)
