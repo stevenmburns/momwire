@@ -1,0 +1,13 @@
+CM a 2-segment probe 236 m from a 10 m vertical, joined to nothing: an ordinary wire (momwire#1580)
+CE
+GW 1 2 236 0 4.5 236 0 5.5 0.001
+GW 2 20 0 0 0 0 0 10 0.001
+GE 0
+FR 0 1 0 0 14.621782 0
+EX 0 1 1 2 1.000000e+00
+EX 0 2 10 2 1.000000e-10
+XQ
+EX 0 1 1 2 1.000000e-10
+EX 0 2 10 2 1.000000e+00
+XQ
+EN

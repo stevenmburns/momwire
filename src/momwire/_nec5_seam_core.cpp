@@ -689,14 +689,27 @@ bool too_close(double a, double b) {
     return std::fabs(a - b) <= 1e-12 * std::max(std::fabs(a), std::fabs(b));
 }
 
-// `_phantom_tags`: the wires EZNEC parked as circuit NODES (deck order). A
-// comparison within an ulp or two of its threshold declines.
+// `_phantom_tags`: the wires EZNEC parked as circuit NODES (deck order): a
+// wire a TL or NT connects to (momwire#1580) that is small and stands clear.
+// A comparison within an ulp or two of its threshold declines.
 std::vector<Int> phantom_tags(const Deck &d, double wavelength) {
     std::vector<Int> tags;
     if (d.wires.size() < 2) return tags;
+    std::vector<Int> connected;
+    for (const TransmissionLine &t : d.transmission_lines) {
+        connected.push_back(t.end_a.tag);
+        connected.push_back(t.end_b.tag);
+    }
+    for (const Network &n : d.networks) {
+        connected.push_back(n.end_a.tag);
+        connected.push_back(n.end_b.tag);
+    }
     const double extent_limit = 0.05 * wavelength;
     for (size_t i = 0; i < d.wires.size(); i++) {
         const Wire &w = d.wires[i];
+        bool card = false;
+        for (const Int &t : connected) card = card || t == w.tag;
+        if (!card) continue;  // an ordinary wire, however small and far
         const double extent = dist(w.end1, w.end2);
         if (too_close(extent, extent_limit)) throw Declined{"phantom-threshold"};
         if (!(extent < extent_limit)) continue;

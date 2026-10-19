@@ -474,6 +474,7 @@ from __future__ import annotations
 
 import cmath
 import math
+import warnings
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from collections.abc import Mapping
@@ -1806,6 +1807,24 @@ def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
     """
     if len(deck.wires) < 2:
         return frozenset()
+    # momwire#1580 (Ward AE6TY's launch-angle deck): only a wire a TL or NT
+    # card connects to can be the circuit node. A short wire nothing connects
+    # to -- a 2-segment probe 236 m from a vertical -- is an ordinary wire,
+    # however small and far: read as the phantom it carried no current and
+    # the transfer it measures was lost, where NEC-5 solves it.
+    connected = {
+        at.tag
+        for card in (*deck.transmission_lines, *deck.networks)
+        for at in (card.end_a, card.end_b)
+    }
+    if not connected:
+        return frozenset()
+    tags = _phantom_tags_geometric(deck, wavelength)
+    return frozenset(tag for tag in tags if tag in connected)
+
+
+def _phantom_tags_geometric(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
+    """:func:`_phantom_tags`' geometric half: small and standing clear."""
     # `math.dist` on plain tuples, not `np.linalg.norm` on 3-vectors: this is
     # O(wires^2) scalar work, where numpy's per-call overhead dominates its
     # arithmetic.  Measured over the committed corpus, the numpy spelling cost
@@ -2133,6 +2152,17 @@ def build_mesh(
         if deck.frequency_mhz
         else frozenset()
     )
+    if phantom:
+        # momwire#1580: a wire the rule takes out of the solve is named, never
+        # dropped silently (stderr; the printout stays the engine's).
+        warnings.warn(
+            "momwire reads GW tag(s) "
+            + ", ".join(str(t) for t in sorted(phantom))
+            + " as EZNEC's parked circuit node (a short wire a TL or NT card "
+            "connects to, far from everything else): it carries no current in "
+            "the solve (momwire#1139, #1580)",
+            stacklevel=2,
+        )
     addressed = _addressed_nodes(deck)
     crossings = _plane_crossings(deck)
     crossing_nodes = frozenset(_crossing_nodes(deck))
