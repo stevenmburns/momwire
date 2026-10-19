@@ -1825,6 +1825,8 @@ def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
 
 def _phantom_tags_geometric(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
     """:func:`_phantom_tags`' geometric half: small and standing clear."""
+    if len(deck.wires) < 2:
+        return frozenset()
     # `math.dist` on plain tuples, not `np.linalg.norm` on 3-vectors: this is
     # O(wires^2) scalar work, where numpy's per-call overhead dominates its
     # arithmetic.  Measured over the committed corpus, the numpy spelling cost
