@@ -212,3 +212,4 @@ def test_momwire_times_on_both_routes(route, tmp_path):
         assert line["load_ms"] > line["fill_ms"]  # CPython and momwire's import
     ((fill, factor),), (run_time,) = tc.printout_timing(on)
     assert fill + factor <= run_time + 1e-3
+    assert tc.timed_extras(on)[1:] == (5, 1)

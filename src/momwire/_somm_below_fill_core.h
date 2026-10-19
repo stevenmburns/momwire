@@ -62,6 +62,9 @@ void fill_region(Grid &g, int idx, uintptr_t cancel_flag);
 // when empty).
 std::shared_ptr<Source> fill_source(const std::string &anchors = "");
 
+// MOMWIRE_BELOW_ANCHORS read as `anchor_mode()` reads it ("auto", "off", "on").
+std::string anchor_mode_from_env();
+
 // The executable's store (off until configured; the extension and the
 // drivers never configure it): exact grids and anchors in the masters'
 // directory (`somm_core::configure_disk_cache`), and the seen list.

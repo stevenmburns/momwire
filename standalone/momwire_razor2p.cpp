@@ -204,6 +204,13 @@ void times_begin() {
     mw_times::enable(g_times.origin);
 }
 
+// The threads the next answer's fill and factor run on (the printout's
+// MOMWIRE_TIMES lines report them).
+void times_threads(int fill, int factor) {
+    mw_times::state().fill_threads = fill;
+    mw_times::state().factor_threads = factor;
+}
+
 // One answer's `times:` line on stderr; the next one's total starts here.
 void times_line(const char *route, int threads, double load_ms, double write_ms) {
     if (!g_times.on) return;
@@ -786,10 +793,13 @@ int main(int argc, char **argv) {
             // 16 (measured), and the launcher's default is threaded, so a
             // thread-sensitive printout cell (a 1e10-ohm network pin's
             // reactance) prints the launcher's digits.
-            set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
+            const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
+            set_threads(blas, false);
+            times_threads(1, blas);
             printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         } else {
             set_threads(threads, true);
+            times_threads(threads, threads);
             printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         }
         if (printed) {
@@ -1015,11 +1025,14 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     bool failed = false, printed;
     const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
     if (serial) {
-        set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
+        const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
+        set_threads(blas, false);
+        times_threads(1, blas);
         printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                    &message, &raised_kind, open_end, served);
     } else {
         set_threads(threads, true);
+        times_threads(threads, threads);
         printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                   &message, &raised_kind, open_end, served);
     }

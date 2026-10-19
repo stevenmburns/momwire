@@ -46,6 +46,12 @@ enum Stage : int {
     n_stages
 };
 
+// A copy of the tally at one moment (per-run deltas for the printout).
+struct Snap {
+    double ms[n_stages] = {};
+    uint64_t built = 0, disk = 0, blended = 0;
+};
+
 struct State {
     std::atomic<bool> on{false};
     std::thread::id owner;
@@ -54,6 +60,10 @@ struct State {
     double ms[n_stages] = {};
     uint64_t ground_built = 0, ground_disk = 0, ground_blended = 0;
     uint64_t runs = 0;  // runs finished (an XQ block, a stepping FR's frequency)
+    // the threads the caller runs the fill and the factor on (0: not known)
+    int fill_threads = 0, factor_threads = 0;
+    // where the last run's ground tables were counted to
+    Snap mark;
     // RUN TIME's zero: the process's start where the caller knows it
     Clock::time_point origin;
 };
@@ -98,6 +108,7 @@ inline void enable(Clock::time_point origin) {
     for (double &m : s.ms) m = 0.0;
     s.ground_built = s.ground_disk = s.ground_blended = 0;
     s.runs = 0;
+    s.mark = Snap();
     s.origin = origin;
     s.on.store(true, std::memory_order_relaxed);
 }
@@ -107,6 +118,17 @@ inline void disable() { state().on.store(false, std::memory_order_relaxed); }
 // The stages so far, the current one brought up to now.
 inline void settle() {
     if (active()) switch_to(state().cur);
+}
+
+inline Snap snap() {
+    settle();
+    const State &s = state();
+    Snap o;
+    for (int k = 0; k < n_stages; k++) o.ms[k] = s.ms[k];
+    o.built = s.ground_built;
+    o.disk = s.ground_disk;
+    o.blended = s.ground_blended;
+    return o;
 }
 
 inline double ms_of(Stage st) {

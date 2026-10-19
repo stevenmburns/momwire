@@ -132,8 +132,28 @@ set, two things change:
 
 - The printout's timing lines carry measured seconds, in the places NEC-5
   prints them: `FILL=` and `FACTOR=` under `- - - MATRIX TIMING - - -` for
-  each run that solves a matrix, and `RUN TIME =` at the end. Without the
-  variable momwire prints zeros there.
+  each run that solves a matrix, and `RUN TIME = ... SEC. (WALL CLOCK)` at
+  the end. Without the variable momwire prints zeros there, and none of the
+  lines below.
+- The printout also carries what a timed NEC-5 build prints. At the top is
+  the environment in effect: `MOMWIRE_THREADS`, `OMP_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS`, the threads the fill and the factor actually ran
+  on, the build (`avx2`, `sse2`, ...), `MOMWIRE_BELOW_ANCHORS` and the ground
+  table cache's folder (or `OFF`). Under each MATRIX TIMING come the run's
+  phases:
+
+```text
+                        FILL=    0.053 SEC.,  FACTOR=    0.001 SEC.
+                        GROUND TABLES=    0.010 SEC.  (BUILT 4, FROM DISK CACHE 0, ANCHOR-BLENDED 1)
+                        FILL: 53 msec (4 threads) FACTOR: 1 msec (4 threads)
+                        SOLUTION (PORTS+CURRENTS+POWER)=    0.000 SEC.
+                        RADIATED FIELD (RP)=    0.000 SEC.
+                        NEAR FIELD (NE/NH)=    0.000 SEC.
+```
+
+  `GROUND TABLES` counts the Sommerfeld tables used since the previous run:
+  how many were computed, how many came from the disk cache, and how many
+  were interpolated from anchor tables.
 - Each answer writes one `times:` line on standard error, with every stage
   in milliseconds:
 
