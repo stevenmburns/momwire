@@ -270,11 +270,12 @@ def test_nec5_undeclared_tag_refuses():
         parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,9,0,0,1.5,0.,0."))
 
 
-def test_nec5_short_card_refuses_rather_than_defaulting_to_zeros():
-    """``Card.f`` reads a missing field as 0.0, which would otherwise make a
-    truncated card look like a legal zero-valued one."""
-    with pytest.raises(DeckError, match="needs at least 7"):
-        parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,1,0,0,1.5"))
+def test_nec5_short_card_reads_its_missing_fields_as_zeros():
+    """The NEC-5 engine reads a missing trailing field as 0 (momwire 0.79.2,
+    measured black-box against the card written out with zeros)."""
+    short = parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,1,0,0,1.5"))
+    full = parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,1,0,0,1.5,0.,0."))
+    assert short.distributed_rlc == full.distributed_rlc
 
 
 def test_nec5_capacitance_field_refuses_by_name():

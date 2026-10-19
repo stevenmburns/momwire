@@ -102,9 +102,12 @@ def test_ld_1_reads_a_parallel_spec():
     assert load.spec == LoadSpec("parallel", r=75.0, l=2e-6, c=5e-11)
 
 
-def test_ld_0_needs_all_three_rlc_fields():
-    with pytest.raises(DeckError, match="needs at least 7"):
-        parse_nec5(_with_card("LD 0,1,4,0,50.,1.E-6"))
+def test_a_short_ld_0_reads_its_missing_capacitance_as_zero():
+    """The NEC-5 engine reads a missing trailing field as 0 (momwire 0.79.2,
+    measured black-box against the card written out with zeros)."""
+    (short,) = parse_nec5(_with_card("LD 0,1,4,0,50.,1.E-6")).loads
+    (full,) = parse_nec5(_with_card("LD 0,1,4,0,50.,1.E-6,0.")).loads
+    assert short.spec == full.spec
 
 
 @pytest.mark.parametrize("card", ["LD 2,1,1,9,1.,0.,0.", "LD 3,1,1,9,1.,0.,0."])

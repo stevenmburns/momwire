@@ -194,11 +194,11 @@ def test_mu_field_absent_passes_and_defaults_to_one():
 # --------------------------------------------------------------------------
 
 
-def test_a_missing_sigma_field_refuses_as_a_short_card():
-    """``Card.f`` reads a missing field as 0.0, which would otherwise look
-    like a legal (if useless) zero conductivity rather than the short card
-    it is."""
-    with pytest.raises(DeckError, match="needs at least 5"):
+def test_a_missing_sigma_field_reads_as_zero_and_refuses_as_one():
+    """A short card reads its missing fields as 0, as the NEC-5 engine does
+    (momwire 0.79.2), so a missing sigma is a zero conductivity, which
+    refuses by name."""
+    with pytest.raises(DeckError, match="must be positive"):
         parse_nec5(_with_card("LD 5,1,1,11"))
 
 

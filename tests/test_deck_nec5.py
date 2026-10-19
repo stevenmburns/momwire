@@ -462,7 +462,6 @@ REFUSALS = [
     pytest.param(("GE",), "GE", id="ge-zero-field"),
     pytest.param(("NE 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NE", id="ne-coordinates-2"),
     pytest.param(("TL 1,1,1,6,0.,1.,0.,0.,0.,0.",), "TL", id="tl-zero-z0"),
-    pytest.param(("NT 1,1,1,6,.01,0.,0.,0.",), "NT", id="nt-short"),
     pytest.param(("GW 1,5,0.,0.,0.,0.,1.,0.,.0005",), "GW", id="gw-duplicate-tag"),
 ]
 
