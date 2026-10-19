@@ -86,7 +86,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import _cancel, _somm_disk_cache
+from . import _cancel, _somm_disk_cache, _times
 from ._quadrature import leggauss
 from ._accel import acc as _acc
 from ._sommerfeld import (
@@ -2057,6 +2057,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
     def _band_floor_filled(self):
         return all(self._regions[i]["filled"] for i in self._band_floor_idx)
 
+    @_times.staged("ground")
     def _ensure_for(self, mx_r1, mn_th, mx_th, lazy=False):
         """Fill every region a batch bounded by these extremes could touch.
 
@@ -2112,6 +2113,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
             self._activate(region_index(idx // _N_BANDS, _BAND_LO))
         reg["active"] = True
 
+    @_times.staged("ground")
     def fill_nodes(self, need):
         """The nodes of `need` (a bool (n_r, n_th) mask per region, None for
         none) in the table's regions and not yet in, filled through one
@@ -2635,6 +2637,7 @@ def _ensure_anchors(plan, r1_wl, idx=None):
             changed = False
             if not _anchor_serves(grid, r1_wl):
                 SWEEP_STATS["anchor_fills"] += 1
+                _times.count("built")
                 eps_a = plan.rungs[j]
                 grid = SommerfeldGridBelow(
                     eps_a,
@@ -2758,6 +2761,7 @@ class SommerfeldGridBelowBlended(SommerfeldGridBelow):
         SWEEP_STATS["blended_regions"] += 1
 
 
+@_times.staged("ground")
 def get_grid_below(
     eps_t,
     k2,
@@ -2859,6 +2863,7 @@ def get_grid_below(
 
         def fill():
             SWEEP_STATS["exact_grids"] += 1
+            _times.count("built")
             return SommerfeldGridBelow(
                 eps_t,
                 k2,
@@ -2895,9 +2900,13 @@ def get_grid_below(
                         eps_t, k2, r1b_wl * lam_m, float(omega), float(mu), plan
                     )
                     SWEEP_STATS["blended_grids"] += 1
+                    _times.count("blended")
                     key = base_key + _BLENDED_KEY
                 elif grid is None:
+                    filled = SWEEP_STATS["exact_grids"]
                     grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
+                    if SWEEP_STATS["exact_grids"] == filled:
+                        _times.count("disk")
         _GRID_CACHE[key] = grid
     return grid
 

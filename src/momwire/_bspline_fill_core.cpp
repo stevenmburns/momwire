@@ -14,6 +14,7 @@
 #include "_field_galerkin_inline.h"
 #include "_somm_pairs_core.h"
 #include "_somm_remainder_core.h"
+#include "_mw_times.h"
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
 #if defined(_MSC_VER)
@@ -788,6 +789,7 @@ std::vector<cdouble> assemble_Z(const CArray &J, const Basis &b, const Geometry 
 PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np, const SymLapack *sym) {
+    const mw_times::Scope timed(mw_times::factor);
     using nec5::Op;
     PortSolve out;
     const size_t nb = static_cast<size_t>(n_b), np_ = static_cast<size_t>(n_p), nc = static_cast<size_t>(n_c);

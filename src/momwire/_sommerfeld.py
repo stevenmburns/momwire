@@ -44,7 +44,7 @@ import os
 import numpy as np
 from scipy.special import hankel2, jv, wofz
 
-from . import _somm_disk_cache
+from . import _somm_disk_cache, _times
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
 from ._constants import C_LIGHT
@@ -1779,6 +1779,7 @@ def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
         stored = _somm_disk_cache.fetch(nkey)
         if stored is not None:
             master.take_nodes(stored)
+            _times.count("disk")
         else:
             _somm_disk_cache.STATS["misses"] += _somm_disk_cache.enabled()
         _NORM_CACHE[nkey] = master
@@ -1795,8 +1796,10 @@ def _ensure_master(nkey, master, need, cancel_flag=0):
     if master.missing(need) is None:
         return
     if master.take_nodes(_somm_disk_cache.fetch(nkey)) and master.missing(need) is None:
+        _times.count("disk")
         return
     master.fill_nodes(need, cancel_flag)
+    _times.count("built")
     if _somm_disk_cache.enabled():
         master.take_nodes(_somm_disk_cache.fetch(nkey))
         _somm_disk_cache.store(nkey, master)
@@ -1814,6 +1817,7 @@ def _view_of(lo, hi, t, eps_t, k2, omega, mu):
     return master.scaled_to(k2, omega, mu)
 
 
+@_times.staged("ground")
 def ensure_nodes(grid, need, cancel_flag=0):
     """Fill a lazy view's nodes of `need` (`get_grid(..., lazy=True)`): the
     two rung masters' same nodes (`_ensure_master`), then the view's blend
@@ -1840,6 +1844,7 @@ def ensure_nodes(grid, need, cancel_flag=0):
         reg["have"] = have
 
 
+@_times.staged("ground")
 def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
     """Cached `SommerfeldGrid` for (eps_t, k2, r1_max, omega, mu).
 
@@ -1887,6 +1892,7 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
         if lo != hi:
             keys.append(("above", hi, r1b_wl, hi))
             masters.append(_norm_master(hi, r1b_wl, hi, cancel_flag))
+            _times.count("blended")  # two ladder rungs, blended to eps_t
         if not lazy:
             for nkey, m in zip(keys, masters, strict=True):
                 _ensure_master(nkey, m, _all_nodes(m), cancel_flag)

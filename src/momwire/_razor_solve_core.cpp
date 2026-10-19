@@ -40,6 +40,7 @@
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
 #include "_somm_grid_core.h"
+#include "_mw_times.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -506,6 +507,7 @@ void SolveContext::add_at(const int64_t *rows, const int64_t *cols, const cd *va
 }
 
 int SolveContext::lu_solve(const Lapack &lp, cd *b, int n_rhs) {
+    const mw_times::Scope timed(mw_times::factor);
     if (lp.getrf == nullptr || lp.getrs == nullptr)
         throw std::invalid_argument("razor_solve: no LAPACK routines were supplied");
     const auto t0 = std::chrono::steady_clock::now();

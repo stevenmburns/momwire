@@ -6,6 +6,7 @@
 #include "_fma_inline.h"
 
 #include "_somm_kernel_core.h"
+#include "_mw_times.h"
 
 #if defined(_MSC_VER)
 #pragma float_control(precise, on)
@@ -829,10 +830,12 @@ Master &norm_master(cd rung, double r1b_wl, cd lattice_eps) {
         std::copy(dkey, dkey + 5, m->key);
         m->g = layout_grid(rung, K2_REF, r1b_wl, K2_REF * C_LIGHT, MU0, lattice_eps);
         if (g_disk.on) {
-            if (disk_merge(dkey, m->g) >= 0)
+            if (disk_merge(dkey, m->g) >= 0) {
                 g_stats.hits++;
-            else
+                mw_times::count_disk();
+            } else {
                 g_stats.misses++;
+            }
         }
         it = cache.emplace(key, std::move(m)).first;
     }
@@ -853,8 +856,12 @@ void ensure_master(Master &m, const std::vector<std::vector<uint8_t>> &need) {
         return false;
     };
     if (!missing()) return;
-    if (g_disk.on && disk_merge(m.key, m.g) > 0 && !missing()) return;
+    if (g_disk.on && disk_merge(m.key, m.g) > 0 && !missing()) {
+        mw_times::count_disk();
+        return;
+    }
     fill_nodes(m.g, need, 1e-6);
+    mw_times::count_built();
     if (g_disk.on) disk_store(m.key, m.g);
 }
 
@@ -938,7 +945,10 @@ View &make_view(cd eps_t, double k2, double r1_max, double omega, double mu) {
     if (it == views().end()) {
         auto v = std::make_unique<View>();
         v->lo = &norm_master(lo, r1b_wl, hi);
-        if (lo != hi) v->hi = &norm_master(hi, r1b_wl, hi);
+        if (lo != hi) {
+            v->hi = &norm_master(hi, r1b_wl, hi);
+            mw_times::count_blended();  // two ladder rungs, blended to eps_t
+        }
         v->t = t;
         // The view's layout: `blend` keeps lo's lattice and takes eps_t;
         // `scaled_to` scales the radii (the masks and values start empty).
@@ -977,6 +987,7 @@ std::vector<std::vector<uint8_t>> all_nodes(const Grid &g) {
 cd py_quot(cd a, cd b) { return py_div(a, b); }
 
 const Grid &get_grid_lazy(cd eps_t, double k2, double r1_max, double omega, double mu) {
+    const mw_times::Scope timed(mw_times::ground);
     std::lock_guard<std::mutex> lock(g_memo_mu);
     View &v = make_view(eps_t, k2, r1_max, omega, mu);
     if (!lazy_grids()) ensure_view(v, all_nodes(v.g));
@@ -984,6 +995,7 @@ const Grid &get_grid_lazy(cd eps_t, double k2, double r1_max, double omega, doub
 }
 
 void ensure_nodes(const Grid &view, const std::vector<std::vector<uint8_t>> &need) {
+    const mw_times::Scope timed(mw_times::ground);
     std::lock_guard<std::mutex> lock(g_memo_mu);
     View *v = view_of(view);
     if (v == nullptr) throw std::logic_error("ensure_nodes: not a view get_grid_lazy made");
@@ -1011,6 +1023,7 @@ bool census_pays(double n_pairs, std::size_t unfilled) {
 std::vector<std::vector<uint8_t>> all_nodes_of(const Grid &view) { return all_nodes(view); }
 
 const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu) {
+    const mw_times::Scope timed(mw_times::ground);
     std::lock_guard<std::mutex> lock(g_memo_mu);
     View &v = make_view(eps_t, k2, r1_max, omega, mu);
     ensure_view(v, all_nodes(v.g));

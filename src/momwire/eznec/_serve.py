@@ -475,7 +475,7 @@ from __future__ import annotations
 import cmath
 import math
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from collections.abc import Mapping
 
@@ -484,7 +484,7 @@ import numpy as np
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
 from .. import _ground_spec, _medium_spec
-from .. import _cmul, _lapack
+from .. import _cmul, _lapack, _times
 from ..deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
@@ -4714,6 +4714,10 @@ class _Prepared:
     solver: object
     solution: object
     source_sites: frozenset
+    # MOMWIRE_TIMES: the solve's fill and factor seconds, printed in the
+    # MATRIX TIMING of the first run that uses this preparation (0 when off)
+    fill_seconds: float = 0.0
+    factor_seconds: float = 0.0
 
 
 def _prepare(
@@ -4816,7 +4820,16 @@ def _prepare(
         # NotImplementedError; on this seam that is a refusal by name, not
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
-    solution = _port_solution(solver, shared)
+    times = _times.current()
+    fill_seconds = factor_seconds = 0.0
+    if times is None:
+        solution = _port_solution(solver, shared)
+    else:
+        fill0, factor0 = times.elapsed_ms("fill"), times.elapsed_ms("factor")
+        with _times.stage("fill"):
+            solution = _port_solution(solver, shared)
+        fill_seconds = (times.elapsed_ms("fill") - fill0) / 1e3
+        factor_seconds = (times.elapsed_ms("factor") - factor0) / 1e3
     return _Prepared(
         structure=structure,
         mesh=mesh,
@@ -4829,6 +4842,8 @@ def _prepare(
         solver=solver,
         solution=solution,
         source_sites=frozenset(source.at for source in deck.sources),
+        fill_seconds=fill_seconds,
+        factor_seconds=factor_seconds,
     )
 
 
@@ -4922,7 +4937,30 @@ def _geometry_digest(value) -> str:
 
 def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
     """The run half of :func:`serve`: this deck's sources driven through the
-    prepared port solution, then every table its printout reports."""
+    prepared port solution, then every table its printout reports.
+
+    Under MOMWIRE_TIMES (:mod:`momwire._times`) it is the ``run`` stage, and
+    the first run of a preparation carries its solve's MATRIX TIMING."""
+    with _times.stage("run"):
+        data = _finish_run(deck, prepared)
+    _times.count_run()
+    if prepared.fill_seconds or prepared.factor_seconds:
+        data = replace(
+            data,
+            fill_seconds=prepared.fill_seconds,
+            factor_seconds=prepared.factor_seconds,
+        )
+        prepared.fill_seconds = prepared.factor_seconds = 0.0
+    return data
+
+
+def _in_stage(name: str, build):
+    """``build()`` in the timing stage ``name`` (MOMWIRE_TIMES)."""
+    with _times.stage(name):
+        return build()
+
+
+def _finish_run(deck: Nec5Deck, prepared: _Prepared) -> RunData:
     structure = prepared.structure
     mesh = prepared.mesh
     by_address = prepared.by_address
@@ -5053,26 +5091,32 @@ def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
             ),
             efficiency_percent=(100.0 * p_radiated / p_in) if p_in > 0 else 0.0,
         ),
-        near_fields=tuple(
-            _near_field(request, solver, coeffs, deck, mesh, wavelength, medium)
-            for request in deck.requests
-            if isinstance(request, Nec5NearFieldRequest)
+        near_fields=_in_stage(
+            "near",
+            lambda: tuple(
+                _near_field(request, solver, coeffs, deck, mesh, wavelength, medium)
+                for request in deck.requests
+                if isinstance(request, Nec5NearFieldRequest)
+            ),
         ),
-        patterns=tuple(
-            _pattern(
-                request,
-                solver,
-                coeffs,
-                _far_ground(deck, medium),
-                frequency,
-                wavelength,
-                p_in,
-                lower_k=None
-                if medium is None
-                else (2.0 * math.pi / wavelength) * cmath.sqrt(medium.eps_c),
-                p_radiated=p_radiated,
-            )
-            for request in deck.requests
-            if isinstance(request, Nec5FarFieldRequest)
+        patterns=_in_stage(
+            "rp",
+            lambda: tuple(
+                _pattern(
+                    request,
+                    solver,
+                    coeffs,
+                    _far_ground(deck, medium),
+                    frequency,
+                    wavelength,
+                    p_in,
+                    lower_k=None
+                    if medium is None
+                    else (2.0 * math.pi / wavelength) * cmath.sqrt(medium.eps_c),
+                    p_radiated=p_radiated,
+                )
+                for request in deck.requests
+                if isinstance(request, Nec5FarFieldRequest)
+            ),
         ),
     )

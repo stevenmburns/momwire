@@ -109,6 +109,12 @@ def pytest_configure(config):
     os.environ["MOMWIRE_SOMM_CACHE"] = "0"
     os.environ["MOMWIRE_SOMM_CACHE_DIR"] = _SOMM_CACHE_TMP[0]
 
+    # MOMWIRE_TIMES (per-stage timing) puts measured seconds into the
+    # printout's MATRIX TIMING and RUN TIME lines and writes `times:` lines on
+    # stderr: a developer who exported it would see every byte gate fail. Off
+    # for the session (and so for every subprocess); its own tests set it.
+    os.environ.pop("MOMWIRE_TIMES", None)
+
     # xdist worker detection: only workers carry `workerinput`. The
     # controller and any serial run are left untouched, so the serial
     # lanes keep the threading they were certified with.

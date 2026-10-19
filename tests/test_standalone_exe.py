@@ -186,3 +186,29 @@ def test_the_sommerfeld_grid_store_is_its_own_and_moves_no_byte(tmp_path):
     off = tmp_path / "off"
     exe_run("off", {"MOMWIRE_SOMM_CACHE": "0", "MOMWIRE_SOMM_CACHE_DIR": str(off)})
     assert not off.exists()
+
+
+@pytest.mark.parametrize("route", ["cxx", "fallback"])
+def test_momwire_times_on_both_routes(route, tmp_path):
+    """MOMWIRE_TIMES=1 on the C++ route and on the embedded Python's: the
+    printout's timing lines measured, every other byte the untimed one's, and
+    one `times:` line, the fallback's carrying the interpreter's load."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    deck = FIXTURES / "momwire_times" / "buried_radials.nec"
+    shutil.copy(deck, tmp_path / deck.name)
+    env = dict(os.environ)
+    if route == "fallback":
+        env["MW_EXE_FORCE_FALLBACK"] = "1"
+    _run([EXE, deck.name, "off.out"], cwd=tmp_path, env=env)
+    env["MOMWIRE_TIMES"] = "1"
+    run = _run([EXE, deck.name, "on.out"], cwd=tmp_path, env=env)
+    on = (tmp_path / "on.out").read_text(encoding="latin-1")
+    assert tc.zero_timing(on) == (tmp_path / "off.out").read_text(encoding="latin-1")
+    (line,) = tc.times_lines(run.stderr)
+    assert line["route"] == route and line["runs"] == 1 and line["fill_ms"] > 0.0
+    if route == "fallback":
+        assert line["load_ms"] > line["fill_ms"]  # CPython and momwire's import
+    ((fill, factor),), (run_time,) = tc.printout_timing(on)
+    assert fill + factor <= run_time + 1e-3

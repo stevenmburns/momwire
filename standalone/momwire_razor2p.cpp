@@ -44,9 +44,15 @@
 //   MW_EXE_ARRAYS=DIR        the C++ route writes each finished run's arrays
 //   MW_EXE_PYSTARTUP=FILE    the fallback execs FILE before answering
 //   MW_EXE_TIMES=1           a timing line on stderr
+//
+// MOMWIRE_TIMES=1 (for users, MOMWIRE_TIMES): the printout's MATRIX TIMING
+// (FILL, FACTOR) and RUN TIME carry measured seconds instead of zeros, and
+// each answer writes one `times:` line on stderr, its stages in milliseconds
+// (`_mw_times.h`). Off, nothing is timed and the printout is unchanged.
 //   MW_EXE_COPY=threads      one thread through the OpenMP copy, not the serial one
 //   MW_EXE_FAIL=alloc|runtime  (no-Python build) throw from the solve, to test
 //                            the INTERNAL ERROR printout
+#include "_mw_times.h"
 #include "_nec5_deck_core.h"
 #include "_nec5_razor_printout_core.h"
 #include "route.h"
@@ -73,6 +79,10 @@
 #include <dlfcn.h>
 #endif
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/time.h>
+#endif
+#include <time.h>
 #endif
 
 #include <algorithm>
@@ -122,6 +132,87 @@ const Clock::time_point T0 = Clock::now();
 
 double ms_since(Clock::time_point t) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+}
+
+// --- MOMWIRE_TIMES ------------------------------------------------------------
+
+bool read_file(const std::string &path, std::string &out);
+
+// How long ago the OS created this process, in ms (-1: not known). Linux
+// reads /proc (10 ms ticks), macOS its process table, Windows the process's
+// creation time; a reader's `start_ms` is this less the time since main().
+double process_age_ms() {
+#if defined(_WIN32)
+    FILETIME created, exited, kernel, user, now;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return -1.0;
+    GetSystemTimeAsFileTime(&now);  // Windows 7 has no precise form
+    const auto u = [](const FILETIME &t) {
+        return (static_cast<unsigned long long>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+    };
+    const unsigned long long a = u(created), b = u(now);
+    return b > a ? static_cast<double>(b - a) / 1e4 : 0.0;  // 100 ns units
+#elif defined(__APPLE__)
+    struct kinfo_proc info;
+    std::size_t len = sizeof info;
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(getpid())};
+    if (sysctl(mib, 4, &info, &len, nullptr, 0) != 0 || len == 0) return -1.0;
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    const struct timeval &st = info.kp_proc.p_starttime;
+    const double age = (now.tv_sec - st.tv_sec) * 1e3 + (now.tv_usec - st.tv_usec) / 1e3;
+    return age > 0 ? age : 0.0;
+#else
+    std::string stat;
+    if (!read_file("/proc/self/stat", stat)) return -1.0;
+    const std::size_t paren = stat.rfind(')');
+    if (paren == std::string::npos) return -1.0;
+    std::istringstream in(stat.substr(paren + 1));
+    std::string field;
+    for (int k = 3; k <= 22 && (in >> field); k++)
+        if (k == 22) {
+            const double ticks = std::strtod(field.c_str(), nullptr);
+            const long hz = sysconf(_SC_CLK_TCK);
+            struct timespec boot;
+            if (hz <= 0 || clock_gettime(CLOCK_BOOTTIME, &boot) != 0) return -1.0;
+            const double age = (boot.tv_sec + boot.tv_nsec / 1e9 - ticks / hz) * 1e3;
+            return age > 0 ? age : 0.0;
+        }
+    return -1.0;
+#endif
+}
+
+// MOMWIRE_TIMES's clock: `on`, the process's start (RUN TIME's zero), main()'s
+// entry, and where the next `times:` line's total starts.
+struct Times {
+    bool on = false;
+    Clock::time_point origin, main_at, line_from;
+    double start_ms = 0.0;  // the first line's; 0 after it
+};
+Times g_times;
+
+void times_begin() {
+    if (!mw_times::env_on()) return;
+    g_times.on = true;
+    g_times.main_at = Clock::now();
+    const double age = process_age_ms();
+    // unknown: the static initialisers' clock (T0), which is near enough
+    const double before_main = age >= 0.0 ? std::max(age, ms_since(T0)) : ms_since(T0);
+    g_times.origin = g_times.main_at - std::chrono::duration_cast<Clock::duration>(
+                                           std::chrono::duration<double, std::milli>(before_main));
+    g_times.start_ms = before_main;
+    g_times.line_from = g_times.origin;
+    mw_times::enable(g_times.origin);
+}
+
+// One answer's `times:` line on stderr; the next one's total starts here.
+void times_line(const char *route, int threads, double load_ms, double write_ms) {
+    if (!g_times.on) return;
+    const std::string line =
+        mw_times::take_line(route, threads, g_times.start_ms, load_ms, write_ms, g_times.line_from);
+    std::fprintf(stderr, "%s\n", line.c_str());
+    std::fflush(stderr);
+    g_times.start_ms = 0.0;
+    g_times.line_from = Clock::now();
 }
 
 std::string env(const char *name) {
@@ -540,6 +631,17 @@ int run_python(const std::string &home, const std::string &code) {
                                  py_str(startup) + ", 'exec'))\n")
                                     .c_str());
     const Clock::time_point t1 = Clock::now();
+    if (g_times.on) {
+        // MOMWIRE_TIMES: the Python answer writes the `times:` line, and
+        // takes this process's start and the interpreter's load from here
+        char pre[256];
+        std::snprintf(pre, sizeof pre,
+                      "import sys\nsys._mw_times_pre = {'route': 'fallback', 'start_ms': %.3f, "
+                      "'load_ms': %.3f}\n",
+                      std::chrono::duration<double, std::milli>(t0 - g_times.origin).count(),
+                      std::chrono::duration<double, std::milli>(t1 - t0).count());
+        py.p_PyRun_SimpleString(pre);
+    }
     const std::string run = "import sys\n_rc = 0\n" + code +
                             "sys.stdout.flush()\nsys.stderr.flush()\n";
     if (py.p_PyRun_SimpleString(run.c_str()) != 0) return 1;
@@ -623,6 +725,7 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
 
 #if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
+    times_begin();
     const std::vector<std::string> args(argv + 1, argv + argc);
 
     // MOMWIRE_THREADS fixes the count for every deck; unset, the deck's size
@@ -669,6 +772,7 @@ int main(int argc, char **argv) {
         // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
         // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
+            const mw_times::Scope timed(mw_times::seam);
             const long long n = mws::exe::largest_solve(text);
             threads = n >= 0 ? threads_for(n) : 1;
         }
@@ -689,10 +793,12 @@ int main(int argc, char **argv) {
             printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         }
         if (printed) {
+            const Clock::time_point tw = Clock::now();
             std::FILE *w = std::fopen(out.c_str(), "wb");
             if (w != nullptr) {
                 std::fwrite(printout.data(), 1, printout.size(), w);
                 if (std::fclose(w) == 0) {
+                    times_line("cxx", threads, 0.0, ms_since(tw));
                     log_route(threads == 1 && env("MW_EXE_COPY") != "threads" ? "cxx:serial"
                                                                     : "cxx:threads",
                               deck);
@@ -849,6 +955,10 @@ std::string not_served(std::string why) {
     return "not served by this build: " + why;
 }
 
+// MOMWIRE_TIMES: the last render's thread count and printout write.
+int g_render_threads = 1;
+double g_write_ms = 0.0;
+
 // What a failed allocation reports: libstdc++'s what(), spelled out so the
 // MSVC build (whose what() is "bad allocation") prints the same line.
 const char *const BAD_ALLOC = "std::bad_alloc";
@@ -895,9 +1005,11 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     }
     int threads = forced_threads;
     if (forced_threads <= 0) {
+        const mw_times::Scope timed(mw_times::seam);
         const long long n = mws::exe::largest_solve(text, open_end);
         threads = n >= 0 ? threads_for(n) : 1;
     }
+    g_render_threads = threads;
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
     std::string printout, why, kind, message, raised_kind;
     bool failed = false, printed;
@@ -930,7 +1042,7 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
 }
 
 // `_shell.run` inside `_shell.main`'s last line of defence.
-int run_deck(const std::string &deck, const std::string &out, bool en_optional,
+int run_deck_inner(const std::string &deck, const std::string &out, bool en_optional,
              int forced_threads) {
     try {
         std::string text, printout, gmo;
@@ -966,7 +1078,10 @@ int run_deck(const std::string &deck, const std::string &out, bool en_optional,
             const std::string path = ml::gmo_path(out);
             if (const int err = write_file(path, crlf)) throw ml::os_error(err, path);
         }
-        if (const int err = write_file(out, printout)) throw ml::os_error(err, out);
+        const Clock::time_point tw = Clock::now();
+        const int err = write_file(out, printout);
+        g_write_ms = ms_since(tw);
+        if (err) throw ml::os_error(err, out);
         return 0;
     } catch (const ml::PyError &e) {
         report_internal_error(deck, out, internal_error_reason(e.kind, e.message));
@@ -979,6 +1094,12 @@ int run_deck(const std::string &deck, const std::string &out, bool en_optional,
                               internal_error_reason("RuntimeError", "an unknown C++ exception"));
     }
     return 0;
+}
+
+int run_deck(const std::string &deck, const std::string &out, bool en_optional, int forced_threads) {
+    const int rc = run_deck_inner(deck, out, en_optional, forced_threads);
+    times_line("cxx", g_render_threads, 0.0, g_write_ms);
+    return rc;
 }
 
 // --- SimNEC's streaming call (`_shell.stream`, momwire#1512) -----------------
@@ -1066,7 +1187,10 @@ int stream(int forced_threads) {
                         blank = blank && mw::nec5::latin1_isspace(static_cast<unsigned char>(c));
                     if (!blank) {
                         bool go_on = false;
-                        write_all(stream_piece(pending, false, forced_threads, go_on));
+                        const std::string last = stream_piece(pending, false, forced_threads, go_on);
+                        const Clock::time_point tw = Clock::now();
+                        write_all(last);
+                        times_line("stream", g_render_threads, 0.0, ms_since(tw));
                     }
                 }
                 break;
@@ -1077,7 +1201,10 @@ int stream(int forced_threads) {
             bool go_on = false;
             const std::string printout = stream_piece(piece, !is_en, forced_threads, go_on);
             log_route(go_on ? "stream:structure" : "stream:last", "-");
-            if (!write_all(printout) || !go_on) return 0;
+            const Clock::time_point tw = Clock::now();
+            const bool wrote = write_all(printout);
+            times_line("stream", g_render_threads, 0.0, ms_since(tw));
+            if (!wrote || !go_on) return 0;
         }
     }
     return 0;
@@ -1103,6 +1230,7 @@ void blas_env_before_load() {
 }  // namespace
 
 int main(int argc, char **argv) {
+    times_begin();
 #if defined(_WIN32)
     blas_env_before_load();
 #endif

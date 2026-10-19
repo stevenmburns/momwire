@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_mw_times.h"
 
 // Thin module TU (momwire#687): the sections register themselves; their
 // prototypes live in _accel_common.h so every TU compiles against the seam.
@@ -44,5 +45,17 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_cmul(m);
     register_razor_solve(m);
     register_nec5_deck(m);
+
+    // MOMWIRE_TIMES: the C++ half of a Python answer's stage
+    // tally -- the ground tables and the LU this module fills and runs --
+    // read by `momwire._times` (`_mw_times.h`; this thread only).
+    m.def("stage_times_begin", [] { mw_times::enable(); });
+    m.def("stage_times_end", [] { mw_times::disable(); });
+    m.def("stage_times_read", [] {
+        const mw_times::State &s = mw_times::state();
+        mw_times::settle();
+        return py::make_tuple(s.ms[mw_times::ground], s.ms[mw_times::factor], s.ground_built,
+                              s.ground_disk, s.ground_blended);
+    });
 }
 
