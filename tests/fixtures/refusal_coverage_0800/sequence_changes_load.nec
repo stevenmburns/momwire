@@ -1,0 +1,11 @@
+CM refusal coverage (momwire 0.80.0), synthetic: sequence changes load
+CE
+GW 1,11,0.,-2.5,5.,0.,2.5,5.,.001
+GE 0,-1
+FR 0,1,0,0,28.
+EX 0,1,6,0,1.,0.
+XQ
+FR 0,1,0,0,29.
+LD 4,1,3,0,50.,0.
+XQ
+EN

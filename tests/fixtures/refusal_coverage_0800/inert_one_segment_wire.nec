@@ -1,0 +1,9 @@
+CM refusal coverage (momwire 0.80.0), synthetic: inert one segment wire
+CE
+GW 1,8,0.,-2.,0.,0.,2.,0.,.001
+GW 2,1,0.5,-0.25,0.,0.5,0.25,0.,.001
+GE 0,-1
+FR 0,1,0,0,30.
+EX 0,1,4,0,1.,0.
+XQ
+EN

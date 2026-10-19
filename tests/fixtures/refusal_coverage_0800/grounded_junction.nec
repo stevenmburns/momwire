@@ -1,0 +1,10 @@
+CM refusal coverage (momwire 0.80.0), synthetic: grounded junction
+CE
+GW 1,10,0.,0.,0.,0.,0.,2.5,.002
+GW 2,4,0.,0.,0.,1.,0.,1.,.002
+GE 1,-1
+GN 1
+FR 0,1,0,0,30.
+EX 0,1,-1,0,1.,0.
+RP 0,1,1,1000,90.,0.,0.,0.
+EN

@@ -1,0 +1,9 @@
+CM refusal coverage (momwire 0.80.0), synthetic: interior node where a wire lands
+CE
+GW 1,10,0.,-2.5,5.,0.,2.5,5.,.001
+GW 2,4,0.,0.,5.,0.,0.,7.,.001
+GE 0,-1
+FR 0,1,0,0,30.
+EX 0,1,5,0,1.,0.
+RP 0,1,1,1000,90.,0.,0.,0.
+EN

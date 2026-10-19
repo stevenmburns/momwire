@@ -1,0 +1,9 @@
+CM refusal coverage (momwire 0.80.0), synthetic: stepping fr several xq blocks
+CE
+GW 1,11,0.,-2.5,5.,0.,2.5,5.,.001
+GE 0,-1
+FR 0,3,0,0,28.,1.
+EX 0,1,6,0,1.,0.
+XQ
+XQ
+EN
