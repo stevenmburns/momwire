@@ -1,4 +1,4 @@
-CM one run, RP and NE before one XQ: read as 0.79 read it (momwire#1579 scope)
+CM one run, RP and NE before one XQ: printed in NEC-5 order (momwire#1579, 0.80.0)
 CE
 GW 1 21 0 -2.5 6 0 2.5 6 0.001
 GW 2 21 3 -2.5 6 3 2.5 6 0.001
