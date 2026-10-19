@@ -261,7 +261,9 @@ bool split_runs(const std::string &latin1_text, std::vector<std::string> &out);
 // and `multi_run` says whether the deck also split into XQ runs (which
 // `_stepping_refusal` then refuses).
 struct Answer {
-    enum Kind { refused, raised, single, multi, stepped } kind = refused;
+    // sequence: a deck read as a program (`_serve.split_sequence`, momwire
+    // 0.79.2), which the C++ route declines
+    enum Kind { refused, raised, single, multi, stepped, sequence } kind = refused;
     bool multi_run = false;  // stepped
     ErrorKind error_kind = ErrorKind::deck_error;
     std::string message;  // UTF-8; refused / raised

@@ -115,7 +115,18 @@ def test_a_single_run_deck_takes_the_old_path():
     assert _serve.split_runs((one_field_ge / "dipole-ex5.nec").read_text()) is None
 
 
-@pytest.mark.parametrize("card", ["FR 0 1 0 0 15.0 1", "LD 5 1 1 21 5.8e7"])
+def test_a_later_block_that_changes_the_frequency_runs_there():
+    """momwire 0.79.2: an FR in a later block is the frequency that block runs
+    at, as the licensed NEC-5 reads a deck (top to bottom), not a refusal."""
+    text = _deck("two-port").replace(
+        "EX 0 1 11 0 1.000000e-10\n", "FR 0 1 0 0 15.0 1\nEX 0 1 11 0 1.000000e-10\n", 1
+    )
+    out = render(text, basis=TWIN)
+    assert "NEC ERROR" not in out
+    assert "FREQUENCY= 1.5000E+01 MHZ" in out
+
+
+@pytest.mark.parametrize("card", ["LD 5 1 1 21 5.8e7"])
 def test_a_later_block_that_changes_more_than_its_sources_is_refused(card):
     text = _deck("two-port").replace(
         "EX 0 1 11 0 1.000000e-10\n", card + "\nEX 0 1 11 0 1.000000e-10\n", 1
