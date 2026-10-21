@@ -36,6 +36,7 @@ from dataclasses import replace
 import numpy as np
 
 from ..deck import BASES, NEC2_BASES
+from ..deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
 from ._nec4_printout import (
     FarFieldGround,
@@ -133,11 +134,85 @@ def render(text: str, *, basis: str) -> str:
     refused = basis_refusal(basis)
     if refused is not None:
         return _printout.render_refusal(text, refused, basis=basis, dialect="nec4")
+    structures = split_structures(text)
+    if structures is not None:
+        return _render_chain(structures, basis=basis)
+    printout, _seconds = render_structure(text, basis=basis)
+    return printout
+
+
+def render_structure(
+    text: str,
+    *,
+    basis: str,
+    echo_text: str | None = None,
+    closing: bool = True,
+    run_seconds: float = 0.0,
+) -> tuple[str, float | None]:
+    """One structure's printout and the seconds its solve took, ``None`` for
+    a refusal (which ends a chain).
+
+    ``text`` is SOLVED; ``echo_text`` is what the printout echoes when it is
+    not the same (a structure an ``NX`` closed is solved as the standalone
+    deck its body makes and echoed with the ``NX`` it arrived with, as the
+    NEC-5 slot's chain is, momwire#1592).  ``closing=False`` leaves out the
+    ``RUN TIME`` trailer; with it, ``run_seconds`` is added to this
+    structure's own, so the last structure of a chain carries the whole
+    chain's.
+    """
+    echo = text if echo_text is None else echo_text
+    refused = basis_refusal(basis)
+    if refused is not None:
+        return _printout.render_refusal(
+            echo, refused, basis=basis, dialect="nec4"
+        ), None
     try:
         data = solve(text, basis=basis)
     except Nec4Refusal as exc:
-        return _printout.render_refusal(text, str(exc), basis=basis, dialect="nec4")
-    return render_nec4_printout(text, data, basis=basis)
+        return _printout.render_refusal(
+            echo, str(exc), basis=basis, dialect="nec4"
+        ), None
+    seconds = data.run_seconds
+    data = replace(data, run_seconds=seconds + run_seconds)
+    return render_nec4_printout(echo, data, basis=basis, closing=closing), seconds
+
+
+def _render_chain(structures: list[Nec5Structure], *, basis: str) -> str:
+    """An ``NX``-chained deck's printout (momwire#1592): each structure's own
+    printout in turn, as the NEC-5 slot lays a chain out
+    (:func:`momwire.eznec._shell._render_chain`).
+
+    SimNEC's batch and stream modes queue several runs into one engine call
+    with ``NX`` between them, and read each run's printout up to its ``NX``
+    echo.  Every structure starts from scratch, so each is solved as the
+    standalone deck its body makes; each prints in full, header included,
+    ends on its ``NX`` echo, and only the last carries ``RUN TIME`` (the
+    chain's).  A structure that refuses ends the chain there with its own
+    refusal printout, after the structures that solved.
+
+    No NEC-4.2 printout of a chain has been captured: the layout between
+    structures is the NEC-5 one, and inside each structure it is this
+    slot's own.  Before momwire#1592 the whole chain was handed to the
+    one-deck path, whose reader stops at the first ``NX`` while its echo
+    counted every execute card up to ``EN``, and the deck refused as
+    ``N execute cards against 1 execute runs``.
+    """
+    printouts: list[str] = []
+    seconds = 0.0
+    for k, structure in enumerate(structures):
+        last = k == len(structures) - 1 and not ends_on_nx(structure)
+        printout, took = render_structure(
+            structure.deck_text,
+            basis=basis,
+            echo_text=structure.echo_text,
+            closing=last,
+            run_seconds=seconds,
+        )
+        printouts.append(printout)
+        if took is None:
+            break
+        seconds += took
+    return "".join(printouts)
 
 
 def _unmeasured(what: str) -> str:

@@ -33,14 +33,15 @@ Three rules, and they are the whole unit
    EZNEC and SimNEC pass the two paths, and with paths on the command line
    stdin stays untouched whether it is a terminal, a pipe carrying bytes, or
    /dev/null.  ``- -`` is SimNEC's streaming call (momwire#1395, served since
-   momwire#1512, :func:`stream`): decks on stdin, printouts on stdout.
+   momwire#1512, :func:`stream`; in the NEC-4.2 slot too since
+   momwire#1592): decks on stdin, printouts on stdout.
    With NO arguments, the NEC-5 slot reads the two paths from stdin, one per
    line (momwire#1488): that is how 4nec2 runs its engine, as
    ``ENGINE.exe < nec2d.tmp`` with ``..\\out\\EXAMPLE3.inp`` and
    ``..\\out\\EXAMPLE3.out`` in the file, resolved against the working
    directory like any relative path.  A terminal on stdin is not read (a
    person who types the bare command gets the argument error at once), and
-   the NEC-4.2 slot never reads stdin at all.
+   the NEC-4.2 slot reads stdin only for ``- -``.
 
 The 4nec2 front end
 -------------------
@@ -681,14 +682,14 @@ def run(
 
 
 STREAMING_REFUSAL = (
-    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only, "
-    "and only in its NEC-5 slot; give it '- -', or two file paths (momwire#1395, momwire#1512)"
+    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only; "
+    "give it '- -', or two file paths (momwire#1395, momwire#1512)"
 )
 
 _STREAM_CHUNK = 65536
 
 
-def _stream_piece(text: str, *, basis: str) -> tuple[str, bool]:
+def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str, bool]:
     """One piece of a stream as its printout: ``(printout, go_on)``.
 
     A piece :func:`next_structure` cut at an ``NX`` is that structure,
@@ -701,12 +702,24 @@ def _stream_piece(text: str, *, basis: str) -> tuple[str, bool]:
     structure that refuses, which ends a stream as it ends a chain. An
     exception is the INTERNAL ERROR printout :func:`main` would write for
     a file holding the piece, and ends the stream too.
+
+    ``dialect`` is the EZNEC slot, as for :func:`render`: the NEC-4.2 slot
+    streams the same way, each structure in its own printout
+    (:func:`momwire.eznec._nec4.render_structure`, momwire#1592).
     """
     try:
         structures = split_structures(text, open_end=True)
         if structures is None:
-            return render(text, basis=basis), False
+            return render(text, basis=basis, dialect=dialect), False
         (structure,) = structures
+        if dialect == "nec4":
+            printout, took = _nec4.render_structure(
+                structure.deck_text,
+                basis=basis,
+                echo_text=structure.echo_text,
+                closing=False,
+            )
+            return printout, took is not None
         answered = _answer(
             structure.deck_text, basis=basis, echo_text=structure.echo_text
         )
@@ -716,20 +729,22 @@ def _stream_piece(text: str, *, basis: str) -> tuple[str, bool]:
         return _print(deck, answers, layout, basis=basis, closing=False), True
     except Exception as exc:  # noqa: BLE001 - the stream's last line of defence
         return (
-            _printout.render_refusal(text, _internal_error_reason(exc), basis=basis),
+            _printout.render_refusal(
+                text, _internal_error_reason(exc), basis=basis, dialect=dialect
+            ),
             False,
         )
 
 
-def _timed_piece(piece: str, basis: str, write) -> bool:
+def _timed_piece(piece: str, basis: str, write, dialect: str = "nec5") -> bool:
     """One stream piece answered and written (``go_on``); under
     MOMWIRE_TIMES with its ``times:`` line on stderr."""
     if not _times.env_on():
-        printout, go_on = _stream_piece(piece, basis=basis)
+        printout, go_on = _stream_piece(piece, basis=basis, dialect=dialect)
         write(printout_bytes(printout))
         return go_on
     with _times.answering("stream", **_times_pre()) as times:
-        printout, go_on = _stream_piece(piece, basis=basis)
+        printout, go_on = _stream_piece(piece, basis=basis, dialect=dialect)
         with _times.stage("write"):
             write(printout_bytes(printout))
     _emit_times(times)
@@ -764,7 +779,9 @@ def _emit_times(times) -> None:
     print(times.line(), file=sys.stderr, flush=True)
 
 
-def stream(read=None, write=None, *, basis: str = _serve.BASIS) -> int:
+def stream(
+    read=None, write=None, *, basis: str = _serve.BASIS, dialect: str = "nec5"
+) -> int:
     """SimNEC's streaming call, ``- -`` (momwire#1395, momwire#1512).
 
     SimNEC starts the engine once and holds it: it writes one structure's
@@ -787,7 +804,8 @@ def stream(read=None, write=None, *, basis: str = _serve.BASIS) -> int:
 
     ``read`` returns the next bytes of stdin (``b""`` at its end) and
     ``write`` takes each printout's bytes and flushes them; both default to
-    the process's own stdin and stdout.
+    the process's own stdin and stdout. ``dialect`` is the EZNEC slot: the
+    NEC-4.2 slot streams too (momwire#1592).
     """
     if read is None:
         fd = sys.stdin.fileno()
@@ -818,12 +836,12 @@ def stream(read=None, write=None, *, basis: str = _serve.BASIS) -> int:
             cut = next_structure(pending, final=final)
             if cut is None:
                 if final and pending.strip():
-                    _timed_piece(pending, basis, write)
+                    _timed_piece(pending, basis, write, dialect)
                 break
             end = cut[0]
             piece, pending = pending[:end], pending[end:]
             swallow_lf = piece.endswith("\r") and not pending and not final
-            if not _timed_piece(piece, basis, write):
+            if not _timed_piece(piece, basis, write, dialect):
                 return 0
     return 0
 
@@ -880,11 +898,11 @@ def main(
 
     deck_path, printout_path = args
     if "-" in (deck_path, printout_path):
-        if args == ["-", "-"] and dialect == "nec5":
+        if args == ["-", "-"] and dialect in DIALECTS:
             # SimNEC's streaming call (momwire#1512): decks on stdin,
-            # printouts on stdout.
+            # printouts on stdout, in either slot (momwire#1592).
             try:
-                return stream(basis=basis)
+                return stream(basis=basis, dialect=dialect)
             except BrokenPipeError:
                 # The caller stopped reading: nobody is left to tell.
                 return 0

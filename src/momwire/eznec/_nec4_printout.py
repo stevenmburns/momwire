@@ -586,7 +586,11 @@ def _echo(index: int, card) -> list[str]:
 
 
 def render_nec4_printout(
-    deck_text: str, data: Nec4Printout, *, basis: str | None = None
+    deck_text: str,
+    data: Nec4Printout,
+    *,
+    basis: str | None = None,
+    closing: bool = True,
 ) -> str:
     """A complete NEC-4.2 printout: the header, then everything to ``RUN TIME``.
 
@@ -594,9 +598,13 @@ def render_nec4_printout(
     post-``GE`` card images, ``EN`` last and after the results, exactly as in
     NEC-5's); ``data`` every number the runs produced.  ``basis`` reaches line
     2's engine stamp and nothing else.
+
+    In an ``NX``-chained deck the terminator's slot holds the ``NX`` echo,
+    and ``closing=False`` drops the ``RUN TIME`` trailer of every structure
+    but the last (momwire#1592), as the NEC-5 printout's chain does.
     """
     cards = _printout._post_ge_cards(deck_text)
-    terminator = cards[-1] if cards and cards[-1].mnemonic == "EN" else None
+    terminator = _printout._terminator(cards)
     numbered = [(i, c) for i, c in enumerate(cards, start=1) if c is not terminator]
     gap = _printout._blank
     body: list[str] = []
@@ -626,7 +634,8 @@ def render_nec4_printout(
     body += [line for i, c in numbered[echoed:] for line in _echo(i, c)]
     if terminator is not None:
         body.append(_printout._card_echo(len(cards), terminator))
-    body += ["", f"{_printout._RUN_TIME_LABEL}{data.run_seconds:10.3f}"]
+    if closing:
+        body += ["", f"{_printout._RUN_TIME_LABEL}{data.run_seconds:10.3f}"]
     header = _printout.render_header(deck_text, basis=basis, dialect="nec4")
     return header + "\n".join(body) + "\n"
 

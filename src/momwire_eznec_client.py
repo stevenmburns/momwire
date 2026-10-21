@@ -247,20 +247,23 @@ def probe_version() -> str:
 
 
 STREAMING_REFUSAL = (
-    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only, "
-    "and only in its NEC-5 slot; give it '- -', or two file paths (momwire#1395, momwire#1512)"
+    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only; "
+    "give it '- -', or two file paths (momwire#1395, momwire#1512)"
 )
 
 
-def _stream(basis: str | None) -> int:
+def _stream(basis: str | None, dialect: str = "nec5") -> int:
     """SimNEC's streaming call (``- -``, momwire#1512): the one-shot shell's
     :func:`momwire.eznec._shell.stream`, in a child that inherits this
     process's stdin and stdout. One interpreter start per stream, which is
     the whole point of the mode; the resident server answers one deck per
-    connection, and a stream is one long conversation."""
+    connection, and a stream is one long conversation. ``dialect`` is the
+    EZNEC slot: the NEC-4.2 slot streams too (momwire#1592)."""
     import subprocess
 
     kwargs = "" if basis is None else f", basis={basis!r}"
+    if dialect != "nec5":
+        kwargs += f", dialect={dialect!r}"
     command = [
         sys.executable,
         "-c",
@@ -339,15 +342,16 @@ def main(argv: list[str] | None = None) -> int:
         basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
         if basis is None:
             basis = _mech.filename_basis(prog, _NEC5_MARKER)
+    dialect = "nec4" if is_nec4 else "nec5"
     if "-" in (deck_path, printout_path):
-        if args == ["-", "-"] and not is_nec4:
-            # SimNEC's streaming call (momwire#1512).
-            return _stream(basis)
+        if args == ["-", "-"]:
+            # SimNEC's streaming call (momwire#1512), in either slot
+            # (momwire#1592).
+            return _stream(basis, dialect)
         # Any other '-' (momwire#1395): refused on stderr with a failing
         # status rather than a printout written to a file named "-".
         print(STREAMING_REFUSAL, file=sys.stderr)
         return 2
-    dialect = "nec4" if is_nec4 else "nec5"
 
     timed = _mech.times_requested()
     try:
