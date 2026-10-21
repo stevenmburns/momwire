@@ -385,6 +385,7 @@ _ACCEL_HEADERS = [
     # The column machinery the near-interface core's twin reads (momwire#1512
     # B4a), shared with `_near_interface_accel`.
     "src/momwire/_near_interface_columns_inline.h",
+    "src/momwire/_vmath_inline.h",
     "src/momwire/_razor_crossing_core.h",
     # The crossing fill's shared pieces, razor's and bs2's (momwire#1517 step 4).
     "src/momwire/_crossing_shared_inline.h",
@@ -608,6 +609,7 @@ _NEAR_HEADERS = [
     "src/momwire/_contour_lanes_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).
     "src/momwire/_near_interface_columns_inline.h",
+    "src/momwire/_vmath_inline.h",
     # The Python-free column twin and sheet interpolator's interface
     # (momwire#1512 B4a), which this extension binds.
     "src/momwire/_near_interface_core.h",
