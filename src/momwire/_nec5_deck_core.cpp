@@ -1529,7 +1529,9 @@ std::string stepping_refusal(const std::string &deck_text, bool multi_run) {
 // read as a program (a later run carries an FR, the first run steps and
 // another follows, or a later run is requests alone), 0 when not, -1 with `why` when a later run changes a
 // structural card (`_printout.execution_groups` for the runs).
-int sequence_read(const std::string &deck_text, std::string &why) {
+int sequence_read(const std::string &deck_text, std::string &why, std::vector<Card> *cards_out,
+                  std::vector<std::vector<std::size_t>> *groups_out,
+                  std::vector<std::size_t> *tail_out) {
     std::vector<Card> cards;
     bool seen_ge = false;
     for (const std::string &line : latin1_splitlines(deck_text)) {
@@ -1589,7 +1591,71 @@ int sequence_read(const std::string &deck_text, std::string &why) {
                 return -1;
             }
         }
+    if (cards_out) *cards_out = std::move(cards);
+    if (groups_out) *groups_out = std::move(groups);
+    if (tail_out) *tail_out = std::move(pending);
     return 1;
+}
+
+// `split_sequence`'s run decks (momwire#1602): the deck through GE, the
+// first run's structural cards, the FR in force, the sources in force (the
+// latest run that wrote EX) and the run's own requests, then XQ and EN.
+bool sequence_texts(const std::string &deck_text, const std::vector<Card> &cards,
+                    const std::vector<std::vector<std::size_t>> &groups,
+                    std::vector<std::string> &texts, std::vector<bool> &full,
+                    std::vector<bool> &sources) {
+    static const char *kSeq[] = {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR"};
+    auto in_seq = [](const std::string &m) {
+        for (const char *c : kSeq)
+            if (m == c) return true;
+        return false;
+    };
+    const std::vector<std::string> lines = latin1_splitlines(deck_text);
+    std::size_t ge = lines.size();
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        if (py_upper(head(lines[i], 2)) == "GE") {
+            ge = i;
+            break;
+        }
+    if (ge == lines.size()) return false;  // `next(...)` finds nothing: Python's escape
+    std::vector<std::string> common;
+    for (std::size_t k : groups[0])
+        if (!in_seq(cards[k].mnemonic)) common.push_back(cards[k].raw);
+    bool have_fr = false;
+    std::string fr;
+    std::vector<std::string> in_force;
+    for (const std::vector<std::size_t> &group : groups) {
+        std::vector<std::string> exs, requests;
+        bool group_fr = false;
+        for (std::size_t k : group) {
+            const std::string &m = cards[k].mnemonic;
+            if (m == "FR") {
+                fr = cards[k].raw;
+                have_fr = group_fr = true;
+            } else if (m == "EX") {
+                exs.push_back(cards[k].raw);
+            } else if (m == "RP" || m == "NE" || m == "NH" || m == "PQ") {
+                requests.push_back(cards[k].raw);
+            }
+        }
+        if (!exs.empty()) in_force = exs;
+        std::string t;
+        auto put = [&t](const std::string &line) {
+            if (!t.empty()) t += "\n";
+            t += line;
+        };
+        for (std::size_t i = 0; i <= ge; ++i) put(lines[i]);
+        for (const std::string &line : common) put(line);
+        if (have_fr) put(fr);
+        for (const std::string &line : in_force) put(line);
+        for (const std::string &line : requests) put(line);
+        put("XQ");
+        put("EN");
+        texts.push_back(t + "\n");
+        full.push_back(texts.size() == 1 || group_fr);
+        sources.push_back(!exs.empty());
+    }
+    return true;
 }
 
 Answer answer(const std::string &text, const std::string *echo_text) {
@@ -1620,9 +1686,30 @@ Answer answer(const std::string &text, const std::string *echo_text) {
     {
         // `_answer`'s sequence reading (momwire 0.79.2), before the split
         std::string why;
-        const int seq = sequence_read(text, why);
+        std::vector<Card> cards;
+        std::vector<std::vector<std::size_t>> groups;
+        std::vector<std::size_t> tail;
+        const int seq = sequence_read(text, why, &cards, &groups, &tail);
         if (seq < 0) return stop(ErrorKind::serve_refusal, why, true);
         if (seq > 0) {
+            std::vector<std::string> texts;
+            std::vector<bool> full, sources;
+            if (!sequence_texts(text, cards, groups, texts, full, sources)) {
+                // no line starts GE (`next(...)` raises): left to Python
+                a.kind = Answer::sequence;
+                a.deck = std::move(deck);
+                return a;
+            }
+            std::vector<DeckOutcome> runs = parse_nec5_shared(texts);
+            for (std::size_t g = 0; g < groups.size(); ++g) {
+                SequenceGroup sg;
+                sg.parsed = std::move(runs[g]);
+                sg.cards = std::move(groups[g]);
+                sg.full = full[g];
+                sg.sources = sources[g];
+                a.groups.push_back(std::move(sg));
+            }
+            a.sequence_tail = std::move(tail);
             a.kind = Answer::sequence;
             a.deck = std::move(deck);
             return a;

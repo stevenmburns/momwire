@@ -2815,8 +2815,21 @@ Lines network_data(const RunDataC &data) {
     return lines;
 }
 
-Lines run_sections(const RunDataC &data) {
+Lines run_sections(const RunDataC &data, bool requests_only = false) {
     Lines body;
+    if (requests_only) {
+        // a run that changed no source: its near fields and patterns alone
+        // (an RP after an XQ, momwire 0.79.2)
+        for (const auto &near : data.near_fields) {
+            add(body, near_lines(*near));
+            blanks(body, 3);
+        }
+        for (const PatternBlockC &block : data.patterns) {
+            add(body, pattern_lines(block));
+            blanks(body, 5);
+        }
+        return body;
+    }
     if (!data.connections.empty()) {
         body.push_back(sp(27) + "- - - STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS - - -");
         body.push_back("");
@@ -3017,6 +3030,70 @@ std::string render_multi_printout(const Deck &deck, const std::string &echo_text
     }
     body.push_back("");
     for (const auto &item : pending) body.push_back(card_echo(item.first, *item.second));
+    if (has_term) body.push_back(card_echo(static_cast<long long>(cards.size()), cards.back()));
+    add(body, closing_lines(closing));
+    return render_header(&echo_text, basis, stamp) + join(body) + "\n";
+}
+
+// `render_sequence_printout` (momwire 0.79.2; momwire#1602): the deck read
+// as a program. The structure, then per run its card echoes and either a
+// whole block per frequency (the first run, or one carrying an FR) or its
+// results only at the frequency in force (a run that changes no source:
+// its near fields and patterns only), then the echoes after the last run,
+// EN and one RUN TIME. `runs` are every run's answers in order, `counts`
+// how many each run has.
+std::string render_sequence_printout(const Deck &deck, const std::string &echo_text,
+                                     const std::vector<SequenceGroup> &groups,
+                                     const std::vector<std::size_t> &tail,
+                                     const std::vector<RunDataC> &runs,
+                                     const std::vector<std::size_t> &counts,
+                                     const std::string &basis, const EngineStamp &stamp,
+                                     bool closing) {
+    const std::vector<Card> cards = post_ge_cards(echo_text);
+    const bool has_term = !cards.empty() && is_terminator(cards.back());
+    if (runs.empty()) throw PyRaise{"IndexError", "list index out of range"};
+    auto echo = [&](std::size_t i) {
+        if (i >= cards.size()) throw PyRaise{"IndexError", "list index out of range"};
+        return card_echo(static_cast<long long>(i) + 1, cards[i]);
+    };
+    Lines body = times_environment(stamp.variant);
+    add(body, head_sections(deck, runs[0]));
+    bool allocate = true;
+    std::size_t at = 0;
+    for (std::size_t g = 0; g < groups.size(); g++) {
+        const SequenceGroup &run = groups[g];
+        if (g) body.push_back("");
+        for (std::size_t i : run.cards) body.push_back(echo(i));
+        const bool requests_only = !run.full && !run.sources;
+        if (run.full) {
+            blanks(body, 4);
+            for (std::size_t k = 0; k < counts[g]; k++) {
+                const RunDataC &data = runs[at + k];
+                if (k) body.push_back("");
+                add(body, frequency(data));
+                blanks(body, 3);
+                add(body, environment(data));
+                blanks(body, 3);
+                add(body, loading(data, allocate));
+                allocate = false;
+                blanks(body, 3);
+                add(body, timing(data));
+                blanks(body, 3);
+                if (!data.networks.empty()) {
+                    add(body, network_data(data));
+                    blanks(body, 3);
+                }
+                add(body, run_sections(data));
+            }
+        } else {
+            blanks(body, 3);
+            for (std::size_t k = 0; k < counts[g]; k++)
+                add(body, run_sections(runs[at + k], requests_only));
+        }
+        at += counts[g];
+    }
+    body.push_back("");
+    for (std::size_t i : tail) body.push_back(echo(i));
     if (has_term) body.push_back(card_echo(static_cast<long long>(cards.size()), cards.back()));
     add(body, closing_lines(closing));
     return render_header(&echo_text, basis, stamp) + join(body) + "\n";
@@ -3262,7 +3339,17 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
                 } else {
                     Prepared &p = r.prepared[static_cast<std::size_t>(o.prepared_index)];
                     const Solved &sol = solution(o.prepared_index);
-                    if (a.kind == Answer::stepped) {
+                    if (a.kind == Answer::sequence) {
+                        // `replace(deck_g, frequency_mhz=f)`, finished in
+                        // turn; its front released as the stepped route's
+                        const auto &step_at = so.steps[j];
+                        Deck step = a.groups[step_at.first].parsed.deck;
+                        step.frequency_mhz = step_at.second;
+                        runs.push_back(
+                            timed_finish(step, p, sol, static_cast<std::size_t>(o.prepared_index)));
+                        engine.release(p);
+                        solved[static_cast<std::size_t>(o.prepared_index)] = Solved();
+                    } else if (a.kind == Answer::stepped) {
                         // `replace(deck, frequency_mhz=f)`, finished before
                         // the next frequency is solved; its front released
                         Deck step = a.deck;
@@ -3285,6 +3372,12 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
                 printed += render_multi_printout(a.deck, echo, runs, basis, stamp, last);
             else if (a.kind == Answer::stepped)
                 printed += render_stepped_printout(a.deck, echo, runs, basis, stamp, last);
+            else if (a.kind == Answer::sequence) {
+                std::vector<std::size_t> counts(a.groups.size(), 0);
+                for (const auto &step_at : so.steps) counts[step_at.first]++;
+                printed += render_sequence_printout(a.deck, echo, a.groups, a.sequence_tail,
+                                                    runs, counts, basis, stamp, last);
+            }
             else
                 printed += render_printout(a.deck, echo, runs[0], basis, stamp, last);
         }

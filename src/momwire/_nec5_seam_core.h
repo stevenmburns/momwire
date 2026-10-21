@@ -207,6 +207,9 @@ struct RunOutcome {
 struct StructureOutcome {
     Answer::Kind read = Answer::refused;  // the reader's answer
     std::vector<RunOutcome> runs;         // single: one; multi: one per run, to the stop
+    // sequence: each entry of `runs`, its run (an index into
+    // `Answer::sequence`) and the frequency it solved at
+    std::vector<std::pair<std::size_t, double>> steps;
 };
 
 struct SeamResult {
