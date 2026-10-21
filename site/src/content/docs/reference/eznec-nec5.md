@@ -275,7 +275,9 @@ needs, since SimNEC reads `nec5` in the path.
 
 The NEC-4.2 launchers carry `nec42` for the same reason: SimNEC recognises an
 engine by `nec42` in its name, as it does `nec5`, so `momwire-nec42.exe` is
-what its NEC-4.2 engine setting takes. (Releases before momwire#1443 shipped
+what its NEC-4.2 engine setting takes, in each of SimNEC's processing modes:
+single, batch (several runs in one deck, `NX` between them) and stream (`- -`)
+since momwire#1592. (Releases before momwire#1443 shipped
 them as `momwire-nec4[-<basis>].exe`.) A copy named with just `nec4` — no
 `2` — still answers EZNEC's NEC-4.2 slot, its basis read past `nec4-`.
 

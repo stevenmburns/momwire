@@ -2,9 +2,9 @@
 
 SimNEC 5.4 starts an ``NEC5CL_a5x`` engine once as ``<engine> - -`` and
 streams decks over stdin/stdout, which the NEC-5 slot serves since
-momwire#1512 (``tests/test_eznec_stream_1512.py``). Any other ``-`` -- one
-of the two paths only, or ``- -`` in the NEC-4.2 slot -- used to be read as
-a file name: the refusal printout went into a file called ``-`` and the
+momwire#1512 (``tests/test_eznec_stream_1512.py``), and the NEC-4.2 slot
+since momwire#1592 (``tests/test_eznec_nec42_chain_1592.py``). Any other
+``-`` -- one of the two paths only -- used to be read as a file name: the refusal printout went into a file called ``-`` and the
 process exited 0 with nothing on stdout, so the caller waited forever. Both
 entry points (the drop-in client and the shell the Windows executables run)
 refuse it on stderr with status 2 and write no file.
@@ -23,15 +23,6 @@ from momwire.eznec import _shell
 def test_a_lone_dash_is_refused_on_stderr(main, args, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(args) == 2
-    captured = capsys.readouterr()
-    assert "streaming mode" in captured.err
-    assert captured.out == ""
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_the_nec4_slot_refuses_the_streaming_call(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    assert _shell.main(["-", "-"], dialect="nec4") == 2
     captured = capsys.readouterr()
     assert "streaming mode" in captured.err
     assert captured.out == ""
