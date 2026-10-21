@@ -164,7 +164,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 42 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 43 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -1147,9 +1147,24 @@ def _edited(capture: str, old: str, new: str) -> str:
             id="sweep-and-two-runs",
         ),
         pytest.param(
-            _edited("0233", "XQ 0", "XQ 0\r\nFR 0,1,0,0,14.,0.\r\nXQ 0"),
+            _edited("0233", "XQ 0", "XQ 0\r\nLD 4,1,3,0,10.,0.\r\nXQ 0"),
             "a later execute card after a card that refills the matrix",
             id="refill-between-runs",
+        ),
+        pytest.param(
+            # A new FR is served (p37); a load beside it is not.
+            _edited(
+                "0233", "XQ 0", "XQ 0\r\nFR 0,1,0,0,14.,0.\r\nLD 4,1,3,0,10.,0.\r\nXQ 0"
+            ),
+            "a later execute card after a card that refills the matrix",
+            id="new-fr-and-a-load-between-runs",
+        ),
+        pytest.param(
+            # Measured: a sweep in the LAST run (p37); a sweep with a run
+            # after it is not.
+            _edited("p37", "RP 0 1 73 1000 0 0 0 5", "XQ\nFR 0 1 0 0 3.6 0\nXQ"),
+            "several execute cards over a frequency sweep",
+            id="a-run-after-a-sweep",
         ),
         pytest.param(
             _edited("0223", "RP 0,1,361,1000", "RP 0,1,361,0"),
@@ -1249,3 +1264,25 @@ def test_a_spherical_grid_into_the_soil_refuses_by_name():
     text = render(deck, basis=BASIS, dialect="nec4")
     assert " ***** NEC ERROR - NE asks for the field at (1.73205, 0, -1)" in text
     assert "below the finite ground" in text
+
+
+@pytest.mark.integration
+def test_dans_fr_xq_fr_rp_serves_through_the_slot(tmp_path):
+    """Dan AC6LA's program (momwire#1592, probe p37): one run at the first
+    ``FR``, then a whole block per frequency of the second, each with its
+    pattern, through the slot's process entry as EZNEC and SimNEC launch it.
+    The layout is gated against the licensed printout above; this pins the
+    run order and the frequencies."""
+    source, out = tmp_path / "EZ.NEC", tmp_path / "NEC.OUT"
+    source.write_bytes(deck_text("p37").encode("latin-1"))
+    assert _shell.main([str(source), str(out)], basis=BASIS, dialect="nec4") == 0
+    text = out.read_bytes().decode("latin-1")
+    assert "NEC ERROR" not in text
+    freqs = [
+        float(ln.split("=")[1].split()[0])
+        for ln in text.splitlines()
+        if ln.strip().startswith("FREQUENCY=")
+    ]
+    assert freqs == pytest.approx([3.68, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0])
+    assert text.count("- - - ANTENNA INPUT PARAMETERS - - -") == 7
+    assert text.count("- - - RADIATION PATTERNS - - -") == 6
