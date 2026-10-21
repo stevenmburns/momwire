@@ -1429,13 +1429,65 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
             stop(o);
             stopped = true;
         } else if (a.kind == Answer::sequence) {
-            // a deck read as a program (momwire 0.79.2): Python's, declined
-            RunOutcome o;
-            o.kind = RunOutcome::declined;
-            o.message = "sequence";
-            so.runs.push_back(o);
-            stop(o);
-            stopped = true;
+            // A deck read as a program (momwire 0.79.2, served here since
+            // momwire#1602): `_answer_sequence` parses each run's deck and
+            // serves it at each frequency in force -- a run that starts a
+            // loop (the first, or one carrying an FR) over its whole list,
+            // any other at the last frequency the run before it solved --
+            // stopping at the first refusal or escape.
+            auto halt = [&](const RunOutcome &o) {
+                so.runs.push_back(o);
+                stop(o);
+                stopped = true;
+            };
+            if (a.groups.empty()) {
+                RunOutcome o;
+                o.kind = RunOutcome::declined;
+                o.message = "sequence";
+                halt(o);
+            }
+            double last = 0.0;
+            for (std::size_t g = 0; g < a.groups.size() && !stopped; g++) {
+                const SequenceGroup &sg = a.groups[g];
+                if (!sg.parsed.ok) {
+                    RunOutcome o;
+                    const bool refusal = sg.parsed.kind == ErrorKind::deck_error ||
+                                         sg.parsed.kind == ErrorKind::serve_refusal;
+                    o.kind = refusal ? RunOutcome::refused : RunOutcome::raised;
+                    o.message = sg.parsed.message;
+                    o.error_kind = error_kind_name(sg.parsed.kind);
+                    halt(o);
+                    break;
+                }
+                const Deck &d = sg.parsed.deck;
+                std::vector<double> freqs;
+                if (!sg.full) {
+                    freqs.push_back(last);
+                } else if (d.frequencies_too_many) {
+                    RunOutcome o;
+                    o.kind = RunOutcome::declined;
+                    o.message = "stepping-fr-count";
+                    halt(o);
+                    break;
+                } else if (!d.frequencies_mhz.empty()) {
+                    freqs = d.frequencies_mhz;
+                } else {
+                    freqs.push_back(d.frequency_mhz);
+                }
+                for (double f : freqs) {
+                    Deck step = d;
+                    step.frequency_mhz = f;
+                    RunOutcome o = run_one(step, engine, r, nullptr);
+                    so.runs.push_back(o);
+                    so.steps.emplace_back(g, f);
+                    if (o.kind != RunOutcome::prepared) {
+                        stop(o);
+                        stopped = true;
+                        break;
+                    }
+                }
+                last = freqs.back();
+            }
         } else if (a.kind == Answer::stepped) {
             // A stepping FR (momwire#1508): `_answer` serves
             // `replace(deck, frequency_mhz=f)` for each frequency in turn,

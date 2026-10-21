@@ -611,6 +611,45 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     # The run half declines nothing by name any more: LD 0 / 1 / 4, RP and
     # NE / NH all print (what is left declines in the seam, before it).
     assert not any(r.endswith("not yet in C++") for r in reasons), reasons
+    # momwire#1602: a deck read as a program prints, compared above
+    assert "sequence" not in reasons, reasons
+
+
+SEQUENCE_DECKS = [
+    ROOT / "tests" / "fixtures" / "nec5_sequence" / "rp_ne_two_runs.nec",
+    ROOT / "tests" / "fixtures" / "nec5_sequence" / "rp_ne_one_xq.nec",
+    ROOT / "tests" / "fixtures" / "nec5_sequence" / "fr_after_xq.nec",
+    ROOT / "tests" / "fixtures" / "eznec_fr_step_1508" / "p07_two_fr.nec",
+    ROOT / "tests" / "fixtures" / "eznec_fr_step_1508" / "p11_ex_change.nec",
+    ROOT / "tests" / "fixtures" / "eznec_fr_step_1508" / "p18_two_rp.nec",
+    ROOT / "tests" / "fixtures" / "eznec_nec42" / "probes" / "p25_xq_rp_ne_free.nec",
+]
+
+
+def test_the_sequence_decks_print_as_python_does(driver, tmp_path):
+    """momwire#1602 / #1590: a deck read as a program (momwire 0.79.2) --
+    RP then NE before each XQ of a two-excitation deck (a feed-to-probe
+    transfer), RP then NE before one XQ, two RP before one XQ, an FR after
+    an XQ, a stepping first run followed by another, a request after a
+    no-op XQ -- prints through the C++ core, which declined every one of
+    them in 0.80.0, byte for byte as `momwire-nec5-razor-2p` writes it."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    with _one_thread():
+        answers = pc.run_driver(
+            driver[0]["nec5_razor_printout_driver"], SEQUENCE_DECKS, tmp_path
+        )
+        for path, ans in zip(SEQUENCE_DECKS, answers, strict=True):
+            assert (ans["route"], ans["seam"], ans["raised"]) == (
+                "printed",
+                "served",
+                "",
+            ), path
+            ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
 
 
 def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
@@ -681,23 +720,17 @@ def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
     in free space, a loaded inverted V at a range with negative theta -- and
     is compared byte for byte by the corpus test above.
 
-    Except the two-card deck, which the deck core now declines as a
-    "sequence" (momwire 0.80.0): its second RP runs on the standing solution
-    and NEC-5 (x13) echoes it between the two patterns, which the Python
-    sequence reading prints and the C++ core does not yet."""
+    The two-card deck is a "sequence" (momwire 0.80.0): its second RP runs
+    on the standing solution and NEC-5 (x13) echoes it between the two
+    patterns, which the C++ core prints as Python does since momwire#1602
+    (it declined it in 0.80.0, momwire#1590)."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     every = sorted(RP_DECKS.glob("*.nec"))
     assert len(every) == 4
-    sequence = RP_DECKS / "rp_free_sphere_two_cards.nec"
-    decks = [p for p in every if p != sequence]
-    (declined,) = pc.run_driver(
-        driver[0]["nec5_razor_printout_driver"], [sequence], tmp_path
-    )
-    assert declined["route"] == "declined", declined["route"]
-    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
-    for path, ans in zip(decks, answers, strict=True):
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], every, tmp_path)
+    for path, ans in zip(every, answers, strict=True):
         assert (ans["route"], ans["seam"], ans["raised"]) == (
             "printed",
             "served",
@@ -1186,8 +1219,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
-        # a deck read as a program (momwire 0.79.2): Python serves it
-        "sequence",
         "front:bspline-buried-two-radius-spread",
         "front:bspline-buried-two-radius-nodes",
         "front:bspline-buried-mixed",

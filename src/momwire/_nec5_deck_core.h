@@ -260,15 +260,28 @@ bool split_runs(const std::string &latin1_text, std::vector<std::string> &out);
 // `stepped`: momwire#1508's stepping FR -- `deck` carries the frequencies,
 // and `multi_run` says whether the deck also split into XQ runs (which
 // `_stepping_refusal` then refuses).
+// One run of a sequence deck (`_serve.SequenceGroup`): its single-run deck
+// as parsed (the outcome held, raised where `_answer_sequence` parses it),
+// the post-GE card indices it echoes, whether it starts a frequency loop and
+// whether it writes its own sources.
+struct SequenceGroup {
+    DeckOutcome parsed;
+    std::vector<std::size_t> cards;
+    bool full = false;
+    bool sources = false;
+};
+
 struct Answer {
     // sequence: a deck read as a program (`_serve.split_sequence`, momwire
-    // 0.79.2), which the C++ route declines
+    // 0.79.2; served by the C++ route since momwire#1602)
     enum Kind { refused, raised, single, multi, stepped, sequence } kind = refused;
     bool multi_run = false;  // stepped
     ErrorKind error_kind = ErrorKind::deck_error;
     std::string message;  // UTF-8; refused / raised
     Deck deck;            // single / multi; source_text is the echo text
     std::vector<Deck> runs;  // multi
+    std::vector<SequenceGroup> groups;  // sequence: its runs, in order
+    std::vector<std::size_t> sequence_tail;  // sequence: the cards echoed after the last
 };
 Answer answer(const std::string &latin1_text, const std::string *latin1_echo_text);
 
