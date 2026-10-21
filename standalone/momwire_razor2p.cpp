@@ -869,8 +869,8 @@ const char *const ARGUMENT_ERROR_INPUT = "UNABLE TO OPEN FILE";
 const char *const ARGUMENT_ERROR_OUTPUT = "UNABLE TO OPEN SECOND FILE";
 const char *const UNABLE_TO_OPEN = "UNABLE TO OPEN FILE";
 const char *const STREAMING_REFUSAL =
-    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only, "
-    "and only in its NEC-5 slot; give it '- -', or two file paths (momwire#1395, momwire#1512)";
+    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only; "
+    "give it '- -', or two file paths (momwire#1395, momwire#1512)";
 
 const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 
