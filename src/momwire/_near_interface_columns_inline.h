@@ -218,6 +218,24 @@ static const double MW_EXP_ZERO = -746.0;
 // vectorized loop instead of in front of it.
 static const int MW_BLOCK = 64;
 
+// The block's transcendental step, e^{ar} (cos ai, sin ai) per node, through
+// mw_vmath (momwire#1441) on the builds where libmvec cannot vectorize it:
+// the x86-64 baseline (`_sse2`) under GCC, whose `omp declare simd
+// simdlen(4)` names a 4-wide SSE2 variant libmvec lacks, and every MSVC
+// build (no libmvec; MW_NI_SIMD compiles out). There each node was a libm
+// call and the step was ~44 % of an sse2 buried fill. The GCC avx2 build
+// keeps libmvec's `_ZGVdN4v_*`, so its tables do not move; macOS keeps libm.
+#if MW_VMATH_X86 && (defined(_MSC_VER) || (!defined(__AVX2__) && !defined(__APPLE__)))
+#define MW_NI_VMATH 1
+#if defined(__AVX2__)
+typedef mw_vmath::avx2 vmath_backend;
+#else
+typedef mw_vmath::sse2 vmath_backend;
+#endif
+#else
+#define MW_NI_VMATH 0
+#endif
+
 // Accumulator lanes of `column_member`'s ordered sum (momwire#1193). The
 // lane combine there is written out for exactly four, so changing this is a
 // deliberate one-time move of every near-interface table, not a tuning knob.
@@ -734,6 +752,11 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
             live |= ar[j] >= MW_EXP_ZERO;
         }
         if (!live) continue;  // exactly zero, see MW_EXP_ZERO
+#if MW_NI_VMATH
+        for (int j = 0; j < nb; ++j)
+            ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
+        mw_vmath::exp_cis_lanes<vmath_backend>(ar, ai, er, ei, nb);
+#else
         MW_NI_SIMD()
         for (int j = 0; j < nb; ++j) {
             ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
@@ -741,6 +764,7 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
             er[j] = ex * cos(ai[j]);
             ei[j] = ex * sin(ai[j]);
         }
+#endif
         // The block's six sums, in an order the SOURCE fixes (momwire#1193,
         // the #781 rule): node j adds into lane j % MW_LANES of its column,
         // sequentially within the lane, and the lanes combine pairwise as
