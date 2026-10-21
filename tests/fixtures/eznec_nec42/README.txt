@@ -105,6 +105,34 @@ probes/<probe>.nec
       file <name as A40>" and "Will compute Sommerfeld-ground tables" after
       the medium, where a GN 2 prints its own block above it (p16, p30).
 
+  p33-p43, written for momwire#1592 (the slot's leftovers: the other XNDA
+  forms, Dan AC6LA's FR/XQ/FR/RP program, and the GS and GM geometry
+  cards).  Captured 2026-10-21, licensed NEC-4.2, clean-room Linux build
+  (nec42cl-static on the Skylake box), black-box: one thread, each deck run
+  in a fresh directory, printout out, nothing else read.  Decks LF.
+    p33 RP XNDA 1002      p34 RP XNDA 1003
+    p35 RP XNDA 1010      p36 RP XNDA 1011
+    p37 FR 1 freq, EX, XQ, then FR 6 freqs and RP: Dan's sequence
+    p38 GS scaling a GW written in millimetres
+    p39 GM moving and copying a GW
+    p40-p43, four more GM probes on a two-wire deck: ITS 2 with two
+    copies, a rotation and move with no copy, a tag increment of 10, and
+    a GM followed by a GS
+  What the printouts show (black box, layout only):
+    - 1002 prints the pattern heading, the column headings and the average
+      gain trailer with no rows; 1003 prints 1001's printout; 1010 and 1011
+      head the gains DIRECTIVE GAINS, the trailer unchanged.  Each is the
+      NEC-5 printout's layout for the same XNDA.
+    - p37 runs in the NEC-5 program order: the XQ's run at the first FR,
+      then one whole block per frequency of the second FR, each with its
+      input parameters, currents, power budget and pattern, in NEC-4.2's own
+      sections.
+    - GS and GM print their lines inside the wire table, in card order,
+      after the rows of the GW cards before them; the rows stay as written
+      and a GM's copies print no rows.  GM prints its two integers, six
+      reals as written, its ITS, then 1 and 0 in every probe, then the
+      segment count of the structure it moves.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
