@@ -325,8 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     is_nec4, basis = _mech.filename_nec4(prog)
     en_optional = False
-    if not args and not is_nec4:
-        # 4nec2's form (#1488): `ENGINE < nec2d.tmp`, the two names on stdin.
+    if not args:
+        # 4nec2's form (#1488): `ENGINE < nec2d.tmp`, the two names on stdin,
+        # for its NEC-5 package and its NEC-4.2 engine alike (#1592).
         from_stdin = _mech.stdin_paths()
         if from_stdin is not None:
             args = from_stdin

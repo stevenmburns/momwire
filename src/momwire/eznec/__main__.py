@@ -22,7 +22,7 @@ Two deliberate omissions, both from the capture study (antennaknobs
   so it cannot be scripted and EZNEC never takes that path.  This engine
   answers a short command line with an error line on stdout and exit 0
   instead.  The one exception is 4nec2's form (momwire#1488): with NO
-  arguments and a stdin that is not a terminal, the NEC-5 slot reads the
+  arguments and a stdin that is not a terminal, either slot reads the
   deck and printout paths from stdin, one per line, as 4nec2 sends them
   (``ENGINE.exe < nec2d.tmp``).  With paths on the command line, stdin is
   never touched.

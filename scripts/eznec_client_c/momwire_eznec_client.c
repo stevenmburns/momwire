@@ -22,8 +22,10 @@
  * stdout ARE its channels, so the engine runs on this process's own, and
  * its exit status is this one's (`streamed`, momwire 0.79.2).
  *
- * THE 4NEC2 FRONT END (momwire#1488).  With no arguments, and a NEC-5-slot
- * name, and stdin not a terminal, the first two lines of stdin are the deck
+ * THE 4NEC2 FRONT END (momwire#1488).  With no arguments and stdin not a
+ * terminal, under either slot's name (the NEC-4.2 one since momwire#1592:
+ * 4nec2 drives its NEC-4.2 engine the same way), the first two lines of
+ * stdin are the deck
  * and printout paths (surrounding whitespace, CR included, stripped;
  * relative paths resolve against the working directory).  4nec2's deck ends
  * without EN, so a run whose paths came from stdin tells the engine so:
@@ -2077,14 +2079,12 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc < 2) {
-        /* 4nec2's form (momwire#1488): the two paths on stdin, for a NEC-5
-         * slot name and a stdin that is not a terminal.  Otherwise, and when
-         * a name is missing, the same argument errors as the command line. */
-        int nec4 = 0;
-        char ignored[256];
+        /* 4nec2's form (momwire#1488): the two paths on stdin, for either
+         * slot's name (momwire#1592) and a stdin that is not a terminal.
+         * Otherwise, and when a name is missing, the same argument errors as
+         * the command line. */
         int got;
-        basis_of(argv[0], ignored, sizeof ignored, &nec4);
-        if (nec4 || stdin_is_terminal()) {
+        if (stdin_is_terminal()) {
             printf("%s\n", ARGUMENT_ERROR_INPUT);
             return 0;
         }
