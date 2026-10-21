@@ -41,8 +41,10 @@ from momwire.eznec._nec4_printout import (
     FarFieldGround,
     Nec4Printout,
     Nec4Report,
+    MoveRow,
     Nec4Run,
     Preamble,
+    ScaleRow,
     SegmentRow,
     SegmentValueRow,
     WireRow,
@@ -162,7 +164,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 36 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 42 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -570,7 +572,27 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
     lines = text.split("\n")
     wires_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.        X1"))
     wires = []
-    for line in _rows_after(lines, wires_at + 1):
+    table = _rows_after(lines, wires_at + 1)
+    for k, line in enumerate(table):
+        # A GS or GM card's lines among the wire rows (p38-p43, momwire#1592).
+        if line.startswith("      STRUCTURE SCALED BY FACTOR"):
+            wires.append(ScaleRow(float(line.split()[-1])))
+            continue
+        if line.startswith("      THE STRUCTURE HAS BEEN MOVED"):
+            v = table[k + 1].split()
+            wires.append(
+                MoveRow(
+                    int(v[0]),
+                    int(v[1]),
+                    (float(v[2]), float(v[3]), float(v[4])),
+                    (float(v[5]), float(v[6]), float(v[7])),
+                    int(v[8]),
+                    int(v[11]),
+                )
+            )
+            continue
+        if k and table[k - 1].startswith("      THE STRUCTURE HAS BEEN MOVED"):
+            continue
         c = _cells(line, _WIRE_EDGES)
         wires.append(
             WireRow(
@@ -1133,6 +1155,21 @@ def _edited(capture: str, old: str, new: str) -> str:
             _edited("0223", "RP 0,1,361,1000", "RP 0,1,361,0"),
             "RP with XNDA 0",
             id="xnda",
+        ),
+        pytest.param(
+            _edited("p39", "GE 0", "GW 9 3 1 0 0 1 1 0 0.001\nGE 0"),
+            "a GW card after a GS or GM card",
+            id="gw-after-gm",
+        ),
+        pytest.param(
+            _edited("p38", "GS 0 0 0.001", "GS 1 1 0.001"),
+            "GS scaling a range of tags",
+            id="gs-tag-range",
+        ),
+        pytest.param(
+            _edited("p43", "GS 0 0 2", "GS 0 0 2\nGM 1 1 0 0 0 0 0 5 0"),
+            "a second GM card",
+            id="second-gm",
         ),
         pytest.param(
             _edited("0230", "GD 2,", "GD 1,"),

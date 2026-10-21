@@ -73,6 +73,8 @@ __all__ = [
     "Preamble",
     "SegmentRow",
     "SegmentValueRow",
+    "MoveRow",
+    "ScaleRow",
     "WireRow",
     "render_nec4_printout",
     "value_row",
@@ -91,6 +93,33 @@ class WireRow:
     first: int
     last: int
     tag: int
+
+
+@dataclass(frozen=True)
+class ScaleRow:
+    """A ``GS`` card's line in the wire table, in card order (probes p38,
+    and ``GM`` then ``GS``, momwire#1592): the factor, F10.5."""
+
+    factor: float
+
+
+@dataclass(frozen=True)
+class MoveRow:
+    """A ``GM`` card's two lines in the wire table, in card order (p39).
+
+    The card's tag increment and copy count, its three rotations and three
+    translations as written, its ``ITS`` field, and the segment count of the
+    structure the card moves.  Two integers between ``ITS`` and that count
+    print as 1 and 0 in every NEC-4.2 printout probed (p39 and four more
+    ``GM`` probes varying every field, momwire#1592), and are printed so.
+    """
+
+    tag_increment: int
+    copies: int
+    rotation_deg: tuple[float, float, float]
+    translation: tuple[float, float, float]
+    first_tag: int
+    segments: int
 
 
 @dataclass(frozen=True)
@@ -221,7 +250,9 @@ class Nec4Report:
 class Nec4Printout:
     """Everything a NEC-4.2 printout prints that the deck text does not."""
 
-    wires: tuple[WireRow, ...]
+    # The wire table's rows in card order: a ``GW``'s row, or the lines a
+    # ``GS`` or ``GM`` card prints among them.
+    wires: tuple[WireRow | ScaleRow | MoveRow, ...]
     ge_flag: int
     total_segments: int
     # One tuple of signed segment numbers per multiple-wire junction.
@@ -315,6 +346,22 @@ _STRUCTURE_GAP = _printout._STRUCTURE_GAP
 # --------------------------------------------------------------------------
 
 
+def _structure_rows(row: WireRow | ScaleRow | MoveRow) -> list[str]:
+    """One entry of the wire table: a wire's row, or a ``GS``/``GM`` card's
+    lines (probes p38, p39), 6X then the words, and for ``GM`` 4X, two I5,
+    six F10.5 and four I5."""
+    if isinstance(row, ScaleRow):
+        return [f"      STRUCTURE SCALED BY FACTOR{row.factor:10.5f}"]
+    if isinstance(row, MoveRow):
+        numbers = "".join(f"{v:10.5f}" for v in (*row.rotation_deg, *row.translation))
+        return [
+            "      THE STRUCTURE HAS BEEN MOVED, GM COMMAND DATA IS -",
+            f"    {row.tag_increment:5d}{row.copies:5d}{numbers}"
+            f"{row.first_tag:5d}{1:5d}{0:5d}{row.segments:5d}",
+        ]
+    return [_wire_row(row)]
+
+
 def _wire_row(row: WireRow) -> str:
     """I6, three F11.5, an F12.5 and two F11.5, the radius F11.5, then the
     segment count I7, FIRST I9, LAST I6 and the tag I8 (0234, 0235)."""
@@ -399,7 +446,7 @@ def _value_row(row: SegmentValueRow) -> str:
 
 def _structure(data: Nec4Printout) -> list[str]:
     lines = [_printout._STRUCTURE_HEADING, "", *_printout._COORDINATE_NOTE, "", ""]
-    lines += [*_WIRE_COLUMNS, *(_wire_row(w) for w in data.wires), ""]
+    lines += [*_WIRE_COLUMNS, *(ln for w in data.wires for ln in _structure_rows(w)), ""]
     if data.ge_flag != 0:
         lines += [_GROUND_PLANE, ""]
     if data.ge_flag > 0:

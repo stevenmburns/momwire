@@ -43,7 +43,9 @@ from ._nec4_printout import (
     Nec4Printout,
     Nec4Report,
     Nec4Run,
+    MoveRow,
     Preamble,
+    ScaleRow,
     SegmentRow,
     WireRow,
     render_nec4_printout,
@@ -83,7 +85,7 @@ _EPS0_PRINTED = 8.854e-12
 _SERVED_CARDS = frozenset(
     {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ", "EN", "EK"}
 )
-_SERVED_GEOMETRY = frozenset({"GW", "GE"})
+_SERVED_GEOMETRY = frozenset({"GW", "GS", "GM", "GE"})
 
 # The pattern request forms captured: XNDA 1000 (a cut) and 1001 (the 3-D
 # grid, with its average-gain trailer), RP mode 0, at no range or at one
@@ -294,6 +296,31 @@ def _served_table(card) -> None:
         raise Nec4Refusal(_unmeasured("RP at a negative range"))
 
 
+def _served_geometry(deck) -> None:
+    """:class:`Nec4Refusal` for a geometry deck no NEC-4.2 printout shows.
+
+    Measured (p38, p39 and four more ``GM`` probes, momwire#1592): ``GW``
+    cards, then at most one ``GM``, then at most one ``GS`` scaling the
+    whole structure.  A ``GW`` after either, a ``GM`` after a ``GS``, a
+    second of either, and ``GS``'s tag-range form (xnec2c's) have no
+    printout, and refuse by name.
+    """
+    seen: list[str] = []
+    for card in deck.geometry:
+        m = card.mnemonic
+        if m not in _SERVED_GEOMETRY:
+            raise Nec4Refusal(_unmeasured(f"the {m} geometry card"))
+        if m == "GS" and (card.i(0) or card.i(1)):
+            raise Nec4Refusal(_unmeasured("GS scaling a range of tags"))
+        if m in ("GS", "GM") and m in seen:
+            raise Nec4Refusal(_unmeasured(f"a second {m} card"))
+        if m == "GW" and ("GS" in seen or "GM" in seen):
+            raise Nec4Refusal(_unmeasured("a GW card after a GS or GM card"))
+        if m == "GM" and "GS" in seen:
+            raise Nec4Refusal(_unmeasured("a GM card after a GS card"))
+        seen.append(m)
+
+
 def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]:
     """``(group index, group)`` for every run the deck executes, or
     :class:`Nec4Refusal` for a shape no NEC-4.2 printout shows.
@@ -312,9 +339,7 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
     fixtures), a layout this printout does not lay out.  Both refuse by
     name: a table left out with nothing said is momwire#1463's fault.
     """
-    for card in deck.geometry:
-        if card.mnemonic not in _SERVED_GEOMETRY:
-            raise Nec4Refusal(_unmeasured(f"the {card.mnemonic} geometry card"))
+    _served_geometry(deck)
     for card in deck.data_cards:
         if card.mnemonic not in _SERVED_CARDS:
             raise Nec4Refusal(_unmeasured(f"the {card.mnemonic} card"))
@@ -611,11 +636,34 @@ def _connections(solver, deck) -> list[tuple[int, int]]:
 # --------------------------------------------------------------------------
 
 
-def _wire_rows(deck) -> tuple[WireRow, ...]:
-    rows = []
+def _wire_rows(deck) -> tuple[WireRow | ScaleRow | MoveRow, ...]:
+    """The wire table in card order: each ``GW``'s row as written, and the
+    lines a ``GS`` or ``GM`` card prints where it stands (p38, p39).  The
+    rows stay as written, before any card moves or scales them, and a
+    ``GM``'s copies print no rows of their own; :func:`_served_geometry`
+    keeps the order to the one the printouts show."""
+    rows: list[WireRow | ScaleRow | MoveRow] = []
     first = 1
-    gw = [c for c in deck.geometry if c.mnemonic == "GW"]
-    for number, card in enumerate(gw, start=1):
+    number = 0
+    for card in deck.geometry:
+        if card.mnemonic == "GS":
+            rows.append(ScaleRow(card.f(2)))
+            continue
+        if card.mnemonic == "GM":
+            rows.append(
+                MoveRow(
+                    card.i(0),
+                    card.i(1),
+                    (card.f(2), card.f(3), card.f(4)),
+                    (card.f(5), card.f(6), card.f(7)),
+                    int(card.f(8) + 0.5),
+                    first - 1,
+                )
+            )
+            continue
+        if card.mnemonic != "GW":
+            continue
+        number += 1
         n_seg = card.i(1)
         rows.append(
             WireRow(
