@@ -351,7 +351,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
         c_new.resize(nc);
         for (std::ptrdiff_t c = 0; c < nc; ++c) {
             if (offsets[c + 1] == offsets[c]) continue;
-            mw899::column_extents(k_p, km,
+            mw899::column_extents(rho[c], k_p, km,
                                   mw899::s_min_of(Arr{z}, Arr{zp}, offsets[c], offsets[c + 1]),
                                   lam_mult, c_ah[c], c_lt[c]);
             c_hit[c] = cc->find(ColumnCacheImpl::key(rho[c], c_ah[c], c_lt[c]));
