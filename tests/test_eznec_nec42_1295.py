@@ -344,6 +344,16 @@ def _edited(capture: str, old: str, new: str) -> str:
             id="gn3-screen",
         ),
         pytest.param(
+            _edited("0231", "GN 2,0,0,0,13.,.005", "GN 2,0,0,0"),
+            r"GN 2 needs a positive relative permittivity \(field 5\)",
+            id="gn2-short",
+        ),
+        pytest.param(
+            _edited("0232", "GN 3,0,0,0,13.,.005", "GN 3,0,0,0,0.,.005"),
+            r"GN 3 needs a positive relative permittivity \(field 5\)",
+            id="gn3-zero-permittivity",
+        ),
+        pytest.param(
             _edited(
                 "0232",
                 "RP 0,1,361,1000,75.,0.,0.,1.,0.",

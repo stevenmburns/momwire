@@ -208,7 +208,8 @@ class _Nec4Parser(_Nec2Parser):
             # printout reads the name back off the deck text
             # (``eznec._nec4._ground_file``).
             card = Card(card.mnemonic, card.values, card.raw)
-        if card.i(0) == 3:
+        code = card.i(0)
+        if code == 3:
             if card.i(1) != 0:
                 raise DeckError(
                     f"GN 3 with a {card.i(1)}-wire radial ground screen is not "
@@ -217,6 +218,16 @@ class _Nec4Parser(_Nec2Parser):
             # One physical ground, two NEC-4.2 evaluations of it (module
             # docstring): read as the GN 2 it shares a model with.
             card = Card(card.mnemonic, (2.0, *card.values[1:]), card.raw, card.trailer)
+        if card.i(0) in (0, 2) and card.f(4) <= 0.0:
+            # A short card reads its missing fields as 0 (momwire#1576), and
+            # a finite ground at a permittivity of 0 has no answer: the solve
+            # used to fail inside the Sommerfeld fill with "array must not
+            # contain infs or NaNs" (momwire#1592's audit).  The nec5
+            # dialect refuses the same card by name in its `_gn`.
+            raise DeckError(
+                f"GN {code} needs a positive relative permittivity (field 5) "
+                f"for a finite ground, and this card's reads {card.f(4):g}"
+            )
         super()._gn(card)
 
     def _ex(self, card: Card) -> None:
