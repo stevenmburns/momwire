@@ -89,6 +89,7 @@ extern "C" double sin(double);
 #define MW_NI_SIMD(clauses) MW_NI_PRAGMA_(omp simd clauses)
 #endif
 
+#include "_vmath_inline.h"
 #include "_near_interface_columns_inline.h"
 
 #define NI_CANCEL_SETUP(flag_addr)                                          \

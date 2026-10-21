@@ -69,6 +69,7 @@ extern "C" double sin(double);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
+#include "_vmath_inline.h"
 #include "_near_interface_columns_inline.h"
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
@@ -233,6 +234,11 @@ static void point_member(const mw899::Scratch &s, size_t K, double z,
             amax = std::max(amax, ar[j]);
         }
         if (amax < MW_EXP_ZERO) continue;
+#if MW_NI_VMATH
+        for (int j = 0; j < nb; ++j)
+            ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
+        mw_vmath::exp_cis_lanes<mw899::vmath_backend>(ar, ai, er, ei, nb);
+#else
         MW_NI_SIMD()
         for (int j = 0; j < nb; ++j) {
             ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
@@ -240,6 +246,7 @@ static void point_member(const mw899::Scratch &s, size_t K, double z,
             er[j] = ex * cos(ai[j]);
             ei[j] = ex * sin(ai[j]);
         }
+#endif
         static_assert(MW_LANES == 4, "the lane combine is written for four");
         for (int c = 0; c < NP; ++c) {
             const double *fr = s.fr.data() + c * K + k0;
