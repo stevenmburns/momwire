@@ -95,14 +95,9 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
                            mw899::Scratch &s, std::vector<cd> &w1) {
     mw899::column_rule(rho, k_p, k_m, s_min, lam_mult, p, detour, gx, gw, ng,
                        s);
-    const double kk = std::max(k_p, std::abs(k_m));
-    double a_head = 1.1 * kk;
-    double lam_top = lam_mult * kk;
-    if (s_min > 0.0 && mw680::MW_FAR_PAIR_KILL / s_min < lam_top) {
-        const double lam_kill = mw680::MW_FAR_PAIR_KILL / s_min;
-        a_head = std::max(2.2 * k_p, std::min(a_head, lam_kill));
-        lam_top = std::max(1.5 * a_head, lam_kill);
-    }
+    // The extents `column_rule` itself used, D1 included (momwire#1595).
+    double a_head, lam_top;
+    mw899::column_extents(rho, k_p, k_m, s_min, lam_mult, a_head, lam_top);
     w1.clear();
     w1.reserve(s.lam.size());
     std::vector<double> edges, seeded, t, wt;
@@ -134,17 +129,19 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
         w1.push_back(wt[i] * dl * (l * rho) * b1x);
     }
 
-    edges.clear();
-    edges.push_back(a_head);
-    edges.push_back(lam_top);
-    mw899::sub_seed(edges, rho, seeded);
-    mw899::fixed_gauss(seeded, p, gx, gw, ng, t, wt);
-    for (size_t i = 0; i < t.size(); ++i) {
-        const cd l(t[i], 0.0);
-        if (!same(l)) return false;
-        cd b0, b1x;
-        mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
-        w1.push_back(wt[i] * (l * rho) * b1x);
+    if (lam_top > a_head) {  // no mid where the rays start at a_head
+        edges.clear();
+        edges.push_back(a_head);
+        edges.push_back(lam_top);
+        mw899::sub_seed(edges, rho, seeded);
+        mw899::fixed_gauss(seeded, p, gx, gw, ng, t, wt);
+        for (size_t i = 0; i < t.size(); ++i) {
+            const cd l(t[i], 0.0);
+            if (!same(l)) return false;
+            cd b0, b1x;
+            mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
+            w1.push_back(wt[i] * (l * rho) * b1x);
+        }
     }
 
     const double scale = std::sqrt(2.0) / (s_min + rho);
@@ -155,7 +152,8 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
         edges.push_back(edges.back() + step);
         step *= 2.0;
     }
-    mw899::fixed_gauss(edges, p, gx, gw, ng, t, wt);
+    // The tail's own 16-point rule, as `column_tail` builds it (momwire#1595 D2).
+    mw899::fixed_gauss(edges, p, mw899::MW_TAIL_GX, mw899::MW_TAIL_GW, mw899::MW_TAIL_NG, t, wt);
     const cd ray = std::exp(cd(0.0, 0.25 * MW_PI));
     if (rho == 0.0) {
         // One up-ray, J1(0) = 0: the rho keys are an exact zero on the axis.

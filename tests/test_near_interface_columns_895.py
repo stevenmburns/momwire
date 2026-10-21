@@ -214,13 +214,45 @@ def test_g895_6_route_switch_is_read_at_call_time_and_refuses_typos():
         ni._ROUTE = was
 
 
+def test_g895_7b_rays_from_head_converge_and_drop_the_mid():
+    """momwire#1595 D1: past `_RAYS_FROM_HEAD` the Hankel rays start at
+    a_head, the real-axis mid is gone, and the far `WIDE` rows still meet the
+    adaptive walk to 1e-10 -- the same bar as the mid they replace. The rule
+    must also actually shrink there (else the threshold silently stopped
+    firing), and stay put below it."""
+    k_m = ni.k_medium(SOIL_A, K7)
+    for label, eps_t, k2, (rho, z, zp) in WIDE:
+        if not label.startswith("radial-41m"):
+            continue
+        ref = ni.six_point(eps_t, k2, rho, z, zp)
+        assert _rel(ni.six_columns(eps_t, k2, rho, [z], zp), ref) <= 1e-10, label
+    s = 0.7
+    k_now = len(ni._column_rule(41.0, K7, k_m, s)[0])
+    was = ni._RAYS_FROM_HEAD
+    try:
+        ni._RAYS_FROM_HEAD = np.inf
+        k_mid = len(ni._column_rule(41.0, K7, k_m, s)[0])
+        k_small_off = len(ni._column_rule(1e-3, K7, k_m, s)[0])
+    finally:
+        ni._RAYS_FROM_HEAD = was
+    assert k_now < 0.6 * k_mid, (k_now, k_mid)
+    assert len(ni._column_rule(1e-3, K7, k_m, s)[0]) == k_small_off
+
+
 def test_g895_7_both_sub_seeding_rules_are_load_bearing(monkeypatch):
     """Red/green on `_sub_seed`: with it neutered to a pass-through, the
     two `WIDE` halves go wrong by the amounts its docstring names — a 41 m
     radial by more than 1 % and the σ = 3 S/m head by more than 1e-9 —
     and with it they are inside 1e-10. Without this the rule could quietly
     stop firing and every other gate here would still pass, because the
-    near-interface ledger does not need it."""
+    near-interface ledger does not need it.
+
+    The 41 m row's half is the real-axis mid's oscillation seeding, which
+    since momwire#1595 D1 only exists below `_RAYS_FROM_HEAD`: at 41 m the
+    rays start at a_head and there is no mid to seed. So the mid is turned
+    back on here (the threshold to infinity) to keep testing the rule that
+    still serves the small-rho columns; `test_g895_7b` gates D1 itself."""
+    monkeypatch.setattr(ni, "_RAYS_FROM_HEAD", np.inf)
     rows = {label: (eps_t, k2, pt) for label, eps_t, k2, pt in WIDE}
     checks = (("radial-41m", 1e-2), ("sigma-3-midband", 1e-9))
     refs = {}
@@ -369,3 +401,26 @@ def test_g895_10_real_ble_columns_are_a_converged_pair():
         hi = ni.six_columns(spy.eps_t, spy.k2, key[0], zs, key[1], p=ni._COLUMN_P + 1)
         worst = max(_rel(lo[i], hi[i]) for i in range(zs.size))
         assert worst <= 1e-12, f"{label} (rho={key[0]:.4g}): pair at {worst:.3e}"
+
+
+def test_g895_7c_the_cxx_tail_rule_is_the_frozen_table():
+    """momwire#1595 D2: the C++ twin's tail rays carry their own 16-point
+    table (MW_TAIL_GX / MW_TAIL_GW, `_near_interface_columns_inline.h`). It
+    must be the frozen order-16 rule `_column_rule` uses, bit for bit, or the
+    exe and the Python walk build different tails and only the twin gates at
+    1e-12 would notice."""
+    import re
+    from pathlib import Path
+
+    from momwire._quadrature import leggauss
+
+    text = Path(ni.__file__).with_name("_near_interface_columns_inline.h").read_text()
+    got = {}
+    for name in ("MW_TAIL_GX", "MW_TAIL_GW"):
+        body = re.search(name + r"\[16\] = \{([^}]*)\}", text).group(1)
+        got[name] = np.array([float(v) for v in body.split(",")])
+    gx, gw = leggauss(16)
+    assert ni._COLUMN_NG == 16
+    assert np.array_equal(got["MW_TAIL_GX"], gx)
+    assert np.array_equal(got["MW_TAIL_GW"], gw)
+    assert np.array_equal(ni._COLUMN_GX, gx) and np.array_equal(ni._COLUMN_GW, gw)

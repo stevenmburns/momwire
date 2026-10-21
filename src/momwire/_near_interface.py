@@ -73,6 +73,7 @@ from scipy.special import hankel1, hankel2
 from threadpoolctl import ThreadpoolController
 
 from . import _accel, _cancel
+from ._quadrature import leggauss
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
     _ADAPT_DEPTH,
@@ -172,6 +173,47 @@ _FAR_PAIR_KILL = 60.0
 # twin. p = 1 costs 2.3× the wall and moves none of those numbers, which is
 # what the converged-pair gate says: the rule is converged AT p = 0.
 _COLUMN_P = 0
+
+# Where a column's Hankel rays start (momwire#1595 D1). The real-axis mid,
+# [a_head, lam_top], is sub-seeded at one J0 oscillation per interval
+# (`_sub_seed`), so its node count grows LINEARLY with rho: 72 nodes at
+# rho = 0.5 m, 14,736 at 500 m (14 MHz, soil 13 / 0.005), where Ward AE6TY's
+# 1 km probe spends its fill (momwire#1582). Every singularity of the
+# integrand -- the gamma_p / gamma_m branch points and the transmitted pole --
+# sits below a_head = 1.1 max(k_p, |k_m|), and the cuts run off toward the
+# imaginary axis, so the +-45 degree wedge from a_head holds none of them and
+# the tail's Hankel split can start THERE: J0 = (H1 + H2) / 2, H1 decaying on
+# the up-ray and H2 on the down-ray as e^{-t (s + rho) / sqrt 2}. The rays'
+# panels are sized by (s + rho) alone, so the column's K stops depending on
+# rho's oscillation count: 21,720 -> 3,480 nodes at 619 m.
+#
+# Gated on rho * a_head because the split is a CANCELLATION where the
+# Hankel argument is small: H1 and H2 are each ~(2j/pi) ln near zero and
+# J0 is their small difference. Measured against `six_point` at rtol 1e-13
+# (AK scratch/table-feasibility-1595/probe_d1.py): no change in the worst
+# error down to a threshold of 0.1, over 80 near-node columns (rho 1e-3 to
+# 0.6 m, s 1e-4 to 0.5 m) and 100 Slant / long-wire columns (rho 0.3 m to
+# 1 km); the worst column fell from 8.3e-10 to 8.6e-11. 1.0 is that with a
+# decade of margin: rho >~ 0.8 m at 14 MHz on that soil.
+_RAYS_FROM_HEAD = 1.0
+
+# The TAIL rays' Gauss order per panel (momwire#1595 D2). The rule was built
+# on the adaptive walk's 24-point `_GX` / `_GW` everywhere, and `_COLUMN_P`'s
+# note already says p = 0 carries four decades of margin. On the rays the
+# margin is in the ORDER too: the integrand there is smooth and decaying
+# (e^{-t (s + rho) / sqrt 2}, no branch point or pole on the path), so 16
+# points per geometric panel pass every gate in tests/
+# test_near_interface_columns_895.py (the eps = 1 identity, the p / p+1
+# converged pair at 1e-12, the ledger) where 12 already fails one.
+# The HEAD and MID keep 24: tried at 16, the eps = 1 head -- where gamma_p
+# and gamma_m coincide -- reads p / p+1 at 2.2e-9 against the 1e-12 gate.
+# The tail is 384 of a near-node column's 816 nodes, so this is 128 nodes
+# off every column with rho > 0, on every CPU. The C++ twin carries the same
+# 16 numbers (MW_TAIL_GX / MW_TAIL_GW in _near_interface_columns_inline.h),
+# copied from this frozen table (`_quadrature.leggauss`, the same numbers
+# as `_leggauss_table.h`) so the two rules agree bit for bit.
+_COLUMN_NG = 16
+_COLUMN_GX, _COLUMN_GW = leggauss(_COLUMN_NG)
 
 # Largest (nz × K) exponential block a column materialises at once. K grows
 # with ρ (one panel per J₀ oscillation), so a long-radial column times a tall
@@ -476,21 +518,21 @@ def six_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     return head + mid + tail
 
 
-def _fixed_gauss(edges, p):
+def _fixed_gauss(edges, p, gx=None, gw=None):
     """Gauss nodes/weights on each [e_i, e_{i+1}], split into 2^p panels.
 
-    The fixed stand-in for `_adaptive_segment`: same `_GX`/`_GW` rule, same
-    per-interval scope, bisection depth read off `p` instead of off the
-    integrand. p = 0 is one 24-point panel per seeded interval, i.e. the
-    adaptive walk's own starting point before any bisection.
+    The fixed stand-in for `_adaptive_segment`: the same per-interval scope,
+    bisection depth read off `p` instead of off the integrand, on the
+    column's own `_COLUMN_GX` / `_COLUMN_GW` (16 points, momwire#1595 D2)
+    rather than the walk's 24. p = 0 is one panel per seeded interval.
     """
     xs, ws = [], []
     for e0, e1 in zip(edges[:-1], edges[1:]):
         sub = np.linspace(e0, e1, 2**p + 1)
         for a, b in zip(sub[:-1], sub[1:]):
             mid, half = 0.5 * (a + b), 0.5 * (b - a)
-            xs.append(mid + half * _GX)
-            ws.append(_GW * half)
+            xs.append(mid + half * (_GX if gx is None else gx))
+            ws.append((_GW if gw is None else gw) * half)
     return np.concatenate(xs), np.concatenate(ws)
 
 
@@ -557,6 +599,10 @@ def _column_rule(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
         lam_kill = _FAR_PAIR_KILL / s_min
         a_head = max(2.2 * k_p, min(a_head, lam_kill))
         lam_top = max(1.5 * a_head, lam_kill)
+    # The rays from the head's end where rho allows (momwire#1595 D1, see
+    # `_RAYS_FROM_HEAD`): no real-axis mid at all.
+    if rho > 0.0 and rho * a_head >= _RAYS_FROM_HEAD:
+        lam_top = a_head
 
     # --- head: `_head`'s detour, H rule and seeded edges. H depends on ρ
     # alone, so it is column-shared exactly.
@@ -579,10 +625,14 @@ def _column_rule(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
     # --- mid: the real axis [a_head, lam_top], same J₀ factor. `six_point`
     # hands the WHOLE range to one `_adaptive_segment`, so unlike the head
     # it carries no seeding at all and `_sub_seed` supplies all of it.
-    t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
-    lam_m = t.astype(np.complex128)
-    b0, _ = _bessel_j0_j1x(lam_m * rho)
-    w_m = wt * b0
+    if lam_top > a_head:
+        t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
+        lam_m = t.astype(np.complex128)
+        b0, _ = _bessel_j0_j1x(lam_m * rho)
+        w_m = wt * b0
+    else:  # the rays start at a_head (`_RAYS_FROM_HEAD`): no mid
+        lam_m = np.empty(0, np.complex128)
+        w_m = np.empty(0, np.complex128)
 
     # --- tail: `_ray_integral`'s geometric panels — starting at the λ₀
     # scale and doubling toward the decay scale, which is what resolves the
@@ -596,7 +646,7 @@ def _column_rule(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
     while t_edges[-1] < _FAR_PAIR_KILL * scale:
         t_edges.append(t_edges[-1] + step)
         step *= 2.0
-    tt, wtt = _fixed_gauss(t_edges, p)
+    tt, wtt = _fixed_gauss(t_edges, p, _COLUMN_GX, _COLUMN_GW)
     if rho == 0.0:
         # `six_point`: the single up-ray, J₀(0) = 1, no Hankel split.
         lam_t = lam_top + tt * _RAY
@@ -839,6 +889,8 @@ def _column_rule_j1(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
         lam_kill = _FAR_PAIR_KILL / s_min
         a_head = max(2.2 * k_p, min(a_head, lam_kill))
         lam_top = max(1.5 * a_head, lam_kill)
+    if rho > 0.0 and rho * a_head >= _RAYS_FROM_HEAD:  # `_column_rule`'s D1
+        lam_top = a_head
     H = min(0.35 * a_head, _DETOUR / max(rho, 1e-12))
     H = max(H, 1e-6 * a_head)
     edges = {0.0, a_head}
@@ -854,17 +906,21 @@ def _column_rule_j1(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
     dl_h = 1.0 + 1j * H * (np.pi / a_head) * np.cos(np.pi * t / a_head)
     _b0, b1x = _bessel_j0_j1x(lam_h * rho)
     w1_h = wt * dl_h * (lam_h * rho) * b1x
-    t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
-    lam_m = t.astype(np.complex128)
-    _b0, b1x = _bessel_j0_j1x(lam_m * rho)
-    w1_m = wt * (lam_m * rho) * b1x
+    if lam_top > a_head:
+        t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
+        lam_m = t.astype(np.complex128)
+        _b0, b1x = _bessel_j0_j1x(lam_m * rho)
+        w1_m = wt * (lam_m * rho) * b1x
+    else:
+        lam_m = np.empty(0, np.complex128)
+        w1_m = np.empty(0, np.complex128)
     scale = np.sqrt(2.0) / (s_min + rho)
     step = min(0.25 * scale, lam_top)
     t_edges = [0.0]
     while t_edges[-1] < _FAR_PAIR_KILL * scale:
         t_edges.append(t_edges[-1] + step)
         step *= 2.0
-    tt, wtt = _fixed_gauss(t_edges, p)
+    tt, wtt = _fixed_gauss(t_edges, p, _COLUMN_GX, _COLUMN_GW)
     if rho == 0.0:
         lam_t = lam_top + tt * _RAY
         w1_t = np.zeros(tt.size, dtype=np.complex128)
