@@ -321,15 +321,37 @@ def _served_geometry(deck) -> None:
         seen.append(m)
 
 
+def _a_new_frequency(cards, previous: int, number: int) -> bool:
+    """Whether the cards after one run's execute card (echo ``previous``)
+    through the next one's (echo ``number``) are a new frequency and nothing
+    else the matrix depends on: an ``FR``, with only sources and requests
+    beside it.
+
+    That is the NEC-5 program reading's later run
+    (:func:`~momwire.eznec._serve.split_sequence`, the same card set), and
+    the shape probe p37 (Dan AC6LA's ``FR / EX / XQ / FR / RP``) measures on
+    NEC-4.2: the run at the new ``FR`` prints every frequency's whole block,
+    FREQUENCY to pattern, after its card echo (momwire#1592).  A ground,
+    load or network card between the runs has no NEC-4.2 printout.
+    """
+    from ._serve import _SEQUENCE_CARDS
+
+    between = [c.mnemonic for c in cards[previous:number]]
+    return "FR" in between and all(m in _SEQUENCE_CARDS for m in between)
+
+
 def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]:
     """``(group index, group)`` for every run the deck executes, or
     :class:`Nec4Refusal` for a shape no NEC-4.2 printout shows.
 
-    Two multi-run shapes are measured: one execute card over an ``FR`` sweep
-    (p2) and several execute cards at one frequency, each after the first
-    changing only the sources (p8).  A later run that refills the matrix (a
-    new ``FR``, ``GN`` or load between execute cards), or a sweep with more
-    than one execute card, is unmeasured.
+    Three multi-run shapes are measured: one execute card over an ``FR``
+    sweep (p2); several execute cards at one frequency, each after the first
+    changing only the sources (p8); and a later run at a new ``FR``, a sweep
+    or one frequency, with only sources and requests beside it
+    (:func:`_a_new_frequency`, p37: Dan AC6LA's ``FR / EX / XQ / FR / RP``,
+    the NEC-5 program reading's order).  A later run that refills the matrix
+    otherwise (a ``GN`` or load between execute cards), or a sweep with a
+    run after it, is unmeasured.
 
     A further ``RP``/``NE``/``NH`` card of a run (:func:`_further_tables`) is
     measured at one frequency (p20-p28).  After a sweep it is not, and
@@ -349,14 +371,21 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
     if not runs:
         raise Nec4Refusal(_unmeasured("a deck with no execute card"))
     if len(runs) > 1:
-        if any(len(g.freqs_mhz) != 1 for _i, g in runs):
+        if any(len(g.freqs_mhz) != 1 for _i, g in runs[:-1]):
             raise Nec4Refusal(
                 _unmeasured("several execute cards over a frequency sweep")
             )
-        if any(g.refilled or g.refilled_partial for _i, g in runs[1:]):
-            raise Nec4Refusal(
-                _unmeasured("a later execute card after a card that refills the matrix")
-            )
+        cards = _printout._post_ge_cards(text)
+        for k in range(1, len(runs)):
+            index, group = runs[k]
+            if not (group.refilled or group.refilled_partial):
+                continue
+            if not _a_new_frequency(cards, echo_at[runs[k - 1][0]], echo_at[index]):
+                raise Nec4Refusal(
+                    _unmeasured(
+                        "a later execute card after a card that refills the matrix"
+                    )
+                )
     gd_at = [
         i
         for i, card in enumerate(_printout._post_ge_cards(text), start=1)
@@ -429,7 +458,10 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
                         records,
                         connections,
                         echo_through=echo_at[index] if step == 0 else None,
-                        preamble=count == 0,
+                        # A run at a new FR prints every frequency's
+                        # preamble, as the first run does (p37); a run that
+                        # changes only the sources prints none (p8).
+                        preamble=count == 0 or group.refilled,
                     )
                 )
             # One frequency here (`_served_shape`), so `records` is the run

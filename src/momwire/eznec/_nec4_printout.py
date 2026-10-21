@@ -446,7 +446,11 @@ def _value_row(row: SegmentValueRow) -> str:
 
 def _structure(data: Nec4Printout) -> list[str]:
     lines = [_printout._STRUCTURE_HEADING, "", *_printout._COORDINATE_NOTE, "", ""]
-    lines += [*_WIRE_COLUMNS, *(ln for w in data.wires for ln in _structure_rows(w)), ""]
+    lines += [
+        *_WIRE_COLUMNS,
+        *(ln for w in data.wires for ln in _structure_rows(w)),
+        "",
+    ]
     if data.ge_flag != 0:
         lines += [_GROUND_PLANE, ""]
     if data.ge_flag > 0:
@@ -675,7 +679,12 @@ def render_nec4_printout(
                 for line in _echo(i, c)
             ]
             echoed = run.echo_through
-            body += [*block, *gap(_STRUCTURE_GAP if index == 0 else _SECTION_GAP)]
+            # A run that opens with its FREQUENCY block stands as far below
+            # its echo as the first run does, a later run at a new FR
+            # included (p37, momwire#1592); a run without one, a section's
+            # gap (p8).
+            opens = index == 0 or getattr(run, "preamble", None) is not None
+            body += [*block, *gap(_STRUCTURE_GAP if opens else _SECTION_GAP)]
         body += _tables(run) if isinstance(run, Nec4Report) else _run(run)
     body.append("")
     body += [line for i, c in numbered[echoed:] for line in _echo(i, c)]
