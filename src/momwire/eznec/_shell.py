@@ -35,13 +35,13 @@ Three rules, and they are the whole unit
    /dev/null.  ``- -`` is SimNEC's streaming call (momwire#1395, served since
    momwire#1512, :func:`stream`; in the NEC-4.2 slot too since
    momwire#1592): decks on stdin, printouts on stdout.
-   With NO arguments, the NEC-5 slot reads the two paths from stdin, one per
-   line (momwire#1488): that is how 4nec2 runs its engine, as
+   With NO arguments, either slot reads the two paths from stdin, one per
+   line (momwire#1488; the NEC-4.2 slot since momwire#1592): that is how
+   4nec2 runs its engine, as
    ``ENGINE.exe < nec2d.tmp`` with ``..\\out\\EXAMPLE3.inp`` and
    ``..\\out\\EXAMPLE3.out`` in the file, resolved against the working
    directory like any relative path.  A terminal on stdin is not read (a
-   person who types the bare command gets the argument error at once), and
-   the NEC-4.2 slot reads stdin only for ``- -``.
+   person who types the bare command gets the argument error at once).
 
 The 4nec2 front end
 -------------------
@@ -49,7 +49,9 @@ A deck that arrives through stdin may end without ``EN`` (4nec2 writes none),
 and only such a deck: the two-argument form still refuses a deck with no
 ``EN`` as truncated, because every deck EZNEC and SimNEC write carries one.
 The engine closes the deck the way NEC's own card reader does at end of
-file, with an ``EN`` the printout echoes.  And any deck whose ``GE`` card
+file, with an ``EN`` the printout echoes, in either slot: 4nec2 drives the
+licensed NEC-4.2 directly the same way (momwire#1592).  And any NEC-5 deck
+whose ``GE`` card
 carries a third field of 1 (``GE 0 0 1``, momwire#1488) gets a
 ``<printout stem>.GMO`` geometry file beside its printout
 (:mod:`momwire.eznec._gmo`), which 4nec2's NEC-5 package rebuilds its
@@ -301,12 +303,13 @@ def render_files(
 ) -> tuple[str, str | None]:
     """``(printout, gmo)``: :func:`render`'s printout, and the ``.GMO``
     geometry file the deck asks for, or ``None`` when it asks for none
-    (momwire#1488).  The NEC-4.2 slot never writes one.
+    (momwire#1488).  The NEC-4.2 slot never writes one: 4nec2 asks none of
+    its NEC-4.2 engine (momwire#1592).
 
-    ``en_optional`` is the stdin form's: the deck is closed by
-    :func:`close_deck` before anything reads it.
+    ``en_optional`` is the stdin form's, in either slot: the deck is closed
+    by :func:`close_deck` before anything reads it.
     """
-    if en_optional and dialect == "nec5":
+    if en_optional:
         text = close_deck(text)
     printout = render(text, basis=basis, dialect=dialect)
     gmo = _gmo.gmo_text(text) if dialect == "nec5" else None
@@ -871,15 +874,15 @@ def main(
     unexpected exception from anywhere below, still leaves a printout behind
     with a ``NEC ERROR`` line in it.
 
-    With no arguments the NEC-5 slot takes the two paths from stdin, one per
-    line (4nec2's form, momwire#1488), and the deck may then end without
+    With no arguments either slot takes the two paths from stdin, one per
+    line (4nec2's form, momwire#1488 and momwire#1592), and the deck may then end without
     ``EN``.  ``en_optional`` is that same allowance passed by a launcher whose
     OWN paths came from stdin and which runs this as its one-shot rung with
     the paths on the command line; like ``basis`` it is not a flag.
     """
     args = list(sys.argv[1:] if argv is None else argv)
 
-    if not args and dialect == "nec5":
+    if not args:
         from_stdin = _mech.stdin_paths()
         if from_stdin is not None:
             # One name is the one-argument fault, none the empty command line.

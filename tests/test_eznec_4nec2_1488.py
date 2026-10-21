@@ -1,4 +1,5 @@
-"""momwire#1488: 4nec2 as a front end for the NEC-5 launchers.
+"""momwire#1488: 4nec2 as a front end for the NEC-5 launchers (and, since
+momwire#1592, for the NEC-4.2 ones).
 
 4nec2 runs its engine as ``ENGINE.exe < nec2d.tmp``: no arguments, the deck
 and printout paths on stdin (``..\\out\\EXAMPLE3.inp``, ``..\\out\\EXAMPLE3.out``),
@@ -20,7 +21,6 @@ from __future__ import annotations
 
 import io
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -527,13 +527,43 @@ def test_the_thin_clients_last_ditch_is_never_silent(tmp_path, capsys):
     assert "MOMWIRE ENGINE UNAVAILABLE - test" in out[1]
 
 
-def test_the_nec42_slot_never_reads_stdin(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
+NEC42_DECK = FIXTURES / "eznec_nec42" / "0224_dipole-ex0.nec"
+
+
+def test_the_nec42_slot_reads_4nec2s_names_from_stdin(tmp_path, monkeypatch, capsys):
+    """4nec2 drives its NEC-4.2 engine as it drives NEC-5, ``ENGINE <
+    nec2d.tmp`` with a deck that has no ``EN`` (momwire#1592, Dan AC6LA):
+    the NEC-4.2 slot reads the names and closes the deck as the NEC-5 slot
+    does, and writes no ``.GMO`` (4nec2 asks none of its NEC-4.2 engine)."""
+    raw = NEC42_DECK.read_bytes()
+    no_en = raw[: raw.rindex(b"EN")]
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    (out_dir / "EXAMPLE3.inp").write_bytes(no_en)
+    monkeypatch.chdir(engine_dir)
     _stdin(monkeypatch, _NAMES)
-    stream = sys.stdin
-    assert _shell.main([], dialect="nec4") == 0
-    assert capsys.readouterr().out.splitlines() == [_shell.ARGUMENT_ERROR_INPUT]
-    assert stream.buffer.tell() == 0
+
+    assert _shell.main([], basis="sinusoidal", dialect="nec4") == 0
+
+    assert capsys.readouterr().out == ""
+    printout = (out_dir / "EXAMPLE3.out").read_bytes().decode("latin-1")
+    expected = _shell.render(
+        raw.decode("latin-1"), basis="sinusoidal", dialect="nec4"
+    ).replace("\n", "\r\n")
+    assert "NEC ERROR" not in printout
+    assert "NEC-4.2" in printout
+    assert _unclocked(printout) == _unclocked(expected)
+    assert sorted(p.name for p in out_dir.iterdir()) == ["EXAMPLE3.inp", "EXAMPLE3.out"]
+
+
+def _unclocked(printout: str) -> str:
+    """The printout without this engine's two measured times."""
+    import re
+
+    printout = re.sub(r"FILL= *\d+\.\d+ SEC\.", "FILL= - SEC.", printout)
+    return re.sub(r"RUN TIME = *\d+\.\d+", "RUN TIME = -", printout)
 
 
 def test_the_two_argument_form_writes_the_gmo_too(tmp_path):
@@ -586,6 +616,31 @@ def test_the_thin_client_reads_4nec2s_names_from_stdin(
     oracle = tmp_path / "oracle.out"
     _shell.run(out_dir / "EXAMPLE3.inp", oracle, basis=basis, en_optional=True)
     assert (out_dir / "EXAMPLE3.out").read_bytes() == oracle.read_bytes()
+
+
+def test_the_thin_client_reads_4nec2s_names_from_stdin_for_nec42(
+    tmp_path, monkeypatch, capsys
+):
+    """The NEC-4.2 launcher name reads the same form (momwire#1592) and asks
+    the NEC-4.2 slot, with the stdin allowance on the wire; no ``.GMO``."""
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    raw = NEC42_DECK.read_bytes()
+    (out_dir / "EXAMPLE3.inp").write_bytes(raw[: raw.rindex(b"EN")])
+    monkeypatch.chdir(engine_dir)
+    _stdin(monkeypatch, _NAMES)
+    monkeypatch.setattr("sys.argv", [str(engine_dir / "momwire-nec42-sinusoidal")])
+    sent = _in_process_server(monkeypatch, "sinusoidal")
+
+    assert eznec_client.main(None) == 0
+
+    assert capsys.readouterr().out == ""
+    assert len(sent) == 1 and sent[0].startswith(mech.EN_OPTIONAL_REQUEST)
+    printout = (out_dir / "EXAMPLE3.out").read_bytes().decode("latin-1")
+    assert "NEC ERROR" not in printout and "NEC-4.2" in printout
+    assert sorted(p.name for p in out_dir.iterdir()) == ["EXAMPLE3.inp", "EXAMPLE3.out"]
 
 
 def test_the_thin_clients_two_argument_form_sends_the_deck_verbatim(

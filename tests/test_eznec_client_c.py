@@ -851,14 +851,30 @@ def test_the_c_clients_stdin_form_faults_like_its_command_line(
 
 
 @pytest.mark.integration
-def test_a_nec4_named_copy_never_reads_stdin(client_exe, tmp_path):
+def test_a_nec4_named_copy_reads_4nec2s_names_from_stdin(client_exe, tmp_path):
+    """4nec2's NEC-4.2 engine form (momwire#1592): the names on stdin, a deck
+    with no EN, against a real daemon of the NEC-4.2 slot. No ``.GMO``."""
     bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC4_TWIN_NAME,))
     room = _room()
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    raw = NEC42_DECK.read_bytes()
+    (out_dir / "EXAMPLE3.inp").write_bytes(raw[: raw.rindex(b"EN")])
     try:
-        proc = _run(bundle, NEC4_TWIN_NAME, [], room, stdin=_NAMES_4NEC2, cwd=tmp_path)
-        assert proc.returncode == 0
-        assert proc.stdout.splitlines() == ["UNABLE TO OPEN FILE"]
-        assert _listening(room) == []
+        proc = _run(
+            bundle, NEC4_TWIN_NAME, [], room, stdin=_NAMES_4NEC2, cwd=engine_dir
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == ""
+        printout = (out_dir / "EXAMPLE3.out").read_bytes()
+        assert _unclocked(printout) == _nec4_oracle(tmp_path)
+        assert sorted(p.name for p in out_dir.iterdir()) == [
+            "EXAMPLE3.inp",
+            "EXAMPLE3.out",
+        ]
+        assert len(_listening(room)) == 1, _listening(room)
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
