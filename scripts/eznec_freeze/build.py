@@ -72,7 +72,8 @@ LAUNCHER = "momwire-nec5"
 # rather than a second 117 MB runtime.  Two per slot, not the whole roster:
 # the default plus the one formulation each slot's parity work was about
 # (razor-2p is NEC-5's own; point-matched sinusoidal is the family NEC-4.2
-# belongs to), and the README says how to make any other, which is a copy.
+# belongs to), and the reference page says how to make any other, which is a
+# copy (the README links it; momwire#1593 kept the README to install steps).
 #
 # Keyed by the file stem, valued by the README table's label.  Kept SHORT: a
 # table row in a plain-text README wrapped at ~70 columns; the longer story
@@ -95,32 +96,6 @@ SHIPPED_VARIANTS = tuple(
     for stem in NEC5_LAUNCHERS
     if stem.startswith(f"{LAUNCHER}-")
 )
-
-# The README's lists of bases a copy can name, per slot.  Restated rather
-# than read from `momwire.deck` because this script must not import the
-# runtime it is about to freeze for a constant; `tests/test_eznec_bundle_
-# readme.py` holds them to the roster.  The NEC-5 list leaves out the bases
-# that refuse every deck in that dialect (`sinusoidal`, `pulse`: centre-fed
-# only) and the deprecated `razor-nec5` spelling; the NEC-4.2 list is
-# `NEC2_BASES`, the centre-feeding ones (razor refuses there by name).
-NEC5_KNOWN_BASES = (
-    "bspline",
-    "bspline-d1",
-    "hmatrix",
-    "arrayblock",
-    "razor-2p",
-    "sinusoidal-galerkin",
-)
-NEC4_KNOWN_BASES = (
-    "bspline",
-    "bspline-d1",
-    "hmatrix",
-    "arrayblock",
-    "sinusoidal",
-    "sinusoidal-galerkin",
-    "pulse",
-)
-
 
 # Which bundle this freeze is (momwire#1456).  `standard` is the release zip,
 # frozen with python.org's 3.12; `win7` is the same code frozen with the
@@ -334,18 +309,6 @@ def launcher_table(suffix: str) -> str:
     )
 
 
-def _wrap_bases(bases: tuple[str, ...], indent: str) -> str:
-    """A list of basis names as README lines under ~70 columns."""
-    lines, line = [], indent
-    for basis in bases:
-        if line.strip() and len(line) + 2 + len(basis) > 70:
-            lines.append(line.rstrip())
-            line = indent
-        line += basis + "  "
-    lines.append(line.rstrip())
-    return "\n".join(lines)
-
-
 def readme_text(
     release: str,
     signing_note: str,
@@ -362,8 +325,6 @@ def readme_text(
     """
     if target not in TARGETS:
         raise ValueError(f"unknown bundle target {target!r}; expected one of {TARGETS}")
-    nec5_known = _wrap_bases(NEC5_KNOWN_BASES, "  NEC-5 slot:    ")
-    nec4_known = _wrap_bases(NEC4_KNOWN_BASES, "  NEC-4.2 slot:  ")
     win7 = win7_prerequisites(ucrt_bundled) if target == "win7" else ""
     return (
         f"momwire {release} — momwire as a NEC-5 or NEC-4.2 engine for the\n"
@@ -456,7 +417,7 @@ def readme_text(
         "In the NEC-5 slot, momwire-nec5-razor-2p is the tent basis with\n"
         "razor-blade path testing at NEC-5's two-point rule — the same\n"
         "formulation NEC-5 itself uses, which is why it agrees with the\n"
-        "licensed engine to the fraction of an ohm measured below.\n"
+        "licensed engine to a few thousandths of an ohm.\n"
         "\n"
         "In the NEC-4.2 slot, momwire-nec42-sinusoidal is the sinusoidal\n"
         "basis with point matching, the basis family NEC-4.2 itself belongs\n"
@@ -501,80 +462,9 @@ def readme_text(
         "For a new release, delete the copied files and _internal first, as\n"
         "above; the edited 4nec2.bat line can stay.\n"
         "\n"
-        "The .GMO joins two wire ends only where the solver joins them (ends\n"
-        "within 1 micrometre).  Ward AE6TY's port draws ends up to about\n"
-        "0.1 mm apart as joined; momwire draws them as the two separate ends\n"
-        "the solve treats them as.  This is deliberate: the drawing shows the\n"
-        "structure that was solved.\n"
-        "\n"
-        "REPRODUCTION IS NOT ACCURACY.  razor-2p agrees with the licensed\n"
-        "engine because it runs the same algorithm, not because it is more\n"
-        "correct, and it inherits that engine's discretization error along\n"
-        "with its answers.\n"
-        "\n"
-        "SEGMENT COUNTS IN THE NEC-5 SLOT: use EVEN ones for a centre-fed\n"
-        "dipole.  NEC-5's basis is the tent, so its unknowns and its sources\n"
-        "sit at KNOTS.  An odd count leaves no knot at the centre and cannot\n"
-        "feed there.  (The 'odd segments' habit is NEC-2's, and NEC-4.2's,\n"
-        "where sources sit at segment centres.)\n"
-        "\n"
-        "Measured on a 0.476-wavelength dipole, free space, even meshes, all\n"
-        "fed at the centre knot:\n"
-        "\n"
-        "    segments   licensed NEC-5      B-spline (bs2)\n"
-        "        4       56.12 - 108.59j     67.64 - 31.15j\n"
-        "       20       66.67 -  35.88j     67.74 - 29.16j\n"
-        "      160       67.67 -  29.28j     67.80 - 28.34j\n"
-        "\n"
-        "razor-2p tracks the licensed column to 0.003 - 0.007 ohm at every\n"
-        "row -- flat, not improving, which is what a twin looks like.\n"
-        "\n"
-        "Which is nearer the truth is a different question, asked by scoring\n"
-        "each basis against ITS OWN answer at the finest mesh above, N = 160,\n"
-        "through this same engine:\n"
-        "\n"
-        "    segments   bs2 error   razor-2p error\n"
-        "        4       2.81 ohm      80.14 ohm\n"
-        "       20       0.82 ohm       6.67 ohm\n"
-        "       60       0.25 ohm       1.43 ohm\n"
-        "\n"
-        "Both converge; at a matched mesh the B-spline basis is 5.8-28x nearer\n"
-        "its own limit.  Neither is converged at a coarse mesh -- bs2 is\n"
-        "still 2.8 ohm out at four segments -- the difference is how fast the\n"
-        "error falls.\n"
-        "\n"
-        "Extrapolated to their limits, the two formulations MEET within\n"
-        "0.08-0.21 ohm on this deck (parity_limits() in the probe script is\n"
-        "the receipt).  So most of a twin-vs-default disagreement at a\n"
-        "practical mesh is the twin still walking the O(1/N) path it shares\n"
-        "with the licensed engine, not the two engines heading somewhere\n"
-        "different.\n"
-        "\n"
-        "So pick the twin when you want what NEC-5 would have said — checking\n"
-        "a published NEC-5 result, or comparing against a NEC-5 workflow.\n"
-        "Pick the default when you want momwire's own best answer.  When they\n"
-        "disagree at a practical mesh, neither is broken: most of the gap is\n"
-        "the twin's inherited discretization, and what remains is a fraction\n"
-        "of an ohm of formulation.\n"
-        "\n"
-        "MAKING ANOTHER.  The basis rides on the FILENAME: everything after\n"
-        "'nec5-' or 'nec42-' selects it.  So copy a LAUNCHER in this folder —\n"
-        "a few tens of kilobytes, not the engine — rename the copy to\n"
-        "momwire-nec5-<basis>.exe or momwire-nec42-<basis>.exe, and that\n"
-        "basis is what answers, in that slot.  Known bases:\n"
-        "\n"
-        f"{nec5_known}\n"
-        f"{nec4_known}\n"
-        "\n"
-        "(In the NEC-5 slot, sinusoidal and pulse cannot answer — every deck\n"
-        "there drives a node, and point matching has no excitation for a\n"
-        "source at one.  In the NEC-4.2 slot, razor cannot, as above.  Either\n"
-        "says so, by name, in the printout.)\n"
-        "\n"
-        "A name that matches no basis is not a silent fallback: it refuses,\n"
-        "names itself, and lists the bases that exist.\n"
-        "\n"
-        "What serves and what refuses (by name, in the printout):\n"
+        "Everything else -- how the launchers compare, making a copy that\n"
+        "names another basis, and what serves and what refuses (by name,\n"
+        "in the printout):\n"
         "https://momwire.dev/reference/eznec-nec5/\n"
     )
 

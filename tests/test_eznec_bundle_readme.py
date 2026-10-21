@@ -25,6 +25,7 @@ from momwire.eznec import _serve
 
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "scripts" / "eznec_freeze" / "build.py"
+SITE_PAGE = REPO / "site" / "src" / "content" / "docs" / "reference" / "eznec-nec5.md"
 
 
 def _build():
@@ -96,12 +97,30 @@ def test_the_primary_names_are_also_console_scripts():
         assert scripts.get(stem) == "momwire_eznec_client:main", stem
 
 
-def test_the_readmes_known_bases_are_the_rosters():
-    """The README's per-slot lists are restated in build.py (it must not
-    import what it freezes); held here to the console-script families, which
-    `test_eznec_nec42_1295` and `test_nec5_command_family_1239` hold to the
-    roster in turn."""
-    build = _build()
+def _site_known_bases() -> dict[str, set[str]]:
+    """The per-slot lists of bases a copy can name, read from the reference
+    page's ``text`` block (momwire#1593 moved them out of the README, which
+    now links the page)."""
+    text = SITE_PAGE.read_text()
+    block = text.split("```text\nNEC-5 slot:", 1)[1].split("```", 1)[0]
+    slots: dict[str, set[str]] = {}
+    slot = "NEC-5"
+    for line in ("NEC-5 slot:" + block).splitlines():
+        for label in ("NEC-5 slot:", "NEC-4.2 slot:"):
+            if line.startswith(label):
+                slot = label.removesuffix(" slot:")
+                line = line.removeprefix(label)
+        slots.setdefault(slot, set()).update(line.split())
+    return slots
+
+
+def test_the_reference_pages_known_bases_are_the_rosters():
+    """The reference page's per-slot lists, held to the console-script
+    families, which `test_eznec_nec42_1295` and
+    `test_nec5_command_family_1239` hold to the roster in turn.  The NEC-5
+    list leaves out the bases that refuse every deck in that dialect
+    (`sinusoidal`, `pulse`: centre-fed only) and the deprecated `razor-nec5`
+    spelling; the NEC-4.2 list is `NEC2_BASES`."""
     scripts = _console_scripts()
     nec5 = {
         basis_from_program_name(k, "nec5-")
@@ -113,8 +132,26 @@ def test_the_readmes_known_bases_are_the_rosters():
         for k in scripts
         if dialect_from_program_name(k) == "nec4"
     } - {None}
-    assert set(build.NEC5_KNOWN_BASES) == nec5
-    assert set(build.NEC4_KNOWN_BASES) == nec4 == set(NEC2_BASES)
+    slots = _site_known_bases()
+    assert slots["NEC-5"] == nec5
+    assert slots["NEC-4.2"] == nec4 == set(NEC2_BASES)
+
+
+def test_the_readme_is_install_steps_and_a_link():
+    """momwire#1593 (Dan AC6LA): the README says how to install under EZNEC,
+    SimNEC and 4nec2 and points at the reference page for the rest; the
+    reference material it used to repeat lives only there."""
+    build = _build()
+    for target in build.TARGETS:
+        text = build.readme_text("9.9.9", "SIGNING: unsigned.", ".exe", target=target)
+        assert text.rstrip().endswith("https://momwire.dev/reference/eznec-nec5/")
+        for gone in (".GMO joins", "REPRODUCTION IS NOT ACCURACY", "MAKING ANOTHER"):
+            assert gone not in text, gone
+        for kept in ("INSTALLING FOR 4NEC2", "SIMNEC.", "External NEC-5"):
+            assert kept in text, kept
+    page = SITE_PAGE.read_text()
+    for moved in ("Ward AE6TY's port draws ends", "Reproduction is not accuracy"):
+        assert moved in page, moved
 
 
 def test_the_readme_table_has_one_row_per_shipped_executable():
@@ -133,9 +170,7 @@ def test_the_readme_table_has_one_row_per_shipped_executable():
     head = text.split("SIGNING:", 1)[0]
     for host in ("EZNEC", "SimNEC", "4nec2"):
         assert host in head, host
-    for basis in (*build.NEC5_KNOWN_BASES, *build.NEC4_KNOWN_BASES):
-        assert basis in text, basis
-    # The table and the lists are generated: hold them to the README's own
+    # The table is generated: hold them to the README's own
     # ~70-column wrap.
     table = build.launcher_table(".exe")
     assert max(len(line) for line in table.splitlines()) <= 72
