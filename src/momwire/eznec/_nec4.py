@@ -87,8 +87,11 @@ _SERVED_GEOMETRY = frozenset({"GW", "GE"})
 
 # The pattern request forms captured: XNDA 1000 (a cut) and 1001 (the 3-D
 # grid, with its average-gain trailer), RP mode 0, at no range or at one
-# (the range form, momwire#1463: `_at_range`).
-_SERVED_XNDA = frozenset({1000, 1001})
+# (the range form, momwire#1463: `_at_range`).  1002 (the trailer and no
+# rows), 1003 (1001's printout), 1010 and 1011 (DIRECTIVE gains in the rows,
+# the trailer still a power gain) print as NEC-5's do for the same XNDA, in
+# the same row builder (probes p33-p36, momwire#1592).
+_SERVED_XNDA = frozenset({1000, 1001, 1002, 1003, 1010, 1011})
 
 # A GD card's leading integer, as the one captured value prints it.
 _GD_KIND = {2: "CIRCLE CLIFF"}
@@ -981,6 +984,7 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
         result.p_in,
         ground_z=result.ground_z or 0.0,
         cliff=cliff,
+        p_radiated=result.p_radiated,
     )
     range_m = card.f(8)
     if range_m == 0.0:

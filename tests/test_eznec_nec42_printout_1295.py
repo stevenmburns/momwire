@@ -66,7 +66,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
 PROBES_DIR = FIXTURES / "probes"
 MULTI_DIR = FIXTURES / "multisource"
-# The seventeen decks EZNEC wrote, and thirty-two probe decks written to show
+# The seventeen decks EZNEC wrote, and the probe decks written to show
 # NEC-4.2's layout of what EZNEC's captures did not (README beside them).
 CAPTURES = tuple(sorted(p.name[:4] for p in FIXTURES.glob("*.nec")))
 PROBES = tuple(sorted(p.name.split("_")[0] for p in PROBES_DIR.glob("*.nec")))
@@ -162,7 +162,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 32 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 36 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -393,6 +393,10 @@ def _pattern(lines: list[str]) -> tuple[PatternBlock, ...]:
                 cell.split("AT PHASE")[1].split()[0]
             )
             first = start + 9
+    # XNDA's D digit (1010, 1011; momwire#1592): the gains column heading
+    # names DIRECTIVE gains.
+    if any("- DIRECTIVE GAINS -" in ln for ln in lines[start:first]):
+        ranged["directive"] = True
     rows = []
     for line in _rows_after(lines, first):
         c = _cells(line, _PATTERN_EDGES)
