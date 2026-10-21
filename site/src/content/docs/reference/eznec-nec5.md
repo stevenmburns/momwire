@@ -95,6 +95,17 @@ EZNEC displays nothing during an external-engine run); if anything about the
 resident path ever fails, the launcher runs the engine directly instead —
 the same answer, at one-shot speed, never a broken engine.
 
+### The 4nec2 geometry file (`.GMO`)
+
+Under 4nec2's NEC-5 package (the install steps are in the zip's
+`README.txt`), a launcher writes the `.GMO` geometry file beside the
+printout when the deck's `GE` card asks for it (`GE 0 0 1`, or any nonzero
+third field). That drawing joins two wire ends only where the solver joins
+them — ends within 1 micrometre. Ward AE6TY's port draws ends up to about
+0.1 mm apart as joined; momwire draws them as the two separate ends the solve
+treats them as. This is deliberate: the drawing shows the structure that was
+solved.
+
 ## Choosing the formulation
 
 The bundle carries seven launchers and the one engine they run, and the
