@@ -64,6 +64,9 @@ CORE_SOURCES = (
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
+    # The nec2 / nec4 deck reader (momwire#1607 A1): the NEC-4.2-dialect
+    # executables' first step, linked into `nec4_deck_driver.cpp` below.
+    "_nec4_deck_core.cpp",
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
     # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents);
     # the engine-neutral seam and razor-2p's engine over it.
@@ -184,6 +187,7 @@ def driver(accel, tmp_path_factory):
         "razor_chain_driver",
         "razor_front_driver",
         "nec5_deck_driver",
+        "nec4_deck_driver",
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
         "nec5_bspline_printout_driver",
@@ -221,6 +225,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_razor_solve_core.h" in seen, "the solve prototype's core was not built"
     assert "_razor_front_core.h" in seen, "the front half's core was not built"
     assert "_nec5_deck_core.h" in seen, "the deck reader's core was not built"
+    assert "_nec4_deck_core.h" in seen, "the nec2 / nec4 reader's core was not built"
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
@@ -232,6 +237,29 @@ def test_the_driver_links_no_python(driver):
     for exe in exes.values():
         libs = subprocess.run(["ldd", str(exe)], capture_output=True, text=True).stdout
         assert "libpython" not in libs, libs
+
+
+@pytest.mark.parametrize("dialect", ["nec4", "nec2"])
+def test_the_nec4_deck_reader_in_cxx_alone_is_pythons(driver, dialect):
+    """momwire#1607 A1: the nec2 / nec4 reader, built from the core TUs alone
+    (`nec4_deck_driver`), reads every NEC deck in tests/fixtures as
+    `momwire.deck.parse(text, dialect)` does, field for field (the
+    extension-bound twin of this check is `tests/test_nec4_deck_core.py`).
+    Only the three deliberately non-finite / oversized fixtures decline."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_nec4_deck_compare", SPLIT / "nec4_deck_compare.py"
+    )
+    nc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nc)
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    counts, mismatches = nc.compare(decks, dialect, driver[0]["nec4_deck_driver"])
+    assert not mismatches, mismatches[:3]
+    assert counts["parsed"] >= 200 and counts["refused"] >= 100, counts
+    assert counts["declined"] <= 3, counts
 
 
 @pytest.mark.parametrize("prefix", ["", "ek_"], ids=["reduced", "extended_kernel"])
