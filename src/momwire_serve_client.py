@@ -607,6 +607,37 @@ def strip_path_line(line: str) -> str:
     return line
 
 
+# The third character of a card's first token when the mnemonic is glued to
+# its first field (``GE1``): `momwire.deck._cards._FUSED_FIELD_START`, restated
+# because this module may not import momwire.
+_FUSED_FIELD_START = "0123456789.+-"
+
+
+def is_names_line(line: str) -> bool:
+    """Whether the first line on a NEC-2 launcher's stdin is 4nec2's first
+    file name rather than the first card of a deck (momwire#1611).
+
+    A NEC-2 launcher reads stdin both ways with no arguments: SimNEC writes
+    ``NX``-chained decks there, and 4nec2 writes the two file names.  A card
+    line is one whose first token is a two-letter mnemonic, alone or glued to
+    a number (``GE1``), which is the rule ``momwire.deck.parse_card`` reads a
+    mnemonic by; a path is anything else, and so is a line naming a file that
+    exists, whatever it looks like.  A blank line is a deck's (a stdin of
+    names never starts with one).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    head = stripped.replace(",", " ").split()[0]
+    card = head[:2].isalpha() and (len(head) == 2 or head[2] in _FUSED_FIELD_START)
+    if not card:
+        return True
+    try:
+        return os.path.isfile(strip_path_line(line))
+    except (OSError, ValueError):
+        return False
+
+
 def stdin_paths(stream=None) -> list[str] | None:
     """The file names 4nec2 sends on stdin: the first two lines, each read by
     :func:`strip_path_line`.
