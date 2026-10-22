@@ -9,8 +9,9 @@ hand it the very `Nec4Printout` Python's own solve built
   solved for both served bases;
 - every fixture deck the slot refuses before any solve, with no Python in
   the C++ path (the seam or the build refuses, and the C++ writes it);
-- hand-built `Nec4Printout` records for the shapes no fixture prints: the GS
-  and GM rows, a further-table report, a named ground file (GN 2 and GN 3),
+- hand-built `Nec4Printout` records for the shapes no fixture prints: the GS,
+  GM, GA and GH rows (fields overrun), a further-table report, a named
+  ground file (GN 2 and GN 3),
   the FAR FIELD GROUND block, a range pattern with its lower-medium line and
   a three-digit exponent, a directive pattern, mixed TL/NT network runs,
   every loading-row kind, and NaN, infinity and negative zero in the cells;
@@ -230,6 +231,22 @@ RECORDS = {
                 1, (1e6, -2e-9, 0.0), (-1234567.0, 0.5, 0.25), 0.001, 5, 1, 5, 1
             ),
             GM,
+            GS,
+        ),
+    ),
+    # GA and GH entries (momwire#1592), with numbers wide enough to fill and
+    # overrun their fields, a negative zero and a three-digit exponent.
+    "ga_gh_rows": _printout(
+        [_run(echo_through=4)],
+        wires=(
+            n4p.ArcRow(1, 12345.678, -0.0, 360.0, 0.002, 9, 1, 9, 3),
+            n4p.ArcRow(2, 2.0, -12345.5, 12345.5, 1e5, 12, 10, 21, 0),
+            n4p.HelixRow(
+                3, -1.5, 0.5, (0.1, 1e-300), (2e-3, 2e-3), 1.06348, 30, 22, 51, 4
+            ),
+            n4p.HelixRow(
+                4, 123456.0, -0.0, (1e5, 1e5), (2.0, 2.0), 1.29918e103, 20, 52, 71, 5
+            ),
             GS,
         ),
     ),
