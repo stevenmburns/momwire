@@ -427,6 +427,8 @@ def test_the_swept_entry_puts_the_frequency_triple_back(swept):
     assert swept.after == swept.before
 
 
+# Default-lane budget is 5 s; CI median 7.8 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_two_axial_feeds_take_the_other_half_of_the_contract():
     """`compute_impedance_swept` returns (n_k,) at one port and
     (n_k, n_ports) at more, and the route fills whichever the caller's own

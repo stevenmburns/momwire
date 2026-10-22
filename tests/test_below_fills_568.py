@@ -444,7 +444,19 @@ G_568_8_TOL = 1e-9
 G_568_8_PANEL_BAND = 0.20
 
 
-@pytest.mark.parametrize("cell", SPEC_CELLS)
+# Default-lane budget is 5 s; the C-soil cells' CI medians are 7.6 s (21 MHz)
+# and 6.7 s (7 MHz) (momwire 0.82.0 release prep). The A/B cells stay as the
+# PR-lane guard.
+_G5688_SLOW = {"C/21MHz", "C/7MHz"}
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        pytest.param(c, marks=pytest.mark.slow) if c in _G5688_SLOW else c
+        for c in SPEC_CELLS
+    ],
+)
 def test_g5688_the_four_surfaces_agree(cell, record_property):
     """`iv_surfaces_direct_below` end to end — the per-point loop that carries
     the OpenMP region, plus the R₁ = 0 analytic row mixed into the same call so

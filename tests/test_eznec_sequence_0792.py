@@ -40,7 +40,15 @@ def _frequencies(out):
     return [float(m) for m in re.findall(r"FREQUENCY= ([0-9.E+-]+) MHZ", out)]
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize(
+    "basis",
+    [
+        "razor-2p",
+        # Default-lane budget is 5 s; CI median 9.9 s Linux, 5.4 s macOS
+        # (momwire 0.82.0 release prep). razor-2p keeps the guard on PRs.
+        pytest.param("bspline", marks=pytest.mark.slow),
+    ],
+)
 def test_dans_fr_after_xq_runs_each_loop_at_its_own_fr(basis):
     out = render(FIXTURE.read_text(), basis=basis)
     assert "NEC ERROR" not in out

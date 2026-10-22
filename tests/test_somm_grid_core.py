@@ -47,6 +47,8 @@ def _call(eps_r, sigma, f_hz, r1_lambda):
 @pytest.mark.skipif(
     shutil.which(os.environ.get("CXX", "g++")) is None, reason="no C++ compiler"
 )
+# Default-lane budget is 5 s; CI median 17 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 @pytest.mark.skipif(sys.platform != "linux", reason="the driver build is the Linux one")
 def test_the_cxx_grid_is_get_grids(tmp_path, monkeypatch):
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "0")

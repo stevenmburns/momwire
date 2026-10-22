@@ -192,8 +192,22 @@ def collapse(base, gap):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("base", ["bspline", "sg"])
-@pytest.mark.parametrize("gap", sorted(LADDER, reverse=True))
+# Default-lane budget is 5 s; the bspline rungs at 0.02/0.005/0.002 m have CI
+# medians 5.9/6.4/5.2 s (momwire 0.82.0 release prep). The other seven rungs
+# stay in the default lane.
+_G1004_SLOW = {(0.02, "bspline"), (0.005, "bspline"), (0.002, "bspline")}
+
+
+@pytest.mark.parametrize(
+    ("gap", "base"),
+    [
+        pytest.param(g, b, marks=pytest.mark.slow)
+        if (g, b) in _G1004_SLOW
+        else pytest.param(g, b)
+        for b in ("bspline", "sg")
+        for g in sorted(LADDER, reverse=True)
+    ],
+)
 def test_the_near_plane_cross_block_collapses(base, gap, record_property):
     bar = LADDER[gap][0 if base == "bspline" else 1]
     rel, other = collapse(base, gap)

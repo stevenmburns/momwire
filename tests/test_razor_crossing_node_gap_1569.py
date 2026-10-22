@@ -67,6 +67,8 @@ def test_the_hub_gap_agrees_with_bspline_at_the_working_mesh():
     assert abs(z_r - z_b) / abs(z_b) < 0.03, (z_r, z_b)
 
 
+# Default-lane budget is 5 s; CI median 8.0 s Linux, 8.5 s macOS (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_a_three_wire_crossing_gap_is_served_and_agrees_with_bspline():
     counts = [[20], [20], [20]]
     z_r = _z(RazorSolver, SLANT, counts, feeds=[], node_gaps=[(0, "start", 1.0)])
