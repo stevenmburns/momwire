@@ -6,6 +6,7 @@
 // can hand the C++ writer exactly the numbers Python's own writer got.
 #include "_accel_common.h"
 #include "_nec4_printout_core.h"
+#include "_sinusoidal_run_core.h"
 
 #include <complex>
 #include <string>
@@ -328,4 +329,34 @@ void register_nec4_printout(py::module_ &m) {
         py::arg("latin1_text"), py::arg("basis"), py::arg("version"), py::arg("variant"), py::arg("marker"),
         "The slot's whole printout (UTF-8) when the C++ seam or build refuses the deck "
         "before any solve, else None.");
+    // The NEC-4.2 slot's run half over the sinusoidal basis (momwire#1607
+    // B4a). `blas`: numpy's ILP64 cblas_zgemm / cblas_zgemv / cblas_zdotu_sub /
+    // zgesv, SciPy's LP64 zgetrf / zgetrs, then numpy's cblas_dgemm, as
+    // addresses.
+    m.def(
+        "sinusoidal_nec4_printout",
+        [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
+           const std::string &variant, const std::string &marker) -> py::tuple {
+            if (blas.size() != 7) throw py::value_error("blas: seven addresses");
+            mw::sinusoidal::FillLinalg la;
+            la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+            la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+            la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+            la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+            la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[4]);
+            la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[5]);
+            la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[6]);
+            const std::string text = latin1_text;
+            const mw::nec5::EngineStamp st = stamp_of(version, variant, marker);
+            std::string out, why;
+            bool ok;
+            {
+                py::gil_scoped_release nogil;
+                ok = mw::sinusoidal::printout(text, st, la, out, why);
+            }
+            return py::make_tuple(ok, py::str(ok ? out : why));
+        },
+        py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
+        "(True, the slot's printout) for basis 'sinusoidal' from the C++ run half, "
+        "or (False, why it declines).");
 }
