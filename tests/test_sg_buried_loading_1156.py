@@ -37,9 +37,10 @@ metal loss 340x low.
 * swept == single-frequency (1e-9 Ω), reciprocity unchanged;
 * the loading SHIFT converges onto bspline's under refinement (slow lane).
 
-The crossing decks cannot carry the exact-pair gate on this trunk: the exact
-pair puts the two media's wires at different radii, and SG's crossing serve
-refuses per-wire radii (`crossing_junctions`, momwire#524 phase 2).
+The crossing decks do not carry the exact-pair gate on this trunk: the exact
+pair puts the two media's wires at different radii, which SG's crossing serve
+refused (`crossing_junctions`, momwire#524 phase 2) until momwire#1630 served
+the two-radius node; the gate was not extended to it there.
 
 The mixed decks here are fed on ONE wire. The cross-medium coupling's sign
 and a buried knot gap's drive k are gated in `test_sg_mixed_sign_1159.py`

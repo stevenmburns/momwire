@@ -2620,14 +2620,10 @@ class BSplineSolver(
         if self.ground_z is None or not self.junctions:
             return None
         media = self._wire_media()
-        if _medium_spec.BELOW not in media or not self._crossing_junctions():
+        if _medium_spec.BELOW not in media:
             return None
-        return _below_interface.crossing_side_radii(
-            media,
-            radii,
-            _below_interface.crossing_above_member(
-                self._crossing_junctions(), self.junctions, media
-            ),
+        return _below_interface.two_radius_crossing(
+            media, radii, self._crossing_junctions(), self.junctions
         )
 
     @property

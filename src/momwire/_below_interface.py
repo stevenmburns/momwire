@@ -440,6 +440,24 @@ def crossing_above_member(crossing, groups, media):
     return None
 
 
+def two_radius_crossing(media, radii, crossing, groups):
+    """`(a_above, a_below)` for a served TWO-RADIUS crossing deck, else None
+    (antennaknobs plan U5): the one reading of the rule every crossing family
+    shares (bspline, and the sinusoidal pair since momwire#1630).
+
+    None without asking anything else when every wire has one radius, so the
+    shipped one-radius decks never reach the side rule from here, and None
+    when `crossing` (the deck's validated crossing junctions,
+    `crossing_junctions(..., two_radius=True)`) is empty. A spread within one
+    side raises (`crossing_side_radii`)."""
+    radii = np.asarray(radii, dtype=float)
+    if float(radii.max()) - float(radii.min()) <= 0.0 or not crossing:
+        return None
+    return crossing_side_radii(
+        media, radii, crossing_above_member(crossing, groups, media)
+    )
+
+
 def crossing_side_radii(media, radii, above_member=None):
     """`(a_above, a_below)` for a TWO-RADIUS crossing deck (antennaknobs plan
     U5): line tests at their observer's radius, the node's point tests at the
