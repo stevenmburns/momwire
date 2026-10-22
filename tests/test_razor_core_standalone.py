@@ -73,6 +73,9 @@ CORE_SOURCES = (
     # The NEC-4.2 build over it (momwire#1607 A2b), linked into
     # `nec4_build_driver.cpp`.
     "_nec4_build_core.cpp",
+    # The NEC-4.2 printout writer (momwire#1607 A3), linked into
+    # `nec4_printout_driver.cpp`.
+    "_nec4_printout_core.cpp",
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
     # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents);
     # the engine-neutral seam and razor-2p's engine over it.
@@ -196,6 +199,7 @@ def driver(accel, tmp_path_factory):
         "nec4_deck_driver",
         "nec4_seam_driver",
         "nec4_build_driver",
+        "nec4_printout_driver",
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
         "nec5_bspline_printout_driver",
@@ -236,6 +240,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_nec4_deck_core.h" in seen, "the nec2 / nec4 reader's core was not built"
     assert "_nec4_seam_core.h" in seen, "the NEC-4.2 seam's core was not built"
     assert "_nec4_build_core.h" in seen, "the NEC-4.2 build's core was not built"
+    assert "_nec4_printout_core.h" in seen, "the NEC-4.2 writer's core was not built"
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
@@ -316,6 +321,52 @@ def test_the_nec4_build_in_cxx_alone_is_pythons(driver, basis):
     assert not mismatches, mismatches[:3]
     assert counts["built"] >= 200, counts
     assert counts["declined"] <= 3, counts
+
+
+@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+def test_the_nec4_refusal_printouts_in_cxx_alone_are_the_slots(driver, basis):
+    """momwire#1607 A3: every fixture deck the NEC-4.2 slot refuses before a
+    solve prints, from the core TUs alone (`nec4_printout_driver`: the C++
+    reader, seam, build and writer), the text `_nec4.render` writes."""
+    from momwire.eznec import _nec4, _printout
+
+    version = _printout._stamp_field(_printout._momwire_version()) or "unknown"
+    variant = _printout._stamp_field(_printout._accelerator_variant()) or "none"
+    marker = _printout._overlay_marker(version) or "-"
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    run = subprocess.run(
+        [
+            str(driver[0]["nec4_printout_driver"]),
+            basis,
+            version,
+            variant,
+            marker,
+            *map(str, decks),
+        ],
+        capture_output=True,
+        check=True,
+    )
+    dumps: dict[str, str] = {}
+    current = None
+    for line in run.stdout.decode("utf-8").splitlines(keepends=True):
+        if line.startswith("== "):
+            current = line[3:].rstrip("\n")
+            dumps[current] = ""
+        else:
+            dumps[current] += line
+    refused = 0
+    for path in decks:
+        cxx = dumps[str(path)]
+        if cxx == "? solve\n":
+            continue
+        refused += 1
+        python = _nec4.render(path.read_bytes().decode("latin-1"), basis=basis)
+        assert cxx == python, path
+    assert refused >= 150, refused
 
 
 @pytest.mark.parametrize("prefix", ["", "ek_"], ids=["reduced", "extended_kernel"])
