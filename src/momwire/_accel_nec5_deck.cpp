@@ -6,6 +6,7 @@
 #include "_accel_common.h"
 #include "_nec4_deck_core.h"
 #include "_nec4_build_core.h"
+#include "_sinusoidal_fill_core.h"
 #include "_sinusoidal_front_core.h"
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
@@ -76,6 +77,27 @@ void register_nec5_deck(py::module_ &m) {
         "_basis_coefs) at every operating point the NEC-4.2 build makes of a "
         "deck (scripts/core_split/sinusoidal_front_compare.py writes the "
         "Python side).");
+    // The sinusoidal free-space fill and solve (`_sinusoidal_fill_core.cpp`,
+    // momwire#1607 B3). `blas`: numpy's ILP64 cblas_zgemm / cblas_zgemv /
+    // cblas_zdotu_sub, then SciPy's LP64 zgetrf / zgetrs, as addresses.
+    m.def(
+        "sinusoidal_fill_dump",
+        [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole) -> std::string {
+            if (blas.size() != 5) throw py::value_error("blas: five addresses");
+            mw::sinusoidal::FillLinalg la;
+            la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+            la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+            la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+            la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[3]);
+            la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[4]);
+            const std::string text = latin1;
+            py::gil_scoped_release nogil;
+            return mw::sinusoidal::dump_fill(text, la, whole);
+        },
+        py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,
+        "The C++ sinusoidal free-space fill and port solve (Z, coefficients, Y) "
+        "at every operating point the NEC-4.2 build makes of a deck "
+        "(scripts/core_split/sinusoidal_fill_compare.py writes the Python side).");
     m.def(
         "nec4_float_probe",
         [](const std::string &op, std::vector<double> v) -> py::object {
