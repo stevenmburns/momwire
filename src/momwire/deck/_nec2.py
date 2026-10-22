@@ -41,7 +41,8 @@ __all__ = ["parse_nec2"]
 
 # The geometry section.  GA/GH are NEC geometry too, and are refused by name
 # below: the corpus never uses them and an untested geometry path is worse
-# than an honest no.
+# than an honest no.  The nec4 dialect reads both, as NEC-4.2 does
+# (`deck._nec4`, momwire#1592).
 _GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GR", "GE"})
 
 # Cards that RUN the pending group.  RP/NE/NH are not merely report requests:
@@ -236,6 +237,14 @@ class _Nec2Parser:
     in force and produce a group's worth of output (spec ``#execution``).
     """
 
+    # The dialect's geometry vocabulary, its by-name refusals and its
+    # geometry builders (None: `build_geometry`'s own).  Class attributes so
+    # a dialect that reads more geometry (the nec4 one's GA and GH,
+    # momwire#1592) widens them without a second state machine.
+    _geometry_mnemonics = _GEOMETRY_CARDS
+    _refused_by_name = _REFUSED_BY_NAME
+    _geometry_builders = None
+
     def __init__(self) -> None:
         self.comments: list[str] = []
         self.quiet = False
@@ -333,7 +342,9 @@ class _Nec2Parser:
         the first card that needs coordinates for one that is not.
         """
         if self._structure is None:
-            self._structure = build_geometry(self._geometry_cards)
+            self._structure = build_geometry(
+                self._geometry_cards, self._geometry_builders
+            )
         return self._structure
 
     def _geometry(self, card: Card) -> None:
@@ -1087,7 +1098,10 @@ class _Nec2Parser:
     def feed(self, text: str) -> None:
         for line in text.splitlines():
             head = line.strip().replace(",", " ").split()
-            if head and (message := _REFUSED_BY_NAME.get(head[0].upper())) is not None:
+            if (
+                head
+                and (message := self._refused_by_name.get(head[0].upper())) is not None
+            ):
                 # By-name refusals fire BEFORE the tokenizer converts fields
                 # (#486): SY's fields are 4nec2 symbolic expressions, so the
                 # generic NON-NUMERICAL CHARACTER error would otherwise outrun
@@ -1115,7 +1129,7 @@ class _Nec2Parser:
             if (ff := _directive(text, "FF")) is not None:
                 self.reduced_field = ff
             return
-        if (message := _REFUSED_BY_NAME.get(card.mnemonic)) is not None:
+        if (message := self._refused_by_name.get(card.mnemonic)) is not None:
             raise DeckError(message)
         if card.mnemonic in _ARMING_CARDS:
             # Above the network dispatch below, so TL/NT arm through the one
@@ -1135,7 +1149,7 @@ class _Nec2Parser:
             # name (spec ``#network-contiguity``).
             if self._network_destroyer is None:
                 self._network_destroyer = card.mnemonic
-        if card.mnemonic in _GEOMETRY_CARDS:
+        if card.mnemonic in self._geometry_mnemonics:
             self._geometry(card)
             return
         if card.mnemonic == "GN":

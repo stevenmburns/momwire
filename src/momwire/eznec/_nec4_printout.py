@@ -73,6 +73,8 @@ __all__ = [
     "Preamble",
     "SegmentRow",
     "SegmentValueRow",
+    "ArcRow",
+    "HelixRow",
     "MoveRow",
     "ScaleRow",
     "WireRow",
@@ -89,6 +91,42 @@ class WireRow:
     end1: tuple[float, float, float]
     end2: tuple[float, float, float]
     radius: float
+    segments: int
+    first: int
+    last: int
+    tag: int
+
+
+@dataclass(frozen=True)
+class ArcRow:
+    """One ``GA`` card's row of the wire table (probes p46-p48,
+    momwire#1592): the arc's radius and its two angles as written in place
+    of a ``GW``'s two ends, then the wire radius and the segment columns."""
+
+    number: int
+    arc_radius: float
+    angle1_deg: float
+    angle2_deg: float
+    radius: float
+    segments: int
+    first: int
+    last: int
+    tag: int
+
+
+@dataclass(frozen=True)
+class HelixRow:
+    """One ``GH`` card's three lines of the wire table (probes p49-p53,
+    momwire#1592): the wire number and segment columns, the card's six reals
+    as written (turns, length along Z, the helix radius and the wire radius
+    at each end), and the total length of its chords."""
+
+    number: int
+    turns: float
+    length: float
+    helix_radii: tuple[float, float]
+    wire_radii: tuple[float, float]
+    wire_length: float
     segments: int
     first: int
     last: int
@@ -120,6 +158,10 @@ class MoveRow:
     translation: tuple[float, float, float]
     first_tag: int
     segments: int
+
+
+# One entry of the wire table, in card order.
+StructureRow = WireRow | ArcRow | HelixRow | ScaleRow | MoveRow
 
 
 @dataclass(frozen=True)
@@ -250,9 +292,9 @@ class Nec4Report:
 class Nec4Printout:
     """Everything a NEC-4.2 printout prints that the deck text does not."""
 
-    # The wire table's rows in card order: a ``GW``'s row, or the lines a
-    # ``GS`` or ``GM`` card prints among them.
-    wires: tuple[WireRow | ScaleRow | MoveRow, ...]
+    # The wire table's rows in card order: a ``GW``, ``GA`` or ``GH``
+    # card's entry, or the lines a ``GS`` or ``GM`` card prints among them.
+    wires: tuple[StructureRow, ...]
     ge_flag: int
     total_segments: int
     # One tuple of signed segment numbers per multiple-wire junction.
@@ -346,10 +388,40 @@ _STRUCTURE_GAP = _printout._STRUCTURE_GAP
 # --------------------------------------------------------------------------
 
 
-def _structure_rows(row: WireRow | ScaleRow | MoveRow) -> list[str]:
+def _segment_columns(row: WireRow | ArcRow | HelixRow) -> str:
+    """The wire table's last four columns: the segment count I7, FIRST I9,
+    LAST I6 and the tag I8, from column 85."""
+    return f"{row.segments:7d}{row.first:9d}{row.last:6d}{row.tag:8d}"
+
+
+def _structure_rows(row: StructureRow) -> list[str]:
     """One entry of the wire table: a wire's row, or a ``GS``/``GM`` card's
     lines (probes p38, p39), 6X then the words, and for ``GM`` 4X, two I5,
-    six F10.5 and four I5."""
+    six F10.5 and four I5.
+
+    A ``GA`` row (p46-p48) is I6, the words, the arc radius F9.5, the two
+    angles F8.3, then the wire radius F11.5 ending in column 84 and the
+    segment columns.  A ``GH`` entry (p49-p53) is three lines: I6, 6X and
+    its words, blank to column 84 and the segment columns; 10X, the turns
+    F10.4 and the five other reals E12.4; 10X and the chords' total length
+    E13.5."""
+    if isinstance(row, ArcRow):
+        head = (
+            f"{row.number:6d}  ARC RADIUS ={row.arc_radius:9.5f}  FROM"
+            f"{row.angle1_deg:8.3f} TO{row.angle2_deg:8.3f} DEGREES"
+        )
+        return [f"{head:<73}{row.radius:11.5f}{_segment_columns(row)}"]
+    if isinstance(row, HelixRow):
+        e = _printout._e
+        head = f"{row.number:6d}      THIS WIRE IS A LOG-SPIRAL OR HELIX"
+        return [
+            f"{head:<84}{_segment_columns(row)}",
+            f"          SPIRAL DATA: TURNS={row.turns:10.4f}  LENGTH={e(row.length, 12, 4)}"
+            f"  H.RAD={e(row.helix_radii[0], 12, 4)}{e(row.helix_radii[1], 12, 4)}"
+            f"  W.RAD={e(row.wire_radii[0], 12, 4)}{e(row.wire_radii[1], 12, 4)}",
+            "          TOTAL LENGTH OF WIRE IN THE SPIRAL ="
+            + e(row.wire_length, 13, 5),
+        ]
     if isinstance(row, ScaleRow):
         return [f"      STRUCTURE SCALED BY FACTOR{row.factor:10.5f}"]
     if isinstance(row, MoveRow):

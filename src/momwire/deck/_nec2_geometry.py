@@ -397,7 +397,9 @@ def _symmetry_after(
         return Symmetry(*before)
     if mnemonic == "GS":
         return symmetry
-    if mnemonic == "GW":
+    if mnemonic in ("GW", "GA", "GH"):
+        # GA/GH: the nec4 dialect's arc and helix (`deck._nec4`), which add
+        # wires exactly as GW does.
         return None
     # GM.  `move` preserves only when it neither replicates nor restricts:
     # `if (nrpt == 0 && ix == 1) return;`, where `ix` is the first segment of
@@ -791,13 +793,17 @@ class Nec2Structure:
         return tuple(sorted(applied)), tuple(p for p in pairs if p not in seen)
 
 
-def build_geometry(cards: list[Card]) -> Nec2Structure:
+def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
     """Run a deck's geometry section and close it.
 
     ``cards`` is the geometry cards in deck order.  ``GE`` terminates the
     section and carries the ground-plane flag; a deck with no ``GE`` builds as
-    though it wrote ``GE 0``.
+    though it wrote ``GE 0``.  ``builders`` maps each geometry mnemonic to
+    its builder, this dialect's by default; the nec4 dialect adds ``GA`` and
+    ``GH`` (`deck._nec4`).
     """
+    if builders is None:
+        builders = _GEOMETRY_BUILDERS
     wires: list[FlatWire] = []
     ground_plane_flag = False
     ground_plane_interpolates = False
@@ -812,7 +818,7 @@ def build_geometry(cards: list[Card]) -> Nec2Structure:
             ground_plane_interpolates = card.i(0) > 0
             continue
         before = (len(wires), sum(w.n_seg for w in wires))
-        _GEOMETRY_BUILDERS[card.mnemonic](card, wires)
+        builders[card.mnemonic](card, wires)
         symmetry = _symmetry_after(card, wires, before, symmetry)
 
     snap_connections(wires)

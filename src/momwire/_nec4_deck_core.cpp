@@ -495,6 +495,105 @@ void gs(const Card &card, std::vector<FlatWire> &wires) {
     }
 }
 
+// --- GA and GH, the nec4 dialect's (`deck/_nec4.py`, momwire#1592) ---------
+
+// Python's `float ** float` for a finite positive base (`float_pow`): 1 at a
+// zero exponent or a base of 1, else libm's pow, and an OverflowError where
+// it overflows (an underflow to 0 is no error).
+double py_float_pow(double x, double y) {
+    if (y == 0.0) return 1.0;
+    if (x == 1.0) return 1.0;
+    double r = std::pow(x, y);
+    if (std::isinf(r))
+        throw ParseError(ErrorKind::overflow_error,
+                         "(" + std::to_string(ERANGE) + ", '" + std::strerror(ERANGE) + "')");
+    return r;
+}
+
+// `deck._nec4._chords`: one one-segment wire per pair of vertices, each at
+// its own wire radius, all carrying `tag`.
+void chords(const Int &tag, const std::vector<std::array<double, 3>> &v,
+            const std::vector<double> &radii, std::vector<FlatWire> &wires) {
+    for (std::size_t k = 0; k + 1 < v.size(); k++) {
+        FlatWire w;
+        w.tag = tag;
+        w.n_seg = 1;
+        for (int c = 0; c < 3; c++) {
+            w.p1[c] = v[k][c];
+            w.p2[c] = v[k + 1][c];
+        }
+        w.radius = radii[k];
+        wires.push_back(w);
+        check_wire_count(wires);
+    }
+}
+
+// `deck._nec4.arc_vertices` and `_ga`
+void ga(const Card &card, std::vector<FlatWire> &wires) {
+    Int n_seg = card.i(1);
+    double radius = card.f(2), first = card.f(3), last = card.f(4);
+    if (n_seg < Int(1)) deck_error("GA segment count must be >= 1, got " + S(n_seg));
+    if (radius <= 0.0) deck_error("GA needs a positive arc radius (F1), got " + g(radius));
+    if (first == last)
+        deck_error("GA from " + g(first) + " to " + g(last) +
+                   " degrees has no length; the arc's two angles (F2, F3) must differ");
+    if (card.f(5) <= 0.0)
+        deck_error("GA needs a positive wire radius (F4), got " + g(card.f(5)) +
+                   "; this engine's nec4 dialect has no tapered arc");
+    ll n = count_of(n_seg, kMaxWires, "segments on one arc");
+    double step = (last - first) * kDeg / static_cast<double>(n);
+    double start = first * kDeg;
+    std::vector<std::array<double, 3>> v;
+    for (ll k = 0; k <= n; k++) {
+        double a = start + static_cast<double>(k) * step;
+        v.push_back({radius * libm_cos(a), 0.0, radius * libm_sin(a)});
+    }
+    chords(card.i(0), v, std::vector<double>(static_cast<std::size_t>(n), card.f(5)), wires);
+}
+
+// `deck._nec4.helix_vertices`, `helix_wire_radii` and `_gh`
+void gh(const Card &card, std::vector<FlatWire> &wires) {
+    Int n_seg = card.i(1);
+    double turns = card.f(2), zlen = card.f(3), r1 = card.f(4), r2 = card.f(5);
+    if (n_seg < Int(1)) deck_error("GH segment count must be >= 1, got " + S(n_seg));
+    if (turns == 0.0)
+        deck_error(
+            "GH with zero turns is not served by this engine's nec4 dialect, which reads "
+            "NEC-4.2's GH: F1 is the number of turns, and no NEC-4.2 run shows a helix of none");
+    if (r1 <= 0.0 || r2 <= 0.0)
+        deck_error("GH needs a positive helix radius at both ends (F3, F4), got " + g(r1) + " and " +
+                   g(r2));
+    if (card.f(6) <= 0.0 || card.f(7) <= 0.0)
+        deck_error("GH needs a positive wire radius at both ends (F5, F6), got " + g(card.f(6)) +
+                   " and " + g(card.f(7)) +
+                   "; this engine's nec4 dialect reads NEC-4.2's GH (turns, length, two helix "
+                   "radii, two wire radii), not NEC-2's");
+    ll n = count_of(n_seg, kMaxWires, "segments on one helix");
+    double dn = static_cast<double>(n);
+    double q = py_float_pow(r2 / r1, 1.0 / dn);
+    double step = 2.0 * kPi * turns / dn;
+    double qn = py_float_pow(q, dn);
+    std::vector<std::array<double, 3>> v;
+    for (ll k = 0; k <= n; k++) {
+        double dk = static_cast<double>(k);
+        double qk = py_float_pow(q, dk);
+        double rho = r1 * qk;
+        double z = q == 1.0 ? zlen * dk / dn : zlen * (1.0 - qk) / (1.0 - qn);
+        double a = dk * step;
+        v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
+    }
+    double w1 = card.f(6), w2 = card.f(7);
+    std::vector<double> radii;
+    if (n == 1) {
+        radii.push_back(w1);
+    } else {
+        for (ll k = 0; k < n; k++)
+            radii.push_back(
+                w1 * py_float_pow(w2 / w1, static_cast<double>(k) / static_cast<double>(n - 1)));
+    }
+    chords(card.i(0), v, radii, wires);
+}
+
 struct Plane {
     int axis;
     ll flag;
@@ -579,7 +678,7 @@ void symmetry_after(const Card &card, const std::vector<FlatWire> &wires, Symmet
         return;
     }
     if (m == "GS") return;
-    if (m == "GW") {
+    if (m == "GW" || m == "GA" || m == "GH") {
         has = false;
         return;
     }
@@ -795,6 +894,10 @@ Structure build_geometry(const std::vector<Card> &cards) {
             gs(card, wires);
         } else if (m == "GX") {
             gx(card, wires);
+        } else if (m == "GA") {
+            ga(card, wires);
+        } else if (m == "GH") {
+            gh(card, wires);
         } else {
             gr(card, wires);
         }
@@ -933,7 +1036,8 @@ class Parser {
             std::vector<std::string> head = nec5::latin1_split(stripped);
             if (!head.empty()) {
                 auto hit = refused_by_name().find(nec5::latin1_upper(head[0]));
-                if (hit != refused_by_name().end()) deck_error(hit->second);
+                if (hit != refused_by_name().end() && !reads_geometry(hit->first))
+                    deck_error(hit->second);
             }
             Card card;
             if (!nec5::read_card(line, card)) continue;
@@ -1001,6 +1105,12 @@ class Parser {
             structure_built_ = true;
         }
         return structure_;
+    }
+
+    // The nec4 dialect's GA and GH (`_Nec4Parser._geometry_mnemonics`):
+    // geometry there, refused by name in the nec2 one.
+    bool reads_geometry(const std::string &m) const {
+        return dialect_ == Dialect::nec4 && (m == "GA" || m == "GH");
     }
 
     void geometry(const Card &card) {
@@ -1143,6 +1253,13 @@ class Parser {
             return;
         }
         Int ex_type = card.i(0);
+        if (ex_type == Int(4))
+            deck_error(
+                "EX 4 is not served by this engine's nec4 dialect: NEC-4.2 reads EX 4 as a current "
+                "element at the point its first three real fields give, tied to no segment, not as "
+                "NEC-5's EX 4 current source on a segment.  For a current source on a segment, "
+                "write EX 6 with that tag and segment and the current in amperes in its first two "
+                "real fields (EX 0 drives a voltage source)");
         if (!(ex_type.is_zero() || ex_type == Int(6)))
             deck_error("EX type " + S(ex_type) +
                        " is not served by this engine's nec4 dialect, which drives EX 0 (voltage "
@@ -1569,7 +1686,7 @@ class Parser {
             return;
         }
         auto hit = refused_by_name().find(m);
-        if (hit != refused_by_name().end()) deck_error(hit->second);
+        if (hit != refused_by_name().end() && !reads_geometry(m)) deck_error(hit->second);
         if (in(m, kArmingCards)) {
             armed_ = true;
             if (in(m, kOperatorCards) && executed_) operator_dirty_ = true;
@@ -1584,7 +1701,7 @@ class Parser {
                 destroyer_ = m;
             }
         }
-        if (in(m, kGeometryCards)) {
+        if (in(m, kGeometryCards) || reads_geometry(m)) {
             geometry(card);
             return;
         }

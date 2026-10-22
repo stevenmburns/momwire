@@ -777,11 +777,12 @@ _DECK_REFUSALS = (PortalError, DeckError)
 
 # Cards echoed inside STRUCTURE SPECIFICATION rather than as DATA CARD lines.
 # The dialect's geometry is GW with GM / GS / GX / GR transforms and the GE
-# terminator; GA/GH are refused by name upstream, so nothing else reaches
-# here. GX and GR joined when momwire#415 served them — a geometry card
-# echoing as a DATA CARD line would diverge from nec2c's printout, which the
-# #415 differential fixtures pin.
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GR", "GE"})
+# terminator; the nec2 dialect refuses GA/GH by name upstream, and only the
+# nec4 one (momwire#1592: NEC-4.2's arc and helix) lets them reach here. GX
+# and GR joined when momwire#415 served them — a geometry card echoing as a
+# DATA CARD line would diverge from nec2c's printout, which the #415
+# differential fixtures pin.
+_GEOMETRY_CARDS = frozenset({"GW", "GA", "GH", "GM", "GS", "GX", "GR", "GE"})
 
 # Cards that RUN the pending excitation group. ``RP``/``NE``/``NH`` are not
 # just report requests: nec2c executes on reading them and then prints their
@@ -1272,6 +1273,16 @@ class PortalDeck:
     structure: object | None = None
 
 
+def _geometry_builders(dialect: str):
+    """The geometry builders the dialect's own reader runs: the nec4 one's
+    add GA and GH (momwire#1592), the nec2 one's are `build_geometry`'s."""
+    if dialect == "nec4":
+        from ..deck._nec4 import _NEC4_GEOMETRY_BUILDERS
+
+        return _NEC4_GEOMETRY_BUILDERS
+    return None
+
+
 def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
     """A deck body's cards, grouped the way the engine executes them.
 
@@ -1386,7 +1397,7 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
         quiet=model.quiet,
         reduced_field=model.reduced_field,
         model=model,
-        structure=build_geometry(geometry),
+        structure=build_geometry(geometry, _geometry_builders(dialect)),
     )
 
 

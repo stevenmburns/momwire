@@ -1,0 +1,9 @@
+CM GH in mm, then GS
+CE
+GH 4 20 2.0 400 100 100 2 2
+GS 0 0 0.001
+GE 0
+FR 0 1 0 0 300.0 0
+EX 0 4 10 0 1.0 0
+XQ
+EN

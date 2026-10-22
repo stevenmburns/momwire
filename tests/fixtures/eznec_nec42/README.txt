@@ -133,12 +133,52 @@ probes/<probe>.nec
       reals as written, its ITS, then 1 and 0 in every probe, then the
       segment count of the structure it moves.
 
+  p44-p53, written for momwire#1592's last three items (XNDA 1012 and
+  1013, the GA and GH geometry cards).  Captured 2026-10-22, same ritual
+  and build as p33-p43.  Decks LF.
+    p44 RP XNDA 1012      p45 RP XNDA 1013
+    p46 GA: radius 12.5, from -45 to 225 degrees, 9 segments
+    p47 GA closed by a GW into a loop, then a GM moving it up 5 m
+    p48 GA whose angle falls, 90 to 0 degrees
+    p49 GH: one turn, constant radius, a GW lead from its start
+    p50 GH tapered (helix radius 0.15 to 0.10, wire radius 0.002 to
+        0.0012) with a negative length
+    p51 GH with negative turns
+    p52 GH of zero length (a flat spiral), helix radius 0.05 to 0.3
+    p53 GH written in millimetres, then a GS
+  What the printouts show (black box, layout and geometry only):
+    - 1012 prints 1002's layout and 1013 prints 1010's, both under the
+      DIRECTIVE GAINS heading: NEC-5's layout for the same XNDA.
+    - GA prints one row in the wire table, the arc radius and its two
+      angles in place of the two ends; its segments are the chords of the
+      arc in the XZ plane, angles from +X toward +Z (NEC-2's arc).
+    - GH is NEC-4.2's own card, not NEC-2's: a LOG-SPIRAL OR HELIX whose
+      reals are turns, length along Z, the helix radius at each end and
+      the WIRE radius at each end (F7 moves nothing: one exploratory deck
+      printed the same bytes with 0.002 and 0 there).  Three lines in the
+      wire table: the wire number and segment columns, the six reals, and
+      the total length of the chords.  The vertices step the angle evenly
+      from +X (clockwise for negative turns); a taper scales the radius and
+      the rise of each step by one ratio, so every segment keeps one pitch
+      angle, and the wire radius steps geometrically from the first segment
+      to the last.  The rule is deck/_nec4.py's helix_vertices docstring.
+    - Exploratory decks (not kept) showed a GA or GH with a zero wire
+      radius stopping with a segment data error; both refuse here.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
   licensed engine prints a FREQUENCY and an ANTENNA ENVIRONMENT block in
   front of the second pattern and no input parameters.  Kept as the record
   of why (tests/test_eznec_nec42_rp_ne_1463.py); not among the byte gates.
+
+refused/r2_ex4_current_element.nec, .out
+  Captured 2026-10-22 with p44-p53, for the EX 4 sentence (momwire#1592).
+  EX 4 1 11 0 1.0 0 on a dipole: the licensed engine prints an EXCITATION
+  table with a CURRENT SOURCE at the position (1, 0, 0), its first three
+  reals, of dipole moment 0, and every current zero.  NEC-4.2's EX 4 is a
+  current element at a point, not NEC-5's EX 4 on a segment, so this engine
+  refuses it and names EX 6 (tests/test_eznec_nec42_printout_1295.py).
 
   The issue's own deck, a wire standing ON a GN 3 ground with no radials,
   is not among the probes: on it the licensed engine's GN 2 and GN 3 give

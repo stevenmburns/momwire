@@ -1,0 +1,8 @@
+CM GA from 90 to 0 degrees
+CE
+GA 3 6 1.0 90 0 0.001
+GE 0
+FR 0 1 0 0 50.0 0
+EX 0 3 3 0 1.0 0
+XQ
+EN
