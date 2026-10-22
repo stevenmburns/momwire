@@ -64,6 +64,9 @@ CORE_SOURCES = (
     # The sinusoidal basis' point-matched field tensors (momwire#1607 B1):
     # the extension TU's text over `_mw_nd.h`'s arrays.
     "_sinusoidal_core.cpp",
+    # The sinusoidal front half over the NEC-4.2 build (momwire#1607 B2),
+    # linked into `sinusoidal_front_driver.cpp`.
+    "_sinusoidal_front_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -209,6 +212,7 @@ def driver(accel, tmp_path_factory):
         "exact_kernel_coaxial_driver",
         "bspline_core_driver",
         "sinusoidal_core_driver",
+        "sinusoidal_front_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -248,6 +252,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
+    assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -372,6 +377,47 @@ def test_the_nec4_refusal_printouts_in_cxx_alone_are_the_slots(driver, basis):
         python = _nec4.render(path.read_bytes().decode("latin-1"), basis=basis)
         assert cxx == python, path
     assert refused >= 150, refused
+
+
+def test_the_sinusoidal_front_in_cxx_alone_is_pythons(driver):
+    """momwire#1607 B2: the sinusoidal front half (constants, junctions,
+    `_build_geometry`, `_basis_coefs`), built from the core TUs alone
+    (`sinusoidal_front_driver`), is `SinusoidalSolver`'s at every operating
+    point the NEC-4.2 build makes of every fixture deck, to the bit."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_sinusoidal_front_compare", SPLIT / "sinusoidal_front_compare.py"
+    )
+    nc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nc)
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    run = subprocess.run(
+        [str(driver[0]["sinusoidal_front_driver"]), *map(str, decks)],
+        capture_output=True,
+        check=True,
+    )
+    dumps: dict[str, str] = {}
+    current = None
+    for line in run.stdout.decode("utf-8").splitlines(keepends=True):
+        if line.startswith("== "):
+            current = line[3:].rstrip("\n")
+            dumps[current] = ""
+        else:
+            dumps[current] += line
+    compared = 0
+    for path in decks:
+        cxx = dumps[str(path)]
+        if nc.classify(cxx) == "declined":
+            continue
+        diff = nc.dc.first_difference(
+            nc.py_front(path.read_bytes().decode("latin-1")), cxx
+        )
+        assert diff is None, (path, diff)
+        compared += 1
+    assert compared >= 50, compared
 
 
 _SIN_KERNELS = (
