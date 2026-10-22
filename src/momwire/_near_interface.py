@@ -69,7 +69,7 @@ import os
 import threading
 
 import numpy as np
-from scipy.special import hankel1, hankel2
+from scipy.special import hankel1, hankel2, wofz
 from threadpoolctl import ThreadpoolController
 
 from . import _accel, _cancel
@@ -215,6 +215,39 @@ _RAYS_FROM_HEAD = 1.0
 _COLUMN_NG = 16
 _COLUMN_GX, _COLUMN_GW = leggauss(_COLUMN_NG)
 
+# The steepest-descent route for FAR columns (momwire#1595 D1b). With
+# lam = k_p sin w and gamma_p = j k_p cos w (analytic in w), the H0^(2) half of
+# the J0 integral carries the phase e^{-j k_p R cos(w - theta)}, R = hypot(rho,
+# z), theta = atan2(rho, z): one saddle at w = theta, and on the path
+# cos(w - theta) = 1 - j s^2 the integrand is a Gaussian e^{-k_p R s^2}. A
+# column 640 m from a probe 770 m up (Ward AE6TY's, momwire#1582) needs ~100
+# nodes there against ~3,900 on the head / mid / tail rule, which has to
+# resolve ~140 J0 oscillations of a non-decaying propagating band.
+#
+# Two singularities can sit near that path, and both are removed exactly,
+# so one fixed node count serves every soil and angle (no fallback, so no
+# cost cliff when an observation point moves):
+#   * the Zenneck pole (k_m^2 gamma_p + k_p^2 gamma_m = 0), within the
+#     Gaussian's width of the saddle for high-contrast ground at grazing:
+#     subtracted (Van der Waerden) with its residue from a contour integral
+#     round it, and added back as the Faddeeva function;
+#   * k_m's branch cut, which the path passes on the left of when the ground
+#     is near lossless: the jump of gamma_m integrated down the cut (the
+#     keyhole), as extra nodes on the cut's two sides.
+# Measured against `six_point` at rtol 1e-14 (AK scratch/d1b-sdp): six soils
+# (eps 1 to sea 80 / 5) x 3.6 / 14 / 29.7 MHz x k_p R 30..3000 x theta
+# 10..89.9 deg x z' -0.1 / -1 m, k_p rho >= 20: worst 4e-12.
+# below k_p R = 30 the propagating band is a few oscillations: nothing to win
+_SDP_KR_MIN = 30.0
+_SDP_KRHO_MIN = 20.0  # and k_p rho at least this (H0's large-argument side)
+_SDP_SPREAD = 2.0  # members' theta within this many Gaussian widths of the path's
+_SDP_N = 96
+_SDP_NCUT = 32
+_SDP_TAIL = 60.0  # the Gaussian run out to e^{-60}, the rule's own dead-range constant
+_SDP_CUT_T = 80.0  # the keyhole run down to e^{-80 / rho * rho}
+_SDP_A_MAX = 6.0  # a pole further than this many Gaussian widths is not subtracted
+_SDP = True
+
 # Largest (nz × K) exponential block a column materialises at once. K grows
 # with ρ (one panel per J₀ oscillation), so a long-radial column times a tall
 # mast is the shape that would allocate hundreds of MB in one go. Rows are
@@ -247,10 +280,14 @@ _SIX_COLUMNS_LANES = True
 
 
 def _columns_lanes_kw():
-    """`near_interface_six_columns`' lanes switch, for a binding that has it."""
-    if _SIX_COLUMNS_LANES or not hasattr(_nia, "six_columns_lanes_1441"):
-        return {}
-    return {"lanes": False}
+    """`near_interface_six_columns`' lanes and steepest-descent switches, for
+    a binding that has them."""
+    kw = {}
+    if not _SIX_COLUMNS_LANES and hasattr(_nia, "six_columns_lanes_1441"):
+        kw["lanes"] = False
+    if not _SDP and hasattr(_nia, "six_columns_sdp_1595"):
+        kw["sdp"] = False
+    return kw
 
 
 # The tests' handle on the dispatch — parity gates drive BOTH machines inside
@@ -664,12 +701,18 @@ def _column_rule(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
     return np.concatenate([lam_h, lam_m, lam_t]), np.concatenate([w_h, w_m, w_t])
 
 
-def _column_factors(lam, w, k_p, k_m):
+def _column_factors(lam, w, k_p, k_m, g_p=None, g_m=None):
     """`_core` at every node with its z-dependent exponential factored out
     and the weights folded in: F (6, K) and the two γ (K,), such that
-    six(z, z′) = F @ exp(γ_m z′ − γ_p z). Index order is `_core`'s."""
-    g_p = _gamma(lam, k_p)
-    g_m = _gamma(lam, k_m)
+    six(z, z′) = F @ exp(γ_m z′ − γ_p z). Index order is `_core`'s.
+
+    `g_p` overrides γ_p where the path leaves the real-axis sheet: the
+    steepest-descent route continues it analytically as j k_p cos w, and
+    `g_m` gives the other side of k_m's cut (its keyhole)."""
+    if g_p is None:
+        g_p = _gamma(lam, k_p)
+    if g_m is None:
+        g_m = _gamma(lam, k_m)
     u = 2.0 * lam / (g_p + g_m)
     v = 2.0 * lam / (k_m * k_m * g_p + k_p * k_p * g_m)
     wv = (g_p - g_m) * v
@@ -696,6 +739,188 @@ def _refuse_bad_members(rho, zs, zps):
         i = int(np.argmax(bad))
         raise ValueError(f"need R > 0, got rho={float(rhos[i])!r}, s={float(s[i])!r}")
     return s
+
+
+def _sdp_path(theta, s):
+    """w and dw/ds on the steepest-descent path cos(w - theta) = 1 - j s^2,
+    psi = w - theta ~ (1 + j) s through the saddle."""
+    psi = np.arccos(1.0 - 1j * s * s)
+    psi = np.where(psi.real * s < 0.0, -psi, psi)
+    return theta + psi, 2j * s / np.sin(psi)  # even Gauss n never samples s = 0
+
+
+def _sdp_factors(s, theta, rho, k_p, k_m):
+    """`_column_factors` at path points s, with 1/2 H0^(2) and dlam/ds folded
+    in and no quadrature weight: the integrand in s, its exponential apart."""
+    w, dpsi = _sdp_path(theta, s)
+    lam = k_p * np.sin(w)
+    wn = 0.5 * hankel2(0, lam * rho) * (k_p * np.cos(w) * dpsi)
+    return _column_factors(lam, wn, k_p, k_m, g_p=1j * k_p * np.cos(w))
+
+
+def _sdp_theta(rho, zs, k_p):
+    """The column's path angle and k_p R, or None when the column is not a
+    far one: rho > 0, k_p rho and every member's k_p R large enough, and
+    every member's angle within `_SDP_SPREAD` Gaussian widths 1/sqrt(k_p R)
+    of the path's (members of a column share rho, so this is their z
+    spread)."""
+    if not _SDP or rho <= 0.0 or k_p * rho < _SDP_KRHO_MIN:
+        return None
+    r = np.hypot(rho, zs)
+    kr = k_p * float(np.min(r))
+    if kr < _SDP_KR_MIN:
+        return None
+    th = np.arctan2(rho, zs)
+    theta = 0.5 * (float(np.min(th)) + float(np.max(th)))
+    if (float(np.max(th)) - float(np.min(th))) * 0.5 * np.sqrt(kr) > _SDP_SPREAD:
+        return None
+    return theta, kr
+
+
+def _sdp_pole(k_p, k_m, theta, rho):
+    """The Zenneck pole's path coordinate s_p and its residue (6,) in s, or
+    None when there is no pole on this sheet (the formula's root is the
+    other branch) or the contour round it does not settle."""
+    lam = k_p * k_m / np.sqrt(k_p * k_p + k_m * k_m)
+    cw = 1j * k_p * _gamma(lam, k_m) / (k_m * k_m)
+    wp = complex(-1j * np.log(cw + 1j * lam / k_p))  # the w with this sine and cosine
+    sp = complex(np.sqrt(-1j * (1.0 - np.cos(wp - theta))))
+    guess = (wp - theta) / (1.0 + 1j)
+    if abs(-sp - guess) < abs(sp - guess):
+        sp = -sp
+    w, _ = _sdp_path(theta, np.array([sp]))
+    lam_p = k_p * np.sin(w[0])
+    d = k_m * k_m * (1j * k_p * np.cos(w[0])) + k_p * k_p * _gamma(lam_p, k_m)
+    if abs(d) > 1e-9 * abs(k_m) ** 2 * k_p:
+        return None
+
+    def contour(radius, m=64):
+        ang = 2.0 * np.pi * (np.arange(m) + 0.5) / m
+        ss = sp + radius * np.exp(1j * ang)
+        # Where the formula's root is spurious (eps 1: no interface at all)
+        # the circle can cross gamma_p + gamma_m = 0 exactly; that contour is
+        # not finite, and a contour that is not finite is no pole.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f, _, _ = _sdp_factors(ss, theta, rho, k_p, k_m)
+            res = (f * (ss - sp)).mean(axis=1)
+        return res if np.all(np.isfinite(res)) else None
+
+    # A trapezoid contour integral is spectrally accurate where a symmetric
+    # difference was off by ~1e-9 at sea grazing; two radii must agree, so a
+    # contour that reaches k_m's branch point is caught.
+    radius = min(1e-2, 0.5 * abs(sp)) if sp != 0 else 1e-2
+    res = contour(radius)
+    for _ in range(6):
+        half = contour(0.5 * radius)
+        if res is None or half is None:
+            return None
+        if np.max(np.abs(half - res)) <= 1e-12 * max(
+            float(np.max(np.abs(res))), 1e-300
+        ):
+            return sp, res
+        radius *= 0.5
+        res = half
+    return None
+
+
+def _sdp_nodes(rho, k_p, k_m, theta, kr):
+    """F (6, K) with weights folded and the two gamma (K,) for the whole
+    far-column rule: the path's Gauss nodes, a pseudo-node carrying the
+    subtracted pole's Faddeeva term, and the keyhole's two cut sides."""
+    S = np.sqrt(_SDP_TAIL / kr)
+    x, gw = leggauss(_SDP_N)
+    s = S * x
+    ws = S * gw
+    F, g_p, g_m = _sdp_factors(s, theta, rho, k_p, k_m)
+    F = F * ws
+    parts = [(F, g_p, g_m)]
+    pole = _sdp_pole(k_p, k_m, theta, rho)
+    if pole is not None and abs(np.sqrt(kr) * pole[0]) <= _SDP_A_MAX:
+        sp, res = pole
+        a = np.sqrt(kr) * sp
+        g_sub = np.exp(-kr * (s * s - sp * sp)) / (s - sp)
+        whole = 1j * np.pi * wofz(a) if a.imag > 0 else -1j * np.pi * wofz(-a)
+        # each member's residue is res times its own exponential at s_p: one
+        # node at s_p carrying res (A - sum G w) is the subtraction plus the
+        # analytic term, for every member at once
+        corr = np.exp(kr * sp * sp) * whole - np.sum(g_sub * ws)
+        _, gp1, gm1 = _sdp_factors(np.array([sp]), theta, rho, k_p, k_m)
+        parts.append((res[:, None] * corr, gp1, gm1))
+        # the Gauss nodes then carry the integrand minus the pole term: the
+        # pole term's own sum is folded into `corr` above, so they are as is
+    if k_m.imag < 0.0 and _sdp_encloses(k_p, k_m, theta, S):
+        t_max = _SDP_CUT_T / rho
+        xc, wc = leggauss(_SDP_NCUT)
+        u = 0.5 * (xc + 1.0) * np.sqrt(t_max)
+        dt = 2.0 * u * 0.5 * np.sqrt(t_max) * wc  # t = u^2
+        lam = k_m.real + 1j * (k_m.imag - u * u)
+        gp = _gamma(lam, k_p)
+        gm = _gamma(lam, k_m)
+        h = 0.5 * hankel2(0, lam * rho) * 1j * dt
+        parts.append(_column_factors(lam, h, k_p, k_m, g_p=gp, g_m=gm))
+        parts.append(_column_factors(lam, -h, k_p, k_m, g_p=gp, g_m=-gm))
+    return (
+        np.concatenate([p[0] for p in parts], axis=1),
+        np.concatenate([p[1] for p in parts]),
+        np.concatenate([p[2] for p in parts]),
+    )
+
+
+def _sdp_encloses(k_p, k_m, theta, S):
+    """Whether the path passes left of k_m: where its s > 0 branch reaches
+    Im lam = Im k_m, Re lam < Re k_m."""
+
+    def im_gap(q):
+        w, _ = _sdp_path(theta, np.array([complex(q)]))
+        return float((k_p * np.sin(w[0])).imag - k_m.imag)
+
+    hi = S
+    while im_gap(hi) > 0.0 and hi < 1e3:
+        hi *= 2.0
+    if im_gap(hi) > 0.0:
+        return False
+    # Bisection, as the C++ twin: the answer is the sign of a real part at
+    # the crossing, not the crossing, and scipy.optimize would pull
+    # scipy.interpolate onto the render path (momwire#1494).
+    lo = 0.0
+    for _ in range(200):
+        if hi - lo <= 1e-15 + 8.88e-16 * hi:
+            break
+        mid = 0.5 * (lo + hi)
+        if im_gap(mid) > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    sc = 0.5 * (lo + hi)
+    w, _ = _sdp_path(theta, np.array([complex(sc)]))
+    return float((k_p * np.sin(w[0])).real) < k_m.real
+
+
+def _columns_apply(F, g_p, g_m, zs, zps, size):
+    """`six_columns`' member sum for a built rule: F @ exp(g_m z' - g_p z),
+    per distinct z', in `_COLUMN_Z_CHUNK` blocks."""
+    out = np.empty((zs.size, 6), dtype=np.complex128)
+    step = max(1, _COLUMN_Z_CHUNK // size)
+    with np.errstate(under="ignore"):
+        for zp_one in np.unique(zps):
+            rows = np.flatnonzero(zps == zp_one)
+            base = g_m * zp_one  # (K,)
+            for i0 in range(0, rows.size, step):
+                sel = rows[i0 : i0 + step]
+                e = np.exp(base[None, :] - g_p[None, :] * zs[sel, None])  # (nz, K)
+                out[sel] = e @ F.T
+    return out
+
+
+def _six_columns_sdp(k_p, k_m, rho, zs, zps):
+    """The far column on the steepest-descent path, or None when the column
+    is not a far one (the caller then takes the head / mid / tail rule)."""
+    got = _sdp_theta(rho, zs, k_p)
+    if got is None:
+        return None
+    theta, kr = got
+    F, g_p, g_m = _sdp_nodes(rho, k_p, k_m, theta, kr)
+    return _columns_apply(F, g_p, g_m, zs, zps, g_p.size)
 
 
 def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
@@ -731,26 +956,20 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     zps = np.broadcast_to(np.asarray(zp, dtype=float), zs.shape)
     s = _refuse_bad_members(rho, zs, zps)
 
+    far = _six_columns_sdp(k_p, k_m, rho, zs, zps)  # momwire#1595 D1b
+    if far is not None:
+        return far
+
     lam, w = _column_rule(rho, k_p, k_m, float(np.min(s)), lam_mult=lam_mult, p=p)
     F, g_p, g_m = _column_factors(lam, w, k_p, k_m)
     # Underflow to exact 0.0 is the answer, not a warning: a member whose s
     # is far above the column's s_min carries nodes past its own decay, and
     # the high-σ far pair underflows e^{−1330} on every node of the tail.
-    # The exponent is built per DISTINCT z': g_m * z' is one (K,) product
-    # shared by every z that carries that z', never an (nz x K) product of
-    # its own — that product was the #899 study's +44 % (`group_columns`).
-    # A column of one z' is the #895 path, the same bits.
-    out = np.empty((zs.size, 6), dtype=np.complex128)
-    step = max(1, _COLUMN_Z_CHUNK // lam.size)
-    with np.errstate(under="ignore"):
-        for zp_one in np.unique(zps):
-            rows = np.flatnonzero(zps == zp_one)
-            base = g_m * zp_one  # (K,)
-            for i0 in range(0, rows.size, step):
-                sel = rows[i0 : i0 + step]
-                e = np.exp(base[None, :] - g_p[None, :] * zs[sel, None])  # (nz, K)
-                out[sel] = e @ F.T
-    return out
+    # The exponent is built per DISTINCT z' (`_columns_apply`): g_m * z' is
+    # one (K,) product shared by every z that carries that z', never an
+    # (nz x K) product of its own — that product was the #899 study's +44 %
+    # (`group_columns`). A column of one z' is the #895 path, the same bits.
+    return _columns_apply(F, g_p, g_m, zs, zps, lam.size)
 
 
 # --------------------------------------------------------------------------

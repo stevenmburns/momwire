@@ -56,6 +56,7 @@
 #include "_contour_engine_inline.h"
 #include "_branch_cut_inline.h"
 #include "xsf/bessel.h"
+#include "xsf/faddeeva.h"
 
 // The column entry's inner loop is exp + sincos per node per member, which
 // is exactly what glibc's libmvec vectorizes (`-lmvec` is already on this
@@ -251,6 +252,277 @@ static size_t column_build(double rho, double k_p, const cd &kpc,
 }
 }  // namespace mw899
 
+// The steepest-descent route for FAR columns (momwire#1595 D1b):
+// `_near_interface._six_columns_sdp`'s twin, the same nodes and the same
+// decisions. With lam = k_p sin w and gamma_p = j k_p cos w, the H0^(2) half
+// of the J0 integral is a Gaussian e^{-k_p R s^2} on the path cos(w - theta)
+// = 1 - j s^2, so one fixed rule (96 Gauss nodes on s, plus a pseudo-node for
+// the subtracted Zenneck pole and 2 x 32 keyhole nodes down k_m's cut when
+// the path passes left of it) serves every far column that the head / mid /
+// tail rule needs thousands of nodes for. The Python walk is the reference;
+// the constants are its, transcribed (a twin that let them drift would not
+// be a twin). The rule is built into the Scratch planes `column_factors`
+// writes, so `column_member` sums it unchanged.
+namespace mw1595 {
+using cd = std::complex<double>;
+using mw899::Scratch;
+
+static const double SDP_KR_MIN = 30.0;
+static const double SDP_KRHO_MIN = 20.0;
+static const double SDP_SPREAD = 2.0;
+static const int SDP_N = 96;
+static const int SDP_NCUT = 32;
+static const double SDP_TAIL = 60.0;
+static const double SDP_CUT_T = 80.0;
+static const double SDP_A_MAX = 6.0;
+
+// numpy's `leggauss(96)` and `leggauss(32)`, transcribed (repr, so the same
+// floats): a Newton rule here differs from numpy's in the last bits of the
+// small end weights (1.5e-12 relative at n = 96), and the twin reads the
+// walk's own nodes, as `MW_TAIL_GX` does.
+static const double SDP_GX[] = {-0.9996895038832307, -0.9983643758631817, -0.9959818429872093, -0.9925439003237626, -0.9880541263296237, -0.9825172635630147, -0.9759391745851365, -0.9683268284632642, -0.9596882914487426, -0.9500327177844377, -0.9393703397527552, -0.9277124567223087, -0.9150714231208981, -0.9014606353158523, -0.8868945174024204, -0.8713885059092965, -0.8549590334346014, -0.8376235112281871, -0.8194003107379316, -0.8003087441391408, -0.7803690438674332, -0.7596023411766475, -0.7380306437444001, -0.7156768123489676, -0.6925645366421715, -0.6687183100439161, -0.6441634037849671, -0.6189258401254686, -0.593032364777572, -0.5665104185613972, -0.5393881083243575, -0.5116941771546677, -0.48345797392059636, -0.454709422167743, -0.42547898840730053, -0.3957976498289086, -0.3656968614723136, -0.3352085228926254, -0.30436494435449635, -0.27319881259104917, -0.24174315616384, -0.2100313104605672, -0.17809688236761861, -0.14597371465489695, -0.11369585011066592, -0.08129749546442555, -0.04881298513604974, -0.016276744849602967, 0.016276744849602967, 0.04881298513604974, 0.08129749546442555, 0.11369585011066592, 0.14597371465489695, 0.17809688236761861, 0.2100313104605672, 0.24174315616384, 0.27319881259104917, 0.30436494435449635, 0.3352085228926254, 0.3656968614723136, 0.3957976498289086, 0.42547898840730053, 0.454709422167743, 0.48345797392059636, 0.5116941771546677, 0.5393881083243575, 0.5665104185613972, 0.593032364777572, 0.6189258401254686, 0.6441634037849671, 0.6687183100439161, 0.6925645366421715, 0.7156768123489676, 0.7380306437444001, 0.7596023411766475, 0.7803690438674332, 0.8003087441391408, 0.8194003107379316, 0.8376235112281871, 0.8549590334346014, 0.8713885059092965, 0.8868945174024204, 0.9014606353158523, 0.9150714231208981, 0.9277124567223087, 0.9393703397527552, 0.9500327177844377, 0.9596882914487426, 0.9683268284632642, 0.9759391745851365, 0.9825172635630147, 0.9880541263296237, 0.9925439003237626, 0.9959818429872093, 0.9983643758631817, 0.9996895038832307};
+static const double SDP_GW[] = {0.0007967920655518723, 0.0018539607889441585, 0.0029107318179352943, 0.003964554338444405, 0.005014202742928604, 0.006058545504235195, 0.007096470791153821, 0.0081268769256983, 0.009148671230783011, 0.010160770535008306, 0.01116210209983861, 0.012151604671088057, 0.013128229566961646, 0.014090941772314894, 0.015038721026994927, 0.015970562902562345, 0.016885479864245195, 0.017782502316045286, 0.01866067962741174, 0.019519081140145382, 0.020356797154333365, 0.021172939892191354, 0.02196664443874457, 0.022737069658329466, 0.023483399085926292, 0.02420484179236482, 0.024900633222483814, 0.025570036005349364, 0.026212340735672593, 0.02682686672559185, 0.027412962726029232, 0.02797000761684837, 0.028497411065085413, 0.02899461415055532, 0.029461089958168016, 0.029896344136328506, 0.03029991542082777, 0.030671376123669266, 0.03101033258631393, 0.03131642559686141, 0.03158933077072725, 0.03182875889441112, 0.032034456231992796, 0.03220620479403032, 0.03234382256857602, 0.0324471637140644, 0.03251611871386895, 0.03255061449236328, 0.03255061449236328, 0.03251611871386895, 0.0324471637140644, 0.03234382256857602, 0.03220620479403032, 0.032034456231992796, 0.03182875889441112, 0.03158933077072725, 0.03131642559686141, 0.03101033258631393, 0.030671376123669266, 0.03029991542082777, 0.029896344136328506, 0.029461089958168016, 0.02899461415055532, 0.028497411065085413, 0.02797000761684837, 0.027412962726029232, 0.02682686672559185, 0.026212340735672593, 0.025570036005349364, 0.024900633222483814, 0.02420484179236482, 0.023483399085926292, 0.022737069658329466, 0.02196664443874457, 0.021172939892191354, 0.020356797154333365, 0.019519081140145382, 0.01866067962741174, 0.017782502316045286, 0.016885479864245195, 0.015970562902562345, 0.015038721026994927, 0.014090941772314894, 0.013128229566961646, 0.012151604671088057, 0.01116210209983861, 0.010160770535008306, 0.009148671230783011, 0.0081268769256983, 0.007096470791153821, 0.006058545504235195, 0.005014202742928604, 0.003964554338444405, 0.0029107318179352943, 0.0018539607889441585, 0.0007967920655518723};
+static const double SDP_CX[] = {-0.9972638618494816, -0.9856115115452684, -0.9647622555875064, -0.9349060759377397, -0.8963211557660521, -0.84936761373257, -0.7944837959679424, -0.7321821187402897, -0.6630442669302152, -0.5877157572407623, -0.5068999089322294, -0.42135127613063533, -0.33186860228212767, -0.23928736225213706, -0.1444719615827965, -0.048307665687738324, 0.048307665687738324, 0.1444719615827965, 0.23928736225213706, 0.33186860228212767, 0.42135127613063533, 0.5068999089322294, 0.5877157572407623, 0.6630442669302152, 0.7321821187402897, 0.7944837959679424, 0.84936761373257, 0.8963211557660521, 0.9349060759377397, 0.9647622555875064, 0.9856115115452684, 0.9972638618494816};
+static const double SDP_CW[] = {0.007018610009470506, 0.016274394730905743, 0.025392065309262024, 0.034273862913021765, 0.042835898022226836, 0.05099805926237609, 0.058684093478535565, 0.06582222277636168, 0.07234579410884834, 0.07819389578707023, 0.08331192422694671, 0.08765209300440378, 0.09117387869576378, 0.09384439908080451, 0.09563872007927471, 0.09654008851472766, 0.09654008851472766, 0.09563872007927471, 0.09384439908080451, 0.09117387869576378, 0.08765209300440378, 0.08331192422694671, 0.07819389578707023, 0.07234579410884834, 0.06582222277636168, 0.058684093478535565, 0.05099805926237609, 0.042835898022226836, 0.034273862913021765, 0.025392065309262024, 0.016274394730905743, 0.007018610009470506};
+static_assert(sizeof(SDP_GX) == SDP_N * sizeof(double) && sizeof(SDP_CX) == SDP_NCUT * sizeof(double),
+              "the transcribed rules are the walk's sizes");
+struct Rule {
+    const double *x, *w;
+};
+static const Rule &rule_n() {
+    static const Rule r{SDP_GX, SDP_GW};
+    return r;
+}
+static const Rule &rule_cut() {
+    static const Rule r{SDP_CX, SDP_CW};
+    return r;
+}
+
+static inline cd hankel2_0(const cd &x) { return xsf::cyl_hankel_2(0.0, x); }
+
+// `_sdp_path`: w and dw/ds on cos(w - theta) = 1 - j s^2. numpy's `<` on a
+// complex operand orders by the real part, then the imaginary.
+static inline void path(double theta, const cd &s, cd &w, cd &dpsi) {
+    const cd j(0.0, 1.0);
+    cd psi = std::acos(1.0 - j * s * s);
+    const cd q = psi.real() * s;
+    if (q.real() < 0.0 || (q.real() == 0.0 && q.imag() < 0.0)) psi = -psi;
+    w = theta + psi;
+    dpsi = 2.0 * j * s / std::sin(psi);
+}
+
+// `_column_factors` at one node with both gammas given and the weight wk.
+static inline void factors(const cd &lam, const cd &wk, const cd &g_p, const cd &g_m,
+                           const cd &k_p, const cd &k_m, cd *f) {
+    const cd u = 2.0 * lam / (g_p + g_m);
+    const cd v = 2.0 * lam / (k_m * k_m * g_p + k_p * k_p * g_m);
+    const cd wv = (g_p - g_m) * v;
+    f[0] = u * wk;
+    f[1] = v * wk;
+    f[2] = wv * wk;
+    f[3] = -g_p * wv * wk;
+    f[4] = -g_p * g_m * v * wk;
+    f[5] = g_m * wv * wk;
+}
+
+// `_sdp_factors` at one path point s, times the quadrature weight `ws`.
+static inline void path_node(const cd &s, double theta, double rho, double k_p, const cd &k_m,
+                             const cd &ws, cd *f, cd &g_p, cd &g_m) {
+    cd w, dpsi;
+    path(theta, s, w, dpsi);
+    const cd lam = k_p * std::sin(w);
+    const cd wn = 0.5 * hankel2_0(lam * rho) * (k_p * std::cos(w) * dpsi);
+    g_p = cd(0.0, 1.0) * k_p * std::cos(w);
+    g_m = mw_branch::gamma_cut(lam, k_m);
+    factors(lam, wn * ws, g_p, g_m, cd(k_p, 0.0), k_m, f);
+}
+
+// `_sdp_theta`: the column's path angle and k_p R, false when the column is
+// not a far one.
+static bool far_column(double rho, const double *z, std::ptrdiff_t lo, std::ptrdiff_t hi,
+                       double k_p, double &theta, double &kr) {
+    if (!(rho > 0.0) || k_p * rho < SDP_KRHO_MIN || hi <= lo) return false;
+    double rmin = std::numeric_limits<double>::infinity();
+    double tmin = rmin, tmax = -rmin;
+    for (std::ptrdiff_t i = lo; i < hi; ++i) {
+        rmin = std::min(rmin, std::hypot(rho, z[i]));
+        const double t = std::atan2(rho, z[i]);
+        tmin = std::min(tmin, t);
+        tmax = std::max(tmax, t);
+    }
+    kr = k_p * rmin;
+    if (kr < SDP_KR_MIN) return false;
+    theta = 0.5 * (tmin + tmax);
+    return !((tmax - tmin) * 0.5 * std::sqrt(kr) > SDP_SPREAD);
+}
+
+// `_sdp_pole`: the Zenneck pole's s_p and its residue in s, false when there
+// is no pole on this sheet or the contour round it does not settle.
+static bool pole(double k_p, const cd &k_m, double theta, double rho, cd &sp, cd *res) {
+    const cd j(0.0, 1.0);
+    const cd lam = k_p * k_m / std::sqrt(k_p * k_p + k_m * k_m);
+    const cd cw = j * k_p * mw_branch::gamma_cut(lam, k_m) / (k_m * k_m);
+    const cd wp = -j * std::log(cw + j * lam / k_p);
+    sp = std::sqrt(-j * (1.0 - std::cos(wp - theta)));
+    const cd guess = (wp - theta) / cd(1.0, 1.0);
+    if (std::abs(-sp - guess) < std::abs(sp - guess)) sp = -sp;
+    {
+        cd w, dpsi;
+        path(theta, sp, w, dpsi);
+        const cd lam_p = k_p * std::sin(w);
+        const cd d = k_m * k_m * (j * k_p * std::cos(w)) +
+                     k_p * k_p * mw_branch::gamma_cut(lam_p, k_m);
+        if (std::abs(d) > 1e-9 * std::norm(k_m) * k_p) return false;
+    }
+    // A trapezoid contour integral round s_p; two radii must agree.
+    // A contour that is not finite is no pole (the walk's words: where the
+    // formula's root is spurious the circle can cross gamma_p + gamma_m = 0).
+    auto contour = [&](double radius, cd *out) {
+        const int m = 64;
+        for (int c = 0; c < 6; ++c) out[c] = 0.0;
+        for (int i = 0; i < m; ++i) {
+            const double ang = 2.0 * M_PI * (i + 0.5) / m;
+            const cd off = radius * cd(std::cos(ang), std::sin(ang));
+            cd f[6], gp, gm;
+            path_node(sp + off, theta, rho, k_p, k_m, cd(1.0, 0.0), f, gp, gm);
+            for (int c = 0; c < 6; ++c) out[c] += f[c] * off;
+        }
+        bool finite = true;
+        for (int c = 0; c < 6; ++c) {
+            out[c] /= double(m);
+            finite = finite && std::isfinite(out[c].real()) && std::isfinite(out[c].imag());
+        }
+        return finite;
+    };
+    double radius = (sp != cd(0.0, 0.0)) ? std::min(1e-2, 0.5 * std::abs(sp)) : 1e-2;
+    if (!contour(radius, res)) return false;
+    for (int it = 0; it < 6; ++it) {
+        cd half[6];
+        if (!contour(0.5 * radius, half)) return false;
+        double dmax = 0.0, rmax = 0.0;
+        for (int c = 0; c < 6; ++c) {
+            dmax = std::max(dmax, std::abs(half[c] - res[c]));
+            rmax = std::max(rmax, std::abs(res[c]));
+        }
+        if (dmax <= 1e-12 * std::max(rmax, 1e-300)) return true;
+        radius *= 0.5;
+        for (int c = 0; c < 6; ++c) res[c] = half[c];
+    }
+    return false;
+}
+
+// `_sdp_encloses`: whether the path passes left of k_m, where its s > 0
+// branch reaches Im lam = Im k_m, by the walk's own bisection.
+static bool encloses(double k_p, const cd &k_m, double theta, double S) {
+    auto im_gap = [&](double q) {
+        cd w, dpsi;
+        path(theta, cd(q, 0.0), w, dpsi);
+        return (k_p * std::sin(w)).imag() - k_m.imag();
+    };
+    double hi = S;
+    while (im_gap(hi) > 0.0 && hi < 1e3) hi *= 2.0;
+    if (im_gap(hi) > 0.0) return false;
+    double lo = 0.0;
+    for (int it = 0; it < 200 && hi - lo > 1e-15 + 8.88e-16 * hi; ++it) {
+        const double mid = 0.5 * (lo + hi);
+        (im_gap(mid) > 0.0 ? lo : hi) = mid;
+    }
+    cd w, dpsi;
+    path(theta, cd(0.5 * (lo + hi), 0.0), w, dpsi);
+    return (k_p * std::sin(w)).real() < k_m.real();
+}
+
+// `_sdp_nodes` into the Scratch planes (`column_factors`' layout). Returns K.
+static size_t build(double rho, double k_p, const cd &k_m, double theta, double kr,
+                    Scratch &s) {
+    const cd j(0.0, 1.0);
+    const Rule &g = rule_n();
+    const double S = std::sqrt(SDP_TAIL / kr);
+    std::vector<cd> F;  // node-major, 6 per node
+    std::vector<cd> GP, GM;
+    F.reserve(6 * (SDP_N + 1 + 2 * SDP_NCUT));
+    auto push = [&](const cd *f, const cd &gp, const cd &gm) {
+        for (int c = 0; c < 6; ++c) F.push_back(f[c]);
+        GP.push_back(gp);
+        GM.push_back(gm);
+    };
+    for (int i = 0; i < SDP_N; ++i) {
+        cd f[6], gp, gm;
+        path_node(cd(S * g.x[i], 0.0), theta, rho, k_p, k_m, cd(S * g.w[i], 0.0), f, gp, gm);
+        push(f, gp, gm);
+    }
+    cd sp, res[6];
+    if (pole(k_p, k_m, theta, rho, sp, res) && std::abs(std::sqrt(kr) * sp) <= SDP_A_MAX) {
+        const cd a = std::sqrt(kr) * sp;
+        const cd whole = a.imag() > 0.0 ? j * M_PI * Faddeeva::w(a, 0.0)
+                                        : -j * M_PI * Faddeeva::w(-a, 0.0);
+        cd gsum = 0.0;
+        for (int i = 0; i < SDP_N; ++i) {
+            const double si = S * g.x[i];
+            gsum += std::exp(-kr * (si * si - sp * sp)) / (si - sp) * (S * g.w[i]);
+        }
+        const cd corr = std::exp(kr * sp * sp) * whole - gsum;
+        cd f1[6], gp1, gm1;
+        path_node(sp, theta, rho, k_p, k_m, cd(1.0, 0.0), f1, gp1, gm1);
+        cd f[6];
+        for (int c = 0; c < 6; ++c) f[c] = res[c] * corr;
+        push(f, gp1, gm1);
+    }
+    if (k_m.imag() < 0.0 && encloses(k_p, k_m, theta, S)) {
+        const Rule &c = rule_cut();
+        const double t_max = SDP_CUT_T / rho;
+        const double rt = std::sqrt(t_max);
+        std::vector<cd> fb, gpb, gmb;
+        for (int i = 0; i < SDP_NCUT; ++i) {
+            const double u = 0.5 * (c.x[i] + 1.0) * rt;
+            const double dt = 2.0 * u * 0.5 * rt * c.w[i];
+            const cd lam(k_m.real(), k_m.imag() - u * u);
+            const cd gp = mw_branch::gamma_cut(lam, cd(k_p, 0.0));
+            const cd gm = mw_branch::gamma_cut(lam, k_m);
+            const cd h = 0.5 * hankel2_0(lam * rho) * j * dt;
+            cd f[6];
+            factors(lam, h, gp, gm, cd(k_p, 0.0), k_m, f);
+            push(f, gp, gm);
+            factors(lam, -h, gp, -gm, cd(k_p, 0.0), k_m, f);
+            for (int q = 0; q < 6; ++q) fb.push_back(f[q]);
+            gpb.push_back(gp);
+            gmb.push_back(-gm);
+        }
+        // Python's order: the 32 nodes of one cut side, then the other's.
+        const size_t n0 = GP.size() - SDP_NCUT;
+        std::vector<cd> Fa(F.begin() + 6 * n0, F.end()), gpa(GP.begin() + n0, GP.end()),
+            gma(GM.begin() + n0, GM.end());
+        F.resize(6 * n0);
+        GP.resize(n0);
+        GM.resize(n0);
+        F.insert(F.end(), Fa.begin(), Fa.end());
+        F.insert(F.end(), fb.begin(), fb.end());
+        GP.insert(GP.end(), gpa.begin(), gpa.end());
+        GP.insert(GP.end(), gpb.begin(), gpb.end());
+        GM.insert(GM.end(), gma.begin(), gma.end());
+        GM.insert(GM.end(), gmb.begin(), gmb.end());
+    }
+    const size_t K = GP.size();
+    s.gpr.resize(K);
+    s.gpi.resize(K);
+    s.gmr.resize(K);
+    s.gmi.resize(K);
+    s.fr.resize(6 * K);
+    s.fi.resize(6 * K);
+    for (size_t k = 0; k < K; ++k) {
+        s.gpr[k] = GP[k].real();
+        s.gpi[k] = GP[k].imag();
+        s.gmr[k] = GM[k].real();
+        s.gmi[k] = GM[k].imag();
+        for (int c = 0; c < 6; ++c) {
+            s.fr[c * K + k] = F[6 * k + c].real();
+            s.fi[c * K + k] = F[6 * k + c].imag();
+        }
+    }
+    return K;
+}
+}  // namespace mw1595
+
 namespace ni_core {
 
 namespace {
@@ -266,7 +538,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                  const double *zp, std::ptrdiff_t n, double lam_mult, int p, double detour,
                  int n_threads, const double *gx, const double *gw, int ng,
                  uintptr_t cancel_flag, ColumnCache *cache, std::complex<double> *out,
-                 bool lanes) {
+                 bool lanes, bool sdp) {
     if (offsets[0] != 0 || offsets[nc] != n)
         throw std::invalid_argument("offsets must span 0 .. len(z)");
     for (std::ptrdiff_t c = 0; c < nc; ++c)
@@ -293,6 +565,16 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
 
     const mw_contour::cd kpc(k_p, 0.0);
     const mw_contour::cd km(k_m);
+
+    // Which columns are FAR ones (momwire#1595 D1b): those take the
+    // steepest-descent rule, built per column like any other, and never
+    // touch the column cache (theirs is a different rule, and cheap).
+    std::vector<char> c_far(nc, 0);
+    std::vector<double> c_theta(nc, 0.0), c_kr(nc, 0.0);
+    if (sdp)
+        for (std::ptrdiff_t c = 0; c < nc; ++c)
+            c_far[c] = mw1595::far_column(rho[c], z, offsets[c], offsets[c + 1], k_p,
+                                          c_theta[c], c_kr[c]);
 
     // The thread count is the CALLER's policy, held to what OpenMP would
     // have used anyway so a pin below it survives: `_near_interface` passes
@@ -350,7 +632,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
         c_hit.resize(nc);
         c_new.resize(nc);
         for (std::ptrdiff_t c = 0; c < nc; ++c) {
-            if (offsets[c + 1] == offsets[c]) continue;
+            if (offsets[c + 1] == offsets[c] || c_far[c]) continue;
             mw899::column_extents(rho[c], k_p, km,
                                   mw899::s_min_of(Arr{z}, Arr{zp}, offsets[c], offsets[c + 1]),
                                   lam_mult, c_ah[c], c_lt[c]);
@@ -378,11 +660,14 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
             const std::ptrdiff_t c = by_column[j];
             const std::ptrdiff_t lo = offsets[c], hi = offsets[c + 1];
             s.lanes = lanes && mw_sl::kActive;
-            const size_t K = mw899::column_build(
-                rho[c], k_p, kpc, km, mw899::s_min_of(Arr{z}, Arr{zp}, lo, hi), lam_mult,
-                p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
-                cached ? c_lt[c] : 0.0, cached ? c_hit[c].get() : nullptr,
-                cached ? &c_new[c] : nullptr, s);
+            const size_t K =
+                c_far[c] ? mw1595::build(rho[c], k_p, km, c_theta[c], c_kr[c], s)
+                         : mw899::column_build(
+                               rho[c], k_p, kpc, km, mw899::s_min_of(Arr{z}, Arr{zp}, lo, hi),
+                               lam_mult, p, detour, gxp, gwp, ng, cached,
+                               cached ? c_ah[c] : 0.0, cached ? c_lt[c] : 0.0,
+                               cached ? c_hit[c].get() : nullptr,
+                               cached ? &c_new[c] : nullptr, s);
             for (std::ptrdiff_t i = lo; i < hi; ++i) {
                 mw_contour::cd o6[6];
                 mw899::column_member(s, K, z[i], zp[i], o6);
@@ -396,11 +681,14 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
             const std::ptrdiff_t lo = offsets[c], hi = offsets[c + 1];
             mw899::Scratch s;
             s.lanes = lanes && mw_sl::kActive;
-            const size_t K = mw899::column_build(
-                rho[c], k_p, kpc, km, mw899::s_min_of(Arr{z}, Arr{zp}, lo, hi), lam_mult,
-                p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
-                cached ? c_lt[c] : 0.0, cached ? c_hit[c].get() : nullptr,
-                cached ? &c_new[c] : nullptr, s);
+            const size_t K =
+                c_far[c] ? mw1595::build(rho[c], k_p, km, c_theta[c], c_kr[c], s)
+                         : mw899::column_build(
+                               rho[c], k_p, kpc, km, mw899::s_min_of(Arr{z}, Arr{zp}, lo, hi),
+                               lam_mult, p, detour, gxp, gwp, ng, cached,
+                               cached ? c_ah[c] : 0.0, cached ? c_lt[c] : 0.0,
+                               cached ? c_hit[c].get() : nullptr,
+                               cached ? &c_new[c] : nullptr, s);
             // `dynamic`: members of one column do NOT cost the same. The
             // rule is converged for the column's smallest s, so a member
             // with a larger s underflows part of its own tail and skips it
