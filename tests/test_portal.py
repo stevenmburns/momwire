@@ -276,7 +276,7 @@ def test_version_probe_matches_executes_versionNECd_regex():
     # regex needs \D after the digit run), and Options.getEngine must read 2.
     assert probe.startswith("NEC2") and not probe[4].isdigit(), probe
     assert OPTIONS_ENGINE_PIECE.match(probe).group(1) == "2", probe
-    assert probe.startswith("NEC2momwire.")
+    assert probe.startswith("NEC2 momwire-nec2c [sb] ")
 
 
 @pytest.mark.integration

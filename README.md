@@ -131,7 +131,7 @@ dialog at that command and its Smith chart, tuner and sweeps run on momwire.
 deployment smoke.
 
 ```bash
-momwire-nec2c -version                            # NEC2momwire.<major>.<minor>
+momwire-nec2c -version                            # NEC2 momwire-nec2c [sb] <version>
 momwire-nec2c --selftest                          # PASS / FAIL, no checkout needed
 momwire-nec2c --basis sinusoidal < dipole.nec     # or run a deck by hand
 ```

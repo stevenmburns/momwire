@@ -111,20 +111,26 @@ DEFAULT_IDLE_TIMEOUT = 900.0
 _PUMP_CHUNK = 65536
 
 
-def probe_version(legacy: bool = False) -> str:
-    """The ``-version`` first line, answered without importing momwire.
+def probe_version(legacy: bool = False, suffix: str | None = None) -> str:
+    """The ``-version`` line, answered without importing momwire.
 
-    :func:`momwire_serve_client.dist_version` — a frozen bundle's baked
-    version first, the installed metadata otherwise (momwire#1277) — so this
-    is the same number ``momwire.portal.PROBE_VERSION`` computes from the same
-    owner, and the reason the probe never has to spawn anything. An editable
-    install reports the version recorded at ``pip install -e`` time, exactly
-    as the stock engine does.
+    :func:`momwire_serve_client.version_line` (momwire#1606), the same line
+    ``momwire.portal.probe_version`` builds from the same owner, so the probe
+    never has to spawn anything. ``suffix`` is what this launcher's own file
+    name selects (:func:`filename_basis`); ``--basis`` never moves the line.
+    An editable install reports the version recorded at ``pip install -e``
+    time, exactly as the stock engine does.
     """
     if legacy:
         return _LEGACY_PROBE_VERSION
-    major, minor = _mech.dist_version()
-    return f"NEC2momwire.{major}.{minor}"
+    return _mech.version_line("NEC2", nec2_launcher_name(suffix))
+
+
+def nec2_launcher_name(suffix: str | None) -> str:
+    """``momwire.portal._portal.nec2_launcher_name`` restated (importing it
+    would cost the NumPy start-up), pinned equal by
+    ``tests/test_version_line_1606.py``."""
+    return f"momwire-nec2c-{suffix}" if suffix else "momwire-nec2c"
 
 
 def split_argv(argv: list[str]) -> tuple[list[str], bool, bool, float]:
@@ -480,7 +486,8 @@ def main(argv: list[str] | None = None) -> int:
         # Answered here, never by a spawn: SimNEC probes at configure time and
         # at every engine start, and a probe that waited on a cold server would
         # put the ~680 ms back in the one place the user watches for it.
-        sys.stdout.write(f"{probe_version('--legacy-probe' in engine)}\n")
+        suffix = filename_basis(sys.argv[0])
+        sys.stdout.write(f"{probe_version('--legacy-probe' in engine, suffix)}\n")
         sys.stdout.flush()
         return 0
 

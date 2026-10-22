@@ -37,6 +37,11 @@ fi
 major=${version%%.*}
 rest=${version#*.}
 minor=${rest%%.*}
+patch=0
+case "$rest" in
+    *.*) patch=${rest#*.}; patch=${patch%%[!0-9]*} ;;
+esac
+[ -n "$patch" ] || patch=0
 case "$major$minor" in
     *[!0-9]*|"") echo "build_cc.sh: unusable version '$version'" >&2; exit 1 ;;
 esac
@@ -44,4 +49,5 @@ esac
 exec "$cc" -std=c11 -Wall -Wextra -Werror -O2 \
     -DMOMWIRE_VERSION_MAJOR="$major" \
     -DMOMWIRE_VERSION_MINOR="$minor" \
+    -DMOMWIRE_VERSION_PATCH="$patch" \
     -o "$out" "$here/momwire_eznec_client.c"

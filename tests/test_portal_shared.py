@@ -715,7 +715,11 @@ def test_the_key_carries_the_version_and_the_interpreter(monkeypatch):
     design could produce that a user would read as a wrong answer rather than
     as a crash."""
     baseline = client.config_key([], 900.0)
-    monkeypatch.setattr(client, "probe_version", lambda legacy=False: "NEC2momwire.9.9")
+    monkeypatch.setattr(
+        client,
+        "probe_version",
+        lambda legacy=False, suffix=None: "NEC2 momwire-nec2c [sb] 9.9.9",
+    )
     assert client.config_key([], 900.0) != baseline
     monkeypatch.undo()
     monkeypatch.setattr(sys, "executable", "/nowhere/python3")

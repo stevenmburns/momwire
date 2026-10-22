@@ -334,6 +334,8 @@ __all__ = [
     "BANNER_VERSION",
     "LEGACY_PROBE_VERSION",
     "PROBE_VERSION",
+    "nec2_launcher_name",
+    "probe_version",
     "deck_frame",
     "engine_scope",
     "main",
@@ -376,8 +378,28 @@ __all__ = [
 # caveat: an editable install reports the version recorded at `pip install -e`
 # time, so a dev box that skipped the reinstall after a bump probes the stale
 # number — cosmetic there, and always correct on a wheel install.
-_MAJ, _MIN = _mech.dist_version()
-PROBE_VERSION = f"NEC2momwire.{_MAJ}.{_MIN}"
+#
+# momwire#1606 replaced the ``NEC2momwire.<major>.<minor>`` line with the
+# four-field one every launcher answers (``momwire_serve_client
+# .version_line``): ``NEC2 momwire-nec2c [sb] <version>``. It still starts
+# ``NEC2`` with a non-digit after the 2, for every reason above.
+
+
+def nec2_launcher_name(suffix: str | None) -> str:
+    """The launcher's name from what its file name selects: ``momwire-nec2c``
+    for none, ``momwire-nec2c-<suffix>`` for a copy named for a basis.  Only
+    the NAME counts: ``--basis`` and ``MOMWIRE_NEC2C_BASIS`` pick the engine
+    but never change the ``-version`` line, which is the launcher's."""
+    return f"momwire-nec2c-{suffix}" if suffix else "momwire-nec2c"
+
+
+def probe_version(suffix: str | None = None) -> str:
+    """The ``-version`` line (momwire#1606) for a launcher whose file name
+    selects ``suffix`` (``_filename_basis``)."""
+    return _mech.version_line("NEC2", nec2_launcher_name(suffix))
+
+
+PROBE_VERSION = probe_version()
 
 # The masquerade this build used through v0.46 — versionA's shape, whose tail
 # rides ``Double.valueOf`` against the 1.23 floor. Kept behind ``--legacy-probe``
@@ -4410,7 +4432,9 @@ def main(
         return code
 
     if any(a.lstrip("-").lower() == "version" for a in argv):
-        stdout.write(f"{LEGACY_PROBE_VERSION if legacy_probe else PROBE_VERSION}\n")
+        suffix = _filename_basis(sys.argv[0] if prog is None else prog)
+        line = LEGACY_PROBE_VERSION if legacy_probe else probe_version(suffix)
+        stdout.write(f"{line}\n")
         stdout.flush()
         return 0
 

@@ -333,6 +333,30 @@ def dist_version() -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+# The interface modes every launcher serves beyond one deck per call:
+# ``s`` streaming (``- -``), ``b`` batch (decks chained by ``NX``).
+LAUNCHER_MODES = "sb"
+
+
+def version_line(dialect: str, name: str, modes: str = LAUNCHER_MODES) -> str:
+    """The ``-version`` line every launcher answers (momwire#1606).
+
+    Four fields separated by spaces, the format agreed with AE6TY for
+    SimNEC: the deck dialect (``NEC5``, ``NEC42`` or ``NEC2``), the
+    launcher's own name (always starting ``momwire``), the interface modes in
+    square brackets (``[sb]``; ``[]`` would mean one deck per call only), and
+    the full momwire version, e.g. ``NEC5 momwire-nec5-razor-2p [sb] 0.82.0``.
+
+    The dialect comes first for the SimNEC builds already deployed: they take
+    the engine number from the first digit of the line (``Options.getEngine``,
+    ``[a-zA-Z]*([0-9])+?(.*)`` over the whole line), and their NEC-2 and
+    NEC-4.2 insulation checks need 2 and 4 there.  The version is the full
+    one, read like :func:`dist_version` without importing momwire; ``0.0.0``
+    when nothing answers, since a probe must never be the thing that fails.
+    """
+    return f"{dialect} {name} [{modes}] {momwire_version() or '0.0.0'}"
+
+
 def digest(parts: list[str]) -> str:
     """A short hex identity for a server configuration.
 
@@ -1159,6 +1183,7 @@ def pin_cpu_env(environ=None) -> dict[str, str]:
 
 __all__ = [
     "BUILD_VERSION_MODULE",
+    "LAUNCHER_MODES",
     "NPY_DISABLE_ENV",
     "NPY_ENABLE_ENV",
     "OPENBLAS_CORETYPE",
@@ -1188,4 +1213,5 @@ __all__ = [
     "spawn_server",
     "stale_versions",
     "transport",
+    "version_line",
 ]
