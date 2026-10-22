@@ -1,0 +1,186 @@
+
+### hub  n_rad=1  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   194.85  -67.45j |   187.59  -62.04j |   184.22  -59.78j |   182.48  -58.87j   |dZ| per doubling: 9.054, 4.058, 1.960
+nec42                r=[1, 2, 4, 8]:   114.70 -476.98j |    73.71 -595.45j |    55.13 -631.29j |    48.64 -632.81j   |dZ| per doubling: 125.366, 40.366, 6.666
+nec5                 r=[1, 2, 4, 8]:   185.97  -64.55j |   182.61  -60.71j |   181.46  -59.50j |   180.96  -59.04j   |dZ| per doubling: 5.099, 1.667, 0.679
+sinusoidal           r=[1, 2, 4, 8]:   150.37  -43.40j |   146.87  -42.10j |   144.94  -41.10j |   142.40  -39.87j   |dZ| per doubling: 3.732, 2.175, 2.824
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   195.13  -67.65j |   187.57  -62.11j |   184.19  -59.78j |   182.45  -58.84j   |dZ| per doubling: 9.377, 4.108, 1.974
+
+### hub  n_rad=1  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   199.93  -73.59j |   193.02  -67.74j |   189.58  -65.53j |   187.55  -64.95j   |dZ| per doubling: 9.057, 4.086, 2.118
+nec42                r=[1, 2, 4, 8]:    94.39 -422.12j |    72.84 -472.53j |    61.08 -485.55j |    58.93 -468.20j   |dZ| per doubling: 54.818, 17.547, 17.480
+nec5                 r=[1, 2, 4, 8]:   191.91  -69.91j |   188.44  -65.94j |   186.97  -65.04j |   186.01  -65.10j   |dZ| per doubling: 5.272, 1.727, 0.962
+sinusoidal           r=[1, 2, 4, 8]:   137.57  -35.21j |   133.70  -33.74j |   131.60  -32.72j |   129.65  -31.86j   |dZ| per doubling: 4.139, 2.327, 2.139
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   200.11  -73.91j |   192.95  -67.79j |   189.47  -65.53j |   187.28  -65.05j   |dZ| per doubling: 9.422, 4.153, 2.238
+
+### hub  n_rad=1  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:   301.89 -868.34j |   414.91-1492.88j |   498.35-2079.90j |   478.90-2013.45j   |dZ| per doubling: 634.681, 592.921, 69.237
+
+### hub  n_rad=1  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:   191.32  -67.22j |   184.49  -61.88j |   181.15  -59.83j |   179.24  -59.27j   |dZ| per doubling: 8.675, 3.912, 1.998
+nec42                r=[1, 2, 4, 8]:    86.91 -443.06j |    66.58 -486.52j |    56.26 -494.61j |    55.97 -472.26j   |dZ| per doubling: 47.980, 13.115, 22.357
+nec5                 r=[1, 2, 4, 8]:   183.28  -64.06j |   179.88  -60.51j |   178.52  -59.62j |   177.69  -59.58j   |dZ| per doubling: 4.913, 1.629, 0.831
+sinusoidal           r=[1, 2, 4, 8]:   137.89  -35.01j |   134.23  -33.80j |   132.07  -32.78j |   129.65  -31.69j   |dZ| per doubling: 3.853, 2.387, 2.653
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   191.55  -67.41j |   184.44  -61.90j |   181.07  -59.81j |   179.04  -59.32j   |dZ| per doubling: 8.989, 3.971, 2.085
+
+### hub  n_rad=1  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:   200.08  -75.87j |   191.93  -70.44j |   188.28  -68.05j |   186.53  -66.94j   |dZ| per doubling: 9.789, 4.363, 2.073
+nec42                r=[1, 2, 4, 8]:   190.89  -70.05j |   188.94  -68.07j |   189.15  -67.36j |   191.01  -69.56j   |dZ| per doubling: 2.780, 0.739, 2.886
+nec5                 r=[1, 2, 4, 8]:   189.90  -73.17j |   186.38  -68.94j |   185.33  -67.51j |   185.00  -66.83j   |dZ| per doubling: 5.506, 1.773, 0.753
+sinusoidal           r=[1, 2, 4, 8]:   191.50  -70.33j |   188.44  -68.50j |   186.77  -67.22j |   182.78  -65.25j   |dZ| per doubling: 3.568, 2.102, 4.447
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   200.43  -76.07j |   191.94  -70.55j |   188.26  -68.10j |   186.52  -66.96j   |dZ| per doubling: 10.132, 4.416, 2.082
+
+### hub  n_rad=4  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    96.23   -5.06j |    91.91   -4.40j |    89.99   -4.06j |    89.09   -3.88j   |dZ| per doubling: 4.375, 1.954, 0.914
+nec42                r=[1, 2, 4, 8]:   110.00 -462.88j |    72.13 -585.38j |    53.77 -622.54j |    47.08 -624.66j   |dZ| per doubling: 128.216, 41.452, 7.021
+nec5                 r=[1, 2, 4, 8]:    88.16   -9.40j |    87.88   -7.01j |    87.92   -5.79j |    88.02   -5.03j   |dZ| per doubling: 2.405, 1.221, 0.769
+sinusoidal           r=[1, 2, 4, 8]:    93.42   -5.78j |    90.79   -5.47j |    88.83   -5.22j |    87.30   -5.13j   |dZ| per doubling: 2.644, 1.975, 1.538
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    96.12   -5.20j |    91.88   -4.45j |    89.99   -4.04j |    89.10   -3.80j   |dZ| per doubling: 4.311, 1.937, 0.912
+
+### hub  n_rad=4  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   101.93   -0.64j |    97.41   -0.06j |    95.42   +0.21j |    94.52   +0.30j   |dZ| per doubling: 4.562, 2.000, 0.910
+nec42                r=[1, 2, 4, 8]:    92.53 -411.17j |    72.01 -462.09j |    60.35 -474.88j |    57.97 -456.12j   |dZ| per doubling: 54.900, 17.301, 18.912
+nec5                 r=[1, 2, 4, 8]:    93.46   -5.45j |    93.11   -3.02j |    93.18   -1.79j |    93.33   -1.09j   |dZ| per doubling: 2.454, 1.239, 0.714
+sinusoidal           r=[1, 2, 4, 8]:    92.78   -2.85j |    90.81   -2.41j |    89.63   -1.95j |    88.76   -1.66j   |dZ| per doubling: 2.025, 1.265, 0.918
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   101.84   -0.73j |    97.39   -0.03j |    95.45   +0.34j |    94.58   +0.51j   |dZ| per doubling: 4.501, 1.977, 0.889
+
+### hub  n_rad=4  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:   286.74 -838.36j |   392.00-1438.92j |   463.63-1995.71j |   436.47-1918.89j   |dZ| per doubling: 609.715, 561.379, 81.480
+
+### hub  n_rad=4  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:    97.03   +0.26j |    92.75   +0.74j |    90.87   +0.99j |    90.01   +1.08j   |dZ| per doubling: 4.309, 1.896, 0.862
+nec42                r=[1, 2, 4, 8]:    85.32 -432.29j |    65.49 -476.11j |    55.02 -484.06j |    54.24 -460.32j   |dZ| per doubling: 48.094, 13.142, 23.753
+nec5                 r=[1, 2, 4, 8]:    88.77   -4.52j |    88.59   -2.23j |    88.71   -1.03j |    88.87   -0.31j   |dZ| per doubling: 2.289, 1.215, 0.731
+sinusoidal           r=[1, 2, 4, 8]:    90.94   -1.24j |    88.69   -0.99j |    87.10   -0.65j |    85.95   -0.43j   |dZ| per doubling: 2.262, 1.625, 1.171
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    96.93   +0.17j |    92.74   +0.77j |    90.90   +1.12j |    90.07   +1.29j   |dZ| per doubling: 4.234, 1.869, 0.842
+
+### hub  n_rad=4  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:    94.86  -23.13j |    90.50  -21.79j |    88.54  -21.17j |    87.62  -20.86j   |dZ| per doubling: 4.559, 2.057, 0.976
+nec42                r=[1, 2, 4, 8]:    99.72  -21.24j |    96.50  -19.40j |    94.29  -18.78j |    92.97  -20.94j   |dZ| per doubling: 3.705, 2.297, 2.530
+nec5                 r=[1, 2, 4, 8]:    87.09  -26.17j |    86.67  -23.43j |    86.62  -22.22j |    86.64  -21.53j   |dZ| per doubling: 2.775, 1.210, 0.682
+sinusoidal           r=[1, 2, 4, 8]:   102.22  -20.18j |    98.40  -19.51j |    95.09  -19.39j |    91.98  -19.71j   |dZ| per doubling: 3.874, 3.309, 3.127
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    94.75  -23.32j |    90.47  -21.90j |    88.53  -21.22j |    87.61  -20.88j   |dZ| per doubling: 4.517, 2.050, 0.978
+
+### hub  n_rad=16  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    50.46   -7.43j |    48.25   -6.73j |    47.26   -6.36j |    46.80   -6.12j   |dZ| per doubling: 2.323, 1.056, 0.515
+nec42                r=[1, 2, 4, 8]:    96.10 -457.46j |    26.68 -613.81j |    87.13 -620.20j |   -19.93 -671.52j   |dZ| per doubling: 171.073, 60.785, 118.727
+nec5                 r=[1, 2, 4, 8]:    45.08  -12.93j |    45.71   -9.97j |    46.00   -8.40j |    46.16   -7.41j   |dZ| per doubling: 3.018, 1.597, 1.009
+sinusoidal           r=[1, 2, 4, 8]:    49.79   -9.32j |    48.12   -8.01j |    47.21   -7.47j |    46.75   -7.13j   |dZ| per doubling: 2.126, 1.054, 0.571
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    50.45   -7.66j |    48.24   -6.81j |    47.26   -6.34j |    46.82   -6.04j   |dZ| per doubling: 2.371, 1.078, 0.540
+
+### hub  n_rad=16  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    53.01   +0.68j |    50.75   +1.09j |    49.76   +1.35j |    49.32   +1.55j   |dZ| per doubling: 2.297, 1.025, 0.483
+nec42                r=[1, 2, 4, 8]:    80.94 -404.66j |   111.30 -507.74j |    30.49 -544.41j |    14.76 -524.44j   |dZ| per doubling: 107.455, 88.742, 25.416
+nec5                 r=[1, 2, 4, 8]:    47.31   -5.52j |    48.03   -2.65j |    48.40   -1.03j |    48.61   +0.00j   |dZ| per doubling: 2.959, 1.660, 1.050
+sinusoidal           r=[1, 2, 4, 8]:    51.89   -2.38j |    50.37   -1.08j |    49.55   -0.42j |    49.14   +0.04j   |dZ| per doubling: 2.005, 1.055, 0.610
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    53.01   +0.51j |    50.75   +1.10j |    49.79   +1.49j |    49.37   +1.80j   |dZ| per doubling: 2.328, 1.042, 0.520
+
+### hub  n_rad=16  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:   257.11 -829.29j |  -106.69-1961.02j |  -328.83 -943.79j | -2773.08-5157.73j   |dZ| per doubling: 1188.759, 1041.203, 4871.516
+
+### hub  n_rad=16  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:    50.95   -1.38j |    48.78   -0.88j |    47.83   -0.56j |    47.41   -0.35j   |dZ| per doubling: 2.228, 1.001, 0.480
+nec42                r=[1, 2, 4, 8]:    74.30 -427.09j |    14.23 -510.48j |    82.32 -479.64j |   -27.93 -558.95j   |dZ| per doubling: 102.774, 74.748, 135.816
+nec5                 r=[1, 2, 4, 8]:    45.45   -7.47j |    46.16   -4.55j |    46.52   -2.91j |    46.72   -1.86j   |dZ| per doubling: 2.999, 1.680, 1.064
+sinusoidal           r=[1, 2, 4, 8]:    50.10   -3.80j |    48.54   -2.50j |    47.71   -1.86j |    47.32   -1.40j   |dZ| per doubling: 2.028, 1.048, 0.611
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    50.95   -1.55j |    48.79   -0.87j |    47.86   -0.43j |    47.45   -0.09j   |dZ| per doubling: 2.265, 1.026, 0.524
+
+### hub  n_rad=16  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:    49.62  -26.73j |    47.35  -25.26j |    46.32  -24.60j |    45.83  -24.27j   |dZ| per doubling: 2.702, 1.220, 0.587
+nec42                r=[1, 2, 4, 8]:    49.50  -26.30j |   116.63 -135.93j |   166.69 -192.59j |   155.37 -250.07j   |dZ| per doubling: 128.549, 75.612, 58.582
+nec5                 r=[1, 2, 4, 8]:    44.43  -30.65j |    44.94  -27.41j |    45.15  -25.92j |    45.25  -25.08j   |dZ| per doubling: 3.280, 1.501, 0.848
+sinusoidal           r=[1, 2, 4, 8]:    49.45  -26.50j |    47.54  -24.86j |    46.47  -24.38j |    45.89  -24.22j   |dZ| per doubling: 2.514, 1.173, 0.600
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    49.60  -27.00j |    47.33  -25.40j |    46.31  -24.66j |    45.83  -24.30j   |dZ| per doubling: 2.781, 1.253, 0.603
+
+### slope  n_rad=1  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   195.90  -67.47j |   188.60  -62.04j |   185.21  -59.77j |   183.46  -58.87j   |dZ| per doubling: 9.100, 4.080, 1.971
+nec42                r=[1, 2, 4, 8]:   146.38 -327.09j |    99.90 -526.75j |    68.39 -603.85j |    55.92 -620.02j   |dZ| per doubling: 205.005, 83.284, 20.425
+nec5                 r=[1, 2, 4, 8]:   186.89  -64.67j |   183.59  -60.75j |   182.46  -59.49j |   181.95  -59.02j   |dZ| per doubling: 5.128, 1.691, 0.693
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   196.21  -67.63j |   188.59  -62.10j |   185.18  -59.77j |   183.43  -58.84j   |dZ| per doubling: 9.419, 4.129, 1.986
+
+### slope  n_rad=1  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   200.91  -73.87j |   193.97  -67.98j |   190.50  -65.77j |   188.43  -65.21j   |dZ| per doubling: 9.101, 4.111, 2.146
+nec42                r=[1, 2, 4, 8]:   117.02 -341.62j |    90.01 -428.76j |    73.74 -459.10j |    69.13 -449.93j   |dZ| per doubling: 91.232, 34.423, 10.261
+nec5                 r=[1, 2, 4, 8]:   192.82  -70.20j |   189.39  -66.18j |   187.93  -65.25j |   186.95  -65.31j   |dZ| per doubling: 5.287, 1.733, 0.982
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   201.13  -74.15j |   193.90  -68.03j |   190.38  -65.78j |   188.14  -65.34j   |dZ| per doubling: 9.466, 4.180, 2.280
+
+### slope  n_rad=1  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:   261.35 -537.89j |   393.18-1068.76j |   507.37-1607.72j |   508.09-1689.64j   |dZ| per doubling: 546.999, 550.925, 81.923
+
+### slope  n_rad=1  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:   192.31  -67.36j |   185.44  -61.98j |   182.08  -59.94j |   180.13  -59.39j   |dZ| per doubling: 8.720, 3.935, 2.020
+nec42                r=[1, 2, 4, 8]:   111.00 -365.66j |    83.13 -447.23j |    67.40 -472.84j |    63.80 -459.59j   |dZ| per doubling: 86.200, 30.057, 13.735
+nec5                 r=[1, 2, 4, 8]:   184.17  -64.23j |   180.82  -60.62j |   179.47  -59.70j |   178.62  -59.67j   |dZ| per doubling: 4.923, 1.637, 0.850
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   192.56  -67.50j |   185.39  -62.01j |   181.98  -59.92j |   179.92  -59.46j   |dZ| per doubling: 9.032, 3.995, 2.118
+
+### slope  n_rad=1  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:   201.21  -75.69j |   193.01  -70.25j |   189.34  -67.85j |   187.58  -66.74j   |dZ| per doubling: 9.838, 4.385, 2.084
+nec42                r=[1, 2, 4, 8]:   193.99  -75.13j |   192.65  -97.87j |   201.53 -271.32j |   148.61 -756.14j   |dZ| per doubling: 22.779, 173.681, 487.699
+nec5                 r=[1, 2, 4, 8]:   190.87  -73.19j |   187.41  -68.85j |   186.38  -67.34j |   186.05  -66.64j   |dZ| per doubling: 5.554, 1.822, 0.775
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i | NotImplementedError: crossing junction 0: its members' tilts off the i   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   201.58  -75.85j |   193.02  -70.36j |   189.32  -67.90j |   187.57  -66.76j   |dZ| per doubling: 10.171, 4.436, 2.092
+
+### slope  n_rad=4  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    96.06   -6.33j |    91.76   -5.59j |    89.84   -5.22j |    88.94   -5.03j   |dZ| per doubling: 4.369, 1.953, 0.915
+nec42                r=[1, 2, 4, 8]:    77.48 -230.03j |   117.65 -559.33j |    28.40 -507.68j |    90.10 -512.52j   |dZ| per doubling: 331.742, 103.115, 61.882
+nec5                 r=[1, 2, 4, 8]:    87.98  -10.60j |    87.73   -8.15j |    87.79   -6.89j |    87.89   -6.12j   |dZ| per doubling: 2.465, 1.260, 0.771
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    95.95   -6.49j |    91.72   -5.66j |    89.84   -5.20j |    88.96   -4.95j   |dZ| per doubling: 4.311, 1.938, 0.915
+
+### slope  n_rad=4  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:   101.63   -2.25j |    97.14   -1.57j |    95.17   -1.25j |    94.26   -1.15j   |dZ| per doubling: 4.542, 1.996, 0.912
+nec42                r=[1, 2, 4, 8]:  -116.99-1244.30j |    48.86 -663.61j |  -237.97 -522.71j |   153.17 -827.35j   |dZ| per doubling: 603.910, 319.567, 495.777
+nec5                 r=[1, 2, 4, 8]:    93.20   -6.92j |    92.88   -4.45j |    92.96   -3.18j |    93.09   -2.48j   |dZ| per doubling: 2.495, 1.271, 0.716
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:   101.54   -2.35j |    97.13   -1.55j |    95.20   -1.13j |    94.32   -0.94j   |dZ| per doubling: 4.487, 1.975, 0.895
+
+### slope  n_rad=4  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:    50.70 -314.99j |   945.06-1228.22j |  -551.26 -949.81j |   163.36  -58.62j   |dZ| per doubling: 1278.229, 1521.998, 1142.321
+
+### slope  n_rad=4  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:    96.82   -1.01j |    92.56   -0.44j |    90.69   -0.16j |    89.83   -0.06j   |dZ| per doubling: 4.297, 1.894, 0.864
+nec42                r=[1, 2, 4, 8]:    40.78 -252.13j |    90.87 -512.87j |   -30.11 -411.77j |   162.70  -98.48j   |dZ| per doubling: 265.501, 157.662, 367.872
+nec5                 r=[1, 2, 4, 8]:    88.57   -5.69j |    88.42   -3.35j |    88.55   -2.11j |    88.70   -1.39j   |dZ| per doubling: 2.343, 1.251, 0.731
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    96.72   -1.11j |    92.54   -0.43j |    90.72   -0.04j |    89.89   +0.15j   |dZ| per doubling: 4.228, 1.869, 0.847
+
+### slope  n_rad=4  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:    94.75  -24.41j |    90.41  -23.00j |    88.45  -22.33j |    87.53  -22.01j   |dZ| per doubling: 4.572, 2.062, 0.978
+nec42                r=[1, 2, 4, 8]:   107.08 -129.68j |   172.82 -226.95j |   110.54 -252.49j |   161.04 -627.42j   |dZ| per doubling: 117.405, 67.309, 378.313
+nec5                 r=[1, 2, 4, 8]:    86.96  -27.39j |    86.58  -24.59j |    86.53  -23.34j |    86.56  -22.66j   |dZ| per doubling: 2.826, 1.247, 0.685
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo | NotImplementedError: crossing junction 0 joins 5 members: SinusoidalSo   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    94.65  -24.62j |    90.37  -23.12j |    88.44  -22.39j |    87.52  -22.04j   |dZ| per doubling: 4.534, 2.060, 0.982
+
+### slope  n_rad=16  radii=above_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    50.41   -8.73j |    48.20   -7.97j |    47.21   -7.57j |    46.75   -7.32j   |dZ| per doubling: 2.336, 1.064, 0.521
+nec42                r=[1, 2, 4, 8]:   118.56  -70.17j |   120.77 -187.46j |   -37.55 -220.02j |    93.09 -503.65j   |dZ| per doubling: 117.309, 161.628, 312.272
+nec5                 r=[1, 2, 4, 8]:    45.05  -14.12j |    45.68  -11.06j |    45.97   -9.47j |    46.12   -8.50j   |dZ| per doubling: 3.123, 1.616, 0.978
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    50.39   -8.95j |    48.18   -8.04j |    47.21   -7.55j |    46.77   -7.23j   |dZ| per doubling: 2.384, 1.087, 0.546
+
+### slope  n_rad=16  radii=below_half  feed=mid
+bspline              r=[1, 2, 4, 8]:    52.92   -0.98j |    50.66   -0.50j |    49.68   -0.20j |    49.23   +0.01j   |dZ| per doubling: 2.304, 1.033, 0.491
+nec42                r=[1, 2, 4, 8]:  -145.72 -176.95j |   136.42 -428.57j |    -5.21 -344.17j |    73.49 -586.11j   |dZ| per doubling: 378.041, 164.871, 254.413
+nec5                 r=[1, 2, 4, 8]:    47.24   -7.04j |    47.97   -4.07j |    48.33   -2.43j |    48.53   -1.42j   |dZ| per doubling: 3.060, 1.679, 1.023
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    52.91   -1.14j |    50.67   -0.49j |    49.70   -0.06j |    49.28   +0.26j   |dZ| per doubling: 2.337, 1.053, 0.531
+
+### slope  n_rad=16  radii=main  feed=bottom
+nec42                r=[1, 2, 4, 8]:   139.82   +1.83j |   130.63  -24.39j |  -382.70 +283.96j |   314.69 -722.80j   |dZ| per doubling: 27.787, 598.829, 1224.720
+
+### slope  n_rad=16  radii=main  feed=mid
+bspline              r=[1, 2, 4, 8]:    50.89   -2.67j |    48.72   -2.11j |    47.77   -1.77j |    47.34   -1.54j   |dZ| per doubling: 2.236, 1.008, 0.486
+nec42                r=[1, 2, 4, 8]:   168.12  -15.11j |   140.76  -44.18j |  -278.17 -355.75j |    77.12 -417.91j   |dZ| per doubling: 39.918, 522.092, 360.682
+nec5                 r=[1, 2, 4, 8]:    45.41   -8.63j |    46.12   -5.62j |    46.47   -3.96j |    46.67   -2.95j   |dZ| per doubling: 3.097, 1.694, 1.031
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja | NotImplementedError: crossing junction 0 joins members whose node-adja   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    50.88   -2.83j |    48.72   -2.09j |    47.80   -1.63j |    47.39   -1.29j   |dZ| per doubling: 2.275, 1.035, 0.533
+
+### slope  n_rad=16  radii=one  feed=mid
+bspline              r=[1, 2, 4, 8]:    49.58  -28.03j |    47.31  -26.50j |    46.29  -25.82j |    45.80  -25.48j   |dZ| per doubling: 2.731, 1.233, 0.593
+nec42                r=[1, 2, 4, 8]:    76.96 -115.36j |    90.24 -189.78j |   105.11 -315.48j |   138.64 -458.02j   |dZ| per doubling: 75.595, 126.571, 146.439
+nec5                 r=[1, 2, 4, 8]:    44.42  -31.86j |    44.93  -28.52j |    45.13  -27.01j |    45.23  -26.20j   |dZ| per doubling: 3.377, 1.519, 0.818
+sinusoidal           r=[1, 2, 4, 8]: NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS | NotImplementedError: crossing junction 0 joins 17 members: SinusoidalS   |dZ| per doubling: 
+sinusoidal-galerkin  r=[1, 2, 4, 8]:    49.56  -28.29j |    47.29  -26.64j |    46.28  -25.88j |    45.80  -25.50j   |dZ| per doubling: 2.807, 1.265, 0.610

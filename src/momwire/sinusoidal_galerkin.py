@@ -495,6 +495,25 @@ _EK_NEAR_CORRECTION_REFUSAL = (
     "(momwire#246)"
 )
 
+# momwire#1630: the TWO-RADIUS crossing node is served on the default
+# mixed-potential fill, which takes bspline's two-radius blocks AND its
+# two-radius completions. The direct fill takes no completions by design (its
+# closed-form fields already carry the node's by-parts content, at the
+# observer's radius, `_add_crossing_blocks`), so it has no two-radius spelling
+# of that content, and measured it is not close: on the U5 rod (2 m buried,
+# soil A, 7.1 MHz) halving the buried radius moves the mixed-potential fill
+# +7.86 ohm (bspline +7.86) and the direct fill -163.7; on the 1-radial hub at
+# 14 MHz a 19 mm vertical moves it -161.8-471.1j against NEC-5's -6.8+7.9j.
+_CROSSING_TWO_RADIUS_DIRECT_FILL_REFUSAL = (
+    'fill="direct" does not serve a TWO-RADIUS crossing node (one wire radius '
+    "above the interface and another below, momwire#1630): its closed-form "
+    "fields carry the node's by-parts content at each observer's radius, and "
+    "the two-radius rule puts the node's point tests at the buried radius, "
+    "which this fill has no spelling for (measured hundreds of ohms from "
+    'NEC-5). Use the default fill="mixed-potential", which serves the node on '
+    "the two-radius rule and tracks NEC-5's radius response to under 0.5 ohm"
+)
+
 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL = (
     "extended_kernel=True with a radius step at a junction is not "
     "implemented on SinusoidalGalerkinSolver: measured DIVERGENT, not "
@@ -1460,6 +1479,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),
+            "buried+crossing_two_radius_direct_fill": (
+                _CROSSING_TWO_RADIUS_DIRECT_FILL_REFUSAL
+            ),
         },
     )
 
@@ -1865,8 +1887,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         inflow over ALL members, which an ordinary junction satisfies
         identically (#177); imposing it makes the two sides' cut vectors
         minus each other on the solution space, so either member names the
-        same port — the series EMF NEC-5 puts on the node."""
-        crossing = sorted(self._node_port_crossing_junctions())
+        same port — the series EMF NEC-5 puts on the node.
+
+        Every crossing junction of a TWO-RADIUS deck takes the row too
+        (momwire#1630), on bspline's terms (`BSplineSolver._kcl_row_junctions`):
+        the two-radius blocks are no longer transposes of each other, and at
+        two radii the split fill's own continuity does not converge, so the
+        node's continuity is closed rather than left to emerge."""
+        crossing = set(self._node_port_crossing_junctions())
+        if self._two_radius_crossing() is not None:
+            crossing |= set(self._crossing_junction_indices())
+        crossing = sorted(crossing)
         if not crossing:
             return None
         return np.stack(
@@ -4180,7 +4211,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the corner — which is why the segment bases were left as free ends
         and the node was given its own dofs (`_crossing_wing_view`).
         """
-        rows, t_rows = (
+        rows, t_rows, t_cols = (
             self._crossing_rows(geom, seg_view, medium, below) if rows is None else rows
         )
         n = G.shape[0]
@@ -4196,19 +4227,30 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # G: first t_ab's rows, then its transpose's columns. Outside `rows`
         # t_ab is zero, so every cell sees its two terms in the order the
         # whole spelling added them, and G keeps its F order for the
-        # in-place solve.
+        # in-place solve. At a TWO-RADIUS node the second block is not the
+        # first's transpose (`_crossing_rows`), and at one radius `t_cols` IS
+        # `t_rows`, so the one-radius sums are unchanged bit for bit.
         G[rows, :] += t_rows
-        G[:, rows] += t_rows.T
+        G[:, rows] += t_cols.T
         return G
 
     def _crossing_rows(self, geom, seg_view, medium, below):
-        """`(rows, t_ab[rows, :])`: the crossing block's live rows
-        (momwire#1224), for `_add_crossing_blocks`.
+        """`(rows, t_ab[rows, :], t_ba[rows, :])`: the crossing block's live
+        rows (momwire#1224), for `_add_crossing_blocks`, which adds the first
+        to G's `rows` and the second's transpose to its `rows` columns.
 
         t_ab is (n_basis, n_basis) but lives in the rows of the bases with
         support ABOVE: the block is (above axis A x below axis B), and A's
         samples are those bases' only. So it is asked for those rows alone
         (`rows=`, momwire#1029 phase 2) rather than built whole beside G.
+
+        At one radius the below rows are the above rows' transpose
+        (reciprocity), so the third entry is the second, the same object. A
+        TWO-RADIUS node (momwire#1630) takes bspline's two blocks
+        (`_crossing_fill.cross_complete_blocks_two_radius`): the above rows'
+        line tests at `a_above` with the node's point tests at `a_below`, and
+        the below rows wholly at `a_below` — the U5 rule (antennaknobs plan
+        U5, momwire#1140), ported rather than re-derived.
         """
         ctx_x = self._crossing_context(geom, seg_view, medium)
         below = np.asarray(below)
@@ -4219,10 +4261,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         starts = np.asarray(seg_view["starts"])
         seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
         rows = np.unique(np.asarray(seg_view["jbasis"])[~below[seg_of_entry]])
+        if ctx_x.a_below is not None:
+            t_rows, t_cols = _crossing_fill.cross_complete_blocks_two_radius(
+                ctx_x, a_idx, b_idx, ax_a, ax_b, rows=rows, below_half="rows"
+            )
+            return rows, t_rows, t_cols
         t_rows, _t_cols = _crossing_fill.cross_complete_block_split(
             ctx_x, a_idx, b_idx, ax_a, ax_b, rows=rows
         )
-        return rows, t_rows
+        return rows, t_rows, t_rows
 
     def _n_crossing_wings(self):
         """How many NODE-WING columns the crossing junctions add: one per
@@ -4483,6 +4530,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 return self._assemble_Z_mp_mixed(
                     geom, eta, below, medium, seg_view, ctx, plan
                 )
+            if crossing and self._two_radius_crossing() is not None:
+                raise NotImplementedError(_CROSSING_TWO_RADIUS_DIRECT_FILL_REFUSAL)
             cross_rows = None
             if self._band_fill_serves(geom["n_segs"]):
                 if crossing:
@@ -4816,7 +4865,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         starts, jbasis, coef, dcoef = _sinusoidal_mp.basis_csr(seg_view, medium.k_p)
         # The crossing pair first (momwire#1224): its transients never sit
         # beside G.
-        rows_x, t_rows = self._crossing_rows(geom, seg_view, medium, below)
+        rows_x, t_rows, t_cols = self._crossing_rows(geom, seg_view, medium, below)
         G = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
         eta_p = self._fill_eta(medium.k_p, eta)
         for keep, k_cls, med in (
@@ -4917,8 +4966,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # The crossing pair, as `_add_crossing_blocks` adds it, then the
         # completions off.
         G[rows_x, :] += t_rows
-        G[:, rows_x] += t_rows.T
-        del t_rows
+        G[:, rows_x] += t_cols.T
+        del t_rows, t_cols
         ctx_x = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~seg_below)[0]
         b_idx = np.nonzero(seg_below)[0]
@@ -4927,8 +4976,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # The completions are an additive correction to bspline's Z = −G and
         # add to their `out`, so G is negated around the call (exact): they
         # land with G's sign and no (n, n) transient.
+        # A TWO-RADIUS node takes bspline's two-radius completions (each
+        # family's line observers at its own radius, the node's point tests
+        # at `a_below`), as its cross blocks do (`_crossing_rows`).
+        completions = (
+            _crossing_fill.self_completions
+            if ctx_x.a_below is None
+            else _crossing_fill.self_completions_two_radius
+        )
         np.negative(G, out=G)
-        _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
+        completions(ctx_x, ax_b, ax_a, out=G)
         np.negative(G, out=G)
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view

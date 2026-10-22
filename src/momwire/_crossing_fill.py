@@ -7840,7 +7840,9 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
 
 
 @_cancelable
-def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
+def cross_complete_blocks_two_radius(
+    ctx, a_idx, b_idx, A, B, *, rows=None, below_half="cols"
+):
     """The cross pair at a TWO-RADIUS crossing node: `(t_above, t_below)`,
     composed by the caller as `Z -= t_above; Z -= t_below.T`.
 
@@ -7874,12 +7876,19 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     one entry point rather than two. A two-radius deck CAN be rotationally
     symmetric — a mast at one radius over a screen at another is the obvious
     one — so the route is not refused here.
+
+    `below_half="rows"` (momwire#1630) answers `t_below[rows, :]` instead:
+    the sinusoidal Galerkin trunk asks for the above-support rows and writes
+    the below block's transpose into those COLUMNS (`G[:, rows] +=
+    t_below[rows].T`), where bspline's restricted fill wants the column half.
     """
+    if below_half not in ("cols", "rows"):
+        raise ValueError(f"below_half must be 'cols' or 'rows', not {below_half!r}")
     ctx_above = ctx._replace(a_wire=float(ctx.a_above))
     ctx_below = ctx._replace(a_wire=float(ctx.a_below))
     t_below = cross_complete_block_split(ctx_below, a_idx, b_idx, A, B, rows=rows)
     if rows is not None:
-        t_below = t_below[1]
+        t_below = t_below[1 if below_half == "cols" else 0]
 
     # Keyed on the folded rho_eff, so one memo per radius stays exact.
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)

@@ -1,0 +1,12 @@
+{"case": "gnd_ratio", "r": 4, "a_v": 0.001, "engine": "nec42", "R": 189.148, "X": -67.361}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.001, "engine": "nec5", "R": 185.33, "X": -67.508}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.0011, "engine": "nec42", "R": 202.649, "X": -407.608}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.0011, "engine": "nec5", "R": 185.24, "X": -67.035}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.0015, "engine": "nec42", "R": 131.431, "X": -765.015}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.0015, "engine": "nec5", "R": 184.92, "X": -65.551}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.002, "engine": "nec42", "R": 93.183, "X": -828.257}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.002, "engine": "nec5", "R": 184.59, "X": -64.259}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.004, "engine": "nec42", "R": 61.6237, "X": -779.192}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.004, "engine": "nec5", "R": 183.54, "X": -61.576}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.019, "engine": "nec42", "R": 56.2629, "X": -494.614}
+{"case": "gnd_ratio", "r": 4, "a_v": 0.019, "engine": "nec5", "R": 178.52, "X": -59.615}

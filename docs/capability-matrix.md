@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-44 sentences across 79 declared cells, verbatim. A sentence shared by several rows is printed
+46 sentences across 81 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -256,6 +256,10 @@ renders in host dialogs.
 
   > singular enrichment is not built for RazorSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
+- `SinusoidalGalerkinSolver` `buried+crossing_two_radius_direct_fill`
+
+  > fill="direct" does not serve a TWO-RADIUS crossing node (one wire radius above the interface and another below, momwire#1630): its closed-form fields carry the node's by-parts content at each observer's radius, and the two-radius rule puts the node's point tests at the buried radius, which this fill has no spelling for (measured hundreds of ohms from NEC-5). Use the default fill="mixed-potential", which serves the node on the two-radius rule and tracks NEC-5's radius response to under 0.5 ohm
+
 - `SinusoidalGalerkinSolver` `extended_kernel+stepped_radius_junction`
 
   > extended_kernel=True with a radius step at a junction is not implemented on SinusoidalGalerkinSolver: measured DIVERGENT, not merely inaccurate. On momwire#435's two-wire step deck (10:1 radius step at the midspan junction, 10.19 m dipole @ 14.2 MHz) the extrapolated continuum limit is 7.110 - 483.925j against NEC-5's 132.560 - 11.921j, with the residual GROWING every rung refined (23.2 Ohm -> 285.8 Ohm) and a 286 Ohm dX spread down the ladder — materially worse than the reduced `sg` row's ~20 Ohm walk-away #435 already documents (that is a formulation gap; this is a divergence). The mechanism is under the mixed end-condition constants the extended delta's end bracket takes at a stepped node — the same node kind momwire#299 gates for the UNIFORM-radius case, not yet derived here for a step. Use `extended_kernel=False` (the reduced `sg` row, correctly documented as NEC-2-identified rather than NEC-5-accurate on any radius step), or `BSplineSolver(extended_kernel=True)` / `SinusoidalSolver(extended_kernel=True)`, both of which are served on a step (taper-readiness study Sec 2-3, maintainer decision D2, stevenmburns/momwire#398)
@@ -283,6 +287,10 @@ renders in host dialogs.
 - `SinusoidalSolver` `buried+crossing_oblique`
 
   > SinusoidalSolver serves a crossing node whose two members' tilts off the interface normal sum to at most 30 degrees (momwire#1223 stage 2): its imposed node condition, I'_above = I'_below/eps_tilde, is the charge match for a wire crossing the plane normally, and a node that leans converges to a different slope ratio, leaving an impedance error that grows with the lean and does not refine away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node slope emerges from the solution
+
+- `SinusoidalSolver` `buried+crossing_two_radius`
+
+  > SinusoidalSolver does not serve a TWO-RADIUS crossing node (one wire radius above the interface and another below, momwire#1630): measured against NEC-5, this lane's impedance responds to the node's radii with the physics swapped -- the buried wires' radius barely moves it and the above wire's moves it several times too far -- because its radius-step junction misses NEC even in free space (momwire#1632). Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve the two-radius node and track NEC-5's radius response to under 0.5 ohm, or give every wire one radius
 
 - `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`
 

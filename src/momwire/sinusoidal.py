@@ -285,6 +285,32 @@ _CROSSING_OBLIQUE_REFUSAL = (
     "away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node "
     "slope emerges from the solution"
 )
+# momwire#1630: the TWO-RADIUS crossing node (one radius above the interface,
+# another below) is served by SG and bspline on the U5 rule, and refused here
+# by measurement, not by omission. On a 1-radial buried hub at 14 MHz, soil
+# 13/0.005, every response to a radius change is measured against NEC-5 (the
+# node's own gap cancels in the difference): thickening the vertical 1 -> 19 mm
+# moves NEC-5 by -6.8+7.9j ohm, SG by -7.2+8.3j and this lane by -54.7+34.4j;
+# thinning the buried wires 1 -> 0.25 mm moves NEC-5 by +19.9-6.7j, SG by
+# +20.1-7.0j and this lane by -2.4+1.2j. No placement of the cross rows' radius
+# puts it right (`scratch/1630-two-radius/`). The cause sits below the
+# crossing: this lane's ordinary radius-STEP junction misses NEC in free space
+# too (a 0.5/1 mm step dipole: -8.9j / -1.2j ohm at 20 / 40 segments a half,
+# against NEC-4.2's -28.1j / -26.6j and NEC-5's -34.7j; momwire#1632), and
+# the crossing's two-k recipe is built on it. NEC-4.2 cannot adjudicate the node either: its
+# crossing junction is discontinuous in the radius ratio (1.1 mm on 1 mm moves
+# its X by -340 ohm where NEC-5 moves 0.5).
+_CROSSING_TWO_RADIUS_REFUSAL = (
+    "SinusoidalSolver does not serve a TWO-RADIUS crossing node (one wire "
+    "radius above the interface and another below, momwire#1630): measured "
+    "against NEC-5, this lane's impedance responds to the node's radii with "
+    "the physics swapped -- the buried wires' radius barely moves it and the "
+    "above wire's moves it several times too far -- because its radius-step "
+    "junction misses NEC even in free space (momwire#1632). Solve it with "
+    "SinusoidalGalerkinSolver or BSplineSolver, which serve the two-radius "
+    "node and track NEC-5's radius response to under 0.5 ohm, or give every "
+    "wire one radius"
+)
 # No pair-count cap on the point-matched crossing block (momwire#1224 perf
 # item 5). Stage 2 refused past 4 M observer x source-node pairs per
 # direction because its route held every pair's kernels at once; the cap
@@ -970,6 +996,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+crossing_multi_node": _CROSSING_MULTI_NODE_REFUSAL,
             "buried+crossing_hub": _CROSSING_HUB_REFUSAL,
             "buried+crossing_oblique": _CROSSING_OBLIQUE_REFUSAL,
+            "buried+crossing_two_radius": _CROSSING_TWO_RADIUS_REFUSAL,
             "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
@@ -1528,7 +1555,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         basis object; each wing's own coefficients already carry its medium,
         because `seg_view` is D2's per-segment stitch and no basis spans the
         interface once the node is C0.
+
+        A TWO-RADIUS node (momwire#1630, SG only: `_refuse_crossing_scope`)
+        carries `a_above` / `a_below`, with `a_wire` their minimum, as
+        bspline's context does: the axes are graded at the finer radius and
+        the two-radius blocks pick the radius the U5 rule names.
         """
+        two = self._two_radius_crossing()
         return _crossing_fill.CrossingContext(
             basis=SinusoidalBasisSampler(
                 seg_view,
@@ -1545,20 +1578,37 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ),
             medium=medium,
             ground_z=float(self.ground_z),
-            a_wire=float(self._radius_per_wire[0]),
+            a_wire=float(self._radius_per_wire[0]) if two is None else min(two),
             omega=self.omega,
             mu=self.mu,
             eps=self.eps,
+            a_above=None if two is None else two[0],
+            a_below=None if two is None else two[1],
             cancel=self._cancel,
+        )
+
+    def _two_radius_crossing(self):
+        """`(a_above, a_below)` for a served TWO-RADIUS crossing deck, else
+        None (momwire#1630) — `_below_interface.two_radius_crossing` over this
+        deck's validated crossing junctions, bspline's reading of the rule."""
+        radii = np.asarray(self._radius_per_wire, dtype=float)
+        if float(radii.max()) - float(radii.min()) <= 0.0:
+            return None
+        crossing = self._crossing_junction_indices()
+        if not crossing:
+            return None
+        return _below_interface.two_radius_crossing(
+            self._wire_media(), radii, crossing, self.junctions
         )
 
     def _crossing_junction_indices(self):
         """Junctions that CROSS the interface (momwire#980 D3), by index.
 
         Answered through `_below_interface`, so this trunk's scope check and
-        its refusals are bspline's — one wire radius, the buried hub, crossing
-        nodes at least `MIN_CROSSING_NODE_SEPARATION_M` apart — rather than a
-        second reading of the same rules. Empty whenever the deck has no lower medium, which keeps every
+        its refusals are bspline's — one radius per side of the interface (the
+        two-radius node, momwire#1630), the buried hub, crossing nodes at least
+        `MIN_CROSSING_NODE_SEPARATION_M` apart — rather than a second reading
+        of the same rules. Empty whenever the deck has no lower medium, which keeps every
         shipped path on the base's empty answer.
 
         A crossing junction's members must NOT take the grounded-junction
@@ -1584,6 +1634,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.wires_polylines,
             self.ground_z,
             self._radius_per_wire,
+            two_radius=True,
         )
         self._refuse_coincident_crossing_members(crossing)
         self._refuse_crossing_scope(crossing)
@@ -1596,8 +1647,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _refuse_crossing_scope(self, crossing):
         """Stage 2's coverage on the point-matched lane (momwire#1223,
-        decision 6): one crossing node per deck, joining exactly two members.
+        decision 6): one crossing node per deck, joining exactly two members,
+        at one wire radius (momwire#1630, `_CROSSING_TWO_RADIUS_REFUSAL`).
         SG serves every crossing geometry and overrides this away."""
+        radii = np.asarray(self._radius_per_wire, dtype=float)
+        if crossing and float(radii.max()) - float(radii.min()) > 0.0:
+            raise NotImplementedError(
+                f"crossing junction {crossing[0]} joins wires of different "
+                f"radii: {_CROSSING_TWO_RADIUS_REFUSAL}"
+            )
         if len(crossing) > 1:
             raise NotImplementedError(
                 f"{len(crossing)} crossing junctions: {_CROSSING_MULTI_NODE_REFUSAL}"
@@ -1648,13 +1706,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if not crossing:
             return
-        a = float(np.max(self._radius_per_wire))
+        radii = np.asarray(self._radius_per_wire, dtype=float)
         for j in crossing:
             members = list(self.junctions[j])
             edges = [self._node_adjacent_edge(w, e) for w, e in members]
             for i in range(len(edges)):
                 for jj in range(i + 1, len(edges)):
                     (n0, f0), (n1, f1) = edges[i], edges[jj]
+                    # The PAIR's own radius (momwire#1630): at a two-radius
+                    # node the deck's largest radius is the above wire's, and
+                    # judging two thin buried legs by it calls legs 10 mm
+                    # apart under a 19 mm mast "coincident". One radius per
+                    # deck reads exactly as before.
+                    a = max(radii[members[i][0]], radii[members[jj][0]])
                     if norm3(n0 - n1) <= a and norm3(f0 - f1) <= a:
                         raise NotImplementedError(
                             _COINCIDENT_CROSSING_MEMBERS_REFUSAL.format(
