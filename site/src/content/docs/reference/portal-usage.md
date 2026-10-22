@@ -234,6 +234,24 @@ a stock `.nec` file's final `EN` card does the same job and then ends the run.
 End of input terminates a deck too, exactly as `EN` does — so a file with
 neither, a deck that stops at `XQ`, solves and exits the same way.
 
+Since momwire 0.83.0 the NEC-2 commands also take the call forms every momwire
+launcher answers (momwire#1611):
+
+```bash
+momwire-nec2c dipole.nec dipole.out     # input file, output file
+momwire-nec2c - - < chain.nec           # streaming: decks on stdin, printouts on stdout
+momwire-nec2c < nec2d.tmp               # 4nec2's form: the two file names on stdin
+```
+
+The two-file form writes the same printout the redirect above prints, with
+Windows (CRLF) line endings, as every momwire launcher writes its printout
+file. A deck it cannot read gets a printout that says so. `- -` is SimNEC's
+own NEC-2 protocol spelled out, so it prints exactly what the bare command
+prints. With no arguments, the first line on stdin decides: a NEC card means
+decks, as SimNEC sends them, and anything else (or the name of a file that
+exists) is the input file's name, with the output file's on the next line, as
+4nec2 writes `nec2d.tmp`.
+
 ## Saving the decks SimNEC sends
 
 A SimNEC circuit whose antenna is written in SimNEC's own script language

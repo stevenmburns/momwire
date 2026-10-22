@@ -160,6 +160,8 @@ stderr; the protocol is byte-identical in all three modes.
 from __future__ import annotations
 
 import contextlib
+import io
+import itertools
 import json
 import math
 import os
@@ -4408,6 +4410,79 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     return run_session(portal_seam(), stdin, stdout, stderr, solve_lock)
 
 
+# --------------------------------------------------------------------------
+# the launcher shell's call forms (momwire#1611 stage 1)
+# --------------------------------------------------------------------------
+
+
+def file_printout(text: str) -> str:
+    """A deck FILE's whole printout: what :func:`resident_loop` writes on
+    stdout for ``text`` arriving on stdin, so ``momwire-nec2c in out`` and
+    ``momwire-nec2c < in > out`` answer the same text.
+
+    The start-up banner, each structure's frame (and its trailing banner
+    after an ``NX``), and the end of the file closing the last deck as
+    ``EN`` does (#458).  Line endings are read universally, as a text stdin
+    reads them.  Whatever the deck sends to stderr (the ``reducedField``
+    line) still goes to this process's stderr.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    resident_loop(io.StringIO(text, newline=None), out, err)
+    if err.getvalue():
+        sys.stderr.write(err.getvalue())
+        sys.stderr.flush()
+    return out.getvalue()
+
+
+def file_refusal(text: str | None, reason: str) -> str:
+    """The printout for a deck file the shell could not serve at all (one it
+    cannot read, an internal error): the start-up banner and the refusal
+    frame :func:`render_deck` prints for a deck it refuses, closed by an
+    ``EN`` echo as a standalone deck is."""
+    out = ["", "", ""]
+    _append_error(out, PortalError(reason))
+    out.append(fmt_data_card(1, Card("EN", (), "EN")))
+    return "\n".join([*_banner_lines(), *out]) + "\n"
+
+
+def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> int:
+    """``in out``, ``- -`` and 4nec2's names, answered by the launcher shell
+    every momwire engine shares (:func:`momwire.eznec._shell.main`) with
+    ``dialect="nec2"`` and this module's printout as its front end.
+
+    Imported here and not at the top: SimNEC's resident call, the one every
+    session makes, must not pay for the shell's imports.  ``- -`` is
+    SimNEC's NEC-2 protocol itself, :func:`resident_loop` on this process's
+    stdin and stdout, so a stream answers byte for byte what the bare
+    command answers.
+    """
+    from ..eznec import _shell
+
+    _shell.register_front_end(
+        "nec2",
+        _shell.FrontEnd(
+            render=file_printout,
+            refusal=file_refusal,
+            stream=lambda: resident_loop(stdin, stdout, stderr),
+        ),
+    )
+    return _shell.main(
+        args, basis=_active_basis_name, dialect="nec2", en_optional=en_optional
+    )
+
+
+def _first_line(stdin) -> str | None:
+    """The first line on ``stdin``, or ``None`` when it is a terminal or
+    cannot be read (a terminal goes straight to the resident loop, as it
+    always has: a person typing a deck)."""
+    try:
+        if stdin is None or stdin.isatty():
+            return None
+        return stdin.readline()
+    except (OSError, ValueError):
+        return None
+
+
 def main(
     argv: list[str] | None = None, stdin=None, stdout=None, stderr=None, prog=None
 ) -> int:
@@ -4416,6 +4491,14 @@ def main(
     One invocation is one process: :func:`configure_engine` reads the engine
     off the command line once, then :func:`resident_loop` speaks the protocol
     on the process's own stdin/stdout for as long as SimNEC keeps it.
+
+    The other call forms every momwire launcher answers (momwire#1611) go
+    through the shared launcher shell with this module's printout:
+    ``in out`` writes the deck file's printout to ``out`` (CRLF, as the
+    shell writes every printout); ``- -`` is the resident loop itself; and
+    with no arguments a stdin whose first line is a file name rather than a
+    card (:func:`momwire_serve_client.is_names_line`) is 4nec2's
+    ``ENGINE < nec2d.tmp``, the input and output names one per line.
 
     So the engine this selects is process-global and outlives the call: a
     SECOND ``main()`` in one process is not isolated from the first, and
@@ -4441,4 +4524,25 @@ def main(
     if any(a.lstrip("-").lower() == "selftest" for a in argv):
         return _selftest(stdout)
 
+    # momwire#1611: the call forms every momwire launcher answers.  Paths on
+    # the command line (`in out`, or `- -`) go to the shared launcher shell;
+    # flags this function does not know are ignored, as they always were.
+    positional = [a for a in argv if a == "-" or not a.startswith("-")]
+    if positional:
+        return _shell_forms(positional, stdin, stdout, stderr)
+
+    # No paths: stdin carries either SimNEC's decks or 4nec2's two file
+    # names (`ENGINE < nec2d.tmp`), told apart by the first line.
+    first = _first_line(stdin)
+    if first:
+        if _mech.is_names_line(first):
+            names = [_mech.strip_path_line(first)]
+            try:
+                second = _mech.strip_path_line(stdin.readline())
+            except (OSError, ValueError):
+                second = ""
+            if second:
+                names.append(second)
+            return _shell_forms(names, stdin, stdout, stderr, en_optional=True)
+        stdin = itertools.chain([first], stdin)
     return resident_loop(stdin, stdout, stderr)

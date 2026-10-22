@@ -43,6 +43,17 @@ Three rules, and they are the whole unit
    directory like any relative path.  A terminal on stdin is not read (a
    person who types the bare command gets the argument error at once).
 
+The NEC-2 launchers
+-------------------
+``momwire-nec2c*`` answer the same call forms through this shell with
+``dialect="nec2"`` (momwire#1611 stage 1): ``in out``, ``- -`` and the two
+names on stdin.  Their printout is still the SimNEC portal's, which the
+portal hands over as a :class:`FrontEnd`, and SimNEC's own NEC-2 call (no
+arguments, ``NX``-chained decks on stdin, printouts on stdout) stays the
+portal's resident loop, which is also what NEC-2's ``- -`` runs.  The portal
+tells the two stdin forms apart by the first line
+(:func:`momwire_serve_client.is_names_line`).
+
 The 4nec2 front end
 -------------------
 A deck that arrives through stdin may end without ``EN`` (4nec2 writes none),
@@ -66,7 +77,8 @@ import io
 import os
 import sys
 import unicodedata
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import momwire_serve_client as _mech
@@ -89,7 +101,9 @@ __all__ = [
     "ARGUMENT_ERROR_INPUT",
     "ARGUMENT_ERROR_OUTPUT",
     "DIALECTS",
+    "FrontEnd",
     "main",
+    "register_front_end",
     "run",
     "seam",
     "stream",
@@ -117,6 +131,51 @@ ARGUMENT_ERROR_INPUT = "ERROR getting input file from command line"
 # one (`momwire.eznec._nec4`).  The process protocol is identical for both;
 # the program's NAME picks which deck dialect and printout answer it.
 DIALECTS = ("nec5", "nec4")
+
+
+@dataclass(frozen=True)
+class FrontEnd:
+    """A deck dialect whose printout another package writes (momwire#1611).
+
+    The NEC-2 launchers (``momwire-nec2c*``) answer through this shell for
+    its call forms (``in out``, ``- -``, the two names on stdin) while their
+    printout is still the SimNEC portal's (stage 1 of momwire#1611; stage 2
+    moves it onto the NEC-4.2 printout code).  The portal may import this
+    module, and nothing here may import the portal (momwire#846 §4), so the
+    portal hands its three pieces over with :func:`register_front_end`:
+
+    ``render(text)`` is a deck file's whole printout, ``refusal(text,
+    reason)`` a printout carrying one refusal (an unreadable deck, an
+    internal error), and ``stream()`` the ``- -`` call on the process's own
+    stdin and stdout, returning the exit status.
+    """
+
+    render: Callable[[str], str]
+    refusal: Callable[[str | None, str], str]
+    stream: Callable[[], int]
+
+
+_FRONT_ENDS: dict[str, FrontEnd] = {}
+
+
+def register_front_end(dialect: str, front: FrontEnd) -> None:
+    """Serve ``dialect`` through ``front`` (:class:`FrontEnd`)."""
+    _FRONT_ENDS[dialect] = front
+
+
+def _known(dialect: str) -> bool:
+    return dialect in DIALECTS or dialect in _FRONT_ENDS
+
+
+def _refusal(
+    text: str | None, reason: str, *, basis: str, dialect: str = "nec5"
+) -> str:
+    """A refusal printout in ``dialect``'s own shape."""
+    front = _FRONT_ENDS.get(dialect)
+    if front is not None:
+        return front.refusal(text, reason)
+    return _printout.render_refusal(text, reason, basis=basis, dialect=dialect)
+
 
 # Decks and printouts are handled as bytes wearing a lossless 1-byte codec:
 # whatever a comment card holds has to survive into the echo unchanged, and a
@@ -347,8 +406,12 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
     """
     if dialect == "nec4":
         return _nec4.render(text, basis=basis)
+    front = _FRONT_ENDS.get(dialect)
+    if front is not None:
+        # NEC-2 (momwire#1611): the registered front end's own printout.
+        return front.render(text)
     if dialect != "nec5":
-        known = ", ".join(repr(name) for name in DIALECTS)
+        known = ", ".join(repr(name) for name in (*DIALECTS, *_FRONT_ENDS))
         return _printout.render_refusal(
             text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
         )
@@ -669,7 +732,7 @@ def run(
     text = read_deck(deck)
     gmo = None
     if text is None:
-        printout = _printout.render_refusal(
+        printout = _refusal(
             None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis, dialect=dialect
         )
     else:
@@ -901,10 +964,14 @@ def main(
 
     deck_path, printout_path = args
     if "-" in (deck_path, printout_path):
-        if args == ["-", "-"] and dialect in DIALECTS:
+        if args == ["-", "-"] and _known(dialect):
             # SimNEC's streaming call (momwire#1512): decks on stdin,
-            # printouts on stdout, in either slot (momwire#1592).
+            # printouts on stdout, in either slot (momwire#1592), and for
+            # NEC-2 the front end's own stream (momwire#1611).
+            front = _FRONT_ENDS.get(dialect)
             try:
+                if front is not None:
+                    return front.stream()
                 return stream(basis=basis, dialect=dialect)
             except BrokenPipeError:
                 # The caller stopped reading: nobody is left to tell.
@@ -968,7 +1035,7 @@ def _report_internal_error(
         deck_text = read_deck(Path(deck_path))
         write_printout(
             Path(printout_path),
-            _printout.render_refusal(deck_text, reason, basis=basis, dialect=dialect),
+            _refusal(deck_text, reason, basis=basis, dialect=dialect),
         )
     except OSError:
         # The output path itself is unwritable, so the printout channel is
