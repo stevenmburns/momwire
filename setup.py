@@ -351,6 +351,10 @@ _ACCEL_HEADERS = [
     # The complex-k Galerkin far fill's vector sweep (momwire#1224), included
     # by `_accel_sinusoidal.cpp`.
     "src/momwire/_accel_sinusoidal_cplx.h",
+    # The point-matched kernels' Python-free core and the series helpers it
+    # shares with the Galerkin far fill (momwire#1607 B1).
+    "src/momwire/_sinusoidal_core.h",
+    "src/momwire/_sinusoidal_series_inline.h",
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
     # TUs and `_accel_somm_proj_inline.h`.
     "src/momwire/_lanes.h",
@@ -442,6 +446,9 @@ _ACCEL_SOURCES = [
     # (momwire#1517 step 0); `_accel_bspline.cpp` is their binding. The
     # extension TU's kernel text, moved verbatim, over `_mw_nd.h`'s arrays.
     "src/momwire/_bspline_core.cpp",
+    # The point-matched sinusoidal kernels, Python-free (momwire#1607 B1);
+    # `_accel_sinusoidal.cpp` binds them beside the Galerkin far fill.
+    "src/momwire/_sinusoidal_core.cpp",
     "src/momwire/_accel_sinusoidal.cpp",
     "src/momwire/_accel_somm.cpp",
     # The Sommerfeld near-field remainder (`_field_point`), one spelled

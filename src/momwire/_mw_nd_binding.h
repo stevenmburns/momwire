@@ -82,6 +82,7 @@ class NumpyHost final : public mw::nd::Host {
             case dtype::i32: return detail::allocate_as<int32_t>(ndim, shape);
             case dtype::u8: return detail::allocate_as<uint8_t>(ndim, shape);
             case dtype::boolean: return detail::allocate_as<bool>(ndim, shape);
+            case dtype::i8: return detail::allocate_as<int8_t>(ndim, shape);
         }
         throw std::logic_error("mw::nd: an element type with no numpy array");
     }

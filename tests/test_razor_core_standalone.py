@@ -61,6 +61,9 @@ CORE_SOURCES = (
     # The B-spline kernels (momwire#1517 step 0): the extension's bspline
     # TU's text over `_mw_nd.h`'s arrays.
     "_bspline_core.cpp",
+    # The sinusoidal basis' point-matched field tensors (momwire#1607 B1):
+    # the extension TU's text over `_mw_nd.h`'s arrays.
+    "_sinusoidal_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -205,6 +208,7 @@ def driver(accel, tmp_path_factory):
         "nec5_bspline_printout_driver",
         "exact_kernel_coaxial_driver",
         "bspline_core_driver",
+        "sinusoidal_core_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -243,6 +247,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_nec4_printout_core.h" in seen, "the NEC-4.2 writer's core was not built"
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
+    assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -367,6 +372,127 @@ def test_the_nec4_refusal_printouts_in_cxx_alone_are_the_slots(driver, basis):
         python = _nec4.render(path.read_bytes().decode("latin-1"), basis=basis)
         assert cxx == python, path
     assert refused >= 150, refused
+
+
+_SIN_KERNELS = (
+    "sinusoidal_field_tensor",
+    "sinusoidal_field_tensor_refl",
+    "sinusoidal_field_tensor_ek",
+    "sinusoidal_field_tensor_ek_refl",
+    "sinusoidal_field_tensor_cplx",
+)
+
+
+def _sin_spec(value, tmp_path, name: str) -> str:
+    """One recorded argument in `sinusoidal_core_driver`'s call syntax."""
+    import struct
+
+    def bits(x: float) -> str:
+        return struct.pack(">d", float(x)).hex()
+
+    if isinstance(value, np.ndarray):
+        kind = {np.dtype(np.float64): "A", np.dtype(np.int8): "I"}[value.dtype]
+        np.ascontiguousarray(value).tofile(tmp_path / name)
+        return f"{kind}:{name}:" + "x".join(str(d) for d in value.shape)
+    if isinstance(value, (bool, np.bool_)):
+        return f"B:{int(value)}"
+    if isinstance(value, complex):
+        return f"Z:{bits(value.real)}:{bits(value.imag)}"
+    if isinstance(value, float):
+        return f"D:{bits(value)}"
+    raise TypeError(f"no driver spelling for {type(value).__name__}")
+
+
+def test_the_sinusoidal_kernels_in_cxx_alone_are_the_extensions(
+    driver, tmp_path, monkeypatch
+):
+    """momwire#1607 B1: the point-matched field tensors, built from the core
+    TUs alone (`sinusoidal_core_driver`, the default host: memory from `new`,
+    no GIL), return the extension's bytes on every call real solves make:
+    free space and a PEC image (the plain tensor), the reflection-coefficient
+    ground (`_refl`), the extended kernel (`_ek`, `_ek_refl`) and a buried
+    wire at a complex wavenumber (`_cplx`, the literal and the folded third
+    shape). Each call is recorded from the extension and replayed through
+    the core with the same arguments."""
+    import warnings
+
+    from momwire import sinusoidal as sm
+
+    real = sm._acc
+    calls = []
+
+    class Recording:
+        def __getattr__(self, name):
+            fn = getattr(real, name)
+            if name not in _SIN_KERNELS:
+                return fn
+
+            def call(*args):
+                # Copies, taken at the call: the solver works in place on what
+                # it is handed back (the image subtraction folds into it).
+                kept = tuple(
+                    np.array(a, copy=True) if isinstance(a, np.ndarray) else a
+                    for a in args
+                )
+                out = fn(*args)
+                calls.append((name, kept, tuple(np.array(o, copy=True) for o in out)))
+                return out
+
+            return call
+
+    monkeypatch.setattr(sm, "_acc", Recording())
+    dipole = [np.array([[0.0, 0.0, -0.25], [0.0, 0.0, 0.25]])]
+    raised = [np.array([[0.0, 0.0, 0.1], [0.0, 0.3, 0.6]])]
+    buried = [np.array([[0.0, 0.0, -1.0], [0.2, 0.0, -0.5]])]
+    soil = dict(ground_z=0.0, ground_eps=(13.0, 0.005))
+    cases = [
+        (dipole, 1.0, {}),
+        (dipole, 1.0, {"extended_kernel": True}),
+        (raised, 1.0, {"ground_z": 0.0}),
+        (raised, 1.0, soil),
+        (raised, 1.0, {**soil, "extended_kernel": True}),
+        (buried, 1.0, {**soil, "ground_model": "sommerfeld"}),
+        (buried, 1e5, {**soil, "ground_model": "sommerfeld"}),
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for wires, wavelength, kw in cases:
+            sm.SinusoidalSolver(
+                wires=wires,
+                n_per_edge_per_wire=[[11]],
+                feeds=[(0, 0.25, 1.0)],
+                wavelength=wavelength,
+                wire_radius=0.001,
+                **kw,
+            ).compute_port_solution()
+    assert {name for name, _a, _o in calls} == set(_SIN_KERNELS), calls
+    folded = [a[10] for name, a, _o in calls if name == "sinusoidal_field_tensor_cplx"]
+    assert True in folded and False in folded, folded
+    lines = []
+    for c, (name, args, _out) in enumerate(calls):
+        specs = []
+        for j, value in enumerate(args):
+            if (
+                j == len(args) - 1
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
+                specs.append("U:0")  # the cancel flag: no cancellation in the replay
+            else:
+                specs.append(_sin_spec(value, tmp_path, f"c{c}_a{j}.bin"))
+        lines.append(f"{name} c{c} " + " ".join(specs))
+    (tmp_path / "calls.txt").write_text("\n".join(lines) + "\n")
+    run = subprocess.run(
+        [str(driver[0]["sinusoidal_core_driver"]), str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    for c, (name, _args, out) in enumerate(calls):
+        for t in range(3):
+            got = (tmp_path / f"c{c}_{t}.bin").read_bytes()
+            want = np.ascontiguousarray(out[t]).tobytes()
+            assert got == want, (name, c, t)
 
 
 @pytest.mark.parametrize("prefix", ["", "ek_"], ids=["reduced", "extended_kernel"])

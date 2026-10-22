@@ -1670,7 +1670,8 @@ def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):
 # small, cancellation-dominated corners (~1e-4 and ~1e-3) by 2.6e-11 and
 # 1.4e-12 of themselves: 2.8e-15 and 2.0e-15 absolute, under 5e-17 of that
 # tensor's largest corner. The link: the refl kernel's source is untouched by
-# #1194 (no std::fma was written in `_accel_sinusoidal.cpp`), the old
+# #1194 (no std::fma was written in `_accel_sinusoidal.cpp`, whose
+# point-matched text is `_sinusoidal_core.cpp` since momwire#1607 B1), the old
 # literals are what the #1194 base build (b39f895) produced, and these are
 # what the same source produces with only the flag added. Since the pin is
 # now a capture of UNcontracted arithmetic, an unrelated edit elsewhere in
