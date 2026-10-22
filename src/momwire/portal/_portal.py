@@ -4474,9 +4474,15 @@ def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> i
 def _first_line(stdin) -> str | None:
     """The first line on ``stdin``, or ``None`` when it is a terminal or
     cannot be read (a terminal goes straight to the resident loop, as it
-    always has: a person typing a deck)."""
+    always has: a person typing a deck).  ``None`` too for a stdin that is
+    only an iterable of lines, which :func:`resident_loop` also takes: no
+    file names arrive that way."""
+    if not callable(getattr(stdin, "isatty", None)) or not callable(
+        getattr(stdin, "readline", None)
+    ):
+        return None
     try:
-        if stdin is None or stdin.isatty():
+        if stdin.isatty():
             return None
         return stdin.readline()
     except (OSError, ValueError):
