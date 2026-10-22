@@ -410,6 +410,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_core.h",
     "src/momwire/_nec5_deck_core.h",
     "src/momwire/_nec4_deck_core.h",
+    "src/momwire/_nec4_seam_core.h",
     "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
     "src/momwire/_nec5_bspline_seam_core.h",
@@ -564,6 +565,9 @@ _ACCEL_SOURCES = [
     # executables' first unit): `deck/_nec2.py`, its geometry and the
     # `deck/_nec4.py` deltas in C++, Python-free; bound by the same TU below.
     "src/momwire/_nec4_deck_core.cpp",
+    # The NEC-4.2 seam front (momwire#1607 A2): `_nec4.render` up to the
+    # solve, over that reader.
+    "src/momwire/_nec4_seam_core.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
     # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh
     # and the ports, for any basis (`_nec5_seam_core.cpp`), and razor-2p's

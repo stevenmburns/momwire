@@ -180,6 +180,34 @@ struct Model {  // model.DeckModel, in its field order
     bool extended_kernel_default = false;
 };
 
+// `deck/_nec2_geometry.py`'s `Nec2Structure` after `build_geometry(cards)`,
+// as plain data (its `cuts` left out: they are the pieces' cut points): the
+// flat NEC wires after every transform and the snapping, the pieces they
+// shatter into, and the symmetric cell still in force. The NEC-4.2 seam's
+// `PortalDeck.structure` (`_nec4_seam_core.h`).
+struct GeometryWire {  // FlatWire
+    Int tag;
+    long long n_seg = 0;
+    double p1[3] = {0, 0, 0}, p2[3] = {0, 0, 0};
+    double radius = 0;
+};
+struct GeometryPiece {  // Piece
+    long long wire = 0, first_seg = 0, n_seg = 0;
+    double p1[3] = {0, 0, 0}, p2[3] = {0, 0, 0};
+};
+struct Geometry {
+    std::vector<GeometryWire> wires;
+    std::vector<GeometryPiece> pieces;
+    std::vector<std::vector<long long>> pieces_of_wire;
+    bool ground_plane_flag = false;
+    bool ground_plane_interpolates = false;
+    bool has_symmetry = false;  // Symmetry(cell_wires, cell_segments) or None
+    long long cell_wires = 0, cell_segments = 0;
+};
+// `build_geometry(cards)` over a deck's geometry cards (GW GM GS GX GR GE, in
+// order); throws as Python raises, or Declined.
+Geometry geometry_of(const std::vector<nec5::Card> &geometry_cards);
+
 // `momwire.deck.parse(text, dialect=...)`: throws nec5::ParseError as Python
 // raises (DeckError, ValueError, OverflowError, IndexError), or Declined.
 Model parse(const std::string &latin1_text, Dialect dialect);
