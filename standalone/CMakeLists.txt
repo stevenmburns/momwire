@@ -287,6 +287,7 @@ target_include_directories(mw_core_serial PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURC
 target_compile_options(mw_core_serial PRIVATE ${MW_CORE_FLAGS})
 target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX} mw=mws
   xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
+  Faddeeva=mws_Faddeeva  # xsf/faddeeva.h keeps its own namespace, outside xsf (momwire#1595 D1b)
   razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
   somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
