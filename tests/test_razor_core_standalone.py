@@ -67,6 +67,9 @@ CORE_SOURCES = (
     # The sinusoidal front half over the NEC-4.2 build (momwire#1607 B2),
     # linked into `sinusoidal_front_driver.cpp`.
     "_sinusoidal_front_core.cpp",
+    # The sinusoidal free-space fill and port solve over it (momwire#1607
+    # B3), linked into `sinusoidal_fill_driver.cpp`.
+    "_sinusoidal_fill_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -213,6 +216,7 @@ def driver(accel, tmp_path_factory):
         "bspline_core_driver",
         "sinusoidal_core_driver",
         "sinusoidal_front_driver",
+        "sinusoidal_fill_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -253,6 +257,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
     assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
+    assert "_sinusoidal_fill_core.h" in seen, "the sinusoidal fill was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -418,6 +423,58 @@ def test_the_sinusoidal_front_in_cxx_alone_is_pythons(driver):
         assert diff is None, (path, diff)
         compared += 1
     assert compared >= 50, compared
+
+
+def test_the_sinusoidal_fill_in_cxx_alone_is_pythons(driver):
+    """momwire#1607 B3: the sinusoidal free-space fill and port solve (Z,
+    the coefficients, Y), built from the core TUs alone
+    (`sinusoidal_fill_driver`, on the OpenBLAS builds numpy and SciPy
+    bundle), is `SinusoidalSolver.compute_port_solution`'s at every
+    operating point the NEC-4.2 build makes of every free-space fixture deck,
+    to the bit."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_sinusoidal_fill_compare", SPLIT / "sinusoidal_fill_compare.py"
+    )
+    nc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nc)
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    run = subprocess.run(
+        [
+            str(driver[0]["sinusoidal_fill_driver"]),
+            pc.scipy_openblas(),
+            pc.numpy_openblas(),
+            *map(str, decks),
+        ],
+        capture_output=True,
+        check=True,
+        env=dict(os.environ, **_ONE_THREAD),
+    )
+    dumps: dict[str, str] = {}
+    current = None
+    for line in run.stdout.decode("utf-8").splitlines(keepends=True):
+        if line.startswith("== "):
+            current = line[3:].rstrip("\n")
+            dumps[current] = ""
+        else:
+            dumps[current] += line
+    compared = 0
+    for path in decks:
+        cxx = dumps[str(path)]
+        if nc.classify(cxx) != "fills":
+            continue
+        diff = nc.dc.first_difference(
+            nc.py_fill(path.read_bytes().decode("latin-1")), cxx
+        )
+        assert diff is None, (path, diff)
+        compared += 1
+    assert compared >= 30, compared
 
 
 _SIN_KERNELS = (
