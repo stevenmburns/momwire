@@ -1,0 +1,9 @@
+CM a radius step on one line, runs long enough for the base gather (momwire#1615)
+CE
+GW 1 100 0 0 -2 0 0 0 0.04
+GW 2 100 0 0 0 0 0 2 0.02
+GE 0
+EX 0 2 1 0 1 0
+FR 0 1 0 0 30.0 0
+XQ
+EN

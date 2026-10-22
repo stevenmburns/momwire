@@ -7657,7 +7657,7 @@ class BSplineSolver(
     def _add_exact_kernel_correction(self, Z, geom, supp_seg, polys, k):
         """Z += Z_exact - Z_base over every coaxial group (momwire#1408),
         and over the cross-radius pairs of every line with a radius step
-        (momwire#1438: `_exact_kernel.CoaxialCrossRows`, its base the
+        (momwire#1438: `_exact_kernel.coaxial_cross_rows`, its base the
         `BaseRows` cross mode, which produces only those pairs).
 
         In place, by observer-row windows of each group (momwire#1411): a
@@ -7710,8 +7710,9 @@ class BSplineSolver(
                     max_cached=max(1, budget // (nd * nd * 16 + 256)),
                 )
             else:
-                # numpy only, zero on the same-radius pairs (momwire#1438)
-                exact = _exact_kernel.CoaxialCrossRows(
+                # zero on the same-radius pairs (momwire#1438); C++ where it
+                # serves, the text the standalone bs2 route runs (momwire#1615)
+                exact = _exact_kernel.coaxial_cross_rows(
                     x0,
                     sgn,
                     h,

@@ -1,6 +1,7 @@
 // momwire#1517 step 1: the B-spline basis' answers to the seam --
 // see `_nec5_bspline_seam_core.h`.
 #include "_nec5_bspline_seam_core.h"
+#include "_near_interface_eval.h"  // `py_repr`
 
 #if defined(_MSC_VER)
 #pragma float_control(precise, on)
@@ -148,13 +149,21 @@ bspline::WireArgs wire_args(const BSplineFrontInputs &in) {
     return wa;
 }
 
-// `configure_loading`'s fail-fast checks this unit does not spell:
-// a conductivity at or below zero raises a ValueError there.
-bool loading_refused(const bspline::WireArgs &wa) {
+// `configure_loading`'s conductivity check: a finite entry at or below zero
+// raises `ValueError(f"wire_conductivity[{w}] must be > 0 S/m, got {c}")`
+// (momwire#1615), the first such wire's. Empty when every entry passes. The
+// deck reader refuses LD 5 at or below zero at the card, so no deck reaches
+// it today; the sentence is Python's all the same. A ValueError, not a
+// refusal: it escapes to the INTERNAL ERROR frame, as the others here do.
+std::string loading_value_error(const bspline::WireArgs &wa) {
     if (wa.has_conductivity)
-        for (double c : wa.conductivity)
-            if (std::isfinite(c) && c <= 0.0) return true;
-    return false;
+        for (size_t w = 0; w < wa.conductivity.size(); w++) {
+            const double c = wa.conductivity[w];
+            if (std::isfinite(c) && c <= 0.0)
+                return "wire_conductivity[" + std::to_string(w) + "] must be > 0 S/m, got " +
+                       ::ni_eval::py_repr(c);
+        }
+    return std::string();
 }
 
 }  // namespace
@@ -218,7 +227,15 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         return b;
     }
     fr->n_ports = static_cast<int64_t>(fr->args.feeds.size() + fr->args.node_gaps.size());
-    if (loading_refused(fr->args)) return decline("bspline-loading-refused");
+    {
+        const std::string why = loading_value_error(fr->args);
+        if (!why.empty()) {
+            b.kind = Built::raised;
+            b.error_kind = "ValueError";
+            b.message = why;
+            return b;
+        }
+    }
     fr->loading.has_conductivity = fr->args.has_conductivity;
     fr->loading.conductivity = fr->args.conductivity;
     fr->loading.has_rlc = fr->args.has_rlc;
@@ -230,11 +247,13 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         r.c = e.c;
         fr->loading.rlc.push_back(r);
     }
-    // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
-    // segment is shorter than 3 radii (free space serves it)
-    fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
-    if (fr->exact_kernel && bspline::exact_kernel_has_cross_job(fr->geom, fr->radii))
-        return decline("bspline-exact-kernel-radius-step");
+    // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when the route
+    // serves it and some segment is shorter than 3 radii. A wire below the
+    // ground makes the route unservable (`_exact_kernel_servable`'s
+    // `_exact_kernel_buried`), so a buried deck resolves False before the
+    // geometry is asked (momwire#1615). A coaxial line across a radius step
+    // takes its cross job in `add_exact_correction`.
+    fr->exact_kernel = !fr->buried && bspline::exact_kernel_auto(fr->geom, fr->radii);
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

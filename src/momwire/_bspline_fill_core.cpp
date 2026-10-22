@@ -1109,9 +1109,11 @@ std::vector<Boundary> boundary_pairs(const std::vector<int64_t> &m, int64_t nA, 
     return out;
 }
 
-// `_exact_kernel_base.BaseRows`, without the cross mode and without its
-// cross-window cache (a cached diagonal is the same representative's value,
-// so the cache moves no bit).
+// `_exact_kernel_base.BaseRows`, its cross mode (momwire#1438, ported for
+// momwire#1615) included, without its cross-window cache (a cached diagonal
+// is the same representative's value, so the cache moves no bit). With
+// `cross_lab` (the line's radius labels, group-local) the base produces only
+// the pairs whose two labels differ, and never evaluates or writes another.
 class BaseRows {
   public:
     struct Edge {
@@ -1120,9 +1122,11 @@ class BaseRows {
         double a_w;
     };
     BaseRows(const Geometry &g, const std::vector<double> &seg_a, const std::vector<int64_t> &S,
-             std::vector<Edge> edges, const FillParams &fp, const EK &ek)
+             std::vector<Edge> edges, const FillParams &fp, const EK &ek,
+             const std::vector<int64_t> *cross_lab = nullptr)
         : g_(g), seg_a_(seg_a), S_(S), n_(static_cast<int64_t>(S.size())), fp_(fp), ek_(ek),
-          nd_(fp.degree + 1), edges_(std::move(edges)) {
+          nd_(fp.degree + 1), edges_(std::move(edges)), cross_(cross_lab != nullptr) {
+        if (cross_) cross_lab_ = *cross_lab;
         const int64_t n = n_;
         std::vector<double> edge_of(static_cast<size_t>(n), -1.0);
         std::vector<int64_t> edge_of_i(static_cast<size_t>(n), -1);
@@ -1162,9 +1166,19 @@ class BaseRows {
             gj[i] = ek.on ? static_cast<double>(ek.group_j[s]) : nan;
             bj[i] = (ek.on && ek.b_kind == EK::per_col) ? ek.b_j[s] : (ek.on && ek.b_kind == EK::scalar ? ek.b : nan);
         }
-        // runs: the exact fields (RUN_FIELDS less "h") ...
+        // runs: the exact fields (RUN_FIELDS less "h"), and in cross mode the
+        // label, one per edge and so per run ...
+        std::vector<double> labd;
+        if (cross_) {
+            for (const auto &e : edges_)
+                for (int64_t q = e.l0; q < e.l1; q++)
+                    if (cross_lab_[q] != cross_lab_[e.l0]) throw std::logic_error("an edge spans two radius labels");
+            for (int64_t v : cross_lab_) labd.push_back(static_cast<double>(v));
+        }
         std::vector<bool> change(static_cast<size_t>(n), false);
-        for (const std::vector<double> *f : {&edge_of, &sgn, &a, &gi, &gj, &bi, &bj})
+        std::vector<const std::vector<double> *> exact_fields{&edge_of, &sgn, &a, &gi, &gj, &bi, &bj};
+        if (cross_) exact_fields.push_back(&labd);
+        for (const std::vector<double> *f : exact_fields)
             for (int64_t i = 1; i < n; i++) {
                 const double x = (*f)[i], y = (*f)[i - 1];
                 const bool same = x == y || (std::isnan(x) && std::isnan(y));
@@ -1279,6 +1293,22 @@ class BaseRows {
             });
         edge_runs_.assign(edges_.size(), {});
         for (size_t r = 0; r < runs_.size(); r++) edge_runs_[runs_[r].edge].push_back(static_cast<int64_t>(r));
+        if (cross_) {
+            for (const auto &r : runs_) run_lab_.push_back(cross_lab_[r.s0]);
+            // per label, the column ranges carrying any OTHER label: a cross
+            // row's whole span (its own edge is its own label, so it is out)
+            std::set<int64_t> labs(cross_lab_.begin(), cross_lab_.end());
+            for (int64_t lab : labs) {
+                Ranges &rg = other_[lab];
+                for (int64_t q = 0; q < n; q++) {
+                    if (cross_lab_[q] == lab) continue;
+                    if (!rg.empty() && rg.back().second == q)
+                        rg.back().second = q + 1;
+                    else
+                        rg.push_back({q, q + 1});
+                }
+            }
+        }
     }
 
     int64_t cache_entries_needed() const {
@@ -1289,6 +1319,7 @@ class BaseRows {
                 for (int64_t B : c) {
                     const int64_t lb = runs_[B].s1 - runs_[B].s0;
                     if (!eligible(la, lb)) break;
+                    if (cross_ && run_lab_[A] == run_lab_[B]) continue;
                     if (same_step(A, B)) need += la + lb - 1;
                 }
             }
@@ -1301,6 +1332,11 @@ class BaseRows {
         r0_ = r0;
         nr_ = r1 - r0;
         if (edges_.size() > 1) fill(r0, r1, false, -1);
+        if (cross_) {
+            // every same-edge pair is a same-radius pair
+            out_ = nullptr;
+            return;
+        }
         for (size_t e = 0; e < edges_.size(); e++) {
             const int64_t l0 = edges_[e].l0, l1 = edges_[e].l1;
             const int64_t lo = std::max(l0, r0), hi = std::min(l1, r1);
@@ -1521,6 +1557,7 @@ class BaseRows {
     Ranges span(bool is_reg, int64_t e) const {
         const int64_t l0 = edges_[e].l0, l1 = edges_[e].l1;
         if (is_reg) return {{l0, l1}};
+        if (cross_) return other_.at(cross_lab_[l0]);
         Ranges r;
         if (0 < l0) r.push_back({0, l0});
         if (l1 < n_) r.push_back({l1, n_});
@@ -1561,6 +1598,7 @@ class BaseRows {
                 for (int64_t B : classes_[class_of_[A]]) {
                     const Run &rb = runs_[B];
                     if (!eligible(ra1 - ra0, rb.s1 - rb.s0)) break;
+                    if (cross_ && run_lab_[B] == run_lab_[A]) continue;
                     if (rb.edge != ra.edge && !phase_tie_[B] && same_step(A, B)) toe.push_back(B);
                 }
             }
@@ -1583,6 +1621,31 @@ class BaseRows {
         std::vector<int64_t> rows;
         for (const auto &r : shorts)
             for (int64_t q = r.first; q < r.second; q++) rows.push_back(q);
+        if (cross_) {
+            // a cross job: per label (ascending, `np.unique`), its rows
+            // against every other label's columns, one call each
+            std::set<int64_t> labs;
+            for (int64_t r : rows) labs.insert(cross_lab_[r]);
+            std::vector<cdouble> &o = *out_;
+            for (int64_t lab : labs) {
+                std::vector<int64_t> ri, ci;
+                for (int64_t r : rows)
+                    if (cross_lab_[r] == lab) ri.push_back(r);
+                for (const auto &c : other_.at(lab))
+                    for (int64_t q = c.first; q < c.second; q++) ci.push_back(q);
+                Blk v = eval(false, e, ri, ci);
+                for (int p = 0; p < nd_; p++)
+                    for (int q = 0; q < nd_; q++)
+                        for (size_t i = 0; i < ri.size(); i++)
+                            for (size_t j = 0; j < ci.size(); j++) {
+                                cdouble &d = o[static_cast<size_t>(
+                                    ((static_cast<int64_t>(p) * nd_ + q) * nr_ + (ri[i] - r0_)) * n_ + ci[j])];
+                                const cdouble sv = v.at(nd_, p, q, static_cast<int64_t>(i), static_cast<int64_t>(j));
+                                d = cdouble(d.real() - sv.real(), d.imag() - sv.imag());
+                            }
+            }
+            return;
+        }
         Blk vals = eval(false, e, rows, iota(0, n_));
         int64_t i = 0;
         for (const auto &r : shorts) {
@@ -1739,6 +1802,10 @@ class BaseRows {
     std::vector<double> s_q_, wu_;
     std::vector<cdouble> *out_ = nullptr;
     int64_t r0_ = 0, nr_ = 0;
+    bool cross_ = false;
+    std::vector<int64_t> cross_lab_;
+    std::vector<int64_t> run_lab_;
+    std::map<int64_t, Ranges> other_;
 };
 
 }  // namespace
@@ -1754,26 +1821,6 @@ bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_
     return false;
 }
 
-bool exact_kernel_has_cross_job(const Geometry &g, const std::vector<double> &radius_per_wire) {
-    std::vector<double> seg_a;
-    for (size_t w = 0; w < g.per_wire.size(); w++)
-        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
-    const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
-    double amax = seg_a.empty() ? 0.0 : seg_a[0];
-    for (double v : seg_a) amax = std::max(amax, v);
-    const std::vector<int64_t> line =
-        razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, std::vector<double>(seg_a.size(), amax));
-    std::map<int64_t, int64_t> first;
-    for (size_t s = 0; s < line.size(); s++) {
-        auto it = first.find(line[s]);
-        if (it == first.end())
-            first[line[s]] = labels[s];
-        else if (it->second != labels[s])
-            return true;
-    }
-    return false;
-}
-
 void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
                           double eps, double mu, double swept_mem_mb) {
@@ -1783,8 +1830,12 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
     for (size_t w = 0; w < g.per_wire.size(); w++)
         for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
     const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
-    if (exact_kernel_has_cross_job(g, radius_per_wire))
-        throw FrontNotPorted("a coaxial line with a radius step (the cross job)");
+    // the coaxial lines (`coaxial_lines`: the one-radius rule with every
+    // radius the largest)
+    double amax = seg_a.empty() ? 0.0 : seg_a[0];
+    for (double v : seg_a) amax = std::max(amax, v);
+    const std::vector<int64_t> line =
+        razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, std::vector<double>(seg_a.size(), amax));
     // the fill's EK spec
     EK ek;
     if (fp.extended_kernel) {
@@ -1798,20 +1849,48 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
             ek.b_j = seg_a;
         }
     }
-    // the groups, in label order, each with its edges (`_edge_ingredients`)
-    std::map<int64_t, std::vector<int64_t>> groups;
-    for (int64_t s = 0; s < n_total; s++) groups[labels[s]].push_back(s);
+    // `_exact_kernel_jobs`: every one-radius group in label order, then every
+    // line carrying a radius step (its cross job, momwire#1438), each with
+    // its edges in `_edge_ingredients` order
     struct GEdge {
         int64_t start, stop;
         const std::vector<double> *arc;
         double a_w;
     };
-    std::map<int64_t, std::vector<GEdge>> edges;
-    for (size_t w = 0; w < g.per_wire.size(); w++) {
-        const auto &pw = g.per_wire[w];
-        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
-            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
-            edges[labels[s0]].push_back({s0, s1, &pw.edge_arc_edges[e], radius_per_wire[w]});
+    struct Job {
+        std::vector<int64_t> S, lab;  // lab empty: a one-radius group
+        std::vector<GEdge> edges;
+    };
+    std::vector<Job> jobs;
+    {
+        std::map<int64_t, size_t> group_job, line_job;
+        std::map<int64_t, std::vector<int64_t>> groups, lines;
+        for (int64_t s = 0; s < n_total; s++) groups[labels[s]].push_back(s);
+        for (const auto &gS : groups) {
+            group_job[gS.first] = jobs.size();
+            jobs.push_back({gS.second, {}, {}});
+        }
+        for (int64_t s = 0; s < n_total; s++) lines[line[s]].push_back(s);
+        for (const auto &lS : lines) {
+            std::set<int64_t> labs;
+            for (int64_t s : lS.second) labs.insert(labels[s]);
+            if (labs.size() < 2) continue;
+            Job j;
+            j.S = lS.second;
+            for (int64_t s : lS.second) j.lab.push_back(labels[s]);
+            line_job[lS.first] = jobs.size();
+            jobs.push_back(std::move(j));
+        }
+        for (size_t w = 0; w < g.per_wire.size(); w++) {
+            const auto &pw = g.per_wire[w];
+            for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+                const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e],
+                              s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+                const GEdge ge{s0, s1, &pw.edge_arc_edges[e], radius_per_wire[w]};
+                jobs[group_job.at(labels[s0])].edges.push_back(ge);
+                auto it = line_job.find(line[s0]);
+                if (it != line_job.end()) jobs[it->second].edges.push_back(ge);
+            }
         }
     }
     const mw::ek::PointRules rules = razor::point_rules();
@@ -1819,8 +1898,9 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
     nd::array_t<std::complex<double>> Za =
         borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis), static_cast<nd::ssize_t>(n_basis)});
     const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
-    for (const auto &gS : groups) {
-        const std::vector<int64_t> &S = gS.second;
+    for (const Job &job : jobs) {
+        const std::vector<int64_t> &S = job.S;
+        const bool cross = !job.lab.empty();
         const int64_t n = static_cast<int64_t>(S.size());
         const size_t s0 = static_cast<size_t>(S[0]);
         const double *axis = &g.tangents[3 * s0];
@@ -1840,8 +1920,25 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
             hmax = std::max(hmax, h[i]);
         }
         const int64_t max_cached = std::max<int64_t>(1, budget / (nd * nd * 16 + 256));
-        mw::ek::CoaxialRows exact(x0.data(), sgn.data(), h.data(), n, seg_a[s0], fp.k, nd, max_cached,
-                                  n ? 1e-11 * hmax : 1.0, true, rules, 0);
+        std::unique_ptr<mw::ek::CoaxialRows> exact;
+        std::unique_ptr<mw::ek::CoaxialCrossRows> exact_cross;
+        std::vector<double> a_S;
+        if (cross) {
+            // `coaxial_cross_rows` (`CoaxialCrossRowsAccel`): zero on the
+            // same-radius pairs, which the groups own
+            double a_max = 0.0;
+            for (int64_t s : S) {
+                a_S.push_back(seg_a[static_cast<size_t>(s)]);
+                a_max = std::max(a_max, seg_a[static_cast<size_t>(s)]);
+            }
+            exact_cross.reset(new mw::ek::CoaxialCrossRows(x0.data(), sgn.data(), h.data(), a_S.data(),
+                                                           job.lab.data(), n, fp.k, nd, max_cached,
+                                                           n ? 1e-11 * hmax : 1.0, n ? 1e-11 * a_max : 1.0,
+                                                           rules, 0));
+        } else {
+            exact.reset(new mw::ek::CoaxialRows(x0.data(), sgn.data(), h.data(), n, seg_a[s0], fp.k, nd,
+                                                max_cached, n ? 1e-11 * hmax : 1.0, true, rules, 0));
+        }
         // the bases relabelled onto the group's local order (sentinel n)
         std::vector<int64_t> loc(static_cast<size_t>(n_total), n);
         for (int64_t i = 0; i < n; i++) loc[static_cast<size_t>(S[i])] = i;
@@ -1861,11 +1958,11 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
         for (int64_t i = 0; i < n; i++)
             for (int c = 0; c < 3; c++) tan_loc[3 * i + c] = g.tangents[3 * static_cast<size_t>(S[i]) + c];
         std::vector<BaseRows::Edge> ge;
-        for (const GEdge &e : edges[gS.first]) {
+        for (const GEdge &e : job.edges) {
             const int64_t l0 = loc[static_cast<size_t>(e.start)];
             ge.push_back({l0, l0 + (e.stop - e.start), e.arc, e.a_w});
         }
-        BaseRows base(g, seg_a, S, ge, fp, ek);
+        BaseRows base(g, seg_a, S, ge, fp, ek, cross ? &job.lab : nullptr);
         const int64_t entry = nd * nd * 16 + 1;
         const int64_t reserve = std::min<int64_t>(budget / 16, base.cache_entries_needed() * entry);
         const double window_mb = static_cast<double>(budget - reserve) / (1024.0 * 1024.0);
@@ -1881,7 +1978,10 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
         for (int64_t r0 = 0; r0 < n; r0 += chunk) {
             const int64_t r1 = std::min(n, r0 + chunk);
             std::vector<cdouble> dJ(static_cast<size_t>(nd2 * (r1 - r0) * n));
-            exact.rows(r0, r1, dJ.data());
+            if (cross)
+                exact_cross->rows(r0, r1, dJ.data());
+            else
+                exact->rows(r0, r1, dJ.data());
             base.subtract_from(dJ, r0, r1);
             std::vector<int64_t> M;
             for (int64_t m : Bs) {

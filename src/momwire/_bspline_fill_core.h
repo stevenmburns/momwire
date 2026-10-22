@@ -97,18 +97,15 @@ bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
 // than `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius.
 bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire);
 
-// Whether `coaxial_lines` lists a line carrying a radius step (momwire#1438's
-// cross job, which `add_exact_correction` does not serve).
-bool exact_kernel_has_cross_job(const Geometry &g, const std::vector<double> &radius_per_wire);
-
 // `_add_exact_kernel_correction(Z, geom, supp_seg, polys, k)` (momwire#1408,
 // #1411, #1421): per one-radius coaxial group, observer-row windows of the
 // exact ring-kernel moments (`mw::ek::CoaxialRows`) minus the base moments
 // the fill put there (`_exact_kernel_base.BaseRows`, its run / diagonal
 // dedup replayed so each gathered value is the same representative pair's),
-// assembled into Z (C order) by the windowed assembler. A coaxial line with
-// a radius step (momwire#1438's cross job, numpy-only in Python) throws
-// FrontNotPorted.
+// assembled into Z (C order) by the windowed assembler; then per coaxial
+// line with a radius step its cross job (momwire#1438, ported for
+// momwire#1615): the two-radius moments (`mw::ek::CoaxialCrossRows`, the
+// text Python's `coaxial_cross_rows` runs) minus `BaseRows`' cross mode.
 void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
                           double eps, double mu, double swept_mem_mb);
