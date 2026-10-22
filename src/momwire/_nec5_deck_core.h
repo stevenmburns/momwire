@@ -85,8 +85,11 @@ const char *error_kind_name(ErrorKind k);  // "DeckError", "OverflowError", ...
 
 struct ParseError : std::runtime_error {
     ErrorKind kind;
+    // The whole message: what() stops at a NUL, which a refusal quoting a
+    // binary file's line carries (the nec4 reader's dump reads this).
+    std::string message;
     ParseError(ErrorKind k, const std::string &utf8_message)
-        : std::runtime_error(utf8_message), kind(k) {}
+        : std::runtime_error(utf8_message), kind(k), message(utf8_message) {}
 };
 
 // --- the model (`deck/_nec5.py`'s dataclasses, field for field) ------------
@@ -344,6 +347,15 @@ bool latin1_isspace(unsigned char c);
 
 // snprintf(fmt, x) in the C locale, whatever the process's locale is.
 std::string format_c_locale(const char *fmt, double x);
+
+// The rest of the reader's toolkit, for the nec2 / nec4 reader
+// (`_nec4_deck_core.cpp`), which shares this one's Python text rules:
+// Python's `float(token)` (false where it raises), `str.strip()`, and the
+// comparison format's spellings (a double's 64 bits, a UTF-8 string's hex).
+bool latin1_float(const std::string &latin1_token, double &value);
+std::string latin1_strip(const std::string &latin1);
+std::string dump_bits(double x);
+std::string dump_hex(const std::string &utf8);
 
 }  // namespace nec5
 }  // namespace mw

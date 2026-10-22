@@ -2134,6 +2134,10 @@ std::string latin1_upper(const std::string &s, std::size_t *length) { return py_
 std::string latin1_to_utf8(const std::string &s) { return utf8(s); }
 bool latin1_isspace(unsigned char c) { return py_isspace(c); }
 std::string format_c_locale(const char *fmt, double x) { return format_c(fmt, x); }
+bool latin1_float(const std::string &token, double &value) { return py_float(token, value); }
+std::string latin1_strip(const std::string &s) { return py_strip(s); }
+std::string dump_bits(double x) { return hex_bits(x); }
+std::string dump_hex(const std::string &s) { return hex_bytes(s); }
 
 }  // namespace nec5
 }  // namespace mw
