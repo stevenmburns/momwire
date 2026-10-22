@@ -84,7 +84,7 @@ PortalDeck parse_deck(const std::string &text) {
             d.comments.push_back(nec5::latin1_to_utf8(card.text()));
             continue;
         }
-        if (one_of(m, {"GW", "GM", "GS", "GX", "GR", "GE"})) {
+        if (one_of(m, {"GW", "GA", "GH", "GM", "GS", "GX", "GR", "GE"})) {
             d.geometry.push_back(card);
             continue;
         }
@@ -191,7 +191,7 @@ void served_table(const Card &card) {
     if (!card.i(0).is_zero()) unmeasured("RP mode " + S(card.i(0)));
     Int xnda = card.i(3);
     bool served = false;
-    for (int x : {1000, 1001, 1002, 1003, 1010, 1011}) served = served || xnda == Int(x);
+    for (int x : {1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013}) served = served || xnda == Int(x);
     if (!served) unmeasured("RP with XNDA " + S(xnda));
     if (card.f(8) < 0.0) unmeasured("RP at a negative range");
 }
@@ -202,11 +202,12 @@ void served_geometry(const PortalDeck &deck) {
     auto saw = [&](const char *m) { return std::find(seen.begin(), seen.end(), m) != seen.end(); };
     for (const Card &card : deck.geometry) {
         const std::string &m = card.mnemonic;
-        if (!one_of(m, {"GW", "GS", "GM", "GE"})) unmeasured("the " + m + " geometry card");
+        if (!one_of(m, {"GW", "GA", "GH", "GS", "GM", "GE"})) unmeasured("the " + m + " geometry card");
         if (m == "GS" && (!card.i(0).is_zero() || !card.i(1).is_zero()))
             unmeasured("GS scaling a range of tags");
         if ((m == "GS" || m == "GM") && saw(m.c_str())) unmeasured("a second " + m + " card");
-        if (m == "GW" && (saw("GS") || saw("GM"))) unmeasured("a GW card after a GS or GM card");
+        if (one_of(m, {"GW", "GA", "GH"}) && (saw("GS") || saw("GM")))
+            unmeasured("a " + m + " card after a GS or GM card");
         if (m == "GM" && saw("GS")) unmeasured("a GM card after a GS card");
         seen.push_back(m);
     }

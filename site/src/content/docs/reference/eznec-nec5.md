@@ -149,6 +149,18 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 - **`RP` with a range**, the form SimNEC writes (`RP 0 19 73 1001 0 0 5 5
   1000`): the pattern's fields are printed in volts per metre at that range,
   as NEC-4.2 prints them. The gains are the same with or without a range.
+- **`RP` gain forms** XNDA 1000 to 1003 and 1010 to 1013 (4nec2 writes 1003
+  by default).
+- **Geometry beyond `GW`:** `GM`, `GS`, the wire arc `GA`, and the helix
+  `GH` as NEC-4.2 reads it. NEC-4.2's `GH` is not NEC-2's: its real fields
+  are the number of turns, the length along Z, the helix radius at each end
+  and the wire radius at each end. A deck that writes NEC-2's `GH` fields
+  (turn spacing, length, four radii, wire radius) means something else to
+  NEC-4.2 and to momwire.
+
+`EX 4` is refused in the NEC-4.2 slot. NEC-4.2 reads it as a current element
+at a point in space, not as NEC-5's current source on a segment. For a
+current source on a segment, write `EX 6` with the same tag and segment.
 
 Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
 

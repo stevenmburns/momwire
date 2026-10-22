@@ -139,6 +139,24 @@ CASES: list[tuple[str, str, str]] = [
         deck(GW + "GS 0 0 .5\nGM 0 0 0 0 10 0 0 0 0\n"),
         "a GM card after a GS card",
     ),
+    # GA and GH (momwire#1592): served where a GW may stand.
+    ("ga_arc", deck("GA 1 12 2 0 180 .001\n"), SERVED),
+    ("gh_helix", deck("GH 1 24 1 .3 .15 .15 .002 .002\n"), SERVED),
+    (
+        "ga_gw_gm",
+        deck("GA 1 12 2 0 180 .001\nGW 2 9 -2 0 0 2 0 0 .001\nGM 0 0 0 0 0 0 0 5 0\n"),
+        SERVED,
+    ),
+    (
+        "ga_after_gm",
+        deck(GW + "GM 0 0 0 0 10 0 0 0 0\nGA 2 4 1 0 90 .001\n"),
+        "a GA card after a GS or GM card",
+    ),
+    (
+        "gh_after_gs",
+        deck(GW + "GS 0 0 .5\nGH 2 8 1 .3 .1 .1 .001 .001\n"),
+        "a GH card after a GS or GM card",
+    ),
     (
         "is_card",
         deck(body="IS 0 1 0 0 3.5 0 .002\n" + FR + EX + "XQ\n"),
@@ -185,6 +203,9 @@ CASES: list[tuple[str, str, str]] = [
     ),
     ("pq_off_restricted", deck(body="PQ -1 1 2 3\n" + FR + EX + "XQ\n"), SERVED),
     ("rp_xnda_1005", deck(body=FR + EX + "RP 0 1 1 1005\n"), "RP with XNDA 1005"),
+    ("rp_xnda_1012", deck(body=FR + EX + "RP 0 1 1 1012\n"), SERVED),
+    ("rp_xnda_1013", deck(body=FR + EX + "RP 0 1 1 1013\n"), SERVED),
+    ("rp_xnda_1014", deck(body=FR + EX + "RP 0 1 1 1014\n"), "RP with XNDA 1014"),
     (
         "rp_negative_range",
         deck(body=FR + EX + "RP 0 1 1 1000 0 0 0 0 -5\n"),
@@ -224,7 +245,7 @@ CASES: list[tuple[str, str, str]] = [
         ),
         SERVED,
     ),
-    ("reader_refusal", deck(body=FR + "EX 4 1 6 0 1\nXQ\n"), "EX type 4 is not served"),
+    ("reader_refusal", deck(body=FR + "EX 4 1 6 0 1\nXQ\n"), "EX 4 is not served"),
     (
         "separators_after_ge_raise",
         deck(body=FR + EX + ", ,\nXQ\n"),
@@ -276,7 +297,7 @@ CASES: list[tuple[str, str, str]] = [
         + FR
         + EX
         + "XQ\nEN\n",
-        "EX type 4",
+        "EX 4 is not served by this engine's nec4 dialect",
     ),
     ("chain_open_end", "CM a\nCE\n" + GW + "GE 0\n" + FR + EX + "XQ\nNX\n", SERVED),
     ("text_after_en", deck() + "garbage ' \xe9 after EN\n", SERVED),

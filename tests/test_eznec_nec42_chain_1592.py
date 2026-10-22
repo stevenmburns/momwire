@@ -96,7 +96,9 @@ def test_a_chain_ending_on_nx_prints_no_run_time():
 
 
 def test_a_refusing_structure_ends_the_chain_after_the_solved_ones():
-    refused = _deck("0223").replace("PQ", "GA 1,4,.5,0,90,.001\nPQ", 1)
+    # A card the nec4 dialect refuses by name (GA was, before momwire#1592
+    # served it).
+    refused = _deck("0223").replace("PQ", "GC 0 0 1 .001 .002\nPQ", 1)
     decks = [DECKS[0], refused, DECKS[2]]
     printout = _render(_chain(decks))
     assert printout.count("NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)") == 2
