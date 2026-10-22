@@ -90,7 +90,8 @@ Twelve gates, derived from the seam's own contract (momwire#497 U1):
    the solver, and this one can never stand in for it.
 9. **The NEC-5 names** (momwire#1239, primary since momwire#1295 phase 4) —
    ``build.py``'s ``NEC5_LAUNCHERS`` are present, answer ``-version`` with
-   exit 0 and ``NEC5momwire.<maj>.<min>`` (SimNEC's configure probe), and
+   exit 0 and ``NEC5 <launcher> [<modes>] <version>`` (SimNEC's configure
+   probe; the one-line format of momwire#1606), and
    serve in the basis read past ``nec5-``.  One family for both hosts: SimNEC
    picks the deck syntax from ``nec5`` in the path, and EZNEC reads no name
    at all.
@@ -783,15 +784,15 @@ def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
     SimNEC runs ``"<path>" -version`` before it accepts a nec5 engine, then
     ``<path> <deck> <printout>`` like EZNEC, which runs only the latter.  So
     each shipped name must be present, answer the probe with exit 0 and the
-    ``NEC5momwire.<maj>.<min>`` line, and serve 0010 byte-identically to the
+    ``NEC5 <its own name> [<modes>] <full version>`` line (momwire#1606), and
+    serve 0010 byte-identically to the
     module in the basis its name reads past ``nec5-`` (none for the plain
     name).
     """
     from importlib.metadata import version
 
     failures = 0
-    major, minor = version("momwire").split(".")[:2]
-    want = f"NEC5momwire.{major}.{minor}"
+    full = version("momwire")
     deck = FIXTURES / f"{BASIS_DECK}.nec"
     for stem in _nec5_launchers():
         launcher = exe.with_name(f"{stem}{exe.suffix}")
@@ -807,10 +808,11 @@ def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
             env=env,
         )
         first = (probe.stdout.splitlines() or [""])[0]
-        if probe.returncode != 0 or first != want:
+        want = re.compile(rf"NEC5 {re.escape(stem)} \[[sb]*\] {re.escape(full)}")
+        if probe.returncode != 0 or not want.fullmatch(first):
             print(
                 f"FAIL {launcher.name} -version: exit {probe.returncode}, "
-                f"{first!r} (want {want!r})"
+                f"{first!r} (want {want.pattern!r})"
             )
             failures += 1
             continue
