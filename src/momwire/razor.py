@@ -1000,19 +1000,10 @@ _OUT_OF_SCOPE = {
 # sentences `BSplineSolver` raises, which is the point of routing both trunks
 # through it, so the row quotes those from there.
 # momwire#813 unit 2: a CHOPPED testing row — one whose T2 takes the knot as
-# an endpoint instead of a centroid — is the crossing arc's row, and that arc
-# declines the extended kernel for the same reason the below-plane fill does
-# (NEC's O(a^2) tube expansion was derived in free space, not in a medium, and
-# a chopped row's knot observer sits ON the interface where the eligibility
-# scan has no answer). Refused rather than labelled by guess.
-_CHOP_EK_REFUSAL = (
-    "razor's chopped testing rows (momwire#813) do not take the extended "
-    "kernel: the knot observer sits at the interface, where the "
-    "coaxial-and-equal-radius eligibility scan the pair rule reads has no "
-    "answer, and the crossing arc declines EK in a medium anyway "
-    "(momwire#812). Build the crossing fill with extended_kernel=False"
-)
-
+# an endpoint instead of a centroid — is the crossing arc's row. Its above
+# half takes the extended kernel since momwire#1614 everywhere but at the knot
+# itself, which stays reduced (`_assemble_Z_prepare`); its below half never
+# takes it.
 _BURIED_FILL_REFUSAL = (
     "RazorSolver's buried fill is switched OFF in this build "
     "(`razor._SERVE_BELOW_PLANE`): the lower-medium family (momwire#812) and "
@@ -1874,10 +1865,6 @@ class RazorSolver(
                 if _SERVE_CROSSING
                 else {"buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL}
             ),
-            # The EK refusal below the plane is tree-wide (bspline declares
-            # the same object); razor raised it at construction with no cell
-            # behind it until momwire#1149 U0.
-            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             # Not reachable through `refusal()`'s cell algebra: a bare
             # condition token is SERVED unless it pairs into a combination
             # key, and "does this family have a bundle rule" is an axis
@@ -1897,6 +1884,15 @@ class RazorSolver(
             # refusals under one geometry word, and a row declares one
             # sentence per cell; antennaknobs' catalog gate names this cell
             # for its bonded screen.
+        },
+        # momwire#1614: served in part, as on the B-spline family since
+        # momwire#1170 stage 0 -- the extended kernel acts on the
+        # above-ground medium's own fill (direct and image), and the below
+        # medium's fill and both cross blocks keep the reduced kernel. It
+        # was a refusal from momwire#1149 U0 until then; the sentence is the
+        # tree-wide one bspline declares for the same cell.
+        partials={
+            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
         },
     )
 
@@ -2150,19 +2146,19 @@ class RazorSolver(
         # kernel existed, on every lane. The eligibility scan is O(N·G) and
         # is cached per geometry object and per mirror flag, exactly as
         # `BSplineSolver._ek_axis_labels` caches it.
+        #
+        # On a buried deck it is served IN PART (momwire#1614, bspline's rule
+        # from momwire#1170 stage 0): NEC's O(a²) tube expansion was derived
+        # in free space, not in a lossy medium (momwire#812), so only the
+        # above-ground medium's own fill takes it -- every pair there is two
+        # above-ground segments, direct or image -- and the below medium's
+        # fill and the two cross blocks keep the reduced kernel
+        # (`_assemble_Z_crossing`). A wholly buried deck therefore solves
+        # reduced everywhere. The first buried fill says so once
+        # (`_advise_ek_above`).
         self.extended_kernel = bool(extended_kernel)
-        if self.extended_kernel and (
-            self._below_plane or self._detached or self._crossing
-        ):
-            # momwire#812: NEC's O(a²) tube expansion was derived in free
-            # space, not in a lossy medium, and no razor buried route takes
-            # it. The sentence is the tree-wide one bspline declares for the
-            # same cell (momwire#1149 U0 declared it on this row too).
-            raise NotImplementedError(
-                "razor's buried fill does not take the extended kernel: "
-                f"{_below_interface.BURIED_EXTENDED_KERNEL_REFUSAL}"
-            )
         self._cached_ek_groups = None
+        self._warned_ek_above = False
         # The exact ring kernel on coaxial pairs (momwire#1433), through the
         # shared option (`_exact_kernel_seam`): False -- the default -- is
         # structurally absent (no line of the correction runs), True is
@@ -3266,6 +3262,17 @@ class RazorSolver(
         seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
         return _wire_spec.seg_radius(self._radius_per_wire, np.diff(seg_off))
 
+    def _medium_seg_radius(self, geom):
+        """`_seg_radius` on any geometry the fill reads, a per-medium
+        sub-geometry included (momwire#1614): its own `seg_a` on a mixed-
+        radius deck, the uniform radius per segment on a uniform one (a
+        sub-geometry has no `seg_offsets`), else the wire table."""
+        if "seg_a" in geom:
+            return geom["seg_a"]
+        if "seg_offsets" not in geom and self._uniform_radius is not None:
+            return np.full(geom["seg_h"].shape[0], float(self._uniform_radius))
+        return self._seg_radius(geom)
+
     def _kernel_radius(self, geom):
         """The `a` the reduced kernel is regularised with, for every source
         segment: the scalar when the model is uniform (the historical fast
@@ -3332,7 +3339,7 @@ class RazorSolver(
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         seg_l = seg_p0
         seg_r = seg_p0 + seg_h[:, None] * seg_t
-        seg_a = self._seg_radius(geom)
+        seg_a = self._medium_seg_radius(geom)
         img = self._image_sources(geom) if mirror else None
         if img is not None:
             img_l = img["seg_p0"]
@@ -4173,7 +4180,9 @@ class RazorSolver(
         np.add.at(Z, (rows, cols), vals)
         return Z
 
-    def _assemble_Z_prepare(self, geom, *, chop=None, loading=True, restrict=None):
+    def _assemble_Z_prepare(
+        self, geom, *, chop=None, loading=True, restrict=None, extended_kernel=None
+    ):
         """K-independent work for the razor-blade fill: stencils and moments.
 
         Everything `_assemble_Z_from_prepared` needs that does not depend on
@@ -4270,12 +4279,19 @@ class RazorSolver(
         `tests/test_razor_t2_at_node_813.py` gets, on three anchors, rather
         than an argument that it must be.
 
-        Two things it refuses rather than guesses. The extended kernel
-        (`_CHOP_EK_REFUSAL`): a knot observer sits ON the interface, where
-        the coaxial-and-equal-radius eligibility scan has no answer. And a
-        row that is already GROUNDED, whose T2 the fill rewrites for the
-        plane-is-the-reference reason below — two rules for one row's
-        endpoints is a silent contradiction, so it raises.
+        Under the extended kernel (momwire#1614, the above medium of a
+        crossing deck) the centroid and path observers take it and the KNOT
+        observer keeps the reduced kernel, the kernel of the cross blocks
+        and the node-charge correction that meet it in the plane (extended
+        there, it drifts away from NEC-5 under refinement). One thing it
+        refuses rather than guesses: a row that is already
+        GROUNDED, whose T2 the fill rewrites for the plane-is-the-reference
+        reason below — two rules for one row's endpoints is a silent
+        contradiction, so it raises.
+
+        `extended_kernel` (momwire#1614): the kernel this prepare builds,
+        None for the solver's own (reduced on a buried route's whole-geometry
+        prepare); the crossing assembly passes it per medium.
 
         **`restrict`** (momwire#1337 phase 2): an :class:`_ObserverRows`, and
         the prepare builds the T1 windows of its rows R ONLY -- each dense
@@ -4323,8 +4339,16 @@ class RazorSolver(
         # way and only the source half of the spec moves. That is the mirror
         # policy in one line: the ground supplies mirrored geometry, the
         # shared rule reads it, and the kernel has no ground branch.
+        #
+        # `extended_kernel` (momwire#1614) is the crossing assembly's per-
+        # medium choice: True for the above medium's own fill, False for the
+        # below one's. None -- every other caller -- is the solver's kernel,
+        # except on a buried route, whose whole-geometry prepare feeds the
+        # loading and the below family only and so never takes it.
+        if extended_kernel is None:
+            extended_kernel = self.extended_kernel and not self._exact_kernel_buried()
         src_lab = img_lab = None
-        if self.extended_kernel:
+        if extended_kernel:
             src_lab, img_lab = self._ek_labels(geom, mirror=self.ground_z is not None)
 
         # --- scalar potential's observation set: segment centroids.
@@ -4336,7 +4360,7 @@ class RazorSolver(
         # on. None on a uniform-radius mesh, where b = a on every pair.
         obs_rad = None
         if src_lab is not None:
-            seg_rad = np.asarray(self._seg_radius(geom), dtype=float)
+            seg_rad = np.asarray(self._medium_seg_radius(geom), dtype=float)
             obs_rad = None if np.all(seg_rad == seg_rad[0]) else seg_rad
         ek_cent = None if src_lab is None else _EK(None, src_lab, src_lab, obs_rad)
         ek_cent_img = None if img_lab is None else _EK(None, src_lab, img_lab, obs_rad)
@@ -4350,8 +4374,6 @@ class RazorSolver(
         # bit-identical rather than merely equal.
         t2_chop = None
         if chop:
-            if self.extended_kernel:
-                raise ValueError(_CHOP_EK_REFUSAL)
             chop_rows = np.array(sorted(int(m) for m in chop), dtype=np.int64)
             bad = np.intersect1d(chop_rows, geom["grounded_bases"])
             if bad.size:
@@ -4534,6 +4556,13 @@ class RazorSolver(
         if t2_chop is not None:
             # Keyed off `sources` in the block, exactly as `t2_chunks` is, so
             # the real and mirrored source sets are served by one body.
+            # Reduced kernel at the knot under any kernel (momwire#1614).
+            # The knot sits in the plane, at the end of its wing's segment,
+            # and the terms that meet it there -- the cross blocks and
+            # `_crossing_node_charges` -- are reduced, so the knot keeps
+            # their kernel. Measured on a 16-radial hub refined to x16
+            # (vertical Delta/a 0.55): reduced at the knot lands within
+            # 0.1 ohm of NEC-5; extended at the knot drifts 4 ohm low in R.
             prepared["t2_chop_chunks"] = self._seg_moments_prepare(
                 t2_chop["pts"], geom, a_src, ek=None
             )
@@ -4659,6 +4688,7 @@ class RazorSolver(
             return Z
         if getattr(self, "_below_plane", False):
             rkw = {} if restrict is None else {"restrict": restrict}
+            self._advise_ek_above()
             return self._assemble_Z_below_plane(geom, prepared, k, omega, **rkw)
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k, omega, restrict=restrict
@@ -5301,6 +5331,40 @@ class RazorSolver(
     # the crossing fill (momwire#813 unit 2)
     # ------------------------------------------------------------------
 
+    def extended_kernel_wires(self):
+        """Per wire, whether its pairs take the extended kernel: a tuple of
+        bools, one per wire, all False with `extended_kernel=False`
+        (`BSplineSolver.extended_kernel_wires`' twin, momwire#1614).
+
+        All True on a deck with no buried wire. On a buried deck a wire
+        below the plane is False: the below medium's fill and the two cross
+        blocks keep the reduced kernel, and the extended kernel acts on the
+        above medium's own fill, direct and image.
+        """
+        n = len(self.wires_polylines)
+        if not self.extended_kernel:
+            return (False,) * n
+        if not self._exact_kernel_buried():
+            return (True,) * n
+        return tuple(m != _medium_spec.BELOW for m in self._wire_media())
+
+    def _advise_ek_above(self):
+        """Say, once per solver, that this buried deck's extended kernel is
+        the above-ground one (`ExtendedKernelAboveGround`, momwire#1614). A
+        front end that has already said it in its own words sets
+        `_warned_ek_above` and this stays silent."""
+        if not self.extended_kernel or getattr(self, "_warned_ek_above", False):
+            return
+        self._warned_ek_above = True
+        wires = self.extended_kernel_wires()
+        if all(wires):
+            return
+        warnings.warn(
+            _below_interface.extended_kernel_above_advisory(wires),
+            _below_interface.ExtendedKernelAboveGround,
+            stacklevel=4,
+        )
+
     def _crossing_tents(self, geom):
         """``[(basis, below_wing)]`` for every tent whose wings span the plane.
 
@@ -5531,7 +5595,18 @@ class RazorSolver(
         # Unrestricted, every call below is the one it always was (no extra
         # argument), so a seam patched with the old signature still serves.
         akw = {} if sub_a is None else {"restrict": sub_a}
-        prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a, loading=False, **akw)
+        # momwire#1614: the extended kernel, when asked, on the above
+        # medium's own fill only -- each of its pairs is two above-ground
+        # segments, direct or image, which is the case the tube expansion
+        # was derived for. The below fill and the cross blocks stay reduced.
+        self._advise_ek_above()
+        prep_a = self._assemble_Z_prepare(
+            geom_a,
+            chop=chop_a,
+            loading=False,
+            extended_kernel=self.extended_kernel,
+            **akw,
+        )
         Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega, **akw)
         if prep_a["image"] is not None:
             ground_a = _potential_ground.potential_ground_for(self, geom_a, k, omega)
@@ -5551,7 +5626,9 @@ class RazorSolver(
             (None, rows_b) if z_of is None else _medium_restriction(z_of, rows_b)
         )
         bkw = {} if sub_b is None else {"restrict": sub_b}
-        prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b, loading=False, **bkw)
+        prep_b = self._assemble_Z_prepare(
+            geom_b, chop=chop_b, loading=False, extended_kernel=False, **bkw
+        )
         # Column-major, so the solve can factor it in place (momwire#1173);
         # every write below is an elementwise += / -= into index blocks.
         # Under `restrict` it is the restriction's target, zeroed.

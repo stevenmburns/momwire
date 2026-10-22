@@ -37,7 +37,6 @@ from typing import NamedTuple
 
 from ._ground_spec import CONTACT_UNDER_REFL_COEF_REFUSAL
 from .bspline import (
-    _BURIED_EXTENDED_KERNEL_REFUSAL,
     _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
     _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
     _ENRICHMENT_WIRE_LOADING_REFUSAL,
@@ -145,22 +144,12 @@ COUPLINGS: tuple[Coupling, ...] = (
         # each would undo that.
         applies_to=("ArrayBlockSolver",),
     ),
-    # The extended kernel is scored across the whole geometry, and nobody has
-    # measured what it means for a pair spanning two media. RazorSolver since
-    # momwire#1149 U0, when its buried cell turned True. BSplineSolver left
-    # this row at momwire#1170 stage 0: it serves the combination IN PART
-    # (extended above ground, reduced on every pair touching a buried
-    # segment) and declares that under `capabilities.partials`, which is not
-    # a refusal and so is not a row here.
-    Coupling(
-        axis_a="kernel",
-        value_a="extended",
-        axis_b="wire_position",
-        value_b="buried",
-        reason=_BURIED_EXTENDED_KERNEL_REFUSAL,
-        issue="momwire#553",
-        applies_to=("RazorSolver",),
-    ),
+    # The extended kernel against a buried wire is no row here: both families
+    # that serve buried wires serve the combination IN PART (extended on the
+    # above-ground pairs, reduced on every pair touching a buried segment) and
+    # declare it under `capabilities.partials`, which is not a refusal --
+    # BSplineSolver since momwire#1170 stage 0, RazorSolver since
+    # momwire#1614. It was RazorSolver's row from momwire#1149 U0 until then.
     # Not an axis pair: `near_correction` is a constructor keyword. Kept
     # because it is a real refused combination and the inventory is the point.
     Coupling(

@@ -276,11 +276,26 @@ def test_the_two_kernel_lanes_agree_on_a_chopped_fill(monkeypatch, lane):
 # ------------------------------------------------------- the two refusals
 
 
-def test_the_extended_kernel_is_refused_on_a_chopped_row():
-    rs = RazorSolver(**_free_space_crossing(n_qp_path=8), extended_kernel=True)
-    geom = rs._build_geometry()
-    with pytest.raises(ValueError, match="do not take the extended kernel"):
-        rs._assemble_Z_prepare(geom, chop={geom["n_basis_total"] - 1: "B"})
+def test_the_knot_keeps_the_reduced_kernel_under_the_extended_one():
+    """momwire#1614: a chopped row is served under the extended kernel (it
+    was refused until then). Its centroids take the extended kernel and its
+    knot keeps the reduced one, the kernel of the cross blocks and node
+    charges that meet it in the plane."""
+    kw = _free_space_crossing(n_qp_path=8)
+    chop = {RazorSolver(**kw)._build_geometry()["n_basis_total"] - 1: "B"}
+    k = 2 * np.pi / LAM
+    out = {}
+    for ek in (False, True):
+        rs = RazorSolver(**kw, extended_kernel=ek)
+        geom = rs._build_geometry()
+        p = rs._assemble_Z_prepare(geom, chop=chop, extended_kernel=ek)
+        knot = rs._seg_moments_from_prepared(p["t2_chop_chunks"], k, 1, need_m1=False)
+        cent = rs._seg_moments_from_prepared(
+            p["t2_chunks"], k, p["n_cent"], need_m1=False
+        )
+        out[ek] = (np.asarray(knot[0]), np.asarray(cent[0]))
+    assert np.array_equal(out[False][0], out[True][0])
+    assert not np.array_equal(out[False][1], out[True][1])
 
 
 def test_a_grounded_row_may_not_be_chopped():

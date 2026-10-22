@@ -42,14 +42,14 @@ from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
 # refl-coef ground has no lower medium whatever razor can fill; a mid-span
 # crossing is still momwire's guess where the model must speak;
 # contact+buried is momwire#567's measured scope decision, and it binds both
-# trunks; EK below the plane is refused on razor (the B-spline family serves
-# it above ground since momwire#1170 stage 0, and declares that as a partial).
+# trunks. EK below the plane is no refusal on either trunk: both serve it
+# above ground and declare that as a partial (the B-spline family since
+# momwire#1170 stage 0, razor since momwire#1614).
 _SURVIVES_THE_ARC = (
     "buried+pec",
     "buried+refl-coef",
     "buried+crossing",
     "buried+contact",
-    "buried+extended_kernel",
 )
 
 # Which constant owns which "not served YET" cell.
@@ -109,14 +109,14 @@ def test_the_surviving_cells_are_the_shared_sentences():
     assert refusals["buried+refl-coef"] == _medium_spec.BURIED_REFL_REFUSAL
     assert refusals["buried+crossing"] == _medium_spec.CROSSING_REFUSAL
     assert refusals["buried+contact"] == _medium_spec.CONTACT_WITH_BURIED_REFUSAL
-    assert (
-        refusals["buried+extended_kernel"]
-        is _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
-    )
-    # momwire#1170 stage 0: the B-spline family no longer refuses it.
-    assert "buried+extended_kernel" not in BSplineSolver.capabilities.refusals
-    assert "buried+extended_kernel" in BSplineSolver.capabilities.partials
-    assert not RazorSolver.capabilities.partials
+    # momwire#1170 stage 0 / momwire#1614: neither family refuses it; both
+    # declare the one partial sentence.
+    for cls in (BSplineSolver, RazorSolver):
+        assert "buried+extended_kernel" not in cls.capabilities.refusals
+        assert (
+            cls.capabilities.partials["buried+extended_kernel"]
+            is _below_interface.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
+        )
 
 
 def test_the_units_own_scope_cells_are_declared():

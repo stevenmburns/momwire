@@ -512,7 +512,10 @@ MediumPart medium_part(const Front &f, bool below) {
     s.omega = f.omega;
     s.c_a_imag = f.c_a_imag;
     s.c_phi_imag = f.c_phi_imag;
-    s.extended_kernel = false;
+    // momwire#1614: the extended kernel on the above medium's own fill only
+    // (every pair there is two above-ground segments, direct or image); the
+    // below medium keeps the reduced kernel.
+    s.extended_kernel = !below && f.extended_kernel;
     s.exact = false;
     s.compose = f.compose;
     s.ground_eps_r_ = f.ground_eps_r_;
@@ -563,6 +566,15 @@ MediumPart medium_part(const Front &f, bool below) {
     }
     s.grounded_bases.clear();
     s.prepare();
+    // `obs_rad = None if np.all(seg_rad == seg_rad[0])` over the MEDIUM's own
+    // segments: a mixed-radius deck whose medium carries one radius takes the
+    // b = a path, as Python's sub-geometry does.
+    if (!s.b_obs.empty()) {
+        bool same = true;
+        for (double b : s.b_obs)
+            if (!(b == s.b_obs[0])) same = false;
+        if (same) s.b_obs.clear();
+    }
     // `t2_chop`: the chopped rows sorted, which half survives, and each
     // one's knot on the SUB-geometry (`_knot_points(geom_side)`).
     std::sort(chop.begin(), chop.end());

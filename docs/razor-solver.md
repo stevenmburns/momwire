@@ -772,8 +772,10 @@ razor's `buried` capability cell (it was off, behind the shelving of
 2026-09-03, until the 2026-09-22 re-measurement). A deck with a crossing
 junction is served since momwire#1149 U2 (`_SERVE_CROSSING`, which owns
 `buried+crossing_junction`; see "Crossing decks" below); a detached
-above/below deck takes its own route (below). The extended kernel is declined below the plane with the
-tree-wide sentence (`buried+extended_kernel`). The serve-plan refusals a
+above/below deck takes its own route (below). The extended kernel is served in part on a buried deck
+(momwire#1614, `buried+extended_kernel` under `partials`, bspline's sentence): the above medium's own
+fill takes it, direct and image, except at a crossing knot, and the below fill and the two cross
+blocks keep the reduced kernel. The serve-plan refusals a
 buried grid can hit (past the R₁ cap, below the θ floor) are asked over
 segment endpoints and centroids before any grid is filled, the same R₁ and θ
 `BSplineSolver._buried_serve_plan` asks over its nodes.

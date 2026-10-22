@@ -35,6 +35,7 @@ from momwire import BSplineSolver, HMatrixSolver, RazorSolver, bspline
 from momwire import _bspline_kernels as _k
 from momwire._below_interface import (
     BURIED_EXTENDED_KERNEL_ABOVE_ONLY,
+    BURIED_EXTENDED_KERNEL_REFUSAL,
     ExtendedKernelAboveGround,
 )
 from momwire.deck import ExtendedKernelDefault, build_solver, parse
@@ -50,15 +51,18 @@ N_A, N_B = 15, 10
 A_FAT = 0.02
 
 
-def deck(ek, *, radial=True, shift=0.0, a=A_FAT, a_radial=None, **kw) -> BSplineSolver:
+def deck(
+    ek, *, radial=True, shift=0.0, a=A_FAT, a_radial=None, cls=BSplineSolver, **kw
+):
     """An elevated 10 m monopole, and (optionally) a detached 5 m radial
-    15 cm down, moved `shift` metres along x."""
+    15 cm down, moved `shift` metres along x. `cls` is the family
+    (RazorSolver since momwire#1614, which serves the same partial)."""
     wires, npe = [_mono(11.0, 1.0)], [[N_A]]
     if radial:
         wires.append(_radial(depth=0.15) + np.array([shift, 0.0, 0.0]))
         npe.append([N_B])
     radius = [a, a_radial] if (radial and a_radial is not None) else a
-    return BSplineSolver(
+    return cls(
         wires=wires,
         n_per_edge_per_wire=npe,
         feeds=[(0, 4.0, 1 + 0j)],
@@ -316,15 +320,67 @@ def test_a_crossing_deck_changes_kernel_at_the_node():
     assert 0.02 < abs(z_ext - z_red) < 0.5, (z_red, z_ext)
 
 
+# ---------------------------------------------------------------------------
+# razor-2p, on the same rule (momwire#1614)
+# ---------------------------------------------------------------------------
+
+RAZOR = dict(cls=RazorSolver, nec5_quadrature=True)
+
+
+def test_razor_far_buried_wire_reproduces_the_above_ground_extended_answer():
+    """Gate 4 on razor's detached route: the above medium's own fill is the
+    above-only deck's, so moving the radial 60 m off leaves only its
+    coupling, and the extended kernel's shift is the above-only deck's to
+    first order in that coupling (same derivation as the B-spline gate)."""
+    above_red = _z(deck(False, radial=False, **RAZOR))
+    above_ext = _z(deck(True, radial=False, **RAZOR))
+    far_red = _z(deck(False, shift=60.0, **RAZOR))
+    far_ext = _z(deck(True, shift=60.0, **RAZOR))
+    coupling = abs(far_red - above_red)
+    r = coupling / abs(above_red)
+    assert 0.0 < r < 1e-5, r
+    assert abs(far_ext - above_ext) <= 1.01 * coupling
+    shift_above, shift_far = above_ext - above_red, far_ext - far_red
+    assert abs(shift_above) > 0.02  # measured 0.046 ohm
+    assert abs(shift_far - shift_above) <= 3.0 * r * abs(shift_above)
+
+
+def test_razor_says_which_wires_once():
+    s = deck(True, **RAZOR)
+    assert s.extended_kernel_wires() == (True, False)
+    with pytest.warns(ExtendedKernelAboveGround) as seen:
+        s.compute_impedance()
+    (message,) = [
+        str(w.message) for w in seen if w.category is ExtendedKernelAboveGround
+    ]
+    assert BURIED_EXTENDED_KERNEL_ABOVE_ONLY in message
+    assert "(wire index 1)" in message
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        warnings.simplefilter("error", ExtendedKernelAboveGround)
+        s.compute_impedance()  # once per solver
+
+
+def test_razor_crossing_deck_changes_kernel_at_the_node():
+    """The crossing route: the above medium extends, the buried one and the
+    cross blocks do not, and the solve is served and moves (measured
+    0.006 ohm on this coarse deck)."""
+    kw = dict(crossing_deck(wire_radius=A_FAT), nec5_quadrature=True)
+    s = RazorSolver(**kw, extended_kernel=True)
+    assert s.extended_kernel_wires() == (False, True)
+    z_ext, z_red = _z(s), _z(RazorSolver(**kw))
+    assert 1e-3 < abs(z_ext - z_red) < 0.5, (z_red, z_ext)
+
+
 def test_the_declarations_say_what_each_family_does():
     key = "buried+extended_kernel"
     assert BSplineSolver.capabilities.refusal("buried", "extended_kernel") is None
     assert BSplineSolver.capabilities.partials[key] is BURIED_EXTENDED_KERNEL_ABOVE_ONLY
     # The accelerated subclasses refuse a buried deck whole, so the partial
-    # is not theirs; razor still refuses the combination.
+    # is not theirs. Razor serves it on the same rule since momwire#1614.
     assert not HMatrixSolver.capabilities.partials
-    assert not RazorSolver.capabilities.partials
-    assert RazorSolver.capabilities.refusal("buried", "extended_kernel")
+    assert RazorSolver.capabilities.refusal("buried", "extended_kernel") is None
+    assert RazorSolver.capabilities.partials[key] is BURIED_EXTENDED_KERNEL_ABOVE_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +438,7 @@ def test_a_family_without_the_partial_still_falls_back_whole(monkeypatch):
     monkeypatch.setattr(
         _deck_solver,
         "extended_kernel_default_refusal",
-        lambda cls, *a: RazorSolver.capabilities.refusal("buried", "extended_kernel"),
+        lambda cls, *a: BURIED_EXTENDED_KERNEL_REFUSAL,
     )
     model = parse(STAKE.format(ek=""), dialect="nec4")
     with pytest.warns(ExtendedKernelDefault, match="below the ground plane"):
