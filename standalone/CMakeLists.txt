@@ -305,7 +305,7 @@ if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
     MW_EXE_VARIANT="${MW_EXE_VARIANT}"
     MW_EXE_BASIS_NAME="bspline"
     MW_EXE_PROGRAM="momwire-bs2"
-    MW_EXE_LAUNCHER="momwire-nec5-bs2"
+    MW_EXE_LAUNCHER="momwire-nec5-bspline"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON)

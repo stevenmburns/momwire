@@ -120,9 +120,10 @@ namespace {
 #define MW_EXE_PROGRAM "momwire-razor2p"
 #endif
 // The name the `-version` line gives this executable (momwire#1606): the
-// shipped file's name without its platform tag (CMakeLists.txt sets bs2's).
+// Python launcher it stands in for, whose line it answers byte for byte
+// (tests/test_standalone_exe.py); CMakeLists.txt sets bs2's.
 #ifndef MW_EXE_LAUNCHER
-#define MW_EXE_LAUNCHER "momwire-nec5-razor2p"
+#define MW_EXE_LAUNCHER "momwire-nec5-razor-2p"
 #endif
 const char *const BASIS = MW_EXE_BASIS_NAME;
 const char *const VERSION = MW_VERSION;
@@ -675,7 +676,7 @@ import momwire_eznec_client as _c
 def _launcher(args):
     en_optional = False
     if args == ["-version"]:
-        print(_c._mech.version_line("NEC5", "momwire-nec5-razor2p"))
+        print(_c._mech.version_line("NEC5", "momwire-nec5-razor-2p"))
         return 0
     if not args:
         from_stdin = _c._mech.stdin_paths()
@@ -881,7 +882,7 @@ const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 
 // `probe_version`: `momwire_serve_client.version_line`'s line (momwire#1606),
 // the dialect, this executable's name, its interface modes and this build's
-// full release, e.g. `NEC5 momwire-nec5-razor2p [sb] 0.82.0`.
+// full release, e.g. `NEC5 momwire-nec5-razor-2p [sb] 0.82.0`.
 std::string probe_version() {
     return std::string("NEC5 ") + MW_EXE_LAUNCHER + " [sb] " + VERSION;
 }
