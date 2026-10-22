@@ -163,10 +163,13 @@ def test_g980c_3_bspline_re_exports_every_historical_name():
     assert not hasattr(BI, "BURIED_PAST_CAP_REFUSAL")
     assert not hasattr(_bs, "_BURIED_PAST_CAP_REFUSAL")
     assert _bs._N_QP_BURIED_FIELD is BI.N_QP_BURIED_FIELD == 6
-    from momwire import _couplings
+    # momwire#1614: no family refuses the extended kernel below the plane any
+    # more; both that serve buried wires declare the one partial sentence.
+    from momwire import RazorSolver
 
-    assert (
-        _couplings._BURIED_EXTENDED_KERNEL_REFUSAL is BI.BURIED_EXTENDED_KERNEL_REFUSAL
+    key = "buried+extended_kernel"
+    assert RazorSolver.capabilities.partials[key] is (
+        BI.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
     )
 
 

@@ -153,14 +153,6 @@ bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w) {
 
 namespace {
 
-const char *const BURIED_EXTENDED_KERNEL_REFUSAL =
-    "extended_kernel=True + a wire below the ground plane is not served: the "
-    "extended kernel extends every pair of the geometry, and momwire#553 "
-    "measured neither what that means for a pair spanning two media (the "
-    "tube expansion's O(a^2) term is written at one wavenumber) nor for the "
-    "image of a buried source, which lands in the OTHER medium. "
-    "Solve the buried deck with extended_kernel=False, which is the default";
-
 const char *const BUNDLE_REFUSAL =
     "this deck spells a conductor as N geometrically COINCIDENT segments (a "
     "bundle). Razor's tent basis puts one column per segment, so N coincident "
@@ -1366,10 +1358,10 @@ std::string Front::build(const FrontInputs &in_raw) {
     // `_refuse_buried_geometry` (momwire#1512 B1): the wire media with the
     // crossing exemption, the crossing serve's scope, and the route.
     refuse_buried_geometry(touching);
+    // On a buried deck the extended kernel is served in part (momwire#1614):
+    // the above medium's own fill takes it, the below fill and the cross
+    // blocks keep the reduced kernel (`medium_part`).
     extended_kernel = in.extended_kernel;
-    if (extended_kernel && buried != Buried::none)
-        not_implemented(std::string("razor's buried fill does not take the extended kernel: ") +
-                        BURIED_EXTENDED_KERNEL_REFUSAL);
 
     // `n_per_edge_per_wire`.
     if (in.counts_given && static_cast<int64_t>(in.counts.size()) != n_wires)

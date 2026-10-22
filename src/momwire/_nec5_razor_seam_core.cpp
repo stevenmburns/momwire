@@ -82,18 +82,20 @@ void RazorSeamEngine::check_can_host(const Deck &d, const Prepared &p, bool has_
 // `_solver_for` -> `construct_solver(RazorSolver, ...)`.
 void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_ground) const {
     const SeamMesh &mesh = p.mesh;
-    // The extended kernel by default: razor declares no refusal for it, a
-    // stepped radius at a junction is a condition it serves, and a wire
-    // below the plane (`_wires_below`) refused on the ladder already.
-    // `extended_kernel_default_refusal`: a wire below the plane (`_wires_below`
-    // on the pieces) takes the reduced kernel, with an advisory the printout
-    // does not carry.
-    bool wires_below = false;
+    // The extended kernel by default: razor declares no refusal for it, and
+    // a stepped radius at a junction is a condition it serves. A wire below
+    // the plane is served IN PART (momwire#1614, `construct_solver`'s
+    // `extended_kernel_partial`): the above-ground medium takes it and the
+    // buried wires keep the reduced kernel, with an advisory the printout
+    // does not carry -- unless EVERY piece is below (`_wires_below` on the
+    // pieces), where it would act on no pair and the default is reduced.
+    size_t n_below = 0;
     if (has_ground)
         for (const SeamPiece &piece : mesh.pieces)
             if (std::min(piece.points[2], piece.points[5]) <
                 0.0 - ground_touch_tol(piece.points, piece.points + 3))
-                wires_below = true;
+                n_below++;
+    const bool all_below = !mesh.pieces.empty() && n_below == mesh.pieces.size();
     auto part = std::make_shared<RazorPrepared>();
     razor::FrontInputs &in = part->inputs;
     for (const SeamPiece &piece : mesh.pieces) {
@@ -176,7 +178,7 @@ void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_grou
         in.ground_sommerfeld = true;
     }
     in.wavelength = p.wavelength;
-    in.extended_kernel = !wires_below;
+    in.extended_kernel = !all_below;
     in.exact_kernel = razor::ExactKernel::automatic;
     p.engine = std::move(part);
 }

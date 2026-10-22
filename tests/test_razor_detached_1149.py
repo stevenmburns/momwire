@@ -63,7 +63,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from momwire import _crossing_fill, _wire_loading  # noqa: E402
+from momwire import _below_interface, _crossing_fill, _wire_loading  # noqa: E402
 from momwire import razor as _razor  # noqa: E402
 from momwire.bspline import BSplineSolver  # noqa: E402
 from momwire.razor import RazorSolver  # noqa: E402
@@ -157,11 +157,20 @@ def test_mixed_radii_are_served_since_u2b():
     assert s._detached
 
 
-def test_the_extended_kernel_is_refused_by_the_declared_sentence():
-    with pytest.raises(NotImplementedError) as exc:
-        RazorSolver(**detached(), extended_kernel=True)
-    declared = RazorSolver.capabilities.refusal("buried", "extended_kernel")
-    assert str(exc.value).endswith(declared)
+def test_the_extended_kernel_is_served_above_ground_by_the_declared_sentence():
+    """momwire#1614 (a refusal until then): the above wire takes the
+    extended kernel, the buried one keeps the reduced kernel, and the fill
+    says so once, opening with the declared partial."""
+    s = RazorSolver(**detached(), extended_kernel=True)
+    assert s.extended_kernel_wires() == (False, True)
+    declared = RazorSolver.capabilities.partials["buried+extended_kernel"]
+    with pytest.warns(_below_interface.ExtendedKernelAboveGround) as seen:
+        Y_ek = np.asarray(s.compute_y_matrix())
+    said = [w for w in seen if w.category is _below_interface.ExtendedKernelAboveGround]
+    assert len(said) == 1 and str(said[0].message).startswith(declared)
+    Y_red = np.asarray(RazorSolver(**detached()).compute_y_matrix())
+    rel = np.abs(Y_ek - Y_red).max() / np.abs(Y_red).max()
+    assert 0.0 < rel < 0.05, rel
 
 
 def test_the_switch_off_refuses_it(monkeypatch):

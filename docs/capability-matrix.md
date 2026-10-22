@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-44 sentences across 80 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 79 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -284,7 +284,7 @@ renders in host dialogs.
 
   > SinusoidalSolver serves a crossing node whose two members' tilts off the interface normal sum to at most 30 degrees (momwire#1223 stage 2): its imposed node condition, I'_above = I'_below/eps_tilde, is the charge match for a wire crossing the plane normally, and a node that leans converges to a different slope ratio, leaving an impedance error that grows with the lean and does not refine away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node slope emerges from the solution
 
-- `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
+- `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`
 
   > extended_kernel=True + a wire below the ground plane is not served: the extended kernel extends every pair of the geometry, and momwire#553 measured neither what that means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor for the image of a buried source, which lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 
@@ -310,6 +310,6 @@ A combination a row takes without refusing and without serving it
 whole (`Capabilities.partials`). The sentence is what the solver does
 there, and it reaches a user as an advisory rather than an exception.
 
-- `BSplineSolver` `buried+extended_kernel`
+- `BSplineSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
 
   > extended_kernel=True + a wire below the ground plane is served in part: the extended kernel acts on the pairs whose two segments are both above the ground plane (and on their images), and every pair that touches a segment below it keeps the reduced kernel, because the extended kernel in the lower medium and across the interface is not derived yet (momwire#1170). A wire that crosses the plane at a junction changes kernel there

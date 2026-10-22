@@ -154,14 +154,20 @@ def test_a_crossing_deck_names_the_crossing_unit(serve_below, monkeypatch):
     assert str(exc.value).endswith(_razor._CROSSING_NOT_SERVED_REFUSAL)
 
 
-def test_the_extended_kernel_is_declined_below_the_plane(serve_below):
-    """With the tree-wide sentence, which razor's row declares as
-    `buried+extended_kernel` since momwire#1149 U0."""
-    with pytest.raises(NotImplementedError, match="extended kernel") as exc:
-        RazorSolver(**deck(11), extended_kernel=True)
-    declared = RazorSolver.capabilities.refusal("buried", "extended_kernel")
-    assert declared is _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
-    assert str(exc.value).endswith(declared)
+def test_the_extended_kernel_acts_on_no_pair_below_the_plane(serve_below):
+    """momwire#1614: served in part, and on a wholly buried deck the part is
+    empty -- every wire keeps the reduced kernel, the fill is the reduced
+    fill bit for bit, and the solver says so once (it was the tree-wide
+    refusal from momwire#1149 U0 until then)."""
+    s = RazorSolver(**deck(11), extended_kernel=True)
+    assert s.extended_kernel_wires() == (False,)
+    with pytest.warns(
+        _below_interface.ExtendedKernelAboveGround, match="served in part"
+    ):
+        z_ek, _ = s.compute_impedance()
+    assert complex(z_ek) == _zin(RazorSolver, **deck(11))
+    declared = RazorSolver.capabilities.partials["buried+extended_kernel"]
+    assert declared is _below_interface.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
 
 
 # ----------------------------------------------------------------------

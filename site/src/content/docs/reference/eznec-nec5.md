@@ -160,12 +160,12 @@ AND KH COMMANDS HAVE NO EFFECT IN NEC-4". On fat wire this lands closer to both
 engines: on a 28 MHz dipole whose segments are 1.5 radii long it is 4 to 5 Ω
 nearer NEC-4.2. On thin wire it moves the answer by a fraction of an ohm. A few
 decks cannot take the extended kernel: a wire below the ground on any basis
-but `bspline`, or two wires of different radii meeting at a junction on
-`sinusoidal-galerkin`. Those decks are solved with the reduced kernel, and the
-engine logs an `ExtendedKernelDefault` advisory instead of refusing. On
-`bspline`, a deck with wires below the ground keeps the extended kernel on its
-above-ground wires; the buried wires use the reduced kernel, and the advisory
-says so.
+but `bspline` and `razor-2p`, or two wires of different radii meeting at a
+junction on `sinusoidal-galerkin`. Those decks are solved with the reduced
+kernel, and the engine logs an `ExtendedKernelDefault` advisory instead of
+refusing. On `bspline` and `razor-2p` (since momwire#1614), a deck with wires
+below the ground keeps the extended kernel on its above-ground wires; the
+buried wires use the reduced kernel, and the advisory says so.
 
 **The `momwire-eznec` launchers are gone** (0.80.0). They were what earlier
 releases said to point EZNEC at; point that path at the `momwire-nec5` name
