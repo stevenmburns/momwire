@@ -411,6 +411,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_deck_core.h",
     "src/momwire/_nec4_deck_core.h",
     "src/momwire/_nec4_seam_core.h",
+    "src/momwire/_nec4_build_core.h",
     "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
     "src/momwire/_nec5_bspline_seam_core.h",
@@ -568,6 +569,9 @@ _ACCEL_SOURCES = [
     # The NEC-4.2 seam front (momwire#1607 A2): `_nec4.render` up to the
     # solve, over that reader.
     "src/momwire/_nec4_seam_core.cpp",
+    # The NEC-4.2 build (momwire#1607 A2b): DeckSolver's construction and
+    # the solver's constructor arguments, over that seam.
+    "src/momwire/_nec4_build_core.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
     # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh
     # and the ports, for any basis (`_nec5_seam_core.cpp`), and razor-2p's
