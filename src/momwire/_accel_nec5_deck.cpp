@@ -5,6 +5,7 @@
 // can hold the C++ reader to it field for field.
 #include "_accel_common.h"
 #include "_nec4_deck_core.h"
+#include "_nec4_build_core.h"
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
 
@@ -56,6 +57,15 @@ void register_nec5_deck(py::module_ &m) {
         py::arg("latin1"), py::arg("basis"),
         "The C++ NEC-4.2 seam front's outcome on a deck's latin-1 bytes "
         "(scripts/core_split/nec4_seam_compare.py writes the Python side).");
+    // The NEC-4.2 build (`_nec4_build_core.cpp`, momwire#1607 A2b).
+    m.def(
+        "nec4_build_dump",
+        [](py::bytes latin1, const std::string &basis) -> std::string {
+            return mw::nec4::dump_build(std::string(latin1), basis);
+        },
+        py::arg("latin1"), py::arg("basis"),
+        "The C++ NEC-4.2 build's outcome on a deck's latin-1 bytes "
+        "(scripts/core_split/nec4_build_compare.py writes the Python side).");
     m.def(
         "nec4_float_probe",
         [](const std::string &op, std::vector<double> v) -> py::object {
