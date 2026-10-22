@@ -70,6 +70,10 @@ CORE_SOURCES = (
     # The sinusoidal free-space fill and port solve over it (momwire#1607
     # B3), linked into `sinusoidal_fill_driver.cpp`.
     "_sinusoidal_fill_core.cpp",
+    # The NEC-4.2 run half and the sinusoidal basis' answers to it
+    # (momwire#1607 B4a), linked into `nec4_sinusoidal_printout_driver.cpp`.
+    "_nec4_run_core.cpp",
+    "_sinusoidal_run_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -217,6 +221,7 @@ def driver(accel, tmp_path_factory):
         "sinusoidal_core_driver",
         "sinusoidal_front_driver",
         "sinusoidal_fill_driver",
+        "nec4_sinusoidal_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -258,6 +263,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
     assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
     assert "_sinusoidal_fill_core.h" in seen, "the sinusoidal fill was not built"
+    assert "_nec4_run_core.h" in seen, "the NEC-4.2 run half was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -475,6 +481,72 @@ def test_the_sinusoidal_fill_in_cxx_alone_is_pythons(driver):
         assert diff is None, (path, diff)
         compared += 1
     assert compared >= 30, compared
+
+
+def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
+    """momwire#1607 B4a: deck text to the NEC-4.2 slot's printout for the
+    sinusoidal basis, built from the core TUs alone
+    (`nec4_sinusoidal_printout_driver`, on the OpenBLAS builds numpy and SciPy
+    bundle), is `_nec4.render(text, basis="sinusoidal")`'s on every NEC-4.2
+    fixture deck it prints, byte for byte but for the two measured-time
+    lines (masked by exact pattern, the same count on both sides)."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_nec4_run_compare", SPLIT / "nec4_run_compare.py"
+    )
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    version, variant, marker = rc.pc.stamp()
+    run = subprocess.run(
+        [
+            str(driver[0]["nec4_sinusoidal_printout_driver"]),
+            pc.scipy_openblas(),
+            pc.numpy_openblas(),
+            version,
+            variant,
+            marker or "-",
+            *map(str, decks),
+        ],
+        capture_output=True,
+        check=True,
+        env=dict(os.environ, **_ONE_THREAD),
+    )
+    blob = run.stdout
+    answers: dict[str, tuple[bool, str]] = {}
+    pos = 0
+    while pos < len(blob):
+        head_end = blob.index(b"\n", pos)
+        path = blob[pos + 3 : head_end].decode("utf-8")
+        line_end = blob.index(b"\n", head_end + 1)
+        word, arg = blob[head_end + 1 : line_end].split(b" ", 1)
+        if word == b"printed":
+            n = int(arg)
+            answers[path] = (
+                True,
+                blob[line_end + 1 : line_end + 1 + n].decode("utf-8"),
+            )
+            pos = line_end + 1 + n
+        else:
+            answers[path] = (False, bytes.fromhex(arg.decode()).decode("utf-8"))
+            pos = line_end + 1
+    printed = 0
+    with _one_thread():
+        for path in decks:
+            ok, text = answers[str(path)]
+            if not ok:
+                continue
+            a, na = rc.mask(rc.py_printout(path.read_bytes().decode("latin-1")))
+            b, nb = rc.mask(text)
+            assert (rc.first_difference(a, b), na) == (None, nb), path
+            printed += 1
+    assert printed >= 30, printed
 
 
 _SIN_KERNELS = (

@@ -423,6 +423,8 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
+    "src/momwire/_nec4_run_core.h",
+    "src/momwire/_sinusoidal_run_core.h",
     "src/momwire/_nec5_seam_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
     "src/momwire/_nec5_bspline_seam_core.h",
@@ -594,6 +596,10 @@ _ACCEL_SOURCES = [
     "src/momwire/_sinusoidal_front_core.cpp",
     # The sinusoidal free-space fill and port solve over it (momwire#1607 B3).
     "src/momwire/_sinusoidal_fill_core.cpp",
+    # The NEC-4.2 run half and the sinusoidal basis' answers to it
+    # (momwire#1607 B4a).
+    "src/momwire/_nec4_run_core.cpp",
+    "src/momwire/_sinusoidal_run_core.cpp",
     "src/momwire/_accel_nec4_printout.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
     # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh

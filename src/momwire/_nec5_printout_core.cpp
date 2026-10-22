@@ -3432,6 +3432,36 @@ void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t
                int64_t os_p) {
     nec5::np_matmul(np, a, b, out, os_m, os_p);
 }
+PatternBlock free_space_pattern(const Request &rq, const std::vector<double> &mid,
+                                const std::vector<cd> &moment, double frequency_mhz,
+                                double wavelength, double p_in, double p_radiated) {
+    const PatternBlockC c = nec5::pattern_block(rq, mid, moment, FarGround::free, 0.0, 0.0,
+                                                frequency_mhz, wavelength, p_in, false,
+                                                cd(0.0, 0.0), p_radiated);
+    PatternBlock out;
+    for (const PatternRowC &r : c.rows) {
+        PatternRow row;
+        row.theta = r.theta;
+        row.phi = r.phi;
+        row.vert = r.vert;
+        row.hor = r.hor;
+        row.total = r.total;
+        row.axial = r.axial;
+        row.tilt = r.tilt;
+        row.sense = r.sense;
+        row.et_mag = r.et_mag;
+        row.et_deg = r.et_deg;
+        row.ep_mag = r.ep_mag;
+        row.ep_deg = r.ep_deg;
+        out.rows.push_back(row);
+    }
+    out.has_average = c.has_average;
+    out.average_power_gain = c.average_power_gain;
+    out.solid_angle_pi = c.solid_angle_pi;
+    out.power_radiated_4pi = c.power_radiated_4pi;
+    out.directive = c.directive;
+    return out;
+}
 }  // namespace replay
 
 }  // namespace nec5
