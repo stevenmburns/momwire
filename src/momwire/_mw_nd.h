@@ -44,7 +44,9 @@ namespace nd {
 using ssize_t = std::ptrdiff_t;
 
 // The element types the kernels' arrays hold.
-enum class dtype : int { f64, c128, i64, i32, u8, boolean };
+// `i8` is last so every earlier value is unchanged; the sinusoidal core's
+// extended-kernel gating flags are int8 (momwire#1607 B1).
+enum class dtype : int { f64, c128, i64, i32, u8, boolean, i8 };
 
 template <class T>
 struct dtype_of;
@@ -67,6 +69,10 @@ struct dtype_of<int32_t> {
 template <>
 struct dtype_of<uint8_t> {
     static constexpr dtype value = dtype::u8;
+};
+template <>
+struct dtype_of<int8_t> {
+    static constexpr dtype value = dtype::i8;
 };
 template <>
 struct dtype_of<bool> {
