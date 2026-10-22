@@ -29,7 +29,7 @@ endorsed by SimNEC's author. Treat it as a cross-check you can run yourself.
 ```bash
 pip install momwire
 which momwire-nec2c        # e.g. ~/.venvs/momwire/bin/momwire-nec2c
-momwire-nec2c -version     # NEC2momwire.<major>.<minor>
+momwire-nec2c -version     # NEC2 momwire-nec2c [sb] <version>
 ```
 
 `python -m momwire.portal` is the same program under its long name, for an
@@ -179,7 +179,7 @@ would refuse every deck SimNEC writes.
 
 Setup is the same as for the NEC-2 slot: `which momwire-nec5-razor-2p` and give
 SimNEC that absolute path (one without spaces is safest). Its `-version` probe
-answers `NEC5momwire.<major>.<minor>`. These commands run the same warm engine
+answers `NEC5 momwire-nec5-razor-2p [sb] <version>`. These commands run the same warm engine
 as the EZNEC drop-in, so a run after the first answers in milliseconds, and
 SimNEC's N-port measurement (one run block per port in a single deck) is served
 as NEC-5 serves it. On Windows without Python, the drop-in zip,
@@ -189,14 +189,23 @@ tells EZNEC's NEC-5 slot to use.
 
 ## The version probe
 
-SimNEC runs `<command> -version` and reads the first line. The portal answers
+SimNEC runs `<command> -version` and reads the first line. Every momwire
+launcher answers four fields separated by spaces (momwire#1606):
 
 ```text
-NEC2momwire.<major>.<minor>
+NEC2 momwire-nec2c [sb] 0.82.0
 ```
 
-which is SimNEC's own engine-family form: the `NEC2` prefix declares the deck
-dialect, and the text after it is free. SimNEC shows the string in the portal
+1. The deck dialect the launcher reads: `NEC2`, `NEC42` or `NEC5`.
+2. The launcher's name, which always starts with `momwire`.
+3. The interface modes it serves beyond one deck per call, in square
+   brackets: `s` for streaming, `b` for batch (decks chained by `NX`). Every
+   launcher answers `[sb]`.
+4. The full momwire version.
+
+The dialect comes first because SimNEC takes the engine number from the first
+digit of the line, and its NEC-2 and NEC-4.2 checks need 2 and 4 there.
+SimNEC shows the string in the portal
 dialog's `NECVersion` row, stamps it as a `CM version` comment card on every
 deck it sends, and stores it in saved circuits — so a momwire session is
 identifiable as one everywhere the version travels.
@@ -206,8 +215,10 @@ that changes solve results. An engine release moves it; nothing else does.
 
 For a SimNEC build old enough to predate that form, `--legacy-probe` on the
 portal command line restores the older `nec2c.ae6ty.9.1` shape. Nothing else
-about the session changes either way. The probe line never carries the
-`--basis` suffix; only the printout banner does.
+about the session changes either way. The probe line names the launcher, not
+the engine: `--basis` never changes it, and only the printout banner records
+which basis answered. A copy named for a basis (`momwire-nec2c-pulse`) gives
+that name.
 
 ## Running a deck from the command line
 

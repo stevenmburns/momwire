@@ -601,8 +601,8 @@ def test_the_clients_version_probes_read_the_baked_version(monkeypatch, tmp_path
 
     _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked="9.8.7")
-    assert momwire_nec2c_client.probe_version() == "NEC2momwire.9.8"
-    assert momwire_eznec_client.probe_version() == "NEC5momwire.9.8"
+    assert momwire_nec2c_client.probe_version() == "NEC2 momwire-nec2c [sb] 9.8.7"
+    assert momwire_eznec_client.probe_version() == "NEC5 momwire-nec5 [sb] 9.8.7"
 
 
 # --------------------------------------------------------------------------

@@ -227,23 +227,33 @@ def _last_ditch(printout_path: str, reason: str) -> None:
         print(f"NEC ERROR - {reason}")
 
 
-def probe_version() -> str:
-    """The ``-version`` first line, answered without importing momwire.
+def probe_version(prog: str = "momwire-eznec-client") -> str:
+    """The ``-version`` line, answered without importing momwire.
 
-    EZNEC never asks: it always passes a deck and a printout path. SimNEC does,
-    because a path containing ``nec5`` is its NEC-5 engine class, and its
-    configure step runs ``"<path>" -version`` before accepting the engine. It
-    takes exit 0 (or 24) with any first line, and records a line matching its
-    ``versionNECd`` pattern, ``NEC<digits><non-digit>...``, as the engine's
-    version. ``NEC5momwire.<major>.<minor>`` is the NEC-5 twin of the portal's
-    ``NEC2momwire.<major>.<minor>``, read through
-    :func:`momwire_serve_client.dist_version` like
-    ``momwire_nec2c_client.probe_version`` (a frozen bundle's baked version
-    first, momwire#1277), so the probe costs no NumPy import and spawns
-    nothing.
+    :func:`momwire_serve_client.version_line` (momwire#1606): the slot's
+    dialect, the launcher's name, its interface modes and the full version,
+    e.g. ``NEC5 momwire-nec5-razor-2p [sb] 0.82.0``.  The name is the one
+    the launcher answers to, rebuilt from what its own name selects
+    (:func:`launcher_name`), so a renamed copy still names itself as one of
+    ours.  Read through :func:`momwire_serve_client.momwire_version` (a frozen
+    bundle's baked version first, momwire#1277), so the probe costs no NumPy
+    import and spawns nothing.
     """
-    major, minor = _mech.dist_version()
-    return f"NEC5momwire.{major}.{minor}"
+    is_nec4, _basis = _mech.filename_nec4(prog)
+    return _mech.version_line("NEC42" if is_nec4 else "NEC5", launcher_name(prog))
+
+
+def launcher_name(prog: str) -> str:
+    """The shipped name a program NAME selects: ``momwire-nec42[-<basis>]``
+    for the NEC-4.2 slot, ``momwire-nec5[-<basis>]`` otherwise, by the same
+    rules :func:`main` reads the slot and the basis with."""
+    is_nec4, basis = _mech.filename_nec4(prog)
+    if not is_nec4:
+        basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+        if basis is None:
+            basis = _mech.filename_basis(prog, _NEC5_MARKER)
+    stem = "momwire-nec42" if is_nec4 else "momwire-nec5"
+    return f"{stem}-{basis}" if basis else stem
 
 
 STREAMING_REFUSAL = (
@@ -321,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     _mech.pin_cpu_env()
 
     if args == ["-version"]:
-        print(probe_version())
+        print(probe_version(prog))
         return 0
     is_nec4, basis = _mech.filename_nec4(prog)
     en_optional = False

@@ -138,6 +138,11 @@ typedef int lock_t;
 #ifndef MOMWIRE_VERSION_MINOR
 #define MOMWIRE_VERSION_MINOR 0
 #endif
+/* The third component, for the `-version` line's full version only
+ * (momwire#1606); the key above stays major.minor, as the Python side's. */
+#ifndef MOMWIRE_VERSION_PATCH
+#define MOMWIRE_VERSION_PATCH 0
+#endif
 #define MW_STR2(x) #x
 #define MW_STR(x) MW_STR2(x)
 #define ENGINE_TAG "eznec." MW_STR(MOMWIRE_VERSION_MAJOR) "." MW_STR(MOMWIRE_VERSION_MINOR)
@@ -166,10 +171,13 @@ typedef int lock_t;
 #define NEC42_MARKER "nec42"
 #define NEC4_KEY_ELEMENT "dialect=nec4"
 
-/* SimNEC's configure step runs `"<path>" -version` on a nec5 engine, takes
- * exit 0 with any first line, and records one matching `NEC<digits><non-
- * digit>...` as the version.  `momwire_eznec_client.probe_version`'s line. */
-#define VERSION_LINE "NEC5momwire." MW_STR(MOMWIRE_VERSION_MAJOR) "." MW_STR(MOMWIRE_VERSION_MINOR)
+/* The `-version` line (momwire#1606), `momwire_serve_client.version_line`'s:
+ * the slot's dialect, this launcher's name, its interface modes and the full
+ * version, e.g. `NEC42 momwire-nec42-sinusoidal [sb] 0.82.0`.  The dialect
+ * leads because deployed SimNEC builds take the engine number from the
+ * line's first digit.  `print_version_line` assembles it. */
+#define VERSION_FULL MW_STR(MOMWIRE_VERSION_MAJOR) "." MW_STR(MOMWIRE_VERSION_MINOR) "." MW_STR(MOMWIRE_VERSION_PATCH)
+#define LAUNCHER_MODES "sb"
 
 /* The one spawn target a deployed bundle has: there is no system Python on a
  * user's box, so the daemon is the bundle's own frozen exe (#718 D3).  The
@@ -2061,6 +2069,25 @@ static void last_ditch(const char *printout_path, const char *reason)
     }
 }
 
+/* `momwire_eznec_client.probe_version`: the name this program's own name
+ * selects -- `momwire-nec42[-<basis>]` or `momwire-nec5[-<basis>]`, by
+ * `basis_of`'s rules -- so a renamed copy still names itself as ours. */
+static void print_version_line(const char *argv0)
+{
+    char basis[PATH_CAP];
+    int nec4 = 0;
+    int named = basis_of(argv0, basis, sizeof basis, &nec4);
+    const char *stem = nec4 ? "momwire-nec42" : "momwire-nec5";
+
+    if (named && basis[0] != '\0') {
+        printf("%s %s-%s [%s] %s\n", nec4 ? "NEC42" : "NEC5", stem, basis,
+               LAUNCHER_MODES, VERSION_FULL);
+    } else {
+        printf("%s %s [%s] %s\n", nec4 ? "NEC42" : "NEC5", stem, LAUNCHER_MODES,
+               VERSION_FULL);
+    }
+}
+
 int main(int argc, char **argv)
 {
     static setup_t setup;
@@ -2075,7 +2102,7 @@ int main(int argc, char **argv)
      * which print what the real engine prints and write no file because
      * there is no output path to write one to. */
     if (argc == 2 && strcmp(argv[1], "-version") == 0) {
-        printf("%s\n", VERSION_LINE);
+        print_version_line(argv[0]);
         return 0;
     }
     if (argc < 2) {

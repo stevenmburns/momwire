@@ -308,15 +308,17 @@ def test_argument_errors_print_and_write_nothing(client_exe, tmp_path):
 @pytest.mark.parametrize("name", [NEC5_NAME, NEC5_TWIN_NAME, CLIENT_NAME])
 def test_the_version_probe_answers_without_an_engine(client_exe, name):
     """SimNEC's configure step: ``"<path>" -version``, exit 0, first line
-    ``NEC5momwire.<major>.<minor>`` — the Python client's line, from the
-    version compiled in, with no daemon spawned and no file written."""
+    ``NEC5 <name> [sb] <version>`` — the Python client's line (momwire#1606),
+    from the version compiled in, with no daemon spawned and no file
+    written."""
     bundle = _bundle(client_exe, None, names=(name,))
     room = _room()
     try:
         proc = _run(bundle, name, ["-version"], room)
-        major, minor = mech.dist_version()
+        import momwire_eznec_client
+
         assert proc.returncode == 0
-        assert proc.stdout.splitlines()[0] == f"NEC5momwire.{major}.{minor}"
+        assert proc.stdout.splitlines()[0] == momwire_eznec_client.probe_version(name)
         assert _listening(room) == []
     finally:
         _stop(room)

@@ -37,16 +37,19 @@ if "%VERSION%"=="" (
     exit /b 1
 )
 
-for /f "tokens=1,2 delims=." %%a in ("%VERSION%") do (
+for /f "tokens=1,2,3 delims=." %%a in ("%VERSION%") do (
     set "MAJOR=%%a"
     set "MINOR=%%b"
+    set "PATCH=%%c"
 )
 if "%MAJOR%"=="" set "MAJOR=0"
 if "%MINOR%"=="" set "MINOR=0"
+if "%PATCH%"=="" set "PATCH=0"
 
 cl /nologo /W3 /WX /O2 /MT /TC ^
     /DMOMWIRE_VERSION_MAJOR=%MAJOR% ^
     /DMOMWIRE_VERSION_MINOR=%MINOR% ^
+    /DMOMWIRE_VERSION_PATCH=%PATCH% ^
     /Fe:"%OUT%" "%HERE%momwire_eznec_client.c" ^
     /link ws2_32.lib advapi32.lib
 exit /b %ERRORLEVEL%

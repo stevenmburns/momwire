@@ -387,8 +387,8 @@ def test_the_version_probe_is_the_nec5_twin_simnec_records(capsys, monkeypatch):
     monkeypatch.setattr(eznec_client, "_one_shot", _no_serving)
     assert eznec_client.main(["-version"]) == 0
     first = capsys.readouterr().out.splitlines()[0].strip()
-    major, minor = eznec_client._mech.dist_version()
-    assert first == f"NEC5momwire.{major}.{minor}"
+    version = eznec_client._mech.momwire_version()
+    assert first == f"NEC5 momwire-nec5 [sb] {version}"
     assert re.match(r"(NEC\d+\D.*)", first)
     # None of SimNEC's NEC-2 patterns may claim it: those run a minimum-
     # version check on the tail, which this spelling must never enter.

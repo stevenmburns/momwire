@@ -79,4 +79,4 @@ def test_the_basis_rides_on_the_name(prog, basis, monkeypatch, tmp_path):
 def test_the_version_probe_answers_under_a_nec5_name(capsys, monkeypatch):
     monkeypatch.setattr("sys.argv", ["momwire-nec5-razor-2p", "-version"])
     assert eznec_client.main(None) == 0
-    assert capsys.readouterr().out.startswith("NEC5momwire.")
+    assert capsys.readouterr().out.startswith("NEC5 momwire-nec5-razor-2p [sb] ")
