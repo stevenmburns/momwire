@@ -45,6 +45,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_cmul(m);
     register_razor_solve(m);
     register_nec5_deck(m);
+    register_nec4_printout(m);
 
     // MOMWIRE_TIMES: the C++ half of a Python answer's stage
     // tally -- the ground tables and the LU this module fills and runs --
