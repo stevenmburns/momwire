@@ -24,9 +24,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <set>
@@ -1102,7 +1104,11 @@ class Parser {
         if (x == 1.0) return 1.0;
         double r = std::pow(x, static_cast<double>(i));
         if (std::isinf(r))
-            throw ParseError(ErrorKind::overflow_error, "(34, 'Numerical result out of range')");
+            // PyErr_SetFromErrno's (errno, strerror): the C library's words,
+            // "Numerical result out of range" on glibc, "Result too large" on
+            // Apple's libc and the UCRT
+            throw ParseError(ErrorKind::overflow_error,
+                             "(" + std::to_string(ERANGE) + ", '" + std::strerror(ERANGE) + "')");
         return r;
     }
 

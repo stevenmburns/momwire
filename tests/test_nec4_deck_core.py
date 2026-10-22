@@ -26,6 +26,8 @@ from __future__ import annotations
 import importlib.util
 import math
 import pathlib
+import errno
+import os
 import random
 import struct
 import sys
@@ -112,6 +114,10 @@ def deck(
     return geometry + ge + "\n" + "".join(c + "\n" for c in cards) + tail
 
 
+# Python's OverflowError text for `float ** int` is (errno, strerror): the C
+# library's words, which differ between glibc, Apple's libc and the UCRT.
+_ERANGE = f"({errno.ERANGE}, {os.strerror(errno.ERANGE)!r})"
+
 # A two-wire structure that a GX in Y=0 mirrors (cell = wires 1-2).
 HALF = "GW 1 5 0 .1 -.25 0 .1 .25 .001\nGW 2 3 0 .1 .25 0 .3 .25 .001\n"
 
@@ -140,7 +146,7 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "fr_multiplicative_overflow",
         ("nec2",),
         deck(DIPOLE, tail="FR 1 400 0 0 1 10\nEX 0 1 6 0 1\nXQ\nEN\n"),
-        "Numerical result out of range",
+        _ERANGE,
     ),
     (
         "fr_multiplicative_underflow",
