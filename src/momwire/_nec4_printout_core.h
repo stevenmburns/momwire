@@ -33,12 +33,17 @@ namespace nec4 {
 
 typedef std::complex<double> cplx;
 
-struct WireTableRow {  // WireRow | ScaleRow | MoveRow
-    enum Kind { wire, scale, move } kind = wire;
+struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow
+    enum Kind { wire, arc, helix, scale, move } kind = wire;
     // wire
     long long number = 0, segments = 0, first = 0, last = 0, tag = 0;
     double end1[3] = {0, 0, 0}, end2[3] = {0, 0, 0};
     double radius = 0;
+    // arc (GA, momwire#1592): number, radius and the segment columns above too
+    double arc_radius = 0, angle1_deg = 0, angle2_deg = 0;
+    // helix (GH): number and the segment columns above too
+    double turns = 0, length = 0, wire_length = 0;
+    double helix_radii[2] = {0, 0}, wire_radii[2] = {0, 0};
     // scale
     double factor = 0;
     // move

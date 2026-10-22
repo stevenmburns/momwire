@@ -232,6 +232,32 @@ Nec4Printout printout_of(const py::handle &h) {
             three(at(w, "translation"), r.translation);
             r.first_tag = in(at(w, "first_tag"));
             r.move_segments = in(at(w, "segments"));
+        } else if (kind == "ArcRow") {
+            r.kind = WireTableRow::arc;
+            r.number = in(at(w, "number"));
+            r.arc_radius = fl(at(w, "arc_radius"));
+            r.angle1_deg = fl(at(w, "angle1_deg"));
+            r.angle2_deg = fl(at(w, "angle2_deg"));
+            r.radius = fl(at(w, "radius"));
+            r.segments = in(at(w, "segments"));
+            r.first = in(at(w, "first"));
+            r.last = in(at(w, "last"));
+            r.tag = in(at(w, "tag"));
+        } else if (kind == "HelixRow") {
+            r.kind = WireTableRow::helix;
+            r.number = in(at(w, "number"));
+            r.turns = fl(at(w, "turns"));
+            r.length = fl(at(w, "length"));
+            py::object hr = at(w, "helix_radii"), wr = at(w, "wire_radii");
+            r.helix_radii[0] = fl(hr[py::int_(0)]);
+            r.helix_radii[1] = fl(hr[py::int_(1)]);
+            r.wire_radii[0] = fl(wr[py::int_(0)]);
+            r.wire_radii[1] = fl(wr[py::int_(1)]);
+            r.wire_length = fl(at(w, "wire_length"));
+            r.segments = in(at(w, "segments"));
+            r.first = in(at(w, "first"));
+            r.last = in(at(w, "last"));
+            r.tag = in(at(w, "tag"));
         } else {
             r.number = in(at(w, "number"));
             three(at(w, "end1"), r.end1);

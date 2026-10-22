@@ -175,7 +175,30 @@ Lines echo(ll index, const nec5::Card &card) {
 
 // --- rows ------------------------------------------------------------------------
 
+// The wire table's last four columns (`_nec4_printout._segment_columns`).
+std::string segment_columns(const WireTableRow &r) {
+    return d(r.segments, 7) + d(r.first, 9) + d(r.last, 6) + d(r.tag, 8);
+}
+
+// Python's `f"{s:<width}"`: pad on the right, never cut.
+std::string left(const std::string &s, std::size_t width) {
+    return s.size() >= width ? s : s + std::string(width - s.size(), ' ');
+}
+
 Lines structure_rows(const WireTableRow &r) {
+    if (r.kind == WireTableRow::arc) {
+        std::string head = d(r.number, 6) + "  ARC RADIUS =" + f(r.arc_radius, 9, 5) + "  FROM" +
+                           f(r.angle1_deg, 8, 3) + " TO" + f(r.angle2_deg, 8, 3) + " DEGREES";
+        return {left(head, 73) + f(r.radius, 11, 5) + segment_columns(r)};
+    }
+    if (r.kind == WireTableRow::helix) {
+        std::string head = d(r.number, 6) + "      THIS WIRE IS A LOG-SPIRAL OR HELIX";
+        return {left(head, 84) + segment_columns(r),
+                "          SPIRAL DATA: TURNS=" + f(r.turns, 10, 4) + "  LENGTH=" + e(r.length, 12, 4) +
+                    "  H.RAD=" + e(r.helix_radii[0], 12, 4) + e(r.helix_radii[1], 12, 4) +
+                    "  W.RAD=" + e(r.wire_radii[0], 12, 4) + e(r.wire_radii[1], 12, 4),
+                "          TOTAL LENGTH OF WIRE IN THE SPIRAL =" + e(r.wire_length, 13, 5)};
+    }
     if (r.kind == WireTableRow::scale) return {"      STRUCTURE SCALED BY FACTOR" + f(r.factor, 10, 5)};
     if (r.kind == WireTableRow::move) {
         std::string numbers;
