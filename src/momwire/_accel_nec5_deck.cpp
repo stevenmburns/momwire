@@ -6,6 +6,7 @@
 #include "_accel_common.h"
 #include "_nec4_deck_core.h"
 #include "_nec4_build_core.h"
+#include "_sinusoidal_front_core.h"
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
 
@@ -66,6 +67,15 @@ void register_nec5_deck(py::module_ &m) {
         py::arg("latin1"), py::arg("basis"),
         "The C++ NEC-4.2 build's outcome on a deck's latin-1 bytes "
         "(scripts/core_split/nec4_build_compare.py writes the Python side).");
+    // The sinusoidal front half (`_sinusoidal_front_core.cpp`, momwire#1607 B2).
+    m.def(
+        "sinusoidal_front_dump",
+        [](py::bytes latin1) -> std::string { return mw::sinusoidal::dump_front(std::string(latin1)); },
+        py::arg("latin1"),
+        "The C++ sinusoidal front half (constants, junctions, _build_geometry, "
+        "_basis_coefs) at every operating point the NEC-4.2 build makes of a "
+        "deck (scripts/core_split/sinusoidal_front_compare.py writes the "
+        "Python side).");
     m.def(
         "nec4_float_probe",
         [](const std::string &op, std::vector<double> v) -> py::object {
