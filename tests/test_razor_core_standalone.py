@@ -67,6 +67,9 @@ CORE_SOURCES = (
     # The nec2 / nec4 deck reader (momwire#1607 A1): the NEC-4.2-dialect
     # executables' first step, linked into `nec4_deck_driver.cpp` below.
     "_nec4_deck_core.cpp",
+    # The NEC-4.2 seam front over it (momwire#1607 A2), linked into
+    # `nec4_seam_driver.cpp`.
+    "_nec4_seam_core.cpp",
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
     # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents);
     # the engine-neutral seam and razor-2p's engine over it.
@@ -188,6 +191,7 @@ def driver(accel, tmp_path_factory):
         "razor_front_driver",
         "nec5_deck_driver",
         "nec4_deck_driver",
+        "nec4_seam_driver",
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
         "nec5_bspline_printout_driver",
@@ -226,6 +230,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_razor_front_core.h" in seen, "the front half's core was not built"
     assert "_nec5_deck_core.h" in seen, "the deck reader's core was not built"
     assert "_nec4_deck_core.h" in seen, "the nec2 / nec4 reader's core was not built"
+    assert "_nec4_seam_core.h" in seen, "the NEC-4.2 seam's core was not built"
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
@@ -259,6 +264,29 @@ def test_the_nec4_deck_reader_in_cxx_alone_is_pythons(driver, dialect):
     counts, mismatches = nc.compare(decks, dialect, driver[0]["nec4_deck_driver"])
     assert not mismatches, mismatches[:3]
     assert counts["parsed"] >= 200 and counts["refused"] >= 100, counts
+    assert counts["declined"] <= 3, counts
+
+
+@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+def test_the_nec4_seam_in_cxx_alone_is_pythons(driver, basis):
+    """momwire#1607 A2: the NEC-4.2 slot's front (`_nec4.render` up to the
+    solve), built from the core TUs alone (`nec4_seam_driver`), serves and
+    refuses every NEC deck in tests/fixtures as the slot does, the printout's
+    view of the cards field for field (the extension-bound twin of this
+    check is `tests/test_nec4_seam_core.py`)."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_nec4_seam_compare", SPLIT / "nec4_seam_compare.py"
+    )
+    nc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nc)
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    counts, mismatches = nc.compare(decks, basis, driver[0]["nec4_seam_driver"])
+    assert not mismatches, mismatches[:3]
+    assert counts["served"] >= 200 and counts["refused"] >= 100, counts
     assert counts["declined"] <= 3, counts
 
 

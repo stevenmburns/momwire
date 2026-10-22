@@ -2104,5 +2104,39 @@ std::string py_repr(double x) {
 
 double py_dist(const double a[3], const double b[3]) { return dist3(a, b); }
 
+Geometry geometry_of(const std::vector<Card> &cards) {
+    Structure st = build_geometry(cards);
+    Geometry g;
+    for (const FlatWire &w : st.wires) {
+        GeometryWire v;
+        v.tag = w.tag;
+        v.n_seg = w.n_seg;
+        for (int c = 0; c < 3; c++) {
+            v.p1[c] = w.p1[c];
+            v.p2[c] = w.p2[c];
+        }
+        v.radius = w.radius;
+        g.wires.push_back(v);
+    }
+    for (const Piece &p : st.pieces) {
+        GeometryPiece v;
+        v.wire = p.wire;
+        v.first_seg = p.first_seg;
+        v.n_seg = p.n_seg;
+        for (int c = 0; c < 3; c++) {
+            v.p1[c] = p.p1[c];
+            v.p2[c] = p.p2[c];
+        }
+        g.pieces.push_back(v);
+    }
+    g.pieces_of_wire = st.pieces_of_wire;
+    g.ground_plane_flag = st.ground_plane_flag;
+    g.ground_plane_interpolates = st.ground_plane_interpolates;
+    g.has_symmetry = st.has_symmetry;
+    g.cell_wires = st.symmetry.cell_wires;
+    g.cell_segments = st.symmetry.cell_segments;
+    return g;
+}
+
 }  // namespace nec4
 }  // namespace mw
