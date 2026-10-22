@@ -1123,6 +1123,67 @@ class CoaxialCrossRows:
         return out
 
 
+# momwire#1615: the line's two-radius moments in C++
+# (`_exact_kernel_coaxial_cross_inline.h`), which the standalone bs2 route
+# compiles from the same text.
+_HAVE_COAXIAL_CROSS_ACCEL = _acc is not None and hasattr(
+    _acc, "ExactKernelCoaxialCrossRows"
+)
+
+
+class CoaxialCrossRowsAccel:
+    """`CoaxialCrossRows` through the C++ kernel: the same windows, the same
+    `rows(r0, r1)` and `evaluated`, the same key (the quantised h_i, h_j, c,
+    σ_i, σ_j, a_i, a_j), the cache bounded the same way. Not bit-exact with
+    the numpy class (its einsums and its vectorised far rule sum in their own
+    order): every value here is a function of its own pair alone, so the bits
+    do not depend on the window, the batch or the thread count; the agreement
+    is gated at a tolerance (tests/test_exact_kernel_two_radius_1438.py). It
+    is the one implementation the bs2 solver and the standalone bs2 route
+    (momwire#1615) share, as `PointCrossRowsAccel` is razor-2p's."""
+
+    def __init__(self, x0, sgn, h, a, lab, k, nd, max_cached=None, *, n_threads=0):
+        h = np.asarray(h, dtype=np.float64)
+        a = np.asarray(a, dtype=np.float64)
+        self.n = int(h.shape[0])
+        self.nd = nd
+        q = 1e-11 * float(np.max(h)) if self.n else 1.0
+        qa = 1e-11 * float(np.max(a)) if self.n else 1.0
+        self._impl = _acc.ExactKernelCoaxialCrossRows(
+            np.asarray(x0, dtype=np.float64),
+            np.asarray(sgn, dtype=np.float64),
+            h,
+            a,
+            np.asarray(lab, dtype=np.int64),
+            float(k),
+            int(nd),
+            -1 if max_cached is None else int(max_cached),
+            q,
+            qa,
+            _accel_rules(),
+            int(n_threads),
+        )
+
+    @property
+    def evaluated(self):
+        return int(self._impl.evaluated)
+
+    def rows(self, r0, r1):
+        """(nd, nd, r1 - r0, n): observer rows [r0, r1) of the line's block,
+        zero on the same-radius pairs."""
+        out = np.empty((self.nd, self.nd, r1 - r0, self.n), dtype=np.complex128)
+        self._impl.rows(int(r0), int(r1), out)
+        return out
+
+
+def coaxial_cross_rows(x0, sgn, h, a, lab, k, nd, max_cached=None):
+    """The two-radius row-window source bs2 walks: C++ where it serves
+    (`CoaxialCrossRowsAccel`), else the numpy `CoaxialCrossRows`."""
+    if _HAVE_COAXIAL_CROSS_ACCEL and accel_serves(k, nd):
+        return CoaxialCrossRowsAccel(x0, sgn, h, a, lab, k, nd, max_cached=max_cached)
+    return CoaxialCrossRows(x0, sgn, h, a, lab, k, nd, max_cached=max_cached)
+
+
 def coaxial_cross_block(x0, sgn, h, a, lab, k, nd):
     """(nd, nd, n, n) two-radius block of one coaxial line, whole (the
     reference the row windows are gated against)."""

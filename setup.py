@@ -314,6 +314,10 @@ _ACCEL_HEADERS = [
     "src/momwire/_exact_kernel_table_inline.h",
     # momwire#1438: the two-radius point moments, included by the 1433 TU.
     "src/momwire/_exact_kernel_cross_inline.h",
+    # momwire#1615: the two-radius kernel those and bs2's Galerkin cross
+    # moments share, and the cross moments (the 1410 TU and its core twin).
+    "src/momwire/_exact_kernel_ring2_inline.h",
+    "src/momwire/_exact_kernel_coaxial_cross_inline.h",
     "src/momwire/_bspline_static_moments_inline.h",
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",

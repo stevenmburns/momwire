@@ -56,5 +56,28 @@ class CoaxialRows {
     std::unique_ptr<Impl> impl_;
 };
 
+// `ExactKernelCoaxialCrossRows` (momwire#1615): one coaxial LINE carrying a
+// radius step (segment starts x0, directions sgn, lengths h, radii a, the
+// one-radius group labels lab), the two-radius moments of observer rows
+// against every segment, zero on each pair whose two labels agree (the
+// groups own those); the pair cache keyed on (h, c, sigma, a) quantised by
+// q and qa, capped at max_cached.
+class CoaxialCrossRows {
+  public:
+    CoaxialCrossRows(const double *x0, const double *sgn, const double *h, const double *a,
+                     const int64_t *lab, int64_t n, double k, int nd, int64_t max_cached,
+                     double q, double qa, const PointRules &rules, int n_threads);
+    ~CoaxialCrossRows();
+    CoaxialCrossRows(CoaxialCrossRows &&) noexcept;
+    int64_t n() const;
+    int64_t evaluated() const;
+    // Rows [r0, r1) into out, (nd, nd, r1 - r0, n) C order.
+    void rows(int64_t r0, int64_t r1, cd *out);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 }  // namespace ek
 }  // namespace mw

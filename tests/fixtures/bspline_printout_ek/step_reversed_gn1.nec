@@ -1,0 +1,11 @@
+CM thin-fat-thin on one line, the last wire walked backwards, perfect ground (momwire#1615)
+CE
+GW 1 70 0 0 0.5 0 0 2.0 0.005
+GW 2 30 0 0 2.0 0 0 2.6 0.03
+GW 3 70 0 0 4.1 0 0 2.6 0.005
+GE 1
+GN 1
+EX 0 2 15 0 1 0
+FR 0 2 0 0 28.0 1.0
+XQ
+EN

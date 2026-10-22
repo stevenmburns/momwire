@@ -1,6 +1,8 @@
 #include "_accel_common.h"
 
 #include <cstring>
+#include <limits>
+#include <map>
 #include <stdexcept>
 #ifdef _OPENMP
 #include <omp.h>
@@ -47,6 +49,9 @@ namespace exact_kernel_1410 {
 
 #define MW_EK_RELEASE_GIL py::gil_scoped_release release;
 #include "_exact_kernel_coaxial_inline.h"
+// the cross job across a radius step (momwire#1615), on the same rules
+#include "_exact_kernel_ring2_inline.h"
+#include "_exact_kernel_coaxial_cross_inline.h"
 
 static Rules make_rules(py::array_t<double, py::array::c_style | py::array::forcecast> xg,
                         py::array_t<double, py::array::c_style | py::array::forcecast> wg,
@@ -104,6 +109,58 @@ class CoaxialRowsAccel {
 
   private:
     CoaxialRowsCore core_;
+    int nd_;
+};
+
+// ---------------------------------------------------------------------------
+// CoaxialCrossRows: the binding over `CoaxialCrossRowsCore` (momwire#1615)
+// ---------------------------------------------------------------------------
+class CoaxialCrossRowsAccel {
+  public:
+    CoaxialCrossRowsAccel(py::array_t<double, py::array::c_style | py::array::forcecast> x0,
+                          py::array_t<double, py::array::c_style | py::array::forcecast> sgn,
+                          py::array_t<double, py::array::c_style | py::array::forcecast> h,
+                          py::array_t<double, py::array::c_style | py::array::forcecast> a,
+                          py::array_t<int64_t, py::array::c_style | py::array::forcecast> lab,
+                          double k, int nd, int64_t max_cached, double q, double qa, Rules rules,
+                          int n_threads)
+        : core_(checked(x0, sgn, h, a, lab), sgn.data(), h.data(), a.data(), lab.data(),
+                static_cast<int64_t>(x0.size()), k, nd, max_cached, q, qa, rules, n_threads),
+          nd_(nd) {}
+
+    int64_t n() const { return core_.n(); }
+    int64_t evaluated() const { return core_.evaluated(); }
+    int64_t cached() const { return core_.cached(); }
+
+    void rows(int64_t r0, int64_t r1, py::array out) {
+        const int64_t n = this->n();
+        const int nd = nd_;
+        if (r0 < 0 || r1 > n || r1 < r0)
+            throw std::runtime_error("CoaxialCrossRowsAccel.rows: bad row window");
+        const int64_t m = r1 - r0;
+        if (out.ndim() != 4 || out.shape(0) != nd || out.shape(1) != nd || out.shape(2) != m ||
+            out.shape(3) != n)
+            throw std::runtime_error("CoaxialCrossRowsAccel.rows: out must be (nd, nd, r1-r0, n)");
+        if (!out.dtype().is(py::dtype::of<std::complex<double>>()) ||
+            !(out.flags() & py::array::c_style) || !out.writeable())
+            throw std::runtime_error(
+                "CoaxialCrossRowsAccel.rows: out must be complex128, C-contiguous, writeable");
+        core_.rows(r0, r1, static_cast<cd *>(out.mutable_data()));
+    }
+
+  private:
+    static const double *checked(
+        const py::array_t<double, py::array::c_style | py::array::forcecast> &x0,
+        const py::array_t<double, py::array::c_style | py::array::forcecast> &sgn,
+        const py::array_t<double, py::array::c_style | py::array::forcecast> &h,
+        const py::array_t<double, py::array::c_style | py::array::forcecast> &a,
+        const py::array_t<int64_t, py::array::c_style | py::array::forcecast> &lab) {
+        const py::ssize_t n = x0.size();
+        if (sgn.size() != n || h.size() != n || a.size() != n || lab.size() != n)
+            throw std::runtime_error("CoaxialCrossRowsAccel: x0, sgn, h, a, lab must share a length");
+        return x0.data();
+    }
+    CoaxialCrossRowsCore core_;
     int nd_;
 };
 
@@ -210,5 +267,23 @@ void register_exact_kernel(py::module_ &m) {
         .def_property_readonly("evaluated", &CoaxialRowsAccel::evaluated)
         .def_property_readonly("cached", &CoaxialRowsAccel::cached)
         .def_property_readonly("n", &CoaxialRowsAccel::n);
+    py::class_<CoaxialCrossRowsAccel>(m, "ExactKernelCoaxialCrossRows")
+        .def(py::init<py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<int64_t, py::array::c_style | py::array::forcecast>, double, int,
+                      int64_t, double, double, Rules, int>(),
+             py::arg("x0"), py::arg("sgn"), py::arg("h"), py::arg("a"), py::arg("lab"),
+             py::arg("k"), py::arg("nd"), py::arg("max_cached"), py::arg("q"), py::arg("qa"),
+             py::arg("rules"), py::arg("n_threads") = 0)
+        .def("rows", &CoaxialCrossRowsAccel::rows,
+             "Write observer rows [r0, r1) of the line's two-radius moment block into out "
+             "(nd, nd, r1 - r0, n), complex128, C-contiguous; zero on same-label pairs. "
+             "momwire#1615.",
+             py::arg("r0"), py::arg("r1"), py::arg("out"))
+        .def_property_readonly("evaluated", &CoaxialCrossRowsAccel::evaluated)
+        .def_property_readonly("cached", &CoaxialCrossRowsAccel::cached)
+        .def_property_readonly("n", &CoaxialCrossRowsAccel::n);
     m.attr("exact_kernel_1410") = true;
 }

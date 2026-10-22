@@ -1514,9 +1514,10 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     Sommerfeld composition with its graded raised pairs (steps 3b, 3c) and a
     wholly-buried structure (step 4a) included. What it declines is a deck
     with wires on both sides of the interface and no crossing node (the
-    transmitted blocks, step 4c), a geometry Python refuses by medium
-    (its sentence not yet ported) and the exact kernel's radius-step cross
-    job, by name, and nothing else. A one-radius crossing node is served
+    transmitted blocks, step 4c) and a geometry Python refuses by medium
+    (its sentence not yet ported), by name, and nothing else. The exact
+    kernel's cross job across a radius step is served (momwire#1615). A
+    one-radius crossing node is served
     (step 4b), a node gap on one included (its KCL row, momwire#1282 /
     #1569), and a two-radius one (antennaknobs plan U5, 0.79.2)."""
     # The wholly-buried decks have their own test below (their Python fills
@@ -1541,7 +1542,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
         "front:bspline-buried-refusal-medium",
         "front:bspline-buried-refusal-contact",
         "front:bspline-buried-refusal-unearned",
-        "front:bspline-exact-kernel-radius-step",
     }, reasons
 
 

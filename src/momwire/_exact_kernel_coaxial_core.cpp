@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -28,6 +29,8 @@ namespace ek {
 namespace coaxial_detail {
 #include "_exact_kernel_ring_inline.h"
 #include "_exact_kernel_coaxial_inline.h"
+#include "_exact_kernel_ring2_inline.h"
+#include "_exact_kernel_coaxial_cross_inline.h"
 }  // namespace coaxial_detail
 
 namespace {
@@ -99,6 +102,22 @@ int64_t CoaxialRows::n() const { return impl_->core.n(); }
 int64_t CoaxialRows::evaluated() const { return impl_->core.evaluated(); }
 int64_t CoaxialRows::cached() const { return impl_->core.cached(); }
 void CoaxialRows::rows(int64_t r0, int64_t r1, cd *out) { impl_->core.rows(r0, r1, out); }
+
+struct CoaxialCrossRows::Impl {
+    coaxial_detail::CoaxialCrossRowsCore core;
+};
+
+CoaxialCrossRows::CoaxialCrossRows(const double *x0, const double *sgn, const double *h,
+                                   const double *a, const int64_t *lab, int64_t n, double k,
+                                   int nd, int64_t max_cached, double q, double qa,
+                                   const PointRules &rules, int n_threads)
+    : impl_(new Impl{coaxial_detail::CoaxialCrossRowsCore(x0, sgn, h, a, lab, n, k, nd, max_cached,
+                                                          q, qa, to_rules(rules), n_threads)}) {}
+CoaxialCrossRows::~CoaxialCrossRows() = default;
+CoaxialCrossRows::CoaxialCrossRows(CoaxialCrossRows &&) noexcept = default;
+int64_t CoaxialCrossRows::n() const { return impl_->core.n(); }
+int64_t CoaxialCrossRows::evaluated() const { return impl_->core.evaluated(); }
+void CoaxialCrossRows::rows(int64_t r0, int64_t r1, cd *out) { impl_->core.rows(r0, r1, out); }
 
 }  // namespace ek
 }  // namespace mw

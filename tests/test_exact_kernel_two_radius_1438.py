@@ -330,6 +330,71 @@ def test_the_solvers_take_the_cxx_cross_rows_where_it_serves(monkeypatch):
     assert built and set(built) == {want}
 
 
+_COAXIAL_CROSS_ACCEL = pytest.mark.skipif(
+    not EK._HAVE_COAXIAL_CROSS_ACCEL,
+    reason="accelerator without the two-radius Galerkin rows",
+)
+
+
+@_COAXIAL_CROSS_ACCEL
+@pytest.mark.parametrize("nd", [2, 3])
+def test_the_cxx_coaxial_cross_rows_are_the_numpy_rows(nd):
+    """`CoaxialCrossRowsAccel` (momwire#1615, the text the standalone bs2
+    route compiles) against the numpy `CoaxialCrossRows`: the same pairs,
+    zero on the same-radius ones, the values to the einsums' roundoff
+    (measured 9.5e-17 of the block's largest), the same deduplication, and
+    bits independent of the thread count, of how the rows are cut into
+    windows and of a capped cache."""
+    x0, sgn, h, a, lab = _line()
+    want = EK.CoaxialCrossRows(x0, sgn, h, a, lab, K, nd).rows(0, 20)
+    src = EK.CoaxialCrossRowsAccel(x0, sgn, h, a, lab, K, nd)
+    got = src.rows(0, 20)
+    same = lab[:, None] == lab[None, :]
+    assert np.all(got[:, :, same] == 0) and np.all(got[0, 0, ~same] != 0)
+    assert np.max(np.abs(got - want)) <= 1e-14 * np.max(np.abs(want))
+    assert src.evaluated <= 2 * 20
+    for nt in (1, 4):
+        one = EK.CoaxialCrossRowsAccel(x0, sgn, h, a, lab, K, nd, n_threads=nt)
+        parts = [one.rows(r0, min(r0 + 7, 20)) for r0 in (0, 7, 14)]
+        assert np.concatenate(parts, 2).tobytes() == got.tobytes()
+    capped = EK.CoaxialCrossRowsAccel(x0, sgn, h, a, lab, K, nd, max_cached=3)
+    again = [capped.rows(0, 20) for _ in range(2)]
+    assert again[0].tobytes() == again[1].tobytes() == got.tobytes()
+
+
+@_COAXIAL_CROSS_ACCEL
+def test_the_cxx_coaxial_cross_rows_handle_reversed_and_touching_pairs():
+    """A line walked in both directions (σ = -1 on the thin run) and a step
+    with the thin run's first segment touching the fat run's last: the
+    near rule's pieces through the step against the numpy primitive."""
+    x0, sgn, h, a, lab = _line()
+    n_fat = int(np.sum(lab == 0))
+    sgn = sgn.copy()
+    sgn[n_fat:] = -1.0
+    x0 = x0.copy()
+    x0[n_fat:] = x0[n_fat:] + h[n_fat:]
+    want = EK.CoaxialCrossRows(x0, sgn, h, a, lab, K, 2).rows(0, 20)
+    got = EK.CoaxialCrossRowsAccel(x0, sgn, h, a, lab, K, 2).rows(0, 20)
+    assert np.max(np.abs(got - want)) <= 1e-14 * np.max(np.abs(want))
+
+
+def test_bs2_takes_the_cxx_coaxial_cross_rows_where_it_serves(monkeypatch):
+    built = []
+    for name in ("CoaxialCrossRows", "CoaxialCrossRowsAccel"):
+        orig = getattr(EK, name)
+
+        def spy(*a, _orig=orig, _name=name, **kw):
+            built.append(_name)
+            return _orig(*a, **kw)
+
+        monkeypatch.setattr(EK, name, spy)
+    _z(BSplineSolver, exact_kernel=True)
+    want = (
+        "CoaxialCrossRowsAccel" if EK._HAVE_COAXIAL_CROSS_ACCEL else "CoaxialCrossRows"
+    )
+    assert built and set(built) == {want}
+
+
 # --------------------------------------------------------------------------
 # the solvers
 # --------------------------------------------------------------------------
