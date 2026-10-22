@@ -552,6 +552,8 @@ def _seam_compare_module():
     return mod
 
 
+# Default-lane budget is 5 s; CI median 34 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_deck_text_to_currents_in_cxx_alone_is_the_python_seam(driver, tmp_path):
     """Every NEC deck in tests/fixtures through the reader, the seam's
     structure half, the front half, the fill and the LU, in a process with no
@@ -632,6 +634,8 @@ NET_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_net"
 EK_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ek"
 
 
+# Default-lane budget is 5 s; CI median 24 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     """Every NEC deck in tests/fixtures through the whole chain -- the
     reader, the seam's structure half, the front half, the fill and the LU,
@@ -903,6 +907,8 @@ BURIED_DECKS = [
 ]
 
 
+# Default-lane budget is 5 s; CI median 11 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_the_buried_decks_print_with_their_tables_filled_in_cxx(
     driver, tmp_path, monkeypatch
 ):
@@ -1271,6 +1277,8 @@ def _bspline_printouts(driver, decks, tmp_path):
     return counts, reasons
 
 
+# Default-lane budget is 5 s; CI median 101 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     """momwire#1517 step 1: every NEC deck in tests/fixtures through bs2's
     whole chain in a process with no Python -- the reader, the seam with the
@@ -1343,6 +1351,8 @@ BSPLINE_CROSSING_DECKS = [
 ]
 
 
+# Default-lane budget is 5 s; CI median 5.2 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_the_crossing_decks_print_as_python(driver, tmp_path):
     """momwire#1517 step 4b: a one-radius crossing node. The crossing serve
     (`_bspline_crossing_core.cpp`) -- the split's cluster partition, its

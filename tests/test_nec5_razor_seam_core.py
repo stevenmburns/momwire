@@ -529,6 +529,8 @@ def test_the_constants_are_the_seams(tools):
     assert k["epsc_conductivity_factor"] == _serve.EPSC_CONDUCTIVITY_FACTOR
 
 
+# Default-lane budget is 5 s; CI median 19 s Linux, 16 s Windows, 9.5 s macOS (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_every_fixture_deck_the_cxx_seam_answers_is_answered_alike(tools):
     """momwire's own fixture decks, field for field (the corpus gate in
     miniature: `seam_compare.py` runs the same comparison over the step-0

@@ -112,9 +112,16 @@ def test_kernel_reduces_to_one_radius_first_order():
 # --------------------------------------------------------------------------
 # moments
 # --------------------------------------------------------------------------
+# pair0/1/5/7 joined the slow lane at momwire 0.82.0 release prep: CI medians
+# 6.8/6.8/6.1/7.6 s against the 5 s default-lane budget. pair6 stays as the
+# PR-lane guard.
 _PAIRS = [  # (h_i, h_j, c, sigma_i, sigma_j, a_i, a_j)
-    (0.01, 0.01, 0.01, 1, 1, 0.008, 0.0005),  # touching across 16:1
-    (0.01, 0.01, 0.01, 1, 1, 0.0005, 0.008),  # the transposed radii
+    pytest.param(  # touching across 16:1
+        (0.01, 0.01, 0.01, 1, 1, 0.008, 0.0005), marks=pytest.mark.slow
+    ),
+    pytest.param(  # the transposed radii
+        (0.01, 0.01, 0.01, 1, 1, 0.0005, 0.008), marks=pytest.mark.slow
+    ),
     # The nested reference takes 10-35 s on these three: the push lane.
     pytest.param(  # touching, near-equal radii
         (0.01, 0.01, 0.01, 1, 1, 0.008, 0.0079), marks=pytest.mark.slow
@@ -125,9 +132,13 @@ _PAIRS = [  # (h_i, h_j, c, sigma_i, sigma_j, a_i, a_j)
     pytest.param(  # antiparallel source
         (0.005, 0.012, 0.005, 1, -1, 0.008, 0.004), marks=pytest.mark.slow
     ),
-    (0.01, 0.01, 0.012, 1, 1, 0.008, 0.0005),  # across a 2 mm gap
+    pytest.param(  # across a 2 mm gap
+        (0.01, 0.01, 0.012, 1, 1, 0.008, 0.0005), marks=pytest.mark.slow
+    ),
     (0.01, 0.01, 0.05, 1, 1, 0.008, 0.0005),  # far
-    (0.003, 0.02, -0.004, 1, 1, 0.008, 0.001),  # overlapping spans
+    pytest.param(  # overlapping spans
+        (0.003, 0.02, -0.004, 1, 1, 0.008, 0.001), marks=pytest.mark.slow
+    ),
 ]
 
 

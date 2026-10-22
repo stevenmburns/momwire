@@ -387,6 +387,8 @@ def _tiny_coated(h, b=_JACKET_B):
     )
 
 
+# Default-lane budget is 5 s; CI median 7.5 s (momwire 0.82.0 release prep).
+@pytest.mark.slow
 def test_a_jacketed_wire_is_served_where_a_bare_one_is_refused():
     """h = b is below the bare h/a = 2 bound and is now served, because the
     measurement says the coated deck there is the EASIER problem."""
