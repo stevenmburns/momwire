@@ -25,6 +25,9 @@
 extern "C" {
 void MWX(cblas_dgemm)(int, int, int, int, int, int, double, const double *, int, const double *, int, double,
                       double *, int);
+void MWX(cblas_dgemv)(int, int, int, int, double, const double *, int, const double *, int, double, double *,
+                      int);
+double MWX(cblas_ddot)(int, const double *, int, const double *, int);
 void MWX(cblas_zgemm)(int, int, int, int, int, int, const void *, const void *, int, const void *, int,
                       const void *, void *, int);
 void MWX(cblas_zgemv)(int, int, int, int, const void *, const void *, int, const void *, int, const void *,
@@ -45,6 +48,13 @@ int i32(np_int v) { return static_cast<int>(v); }
 void a_dgemm(int order, int ta, int tb, np_int m, np_int n, np_int k, double alpha, const double *a, np_int lda,
              const double *b, np_int ldb, double beta, double *c, np_int ldc) {
     MWX(cblas_dgemm)(order, ta, tb, i32(m), i32(n), i32(k), alpha, a, i32(lda), b, i32(ldb), beta, c, i32(ldc));
+}
+void a_dgemv(int order, int trans, np_int m, np_int n, double alpha, const double *a, np_int lda, const double *x,
+             np_int incx, double beta, double *y, np_int incy) {
+    MWX(cblas_dgemv)(order, trans, i32(m), i32(n), alpha, a, i32(lda), x, i32(incx), beta, y, i32(incy));
+}
+double a_ddot(np_int n, const double *x, np_int incx, const double *y, np_int incy) {
+    return MWX(cblas_ddot)(i32(n), x, i32(incx), y, i32(incy));
 }
 void a_zgemm(int order, int ta, int tb, np_int m, np_int n, np_int k, const void *alpha, const void *a, np_int lda,
              const void *b, np_int ldb, const void *beta, void *c, np_int ldc) {
@@ -72,6 +82,8 @@ sinusoidal::FillLinalg linalg() {
     la.lu.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     la.lu.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
     la.np.dgemm = &a_dgemm;
+    la.np.dgemv = &a_dgemv;
+    la.np.ddot = &a_ddot;
     la.np.zgemm = &a_zgemm;
     la.np.zgemv = &a_zgemv;
     la.np.zdotu_sub = &a_zdotu;

@@ -345,7 +345,7 @@ void linspace3(const double *a, const double *b, int64_t num, std::vector<double
 void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t os_m,
                int64_t os_p);
 // `_serve._pattern` + `_pattern_rows` for one RP card in free space or over
-// a perfect ground at z = 0 (`pec`), over `element_currents(coeffs)`'s
+// a ground at z = 0, over `element_currents(coeffs)`'s
 // midpoints and moments ((n, 3) row-major): the NEC-5 seam's row builder,
 // which the NEC-4.2 slot shares (momwire#1607 B4a, B5a). `rq` carries no
 // range (the NEC-4.2 slot applies its own). Throws `PrintoutDecline` where
@@ -361,9 +361,11 @@ struct PatternBlock {
     double average_power_gain = 0, solid_angle_pi = 0, power_radiated_4pi = 0;
     bool directive = false;
 };
+// `ground`: 0 free space, 1 a perfect ground, 2 a finite one (the Fresnel
+// image, `eps_r` / `sigma`).
 PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
-                         const std::vector<cd> &moment, bool pec, double frequency_mhz,
-                         double wavelength, double p_in, double p_radiated);
+                         const std::vector<cd> &moment, int ground, double eps_r, double sigma,
+                         double frequency_mhz, double wavelength, double p_in, double p_radiated);
 
 }  // namespace replay
 

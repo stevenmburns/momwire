@@ -47,7 +47,7 @@ pytestmark = pytest.mark.skipif(
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
 CURRENT = NEC42 / "0223_dipole-ex6.nec"
-GROUND = NEC42 / "0231_dipole-10m-gn2.nec"  # not served yet (B5c)
+GROUND = NEC42 / "0239_dipole-buried-gn3.nec"  # not served yet (B6)
 REFUSED = NEC42 / "refused" / "r1_gd_after_a_run.nec"
 DECKS = (DIPOLE, CURRENT, GROUND, REFUSED)
 
@@ -238,7 +238,7 @@ def test_a_refused_deck_and_an_unserved_one(tmp_path):
     _same(*_both([REFUSED.name, "x.out"], tmp_path))
     exe, _ref, de, _dl = _both([GROUND.name, "y.out"], tmp_path / "g")
     assert (
-        b"NEC ERROR - not served by this build: a finite ground"
+        b"NEC ERROR - not served by this build: a wire below the ground plane"
         in (de / "y.out").read_bytes()
     )
 

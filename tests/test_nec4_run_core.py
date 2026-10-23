@@ -17,7 +17,11 @@ masked, by exact pattern and with the same count on both sides, over:
   the horizon;
 - wire loading: LD 5 (with its loss in the power budget), on one wire
   through a sweep, and LD 2 / LD 3 per metre;
-- the declines: a finite ground, GD's far-field cliff, a network, an NE
+- a Sommerfeld ground above the plane: RP with a range, the lower medium's
+  line and rows below the horizon, PQ, GN 3 with LD 5;
+- a monopole on a Sommerfeld ground (the contact correction), with PQ and
+  RP;
+- the declines: GD's far-field cliff, a network, an NE
   table, a GH helix.
 """
 
@@ -187,12 +191,31 @@ CASES = [
         "printed",
     ),
     (
-        "finite_ground_declines",
+        "gn2_rp_range_below_horizon",
         deck(
-            "GW 1 11 0 0 .1 0 0 .6 .001\n",
-            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+            "GW 1 11 0 0 .3 0 0 .8 .001\n",
+            "GN 2 0 0 0 13 .005\n"
+            + FR
+            + "EX 0 1 6 0 1\nPQ 0\nRP 0 10 2 1001 0 0 20 90 1000\n",
         ),
-        "declined",
+        "printed",
+    ),
+    (
+        "gn3_ld5_horizontal",
+        deck(
+            "GW 1 21 -.5 0 .3 .5 0 .3 .001\n",
+            "GN 3 0 0 0 5 .02\nLD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 11 0 1\n" + RP,
+        ),
+        "printed",
+    ),
+    (
+        "monopole_on_gn2_contact",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nPQ 0\n" + RP,
+            "GE 1",
+        ),
+        "printed",
     ),
     (
         "gd_declines",

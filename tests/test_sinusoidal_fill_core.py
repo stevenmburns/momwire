@@ -19,7 +19,10 @@ tests hold the C++ dump (Z, the coefficients, Y) equal to it over:
   route, and the folded cos-1 fill with its image above the elision size;
 - wire loading: LD 5 on every wire and on one, LD 2 / LD 3 per metre, and
   LD 5 over a perfect ground on the cos-1 route;
-- the declines: a finite ground.
+- a Sommerfeld ground (GN 2 / GN 3) above the plane: a vertical and a
+  horizontal wire on the sparse route;
+- a wire end on a Sommerfeld ground (the contact correction): a vertical
+  monopole (its extended end's delta) and a slanted wire on the sparse route.
 """
 
 from __future__ import annotations
@@ -189,12 +192,38 @@ CASES = [
         "fills",
     ),
     (
-        "finite_ground_declines",
+        "dipole_over_gn2",
         deck(
             "GW 1 11 0 0 .1 0 0 .6 .001\n",
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
         ),
-        "declined",
+        "fills",
+    ),
+    (
+        "horizontal_over_gn3_sparse",
+        deck(
+            "GW 1 61 -.5 0 .3 .5 0 .3 .001\n",
+            "GN 3 0 0 0 5 .02\n" + FR + "EX 0 1 31 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "monopole_on_gn2_contact",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nXQ\n",
+            ge="GE 1",
+        ),
+        "fills",
+    ),
+    (
+        "slant_on_gn3_contact_sparse",
+        deck(
+            "GW 1 70 0 0 0 .3 0 .6 .001\n",
+            "GN 3 0 0 0 5 .02\n" + FR + "EX 0 1 1 0 1\nXQ\n",
+            ge="GE 1",
+        ),
+        "fills",
     ),
     (
         "ld5_copper",

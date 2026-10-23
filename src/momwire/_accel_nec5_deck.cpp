@@ -79,17 +79,20 @@ void register_nec5_deck(py::module_ &m) {
         "Python side).");
     // The sinusoidal free-space fill and solve (`_sinusoidal_fill_core.cpp`,
     // momwire#1607 B3). `blas`: numpy's ILP64 cblas_zgemm / cblas_zgemv /
-    // cblas_zdotu_sub, then SciPy's LP64 zgetrf / zgetrs, as addresses.
+    // cblas_zdotu_sub, SciPy's LP64 zgetrf / zgetrs, then numpy's cblas_dgemv /
+    // cblas_ddot (the contact correction's real products), as addresses.
     m.def(
         "sinusoidal_fill_dump",
         [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole) -> std::string {
-            if (blas.size() != 5) throw py::value_error("blas: five addresses");
+            if (blas.size() != 7) throw py::value_error("blas: seven addresses");
             mw::sinusoidal::FillLinalg la;
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
             la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
             la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[3]);
             la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[4]);
+            la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[5]);
+            la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
             const std::string text = latin1;
             py::gil_scoped_release nogil;
             return mw::sinusoidal::dump_fill(text, la, whole);

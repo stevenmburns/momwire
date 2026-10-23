@@ -13,12 +13,15 @@
 #include "_razor_front_core.h"
 #include "_razor_wire_loading_core.h"
 #include "_sinusoidal_core.h"
+#include "_somm_grid_core.h"
+#include "_somm_proj_core.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -464,16 +467,193 @@ std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1, co
     return out;
 }
 
+// --- the composing Sommerfeld ground (`fg.mode == "compose"`) --------------
+//
+// `_sommerfeld_remainder_prepare` and `_replay_sommerfeld_remainder`: each
+// source segment's `n_qp_sommerfeld` Gauss nodes, the three source shapes
+// weighted (`shp_w`), the grid (`_sommerfeld.get_grid`, the shared cores'
+// view with every node filled: the eager grid's values), and per observer
+// chunk the projected remainder table (`remainder_field_proj_batch`,
+// `somm_core::field_proj_batch`) reduced against the shapes as
+// `remainder_shape_reduce` does it.
+const ll kNQpSommerfeld = 3;              // SinusoidalSolver(n_qp_sommerfeld=3)
+const ll kRemainderChunkElems = 1 << 19;  // _REMAINDER_CHUNK_ELEMS
+const double kMu = 1.25663706127e-6;      // SinusoidalSolver.mu
+
+struct Somm {
+    cd eps_t, c2;  // the medium and the image coefficient (eps_t - 1) / (eps_t + 1)
+    ll q = 0, n_src = 0;
+    std::vector<double> srcf, t_src;  // (n_src, 3)
+    std::vector<double> shp_w;        // (3, N, q)
+    const somm_core::Grid *grid = nullptr;
+    std::shared_ptr<somm_proj::GridView> view;
+    std::size_t n_reg = 0;
+};
+
+// `_ground_refl.eps_tilde((eps_r, sigma), omega, eps0)` and CPython's
+// `(eps_t - 1.0) / (eps_t + 1.0)`
+cd py_quot(cd a, cd b) {
+    const double abs_breal = b.real() < 0 ? -b.real() : b.real();
+    const double abs_bimag = b.imag() < 0 ? -b.imag() : b.imag();
+    if (abs_breal >= abs_bimag) {
+        if (abs_breal == 0.0) decline("a complex division by zero (the reference raises)");
+        const double ratio = b.imag() / b.real();
+        const double denom = b.real() + b.imag() * ratio;
+        return cd((a.real() + a.imag() * ratio) / denom, (a.imag() - a.real() * ratio) / denom);
+    }
+    const double ratio = b.real() / b.imag();
+    const double denom = b.real() * ratio + b.imag();
+    return cd((a.real() * ratio + a.imag()) / denom, (a.imag() * ratio - a.real()) / denom);
+}
+
+void somm_prepare(const Front &fr, const nec4::SolverArgs &args, bool cos1, Somm &sm) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs;
+    const double gz = 0.0;  // the NEC-4.2 dialect's interface
+    sm.eps_t = cd(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+    sm.c2 = py_quot(cd(sm.eps_t.real() - 1.0, sm.eps_t.imag() - 0.0),
+                    cd(sm.eps_t.real() + 1.0, sm.eps_t.imag() + 0.0));
+    for (ll i = 0; i < N; i++) {
+        const std::size_t z = static_cast<std::size_t>(i);
+        if (g.seg_l[z][2] - gz < -1e-12 || g.seg_r[z][2] - gz < -1e-12)
+            decline("a wire below the Sommerfeld ground (the reference raises)");
+    }
+    std::vector<double> gx, gw;
+    if (!razor::leggauss(kNQpSommerfeld, gx, gw)) throw std::logic_error("leggauss(3) is tabled");
+    const ll q = kNQpSommerfeld;
+    sm.q = q;
+    sm.n_src = N * q;
+    const double k = fr.k;
+    sm.srcf.resize(static_cast<std::size_t>(3 * N * q));
+    sm.t_src.resize(static_cast<std::size_t>(3 * N * q));
+    sm.shp_w.resize(static_cast<std::size_t>(3 * N * q));
+    for (ll n = 0; n < N; n++) {
+        const std::size_t nz = static_cast<std::size_t>(n);
+        const double h_half = 0.5 * g.seg_h[nz];
+        for (ll j = 0; j < q; j++) {
+            const std::size_t jz = static_cast<std::size_t>(j);
+            const double zloc = h_half * gx[jz];
+            const std::size_t at = static_cast<std::size_t>(n * q + j);
+            for (int c = 0; c < 3; c++) {
+                sm.srcf[3 * at + static_cast<std::size_t>(c)] =
+                    g.seg_centers[nz][static_cast<std::size_t>(c)] + zloc * g.seg_tangents[nz][static_cast<std::size_t>(c)];
+                sm.t_src[3 * at + static_cast<std::size_t>(c)] = g.seg_tangents[nz][static_cast<std::size_t>(c)];
+            }
+            const double w_node = h_half * gw[jz];
+            double shp_cos;
+            if (cos1) {
+                const double s = std::sin(0.5 * k * zloc);
+                shp_cos = -2.0 * (s * s);
+            } else {
+                shp_cos = std::cos(k * zloc);
+            }
+            const double shp[3] = {1.0, std::sin(k * zloc), shp_cos};
+            for (int c = 0; c < 3; c++)
+                sm.shp_w[static_cast<std::size_t>((c * N + n) * q + j)] = shp[c] * w_node;
+        }
+    }
+    // `_sommerfeld.max_image_distance(seg_l, seg_r, gz)`
+    std::vector<double> sl(static_cast<std::size_t>(3 * N)), sr(static_cast<std::size_t>(3 * N));
+    for (ll n = 0; n < N; n++)
+        for (int c = 0; c < 3; c++) {
+            sl[static_cast<std::size_t>(3 * n + c)] = g.seg_l[static_cast<std::size_t>(n)][static_cast<std::size_t>(c)];
+            sr[static_cast<std::size_t>(3 * n + c)] = g.seg_r[static_cast<std::size_t>(n)][static_cast<std::size_t>(c)];
+        }
+    const double r1_max = razor::max_image_distance(sl.data(), sr.data(), static_cast<std::size_t>(N), gz);
+    const somm_core::Grid &grid = somm_core::get_grid_lazy(sm.eps_t, k, r1_max, fr.omega, kMu);
+    // the eager grid: every node (`get_grid(..., lazy=False)`), the same values
+    somm_core::ensure_nodes(grid, somm_core::all_nodes_of(grid));
+    sm.grid = &grid;
+    sm.n_reg = grid.regions.size();
+    if (sm.n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout this copy does not view");
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cd *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (std::size_t r = 0; r < sm.n_reg; r++) {
+        const somm_core::GridRegion &reg = grid.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    // `grid_cpp_args(grid)`: theta split at `math.radians(30.0)`, the far pack
+    sm.view = std::make_shared<somm_proj::GridView>(somm_proj::build_grid_view(
+        grid.r1_max, grid.r_break, 30.0 * (M_PI / 180.0), grid.r_near, r0, dr, th0, dth, sm.n_reg, vals, shape0,
+        nr, nth));
+    const std::vector<cd> far = somm_core::far_pack(grid);
+    somm_proj::set_far(*sm.view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+}
+
+// `_replay_sommerfeld_remainder` for observer rows [i0, i1): S (3, M, N)
+std::vector<std::vector<cd>> somm_replay(const Front &fr, const Somm &sm, ll i0, ll i1) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs, M = i1 - i0, q = sm.q;
+    std::vector<std::vector<cd>> S(3, std::vector<cd>(static_cast<std::size_t>(M * N)));
+    const ll chunk = std::max<ll>(1, kRemainderChunkElems / std::max<ll>(1, sm.n_src));  // `elem_rows`
+    std::vector<double> obs, tob;
+    for (ll a = 0; a < M; a += chunk) {
+        const ll b = std::min(a + chunk, M), m = b - a;
+        obs.assign(static_cast<std::size_t>(3 * m), 0.0);
+        tob.assign(static_cast<std::size_t>(3 * m), 0.0);
+        for (ll r = 0; r < m; r++)
+            for (int c = 0; c < 3; c++) {
+                obs[static_cast<std::size_t>(3 * r + c)] = g.seg_centers[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+                tob[static_cast<std::size_t>(3 * r + c)] = g.seg_tangents[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+            }
+        std::vector<cd> table(static_cast<std::size_t>(m * sm.n_src));
+        somm_core::field_proj_batch(*sm.view, sm.n_reg, m, sm.n_src, obs.data(), tob.data(), sm.srcf.data(),
+                                    sm.t_src.data(), 0.0, fr.k, table.data(), 0, true);
+        // `remainder_shape_reduce(shp_w, table)`: per k numpy's unfused
+        // complex product against (w + 0j), added to a +0.0 accumulator
+        for (ll i = 0; i < m; i++) {
+            const cd *row = table.data() + i * N * q;
+            for (int s = 0; s < 3; s++) {
+                const double *w = sm.shp_w.data() + s * N * q;
+                for (ll n = 0; n < N; n++) {
+                    double are = 0.0, aim = 0.0;
+                    for (ll k = 0; k < q; k++) {
+                        const double r0 = w[n * q + k], i0w = 0.0;
+                        const double r1 = row[n * q + k].real(), i1 = row[n * q + k].imag();
+                        const double re = r0 * r1 - i0w * i1;
+                        const double im = r0 * i1 + i0w * r1;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    S[static_cast<std::size_t>(s)][static_cast<std::size_t>((a + i) * N + n)] = cd(are, aim);
+                }
+            }
+        }
+    }
+    return S;
+}
+
 // One band's Φ triple (`_field_tensor` on the real sources), less the
-// image's over a perfect ground (`Phi_c -= Phi_i[0]`, ...).
+// image's over a perfect ground (`Phi_c -= Phi_i[0]`, ...), or over the
+// composing Sommerfeld ground less `c2 * Phi_img - S`.
 std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool pec,
-                                  const std::vector<Point3> &img_c, const std::vector<Point3> &img_t) {
+                                  const std::vector<Point3> &img_c, const std::vector<Point3> &img_t,
+                                  const Somm *somm = nullptr) {
     const Geometry &g = K.fr->geometry;
     std::vector<std::vector<cd>> phi = cos1 ? field_tensor_cos1(K, i0, i1, g.seg_centers, g.seg_tangents)
                                             : field_tensor(K, i0, i1, g.seg_centers, g.seg_tangents);
-    if (!pec) return phi;
-    const std::vector<std::vector<cd>> img =
+    if (!pec && somm == nullptr) return phi;
+    std::vector<std::vector<cd>> img =
         cos1 ? field_tensor_cos1(K, i0, i1, img_c, img_t) : field_tensor(K, i0, i1, img_c, img_t);
+    if (somm != nullptr) {
+        const std::vector<std::vector<cd>> S = somm_replay(*K.fr, *somm, i0, i1);
+        for (int c = 0; c < 3; c++)
+            for (std::size_t q = 0; q < img[static_cast<std::size_t>(c)].size(); q++) {
+                cd &y = img[static_cast<std::size_t>(c)][q];
+                y = nec5::replay::np_cmul(somm->c2, y);  // np.multiply(c2, Pi, out=Pi)
+                const cd s = S[static_cast<std::size_t>(c)][q];
+                y = cd(y.real() - s.real(), y.imag() - s.imag());  // Pi -= Si
+            }
+    }
     for (int c = 0; c < 3; c++)
         for (std::size_t q = 0; q < phi[static_cast<std::size_t>(c)].size(); q++) {
             cd &x = phi[static_cast<std::size_t>(c)][q];
@@ -481,6 +661,151 @@ std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool
             x = cd(x.real() - y.real(), x.imag() - y.imag());
         }
     return phi;
+}
+
+// --- `_contact_charge_correction` over a Sommerfeld ground ------------------
+//
+// A wire end on the finite ground (`_contact_nodes`: every `ground_minus`
+// segment's start, then every `ground_plus` segment's end) leaves an end
+// charge whose field the image does not cancel there: its kernel
+// (`_contact_charge_kernel`, the Sommerfeld branch), plus the EK end's delta
+// where the end is extended (`_contact_charge_ek_delta`), times the end's
+// basis values (`_contact_node_values`), subtracted from the columns of its
+// basis: `G[:, jb] -= sgn * R[:, None] * val[None, :]`. Every operation is
+// numpy's over the N observers; a product whose right operand is a fresh
+// complex temporary of 256 KiB (N >= 16384) is elided (B3's rule, `cmt`).
+
+// numpy's real matmul `(N, 3) @ (3,)`: `DOUBLE_matmul`'s matrix-vector gemv,
+// `cblas_dgemv(ColMajor, Trans, 3, N, 1, a, 3, x, 1, 0, y, 1)`
+std::vector<double> mat3_vec(const nec5::NumpyLinalg &np, const std::vector<double> &a, const double *x) {
+    const ll n = static_cast<ll>(a.size() / 3);
+    std::vector<double> y(static_cast<std::size_t>(n));
+    if (n == 1) {
+        // numpy's `DOUBLE_dot` for a (1, 3) @ (3,): `sum += ddot`
+        if (np.ddot == nullptr) decline("no real BLAS for the contact correction");
+        y[0] = 0.0 + np.ddot(3, a.data(), 1, x, 1);
+        return y;
+    }
+    if (np.dgemv == nullptr) decline("no real BLAS for the contact correction");
+    np.dgemv(102, 112, 3, n, 1.0, a.data(), 3, x, 1, 0.0, y.data(), 1);
+    return y;
+}
+
+void contact_correction(const Front &fr, const nec4::SolverArgs &args, const Kernel &K, const nec5::NumpyLinalg &np,
+                        std::vector<cd> &G) {
+    const Geometry &g = fr.geometry;
+    const SegView &sv = fr.basis;
+    const ll N = g.n_segs;
+    const std::size_t Nz = static_cast<std::size_t>(N);
+    const bool elide = N >= 16384;
+    const double k = fr.k;
+    const double eta = fr.eta;
+    // CPython scalars: -1j * eta / (4 pi k), 1j * k, -1j * k, con = 1j * eta / (4 pi k)
+    const double four_pi_k = 4.0 * 3.141592653589793 * k;
+    const cd pre0 = py_quot(cd(-0.0 * eta - (-1.0) * 0.0, -0.0 * 0.0 + (-1.0) * eta), cd(four_pi_k, 0.0));
+    const cd jk(0.0 * k - 1.0 * 0.0, 0.0 * 0.0 + 1.0 * k), mjk(-0.0 * k - (-1.0) * 0.0, -0.0 * 0.0 + (-1.0) * k);
+    const cd con = py_quot(cd(0.0 * eta - 1.0 * 0.0, 0.0 * 0.0 + 1.0 * eta), cd(four_pi_k, 0.0));
+    const cd mcon(-con.real(), -con.imag());
+    const cd eps_t(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+    const cd c2 = py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0), cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+    const cd one_minus_c2(1.0 - c2.real(), 0.0 - c2.imag());
+    const std::vector<double> &a_obs = K.src_a.empty() ? std::vector<double>() : K.src_a;
+    std::vector<double> rad = a_obs;
+    if (rad.empty()) decline("a contact correction without the segment radii");
+    std::vector<double> obs_t_flat(3 * Nz);
+    for (std::size_t m = 0; m < Nz; m++)
+        for (int c = 0; c < 3; c++) obs_t_flat[3 * m + static_cast<std::size_t>(c)] = g.seg_tangents[m][static_cast<std::size_t>(c)];
+    // `_contact_nodes`
+    struct Node {
+        ll i;
+        double sgn;
+        double p[3];
+    };
+    std::vector<Node> nodes;
+    for (int side = 0; side < 2; side++) {
+        const std::vector<bool> &mask = side == 0 ? g.ground_minus : g.ground_plus;
+        const double sgn = side == 0 ? -1.0 : 1.0;
+        for (std::size_t i = 0; i < Nz; i++)
+            if (mask[i]) {
+                Node nd;
+                nd.i = static_cast<ll>(i);
+                nd.sgn = sgn;
+                const double sc = sgn * 0.5 * g.seg_h[i];
+                for (int c = 0; c < 3; c++)
+                    nd.p[c] = g.seg_centers[i][static_cast<std::size_t>(c)] + sc * g.seg_tangents[i][static_cast<std::size_t>(c)];
+                nodes.push_back(nd);
+            }
+    }
+    for (const Node &nd : nodes) {
+        const std::size_t iz = static_cast<std::size_t>(nd.i);
+        // `_contact_charge_kernel` (Sommerfeld): pref * (1 - c2) * t_d
+        std::vector<cd> pref(Nz), R(Nz);
+        std::vector<double> t_d(Nz);
+        for (std::size_t m = 0; m < Nz; m++) {
+            double d[3];
+            for (int c = 0; c < 3; c++) d[c] = g.seg_centers[m][static_cast<std::size_t>(c)] - nd.p[c];
+            const double r2 = (d[0] * d[0] + d[2] * d[2]) + d[1] * d[1];
+            const double r0 = std::sqrt(r2 + rad[m] * rad[m]);
+            const cd t1 = radd(1.0, cm(jk, cd(r0, 0.0)));
+            const cd e = std::exp(cm(mjk, cd(r0, 0.0)));
+            pref[m] = cdr(cm(cmt(elide, pre0, t1), e), (r0 * r0) * r0);
+            const Point3 &ot = g.seg_tangents[m];
+            t_d[m] = (ot[0] * d[0] + ot[2] * d[2]) + ot[1] * d[1];
+            R[m] = cr(cm(pref[m], one_minus_c2), t_d[m]);
+        }
+        // `_contact_ek_masks`: the extended end's delta
+        const bool extended = args.extended_kernel && (nd.sgn > 0 ? K.ind2 : K.ind1)[iz] != 2;
+        if (extended) {
+            // `_contact_charge_end_gradient`
+            const Point3 &src_c = g.seg_centers[iz], &src_t = g.seg_tangents[iz];
+            const double src_hh = 0.5 * g.seg_h[iz];
+            const double src_a = fr.uniform_radius ? fr.radius_per_wire[0] : rad[iz];
+            std::vector<double> rvec(3 * Nz);
+            for (std::size_t m = 0; m < Nz; m++)
+                for (int c = 0; c < 3; c++)
+                    rvec[3 * m + static_cast<std::size_t>(c)] =
+                        g.seg_centers[m][static_cast<std::size_t>(c)] - src_c[static_cast<std::size_t>(c)];
+            const std::vector<double> z_eval = mat3_vec(np, rvec, src_t.data());   // rvec @ src_t
+            const std::vector<double> ts = mat3_vec(np, obs_t_flat, src_t.data());  // obs_t @ src_t
+            for (std::size_t m = 0; m < Nz; m++) {
+                double rho_vec[3];
+                for (int c = 0; c < 3; c++)
+                    rho_vec[c] = rvec[3 * m + static_cast<std::size_t>(c)] - z_eval[m] * src_t[static_cast<std::size_t>(c)];
+                const double rho_axis =
+                    std::sqrt((rho_vec[0] * rho_vec[0] + rho_vec[1] * rho_vec[1]) + rho_vec[2] * rho_vec[2]);
+                const double rho_eval = std::sqrt(rho_axis * rho_axis + rad[m] * rad[m]);
+                const double zz = nd.sgn > 0 ? (src_hh - z_eval[m]) : -(src_hh + z_eval[m]);
+                const bool swap = rho_eval < src_a;
+                const double rh = swap ? src_a : rho_eval;
+                const double b = swap ? rho_eval : src_a;
+                const End e = ek_end_gxx(k, zz, rh, b, swap);
+                const cd ez = cm(mcon, e.g1p);
+                const cd erho_hat = cdr(cm(con, e.g3), rho_eval);
+                // `_contact_charge_ek_delta`
+                const Point3 &ot = g.seg_tangents[m];
+                const double rho_t = (rho_vec[0] * ot[0] + rho_vec[2] * ot[2]) + rho_vec[1] * ot[1];
+                const cd dt = csub(cadd(cr(ez, ts[m]), cr(erho_hat, rho_t)), cr(pref[m], t_d[m]));
+                const cd delta = csub(dt, cmt(elide, c2, dt));
+                R[m] = cadd(R[m], delta);
+            }
+        }
+        // `_contact_node_values`
+        const double sseg = nd.sgn * 0.5 * g.seg_h[iz];
+        const double half = std::sin(0.5 * k * sseg);
+        const double sks = std::sin(k * sseg);
+        for (ll q = sv.starts[iz]; q < sv.starts[iz + 1]; q++) {
+            const std::size_t qz = static_cast<std::size_t>(q);
+            const cd sig(static_cast<double>(sv.sigma[qz]), 0.0);
+            const cd val = csub(cadd(cm(sig, sv.AC[qz]), cr(sv.B[qz], sks)),
+                                cr(cr(cr(cm(sig, sv.C[qz]), 2.0), half), half));
+            const std::size_t col = static_cast<std::size_t>(sv.jbasis[qz]);
+            for (std::size_t m = 0; m < Nz; m++) {
+                const cd t = cm(cm(cd(nd.sgn, 0.0), R[m]), val);  // sgn * R[:, None] * val[None, :]
+                cd &x = G[m * Nz + col];
+                x = cd(x.real() - t.real(), x.imag() - t.imag());
+            }
+        }
+    }
 }
 
 // The (segment, basis) entries of `_assemble_Z`'s M_A / M_B / M_C.
@@ -576,7 +901,10 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
     // a finite ground is B5c's
     const bool pec = args.ground.kind == nec4::Ground::pec;
-    if (args.ground.kind != nec4::Ground::none && !pec) decline("a finite ground (momwire#1607 B5c)");
+    const bool finite = args.ground.kind == nec4::Ground::finite;  // GN 2 / GN 3: Sommerfeld
+    if (args.ground.kind != nec4::Ground::none && !pec && !finite)
+        decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
+
     if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
     const razor::WireLoading loading = wire_loading(args);
     // The NEC-4.2 slot builds every solver with the extended kernel; the
@@ -633,7 +961,10 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // `_image_source_centers_tangents`: the sources mirrored in z = 0
     // (`2 * ground_z - z`, `tangents * [1, 1, -1]`)
     std::vector<Point3> img_c, img_t;
-    if (pec)
+    Somm somm;
+    if (finite) somm_prepare(fr, args, cos1, somm);
+    const Somm *sp = finite ? &somm : nullptr;
+    if (pec || finite)
         for (std::size_t i = 0; i < Nz; i++) {
             const Point3 &c = g.seg_centers[i], &t = g.seg_tangents[i];
             img_c.push_back({c[0], c[1], 2.0 * 0.0 - c[2]});
@@ -647,7 +978,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         for (int c = 0; c < 3; c++)
             for (std::size_t e = 0; e < E.n.size(); e++)
                 M[static_cast<std::size_t>(c)][static_cast<std::size_t>(E.n[e] * N + E.j[e])] = E.v[c][e];
-        const std::vector<std::vector<cd>> Phi = band(K, 0, N, cos1, pec, img_c, img_t);
+        const std::vector<std::vector<cd>> Phi = band(K, 0, N, cos1, pec, img_c, img_t, sp);
         std::vector<cd> tmp(Nz * Nz);
         for (int c = 0; c < 3; c++) {
             const nec5::Op a{Phi[static_cast<std::size_t>(c)].data(), N, N, N, 1};
@@ -656,6 +987,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             if (c > 0)
                 for (std::size_t i = 0; i < Nz * Nz; i++) G[i] = nec5::replay::c_add(G[i], tmp[i]);
         }
+        if (finite) contact_correction(fr, args, K, np, G);
         apply_loading(fr, loading, E, G);
         return G;
     }
@@ -675,12 +1007,12 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     }
 
     // `_schedule.mb_rows(swept_mem_mb, _fill_row_bytes(N))` in free space
-    const ll blocks = 1 + (pec ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
+    const ll blocks = 1 + ((pec || finite) ? 1 : 0) + (finite ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
     const ll row_bytes = std::max<ll>(3 * blocks, 3 + 2) * N * 16;
     const ll chunk = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / row_bytes);
     for (ll i0 = 0; i0 < N; i0 += chunk) {
         const ll i1 = std::min(i0 + chunk, N);
-        const std::vector<std::vector<cd>> Phi = band(K, i0, i1, cos1, pec, img_c, img_t);
+        const std::vector<std::vector<cd>> Phi = band(K, i0, i1, cos1, pec, img_c, img_t, sp);
         // `_reduce_phi_band` over this band: per tile, P_c = Mcᵀ @ Φc[a:b]ᵀ
         // (csr_matvecs into zeros), then (P0 + P1) + P2, written back transposed
         for (const auto &tile : reduce_tiles(i1 - i0)) {
@@ -701,6 +1033,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             }
         }
     }
+    if (finite) contact_correction(fr, args, K, np, G);
     apply_loading(fr, loading, E, G);
     return G;
 }

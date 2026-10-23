@@ -148,7 +148,13 @@ Engine::Engine(const nec4::StructureBuild &structure, const FillLinalg &la)
     : structure_(structure), la_(la), fronts_(structure.points.size()), solves_(structure.points.size()) {}
 
 const Front &Engine::front_at(std::size_t index) {
-    if (!fronts_.at(index)) fronts_[index].reset(new Front(front(structure_.points[index].args)));
+    if (!fronts_.at(index)) {
+        try {
+            fronts_[index].reset(new Front(front(structure_.points[index].args)));
+        } catch (const FrontError &e) {
+            throw nec4::Refusal(e.message);  // the constructor's ValueError
+        }
+    }
     return *fronts_[index];
 }
 

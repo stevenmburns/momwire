@@ -134,8 +134,9 @@ def py_fill(text: str, whole: int = WHOLE) -> str:
 
 
 def blas_addresses() -> list[int]:
-    """numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub and SciPy's LP64
-    zgetrf / zgetrs, as `sinusoidal_fill_dump` takes them."""
+    """numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub, SciPy's LP64 zgetrf /
+    zgetrs, and numpy's cblas_dgemv / ddot, as `sinusoidal_fill_dump` takes
+    them."""
     import scipy
 
     def lib(pkg, pattern):
@@ -152,6 +153,8 @@ def blas_addresses() -> list[int]:
         (npl, "scipy_cblas_zdotu_sub64_"),
         (spl, "scipy_zgetrf_"),
         (spl, "scipy_zgetrs_"),
+        (npl, "scipy_cblas_dgemv64_"),
+        (npl, "scipy_cblas_ddot64_"),
     )
     return [ctypes.cast(getattr(lb, n), ctypes.c_void_p).value for lb, n in names]
 

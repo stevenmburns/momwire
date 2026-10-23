@@ -41,6 +41,15 @@
 namespace mw {
 namespace nec4 {
 
+// A refusal the reference raises as a ValueError inside `solve` (the solver
+// constructor's, say), which `_nec4.solve` turns into the structure's
+// refusal printout with the exception's words: an engine throws it with
+// Python's message.
+struct Refusal : std::runtime_error {
+    std::string message;  // UTF-8
+    explicit Refusal(const std::string &m) : std::runtime_error(m), message(m) {}
+};
+
 // One operating point's `compute_port_solution()`: Y (n_ports x n_ports,
 // C order) and the coefficients X (n_basis x n_ports) with the element
 // strides numpy holds them at.
