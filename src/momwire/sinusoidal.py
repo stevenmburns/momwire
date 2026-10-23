@@ -38,6 +38,7 @@ Scope (deliberately narrow):
 import cmath
 import contextlib
 import math
+import warnings
 from collections import namedtuple
 from dataclasses import dataclass
 
@@ -905,6 +906,90 @@ _POINT_FEED_MODEL_REFUSAL = (
 )
 
 
+class RadiusStepJunction(UserWarning):
+    """Wires of different radius meet at a junction, on the point-matched
+    `SinusoidalSolver` (momwire#1632). Raised once per solver, at
+    construction. Advisory only: nothing is remeshed, refused or changed.
+
+    This lane follows NEC-2 at a radius step, and that includes NEC-2's
+    known weakness there (the tapered-element problem): it mostly ignores
+    the step, and more so as the mesh is refined. Measured on #1632's
+    stepped dipole (a 6 m dipole at 14 MHz, a 0.5 mm half joined to a 1 mm
+    half), the step's effect on Z, Z(step) - Z(both 1 mm), in ohms:
+
+        ======================  ==============  ==============
+        engine                  20 seg/half     40 seg/half
+        ======================  ==============  ==============
+        NEC-2 (PyNEC)           -0.59 - 8.90j   -0.77 - 1.21j
+        SinusoidalSolver        -0.59 - 8.86j   -0.76 - 1.16j
+        SinusoidalGalerkin      -0.02 - 33.42j  -0.00 - 34.02j
+        NEC-5                   +0.03 - 34.69j  +0.03 - 34.80j
+        ======================  ==============  ==============
+
+    So the lane is NEC-2-faithful here, by decision (Steve, 10-22): the
+    NEC-2 slot and momwire-nec2c are meant to match nec2c. A NEC-4.2-style
+    step for the NEC-4 dialect is momwire#1644. `SinusoidalGalerkinSolver`
+    and `BSplineSolver` give the converged answer and do not raise this.
+
+    The test is the one `SinusoidalGalerkinSolver`'s extended-kernel step
+    refusal uses: two members of one junction whose per-wire radii differ,
+    compared exactly (radii only disagree when the caller gave them per wire).
+    """
+
+
+_RADIUS_STEP_NAMED = 4
+
+
+def radius_step_junctions(junctions, radius_per_wire):
+    """``[(junction index, sorted member wires, smallest radius, largest
+    radius)]`` for every junction whose members do not share one radius."""
+    found = []
+    for j, members in enumerate(junctions):
+        wires = sorted({int(w) for w, _end in members})
+        radii = [float(radius_per_wire[w]) for w in wires]
+        if len(set(radii)) > 1:
+            found.append((j, wires, min(radii), max(radii)))
+    return found
+
+
+def radius_step_message(family, found):
+    """The advisory sentence for `radius_step_junctions`' result."""
+    named = []
+    for _j, wires, a_lo, a_hi in found[:_RADIUS_STEP_NAMED]:
+        who = (
+            " and ".join(str(w) for w in wires)
+            if len(wires) <= 2
+            else ", ".join(str(w) for w in wires)
+        )
+        named.append(f"wires {who} ({a_lo * 1e3:.3g} mm to {a_hi * 1e3:.3g} mm)")
+    more = len(found) - _RADIUS_STEP_NAMED
+    if more > 0:
+        named.append(f"and {more} more")
+    where = (
+        f"wires of different radius meet at a junction: {named[0]}"
+        if len(found) == 1
+        else f"wires of different radius meet at {len(found)} junctions: "
+        + "; ".join(named)
+    )
+    return (
+        f"{family}: {where}. At a change of wire radius this basis follows "
+        "NEC-2, including NEC-2's known weakness there: it underestimates the "
+        "effect of the step, and more so as the mesh is refined. Basis "
+        "sinusoidal-galerkin or bspline gives the converged answer "
+        "(momwire#1632, momwire#1644)."
+    )
+
+
+def advise_radius_step(family, junctions, radius_per_wire):
+    """Warn `RadiusStepJunction` once when any junction joins two radii.
+    Called from the point-matched constructor once the junctions are final."""
+    found = radius_step_junctions(junctions, radius_per_wire)
+    if found:
+        warnings.warn(
+            radius_step_message(family, found), RadiusStepJunction, stacklevel=3
+        )
+
+
 class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
@@ -1370,6 +1455,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self.extended_kernel,
                 _wire_spec.solver_gaps(self, junctions_are_gaps=self.extended_kernel),
                 gap_model="segment",
+            )
+            # momwire#1632: wires of different radius meeting at a junction.
+            # The point-matched lane only (Sin-Galerkin never reaches this
+            # block), because it is this lane that follows NEC-2 there.
+            advise_radius_step(
+                type(self).__name__, self.junctions, self._radius_per_wire
             )
 
     def _reject_junction_ports(self):

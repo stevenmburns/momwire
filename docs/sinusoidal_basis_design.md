@@ -289,6 +289,43 @@ mixed-radius validation rests on (a) cross-degree consistency at the
 step, and (b) direct PyNEC parity on mixed-radius JUNCTIONS (fat vertical
 + thin radials: ~0.5 Ω, stable under refinement), where NEC converges.
 
+**At a radius step this lane is NEC-2-faithful, by decision (momwire#1632).**
+Re-measured on #1632's stepped dipole: a 6 m dipole at 14 MHz in free
+space, a thin left half joined to a 1 mm right half at the centre, fed on
+the first segment of the right half. The step's effect on Z,
+Z(step) − Z(both halves 1 mm), in Ω:
+
+| 2:1 step (0.5 mm / 1 mm) | 20 seg/half | 40 seg/half | 80 seg/half |
+|---|---|---|---|
+| NEC-2 (PyNEC, nec2++) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
+| `SinusoidalSolver` | −0.59 − 8.86j | −0.76 − 1.18j | −1.01 + 9.47j |
+| `SinusoidalGalerkinSolver` | −0.02 − 33.44j | −0.00 − 34.04j | +0.01 − 34.42j |
+| `BSplineSolver` (bs2) | −0.07 − 32.55j | −0.03 − 33.42j | −0.01 − 33.95j |
+| NEC-4.2 (licensed, black box) | −0.15 − 28.08j | −0.18 − 26.56j | |
+| NEC-5 | +0.03 − 34.69j | +0.03 − 34.80j | |
+
+| 10:1 step (0.1 mm / 1 mm) | 20 seg/half | 40 seg/half | 80 seg/half |
+|---|---|---|---|
+| NEC-2 (PyNEC) | −1.54 − 35.04j | −1.95 − 14.36j | −2.49 + 12.64j |
+| `SinusoidalSolver` | −1.54 − 34.96j | −1.95 − 14.29j | −2.49 + 12.71j |
+| `SinusoidalGalerkinSolver` | −0.09 − 110.29j | −0.02 − 112.45j | +0.02 − 113.79j |
+| `BSplineSolver` (bs2) | −0.16 − 108.55j | −0.08 − 111.12j | −0.02 − 112.69j |
+
+The uniform response (both halves 1 → 0.5 mm) is −70.0j on every engine, so
+the per-wire radius plumbing is right; the difference is the junction
+between two radii. NEC-2's step response shrinks and then changes sign as
+the mesh refines, and the point-matched lane follows it to 0.1 Ω at every
+rung, with the extended kernel on or off (the EK rows are the same to
+0.06 Ω). Sin-Galerkin and bs2 converge onto NEC-5. That is NEC-2's
+well-known stepped-radius weakness (the tapered-element problem), not a
+defect of the lane against its model, and it stays: the NEC-2 slot and
+momwire-nec2c are meant to match nec2c. So the solver says so instead.
+Every `SinusoidalSolver` construction with two radii at one junction raises
+`RadiusStepJunction` (an advisory, `momwire.sinusoidal`), naming the wires
+and pointing to `sinusoidal-galerkin` or `bspline` for the converged
+answer. A NEC-4.2-style step for the NEC-4 dialect is momwire#1644.
+Measurement script: antennaknobs `scratch/1632-nec2-step/step.py`.
+
 ## The extended thin-wire kernel (Eqs 84–98)
 
 Everything above is NEC's *reduced* ("thin-wire") kernel: the source current
