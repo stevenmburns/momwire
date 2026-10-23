@@ -55,6 +55,9 @@
 #include "_mw_times.h"
 #include "_nec5_deck_core.h"
 #include "_nec5_razor_printout_core.h"
+#if MW_EXE_DIALECT_NEC4
+#include "_nec4_printout_core.h"
+#endif
 #include "route.h"
 #define mw mws
 #include "route.h"
@@ -124,6 +127,11 @@ namespace {
 // (tests/test_standalone_exe.py); CMakeLists.txt sets bs2's.
 #ifndef MW_EXE_LAUNCHER
 #define MW_EXE_LAUNCHER "momwire-nec5-razor-2p"
+#endif
+// The EZNEC slot whose printout this answers: 1 for the NEC-4.2 slot
+// (`momwire-nec42-sinusoidal`, momwire#1607 B4b), else NEC-5.
+#ifndef MW_EXE_DIALECT_NEC4
+#define MW_EXE_DIALECT_NEC4 0
 #endif
 const char *const BASIS = MW_EXE_BASIS_NAME;
 const char *const VERSION = MW_VERSION;
@@ -629,7 +637,7 @@ int run_python(const std::string &home, const std::string &code) {
                     "if _v != '") +
         VERSION +
         "':\n"
-        "    raise SystemExit('momwire-razor2p ' + '" +
+        "    raise SystemExit('" MW_EXE_PROGRAM " ' + '" +
         VERSION + "' + ': the momwire beside it is ' + str(_v))\n"
         // AVX-512 off for the embedded numpy and SciPy, before momwire imports
         // them: the launcher's own pin (momwire_serve_client.pin_cpu_env).
@@ -671,12 +679,21 @@ int run_python(const std::string &home, const std::string &code) {
 // printout) with the resident-server rung skipped and the one-shot rung,
 // `_shell.main(..., basis, en_optional)`, run in this process instead of a
 // child interpreter.
+// The slot's words, for the fallback's text: its version-line dialect and
+// the shell's keyword (the NEC-4.2 slot's `dialect="nec4"`, momwire#1607 B4b).
+#if MW_EXE_DIALECT_NEC4
+#define MW_EXE_VERSION_DIALECT "NEC42"
+#define MW_EXE_SHELL_KW ", dialect=\"nec4\""
+#else
+#define MW_EXE_VERSION_DIALECT "NEC5"
+#define MW_EXE_SHELL_KW ""
+#endif
 const char *const FALLBACK_PY = R"PY(
 import momwire_eznec_client as _c
 def _launcher(args):
     en_optional = False
     if args == ["-version"]:
-        print(_c._mech.version_line("NEC5", "momwire-nec5-razor-2p"))
+        print(_c._mech.version_line(")PY" MW_EXE_VERSION_DIALECT R"PY(", ")PY" MW_EXE_LAUNCHER R"PY("))
         return 0
     if not args:
         from_stdin = _c._mech.stdin_paths()
@@ -693,12 +710,12 @@ def _launcher(args):
     if "-" in (deck_path, printout_path):
         if args == ["-", "-"]:
             from momwire.eznec._shell import main as _main
-            return _main(args, basis="razor-2p")
+            return _main(args, basis=")PY" MW_EXE_BASIS_NAME R"PY(")PY" MW_EXE_SHELL_KW R"PY()
         print(_c.STREAMING_REFUSAL, file=sys.stderr)
         return 2
     try:
         from momwire.eznec._shell import main as _main
-        _main([deck_path, printout_path], basis="razor-2p", en_optional=en_optional)
+        _main([deck_path, printout_path], basis=")PY" MW_EXE_BASIS_NAME R"PY(")PY" MW_EXE_SHELL_KW R"PY(, en_optional=en_optional)
     except Exception as exc:  # the client's rung 4: the file is the only channel
         _c._last_ditch(printout_path, f"MOMWIRE ENGINE UNAVAILABLE - {type(exc).__name__}: {exc}")
     return 0
@@ -715,17 +732,22 @@ int fallback(const std::string &home, const std::vector<std::string> &args) {
 // A refusal printout naming the mismatch (the deck's comment echo kept, as
 // the launcher's own refusals keep it).
 void refuse_version(const std::string &deck, const std::string &out, const std::string &found) {
-    const std::string why = std::string("this momwire-razor2p is momwire ") + VERSION +
+    const std::string why = std::string("this ") + MW_EXE_PROGRAM + " is momwire " + VERSION +
                             ", but the momwire installed beside it is " +
                             (found.empty() ? std::string("missing") : found) +
                             "; reinstall them together";
-    std::fprintf(stderr, "momwire-razor2p: %s\n", why.c_str());
+    std::fprintf(stderr, "%s: %s\n", MW_EXE_PROGRAM, why.c_str());
     if (out.empty()) return;
     std::string text;
     const bool readable = read_file(deck, text);
     mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, ""};
+#if MW_EXE_DIALECT_NEC4
+    const std::string printout = mw::nec5::printout_bytes(
+        mw::nec4::render_nec4_refusal(readable ? &text : nullptr, why, BASIS, stamp));
+#else
     const std::string printout = mw::nec5::printout_bytes(
         mw::nec5::render_refusal(readable ? &text : nullptr, why, BASIS, stamp));
+#endif
     if (std::FILE *w = std::fopen(out.c_str(), "wb")) {
         std::fwrite(printout.data(), 1, printout.size(), w);
         std::fclose(w);
@@ -770,7 +792,7 @@ int main(int argc, char **argv) {
         why = "variant";
     else if (!read_file(deck, text))
         why = "unreadable";
-    else if (may_request_gmo(text))
+    else if (!MW_EXE_DIALECT_NEC4 && may_request_gmo(text))  // the NEC-4.2 slot writes none
         why = "gmo";
     if (why.empty()) {
         const Clock::time_point t = Clock::now();
@@ -884,7 +906,11 @@ const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 // the dialect, this executable's name, its interface modes and this build's
 // full release, e.g. `NEC5 momwire-nec5-razor-2p [sb] 0.82.0`.
 std::string probe_version() {
+#if MW_EXE_DIALECT_NEC4
+    return std::string("NEC42 ") + MW_EXE_LAUNCHER + " [sb] " + VERSION;
+#else
     return std::string("NEC5 ") + MW_EXE_LAUNCHER + " [sb] " + VERSION;
+#endif
 }
 
 // `_shell.read_deck`: the file's bytes, false for anything open/read refuses
@@ -929,7 +955,12 @@ int write_file(const std::string &path, const std::string &bytes) {
 }
 
 std::string refusal(const std::string *latin1, const std::string &utf8_reason) {
+#if MW_EXE_DIALECT_NEC4
+    // `_printout.render_refusal(..., dialect="nec4")`: the NEC-4.2 banner
+    return mw::nec5::printout_bytes(mw::nec4::render_nec4_refusal(latin1, utf8_reason, BASIS, STAMP));
+#else
     return mw::nec5::printout_bytes(mw::nec5::render_refusal(latin1, utf8_reason, BASIS, STAMP));
+#endif
 }
 
 // The sentence for a deck the C++ route declines: what is not served, by
@@ -1075,7 +1106,8 @@ int run_deck_inner(const std::string &deck, const std::string &out, bool en_opti
             if (inject == "runtime") throw std::runtime_error("injected by MW_EXE_FAIL");
             bool raised = false;
             printout = render(deck, text, forced_threads, raised);
-            if (!raised) try {
+            // the NEC-4.2 slot writes no .GMO (`_shell.render_files`)
+            if (!raised && !MW_EXE_DIALECT_NEC4) try {
                 has_gmo = ml::gmo_text(text, gmo);
             } catch (const ml::PyError &e) {
                 if (!e.kind.empty()) throw;

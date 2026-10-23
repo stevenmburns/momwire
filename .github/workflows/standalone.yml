@@ -372,6 +372,87 @@ jobs:
           path: exe-linux-*.jsonl
           if-no-files-found: ignore
 
+  # `linux-nec42` (momwire#1607 B4b): the NEC-4.2 slot's
+  # `momwire-nec42-sinusoidal`, built on the runner against the static
+  # OpenBLAS linux-artifact cached (the manylinux build of
+  # standalone/build_openblas.sh), avx2 and sse2: the no-Python build gated
+  # against this environment's launcher (tests/test_standalone_nec42.py,
+  # every fixture deck and the launcher layer, the measured-time lines
+  # masked), and the hybrid's two routes (its C++ route and its embedded
+  # launcher for a deck the C++ declines). Not part of the release yet.
+  linux-nec42:
+    needs: linux-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          save: false
+      - name: momwire environment
+        run: |
+          pip install --upgrade pip
+          pip install "setuptools>=61.0" wheel pybind11 cmake ninja
+          pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      - name: static OpenBLAS (linux-artifact's cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/mwx-openblas-manylinux/libmwxp.a
+          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
+          fail-on-cache-miss: true
+      - name: build (no-Python avx2 and sse2, hybrid avx2)
+        run: |
+          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          for v in avx2 sse2; do
+            cmake -S standalone -B build-nec42-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=sin42 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
+            cmake --build build-nec42-$v
+          done
+          cmake -S standalone -B build-nec42-hybrid -G Ninja -DMW_EXE_BASIS=sin42 \
+            -DMW_EXE_VARIANT=avx2 -DMW_OPENBLAS_LIB=$OB \
+            -DMW_DEFAULT_PYTHON_HOME="$(python -c 'import sys; print(sys.prefix)')" \
+            -DPython3_EXECUTABLE="$(command -v python)"
+          cmake --build build-nec42-hybrid
+      - name: no-Python build against the launcher (avx2)
+        run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
+        env:
+          MOMWIRE_NEC42_SIN_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-avx2/momwire-nec42-sinusoidal-standalone
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: no-Python build against the launcher (sse2)
+        run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
+        env:
+          MOMWIRE_NEC42_SIN_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-sse2/momwire-nec42-sinusoidal-standalone
+          MOMWIRE_FORCE_VARIANT: sse2
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: the hybrid's two routes
+        run: |
+          E=build-nec42-hybrid/momwire-nec42-sinusoidal
+          test "$($E -version)" = "$(momwire-nec42-sinusoidal -version)"
+          F=tests/fixtures/eznec_nec42
+          MW_EXE_ROUTE_LOG=route-cxx $E $F/0224_dipole-ex0.nec cxx.out
+          MW_EXE_ROUTE_LOG=route-py $E $F/0229_dipole-10m-gn1.nec fallback.out
+          grep -q '^cxx:' route-cxx
+          grep -q '^fallback:' route-py
+          for f in cxx.out fallback.out; do
+            sed -n 2p $f
+            if grep -q "NEC ERROR" $f; then exit 1; fi
+          done
+        env:
+          MOMWIRE_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 90

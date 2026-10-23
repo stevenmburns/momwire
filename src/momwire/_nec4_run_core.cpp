@@ -1021,53 +1021,59 @@ Nec4Printout solve_structure(Ctx &c) {
 
 }  // namespace
 
+namespace {
+
+// One served structure's printout (`render_structure`), appended to `out`:
+// true when it solved (`own`: its seconds), false when it refused (its
+// refusal printout). Anything this copy does not print throws Declined.
+bool one_structure(const StructureSeam &ss, const Build &b, std::size_t k, const std::string &echo,
+                   bool closing, double seconds, const std::string &basis, const nec5::EngineStamp &stamp,
+                   EngineFactory &engines, const nec5::NumpyLinalg &np, std::string &out, double &own) {
+    own = 0.0;
+    if (ss.kind == StructureSeam::refused) {
+        out += render_nec4_refusal(&echo, ss.message, basis, stamp);
+        return false;
+    }
+    if (ss.kind != StructureSeam::served)
+        decline(ss.kind == StructureSeam::declined ? ss.message : "a structure the reference raises on");
+    if (k >= b.structures.size()) decline("a structure the build did not reach");
+    const StructureBuild &sb = b.structures[k];
+    if (sb.kind == StructureBuild::refused) {
+        out += render_nec4_refusal(&echo, sb.message, basis, stamp);
+        return false;
+    }
+    if (sb.kind != StructureBuild::built)
+        decline(sb.kind == StructureBuild::declined ? sb.message : "a build the reference raises on");
+    const Tables t = tables_of(ss, sb);
+    Ctx c;
+    c.ss = &ss;
+    c.sb = &sb;
+    c.t = &t;
+    c.engine = &engines.engine_for(sb);
+    c.np = &np;
+    Nec4Printout data = solve_structure(c);
+    own = data.run_seconds;
+    data.run_seconds = own + seconds;
+    out += render_nec4_printout(echo, data, basis, stamp, closing);
+    return true;
+}
+
+}  // namespace
+
 bool render(const std::string &text, const std::string &basis, const nec5::EngineStamp &stamp,
             EngineFactory &engines, const nec5::NumpyLinalg &np, std::string &out, std::string &why) {
     out.clear();
     why.clear();
     try {
         const Seam s = seam(text, basis);
-        if (s.basis_refused) {
-            why = "a refused basis";
-            return false;
-        }
+        if (s.basis_refused) decline("a refused basis");
         const Build b = build(text, basis);
         double seconds = 0.0;
         for (std::size_t k = 0; k < s.structures.size(); k++) {
             const StructureSeam &ss = s.structures[k];
-            const std::string &echo = ss.echo_text;
-            if (ss.kind == StructureSeam::refused) {
-                out += render_nec4_refusal(&echo, ss.message, basis, stamp);
-                return true;
-            }
-            if (ss.kind != StructureSeam::served) {
-                why = ss.kind == StructureSeam::declined ? ss.message : "a structure the reference raises on";
-                return false;
-            }
-            if (k >= b.structures.size()) {
-                why = "a structure the build did not reach";
-                return false;
-            }
-            const StructureBuild &sb = b.structures[k];
-            if (sb.kind == StructureBuild::refused) {
-                out += render_nec4_refusal(&echo, sb.message, basis, stamp);
-                return true;
-            }
-            if (sb.kind != StructureBuild::built) {
-                why = sb.kind == StructureBuild::declined ? sb.message : "a build the reference raises on";
-                return false;
-            }
-            const Tables t = tables_of(ss, sb);
-            Ctx c;
-            c.ss = &ss;
-            c.sb = &sb;
-            c.t = &t;
-            c.engine = &engines.engine_for(sb);
-            c.np = &np;
-            Nec4Printout data = solve_structure(c);
-            const double own = data.run_seconds;
-            data.run_seconds = own + seconds;
-            out += render_nec4_printout(echo, data, basis, stamp, ss.closing);
+            double own = 0.0;
+            if (!one_structure(ss, b, k, ss.echo_text, ss.closing, seconds, basis, stamp, engines, np, out, own))
+                break;
             seconds += own;
         }
         return true;
@@ -1075,11 +1081,68 @@ bool render(const std::string &text, const std::string &basis, const nec5::Engin
         why = e.what();
     } catch (const nec5::PrintoutDecline &e) {
         why = e.reason;
-    } catch (const std::exception &e) {
-        why = std::string("an error this copy does not word: ") + e.what();
     }
     out.clear();
     return false;
+}
+
+bool render_piece(const std::string &text, const std::string &basis, const nec5::EngineStamp &stamp,
+                  EngineFactory &engines, const nec5::NumpyLinalg &np, std::string &out, std::string &why,
+                  bool &go_on) {
+    go_on = false;
+    std::vector<nec5::Structure> all;
+    bool split = false;
+    try {
+        split = nec5::split_structures(text, all, true);
+    } catch (const nec5::ParseError &e) {
+        why = "a stream piece the reference raises on";
+        return false;
+    }
+    if (!split) return render(text, basis, stamp, engines, np, out, why);
+    out.clear();
+    why.clear();
+    try {
+        if (all.size() != 1) decline("a stream piece of more than one structure (the reference raises)");
+        const std::string deck_text = all[0].deck_text(), echo = all[0].echo_text();
+        const Seam s = seam(deck_text, basis);
+        if (s.basis_refused) decline("a refused basis");
+        if (s.structures.size() != 1) decline("a structure the seam splits again");
+        const Build b = build(deck_text, basis);
+        double own = 0.0;
+        go_on = one_structure(s.structures[0], b, 0, echo, false, 0.0, basis, stamp, engines, np, out, own);
+        return true;
+    } catch (const Declined &e) {
+        why = e.what();
+    } catch (const nec5::PrintoutDecline &e) {
+        why = e.reason;
+    }
+    out.clear();
+    go_on = false;
+    return false;
+}
+
+long long largest_solve(const std::string &text, const std::string &basis, bool open_end) {
+    try {
+        std::string deck = text;
+        if (open_end) {
+            std::vector<nec5::Structure> all;
+            if (nec5::split_structures(text, all, true) && all.size() == 1) deck = all[0].deck_text();
+        }
+        const Build b = build(deck, basis);
+        long long n = -1;
+        for (const StructureBuild &sb : b.structures) {
+            if (sb.kind != StructureBuild::built) break;
+            for (const OperatingPoint &op : sb.points) {
+                long long segs = 0;
+                for (const auto &npe : op.args.n_per_edge)
+                    for (long long e : npe) segs += e;
+                n = std::max(n, segs);
+            }
+        }
+        return n;
+    } catch (const std::exception &) {
+        return -1;
+    }
 }
 
 }  // namespace nec4
