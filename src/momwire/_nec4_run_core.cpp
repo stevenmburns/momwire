@@ -641,7 +641,6 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     const BuildTables &bt = c.sb->tables;
     const PortalDeck &deck = c.ss->deck;
     if (!deck.model.networks.empty()) decline("a TL / NT network (momwire#1607 B4c)");
-    if (bt.lossy) decline("a lossy wire (momwire#1607 B5)");
     RunResult r;
     r.point = point_for(*c.sb, freq, group.ek, group.environment);
     r.pec = group.environment.ground.kind == Ground::pec;
@@ -734,7 +733,10 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
         terms.push_back(z_load[static_cast<std::size_t>(p)].real() * (a * a));
     }
     const double p_load = 0.5 * rp::np_pairwise(terms.data(), static_cast<int64_t>(terms.size()));
-    r.p_structure = (p_load + 0.0) + 0.0;
+    // `p_wire`: the wires' own loss, read when a wire carries a material
+    // (`DeckSolver._lossy`)
+    const double p_wire = bt.lossy ? c.engine->wire_loss_power(r.point, r.coeffs) : 0.0;
+    r.p_structure = (p_load + p_wire) + 0.0;
     r.p_radiated = r.p_in - r.p_structure;
     r.efficiency = r.p_in > 0 ? (100.0 * r.p_radiated) / r.p_in : 0.0;
     return r;

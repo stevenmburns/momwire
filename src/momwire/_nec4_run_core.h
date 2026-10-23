@@ -26,8 +26,8 @@
 // `tests/test_nec4_run_core.py` through `scripts/core_split/nec4_run_compare.py`.
 //
 // DECLINED (`Declined`), never misprinted: a finite ground and GD's far-field
-// cliff (B5c), wire loading (B5b), a TL / NT network,
-// phased current sources, NE / NH (B4c), a GH helix row, a lossy wire, and
+// cliff (B5c), an insulated wire, a TL / NT network,
+// phased current sources, NE / NH (B4c), a GH helix row, and
 // any run Python would answer with a refusal this copy does not word (a
 // singular drive block, a current source on a port that takes no current).
 #pragma once
@@ -66,6 +66,9 @@ class RunEngine {
     virtual std::vector<std::vector<std::complex<double>>> current_slopes(
         std::size_t index, const std::vector<std::complex<double>> &coeffs,
         const std::vector<std::vector<double>> &s) = 0;
+    // `solver.wire_loss_power(coeffs)[0]`: the wires' own loss (0 with no
+    // wire loading).
+    virtual double wire_loss_power(std::size_t index, const std::vector<std::complex<double>> &coeffs) = 0;
 };
 
 // Builds the engine for one built structure (its operating points).

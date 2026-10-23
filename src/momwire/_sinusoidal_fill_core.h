@@ -26,7 +26,7 @@
 //
 // DECLINED (`nec4::Declined`), never misread:
 // - a solver without the extended kernel (the NEC-4.2 slot never builds one);
-// - a finite ground (momwire#1607 B5c) and any wire loading (B5b);
+// - a finite ground (momwire#1607 B5c) and an insulated wire;
 // - a matrix scipy's solve would NOT take as general: exactly symmetric or
 //   Hermitian, or of lower or upper bandwidth at most 1 (its diagonal,
 //   triangular and tridiagonal detection), or not finite; a singular one
@@ -63,6 +63,12 @@ struct PortSolution {
 // `_assemble_Z(geom, k)` in free space: Z in C order.
 std::vector<std::complex<double>> assemble_Z(const Front &fr, const nec4::SolverArgs &args,
                                              const nec5::NumpyLinalg &np);
+
+// `loading_for(solver, omega).z_wire`: each wire's per-metre series
+// impedance (LD 5, LD 2 / LD 3), false when the solver carries no wire
+// loading (`_loading_active`). Declines an insulated wire.
+bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega,
+                             std::vector<std::complex<double>> &z_wire);
 
 // `compute_port_solution()` in free space.
 PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const FillLinalg &la);

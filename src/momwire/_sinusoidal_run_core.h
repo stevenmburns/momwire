@@ -32,6 +32,7 @@ class Engine : public nec4::RunEngine {
     std::vector<std::vector<std::complex<double>>> current_slopes(
         std::size_t index, const std::vector<std::complex<double>> &coeffs,
         const std::vector<std::vector<double>> &s) override;
+    double wire_loss_power(std::size_t index, const std::vector<std::complex<double>> &coeffs) override;
 
   private:
     const Front &front_at(std::size_t index);

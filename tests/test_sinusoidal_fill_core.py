@@ -17,7 +17,9 @@ tests hold the C++ dump (Z, the coefficients, Y) equal to it over:
   across a radius step;
 - a perfect ground (GN 1): a monopole, a dipole above it on the sparse
   route, and the folded cos-1 fill with its image above the elision size;
-- the declines: a finite ground, wire loading.
+- wire loading: LD 5 on every wire and on one, LD 2 / LD 3 per metre, and
+  LD 5 over a perfect ground on the cos-1 route;
+- the declines: a finite ground.
 """
 
 from __future__ import annotations
@@ -195,9 +197,35 @@ CASES = [
         "declined",
     ),
     (
-        "wire_loading_declines",
+        "ld5_copper",
         deck(dipole(11), "LD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
-        "declined",
+        "fills",
+    ),
+    (
+        "ld5_one_wire_sparse",
+        deck(
+            dipole(61, 0.5) + "GW 2 11 .3 0 -.25 .3 0 .25 .001\n",
+            "LD 5 2 0 0 3.5e7\n" + FR + "EX 0 1 31 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "ld2_series_per_metre",
+        deck(dipole(11), "LD 2 1 0 0 10 1e-7 0\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "ld3_parallel_per_metre",
+        deck(dipole(11), "LD 3 1 0 0 1e4 1e-6 0\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "ld5_over_pec_cos_minus_one",
+        deck(
+            dipole(31).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
+            "GN 1\nLD 5 0 0 0 5.8e7\n" + LF + "EX 0 1 16 0 1\nXQ\n",
+        ),
+        "fills",
     ),
 ]
 
