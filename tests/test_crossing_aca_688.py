@@ -191,6 +191,11 @@ def test_g688_5_dense_mesh_engages_low_rank_and_holds_parity(
         return U, V
 
     monkeypatch.setattr(_aca, "aca_partial", spy)
+    # The fan's far block repeats rho (its rise is on the axis), so since
+    # momwire#1595 the cost rule routes it dense and the lane would sit idle
+    # again. This row exists to exercise the sampler, so it keeps the ACA
+    # routing for that block.
+    monkeypatch.setattr(cf, "_dense_beats_aca", lambda *a, **k: False)
     build = fan_rise_deck()
     build["n_per_edge_per_wire"] = [[20, 6] for _ in range(4)] + [[30]]
     _s, ctx, a_idx, b_idx = _deck_axes(build)
