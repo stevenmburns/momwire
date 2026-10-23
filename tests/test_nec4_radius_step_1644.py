@@ -536,3 +536,20 @@ def test_steps_over_ground_track_nec42(name):
     0.6 ohm of X and 0.05 of R (measured at most 0.47 and 0.035)."""
     d = _momwire(name) - _nec42(name)
     assert abs(d.imag) <= 0.6 and abs(d.real) <= 0.05
+
+
+@pytest.mark.parametrize(
+    "deck",
+    ["dup_phantom_served_h689.nec", "dup_no_ports_raises_h784.nec"],
+)
+def test_a_singular_node_keeps_the_log_rule(deck):
+    """Coincident members (a wire left in place twice) give the junction
+    solve no unique split; that node keeps the log rule and the deck prints
+    as it did rather than raising."""
+    from momwire.eznec import _nec4
+
+    text = (
+        pathlib.Path(__file__).parent / "fixtures" / "razor_printout_small" / deck
+    ).read_text()
+    out = _nec4.render(text, basis="sinusoidal")
+    assert "ZeroDivisionError" not in out

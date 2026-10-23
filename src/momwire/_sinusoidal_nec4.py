@@ -94,9 +94,17 @@ def end_factors(geom, k, a_const, junctions, radius_per_wire, nodes):
             segs.append((s, end))
         radii = [float(radius_per_wire[w]) for w, _end in junctions[j]]
         lengths = [float(seg_h[s]) for s, _end in segs]
-        factors = _nec4_junction.junction_charge_factors(
-            float(k), dirs, radii, lengths, float(base[segs[0][0]])
-        )
+        try:
+            factors = _nec4_junction.junction_charge_factors(
+                float(k), dirs, radii, lengths, float(base[segs[0][0]])
+            )
+        except ZeroDivisionError:
+            # A singular node: members that coincide (two copies of one wire
+            # left in place, say) have no unique charge split. It keeps the
+            # log rule, as an unsolved node does.
+            continue
+        if not all(math.isfinite(f) for f in factors):
+            continue
         for (s, end), f in zip(segs, factors, strict=True):
             if end == "start":
                 a_minus[s] = f

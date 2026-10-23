@@ -265,7 +265,10 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
             fac = junction_charge_factors(k, dirs, radii, lengths, base[segs[0].first]);
         } catch (const std::domain_error &e) {
             fail(e.what());
+        } catch (const std::runtime_error &) {
+            continue;  // a singular node keeps the log rule (Python's ZeroDivisionError)
         }
+        if (!std::all_of(fac.begin(), fac.end(), [](double v) { return std::isfinite(v); })) continue;
         for (std::size_t q = 0; q < segs.size(); q++) (segs[q].second ? am : ap)[segs[q].first] = fac[q];
     }
     // end_cap_x
