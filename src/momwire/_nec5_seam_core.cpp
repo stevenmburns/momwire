@@ -356,12 +356,11 @@ std::string near_field_refusal(const Deck &d, const Request &rq) {
     const auto where = [&](const double *pt) {
         return "(" + format_g(pt[0]) + ", " + format_g(pt[1]) + ", " + format_g(pt[2]) + ")";
     };
-    // A point in the soil (momwire#1653): served by the Python seam's
-    // transmitted readout over GN 0 / GN 2, which this front does not carry,
-    // so it declines; refused by name under a bare GD.
+    // A point in the soil (momwire#1653): served over GN 0 / GN 2 (the
+    // transmitted readout, `_near_buried_core.cpp`), refused by name under a
+    // bare GD.
     for (std::size_t q = 0; q < pts.size() / 3; q++)
-        if (pts[3 * q + 2] < 0.0) {
-            if (d.ground.kind != Ground::mininec) throw Declined{"near-field-below"};
+        if (pts[3 * q + 2] < 0.0 && d.ground.kind == Ground::mininec) {
             return card + " asks for the field at " + where(&pts[3 * q]) +
                    " metres, which is below "
                    "this deck's GD ground. A GD deck's currents are solved over a perfect "
@@ -607,13 +606,11 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
                 if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
         std::string geometry = geometry_refusal(d);
         if (!geometry.empty()) return geometry;
-        // A buried deck's near field is served since momwire#1653 by the
-        // Python seam's four-regime readout (`_near_buried`), which this
-        // front does not carry: it declines. A near field over a FINITE
-        // ground (GN 0 / GN 2 / GD) asks `near_point_refusal` of its grid.
-        const bool buried = has_buried_wire(d);
+        // A buried deck's near field is served since momwire#1653 (the
+        // four-regime readout, `_near_buried_core.cpp`). A near field over a
+        // FINITE ground (GN 0 / GN 2 / GD) asks `near_point_refusal` of its
+        // grid.
         for (const Request &r : d.requests) {
-            if (r.kind == Request::near_field && buried) throw Declined{"near-field-buried"};
             if (r.kind == Request::near_field &&
                 (d.ground.kind == Ground::mininec || d.ground.kind == Ground::sommerfeld)) {
                 const std::string near = near_field_refusal(d, r);

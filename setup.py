@@ -390,9 +390,13 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_remainder_inline.h",
     "src/momwire/_near_interface_core.h",
     "src/momwire/_near_interface_eval.h",
+    "src/momwire/_near_interface_point_core.h",
+    "src/momwire/_near_buried_core.h",
     # The column machinery the near-interface core's twin reads (momwire#1512
     # B4a), shared with `_near_interface_accel`.
     "src/momwire/_near_interface_columns_inline.h",
+    # The steepest-descent path both column twins read (momwire#1653).
+    "src/momwire/_near_interface_sdp_inline.h",
     "src/momwire/_vmath_inline.h",
     "src/momwire/_razor_crossing_core.h",
     # The crossing fill's shared pieces, razor's and bs2's (momwire#1517 step 4).
@@ -561,6 +565,13 @@ _ACCEL_SOURCES = [
     "src/momwire/_razor_crossing_core.cpp",
     "src/momwire/_near_interface_eval.cpp",
     "src/momwire/_near_interface_core.cpp",
+    # The point-observer column twin, Python-free (momwire#1653), for the
+    # buried near-field readout; its own TU (its own renamed xsf copy).
+    "src/momwire/_near_interface_point_core.cpp",
+    # The buried near-field readout (momwire#1653), Python-free, and its
+    # binding (`near_buried_parts`); the executables link the core.
+    "src/momwire/_near_buried_core.cpp",
+    "src/momwire/_accel_near_buried.cpp",
     # The front half's exact ring kernel (momwire#1479): the plan and the
     # correction, and the point moments' Python-free twin of
     # `_accel_exact_kernel_point.cpp` (the same inline text, so the same
@@ -651,10 +662,15 @@ _NEAR_HEADERS = [
     "src/momwire/_contour_lanes_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).
     "src/momwire/_near_interface_columns_inline.h",
+    # The steepest-descent path both column twins read (momwire#1653).
+    "src/momwire/_near_interface_sdp_inline.h",
     "src/momwire/_vmath_inline.h",
     # The Python-free column twin and sheet interpolator's interface
     # (momwire#1512 B4a), which this extension binds.
     "src/momwire/_near_interface_core.h",
+    # The point-observer twin's Python-free core (momwire#1653), which the
+    # point extension binds.
+    "src/momwire/_near_interface_point_core.h",
     # The SIMD lane layer (momwire#1372): the sheet's fixed-width cell sum.
     "src/momwire/_lanes.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
@@ -766,7 +782,10 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
         _variant(
             "_near_interface_point_accel",
             _suffix,
-            ["src/momwire/_near_interface_point_accel.cpp"],
+            [
+                "src/momwire/_near_interface_point_accel.cpp",
+                "src/momwire/_near_interface_point_core.cpp",
+            ],
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],

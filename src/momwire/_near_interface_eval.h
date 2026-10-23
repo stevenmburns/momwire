@@ -143,6 +143,13 @@ void designed_index(const Evaluator &ev, Memo &memo, const double *rho, const do
                     const double *zp, size_t n, const int64_t *labels, uint32_t *idx,
                     int n_threads = 1);
 
+// `_point_radius_tables_folded` (momwire#1653): the point-observer family
+// (POINT_KEYS) at m rows (m, 3) of (rho already folded, z, z'), out (m, 4):
+// the rows on the plan's planes and heights from the point sheets, the rest
+// exact through the point twin, grouped by rho. Memo-free, as the Python
+// route is.
+void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows, size_t m, cd *out);
+
 // `_evaluate_fresh` over distinct rows (m, 3): (m, 6).
 void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int64_t *labels,
                     const SheetPlan *plan, ni_core::ColumnCache *cache, Six *out);

@@ -14,6 +14,7 @@
 #include "_somm_grid_core.h"
 #include "_mw_times.h"
 #include "_somm_below_fill_core.h"
+#include "_near_buried_core.h"
 #include "_accel_somm_proj_inline.h"
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and
@@ -42,6 +43,9 @@
 #include <set>
 #include <stdexcept>
 #include <utility>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace mw {
 namespace nec5 {
@@ -1955,9 +1959,13 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
 // `field + (C2 * image + remainder)`, C2's product numpy's fused one.
 // The block over given elements (`near_field_at` + `near_field_block`):
 // `compose` reads the medium (eps_r, sigma) at `omega` with `eps0`.
-NearBlockC near_block_of(const Request &rq, const std::vector<double> &points, const Elements &el, double k,
-                         double radius, bool pec, bool compose, double omega, double eps0, double eps_r,
-                         double sigma) {
+// `near_field_at` over the elements alone (no buried composition): free
+// space, GN 1's image, or `field + (C2 * image + remainder)`.
+std::vector<cd> near_field_values(bool magnetic, const std::vector<double> &points, const Elements &el, double k,
+                                  double radius, bool pec, bool compose, double omega, double eps0, double eps_r,
+                                  double sigma) {
+    Request rq;
+    rq.magnetic = magnetic;
     std::vector<cd> field = element_fields(points, el, k, radius, rq.magnetic);
     if (pec || compose) {
         Elements img = el;
@@ -1985,6 +1993,72 @@ NearBlockC near_block_of(const Request &rq, const std::vector<double> &points, c
             for (std::size_t q = 0; q < field.size(); q++) field[q] = c_add(field[q], image[q]);
         }
     }
+    return field;
+}
+
+// The buried readout's thread budget: the process's OpenMP team (its values
+// do not depend on it).
+int mw_threads_for_near() {
+#ifdef _OPENMP
+    return omp_get_max_threads();
+#else
+    return 1;
+#endif
+}
+
+// `_near_readout._near_field_buried` (momwire#1653): over the composing
+// ground with an element or a point below the plane, the above/above share of
+// the above-ground elements first, then `near_buried::parts` -- the code the
+// Python route calls (`near_buried_parts`).
+std::vector<cd> near_field_buried(bool magnetic, const std::vector<double> &points, const Elements &el,
+                                  const std::vector<int64_t> &counts, int subdiv, double k, double radius,
+                                  double omega, double eps0, double eps_r, double sigma) {
+    const cd eps_t(eps_r, (-sigma) / (omega * eps0));
+    near_buried::Elements ne;
+    ne.mid = el.mid.data();
+    ne.moment = el.moment.data();
+    ne.n_el = el.mid.size() / 3;
+    ne.nodes = el.nodes.data();
+    ne.delta = el.delta.data();
+    ne.n_nodes = el.nodes.size() / 3;
+    ne.counts = counts.data();
+    ne.n_wires = counts.size();
+    ne.subdiv = subdiv;
+    near_buried::Sources above, below;
+    near_buried::split(ne, 0.0, above, below);
+    const std::size_t n = points.size() / 3;
+    std::vector<cd> fresh(3 * n);
+    near_buried::parts(points.data(), n, ne, eps_t, 0.0, k, omega, 4e-7 * 3.141592653589793, radius, magnetic,
+                       mw_threads_for_near(), fresh.data());
+    std::vector<double> pa;
+    std::vector<std::size_t> ia;
+    for (std::size_t q = 0; q < n; q++)
+        if (points[3 * q + 2] >= 0.0) {
+            pa.insert(pa.end(), &points[3 * q], &points[3 * q] + 3);
+            ia.push_back(q);
+        }
+    std::vector<cd> out(3 * n, cd(0.0, 0.0));
+    if (!ia.empty() && above.n_el() != 0) {
+        Elements ea;
+        ea.mid = above.mid;
+        ea.moment = above.moment;
+        ea.nodes = above.nodes;
+        ea.delta = above.delta;
+        const std::vector<cd> aa =
+            near_field_values(magnetic, pa, ea, k, radius, false, true, omega, eps0, eps_r, sigma);
+        for (std::size_t r = 0; r < ia.size(); r++)
+            for (int c = 0; c < 3; c++) out[3 * ia[r] + c] = aa[3 * r + c];
+    }
+    for (std::size_t q = 0; q < n; q++)
+        for (int c = 0; c < 3; c++) {
+            const std::size_t i = 3 * q + static_cast<std::size_t>(c);
+            out[i] = points[3 * q + 2] >= 0.0 ? c_add(out[i], fresh[i]) : fresh[i];
+        }
+    return out;
+}
+
+// `near_field_block`: the rows, each cell floored before it is read.
+NearBlockC near_rows(const Request &rq, const std::vector<double> &points, const std::vector<cd> &field) {
     NearBlockC block;
     block.magnetic = rq.magnetic;
     for (std::size_t q = 0; q < points.size() / 3; q++) {
@@ -2001,6 +2075,13 @@ NearBlockC near_block_of(const Request &rq, const std::vector<double> &points, c
     return block;
 }
 
+NearBlockC near_block_of(const Request &rq, const std::vector<double> &points, const Elements &el, double k,
+                         double radius, bool pec, bool compose, double omega, double eps0, double eps_r,
+                         double sigma) {
+    return near_rows(rq, points,
+                     near_field_values(rq.magnetic, points, el, k, radius, pec, compose, omega, eps0, eps_r, sigma));
+}
+
 NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
                       const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
                       const Prepared &p, bool pec, bool compose) {
@@ -2014,6 +2095,24 @@ NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
     // `solver.omega` = 2 * np.pi * (c / wavelength)
     const double omega = compose ? engine.solver_omega(p) : 0.0;
     const double eps0 = compose ? engine.eps0() : 0.0;
+    if (compose) {
+        // `_near_readout._crosses`: an element or a point below the plane
+        bool crosses = false;
+        for (std::size_t e = 0; e < el.mid.size() / 3 && !crosses; e++) crosses = el.mid[3 * e + 2] < 0.0;
+        for (std::size_t q = 0; q < points.size() / 3 && !crosses; q++) crosses = points[3 * q + 2] < 0.0;
+        if (crosses) {
+            // `element_counts(solver)` at subdiv 8: each wire's segments x 8
+            std::vector<int64_t> counts;
+            for (const WireWalk &w : walk) {
+                int64_t m = 0;
+                for (int64_t n_e : w.npe) m += n_e;
+                counts.push_back(m * 8);
+            }
+            return near_rows(rq, points,
+                             near_field_buried(rq.magnetic, points, el, counts, 8, k, radius, omega, eps0,
+                                               p.medium_eps_r, p.medium_sigma));
+        }
+    }
     return near_block_of(rq, points, el, k, radius, pec, compose, omega, eps0, p.medium_eps_r, p.medium_sigma);
 }
 

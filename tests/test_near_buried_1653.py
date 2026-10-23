@@ -373,6 +373,57 @@ def test_g4_the_near_field_tends_to_the_transmitted_far_field(record_property):
 
 
 # --------------------------------------------------------------------------
+# the C++ readout against the numpy reference, per regime
+# --------------------------------------------------------------------------
+
+# The C++ route (`_near_buried_core.cpp`) evaluates the same kernels through
+# the same twins and sheets as the numpy route; what differs is the
+# arithmetic around them (sums, products, the grid's own read), so E agrees
+# to rounding: measured <= 1.5e-15 relative per point over every regime
+# below. H is a central difference of that E over a step of 1e-4 wl
+# (transmitted) / 1e-3 wl_m (below), which amplifies a rounding-level
+# difference by 1/(k step) ~ 1.6e3: measured <= 2.7e-13. The bars are those
+# with three decades of headroom, so a reordered sum under MSVC's /fp:fast
+# (no bit compatibility on Windows) stays inside them while a wrong term,
+# which moves a field at O(1e-3) or more, cannot.
+_CXX_E_RTOL = 1e-12
+_CXX_H_RTOL = 1e-10
+
+
+@pytest.mark.parametrize(
+    "deck, side",
+    [
+        ("buried", "above"),  # transmitted, upward
+        ("buried", "below"),  # below/below
+        ("above", "below"),  # transmitted, downward
+        ("hub", "above"),  # all four at once
+        ("hub", "below"),
+    ],
+)
+@pytest.mark.parametrize("magnetic", [False, True], ids=["E", "H"])
+def test_the_cxx_readout_is_the_numpy_reference(deck, side, magnetic, monkeypatch):
+    if _near_buried.cxx_parts() is None:
+        pytest.skip("no accelerator: the numpy route is the only one")
+    s, c = {"buried": _buried_dipole, "above": _above_dipole, "hub": _hub}[deck]()
+    rng = np.random.default_rng(7)
+    sgn = 1.0 if side == "above" else -1.0
+    pts = np.column_stack(
+        [
+            rng.uniform(-8, 8, 12),
+            rng.uniform(-8, 8, 12),
+            sgn * np.exp(rng.uniform(np.log(1e-4), np.log(3.0), 12)),
+        ]
+    )
+    # and two past the below grid's cap (the direct route), or far above
+    pts = np.vstack([pts, [[80.0, 0.0, 0.05 * sgn], [40.0, 3.0, 0.3 * sgn]]])
+    cxx = _field(s, c, pts, magnetic=magnetic)
+    monkeypatch.setattr(_near_buried, "_CXX", False)
+    ref = _field(s, c, pts, magnetic=magnetic)
+    rel = np.linalg.norm(cxx - ref, axis=1) / np.linalg.norm(ref, axis=1)
+    assert float(np.max(rel)) < (_CXX_H_RTOL if magnetic else _CXX_E_RTOL), rel
+
+
+# --------------------------------------------------------------------------
 # G5 above/above untouched
 # --------------------------------------------------------------------------
 

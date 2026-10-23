@@ -279,6 +279,14 @@ _HAVE_POINT_COLUMNS_ACCEL = _nipa is not None and bool(
 _SIX_COLUMNS_LANES = True
 
 
+def _point_sdp_kw():
+    """`near_interface_point_columns`' steepest-descent switch (momwire#1653),
+    for a binding that has it."""
+    if not _SDP and _nipa is not None and hasattr(_nipa, "point_columns_sdp_1653"):
+        return {"sdp": False}
+    return {}
+
+
 def _columns_lanes_kw():
     """`near_interface_six_columns`' lanes and steepest-descent switches, for
     a binding that has them."""
@@ -777,10 +785,14 @@ def _sdp_theta(rho, zs, k_p):
     return theta, kr
 
 
-def _sdp_pole(k_p, k_m, theta, rho):
+def _sdp_pole(k_p, k_m, theta, rho, factors=None):
     """The Zenneck pole's path coordinate s_p and its residue (6,) in s, or
     None when there is no pole on this sheet (the formula's root is the
-    other branch) or the contour round it does not settle."""
+    other branch) or the contour round it does not settle. `factors` is the
+    family's path integrand (`_sdp_factors`, the six; `_sdp_point_factors`,
+    the point family's four, momwire#1653)."""
+    if factors is None:
+        factors = _sdp_factors
     lam = k_p * k_m / np.sqrt(k_p * k_p + k_m * k_m)
     cw = 1j * k_p * _gamma(lam, k_m) / (k_m * k_m)
     wp = complex(-1j * np.log(cw + 1j * lam / k_p))  # the w with this sine and cosine
@@ -801,7 +813,7 @@ def _sdp_pole(k_p, k_m, theta, rho):
         # the circle can cross gamma_p + gamma_m = 0 exactly; that contour is
         # not finite, and a contour that is not finite is no pole.
         with np.errstate(divide="ignore", invalid="ignore"):
-            f, _, _ = _sdp_factors(ss, theta, rho, k_p, k_m)
+            f, _, _ = factors(ss, theta, rho, k_p, k_m)
             res = (f * (ss - sp)).mean(axis=1)
         return res if np.all(np.isfinite(res)) else None
 
@@ -921,6 +933,98 @@ def _six_columns_sdp(k_p, k_m, rho, zs, zps):
     theta, kr = got
     F, g_p, g_m = _sdp_nodes(rho, k_p, k_m, theta, kr)
     return _columns_apply(F, g_p, g_m, zs, zps, g_p.size)
+
+
+def _point_column_factors(lam, w0, w1, k_p, k_m, g_p=None, g_m=None):
+    """The point family's `_column_factors`: F (4, K) in POINT_KEYS order
+    with the J0 weights `w0` on the z rows and the J1 weights `w1` on the
+    rho rows (momwire#1653), and the two gammas."""
+    if g_p is None:
+        g_p = _gamma(lam, k_p)
+    if g_m is None:
+        g_m = _gamma(lam, k_m)
+    v = 2.0 * lam / (k_m * k_m * g_p + k_p * k_p * g_m)
+    wv = (g_p - g_m) * v
+    return (
+        np.stack([-lam * v * w1, -g_p * v * w0, -lam * wv * w1, g_m * v * w0]),
+        g_p,
+        g_m,
+    )
+
+
+def _sdp_point_factors(s, theta, rho, k_p, k_m):
+    """`_sdp_factors` for the point family (momwire#1653): the J0 rows take
+    1/2 H0^(2) on the path, as the six do, and the J1 rows 1/2 H1^(2). The
+    J1 integrands are EVEN in lambda (a lambda times the odd v~), the J0 ones
+    odd, and H1^(1)(-x) = +H1^(2)(x) where H0^(1)(-x) = -H0^(2)(x): both fold
+    the half-line onto the whole real axis the same way, so one path and
+    one rule serve both."""
+    w, dpsi = _sdp_path(theta, s)
+    lam = k_p * np.sin(w)
+    d = k_p * np.cos(w) * dpsi
+    w0 = 0.5 * hankel2(0, lam * rho) * d
+    w1 = 0.5 * hankel2(1, lam * rho) * d
+    return _point_column_factors(lam, w0, w1, k_p, k_m, g_p=1j * k_p * np.cos(w))
+
+
+def _sdp_point_nodes(rho, k_p, k_m, theta, kr):
+    """`_sdp_nodes` for the point family: the same path rule, pole
+    subtraction and keyhole, on its four rows (momwire#1653)."""
+    S = np.sqrt(_SDP_TAIL / kr)
+    x, gw = leggauss(_SDP_N)
+    s = S * x
+    ws = S * gw
+    F, g_p, g_m = _sdp_point_factors(s, theta, rho, k_p, k_m)
+    F = F * ws
+    parts = [(F, g_p, g_m)]
+    pole = _sdp_pole(k_p, k_m, theta, rho, factors=_sdp_point_factors)
+    if pole is not None and abs(np.sqrt(kr) * pole[0]) <= _SDP_A_MAX:
+        sp, res = pole
+        a = np.sqrt(kr) * sp
+        g_sub = np.exp(-kr * (s * s - sp * sp)) / (s - sp)
+        whole = 1j * np.pi * wofz(a) if a.imag > 0 else -1j * np.pi * wofz(-a)
+        corr = np.exp(kr * sp * sp) * whole - np.sum(g_sub * ws)
+        _, gp1, gm1 = _sdp_point_factors(np.array([sp]), theta, rho, k_p, k_m)
+        parts.append((res[:, None] * corr, gp1, gm1))
+    if k_m.imag < 0.0 and _sdp_encloses(k_p, k_m, theta, S):
+        t_max = _SDP_CUT_T / rho
+        xc, wc = leggauss(_SDP_NCUT)
+        u = 0.5 * (xc + 1.0) * np.sqrt(t_max)
+        dt = 2.0 * u * 0.5 * np.sqrt(t_max) * wc  # t = u^2
+        lam = k_m.real + 1j * (k_m.imag - u * u)
+        gp = _gamma(lam, k_p)
+        gm = _gamma(lam, k_m)
+        h0 = 0.5 * hankel2(0, lam * rho) * 1j * dt
+        h1 = 0.5 * hankel2(1, lam * rho) * 1j * dt
+        parts.append(_point_column_factors(lam, h0, h1, k_p, k_m, g_p=gp, g_m=gm))
+        parts.append(_point_column_factors(lam, -h0, -h1, k_p, k_m, g_p=gp, g_m=-gm))
+    return (
+        np.concatenate([p[0] for p in parts], axis=1),
+        np.concatenate([p[1] for p in parts]),
+        np.concatenate([p[2] for p in parts]),
+    )
+
+
+def _point_columns_sdp(k_p, k_m, rho, zs, zps):
+    """The point family's far column on the steepest-descent path
+    (momwire#1653: the D1b route of `_six_columns_sdp`, the same crossover
+    `_sdp_theta`), or None when the column is not a far one."""
+    got = _sdp_theta(rho, zs, k_p)
+    if got is None:
+        return None
+    theta, kr = got
+    F, g_p, g_m = _sdp_point_nodes(rho, k_p, k_m, theta, kr)
+    out = np.empty((zs.size, N_POINT_KEYS), dtype=np.complex128)
+    step = max(1, _COLUMN_Z_CHUNK // g_p.size)
+    with np.errstate(under="ignore"):
+        for zp_one in np.unique(zps):
+            rows = np.flatnonzero(zps == zp_one)
+            base = g_m * zp_one
+            for i0 in range(0, rows.size, step):
+                sel = rows[i0 : i0 + step]
+                e = np.exp(base[None, :] - g_p[None, :] * zs[sel, None])
+                out[sel] = e @ F.T
+    return out
 
 
 def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
@@ -1170,6 +1274,9 @@ def point_keys_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p
     zs = np.atleast_1d(np.asarray(zs, dtype=float))
     zps = np.broadcast_to(np.asarray(zp, dtype=float), zs.shape)
     s = _refuse_bad_members(rho, zs, zps)
+    far = _point_columns_sdp(k_p, k_m, rho, zs, zps)  # momwire#1653: D1b's route
+    if far is not None:
+        return far
     lam, w0, w1 = _column_rule_j1(
         rho, k_p, k_m, float(np.min(s)), lam_mult=lam_mult, p=p
     )
@@ -1298,6 +1405,7 @@ def _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p=None):
             _physical_cpu_count(),
             _GX,
             _GW,
+            **_point_sdp_kw(),
         )
     else:
         for i, r in enumerate(uniq):

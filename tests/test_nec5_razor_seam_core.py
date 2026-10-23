@@ -433,26 +433,28 @@ CASES = {
         "refused",
         "which is below this deck's GD ground",
     ),
-    "declines_a_near_field_below_sommerfeld": (
+    "serves_a_near_field_below_sommerfeld": (
         HEAD
         + MONO
         + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\n"
         + "NE 0,1,1,1,1.,0.,-1.,0.,0.,0.\n"
         + RP
         + "EN\n",
-        # momwire#1653: the Python seam's transmitted readout serves it.
-        "declined",
-        "near-field-below",
+        # momwire#1653: the transmitted readout, in C++ too.
+        "served",
+        "",
     ),
-    "declines_a_buried_decks_near_field": (
+    "a_buried_decks_near_field_reaches_the_buried_fill": (
         HEAD
         + "GW 1,10,0.,-2.5,-0.5,0.,2.5,-0.5,.002\n"
         + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,5,0,1.,0.\n"
         + "NE 0,1,1,1,1.,0.,1.,0.,0.,0.\n"
         + RP
         + "EN\n",
+        # momwire#1653: its near field is served in C++; the deck itself
+        # still leaves its buried fill to the run half.
         "declined",
-        "near-field-buried",
+        "front:buried-fill",
     ),
     "serves_wire_loading": (
         HEAD

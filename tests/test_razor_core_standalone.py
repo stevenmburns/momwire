@@ -110,6 +110,10 @@ CORE_SOURCES = (
     "_somm_below_fill_core.cpp",
     "_near_interface_core.cpp",
     "_near_interface_eval.cpp",
+    # The point-observer twin and the buried near-field readout over it
+    # (momwire#1653).
+    "_near_interface_point_core.cpp",
+    "_near_buried_core.cpp",
     "_razor_crossing_core.cpp",
     # The near-field remainder over a finite ground (S4).
     "_somm_field_core.cpp",
@@ -1674,11 +1678,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
         "front:bspline-buried-refusal-medium",
         "front:bspline-buried-refusal-contact",
         "front:bspline-buried-refusal-unearned",
-        # momwire#1653: a buried deck's near field and a point in the soil
-        # are the Python seam's four-regime readout, which this chain does
-        # not carry (tests/fixtures/near_buried_1653).
-        "near-field-buried",
-        "near-field-below",
     }, reasons
 
 
