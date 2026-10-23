@@ -260,7 +260,10 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
             raise ValueError(
                 f"node_gaps[{i}]: junction {j_idx} has a single member "
                 "— there is no through-current path to be in series "
-                "with (a lone-end attachment is junction_ports=)"
+                "with (a lone-end attachment is junction_ports=; a lone end "
+                "standing in the ground plane is fed by feeds=(wire, "
+                "arclength of that end, V), the ground-contact feed, "
+                "momwire#1120)"
             )
         if member in seen_members:
             raise ValueError(
