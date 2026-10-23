@@ -59,6 +59,10 @@ int main(int argc, char **argv) {
         sym_of(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
     la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_dgemv64_", "cblas_dgemv64_"}));
+    la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_ddot64_", "cblas_ddot64_"}));
     for (int k = 3; k < argc; ++k) {
         std::ifstream in(argv[k], std::ios::binary);
         if (!in) {

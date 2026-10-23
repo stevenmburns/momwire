@@ -544,7 +544,9 @@ struct RunResult {
     double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0;
     double fill_seconds = 0, wavelength = 0;
     std::size_t point = 0;
-    bool pec = false;  // GN 1
+    bool pec = false;     // GN 1
+    bool finite = false;  // GN 2 / GN 3 (the Sommerfeld half-space)
+    double eps_r = 0, sigma = 0;
 };
 
 struct Ctx {
@@ -568,8 +570,7 @@ struct Ctx {
 };
 
 std::size_t point_for(const StructureBuild &sb, double freq, bool ek, const Environment &env) {
-    if (env.ground.kind != Ground::none && env.ground.kind != Ground::pec)
-        decline("a finite ground (momwire#1607 B5c)");
+    if (env.ground.kind == Ground::finite_fast) decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
     for (std::size_t i = 0; i < sb.points.size(); i++)
         if (sb.points[i].frequency_mhz == freq && sb.points[i].extended_kernel == ek &&
             sb.points[i].args.ground.kind == env.ground.kind)
@@ -642,13 +643,19 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     const PortalDeck &deck = c.ss->deck;
     if (!deck.model.networks.empty()) decline("a TL / NT network (momwire#1607 B4c)");
     RunResult r;
+    if (group.environment.ground.kind != Ground::none)
+        for (const GeometryWire &w : deck.structure.wires)
+            if (w.p1[2] < 0.0 || w.p2[2] < 0.0) decline("a wire below the ground plane (momwire#1607 B6)");
     r.point = point_for(*c.sb, freq, group.ek, group.environment);
     r.pec = group.environment.ground.kind == Ground::pec;
+    r.finite = group.environment.ground.kind == Ground::finite;
+    r.eps_r = group.environment.ground.eps_r;
+    r.sigma = group.environment.ground.sigma;
     // GD's second medium: the far field's cliff (`_far_field_ground`) is not
     // copied yet
     bool gd = false;  // `_far_ground_card(deck)`
     for (const nec5::Card &card : c.ss->deck.data_cards) gd = gd || card.mnemonic == "GD";
-    if (r.pec && gd && group.environment.has_second_medium)
+    if ((r.pec || r.finite) && gd && group.environment.has_second_medium)
         decline("a GD far-field ground (momwire#1607 B5c)");
     const OperatingPoint &op = c.sb->points[r.point];
     const EngineSolve &es = c.engine->solve(r.point);
@@ -742,6 +749,21 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     return r;
 }
 
+// `_medium(ground, freq)`'s eps_c: `complex(eps_r, -sigma / (omega * 8.854e-12))`,
+// omega = 2 pi f
+cd medium_eps_c(const RunResult &r, double freq) {
+    const double omega = 2.0 * kPi * freq * 1e6;
+    return cd(r.eps_r, (-r.sigma) / (omega * 8.854e-12));
+}
+
+// `_local_wavelength(wavelength, medium, ground_z)`: below a finite ground's
+// interface a row is normalised by the medium's wavelength
+double local_wavelength(const RunResult &r, double freq, double wavelength, double z) {
+    if (!r.finite || !(z < 0.0)) return wavelength;
+    const cd root = std::sqrt(medium_eps_c(r, freq));
+    return wavelength / std::hypot(root.real(), root.imag());
+}
+
 // `_charges` + `_charge_rows`
 std::vector<ValueRow> charge_rows(Ctx &c, const RunResult &r, double freq, double local) {
     const std::vector<GeometryWire> &wires = c.ss->deck.structure.wires;
@@ -804,17 +826,19 @@ std::vector<ValueRow> charge_rows(Ctx &c, const RunResult &r, double freq, doubl
         const SegmentRow &sl = segs[static_cast<std::size_t>(first + wires[wi].n_seg - 1)];
         const double length = norm3(s0.direction);
         auto end_row = [&](const SegmentRow &seg, const double *point, cd q) {
+            const double lw = local_wavelength(r, freq, local, point[2]);
             double ce[3];
-            for (int k = 0; k < 3; k++) ce[k] = point[k] / local;
-            rows.push_back(value_row(seg.number, i64(seg.tag), ce, length / local, q, true));
+            for (int k = 0; k < 3; k++) ce[k] = point[k] / lw;
+            rows.push_back(value_row(seg.number, i64(seg.tag), ce, length / lw, q, true));
         };
         auto it = end_charges.find({wi, true});
         if (it != end_charges.end()) end_row(s0, wires[wi].p1, it->second);
         for (ll k = 0; k < wires[wi].n_seg; k++) {
             const SegmentRow &seg = segs[static_cast<std::size_t>(first + k)];
+            const double lw = local_wavelength(r, freq, local, seg.centre[2]);
             double ce[3];
-            for (int m = 0; m < 3; m++) ce[m] = seg.centre[static_cast<std::size_t>(m)] / local;
-            rows.push_back(value_row(seg.number, i64(seg.tag), ce, length / local,
+            for (int m = 0; m < 3; m++) ce[m] = seg.centre[static_cast<std::size_t>(m)] / lw;
+            rows.push_back(value_row(seg.number, i64(seg.tag), ce, length / lw,
                                      r.segment_charges[static_cast<std::size_t>(seg.number - 1)]));
         }
         it = end_charges.find({wi, false});
@@ -854,7 +878,8 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     rq.mode = nec5::Int(0);
     rp::PatternBlock b;
     try {
-        b = rp::far_pattern(rq, mid, moment, r.pec, freq, r.wavelength, r.p_in, r.p_radiated);
+        b = rp::far_pattern(rq, mid, moment, r.pec ? 1 : r.finite ? 2 : 0, r.eps_r, r.sigma, freq, r.wavelength,
+                            r.p_in, r.p_radiated);
     } catch (const nec5::PrintoutDecline &e) {
         decline(e.reason);
     }
@@ -882,15 +907,27 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     out.directive = b.directive;
     const double range_m = card.f(8);
     if (range_m == 0.0) return out;
-    // `_at_range(block, range_m, freq, medium=None, grounded=False)`
+    // `_at_range(block, range_m, freq, medium, grounded)`
     const double k = (2.0 * kPi * freq) / kCMhzM;
     const double rad = -k * range_m;
     const double shift = py_degrees(py_atan2(std::sin(rad), std::cos(rad)));
-    // over a perfect ground a row below the horizon keeps the lower
-    // medium's phase, which with no medium is 0.0 (p32)
-    const double below_shift = 0.0;
+    // a row below the horizon over a ground keeps the LOWER medium's phase:
+    // 0.0 over a perfect ground (p32); over a Sommerfeld ground the phase of
+    // exp(-jkR) at k * sqrt(eps_c), with its magnitude line (p31)
+    double below_shift = 0.0;
+    if (r.finite) {
+        const cd eps_c = medium_eps_c(r, freq);
+        const cd root = std::sqrt(eps_c);  // np.sqrt: glibc's csqrt
+        const cd k_lower = scmul(cd(k, 0.0), root);  // float * np.complex128: numpy's scalar product
+        const double x = -k_lower.real() * range_m;
+        below_shift = py_degrees(py_atan2(std::sin(x), std::cos(x)));
+        out.has_lower = true;
+        out.lower_range_mag = std::exp(k_lower.imag() * range_m) / range_m;
+        out.lower_range_phase_deg = below_shift;
+    }
+    const bool grounded = r.pec || r.finite;
     for (PrintPatternRow &row : out.rows) {
-        const bool below = r.pec && row.theta_deg > 90.0 + 1e-9;
+        const bool below = grounded && row.theta_deg > 90.0 + 1e-9;
         row.e_theta_magnitude = row.e_theta_magnitude / range_m;
         row.e_phi_magnitude = row.e_phi_magnitude / range_m;
         row.e_theta_phase_deg = below ? below_shift : row.e_theta_phase_deg + shift;
@@ -935,9 +972,10 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
         auto it = gap_current.find(seg.number);
         const cd value = it != gap_current.end() ? r.i_port[static_cast<std::size_t>(it->second)]
                                                  : r.segment_currents[static_cast<std::size_t>(seg.number - 1)];
+        const double lw = local_wavelength(r, freq, local, seg.centre[2]);
         double ce[3];
-        for (int m = 0; m < 3; m++) ce[m] = seg.centre[static_cast<std::size_t>(m)] / local;
-        out.currents.push_back(value_row(seg.number, i64(seg.tag), ce, norm3(seg.direction) / local, value));
+        for (int m = 0; m < 3; m++) ce[m] = seg.centre[static_cast<std::size_t>(m)] / lw;
+        out.currents.push_back(value_row(seg.number, i64(seg.tag), ce, norm3(seg.direction) / lw, value));
     }
     if (preamble) {
         out.has_preamble = true;
@@ -946,6 +984,23 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
         p.wavelength_m = wavelength;
         p.environment = r.pec ? "PERFECT GROUND" : "FREE SPACE";
         p.has_ground = false;
+        if (r.finite) {
+            // `_environment_label`: the GN type the deck wrote; `_medium`;
+            // `_ground_file`: the last GN card's trailer
+            const nec5::Card *gn = nullptr;
+            for (const nec5::Card &card : deck.data_cards)
+                if (card.mnemonic == "GN") gn = &card;
+            if (gn == nullptr) decline("a Sommerfeld ground with no GN card");
+            p.environment = "FINITE GROUND.  SOMMERFELD SOLUTION GN" + gn->i(0).str();
+            p.has_ground = true;
+            p.eps_r = r.eps_r;
+            p.sigma = r.sigma;
+            p.eps_c = medium_eps_c(r, freq);
+            if (gn->has_trailer) {
+                p.has_ground_file = true;
+                p.ground_file = nec5::latin1_to_utf8(gn->trailer);
+            }
+        }
         for (const nec5::Card &ld : group.loads) p.loads.push_back(load_row(ld));
         p.fill_seconds = static_cast<double>(static_cast<ll>(std::nearbyint(r.fill_seconds * 1000.0))) / 1000.0;
         p.factor_seconds = 0.0;
@@ -1066,7 +1121,15 @@ bool one_structure(const StructureSeam &ss, const Build &b, std::size_t k, const
     c.t = &t;
     c.engine = &engines.engine_for(sb);
     c.np = &np;
-    Nec4Printout data = solve_structure(c);
+    Nec4Printout data;
+    try {
+        data = solve_structure(c);
+    } catch (const Refusal &e) {
+        // `solve`'s `except (PortalError, ValueError, ...)`: the structure's
+        // refusal printout, nothing of its runs
+        out += render_nec4_refusal(&echo, e.message, basis, stamp);
+        return false;
+    }
     own = data.run_seconds;
     data.run_seconds = own + seconds;
     out += render_nec4_printout(echo, data, basis, stamp, closing);

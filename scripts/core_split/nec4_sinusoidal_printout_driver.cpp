@@ -71,6 +71,10 @@ int main(int argc, char **argv) {
         sym_of(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
     la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_dgemv64_", "cblas_dgemv64_"}));
+    la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_ddot64_", "cblas_ddot64_"}));
     la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym_of(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
     la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dgemm64_", "cblas_dgemm64_"}));
