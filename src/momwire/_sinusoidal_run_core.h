@@ -33,6 +33,11 @@ class Engine : public nec4::RunEngine {
         std::size_t index, const std::vector<std::complex<double>> &coeffs,
         const std::vector<std::vector<double>> &s) override;
     double wire_loss_power(std::size_t index, const std::vector<std::complex<double>> &coeffs) override;
+    std::vector<std::complex<double>> currents_at_arcs(std::size_t index,
+                                                       const std::vector<std::complex<double>> &coeffs,
+                                                       std::size_t wire, const std::vector<double> &arcs) override;
+    double solver_omega(std::size_t index) override;
+    double solver_eps0(std::size_t index) override;
 
   private:
     const Front &front_at(std::size_t index);

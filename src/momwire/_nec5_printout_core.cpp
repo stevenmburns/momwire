@@ -1948,16 +1948,11 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
 // composing ground (`compose`: GN 0 / GN 2's eps~ from the solver's ground,
 // GD's from its medium -- one expression, at the solver's own omega):
 // `field + (C2 * image + remainder)`, C2's product numpy's fused one.
-NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
-                      const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
-                      const Prepared &p, bool pec, bool compose) {
-    const std::vector<double> points = near_points(rq);
-    const double k = 2.0 * 3.141592653589793 / p.wavelength;
-    double radius = p.mesh.pieces.empty() ? 0.0 : p.mesh.pieces[0].radius;
-    for (const SeamPiece &piece : p.mesh.pieces)
-        if (piece.radius < radius) radius = piece.radius;  // Python's `min`
-    if (p.mesh.pieces.empty()) throw Decline{"a near field with no wire"};
-    const Elements el = element_currents_sub(walk, sampler, 8);
+// The block over given elements (`near_field_at` + `near_field_block`):
+// `compose` reads the medium (eps_r, sigma) at `omega` with `eps0`.
+NearBlockC near_block_of(const Request &rq, const std::vector<double> &points, const Elements &el, double k,
+                         double radius, bool pec, bool compose, double omega, double eps0, double eps_r,
+                         double sigma) {
     std::vector<cd> field = element_fields(points, el, k, radius, rq.magnetic);
     if (pec || compose) {
         Elements img = el;
@@ -1969,10 +1964,9 @@ NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
         for (std::size_t n = 0; n < el.delta.size(); n++) img.delta[n] = cd(-el.delta[n].real(), -el.delta[n].imag());
         std::vector<cd> image = element_fields(points, img, k, radius, rq.magnetic);
         if (compose) {
-            // `solver.omega` = 2 * np.pi * (c / wavelength); `eps_tilde((eps_r,
-            // sigma), omega, eps0)`; C2 = (eps_t - 1.0) / (eps_t + 1.0).
-            const double omega = engine.solver_omega(p);
-            const cd eps_t(p.medium_eps_r, (-p.medium_sigma) / (omega * engine.eps0()));
+            // `eps_tilde((eps_r, sigma), omega, eps0)`; C2 = (eps_t - 1.0) /
+            // (eps_t + 1.0).
+            const cd eps_t(eps_r, (-sigma) / (omega * eps0));
             const cd c2 = somm_core::py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0),
                                              cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
             const std::vector<cd> rem = near_remainder(points, el, eps_t, k, omega, rq.magnetic);
@@ -2000,6 +1994,22 @@ NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
         block.rows.push_back(row);
     }
     return block;
+}
+
+NearBlockC near_block(const Request &rq, const PrintoutEngine &engine,
+                      const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
+                      const Prepared &p, bool pec, bool compose) {
+    const std::vector<double> points = near_points(rq);
+    const double k = 2.0 * 3.141592653589793 / p.wavelength;
+    double radius = p.mesh.pieces.empty() ? 0.0 : p.mesh.pieces[0].radius;
+    for (const SeamPiece &piece : p.mesh.pieces)
+        if (piece.radius < radius) radius = piece.radius;  // Python's `min`
+    if (p.mesh.pieces.empty()) throw Decline{"a near field with no wire"};
+    const Elements el = element_currents_sub(walk, sampler, 8);
+    // `solver.omega` = 2 * np.pi * (c / wavelength)
+    const double omega = compose ? engine.solver_omega(p) : 0.0;
+    const double eps0 = compose ? engine.eps0() : 0.0;
+    return near_block_of(rq, points, el, k, radius, pec, compose, omega, eps0, p.medium_eps_r, p.medium_sigma);
 }
 
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
@@ -3461,6 +3471,29 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
     out.solid_angle_pi = c.solid_angle_pi;
     out.power_radiated_4pi = c.power_radiated_4pi;
     out.directive = c.directive;
+    return out;
+}
+std::vector<double> near_grid(const Request &rq) { return nec5::near_points(rq); }
+ElementCurrents element_currents_sub(const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
+                                     int64_t subdiv) {
+    return nec5::element_currents_sub(walk, sampler, subdiv);
+}
+NearBlock near_field(const Request &rq, const std::vector<double> &points, const ElementCurrents &el,
+                     double k, double radius, int ground, double eps_r, double sigma, double omega,
+                     double eps0) {
+    const NearBlockC c =
+        nec5::near_block_of(rq, points, el, k, radius, ground == 1, ground == 2, omega, eps0, eps_r, sigma);
+    NearBlock out;
+    out.magnetic = c.magnetic;
+    for (const NearRowC &r : c.rows) {
+        NearRow row;
+        for (int i = 0; i < 3; i++) {
+            row.point[i] = r.point[i];
+            row.mag[i] = r.mag[i];
+            row.deg[i] = r.deg[i];
+        }
+        out.rows.push_back(row);
+    }
     return out;
 }
 }  // namespace replay

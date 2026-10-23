@@ -24,7 +24,11 @@ masked, by exact pattern and with the same count on both sides, over:
 - a GH helix (its wire-table row), alone and tapered beside a wire;
 - a phased drive (current sources among several): an EX 6 beside an EX 0,
   and two EX 6 with a port load;
-- the declines: GD's far-field cliff, a network, an NE table.
+- NE / NH tables: free space (rectangular, and spherical after an RP), a
+  perfect ground, and a Sommerfeld ground above the plane and beside a
+  monopole's contact;
+- the declines: GD's far-field cliff, a network, a near-field point on a
+  wire's finite-ground contact or in the soil.
 """
 
 from __future__ import annotations
@@ -232,8 +236,57 @@ CASES = [
         "declined",
     ),
     (
-        "near_field_declines",
-        deck(DIPOLE, FR + "EX 0 1 6 0 1\nNE 0 1 1 3 .1 0 0 0 0 .1\n"),
+        "ne_free",
+        deck(DIPOLE, FR + "EX 0 1 6 0 1\nNE 0 2 3 2 .1 -.1 -.2 .05 .1 .2\n"),
+        "printed",
+    ),
+    ("nh_free", deck(TWO, FR + "EX 0 1 6 0 1\nNH 0 1 1 3 .1 0 0 0 0 .1\n"), "printed"),
+    (
+        "ne_spherical_after_rp",
+        deck(DIPOLE, FR + "EX 0 1 6 0 1\n" + RP + "NE 1 2 4 3 1 0 0 .5 30 45\n"),
+        "printed",
+    ),
+    (
+        "ne_over_pec_monopole",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 1\n" + FR + "EX 0 1 1 0 1\nNE 0 3 1 2 .05 0 0 .05 0 .1\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "nh_over_gn2",
+        deck(
+            "GW 1 11 0 0 .3 0 0 .8 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nNH 0 2 1 2 .2 0 .1 .1 0 .2\n",
+        ),
+        "printed",
+    ),
+    (
+        "ne_over_gn3_off_the_contact",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 3 0 0 0 5 .02\n" + FR + "EX 0 1 1 0 1\nNE 0 2 1 2 .05 0 0 .05 0 .1\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "ne_on_the_gn2_contact_declines",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nNE 0 1 1 1 0 0 0 0 0 0\n",
+            "GE 1",
+        ),
+        "declined",
+    ),
+    (
+        "ne_in_the_soil_declines",
+        deck(
+            "GW 1 11 0 0 .3 0 0 .8 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nNE 0 1 1 2 .2 0 -.1 0 0 .2\n",
+        ),
         "declined",
     ),
     (

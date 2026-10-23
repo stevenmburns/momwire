@@ -14,7 +14,8 @@
 //   budget;
 // - the rows (`_run`, `_run_records`' source rows, `_charge_rows`, `value_row`)
 //   and RP (`_pattern` over the NEC-5 seam's row builder,
-//   `nec5::replay::free_space_pattern`, then `_at_range`).
+//   `nec5::replay::free_space_pattern`, then `_at_range`); NE / NH over the
+//   NEC-5 seam's near-field readout (`nec5::replay::near_field`).
 //
 // The basis answers three questions (`RunEngine`): its port solution, its
 // current at every knot, and dI/ds at given arclengths. The sinusoidal
@@ -26,8 +27,10 @@
 // `tests/test_nec4_run_core.py` through `scripts/core_split/nec4_run_compare.py`.
 //
 // DECLINED (`Declined`), never misprinted: GD's far-field cliff (B5d), a
-// wire below the ground plane (B6), an insulated wire, a TL / NT network and
-// NE / NH (B4c), two sources on one segment of a phased drive, and
+// wire below the ground plane (B6), an insulated wire, a TL / NT network
+// (B4c3), two sources on one segment of a phased drive, a near-field point in
+// the soil or on a wire's finite-ground contact (the reference refuses both
+// in its own words), and
 // any run Python would answer with a refusal this copy does not word (a
 // singular drive block, a current source on a port that takes no current).
 #pragma once
@@ -78,6 +81,15 @@ class RunEngine {
     // `solver.wire_loss_power(coeffs)[0]`: the wires' own loss (0 with no
     // wire loading).
     virtual double wire_loss_power(std::size_t index, const std::vector<std::complex<double>> &coeffs) = 0;
+    // `solver.currents_at_knots(coeffs, s_array)` on ONE polyline `wire`:
+    // the current at each arclength from its start (`element_currents`'
+    // subdivided walk, for NE / NH).
+    virtual std::vector<std::complex<double>> currents_at_arcs(
+        std::size_t index, const std::vector<std::complex<double>> &coeffs, std::size_t wire,
+        const std::vector<double> &arcs) = 0;
+    // `solver.omega`, and the `solver.eps` its ground's eps~ is folded with.
+    virtual double solver_omega(std::size_t index) = 0;
+    virtual double solver_eps0(std::size_t index) = 0;
 };
 
 // Builds the engine for one built structure (its operating points).
