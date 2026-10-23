@@ -333,6 +333,52 @@ static void near_interface_grid_sheet(
     }
 }
 
+// `ConeSheet.interpolate` (momwire#1595 option A): out[r] = one cone
+// surface's kernels at u[r] and height zs[zi[r]] (`ni_core::cone_line`).
+static void near_interface_cone_line(
+    py::array_t<double, py::array::c_style | py::array::forcecast> u,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> zi,
+    py::array_t<double, py::array::c_style | py::array::forcecast> zs, double d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> u_edges,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> cell_off,
+    py::array_t<double, py::array::c_style | py::array::forcecast> x,
+    py::array_t<double, py::array::c_style | py::array::forcecast> bw,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> vals,
+    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rpow) {
+    if (u.ndim() != 1 || zi.ndim() != 1 || zi.shape(0) != u.shape(0))
+        throw std::invalid_argument("u and zi must be 1-D of one length");
+    const py::ssize_t n = u.shape(0);
+    if (rpow.ndim() != 1 || rpow.shape(0) < 1 || rpow.shape(0) > MW_SHEET_MAX_KEYS)
+        throw std::invalid_argument("rpow must be 1-D with 1..16 entries");
+    const int nk = static_cast<int>(rpow.shape(0));
+    for (int k = 0; k < nk; ++k)
+        if (rpow.data()[k] < 0 || rpow.data()[k] > 4)
+            throw std::invalid_argument("rpow entries must be in 0..4");
+    if (out.ndim() != 2 || out.shape(0) != n || out.shape(1) != nk || !out.writeable())
+        throw std::invalid_argument("out must be a writeable (n, len(rpow)) complex array");
+    if (zs.ndim() != 1 || zs.shape(0) < 1) throw std::invalid_argument("zs must be 1-D");
+    const py::ssize_t n_z = zs.shape(0);
+    if (u_edges.ndim() != 1 || u_edges.shape(0) < 2)
+        throw std::invalid_argument("edges must be 1-D with at least 2 entries");
+    const py::ssize_t nu = u_edges.shape(0) - 1;
+    if (cell_off.ndim() != 1 || cell_off.shape(0) != nu)
+        throw std::invalid_argument("cell_off must be (len(u_edges) - 1,)");
+    const int p = static_cast<int>(x.shape(0));
+    if (p < 1 || p > 32 || bw.shape(0) != p)
+        throw std::invalid_argument("bad Chebyshev nodes (1..32)");
+    if (vals.ndim() != 2 || vals.shape(1) != nk || vals.shape(0) % n_z != 0)
+        throw std::invalid_argument("vals must be (nodes * len(zs), len(rpow))");
+    const py::ssize_t n_nodes = vals.shape(0) / n_z;
+    for (py::ssize_t c = 0; c < nu; ++c)
+        if (cell_off.data()[c] < 0 || cell_off.data()[c] + p > n_nodes)
+            throw std::invalid_argument("inconsistent cone sheet cells");
+    py::gil_scoped_release release;
+    ni_core::cone_line(u.data(), zi.data(), n, zs.data(), n_z, d, u_edges.data(), nu,
+                       cell_off.data(), x.data(), bw.data(), p, vals.data(), out.mutable_data(),
+                       n_threads, rpow.data(), nk);
+}
+
 // momwire#1032: the module NAME is a build parameter, so the same sources can
 // be compiled twice — once with AVX2/FMA and once at the x86-64 baseline — and
 // loaded by name at import time on a CPU that can run one but not the other.
@@ -408,6 +454,12 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // from the caller. A distinct flag, so a stale build is refused by name
     // rather than handed an argument it does not know.
     m.attr("grid_sheet_width_1221") = true;
+    // momwire#1595 option A: the cone line sheets' interpolator.
+    m.attr("cone_line_1595") = true;
+    m.def("near_interface_cone_line", &near_interface_cone_line, py::arg("u"), py::arg("zi"),
+          py::arg("zs"), py::arg("d"), py::arg("u_edges"), py::arg("cell_off"), py::arg("x"),
+          py::arg("bw"), py::arg("vals"), py::arg("out"), py::arg("n_threads"), py::arg("rpow"),
+          "Interpolate one cone sheet surface (momwire#1595) at rows (u, height index).");
     // momwire#1290: whether this build has the fixed-width cell sums (the
     // AVX2 variant does); either way `generic=True` reaches the width-generic
     // loop they are gated against.

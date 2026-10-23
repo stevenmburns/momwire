@@ -58,6 +58,15 @@ void grid_sheet(const double *sub, std::ptrdiff_t m, const std::ptrdiff_t *idx, 
                 std::complex<double> *out, int n_threads, const std::int64_t *rpow, int nk,
                 bool generic);
 
+// The cone line sheets' interpolator (momwire#1595 option A): out[r] (out
+// (n, nk) row-major) = the table's kernels at u[r], height index zi[r] of
+// zs; vals is [node][height][key], u cell c's nodes from cell_off[c].
+void cone_line(const double *u, const std::int64_t *zi, std::ptrdiff_t n, const double *zs,
+               std::ptrdiff_t n_z, double d, const double *u_edges, std::ptrdiff_t nu,
+               const std::int64_t *cell_off, const double *x, const double *bw, int p,
+               const std::complex<double> *vals, std::complex<double> *out, int n_threads,
+               const std::int64_t *rpow, int nk);
+
 // `near_interface_hankel_conj_mismatches`' count (TEST-ONLY) and
 // `six_point`'s twin per triple (`near_interface_six_batch`, out (n, 6)).
 int64_t hankel_conj_mismatches(const std::complex<double> *w, std::ptrdiff_t n);

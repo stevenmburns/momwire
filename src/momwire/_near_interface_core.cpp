@@ -990,6 +990,76 @@ bool grid_sheet_fixed() { return bool(MW_SHEET_FIXED); }
 
 namespace ni_core {
 
+// The cone line sheets' interpolator (momwire#1595 option A): one surface
+// z' = zf + beta * u tabulated along u at a fixed set of heights `zs`, each
+// u cell `p` Chebyshev nodes, each node a column of every height. Row r is
+// (u[r], height zs[zi[r]]); its value is the barycentric sum over its u
+// cell's nodes, in node order, one fused multiply-add a step from +0.0
+// (`cell_sum`'s inner loop), then 1/R^pw with R = hypot(u, z + d), the
+// spelling the table was stored times. vals is [node][height][key].
+void cone_line(const double *u, const std::int64_t *zi, std::ptrdiff_t n, const double *zs,
+               std::ptrdiff_t n_z, double d, const double *u_edges, std::ptrdiff_t nu,
+               const std::int64_t *cell_off, const double *x, const double *bw, int p,
+               const std::complex<double> *vals, std::complex<double> *out, int n_threads,
+               const std::int64_t *rpow, int nk) {
+    if (nk < 1 || nk > MW_SHEET_MAX_KEYS) throw std::invalid_argument("bad key count");
+    if (nu < 1) throw std::invalid_argument("edges must be 1-D with at least 2 entries");
+    if (p < 1 || p > 32) throw std::invalid_argument("bad Chebyshev nodes (1..32)");
+    if (!(d > 0.0)) throw std::invalid_argument("a cone sheet needs d > 0");
+    for (std::ptrdiff_t j = 0; j < nu; ++j)
+        if (!(u_edges[j + 1] > u_edges[j])) throw std::invalid_argument("u edges must rise");
+    const int nd = 2 * nk;
+    const double *V = reinterpret_cast<const double *>(vals);
+    double *ob = reinterpret_cast<double *>(out);
+    int nt = 1;
+#ifdef _OPENMP
+    nt = omp_get_max_threads();
+    if (n_threads > 0) nt = std::min(nt, n_threads);
+    nt = std::max(nt, 1);
+#else
+    (void)n_threads;
+#endif
+    int bad = 0;
+    #pragma omp parallel for schedule(static) num_threads(nt) reduction(|:bad)
+    for (std::ptrdiff_t r = 0; r < n; ++r) {
+        double w[32];
+        double *o = ob + r * nd;
+        const std::int64_t j = zi[r];
+        const std::ptrdiff_t c = (j >= 0 && j < n_z) ? mw_sheet::cell_of(u[r], u_edges, nu) : -1;
+        if (c < 0) {
+            bad = 1;
+            for (int k = 0; k < nd; ++k) o[k] = 0.0;
+            continue;
+        }
+        mw_sheet::bary(u[r], u_edges[c], u_edges[c + 1], x, bw, p, w);
+        double acc[2 * MW_SHEET_MAX_KEYS];
+        for (int k = 0; k < nd; ++k) acc[k] = 0.0;
+        for (int a = 0; a < p; ++a) {
+            const double *Va = V + ((cell_off[c] + a) * n_z + j) * nd;
+            const double wa = w[a];
+            for (int k = 0; k < nd; ++k) acc[k] = mw_fma::fma(wa, Va[k], acc[k]);
+        }
+        const double i1 = 1.0 / std::hypot(u[r], zs[j] + d);
+        for (int k = 0; k < nk; ++k) {
+            double f = 1.0;
+            if (rpow[k] > 0) {
+                f = i1;
+                for (std::int64_t e = 1; e < rpow[k]; ++e) f *= i1;
+            }
+            o[2 * k] = acc[2 * k] * f;
+            o[2 * k + 1] = acc[2 * k + 1] * f;
+        }
+    }
+    if (bad)
+        throw std::invalid_argument(
+            "a row lies off the cone sheet (its height is not one of the table's, or u is "
+            "outside its cells)");
+}
+
+}  // namespace ni_core
+
+namespace ni_core {
+
 int64_t hankel_conj_mismatches(const std::complex<double> *wp, std::ptrdiff_t n) {
     int64_t bad = 0;
     for (std::ptrdiff_t i = 0; i < n; ++i) {

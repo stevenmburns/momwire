@@ -1242,7 +1242,7 @@ def _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=None, plan=None):
     take = None
     if plan is not None and p is None and _use_point_sheet():
         sub = np.ascontiguousarray(np.stack([flat_r, flat_z, flat_zp], axis=1))
-        take = _sheet_take(sub, plan)
+        take = _sheet_take(sub, plan, cones=False)
     if take is None:
         out = _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p)
         _SHEET_STATS["point_exact_rows"] += flat_r.size
@@ -2642,6 +2642,14 @@ _SHEET_STATS = dict.fromkeys(
         "point_height_rows",
         "point_sheets_built",
         "point_nodes_built",
+        # The cone sheets' (momwire#1595 option A): rows they served, cones
+        # the fills planned, rows the cost rule (or the fan bound) left
+        # exact, and the surfaces built and their nodes.
+        "cone_rows",
+        "cones_planned",
+        "cone_declined_rows",
+        "cone_sheets_built",
+        "cone_nodes_built",
     ),
     0,
 )
@@ -2679,14 +2687,31 @@ class SheetPlan:
     (`TripleMemo.sheet_plan`), so every call of the fill -- tiles, chunks,
     end spans, ACA samples -- serves the same rows from a sheet."""
 
-    __slots__ = ("planes", "heights", "depths", "column_cache")
+    __slots__ = ("planes", "heights", "depths", "cones", "fold", "column_cache")
 
-    def __init__(self, planes=(), heights=()):
-        """`heights`: (h, depth) pairs."""
+    def __init__(self, planes=(), heights=(), cones=(), fold=0.0):
+        """`heights`: (h, depth) pairs. `cones`: the sloped-wire sheets
+        (momwire#1595 option A), each `(zf, beta_lo, beta_hi, d, heights,
+        p_fan)` (`_cone_census`, heights a sorted array, p_fan the fan
+        correction's nodes a cell, 0 on a fan of one slope), kept in the
+        census's order; `fold` is the wire radius their rows' rho was folded with
+        (`radius_fold`)."""
         self.planes = np.asarray(sorted(float(v) for v in planes), dtype=float)
         hd = sorted((float(h), float(dd)) for h, dd in heights)
         self.heights = np.asarray([h for h, _dd in hd], dtype=float)
         self.depths = np.asarray([dd for _h, dd in hd], dtype=float)
+        self.cones = tuple(
+            (
+                float(zf),
+                float(blo),
+                float(bhi),
+                float(d),
+                np.asarray(zs, dtype=float),
+                int(p_fan),
+            )
+            for zf, blo, bhi, d, zs, p_fan in cones
+        )
+        self.fold = float(fold)
         # The fill's column-rule cache (`_new_column_cache`). It rides here
         # because the plan is the one object every call of a fill carries;
         # it decides when a column's head + mid are computed, never what
@@ -2694,22 +2719,26 @@ class SheetPlan:
         self.column_cache = _new_column_cache()
 
     def __bool__(self):
-        return bool(self.planes.size or self.heights.size)
+        return bool(self.planes.size or self.heights.size or self.cones)
 
     def __repr__(self):
         return (
             f"SheetPlan(planes={self.planes.tolist()}, "
-            f"heights={list(zip(self.heights.tolist(), self.depths.tolist()))})"
+            f"heights={list(zip(self.heights.tolist(), self.depths.tolist()))}, "
+            f"cones={[(c[0], c[1], c[2], c[3], c[4].size, c[5]) for c in self.cones]})"
         )
 
 
-def _sheet_take(sub, plan):
-    """`(take, on_plane)` for `sub` under `plan`, or None when it serves no
-    row: `take` the rows a sheet serves, `on_plane` those on one of its
-    planes (the rest of `take` are on one of its heights). A plane row is on
-    a plane with z >= 0; a height row is at a height with -depth <= z' <= 0
-    (its sheet's reach) and on no plane. Both need a finite rho >= 0. A
-    function of each row alone."""
+def _sheet_take(sub, plan, cones=True):
+    """`(take, on_plane, cone)` for `sub` under `plan`, or None when it serves
+    no row: `take` the rows a sheet serves, `on_plane` those on one of its
+    planes, `cone` each row's cone sheet (an index into `plan.cones`, -1 for
+    none; None when no row is on one), and the rest of `take` are on one of
+    its heights. A plane row is on a plane with z >= 0; a cone row is on no
+    plane (`_cone_take`); a height row is at a height with -depth <= z' <= 0
+    (its sheet's reach) and on no plane or cone. All need a finite rho >= 0.
+    A function of each row alone. `cones=False` reads the plan's planes and
+    heights only (the point family, which has no cone sheets)."""
     if plan is None or not plan or not _use_sheet() or sub.shape[0] == 0:
         return None
     # Boolean masks only, built in place: a tile call carries ~1 M rows, and
@@ -2723,8 +2752,15 @@ def _sheet_take(sub, plan):
     on_plane &= z >= 0.0
     on_plane &= ok
     take = on_plane
+    cone = None
+    if cones and plan.cones and _use_cone():
+        cone = _cone_take(sub, plan, ok & ~on_plane)
+        if (cone >= 0).any():
+            take = on_plane | (cone >= 0)
+        else:
+            cone = None
     if plan.heights.size:
-        take = on_plane.copy()
+        take = take.copy() if take is on_plane else take
         for h, dep in zip(plan.heights.tolist(), plan.depths.tolist()):
             at = z == h
             if not at.any():
@@ -2733,8 +2769,10 @@ def _sheet_take(sub, plan):
             at &= zp <= 0.0
             at &= zp >= -dep
             at[on_plane] = False
+            if cone is not None:
+                at[cone >= 0] = False
             take |= at
-    return (take, on_plane) if take.any() else None
+    return (take, on_plane, cone) if take.any() else None
 
 
 def _plane_pays(k_p, k_m, d, parts, depth=None):
@@ -2863,7 +2901,9 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
     Planes first: a depth z' = v < 0 is a candidate when its rows (counted
     before dedup) reach `_SHEET_MIN_ROWS`; one shallower than
     `_SHEET_MIN_DEPTH` is left exact (guarded), and one whose rows do not pay
-    for its table (`_plane_pays`) is declined. Then heights, over the rows no
+    for its table (`_plane_pays`) is declined. Then cones (`_cone_census`),
+    over the below nodes no plane took: the sloped straight wires seen from
+    an above group on their axis. Then heights, over the rows no
     plane took: a height z = h > 0 is a candidate on the same count, guarded
     below `_SHEET_MIN_DEPTH`, and taken on the same rule -- the Beverage's
     wire, one height over rods whose every node is its own depth, is the
@@ -2884,11 +2924,13 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
         if pa.shape[0] and pb.shape[0]:
             sides.append((pa, pb))
     planes = _census(sides, False, k_p, k_m, a)
+    cones = _cone_census(sides, k_p, k_m, a, planes)
     heights = _census(sides, True, k_p, k_m, a, skip=planes)
     _SHEET_STATS["fills_planned"] += 1
     _SHEET_STATS["planes_planned"] += len(planes)
     _SHEET_STATS["heights_planned"] += len(heights)
-    return SheetPlan(planes, heights)
+    _SHEET_STATS["cones_planned"] += len(cones)
+    return SheetPlan(planes, heights, cones, a)
 
 
 # The census measures distances in chunks of at most this many (node, group)
@@ -3086,7 +3128,7 @@ def _sheet_planes(sub, k_p, k_m):
     if not planes:
         return [], None
     plan = SheetPlan(planes)
-    take, _on_plane = _sheet_take(np.ascontiguousarray(sub, dtype=float), plan)
+    take = _sheet_take(np.ascontiguousarray(sub, dtype=float), plan)[0]
     out = []
     for v in plan.planes.tolist():
         m = take & (zp == v)
@@ -3432,10 +3474,603 @@ def _plane_sheet(
         return sheet
 
 
+# --- Cone sheets: the sheets along a SLOPED wire (momwire#1595 option A) ---
+#
+# A plane sheet needs one z' and a height sheet one z. A buried radial that
+# slopes (Dan's Slant: from the feed at the interface down to -5 cm at 5 m)
+# has neither: every node is its own depth and its own rho, so before this
+# every crossing row of such a deck went to the column twin, a column setup
+# per distinct rho, one per radial node.
+#
+# Seen from an observer on the wire's own axis (a vertical over its radials),
+# a sloped straight wire is a CONE: every one of its nodes sits at
+# z' = zf + beta * u, u its horizontal distance from the axis. So its rows lie
+# on the surface z' = zf + beta * u(rho), u = sqrt(rho^2 - a^2) (the fold
+# undone, `radius_fold`) -- a function of the row alone, whichever wire or
+# observer produced it, and every radial of a screen sloping alike shares it.
+#
+# The observer's heights are a FIXED set the fill knows before it evaluates
+# anything (the above group's nodes), so the cone is tabulated along u at
+# each of those heights exactly, as a height sheet is at its one z: a row is
+# on the cone when its z is one of the plan's heights and its slope is the
+# cone's. Along u the kernels are analytic away from the corner u = z = 0
+# (where the observer's axis meets the apex), and the u axis is the plane's
+# rho layout ([0, d/2], [d/2, d], [d, 2d], ...; cells no wider than
+# `_SHEET_WAVES` of the live wavelength, `_SHEET_P` Chebyshev nodes a cell),
+# the strips next to the corner split in two (`_CONE_SPLIT_U`). A column is
+# one u node with every plan height as its members, so growing the sheet
+# appends columns and never changes one: a node's value is a function of
+# the plan's cone alone. Rows with u < d and z < d (the corner) stay exact.
+# Stored as f * R^pw, R = hypot(u, z + d), and read by
+# `near_interface_cone_line`.
+#
+# A deck's radials are not bitwise alike (coordinates printed to a few
+# decimals make each slope its own to ~1e-7), so one cone carries a FAN: the
+# census clusters slopes within `_CONE_FAN_REL`, and each row is read
+# linearly in slope between the fan's two edges, beta_lo and beta_hi, at its
+# own slope (zp - zf) / u:
+#
+#     K = K_lo + t (K_hi - K_lo),   t = (slope - beta_lo) / (beta_hi - beta_lo).
+#
+# K_lo is the full table. The correction is ~1e-9 to 1e-6 of K (a slope
+# spread of 1e-7 to 1e-5 at |k_m| u of a few), so it needs little relative
+# accuracy: it is read from a COARSE pair of surfaces, beta_lo and beta_hi on
+# the same cells with the fan's own `p_fan` nodes a cell (`_CONE_FAN_PS`),
+# whose interpolation errors cancel in the difference to that order. The linear step's own error is bounded by
+# ((|k_m| u + 3) dbeta)^2 / 8 relative (the far field's k_m^2 and the near
+# field's pw (pw + 1) / R^2 <= 6 / u^2, times (u dbeta)^2), and a fan wider
+# than `_CONE_FAN_ERR` by that bound is not taken. A fan of one slope is one
+# surface.
+#
+# GATED, not bit-identical, like the plane sheets: `_CONE = False` (or
+# MOMWIRE_NEAR_INTERFACE_CONE=0) is the exact route for every cone row.
+_CONE = os.environ.get("MOMWIRE_NEAR_INTERFACE_CONE", "1") != "0"
+_HAVE_CONE_ACCEL = _nia is not None and bool(getattr(_nia, "cone_line_1595", False))
+# Slopes |dz'/du| below this are a horizontal wire's: a plane's rows, or none.
+_CONE_BETA_MIN = 1e-6
+# A fan: slopes within this fraction of its least one share a cone (a
+# deck's 4-decimal endpoints spread a 5 m radial's slope ~1e-5); the fan's
+# bound, not this window, decides whether it is taken.
+_CONE_FAN_REL = 1e-4
+# The fan's linear step may cost at most this much (relative, its bound).
+_CONE_FAN_ERR = 1e-12
+# Chebyshev nodes a u cell on the full surface.
+_CONE_P = 12
+# The fan correction's coarse pair: the least of these node counts whose
+# error, a fraction `_CONE_FAN_E[p]` of the step's own size
+# S = (|k_m| u + 3) dbeta, is within `_CONE_FAN_TOL`. The fractions are
+# twice what the step read against the twin (16 radials, 6 / 5 / 4-decimal
+# endpoints: 0.058 S at p = 2, 0.0090 S at 3, 1.2e-3 S at 4, below the
+# table's own 4.7e-10 floor from 6), the larger p extrapolated at the same
+# rate.
+_CONE_FAN_PS = (2, 3, 4, 6, 8, 12)
+_CONE_FAN_E = (0.12, 0.018, 2.5e-3, 1e-4, 4e-6, 0.0)
+_CONE_FAN_TOL = 2e-10
+# A row is on a fan when its slope is inside it to this fraction of its
+# least; a candidate apex above the interface by at most this fraction of
+# its node's distances is the interface's own.
+_CONE_MARGIN = 1e-9
+# The corner's size: d >= this many fold radii and >= twice the apex depth,
+# a power of two (so fills about alike share a sheet); the census takes the
+# power of two from there up to `_CONE_D_STEPS` doublings (and at most a
+# quarter of the fan's reach) that its cost rule likes best -- each doubling
+# drops a near-corner strip's columns and leaves the corner's few rows exact.
+_CONE_FOLD_D = 8.0
+_CONE_D_STEPS = 8
+# u strips (past the first two) ending at or below this many d take two
+# cells at least: a cell as wide as its distance to the corner reads ~5e-8.
+_CONE_SPLIT_U = 4.0
+# The cost rule's prices, in column setups: a member, and the interpolation
+# of a served row as a fraction of a member. The column twin at cone-like
+# columns (rho 0.05-5 m, z' = -0.01 rho, members over 0-5 m), one thread,
+# Haswell: a setup 135 us, a member 6.4 us (1/21); the plane sheets' 1/40
+# (`_SHEET_ROW_WORTH`, Design E's 4-thread lines) undervalues a member
+# here. The interpolation measured ~0.04 of a member over a fan's three
+# surfaces; 0.1 is charged.
+_CONE_ROW_WORTH = 1.0 / 20.0
+_CONE_ROW_INTERP = 0.1
+# The census's own record (a list, or None: off): one dict per fan it costed,
+# what it counted and what it charged. The tests' and the PR's handle on the
+# rule.
+_CONE_TRACE = None
+
+
+def _use_cone():
+    return _CONE and _HAVE_CONE_ACCEL
+
+
+def _pow2_at_least(x):
+    """The least power of two >= x > 0, by exact doubling and halving (no
+    log, so both twins agree to the bit)."""
+    v = 1.0
+    while v < x:
+        v *= 2.0
+    while v * 0.5 >= x:
+        v *= 0.5
+    return v
+
+
+def _cone_d(zf, a):
+    """A cone's corner size d (`_CONE_FOLD_D`)."""
+    return _pow2_at_least(max(_CONE_FOLD_D * a, 2.0 * abs(zf)))
+
+
+def _cone_u_strip(k_p, k_m, d, i):
+    """A cone's u strip i: the plane's rho strip, split near the corner."""
+    lo, hi, n = _sheet_strip(k_p, k_m, d, i, "rho")
+    if i >= 2 and hi <= _CONE_SPLIT_U * d:
+        n = max(n, 2)
+    return lo, hi, n
+
+
+def _cone_columns(k_p, k_m, d, u_reach):
+    """The u nodes (columns) one surface of a cone holds once it reaches
+    `u_reach`, and how many of them are the corner's (u < d)."""
+    cols = corner = 0
+    i = 0
+    while True:
+        _lo, hi, n = _cone_u_strip(k_p, k_m, d, i)
+        cols += n * _CONE_P
+        if i < 2:
+            corner += n * _CONE_P
+        if hi >= u_reach:
+            return cols, corner
+        i += 1
+
+
+class ConeSheet:
+    """The six kernels on one cone surface z' = zf + beta * u (u the
+    unfolded horizontal distance, rho = hypot(u, a)), along u at the fixed
+    heights `zs` (sorted, distinct, >= 0), as far in u as asked (grown on
+    demand by whole u strips). See the block comment above."""
+
+    def __init__(self, k_p, k_m, d, zf, beta, a, zs, p=None):
+        self.k_p, self.k_m = float(k_p), complex(k_m)
+        self.d, self.zf, self.beta, self.a = float(d), float(zf), float(beta), float(a)
+        self.zs = np.ascontiguousarray(zs, dtype=float)
+        self.far = self.zs >= self.d  # the corner columns' members
+        self.p = _CONE_P if p is None else int(p)
+        self.x, self.bw = _cheb(self.p)
+        self.u_strips, self.u_cells = [], []
+        self._vals = []
+        self.n_nodes = 0
+        self._flat = None
+
+    def cover(self, u_max):
+        have = (len(self.u_strips), len(self.u_cells))
+        try:
+            self._cover(u_max)
+        except BaseException:
+            del self.u_strips[have[0] :]
+            del self.u_cells[have[1] :]
+            raise
+
+    def _cover(self, u_max):
+        new = []
+        while not self.u_strips or self.u_strips[-1][1] < u_max:
+            i = len(self.u_strips)
+            lo, hi, n = _cone_u_strip(self.k_p, self.k_m, self.d, i)
+            self.u_strips.append((lo, hi, n))
+            for q in range(n):
+                a_ = lo + (hi - lo) * q / n
+                b_ = hi if q == n - 1 else lo + (hi - lo) * (q + 1) / n
+                new.append(len(self.u_cells))
+                self.u_cells.append((a_, b_, i))
+        if not new:
+            return
+        p, n_z = self.p, self.zs.size
+        u_c, corner = [], []
+        for c in new:
+            a_, b_, i = self.u_cells[c]
+            u_c += (0.5 * (a_ + b_) + 0.5 * (b_ - a_) * self.x).tolist()
+            corner += [i < 2] * p
+        u_c = np.asarray(u_c)
+        corner = np.asarray(corner, dtype=bool)
+        rho_c = np.hypot(u_c, self.a)
+        zq_c = self.zf + self.beta * u_c
+        zq_c = np.where(zq_c < 0.0, zq_c, 0.0)
+        sizes = np.where(corner, int(np.count_nonzero(self.far)), n_z).astype(np.intp)
+        offsets = np.zeros(sizes.size + 1, dtype=np.intp)
+        offsets[1:] = np.cumsum(sizes)
+        zfar = self.zs[self.far]
+        z = np.concatenate([zfar if cn else self.zs for cn in corner.tolist()])
+        zq = np.repeat(zq_c, sizes)
+        _cancel.poll()
+        vals = np.asarray(
+            _nia.near_interface_six_columns(
+                self.k_p,
+                self.k_m,
+                rho_c,
+                offsets,
+                np.ascontiguousarray(z),
+                np.ascontiguousarray(zq),
+                _LAM_MULT,
+                int(_COLUMN_P),
+                float(_DETOUR),
+                _physical_cpu_count(),
+                _GX,
+                _GW,
+                cancel_flag=_cancel.ptr(),
+                **_columns_lanes_kw(),
+            )
+        )
+        # f * R^pw, R = hypot(u, z + d) (the interpolator's R), spelled as
+        # `PlaneSheet._cover` spells it.
+        Rn = np.hypot(np.repeat(u_c, sizes), z + self.d)
+        for pw in sorted(set(KEY_RPOW)):
+            cols = [j for j, q in enumerate(KEY_RPOW) if q == pw]
+            f = Rn
+            for _ in range(pw - 1):
+                f = f * Rn
+            vals[:, cols] *= f[:, None]
+        # [node][height][key], the corner columns' near heights zero (never
+        # read: `_cone_take` leaves those rows exact).
+        blk = np.zeros((u_c.size, n_z, N_KEYS), dtype=np.complex128)
+        for col in range(u_c.size):
+            v = vals[offsets[col] : offsets[col + 1]]
+            if corner[col]:
+                blk[col, self.far] = v
+            else:
+                blk[col] = v
+        self._vals.append(blk.reshape(u_c.size * n_z, N_KEYS))
+        _SHEET_STATS["cone_nodes_built"] += int(offsets[-1])
+        self.n_nodes += u_c.size
+        self._flat = None
+
+    def arrays(self):
+        if self._flat is None:
+            u_edges = [c[0] for c in self.u_cells] + [self.u_cells[-1][1]]
+            self._flat = (
+                np.asarray(u_edges, dtype=float),
+                np.arange(len(self.u_cells), dtype=np.int64) * self.p,
+                np.ascontiguousarray(np.concatenate(self._vals)),
+            )
+        return self._flat
+
+    def interpolate(self, u, zi, out):
+        """out = the kernels at rows (u, height index zi)."""
+        u_edges, cell_off, vals = self.arrays()
+        _nia.near_interface_cone_line(
+            np.ascontiguousarray(u, dtype=float),
+            np.ascontiguousarray(zi, dtype=np.int64),
+            self.zs,
+            self.d,
+            u_edges,
+            cell_off,
+            self.x,
+            self.bw,
+            vals,
+            out,
+            _physical_cpu_count(),
+            np.asarray(KEY_RPOW, dtype=np.int64),
+        )
+
+
+def _cone_sheet(k_p, k_m, d, zf, beta, a, zs, u_max, p=None):
+    """The cached cone sheet of surface (zf, beta) folded at `a` at heights
+    `zs`, `p` nodes a u cell (default `_CONE_P`), grown to `u_max`; keyed on
+    everything a node's value depends on (`_plane_sheet`)."""
+    p = _CONE_P if p is None else int(p)
+    key = (
+        "cone",
+        p,
+        float(k_p),
+        complex(k_m),
+        float(d),
+        float(zf),
+        float(beta),
+        float(a),
+        np.asarray(zs, dtype=float).tobytes(),
+        int(_COLUMN_P),
+        float(_DETOUR),
+        _SHEET_P,
+        _SHEET_WAVES,
+        _SHEET_DEAD,
+        _CONE_SPLIT_U,
+    )
+    with _SHEET_LOCK:
+        sheet = _SHEET_CACHE.pop(key, None)
+        if sheet is None:
+            sheet = ConeSheet(k_p, k_m, d, zf, beta, a, zs, p)
+            _SHEET_STATS["cone_sheets_built"] += 1
+        _SHEET_CACHE[key] = sheet
+        while len(_SHEET_CACHE) > _SHEET_CACHE_MAX:
+            _SHEET_CACHE.popitem(last=False)
+        sheet.cover(u_max)
+        return sheet
+
+
+def _cone_u(rho, a):
+    """u = sqrt(rho^2 - a^2), the fold undone, as both twins spell it."""
+    return np.sqrt((rho - a) * (rho + a))
+
+
+def _cone_take(sub, plan, free):
+    """Each row's cone (an index into `plan.cones`, -1 for none): the first
+    cone holding it, among the rows `free` (finite, rho >= 0, on no plane).
+    A row is on a cone when z' < 0, rho > a, its z is one of the cone's
+    heights, it is outside the corner (not u < d and z < d), and its slope
+    (z' - zf) / u is inside [beta_lo, beta_hi] to `_CONE_MARGIN` of beta_lo.
+    A function of the row and the plan alone."""
+    a = plan.fold
+    rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
+    out = np.full(sub.shape[0], -1, dtype=np.int64)
+    base = free & (z >= 0.0) & (zp < 0.0) & (rho > a)
+    if not base.any():
+        return out
+    idx = np.flatnonzero(base)
+    u = _cone_u(rho[idx], a)
+    zi, zpi = z[idx], zp[idx]
+    left = np.ones(idx.size, dtype=bool)
+    for k, (zf, blo, bhi, d, zs, _p_fan) in enumerate(plan.cones):
+        m = left & (u > 0.0) & np.isin(zi, zs) & ~((u < d) & (zi < d))
+        if not m.any():
+            continue
+        sl = np.zeros(idx.size)
+        np.divide(zpi - zf, u, out=sl, where=m)
+        mg = _CONE_MARGIN * abs(blo)
+        m &= (sl >= blo - mg) & (sl <= bhi + mg)
+        out[idx[m]] = k
+        left &= ~m
+    return out
+
+
+def _serve_from_cones(k_p, k_m, sub, cone, plan, out):
+    """out[r] for every row r with a cone (`_cone_take`): the fan's full
+    surface at beta_lo, plus the row's linear step in slope read from the
+    coarse pair (see the block comment), or the one surface of a fan of one
+    slope. Returns the cones used."""
+    a = plan.fold
+    used = 0
+    for k, (zf, blo, bhi, d, zs, p_fan) in enumerate(plan.cones):
+        idx = np.flatnonzero(cone == k)
+        if not idx.size:
+            continue
+        used += 1
+        u = _cone_u(sub[idx, 0], a)
+        zi = np.searchsorted(zs, sub[idx, 1]).astype(np.int64)
+        u_max = float(u.max())
+        lo = np.empty((idx.size, N_KEYS), dtype=np.complex128)
+        _cone_sheet(k_p, k_m, d, zf, blo, a, zs, u_max).interpolate(u, zi, lo)
+        if bhi != blo:
+            q = p_fan
+            clo = np.empty((idx.size, N_KEYS), dtype=np.complex128)
+            chi = np.empty((idx.size, N_KEYS), dtype=np.complex128)
+            _cone_sheet(k_p, k_m, d, zf, blo, a, zs, u_max, q).interpolate(u, zi, clo)
+            _cone_sheet(k_p, k_m, d, zf, bhi, a, zs, u_max, q).interpolate(u, zi, chi)
+            t = ((sub[idx, 2] - zf) / u - blo) / (bhi - blo)
+            tc = t[:, None]
+            lo.real = lo.real + tc * (chi.real - clo.real)
+            lo.imag = lo.imag + tc * (chi.imag - clo.imag)
+        out[idx] = lo
+        _SHEET_STATS["cone_rows"] += idx.size
+    return used
+
+
+def _cone_candidates(gxy, below):
+    """The (beta, zf) a side's consecutive below nodes name, seen from each
+    above group: a straight wire's neighbours give its slope and apex depth.
+    Only falling slopes (beta <= -`_CONE_BETA_MIN`) whose apex is at or below
+    the interface (an apex up to `_CONE_MARGIN` of the nodes' distances
+    above it is the interface's); zf is clamped to <= 0."""
+    w = below[:, 2]
+    out = []
+    for g in range(gxy.shape[0]):
+        _cancel.poll()
+        u = np.hypot(below[:, 0] - gxy[g, 0], below[:, 1] - gxy[g, 1])
+        du = u[1:] - u[:-1]
+        ok = du != 0.0
+        if not ok.any():
+            continue
+        u0, w0 = u[:-1][ok], w[:-1][ok]
+        beta = (w[1:][ok] - w0) / du[ok]
+        c = w0 - beta * u0
+        keep = (beta <= -_CONE_BETA_MIN) & (c <= _CONE_MARGIN * (u0 + np.abs(w0)))
+        if keep.any():
+            ck = c[keep]
+            out.append(np.stack([beta[keep], np.where(ck < 0.0, ck, 0.0)], axis=1))
+    return out
+
+
+def _cone_fans(cand, a):
+    """Cluster the candidates into fan SEEDS: sorted by (beta, zf), a run of
+    slopes within `_CONE_FAN_REL` of its least, and within it a run of apex
+    depths within `_CONE_FAN_REL` of the corner size (`_cone_d`) of its
+    least. Each seed is (zf, beta_min, beta_max, candidates), an apex inside
+    that tolerance of the interface snapped to it. The seed names the
+    surface family; `_cone_census` sets the fan's edges from the slopes of
+    the rows it holds, so a wire whose apex reads a little off (a pair's
+    rounding) widens the fan instead of seeding a sheet of its own."""
+    C = np.concatenate(cand)
+    C = C[np.lexsort((C[:, 1], C[:, 0]))]
+    beta, zf = C[:, 0], C[:, 1]
+    fans, i, n = [], 0, beta.size
+    while i < n:
+        j = int(
+            np.searchsorted(beta, beta[i] + _CONE_FAN_REL * abs(beta[i]), side="right")
+        )
+        j = max(j, i + 1)
+        o = np.lexsort((beta[i:j], zf[i:j])) + i
+        zs = zf[o]
+        k = 0
+        while k < o.size:
+            z0 = float(zs[k])
+            tol = _CONE_FAN_REL * _cone_d(z0, a)
+            e = max(k + 1, int(np.searchsorted(zs, z0 + tol, side="right")))
+            b = beta[o[k:e]]
+            fans.append(
+                (0.0 if abs(z0) <= tol else z0, float(b.min()), float(b.max()), e - k)
+            )
+            k = e
+        i = j
+    return fans
+
+
+def _cone_distinct_rows(hits, a):
+    """The distinct (folded rho, z) rows of a fan's hits over every side (a
+    pair two sides both ask is one fresh row), as (u, z) arrays, u from rho
+    as `_cone_take` takes it."""
+    rows = []
+    for rh, zs, _rl, _ul in hits:
+        rows.append(np.repeat(rh, zs.size) + 1j * np.tile(zs, rh.size))
+    allr = np.unique(np.concatenate(rows))
+    return _cone_u(allr.real, a), allr.imag
+
+
+def _cone_census(sides, k_p, k_m, a, planes):
+    """The cone sheets a fill takes (momwire#1595 option A): each
+    (zf, beta_lo, beta_hi, d, heights, p_fan), in fan order.
+
+    The candidates come from the below nodes on no taken plane, seen from
+    each exact-(x, y) above group (`_cone_candidates`), clustered into fans
+    (`_cone_fans`; a fan named by one pair alone is noise, a corner between
+    two wires). A fan's rows are then counted the way `_cone_take` will take
+    them: every (above group, distinct folded rho of a below node) pair
+    whose slope is in the fan, times the group's heights, less the
+    corner's. The cost rule charges the
+    sheet as the exact route is charged -- a column setup each, a member
+    `_CONE_ROW_WORTH` -- plus `_CONE_ROW_INTERP` of a member per row
+    served, against the setups the rows save (distinct folded rho of the
+    lone below nodes outside the corner: no other depth asks their column)
+    and their members:
+
+        net = credited rho + rows * w
+              - surfaces * (columns + members * w) - rows * w * _CONE_ROW_INTERP,
+
+    taken at the corner size d (`_CONE_D_STEPS`) with the greatest net, the
+    least d on a tie, when that net is >= 0. A fan whose linear step's bound
+    exceeds `_CONE_FAN_ERR` is declined whatever it would save."""
+    if not _use_cone():
+        return []
+    planes = np.asarray(planes, dtype=float)
+    per, cand = [], []
+    for pa, pb in sides:
+        below = pb[pb[:, 2] < 0.0]
+        if planes.size:
+            below = below[~np.isin(below[:, 2], planes)]
+        if below.shape[0] < 2:
+            continue
+        gxy, zg, _glo, _ghi = _grouped(pa, 2)
+        bxy, binv = _xy_groups(below[:, 0], below[:, 1])
+        _zv, zinv = np.unique(below[:, 2] + 0.0, return_inverse=True)
+        pairs = np.unique(np.stack([binv, np.asarray(zinv).ravel()], axis=1), axis=0)
+        lone = (np.bincount(pairs[:, 0], minlength=bxy.shape[0]) == 1)[binv]
+        per.append((gxy, zg, below, lone))
+        cand += _cone_candidates(gxy, below)
+    if not cand:
+        return []
+    w = _CONE_ROW_WORTH
+    taken = []
+    # The nodes a taken fan holds, per side and group: `_cone_take` gives a
+    # row to the FIRST cone holding it, so a later fan is costed on what is
+    # left (two seeds' windows can overlap).
+    claimed = [
+        np.zeros((gxy.shape[0], below.shape[0]), dtype=bool)
+        for gxy, _zg, below, _l in per
+    ]
+    for zf, bmin, bmax, n_cand in _cone_fans(cand, a):
+        if n_cand < 2:
+            continue
+        d0 = _cone_d(zf, a)
+        wlo = bmin - _CONE_FAN_REL * abs(bmin)
+        whi = bmax + _CONE_FAN_REL * abs(bmin)
+        hits, u_reach, held = [], 0.0, []
+        blo, bhi = np.inf, -np.inf
+        for si, (gxy, zg, below, lone) in enumerate(per):
+            for g in range(gxy.shape[0]):
+                _cancel.poll()
+                rho_b = np.hypot(
+                    np.hypot(below[:, 0] - gxy[g, 0], below[:, 1] - gxy[g, 1]), a
+                )
+                on = rho_b > a
+                u = _cone_u(rho_b, a)
+                on &= u > 0.0
+                sl = np.zeros(u.size)
+                np.divide(below[:, 2] - zf, u, out=sl, where=on)
+                on &= (sl >= wlo) & (sl <= whi)
+                on &= ~claimed[si][g]
+                zs = zg[g][zg[g] >= 0.0]
+                if not on.any() or not zs.size:
+                    continue
+                held.append((si, g, on))
+                blo = min(blo, float(sl[on].min()))
+                bhi = max(bhi, float(sl[on].max()))
+                # Distinct rows: a node listed twice (a knot two segments
+                # share) asks one row per height, not two.
+                hits.append((np.unique(rho_b[on]), zs, rho_b[on & lone], u[on & lone]))
+                u_reach = max(u_reach, float(u[on].max()))
+        if not hits:
+            continue
+        zset = np.unique(np.concatenate([zs for _rh, zs, _rl, _ul in hits]) + 0.0)
+        ru, rz = _cone_distinct_rows(hits, a)
+        rl = np.concatenate([np.empty(0)] + [rl for _rh, _zs, rl, _ul in hits])
+        ul = np.concatenate([np.empty(0)] + [ul for _rh, _zs, _rl, ul in hits])
+        # The fan's step size S, its linear step's bound, and the coarse
+        # pair's nodes: the least p whose error fraction of S is in tolerance.
+        fan_f = (abs(k_m) * u_reach + 3.0) * (bhi - blo)
+        fan_err = fan_f * fan_f / 8.0
+        p_fan = 0
+        if bhi != blo:
+            p_fan = next(
+                (
+                    q
+                    for q, e in zip(_CONE_FAN_PS, _CONE_FAN_E, strict=True)
+                    if e * fan_f <= _CONE_FAN_TOL
+                ),
+                _CONE_FAN_PS[-1],
+            )
+        # The full surface, and a fan's coarse pair at p_fan / `_CONE_P`.
+        surfaces = 1.0 if bhi == blo else 1.0 + 2.0 * p_fan / _CONE_P
+        best = None
+        d = d0
+        for _step in range(_CONE_D_STEPS + 1):
+            n_rows = ru.size - int(np.count_nonzero((ru < d) & (rz < d)))
+            n_credit = np.unique(rl[ul >= d]).size
+            cols, corner = _cone_columns(k_p, k_m, d, u_reach)
+            members = (cols - corner) * zset.size + corner * int(
+                np.count_nonzero(zset >= d)
+            )
+            cost = surfaces * (cols + members * w) + n_rows * w * _CONE_ROW_INTERP
+            net = n_credit + n_rows * w - cost
+            if best is None or net > best[0]:
+                best = (net, d, n_rows, n_credit, cols, members, cost)
+            d *= 2.0
+            if d > 0.25 * u_reach:
+                break
+        net, d, n_rows, n_credit, cols, members, cost = best
+        if _CONE_TRACE is not None:
+            _CONE_TRACE.append(
+                dict(
+                    zf=zf,
+                    blo=blo,
+                    bhi=bhi,
+                    d=d,
+                    n_z=zset.size,
+                    u_reach=u_reach,
+                    rows=n_rows,
+                    credit=n_credit,
+                    cols=cols,
+                    members=members,
+                    surfaces=surfaces,
+                    p_fan=p_fan,
+                    cost=cost,
+                    gain=n_credit + n_rows * w,
+                    fan_err=fan_err,
+                )
+            )
+        if n_rows < _SHEET_MIN_ROWS or net < 0.0 or fan_err > _CONE_FAN_ERR:
+            _SHEET_STATS["cone_declined_rows"] += n_rows
+            continue
+        for si, g, on in held:
+            claimed[si][g] |= on
+        taken.append((zf, blo, bhi, d, zset, p_fan))
+    return taken
+
+
 def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan):
     """`_evaluate_fresh` on the column route when the fill's plan serves some
-    rows (`take` = `_sheet_take`'s (take, on_plane)): those interpolated from
-    their planes' and heights' sheets, the rest through the column twin
+    rows (`take` = `_sheet_take`'s (take, on_plane, cone)): those
+    interpolated from their planes', cones' and heights' sheets, the rest through the column twin
     exactly as `_column_twin` would take them alone (their labels, their
     first-appearance order). Each sheet is grown to this call's farthest row
     on it, which moves no node (`PlaneSheet`)."""
@@ -3462,14 +4097,14 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
 
 def _serve_from_sheets(k_p, k_m, sub, lam_mult, take, plan, out, family):
     """out[r] = the `family` kernels of every row r of `sub` that `take`
-    (`_sheet_take`'s (take, on_plane)) gives a sheet, interpolated from its
-    plane's or height's sheet; the other rows of `out` are not touched. Each
+    (`_sheet_take`'s (take, on_plane, cone)) gives a sheet, interpolated from
+    its plane's, cone's or height's sheet; the other rows of `out` are not touched. Each
     sheet is grown to this call's farthest row on it, which moves no node
     (`PlaneSheet`). Returns (sheets used, height rows served). Shared by the
     six keys' `_evaluate_with_sheets` and the point family's
     `_point_radius_tables_folded` (momwire#1224 option A), so the two
     families read one plan the same way."""
-    take, on_plane = take
+    take, on_plane, cone = take
     n_sheets = n_height = 0
     # One sheet at a time, by the plan's values: a mask and its rows' index,
     # and the reach as masked reductions (on a plane z' is the fixed value, so
@@ -3480,6 +4115,8 @@ def _serve_from_sheets(k_p, k_m, sub, lam_mult, take, plan, out, family):
             if height:
                 sel &= take
                 sel[on_plane] = False
+                if cone is not None:
+                    sel[cone >= 0] = False
             else:
                 sel &= on_plane
             if not sel.any():
@@ -3500,6 +4137,8 @@ def _serve_from_sheets(k_p, k_m, sub, lam_mult, take, plan, out, family):
             if height:
                 n_height += idx.size
             del sel, idx
+    if cone is not None and family == "six":
+        n_sheets += _serve_from_cones(k_p, k_m, sub, cone, plan, out)
     return n_sheets, n_height
 
 

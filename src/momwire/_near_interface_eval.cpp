@@ -324,6 +324,228 @@ PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth
 }
 
 // --------------------------------------------------------------------------
+// Cone sheets (momwire#1595 option A): `ConeSheet`, `_cone_sheet` and their
+// constants, the Python block comment's layout step for step.
+
+constexpr double CONE_BETA_MIN = 1e-6;
+constexpr double CONE_FAN_REL = 1e-4;
+constexpr double CONE_FAN_ERR = 1e-12;
+constexpr double CONE_MARGIN = 1e-9;
+constexpr double CONE_FOLD_D = 8.0;
+constexpr double CONE_SPLIT_U = 4.0;
+constexpr double CONE_ROW_INTERP = 0.1;
+constexpr double CONE_ROW_WORTH = 1.0 / 20.0;
+constexpr int CONE_D_STEPS = 8;
+constexpr int CONE_P = 12;
+// `_CONE_FAN_PS`, `_CONE_FAN_E`, `_CONE_FAN_TOL`.
+constexpr int CONE_FAN_PS[6] = {2, 3, 4, 6, 8, 12};
+constexpr double CONE_FAN_E[6] = {0.12, 0.018, 2.5e-3, 1e-4, 4e-6, 0.0};
+constexpr double CONE_FAN_TOL = 2e-10;
+
+// `_use_cone`'s switch: MOMWIRE_NEAR_INTERFACE_CONE=0 is the exact route
+// for every cone row, as on the Python side.
+bool use_cone() {
+    const char *v = std::getenv("MOMWIRE_NEAR_INTERFACE_CONE");
+    return !(v != nullptr && std::string(v) == "0");
+}
+
+// `_pow2_at_least`.
+double pow2_at_least(double x) {
+    double v = 1.0;
+    while (v < x) v *= 2.0;
+    while (v * 0.5 >= x) v *= 0.5;
+    return v;
+}
+
+// `_cone_d`.
+double cone_d(double zf, double a) { return pow2_at_least(std::max(CONE_FOLD_D * a, 2.0 * std::fabs(zf))); }
+
+// `_cone_u`.
+double cone_u(double rho, double a) { return std::sqrt((rho - a) * (rho + a)); }
+
+// `_cone_u_strip`.
+Strip cone_u_strip(double k_p, cd k_m, double d, int i) {
+    Strip st;
+    sheet_strip(k_p, k_m, d, i, true, -1, st);
+    if (i >= 2 && st.hi <= CONE_SPLIT_U * d) st.n = std::max<int64_t>(st.n, 2);
+    return st;
+}
+
+// `_cone_columns`: (columns, corner columns) of one surface reaching u_reach.
+std::pair<int64_t, int64_t> cone_columns(double k_p, cd k_m, double d, double u_reach) {
+    int64_t cols = 0, corner = 0;
+    for (int i = 0;; i++) {
+        const Strip st = cone_u_strip(k_p, k_m, d, i);
+        cols += st.n * CONE_P;
+        if (i < 2) corner += st.n * CONE_P;
+        if (st.hi >= u_reach) return {cols, corner};
+    }
+}
+
+// `_cheb(p)` at any p. The cosines and sines are libm's SCALAR ones (numpy's
+// on the Python side are): through a volatile pointer, so the loop cannot be
+// vectorised onto a vector libm, whose last bit differs and moved ~1 node in
+// 8 of a p = 12 table by an ulp when it was.
+void cheb_p(int p, std::vector<double> &x, std::vector<double> &bw) {
+    double (*volatile cos_fn)(double) = static_cast<double (*)(double)>(std::cos);
+    double (*volatile sin_fn)(double) = static_cast<double (*)(double)>(std::sin);
+    x.resize(static_cast<size_t>(p));
+    bw.resize(static_cast<size_t>(p));
+    for (int k = 0; k < p; k++) {
+        const double t = (static_cast<double>(2 * k + 1) * M_PI) / static_cast<double>(2 * p);
+        x[static_cast<size_t>(k)] = -cos_fn(t);
+        bw[static_cast<size_t>(k)] = ((k % 2) ? -1.0 : 1.0) * sin_fn(t);
+    }
+}
+
+class ConeSheet {
+  public:
+    ConeSheet(double k_p, cd k_m, double d, double zf, double beta, double a, const std::vector<double> &zs, int p)
+        : k_p_(k_p), k_m_(k_m), d_(d), zf_(zf), beta_(beta), a_(a), zs_(zs), p_(p) {
+        cheb_p(p_, x_, bw_);
+        for (double z : zs_) far_.push_back(z >= d_);
+        for (char f : far_) n_far_ += f ? 1 : 0;
+    }
+
+    // `ConeSheet.cover` / `_cover`.
+    void cover(double u_max, int n_threads) {
+        std::vector<size_t> fresh;
+        while (strips_.empty() || strips_.back().hi < u_max) {
+            const int i = static_cast<int>(strips_.size());
+            const Strip st = cone_u_strip(k_p_, k_m_, d_, i);
+            strips_.push_back(st);
+            for (int64_t q = 0; q < st.n; q++) {
+                const double a = st.lo + (st.hi - st.lo) * static_cast<double>(q) / static_cast<double>(st.n);
+                const double b = q == st.n - 1 ? st.hi
+                                               : st.lo + (st.hi - st.lo) * static_cast<double>(q + 1) /
+                                                             static_cast<double>(st.n);
+                fresh.push_back(cells_.size());
+                cells_.push_back(Cell{a, b, i});
+            }
+        }
+        if (fresh.empty()) return;
+        const size_t n_z = zs_.size(), p = static_cast<size_t>(p_);
+        std::vector<double> u_c, rho_c, zq_c;
+        std::vector<char> corner;
+        for (size_t c : fresh) {
+            const Cell &cl = cells_[c];
+            const double mid = 0.5 * (cl.a + cl.b), half = 0.5 * (cl.b - cl.a);
+            for (size_t k = 0; k < p; k++) {
+                const double u = mid + half * x_[k];
+                u_c.push_back(u);
+                corner.push_back(cl.strip < 2);
+            }
+        }
+        const size_t nc = u_c.size();
+        std::vector<std::ptrdiff_t> offsets(nc + 1, 0);
+        for (size_t c = 0; c < nc; c++) {
+            rho_c.push_back(std::hypot(u_c[c], a_));
+            const double v = zf_ + beta_ * u_c[c];
+            zq_c.push_back(v < 0.0 ? v : 0.0);
+            offsets[c + 1] = offsets[c] + static_cast<std::ptrdiff_t>(corner[c] ? n_far_ : n_z);
+        }
+        const size_t m = static_cast<size_t>(offsets[nc]);
+        std::vector<double> z(m), zq(m);
+        for (size_t c = 0, i = 0; c < nc; c++)
+            for (size_t j = 0; j < n_z; j++) {
+                if (corner[c] && !far_[j]) continue;
+                z[i] = zs_[j];
+                zq[i] = zq_c[c];
+                i++;
+            }
+        std::vector<cd> vals(m * N_KEYS);
+        ni_core::six_columns(k_p_, k_m_, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc), z.data(),
+                             zq.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P, DETOUR, n_threads,
+                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data());
+        // `vals[:, cols] *= f`, f = R ** pw with R = hypot(u, z + d) (numpy's
+        // complex by real-as-complex product: each part one rounding).
+        for (size_t c = 0, i = 0; c < nc; c++)
+            for (std::ptrdiff_t q = offsets[c]; q < offsets[c + 1]; q++, i++) {
+                const double Rn = std::hypot(u_c[c], z[i] + d_);
+                const double f2 = Rn * Rn;
+                for (int k = 0; k < N_KEYS; k++) {
+                    const double f = KEY_RPOW[k] == 1 ? Rn : f2;
+                    cd &v = vals[i * N_KEYS + k];
+                    v = cd(mw_fma::exact(v.real(), f, -(v.imag() * 0.0)), mw_fma::exact(v.real(), 0.0, v.imag() * f));
+                }
+            }
+        // [node][height][key], the corner columns' near heights zero.
+        const size_t base = vals_.size();
+        vals_.resize(base + nc * n_z * N_KEYS, cd(0.0, 0.0));
+        for (size_t c = 0; c < nc; c++) {
+            size_t i = static_cast<size_t>(offsets[c]);
+            for (size_t j = 0; j < n_z; j++) {
+                if (corner[c] && !far_[j]) continue;
+                for (int k = 0; k < N_KEYS; k++) vals_[base + (c * n_z + j) * N_KEYS + k] = vals[i * N_KEYS + k];
+                i++;
+            }
+        }
+        flat_ok_ = false;
+    }
+
+    // `ConeSheet.interpolate`: out (n, N_KEYS) at rows (u[r], zs[zi[r]]).
+    void interpolate(const std::vector<double> &u, const std::vector<int64_t> &zi, std::vector<cd> &out,
+                     int n_threads) {
+        if (!flat_ok_) {
+            edges_.clear();
+            off_.clear();
+            for (size_t c = 0; c < cells_.size(); c++) {
+                edges_.push_back(cells_[c].a);
+                off_.push_back(static_cast<int64_t>(c) * p_);
+            }
+            edges_.push_back(cells_.back().b);
+            flat_ok_ = true;
+        }
+        out.assign(u.size() * N_KEYS, cd(0.0, 0.0));
+        ni_core::cone_line(u.data(), zi.data(), static_cast<std::ptrdiff_t>(u.size()), zs_.data(),
+                           static_cast<std::ptrdiff_t>(zs_.size()), d_, edges_.data(),
+                           static_cast<std::ptrdiff_t>(cells_.size()), off_.data(), x_.data(), bw_.data(), p_,
+                           vals_.data(), out.data(), n_threads, KEY_RPOW, N_KEYS);
+    }
+
+    // The table (`cone_table`, TEST-ONLY).
+    void table(std::vector<double> &u_edges, std::vector<cd> &vals) const {
+        u_edges.clear();
+        for (const Cell &c : cells_) u_edges.push_back(c.a);
+        if (!cells_.empty()) u_edges.push_back(cells_.back().b);
+        vals = vals_;
+    }
+
+  private:
+    struct Cell {
+        double a, b;
+        int strip;
+    };
+    double k_p_;
+    cd k_m_;
+    double d_, zf_, beta_, a_;
+    std::vector<double> zs_;
+    int p_;
+    std::vector<double> x_, bw_;
+    std::vector<char> far_;
+    size_t n_far_ = 0;
+    std::vector<Strip> strips_;
+    std::vector<Cell> cells_;
+    std::vector<cd> vals_;
+    bool flat_ok_ = false;
+    std::vector<double> edges_;
+    std::vector<int64_t> off_;
+};
+
+// `_cone_sheet`: the process's cone sheets, keyed by what a node depends on.
+using ConeKey = std::pair<std::tuple<int, double, double, double, double, double, double, double>, std::vector<double>>;
+std::map<ConeKey, std::unique_ptr<ConeSheet>> g_cones;
+
+ConeSheet &cone_sheet(double k_p, cd k_m, const Cone &c, double beta, double a, int p) {
+    const ConeKey key{std::make_tuple(p, k_p, k_m.real(), k_m.imag(), c.d, c.zf, beta, a), c.zs};
+    auto it = g_cones.find(key);
+    if (it == g_cones.end())
+        it = g_cones.emplace(key, std::unique_ptr<ConeSheet>(new ConeSheet(k_p, k_m, c.d, c.zf, beta, a, c.zs, p)))
+                 .first;
+    return *it->second;
+}
+
+// --------------------------------------------------------------------------
 // The column twin over a row set (`_column_twin`, `_column_blocks`,
 // `_refuse_bad_members`).
 
@@ -389,6 +611,14 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
 }  // namespace
 
 // --------------------------------------------------------------------------
+
+void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
+                const std::vector<double> &zs, int p, double u_max, int n_threads,
+                std::vector<double> &u_edges, std::vector<cd> &vals) {
+    ConeSheet sh(k_p, k_m, d, zf, beta, a, zs, p);
+    sh.cover(u_max, n_threads);
+    sh.table(u_edges, vals);
+}
 
 std::string py_repr(double x) {
     if (std::isnan(x)) return "nan";
@@ -521,9 +751,10 @@ void Memo::insert(const double *row, const Six &v) {
 void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int64_t *labels,
                     const SheetPlan *plan, ni_core::ColumnCache *cache, Six *out) {
     if (m == 0) return;
-    // `_sheet_take`
+    // `_sheet_take`: planes, then cones (`_cone_take`), then heights
     std::vector<char> take(m, 0), on_plane(m, 0);
-    bool any = false;
+    std::vector<int> cone(m, -1);
+    bool any = false, any_cone = false;
     if (plan != nullptr && plan->any()) {
         for (size_t i = 0; i < m; i++) {
             const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
@@ -533,11 +764,35 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             on_plane[i] = onp;
             take[i] = onp;
         }
+        if (!plan->cones.empty() && use_cone()) {
+            const double a = plan->fold;
+            for (size_t i = 0; i < m; i++) {
+                if (on_plane[i]) continue;
+                const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
+                const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
+                if (!(ok && z >= 0.0 && zp < 0.0 && rho > a)) continue;
+                const double u = cone_u(rho, a);
+                if (!(u > 0.0)) continue;
+                for (size_t k = 0; k < plan->cones.size(); k++) {
+                    const Cone &c = plan->cones[k];
+                    if (!std::binary_search(c.zs.begin(), c.zs.end(), z) || (u < c.d && z < c.d)) continue;
+                    const double sl = (zp - c.zf) / u;
+                    const double mg = CONE_MARGIN * std::fabs(c.blo);
+                    if (sl >= c.blo - mg && sl <= c.bhi + mg) {
+                        cone[i] = static_cast<int>(k);
+                        take[i] = 1;
+                        any_cone = true;
+                        break;
+                    }
+                }
+            }
+        }
         for (size_t h = 0; h < plan->heights.size(); h++)
             for (size_t i = 0; i < m; i++) {
                 const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
                 const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
-                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
+                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i] &&
+                    cone[i] < 0)
                     take[i] = 1;
             }
         for (size_t i = 0; i < m; i++) any |= take[i] != 0;
@@ -576,7 +831,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
                 const double col = rows[3 * i + (height ? 1 : 2)];
                 bool sel = col == v;
                 if (height)
-                    sel = sel && take[i] && !on_plane[i];
+                    sel = sel && take[i] && !on_plane[i] && cone[i] < 0;
                 else
                     sel = sel && on_plane[i];
                 if (!sel) continue;
@@ -593,6 +848,50 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth);
             sh.cover(rho_max, s_max, ev.n_threads);
             sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+        }
+    }
+    // `_serve_from_cones`: the full surface at beta_lo, plus the row's linear
+    // step in slope from the coarse pair on a fan.
+    if (any_cone) {
+        const double a = plan->fold;
+        for (size_t k = 0; k < plan->cones.size(); k++) {
+            const Cone &c = plan->cones[k];
+            std::vector<size_t> idx;
+            std::vector<double> u;
+            std::vector<int64_t> zi;
+            double u_max = -std::numeric_limits<double>::infinity();
+            for (size_t i = 0; i < m; i++) {
+                if (cone[i] != static_cast<int>(k)) continue;
+                const double uu = cone_u(rows[3 * i], a);
+                idx.push_back(i);
+                u.push_back(uu);
+                zi.push_back(std::lower_bound(c.zs.begin(), c.zs.end(), rows[3 * i + 1]) - c.zs.begin());
+                u_max = std::max(u_max, uu);
+            }
+            if (idx.empty()) continue;
+            std::vector<cd> vlo;
+            ConeSheet &lo = cone_sheet(ev.k_p, ev.k_m, c, c.blo, a, CONE_P);
+            lo.cover(u_max, ev.n_threads);
+            lo.interpolate(u, zi, vlo, ev.n_threads);
+            if (c.bhi != c.blo) {
+                std::vector<cd> vclo, vchi;
+                ConeSheet &clo = cone_sheet(ev.k_p, ev.k_m, c, c.blo, a, c.p_fan);
+                clo.cover(u_max, ev.n_threads);
+                clo.interpolate(u, zi, vclo, ev.n_threads);
+                ConeSheet &chi = cone_sheet(ev.k_p, ev.k_m, c, c.bhi, a, c.p_fan);
+                chi.cover(u_max, ev.n_threads);
+                chi.interpolate(u, zi, vchi, ev.n_threads);
+                for (size_t r = 0; r < idx.size(); r++) {
+                    const double t = ((rows[3 * idx[r] + 2] - c.zf) / u[r] - c.blo) / (c.bhi - c.blo);
+                    for (int q = 0; q < N_KEYS; q++) {
+                        const size_t j = r * N_KEYS + static_cast<size_t>(q);
+                        vlo[j] = cd(vlo[j].real() + t * (vchi[j].real() - vclo[j].real()),
+                                    vlo[j].imag() + t * (vchi[j].imag() - vclo[j].imag()));
+                    }
+                }
+            }
+            for (size_t r = 0; r < idx.size(); r++)
+                for (int q = 0; q < N_KEYS; q++) out[idx[r]][static_cast<size_t>(q)] = vlo[r * N_KEYS + static_cast<size_t>(q)];
         }
     }
 }
@@ -1085,6 +1384,221 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
     }
 }
 
+// `_cone_census(sides, k_p, k_m, a, planes)` (momwire#1595 option A), with
+// `_cone_candidates`, `_cone_fans` and `_cone_distinct_rows`, step for step.
+std::vector<Cone> cone_census(const std::vector<Side> &sides, double k_p, cd k_m, double a,
+                              const std::vector<double> &planes) {
+    std::vector<Cone> taken;
+    if (!use_cone()) return taken;
+    struct Per {
+        Grouped g;
+        std::vector<double> below;  // (n, 3)
+        std::vector<char> lone;
+    };
+    std::vector<Per> per;
+    std::vector<std::pair<double, double>> cand;  // (beta, zf)
+    for (const Side &sd : sides) {
+        Per P;
+        for (size_t i = 0; i < sd.below.size() / 3; i++) {
+            const double zq = sd.below[3 * i + 2];
+            if (!(zq < 0.0)) continue;
+            if (!planes.empty() && std::binary_search(planes.begin(), planes.end(), zq)) continue;
+            P.below.insert(P.below.end(), sd.below.begin() + 3 * i, sd.below.begin() + 3 * i + 3);
+        }
+        const size_t nb = P.below.size() / 3;
+        if (nb < 2) continue;
+        P.g = grouped(sd.above);
+        // lone: the below node's exact (x, y) holds one depth
+        std::map<std::pair<double, double>, std::set<double>> depths;
+        for (size_t i = 0; i < nb; i++)
+            depths[{P.below[3 * i] + 0.0, P.below[3 * i + 1] + 0.0}].insert(P.below[3 * i + 2] + 0.0);
+        P.lone.resize(nb);
+        for (size_t i = 0; i < nb; i++)
+            P.lone[i] = depths[{P.below[3 * i] + 0.0, P.below[3 * i + 1] + 0.0}].size() == 1;
+        // `_cone_candidates`
+        std::vector<double> u(nb);
+        for (size_t g = 0; g < P.g.gx.size(); g++) {
+            for (size_t i = 0; i < nb; i++)
+                u[i] = std::hypot(P.below[3 * i] - P.g.gx[g], P.below[3 * i + 1] - P.g.gy[g]);
+            for (size_t i = 0; i + 1 < nb; i++) {
+                const double du = u[i + 1] - u[i];
+                if (!(du != 0.0)) continue;
+                const double w0 = P.below[3 * i + 2], u0 = u[i];
+                const double beta = (P.below[3 * (i + 1) + 2] - w0) / du;
+                const double c = w0 - beta * u0;
+                if (beta <= -CONE_BETA_MIN && c <= CONE_MARGIN * (u0 + std::fabs(w0)))
+                    cand.emplace_back(beta, c < 0.0 ? c : 0.0);
+            }
+        }
+        per.push_back(std::move(P));
+    }
+    if (cand.empty()) return taken;
+    // `_cone_fans`
+    std::sort(cand.begin(), cand.end());
+    struct Seed {
+        double zf, bmin, bmax;
+        size_t n;
+    };
+    std::vector<Seed> seeds;
+    const size_t n = cand.size();
+    for (size_t i = 0; i < n;) {
+        const double thr = cand[i].first + CONE_FAN_REL * std::fabs(cand[i].first);
+        size_t j = static_cast<size_t>(std::upper_bound(cand.begin(), cand.end(), thr,
+                                                         [](double t, const std::pair<double, double> &e) {
+                                                             return t < e.first;
+                                                         }) -
+                                       cand.begin());
+        j = std::max(j, i + 1);
+        std::vector<std::pair<double, double>> run;  // (zf, beta)
+        for (size_t q = i; q < j; q++) run.emplace_back(cand[q].second, cand[q].first);
+        std::sort(run.begin(), run.end());
+        for (size_t k = 0; k < run.size();) {
+            const double z0 = run[k].first;
+            const double tol = CONE_FAN_REL * cone_d(z0, a);
+            size_t e = static_cast<size_t>(std::upper_bound(run.begin(), run.end(), z0 + tol,
+                                                             [](double t, const std::pair<double, double> &x) {
+                                                                 return t < x.first;
+                                                             }) -
+                                           run.begin());
+            e = std::max(e, k + 1);
+            double bmin = run[k].second, bmax = run[k].second;
+            for (size_t q = k; q < e; q++) {
+                bmin = std::min(bmin, run[q].second);
+                bmax = std::max(bmax, run[q].second);
+            }
+            seeds.push_back(Seed{std::fabs(z0) <= tol ? 0.0 : z0, bmin, bmax, e - k});
+            k = e;
+        }
+        i = j;
+    }
+    const double w = CONE_ROW_WORTH;
+    // `claimed`: the nodes a taken fan holds, per side and group.
+    std::vector<std::vector<std::vector<char>>> claimed;
+    for (const Per &P : per)
+        claimed.emplace_back(P.g.gx.size(), std::vector<char>(P.below.size() / 3, 0));
+    for (const Seed &sd : seeds) {
+        if (sd.n < 2) continue;
+        const double zf = sd.zf, d0 = cone_d(zf, a);
+        const double wlo = sd.bmin - CONE_FAN_REL * std::fabs(sd.bmin);
+        const double whi = sd.bmax + CONE_FAN_REL * std::fabs(sd.bmin);
+        double blo = std::numeric_limits<double>::infinity(), bhi = -blo, u_reach = 0.0;
+        bool hit = false;
+        std::set<double> zset;
+        // distinct (rho, z) rows and credited rho: sorted and deduplicated
+        // once below (a set of ~1e5 pairs was most of the census's time)
+        std::vector<std::pair<double, double>> credit;  // (rho, u) of lone supporters
+        // the hits' (rho, heights) blocks; distinct rows are counted after,
+        // per distinct rho as flags over the fan's heights (no pair sort)
+        std::vector<std::pair<std::vector<double>, std::vector<double>>> blocks;
+        std::vector<std::tuple<size_t, size_t, size_t>> held;  // (side, group, node)
+        for (size_t si = 0; si < per.size(); si++) {
+            const Per &P = per[si];
+            const size_t nb = P.below.size() / 3;
+            for (size_t g = 0; g < P.g.gx.size(); g++) {
+                std::vector<double> zs;
+                for (double zv : P.g.vals[g])
+                    if (zv >= 0.0) zs.push_back(zv);
+                std::vector<double> on_rho;
+                bool any_on = false;
+                for (size_t i = 0; i < nb; i++) {
+                    const double rho_b =
+                        std::hypot(std::hypot(P.below[3 * i] - P.g.gx[g], P.below[3 * i + 1] - P.g.gy[g]), a);
+                    if (!(rho_b > a)) continue;
+                    const double u = cone_u(rho_b, a);
+                    if (!(u > 0.0)) continue;
+                    const double sl = (P.below[3 * i + 2] - zf) / u;
+                    if (!(sl >= wlo && sl <= whi)) continue;
+                    if (claimed[si][g][i]) continue;
+                    if (zs.empty()) continue;
+                    any_on = true;
+                    held.emplace_back(si, g, i);
+                    blo = std::min(blo, sl);
+                    bhi = std::max(bhi, sl);
+                    u_reach = std::max(u_reach, u);
+                    on_rho.push_back(rho_b);
+                    if (P.lone[i]) credit.emplace_back(rho_b, u);
+                }
+                if (!any_on) continue;
+                hit = true;
+                for (double zv : zs) zset.insert(zv + 0.0);
+                blocks.emplace_back(std::move(on_rho), zs);
+            }
+        }
+        if (!hit) continue;
+        std::vector<double> zv(zset.begin(), zset.end());
+        std::vector<double> rhos;
+        for (const auto &b : blocks) rhos.insert(rhos.end(), b.first.begin(), b.first.end());
+        std::sort(rhos.begin(), rhos.end());
+        rhos.erase(std::unique(rhos.begin(), rhos.end()), rhos.end());
+        const size_t nzv = zv.size();
+        std::vector<char> flag(rhos.size() * nzv, 0);
+        for (const auto &b : blocks) {
+            std::vector<size_t> zi;
+            for (double z : b.second)
+                zi.push_back(static_cast<size_t>(std::lower_bound(zv.begin(), zv.end(), z + 0.0) - zv.begin()));
+            for (double r : b.first) {
+                const size_t ri = static_cast<size_t>(std::lower_bound(rhos.begin(), rhos.end(), r) - rhos.begin());
+                for (size_t j : zi) flag[ri * nzv + j] = 1;
+            }
+        }
+        int64_t n_all = 0;
+        for (char f : flag) n_all += f;
+        std::vector<double> ru(rhos.size());
+        for (size_t r = 0; r < rhos.size(); r++) ru[r] = cone_u(rhos[r], a);
+        // the fan's step, its bound and its coarse pair (`_cone_census`)
+        const double fan_f = (cabs(k_m) * u_reach + 3.0) * (bhi - blo);
+        const double fan_err = fan_f * fan_f / 8.0;
+        int p_fan = 0;
+        if (bhi != blo) {
+            p_fan = CONE_FAN_PS[5];
+            for (int q = 0; q < 6; q++)
+                if (CONE_FAN_E[q] * fan_f <= CONE_FAN_TOL) {
+                    p_fan = CONE_FAN_PS[q];
+                    break;
+                }
+        }
+        const double surfaces = bhi == blo ? 1.0 : 1.0 + 2.0 * p_fan / CONE_P;
+        // the corner size with the greatest net, the least on a tie
+        bool have = false;
+        double best_net = 0.0, d = d0, best_d = d0, best_rows = 0.0;
+        double dd = d0;
+        for (int step = 0; step <= CONE_D_STEPS; step++) {
+            int64_t in_corner = 0;
+            const size_t z_below = static_cast<size_t>(std::lower_bound(zv.begin(), zv.end(), dd) - zv.begin());
+            for (size_t r = 0; r < rhos.size(); r++)
+                if (ru[r] < dd)
+                    for (size_t j = 0; j < z_below; j++) in_corner += flag[r * nzv + j];
+            const double n_rows = static_cast<double>(n_all - in_corner);
+            std::vector<double> cr;
+            for (const auto &q : credit)
+                if (q.second >= dd) cr.push_back(q.first);
+            std::sort(cr.begin(), cr.end());
+            const double n_credit = static_cast<double>(std::unique(cr.begin(), cr.end()) - cr.begin());
+            const std::pair<int64_t, int64_t> cc = cone_columns(k_p, k_m, dd, u_reach);
+            int64_t n_far = 0;
+            for (double z : zv) n_far += z >= dd ? 1 : 0;
+            const double members = static_cast<double>((cc.first - cc.second) * static_cast<int64_t>(zv.size()) +
+                                                        cc.second * n_far);
+            const double cost =
+                surfaces * (static_cast<double>(cc.first) + members * w) + n_rows * w * CONE_ROW_INTERP;
+            const double net = n_credit + n_rows * w - cost;
+            if (!have || net > best_net) {
+                have = true;
+                best_net = net;
+                best_d = dd;
+                best_rows = n_rows;
+            }
+            dd *= 2.0;
+            if (dd > 0.25 * u_reach) break;
+        }
+        d = best_d;
+        if (best_rows < SHEET_MIN_ROWS || best_net < 0.0 || fan_err > CONE_FAN_ERR) continue;
+        for (const auto &h : held) claimed[std::get<0>(h)][std::get<1>(h)][std::get<2>(h)] = 1;
+        taken.push_back(Cone{zf, blo, bhi, d, zv, p_fan});
+    }
+    return taken;
+}
+
 }  // namespace
 
 SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, double wire_radius) {
@@ -1107,10 +1621,13 @@ SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, dou
     census(sides, false, k_p, k_m, wire_radius, {}, planes);
     std::vector<double> skip = planes.planes;
     std::sort(skip.begin(), skip.end());
+    std::vector<Cone> cones = cone_census(sides, k_p, k_m, wire_radius, skip);
     census(sides, true, k_p, k_m, wire_radius, skip, heights);
     SheetPlan plan;
     plan.planes = planes.planes;
     std::sort(plan.planes.begin(), plan.planes.end());
+    plan.cones = std::move(cones);
+    plan.fold = wire_radius;
     std::vector<std::pair<double, double>> hd = heights.heights;
     std::sort(hd.begin(), hd.end());
     for (auto &p : hd) {
