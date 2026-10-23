@@ -144,8 +144,12 @@ def test_decks_without_a_sliver_read_what_they_did(name):
     read the same loss before and after, to the readout's own rounding."""
     # Re-pinned for the matrix fills' coarser below/below table, which moved
     # them by 1.2e-5 and 1.5e-5 relative (4.732150e-05 and 4.761289e-05
-    # before it); the tolerance is unchanged.
-    want = {"thr_n21": 4.732208e-05, "hs_n204": 4.761358e-05}[name]
+    # before it); the tolerance is unchanged. Re-pinned again at momwire#1626:
+    # the NEC-5 seam solves EK-on by default, and these buried decks now take
+    # the extended kernel above ground on this basis instead of falling back
+    # to the reduced one, which moved them by 1.85e-5 and 3.44e-5 relative
+    # (the reduced kernel still reads 4.732208e-05 and 4.761358e-05 exactly).
+    want = {"thr_n21": 4.732296e-05, "hs_n204": 4.761522e-05}[name]
     assert _budget(name, "sinusoidal-galerkin").wire_loss == pytest.approx(
         want, rel=2e-6
     )

@@ -37,6 +37,7 @@ from typing import NamedTuple
 
 from ._ground_spec import CONTACT_UNDER_REFL_COEF_REFUSAL
 from .bspline import (
+    _BURIED_EXTENDED_KERNEL_REFUSAL,
     _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
     _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
     _ENRICHMENT_WIRE_LOADING_REFUSAL,
@@ -44,6 +45,7 @@ from .bspline import (
 from .hmatrix import HMatrixSolver
 from .sinusoidal import _POINT_FEED_MODEL_REFUSAL
 from .sinusoidal_galerkin import (
+    _EK_DIRECT_CROSSING_REFUSAL,
     _EK_NEAR_CORRECTION_REFUSAL,
     _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
 )
@@ -144,12 +146,23 @@ COUPLINGS: tuple[Coupling, ...] = (
         # each would undo that.
         applies_to=("ArrayBlockSolver",),
     ),
-    # The extended kernel against a buried wire is no row here: both families
-    # that serve buried wires serve the combination IN PART (extended on the
+    # The extended kernel against a buried wire. Every other family that
+    # serves buried wires serves the combination IN PART (extended on the
     # above-ground pairs, reduced on every pair touching a buried segment) and
-    # declare it under `capabilities.partials`, which is not a refusal --
-    # BSplineSolver since momwire#1170 stage 0, RazorSolver since
-    # momwire#1614. It was RazorSolver's row from momwire#1149 U0 until then.
+    # declares it under `capabilities.partials`, which is not a refusal --
+    # BSplineSolver since momwire#1170 stage 0, RazorSolver since momwire#1614
+    # (its row from momwire#1149 U0 until then), SinusoidalGalerkinSolver
+    # since momwire#1626. The point-matched SinusoidalSolver still refuses it;
+    # serving it there is momwire#1636.
+    Coupling(
+        axis_a="kernel",
+        value_a="extended",
+        axis_b="wire_position",
+        value_b="buried",
+        reason=_BURIED_EXTENDED_KERNEL_REFUSAL,
+        issue="momwire#1636",
+        applies_to=("SinusoidalSolver",),
+    ),
     # Not an axis pair: `near_correction` is a constructor keyword. Kept
     # because it is a real refused combination and the inventory is the point.
     Coupling(
@@ -184,6 +197,21 @@ COUPLINGS: tuple[Coupling, ...] = (
         issue="momwire#398",
         b_is_axis=False,
         condition="a radius step at the junction",
+        applies_to=("SinusoidalGalerkinSolver",),
+    ),
+    # Not an axis pair either: `fill` is a constructor keyword, and the
+    # default (`"mixed-potential"`) serves the combination in part like every
+    # other buried family. Only an explicit `fill="direct"` on a deck whose
+    # wire crosses the interface at a junction meets it (momwire#1626).
+    Coupling(
+        axis_a="kernel",
+        value_a="extended",
+        axis_b="fill",
+        value_b="direct",
+        reason=_EK_DIRECT_CROSSING_REFUSAL,
+        issue="momwire#1626",
+        b_is_axis=False,
+        condition="a buried deck with a crossing junction",
         applies_to=("SinusoidalGalerkinSolver",),
     ),
     # ---- singular enrichment, three rows (momwire#888) -------------------

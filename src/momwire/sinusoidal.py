@@ -997,6 +997,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+crossing_hub": _CROSSING_HUB_REFUSAL,
             "buried+crossing_oblique": _CROSSING_OBLIQUE_REFUSAL,
             "buried+crossing_two_radius": _CROSSING_TWO_RADIUS_REFUSAL,
+            # Still a refusal on this point-matched lane, deferred to
+            # momwire#1636: its subclass SinusoidalGalerkinSolver serves the
+            # combination in part since momwire#1626, but here the crossing
+            # node's source end would take NEC's gating code 2, which this
+            # lane's extended kernel handles as it handles a bend -- measured
+            # to drift from bs2's partial kernel below Delta/a ~ 1 (2.4 ohm at
+            # 1.1, 20 ohm at 0.55 on a 19 mm vertical into a buried rod).
             "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
@@ -5191,9 +5198,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if medium is None:
             yield None
             return
+        # A family that serves the extended kernel in part on a buried deck
+        # (SinusoidalGalerkinSolver since momwire#1626) fills a wholly buried
+        # one reduced -- every pair is two buried segments -- and says so
+        # once; this point-matched lane still refuses it (momwire#1636).
+        partial = "buried+extended_kernel" in type(self).capabilities.partials
+        if partial:
+            self._advise_ek_above()
         _below_interface.refuse_out_of_scope(
             use_singular_enrichment=getattr(self, "use_singular_enrichment", False),
-            extended_kernel=self.extended_kernel,
+            extended_kernel=self.extended_kernel and not partial,
             n=int(geom["seg_l"].shape[0]),
             degree=1,
             dense_fits=True,
@@ -5233,17 +5247,25 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             crossing=False,
             pair_extents=_bspline._pair_extents_below,
         )
-        saved = (self.k, self._active_medium, self._active_r1_below)
+        saved = (
+            self.k,
+            self._active_medium,
+            self._active_r1_below,
+            self.extended_kernel,
+        )
         try:
             self.k = medium.k_m
             self._active_medium = medium
             self._active_r1_below = plan["r1_below"]
+            if partial:
+                self.extended_kernel = False
             yield medium
         finally:
             (
                 self.k,
                 self._active_medium,
                 self._active_r1_below,
+                self.extended_kernel,
             ) = saved
 
     def _is_mixed(self, geom):

@@ -53,6 +53,7 @@ same family of failure one level up.
 from __future__ import annotations
 
 import pathlib
+import warnings
 
 import numpy as np
 import pytest
@@ -205,7 +206,8 @@ def test_bspline_serves_the_extended_kernel_on_a_buried_deck_in_part():
 def test_razor_serves_the_extended_kernel_on_a_buried_deck_in_part():
     """RazorSolver left the row at momwire#1614, on bspline's rule: the
     combination is served above ground, declared under `partials`, and said
-    once. No class is left on the row, so the row is gone."""
+    once. Razor is off the row; only the point-matched sinusoidal lane is
+    left on it (momwire#1636)."""
     assert RazorSolver.capabilities.refusal("buried", "extended_kernel") is None
     declared = RazorSolver.capabilities.partials["buried+extended_kernel"]
     assert declared == BSplineSolver.capabilities.partials["buried+extended_kernel"]
@@ -214,9 +216,58 @@ def test_razor_serves_the_extended_kernel_on_a_buried_deck_in_part():
         s.compute_impedance()
     assert any(declared in str(w.message) for w in seen)
     assert not any(
-        c.axis_a == "kernel" and c.value_a == "extended" and c.value_b == "buried"
+        c.axis_a == "kernel"
+        and c.value_a == "extended"
+        and c.value_b == "buried"
+        and "RazorSolver" in c.applies_to
         for c in COUPLINGS
     )
+
+
+def test_sg_serves_the_extended_kernel_on_a_buried_deck_in_part():
+    """momwire#1626, on bspline's rule and its sentence: served above ground,
+    declared under `partials`, said once (the tree-wide refusal until then)."""
+    cls = SinusoidalGalerkinSolver
+    assert cls.capabilities.refusal("buried", "extended_kernel") is None
+    declared = cls.capabilities.partials["buried+extended_kernel"]
+    assert declared == BSplineSolver.capabilities.partials["buried+extended_kernel"]
+    s = cls(**_buried_kw(), extended_kernel=True)
+    assert s.extended_kernel_wires() == (True, False)
+    with pytest.warns(UserWarning, match="served in part") as seen:
+        s.compute_impedance()
+    assert any(declared in str(w.message) for w in seen)
+
+
+@pytest.mark.parametrize("cls", [SinusoidalSolver])
+def test_the_extended_kernel_really_refuses_buried(cls):
+    """The point-matched lane keeps the row (momwire#1636); its Galerkin
+    subclass left it at momwire#1626."""
+    c = _find_for(cls, "kernel", "extended", "wire_position", "buried")
+    with pytest.raises((NotImplementedError, ValueError)) as exc:
+        cls(**_buried_kw(), extended_kernel=True).compute_impedance()
+    assert c.reason in str(exc.value)
+
+
+def test_the_extended_kernel_really_refuses_the_direct_fill_at_a_crossing():
+    """momwire#1626: conditional, and both halves are built -- the crossing
+    deck refuses on `fill="direct"`, the default fill serves it, and the
+    direct fill serves a DETACHED buried deck."""
+    from test_crossing_serve_524 import crossing_deck
+
+    c = _find_for(SinusoidalGalerkinSolver, "kernel", "extended", "fill", "direct")
+    assert c.condition
+    kw = crossing_deck(1)
+    with pytest.raises(NotImplementedError) as exc:
+        SinusoidalGalerkinSolver(
+            **kw, fill="direct", extended_kernel=True
+        ).compute_impedance()
+    assert c.reason in str(exc.value)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        SinusoidalGalerkinSolver(**kw, extended_kernel=True).compute_impedance()
+        SinusoidalGalerkinSolver(
+            **_buried_kw(), fill="direct", extended_kernel=True
+        ).compute_impedance()
 
 
 def test_the_extended_kernel_really_requires_the_near_correction():
@@ -518,6 +569,7 @@ def test_every_reason_IS_the_module_constant_and_not_a_copy():
     from momwire.hmatrix import HMatrixSolver as _H
     from momwire.sinusoidal import _POINT_FEED_MODEL_REFUSAL
     from momwire.sinusoidal_galerkin import (
+        _EK_DIRECT_CROSSING_REFUSAL,
         _EK_NEAR_CORRECTION_REFUSAL,
         _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
     )
@@ -528,6 +580,7 @@ def test_every_reason_IS_the_module_constant_and_not_a_copy():
         ("kernel", "wire_position"): _BURIED_EXTENDED_KERNEL_REFUSAL,
         ("kernel", "near_correction"): _EK_NEAR_CORRECTION_REFUSAL,
         ("kernel", "junctions"): _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
+        ("kernel", "fill"): _EK_DIRECT_CROSSING_REFUSAL,
         # momwire#888
         ("kernel", "singular_enrichment"): _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
         (

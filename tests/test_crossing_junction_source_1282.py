@@ -66,9 +66,17 @@ PINNED = {
     # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
     # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
     # against 1.99 / 2.26) and 0.09 ohm from bspline's own answer on each.
+    # momwire#1626: moved as the B-spline rows did at #1170. The dialect
+    # solves extended by default and its buried radials sent SG back to the
+    # reduced kernel; now the vertical's pairs are extended. Before:
+    # 71.1117686390 + 1.1134179730j / 71.6934518427 + 2.0954101627j. The move
+    # is 4.0 / 4.3 milliohm, toward NEC-5 on both (1.8384 -> 1.8344 and
+    # 2.1204 -> 2.1161 ohm), and forcing the reduced kernel reads the old
+    # pins within 0.4 milliohm. Measured on Rocketlake; macOS arm64 CI reads
+    # the end1 pin to 1e-10.
     "sinusoidal-galerkin": (
-        71.1117686390 + 1.1134179730j,
-        71.6934518427 + 2.0954101627j,
+        71.1104775851 + 1.1094078316j,
+        71.6922338638 + 2.0910463692j,
     ),
 }
 PIN_OHM = 1e-3

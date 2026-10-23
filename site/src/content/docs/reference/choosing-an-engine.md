@@ -192,8 +192,11 @@ solve. **All six families serve it** — the razor twins were the last
 holdout, reduced-kernel by design until momwire#603 gave them the tube
 correction too. One narrow refusal survives: `sinusoidal-galerkin` declines
 `EK` on a deck where two wires of different radii meet at a junction,
-measured divergent rather than merely inaccurate there. On ordinary thin
-wire it changes the answer by less than the mesh does. A NEC-2 deck asks for it
+measured divergent rather than merely inaccurate there. On a deck with
+buried wires `bspline`, `razor-2p` and `sinusoidal-galerkin` (since
+momwire#1626) serve it in part: extended on the above-ground wires, reduced on
+the buried ones; `sinusoidal` solves such a deck reduced (momwire#1636). On
+ordinary thin wire it changes the answer by less than the mesh does. A NEC-2 deck asks for it
 with its `EK` card. NEC-4 and NEC-5 decks get it by default (momwire#1326),
 because both programs' thin-wire models behave as the extended kernel.
 Where a deck or a basis cannot take it, such a deck falls back to the reduced
