@@ -33,8 +33,8 @@ namespace nec4 {
 
 typedef std::complex<double> cplx;
 
-struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow
-    enum Kind { wire, arc, helix, scale, move } kind = wire;
+struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow | ReflectRow
+    enum Kind { wire, arc, helix, scale, move, reflect } kind = wire;
     // wire
     long long number = 0, segments = 0, first = 0, last = 0, tag = 0;
     double end1[3] = {0, 0, 0}, end2[3] = {0, 0, 0};
@@ -46,8 +46,10 @@ struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow
     double helix_radii[2] = {0, 0}, wire_radii[2] = {0, 0};
     // scale
     double factor = 0;
-    // move
+    // move (and reflect: its tag increment)
     long long tag_increment = 0, copies = 0, first_tag = 0, move_segments = 0;
+    // reflect (GX, momwire#1651): the X, Y and Z planes it selects
+    bool planes[3] = {false, false, false};
     double rotation_deg[3] = {0, 0, 0}, translation[3] = {0, 0, 0};
 };
 
@@ -161,6 +163,8 @@ struct Nec4Printout {
     std::vector<SegmentDataRow> segments;
     std::vector<PrintRun> runs;
     double run_seconds = 0;
+    // The GX symmetry in force (momwire#1651): cell, SYMMETRY FLAG, planes.
+    long long cell_segments = 0, symmetry_flag = 0, symmetry_planes = 0;
 };
 
 // `_printout.render_header(deck_text, basis=..., dialect="nec4")`

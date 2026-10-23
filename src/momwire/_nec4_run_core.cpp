@@ -292,12 +292,45 @@ ll global_segment(const std::vector<GeometryWire> &wires, const nec5::Int &tag, 
     decline("a source address out of range (the reference raises)");
 }
 
+// `deck._nec2_geometry._planes`: GX's I2 digits, X, Y, Z, as Python's floor
+// division and modulo read them.
+std::array<bool, 3> gx_planes(const nec5::Card &card) {
+    const ll code = i64(card.i(1));
+    auto floordiv = [](ll a, ll b) { return a / b - ((a % b != 0) && ((a < 0) != (b < 0))); };
+    auto pymod = [](ll a, ll b) { return ((a % b) + b) % b; };
+    return {pymod(floordiv(code, 100), 10) != 0, pymod(floordiv(code, 10), 10) != 0, pymod(code, 10) != 0};
+}
+
+// `_symmetry(deck)`: (cell segments, SYMMETRY FLAG, planes), zeros for none.
+void symmetry_of(const PortalDeck &deck, ll &cell, ll &flag, ll &planes) {
+    cell = flag = planes = 0;
+    if (!deck.structure.has_symmetry) return;
+    const nec5::Card *last = nullptr;
+    for (const nec5::Card &card : deck.geometry)
+        if (card.mnemonic == "GX") last = &card;
+    if (last == nullptr) decline("a live symmetry with no GX card (the reference raises)");
+    const std::array<bool, 3> p = gx_planes(*last);
+    cell = deck.structure.cell_segments;
+    flag = p[2] ? 2 : 1;
+    planes = static_cast<ll>(p[0]) + static_cast<ll>(p[1]) + static_cast<ll>(p[2]);
+}
+
 // `_wire_rows(deck)`
 std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
     std::vector<WireTableRow> rows;
     ll first = 1, number = 0;
     for (const nec5::Card &card : deck.geometry) {
         WireTableRow r;
+        if (card.mnemonic == "GX") {
+            r.kind = WireTableRow::reflect;
+            const std::array<bool, 3> p = gx_planes(card);
+            for (int c = 0; c < 3; c++) r.planes[c] = p[static_cast<std::size_t>(c)];
+            r.tag_increment = i64(card.i(0));
+            rows.push_back(r);
+            for (bool on : p)
+                if (on) first = (first - 1) * 2 + 1;
+            continue;
+        }
         if (card.mnemonic == "GS") {
             r.kind = WireTableRow::scale;
             r.factor = card.f(2);
@@ -1424,6 +1457,8 @@ Nec4Printout solve_structure(Ctx &c) {
             break;
         }
     data.total_segments = static_cast<ll>(c.sb->tables.segments.size());
+    symmetry_of(deck, data.cell_segments, data.symmetry_flag, data.symmetry_planes);
+    if (!data.symmetry_flag) data.cell_segments = data.total_segments;
     data.junctions = c.t->junctions;
     for (std::size_t i = 0; i < c.sb->tables.segments.size(); i++) {
         const SegmentRow &seg = c.sb->tables.segments[i];

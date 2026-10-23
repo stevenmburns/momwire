@@ -202,13 +202,14 @@ void served_geometry(const PortalDeck &deck) {
     auto saw = [&](const char *m) { return std::find(seen.begin(), seen.end(), m) != seen.end(); };
     for (const Card &card : deck.geometry) {
         const std::string &m = card.mnemonic;
-        if (!one_of(m, {"GW", "GA", "GH", "GS", "GM", "GE"})) unmeasured("the " + m + " geometry card");
+        if (!one_of(m, {"GW", "GA", "GH", "GS", "GM", "GX", "GE"})) unmeasured("the " + m + " geometry card");
         if (m == "GS" && (!card.i(0).is_zero() || !card.i(1).is_zero()))
             unmeasured("GS scaling a range of tags");
         if ((m == "GS" || m == "GM") && saw(m.c_str())) unmeasured("a second " + m + " card");
         if (one_of(m, {"GW", "GA", "GH"}) && (saw("GS") || saw("GM")))
             unmeasured("a " + m + " card after a GS or GM card");
         if (m == "GM" && saw("GS")) unmeasured("a GM card after a GS card");
+        if (m == "GX" && saw("GS")) unmeasured("a GX card after a GS card");
         seen.push_back(m);
     }
 }

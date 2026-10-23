@@ -165,6 +165,56 @@ probes/<probe>.nec
     - Exploratory decks (not kept) showed a GA or GH with a zero wire
       radius stopping with a segment data error; both refuse here.
 
+  p54-p85, written for momwire#1651 (GX on the NEC-4.2 slot, and more GA
+  and GH).  Captured 2026-10-23 on the licensed NEC-4.2 reference build
+  (the unmodified nec42 executable on the Haswell box, sha256 02c6fc87...),
+  black box, the same ritual: one deck per fresh directory, the engine
+  invoked with the deck and printout names, nothing else read.  Decks LF.
+  p46-p53 were re-run on the same build and print the same geometry bytes
+  (only timing and floor-level pattern digits move).
+    GX, a 5-segment wire 1 m off the plane, unless named otherwise:
+    p54 GX 10 100 (X)             p55 the same, fed on the mirrored tag 11
+    p56 GX 10 110 (X and Y), fed on tag 31
+    p57 GX 10 001 (Z), a horizontal wire 1 m up
+    p58 GX 100 111 (all three)    p59 GX 5 010 (Y)
+    p60 GX then a GW              p61 GX then a whole-structure GM move
+    p62 GX then a GS              p63 two GX cards (X, then Y)
+    p64 GX with an RP             p65 GX over GN 1 (GE 1)
+    p66 GX with an LD 0 on the cell   p67 GX of two joined wires
+    p68 GX 10 000 (no plane)      p69 a GM, then the GX
+    p70 GX then a copying GM      p71 GX then a GM rotating 90 about Z
+    p72 GX then a GA              p73 GX with a tag increment of 0
+    p74 a GH, then the GX         p75 GX of a wire touching the plane
+    p76 GX then a GM moving tag 2 only  p77 GX then GS 2
+    GA and GH:
+    p78 the issue's arc: radius 2, 0 to 180 degrees, 9 segments, GM +10 m
+    p79-p85 GH: 2.5 turns; -1.5 turns; a negative length; a taper (helix
+    radius 0.2 to 0.1, wire radius 0.003 to 0.001); the issue's deck in
+    NEC-2's layout (S 0.5, HL 1.5, radii 0.2: NEC-4.2 builds half a turn
+    rising 1.5 m, 12 segments sweeping 0 to 180 degrees); a quarter turn;
+    negative turns with a negative length and a taper
+  What the printouts show (black box, layout and geometry only):
+    - A GX prints one line in the wire table where it stands:
+      "STRUCTURE REFLECTED ALONG THE AXES X Y Z.  TAGS INCREMENTED BY" and
+      the increment as written, each unselected axis a blank.
+    - Copies are numbered as momwire-nec2c numbers them: the structure so
+      far, then its mirror in Y (tags + I1), then in X (+ 2 I1), and so on
+      in nec2c's order Z, Y, X, each copy of the whole structure so far;
+      every segment centre and tag of p54-p77 is the reader's.  A wire card
+      after a GX starts past the copies (p60: FIRST 11).
+    - While the symmetry is live, the segment-count line carries the cell
+      (the segments before the last GX) and SYMMETRY FLAG 1, or 2 when Z is
+      among the planes, and a line "STRUCTURE HAS n PLANES OF SYMMETRY"
+      follows, with one blank line more before the junction table.  A GW or
+      GA after it (p60, p72), a copying GM (p70) or a GM moving part of the
+      structure (p76) ends it: the cell is the whole structure, the flag 0,
+      no planes line.  A whole-structure GM (p61, p71, even rotating), a
+      GS (p62, p77) and a second GX (p63, which counts its own planes)
+      keep it, which is nec2c's rule and the reader's.  GX 000 prints its
+      line and declares nothing (p68).
+    - The GH probes confirm deck/_nec4.py's helix_vertices on every segment;
+      p83 is the issue's observation, reproduced.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
@@ -179,6 +229,17 @@ refused/r2_ex4_current_element.nec, .out
   reals, of dipole moment 0, and every current zero.  NEC-4.2's EX 4 is a
   current element at a point, not NEC-5's EX 4 on a segment, so this engine
   refuses it and names EX 6 (tests/test_eznec_nec42_printout_1295.py).
+
+refused/r3_gx_wire_in_plane.nec, .out
+  momwire#1651, the p54-p85 sitting: a wire lying in the X = 0 plane under
+  GX 10 100.  The licensed engine stops ("SEGMENT 1 LIES IN PLANE OF
+  SYMMETRY"); the reader refuses it by name.
+
+refused/r4_ga_full_circle.nec, .out
+  The same sitting: GA from 0 to 360 degrees.  The licensed engine stops
+  ("ARC ANGLE EXCEEDS 360. DEGREES"), as it does for 360 to 0 and -90 to
+  270, and runs 0 to 359.999999; nec2c reads 360 itself.  The nec4 dialect
+  refuses 360 or more, the nec2 one 360.00001 or more.
 
   The issue's own deck, a wire standing ON a GN 3 ground with no radials,
   is not among the probes: on it the licensed engine's GN 2 and GN 3 give

@@ -47,6 +47,7 @@ from ._nec4_printout import (
     Nec4Run,
     MoveRow,
     Preamble,
+    ReflectRow,
     ScaleRow,
     SegmentRow,
     StructureRow,
@@ -88,7 +89,7 @@ _EPS0_PRINTED = 8.854e-12
 _SERVED_CARDS = frozenset(
     {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ", "EN", "EK"}
 )
-_SERVED_GEOMETRY = frozenset({"GW", "GA", "GH", "GS", "GM", "GE"})
+_SERVED_GEOMETRY = frozenset({"GW", "GA", "GH", "GS", "GM", "GX", "GE"})
 # The cards that add wires to the structure (p38-p53): GW, and NEC-4.2's arc
 # and helix, each of which prints its own entry in the wire table.
 _WIRE_CARDS = frozenset({"GW", "GA", "GH"})
@@ -312,6 +313,10 @@ def _served_geometry(deck) -> None:
     second of either, and ``GS``'s tag-range form (xnec2c's) have no
     printout, and refuse by name.  ``GA`` and ``GH`` stand where a ``GW``
     may (p46-p53: among ``GW`` cards, before a ``GM`` or a ``GS``).
+
+    ``GX`` (momwire#1651, p54-p85) stands among the wire cards, before or
+    after a ``GM``, and before a ``GS``; a second one is measured too.  A
+    ``GX`` after a ``GS`` has no printout.  ``GR`` has none at all.
     """
     seen: list[str] = []
     for card in deck.geometry:
@@ -326,6 +331,8 @@ def _served_geometry(deck) -> None:
             raise Nec4Refusal(_unmeasured(f"a {m} card after a GS or GM card"))
         if m == "GM" and "GS" in seen:
             raise Nec4Refusal(_unmeasured("a GM card after a GS card"))
+        if m == "GX" and "GS" in seen:
+            raise Nec4Refusal(_unmeasured("a GX card after a GS card"))
         seen.append(m)
 
 
@@ -485,6 +492,7 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
         raise Nec4Refusal(str(exc)) from exc
 
     ends, order = _segment_end_nodes(solver.wires)
+    cell, flag, planes = _symmetry(deck)
     return Nec4Printout(
         wires=_wire_rows(deck),
         ge_flag=_ge_flag(deck),
@@ -498,6 +506,9 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
         ),
         runs=tuple(runs),
         run_seconds=time.perf_counter() - started,
+        cell_segments=cell if flag else solver.n_segments,
+        symmetry_flag=flag,
+        symmetry_planes=planes,
     )
 
 
@@ -676,19 +687,58 @@ def _connections(solver, deck) -> list[tuple[int, int]]:
 # --------------------------------------------------------------------------
 
 
+def _symmetry(deck) -> tuple[int, int, int]:
+    """``(cell segments, SYMMETRY FLAG, planes)`` for the printout's segment
+    count line (momwire#1651, p54-p85), ``(0, 0, 0)`` with no symmetry.
+
+    The reader decides whether a ``GX`` symmetry survives the cards after it
+    (``Nec2Structure.symmetry``, nec2c's rule, which the probes bear out: a
+    ``GW``, ``GA`` or replicating or partial ``GM`` after it kills it, a
+    whole-structure ``GM``, a ``GS`` or another ``GX`` does not).  A live one
+    was declared by the deck's last ``GX``, whose planes are counted; the
+    flag is 2 when Z is among them and 1 otherwise."""
+    from ..deck._nec2_geometry import _planes
+
+    symmetry = deck.structure.symmetry
+    if symmetry is None:
+        return 0, 0, 0
+    last = [card for card in deck.geometry if card.mnemonic == "GX"][-1]
+    flags = {plane: bool(flag) for _axis, flag, plane in _planes(last)}
+    return (
+        symmetry.cell_segments,
+        2 if flags["Z=0"] else 1,
+        sum(flags.values()),
+    )
+
+
 def _wire_rows(deck) -> tuple[StructureRow, ...]:
     """The wire table in card order: each ``GW``, ``GA`` or ``GH`` card's
-    entry as written, and the lines a ``GS`` or ``GM`` card prints where it
-    stands (p38, p39, p46-p53).  The rows stay as written, before any card
-    moves or scales them, and a ``GM``'s copies print no rows of their own;
-    :func:`_served_geometry` keeps the order to the one the printouts
-    show."""
+    entry as written, and the lines a ``GS``, ``GM`` or ``GX`` card prints
+    where it stands (p38, p39, p46-p53, p54-p85).  The rows stay as written,
+    before any card moves or scales them, and neither a ``GM``'s copies nor a
+    ``GX``'s images print rows of their own; :func:`_served_geometry` keeps
+    the order to the one the printouts show.
+
+    The segment columns count the structure as built so far: a ``GX``
+    doubles it once per plane, so a ``GW`` after one starts past the images
+    (p54 GX then GW: FIRST 11), and a ``GM`` prints the count it moves.  A
+    ``GM``'s copies are not counted, because no row the printout serves
+    follows them (:func:`_served_geometry` refuses a wire card after a
+    ``GM``, and a second ``GM``)."""
+    from ..deck._nec2_geometry import _planes
     from ..deck._nec4 import helix_vertices
 
     rows: list[StructureRow] = []
     first = 1
     number = 0
     for card in deck.geometry:
+        if card.mnemonic == "GX":
+            flags = {plane: bool(flag) for _axis, flag, plane in _planes(card)}
+            rows.append(
+                ReflectRow((flags["X=0"], flags["Y=0"], flags["Z=0"]), card.i(0))
+            )
+            first = (first - 1) * 2 ** sum(flags.values()) + 1
+            continue
         if card.mnemonic == "GS":
             rows.append(ScaleRow(card.f(2)))
             continue

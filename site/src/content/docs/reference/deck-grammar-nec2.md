@@ -42,8 +42,7 @@ matrix ([`NT`](#nt--two-port-network)) between two segments. That is NEC-2's
 network vocabulary, in full, minus nothing.
 
 What it does not describe is anything that is not a **wire**. Surface patches
-(`SP`, `SM`, `SC`), arcs (`GA`), helices (`GH`) and tapered-wire continuations
-(`GC`) are refused by name; so is the numerical Green's function (`GF`), and
+(`SP`, `SM`, `SC`) and tapered-wire continuations (`GC`) are refused by name; so is the numerical Green's function (`GF`), and
 so are the 4nec2 authoring extensions (`SY`) that never reach an engine
 anyway. See [Refusals](#refusals) for each message.
 
@@ -52,7 +51,9 @@ reference corpus the card histogram is `GW` 104, `EX` 55, `XQ` 52, `FR` 49,
 `NX` 45, `GE` 45, `CE` 45, `CM` 21, `GN` 16, `RP` 7, `LD` 7, `GD` 5, `PT` 3,
 `EK` 3, `MP` 2, two `TL`, two `NT`, and one each of `NE`, `NH`, `GS`, `GM`.
 Zero patches, zero arcs, zero helices. The dialect covers what real decks
-contain.
+contain, and since momwire#1651 the arc ([`GA`](#ga--wire-arc)) and the helix
+([`GH`](#gh--helix)) too, which 4nec2's decks use: both are wires, gated against
+nec2c.
 
 The network cards were themselves once outside it, refused by name as out of
 an "antenna-only" grammar. That reading did not survive contact with the
@@ -364,6 +365,84 @@ A non-positive radius is NEC's announcement of a tapered wire continued by a
 ```text
 segment count must be >= 1, got <n>
 GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect
+```
+
+## GA — wire arc
+
+An arc of a circle in the XZ plane, centred on the origin, divided into equal
+steps of angle; each segment is the chord between two steps.
+
+| field | meaning |
+|---|---|
+| `I1` | tag |
+| `I2` | `NS`, segment count. Must be ≥ 1 |
+| `F1` | arc radius, metres. Must be > 0 |
+| `F2` | angle of the first end, degrees, from +X toward +Z |
+| `F3` | angle of the second end, degrees. Must differ from `F2` by less than 360.00001 |
+| `F4` | conductor radius, metres. Must be > 0 |
+
+Fields past `F4` are ignored, as nec2c ignores them. Segment `k` (from 1) runs
+from the angle `F2 + (k - 1) * step` to `F2 + k * step`, with `step = (F3 -
+F2) / NS`, so the angle may fall as well as rise. The segments carry the
+card's tag and are addressed `(tag, 1..NS)` along the arc, as a `GW`'s are; a
+closed loop is an arc whose ends meet, and connects there by the ordinary
+[connection](#connections) rule.
+
+nec2c reads a sweep of exactly 360 degrees and stops on one of 360.00001 or
+more (`ARC ANGLE EXCEEDS 360 DEGREES`), and so does this dialect. The `nec4`
+dialect reads the same card with NEC-4.2's limit, which stops on 360 itself.
+
+```text
+GA segment count must be >= 1, got <n>
+GA needs a positive arc radius (F1), got <r>
+GA from <a> to <b> degrees has no length; the arc's two angles (F2, F3) must differ
+GA from <a> to <b> degrees sweeps <d> degrees, which NEC-2 stops on (ARC ANGLE EXCEEDS 360 DEGREES); a closed loop is an arc of less than 360 degrees closed by its own end segments
+GA needs a positive wire radius (F4), got <r>; this engine's nec2 dialect has no tapered arc
+```
+
+## GH — helix
+
+NEC-2's helix: a wire wound about the Z axis, rising from Z = 0, in `NS`
+straight segments.
+
+| field | meaning |
+|---|---|
+| `I1` | tag |
+| `I2` | `NS`, segment count. Must be ≥ 1 |
+| `F1` | `S`, the spacing between turns, metres. Must be nonzero |
+| `F2` | `HL`, the total length along Z, metres. Must be nonzero; negative winds the helix left-handed |
+| `F3 F4` | `A1`, `B1`: the X and Y radii at Z = 0 |
+| `F5 F6` | `A2`, `B2`: the X and Y radii at Z = `|HL|` |
+| `F7` | conductor radius, metres. Must be > 0 |
+
+The four helix radii must be ≥ 0, with `A1` or `A2` positive. This is nec2c's
+`helix`, transcribed. The segment ends stand at the heights `z = 0, |HL|/NS,
+2|HL|/NS, ...` (a running sum, nec2c's), at
+
+- `X = A cos(2πz/S)`, `Y = B sin(2πz/S)` with `A = A1`, `B = B1` when `A2 =
+  A1` — a constant radius, and a zero `B1` reads as `A1` (a circular helix);
+- otherwise both radii running linearly in `z`, `A` from `A1` to `A2` and `B`
+  from `B1` to `B2`, a zero `B2` reading as `A2` (a zero `B1` stays zero:
+  nec2c defaults only `B2` here);
+- with X and Y swapped when `HL` is negative.
+
+The segments carry the card's tag and are addressed `(tag, 1..NS)` from Z = 0
+up, as a `GW`'s are.
+
+**The `nec4` dialect reads `GH` differently.** NEC-4.2's card is a log-spiral
+or helix whose first real is the number of TURNS, then the length, two helix
+radii and two wire radii, measured on the licensed engine as a black box
+(momwire#1592, #1651). The same card therefore builds a different structure
+in each dialect: `GH 1 12 0.5 1.5 0.2 0.2 0.2 0.2 0.002` is three turns here
+and half a turn there. A NEC-4.2-layout card read here leaves `F7` empty, and
+so refuses for its wire radius rather than building silently.
+
+```text
+GH segment count must be >= 1, got <n>
+GH needs a nonzero spacing between turns (F1); this engine's nec2 dialect reads NEC-2's GH (turn spacing, total length, four helix radii, wire radius)
+GH needs a nonzero total length (F2)
+GH needs non-negative helix radii (F3-F6) and a positive one at one end at least, got <a1>, <b1>, <a2> and <b2>
+GH needs a positive wire radius (F7), got <r>; this engine's nec2 dialect reads NEC-2's GH (turn spacing, total length, four helix radii, wire radius)
 ```
 
 ## GM — move and replicate
@@ -1479,8 +1558,6 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 
 | card | message |
 |---|---|
-| `GA` | `GA (wire arc) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
-| `GH` | `GH (helix) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
 | `GC` | `GC (tapered wire continuation) is not part of this engine's nec2 dialect` |
 | `GF` | `GF (numerical Green's function) is not part of this engine's nec2 dialect` |
 | `SY` | `SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect` |
@@ -1493,11 +1570,10 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `WG` | `WG (NGF write request) is not supported by this engine` |
 | `ZO` | `ZO (impedance normalisation) is not supported by this engine` |
 
-`GA`/`GH` are refused rather than translated because the corpus never uses
-them and an untested geometry path is worse than an honest no.
-([`GX`](#gx--structure-reflection) and [`GR`](#gr--cylindrical-structure-rotation) were
-two of them and are now built.) The three "yet" messages mark the cards a
-patch model would bring, not a dialect decision.
+[`GX`](#gx--structure-reflection), [`GR`](#gr--cylindrical-structure-rotation),
+[`GA`](#ga--wire-arc) and [`GH`](#gh--helix) were on this table and are now
+built. The three "yet" messages mark the cards a patch model would bring, not
+a dialect decision.
 
 `TL` and `NT` were on this table and have left it: the dialect reads them, and
 what they refuse is [by value](#fields-refused-by-value) — a nonpositive
@@ -1567,7 +1643,7 @@ anyone moving a deck between them:
 | `TL` / `NT` non-contiguity | the cards are collected wherever they appear; NEC's destroy rule is not reproduced | [refused](#network-contiguity) rather than answered as a different antenna |
 | all-zero `NT` | skipped as unmodellable, with a note in an "ignored" list | [read as written](#an-all-zero-nt-is-not-a-no-op) — the oracle open-circuits both segments, so skipping it is a wrong answer |
 | `TL` / `NT` nonpositive segment | resolved | [refused](#segment-numbers-must-be-positive), as NEC halts on it |
-| `GA` / `GH` | built as geometry | refused by name |
+| `GA` / `GH` | built as geometry | built as geometry, gated against nec2c (momwire#1651) |
 | `LD` under a live `GX`/`GR` symmetry | the geometry expands; the symmetric-cell load rule is not applied, so the load stays where it was written | [the cell rule](#the-cell-rule): a cell load is expanded onto every copy, and a copy-addressed load is refused rather than silently dropped |
 | `IS` under a live `GX`/`GR` symmetry | applied where written | refused (momwire#415) — no NEC-2 oracle for the cell rule on this card |
 | `GE` ground flag | `GE I1 ≠ 0` alone marks the deck as grounded | records the flag; ground physics comes from `GN` only |

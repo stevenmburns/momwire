@@ -162,6 +162,140 @@ def _gw(card: Card, wires: list[FlatWire]) -> None:
     )
 
 
+# The widest sweep each dialect's GA reads, in degrees.  nec2c stops on an arc
+# whose two angles are 360.00001 or more apart (``arc``: "ARC ANGLE EXCEEDS
+# 360 DEGREES"); the licensed NEC-4.2, as a black box, stops on 360 itself
+# (0 to 360, 360 to 0 and -90 to 270 all print "ARC ANGLE EXCEEDS 360.
+# DEGREES", 0 to 359.999999 runs; momwire#1651).
+_GA_SWEEP_LIMIT = {"nec2": 360.00001, "nec4": 360.0}
+_GA_ENGINE = {"nec2": "NEC-2", "nec4": "NEC-4.2"}
+
+
+def arc_vertices(card: Card, dialect: str = "nec2") -> list[tuple[float, float, float]]:
+    """A ``GA`` card's ``NS + 1`` vertices: the arc of radius F1 in the XZ
+    plane about the origin, from angle F2 to F3 degrees measured from +X
+    toward +Z, in ``NS`` equal steps of angle; each segment is the chord
+    between two vertices (spec ``#ga--wire-arc``).
+
+    NEC-2's arc (nec2c's ``arc``), and NEC-4.2's: measured on the licensed
+    NEC-4.2 as a black box (probes p46-p48, momwire#1592), the printed
+    segment centres and lengths are these chords' to every digit.  The two
+    dialects differ only in the widest sweep they read
+    (:data:`_GA_SWEEP_LIMIT`).  The angle of vertex ``k`` is ``F2 + k *
+    step`` rather than nec2c's running sum, which moves a coordinate by an
+    ulp or so and no printed digit."""
+    n_seg = card.i(1)
+    radius, first, last = card.f(2), card.f(3), card.f(4)
+    if n_seg < 1:
+        raise DeckError(f"GA segment count must be >= 1, got {n_seg}")
+    if radius <= 0.0:
+        raise DeckError(f"GA needs a positive arc radius (F1), got {radius:g}")
+    if first == last:
+        raise DeckError(
+            f"GA from {first:g} to {last:g} degrees has no length; the arc's "
+            f"two angles (F2, F3) must differ"
+        )
+    if abs(last - first) >= _GA_SWEEP_LIMIT[dialect]:
+        raise DeckError(
+            f"GA from {first:g} to {last:g} degrees sweeps "
+            f"{abs(last - first):g} degrees, which {_GA_ENGINE[dialect]} stops "
+            f"on (ARC ANGLE EXCEEDS 360 DEGREES); a closed loop is an arc of "
+            f"less than 360 degrees closed by its own end segments"
+        )
+    if card.f(5) <= 0.0:
+        # NEC-4.2 stops on it with a segment data error (black box).
+        raise DeckError(
+            f"GA needs a positive wire radius (F4), got {card.f(5):g}; this "
+            f"engine's {dialect} dialect has no tapered arc"
+        )
+    step = (last - first) * _DEG / n_seg
+    start = first * _DEG
+    return [
+        (radius * math.cos(start + k * step), 0.0, radius * math.sin(start + k * step))
+        for k in range(n_seg + 1)
+    ]
+
+
+def _ga(card: Card, wires: list[FlatWire]) -> None:
+    """``GA`` — one one-segment wire per chord of :func:`arc_vertices`, all
+    carrying the card's tag, so ``(tag, segment)`` counts along the arc as
+    along a ``GW`` (NEC numbers an arc's segments straight through, and
+    connects them by their shared ends, as it does every segment)."""
+    vertices = arc_vertices(card, "nec2")
+    for a, b in zip(vertices, vertices[1:], strict=False):
+        wires.append(FlatWire(card.i(0), 1, list(a), list(b), card.f(5)))
+
+
+def nec2_helix_vertices(card: Card) -> list[tuple[float, float, float]]:
+    """A ``GH`` card's ``NS + 1`` vertices, in NEC-2's reading of the card
+    (spec ``#gh--helix``): nec2c's ``helix``, transcribed.
+
+    The reals are ``S, HL, A1, B1, A2, B2, RAD``: the spacing between turns,
+    the total length along Z, the X and Y radii at the start and at the end,
+    and the wire radius.  Vertex ``k`` stands at the height ``z_k``, the
+    running sum of ``|HL| / NS`` from 0 (nec2c's own sum, kept so its
+    rounding is too), at ``X = A cos(2 pi z / S)``, ``Y = B sin(2 pi z / S)``:
+
+    * ``A2 == A1``: a constant radius, ``A = A1`` and ``B = B1``, a zero
+      ``B1`` reading as ``A1`` (a circular helix);
+    * otherwise both radii run linearly in ``z`` from ``A1``/``B1`` to
+      ``A2``/``B2``, a zero ``B2`` reading as ``A2`` (and a zero ``B1`` as
+      itself: nec2c defaults only the one);
+    * a NEGATIVE ``HL`` swaps X and Y, a left-handed helix still rising from
+      Z = 0.
+
+    This is NOT NEC-4.2's ``GH`` (:func:`momwire.deck._nec4.helix_vertices`),
+    which reads the same first field as a number of turns.
+    """
+    n_seg = card.i(1)
+    s, hl, a1, b1, a2, b2 = (card.f(k) for k in range(2, 8))
+    if n_seg < 1:
+        raise DeckError(f"GH segment count must be >= 1, got {n_seg}")
+    if s == 0.0:
+        raise DeckError(
+            "GH needs a nonzero spacing between turns (F1); this engine's nec2 "
+            "dialect reads NEC-2's GH (turn spacing, total length, four helix "
+            "radii, wire radius)"
+        )
+    if hl == 0.0:
+        raise DeckError("GH needs a nonzero total length (F2)")
+    if min(a1, b1, a2, b2) < 0.0 or (a1 == 0.0 and a2 == 0.0):
+        raise DeckError(
+            f"GH needs non-negative helix radii (F3-F6) and a positive one at "
+            f"one end at least, got {a1:g}, {b1:g}, {a2:g} and {b2:g}"
+        )
+    if card.f(8) <= 0.0:
+        raise DeckError(
+            f"GH needs a positive wire radius (F7), got {card.f(8):g}; this "
+            f"engine's nec2 dialect reads NEC-2's GH (turn spacing, total "
+            f"length, four helix radii, wire radius)"
+        )
+    zinc = abs(hl) / n_seg
+    z = [0.0]
+    for _ in range(n_seg):
+        z.append(z[-1] + zinc)
+    out = []
+    for zk in z:
+        angle = 2.0 * math.pi * zk / s
+        if a2 == a1:
+            x = a1 * math.cos(angle)
+            y = (a1 if b1 == 0.0 else b1) * math.sin(angle)
+        else:
+            b_end = a2 if b2 == 0.0 else b2
+            x = (a1 + (a2 - a1) * zk / abs(hl)) * math.cos(angle)
+            y = (b1 + (b_end - b1) * zk / abs(hl)) * math.sin(angle)
+        out.append((x, y, zk) if hl > 0.0 else (y, x, zk))
+    return out
+
+
+def _gh(card: Card, wires: list[FlatWire]) -> None:
+    """``GH`` — one one-segment wire per chord of
+    :func:`nec2_helix_vertices`, all at the card's wire radius and tag."""
+    vertices = nec2_helix_vertices(card)
+    for a, b in zip(vertices, vertices[1:], strict=False):
+        wires.append(FlatWire(card.i(0), 1, list(a), list(b), card.f(8)))
+
+
 def _first_wire_with_tag(wires: list[FlatWire], tag: int) -> int:
     if tag <= 0:
         return 0
@@ -337,7 +471,15 @@ def _gr(card: Card, wires: list[FlatWire]) -> None:
         wires.extend(block)
 
 
-_GEOMETRY_BUILDERS = {"GW": _gw, "GM": _gm, "GS": _gs, "GX": _gx, "GR": _gr}
+_GEOMETRY_BUILDERS = {
+    "GW": _gw,
+    "GA": _ga,
+    "GH": _gh,
+    "GM": _gm,
+    "GS": _gs,
+    "GX": _gx,
+    "GR": _gr,
+}
 
 
 def _symmetry_after(
@@ -398,8 +540,9 @@ def _symmetry_after(
     if mnemonic == "GS":
         return symmetry
     if mnemonic in ("GW", "GA", "GH"):
-        # GA/GH: the nec4 dialect's arc and helix (`deck._nec4`), which add
-        # wires exactly as GW does.
+        # GA/GH add wires exactly as GW does, in both dialects: nec2c's
+        # `arc` and `helix` set NP = N and IPSYM = 0 as `wire` does, and
+        # NEC-4.2 prints SYMMETRY FLAG 0 after a GA under a GX (momwire#1651).
         return None
     # GM.  `move` preserves only when it neither replicates nor restricts:
     # `if (nrpt == 0 && ix == 1) return;`, where `ix` is the first segment of
@@ -799,8 +942,8 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
     ``cards`` is the geometry cards in deck order.  ``GE`` terminates the
     section and carries the ground-plane flag; a deck with no ``GE`` builds as
     though it wrote ``GE 0``.  ``builders`` maps each geometry mnemonic to
-    its builder, this dialect's by default; the nec4 dialect adds ``GA`` and
-    ``GH`` (`deck._nec4`).
+    its builder, this dialect's by default; the nec4 dialect reads ``GA``'s
+    sweep and ``GH`` its own way (`deck._nec4`).
     """
     if builders is None:
         builders = _GEOMETRY_BUILDERS

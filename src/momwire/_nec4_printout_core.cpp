@@ -200,6 +200,12 @@ Lines structure_rows(const WireTableRow &r) {
                 "          TOTAL LENGTH OF WIRE IN THE SPIRAL =" + e(r.wire_length, 13, 5)};
     }
     if (r.kind == WireTableRow::scale) return {"      STRUCTURE SCALED BY FACTOR" + f(r.factor, 10, 5)};
+    if (r.kind == WireTableRow::reflect) {
+        std::string axes = std::string(1, r.planes[0] ? 'X' : ' ') + " " + (r.planes[1] ? 'Y' : ' ') + " " +
+                           (r.planes[2] ? 'Z' : ' ');
+        return {"      STRUCTURE REFLECTED ALONG THE AXES " + axes + ".  TAGS INCREMENTED BY" +
+                d(r.tag_increment, 5)};
+    }
     if (r.kind == WireTableRow::move) {
         std::string numbers;
         for (double v : r.rotation_deg) numbers += f(v, 10, 5);
@@ -343,10 +349,12 @@ Lines structure(const Nec4Printout &data) {
         add(lines, {"   WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE INTERPOLATED TO IMAGE IN GROUND PLANE.", "",
                     ""});
     ll total = data.total_segments;
-    add(lines, {"   TOTAL SEGMENTS USED=" + d(total, 5) + "     NO. SEG. IN A SYMMETRIC CELL=" + d(total, 5) +
-                    "     SYMMETRY FLAG=" + d(0, 3),
-                "", "", "         - MULTIPLE WIRE JUNCTIONS -",
-                " JUNCTION    SEGMENTS  (- FOR END 1, + FOR END 2)"});
+    ll cell = data.symmetry_flag ? data.cell_segments : total;
+    lines.push_back("   TOTAL SEGMENTS USED=" + d(total, 5) + "     NO. SEG. IN A SYMMETRIC CELL=" + d(cell, 5) +
+                    "     SYMMETRY FLAG=" + d(data.symmetry_flag, 3));
+    if (data.symmetry_flag)
+        add(lines, {" STRUCTURE HAS " + std::to_string(data.symmetry_planes) + " PLANES OF SYMMETRY", ""});
+    add(lines, {"", "", "         - MULTIPLE WIRE JUNCTIONS -", " JUNCTION    SEGMENTS  (- FOR END 1, + FOR END 2)"});
     if (!data.junctions.empty()) {
         for (std::size_t i = 0; i < data.junctions.size(); i++)
             lines.push_back(junction_row(static_cast<ll>(i + 1), data.junctions[i]));

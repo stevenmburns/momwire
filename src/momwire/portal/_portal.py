@@ -3026,6 +3026,56 @@ def _solver_for(deck: PortalDeck) -> DeckSolver:
 # --------------------------------------------------------------------------
 
 
+def _arc_or_helix_rows(card: Card, wire_no: int, seg_total: int) -> list[str]:
+    """A ``GA`` or ``GH`` card's lines in the STRUCTURE SPECIFICATION, as
+    nec2c's ``datagn`` (cases 8 and 10) and ``helix`` print them
+    (momwire#1651, ``tests/fixtures/nec2_ga_gh_1651``).
+
+    ``GA``: one row, the arc radius and its two angles where a ``GW`` prints
+    its ends.  ``GH``: the spacing, length and wire radius with the segment
+    columns, the four helix radii as written (trailing blank included), and
+    one line of nec2c's own arithmetic -- the cone angle of a tapered helix
+    (printed in RADIANS, as nec2c does) or the pitch angle and the wire length
+    per turn of a constant-radius one.  The elliptical form's diameter is
+    nec2c's expression as written, ``sqrt((M*M + m*m)/2*M)``."""
+    n_seg, tag = card.i(1), card.i(0)
+    first, last = seg_total + 1, seg_total + n_seg
+    if card.mnemonic == "GA":
+        return [
+            f" {wire_no:5d} ARC RADIUS: {card.f(2):9.5f}  FROM: {card.f(3):8.3f}"
+            f" TO: {card.f(4):8.3f} DEGREES       {card.f(5):11.5f}"
+            f" {n_seg:5d} {first:5d} {last:5d} {tag:4d}"
+        ]
+    s, hl, a1, b1, a2, b2, rad = (card.f(k) for k in range(2, 9))
+    rows = [
+        f" {wire_no:5d} HELIX STRUCTURE - SPACING OF TURNS: {s:8.3f} AXIAL"
+        f" LENGTH: {hl:8.3f}  {rad:8.3f} {n_seg:5d} {first:5d} {last:5d} {tag:4d}",
+        f"       RADIUS X1:{a1:8.3f} Y1:{b1:8.3f} X2:{a2:8.3f} Y2:{b2:8.3f} ",
+    ]
+    if a2 != a1:
+        cone = math.atan(a2 / (abs(hl) + (abs(hl) * a1) / (a2 - a1)))
+        rows.append(f"       THE CONE ANGLE OF THE SPIRAL IS {cone:10.4f}")
+        return rows
+    if b1 == 0.0:
+        # `helix` defaults B1 to A1 inside its segment loop, before this.
+        b1 = a1
+    if a1 == b1:
+        hdia = 2.0 * a1
+        pitch = math.atan(s / (math.pi * hdia))
+        turn = hdia * math.pi / math.cos(pitch)
+        pitch = 180.0 * pitch / math.pi
+    else:
+        hmaj, hmin = (2.0 * a1, 2.0 * b1) if a1 >= b1 else (2.0 * b1, 2.0 * a1)
+        hdia = math.sqrt((hmaj * hmaj + hmin * hmin) / 2 * hmaj)
+        turn = 2.0 * math.pi * hdia
+        pitch = (180.0 / math.pi) * math.atan(s / (math.pi * hdia))
+    rows.append(
+        f"       THE PITCH ANGLE IS: {pitch:.4f}    THE LENGTH OF WIRE/TURN IS:"
+        f" {turn:.4f}"
+    )
+    return rows
+
+
 def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     """The STRUCTURE SPECIFICATION body: the geometry cards as the deck wrote
     them, with the transform annotations the oracle interleaves."""
@@ -3055,6 +3105,10 @@ def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
                 )
             )
             seg_total += n_seg
+        elif card.mnemonic in ("GA", "GH"):
+            wire_no += 1
+            rows += _arc_or_helix_rows(card, wire_no, seg_total)
+            seg_total += card.i(1)
         elif card.mnemonic == "GX":
             # nec2c geometry.c case 1: flags normalized to 0/1, printed X Y Z
             # with '*' for an unselected plane, then reflc doubles N per

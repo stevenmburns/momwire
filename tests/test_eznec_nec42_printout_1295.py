@@ -46,6 +46,7 @@ from momwire.eznec._nec4_printout import (
     MoveRow,
     Nec4Run,
     Preamble,
+    ReflectRow,
     ScaleRow,
     SegmentRow,
     SegmentValueRow,
@@ -166,7 +167,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 53 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 85 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -580,6 +581,16 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
         if line.startswith("      STRUCTURE SCALED BY FACTOR"):
             wires.append(ScaleRow(float(line.split()[-1])))
             continue
+        # A GX card's line (p54-p85, momwire#1651): the three axis columns.
+        if line.startswith("      STRUCTURE REFLECTED ALONG THE AXES "):
+            axes = line[len("      STRUCTURE REFLECTED ALONG THE AXES ") :][:5]
+            wires.append(
+                ReflectRow(
+                    (axes[0] == "X", axes[2] == "Y", axes[4] == "Z"),
+                    int(line.split()[-1]),
+                )
+            )
+            continue
         if line.startswith("      THE STRUCTURE HAS BEEN MOVED"):
             v = table[k + 1].split()
             wires.append(
@@ -641,8 +652,15 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
                 int(c[11]),
             )
         )
-    total = next(
-        int(ln.split("=")[1].split()[0]) for ln in lines if "TOTAL SEGMENTS USED=" in ln
+    count_line = next(ln for ln in lines if "TOTAL SEGMENTS USED=" in ln)
+    total, cell, flag = (int(part.split()[0]) for part in count_line.split("=")[1:])
+    planes = next(
+        (
+            int(ln.split()[2])
+            for ln in lines
+            if ln.startswith(" STRUCTURE HAS ") and "PLANES OF SYMMETRY" in ln
+        ),
+        0,
     )
     junction_at = next(i for i, ln in enumerate(lines) if ln.startswith(" JUNCTION"))
     junctions = tuple(
@@ -710,6 +728,9 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
         segments=tuple(segments),
         runs=tuple(runs),
         run_seconds=_number_after(run_time, "RUN TIME ="),
+        cell_segments=cell,
+        symmetry_flag=flag,
+        symmetry_planes=planes,
     )
 
 
@@ -744,7 +765,9 @@ def render_header_lines(deck: str, dialect: str) -> list[str]:
 # the geometry, no solve: GA and GH (momwire#1592)
 # ==========================================================================
 
-# The probes whose geometry carries NEC-4.2's arc or helix (p46-p53).
+# The probes whose geometry carries NEC-4.2's arc or helix (p46-p53, and
+# momwire#1651's: an arc or helix beside a GX, the issue's arc, and seven
+# more helices confirming the reading of GH).
 ARC_HELIX = tuple(
     c for c in PROBES if re.search(r"^G[AH] ", deck_text(c), flags=re.MULTILINE)
 )
@@ -757,7 +780,10 @@ def _wire_table(text: str) -> list[str]:
 
 
 def test_the_arc_and_helix_probes_are_the_ones_the_readme_lists():
-    assert ARC_HELIX == ("p46", "p47", "p48", "p49", "p50", "p51", "p52", "p53")
+    assert ARC_HELIX == (
+        *("p46", "p47", "p48", "p49", "p50", "p51", "p52", "p53"),
+        *("p72", "p74", "p78", "p79", "p80", "p81", "p82", "p83", "p84", "p85"),
+    )
 
 
 @pytest.mark.parametrize("capture", CASES)
@@ -1306,6 +1332,30 @@ def _edited(capture: str, old: str, new: str) -> str:
             _edited("0230", "GD 2,", "GD 1,"),
             "GD 1",
             id="gd-kind",
+        ),
+        # momwire#1651: GX is served where p54-p85 measured it, not after a
+        # GS; GR has no NEC-4.2 printout at all; and a wire lying in a plane
+        # of symmetry stops the licensed engine (refused/r3) and refuses in
+        # the reader, as a 360-degree arc does (refused/r4).
+        pytest.param(
+            _edited("p62", "GX 10 100\nGS 0 0 0.001", "GS 0 0 0.001\nGX 10 100"),
+            "a GX card after a GS card",
+            id="gx-after-gs",
+        ),
+        pytest.param(
+            _edited("p54", "GX 10 100", "GR 10 4"),
+            "the GR geometry card",
+            id="gr",
+        ),
+        pytest.param(
+            (FIXTURES / "refused" / "r3_gx_wire_in_plane.nec").read_text(),
+            "lies in or crosses the X=0 symmetry plane",
+            id="gx-wire-in-plane",
+        ),
+        pytest.param(
+            (FIXTURES / "refused" / "r4_ga_full_circle.nec").read_text(),
+            "sweeps 360 degrees, which NEC-4.2 stops on",
+            id="ga-full-circle",
         ),
     ],
 )
