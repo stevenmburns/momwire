@@ -929,7 +929,10 @@ def test_the_gd_and_gn0_composed_tables_cross_agree_like_the_captures_do():
     "regime", [("below", "below"), ("below", "above"), ("above", "below")]
 )
 def test_the_three_buried_regimes_refuse_by_name(regime):
-    """The regimes momwire#524 owns refuse, and say so in words.
+    """The three buried regimes refuse THROUGH THIS ENTRY POINT, and say so
+    in words: it returns a remainder, and momwire#1653 answers them in
+    `_near_buried` instead (a whole field across the interface; a
+    composition in the medium below it).
 
     The keying is the module's DISPATCH SHAPE and not a docstring promise:
     a buried-wire arc lands by filling in three entries of `_REGIMES`, and
@@ -953,21 +956,21 @@ def test_the_three_buried_regimes_refuse_by_name(regime):
         )
     message = str(excinfo.value)
     assert repr(regime) in message
-    assert "momwire#524" in message
+    assert "momwire#1653" in message
     assert "('above', 'above')" in message
 
 
 @pytest.mark.parametrize(
     "regime, must_name",
     [
-        (("below", "below"), ("momwire#553 U2", "_sommerfeld_below", "phase 3")),
+        (("below", "below"), ("momwire#553 U2", "_sommerfeld_below", "below_field_at")),
         (
             ("below", "above"),
-            ("momwire#553 U3", "_sommerfeld_transmitted", "double-count"),
+            ("momwire#553 U3", "transmitted_field_at", "double-count"),
         ),
         (
             ("above", "below"),
-            ("momwire#553 U3", "reciprocity transpose", "no direct or image"),
+            ("momwire#553 U3", "transmitted_field_at", "no direct or image"),
         ),
     ],
 )

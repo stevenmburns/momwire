@@ -18,10 +18,9 @@ a DIFFERENT missing thing (the first has since been retired):
 * a buried wire on a deck that ALSO stands a wire end in the plane — the
   combination momwire#553 U5 measured itself out of, with both phase-0
   anchors quoted as the gates phase 2 has to meet;
-* the one OUTPUT a buried deck cannot answer: its NEAR field (momwire#524
-  phase 3). Impedance, currents, charges and the radiation PATTERN serve —
-  that is the serve matrix, and this last refusal is all that is left of its
-  other half.
+* the one OUTPUT a buried deck could not answer, its NEAR field (momwire#524
+  phase 3), is served since momwire#1653: impedance, currents, charges, the
+  radiation PATTERN and the near field are the whole serve matrix.
 
 The pattern moved sides with momwire#570, which gave the shared far-zone
 readout the transmitted Fresnel factors a below-interface element radiates
@@ -212,7 +211,9 @@ def test_ground_contact_alone_still_serves():
 # ----------------------------------------------------------------------
 
 
-def test_a_buried_decks_near_field_refuses_naming_phase_three():
+def test_a_buried_decks_near_field_serves():
+    """momwire#1653 (#524 phase 3): the last output of the serve matrix.
+    The physics gates are tests/test_near_buried_1653.py."""
     text = deck(
         -0.15,
         "1,-1",
@@ -220,17 +221,24 @@ def test_a_buried_decks_near_field_refuses_naming_phase_three():
         requests="PQ 0\nNE 0,1,1,1,2.,0.,1.,0.,0.,0.\nXQ 0\n",
         mono_bottom="1.",
     )
-    r = why(text)
-    assert r is not None
-    assert "buried deck's near field is not served" in r
-    assert "phase 3" in r
-    # The sentence lists what DOES serve, so the reader gets a fork in the
-    # road rather than a dead end — and since momwire#570 the pattern is on
-    # that list.
-    assert (
-        "IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
-        "are all served" in r
+    assert why(text) is None
+
+
+@pytest.mark.integration
+def test_a_buried_decks_near_field_prints_its_tables():
+    text = deck(
+        -0.15,
+        "1,-1",
+        GN0,
+        requests=(
+            "PQ 0\nNE 0,2,1,2,2.,0.,-0.3,1.,0.,0.6\n"
+            "NH 0,2,1,2,2.,0.,-0.3,1.,0.,0.6\nXQ 0\n"
+        ),
+        mono_bottom="1.",
     )
+    out = render(text)
+    assert "NEC ERROR" not in out
+    assert "NEAR ELECTRIC FIELDS" in out and "NEAR MAGNETIC FIELDS" in out
 
 
 def test_a_buried_decks_far_field_serves():

@@ -409,6 +409,20 @@ every table heading are untouched.
   and in both polarisations, the difference is under 0.6 % of the field at
   each point, where holding the edge had made the vertically polarised field
   at the horizon 58 times too large at 1000 m.
+- **Near fields with buried wires, and in the soil** (*momwire#1653*): an
+  `NE` / `NH` grid on a deck with buried wires, or a grid point below a
+  Sommerfeld ground, is served on every knot engine. Each pair of source
+  and observation point is composed by which side of the ground each is on:
+  in air from air, the direct field, its image and the reflected
+  remainder, as above ground; in the soil from the soil, the same three
+  written in the soil; across the interface either way, the transmitted
+  field alone, read from the same contour integrals the buried fill solves
+  with. Tangential E, normal D and H are continuous across z = 0 to a few
+  parts in 10⁴; on decks whose impedance matches the licensed NEC-5's, the
+  tables match its near-field printout to a few parts in 10⁴ from 1 cm
+  above the surface to 50 cm into it, out to 300 m. Where the two engines'
+  currents differ (at a crossing node), the fields differ by that same
+  factor.
 
 ## What refuses, and why
 
@@ -417,7 +431,7 @@ capability statements rather than deck errors:
 
 - **Buried wires now serve — with measured edges.** Wires strictly below
   the interface over the Sommerfeld ground get **impedance, currents,
-  charges and the radiation pattern**: detached buried radials and screens,
+  charges, the radiation pattern and the near field**: detached buried radials and screens,
   bonded radial screens and ground rods (the wire that crosses the
   interface, written as two `GW` cards meeting at z = 0 or as one card
   straight through the plane), buried fed elements, and elevated feeds
@@ -461,7 +475,6 @@ capability statements rather than deck errors:
   counterpoise chapter](/act-5/counterpoise/) is the measurement behind
   that; an elevated feed over a buried counterpoise serves, and so does
   a screen bonded to the vertical at z = 0);
-  **`NE`/`NH` on decks with buried wires** (#524 phase 3);
   buried wires over the perfect ground or `GD`
   (no lower medium to be in); sources deeper or pairs farther than the
   tabulated domains (the sentence states the limit and its extension
@@ -498,12 +511,12 @@ capability statements rather than deck errors:
   publishing a sampling artifact. The sentence quotes the measured
   divergence and says to move the observation point; the same grid one
   step off the contact serves.
-- **A near-field point below a finite ground** (an `NE`/`NH` point with
-  z < 0 over `GN 0` / `GN 2` / `GD`, which a spherical grid reaches once θ
-  passes 90°) refuses naming the point: the field in the soil is the
-  transmitted field, and momwire's near-field readout composes the field
-  above the interface only. Over the perfect ground such a point serves, as
-  it does in the licensed engine.
+- **A near-field point below a `GD` ground** (an `NE`/`NH` point with
+  z < 0, which a spherical grid reaches once θ passes 90°) refuses naming
+  the point: a `GD` deck's currents are solved over a perfect image, and
+  there is no measured reading of the soil under it. Over the Sommerfeld
+  ground (`GN 0` / `GN 2`) the same point serves, and over the perfect
+  ground it serves as it does in the licensed engine.
 - **Cards outside the emitted dialect** — surface patches, geometry
   generators (arcs, helices, catenaries), incident-wave excitation, load
   types other than `LD 2` / `LD 3` / `LD 4` / `LD 5`, magnetic grounds —
