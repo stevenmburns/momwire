@@ -131,12 +131,13 @@ struct Kernel {
     std::vector<std::pair<std::pair<ll, ll>, double>> runs;
 };
 
-Tensors call(const Kernel &K, ll r0, ll r1, double a) {
+Tensors call(const Kernel &K, ll r0, ll r1, double a, const std::vector<Point3> &src_c,
+             const std::vector<Point3> &src_t) {
     const Geometry &g = K.fr->geometry;
     const ll n = g.n_segs;
     const ll q = static_cast<ll>(K.gx.size());
     CF oc = pts(g.seg_centers, r0, r1), ot = pts(g.seg_tangents, r0, r1);
-    CF sc = pts(g.seg_centers, 0, n), st = pts(g.seg_tangents, 0, n);
+    CF sc = pts(src_c, 0, n), st = pts(src_t, 0, n);
     CF h = f64(g.seg_h.data(), {n});
     CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
     if (K.ek) {
@@ -149,7 +150,8 @@ Tensors call(const Kernel &K, ll r0, ll r1, double a) {
 
 // `_field_tensor(geom, k, obs_rows=(i0, i1))` on the accelerated literal-cos
 // route: (Φ_const, Φ_sin, Φ_cos), each (i1 - i0, N) in C order.
-std::vector<std::vector<cd>> field_tensor(const Kernel &K, ll i0, ll i1) {
+std::vector<std::vector<cd>> field_tensor(const Kernel &K, ll i0, ll i1, const std::vector<Point3> &src_c,
+                                          const std::vector<Point3> &src_t) {
     const ll n = K.fr->geometry.n_segs;
     std::vector<std::vector<cd>> out(3, std::vector<cd>(static_cast<std::size_t>((i1 - i0) * n)));
     auto put = [&](const Tensors &t, ll r0, ll r1) {
@@ -161,7 +163,7 @@ std::vector<std::vector<cd>> field_tensor(const Kernel &K, ll i0, ll i1) {
         }
     };
     if (K.fr->uniform_radius) {
-        put(call(K, i0, i1, K.fr->radius_per_wire[0]), i0, i1);
+        put(call(K, i0, i1, K.fr->radius_per_wire[0], src_c, src_t), i0, i1);
         return out;
     }
     // `_radius_runs(geom, obs_rows)`, concatenated on the observer axis
@@ -169,7 +171,7 @@ std::vector<std::vector<cd>> field_tensor(const Kernel &K, ll i0, ll i1) {
         const ll s = run.first.first, e = run.first.second;
         if (!(s < i1 && e > i0)) continue;
         const ll r0 = std::max(s, i0), r1 = std::min(e, i1);
-        put(call(K, r0, r1, run.second), r0, r1);
+        put(call(K, r0, r1, run.second, src_c, src_t), r0, r1);
     }
     return out;
 }
@@ -367,7 +369,8 @@ cd ek_rho_cos1_gap(bool elide, double k, cd jk, cd mjk, double z1, double z2, do
 
 // `_field_tensor(geom, k, obs_rows=(i0, i1), cos_shape="cos-1")` with the
 // extended kernel: numpy's route, (Φ_const, Φ_sin, Φ_cos) in C order.
-std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1) {
+std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1, const std::vector<Point3> &src_c,
+                                               const std::vector<Point3> &src_t) {
     const Front &fr = *K.fr;
     const Geometry &g = fr.geometry;
     const ll n = g.n_segs;
@@ -387,8 +390,8 @@ std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1) {
         const double aa = a * a;
         for (ll j = 0; j < n; j++) {
             const std::size_t jz = static_cast<std::size_t>(j);
-            const Point3 &sc = g.seg_centers[jz];
-            const Point3 &st = g.seg_tangents[jz];
+            const Point3 &sc = src_c[jz];
+            const Point3 &st = src_t[jz];
             const double H = 0.5 * g.seg_h[jz];
             const double src_a = fr.uniform_radius ? fr.radius_per_wire[0] : K.src_a[jz];
             // _pair_geometry
@@ -460,6 +463,25 @@ std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1) {
     return out;
 }
 
+// One band's Φ triple (`_field_tensor` on the real sources), less the
+// image's over a perfect ground (`Phi_c -= Phi_i[0]`, ...).
+std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool pec,
+                                  const std::vector<Point3> &img_c, const std::vector<Point3> &img_t) {
+    const Geometry &g = K.fr->geometry;
+    std::vector<std::vector<cd>> phi = cos1 ? field_tensor_cos1(K, i0, i1, g.seg_centers, g.seg_tangents)
+                                            : field_tensor(K, i0, i1, g.seg_centers, g.seg_tangents);
+    if (!pec) return phi;
+    const std::vector<std::vector<cd>> img =
+        cos1 ? field_tensor_cos1(K, i0, i1, img_c, img_t) : field_tensor(K, i0, i1, img_c, img_t);
+    for (int c = 0; c < 3; c++)
+        for (std::size_t q = 0; q < phi[static_cast<std::size_t>(c)].size(); q++) {
+            cd &x = phi[static_cast<std::size_t>(c)][q];
+            const cd y = img[static_cast<std::size_t>(c)][q];
+            x = cd(x.real() - y.real(), x.imag() - y.imag());
+        }
+    return phi;
+}
+
 // The (segment, basis) entries of `_assemble_Z`'s M_A / M_B / M_C.
 struct Entries {
     std::vector<ll> n, j;
@@ -480,7 +502,10 @@ std::vector<std::pair<ll, ll>> reduce_tiles(ll n) {
 }  // namespace
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
-    if (args.ground.kind != nec4::Ground::none) decline("a ground (momwire#1607 B5)");
+    // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
+    // a finite ground is B5c's
+    const bool pec = args.ground.kind == nec4::Ground::pec;
+    if (args.ground.kind != nec4::Ground::none && !pec) decline("a finite ground (momwire#1607 B5c)");
     if (args.has_conductivity || args.has_insulation || args.has_distributed)
         decline("wire loading (momwire#1607 B5)");
     // The NEC-4.2 slot builds every solver with the extended kernel; the
@@ -534,6 +559,15 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             }
     }
 
+    // `_image_source_centers_tangents`: the sources mirrored in z = 0
+    // (`2 * ground_z - z`, `tangents * [1, 1, -1]`)
+    std::vector<Point3> img_c, img_t;
+    if (pec)
+        for (std::size_t i = 0; i < Nz; i++) {
+            const Point3 &c = g.seg_centers[i], &t = g.seg_tangents[i];
+            img_c.push_back({c[0], c[1], 2.0 * 0.0 - c[2]});
+            img_t.push_back({t[0] * 1.0, t[1] * 1.0, t[2] * -1.0});
+        }
     std::vector<cd> G(Nz * Nz, cd(0.0, 0.0));
     const bool dense = N < kDenseAssemblyThreshold;
     if (dense) {
@@ -542,7 +576,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         for (int c = 0; c < 3; c++)
             for (std::size_t e = 0; e < E.n.size(); e++)
                 M[static_cast<std::size_t>(c)][static_cast<std::size_t>(E.n[e] * N + E.j[e])] = E.v[c][e];
-        const std::vector<std::vector<cd>> Phi = cos1 ? field_tensor_cos1(K, 0, N) : field_tensor(K, 0, N);
+        const std::vector<std::vector<cd>> Phi = band(K, 0, N, cos1, pec, img_c, img_t);
         std::vector<cd> tmp(Nz * Nz);
         for (int c = 0; c < 3; c++) {
             const nec5::Op a{Phi[static_cast<std::size_t>(c)].data(), N, N, N, 1};
@@ -569,11 +603,12 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     }
 
     // `_schedule.mb_rows(swept_mem_mb, _fill_row_bytes(N))` in free space
-    const ll row_bytes = std::max<ll>(3 * 1, 3 + 2) * N * 16;
+    const ll blocks = 1 + (pec ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
+    const ll row_bytes = std::max<ll>(3 * blocks, 3 + 2) * N * 16;
     const ll chunk = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / row_bytes);
     for (ll i0 = 0; i0 < N; i0 += chunk) {
         const ll i1 = std::min(i0 + chunk, N);
-        const std::vector<std::vector<cd>> Phi = cos1 ? field_tensor_cos1(K, i0, i1) : field_tensor(K, i0, i1);
+        const std::vector<std::vector<cd>> Phi = band(K, i0, i1, cos1, pec, img_c, img_t);
         // `_reduce_phi_band` over this band: per tile, P_c = Mcᵀ @ Φc[a:b]ᵀ
         // (csr_matvecs into zeros), then (P0 + P1) + P2, written back transposed
         for (const auto &tile : reduce_tiles(i1 - i0)) {

@@ -15,7 +15,9 @@ tests hold the C++ dump (Z, the coefficients, Y) equal to it over:
   sweep, a one-segment structure (scipy's scalar route), and the folded
   cos-1 fill (numpy's route) below and above numpy's temporary elision and
   across a radius step;
-- the declines: a ground, wire loading.
+- a perfect ground (GN 1): a monopole, a dipole above it on the sparse
+  route, and the folded cos-1 fill with its image above the elision size;
+- the declines: a finite ground, wire loading.
 """
 
 from __future__ import annotations
@@ -160,11 +162,35 @@ CASES = [
         "fills",
     ),
     (
-        "ground_declines",
+        "monopole_on_pec",
         deck(
             "GW 1 10 0 0 0 0 0 .25 .001\n",
             "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n",
             ge="GE 1",
+        ),
+        "fills",
+    ),
+    (
+        "dipole_over_pec_sparse",
+        deck(
+            dipole(81, 0.5).replace("0 0 -0.5 0 0 0.5", "0 0 1 0 0 2"),
+            "GN 1\n" + FR + "EX 0 1 41 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "pec_cos_minus_one_elided",
+        deck(
+            dipole(131).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
+            "GN 1\n" + LF + "EX 0 1 66 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "finite_ground_declines",
+        deck(
+            "GW 1 11 0 0 .1 0 0 .6 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
         ),
         "declined",
     ),

@@ -25,7 +25,8 @@
 // carry measured time (FILL= ... SEC. and RUN TIME), gated by
 // `tests/test_nec4_run_core.py` through `scripts/core_split/nec4_run_compare.py`.
 //
-// DECLINED (`Declined`), never misprinted: a ground (B5), a TL / NT network,
+// DECLINED (`Declined`), never misprinted: a finite ground and GD's far-field
+// cliff (B5c), wire loading (B5b), a TL / NT network,
 // phased current sources, NE / NH (B4c), a GH helix row, a lossy wire, and
 // any run Python would answer with a refusal this copy does not word (a
 // singular drive block, a current source on a port that takes no current).
