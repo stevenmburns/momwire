@@ -13,6 +13,7 @@
 #include "_razor_front_core.h"
 #include "_razor_wire_loading_core.h"
 #include "_sinusoidal_core.h"
+#include "_sinusoidal_nec4_core.h"
 #include "_somm_grid_core.h"
 #include "_somm_proj_core.h"
 
@@ -45,6 +46,7 @@ static_assert(sizeof(Point3) == 3 * sizeof(double), "Point3 is three packed doub
 const ll kDenseAssemblyThreshold = 60;  // _DENSE_ASSEMBLY_THRESHOLD
 const ll kReduceTile = 32;              // _REDUCE_TILE
 const double kWellScaledKd = 1.5e-3;    // _WELL_SCALED_KD
+const double kPi = 3.141592653589793;     // math.pi
 const ll kSweptMemMb = 256;             // SinusoidalSolver(swept_mem_mb=256)
 const ll kNQpConst = 8;                 // SinusoidalSolver(n_qp_const=8)
 
@@ -129,6 +131,7 @@ void ek_gating(const Front &fr, const std::vector<double> &rad, std::vector<int8
 struct Kernel {
     const Front *fr = nullptr;
     bool ek = false;
+    bool nec4 = false;  // momwire#1644: the NEC-4 kernel, `src_a` per source
     std::vector<double> gx, gw, src_a;
     std::vector<int8_t> ind1, ind2;
     // radius runs: (start, stop, a)
@@ -144,6 +147,11 @@ Tensors call(const Kernel &K, ll r0, ll r1, double a, const std::vector<Point3> 
     CF sc = pts(src_c, 0, n), st = pts(src_t, 0, n);
     CF h = f64(g.seg_h.data(), {n});
     CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
+    if (K.nec4) {
+        (void)a;
+        CF sa = f64(K.src_a.data(), {n});
+        return sinusoidal_field_tensor_nec4(oc, ot, sc, st, h, sa, K.fr->k, K.fr->eta, gx, gw, 0);
+    }
     if (K.ek) {
         CF sa = f64(K.src_a.data(), {n});
         CI8 i1 = CI8::borrow(buffer(K.ind1.data(), 1, {n})), i2 = CI8::borrow(buffer(K.ind2.data(), 1, {n}));
@@ -166,7 +174,8 @@ std::vector<std::vector<cd>> field_tensor(const Kernel &K, ll i0, ll i1, const s
                       out[static_cast<std::size_t>(c)].begin() + (r0 - i0) * n);
         }
     };
-    if (K.fr->uniform_radius) {
+    if (K.fr->uniform_radius || K.nec4) {
+        // `_nec4_field_tensor`: one call over the band, the radius per source
         put(call(K, i0, i1, K.fr->radius_per_wire[0], src_c, src_t), i0, i1);
         return out;
     }
@@ -887,6 +896,67 @@ void apply_loading(const Front &fr, const razor::WireLoading &loading, const Ent
     (void)E;
 }
 
+// `SinusoidalSolver._nec4_cap_columns` (momwire#1644): every free end's cap
+// (`_sinusoidal_nec4.end_caps`, scalar float arithmetic), its field from the
+// shared kernel, less its image under a ground (`c2 * img` under Sommerfeld,
+// numpy's fused product), added into its basis column.
+void nec4_cap_columns(const Front &fr, bool pec, const Somm *somm, std::vector<cd> &G) {
+    const Geometry &g = fr.geometry;
+    const SegView &sv = fr.basis;
+    const ll N = g.n_segs;
+    const std::size_t Nz = static_cast<std::size_t>(N);
+    const double k = fr.k;
+    const std::vector<double> rad = seg_radius(fr);
+    CF oc = pts(g.seg_centers, 0, N), ot = pts(g.seg_tangents, 0, N);
+    for (std::size_t i = 0; i < Nz; i++) {
+        const bool free_m = g.nm_count[i] == 0 && !g.ground_minus[i] && !g.crossing_minus[i];
+        const bool free_p = g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i];
+        if (!free_m && !free_p) continue;
+        ll e = -1;
+        for (ll q = sv.starts[i]; q < sv.starts[i + 1]; q++)
+            if (sv.jbasis[static_cast<std::size_t>(q)] == static_cast<ll>(i)) {
+                e = q;
+                break;
+            }
+        if (e < 0) throw std::logic_error("a segment without its own basis entry");
+        const std::size_t ez = static_cast<std::size_t>(e);
+        const double A = sv.A[ez].real(), B = sv.B[ez].real(), C = sv.C[ez].real();
+        const double h = g.seg_h[i];
+        const double u = 0.5 * k * h;
+        const Point3 &c = g.seg_centers[i], &t = g.seg_tangents[i];
+        const bool frees[2] = {free_m, free_p};
+        const double sgns[2] = {-1.0, 1.0};
+        for (int side = 0; side < 2; side++) {
+            if (!frees[side]) continue;
+            const double sgn = sgns[side];
+            const double i_end = A + B * std::sin(sgn * u) + C * std::cos(u);
+            const double S = -sgn;
+            const double off = sgn * 0.5 * h;
+            const double pos[3] = {c[0] + off * t[0], c[1] + off * t[1], c[2] + off * t[2]};
+            const double nrm[3] = {sgn * t[0], sgn * t[1], sgn * t[2]};
+            const cd c0(0.0, S * i_end / (4.0 * kPi * k));
+            const nd::array_t<cd> col =
+                sinusoidal_cap_field(oc, ot, f64(pos, {3}), f64(nrm, {3}), rad[i], k, fr.eta, c0);
+            std::vector<cd> v(col.data(), col.data() + N);
+            if (pec || somm != nullptr) {
+                const double ipos[3] = {pos[0], pos[1], 2.0 * 0.0 - pos[2]};
+                const double inrm[3] = {nrm[0] * 1.0, nrm[1] * 1.0, nrm[2] * -1.0};
+                const nd::array_t<cd> img =
+                    sinusoidal_cap_field(oc, ot, f64(ipos, {3}), f64(inrm, {3}), rad[i], k, fr.eta, c0);
+                for (std::size_t m = 0; m < Nz; m++) {
+                    cd y = img.data()[m];
+                    if (somm != nullptr) y = nec5::replay::np_cmul(somm->c2, y);
+                    v[m] = cd(v[m].real() - y.real(), v[m].imag() - y.imag());
+                }
+            }
+            for (std::size_t m = 0; m < Nz; m++) {
+                cd &x = G[m * Nz + i];
+                x = cd(x.real() + v[m].real(), x.imag() + v[m].imag());
+            }
+        }
+    }
+}
+
 }  // namespace
 
 bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega, std::vector<cd> &z) {
@@ -910,7 +980,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // The NEC-4.2 slot builds every solver with the extended kernel; the
     // reduced-kernel route (`sinusoidal_field_tensor`) is wired below but no
     // deck reaches it, so it is declined rather than served ungated.
-    if (!args.extended_kernel) decline("the reduced-kernel fill (the NEC-4.2 slot never builds one)");
+    if (!args.extended_kernel && !fr.nec4) decline("the reduced-kernel fill (the NEC-4.2 slot never builds one)");
     const Geometry &g = fr.geometry;
     const SegView &sv = fr.basis;
     const ll N = g.n_segs;
@@ -924,7 +994,8 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         if (v < kd_min || std::isnan(v)) kd_min = v;
     }
     if (std::isnan(kd_min)) decline("a non-finite k*h");
-    const bool cos1 = kd_min < kWellScaledKd;  // cos_shape == "cos-1"
+    // momwire#1644: the NEC-4 kernel serves the literal shapes only
+    const bool cos1 = !fr.nec4 && kd_min < kWellScaledKd;  // cos_shape == "cos-1"
 
     // M_A, M_B, M_C's entries: n_idx = repeat(arange(N), diff(starts))
     Entries E;
@@ -942,9 +1013,11 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
 
     Kernel K;
     K.fr = &fr;
-    K.ek = args.extended_kernel;
+    K.nec4 = fr.nec4;
+    K.ek = args.extended_kernel && !K.nec4;
     if (!razor::leggauss(kNQpConst, K.gx, K.gw)) throw std::logic_error("leggauss(8) is tabled");
     const std::vector<double> rad = seg_radius(fr);
+    if (K.nec4) K.src_a = rad;
     if (K.ek) {
         K.src_a = rad;
         ek_gating(fr, rad, K.ind1, K.ind2);
@@ -987,7 +1060,8 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             if (c > 0)
                 for (std::size_t i = 0; i < Nz * Nz; i++) G[i] = nec5::replay::c_add(G[i], tmp[i]);
         }
-        if (finite) contact_correction(fr, args, K, np, G);
+        if (fr.nec4) nec4_cap_columns(fr, pec, sp, G);
+        if (finite && !fr.nec4) contact_correction(fr, args, K, np, G);
         apply_loading(fr, loading, E, G);
         return G;
     }
@@ -1033,7 +1107,8 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             }
         }
     }
-    if (finite) contact_correction(fr, args, K, np, G);
+    if (fr.nec4) nec4_cap_columns(fr, pec, sp, G);
+    if (finite && !fr.nec4) contact_correction(fr, args, K, np, G);
     apply_loading(fr, loading, E, G);
     return G;
 }

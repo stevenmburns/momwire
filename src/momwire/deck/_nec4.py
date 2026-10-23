@@ -429,6 +429,7 @@ class _Nec4Parser(_Nec2Parser):
             model,
             current_feeds=current if current else model.current_feeds,
             extended_kernel_default=True,
+            junction_rule="nec42",
         )
 
 

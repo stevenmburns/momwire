@@ -357,6 +357,19 @@ def version_line(dialect: str, name: str, modes: str = LAUNCHER_MODES) -> str:
     return f"{dialect} {name} [{modes}] {momwire_version() or '0.0.0'}"
 
 
+# momwire#1644: `momwire.deck._solver.JUNCTION_RULE_ENV`, read by the engine
+# behind every launcher. A server inherits it from the client that spawned it,
+# so it is identity: `junction_rule_identity()` goes into both clients' keys.
+JUNCTION_RULE_ENV = "MOMWIRE_JUNCTION_RULE"
+
+
+def junction_rule_identity() -> list[str]:
+    """``["junction_rule=<value>"]`` when ``MOMWIRE_JUNCTION_RULE`` is set,
+    else nothing -- so every key without the override is the key it was."""
+    value = os.environ.get(JUNCTION_RULE_ENV)
+    return [f"junction_rule={value}"] if value else []
+
+
 def digest(parts: list[str]) -> str:
     """A short hex identity for a server configuration.
 

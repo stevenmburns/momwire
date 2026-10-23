@@ -474,6 +474,15 @@ class DeckModel:
     # gives.
     extended_kernel_default: bool = False
 
+    # The point-matched sinusoidal basis's junction rule the dialect defaults
+    # to (momwire#1644): ``"nec42"`` for the ``nec4`` dialect, whose engine
+    # solves a junction's charge (NEC-4 theory manual, UCRL-MA-109338 Pt. II,
+    # Section 3.4), ``"nec2"`` (NEC-2's log rule) for every other.  A
+    # DEFAULT, not a fixed choice: `build_solver` reads it for the one family
+    # that takes the option, and `MOMWIRE_JUNCTION_RULE` overrides it on
+    # either dialect.  Last for the reason :attr:`networks` gives.
+    junction_rule: str = "nec2"
+
     @property
     def environment(self) -> Environment:
         """The deck's last environment, as one value.

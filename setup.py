@@ -358,6 +358,7 @@ _ACCEL_HEADERS = [
     # The point-matched kernels' Python-free core and the series helpers it
     # shares with the Galerkin far fill (momwire#1607 B1).
     "src/momwire/_sinusoidal_core.h",
+    "src/momwire/_sinusoidal_nec4_core.h",
     "src/momwire/_sinusoidal_series_inline.h",
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
     # TUs and `_accel_somm_proj_inline.h`.
@@ -462,6 +463,11 @@ _ACCEL_SOURCES = [
     # `_accel_sinusoidal.cpp` binds them beside the Galerkin far fill.
     "src/momwire/_sinusoidal_core.cpp",
     "src/momwire/_accel_sinusoidal.cpp",
+    # momwire#1644: the NEC-4 dialect's radius-step junction (its kernel, the
+    # end-cap field, the junction-charge solve) and their binding. Their own
+    # TUs so that no existing kernel's codegen can move with them.
+    "src/momwire/_sinusoidal_nec4_core.cpp",
+    "src/momwire/_accel_sinusoidal_nec4.cpp",
     "src/momwire/_accel_somm.cpp",
     # The Sommerfeld near-field remainder (`_field_point`), one spelled
     # kernel rather than numpy's CPU-dependent arctan2 and einsum; its

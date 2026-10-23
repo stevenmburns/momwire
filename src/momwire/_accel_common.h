@@ -35,6 +35,7 @@ namespace py = pybind11;
 // (or, for a forgotten call, not at all).
 void register_bspline(py::module_ &m);
 void register_sinusoidal(py::module_ &m);
+void register_sinusoidal_nec4(py::module_ &m);
 void register_somm(py::module_ &m);
 void register_mw568(py::module_ &m);
 void register_razor(py::module_ &m);

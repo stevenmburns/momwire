@@ -1370,6 +1370,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     Galerkin overlap term of `_apply_loading`, closed-form on the shapes.
     """
 
+    # momwire#1644: no dialect's junction rule applies here (the parent's
+    # `junction_rule` is the point-matched lane's NEC-4 option).
+    takes_junction_rule = False
+
     # momwire#1333: two coincident wires left in place because they are
     # joined to different wires. The Galerkin fill has no answer for them in
     # free space: on the split rise fan it read 61.89 - 0.88j ohm where
@@ -1443,7 +1447,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `feed_model=` kwarg is the axis the bespoke `sin-galerkin` panel
         # hint was standing in for.
         axes={
-            **SinusoidalSolver.capabilities.axes,
+            # momwire#1644: every parent axis but `junction_rule`, the
+            # point-matched lane's NEC-4.2 option this class does not take.
+            **{
+                axis: values
+                for axis, values in SinusoidalSolver.capabilities.axes.items()
+                if axis != "junction_rule"
+            },
             "testing": ("galerkin",),
             # Default first (see BSplineSolver's row): this class defaults
             # to feed_model="point", so the point gap leads.

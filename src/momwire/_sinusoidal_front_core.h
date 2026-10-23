@@ -79,6 +79,11 @@ struct Front {
     bool uniform_radius = true;
     Geometry geometry;
     SegView basis;
+    // momwire#1644: the NEC-4 dialect's junction is live on this structure
+    // (`SinusoidalSolver._nec4_live`): the basis above carries the junction
+    // solve's per-end factors and the end caps, and the fill takes the NEC-4
+    // kernel and the caps' fields.
+    bool nec4 = false;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy

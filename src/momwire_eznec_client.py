@@ -102,6 +102,7 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
     if dialect != "nec5":
         elements.append(f"dialect={dialect}")
     elements.append("default" if basis is None else f"basis={basis}")
+    elements += _mech.junction_rule_identity()
     return _mech.digest(elements)
 
 
