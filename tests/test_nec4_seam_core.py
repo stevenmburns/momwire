@@ -115,13 +115,47 @@ CASES: list[tuple[str, str, str]] = [
         SERVED,
     ),
     ("gm_then_gs", deck(GW + "GM 0 0 0 0 30 0 0 .1 0\nGS 0 0 .5\n"), SERVED),
+    # GX (momwire#1651): served among the wire cards and beside a GM, and
+    # the symmetry's cell and flag reach the printout; GR still refuses.
     (
         "gx_geometry",
         deck(
             "GW 1 5 0 .1 -.25 0 .1 .25 .001\nGX 10 010\n",
             body=FR + "EX 0 1 3 0 1\nXQ\n",
         ),
-        "the GX geometry card",
+        SERVED,
+    ),
+    (
+        "gx_three_planes_then_gm",
+        deck(
+            "GW 1 5 .1 .1 .05 .1 .3 .3 .001\nGX 100 111\nGM 0 0 0 0 0 0 0 1 0\n",
+            body=FR + "EX 0 101 3 0 1\nXQ\n",
+        ),
+        SERVED,
+    ),
+    (
+        "gx_then_gw",
+        deck(
+            "GW 1 5 .1 0 -.25 .1 0 .25 .001\nGX 10 100\nGW 3 5 0 .2 -.25 0 .2 .25 .001\n",
+            body=FR + "EX 0 3 3 0 1\nXQ\n",
+        ),
+        SERVED,
+    ),
+    (
+        "gx_after_gs",
+        deck(
+            "GW 1 5 .1 0 -.25 .1 0 .25 .001\nGS 0 0 .5\nGX 10 100\n",
+            body=FR + "EX 0 1 3 0 1\nXQ\n",
+        ),
+        "a GX card after a GS card",
+    ),
+    (
+        "gr_geometry",
+        deck(
+            "GW 1 5 .1 0 -.25 .1 0 .25 .001\nGR 10 4\n",
+            body=FR + "EX 0 1 3 0 1\nXQ\n",
+        ),
+        "the GR geometry card",
     ),
     ("gs_ranged", deck(GW + "GS 1 1 .5\n"), "GS scaling a range of tags"),
     (

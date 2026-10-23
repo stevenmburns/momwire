@@ -1,0 +1,8 @@
+CM n03_ga_falling
+CE
+GA 1 6 1.0 90 0 0.001
+GE 0
+FR 0 1 0 0 30.0 0
+EX 0 1 3 0 1.0 0
+XQ
+EN

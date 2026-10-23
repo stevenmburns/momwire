@@ -39,11 +39,11 @@ from .model import (
 __all__ = ["parse_nec2"]
 
 
-# The geometry section.  GA/GH are NEC geometry too, and are refused by name
-# below: the corpus never uses them and an untested geometry path is worse
-# than an honest no.  The nec4 dialect reads both, as NEC-4.2 does
-# (`deck._nec4`, momwire#1592).
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GR", "GE"})
+# The geometry section.  GA and GH are read with NEC-2's meaning, gated
+# against nec2c (momwire#1651, spec ``#ga--wire-arc`` and ``#gh--helix``); the
+# nec4 dialect reads GH as NEC-4.2 does, which is a different card
+# (`deck._nec4`, momwire#1592).  GC and GF stay refused by name below.
+_GEOMETRY_CARDS = frozenset({"GW", "GA", "GH", "GM", "GS", "GX", "GR", "GE"})
 
 # Cards that RUN the pending group.  RP/NE/NH are not merely report requests:
 # the engine executes on reading them and prints their table afterwards.
@@ -107,14 +107,6 @@ _LD_EXPAND_MAX = 8
 
 _REFUSED_BY_NAME = MappingProxyType(
     {
-        "GA": (
-            "GA (wire arc) is not part of this engine's nec2 dialect, whose "
-            "geometry is GW with GM / GS transforms"
-        ),
-        "GH": (
-            "GH (helix) is not part of this engine's nec2 dialect, whose "
-            "geometry is GW with GM / GS transforms"
-        ),
         "GC": (
             "GC (tapered wire continuation) is not part of this engine's nec2 dialect"
         ),

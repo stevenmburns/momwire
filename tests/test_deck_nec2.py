@@ -2333,9 +2333,12 @@ def test_the_refusal_table_is_the_pages_table():
     """§#cards-refused-by-name, as a set: nothing in this dialect is accepted
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
-        "GA", "GH", "GC", "GF", "SY",
+        "GC", "GF", "SY",
         "SP", "SM", "SC", "KH", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
+    # GA and GH left it in momwire#1651: the dialect reads NEC-2's arc and
+    # helix (§#ga--wire-arc, §#gh--helix, tests/test_nec2_ga_gh_1651.py).
+    assert not {"GA", "GH"} & set(_REFUSED_BY_NAME)
     # TL and NT left this set in momwire#456 phase C: the dialect reads them
     # now, and what they refuse is by VALUE (§#fields-refused-by-value) —
     # nonpositive segment addressing, a zero TL characteristic impedance, and

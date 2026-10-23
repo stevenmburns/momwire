@@ -204,7 +204,7 @@ struct Geometry {
     bool has_symmetry = false;  // Symmetry(cell_wires, cell_segments) or None
     long long cell_wires = 0, cell_segments = 0;
 };
-// `build_geometry(cards)` over a deck's geometry cards (GW GM GS GX GR GE, in
+// `build_geometry(cards)` over a deck's geometry cards (GW GA GH GM GS GX GR GE, in
 // order); throws as Python raises, or Declined.
 Geometry geometry_of(const std::vector<nec5::Card> &geometry_cards);
 

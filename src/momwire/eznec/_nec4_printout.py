@@ -76,6 +76,7 @@ __all__ = [
     "ArcRow",
     "HelixRow",
     "MoveRow",
+    "ReflectRow",
     "ScaleRow",
     "WireRow",
     "render_nec4_printout",
@@ -160,8 +161,18 @@ class MoveRow:
     segments: int
 
 
+@dataclass(frozen=True)
+class ReflectRow:
+    """A ``GX`` card's line in the wire table, in card order (momwire#1651,
+    probes p54-p76): which of the X, Y and Z planes it reflects in, as the
+    card's digits select them, and its tag increment as written."""
+
+    planes: tuple[bool, bool, bool]
+    tag_increment: int
+
+
 # One entry of the wire table, in card order.
-StructureRow = WireRow | ArcRow | HelixRow | ScaleRow | MoveRow
+StructureRow = WireRow | ArcRow | HelixRow | ScaleRow | MoveRow | ReflectRow
 
 
 @dataclass(frozen=True)
@@ -303,6 +314,13 @@ class Nec4Printout:
     # In printed order: each run, then the further tables asked of it.
     runs: tuple[Nec4Run | Nec4Report, ...]
     run_seconds: float
+    # The GX symmetry still in force when the geometry ends (momwire#1651):
+    # the segments in the symmetric cell, NEC-4.2's SYMMETRY FLAG (1 for
+    # planes X and Y alone, 2 when Z is among them, 0 for none) and the
+    # number of planes.  With no symmetry the cell is the whole structure.
+    cell_segments: int = 0
+    symmetry_flag: int = 0
+    symmetry_planes: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -397,7 +415,9 @@ def _segment_columns(row: WireRow | ArcRow | HelixRow) -> str:
 def _structure_rows(row: StructureRow) -> list[str]:
     """One entry of the wire table: a wire's row, or a ``GS``/``GM`` card's
     lines (probes p38, p39), 6X then the words, and for ``GM`` 4X, two I5,
-    six F10.5 and four I5.
+    six F10.5 and four I5.  A ``GX`` line (p54-p76) is 6X, the words, each
+    selected axis's letter or a blank, one blank between them, a full stop
+    hard against the third, and the tag increment as written, I5.
 
     A ``GA`` row (p46-p48) is I6, the words, the arc radius F9.5, the two
     angles F8.3, then the wire radius F11.5 ending in column 84 and the
@@ -424,6 +444,14 @@ def _structure_rows(row: StructureRow) -> list[str]:
         ]
     if isinstance(row, ScaleRow):
         return [f"      STRUCTURE SCALED BY FACTOR{row.factor:10.5f}"]
+    if isinstance(row, ReflectRow):
+        axes = " ".join(
+            a if on else " " for a, on in zip("XYZ", row.planes, strict=True)
+        )
+        return [
+            f"      STRUCTURE REFLECTED ALONG THE AXES {axes}.  TAGS INCREMENTED BY"
+            f"{row.tag_increment:5d}"
+        ]
     if isinstance(row, MoveRow):
         numbers = "".join(f"{v:10.5f}" for v in (*row.rotation_deg, *row.translation))
         return [
@@ -528,13 +556,16 @@ def _structure(data: Nec4Printout) -> list[str]:
     if data.ge_flag > 0:
         lines += [_INTERPOLATION, "", ""]
     total = data.total_segments
-    lines += [
+    # Under a live GX symmetry the line carries the cell and the flag, and a
+    # plane count follows it, one blank more before the junctions (p54-p76).
+    cell = data.cell_segments if data.symmetry_flag else total
+    lines.append(
         f"   TOTAL SEGMENTS USED={total:5d}     NO. SEG. IN A SYMMETRIC CELL="
-        f"{total:5d}     SYMMETRY FLAG={0:3d}",
-        "",
-        "",
-        *_JUNCTION_HEADING,
-    ]
+        f"{cell:5d}     SYMMETRY FLAG={data.symmetry_flag:3d}"
+    )
+    if data.symmetry_flag:
+        lines += [f" STRUCTURE HAS {data.symmetry_planes} PLANES OF SYMMETRY", ""]
+    lines += ["", "", *_JUNCTION_HEADING]
     if data.junctions:
         lines += [
             _junction_row(i, members) for i, members in enumerate(data.junctions, 1)

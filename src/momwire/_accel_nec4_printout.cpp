@@ -225,6 +225,11 @@ Nec4Printout printout_of(const py::handle &h) {
         if (kind == "ScaleRow") {
             r.kind = WireTableRow::scale;
             r.factor = fl(at(w, "factor"));
+        } else if (kind == "ReflectRow") {
+            r.kind = WireTableRow::reflect;
+            py::object planes = at(w, "planes");
+            for (int c = 0; c < 3; c++) r.planes[c] = py::cast<bool>(planes[py::int_(c)]);
+            r.tag_increment = in(at(w, "tag_increment"));
         } else if (kind == "MoveRow") {
             r.kind = WireTableRow::move;
             r.tag_increment = in(at(w, "tag_increment"));
@@ -293,6 +298,9 @@ Nec4Printout printout_of(const py::handle &h) {
     }
     for (const py::handle &r : at(h, "runs")) d.runs.push_back(run(r));
     d.run_seconds = fl(at(h, "run_seconds"));
+    d.cell_segments = in(at(h, "cell_segments"));
+    d.symmetry_flag = in(at(h, "symmetry_flag"));
+    d.symmetry_planes = in(at(h, "symmetry_planes"));
     return d;
 }
 

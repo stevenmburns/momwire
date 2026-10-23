@@ -66,10 +66,12 @@ captures show, and nothing else:
   p30, momwire#1463), and compute the table either way.  The name is a cache, not physics,
   so it is accepted and ignored on every type: the solve is the card's
   without it, and the printout echoes the name (``eznec._nec4._ground_file``).
-* ``GA`` (wire arc) and ``GH`` are geometry here, where the ``nec2``
-  dialect refuses both by name (momwire#1592, probes p46-p53, measured on
-  the licensed binary as a black box).  ``GA`` is NEC-2's arc.  ``GH`` is
-  NEC-4.2's own card, which is NOT NEC-2's: a log-spiral or helix read as
+* ``GA`` (wire arc) and ``GH`` are geometry here (momwire#1592, probes
+  p46-p53, measured on the licensed binary as a black box), as they are in
+  the ``nec2`` dialect since momwire#1651.  ``GA`` is NEC-2's arc, except
+  that NEC-4.2 stops on a sweep of 360 degrees, which nec2c reads.  ``GH`` is
+  NEC-4.2's own card, which is NOT NEC-2's (the ``nec2`` dialect reads the
+  NEC-2 one): a log-spiral or helix read as
   turns, length and two helix and two wire radii (:func:`helix_vertices`
   has the measured rule).  Both are built as one one-segment wire per
   chord, carrying the card's tag, so a ``(tag, segment)`` address counts
@@ -129,8 +131,9 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from ._cards import Card, DeckError
-from ._nec2 import _GEOMETRY_CARDS, _REFUSED_BY_NAME, _Nec2Parser
-from ._nec2_geometry import _DEG, _GEOMETRY_BUILDERS, FlatWire
+from ._nec2 import _Nec2Parser
+from ._nec2_geometry import _GEOMETRY_BUILDERS, FlatWire
+from ._nec2_geometry import arc_vertices as _arc_vertices
 from .model import DeckModel
 
 __all__ = ["parse_nec4"]
@@ -166,38 +169,14 @@ _GE_I2 = frozenset({0, -1})
 
 
 def arc_vertices(card: Card) -> list[tuple[float, float, float]]:
-    """A ``GA`` card's ``NS + 1`` vertices: the arc of radius F1 in the XZ
-    plane about the origin, from angle F2 to F3 degrees measured from +X
-    toward +Z, in ``NS`` equal steps of angle; each segment is the chord
-    between two vertices.
-
-    Measured on the licensed NEC-4.2 as a black box (probes p46-p48): the
-    printed segment centres and lengths are these chords' to every digit,
-    for an arc that starts below the X axis, one wider than 180 degrees and
-    one whose angle falls.  It is also NEC-2's arc."""
-    n_seg = card.i(1)
-    radius, first, last = card.f(2), card.f(3), card.f(4)
-    if n_seg < 1:
-        raise DeckError(f"GA segment count must be >= 1, got {n_seg}")
-    if radius <= 0.0:
-        raise DeckError(f"GA needs a positive arc radius (F1), got {radius:g}")
-    if first == last:
-        raise DeckError(
-            f"GA from {first:g} to {last:g} degrees has no length; the arc's "
-            f"two angles (F2, F3) must differ"
-        )
-    if card.f(5) <= 0.0:
-        # NEC-4.2 stops on it with a segment data error (black box).
-        raise DeckError(
-            f"GA needs a positive wire radius (F4), got {card.f(5):g}; this "
-            f"engine's nec4 dialect has no tapered arc"
-        )
-    step = (last - first) * _DEG / n_seg
-    start = first * _DEG
-    return [
-        (radius * math.cos(start + k * step), 0.0, radius * math.sin(start + k * step))
-        for k in range(n_seg + 1)
-    ]
+    """A ``GA`` card's ``NS + 1`` vertices, as NEC-4.2 reads the card: NEC-2's
+    arc (:func:`momwire.deck._nec2_geometry.arc_vertices`), measured on the
+    licensed NEC-4.2 as a black box (probes p46-p48: the printed segment
+    centres and lengths are these chords' to every digit, for an arc that
+    starts below the X axis, one wider than 180 degrees and one whose angle
+    falls), with NEC-4.2's own widest sweep: under 360 degrees, where nec2c
+    reads 360 itself (momwire#1651)."""
+    return _arc_vertices(card, "nec4")
 
 
 def _ga(card: Card, wires: list[FlatWire]) -> None:
@@ -295,11 +274,6 @@ class _Nec4Parser(_Nec2Parser):
     """The ``nec2`` state machine with the NEC-4.2 deltas in the module
     docstring; every other card is read by the parent unchanged."""
 
-    # GA and GH are geometry here (module docstring), not refused by name.
-    _geometry_mnemonics = _GEOMETRY_CARDS | {"GA", "GH"}
-    _refused_by_name = MappingProxyType(
-        {k: v for k, v in _REFUSED_BY_NAME.items() if k not in ("GA", "GH")}
-    )
     _geometry_builders = _NEC4_GEOMETRY_BUILDERS
 
     def __init__(self) -> None:
