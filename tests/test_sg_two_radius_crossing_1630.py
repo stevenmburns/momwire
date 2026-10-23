@@ -232,3 +232,34 @@ def test_g9_thin_legs_under_a_fat_mast_are_not_coincident():
         SinusoidalGalerkinSolver(
             **same, wire_radius=[0.019, 0.001, 0.001]
         )._crossing_junction_indices()
+
+
+def test_g10_the_extended_kernel_at_a_two_radius_node_is_refused_by_name():
+    """momwire#1626 x momwire#1630: the partial extended kernel and the
+    two-radius node do not compose. The node is a radius step at a junction,
+    which SG refuses under the extended kernel by name at construction
+    (`extended_kernel+stepped_radius_junction`, measured divergent at
+    momwire#398), and a NEC-4.2 deck, whose dialect defaults to the extended
+    kernel, falls back to the reduced one with that sentence in its advisory:
+    the hub with a 19 mm vertical reads exactly its reduced solve."""
+    from momwire.deck import ExtendedKernelDefault
+
+    with pytest.raises(NotImplementedError) as err:
+        _rod(SinusoidalGalerkinSolver, A, A / 2, extended_kernel=True)
+    assert str(err.value) == sg_mod._EK_STEPPED_RADIUS_JUNCTION_REFUSAL
+    model = parse((FIX / "hub1_v19mm.nec42.nec").read_text(), dialect="nec4")
+    with pytest.warns(ExtendedKernelDefault) as seen:
+        built = build_solver(model, basis="sinusoidal-galerkin")
+    assert built.extended_kernel is False
+    assert any(
+        sg_mod._EK_STEPPED_RADIUS_JUNCTION_REFUSAL in str(w.message) for w in seen
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        z_default = _z(built.solver.compute_impedance())
+        z_reduced = _z(
+            build_solver(
+                model, basis="sinusoidal-galerkin", extended_kernel=False
+            ).solver.compute_impedance()
+        )
+    assert z_default == z_reduced

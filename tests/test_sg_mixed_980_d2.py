@@ -247,16 +247,58 @@ def test_the_transmitted_directions_are_reciprocal():
 # tests/test_sg_buried_loading_1156.py.
 
 
-def test_the_extended_kernel_on_a_mixed_deck_refuses_by_bsplines_name():
-    """The mixed route does not enter `_operating_medium`, so it raises the
-    scope refusals itself — otherwise an EK mixed deck slips through."""
-    from momwire._below_interface import BURIED_EXTENDED_KERNEL_REFUSAL
+def test_the_extended_kernel_on_a_mixed_deck_is_served_above_ground():
+    """momwire#1626 (bspline's sentence, a refusal until then): the direct
+    fill extends the above class's own pairs, keeps every pair touching the
+    buried wire reduced, takes the end-bracket correction off the extended
+    pairs, and stays reciprocal."""
+    from momwire._below_interface import (
+        BURIED_EXTENDED_KERNEL_ABOVE_ONLY,
+        ExtendedKernelAboveGround,
+    )
 
+    z_red = complex(mk([ABOVE, BELOW_NEAR], [[11], [11]]).compute_impedance()[0])
     s = mk([ABOVE, BELOW_NEAR], [[11], [11]])
     s.extended_kernel = True
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == BURIED_EXTENDED_KERNEL_REFUSAL
+    assert s.extended_kernel_wires() == (True, False)
+    with pytest.warns(ExtendedKernelAboveGround) as seen:
+        z_ek = complex(s.compute_impedance()[0])
+    (said,) = [w for w in seen if w.category is ExtendedKernelAboveGround]
+    assert str(said.message).startswith(BURIED_EXTENDED_KERNEL_ABOVE_ONLY)
+    assert "(wire index 1)" in str(said.message)
+    assert 1e-4 < abs(z_ek - z_red) < 1.0, (z_red, z_ek)
+    geom = s._build_geometry()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        G = np.asarray(s._assemble_Z(geom, s.k)[0])
+    assert np.linalg.norm(G - G.T) / np.linalg.norm(G) < 1e-9
+
+
+def test_the_banded_mixed_fill_takes_the_same_extended_kernel(monkeypatch):
+    """momwire#1626: the band-fused mixed fill (momwire#1224) and the
+    whole-triple one apply the same per-class kernel. They are not bit-equal
+    on this small deck even reduced -- below the dense threshold the
+    whole-triple scatter is a zgemm whose sum order differs from the band's
+    (3.1e-16 relative on x86-64, either kernel) -- so the gate is a derived
+    1e-12 on G, which macOS arm64's BLAS meets too, and the extended kernel
+    must actually have moved G."""
+    out = {}
+    for ek in (False, True):
+        for banded in (False, True):
+            monkeypatch.setattr(
+                SinusoidalGalerkinSolver,
+                "_band_fill_serves",
+                lambda self, n, banded=banded: banded,
+            )
+            s = mk([ABOVE, BELOW_NEAR], [[21], [21]])
+            s.extended_kernel = ek
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                G = s._assemble_Z(s._build_geometry(), s.k)[0]
+            out[ek, banded] = np.asarray(G)
+    scale = np.max(np.abs(out[True, False]))
+    assert np.max(np.abs(out[True, False] - out[True, True])) / scale <= 1e-12
+    assert np.max(np.abs(out[True, False] - out[False, False])) / scale > 1e-6
 
 
 def test_a_deck_past_the_transmitted_domain_refuses_with_its_numbers():

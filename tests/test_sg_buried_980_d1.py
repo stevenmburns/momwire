@@ -350,12 +350,23 @@ def test_a_ground_with_no_lower_medium_refuses_with_its_own_reason(ground, expec
     assert str(exc.value).endswith(expected)
 
 
-def test_the_extended_kernel_is_refused_by_bsplines_own_name():
-    """Same deck, same sentence, whichever trunk a user reaches it through."""
-    from momwire._below_interface import BURIED_EXTENDED_KERNEL_REFUSAL
+def test_the_extended_kernel_acts_on_no_pair_of_a_wholly_buried_deck():
+    """momwire#1626 (bspline's sentence, a refusal until then): served in
+    part, and with every wire buried the part is empty, so the solve is the
+    reduced one bit for bit, said once."""
+    from momwire._below_interface import (
+        BURIED_EXTENDED_KERNEL_ABOVE_ONLY,
+        ExtendedKernelAboveGround,
+    )
 
     s = sg_dipole(n=11, depth=1.5)
+    z_red = complex(s.compute_impedance()[0])
+    s = sg_dipole(n=11, depth=1.5)
     s.extended_kernel = True
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == BURIED_EXTENDED_KERNEL_REFUSAL
+    assert s.extended_kernel_wires() == (False,)
+    with pytest.warns(ExtendedKernelAboveGround) as seen:
+        z_ek = complex(s.compute_impedance()[0])
+    (said,) = [w for w in seen if w.category is ExtendedKernelAboveGround]
+    assert str(said.message).startswith(BURIED_EXTENDED_KERNEL_ABOVE_ONLY)
+    assert z_ek == z_red
+    assert s.extended_kernel is True

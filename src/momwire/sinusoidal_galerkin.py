@@ -350,8 +350,10 @@ the readout write the basis at it), but no longer touches `self.eta`.
 
 import collections
 import concurrent.futures
+import contextlib
 import functools
 import math
+import warnings
 
 import numpy as np
 import scipy.linalg
@@ -533,6 +535,22 @@ _EK_STEPPED_RADIUS_JUNCTION_REFUSAL = (
     "`SinusoidalSolver(extended_kernel=True)`, both of which are served on "
     "a step (taper-readiness study Sec 2-3, maintainer decision D2, "
     "stevenmburns/momwire#398)"
+)
+# momwire#1626: the extended kernel on a buried CROSSING deck is served on the
+# mixed-potential fill (SG's default, `_assemble_Z_mp_mixed`) and refused on
+# the direct one, which a caller reaches only by asking for `fill="direct"`.
+_EK_DIRECT_CROSSING_REFUSAL = (
+    "extended_kernel=True on a buried deck with a crossing junction is not "
+    "served by SinusoidalGalerkinSolver's direct fill (fill='direct'): the "
+    "extended delta's end cap at the crossing node has no partner in the "
+    "fill, because the node's other member is in the other medium and its "
+    "terms come from the crossing fill on the reduced kernel. Measured on "
+    "the momwire#524 crossing deck: with the cap removed the extended "
+    "kernel moved the input impedance by 1.1 ohm at grade 1 and 7.3 ohm at "
+    "grade 2, with it kept by 237 ohm, where the mixed-potential fill moves "
+    "it by 0.097 ohm at both grades, within 1e-4 ohm of bs2's partial "
+    "extended kernel (momwire#1626). Use the default "
+    "fill='mixed-potential', or extended_kernel=False"
 )
 # The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). On a
 # build without it — a pure-Python install, or one whose extension predates
@@ -1472,16 +1490,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
-            # Raised by `_below_interface.refuse_out_of_scope` at the fill, the
-            # same sentence every buried family declares; undeclared here
-            # until momwire#1326's default-kernel check asked this row first.
-            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),
             "buried+crossing_two_radius_direct_fill": (
                 _CROSSING_TWO_RADIUS_DIRECT_FILL_REFUSAL
             ),
+        },
+        # momwire#1626: served in part, on the rule of the B-spline family
+        # (momwire#1170 stage 0) and razor (momwire#1614) -- the extended
+        # kernel on the above class's own pairs, direct and image, and the
+        # reduced kernel on every pair touching a buried segment and on the
+        # crossing node's own terms. It was the tree-wide refusal, raised by
+        # `_below_interface.refuse_out_of_scope` at the fill, until then.
+        partials={
+            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
         },
     )
 
@@ -2515,6 +2538,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         seg_l = seg_c - hh * seg_t
         seg_r = seg_c + hh * seg_t
         seg_a = self._seg_radius(geom)
+        buried = self._ek_never_extend(geom)
         if mirror:
             n = seg_c.shape[0]
             gz = self.ground_z
@@ -2529,8 +2553,79 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         else:
             labels = _ek_axis_groups_coaxial(seg_l, seg_r, seg_t, seg_a)
             hit = (labels, labels)
+        if buried is not None:
+            # momwire#1626: a buried segment and its reflection carry the
+            # never-extend marker (`_ek_never_extend`), so every pair
+            # touching one keeps the reduced kernel.
+            hit = tuple(np.where(buried, -1, lab).astype(lab.dtype) for lab in hit)
         cached[1][mirror] = hit
         return hit
+
+    def extended_kernel_wires(self):
+        """Per wire, whether its pairs take the extended kernel: a tuple of
+        bools, one per wire, all False with `extended_kernel=False`
+        (`BSplineSolver.extended_kernel_wires`' twin, momwire#1626).
+
+        All True on a deck with no buried wire. On a buried deck a wire
+        below the plane is False: the below class, the transmitted blocks,
+        the crossing pair and the node's completions keep the reduced
+        kernel, and the extended kernel acts on the above class's own pairs,
+        direct and image.
+        """
+        n = len(self.wires_polylines)
+        if not self.extended_kernel:
+            return (False,) * n
+        if self.ground_z is None or not self._lower_medium():
+            return (True,) * n
+        return tuple(m != _medium_spec.BELOW for m in self._wire_media())
+
+    def _advise_ek_above(self):
+        """Say, once per solver, that this buried deck's extended kernel is
+        the above-ground one (`ExtendedKernelAboveGround`, momwire#1626). A
+        front end that has already said it in its own words sets
+        `_warned_ek_above` and this stays silent."""
+        if not self.extended_kernel or getattr(self, "_warned_ek_above", False):
+            return
+        self._warned_ek_above = True
+        wires = self.extended_kernel_wires()
+        if all(wires):
+            return
+        warnings.warn(
+            _below_interface.extended_kernel_above_advisory(wires),
+            _below_interface.ExtendedKernelAboveGround,
+            stacklevel=4,
+        )
+
+    @contextlib.contextmanager
+    def _class_kernel(self, medium):
+        """The kernel one pair class of a mixed deck fills under
+        (momwire#1626): the solver's own for the above class (`medium` None),
+        the reduced kernel for the below class whatever was asked, restored
+        on exit. Scoped like `_operating_medium`'s `self.k`, because the
+        Galerkin fills read `self.extended_kernel` at every level."""
+        if medium is None or not self.extended_kernel:
+            yield
+            return
+        self.extended_kernel = False
+        try:
+            yield
+        finally:
+            self.extended_kernel = True
+
+    def _ek_never_extend(self, geom):
+        """`(n_segs,)` bool, the buried segments of a MIXED deck, which the
+        direct fill's extended kernel never acts on (momwire#1626), or None
+        on every other deck -- free space, a deck wholly above ground, and a
+        wholly buried one, which fills reduced (`_operating_medium`) and
+        never asks. The direct fill reaches a mixed deck under the extended
+        kernel only when it is detached (`_EK_DIRECT_CROSSING_REFUSAL`), so
+        no above segment here has an end on the plane."""
+        if self.ground_z is None or not self._lower_medium():
+            return None
+        below = np.asarray(self._below_segments(geom), dtype=bool)
+        if not below.any() or below.all():
+            return None
+        return below
 
     def _ek_far_labels(self, geom, mirror, n_panels=1):
         """The `_EKFarLabels` payload for one FUSED far-fill call, or None when
@@ -4066,46 +4161,48 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 remainder_geom=self._class_geom(geom, keep),
                 eta=eta_cls,
             )
-            if self._class_fill_serves(geom, k_cls, eta_cls, fg):
-                # The class's own test entries against its own sources, free
-                # block, image and remainder alike (momwire#1224). The
-                # whole-plane fill below computed every observer against every
-                # source and kept the quadrant: on hub16 x4, 60 of 702
-                # segments are above, so the above class discarded ~99 % of
-                # what it filled, and the (nnz, N) block it built was the
-                # mixed peak's largest owner.
-                cv = self._class_view(ctx, keep, n_segs)
-                block = self._tested_contribs(
-                    geom, k_cls, cv.ctx, _plain_projection, eta=eta_cls, cls=cv
-                )
-                if fg is not None:
-                    self._fold_ground_block(
-                        geom, k_cls, cv.ctx, block, fg, eta=eta_cls, cls=cv
+            # momwire#1626: the below class fills reduced under any kernel.
+            with self._class_kernel(med):
+                if self._class_fill_serves(geom, k_cls, eta_cls, fg):
+                    # The class's own test entries against its own sources, free
+                    # block, image and remainder alike (momwire#1224). The
+                    # whole-plane fill below computed every observer against every
+                    # source and kept the quadrant: on hub16 x4, 60 of 702
+                    # segments are above, so the above class discarded ~99 % of
+                    # what it filled, and the (nnz, N) block it built was the
+                    # mixed peak's largest owner.
+                    cv = self._class_view(ctx, keep, n_segs)
+                    block = self._tested_contribs(
+                        geom, k_cls, cv.ctx, _plain_projection, eta=eta_cls, cls=cv
                     )
-                for dest, b in zip(_destination(), block):
-                    dest[np.ix_(cv.entries, cv.segs)] = b[:, cv.pad :]
-            else:
-                # The numpy far fill (no accelerator, or a weighted image
-                # projector) indexes in whole-deck coordinates, so it keeps the
-                # whole-plane fill: every observer against every source, the
-                # quadrant kept.
-                block = self._tested_contribs(
-                    geom, k_cls, ctx, _plain_projection, eta=eta_cls
-                )
-                if fg is not None:
-                    self._fold_ground_block(
-                        geom,
-                        k_cls,
-                        ctx,
-                        block,
-                        fg,
-                        obs_mask=keep,
-                        src_cols=np.nonzero(keep)[0],
-                        eta=eta_cls,
+                    if fg is not None:
+                        self._fold_ground_block(
+                            geom, k_cls, cv.ctx, block, fg, eta=eta_cls, cls=cv
+                        )
+                    for dest, b in zip(_destination(), block):
+                        dest[np.ix_(cv.entries, cv.segs)] = b[:, cv.pad :]
+                else:
+                    # The numpy far fill (no accelerator, or a weighted image
+                    # projector) indexes in whole-deck coordinates, so it keeps the
+                    # whole-plane fill: every observer against every source, the
+                    # quadrant kept.
+                    block = self._tested_contribs(
+                        geom, k_cls, ctx, _plain_projection, eta=eta_cls
                     )
-                quadrant = np.ix_(np.nonzero(rows)[0], np.nonzero(keep)[0])
-                for dest, b in zip(_destination(), block):
-                    dest[quadrant] = b[quadrant]
+                    if fg is not None:
+                        self._fold_ground_block(
+                            geom,
+                            k_cls,
+                            ctx,
+                            block,
+                            fg,
+                            obs_mask=keep,
+                            src_cols=np.nonzero(keep)[0],
+                            eta=eta_cls,
+                        )
+                    quadrant = np.ix_(np.nonzero(rows)[0], np.nonzero(keep)[0])
+                    for dest, b in zip(_destination(), block):
+                        dest[quadrant] = b[quadrant]
             # The quadrant is copied, so the class block is dead — and the
             # loop variable `b` is one of its three arrays. Left bound, `b`
             # kept the FIRST class's array alive through the second class's
@@ -4497,10 +4594,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             crossing = self._is_crossing(geom)
             # The scope refusals, which a single-medium deck raises inside
             # `_operating_medium` — the mixed route does not enter it (two k
-            # are live), so they are raised here rather than skipped.
+            # are live), so they are raised here rather than skipped. The
+            # extended kernel is not one of them since momwire#1626: it acts
+            # on the above class's own pairs (`_assemble_Z_mp_mixed`, and on
+            # a detached deck the direct fill under `_class_kernel`), and the
+            # deck says so once.
+            self._advise_ek_above()
             _below_interface.refuse_out_of_scope(
                 use_singular_enrichment=getattr(self, "use_singular_enrichment", False),
-                extended_kernel=self.extended_kernel,
+                extended_kernel=False,
                 n=int(geom["n_segs"]),
                 degree=1,
                 dense_fits=True,
@@ -4532,6 +4634,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
             if crossing and self._two_radius_crossing() is not None:
                 raise NotImplementedError(_CROSSING_TWO_RADIUS_DIRECT_FILL_REFUSAL)
+            if crossing and self.extended_kernel:
+                raise NotImplementedError(_EK_DIRECT_CROSSING_REFUSAL)
             cross_rows = None
             if self._band_fill_serves(geom["n_segs"]):
                 if crossing:
@@ -4558,6 +4662,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 # node the basis leaves free.
                 G = self._add_crossing_blocks(
                     geom, seg_view, medium, below, G, rows=cross_rows
+                )
+            if self.extended_kernel:
+                # momwire#299's end-bracket correction on the above class's
+                # extended pairs (momwire#1626; a detached deck, the crossing
+                # one being refused above). The labels give every buried
+                # segment the never-extend marker, so the correction's pairs
+                # are the above/above ones the fill extended.
+                eta_p = self._fill_eta(medium.k_p, eta)
+                fg_p = _field_ground.field_ground_for(
+                    self,
+                    geom,
+                    medium.k_p,
+                    self.omega,
+                    medium=None,
+                    remainder_geom=self._class_geom(geom, ~np.asarray(below)),
+                    eta=eta_p,
+                )
+                self._ek_bracket_correction_tested(
+                    G, geom, medium.k_p, ctx, fg_p, eta=eta_p
                 )
             # Loading on a mixed deck (momwire#1156): each shared-segment
             # overlap is written at its segment's own k (`k_entry`, which the
@@ -4900,6 +5023,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 else BURIED_PAIR_ORDER_LADDER,
                 checkpoint=self._checkpoint,
             )
+            # momwire#1626: the extended kernel, when asked, on the above
+            # class's own pairs, direct and image, every pair of them as
+            # `_assemble_Z_mp` extends them (momwire#1368); the below class,
+            # the crossing pair and the node's completions keep the reduced
+            # kernel, so the node's own terms are reduced as razor's knot is
+            # (momwire#1614). `b` is dropped when the class's radii agree,
+            # as the whole-deck fill drops it.
+            ek_cls = None
+            if self.extended_kernel and med is None:
+                a_cls = a_row[idx]
+                every = np.zeros(idx.size, dtype=np.int64)
+                ek_cls = (
+                    every,
+                    every,
+                    None if np.all(a_cls == a_cls[0]) else a_cls,
+                )
             fill.accumulate(
                 c[idx],
                 t[idx],
@@ -4911,6 +5050,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 scale=_sinusoidal_mp.DIRECT_SIGN,
                 obs_idx=idx,
                 src_idx=idx,
+                ek=ek_cls,
             )
             if fg is None:
                 continue
@@ -4926,6 +5066,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 scale=-_sinusoidal_mp.DIRECT_SIGN * fg.image_coefficient,
                 obs_idx=idx,
                 src_idx=idx,
+                ek=ek_cls,
             )
             if fg.mode != "compose":
                 continue
@@ -5526,46 +5667,49 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             if not keep.any() or not rows.any():
                 continue
             eta_cls = eta_p if med is None else self._medium_eta(med)
-            fg = _field_ground.field_ground_for(
-                self,
-                geom,
-                k_cls,
-                self.omega,
-                medium=med,
-                r1_below=plan.get("r1_below") if med is not None else None,
-                remainder_geom=self._class_geom(geom, keep),
-                eta=eta_cls,
-            )
-            near_free = near_img = None
-            if self.near_correction:
-                near_free = self._near_cells(
-                    geom, k_cls, ctx, _plain_projection, eta=eta_cls, keep=keep
-                )
-                if fg is not None:
-                    src_c_img, src_t_img = fg.image_sources()
-                    near_img = self._near_cells(
-                        geom,
-                        k_cls,
-                        ctx,
-                        self._image_projector(geom, fg),
-                        src_c_img,
-                        src_t_img,
-                        mirror=True,
-                        eta=eta_cls,
-                        keep=keep,
-                    )
-            classes.append(
-                (
-                    keep,
-                    rows,
+            # momwire#1626: the below class fills reduced under any kernel.
+            with self._class_kernel(med):
+                fg = _field_ground.field_ground_for(
+                    self,
+                    geom,
                     k_cls,
-                    eta_cls,
-                    fg,
-                    self._class_fill_serves(geom, k_cls, eta_cls, fg),
-                    near_free,
-                    near_img,
+                    self.omega,
+                    medium=med,
+                    r1_below=plan.get("r1_below") if med is not None else None,
+                    remainder_geom=self._class_geom(geom, keep),
+                    eta=eta_cls,
                 )
-            )
+                near_free = near_img = None
+                if self.near_correction:
+                    near_free = self._near_cells(
+                        geom, k_cls, ctx, _plain_projection, eta=eta_cls, keep=keep
+                    )
+                    if fg is not None:
+                        src_c_img, src_t_img = fg.image_sources()
+                        near_img = self._near_cells(
+                            geom,
+                            k_cls,
+                            ctx,
+                            self._image_projector(geom, fg),
+                            src_c_img,
+                            src_t_img,
+                            mirror=True,
+                            eta=eta_cls,
+                            keep=keep,
+                        )
+                classes.append(
+                    (
+                        keep,
+                        rows,
+                        k_cls,
+                        eta_cls,
+                        fg,
+                        self._class_fill_serves(geom, k_cls, eta_cls, fg),
+                        near_free,
+                        near_img,
+                        med,
+                    )
+                )
         transmitted = []
         if not crossing:
             # See `_assemble_mixed_contribs` for the sign: ADDED (momwire#1159).
@@ -5593,7 +5737,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             band = tuple(
                 np.zeros((e1 - e0, n_segs), dtype=np.complex128) for _ in range(3)
             )
-            for keep, rows, k_cls, eta_cls, fg, serves, near_free, near_img in classes:
+            for (
+                keep,
+                rows,
+                k_cls,
+                eta_cls,
+                fg,
+                serves,
+                near_free,
+                near_img,
+                med,
+            ) in classes:
                 ent = entries[rows[e0:e1]]
                 if ent.size == 0:
                     continue
@@ -5613,26 +5767,27 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                         rem_obs=keep[m0:m1],
                     )
                     brow = ent - e0
-                block = self._tested_contribs(
-                    geom,
-                    k_cls,
-                    view.ctx,
-                    _plain_projection,
-                    eta=eta_cls,
-                    cls=view,
-                    near=near_free,
-                )
-                if fg is not None:
-                    self._fold_ground_block(
+                with self._class_kernel(med):
+                    block = self._tested_contribs(
                         geom,
                         k_cls,
                         view.ctx,
-                        block,
-                        fg,
+                        _plain_projection,
                         eta=eta_cls,
                         cls=view,
-                        near=near_img,
+                        near=near_free,
                     )
+                    if fg is not None:
+                        self._fold_ground_block(
+                            geom,
+                            k_cls,
+                            view.ctx,
+                            block,
+                            fg,
+                            eta=eta_cls,
+                            cls=view,
+                            near=near_img,
+                        )
                 quadrant = np.ix_(ent - e0, cols)
                 own = np.ix_(brow, view.col_of_seg[cols])
                 for dest, b in zip(band, block):

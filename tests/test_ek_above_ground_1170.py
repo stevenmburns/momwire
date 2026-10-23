@@ -31,7 +31,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from momwire import BSplineSolver, HMatrixSolver, RazorSolver, bspline
+from momwire import (
+    BSplineSolver,
+    HMatrixSolver,
+    RazorSolver,
+    SinusoidalGalerkinSolver,
+    SinusoidalSolver,
+    bspline,
+)
 from momwire import _bspline_kernels as _k
 from momwire._below_interface import (
     BURIED_EXTENDED_KERNEL_ABOVE_ONLY,
@@ -372,6 +379,61 @@ def test_razor_crossing_deck_changes_kernel_at_the_node():
     assert 1e-3 < abs(z_ext - z_red) < 0.5, (z_red, z_ext)
 
 
+# ---------------------------------------------------------------------------
+# Sin-Galerkin, on the same rule (momwire#1626)
+# ---------------------------------------------------------------------------
+
+
+def test_sg_far_buried_wire_reproduces_the_above_ground_extended_answer():
+    """Gate 4 on Sin-Galerkin's detached route: the above class's own block
+    is the above-only deck's, so the extended kernel's shift is the
+    above-only deck's to first order in the 60 m radial's coupling (measured
+    0.258 ohm)."""
+    cls = SinusoidalGalerkinSolver
+    above_red = _z(deck(False, radial=False, cls=cls))
+    above_ext = _z(deck(True, radial=False, cls=cls))
+    far_red = _z(deck(False, shift=60.0, cls=cls))
+    far_ext = _z(deck(True, shift=60.0, cls=cls))
+    coupling = abs(far_red - above_red)
+    r = coupling / abs(above_red)
+    assert 0.0 < r < 1e-5, r
+    shift_above, shift_far = above_ext - above_red, far_ext - far_red
+    assert abs(shift_above) > 0.05
+    assert abs(shift_far - shift_above) <= 3.0 * r * abs(shift_above)
+
+
+def test_sg_says_which_wires_once():
+    s = deck(True, cls=SinusoidalGalerkinSolver)
+    assert s.extended_kernel_wires() == (True, False)
+    with pytest.warns(ExtendedKernelAboveGround) as seen:
+        s.compute_impedance()
+    (message,) = [
+        str(w.message) for w in seen if w.category is ExtendedKernelAboveGround
+    ]
+    assert BURIED_EXTENDED_KERNEL_ABOVE_ONLY in message
+    assert "(wire index 1)" in message
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        warnings.simplefilter("error", ExtendedKernelAboveGround)
+        s.compute_impedance()  # once per solver
+
+
+def test_sg_crossing_deck_takes_bsplines_extended_shift():
+    """SG's default (mixed-potential) fill at a crossing: the above class
+    extends every pair, the below class, the crossing pair and the node's
+    completions stay reduced, and the extended kernel moves the feed by
+    what it moves bs2's partial kernel (measured 0.0968 ohm on both, 1e-4
+    apart; the fills' reduced answers differ by 0.025 ohm)."""
+    kw = crossing_deck(wire_radius=A_FAT)
+    shifts = []
+    for cls in (SinusoidalGalerkinSolver, BSplineSolver):
+        s = cls(**kw, extended_kernel=True)
+        assert s.extended_kernel_wires() == (False, True)
+        shifts.append(_z(s) - _z(cls(**kw)))
+    assert 0.05 < abs(shifts[1]) < 0.5, shifts
+    assert abs(shifts[0] - shifts[1]) < 1e-3, shifts
+
+
 def test_the_declarations_say_what_each_family_does():
     key = "buried+extended_kernel"
     assert BSplineSolver.capabilities.refusal("buried", "extended_kernel") is None
@@ -381,6 +443,15 @@ def test_the_declarations_say_what_each_family_does():
     assert not HMatrixSolver.capabilities.partials
     assert RazorSolver.capabilities.refusal("buried", "extended_kernel") is None
     assert RazorSolver.capabilities.partials[key] is BURIED_EXTENDED_KERNEL_ABOVE_ONLY
+    # And Sin-Galerkin since momwire#1626; the point-matched lane still
+    # refuses it (momwire#1636).
+    SG = SinusoidalGalerkinSolver
+    assert SG.capabilities.refusal("buried", "extended_kernel") is None
+    assert SG.capabilities.partials[key] is BURIED_EXTENDED_KERNEL_ABOVE_ONLY
+    assert SinusoidalSolver.capabilities.refusal("buried", "extended_kernel") is (
+        BURIED_EXTENDED_KERNEL_REFUSAL
+    )
+    assert "buried+extended_kernel" not in SinusoidalSolver.capabilities.partials
 
 
 # ---------------------------------------------------------------------------
