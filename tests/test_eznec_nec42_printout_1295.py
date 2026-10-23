@@ -167,7 +167,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 85 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 90 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -504,6 +504,14 @@ def _parse_run(lines: list[str], echo_through: int | None) -> Nec4Run:
         )
     except StopIteration:
         charges = None
+    # PT -1 in force prints no CURRENTS AND LOCATION section (p86-p90,
+    # momwire#1650).
+    try:
+        currents = _value_rows(
+            lines, _section(lines, "- - - CURRENTS AND LOCATION - - -") + 6
+        )
+    except StopIteration:
+        currents = None
     power_at = _section(lines, "- - - POWER BUDGET - - -")
     budget = {}
     for line in _rows_after(lines, power_at + 2):
@@ -517,9 +525,7 @@ def _parse_run(lines: list[str], echo_through: int | None) -> Nec4Run:
             _port_rows(lines, excitation_heading) if has_excitation else ()
         ),
         sources=_port_rows(lines, "- - - ANTENNA INPUT PARAMETERS - - -"),
-        currents=_value_rows(
-            lines, _section(lines, "- - - CURRENTS AND LOCATION - - -") + 6
-        ),
+        currents=currents,
         charges=charges,
         power=PowerBudget(
             budget["INPUT POWER"],
@@ -1021,14 +1027,18 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
             report.append((label, complex(*b[6:8]), complex(*a[6:8]), None, None))
         z_ours = complex(*ours["input"][0][6:8])
         z_theirs = complex(*theirs["input"][0][6:8])
-        peak = max(abs(complex(*r[6:8])) for r in theirs["currents"])
-        i_rel = (
-            max(
-                abs(complex(*a[6:8]) - complex(*b[6:8]))
-                for a, b in zip(ours["currents"], theirs["currents"], strict=True)
+        # A deck under PT -1 prints no currents (p86, p88, p90).
+        assert len(ours["currents"]) == len(theirs["currents"]), capture
+        i_rel = None
+        if theirs["currents"]:
+            peak = max(abs(complex(*r[6:8])) for r in theirs["currents"])
+            i_rel = (
+                max(
+                    abs(complex(*a[6:8]) - complex(*b[6:8]))
+                    for a, b in zip(ours["currents"], theirs["currents"], strict=True)
+                )
+                / peak
             )
-            / peak
-        )
         gain = [
             abs(a[4] - b[4])
             for a, b in zip(ours["pattern"], theirs["pattern"], strict=True)
@@ -1096,6 +1106,7 @@ def test_the_near_fields_against_the_licensed_engine(served, capsys):
         *("p11", "p12", "p13", "p14", "p15"),
         *("p20", "p21", "p22", "p23", "p24", "p25", "p26", "p27", "p28"),
         "p4",
+        "p90",
     )
     lines = []
     for case in NEAR_CASES:
@@ -1356,6 +1367,22 @@ def _edited(capture: str, old: str, new: str) -> str:
             (FIXTURES / "refused" / "r4_ga_full_circle.nec").read_text(),
             "sweeps 360 degrees, which NEC-4.2 stops on",
             id="ga-full-circle",
+        ),
+        # momwire#1650: PT -1 is served (p86-p90); no other form is measured.
+        pytest.param(
+            _edited("p88", "PT -1", "PT 0 1 3 5"),
+            "PT 0 is not served by this engine's NEC-4.2 printout",
+            id="pt-range",
+        ),
+        pytest.param(
+            _edited("p89", "PT -1", "PT -2"),
+            "PT -2 is not served",
+            id="pt-restore",
+        ),
+        pytest.param(
+            _edited("p88", "PT -1", "PT 1"),
+            "PT 1 is not served",
+            id="pt-one",
         ),
     ],
 )

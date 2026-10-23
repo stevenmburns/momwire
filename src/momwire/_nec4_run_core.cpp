@@ -1287,8 +1287,11 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
     std::map<ll, ll> gap_current;  // segment -> port
     for (const auto &d : r.driven) gap_current[d.second.first] = d.first;
     for (const auto &np_ : r.network_points) gap_current[np_.second.first] = np_.second.second;
-    out.has_currents = true;
+    // `_run`: PT -1 in force prints no CURRENTS AND LOCATION section; the
+    // seam serves no other PT form (momwire#1650).
+    out.has_currents = !(group.has_pt && i64(group.pt.flag) == -1);
     for (const SegmentRow &seg : c.sb->tables.segments) {
+        if (!out.has_currents) break;
         auto it = gap_current.find(seg.number);
         const cd value = it != gap_current.end() ? r.i_port[static_cast<std::size_t>(it->second)]
                                                  : r.segment_currents[static_cast<std::size_t>(seg.number - 1)];

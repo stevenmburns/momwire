@@ -231,10 +231,11 @@ bool a_new_frequency(const std::vector<Card> &cards, ll previous, ll number) {
 void served_shape(const std::string &text, const PortalDeck &deck, StructureSeam &out) {
     served_geometry(deck);
     for (const Card &card : deck.data_cards) {
-        if (!one_of(card.mnemonic, {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ",
-                                    "EN", "EK"}))
+        if (!one_of(card.mnemonic, {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "PT", "RP", "NE", "NH",
+                                    "XQ", "EN", "EK"}))
             unmeasured("the " + card.mnemonic + " card");
         if (card.mnemonic == "GD" && card.i(0) != Int(2)) unmeasured("GD " + S(card.i(0)));
+        if (card.mnemonic == "PT" && card.i(0) != Int(-1)) unmeasured("PT " + S(card.i(0)));
     }
     std::vector<ll> runs;
     for (std::size_t i = 0; i < deck.group_ran.size(); i++)

@@ -87,8 +87,13 @@ _EPS0_PRINTED = 8.854e-12
 # The cards a captured or probed NEC-4.2 printout shows, after GE.  Everything else the
 # nec4 dialect reads (it inherits nec2's vocabulary) has no measured layout.
 _SERVED_CARDS = frozenset(
-    {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ", "EN", "EK"}
+    {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "PT", "RP", "NE", "NH", "XQ"}
+    | {"EN", "EK"}
 )
+# The PT forms a NEC-4.2 printout shows: -1, which removes the CURRENTS AND
+# LOCATION section and nothing else, from its card until the next PT (probes
+# p86-p90, momwire#1650).  4nec2's ItsHF decks write it, beside PQ -1.
+_SERVED_PT = frozenset({-1})
 _SERVED_GEOMETRY = frozenset({"GW", "GA", "GH", "GS", "GM", "GX", "GE"})
 # The cards that add wires to the structure (p38-p53): GW, and NEC-4.2's arc
 # and helix, each of which prints its own entry in the wire table.
@@ -382,6 +387,8 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
             raise Nec4Refusal(_unmeasured(f"the {card.mnemonic} card"))
         if card.mnemonic == "GD" and card.i(0) not in _GD_KIND:
             raise Nec4Refusal(_unmeasured(f"GD {card.i(0)}"))
+        if card.mnemonic == "PT" and card.i(0) not in _SERVED_PT:
+            raise Nec4Refusal(_unmeasured(f"PT {card.i(0)}"))
     runs = [(i, g) for i, g in enumerate(deck.groups) if g is not None]
     if not runs:
         raise Nec4Refusal(_unmeasured("a deck with no execute card"))
@@ -546,8 +553,10 @@ def _run(
     # segment 61 reads 4.4E-09 A under a 1.414 A source).
     gap_current = {segment: port for port, segment, _v in result.driven}
     gap_current.update({segment: port for _t, segment, port in result.network_points})
-    currents = []
-    for seg in solver.segments:
+    # PT -1 in force: no CURRENTS AND LOCATION section (p86-p90).
+    suppressed = group.pt is not None and group.pt.suppressed
+    currents = None if suppressed else []
+    for seg in () if suppressed else solver.segments:
         port = gap_current.get(seg.number)
         value = (
             complex(result.i_port[port])
@@ -596,7 +605,7 @@ def _run(
             )
             for row in records.aip_rows
         ),
-        currents=tuple(currents),
+        currents=None if currents is None else tuple(currents),
         charges=charges,
         power=PowerBudget(
             input_power=result.p_in,

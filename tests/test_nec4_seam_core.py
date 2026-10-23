@@ -197,7 +197,17 @@ CASES: list[tuple[str, str, str]] = [
         "the IS card is not",
     ),
     ("mp_card", deck(body="MP 4 32\n" + FR + EX + "XQ\n"), "the MP card is not"),
-    ("pt_card", deck(body="PT -1\n" + FR + EX + "XQ\n"), "the PT card is not"),
+    # PT -1 (momwire#1650): served, the current table suppressed until the
+    # next PT; every other form refuses by name.
+    ("pt_minus_one", deck(body="PT -1\n" + FR + EX + "XQ\n"), SERVED),
+    (
+        "pt_minus_one_between_runs",
+        deck(body=FR + EX + "XQ\nPT -1\nEX 0 1 5 0 1\nXQ\n"),
+        SERVED,
+    ),
+    ("pt_zero", deck(body="PT 0 1 2 4\n" + FR + EX + "XQ\n"), "PT 0 is not"),
+    ("pt_restore", deck(body="PT -1\nPT -2\n" + FR + EX + "XQ\n"), "PT -2 is not"),
+    ("pt_one", deck(body="PT 1\n" + FR + EX + "XQ\n"), "PT 1 is not"),
     ("no_execute_card", deck(body=FR + EX), "a deck with no execute card"),
     (
         "execute_before_ge",
