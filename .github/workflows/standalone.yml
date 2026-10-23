@@ -441,7 +441,7 @@ jobs:
           test "$($E -version)" = "$(momwire-nec42-sinusoidal -version)"
           F=tests/fixtures/eznec_nec42
           MW_EXE_ROUTE_LOG=route-cxx $E $F/0224_dipole-ex0.nec cxx.out
-          MW_EXE_ROUTE_LOG=route-py $E $F/0229_dipole-10m-gn1.nec fallback.out
+          MW_EXE_ROUTE_LOG=route-py $E $F/0231_dipole-10m-gn2.nec fallback.out
           grep -q '^cxx:' route-cxx
           grep -q '^fallback:' route-py
           for f in cxx.out fallback.out; do

@@ -13,7 +13,10 @@ masked, by exact pattern and with the same count on both sides, over:
   execute cards with and without a new FR, PQ charges with free ends and a
   junction, RP with and without a range, an XNDA average-gain trailer, a GM
   copy, a GS scale, a GA arc, and an NX chain;
-- the declines: a ground, a network, an NE table, a GH helix.
+- a perfect ground (GN 1): a monopole, and RP with a range and rows below
+  the horizon;
+- the declines: a finite ground, GD's far-field cliff, a network, an NE
+  table, a GH helix.
 """
 
 from __future__ import annotations
@@ -149,10 +152,33 @@ CASES = [
         "printed",
     ),
     (
-        "ground_declines",
+        "monopole_on_pec",
         deck(
             "GW 1 10 0 0 0 0 0 .25 .001\n", "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", "GE 1"
         ),
+        "printed",
+    ),
+    (
+        "pec_rp_range_below_horizon",
+        deck(
+            "GW 1 11 0 0 .5 0 0 1 .001\n",
+            "GN 1\n" + FR + "EX 0 1 6 0 1\nPQ 0\nRP 0 10 2 1001 0 0 20 90 1000\n",
+        ),
+        "printed",
+    ),
+    (
+        "finite_ground_declines",
+        deck(
+            "GW 1 11 0 0 .1 0 0 .6 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "declined",
+    ),
+    (
+        "gd_declines",
+        "CM run\nCE\nGW 1,11,0.,-.25,10.,0.,.25,10.,.0005\nGE 1,-1\n"
+        "FR 0,1,0,0,299.7925\nGN 1,0,0,0,0.,0.\nEX 0,1,6,0,1.414214,0.\n"
+        "GD 2,0,0,0,13.,.005,0.,0.\nXQ 0\nEN\n",
         "declined",
     ),
     (

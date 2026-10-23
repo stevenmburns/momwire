@@ -544,6 +544,7 @@ struct RunResult {
     double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0;
     double fill_seconds = 0, wavelength = 0;
     std::size_t point = 0;
+    bool pec = false;  // GN 1
 };
 
 struct Ctx {
@@ -567,10 +568,11 @@ struct Ctx {
 };
 
 std::size_t point_for(const StructureBuild &sb, double freq, bool ek, const Environment &env) {
-    if (env.ground.kind != Ground::none) decline("a ground (momwire#1607 B5)");
+    if (env.ground.kind != Ground::none && env.ground.kind != Ground::pec)
+        decline("a finite ground (momwire#1607 B5c)");
     for (std::size_t i = 0; i < sb.points.size(); i++)
         if (sb.points[i].frequency_mhz == freq && sb.points[i].extended_kernel == ek &&
-            sb.points[i].args.ground.kind == Ground::none)
+            sb.points[i].args.ground.kind == env.ground.kind)
             return i;
     decline("an operating point the build did not make");
 }
@@ -642,6 +644,13 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     if (bt.lossy) decline("a lossy wire (momwire#1607 B5)");
     RunResult r;
     r.point = point_for(*c.sb, freq, group.ek, group.environment);
+    r.pec = group.environment.ground.kind == Ground::pec;
+    // GD's second medium: the far field's cliff (`_far_field_ground`) is not
+    // copied yet
+    bool gd = false;  // `_far_ground_card(deck)`
+    for (const nec5::Card &card : c.ss->deck.data_cards) gd = gd || card.mnemonic == "GD";
+    if (r.pec && gd && group.environment.has_second_medium)
+        decline("a GD far-field ground (momwire#1607 B5c)");
     const OperatingPoint &op = c.sb->points[r.point];
     const EngineSolve &es = c.engine->solve(r.point);
     r.fill_seconds = es.fill_seconds;
@@ -843,7 +852,7 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     rq.mode = nec5::Int(0);
     rp::PatternBlock b;
     try {
-        b = rp::free_space_pattern(rq, mid, moment, freq, r.wavelength, r.p_in, r.p_radiated);
+        b = rp::far_pattern(rq, mid, moment, r.pec, freq, r.wavelength, r.p_in, r.p_radiated);
     } catch (const nec5::PrintoutDecline &e) {
         decline(e.reason);
     }
@@ -875,11 +884,15 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     const double k = (2.0 * kPi * freq) / kCMhzM;
     const double rad = -k * range_m;
     const double shift = py_degrees(py_atan2(std::sin(rad), std::cos(rad)));
+    // over a perfect ground a row below the horizon keeps the lower
+    // medium's phase, which with no medium is 0.0 (p32)
+    const double below_shift = 0.0;
     for (PrintPatternRow &row : out.rows) {
+        const bool below = r.pec && row.theta_deg > 90.0 + 1e-9;
         row.e_theta_magnitude = row.e_theta_magnitude / range_m;
         row.e_phi_magnitude = row.e_phi_magnitude / range_m;
-        row.e_theta_phase_deg = row.e_theta_phase_deg + shift;
-        row.e_phi_phase_deg = row.e_phi_phase_deg + shift;
+        row.e_theta_phase_deg = below ? below_shift : row.e_theta_phase_deg + shift;
+        row.e_phi_phase_deg = below ? below_shift : row.e_phi_phase_deg + shift;
     }
     out.has_range = true;
     out.range_m = range_m;
@@ -929,7 +942,7 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
         PrintPreamble &p = out.preamble;
         p.frequency_mhz = freq;
         p.wavelength_m = wavelength;
-        p.environment = "FREE SPACE";
+        p.environment = r.pec ? "PERFECT GROUND" : "FREE SPACE";
         p.has_ground = false;
         for (const nec5::Card &ld : group.loads) p.loads.push_back(load_row(ld));
         p.fill_seconds = static_cast<double>(static_cast<ll>(std::nearbyint(r.fill_seconds * 1000.0))) / 1000.0;

@@ -344,11 +344,12 @@ void linspace3(const double *a, const double *b, int64_t num, std::vector<double
 // elements; a 1-D result has `os_p` 0); with a host table, `_lapack.matmul`.
 void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t os_m,
                int64_t os_p);
-// `_serve._pattern` + `_pattern_rows` for one RP card in FREE SPACE, over
-// `element_currents(coeffs)`'s midpoints and moments ((n, 3) row-major): the
-// NEC-5 seam's row builder, which the NEC-4.2 slot shares (momwire#1607
-// B4a). `rq` carries no range (the NEC-4.2 slot applies its own). Throws
-// `PrintoutDecline` where the builder declines.
+// `_serve._pattern` + `_pattern_rows` for one RP card in free space or over
+// a perfect ground at z = 0 (`pec`), over `element_currents(coeffs)`'s
+// midpoints and moments ((n, 3) row-major): the NEC-5 seam's row builder,
+// which the NEC-4.2 slot shares (momwire#1607 B4a, B5a). `rq` carries no
+// range (the NEC-4.2 slot applies its own). Throws `PrintoutDecline` where
+// the builder declines.
 struct PatternRow {
     double theta = 0, phi = 0, vert = 0, hor = 0, total = 0, axial = 0, tilt = 0;
     std::string sense;
@@ -360,9 +361,9 @@ struct PatternBlock {
     double average_power_gain = 0, solid_angle_pi = 0, power_radiated_4pi = 0;
     bool directive = false;
 };
-PatternBlock free_space_pattern(const Request &rq, const std::vector<double> &mid,
-                                const std::vector<cd> &moment, double frequency_mhz,
-                                double wavelength, double p_in, double p_radiated);
+PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
+                         const std::vector<cd> &moment, bool pec, double frequency_mhz,
+                         double wavelength, double p_in, double p_radiated);
 
 }  // namespace replay
 

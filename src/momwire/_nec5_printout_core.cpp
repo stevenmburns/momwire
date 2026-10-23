@@ -3432,10 +3432,10 @@ void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t
                int64_t os_p) {
     nec5::np_matmul(np, a, b, out, os_m, os_p);
 }
-PatternBlock free_space_pattern(const Request &rq, const std::vector<double> &mid,
-                                const std::vector<cd> &moment, double frequency_mhz,
-                                double wavelength, double p_in, double p_radiated) {
-    const PatternBlockC c = nec5::pattern_block(rq, mid, moment, FarGround::free, 0.0, 0.0,
+PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
+                         const std::vector<cd> &moment, bool pec, double frequency_mhz,
+                         double wavelength, double p_in, double p_radiated) {
+    const PatternBlockC c = nec5::pattern_block(rq, mid, moment, pec ? FarGround::pec : FarGround::free, 0.0, 0.0,
                                                 frequency_mhz, wavelength, p_in, false,
                                                 cd(0.0, 0.0), p_radiated);
     PatternBlock out;
