@@ -122,20 +122,32 @@ the NEC-5 dialect's `momwire-nec5-razor-2p`, for EZNEC's NEC-5 slot and
 SimNEC's own NEC-5 engine alike ([below](#simnecs-nec-5-engine)), which
 writes a source at a node.
 
-**On a tapered or stepped-radius wire, `sinusoidal` and
-`sinusoidal-galerkin` are NEC-2-identified, not NEC-5-accurate.** Both ride
-NEC-2's per-segment end-condition convention, so on a radius step they
-reproduce NEC-2's own stepped-radius error rather than resolving it —
-measured converging onto nec2c's answer to 0.01-0.1 Ω while sitting tens of
-ohms from the licensed NEC-5 reference on the same geometry
-(momwire#398/#435). That is by design: this row exists to be the
-NEC-2-closest rung of the ladder, and inheriting NEC-2's own defect on a
-taper is what "closest" means there. Reach for `bspline-d1` with `EK` armed
-(the `EK` card, above) for a tapered or fat-conductor deck instead — it is
+**On a tapered or stepped-radius wire, `sinusoidal` is NEC-2-faithful, not
+converged.** At a junction where two wire radii meet it follows NEC-2, and
+that includes NEC-2's well-known stepped-radius weakness: it mostly ignores
+the step, and more so as the mesh is refined. On a 6 m dipole at 14 MHz with
+a 0.5 mm half joined to a 1 mm half, the step's effect on Z, in ohms
+(momwire#1632):
+
+| | 20 seg/half | 40 seg/half | 80 seg/half |
+|---|---|---|---|
+| NEC-2 (PyNEC) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
+| `sinusoidal` | −0.59 − 8.86j | −0.76 − 1.18j | −1.01 + 9.47j |
+| `sinusoidal-galerkin` | −0.02 − 33.44j | −0.00 − 34.04j | +0.01 − 34.42j |
+| `bspline` | −0.07 − 32.55j | −0.03 − 33.42j | −0.01 − 33.95j |
+| NEC-5 | +0.03 − 34.69j | +0.03 − 34.80j | |
+
+That is by design: this row exists to be the NEC-2-closest rung of the
+ladder, and the nec2 slot is meant to match nec2c, so inheriting NEC-2's own
+behaviour on a taper is what "closest" means there. The solver says so: every
+`sinusoidal` solve with two radii at one junction raises a
+`RadiusStepJunction` advisory naming the wires. A NEC-4.2-style step for the
+NEC-4 dialect is momwire#1644. For the converged answer use `bspline` or
+`sinusoidal-galerkin`; `bspline-d1` with `EK` armed (the `EK` card, above) is
 the row measured closest to NEC-5 on Ward Harriman AE6TY's flagship 20:1
-tapered dipole. `sinusoidal-galerkin` additionally REFUSES `EK` outright on
-any deck where two wires of different radii meet at a junction — measured
-divergent rather than merely inaccurate there; see the `EK` card entry in
+tapered dipole. `sinusoidal-galerkin` REFUSES `EK` outright on any deck
+where two wires of different radii meet at a junction — measured divergent
+rather than merely inaccurate there; see the `EK` card entry in
 [the nec2 deck grammar
 reference](/reference/deck-grammar-nec2/#ek--extended-thin-wire-kernel).
 
