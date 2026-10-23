@@ -809,16 +809,18 @@ struct NetSolve {
     std::vector<cd> v_applied, i_port, i_source;
 };
 
-// `_reduced_state(cards, n, voltages, driven, y_eff, wavelength)`.
-NetSolve reduced_state(const Prepared &p, int64_t n, const std::vector<cd> &voltages,
-                       const std::vector<int64_t> &held, const Op &yeff_op,
+// `_reduced_state(cards, n, voltages, driven, y_eff, wavelength)`:
+// `flat_network(..., held=held)` and `reduced_ports(..., driven)` (the seam
+// holds exactly the ports it reads back; the NEC-4.2 slot may not).
+NetSolve reduced_state(const std::vector<SeamCard> &cards, int64_t n, const std::vector<cd> &voltages,
+                       const std::vector<int64_t> &held, const std::vector<int64_t> &driven, const Op &yeff_op,
                        const std::function<cd(int64_t, int64_t)> &y_eff_at, double wavelength,
                        const NumpyLinalg &np) {
     if (np.zgesvx == nullptr) throw Decline{"no zgesvx for the network solve"};
     // `flat_network`: every port that is not an endpoint (or is held, or
     // carries a voltage) is a Driven source at its voltage
     std::set<int64_t> endpoints;
-    for (const SeamCard &c : p.cards) {
+    for (const SeamCard &c : cards) {
         endpoints.insert(c.site_a);
         endpoints.insert(c.site_b);
     }
@@ -839,7 +841,7 @@ NetSolve reduced_state(const Prepared &p, int64_t n, const std::vector<cd> &volt
     auto G = [&](int64_t i, int64_t j) -> cd & { return g[static_cast<std::size_t>(i * n + j)]; };
     std::vector<G2> elements;
     std::vector<std::tuple<int64_t, int64_t, cd>> couplings;
-    for (const SeamCard &c : p.cards) {
+    for (const SeamCard &c : cards) {
         const int64_t a = c.site_a, b = c.site_b;
         if (c.kind == SeamCard::nt) {
             if (a == b) throw Decline{"an NT card with both ends on one site"};
@@ -941,8 +943,11 @@ NetSolve reduced_state(const Prepared &p, int64_t n, const std::vector<cd> &volt
         out.v_applied[static_cast<std::size_t>(src_port[k])] = src_volts[k];
     out.i_port = mv(np, yeff_op, out.v_applied);
     out.i_source = out.i_port;
-    for (int64_t port : held)
-        out.i_source[static_cast<std::size_t>(port)] = x[static_cast<std::size_t>(n + termination_of.at(port))];
+    for (int64_t port : driven) {
+        const auto t = termination_of.find(port);
+        if (t == termination_of.end()) throw Decline{"a driven network port with no source branch (the reference raises)"};
+        out.i_source[static_cast<std::size_t>(port)] = x[static_cast<std::size_t>(n + t->second)];
+    }
     return out;
 }
 
@@ -1027,7 +1032,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
                 for (int64_t column = 0; column < nd; column++) {
                     std::vector<cd> probe(static_cast<std::size_t>(n), cd(0.0, 0.0));
                     probe[static_cast<std::size_t>(driven[column])] = cd(1.0, 0.0);
-                    const NetSolve r = reduced_state(p, n, probe, driven, yeff_op, y_eff_at,
+                    const NetSolve r = reduced_state(p.cards, n, probe, driven, driven, yeff_op, y_eff_at,
                                                      p.wavelength, np);
                     for (int64_t i = 0; i < nd; i++)
                         m.at(i, column) = r.i_source[static_cast<std::size_t>(driven[i])];
@@ -1057,7 +1062,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             st.i_port = mv(np, yeff_op, st.v_applied);
             st.i_source = st.i_port;
         } else {
-            const NetSolve r = reduced_state(p, n, volts, driven, yeff_op, y_eff_at, p.wavelength, np);
+            const NetSolve r = reduced_state(p.cards, n, volts, driven, driven, yeff_op, y_eff_at, p.wavelength, np);
             st.v_applied = r.v_applied;
             st.i_port = r.i_port;
             st.i_source = r.i_source;
@@ -1110,7 +1115,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
         const std::function<cd(int64_t, int64_t)> y_eff_at = [&](int64_t i, int64_t j) {
             return any_series ? xt.at(j, i) : y.at(i, j);
         };
-        const NetSolve r = reduced_state(p, n, probe, {driven}, yeff_op, y_eff_at, p.wavelength, np);
+        const NetSolve r = reduced_state(p.cards, n, probe, {driven}, {driven}, yeff_op, y_eff_at, p.wavelength, np);
         v_applied = r.v_applied;
         i_port = r.i_port;
         i_source = r.i_source;
@@ -3471,6 +3476,37 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
     out.solid_angle_pi = c.solid_angle_pi;
     out.power_radiated_4pi = c.power_radiated_4pi;
     out.directive = c.directive;
+    return out;
+}
+NetState composed(const std::vector<SeamCard> &cards, const CMat &y, const std::vector<cd> &z_load,
+                  const std::vector<cd> &voltages, const std::vector<int64_t> &held,
+                  const std::vector<int64_t> &driven, double wavelength, const NumpyLinalg &np) {
+    const int64_t n = y.rows;
+    bool any = false;  // `np.any(z_load)`
+    for (const cd &z : z_load) any = any || py_ctruth(z) || std::isnan(z.real()) || std::isnan(z.imag());
+    // `y_eff = solve((eye + z_load[:, None] * y).T, y.T).T`: the transposed
+    // view of the C-ordered solution, read through its strides
+    CMat xt;
+    Op yeff_op = y.op();
+    if (any) {
+        CMat lt(n, n), yt(n, n);
+        for (int64_t i = 0; i < n; i++)
+            for (int64_t j = 0; j < n; j++) {
+                const cd prod = nec5::np_cmul(z_load[static_cast<std::size_t>(i)], y.at(i, j));
+                lt.at(j, i) = cd((i == j ? 1.0 : 0.0) + prod.real(), 0.0 + prod.imag());
+                yt.at(i, j) = y.at(j, i);
+            }
+        xt = nec5::np_solve_matrix(np, lt, yt);
+        yeff_op = Op{xt.v.data(), n, n, 1, n};
+    }
+    const std::function<cd(int64_t, int64_t)> y_eff_at = [&](int64_t i, int64_t j) {
+        return any ? xt.at(j, i) : y.at(i, j);
+    };
+    const NetSolve r = nec5::reduced_state(cards, n, voltages, held, driven, yeff_op, y_eff_at, wavelength, np);
+    NetState out;
+    out.v_applied = r.v_applied;
+    out.i_port = r.i_port;
+    out.i_source = r.i_source;
     return out;
 }
 std::vector<double> near_grid(const Request &rq) { return nec5::near_points(rq); }

@@ -67,7 +67,8 @@ def mask(text: str) -> tuple[str, int]:
 
 def blas_addresses() -> list[int]:
     """numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub / zgesv, SciPy's LP64
-    zgetrf / zgetrs, and numpy's cblas_dgemm / dgemv / ddot."""
+    zgetrf / zgetrs, numpy's cblas_dgemm / dgemv / ddot, and SciPy's LP64
+    zgesvx (the network solve)."""
     import scipy
 
     def lib(pkg, pattern):
@@ -89,6 +90,7 @@ def blas_addresses() -> list[int]:
         (npl, "scipy_cblas_dgemm64_"),
         (npl, "scipy_cblas_dgemv64_"),
         (npl, "scipy_cblas_ddot64_"),
+        (spl, "scipy_zgesvx_"),
     )
     return [ctypes.cast(getattr(lb, n), ctypes.c_void_p).value for lb, n in names]
 

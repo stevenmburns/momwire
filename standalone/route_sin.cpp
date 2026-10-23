@@ -88,6 +88,7 @@ sinusoidal::FillLinalg linalg() {
     la.np.zgemv = &a_zgemv;
     la.np.zdotu_sub = &a_zdotu;
     la.np.zgesv = &a_zgesv;
+    la.np.zgesvx = &MWX(zgesvx_);  // the network solve's expert driver (SciPy's)
     return la;
 }
 

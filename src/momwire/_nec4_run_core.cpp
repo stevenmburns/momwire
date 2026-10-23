@@ -549,8 +549,10 @@ struct RunResult {
     std::vector<std::pair<ll, std::pair<ll, cd>>> driven;  // (port, (segment, volts))
     std::vector<cd> v_gap, v_applied, i_port, i_source, coeffs;
     std::vector<cd> segment_currents, segment_charges;
-    double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0;
+    double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0, p_network = 0;
     double fill_seconds = 0, wavelength = 0;
+    bool networked = false;  // a network reached the group (`reducer is not None`)
+    std::vector<std::pair<ll, std::pair<ll, ll>>> network_points;  // (tag, (segment, port))
     std::size_t point = 0;
     bool pec = false;     // GN 1
     bool finite = false;  // GN 2 / GN 3 (the Sommerfeld half-space)
@@ -645,11 +647,100 @@ std::vector<cd> segment_charges(Ctx &c, std::size_t point, const std::vector<cd>
     return table;
 }
 
-// `DeckSolver.solve_group(group, freq, group_index)` with no network
+// `deck._networks.live_cards(model, plan, group)`: (card, (port a, port b))
+// for every card in force at execute group `group`
+struct LiveCard {
+    const NetworkCard *card = nullptr;
+    ll port_a = 0, port_b = 0;
+};
+std::vector<LiveCard> live_cards(const PortalDeck &deck, const PortPlan &plan, ll group) {
+    std::vector<LiveCard> out;
+    const std::vector<NetworkCard> &cards = deck.model.networks;
+    for (std::size_t k = 0; k < cards.size() && k < plan.network_ports.size(); k++)
+        if (group >= cards[k].first_group)
+            out.push_back({&cards[k], plan.network_ports[k].first, plan.network_ports[k].second});
+    return out;
+}
+
+// `_point_at(wire, arclength)` on a two-vertex DeckWire
+std::array<double, 3> point_at(const DeckWire &w, double arclength) {
+    const double *a = w.vertices[0], *b = w.vertices[1];
+    const double length = py_dist(a, b);
+    const double t = length != 0.0 ? arclength / length : 0.0;
+    return {a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+}
+
+// `card_branches(card, ...)`'s TL line: (z0, length, crossed), the zero-length
+// rule measured between the two endpoint segment centres
+void tl_line(const PortalDeck &deck, const NetworkCard &card, double &z0, double &length, bool &crossed) {
+    const std::vector<DeckWire> &wires = deck.model.wires;
+    z0 = std::fabs(card.payload[0]);
+    crossed = card.payload[0] < 0.0;
+    length = card.payload[1];
+    if (length == 0.0) {
+        if (card.wire_a < 0 || card.wire_b < 0 || static_cast<std::size_t>(card.wire_a) >= wires.size() ||
+            static_cast<std::size_t>(card.wire_b) >= wires.size())
+            decline("a network end on no wire");
+        const std::array<double, 3> pa = point_at(wires[static_cast<std::size_t>(card.wire_a)], card.arclength_a);
+        const std::array<double, 3> pb = point_at(wires[static_cast<std::size_t>(card.wire_b)], card.arclength_b);
+        length = py_dist(pa.data(), pb.data());
+    }
+}
+
+// the live cards as the network solve takes them (TL lengths resolved)
+std::vector<nec5::SeamCard> seam_cards(const PortalDeck &deck, const std::vector<LiveCard> &live) {
+    std::vector<nec5::SeamCard> out;
+    for (const LiveCard &lc : live) {
+        nec5::SeamCard sc;
+        if (lc.card->kind == "NT") {
+            sc.kind = nec5::SeamCard::nt;
+        } else if (lc.card->kind == "TL") {
+            sc.kind = nec5::SeamCard::tl;
+        } else {
+            decline("a network card of another kind (the reference raises)");
+        }
+        for (int i = 0; i < 6; i++) sc.payload[i] = lc.card->payload[i];
+        if (sc.kind == nec5::SeamCard::tl) {
+            double z0, length;
+            bool crossed;
+            tl_line(deck, *lc.card, z0, length, crossed);
+            sc.payload[1] = length;  // the solve reads |F1| and F1's sign itself
+        }
+        sc.site_a = lc.port_a;
+        sc.site_b = lc.port_b;
+        out.push_back(sc);
+    }
+    return out;
+}
+
+// `DeckSolver.network_connection_points(group_index)`: (tag, segment, port)
+// per live connection point, the unsourced ones first, each in discovery order
+std::vector<std::pair<ll, std::pair<ll, ll>>> network_connection_points(const Ctx &c, const std::vector<LiveCard> &live,
+                                                                        const std::vector<ll> &sourced) {
+    const PortalDeck &deck = c.ss->deck;
+    std::vector<std::pair<ll, ll>> seen;  // (segment, port)
+    for (const LiveCard &lc : live) {
+        const std::pair<ll, ll> ends[2] = {
+            {global_segment(deck.structure.wires, lc.card->address_a[0], lc.card->address_a[1]), lc.port_a},
+            {global_segment(deck.structure.wires, lc.card->address_b[0], lc.card->address_b[1]), lc.port_b}};
+        for (const auto &e : ends)
+            if (std::find(seen.begin(), seen.end(), e) == seen.end()) seen.push_back(e);
+    }
+    std::vector<std::pair<ll, std::pair<ll, ll>>> out;
+    for (int pass = 0; pass < 2; pass++)
+        for (const auto &e : seen) {
+            const bool is_sourced = std::find(sourced.begin(), sourced.end(), e.first) != sourced.end();
+            if (is_sourced != (pass == 1)) continue;
+            const SegmentRow &seg = c.sb->tables.segments.at(static_cast<std::size_t>(e.first - 1));
+            out.push_back({i64(seg.tag), {e.first, e.second}});
+        }
+    return out;
+}
+
+// `DeckSolver.solve_group(group, freq, group_index)`
 RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_index) {
     const BuildTables &bt = c.sb->tables;
     const PortalDeck &deck = c.ss->deck;
-    if (!deck.model.networks.empty()) decline("a TL / NT network (momwire#1607 B4c)");
     RunResult r;
     if (group.environment.ground.kind != Ground::none)
         for (const GeometryWire &w : deck.structure.wires)
@@ -704,19 +795,41 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     for (ll i = 0; i < P; i++)
         for (ll j = 0; j < P; j++)
             system.at(i, j) = cadd(cd(i == j ? 1.0 : 0.0, 0.0), cm(z_load[static_cast<std::size_t>(i)], y.at(i, j)));
-    // `respond(v_source)` with no network: (v_gap, i_port)
-    auto respond = [&](const std::vector<cd> &v, std::vector<cd> &v_gap, std::vector<cd> &i_port) {
-        v_gap = np_solve(*c.np, system, v);
-        i_port.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
-        if (P > 0) {
-            const nec5::Op vo{v_gap.data(), P, 1, 1, 0};
-            rp::np_matmul(*c.np, y.op(), vo, i_port.data(), 1, 0);
+    // the network cards in force at this group (`build_reducer` is None
+    // without one)
+    const std::vector<LiveCard> live = live_cards(deck, op.ports, group_index);
+    const std::vector<nec5::SeamCard> cards = seam_cards(deck, live);
+    r.networked = !live.empty();
+    std::vector<ll> driven_ports;
+    for (const auto &d : r.driven) driven_ports.push_back(d.first);
+    // `respond(v_source)`: (v_gap, v_applied, i_port, i_source); with a
+    // network `_composed` and `v_gap = v_applied - z_load * i_port`
+    auto respond = [&](const std::vector<cd> &v, const std::vector<ll> &held, std::vector<cd> &v_gap,
+                       std::vector<cd> &v_applied, std::vector<cd> &i_port, std::vector<cd> &i_source) {
+        if (!r.networked) {
+            v_gap = np_solve(*c.np, system, v);
+            i_port.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
+            if (P > 0) {
+                const nec5::Op vo{v_gap.data(), P, 1, 1, 0};
+                rp::np_matmul(*c.np, y.op(), vo, i_port.data(), 1, 0);
+            }
+            v_applied = v_gap;
+            i_source = i_port;
+            return;
+        }
+        std::vector<int64_t> h(held.begin(), held.end()), dv(driven_ports.begin(), driven_ports.end());
+        const rp::NetState ns = rp::composed(cards, y, z_load, v, h, dv, op.wavelength, *c.np);
+        v_applied = ns.v_applied;
+        i_port = ns.i_port;
+        i_source = ns.i_source;
+        v_gap.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
+        for (ll k = 0; k < P; k++) {
+            const std::size_t q = static_cast<std::size_t>(k);
+            v_gap[q] = rp::c_sub(v_applied[q], cm(z_load[q], i_port[q]));
         }
     };
     if (!phased) {
-        respond(v_source, r.v_gap, r.i_port);
-        r.v_applied = r.v_gap;
-        r.i_source = r.i_port;
+        respond(v_source, {}, r.v_gap, r.v_applied, r.i_port, r.i_source);
     } else {
         // `_phased_drive` with no network: the driven ports partition into
         // the set currents (I) and the set voltages (V); M, the driven
@@ -734,13 +847,13 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
         std::vector<std::size_t> i_rows, v_rows;
         for (std::size_t k = 0; k < D; k++) (is_current(ports[k]) ? i_rows : v_rows).push_back(k);
         nec5::CMat m(static_cast<ll>(D), static_cast<ll>(D));
-        std::vector<cd> g, ip;
+        std::vector<cd> g, va, ip, is;
         for (std::size_t col = 0; col < D; col++) {
             std::vector<cd> probe(static_cast<std::size_t>(P), cd(0.0, 0.0));
             probe[static_cast<std::size_t>(ports[col])] = cd(1.0, 0.0);
-            respond(probe, g, ip);
+            respond(probe, ports, g, va, ip, is);
             for (std::size_t k = 0; k < D; k++)
-                m.at(static_cast<ll>(k), static_cast<ll>(col)) = ip[static_cast<std::size_t>(ports[k])];
+                m.at(static_cast<ll>(k), static_cast<ll>(col)) = is[static_cast<std::size_t>(ports[k])];
         }
         const ll ni = static_cast<ll>(i_rows.size()), nv = static_cast<ll>(v_rows.size());
         std::vector<cd> rhs;
@@ -769,12 +882,10 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
         for (ll a = 0; a < ni; a++) volts[i_rows[static_cast<std::size_t>(a)]] = vi[static_cast<std::size_t>(a)];
         std::vector<cd> vs(static_cast<std::size_t>(P), cd(0.0, 0.0));
         for (std::size_t k = 0; k < D; k++) vs[static_cast<std::size_t>(ports[k])] = volts[k];
-        respond(vs, r.v_gap, r.i_port);
-        r.v_applied = r.v_gap;
-        r.i_source = r.i_port;
+        respond(vs, ports, r.v_gap, r.v_applied, r.i_port, r.i_source);
         for (std::size_t k : i_rows) {
             r.i_source[static_cast<std::size_t>(ports[k])] = spec[k];
-            r.i_port[static_cast<std::size_t>(ports[k])] = spec[k];
+            if (!r.networked) r.i_port[static_cast<std::size_t>(ports[k])] = spec[k];
         }
         for (std::size_t k : i_rows) r.driven[k].second.second = r.v_applied[static_cast<std::size_t>(ports[k])];
     }
@@ -818,7 +929,26 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     // (`DeckSolver._lossy`)
     const double p_wire = bt.lossy ? c.engine->wire_loss_power(r.point, r.coeffs) : 0.0;
     r.p_structure = (p_load + p_wire) + 0.0;
-    r.p_radiated = r.p_in - r.p_structure;
+    if (!r.networked) {
+        r.p_radiated = r.p_in - r.p_structure;
+    } else {
+        // what crossed the gaps, 1/2 Re(V_gap I*), is radiation plus wire
+        // loss; what the source delivered but the gaps did not receive went
+        // into the network
+        if (P >= 16384) decline("a network deck with a port count past numpy's temporary elision");
+        std::vector<double> gap(static_cast<std::size_t>(P));
+        for (ll p = 0; p < P; p++) {
+            const std::size_t q = static_cast<std::size_t>(p);
+            gap[q] = cm(r.v_gap[q], std::conj(r.i_port[q])).real();
+        }
+        const double p_gap = 0.5 * rp::np_pairwise(gap.data(), static_cast<int64_t>(gap.size()));
+        r.p_radiated = (p_gap - p_wire) - 0.0;
+        r.p_network = (r.p_in - p_load) - p_gap;
+        if (std::fabs(r.p_network) <= 1e-9 * std::fabs(r.p_in)) r.p_network = 0.0;  // _NETWORK_LOSS_FLOOR
+        std::vector<ll> sourced;
+        for (const auto &d : r.driven) sourced.push_back(d.second.first);
+        r.network_points = network_connection_points(c, live, sourced);
+    }
     r.efficiency = r.p_in > 0 ? (100.0 * r.p_radiated) / r.p_in : 0.0;
     return r;
 }
@@ -1123,6 +1253,7 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
     }
     std::map<ll, ll> gap_current;  // segment -> port
     for (const auto &d : r.driven) gap_current[d.second.first] = d.first;
+    for (const auto &np_ : r.network_points) gap_current[np_.second.first] = np_.second.second;
     out.has_currents = true;
     for (const SegmentRow &seg : c.sb->tables.segments) {
         auto it = gap_current.find(seg.number);
@@ -1181,8 +1312,76 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
     out.power.wire_loss = r.p_structure;
     out.power.efficiency_percent = r.efficiency;
     out.power.has_network_loss = false;
-    (void)deck;
-    (void)index;
+    // `_networks(solver, result, index)`: NETWORK DATA (with the preamble)
+    // and the excitation at every connection point
+    if (r.networked) {
+        const std::vector<LiveCard> live = live_cards(deck, c.sb->points[r.point].ports, index);
+        std::vector<ll> seen;
+        for (const LiveCard &lc : live) {
+            PrintNetworkRow row;
+            ll ends[4];
+            const nec5::Int *addr[2] = {lc.card->address_a, lc.card->address_b};
+            for (int e = 0; e < 2; e++) {
+                const ll segment = global_segment(deck.structure.wires, addr[e][0], addr[e][1]);
+                ends[2 * e] = i64(c.sb->tables.segments.at(static_cast<std::size_t>(segment - 1)).tag);
+                ends[2 * e + 1] = segment;
+                if (std::find(seen.begin(), seen.end(), segment) == seen.end()) seen.push_back(segment);
+            }
+            row.tag_from = ends[0];
+            row.segment_from = ends[1];
+            row.tag_to = ends[2];
+            row.segment_to = ends[3];
+            const double *f = lc.card->payload;
+            if (lc.card->kind == "NT") {
+                row.line = false;
+                row.y11 = cd(f[0], f[1]);
+                row.y12 = cd(f[2], f[3]);
+                row.y22 = cd(f[4], f[5]);
+            } else {
+                row.line = true;
+                tl_line(deck, *lc.card, row.z0, row.length_m, row.crossed);
+                row.shunt_a = cd(f[2], f[3]);
+                row.shunt_b = cd(f[4], f[5]);
+            }
+            if (preamble) out.networks.push_back(row);
+        }
+        std::map<ll, std::pair<ll, ll>> by_segment;  // segment -> (tag, port)
+        for (const auto &np_ : r.network_points) by_segment[np_.second.first] = {np_.first, np_.second.second};
+        // a point a VOLTAGE source drives prints after the rest
+        std::vector<ll> voltage_driven;
+        for (const auto &d : r.driven)
+            if (std::find(c.sb->tables.current_ports.begin(), c.sb->tables.current_ports.end(), d.first) ==
+                c.sb->tables.current_ports.end())
+                voltage_driven.push_back(d.second.first);
+        std::vector<ll> order;
+        for (int pass = 0; pass < 2; pass++)
+            for (ll g : seen) {
+                const bool vd = std::find(voltage_driven.begin(), voltage_driven.end(), g) != voltage_driven.end();
+                if (vd == (pass == 1)) order.push_back(g);
+            }
+        for (ll segment : order) {
+            auto it = by_segment.find(segment);
+            if (it == by_segment.end()) continue;
+            const ll port = it->second.second;
+            const cd volts = r.v_applied[static_cast<std::size_t>(port)];
+            cd current = r.i_port[static_cast<std::size_t>(port)];
+            if (current.real() * current.real() + current.imag() * current.imag() <= 1.0e-20) current = cd(0.0, 0.0);
+            PrintPortRow row;
+            row.tag = it->second.first;
+            row.segment = segment;
+            row.end_index = 0;
+            row.voltage = volts;
+            row.current = current;
+            row.impedance = current != cd(0.0, 0.0) ? py_div(volts, current) : cd(0.0, 0.0);
+            row.admittance = volts != cd(0.0, 0.0) ? py_div(current, volts) : cd(0.0, 0.0);
+            row.power = 0.5 * py_mul(volts, std::conj(current)).real();
+            out.network_excitation.push_back(row);
+        }
+        if (!out.network_excitation.empty()) {
+            out.power.has_network_loss = true;
+            out.power.network_loss = r.p_network;
+        }
+    }
     return out;
 }
 

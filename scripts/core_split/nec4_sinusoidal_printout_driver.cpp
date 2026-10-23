@@ -76,6 +76,7 @@ int main(int argc, char **argv) {
     la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(
         sym_of(numpy_lib, {"scipy_cblas_ddot64_", "cblas_ddot64_"}));
     la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym_of(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
+    la.np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym_of(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));
     la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dgemm64_", "cblas_dgemm64_"}));
     mw::nec5::EngineStamp stamp;

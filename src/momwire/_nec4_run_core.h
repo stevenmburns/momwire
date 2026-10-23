@@ -5,7 +5,8 @@
 // - the deck tables: the wire table (`_wire_rows`), the GE flag, the
 //   junctions (`_segment_end_nodes`) and the segmentation rows with NEC-4.2's
 //   junction rule for the connection columns (`_connections`);
-// - each run's port algebra (`DeckSolver.solve_group` with no network):
+// - each run's port algebra (`DeckSolver.solve_group`), a TL / NT network
+//   through the NEC-5 seam's network solve (`nec5::replay::composed`):
 //   the LD 0-4 port impedances (`_load_impedances`), `(1 + Z·Y)⁻¹·V` by
 //   numpy's solve, a lone current source scaled to its set current, the
 //   coefficients `X·(signs·V_gap)`, the segment currents
@@ -15,7 +16,8 @@
 // - the rows (`_run`, `_run_records`' source rows, `_charge_rows`, `value_row`)
 //   and RP (`_pattern` over the NEC-5 seam's row builder,
 //   `nec5::replay::free_space_pattern`, then `_at_range`); NE / NH over the
-//   NEC-5 seam's near-field readout (`nec5::replay::near_field`).
+//   NEC-5 seam's near-field readout (`nec5::replay::near_field`); the
+//   network rows (`_networks`).
 //
 // The basis answers three questions (`RunEngine`): its port solution, its
 // current at every knot, and dI/ds at given arclengths. The sinusoidal
@@ -27,10 +29,9 @@
 // `tests/test_nec4_run_core.py` through `scripts/core_split/nec4_run_compare.py`.
 //
 // DECLINED (`Declined`), never misprinted: GD's far-field cliff (B5d), a
-// wire below the ground plane (B6), an insulated wire, a TL / NT network
-// (B4c3), two sources on one segment of a phased drive, a near-field point in
-// the soil or on a wire's finite-ground contact (the reference refuses both
-// in its own words), and
+// wire below the ground plane (B6), an insulated wire, two sources on one
+// segment of a phased drive, a near-field point in the soil or on a wire's
+// finite-ground contact (the reference refuses both in its own words), and
 // any run Python would answer with a refusal this copy does not word (a
 // singular drive block, a current source on a port that takes no current).
 #pragma once
