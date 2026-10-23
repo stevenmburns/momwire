@@ -142,6 +142,50 @@ def deck_files(root: pathlib.Path) -> list[pathlib.Path]:
     return [p for p in sorted(root.rglob("*")) if p.is_file() and p.suffix in SUFFIXES]
 
 
+# The front is bit for bit on x86 Linux, which is what the standalone NEC-4.2
+# executable ships on (momwire#1512). Elsewhere numpy's float64 sin and cos
+# need not be libm's, which is what the core calls: on macOS arm64 the
+# momwire#1651 arc probe p78 put one basis coefficient one ulp apart
+# (3fe1a844feeaaca3 against ...aca2), every other field equal. Off Linux a
+# float or complex field is therefore the same within `_OFF_LINUX_RTOL`, the
+# NEC-5 seam's off-Linux bar (`seam_compare._OFF_LINUX_RTOL`); every other
+# field, and every field on Linux, still compares byte for byte.
+_OFF_LINUX_RTOL = 1e-11
+
+
+def _hex_double(text: str) -> float:
+    return float(np.frombuffer(bytes.fromhex(text)[::-1], dtype="<f8")[0])
+
+
+def _within(x: str, y: str) -> bool:
+    """Two dump lines that differ only in float or complex digits, each
+    component within `_OFF_LINUX_RTOL` of the other."""
+    (kx, _, vx), (ky, _, vy) = x.partition(" = "), y.partition(" = ")
+    tx, ty = vx.split(), vy.split()
+    if kx != ky or not tx or tx[0] != ty[0] or tx[0] not in ("float", "complex"):
+        return False
+    if len(tx) != len(ty):
+        return False
+    for hx, hy in zip(tx[1:], ty[1:], strict=True):
+        a, b = _hex_double(hx), _hex_double(hy)
+        if not (abs(a - b) <= _OFF_LINUX_RTOL * max(abs(a), abs(b))):
+            return False
+    return True
+
+
+def _difference(py: str, cxx: str) -> str | None:
+    diff = dc.first_difference(py, cxx)
+    if diff is None or sys.platform.startswith("linux"):
+        return diff
+    lp, lc = py.splitlines(), cxx.splitlines()
+    if len(lp) != len(lc):
+        return diff
+    for k, (x, y) in enumerate(zip(lp, lc, strict=True)):
+        if x != y and not _within(x, y):
+            return f"line {k}: python {x!r}\n          c++    {y!r}"
+    return None
+
+
 def compare(paths, out=None):
     acc = dc.accel()
     counts = {"fronts": 0, "empty": 0, "declined": 0, "mismatch": 0}
@@ -152,7 +196,7 @@ def compare(paths, out=None):
         kind = classify(cxx)
         diff = None
         if kind != "declined":
-            diff = dc.first_difference(py_front(text), cxx)
+            diff = _difference(py_front(text), cxx)
             if diff is not None:
                 kind = "mismatch"
                 mismatches.append((str(path), diff))
