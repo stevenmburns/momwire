@@ -315,6 +315,13 @@ def test_the_array_memo_is_bit_identical_to_the_dict_reference(case, monkeypatch
     moved 294 of 841 entries. A memo that misses where it should hit (every
     row fresh, so the column grouping changes) moved 208 / 6,873 / 11,073
     entries on the three."""
+    # The hub decks' crossing far blocks repeat rho (a vertical on the axis),
+    # so since momwire#1595 they are evaluated dense: one batched call, which
+    # dedups inside the call and leaves the memo nothing to HIT. The hits this
+    # row exists to exercise came from the ACA row and column samples, so it
+    # keeps them. Measured on the dense route too (10-22): bit-identical, with
+    # zero hits.
+    monkeypatch.setattr(cf, "_dense_beats_aca", lambda *a, **k: False)
     routes = _Routes(monkeypatch)
     restore = routes.use_reference()
     z_ref, i_ref = _solve(CASES[case])
