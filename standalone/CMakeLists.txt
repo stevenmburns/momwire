@@ -1,7 +1,9 @@
 # momwire-razor2p: `momwire-nec5-razor-2p` as one native executable
 # (momwire_razor2p.cpp's header says what it does). -DMW_EXE_BASIS=bs2 with
 # MW_EXE_NO_PYTHON builds `momwire-bs2-standalone`, `momwire-nec5-bspline`'s
-# twin, from the same cores (momwire#1517).
+# twin, from the same cores (momwire#1517). -DMW_EXE_BASIS=sin42 builds the
+# NEC-4.2 slot's `momwire-nec42-sinusoidal` (momwire#1607 B4b): the hybrid,
+# or with MW_EXE_NO_PYTHON `momwire-nec42-sinusoidal-standalone`.
 #
 #   cmake -S standalone -B build-exe -G Ninja \
 #         -DMW_OPENBLAS_LIB=/path/to/libmwxp.a \
@@ -54,13 +56,18 @@ option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it"
 # Which formulation the executable answers for (momwire#1517 Phase A): razor2p
 # (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
 # route_bs2.cpp, no-Python builds only). Both from the same cores.
-set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p or bs2")
-set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2)
+set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bs2 or sin42")
+set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2 sin42)
 if(MW_EXE_BASIS STREQUAL "bs2")
   if(NOT MW_EXE_NO_PYTHON)
     message(FATAL_ERROR "MW_EXE_BASIS=bs2 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
   endif()
   set(MW_ROUTE route_bs2.cpp)
+elseif(MW_EXE_BASIS STREQUAL "sin42")
+  # `momwire-nec42-sinusoidal` (momwire#1607 B4b): the NEC-4.2 slot, point
+  # matched; the hybrid (the embedded launcher answers what the C++ route
+  # declines) or, with MW_EXE_NO_PYTHON, the no-Python build
+  set(MW_ROUTE route_sin.cpp)
 elseif(MW_EXE_BASIS STREQUAL "razor2p")
   set(MW_ROUTE route.cpp)
 else()
@@ -248,6 +255,21 @@ if(MW_EXE_BASIS STREQUAL "bs2")
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
 endif()
+if(MW_EXE_BASIS STREQUAL "sin42")
+  # the NEC-4.2 slot's reader, seam, build, printout writer and run half, and
+  # the sinusoidal basis' point-matched kernels, front half, fill and answers
+  # (momwire#1607 A1-B4a)
+  list(APPEND MW_CORE_SOURCES
+    ${MW_SRC}/_nec4_deck_core.cpp
+    ${MW_SRC}/_nec4_seam_core.cpp
+    ${MW_SRC}/_nec4_build_core.cpp
+    ${MW_SRC}/_nec4_printout_core.cpp
+    ${MW_SRC}/_nec4_run_core.cpp
+    ${MW_SRC}/_sinusoidal_core.cpp
+    ${MW_SRC}/_sinusoidal_front_core.cpp
+    ${MW_SRC}/_sinusoidal_fill_core.cpp
+    ${MW_SRC}/_sinusoidal_run_core.cpp)
+endif()
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
 # `mw_core_serial`, the same sources with `mw` renamed `mws` and no OpenMP
 # runtime at all (`omp simd` stays: -fopenmp-simd / MSVC's simd no-ops), so a
@@ -309,6 +331,21 @@ if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
     MW_EXE_LAUNCHER="momwire-nec5-bspline"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
+elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sin42")
+  set(MW_EXE momwire-nec42-sinusoidal-standalone)
+  add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
+                 $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_NO_PYTHON=1
+    MW_EXE_DIALECT_NEC4=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_BASIS_NAME="sinusoidal"
+    MW_EXE_PROGRAM="momwire-nec42-sinusoidal"
+    MW_EXE_LAUNCHER="momwire-nec42-sinusoidal"
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON)
   set(MW_EXE momwire-razor2p-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
@@ -320,6 +357,23 @@ elseif(MW_EXE_NO_PYTHON)
     MW_EXE_VARIANT="${MW_EXE_VARIANT}"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
+elseif(MW_EXE_BASIS STREQUAL "sin42")
+  set(MW_EXE momwire-nec42-sinusoidal)
+  add_executable(${MW_EXE} momwire_razor2p.cpp $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${Python3_INCLUDE_DIRS})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_DIALECT_NEC4=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_BASIS_NAME="sinusoidal"
+    MW_EXE_PROGRAM="momwire-nec42-sinusoidal"
+    MW_EXE_LAUNCHER="momwire-nec42-sinusoidal"
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}"
+    MW_LIBPYTHON="${MW_LIBPYTHON}")
+  if(MW_DEFAULT_PYTHON_HOME)
+    target_compile_definitions(${MW_EXE} PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
+  endif()
 else()
   set(MW_EXE momwire-razor2p)
   add_executable(${MW_EXE} momwire_razor2p.cpp $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)

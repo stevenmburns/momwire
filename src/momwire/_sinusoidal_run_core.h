@@ -55,6 +55,10 @@ class Engines : public nec4::EngineFactory {
 // LF), or false with the reason this copy declines.
 bool printout(const std::string &latin1_text, const nec5::EngineStamp &stamp, const FillLinalg &la,
               std::string &utf8_printout, std::string &why);
+// `_shell._stream_piece(text, basis="sinusoidal", dialect="nec4")`
+// (`nec4::render_piece`).
+bool printout_piece(const std::string &latin1_text, const nec5::EngineStamp &stamp, const FillLinalg &la,
+                    std::string &utf8_printout, std::string &why, bool &go_on);
 
 }  // namespace sinusoidal
 }  // namespace mw

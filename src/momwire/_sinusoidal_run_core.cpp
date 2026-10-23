@@ -182,5 +182,11 @@ bool printout(const std::string &text, const nec5::EngineStamp &stamp, const Fil
     return nec4::render(text, "sinusoidal", stamp, engines, la.np, out, why);
 }
 
+bool printout_piece(const std::string &text, const nec5::EngineStamp &stamp, const FillLinalg &la,
+                    std::string &out, std::string &why, bool &go_on) {
+    Engines engines(la);
+    return nec4::render_piece(text, "sinusoidal", stamp, engines, la.np, out, why, go_on);
+}
+
 }  // namespace sinusoidal
 }  // namespace mw

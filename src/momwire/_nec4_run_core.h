@@ -75,10 +75,24 @@ class EngineFactory {
 };
 
 // `_nec4.render(text, basis=...)` over the engine: true with the printout
-// (UTF-8, LF), or false with why this copy declines the deck.
+// (UTF-8, LF), or false with why this copy declines the deck. An exception
+// that is not a decline (an allocation, say) escapes, as Python's would.
 bool render(const std::string &latin1_text, const std::string &basis,
             const nec5::EngineStamp &stamp, EngineFactory &engines,
             const nec5::NumpyLinalg &np, std::string &utf8_printout, std::string &why);
+
+// `_shell._stream_piece(text, dialect="nec4")` (momwire#1512): a piece cut
+// at an NX is that structure (`_nec4.render_structure` with its NX echo and
+// no RUN TIME), and `go_on` says it solved; any other piece is a whole deck
+// (`render`), after which the stream is over.
+bool render_piece(const std::string &latin1_text, const std::string &basis,
+                  const nec5::EngineStamp &stamp, EngineFactory &engines,
+                  const nec5::NumpyLinalg &np, std::string &utf8_printout, std::string &why,
+                  bool &go_on);
+
+// The largest solve (segments) the deck's built structures prepare, or -1
+// (the executable's thread policy).
+long long largest_solve(const std::string &latin1_text, const std::string &basis, bool open_end);
 
 }  // namespace nec4
 }  // namespace mw
