@@ -26,7 +26,7 @@
 //
 // DECLINED (`nec4::Declined`), never misread:
 // - a solver without the extended kernel (the NEC-4.2 slot never builds one);
-// - a finite ground (momwire#1607 B5c) and an insulated wire;
+// - an insulated wire;
 // - a matrix scipy's solve would NOT take as general: exactly symmetric or
 //   Hermitian, or of lower or upper bandwidth at most 1 (its diagonal,
 //   triangular and tridiagonal detection), or not finite; a singular one

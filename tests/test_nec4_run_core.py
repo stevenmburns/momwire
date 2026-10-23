@@ -21,8 +21,10 @@ masked, by exact pattern and with the same count on both sides, over:
   line and rows below the horizon, PQ, GN 3 with LD 5;
 - a monopole on a Sommerfeld ground (the contact correction), with PQ and
   RP;
-- the declines: GD's far-field cliff, a network, an NE
-  table, a GH helix.
+- a GH helix (its wire-table row), alone and tapered beside a wire;
+- a phased drive (current sources among several): an EX 6 beside an EX 0,
+  and two EX 6 with a port load;
+- the declines: GD's far-field cliff, a network, an NE table.
 """
 
 from __future__ import annotations
@@ -235,9 +237,30 @@ CASES = [
         "declined",
     ),
     (
-        "helix_declines",
-        deck("GH 1 20 2 .5 .05 .05 .05 .05 .001\n", FR + "EX 0 1 1 0 1\nXQ\n"),
-        "declined",
+        "helix",
+        deck("GH 1 40 3 .3 .05 .05 .001 .001\n", FR + "EX 0 1 1 0 1\nPQ 0\n" + RP),
+        "printed",
+    ),
+    (
+        "helix_tapered_beside_a_wire",
+        deck(
+            "GH 1 30 -2.5 .4 .08 .03 .002 .001\nGW 2 11 .3 0 0 .3 0 .5 .001\n",
+            FR + "EX 0 2 6 0 1\nXQ\n",
+        ),
+        "printed",
+    ),
+    (
+        "phased_current_and_voltage",
+        deck(TWO, FR + "EX 6 1 6 0 1 0\nEX 0 2 6 0 0 1\n" + RP),
+        "printed",
+    ),
+    (
+        "phased_two_current_sources_loaded",
+        deck(
+            TWO,
+            FR + "LD 4 1 6 6 10 5\nEX 6 1 6 0 1 0\nEX 6 2 6 0 0 -1\nPQ 0\nXQ\n",
+        ),
+        "printed",
     ),
 ]
 

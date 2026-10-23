@@ -899,7 +899,7 @@ bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, doub
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
-    // a finite ground is B5c's
+    // GN 2 / GN 3: the Sommerfeld composition (B5c)
     const bool pec = args.ground.kind == nec4::Ground::pec;
     const bool finite = args.ground.kind == nec4::Ground::finite;  // GN 2 / GN 3: Sommerfeld
     if (args.ground.kind != nec4::Ground::none && !pec && !finite)

@@ -319,8 +319,7 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             rows.push_back(r);
             continue;
         }
-        if (card.mnemonic == "GH") decline("a GH helix row (momwire#1607 B4c)");
-        if (card.mnemonic != "GW" && card.mnemonic != "GA") continue;
+        if (card.mnemonic != "GW" && card.mnemonic != "GA" && card.mnemonic != "GH") continue;
         number++;
         const ll n_seg = i64(card.i(1));
         const ll last = first + n_seg - 1;
@@ -335,6 +334,15 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             r.angle1_deg = card.f(3);
             r.angle2_deg = card.f(4);
             r.radius = card.f(5);
+        } else if (card.mnemonic == "GH") {
+            r.kind = WireTableRow::helix;
+            r.turns = card.f(2);
+            r.length = card.f(3);
+            r.helix_radii[0] = card.f(4);
+            r.helix_radii[1] = card.f(5);
+            r.wire_radii[0] = card.f(6);
+            r.wire_radii[1] = card.f(7);
+            r.wire_length = helix_wire_length(card);
         } else {
             r.kind = WireTableRow::wire;
             for (int c = 0; c < 3; c++) {
@@ -656,7 +664,7 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     bool gd = false;  // `_far_ground_card(deck)`
     for (const nec5::Card &card : c.ss->deck.data_cards) gd = gd || card.mnemonic == "GD";
     if ((r.pec || r.finite) && gd && group.environment.has_second_medium)
-        decline("a GD far-field ground (momwire#1607 B5c)");
+        decline("a GD far-field ground (momwire#1607 B5d)");
     const OperatingPoint &op = c.sb->points[r.point];
     const EngineSolve &es = c.engine->solve(r.point);
     r.fill_seconds = es.fill_seconds;
@@ -689,21 +697,87 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     std::vector<cd> v_source(static_cast<std::size_t>(P), cd(0.0, 0.0));
     for (const auto &d : r.driven) v_source.at(static_cast<std::size_t>(d.first)) = d.second.second;
     const std::vector<cd> z_load = load_impedances(bt, P, omega, group_index);
+    bool phased = false;
     if (r.driven.size() > 1)
-        for (const auto &d : r.driven)
-            if (is_current(d.first)) decline("phased current sources (momwire#1607 B4c)");
+        for (const auto &d : r.driven) phased = phased || is_current(d.first);
     nec5::CMat system(P, P);
     for (ll i = 0; i < P; i++)
         for (ll j = 0; j < P; j++)
             system.at(i, j) = cadd(cd(i == j ? 1.0 : 0.0, 0.0), cm(z_load[static_cast<std::size_t>(i)], y.at(i, j)));
-    r.v_gap = np_solve(*c.np, system, v_source);
-    r.i_port.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
-    if (P > 0) {
-        const nec5::Op vo{r.v_gap.data(), P, 1, 1, 0};
-        rp::np_matmul(*c.np, y.op(), vo, r.i_port.data(), 1, 0);
+    // `respond(v_source)` with no network: (v_gap, i_port)
+    auto respond = [&](const std::vector<cd> &v, std::vector<cd> &v_gap, std::vector<cd> &i_port) {
+        v_gap = np_solve(*c.np, system, v);
+        i_port.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
+        if (P > 0) {
+            const nec5::Op vo{v_gap.data(), P, 1, 1, 0};
+            rp::np_matmul(*c.np, y.op(), vo, i_port.data(), 1, 0);
+        }
+    };
+    if (!phased) {
+        respond(v_source, r.v_gap, r.i_port);
+        r.v_applied = r.v_gap;
+        r.i_source = r.i_port;
+    } else {
+        // `_phased_drive` with no network: the driven ports partition into
+        // the set currents (I) and the set voltages (V); M, the driven
+        // ports' voltage-to-current map, is measured a unit probe at a time,
+        // M[I, I] V_I = I_spec - M[I, V] V_V is solved, and one last
+        // response at the full voltages is the state
+        const std::size_t D = r.driven.size();
+        std::vector<ll> ports;
+        for (const auto &d : r.driven) ports.push_back(d.first);
+        for (std::size_t a = 0; a < D; a++)
+            for (std::size_t b = a + 1; b < D; b++)
+                if (ports[a] == ports[b]) decline("two sources of one execute group on one segment (the reference refuses)");
+        std::vector<cd> spec;
+        for (const auto &d : r.driven) spec.push_back(d.second.second);
+        std::vector<std::size_t> i_rows, v_rows;
+        for (std::size_t k = 0; k < D; k++) (is_current(ports[k]) ? i_rows : v_rows).push_back(k);
+        nec5::CMat m(static_cast<ll>(D), static_cast<ll>(D));
+        std::vector<cd> g, ip;
+        for (std::size_t col = 0; col < D; col++) {
+            std::vector<cd> probe(static_cast<std::size_t>(P), cd(0.0, 0.0));
+            probe[static_cast<std::size_t>(ports[col])] = cd(1.0, 0.0);
+            respond(probe, g, ip);
+            for (std::size_t k = 0; k < D; k++)
+                m.at(static_cast<ll>(k), static_cast<ll>(col)) = ip[static_cast<std::size_t>(ports[k])];
+        }
+        const ll ni = static_cast<ll>(i_rows.size()), nv = static_cast<ll>(v_rows.size());
+        std::vector<cd> rhs;
+        for (std::size_t k : i_rows) rhs.push_back(spec[k]);
+        if (nv > 0) {
+            nec5::CMat miv(ni, nv);
+            std::vector<cd> sv(static_cast<std::size_t>(nv));
+            for (ll a = 0; a < ni; a++)
+                for (ll b = 0; b < nv; b++)
+                    miv.at(a, b) = m.at(static_cast<ll>(i_rows[static_cast<std::size_t>(a)]),
+                                        static_cast<ll>(v_rows[static_cast<std::size_t>(b)]));
+            for (ll b = 0; b < nv; b++) sv[static_cast<std::size_t>(b)] = spec[v_rows[static_cast<std::size_t>(b)]];
+            std::vector<cd> prod(static_cast<std::size_t>(ni), cd(0.0, 0.0));
+            const nec5::Op so{sv.data(), nv, 1, 1, 0};
+            rp::np_matmul(*c.np, miv.op(), so, prod.data(), 1, 0);
+            for (ll a = 0; a < ni; a++)
+                rhs[static_cast<std::size_t>(a)] = rp::c_sub(rhs[static_cast<std::size_t>(a)], prod[static_cast<std::size_t>(a)]);
+        }
+        nec5::CMat mii(ni, ni);
+        for (ll a = 0; a < ni; a++)
+            for (ll b = 0; b < ni; b++)
+                mii.at(a, b) = m.at(static_cast<ll>(i_rows[static_cast<std::size_t>(a)]),
+                                    static_cast<ll>(i_rows[static_cast<std::size_t>(b)]));
+        const std::vector<cd> vi = np_solve(*c.np, mii, rhs);
+        std::vector<cd> volts = spec;
+        for (ll a = 0; a < ni; a++) volts[i_rows[static_cast<std::size_t>(a)]] = vi[static_cast<std::size_t>(a)];
+        std::vector<cd> vs(static_cast<std::size_t>(P), cd(0.0, 0.0));
+        for (std::size_t k = 0; k < D; k++) vs[static_cast<std::size_t>(ports[k])] = volts[k];
+        respond(vs, r.v_gap, r.i_port);
+        r.v_applied = r.v_gap;
+        r.i_source = r.i_port;
+        for (std::size_t k : i_rows) {
+            r.i_source[static_cast<std::size_t>(ports[k])] = spec[k];
+            r.i_port[static_cast<std::size_t>(ports[k])] = spec[k];
+        }
+        for (std::size_t k : i_rows) r.driven[k].second.second = r.v_applied[static_cast<std::size_t>(ports[k])];
     }
-    r.v_applied = r.v_gap;
-    r.i_source = r.i_port;
     if (has_set) {
         const ll port = r.driven[0].first;
         const cd is = r.i_source[static_cast<std::size_t>(port)];
