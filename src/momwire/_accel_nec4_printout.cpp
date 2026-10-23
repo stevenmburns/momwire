@@ -332,12 +332,13 @@ void register_nec4_printout(py::module_ &m) {
     // The NEC-4.2 slot's run half over the sinusoidal basis (momwire#1607
     // B4a). `blas`: numpy's ILP64 cblas_zgemm / cblas_zgemv / cblas_zdotu_sub /
     // zgesv, SciPy's LP64 zgetrf / zgetrs, then numpy's cblas_dgemm /
-    // cblas_dgemv / cblas_ddot, as addresses.
+    // cblas_dgemv / cblas_ddot, and SciPy's LP64 zgesvx (the network
+    // solve), as addresses.
     m.def(
         "sinusoidal_nec4_printout",
         [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
            const std::string &variant, const std::string &marker) -> py::tuple {
-            if (blas.size() != 9) throw py::value_error("blas: nine addresses");
+            if (blas.size() != 10) throw py::value_error("blas: ten addresses");
             mw::sinusoidal::FillLinalg la;
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
@@ -348,6 +349,7 @@ void register_nec4_printout(py::module_ &m) {
             la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[6]);
             la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[7]);
             la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[8]);
+            la.np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(blas[9]);
             const std::string text = latin1_text;
             const mw::nec5::EngineStamp st = stamp_of(version, variant, marker);
             std::string out, why;

@@ -27,7 +27,10 @@ masked, by exact pattern and with the same count on both sides, over:
 - NE / NH tables: free space (rectangular, and spherical after an RP), a
   perfect ground, and a Sommerfeld ground above the plane and beside a
   monopole's contact;
-- the declines: GD's far-field cliff, a network, a near-field point on a
+- networks: a TL (straight, and crossed with shunts and its length taken
+  between the segment centres), an NT beside a port load, a TL under a
+  current source and under a phased drive, and a TL read after a run;
+- the declines: GD's far-field cliff, a near-field point on a
   wire's finite-ground contact or in the soil.
 """
 
@@ -230,10 +233,39 @@ CASES = [
         "GD 2,0,0,0,13.,.005,0.,0.\nXQ 0\nEN\n",
         "declined",
     ),
+    ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (
-        "network_declines",
-        deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"),
-        "declined",
+        "tl_crossed_shunts_zero_length",
+        deck(TWO, FR + "TL 1 6 2 6 -75 0 0 .01 .002 -.003\nEX 0 1 6 0 1\nPQ 0\nXQ\n"),
+        "printed",
+    ),
+    (
+        "nt_with_a_port_load",
+        deck(
+            TWO,
+            FR
+            + "LD 4 2 3 3 20 -10\nNT 1 6 2 6 0 -.02 0 .01 0 -.02\nEX 0 1 6 0 1\n"
+            + RP,
+        ),
+        "printed",
+    ),
+    (
+        "tl_current_source",
+        deck(TWO, FR + "TL 1 6 2 6 50 .2\nEX 6 1 6 0 1 0\nXQ\n"),
+        "printed",
+    ),
+    (
+        "tl_phased_two_current_sources",
+        deck(
+            TWO + "GW 3 11 .4 0 -.25 .4 0 .25 .001\n",
+            FR + "TL 1 6 3 6 50 .25\nEX 6 1 6 0 1 0\nEX 6 2 6 0 0 1\nXQ\n",
+        ),
+        "printed",
+    ),
+    (
+        "tl_read_after_the_first_run",
+        deck(TWO, FR + "EX 0 1 6 0 1\nXQ\nTL 1 6 2 6 50 .1\nXQ\n"),
+        "printed",
     ),
     (
         "ne_free",

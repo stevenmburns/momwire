@@ -366,6 +366,17 @@ struct PatternBlock {
 PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
                          const std::vector<cd> &moment, int ground, double eps_r, double sigma,
                          double frequency_mhz, double wavelength, double p_in, double p_radiated);
+// `DeckSolver._composed(reducer, y, z_load, wavelength, driven)` over the
+// seam's network solve: `y_eff` with the series loads folded in (`y` itself
+// when none), the flat network with `held` held, and `reduced_ports(...,
+// driven)`: V_applied, the structure current and the source current. The
+// cards' TL lengths are resolved. Throws `PrintoutDecline` where it declines.
+struct NetState {
+    std::vector<cd> v_applied, i_port, i_source;
+};
+NetState composed(const std::vector<SeamCard> &cards, const CMat &y, const std::vector<cd> &z_load,
+                  const std::vector<cd> &voltages, const std::vector<int64_t> &held,
+                  const std::vector<int64_t> &driven, double wavelength, const NumpyLinalg &np);
 // `grid_points(coordinates, counts, origin, step)` of an NE / NH request:
 // (n, 3) row-major, in the order its table prints them.
 std::vector<double> near_grid(const Request &rq);
