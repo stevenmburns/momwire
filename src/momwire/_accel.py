@@ -383,6 +383,8 @@ acc, LOADED, VARIANT = _load()
 # only ever catch a single abort type, whether it came from a Python-level
 # checkpoint or from inside a native fill.
 _CANCELLABLE_KERNELS = (
+    # momwire#1644: the NEC-4 dialect's kernel (`_accel_sinusoidal_nec4.cpp`).
+    "sinusoidal_field_tensor_nec4",
     "assemble_Z_bspline",
     "assemble_Z_bspline_windowed",
     "assemble_Z_bspline_weighted_windowed",

@@ -64,6 +64,9 @@ CORE_SOURCES = (
     # The sinusoidal basis' point-matched field tensors (momwire#1607 B1):
     # the extension TU's text over `_mw_nd.h`'s arrays.
     "_sinusoidal_core.cpp",
+    # The NEC-4 dialect's junction kernels and solve (momwire#1644), which
+    # the front half and the fill call.
+    "_sinusoidal_nec4_core.cpp",
     # The sinusoidal front half over the NEC-4.2 build (momwire#1607 B2),
     # linked into `sinusoidal_front_driver.cpp`.
     "_sinusoidal_front_core.cpp",

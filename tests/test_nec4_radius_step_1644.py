@@ -404,12 +404,11 @@ def test_sin_galerkin_takes_no_rule(rule, monkeypatch):
     assert solver.junction_rule == "nec2" and z == z0
 
 
-def test_the_rule_is_a_declared_axis():
-    from momwire._capabilities import AXIS_VALUES
-
-    assert AXIS_VALUES["junction_rule"] == ("nec2", "nec42")
-    assert SinusoidalSolver.capabilities.axes["junction_rule"] == ("nec2", "nec42")
-    assert "junction_rule" not in SinusoidalGalerkinSolver.capabilities.axes
+def test_the_class_flag_says_who_takes_the_rule():
+    """`takes_junction_rule` is what `build_solver` reads; only the
+    point-matched class sets it."""
+    assert SinusoidalSolver.takes_junction_rule is True
+    assert SinusoidalGalerkinSolver.takes_junction_rule is False
 
 
 def test_the_warm_server_keys_carry_the_override(monkeypatch):

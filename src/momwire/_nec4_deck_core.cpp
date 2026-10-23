@@ -1968,6 +1968,7 @@ Model Parser::model() {
                     sk.second == 6)
                     m.current_feeds.push_back(static_cast<ll>(i));
         m.extended_kernel_default = true;
+        m.junction_rule = "nec42";
     }
     return m;
 }
@@ -2208,6 +2209,7 @@ std::string dump_model(const Model &m, const std::string &p) {
     o.tup(p + ".current_feeds", m.current_feeds.size());
     for (std::size_t k = 0; k < m.current_feeds.size(); k++) o.i(at(p + ".current_feeds", k), m.current_feeds[k]);
     o.b(p + ".extended_kernel_default", m.extended_kernel_default);
+    o.str(p + ".junction_rule", m.junction_rule);
     return o.s;
 }
 

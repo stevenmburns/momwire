@@ -105,10 +105,6 @@ AXIS_VALUES: Mapping[str, tuple[str, ...]] = {
     # table answers, and not a claim about how it is reached.
     "solve_strategy": ("dense", "aca", "element-block", "sector"),
     "feed_model": ("segment-gap", "point-gap", "node-port"),
-    # momwire#1644: the condition on charge at a junction, a constructor
-    # kwarg of the point-matched sinusoidal basis (`junction_rule=`): NEC-2's
-    # log rule, or NEC-4.2's junction solve with its kernel and end caps.
-    "junction_rule": ("nec2", "nec42"),
 }
 
 # DERIVED AXES — in the vocabulary so it is complete, and deliberately NOT
