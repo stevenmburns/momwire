@@ -33,7 +33,7 @@ Which server
 One server per ENGINE, and the engine is what the command line says it is:
 the socket name is a hash of the momwire version, the interpreter path, and
 the engine flags (``--basis``, ``--cache``, ``--cache-stats``,
-``--legacy-probe``, ``--idle-timeout``, ``--save-decks``). Two portal-dialog
+``--idle-timeout``, ``--save-decks``). Two portal-dialog
 entries differing only in ``--basis`` therefore reach two servers — the same
 "two entries are two engines" rule the flags already carried, now with
 process identity behind it. The winning client spawns the server with those
@@ -67,11 +67,14 @@ import sys
 
 import momwire_serve_client as _mech
 
-# The stock engine's two probe answers, reconstructed rather than imported —
-# importing them would cost the NumPy start-up this module exists to avoid.
-# Both shapes are pinned against ``_portal``'s own constants by
+# The stock engine's refusal of a removed flag (momwire#1658), restated rather
+# than imported — importing it would cost the NumPy start-up this module exists
+# to avoid. Pinned equal to ``_portal.REMOVED_FLAG_REFUSAL`` by
 # ``tests/test_portal_shared.py``; that test is the link this comment claims.
-_LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
+_REMOVED_FLAG_REFUSAL = (
+    "--legacy-probe was removed in momwire 0.83.0; "
+    "drop it from the portal dialog command line"
+)
 
 # Flags that take a value; everything else that survives is a bare flag.
 _VALUE_FLAGS = ("--basis", "--cache-stats", "--idle-timeout", "--save-decks")
@@ -117,7 +120,7 @@ DEFAULT_IDLE_TIMEOUT = 900.0
 _PUMP_CHUNK = 65536
 
 
-def probe_version(legacy: bool = False, suffix: str | None = None) -> str:
+def probe_version(suffix: str | None = None) -> str:
     """The ``-version`` line, answered without importing momwire.
 
     :func:`momwire_serve_client.version_line` (momwire#1606), the same line
@@ -127,8 +130,6 @@ def probe_version(legacy: bool = False, suffix: str | None = None) -> str:
     An editable install reports the version recorded at ``pip install -e``
     time, exactly as the stock engine does.
     """
-    if legacy:
-        return _LEGACY_PROBE_VERSION
     return _mech.version_line("NEC2", nec2_launcher_name(suffix))
 
 
@@ -290,6 +291,11 @@ def resolve_engine(
     # flag, or two clients choosing differently would share one server.
     # Made absolute here as well, because the server is a different process
     # whose working directory is not this client's to promise.
+    # A removed flag is refused first, in the stock engine's words, so the
+    # probe that reads this error says what to change (momwire#1658).
+    if "--legacy-probe" in engine:
+        return engine, _REMOVED_FLAG_REFUSAL
+
     env_save = os.environ.get("MOMWIRE_NEC2C_SAVE_DECKS")
     if env_save and "--save-decks" not in engine:
         engine = [*engine, "--save-decks", env_save]
@@ -325,8 +331,8 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
     Hashed rather than spelt out because the name has to fit in ``sun_path``
     (107 bytes) with a directory in front of it, and because a ``--cache-stats``
     path in a socket name would leak a user's filesystem into a world-listable
-    directory. Value flags keep their pairing; bare flags are sorted, so
-    ``--cache --legacy-probe`` and ``--legacy-probe --cache`` are one engine.
+    directory. Value flags keep their pairing and every flag is sorted, so
+    ``--cache --save-decks D`` and ``--save-decks D --cache`` are one engine.
 
     The momwire version and the interpreter path are in the key because an
     upgrade or a different venv is a different engine and must not be served
@@ -549,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         # at every engine start, and a probe that waited on a cold server would
         # put the ~680 ms back in the one place the user watches for it.
         suffix = filename_basis(sys.argv[0])
-        sys.stdout.write(f"{probe_version('--legacy-probe' in engine, suffix)}\n")
+        sys.stdout.write(f"{probe_version(suffix)}\n")
         sys.stdout.flush()
         return 0
 

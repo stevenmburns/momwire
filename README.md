@@ -121,11 +121,12 @@ solvers = [build_solver(model, mesh=mesh, frequency_mhz=f) for f in sweep]
 Every solver built from one handle is given the same coordinate arrays, so a
 prepared solve is bit-equal to an unprepared one.
 
-## SimNEC portal
+## NEC-2 launcher
 
-Installing momwire puts **`momwire-nec2c`** on your path — a resident NEC
-engine speaking the protocol [SimNEC](https://ae6ty.com/smith_charts/) uses
-to drive `nec2c`, with momwire's solver behind it. Point SimNEC's NEC portal
+Installing momwire puts **`momwire-nec2c`** on your path — the NEC-2
+launcher (`momwire-nec2c` and its siblings), a resident NEC engine speaking
+the protocol [SimNEC](https://ae6ty.com/smith_charts/) uses to drive `nec2c`,
+with momwire's solver behind it. Point SimNEC's NEC portal
 dialog at that command and its Smith chart, tuner and sweeps run on momwire.
 `python -m momwire.portal` is the long spelling, and `--selftest` is the
 deployment smoke.

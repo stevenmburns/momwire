@@ -277,7 +277,7 @@ mesh before it is information about either engine.
 you make yourself works — copy a **launcher** (a couple of hundred kilobytes,
 not the engine), rename the copy to `momwire-nec5-<basis>.exe` (or
 `momwire-nec42-<basis>.exe`) in the same folder, and that basis answers in that
-slot. This is the same rule the [SimNEC portal's](/reference/portal-usage/)
+slot. This is the same rule the [NEC-2 launcher's](/reference/portal-usage/)
 `momwire-nec2c-<basis>` commands use, with one owner behind both. The bundle
 ships two per slot because that is what the parity work was about; the rest
 are a copy away:
@@ -515,7 +515,7 @@ capability statements rather than deck errors:
 
 The solver behind the portal is whichever of the two bundled engines you
 pointed EZNEC at, defaulting to momwire's degree-2 B-spline — the same
-physics as [the SimNEC portal's](/reference/portal-usage/) default, where the
+physics as [the NEC-2 launcher's](/reference/portal-usage/) default, where the
 full eight-engine roster and the cross-basis validation workflow are
 documented. On the models where we hold a licensed NEC-5 reference, the
 portal's printouts agree with the engine's element for element at the

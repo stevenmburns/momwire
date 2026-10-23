@@ -106,7 +106,7 @@ def serve_main(argv: list[str]) -> int:
         # ONCE per process. The engine flags are the server's identity — the
         # client hashed them into the socket name — so a second call could only
         # ever restate them, at the cost of the cache they were chosen for.
-        rest, _legacy_probe, code = configure_engine(argv, log)
+        rest, code = configure_engine(argv, log)
         if code is not None:
             return code
         if rest:

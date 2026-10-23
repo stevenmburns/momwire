@@ -7421,7 +7421,7 @@ class BSplineSolver(
         (d+1, d+1, N, N) moment tensor would blow the `swept_mem_mb`
         budget. `compute_y_matrix` used to bypass that dispatch and
         materialise the full tensor unconditionally — a flat ~12x n²·16 B
-        peak on exactly the entry point the SimNEC portal and the array
+        peak on exactly the entry point the NEC-2 launcher and the array
         benchmarks drive (issue #235).
         """
         # "auto" never refuses: an unserved route skips the correction, and

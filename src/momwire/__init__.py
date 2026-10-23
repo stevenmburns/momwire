@@ -6,8 +6,8 @@
 # fill: +29 % Sommerfeld, +60 % refl-coef, +77 % free space per repeated
 # solve (0.63.0, Skylake, 4 threads, paired runs, 2026-09-24; antennaknobs'
 # scratch/openblas-spin harness, its #1050). Here, first, so every process
-# that imports momwire before NumPy gets them -- the SimNEC portal daemon,
-# the EZNEC drop-in and plain scripts. setdefault keeps a caller's own
+# that imports momwire before NumPy gets them -- the NEC-2 launcher
+# (`momwire-nec2c`), the EZNEC drop-in and plain scripts. setdefault keeps a caller's own
 # values; a process that loaded NumPy first is unaffected (antennaknobs,
 # which does, sets the same three at the top of its own package).
 # MOMWIRE_TIMES: when the package started importing, the one-shot engine's

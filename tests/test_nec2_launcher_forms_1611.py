@@ -282,8 +282,8 @@ def test_the_version_line_is_unchanged(capsys):
         ),
         (["-", "-", "--cache"], ["--cache"], ["-", "-"]),
         (
-            ["--save-decks", "dir", "--legacy-probe"],
-            ["--save-decks", "dir", "--legacy-probe"],
+            ["--save-decks", "dir", "--cache"],
+            ["--save-decks", "dir", "--cache"],
             [],
         ),
     ],

@@ -281,10 +281,28 @@ def test_no_line_of_the_client_imports_momwire():
 
 def test_the_version_probe_is_the_stock_engines_answer():
     """Reconstructed, not imported — so it has to be pinned against the
-    original. Both shapes: the honest ``versionNECd`` identity and the
-    ``--legacy-probe`` masquerade."""
+    original. The removed flag's refusal is restated the same way
+    (momwire#1658), so it is pinned beside it."""
     assert client.probe_version() == nec_portal.PROBE_VERSION
-    assert client.probe_version(legacy=True) == nec_portal.LEGACY_PROBE_VERSION
+    assert client._REMOVED_FLAG_REFUSAL == nec_portal.REMOVED_FLAG_REFUSAL
+
+
+def test_the_removed_legacy_probe_flag_is_refused_before_any_server(
+    monkeypatch, capsys
+):
+    """The thin client refuses ``--legacy-probe`` (removed in 0.83.0,
+    momwire#1658) in the stock engine's words, on stdout with 3 -- before
+    the probe, the selftest or a spawn can act on a dialog line that still
+    carries it."""
+    monkeypatch.setattr(sys, "argv", ["momwire-nec2c-shared"])
+    monkeypatch.setattr(client._mech, "pin_cpu_env", lambda: {})
+    for argv in (["--legacy-probe", "-version"], ["--cache", "--legacy-probe"]):
+        assert client.main(argv) == 3
+        captured = capsys.readouterr()
+        assert captured.out == (
+            "--legacy-probe was removed in momwire 0.83.0; "
+            "drop it from the portal dialog command line\n"
+        )
 
 
 @pytest.mark.integration
@@ -298,8 +316,14 @@ def test_the_version_probe_answers_without_a_server(runtime):
     assert probe.stdout.splitlines() == [nec_portal.PROBE_VERSION]
     assert sockets(runtime) == [], "the probe started a server"
 
-    legacy = run_client(runtime, "", "-version", "--legacy-probe")
-    assert legacy.stdout.splitlines() == [nec_portal.LEGACY_PROBE_VERSION]
+    # The removed flag fails the probe as the stock engine does, on stdout
+    # with 3, and still without a server (momwire#1658).
+    removed = run_client(runtime, "", "-version", "--legacy-probe")
+    assert removed.returncode == 3, removed.stderr
+    assert removed.stdout.splitlines() == [
+        "--legacy-probe was removed in momwire 0.83.0; "
+        "drop it from the portal dialog command line"
+    ]
     assert sockets(runtime) == []
 
 
@@ -696,7 +720,6 @@ def test_the_same_engine_spelt_two_ways_is_one_server():
     [
         ["--basis", "sinusoidal"],
         ["--cache"],
-        ["--legacy-probe"],
         ["--cache-stats", "/tmp/one.json"],
     ],
 )
@@ -718,7 +741,7 @@ def test_the_key_carries_the_version_and_the_interpreter(monkeypatch):
     monkeypatch.setattr(
         client,
         "probe_version",
-        lambda legacy=False, suffix=None: "NEC2 momwire-nec2c [sb] 9.9.9",
+        lambda suffix=None: "NEC2 momwire-nec2c [sb] 9.9.9",
     )
     assert client.config_key([], 900.0) != baseline
     monkeypatch.undo()
@@ -931,7 +954,7 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     # which is what makes the inherited environment irrelevant to the server.
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal")
     with nec_portal.engine_scope():
-        rest, _legacy, code = nec_portal.configure_engine(list(engine), io.StringIO())
+        rest, code = nec_portal.configure_engine(list(engine), io.StringIO())
         assert (code, rest) == (None, [])
         assert nec_portal._active_basis_name == "sinusoidal-galerkin"
 

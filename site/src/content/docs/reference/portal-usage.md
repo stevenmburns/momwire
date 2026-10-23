@@ -1,6 +1,6 @@
 ---
-title: "Running momwire as SimNEC's engine"
-description: Install the momwire-nec2c portal, point SimNEC at it, pick an engine by name (one command per solver since 0.36.1), read the version probe and the refusals, and swap in the shared resident engine.
+title: "Running momwire as a NEC-2 engine"
+description: Install the NEC-2 launcher (momwire-nec2c), point SimNEC at it, pick an engine by name (one command per solver since 0.36.1), read the version probe and the refusals, and swap in the shared resident engine.
 ---
 
 [SimNEC](https://ae6ty.com/smith_charts/) (AE6TY) does not link its NEC
@@ -10,9 +10,10 @@ back on stdout, and SimNEC's own circuit solver reads two numbers per
 feedpoint out of each printout to build the antenna's Y matrix.
 
 momwire ships that process. `pip install momwire` puts **`momwire-nec2c`** on
-your path: a drop-in for the engine binary, with momwire's solver behind it.
-The Smith chart, the tuner and the sweeps stay SimNEC's; the
-electromagnetics become momwire's.
+your path: the **NEC-2 launcher** (`momwire-nec2c` and its siblings), a
+drop-in for the engine binary with momwire's solver behind it. It has two
+front ends, SimNEC and 4nec2; this page covers SimNEC. The Smith chart, the
+tuner and the sweeps stay SimNEC's; the electromagnetics become momwire's.
 
 The deck language is momwire's own **`nec2` dialect** — wire structures and
 the two-port cards attached to them, specified card by card in
@@ -225,9 +226,10 @@ identifiable as one everywhere the version travels.
 **The number is momwire's own version** — the engine's, which is the number
 that changes solve results. An engine release moves it; nothing else does.
 
-For a SimNEC build old enough to predate that form, `--legacy-probe` on the
-portal command line restores the older `nec2c.ae6ty.9.1` shape. Nothing else
-about the session changes either way. The probe line names the launcher, not
+Every NEC-2 launcher answers this one form. The older `--legacy-probe` flag
+was removed in 0.83.0: a portal dialog line that still carries it is refused
+at the probe with a line saying so, and the fix is to delete the flag. The
+probe line names the launcher, not
 the engine: `--basis` never changes it, and only the printout banner records
 which basis answered. A copy named for a basis (`momwire-nec2c-pulse`) gives
 that name.

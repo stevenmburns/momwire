@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from ._portal import (
     BANNER_VERSION,
-    LEGACY_PROBE_VERSION,
     PROBE_VERSION,
+    REMOVED_FLAG_REFUSAL,
     deck_frame,
     engine_scope,
     main,
@@ -38,8 +38,8 @@ from ._portal import (
 
 __all__ = [
     "BANNER_VERSION",
-    "LEGACY_PROBE_VERSION",
     "PROBE_VERSION",
+    "REMOVED_FLAG_REFUSAL",
     "deck_frame",
     "engine_scope",
     "main",

@@ -47,7 +47,7 @@ The NEC-2 launchers
 -------------------
 ``momwire-nec2c*`` answer the same call forms through this shell with
 ``dialect="nec2"`` (momwire#1611 stage 1): ``in out``, ``- -`` and the two
-names on stdin.  Their printout is still the SimNEC portal's, which the
+names on stdin.  Their printout is still the NEC-2 launcher's own, which the
 portal hands over as a :class:`FrontEnd`, and SimNEC's own NEC-2 call (no
 arguments, ``NX``-chained decks on stdin, printouts on stdout) stays the
 portal's resident loop, which is also what NEC-2's ``- -`` runs.  The portal
@@ -139,7 +139,7 @@ class FrontEnd:
 
     The NEC-2 launchers (``momwire-nec2c*``) answer through this shell for
     its call forms (``in out``, ``- -``, the two names on stdin) while their
-    printout is still the SimNEC portal's (stage 1 of momwire#1611; stage 2
+    printout is still the NEC-2 launcher's own (stage 1 of momwire#1611; stage 2
     moves it onto the NEC-4.2 printout code).  The portal may import this
     module, and nothing here may import the portal (momwire#846 §4), so the
     portal hands its three pieces over with :func:`register_front_end`:
