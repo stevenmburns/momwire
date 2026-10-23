@@ -93,9 +93,12 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
 // within `swept_mem_mb`.
 bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
 
-// `_resolve_exact_kernel_auto` on a free-space route: some segment shorter
-// than `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius.
-bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire);
+// `_resolve_exact_kernel_auto`: some segment shorter than
+// `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius -- on a deck with buried
+// wires (`below_wire` set, one flag per wire) an above-ground one only
+// (momwire#1619 stage 1), and none on a wholly buried deck.
+bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire,
+                       const std::vector<uint8_t> *below_wire = nullptr);
 
 // `_add_exact_kernel_correction(Z, geom, supp_seg, polys, k)` (momwire#1408,
 // #1411, #1421): per one-radius coaxial group, observer-row windows of the
@@ -106,9 +109,16 @@ bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_
 // line with a radius step its cross job (momwire#1438, ported for
 // momwire#1615): the two-radius moments (`mw::ek::CoaxialCrossRows`, the
 // text Python's `coaxial_cross_rows` runs) minus `BaseRows`' cross mode.
+//
+// `below_wire` (momwire#1619 stage 1, `above_only=True`): a deck with buried
+// wires, Z its whole buried fill. Every job is cut to its above-ground
+// segments (`_exact_kernel_jobs(above_only=True)`), a cross job left with
+// one radius is dropped, and the base is the above/above block's
+// (`_ek_spec_above`: buried segments never extend).
 void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
-                          double eps, double mu, double swept_mem_mb);
+                          double eps, double mu, double swept_mem_mb,
+                          const std::vector<uint8_t> *below_wire = nullptr);
 
 // The image term of an above-ground fill (`_accumulate_Z_image_chunked`
 // over `PotentialGround.weight_windows()`): observer windows of the

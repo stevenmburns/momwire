@@ -171,10 +171,14 @@ def _screen(**kw):
 
 
 def test_buried_resolves_off():
+    """The screen's mast is coarse (h/a 66): "auto" resolves False. Since
+    momwire#1619 stage 1 the route serves the above-ground half of a buried
+    deck, so True is not refused here any more; a wholly buried deck still is
+    (`tests/test_exact_kernel_buried_above_1619.py`)."""
     s = _screen(exact_kernel="auto")
     assert s.exact_kernel is False
     true = _screen(exact_kernel=True)
-    assert true._exact_kernel_route_refusal(None, False) is not None
+    assert true._exact_kernel_route_refusal(None, False) is None
 
 
 def test_rotational_symmetry_resolves_off():

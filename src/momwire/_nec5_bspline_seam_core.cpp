@@ -248,12 +248,13 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->loading.rlc.push_back(r);
     }
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when the route
-    // serves it and some segment is shorter than 3 radii. A wire below the
-    // ground makes the route unservable (`_exact_kernel_servable`'s
-    // `_exact_kernel_buried`), so a buried deck resolves False before the
-    // geometry is asked (momwire#1615). A coaxial line across a radius step
-    // takes its cross job in `add_exact_correction`.
-    fr->exact_kernel = !fr->buried && bspline::exact_kernel_auto(fr->geom, fr->radii);
+    // serves it and some segment it can correct is shorter than 3 radii. On
+    // a deck with buried wires those are the above-ground segments
+    // (momwire#1619 stage 1, `_exact_kernel_h_and_a`), and a wholly buried
+    // deck has none. A coaxial line across a radius step takes its cross
+    // job in `add_exact_correction`.
+    fr->exact_kernel =
+        bspline::exact_kernel_auto(fr->geom, fr->radii, fr->buried ? &fr->basis.below_wire : nullptr);
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

@@ -1604,8 +1604,14 @@ class RazorSolver(
         observer points the fill uses, assembled by the fill's own wing
         algebra (`_add_exact_kernel_correction`; derivation in
         scratch/1433/DERIVATION.md). Bends, offset wires, images and the
-        Sommerfeld remainder keep `extended_kernel`'s kernel. Refused by name
-        (skipped under "auto"): buried wires, a complex wavenumber,
+        Sommerfeld remainder keep `extended_kernel`'s kernel. On a deck with
+        buried wires it is served IN PART (momwire#1619 stage 1,
+        `_exact_kernel_seam.BURIED_ABOVE_ONLY`): the above medium's own fill
+        takes it on its coaxial pairs, every pair touching a buried segment
+        keeps the fill's kernel, and so does a chopped row's knot observer
+        at a crossing node, as under the extended kernel (momwire#1614);
+        "auto" reads the above-ground segments only. Refused by name
+        (skipped under "auto"): a wholly buried deck, a complex wavenumber,
         restricted-row fills. **Razor's feed is a knot gap of zero width**,
         and under the exact kernel such a gap has no limiting reactance:
         each halving of the segments at it adds about 4 ln2·ωε₀a of
@@ -2387,15 +2393,19 @@ class RazorSolver(
             self.exact_kernel = self._resolve_exact_kernel_auto()
         # The advisories read the RESOLVED kernel (momwire#1412/#1433).
         exact_runs, servable = self._exact_kernel_resolved()
+        gaps = _wire_spec.solver_gaps(self)
+        short_ek, gap_ek = self._exact_kernel_advisory_kernels(
+            exact_runs, servable, gaps
+        )
         # momwire#1378: any segment under two radii, anywhere (not only at a gap).
         # Advisory, once per solver, on the final mesh; silent where the exact
-        # ring kernel runs.
+        # ring kernel runs (on a buried deck, on the wires it reaches).
         _wire_spec.advise_short_segments(
             type(self).__name__,
             self.wires_polylines,
             self.n_per_edge_per_wire,
             self._radius_per_wire,
-            exact_kernel=exact_runs,
+            exact_kernel=short_ek,
         )
         # momwire#959: segments below the radius AT A GAP. Advisory, once per
         # solver. Razor's gaps are knots of zero width, so under the exact
@@ -2407,9 +2417,9 @@ class RazorSolver(
             self.n_per_edge_per_wire,
             self._radius_per_wire,
             self.extended_kernel,
-            _wire_spec.solver_gaps(self),
+            gaps,
             gap_model="knot",
-            exact_kernel=True if exact_runs else (False if servable else None),
+            exact_kernel=gap_ek,
             fixed_gap_feed=self.EXACT_KERNEL_FIXED_GAP_FEED,
         )
         if self.exact_kernel_requested is True and self.feeds:
@@ -2422,6 +2432,9 @@ class RazorSolver(
     # -- the exact-kernel option's hooks (`_exact_kernel_seam`, momwire#1433)
     # Razor's feeds are knots: no gap of fixed width to offer.
     EXACT_KERNEL_FIXED_GAP_FEED = False
+    # momwire#1619 stage 1: the above medium's own fill of a crossing or
+    # detached deck takes the correction (`_assemble_Z_crossing`).
+    _serves_exact_kernel_above_buried = True
 
     def _exact_kernel_buried(self):
         # Read with defaults: probes that stub `_refuse_buried_geometry` (the
@@ -2438,7 +2451,21 @@ class RazorSolver(
 
     def _exact_kernel_h_and_a(self):
         geom = self._build_geometry()
-        return geom["seg_h"], self._seg_radius(geom)
+        h, a = geom["seg_h"], self._seg_radius(geom)
+        if self._exact_kernel_buried():
+            # momwire#1619: only the above medium's segments are corrected.
+            above = self._above_segments(geom)
+            return h[above], a[above]
+        return h, a
+
+    def _exact_kernel_any_above(self):
+        return any(m == _medium_spec.ABOVE for m in self._wire_media())
+
+    def _above_segments(self, geom):
+        """(n_seg,) bool: the segments of the wires above the ground."""
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        media = np.array([m == _medium_spec.ABOVE for m in self._wire_media()])
+        return np.repeat(media, np.diff(seg_off))
 
     # ------------------------------------------------------------------
     # geometry
@@ -4683,6 +4710,11 @@ class RazorSolver(
             # Unrestricted, the calls are the ones they always were (no extra
             # argument), so a seam patched with the old signature still serves.
             rkw = {} if restrict is None else {"restrict": restrict}
+            # momwire#1619: the exact kernel on the above medium's own fill,
+            # passed only when it runs, so a seam patched with the old
+            # signature still serves every other solve.
+            if use_exact:
+                rkw["exact"] = True
             Z = self._assemble_Z_crossing(geom, k, omega, detached=detached, **rkw)
             self._load_in_place(Z, prepared, geom, omega, restrict=restrict)
             return Z
@@ -4724,7 +4756,7 @@ class RazorSolver(
     # the exact ring kernel on coaxial pairs (momwire#1433)
     # ------------------------------------------------------------------
 
-    def _add_exact_kernel_correction(self, Z, geom, k, omega):
+    def _add_exact_kernel_correction(self, Z, geom, k, omega, chop=None):
         """Z += (Z_exact - Z_base) over every coaxial equal-radius group,
         and over the cross-radius pairs of every line with a radius step
         (momwire#1438): there the observer point's ring is on ITS segment's
@@ -4763,6 +4795,19 @@ class RazorSolver(
         the transient is a window's (rows, n_group) tables; the assembly is
         C++ (`exact_kernel_point_assemble`) where built.
 
+        On a buried deck (momwire#1619 stage 1) `geom` is the ABOVE medium's
+        own sub-geometry (`_medium_geometry`) and `Z` its direct block,
+        before the image, exactly where the free-space fill corrects: every
+        pair the plan sees is two above-ground segments, so no pair touching
+        a buried wire is corrected. `chop` is that sub-geometry's chopped
+        rows (`{row: "A" | "B"}`): a crossing tent's half whose T2 ends at
+        the KNOT in the plane. The knot observer keeps the fill's kernel --
+        the kernel of the cross blocks and node charges that meet it there,
+        which is why the fill keeps it reduced under the extended kernel
+        (momwire#1614) -- so the plan zeroes that endpoint's T2 coefficient
+        (`_razor_exact_plan.build_plan`'s `chop`) and corrects the surviving
+        centroid endpoint and the live half path only.
+
         The geometry-only half -- the groups, their frames, the wing and row
         tables, the observer windows -- is `_razor_exact_plan`'s, kept across
         calls on the same inputs, and each group's point-moment source is
@@ -4778,7 +4823,7 @@ class RazorSolver(
         frequency, so a sweep integrates each pair once. Derivation and
         measurements: `docs/design/exact-kernel-static-dynamic-split.md`.
         """
-        seg_a = np.asarray(self._seg_radius(geom), dtype=float)
+        seg_a = np.asarray(self._medium_seg_radius(geom), dtype=float)
         pts, tans, wts = self._testing_paths(geom)
         on_cent = bool(self.nec5_quadrature and pts.shape[1] == 2)
         c_A = 1j * omega * self.mu
@@ -4797,8 +4842,20 @@ class RazorSolver(
             type(self).__qualname__,
             repr((self.nec5_quadrature, self.n_qp_path, self.extended_kernel)),
         )
+        chop_rows = None
+        if chop:
+            chop_rows = np.array(sorted(int(m) for m in chop), dtype=np.int64)
         plan, cached = _razor_exact_plan.plan_for(
-            geom, seg_a, pts, tans, wts, src_lab, on_cent, _CHUNK_ELEMS, context
+            geom,
+            seg_a,
+            pts,
+            tans,
+            wts,
+            src_lab,
+            on_cent,
+            _CHUNK_ELEMS,
+            context,
+            chop=chop_rows,
         )
         # Which rule serves each group's exact moments: the k-series on
         # geometry-only coefficients where the group is short enough at this
@@ -5503,7 +5560,9 @@ class RazorSolver(
                 recs += self._path_test_rows(geom, [m], paths=paths, knot=knot)
         return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
 
-    def _assemble_Z_crossing(self, geom, k, omega, *, detached=False, restrict=None):
+    def _assemble_Z_crossing(
+        self, geom, k, omega, *, detached=False, restrict=None, exact=False
+    ):
         """The razor-blade matrix of a deck that CROSSES the interface, as
         four masked terms indexed by (row HALF) x (column WING):
 
@@ -5561,7 +5620,19 @@ class RazorSolver(
         `A` and `P` hold the requested rows only (`_crossing_path_axis(held=)`):
         every cross-block structure is sized by its axis, so a whole axis
         would hold a dense fill's working memory for a sector's rows.
+
+        **`exact`** (momwire#1619 stage 1): the exact ring kernel on the
+        above medium's own fill, added to its direct block before the image
+        exactly where the free-space fill adds it
+        (`_add_exact_kernel_correction` over the above sub-geometry, its
+        chopped rows' knot observers left as they are). The below fill, the
+        cross blocks and the node charges keep their kernels. Never with
+        `restrict`: the fill gate refuses a restricted-row fill first.
         """
+        if exact and restrict is not None:
+            raise ValueError(
+                "the exact-kernel correction serves the dense fill only (momwire#1619)"
+            )
         tents = self._crossing_tents(geom)
         if detached and tents:
             # Unreachable by construction: a tent spanning the plane needs a
@@ -5608,6 +5679,11 @@ class RazorSolver(
             **akw,
         )
         Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega, **akw)
+        if exact:
+            # momwire#1619 stage 1: every pair here is two above-ground
+            # segments, the upper medium, where k is real.
+            self._checkpoint()
+            self._add_exact_kernel_correction(Z_a, geom_a, k, omega, chop=chop_a)
         if prep_a["image"] is not None:
             ground_a = _potential_ground.potential_ground_for(self, geom_a, k, omega)
             self._assemble_Z_source_block(

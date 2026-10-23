@@ -1500,14 +1500,19 @@ std::string Front::build(const FrontInputs &in_raw) {
     // auto`): any segment under three radii engages the exact ring kernel.
     build_geometry();
     exact = false;
-    // `_serves_exact_kernel` is False on every buried route.
-    if (in.exact_kernel == ExactKernel::automatic && buried == Buried::none)
-        for (int64_t w = 0; w < n_wires && !exact; w++)
+    // On a buried deck the route serves the above medium only (momwire#1619
+    // stage 1, `_exact_kernel_h_and_a`): its segments are the ones asked, and
+    // a wholly buried deck has none. The plan is the above medium front's
+    // (`medium_part`).
+    if (in.exact_kernel == ExactKernel::automatic && buried != Buried::below_plane)
+        for (int64_t w = 0; w < n_wires && !exact; w++) {
+            if (buried != Buried::none && media_below[static_cast<size_t>(w)] != 0) continue;
             for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++)
                 if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) {
                     exact = true;
                     break;
                 }
+        }
 
     // The solve-time half: the bundle refusal, the ports, the tables. What
     // these raise, Python raises from `compute_port_solution`.

@@ -1,0 +1,17 @@
+CM A 19.05 mm vertical over four buried radials of 1.026 mm, 14 MHz, its base on a hub (a one-segment stub down to radials 25.4 mm deep).
+CM 120 segments on the vertical: Delta/a 2.2, under the exact kernel's 'auto' gate of 3,
+CM so the above-ground pairs take the exact ring kernel and every pair touching a
+CM buried wire keeps the fill's (momwire#1619 stage 1). Synthetic.
+CE
+GW 1,120,0.,0.,0.,0.,0.,5.0253,0.01905
+GW 2,6,0.,0.,-.0254,5.1816,0,-.0254,0.0010262
+GW 3,6,0.,0.,-.0254,0,5.1816,-.0254,0.0010262
+GW 4,6,0.,0.,-.0254,-5.1816,0,-.0254,0.0010262
+GW 5,6,0.,0.,-.0254,0,-5.1816,-.0254,0.0010262
+GW 6,1,0.,0.,0.,0.,0.,-.0254,0.0010262
+GE -1
+FR 0,1,0,0,14.
+GN 0,0,0,0,13.,.005,1.,0.
+EX 0,1,8,0,1.,0.
+XQ
+EN

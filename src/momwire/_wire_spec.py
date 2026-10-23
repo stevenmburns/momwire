@@ -1061,10 +1061,15 @@ def advise_short_segments(
     """Warn `ShortSegments` once, naming the wires and the worst delta/a.
     Called from every solver's constructor once the mesh is final.
     `exact_kernel`: the exact ring kernel runs in this solve (resolved, not
-    requested), which silences it (see `ShortSegments`)."""
-    if exact_kernel:
+    requested), which silences it (see `ShortSegments`) -- or, per wire, a
+    tuple of bools (`exact_kernel_wires()`, momwire#1619): only the wires it
+    reaches are silent."""
+    per_wire = isinstance(exact_kernel, (tuple, list))
+    if exact_kernel and not per_wire:
         return
     found = short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire)
+    if per_wire:
+        found = [f for f in found if not exact_kernel[f[0]]]
     if found:
         warnings.warn(short_segment_message(family, found), ShortSegments, stacklevel=3)
 

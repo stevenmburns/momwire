@@ -1810,25 +1810,32 @@ class BaseRows {
 
 }  // namespace
 
-bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire) {
-    for (size_t w = 0; w < g.per_wire.size(); w++)
+bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire,
+                       const std::vector<uint8_t> *below_wire) {
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        if (below_wire != nullptr && (*below_wire)[w]) continue;
         for (int64_t q = 0; q < g.per_wire[w].n_total; q++) {
             const size_t s = static_cast<size_t>(g.seg_offsets[w] + q);
             double d[3];
             for (int c = 0; c < 3; c++) d[c] = g.seg_r[3 * s + c] - g.seg_l[3 * s + c];
             if (nnorm3(d) < 3.0 * radius_per_wire[w]) return true;
         }
+    }
     return false;
 }
 
 void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
-                          double eps, double mu, double swept_mem_mb) {
+                          double eps, double mu, double swept_mem_mb, const std::vector<uint8_t> *below_wire) {
     const int d = fp.degree, nd = d + 1;
     const int64_t n_total = g.n_segs_total, n_basis = b.n_basis;
     std::vector<double> seg_a;
+    std::vector<uint8_t> below(static_cast<size_t>(n_total), 0);
     for (size_t w = 0; w < g.per_wire.size(); w++)
-        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) {
+            seg_a.push_back(radius_per_wire[w]);
+            if (below_wire != nullptr) below[static_cast<size_t>(g.seg_offsets[w] + q)] = (*below_wire)[w];
+        }
     const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
     // the coaxial lines (`coaxial_lines`: the one-radius rule with every
     // radius the largest)
@@ -1848,6 +1855,10 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
             ek.b_kind = EK::per_col;
             ek.b_j = seg_a;
         }
+        // `_ek_spec_above`: a buried segment never extends (momwire#1619)
+        if (below_wire != nullptr)
+            for (int64_t s = 0; s < n_total; s++)
+                if (below[static_cast<size_t>(s)]) ek.group_i[static_cast<size_t>(s)] = ek.group_j[static_cast<size_t>(s)] = -1;
     }
     // `_exact_kernel_jobs`: every one-radius group in label order, then every
     // line carrying a radius step (its cross job, momwire#1438), each with
@@ -1892,6 +1903,28 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
                 if (it != line_job.end()) jobs[it->second].edges.push_back(ge);
             }
         }
+    }
+    if (below_wire != nullptr) {
+        // `_exact_kernel_jobs(above_only=True)`: each job cut to its
+        // above-ground segments; an edge lies on one wire, so it goes whole
+        std::vector<Job> kept;
+        for (Job &j : jobs) {
+            Job k;
+            for (size_t i = 0; i < j.S.size(); i++)
+                if (!below[static_cast<size_t>(j.S[i])]) {
+                    k.S.push_back(j.S[i]);
+                    if (!j.lab.empty()) k.lab.push_back(j.lab[i]);
+                }
+            if (k.S.empty()) continue;
+            if (!j.lab.empty()) {
+                const std::set<int64_t> labs(k.lab.begin(), k.lab.end());
+                if (labs.size() < 2) continue;
+            }
+            for (const GEdge &e : j.edges)
+                if (!below[static_cast<size_t>(e.start)]) k.edges.push_back(e);
+            kept.push_back(std::move(k));
+        }
+        jobs = std::move(kept);
     }
     const mw::ek::PointRules rules = razor::point_rules();
     const int64_t budget = static_cast<int64_t>(swept_mem_mb) * 1024 * 1024;
