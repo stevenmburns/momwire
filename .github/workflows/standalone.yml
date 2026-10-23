@@ -9,7 +9,9 @@
 # (standalone/build_release_linux.sh: glibc 2.28 floor, libstdc++, libgcc and
 # libgomp linked in), run once on AlmaLinux 8 (glibc 2.28), and uploaded as a
 # workflow artifact on every run: the dry run of what a tag attaches
-# (`release-linux`, pushed v* tags only).
+# (`release-linux`, pushed v* tags only). Since 0.83.0 the tarball also
+# carries the NEC-4.2 slot's `momwire-nec42-sinusoidal` the same way, as a
+# PREVIEW (momwire#1607), gated by `linux-nec42`.
 #
 # `linux`: those same bytes, gated. REQUIRED gates run on the runner: the launcher-layer contract tests
 # (tests/test_standalone_nopython.py) and every fixture deck answered byte for
@@ -166,7 +168,24 @@ jobs:
             done
             ./momwire-nec5-bs2-linux - - \
               < /io/scripts/core_split/nx_decks/simnec_stream_2281566.nec > /tmp/bs2-stream.out
-            echo "bs2 stream: $(grep -c "INPUT LINE .* NX " /tmp/bs2-stream.out) structures"'
+            echo "bs2 stream: $(grep -c "INPUT LINE .* NX " /tmp/bs2-stream.out) structures"
+            # the NEC-4.2 sinusoidal engine (momwire#1607, a preview):
+            # a NEC-4.2 fixture deck per build, and two of them as one stream
+            F=/io/tests/fixtures/eznec_nec42
+            ldd momwire-nec42-sinusoidal-linux-avx2
+            ./momwire-nec42-sinusoidal-linux -version
+            for v in avx2 sse2; do
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec42-sinusoidal-linux \
+                $F/0224_dipole-ex0.nec /tmp/nec42-$v.out
+              sed -n 2p /tmp/nec42-$v.out
+              if grep -q "NEC ERROR" /tmp/nec42-$v.out; then exit 1; fi
+            done
+            sed "s/^EN/NX/" $F/0224_dipole-ex0.nec $F/0223_dipole-ex6.nec |
+              ./momwire-nec42-sinusoidal-linux - - > /tmp/nec42-stream.out
+            if grep -q "NEC ERROR" /tmp/nec42-stream.out; then exit 1; fi
+            n=$(grep -c "INPUT LINE .* NX " /tmp/nec42-stream.out)
+            echo "nec42 stream: $n structures"
+            test "$n" = 2'
       - uses: actions/upload-artifact@v7
         with:
           name: momwire-nec5-linux-x86_64
@@ -179,7 +198,9 @@ jobs:
   # owns the body (#662, tests/test_release_notes.py).
   release-linux:
     name: attach the Linux executable to the release
-    needs: [linux-artifact, linux]
+    # every executable in the tarball gated: razor-2p and bs2 by `linux`,
+    # the NEC-4.2 sinusoidal preview by `linux-nec42`
+    needs: [linux-artifact, linux, linux-nec42]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
@@ -373,13 +394,16 @@ jobs:
           if-no-files-found: ignore
 
   # `linux-nec42` (momwire#1607 B4b): the NEC-4.2 slot's
-  # `momwire-nec42-sinusoidal`, built on the runner against the static
-  # OpenBLAS linux-artifact cached (the manylinux build of
-  # standalone/build_openblas.sh), avx2 and sse2: the no-Python build gated
-  # against this environment's launcher (tests/test_standalone_nec42.py,
-  # every fixture deck and the launcher layer, the measured-time lines
-  # masked), and the hybrid's two routes (its C++ route and its embedded
-  # launcher for a deck the C++ declines). Not part of the release yet.
+  # `momwire-nec42-sinusoidal`, shipped in the tarball as a PREVIEW. The
+  # no-Python builds gated are the release artifact's own bytes (the
+  # tarball's momwire-nec42-sinusoidal-linux-avx2 / -sse2, built in
+  # manylinux_2_28 by linux-artifact), against this environment's launcher
+  # (tests/test_standalone_nec42.py: every fixture deck and the launcher
+  # layer, the measured-time lines masked), and the picking script. The
+  # hybrid (its C++ route and its embedded launcher for a deck the C++
+  # declines) is built on the runner against the static OpenBLAS
+  # linux-artifact cached, and is not shipped. `release-linux` needs this
+  # job, so a tag never attaches an nec42 build no gate ran.
   linux-nec42:
     needs: linux-artifact
     runs-on: ubuntu-24.04
@@ -409,14 +433,46 @@ jobs:
           path: ~/mwx-openblas-manylinux/libmwxp.a
           key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
           fail-on-cache-miss: true
-      - name: build (no-Python avx2 and sse2, hybrid avx2)
+      # The release artifact's two no-Python builds, at the paths the gates
+      # below name: every no-Python gate here is of the bytes a tag ships.
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-linux-x86_64
+      - name: the release build (avx2 and sse2)
+        run: |
+          tar -xzf momwire-nec5-linux-x86_64.tar.gz
+          R=momwire-nec5-linux-x86_64
+          for v in avx2 sse2; do
+            mkdir -p build-nec42-$v
+            cp $R/momwire-nec42-sinusoidal-linux-$v \
+              build-nec42-$v/momwire-nec42-sinusoidal-standalone
+          done
+          ldd build-nec42-avx2/momwire-nec42-sinusoidal-standalone
+      # The picking script: the build this runner's CPU runs (avx2), and the
+      # forced sse2, each the very binary's bytes (the time lines masked).
+      - name: the picking script
+        run: |
+          R=momwire-nec42-sinusoidal-linux
+          P=momwire-nec5-linux-x86_64/$R
+          B=momwire-nec42-sinusoidal-standalone
+          D=tests/fixtures/eznec_nec42/0224_dipole-ex0.nec
+          test "$($P -version)" = "$(build-nec42-avx2/$B -version)"
+          mask() { sed -E 's/^( +FILL=).*$/\1<t>/; s/^( RUN TIME =).*$/\1<t>/' "$1"; }
+          for v in avx2 sse2; do
+            MOMWIRE_FORCE_VARIANT=$v $P $D via-script-$v.out
+            build-nec42-$v/$B $D direct-$v.out
+            cmp <(mask via-script-$v.out) <(mask direct-$v.out)
+            sed -n 2p via-script-$v.out
+          done
+          $P $D via-script.out
+          cmp <(mask via-script.out) <(mask via-script-avx2.out)
+        env:
+          MOMWIRE_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: build (hybrid avx2, not shipped)
         run: |
           OB=$HOME/mwx-openblas-manylinux/libmwxp.a
-          for v in avx2 sse2; do
-            cmake -S standalone -B build-nec42-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
-              -DMW_EXE_BASIS=sin42 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
-            cmake --build build-nec42-$v
-          done
           cmake -S standalone -B build-nec42-hybrid -G Ninja -DMW_EXE_BASIS=sin42 \
             -DMW_EXE_VARIANT=avx2 -DMW_OPENBLAS_LIB=$OB \
             -DMW_DEFAULT_PYTHON_HOME="$(python -c 'import sys; print(sys.prefix)')" \

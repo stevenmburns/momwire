@@ -48,6 +48,16 @@ cd momwire-nec5-linux-x86_64
 ./momwire-nec5-bs2-linux deck.nec deck.out
 ```
 
+**NEC-4.2, Linux (preview).** From 0.83.0 the Linux tarball also holds
+`momwire-nec42-sinusoidal-linux`, what the Python command
+`momwire-nec42-sinusoidal` answers for EZNEC's and SimNEC's NEC-4.2 slot,
+with its own avx2 and sse2 builds and picker. Point the NEC-4.2 engine
+setting at it. Its printout is the Python command's byte for byte except
+the two measured-time lines (`FILL= ... SEC.` and `RUN TIME =`). As a
+preview it still refuses by name a wire below the ground plane (buried
+wires), a GD far-field ground and an insulated wire (IS); the Python
+command serves those decks.
+
 **Windows (preview).** The zip holds `momwire-nec5-razor2p-avx2.exe` and
 `momwire-nec5-bs2-avx2.exe`, the `-sse2` pair, and a `win7` folder with an
 sse2 pair built to run on Windows 7 SP1. The programs are signed with

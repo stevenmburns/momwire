@@ -257,6 +257,20 @@ in the printout by name ("not served by this build: ..."), and the Python
 command serves it. The other formulations stay Python. The existing Windows
 `momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is unchanged.
 
+### The NEC-4.2 sinusoidal engine on Linux, without Python (preview)
+
+**Preview:** from 0.83.0 the same tarball also carries
+`momwire-nec42-sinusoidal-linux`, the native twin of the Python command
+`momwire-nec42-sinusoidal` for EZNEC's and SimNEC's NEC-4.2 slot, with the
+same `-avx2` / `-sse2` picking and the same three forms. Its printouts are
+the Python command's byte for byte, apart from the two lines that report
+measured time (`FILL= ... SEC.` and `RUN TIME =`). It serves free space, a
+perfect ground (GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire
+above it, wire loading, TL / NT networks, helices and near fields. It still
+refuses by name a wire below the ground plane (buried wires), a GD
+far-field ground, and an insulated wire (IS); the Python command serves
+those decks.
+
 ### The NEC-5 engines on Windows, without Python (preview)
 
 **Preview:** each release from 0.79.0 also carries
