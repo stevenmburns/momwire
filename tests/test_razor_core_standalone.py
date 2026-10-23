@@ -1674,6 +1674,11 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
         "front:bspline-buried-refusal-medium",
         "front:bspline-buried-refusal-contact",
         "front:bspline-buried-refusal-unearned",
+        # momwire#1653: a buried deck's near field and a point in the soil
+        # are the Python seam's four-regime readout, which this chain does
+        # not carry (tests/fixtures/near_buried_1653).
+        "near-field-buried",
+        "near-field-below",
     }, reasons
 
 
