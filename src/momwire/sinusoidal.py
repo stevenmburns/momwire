@@ -1101,9 +1101,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "quadrature": ("converged",),
             "solve_strategy": ("dense",),
             "feed_model": ("segment-gap",),
-            # momwire#1644: `junction_rule=` ("nec2" the default; "nec42" the
-            # NEC-4 dialect's default through `momwire.deck`).
-            "junction_rule": ("nec2", "nec42"),
         },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,

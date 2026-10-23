@@ -1447,13 +1447,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `feed_model=` kwarg is the axis the bespoke `sin-galerkin` panel
         # hint was standing in for.
         axes={
-            # momwire#1644: every parent axis but `junction_rule`, the
-            # point-matched lane's NEC-4.2 option this class does not take.
-            **{
-                axis: values
-                for axis, values in SinusoidalSolver.capabilities.axes.items()
-                if axis != "junction_rule"
-            },
+            **SinusoidalSolver.capabilities.axes,
             "testing": ("galerkin",),
             # Default first (see BSplineSolver's row): this class defaults
             # to feed_model="point", so the point gap leads.

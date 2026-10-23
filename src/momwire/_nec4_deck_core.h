@@ -178,6 +178,8 @@ struct Model {  // model.DeckModel, in its field order
     std::vector<NetworkCard> networks;
     std::vector<long long> current_feeds;  // nec4's EX 6 ports
     bool extended_kernel_default = false;
+    // `DeckModel.junction_rule` (momwire#1644): "nec42" on the nec4 dialect
+    std::string junction_rule = "nec2";
 };
 
 // `deck/_nec2_geometry.py`'s `Nec2Structure` after `build_geometry(cards)`,
