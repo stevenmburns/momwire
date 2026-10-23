@@ -2,6 +2,14 @@
 of any deck at a point IN the ground (momwire#1653 unit 1: #524 phase 3,
 #570's NE/NH half, #1257).
 
+Two spellings, one readout. `_near_buried_core.cpp` is the C++ one, which
+the standalone executables link and which `_near_readout` calls through
+`_accelerators.near_buried_parts` whenever it is built (`cxx_parts`), so a
+launcher and an executable print the same bytes. This module's numpy
+functions are the REFERENCE it is gated against
+(tests/test_near_buried_1653.py, per regime) and the route without an
+accelerator; the docstrings below describe both.
+
 The readout contract
 --------------------
 Every point field in this tree is a sum over SOURCE elements, and which
@@ -112,6 +120,50 @@ BELOW_FAR_SEGMENT_PHASE = 0.1
 
 # The transmitted kernels' contour tolerance: the crossing fill's own.
 _RTOL = 1e-10
+
+# The C++ readout (`_near_buried_core.cpp`, bound as
+# `_accelerators.near_buried_parts`): what `_near_readout._near_field_buried`
+# answers through when it is built, so the Python launchers and the
+# standalone executables read the same code. False takes this module's numpy
+# spelling, the reference the C++ route is gated against
+# (tests/test_near_buried_1653.py).
+_CXX = True
+
+
+def cxx_parts():
+    """The C++ readout as a callable, or None (no accelerator, or `_CXX`
+    off): `f(points, elements, per_wire, subdiv, eps_t, ground_z, k, omega,
+    radius, magnetic)` -> (n, 3), the transmitted field of the buried
+    sources at a point at or above the plane, below_field_at + the
+    transmitted field of the above sources at a point below it."""
+    from ._accel import acc
+
+    if not _CXX or acc is None or not getattr(acc, "near_buried_1653", False):
+        return None
+
+    def run(
+        points, elements, per_wire, subdiv, eps_t, ground_z, k, omega, radius, magnetic
+    ):
+        mid, moment, nodes, delta = elements
+        return acc.near_buried_parts(
+            np.ascontiguousarray(points, dtype=float),
+            np.ascontiguousarray(mid, dtype=float),
+            np.ascontiguousarray(moment, dtype=np.complex128),
+            np.ascontiguousarray(nodes, dtype=float),
+            np.ascontiguousarray(delta, dtype=np.complex128),
+            np.asarray(per_wire, dtype=np.int64),
+            int(subdiv),
+            complex(eps_t),
+            float(ground_z),
+            float(k),
+            float(omega),
+            float(_MU0),
+            float(radius),
+            bool(magnetic),
+            _near_interface._physical_cpu_count(),
+        )
+
+    return run
 
 
 # --------------------------------------------------------------------------

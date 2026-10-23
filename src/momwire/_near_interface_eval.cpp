@@ -1,6 +1,7 @@
 // The designed near-interface tables, Python-free: see `_near_interface_eval.h`.
 // Every rule below names the `_near_interface.py` function it replays.
 #include "_near_interface_eval.h"
+#include "_near_interface_point_core.h"
 #include "_fma_inline.h"
 
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
@@ -148,10 +149,16 @@ const Cheb &cheb() {
     return c;
 }
 
+// `PlaneSheet(..., family=)`: the six keys (nk 6, `KEY_RPOW`, the six
+// twin), or the point-observer family (nk 4, `POINT_KEY_RPOW` all 2, the
+// point twin; momwire#1653, as `_SHEET_FAMILIES["point"]`).
+constexpr int64_t POINT_KEY_RPOW[ni_point::N_POINT_KEYS] = {2, 2, 2, 2};
+
 class PlaneSheet {
   public:
-    PlaneSheet(double k_p, cd k_m, double zp, bool height, double depth)
-        : k_p_(k_p), k_m_(k_m), zp_(zp), d_(std::fabs(zp)), height_(height), depth_(height ? depth : -1) {}
+    PlaneSheet(double k_p, cd k_m, double zp, bool height, double depth, bool point = false)
+        : k_p_(k_p), k_m_(k_m), zp_(zp), d_(std::fabs(zp)), height_(height), depth_(height ? depth : -1),
+          point_(point), nk_(point ? ni_point::N_POINT_KEYS : N_KEYS) {}
 
     // `cover(rho_max, s_max)`: grow by whole strips, evaluate the new cells.
     void cover(double rho_max, double s_max, int n_threads) {
@@ -198,10 +205,17 @@ class PlaneSheet {
                 zq[i] = zp_;
             }
         }
-        std::vector<cd> vals(n * N_KEYS);
-        ni_core::six_columns(k_p_, k_m_, rho_c.data(), offsets.data(), nc, z.data(), zq.data(),
-                             static_cast<std::ptrdiff_t>(n), LAM_MULT, COLUMN_P, DETOUR, n_threads,
-                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data());
+        const size_t nk = static_cast<size_t>(nk_);
+        std::vector<cd> vals(n * nk);
+        if (point_)
+            ni_point::point_columns(k_p_, k_m_, rho_c.data(), offsets.data(), nc, z.data(), zq.data(),
+                                    static_cast<std::ptrdiff_t>(n), LAM_MULT, COLUMN_P, DETOUR, n_threads,
+                                    gx24().data(), gw24().data(), 24, vals.data());
+        else
+            ni_core::six_columns(k_p_, k_m_, rho_c.data(), offsets.data(), nc, z.data(), zq.data(),
+                                 static_cast<std::ptrdiff_t>(n), LAM_MULT, COLUMN_P, DETOUR, n_threads,
+                                 gx24().data(), gw24().data(), 24, 0, nullptr, vals.data());
+        const int64_t *rpow = point_ ? POINT_KEY_RPOW : KEY_RPOW;
         // `vals[:, cols] *= f`, f = R ** pw (numpy's complex by real-as-complex
         // product: each part one rounding).
         size_t i = 0;
@@ -209,9 +223,9 @@ class PlaneSheet {
             for (std::ptrdiff_t q = 0; q < sizes[c]; q++, i++) {
                 const double Rn = std::hypot(rho_c[c], z[i] - zq[i]);
                 const double f2 = Rn * Rn;
-                for (int k = 0; k < N_KEYS; k++) {
-                    const double f = KEY_RPOW[k] == 1 ? Rn : f2;
-                    cd &v = vals[i * N_KEYS + k];
+                for (size_t k = 0; k < nk; k++) {
+                    const double f = rpow[k] == 1 ? Rn : f2;
+                    cd &v = vals[i * nk + k];
                     v = cd(mw_fma::exact(v.real(), f, -(v.imag() * 0.0)), mw_fma::exact(v.real(), 0.0, v.imag() * f));
                 }
             }
@@ -220,31 +234,30 @@ class PlaneSheet {
             const Place &pl = place[static_cast<size_t>(c)];
             for (size_t q = 0; q < pl.s_ids.size(); q++) {
                 std::vector<cd> &blk = blocks[{pl.a, pl.s_ids[q]}];
-                if (blk.empty()) blk.assign(static_cast<size_t>(p * p * N_KEYS), cd(0, 0));
+                if (blk.empty()) blk.assign(static_cast<size_t>(p * p) * nk, cd(0, 0));
                 for (int ks = 0; ks < p; ks++)
-                    for (int k = 0; k < N_KEYS; k++)
-                        blk[(static_cast<size_t>(pl.k) * p + ks) * N_KEYS + k] =
-                            vals[(static_cast<size_t>(offsets[c]) + q * p + ks) * N_KEYS + k];
+                    for (size_t k = 0; k < nk; k++)
+                        blk[(static_cast<size_t>(pl.k) * p + ks) * nk + k] =
+                            vals[(static_cast<size_t>(offsets[c]) + q * p + ks) * nk + k];
             }
         }
         for (auto &kv : blocks) {
-            off_[kv.first] = static_cast<int64_t>(vals_.size() / N_KEYS);
+            off_[kv.first] = static_cast<int64_t>(vals_.size() / nk);
             vals_.insert(vals_.end(), kv.second.begin(), kv.second.end());
         }
         flat_ok_ = false;
     }
 
+    // `out` is (m, nk) row-major (for the six keys, a Six is N_KEYS
+    // contiguous complexes), and grid_sheet writes only rows idx: in place.
     void interpolate(const double *sub, std::ptrdiff_t m, const std::vector<std::ptrdiff_t> &idx,
-                     Six *out, int n_threads) {
+                     cd *out, int n_threads) {
         if (!flat_ok_) flatten();
-        // `out` is (m, N_KEYS) row-major already (Six is N_KEYS contiguous
-        // complexes), and grid_sheet writes only rows idx: in place.
-        static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
         ni_core::grid_sheet(sub, m, idx.data(), static_cast<std::ptrdiff_t>(idx.size()), zp_, height_,
                             rho_edges_.data(), static_cast<std::ptrdiff_t>(rho_edges_.size() - 1),
                             s_edges_.data(), static_cast<std::ptrdiff_t>(s_edges_.size() - 1),
-                            cell_off_.data(), cheb().x, cheb().bw, SHEET_P, vals_.data(),
-                            reinterpret_cast<cd *>(out), n_threads, KEY_RPOW, N_KEYS, false);
+                            cell_off_.data(), cheb().x, cheb().bw, SHEET_P, vals_.data(), out, n_threads,
+                            point_ ? POINT_KEY_RPOW : KEY_RPOW, nk_, false);
     }
 
   private:
@@ -257,6 +270,8 @@ class PlaneSheet {
     double zp_, d_;
     bool height_;
     double depth_;
+    bool point_;
+    int nk_;
     std::vector<Strip> strips_[2];  // rho, s
     std::vector<Cell> cells_[2];
     std::map<std::pair<int, int>, int64_t> off_;
@@ -313,13 +328,16 @@ class PlaneSheet {
 // `_plane_sheet`: the process's sheets, keyed by what a node depends on (a
 // node's value never depends on how far its sheet was grown).
 std::mutex g_sheet_mutex;
-std::map<std::tuple<bool, double, double, double, double, double>, std::unique_ptr<PlaneSheet>> g_sheets;
+std::map<std::tuple<bool, bool, double, double, double, double, double>, std::unique_ptr<PlaneSheet>>
+    g_sheets;
 
-PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth) {
-    const auto key = std::make_tuple(height, height ? depth : -1.0, k_p, k_m.real(), k_m.imag(), zp);
+PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth, bool point = false) {
+    const auto key = std::make_tuple(point, height, height ? depth : -1.0, k_p, k_m.real(), k_m.imag(), zp);
     auto it = g_sheets.find(key);
     if (it == g_sheets.end())
-        it = g_sheets.emplace(key, std::unique_ptr<PlaneSheet>(new PlaneSheet(k_p, k_m, zp, height, depth))).first;
+        it = g_sheets
+                 .emplace(key, std::unique_ptr<PlaneSheet>(new PlaneSheet(k_p, k_m, zp, height, depth, point)))
+                 .first;
     return *it->second;
 }
 
@@ -847,7 +865,8 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             const double s_max = height ? v - ext : ext - v;
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth);
             sh.cover(rho_max, s_max, ev.n_threads);
-            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
+            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
         }
     }
     // `_serve_from_cones`: the full surface at beta_lo, plus the row's linear
@@ -892,6 +911,112 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             }
             for (size_t r = 0; r < idx.size(); r++)
                 for (int q = 0; q < N_KEYS; q++) out[idx[r]][static_cast<size_t>(q)] = vlo[r * N_KEYS + static_cast<size_t>(q)];
+        }
+    }
+}
+
+// `_point_columns_exact`: one column per distinct rho (np.unique: ascending),
+// its members in their order (a stable argsort of the inverse), through the
+// point twin.
+static void point_columns_exact(const Evaluator &ev, const double *rows, const std::vector<size_t> &sel,
+                                cd *out) {
+    const size_t m = sel.size();
+    if (m == 0) return;
+    std::vector<size_t> order(m);
+    for (size_t j = 0; j < m; j++) order[j] = j;
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t a, size_t b) { return rows[3 * sel[a]] < rows[3 * sel[b]]; });
+    std::vector<double> uniq, zs(m), zps(m);
+    std::vector<std::ptrdiff_t> offsets(1, 0);
+    for (size_t j = 0; j < m; j++) {
+        const double r = rows[3 * sel[order[j]]];
+        if (uniq.empty() || r != uniq.back()) {
+            if (!uniq.empty()) offsets.push_back(static_cast<std::ptrdiff_t>(j));
+            uniq.push_back(r);
+        }
+        zs[j] = rows[3 * sel[order[j]] + 1];
+        zps[j] = rows[3 * sel[order[j]] + 2];
+    }
+    offsets.push_back(static_cast<std::ptrdiff_t>(m));
+    // `_refuse_bad_members`, in the walk's words.
+    for (size_t j = 0; j < m; j++)
+        if (zs[j] < 0.0 || zps[j] > 0.0)
+            throw std::invalid_argument("need z >= 0 >= zp, got (" + py_repr(zs[j]) + ", " + py_repr(zps[j]) +
+                                        ")");
+    for (size_t c = 0; c + 1 < offsets.size(); c++)
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++) {
+            const double sv = zs[static_cast<size_t>(j)] - zps[static_cast<size_t>(j)];
+            if (uniq[c] < 0.0 || sv + uniq[c] <= 0.0)
+                throw std::invalid_argument("need R > 0, got rho=" + py_repr(uniq[c]) + ", s=" + py_repr(sv));
+        }
+    std::vector<cd> vals(m * ni_point::N_POINT_KEYS);
+    ni_point::point_columns(ev.k_p, ev.k_m, uniq.data(), offsets.data(),
+                            static_cast<std::ptrdiff_t>(uniq.size()), zs.data(), zps.data(),
+                            static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P, DETOUR, ev.n_threads,
+                            gx24().data(), gw24().data(), 24, vals.data());
+    for (size_t j = 0; j < m; j++)
+        for (int q = 0; q < ni_point::N_POINT_KEYS; q++)
+            out[sel[order[j]] * ni_point::N_POINT_KEYS + static_cast<size_t>(q)] =
+                vals[j * ni_point::N_POINT_KEYS + static_cast<size_t>(q)];
+}
+
+void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows, size_t m, cd *out) {
+    if (m == 0) return;
+    // `_sheet_take(sub, plan, cones=False)`: planes, then heights.
+    std::vector<char> take(m, 0), on_plane(m, 0);
+    bool any = false;
+    if (plan != nullptr && plan->any()) {
+        for (size_t i = 0; i < m; i++) {
+            const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
+            const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
+            const bool onp =
+                ok && z >= 0.0 && std::binary_search(plan->planes.begin(), plan->planes.end(), zp);
+            on_plane[i] = onp;
+            take[i] = onp;
+        }
+        for (size_t h = 0; h < plan->heights.size(); h++)
+            for (size_t i = 0; i < m; i++) {
+                const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
+                const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
+                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
+                    take[i] = 1;
+            }
+        for (size_t i = 0; i < m; i++) any |= take[i] != 0;
+    }
+    std::vector<size_t> rest;
+    for (size_t i = 0; i < m; i++)
+        if (!take[i]) rest.push_back(i);
+    point_columns_exact(ev, rows, rest, out);
+    if (!any) return;
+    // `_serve_from_sheets(..., "point")`: planes, then heights, each grown to
+    // this call's farthest row on it.
+    std::lock_guard<std::mutex> lock(g_sheet_mutex);
+    for (int pass = 0; pass < 2; pass++) {
+        const bool height = pass == 1;
+        const std::vector<double> &values = height ? plan->heights : plan->planes;
+        for (size_t k = 0; k < values.size(); k++) {
+            const double v = values[k];
+            std::vector<std::ptrdiff_t> idx;
+            double rho_max = -std::numeric_limits<double>::infinity();
+            double ext = height ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
+            for (size_t i = 0; i < m; i++) {
+                const double col = rows[3 * i + (height ? 1 : 2)];
+                bool sel = col == v;
+                sel = height ? (sel && take[i] && !on_plane[i]) : (sel && on_plane[i]);
+                if (!sel) continue;
+                idx.push_back(static_cast<std::ptrdiff_t>(i));
+                rho_max = std::max(rho_max, rows[3 * i]);
+                if (height)
+                    ext = std::min(ext, rows[3 * i + 2]);
+                else
+                    ext = std::max(ext, rows[3 * i + 1]);
+            }
+            if (idx.empty()) continue;
+            const double depth = height ? plan->depths[k] : -1.0;
+            const double s_max = height ? v - ext : ext - v;
+            PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth, true);
+            sh.cover(rho_max, s_max, ev.n_threads);
+            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
         }
     }
 }

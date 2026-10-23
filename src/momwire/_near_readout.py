@@ -305,6 +305,20 @@ def _near_field_buried(
     out = np.zeros((points.shape[0], 3), dtype=complex)
     eps_t = ground.eps_tilde
     pa, pb = points[obs_above], points[~obs_above]
+    if _near_buried.cxx_parts() is not None:
+        # The two new regimes in C++ (`_near_buried_core.cpp`), the code the
+        # standalone executables run; the above/above share is this module's
+        # as always, and is added first, as the numpy route below adds it.
+        new = _near_buried.cxx_parts()(
+            points, elements, per_wire, sub, eps_t, gz, k, omega, radius, magnetic
+        )
+        if pa.shape[0] and above[0].shape[0]:
+            out[obs_above] = near_field_at(
+                pa, above, k, radius, magnetic, ground, omega
+            )
+        out[obs_above] += new[obs_above]
+        out[~obs_above] = new[~obs_above]
+        return out
     if pa.shape[0]:
         if above[0].shape[0]:
             out[obs_above] = near_field_at(

@@ -51,6 +51,7 @@ void register_cmul(py::module_ &m);
 void register_razor_solve(py::module_ &m);
 void register_nec5_deck(py::module_ &m);
 void register_nec4_printout(py::module_ &m);
+void register_near_buried(py::module_ &m);
 
 // The Python-free half: libmvec declarations, constants, OpenMP macros and
 // the cancellation machinery now live in `_mw_core.h`, included here at the
