@@ -215,6 +215,22 @@ probes/<probe>.nec
     - The GH probes confirm deck/_nec4.py's helix_vertices on every segment;
       p83 is the issue's observation, reproduced.
 
+  p86-p90, written for momwire#1650 (PT -1, which 4nec2's ItsHF decks
+  write beside PQ -1).  Captured 2026-10-23 on the licensed NEC-4.2
+  reference build (the unmodified nec42 executable on the Haswell box,
+  sha256 02c6fc87...), black box, the same ritual.  Decks LF.  A 21-segment
+  5 m dipole 10 m up in free space, fed at its centre:
+    p86 PQ -1, PT -1, FR 30 MHz, XQ, then FR 29-31 MHz and an RP cut
+    p87 p86 without the PT card: the baseline
+    p88 PT -1 and one XQ (no PQ)
+    p89 an XQ, then PT -1, a new EX and a second XQ
+    p90 PT -1 over GN 2, with an RP and an NE
+  What the printouts show (black box, layout only): PT -1 removes the
+  CURRENTS AND LOCATION section, heading to last row and its gap, and
+  nothing else (p86 against p87, line for line, every frequency and the RP
+  run after the XQ); the card is echoed as any other.  It holds from its
+  card on: p89's first run prints the table and its second does not.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The

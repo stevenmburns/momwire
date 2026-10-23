@@ -151,6 +151,9 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
   as NEC-4.2 prints them. The gains are the same with or without a range.
 - **`RP` gain forms** XNDA 1000 to 1003 and 1010 to 1013 (4nec2 writes 1003
   by default).
+- **`PT -1`**, which 4nec2's ItsHF decks write beside `PQ -1`: the printout
+  leaves out the CURRENTS AND LOCATION table from that card on, as NEC-4.2
+  does, and prints everything else. Every other `PT` form is refused.
 - **Geometry beyond `GW`:** `GM`, `GS`, the reflection `GX`, the wire arc
   `GA`, and the helix `GH` as NEC-4.2 reads it. NEC-4.2's `GH` is not NEC-2's:
   its real fields are the number of turns, the length along Z, the helix
