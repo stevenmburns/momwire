@@ -1267,10 +1267,18 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bo
         try {
             py::gil_scoped_release release;
             mw::bspline::CrossingStages st;
-            const std::vector<std::complex<double>> Z =
+            std::vector<std::complex<double>> Z =
                 mw::bspline::fill_buried(fr.geom, fr.basis, fr.radii, fp, fr.omega, mw::nec5::BSPLINE_EPS,
                                          mw::nec5::BSPLINE_MU, fr.ground_z, fr.ground_eps_r, fr.ground_sigma, 3, 256,
                                          npl, !cross, &st);
+            // `_compute_Z_operator`'s exact ring kernel on the above-ground
+            // pairs, after the buried fill (momwire#1619 stage 1), as the
+            // printout applies it: "auto" engages on a buried deck whose
+            // above-ground segments are short -- a plane split's sliver
+            // included -- so the stages a gate compares carry it too
+            if (fr.exact_kernel)
+                mw::bspline::add_exact_correction(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, mw::nec5::BSPLINE_EPS,
+                                                  mw::nec5::BSPLINE_MU, 256.0, &fr.basis.below_wire);
             py::gil_scoped_acquire acquire;
             d["Z"] = Z;
             if (cross) {
