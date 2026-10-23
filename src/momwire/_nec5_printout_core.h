@@ -366,6 +366,27 @@ struct PatternBlock {
 PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
                          const std::vector<cd> &moment, int ground, double eps_r, double sigma,
                          double frequency_mhz, double wavelength, double p_in, double p_radiated);
+// `grid_points(coordinates, counts, origin, step)` of an NE / NH request:
+// (n, 3) row-major, in the order its table prints them.
+std::vector<double> near_grid(const Request &rq);
+// `element_currents(coeffs, subdiv)` over a walk and a basis' sampler.
+ElementCurrents element_currents_sub(const std::vector<WireWalk> &walk, const CurrentSampler &sampler,
+                                     int64_t subdiv);
+// `near_field_at` + `near_field_block` at `points` (`near_grid(rq)`) over
+// `element_currents(coeffs, subdiv=8)`: `ground` 0 free space, 1 a perfect
+// ground's image, 2 the composing (Sommerfeld) ground, whose eps~ is
+// `(eps_r, -sigma / (omega * eps0))`, all at z = 0. Throws `PrintoutDecline`
+// where the readout declines.
+struct NearRow {
+    double point[3] = {0, 0, 0}, mag[3] = {0, 0, 0}, deg[3] = {0, 0, 0};
+};
+struct NearBlock {
+    std::vector<NearRow> rows;
+    bool magnetic = false;
+};
+NearBlock near_field(const Request &rq, const std::vector<double> &points, const ElementCurrents &el,
+                     double k, double radius, int ground, double eps_r, double sigma, double omega,
+                     double eps0);
 
 }  // namespace replay
 

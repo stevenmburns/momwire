@@ -210,6 +210,77 @@ std::vector<std::vector<cd>> Engine::currents_at_knots(std::size_t index, const 
     return out;
 }
 
+// `currents_at_knots(alpha, s_array)` on one wire: a sample on an interior
+// knot (within 1e-12 of the wire's arc, or of 1 m) is the mean of the two
+// segments' edge values, any other the containing segment's value
+std::vector<cd> Engine::currents_at_arcs(std::size_t index, const std::vector<cd> &alpha, std::size_t w,
+                                         const std::vector<double> &sv) {
+    const Front &fr = front_at(index);
+    const Geometry &g = fr.geometry;
+    if (w >= g.wire_first.size()) throw nec4::Declined("a sample on a wire the solver does not hold");
+    const ll first = g.wire_first[w], n = g.wire_last[w] - first + 1;
+    std::vector<double> arc{0.0};
+    double run = 0.0;
+    for (ll i = 0; i < n; i++) {
+        run = run + g.seg_h[static_cast<std::size_t>(first + i)];
+        arc.push_back(run);
+    }
+    const std::size_t n_s = sv.size();
+    if (n_s == 0) return {};
+    const double wire_arc = arc.back();
+    const double eps = 1e-12 * std::max(wire_arc, 1.0);  // Python's max(wire_arc, 1.0)
+    std::vector<ll> nk_seg, k_left, k_right;
+    std::vector<double> nk_s;
+    std::vector<std::size_t> nk_target, k_target;
+    for (std::size_t q = 0; q < n_s; q++) {
+        if (std::isnan(sv[q])) throw nec4::Declined("a NaN arclength");
+        const double c = std::min(std::max(sv[q], 0.0), wire_arc);  // np.clip
+        // searchsorted(arc, c) (side left)
+        const ll hit = static_cast<ll>(std::lower_bound(arc.begin(), arc.end(), c) - arc.begin());
+        const ll hit_c = std::min(std::max(hit, 0LL), n);
+        const bool on_knot = hit > 0 && hit < n && std::fabs(c - arc[static_cast<std::size_t>(hit_c)]) <= eps;
+        if (on_knot) {
+            k_target.push_back(q);
+            k_left.push_back(first + hit - 1);
+            k_right.push_back(first + hit);
+        } else {
+            ll pos = static_cast<ll>(std::upper_bound(arc.begin(), arc.end(), c) - arc.begin()) - 1;
+            pos = std::min(std::max(pos, 0LL), n - 1);
+            nk_target.push_back(q);
+            nk_seg.push_back(first + pos);
+            nk_s.push_back((c - arc[static_cast<std::size_t>(pos)]) - 0.5 * g.seg_h[static_cast<std::size_t>(first + pos)]);
+        }
+    }
+    std::vector<ll> all_seg(nk_seg);
+    std::vector<double> all_s(nk_s);
+    std::vector<std::size_t> all_target(nk_target);
+    std::vector<double> all_weight(nk_seg.size(), 1.0);
+    for (ll sg : k_left) {
+        all_seg.push_back(sg);
+        all_s.push_back(+0.5 * g.seg_h[static_cast<std::size_t>(sg)]);
+    }
+    for (ll sg : k_right) {
+        all_seg.push_back(sg);
+        all_s.push_back(-0.5 * g.seg_h[static_cast<std::size_t>(sg)]);
+    }
+    all_target.insert(all_target.end(), k_target.begin(), k_target.end());
+    all_target.insert(all_target.end(), k_target.begin(), k_target.end());
+    all_weight.insert(all_weight.end(), 2 * k_target.size(), 0.5);
+    const std::vector<cd> evals = basis_at(fr, all_seg, all_s, alpha);
+    std::vector<cd> out(n_s, cd(0.0, 0.0));
+    for (std::size_t e = 0; e < evals.size(); e++) {
+        cd &slot = out[all_target[e]];
+        slot = cadd(slot, cm(cd(all_weight[e], 0.0), evals[e]));
+    }
+    return out;
+}
+
+double Engine::solver_omega(std::size_t index) { return front_at(index).omega; }
+double Engine::solver_eps0(std::size_t index) {
+    (void)index;
+    return 8.8541878188e-12;  // the sinusoidal solver's `eps` (the fill's eps~)
+}
+
 // `current_slopes(coeffs, s_array)`
 std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std::vector<cd> &alpha,
                                                     const std::vector<std::vector<double>> &s) {

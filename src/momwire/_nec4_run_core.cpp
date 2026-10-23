@@ -1013,15 +1013,97 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     return out;
 }
 
-// `_tables(card, ...)`: patterns only (an NE / NH declines)
+// The run's current at subdivided arcs, asked of the basis
+// (`currents_at_knots(coeffs, s_array)`)
+class EngineSampler : public nec5::CurrentSampler {
+  public:
+    EngineSampler(RunEngine &e, std::size_t point, const std::vector<cd> &coeffs)
+        : e_(&e), point_(point), coeffs_(coeffs) {}
+    std::vector<cd> at(std::size_t w, const nec5::WireWalk &, const std::vector<double> &arcs) const override {
+        return e_->currents_at_arcs(point_, coeffs_, w, arcs);
+    }
+
+  private:
+    RunEngine *e_;
+    std::size_t point_;
+    const std::vector<cd> &coeffs_;
+};
+
+// `_near_field(card, result, deck_solver)`: one NE / NH table over free
+// space, a perfect ground or the Sommerfeld one, by the NEC-5 seam's readout
+// (`near_field_at` over `element_currents(coeffs, subdiv=8)`)
+PrintNearBlock near_field(Ctx &c, const nec5::Card &card, const RunResult &r) {
+    nec5::Request rq;
+    rq.kind = nec5::Request::near_field;
+    rq.magnetic = card.mnemonic == "NH";
+    rq.coordinates = card.i(0);
+    for (int i = 0; i < 3; i++) {
+        const nec5::Int n = card.i(1 + i);
+        rq.counts[i] = n < nec5::Int(1) ? nec5::Int(1) : n;  // max(card.i(k), 1)
+        rq.origin[i] = card.f(4 + i);
+        rq.step[i] = card.f(7 + i);
+    }
+    const std::vector<double> points = rp::near_grid(rq);
+    const std::vector<GeometryWire> &wires = c.ss->deck.structure.wires;
+    if (wires.empty()) decline("a near field with no wire");
+    if (r.finite) {
+        // `_refuse_finite_ground_near_field`: a point in the soil, or on a
+        // wire end standing on the ground, is refused (not worded here)
+        for (std::size_t q = 0; q < points.size() / 3; q++)
+            if (points[3 * q + 2] < 0.0) decline("a near-field point below a finite ground (the reference refuses)");
+        for (const GeometryWire &w : wires) {
+            const double tol = nec5::ground_touch_tol(w.p1, w.p2);
+            for (const double *end : {w.p1, w.p2}) {
+                if (!(std::fabs(end[2] - 0.0) <= tol)) continue;
+                for (std::size_t q = 0; q < points.size() / 3; q++) {
+                    const double d[3] = {points[3 * q] - end[0], points[3 * q + 1] - end[1], points[3 * q + 2] - end[2]};
+                    if (norm3(d) <= tol) decline("a near-field point on a wire's finite-ground contact (the reference refuses)");
+                }
+            }
+        }
+    }
+    double radius = wires[0].radius;  // `min(w.radius for w in self.wires)`
+    for (const GeometryWire &w : wires)
+        if (w.radius < radius) radius = w.radius;
+    const SolverArgs &args = c.sb->points[r.point].args;
+    std::vector<nec5::WireWalk> walk;
+    for (std::size_t p = 0; p < args.wires.size(); p++) {
+        nec5::WireWalk ww;
+        for (const Point3 &v : args.wires[p]) ww.polyline.insert(ww.polyline.end(), v.begin(), v.end());
+        for (ll n : args.n_per_edge[p]) ww.npe.push_back(n);
+        ww.solved = static_cast<int64_t>(p);
+        walk.push_back(ww);
+    }
+    const EngineSampler sampler(*c.engine, r.point, r.coeffs);
+    const nec5::ElementCurrents el = rp::element_currents_sub(walk, sampler, 8);
+    const double k = 2.0 * kPi / r.wavelength;
+    const int ground = r.finite ? 2 : r.pec ? 1 : 0;
+    const double omega = c.engine->solver_omega(r.point);
+    const nec5::replay::NearBlock b = rp::near_field(rq, points, el, k, radius, ground, args.ground.eps_r,
+                                                     args.ground.sigma, omega, c.engine->solver_eps0(r.point));
+    PrintNearBlock out;
+    out.magnetic = b.magnetic;
+    for (const nec5::replay::NearRow &row : b.rows) {
+        PrintNearRow pr;
+        for (int i = 0; i < 3; i++) {
+            pr.point[i] = row.point[i];
+            pr.magnitudes[i] = row.mag[i];
+            pr.phases_deg[i] = row.deg[i];
+        }
+        out.rows.push_back(pr);
+    }
+    return out;
+}
+
+// `_tables(card, ...)`: (patterns, near fields)
 void tables(Ctx &c, bool has_card, const nec5::Card &card, const RunResult &r, double freq,
-            std::vector<PrintPatternBlock> &patterns) {
+            std::vector<PrintPatternBlock> &patterns, std::vector<PrintNearBlock> &near_fields) {
     if (!has_card) return;
     if (card.mnemonic == "RP") {
         patterns.push_back(pattern(c, card, r, freq));
         return;
     }
-    decline("an " + card.mnemonic + " near field (momwire#1607 B4c)");
+    near_fields.push_back(near_field(c, card, r));
 }
 
 // `_run(...)`
@@ -1034,7 +1116,7 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
     out.report = false;
     out.has_echo_through = has_echo;
     out.echo_through = echo_through;
-    tables(c, group.has_report, group.report, r, freq, out.patterns);
+    tables(c, group.has_report, group.report, r, freq, out.patterns, out.near_fields);
     if (group.has_pq && i64(group.pq.flag) != -1) {
         out.has_charges = true;
         out.charges = charge_rows(c, r, freq, local);
@@ -1130,7 +1212,7 @@ Nec4Printout solve_structure(Ctx &c) {
                     rep.report = true;
                     rep.has_echo_through = true;
                     rep.echo_through = nc.first;
-                    tables(c, true, nc.second, last, last_freq, rep.patterns);
+                    tables(c, true, nc.second, last, last_freq, rep.patterns, rep.near_fields);
                     data.runs.push_back(rep);
                 }
         count++;
