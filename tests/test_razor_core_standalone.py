@@ -1248,6 +1248,9 @@ BURIED_DECKS = [
         "eznec_phantom_1139/ground_rod_efhw_wa7ark.nec",
         "eznec_split_1281/dan_through.nec",
         "eznec_split_1281/thr_n21.nec",
+        # the exact ring kernel on the above medium (momwire#1619 stage 1)
+        "eznec_exact_buried_1619/fat_hub.nec",
+        "eznec_exact_buried_1619/fat_slant.nec",
     )
 ] + [
     # NX chains of buried structures (momwire#1512): kept out of
@@ -1699,6 +1702,9 @@ BSPLINE_CROSSING_DECKS = [
         "eznec_fr_step_1508/b01_buried_xq.nec",
         "eznec_fr_step_1508/b02_buried_rp.nec",
         "bspline_printout_crossing/aca_vertical_screen.nec",
+        # the exact ring kernel above ground (momwire#1619 stage 1)
+        "eznec_exact_buried_1619/fat_hub.nec",
+        "eznec_exact_buried_1619/fat_slant.nec",
     )
 ]
 
@@ -1711,7 +1717,9 @@ def test_the_crossing_decks_print_as_python(driver, tmp_path):
     direct groups through one memo, the far blocks' ACA (the screen with a
     vertical through the plane takes it), the ends and the designed corner,
     and the self completions -- composed into Z as the buried fill composes
-    it, with the above blocks and both remainders around it."""
+    it, with the above blocks and both remainders around it -- and, on a fat
+    vertical, the exact ring kernel on the above-ground pairs after the
+    loading (momwire#1619 stage 1)."""
     counts, reasons = _bspline_printouts(driver, BSPLINE_CROSSING_DECKS, tmp_path)
     assert counts.get("served", 0) == len(BSPLINE_CROSSING_DECKS) and not reasons, (
         counts,

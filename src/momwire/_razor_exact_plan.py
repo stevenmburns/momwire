@@ -66,6 +66,16 @@ where it serves; the numpy `PointCrossRows`, the route a test swaps
 k-series, whose coefficients are one radius's. A deck with
 no step lists no line, so its plan is the one-radius plan exactly.
 
+Chopped rows (momwire#1619 stage 1). On a deck with buried wires the
+correction runs on the above medium's own sub-geometry, where each crossing
+tent is a half tent: its other wing is a ghost (sigma 0, on the live wing's
+segment) and its T2 ends at the knot in the plane instead of at the ghost's
+centroid. The knot observer keeps the fill's kernel, so `chop` names those
+rows and the plan zeroes the ghost wing's T2 coefficient, the way a grounded
+row's plane endpoint is zeroed; T1 needs nothing, since the ghost half's
+tangent is zero. `chop` is part of the key. Without it the plan is the one it
+always was.
+
 Bounded: `_PLAN_ENTRIES` geometries (least recently used out), each with at
 most `_ROWS_ENTRIES` wavenumbers, and a geometry whose tables would exceed
 `_PLAN_MAX_BYTES` is computed as before and not stored. The resident server
@@ -237,12 +247,16 @@ def rows_cacheable(k):
     return _exact_kernel.point_accel_serves(k, 2)
 
 
-def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
+def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop=None):
     """The geometry-only tables of every coaxial group that carries a wing,
     in `coaxial_groups`' order, then of every stepped line's cross job
     (momwire#1438). The expressions are the ones
     `RazorSolver._add_exact_kernel_correction` evaluated inline before
-    momwire#1454, so the tables hold the same values."""
+    momwire#1454, so the tables hold the same values.
+
+    `chop` (momwire#1619): the sorted chopped rows of a medium's
+    sub-geometry, or None. A chopped row's ghost wing (sigma 0) names the
+    endpoint its T2 moved to the knot, whose observer stays uncorrected."""
     # Every 3-vector product below is `dot3`'s fixed order, not `@`/einsum
     # (numpy's BLAS FMA chain / einsum's lane split), so the plan is one
     # that a C++ replay (momwire#1479) forms bit for bit.
@@ -254,6 +268,12 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
     n_basis = wing_seg.shape[0]
     grounded = np.zeros(n_basis, dtype=bool)
     grounded[np.asarray(geom["grounded_bases"], dtype=np.int64)] = True
+    # The chopped rows' ghost wings: the T2 endpoint at the knot.
+    ghost = None
+    if chop is not None and len(chop):
+        chopped = np.zeros(n_basis, dtype=bool)
+        chopped[np.asarray(chop, dtype=np.int64)] = True
+        ghost = chopped[:, None] & (wing_sigma == 0.0)
     n_path = pts.shape[1]
     half = n_path // 2
     node_seg = np.concatenate(
@@ -310,7 +330,10 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
         r_m, r_o, a_parts, p_parts = [], [], [], []
         for w, sign in ((0, -1.0), (1, 1.0)):
             rows = np.flatnonzero(loc[wing_seg[:, w]] >= 0)
-            p_parts.append((sign, rows.size, grounded[rows] if w == 0 else None))
+            zero = grounded[rows] if w == 0 else None
+            if ghost is not None and ghost[rows, w].any():
+                zero = ghost[rows, w] if zero is None else zero | ghost[rows, w]
+            p_parts.append((sign, rows.size, zero))
             if on_cent:
                 a_parts.append((wts[rows, w], dot3(tans[rows, w], axis)))
             else:
@@ -440,7 +463,9 @@ def _freeze(groups):
                         _readonly(x)
 
 
-def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context=()):
+def plan_for(
+    geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context=(), chop=None
+):
     """The plan for these inputs: from the cache when the very same inputs
     were planned before, else built (and stored, within the bounds).
 
@@ -448,9 +473,11 @@ def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context
     flags), compared as part of the key. The plan reads none of it
     beyond what the arrays already carry; it is there so that a solver
     configured differently never shares an entry, whatever the arrays say."""
+    if chop is not None and not len(chop):
+        chop = None
     if not ENABLED:
         groups, nbytes = build_plan(
-            geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems
+            geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop
         )
         return Plan(groups, nbytes), False
     key = (
@@ -471,6 +498,7 @@ def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context
         tuple(context),
         # the byte bound a plan was admitted under counts the series sources
         bool(_exact_kernel_series.ENABLED),
+        None if chop is None else _arr_key(np.asarray(chop, dtype=np.int64)),
     )
     with _LOCK:
         plan = _PLANS.get(key)
@@ -480,7 +508,7 @@ def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context
             return plan, True
         STATS["plan_miss"] += 1
     groups, nbytes = build_plan(
-        geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems
+        geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop
     )
     plan = Plan(groups, nbytes)
     if nbytes <= _PLAN_MAX_BYTES:

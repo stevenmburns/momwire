@@ -179,6 +179,11 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
     }
     std::vector<bool> grounded(static_cast<size_t>(n_basis), false);
     for (int64_t b : f.grounded_bases) grounded[b] = true;
+    // A medium front's chopped rows (momwire#1619, `build_plan`'s `chop`):
+    // the ghost wing (sigma 0) is the T2 endpoint moved to the knot, whose
+    // observer keeps the fill's kernel. None on any other front.
+    std::vector<bool> chopped(static_cast<size_t>(n_basis), false);
+    for (int64_t b : f.chop_rows) chopped[static_cast<size_t>(b)] = true;
     // The EK labels (`_ek_labels`) and `obs_rad`, as `build_plan` reads them.
     const bool ek = f.extended_kernel;
     bool one_radius = true;
@@ -247,7 +252,8 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
                 g.part_w.push_back(f.wts[2 * b + w]);
                 g.part_p.push_back(dot3(&f.tans[6 * b + 3 * w], axis));
                 g.part_sign.push_back(w == 0 ? -1.0 : 1.0);
-                g.part_zero.push_back(w == 0 && grounded[b] ? 1 : 0);
+                const bool ghost = chopped[static_cast<size_t>(b)] && f.wing_sigma[2 * b + w] == 0.0;
+                g.part_zero.push_back((w == 0 && grounded[b]) || ghost ? 1 : 0);
             }
         for (int64_t i = 0; i < n; i++) {
             const int64_t s = g.S[i];

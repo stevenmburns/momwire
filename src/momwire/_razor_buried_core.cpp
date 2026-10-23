@@ -460,6 +460,11 @@ const cd *fill_part(const Front &s, SolveContext &ctx, uintptr_t cancel_flag,
         in.chop_keep_a = view<const bool, 1>::contiguous(s.chop_keep_a.data(), {nc});
         in.chop_pts = view<const double, 2>::contiguous(s.chop_pts.data(), {nc, 3});
     }
+    if (s.exact) {
+        // `Z_a = free; Z_a += exact correction; Z_a -= image` (momwire#1619)
+        ctx.fill(in, [&](cd *z) { add_exact_correction(s, s.exact_plan, z, cancel_flag); });
+        return ctx.z();
+    }
     if (bm != nullptr) {
         in.k_complex = true;
         in.k_c = bm->k_m;
@@ -516,7 +521,9 @@ MediumPart medium_part(const Front &f, bool below) {
     // (every pair there is two above-ground segments, direct or image); the
     // below medium keeps the reduced kernel.
     s.extended_kernel = !below && f.extended_kernel;
-    s.exact = false;
+    // momwire#1619 stage 1: the exact ring kernel on the above medium's own
+    // fill, its plan built below once the chopped rows are known.
+    s.exact = !below && f.exact;
     s.compose = f.compose;
     s.ground_eps_r_ = f.ground_eps_r_;
     s.ground_sigma_ = f.ground_sigma_;
@@ -593,6 +600,14 @@ MediumPart medium_part(const Front &f, bool below) {
     const int64_t budget = f.chunk_elems / 12;
     s.window_rows = std::max<int64_t>(1, budget / std::max<int64_t>(1, 2 * n));
     s.chunk_elems = f.chunk_elems;
+    // The correction's tables over the sub-geometry (`_add_exact_kernel_
+    // correction(Z_a, geom_a, chop=chop_a)`): every pair two above-ground
+    // segments, each chopped row's knot endpoint left uncorrected.
+    s.exact_plan.groups.clear();
+    if (s.exact) {
+        const std::string why = build_exact_plan(s, s.exact_plan);
+        if (!why.empty()) throw std::runtime_error("buried above medium: " + why);
+    }
     if (!below && s.compose) {
         const std::string why = s.prepare_compose(s.n_qp_sommerfeld);
         if (!why.empty()) throw std::runtime_error("buried above medium: " + why);

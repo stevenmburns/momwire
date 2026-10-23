@@ -138,10 +138,14 @@ def test_short_segments_fires_where_it_does_not(deck):
 
 @pytest.mark.parametrize("ek", [True, "auto"])
 def test_short_segments_fires_on_a_route_the_exact_kernel_does_not_serve(ek):
-    """Buried: "auto" resolves off, and True would be refused by the fill;
-    neither runs the exact kernel, so the advisory stands."""
-    _s, by = _caught(**_screen(exact_kernel=ek))
-    assert len(by[ShortSegments]) == 1
+    """Buried: the exact kernel runs on the mast (momwire#1619 stage 1) but
+    not on the buried wires, whose pairs keep the fill's kernel, so the
+    advisory stands -- naming the buried wires and not the mast."""
+    s, by = _caught(**_screen(exact_kernel=ek))
+    assert s.exact_kernel is True
+    assert s.exact_kernel_wires() == (False, False, True)
+    (msg,) = by[ShortSegments]
+    assert "wires 0 (" in msg and ", 1 (" in msg and "2 (" not in msg
 
 
 def test_short_segments_fires_on_a_subclass_that_refuses_it():
@@ -198,18 +202,19 @@ def test_gap_floor_off_names_the_exact_kernel():
 
 
 # Razor took the exact kernel in momwire#1433; its "could, did not" text
-# is held in tests/test_exact_kernel_razor_1433.py.
+# is held in tests/test_exact_kernel_razor_1433.py. On the buried deck the
+# exact kernel runs on the mast since momwire#1619 stage 1, and a gap on a
+# BURIED wire, which it does not reach, keeps the thin-wire text.
 @pytest.mark.parametrize(
     "cls, deck",
     [(BSplineSolver, _screen(exact_kernel="auto"))],
     ids=["bspline-buried"],
 )
 def test_gap_floor_without_an_exact_kernel_points_at_1330(cls, deck):
-    # the buried deck's mast feed sits on a fine run: mesh it so
-    deck = dict(deck)
-    if cls is BSplineSolver:
-        deck["n_per_edge_per_wire"] = [[40], [4], [100]]
-    _s, by = _caught(cls, **deck)
+    # the feed on the buried radial, meshed under the radius there
+    deck = dict(deck, feeds=[(0, 0.25, 1 + 0j)], n_per_edge_per_wire=[[80], [4], [20]])
+    s, by = _caught(cls, **deck)
+    assert s.exact_kernel is True
     (msg,) = by[GapMeshFloor]
     assert "toward 0 ohm" in msg and "momwire#1330" in msg
     assert "exact_kernel=True" not in msg

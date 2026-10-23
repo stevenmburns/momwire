@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import _medium_spec
 from ._bspline_kernels import _ek_axis_groups_coaxial
 from ._vec3 import dot3, norm3
 
@@ -56,6 +57,15 @@ RESTRICTED_ROUTE_REFUSAL = (
 BURIED_REFUSAL = (
     "exact_kernel=True is refused for buried wires: the exact ring "
     "kernel here is written for a real wavenumber (momwire#1408)"
+)
+# What a family that serves the above-ground half of a buried deck does there
+# (momwire#1619 stage 1): the sentence its docstrings and the advisories read.
+BURIED_ABOVE_ONLY = (
+    "exact_kernel on a deck with buried wires is served in part: the exact "
+    "ring kernel corrects the coaxial pairs whose two segments are both "
+    "above the ground, and every pair that touches a buried segment (or "
+    "observes at a crossing node) keeps the fill's kernel, because the "
+    "lower medium's wavenumber is complex (momwire#1619)"
 )
 LOSSY_REFUSAL = (
     "exact_kernel=True is refused in a lossy medium (complex k or "
@@ -177,6 +187,14 @@ class ExactKernelOption:
     # Subclasses that replace the dense fill (H-matrix, array blocks) never
     # reach the correction, so they set this False and refuse it.
     _serves_exact_kernel = True
+    # Whether this family serves the ABOVE-ground half of a deck with buried
+    # wires (momwire#1619 stage 1): the coaxial pairs whose two segments are
+    # both above ground take the correction, in the upper medium where k is
+    # real, and every pair touching a buried segment keeps the fill's kernel
+    # (`BURIED_ABOVE_ONLY`). False refuses every buried deck (`BURIED_REFUSAL`),
+    # as every family did before; a wholly buried deck is refused either way,
+    # since nothing on it is above ground.
+    _serves_exact_kernel_above_buried = False
     EXACT_KERNEL_CHOICES = EXACT_KERNEL_CHOICES
     EXACT_KERNEL_AUTO_H_OVER_A = EXACT_KERNEL_AUTO_H_OVER_A
     # Whether this family can drive a gap of FIXED width (bs2's end-port
@@ -202,8 +220,22 @@ class ExactKernelOption:
         raise NotImplementedError
 
     def _exact_kernel_h_and_a(self):
-        """``(h, a)``: every segment's length and radius, on the final mesh."""
+        """``(h, a)``: every segment's length and radius, on the final mesh --
+        on a buried deck, of the segments above ground only, the ones the
+        correction can reach (momwire#1619)."""
         raise NotImplementedError
+
+    def _exact_kernel_any_above(self):
+        """Whether some wire lies above the ground, asked only of a buried
+        deck by a family that serves its above-ground half."""
+        raise NotImplementedError
+
+    def _exact_kernel_buried_served(self):
+        """Whether this buried deck's route serves the correction in part:
+        the family serves the above-ground half and there is one."""
+        return bool(
+            self._serves_exact_kernel_above_buried and self._exact_kernel_any_above()
+        )
 
     # -- the option -----------------------------------------------------------
     def _exact_kernel_init(self, exact_kernel, refusals=()):
@@ -223,8 +255,9 @@ class ExactKernelOption:
 
     def _resolve_exact_kernel_auto(self):
         """`exact_kernel="auto"`'s value: True iff this route serves the
-        exact kernel and some segment is shorter than
-        `EXACT_KERNEL_AUTO_H_OVER_A` radii. Never raises a refusal."""
+        exact kernel and some segment it can correct is shorter than
+        `EXACT_KERNEL_AUTO_H_OVER_A` radii -- on a buried deck an above-ground
+        one (`_exact_kernel_h_and_a`). Never raises a refusal."""
         if not self._exact_kernel_servable():
             return False
         h, a = self._exact_kernel_h_and_a()
@@ -237,7 +270,7 @@ class ExactKernelOption:
             return False
         if any(cond for cond, _m in self._exact_kernel_family_refusals()):
             return False
-        if self._exact_kernel_buried():
+        if self._exact_kernel_buried() and not self._exact_kernel_buried_served():
             return False
         return not self._exact_kernel_lossy()
 
@@ -254,11 +287,40 @@ class ExactKernelOption:
             servable = False
         return bool(self.exact_kernel) and servable, servable
 
+    def exact_kernel_wires(self):
+        """Per wire, whether the exact ring kernel reaches its pairs: a tuple
+        of bools, one per wire, all False when it does not run (momwire#1619,
+        `extended_kernel_wires`' twin). All True on a deck with no buried
+        wire; on a buried deck a wire below the ground is False, its pairs
+        keeping the fill's kernel."""
+        n = len(self.wires_polylines)
+        if not self.exact_kernel:
+            return (False,) * n
+        if not self._exact_kernel_buried():
+            return (True,) * n
+        return tuple(m != _medium_spec.BELOW for m in self._wire_media())
+
+    def _exact_kernel_advisory_kernels(self, exact_runs, servable, gaps):
+        """``(short, gap)``: what `advise_short_segments` and
+        `advise_gap_mesh_floor` are told about the exact kernel. On a buried
+        deck it reaches the above-ground wires only (momwire#1619), so the
+        short-segment advisory still names the buried wires it misses, and
+        the gap text is the exact kernel's only when every gap is on a wire
+        it reaches -- a gap on a buried wire reads as a route it does not
+        serve."""
+        if not exact_runs:
+            return False, (False if servable else None)
+        covered = self.exact_kernel_wires()
+        if all(covered):
+            return True, True
+        wires = {int(w) for _label, sites in gaps for w, _where in sites}
+        return covered, (True if all(covered[w] for w in wires) else None)
+
     def _exact_kernel_route_refusal(self, rows, compact):
         """Why this fill route does not serve `exact_kernel`, or None."""
         if rows is not None or compact:
             return RESTRICTED_ROUTE_REFUSAL
-        if self._exact_kernel_buried():
+        if self._exact_kernel_buried() and not self._exact_kernel_buried_served():
             return BURIED_REFUSAL
         if self._exact_kernel_lossy():
             return LOSSY_REFUSAL

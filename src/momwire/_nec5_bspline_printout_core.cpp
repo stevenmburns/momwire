@@ -106,6 +106,12 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
         bspline::add_wire_scaled(Z, fr.basis.n_basis, fr.gram,
                                  razor::series_impedance_per_wire(fr.omega, fr.radii, fr.loading));
     }
+    // momwire#1619 stage 1: on a buried deck the correction follows the whole
+    // buried fill, its loading included (`_compute_Z_operator`), over the
+    // above-ground coaxial pairs only
+    if (fr.exact_kernel && fr.buried)
+        bspline::add_exact_correction(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0,
+                                      &fr.basis.below_wire);
     const bspline::PortSolve ps =
         bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack_, np,
                              &sym_);
