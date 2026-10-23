@@ -53,7 +53,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from . import _field_point, _ground_refl, _ground_spec
+from . import _field_point, _ground_refl, _ground_spec, _near_buried
 from ._far_readout import _element_fields, _image_moments
 from ._vec3 import norm3
 
@@ -196,7 +196,18 @@ def cos_sin_deg(angle_deg: float) -> tuple[float, float]:
     return math.cos(rad), math.sin(rad)
 
 
-def near_field_at(points, elements, k, radius, magnetic, ground: NearGround, omega):
+def near_field_at(
+    points,
+    elements,
+    k,
+    radius,
+    magnetic,
+    ground: NearGround,
+    omega,
+    *,
+    counts=None,
+    subdiv=None,
+):
     """E (or H) at ``points``: ``(N, 3)`` complex, peak, in the units the
     solve's drive set — nothing is scaled.
 
@@ -205,7 +216,22 @@ def near_field_at(points, elements, k, radius, magnetic, ground: NearGround, ome
     :func:`~momwire._far_readout._element_fields` reads, ``omega`` the radian
     frequency the remainder's surfaces are normalised at.  A ``refl-coef``
     ground is a ``ValueError``: the seam refuses it by name before asking.
+
+    Over a finite ground with a source element or an observer BELOW the
+    interface the composition is :mod:`momwire._near_buried`'s, per (source
+    side, observer side) regime (momwire#1653); ``counts`` is then the
+    per-wire, per-edge segment counts of the walk (:func:`~momwire.
+    _near_buried.element_counts`), which is how a knot in the plane learns its
+    side, and ``subdiv`` the walk's resampling; together they are the cluster
+    tree a point far from a run of elements reads it through
+    (:class:`~momwire._near_buried.Sources`).  A
+    deck and grid wholly above the interface never reaches it, so its
+    numbers are the ones this function has always returned.
     """
+    if ground.kind == "compose" and _crosses(points, elements, ground.ground_z):
+        return _near_field_buried(
+            points, elements, k, radius, magnetic, ground, omega, counts, subdiv
+        )
     field = _element_fields(points, elements, k, radius, magnetic)
     if ground.kind == "free":
         return field
@@ -232,9 +258,95 @@ def near_field_at(points, elements, k, radius, magnetic, ground: NearGround, ome
     return field + (image + remainder)
 
 
-def near_point_refusal(points, polylines, ground_z):
+def _crosses(points, elements, ground_z):
+    """True when an element midpoint or an observer lies below the plane."""
+    mid = elements[0]
+    return bool(
+        np.any(np.asarray(mid)[:, 2] < ground_z)
+        or np.any(np.asarray(points)[:, 2] < ground_z)
+    )
+
+
+def _near_field_buried(
+    points, elements, k, radius, magnetic, ground, omega, counts, subdiv
+):
+    """The four-regime composition (:mod:`momwire._near_buried`)."""
+    points = np.asarray(points, dtype=float)
+    mid, moment, nodes, delta = elements
+    gz = ground.ground_z
+    if counts is None:
+        if np.any(np.asarray(mid)[:, 2] < gz):
+            raise ValueError(
+                "a near field with source elements below the interface needs "
+                "the per-wire edge counts (`_near_buried.element_counts`)"
+            )
+        # all above: one straight run of single elements, read fine
+        counts = [[mid.shape[0]]]
+        subdiv = None
+    sub = max(int(subdiv or 1), 1)
+    per_wire = [int(sum(npe)) * sub for npe in counts]
+    mid_below, node_below = _near_buried.source_sides(elements, per_wire, gz)
+    wire_below = []
+    e0 = 0
+    for m in per_wire:
+        wire_below.append(bool(m and mid_below[e0]))
+        e0 += m
+    wire_below = np.array(wire_below, dtype=bool)
+    above = (
+        mid[~mid_below],
+        moment[~mid_below],
+        nodes[~node_below],
+        delta[~node_below],
+    )
+    below = (mid[mid_below], moment[mid_below], nodes[node_below], delta[node_below])
+    src_above = _near_buried.Sources(elements, per_wire, ~wire_below, sub)
+    src_below = _near_buried.Sources(elements, per_wire, wire_below, sub)
+    obs_above = points[:, 2] >= gz
+    out = np.zeros((points.shape[0], 3), dtype=complex)
+    eps_t = ground.eps_tilde
+    pa, pb = points[obs_above], points[~obs_above]
+    if pa.shape[0]:
+        if above[0].shape[0]:
+            out[obs_above] = near_field_at(
+                pa, above, k, radius, magnetic, ground, omega
+            )
+        out[obs_above] += _near_buried.transmitted_field_at(
+            pa,
+            src_below,
+            eps_t,
+            gz,
+            k,
+            omega,
+            radius,
+            observers_above=True,
+            magnetic=magnetic,
+        )
+    if pb.shape[0]:
+        field = _near_buried.below_field_at(
+            pb, below, src_below, eps_t, gz, k, omega, radius, magnetic=magnetic
+        )
+        field += _near_buried.transmitted_field_at(
+            pb,
+            src_above,
+            eps_t,
+            gz,
+            k,
+            omega,
+            radius,
+            observers_above=False,
+            magnetic=magnetic,
+        )
+        out[~obs_above] = field
+    return out
+
+
+def near_point_refusal(points, polylines, ground_z, *, below=True):
     """The first observation point no finite-ground composition answers, or
     ``None``.
+
+    ``below=False`` serves a point in the soil (momwire#1653: the NEC-5
+    seam's Sommerfeld decks, whose transmitted readout is
+    :mod:`momwire._near_buried`); only the contact cell is then asked.
 
     ``("below", point, None)`` for a point under the interface — the field in
     the soil is the TRANSMITTED one, which this composition is not
@@ -253,7 +365,7 @@ def near_point_refusal(points, polylines, ground_z):
     that grows an image off it.  ``wire`` is an index into ``polylines``.
     """
     for point in points:
-        if float(point[2]) < ground_z:
+        if below and float(point[2]) < ground_z:
             return ("below", point, None)
     contacts = []
     for index, polyline in enumerate(polylines):

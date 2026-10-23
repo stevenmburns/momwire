@@ -38,8 +38,10 @@ The pattern is momwire#570's: :func:`momwire._far_readout.transmitted_moments`
 carries a below-interface element to the far zone through the transmitted
 Fresnel factors instead of through an image, in the one readout both seams
 call, so ``RP 0`` on a buried deck is the same arithmetic as ``RP 0`` on any
-other.  What a buried deck still cannot answer is its NEAR field, which is
-momwire#524 phase 3.
+other.  Its NEAR field is momwire#1653's (#524 phase 3): each (source side,
+observer side) regime composes its own terms in :mod:`momwire._near_buried`,
+and a point IN the soil is served on every Sommerfeld deck, buried wire or
+not.
 A wire CROSSING the interface is served two ways: as the crossing junction
 written out (a buried card ending at z = 0 and a card rising from that node,
 momwire#667), and since momwire#1281 as ONE card spanning the plane, which
@@ -545,6 +547,7 @@ from .._near_readout import (
     near_ground,
     near_point_refusal,
 )
+from .._near_buried import element_counts
 
 from ._printout import (
     ENVIRONMENT_FINITE_GROUND,
@@ -768,20 +771,22 @@ _REFUSE_NEAR_FIELD_CONTACT = (
     "field is served at every point off the contact - move the {card} card's "
     "observation point off wire {tag}'s base"
 )
-# momwire#1257: a near-field point BELOW a finite ground (``GN 0``/``GN 2``/
-# ``GD``). The readout composes the upper half-space's field (direct, image
-# and the reflected-wave remainder); inside the soil the field is the
-# TRANSMITTED one, which that composition is not, so the number it would print
-# there is not the field at that point. A spherical ``NE 1`` grid reaches the
-# soil as soon as theta passes 90 degrees, which is why this arrived with it.
+# momwire#1257, narrowed by momwire#1653: a near-field point BELOW a bare
+# ``GD``. Over the Sommerfeld ground (``GN 0``/``GN 2``) a point in the soil
+# is served by the transmitted readout (`_near_buried`), since its currents
+# were solved over that same half-space. A ``GD`` deck's currents were solved
+# over a PERFECT image (the MININEC-type ground), and the field in the soil
+# below a perfect conductor is zero: no measurement says which of the two
+# readings the dialect means there, so the point refuses by name.
 _REFUSE_NEAR_FIELD_BELOW = (
     "{card} asks for the field at ({x:g}, {y:g}, {z:g}) metres, which is below "
-    "this deck's finite ground. The field inside the soil is the transmitted "
-    "field, and this engine's near-field readout composes the field ABOVE the "
-    "interface only (the transmitted readout is momwire#524), so it will not "
-    "print a number for a point in the soil. Every point at or above z = 0 is "
-    "served - on a spherical (NE 1) grid, keep theta (from the zenith) "
-    "between -90 and 90 degrees"
+    "this deck's GD ground. A GD deck's currents are solved over a perfect "
+    "image of the structure, which puts no field in the soil at all, while "
+    "its near field is read in the medium; this engine has no measured "
+    "reading of a point in the soil under that ground, so it will not print "
+    "one. Every point at or above z = 0 is served, and so is a point in the "
+    "soil under a Sommerfeld ground (GN 0 or GN 2) - on a spherical (NE 1) "
+    "grid, keep theta (from the zenith) between -90 and 90 degrees"
 )
 # The buried rung LANDED with momwire#553: a wire strictly below a ``GN 0`` /
 # ``GN 2`` interface is served, through the per-segment medium and the two
@@ -791,9 +796,10 @@ _REFUSE_NEAR_FIELD_BELOW = (
 #
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
 #     under either card, so there is nothing to bury the wire in.  The buried
-#     PART of a card crossing z = 0 is such a wire;
-#   * the one OUTPUT a buried deck cannot answer — its NEAR field, which is
-#     momwire#524 phase 3.
+#     PART of a card crossing z = 0 is such a wire.
+#
+# The one OUTPUT a buried deck could not answer, its NEAR field, is served
+# since momwire#1653 (#524 phase 3).
 #
 # A card crossing the interface mid-span used to be a third: refused because
 # where it pierces the plane looked like momwire's guess.  For a straight card
@@ -889,18 +895,6 @@ _REFUSE_BURIED_WITH_CONTACT = (
     "wire over N below wires, buried-hub spelling included), raise the "
     "above-ground wire clear of z = 0 (an elevated feed over a buried "
     "counterpoise is served), or model the buried structure alone"
-)
-_REFUSE_BURIED_NEAR_FIELD = (
-    "{card} asks for a field on a deck with a wire below the ground plane, "
-    "and a buried deck's near field is not served. The point evaluator "
-    "composes a direct term, an image term and a Sommerfeld remainder, and "
-    "which three of those a point gets depends on which side of the "
-    "interface it and the source are on - reconciling the two readouts (a "
-    "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
-    "3, and the three crossing regimes refuse by name until it lands. This "
-    "deck's IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
-    "are all served: drop the "
-    "{card} card, or lift the wire above z = 0"
 )
 _REFUSE_IN_PLANE_WIRE = (
     "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
@@ -1117,16 +1111,13 @@ def refusal(deck: Nec5Deck) -> str | None:
     still name is either a GEOMETRY around it (a wire crossing the interface,
     a buried wire over a card with no lower medium, a buried wire sharing a
     deck with a ground contact) or an OUTPUT it cannot answer — which was a
-    PAIR, near field and far field, and is now one.  momwire#570 gave the
-    shared far-zone readout the transmitted factors, so ``RP`` came off this
-    list and the ``NE``/``NH`` pair is what is left (momwire#524 phase 3).
-    That single remaining output is still the only place this seam's refusal
-    grammar says "this deck is served, but not for THAT number", which is why
-    the serve matrix — impedance, currents, charges, pattern — is written out
-    in the module docstring rather than left implicit in the order of the
-    branches below.  The geometry rung goes on being checked
-    before the request rung, so a deck that is out of scope both ways still
-    names the geometry a reader would fix first.
+    PAIR, near field and far field.  momwire#570 gave the shared far-zone
+    readout the transmitted factors, so ``RP`` came off this list, and
+    momwire#1653 the near field (#524 phase 3), so the serve matrix of a
+    buried deck is whole: impedance, currents, charges, pattern and near
+    field.  The geometry rung goes on being checked before the request rung,
+    so a deck that is out of scope both ways still names the geometry a
+    reader would fix first.
     """
     if deck.transmission_lines and deck.networks and _interleaves_networks(deck):
         return _REFUSE_MIXED_ORDER
@@ -1140,15 +1131,10 @@ def refusal(deck: Nec5Deck) -> str | None:
     geometry = _geometry_refusal(deck)
     if geometry is not None:
         return geometry
-    buried = _has_buried_wire(deck)
     for request in deck.requests:
         if isinstance(request, Nec5NearFieldRequest):
-            if buried:
-                # THE SERVE MATRIX, in one branch: a buried deck's impedance,
-                # currents, charges and pattern serve, and the NEAR field is
-                # the one output left refusing BY NAME (momwire#524 phase 3).
-                # The far field left this branch with momwire#570.
-                return _REFUSE_BURIED_NEAR_FIELD.format(card=_near_field_card(request))
+            # A buried deck's near field is served since momwire#1653: the
+            # serve matrix is whole, and only the CELLS below stay refused.
             near = _near_field_refusal(deck, request)
             if near is not None:
                 return near
@@ -1467,14 +1453,14 @@ def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | 
 
     One wider cell did arrive with ``NE 1`` (momwire#1257): a POINT BELOW a
     finite ground, which a spherical grid reaches the moment θ passes 90°.
-    The field in the soil is the transmitted one, and the composition above
-    is the upper half-space's — evaluated below the interface it prints a
-    number of the size of the field in air, where the licensed engine prints
-    one attenuated by hundreds of orders of magnitude.  So that point refuses
-    by name too, checked first because it is the grid's shape rather than
-    one unlucky cell.  A point below a PERFECT ground is not refused: both
-    engines print the same direct-plus-image sum there (measured on a
-    ``GN 1`` spherical grid through the nadir).
+    Over the Sommerfeld ground it is served since momwire#1653 — the field in
+    the soil is the transmitted one, and :mod:`momwire._near_buried` reads it
+    from the same kernels the buried fill solves with.  Under a bare ``GD``
+    it still refuses (:data:`_REFUSE_NEAR_FIELD_BELOW` says why), checked
+    first because it is the grid's shape rather than one unlucky cell.  A
+    point below a PERFECT ground is not refused: both engines print the same
+    direct-plus-image sum there (measured on a ``GN 1`` spherical grid
+    through the nadir).
     """
     if not isinstance(deck.ground, (Nec5MininecGround, Nec5SommerfeldGround)):
         return None
@@ -1482,6 +1468,7 @@ def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | 
         _grid_points(request),
         [np.array([wire.end1, wire.end2], dtype=float) for wire in deck.wires],
         0.0,
+        below=isinstance(deck.ground, Nec5MininecGround),
     )
     if verdict is None:
         return None
@@ -4386,7 +4373,15 @@ def _near_field(
         else None,
     )
     field = near_field_at(
-        points, elements, k, radius, request.magnetic, ground, solver.omega
+        points,
+        elements,
+        k,
+        radius,
+        request.magnetic,
+        ground,
+        solver.omega,
+        counts=element_counts(solver),
+        subdiv=_NEAR_FIELD_SUBDIV,
     )
 
     return near_field_block(points, field, request.magnetic)

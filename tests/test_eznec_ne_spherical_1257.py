@@ -327,18 +327,33 @@ def _ground_deck(card: str, ground: str = "GN 2 0 0 0 13.0 0.005 0 0 NOFILE") ->
     return head + card + "\nEN\n"
 
 
-@pytest.mark.parametrize(
-    "card",
-    [
-        "NE 1 1 5 1 1000.0 90.0 0.0 0 22.5 0",  # theta past 90: into the soil
-        "NH 1 1 3 1 10.0 170.0 0.0 0 5.0 0",
-        "NE 0 1 1 1 5.0 0.0 -1.0 0 0 0",  # the rectangular form, same rule
-    ],
-)
-def test_a_point_below_a_finite_ground_refuses_by_name(card):
-    reason = _serve.refusal(parse_nec5(_ground_deck(card)))
+_BELOW_CARDS = [
+    "NE 1 1 5 1 1000.0 90.0 0.0 0 22.5 0",  # theta past 90: into the soil
+    "NH 1 1 3 1 10.0 170.0 0.0 0 5.0 0",
+    "NE 0 1 1 1 5.0 0.0 -1.0 0 0 0",  # the rectangular form, same rule
+]
+
+
+@pytest.mark.parametrize("card", _BELOW_CARDS)
+def test_a_point_below_a_sommerfeld_ground_is_served(card):
+    """momwire#1653: the field in the soil is the transmitted one, and the
+    readout serves it (`_near_buried`); the physics gates are
+    tests/test_near_buried_1653.py."""
+    text = _ground_deck(card)
+    assert _serve.refusal(parse_nec5(text)) is None
+    out = render(text, basis=TWIN)
+    assert "NEAR ELECTRIC FIELDS" in out or "NEAR MAGNETIC FIELDS" in out
+    assert "NEC ERROR" not in out
+
+
+@pytest.mark.parametrize("card", _BELOW_CARDS)
+def test_a_point_below_a_gd_ground_refuses_by_name(card):
+    """A bare GD solves its currents over a PERFECT image, so a point in the
+    soil under it has no measured reading and still refuses."""
+    text = _ground_deck(card, ground="GD 0 0 0 0 13.0 0.005")
+    reason = _serve.refusal(parse_nec5(text))
     assert reason is not None
-    assert "below this deck's finite ground" in reason
+    assert "below this deck's GD ground" in reason
     assert reason.startswith(("NE (near electric field)", "NH (near magnetic field)"))
 
 

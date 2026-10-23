@@ -431,7 +431,28 @@ CASES = {
         + RP
         + "EN\n",
         "refused",
-        "which is below this deck's finite ground",
+        "which is below this deck's GD ground",
+    ),
+    "declines_a_near_field_below_sommerfeld": (
+        HEAD
+        + MONO
+        + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\n"
+        + "NE 0,1,1,1,1.,0.,-1.,0.,0.,0.\n"
+        + RP
+        + "EN\n",
+        # momwire#1653: the Python seam's transmitted readout serves it.
+        "declined",
+        "near-field-below",
+    ),
+    "declines_a_buried_decks_near_field": (
+        HEAD
+        + "GW 1,10,0.,-2.5,-0.5,0.,2.5,-0.5,.002\n"
+        + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,5,0,1.,0.\n"
+        + "NE 0,1,1,1,1.,0.,1.,0.,0.,0.\n"
+        + RP
+        + "EN\n",
+        "declined",
+        "near-field-buried",
     ),
     "serves_wire_loading": (
         HEAD

@@ -43,14 +43,15 @@ argument about which way a manual's minus sign points.
 The regimes
 -----------
 The evaluator is keyed by (source medium, observer medium) from its first
-commit, so the buried-wire arc extends a dict instead of forcing a second
-evaluator. Today exactly one key is implemented:
+commit. This module answers one key, and since momwire#1653 the other three
+are answered too, in `_near_buried`, under the contract it states (a
+REMAINDER entry point and a WHOLE-field one are two entry points):
 
-    (source, observer)      surface family                      state
-    ("above", "above")      reflected wave over (ρ, h = z+z′)   implemented
-    ("below", "below")      remainder over (ρ, h = |z|+|z′|)    momwire#524
-    ("below", "above")      transmitted, upward                 momwire#524
-    ("above", "below")      transmitted, downward               momwire#524
+    (source, observer)      surface family                      answered by
+    ("above", "above")      reflected wave over (ρ, h = z+z′)   this module
+    ("below", "below")      remainder over (ρ, h = |z|+|z′|)    _near_buried.below_field_at
+    ("below", "above")      transmitted, upward                 _near_buried.transmitted_field_at
+    ("above", "below")      transmitted, downward               _near_buried.transmitted_field_at
 
 The three unimplemented regimes raise `ValueError` naming themselves, and none
 of the three is missing its SURFACES any more — all three families are built.
@@ -71,8 +72,9 @@ transpose of the same tables. What is missing there is not physics but
 CONTRACT. This module returns the ground REMAINDER and its caller adds direct
 and image; the transmitted integral is the ENTIRE field above a buried source,
 with nothing to add, so answering through this signature would double-count.
-Reconciling the two readouts is momwire#524 phase 3, and until then the
-crossing regimes are served by calling `_sommerfeld_transmitted` directly.
+momwire#1653 settled it as two entry points: this one stays a REMAINDER and
+keeps refusing the crossing regimes (and below/below, whose direct and image
+are in the medium), and `_near_buried` answers them whole.
 A regime entry owns its whole answer — the grid it
 needs, the surfaces it samples, and the combination that turns them into a
 vector — which is what makes "add a regime" an addition rather than a
@@ -340,8 +342,8 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
             "its remainder surfaces DO exist — momwire#553 U2 built "
             "`_sommerfeld_below` on the swapped `_d12` kernel pair and its own "
             "contour — but a point observer below the interface also needs "
-            "direct and image terms, and that buried-deck readout is "
-            "momwire#524 phase 3"
+            "direct and image terms in the medium, and that composition is "
+            "`_near_buried.below_field_at` (momwire#1653)"
         ),
     ),
     ("below", "above"): _Regime(
@@ -357,8 +359,8 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
             "its caller adds the direct and image terms, and the transmitted "
             "integral has no such split (it is the entire field above a "
             "buried source), so serving it through this signature would "
-            "double-count. Reconciling the two readouts is momwire#524 "
-            "phase 3; call `_sommerfeld_transmitted` directly meanwhile"
+            "double-count. The whole field is "
+            "`_near_buried.transmitted_field_at` (momwire#1653)"
         ),
     ),
     ("above", "below"): _Regime(
@@ -373,8 +375,8 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
             "in that regime what is missing is the CONTRACT: this entry point "
             "returns the ground REMAINDER for its caller to compose, and the "
             "transmitted integral is the whole field, with no direct or image "
-            "term to add. Reconciling the two readouts is momwire#524 phase 3; "
-            "call `_sommerfeld_transmitted` directly meanwhile"
+            "term to add. The whole field is "
+            "`_near_buried.transmitted_field_at` (momwire#1653)"
         ),
     ),
 }

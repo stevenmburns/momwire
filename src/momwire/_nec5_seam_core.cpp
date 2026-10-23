@@ -356,16 +356,22 @@ std::string near_field_refusal(const Deck &d, const Request &rq) {
     const auto where = [&](const double *pt) {
         return "(" + format_g(pt[0]) + ", " + format_g(pt[1]) + ", " + format_g(pt[2]) + ")";
     };
+    // A point in the soil (momwire#1653): served by the Python seam's
+    // transmitted readout over GN 0 / GN 2, which this front does not carry,
+    // so it declines; refused by name under a bare GD.
     for (std::size_t q = 0; q < pts.size() / 3; q++)
-        if (pts[3 * q + 2] < 0.0)
+        if (pts[3 * q + 2] < 0.0) {
+            if (d.ground.kind != Ground::mininec) throw Declined{"near-field-below"};
             return card + " asks for the field at " + where(&pts[3 * q]) +
                    " metres, which is below "
-                   "this deck's finite ground. The field inside the soil is the transmitted "
-                   "field, and this engine's near-field readout composes the field ABOVE the "
-                   "interface only (the transmitted readout is momwire#524), so it will not "
-                   "print a number for a point in the soil. Every point at or above z = 0 is "
-                   "served - on a spherical (NE 1) grid, keep theta (from the zenith) "
-                   "between -90 and 90 degrees";
+                   "this deck's GD ground. A GD deck's currents are solved over a perfect "
+                   "image of the structure, which puts no field in the soil at all, while "
+                   "its near field is read in the medium; this engine has no measured "
+                   "reading of a point in the soil under that ground, so it will not print "
+                   "one. Every point at or above z = 0 is served, and so is a point in the "
+                   "soil under a Sommerfeld ground (GN 0 or GN 2) - on a spherical (NE 1) "
+                   "grid, keep theta (from the zenith) between -90 and 90 degrees";
+        }
     struct Contact {
         std::size_t wire;
         const double *end;
@@ -543,20 +549,6 @@ const char *const REFUSE_BURIED_WITH_CONTACT_TAIL =
     "above-ground wire clear of z = 0 (an elevated feed over a buried "
     "counterpoise is served), or model the buried structure alone";
 
-std::string refuse_buried_near_field(const std::string &card) {
-    return card +
-           " asks for a field on a deck with a wire below the ground plane, "
-           "and a buried deck's near field is not served. The point evaluator "
-           "composes a direct term, an image term and a Sommerfeld remainder, and "
-           "which three of those a point gets depends on which side of the "
-           "interface it and the source are on - reconciling the two readouts (a "
-           "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
-           "3, and the three crossing regimes refuse by name until it lands. This "
-           "deck's IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
-           "are all served: drop the " +
-           card + " card, or lift the wire above z = 0";
-}
-
 // `_geometry_refusal`, over the spans: the first span refusing (buried with
 // no lower medium under GN 1 / GD, or in the plane), then over GN 0 / GN 2 a
 // buried span on a deck that also stands an above span's END in the plane
@@ -615,15 +607,13 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
                 if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
         std::string geometry = geometry_refusal(d);
         if (!geometry.empty()) return geometry;
-        // `_has_buried_wire` is False here: free space has no plane, over
-        // GN 1 / GD a span below it refused just above, and over GN 0 / GN 2
-        // it declined. A near field over a FINITE ground (GN 0 / GN 2 / GD)
-        // asks `near_point_refusal` of its grid.
+        // A buried deck's near field is served since momwire#1653 by the
+        // Python seam's four-regime readout (`_near_buried`), which this
+        // front does not carry: it declines. A near field over a FINITE
+        // ground (GN 0 / GN 2 / GD) asks `near_point_refusal` of its grid.
         const bool buried = has_buried_wire(d);
         for (const Request &r : d.requests) {
-            if (r.kind == Request::near_field && buried)
-                return refuse_buried_near_field(r.magnetic ? "NH (near magnetic field)"
-                                                           : "NE (near electric field)");
+            if (r.kind == Request::near_field && buried) throw Declined{"near-field-buried"};
             if (r.kind == Request::near_field &&
                 (d.ground.kind == Ground::mininec || d.ground.kind == Ground::sommerfeld)) {
                 const std::string near = near_field_refusal(d, r);
