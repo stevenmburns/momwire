@@ -551,8 +551,8 @@ void ga(const Card &card, std::vector<FlatWire> &wires) {
     chords(card.i(0), v, std::vector<double>(static_cast<std::size_t>(n), card.f(5)), wires);
 }
 
-// `deck._nec4.helix_vertices`, `helix_wire_radii` and `_gh`
-void gh(const Card &card, std::vector<FlatWire> &wires) {
+// `deck._nec4.helix_vertices`
+std::vector<std::array<double, 3>> helix_points(const Card &card) {
     Int n_seg = card.i(1);
     double turns = card.f(2), zlen = card.f(3), r1 = card.f(4), r2 = card.f(5);
     if (n_seg < Int(1)) deck_error("GH segment count must be >= 1, got " + S(n_seg));
@@ -582,6 +582,13 @@ void gh(const Card &card, std::vector<FlatWire> &wires) {
         double a = dk * step;
         v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
     }
+    return v;
+}
+
+// `helix_wire_radii` and `_gh`
+void gh(const Card &card, std::vector<FlatWire> &wires) {
+    const std::vector<std::array<double, 3>> v = helix_points(card);
+    const ll n = static_cast<ll>(v.size()) - 1;
     double w1 = card.f(6), w2 = card.f(7);
     std::vector<double> radii;
     if (n == 1) {
@@ -2220,6 +2227,14 @@ std::string py_repr(double x) {
 }
 
 double py_dist(const double a[3], const double b[3]) { return dist3(a, b); }
+
+double helix_wire_length(const nec5::Card &card) {
+    const std::vector<std::array<double, 3>> v = helix_points(card);
+    std::vector<double> d;
+    d.reserve(v.size());
+    for (std::size_t k = 0; k + 1 < v.size(); k++) d.push_back(dist3(v[k].data(), v[k + 1].data()));
+    return py_sum(d.data(), static_cast<int>(d.size()));
+}
 
 Geometry geometry_of(const std::vector<Card> &cards) {
     Structure st = build_geometry(cards);

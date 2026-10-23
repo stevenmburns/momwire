@@ -223,5 +223,9 @@ std::string dump_model(const Model &model, const std::string &path);
 std::string py_repr(double x);
 double py_dist(const double a[3], const double b[3]);
 
+// `sum(math.dist(a, b) for a, b in zip(v, v[1:]))` over a GH card's
+// `helix_vertices`: the wire table's TOTAL LENGTH OF WIRE IN THE SPIRAL.
+double helix_wire_length(const nec5::Card &card);
+
 }  // namespace nec4
 }  // namespace mw
