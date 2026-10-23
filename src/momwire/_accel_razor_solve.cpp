@@ -10,6 +10,7 @@
 #include "_somm_below_fill_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
+#include "_near_interface_eval.h"
 
 // The binding half of `_razor_solve_core.cpp`: `RazorSolveContext`, a Python
 // handle on one `mw::razor::SolveContext` (its buffer pool and counters).
@@ -1296,6 +1297,61 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bo
 }
 }  // namespace
 
+// TEST-ONLY (momwire#1595 option A): the C++ crossing fills' sheet plan over
+// (above, below) node pairs (z relative to the interface) and the designed
+// tables of rows (rho, z, zp) through a memo carrying it -- `sheet_plan` and
+// `designed_tables` as `_razor_crossing_core` / `_bspline_crossing_core` call
+// them, so a test can hold them to the Python route's bits.
+static py::dict near_interface_eval_designed(double k_p, cd k_m, py::list specs, double wire_radius, darr rho,
+                                      darr z, darr zp) {
+    std::vector<darr> keep;
+    std::vector<ni_eval::NodePair> pairs;
+    for (py::handle h : specs) {
+        py::tuple t = py::reinterpret_borrow<py::tuple>(h);
+        darr a = t[0].cast<darr>(), b = t[1].cast<darr>();
+        if (a.ndim() != 2 || a.shape(1) != 3 || b.ndim() != 2 || b.shape(1) != 3)
+            throw std::invalid_argument("specs are (above (n, 3), below (n, 3)) pairs");
+        keep.push_back(a);
+        keep.push_back(b);
+        pairs.push_back({a.data(), static_cast<size_t>(a.shape(0)), b.data(), static_cast<size_t>(b.shape(0))});
+    }
+    if (z.shape(0) != rho.shape(0) || zp.shape(0) != rho.shape(0))
+        throw std::invalid_argument("rho, z, zp must be one length");
+    const size_t n = static_cast<size_t>(rho.shape(0));
+    ni_eval::Evaluator ev;
+    ev.k_p = k_p;
+    ev.k_m = k_m;
+    ni_eval::Memo memo;
+    memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
+    memo.have_plan = true;
+    py::array_t<cd> out({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(ni_eval::N_KEYS)});
+    ni_eval::designed_tables(ev, &memo, rho.data(), z.data(), zp.data(), n, nullptr,
+                             reinterpret_cast<ni_eval::Six *>(out.mutable_data()));
+    py::list cones;
+    for (const ni_eval::Cone &c : memo.plan.cones)
+        cones.append(py::make_tuple(c.zf, c.blo, c.bhi, c.d,
+                                    py::array_t<double>(static_cast<py::ssize_t>(c.zs.size()), c.zs.data()),
+                                    c.p_fan));
+    py::dict d;
+    d["planes"] = memo.plan.planes;
+    d["heights"] = memo.plan.heights;
+    d["depths"] = memo.plan.depths;
+    d["cones"] = cones;
+    d["fold"] = memo.plan.fold;
+    d["values"] = out;
+    return d;
+}
+
+// TEST-ONLY (momwire#1595 option A): one C++ cone surface's table.
+static py::tuple near_interface_eval_cone_table(double k_p, cd k_m, double d, double zf, double beta,
+                                                double a, std::vector<double> zs, int p, double u_max) {
+    std::vector<double> edges;
+    std::vector<cd> vals;
+    ni_eval::cone_table(k_p, k_m, d, zf, beta, a, zs, p, u_max, 0, edges, vals);
+    py::array_t<cd> v(static_cast<py::ssize_t>(vals.size()), vals.data());
+    return py::make_tuple(py::array_t<double>(static_cast<py::ssize_t>(edges.size()), edges.data()), v);
+}
+
 void register_razor_solve(py::module_ &m) {
     m.attr("razor_solve_proto") = true;
     py::class_<mw::razor::SolveContext>(m, "RazorSolveContext",
@@ -1332,6 +1388,13 @@ void register_razor_solve(py::module_ &m) {
              "(`_build_geometry`'s dict), ties, and Z / front on request.");
 
     m.attr("razor_front_proto") = true;
+    m.def("near_interface_eval_cone_table", &near_interface_eval_cone_table, py::arg("k_p"), py::arg("k_m"),
+          py::arg("d"), py::arg("zf"), py::arg("beta"), py::arg("a"), py::arg("zs"), py::arg("p"),
+          py::arg("u_max"), "TEST-ONLY (momwire#1595): one C++ cone surface's (u edges, values).");
+    m.def("near_interface_eval_designed", &near_interface_eval_designed, py::arg("k_p"), py::arg("k_m"),
+          py::arg("specs"), py::arg("wire_radius"), py::arg("rho"), py::arg("z"), py::arg("zp"),
+          "TEST-ONLY (momwire#1595): the C++ fills' sheet plan over node pairs and the designed "
+          "tables of rows through a memo carrying it.");
     m.def("razor_buried_stages", &razor_buried_stages, py::arg("kwargs"),
           py::arg("chunk_elems") = 2000000, py::arg("below_tables") = std::string(),
           "momwire#1512 step 3's gate: a buried solve's matrix at each stage the "
