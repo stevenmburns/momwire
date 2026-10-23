@@ -272,6 +272,24 @@ refuses by name a wire below the ground plane (buried wires), a GD
 far-field ground, and an insulated wire (IS); the Python command serves
 those decks.
 
+### Radius steps and junctions on the sinusoidal basis: the junction rule
+
+The point-matched sinusoidal basis takes a junction rule,
+`SinusoidalSolver(junction_rule=...)` (momwire#1644). `"nec2"` is NEC-2's
+log rule at every junction, the class default and what the NEC-2 launchers
+(`momwire-nec2c*`) use. `"nec42"` is NEC-4.2's treatment, from the public
+NEC-4 theory manual (UCRL-MA-109338): a small charge solve at each junction
+where wires of different radius meet (and at every junction of three or more
+wires), with NEC-4's thin-wire kernel and end caps. It is what the NEC-4.2
+launchers (`momwire-nec42*`, and the native `momwire-nec42-sinusoidal`) use,
+and on a tapered element it lands within about half an ohm of licensed
+NEC-4.2, where the NEC-2 rule is off by 10 to 20 ohms. A deck with no such
+junction solves exactly as before under either rule.
+
+Each launcher's choice is only its default. Set `MOMWIRE_JUNCTION_RULE` to
+`nec2` or `nec42` in the environment the engine runs in to choose the other
+on any launcher. Sin-Galerkin and the other bases take no junction rule.
+
 ### The NEC-5 engines on Windows, without Python (preview)
 
 **Preview:** each release from 0.79.0 also carries
