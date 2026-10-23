@@ -52,6 +52,21 @@ namespace py = mw::nd;
 // and a codegen regeneration should rebuild one TU, not five.
 #include "_bspline_ek_moments_inline.h"
 
+// The lossy-medium decay exp(k_im * R) in libmvec too (momwire#1595), where
+// `_mw_core.h` declares only cos and sin: its four `omp simd` loops (the
+// COMPLEX_K branches of the swept and full-moment kernels, i.e. a wire in a
+// lossy medium) ran glibc's scalar exp per point, beside a vector cos/sin,
+// and that was a third of bs2's seg-seg time on a buried deck. Declared in
+// THIS TU only: no other exp here sits in an `omp simd` loop (the one in the
+// static far pair is scalar code), so nothing else changes. libmvec exp is
+// within 4 ulp where glibc's is within 1, so the decay moves at round-off;
+// identity stays exe == Python per variant (both build this TU), and MSVC and
+// macOS keep libm as for cos/sin.
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#pragma omp declare simd notinbranch simdlen(4)
+extern "C" double exp(double);
+#endif
+
 // bspline section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 121-3348.
 
