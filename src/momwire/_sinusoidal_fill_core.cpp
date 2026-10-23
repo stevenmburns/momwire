@@ -11,6 +11,7 @@
 #include "_sinusoidal_fill_core.h"
 
 #include "_razor_front_core.h"
+#include "_razor_wire_loading_core.h"
 #include "_sinusoidal_core.h"
 
 #include <algorithm>
@@ -499,15 +500,85 @@ std::vector<std::pair<ll, ll>> reduce_tiles(ll n) {
     return t;
 }
 
+// `configure_loading`'s wire loading from the solver arguments (LD 5's
+// conductivity, LD 2 / LD 3's distributed RLC); a conductivity <= 0 is the
+// constructor's ValueError, which this copy declines.
+razor::WireLoading wire_loading(const nec4::SolverArgs &args) {
+    razor::WireLoading w;
+    if (args.has_conductivity) {
+        w.has_conductivity = true;
+        w.conductivity = args.conductivity;
+        for (double c : w.conductivity)
+            if (std::isfinite(c) && c <= 0.0) decline("a wire conductivity <= 0 (the reference raises)");
+    }
+    if (args.has_distributed) {
+        w.has_rlc = true;
+        for (std::size_t i = 0; i < args.distributed.size(); i++) {
+            razor::WireRLC r;
+            if (i < args.distributed_present.size() && args.distributed_present[i]) {
+                const nec4::DistributedRLC &d = args.distributed[i];
+                if (d.kind == "series")
+                    r.kind = razor::WireRLC::series;
+                else if (d.kind == "parallel")
+                    r.kind = razor::WireRLC::parallel;
+                else
+                    decline("a distributed load kind this copy does not read");
+                r.r = d.r;
+                r.l = d.l;
+                r.c = d.c;
+            }
+            w.rlc.push_back(r);
+        }
+    }
+    return w;
+}
+
+// The per-metre series impedance each wire carries
+// (`series_impedance_per_wire` at `omega = k * c`, the conductor radius).
+std::vector<cd> wire_impedance(const Front &fr, const razor::WireLoading &loading, double omega) {
+    return razor::series_impedance_per_wire(omega, fr.radius_per_wire, loading);
+}
+
+// `_apply_loading(G, geom, seg_view, k)`: `G[rows, cols] -= z_seg[rows] *
+// (sigma * AC)` (not A + C, #606), the entries in their CSR order.
+void apply_loading(const Front &fr, const razor::WireLoading &loading, const Entries &E, std::vector<cd> &G) {
+    if (!loading.active()) return;
+    const std::vector<cd> z_wire = wire_impedance(fr, loading, fr.k * fr.c);
+    const Geometry &g = fr.geometry;
+    const SegView &sv = fr.basis;
+    const ll N = g.n_segs;
+    std::vector<cd> z_seg(static_cast<std::size_t>(N));
+    for (std::size_t w = 0; w < g.wire_first.size(); w++)
+        for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) z_seg[static_cast<std::size_t>(i)] = z_wire.at(w);
+    std::size_t e = 0;
+    for (ll n = 0; n < N; n++)
+        for (ll q = sv.starts[static_cast<std::size_t>(n)]; q < sv.starts[static_cast<std::size_t>(n) + 1]; q++, e++) {
+            const std::size_t qz = static_cast<std::size_t>(q);
+            const cd ic = sig_mul(sv.sigma[qz], sv.AC[qz]);
+            const cd t = nec5::replay::np_cmul(z_seg[static_cast<std::size_t>(n)], ic);
+            cd &x = G[static_cast<std::size_t>(n * N + sv.jbasis[qz])];
+            x = cd(x.real() - t.real(), x.imag() - t.imag());
+        }
+    (void)E;
+}
+
 }  // namespace
+
+bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega, std::vector<cd> &z) {
+    if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
+    const razor::WireLoading loading = wire_loading(args);
+    if (!loading.active()) return false;
+    z = wire_impedance(fr, loading, omega);
+    return true;
+}
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
     // a finite ground is B5c's
     const bool pec = args.ground.kind == nec4::Ground::pec;
     if (args.ground.kind != nec4::Ground::none && !pec) decline("a finite ground (momwire#1607 B5c)");
-    if (args.has_conductivity || args.has_insulation || args.has_distributed)
-        decline("wire loading (momwire#1607 B5)");
+    if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
+    const razor::WireLoading loading = wire_loading(args);
     // The NEC-4.2 slot builds every solver with the extended kernel; the
     // reduced-kernel route (`sinusoidal_field_tensor`) is wired below but no
     // deck reaches it, so it is declined rather than served ungated.
@@ -585,6 +656,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             if (c > 0)
                 for (std::size_t i = 0; i < Nz * Nz; i++) G[i] = nec5::replay::c_add(G[i], tmp[i]);
         }
+        apply_loading(fr, loading, E, G);
         return G;
     }
 
@@ -629,6 +701,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             }
         }
     }
+    apply_loading(fr, loading, E, G);
     return G;
 }
 

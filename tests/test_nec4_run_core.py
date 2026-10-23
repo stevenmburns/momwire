@@ -15,6 +15,8 @@ masked, by exact pattern and with the same count on both sides, over:
   copy, a GS scale, a GA arc, and an NX chain;
 - a perfect ground (GN 1): a monopole, and RP with a range and rows below
   the horizon;
+- wire loading: LD 5 (with its loss in the power budget), on one wire
+  through a sweep, and LD 2 / LD 3 per metre;
 - the declines: a finite ground, GD's far-field cliff, a network, an NE
   table, a GH helix.
 """
@@ -163,6 +165,24 @@ CASES = [
         deck(
             "GW 1 11 0 0 .5 0 0 1 .001\n",
             "GN 1\n" + FR + "EX 0 1 6 0 1\nPQ 0\nRP 0 10 2 1001 0 0 20 90 1000\n",
+        ),
+        "printed",
+    ),
+    (
+        "ld5_copper",
+        deck(DIPOLE, "LD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 6 0 1\nPQ 0\n" + RP),
+        "printed",
+    ),
+    (
+        "ld5_one_wire_sweep",
+        deck(TWO, "LD 5 2 0 0 3.5e7\nFR 0 3 0 0 250 50\nEX 0 1 6 0 1\nXQ\n"),
+        "printed",
+    ),
+    (
+        "ld2_ld3_per_metre",
+        deck(
+            TWO,
+            "LD 2 1 0 0 10 1e-7 0\nLD 3 2 0 0 1e4 1e-6 0\n" + FR + "EX 0 1 6 0 1\nXQ\n",
         ),
         "printed",
     ),

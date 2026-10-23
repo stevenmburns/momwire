@@ -69,6 +69,79 @@ std::vector<cd> slope_at(const Front &fr, const std::vector<ll> &eval_seg, const
     return out;
 }
 
+// --- `wire_loss_power(coeffs)`: the conductor's I²R ---------------------------
+
+cd cdivr(cd a, double x) { return nec5::replay::np_cdiv(a, cd(x, 0.0)); }
+cd rsubc(double x, cd b) { return cd(x - b.real(), 0.0 - b.imag()); }  // float - complex
+cd cneg(cd a) { return cd(-a.real(), -a.imag()); }
+double cabs(cd a) { return std::hypot(a.real(), a.imag()); }
+
+// The series' Horner bracket `1 - u2/20 (1 - u2/42 (1 - u2/72 (1 - u2/110)))`
+cd bracket(cd u2) {
+    const cd w = rsubc(1.0, cdivr(u2, 110.0));
+    const cd z = rsubc(1.0, cm(cdivr(u2, 72.0), w));
+    const cd y = rsubc(1.0, cm(cdivr(u2, 42.0), z));
+    return rsubc(1.0, cm(cdivr(u2, 20.0), y));
+}
+
+// `_abs_shape_integrals`' `g_of(c)` at one segment: `h * where(|u| < 0.1,
+// series, _sin_minus_arg(u) / safe)`, u = 0.5 c h.
+cd g_of(cd c, double h) {
+    const cd u = cm(cm(cd(0.5, 0.0), c), cd(h, 0.0));
+    const cd u2 = cm(u, u);
+    const cd series = cm(cdivr(cneg(u2), 6.0), bracket(u2));
+    const cd safe = (u.real() == 0.0 && u.imag() == 0.0) ? cd(1.0, 0.0) : u;
+    // `_sin_minus_arg(u)`
+    const cd sm_series = cm(cdivr(cneg(cm(u, u2)), 6.0), bracket(u2));
+    const cd sm = cabs(u) < 0.1 ? sm_series : csub(std::sin(u), u);
+    const cd sel = cabs(u) < 0.1 ? series : nec5::replay::np_cdiv(sm, safe);
+    return cm(cd(h, 0.0), sel);
+}
+
+// `(-1)**(m + n) / ((2m)! (2n)! (2(m + n) + 1))`, Python's correctly rounded
+// int / int, m, n = 1..7
+const double kShapeCoef[7][7] = {
+    {0x1.999999999999ap-5, -0x1.8618618618618p-9, 0x1.43a2730abee4dp-14, -0x1.2e9e8cd187470p-20, 0x1.6c2d84445b072p-27, -0x1.320e7665ec4e6p-34, 0x1.7bd9af92da276p-42},
+    {-0x1.8618618618618p-9, 0x1.948b0fcd6e9e0p-13, -0x1.610e4ef473283p-18, 0x1.556aac001556bp-24, -0x1.a4d3e2cc24ebcp-31, 0x1.681103c334200p-38, -0x1.c527a00d82021p-46},
+    {0x1.43a2730abee4dp-14, -0x1.610e4ef473283p-18, 0x1.3ea7d3bbcfa64p-23, -0x1.3b9eea191bb0dp-29, 0x1.8c12b756b9566p-36, -0x1.57a472f92d419p-43, 0x1.b55490b613d13p-51},
+    {-0x1.2e9e8cd187470p-20, 0x1.556aac001556bp-24, -0x1.3b9eea191bb0dp-29, 0x1.3e45e59c8bca0p-35, -0x1.9501d0a5ac31dp-42, 0x1.6354b593f01a0p-49, -0x1.c8583df5a55fep-57},
+    {0x1.6c2d84445b072p-27, -0x1.a4d3e2cc24ebcp-31, 0x1.8c12b756b9566p-36, -0x1.9501d0a5ac31dp-42, 0x1.04937417278a8p-48, -0x1.cd6a4a0698fd6p-56, 0x1.2a8d03e61c8c1p-63},
+    {-0x1.320e7665ec4e6p-34, 0x1.681103c334200p-38, -0x1.57a472f92d419p-43, 0x1.6354b593f01a0p-49, -0x1.cd6a4a0698fd6p-56, 0x1.9ba366586d2dcp-63, -0x1.0c0f223e604fdp-70},
+    {0x1.7bd9af92da276p-42, -0x1.c527a00d82021p-46, 0x1.b55490b613d13p-51, -0x1.c8583df5a55fep-57, 0x1.2a8d03e61c8c1p-63, -0x1.0c0f223e604fdp-70, 0x1.5f0bf6222767ap-78},
+};
+
+struct ShapeIntegrals {
+    cd i_g;
+    double i_ss, i_gg, i_cc;
+};
+
+// `_abs_shape_integrals(k, h)` at one segment, for a real k
+ShapeIntegrals abs_shape_integrals(cd k, double h) {
+    ShapeIntegrals r;
+    const cd kc = std::conj(k);
+    r.i_g = g_of(k, h);
+    const double g_d = g_of(csub(k, kc), h).real();
+    const double g_s = g_of(cadd(k, kc), h).real();
+    r.i_ss = 0.5 * (g_d - g_s);
+    r.i_cc = h + 0.5 * (g_d + g_s);
+    const cd half_kh = cm(cm(cd(0.5, 0.0), k), cd(h, 0.0));
+    const cd z = cm(half_kh, half_kh);  // `(0.5 * k * h) ** 2`: numpy's square is the fused product
+    const cd zc = std::conj(z);
+    double series = 0.0;
+    cd zm(1.0, 0.0);
+    for (int m = 1; m < 8; m++) {
+        zm = cm(zm, z);
+        cd zn(1.0, 0.0);
+        for (int n = 1; n < 8; n++) {
+            zn = cm(zn, zc);
+            series = series + cm(zm, zn).real() * kShapeCoef[m - 1][n - 1];
+        }
+    }
+    const double literal = 0.5 * (g_d + g_s) - 2.0 * r.i_g.real();
+    r.i_gg = cabs(half_kh) < 0.25 ? h * series : literal;
+    return r;
+}
+
 }  // namespace
 
 Engine::Engine(const nec4::StructureBuild &structure, const FillLinalg &la)
@@ -169,6 +242,46 @@ std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std
         out.emplace_back(flat.begin() + static_cast<std::ptrdiff_t>(offsets[w]),
                          flat.begin() + static_cast<std::ptrdiff_t>(offsets[w + 1]));
     return out;
+}
+
+// `SinusoidalSolver.wire_loss_power(coeffs)[0]` (no lower medium, no
+// insulation): the I²R of each segment's current, |I|² integrated by
+// `_abs_shape_integrals`, summed per wire.
+double Engine::wire_loss_power(std::size_t index, const std::vector<cd> &coeffs) {
+    const Front &fr = front_at(index);
+    const nec4::SolverArgs &args = structure_.points[index].args;
+    std::vector<cd> z_wire;
+    if (!wire_impedance_per_wire(fr, args, fr.omega, z_wire)) return 0.0;
+    const double k = fr.omega / fr.c;
+    if (k != fr.k) throw nec4::Declined("a loss readout at another wavenumber than the fill's");
+    const Geometry &g = fr.geometry;
+    const SegView &v = fr.basis;
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    std::vector<cd> U(n, cd(0.0, 0.0)), Q(n, cd(0.0, 0.0)), R(n, cd(0.0, 0.0));
+    for (std::size_t i = 0; i < n; i++)
+        for (ll q = v.starts[i]; q < v.starts[i + 1]; q++) {
+            const std::size_t e = static_cast<std::size_t>(q);
+            const cd a = coeffs.at(static_cast<std::size_t>(v.jbasis[e]));
+            U[i] = cadd(U[i], cm(cm(a, sig(v.sigma[e])), v.AC[e]));
+            Q[i] = cadd(Q[i], cm(a, v.B[e]));
+            R[i] = cadd(R[i], cm(cm(a, sig(v.sigma[e])), v.C[e]));
+        }
+    // `U * np.conj(R)`: a fresh complex temporary of 256 KiB or more on the
+    // right is elided into `conj(R) * U` (B3's measured rule)
+    const bool elide = n >= 16384;
+    std::vector<double> per_wire(g.wire_first.size(), 0.0);
+    for (std::size_t w = 0; w < g.wire_first.size(); w++)
+        for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) {
+            const std::size_t s = static_cast<std::size_t>(i);
+            const double h = g.seg_h[s];
+            const ShapeIntegrals si = abs_shape_integrals(cd(k, 0.0), h);
+            const double au = cabs(U[s]), aq = cabs(Q[s]), ar = cabs(R[s]);
+            const cd ur = elide ? cm(std::conj(R[s]), U[s]) : cm(U[s], std::conj(R[s]));
+            const double cross = 2.0 * cm(ur, std::conj(si.i_g)).real();
+            const double i2 = (((au * au) * h + cross) + (aq * aq) * si.i_ss) + (ar * ar) * si.i_gg;
+            per_wire[w] = per_wire[w] + (0.5 * z_wire[w].real()) * i2;
+        }
+    return nec5::replay::np_pairwise(per_wire.data(), static_cast<int64_t>(per_wire.size()));
 }
 
 nec4::RunEngine &Engines::engine_for(const nec4::StructureBuild &structure) {
