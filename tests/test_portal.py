@@ -1,4 +1,4 @@
-"""The momwire SimNEC portal daemon (issue #792, units 2 to 4).
+"""The momwire NEC-2 launcher, ``momwire-nec2c`` (issue #792, units 2 to 4).
 
 Everything here runs against the committed oracle fixtures — no ``nec2c``
 binary — and, bar the one cwd-independence test at the foot of the file, in
@@ -279,18 +279,20 @@ def test_version_probe_matches_executes_versionNECd_regex():
     assert probe.startswith("NEC2 momwire-nec2c [sb] ")
 
 
-@pytest.mark.integration
-def test_legacy_probe_flag_answers_the_versionA_masquerade():
-    """``--legacy-probe`` keeps the pre-#828 identity available for a SimNEC
-    build that might predate versionNECd. That path Double-parses the tail
-    against the 1.23 floor, so the shape constraints are the old ones: one
-    dot, a bare number above the floor."""
+def test_the_removed_legacy_probe_flag_is_refused_by_name():
+    """``--legacy-probe`` (the pre-#828 ``-version`` masquerade) was removed in
+    0.83.0 (momwire#1658). A portal-dialog line saved with it is refused at
+    the probe the way an unknown ``--basis`` is -- on stdout, exit 3, one line
+    that says what to change -- rather than the flag being dropped silently."""
     out = io.StringIO()
-    assert main(["--legacy-probe", "-version"], stdin=io.StringIO(""), stdout=out) == 0
-    probe = out.getvalue().strip()
-    assert probe == nec_portal.LEGACY_PROBE_VERSION
-    tail = VERSION_A.match(probe).group(1)
-    assert tail.count(".") == 1 and float(tail) >= 1.23, tail
+    with nec_portal.engine_scope():
+        code = main(["--legacy-probe", "-version"], stdin=io.StringIO(""), stdout=out)
+    assert code == 3
+    assert out.getvalue() == (
+        "--legacy-probe was removed in momwire 0.83.0; "
+        "drop it from the portal dialog command line\n"
+    )
+    assert out.getvalue() == f"{nec_portal.REMOVED_FLAG_REFUSAL}\n"
 
 
 @pytest.mark.integration
@@ -5153,8 +5155,8 @@ def test_a_razor_basis_is_refused_at_configure_time_with_its_reason(basis):
 
     out = io.StringIO()
     with nec_portal.engine_scope():
-        rest, legacy, code = nec_portal.configure_engine(["--basis", basis], out)
-        assert code == 3 and rest == [] and legacy is False
+        rest, code = nec_portal.configure_engine(["--basis", basis], out)
+        assert code == 3 and rest == []
         # And the process was left on the default, not on a basis it refused.
         assert nec_portal._active_basis_name == "bspline"
     line = out.getvalue()
@@ -5169,7 +5171,7 @@ def test_a_stale_razor_copy_is_refused_by_its_filename():
     kept the copy gets the reason from the executable name, not a typo line."""
     out = io.StringIO()
     with nec_portal.engine_scope():
-        _rest, _legacy, code = nec_portal.configure_engine(
+        _rest, code = nec_portal.configure_engine(
             [], out, prog="C:\\SimNEC\\momwire-nec2c-razor-2p.exe"
         )
     assert code == 3
@@ -5183,7 +5185,7 @@ def test_an_unknown_name_still_reads_as_a_typo():
     choices, and the choices are the nec2 roster, razor not among them."""
     out = io.StringIO()
     with nec_portal.engine_scope():
-        _rest, _legacy, code = nec_portal.configure_engine(["--basis", "rzaor-2p"], out)
+        _rest, code = nec_portal.configure_engine(["--basis", "rzaor-2p"], out)
     assert code == 3
     line = out.getvalue()
     assert line.startswith("unknown --basis 'rzaor-2p'; choices: ")

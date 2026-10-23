@@ -334,8 +334,8 @@ _active_basis_name = "bspline"
 
 __all__ = [
     "BANNER_VERSION",
-    "LEGACY_PROBE_VERSION",
     "PROBE_VERSION",
+    "REMOVED_FLAG_REFUSAL",
     "nec2_launcher_name",
     "probe_version",
     "deck_frame",
@@ -403,11 +403,14 @@ def probe_version(suffix: str | None = None) -> str:
 
 PROBE_VERSION = probe_version()
 
-# The masquerade this build used through v0.46 — versionA's shape, whose tail
-# rides ``Double.valueOf`` against the 1.23 floor. Kept behind ``--legacy-probe``
-# for SimNEC builds old enough to predate versionNECd, until one is confirmed
-# not to exist; the flag rides the portal-dialog command line like --basis.
-LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
+# The one flag this engine used to take and no longer does (momwire#1658): it
+# chose the pre-#828 masquerade answer to `-version`. A portal-dialog command
+# line saved with it is refused at the probe, by name, rather than having the
+# flag dropped silently or read as something else.
+REMOVED_FLAG_REFUSAL = (
+    "--legacy-probe was removed in momwire 0.83.0; "
+    "drop it from the portal dialog command line"
+)
 
 # The banner inside a printout is NOT version-checked: the four regexes are
 # ``lookingAt()``, i.e. anchored, and the banner line is prefixed ``VERSION:``
@@ -4171,10 +4174,10 @@ def _basis_refusal(name: str, source: str) -> str:
 
 def configure_engine(
     argv: list[str], stdout, prog: str | None = None
-) -> tuple[list[str], bool, int | None]:
+) -> tuple[list[str], int | None]:
     """Read the engine flags off the command line; return what is left.
 
-    ``(rest, legacy_probe, code)`` — a non-``None`` ``code`` is an exit status
+    ``(rest, code)`` — a non-``None`` ``code`` is an exit status
     whose message has already gone to ``stdout``.
 
     Split out of :func:`main` (#379) so the shared server reads its command
@@ -4221,6 +4224,12 @@ def configure_engine(
     _cache_stats_path = None
     _reset_solver_cache()
     rest = list(argv)
+    # Refused like an unknown --basis, and for its reason: the -version probe
+    # is where SimNEC shows the mistake (momwire#1658).
+    if "--legacy-probe" in rest:
+        stdout.write(f"{REMOVED_FLAG_REFUSAL}\n")
+        stdout.flush()
+        return [], 3
     explicit = False
     while "--basis" in rest or any(a.startswith("--basis=") for a in rest):
         if "--basis" in rest:
@@ -4233,7 +4242,7 @@ def configure_engine(
         if name not in _BASES:
             stdout.write(_basis_refusal(name, "--basis"))
             stdout.flush()
-            return [], False, 3
+            return [], 3
         _active_basis = _BASES[name]
         _active_basis_name = name
         explicit = True
@@ -4251,7 +4260,7 @@ def configure_engine(
             if name not in _BASES:
                 stdout.write(_basis_refusal(name, source))
                 stdout.flush()
-                return [], False, 3
+                return [], 3
             _active_basis = _BASES[name]
             _active_basis_name = name
 
@@ -4276,7 +4285,7 @@ def configure_engine(
         if not path or path.startswith("-"):
             stdout.write("--cache-stats needs a file path\n")
             stdout.flush()
-            return [], False, 3
+            return [], 3
         _cache_stats_path = path
 
     # --save-decks DIR writes every deck received to DIR (momwire#1080), so a
@@ -4298,7 +4307,7 @@ def configure_engine(
         if not save_dir or save_dir.startswith("-"):
             stdout.write("--save-decks needs a directory\n")
             stdout.flush()
-            return [], False, 3
+            return [], 3
     if save_dir is None:
         save_dir = os.environ.get("MOMWIRE_NEC2C_SAVE_DECKS") or None
     if save_dir is not None:
@@ -4308,7 +4317,7 @@ def configure_engine(
                 f"--save-decks: {save_dir!r} is not a directory; create it first\n"
             )
             stdout.flush()
-            return [], False, 3
+            return [], 3
         _save_decks_dir = save_dir
 
     # --cache is a bare flag on purpose: it has no parameter to get wrong, and
@@ -4316,14 +4325,7 @@ def configure_engine(
     _cache_serving = "--cache" in rest
     argv = [a for a in rest if a != "--cache"]
 
-    # --legacy-probe swaps the honest versionNECd identity for the pre-#828
-    # versionA masquerade — for a SimNEC build old enough to predate
-    # versionNECd, should one surface. Deck behavior is identical either way
-    # (the probe response sets no engine state; see PROBE_VERSION).
-    legacy_probe = "--legacy-probe" in argv
-    argv = [a for a in argv if a != "--legacy-probe"]
-
-    return argv, legacy_probe, None
+    return argv, None
 
 
 @contextlib.contextmanager
@@ -4527,14 +4529,13 @@ def main(
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
 
-    argv, legacy_probe, code = configure_engine(list(argv), stdout, prog=prog)
+    argv, code = configure_engine(list(argv), stdout, prog=prog)
     if code is not None:
         return code
 
     if any(a.lstrip("-").lower() == "version" for a in argv):
         suffix = _filename_basis(sys.argv[0] if prog is None else prog)
-        line = LEGACY_PROBE_VERSION if legacy_probe else probe_version(suffix)
-        stdout.write(f"{line}\n")
+        stdout.write(f"{probe_version(suffix)}\n")
         stdout.flush()
         return 0
 

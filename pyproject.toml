@@ -78,9 +78,9 @@ validation = [
 
 # Console scripts.
 #
-# `momwire-nec2c` is the SimNEC portal daemon (momwire.portal, issue #846
-# phase III) — momwire standing in for the nec2c binary SimNEC shells out to,
-# and momwire's only executable front door. The NAME IS PART OF THE CONTRACT
+# `momwire-nec2c` is the NEC-2 launcher (momwire.portal, issue #846 phase III;
+# momwire#1658 for the name) — momwire standing in for the nec2c binary that
+# its two front ends, SimNEC and 4nec2, shell out to. The NAME IS PART OF THE CONTRACT
 # and must not be "prettified": `nec2/NEC2PortalDialog` accepts a configured
 # engine only if the executable's FILENAME, lowercased, CONTAINS the substring
 # "nec2c" (the same check picks NEC5/NEC4.2 dialects off "nec5"/"nec42", so a
@@ -90,9 +90,11 @@ validation = [
 # "NO NEC Command Available".
 #
 # SimNEC then probes `<cmd> -version` and matches the first line against
-# `nec2c\.ae6ty\.(.*)` — see momwire.portal PROBE_VERSION for why that tail
-# has to be a bare one-dot number — and afterwards runs the command through
-# `sh -c` with cwd=$HOME, so the entry point must never depend on the working
+# `versionNECd`, `(NEC\d+\D.*)`. The launcher answers the four-field line every
+# momwire launcher shares (momwire#1606), `NEC2 momwire-nec2c [sb] <version>`:
+# it must start `NEC2` with a non-digit after the 2, and the tail is free (see
+# the comment above `probe_version` in momwire/portal/_portal.py). SimNEC
+# afterwards runs the command through `sh -c` with cwd=$HOME, so the entry point must never depend on the working
 # directory. Both properties are pinned in tests/test_portal.py.
 #
 # `momwire-nec2c-shared` (issue #379) is the OPT-IN sibling: a thin, stdlib-only

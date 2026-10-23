@@ -8,7 +8,7 @@ seam and had no counterpart here.
 entry in ``momwire.deck.NEC2_BASES``, and no portal test parametrized over
 that mapping, so nothing anywhere solved a deck through every rostered name.  A
 basis could therefore be on the roster and answer nothing, and stay invisible
-until a user picked it in a SimNEC portal dialog.
+until a user picked it in a SimNEC or 4nec2 engine dialog.
 
 That is not hypothetical: momwire#559 rostered ``"pulse"`` and the review
 caught it before merge.  ``HarringtonSolver`` implements no

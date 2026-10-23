@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hand smoke test for the momwire SimNEC portal daemon (issue #792).
+# Hand smoke test for the momwire NEC-2 launcher, `momwire-nec2c` (issue #792).
 #
 # The unit suite proves the printout is right. This proves the PROCESS is
 # right — the part a SimNEC session actually depends on and that no in-process
@@ -79,8 +79,7 @@ check "exit 0" $probe_rc
 [[ $(printf '%s\n' "$probe" | wc -l) -eq 1 ]]
 check "exactly one line of stdout" $?
 # nec2/Execute.versionNECd — `(NEC\d+\D.*)`, the honest-identity probe this
-# build has answered since v0.46. `--legacy-probe` still offers versionA's
-# `nec2c.ae6ty.<double>` shape for a SimNEC old enough to predate it.
+# build has answered since v0.46, in the four-field form since #1606.
 [[ $probe =~ ^NEC2[^0-9].*$ ]]
 check "matches Execute.versionNECd  (got: ${probe:-<empty>})" $?
 [[ ! -s $work/probe.err ]]
