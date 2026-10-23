@@ -91,6 +91,29 @@ def test_the_nec42_fixtures_have_the_same_fill(acc):
     assert counts["fills"] >= 30, counts
 
 
+# momwire#1644: the NEC-4 dialect's radius-step junction (the junction solve's
+# per-end basis, the NEC-4 kernel, the end caps and their images), on the
+# fixture decks small enough for the default lane.
+_STEP_1644 = sorted(
+    p
+    for p in (FIXTURES / "nec42_radius_step_1644" / "decks").glob("*.nec")
+    if not any(t in p.stem for t in ("_n80", "_n160", "_x4", "_x8"))
+)
+
+
+@pytest.mark.parametrize("rule", [None, "nec2", "nec42"])
+def test_the_radius_step_decks_have_the_same_fill(rule, acc, monkeypatch):
+    # both junction rules (momwire#1644): the dialect's default, and each
+    # spelled through MOMWIRE_JUNCTION_RULE, which both copies read
+    if rule is None:
+        monkeypatch.delenv("MOMWIRE_JUNCTION_RULE", raising=False)
+    else:
+        monkeypatch.setenv("MOMWIRE_JUNCTION_RULE", rule)
+    counts, mismatches = nc.compare(_STEP_1644)
+    assert not mismatches, mismatches[:2]
+    assert counts["fills"] >= 40, counts
+
+
 FR = "FR 0 1 0 0 299.7925\n"
 LF = "FR 0 1 0 0 .001\n"  # k·h ≈ 1e-6: the folded cos-1 shape
 

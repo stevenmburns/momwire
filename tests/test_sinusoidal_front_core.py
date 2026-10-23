@@ -75,6 +75,18 @@ def test_every_fixture_deck_has_the_same_front(acc):
     assert counts["fronts"] >= 200, counts
 
 
+@pytest.mark.parametrize("rule", [None, "nec2", "nec42"])
+def test_the_radius_step_decks_have_the_same_front(rule, acc, monkeypatch):
+    # momwire#1644: the per-end basis under both junction rules
+    if rule is None:
+        monkeypatch.delenv("MOMWIRE_JUNCTION_RULE", raising=False)
+    else:
+        monkeypatch.setenv("MOMWIRE_JUNCTION_RULE", rule)
+    counts, mismatches = nc.compare(_decks(FIXTURES / "nec42_radius_step_1644"))
+    assert not mismatches, mismatches[:2]
+    assert counts["fronts"] >= 80, counts
+
+
 FR = "FR 0 1 0 0 299.7925\n"
 
 
