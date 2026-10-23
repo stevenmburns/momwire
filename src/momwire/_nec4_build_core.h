@@ -63,6 +63,7 @@ struct SolverArgs {
     std::vector<DistributedRLC> distributed;
     Ground ground;                                       // ground_z= / ground_eps= / ground_model=
     bool exact_kernel_auto = false;                      // bspline's exact_kernel='auto'
+    bool junction_rule_nec42 = false;                   // junction_rule='nec42' (momwire#1644)
 };
 
 struct PortSite {

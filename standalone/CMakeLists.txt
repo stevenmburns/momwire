@@ -268,6 +268,7 @@ if(MW_EXE_BASIS STREQUAL "sin42")
     ${MW_SRC}/_nec4_printout_core.cpp
     ${MW_SRC}/_nec4_run_core.cpp
     ${MW_SRC}/_sinusoidal_core.cpp
+    ${MW_SRC}/_sinusoidal_nec4_core.cpp
     ${MW_SRC}/_sinusoidal_front_core.cpp
     ${MW_SRC}/_sinusoidal_fill_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)

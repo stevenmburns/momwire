@@ -56,6 +56,7 @@ from . import (
     _ground_spec,
     _medium_spec,
     _schedule,
+    _sinusoidal_nec4,
     _sommerfeld,
     _sommerfeld_below,
     _sommerfeld_transmitted,
@@ -100,6 +101,10 @@ _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
 # signature"; without it the EK paths take the numpy reference, which carries
 # the same per-pair fix.
 _EK_IRA_PER_PAIR = _acc is not None and bool(getattr(_acc, "ek_ira_per_pair", False))
+# momwire#1644: the NEC-4 dialect's kernel (`_sinusoidal_nec4`).
+_HAVE_FIELD_TENSOR_NEC4 = _acc is not None and hasattr(
+    _acc, "sinusoidal_field_tensor_nec4"
+)
 _HAVE_FIELD_TENSOR_EK = (
     _acc is not None
     and hasattr(_acc, "sinusoidal_field_tensor_ek")
@@ -906,6 +911,18 @@ _POINT_FEED_MODEL_REFUSAL = (
 )
 
 
+# momwire#1644: `SinusoidalSolver(junction_rule=...)`. "nec2" is NEC-2's log
+# rule (the default, bit for bit what this lane always did); "nec42" is NEC-4.2's
+# junction treatment: the junction-charge solve, the NEC-4 kernel and end caps.
+_JUNCTION_RULES = ("nec2", "nec42")
+
+_JUNCTION_RULE_GALERKIN_REFUSAL = (
+    "junction_rule='nec42' is the point-matched lane's NEC-4 dialect "
+    "option (momwire#1644); SinusoidalGalerkinSolver's junctions are its own "
+    "and take no charge rule"
+)
+
+
 class RadiusStepJunction(UserWarning):
     """Wires of different radius meet at a junction, on the point-matched
     `SinusoidalSolver` (momwire#1632). Raised once per solver, at
@@ -927,9 +944,17 @@ class RadiusStepJunction(UserWarning):
         ======================  ==============  ==============
 
     So the lane is NEC-2-faithful here, by decision (Steve, 10-22): the
-    NEC-2 slot and momwire-nec2c are meant to match nec2c. A NEC-4.2-style
-    step for the NEC-4 dialect is momwire#1644. `SinusoidalGalerkinSolver`
-    and `BSplineSolver` give the converged answer and do not raise this.
+    NEC-2 slot and momwire-nec2c are meant to match nec2c.
+    `SinusoidalGalerkinSolver` and `BSplineSolver` give the converged answer
+    and do not raise this.
+
+    On the NEC-4 dialect (`junction_rule="nec42"`: the NEC-4.2 slot and
+    momwire-nec42-sinusoidal) the lane takes NEC-4's junction solve instead
+    (momwire#1644) and this advisory is not raised for a step it serves: in
+    air, over a perfect ground and over the Sommerfeld ground. It still is
+    for a step it does not -- under a reflection-coefficient ground, with a
+    wire below the interface, at a junction in the ground plane -- where the
+    lane keeps NEC-2's rule, and the message says so.
 
     The test is the one `SinusoidalGalerkinSolver`'s extended-kernel step
     refusal uses: two members of one junction whose per-wire radii differ,
@@ -952,8 +977,10 @@ def radius_step_junctions(junctions, radius_per_wire):
     return found
 
 
-def radius_step_message(family, found):
-    """The advisory sentence for `radius_step_junctions`' result."""
+def radius_step_message(family, found, nec4_dialect=False):
+    """The advisory sentence for `radius_step_junctions`' result.
+    `nec4_dialect`: the solver asked for the NEC-4 junction and these steps
+    are ones it does not serve."""
     named = []
     for _j, wires, a_lo, a_hi in found[:_RADIUS_STEP_NAMED]:
         who = (
@@ -971,8 +998,16 @@ def radius_step_message(family, found):
         else f"wires of different radius meet at {len(found)} junctions: "
         + "; ".join(named)
     )
+    why = (
+        " NEC-4.2's junction solve, which this dialect takes in air and over a "
+        "perfect or Sommerfeld ground, does not reach here (a "
+        "reflection-coefficient ground, a wire below the interface, or a "
+        "junction in the ground plane), so"
+        if nec4_dialect
+        else ""
+    )
     return (
-        f"{family}: {where}. At a change of wire radius this basis follows "
+        f"{family}: {where}.{why} At a change of wire radius this basis follows "
         "NEC-2, including NEC-2's known weakness there: it underestimates the "
         "effect of the step, and more so as the mesh is refined. Basis "
         "sinusoidal-galerkin or bspline gives the converged answer "
@@ -980,13 +1015,21 @@ def radius_step_message(family, found):
     )
 
 
-def advise_radius_step(family, junctions, radius_per_wire):
+def advise_radius_step(family, junctions, radius_per_wire, served=None):
     """Warn `RadiusStepJunction` once when any junction joins two radii.
-    Called from the point-matched constructor once the junctions are final."""
+    Called from the point-matched constructor once the junctions are final.
+
+    `served`, when given, is the set of junction indices the NEC-4 dialect's
+    junction solve serves (momwire#1644); those are not NEC-2 steps and are
+    left out, and what remains is named with the NEC-4 dialect's reason."""
     found = radius_step_junctions(junctions, radius_per_wire)
+    if served is not None:
+        found = [f for f in found if f[0] not in served]
     if found:
         warnings.warn(
-            radius_step_message(family, found), RadiusStepJunction, stacklevel=3
+            radius_step_message(family, found, nec4_dialect=served is not None),
+            RadiusStepJunction,
+            stacklevel=3,
         )
 
 
@@ -1024,6 +1067,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # momwire#1644: this family takes a dialect's condition on charge at a
+    # junction (`junction_rule`, `DeckModel.junction_rule`): NEC-2's basis
+    # on the nec2 dialect, NEC-4's on the nec4 one. `build_solver` reads the
+    # flag; `SinusoidalGalerkinSolver` clears it (its junction is its own).
+    takes_junction_rule = True
+
     # momwire#396: every ground, wire loading and the extended kernel are
     # served (this is NEC2's own basis); junction_ports and node_gaps are
     # not (`_reject_junction_ports`; node_gaps has no kwarg here at all).
@@ -1052,6 +1101,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "quadrature": ("converged",),
             "solve_strategy": ("dense",),
             "feed_model": ("segment-gap",),
+            # momwire#1644: `junction_rule=` ("nec2" the default; "nec42" the
+            # NEC-4 dialect's default through `momwire.deck`).
+            "junction_rule": ("nec2", "nec42"),
         },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
@@ -1128,7 +1180,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         distributed_rlc=None,
         swept_mem_mb=256,
         cancel=None,
+        junction_rule="nec2",
     ):
+        # momwire#1644: which condition on charge a junction's basis functions
+        # take. "nec2" (the default) is NEC-2's log rule at every segment end,
+        # bit for bit what this lane always did; "nec42" is NEC-4.2's junction
+        # (`_nec4_junction`, `_sinusoidal_nec4`), the NEC-4 dialect's default
+        # through `momwire.deck` and overridable there. Checked first,
+        # so a typo is refused before any other work.
+        if junction_rule not in _JUNCTION_RULES:
+            raise ValueError(
+                "junction_rule must be one of "
+                f"{', '.join(repr(r) for r in _JUNCTION_RULES)}, "
+                f"got {junction_rule!r}"
+            )
+        if junction_rule != "nec2" and hasattr(self, "_node_drive_declared"):
+            raise NotImplementedError(_JUNCTION_RULE_GALERKIN_REFUSAL)
+        self.junction_rule = junction_rule
         # momwire#1042: a wire listed twice is solved once. Dropped here,
         # before anything reads a wire index, and every wire-indexed argument
         # remapped; the per-wire readouts re-expand through `_wire_dedup`.
@@ -1209,6 +1277,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # thin-wire kernel, so EK does not apply to it at all.)
         self.extended_kernel = bool(extended_kernel)
         self._cached_ek_gating: tuple | None = None
+        self._cached_nec4_live: tuple | None = None
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -1460,8 +1529,40 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # The point-matched lane only (Sin-Galerkin never reaches this
             # block), because it is this lane that follows NEC-2 there.
             advise_radius_step(
-                type(self).__name__, self.junctions, self._radius_per_wire
+                type(self).__name__,
+                self.junctions,
+                self._radius_per_wire,
+                served=self._nec4_served_junctions(),
             )
+
+    def _nec4_served_junctions(self):
+        """The junctions the NEC-4 junction solve will take, decided at
+        construction for the radius-step advisory (momwire#1644): None when
+        the option is off, else every ungrounded junction -- or none at all
+        under a reflection-coefficient ground or with a wire below the
+        interface, where `_nec4_live` keeps NEC-2's basis."""
+        if self.junction_rule != "nec42":
+            return None
+        if self.ground_eps is not None and self.ground_model != "sommerfeld":
+            return frozenset()
+        gz = self.ground_z
+        served = set()
+        for j, members in enumerate(self.junctions):
+            w0, end0 = members[0]
+            pl = np.asarray(self.wires_polylines[w0], dtype=np.float64)
+            if gz is not None:
+                if any(
+                    float(np.min(np.asarray(q, dtype=np.float64)[:, 2]))
+                    < gz
+                    - _ground_spec.ground_touch_tol(np.asarray(q, dtype=np.float64))
+                    for q in self.wires_polylines
+                ):
+                    return frozenset()
+                pt = pl[0] if end0 == "start" else pl[-1]
+                if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
+                    continue
+            served.add(j)
+        return frozenset(served)
 
     def _reject_junction_ports(self):
         """Refuse `junction_ports=` on the point-matched solver.
@@ -2324,6 +2425,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         nm_count = geom["nm_count"]
         np_count = geom["np_count"]
 
+        # momwire#1644: the NEC-4 dialect's junction solve, where it solves a
+        # node. Every other deck falls through to NEC-2's basis below, so the
+        # option is bit-identical wherever it changes nothing.
+        if not per_seg_k and not _complex_k(k) and self._nec4_live(geom):
+            factors = self._nec4_end_factors(geom, k, a)
+            if factors is not None:
+                x_end = _sinusoidal_nec4.end_cap_x(geom, k, self._seg_radius(geom))
+                seg_view = _sinusoidal_nec4.basis_coefs_per_end(
+                    geom, k, *factors, x_end
+                )
+                self._cached_basis = (geom, k, a_key, seg_view)
+                return seg_view
+
         ka = k * a
         # a_i± from Eq 25: 1/(ln(2/(k·a)) − γ) per segment (scalar when the
         # radius is uniform). Mixed radii follow NEC2's TBF convention —
@@ -2601,6 +2715,44 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_basis = (geom, k, a_key, seg_view)
         return seg_view
 
+    def _nec4_live(self, geom):
+        """Whether this solve takes the NEC-4 junction (momwire#1644): the
+        option is set, the deck has a node the rule solves, and the deck is
+        in air over free space, a PEC plane or the Sommerfeld ground. Every
+        other deck -- no solved node, a reflection-coefficient ground, a wire
+        below the interface -- keeps NEC-2's basis and kernel, bit for bit.
+        Decided once per geometry; the junction solve's factors and the
+        NEC-4 kernel go together or not at all."""
+        if self.junction_rule != "nec42":
+            return False
+        cached = self._cached_nec4_live
+        if cached is not None and cached[0] is geom:
+            return cached[1]
+        live = bool(
+            _sinusoidal_nec4.solved_nodes(
+                self.junctions, self._radius_per_wire, geom["grounded_junctions"]
+            )
+        )
+        if live and self.ground_eps is not None and self.ground_model != "sommerfeld":
+            live = False
+        if live and self.ground_z is not None and self._lower_medium():
+            live = not bool(self._below_segments(geom).any())
+        self._cached_nec4_live = (geom, live)
+        return live
+
+    def _nec4_end_factors(self, geom, k, a):
+        """`(a_minus, a_plus)` per segment from the NEC-4 junction solve, or
+        None when this deck has no node the rule solves (momwire#1644)."""
+        nodes = _sinusoidal_nec4.solved_nodes(
+            self.junctions, self._radius_per_wire, geom["grounded_junctions"]
+        )
+        if not nodes:
+            return None
+        a_const = 1.0 / (np.log(2.0 / (k * a)) - _EULER_GAMMA)
+        return _sinusoidal_nec4.end_factors(
+            geom, k, a_const, self.junctions, self._radius_per_wire, nodes
+        )
+
     def _evaluate_basis_at_points(self, seg_view, eval_seg, eval_s, alpha):
         """Vectorized evaluation of Σ_j α_j · f_{j, seg}(s_local) at an
         array of (segment, s_local) pairs.
@@ -2840,6 +2992,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # the unchunked marshalling is byte-for-byte the pre-#332 one.
         win = slice(None) if obs_rows is None else slice(*obs_rows)
 
+        # momwire#1644: the NEC-4 dialect's junction takes NEC-4's kernel with
+        # it (`_sinusoidal_nec4`), whatever `extended_kernel` says -- NEC-4
+        # has one thin-wire kernel and no EK. Literal cos only (`_assemble_Z`
+        # asks for nothing else while it is live).
+        if self._nec4_live(geom):
+            return self._nec4_field_tensor(geom, k, src_c, src_t, win, eta)
+
         # `extended_kernel=True` has had its own C++ entry point since
         # momwire#245 — EKSCX rather than EKSC, taking the SOURCE radius and
         # the per-end gating codes as (N,) tables alongside the observer-side
@@ -2985,6 +3144,43 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Phi_sin = td * cm["Ez_sin"] + rho_proj_factor * cm["Erho_sin"]
         Phi_cos = td * cm["Ez_cos"] + rho_proj_factor * cm["Erho_cos"]
         return Phi_const, Phi_sin, Phi_cos
+
+    def _nec4_field_tensor(self, geom, k, src_c, src_t, win, eta):
+        """`_field_tensor` under the NEC-4 kernel (momwire#1644), on the
+        observer rows `win`: the C++ `sinusoidal_field_tensor_nec4` when the
+        accelerator is loaded, `_sinusoidal_nec4.nec4_field_components`
+        otherwise (the reference). The source radius rides per segment."""
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        seg_h = np.asarray(geom["seg_h"], dtype=np.float64)
+        src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
+        gx, gw = self._leggauss_cached(self.n_qp_const)
+        if _HAVE_FIELD_TENSOR_NEC4:
+            return _acc.sinusoidal_field_tensor_nec4(
+                np.ascontiguousarray(seg_c[win], dtype=np.float64),
+                np.ascontiguousarray(seg_t[win], dtype=np.float64),
+                np.ascontiguousarray(src_c, dtype=np.float64),
+                np.ascontiguousarray(src_t, dtype=np.float64),
+                seg_h,
+                src_a,
+                float(k),
+                float(eta),
+                np.ascontiguousarray(gx, dtype=np.float64),
+                np.ascontiguousarray(gw, dtype=np.float64),
+                self._cancel_flag,
+            )
+        return _sinusoidal_nec4.nec4_field_components(
+            float(k),
+            float(eta),
+            np.asarray(seg_c[win], dtype=np.float64),
+            np.asarray(seg_t[win], dtype=np.float64),
+            np.asarray(src_c, dtype=np.float64),
+            np.asarray(src_t, dtype=np.float64),
+            0.5 * seg_h,
+            src_a,
+            gx,
+            gw,
+        )
 
     # ---- NEC's extended thin-wire kernel (EK card), momwire#233 -----------
     #
@@ -5991,6 +6187,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if self.ground_eps is None:
             return G
+        if self._nec4_live(geom):
+            # momwire#1644: the NEC-4 kernel carries no segment-end charge,
+            # so there is no residual contact charge to take out.
+            return G
         nodes = self._contact_nodes(geom)
         if not nodes:
             return G
@@ -6133,6 +6333,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # positive k the two are the same floats.
         kd_min = float(np.min(np.abs(k) * np.asarray(geom["seg_h"], dtype=np.float64)))
         cos_shape = "cos-1" if kd_min < _WELL_SCALED_KD else "cos"
+        if self._nec4_live(geom):
+            # momwire#1644: the NEC-4 kernel's forms have no folded spelling
+            # here; the literal shapes cost ~eps*8/(k Delta)^2 relative below
+            # the threshold (6e-10 at it), and are what it serves.
+            cos_shape = "cos"
         A_eff = sigma_arr * (seg_view["A"] if cos_shape == "cos" else seg_view["AC"])
         B_eff = seg_view["B"]
         C_eff = sigma_arr * seg_view["C"]
@@ -6274,9 +6479,32 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # beside the three Φ (`_reduce_phi_band`, momwire#1290).
             _reduce_phi_band((Phi_c, Phi_s, Phi_co), (M_A, M_B, M_C), G[i0:i1])
             del Phi_c, Phi_s, Phi_co
+        if self._nec4_live(geom):
+            self._nec4_cap_columns(G, geom, k, seg_view, fg, eta)
         self._contact_charge_correction(G, geom, k, seg_view, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
+
+    def _nec4_cap_columns(self, G, geom, k, seg_view, fg, eta):
+        """Add each free end's cap-charge field to its basis column, in
+        place (momwire#1644, `_sinusoidal_nec4.end_caps`): the direct cap,
+        less its image under a ground, weighted exactly as the image blocks
+        of the fill are (`fg.image_coefficient` when the ground composes)."""
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        caps = _sinusoidal_nec4.end_caps(geom, k, seg_view, self._seg_radius(geom))
+        for i, pos, normal, a, c0 in caps:
+            col = _sinusoidal_nec4.cap_field(k, eta, seg_c, seg_t, pos, normal, a, c0)
+            if fg is not None:
+                ipos = _ground_mirror.mirror_positions(pos[None, :], self.ground_z)[0]
+                inrm = _ground_mirror.mirror_tangents(normal[None, :])[0]
+                img = _sinusoidal_nec4.cap_field(
+                    k, eta, seg_c, seg_t, ipos, inrm, a, c0
+                )
+                if fg.mode == "compose":
+                    img = fg.image_coefficient * img
+                col = col - img
+            G[:, i] += col
 
     def _assemble_Z_mixed(self, geom, eta):
         """Point-matched Z of a MIXED deck (momwire#1222): wires wholly above

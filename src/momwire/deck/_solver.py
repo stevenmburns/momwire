@@ -49,6 +49,7 @@ polyline arrays rather than a fresh rounding of the same walk.
 
 from __future__ import annotations
 
+import os
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -343,6 +344,34 @@ def _warn_kernel_fallback(basis: str, reason: str, stacklevel: int = 3) -> str:
     )
     warnings.warn(message, ExtendedKernelDefault, stacklevel=stacklevel)
     return message
+
+
+# momwire#1644: the junction rule a deck's point-matched sinusoidal solve
+# takes is its dialect's default (`DeckModel.junction_rule`: "nec42" on the
+# nec4 dialect, "nec2" on every other) unless this variable names one. It is
+# the one channel every launcher shares -- EZNEC's NEC-4.2 slot passes two
+# file names and nothing else -- so the NEC-2 launchers, the NEC-4.2 ones and
+# the C++ `momwire-nec42-sinusoidal` all read it; the thin clients carry it in
+# their warm server's identity, so a server started under one rule never
+# answers for the other.
+JUNCTION_RULE_ENV = "MOMWIRE_JUNCTION_RULE"
+JUNCTION_RULES = ("nec2", "nec42")
+
+
+def junction_rule(model: DeckModel) -> str:
+    """The junction rule a deck's point-matched sinusoidal solve takes: the
+    `MOMWIRE_JUNCTION_RULE` override when it is set, else the dialect's
+    default. An unknown value is a ValueError naming the variable."""
+    value = os.environ.get(JUNCTION_RULE_ENV)
+    if value is None or value == "":
+        return model.junction_rule
+    if value not in JUNCTION_RULES:
+        raise ValueError(
+            f"{JUNCTION_RULE_ENV}={value!r} names no junction rule; "
+            f"known rules: {', '.join(repr(r) for r in JUNCTION_RULES)} "
+            "(momwire#1644)"
+        )
+    return value
 
 
 def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
@@ -1173,6 +1202,13 @@ def build_solver(
     NEC-5 dialect, which addresses the knots razor lives on, serves it.
     """
     solver_class, basis_kwargs = basis_entry(basis)
+    if getattr(solver_class, "takes_junction_rule", False):
+        # momwire#1644: the dialect's junction rule, or the override. Passed
+        # only when it is not the class default, so a "nec2" solve is built
+        # with exactly the kwargs it always was.
+        rule = junction_rule(model)
+        if rule != "nec2":
+            basis_kwargs = MappingProxyType({**basis_kwargs, "junction_rule": rule})
 
     if model.feeds and not solver_class.capabilities.centre_feeds:
         wire, arclength, _v = model.feeds[0]

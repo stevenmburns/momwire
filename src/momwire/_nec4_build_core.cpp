@@ -13,6 +13,7 @@
 #include "_nec4_build_core.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -670,6 +671,18 @@ std::vector<ll> wires_below(const std::vector<std::vector<Point3>> &polylines, c
 
 std::string repr_str(const std::string &s) { return "'" + s + "'"; }
 
+// `_solver.junction_rule(model)` on the nec4 dialect: "nec42" unless
+// MOMWIRE_JUNCTION_RULE names a rule; an unknown one is refused with the
+// reference's sentence.
+std::string junction_rule_env() {
+    const char *e = std::getenv("MOMWIRE_JUNCTION_RULE");
+    if (e == nullptr || *e == '\0') return "nec42";
+    const std::string v(e);
+    if (v == "nec2" || v == "nec42") return v;
+    refuse("MOMWIRE_JUNCTION_RULE=" + repr_str(v) +
+           " names no junction rule; known rules: 'nec2', 'nec42' (momwire#1644)");
+}
+
 // `build_solver` (through `construct_solver`) at one operating point.
 OperatingPoint build_point(const Model &model, const Prepared &prep, const std::string &basis, ll group,
                            double frequency_mhz, bool extended_kernel, const Environment &env) {
@@ -695,6 +708,10 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
     a.junctions = prep.mesh.junctions;
     a.ground = env.ground;
     a.exact_kernel_auto = basis == "bspline";
+    // `build_solver`'s `junction_rule(model)` (momwire#1644): the nec4
+    // dialect's default "nec42" unless MOMWIRE_JUNCTION_RULE names a rule,
+    // for the point-matched sinusoidal basis only.
+    a.junction_rule_nec42 = basis == "sinusoidal" && junction_rule_env() == "nec42";
     // _wire_loading
     std::size_t n = prep.mesh.materials.size();
     a.conductivity.assign(n, kNaN);
@@ -1039,6 +1056,8 @@ void dump_args(Out &o, const std::string &p, const SolverArgs &a) {
         }
     }
     if (a.exact_kernel_auto) kw.push_back({"exact_kernel", [&](const std::string &q) { o.str(q, "auto"); }});
+    if (a.junction_rule_nec42)
+        kw.push_back({"junction_rule", [&](const std::string &q) { o.str(q, "nec42"); }});
     o.line(p + " : mapping " + std::to_string(kw.size()));
     for (std::size_t k = 0; k < kw.size(); k++) {
         std::string r = p + "{" + std::to_string(k) + "}";

@@ -9,6 +9,8 @@
 
 #include "_sinusoidal_front_core.h"
 
+#include "_sinusoidal_nec4_core.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -16,6 +18,7 @@
 #include <map>
 #include <numeric>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -209,6 +212,232 @@ void check_junction_coincidence(const std::vector<std::vector<Point3>> &pls,
             if (d > tol) decline("junction members that do not coincide (the refusal's wording is not copied)");
         }
     }
+}
+
+// --- the NEC-4 dialect's junction (momwire#1644) ------------------------------
+
+// `_sinusoidal_nec4.solved_nodes`
+std::vector<std::size_t> nec4_solved_nodes(const Front &f) {
+    const auto &gr = f.geometry.grounded_junctions;
+    std::vector<std::size_t> out;
+    for (std::size_t j = 0; j < f.junctions.size(); j++) {
+        const auto &members = f.junctions[j];
+        if (std::find(gr.begin(), gr.end(), static_cast<ll>(j)) != gr.end() || members.size() < 2) continue;
+        std::set<double> radii;
+        for (const auto &mb : members) radii.insert(f.radius_per_wire[static_cast<std::size_t>(mb.first)]);
+        if (members.size() >= 3 || radii.size() > 1) out.push_back(j);
+    }
+    return out;
+}
+
+// `SinusoidalSolver._nec4_end_factors` + `_sinusoidal_nec4.end_cap_x` +
+// `_sinusoidal_nec4.basis_coefs_per_end`, numpy's elementwise order.
+void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::size_t> &nodes) {
+    const Geometry &g = f.geometry;
+    const double k = f.k;
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    std::vector<double> base(n), am, ap;
+    for (std::size_t i = 0; i < n; i++) {
+        const double ka = k * a[i];
+        base[i] = 1.0 / (std::log(2.0 / ka) - kEulerGamma);
+    }
+    am = ap = base;
+    for (std::size_t j : nodes) {
+        std::vector<std::pair<std::size_t, bool>> segs;
+        std::vector<std::array<double, 3>> dirs;
+        std::vector<double> radii, lengths;
+        for (const auto &mb : f.junctions[j]) {
+            const std::size_t w = static_cast<std::size_t>(mb.first);
+            const std::size_t sg = static_cast<std::size_t>(mb.second ? g.wire_first[w] : g.wire_last[w]);
+            const Point3 &t = g.seg_tangents[sg];
+            if (mb.second)
+                dirs.push_back({t[0], t[1], t[2]});
+            else
+                dirs.push_back({-t[0], -t[1], -t[2]});
+            segs.push_back({sg, mb.second});
+            radii.push_back(f.radius_per_wire[w]);
+            lengths.push_back(g.seg_h[sg]);
+        }
+        std::vector<double> fac;
+        try {
+            // the first member's LOG-RULE factor (`base`), not one an earlier
+            // node already replaced at this segment's other end
+            fac = junction_charge_factors(k, dirs, radii, lengths, base[segs[0].first]);
+        } catch (const std::domain_error &e) {
+            fail(e.what());
+        }
+        for (std::size_t q = 0; q < segs.size(); q++) (segs[q].second ? am : ap)[segs[q].first] = fac[q];
+    }
+    // end_cap_x
+    std::vector<double> X(n), kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), tanh_(n);
+    const double half_k = 0.5 * k;
+    for (std::size_t i = 0; i < n; i++) {
+        const bool free_m = g.nm_count[i] == 0 && !g.ground_minus[i] && !g.crossing_minus[i];
+        const bool free_p = g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i];
+        X[i] = (free_m || free_p) ? half_k * a[i] : 0.0;
+        kd[i] = k * g.seg_h[i];
+        sin_kd[i] = std::sin(kd[i]);
+        cos_kd[i] = std::cos(kd[i]);
+        s2[i] = std::sin(0.5 * kd[i]);
+        c2[i] = std::cos(0.5 * kd[i]);
+        s4[i] = std::sin(0.25 * kd[i]);
+        const double rs4 = std::sin(0.25 * kd[i]);
+        recip[i] = rs4 * rs4 / (std::sin(0.5 * kd[i]) * std::cos(0.5 * kd[i]));
+        tanh_[i] = s2[i] / c2[i];
+    }
+    // the neighbours' factors at the shared node
+    std::vector<double> a_nm(g.nm_basis.size()), a_np(g.np_basis.size());
+    for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+        const std::size_t sg = static_cast<std::size_t>(g.nm_seg[e]);
+        a_nm[e] = g.nm_sigma[e] > 0 ? ap[sg] : am[sg];
+    }
+    for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+        const std::size_t sg = static_cast<std::size_t>(g.np_seg[e]);
+        a_np[e] = g.np_sigma[e] > 0 ? am[sg] : ap[sg];
+    }
+    std::vector<double> Pm(n, 0.0), Pp(n, 0.0);
+    for (std::size_t e = 0; e < g.nm_basis.size(); e++)
+        Pm[static_cast<std::size_t>(g.nm_basis[e])] += a_nm[e] * tanh_[static_cast<std::size_t>(g.nm_seg[e])];
+    for (std::size_t e = 0; e < g.np_basis.size(); e++)
+        Pp[static_cast<std::size_t>(g.np_basis[e])] += -(a_np[e] * tanh_[static_cast<std::size_t>(g.np_seg[e])]);
+    const bool any_gm = std::find(g.ground_minus.begin(), g.ground_minus.end(), true) != g.ground_minus.end();
+    const bool any_gp = std::find(g.ground_plus.begin(), g.ground_plus.end(), true) != g.ground_plus.end();
+    if (any_gm)
+        for (std::size_t i = 0; i < n; i++) Pm[i] = Pm[i] + (g.ground_minus[i] ? am[i] * tanh_[i] : 0.0);
+    if (any_gp)
+        for (std::size_t i = 0; i < n; i++) Pp[i] = Pp[i] - (g.ground_plus[i] ? ap[i] * tanh_[i] : 0.0);
+    std::vector<bool> has_minus(n), has_plus(n);
+    for (std::size_t i = 0; i < n; i++) {
+        has_minus[i] = g.nm_count[i] > 0 || g.ground_minus[i] || g.crossing_minus[i];
+        has_plus[i] = g.np_count[i] > 0 || g.ground_plus[i] || g.crossing_plus[i];
+    }
+    std::vector<double> Qm(n), Qp(n), A(n), B(n), C(n), AC(n), sin_safe(n), omc(n), s4sq(n);
+    for (std::size_t i = 0; i < n; i++) {
+        const double D = (Pm[i] * Pp[i] + am[i] * ap[i]) * sin_kd[i] + (Pm[i] * ap[i] - Pp[i] * am[i]) * cos_kd[i];
+        const double D_safe = D != 0 ? D : 1.0;
+        sin_safe[i] = sin_kd[i] != 0 ? sin_kd[i] : 1.0;
+        omc[i] = 2.0 * s2[i] * s2[i];
+        Qm[i] = (ap[i] * omc[i] - Pp[i] * sin_kd[i]) / D_safe;
+        Qp[i] = (-am[i] * omc[i] - Pm[i] * sin_kd[i]) / D_safe;
+        A[i] = -1.0;
+        B[i] = (am[i] * Qm[i] + ap[i] * Qp[i]) * s2[i] / sin_safe[i];
+        C[i] = (am[i] * Qm[i] - ap[i] * Qp[i]) * c2[i] / sin_safe[i];
+        const double dP = Pm[i] * ap[i] - Pp[i] * am[i];
+        s4sq[i] = s4[i] * s4[i];
+        AC[i] = (4.0 * am[i] * ap[i] * s2[i] * s4sq[i] - 2.0 * dP * s4sq[i] - 2.0 * s2[i] * c2[i] * Pm[i] * Pp[i] +
+                 2.0 * dP * s2[i] * s2[i]) /
+                D_safe;
+    }
+    bool any_branch = false;
+    for (std::size_t i = 0; i < n; i++) any_branch = any_branch || !(has_minus[i] && has_plus[i]);
+    if (any_branch) {
+        for (std::size_t i = 0; i < n; i++) {
+            const bool only_plus = has_plus[i] && !has_minus[i];
+            const bool only_minus = has_minus[i] && !has_plus[i];
+            const bool iso = !has_minus[i] && !has_plus[i];
+            const double x = X[i];
+            const double denom_x = cos_kd[i] - x * sin_kd[i];
+            const double dxs = denom_x != 0 ? denom_x : 1.0;
+            const double gap_x = omc[i] + x * sin_kd[i];
+            const double cap_s = s2[i] + x * c2[i];
+            const double cap_c = c2[i] - x * s2[i];
+            const double qpe1_d = (ap[i] + x * Pp[i]) * sin_kd[i] + (ap[i] * x - Pp[i]) * cos_kd[i];
+            const double qpe1_s = qpe1_d != 0 ? qpe1_d : 1.0;
+            const double Q_plus_e1 = -gap_x / qpe1_s;
+            const double B_e1 = (s2[i] + ap[i] * Q_plus_e1 * cap_c) / dxs;
+            const double C_e1 = (c2[i] + ap[i] * Q_plus_e1 * cap_s) / dxs;
+            const double qme2_d = (am[i] - x * Pm[i]) * sin_kd[i] + (am[i] * x + Pm[i]) * cos_kd[i];
+            const double qme2_s = qme2_d != 0 ? qme2_d : 1.0;
+            const double Q_minus_e2 = gap_x / qme2_s;
+            const double B_e2 = (-s2[i] + am[i] * Q_minus_e2 * cap_c) / dxs;
+            const double C_e2 = (c2[i] - am[i] * Q_minus_e2 * cap_s) / dxs;
+            const double iso_den = c2[i] - x * s2[i];
+            const double iso_s = iso_den != 0 ? iso_den : 1.0;
+            const double C_iso = 1.0 / iso_s;
+            if (only_plus || iso) Qm[i] = 0.0;
+            if (only_minus) Qm[i] = Q_minus_e2;
+            if (only_minus || iso) Qp[i] = 0.0;
+            if (only_plus) Qp[i] = Q_plus_e1;
+            if (only_plus) B[i] = B_e1;
+            if (only_minus) B[i] = B_e2;
+            if (iso) B[i] = 0.0;
+            if (only_plus) C[i] = C_e1;
+            if (only_minus) C[i] = C_e2;
+            if (iso) C[i] = C_iso;
+            const double cos_gap_e = 2.0 * std::sin(0.75 * kd[i]) * s4[i] + x * sin_kd[i];
+            const double AC_e1 = (cos_gap_e + ap[i] * Q_plus_e1 * cap_s) / dxs;
+            const double AC_e2 = (cos_gap_e - am[i] * Q_minus_e2 * cap_s) / dxs;
+            const double AC_iso = (2.0 * s4sq[i] + x * s2[i]) / iso_s;
+            if (only_plus) AC[i] = AC_e1;
+            if (only_minus) AC[i] = AC_e2;
+            if (iso) AC[i] = AC_iso;
+        }
+    }
+    if (any_gm)
+        for (std::size_t i = 0; i < n; i++) {
+            const double Qg = g.ground_minus[i] ? am[i] * Qm[i] : 0.0;
+            A[i] = A[i] + Qg / sin_safe[i];
+            B[i] = B[i] - Qg / (2.0 * c2[i]);
+            C[i] = C[i] - Qg / (2.0 * s2[i]);
+            AC[i] = AC[i] + Qg * recip[i];
+        }
+    if (any_gp)
+        for (std::size_t i = 0; i < n; i++) {
+            const double Qg = g.ground_plus[i] ? ap[i] * Qp[i] : 0.0;
+            A[i] = A[i] - Qg / sin_safe[i];
+            B[i] = B[i] - Qg / (2.0 * c2[i]);
+            C[i] = C[i] + Qg / (2.0 * s2[i]);
+            AC[i] = AC[i] - Qg * recip[i];
+        }
+    std::vector<ll> all_seg, all_basis;
+    std::vector<double> all_A, all_B, all_C, all_AC;
+    std::vector<int8_t> all_sigma;
+    for (std::size_t i = 0; i < n; i++) {
+        all_seg.push_back(static_cast<ll>(i));
+        all_basis.push_back(static_cast<ll>(i));
+        all_A.push_back(A[i]);
+        all_B.push_back(B[i]);
+        all_C.push_back(C[i]);
+        all_AC.push_back(AC[i]);
+        all_sigma.push_back(1);
+    }
+    for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+        const std::size_t sg = static_cast<std::size_t>(g.nm_seg[e]);
+        const double aq = a_nm[e] * Qm[static_cast<std::size_t>(g.nm_basis[e])];
+        all_seg.push_back(g.nm_seg[e]);
+        all_basis.push_back(g.nm_basis[e]);
+        all_A.push_back(aq / sin_kd[sg]);
+        all_B.push_back(aq / (2.0 * c2[sg]));
+        all_C.push_back(-aq / (2.0 * s2[sg]));
+        all_AC.push_back(aq * recip[sg]);
+        all_sigma.push_back(g.nm_sigma[e]);
+    }
+    for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+        const std::size_t sg = static_cast<std::size_t>(g.np_seg[e]);
+        const double aq = a_np[e] * Qp[static_cast<std::size_t>(g.np_basis[e])];
+        all_seg.push_back(g.np_seg[e]);
+        all_basis.push_back(g.np_basis[e]);
+        all_A.push_back(-aq / sin_kd[sg]);
+        all_B.push_back(aq / (2.0 * c2[sg]));
+        all_C.push_back(aq / (2.0 * s2[sg]));
+        all_AC.push_back(-aq * recip[sg]);
+        all_sigma.push_back(g.np_sigma[e]);
+    }
+    std::vector<std::size_t> order(all_seg.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return all_seg[x] < all_seg[y]; });
+    SegView &v = f.basis;
+    v.starts.assign(n + 1, 0);
+    for (std::size_t i = 0; i < n; i++) v.starts[i + 1] = v.starts[i] + 1 + g.nm_count[i] + g.np_count[i];
+    for (std::size_t o : order) {
+        v.jbasis.push_back(all_basis[o]);
+        v.A.push_back(cd(all_A[o], 0.0));
+        v.B.push_back(cd(all_B[o], 0.0));
+        v.C.push_back(cd(all_C[o], 0.0));
+        v.AC.push_back(cd(all_AC[o], 0.0));
+        v.sigma.push_back(all_sigma[o]);
+    }
+    f.nec4 = true;
 }
 
 }  // namespace
@@ -426,6 +655,15 @@ Front front(const nec4::SolverArgs &args) {
     } else {
         for (std::size_t w = 0; w < n_w; w++)
             for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = f.radius_per_wire[w];
+    }
+    if (args.junction_rule_nec42) {
+        // momwire#1644: `_nec4_live` -- the deck has a node the rule solves
+        // (a refl-coef ground or a buried wire is declined above).
+        const std::vector<std::size_t> nodes = nec4_solved_nodes(f);
+        if (!nodes.empty()) {
+            nec4_basis(f, a, nodes);
+            return f;
+        }
     }
     std::vector<double> a_const(n), kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), atom(n);
     for (std::size_t i = 0; i < n; i++) {

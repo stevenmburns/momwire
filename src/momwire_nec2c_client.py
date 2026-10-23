@@ -356,6 +356,7 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             os.path.realpath(sys.executable),
             f"{idle_timeout!r}",
             *(f"{flag}={value}" for flag, value in pairs),
+            *_mech.junction_rule_identity(),
         ]
     )
 
