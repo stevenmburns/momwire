@@ -663,7 +663,9 @@ void check_ports(const WireArgs &args) {
         if (args.junctions[j].size() < 2)
             throw FrontValueError(at + "junction " + std::to_string(j) +
                                   " has a single member \xe2\x80\x94 there is no through-current path "
-                                  "to be in series with (a lone-end attachment is junction_ports=)");
+                                  "to be in series with (a lone-end attachment is junction_ports=; a "
+                                  "lone end standing in the ground plane is fed by feeds=(wire, "
+                                  "arclength of that end, V), the ground-contact feed, momwire#1120)");
         if (seen_members.count(member))
             throw FrontValueError(at + "the " + end + " of wire " + std::to_string(gp.wire) +
                                   " is listed twice");

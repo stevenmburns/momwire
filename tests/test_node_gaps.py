@@ -423,3 +423,32 @@ def test_sg_swept_ports_match_per_k():
         s1 = SinusoidalGalerkinSolver(**dict(kw, wavelength=2 * np.pi / k))
         z1 = complex(np.atleast_1d(s1.compute_impedance()[0])[0])
         assert abs(z_sw - z1) < 1e-6 * abs(z1), (k, z_sw, z1)
+
+
+def test_a_lone_grounded_end_is_pointed_at_the_contact_feed():
+    """momwire#1120: a series gap cannot name a lone end standing in the
+    ground plane, and the refusal says which spelling serves it — the
+    ground-contact feed, ``feeds=(wire, 0.0, V)`` at a start — and that
+    spelling solves. Both fronts word it the same (C++ for razor)."""
+    from momwire.razor import RazorSolver
+
+    wl, h = 40.0, 10.0
+    kw = dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, h]])],
+        n_per_edge_per_wire=[[21]],
+        wire_radius=1.0e-3,
+        wavelength=wl,
+        ground_z=0.0,
+    )
+    for cls in (BSplineSolver, RazorSolver):
+        with pytest.raises(ValueError, match=r"single member.*feeds=\(wire, arclength"):
+            cls(
+                feeds=[],
+                junctions=[[(0, "start")]],
+                node_gaps=[(0, "start", 1.0)],
+                **kw,
+            )
+        out = cls(feeds=[(0, 0.0, 1.0 + 0j)], **kw).compute_impedance()
+        z = complex(out[0] if isinstance(out, tuple) else out)  # razor: (z, I)
+        assert math.isfinite(z.real) and math.isfinite(z.imag)
+        assert 20.0 < z.real < 60.0, (cls.__name__, z)

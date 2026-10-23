@@ -1433,7 +1433,9 @@ std::string Front::build(const FrontInputs &in_raw) {
             if (groups_[j].ends.size() < 2)
                 value_error(at + "junction " + std::to_string(j) +
                             " has a single member \xe2\x80\x94 there is no through-current path to "
-                            "be in series with (a lone-end attachment is junction_ports=)");
+                            "be in series with (a lone-end attachment is junction_ports=; a lone "
+                            "end standing in the ground plane is fed by feeds=(wire, arclength of "
+                            "that end, V), the ground-contact feed, momwire#1120)");
             if (seen_members.count(member))
                 value_error(at + "the " + end_name(g.end) + " of wire " + std::to_string(g.wire) +
                             " is listed twice");
