@@ -41,6 +41,8 @@ constexpr int NEAR_PANEL = 4;              // `_NEAR_GX, _NEAR_GW = leggauss(4)`
 constexpr size_t CLUSTER_LEAF = 3;         // `_CLUSTER_LEAF_SEGS`
 constexpr double ADM_ETA = 1.0;            // `_ADM_ETA`
 constexpr double ACA_COST_GUARD = 48.0;    // `_ACA_COST_GUARD`
+constexpr double ACA_RULE_COST = 16.0;     // `_ACA_RULE_COST` (momwire#1595)
+constexpr int64_t DENSE_FAR_MAX_PAIRS = 600000;  // `_DENSE_FAR_MAX_PAIRS`
 constexpr int64_t PAIR_GROUP_BUDGET = 600000;  // `_pair_groups(budget_pairs=)`
 constexpr double ENDS_TO_NODES_MB = 48.0;  // `_ends_to_nodes(budget_mb=)`
 constexpr int64_t ENDS_TO_NODES_BYTES_PER_PAIR = 112;
@@ -649,6 +651,32 @@ void far_block(const nec5::NumpyLinalg &np, const cx::Axis &A, const cx::Axis &B
         }
 }
 
+// `_dense_beats_aca(Ac, Bc, iA, iB, a_wire)` (momwire#1595): whether a far
+// block past the guard is still cheaper dense once the column twin's rule
+// sharing is counted. The Python docstring carries the cost model; with every
+// rho distinct it is the guard itself, so only blocks whose rho repeats move.
+// rho by the same two hypots as the samples, n_rho by value as np.unique.
+bool dense_beats_aca(const cx::Axis &Ac, const cx::Axis &Bc, const Spec &sp, double a_wire) {
+    const size_t m = sp.iA.size(), n = sp.iB.size();
+    if (static_cast<int64_t>(m * n) > DENSE_FAR_MAX_PAIRS) return false;
+    std::vector<double> re;
+    re.reserve(m * n);
+    for (size_t i = 0; i < m; i++) {
+        const double *pa = &Ac.nodes[3 * static_cast<size_t>(sp.iA[i])];
+        for (size_t j = 0; j < n; j++) {
+            const double *pb = &Bc.nodes[3 * static_cast<size_t>(sp.iB[j])];
+            re.push_back(std::hypot(std::hypot(pa[0] - pb[0], pa[1] - pb[1]), a_wire));
+        }
+    }
+    std::sort(re.begin(), re.end());
+    const double n_rho = static_cast<double>(std::unique(re.begin(), re.end()) - re.begin());
+    const double c = ACA_RULE_COST, g = ACA_COST_GUARD;
+    const double dm = static_cast<double>(m), dn = static_cast<double>(n);
+    const double dense = dm * dn + c * n_rho;
+    const double aca = g * ((dn + c * std::min(dn, n_rho)) + (dm + c * std::min(dm, n_rho)));
+    return dense <= aca;
+}
+
 // `_main_split(ctx, a_idx, b_idx, A, B, ...)` without the restriction: the
 // partition, the direct groups through one memo, c1 * t_main.
 // `Ac` / `Bc` are the coarse axes (`axis_data(coarse=True)`): the dense ones
@@ -681,7 +709,7 @@ std::vector<cd> main_split(const Geometry &g, const cx::Axis &A, const cx::Axis 
         sp.coarse = true;
         if (sp.iA.empty() || sp.iB.empty()) continue;
         const double na = static_cast<double>(sp.iA.size()), nb = static_cast<double>(sp.iB.size());
-        if (na * nb > ACA_COST_GUARD * (na + nb))
+        if (na * nb > ACA_COST_GUARD * (na + nb) && !dense_beats_aca(Ac, Bc, sp, a_wire))
             far_aca.push_back(std::move(sp));
         else
             direct.push_back(std::move(sp));

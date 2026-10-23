@@ -640,6 +640,18 @@ _NEAR_GX, _NEAR_GW = leggauss(4)
 # that to win. Below the guard, direct coarse evaluation is cheaper
 # AND memo-dedups against its mirror blocks.
 _ACA_COST_GUARD = 48.0
+# The guard above counts designed POINTS, as if every point cost the same.
+# It does not: the column twin builds one λ rule per distinct ρ_eff in a call
+# and sums its members against it, and the rule (head J0s, ~128 tail Hankels,
+# the factors at every node) costs this many member sums. Measured 10-22 on
+# Skylake, avx2, one thread, from the column counters over Dan's revised Hub
+# and Slant decks (momwire#1595): 66 µs per one-member column against 3.8 µs
+# per member.
+_ACA_RULE_COST = 16.0
+# A far block routed dense joins `_pair_groups`, where a block over the
+# budget is its own group; this keeps such a block inside it, so the dense
+# route never raises the phase's peak.
+_DENSE_FAR_MAX_PAIRS = 600_000
 _GX4, _GW4 = leggauss(4)
 _CROSS_KEYS = ("U", "V", "W", "dzpW")
 # The whole-axis main sandwich's kernel tables are evaluated in column chunks
@@ -8048,6 +8060,46 @@ def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows)
         _sandwich_dense(AX, BX, iA, iB, K, k2sq, out=t_main, rows=rows, out_cols=t_cols)
 
 
+def _dense_beats_aca(Ac, Bc, iA, iB, a_wire):
+    """Whether a far block that passed `_ACA_COST_GUARD` is still cheaper
+    dense, once the column twin's rule sharing is counted (momwire#1595).
+
+    In member sums (one rule = `_ACA_RULE_COST` of them), over the block's
+    n_ρ distinct ρ_eff values:
+
+        dense = m·n + C·n_ρ
+        ACA   = G·[(n + C·min(n, n_ρ)) + (m + C·min(m, n_ρ))]
+
+    with G = `_ACA_COST_GUARD` samples a side: a row sample is one call over
+    n points that builds a rule per distinct ρ in it, and a column sample the
+    same over m.
+
+    With every ρ distinct (n_ρ = m·n) both sides carry the same (1 + C) and
+    the test is `m·n <= G·(m + n)`, the guard itself, so such a block stays
+    ACA exactly as before. It only moves blocks whose ρ repeats. The common
+    one is a vertical on the axis over a radial field: every above node sees
+    one radial node at the same ρ, so the dense block is one rule per radial
+    node with all the above nodes as members, while each ACA row sample builds
+    one rule per radial node with a single member. On Dan's revised Hub deck
+    that is 9,888 one-member columns, 37 % of the solve.
+
+    The answer's arithmetic is the C++ twin's (`dense_beats_aca`) term for
+    term, ρ by the same two hypots and n_ρ by value."""
+    m, n = iA.size, iB.size
+    if m * n > _DENSE_FAR_MAX_PAIRS:
+        return False
+    pa, pb = Ac["nodes"][iA], Bc["nodes"][iB]
+    rho = np.hypot(
+        pa[:, 0][:, None] - pb[:, 0][None, :],
+        pa[:, 1][:, None] - pb[:, 1][None, :],
+    )
+    n_rho = float(np.unique(np.hypot(rho, a_wire)).size)
+    c, g = _ACA_RULE_COST, _ACA_COST_GUARD
+    dense = float(m * n) + c * n_rho
+    aca = g * ((n + c * min(float(n), n_rho)) + (m + c * min(float(m), n_rho)))
+    return dense <= aca
+
+
 def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
@@ -8095,7 +8147,9 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
         iB = _nodes_of(Bc, seg_b[ct.indices])
         if iA.size == 0 or iB.size == 0:
             continue
-        if iA.size * iB.size > _ACA_COST_GUARD * (iA.size + iB.size):
+        if iA.size * iB.size > _ACA_COST_GUARD * (
+            iA.size + iB.size
+        ) and not _dense_beats_aca(Ac, Bc, iA, iB, float(ctx.a_wire)):
             far_aca.append((iA, iB))
         else:
             direct.append((Ac, Bc, iA, iB))
