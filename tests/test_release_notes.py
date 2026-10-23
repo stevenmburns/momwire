@@ -81,3 +81,21 @@ def test_the_windows_and_macos_executables_attach_to_the_release():
     readme = (WORKFLOWS.parent.parent / "README.md").read_text(encoding="utf-8")
     for name in ("momwire-nec5-windows-x64.zip", "momwire-nec5-macos-arm64.tar.gz"):
         assert name in readme
+
+
+def test_the_nec42_sinusoidal_exe_ships_in_the_linux_tarball_as_a_preview():
+    """0.83.0 (momwire#1607): the NEC-4.2 slot's sinusoidal no-Python build
+    rides the Linux tarball, gated before a tag attaches it, and every note
+    that lists it says it is a preview and what it still refuses."""
+    root = WORKFLOWS.parent.parent
+    script = (root / "standalone" / "build_release_linux.sh").read_text()
+    assert "momwire-nec42-sinusoidal-linux sin42" in script
+    assert (root / "standalone" / "release" / "momwire-nec42-sinusoidal-linux").exists()
+    workflow = (WORKFLOWS / "standalone.yml").read_text()
+    assert "needs: [linux-artifact, linux, linux-nec42]" in workflow
+    readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
+    assert "PREVIEW: momwire-nec42-sinusoidal-linux" in readme_txt
+    for refusal in ("B6", "B5d"):
+        assert refusal in readme_txt, refusal
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "NEC-4.2 sinusoidal engine on Linux, without Python (preview)" in readme
