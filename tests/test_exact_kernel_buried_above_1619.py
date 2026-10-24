@@ -170,7 +170,7 @@ def test_auto_reads_the_above_ground_segments_only(family):
     alone."""
     s = solver(family, hub(COARSE, stub_a=A_V, stub_n=2, radial_a=A_V))
     assert s.exact_kernel is False
-    h, a = s._exact_kernel_h_and_a()
+    h, a, _wire = s._exact_kernel_h_and_a()
     assert h.size == COARSE and np.all(a == A_V)
     assert np.all(h >= SEAM.EXACT_KERNEL_AUTO_H_OVER_A * a)
 

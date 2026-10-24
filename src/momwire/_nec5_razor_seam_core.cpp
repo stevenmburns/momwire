@@ -180,6 +180,9 @@ void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_grou
     in.wavelength = p.wavelength;
     in.extended_kernel = !all_below;
     in.exact_kernel = razor::ExactKernel::automatic;
+    // momwire#1649 (`_solver_for`): the pieces cut at z = 0 are not asked
+    for (size_t i = 0; i < mesh.pieces.size(); i++)
+        if (mesh.pieces[i].cut_start || mesh.pieces[i].cut_end) in.exact_auto_skip.push_back(static_cast<int64_t>(i));
     p.engine = std::move(part);
 }
 

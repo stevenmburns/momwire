@@ -220,9 +220,9 @@ class ExactKernelOption:
         raise NotImplementedError
 
     def _exact_kernel_h_and_a(self):
-        """``(h, a)``: every segment's length and radius, on the final mesh --
-        on a buried deck, of the segments above ground only, the ones the
-        correction can reach (momwire#1619)."""
+        """``(h, a, wire)``: every segment's length, radius and wire index, on
+        the final mesh -- on a buried deck, of the segments above ground only,
+        the ones the correction can reach (momwire#1619)."""
         raise NotImplementedError
 
     def _exact_kernel_any_above(self):
@@ -238,7 +238,7 @@ class ExactKernelOption:
         )
 
     # -- the option -----------------------------------------------------------
-    def _exact_kernel_init(self, exact_kernel, refusals=()):
+    def _exact_kernel_init(self, exact_kernel, refusals=(), auto_skip=()):
         """Parse `exact_kernel` and raise this class's construction-time
         refusals of True: the shared one, then `refusals` -- the family's
         ``[(condition, message)]`` read off the constructor's arguments,
@@ -246,6 +246,10 @@ class ExactKernelOption:
         exist yet. "auto" is resolved later (`_resolve_exact_kernel_auto`),
         once geometry and ground are known."""
         self.exact_kernel_requested, self.exact_kernel = parse_option(exact_kernel)
+        # momwire#1649: wires whose segments "auto" does not ask -- the pieces
+        # a deck seam cut at z = 0, whose length is where the plane fell
+        # rather than the user's mesh. An explicit True still reaches them.
+        self.exact_kernel_auto_skip = tuple(int(w) for w in auto_skip)
         if self.exact_kernel:
             if not self._serves_exact_kernel:
                 raise NotImplementedError(not_served_refusal(type(self).__name__))
@@ -260,8 +264,11 @@ class ExactKernelOption:
         one (`_exact_kernel_h_and_a`). Never raises a refusal."""
         if not self._exact_kernel_servable():
             return False
-        h, a = self._exact_kernel_h_and_a()
-        return bool(np.any(h < self.EXACT_KERNEL_AUTO_H_OVER_A * a))
+        h, a, wire = self._exact_kernel_h_and_a()
+        short = h < self.EXACT_KERNEL_AUTO_H_OVER_A * a
+        if self.exact_kernel_auto_skip:
+            short &= ~np.isin(wire, self.exact_kernel_auto_skip)
+        return bool(np.any(short))
 
     def _exact_kernel_servable(self):
         """Whether this solver's construction-time route serves the exact

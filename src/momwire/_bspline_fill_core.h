@@ -96,9 +96,11 @@ bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
 // `_resolve_exact_kernel_auto`: some segment shorter than
 // `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius -- on a deck with buried
 // wires (`below_wire` set, one flag per wire) an above-ground one only
-// (momwire#1619 stage 1), and none on a wholly buried deck.
+// (momwire#1619 stage 1), and none on a wholly buried deck. A wire flagged
+// in `skip` is not asked (momwire#1649: a piece cut at z = 0).
 bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire,
-                       const std::vector<uint8_t> *below_wire = nullptr);
+                       const std::vector<uint8_t> *below_wire = nullptr,
+                       const std::vector<uint8_t> *skip = nullptr);
 
 // `_add_exact_kernel_correction(Z, geom, supp_seg, polys, k)` (momwire#1408,
 // #1411, #1421): per one-radius coaxial group, observer-row windows of the
