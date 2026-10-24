@@ -553,3 +553,25 @@ def test_a_singular_node_keeps_the_log_rule(deck):
     ).read_text()
     out = _nec4.render(text, basis="sinusoidal")
     assert "ZeroDivisionError" not in out
+
+
+@pytest.mark.parametrize("n", (20, 40))
+def test_a_grounded_stepped_vertical_over_sommerfeld_tracks_nec42(n, monkeypatch):
+    """A wire end in contact with the GN 2 ground, a 10 mm / 2 mm step above
+    it: the ladder's tolerance, against its uniform 10 mm twin. (The oracle is
+    `nec42-release`: main-pre misreads a wire end on a Sommerfeld ground.)"""
+    _within(f"G_vert_somm_n{n}", f"G_vuni10_somm_n{n}", monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["G_vuni10_somm_n20", "G_vuni10_somm_n40", "G_vuni2_somm_n20", "G_vuni2_somm_n40"],
+)
+def test_the_grounded_uniform_twins_take_no_junction_and_track_nec42(name, monkeypatch):
+    """One wire, no node the rule solves: both rules are the same solve, and
+    it sits within 0.2 ohm of R and 0.4 of X of NEC-4.2."""
+    z = _momwire(name)
+    monkeypatch.setenv("MOMWIRE_JUNCTION_RULE", "nec2")
+    assert _momwire(name) == z
+    d = z - _nec42(name)
+    assert abs(d.real) <= 0.2 and abs(d.imag) <= 0.4

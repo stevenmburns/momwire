@@ -21,9 +21,10 @@ Y_*   a tapered 20 m Yagi element (sections from the centre: 2.4 m of 12.7 mm
       director x0.955 at +2.6 m, the driven element fed); four meshes each.
       `Yu*` is the uniform-radius twin (every section at 12.7 mm).
 G_*   over ground: a horizontal 1:5 stepped dipole at 8 m (feed on the thick
-      half's middle) over GN 1 and GN 2 (13, 0.005 S/m), and a grounded
-      stepped vertical (2.5 m of 10 mm under 2.5 m of 2 mm) over GN 1, fed
-      at its base segment.
+      half's middle) over GN 1 and GN 2 (13, 0.005 S/m); a grounded stepped
+      vertical (2.5 m of 10 mm under 2.5 m of 2 mm) over GN 1 and GN 2, fed
+      at its base segment; and grounded uniform 5 m verticals of 10 mm and
+      2 mm over GN 2 (40 and 80 segments), the stepped one's twins.
 """
 
 import math
@@ -176,6 +177,28 @@ def main(out):
                 2,
                 n // 2,
                 gn=gn,
+            )
+        deck(
+            out,
+            f"G_vert_somm_n{n}",
+            f"grounded stepped vertical 10/2 mm, somm, {n}/section",
+            [
+                (1, n, (0, 0, 0), (0, 0, 2.5), 10 * MM),
+                (2, n, (0, 0, 2.5), (0, 0, 5.0), 2 * MM),
+            ],
+            1,
+            1,
+            gn=2,
+        )
+        for r in (10, 2):
+            deck(
+                out,
+                f"G_vuni{r}_somm_n{n}",
+                f"grounded uniform vertical {r} mm, somm",
+                [(1, 2 * n, (0, 0, 0), (0, 0, 5.0), r * MM)],
+                1,
+                1,
+                gn=2,
             )
         deck(
             out,
