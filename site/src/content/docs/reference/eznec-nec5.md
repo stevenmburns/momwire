@@ -386,6 +386,27 @@ its own build tag, so it is the one line that already carried an engine
 identity; the comment block EZNEC checks the printout against, the banner and
 every table heading are untouched.
 
+### Advisories: on stderr, and only when asked
+
+Besides refusals, momwire raises **advisories**: a warning about the mesh,
+the kernel or a feed that does not stop the solve, such as `CoarseCrossingNode`
+or `GapMeshFloor`. They never go in the printout, so it stays in the engine's
+own layout. Since 0.84.0 the launchers also keep them **off stderr by
+default**, because the licensed engines write nothing there. SimNEC's stream
+mode (`- -`) is one engine process for a whole sweep, and a host that never
+reads that process's stderr stalled the stream once a few kilobytes of
+advisories had filled the pipe (momwire#1673).
+
+To see them, set the environment variable before your program starts:
+
+```
+MOMWIRE_ADVISORIES=stderr
+```
+
+Set it only when your program reads the engine's stderr. If it does not,
+SimNEC's stream mode can stall again. EZNEC never shows stderr, so there it
+changes nothing you can see.
+
 ## What serves
 
 - **Geometry**: `GW` wires — straight, junctioned, tapered via stepped
