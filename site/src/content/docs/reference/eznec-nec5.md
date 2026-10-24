@@ -312,6 +312,32 @@ no basis does the same: it refuses, names itself and lists what exists, so a
 typo can never be served as the default. The match is case-insensitive, as
 Windows filenames are, so `Momwire-NEC5-Razor-2p.exe` is the twin too.
 
+### Refining the mesh at a feed on a fat wire
+
+A deck's source is a point gap: zero width, at a knot. A zero-width gap has no
+limiting capacitance, so once the segments at the feed are shorter than the
+wire's radius, each refinement adds a little more, and X keeps sliding
+negative instead of settling. Every engine does this, the licensed NEC-5
+included. They differ only in how fine a mesh it takes (momwire#1675). For a 38 mm
+vertical over perfect ground at 14 MHz, base-fed, X in ohms:
+
+| segs/λ | Δ/a at the feed | licensed NEC-5 | razor-2p | bs2 |
+|---|---|---|---|---|
+| 200 | 2.8 | −0.52 | −0.53 | +0.01 |
+| 400 | 1.4 | −0.08 | −0.09 | −0.05 |
+| 800 | 0.70 | +0.03 | −0.06 | −0.25 |
+| 1600 | 0.35 | −0.01 | −0.17 | −0.31 |
+| 3200 | 0.18 | −0.14 | −0.26 | −0.34 |
+
+`bs2` gets near its converged value at a far coarser mesh than the other two,
+then starts sliding first, at about Δ/a = 1. On a convergence chart that looks
+like a curve that never settles. It is the feed model, not the antenna, and on a
+fat wire the tail is a few tenths of an ohm. Keep the segments at a feed no
+shorter than the wire's radius. Below that, the engine raises a `GapMeshFloor`
+advisory naming the source. Only a source of fixed width converges past it,
+and no deck card asks for one. Through momwire's own API, bs2's end-port
+feed does: two facing wire ends a real gap apart, under the exact kernel.
+
 :::caution[Not a supported configuration]
 No part of EZNEC knows momwire exists, and nothing here has been reviewed or
 endorsed by EZNEC's author. The portal was built black-box, from the decks
