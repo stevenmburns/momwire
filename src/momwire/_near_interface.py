@@ -2938,12 +2938,55 @@ def _plane_pays(k_p, k_m, d, parts, depth=None):
     return n_rho + _distinct_pairs(parts) * w >= need
 
 
+# `_distinct_pairs` expands every group into its (z, rho) pairs and counts the
+# distinct ones in one sort; past this many pairs it walks the groups instead
+# (`_distinct_pairs_loop`), whose memory is the rows rather than their product.
+_DISTINCT_PAIRS_FLAT_MAX = 20_000_000
+
+
 def _distinct_pairs(parts):
-    """The number of distinct (rho, z) pairs of a sheet census (`_plane_pays`):
-    by z, the size of the union of the distinct rho of the groups holding
-    that z. A z held by one group (a mast's heights) costs its group's count;
-    only a z shared by several groups (a horizontal wire's) pays a union, once
-    per distinct set of groups."""
+    """The number of distinct (rho, z) pairs of a sheet census (`_plane_pays`).
+
+    momwire#1688: one sort over every group's (z, rho) pairs instead of a
+    Python walk with one `np.unique` per shared height -- on a 4-radial
+    buried screen at 500 segs/wl, 106 censuses of 5 920 groups each took 1.9 s
+    of a 5.3 s solve. Same count, since a pair is distinct exactly when
+    `_distinct_pairs_loop` counts it: equality is float `!=` on both
+    columns (so -0.0 is 0.0, as there)."""
+    total = 0
+    for r, zg, _s, _c in parts:
+        total += sum(len(z) for z in zg) * (r.shape[1] if r.ndim == 2 else 1)
+    if total > _DISTINCT_PAIRS_FLAT_MAX:
+        return _distinct_pairs_loop(parts)
+    if total == 0:
+        return 0
+    zcol, rcol = [], []
+    for r, zg, _s, _c in parts:
+        _cancel.poll()
+        lens = np.fromiter((len(z) for z in zg), dtype=np.int64, count=len(zg))
+        if not lens.any():
+            continue
+        z = np.concatenate([np.asarray(v, dtype=float) for v in zg]) + 0.0
+        rows = np.asarray(r, dtype=float).reshape(len(zg), -1)
+        g = np.repeat(np.arange(len(zg)), lens)
+        k = rows.shape[1]
+        zcol.append(np.repeat(z, k))
+        rcol.append(rows[g].reshape(-1) + 0.0)
+    if not zcol:
+        return 0
+    zc = np.concatenate(zcol)
+    rc = np.concatenate(rcol)
+    order = np.lexsort((rc, zc))
+    zs, rs = zc[order], rc[order]
+    return int(1 + np.count_nonzero((zs[1:] != zs[:-1]) | (rs[1:] != rs[:-1])))
+
+
+def _distinct_pairs_loop(parts):
+    """`_distinct_pairs` by walking the groups: by z, the size of the union
+    of the distinct rho of the groups holding that z. A z held by one group
+    (a mast's heights) costs its group's count; only a z shared by several
+    groups (a horizontal wire's) pays a union, once per distinct set of
+    groups."""
     rows_of, count_of, by_z = [], [], collections.defaultdict(list)
     for r, zg, _s, _c in parts:
         rs = np.sort(r, axis=1)
