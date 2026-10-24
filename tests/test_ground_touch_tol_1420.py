@@ -19,6 +19,7 @@ equality against the spelling it replaced:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -275,10 +276,22 @@ def _check(name, deck):
 
 
 def test_rules_match_the_walks_on_every_fixture_deck():
+    """The walks predate bent wires (GA and GH, momwire#1669), so a deck
+    carrying one has no walk to match; its spans and refusals are held by
+    ``test_nec5_4nec2_cards_1669`` instead."""
     decks = _fixture_decks()
     assert len(decks) > 100
+    bent = [name for name, deck in decks if any(w.path for w in deck.wires)]
+    assert {
+        f"nec5_4nec2_cards_1669/{p}.nec"
+        for p in ("a1", "a2", "a3", "a5", "h1", "h3", "h4", "h5", "z8")
+    } <= set(bent)
+    assert all(
+        re.search(r"\bG[AH]\b", (FIXTURES / n).read_text("latin-1")) for n in bent
+    )
     for name, deck in decks:
-        _check(name, deck)
+        if name not in bent:
+            _check(name, deck)
 
 
 def test_rules_match_the_walks_on_random_geometry():
