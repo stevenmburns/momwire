@@ -983,6 +983,9 @@ std::string not_served(std::string why) {
         {"crossing-tolerance", "a wire crossing the ground plane too close to call"},
         {"source-text-encoding", "deck text this build does not read"},
         {"network-card-order", "network cards in an order this build does not read"},
+        {"bspline: buried-grazing-remainder",
+         "a buried wire within a segment of the ground surface on bs2, whose remainder this build does not "
+         "integrate yet (momwire#1672)"},
     };
     std::string head = why, tail;
     const std::size_t colon = why.find(':');
