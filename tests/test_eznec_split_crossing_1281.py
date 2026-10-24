@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from unittest import mock
+
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
@@ -229,10 +231,50 @@ def test_a_wire_that_only_touches_the_plane_is_not_split():
 
 
 def _equivalence(basis: str, n: int, feed: int, ld: str = LD5_ALL) -> None:
+    """The cut deck against its hand split, bit for bit. Since momwire#1649
+    the seam names the pieces it cut (`exact_kernel_auto_skip`) and "auto"
+    does not ask them, while the same pieces written by hand are the user's
+    and are asked; the hand split is read with the same skip, so what is
+    compared is the split itself (the hand split's piece order is the
+    cut's). `test_a_hand_written_sliver_is_the_users` holds the difference."""
     hand = HandSplit(n)
-    auto = serve_z(through(n, ex=ex(f"1,{feed}"), ld=ld), basis)
-    written = serve_z(hand.deck(ex=ex(hand.address(feed)), ld=ld), basis)
+    orig = _serve.construct_solver
+    seen: dict = {}
+
+    def capture(cls, kwargs, **rest):
+        seen["skip"] = kwargs.get("exact_kernel_auto_skip")
+        return orig(cls, kwargs, **rest)
+
+    def inject(cls, kwargs, **rest):
+        if seen["skip"] and kwargs.get("exact_kernel") == "auto":
+            kwargs = {**kwargs, "exact_kernel_auto_skip": seen["skip"]}
+        return orig(cls, kwargs, **rest)
+
+    with mock.patch.object(_serve, "construct_solver", capture):
+        auto = serve_z(through(n, ex=ex(f"1,{feed}"), ld=ld), basis)
+    with mock.patch.object(_serve, "construct_solver", inject):
+        written = serve_z(hand.deck(ex=ex(hand.address(feed)), ld=ld), basis)
     assert auto == written, f"{basis} n={n}: {auto!r} vs {written!r}"
+
+
+@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+def test_a_hand_written_sliver_is_the_users(basis):
+    """momwire#1649: thr_n204's 9.46 um above half, CUT by the seam, does not
+    switch "auto" on; the same piece WRITTEN as a card is the user's segment
+    and does (9.46 um is under 3 radii of 1.03 mm)."""
+    hand = HandSplit(204)
+    orig = _serve.construct_solver
+    exact = []
+
+    def record(cls, kwargs, **rest):
+        out = orig(cls, kwargs, **rest)
+        exact.append(out[0].exact_kernel)
+        return out
+
+    with mock.patch.object(_serve, "construct_solver", record):
+        _serve.serve(parse_nec5(through(204, ex=ex("1,1"))), basis=basis)
+        _serve.serve(parse_nec5(hand.deck(ex=ex(hand.address(1)))), basis=basis)
+    assert exact == [False, True], exact
 
 
 @pytest.mark.slow
