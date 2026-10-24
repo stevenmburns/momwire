@@ -247,6 +247,7 @@ def test_the_transmitted_directions_are_reciprocal():
 # tests/test_sg_buried_loading_1156.py.
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_extended_kernel_on_a_mixed_deck_is_served_above_ground():
     """momwire#1626 (bspline's sentence, a refusal until then): the direct
     fill extends the above class's own pairs, keeps every pair touching the
@@ -274,6 +275,7 @@ def test_the_extended_kernel_on_a_mixed_deck_is_served_above_ground():
     assert np.linalg.norm(G - G.T) / np.linalg.norm(G) < 1e-9
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_banded_mixed_fill_takes_the_same_extended_kernel(monkeypatch):
     """momwire#1626: the band-fused mixed fill (momwire#1224) and the
     whole-triple one apply the same per-class kernel. They are not bit-equal

@@ -438,6 +438,7 @@ def test_the_sinusoidal_front_in_cxx_alone_is_pythons(driver):
     assert compared >= 50, compared
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_sinusoidal_fill_in_cxx_alone_is_pythons(driver):
     """momwire#1607 B3: the sinusoidal free-space fill and port solve (Z,
     the coefficients, Y), built from the core TUs alone
@@ -1073,6 +1074,7 @@ SEQUENCE_DECKS = [
 ]
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_sequence_decks_print_as_python_does(driver, tmp_path):
     """momwire#1602 / #1590: a deck read as a program (momwire 0.79.2) --
     RP then NE before each XQ of a two-excitation deck (a feed-to-probe

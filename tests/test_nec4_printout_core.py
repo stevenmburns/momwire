@@ -68,6 +68,7 @@ def _decks(root: pathlib.Path) -> list[pathlib.Path]:
 
 
 @pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_nec42_fixtures_print_the_same(basis, acc):
     counts, mismatches = nc.compare(_decks(FIXTURES / "eznec_nec42"), basis)
     assert not mismatches, mismatches[:2]

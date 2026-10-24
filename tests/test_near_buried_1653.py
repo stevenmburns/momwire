@@ -401,6 +401,7 @@ _CXX_H_RTOL = 1e-10
     ],
 )
 @pytest.mark.parametrize("magnetic", [False, True], ids=["E", "H"])
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_cxx_readout_is_the_numpy_reference(deck, side, magnetic, monkeypatch):
     if _near_buried.cxx_parts() is None:
         pytest.skip("no accelerator: the numpy route is the only one")

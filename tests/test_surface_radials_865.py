@@ -405,6 +405,7 @@ def test_a_jacket_may_rest_on_the_soil_but_not_sink_into_it():
         _tiny_coated(_JACKET_B * 0.9).compute_impedance()
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_bare_bound_is_unchanged_for_a_bare_wire():
     """The relaxation is for jacketed wires only; nothing about a bare deck
     moves, and its refusal still names mesh stability rather than physics."""
