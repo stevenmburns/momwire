@@ -134,6 +134,74 @@ int64_t remainder_qp(const double *obs, size_t n_obs, const double *src_l, const
     return std::min(std::max(base, need), cap);
 }
 
+// `_quadrature.remainder_qp_per_source` (momwire#1688): `remainder_qp`'s rule
+// per source segment, whose maximum is `remainder_qp`. Same geometry, same
+// broadside-only guard, same short-circuit; each source keeps its own order.
+std::vector<int64_t> remainder_qp_per_source(const double *obs, size_t n_obs, const double *src_l,
+                                             const double *src_r, size_t n_src, double ground_z,
+                                             int64_t base, int64_t cap, double c) {
+    std::vector<int64_t> out(n_src, base);
+    if (n_src == 0 || n_obs == 0) return out;
+    auto norm3 = [](double x, double y, double z) { return std::sqrt((x * x + y * y) + z * z); };
+    std::vector<double> mir_l(3 * n_src), d(3 * n_src), dd(n_src), len(n_src);
+    for (size_t j = 0; j < n_src; j++) {
+        double ml[3], mr[3];
+        for (int c3 = 0; c3 < 3; c3++) {
+            ml[c3] = src_l[3 * j + c3];
+            mr[c3] = src_r[3 * j + c3];
+        }
+        ml[2] = 2.0 * ground_z - src_l[3 * j + 2];
+        mr[2] = 2.0 * ground_z - src_r[3 * j + 2];
+        for (int c3 = 0; c3 < 3; c3++) {
+            mir_l[3 * j + c3] = ml[c3];
+            d[3 * j + c3] = mr[c3] - ml[c3];
+        }
+        const double *dj = &d[3 * j];
+        dd[j] = (dj[0] * dj[0] + dj[1] * dj[1]) + dj[2] * dj[2];
+        len[j] = norm3(src_r[3 * j] - src_l[3 * j], src_r[3 * j + 1] - src_l[3 * j + 1],
+                       src_r[3 * j + 2] - src_l[3 * j + 2]);
+    }
+    double h_l = src_l[2] - ground_z, h_r = src_r[2] - ground_z, h_o = obs[2] - ground_z;
+    for (size_t j = 1; j < n_src; j++) {
+        h_l = std::min(h_l, src_l[3 * j + 2] - ground_z);
+        h_r = std::min(h_r, src_r[3 * j + 2] - ground_z);
+    }
+    for (size_t i = 1; i < n_obs; i++) h_o = std::min(h_o, obs[3 * i + 2] - ground_z);
+    const double h_min = std::min(std::min(h_l, h_r), h_o);
+    if (h_min > 0.0) {
+        double lmax = len[0];
+        for (size_t j = 1; j < n_src; j++) lmax = std::max(lmax, len[j]);
+        const double bound = lmax / (2.0 * h_min);
+        if (static_cast<int64_t>(std::ceil(c * bound)) <= base) return out;
+    }
+    for (size_t j = 0; j < n_src; j++) {
+        if (len[j] <= 0.0) continue;
+        if (!(dd[j] > 0.0)) continue;
+        const double *ml = &mir_l[3 * j], *dj = &d[3 * j];
+        bool any = false;
+        double r_min = 0.0;
+        for (size_t i = 0; i < n_obs; i++) {
+            const double *o = &obs[3 * i];
+            const double ax = o[0] - ml[0], ay = o[1] - ml[1], az = o[2] - ml[2];
+            const double t_raw = (ax * dj[0] + ay * dj[1] + az * dj[2]) / dd[j];
+            if (!(t_raw > 0.0 && t_raw < 1.0)) continue;
+            const double cx = ml[0] + t_raw * dj[0], cy = ml[1] + t_raw * dj[1],
+                         cz = ml[2] + t_raw * dj[2];
+            const double r = norm3(o[0] - cx, o[1] - cy, o[2] - cz);
+            if (!any || r < r_min) r_min = r;
+            any = true;
+        }
+        if (!any) continue;
+        if (r_min <= 0.0) {
+            out[j] = cap;
+            continue;
+        }
+        const int64_t need = static_cast<int64_t>(std::ceil(c * (len[j] / r_min)));
+        out[j] = std::min(std::max(base, need), cap);
+    }
+    return out;
+}
+
 bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w) {
     if (n < 1 || n > leggauss_table::N_MAX) return false;
     const int lo = leggauss_table::OFFSET[n - 1], hi = leggauss_table::OFFSET[n];
@@ -1749,10 +1817,14 @@ SolveInputs Front::solve_inputs(uintptr_t cancel_flag) const {
         c.sig_b = view<const double, 1>::contiguous(sig_b.data(), {n});
         c.grid = grid_view.get();
         c.n_reg = n_reg;
-        c.rem_src = view<const double, 2>::contiguous(rem_src.data(), {ns * nq, 3});
-        c.rem_t_src = view<const double, 2>::contiguous(rem_t_src.data(), {ns * nq, 3});
+        // A ragged (per-segment order) layout carries its node offsets
+        // (momwire#1688); the uniform one is `ns * nq` nodes.
+        const ptrdiff_t n_nodes = rem_off.empty() ? ns * nq : static_cast<ptrdiff_t>(rem_off.back());
+        c.rem_src = view<const double, 2>::contiguous(rem_src.data(), {n_nodes, 3});
+        c.rem_t_src = view<const double, 2>::contiguous(rem_t_src.data(), {n_nodes, 3});
         c.W = rem_W.data();
         c.n_qp = nq;
+        c.rem_off = rem_off.empty() ? nullptr : rem_off.data();
     }
     s.window_rows = static_cast<ptrdiff_t>(window_rows);
     s.cancel_flag = cancel_flag;

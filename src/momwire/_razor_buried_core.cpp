@@ -191,11 +191,11 @@ void prepare_paths(Front &s) {
         }
 }
 
-// `_remainder_qp(obs, seg_p0, seg_p0 + seg_h t, ground_z, n_qp_sommerfeld)`:
-// the below remainder's order keyed to grazing height, as the above one is
-// (momwire#510); a buried wire within a segment of the surface sees its
-// mirror there (momwire#1672). The path points are the wing centroids.
-int64_t below_remainder_qp(const Front &s) {
+// `_remainder_qp_per_source(obs, seg_p0, seg_p0 + seg_h t, ground_z,
+// n_qp_sommerfeld)`: the below remainder's order keyed to grazing height per
+// source segment (momwire#1672, momwire#1688: one hub segment no longer sets
+// the whole fill's order). The path points are the wing centroids.
+std::vector<int64_t> below_remainder_qp(const Front &s) {
     const size_t n = static_cast<size_t>(s.n_basis), ns = static_cast<size_t>(s.n_seg);
     std::vector<double> obs(6 * n), src_r(3 * ns);
     for (size_t m = 0; m < n; m++)
@@ -205,8 +205,8 @@ int64_t below_remainder_qp(const Front &s) {
         }
     for (size_t g = 0; g < ns; g++)
         for (int c3 = 0; c3 < 3; c3++) src_r[3 * g + c3] = s.seg_p0[3 * g + c3] + s.seg_h[g] * s.seg_t[3 * g + c3];
-    return remainder_qp(obs.data(), 2 * n, s.seg_p0.data(), src_r.data(), ns, s.ground_z, s.n_qp_sommerfeld,
-                        REMAINDER_QP_CAP, REMAINDER_QP_C);
+    return remainder_qp_per_source(obs.data(), 2 * n, s.seg_p0.data(), src_r.data(), ns, s.ground_z,
+                                   s.n_qp_sommerfeld, REMAINDER_QP_CAP, REMAINDER_QP_C);
 }
 
 int64_t wire_of_seg(const Front &f, int64_t g) {
@@ -303,16 +303,19 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
     if (r1_max > r1_cap && !(th_min >= floor)) plan_extents(true, r1_max, th_min);
     if (depth <= 0.0) th_min = std::min(th_min, std::atan2(depth, 0.0));
     // The pairs the below remainder evaluates: path points x its Gauss
-    // nodes `seg_p0 + (tq h) t`, at the order it evaluates them
-    // (`_below_remainder_th_min`, `below_remainder_qp`, momwire#1672).
-    std::vector<double> xq, wq;
-    if (!leggauss(below_remainder_qp(s), xq, wq)) throw std::runtime_error("grazing order");
+    // nodes `seg_p0 + (tq h) t`, each segment at the order it evaluates it
+    // (`_below_remainder_th_min`, `below_remainder_qp`, momwire#1672 and
+    // #1688). The walk below takes minima over the set, so node order is free.
+    const std::vector<int64_t> qs = below_remainder_qp(s);
     std::vector<double> src;
-    for (size_t g = 0; g < ns; g++)
+    for (size_t g = 0; g < ns; g++) {
+        std::vector<double> xq, wq;
+        if (!leggauss(qs[g], xq, wq)) throw std::runtime_error("grazing order");
         for (double x : xq) {
             const double tq = 0.5 * (x + 1.0);
             for (int c = 0; c < 3; c++) src.push_back(s.seg_p0[3 * g + c] + (tq * s.seg_h[g]) * s.seg_t[3 * g + c]);
         }
+    }
     // Only a pair with theta at or under U = max(th_min, floor) can move the
     // answer: a lower minimum replaces th_min (and its depth) only when under
     // it, and `near` is asked only whether some theta sits within 1e-12 of
@@ -429,30 +432,43 @@ void prepare_below(Front &s, const BelowMedium &bm, BelowRemainder &rem) {
     if (src == nullptr) throw std::runtime_error(BELOW_TABLE_MISSING);
     rem.grid = &src->get(bm.eps_t, s.k, r1, s.omega, MU, somm_below::SPACING_FILL);
     rem.build_view();
-    // `leggauss(n_qp)`, the nodes `seg_l + tq * span`, `W = w_node * u ** p`.
-    const int64_t nq = below_remainder_qp(s);
-    std::vector<double> xq, wq;
-    if (!leggauss(nq, xq, wq)) throw std::runtime_error("below remainder order");
-    const size_t q = static_cast<size_t>(nq);
-    s.n_qp_rem = nq;
-    s.rem_src.resize(3 * ns * q);
-    s.rem_t_src.resize(3 * ns * q);
-    s.rem_W.resize(2 * ns * q);
+    // `leggauss(n_qp)`, the nodes `seg_l + tq * span`, `W = w_node * u ** p`,
+    // each segment at its own order (momwire#1688), segment-major: segment g
+    // at [off[g], off[g + 1]), W as (2, n_nodes). With one order throughout
+    // this is the uniform (2, n_seg, q) layout and `rem_off` stays empty.
+    const std::vector<int64_t> qs = below_remainder_qp(s);
+    bool uniform = true;
+    for (size_t g = 1; g < ns; g++) uniform = uniform && qs[g] == qs[0];
+    std::vector<int64_t> off(ns + 1, 0);
+    for (size_t g = 0; g < ns; g++) off[g + 1] = off[g] + qs[g];
+    const size_t T = static_cast<size_t>(off[ns]);
+    s.n_qp_rem = ns ? *std::max_element(qs.begin(), qs.end()) : s.n_qp_sommerfeld;
+    s.rem_src.resize(3 * T);
+    s.rem_t_src.resize(3 * T);
+    s.rem_W.resize(2 * T);
     for (size_t g = 0; g < ns; g++) {
+        std::vector<double> xq, wq;
+        if (!leggauss(qs[g], xq, wq)) throw std::runtime_error("below remainder order");
         double span[3];
         for (int c3 = 0; c3 < 3; c3++) span[c3] = src_r[3 * g + c3] - s.seg_p0[3 * g + c3];
         const double h = std::sqrt((span[0] * span[0] + span[1] * span[1]) + span[2] * span[2]);
+        const size_t a = static_cast<size_t>(off[g]), q = static_cast<size_t>(qs[g]);
         for (size_t j = 0; j < q; j++) {
             const double tq = 0.5 * (xq[j] + 1.0);
             for (int c3 = 0; c3 < 3; c3++) {
-                s.rem_src[3 * (g * q + j) + c3] = s.seg_p0[3 * g + c3] + tq * span[c3];
-                s.rem_t_src[3 * (g * q + j) + c3] = s.seg_t[3 * g + c3];
+                s.rem_src[3 * (a + j) + c3] = s.seg_p0[3 * g + c3] + tq * span[c3];
+                s.rem_t_src[3 * (a + j) + c3] = s.seg_t[3 * g + c3];
             }
             const double u = h * tq, w_node = 0.5 * h * wq[j];
-            s.rem_W[g * q + j] = w_node * 1.0;
-            s.rem_W[(ns + g) * q + j] = w_node * u;
+            s.rem_W[a + j] = w_node * 1.0;
+            s.rem_W[T + a + j] = w_node * u;
         }
     }
+    if (uniform)
+        s.rem_off.clear();
+    else
+        s.rem_off = off;
+    const size_t q = T;  // the node count the below remainder's d_src spans
     s.grid = nullptr;
     s.grid_view.reset();
     s.n_reg = 0;
@@ -462,8 +478,8 @@ void prepare_below(Front &s, const BelowMedium &bm, BelowRemainder &rem) {
     rem.k_m = bm.k_m;
     rem.src = s.rem_src;
     rem.t_src = s.rem_t_src;
-    rem.d_src.resize(ns * q);
-    for (size_t j = 0; j < ns * q; j++) rem.d_src[j] = gz - rem.src[3 * j + 2];
+    rem.d_src.resize(q);
+    for (size_t j = 0; j < q; j++) rem.d_src[j] = gz - rem.src[3 * j + 2];
     rem.obs = s.obs_pts.data();
     rem.t_obs = s.tans.data();
 }

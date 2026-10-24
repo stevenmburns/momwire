@@ -337,7 +337,10 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
             somm_core::check_read(proj_.data(), static_cast<size_t>(m_u * s_src),
                                   c.proj ? "the below compose window" : "the above compose window");
         reserve(mom_, static_cast<size_t>(m_u * n_seg * 2));
-        somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
+        if (c.rem_off)
+            somm_core::moment_reduce_ragged(proj_.data(), c.W, 2, n_seg, c.rem_off, m_u, mom_.data());
+        else
+            somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
         reserve(q_, static_cast<size_t>(nb * n));
         q_rows(c_view<const cd, 3>(mom_.data(), {m_u, n_seg, 2}),
                c_view<const int64_t, 1>(q_row_.data(), {m_obs}), in.s_a, in.s_b, in.h_a,
@@ -411,12 +414,14 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         throw std::invalid_argument("razor_solve: b_obs must be (n_seg,)");
     if (in.compose) {
         const Compose &c = in.comp;
-        if (!in.has_image || (c.grid == nullptr && !c.proj) || c.W == nullptr || c.n_qp < 1)
+        if (!in.has_image || (c.grid == nullptr && !c.proj) || c.W == nullptr ||
+            (c.rem_off == nullptr && c.n_qp < 1))
             throw std::invalid_argument("razor_solve: a composing ground needs its image and remainder");
+        const ptrdiff_t n_nodes = c.rem_off ? static_cast<ptrdiff_t>(c.rem_off[n_seg]) : n_seg * c.n_qp;
         if (c.obs_pts.shape(0) != n * 2 || c.obs_tans.shape(0) != n * 2 ||
             c.src_c.shape(0) != n_seg || c.src_t.shape(0) != n_seg ||
             c.sig_a.shape(0) != n || c.sig_b.shape(0) != n ||
-            c.rem_src.shape(0) != n_seg * c.n_qp || c.rem_t_src.shape(0) != n_seg * c.n_qp)
+            c.rem_src.shape(0) != n_nodes || c.rem_t_src.shape(0) != n_nodes)
             throw std::invalid_argument("razor_solve: the composing ground's tables are mis-shaped");
         require_contiguous(c.obs_pts, who, "obs_pts");
         require_contiguous(c.obs_tans, who, "obs_tans");

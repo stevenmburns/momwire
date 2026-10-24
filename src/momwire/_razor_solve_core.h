@@ -74,6 +74,10 @@ struct Compose {
     view<const double, 2> rem_src, rem_t_src;
     const double *W = nullptr;
     ptrdiff_t n_qp = 0;
+    // momwire#1688: when set, the nodes are ragged, segment-major, segment j
+    // at [rem_off[j], rem_off[j + 1]) and W is (2, rem_off[n_seg]);
+    // `n_qp` is then unread.
+    const int64_t *rem_off = nullptr;
     // The below medium's remainder (momwire#1512 B2, `RemainderBelow`): when
     // set, the projection of m observers (points and tangents, (m, 3) row
     // major) against the remainder's source nodes, (m, n_src) row-major into

@@ -1094,6 +1094,17 @@ def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
     )
 
 
+def _remainder_qp_per_source(obs_pts, src_l, src_r, ground_z, base, cap=None):
+    """`_remainder_qp` per source segment (momwire#1688): one order each,
+    whose maximum is `_remainder_qp`. The below remainder fills at these
+    orders, so four hub segments of a shallow screen no longer set the order
+    of the whole fill. Same cap and constant, read at call time."""
+    cap = _REMAINDER_QP_CAP if cap is None else cap
+    return _quadrature.remainder_qp_per_source(
+        obs_pts, src_l, src_r, ground_z, base, cap, _REMAINDER_QP_C
+    )
+
+
 class _PreparedChunks(_schedule.Prepared):
     """The numpy fill's chunk list, BOUND to the source set it was built from.
 
@@ -5250,15 +5261,26 @@ class RazorSolver(
         gz = float(self.ground_z)
         obs = self._testing_paths(geom)[0].reshape(-1, 3)
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
-        q = _remainder_qp(
+        q = _remainder_qp_per_source(
             obs, seg_p0, seg_p0 + seg_h[:, None] * seg_t, gz, self.n_qp_sommerfeld
         )
-        xg, _wg = leggauss(q)
-        tq = 0.5 * (xg + 1.0)
-        src = (
-            seg_p0[:, None, :]
-            + (tq[None, :, None] * seg_h[:, None, None]) * seg_t[:, None, :]
-        ).reshape(-1, 3)
+        # The fill's own nodes (momwire#1688): each segment at its own
+        # order, grouped by order as `RemainderBelow.field_windows` lays
+        # them. The extents this feeds are a min/max over the set, so the
+        # node order does not matter.
+        parts = []
+        for qq in np.unique(q):
+            idx = np.flatnonzero(q == qq)
+            xg, _wg = leggauss(int(qq))
+            tq = 0.5 * (xg + 1.0)
+            parts.append(
+                (
+                    seg_p0[idx][:, None, :]
+                    + (tq[None, :, None] * seg_h[idx][:, None, None])
+                    * seg_t[idx][:, None, :]
+                ).reshape(-1, 3)
+            )
+        src = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return obs, src, gz - obs[:, 2], gz - src[:, 2]
 
     def _below_remainder_th_min(self, geom, *, r1_cap=None):
@@ -6227,11 +6249,20 @@ class RazorSolver(
                 # segment's length of the surface sees its own mirror there,
                 # the same spike, and the flat order missed it by tens of
                 # ohms on shallow radials.
+                # Below the plane the order is per source segment
+                # (momwire#1688): the spike is the pair's own, and one hub
+                # segment of a shallow screen asking for 103 no longer
+                # charges every segment of the fill 103 nodes.
+                keyed = (
+                    _remainder_qp_per_source
+                    if isinstance(remainder, _potential_ground.RemainderBelow)
+                    else _remainder_qp
+                )
                 rem_fn = remainder.field_windows(
                     (sources["obs_pts"], sources["obs_tans"]),
                     (sources["src_l"], sources["src_r"], sources["src_t"]),
                     n_moment=2,
-                    n_qp=_remainder_qp(
+                    n_qp=keyed(
                         sources["obs_pts"],
                         sources["src_l"],
                         sources["src_r"],
