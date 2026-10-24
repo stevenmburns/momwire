@@ -94,10 +94,6 @@ ALLOWED = {
     "_crossing_site: {},{} addresses a node where several wires meet IN": (
         "same-sentence:_site_for: {},{} addresses a node where several wires meet IN"
     ),
-    # -- a deck carrying the cards 4nec2 writes (momwire#1669) is declined by
-    # both C++ seams before any refusal: the named deck proves the decline on
-    # both, and that Python prints the sentence for it
-    "_REFUSE_BENT_BELOW": "declined:bent_below_ground.nec",
 }
 
 # The raise sites that relay a sentence made elsewhere rather than write one.
