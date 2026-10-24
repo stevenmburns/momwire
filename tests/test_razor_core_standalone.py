@@ -1701,6 +1701,21 @@ def test_the_wholly_buried_decks_print_as_python(driver, tmp_path):
     assert counts.get("runs", 0) == 7, counts
 
 
+GRAZING_1672_DECKS = ROOT / "tests" / "fixtures" / "buried_grazing_1672"
+
+
+def test_the_grazing_buried_decks_print_as_python(driver, tmp_path):
+    """momwire#1672: radials leaving a base at z = 0 a few centimetres into
+    the soil list below/below pairs whose remainder bs2 raises to their own
+    order (`_below_pair_correction`) -- in C++ alone, byte for byte as
+    `_shell.render(text, basis="bspline")` prints them, every run's arrays
+    included. None declines."""
+    decks = sorted(GRAZING_1672_DECKS.glob("*.nec"))
+    assert len(decks) == 3
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 3 and not reasons, (counts, reasons)
+
+
 BSPLINE_CROSSING_DECKS = [
     ROOT / "tests" / "fixtures" / rel
     for rel in (
