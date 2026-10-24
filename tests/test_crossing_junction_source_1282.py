@@ -49,8 +49,13 @@ KNOT_BASES = ("razor-nec5", "razor-2p", "bspline", "bspline-d1", "sinusoidal-gal
 # orders under the ~0.5 ohm the one-member port was wrong by, and far above
 # the cross-machine BLAS/FMA drift this repo sees (~1e-9 relative).
 PINNED = {
-    "razor-nec5": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
-    "razor-2p": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
+    # momwire#1672: the razor rows moved, and only they. The buried remainder's
+    # order is keyed to grazing height, and this deck's radials leave the
+    # crossing node at z = 0. Before: 70.8068660130 - 0.2415288500j /
+    # 71.4387098395 + 0.4515876592j. The move is 18 mOhm; the offset from
+    # NEC-5 goes 0.455 -> 0.468 ohm, the node's own (CoarseCrossingNode).
+    "razor-nec5": (70.8198013935 - 0.2284093660j, 71.4518660216 + 0.4649614256j),
+    "razor-2p": (70.8198013935 - 0.2284093660j, 71.4518660216 + 0.4649614256j),
     # momwire#1170 stage 0: the B-spline rows moved, and only they. This
     # deck's dialect solves extended by default, and until then its buried
     # radials sent the whole deck back to the reduced kernel; now the
