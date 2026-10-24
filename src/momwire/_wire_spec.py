@@ -735,9 +735,14 @@ class GapMeshFloor(UserWarning):
       end-port junction ports themselves are not gaps under it: their gap
       is the geometric distance between the two ends, fixed under
       refinement, and that ladder converges first order down to delta/a
-      0.28 (momwire#1408's study). The floor that triggers it is unchanged;
-      it marks where the per-halving drift has reached most of its
-      asymptote (0.13 mS at delta/a 0.74).
+      0.28 (momwire#1408's study). Its floor is `GAP_FLOOR_EXACT` = 1,
+      higher than the extended kernel's 0.6: under the exact kernel nothing
+      collapses, and what the advisory marks is where the drift starts
+      (momwire#1675, a = 38 mm monopole over PEC at 14 MHz, bspline, X at
+      delta/a 2.8 / 1.4 / 0.70 / 0.35 / 0.18: -0.00 / +0.01 / -0.05 /
+      -0.25 / -0.31 ohm, where NEC-5's own point gap holds to delta/a
+      ~0.35 and razor-2p's to ~0.7). A deck refined past it moves by tenths
+      of an ohm per halving, which reads as non-convergence on a chart.
 
     Measured on a free-space 600 MHz dipole (L = 0.24 m, a = 3.175 mm, a 2 a
     mesh elsewhere), relative to the same deck with a 2 a gap segment:
@@ -777,6 +782,7 @@ class GapMeshFloor(UserWarning):
 
 GAP_FLOOR_REDUCED = 0.85
 GAP_FLOOR_EXTENDED = 0.6
+GAP_FLOOR_EXACT = 1.0  # momwire#1675: where the zero-width gap's drift starts
 # Sub-floor segments needed BEYOND the gap's own on each side, per gap model.
 GAP_DEPTH = {"point": 1, "knot": 0, "segment": 0}
 
@@ -890,7 +896,10 @@ def advise_gap_mesh_floor(
     family that cannot (razor's feeds are knots) is told where one is
     instead of being told to build it.
     """
-    floor = GAP_FLOOR_EXTENDED if extended_kernel else GAP_FLOOR_REDUCED
+    if exact_kernel:
+        floor = GAP_FLOOR_EXACT
+    else:
+        floor = GAP_FLOOR_EXTENDED if extended_kernel else GAP_FLOOR_REDUCED
     depth = GAP_DEPTH[gap_model]
     found = []
     for label, sites in gaps:
