@@ -3627,6 +3627,22 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     std::vector<double> obs_a, t_a, W_a, obs_b, t_b, W_b;
     buried_nodes(g, a_idx, q, nd, obs_a, t_a, W_a);
     buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
+    // momwire#1672: a below/below pair the remainder needs more than the base
+    // order for (`below_remainder_pairs`: a buried wire within a segment of
+    // the surface) is raised to its own order in Python; that correction is
+    // not ported, so such a deck declines by name. The scalar rule is the
+    // per-pair rule's maximum, so "any pair listed" is "scalar above base".
+    {
+        std::vector<double> sl, sr;
+        for (int64_t s2 : b_idx)
+            for (int c = 0; c < 3; c++) {
+                sl.push_back(g.seg_l[3 * static_cast<size_t>(s2) + c]);
+                sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
+            }
+        if (!b_idx.empty() && razor::remainder_qp(obs_b.data(), obs_b.size() / 3, sl.data(), sr.data(), b_idx.size(),
+                                                  gz, q, razor::REMAINDER_QP_CAP, razor::REMAINDER_QP_C) > q)
+            throw FrontNotPorted("buried-grazing-remainder");
+    }
     const size_t n_obs = obs_b.size() / 3;
     // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
     std::vector<double> d_b(n_obs);
