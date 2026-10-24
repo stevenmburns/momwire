@@ -435,7 +435,7 @@ REFUSALS = [
     # momwire#1257: NE/NH 1 (spherical) parse now; only a coordinate system
     # that is neither 0 nor 1 refuses.
     pytest.param(("NH 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="nh-coordinates-2"),
-    pytest.param(("GX 0,101",), "GX", id="symmetry"),
+    pytest.param(("GR 0,2",), "GR", id="symmetry"),
     # A stepping FR is served since momwire#1508; a stepping type NEC does
     # not define is what still refuses.
     pytest.param(("FR 2,3,0,0,14.,0.05",), "FR", id="fr-stepping-type-2"),

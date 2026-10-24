@@ -364,7 +364,29 @@ every table heading are untouched.
 
 - **Geometry**: `GW` wires — straight, junctioned, tapered via stepped
   radii, exactly as EZNEC emits them (EZNEC resolves its own transforms
-  before writing the deck).
+  before writing the deck). Since momwire#1669, also the geometry cards
+  4nec2's NEC-5 package writes, each read as the licensed NEC-5 reads it
+  (measured as a black box):
+  - `GA`, the wire arc, and `GH`, the helix, each as **one wire** of its
+    segment count, so `EX` and `LD` address its nodes as they address a
+    `GW`'s. `GH` is read as NEC-4.2 and NEC-5 read it: turns, the length
+    along Z, the helix radius at each end and the wire radius at each end.
+    A `GH` whose two wire radii differ is refused, and so is a `GA` or `GH`
+    that reaches below a ground plane (write that part as `GW` cards). A
+    `GA` of 360 degrees closes on itself.
+  - `GM` moves or copies the wires from the tag `ITS` names to the last.
+    With `NRPT` 0 it moves them in place and still adds `ITGI` to their
+    tags, as NEC-5 does.
+  - `GX` reflects in the planes its code names and numbers the copies as
+    NEC-2 does, and the printout carries NEC-5's `Reflection symmetry`
+    block. A reflection in Z = 0 over a ground is refused.
+  - `GS` scales every coordinate and radius. NEC-5 reads no tag range on
+    it, so neither does momwire.
+  - A wire end within 1e-4 of an element length of an earlier wire's end
+    joins it, as NEC-5 joins them, so a hand-typed `GW` meets an arc's end.
+
+  On these cards razor-2p matches the licensed engine to 0.01 % of the
+  feed impedance (29 probe decks).
 - **Grounds**: free space (`GN -1`), perfect ground (`GN 1`), the
   Sommerfeld finite ground (`GN 0` / `GN 2`) including ground contact, and
   EZNEC's MININEC-type ground (bare `GD`).
@@ -387,8 +409,9 @@ every table heading are untouched.
   against momwire as they do against the licensed engine. A block that
   changes the geometry, ground, loads or frequency between runs refuses by
   name.
-- **Requests**: impedance runs (`PQ` / `XQ`), far-field patterns (`RP`,
-  including the range form SimNEC writes),
+- **Requests**: impedance runs (`PQ` / `XQ`; `PT -1`, which 4nec2's ItsHF
+  decks write, leaves out the Wire Currents table and nothing else),
+  far-field patterns (`RP`, including the range form SimNEC writes),
   and near fields (`NE` / `NH`) over **all four ground cards** — free space,
   perfect ground, the Sommerfeld finite ground, and the MININEC-type `GD`
   (whose near field the engine solves in the medium, and so does momwire).

@@ -167,8 +167,10 @@ def _gw(card: Card, wires: list[FlatWire]) -> None:
 # 360 DEGREES"); the licensed NEC-4.2, as a black box, stops on 360 itself
 # (0 to 360, 360 to 0 and -90 to 270 all print "ARC ANGLE EXCEEDS 360.
 # DEGREES", 0 to 359.999999 runs; momwire#1651).
-_GA_SWEEP_LIMIT = {"nec2": 360.00001, "nec4": 360.0}
-_GA_ENGINE = {"nec2": "NEC-2", "nec4": "NEC-4.2"}
+# NEC-5 reads 360 itself, as nec2c does: a GA of 0 to 360 degrees closes on
+# itself (momwire#1669, black box: 8 elements, 8 nodes, 8 unknowns).
+_GA_SWEEP_LIMIT = {"nec2": 360.00001, "nec4": 360.0, "nec5": 360.00001}
+_GA_ENGINE = {"nec2": "NEC-2", "nec4": "NEC-4.2", "nec5": "NEC-5"}
 
 
 def arc_vertices(card: Card, dialect: str = "nec2") -> list[tuple[float, float, float]]:
@@ -305,18 +307,12 @@ def _first_wire_with_tag(wires: list[FlatWire], tag: int) -> int:
     raise DeckError(f"no wire has tag {tag}")
 
 
-def _gm(card: Card, wires: list[FlatWire]) -> None:
-    """``GM`` — rotate about X then Y then Z, translate, optionally replicate
-    (spec ``#gm--move-and-replicate``).
-
-    ``ITS`` is read as a real and rounded, which is NEC's own reading of the
-    field; the block is every wire from the first one carrying that tag to the
-    end of the list.
-    """
-    itgi, nrpt = card.i(0), card.i(1)
+def gm_transform(card: Card):
+    """A ``GM`` card's point map: rotate about X, then Y, then Z (F1-F3,
+    degrees), then translate (F4-F6).  Shared by the nec2 dialect's ``GM``
+    and the nec5 one's (momwire#1669), which read the same seven reals."""
     rox, roy, roz = card.f(2) * _DEG, card.f(3) * _DEG, card.f(4) * _DEG
     xs, ys, zs = card.f(5), card.f(6), card.f(7)
-    its = int(card.f(8) + 0.5)
 
     sps, cps = math.sin(rox), math.cos(rox)
     sth, cth = math.sin(roy), math.cos(roy)
@@ -333,6 +329,21 @@ def _gm(card: Card, wires: list[FlatWire]) -> None:
             p[0] * m[1][0] + p[1] * m[1][1] + p[2] * m[1][2] + ys,
             p[0] * m[2][0] + p[1] * m[2][1] + p[2] * m[2][2] + zs,
         ]
+
+    return xf
+
+
+def _gm(card: Card, wires: list[FlatWire]) -> None:
+    """``GM`` — rotate about X then Y then Z, translate, optionally replicate
+    (spec ``#gm--move-and-replicate``).
+
+    ``ITS`` is read as a real and rounded, which is NEC's own reading of the
+    field; the block is every wire from the first one carrying that tag to the
+    end of the list.
+    """
+    itgi, nrpt = card.i(0), card.i(1)
+    its = int(card.f(8) + 0.5)
+    xf = gm_transform(card)
 
     i1 = _first_wire_with_tag(wires, its)
     if nrpt == 0:

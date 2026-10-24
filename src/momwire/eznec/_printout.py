@@ -53,11 +53,13 @@ it now answers.
 from __future__ import annotations
 
 import functools
+import math
 import os
 from dataclasses import dataclass
 from typing import NamedTuple
 
 from ..deck._cards import Card, parse_card
+from ..deck._nec4 import helix_vertices
 from ..deck._nec5 import Nec5Deck
 
 __all__ = [
@@ -816,6 +818,13 @@ class RunData:
     # the geometry echo.  The engine prints nothing there because it does not
     # split, so a captured printout reads back with none.
     split_notes: tuple[str, ...] = ()
+    # The ``Reflection symmetry`` block a GX deck prints under the counts
+    # (momwire#1669): sections, basis functions per section, non-symmetric
+    # basis functions -- see `momwire.deck._nec5.Nec5Symmetry`.
+    symmetry: tuple[int, int, int] | None = None
+    # False under PT -1 (momwire#1669), which drops the Wire Currents table
+    # and nothing else.
+    print_currents: bool = True
     # -- the operating point -----------------------------------------------
     frequency_mhz: float = 0.0
     wavelength_m: float = 0.0
@@ -1157,11 +1166,17 @@ def _structure_specification(deck: Nec5Deck, data: RunData) -> list[str]:
     through :func:`_card_echo`.
     """
     lines = [_STRUCTURE_HEADING, "", *_COORDINATE_NOTE, "", _MODEL_COMMANDS, ""]
-    for wire in deck.wires:
-        coordinates = "".join(
-            _e(v, 13, 5) for v in (*wire.end1, *wire.end2, wire.radius)
-        )
-        lines.append(f" GW{wire.tag:5d}{wire.segment_count:6d}{coordinates}")
+    if deck.geometry_cards:
+        for card in deck.geometry_cards:
+            lines += _geometry_echo(card)
+    else:
+        # A deck built without its cards (a test's hand-made model) echoes
+        # its wires, which for a GW-only deck is the same text.
+        for wire in deck.wires:
+            coordinates = "".join(
+                _e(v, 13, 5) for v in (*wire.end1, *wire.end2, wire.radius)
+            )
+            lines.append(f" GW{wire.tag:5d}{wire.segment_count:6d}{coordinates}")
     lines.append(f" GE{deck.ge_flag:5d}{deck.ge_second:5d}")
     lines.append("")
     if deck.ge_flag != 0:
@@ -1177,7 +1192,44 @@ def _structure_specification(deck: Nec5Deck, data: RunData) -> list[str]:
     lines += [
         f"{label}{count:6d}" for label, count in zip(_COUNT_LABELS, counts, strict=True)
     ]
+    if data.symmetry is not None:
+        sections, per_section, non_symmetric = data.symmetry
+        lines += [
+            "",
+            "Reflection symmetry",
+            f"Number of symmetric sections:{sections:5d}",
+            f"Number of basis functions in a sym. section:{per_section:5d}",
+            f"Number of non-symmetric basis functions:{non_symmetric:5d}",
+        ]
     return lines
+
+
+def _geometry_echo(card: Card) -> list[str]:
+    """One geometry card as the STRUCTURE SPECIFICATION block echoes it.
+
+    Each layout is the licensed engine's (momwire#1669, black box on
+    nec5cl-simd-d0c1383): the mnemonic, then I5 and I6 for every card but
+    ``GM`` (two I5), then the card's reals as E13.5 -- seven for ``GW``, four
+    for ``GA``, six for ``GH``, six for ``GM``, one for ``GS`` and none for
+    ``GX``.  ``GH`` closes with an I4 that prints 0 whatever the card carries
+    there, and a second line, its chords' total length; ``GM`` with ``ITS``
+    as I5 and three I5 zeros.
+    """
+    m, i0, i1 = card.mnemonic, card.i(0), card.i(1)
+    reals = {"GW": 7, "GA": 4, "GH": 6, "GM": 6, "GS": 1, "GX": 0}[m]
+    values = "".join(_e(card.f(2 + k), 13, 5) for k in range(reals))
+    if m == "GM":
+        its = int(card.f(8) + 0.5)
+        return [f" GM{i0:5d}{i1:5d}{values}{its:5d}" + "    0" * 3]
+    line = f" {m}{i0:5d}{i1:6d}{values}"
+    if m != "GH":
+        return [line]
+    nodes = helix_vertices(card)
+    length = sum(math.dist(a, b) for a, b in zip(nodes[:-1], nodes[1:], strict=True))
+    return [
+        line + "   0",
+        " " * 10 + "TOTAL LENGTH OF WIRE IN THE SPIRAL =" + _e(length, 13, 5),
+    ]
 
 
 def _frequency(data: RunData) -> list[str]:
@@ -1735,7 +1787,7 @@ def _run_sections(data: RunData, *, requests_only: bool = False) -> list[str]:
         body += [_ANTENNA_INPUT_HEADING, "", *_PORT_COLUMNS]
         body += [_port_row(row) for row in data.sources]
         body += _blank(_SECTION_GAP)
-    if data.currents:
+    if data.currents and data.print_currents:
         body += _currents(data)
         body += _blank(_SECTION_GAP)
     if data.charges:

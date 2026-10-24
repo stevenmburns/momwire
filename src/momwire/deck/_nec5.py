@@ -27,18 +27,25 @@ Scope is exactly the **fifteen observed mnemonics** — ``GW``, ``GE``,
 ``GN``, ``GD``, ``EX``, ``LD``, ``TL``, ``NT``, ``FR``, ``PQ``, ``RP``,
 ``XQ``, ``NE``, ``NH``, ``EN`` — plus the ``CM``/``CE`` comment framing.
 (``NH`` is the fifteenth: capture sitting 4 falsified the study-era premise
-that EZNEC never emits it — momwire#513, capture 0111.)  Everything
+that EZNEC never emits it — momwire#513, capture 0111.)  Since momwire#1669
+it also reads the six cards 4nec2's NEC-5 package writes and EZNEC does not
+— ``GA``, ``GH``, ``GM``, ``GX``, ``GS`` and ``PT`` — each as the licensed
+engine reads it, measured as a black box (nec5cl-simd-d0c1383, 2026-10-24;
+the probes are under ``tests/fixtures/nec5_4nec2_cards_1669``).  Everything
 else refuses BY NAME.  This module reads a deck and records what it said; it
 solves nothing and renders nothing (those are the seam's other units).
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
 from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
+from ._nec2_geometry import arc_vertices, gm_transform
+from ._nec4 import helix_vertices
 from .model import DistributedRLC, LoadSpec
 
 __all__ = [
@@ -50,6 +57,7 @@ __all__ = [
     "Nec5Deck",
     "Nec5Node",
     "Nec5Wire",
+    "Nec5Symmetry",
     "Nec5FreeSpace",
     "Nec5PerfectGround",
     "Nec5SommerfeldGround",
@@ -112,13 +120,23 @@ class Nec5Node:
 
 @dataclass(frozen=True)
 class Nec5Wire:
-    """One ``GW``: a tag, a segment count, two endpoints and a radius."""
+    """One wire: a tag, a segment count, two endpoints and a radius.
+
+    A ``GW`` (and every ``GM`` / ``GX`` copy of one) is straight, and its
+    nodes are the ``segment_count + 1`` equal steps from ``end1`` to
+    ``end2``.  A ``GA`` arc or a ``GH`` helix is ONE wire too — the licensed
+    engine reads either as one tag of ``segment_count`` elements and
+    ``segment_count + 1`` nodes, addressed by node like a ``GW``
+    (momwire#1669, black box) — but a bent one, so :attr:`path` carries its
+    nodes, ``end1`` first and ``end2`` last.  Empty for a straight wire.
+    """
 
     tag: int
     segment_count: int
     end1: Point
     end2: Point
     radius: float
+    path: tuple[Point, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -440,6 +458,33 @@ Nec5Request = Nec5FarFieldRequest | Nec5NearFieldRequest | Nec5ExecuteRequest
 
 
 @dataclass(frozen=True)
+class Nec5Symmetry:
+    """The reflection symmetry the deck's last ``GX`` declares (momwire#1669).
+
+    The licensed engine prints a ``Reflection symmetry`` block under the
+    structure counts when a deck carries a ``GX``, and every number in it is
+    read off this (black box, nec5cl-simd-d0c1383, 2026-10-24):
+
+    * :attr:`sections` is ``2 ** planes`` for the planes the LAST ``GX``
+      fires — a second ``GX`` replaces the first's count rather than adding to
+      it — except that the Z = 0 plane does not count over a ground (``GE``
+      nonzero): ``GX 1 001`` there prints no block, ``GX 1 011`` two sections;
+    * the basis functions in a section are the unknowns of the
+      :attr:`block_wires` wires that ``GX`` copied, counted on their own (a
+      node on the plane, which only a copy meets, is not theirs);
+    * and the non-symmetric ones are whatever the whole structure has beyond
+      ``sections`` times that: the plane nodes, and every wire a later card
+      adds — ``GW``, ``GA``, a ``GM`` copy.  ``GS``, a ``GM`` move and the
+      loads leave the block as it was.
+
+    ``None`` on the deck when there is no ``GX`` or it leaves one section.
+    """
+
+    sections: int
+    block_wires: int
+
+
+@dataclass(frozen=True)
 class Nec5Deck:
     """One EZNEC-emitted NEC-5 deck, in the dialect's own terms.
 
@@ -459,6 +504,12 @@ class Nec5Deck:
     # `(deck, data)` rather than `(deck, text, data)`.
     source_text: str = ""
     wires: tuple[Nec5Wire, ...] = ()
+    # Every geometry card before GE in deck order -- GW, GA, GH, GM, GX, GS --
+    # as written: the printout's "Model definition commands" echo walks them
+    # (momwire#1669; until then GW was the only one and was echoed off
+    # `wires`, which a GM or GX copy now adds to without a card of its own).
+    geometry_cards: tuple[Card, ...] = ()
+    symmetry: Nec5Symmetry | None = None
     ge_flag: int = 0
     ge_second: int = -1
     # GE's third field (momwire#1488): nonzero asks for a ``.GMO`` geometry
@@ -501,6 +552,10 @@ class Nec5Deck:
     frequencies_mhz: tuple[float, ...] = ()
     requests: tuple[Nec5Request, ...] = ()
     pq: int | None = None
+    # PT's first field, last card winning (momwire#1669): -1 drops the
+    # printout's Wire Currents table and nothing else, 0 prints it.  None
+    # when the deck has no PT.
+    pt: int | None = None
 
     def wire(self, tag: int) -> Nec5Wire | None:
         """The wire a tag names, or ``None``."""
@@ -517,15 +572,22 @@ class Nec5Deck:
 # The fifteen mnemonics observed across the capture corpus — fourteen from
 # the original 49-capture study plus NH, which capture sitting 4 measured off
 # one radio button (momwire#513, capture 0111) — plus the CM/CE comment
-# framing.  Anything outside this
-# set refuses; the table below gives the ones a reader might plausibly send
-# a reason of their own, and everything else falls through to the generic
-# by-name refusal in `_Nec5Parser.card`.
+# framing, plus the six cards 4nec2's NEC-5 package writes and EZNEC does not:
+# GA, GH, GM, GX and GS (geometry) and PT (momwire#1669, each measured on the
+# licensed engine as a black box).  Anything outside this set refuses; the
+# table below gives the ones a reader might plausibly send a reason of their
+# own, and everything else falls through to the generic by-name refusal in
+# `_Nec5Parser.card`.
 _VOCABULARY = frozenset(
     {
         "CM",
         "CE",
         "GW",
+        "GA",
+        "GH",
+        "GM",
+        "GX",
+        "GS",
         "GE",
         "GN",
         "GD",
@@ -535,6 +597,7 @@ _VOCABULARY = frozenset(
         "NT",
         "FR",
         "PQ",
+        "PT",
         "RP",
         "XQ",
         "NE",
@@ -545,22 +608,11 @@ _VOCABULARY = frozenset(
 
 _REFUSED_BY_NAME = MappingProxyType(
     {
-        # NEC geometry EZNEC never writes: it resolves every transform in its
-        # own UI and emits explicit GW cards, so a deck carrying one of these
-        # is not an EZNEC deck.  Ignoring them would mangle the geometry
-        # silently, which is the one outcome worse than a refusal.
-        "GM": "GM (geometry move) is not part of this engine's nec5 dialect, whose "
-        "geometry is GW alone - EZNEC resolves its transforms before writing a deck",
-        "GX": "GX (symmetry reflection) is not part of this engine's nec5 dialect, "
-        "whose geometry is GW alone",
-        "GR": "GR (cylindrical symmetry) is not part of this engine's nec5 dialect, "
-        "whose geometry is GW alone",
-        "GS": "GS (structure scale) is not part of this engine's nec5 dialect, whose "
-        "geometry is GW alone",
-        "GA": "GA (wire arc) is not part of this engine's nec5 dialect, whose "
-        "geometry is GW alone",
-        "GH": "GH (helix) is not part of this engine's nec5 dialect, whose geometry "
-        "is GW alone",
+        # NEC geometry neither EZNEC nor 4nec2's NEC-5 package writes (GA, GH,
+        # GM, GX and GS are served since momwire#1669).  Ignoring one would
+        # mangle the geometry silently, which is the one outcome worse than a
+        # refusal.
+        "GR": "GR (cylindrical symmetry) is not part of this engine's nec5 dialect",
         "GC": "GC (tapered wire continuation) is not part of this engine's nec5 "
         "dialect",
         "GF": "GF (numerical Green's function) is not part of this engine's nec5 "
@@ -581,8 +633,6 @@ _REFUSED_BY_NAME = MappingProxyType(
         "EK": "EK (extended thin-wire kernel) is not part of this engine's nec5 "
         "dialect - EZNEC emits no kernel card",
         "IS": "IS (insulated sheath) is not part of this engine's nec5 dialect",
-        "PT": "PT (element-current print control) is not part of this engine's nec5 "
-        "dialect; PQ is the only print-control card EZNEC emits",
         "MP": "MP (multiprocessing hint) is not part of this engine's nec5 dialect",
         "SY": "SY (4nec2 symbolic variables) is not part of this engine's nec5 dialect",
         # NX is served, structure by structure, by `split_structures` (the
@@ -773,6 +823,11 @@ class _Nec5Parser:
         self.ce_text: str | None = None
         self.wires: list[Nec5Wire] = []
         self._by_tag: dict[int, Nec5Wire] = {}
+        self.geometry_cards: list[Card] = []
+        # The last GX's plane code (its I2) and how many wires it copied
+        # (momwire#1669); `deck` turns them into a `Nec5Symmetry`.
+        self._gx_code: int | None = None
+        self._gx_block: int = 0
         self.ge_flag: int | None = None
         self.ge_second: int = -1
         self.geometry_file: bool = False
@@ -799,6 +854,7 @@ class _Nec5Parser:
         self.frequencies_mhz: tuple[float, ...] = ()
         self.requests: list[Nec5Request] = []
         self.pq: int | None = None
+        self.pt: int | None = None
         self._saw_en = False
 
     # -- addressing --------------------------------------------------------
@@ -952,6 +1008,7 @@ class _Nec5Parser:
 
     def _gw(self, card: Card) -> None:
         tag = card.i(0)
+        self.geometry_cards.append(card)
         if tag in self._by_tag:
             # EZNEC numbers its wires 1..N, one GW each.  NEC-2 lets several
             # GW cards share a tag; a node address into such a group has no
@@ -977,6 +1034,234 @@ class _Nec5Parser:
         )
         self.wires.append(wire)
         self._by_tag[tag] = wire
+
+    # -- the geometry cards 4nec2 writes (momwire#1669) -------------------
+    #
+    # Each reads as the licensed engine reads it, measured as a black box on
+    # nec5cl-simd-d0c1383 (2026-10-24, the probes and printouts under
+    # tests/fixtures/nec5_4nec2_cards_1669).  A GA or GH is ONE wire of its
+    # segment count, bent; GM, GX and GS act on the wires declared so far.
+
+    def _open_geometry(self, card: Card) -> None:
+        if self.ge_flag is not None:
+            raise DeckError(
+                f"{card.mnemonic} arrives after GE; GE closes the geometry "
+                f"section, so every geometry card comes before it"
+            )
+        self.geometry_cards.append(card)
+
+    def _add_wire(self, wire: Nec5Wire, card: Card) -> None:
+        """A wire a GA, GH, GM or GX card made, under the GW tag rule."""
+        if wire.tag in self._by_tag:
+            raise DeckError(
+                f"{card.mnemonic} gives a wire tag {wire.tag}, which another wire "
+                f"already carries; this engine's nec5 dialect gives each wire its "
+                f"own tag, because a node address names one wire's segment "
+                f"boundary and a tag group has no single wire to count along (a "
+                f"GM or GX with a tag increment of 0 copies every wire onto its "
+                f"own tag)"
+            )
+        self.wires.append(wire)
+        self._by_tag[wire.tag] = wire
+
+    def _bent(self, card: Card, vertices, radius: float) -> Nec5Wire:
+        points = tuple(tuple(float(c) for c in v) for v in vertices)
+        return Nec5Wire(
+            tag=card.i(0),
+            segment_count=card.i(1),
+            end1=points[0],
+            end2=points[-1],
+            radius=radius,
+            path=points,
+        )
+
+    def _ga(self, card: Card) -> None:
+        """``GA ITG NS RADA ANG1 ANG2 RAD``: NEC-2's arc in the XZ plane, the
+        chord between each pair of its ``NS + 1`` vertices one element.  The
+        licensed engine's segment centres and lengths are these chords' (probe
+        a1-a5), and it reads a sweep of 360 degrees as a closed loop."""
+        self._open_geometry(card)
+        self._add_wire(self._bent(card, arc_vertices(card, "nec5"), card.f(5)), card)
+
+    def _gh(self, card: Card) -> None:
+        """``GH ITG NS TURNS ZLEN HR1 HR2 WR1 WR2``: NEC-4.2's reading of the
+        card, not NEC-2's — F1 is the number of turns, F5 and F6 the wire
+        radius at the two ends (probes h1-h8: F7 and any field after it change
+        nothing, a thicker F5/F6 moves Z, and zero turns stops the engine on a
+        zero-length element).  The vertices are :func:`momwire.deck._nec4.
+        helix_vertices`, and one radius serves the whole wire, so a GH whose
+        two wire radii differ refuses: a tapered wire is two radii on one tag,
+        which this dialect's one-radius wire cannot carry."""
+        self._open_geometry(card)
+        n, turns = card.i(1), card.f(2)
+        r1, r2, w1, w2 = card.f(4), card.f(5), card.f(6), card.f(7)
+        if n < 1:
+            raise DeckError(f"GH segment count must be >= 1, got {n}")
+        if turns == 0.0:
+            raise DeckError(
+                "GH with zero turns has no length: this engine's nec5 dialect "
+                "reads F1 as the number of turns, as NEC-5 does, and NEC-5 stops "
+                "on a zero-length element"
+            )
+        if r1 <= 0.0 or r2 <= 0.0:
+            raise DeckError(
+                f"GH needs a positive helix radius at both ends (F3, F4), got "
+                f"{r1:g} and {r2:g}"
+            )
+        if w1 <= 0.0 or w2 <= 0.0:
+            raise DeckError(
+                f"GH needs a positive wire radius at both ends (F5, F6), got "
+                f"{w1:g} and {w2:g}; this engine's nec5 dialect reads NEC-5's GH "
+                f"(turns, length, two helix radii, two wire radii), not NEC-2's"
+            )
+        if w1 != w2:
+            raise DeckError(
+                f"GH with two wire radii ({w1:g} and {w2:g}, F5 and F6) tapers "
+                f"its wire along the helix; this engine's nec5 dialect gives a "
+                f"wire one radius, so it serves a GH whose two wire radii are equal"
+            )
+        self._add_wire(self._bent(card, helix_vertices(card), w1), card)
+
+    def _moved(self, wire: Nec5Wire, xf, tag: int) -> Nec5Wire:
+        end1, end2 = tuple(xf(wire.end1)), tuple(xf(wire.end2))
+        path = tuple(tuple(xf(p)) for p in wire.path)
+        if path:
+            end1, end2 = path[0], path[-1]
+        return Nec5Wire(
+            tag=tag,
+            segment_count=wire.segment_count,
+            end1=end1,
+            end2=end2,
+            radius=wire.radius,
+            path=path,
+        )
+
+    def _gm(self, card: Card) -> None:
+        """``GM ITGI NRPT ROX ROY ROZ XS YS ZS ITS``: rotate about X, Y, then Z
+        and translate the wires from the first one tagged ``ITS`` to the last
+        (all of them for ``ITS`` 0).  NRPT 0 moves them in place and STILL adds
+        ``ITGI`` to their tags (probe q1/q6: after ``GM 5 0 ..`` tag 1 answers
+        as tag 6 and no longer as tag 1); NRPT > 0 leaves them and adds NRPT
+        copies, each the transform of the one before, its tags ``ITGI`` higher
+        (m2-m7).  A tag ITS that no wire carries stops the engine (q9)."""
+        self._open_geometry(card)
+        extra = [k for k in range(9, len(card.values)) if card.f(k) != 0.0]
+        if extra:
+            raise DeckError(
+                f"GM carries {card.f(extra[0]):g} in field {extra[0] + 1}; this "
+                f"engine's nec5 dialect reads GM's nine fields (ITGI, NRPT, three "
+                f"rotations, three translations, ITS) and nothing after them"
+            )
+        itgi, nrpt = card.i(0), card.i(1)
+        its = int(card.f(8) + 0.5)
+        if nrpt < 0:
+            raise DeckError(f"GM asks for {nrpt} copies; NRPT is 0 or more")
+        first = 0
+        if its > 0:
+            first = next((k for k, w in enumerate(self.wires) if w.tag == its), -1)
+            if first < 0:
+                raise DeckError(
+                    f"GM starts its block at tag {its} (ITS), which no wire "
+                    f"before it carries"
+                )
+        xf = gm_transform(card)
+
+        def tag_of(wire: Nec5Wire) -> int:
+            return wire.tag + itgi if wire.tag != 0 else 0
+
+        block = self.wires[first:]
+        if nrpt == 0:
+            del self.wires[first:]
+            for wire in block:
+                del self._by_tag[wire.tag]
+            for wire in block:
+                self._add_wire(self._moved(wire, xf, tag_of(wire)), card)
+            return
+        for _ in range(nrpt):
+            block = [self._moved(wire, xf, tag_of(wire)) for wire in block]
+            for wire in block:
+                self._add_wire(wire, card)
+
+    def _gx(self, card: Card) -> None:
+        """``GX ITX IXYZ``: reflect every wire so far in Z = 0, then Y = 0,
+        then X = 0, each plane the I2 digit names (100 X, 010 Y, 001 Z), the
+        tag increment doubling after each — NEC-2's order and numbering (probe
+        y2: tags 1-8 are the identity, then Z, Y, YZ, X, XZ, XY, XYZ).  A copy
+        keeps its original's node order (x1/x2).  An element lying in a plane
+        or crossing it stops the engine (x5), and refuses here."""
+        self._open_geometry(card)
+        code = card.i(1)
+        if code not in _GX_CODES:
+            raise DeckError(
+                f"GX carries {code} as its plane code; this engine's nec5 dialect "
+                f"reads one digit per plane, 0 or 1 (100 X = 0, 010 Y = 0, 001 "
+                f"Z = 0), as 4nec2 writes it"
+            )
+        flags = (
+            (2, code % 10, "Z = 0"),
+            (1, (code // 10) % 10, "Y = 0"),
+            (0, (code // 100) % 10, "X = 0"),
+        )
+        increment = card.i(0)
+        self._gx_code = code
+        self._gx_block = len(self.wires)
+        for axis, flag, plane in flags:
+            if not flag:
+                continue
+            images = []
+            for wire in self.wires:
+                nodes = wire.path or (wire.end1, wire.end2)
+                for a, b in zip(nodes[:-1], nodes[1:], strict=True):
+                    e1, e2 = a[axis], b[axis]
+                    if abs(e1) + abs(e2) <= 1.0e-5 or e1 * e2 < -1.0e-6:
+                        raise DeckError(
+                            f"GX reflects tag {wire.tag} in the {plane} plane, "
+                            f"which the wire lies in or crosses; its image would "
+                            f"land on the wire itself, and NEC-5 stops on it "
+                            f"(GEOMETRY DATA ERROR)"
+                        )
+
+                def mirror(p, axis=axis):
+                    q = list(p)
+                    q[axis] = -q[axis]
+                    return q
+
+                tag = wire.tag + increment if wire.tag != 0 else 0
+                images.append(self._moved(wire, mirror, tag))
+            for image in images:
+                self._add_wire(image, card)
+            increment *= 2
+
+    def _gs(self, card: Card) -> None:
+        """``GS 0 0 XSCALE``: scale every coordinate and every wire radius by
+        XSCALE (probe s4: GS 0.5 answers the hand-halved deck to every printed
+        digit).  The engine reads no tag range — ``GS 2 2 2`` answers ``GS 0 0
+        2`` exactly (s1/s2), so the two integer fields are echoed and
+        otherwise ignored, as NEC-5 ignores them."""
+        self._open_geometry(card)
+        factor = card.f(2)
+        if factor <= 0.0:
+            raise DeckError(
+                f"GS scales by {factor:g}; this engine's nec5 dialect serves a "
+                f"positive scale factor"
+            )
+
+        def scale(p):
+            return [c * factor for c in p]
+
+        scaled = [
+            Nec5Wire(
+                tag=w.tag,
+                segment_count=w.segment_count,
+                end1=tuple(scale(w.end1)),
+                end2=tuple(scale(w.end2)),
+                radius=w.radius * factor,
+                path=tuple(tuple(scale(p)) for p in w.path),
+            )
+            for w in self.wires
+        ]
+        self.wires = scaled
+        self._by_tag = {w.tag: w for w in scaled}
 
     def _ge(self, card: Card) -> None:
         """``GE <ground-flag>[,<segment-check-flag>]``.
@@ -1568,6 +1853,25 @@ class _Nec5Parser:
         """
         self.pq = card.i(0)
 
+    def _pt(self, card: Card) -> None:
+        """``PT``, as 4nec2's NEC-5 package writes it for its ItsHF requests
+        (momwire#1669, #1650).  On the licensed engine ``PT -1`` drops the
+        Wire Currents table and changes nothing else — Z is the same with and
+        without it — and ``PT 0`` prints the table as a deck with no PT does;
+        the last PT card wins (probe p5).  Every other form refuses: ``PT 2 1
+        3 5`` prints no table at all there (p3), which is not NEC-2's reading
+        and not one this seam has a printout for."""
+        flag = card.i(0)
+        rest = [card.i(k) for k in (1, 2, 3)]
+        if flag not in (-1, 0) or (flag == 0 and any(rest)):
+            raise DeckError(
+                f"PT {flag} {rest[0]} {rest[1]} {rest[2]} is not served by this "
+                f"engine's nec5 dialect, which reads PT -1 (no Wire Currents "
+                f"table, as 4nec2's NEC-5 package writes it) and PT 0 (the table, "
+                f"as with no PT)"
+            )
+        self.pt = flag
+
     # -- the loop ----------------------------------------------------------
 
     def feed(self, text: str) -> None:
@@ -1661,8 +1965,9 @@ class _Nec5Parser:
         if card.mnemonic not in _VOCABULARY:
             raise DeckError(
                 f"{card.mnemonic} is not a card in this engine's nec5 dialect, whose "
-                f"vocabulary is the fifteen mnemonics EZNEC emits: GW, GE, GN, GD, "
-                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, NH, EN"
+                f"vocabulary is the fifteen mnemonics EZNEC emits (GW, GE, GN, GD, "
+                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, NH, EN) and the six 4nec2's "
+                f"NEC-5 package adds (GA, GH, GM, GX, GS, PT)"
             )
         minimum = _MIN_FIELDS.get(card.mnemonic)
         if minimum is not None and (written := len(card.values)) < minimum:
@@ -1673,6 +1978,11 @@ class _Nec5Parser:
             )
         handler = {
             "GW": self._gw,
+            "GA": self._ga,
+            "GH": self._gh,
+            "GM": self._gm,
+            "GX": self._gx,
+            "GS": self._gs,
             "GE": self._ge,
             "GN": self._gn,
             "GD": self._gd,
@@ -1685,6 +1995,7 @@ class _Nec5Parser:
             "NE": self._ne,
             "NH": self._ne,
             "PQ": self._pq,
+            "PT": self._pt,
         }.get(card.mnemonic)
         if handler is not None:
             handler(card)
@@ -1741,7 +2052,9 @@ class _Nec5Parser:
             comments=tuple(self.comments),
             ce_text=self.ce_text or "",
             source_text=source_text,
-            wires=tuple(self.wires),
+            wires=_joined(self.wires),
+            geometry_cards=tuple(self.geometry_cards),
+            symmetry=self._symmetry(),
             ge_flag=self.ge_flag,
             ge_second=self.ge_second,
             geometry_file=self.geometry_file,
@@ -1759,7 +2072,97 @@ class _Nec5Parser:
             frequencies_mhz=self.frequencies_mhz,
             requests=tuple(self.requests),
             pq=self.pq,
+            pt=self.pt,
         )
+
+    def _symmetry(self) -> Nec5Symmetry | None:
+        """The last GX as the printout's symmetry block reads it — see
+        :class:`Nec5Symmetry`.  A Z = 0 reflection over a ground puts the
+        copy below the ground plane, where the licensed engine's own counts
+        are ones this seam does not reproduce (probe y14: 22 elements and 32
+        unknowns), so it refuses rather than print a block it cannot match."""
+        code = self._gx_code
+        if code is None:
+            return None
+        planes = [(code // 100) % 10, (code // 10) % 10]
+        if code % 10:
+            if self.ge_flag:
+                raise DeckError(
+                    f"GX reflects the structure in the Z = 0 plane over a ground "
+                    f"(GE {self.ge_flag}); the copy lands below the ground plane, "
+                    f"which this engine's nec5 dialect does not serve as a "
+                    f"reflection - write the buried wires as GW cards"
+                )
+            planes.append(1)
+        sections = 2 ** sum(1 for p in planes if p)
+        if sections == 1:
+            return None
+        return Nec5Symmetry(sections=sections, block_wires=self._gx_block)
+
+
+# GX's plane codes: one 0/1 digit per plane, X then Y then Z.
+_GX_CODES = frozenset({0, 1, 10, 11, 100, 101, 110, 111})
+
+# The licensed engine joins a wire end to a node already in the structure
+# when the two stand closer than this fraction of the length of the element
+# that node came from -- the EARLIER wire's element, not the later one's
+# (momwire#1669, black box: with 1 m elements a 9e-5 m gap joins and 1e-4 m
+# does not; 0.1 m elements join 5e-6 and not 1e-5; 10 m elements join 5e-4
+# and not 1e-3, whatever the segment count; and a 0.1 m wire after a 1 m one
+# joins at 5e-5 m where a 1 m wire after a 0.1 m one does not join at 2e-5).
+_JOIN_FRACTION = 1e-4
+
+
+def _element_length(wire: Nec5Wire, end: int) -> float:
+    """The length of the element at ``wire``'s end 1 (``end`` 0) or end 2."""
+    if wire.path:
+        a, b = (wire.path[0], wire.path[1]) if end == 0 else wire.path[-2:]
+        return math.dist(a, b)
+    return math.dist(wire.end1, wire.end2) / wire.segment_count
+
+
+def _joined(wires: list[Nec5Wire]) -> tuple[Nec5Wire, ...]:
+    """``wires`` with every end that NEC-5 would join to an earlier end moved
+    onto it exactly (:data:`_JOIN_FRACTION`).
+
+    EZNEC writes a shared end as the same decimal string twice, so its decks
+    never move here.  A 4nec2 deck is typed: a ``GW`` meeting a ``GA`` arc's
+    end at ``1.732`` stands 5e-5 m off the arc's ``2 cos 30`` (probe a5), and
+    NEC-5 reads the two as one node.  Ends only, walked in wire order, each
+    joined to the first earlier end in range; a joined end is the same node,
+    so it adds no tolerance of its own.
+    """
+    nodes: list[tuple[Point, float]] = []
+    out = []
+    for wire in wires:
+        ends = [wire.end1, wire.end2]
+        for k in (0, 1):
+            point = ends[k]
+            target = next(
+                (node for node, tol in nodes if math.dist(point, node) < tol), None
+            )
+            if target is not None:
+                ends[k] = target
+            elif k == 1 and math.dist(
+                point, ends[0]
+            ) < _JOIN_FRACTION * _element_length(wire, 0):
+                ends[k] = ends[0]  # a closed GA: its own end 1
+            else:
+                nodes.append((point, _JOIN_FRACTION * _element_length(wire, k)))
+        if (ends[0], ends[1]) != (wire.end1, wire.end2):
+            path = wire.path
+            if path:
+                path = (ends[0], *path[1:-1], ends[1])
+            wire = Nec5Wire(
+                tag=wire.tag,
+                segment_count=wire.segment_count,
+                end1=ends[0],
+                end2=ends[1],
+                radius=wire.radius,
+                path=path,
+            )
+        out.append(wire)
+    return tuple(out)
 
 
 @dataclass(frozen=True)
