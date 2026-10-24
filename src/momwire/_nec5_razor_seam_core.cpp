@@ -64,8 +64,8 @@ void RazorSeamEngine::check_can_host(const Deck &d, const Prepared &p, bool has_
         if (joined.count(JunctionEnd(i, End::start)) || joined.count(JunctionEnd(i, End::end)))
             continue;
         if (has_ground) {
-            const double tol = ground_touch_tol(piece.points, piece.points + 3);
-            if (std::fabs(piece.points[2] - 0.0) <= tol || std::fabs(piece.points[5] - 0.0) <= tol)
+            const double tol = piece.touch_tol();
+            if (std::fabs(piece.start()[2] - 0.0) <= tol || std::fabs(piece.end()[2] - 0.0) <= tol)
                 continue;
         }
         inert.push_back(static_cast<long long>(i));
@@ -92,18 +92,17 @@ void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_grou
     size_t n_below = 0;
     if (has_ground)
         for (const SeamPiece &piece : mesh.pieces)
-            if (std::min(piece.points[2], piece.points[5]) <
-                0.0 - ground_touch_tol(piece.points, piece.points + 3))
+            if (piece.zmin() < 0.0 - piece.touch_tol())
                 n_below++;
     const bool all_below = !mesh.pieces.empty() && n_below == mesh.pieces.size();
     auto part = std::make_shared<RazorPrepared>();
     razor::FrontInputs &in = part->inputs;
     for (const SeamPiece &piece : mesh.pieces) {
-        in.points.insert(in.points.end(), piece.points, piece.points + 6);
-        in.wire_points.push_back(2);
+        in.points.insert(in.points.end(), piece.points.begin(), piece.points.end());
+        in.wire_points.push_back(piece.n_points());
         razor::EdgeCounts ec;
         ec.kind = razor::EdgeCounts::list;
-        ec.v.push_back(piece.n_elements());
+        for (long long n : piece.edge_elements()) ec.v.push_back(n);
         in.counts.push_back(ec);
     }
     in.counts_given = true;

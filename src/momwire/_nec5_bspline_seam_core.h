@@ -39,8 +39,9 @@ namespace nec5 {
 
 // `BSplineSolver(...)`'s keyword arguments as the seam spells them.
 struct BSplineFrontInputs {
-    std::vector<double> points;       // `wires`: per piece (start, end), 6 doubles
-    std::vector<int64_t> n_per_edge;  // `n_per_edge_per_wire`: [[n]] per piece
+    std::vector<double> points;       // `wires`: each piece's points, x y z each
+    std::vector<int64_t> wire_points;  // points per piece (2, or a bent piece's nodes)
+    std::vector<std::vector<int64_t>> n_per_edge;  // `n_per_edge_per_wire`: per piece, per edge
     std::vector<int64_t> exact_auto_skip;  // momwire#1649: the pieces cut at z = 0
     struct Feed {
         int64_t wire = 0;

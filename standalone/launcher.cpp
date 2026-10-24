@@ -200,7 +200,9 @@ std::string render_gmo(const nec5::Deck &deck) {
         const long long n = w.segment_count.i64();
         std::vector<std::array<double, 3>> wp(static_cast<std::size_t>(n + 1));
         for (long long k = 0; k <= n; k++) {
-            if (k == 0) {
+            if (!w.path.empty()) {  // a GA arc or GH helix (momwire#1669)
+                wp[static_cast<std::size_t>(k)] = w.path[static_cast<std::size_t>(k)];
+            } else if (k == 0) {
                 wp[0] = {w.end1[0], w.end1[1], w.end1[2]};
             } else if (k == n) {
                 wp[static_cast<std::size_t>(k)] = {w.end2[0], w.end2[1], w.end2[2]};

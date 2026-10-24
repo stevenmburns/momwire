@@ -1718,6 +1718,62 @@ def test_the_grazing_buried_decks_print_as_python(driver, tmp_path):
     assert counts.get("served", 0) == 3 and not reasons, (counts, reasons)
 
 
+CARDS_1669_DECKS = ROOT / "tests" / "fixtures" / "nec5_4nec2_cards_1669"
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
+    """momwire#1671: GA, GH, GM, GX, GS and PT, read as 4nec2 writes them
+    (#1669), through the whole C++ chain on both bases -- a bent wire as one
+    multi-vertex piece, each geometry card's echo, the Reflection symmetry
+    block and PT -1 -- byte for byte as `_shell.render` prints them, and
+    every run's arrays. None declines."""
+    decks = sorted(CARDS_1669_DECKS.glob("*.nec"))
+    assert len(decks) == 29
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    else:
+        pc = _printout_compare_module()
+        if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+            pytest.skip(
+                "no bundled OpenBLAS beside SciPy / numpy (not a wheel install)"
+            )
+        saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+        os.environ.update(_ONE_THREAD)
+        try:
+            answers = pc.run_driver(
+                driver[0]["nec5_razor_printout_driver"], decks, tmp_path, arrays=True
+            )
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        counts, reasons = {}, {}
+        with _one_thread():
+            for path, ans in zip(decks, answers, strict=True):
+                if ans["route"] == "declined":
+                    reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
+                    continue
+                counts[ans["seam"]] = counts.get(ans["seam"], 0) + 1
+                py_runs = []
+                text = path.read_bytes().decode("latin-1")
+                ref = pc.python_printout(text, runs=py_runs)
+                assert ans["printout"] == ref, (
+                    f"{path}: {pc.first_difference(ref, ans['printout'])}"
+                )
+                assert len(ans["runs"]) == len(py_runs), path
+                for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
+                    for name in pc.ARRAYS:
+                        mine = np.ascontiguousarray(py[name], dtype=np.complex128)
+                        assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
+                    counts["runs"] = counts.get("runs", 0) + 1
+    assert not reasons, reasons
+    assert counts.get("served", 0) == 29, counts
+    assert counts.get("runs", 0) >= 29, counts
+
+
 BSPLINE_CROSSING_DECKS = [
     ROOT / "tests" / "fixtures" / rel
     for rel in (

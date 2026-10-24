@@ -167,8 +167,8 @@ def python_mesh(prepared):
                 p.radius,
                 p.cut_start,
                 p.cut_end,
-                tuple(float(v) for v in p.points[0]),
-                tuple(float(v) for v in p.points[1]),
+                # every node of a bent piece (momwire#1669), else its two ends
+                *(tuple(float(v) for v in q) for q in p.points),
             )
             for p in mesh.pieces
         ],

@@ -210,6 +210,10 @@ struct Card {
     std::string text() const;       // raw[2:]
 };
 
+// The `TOTAL LENGTH OF WIRE IN THE SPIRAL` a GH card's echo prints
+// (`_printout._geometry_echo`, momwire#1669): its chords' lengths summed.
+double gh_spiral_length(const Card &card);
+
 struct Deck {  // Nec5Deck, in its field order
     std::vector<std::string> comments;  // UTF-8, each a CM card's raw[2:]
     std::string ce_text;                // UTF-8
@@ -248,10 +252,6 @@ struct Deck {  // Nec5Deck, in its field order
     // Not Python's: a GA / GH / GM this copy declined to materialise (a count
     // past `kMaxGeometry`), which the seam declines as "segment-count".
     bool geometry_too_large = false;
-
-    // Whether the deck carries a card the C++ route does not serve yet: any
-    // geometry card but GW, or a PT (momwire#1669). The seam declines it.
-    bool carries_4nec2_cards() const;
 
     const Wire *wire(const Int &tag) const;  // Nec5Deck.wire
 };
