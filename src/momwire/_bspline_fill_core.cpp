@@ -2878,19 +2878,26 @@ std::vector<cdouble> pair_moments_fixed(const Geometry &g, const somm_proj::Grid
 
 }  // namespace
 
-// `_quadrature.remainder_qp_pairs` (+ `_remainder_qp_pairs`' symmetrise,
-// dilate and per-pair max): the raised pairs (I, J, Q), sorted by I then J.
-void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const nec5::NumpyLinalg &np,
-                            std::vector<int64_t> &I, std::vector<int64_t> &J, std::vector<int64_t> &Q) {
+// `_quadrature.remainder_qp_pairs(nodes, sl, sr, gz, base, cap, c,
+// edge_tol)` (+ the symmetrise, dilate and per-pair max its two callers
+// add): the raised pairs (I, J, Q) over the `n` segments `sl` -> `sr`,
+// sorted by I then J, local to them.
+void raised_pairs_on(const std::vector<double> &sl, const std::vector<double> &sr, int64_t n, double gz, int64_t base,
+                     double c, double edge_tol, const nec5::NumpyLinalg &np, std::vector<int64_t> &I,
+                     std::vector<int64_t> &J, std::vector<int64_t> &Q) {
     I.clear();
     J.clear();
     Q.clear();
-    const int64_t n = g.n_segs_total;
     if (n == 0) return;
-    if (remainder_pairs_cleared(g, gz, base)) return;
     std::vector<double> tq, wg;
     remainder_rule(base, tq, wg);
-    const std::vector<double> obs = remainder_nodes(g, tq);
+    const size_t qn = tq.size();
+    std::vector<double> obs(static_cast<size_t>(n) * qn * 3);
+    for (int64_t s2 = 0; s2 < n; s2++)
+        for (size_t j = 0; j < qn; j++)
+            for (int cc = 0; cc < 3; cc++)
+                obs[(static_cast<size_t>(s2) * qn + j) * 3 + cc] =
+                    sl[3 * s2 + cc] + tq[j] * (sr[3 * s2 + cc] - sl[3 * s2 + cc]);
     const int64_t nn = static_cast<int64_t>(tq.size());
     const std::ptrdiff_t M = static_cast<std::ptrdiff_t>(n * nn);
     std::vector<double> mir_l(3 * static_cast<size_t>(n)), d(3 * static_cast<size_t>(n)), dd(static_cast<size_t>(n)),
@@ -2898,17 +2905,30 @@ void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const ne
     for (int64_t s = 0; s < n; s++) {
         double mr[3];
         for (int c = 0; c < 3; c++) {
-            mir_l[3 * s + c] = g.seg_l[3 * s + c];
-            mr[c] = g.seg_r[3 * s + c];
+            mir_l[3 * s + c] = sl[3 * s + c];
+            mr[c] = sr[3 * s + c];
         }
-        mir_l[3 * s + 2] = 2.0 * gz - g.seg_l[3 * s + 2];
-        mr[2] = 2.0 * gz - g.seg_r[3 * s + 2];
+        mir_l[3 * s + 2] = 2.0 * gz - sl[3 * s + 2];
+        mr[2] = 2.0 * gz - sr[3 * s + 2];
         for (int c = 0; c < 3; c++) d[3 * s + c] = mr[c] - mir_l[3 * s + c];
         dd[s] = edot3(&d[3 * s], &d[3 * s]);
-        lengths[s] = vnorm3(g.seg_r[3 * s] - g.seg_l[3 * s], g.seg_r[3 * s + 1] - g.seg_l[3 * s + 1],
-                            g.seg_r[3 * s + 2] - g.seg_l[3 * s + 2]);
+        lengths[s] = vnorm3(sr[3 * s] - sl[3 * s], sr[3 * s + 1] - sl[3 * s + 1],
+                            sr[3 * s + 2] - sl[3 * s + 2]);
     }
-    const double c = REMAINDER_GRADED_C, edge_tol = REMAINDER_GRADED_EDGE_TOL;
+    {
+        // the scalar rule's short-circuit, as `remainder_qp_pairs` asks it:
+        // never below the plane, where every depth is negative
+        double h_min = INFINITY, lmax = -INFINITY;
+        for (int64_t s2 = 0; s2 < n; s2++) {
+            h_min = std::min(h_min, sl[3 * s2 + 2] - gz);
+            lmax = std::max(lmax, lengths[s2]);
+        }
+        double h_r = INFINITY, h_o = INFINITY;
+        for (int64_t s2 = 0; s2 < n; s2++) h_r = std::min(h_r, sr[3 * s2 + 2] - gz);
+        for (size_t t = 0; t < obs.size() / 3; t++) h_o = std::min(h_o, obs[3 * t + 2] - gz);
+        h_min = std::min(std::min(h_min, h_r), h_o);
+        if (h_min > 0.0 && static_cast<int64_t>(std::ceil(c * (lmax / (2.0 * h_min)))) <= base) return;
+    }
     std::vector<std::vector<somm_core::QpHit>> hits;
     std::vector<unsigned char> unsure;
     somm_core::remainder_qp_pairs_scan(obs.data(), M, nn, mir_l.data(), d.data(), dd.data(), lengths.data(), n, base,
@@ -2994,12 +3014,12 @@ void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const ne
     {
         std::vector<std::pair<double, int64_t>> ends;  // by x, sweep
         for (int64_t s = 0; s < n; s++) {
-            ends.push_back({g.seg_l[3 * s], 2 * s});
-            ends.push_back({g.seg_r[3 * s], 2 * s + 1});
+            ends.push_back({sl[3 * s], 2 * s});
+            ends.push_back({sr[3 * s], 2 * s + 1});
         }
         std::sort(ends.begin(), ends.end());
         const auto pt = [&](int64_t e) {
-            const std::vector<double> &src = (e % 2 == 0) ? g.seg_l : g.seg_r;
+            const std::vector<double> &src = (e % 2 == 0) ? sl : sr;
             const int64_t s = e / 2;
             return V3{src[3 * s], src[3 * s + 1], src[3 * s + 2]};
         };
@@ -3038,6 +3058,19 @@ void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const ne
             }
         pair_max(ea, eb, eq, I, J, Q);
     }
+}
+
+
+// `_remainder_qp_pairs` on the graded route over the whole deck.
+void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const nec5::NumpyLinalg &np,
+                            std::vector<int64_t> &I, std::vector<int64_t> &J, std::vector<int64_t> &Q) {
+    I.clear();
+    J.clear();
+    Q.clear();
+    if (g.n_segs_total == 0) return;
+    if (remainder_pairs_cleared(g, gz, base)) return;
+    raised_pairs_on(g.seg_l, g.seg_r, g.n_segs_total, gz, base, REMAINDER_GRADED_C, REMAINDER_GRADED_EDGE_TOL, np, I,
+                    J, Q);
 }
 
 // `_remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)` on the
@@ -3590,6 +3623,116 @@ void buried_nodes(const Geometry &g, const std::vector<int64_t> &idx, int64_t q,
 
 }  // namespace
 
+namespace {
+
+// `_below_interface._pair_moments` for one pair: `Jf[p][P] = Σ_a Σ_b
+// Wo[p][a] F[a][b] Ws[P][b]`, the real and imaginary parts apart, each sum
+// numpy's pairwise sum (`Fp[:, :, None, :] * Ws`, then `Wo * tT`).
+void below_pair_moments(const cdouble *F, const double *Wo, size_t wo_stride, const double *Ws, size_t ws_stride,
+                        size_t q, int nd, cdouble *J) {
+    std::vector<double> t(q * static_cast<size_t>(nd)), prod(q);
+    for (int part = 0; part < 2; part++) {
+        for (size_t a = 0; a < q; a++)
+            for (int P = 0; P < nd; P++) {
+                for (size_t bb = 0; bb < q; bb++) {
+                    const cdouble f = F[a * q + bb];
+                    prod[bb] = (part == 0 ? f.real() : f.imag()) * Ws[static_cast<size_t>(P) * ws_stride + bb];
+                }
+                t[static_cast<size_t>(P) * q + a] = nec5::replay::np_pairwise(prod.data(), static_cast<int64_t>(q));
+            }
+        for (int p = 0; p < nd; p++)
+            for (int P = 0; P < nd; P++) {
+                for (size_t a = 0; a < q; a++)
+                    prod[a] = Wo[static_cast<size_t>(p) * wo_stride + a] * t[static_cast<size_t>(P) * q + a];
+                const double v = nec5::replay::np_pairwise(prod.data(), static_cast<int64_t>(q));
+                cdouble &out = J[static_cast<size_t>(p) * nd + static_cast<size_t>(P)];
+                out = part == 0 ? cdouble(v, out.imag()) : cdouble(out.real(), v);
+            }
+    }
+}
+
+// `_below_interface._below_pair_correction` (momwire#1672), unrestricted:
+// each listed below/below pair's base-order moments swapped for its own
+// order's, `Z -= P (Jf_q - Jf_base) P`, scattered in list order.
+template <class Rem>
+void below_pair_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b, const std::vector<int64_t> &b_idx,
+                           const std::vector<int64_t> &I, const std::vector<int64_t> &J,
+                           const std::vector<int64_t> &Qv, int64_t q0, int nd, const std::vector<double> &obs_b,
+                           const std::vector<double> &t_b, const std::vector<double> &W_b, Rem &rem) {
+    const size_t n_b = b_idx.size(), Q0 = static_cast<size_t>(q0), d2 = static_cast<size_t>(nd * nd);
+    const double gz = rem.gz;
+    std::vector<cdouble> dJ(I.size() * d2);
+    const auto project = [&](const double *o, const double *to, size_t mo, const double *sn, const double *st,
+                             size_t ms, std::vector<cdouble> &F) {
+        rem.src.assign(sn, sn + 3 * ms);
+        rem.t_src.assign(st, st + 3 * ms);
+        rem.d_src.resize(ms);
+        for (size_t j = 0; j < ms; j++) rem.d_src[j] = gz - rem.src[3 * j + 2];
+        F.assign(mo * ms, cdouble(0.0, 0.0));
+        rem.project(o, to, static_cast<std::ptrdiff_t>(mo), F.data());
+    };
+    std::vector<cdouble> F, hi(d2), lo(d2);
+    for (size_t k = 0; k < I.size(); k++) {
+        const size_t io = static_cast<size_t>(I[k]), js = static_cast<size_t>(J[k]);
+        const int64_t qk = Qv[k];
+        const size_t Qk = static_cast<size_t>(qk);
+        std::vector<double> on, ot, oW, sn, st, sW;
+        buried_nodes(g, {b_idx[io]}, qk, nd, on, ot, oW);
+        buried_nodes(g, {b_idx[js]}, qk, nd, sn, st, sW);
+        project(on.data(), ot.data(), Qk, sn.data(), st.data(), Qk, F);
+        below_pair_moments(F.data(), oW.data(), Qk, sW.data(), Qk, Qk, nd, hi.data());
+        project(&obs_b[3 * io * Q0], &t_b[3 * io * Q0], Q0, &obs_b[3 * js * Q0], &t_b[3 * js * Q0], Q0, F);
+        below_pair_moments(F.data(), &W_b[io * Q0], n_b * Q0, &W_b[js * Q0], n_b * Q0, Q0, nd, lo.data());
+        for (size_t e = 0; e < d2; e++)
+            dJ[k * d2 + e] = cdouble(hi[e].real() - lo[e].real(), hi[e].imag() - lo[e].imag());
+    }
+    // (basis, wing) on each segment, live wings only, by basis then wing
+    const int64_t n_basis = b.n_basis, nw = static_cast<int64_t>(b.supp_seg.size()) / std::max<int64_t>(n_basis, 1);
+    std::map<int64_t, std::vector<std::pair<int64_t, int64_t>>> by_seg;
+    for (int64_t m = 0; m < n_basis; m++)
+        for (int64_t a = 0; a < nw; a++) {
+            const int64_t sg = b.supp_seg[static_cast<size_t>(m * nw + a)];
+            if (sg < 0) continue;
+            bool live = false;
+            for (int p = 0; p < nd; p++) live = live || b.polys[static_cast<size_t>((m * nw + a) * nd + p)] != 0.0;
+            if (live) by_seg[sg].emplace_back(m, a);
+        }
+    const auto wings = [&](int64_t sg) -> const std::vector<std::pair<int64_t, int64_t>> * {
+        auto it = by_seg.find(sg);
+        return it == by_seg.end() ? nullptr : &it->second;
+    };
+    std::vector<double> ur(static_cast<size_t>(nd)), ui(static_cast<size_t>(nd));
+    for (size_t k = 0; k < I.size(); k++) {
+        const auto *wo = wings(b_idx[static_cast<size_t>(I[k])]), *ws = wings(b_idx[static_cast<size_t>(J[k])]);
+        if (wo == nullptr || ws == nullptr) continue;
+        const cdouble *dk = &dJ[k * d2];
+        for (const auto &ma : *wo) {
+            const double *pm = &b.polys[static_cast<size_t>((ma.first * nw + ma.second) * nd)];
+            for (int P = 0; P < nd; P++) {
+                double sr = pm[0] * dk[P].real(), si = pm[0] * dk[P].imag();
+                for (int p = 1; p < nd; p++) {
+                    sr += pm[p] * dk[static_cast<size_t>(p) * nd + P].real();
+                    si += pm[p] * dk[static_cast<size_t>(p) * nd + P].imag();
+                }
+                ur[static_cast<size_t>(P)] = sr;
+                ui[static_cast<size_t>(P)] = si;
+            }
+            for (const auto &nbw : *ws) {
+                const double *pn = &b.polys[static_cast<size_t>((nbw.first * nw + nbw.second) * nd)];
+                double vr = ur[0] * pn[0], vi = ui[0] * pn[0];
+                for (int P = 1; P < nd; P++) {
+                    vr += ur[static_cast<size_t>(P)] * pn[P];
+                    vi += ui[static_cast<size_t>(P)] * pn[P];
+                }
+                cdouble &z = Z[static_cast<size_t>(ma.first * n_basis + nbw.first)];
+                z = cdouble(z.real() - vr, z.imag() - vi);
+            }
+        }
+    }
+}
+
+}  // namespace
+
 BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps, double k) {
     BuriedMedium m;
     // `_ground_refl.eps_tilde`: complex(eps_r, -sigma / (omega * eps0))
@@ -3627,30 +3770,46 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     std::vector<double> obs_a, t_a, W_a, obs_b, t_b, W_b;
     buried_nodes(g, a_idx, q, nd, obs_a, t_a, W_a);
     buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
-    // momwire#1672: a below/below pair the remainder needs more than the base
-    // order for (`below_remainder_pairs`: a buried wire within a segment of
-    // the surface) is raised to its own order in Python; that correction is
-    // not ported, so such a deck declines by name. The scalar rule is the
-    // per-pair rule's maximum, so "any pair listed" is "scalar above base".
-    {
+    // momwire#1672 (`BSplineSolver._below_remainder_pairs`): the below/below
+    // pairs the remainder needs more than the base order for, a buried wire
+    // within a segment of the surface; their raised-order nodes join the
+    // plan (`_raised_nodes`), which sizes the grid over every node it reads.
+    std::vector<int64_t> bbI, bbJ, bbQ;
+    std::vector<double> plan_b(obs_b);
+    if (!b_idx.empty()) {
         std::vector<double> sl, sr;
         for (int64_t s2 : b_idx)
             for (int c = 0; c < 3; c++) {
                 sl.push_back(g.seg_l[3 * static_cast<size_t>(s2) + c]);
                 sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
             }
-        if (!b_idx.empty() && razor::remainder_qp(obs_b.data(), obs_b.size() / 3, sl.data(), sr.data(), b_idx.size(),
-                                                  gz, q, razor::REMAINDER_QP_CAP, razor::REMAINDER_QP_C) > q)
-            throw FrontNotPorted("buried-grazing-remainder");
+        raised_pairs_on(sl, sr, static_cast<int64_t>(b_idx.size()), gz, q, 1.0, 0.0, np, bbI, bbJ, bbQ);
+        if (!bbI.empty()) {
+            std::vector<int64_t> qmax(b_idx.size(), 0);
+            for (size_t t = 0; t < bbI.size(); t++) {
+                qmax[static_cast<size_t>(bbI[t])] = std::max(qmax[static_cast<size_t>(bbI[t])], bbQ[t]);
+                qmax[static_cast<size_t>(bbJ[t])] = std::max(qmax[static_cast<size_t>(bbJ[t])], bbQ[t]);
+            }
+            std::set<int64_t> orders(qmax.begin(), qmax.end());
+            for (int64_t qo : orders) {
+                if (qo <= 0) continue;
+                std::vector<int64_t> segs;
+                for (size_t i = 0; i < b_idx.size(); i++)
+                    if (qmax[i] == qo) segs.push_back(b_idx[i]);
+                std::vector<double> rn, rt, rw;
+                buried_nodes(g, segs, qo, nd, rn, rt, rw);
+                plan_b.insert(plan_b.end(), rn.begin(), rn.end());
+            }
+        }
     }
-    const size_t n_obs = obs_b.size() / 3;
+    const size_t n_obs = plan_b.size() / 3;
     // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
     std::vector<double> d_b(n_obs);
-    for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - obs_b[3 * i + 2];
+    for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - plan_b[3 * i + 2];
     double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
     for (size_t i = 0; i < n_obs; i++)
         for (size_t j = i; j < n_obs; j++) {
-            const double dx = obs_b[3 * i] - obs_b[3 * j], dy = obs_b[3 * i + 1] - obs_b[3 * j + 1];
+            const double dx = plan_b[3 * i] - plan_b[3 * j], dy = plan_b[3 * i + 1] - plan_b[3 * j + 1];
             const double rho2 = dx * dx + dy * dy;
             const double hh = d_b[i] + d_b[j];
             const double hh2 = hh * hh;
@@ -3884,6 +4043,8 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         args.lanes = true;
         mw_fg::assemble(args);
     }
+    if (!bbI.empty())
+        below_pair_correction(Z, g, b, b_idx, bbI, bbJ, bbQ, q, nd, obs_b, t_b, W_b, rem);
     // the crossing serve (`_crossing_fill`, momwire#524 phase 2): the cross
     // block's split fill and the self completions, on a one-radius deck
     if (crossing && !stop_before_cross) {

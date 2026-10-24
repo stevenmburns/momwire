@@ -252,7 +252,16 @@ def _hand_chunked(obs, src, gz):
 
 def _remainder_clouds(s, geom):
     obs = s._testing_paths(geom)[0].reshape(-1, 3)
-    xg, _wg = np.polynomial.legendre.leggauss(s.n_qp_sommerfeld)
+    # the order the below remainder evaluates its sources at, keyed to
+    # grazing height (momwire#1672)
+    q = _razor._remainder_qp(
+        obs,
+        geom["seg_p0"],
+        geom["seg_p0"] + geom["seg_h"][:, None] * geom["seg_t"],
+        float(s.ground_z),
+        s.n_qp_sommerfeld,
+    )
+    xg, _wg = np.polynomial.legendre.leggauss(q)
     tq = 0.5 * (xg + 1.0)
     src = (
         geom["seg_p0"][:, None, :]
