@@ -39,9 +39,10 @@ def _solver(text, basis, monkeypatch):
     def capture(cls, kwargs, **rest):
         built["kwargs"] = dict(kwargs)
         built["rest"] = rest
-        built["solver"] = orig(cls, kwargs, **rest)
+        out = orig(cls, kwargs, **rest)  # (solver, extended_kernel)
+        built["solver"] = out[0]
         built["cls"] = cls
-        return built["solver"]
+        return out
 
     monkeypatch.setattr(_serve, "construct_solver", capture)
     _serve.serve(parse_nec5(text), basis=basis)
@@ -59,7 +60,7 @@ def test_the_cut_sliver_alone_leaves_auto_off(basis, monkeypatch):
     kwargs = dict(built["kwargs"])
     del kwargs["exact_kernel_auto_skip"]
     monkeypatch.undo()
-    again = _serve.construct_solver(built["cls"], kwargs, **built["rest"])
+    again, _ek = _serve.construct_solver(built["cls"], kwargs, **built["rest"])
     assert again.exact_kernel is True
 
 
