@@ -114,12 +114,37 @@ struct SplitElement {
 struct SeamPiece {  // `_Piece`: a run of one GW (cut only at z = 0)
     Int tag;
     long long first_node = 0, last_node = 0;
-    double points[6] = {0, 0, 0, 0, 0, 0};  // start, end
+    // start, end -- or, on a run of a GA arc or GH helix (momwire#1669), its
+    // nodes, one element per edge (`_Piece.bent`)
+    std::vector<double> points = std::vector<double>(6, 0.0);
     double radius = 0;
     bool cut_start = false, cut_end = false;  // an end at a z = 0 cut
     long long n_elements() const { return last_node - first_node; }
-    double length() const;  // `_vec3.norm3(points[1] - points[0])`
+    long long n_points() const { return static_cast<long long>(points.size() / 3); }
+    bool bent() const { return points.size() > 6; }
+    const double *start() const { return points.data(); }
+    const double *end() const { return points.data() + points.size() - 3; }
+    // `_Piece.edge_elements`: the solver's `edge_elements` row
+    std::vector<long long> edge_elements() const;
+    // `_Piece.length`: the edges' lengths summed as numpy sums them
+    double length() const;
+    // `_ground_spec.ground_touch_tol(points)`, and the polyline's lowest and
+    // highest z
+    double touch_tol() const;
+    double zmin() const;
+    double zmax() const;
+    // `_Piece.arclength_at(node)`, a node strictly inside a bent piece
+    double arclength_at(long long node) const;
+    // `_Piece.element_centres()`: metres along the piece to each centre
+    std::vector<double> element_centres() const;
 };
+
+// numpy's `DOUBLE_pairwise_sum` over `n` contiguous float64 values (what
+// `np.sum` / `np.add.reduce` of a 1-D array computes).
+double np_pairwise_sum(const double *a, long long n);
+// `_ground_spec.ground_touch_tol` of an `n`-point polyline (`pts` x, y, z
+// per point): 1e-6 of its length.
+double polyline_touch_tol(const double *pts, long long n);
 
 struct SeamSite {  // `_Site`
     Node at;
@@ -167,6 +192,10 @@ struct SeamCard {
 struct SeamStructure {  // `Structure`: the STRUCTURE SPECIFICATION counts
     long long node_count = 0, wire_element_count = 0, unknown_count = 0;
     bool ground_plane = false;
+    // `_symmetry_counts` (momwire#1669): a GX deck's Reflection symmetry
+    // block -- sections, basis functions per section, non-symmetric ones
+    bool has_symmetry = false;
+    long long symmetry[3] = {0, 0, 0};
 };
 
 // What an engine built for one preparation: its solver's arguments and the

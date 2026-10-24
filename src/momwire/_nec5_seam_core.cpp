@@ -103,6 +103,13 @@ std::string refuse_buried_no_medium(const std::string &tag, double zmin, bool gd
            "card, raise the wire to the surface, or model in free space (GN -1)";
 }
 
+std::string refuse_bent_below(const std::string &tag) {
+    return "wire " + tag +
+           " is a GA arc or GH helix that reaches below the ground plane; this engine serves a "
+           "buried wire, and a wire crossing the plane, as straight GW cards, so write that part "
+           "of it as GW cards (momwire#1669)";
+}
+
 std::string refuse_in_plane_wire(const std::string &tag) {
     return "wire " + tag +
            " lies in the ground plane (both ends at z = 0) - a horizontal wire IN a conducting "
@@ -458,6 +465,9 @@ std::vector<PlaneCrossing> plane_crossings(const Deck &d) {
     std::vector<PlaneCrossing> out;
     if (!has_interface(d)) return out;
     for (const Wire &w : d.wires) {
+        // a bent wire (GA, GH: momwire#1669) is never split at the plane: one
+        // reaching below it is refused by name in `geometry_refusal`
+        if (!w.path.empty()) continue;
         const double tol = touch_tol(w.end1, w.end2);
         const double za = w.end1[2], zb = w.end2[2];
         if ((za < -tol && zb > tol) || (za > tol && zb < -tol)) out.push_back(crossing_of(w, tol));
@@ -487,7 +497,10 @@ std::vector<Span> span_table(const Deck &d) {
             s.tol = touch_tol(a, b);
             out.push_back(s);
         };
-        if (c == nullptr) {
+        if (!w.path.empty()) {
+            // a bent wire's spans are its elements (momwire#1669)
+            for (size_t k = 0; k + 1 < w.path.size(); k++) add(w.path[k].data(), w.path[k + 1].data());
+        } else if (c == nullptr) {
             add(w.end1, w.end2);
         } else {
             add(w.end1, c->point);
@@ -554,6 +567,13 @@ const char *const REFUSE_BURIED_WITH_CONTACT_TAIL =
 // that is not a crossing node.
 std::string geometry_refusal(const Deck &d) {
     if (!has_interface(d)) return "";
+    for (const Wire &w : d.wires) {
+        if (w.path.empty()) continue;
+        double zmin = w.path[0][2];
+        for (const auto &q : w.path) zmin = std::min(zmin, q[2]);
+        if (zmin < -polyline_touch_tol(w.path[0].data(), static_cast<long long>(w.path.size())))
+            return refuse_bent_below(w.tag.str());
+    }
     const bool sommerfeld = d.ground.kind == Ground::sommerfeld;
     const bool gd = d.ground.kind == Ground::mininec;
     const std::vector<Span> spans = span_table(d);
@@ -591,11 +611,9 @@ std::string geometry_refusal(const Deck &d) {
 std::string scope_refusal(const Deck &d, std::string &declined) {
     declined.clear();
     try {
-        // The cards 4nec2 writes (momwire#1669) are read, as Python reads them,
-        // and not yet served here: the hybrid executable hands such a deck to
-        // the launcher, the no-Python one names it.
+        // A GA / GH / GM / GX past the node grid's reach (`kMaxGeometry`):
+        // the reader stopped building it.
         if (d.geometry_too_large) throw Declined{"segment-count"};
-        if (d.carries_4nec2_cards()) throw Declined{"4nec2-cards"};
         if (!d.transmission_lines.empty() && !d.networks.empty() && interleaves_networks(d))
             return REFUSE_MIXED_ORDER;
         if (d.sources.empty()) return REFUSE_NO_EX;
@@ -634,7 +652,95 @@ std::string internal_error_reason(const std::string &error_kind, const std::stri
     return "INTERNAL ERROR IN MOMWIRE ENGINE - " + error_kind + ": " + message;
 }
 
-double SeamPiece::length() const { return norm3_diff(points + 3, points); }
+double np_pairwise_sum(const double *a, long long n) {
+    if (n < 8) {
+        double res = 0.0;
+        for (long long i = 0; i < n; i++) res += a[i];
+        return res;
+    }
+    if (n <= 128) {
+        double r[8];
+        for (int j = 0; j < 8; j++) r[j] = a[j];
+        long long i = 8;
+        for (; i < n - (n % 8); i += 8)
+            for (int j = 0; j < 8; j++) r[j] += a[i + j];
+        double res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; i < n; i++) res += a[i];
+        return res;
+    }
+    long long n2 = n / 2;
+    n2 -= n2 % 8;
+    return np_pairwise_sum(a, n2) + np_pairwise_sum(a + n2, n - n2);
+}
+
+namespace {
+
+// `norm3(points[1:] - points[:-1])` over the first `edges` edges.
+std::vector<double> edge_lengths(const double *pts, long long edges) {
+    std::vector<double> out(static_cast<size_t>(edges));
+    for (long long k = 0; k < edges; k++) out[static_cast<size_t>(k)] = norm3_diff(pts + 3 * (k + 1), pts + 3 * k);
+    return out;
+}
+
+}  // namespace
+
+double polyline_touch_tol(const double *pts, long long n) {
+    const std::vector<double> e = edge_lengths(pts, n - 1);
+    const double length = np_pairwise_sum(e.data(), n - 1);
+    return 1e-6 * std::max(length, 1e-30);
+}
+
+std::vector<long long> SeamPiece::edge_elements() const {
+    if (bent()) return std::vector<long long>(static_cast<size_t>(n_points() - 1), 1);
+    return {n_elements()};
+}
+
+double SeamPiece::length() const {
+    if (!bent()) return norm3_diff(end(), start());
+    const std::vector<double> e = edge_lengths(points.data(), n_points() - 1);
+    return np_pairwise_sum(e.data(), n_points() - 1);
+}
+
+double SeamPiece::touch_tol() const {
+    if (!bent()) return ::mw::nec5::touch_tol(start(), end());
+    return polyline_touch_tol(points.data(), n_points());
+}
+
+double SeamPiece::zmin() const {
+    double z = points[2];
+    for (long long k = 1; k < n_points(); k++) z = std::min(z, points[static_cast<size_t>(3 * k + 2)]);
+    return z;
+}
+
+double SeamPiece::zmax() const {
+    double z = points[2];
+    for (long long k = 1; k < n_points(); k++) z = std::max(z, points[static_cast<size_t>(3 * k + 2)]);
+    return z;
+}
+
+double SeamPiece::arclength_at(long long node) const {
+    const long long k = node - first_node;
+    const std::vector<double> e = edge_lengths(points.data(), k);
+    return np_pairwise_sum(e.data(), k);
+}
+
+std::vector<double> SeamPiece::element_centres() const {
+    std::vector<double> out;
+    if (bent()) {
+        const long long edges = n_points() - 1;
+        const std::vector<double> e = edge_lengths(points.data(), edges);
+        double run = 0.0;  // `np.cumsum`
+        for (long long k = 0; k < edges; k++) {
+            run += e[static_cast<size_t>(k)];
+            out.push_back(run - 0.5 * e[static_cast<size_t>(k)]);
+        }
+        return out;
+    }
+    const long long ne = n_elements();
+    const double step = length() / static_cast<double>(ne);
+    for (long long k = 0; k < ne; k++) out.push_back((static_cast<double>(k) + 0.5) * step);
+    return out;
+}
 
 namespace {
 
@@ -661,6 +767,10 @@ NodeKey node_key(const double *p) {
 
 // `_node_grid`'s node k of a wire: `a + (b - a) * (k / n)`, ends authored.
 void grid_point(const Wire &w, long long n, long long k, double *out) {
+    if (!w.path.empty()) {  // a GA arc or GH helix carries its own nodes (momwire#1669)
+        std::copy(w.path[static_cast<size_t>(k)].begin(), w.path[static_cast<size_t>(k)].end(), out);
+        return;
+    }
     if (k == 0) {
         std::copy(w.end1, w.end1 + 3, out);
         return;
@@ -702,6 +812,9 @@ std::vector<Int> phantom_tags(const Deck &d, double wavelength) {
         bool card = false;
         for (const Int &t : connected) card = card || t == w.tag;
         if (!card) continue;  // an ordinary wire, however small and far
+        // EZNEC's parked node is a GW; a GA or GH is geometry (momwire#1669),
+        // and its end-to-end extent is no measure of its size
+        if (!w.path.empty()) continue;
         const double extent = dist(w.end1, w.end2);
         if (too_close(extent, extent_limit)) throw Declined{"phantom-threshold"};
         if (!(extent < extent_limit)) continue;
@@ -732,8 +845,8 @@ std::vector<Int> phantom_tags(const Deck &d, double wavelength) {
 void junctions_of(SeamMesh &mesh) {
     std::map<NodeKey, std::vector<JunctionEnd>> ends_at;
     for (size_t i = 0; i < mesh.pieces.size(); i++) {
-        ends_at[node_key(mesh.pieces[i].points)].emplace_back(i, End::start);
-        ends_at[node_key(mesh.pieces[i].points + 3)].emplace_back(i, End::end);
+        ends_at[node_key(mesh.pieces[i].start())].emplace_back(i, End::start);
+        ends_at[node_key(mesh.pieces[i].end())].emplace_back(i, End::end);
     }
     for (auto &kv : ends_at) {
         if (kv.second.size() < 2) continue;
@@ -880,6 +993,27 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     p.structure.node_count = static_cast<long long>(degree.size());
     p.structure.wire_element_count = total;
     for (const auto &kv : degree) p.structure.unknown_count += std::max(kv.second - 1, 0LL);
+    if (d.has_symmetry) {
+        // `_symmetry_counts`: `structure_of` on the wires the last GX copied
+        // (`wires[:block_wires]`), counted on their own
+        std::unordered_map<NodeKey, long long, KeyHash> block;
+        const size_t m = std::min(d.symmetry.block_wires, d.wires.size());
+        for (size_t i = 0; i < m; i++)
+            for (long long k = 0; k <= nseg[i]; k++) {
+                grid_point(d.wires[i], nseg[i], k, pt);
+                block[node_key(pt)] += (k == 0 || k == nseg[i]) ? 1 : 2;
+            }
+        if (ground_plane)
+            for (size_t i = 0; i < m; i++)
+                for (const double *e : {d.wires[i].end1, d.wires[i].end2})
+                    if (std::fabs(e[2]) <= NODE_EPS) block[node_key(e)] += 1;
+        long long per = 0;
+        for (const auto &kv : block) per += std::max(kv.second - 1, 0LL);
+        p.structure.has_symmetry = true;
+        p.structure.symmetry[0] = d.symmetry.sections;
+        p.structure.symmetry[1] = per;
+        p.structure.symmetry[2] = p.structure.unknown_count - d.symmetry.sections * per;
+    }
 
     // --- `build_mesh` (the delta-gap spelling, cut only at z = 0) -----------
     // A phantom GW becomes NO piece (momwire#1139): its elements stay in
@@ -1003,8 +1137,17 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             piece.tag = w.tag;
             piece.first_node = r.a;
             piece.last_node = r.b;
-            std::copy(r.start, r.start + 3, piece.points);
-            std::copy(r.end, r.end + 3, piece.points + 3);
+            if (!w.path.empty()) {
+                // a bent wire's run is its nodes (momwire#1669), never split
+                // at the plane
+                piece.points.clear();
+                for (long long k = r.a; k <= r.b; k++)
+                    piece.points.insert(piece.points.end(), w.path[static_cast<size_t>(k)].begin(),
+                                        w.path[static_cast<size_t>(k)].end());
+            } else {
+                std::copy(r.start, r.start + 3, piece.points.begin());
+                std::copy(r.end, r.end + 3, piece.points.begin() + 3);
+            }
             piece.radius = w.radius;
             piece.cut_start = r.cut_start;
             piece.cut_end = r.cut_end;
@@ -1015,7 +1158,9 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                 if (r.a < k && k < r.b) {
                     double pk[3];
                     node_pt(k, pk);
-                    inside_piece[{w.tag, k}] = {index, norm3_diff(pk, mesh.pieces[index].points)};
+                    const SeamPiece &held = mesh.pieces[static_cast<size_t>(index)];
+                    inside_piece[{w.tag, k}] = {
+                        index, held.bent() ? held.arclength_at(k) : norm3_diff(pk, held.start())};
                 }
             if (r.cut_end) {
                 lower_half = index;
@@ -1031,13 +1176,13 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                 SplitElement split;
                 split.lower = lower_half;
                 split.upper = index;
-                const double s0 = norm3_diff(centre, first.points);
+                const double s0 = norm3_diff(centre, first.start());
                 if (s0 <= first.length()) {
                     split.centre_piece = lower_half;
                     split.centre_s = s0;
                 } else {
                     split.centre_piece = index;
-                    split.centre_s = norm3_diff(centre, mesh.pieces[static_cast<size_t>(index)].points);
+                    split.centre_s = norm3_diff(centre, mesh.pieces[static_cast<size_t>(index)].start());
                 }
                 mesh.split_elements[static_cast<long long>(mesh.element_of.size())] = split;
                 mesh.element_of.emplace_back(split.centre_piece, 0);
@@ -1093,7 +1238,7 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                 const End which = where->second.second;
                 const SeamPiece &piece = mesh.pieces[static_cast<size_t>(pi)];
                 const bool start = which == End::start;
-                const double *point = start ? piece.points : piece.points + 3;
+                const double *point = start ? piece.start() : piece.end();
                 const NodeKey key = node_key(point);
                 bool in_junction = false;
                 for (const auto &g : mesh.junctions)
@@ -1110,10 +1255,10 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                     int above = 0, below = 0, plane = 0;
                     for (const JunctionEnd &m : *members) {
                         const SeamPiece &mp = mesh.pieces[static_cast<size_t>(m.first)];
-                        const double tol = touch_tol(mp.points, mp.points + 3);
-                        if (std::max(mp.points[2], mp.points[5]) > tol)
+                        const double tol = mp.touch_tol();
+                        if (mp.zmax() > tol)
                             above++;
-                        else if (std::min(mp.points[2], mp.points[5]) < -tol)
+                        else if (mp.zmin() < -tol)
                             below++;
                         else
                             plane++;

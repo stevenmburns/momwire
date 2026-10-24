@@ -643,6 +643,10 @@ struct NetworkRowC {  // `NetworkRow` / `LineRow`
 
 struct RunDataC {  // `RunData`, for the decks this unit prints
     long long node_count = 0, wire_element_count = 0, unknown_count = 0;
+    // `RunData.symmetry` and `.print_currents` (momwire#1669)
+    bool has_symmetry = false;
+    long long symmetry[3] = {0, 0, 0};
+    bool print_currents = true;
     double frequency_mhz = 0, wavelength_m = 0;
     enum Env { free_space, perfect_ground, finite_ground } environment = free_space;
     double eps_r = 0, sigma = 0, eps_c[2] = {0, 0};
@@ -2364,7 +2368,10 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         std::vector<double> pts(static_cast<std::size_t>(3 * (n + 1)));
         for (long long k = 0; k <= n; k++) {
             double *q = &pts[static_cast<std::size_t>(3 * k)];
-            if (k == 0) {
+            if (!wire.path.empty()) {  // a GA arc or GH helix (momwire#1669)
+                std::copy(wire.path[static_cast<std::size_t>(k)].begin(),
+                          wire.path[static_cast<std::size_t>(k)].end(), q);
+            } else if (k == 0) {
                 std::copy(wire.end1, wire.end1 + 3, q);
             } else if (k == n) {
                 std::copy(wire.end2, wire.end2 + 3, q);
@@ -2390,10 +2397,7 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     std::vector<std::vector<double>> centres_per_piece;
     for (std::size_t w = 0; w < p.mesh.pieces.size(); w++) {
         const SeamPiece &piece = p.mesh.pieces[w];
-        const int64_t ne = piece.n_elements();
-        const double step = piece.length() / static_cast<double>(ne);
-        std::vector<double> centres_s;
-        for (int64_t k = 0; k < ne; k++) centres_s.push_back((static_cast<double>(k) + 0.5) * step);
+        std::vector<double> centres_s = piece.element_centres();
         for (const auto &se : p.mesh.split_elements)
             if (se.second.centre_piece == static_cast<long long>(w)) centres_s.push_back(se.second.centre_s);
         centres_per_piece.push_back(std::move(centres_s));
@@ -2440,6 +2444,9 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     data.node_count = p.structure.node_count;
     data.wire_element_count = p.structure.wire_element_count;
     data.unknown_count = p.structure.unknown_count;
+    data.has_symmetry = p.structure.has_symmetry;
+    std::copy(p.structure.symmetry, p.structure.symmetry + 3, data.symmetry);
+    data.print_currents = !(deck.has_pt && deck.pt == Int(-1));
     data.frequency_mhz = p.frequency_mhz;
     data.wavelength_m = p.wavelength;
     if (p.has_medium) {
@@ -2604,6 +2611,23 @@ std::string card_echo(long long index, const Card &card) {
 
 bool is_terminator(const Card &c) { return c.mnemonic == "EN" || c.mnemonic == "NX"; }
 
+// `_geometry_echo`: one geometry card as the STRUCTURE SPECIFICATION block
+// echoes it, in the licensed engine's layout (momwire#1669).
+Lines geometry_echo(const Card &card) {
+    const std::string &m = card.mnemonic;
+    const Int i0 = card.i(0), i1 = card.i(1);
+    const int reals = m == "GW" ? 7 : m == "GA" ? 4 : (m == "GH" || m == "GM") ? 6 : m == "GS" ? 1 : 0;
+    std::string values;
+    for (int k = 0; k < reals; k++) values += e(card.f(static_cast<std::size_t>(2 + k)), 13, 5);
+    if (m == "GM") {
+        const long long its = static_cast<long long>(card.f(8) + 0.5);  // `int(...)`
+        return {" GM" + d(i0, 5) + d(i1, 5) + values + d(its, 5) + "    0    0    0"};
+    }
+    const std::string line = " " + m + d(i0, 5) + d(i1, 6) + values;
+    if (m != "GH") return {line};
+    return {line + "   0", sp(10) + "TOTAL LENGTH OF WIRE IN THE SPIRAL =" + e(gh_spiral_length(card), 13, 5)};
+}
+
 Lines structure_specification(const Deck &deck, const RunDataC &data) {
     Lines lines = {sp(33) + "- - - STRUCTURE SPECIFICATION - - -",
                    "",
@@ -2613,11 +2637,15 @@ Lines structure_specification(const Deck &deck, const RunDataC &data) {
                    "",
                    " Model definition commands:",
                    ""};
-    for (const Wire &w : deck.wires) {
-        std::string coords;
-        for (double v : {w.end1[0], w.end1[1], w.end1[2], w.end2[0], w.end2[1], w.end2[2], w.radius})
-            coords += e(v, 13, 5);
-        lines.push_back(" GW" + d(w.tag, 5) + d(w.segment_count, 6) + coords);
+    if (!deck.geometry_cards.empty()) {
+        for (const Card &card : deck.geometry_cards) add(lines, geometry_echo(card));
+    } else {
+        for (const Wire &w : deck.wires) {
+            std::string coords;
+            for (double v : {w.end1[0], w.end1[1], w.end1[2], w.end2[0], w.end2[1], w.end2[2], w.radius})
+                coords += e(v, 13, 5);
+            lines.push_back(" GW" + d(w.tag, 5) + d(w.segment_count, 6) + coords);
+        }
     }
     lines.push_back(" GE" + d(deck.ge_flag, 5) + d(deck.ge_second, 5));
     lines.push_back("");
@@ -2635,6 +2663,10 @@ Lines structure_specification(const Deck &deck, const RunDataC &data) {
     lines.push_back(" Number of wire elements :" + d(data.wire_element_count, 6));
     lines.push_back(" Number of patch elements:" + d(0LL, 6));
     lines.push_back(" Number unknowns:" + d(data.unknown_count, 6));
+    if (data.has_symmetry)
+        add(lines, {"", "Reflection symmetry", "Number of symmetric sections:" + d(data.symmetry[0], 5),
+                    "Number of basis functions in a sym. section:" + d(data.symmetry[1], 5),
+                    "Number of non-symmetric basis functions:" + d(data.symmetry[2], 5)});
     return lines;
 }
 
@@ -2958,7 +2990,7 @@ Lines run_sections(const RunDataC &data, bool requests_only = false) {
         for (const PortRowC &r : data.sources) body.push_back(port_row(r));
         blanks(body, 3);
     }
-    if (!data.currents.empty()) {
+    if (!data.currents.empty() && data.print_currents) {
         add(body, {sp(39) + "- - - Wire Currents - - -", "",
                    sp(29) + "Lengths normalized by wavelength (or 2.*pi/CABS(k))", "",
                    "  Elem.  Tag            Coord. of seg. center          Seg.            "

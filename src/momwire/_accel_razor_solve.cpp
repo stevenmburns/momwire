@@ -655,9 +655,12 @@ py::dict seam_kwargs(const mw::nec5::Prepared &p) {
     const mw::razor::FrontInputs &in = mw::nec5::razor_part(p).inputs;
     py::dict kw;
     py::list wires, npe;
+    size_t at = 0;
     for (size_t w = 0; w < in.wire_points.size(); w++) {
-        py::array_t<double> a({static_cast<ptrdiff_t>(2), static_cast<ptrdiff_t>(3)});
-        std::copy(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6, a.mutable_data());
+        const size_t n = static_cast<size_t>(in.wire_points[w]);
+        py::array_t<double> a({static_cast<ptrdiff_t>(n), static_cast<ptrdiff_t>(3)});
+        std::copy(in.points.begin() + at, in.points.begin() + at + 3 * n, a.mutable_data());
+        at += 3 * n;
         wires.append(a);
         py::list c;
         for (int64_t v : in.counts[w].v) c.append(v);
@@ -727,11 +730,20 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
     const mw::nec5::SeamMesh &m = p.mesh;
     py::dict d;
     py::list pieces, junctions, sites, feeds, gaps;
-    for (const auto &pc : m.pieces)
-        pieces.append(py::make_tuple(py::int_(py::str(pc.tag.str())), pc.first_node,
-                                     pc.last_node, pc.radius, pc.cut_start, pc.cut_end,
-                                     py::make_tuple(pc.points[0], pc.points[1], pc.points[2]),
-                                     py::make_tuple(pc.points[3], pc.points[4], pc.points[5])));
+    for (const auto &pc : m.pieces) {
+        // the scalars, then every node of the piece (its two ends, or a bent
+        // piece's nodes: momwire#1669)
+        py::list row;
+        row.append(py::int_(py::str(pc.tag.str())));
+        row.append(pc.first_node);
+        row.append(pc.last_node);
+        row.append(pc.radius);
+        row.append(pc.cut_start);
+        row.append(pc.cut_end);
+        for (long long k = 0; k < pc.n_points(); k++)
+            row.append(py::make_tuple(pc.points[3 * k], pc.points[3 * k + 1], pc.points[3 * k + 2]));
+        pieces.append(py::tuple(row));
+    }
     for (const auto &g : m.junctions) {
         py::list members;
         for (const auto &e : g)
@@ -873,12 +885,15 @@ py::dict bspline_kwargs(const mw::nec5::Prepared &p) {
     const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
     py::dict kw;
     py::list wires, npe, feeds;
+    size_t at = 0;
     for (size_t w = 0; w < in.n_per_edge.size(); w++) {
-        py::array_t<double> a({static_cast<ptrdiff_t>(2), static_cast<ptrdiff_t>(3)});
-        std::copy(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6, a.mutable_data());
+        const size_t n = static_cast<size_t>(in.wire_points[w]);
+        py::array_t<double> a({static_cast<ptrdiff_t>(n), static_cast<ptrdiff_t>(3)});
+        std::copy(in.points.begin() + at, in.points.begin() + at + 3 * n, a.mutable_data());
+        at += 3 * n;
         wires.append(a);
         py::list c;
-        c.append(in.n_per_edge[w]);
+        for (int64_t v : in.n_per_edge[w]) c.append(v);
         npe.append(c);
     }
     kw["wires"] = wires;
@@ -993,9 +1008,12 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
     for (const auto &p : r.prepared) {
         const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
         mw::bspline::WireArgs wa;
+        size_t at = 0;
         for (size_t w = 0; w < in.n_per_edge.size(); w++) {
-            wa.polylines.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
-            wa.n_per_edge.push_back({in.n_per_edge[w]});
+            const size_t n = static_cast<size_t>(3 * in.wire_points[w]);
+            wa.polylines.emplace_back(in.points.begin() + at, in.points.begin() + at + n);
+            at += n;
+            wa.n_per_edge.push_back(in.n_per_edge[w]);
         }
         wa.radius = in.radius;
         wa.radius_per_wire = in.radius_per_wire;

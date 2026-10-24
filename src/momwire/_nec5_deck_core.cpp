@@ -624,7 +624,6 @@ double vector_norm(int n, double *vec, double max, bool found_nan) {
     return h / scale;
 }
 
-// `math.dist(p, q)` of two points
 double dist3(const double *p, const double *q) {
     double diffs[3];
     double max = 0.0;
@@ -669,6 +668,26 @@ double to_double(const Int &n) {
 const long long kMaxGeometry = 10000000;
 
 using Point3 = std::array<double, 3>;
+
+// `deck._nec4.helix_vertices(card)` for a GH of `n` segments: NEC-4.2's
+// helix (turns, length, two helix radii; a log spiral between them).
+std::vector<Point3> helix_points(const Card &card, long long n) {
+    double turns = card.f(2), zlen = card.f(3), r1 = card.f(4), r2 = card.f(5);
+    double dn = static_cast<double>(n);
+    double q = py_float_pow(r2 / r1, 1.0 / dn);
+    double step = 2.0 * kPi * turns / dn;
+    double qn = py_float_pow(q, dn);
+    std::vector<Point3> v;
+    for (long long k = 0; k <= n; k++) {
+        double dk = static_cast<double>(k);
+        double qk = py_float_pow(q, dk);
+        double rho = r1 * qk;
+        double z = q == 1.0 ? zlen * dk / dn : zlen * (1.0 - qk) / (1.0 - qn);
+        double a = dk * step;
+        v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
+    }
+    return v;
+}
 
 struct Parser {
     std::vector<std::string> comments;  // UTF-8
@@ -906,22 +925,7 @@ struct Parser {
                        ", F5 and F6) tapers its wire along the helix; this engine's nec5 dialect "
                        "gives a wire one radius, so it serves a GH whose two wire radii are equal");
         if (too_large(n_seg)) return;
-        const long long n = n_seg.i64();
-        double zlen = card.f(3);
-        double dn = static_cast<double>(n);
-        double q = py_float_pow(r2 / r1, 1.0 / dn);
-        double step = 2.0 * kPi * turns / dn;
-        double qn = py_float_pow(q, dn);
-        std::vector<Point3> v;
-        for (long long k = 0; k <= n; k++) {
-            double dk = static_cast<double>(k);
-            double qk = py_float_pow(q, dk);
-            double rho = r1 * qk;
-            double z = q == 1.0 ? zlen * dk / dn : zlen * (1.0 - qk) / (1.0 - qn);
-            double a = dk * step;
-            v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
-        }
-        add_wire(bent(card.i(0), card.i(1), v, w1), card);
+        add_wire(bent(card.i(0), card.i(1), helix_points(card, n_seg.i64()), w1), card);
     }
 
     // `_nec5._Nec5Parser._moved`: one wire through a point map, retagged.
@@ -2639,11 +2643,26 @@ Int Card::i(std::size_t k) const {
     return py_round(v);
 }
 
-bool Deck::carries_4nec2_cards() const {
-    if (has_pt) return true;
-    for (const Card &c : geometry_cards)
-        if (c.mnemonic != "GW") return true;
-    return false;
+double gh_spiral_length(const Card &card) {
+    // `sum(math.dist(a, b) for a, b in zip(nodes[:-1], nodes[1:]))`: CPython's
+    // float sum from the int 0 (Neumaier), over `math.dist`'s chords
+    const std::vector<Point3> v = helix_points(card, card.i(1).i64());
+    double f = 0.0, c = 0.0;
+    for (std::size_t k = 0; k + 1 < v.size(); k++) {
+        const double x = dist3(v[k].data(), v[k + 1].data());
+        if (k == 0) {
+            f = 0.0 + x;
+            continue;
+        }
+        const double t = f + x;
+        if (std::fabs(f) >= std::fabs(x))
+            c += (f - t) + x;
+        else
+            c += (x - t) + f;
+        f = t;
+    }
+    if (c != 0.0 && std::isfinite(c)) f += c;
+    return f;
 }
 
 std::string Card::text() const { return raw.size() > 2 ? raw.substr(2) : std::string(); }

@@ -57,8 +57,10 @@ void BSplineSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_gr
     auto part = std::make_shared<BSplinePrepared>();
     BSplineFrontInputs &in = part->inputs;
     for (const SeamPiece &piece : mesh.pieces) {
-        in.points.insert(in.points.end(), piece.points, piece.points + 6);
-        in.n_per_edge.push_back(piece.n_elements());
+        in.points.insert(in.points.end(), piece.points.begin(), piece.points.end());
+        in.wire_points.push_back(piece.n_points());
+        const std::vector<long long> edges = piece.edge_elements();
+        in.n_per_edge.emplace_back(edges.begin(), edges.end());
     }
     for (long long s : mesh.feeds)
         in.feeds.push_back({mesh.sites[static_cast<size_t>(s)].piece, mesh.sites[static_cast<size_t>(s)].arclength});
@@ -85,8 +87,7 @@ void BSplineSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_gr
     long long below = 0;
     if (has_ground)
         for (const SeamPiece &piece : mesh.pieces)
-            if (std::min(piece.points[2], piece.points[5]) <
-                0.0 - ground_touch_tol(piece.points, piece.points + 3))
+            if (piece.zmin() < 0.0 - piece.touch_tol())
                 below++;
     in.extended_kernel = !(below > 0 && below == static_cast<long long>(mesh.pieces.size()));
     if (!d.wire_conductivity.empty()) {
@@ -131,9 +132,13 @@ namespace {
 // The seam's arguments as the constructor's wire-indexed ones.
 bspline::WireArgs wire_args(const BSplineFrontInputs &in) {
     bspline::WireArgs wa;
+    size_t at = 0;
     for (size_t w = 0; w < in.n_per_edge.size(); w++) {
-        wa.polylines.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
-        wa.n_per_edge.push_back({in.n_per_edge[w]});
+        const size_t n = static_cast<size_t>(3 * in.wire_points[w]);
+        wa.polylines.emplace_back(in.points.begin() + at, in.points.begin() + at + n);
+        at += n;
+        std::vector<int64_t> row(in.n_per_edge[w].begin(), in.n_per_edge[w].end());
+        wa.n_per_edge.push_back(row);
     }
     wa.radius = in.radius;
     wa.radius_per_wire = in.radius_per_wire;
