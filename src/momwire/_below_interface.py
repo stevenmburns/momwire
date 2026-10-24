@@ -1125,25 +1125,40 @@ def plan_buried(
     # raised-order nodes join the plan, which sizes the grid on the union of
     # every node rule the fill will query.
     bb_pairs = None
+    q_base = 0
     if below_pairs_fn is not None and b_idx.size:
         q_base = obs_b.shape[0] // b_idx.size
         bb_pairs = below_pairs_fn(
             geom["seg_l"][b_idx], geom["seg_r"][b_idx], float(ground_z), q_base
         )
-        if bb_pairs[0].size:
-            plan_b = np.vstack([plan_b, _raised_nodes(geom, b_idx, bb_pairs)])
-        else:
+        if not bb_pairs[0].size:
             bb_pairs = None
 
-    plan = serve_plan_fn(
-        geom,
-        a_idx,
-        plan_a,
-        plan_b,
-        k_p,
-        k_m,
-        crossing=crossing_plan,
-    )
+    # A raised node sits closer to its segment's ends than any base node, so
+    # beside a crossing node (depth 0 at the shared end) the raised pairs can
+    # reach under the grid's grazing floor and refuse a deck the base order
+    # served. They are raised only as far as the grid serves: each refusal of
+    # the floor halves every listed order, and a list that halves away to the
+    # base is the base fill exactly -- the deck serves, or refuses, as before.
+    while True:
+        pb = plan_b
+        if bb_pairs is not None:
+            pb = np.vstack([plan_b, _raised_nodes(geom, b_idx, bb_pairs)])
+        try:
+            plan = serve_plan_fn(
+                geom,
+                a_idx,
+                plan_a,
+                pb,
+                k_p,
+                k_m,
+                crossing=crossing_plan,
+            )
+            break
+        except ValueError as exc:
+            if bb_pairs is None or not _is_grazing_refusal(exc):
+                raise
+            bb_pairs = _halved(bb_pairs, q_base)
     return BuriedPlan(
         below,
         a_idx,
@@ -1171,6 +1186,27 @@ def plan_buried(
         plan,
         bb_pairs,
     )
+
+
+def _is_grazing_refusal(exc):
+    """Whether `exc` is a plan's grazing-floor refusal (below/below, or the
+    cross block's), the refusals raised nodes can bring on."""
+    prefixes = tuple(
+        t.split("{", 1)[0]
+        for t in (BURIED_GRAZING_REFUSAL, BURIED_CROSS_GRAZING_REFUSAL)
+    )
+    return str(exc).startswith(prefixes)
+
+
+def _halved(pairs, base):
+    """Every listed order halved; the pairs that reach the base order drop
+    out, and an empty list is None (the base fill)."""
+    I, J, Q = pairs
+    Q = Q // 2
+    keep = Q > base
+    if not np.any(keep):
+        return None
+    return I[keep], J[keep], Q[keep]
 
 
 def _raised_nodes(geom, b_idx, pairs):
