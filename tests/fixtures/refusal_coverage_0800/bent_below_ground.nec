@@ -1,0 +1,10 @@
+CM A GA arc reaching below a Sommerfeld ground (momwire#1669): Python refuses
+CM it by name; both C++ seams decline the deck first (4nec2-cards).
+CE
+GA 1 8 2 -30 200 1e-3
+GE 1
+GN 2 0 0 0 13 0.005
+EX 0 1 3 0 1 0
+FR 0 1 0 0 14 0
+XQ
+EN

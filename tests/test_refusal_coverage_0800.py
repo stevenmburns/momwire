@@ -94,6 +94,10 @@ ALLOWED = {
     "_crossing_site: {},{} addresses a node where several wires meet IN": (
         "same-sentence:_site_for: {},{} addresses a node where several wires meet IN"
     ),
+    # -- a deck carrying the cards 4nec2 writes (momwire#1669) is declined by
+    # both C++ seams before any refusal: the named deck proves the decline on
+    # both, and that Python prints the sentence for it
+    "_REFUSE_BENT_BELOW": "declined:bent_below_ground.nec",
 }
 
 # The raise sites that relay a sentence made elsewhere rather than write one.
@@ -280,6 +284,21 @@ def test_every_allowance_holds(printed):
             f"{key} is ALLOWED as unreachable, but a fixture reaches it: "
             "drop the allowance"
         )
+        if why.startswith("declined:"):
+            from momwire import _accel
+            from momwire.eznec._shell import render
+
+            deck = OWN / why.split(":", 1)[1]
+            for seam in SEAMS.values():
+                answer = getattr(_accel.acc, seam)(deck.read_bytes())
+                assert answer["route"] == "declined", (deck, seam, answer["route"])
+                assert answer["message"] == "4nec2-cards", (
+                    deck,
+                    seam,
+                    answer["message"],
+                )
+            assert re.search(regex, render(deck.read_text()), re.S), deck
+            continue
         if why.startswith("reader:"):
             deck = OWN / why.split(":", 1)[1]
             reached = [

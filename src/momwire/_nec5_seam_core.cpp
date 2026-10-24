@@ -591,6 +591,11 @@ std::string geometry_refusal(const Deck &d) {
 std::string scope_refusal(const Deck &d, std::string &declined) {
     declined.clear();
     try {
+        // The cards 4nec2 writes (momwire#1669) are read, as Python reads them,
+        // and not yet served here: the hybrid executable hands such a deck to
+        // the launcher, the no-Python one names it.
+        if (d.geometry_too_large) throw Declined{"segment-count"};
+        if (d.carries_4nec2_cards()) throw Declined{"4nec2-cards"};
         if (!d.transmission_lines.empty() && !d.networks.empty() && interleaves_networks(d))
             return REFUSE_MIXED_ORDER;
         if (d.sources.empty()) return REFUSE_NO_EX;
