@@ -323,4 +323,34 @@ void moment_reduce(const std::complex<double> *proj, const double *W,
     }
 }
 
+void moment_reduce_ragged(const std::complex<double> *proj, const double *W,
+                          std::ptrdiff_t P, std::ptrdiff_t N, const int64_t *off,
+                          std::ptrdiff_t M, std::complex<double> *out) {
+    typedef std::complex<double> cd;
+    const std::ptrdiff_t T = static_cast<std::ptrdiff_t>(off[N]);
+    #pragma omp parallel for schedule(static)
+    for (std::ptrdiff_t o = 0; o < M; ++o) {
+        const cd *row = proj + o * T;
+        cd *orow = out + o * N * P;
+        for (std::ptrdiff_t j = 0; j < N; ++j) {
+            const std::ptrdiff_t a = static_cast<std::ptrdiff_t>(off[j]);
+            const std::ptrdiff_t q = static_cast<std::ptrdiff_t>(off[j + 1]) - a;
+            const cd *pn = row + a;
+            for (std::ptrdiff_t m = 0; m < P; ++m) {
+                const double *wn = W + m * T + a;
+                double are = 0.0, aim = 0.0;
+                for (std::ptrdiff_t k = 0; k < q; ++k) {
+                    const double pr = pn[k].real(), pi = pn[k].imag();
+                    const double w = wn[k], z = 0.0;
+                    const double re = pr * w - pi * z;
+                    const double im = pr * z + pi * w;
+                    are = re + are;
+                    aim = im + aim;
+                }
+                orow[j * P + m] = cd(are, aim);
+            }
+        }
+    }
+}
+
 }  // namespace somm_core

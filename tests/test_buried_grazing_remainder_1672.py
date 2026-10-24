@@ -100,3 +100,86 @@ def test_a_halved_list_reaches_the_base_fill():
     I, J, Q = _below_interface._halved(pairs, 6)
     assert I.tolist() == [0] and Q.tolist() == [96]
     assert _below_interface._halved((I, J, np.array([12])), 6) is None
+
+
+def _shallow_orders(name):
+    """The per-segment remainder orders razor fills the deck's buried part
+    at (momwire#1688), captured from the fill's own call."""
+    from momwire import razor as rz
+
+    seen = []
+    orig = rz._remainder_qp_per_source
+
+    def spy(*a, **k):
+        out = orig(*a, **k)
+        seen.append(np.asarray(out).copy())
+        return out
+
+    rz._remainder_qp_per_source = spy
+    try:
+        render(_deck(name), basis="razor-2p")
+    finally:
+        rz._remainder_qp_per_source = orig
+    return seen
+
+
+def test_razor_fills_each_buried_segment_at_its_own_order():
+    """momwire#1688: one hub segment asking a high order no longer charges
+    every segment of the fill. On shallow_s40 each radial's orders fall from
+    the hub outward (101 down to 6), so the fill evaluates well under half
+    the nodes the single highest order would have cost."""
+    from momwire import razor as rz
+
+    seen = _shallow_orders("shallow_s40")
+    assert seen, "the per-segment rule never ran"
+    q = seen[-1]
+    assert len(set(q.tolist())) > 1, q
+    assert rz._REMAINDER_QP_CAP >= int(q.max()) > 3
+    assert int(q.sum()) < 0.5 * q.size * int(q.max()), q
+
+
+def test_the_per_source_rule_peaks_at_the_scalar_rule():
+    from momwire import _quadrature as qd
+
+    rng = np.random.default_rng(1688)
+    for _ in range(200):
+        n, m = int(rng.integers(1, 12)), int(rng.integers(1, 30))
+        sl = rng.normal(size=(n, 3)) * 2
+        sr = sl + rng.normal(size=(n, 3))
+        sl[:, 2] -= rng.uniform(0, 0.3, n)
+        sr[:, 2] -= rng.uniform(0, 0.3, n)
+        obs = rng.normal(size=(m, 3)) * 2
+        obs[:, 2] = -np.abs(obs[:, 2]) * 0.1
+        scalar = qd.remainder_qp(obs, sl, sr, 0.0, 3, 192, 1.0)
+        per = qd.remainder_qp_per_source(obs, sl, sr, 0.0, 3, 192, 1.0)
+        assert scalar == int(per.max())
+
+
+def test_ragged_windows_are_each_segment_at_its_own_order():
+    """`RemainderBelow.field_windows` at per-segment orders gives every
+    segment the moments the uniform rule gives it at that segment's order,
+    bit for bit."""
+    from momwire import _potential_ground as pg
+
+    seen = {}
+    orig = pg.RemainderBelow.field_windows
+
+    def spy(self, observers, sources=None, **kw):
+        seen["args"] = (self, observers, sources, kw)
+        return orig(self, observers, sources, **kw)
+
+    pg.RemainderBelow.field_windows = spy
+    try:
+        render(_deck("shallow_s40"), basis="razor-2p")
+    finally:
+        pg.RemainderBelow.field_windows = orig
+    rem, observers, sources, kw = seen["args"]
+    orders = np.asarray(kw["n_qp"])
+    assert len(set(orders.tolist())) > 1
+    n_obs = min(8, observers[0].shape[0])
+    ragged = orig(rem, observers, sources, **kw)(0, n_obs)
+    for q in sorted(set(orders.tolist())):
+        idx = np.flatnonzero(orders == q)
+        sub = tuple(a[idx] for a in sources)
+        alone = orig(rem, observers, sub, **{**kw, "n_qp": int(q)})(0, n_obs)
+        assert np.array_equal(ragged[:, idx, :], alone), q

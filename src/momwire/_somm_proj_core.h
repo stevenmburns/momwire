@@ -3,6 +3,7 @@
 // `remainder_field_proj_batch` and `remainder_moment_reduce`, which bind them.
 #pragma once
 
+#include <cstdint>
 #include "_accel_somm_proj_inline.h"
 
 namespace somm_core {
@@ -35,5 +36,12 @@ unsigned long long proj_lane_pairs();
 void moment_reduce(const std::complex<double> *proj, const double *W,
                    std::ptrdiff_t P, std::ptrdiff_t N, std::ptrdiff_t q,
                    std::ptrdiff_t M, std::complex<double> *out);
+
+// `moment_reduce` over a ragged node layout (momwire#1688): source j's nodes
+// are [off[j], off[j + 1]) of each projection row, W is (P, off[N]), and
+// each (o, j, m) is the same ascending-node sum `moment_reduce` takes.
+void moment_reduce_ragged(const std::complex<double> *proj, const double *W,
+                          std::ptrdiff_t P, std::ptrdiff_t N, const int64_t *off,
+                          std::ptrdiff_t M, std::complex<double> *out);
 
 }  // namespace somm_core

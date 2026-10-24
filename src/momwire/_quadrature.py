@@ -185,6 +185,59 @@ def remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap, c):
     return int(min(max(int(base), need), int(cap)))
 
 
+def remainder_qp_per_source(obs_pts, src_l, src_r, ground_z, base, cap, c):
+    """`remainder_qp` per SOURCE segment: an int array, one order each.
+
+    momwire#1688. The scalar rule is one order for the whole fill, so on a
+    buried screen whose radials leave a hub at the surface four hub segments
+    asked for 103 and all 602 segments paid it (62 006 remainder nodes where
+    2 622 were needed). This is the same geometry, the same broadside-only
+    guard and the same `ceil(c · len / R_min)` clipped to `[base, cap]`, with
+    `R_min` taken over every observer against ONE source segment's mirror,
+    so by construction `remainder_qp` is this array's maximum (`ceil` and
+    the clip are monotone). A deck with nothing grazing answers `base` for
+    every source, which the fill takes as the uniform rule it always was."""
+    src_l = np.asarray(src_l, dtype=float)
+    src_r = np.asarray(src_r, dtype=float)
+    obs = np.asarray(obs_pts, dtype=float)
+    n = src_l.shape[0]
+    out = np.full(n, int(base), dtype=np.int64)
+    if n == 0 or obs.size == 0:
+        return out
+    mir_l, mir_r = src_l.copy(), src_r.copy()
+    mir_l[:, 2] = 2.0 * ground_z - src_l[:, 2]
+    mir_r[:, 2] = 2.0 * ground_z - src_r[:, 2]
+    d = mir_r - mir_l
+    dd = np.einsum("ij,ij->i", d, d)
+    lengths = norm3(src_r - src_l)
+    # The scalar rule's O(N) short-circuit, per the same bound.
+    h_min = min(
+        float(np.min(src_l[:, 2] - ground_z)), float(np.min(src_r[:, 2] - ground_z))
+    )
+    h_min = min(h_min, float(np.min(obs[:, 2] - ground_z)))
+    if h_min > 0.0:
+        bound = float(np.max(lengths)) / (2.0 * h_min)
+        if int(np.ceil(c * bound)) <= int(base):
+            return out
+    for j in range(n):
+        if lengths[j] <= 0.0 or dd[j] <= 0.0:
+            continue
+        ap = obs - mir_l[j]
+        t_raw = ap @ d[j] / dd[j]
+        interior = (t_raw > 0.0) & (t_raw < 1.0)
+        if not interior.any():
+            continue
+        t = np.clip(t_raw, 0.0, 1.0)
+        closest = mir_l[j] + t[:, None] * d[j]
+        r_min = float(np.min(norm3(obs[interior] - closest[interior])))
+        if r_min <= 0.0:
+            out[j] = int(cap)
+            continue
+        need = int(np.ceil(c * (float(lengths[j]) / r_min)))
+        out[j] = min(max(int(base), need), int(cap))
+    return out
+
+
 # Which route `remainder_qp_pairs` took, per call ("cpp") and per source the
 # scan left to the numpy body ("unsure"). Read by the tests; never reset here.
 _QP_SCAN_ROUTES = {"cpp": 0, "unsure": 0}

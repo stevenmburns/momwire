@@ -1774,6 +1774,61 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     assert counts.get("runs", 0) >= 29, counts
 
 
+def _razor_printouts(driver, decks, tmp_path):
+    """`({seam: n, "runs": n}, {decline reason: n})`: each deck through the
+    C++ razor chain, its printout and every run's arrays checked byte for byte
+    against `_shell.render`'s, at one thread."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+    os.environ.update(_ONE_THREAD)
+    try:
+        answers = pc.run_driver(
+            driver[0]["nec5_razor_printout_driver"], decks, tmp_path, arrays=True
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    counts, reasons = {}, {}
+    with _one_thread():
+        for path, ans in zip(decks, answers, strict=True):
+            if ans["route"] == "declined":
+                reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
+                continue
+            counts[ans["seam"]] = counts.get(ans["seam"], 0) + 1
+            py_runs = []
+            text = path.read_bytes().decode("latin-1")
+            ref = pc.python_printout(text, runs=py_runs)
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
+            assert len(ans["runs"]) == len(py_runs), path
+            for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
+                for name in pc.ARRAYS:
+                    mine = np.ascontiguousarray(py[name], dtype=np.complex128)
+                    assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
+                counts["runs"] = counts.get("runs", 0) + 1
+    return counts, reasons
+
+
+def test_the_grazing_buried_decks_print_as_python_on_razor(driver, tmp_path):
+    """momwire#1688: razor's below remainder at per-segment orders -- the
+    ragged node layout and `moment_reduce_ragged` in C++ -- byte for byte as
+    `_shell.render` prints the #1672 grazing decks, every run's arrays
+    included. The shallow decks' segments really do ask different orders
+    (`test_buried_grazing_remainder_1672.py` pins that), so the ragged route
+    is the one compared, not the uniform one."""
+    decks = sorted(GRAZING_1672_DECKS.glob("*.nec"))
+    assert len(decks) == 3
+    counts, reasons = _razor_printouts(driver, decks, tmp_path)
+    assert not reasons, reasons
+    assert counts.get("served", 0) == 3 and counts.get("runs", 0) >= 3, counts
+
+
 BSPLINE_CROSSING_DECKS = [
     ROOT / "tests" / "fixtures" / rel
     for rel in (

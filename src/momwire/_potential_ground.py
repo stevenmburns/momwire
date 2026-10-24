@@ -694,18 +694,54 @@ class RemainderBelow(Remainder):
         )
 
         n_src = seg_l.shape[0]
-        xg, wg = leggauss(n_qp)
-        tq = 0.5 * (xg + 1.0)
-        span = seg_r - seg_l
-        nodes = seg_l[:, None, :] + tq[None, :, None] * span[:, None, :]
-        h = norm3(span)
-        u_phys = h[:, None] * tq[None, :]
-        w_node = 0.5 * h[:, None] * wg[None, :]
-        W = w_node[None] * np.float_power(
-            u_phys[None], np.arange(n_moment)[:, None, None]
-        )
-        src = nodes.reshape(n_src * n_qp, 3)
-        t_src = np.repeat(src_t, n_qp, axis=0)
+        # `n_qp` is one order for every segment, or (momwire#1688) one per
+        # segment. Segments of one order form a GROUP laid out exactly as
+        # the uniform rule lays the whole set, so each group's moments are
+        # that rule's reduction over its own columns; a per-segment array
+        # with one value is the uniform rule, bit for bit.
+        orders = np.asarray(n_qp, dtype=np.int64).reshape(-1)
+        if orders.size == 1 or bool(np.all(orders == orders[0])):
+            groups = [(int(orders[0]), None)]
+        else:
+            if orders.size != n_src:
+                raise ValueError(
+                    f"field_windows: {orders.size} orders for {n_src} segments"
+                )
+            groups = [(int(q), np.flatnonzero(orders == q)) for q in np.unique(orders)]
+        span_all = seg_r - seg_l
+        h_all = norm3(span_all)
+        src_parts, t_parts, layout = [], [], []
+        col = 0
+        for q, idx in groups:
+            xg, wg = leggauss(q)
+            tq = 0.5 * (xg + 1.0)
+            sl = seg_l if idx is None else seg_l[idx]
+            span = span_all if idx is None else span_all[idx]
+            h = h_all if idx is None else h_all[idx]
+            st = src_t if idx is None else src_t[idx]
+            nodes = sl[:, None, :] + tq[None, :, None] * span[:, None, :]
+            u_phys = h[:, None] * tq[None, :]
+            w_node = 0.5 * h[:, None] * wg[None, :]
+            W = w_node[None] * np.float_power(
+                u_phys[None], np.arange(n_moment)[:, None, None]
+            )
+            m = sl.shape[0]
+            src_parts.append(nodes.reshape(m * q, 3))
+            t_parts.append(np.repeat(st, q, axis=0))
+            layout.append((idx, col, col + m * q, W))
+            col += m * q
+        if len(groups) == 1:
+            src, t_src = src_parts[0], t_parts[0]
+        else:
+            src, t_src = np.concatenate(src_parts), np.concatenate(t_parts)
+
+        def _moments(proj):
+            if len(layout) == 1:
+                return _arc_moments(proj, layout[0][3])
+            mom = np.empty((proj.shape[0], n_src, n_moment), dtype=proj.dtype)
+            for idx, c0, c1, W in layout:
+                mom[:, idx, :] = _arc_moments(np.ascontiguousarray(proj[:, c0:c1]), W)
+            return mom
 
         def field_moments(i0, i1, distinct=False):
             # `distinct`: answer `(moments of the distinct rows, each row's
@@ -717,7 +753,7 @@ class RemainderBelow(Remainder):
             proj = _sommerfeld_below.remainder_field_proj_below(
                 o_p, o_t, src, t_src, gz, k_p, k_m, grid, solver._cancel_flag
             )
-            mom = _arc_moments(proj, W)
+            mom = _moments(proj)
             if distinct:
                 return mom, inv
             return mom if first is None else mom[inv]
