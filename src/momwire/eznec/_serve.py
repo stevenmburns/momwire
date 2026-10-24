@@ -1194,6 +1194,9 @@ def _plane_crossings(deck: Nec5Deck) -> dict[int, _PlaneCrossing]:
         return crossings
     za, zb = ends[:, 0, 2], ends[:, 1, 2]
     across = ((za < -tol) & (zb > tol)) | ((za > tol) & (zb < -tol))
+    # A bent wire (GA, GH: momwire#1669) is never split at the plane: one that
+    # reaches below it is refused by name in `_geometry_refusal`.
+    across &= np.array([not w.path for w in deck.wires], dtype=bool)
     # momwire#1420: the per-card test above is one array expression; only a
     # card that does cross (rare: a radial field crossing the plane has one
     # per radial, an elevated antenna none) walks its nodes in Python.
@@ -1262,12 +1265,19 @@ def _span_table(deck: Nec5Deck) -> tuple[list[int], np.ndarray, np.ndarray]:
     bit: a half's ends are the card's end and the crossing point, exactly as
     ``np.array([pl[0], x])`` spells them."""
     crossings = _plane_crossings(deck)
-    if not crossings:
+    bent = any(wire.path for wire in deck.wires)
+    if not crossings and not bent:
         ends, tol = _card_ends(deck)
         return [wire.tag for wire in deck.wires], ends, tol
     tags: list[int] = []
     rows: list[tuple] = []
     for wire in deck.wires:
+        if wire.path:
+            # A bent wire's spans are its elements (momwire#1669): each is the
+            # straight conductor every rule here is written for.
+            tags += [wire.tag] * wire.segment_count
+            rows += list(zip(wire.path[:-1], wire.path[1:], strict=True))
+            continue
         crossing = crossings.get(wire.tag)
         if crossing is None:
             tags.append(wire.tag)
@@ -1314,6 +1324,13 @@ def _has_buried_wire(deck: Nec5Deck) -> bool:
     return bool(np.any(np.minimum(ends[:, 0, 2], ends[:, 1, 2]) < -tol))
 
 
+_REFUSE_BENT_BELOW = (
+    "wire {tag} is a GA arc or GH helix that reaches below the ground plane; "
+    "this engine serves a buried wire, and a wire crossing the plane, as "
+    "straight GW cards, so write that part of it as GW cards (momwire#1669)"
+)
+
+
 def _geometry_refusal(deck: Nec5Deck) -> str | None:
     """``None`` when every wire can stand over this deck's ground, the
     sentence when one cannot.
@@ -1346,6 +1363,11 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
     """
     if not _has_interface(deck):
         return None
+    for wire in deck.wires:
+        if wire.path:
+            path = np.array(wire.path, dtype=float)
+            if float(path[:, 2].min()) < -_ground_spec.ground_touch_tol(path):
+                return _REFUSE_BENT_BELOW.format(tag=wire.tag)
     sommerfeld = isinstance(deck.ground, Nec5SommerfeldGround)
     card = "GD" if isinstance(deck.ground, Nec5MininecGround) else "GN 1"
     tags, ends, tol = _span_table(deck)
@@ -1466,7 +1488,10 @@ def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | 
         return None
     verdict = near_point_refusal(
         _grid_points(request),
-        [np.array([wire.end1, wire.end2], dtype=float) for wire in deck.wires],
+        [
+            np.array(wire.path or (wire.end1, wire.end2), dtype=float)
+            for wire in deck.wires
+        ],
         0.0,
         below=isinstance(deck.ground, Nec5MininecGround),
     )
@@ -1705,6 +1730,9 @@ def _node_grid(wire: Nec5Wire) -> np.ndarray:
     correctly rounded, exactly as the Python division is -- so the same
     bits, at a fraction of the per-node array overhead.
     """
+    if wire.path:
+        # A GA arc or GH helix (momwire#1669) carries its own nodes.
+        return np.array(wire.path, dtype=float)
     n = wire.segment_count
     a = np.asarray(wire.end1, dtype=float)
     b = np.asarray(wire.end2, dtype=float)
@@ -1808,6 +1836,26 @@ class Structure:
         return 1 + sum(w.segment_count for w in self.wires[: self.index_of(tag)])
 
 
+def _symmetry_counts(
+    deck: Nec5Deck, structure: Structure
+) -> tuple[int, int, int] | None:
+    """The ``Reflection symmetry`` block's three numbers (momwire#1669): the
+    last GX's sections, the unknowns of the wires it copied counted on their
+    own, and whatever the whole structure has beyond ``sections`` times that
+    -- the rule :class:`~momwire.deck._nec5.Nec5Symmetry` records, which
+    reproduces every probe printout (y1-y16, z1-z11, g1, g3)."""
+    symmetry = deck.symmetry
+    if symmetry is None:
+        return None
+    block = structure_of(replace(deck, wires=deck.wires[: symmetry.block_wires]))
+    per_section = block.unknown_count
+    return (
+        symmetry.sections,
+        per_section,
+        structure.unknown_count - symmetry.sections * per_section,
+    )
+
+
 def structure_of(deck: Nec5Deck) -> Structure:
     """Count a deck's nodes, elements and unknowns."""
     nodes = [_wire_nodes(w) for w in deck.wires]
@@ -1901,7 +1949,10 @@ def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
     if not connected:
         return frozenset()
     tags = _phantom_tags_geometric(deck, wavelength)
-    return frozenset(tag for tag in tags if tag in connected)
+    # EZNEC's parked node is a GW; a GA or GH is geometry (momwire#1669), and
+    # its end-to-end extent is no measure of its size (a closed arc has none).
+    bent = {wire.tag for wire in deck.wires if wire.path}
+    return frozenset(tag for tag in tags if tag in connected and tag not in bent)
 
 
 def _phantom_tags_geometric(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
@@ -2012,8 +2063,36 @@ class _Piece:
         return self.last_node - self.first_node
 
     @property
+    def bent(self) -> bool:
+        """A run of a GA arc or GH helix (momwire#1669): ``points`` is its
+        nodes, one element per edge, rather than one straight edge."""
+        return len(self.points) > 2
+
+    @property
+    def edge_elements(self) -> list[int]:
+        """The solver's ``edge_elements`` row for this piece."""
+        return [1] * (len(self.points) - 1) if self.bent else [self.n_elements]
+
+    @property
     def length(self) -> float:
+        if self.bent:
+            return float(np.sum(norm3(self.points[1:] - self.points[:-1])))
         return float(norm3(self.points[1] - self.points[0]))
+
+    def arclength_at(self, node: int) -> float:
+        """Metres along the piece to deck node ``node`` (inside it)."""
+        if self.bent:
+            k = node - self.first_node
+            return float(np.sum(norm3(self.points[1 : k + 1] - self.points[:k])))
+        return float(norm3(self.points[0] - self.points[0]))  # pragma: no cover
+
+    def element_centres(self) -> np.ndarray:
+        """Metres along the piece to each element's centre."""
+        if self.bent:
+            edges = norm3(self.points[1:] - self.points[:-1])
+            return np.cumsum(edges) - 0.5 * edges
+        step = self.length / self.n_elements
+        return (np.arange(self.n_elements) + 0.5) * step
 
 
 @dataclass
@@ -2277,7 +2356,12 @@ def build_mesh(
                     tag=wire.tag,
                     first_node=a,
                     last_node=b,
-                    points=np.array([start, end], dtype=float),
+                    # A bent wire's run is its nodes (momwire#1669); it is
+                    # never split at the plane, so `start`/`end` are nodes too.
+                    points=np.array(
+                        points[a : b + 1] if wire.path else [start, end],
+                        dtype=float,
+                    ),
                     radius=wire.radius,
                     cut_start=cut_start,
                     cut_end=cut_end,
@@ -2295,13 +2379,13 @@ def build_mesh(
                 piece_of_node.setdefault((wire.tag, b), (index, "end"))
             for k in addressed_inside:
                 if a < k < b:
+                    piece = mesh.pieces[index]
                     inside_piece[(wire.tag, k)] = (
                         index,
-                        float(
-                            norm3(
-                                np.asarray(points[k], dtype=float)
-                                - mesh.pieces[index].points[0]
-                            )
+                        piece.arclength_at(k)
+                        if piece.bent
+                        else float(
+                            norm3(np.asarray(points[k], dtype=float) - piece.points[0])
                         ),
                     )
             if cut_end:
@@ -2324,7 +2408,7 @@ def build_mesh(
     # base-fed verticals from their own image.
     ends_at: dict[tuple[int, int, int], list[tuple[int, str]]] = {}
     for index, piece in enumerate(mesh.pieces):
-        for which, point in (("start", piece.points[0]), ("end", piece.points[1])):
+        for which, point in (("start", piece.points[0]), ("end", piece.points[-1])):
             ends_at.setdefault(_node_key(point), []).append((index, which))
     for key in sorted(ends_at):
         if len(ends_at[key]) >= 2:
@@ -2779,7 +2863,7 @@ def _site_for(
         raise ServeRefusal(f"no wire piece carries node {node} of tag {tag}")
     piece_index, which = where
     piece = mesh.pieces[piece_index]
-    point = piece.points[0 if which == "start" else 1]
+    point = piece.points[0 if which == "start" else -1]
     key = _node_key(point)
     # A crossing junction is asked of the MESH, before the card-level degree:
     # where a card is split ON a node (momwire#1281) that node is interior to
@@ -3019,7 +3103,7 @@ def _solver_for(
         solver_class,
         basis_kwargs,
         polylines=[piece.points for piece in mesh.pieces],
-        edge_elements=[[piece.n_elements] for piece in mesh.pieces],
+        edge_elements=[piece.edge_elements for piece in mesh.pieces],
         feeds=feeds,
         radii=[piece.radius for piece in mesh.pieces],
         wavelength=wavelength,
@@ -4006,8 +4090,7 @@ def _element_currents_and_charges(
     knot_currents = solver.currents_at_knots(coeffs)
     centres_per_piece = []
     for piece in mesh.pieces:
-        step = piece.length / piece.n_elements
-        centres_per_piece.append((np.arange(piece.n_elements) + 0.5) * step)
+        centres_per_piece.append(piece.element_centres())
     # A deck element cut at z = 0 (momwire#1281) reads its charge at its OLD
     # centre, one extra sample appended to the half that holds it; that half
     # has one element, so its own centre stays at index 0 and is unread.
@@ -5061,6 +5144,8 @@ def _finish_run(deck: Nec5Deck, prepared: _Prepared) -> RunData:
 
     return RunData(
         split_notes=_split_notes(deck),
+        symmetry=_symmetry_counts(deck, structure),
+        print_currents=deck.pt != -1,
         node_count=structure.node_count,
         wire_element_count=structure.wire_element_count,
         patch_element_count=structure.patch_element_count,

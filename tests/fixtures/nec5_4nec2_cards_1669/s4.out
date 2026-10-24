@@ -1,0 +1,119 @@
+1
+ x13
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          s4                                                                           
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+ Model definition commands:
+
+ GW    1    11  0.00000E+00  5.00000E-01 -5.00000E+00  0.00000E+00  8.00000E-01  5.00000E+00  1.00000E-03
+ GS    0     0  5.00000E-01
+ GE    0    0
+
+ Number of nodes :    12
+ Number of wire elements :    11
+ Number of patch elements:     0
+ Number unknowns:    10
+
+
+
+
+ ***** INPUT LINE  1  EX   0    1    3    0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  FR   0    1    0    0  1.40000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  XQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 1.4000E+01 MHZ
+                                    WAVELENGTH= 2.1414E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+                                            FREE SPACE
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+                                   THIS STRUCTURE IS NOT LOADED
+ALLOCATE CM:            100
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.000 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+   1     3 1  1.0000E+00  0.0000E+00  7.1475E-06  7.8085E-04  1.1721E+01 -1.2805E+03  7.1475E-06  7.8085E-04  3.5737E-06
+
+
+
+                                       - - - Wire Currents - - -
+
+                             Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  Elem.  Tag            Coord. of seg. center          Seg.            - - - Current (Amps) - - -
+   No.   No.     X            Y            Z           Length       Real         Imag.        Mag.         Phase
+      1    1  0.00000E+00  1.19928E-02 -1.06131E-01  2.12358E-02  1.52993E-06  1.34308E-04  1.34317E-04   89.3474
+      2    1  0.00000E+00  1.26296E-02 -8.49051E-02  2.12358E-02  4.22923E-06  3.94811E-04  3.94834E-04   89.3863
+      3    1  0.00000E+00  1.32664E-02 -6.36788E-02  2.12358E-02  6.27303E-06  6.50930E-04  6.50960E-04   89.4479
+      4    1  0.00000E+00  1.39032E-02 -4.24525E-02  2.12358E-02  7.73136E-06  7.36482E-04  7.36523E-04   89.3985
+      5    1  0.00000E+00  1.45400E-02 -2.12263E-02  2.12358E-02  8.60648E-06  6.52044E-04  6.52101E-04   89.2438
+      6    1  0.00000E+00  1.51768E-02  1.03690E-17  2.12358E-02  8.89455E-06  5.69476E-04  5.69546E-04   89.1052
+      7    1  0.00000E+00  1.58136E-02  2.12263E-02  2.12358E-02  8.59449E-06  4.81136E-04  4.81213E-04   88.9766
+      8    1  0.00000E+00  1.64504E-02  4.24525E-02  2.12358E-02  7.70984E-06  3.86100E-04  3.86177E-04   88.8560
+      9    1  0.00000E+00  1.70871E-02  6.36788E-02  2.12358E-02  6.24690E-06  2.84562E-04  2.84630E-04   88.7424
+     10    1  0.00000E+00  1.77239E-02  8.49051E-02  2.12358E-02  4.20592E-06  1.76759E-04  1.76809E-04   88.6369
+     11    1  0.00000E+00  1.83607E-02  1.06131E-01  2.12358E-02  1.52007E-06  6.06492E-05  6.06682E-05   88.5643
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 3.5737E-06 WATTS
+                                           RADIATED POWER= 3.5737E-06 WATTS
+                                           WIRE LOSS     = 0.0000E+00 WATTS
+                                           EFFICIENCY    = 100.00 PERCENT
+
+
+
+
+ ***** INPUT LINE  4  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.001
