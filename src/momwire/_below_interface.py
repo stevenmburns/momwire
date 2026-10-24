@@ -1207,6 +1207,24 @@ def _pair_side(geom, segs, q, d1):
     return nodes, np.repeat(geom["tangents"][segs], int(q), axis=0), W
 
 
+def _pair_moments(F, Wo, Ws):
+    """`Jf[k, p, P] = Σ_a Σ_b Wo[k, p, a] F[k, a, b] Ws[P, b]` for one source
+    segment's pairs, in arithmetic the C++ fill replays bit for bit: the real
+    and imaginary parts apart, each sum numpy's pairwise sum over a
+    contiguous last axis (`_bspline_fill_core.cpp`'s `below_pair_moments`)."""
+    out = np.empty(F.shape[:1] + (Wo.shape[1], Ws.shape[0]), dtype=np.complex128)
+    for part, F_part in ((0, F.real), (1, F.imag)):
+        Fp = np.ascontiguousarray(F_part)
+        t = np.add.reduce(Fp[:, :, None, :] * Ws[None, None, :, :], axis=-1)
+        tT = np.ascontiguousarray(t.transpose(0, 2, 1))
+        J = np.add.reduce(Wo[:, :, None, :] * tT[:, None, :, :], axis=-1)
+        if part == 0:
+            out.real = J
+        else:
+            out.imag = J
+    return out
+
+
 def _below_pair_correction(
     Z, geom, b_idx, pairs, supp_seg, polys, proj, obs_b, W_b, *, keep_obs, row_of
 ):
@@ -1217,6 +1235,8 @@ def _below_pair_correction(
 
     `keep_obs` is the observer restriction (global below segments; None for
     all) and `row_of` the row-compact map, as the block itself takes them.
+    Every step is one the C++ fill replays: the moments by `_pair_moments`,
+    the scatter in list order with scalar sums.
     """
     I, J, Q = pairs
     if keep_obs is not None:
@@ -1228,6 +1248,7 @@ def _below_pair_correction(
     q0 = obs_b.shape[0] // b_idx.size
     nodes0 = obs_b.reshape(b_idx.size, q0, 3)
     tang = geom["tangents"]
+    W0 = np.ascontiguousarray(W_b.transpose(1, 0, 2))  # (segment, p, node)
     dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
     # One projection per (source segment, order): its observers are that
     # column of the list, each read at the pair's own order on both sides.
@@ -1239,7 +1260,7 @@ def _below_pair_correction(
         on, ot, oW = _pair_side(geom, b_idx[obs], q, d1)
         sn, st, sW = _pair_side(geom, b_idx[[j]], q, d1)
         F = proj(on.reshape(-1, 3), ot, sn.reshape(-1, 3), st).reshape(obs.size, q, q)
-        hi = np.einsum("kpa,kab,Pb->kpP", oW, F, sW[0], optimize=True)
+        hi = _pair_moments(F, oW, sW[0])
         # the base order's own moments, on the nodes and weights the block read
         F0 = proj(
             nodes0[obs].reshape(-1, 3),
@@ -1247,26 +1268,40 @@ def _below_pair_correction(
             nodes0[j],
             np.repeat(tang[b_idx[[j]]], q0, axis=0),
         ).reshape(obs.size, q0, q0)
-        lo = np.einsum(
-            "pka,kab,Pb->kpP", W_b[:, obs, :], F0, W_b[:, j, :], optimize=True
-        )
+        lo = _pair_moments(F0, W0[obs], W0[j])
         dJ[run] = hi - lo
-    # (basis, wing) resting on each segment, live wings only
+    # (basis, wing) resting on each segment, live wings only, by basis then wing
     live = (supp_seg >= 0) & np.any(polys != 0.0, axis=2)
     mm, aa = np.nonzero(live)
-    seg_of = supp_seg[mm, aa]
     by_seg = {}
-    for m, a, g in zip(mm.tolist(), aa.tolist(), seg_of.tolist(), strict=True):
-        by_seg.setdefault(g, []).append((m, a))
+    for m, a in zip(mm.tolist(), aa.tolist(), strict=True):
+        by_seg.setdefault(int(supp_seg[m, a]), []).append((m, a))
     for k in range(I.size):
         go, gs = int(b_idx[I[k]]), int(b_idx[J[k]])
+        dr, di = dJ[k].real.tolist(), dJ[k].imag.tolist()
         for m, a in by_seg.get(go, ()):
             r = m if row_of is None else int(row_of[m])
             if r < 0:
                 continue
-            left = polys[m, a] @ dJ[k]
+            pm = polys[m, a].tolist()
+            # u[P] = Σ_p pm[p] dJ[p, P], then v = Σ_P u[P] pn[P], in order
+            ur = [0.0] * d1
+            ui = [0.0] * d1
+            for P in range(d1):
+                sr = pm[0] * dr[0][P]
+                si = pm[0] * di[0][P]
+                for p in range(1, d1):
+                    sr += pm[p] * dr[p][P]
+                    si += pm[p] * di[p][P]
+                ur[P], ui[P] = sr, si
             for n, b in by_seg.get(gs, ()):
-                Z[r, n] -= left @ polys[n, b]
+                pn = polys[n, b].tolist()
+                vr = ur[0] * pn[0]
+                vi = ui[0] * pn[0]
+                for P in range(1, d1):
+                    vr += ur[P] * pn[P]
+                    vi += ui[P] * pn[P]
+                Z[r, n] -= complex(vr, vi)
 
 
 def _crossing_basis_rows(supp_seg, polys, rows):
