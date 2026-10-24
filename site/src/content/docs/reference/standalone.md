@@ -21,7 +21,9 @@ momwire-nec5-razor2p-linux -version
 To use one from SimNEC or EZNEC, point the NEC-5 engine setting at the
 program, inside its unpacked folder. A deck an engine does not serve yet is
 refused in the printout by name (`not served by this build: ...`), and the
-Python command serves it. The other formulations stay Python.
+Python command serves it. A deck carrying 4nec2's `GA`, `GH`, `GM`, `GX`, `GS`
+or `PT` cards is one of those for now (momwire#1669). The other formulations
+stay Python.
 
 ## Downloads
 

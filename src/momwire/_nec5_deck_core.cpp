@@ -5,6 +5,8 @@
 #include "_nec5_deck_core.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -475,23 +477,13 @@ bool parse_card(const std::string &line, Card &card) {
 // The parser (`deck/_nec5.py`'s `_Nec5Parser`)
 // ============================================================================
 
-const char *const kVocabulary[] = {"CM", "CE", "GW", "GE", "GN", "GD", "EX", "LD", "TL",
-                                   "NT", "FR", "PQ", "RP", "XQ", "NE", "NH", "EN"};
+const char *const kVocabulary[] = {"CM", "CE", "GW", "GA", "GH", "GM", "GX", "GS", "GE",
+                                   "GN", "GD", "EX", "LD", "TL", "NT", "FR", "PQ", "PT",
+                                   "RP", "XQ", "NE", "NH", "EN"};
 
 const std::map<std::string, std::string> &refused_by_name() {
     static const std::map<std::string, std::string> table = {
-        {"GM", "GM (geometry move) is not part of this engine's nec5 dialect, whose "
-               "geometry is GW alone - EZNEC resolves its transforms before writing a deck"},
-        {"GX", "GX (symmetry reflection) is not part of this engine's nec5 dialect, "
-               "whose geometry is GW alone"},
-        {"GR", "GR (cylindrical symmetry) is not part of this engine's nec5 dialect, "
-               "whose geometry is GW alone"},
-        {"GS", "GS (structure scale) is not part of this engine's nec5 dialect, whose "
-               "geometry is GW alone"},
-        {"GA", "GA (wire arc) is not part of this engine's nec5 dialect, whose "
-               "geometry is GW alone"},
-        {"GH", "GH (helix) is not part of this engine's nec5 dialect, whose geometry "
-               "is GW alone"},
+        {"GR", "GR (cylindrical symmetry) is not part of this engine's nec5 dialect"},
         {"GC", "GC (tapered wire continuation) is not part of this engine's nec5 "
                "dialect"},
         {"GF", "GF (numerical Green's function) is not part of this engine's nec5 "
@@ -509,8 +501,6 @@ const std::map<std::string, std::string> &refused_by_name() {
         {"EK", "EK (extended thin-wire kernel) is not part of this engine's nec5 "
                "dialect - EZNEC emits no kernel card"},
         {"IS", "IS (insulated sheath) is not part of this engine's nec5 dialect"},
-        {"PT", "PT (element-current print control) is not part of this engine's nec5 "
-               "dialect; PQ is the only print-control card EZNEC emits"},
         {"MP", "MP (multiprocessing hint) is not part of this engine's nec5 dialect"},
         {"SY", "SY (4nec2 symbolic variables) is not part of this engine's nec5 dialect"},
         {"NX", "NX (next structure) ends one structure and starts the next; "
@@ -567,12 +557,130 @@ bool sp_is_sphere(const Card &card) {
 
 std::string S(const Int &v) { return v.str(); }
 
+// --- the geometry cards' arithmetic (momwire#1669) -------------------------
+//
+// Copies of `_nec4_deck_core.cpp`'s, which this core cannot link against (the
+// standalone executables carry this core alone): libm called, never inlined
+// or folded, CPython 3.12's `math.dist` and `float ** float`.
+
+#if defined(__GNUC__)
+#define MW_NEC5_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define MW_NEC5_NOINLINE __declspec(noinline)
+#else
+#define MW_NEC5_NOINLINE
+#endif
+
+MW_NEC5_NOINLINE double libm_sin(double x) { return std::sin(x); }
+MW_NEC5_NOINLINE double libm_cos(double x) { return std::cos(x); }
+
+const double kDeg = 3.141592653589793 / 180.0;  // `_nec2_geometry._DEG`
+const double kPi = 3.141592653589793;
+
+struct DoubleLength {
+    double hi, lo;
+};
+DoubleLength dl_fast_sum(double a, double b) {
+    double x = a + b;
+    double y = (a - x) + b;
+    return {x, y};
+}
+DoubleLength dl_mul(double x, double y) {
+    double z = x * y;
+    double zz = std::fma(x, y, -z);
+    return {z, zz};
+}
+
+double vector_norm(int n, double *vec, double max, bool found_nan) {
+    double x, h, scale, csum = 1.0, frac1 = 0.0, frac2 = 0.0;
+    DoubleLength pr, sm;
+    int max_e;
+    if (std::isinf(max)) return max;
+    if (found_nan) return std::numeric_limits<double>::quiet_NaN();
+    if (max == 0.0 || n <= 1) return max;
+    std::frexp(max, &max_e);
+    if (max_e < -1023) {
+        for (int i = 0; i < n; i++) vec[i] /= DBL_MIN;
+        return DBL_MIN * vector_norm(n, vec, max / DBL_MIN, found_nan);
+    }
+    scale = std::ldexp(1.0, -max_e);
+    for (int i = 0; i < n; i++) {
+        x = vec[i];
+        x *= scale;
+        pr = dl_mul(x, x);
+        sm = dl_fast_sum(csum, pr.hi);
+        csum = sm.hi;
+        frac1 += pr.lo;
+        frac2 += sm.lo;
+    }
+    h = std::sqrt(csum - 1.0 + (frac1 + frac2));
+    pr = dl_mul(-h, h);
+    sm = dl_fast_sum(csum, pr.hi);
+    csum = sm.hi;
+    frac1 += pr.lo;
+    frac2 += sm.lo;
+    x = csum - 1.0 + (frac1 + frac2);
+    h += x / (2.0 * h);
+    return h / scale;
+}
+
+// `math.dist(p, q)` of two points
+double dist3(const double *p, const double *q) {
+    double diffs[3];
+    double max = 0.0;
+    bool found_nan = false;
+    for (int i = 0; i < 3; i++) {
+        double x = std::fabs(p[i] - q[i]);
+        diffs[i] = x;
+        found_nan = found_nan || std::isnan(x);
+        if (x > max) max = x;
+    }
+    return vector_norm(3, diffs, max, found_nan);
+}
+
+// Python's `float ** float` for a finite positive base (`float_pow`).
+double py_float_pow(double x, double y) {
+    if (y == 0.0) return 1.0;
+    if (x == 1.0) return 1.0;
+    double r = std::pow(x, y);
+    if (std::isinf(r))
+        throw ParseError(ErrorKind::overflow_error,
+                         "(" + std::to_string(ERANGE) + ", '" + std::strerror(ERANGE) + "')");
+    return r;
+}
+
+// Python's `int(x)` of a float.
+Int py_int(double x) {
+    if (std::isnan(x)) throw ParseError(ErrorKind::value_error, "cannot convert float NaN to integer");
+    if (std::isinf(x))
+        throw ParseError(ErrorKind::overflow_error, "cannot convert float infinity to integer");
+    return Int::from_integral_double(std::trunc(x));
+}
+
+// Python's `float(n)` of an int that came off a card field (an integral
+// double, so exact).
+double to_double(const Int &n) {
+    return n.fits_i64() ? static_cast<double>(n.i64()) : std::strtod(n.str().c_str(), nullptr);
+}
+
+// The most nodes / wires this copy materialises for one GA, GH or GM; past it
+// the deck carries `geometry_too_large` and the seam declines it. (Python
+// builds them all, which no deck this size finishes doing.)
+const long long kMaxGeometry = 10000000;
+
+using Point3 = std::array<double, 3>;
+
 struct Parser {
     std::vector<std::string> comments;  // UTF-8
     bool has_ce = false;
     std::string ce_text;  // UTF-8
     std::vector<Wire> wires;
     std::map<Int, std::size_t> by_tag;
+    std::vector<Card> geometry_cards;
+    bool has_gx = false;  // the last GX's plane code and block (momwire#1669)
+    long long gx_code = 0;
+    std::size_t gx_block = 0;
+    bool geometry_too_large = false;
     bool has_ge = false;
     Int ge_flag;
     Int ge_second = -1;
@@ -592,6 +700,8 @@ struct Parser {
     std::vector<Request> requests;
     bool has_pq = false;
     Int pq;
+    bool has_pt = false;
+    Int pt;
     bool saw_en = false;
 
     const Wire *find(const Int &tag) const {
@@ -677,6 +787,7 @@ struct Parser {
 
     void gw(const Card &card) {
         Int tag = card.i(0);
+        geometry_cards.push_back(card);
         if (find(tag))
             deck_error("GW declares tag " + S(tag) +
                        " a second time; this engine's nec5 dialect gives each wire its own "
@@ -696,6 +807,295 @@ struct Parser {
         w.radius = card.f(8);
         wires.push_back(w);
         by_tag[tag] = wires.size() - 1;
+    }
+
+    // -- the geometry cards 4nec2 writes (`_nec5._Nec5Parser`, momwire#1669) --
+
+    void open_geometry(const Card &card) {
+        if (has_ge)
+            deck_error(card.mnemonic +
+                       " arrives after GE; GE closes the geometry section, so every geometry "
+                       "card comes before it");
+        geometry_cards.push_back(card);
+    }
+
+    void add_wire(const Wire &w, const Card &card) {
+        if (find(w.tag))
+            deck_error(card.mnemonic + " gives a wire tag " + S(w.tag) +
+                       ", which another wire already carries; this engine's nec5 dialect gives "
+                       "each wire its own tag, because a node address names one wire's segment "
+                       "boundary and a tag group has no single wire to count along (a GM or GX "
+                       "with a tag increment of 0 copies every wire onto its own tag)");
+        wires.push_back(w);
+        by_tag[w.tag] = wires.size() - 1;
+    }
+
+    static Wire bent(const Int &tag, const Int &segments, const std::vector<Point3> &v,
+                     double radius) {
+        Wire w;
+        w.tag = tag;
+        w.segment_count = segments;
+        for (int d = 0; d < 3; ++d) {
+            w.end1[d] = v.front()[d];
+            w.end2[d] = v.back()[d];
+        }
+        w.radius = radius;
+        w.path = v;
+        return w;
+    }
+
+    // A count past what this copy materialises: the deck is flagged and the
+    // card builds nothing.
+    bool too_large(const Int &n) {
+        if (n.fits_i64() && n.i64() <= kMaxGeometry) return false;
+        geometry_too_large = true;
+        return true;
+    }
+
+    // `deck._nec2_geometry.arc_vertices(card, "nec5")` and `_ga`
+    void ga(const Card &card) {
+        open_geometry(card);
+        Int n_seg = card.i(1);
+        double radius = card.f(2), first = card.f(3), last = card.f(4);
+        if (n_seg < Int(1)) deck_error("GA segment count must be >= 1, got " + S(n_seg));
+        if (radius <= 0.0) deck_error("GA needs a positive arc radius (F1), got " + py_g(radius));
+        if (first == last)
+            deck_error("GA from " + py_g(first) + " to " + py_g(last) +
+                       " degrees has no length; the arc's two angles (F2, F3) must differ");
+        if (std::fabs(last - first) >= 360.00001)
+            deck_error("GA from " + py_g(first) + " to " + py_g(last) + " degrees sweeps " +
+                       py_g(std::fabs(last - first)) +
+                       " degrees, which NEC-5 stops on (ARC ANGLE EXCEEDS 360 DEGREES); a closed "
+                       "loop is an arc of less than 360 degrees closed by its own end segments");
+        if (card.f(5) <= 0.0)
+            deck_error("GA needs a positive wire radius (F4), got " + py_g(card.f(5)) +
+                       "; this engine's nec5 dialect has no tapered arc");
+        if (too_large(n_seg)) return;
+        const long long n = n_seg.i64();
+        double step = (last - first) * kDeg / static_cast<double>(n);
+        double start = first * kDeg;
+        std::vector<Point3> v;
+        for (long long k = 0; k <= n; k++) {
+            double a = start + static_cast<double>(k) * step;
+            v.push_back({radius * libm_cos(a), 0.0, radius * libm_sin(a)});
+        }
+        add_wire(bent(card.i(0), card.i(1), v, card.f(5)), card);
+    }
+
+    // `_nec5._Nec5Parser._gh`, then `deck._nec4.helix_vertices`
+    void gh(const Card &card) {
+        open_geometry(card);
+        Int n_seg = card.i(1);
+        double turns = card.f(2);
+        double r1 = card.f(4), r2 = card.f(5), w1 = card.f(6), w2 = card.f(7);
+        if (n_seg < Int(1)) deck_error("GH segment count must be >= 1, got " + S(n_seg));
+        if (turns == 0.0)
+            deck_error("GH with zero turns has no length: this engine's nec5 dialect reads F1 as "
+                       "the number of turns, as NEC-5 does, and NEC-5 stops on a zero-length "
+                       "element");
+        if (r1 <= 0.0 || r2 <= 0.0)
+            deck_error("GH needs a positive helix radius at both ends (F3, F4), got " + py_g(r1) +
+                       " and " + py_g(r2));
+        if (w1 <= 0.0 || w2 <= 0.0)
+            deck_error("GH needs a positive wire radius at both ends (F5, F6), got " + py_g(w1) +
+                       " and " + py_g(w2) +
+                       "; this engine's nec5 dialect reads NEC-5's GH (turns, length, two helix "
+                       "radii, two wire radii), not NEC-2's");
+        if (w1 != w2)
+            deck_error("GH with two wire radii (" + py_g(w1) + " and " + py_g(w2) +
+                       ", F5 and F6) tapers its wire along the helix; this engine's nec5 dialect "
+                       "gives a wire one radius, so it serves a GH whose two wire radii are equal");
+        if (too_large(n_seg)) return;
+        const long long n = n_seg.i64();
+        double zlen = card.f(3);
+        double dn = static_cast<double>(n);
+        double q = py_float_pow(r2 / r1, 1.0 / dn);
+        double step = 2.0 * kPi * turns / dn;
+        double qn = py_float_pow(q, dn);
+        std::vector<Point3> v;
+        for (long long k = 0; k <= n; k++) {
+            double dk = static_cast<double>(k);
+            double qk = py_float_pow(q, dk);
+            double rho = r1 * qk;
+            double z = q == 1.0 ? zlen * dk / dn : zlen * (1.0 - qk) / (1.0 - qn);
+            double a = dk * step;
+            v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
+        }
+        add_wire(bent(card.i(0), card.i(1), v, w1), card);
+    }
+
+    // `_nec5._Nec5Parser._moved`: one wire through a point map, retagged.
+    template <class F>
+    static Wire moved(const Wire &w, F xf, const Int &tag) {
+        Wire out = w;
+        out.tag = tag;
+        xf(w.end1, out.end1);
+        xf(w.end2, out.end2);
+        for (std::size_t k = 0; k < w.path.size(); ++k) xf(w.path[k].data(), out.path[k].data());
+        if (!out.path.empty()) {
+            for (int d = 0; d < 3; ++d) {
+                out.end1[d] = out.path.front()[d];
+                out.end2[d] = out.path.back()[d];
+            }
+        }
+        return out;
+    }
+
+    void reindex() {
+        by_tag.clear();
+        for (std::size_t k = 0; k < wires.size(); ++k) by_tag[wires[k].tag] = k;
+    }
+
+    // `_nec5._Nec5Parser._gm` and `deck._nec2_geometry.gm_transform`
+    void gm(const Card &card) {
+        open_geometry(card);
+        for (std::size_t k = 9; k < card.values.size(); ++k)
+            if (card.f(k) != 0.0)
+                deck_error("GM carries " + py_g(card.f(k)) + " in field " + std::to_string(k + 1) +
+                           "; this engine's nec5 dialect reads GM's nine fields (ITGI, NRPT, three "
+                           "rotations, three translations, ITS) and nothing after them");
+        Int itgi = card.i(0), nrpt = card.i(1);
+        Int its = py_int(card.f(8) + 0.5);
+        if (nrpt < Int(0)) deck_error("GM asks for " + S(nrpt) + " copies; NRPT is 0 or more");
+        std::size_t first = 0;
+        if (its > Int(0)) {
+            bool found = false;
+            for (std::size_t k = 0; k < wires.size() && !found; ++k)
+                if (wires[k].tag == its) {
+                    first = k;
+                    found = true;
+                }
+            if (!found)
+                deck_error("GM starts its block at tag " + S(its) +
+                           " (ITS), which no wire before it carries");
+        }
+        double rox = card.f(2) * kDeg, roy = card.f(3) * kDeg, roz = card.f(4) * kDeg;
+        double xs = card.f(5), ys = card.f(6), zs = card.f(7);
+        double sps = libm_sin(rox), cps = libm_cos(rox);
+        double sth = libm_sin(roy), cth = libm_cos(roy);
+        double sph = libm_sin(roz), cph = libm_cos(roz);
+        const double m[3][3] = {
+            {cph * cth, cph * sth * sps - sph * cps, cph * sth * cps + sph * sps},
+            {sph * cth, sph * sth * sps + cph * cps, sph * sth * cps - cph * sps},
+            {-sth, cth * sps, cth * cps},
+        };
+        auto xf = [&](const double *p, double *out) {
+            double q[3];
+            q[0] = p[0] * m[0][0] + p[1] * m[0][1] + p[2] * m[0][2] + xs;
+            q[1] = p[0] * m[1][0] + p[1] * m[1][1] + p[2] * m[1][2] + ys;
+            q[2] = p[0] * m[2][0] + p[1] * m[2][1] + p[2] * m[2][2] + zs;
+            out[0] = q[0];
+            out[1] = q[1];
+            out[2] = q[2];
+        };
+        auto tag_of = [&](const Wire &w) { return w.tag.is_zero() ? Int(0) : w.tag + itgi; };
+        std::vector<Wire> block(wires.begin() + static_cast<std::ptrdiff_t>(first), wires.end());
+        if (nrpt.is_zero()) {
+            wires.erase(wires.begin() + static_cast<std::ptrdiff_t>(first), wires.end());
+            reindex();
+            for (const Wire &w : block) add_wire(moved(w, xf, tag_of(w)), card);
+            return;
+        }
+        if (too_large(nrpt)) return;
+        const long long repeats = nrpt.i64();
+        if (!block.empty() && repeats > kMaxGeometry / static_cast<long long>(block.size())) {
+            geometry_too_large = true;
+            return;
+        }
+        for (long long r = 0; r < repeats; ++r) {
+            std::vector<Wire> next;
+            next.reserve(block.size());
+            for (const Wire &w : block) next.push_back(moved(w, xf, tag_of(w)));
+            block = next;
+            for (const Wire &w : block) add_wire(w, card);
+        }
+    }
+
+    // `_nec5._Nec5Parser._gx`
+    void gx(const Card &card) {
+        open_geometry(card);
+        Int code_int = card.i(1);
+        static const long long kCodes[] = {0, 1, 10, 11, 100, 101, 110, 111};
+        bool ok = false;
+        for (long long c : kCodes) ok = ok || code_int == Int(c);
+        if (!ok)
+            deck_error("GX carries " + S(code_int) +
+                       " as its plane code; this engine's nec5 dialect reads one digit per "
+                       "plane, 0 or 1 (100 X = 0, 010 Y = 0, 001 Z = 0), as 4nec2 writes it");
+        const long long code = code_int.i64();
+        struct Plane {
+            int axis;
+            long long flag;
+            const char *name;
+        };
+        const Plane planes[3] = {
+            {2, code % 10, "Z = 0"}, {1, (code / 10) % 10, "Y = 0"}, {0, (code / 100) % 10, "X = 0"}};
+        Int increment = card.i(0);
+        has_gx = true;
+        gx_code = code;
+        gx_block = wires.size();
+        for (const Plane &pl : planes) {
+            if (!pl.flag) continue;
+            const int axis = pl.axis;
+            std::vector<Wire> images;
+            for (const Wire &w : wires) {
+                std::vector<Point3> nodes = w.path;
+                if (nodes.empty())
+                    nodes = {Point3{w.end1[0], w.end1[1], w.end1[2]},
+                             Point3{w.end2[0], w.end2[1], w.end2[2]}};
+                for (std::size_t k = 0; k + 1 < nodes.size(); ++k) {
+                    double e1 = nodes[k][axis], e2 = nodes[k + 1][axis];
+                    if (std::fabs(e1) + std::fabs(e2) <= 1.0e-5 || e1 * e2 < -1.0e-6)
+                        deck_error("GX reflects tag " + S(w.tag) + " in the " + pl.name +
+                                   " plane, which the wire lies in or crosses; its image would "
+                                   "land on the wire itself, and NEC-5 stops on it (GEOMETRY DATA "
+                                   "ERROR)");
+                }
+                auto mirror = [axis](const double *p, double *out) {
+                    double q[3] = {p[0], p[1], p[2]};
+                    q[axis] = -q[axis];
+                    out[0] = q[0];
+                    out[1] = q[1];
+                    out[2] = q[2];
+                };
+                Int tag = w.tag.is_zero() ? Int(0) : w.tag + increment;
+                images.push_back(moved(w, mirror, tag));
+            }
+            for (const Wire &image : images) add_wire(image, card);
+            increment = increment + increment;
+        }
+    }
+
+    // `_nec5._Nec5Parser._gs`
+    void gs(const Card &card) {
+        open_geometry(card);
+        double factor = card.f(2);
+        if (factor <= 0.0)
+            deck_error("GS scales by " + py_g(factor) +
+                       "; this engine's nec5 dialect serves a positive scale factor");
+        for (Wire &w : wires) {
+            for (int d = 0; d < 3; ++d) {
+                w.end1[d] = w.end1[d] * factor;
+                w.end2[d] = w.end2[d] * factor;
+            }
+            w.radius = w.radius * factor;
+            for (Point3 &p : w.path)
+                for (int d = 0; d < 3; ++d) p[d] = p[d] * factor;
+        }
+    }
+
+    // `_nec5._Nec5Parser._pt`
+    void pt_card(const Card &card) {
+        Int flag = card.i(0);
+        Int rest[3] = {card.i(1), card.i(2), card.i(3)};
+        bool any = !rest[0].is_zero() || !rest[1].is_zero() || !rest[2].is_zero();
+        if ((flag != Int(-1) && !flag.is_zero()) || (flag.is_zero() && any))
+            deck_error("PT " + S(flag) + " " + S(rest[0]) + " " + S(rest[1]) + " " + S(rest[2]) +
+                       " is not served by this engine's nec5 dialect, which reads PT -1 (no Wire "
+                       "Currents table, as 4nec2's NEC-5 package writes it) and PT 0 (the table, "
+                       "as with no PT)");
+        pt = flag;
+        has_pt = true;
     }
 
     void ge(const Card &card) {
@@ -1167,8 +1567,9 @@ struct Parser {
         for (const char *v : kVocabulary) known = known || mn == v;
         if (!known)
             deck_error(mn + " is not a card in this engine's nec5 dialect, whose vocabulary is "
-                            "the fifteen mnemonics EZNEC emits: GW, GE, GN, GD, EX, LD, TL, NT, "
-                            "FR, PQ, RP, XQ, NE, NH, EN");
+                            "the fifteen mnemonics EZNEC emits (GW, GE, GN, GD, EX, LD, TL, NT, "
+                            "FR, PQ, RP, XQ, NE, NH, EN) and the six 4nec2's NEC-5 package adds "
+                            "(GA, GH, GM, GX, GS, PT)");
         int minimum = min_fields(mn);
         if (minimum >= 0 && c.values.size() < static_cast<std::size_t>(minimum)) {
             std::size_t written = c.values.size();
@@ -1177,6 +1578,12 @@ struct Parser {
                        std::to_string(minimum));
         }
         if (mn == "GW") return gw(c);
+        if (mn == "GA") return ga(c);
+        if (mn == "GH") return gh(c);
+        if (mn == "GM") return gm(c);
+        if (mn == "GX") return gx(c);
+        if (mn == "GS") return gs(c);
+        if (mn == "PT") return pt_card(c);
         if (mn == "GE") return ge(c);
         if (mn == "GN") return gn(c);
         if (mn == "GD") return gd(c);
@@ -1201,6 +1608,85 @@ struct Parser {
 
     // -- the deck --
 
+    // `_nec5._element_length`
+    static double element_length(const Wire &w, int end) {
+        if (!w.path.empty()) {
+            const Point3 &a = end == 0 ? w.path[0] : w.path[w.path.size() - 2];
+            const Point3 &b = end == 0 ? w.path[1] : w.path.back();
+            return dist3(a.data(), b.data());
+        }
+        return dist3(w.end1, w.end2) / to_double(w.segment_count);
+    }
+
+    // `_nec5._joined`: every end NEC-5 joins to an earlier end, moved onto it.
+    static std::vector<Wire> joined(const std::vector<Wire> &in) {
+        const double kJoinFraction = 1e-4;  // `_JOIN_FRACTION`
+        std::vector<std::pair<Point3, double>> nodes;
+        std::vector<Wire> out;
+        out.reserve(in.size());
+        for (const Wire &w : in) {
+            Point3 ends[2] = {Point3{w.end1[0], w.end1[1], w.end1[2]},
+                              Point3{w.end2[0], w.end2[1], w.end2[2]}};
+            for (int k = 0; k < 2; ++k) {
+                const Point3 point = ends[k];
+                const Point3 *target = nullptr;
+                for (const auto &node : nodes)
+                    if (dist3(point.data(), node.first.data()) < node.second) {
+                        target = &node.first;
+                        break;
+                    }
+                if (target) {
+                    ends[k] = *target;
+                } else if (k == 1 &&
+                           dist3(point.data(), ends[0].data()) < kJoinFraction * element_length(w, 0)) {
+                    ends[k] = ends[0];
+                } else {
+                    nodes.emplace_back(point, kJoinFraction * element_length(w, k));
+                }
+            }
+            // `(ends[0], ends[1]) != (wire.end1, wire.end2)`: float ==, so a
+            // join onto 0.0 from -0.0 leaves the wire as it was.
+            bool changed = false;
+            for (int d = 0; d < 3; ++d)
+                changed = changed || ends[0][d] != w.end1[d] || ends[1][d] != w.end2[d];
+            if (!changed) {
+                out.push_back(w);
+                continue;
+            }
+            Wire j = w;
+            for (int d = 0; d < 3; ++d) {
+                j.end1[d] = ends[0][d];
+                j.end2[d] = ends[1][d];
+            }
+            if (!j.path.empty()) {
+                j.path.front() = ends[0];
+                j.path.back() = ends[1];
+            }
+            out.push_back(j);
+        }
+        return out;
+    }
+
+    // `_nec5._Nec5Parser._symmetry`
+    bool symmetry(Symmetry &out) const {
+        if (!has_gx) return false;
+        long long planes = ((gx_code / 100) % 10 ? 1 : 0) + ((gx_code / 10) % 10 ? 1 : 0);
+        if (gx_code % 10) {
+            if (!ge_flag.is_zero())
+                deck_error("GX reflects the structure in the Z = 0 plane over a ground (GE " +
+                           S(ge_flag) +
+                           "); the copy lands below the ground plane, which this engine's nec5 "
+                           "dialect does not serve as a reflection - write the buried wires as GW "
+                           "cards");
+            planes += 1;
+        }
+        const long long sections = 1LL << planes;
+        if (sections == 1) return false;
+        out.sections = sections;
+        out.block_wires = gx_block;
+        return true;
+    }
+
     Deck deck(const std::string &latin1_source) const {
         if (!has_ge)
             deck_error("deck has no GE card; GE closes the geometry section and carries the "
@@ -1209,7 +1695,10 @@ struct Parser {
         d.comments = comments;
         d.ce_text = ce_text;
         d.source_text = utf8(latin1_source);
-        d.wires = wires;
+        d.wires = joined(wires);
+        d.geometry_cards = geometry_cards;
+        d.has_symmetry = symmetry(d.symmetry);
+        d.geometry_too_large = geometry_too_large;
         d.ge_flag = ge_flag;
         d.ge_second = ge_second;
         d.geometry_file = geometry_file;
@@ -1240,6 +1729,8 @@ struct Parser {
         d.requests = requests;
         d.has_pq = has_pq;
         d.pq = pq;
+        d.has_pt = has_pt;
+        d.pt = pt;
         return d;
     }
 
@@ -1856,6 +2347,27 @@ void dump_deck_into(Out &o, const Deck &d, const std::string &p) {
         o.f3(q + ".end1", w.end1, 3);
         o.f3(q + ".end2", w.end2, 3);
         o.f(q + ".radius", w.radius);
+        o.seq(q + ".path", "tuple", w.path.size());
+        for (std::size_t n = 0; n < w.path.size(); ++n) o.f3(idx(q + ".path", n), w.path[n].data(), 3);
+    }
+    o.seq(p + ".geometry_cards", "tuple", d.geometry_cards.size());
+    for (std::size_t k = 0; k < d.geometry_cards.size(); ++k) {
+        std::string q = idx(p + ".geometry_cards", k);
+        const Card &c = d.geometry_cards[k];
+        o.typ(q, "Card");
+        o.str(q + ".mnemonic", c.mnemonic);
+        o.seq(q + ".values", "tuple", c.values.size());
+        for (std::size_t n = 0; n < c.values.size(); ++n) o.f(idx(q + ".values", n), c.values[n]);
+        o.str(q + ".raw", latin1_to_utf8(c.raw));
+        if (c.has_trailer) o.str(q + ".trailer", latin1_to_utf8(c.trailer));
+        else o.none(q + ".trailer");
+    }
+    if (d.has_symmetry) {
+        o.typ(p + ".symmetry", "Nec5Symmetry");
+        o.i(p + ".symmetry.sections", Int(d.symmetry.sections));
+        o.i(p + ".symmetry.block_wires", Int(static_cast<long long>(d.symmetry.block_wires)));
+    } else {
+        o.none(p + ".symmetry");
     }
     o.i(p + ".ge_flag", d.ge_flag);
     o.i(p + ".ge_second", d.ge_second);
@@ -1979,6 +2491,8 @@ void dump_deck_into(Out &o, const Deck &d, const std::string &p) {
     }
     if (d.has_pq) o.i(p + ".pq", d.pq);
     else o.none(p + ".pq");
+    if (d.has_pt) o.i(p + ".pt", d.pt);
+    else o.none(p + ".pt");
 }
 
 }  // namespace
@@ -2123,6 +2637,13 @@ Int Card::i(std::size_t k) const {
                          mnemonic + " field " + std::to_string(k + 1) +
                              " is infinite; an integer field must be a finite number");
     return py_round(v);
+}
+
+bool Deck::carries_4nec2_cards() const {
+    if (has_pt) return true;
+    for (const Card &c : geometry_cards)
+        if (c.mnemonic != "GW") return true;
+    return false;
 }
 
 std::string Card::text() const { return raw.size() > 2 ? raw.substr(2) : std::string(); }

@@ -36,6 +36,7 @@
 // Python's is raised.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -105,6 +106,14 @@ struct Wire {  // Nec5Wire
     double end1[3] = {0, 0, 0};
     double end2[3] = {0, 0, 0};
     double radius = 0;
+    // A GA arc's or GH helix's nodes, end 1 first (momwire#1669); empty for
+    // a straight wire.
+    std::vector<std::array<double, 3>> path;
+};
+
+struct Symmetry {  // Nec5Symmetry
+    long long sections = 0;
+    std::size_t block_wires = 0;
 };
 
 struct Ground {
@@ -187,11 +196,29 @@ struct Request {
     Int flag;
 };
 
+// `deck/_cards.Card`: a mnemonic (UTF-8, upper-cased) and its numeric fields.
+struct Card {
+    std::string mnemonic;
+    std::vector<double> values;
+    std::string raw;  // latin-1
+    bool has_trailer = false;
+    std::string trailer;  // latin-1
+
+    double f(std::size_t k) const;  // a field the card did not write reads 0
+    Int i(std::size_t k) const;     // rounded half to even; throws ParseError
+                                    // (OverflowError / ValueError) where Python raises
+    std::string text() const;       // raw[2:]
+};
+
 struct Deck {  // Nec5Deck, in its field order
     std::vector<std::string> comments;  // UTF-8, each a CM card's raw[2:]
     std::string ce_text;                // UTF-8
     std::string source_text;            // UTF-8: the text the deck was read from
     std::vector<Wire> wires;
+    // Every geometry card before GE, as written (momwire#1669).
+    std::vector<Card> geometry_cards;
+    bool has_symmetry = false;
+    Symmetry symmetry;
     Int ge_flag;
     Int ge_second = -1;
     bool geometry_file = false;  // GE's third field nonzero (momwire#1488)
@@ -216,6 +243,15 @@ struct Deck {  // Nec5Deck, in its field order
     std::vector<Request> requests;
     bool has_pq = false;
     Int pq;
+    bool has_pt = false;  // momwire#1669
+    Int pt;
+    // Not Python's: a GA / GH / GM this copy declined to materialise (a count
+    // past `kMaxGeometry`), which the seam declines as "segment-count".
+    bool geometry_too_large = false;
+
+    // Whether the deck carries a card the C++ route does not serve yet: any
+    // geometry card but GW, or a PT (momwire#1669). The seam declines it.
+    bool carries_4nec2_cards() const;
 
     const Wire *wire(const Int &tag) const;  // Nec5Deck.wire
 };
@@ -321,19 +357,6 @@ std::string format_g(double x);
 // (`_nec5_razor_printout_core.cpp` re-reads the deck's card images for its
 // echo, as `_printout._post_ge_cards` does, and lays out the comment box.)
 
-// `deck/_cards.Card`: a mnemonic (UTF-8, upper-cased) and its numeric fields.
-struct Card {
-    std::string mnemonic;
-    std::vector<double> values;
-    std::string raw;  // latin-1
-    bool has_trailer = false;
-    std::string trailer;  // latin-1
-
-    double f(std::size_t k) const;  // a field the card did not write reads 0
-    Int i(std::size_t k) const;     // rounded half to even; throws ParseError
-                                    // (OverflowError / ValueError) where Python raises
-    std::string text() const;       // raw[2:]
-};
 
 // `parse_card(line)`: false for a blank line; throws ParseError as Python raises.
 bool read_card(const std::string &latin1_line, Card &card);

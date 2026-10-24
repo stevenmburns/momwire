@@ -504,9 +504,117 @@ CASES = {
     "nx in one structure": (deck("NX"), "NX (next structure) ends one structure"),
     **{
         f"refused by name {m}": (deck(f"{m} 1"), f"{m} ")
-        for m in ("GM GX GR GS GA GH GC GF SM SC CP PL WG ZO KH EK IS PT MP SY".split())
+        for m in ("GR GC GF SM SC CP PL WG ZO KH EK IS MP SY".split())
     },
-    "refused by name before vocabulary minimum": (deck("PT"), "PT (element-current"),
+    "refused by name before vocabulary minimum": (deck("GR"), "GR (cylindrical"),
+    # -- the cards 4nec2 writes (momwire#1669) --
+    "ga": (deck(wires=GW1 + "GA 3,8,2.,-30.,200.,1E-3\n"), "parsed"),
+    "ga closed": (deck(wires=GW1 + "GA 3,8,2.,0.,360.,1E-3\n"), "parsed"),
+    "ga falling": (deck(wires=GW1 + "GA 3,8,2.,120.,-30.,1E-3\n"), "parsed"),
+    "ga past 360": (deck(wires=GW1 + "GA 3,8,2.,0.,361.,1E-3\n"), "sweeps 361"),
+    "ga no segments": (deck(wires=GW1 + "GA 3,0,2.,0.,90.,1E-3\n"), "GA segment count"),
+    "ga no radius": (
+        deck(wires=GW1 + "GA 3,8,0.,0.,90.,1E-3\n"),
+        "positive arc radius",
+    ),
+    "ga no sweep": (deck(wires=GW1 + "GA 3,8,2.,10.,10.,1E-3\n"), "has no length"),
+    "ga no wire radius": (deck(wires=GW1 + "GA 3,8,2.,0.,90.,0.\n"), "no tapered arc"),
+    "ga nan radius": (deck(wires=GW1 + "GA 3,8,nan,0.,90.,1E-3\n"), "parsed"),
+    "ga huge count": (
+        deck(wires=GW1 + f"GA 3,{BIG},2.,0.,90.,1E-3\n"),
+        "OverflowError",
+    ),
+    "ga duplicate tag": (deck(wires=GW1 + "GA 1,8,2.,0.,90.,1E-3\n"), "another wire"),
+    "gh": (deck(wires=GW1 + "GH 3,21,.5,3.,.5,.5,1E-3,1E-3\n"), "parsed"),
+    "gh tapered helix": (deck(wires=GW1 + "GH 3,20,2.,3.,.5,.3,1E-3,1E-3\n"), "parsed"),
+    "gh down and back": (
+        deck(wires=GW1 + "GH 3,20,-1.5,-3.,.5,.5,1E-3,1E-3\n"),
+        "parsed",
+    ),
+    "gh no turns": (deck(wires=GW1 + "GH 3,21,0.,3.,.5,.5,1E-3,1E-3\n"), "zero turns"),
+    "gh no helix radius": (
+        deck(wires=GW1 + "GH 3,21,1.,3.,0.,.5,1E-3,1E-3\n"),
+        "helix radius",
+    ),
+    "gh no wire radius": (
+        deck(wires=GW1 + "GH 3,21,1.,3.,.5,.5,0.,1E-3\n"),
+        "wire radius at both",
+    ),
+    "gh two wire radii": (
+        deck(wires=GW1 + "GH 3,21,1.,3.,.5,.5,1E-3,2E-3\n"),
+        "two wire radii",
+    ),
+    "gm copies": (deck(wires=GW1 + GW2 + "GM 10,2,0.,0.,30.,0.,1.,0.,0.\n"), "parsed"),
+    "gm in place renumbers": (
+        deck(wires=GW1 + GW2 + "GM 5,0,10.,20.,30.,0.,0.,1.,2.\n"),
+        "parsed",
+    ),
+    "gm renumbers the fed wire": (
+        deck(wires=GW1 + GW2 + "GM 5,0,0.,0.,0.,0.,0.,1.,0.\n"),
+        "names tag 1",
+    ),
+    "gm its missing": (
+        deck(wires=GW1 + GW2 + "GM 1,1,0.,0.,0.,0.,1.,0.,9.\n"),
+        "tag 9 (ITS)",
+    ),
+    "gm extra field": (
+        deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,0.,3.\n"),
+        "field 10",
+    ),
+    "gm negative copies": (
+        deck(wires=GW1 + "GM 1,-1,0.,0.,0.,0.,1.,0.,0.\n"),
+        "NRPT is 0",
+    ),
+    "gm onto its own tag": (
+        deck(wires=GW1 + "GM 0,1,0.,0.,0.,0.,1.,0.,0.\n"),
+        "another wire",
+    ),
+    "gm nan its": (deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,nan\n"), "ValueError"),
+    "gm inf its": (deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,inf\n"), "OverflowError"),
+    "gx three planes": (
+        deck(wires="GW 1,11,.1,.25,.1,.2,.75,.3,.0005\nGX 10,111\n"),
+        "parsed",
+    ),
+    "gx in a plane": (deck(wires=GW1 + "GX 1,100\n"), "lies in or crosses"),
+    "gx code 2": (deck(wires=GW1 + "GX 1,020\n"), "plane code"),
+    "gx onto its own tag": (
+        deck(wires="GW 1,11,.1,.25,.1,.2,.75,.3,.0005\nGX 0,100\n"),
+        "another wire",
+    ),
+    "gx z over a ground": (
+        deck(
+            wires="GW 1,11,.1,.25,.1,.2,.75,.3,.0005\nGX 1,001\n",
+            rest=REST.replace("GE 0,-1", "GE 1,-1").replace("GN -1", "GN 1"),
+        ),
+        "Z = 0 plane over a ground",
+    ),
+    "gx then gw": (
+        deck(
+            wires="GW 1,11,.1,.25,.1,.2,.75,.3,.0005\nGX 1,010\nGW 9,3,1.,1.,1.,1.,1.,2.,.0005\n"
+        ),
+        "parsed",
+    ),
+    "gs": (deck(wires=GW1 + GW2 + "GS 0,0,2.\n"), "parsed"),
+    "gs reads no range": (deck(wires=GW1 + GW2 + "GS 2,2,2.\n"), "parsed"),
+    "gs zero": (deck(wires=GW1 + "GS 0,0,0.\n"), "positive scale factor"),
+    "geometry after ge": (deck("GS 0,0,2."), "arrives after GE"),
+    "pt -1": (deck("PT -1,0,0,0"), "parsed"),
+    "pt bare": (deck("PT"), "parsed"),
+    "pt last wins": (deck("PT -1", "PT 0"), "parsed"),
+    "pt 2": (deck("PT 2,1,3,5"), "PT -1"),
+    "pt 0 with a range": (deck("PT 0,1,3,5"), "PT -1"),
+    "join a typed end": (
+        deck(wires=GW1 + "GW 2,5,0.,.25000002,0.,0.,.75,0.,.0005\n"),
+        "parsed",
+    ),
+    "join keeps negative zero": (
+        deck(wires=GW1 + "GW 2,5,-0.,.25,0.,0.,.75,0.,.0005\n"),
+        "parsed",
+    ),
+    "join out of reach": (
+        deck(wires=GW1 + "GW 2,5,0.,.2501,0.,0.,.75,0.,.0005\n"),
+        "parsed",
+    ),
     # -- multi-run decks (XQ blocks) --
     "two runs": (
         runs("XQ 0", "EX 4,2,3,0,1.,0.", "RP 0,1,361,1000,90.,0.,0.,1.", "XQ 0"),
