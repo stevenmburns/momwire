@@ -5233,12 +5233,16 @@ class RazorSolver(
 
     def _below_remainder_pairs(self, geom):
         """``(obs, src, d_obs, d_src)``: the testing-path points and the
-        order-`n_qp_sommerfeld` Gauss nodes of every segment the below
-        remainder evaluates on `geom`, with their depths below the plane."""
+        Gauss nodes of every segment the below remainder evaluates on `geom`,
+        at the order it evaluates them (`_remainder_qp`, momwire#1672), with
+        their depths below the plane."""
         gz = float(self.ground_z)
         obs = self._testing_paths(geom)[0].reshape(-1, 3)
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
-        xg, _wg = leggauss(self.n_qp_sommerfeld)
+        q = _remainder_qp(
+            obs, seg_p0, seg_p0 + seg_h[:, None] * seg_t, gz, self.n_qp_sommerfeld
+        )
+        xg, _wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         src = (
             seg_p0[:, None, :]
@@ -5248,7 +5252,7 @@ class RazorSolver(
 
     def _below_remainder_th_min(self, geom, *, r1_cap=None):
         """``(θ_min, d + d′ there)`` over the pairs the below remainder
-        evaluates on `geom`: testing-path points × order-`n_qp_sommerfeld`
+        evaluates on `geom`: testing-path points × `_remainder_qp`-order
         Gauss nodes of every segment, exactly as `_assemble_Z_source_block`
         hands them to `RemainderBelow.field_windows`. The pair set is the
         remainder's own size, so it is walked in observer chunks by
@@ -6208,13 +6212,15 @@ class RazorSolver(
                 # momwire#510: the order is keyed to grazing height rather
                 # than taken flat from the kwarg. A deck with nothing near the
                 # plane gets `self.n_qp_sommerfeld` exactly and is unchanged.
+                # Below the plane too (momwire#1672): a buried wire within a
+                # segment's length of the surface sees its own mirror there,
+                # the same spike, and the flat order missed it by tens of
+                # ohms on shallow radials.
                 rem_fn = remainder.field_windows(
                     (sources["obs_pts"], sources["obs_tans"]),
                     (sources["src_l"], sources["src_r"], sources["src_t"]),
                     n_moment=2,
-                    n_qp=self.n_qp_sommerfeld
-                    if ground.below
-                    else _remainder_qp(
+                    n_qp=_remainder_qp(
                         sources["obs_pts"],
                         sources["src_l"],
                         sources["src_r"],

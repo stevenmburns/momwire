@@ -191,6 +191,24 @@ void prepare_paths(Front &s) {
         }
 }
 
+// `_remainder_qp(obs, seg_p0, seg_p0 + seg_h t, ground_z, n_qp_sommerfeld)`:
+// the below remainder's order keyed to grazing height, as the above one is
+// (momwire#510); a buried wire within a segment of the surface sees its
+// mirror there (momwire#1672). The path points are the wing centroids.
+int64_t below_remainder_qp(const Front &s) {
+    const size_t n = static_cast<size_t>(s.n_basis), ns = static_cast<size_t>(s.n_seg);
+    std::vector<double> obs(6 * n), src_r(3 * ns);
+    for (size_t m = 0; m < n; m++)
+        for (int c3 = 0; c3 < 3; c3++) {
+            obs[6 * m + c3] = s.cent[3 * static_cast<size_t>(s.s_a[m]) + c3];
+            obs[6 * m + 3 + c3] = s.cent[3 * static_cast<size_t>(s.s_b[m]) + c3];
+        }
+    for (size_t g = 0; g < ns; g++)
+        for (int c3 = 0; c3 < 3; c3++) src_r[3 * g + c3] = s.seg_p0[3 * g + c3] + s.seg_h[g] * s.seg_t[3 * g + c3];
+    return remainder_qp(obs.data(), 2 * n, s.seg_p0.data(), src_r.data(), ns, s.ground_z, s.n_qp_sommerfeld,
+                        REMAINDER_QP_CAP, REMAINDER_QP_C);
+}
+
 int64_t wire_of_seg(const Front &f, int64_t g) {
     int64_t w = 0;
     while (f.seg_offsets[static_cast<size_t>(w) + 1] <= g) w++;
@@ -284,10 +302,11 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
     plan_extents(false, r1_max, th_min);
     if (r1_max > r1_cap && !(th_min >= floor)) plan_extents(true, r1_max, th_min);
     if (depth <= 0.0) th_min = std::min(th_min, std::atan2(depth, 0.0));
-    // The pairs the below remainder evaluates: path points x the order
-    // n_qp_sommerfeld nodes `seg_p0 + (tq h) t` (`_below_remainder_th_min`).
+    // The pairs the below remainder evaluates: path points x its Gauss
+    // nodes `seg_p0 + (tq h) t`, at the order it evaluates them
+    // (`_below_remainder_th_min`, `below_remainder_qp`, momwire#1672).
     std::vector<double> xq, wq;
-    if (!leggauss(s.n_qp_sommerfeld, xq, wq)) throw std::runtime_error("grazing order");
+    if (!leggauss(below_remainder_qp(s), xq, wq)) throw std::runtime_error("grazing order");
     std::vector<double> src;
     for (size_t g = 0; g < ns; g++)
         for (double x : xq) {
@@ -378,8 +397,8 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
 
 // `RemainderBelow.field_windows`' per-solve half on a below medium front:
 // the path points (wing centroids) and wing signs the weighted rule and the
-// remainder read, the source nodes and moment weights at n_qp_sommerfeld
-// (flat: no grazing keying below), the grid radius and the grid.
+// remainder read, the source nodes and moment weights at the grazing-keyed
+// order (`below_remainder_qp`, momwire#1672), the grid radius and the grid.
 void prepare_below(Front &s, const BelowMedium &bm, BelowRemainder &rem) {
     const size_t n = static_cast<size_t>(s.n_basis), ns = static_cast<size_t>(s.n_seg);
     s.eps_t = bm.eps_t;
@@ -411,7 +430,7 @@ void prepare_below(Front &s, const BelowMedium &bm, BelowRemainder &rem) {
     rem.grid = &src->get(bm.eps_t, s.k, r1, s.omega, MU, somm_below::SPACING_FILL);
     rem.build_view();
     // `leggauss(n_qp)`, the nodes `seg_l + tq * span`, `W = w_node * u ** p`.
-    const int64_t nq = s.n_qp_sommerfeld;
+    const int64_t nq = below_remainder_qp(s);
     std::vector<double> xq, wq;
     if (!leggauss(nq, xq, wq)) throw std::runtime_error("below remainder order");
     const size_t q = static_cast<size_t>(nq);
