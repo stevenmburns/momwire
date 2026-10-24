@@ -141,6 +141,7 @@ def _served(sub, plan):
 
 
 @pytest.mark.parametrize("apex", [0.0, -0.0254])
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_cone_is_the_twin_at_its_rows(apex):
     """Every row a cone serves, against the twin at that row: below the
     plane sheets' bound. Both apex kinds: at the interface (Dan's Slant, a
@@ -155,6 +156,7 @@ def test_the_cone_is_the_twin_at_its_rows(apex):
     assert ni._SHEET_STATS["cone_rows"] == idx.size
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_a_coarse_cone_fails_the_same_check(monkeypatch):
     """At p = 8 the same rows read ~7e-7: the check can fail."""
     monkeypatch.setattr(ni, "_CONE_P", 8)
@@ -163,6 +165,7 @@ def test_a_coarse_cone_fails_the_same_check(monkeypatch):
     assert _envelope_error(sub[idx], got, _twin(sub[idx])) > 10 * BOUND
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_fan_needs_its_slope_step():
     """Endpoints printed to 4 decimals spread the slopes ~1e-5 apart, a fan
     inside its bound whose edges are ~5e-7 of K apart. Read with the slope

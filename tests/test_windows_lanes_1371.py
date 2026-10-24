@@ -116,6 +116,7 @@ print(json.dumps({
 """
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_sse2_variant_runs_its_walks():
     from test_sg_cplx_far_fill_simd_1224 import _hub4
 

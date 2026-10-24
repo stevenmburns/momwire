@@ -798,6 +798,7 @@ def test_g5689_an_in_domain_query_at_the_edges_is_served_not_refused(proj_grid):
 # real disturbance of those paths would produce.
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_g56810_the_above_family_projection_did_not_move(record_property):
     et = complex(13.0, -12.839)
     k2 = 2.0 * np.pi
