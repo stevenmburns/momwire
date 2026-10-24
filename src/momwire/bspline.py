@@ -3305,6 +3305,34 @@ class BSplineSolver(
             I, J, Q = I[k2], jj, Q[k2]
         return _pair_max(I, J, Q, n)
 
+    def _below_remainder_pairs(self, seg_l, seg_r, gz, base):
+        """The below/below segment pairs whose remainder needs more than the
+        base order (momwire#1672), local to the segments handed in.
+
+        `_remainder_qp_pairs`' rule below the surface: each segment's own
+        base-order nodes as observers, R_min against the source's mirror,
+        `ceil(c · len / R_min)` clipped to `[base, cap]` -- then symmetrised
+        and dilated to the touching pairs, as above. Empty for a buried deck
+        whose wires all sit a segment or more down, which keeps its fill bit
+        for bit what it was."""
+        base = int(base)
+        xg, _ = leggauss(base)
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        I, J, Q = _quadrature.remainder_qp_pairs(
+            nodes, seg_l, seg_r, gz, base, _REMAINDER_QP_CAP, _REMAINDER_QP_C
+        )
+        if I.size == 0:
+            return I, J, Q
+        n = int(seg_l.shape[0])
+        I, J = np.concatenate([I, J]), np.concatenate([J, I])
+        Q = np.concatenate([Q, Q])
+        ptr, idx = _segment_touch_lists(seg_l, seg_r)
+        k1, ii = _csr_expand(ptr, idx, I)
+        I, J, Q = _pair_max(ii, J[k1], Q[k1], n)
+        k2, jj = _csr_expand(ptr, idx, J)
+        return _pair_max(I[k2], jj, Q[k2], n)
+
     def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid):
         """Segment-pair remainder moments `Jf[a, b, p, P]` over the rectangle
         `obs_segs x src_segs`, at Gauss order `q` on both sides.
@@ -7333,6 +7361,8 @@ class BSplineSolver(
                 refuse_out_of_scope_fn=self._refuse_buried_out_of_scope,
                 crossing_junctions_fn=self._crossing_junctions,
                 serve_plan_fn=self._buried_serve_plan,
+                below_pairs_fn=self._below_remainder_pairs,
+                ground_z=self.ground_z,
             )
         except (ValueError, NotImplementedError) as exc:
             return str(exc)
@@ -7378,6 +7408,7 @@ class BSplineSolver(
                 field_galerkin_out_ok=_HAVE_FIELD_GALERKIN_STRIDED,
                 apply_loading=self._apply_loading,
                 compact_ok=_HAVE_WINDOWED_ROW_OF and _HAVE_FIELD_GALERKIN_ROW_OF,
+                below_remainder_pairs=self._below_remainder_pairs,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,

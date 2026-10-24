@@ -997,6 +997,10 @@ class BuriedFills(NamedTuple):
     # (momwire#1132). False, and a `compact=True` fill falls back to the square
     # Z and slices it: the same bits, none of the saving.
     compact_ok: bool = False
+    # `(seg_l, seg_r, ground_z, base) -> (I, J, Q)`: the below/below segment
+    # pairs whose remainder needs more than the base order, keyed to grazing
+    # height (momwire#1672), local to the below segments; None lists none.
+    below_remainder_pairs: Callable | None = None
 
 
 class BuriedPlan(NamedTuple):
@@ -1028,6 +1032,9 @@ class BuriedPlan(NamedTuple):
     t_bx: object
     W_bx: object
     plan: object
+    # momwire#1672: the below/below pairs raised above the base order
+    # (`BuriedFills.below_remainder_pairs`), or None.
+    bb_pairs: object = None
 
 
 def plan_buried(
@@ -1039,6 +1046,8 @@ def plan_buried(
     refuse_out_of_scope_fn,
     crossing_junctions_fn,
     serve_plan_fn,
+    below_pairs_fn=None,
+    ground_z=None,
 ):
     """Everything the buried fill decides before it fills a grid, in the
     order it decides it: the solver's out-of-scope configurations, the
@@ -1107,6 +1116,25 @@ def plan_buried(
         obs_bx, t_bx, W_bx = obs_b, t_b, W_b
         plan_a, plan_b = obs_a, obs_b
 
+    # --- the below/below remainder's grazing pairs (momwire#1672) ---------
+    # The remainder is "smooth over a segment" only away from the surface: a
+    # buried wire within a segment of it sees its own mirror at d + d', a
+    # spike the base order cannot see, and shallow radials converged tens of
+    # ohms slowly in X. The pairs that need more are listed by the rule the
+    # above-ground remainder keys its order by (momwire#631/#1189), and their
+    # raised-order nodes join the plan, which sizes the grid on the union of
+    # every node rule the fill will query.
+    bb_pairs = None
+    if below_pairs_fn is not None and b_idx.size:
+        q_base = obs_b.shape[0] // b_idx.size
+        bb_pairs = below_pairs_fn(
+            geom["seg_l"][b_idx], geom["seg_r"][b_idx], float(ground_z), q_base
+        )
+        if bb_pairs[0].size:
+            plan_b = np.vstack([plan_b, _raised_nodes(geom, b_idx, bb_pairs)])
+        else:
+            bb_pairs = None
+
     plan = serve_plan_fn(
         geom,
         a_idx,
@@ -1141,7 +1169,104 @@ def plan_buried(
         t_bx,
         W_bx,
         plan,
+        bb_pairs,
     )
+
+
+def _raised_nodes(geom, b_idx, pairs):
+    """Every listed below segment's Gauss nodes at the largest order any of
+    its pairs takes: the points `_below_pair_correction` will query."""
+    I, J, Q = pairs
+    n = b_idx.size
+    qmax = np.zeros(n, dtype=np.int64)
+    np.maximum.at(qmax, I, Q)
+    np.maximum.at(qmax, J, Q)
+    out = []
+    for q in np.unique(qmax[qmax > 0]):
+        segs = b_idx[qmax == q]
+        xg, _wg = leggauss(int(q))
+        tq = 0.5 * (xg + 1.0)
+        sl, sr = geom["seg_l"][segs], geom["seg_r"][segs]
+        out.append(
+            (sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]).reshape(-1, 3)
+        )
+    return np.vstack(out)
+
+
+def _pair_side(geom, segs, q, d1):
+    """`(nodes (n, q, 3), tangents (n*q, 3), W (n, d1, q))` at Gauss order q:
+    `field_nodes`' rule with the polynomial moment weights folded on."""
+    xg, wg = leggauss(int(q))
+    tq = 0.5 * (xg + 1.0)
+    sl, sr = geom["seg_l"][segs], geom["seg_r"][segs]
+    h = geom["h_per_seg"][segs]
+    nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
+    u = h[:, None] * tq[None, :]
+    w = 0.5 * h[:, None] * wg[None, :]
+    W = w[:, None, :] * np.float_power(u[:, None, :], np.arange(d1)[None, :, None])
+    return nodes, np.repeat(geom["tangents"][segs], int(q), axis=0), W
+
+
+def _below_pair_correction(
+    Z, geom, b_idx, pairs, supp_seg, polys, proj, obs_b, W_b, *, keep_obs, row_of
+):
+    """The listed below/below pairs at their own order, in place
+    (momwire#1672): the block was filled at the base order over every pair,
+    so each listed pair swaps its base-order moments for its own,
+    `Z -= P·(Jf_q − Jf_base)·P` (the field-form block subtracts).
+
+    `keep_obs` is the observer restriction (global below segments; None for
+    all) and `row_of` the row-compact map, as the block itself takes them.
+    """
+    I, J, Q = pairs
+    if keep_obs is not None:
+        keep = np.isin(b_idx[I], keep_obs)
+        I, J, Q = I[keep], J[keep], Q[keep]
+    if I.size == 0:
+        return
+    d1 = polys.shape[2]
+    q0 = obs_b.shape[0] // b_idx.size
+    nodes0 = obs_b.reshape(b_idx.size, q0, 3)
+    tang = geom["tangents"]
+    dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
+    # One projection per (source segment, order): its observers are that
+    # column of the list, each read at the pair's own order on both sides.
+    grp = np.lexsort((J, Q))
+    cuts = np.flatnonzero((np.diff(Q[grp]) != 0) | (np.diff(J[grp]) != 0)) + 1
+    for run in np.split(grp, cuts):
+        j, q = int(J[run[0]]), int(Q[run[0]])
+        obs = I[run]
+        on, ot, oW = _pair_side(geom, b_idx[obs], q, d1)
+        sn, st, sW = _pair_side(geom, b_idx[[j]], q, d1)
+        F = proj(on.reshape(-1, 3), ot, sn.reshape(-1, 3), st).reshape(obs.size, q, q)
+        hi = np.einsum("kpa,kab,Pb->kpP", oW, F, sW[0], optimize=True)
+        # the base order's own moments, on the nodes and weights the block read
+        F0 = proj(
+            nodes0[obs].reshape(-1, 3),
+            np.repeat(tang[b_idx[obs]], q0, axis=0),
+            nodes0[j],
+            np.repeat(tang[b_idx[[j]]], q0, axis=0),
+        ).reshape(obs.size, q0, q0)
+        lo = np.einsum(
+            "pka,kab,Pb->kpP", W_b[:, obs, :], F0, W_b[:, j, :], optimize=True
+        )
+        dJ[run] = hi - lo
+    # (basis, wing) resting on each segment, live wings only
+    live = (supp_seg >= 0) & np.any(polys != 0.0, axis=2)
+    mm, aa = np.nonzero(live)
+    seg_of = supp_seg[mm, aa]
+    by_seg = {}
+    for m, a, g in zip(mm.tolist(), aa.tolist(), seg_of.tolist(), strict=True):
+        by_seg.setdefault(g, []).append((m, a))
+    for k in range(I.size):
+        go, gs = int(b_idx[I[k]]), int(b_idx[J[k]])
+        for m, a in by_seg.get(go, ()):
+            r = m if row_of is None else int(row_of[m])
+            if r < 0:
+                continue
+            left = polys[m, a] @ dJ[k]
+            for n, b in by_seg.get(gs, ()):
+                Z[r, n] -= left @ polys[n, b]
 
 
 def _crossing_basis_rows(supp_seg, polys, rows):
@@ -1354,6 +1479,7 @@ def compute_Z_operator_buried(
         t_bx,
         W_bx,
         plan,
+        bb_pairs,
     ) = plan_buried(
         geom,
         nodes=f.nodes,
@@ -1362,6 +1488,8 @@ def compute_Z_operator_buried(
         refuse_out_of_scope_fn=refuse_out_of_scope_fn,
         crossing_junctions_fn=crossing_junctions_fn,
         serve_plan_fn=serve_plan_fn,
+        below_pairs_fn=f.below_remainder_pairs,
+        ground_z=ground_z,
     )
     gz = ground_z
     # momwire#1132: the row-compact target, resolved before any fill so a
@@ -1579,6 +1707,20 @@ def compute_Z_operator_buried(
         # restriction makes the block rectangular, which takes the full one.
         symmetric=rows is None,
     )
+    if bb_pairs is not None:
+        _below_pair_correction(
+            Z,
+            geom,
+            b_idx,
+            bb_pairs,
+            supp_seg,
+            polys,
+            proj_bb,
+            obs_b,
+            W_b,
+            keep_obs=None if rows is None else obs_b_idx,
+            row_of=row_of,
+        )
 
     crossing = crossing_j if a_idx.size else ()
     if crossing:
