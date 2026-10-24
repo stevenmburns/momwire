@@ -1506,9 +1506,18 @@ std::string Front::build(const FrontInputs &in_raw) {
     // stage 1, `_exact_kernel_h_and_a`): its segments are the ones asked, and
     // a wholly buried deck has none. The plan is the above medium front's
     // (`medium_part`).
+    // `_solved_wires`: the skipped input wires as solved ones (a dropped
+    // copy is not one)
+    std::vector<uint8_t> auto_skip(static_cast<size_t>(n_wires), 0);
+    for (int64_t w = 0; w < n_wires; w++) {
+        const int64_t input = has_dedup ? dedup_kept[static_cast<size_t>(w)] : w;
+        for (int64_t k : in.exact_auto_skip)
+            if (k == input) auto_skip[static_cast<size_t>(w)] = 1;
+    }
     if (in.exact_kernel == ExactKernel::automatic && buried != Buried::below_plane)
         for (int64_t w = 0; w < n_wires && !exact; w++) {
             if (buried != Buried::none && media_below[static_cast<size_t>(w)] != 0) continue;
+            if (auto_skip[static_cast<size_t>(w)]) continue;  // momwire#1649
             for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++)
                 if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) {
                     exact = true;

@@ -669,6 +669,15 @@ _REMAINDER_GRADED_C = 4.0
 _REMAINDER_GRADED_EDGE_TOL = 1e-9
 
 
+def _solved_wires(inputs, dedup):
+    """Input wire indices as the solved wires' (momwire#1649): unchanged with
+    no duplicate dropped, else the solved wires whose kept input is named."""
+    if dedup is None:
+        return tuple(int(w) for w in inputs)
+    named = {int(w) for w in inputs}
+    return tuple(i for i, k in enumerate(dedup.kept) if k in named)
+
+
 def _segment_touch_lists(seg_l, seg_r):
     """CSR lists of the segments sharing an endpoint with each segment,
     each segment included in its own list."""
@@ -1376,6 +1385,11 @@ class BSplineSolver(
         segment/radius 5 and 2.5, it is 0.16-0.23 ohm, TOWARD NEC-5 and AWAY
         from NEC-4.2. `tests/test_ek_above_ground_1170.py` counts the pairs
         per kernel.
+    exact_kernel_auto_skip : wire indices whose segments "auto" does not
+        ask about (momwire#1649): the pieces a deck seam cut at z = 0, whose
+        length is where the plane fell rather than the user's mesh. Default
+        (): every wire is asked. An explicit `exact_kernel=True` still
+        reaches every wire.
     exact_kernel : the exact ring kernel on coaxial pairs (momwire#1408),
         opt-in. False (the default) leaves every fill exactly as it was, bit
         for bit: no line of the correction runs. True replaces, after the
@@ -1631,6 +1645,7 @@ class BSplineSolver(
         n_qp_source=16,
         extended_kernel=False,
         exact_kernel=False,
+        exact_kernel_auto_skip=(),
         wavelength=22,
         halfdriver_factor=0.962,
         wire_radius=0.0005,
@@ -1802,6 +1817,9 @@ class BSplineSolver(
         self._exact_kernel_init(
             exact_kernel,
             _exact_kernel_refusals(use_singular_enrichment, rotational_symmetry),
+            # the seam's wire indices, onto the wires solved (a dropped copy
+            # is not one)
+            auto_skip=_solved_wires(exact_kernel_auto_skip, self._wire_dedup),
         )
         self.swept_mem_mb = int(swept_mem_mb)
         if self.swept_mem_mb < 1:
@@ -2212,10 +2230,12 @@ class BSplineSolver(
         geom = self._build_geometry()
         h = norm3(geom["seg_r"] - geom["seg_l"])
         a = self._seg_radius(geom)
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        wire = np.repeat(np.arange(seg_off.size - 1), np.diff(seg_off))
         if self._exact_kernel_buried():
             above = ~np.asarray(self._below_segments(geom), dtype=bool)
-            return h[above], a[above]
-        return h, a
+            return h[above], a[above], wire[above]
+        return h, a, wire
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule (momwire#1029

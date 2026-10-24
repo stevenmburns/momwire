@@ -3002,6 +3002,19 @@ def _solver_for(
             deck.wire_distributed_rlc.get(piece.tag) for piece in mesh.pieces
         ]
 
+    # momwire#1649: a piece cut at z = 0 is as long as where the plane fell
+    # on its card, not as the user meshed it, so "auto" does not ask its
+    # segments whether the exact kernel is needed. Only a deck with a cut
+    # passes the keyword, so every other deck's call is the one it was.
+    if basis_kwargs.get("exact_kernel") == "auto":
+        cut = tuple(
+            i for i, piece in enumerate(mesh.pieces) if piece.cut_start or piece.cut_end
+        )
+        if cut:
+            basis_kwargs = MappingProxyType(
+                {**basis_kwargs, "exact_kernel_auto_skip": cut}
+            )
+
     return construct_solver(
         solver_class,
         basis_kwargs,

@@ -1589,6 +1589,11 @@ class RazorSolver(
         identical to `BSplineSolver`'s and `SinusoidalSolver`'s, so a deck's
         `EK` card reaches this class through the same `build_solver` line
         that reaches them.
+    exact_kernel_auto_skip: wire indices whose segments "auto" does not
+        ask about (momwire#1649): the pieces a deck seam cut at z = 0, whose
+        length is where the plane fell rather than the user's mesh. Default
+        (): every wire is asked. An explicit `exact_kernel=True` still
+        reaches every wire.
     exact_kernel: the exact ring kernel on coaxial pairs (momwire#1433),
         `BSplineSolver`'s option with its semantics, through the shared
         `_exact_kernel_seam`: False (the default) is structurally absent and
@@ -1913,6 +1918,7 @@ class RazorSolver(
         wire_radius=0.0005,
         extended_kernel=False,
         exact_kernel=False,
+        exact_kernel_auto_skip=(),
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
@@ -2170,7 +2176,10 @@ class RazorSolver(
         # structurally absent (no line of the correction runs), True is
         # refused by name on the routes it does not serve, and "auto" is
         # resolved at the end of __init__ once the mesh is final.
-        self._exact_kernel_init(exact_kernel)
+        self._exact_kernel_init(
+            exact_kernel,
+            auto_skip=_bspline._solved_wires(exact_kernel_auto_skip, self._wire_dedup),
+        )
 
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
@@ -2452,11 +2461,13 @@ class RazorSolver(
     def _exact_kernel_h_and_a(self):
         geom = self._build_geometry()
         h, a = geom["seg_h"], self._seg_radius(geom)
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        wire = np.repeat(np.arange(seg_off.size - 1), np.diff(seg_off))
         if self._exact_kernel_buried():
             # momwire#1619: only the above medium's segments are corrected.
             above = self._above_segments(geom)
-            return h[above], a[above]
-        return h, a
+            return h[above], a[above], wire[above]
+        return h, a, wire
 
     def _exact_kernel_any_above(self):
         return any(m == _medium_spec.ABOVE for m in self._wire_media())

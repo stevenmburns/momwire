@@ -66,6 +66,9 @@ void BSplineSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_gr
         in.node_gaps.push_back({mesh.sites[static_cast<size_t>(s)].piece,
                                 mesh.sites[static_cast<size_t>(s)].end == SeamSite::at_start ? End::start : End::end});
     in.junctions = mesh.junctions;
+    // momwire#1649 (`_solver_for`): the pieces cut at z = 0 are not asked
+    for (size_t i = 0; i < mesh.pieces.size(); i++)
+        if (mesh.pieces[i].cut_start || mesh.pieces[i].cut_end) in.exact_auto_skip.push_back(static_cast<int64_t>(i));
     bool uniform = true;
     for (const SeamPiece &piece : mesh.pieces)
         if (!(piece.radius == mesh.pieces[0].radius)) uniform = false;
@@ -253,8 +256,17 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     // (momwire#1619 stage 1, `_exact_kernel_h_and_a`), and a wholly buried
     // deck has none. A coaxial line across a radius step takes its cross
     // job in `add_exact_correction`.
-    fr->exact_kernel =
-        bspline::exact_kernel_auto(fr->geom, fr->radii, fr->buried ? &fr->basis.below_wire : nullptr);
+    {
+        // `_solved_wires`: the skipped seam pieces as solved wires
+        std::vector<uint8_t> skip(fr->args.polylines.size(), 0);
+        for (size_t w = 0; w < skip.size(); w++) {
+            const int64_t input = fr->dedup.active ? fr->dedup.kept[w] : static_cast<int64_t>(w);
+            for (int64_t k : in.exact_auto_skip)
+                if (k == input) skip[w] = 1;
+        }
+        fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii,
+                                                      fr->buried ? &fr->basis.below_wire : nullptr, &skip);
+    }
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

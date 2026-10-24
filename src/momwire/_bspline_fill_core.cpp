@@ -1811,9 +1811,10 @@ class BaseRows {
 }  // namespace
 
 bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire,
-                       const std::vector<uint8_t> *below_wire) {
+                       const std::vector<uint8_t> *below_wire, const std::vector<uint8_t> *skip) {
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         if (below_wire != nullptr && (*below_wire)[w]) continue;
+        if (skip != nullptr && w < skip->size() && (*skip)[w]) continue;
         for (int64_t q = 0; q < g.per_wire[w].n_total; q++) {
             const size_t s = static_cast<size_t>(g.seg_offsets[w] + q);
             double d[3];

@@ -140,6 +140,9 @@ struct FrontInputs {
     double wavelength = 22.0;
     bool extended_kernel = false;
     ExactKernel exact_kernel = ExactKernel::off;
+    // `exact_kernel_auto_skip` (momwire#1649): input wire indices whose
+    // segments "auto" does not ask (a deck seam's z = 0 cut pieces)
+    std::vector<int64_t> exact_auto_skip;
     // The three quadrature orders the constructor validates (`n_qp_path`
     // None = derived; razor-2p's path rule never reads it).
     bool n_qp_path_given = false;

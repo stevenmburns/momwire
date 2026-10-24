@@ -371,6 +371,9 @@ mw::razor::FrontInputs front_inputs(const py::dict &kw) {
     } else {
         in.exact_kernel = (!ek.is_none() && py::bool_(ek)) ? ExactKernel::on : ExactKernel::off;
     }
+    py::object skip = get("exact_kernel_auto_skip");
+    if (!skip.is_none())
+        for (py::handle w : skip) in.exact_auto_skip.push_back(as_count(py::reinterpret_borrow<py::object>(w)));
     py::object nqp = get("n_qp_path");
     in.n_qp_path_given = !nqp.is_none();
     if (in.n_qp_path_given) in.n_qp_path = as_count(nqp);
@@ -708,6 +711,11 @@ py::dict seam_kwargs(const mw::nec5::Prepared &p) {
     }
     kw["nec5_quadrature"] = true;
     kw["exact_kernel"] = "auto";
+    if (!in.exact_auto_skip.empty()) {
+        py::list skip;
+        for (int64_t w : in.exact_auto_skip) skip.append(w);
+        kw["exact_kernel_auto_skip"] = py::tuple(skip);
+    }
     return kw;
 }
 
@@ -928,6 +936,11 @@ py::dict bspline_kwargs(const mw::nec5::Prepared &p) {
         kw["ground_model"] = "sommerfeld";
     }
     kw["exact_kernel"] = "auto";
+    if (!in.exact_auto_skip.empty()) {
+        py::list skip;
+        for (int64_t w : in.exact_auto_skip) skip.append(w);
+        kw["exact_kernel_auto_skip"] = py::tuple(skip);
+    }
     return kw;
 }
 

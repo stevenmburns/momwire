@@ -41,6 +41,7 @@ namespace nec5 {
 struct BSplineFrontInputs {
     std::vector<double> points;       // `wires`: per piece (start, end), 6 doubles
     std::vector<int64_t> n_per_edge;  // `n_per_edge_per_wire`: [[n]] per piece
+    std::vector<int64_t> exact_auto_skip;  // momwire#1649: the pieces cut at z = 0
     struct Feed {
         int64_t wire = 0;
         double arc = 0;
