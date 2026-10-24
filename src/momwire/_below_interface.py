@@ -1131,8 +1131,7 @@ def plan_buried(
         bb_pairs = below_pairs_fn(
             geom["seg_l"][b_idx], geom["seg_r"][b_idx], float(ground_z), q_base
         )
-        if not bb_pairs[0].size:
-            bb_pairs = None
+        bb_pairs = _same_wire(bb_pairs, geom, b_idx)
 
     # A raised node sits closer to its segment's ends than any base node, so
     # beside a crossing node (depth 0 at the shared end) the raised pairs can
@@ -1196,6 +1195,23 @@ def _is_grazing_refusal(exc):
         for t in (BURIED_GRAZING_REFUSAL, BURIED_CROSS_GRAZING_REFUSAL)
     )
     return str(exc).startswith(prefixes)
+
+
+def _same_wire(pairs, geom, b_idx):
+    """The listed pairs whose two segments lie on one wire, or None.
+
+    Pairs across wires are the corner where radials meet at a hub, listed
+    there because each radial's mirror passes close to its neighbours'
+    first nodes. Raising them cost a 32-radial screen 5x and moved X by at
+    most 0.3 ohm, within 0.1 ohm of the converged value either way (16
+    radials: -1.55 / -1.35 ohm at 40 segments per wavelength with / without
+    them, -1.46 / -1.44 at 400), so only the pairs along a wire are raised."""
+    I, J, Q = pairs
+    wire = np.searchsorted(np.asarray(geom["seg_offsets"]), b_idx, side="right") - 1
+    keep = wire[I] == wire[J]
+    if not np.any(keep):
+        return None
+    return I[keep], J[keep], Q[keep]
 
 
 def _halved(pairs, base):

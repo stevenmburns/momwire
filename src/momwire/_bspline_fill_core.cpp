@@ -3783,6 +3783,22 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
                 sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
             }
         raised_pairs_on(sl, sr, static_cast<int64_t>(b_idx.size()), gz, q, 1.0, 0.0, np, bbI, bbJ, bbQ);
+        // `_same_wire`: only the pairs along one wire are raised
+        const auto wire_of = [&](int64_t s2) {
+            return static_cast<int64_t>(std::upper_bound(g.seg_offsets.begin(), g.seg_offsets.end(), s2) -
+                                        g.seg_offsets.begin()) -
+                   1;
+        };
+        std::vector<int64_t> kI, kJ, kQ;
+        for (size_t t = 0; t < bbI.size(); t++)
+            if (wire_of(b_idx[static_cast<size_t>(bbI[t])]) == wire_of(b_idx[static_cast<size_t>(bbJ[t])])) {
+                kI.push_back(bbI[t]);
+                kJ.push_back(bbJ[t]);
+                kQ.push_back(bbQ[t]);
+            }
+        bbI.swap(kI);
+        bbJ.swap(kJ);
+        bbQ.swap(kQ);
     }
     const double lam_m = (2.0 * PI_) / std::hypot(bm.k_m.real(), bm.k_m.imag());
     const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
