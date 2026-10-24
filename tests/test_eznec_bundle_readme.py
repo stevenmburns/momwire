@@ -238,3 +238,26 @@ def test_the_first_run_note_reads_as_dan_worded_it():
     assert lines[at + 2] == (
         'have to click "More info" and then "Run anyway". Nothing is wrong'
     )
+
+
+def test_4nec2_runs_the_launchers_from_their_own_folder():
+    """momwire#1652 (Dan AC6LA): 4nec2 is set up like EZNEC and SimNEC, with
+    the bundle in a folder of its own and 4nec2.bat naming a launcher there
+    by its full path, in both slots; nothing is copied into 4nec2's
+    folders."""
+    build = _build()
+    text = build.readme_text("9.9.9", "SIGNING: unsigned.", ".exe")
+    assert "which is the exception" not in text
+    assert "Copy the WHOLE CONTENTS" not in text
+    lines = [line.strip() for line in text.splitlines()]
+    for name in NEC5_SLOT_LINES + NEC42_SLOT_LINES:
+        assert f"rem C:\\momwire\\{name}.exe < nec2d.tmp" in lines, name
+    assert "C:\\momwire\\momwire-nec5.exe < nec2d.tmp" in lines
+    assert "C:\\momwire\\momwire-nec42.exe < nec2d.tmp" in lines
+    head = text.split("\n\n", 1)[0]
+    assert "SimNEC (its NEC-5 and NEC-4.2 engines)" in " ".join(head.split())
+    assert "its NEC-4.2 engine" in " ".join(head.split())
+
+
+NEC5_SLOT_LINES = ("momwire-nec5", "momwire-nec5-razor-2p")
+NEC42_SLOT_LINES = ("momwire-nec42", "momwire-nec42-sinusoidal")
