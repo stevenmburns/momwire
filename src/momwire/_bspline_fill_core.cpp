@@ -3775,7 +3775,6 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     // within a segment of the surface; their raised-order nodes join the
     // plan (`_raised_nodes`), which sizes the grid over every node it reads.
     std::vector<int64_t> bbI, bbJ, bbQ;
-    std::vector<double> plan_b(obs_b);
     if (!b_idx.empty()) {
         std::vector<double> sl, sr;
         for (int64_t s2 : b_idx)
@@ -3784,6 +3783,15 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
                 sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
             }
         raised_pairs_on(sl, sr, static_cast<int64_t>(b_idx.size()), gz, q, 1.0, 0.0, np, bbI, bbJ, bbQ);
+    }
+    const double lam_m = (2.0 * PI_) / std::hypot(bm.k_m.real(), bm.k_m.imag());
+    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
+    const double floor = (0.05 - 2.0 * (0.05 / 3.0)) * (PI_ / 180.0);
+    double r1_max = 0.0, th_min = 0.0;
+    // `plan_buried`'s backoff: the raised pairs halve until the plan's
+    // grazing floor serves them (`_halved`), the base fill when none remain
+    for (;;) {
+        std::vector<double> plan_b(obs_b);
         if (!bbI.empty()) {
             std::vector<int64_t> qmax(b_idx.size(), 0);
             for (size_t t = 0; t < bbI.size(); t++) {
@@ -3801,29 +3809,40 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
                 plan_b.insert(plan_b.end(), rn.begin(), rn.end());
             }
         }
+        const size_t n_obs = plan_b.size() / 3;
+        // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
+        std::vector<double> d_b(n_obs);
+        for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - plan_b[3 * i + 2];
+        double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
+        for (size_t i = 0; i < n_obs; i++)
+            for (size_t j = i; j < n_obs; j++) {
+                const double dx = plan_b[3 * i] - plan_b[3 * j], dy = plan_b[3 * i + 1] - plan_b[3 * j + 1];
+                const double rho2 = dx * dx + dy * dy;
+                const double hh = d_b[i] + d_b[j];
+                const double hh2 = hh * hh;
+                const double r1sq = rho2 + hh2;
+                if (r1sq > r1sq_max) r1sq_max = r1sq;
+                const double qq = hh2 / rho2;
+                if (qq < q_min) q_min = qq;
+            }
+        r1_max = std::sqrt(r1sq_max);
+        th_min = std::atan(std::sqrt(q_min));
+        // past the cap Python asks the floor of the pairs inside it only,
+        // which this walk does not: decline rather than choose differently
+        if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
+        if (!(th_min < floor)) break;
+        if (bbI.empty()) throw FrontNotPorted("buried-grazing-refusal");
+        std::vector<int64_t> hI, hJ, hQ;
+        for (size_t t = 0; t < bbI.size(); t++)
+            if (bbQ[t] / 2 > q) {
+                hI.push_back(bbI[t]);
+                hJ.push_back(bbJ[t]);
+                hQ.push_back(bbQ[t] / 2);
+            }
+        bbI.swap(hI);
+        bbJ.swap(hJ);
+        bbQ.swap(hQ);
     }
-    const size_t n_obs = plan_b.size() / 3;
-    // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
-    std::vector<double> d_b(n_obs);
-    for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - plan_b[3 * i + 2];
-    double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
-    for (size_t i = 0; i < n_obs; i++)
-        for (size_t j = i; j < n_obs; j++) {
-            const double dx = plan_b[3 * i] - plan_b[3 * j], dy = plan_b[3 * i + 1] - plan_b[3 * j + 1];
-            const double rho2 = dx * dx + dy * dy;
-            const double hh = d_b[i] + d_b[j];
-            const double hh2 = hh * hh;
-            const double r1sq = rho2 + hh2;
-            if (r1sq > r1sq_max) r1sq_max = r1sq;
-            const double qq = hh2 / rho2;
-            if (qq < q_min) q_min = qq;
-        }
-    const double r1_max = std::sqrt(r1sq_max), th_min = std::atan(std::sqrt(q_min));
-    const double lam_m = (2.0 * PI_) / std::hypot(bm.k_m.real(), bm.k_m.imag());
-    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
-    const double floor = (0.05 - 2.0 * (0.05 / 3.0)) * (PI_ / 180.0);
-    if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
-    if (th_min < floor) throw FrontNotPorted("buried-grazing-refusal");
     // the above/above sizing (`max_image_distance` over the above segments)
     double r1_above = 0.0;
     if (!a_idx.empty()) {
