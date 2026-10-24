@@ -73,6 +73,7 @@ field, so their runs write exactly what they wrote before.
 from __future__ import annotations
 
 import codecs
+import functools
 import io
 import os
 import sys
@@ -842,7 +843,7 @@ def _emit_times(times) -> None:
     pre = getattr(sys, "_mw_times_pre", None)
     if pre and pre.get("route") and times.route == "python":
         times.route = pre["route"]
-    print(times.line(), file=sys.stderr, flush=True)
+    print(times.line(), file=_stderr(), flush=True)
 
 
 def stream(
@@ -912,6 +913,47 @@ def stream(
     return 0
 
 
+# momwire#1673: what the launchers print on stderr. Nothing, by default: the
+# real engines write nothing there, and a host that never drains the pipe
+# (SimNEC's stream, `- -`) blocks the engine on a full pipe once the
+# advisories one long stream raises pass its size (a Windows anonymous pipe
+# is about 4 KB; a buried-radial sweep raises ~1.5 KB per structure). So
+# `main` answers with `sys.stderr` pointed at a sink, which is where Python's
+# warnings display goes. The printout is unchanged, a
+# `warnings.catch_warnings(record=True)` around `main` still records every
+# advisory, and the shell's own deliberate lines (the streaming refusal,
+# MOMWIRE_TIMES) still reach the real stderr through `_stderr()`.
+# `MOMWIRE_ADVISORIES=stderr` leaves stderr alone, for a host that reads it
+# as a diagnostic feed.
+ADVISORIES_ENV = "MOMWIRE_ADVISORIES"
+_REAL_STDERR: list = []
+
+
+def _stderr():
+    """The process's real stderr, under `main`'s sink or not."""
+    return _REAL_STDERR[-1] if _REAL_STDERR else sys.stderr
+
+
+def _quiet_advisories(entry: Callable[..., int]) -> Callable[..., int]:
+    """Run a launcher entry point with stderr pointed at a sink
+    (momwire#1673), unless ``MOMWIRE_ADVISORIES=stderr`` asks otherwise."""
+
+    @functools.wraps(entry)
+    def quiet(*args: object, **kwargs: object) -> int:
+        if os.environ.get(ADVISORIES_ENV, "").strip().lower() == "stderr":
+            return entry(*args, **kwargs)
+        _REAL_STDERR.append(sys.stderr)
+        with open(os.devnull, "w", encoding="utf-8") as sink:
+            sys.stderr = sink
+            try:
+                return entry(*args, **kwargs)
+            finally:
+                sys.stderr = _REAL_STDERR.pop()
+
+    return quiet
+
+
+@_quiet_advisories
 def main(
     argv: list[str] | None = None,
     *,
@@ -980,7 +1022,7 @@ def main(
         # in, and answering 0 with nothing on stdout leaves the caller
         # waiting forever, so this one refusal goes to stderr with a failing
         # status, which SimNEC reports as a NEC failure.
-        print(STREAMING_REFUSAL, file=sys.stderr)
+        print(STREAMING_REFUSAL, file=_stderr())
         return 2
     times_on = _times.env_on()
     try:
