@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from momwire.deck import DeckError
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec._shell import render
 
@@ -94,12 +93,15 @@ def test_a_nonzero_one_field_ground_flag_also_parses():
     assert parsed.ge_second == 0
 
 
-def test_zero_field_ge_still_refuses_by_name():
-    """The field count is 1 now, not 0 -- a bare ``GE`` with no fields at
-    all is still short and must still refuse, distinctly from the one-field
-    form this issue accepts."""
-    with pytest.raises(DeckError, match="GE carries 0 fields and needs at least 1"):
-        parse_nec5(DIPOLE.format(ge="GE"))
+def test_a_ge_with_no_field_reads_as_ge_0():
+    """Dan AC6LA's 4nec2 decks carry a ``GE`` with no fields at all. The
+    licensed NEC-5 reads it as ``GE 0``, echoes it as ``GE 0 0`` and prints
+    the same results (probed black-box, momwire#1698's batch), so it parses
+    as the one-field form does, and prints the same echo."""
+    parsed = parse_nec5(DIPOLE.format(ge="GE"))
+    assert (parsed.ge_flag, parsed.ge_second, parsed.geometry_file) == (0, 0, False)
+    assert " GE    0    0\n" in render(DIPOLE.format(ge="GE"))
+    assert render(DIPOLE.format(ge="GE")) == render(DIPOLE.format(ge="GE 0"))
 
 
 def test_the_printout_echoes_the_default_second_field():
