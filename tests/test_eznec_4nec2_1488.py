@@ -238,7 +238,17 @@ def test_close_deck_adds_en_to_a_deck_without_one():
     assert _shell.close_deck("CM\nCE\nXQ") == "CM\nCE\nXQ\nEN\n"
 
 
-@pytest.mark.parametrize("text", ["CM\nCE\nXQ\nEN\n", "CM\nCE\nXQ\n en\n"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "CM\nCE\nXQ\nEN\n",
+        "CM\nCE\nXQ\n en\n",
+        # a chain that stops after a structure reads as the stream form reads
+        # it, with no empty structure added after its NX (momwire#1698)
+        "CM\nCE\nXQ\nNX\n",
+        "CM\nCE\nXQ\nNX\n\n  \n",
+    ],
+)
 def test_close_deck_leaves_a_deck_with_en_alone(text):
     assert _shell.close_deck(text) == text
 

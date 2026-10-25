@@ -366,6 +366,8 @@ std::string path_str(const std::string &p) {
 #endif
 
 std::string close_deck(const std::string &latin1) {
+    // `_shell.close_deck`: unchanged when a line is EN, or the last card is NX
+    bool last_nx = false;
     for (const std::string &line : nec5::latin1_splitlines(latin1)) {
         // `line.strip().replace(",", " ").split()[0][:2].upper() == "EN"`
         std::size_t a = 0;
@@ -377,7 +379,12 @@ std::string close_deck(const std::string &latin1) {
             const char c0 = line[a], c1 = line[a + 1];
             if ((c0 == 'E' || c0 == 'e') && (c1 == 'N' || c1 == 'n')) return latin1;
         }
+        if (a < line.size()) {
+            const char c0 = line[a], c1 = a + 1 < line.size() ? line[a + 1] : ' ';
+            last_nx = (c0 == 'N' || c0 == 'n') && (c1 == 'X' || c1 == 'x');
+        }
     }
+    if (last_nx) return latin1;
     std::string text = latin1;
     if (!text.empty() && text.back() != '\n' && text.back() != '\r') text += "\n";
     return text + "EN\n";
