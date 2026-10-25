@@ -491,6 +491,7 @@ def test_the_sinusoidal_fill_in_cxx_alone_is_pythons(driver):
     assert compared >= 30, compared
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.1
 def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
     """momwire#1607 B4a: deck text to the NEC-4.2 slot's printout for the
     sinusoidal basis, built from the core TUs alone

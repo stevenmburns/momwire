@@ -238,7 +238,14 @@ def test_the_near_plane_cross_block_collapses(base, gap, record_property):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("base", ["bspline", "sg"])
+@pytest.mark.parametrize(
+    "base",
+    [
+        # median over the 5 s default-lane budget at 0.84.1
+        pytest.param("bspline", marks=pytest.mark.slow),
+        "sg",
+    ],
+)
 def test_the_raised_order_is_what_buys_it(base, monkeypatch, record_property):
     """The gate above with the lever pinned off, in the same process.
 
