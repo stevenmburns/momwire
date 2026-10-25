@@ -512,8 +512,9 @@ const std::map<std::string, std::string> &refused_by_name() {
 
 int min_fields(const std::string &mnemonic) {
     // `_MIN_FIELDS`: a short card reads its missing trailing fields as 0, as
-    // the NEC-5 engine does (momwire 0.79.2); GE and GW keep their floors
-    static const std::map<std::string, int> table = {{"GE", 1}, {"GW", 9}};
+    // the NEC-5 engine does (momwire 0.79.2); GW keeps its floor, and a bare
+    // GE reads as GE 0 (momwire#1698's batch)
+    static const std::map<std::string, int> table = {{"GW", 9}};
     auto it = table.find(mnemonic);
     return it == table.end() ? -1 : it->second;
 }

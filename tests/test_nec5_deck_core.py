@@ -268,7 +268,7 @@ CASES = {
         "OverflowError",
     ),
     # -- GE --
-    "ge bare": (DIPOLE.replace("GE 0,-1", "GE"), "GE carries 0 fields"),
+    "ge bare": (DIPOLE.replace("GE 0,-1", "GE"), "parsed"),
     "ge one field": (DIPOLE.replace("GE 0,-1", "GE 1"), "parsed"),
     "ge three fields": (DIPOLE.replace("GE 0,-1", "GE -1,5,7"), "parsed"),
     "ge infinite second": (DIPOLE.replace("GE 0,-1", "GE 0,-inf"), "OverflowError"),

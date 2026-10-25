@@ -651,13 +651,14 @@ _REFUSED_BY_NAME = MappingProxyType(
 # 0/1/4/5 and GN 2 -- identical printouts every time; `Card.f` / `Card.i`
 # already read an absent field as 0).  EZNEC's own writer omits fields too
 # (its `RP 0 181 1 1000 90. 0. -1. 0. 0.`), so a short card is not a sign of
-# a foreign deck.  Two floors stay: GE's (a GE with no field at all is
-# refused, momwire#1116 -- the bare one-field GE is served, the zero-field
-# one not, until the condition EZNEC writes it under is known) and GW's (a
-# wire missing its radius reads it as 0, and the engine stops on it with an
-# input data error).  A finite GN missing its permittivity is refused in
-# `_gn`: the engine reads it as 0 and answers NaN.
-_MIN_FIELDS = MappingProxyType({"GE": 1, "GW": 9})
+# a foreign deck.  One floor stays, GW's: a wire missing its radius reads it
+# as 0, and the engine stops on it with an input data error.  GE's floor went
+# with momwire#1698's batch (Dan AC6LA's 4nec2 decks carry a bare GE): the
+# licensed NEC-5 reads a GE with no field as GE 0, echoes it as "GE 0 0" and
+# prints the same results over a GN 2 ground as GE 0, 1 and -1 (probed
+# black-box, nec5cl-simd-d0c1383).  A finite GN missing its permittivity is
+# refused in `_gn`: the engine reads it as 0 and answers NaN.
+_MIN_FIELDS = MappingProxyType({"GW": 9})
 
 # EX kinds the dialect emits: 4 (elementary current source) 47/49 captures,
 # 0 (voltage source) 2/49.  Every other NEC excitation — incident plane
