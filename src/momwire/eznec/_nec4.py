@@ -352,12 +352,13 @@ def _a_new_frequency(cards, previous: int, number: int) -> bool:
     the shape probe p37 (Dan AC6LA's ``FR / EX / XQ / FR / RP``) measures on
     NEC-4.2: the run at the new ``FR`` prints every frequency's whole block,
     FREQUENCY to pattern, after its card echo (momwire#1592).  A ground,
-    load or network card between the runs has no NEC-4.2 printout.
+    load or network card between the runs has no NEC-4.2 printout.  A ``PT``
+    there is print control, as on NEC-5 (momwire#1696).
     """
-    from ._serve import _SEQUENCE_CARDS
+    from ._serve import _LATER_SEQUENCE_CARDS
 
     between = [c.mnemonic for c in cards[previous:number]]
-    return "FR" in between and all(m in _SEQUENCE_CARDS for m in between)
+    return "FR" in between and all(m in _LATER_SEQUENCE_CARDS for m in between)
 
 
 def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]:

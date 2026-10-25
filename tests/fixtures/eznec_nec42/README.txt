@@ -231,6 +231,15 @@ probes/<probe>.nec
   run after the XQ); the card is echoed as any other.  It holds from its
   card on: p89's first run prints the table and its second does not.
 
+  p91, written for momwire#1696 (Dan AC6LA's 4nec2 deck: PQ -1 and PT -1
+  before each of two runs, the second at a new FR).  Captured 2026-10-25 on
+  the same reference build (sha256 02c6fc87...), same ritual.  Deck LF.  An
+  inverted V of three wires over GN 1, fed on its 1-segment apex wire:
+    p91 PQ -1, PT -1, FR 3.68 MHz, XQ, then PQ -1, PT -1, FR 3.5-3.7 MHz
+        and an RP
+  The second run prints a whole block per frequency of its FR, as p37's
+  does, each with its pattern and none with a current table.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
