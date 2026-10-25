@@ -170,3 +170,65 @@ def test_the_cxx_core_declines_both_rp_ne_shapes_as_sequences():
     for path, kind in ((RP_NE_ONE, "sequence"), (RP_NE, "sequence")):
         answer = acc.nec5_razor_seam(path.read_bytes())
         assert [s["read"] for s in answer["structures"]] == [kind], path
+
+
+# momwire#1696: PT, the current table's print control, in a later run. 4nec2
+# writes PT -1 in every run. Probed black-box on the licensed NEC-5
+# (nec5cl-simd-d0c1383): PT holds from run to run like a source -- PT -1 drops
+# the Wire Currents table in its own run and every run after it, PT 0 brings
+# it back, and a run with no PT keeps the one in force.
+_CURRENTS = "Wire Currents"
+_PT_RUNS = {
+    "PT -1 in run 2 drops run 2's table": (
+        ["EX 0 1 11 0 1 0", "FR 0 1 0 0 3.6 0", "XQ", "PT -1", "FR 0 1 0 0 3.7 0"],
+        [True, False],
+    ),
+    "PT 0 in run 2 brings it back": (
+        ["EX 0 1 11 0 1 0", "PT -1", "FR 0 1 0 0 3.6 0", "XQ", "PT 0"]
+        + ["FR 0 1 0 0 3.7 0"],
+        [False, True],
+    ),
+    "run 2 keeps run 1's PT -1": (
+        ["EX 0 1 11 0 1 0", "PT -1", "FR 0 1 0 0 3.6 0", "XQ", "FR 0 1 0 0 3.7 0"],
+        [False, False],
+    ),
+    "XQ blocks: PT -1 with a source change": (
+        ["EX 0 1 11 0 1 0", "FR 0 1 0 0 3.6 0", "XQ", "PT -1", "EX 0 2 11 0 1 0"],
+        [True, False],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_PT_RUNS), ids=list(_PT_RUNS))
+def test_a_later_runs_pt_holds_like_a_source(case):
+    cards, tables = _PT_RUNS[case]
+    out = _out([*cards, "XQ", "EN"])
+    assert "NEC ERROR" not in out
+    # each run's block starts at its input table; its currents follow it
+    per_run = [_CURRENTS in run for run in out.split("ANTENNA INPUT PARAMETERS")[1:]]
+    assert per_run == tables
+
+
+def test_dans_two_runs_of_print_control_and_a_sweep_are_served():
+    # the shape of Dan's 4nec2 deck: PQ -1 and PT -1 before each XQ, the second
+    # run a 30-step FR with an RP
+    out = _out(
+        ["EX 0 1 11 0 1 0", "PQ -1", "PT -1", "FR 0 1 0 0 3.68 0", "XQ"]
+        + ["PQ -1", "PT -1", "FR 0 3 0 0 1 1", "RP 0 3 1 1000 90 0 -1", "EN"]
+    )
+    assert "NEC ERROR" not in out
+    assert out.count("ANTENNA INPUT PARAMETERS") == 4
+    assert _CURRENTS not in out
+
+
+def test_the_cxx_core_reads_a_later_runs_pt_as_python_does():
+    from momwire import _accel
+
+    acc = _accel.acc
+    if acc is None or not hasattr(acc, "nec5_razor_seam"):
+        pytest.skip("no accelerator with the C++ seam loaded")
+    for case, (cards, _tables) in _PT_RUNS.items():
+        text = HEAD + "\n" + "\n".join([*cards, "XQ", "EN"]) + "\n"
+        answer = acc.nec5_razor_seam(text.encode("latin-1"))
+        assert answer["route"] != "refused", (case, answer["message"])
+        assert [s["read"] for s in answer["structures"]] in (["sequence"], ["multi"])

@@ -1830,6 +1830,23 @@ def test_the_grazing_buried_decks_print_as_python_on_razor(driver, tmp_path):
     assert counts.get("served", 0) == 3 and counts.get("runs", 0) >= 3, counts
 
 
+def test_a_later_runs_pt_prints_as_python_on_razor(driver, tmp_path):
+    """momwire#1696: a later run carrying PT, the current table's print
+    control, through both of the C++ core's multi-run readings (a sequence and
+    XQ blocks), byte for byte as `_shell.render` prints it."""
+    from test_eznec_sequence_0792 import _PT_RUNS, HEAD
+
+    decks = []
+    (tmp_path / "decks").mkdir()
+    for k, (cards, _tables) in enumerate(_PT_RUNS.values()):
+        path = tmp_path / "decks" / f"pt_{k}.nec"
+        path.write_text(HEAD + "\n" + "\n".join([*cards, "XQ", "EN"]) + "\n")
+        decks.append(path)
+    counts, reasons = _razor_printouts(driver, decks, tmp_path)
+    assert not reasons, reasons
+    assert sum(n for seam, n in counts.items() if seam != "runs") == len(decks), counts
+
+
 BSPLINE_CROSSING_DECKS = [
     ROOT / "tests" / "fixtures" / rel
     for rel in (
