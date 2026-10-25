@@ -222,7 +222,8 @@ bool a_new_frequency(const std::vector<Card> &cards, ll previous, ll number) {
     for (ll k = lo; k < hi; k++) {
         const std::string &m = cards[static_cast<std::size_t>(k)].mnemonic;
         fr = fr || m == "FR";
-        all = all && one_of(m, {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR"});
+        // `_serve._LATER_SEQUENCE_CARDS`: PT between the runs is print control (momwire#1696)
+        all = all && one_of(m, {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR", "PT"});
     }
     return fr && all;
 }
