@@ -66,6 +66,8 @@ sys.path.insert(0, str(SPLIT))
 import printout_compare as pc  # noqa: E402
 import printout_tolerance as pt  # noqa: E402
 
+from momwire.eznec._shell import close_deck  # noqa: E402
+
 ARRAYS = pc.ARRAYS
 
 # The no-Python executables' printouts against Python's on Windows (MSVC
@@ -249,8 +251,11 @@ def main(argv=None):
         refusals = Counter()
         with open(out_path, "w") as out:
             for deck, fut in zip(decks, futures, strict=True):
+                # the file form closes a deck at end of file (momwire#1698),
+                # in the launcher and the executable alike, so the reference
+                # reads the text they read
                 python = pc.python_printout(
-                    deck.read_bytes().decode("latin-1"), basis=basis
+                    close_deck(deck.read_bytes().decode("latin-1")), basis=basis
                 )
                 a = fut.result()
                 rec = {"deck": str(deck), "route": a["route"]}

@@ -367,13 +367,15 @@ def render_files(
     (momwire#1488).  The NEC-4.2 slot never writes one: 4nec2 asks none of
     its NEC-4.2 engine (momwire#1592).
 
-    Every deck that arrives as a file is closed by :func:`close_deck` before
-    anything reads it, as the licensed NEC-5 closes a deck at end of file
-    (momwire#1698).  ``en_optional`` is the stdin form's flag from before
-    that (momwire#1488); the clients still send it, and it changes nothing.
+    Every NEC-5 or NEC-4.2 deck that arrives as a file is closed by
+    :func:`close_deck` before anything reads it, as the licensed NEC-5
+    closes a deck at end of file (momwire#1698).  The NEC-2 front end's own
+    reader already closes one there, and an ``EN`` added would print as a
+    card echo of its own, so ``nec2`` keeps the stdin form's rule: closed
+    when ``en_optional`` says the names came from stdin (momwire#1488).
     """
-    del en_optional
-    text = close_deck(text)
+    if en_optional or dialect != "nec2":
+        text = close_deck(text)
     printout = render(text, basis=basis, dialect=dialect)
     gmo = _gmo.gmo_text(text) if dialect == "nec5" else None
     return printout, gmo
