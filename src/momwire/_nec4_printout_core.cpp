@@ -47,6 +47,13 @@ std::string d(const Int &v, int width) {
 std::string e(double x, int width, int digits) { return nec5::py_format_e(x, width, digits); }
 std::string f(double x, int width, int digits) { return nec5::py_format_f(x, width, digits); }
 
+// `_nec4_printout._fixed_or_stars`: width asterisks when the value does not
+// fit its fixed field (momwire#1694)
+std::string f_or_stars(double x, int width, int digits) {
+    std::string text = f(x, width, digits);
+    return static_cast<int>(text.size()) > width ? std::string(static_cast<std::size_t>(width), '*') : text;
+}
+
 // `_printout._e_fortran`: a three-digit exponent drops its E.
 std::string e_fortran(double x, int width, int digits) {
     std::string text = nec5::py_format_e(x, 0, digits);
@@ -208,8 +215,8 @@ Lines structure_rows(const WireTableRow &r) {
     }
     if (r.kind == WireTableRow::move) {
         std::string numbers;
-        for (double v : r.rotation_deg) numbers += f(v, 10, 5);
-        for (double v : r.translation) numbers += f(v, 10, 5);
+        for (double v : r.rotation_deg) numbers += f_or_stars(v, 10, 5);
+        for (double v : r.translation) numbers += f_or_stars(v, 10, 5);
         return {"      THE STRUCTURE HAS BEEN MOVED, GM COMMAND DATA IS -",
                 "    " + d(r.tag_increment, 5) + d(r.copies, 5) + numbers + d(r.first_tag, 5) + d(1, 5) +
                     d(0, 5) + d(r.move_segments, 5)};

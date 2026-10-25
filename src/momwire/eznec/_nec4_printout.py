@@ -453,13 +453,23 @@ def _structure_rows(row: StructureRow) -> list[str]:
             f"{row.tag_increment:5d}"
         ]
     if isinstance(row, MoveRow):
-        numbers = "".join(f"{v:10.5f}" for v in (*row.rotation_deg, *row.translation))
+        numbers = "".join(
+            _fixed_or_stars(v, 10, 5) for v in (*row.rotation_deg, *row.translation)
+        )
         return [
             "      THE STRUCTURE HAS BEEN MOVED, GM COMMAND DATA IS -",
             f"    {row.tag_increment:5d}{row.copies:5d}{numbers}"
             f"{row.first_tag:5d}{1:5d}{0:5d}{row.segments:5d}",
         ]
     return [_wire_row(row)]
+
+
+def _fixed_or_stars(value: float, width: int, digits: int) -> str:
+    """``value`` in a fixed field, or ``width`` asterisks when it does not fit
+    there, as the licensed NEC-4.2 prints a GM translation of -3200 m in its
+    ten-character field (Dan AC6LA's 4nec2 deck, momwire#1694)."""
+    text = f"{value:{width}.{digits}f}"
+    return "*" * width if len(text) > width else text
 
 
 def _wire_row(row: WireRow) -> str:

@@ -312,11 +312,11 @@ def _served_table(card) -> None:
 def _served_geometry(deck) -> None:
     """:class:`Nec4Refusal` for a geometry deck no NEC-4.2 printout shows.
 
-    Measured (p38, p39 and four more ``GM`` probes, momwire#1592): ``GW``
-    cards, then at most one ``GM``, then at most one ``GS`` scaling the
-    whole structure.  A ``GW`` after either, a ``GM`` after a ``GS``, a
-    second of either, and ``GS``'s tag-range form (xnec2c's) have no
-    printout, and refuse by name.  ``GA`` and ``GH`` stand where a ``GW``
+    Measured (p38, p39 and four more ``GM`` probes, momwire#1592; p92-p96,
+    momwire#1694): wire cards and ``GM`` cards in any order and number, then
+    at most one ``GS`` scaling the whole structure.  A wire card or ``GM``
+    after the ``GS``, a second ``GS``, and ``GS``'s tag-range form
+    (xnec2c's) have no printout, and refuse by name.  ``GA`` and ``GH`` stand where a ``GW``
     may (p46-p53: among ``GW`` cards, before a ``GM`` or a ``GS``).
 
     ``GX`` (momwire#1651, p54-p85) stands among the wire cards, before or
@@ -330,10 +330,10 @@ def _served_geometry(deck) -> None:
             raise Nec4Refusal(_unmeasured(f"the {m} geometry card"))
         if m == "GS" and (card.i(0) or card.i(1)):
             raise Nec4Refusal(_unmeasured("GS scaling a range of tags"))
-        if m in ("GS", "GM") and m in seen:
-            raise Nec4Refusal(_unmeasured(f"a second {m} card"))
-        if m in _WIRE_CARDS and ("GS" in seen or "GM" in seen):
-            raise Nec4Refusal(_unmeasured(f"a {m} card after a GS or GM card"))
+        if m == "GS" and m in seen:
+            raise Nec4Refusal(_unmeasured("a second GS card"))
+        if m in _WIRE_CARDS and "GS" in seen:
+            raise Nec4Refusal(_unmeasured(f"a {m} card after a GS card"))
         if m == "GM" and "GS" in seen:
             raise Nec4Refusal(_unmeasured("a GM card after a GS card"))
         if m == "GX" and "GS" in seen:
@@ -732,15 +732,18 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
     The segment columns count the structure as built so far: a ``GX``
     doubles it once per plane, so a ``GW`` after one starts past the images
     (p54 GX then GW: FIRST 11), and a ``GM`` prints the count it moves.  A
-    ``GM``'s copies are not counted, because no row the printout serves
-    follows them (:func:`_served_geometry` refuses a wire card after a
-    ``GM``, and a second ``GM``)."""
+    ``GM``'s copies count too, so a wire card after one starts past them
+    (p93, p94, p96, momwire#1694).  ``built`` is the structure so far as
+    ``(tag, segments)`` per wire, read as ``deck._nec2_geometry`` builds it
+    (``_gx``: images in Z, Y, X order, the increment doubling; ``_gm``: the
+    block from the first wire carrying ``ITS``), for a ``GM``'s block."""
     from ..deck._nec2_geometry import _planes
     from ..deck._nec4 import helix_vertices
 
     rows: list[StructureRow] = []
     first = 1
     number = 0
+    built: list[tuple[int, int]] = []
     for card in deck.geometry:
         if card.mnemonic == "GX":
             flags = {plane: bool(flag) for _axis, flag, plane in _planes(card)}
@@ -748,6 +751,11 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
                 ReflectRow((flags["X=0"], flags["Y=0"], flags["Z=0"]), card.i(0))
             )
             first = (first - 1) * 2 ** sum(flags.values()) + 1
+            iti = card.i(0)
+            for _axis, flag, _plane in _planes(card):
+                if flag:
+                    built += [(t + iti if t else 0, n) for t, n in built]
+                    iti *= 2
             continue
         if card.mnemonic == "GS":
             rows.append(ScaleRow(card.f(2)))
@@ -763,12 +771,20 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
                     first - 1,
                 )
             )
+            its, itgi = int(card.f(8) + 0.5), card.i(0)
+            start = next((k for k, (t, _n) in enumerate(built) if t == its), 0)
+            block = built[start if its > 0 else 0 :]
+            for _ in range(card.i(1)):
+                block = [(t + itgi if t else 0, n) for t, n in block]
+                built += block
+                first += sum(n for _t, n in block)
             continue
         if card.mnemonic not in _WIRE_CARDS:
             continue
         number += 1
         n_seg = card.i(1)
         last = first + n_seg - 1
+        built.append((card.i(0), n_seg))
         if card.mnemonic == "GA":
             rows.append(
                 ArcRow(
