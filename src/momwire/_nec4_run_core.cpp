@@ -319,6 +319,9 @@ void symmetry_of(const PortalDeck &deck, ll &cell, ll &flag, ll &planes) {
 std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
     std::vector<WireTableRow> rows;
     ll first = 1, number = 0;
+    // the structure so far as (tag, segments) per wire, for a GM's block
+    // (`_nec4._wire_rows`, momwire#1694)
+    std::vector<std::pair<ll, ll>> built;
     for (const nec5::Card &card : deck.geometry) {
         WireTableRow r;
         if (card.mnemonic == "GX") {
@@ -329,6 +332,15 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             rows.push_back(r);
             for (bool on : p)
                 if (on) first = (first - 1) * 2 + 1;
+            // `_nec2_geometry._gx`: Z, then Y, then X, the increment doubling
+            ll iti = i64(card.i(0));
+            for (int c = 2; c >= 0; c--)
+                if (p[static_cast<std::size_t>(c)]) {
+                    const std::size_t n = built.size();
+                    for (std::size_t k = 0; k < n; k++)
+                        built.emplace_back(built[k].first ? built[k].first + iti : 0, built[k].second);
+                    iti *= 2;
+                }
             continue;
         }
         if (card.mnemonic == "GS") {
@@ -350,12 +362,28 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             r.first_tag = static_cast<ll>(std::trunc(f8));
             r.move_segments = first - 1;
             rows.push_back(r);
+            // `_nec2_geometry._gm`: the block from the first wire carrying ITS
+            const ll its = r.first_tag, itgi = r.tag_increment;
+            std::size_t start = 0;
+            if (its > 0)
+                for (std::size_t k = 0; k < built.size(); k++)
+                    if (built[k].first == its) {
+                        start = k;
+                        break;
+                    }
+            std::vector<std::pair<ll, ll>> block(built.begin() + static_cast<std::ptrdiff_t>(start), built.end());
+            for (ll rep = 0; rep < r.copies; rep++) {
+                for (auto &w : block) w.first = w.first ? w.first + itgi : 0;
+                built.insert(built.end(), block.begin(), block.end());
+                for (const auto &w : block) first += w.second;
+            }
             continue;
         }
         if (card.mnemonic != "GW" && card.mnemonic != "GA" && card.mnemonic != "GH") continue;
         number++;
         const ll n_seg = i64(card.i(1));
         const ll last = first + n_seg - 1;
+        built.emplace_back(i64(card.i(0)), n_seg);
         r.number = number;
         r.segments = n_seg;
         r.first = first;

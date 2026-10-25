@@ -66,6 +66,7 @@ from momwire.eznec._printout import (
     PowerBudget,
 )
 from momwire.eznec._shell import render
+from momwire.portal._portal import parse_deck
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
@@ -167,7 +168,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 90 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 97 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -579,6 +580,9 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
     renderer places from the deck.
     """
     lines = text.split("\n")
+    gm_cards = iter(
+        c for c in parse_deck(deck, dialect="nec4").geometry if c.mnemonic == "GM"
+    )
     wires_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.        X1"))
     wires = []
     table = _rows_after(lines, wires_at + 1)
@@ -598,15 +602,25 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
             )
             continue
         if line.startswith("      THE STRUCTURE HAS BEEN MOVED"):
-            v = table[k + 1].split()
+            # By column: a value that fills its ten characters runs into its
+            # neighbour, and one too wide prints as asterisks (p97, Dan
+            # AC6LA's deck, momwire#1694); that one is the GM card's own.
+            row, card = table[k + 1], next(gm_cards)
+            cells = [row[4 + 5 * j : 9 + 5 * j] for j in range(2)]
+            reals = [row[14 + 10 * j : 24 + 10 * j] for j in range(6)]
+            tail = [row[74 + 5 * j : 79 + 5 * j] for j in range(4)]
+            r = [
+                card.f(2 + j) if set(x.strip()) == {"*"} else float(x)
+                for j, x in enumerate(reals)
+            ]
             wires.append(
                 MoveRow(
-                    int(v[0]),
-                    int(v[1]),
-                    (float(v[2]), float(v[3]), float(v[4])),
-                    (float(v[5]), float(v[6]), float(v[7])),
-                    int(v[8]),
-                    int(v[11]),
+                    int(cells[0]),
+                    int(cells[1]),
+                    (r[0], r[1], r[2]),
+                    (r[3], r[4], r[5]),
+                    int(tail[0]),
+                    int(tail[3]),
                 )
             )
             continue
@@ -1309,19 +1323,21 @@ def _edited(capture: str, old: str, new: str) -> str:
             "RP with XNDA 0",
             id="xnda",
         ),
+        # momwire#1694: a wire card after a GM, and a second GM, are served
+        # (p92-p96); after the GS they are not
         pytest.param(
-            _edited("p39", "GE 0", "GW 9 3 1 0 0 1 1 0 0.001\nGE 0"),
-            "a GW card after a GS or GM card",
-            id="gw-after-gm",
+            _edited("p38", "GE 0", "GW 9 3 1 0 0 1 1 0 0.001\nGE 0"),
+            "a GW card after a GS card",
+            id="gw-after-gs",
         ),
         pytest.param(
-            _edited("p39", "GE 0", "GA 9 3 1 0 90 0.001\nGE 0"),
-            "a GA card after a GS or GM card",
-            id="ga-after-gm",
+            _edited("p38", "GE 0", "GA 9 3 1 0 90 0.001\nGE 0"),
+            "a GA card after a GS card",
+            id="ga-after-gs",
         ),
         pytest.param(
             _edited("p53", "GE 0", "GH 5 8 1 100 10 10 1 1\nGE 0"),
-            "a GH card after a GS or GM card",
+            "a GH card after a GS card",
             id="gh-after-gs",
         ),
         pytest.param(
@@ -1336,8 +1352,13 @@ def _edited(capture: str, old: str, new: str) -> str:
         ),
         pytest.param(
             _edited("p43", "GS 0 0 2", "GS 0 0 2\nGM 1 1 0 0 0 0 0 5 0"),
-            "a second GM card",
-            id="second-gm",
+            "a GM card after a GS card",
+            id="gm-after-gs",
+        ),
+        pytest.param(
+            _edited("p38", "GS 0 0 0.001", "GS 0 0 0.001\nGS 0 0 2"),
+            "a second GS card",
+            id="second-gs",
         ),
         pytest.param(
             _edited("0230", "GD 2,", "GD 1,"),

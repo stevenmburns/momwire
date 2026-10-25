@@ -240,6 +240,22 @@ probes/<probe>.nec
   The second run prints a whole block per frequency of its FR, as p37's
   does, each with its pattern and none with a current table.
 
+  p92-p96, written for momwire#1694 (Dan AC6LA's 4nec2 deck: eight GM
+  cards with GW cards between them).  Captured 2026-10-25 on the same
+  reference build, same ritual.  Decks LF.
+    p92 two GM moves of one wire, a rotation then a translation
+    p93 a GW after a GM that copies the first wire
+    p94 GM, GW, then a GM whose ITS names the new wire
+    p95 GX, then a GM move and a GM copy of the whole structure
+    p96 a GM making three copies, then a GM moving everything
+    p97 a GM translation of -3200 m, wider than its ten-character field,
+        and a second GM moving the wire back
+  What the printouts show (layout only): each GM prints its two lines where
+  it stands, and the segment numbers of a wire card after a GM start past
+  the GM's copies (p93: FIRST 23 after a one-copy GM of 11 segments).  A
+  value too wide for its field prints as ten asterisks (p97), as Fortran's
+  fixed format does.
+
 refused/r1_gd_after_a_run.nec, .out
   One more deck and its licensed printout, same day and ritual, for a shape
   this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
