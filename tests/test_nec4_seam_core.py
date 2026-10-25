@@ -160,13 +160,14 @@ CASES: list[tuple[str, str, str]] = [
     ("gs_ranged", deck(GW + "GS 1 1 .5\n"), "GS scaling a range of tags"),
     (
         "second_gm",
+        # served since momwire#1694 (p92-p96), as the next two are
         deck(GW + "GM 0 0 0 0 10 0 0 0 0\nGM 0 0 0 0 10 0 0 0 0\n"),
-        "a second GM card",
+        SERVED,
     ),
     (
         "gw_after_gm",
         deck(GW + "GM 0 0 0 0 10 0 0 0 0\nGW 2 3 1 1 0 1 1 .5 .001\n"),
-        "a GW card after a GS or GM card",
+        SERVED,
     ),
     (
         "gm_after_gs",
@@ -184,12 +185,12 @@ CASES: list[tuple[str, str, str]] = [
     (
         "ga_after_gm",
         deck(GW + "GM 0 0 0 0 10 0 0 0 0\nGA 2 4 1 0 90 .001\n"),
-        "a GA card after a GS or GM card",
+        SERVED,
     ),
     (
         "gh_after_gs",
         deck(GW + "GS 0 0 .5\nGH 2 8 1 .3 .1 .1 .001 .001\n"),
-        "a GH card after a GS or GM card",
+        "a GH card after a GS card",
     ),
     (
         "is_card",
