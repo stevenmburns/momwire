@@ -344,12 +344,19 @@ def close_deck(text: str) -> str:
     stdin form's, since 4nec2 writes no ``EN``): NEC's own card reader closes
     a deck at end of file.  A deck that has an
     ``EN`` anywhere is returned unchanged, which keeps everything after it out
-    of the deck exactly as before.
+    of the deck exactly as before.  So is one whose last card is ``NX``: a
+    chain that stops after a structure (SimNEC's recorded streams) reads as
+    the stream form reads it, with no empty structure after it.
     """
+    last = ""
     for line in text.splitlines():
         tokens = line.strip().replace(",", " ").split()
         if tokens and tokens[0][:2].upper() == "EN":
             return text
+        if tokens:
+            last = tokens[0][:2].upper()
+    if last == "NX":
+        return text
     if text and not text.endswith(("\n", "\r")):
         text += "\n"
     return text + "EN\n"
