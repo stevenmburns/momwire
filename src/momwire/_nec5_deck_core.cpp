@@ -694,7 +694,8 @@ struct Parser {
     bool has_ce = false;
     std::string ce_text;  // UTF-8
     std::vector<Wire> wires;
-    std::map<Int, std::size_t> by_tag;
+    std::map<Int, std::size_t> by_tag;  // the FIRST wire carrying each tag (momwire#1695)
+    std::vector<Int> repeated_tags;      // tags more than one GW carries, in order
     std::vector<Card> geometry_cards;
     bool has_gx = false;  // the last GX's plane code and block (momwire#1669)
     long long gx_code = 0;
@@ -807,11 +808,11 @@ struct Parser {
     void gw(const Card &card) {
         Int tag = card.i(0);
         geometry_cards.push_back(card);
-        if (find(tag))
-            deck_error("GW declares tag " + S(tag) +
-                       " a second time; this engine's nec5 dialect gives each wire its own "
-                       "tag, because a node address names one wire's segment boundary and a "
-                       "tag group has no single wire to count along");
+        // a repeated tag is served as the licensed NEC-5 reads it: an address
+        // names the first wire carrying it (`_nec5._Nec5Parser._gw`, momwire#1695)
+        if (find(tag) &&
+            std::find(repeated_tags.begin(), repeated_tags.end(), tag) == repeated_tags.end())
+            repeated_tags.push_back(tag);
         Int segments = card.i(1);
         if (segments < Int(1))
             deck_error("GW tag " + S(tag) + " asks for " + S(segments) +
@@ -825,7 +826,7 @@ struct Parser {
         }
         w.radius = card.f(8);
         wires.push_back(w);
-        by_tag[tag] = wires.size() - 1;
+        by_tag.emplace(tag, wires.size() - 1);
     }
 
     // -- the geometry cards 4nec2 writes (`_nec5._Nec5Parser`, momwire#1669) --
@@ -947,7 +948,35 @@ struct Parser {
 
     void reindex() {
         by_tag.clear();
-        for (std::size_t k = 0; k < wires.size(); ++k) by_tag[wires[k].tag] = k;
+        for (std::size_t k = 0; k < wires.size(); ++k) by_tag.emplace(wires[k].tag, k);
+    }
+
+    // `_nec5._Nec5Parser._repeated_tag_refusal`
+    std::string repeated_tag_refusal() const {
+        for (const Int &tag : repeated_tags) {
+            std::string why;
+            if (!lines.empty() || !networks.empty()) {
+                why = "a TL or NT card";
+            } else if (ground.kind != Ground::free_space) {
+                bool below = false;
+                for (const Wire &w : wires) {
+                    if (!(w.tag == tag)) continue;
+                    double lo = std::min(w.end1[2], w.end2[2]);
+                    for (const auto &p : w.path) lo = std::min(lo, p[2]);
+                    below = below || lo < 0.0;
+                }
+                if (!below) continue;
+                why = "a wire carrying tag " + S(tag) + " below the ground at z = 0";
+            } else {
+                continue;
+            }
+            return "GW declares tag " + S(tag) +
+                   " on more than one wire; this engine's nec5 dialect serves a repeated tag as "
+                   "the licensed NEC-5 reads it (an address on the tag names the first wire "
+                   "carrying it, a tag-wide load every one) in a deck with no TL or NT card and "
+                   "no such wire below a ground, and this deck has " + why;
+        }
+        return "";
     }
 
     // `_nec5._Nec5Parser._gm` and `deck._nec2_geometry.gm_transform`
@@ -1695,6 +1724,8 @@ struct Parser {
         if (!has_ge)
             deck_error("deck has no GE card; GE closes the geometry section and carries the "
                        "ground flag, and EZNEC writes one on every deck");
+        const std::string why = repeated_tag_refusal();
+        if (!why.empty()) deck_error(why);
         Deck d;
         d.comments = comments;
         d.ce_text = ce_text;

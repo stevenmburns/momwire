@@ -225,7 +225,24 @@ CASES = {
     "garbage after en": (DIPOLE + "QQ 1\nnot a card\n,,\n", "parsed"),
     "lowercase en": (DIPOLE.replace("EN", "en"), "parsed"),
     # -- GW --
-    "gw duplicate tag": (deck(wires=GW1 + GW1), "GW declares tag 1 a second time"),
+    # a repeated tag is served as the licensed NEC-5 reads it (momwire#1695) ...
+    "gw repeated tag": (deck(wires=GW1 + GW2 + GW1), "parsed"),
+    # ... except where a reading downstream is keyed by tag
+    "gw repeated tag with a tl": (
+        deck("TL 1,6,2,3,50.,.1,0.,0.,0.,0.", wires=GW1 + GW2 + GW1),
+        "GW declares tag 1 on more than one wire",
+    ),
+    "gw repeated tag below a ground": (
+        deck(
+            wires=GW1 + GW2 + GW1.replace(",-.25,0.,", ",-.25,-.1,"),
+            rest=REST.replace("GN -1", "GN 1"),
+        ),
+        "this deck has a wire carrying tag 1 below the ground at z = 0",
+    ),
+    "gw repeated tag below z = 0 in free space": (
+        deck(wires=GW1 + GW2 + GW1.replace(",-.25,0.,", ",-.25,-.1,")),
+        "parsed",
+    ),
     "gw zero segments": (
         deck(wires=GW1 + "GW 2,0,0,0,0,1,0,0,.1\n"),
         "asks for 0 segments",

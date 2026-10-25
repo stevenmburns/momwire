@@ -476,12 +476,15 @@ def test_the_phantom_set_is_tags_because_a_tag_names_one_wire():
     A tag shared between a parked wire and a real one would put a real node in
     the phantom set, because ``Structure.index_of`` resolves a tag to the
     FIRST wire carrying it. Nothing in the detector guards against that, and
-    nothing needs to: the dialect refuses a repeated tag at the parse. That
-    guarantee is what this pins, so a later relaxation of it lands here rather
-    than silently in a moved drive row.
+    nothing needs to: the dialect refuses a repeated tag at the parse in any
+    deck with a TL or NT card (momwire#1695 serves one only without them).
+    That guarantee is what this pins, so a later relaxation of it lands here
+    rather than silently in a moved drive row.
     """
     text = (FIXTURES / "gyrator_current.nec").read_text()
     shared = text.replace("GE 0,-1", "GW 2,4,0.,1.,-0.5,0.,1.,0.5,.001\nGE 0,-1")
     assert shared != text
-    with pytest.raises(DeckError, match="declares tag 2 a second time"):
+    with pytest.raises(
+        DeckError, match="declares tag 2 on more than one wire.*TL or NT"
+    ):
         parse_nec5(shared)
