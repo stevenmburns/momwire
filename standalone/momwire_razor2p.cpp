@@ -1099,7 +1099,11 @@ int run_deck_inner(const std::string &deck, const std::string &out, bool en_opti
                                             ml::os_bytes_to_utf8(ml::path_str(deck)));
             log_route("unreadable", deck);
         } else {
-            if (en_optional) text = ml::close_deck(text);
+            // every file-form deck closes at end of file, as the licensed NEC-5
+            // closes one (momwire#1698); en_optional, the stdin form's flag from
+            // before that (momwire#1488), no longer changes anything
+            (void)en_optional;
+            text = ml::close_deck(text);
             // gate hook: an exception from the solve, as memory would raise
             const std::string inject = env("MW_EXE_FAIL");
             if (inject == "alloc") throw std::bad_alloc();

@@ -340,8 +340,9 @@ def write_gmo(gmo_path: Path, text: str) -> None:
 def close_deck(text: str) -> str:
     """``text`` closed by ``EN`` when no line of it is one (momwire#1488).
 
-    For a deck whose file names came from stdin: 4nec2 writes no ``EN``, and
-    NEC's own card reader closes a deck at end of file.  A deck that has an
+    For every deck that arrives as a file (momwire#1698; at first only the
+    stdin form's, since 4nec2 writes no ``EN``): NEC's own card reader closes
+    a deck at end of file.  A deck that has an
     ``EN`` anywhere is returned unchanged, which keeps everything after it out
     of the deck exactly as before.
     """
@@ -366,11 +367,13 @@ def render_files(
     (momwire#1488).  The NEC-4.2 slot never writes one: 4nec2 asks none of
     its NEC-4.2 engine (momwire#1592).
 
-    ``en_optional`` is the stdin form's, in either slot: the deck is closed
-    by :func:`close_deck` before anything reads it.
+    Every deck that arrives as a file is closed by :func:`close_deck` before
+    anything reads it, as the licensed NEC-5 closes a deck at end of file
+    (momwire#1698).  ``en_optional`` is the stdin form's flag from before
+    that (momwire#1488); the clients still send it, and it changes nothing.
     """
-    if en_optional:
-        text = close_deck(text)
+    del en_optional
+    text = close_deck(text)
     printout = render(text, basis=basis, dialect=dialect)
     gmo = _gmo.gmo_text(text) if dialect == "nec5" else None
     return printout, gmo

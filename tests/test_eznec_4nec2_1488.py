@@ -243,7 +243,21 @@ def test_close_deck_leaves_a_deck_with_en_alone(text):
     assert _shell.close_deck(text) == text
 
 
-def test_the_two_argument_form_still_refuses_a_deck_without_en():
+def test_the_two_argument_form_closes_a_deck_without_en_at_end_of_file(tmp_path):
+    # momwire#1698: the licensed NEC-5 closes a deck at end of file, so the
+    # file form does too, whether its names came from stdin or the command line.
+    deck, out = tmp_path / "EXAMPLE3.nec", tmp_path / "EXAMPLE3.out"
+    deck.write_bytes(_free_space_example3())
+    assert b"\nEN" not in deck.read_bytes()
+    assert _shell.main([str(deck), str(out)]) == 0
+    printout = out.read_text(encoding="latin-1")
+    assert "NEC ERROR" not in printout
+    assert "ANTENNA INPUT PARAMETERS" in printout
+
+
+def test_the_deck_reader_itself_still_refuses_a_deck_without_en():
+    # Only the file form closes the text; the stream form's decks (#1512) and
+    # the reader stay strict, since EN is what ends one streamed deck.
     printout = _shell.render(_example3_text())
     assert "deck has no EN card" in printout
 
