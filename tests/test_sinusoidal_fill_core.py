@@ -85,6 +85,7 @@ def _decks(root):
     ]
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.2
 def test_the_nec42_fixtures_have_the_same_fill(acc):
     counts, mismatches = nc.compare(_decks(FIXTURES / "eznec_nec42"))
     assert not mismatches, mismatches[:2]
