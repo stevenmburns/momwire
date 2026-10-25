@@ -63,8 +63,9 @@ def _both(argv_tail, tmp_path, *, stdin_text=None):
         d.mkdir()
         for f in (DIPOLE, EXAMPLE3):
             shutil.copy(f, d / f.name)
-        # 4nec2 writes no EN; the two-path form refuses such a deck as
-        # truncated (and writes no .GMO), so the two-path case closes it.
+        # 4nec2 writes no EN. Since momwire#1698 the two-path form closes a
+        # deck at end of file as the stdin form does; the copy with EN keeps
+        # the .GMO case independent of that rule.
         (d / "EXAMPLE3_EN.nec").write_bytes(EXAMPLE3.read_bytes() + b"EN\n")
         stdin = subprocess.DEVNULL
         if stdin_text is not None:
@@ -101,6 +102,15 @@ def test_a_deck_asking_for_a_gmo_file_writes_it_as_the_launcher_does(tmp_path):
     assert (de / "EXAMPLE3.out").read_bytes() == (dl / "EXAMPLE3.out").read_bytes()
     assert (dl / "EXAMPLE3.GMO").exists()
     assert (de / "EXAMPLE3.GMO").read_bytes() == (dl / "EXAMPLE3.GMO").read_bytes()
+
+
+def test_the_two_path_form_closes_a_deck_without_en_as_the_launcher_does(tmp_path):
+    # momwire#1698: the licensed NEC-5 closes a deck at end of file.
+    exe, ref, de, dl = _both([EXAMPLE3.name, "EXAMPLE3.out"], tmp_path)
+    assert exe.returncode == ref.returncode == 0
+    printout = (de / "EXAMPLE3.out").read_bytes()
+    assert printout == (dl / "EXAMPLE3.out").read_bytes()
+    assert b"NEC ERROR" not in printout
 
 
 def test_the_stdin_form(tmp_path):
