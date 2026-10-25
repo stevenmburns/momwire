@@ -1939,12 +1939,13 @@ bool split_runs(const std::string &text, std::vector<std::string> &out) {
     for (std::size_t r = 1; r < kept.size(); ++r)
         for (const std::string &ln : kept[r]) {
             std::string card = card_of(ln);
-            if (!is_run_card(card))
+            // a later run may also carry PT (`_serve._LATER_RUN_CARDS`, momwire#1696)
+            if (!is_run_card(card) && card != "PT")
                 throw ParseError(
                     ErrorKind::serve_refusal,
                     "XQ block " + std::to_string(r + 1) + " carries " + card +
                         ": a multi-run deck is served when its later runs change only their "
-                        "sources and requests (EX, RP, NE, NH), which is what SimNEC writes. "
+                        "sources and requests (EX, RP, NE, NH, PQ, PT), which is what SimNEC writes. "
                         "Every run reuses the first block's structure, ground, loads and "
                         "frequency, so a block that changes one of those is refused rather than "
                         "silently ignored");
@@ -1952,9 +1953,21 @@ bool split_runs(const std::string &text, std::vector<std::string> &out) {
     std::vector<std::string> common;
     for (const std::string &ln : kept[0])
         if (!is_run_card(card_of(ln))) common.push_back(ln);
-    for (const auto &block : kept) {
+    // a later run's PT holds until another replaces it; the first run's stays
+    // among the common cards (`_serve.split_runs`, momwire#1696)
+    std::string pt;
+    bool have_pt = false;
+    for (std::size_t r = 0; r < kept.size(); ++r) {
+        const auto &block = kept[r];
+        if (r)
+            for (const std::string &ln : block)
+                if (card_of(ln) == "PT") {
+                    pt = ln;
+                    have_pt = true;
+                }
         std::vector<std::string> parts(lines.begin(), lines.begin() + ge + 1);
         parts.insert(parts.end(), common.begin(), common.end());
+        if (have_pt) parts.push_back(pt);
         std::string xq;
         bool has_xq = false;
         for (const std::string &ln : block) {
@@ -2071,7 +2084,8 @@ int sequence_read(const std::string &deck_text, std::string &why, std::vector<Ca
         for (std::size_t k : groups[g])
             if (cards[k].mnemonic == "FR") later_fr = true;
     if (!first_steps && !later_fr && !requests_alone) return 0;
-    static const char *kSeq[] = {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR"};
+    // a later run may also carry PT (`_serve._LATER_SEQUENCE_CARDS`, momwire#1696)
+    static const char *kSeq[] = {"EX", "RP", "NE", "NH", "PQ", "XQ", "FR", "PT"};
     for (std::size_t g = 1; g < groups.size(); ++g)
         for (std::size_t k : groups[g]) {
             bool ok = false;
@@ -2079,7 +2093,7 @@ int sequence_read(const std::string &deck_text, std::string &why, std::vector<Ca
             if (!ok) {
                 why = "run " + std::to_string(g + 1) + " carries " + cards[k].mnemonic +
                       ": a deck whose later runs change their frequency, sources and requests "
-                      "(FR, EX, RP, NE, NH, PQ) is served, each run at the FR in force, as the "
+                      "(FR, EX, RP, NE, NH, PQ, PT) is served, each run at the FR in force, as the "
                       "licensed NEC-5 reads it; every run reuses the first run's structure, "
                       "ground and loads, so a run that changes one of those is refused rather "
                       "than silently ignored";
@@ -2116,15 +2130,21 @@ bool sequence_texts(const std::string &deck_text, const std::vector<Card> &cards
     std::vector<std::string> common;
     for (std::size_t k : groups[0])
         if (!in_seq(cards[k].mnemonic)) common.push_back(cards[k].raw);
-    bool have_fr = false;
-    std::string fr;
+    bool have_fr = false, have_pt = false;
+    std::string fr, pt;
     std::vector<std::string> in_force;
-    for (const std::vector<std::size_t> &group : groups) {
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        const std::vector<std::size_t> &group = groups[g];
         std::vector<std::string> exs, requests;
         bool group_fr = false;
         for (std::size_t k : group) {
             const std::string &m = cards[k].mnemonic;
-            if (m == "FR") {
+            if (m == "PT" && g) {
+                // a later run's PT holds until another replaces it; the first
+                // run's stays among the common cards (momwire#1696)
+                pt = cards[k].raw;
+                have_pt = true;
+            } else if (m == "FR") {
                 fr = cards[k].raw;
                 have_fr = group_fr = true;
             } else if (m == "EX") {
@@ -2141,6 +2161,7 @@ bool sequence_texts(const std::string &deck_text, const std::vector<Card> &cards
         };
         for (std::size_t i = 0; i <= ge; ++i) put(lines[i]);
         for (const std::string &line : common) put(line);
+        if (have_pt) put(pt);
         if (have_fr) put(fr);
         for (const std::string &line : in_force) put(line);
         for (const std::string &line : requests) put(line);

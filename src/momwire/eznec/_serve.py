@@ -923,9 +923,16 @@ _REFUSE_RP_RANGE = (
 # block's own sources, never an accumulation) and reuses everything else.
 # Those are the only cards a later block may carry here.
 _RUN_CARDS = frozenset({"EX", "RP", "NE", "NH", "PQ", "XQ"})
+# A later run may also carry PT, the current table's print control (4nec2
+# writes PT -1 in every run, momwire#1696).  The licensed NEC-5 holds it from
+# run to run like a source: PT -1 drops the Wire Currents table in its own run
+# and every run after it until a PT 0.  The first run's PT stays among the
+# common cards where it always was; a later one rides after them, and the last
+# PT in a deck wins.
+_LATER_RUN_CARDS = _RUN_CARDS | {"PT"}
 _REFUSE_RUN_CHANGES = (
     "XQ block {run} carries {card}: a multi-run deck is served when its later "
-    "runs change only their sources and requests (EX, RP, NE, NH), which is "
+    "runs change only their sources and requests (EX, RP, NE, NH, PQ, PT), which is "
     "what SimNEC writes. Every run reuses the first block's structure, ground, "
     "loads and frequency, so a block that changes one of those is refused "
     "rather than silently ignored"
@@ -960,15 +967,18 @@ def split_runs(text: str) -> list[str] | None:
     for run, block in enumerate(blocks[1:], start=2):
         for ln in block:
             card = ln[:2].upper()
-            if card not in _RUN_CARDS:
+            if card not in _LATER_RUN_CARDS:
                 raise ServeRefusal(_REFUSE_RUN_CHANGES.format(run=run, card=card))
     common = [ln for ln in blocks[0] if ln[:2].upper() not in _RUN_CARDS]
     head = lines[: ge + 1]
     out = []
-    for block in blocks:
+    pt: list[str] = []
+    for r, block in enumerate(blocks):
+        if r:
+            pt = [ln for ln in block if ln[:2].upper() == "PT"][-1:] or pt
         own = [ln for ln in block if ln[:2].upper() in _RUN_CARDS - {"XQ"}]
         xq = [ln for ln in block if ln[:2].upper() == "XQ"] or ["XQ 0"]
-        out.append("\n".join([*head, *common, *own, xq[0], "EN"]) + "\n")
+        out.append("\n".join([*head, *common, *pt, *own, xq[0], "EN"]) + "\n")
     return out
 
 
@@ -986,10 +996,11 @@ class SequenceGroup:
 
 
 _SEQUENCE_CARDS = _RUN_CARDS | {"FR"}
+_LATER_SEQUENCE_CARDS = _SEQUENCE_CARDS | {"PT"}
 _REQUEST_CARDS = frozenset({"RP", "NE", "NH", "XQ"})
 _REFUSE_SEQUENCE_CHANGES = (
     "run {run} carries {card}: a deck whose later runs change their "
-    "frequency, sources and requests (FR, EX, RP, NE, NH, PQ) is served, each "
+    "frequency, sources and requests (FR, EX, RP, NE, NH, PQ, PT) is served, each "
     "run at the FR in force, as the licensed NEC-5 reads it; every run reuses "
     "the first run's structure, ground and loads, so a run that changes one "
     "of those is refused rather than silently ignored"
@@ -1028,7 +1039,7 @@ def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
         return None
     for run, group in enumerate(groups[1:], start=2):
         for k in group:
-            if cards[k].mnemonic not in _SEQUENCE_CARDS:
+            if cards[k].mnemonic not in _LATER_SEQUENCE_CARDS:
                 raise ServeRefusal(
                     _REFUSE_SEQUENCE_CHANGES.format(run=run, card=cards[k].mnemonic)
                 )
@@ -1041,6 +1052,7 @@ def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
     out: list[SequenceGroup] = []
     fr: str | None = None
     sources: list[str] = []
+    pt: list[str] = []
     for r, group in enumerate(groups):
         own = [cards[k] for k in group]
         frs = [c.raw for c in own if c.mnemonic == "FR"]
@@ -1049,8 +1061,17 @@ def split_sequence(text: str) -> tuple[list[SequenceGroup], list[int]] | None:
         exs = [c.raw for c in own if c.mnemonic == "EX"]
         if exs:
             sources = exs
+        if r:
+            pt = [c.raw for c in own if c.mnemonic == "PT"][-1:] or pt
         requests = [c.raw for c in own if c.mnemonic in ("RP", "NE", "NH", "PQ")]
-        body = [*head, *common, *([fr] if fr is not None else []), *sources, *requests]
+        body = [
+            *head,
+            *common,
+            *pt,
+            *([fr] if fr is not None else []),
+            *sources,
+            *requests,
+        ]
         out.append(
             SequenceGroup(
                 text="\n".join([*body, "XQ", "EN"]) + "\n",
