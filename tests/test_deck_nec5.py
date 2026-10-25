@@ -456,13 +456,11 @@ REFUSALS = [
     ),
     pytest.param(("GN -1,NOFILE",), "GN", id="gn-free-space-with-trailer"),
     pytest.param(("GN 1,NOFILE",), "GN", id="gn-perfect-with-trailer"),
-    # momwire#1116: a ONE-field GE now parses (see
-    # tests/test_eznec_one_field_ge_1116.py) and NEC-5 defaults its missing
-    # second field to 0; only a ZERO-field GE is still short.
-    pytest.param(("GE",), "GE", id="ge-zero-field"),
+    # momwire#1116: a ONE-field GE parses, and since momwire#1698's batch a
+    # ZERO-field one too, as GE 0 (tests/test_eznec_one_field_ge_1116.py).
     pytest.param(("NE 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NE", id="ne-coordinates-2"),
     pytest.param(("TL 1,1,1,6,0.,1.,0.,0.,0.,0.",), "TL", id="tl-zero-z0"),
-    pytest.param(("GW 1,5,0.,0.,0.,0.,1.,0.,.0005",), "GW", id="gw-duplicate-tag"),
+    # momwire#1695: a repeated GW tag is served (tests/test_nec5_repeated_tag_1695.py)
 ]
 
 
