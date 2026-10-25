@@ -1064,16 +1064,20 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     // along it) for an addressed node strictly inside a piece.
     std::map<std::pair<Int, long long>, std::pair<long long, End>, PairLess> piece_of_node;
     std::map<std::pair<Int, long long>, std::pair<long long, double>, PairLess> inside_piece;
+    // a repeated tag's addresses are its FIRST wire's (`_serve.build_mesh`,
+    // momwire#1695): only that wire takes the tag's cuts and (tag, node) entries
+    std::set<Int> owned;
     for (size_t i = 0; i < d.wires.size(); i++) {
         const Wire &w = d.wires[i];
         const long long last = nseg[i];
+        const bool owner = owned.insert(w.tag).second;
         if (is_phantom(w.tag)) {
             for (long long k = 0; k < last; k++) mesh.element_of.emplace_back(-1, k);
             continue;
         }
         std::vector<long long> inside_nodes;
         {
-            auto it = addressed.find(w.tag);
+            auto it = owner ? addressed.find(w.tag) : addressed.end();
             if (it != addressed.end())
                 for (long long k : it->second)
                     if (0 < k && k < last) inside_nodes.push_back(k);
@@ -1152,8 +1156,9 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             piece.cut_start = r.cut_start;
             piece.cut_end = r.cut_end;
             mesh.pieces.push_back(piece);
-            if (!r.cut_start) piece_of_node[{w.tag, r.a}] = {index, End::start};
-            if (!r.cut_end) piece_of_node.emplace(std::make_pair(w.tag, r.b), std::make_pair(index, End::end));
+            if (owner && !r.cut_start) piece_of_node[{w.tag, r.a}] = {index, End::start};
+            if (owner && !r.cut_end)
+                piece_of_node.emplace(std::make_pair(w.tag, r.b), std::make_pair(index, End::end));
             for (long long k : inside_nodes)
                 if (r.a < k && k < r.b) {
                     double pk[3];

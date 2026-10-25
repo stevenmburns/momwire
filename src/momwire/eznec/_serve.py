@@ -2354,9 +2354,15 @@ def build_mesh(
     # inside a piece.  Only the delta-gap spelling leaves one there; under the
     # node-gap spelling the cut has already turned every one into a piece end.
     inside_piece: dict[tuple[int, int], tuple[int, float]] = {}
+    # A repeated tag (momwire#1695): its addresses are the FIRST wire's, as the
+    # licensed NEC-5 counts them, so only that wire takes the tag's cuts and
+    # its (tag, node) entries; a later wire carrying the tag is meshed plain.
+    owned: set[int] = set()
 
     for wire, points in zip(structure.wires, structure.points, strict=True):
         last = wire.segment_count
+        owner = wire.tag not in owned
+        owned.add(wire.tag)
         if wire.tag in phantom:
             # No piece, so no junction end, no radius, no arclength and no
             # unknown — but one `element_of` entry per element, because the
@@ -2364,7 +2370,7 @@ def build_mesh(
             mesh.element_of += [(_NO_PIECE, k) for k in range(last)]
             continue
         addressed_inside = sorted(
-            k for k in addressed.get(wire.tag, ()) if 0 < k < last
+            k for k in (addressed.get(wire.tag, ()) if owner else ()) if 0 < k < last
         )
         bounds = [0, *addressed_inside, last] if cut else [0, last]
         lower_half = _NO_PIECE
@@ -2394,9 +2400,9 @@ def build_mesh(
             # "end" only where nothing claimed the node yet is what makes the
             # later piece win at a cut.  The end at a z = 0 cut is no deck
             # node, so it claims nothing.
-            if not cut_start:
+            if owner and not cut_start:
                 piece_of_node[(wire.tag, a)] = (index, "start")
-            if not cut_end:
+            if owner and not cut_end:
                 piece_of_node.setdefault((wire.tag, b), (index, "end"))
             for k in addressed_inside:
                 if a < k < b:

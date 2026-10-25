@@ -823,6 +823,8 @@ class _Nec5Parser:
         self.ce_text: str | None = None
         self.wires: list[Nec5Wire] = []
         self._by_tag: dict[int, Nec5Wire] = {}
+        # tags more than one GW carries, in the order they repeat (momwire#1695)
+        self._repeated_tags: dict[int, None] = {}
         self.geometry_cards: list[Card] = []
         # The last GX's plane code (its I2) and how many wires it copied
         # (momwire#1669); `deck` turns them into a `Nec5Symmetry`.
@@ -1010,16 +1012,13 @@ class _Nec5Parser:
         tag = card.i(0)
         self.geometry_cards.append(card)
         if tag in self._by_tag:
-            # EZNEC numbers its wires 1..N, one GW each.  NEC-2 lets several
-            # GW cards share a tag; a node address into such a group has no
-            # single wire to count segments along, so this dialect refuses
-            # the ambiguity rather than picking a wire.
-            raise DeckError(
-                f"GW declares tag {tag} a second time; this engine's nec5 dialect "
-                f"gives each wire its own tag, because a node address names one "
-                f"wire's segment boundary and a tag group has no single wire to "
-                f"count along"
-            )
+            # EZNEC numbers its wires 1..N, one GW each; 4nec2's decks can
+            # repeat a tag (momwire#1695).  Probed black-box on the licensed
+            # NEC-5: a node address on the tag counts along the FIRST wire
+            # carrying it, and a tag-wide load (LD 5 on the tag) reaches every
+            # one.  `_by_tag` keeps the first; `deck` refuses the shapes whose
+            # downstream reading is keyed by tag (see `_repeated_tag_refusal`).
+            self._repeated_tags[tag] = None
         segments = card.i(1)
         if segments < 1:
             raise DeckError(
@@ -1033,7 +1032,7 @@ class _Nec5Parser:
             radius=card.f(8),
         )
         self.wires.append(wire)
-        self._by_tag[tag] = wire
+        self._by_tag.setdefault(tag, wire)
 
     # -- the geometry cards 4nec2 writes (momwire#1669) -------------------
     #
@@ -1049,6 +1048,41 @@ class _Nec5Parser:
                 f"section, so every geometry card comes before it"
             )
         self.geometry_cards.append(card)
+
+    def _reindex(self) -> None:
+        """``_by_tag`` rebuilt from ``wires``, the first wire carrying a tag
+        first (momwire#1695)."""
+        self._by_tag = {}
+        for w in self.wires:
+            self._by_tag.setdefault(w.tag, w)
+
+    def _repeated_tag_refusal(self) -> str | None:
+        """Why this deck's repeated tags are not served, or ``None``.
+
+        Two readings downstream answer in tags rather than in wires: the
+        z = 0 crossing split (``_serve._plane_crossings``) and the phantom-
+        node test a TL or NT card brings (``_serve._phantom_tags``).  A tag
+        two wires share would cross them, so those shapes refuse by name
+        until each is probed and keyed by wire.  Over free space there is no
+        plane to cross, and z < 0 is ordinary geometry."""
+        for tag in self._repeated_tags:
+            carriers = [w for w in self.wires if w.tag == tag]
+            if self.lines or self.networks:
+                why = "a TL or NT card"
+            elif not isinstance(self.ground, Nec5FreeSpace) and any(
+                min(p[2] for p in (w.end1, w.end2, *w.path)) < 0.0 for w in carriers
+            ):
+                why = f"a wire carrying tag {tag} below the ground at z = 0"
+            else:
+                continue
+            return (
+                f"GW declares tag {tag} on more than one wire; this engine's nec5 "
+                f"dialect serves a repeated tag as the licensed NEC-5 reads it (an "
+                f"address on the tag names the first wire carrying it, a tag-wide "
+                f"load every one) in a deck with no TL or NT card and no such wire "
+                f"below a ground, and this deck has {why}"
+            )
+        return None
 
     def _add_wire(self, wire: Nec5Wire, card: Card) -> None:
         """A wire a GA, GH, GM or GX card made, under the GW tag rule."""
@@ -1172,8 +1206,7 @@ class _Nec5Parser:
         block = self.wires[first:]
         if nrpt == 0:
             del self.wires[first:]
-            for wire in block:
-                del self._by_tag[wire.tag]
+            self._reindex()
             for wire in block:
                 self._add_wire(self._moved(wire, xf, tag_of(wire)), card)
             return
@@ -1261,7 +1294,7 @@ class _Nec5Parser:
             for w in self.wires
         ]
         self.wires = scaled
-        self._by_tag = {w.tag: w for w in scaled}
+        self._reindex()
 
     def _ge(self, card: Card) -> None:
         """``GE <ground-flag>[,<segment-check-flag>]``.
@@ -2048,6 +2081,9 @@ class _Nec5Parser:
                 "deck has no GE card; GE closes the geometry section and carries the "
                 "ground flag, and EZNEC writes one on every deck"
             )
+        why = self._repeated_tag_refusal()
+        if why is not None:
+            raise DeckError(why)
         return Nec5Deck(
             comments=tuple(self.comments),
             ce_text=self.ce_text or "",
