@@ -267,7 +267,210 @@ def _gh(card: Card, wires: list[FlatWire]) -> None:
         wires.append(FlatWire(card.i(0), 1, list(a), list(b), radius))
 
 
-_NEC4_GEOMETRY_BUILDERS = MappingProxyType({**_GEOMETRY_BUILDERS, "GA": _ga, "GH": _gh})
+# ---------------------------------------------------------------------------
+# CW: NEC-4 and NEC-5's catenary wire (momwire#1697)
+# ---------------------------------------------------------------------------
+# ``CW ITG NS X1 Y1 Z1 X2 Y2 Z2 RAD ICAT RHM ZM``. The wire hangs between its
+# two ends under gravity along -z. With u the horizontal distance from end 1
+# (along the ends' separation projected onto the xy plane) and k = 1/a the
+# curvature at the vertex,
+#
+#     z(u) = z1 + (cosh(k(u - u0)) - cosh(k u0)) / k,
+#
+# k > 0 for a wire that sags below the straight line between its ends and
+# k < 0 for one that arches above it. ICAT says which number fixes k:
+#
+# * 1: the wire passes through the point at horizontal distance RHM from end
+#   1 at height ZM (absolute z, metres);
+# * 2: at horizontal distance RHM from end 1 it hangs ZM below the straight
+#   line between the ends (a negative ZM arches above it);
+# * 3: its arc length is RHM (ZM unused); no longer than the straight line,
+#   and the wire is that straight line.
+#
+# A sag is cut into NS pieces of equal ARC LENGTH, an arch into NS pieces of
+# equal HORIZONTAL step: what both licensed engines build, read off their own
+# segment tables as black boxes (antennaknobs#2021, 20 synthetic decks), not
+# what the NEC-5 User's Guide says (equal arc length always).
+#
+# The same construction as antennaknobs' importer (`nec_import._cw`), so the
+# app and the launchers cannot disagree on the curve. Everything is written
+# in forms that stay accurate as k -> 0 (a nearly straight wire): z and the
+# arc length are products of sinh/cosh terms whose arguments are O(1), never
+# differences of two large cosh values.
+
+_CW_KD_MAX = 600.0  # |k|·D bound: sinh overflows past ~710
+
+
+def _sinhc(x: float) -> float:
+    """sinh(x)/x, 1 at 0."""
+    return math.sinh(x) / x if x != 0.0 else 1.0
+
+
+def _cw_shape(k: float, d: float, h: float):
+    """``(z(u), s(u))``: height above end 1 and arc length from end 1 of the
+    catenary of curvature ``k`` through (0, 0) and (``d``, ``h``)."""
+    half = 0.5 * k * d
+    # asinh(k h / (2 sinh(k d / 2))), the vertex offset, as an O(1) number.
+    c = math.asinh(h / (d * _sinhc(half)))
+
+    def z(u: float) -> float:
+        # 2 sinh(k(u - 2 u0)/2) sinh(k u/2) / k
+        return u * math.sinh(0.5 * k * u - half + c) * _sinhc(0.5 * k * u)
+
+    def s(u: float) -> float:
+        # 2 cosh(k(u - 2 u0)/2) sinh(k u/2) / k
+        return u * math.cosh(0.5 * k * u - half + c) * _sinhc(0.5 * k * u)
+
+    return z, s
+
+
+def _bisect(f, lo: float, hi: float) -> float:
+    """The root of ``f`` between ``lo`` and ``hi`` (a sign change)."""
+    f_lo = f(lo)
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if mid in (lo, hi):
+            break
+        f_mid = f(mid)
+        if (f_mid > 0.0) == (f_lo > 0.0):
+            lo, f_lo = mid, f_mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _cw_solve_k(g, d: float, signs) -> float | None:
+    """The curvature k where ``g(k)`` crosses zero, searched outward from a
+    straight wire on each side in ``signs``; None when it never does."""
+    for sign in signs:
+        prev_k, prev_g = None, None
+        for j in range(-400, 1):
+            k = sign * (_CW_KD_MAX / d) * 10.0 ** (j / 25.0)
+            try:
+                gk = g(k)
+            except OverflowError:
+                continue
+            if gk != gk:  # NaN
+                continue
+            if gk == 0.0:
+                return k
+            if prev_g is not None and (gk > 0.0) != (prev_g > 0.0):
+                return _bisect(g, prev_k, k)
+            prev_k, prev_g = k, gk
+    return None
+
+
+def _catenary(card: Card) -> tuple[list[tuple[float, float, float]], float]:
+    """``(vertices, arc length)`` of a ``CW`` card: its ``NS + 1`` vertices
+    (see the block above), each segment the chord between two of them, and
+    the length of the curve itself. A wire no longer than the straight line
+    between its ends (ICAT 3) is that line, cut evenly."""
+    n_seg = card.i(1)
+    p1 = (card.f(2), card.f(3), card.f(4))
+    p2 = (card.f(5), card.f(6), card.f(7))
+    radius, icat, rhm, zm = card.f(8), card.f(9), card.f(10), card.f(11)
+    if n_seg < 1:
+        raise DeckError(f"CW segment count must be >= 1, got {n_seg}")
+    if radius <= 0.0:
+        raise DeckError(f"CW needs a positive wire radius (F7), got {radius:g}")
+    if icat not in (1.0, 2.0, 3.0):
+        raise DeckError(
+            f"CW ICAT must be 1 (a point the wire passes through), 2 (the sag "
+            f"below the straight line at a distance) or 3 (the wire's "
+            f"length), got {icat:g}"
+        )
+    dx, dy, h = p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]
+    d = math.hypot(dx, dy)
+    if d == 0.0:
+        raise DeckError(
+            "CW's two ends are one above the other, so there is no horizontal "
+            "span for the wire to hang across"
+        )
+    ex, ey = dx / d, dy / d
+
+    if icat == 3.0:
+        if rhm <= math.hypot(d, h):
+            # No longer than the straight line: both engines build that line.
+            line = [
+                tuple(a + (b - a) * i / n_seg for a, b in zip(p1, p2, strict=True))
+                for i in range(n_seg + 1)
+            ]
+            return line, math.dist(p1, p2)
+        signs: tuple[float, ...] = (1.0,)
+
+        def g(k):
+            return _cw_shape(k, d, h)[1](d) - rhm
+
+    else:
+        if rhm == 0.0 or rhm == d:
+            raise DeckError(
+                f"CW with RHM = {rhm:g} puts the point at an end of the wire, "
+                "which fixes nothing about its shape"
+            )
+        drop = zm if icat == 2.0 else p1[2] + h * rhm / d - zm
+        if drop == 0.0:
+            raise DeckError(
+                "CW's point lies on the straight line between the ends, so no "
+                "catenary passes through it"
+            )
+        # Inside the span a sag (k > 0) drops below the line and an arch
+        # rises above it; outside the span the two swap, so try both.
+        inside = 0.0 < rhm < d
+        signs = (
+            (math.copysign(1.0, drop),)
+            if inside
+            else (-math.copysign(1.0, drop), math.copysign(1.0, drop))
+        )
+
+        def g(k):
+            return h * rhm / d - _cw_shape(k, d, h)[0](rhm) - drop
+
+    k = _cw_solve_k(g, d, signs)
+    if k is None:
+        raise DeckError(
+            f"no catenary between CW's ends fits ICAT {icat:g} with "
+            f"RHM = {rhm:g} and ZM = {zm:g}"
+        )
+    z, s = _cw_shape(k, d, h)
+    if k > 0.0:
+        total = s(d)
+        us = [0.0]
+        for i in range(1, n_seg):
+            target = total * i / n_seg
+            us.append(_bisect(lambda u, t=target: s(u) - t, 0.0, d))
+        us.append(d)
+    else:
+        us = [d * i / n_seg for i in range(n_seg + 1)]
+    out = [p1]
+    for u in us[1:-1]:
+        out.append((p1[0] + ex * u, p1[1] + ey * u, p1[2] + z(u)))
+    out.append(p2)
+    return out, s(d)
+
+
+def catenary_vertices(card: Card) -> list[tuple[float, float, float]]:
+    """A ``CW`` card's ``NS + 1`` vertices (see `_catenary`)."""
+    return _catenary(card)[0]
+
+
+def catenary_length(card: Card) -> float:
+    """The arc length of a ``CW`` card's curve, the "Catenary length" both
+    engines echo beside the card (see `_catenary`)."""
+    return _catenary(card)[1]
+
+
+def _cw(card: Card, wires: list[FlatWire]) -> None:
+    """``CW``: one one-segment wire per chord of :func:`catenary_vertices`,
+    all carrying the card's tag, so ``(tag, segment)`` counts along the
+    curve."""
+    vertices = catenary_vertices(card)
+    for a, b in zip(vertices, vertices[1:], strict=False):
+        wires.append(FlatWire(card.i(0), 1, list(a), list(b), card.f(8)))
+
+
+_NEC4_GEOMETRY_BUILDERS = MappingProxyType(
+    {**_GEOMETRY_BUILDERS, "GA": _ga, "GH": _gh, "CW": _cw}
+)
 
 
 class _Nec4Parser(_Nec2Parser):
