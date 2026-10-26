@@ -351,6 +351,22 @@ CASES = [
         "printed",
     ),
     (
+        "catenary",
+        deck(
+            "CW 1 21 -5 0 10 5 0 10 .001 3 10.6 0\n", FR + "EX 0 1 11 0 1\nPQ 0\n" + RP
+        ),
+        "printed",
+    ),
+    (
+        "catenary_between_wires",
+        deck(
+            "GW 1 5 -5 0 0 -5 0 10 .001\nCW 2 10 -5 0 10 5 0 10 .001 1 5 8\n"
+            "GW 3 5 5 0 10 5 0 0 .001\n",
+            FR + "EX 0 1 1 0 1\nXQ\n",
+        ),
+        "printed",
+    ),
+    (
         "helix_tapered_beside_a_wire",
         deck(
             "GH 1 30 -2.5 .4 .08 .03 .002 .001\nGW 2 11 .3 0 0 .3 0 .5 .001\n",

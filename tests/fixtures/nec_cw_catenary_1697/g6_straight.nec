@@ -1,0 +1,8 @@
+CM straight control for c6
+CE
+GW 1 21 -5.3 0 10 5.3 0 10 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 14 0
+XQ
+EN

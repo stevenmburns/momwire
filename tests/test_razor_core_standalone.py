@@ -499,6 +499,18 @@ def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
     bundle), is `_nec4.render(text, basis="sinusoidal")`'s on every NEC-4.2
     fixture deck it prints, byte for byte but for the two measured-time
     lines (masked by exact pattern, the same count on both sides)."""
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    assert _nec42_sinusoidal_printouts(driver, decks) >= 30
+
+
+def _nec42_sinusoidal_printouts(driver, decks) -> int:
+    """How many of `decks` `nec4_sinusoidal_printout_driver` prints, each
+    checked against `_nec4.render(text, basis="sinusoidal")` byte for byte but
+    for the two measured-time lines."""
     spec = importlib.util.spec_from_file_location(
         "core_split_nec4_run_compare", SPLIT / "nec4_run_compare.py"
     )
@@ -507,11 +519,6 @@ def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    decks = [
-        p
-        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
-        if p.is_file() and p.suffix in (".nec", ".deck")
-    ]
     version, variant, marker = rc.pc.stamp()
     run = subprocess.run(
         [
@@ -555,7 +562,7 @@ def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
             b, nb = rc.mask(text)
             assert (rc.first_difference(a, b), na) == (None, nb), path
             printed += 1
-    assert printed >= 30, printed
+    return printed
 
 
 _SIN_KERNELS = (
@@ -1773,6 +1780,29 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     assert not reasons, reasons
     assert counts.get("served", 0) == 29, counts
     assert counts.get("runs", 0) >= 29, counts
+
+
+CW_1697_DECKS = ROOT / "tests" / "fixtures" / "nec_cw_catenary_1697"
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline", "sinusoidal"])
+def test_the_catenary_decks_print_as_python(driver, tmp_path, basis):
+    """momwire#1697: CW through the whole C++ chain -- the NEC-5 reader's one
+    bent wire and its echo on razor-2p and bs2, and the NEC-4.2 slot's
+    catenary entry on the sinusoidal basis -- byte for byte as `_shell.render`
+    prints them. None declines."""
+    decks = sorted(CW_1697_DECKS.glob("*.nec"))
+    assert len(decks) == 8
+    if basis == "sinusoidal":
+        assert _nec42_sinusoidal_printouts(driver, decks) == 8
+        return
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    else:
+        counts, reasons = _razor_printouts(driver, decks, tmp_path)
+    assert not reasons, reasons
+    assert counts.get("served", 0) == 8, counts
+    assert counts.get("runs", 0) >= 8, counts
 
 
 def _razor_printouts(driver, decks, tmp_path):

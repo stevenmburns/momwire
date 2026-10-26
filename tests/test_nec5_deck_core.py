@@ -516,7 +516,36 @@ CASES = {
     "sp nan radius": (deck("SP 0 1 1 0 0 0 0 nan"), "SP (sphere)"),
     "sp fused": (deck("SP0 1 1 0 0 0 0 1"), "SP (sphere)"),
     "sp huge count": (deck(f"SP 0 {BIG} 1 0 0 0 0 1"), "OverflowError"),
-    "cw": (deck("CW 1 2 3"), "CW is not a card"),
+    # CW, the catenary (momwire#1697): read, and each refusal
+    "cw sag": (deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 1 20 8\n"), "parsed"),
+    "cw arch": (deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 2 10 -2\n"), "parsed"),
+    "cw length": (deck(wires=GW1 + "CW 3 12 0 0 10 30 10 14 0.002 3 36 0\n"), "parsed"),
+    "cw length is the line": (
+        deck(wires=GW1 + "CW 3 4 0 0 0 3 0 4 0.001 3 4 0\n"),
+        "parsed",
+    ),
+    "cw point outside the span": (
+        deck(wires=GW1 + "CW 3 21 -5 0 10 5 0 10 1e-3 1 20 8\n"),
+        "parsed",
+    ),
+    "cw short card": (deck(wires=GW1 + "CW 3 2 3\n"), "positive wire radius"),
+    "cw icat": (deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 4 20 8\n"), "CW ICAT"),
+    "cw at an end": (
+        deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 1 40 8\n"),
+        "at an end",
+    ),
+    "cw on the line": (
+        deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 1 20 15\n"),
+        "straight line",
+    ),
+    "cw vertical": (
+        deck(wires=GW1 + "CW 3 10 0 0 0 0 0 15 0.001 3 20 0\n"),
+        "one above the other",
+    ),
+    "cw no segments": (
+        deck(wires=GW1 + "CW 3 0 -20 0 15 20 0 15 0.001 1 20 8\n"),
+        "segment count",
+    ),
     "qq lowercase": (deck("qq"), "QQ is not a card"),
     "nx in one structure": (deck("NX"), "NX (next structure) ends one structure"),
     **{

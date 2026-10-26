@@ -908,6 +908,49 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         deck("GA 1 12 1 -90 270.00001 .002\n"),
         "degrees, which NEC-",
     ),
+    # CW, NEC-4.2's catenary (momwire#1697): the nec4 dialect only
+    (
+        "cw_sag",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 10 -.5 0 .2 .5 0 .2 .001 1 .5 .1\n"),
+        "parsed",
+    ),
+    (
+        "cw_arch",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 10 -.5 0 .2 .5 0 .2 .001 2 .3 -.05\n"),
+        "parsed",
+    ),
+    (
+        "cw_length",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 12 0 0 .3 1 .2 .5 .002 3 1.3 0\n"),
+        "parsed",
+    ),
+    (
+        "cw_line",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 4 0 0 .3 .3 0 .7 .001 3 .4 0\n"),
+        "parsed",
+    ),
+    (
+        "cw_icat",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 10 -.5 0 .2 .5 0 .2 .001 4 .5 .1\n"),
+        "CW ICAT",
+    ),
+    (
+        "cw_vertical",
+        ("nec4",),
+        deck(DIPOLE + "CW 2 10 0 0 .3 0 0 .9 .001 3 1 0\n"),
+        "one above",
+    ),
+    (
+        "cw_nec2",
+        ("nec2",),
+        deck(DIPOLE + "CW 2 10 -.5 0 .2 .5 0 .2 .001 1 .5 .1\n"),
+        "CW",
+    ),
     (
         "ga_no_wire_nec2",
         ("nec2",),
