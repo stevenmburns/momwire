@@ -1,0 +1,8 @@
+CM CW centre-fed sag dipole
+CE
+CW 1 21 -5 0 10 5 0 10 0.001 3 10.6 0
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 14 0
+XQ
+EN

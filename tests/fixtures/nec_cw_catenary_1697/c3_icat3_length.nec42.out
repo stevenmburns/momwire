@@ -1,0 +1,146 @@
+1
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)  *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          CW icat 3 length                                                             
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+
+  WIRE                                                                               NO. OF    FIRST  LAST     TAG
+  NO.        X1         Y1         Z1          X2         Y2         Z2      RADIUS   SEG.     SEG.   SEG.     NO.
+          THE FOLLOWING WIRE IS A CATENARY,    3 3.60000E+01 0.00000E+00
+          Catenary length = 3.60000E+01    Total segment length = 3.59738E+01
+     1    0.00000    0.00000   10.00000    30.00000   10.00000   14.00000    0.00200     12        1    12       1
+
+   TOTAL SEGMENTS USED=   12     NO. SEG. IN A SYMMETRIC CELL=   12     SYMMETRY FLAG=  0
+
+
+         - MULTIPLE WIRE JUNCTIONS -
+ JUNCTION    SEGMENTS  (- FOR END 1, + FOR END 2)
+  NONE
+
+
+
+
+                                 - - - - SEGMENTATION DATA - - - -
+
+                                        COORDINATES IN METERS
+
+                         I+ AND I- INDICATE THE SEGMENTS BEFORE AND AFTER I
+
+
+  SEG.   COORDINATES OF SEG. CENTER     SEG.     ORIENTATION ANGLES    WIRE    CONNECTION DATA   TAG
+  NO.       X         Y         Z       LENGTH     ALPHA     BETA      RADIUS    I-   I    I+    NO.
+     1   1.13733   0.37911   9.09964   2.99861  -36.90725  18.43495   0.00200     0    1    2      1
+     2   3.50174   1.16725   7.44153   2.99811  -30.36307  18.43495   0.00200     1    2    3      1
+     3   6.03940   2.01313   6.10258   2.99754  -22.81750  18.43495   0.00200     2    3    4      1
+     4   8.72728   2.90909   5.15014   2.99700  -14.34313  18.43495   0.00200     3    4    5      1
+     5  11.52018   3.84006   4.64350   2.99665   -5.18540  18.43495   0.00200     4    5    6      1
+     6  14.35334   4.78445   4.61890   2.99663    4.24169  18.43495   0.00200     5    6    7      1
+     7  17.15348   5.71783   5.07820   2.99695   13.44751  18.43495   0.00200     6    7    8      1
+     8  19.85433   6.61811   5.98823   2.99748   22.00479  18.43495   0.00200     7    8    9      1
+     9  22.40849   7.46950   7.29135   2.99805   29.64960  18.43495   0.00200     8    9   10      1
+    10  24.79079   8.26360   8.92037   2.99856   36.29379  18.43495   0.00200     9   10   11      1
+    11  26.99473   8.99824  10.81072   2.99896   41.97611  18.43495   0.00200    10   11   12      1
+    12  29.02614   9.67538  12.90680   2.99925   46.80113  18.43495   0.00200    11   12    0      1
+
+
+
+
+ ***** INPUT LINE  1  EX   0    1    1    0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  FR   0    1    0    0  1.40000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  XQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 1.4000E+01 MHZ
+                                    WAVELENGTH= 2.1414E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+                                            FREE SPACE
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+                                   THIS STRUCTURE IS NOT LOADED
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.001 SEC.,  FACTOR=    0.001 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+     1     1 1.00000E+00 0.00000E+00 9.43027E-05 4.88487E-04 3.81002E+02-1.97358E+03 9.43027E-05 4.88487E-04 4.71514E-05
+
+
+
+                             - - - CURRENTS AND LOCATION - - -
+
+                     LENGTHS NORMALIZED BY WAVELENGTH (OR 2.*PI/CABS(K))
+
+  SEG.  TAG    COORD. OF SEG. CENTER     SEG.            - - - CURRENT (AMPS) - - -
+  NO.   NO.     X        Y        Z      LENGTH     REAL        IMAG.       MAG.        PHASE
+     1    1   0.0531   0.0177   0.4249  0.14003   9.4303E-05  4.8849E-04  4.9751E-04   79.073
+     2    1   0.1635   0.0545   0.3475  0.14001   2.1652E-04 -1.3132E-04  2.5323E-04  -31.238
+     3    1   0.2820   0.0940   0.2850  0.13998   2.0636E-04 -8.5793E-04  8.8239E-04  -76.476
+     4    1   0.4075   0.1358   0.2405  0.13995   7.9517E-05 -9.4532E-04  9.4866E-04  -85.192
+     5    1   0.5380   0.1793   0.2168  0.13994  -7.8422E-05 -3.5506E-04  3.6362E-04 -102.455
+     6    1   0.6703   0.2234   0.2157  0.13994  -1.6973E-04  4.8341E-04  5.1234E-04  109.346
+     7    1   0.8010   0.2670   0.2371  0.13995  -1.4626E-04  9.6858E-04  9.7956E-04   98.587
+     8    1   0.9272   0.3091   0.2796  0.13998  -3.3246E-05  7.5389E-04  7.5462E-04   92.525
+     9    1   1.0464   0.3488   0.3405  0.14000   9.4035E-05 -5.7931E-06  9.4213E-05   -3.525
+    10    1   1.1577   0.3859   0.4166  0.14003   1.6058E-04 -7.6490E-04  7.8157E-04  -78.144
+    11    1   1.2606   0.4202   0.5048  0.14004   1.3644E-04 -9.7455E-04  9.8406E-04  -82.031
+    12    1   1.3555   0.4518   0.6027  0.14006   4.9179E-05 -4.5909E-04  4.6172E-04  -83.886
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 4.7151E-05 WATTS
+                                           RADIATED POWER= 4.7151E-05 WATTS
+                                           WIRE LOSS     = 0.0000E+00 WATTS
+                                           EFFICIENCY    = 100.00 PERCENT
+
+
+
+
+ ***** INPUT LINE  4  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.008

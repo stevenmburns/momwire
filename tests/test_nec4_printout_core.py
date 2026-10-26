@@ -251,6 +251,32 @@ RECORDS = {
             GS,
         ),
     ),
+    # CW entries (momwire#1697): ICAT, RHM and ZM, the two lengths, the row.
+    "cw_rows": _printout(
+        [_run(echo_through=4)],
+        wires=(
+            n4p.CatenaryRow(
+                1,
+                20.0,
+                -8.0,
+                43.0988,
+                43.0701,
+                n4p.WireRow(
+                    1, (-20.0, 0.0, 15.0), (20.0, 0.0, 15.0), 0.001, 10, 1, 10, 1
+                ),
+            ),
+            n4p.CatenaryRow(
+                3,
+                1e5,
+                -0.0,
+                1.29918e103,
+                1e-300,
+                n4p.WireRow(
+                    2, (1e6, -2e-9, 0.0), (-1.0, 0.5, 0.25), 2.0, 20, 11, 30, 4
+                ),
+            ),
+        ),
+    ),
     "ground_plane_junctions": _printout(
         [_run(echo_through=4)], ge_flag=1, junctions=((-1, 6, -11), (5, 10, 15, -20))
     ),

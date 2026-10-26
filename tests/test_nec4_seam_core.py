@@ -187,6 +187,13 @@ CASES: list[tuple[str, str, str]] = [
         deck(GW + "GM 0 0 0 0 10 0 0 0 0\nGA 2 4 1 0 90 .001\n"),
         SERVED,
     ),
+    # CW (momwire#1697): served where a GW may stand.
+    ("cw_catenary", deck("CW 1 21 -5 0 10 5 0 10 .001 3 10.6 0\n"), SERVED),
+    (
+        "cw_after_gs",
+        deck(GW + "GS 0 0 .5\nCW 2 10 -5 0 10 5 0 10 .001 1 2 9\n"),
+        "a CW card after a GS card",
+    ),
     (
         "gh_after_gs",
         deck(GW + "GS 0 0 .5\nGH 2 8 1 .3 .1 .1 .001 .001\n"),
