@@ -25,6 +25,7 @@ Windows lanes build the extension through their own toolchains.
 from __future__ import annotations
 
 import ast
+import concurrent.futures
 import importlib.util
 import os
 import pathlib
@@ -231,16 +232,25 @@ def driver(accel, tmp_path_factory):
         "nec4_sinusoidal_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
-    objects, deps, procs = {}, [], []
-    for src in sources:  # concurrently: the -O3 core TUs dominate the cost
+    objects, deps, cmds = {}, [], []
+    for src in sources:
         obj, dep = out / (src.stem + ".o"), out / (src.stem + ".d")
-        cmd = [*base, "-MD", "-MF", str(dep), "-c", str(src), "-o", str(obj)]
-        procs.append((cmd, subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)))
+        cmds.append([*base, "-MD", "-MF", str(dep), "-c", str(src), "-o", str(obj)])
         objects[src.stem] = str(obj)
         deps.append(dep)
-    for cmd, proc in procs:
-        _, err = proc.communicate()
-        assert proc.returncode == 0, f"{shlex.join(cmd)}\n{err}"
+    # Concurrently, as setup.py's ParallelCompile does and with its knob and
+    # default (momwire#1703): at most NPY_NUM_BUILD_JOBS compilers, the CPU
+    # count when it is unset or 0. All 61 at once peaked near 20 GB (an -O3
+    # core TU is 330-380 MB) and OOM-killed a 15 GB machine.
+    jobs = int(os.environ.get("NPY_NUM_BUILD_JOBS") or 0) or os.cpu_count() or 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        runs = list(
+            pool.map(
+                lambda cmd: subprocess.run(cmd, capture_output=True, text=True), cmds
+            )
+        )
+    for cmd, run in zip(cmds, runs, strict=True):
+        assert run.returncode == 0, f"{shlex.join(cmd)}\n{run.stderr}"
     core = [objects[pathlib.Path(s).stem] for s in CORE_SOURCES]
     exes = {}
     for d in drivers:
