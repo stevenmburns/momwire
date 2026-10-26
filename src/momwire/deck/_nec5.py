@@ -45,7 +45,7 @@ from types import MappingProxyType
 
 from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
 from ._nec2_geometry import arc_vertices, gm_transform
-from ._nec4 import helix_vertices
+from ._nec4 import catenary_vertices, helix_vertices
 from .model import DistributedRLC, LoadSpec
 
 __all__ = [
@@ -574,7 +574,7 @@ class Nec5Deck:
 # one radio button (momwire#513, capture 0111) — plus the CM/CE comment
 # framing, plus the six cards 4nec2's NEC-5 package writes and EZNEC does not:
 # GA, GH, GM, GX and GS (geometry) and PT (momwire#1669, each measured on the
-# licensed engine as a black box).  Anything outside this set refuses; the
+# licensed engine as a black box), plus CW, NEC-5's catenary (momwire#1697).  Anything outside this set refuses; the
 # table below gives the ones a reader might plausibly send a reason of their
 # own, and everything else falls through to the generic by-name refusal in
 # `_Nec5Parser.card`.
@@ -585,6 +585,7 @@ _VOCABULARY = frozenset(
         "GW",
         "GA",
         "GH",
+        "CW",
         "GM",
         "GX",
         "GS",
@@ -1117,6 +1118,15 @@ class _Nec5Parser:
         a1-a5), and it reads a sweep of 360 degrees as a closed loop."""
         self._open_geometry(card)
         self._add_wire(self._bent(card, arc_vertices(card, "nec5"), card.f(5)), card)
+
+    def _cw(self, card: Card) -> None:
+        """``CW ITG NS X1 Y1 Z1 X2 Y2 Z2 RAD ICAT RHM ZM``: a catenary between
+        two points, the chord between each pair of its ``NS + 1`` vertices one
+        element.  The vertices are :func:`momwire.deck._nec4.
+        catenary_vertices`, the curve both licensed engines build (probes
+        c1-c5: the same segment count and catenary length on each)."""
+        self._open_geometry(card)
+        self._add_wire(self._bent(card, catenary_vertices(card), card.f(8)), card)
 
     def _gh(self, card: Card) -> None:
         """``GH ITG NS TURNS ZLEN HR1 HR2 WR1 WR2``: NEC-4.2's reading of the
@@ -2000,8 +2010,8 @@ class _Nec5Parser:
             raise DeckError(
                 f"{card.mnemonic} is not a card in this engine's nec5 dialect, whose "
                 f"vocabulary is the fifteen mnemonics EZNEC emits (GW, GE, GN, GD, "
-                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, NH, EN) and the six 4nec2's "
-                f"NEC-5 package adds (GA, GH, GM, GX, GS, PT)"
+                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, NH, EN), the six 4nec2's "
+                f"NEC-5 package adds (GA, GH, GM, GX, GS, PT) and CW"
             )
         minimum = _MIN_FIELDS.get(card.mnemonic)
         if minimum is not None and (written := len(card.values)) < minimum:
@@ -2014,6 +2024,7 @@ class _Nec5Parser:
             "GW": self._gw,
             "GA": self._ga,
             "GH": self._gh,
+            "CW": self._cw,
             "GM": self._gm,
             "GX": self._gx,
             "GS": self._gs,
