@@ -2616,6 +2616,16 @@ bool is_terminator(const Card &c) { return c.mnemonic == "EN" || c.mnemonic == "
 Lines geometry_echo(const Card &card) {
     const std::string &m = card.mnemonic;
     const Int i0 = card.i(0), i1 = card.i(1);
+    if (m == "CW") {  // momwire#1697: the seven reals, ICAT, RHM, ZM; then the length line
+        std::string values;
+        for (int k = 0; k < 7; k++) values += e(card.f(static_cast<std::size_t>(2 + k)), 13, 5);
+        double length = 0.0;
+        catenary_points(card, std::numeric_limits<long long>::max(), &length);
+        return {" CW" + d(i0, 5) + d(i1, 6) + values + d(card.i(9), 4) + e(card.f(10), 13, 5) +
+                    e(card.f(11), 13, 5),
+                sp(10) + "Catenary length =" + e(length, 12, 5) + "    Total segment length =" +
+                    e(0.0, 12, 5)};
+    }
     const int reals = m == "GW" ? 7 : m == "GA" ? 4 : (m == "GH" || m == "GM") ? 6 : m == "GS" ? 1 : 0;
     std::string values;
     for (int k = 0; k < reals; k++) values += e(card.f(static_cast<std::size_t>(2 + k)), 13, 5);

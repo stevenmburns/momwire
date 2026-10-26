@@ -206,6 +206,16 @@ Lines structure_rows(const WireTableRow &r) {
                     "  W.RAD=" + e(r.wire_radii[0], 12, 4) + e(r.wire_radii[1], 12, 4),
                 "          TOTAL LENGTH OF WIRE IN THE SPIRAL =" + e(r.wire_length, 13, 5)};
     }
+    if (r.kind == WireTableRow::catenary) {
+        WireTableRow w = r;
+        w.kind = WireTableRow::wire;
+        Lines lines = {"          THE FOLLOWING WIRE IS A CATENARY," + d(r.icat, 5) + e(r.rhm, 12, 5) +
+                           e(r.zm, 12, 5),
+                       "          Catenary length =" + e(r.length, 12, 5) + "    Total segment length =" +
+                           e(r.wire_length, 12, 5)};
+        for (const std::string &s : structure_rows(w)) lines.push_back(s);
+        return lines;
+    }
     if (r.kind == WireTableRow::scale) return {"      STRUCTURE SCALED BY FACTOR" + f(r.factor, 10, 5)};
     if (r.kind == WireTableRow::reflect) {
         std::string axes = std::string(1, r.planes[0] ? 'X' : ' ') + " " + (r.planes[1] ? 'Y' : ' ') + " " +

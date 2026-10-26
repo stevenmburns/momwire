@@ -264,6 +264,22 @@ Nec4Printout printout_of(const py::handle &h) {
             r.first = in(at(w, "first"));
             r.last = in(at(w, "last"));
             r.tag = in(at(w, "tag"));
+        } else if (kind == "CatenaryRow") {
+            r.kind = WireTableRow::catenary;
+            r.icat = in(at(w, "icat"));
+            r.rhm = fl(at(w, "rhm"));
+            r.zm = fl(at(w, "zm"));
+            r.length = fl(at(w, "length"));
+            r.wire_length = fl(at(w, "chord_length"));
+            py::object row = at(w, "wire");
+            r.number = in(at(row, "number"));
+            three(at(row, "end1"), r.end1);
+            three(at(row, "end2"), r.end2);
+            r.radius = fl(at(row, "radius"));
+            r.segments = in(at(row, "segments"));
+            r.first = in(at(row, "first"));
+            r.last = in(at(row, "last"));
+            r.tag = in(at(row, "tag"));
         } else {
             r.number = in(at(w, "number"));
             three(at(w, "end1"), r.end1);

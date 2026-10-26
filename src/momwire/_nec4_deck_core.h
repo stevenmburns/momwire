@@ -229,5 +229,9 @@ double py_dist(const double a[3], const double b[3]);
 // `helix_vertices`: the wire table's TOTAL LENGTH OF WIRE IN THE SPIRAL.
 double helix_wire_length(const nec5::Card &card);
 
+// A CW card's `catenary_length` and the wire table's `sum()` of its chords'
+// `math.dist` (momwire#1697).
+void catenary_lengths(const nec5::Card &card, double *length, double *chord_length);
+
 }  // namespace nec4
 }  // namespace mw

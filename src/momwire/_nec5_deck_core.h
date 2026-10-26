@@ -349,6 +349,12 @@ std::string dump_deck(const Deck &deck, const std::string &path);
 // rendering.
 std::string text_probe(const std::string &op, const std::string &latin1_arg);
 
+// `deck._nec4._catenary`: a CW card's NS + 1 vertices, with the curve's arc
+// length in `*length`; raises the DeckError Python raises, and returns empty
+// when NS is past `max_segments` (the caller declines).  momwire#1697.
+std::vector<std::array<double, 3>> catenary_points(const Card &card, long long max_segments,
+                                                   double *length);
+
 // Python's `format(x, "g")` (printf's `%g` in the C locale, with Python's
 // spellings of NaN and the infinities): the `{x:g}` the seam's sentences use.
 std::string format_g(double x);

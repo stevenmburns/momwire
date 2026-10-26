@@ -84,7 +84,7 @@ PortalDeck parse_deck(const std::string &text) {
             d.comments.push_back(nec5::latin1_to_utf8(card.text()));
             continue;
         }
-        if (one_of(m, {"GW", "GA", "GH", "GM", "GS", "GX", "GR", "GE"})) {
+        if (one_of(m, {"GW", "GA", "GH", "CW", "GM", "GS", "GX", "GR", "GE"})) {
             d.geometry.push_back(card);
             continue;
         }
@@ -202,13 +202,13 @@ void served_geometry(const PortalDeck &deck) {
     auto saw = [&](const char *m) { return std::find(seen.begin(), seen.end(), m) != seen.end(); };
     for (const Card &card : deck.geometry) {
         const std::string &m = card.mnemonic;
-        if (!one_of(m, {"GW", "GA", "GH", "GS", "GM", "GX", "GE"})) unmeasured("the " + m + " geometry card");
+        if (!one_of(m, {"GW", "GA", "GH", "CW", "GS", "GM", "GX", "GE"})) unmeasured("the " + m + " geometry card");
         if (m == "GS" && (!card.i(0).is_zero() || !card.i(1).is_zero()))
             unmeasured("GS scaling a range of tags");
         // several GM cards, and wire cards between them, are measured (p92-p96,
         // momwire#1694); GS stays at most one, and last
         if (m == "GS" && saw("GS")) unmeasured("a second GS card");
-        if (one_of(m, {"GW", "GA", "GH"}) && saw("GS")) unmeasured("a " + m + " card after a GS card");
+        if (one_of(m, {"GW", "GA", "GH", "CW"}) && saw("GS")) unmeasured("a " + m + " card after a GS card");
         if (m == "GM" && saw("GS")) unmeasured("a GM card after a GS card");
         if (m == "GX" && saw("GS")) unmeasured("a GX card after a GS card");
         seen.push_back(m);
