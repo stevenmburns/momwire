@@ -353,7 +353,7 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
     return _mech.digest(
         [
             probe_version(),
-            os.path.realpath(sys.executable),
+            *_mech.interpreter_identity(),
             f"{idle_timeout!r}",
             *(f"{flag}={value}" for flag, value in pairs),
             *_mech.junction_rule_identity(),

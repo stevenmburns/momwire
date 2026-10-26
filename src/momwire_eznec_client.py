@@ -43,7 +43,6 @@ hold both to it.
 
 from __future__ import annotations
 
-import os
 import sys
 import time as _time
 
@@ -96,7 +95,7 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
     major, minor = _mech.dist_version()
     elements = [
         f"eznec.{major}.{minor}",
-        os.path.realpath(sys.executable),
+        *_mech.interpreter_identity(),
         f"{idle_timeout!r}",
     ]
     if dialect != "nec5":
