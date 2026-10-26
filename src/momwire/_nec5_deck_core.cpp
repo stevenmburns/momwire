@@ -477,9 +477,9 @@ bool parse_card(const std::string &line, Card &card) {
 // The parser (`deck/_nec5.py`'s `_Nec5Parser`)
 // ============================================================================
 
-const char *const kVocabulary[] = {"CM", "CE", "GW", "GA", "GH", "GM", "GX", "GS", "GE",
-                                   "GN", "GD", "EX", "LD", "TL", "NT", "FR", "PQ", "PT",
-                                   "RP", "XQ", "NE", "NH", "EN"};
+const char *const kVocabulary[] = {"CM", "CE", "GW", "GA", "GH", "CW", "GM", "GX",
+                                   "GS", "GE", "GN", "GD", "EX", "LD", "TL", "NT",
+                                   "FR", "PQ", "PT", "RP", "XQ", "NE", "NH", "EN"};
 
 const std::map<std::string, std::string> &refused_by_name() {
     static const std::map<std::string, std::string> table = {
@@ -688,6 +688,105 @@ std::vector<Point3> helix_points(const Card &card, long long n) {
         v.push_back({rho * libm_cos(a), rho * libm_sin(a), z});
     }
     return v;
+}
+
+// --- CW (`deck._nec4._catenary`, momwire#1697): the NEC-5 and NEC-4.2 readers' one copy
+
+MW_NEC5_NOINLINE double libm_sinh(double x) { return std::sinh(x); }
+MW_NEC5_NOINLINE double libm_cosh(double x) { return std::cosh(x); }
+MW_NEC5_NOINLINE double libm_asinh(double x) { return std::asinh(x); }
+
+// `math.sinh` / `math.cosh`: libm's, and an OverflowError where a finite
+// argument overflows.
+[[noreturn]] void math_range_error() {
+    throw ParseError(ErrorKind::overflow_error, "math range error");
+}
+double py_sinh(double x) {
+    double r = libm_sinh(x);
+    if (std::isinf(r) && std::isfinite(x)) math_range_error();
+    return r;
+}
+double py_cosh(double x) {
+    double r = libm_cosh(x);
+    if (std::isinf(r) && std::isfinite(x)) math_range_error();
+    return r;
+}
+
+// `math.hypot(x, y)`: CPython 3.12's `vector_norm` of two.
+double py_hypot2(double x, double y) {
+    double v[2] = {std::fabs(x), std::fabs(y)};
+    double max = 0.0;
+    bool found_nan = false;
+    for (double a : v) {
+        found_nan = found_nan || std::isnan(a);
+        if (a > max) max = a;
+    }
+    return vector_norm(2, v, max, found_nan);
+}
+
+const double kCwKdMax = 600.0;  // `_CW_KD_MAX`
+
+double cw_sinhc(double x) { return x != 0.0 ? py_sinh(x) / x : 1.0; }
+
+// `_cw_shape`: z(u) and s(u) of the catenary of curvature k through (0, 0)
+// and (d, h).
+struct CwShape {
+    double k, half, c;
+    CwShape(double k_, double d, double h) : k(k_), half(0.5 * k_ * d) {
+        c = libm_asinh(h / (d * cw_sinhc(half)));
+    }
+    double z(double u) const { return u * py_sinh(0.5 * k * u - half + c) * cw_sinhc(0.5 * k * u); }
+    double s(double u) const { return u * py_cosh(0.5 * k * u - half + c) * cw_sinhc(0.5 * k * u); }
+};
+
+// `_bisect`
+template <class F>
+double cw_bisect(const F &f, double lo, double hi) {
+    double f_lo = f(lo);
+    for (int it = 0; it < 200; it++) {
+        double mid = 0.5 * (lo + hi);
+        if (mid == lo || mid == hi) break;
+        double f_mid = f(mid);
+        if ((f_mid > 0.0) == (f_lo > 0.0)) {
+            lo = mid;
+            f_lo = f_mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0.5 * (lo + hi);
+}
+
+// `_cw_solve_k`: false when g never crosses zero.
+template <class G>
+bool cw_solve_k(const G &g, double d, const std::vector<double> &signs, double &out) {
+    for (double sign : signs) {
+        bool have_prev = false;
+        double prev_k = 0.0, prev_g = 0.0;
+        for (int j = -400; j <= 0; j++) {
+            double k = sign * (kCwKdMax / d) * py_float_pow(10.0, static_cast<double>(j) / 25.0);
+            double gk;
+            try {
+                gk = g(k);
+            } catch (const ParseError &e) {
+                if (e.kind == ErrorKind::overflow_error) continue;
+                throw;
+            }
+            if (gk != gk) continue;  // NaN
+            if (gk == 0.0) {
+                out = k;
+                return true;
+            }
+            if (have_prev && (gk > 0.0) != (prev_g > 0.0)) {
+                out = cw_bisect(g, prev_k, k);
+                return true;
+            }
+            have_prev = true;
+            prev_k = k;
+            prev_g = gk;
+        }
+    }
+    return false;
 }
 
 struct Parser {
@@ -928,6 +1027,18 @@ struct Parser {
                        "gives a wire one radius, so it serves a GH whose two wire radii are equal");
         if (too_large(n_seg)) return;
         add_wire(bent(card.i(0), card.i(1), helix_points(card, n_seg.i64()), w1), card);
+    }
+
+    // `_nec5._Nec5Parser._cw`, through `deck._nec4.catenary_vertices`
+    void cw(const Card &card) {
+        open_geometry(card);
+        double length = 0.0;
+        std::vector<Point3> v = catenary_points(card, kMaxGeometry, &length);
+        if (v.empty()) {
+            geometry_too_large = true;
+            return;
+        }
+        add_wire(bent(card.i(0), card.i(1), v, card.f(8)), card);
     }
 
     // `_nec5._Nec5Parser._moved`: one wire through a point map, retagged.
@@ -1602,8 +1713,8 @@ struct Parser {
         if (!known)
             deck_error(mn + " is not a card in this engine's nec5 dialect, whose vocabulary is "
                             "the fifteen mnemonics EZNEC emits (GW, GE, GN, GD, EX, LD, TL, NT, "
-                            "FR, PQ, RP, XQ, NE, NH, EN) and the six 4nec2's NEC-5 package adds "
-                            "(GA, GH, GM, GX, GS, PT)");
+                            "FR, PQ, RP, XQ, NE, NH, EN), the six 4nec2's NEC-5 package adds "
+                            "(GA, GH, GM, GX, GS, PT) and CW");
         int minimum = min_fields(mn);
         if (minimum >= 0 && c.values.size() < static_cast<std::size_t>(minimum)) {
             std::size_t written = c.values.size();
@@ -1614,6 +1725,7 @@ struct Parser {
         if (mn == "GW") return gw(c);
         if (mn == "GA") return ga(c);
         if (mn == "GH") return gh(c);
+        if (mn == "CW") return cw(c);
         if (mn == "GM") return gm(c);
         if (mn == "GX") return gx(c);
         if (mn == "GS") return gs(c);
@@ -1790,6 +1902,95 @@ DeckOutcome outcome_of(const ParseError &e) {
 }
 
 }  // namespace
+
+// `_catenary` (declared in the header)
+std::vector<std::array<double, 3>> catenary_points(const Card &card, long long max_segments,
+                                                   double *length) {
+    Int n_seg = card.i(1);
+    const double p1[3] = {card.f(2), card.f(3), card.f(4)};
+    const double p2[3] = {card.f(5), card.f(6), card.f(7)};
+    double radius = card.f(8), icat = card.f(9), rhm = card.f(10), zm = card.f(11);
+    if (n_seg < Int(1)) deck_error("CW segment count must be >= 1, got " + n_seg.str());
+    if (radius <= 0.0) deck_error("CW needs a positive wire radius (F7), got " + py_g(radius));
+    if (!(icat == 1.0 || icat == 2.0 || icat == 3.0))
+        deck_error("CW ICAT must be 1 (a point the wire passes through), 2 (the sag below the "
+                   "straight line at a distance) or 3 (the wire's length), got " +
+                   py_g(icat));
+    double dx = p2[0] - p1[0], dy = p2[1] - p1[1], h = p2[2] - p1[2];
+    double d = py_hypot2(dx, dy);
+    if (d == 0.0)
+        deck_error("CW's two ends are one above the other, so there is no horizontal span for the "
+                   "wire to hang across");
+    double ex = dx / d, ey = dy / d;
+    if (!n_seg.fits_i64() || n_seg.i64() > max_segments) return {};
+    long long n = n_seg.i64();
+    double dn = static_cast<double>(n);
+    std::vector<std::array<double, 3>> out;
+
+    std::vector<double> signs;
+    bool length_fixed = icat == 3.0;
+    double drop = 0.0;
+    if (length_fixed) {
+        if (rhm <= py_hypot2(d, h)) {
+            for (long long i = 0; i <= n; i++) {
+                std::array<double, 3> v;
+                for (int c = 0; c < 3; c++)
+                    v[c] = p1[c] + (p2[c] - p1[c]) * static_cast<double>(i) / dn;
+                out.push_back(v);
+            }
+            *length = dist3(p1, p2);
+            return out;
+        }
+        signs.push_back(1.0);
+    } else {
+        if (rhm == 0.0 || rhm == d)
+            deck_error("CW with RHM = " + py_g(rhm) +
+                       " puts the point at an end of the wire, which fixes nothing about its shape");
+        drop = icat == 2.0 ? zm : p1[2] + h * rhm / d - zm;
+        if (drop == 0.0)
+            deck_error("CW's point lies on the straight line between the ends, so no catenary "
+                       "passes through it");
+        bool inside = 0.0 < rhm && rhm < d;
+        double sd = std::copysign(1.0, drop);
+        if (inside) {
+            signs.push_back(sd);
+        } else {
+            signs.push_back(-sd);
+            signs.push_back(sd);
+        }
+    }
+    auto gfun = [&](double k) {
+        CwShape sh(k, d, h);
+        if (length_fixed) return sh.s(d) - rhm;
+        return h * rhm / d - sh.z(rhm) - drop;
+    };
+    double k = 0.0;
+    if (!cw_solve_k(gfun, d, signs, k))
+        deck_error("no catenary between CW's ends fits ICAT " + py_g(icat) + " with RHM = " + py_g(rhm) +
+                   " and ZM = " + py_g(zm));
+    CwShape sh(k, d, h);
+    std::vector<double> us;
+    if (k > 0.0) {
+        double total = sh.s(d);
+        us.push_back(0.0);
+        for (long long i = 1; i < n; i++) {
+            double target = total * static_cast<double>(i) / dn;
+            us.push_back(cw_bisect([&](double u) { return sh.s(u) - target; }, 0.0, d));
+        }
+        us.push_back(d);
+    } else {
+        for (long long i = 0; i <= n; i++) us.push_back(d * static_cast<double>(i) / dn);
+    }
+    out.push_back({p1[0], p1[1], p1[2]});
+    for (std::size_t i = 1; i + 1 < us.size(); i++) {
+        double u = us[i];
+        out.push_back({p1[0] + ex * u, p1[1] + ey * u, p1[2] + sh.z(u)});
+    }
+    out.push_back({p2[0], p2[1], p2[2]});
+    *length = sh.s(d);
+    return out;
+}
+
 
 const Wire *Deck::wire(const Int &tag) const {
     for (const Wire &w : wires)

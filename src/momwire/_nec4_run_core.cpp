@@ -379,7 +379,9 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             }
             continue;
         }
-        if (card.mnemonic != "GW" && card.mnemonic != "GA" && card.mnemonic != "GH") continue;
+        if (card.mnemonic != "GW" && card.mnemonic != "GA" && card.mnemonic != "GH" &&
+            card.mnemonic != "CW")
+            continue;
         number++;
         const ll n_seg = i64(card.i(1));
         const ll last = first + n_seg - 1;
@@ -405,12 +407,18 @@ std::vector<WireTableRow> wire_rows(const PortalDeck &deck) {
             r.wire_radii[1] = card.f(7);
             r.wire_length = helix_wire_length(card);
         } else {
-            r.kind = WireTableRow::wire;
+            r.kind = card.mnemonic == "CW" ? WireTableRow::catenary : WireTableRow::wire;
             for (int c = 0; c < 3; c++) {
                 r.end1[c] = card.f(2 + c);
                 r.end2[c] = card.f(5 + c);
             }
             r.radius = card.f(8);
+            if (card.mnemonic == "CW") {
+                r.icat = i64(card.i(9));
+                r.rhm = card.f(10);
+                r.zm = card.f(11);
+                catenary_lengths(card, &r.length, &r.wire_length);
+            }
         }
         rows.push_back(r);
         first += n_seg;

@@ -550,10 +550,11 @@ def _symmetry_after(
         return Symmetry(*before)
     if mnemonic == "GS":
         return symmetry
-    if mnemonic in ("GW", "GA", "GH"):
+    if mnemonic in ("GW", "GA", "GH", "CW"):
         # GA/GH add wires exactly as GW does, in both dialects: nec2c's
         # `arc` and `helix` set NP = N and IPSYM = 0 as `wire` does, and
         # NEC-4.2 prints SYMMETRY FLAG 0 after a GA under a GX (momwire#1651).
+        # The nec4 dialect's CW is a wire card too (momwire#1697).
         return None
     # GM.  `move` preserves only when it neither replicates nor restricts:
     # `if (nrpt == 0 && ix == 1) return;`, where `ix` is the first segment of

@@ -652,6 +652,20 @@ void gh(const Card &card, std::vector<FlatWire> &wires) {
     chords(card.i(0), v, radii, wires);
 }
 
+// `deck._nec4._catenary` (the NEC-5 reader's copy, which both dialects share)
+std::vector<std::array<double, 3>> catenary_points(const Card &card, double *length) {
+    std::vector<std::array<double, 3>> v = nec5::catenary_points(card, kMaxWires, length);
+    if (v.empty()) decline("too many segments on one catenary");
+    return v;
+}
+
+// `_cw`
+void cw(const Card &card, std::vector<FlatWire> &wires) {
+    double length = 0.0;
+    const std::vector<std::array<double, 3>> v = catenary_points(card, &length);
+    chords(card.i(0), v, std::vector<double>(v.size() - 1, card.f(8)), wires);
+}
+
 struct Plane {
     int axis;
     ll flag;
@@ -736,7 +750,7 @@ void symmetry_after(const Card &card, const std::vector<FlatWire> &wires, Symmet
         return;
     }
     if (m == "GS") return;
-    if (m == "GW" || m == "GA" || m == "GH") {
+    if (m == "GW" || m == "GA" || m == "GH" || m == "CW") {
         has = false;
         return;
     }
@@ -959,6 +973,8 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
                 gh(card, wires);
             else
                 gh_nec2(card, wires);
+        } else if (m == "CW") {
+            cw(card, wires);
         } else {
             gr(card, wires);
         }
@@ -1751,7 +1767,7 @@ class Parser {
                 destroyer_ = m;
             }
         }
-        if (in(m, kGeometryCards)) {
+        if (in(m, kGeometryCards) || (m == "CW" && dialect_ == Dialect::nec4)) {
             geometry(card);
             return;
         }
@@ -2279,6 +2295,16 @@ double helix_wire_length(const nec5::Card &card) {
     d.reserve(v.size());
     for (std::size_t k = 0; k + 1 < v.size(); k++) d.push_back(dist3(v[k].data(), v[k + 1].data()));
     return py_sum(d.data(), static_cast<int>(d.size()));
+}
+
+// `deck._nec4.catenary_length` and the wire table's chord total, `sum()` of
+// the chords' `math.dist` (momwire#1697).
+void catenary_lengths(const nec5::Card &card, double *length, double *chord_length) {
+    const std::vector<std::array<double, 3>> v = catenary_points(card, length);
+    std::vector<double> d;
+    d.reserve(v.size());
+    for (std::size_t k = 0; k + 1 < v.size(); k++) d.push_back(dist3(v[k].data(), v[k + 1].data()));
+    *chord_length = py_sum(d.data(), static_cast<int>(d.size()));
 }
 
 Geometry geometry_of(const std::vector<Card> &cards) {

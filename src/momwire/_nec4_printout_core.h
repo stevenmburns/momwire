@@ -33,8 +33,8 @@ namespace nec4 {
 
 typedef std::complex<double> cplx;
 
-struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow | ReflectRow
-    enum Kind { wire, arc, helix, scale, move, reflect } kind = wire;
+struct WireTableRow {  // WireRow | ArcRow | HelixRow | CatenaryRow | ScaleRow | MoveRow | ReflectRow
+    enum Kind { wire, arc, helix, catenary, scale, move, reflect } kind = wire;
     // wire
     long long number = 0, segments = 0, first = 0, last = 0, tag = 0;
     double end1[3] = {0, 0, 0}, end2[3] = {0, 0, 0};
@@ -44,6 +44,10 @@ struct WireTableRow {  // WireRow | ArcRow | HelixRow | ScaleRow | MoveRow | Ref
     // helix (GH): number and the segment columns above too
     double turns = 0, length = 0, wire_length = 0;
     double helix_radii[2] = {0, 0}, wire_radii[2] = {0, 0};
+    // catenary (CW, momwire#1697): the wire's columns above, its ICAT, RHM and
+    // ZM, and the curve's length (`length`) and chords' total (`wire_length`)
+    long long icat = 0;
+    double rhm = 0, zm = 0;
     // scale
     double factor = 0;
     // move (and reflect: its tag increment)
