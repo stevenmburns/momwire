@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 from ..deck._cards import Card, parse_card
-from ..deck._nec4 import helix_vertices
+from ..deck._nec4 import catenary_length, helix_vertices
 from ..deck._nec5 import Nec5Deck
 
 __all__ = [
@@ -1213,9 +1213,24 @@ def _geometry_echo(card: Card) -> list[str]:
     for ``GA``, six for ``GH``, six for ``GM``, one for ``GS`` and none for
     ``GX``.  ``GH`` closes with an I4 that prints 0 whatever the card carries
     there, and a second line, its chords' total length; ``GM`` with ``ITS``
-    as I5 and three I5 zeros.
+    as I5 and three I5 zeros.  ``CW`` prints its seven reals, ``ICAT`` as I4
+    and ``RHM``/``ZM``, then a second line with the curve's length and a
+    "Total segment length" that NEC-5 prints as zero (probes c1-c5,
+    momwire#1697).
     """
     m, i0, i1 = card.mnemonic, card.i(0), card.i(1)
+    if m == "CW":
+        values = "".join(_e(card.f(2 + k), 13, 5) for k in range(7))
+        return [
+            f" CW{i0:5d}{i1:6d}{values}{card.i(9):4d}"
+            + _e(card.f(10), 13, 5)
+            + _e(card.f(11), 13, 5),
+            " " * 10
+            + "Catenary length ="
+            + _e(catenary_length(card), 12, 5)
+            + "    Total segment length ="
+            + _e(0.0, 12, 5),
+        ]
     reals = {"GW": 7, "GA": 4, "GH": 6, "GM": 6, "GS": 1, "GX": 0}[m]
     values = "".join(_e(card.f(2 + k), 13, 5) for k in range(reals))
     if m == "GM":
