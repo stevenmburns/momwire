@@ -296,7 +296,9 @@ class TL:
     from these at each operating frequency, so sweeps get the loss slope
     for free, and SWR-dependent additional loss emerges from the circuit
     solution rather than a formula. Defaults 0.0 → lossless. Use
-    `TL.from_cable()` for real cables.
+    `TL.from_cable()` for real cables. A lossy line's characteristic
+    impedance is complex, z0·(1 − jα/β), as EZNEC's is (momwire#1706); z0
+    names the lossless one.
     """
 
     a: str  # port name

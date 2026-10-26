@@ -137,13 +137,30 @@ def _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m=None):
     return (alpha + 1j * beta) * length
 
 
+def _tl_zc(z0, gl):
+    """The line's characteristic impedance: ``z0`` itself when lossless, and
+    ``z0·(1 − jα/β)`` when lossy (momwire#1706).
+
+    A lossy line's characteristic impedance is complex. With the loss in the
+    series resistance, Zc = √((R + jωL)/(jωC)) = Z0·√(1 + R/(jωL)), which to
+    first order in α/β = R/(2ωL) is Z0·(1 − jα/β): EZNEC's lossy line, and
+    antennaknobs' ``.ez`` importer's. α/β is Re(γl)/Im(γl), the length
+    cancelling. A lossless line (α exactly 0) returns ``z0`` untouched, so
+    every lossless stamp is bit for bit what it was.
+    """
+    if gl.real == 0.0 or gl.imag == 0.0:
+        return z0
+    return z0 * (1.0 - 1j * (gl.real / gl.imag))
+
+
 def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=None):
     """Ideal-TL chain (ABCD) matrix ``(A, B, C, D)`` — the reducer's stamp
     (issue #746).
 
-        [v_a; i_a] = [[cosh γl, Z0 sinh γl], [sinh γl / Z0, cosh γl]] · [v_b; i_b]
+        [v_a; i_a] = [[cosh γl, Zc sinh γl], [sinh γl / Zc, cosh γl]] · [v_b; i_b]
 
-    with i_a into port A and i_b out of port B. Every entry is an entire
+    with Zc the line's characteristic impedance, complex when it is lossy
+    (`_tl_zc`, momwire#1706), and i_a into port A and i_b out of port B. Every entry is an entire
     function of γl, so unlike `tl_admittance_2x2` — the same line, written as
     the ratio 1/(Z0 sinh γl) — this has no pole anywhere: at the lossless
     k·λ/2 point it is exactly [[±1, 0], [0, ±1]], the through-line the
@@ -155,8 +172,9 @@ def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=Non
     negated where the pair is stamped, which is what a polarity inversion is.
     """
     gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
+    zc = _tl_zc(z0, gl)
     sh, ch = np.sinh(gl), np.cosh(gl)
-    return ch, z0 * sh, sh / z0, ch
+    return ch, zc * sh, sh / zc, ch
 
 
 def tl_admittance_2x2(
@@ -178,7 +196,8 @@ def tl_admittance_2x2(
     4×4's even/odd decomposition are written against.
 
     For complex propagation γl = (α + jβ)·length with β = 2π/(vf·λ):
-        Y_TL = 1/(Z0 sinh γl) · [[cosh γl, -1], [-1, cosh γl]]
+        Y_TL = 1/(Zc sinh γl) · [[cosh γl, -1], [-1, cosh γl]]
+    (Zc complex when the line is lossy, as in `tl_abcd`)
     which reduces exactly to the classic lossless form
         Y_TL = 1/(j Z0 sin θ) · [[cos θ, -1], [-1, cos θ]]
     at α = 0 (sinh jθ = j·sin θ). α comes from the cable-table matched-loss
@@ -208,7 +227,7 @@ def tl_admittance_2x2(
             "its chain matrix (`tl_abcd`) instead, which is what the reducer "
             "stamps and which stays finite"
         )
-    scale = 1.0 / (z0 * sh)
+    scale = 1.0 / (_tl_zc(z0, gl) * sh)
     off = 1.0 if transposed else -1.0
     return scale * np.array([[ch, off], [off, ch]], dtype=np.complex128)
 
