@@ -131,7 +131,7 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from ._cards import Card, DeckError
-from ._nec2 import _Nec2Parser
+from ._nec2 import _GEOMETRY_CARDS, _Nec2Parser
 from ._nec2_geometry import _GEOMETRY_BUILDERS, FlatWire
 from ._nec2_geometry import arc_vertices as _arc_vertices
 from .model import DeckModel
@@ -477,6 +477,7 @@ class _Nec4Parser(_Nec2Parser):
     """The ``nec2`` state machine with the NEC-4.2 deltas in the module
     docstring; every other card is read by the parent unchanged."""
 
+    _geometry_mnemonics = _GEOMETRY_CARDS | {"CW"}
     _geometry_builders = _NEC4_GEOMETRY_BUILDERS
 
     def __init__(self) -> None:
