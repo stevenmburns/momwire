@@ -241,9 +241,10 @@ def test_the_near_plane_cross_block_collapses(base, gap, record_property):
 @pytest.mark.parametrize(
     "base",
     [
-        # median over the 5 s default-lane budget at 0.84.1
+        # median over the 5 s default-lane budget at 0.84.1 (bspline) and
+        # 0.84.3 (sg, 5.26 s over 25 runs)
         pytest.param("bspline", marks=pytest.mark.slow),
-        "sg",
+        pytest.param("sg", marks=pytest.mark.slow),
     ],
 )
 def test_the_raised_order_is_what_buys_it(base, monkeypatch, record_property):
@@ -471,7 +472,14 @@ def test_a_near_plane_deck_does_raise_it_on_the_bspline_trunk():
     not _bs._HAVE_FIELD_GALERKIN_ACCEL,
     reason="built without the #914 field-Galerkin accelerator",
 )
-@pytest.mark.parametrize("gap,factor", [(0.005, 4), (0.002, 10)])
+@pytest.mark.parametrize(
+    "gap,factor",
+    [
+        (0.005, 4),
+        # median over the 5 s default-lane budget at 0.84.3 (6.18 s, 25 runs)
+        pytest.param(0.002, 10, marks=pytest.mark.slow),
+    ],
+)
 def test_the_cpp_and_numpy_assemblies_agree_at_the_raised_order(gap, factor):
     """momwire#914's parity gate, at an order it has never seen.
 
