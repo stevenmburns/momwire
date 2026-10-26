@@ -125,19 +125,20 @@ def test_lossless_quarter_wave_inverts_impedance(z_load):
 
 
 def test_matched_line_transfer_is_exactly_exp_gamma_l():
-    """A + B/z0 = e^{γl}, so |A + B/z0| = e^{αl}: attenuation, exactly.
+    """A + B/Zc = e^{γl}, so |A + B/Zc| = e^{αl}: attenuation, exactly.
 
-    Feeding the line its own z0 makes the chain matrix collapse to the raw
-    propagation factor (v_a = (A + B/z0)·v_b), which pins the loss model to a
-    closed form computed here from the cable-table coefficients rather than
-    from the module under test.
+    Feeding the line its own characteristic impedance makes the chain matrix
+    collapse to the raw propagation factor (v_a = (A + B/Zc)·v_b), which pins
+    the loss model to a closed form computed here from the cable-table
+    coefficients rather than from the module under test. A lossy line's Zc is
+    z0·(1 − jα/β) (momwire#1706), also computed here.
     """
     z0, vf, k1, k2 = 50.0, 0.82, 0.9, 0.02
+    alpha, beta = _alpha(k1, k2), 2.0 * math.pi / (vf * WL)
+    zc = z0 * complex(1.0, -alpha / beta)
     for length in (0.2 * WL, 1.0 * WL, 3.7 * WL):
         a, b, _, _ = tl_abcd(z0, length, WL, vf=vf, k1=k1, k2=k2)
-        assert abs(a + b / z0) == pytest.approx(
-            math.exp(_alpha(k1, k2) * length), rel=1e-9
-        )
+        assert abs(a + b / zc) == pytest.approx(math.exp(alpha * length), rel=1e-9)
 
 
 def test_loss_grows_with_length_and_attenuation_and_is_positive():
