@@ -363,6 +363,26 @@ def version_line(dialect: str, name: str, modes: str = LAUNCHER_MODES) -> str:
 JUNCTION_RULE_ENV = "MOMWIRE_JUNCTION_RULE"
 
 
+def interpreter_identity() -> list[str]:
+    """The interpreter a server runs on, as server-key elements.
+
+    ``realpath(sys.executable)`` names the base interpreter. It is not the
+    install: a venv's ``bin/python`` is a symlink to that base, so every venv
+    built on one interpreter resolves to the same file, and two installs of one
+    version shared one server, whichever started first answering both
+    (momwire#1674). Inside a venv (``sys.prefix`` is not ``sys.base_prefix``)
+    the venv's own prefix joins the key. Everything else keeps the key it had,
+    a frozen bundle above all: the native C launcher spells that key itself
+    (``scripts/eznec_client_c``) and must keep meeting the Python client's.
+    """
+    import sys
+
+    elements = [os.path.realpath(sys.executable)]
+    if sys.prefix != sys.base_prefix:
+        elements.append(f"venv={sys.prefix}")
+    return elements
+
+
 def junction_rule_identity() -> list[str]:
     """``["junction_rule=<value>"]`` when ``MOMWIRE_JUNCTION_RULE`` is set,
     else nothing -- so every key without the override is the key it was."""
