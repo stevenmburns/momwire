@@ -40,6 +40,7 @@ from ..deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
 from ._nec4_printout import (
     ArcRow,
+    CatenaryRow,
     HelixRow,
     FarFieldGround,
     Nec4Printout,
@@ -94,10 +95,11 @@ _SERVED_CARDS = frozenset(
 # LOCATION section and nothing else, from its card until the next PT (probes
 # p86-p90, momwire#1650).  4nec2's ItsHF decks write it, beside PQ -1.
 _SERVED_PT = frozenset({-1})
-_SERVED_GEOMETRY = frozenset({"GW", "GA", "GH", "GS", "GM", "GX", "GE"})
-# The cards that add wires to the structure (p38-p53): GW, and NEC-4.2's arc
-# and helix, each of which prints its own entry in the wire table.
-_WIRE_CARDS = frozenset({"GW", "GA", "GH"})
+_SERVED_GEOMETRY = frozenset({"GW", "GA", "GH", "CW", "GS", "GM", "GX", "GE"})
+# The cards that add wires to the structure (p38-p53): GW, and NEC-4.2's arc,
+# helix and catenary (c1-c7, momwire#1697), each of which prints its own entry
+# in the wire table.
+_WIRE_CARDS = frozenset({"GW", "GA", "GH", "CW"})
 
 # The pattern request forms captured: XNDA 1000 (a cut) and 1001 (the 3-D
 # grid, with its average-gain trailer), RP mode 0, at no range or at one
@@ -738,7 +740,7 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
     (``_gx``: images in Z, Y, X order, the increment doubling; ``_gm``: the
     block from the first wire carrying ``ITS``), for a ``GM``'s block."""
     from ..deck._nec2_geometry import _planes
-    from ..deck._nec4 import helix_vertices
+    from ..deck._nec4 import catenary_length, catenary_vertices, helix_vertices
 
     rows: list[StructureRow] = []
     first = 1
@@ -822,18 +824,30 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
             )
             first += n_seg
             continue
-        rows.append(
-            WireRow(
-                number,
-                (card.f(2), card.f(3), card.f(4)),
-                (card.f(5), card.f(6), card.f(7)),
-                card.f(8),
-                n_seg,
-                first,
-                first + n_seg - 1,
-                card.i(0),
-            )
+        row = WireRow(
+            number,
+            (card.f(2), card.f(3), card.f(4)),
+            (card.f(5), card.f(6), card.f(7)),
+            card.f(8),
+            n_seg,
+            first,
+            first + n_seg - 1,
+            card.i(0),
         )
+        if card.mnemonic == "CW":
+            vertices = catenary_vertices(card)
+            row = CatenaryRow(
+                card.i(9),
+                card.f(10),
+                card.f(11),
+                catenary_length(card),
+                sum(
+                    math.dist(a, b)
+                    for a, b in zip(vertices, vertices[1:], strict=False)
+                ),
+                row,
+            )
+        rows.append(row)
         first += n_seg
     return tuple(rows)
 

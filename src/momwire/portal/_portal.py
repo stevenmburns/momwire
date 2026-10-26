@@ -1314,6 +1314,8 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
     records its volts, and the model's ``current_feeds`` says which is which.
     """
     model = parse_dialect(body, dialect=dialect)
+    # NEC-4.2's catenary is a wire card of the nec4 dialect only (momwire#1697).
+    geometry_cards = _GEOMETRY_CARDS | {"CW"} if dialect == "nec4" else _GEOMETRY_CARDS
 
     comments: list[str] = []
     geometry: list[Card] = []
@@ -1335,7 +1337,7 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
         if card.mnemonic in ("CM", "CE"):
             comments.append(card.text)
             continue
-        if card.mnemonic in _GEOMETRY_CARDS:
+        if card.mnemonic in geometry_cards:
             geometry.append(card)
             continue
         data_cards.append(card)

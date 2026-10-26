@@ -74,6 +74,7 @@ __all__ = [
     "SegmentRow",
     "SegmentValueRow",
     "ArcRow",
+    "CatenaryRow",
     "HelixRow",
     "MoveRow",
     "ReflectRow",
@@ -135,6 +136,20 @@ class HelixRow:
 
 
 @dataclass(frozen=True)
+class CatenaryRow:
+    """One ``CW`` card's three lines of the wire table (probes c1-c7,
+    momwire#1697): the card's ICAT, RHM and ZM as written, the curve's
+    length and its chords' total, then the card's row as a ``GW``'s."""
+
+    icat: int
+    rhm: float
+    zm: float
+    length: float
+    chord_length: float
+    wire: WireRow
+
+
+@dataclass(frozen=True)
 class ScaleRow:
     """A ``GS`` card's line in the wire table, in card order (probes p38,
     and ``GM`` then ``GS``, momwire#1592): the factor, F10.5."""
@@ -172,7 +187,9 @@ class ReflectRow:
 
 
 # One entry of the wire table, in card order.
-StructureRow = WireRow | ArcRow | HelixRow | ScaleRow | MoveRow | ReflectRow
+StructureRow = (
+    WireRow | ArcRow | HelixRow | CatenaryRow | ScaleRow | MoveRow | ReflectRow
+)
 
 
 @dataclass(frozen=True)
@@ -424,7 +441,20 @@ def _structure_rows(row: StructureRow) -> list[str]:
     segment columns.  A ``GH`` entry (p49-p53) is three lines: I6, 6X and
     its words, blank to column 84 and the segment columns; 10X, the turns
     F10.4 and the five other reals E12.4; 10X and the chords' total length
-    E13.5."""
+    E13.5.  A ``CW`` entry (c1-c7) is three lines: 10X and the words, ICAT I5,
+    RHM and ZM E12.5; 10X, the curve's length and its chords' total, E12.5
+    each; then the card's ends and radius as a ``GW`` row."""
+    if isinstance(row, CatenaryRow):
+        e = _printout._e
+        return [
+            "          THE FOLLOWING WIRE IS A CATENARY,"
+            f"{row.icat:5d}{e(row.rhm, 12, 5)}{e(row.zm, 12, 5)}",
+            "          Catenary length ="
+            + e(row.length, 12, 5)
+            + "    Total segment length ="
+            + e(row.chord_length, 12, 5),
+            _wire_row(row.wire),
+        ]
     if isinstance(row, ArcRow):
         head = (
             f"{row.number:6d}  ARC RADIUS ={row.arc_radius:9.5f}  FROM"
