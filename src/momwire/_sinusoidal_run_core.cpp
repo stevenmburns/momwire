@@ -5,6 +5,7 @@
 #pragma fp_contract(off)
 #endif
 
+#include "_libm_complex_inline.h"
 #include "_sinusoidal_run_core.h"
 
 #include <algorithm>
@@ -88,8 +89,8 @@ std::vector<cd> basis_at_complex(const Front &fr, const std::vector<ll> &eval_se
     for (std::size_t e = 0; e < eval_seg.size(); e++) {
         const std::size_t s = static_cast<std::size_t>(eval_seg[e]);
         const cd se(eval_s[e], 0.0);
-        const cd half = std::sin(cm(half_k, se));
-        const cd sin_e = std::sin(cm(k, se));
+        const cd half = mw_libm_c::csin(cm(half_k, se));
+        const cd sin_e = mw_libm_c::csin(cm(k, se));
         for (ll q = v.starts[s]; q < v.starts[s + 1]; q++) {
             const std::size_t g = static_cast<std::size_t>(q);
             const cd sig_ac = cm(sig(v.sigma[g]), v.AC[g]), sig_c = cm(sig(v.sigma[g]), v.C[g]);
@@ -110,7 +111,7 @@ std::vector<cd> slope_at_complex(const Front &fr, const std::vector<ll> &eval_se
     for (std::size_t e = 0; e < eval_seg.size(); e++) {
         const std::size_t s = static_cast<std::size_t>(eval_seg[e]);
         const cd ks = cm(k, cd(eval_s[e], 0.0));
-        const cd cos_e = std::cos(ks), sin_e = std::sin(ks);
+        const cd cos_e = mw_libm_c::ccos(ks), sin_e = mw_libm_c::csin(ks);
         for (ll q = v.starts[s]; q < v.starts[s + 1]; q++) {
             const std::size_t g = static_cast<std::size_t>(q);
             const cd fd = cm(k, csub(cm(v.B[g], cos_e), cm(cm(sig(v.sigma[g]), v.C[g]), sin_e)));

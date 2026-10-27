@@ -430,6 +430,8 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
+    # numpy's complex sin / cos / log as the C library's (momwire#1607 B6a).
+    "src/momwire/_libm_complex_inline.h",
     "src/momwire/_sinusoidal_galerkin_fill_core.h",
     "src/momwire/_sinusoidal_galerkin_run_core.h",
     "src/momwire/_nec4_run_core.h",

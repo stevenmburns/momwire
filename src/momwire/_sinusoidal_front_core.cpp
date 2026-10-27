@@ -7,6 +7,7 @@
 #pragma fp_contract(off)
 #endif
 
+#include "_libm_complex_inline.h"
 #include "_sinusoidal_front_core.h"
 
 #include "_sinusoidal_nec4_core.h"
@@ -903,10 +904,11 @@ cd xsub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
 cd xneg(cd a) { return cd(-a.real(), -a.imag()); }
 cd re(double x) { return cd(x, 0.0); }
 bool nonzero(cd z) { return z.real() != 0.0 || z.imag() != 0.0; }
-// numpy's complex sin / cos / log: libm's csin / ccos / clog
-cd csin_(cd z) { return std::sin(z); }
-cd ccos_(cd z) { return std::cos(z); }
-cd clog_(cd z) { return std::log(z); }
+// numpy's complex sin / cos / log: libm's csin / ccos / clog (not libc++'s
+// own std:: formulas, which differ by bits on macOS)
+cd csin_(cd z) { return mw_libm_c::csin(z); }
+cd ccos_(cd z) { return mw_libm_c::ccos(z); }
+cd clog_(cd z) { return mw_libm_c::clog(z); }
 
 // `_basis_coefs(geom, k)` at a complex scalar k (a wholly-buried deck's k_m,
 // momwire#1222), the closed forms in numpy's complex arithmetic op for op.
