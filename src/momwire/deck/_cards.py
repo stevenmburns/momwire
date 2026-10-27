@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-__all__ = ["DeckError", "Card", "parse_card", "tokenize"]
+__all__ = ["DeckError", "Card", "gw_field_refusal", "parse_card", "tokenize"]
 
 
 class DeckError(ValueError):
@@ -81,6 +81,39 @@ class Card:
     def text(self) -> str:
         """A comment card's free text: everything after the mnemonic."""
         return self.raw[2:]
+
+
+# The most segments one GW may ask for. A count past it is no wire anything
+# can mesh (the matrix alone is its square), and a count in the millions of
+# millions would hang the reader building nodes, so it refuses on the card.
+# The C++ readers hold the same limit (`_nec5_deck_core.cpp`'s
+# `kMaxGeometry`, `_nec4_deck_core.cpp`'s `kMaxSegments`).
+MAX_WIRE_SEGMENTS = 10_000_000
+
+
+def gw_field_refusal(card: Card) -> str | None:
+    """Why a ``GW`` card is malformed past serving, or ``None``.
+
+    Every one of a GW's nine fields is read (tag, segment count, the two
+    ends, the radius), and none of them means anything as an infinity or
+    a NaN: each such deck used to fail deep in the mesh with the
+    interpreter's own float-to-int message. A segment count past
+    :data:`MAX_WIRE_SEGMENTS` is refused here too. Every dialect's reader
+    asks this on the card, before anything else reads it, and the C++
+    readers (`_nec5_deck_core.cpp`'s `gw_field_refusal`) say the same
+    words."""
+    for k, value in enumerate(card.values[:9]):
+        if not math.isfinite(value):
+            return (
+                f"GW field {k + 1} is not a finite number; a wire's tag, segment "
+                f"count, end coordinates and radius must all be finite"
+            )
+    if card.i(1) > MAX_WIRE_SEGMENTS:
+        return (
+            f"GW tag {card.i(0)} asks for more than {MAX_WIRE_SEGMENTS} segments; "
+            f"this engine meshes at most {MAX_WIRE_SEGMENTS} segments on one wire"
+        )
+    return None
 
 
 def _to_float(token: str) -> float | None:

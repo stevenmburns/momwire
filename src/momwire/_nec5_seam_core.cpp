@@ -632,9 +632,9 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
         if (!drive.empty()) return drive;
         if (!d.has_frequency || d.frequency_mhz <= 0.0) return REFUSE_NO_FR;
         if (!std::isfinite(d.frequency_mhz)) throw Declined{"non-finite-frequency"};
-        // Over a ground the geometry checks read the coordinates (NaN rules
-        // not replayed here); in free space they go to `structure_of`, whose
-        // `_node_key` raises on them as Python's does.
+        // A GW's own non-finite field is the reader's refusal; one a GS or
+        // GM made declines, over a ground here (the geometry checks read the
+        // coordinates) and in free space in `structure_of`.
         if (d.ground.kind != Ground::free_space)
             for (const Wire &w : d.wires)
                 if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
@@ -952,19 +952,18 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     p.omega = 2.0 * 3.141592653589793 * frequency * 1e6;
 
     // --- `structure_of` ----------------------------------------------------
-    // Wire by wire, as `_wire_nodes` meets them: a count numpy's `arange`
-    // refuses raises its ValueError (from 2**63 + 1024 up; below that a
-    // count past MAX_SEGMENTS declines), and a coordinate `round` cannot
-    // take raises where `_node_key` does.
+    // Wire by wire, as `_wire_nodes` meets them. The reader refuses a GW of
+    // more than `kMaxWireSegments` segments or with a non-finite field
+    // (`gw_field_refusal`); a count past MAX_SEGMENTS still declines here,
+    // and so does a coordinate too large for `_node_key` to round (one the
+    // geometry cards scaled or moved past the doubles), which Python does
+    // not yet refuse in a sentence of its own.
     long long total = 0;
     std::vector<long long> nseg;
-    const Int arange_limit = Int(9223372036854775807LL) + Int(1025);
     const bool ground_plane = !d.ge_flag.is_zero();
     std::unordered_map<NodeKey, long long, KeyHash> degree;
     double pt[3];
     for (const Wire &w : d.wires) {
-        if (w.segment_count >= arange_limit)
-            throw Raised{"ValueError", "Maximum allowed size exceeded"};
         if (!w.segment_count.fits_i64()) throw Declined{"segment-count"};
         const long long n = w.segment_count.i64();
         if (n < 1 || n > MAX_SEGMENTS) throw Declined{"segment-count"};
@@ -982,12 +981,8 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
         if (!fits)
             for (long long k = 0; k <= n; k++) {
                 grid_point(w, n, k, pt);
-                for (int c = 0; c < 3; c++) {
-                    const double q = pt[c] / NODE_EPS;
-                    if (std::isnan(q)) throw Raised{"ValueError", "cannot convert float NaN to integer"};
-                    if (std::isinf(q))
-                        throw Raised{"OverflowError", "cannot convert float infinity to integer"};
-                }
+                for (int c = 0; c < 3; c++)
+                    if (!std::isfinite(pt[c] / NODE_EPS)) throw Declined{"node-key-range"};
             }
         for (long long k = 0; k <= n; k++) {
             grid_point(w, n, k, pt);

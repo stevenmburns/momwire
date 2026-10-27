@@ -158,9 +158,11 @@ std::string fmt_i(const char *f, long long v) {
 using Key = std::tuple<double, double, double>;
 
 // `_wire_nodes`' keys for one wire's points: numpy's int64 path when every
-// rounded coordinate is under 2**62, else `_node_key` point by point, whose
-// `round` raises on NaN and infinity in Python's words. A key is the rounded
-// value itself, which is the exact integer either path makes.
+// rounded coordinate is under 2**62, else `_node_key` point by point. A
+// coordinate too large to round (the reader refuses a non-finite GW field,
+// but GS and GM can still scale or move one past the doubles) is a geometry
+// this build does not lay out. A key is the rounded value itself, which is
+// the exact integer either path makes.
 std::vector<Key> wire_keys(const std::vector<std::array<double, 3>> &points) {
     const double eps = 1e-6;  // `_NODE_EPS`
     std::vector<Key> keys;
@@ -171,11 +173,7 @@ std::vector<Key> wire_keys(const std::vector<std::array<double, 3>> &points) {
         double k[3];
         for (int c = 0; c < 3; c++) {
             const double q = p[c] / eps;
-            if (!fits) {
-                if (std::isnan(q)) throw PyError{"ValueError", "cannot convert float NaN to integer"};
-                if (std::isinf(q))
-                    throw PyError{"OverflowError", "cannot convert float infinity to integer"};
-            }
+            if (!fits && !std::isfinite(q)) throw PyError{"", "node-key-range"};
             k[c] = std::nearbyint(q) + 0.0;  // -0 and 0 are one key, as ints are
         }
         keys.emplace_back(k[0], k[1], k[2]);

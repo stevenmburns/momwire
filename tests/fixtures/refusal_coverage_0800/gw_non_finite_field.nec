@@ -1,0 +1,9 @@
+CM refusal coverage, synthetic: a GW coordinate that is not a finite number
+CE
+GW 1,11,0.,-2.5,5.,0.,2.5,5.,.001
+GW 2,5,0.,inf,5.,0.,2.5,7.,.001
+GE 0,-1
+FR 0,1,0,0,30.
+EX 0,1,6,0,1.,0.
+RP 0,1,1,1000,90.,0.,0.,0.
+EN

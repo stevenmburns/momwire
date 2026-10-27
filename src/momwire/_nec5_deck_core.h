@@ -210,6 +210,14 @@ struct Card {
     std::string text() const;       // raw[2:]
 };
 
+// `deck._cards.MAX_WIRE_SEGMENTS`: the most segments one GW may ask for.
+constexpr long long kMaxWireSegments = 10000000;
+
+// `deck._cards.gw_field_refusal`: the sentence a malformed GW card refuses
+// with (a non-finite field, or more than `kMaxWireSegments` segments), or ""
+// for a card every reader goes on to read.
+std::string gw_field_refusal(const Card &card);
+
 // The `TOTAL LENGTH OF WIRE IN THE SPIRAL` a GH card's echo prints
 // (`_printout._geometry_echo`, momwire#1669): its chords' lengths summed.
 double gh_spiral_length(const Card &card);

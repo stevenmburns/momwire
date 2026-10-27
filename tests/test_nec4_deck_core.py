@@ -338,6 +338,29 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "segment count must be >= 1, got 0",
     ),
     ("gw_zero_radius", ("nec2",), deck("GW 1 3 0 0 -.25 0 0 .25 0\n"), "tapered wire"),
+    # A malformed GW refuses on the card in both readers, in one sentence
+    # (`deck._cards.gw_field_refusal`); these were declines, and Python's
+    # own answer was the interpreter's float-to-int message
+    (
+        "gw_inf_field",
+        ("nec2", "nec4"),
+        deck("GW 1 3 0 0 -inf 0 0 .25 .001\n"),
+        "GW field 5 is not a finite number; a wire's tag, segment count, end "
+        "coordinates and radius must all be finite",
+    ),
+    (
+        "gw_nan_radius",
+        ("nec2", "nec4"),
+        deck("GW 1 3 0 0 -.25 0 0 .25 nan\n"),
+        "GW field 9 is not a finite number",
+    ),
+    (
+        "gw_huge_segment_count",
+        ("nec2", "nec4"),
+        deck("GW 1 1e30 0 0 -.25 0 0 .25 .001\n"),
+        "GW tag 1 asks for more than 10000000 segments; this engine meshes at "
+        "most 10000000 segments on one wire",
+    ),
     (
         "ex_type_1_nec2",
         ("nec2",),
@@ -1212,15 +1235,11 @@ def test_a_hand_written_deck_reads_the_same(name, dialects, text, expect, acc):
     "text",
     [
         deck(DIPOLE, "LD 5 0 0 0 nan"),
-        deck("GW 1 3 0 0 -inf 0 0 .25 .001\n"),
-        deck("GW 1 1e30 0 0 -.25 0 0 .25 .001\n"),
         deck("GW 1 3 0 0 -1e308 0 0 1e308 .001\n"),
         deck(DIPOLE, tail="FR 0 1e9 0 0 1 1\nEX 0 1 6 0 1\nXQ\nEN\n"),
     ],
     ids=[
         "nan_field",
-        "inf_field",
-        "huge_segment_count",
         "overflowing_length",
         "huge_sweep",
     ],

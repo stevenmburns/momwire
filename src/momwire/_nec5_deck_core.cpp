@@ -1722,7 +1722,11 @@ struct Parser {
                        (written == 1 ? "field" : "fields") + " and needs at least " +
                        std::to_string(minimum));
         }
-        if (mn == "GW") return gw(c);
+        if (mn == "GW") {
+            const std::string why = gw_field_refusal(c);
+            if (!why.empty()) deck_error(why);
+            return gw(c);
+        }
         if (mn == "GA") return ga(c);
         if (mn == "GH") return gh(c);
         if (mn == "CW") return cw(c);
@@ -2895,6 +2899,22 @@ Int Card::i(std::size_t k) const {
                          mnemonic + " field " + std::to_string(k + 1) +
                              " is infinite; an integer field must be a finite number");
     return py_round(v);
+}
+
+// `deck._cards.gw_field_refusal`: why a GW card is malformed past serving,
+// or the empty string. Every dialect's reader asks it on the card, before
+// anything else reads the card.
+std::string gw_field_refusal(const Card &card) {
+    for (std::size_t k = 0; k < 9 && k < card.values.size(); k++)
+        if (!std::isfinite(card.values[k]))
+            return "GW field " + std::to_string(k + 1) +
+                   " is not a finite number; a wire's tag, segment count, end coordinates and "
+                   "radius must all be finite";
+    if (card.i(1) > Int(kMaxWireSegments))
+        return "GW tag " + card.i(0).str() + " asks for more than " +
+               std::to_string(kMaxWireSegments) + " segments; this engine meshes at most " +
+               std::to_string(kMaxWireSegments) + " segments on one wire";
+    return std::string();
 }
 
 double gh_spiral_length(const Card &card) {
