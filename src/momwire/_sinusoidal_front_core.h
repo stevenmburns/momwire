@@ -4,6 +4,8 @@
 // `SinusoidalSolver` derives from them before any fill:
 // - the constructor's constants (c, freq, omega, k, eta from the class's
 //   eps and mu);
+// - `_wire_spec.drop_duplicated_wires`: a wire listed twice is solved once,
+//   or refused in the constructor's words (momwire#1042 / #1333);
 // - its junction normalisation (`_wire_spec.normalize_junctions`, inferring
 //   coincident ends when none are given, and the coincidence check);
 // - `_build_geometry`: segments, the N-/N+ neighbour tables with their sigma
@@ -21,9 +23,8 @@
 //
 // DECLINED (`nec4::Declined`), never misread: a buried or plane-crossing
 // structure (the complex-wavenumber basis, momwire#1607 B6), a
-// reflection-coefficient ground (not served by the NEC-4.2 slot), duplicated
-// wires (the solver's merge rule is not copied), a malformed argument the
-// constructor would refuse.
+// reflection-coefficient ground (not served by the NEC-4.2 slot), a malformed
+// argument the constructor would refuse.
 #pragma once
 
 #include "_nec4_build_core.h"
@@ -84,6 +85,11 @@ struct Front {
     // solve's per-end factors and the end caps, and the fill takes the NEC-4
     // kernel and the caps' fields.
     bool nec4 = false;
+    // The constructor's arguments after `_wire_spec.drop_duplicated_wires`
+    // (momwire#1042 / #1333): the wires it solves, every wire-indexed
+    // argument remapped, and how they map back onto the caller's.
+    nec4::SolverArgs args;
+    nec4::WireDedup dedup;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy

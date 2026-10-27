@@ -38,6 +38,7 @@ class Engine : public nec4::RunEngine {
                                                        std::size_t wire, const std::vector<double> &arcs) override;
     double solver_omega(std::size_t index) override;
     double solver_eps0(std::size_t index) override;
+    const nec4::WireDedup *dedup(std::size_t index) override;
 
   private:
     const Front &front_at(std::size_t index);

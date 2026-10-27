@@ -280,6 +280,27 @@ CASES = [
         ),
         "fills",
     ),
+    # momwire#1042: a parasite listed twice leaves a (segment, basis) pair
+    # repeated; the dense M keeps the last value, scipy's CSC sums the two,
+    # and the loading's `G[rows, cols] -= v` keeps the last difference
+    (
+        "duplicate_dense_ld5",
+        deck(
+            dipole(11)
+            + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .001\n",
+            "LD 5 0 0 0 3.5e7\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "duplicate_sparse_ld5",
+        deck(
+            dipole(41)
+            + "GW 2 31 .2 0 -.23 .2 0 .23 .001\nGW 3 31 .2 0 .23 .2 0 -.23 .001\n",
+            "LD 5 0 0 0 3.5e7\n" + FR + "EX 0 1 21 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
 ]
 
 

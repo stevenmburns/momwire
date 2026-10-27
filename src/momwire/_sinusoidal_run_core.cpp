@@ -162,7 +162,7 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
     if (!solves_.at(index)) {
         const Front &fr = front_at(index);
         const auto t0 = std::chrono::steady_clock::now();
-        const PortSolution ps = port_solution(fr, structure_.points[index].args, la_);
+        const PortSolution ps = port_solution(fr, fr.args, la_);  // the solved wires (momwire#1042)
         std::unique_ptr<nec4::EngineSolve> es(new nec4::EngineSolve);
         es->fill_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         es->n_basis = ps.n;
@@ -276,6 +276,10 @@ std::vector<cd> Engine::currents_at_arcs(std::size_t index, const std::vector<cd
 }
 
 double Engine::solver_omega(std::size_t index) { return front_at(index).omega; }
+const nec4::WireDedup *Engine::dedup(std::size_t index) {
+    const Front &fr = front_at(index);
+    return fr.dedup.active ? &fr.dedup : nullptr;
+}
 double Engine::solver_eps0(std::size_t index) {
     (void)index;
     return 8.8541878188e-12;  // the sinusoidal solver's `eps` (the fill's eps~)
@@ -326,7 +330,7 @@ std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std
 // `_abs_shape_integrals`, summed per wire.
 double Engine::wire_loss_power(std::size_t index, const std::vector<cd> &coeffs) {
     const Front &fr = front_at(index);
-    const nec4::SolverArgs &args = structure_.points[index].args;
+    const nec4::SolverArgs &args = fr.args;  // the solved wires (momwire#1042)
     std::vector<cd> z_wire;
     if (!wire_impedance_per_wire(fr, args, fr.omega, z_wire)) return 0.0;
     const double k = fr.omega / fr.c;

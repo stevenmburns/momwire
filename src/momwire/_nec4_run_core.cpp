@@ -635,6 +635,48 @@ struct RunResult {
     rp::FarCliff far_cliff;
 };
 
+// The solver's own polylines (`solver.wires_polylines`,
+// `n_per_edge_per_wire`): the operating point's wires with any dropped copy
+// left out (momwire#1042).
+SolverArgs solved_wires(const SolverArgs &args, const WireDedup *dd) {
+    SolverArgs out;
+    if (dd == nullptr) {
+        out.wires = args.wires;
+        out.n_per_edge = args.n_per_edge;
+        return out;
+    }
+    for (ll w : dd->kept) {
+        out.wires.push_back(args.wires.at(static_cast<std::size_t>(w)));
+        out.n_per_edge.push_back(args.n_per_edge.at(static_cast<std::size_t>(w)));
+    }
+    return out;
+}
+
+// `element_currents`' walk in the CALLER's wires: a dropped copy walks its
+// kept twin's polyline (reversed, with its edge counts, when it runs the
+// other way) and reads no current (`WireDedup.to_input`); every other wire
+// is its solved self. `solved[p]` is -1 for a copy.
+void input_walk(const SolverArgs &args, const WireDedup *dd, std::vector<std::vector<Point3>> &polys,
+                std::vector<std::vector<ll>> &npes, std::vector<ll> &solved) {
+    polys = args.wires;
+    npes = args.n_per_edge;
+    solved.assign(args.wires.size(), -1);
+    if (dd == nullptr) {
+        for (std::size_t p = 0; p < solved.size(); p++) solved[p] = static_cast<ll>(p);
+        return;
+    }
+    for (std::size_t i = 0; i < dd->kept.size(); i++) solved.at(static_cast<std::size_t>(dd->kept[i])) = static_cast<ll>(i);
+    for (const WireDedup::Dropped &d : dd->removed) {
+        const std::size_t r = static_cast<std::size_t>(d.copy), t = static_cast<std::size_t>(d.twin);
+        polys.at(r) = args.wires.at(t);
+        npes.at(r) = args.n_per_edge.at(t);
+        if (d.reversed) {
+            std::reverse(polys[r].begin(), polys[r].end());
+            std::reverse(npes[r].begin(), npes[r].end());
+        }
+    }
+}
+
 struct Ctx {
     const StructureSeam *ss = nullptr;
     const StructureBuild *sb = nullptr;
@@ -645,7 +687,8 @@ struct Ctx {
     std::map<std::size_t, std::vector<std::size_t>> matches;
     const Walk &walk(std::size_t point) {
         auto it = walks.find(point);
-        if (it == walks.end()) it = walks.emplace(point, walk_of(sb->points[point].args)).first;
+        if (it == walks.end())
+            it = walks.emplace(point, walk_of(solved_wires(sb->points[point].args, engine->dedup(point)))).first;
         return it->second;
     }
     const std::vector<std::size_t> &match(std::size_t point) {
@@ -1073,9 +1116,10 @@ std::vector<ValueRow> charge_rows(Ctx &c, const RunResult &r, double freq, doubl
         double length;
     };
     std::vector<PEnd> pends;
-    for (std::size_t p = 0; p < op.args.wires.size(); p++) {
+    const SolverArgs solved = solved_wires(op.args, c.engine->dedup(r.point));
+    for (std::size_t p = 0; p < solved.wires.size(); p++) {
         const std::vector<double> arc = arc_at_knot(w.knots[p]);
-        pends.push_back({op.args.wires[p].front(), op.args.wires[p].back(), arc.back()});
+        pends.push_back({solved.wires[p].front(), solved.wires[p].back(), arc.back()});
     }
     std::vector<std::vector<double>> positions(pends.size());
     std::map<std::pair<std::size_t, bool>, std::pair<std::size_t, std::size_t>> slots;
@@ -1147,13 +1191,31 @@ std::vector<ValueRow> charge_rows(Ctx &c, const RunResult &r, double freq, doubl
 
 // `_pattern(card, result, freq, gd, medium)` in free space
 PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, double freq) {
-    const Walk &w = c.walk(r.point);
-    // `solver.element_currents(coeffs)` (subdiv 1: the knot currents)
-    const std::vector<std::vector<cd>> cur = c.engine->currents_at_knots(r.point, r.coeffs);
+    // `solver.element_currents(coeffs)` (subdiv 1: the knot currents), in
+    // the caller's wires: a dropped copy over its twin's knots, at zero
+    // current (momwire#1042)
+    const std::vector<std::vector<cd>> solved_cur = c.engine->currents_at_knots(r.point, r.coeffs);
+    const WireDedup *dd = c.engine->dedup(r.point);
+    std::vector<std::vector<Point3>> polys;
+    std::vector<std::vector<ll>> npes;
+    std::vector<ll> solved;
+    input_walk(c.sb->points[r.point].args, dd, polys, npes, solved);
+    std::vector<std::vector<cd>> cur;
+    std::vector<std::vector<double>> knots;
+    for (std::size_t p = 0; p < polys.size(); p++) {
+        knots.push_back(knots_of(polys[p], npes[p]));
+        cur.push_back(solved[p] >= 0 ? solved_cur.at(static_cast<std::size_t>(solved[p])) : std::vector<cd>());
+    }
+    if (dd != nullptr)
+        for (const WireDedup::Dropped &d : dd->removed) {
+            // zeros sized like the twin's own knot currents
+            const std::size_t t = static_cast<std::size_t>(solved.at(static_cast<std::size_t>(d.twin)));
+            cur.at(static_cast<std::size_t>(d.copy)).assign(solved_cur.at(t).size(), cd(0.0, 0.0));
+        }
     std::vector<double> mid;
     std::vector<cd> moment;
     for (std::size_t p = 0; p < cur.size(); p++) {
-        const std::vector<double> &k = w.knots[p];
+        const std::vector<double> &k = knots[p];
         if (cur[p].size() != k.size() / 3) decline("an engine's knots that do not match the walk");
         for (std::size_t q = 0; q + 1 < cur[p].size(); q++) {
             const cd element = cm(cd(0.5, 0.0), cadd(cur[p][q + 1], cur[p][q]));
@@ -1243,8 +1305,8 @@ class EngineSampler : public nec5::CurrentSampler {
   public:
     EngineSampler(RunEngine &e, std::size_t point, const std::vector<cd> &coeffs)
         : e_(&e), point_(point), coeffs_(coeffs) {}
-    std::vector<cd> at(std::size_t w, const nec5::WireWalk &, const std::vector<double> &arcs) const override {
-        return e_->currents_at_arcs(point_, coeffs_, w, arcs);
+    std::vector<cd> at(std::size_t, const nec5::WireWalk &ww, const std::vector<double> &arcs) const override {
+        return e_->currents_at_arcs(point_, coeffs_, static_cast<std::size_t>(ww.solved), arcs);
     }
 
   private:
@@ -1290,12 +1352,16 @@ PrintNearBlock near_field(Ctx &c, const nec5::Card &card, const RunResult &r) {
     for (const GeometryWire &w : wires)
         if (w.radius < radius) radius = w.radius;
     const SolverArgs &args = c.sb->points[r.point].args;
+    std::vector<std::vector<Point3>> polys;
+    std::vector<std::vector<ll>> npes;
+    std::vector<ll> solved;
+    input_walk(args, c.engine->dedup(r.point), polys, npes, solved);
     std::vector<nec5::WireWalk> walk;
-    for (std::size_t p = 0; p < args.wires.size(); p++) {
+    for (std::size_t p = 0; p < polys.size(); p++) {
         nec5::WireWalk ww;
-        for (const Point3 &v : args.wires[p]) ww.polyline.insert(ww.polyline.end(), v.begin(), v.end());
-        for (ll n : args.n_per_edge[p]) ww.npe.push_back(n);
-        ww.solved = static_cast<int64_t>(p);
+        for (const Point3 &v : polys[p]) ww.polyline.insert(ww.polyline.end(), v.begin(), v.end());
+        for (ll n : npes[p]) ww.npe.push_back(n);
+        ww.solved = static_cast<int64_t>(solved[p]);  // -1: a dropped copy, no current
         walk.push_back(ww);
     }
     const EngineSampler sampler(*c.engine, r.point, r.coeffs);

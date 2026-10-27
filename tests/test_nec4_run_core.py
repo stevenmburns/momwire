@@ -34,6 +34,10 @@ masked, by exact pattern and with the same count on both sides, over:
   splitting the reflection points, with a range, an average, further tables,
   a monopole on the ground, an empty second medium, and GD in free space
   (its block printed, no number moved);
+- a wire listed twice (momwire#1042): merged on the dense and the sparse
+  route, reversed, three times, made by GM, as a T's arm, over GN 1 and
+  GN 2, under LD 5, with PQ / RP / NE; refused for a feed on the pair,
+  differing segment counts, radii, and LD 2 / LD 5 on the copy alone;
 - the declines: a near-field point on a wire's finite-ground contact or in
   the soil.
 """
@@ -139,6 +143,8 @@ TWO = DIPOLE + "GW 2 11 .2 0 -.25 .2 0 .25 .001\n"
 TEE = "GW 1 10 0 0 -.25 0 0 .25 .001\nGW 2 5 0 0 0 .3 0 0 .001\n"
 RP = "RP 0 7 4 1000 0 0 30 90\n"
 GD_DIPOLE = "GW 1 11 0 -.25 .6 0 .25 .6 .001\n"
+DUP_DIPOLE = "GW 1 41 0 0 -.25 0 0 .25 .001\n"
+DUP_PARASITE = "GW 2 31 .2 0 -.23 .2 0 .23 .001\n"
 GD_RP = "RP 0 19 4 1000 0 0 5 45\n"
 
 CASES = [
@@ -339,6 +345,112 @@ CASES = [
         ),
         "printed",
     ),
+    # momwire#1042: a wire listed twice is solved once (the dropped copy
+    # reads its twin's current in the tables and none in RP / NE), or refused
+    # in the constructor's words
+    (
+        "duplicate_sparse_ld5_pq_rp",
+        deck(
+            DUP_DIPOLE + DUP_PARASITE + DUP_PARASITE.replace("GW 2", "GW 3"),
+            "LD 5 0 0 0 3.5e7\n"
+            + FR
+            + "EX 0 1 21 0 1\nPQ 0\nRP 0 7 4 1000 0 0 30 90\n",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_reversed_sparse_ne",
+        deck(
+            DUP_DIPOLE + DUP_PARASITE + "GW 3 31 .2 0 .23 .2 0 -.23 .001\n",
+            FR + "EX 0 1 21 0 1\nNE 0 1 3 1 .3 -.1 0 0 .1 0\n",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_three_times",
+        deck(
+            DIPOLE
+            + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .001\n"
+            + "GW 4 9 .2 0 .23 .2 0 -.23 .001\n",
+            FR + "EX 0 1 6 0 1\nPQ 0\nXQ\n",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_by_gm",
+        deck(
+            DIPOLE + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGM 0 0 0 0 0 0 0 0 2\n",
+            FR + "EX 0 1 6 0 1\nRP 0 7 1 1000 0 0 15 0\n",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_tee_arm",
+        deck(
+            DIPOLE + "GW 2 5 0 0 .25 .2 0 .25 .001\nGW 3 5 0 0 .25 .2 0 .25 .001\n",
+            FR + "EX 0 1 6 0 1\nPQ 0\nXQ\n",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_monopoles_on_gn1",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\nGW 2 10 .3 0 0 .3 0 .23 .001\n"
+            "GW 3 10 .3 0 0 .3 0 .23 .001\n",
+            "GN 1\n" + FR + "EX 0 1 1 0 1\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_reversed_over_gn2",
+        deck(
+            "GW 1 10 0 0 .1 0 0 .35 .001\nGW 2 10 .3 0 .1 .3 0 .33 .001\n"
+            "GW 3 10 .3 0 .33 .3 0 .1 .001\n",
+            "GN 2 0 0 0 13 .005\n"
+            + FR
+            + "EX 0 1 5 0 1\nPQ 0\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "duplicate_fed_refused",
+        deck(DIPOLE + DIPOLE.replace("GW 1", "GW 2"), FR + "EX 0 1 6 0 1\nXQ\n"),
+        "refused",
+    ),
+    (
+        "duplicate_counts_differ_refused",
+        deck(
+            DIPOLE + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 7 .2 0 .23 .2 0 -.23 .001\n",
+            FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "refused",
+    ),
+    (
+        "duplicate_radius_differs_refused",
+        deck(
+            DIPOLE + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .002\n",
+            FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "refused",
+    ),
+    (
+        "duplicate_ld2_on_the_copy_refused",
+        deck(
+            DIPOLE + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .001\n",
+            "LD 2 3 0 0 10 1e-7 0\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "refused",
+    ),
+    (
+        "duplicate_ld5_on_the_copy_refused",
+        deck(
+            DIPOLE + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .001\n",
+            "LD 5 3 0 0 1e7\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "refused",
+    ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (
         "tl_crossed_shunts_zero_length",
@@ -474,14 +586,20 @@ CASES = [
 
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
 def test_a_hand_written_deck_prints_the_same(name, text, expect, acc):
+    # "refused": printed, and the printout is the reference's refusal
     ok, cxx = rc.cxx_printout(text, acc)
-    assert ("printed" if ok else "declined") == expect, cxx[:400]
+    assert ("declined" if not ok else "printed") == expect.replace(
+        "refused", "printed"
+    ), cxx[:400]
     if not ok:
         return
     a, na = rc.mask(rc.py_printout(text))
     b, nb = rc.mask(cxx)
     assert rc.first_difference(a, b) is None, rc.first_difference(a, b)
-    assert na == nb and na >= 2, (na, nb)
+    if expect == "refused":
+        assert "NEC ERROR - " in cxx and na == nb == 0, (na, nb)
+    else:
+        assert na == nb and na >= 2, (na, nb)
 
 
 def test_the_masks_hide_only_the_two_timing_lines():
