@@ -736,6 +736,15 @@ _REFUSE_PROBE_AT_NETWORK_POINT = (
     "to the load's own node, or drop it and read the load current out of the "
     "CURRENTS table"
 )
+_REFUSE_UNPINNED_PHANTOM = (
+    "{card} ends at {at} on GW {tag}, EZNEC's parked circuit wire, and that "
+    "node carries no LD pin; every deck EZNEC hands an engine pins each "
+    "parked node a network reaches (LD 4 ... 1.E+10 for an open), so this "
+    "deck was edited or saved by hand. Unpinned, the answer depends on "
+    "reading the parked wire as a wire (NEC-5 solves it as a few millimetres "
+    "of metal, about 1 % on momwire#1314's open-stub deck) or as a circuit "
+    "node (what EZNEC means) - add the LD 4 pin EZNEC writes, or 0 for a short"
+)
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
     "second generator in series across the same gap - no captured deck writes "
@@ -4113,6 +4122,54 @@ def _check_one_port_per_drive(
         seen[site.column] = source.at
 
 
+def _check_pinned_phantoms(deck: Nec5Deck, by_address: dict[Nec5Node, _Site]) -> None:
+    """A network end on a parked (virtual) node must carry EZNEC's pin.
+
+    EZNEC parks a network end that has nowhere else to go on a short wire far
+    from the antenna and pins that node with an ``LD`` (``LD 4 ... 1.E+10`` for
+    an open stub end).  It does NOT pin a parked node that a source drives or
+    that two cards chain through: Dan's cardioid drives its parked nodes, and
+    WA7ARK's OCF deck runs two ``NT`` cards through one, both unpinned, and
+    both measured against their oracles.  So only a DANGLING end - one card,
+    no source - is required to carry the pin.  This seam
+    reads the parked wire as a circuit node with no geometry (momwire#1139),
+    and pinned, that is NEC's own answer less the little wire's reactance.
+    Unpinned, the two readings part: NEC-5 solves the parked wire as metal, so
+    an "open" stub ends on its few-picofarad gap, and momwire#1314's open-stub
+    deck moves 1.3 % between them.  Neither is a defect to pick, so the deck
+    is refused by name (Steve, 2026-10-27).
+
+    Only an end the network actually REACHES counts.  A one-port ``NT``'s far
+    end (``Y12 = Y22 = 0``) stamps nothing there, so nothing reads the node
+    and both readings agree exactly; that is the File > Save shape of EZNEC's
+    parallel loads, and it is served (:func:`_unreached_sites`).
+    """
+    ends: list[tuple[str, Nec5Node]] = []
+    for line in deck.transmission_lines:
+        ends += [("a TL card", line.end_a), ("a TL card", line.end_b)]
+    for net in deck.networks:
+        if net.y11 or net.y12:
+            ends.append(("an NT card", net.end_a))
+        if net.y22 or net.y12:
+            ends.append(("an NT card", net.end_b))
+    count: dict[Nec5Node, int] = {}
+    for _card, at in ends:
+        count[at] = count.get(at, 0) + 1
+    for card, at in ends:
+        site = by_address[at]
+        if (
+            site.spelling == "virtual"
+            and not site.load
+            and not site.driven
+            and count[at] == 1
+        ):
+            raise ServeRefusal(
+                _REFUSE_UNPINNED_PHANTOM.format(
+                    card=card, at=f"{at.tag},{at.written}", tag=at.tag
+                )
+            )
+
+
 def _element_geometry(structure: Structure, wavelength: float):
     """``(centres, lengths, tags)`` for every deck element, in global order.
 
@@ -4956,6 +5013,7 @@ def _prepare(
     for source in deck.sources:
         by_address[source.at].driven = True
     _check_one_port_per_drive(deck, by_address)
+    _check_pinned_phantoms(deck, by_address)
 
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
     omega = 2.0 * math.pi * frequency * 1e6
