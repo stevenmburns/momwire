@@ -5965,11 +5965,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a2 = np.asarray(a_obs, dtype=float)
         a2 = a2.reshape(a2.shape[:1]) if a2.ndim == 2 else a2
         r0 = np.sqrt(r2 + a2 * a2)
+        # The bracket is NAMED before the product (momwire#1718 S7): `scalar *
+        # <fresh temporary>` is computed in place in the temporary, as
+        # `temporary * scalar`, where numpy elides temporaries (256 KiB and
+        # up) and as written where it cannot (CI's interpreter), and the
+        # complex product is not symmetric in its operands. The Galerkin
+        # caller's observers (N times the graded rule's nodes) reach that
+        # size on ordinary decks.
+        c1 = 1.0 + 1j * k * r0
         pref = (
             -1j
             * self._fill_eta(k, eta)
             / (4.0 * np.pi * k)
-            * (1.0 + 1j * k * r0)
+            * c1
             * np.exp(-1j * k * r0)
             / (r0 * r0 * r0)
         )
@@ -6119,11 +6127,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a2 = np.asarray(a_obs, dtype=float)
         a2 = a2.reshape(a2.shape[:1]) if a2.ndim == 2 else a2
         r0 = np.sqrt(r2 + a2 * a2)
+        # The bracket is NAMED before the product (momwire#1718 S7): `scalar *
+        # <fresh temporary>` is computed in place in the temporary, as
+        # `temporary * scalar`, where numpy elides temporaries (256 KiB and
+        # up) and as written where it cannot (CI's interpreter), and the
+        # complex product is not symmetric in its operands. The Galerkin
+        # caller's observers (N times the graded rule's nodes) reach that
+        # size on ordinary decks.
+        c1 = 1.0 + 1j * k * r0
         pref = (
             -1j
             * self._fill_eta(k, eta)
             / (4.0 * np.pi * k)
-            * (1.0 + 1j * k * r0)
+            * c1
             * np.exp(-1j * k * r0)
             / (r0 * r0 * r0)
         )
@@ -6137,7 +6153,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Sommerfeld image's point-charge behaviour at the contact and
             # the interpolated remainder takes no share of it.
             c2 = (eps_t - 1.0) / (eps_t + 1.0)
-            return np.where(use_real, dt, zero) - c2 * np.where(use_image, dt, zero)
+            # Named for the same reason as `pref` above (momwire#1718 S7).
+            img = np.where(use_image, dt, zero)
+            return np.where(use_real, dt, zero) - c2 * img
         rho_v, rho_h, t_p, px, py, p_d = self._contact_charge_fresnel(
             d, r2, obs_c, obs_t, eps_t
         )
