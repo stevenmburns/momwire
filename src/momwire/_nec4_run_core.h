@@ -28,12 +28,15 @@
 // carry measured time (FILL= ... SEC. and RUN TIME), gated by
 // `tests/test_nec4_run_core.py` through `scripts/core_split/nec4_run_compare.py`.
 //
-// DECLINED (`Declined`), never misprinted: GD's far-field cliff (B5d), a
-// wire below the ground plane (B6), an insulated wire, two sources on one
-// segment of a phased drive, a near-field point in the soil or on a wire's
-// finite-ground contact (the reference refuses both in its own words), and
-// any run Python would answer with a refusal this copy does not word (a
-// singular drive block, a current source on a port that takes no current).
+// A GD card's second medium is the far field's cliff (`_far_moments`'
+// `cliff`, B5d), reflected off on every RP over a ground.
+//
+// DECLINED (`Declined`), never misprinted: a wire below the ground plane
+// (B6), an insulated wire, two sources on one segment of a phased drive, a
+// near-field point in the soil or on a wire's finite-ground contact (the
+// reference refuses both in its own words), and any run Python would answer
+// with a refusal this copy does not word (a singular drive block, a current
+// source on a port that takes no current).
 #pragma once
 
 #include "_nec4_printout_core.h"
