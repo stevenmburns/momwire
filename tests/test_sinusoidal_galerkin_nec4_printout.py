@@ -16,6 +16,8 @@ with only the two measured-time lines masked, over:
 - the dialect default's fallback to the reduced kernel at a radius-step
   junction, with its advisory (SinusoidalGalerkinSolver's declared refusal;
   the point-matched basis has none);
+- a wholly-buried deck (momwire#1718 S11a), `test_sinusoidal_galerkin_fill_
+  core.py`'s buried decks;
 - a wire end on the ground plane (momwire#1718 S7, the direct-field fill):
   `test_sinusoidal_galerkin_fill_core.py`'s contact decks, and the
   radius-step ones that reach it on the reduced kernel.
@@ -147,3 +149,16 @@ CONTACT = fill_cases.CONTACT_CASES + fill_cases.CONTACT_STEP_CASES
 def test_a_wire_end_on_the_ground_prints_the_same(name, text, acc):
     """The direct-field fill under the run half: printed, not declined."""
     assert _same(text, acc) == "printed"
+
+
+BURIED = fill_cases.BURIED_CASES
+
+
+@pytest.mark.parametrize("name, text, expect", BURIED, ids=[c[0] for c in BURIED])
+def test_a_wholly_buried_deck_prints_the_same(name, text, expect, acc, monkeypatch):
+    """The lower-medium fill under the run half (momwire#1718 S11a): the
+    printout, loss power and pattern at k_m, or the reference's refusal;
+    a deck on both sides of the interface declines. The below grids are
+    the exact fill on both copies (the anchors read the process's history)."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    assert _same(text, acc) == ("declined" if expect == "declined" else "printed")

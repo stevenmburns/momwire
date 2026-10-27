@@ -333,7 +333,11 @@ std::unique_ptr<CurrentSampler> SinusoidalGalerkinPrintoutEngine::sampler(
 // `wire_loss_power(coeffs, omega)[0]`, at the run's omega
 double SinusoidalGalerkinPrintoutEngine::wire_loss_power(const Prepared &p, const std::vector<cd> &coeffs,
                                                          double omega) const {
-    return sinusoidal::loss_power_at(front_of(p), coeffs, omega);
+    const sinusoidal::Front &fr = front_of(p);
+    // a wholly-buried deck's readout at the run's omega: the medium and the
+    // shapes at that omega's k_m (`_buried_wire_loss_power`)
+    if (fr.buried && omega / fr.c != fr.k) return sinusoidal::loss_power_at(sinusoidal::buried_at(fr, omega), coeffs, omega);
+    return sinusoidal::loss_power_at(fr, coeffs, omega);
 }
 
 double SinusoidalGalerkinPrintoutEngine::solver_omega(const Prepared &p) const { return front_of(p).omega; }

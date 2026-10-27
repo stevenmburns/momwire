@@ -145,6 +145,7 @@ void register_nec5_deck(py::module_ &m) {
             la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
             const std::string text = latin1;
             py::gil_scoped_release nogil;
+            SinBelowSource below;  // a wholly-buried deck's table (momwire#1718 S11a)
             return mw::sinusoidal_galerkin::dump_fill(text, la, whole);
         },
         py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,

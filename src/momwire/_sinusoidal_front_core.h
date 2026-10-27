@@ -134,6 +134,12 @@ Front front(const nec4::SolverArgs &args, bool galerkin = false);
 // the caller's omega, momwire#1718 S8); declines a NEC-4 junction front.
 SegView basis_coefs(const Front &fr, double k);
 
+// A wholly-buried front read at another omega (`_buried_wire_loss_power`'s
+// `buried_medium(ground_eps, omega, eps, omega / c)` and `_basis_coefs(geom,
+// medium.k_m)`, momwire#1718 S11a): a copy whose k, medium and basis are
+// that omega's.
+Front buried_at(const Front &fr, double omega);
+
 // The comparison format (`sinusoidal_front_compare.py`), per operating point
 // of each built structure of a deck (the NEC-4.2 build's own enumeration).
 std::string dump_front(const std::string &latin1_text);
