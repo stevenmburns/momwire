@@ -84,8 +84,12 @@ PortSolution port_solution(const sinusoidal::Front &fr, const nec4::SolverArgs &
 
 // The comparison format (`sinusoidal_galerkin_fill_compare.py`), per operating
 // point of each built structure of a deck: a matrix of up to `whole` columns
-// element by element, a wider one by row digest.
-std::string dump_fill(const std::string &latin1_text, const sinusoidal::FillLinalg &la, std::size_t whole = 64);
+// element by element, a wider one by row digest. `g_only`: the fill alone
+// (G, no BLAS and no solve), so the comparison runs where numpy bundles no
+// OpenBLAS to hand the solve (macOS's Accelerate build); a Sommerfeld
+// ground's remainder, which takes numpy's products, declines there.
+std::string dump_fill(const std::string &latin1_text, const sinusoidal::FillLinalg &la, std::size_t whole = 64,
+                      bool g_only = false);
 
 }  // namespace sinusoidal_galerkin
 }  // namespace mw
