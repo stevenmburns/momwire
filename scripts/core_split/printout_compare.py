@@ -194,7 +194,11 @@ def build_driver(out_dir: Path, basis: str = "razor-2p") -> Path:
         "-I",
         str(ROOT / "extern" / "xsf" / "include"),
     ]
-    driver = "nec5_bspline_printout_driver" if basis == "bspline" else DRIVER
+    driver = {
+        "bspline": "nec5_bspline_printout_driver",
+        # momwire#1718 S8
+        "sinusoidal-galerkin": "nec5_sinusoidal_galerkin_printout_driver",
+    }.get(basis, DRIVER)
     sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{driver}.cpp"]
     procs, objects = [], []
     for src in sources:

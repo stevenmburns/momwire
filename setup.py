@@ -443,6 +443,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_fill_core.h",
     "src/momwire/_bspline_crossing_core.h",
     "src/momwire/_nec5_bspline_printout_core.h",
+    "src/momwire/_nec5_sinusoidal_galerkin_core.h",
     "src/momwire/_nec5_printout_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
@@ -651,6 +652,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_bspline_fill_core.cpp",
     "src/momwire/_bspline_crossing_core.cpp",
     "src/momwire/_nec5_bspline_printout_core.cpp",
+    # The Sinusoidal-Galerkin basis on the NEC-5 seam and run half
+    # (momwire#1718 S8). Nothing binds it; built so every toolchain compiles it.
+    "src/momwire/_nec5_sinusoidal_galerkin_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, Python-free, for any basis (`_nec5_printout_core.cpp`),
     # and razor-2p's answers to what the solver is asked
