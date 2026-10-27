@@ -252,11 +252,10 @@ def test_an_unreadable_deck(deck, tmp_path):
 def test_a_refused_deck_and_an_unserved_one(tmp_path):
     _same(*_both([REFUSED.name, "x.out"], tmp_path))
     exe, _ref, de, _dl = _both([GROUND.name, "y.out"], tmp_path / "g")
-    # the point-matched copy serves a wholly-buried deck and declines only
-    # the mixed one (momwire#1607 B6a); the Galerkin copy has no lower-medium
-    # fill yet and declines any buried wire
+    # both copies serve a wholly-buried deck and decline the mixed one
+    # (momwire#1607 B6a, momwire#1718 S11a), each in its own words
     why = (
-        b"a wire below the ground plane"
+        b"wires on both sides of the interface"
         if BASIS == "sinusoidal-galerkin"
         else b"wires both above and below the interface"
     )
