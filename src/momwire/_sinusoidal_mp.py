@@ -620,7 +620,14 @@ def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj, ek=
         elig, b = ek
         rho = np.sqrt(np.asarray(a2, float))[:, None, None]
         bb = None if b is None else np.asarray(b, float)[:, None, None]
-        G = np.where(np.asarray(elig)[:, None, None], G * _ek_factor(R, rho, k, bb), G)
+        # The factor is NAMED before the product (momwire#1718 S2): `G *
+        # <fresh temporary>` is computed in place in the temporary, as
+        # `fac * G`, where numpy elides temporaries (256 KiB and up) and as
+        # written where it cannot -- measured on CI's interpreter, which does
+        # not -- and the complex product is not symmetric in its operands, so
+        # the moments moved by an ULP with the interpreter running them.
+        fac = _ek_factor(R, rho, k, bb)
+        G = np.where(np.asarray(elig)[:, None, None], G * fac, G)
     return np.einsum("pnq,nqr,Pnr->pPn", ws_i, G, ws_j)
 
 
