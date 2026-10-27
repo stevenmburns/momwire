@@ -40,10 +40,13 @@
 // (`sinusoidal::front(args, galerkin=true)`).
 //
 // A wire end on a ground plane takes the direct-field fill
-// (`_sinusoidal_galerkin_direct_core.h`, momwire#1718 S7).
+// (`_sinusoidal_galerkin_direct_core.h`, momwire#1718 S7). Node ports (S9,
+// `node_gaps`) are served on the mixed-potential fill.
 //
 // DECLINED (`nec4::Declined`), never misread: an insulated wire, a buried or
-// plane-crossing structure (S11), junction or node ports (S9).
+// plane-crossing structure (S11), junction ports (the direct route; no
+// corpus deck carries one, S0), and node gaps on a deck the duplicate drop
+// has reduced.
 #pragma once
 
 #include "_sinusoidal_fill_core.h"
@@ -80,9 +83,19 @@ void check_constructor(const sinusoidal::Front &fr, const nec4::SolverArgs &args
 std::vector<std::complex<double>> assemble_Z(const sinusoidal::Front &fr, const nec4::SolverArgs &args,
                                              const nec5::NumpyLinalg *np = nullptr);
 
-// `compute_port_solution()` in free space.
+// A series EMF AT a junction node, named by one member (`node_gaps=`, the
+// NEC-5 seam's node spelling, momwire#1718 S9): wire `wire`'s start or end.
+struct NodeGap {
+    long long wire = 0;
+    bool start = true;
+};
+
+// The constructor's checks of `node_gaps=` (`SolverRefusal` ValueError).
+void check_node_gaps(const sinusoidal::Front &fr, const std::vector<NodeGap> &node_gaps);
+
+// `compute_port_solution()`: ports [gap feeds..., node gaps...].
 PortSolution port_solution(const sinusoidal::Front &fr, const nec4::SolverArgs &args,
-                           const sinusoidal::FillLinalg &la);
+                           const sinusoidal::FillLinalg &la, const std::vector<NodeGap> &node_gaps = {});
 
 // The comparison format (`sinusoidal_galerkin_fill_compare.py`), per operating
 // point of each built structure of a deck: a matrix of up to `whole` columns
