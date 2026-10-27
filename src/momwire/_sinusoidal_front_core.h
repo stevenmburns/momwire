@@ -21,10 +21,16 @@
 // pairwise_sum, and its float64 sin / cos / log are libm's under the
 // AVX-512 pins every momwire process sets (`momwire_serve_client.cpu_env`).
 //
-// DECLINED (`nec4::Declined`), never misread: a buried or plane-crossing
-// structure (the complex-wavenumber basis, momwire#1607 B6), a
-// reflection-coefficient ground (not served by the NEC-4.2 slot), a malformed
-// argument the constructor would refuse.
+// - the lower medium (momwire#1607 B6a): `_wire_media`, the crossing
+//   junctions and this family's crossing scope, each refusal in Python's
+//   words; a wholly-buried deck's basis at k_m (`_basis_coefs(geom, k_m)` in
+//   numpy's complex arithmetic) and its `Medium`.
+//
+// DECLINED (`nec4::Declined`), never misread: a crossing junction inside the
+// scope (the crossing fill, B6b), wires on both sides of the interface with
+// no crossing (the transmitted block), a reflection-coefficient ground (not
+// served by the NEC-4.2 slot), a malformed argument the constructor would
+// refuse.
 #pragma once
 
 #include "_nec4_build_core.h"
@@ -40,7 +46,9 @@ namespace sinusoidal {
 // A refusal the constructor or `_build_geometry` raises (ValueError).
 struct FrontError : std::runtime_error {
     std::string message;
+    std::string kind = "ValueError";  // or "NotImplementedError" (the crossing scope)
     explicit FrontError(const std::string &m) : std::runtime_error(m), message(m) {}
+    FrontError(const std::string &m, const std::string &k) : std::runtime_error(m), message(m), kind(k) {}
 };
 
 struct FeedSite {  // (wire, requested, clamped, centre)
@@ -73,6 +81,13 @@ struct SegView {  // `_basis_coefs`' dict
     std::vector<int8_t> sigma;
 };
 
+// `_crossing_fill.Medium` (`buried_medium`): the lower medium of a solve,
+// CPython's complex arithmetic.
+struct Medium {
+    std::complex<double> eps_t, eps_m, k_m, c2, a_m;
+    double k_p = 0;
+};
+
 struct Front {
     double c = 0, freq = 0, omega = 0, k = 0, eta = 0;
     std::vector<std::vector<std::pair<long long, bool>>> junctions;  // (wire, start)
@@ -90,6 +105,12 @@ struct Front {
     // argument remapped, and how they map back onto the caller's.
     nec4::SolverArgs args;
     nec4::WireDedup dedup;
+    // momwire#1607 B6: `_wire_media`, per wire BELOW the interface; a
+    // wholly-buried deck (`buried`) is solved in the lower medium
+    // (`_operating_medium`): the basis above is `_basis_coefs(geom, k_m)`.
+    std::vector<bool> below_wire;
+    bool buried = false;
+    Medium medium;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy

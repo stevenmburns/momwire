@@ -18,14 +18,23 @@
 //   general route -- getrf on the Fortran copy, getrs 'N' -- on whichever
 //   LAPACK the caller hands in (the binding passes SciPy's own; an
 //   executable its bundled OpenBLAS, as `_lapack`'s host route does);
-// - `_feed_segment_current` at each feed segment's centre, into Y.
+// - `_feed_segment_current` at each feed segment's centre, into Y;
+// - a wholly-buried deck (momwire#1607 B6a), the whole fill at the lower
+//   medium's k_m / eta_m (`_operating_medium`): the complex twin
+//   (`sinusoidal_field_tensor_cplx`), the image weighted A_m, and the
+//   below-family remainder (`_somm_remainder_below_prepare` / `_replay`: the
+//   below grid from `somm_below::source()`, `remainder_field_proj_below`
+//   through the shared `somm_below::Remainder`), sized by `serve_plan`'s
+//   below/below extents.
 //
 // Python stays the reference: Z, the coefficients and Y are Python's to the
 // bit, gated by `tests/test_sinusoidal_fill_core.py` through
 // `scripts/core_split/sinusoidal_fill_compare.py`.
 //
 // DECLINED (`nec4::Declined`), never misread:
-// - a solver without the extended kernel (the NEC-4.2 slot never builds one);
+// - a solver without the extended kernel above ground (the NEC-4.2 slot
+//   never builds one), and one with it below (the reference refuses);
+// - a below/below pair under the grazing floor (not worded here);
 // - an insulated wire;
 // - a matrix scipy's solve would NOT take as general: exactly symmetric or
 //   Hermitian, or of lower or upper bandwidth at most 1 (its diagonal,

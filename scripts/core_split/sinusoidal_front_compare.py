@@ -57,7 +57,16 @@ def _front(kw: dict, p: str, out: list[str]) -> None:
     try:
         s = SinusoidalSolver(**kw)
         g = s._build_geometry()
-        b = s._basis_coefs(g, s.k)
+        k = s.k
+        # The media labels (`_wire_media`) the C++ front reads up front, and
+        # Python at the fill: their refusals are the solve's either way. A
+        # wholly-buried deck is solved, and read, at k_m (`_readout_view`,
+        # momwire#1607 B6a): that is the basis the C++ front builds.
+        if s.ground_z is not None:
+            below = s._below_segments(g)
+            if s._lower_medium() and below.all():
+                k = s._fill_medium(g).k_m
+        b = s._basis_coefs(g, k)
     except Exception as exc:  # noqa: BLE001 — the outcome IS the exception
         out.append(dc._error(p, exc))
         return

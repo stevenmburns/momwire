@@ -55,7 +55,8 @@ pytestmark = pytest.mark.skipif(
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
 CURRENT = NEC42 / "0223_dipole-ex6.nec"
-GROUND = NEC42 / "0239_dipole-buried-gn3.nec"  # not served yet (B6)
+# not served yet: wires on both sides of the interface (momwire#1607 B6)
+GROUND = NEC42 / "probes" / "p9_above_and_buried_gn2.nec"
 REFUSED = NEC42 / "refused" / "r1_gd_after_a_run.nec"
 DECKS = (DIPOLE, CURRENT, GROUND, REFUSED)
 
@@ -91,8 +92,14 @@ _RUNTIME = tempfile.mkdtemp(prefix="mw-nec42-exe-")
 
 
 def _env(**extra) -> dict:
+    # MOMWIRE_BELOW_ANCHORS=off: a buried deck's below grid is the exact one
+    # on both sides (its anchors follow the frequencies a process has seen)
     return dict(
-        os.environ, MOMWIRE_THREADS="1", MOMWIRE_PORTAL_RUNTIME_DIR=_RUNTIME, **extra
+        os.environ,
+        MOMWIRE_THREADS="1",
+        MOMWIRE_PORTAL_RUNTIME_DIR=_RUNTIME,
+        MOMWIRE_BELOW_ANCHORS="off",
+        **extra,
     )
 
 
@@ -246,7 +253,7 @@ def test_a_refused_deck_and_an_unserved_one(tmp_path):
     _same(*_both([REFUSED.name, "x.out"], tmp_path))
     exe, _ref, de, _dl = _both([GROUND.name, "y.out"], tmp_path / "g")
     assert (
-        b"NEC ERROR - not served by this build: a wire below the ground plane"
+        b"NEC ERROR - not served by this build: wires both above and below the interface"
         in (de / "y.out").read_bytes()
     )
 
