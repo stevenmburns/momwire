@@ -252,13 +252,13 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
         const bool free_p = g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i];
         X[i] = (free_m || free_p) ? half_k * a[i] : 0.0;
         kd[i] = k * g.seg_h[i];
-        sin_kd[i] = std::sin(kd[i]);
-        cos_kd[i] = std::cos(kd[i]);
-        s2[i] = std::sin(0.5 * kd[i]);
-        c2[i] = std::cos(0.5 * kd[i]);
-        s4[i] = std::sin(0.25 * kd[i]);
-        const double rs4 = std::sin(0.25 * kd[i]);
-        recip[i] = rs4 * rs4 / (std::sin(0.5 * kd[i]) * std::cos(0.5 * kd[i]));
+        sin_kd[i] = mw_libm_c::rsin(kd[i]);
+        cos_kd[i] = mw_libm_c::rcos(kd[i]);
+        s2[i] = mw_libm_c::rsin(0.5 * kd[i]);
+        c2[i] = mw_libm_c::rcos(0.5 * kd[i]);
+        s4[i] = mw_libm_c::rsin(0.25 * kd[i]);
+        const double rs4 = mw_libm_c::rsin(0.25 * kd[i]);
+        recip[i] = rs4 * rs4 / (mw_libm_c::rsin(0.5 * kd[i]) * mw_libm_c::rcos(0.5 * kd[i]));
         tanh_[i] = s2[i] / c2[i];
     }
     // the neighbours' factors at the shared node
@@ -340,7 +340,7 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
             if (only_plus) C[i] = C_e1;
             if (only_minus) C[i] = C_e2;
             if (iso) C[i] = C_iso;
-            const double cos_gap_e = 2.0 * std::sin(0.75 * kd[i]) * s4[i] + x * sin_kd[i];
+            const double cos_gap_e = 2.0 * mw_libm_c::rsin(0.75 * kd[i]) * s4[i] + x * sin_kd[i];
             const double AC_e1 = (cos_gap_e + ap[i] * Q_plus_e1 * cap_s) / dxs;
             const double AC_e2 = (cos_gap_e - am[i] * Q_minus_e2 * cap_s) / dxs;
             const double AC_iso = (2.0 * s4sq[i] + x * s2[i]) / iso_s;
@@ -1370,13 +1370,13 @@ static SegView basis_coefs_at(const Geometry &g, const std::vector<double> &a, d
         double ka = k * a[i];
         a_const[i] = 1.0 / (std::log(2.0 / ka) - kEulerGamma);
         kd[i] = k * g.seg_h[i];
-        sin_kd[i] = std::sin(kd[i]);
-        cos_kd[i] = std::cos(kd[i]);
-        s2[i] = std::sin(0.5 * kd[i]);
-        c2[i] = std::cos(0.5 * kd[i]);
-        s4[i] = std::sin(0.25 * kd[i]);
-        double rs4 = std::sin(0.25 * kd[i]);
-        recip[i] = rs4 * rs4 / (std::sin(0.5 * kd[i]) * std::cos(0.5 * kd[i]));
+        sin_kd[i] = mw_libm_c::rsin(kd[i]);
+        cos_kd[i] = mw_libm_c::rcos(kd[i]);
+        s2[i] = mw_libm_c::rsin(0.5 * kd[i]);
+        c2[i] = mw_libm_c::rcos(0.5 * kd[i]);
+        s4[i] = mw_libm_c::rsin(0.25 * kd[i]);
+        double rs4 = mw_libm_c::rsin(0.25 * kd[i]);
+        recip[i] = rs4 * rs4 / (mw_libm_c::rsin(0.5 * kd[i]) * mw_libm_c::rcos(0.5 * kd[i]));
         atom[i] = (s2[i] / c2[i]) * a_const[i];
     }
     std::vector<double> Pm(n, 0.0), Pp(n, 0.0);
@@ -1444,7 +1444,7 @@ static SegView basis_coefs_at(const Geometry &g, const std::vector<double> &a, d
             if (only_plus) C[i] = C_e1;
             if (only_minus) C[i] = C_e2;
             if (iso) C[i] = C_iso;
-            double cos_gap_e = 2.0 * std::sin(0.75 * kd[i]) * s4[i];
+            double cos_gap_e = 2.0 * mw_libm_c::rsin(0.75 * kd[i]) * s4[i];
             double AC_e1 = (cos_gap_e + ac * Q_plus_e1 * s2[i]) / dxs;
             double AC_e2 = (cos_gap_e - ac * Q_minus_e2 * s2[i]) / dxs;
             double AC_iso = 2.0 * s4sq[i] / c2s;
