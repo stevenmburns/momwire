@@ -570,6 +570,91 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
 
+
+  # `linux-nec5-sg` (momwire#1718 S10): the NEC-5 dialect's
+  # `momwire-nec5-sinusoidal-galerkin` as one no-Python executable
+  # (MW_EXE_BASIS=sg5), built here from source in both variants: the
+  # launcher-layer contract tests, every fixture deck and the NX chains as
+  # the launcher answers them (exe_compare --standalone), and SimNEC's
+  # streaming call. Not in the release tarball yet (#1718 S-D).
+  linux-nec5-sg:
+    needs: linux-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          save: false
+      - name: momwire environment
+        run: |
+          pip install --upgrade pip
+          pip install "setuptools>=61.0" wheel pybind11 cmake ninja
+          pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      - name: static OpenBLAS (linux-artifact's cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/mwx-openblas-manylinux/libmwxp.a
+          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
+          fail-on-cache-miss: true
+      - name: build (no-Python, avx2 and sse2)
+        run: |
+          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          for v in avx2 sse2; do
+            cmake -S standalone -B build-nec5-sg-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=sg5 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
+            cmake --build build-nec5-sg-$v
+          done
+          ldd build-nec5-sg-avx2/momwire-nec5-sinusoidal-galerkin-standalone
+        env:
+          CXX: ccache g++
+      - name: contract tests
+        run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
+        env:
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-nec5-sg-avx2/momwire-nec5-sinusoidal-galerkin-standalone
+          MOMWIRE_STANDALONE_BASIS: sinusoidal-galerkin
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: every fixture deck and the NX chains, as the launcher (avx2 and sse2)
+        run: |
+          L="$(command -v momwire-nec5-sinusoidal-galerkin)"
+          B=momwire-nec5-sinusoidal-galerkin-standalone
+          D="tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks"
+          python scripts/core_split/exe_compare.py exe-linux-sg-avx2.jsonl --standalone \
+            --basis sinusoidal-galerkin --exe build-nec5-sg-avx2/$B --launcher "$L" \
+            --workers 4 $D
+          MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/exe_compare.py \
+            exe-linux-sg-sse2.jsonl --standalone --basis sinusoidal-galerkin \
+            --exe build-nec5-sg-sse2/$B --launcher "$L" --workers 4 $D
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      # The streams this build serves; every other stream here holds a buried
+      # structure (#1718 S11), which this build refuses by name.
+      - name: the streaming call, as the launcher (avx2 and sse2)
+        run: |
+          L="$(command -v momwire-nec5-sinusoidal-galerkin)"
+          B=momwire-nec5-sinusoidal-galerkin-standalone
+          for v in avx2 sse2; do
+            F=""; [ $v = sse2 ] && F="MOMWIRE_FORCE_VARIANT=sse2"
+            env $F python scripts/core_split/stream_compare.py \
+              exe-linux-sg-stream-$v.jsonl --exe build-nec5-sg-$v/$B --launcher "$L" \
+              --workers 4 scripts/core_split/bs2_stream_decks/bs2_stream_beam_free.nec \
+              scripts/core_split/bs2_stream_decks/bs2_stream_dipole_gn2.nec
+          done
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 90

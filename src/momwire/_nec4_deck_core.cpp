@@ -372,7 +372,7 @@ struct Structure {
         const std::vector<Pair> &pairs) const {
         if (!has_symmetry) return {pairs, {}};
         ll cell = symmetry.cell_wires;
-        if (cell == 0) decline("a symmetric cell of no wires (Python divides by zero)");
+        if (cell == 0) decline("a symmetric cell of no wires (the reference divides by zero)");
         ll copies = static_cast<ll>(wires.size()) / cell;
         std::vector<Pair> applied;
         std::set<Pair> seen;
