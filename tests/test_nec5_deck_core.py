@@ -203,11 +203,28 @@ CASES = {
     "python float spellings": (
         deck(
             "GW 3,1_0,1.5D-3,2d2,-0.,.5,5.,+.5e-3,1_0e1_0",
-            "GW 4,1,inf,-Infinity,nan,+NaN,1e400,-1e-400,4.9e-324",
             "GW 5,2,2.4703282292062327e-324,2.4703282292062328e-324,1e-310,"
-            "1.7976931348623157e308,1.7976931348623159e308,0.1,1e23",
+            "1.7976931348623157e308,-1e-400,0.1,1e23",
         ),
         "parsed",
+    ),
+    # A non-finite GW field refuses on the card (`deck._cards.
+    # gw_field_refusal`); each spelling below reads as one
+    "python non-finite spellings": (
+        deck("GW 4,1,inf,-Infinity,nan,+NaN,1e400,-1e-400,4.9e-324"),
+        "GW field 3 is not a finite number; a wire's tag, segment count, end coordinates and radius must all be finite",
+    ),
+    "python nan spelling": (
+        deck("GW 4,1,0,0,0,+NaN,1,0,.1"),
+        "GW field 6 is not a finite",
+    ),
+    "python -infinity spelling": (
+        deck("GW 4,1,0,0,0,1,-Infinity,0,.1"),
+        "GW field 7 is not a finite",
+    ),
+    "python overflowing literal": (
+        deck("GW 5,2,0,0,0,1.7976931348623159e308,0,0,.1"),
+        "GW field 6 is not a finite",
     ),
     "round half to even": (
         deck(wires=GW1 + "GW 2.5,4.5,0,0,1,0,0,2,.001\nGW -0.5,1.5,0,0,1,0,0,2,.001\n"),
@@ -261,11 +278,30 @@ CASES = {
         deck("EX 4,1e300,9,0,1,0", wires=GW1 + "GW 1e300,3,0,0,0,1,0,0,.1\n"),
         "addresses node 9 of tag 1000000000000000052504760255204420248704468581",
     ),
-    "gw infinite tag": (deck(wires="GW inf,3,0,0,0,1,0,0,.1\n"), "OverflowError"),
-    "gw nan segments": (deck(wires="GW 1,nan,0,0,0,1,0,0,.1\n"), "ValueError"),
+    "gw infinite tag": (
+        deck(wires="GW inf,3,0,0,0,1,0,0,.1\n"),
+        "DeckError GW field 1 is not a finite number; a wire's tag, segment count, end coordinates and radius must all be finite",
+    ),
+    "gw nan segments": (
+        deck(wires="GW 1,nan,0,0,0,1,0,0,.1\n"),
+        "DeckError GW field 2 is not a finite",
+    ),
+    "gw nan radius": (
+        deck(wires="GW 1,3,0,0,0,1,0,0,nan\n"),
+        "DeckError GW field 9 is not a finite",
+    ),
+    "gw too many segments": (
+        deck(wires=GW1 + "GW 3,1e300,0,0,0,1,0,0,.1\n"),
+        "DeckError GW tag 3 asks for more than 10000000 segments; this engine "
+        "meshes at most 10000000 segments on one wire",
+    ),
+    "gw one segment past the limit": (
+        deck(wires=GW1 + "GW 3,10000001,0,0,0,1,0,0,.1\n"),
+        "asks for more than 10000000 segments",
+    ),
     "gw integer literal too big for a double": (
         deck(wires=f"GW {BIG},3,0,0,0,1,0,0,.1\n"),
-        "OverflowError",
+        "DeckError GW field 1 is not a finite",
     ),
     # -- GE --
     "ge bare": (DIPOLE.replace("GE 0,-1", "GE"), "parsed"),
@@ -370,7 +406,7 @@ CASES = {
     "ex end code infinite": (deck("EX 4,2,1,inf,1.,0."), "OverflowError"),
     "ex end code on a huge wire": (
         deck("EX 4,3,1e300,1,1.,0.", wires=GW1 + "GW 3,1e300,0,0,0,1,0,0,.1\n"),
-        "parsed",
+        "GW tag 3 asks for more than 10000000 segments",
     ),
     "ex multiple": (deck("EX 4,2,1,1,1.,0.", "EX 0,2,3,0,.5,.25"), "parsed"),
     # -- LD 0 / 1 / 4 --
@@ -411,7 +447,7 @@ CASES = {
     ),
     "ld 5 on huge wires": (
         deck("LD 5,0,1,2,1e6", wires=GW1 + "GW 3,1e20,0,0,0,1,0,0,.1\n"),
-        "this deck's wires span 1-11, 12-100000000000000000011",
+        "GW tag 3 asks for more than 10000000 segments",
     ),
     "ld 5 tag 0 over huge wires": (
         deck(
@@ -419,7 +455,7 @@ CASES = {
             "LD 2,0,1,2e20,0.,1e-7,0.",
             wires="GW 1,1e20,0,0,0,1,0,0,.1\nGW 3,1e20,0,0,0,1,0,0,.1\n",
         ),
-        "parsed",
+        "GW tag 1 asks for more than 10000000 segments",
     ),
     # -- LD 2 / 3 --
     "ld 2": (deck("LD 2,0,0,0,0.,1e-7,0."), "parsed"),
@@ -745,7 +781,7 @@ CASES = {
     ),
     "the shared prefix overflows": (
         "CM\nCE\nGW 1,inf,0,0,0,1,0,0,.1\nGE 0\nXQ\nEX 4,1,1,0,1,0\nXQ\nEN\n",
-        "OverflowError",
+        "GW field 2 is not a finite number",
     ),
     # -- NX chains --
     "two structures": (DIPOLE.replace("EN\n", "NX\n") + DIPOLE, "NX (next structure)"),

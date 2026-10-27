@@ -48,6 +48,9 @@ FIXTURES = ROOT / "tests" / "fixtures"
 OWN = FIXTURES / "refusal_coverage_0800"
 
 PYTHON_SOURCES = (SRC / "eznec" / "_serve.py", SRC / "eznec" / "_shell.py")
+# The deck reader's sentences: its own, and the card-level ones every
+# dialect's reader shares (`_cards.gw_field_refusal`).
+READER_SOURCES = (SRC / "deck" / "_nec5.py", SRC / "deck" / "_cards.py")
 CXX_SOURCES = (
     SRC / "_nec5_seam_core.cpp",
     SRC / "_nec5_razor_seam_core.cpp",
@@ -255,7 +258,7 @@ def test_every_cxx_printed_refusal_is_a_python_sentence(printed):
     C++ seam prints on a fixture matches a Python sentence -- or the deck
     reader's, which its own gate holds."""
     sentences, _ = python_refusals()
-    reader = _cxx_literals([SRC / "deck" / "_nec5.py"], python=True)
+    reader = _cxx_literals(READER_SOURCES, python=True)
     stray = []
     for message in printed:
         if any(re.fullmatch(rx, message, re.S) for rx in sentences.values()):
@@ -462,7 +465,7 @@ def _balanced(code, start):
 
 def test_every_cxx_refusal_sentence_exists_in_python():
     # the deck core's reader rungs answer to the Python reader
-    python = _cxx_literals((*PYTHON_SOURCES, SRC / "deck" / "_nec5.py"), python=True)
+    python = _cxx_literals((*PYTHON_SOURCES, *READER_SOURCES), python=True)
     python += [
         p for t in python for p in re.split(r"\{[^{}]*\}", t)
     ]  # a template's literal runs
@@ -500,3 +503,51 @@ def test_the_serve_layer_names_its_refusal_constants_as_this_file_reads_them():
                     node.args[0].id
                 ), (path.name, node.args[0].id)
     assert _serve.ServeRefusal  # the name this file walks for
+
+
+# --- malformed decks: a plain refusal, never the interpreter's crash text ----
+
+# Each deck once failed deep in the mesh with Python's own float-to-int or
+# numpy's allocation message, as an INTERNAL ERROR frame the C++ seams copied.
+# Now every reader refuses it on the card, in one sentence.
+MALFORMED = {
+    "gw_non_finite_field.nec": (
+        "GW field 4 is not a finite number; a wire's tag, segment count, end "
+        "coordinates and radius must all be finite"
+    ),
+    "gw_too_many_segments.nec": (
+        "GW tag 2 asks for more than 10000000 segments; this engine meshes at "
+        "most 10000000 segments on one wire"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED))
+def test_a_malformed_deck_is_one_plain_refusal_everywhere(name):
+    """Python's three dialects and every C++ reader (the NEC-5 reader under
+    both seams, the NEC-2 / NEC-4.2 reader) refuse the deck with the same
+    sentence."""
+    from momwire import _accel
+    from momwire.deck import DeckError, parse
+    from momwire.deck._nec5 import parse_nec5
+
+    sentence = MALFORMED[name]
+    text = (OWN / name).read_text(encoding="latin-1")
+    with pytest.raises(DeckError) as nec5:
+        parse_nec5(text)
+    assert str(nec5.value) == sentence
+    for dialect in ("nec2", "nec4"):
+        with pytest.raises(DeckError) as other:
+            parse(text, dialect=dialect)
+        assert str(other.value) == sentence, dialect
+    acc = _accel.acc
+    if acc is None or not all(hasattr(acc, s) for s in SEAMS.values()):
+        pytest.skip("no accelerator with the C++ seams loaded")
+    for seam in SEAMS.values():
+        answer = getattr(acc, seam)((OWN / name).read_bytes())
+        assert (answer["route"], answer["message"]) == ("refused", sentence), seam
+    if hasattr(acc, "nec4_deck_dump"):
+        for dialect in ("nec2", "nec4"):
+            first = acc.nec4_deck_dump(text.encode("latin-1"), dialect).split("\n")[0]
+            assert first.startswith("parse ! DeckError "), (dialect, first)
+            assert bytes.fromhex(first.split(" ")[3]).decode("utf-8") == sentence

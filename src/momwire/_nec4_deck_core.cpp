@@ -1114,6 +1114,13 @@ class Parser {
             Card card;
             if (!nec5::read_card(line, card)) continue;
             if (card.mnemonic == "NX" || card.mnemonic == "EN") break;
+            // `_Nec2Parser.card`: a malformed GW refuses on the card, in the
+            // words every reader uses; any other card's non-finite field is
+            // Python's to read (an LD 5 NaN conductivity is served)
+            if (card.mnemonic == "GW") {
+                const std::string why = nec5::gw_field_refusal(card);
+                if (!why.empty()) deck_error(why);
+            }
             if (card.mnemonic != "CM" && card.mnemonic != "CE") {
                 for (double v : card.values)
                     if (!std::isfinite(v)) decline("a non-finite field on a " + card.mnemonic + " card");

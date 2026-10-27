@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
-from ._cards import Card, DeckError, parse_card
+from ._cards import Card, DeckError, gw_field_refusal, parse_card
 from ._nec2_geometry import _SMIN, Nec2Structure, build_geometry
 from .model import (
     DeckModel,
@@ -1141,6 +1141,10 @@ class _Nec2Parser:
             # name (spec ``#network-contiguity``).
             if self._network_destroyer is None:
                 self._network_destroyer = card.mnemonic
+        if card.mnemonic == "GW" and (why := gw_field_refusal(card)) is not None:
+            # On the card, as the nec5 reader asks it, rather than when the
+            # geometry is built: the C++ reader asks it in the same place.
+            raise DeckError(why)
         if card.mnemonic in self._geometry_mnemonics:
             self._geometry(card)
             return

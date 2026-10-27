@@ -43,7 +43,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
+from ._cards import _FUSED_FIELD_START, Card, DeckError, gw_field_refusal, parse_card
 from ._nec2_geometry import arc_vertices, gm_transform
 from ._nec4 import catenary_vertices, helix_vertices
 from .model import DistributedRLC, LoadSpec
@@ -2020,6 +2020,8 @@ class _Nec5Parser:
                 f"{'field' if written == 1 else 'fields'} and needs at least "
                 f"{minimum}"
             )
+        if card.mnemonic == "GW" and (why := gw_field_refusal(card)) is not None:
+            raise DeckError(why)
         handler = {
             "GW": self._gw,
             "GA": self._ga,

@@ -367,6 +367,16 @@ segment count must be >= 1, got <n>
 GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect
 ```
 
+A field that is not a finite number (an `inf`, a `nan`, or a literal past
+the doubles) and a segment count past ten million are refused on the card,
+before any other GW rule, in every dialect (nec2, nec4 and nec5) and in the
+C++ readers alike. The first non-finite of the nine fields is the one named:
+
+```text
+GW field <k> is not a finite number; a wire's tag, segment count, end coordinates and radius must all be finite
+GW tag <t> asks for more than 10000000 segments; this engine meshes at most 10000000 segments on one wire
+```
+
 ## GA — wire arc
 
 An arc of a circle in the XZ plane, centred on the origin, divided into equal
@@ -1605,6 +1615,8 @@ unrecognised NEC card '<XX>'
 | `IS` | partial-wire range | `IS: insulation on a partial-wire segment range — per-wire specs cover whole wires only` |
 | `IS` | jacket inside the conductor | `IS: insulation whose outer radius does not exceed the wire's conductor radius` |
 | `MP` | fractional field | `MP field <k> must be an integer, not <v>` |
+| `GW` | a field that is not a finite number | `GW field <k> is not a finite number; a wire's tag, segment count, end coordinates and radius must all be finite` |
+| `GW` | `NS` > 10000000 | `GW tag <t> asks for more than 10000000 segments; this engine meshes at most 10000000 segments on one wire` |
 | `GW` | `NS < 1` | `segment count must be >= 1, got <n>` |
 | `GW` | radius ≤ 0 | `GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect` |
 | `GS` | factor ≤ 0 | `scale factor must be > 0, got <f>` |
