@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import platform
 import sys
 import warnings
 
@@ -407,7 +408,25 @@ def acc_fill_only():
     return _accel.acc
 
 
-@pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
+# On macOS arm64 the shared sinusoidal front's basis view differs from
+# Python's by an ULP on skewed geometry (momwire#1733), so these two decks'
+# G cannot match there yet; strict, so the fix turns them red.
+_FRONT_ARM64 = {"zigzag", "hub_fan"}
+
+
+def _every_platform_cases():
+    for c in CASES:
+        marks = ()
+        if c[0] in _FRONT_ARM64:
+            marks = pytest.mark.xfail(
+                sys.platform == "darwin" and platform.machine() == "arm64",
+                reason="the front's basis view on macOS arm64 (momwire#1733)",
+                strict=True,
+            )
+        yield pytest.param(*c, id=c[0], marks=marks)
+
+
+@pytest.mark.parametrize("name, text, expect", list(_every_platform_cases()))
 def test_a_hand_written_deck_has_the_same_fill_on_every_platform(
     name, text, expect, acc_fill_only
 ):
