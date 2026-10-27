@@ -8,6 +8,7 @@
 #pragma fp_contract(off)
 #endif
 
+#include "_libm_complex_inline.h"
 #include "_sinusoidal_fill_core.h"
 
 #include "_razor_front_core.h"
@@ -839,12 +840,12 @@ void somm_below_prepare(const Front &fr, bool cos1, double r1_below, SommBelow &
             const cd kz = nec5::replay::np_cmul(md.k_m, cd(zloc, 0.0));  // `k_m * zloc`
             cd shp_cos;
             if (cos1) {
-                const cd s = std::sin(nec5::replay::np_cmul(half_k, cd(zloc, 0.0)));
+                const cd s = mw_libm_c::csin(nec5::replay::np_cmul(half_k, cd(zloc, 0.0)));
                 shp_cos = nec5::replay::np_cmul(cd(-2.0, 0.0), nec5::replay::np_cmul(s, s));  // -2 * sin(.)**2
             } else {
-                shp_cos = std::cos(kz);
+                shp_cos = mw_libm_c::ccos(kz);
             }
-            const cd shp[3] = {cd(1.0, 0.0), std::sin(kz), shp_cos};
+            const cd shp[3] = {cd(1.0, 0.0), mw_libm_c::csin(kz), shp_cos};
             for (int c = 0; c < 3; c++)
                 sb.shp_w[static_cast<std::size_t>((c * N + n) * q + j)] = nec5::replay::np_cmul(shp[c], cd(w_node, 0.0));
         }
