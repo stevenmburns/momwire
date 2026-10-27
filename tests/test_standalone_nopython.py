@@ -51,7 +51,7 @@ DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)
 # buried wires (S11), momwire#1718.
 _NOT_YET = (
     {
-        "buried_radials.nec": "a buried wire (momwire#1718 S11)",
+        "buried_radials.nec": "a crossing junction (momwire#1718 S11b)",
     }
     if BASIS == "sinusoidal-galerkin"
     else {}

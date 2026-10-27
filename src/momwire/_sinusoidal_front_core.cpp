@@ -1535,15 +1535,6 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     const bool has_ground = args.ground.kind != nec4::Ground::none;
     const bool lower_medium = args.ground.kind == nec4::Ground::finite;  // the Sommerfeld half-space
     const double gz = 0.0;
-    // the Sinusoidal-Galerkin copy (momwire#1718) has no lower-medium fill:
-    // it keeps declining a buried wire, which SinusoidalGalerkinSolver
-    // answers in its own words (the point-matched lane's below are not its)
-    if (galerkin && has_ground)
-        for (const auto &pl : pls) {
-            double mn = pl[0][2];
-            for (const Point3 &p : pl) mn = std::min(mn, p[2]);
-            if (mn < gz - ground_touch_tol(pl)) decline("a wire below the ground plane (momwire#1607 B6)");
-        }
 
     // the constructor's constants
     double c = 1 / std::sqrt(kEps * kMu);
@@ -1646,6 +1637,16 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     if (has_ground) {
         const std::set<std::pair<ll, bool>> exempt = crossing_exemption(pls, gz, f.junctions);
         f.below_wire = wire_media(pls, gz, lower_medium, args.ground.kind == nec4::Ground::pec, exempt);
+        // the Sinusoidal-Galerkin copy (momwire#1718) fills a WHOLLY buried
+        // deck (S11a); wires on both sides of the interface decline here,
+        // before the point-matched lane's crossing scope, whose refusals
+        // are not SinusoidalGalerkinSolver's
+        if (galerkin) {
+            const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
+            if (nb > 0 && nb < n_w)
+                decline("wires on both sides of the interface (momwire#1718: the transmitted blocks, S11a, or a "
+                        "crossing junction, S11b)");
+        }
         if (lower_medium && !grounded.empty() && !f.junctions.empty()) {
             const std::vector<ll> crossing =
                 crossing_junctions(f.below_wire, f.junctions, grounded, pls, gz, f.radius_per_wire);
@@ -1951,6 +1952,24 @@ SegView basis_coefs(const Front &fr, double k) {
             for (long long s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = fr.radius_per_wire[w];
     }
     return basis_coefs_at(g, a, k);
+}
+
+Front buried_at(const Front &fr, double omega) {
+    if (!fr.buried) throw nec4::Declined("a buried readout on a deck that is not wholly buried");
+    Front f = fr;
+    f.k = omega / fr.c;
+    f.medium = buried_medium(fr.args.ground.eps_r, fr.args.ground.sigma, omega, f.k);
+    const Geometry &g = f.geometry;
+    std::vector<double> a(static_cast<std::size_t>(g.n_segs));
+    if (f.uniform_radius) {
+        std::fill(a.begin(), a.end(), f.radius_per_wire[0]);
+    } else {
+        for (std::size_t w = 0; w < g.wire_first.size(); w++)
+            for (long long s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = f.radius_per_wire[w];
+    }
+    f.basis = SegView();
+    basis_coefs_complex(f, a, {f.medium.k_m}, false);
+    return f;
 }
 
 std::string dump_front(const std::string &text) {

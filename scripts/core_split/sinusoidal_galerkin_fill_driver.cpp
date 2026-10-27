@@ -11,6 +11,7 @@
 //
 // Output per deck: "== <path>", then the fill dump.
 #include "_sinusoidal_galerkin_fill_core.h"
+#include "_somm_below_fill_core.h"
 
 #include <dlfcn.h>
 
@@ -44,6 +45,9 @@ void *open_lib(const char *path) {
 }  // namespace
 
 int main(int argc, char **argv) {
+    // the below/below table a wholly-buried deck's fill reads (momwire#1718
+    // S11a), filled in process as the executable's route does
+    somm_below::set_source(somm_below::fill_source());
     if (argc < 3) {
         std::cerr << "usage: sinusoidal_galerkin_fill_driver SCIPY_OPENBLAS NUMPY_OPENBLAS DECK...\n";
         return 2;

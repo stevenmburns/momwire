@@ -434,6 +434,7 @@ void register_nec4_printout(py::module_ &m) {
             bool ok;
             {
                 py::gil_scoped_release nogil;
+                SinBelowSource below;  // a wholly-buried deck's table (momwire#1718 S11a)
                 ok = mw::sinusoidal_galerkin::printout(text, st, la, out, why);
             }
             return py::make_tuple(ok, py::str(ok ? out : why));

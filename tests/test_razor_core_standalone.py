@@ -614,6 +614,21 @@ def test_the_nec42_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(driver):
     assert _nec42_sinusoidal_printouts(driver, decks, "sinusoidal-galerkin") >= 80
 
 
+def test_a_wholly_buried_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(
+    driver, monkeypatch
+):
+    """momwire#1718 S11a: the lower-medium fill (k_m, the below remainder,
+    the loss power at k_m) through the core TUs alone, on the buried
+    fixtures; the below grids the exact fill on both sides."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    decks = sorted(
+        (ROOT / "tests" / "fixtures" / "bspline_printout_buried").glob("*.nec")
+    )
+    assert _nec42_sinusoidal_printouts(driver, decks, "sinusoidal-galerkin") == len(
+        decks
+    )
+
+
 def _nec42_sinusoidal_printouts(driver, decks, basis="sinusoidal") -> int:
     """How many of `decks` `nec4_sinusoidal_printout_driver` (for `basis`
     "sinusoidal-galerkin", `nec4_sinusoidal_galerkin_printout_driver`)

@@ -82,6 +82,14 @@ def acc():
 
 
 @pytest.fixture(autouse=True)
+def _exact_below_grids(monkeypatch):
+    """Every below/below grid the exact fill (momwire#1471's anchors off on
+    both copies): whether a grid is blended reads the frequencies the
+    PROCESS has seen, and the C++ source keeps its own list."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+
+
+@pytest.fixture(autouse=True)
 def _one_blas_thread():
     """One BLAS thread on both sides: OpenBLAS's LU is deterministic at a
     given width, not across widths."""
@@ -384,6 +392,76 @@ CASES = [
 
 CASES += [(name, text, "fills") for name, text in CONTACT_CASES]
 
+# A wholly-buried deck (momwire#1718 S11a): the mixed-potential fill in the
+# lower medium, at k_m and eta_m, with the below family's remainder. Each
+# refusal is the reference's, in its words; a deck on both sides of the
+# interface declines (the transmitted blocks; a crossing junction is S11b).
+BURIED = "GW 1 11 -.25 0 -.1 .25 0 -.1 .001\n"
+BURIED_CASES = [
+    ("buried_dipole_gn2", deck(BURIED, GN2 + FR + "EX 0 1 6 0 1\nXQ\n"), "fills"),
+    ("buried_dipole_gn3", deck(BURIED, GN3 + FR + "EX 0 1 6 0 1\nXQ\n"), "fills"),
+    (
+        "buried_dipole_gn2_ld5",
+        deck(BURIED, GN2 + "LD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "buried_dipole_gn2_ld0",
+        deck(BURIED, GN2 + "LD 0 1 3 3 20 1e-8 0\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "buried_bent_pair_gn2",
+        deck(
+            "GW 1 8 -.3 0 -.05 0 0 -.15 .001\nGW 2 8 0 0 -.15 .3 0 -.05 .001\n",
+            GN2 + FR + "EX 0 1 8 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        # just under the plane: the remainder's pairs at a raised order
+        "buried_shallow_gn2",
+        deck("GW 1 15 -.3 0 -.004 .3 0 -.004 .001\n", GN2 + FR + "EX 0 1 8 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "buried_two_radii_gn2",
+        deck(
+            BURIED + "GW 2 11 -.25 .1 -.1 .25 .1 -.1 .002\n",
+            GN2 + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "buried_sweep_gn2",
+        deck(BURIED, GN2 + "FR 0 3 0 0 280 10\nEX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    # refusals, the reference's words
+    ("buried_over_pec", deck(BURIED, "GN 1\n" + FR + "EX 0 1 6 0 1\nXQ\n"), "fills"),
+    (
+        "buried_beside_contact",
+        deck(MONO + BURIED, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+        "fills",
+    ),
+    # wires on both sides of the interface decline: detached, and a card
+    # wire through the plane, which the slot splits into a crossing junction
+    (
+        "buried_split_at_the_plane",
+        deck("GW 1 11 0 0 -.2 0 0 .2 .001\n", GN2 + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "declined",
+    ),
+    (
+        "buried_beside_elevated",
+        deck(
+            BURIED + "GW 2 11 -.25 0 .2 .25 0 .2 .001\n",
+            GN2 + FR + "EX 0 2 6 0 1\nXQ\n",
+        ),
+        "declined",
+    ),
+]
+CASES += BURIED_CASES
+
 
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
 def test_a_hand_written_deck_has_the_same_fill(name, text, expect, acc):
@@ -510,6 +588,30 @@ def test_a_wire_listed_twice_refuses_in_the_galerkin_solvers_name(acc):
         :300
     ]
     assert nc.dc.first_difference(nc.py_fill(text), cxx) is None
+
+
+def test_the_buried_remainder_raises_its_pairs(acc):
+    """Not vacuous: the shallow buried wire's remainder re-integrates pairs
+    at a raised order (`remainder_raised_pairs`), and the C++ fill is
+    Python's there too."""
+    from momwire import _sinusoidal_mp as mp
+
+    seen = []
+    raised = mp.remainder_raised_pairs
+
+    def spy(*a, **kw):
+        out = raised(*a, **kw)
+        seen.append(out[0].size)
+        return out
+
+    mp.remainder_raised_pairs = spy
+    try:
+        text = dict((c[0], c[1]) for c in CASES)["buried_shallow_gn2"]
+        py = nc.py_fill(text)
+    finally:
+        mp.remainder_raised_pairs = raised
+    assert seen and max(seen) > 0, seen
+    assert nc.dc.first_difference(py, nc.cxx_fill(text, acc)) is None
 
 
 def test_the_remainder_branches_are_reached(acc):

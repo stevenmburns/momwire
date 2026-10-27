@@ -43,10 +43,21 @@
 // (`_sinusoidal_galerkin_direct_core.h`, momwire#1718 S7). Node ports (S9,
 // `node_gaps`) are served on the mixed-potential fill.
 //
-// DECLINED (`nec4::Declined`), never misread: an insulated wire, a buried or
-// plane-crossing structure (S11), junction ports (the direct route; no
-// corpus deck carries one, S0), and node gaps on a deck the duplicate drop
-// has reduced.
+// A WHOLLY-BURIED deck (momwire#1718 S11a, `_operating_medium`) is solved in
+// the lower medium: the same fill at k_m / eta_m (`WindowFill` at a complex
+// k, its near pairs on the complex product rule), the image weighted A_m,
+// and the below family's remainder (`_mp_remainder_below`: bspline's
+// field-form route over the shared below projection,
+// `somm_below::Remainder`, the grid from `somm_below::source()`), the
+// loading's overlap at k_m, the drive and the gap readout at k_m (off the
+// segment centre CPython's `cmath.sin`).
+//
+// DECLINED (`nec4::Declined`), never misread: an insulated wire, wires on
+// both sides of the interface (the transmitted blocks; a crossing junction
+// is S11b), junction ports (the direct route; no
+// corpus deck carries one, S0), node gaps on a deck the duplicate drop has
+// reduced, a below/below pair under the
+// grazing floor (the refusal's words are not copied).
 #pragma once
 
 #include "_sinusoidal_fill_core.h"

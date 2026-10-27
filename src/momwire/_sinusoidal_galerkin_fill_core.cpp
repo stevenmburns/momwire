@@ -37,6 +37,7 @@
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 #include "_fma_inline.h"
 #include "_libm_complex_inline.h"  // libm's cexp, `MW_NUMPY_CONTRACTS`
+#include "_somm_below_remainder_inline.h"  // the below remainder's projection (momwire#1718 S11a)
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +45,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -485,6 +487,124 @@ void two_rules_batch(const Segs &o, std::size_t i0, const Segs &s, const std::ve
     }
 }
 
+// --- numpy's complex arithmetic at a complex k (momwire#1718 S11a) -----------
+//
+// A wholly-buried deck's fill runs at k_m, a CPython complex, with eta_m a
+// numpy complex128 scalar: an array product is numpy's fused one (`cm`), a
+// product of two scalars numpy's scalar math (`smul`), an array quotient
+// `CDOUBLE_divide` (`xdiv`); the scalar math and the quotient are numpy's
+// plain C, contracted on arm64 (`MW_NUMPY_CONTRACTS`, as the front's copies,
+// momwire#1607 B6a); CPython's own scalars take `py_mul` / `py_div`.
+
+cd smul(cd a, cd b) {  // numpy 0-d scalars (`cdouble_ctype_multiply`)
+#if MW_NUMPY_CONTRACTS
+    return cm(a, b);
+#else
+    return py_mul(a, b);
+#endif
+}
+
+cd xdiv(cd a, cd b) {  // `CDOUBLE_divide`
+    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
+    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
+    if (in2r_abs >= in2i_abs) {
+        if (in2r_abs == 0 && in2i_abs == 0) return cd(in1r / in2r_abs, in1i / in2i_abs);
+        const double rat = in2i / in2r;
+#if MW_NUMPY_CONTRACTS
+        const double scl = 1.0 / mw_fma::exact(in2i, rat, in2r);
+        return cd(mw_fma::exact(in1i, rat, in1r) * scl, mw_fma::exact(-in1r, rat, in1i) * scl);
+#else
+        const double scl = 1.0 / (in2r + in2i * rat);
+        return cd((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+#endif
+    }
+    const double rat = in2r / in2i;
+#if MW_NUMPY_CONTRACTS
+    const double scl = 1.0 / mw_fma::exact(in2r, rat, in2i);
+    return cd(mw_fma::exact(in1r, rat, in1i) * scl, mw_fma::exact(in1i, rat, -in1r) * scl);
+#else
+    const double scl = 1.0 / (in2i + in2r * rat);
+    return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+#endif
+}
+
+// `shape_values(k, xi)` at a complex k, one arc: `arg = k * xi`, `half =
+// np.sin(0.5 * arg)`, (1, sin arg, -2.0 * half * half), each an array op
+void shapes_c(cd k, double xi, cd S[3]) {
+    const cd arg = cm(k, cd(xi, 0.0));
+    const cd half = mw_libm_c::csin(cm(cd(0.5, 0.0), arg));
+    S[0] = cd(1.0, 0.0);
+    S[1] = mw_libm_c::csin(arg);
+    S[2] = cm(cm(cd(-2.0, 0.0), half), half);
+}
+
+// `_pair_moments_two_rules_batch` at a complex k (no extended kernel: a
+// wholly-buried deck fills reduced): as `two_rules_batch`, with the shapes
+// complex (`shapes_c`, scaled `(w len) * S`), `-1j * k` CPython's product,
+// `np.exp` libm's cexp and the quotient by `4 pi R` numpy's.
+void two_rules_batch_c(const Segs &o, std::size_t i0, const Segs &s, const std::vector<int64_t> &gi,
+                       const std::vector<int64_t> &gj, const std::vector<double> &a2, cd k,
+                       const std::vector<double> &ti, const std::vector<double> &wi, const std::vector<double> &tj,
+                       const std::vector<double> &wj, std::vector<cd> &J, std::size_t n_pairs_total,
+                       const std::vector<std::size_t> &cols) {
+    const std::size_t n = gi.size(), qi = ti.size(), qj = tj.size();
+    if (qj > 256 || qi > 256) decline("a near-pair rule wider than the einsum replay is measured for");
+    const std::size_t chunk = qi * qj <= EINSUM_BUFSIZE ? qi : std::max<std::size_t>(1, EINSUM_BUFSIZE / qj);
+    const double four_pi = 4.0 * M_PI;
+    const cd mjk = py_mul(cd(-0.0, -1.0), k);  // `-1j * k`
+    std::vector<cd> ws_i(3 * qi), ws_j(3 * qj), G(qi * qj);
+    std::vector<double> pos_i(3 * qi), pos_j(3 * qj);
+    for (std::size_t m = 0; m < n; m++) {
+        const std::size_t i = i0 + static_cast<std::size_t>(gi[m]), j = static_cast<std::size_t>(gj[m]);
+        const double *li = &o.l[3 * i], *ri = &o.r[3 * i], *lj = &s.l[3 * j], *rj = &s.r[3 * j];
+        const double di[3] = {ri[0] - li[0], ri[1] - li[1], ri[2] - li[2]};
+        const double dj[3] = {rj[0] - lj[0], rj[1] - lj[1], rj[2] - lj[2]};
+        const double len_i = norm3(di), len_j = norm3(dj);
+        auto side = [&](const double *l, const double *r, double len, const std::vector<double> &t,
+                        const std::vector<double> &w, std::vector<double> &pos, std::vector<cd> &ws) {
+            const std::size_t q = t.size();
+            for (std::size_t a = 0; a < q; a++) {
+                const double om = 1.0 - t[a];
+                for (int d = 0; d < 3; d++) pos[3 * a + d] = om * l[d] + t[a] * r[d];
+                const double wl = w[a] * len;
+                const double xi = (t[a] - 0.5) * len;
+                cd S[3];
+                shapes_c(k, xi, S);
+                for (int p = 0; p < 3; p++) ws[static_cast<std::size_t>(p) * q + a] = cm(cd(wl, 0.0), S[p]);
+            }
+        };
+        side(li, ri, len_i, ti, wi, pos_i, ws_i);
+        side(lj, rj, len_j, tj, wj, pos_j, ws_j);
+        for (std::size_t a = 0; a < qi; a++)
+            for (std::size_t b = 0; b < qj; b++) {
+                const double d0 = pos_i[3 * a] - pos_j[3 * b], d1 = pos_i[3 * a + 1] - pos_j[3 * b + 1],
+                             d2 = pos_i[3 * a + 2] - pos_j[3 * b + 2];
+                const double R = std::sqrt(((d0 * d0 + d1 * d1) + d2 * d2) + a2[m]);
+                const cd e = mw_libm_c::cexp(cm(mjk, cd(R, 0.0)));
+                G[a * qj + b] = xdiv(e, cd(four_pi * R, 0.0));
+            }
+        for (int p = 0; p < 3; p++)
+            for (int P = 0; P < 3; P++) {
+                double ar = 0.0, ai = 0.0;
+                for (std::size_t a0 = 0; a0 < qi; a0 += chunk) {
+                    double pr = 0.0, pi = 0.0;
+                    for (std::size_t a = a0; a < std::min(a0 + chunk, qi); a++) {
+                        const cd wa = ws_i[static_cast<std::size_t>(p) * qi + a];
+                        for (std::size_t b = 0; b < qj; b++) {
+                            const cd t =
+                                e_mul(e_mul(wa, G[a * qj + b]), ws_j[static_cast<std::size_t>(P) * qj + b]);
+                            pr = t.real() + pr;
+                            pi = t.imag() + pi;
+                        }
+                    }
+                    ar = pr + ar;
+                    ai = pi + ai;
+                }
+                J[(static_cast<std::size_t>(p) * 3 + static_cast<std::size_t>(P)) * n_pairs_total + cols[m]] = cd(ar, ai);
+            }
+    }
+}
+
 // `near_pair_moments(c_i, t_i, h_i, c_j, t_j, h_j, a2, k, ek=...)` for the
 // window [i0, i1): the pairs and J (3, 3, n_near), C order.
 struct NearBlock {
@@ -492,7 +612,7 @@ struct NearBlock {
     std::vector<cd> J;
 };
 
-NearBlock near_pair_moments(const Segs &o, std::size_t i0, std::size_t i1, const Segs &s, double k, bool ek,
+NearBlock near_pair_moments(const Segs &o, std::size_t i0, std::size_t i1, const Segs &s, cd k, bool cplx, bool ek,
                             bool has_b_src, const std::vector<double> &b_src) {
     NearBlock nb;
     nb.pairs = classify_pairs(o, i0, i1, s);
@@ -538,7 +658,7 @@ NearBlock near_pair_moments(const Segs &o, std::size_t i0, std::size_t i1, const
         const nd::object ob = ek && has_b_src ? nd::object(&bb) : nd::none();
         const nd::array_t<cd> out = bspline::parallel_pair_moments_sinusoidal(
             borrow(ci, {M, 3}), borrow(ti, {M, 3}), borrow(hi, {M}), borrow(cj, {M, 3}), borrow(tj, {M, 3}),
-            borrow(hj, {M}), borrow(a2, {M}), cd(k, 0.0), borrow(gt, {static_cast<nd::ssize_t>(gt.size())}),
+            borrow(hj, {M}), borrow(a2, {M}), k, borrow(gt, {static_cast<nd::ssize_t>(gt.size())}),
             borrow(gw, {static_cast<nd::ssize_t>(gw.size())}), borrow(gx, {static_cast<nd::ssize_t>(gx.size())}),
             borrow(gwx, {static_cast<nd::ssize_t>(gwx.size())}), oa, ob);
         const cd *op = out.data();
@@ -596,7 +716,10 @@ NearBlock near_pair_moments(const Segs &o, std::size_t i0, std::size_t i1, const
             a2.push_back(a2_row[static_cast<std::size_t>(P.ii[q])]);
             if (eb.has_b) eb.b.push_back(b_src[static_cast<std::size_t>(P.jj[q])]);
         }
-        two_rules_batch(o, i0, s, gi, gj, a2, k, ti, wi, tj, wj, eb, nb.J, n, groups[g]);
+        if (cplx)
+            two_rules_batch_c(o, i0, s, gi, gj, a2, k, ti, wi, tj, wj, nb.J, n, groups[g]);
+        else
+            two_rules_batch(o, i0, s, gi, gj, a2, k.real(), ti, wi, tj, wj, eb, nb.J, n, groups[g]);
     }
     return nb;
 }
@@ -639,12 +762,24 @@ Deck deck_of(const Front &fr) {
 // G (F order): the deck's segments `s` as the observers, `src` the sources
 // (the same segments, or their images). `scale` is the block's Python scalar
 // (a float as (x, 0)).
+// The block's walk at the window's own (k, c_a * scale, c_phi * scale), the
+// products as the caller's operand types make them: `cplx` is a complex k (a
+// wholly-buried deck's k_m, momwire#1718 S11a), whose near pairs take the
+// complex product rule.
+void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src, cd k,
+                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src);
+
 void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src,
                  double k, double eta, cd scale, bool ek, bool has_b_src, const std::vector<double> &b_src) {
     const cd c_a = py_mul(py_mul(cd(0.0, 1.0), cd(k, 0.0)), cd(eta, 0.0));  // 1j * k * eta
     const cd c_phi = py_div(cd(eta, 0.0), py_mul(cd(0.0, 1.0), cd(k, 0.0)));  // eta / (1j * k)
     const cd c_a_s = py_mul(c_a, scale);
     const cd c_phi_s = py_mul(c_phi, scale);
+    window_fill_at(G, n_basis, csr, s, src, cd(k, 0.0), false, c_a_s, c_phi_s, ek, has_b_src, b_src);
+}
+
+void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src, cd k,
+                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src) {
     const std::size_t n_obs = s.n, n_src = src.n;
     const int64_t rows = std::max<int64_t>(
         1, WINDOW_BYTES / (N_SHAPES * N_SHAPES * 16 * std::max<int64_t>(static_cast<int64_t>(n_src), 1)));
@@ -696,11 +831,11 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
                 BufferHost host;
                 nd::HostScope scope(host);
                 out = bspline::seg_seg_full_moments_sinusoidal_tiered_ek(
-                    borrow(l, {NR, 3}), borrow(r, {NR, 3}), sl_s, sr_s, a2, k, tt, tw, tn, tr, borrow(gi, {NR}), gj,
+                    borrow(l, {NR, 3}), borrow(r, {NR, 3}), sl_s, sr_s, a2, k.real(), tt, tw, tn, tr, borrow(gi, {NR}), gj,
                     a, has_b_src ? nd::object(&b_buf) : nd::none());
             } else {
                 out = bspline::seg_seg_full_moments_sinusoidal_tiered(borrow(l, {NR, 3}), borrow(r, {NR, 3}), sl_s,
-                                                                      sr_s, a2, cd(k, 0.0), tt, tw, tn, tr, false);
+                                                                      sr_s, a2, k, tt, tw, tn, tr, false);
             }
             // concatenate along axis 2
             const cd *op = out.data();
@@ -712,7 +847,7 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
             r0 = r1;
         }
         // the near pairs overwrite their moments
-        const NearBlock nb = near_pair_moments(s, i0, i1, src, k, ek, has_b_src, b_src);
+        const NearBlock nb = near_pair_moments(s, i0, i1, src, k, cplx, ek, has_b_src, b_src);
         const std::size_t nn = nb.pairs.ii.size();
         for (std::size_t q = 0; q < nn; q++) {
             const std::size_t m = static_cast<std::size_t>(nb.pairs.ii[q]), j = static_cast<std::size_t>(nb.pairs.jj[q]);
@@ -1074,6 +1209,441 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
     }
 }
 
+// --- a wholly-buried deck (momwire#1718 S11a, `_operating_medium`) ----------
+//
+// The whole solve at the lower medium's k_m (a CPython complex) and eta_m =
+// np.sqrt(mu / eps_m) (CPython's quotient, numpy's csqrt), sized by the serve
+// plan's below/below extents (`r1_below`), then `_assemble_Z_mp` at k_m: the
+// free block and the image weighted A_m (`WindowFill` at a complex k), and
+// the below family's remainder (`_mp_remainder_below`) through bspline's
+// field-form route (`_sinusoidal_mp.remainder_Q_field`): the shared below
+// projection (`somm_below::Remainder`, the grid from `somm_below::source()`),
+// `field_pair_moments_sinusoidal`, the windowed assembler, and the pairs the
+// geometry raises above the base order (`remainder_raised_pairs`)
+// re-integrated at their own order minus what the base fill gave them.
+
+// `basis_csr(seg_view, k_m)`: `dshape_coefs` with k a 0-d complex array (an
+// array product, and numpy's negative)
+Csr basis_csr_c(const SegView &v, cd k) {
+    Csr c;
+    c.starts.assign(v.starts.begin(), v.starts.end());
+    c.jbasis.assign(v.jbasis.begin(), v.jbasis.end());
+    const std::size_t nnz = v.jbasis.size();
+    c.coef.resize(3 * nnz);
+    c.dcoef.resize(3 * nnz);
+    const cd mk(-k.real(), -k.imag());
+    for (std::size_t e = 0; e < nnz; e++) {
+        const cd sig(static_cast<double>(v.sigma[e]), 0.0);
+        const cd c0 = cm(sig, v.AC[e]);
+        const cd c1 = v.B[e];
+        const cd c2 = cm(sig, v.C[e]);
+        c.coef[3 * e] = c0;
+        c.coef[3 * e + 1] = c1;
+        c.coef[3 * e + 2] = c2;
+        c.dcoef[3 * e] = cm(k, c1);
+        c.dcoef[3 * e + 1] = cm(mk, c2);
+        c.dcoef[3 * e + 2] = cm(k, c1);
+    }
+    return c;
+}
+
+// `_operating_medium`'s `serve_plan` over the field rule's nodes
+// (`field_nodes`, q = `n_qp_buried_field(3)` = 6) with bspline's
+// `_pair_extents_below`: `r1_below`, or the grazing refusal, which is not
+// worded here (it declines). The inherited plan, the point-matched lane's
+// `serve_plan_below` (`_sinusoidal_fill_core.cpp`) line for line, kept out
+// of that shared TU.
+double serve_plan_below(const Front &fr) {
+    const Geometry &g = fr.geometry;
+    const double gz = 0.0;
+    const ll q = 6;  // max(n_qp_sommerfeld, N_QP_BURIED_FIELD) * near_q_factor(None, None)
+    std::vector<double> xg, wg;
+    leggauss(q, xg, wg);
+    std::vector<double> x, y, d;
+    for (ll i = 0; i < g.n_segs; i++) {
+        const auto &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
+        for (ll j = 0; j < q; j++) {
+            const double tq = 0.5 * (xg[static_cast<std::size_t>(j)] + 1.0);
+            double p[3];
+            for (int c = 0; c < 3; c++)
+                p[c] = l[static_cast<std::size_t>(c)] + tq * (r[static_cast<std::size_t>(c)] - l[static_cast<std::size_t>(c)]);
+            x.push_back(p[0]);
+            y.push_back(p[1]);
+            d.push_back(gz - p[2]);
+        }
+    }
+    // `_pair_extents_below_all`: the upper triangle, diagonal included
+    double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
+    const std::size_t n = x.size();
+    for (std::size_t i = 0; i < n; i++)
+        for (std::size_t j = i; j < n; j++) {
+            const double dx = x[i] - x[j], dy = y[i] - y[j];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = d[i] + d[j];
+            const double hh2 = hh * hh;
+            const double r1sq = rho2 + hh2;
+            if (r1sq > r1sq_max) r1sq_max = r1sq;
+            const double qq = hh2 / rho2;
+            if (qq < q_min) q_min = qq;
+        }
+    const double r1_max = std::sqrt(r1sq_max), th_min = std::atan(std::sqrt(q_min));
+    const double lam_m = (2.0 * M_PI) / std::hypot(fr.medium.k_m.real(), fr.medium.k_m.imag());
+    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);  // `plan_r1_cap(below_r1_cap(k_m))`
+    const double floor_deg = 0.05 - 2.0 * (0.05 / 3.0);  // _SOMM_BELOW_TH_MIN_DEG
+    const double floor = floor_deg * (M_PI / 180.0);     // math.radians
+    if (th_min < floor) {
+        // past the cap Python asks the floor of the pairs inside it only
+        if (r1_max > r1_cap) decline("a grazing below/below pair past the cap (the capped walk is not copied)");
+        decline("a below/below pair under the grazing floor (the refusal's wording is not copied)");
+    }
+    return r1_max;
+}
+
+// A ValueError the below remainder raises (the solve's), in its words.
+struct SgBelowRefusal {
+    [[noreturn]] static void value(const std::string &m) { throw SolverRefusal("ValueError", m); }
+};
+using BelowRemainder = somm_below::Remainder<SgBelowRefusal>;
+
+// `_below_interface.field_nodes(seg_l, seg_r, tangents, h, q)` over the
+// segments `idx` of `s` (its `segment_ends`): the nodes (n q, 3), their
+// tangents, and `u_phys` / `w_node` (n, q)
+struct FieldNodes {
+    std::size_t n = 0, q = 0;
+    std::vector<double> nodes, t, u, w;
+};
+FieldNodes field_nodes(const Segs &s, const std::vector<int64_t> &idx, int64_t q) {
+    std::vector<double> xg, wg;
+    leggauss(q, xg, wg);
+    FieldNodes f;
+    f.n = idx.size();
+    f.q = static_cast<std::size_t>(q);
+    f.nodes.resize(3 * f.n * f.q);
+    f.t.resize(3 * f.n * f.q);
+    f.u.resize(f.n * f.q);
+    f.w.resize(f.n * f.q);
+    for (std::size_t i = 0; i < f.n; i++) {
+        const std::size_t si = static_cast<std::size_t>(idx[i]);
+        const double h = s.h[si];
+        for (std::size_t a = 0; a < f.q; a++) {
+            const double tq = 0.5 * (xg[a] + 1.0);
+            const std::size_t o = i * f.q + a;
+            for (int c = 0; c < 3; c++) {
+                f.nodes[3 * o + c] = s.l[3 * si + c] + tq * (s.r[3 * si + c] - s.l[3 * si + c]);
+                f.t[3 * o + c] = s.t[3 * si + c];
+            }
+            f.u[o] = h * tq;
+            f.w[o] = (0.5 * h) * wg[a];
+        }
+    }
+    return f;
+}
+
+// `w_node[None] * shape_values(k, u_phys - 0.5 * h[:, None])`: (3, n, q)
+std::vector<cd> shape_weights_c(cd k, const Segs &s, const std::vector<int64_t> &idx, const FieldNodes &f) {
+    std::vector<cd> W(3 * f.n * f.q);
+    for (std::size_t i = 0; i < f.n; i++) {
+        const double hh = 0.5 * s.h[static_cast<std::size_t>(idx[i])];
+        for (std::size_t a = 0; a < f.q; a++) {
+            const std::size_t o = i * f.q + a;
+            cd S[3];
+            shapes_c(k, f.u[o] - hh, S);
+            for (std::size_t p = 0; p < 3; p++) W[(p * f.n + i) * f.q + a] = cm(cd(f.w[o], 0.0), S[p]);
+        }
+    }
+    return W;
+}
+
+// The below family's projection with the nodes `f` as its sources:
+// `remainder_field_proj_below(obs, t_obs, src, t_src, gz, k_p, k_m, grid)`
+void below_remainder_for(BelowRemainder &rem, const sinusoidal::Medium &md, somm_below::Grid *grid,
+                         const FieldNodes &f) {
+    rem.gz = 0.0;
+    rem.k_p = md.k_p;
+    rem.k_m = md.k_m;
+    rem.grid = grid;
+    rem.src = f.nodes;
+    rem.t_src = f.t;
+    rem.d_src.resize(f.n * f.q);
+    for (std::size_t j = 0; j < rem.d_src.size(); j++) rem.d_src[j] = rem.gz - rem.src[3 * j + 2];
+    rem.build_view();
+}
+
+// `field_pair_moments(F, W_obs, W_src)`: (3, 3, n_obs, n_src) C order
+std::vector<cd> field_moments(const std::vector<cd> &F, const std::vector<cd> &Wo, std::size_t n_obs,
+                              const std::vector<cd> &Ws, std::size_t n_src, std::size_t q) {
+    const nd::ssize_t M = static_cast<nd::ssize_t>(n_obs * q), S = static_cast<nd::ssize_t>(n_src * q);
+    const nd::array_t<cd> J = bspline::field_pair_moments_sinusoidal(
+        borrow(F, {M, S}), borrow(Wo, {3, static_cast<nd::ssize_t>(n_obs), static_cast<nd::ssize_t>(q)}),
+        borrow(Ws, {3, static_cast<nd::ssize_t>(n_src), static_cast<nd::ssize_t>(q)}));
+    if (static_cast<std::size_t>(J.size()) != 9 * n_obs * n_src) throw std::logic_error("field moments: shape");
+    return std::vector<cd>(J.data(), J.data() + J.size());
+}
+
+// `scatter_pair_moments(G, starts, jbasis, coef, I, J, dJ, scale=1.0)`: each
+// listed pair's `einsum("ep,epP,eP->e")` (p outer, P inner, from zero),
+// `scale * val`, `np.add.at` in list order; G F order
+void scatter_pair_moments(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const std::vector<int64_t> &I,
+                          const std::vector<int64_t> &J, const std::vector<cd> &dJ) {
+    for (std::size_t t = 0; t < I.size(); t++) {
+        const int64_t a0 = csr.starts[static_cast<std::size_t>(I[t])], a1 = csr.starts[static_cast<std::size_t>(I[t]) + 1];
+        const int64_t b0 = csr.starts[static_cast<std::size_t>(J[t])], b1 = csr.starts[static_cast<std::size_t>(J[t]) + 1];
+        for (int64_t ei = a0; ei < a1; ei++)
+            for (int64_t ej = b0; ej < b1; ej++) {
+                double ar = 0.0, ai = 0.0;
+                for (int p = 0; p < 3; p++)
+                    for (int P = 0; P < 3; P++) {
+                        const cd v = e_mul(e_mul(csr.coef[3 * static_cast<std::size_t>(ei) + static_cast<std::size_t>(p)],
+                                                 dJ[t * 9 + static_cast<std::size_t>(p) * 3 + static_cast<std::size_t>(P)]),
+                                           csr.coef[3 * static_cast<std::size_t>(ej) + static_cast<std::size_t>(P)]);
+                        ar = v.real() + ar;
+                        ai = v.imag() + ai;
+                    }
+                const cd val = cm(cd(1.0, 0.0), cd(ar, ai));
+                cd &gij = G[static_cast<std::size_t>(csr.jbasis[static_cast<std::size_t>(ei)]) +
+                            static_cast<std::size_t>(csr.jbasis[static_cast<std::size_t>(ej)]) * n_basis];
+                gij = cadd(gij, val);
+            }
+    }
+}
+
+// `_mp_remainder_below(G, geom, seg_view, ctx, fg, keep=all, medium, r1_below)`:
+// `remainder_Q_field(G, ..., segs=all, k_m, n_qp_sommerfeld=3, proj, gz=0,
+// scale=REMAINDER_SIGN)`, G F order
+void mp_remainder_below(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s,
+                        const sinusoidal::Medium &md, double r1_below, double omega, const nec5::NumpyLinalg &np) {
+    const std::size_t N = s.n;
+    const int64_t q = 3;  // n_qp_sommerfeld
+    const std::size_t Q = static_cast<std::size_t>(q);
+    const cd k = md.k_m;
+    somm_below::Source *source = somm_below::source();
+    if (source == nullptr) decline("no below/below table source (the buried fill's grid)");
+    somm_below::Grid *grid = &source->get(md.eps_t, md.k_p, r1_below, omega, SOLVER_MU, somm_below::SPACING_FILL);
+    std::vector<int64_t> segs(N);
+    for (std::size_t i = 0; i < N; i++) segs[i] = static_cast<int64_t>(i);
+    const FieldNodes f = field_nodes(s, segs, q);
+    const std::vector<cd> W = shape_weights_c(k, s, segs, f);
+    BelowRemainder rem;
+    below_remainder_for(rem, md, grid, f);
+    // the assembler's tables: unit tangents (F carries the projection), no
+    // derivative coefficients
+    std::vector<double> unit(3 * N, 0.0);
+    for (std::size_t i = 0; i < N; i++) unit[3 * i] = 1.0;
+    const std::vector<cd> zero_d(csr.dcoef.size(), cd(0.0, 0.0));
+    const nd::ssize_t NS = static_cast<nd::ssize_t>(N), nnz = static_cast<nd::ssize_t>(csr.jbasis.size());
+    const CI st = borrow(csr.starts, {static_cast<nd::ssize_t>(csr.starts.size())}), jb = borrow(csr.jbasis, {nnz});
+    const CC cf = borrow(csr.coef, {nnz, 3}), dz = borrow(zero_d, {nnz, 3});
+    const CI cols = borrow(segs, {NS});
+    const CF tc = borrow(unit, {NS, 3});
+    nd::Buffer zb;
+    zb.ptr = G.data();
+    zb.ndim = 2;
+    zb.shape[0] = zb.shape[1] = static_cast<nd::ssize_t>(n_basis);
+    zb.strides[0] = sizeof(cd);
+    zb.strides[1] = static_cast<nd::ssize_t>(sizeof(cd) * n_basis);
+    zb.writeable = true;
+    const nd::array_t<cd> Z = nd::array_t<cd>::borrow(zb);
+    const std::size_t chunk = std::max<std::size_t>(1, (std::size_t(1) << 19) / std::max<std::size_t>(N * Q * Q, 1));
+    for (std::size_t i0 = 0; i0 < N; i0 += chunk) {
+        const std::size_t i1 = std::min(i0 + chunk, N), m = (i1 - i0) * Q;
+        std::vector<cd> proj(m * N * Q);
+        rem.project(&f.nodes[3 * i0 * Q], &f.t[3 * i0 * Q], static_cast<std::ptrdiff_t>(m), proj.data());
+        std::vector<cd> Wo(3 * (i1 - i0) * Q);
+        for (std::size_t p = 0; p < 3; p++)
+            std::copy(W.begin() + static_cast<std::ptrdiff_t>((p * N + i0) * Q),
+                      W.begin() + static_cast<std::ptrdiff_t>((p * N + i1) * Q),
+                      Wo.begin() + static_cast<std::ptrdiff_t>(p * (i1 - i0) * Q));
+        const std::vector<cd> J = field_moments(proj, Wo, i1 - i0, W, N, Q);
+        const nd::ssize_t NW = static_cast<nd::ssize_t>(i1 - i0);
+        std::vector<int64_t> rows(segs.begin() + static_cast<std::ptrdiff_t>(i0), segs.begin() + static_cast<std::ptrdiff_t>(i1));
+        std::vector<double> t_rows(unit.begin() + static_cast<std::ptrdiff_t>(3 * i0),
+                                   unit.begin() + static_cast<std::ptrdiff_t>(3 * i1));
+        bspline::assemble_Z_sinusoidal_windowed(borrow(J, {3, 3, NW, NS}), borrow(rows, {NW}), cols, st, jb, cf, dz,
+                                                borrow(t_rows, {NW, 3}), tc, cd(1.0, 0.0), cd(0.0, 0.0), nd::none(),
+                                                nd::none(), Z, 0);
+    }
+    // the pairs the geometry raises (`remainder_raised_pairs`), each at its
+    // own order minus the base fill's
+    std::vector<int64_t> I, Jl, Qp;
+    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), 0.0, q, 1.0, 0.0, np, I, Jl, Qp);
+    if (I.empty()) return;
+    const std::size_t n = I.size();
+    std::vector<cd> dJ(9 * n, cd(0.0, 0.0));
+    auto moments = [&](const std::vector<int64_t> &obs, const std::vector<int64_t> &src, int64_t qq) {
+        const FieldNodes fo = field_nodes(s, obs, qq), fs = field_nodes(s, src, qq);
+        const std::vector<cd> Wo = shape_weights_c(k, s, obs, fo), Ws = shape_weights_c(k, s, src, fs);
+        BelowRemainder r2;
+        below_remainder_for(r2, md, grid, fs);
+        std::vector<cd> F(fo.n * fo.q * fs.n * fs.q);
+        r2.project(fo.nodes.data(), fo.t.data(), static_cast<std::ptrdiff_t>(fo.n * fo.q), F.data());
+        return field_moments(F, Wo, fo.n, Ws, fs.n, static_cast<std::size_t>(qq));
+    };
+    std::vector<int64_t> orders(Qp);
+    std::sort(orders.begin(), orders.end());
+    orders.erase(std::unique(orders.begin(), orders.end()), orders.end());
+    for (int64_t qq : orders) {
+        std::vector<std::size_t> sel;
+        for (std::size_t t = 0; t < n; t++)
+            if (Qp[t] == qq) sel.push_back(t);
+        std::vector<int64_t> uI, uJ;
+        for (std::size_t t : sel) {
+            uI.push_back(I[t]);
+            uJ.push_back(Jl[t]);
+        }
+        std::sort(uI.begin(), uI.end());
+        uI.erase(std::unique(uI.begin(), uI.end()), uI.end());
+        std::sort(uJ.begin(), uJ.end());
+        uJ.erase(std::unique(uJ.begin(), uJ.end()), uJ.end());
+        const std::vector<cd> hi = moments(uI, uJ, qq), lo = moments(uI, uJ, q);
+        const std::size_t nI = uI.size(), nJ = uJ.size();
+        for (std::size_t t : sel) {
+            const std::size_t a = static_cast<std::size_t>(std::lower_bound(uI.begin(), uI.end(), I[t]) - uI.begin());
+            const std::size_t b = static_cast<std::size_t>(std::lower_bound(uJ.begin(), uJ.end(), Jl[t]) - uJ.begin());
+            for (std::size_t pq = 0; pq < 9; pq++) {
+                const std::size_t at = (pq * nI + a) * nJ + b;
+                dJ[t * 9 + pq] = csub(hi[at], lo[at]);
+            }
+        }
+    }
+    scatter_pair_moments(G, n_basis, csr, I, Jl, dJ);
+}
+
+// numpy's complex absolute (`simd_cabsolute`): larger * sqrt(fma(r, r, 1)),
+// r = smaller / larger (the point-matched lane's `np_cabs`)
+double np_cabs(cd z) {
+    const double re = std::fabs(z.real()), im = std::fabs(z.imag());
+    if (std::isnan(re) || std::isnan(im)) return std::numeric_limits<double>::quiet_NaN();
+    if (std::isinf(re) || std::isinf(im)) return std::numeric_limits<double>::infinity();
+    const double larger = std::max(re, im), smaller = std::min(im, re);
+    if (larger == 0.0) return larger;
+    const double r = smaller / larger;
+    return std::sqrt(mw_fma::exact(r, r, 1.0)) * larger;
+}
+
+inline cd rsub(double x, cd b) { return cd(x - b.real(), 0.0 - b.imag()); }  // float - complex array
+inline cd xdivr(cd a, double x) { return xdiv(a, cd(x, 0.0)); }               // complex array / float
+
+// `_sin_minus_arg(u)` at one complex element: the series and the literal
+// difference both evaluated, `np.where(np.abs(u) < 0.1, ...)`
+cd sin_minus_arg_c(cd u) {
+    const cd u2 = cm(u, u);
+    const cd inner = rsub(1.0, cm(xdivr(u2, 72.0), rsub(1.0, xdivr(u2, 110.0))));
+    const cd mid = rsub(1.0, cm(xdivr(u2, 42.0), inner));
+    const cd bracket = rsub(1.0, cm(xdivr(u2, 20.0), mid));
+    const cd series = cm(xdivr(cneg(cm(u, u2)), 6.0), bracket);
+    return np_cabs(u) < 0.1 ? series : csub(mw_libm_c::csin(u), u);
+}
+
+// `_loading_integrals(k, h)` at a CPython complex k, one segment: (i_g,
+// i_ss, i_gg), numpy's elementwise order
+void loading_integrals_c(cd k, double h, cd &i_g, cd &i_ss, cd &i_gg) {
+    const cd x = cm(cm(cd(0.5, 0.0), k), cd(h, 0.0));  // 0.5 * np.asarray(k) * np.asarray(h)
+    const cd s1 = sin_minus_arg_c(x);
+    const cd s2 = sin_minus_arg_c(cm(cd(2.0, 0.0), x));
+    i_g = cm(py_div(cd(2.0, 0.0), k), s1);           // (2.0 / k) * s1
+    i_ss = xdiv(cneg(s2), py_mul(cd(2.0, 0.0), k));  // -s2 / (2.0 * k)
+    const cd x2 = cm(x, x);
+    static const double fact[16] = {1.0, 1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0, 362880.0,
+                                    3628800.0, 39916800.0, 479001600.0, 6227020800.0, 87178291200.0,
+                                    1307674368000.0};
+    cd series(0.0, 0.0);
+    bool first = true;
+    for (int m = 7; m > 1; m--) {
+        const double sign = m % 2 == 0 ? 1.0 : -1.0;
+        const double coef = sign * (std::pow(4.0, static_cast<double>(m)) - 4.0) / fact[2 * m + 1];
+        // `series * x2 + coef`: the float 0.0 first, an array after
+        const cd prod = first ? cm(cd(0.0, 0.0), x2) : cm(series, x2);
+        series = cd(prod.real() + coef, prod.imag() + 0.0);
+        first = false;
+    }
+    series = cm(cm(cm(series, x2), x2), x);
+    const cd lit = csub(cm(cd(0.5, 0.0), s2), cm(cd(4.0, 0.0), s1));
+    i_gg = xdiv(np_cabs(x) < 0.25 ? series : lit, k);
+}
+
+// `_apply_loading(G, geom, seg_view, k_m)` inside `_operating_medium` (no
+// `k_entry` on the fill's view): the overlap's shapes at k_m, the series
+// impedance read at the solve's real omega (`medium.k_p * c`)
+void apply_loading_c(std::vector<cd> &G, std::size_t n_basis, const Front &fr, cd k, const std::vector<cd> &z_wire) {
+    const Geometry &g = fr.geometry;
+    const SegView &v = fr.basis;
+    std::vector<cd> z_seg(static_cast<std::size_t>(g.n_segs));
+    for (std::size_t w = 0; w < g.wire_first.size(); w++)
+        for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) z_seg[static_cast<std::size_t>(i)] = z_wire.at(w);
+    const std::size_t nnz = v.jbasis.size();
+    std::vector<cd> U(nnz), R(nnz);
+    for (std::size_t e = 0; e < nnz; e++) {
+        const cd sg(static_cast<double>(v.sigma[e]), 0.0);
+        U[e] = cm(sg, v.AC[e]);
+        R[e] = cm(sg, v.C[e]);
+    }
+    for (std::size_t m = 0; m < static_cast<std::size_t>(g.n_segs); m++) {
+        const double h = g.seg_h[m];
+        cd i_g, i_ss, i_gg;
+        loading_integrals_c(k, h, i_g, i_ss, i_gg);
+        for (ll e = v.starts[m]; e < v.starts[m + 1]; e++)
+            for (ll f = v.starts[m]; f < v.starts[m + 1]; f++) {
+                const std::size_t a = static_cast<std::size_t>(e), b = static_cast<std::size_t>(f);
+                const cd t1 = cr(cm(U[a], U[b]), h);
+                const cd t2 = cm(cadd(cm(U[a], R[b]), cm(R[a], U[b])), i_g);
+                const cd t3 = cm(cm(v.B[a], v.B[b]), i_ss);
+                const cd t4 = cm(cm(R[a], R[b]), i_gg);
+                const cd val = cm(cadd(cadd(cadd(t1, t2), t3), t4), z_seg[m]);
+                cd &slot = G[static_cast<std::size_t>(v.jbasis[a]) +
+                             static_cast<std::size_t>(v.jbasis[b]) * n_basis];
+                slot = csub(slot, val);
+            }
+    }
+}
+
+// `_assemble_Z_mp(geom, k_m, eta_m)` inside `_operating_medium`: G F order
+std::vector<cd> assemble_Z_buried(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg *np) {
+    // the dialects build the reduced kernel when every wire is below (the
+    // buried partial's full fallback); a solver that still asks for the
+    // extended kernel takes `_advise_ek_above`'s advisory, not copied here
+    if (args.extended_kernel) decline("the extended kernel on a wholly-buried deck (its advisory is not copied)");
+    if (np == nullptr) decline("no numpy products for the below remainder's pair scan");
+    const sinusoidal::Medium &md = fr.medium;
+    const double r1_below = serve_plan_below(fr);
+    const cd k = md.k_m;
+    const cd eta = mw_libm_c::csqrt(py_div(cd(SOLVER_MU, 0.0), md.eps_m));  // np.sqrt(self.mu / medium.eps_m)
+    const Csr csr = basis_csr_c(fr.basis, k);
+    const Deck d = deck_of(fr);
+    const std::size_t N = d.segs.n, n_basis = N;
+    std::vector<cd> G(n_basis * n_basis, cd(0.0, 0.0));
+    // `WindowFill`'s c_a = 1j * k * eta (CPython's 1j * k, then numpy's
+    // scalar product) and c_phi = eta / (1j * k) (numpy's scalar quotient);
+    // each block's `complex(c * scale)` numpy's scalar product
+    const cd jk = py_mul(cd(0.0, 1.0), k);
+    const cd c_a = smul(jk, eta), c_phi = xdiv(eta, jk);
+    const std::vector<double> none_b;
+    window_fill_at(G, n_basis, csr, d.segs, d.segs, k, true, smul(c_a, cd(DIRECT_SIGN, 0.0)),
+                   smul(c_phi, cd(DIRECT_SIGN, 0.0)), false, false, none_b);
+    // the image, `fg.image_sources()` (mirrored in z = 0), scale
+    // `-DIRECT_SIGN * fg.image_coefficient` = 1.0 * A_m (CPython's product)
+    Segs img;
+    img.n = N;
+    img.c = d.segs.c;
+    img.t = d.segs.t;
+    img.h = d.segs.h;
+    img.a = d.segs.a;
+    for (std::size_t i = 0; i < N; i++) {
+        img.c[3 * i + 2] = 2.0 * 0.0 - d.segs.c[3 * i + 2];
+        img.t[3 * i] = d.segs.t[3 * i] * 1.0;
+        img.t[3 * i + 1] = d.segs.t[3 * i + 1] * 1.0;
+        img.t[3 * i + 2] = d.segs.t[3 * i + 2] * -1.0;
+    }
+    segment_ends(img);
+    const cd scale = py_mul(cd(-DIRECT_SIGN, 0.0), md.a_m);
+    window_fill_at(G, n_basis, csr, d.segs, img, k, true, smul(c_a, scale), smul(c_phi, scale), false, false, none_b);
+    mp_remainder_below(G, n_basis, csr, d.segs, md, r1_below, fr.omega, *np);
+    // `_apply_loading(G, geom, seg_view, k_m)`: the overlap's integrals at the
+    // complex k are not copied yet
+    std::vector<cd> z_wire;
+    if (sinusoidal::wire_impedance_per_wire(fr, args, md.k_p * fr.c, z_wire)) apply_loading_c(G, n_basis, fr, k, z_wire);
+    return G;
+}
+
 // `_basis_value(sigAC, B, sigC, k, xi)` at one entry
 cd basis_value(cd sigAC, cd B, cd sigC, double k, double xi) {
     const double half = std::sin(0.5 * k * xi);
@@ -1081,6 +1651,49 @@ cd basis_value(cd sigAC, cd B, cd sigC, double k, double xi) {
     const cd t1 = cr(B, s);
     const cd t2 = cr(rc(2.0, sigC), half * half);
     return csub(cadd(sigAC, t1), t2);
+}
+
+// `_basis_value(sigAC, B, sigC, k, xi)` at a CPython complex k (a wholly-
+// buried deck's k_m) and a float xi: `0.5 * k * xi` and `k * xi` CPython's
+// products, `np.sin` libm's csin into numpy scalars, `half * half` numpy's
+// scalar product, the rest array products
+cd basis_value_c(cd sigAC, cd B, cd sigC, cd k, double xi) {
+    const cd half = mw_libm_c::csin(py_mul(py_mul(cd(0.5, 0.0), k), cd(xi, 0.0)));
+    const cd s = mw_libm_c::csin(py_mul(k, cd(xi, 0.0)));
+    const cd t1 = cm(B, s);
+    const cd t2 = cm(cm(cd(2.0, 0.0), sigC), smul(half, half));
+    return csub(cadd(sigAC, t1), t2);
+}
+
+// CPython 3.12's `cmath.sin(z)` at a finite z of moderate size:
+// `-1j * sinh(1j * z)`, its sinh `(cos y sinh x, sin y cosh x)` at x + jy =
+// -Im z + j Re z (`cmath_sinh_impl` past its special values)
+cd cmath_sin(cd z) {
+    const double x = -z.imag(), y = z.real();
+    if (!std::isfinite(x) || !std::isfinite(y) || std::fabs(x) > 708.0)
+        decline("cmath.sin past its ordinary branch");
+    const double r_re = std::cos(y) * std::sinh(x), r_im = std::sin(y) * std::cosh(x);
+    return cd(r_im, -r_re);
+}
+
+// `_feed_segment_current(alpha, seg_view, feed_seg, xi)` at a CPython complex
+// k off the segment centre (a wholly-buried deck's k_m): `cmath.sin` of
+// CPython's products, then numpy's array arithmetic and sum
+cd feed_segment_current_c(const SegView &v, const std::vector<cd> &alpha, std::size_t off, ll fi, cd k, double xi) {
+    const std::size_t f = static_cast<std::size_t>(fi);
+    const cd half = cmath_sin(py_mul(py_mul(cd(0.5, 0.0), k), cd(xi, 0.0)));
+    const cd s = cmath_sin(py_mul(k, cd(xi, 0.0)));
+    std::vector<cd> terms;
+    for (ll e = v.starts[f]; e < v.starts[f + 1]; e++) {
+        const std::size_t ez = static_cast<std::size_t>(e);
+        const cd amp = alpha[off + static_cast<std::size_t>(v.jbasis[ez])];
+        const double sg = static_cast<double>(v.sigma[ez]);
+        // sig*AC + B*sin(k xi) - 2.0*sig*C*half*half
+        const cd a1 = cadd(cm(cd(sg, 0.0), v.AC[ez]), cm(v.B[ez], s));
+        const cd a2 = cm(cm(rc(2.0 * sg, v.C[ez]), half), half);
+        terms.push_back(cm(amp, csub(a1, a2)));
+    }
+    return rp::np_csum(terms);
 }
 
 // `_feed_segment_current(alpha, seg_view, feed_seg, xi)` for a real k
@@ -1129,6 +1742,13 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
     // a wire end on the ground plane: the direct-field fill (S7), then the
     // same `_apply_loading`
+    // a wholly-buried deck (momwire#1718 S11a): the mixed-potential fill in
+    // the lower medium; a mixed or crossing deck declines in the front
+    if (fr.crossing) decline("a crossing junction (momwire#1718 S11b)");
+    if (fr.buried) {
+        if (direct_route(fr, args)) decline("a wire end on the plane beside a buried wire");
+        return assemble_Z_buried(fr, args, np);
+    }
     if (direct_route(fr, args)) {
         std::vector<cd> G = assemble_Z_direct(fr, args, np);
         std::vector<cd> z_wire;
@@ -1297,7 +1917,9 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
             for (ll e = v.starts[static_cast<std::size_t>(m)]; e < v.starts[static_cast<std::size_t>(m) + 1]; e++) {
                 const std::size_t ez = static_cast<std::size_t>(e);
                 const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
-                const cd val = basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, half * sgn);
+                // at k_m on a wholly-buried deck (`_entry_k` of the fill's view)
+                const cd val = fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, half * sgn)
+                                         : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, half * sgn);
                 cd &slot = cut[static_cast<std::size_t>(v.jbasis[ez])];
                 slot = cadd(slot, cm(cd(sgn, 0.0), val));
             }
@@ -1310,7 +1932,9 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         for (ll e = v.starts[f]; e < v.starts[f + 1]; e++) {
             const std::size_t ez = static_cast<std::size_t>(e);
             const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
-            const cd col = cneg(basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, xi));
+            // at k_m on a wholly-buried deck (`_operating_medium`'s self.k)
+            const cd col = cneg(fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, xi)
+                                          : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, xi));
             cd &slot = U[static_cast<std::size_t>(v.jbasis[ez]) * P + j];
             slot = cadd(slot, col);
         }
@@ -1349,7 +1973,11 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
     for (std::size_t j = 0; j < P; j++)
         for (std::size_t i = 0; i < P; i++) {
             if (i < NF) {
-                ps.y[i * P + j] = feed_segment_current(v, ps.coeffs, j * N, g.feed_segs[i], k, g.feed_xi[i]);
+                ps.y[i * P + j] =
+                    fr.buried && g.feed_xi[i] != 0.0
+                        // off the centre at k_m: `cmath.sin` (the readout's #980 branch)
+                        ? feed_segment_current_c(v, ps.coeffs, j * N, g.feed_segs[i], fr.medium.k_m, g.feed_xi[i])
+                        : feed_segment_current(v, ps.coeffs, j * N, g.feed_segs[i], k, g.feed_xi[i]);
             } else {
                 cd dot(0.0, 0.0);
                 la.np.zdotu_sub(static_cast<nec5::np_int>(N), &U[i], static_cast<nec5::np_int>(P),
