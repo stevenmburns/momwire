@@ -1977,7 +1977,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     # Not vacuous: results, refusals and the INTERNAL ERROR frame all print.
     assert counts.get("served", 0) >= 80 and counts.get("refused", 0) >= 100, counts
-    assert counts.get("raised|frame", 0) >= 3, counts
+    # two decks that once raised now refuse on the GW card (non-finite
+    # field, too many segments: `deck._cards.gw_field_refusal`)
+    assert counts.get("raised|frame", 0) >= 2, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
         "front:bspline-buried-two-radius-spread",
