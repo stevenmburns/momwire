@@ -732,22 +732,7 @@ void check_constructor(const Front &fr, const nec4::SolverArgs &args) {
             std::vector<double> radii;
             for (const auto &m : jw) radii.push_back(fr.radius_per_wire.at(static_cast<std::size_t>(m.first)));
             if (std::any_of(radii.begin(), radii.end(), [&](double r) { return r != radii[0]; }))
-                throw SolverRefusal(
-                    "NotImplementedError",
-                    "extended_kernel=True with a radius step at a junction is not implemented on "
-                    "SinusoidalGalerkinSolver: measured DIVERGENT, not merely inaccurate. On momwire#435's "
-                    "two-wire step deck (10:1 radius step at the midspan junction, 10.19 m dipole @ 14.2 MHz) "
-                    "the extrapolated continuum limit is 7.110 - 483.925j against NEC-5's 132.560 - 11.921j, "
-                    "with the residual GROWING every rung refined (23.2 Ohm -> 285.8 Ohm) and a 286 Ohm dX "
-                    "spread down the ladder \xe2\x80\x94 materially worse than the reduced `sg` row's ~20 Ohm "
-                    "walk-away #435 already documents (that is a formulation gap; this is a divergence). The "
-                    "mechanism is under the mixed end-condition constants the extended delta's end bracket "
-                    "takes at a stepped node \xe2\x80\x94 the same node kind momwire#299 gates for the "
-                    "UNIFORM-radius case, not yet derived here for a step. Use `extended_kernel=False` (the "
-                    "reduced `sg` row, correctly documented as NEC-2-identified rather than NEC-5-accurate on "
-                    "any radius step), or `BSplineSolver(extended_kernel=True)` / "
-                    "`SinusoidalSolver(extended_kernel=True)`, both of which are served on a step "
-                    "(taper-readiness study Sec 2-3, maintainer decision D2, stevenmburns/momwire#398)");
+                throw SolverRefusal("NotImplementedError", nec4::kSgEkSteppedJunction);
         }
     }
 }

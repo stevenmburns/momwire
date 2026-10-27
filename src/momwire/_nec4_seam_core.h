@@ -104,7 +104,8 @@ struct Seam {
 };
 
 // `_nec4.render(text, basis=...)` up to the solve. `basis` must be one this
-// copy serves ("sinusoidal", "bspline"); any other name is Declined.
+// copy serves ("sinusoidal", "bspline", "sinusoidal-galerkin"); any other
+// name is Declined.
 Seam seam(const std::string &latin1_text, const std::string &basis);
 
 // The comparison format (`scripts/core_split/nec4_seam_compare.py`).

@@ -66,7 +66,7 @@ FIXTURE_DECKS = [
 ]
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bspline", "sinusoidal-galerkin"])
 def test_every_fixture_deck_builds_the_same(basis, acc):
     counts, mismatches = nc.compare(FIXTURE_DECKS, basis)
     assert not mismatches, mismatches[:3]
@@ -230,7 +230,7 @@ def _python_lands(text: str, basis: str) -> str:
     return kind
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bspline", "sinusoidal-galerkin"])
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
 def test_a_hand_written_deck_builds_the_same(name, text, expect, basis, acc):
     lands = _python_lands(text, basis)

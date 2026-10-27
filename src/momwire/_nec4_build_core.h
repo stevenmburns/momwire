@@ -45,6 +45,12 @@ struct SolverFeed {  // (polyline, arclength, volts)
 };
 
 // The keyword arguments `construct_solver` hands the solver class, in order.
+// The Sinusoidal-Galerkin row's declared refusal of the extended kernel at a
+// radius-step junction (`_EK_STEPPED_RADIUS_JUNCTION_REFUSAL`): the dialect
+// default falls back on it (momwire#1718 S3), and the constructor raises it
+// when the kernel is asked for.
+extern const char *const kSgEkSteppedJunction;
+
 struct SolverArgs {
     std::vector<std::vector<Point3>> wires;              // wires=
     std::vector<std::vector<long long>> n_per_edge;      // n_per_edge_per_wire=
@@ -105,6 +111,9 @@ struct OperatingPoint {
     double wavelength = 0;
     long long group = -1;  // -1: None
     bool extended_kernel = false;  // what the solver was built with
+    // what the run asked for (`solver.at(freq, extended_kernel=...)`'s key):
+    // the dialect default's fallback can build without it (momwire#1718 S3)
+    bool extended_kernel_asked = false;
     std::vector<std::string> advisories;
     std::vector<double> signs;
 };

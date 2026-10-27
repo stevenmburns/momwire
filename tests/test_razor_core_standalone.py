@@ -82,6 +82,9 @@ CORE_SOURCES = (
     # (momwire#1607 B4a), linked into `nec4_sinusoidal_printout_driver.cpp`.
     "_nec4_run_core.cpp",
     "_sinusoidal_run_core.cpp",
+    # The Sinusoidal-Galerkin basis' answers to the same run half
+    # (momwire#1718 S3).
+    "_sinusoidal_galerkin_run_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -235,6 +238,7 @@ def driver(accel, tmp_path_factory):
         "sinusoidal_fill_driver",
         "sinusoidal_galerkin_fill_driver",
         "nec4_sinusoidal_printout_driver",
+        "nec4_sinusoidal_galerkin_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, cmds = {}, [], []
@@ -577,10 +581,26 @@ def test_the_nec42_sinusoidal_printout_in_cxx_alone_is_pythons(driver):
     assert _nec42_sinusoidal_printouts(driver, decks) >= 30
 
 
-def _nec42_sinusoidal_printouts(driver, decks) -> int:
-    """How many of `decks` `nec4_sinusoidal_printout_driver` prints, each
-    checked against `_nec4.render(text, basis="sinusoidal")` byte for byte but
-    for the two measured-time lines."""
+@pytest.mark.slow  # every NEC-4.2 fixture, printed by both copies
+def test_the_nec42_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(driver):
+    """momwire#1718 S3: deck text to the NEC-4.2 slot's printout for the
+    Sinusoidal-Galerkin basis, built from the core TUs alone
+    (`nec4_sinusoidal_galerkin_printout_driver`), is `_nec4.render(text,
+    basis="sinusoidal-galerkin")`'s on every NEC-4.2 fixture deck it prints,
+    byte for byte but for the two measured-time lines."""
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    assert _nec42_sinusoidal_printouts(driver, decks, "sinusoidal-galerkin") >= 80
+
+
+def _nec42_sinusoidal_printouts(driver, decks, basis="sinusoidal") -> int:
+    """How many of `decks` `nec4_sinusoidal_printout_driver` (for `basis`
+    "sinusoidal-galerkin", `nec4_sinusoidal_galerkin_printout_driver`)
+    prints, each checked against `_nec4.render(text, basis=basis)` byte for
+    byte but for the two measured-time lines."""
     spec = importlib.util.spec_from_file_location(
         "core_split_nec4_run_compare", SPLIT / "nec4_run_compare.py"
     )
@@ -592,7 +612,13 @@ def _nec42_sinusoidal_printouts(driver, decks) -> int:
     version, variant, marker = rc.pc.stamp()
     run = subprocess.run(
         [
-            str(driver[0]["nec4_sinusoidal_printout_driver"]),
+            str(
+                driver[0][
+                    "nec4_sinusoidal_galerkin_printout_driver"
+                    if basis == "sinusoidal-galerkin"
+                    else "nec4_sinusoidal_printout_driver"
+                ]
+            ),
             pc.scipy_openblas(),
             pc.numpy_openblas(),
             version,
@@ -628,7 +654,7 @@ def _nec42_sinusoidal_printouts(driver, decks) -> int:
             ok, text = answers[str(path)]
             if not ok:
                 continue
-            a, na = rc.mask(rc.py_printout(path.read_bytes().decode("latin-1")))
+            a, na = rc.mask(rc.py_printout(path.read_bytes().decode("latin-1"), basis))
             b, nb = rc.mask(text)
             assert (rc.first_difference(a, b), na) == (None, nb), path
             printed += 1
