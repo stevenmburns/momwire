@@ -435,6 +435,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_sinusoidal_galerkin_fill_core.h",
     "src/momwire/_sinusoidal_galerkin_direct_core.h",
     "src/momwire/_sinusoidal_galerkin_run_core.h",
+    "src/momwire/_sinusoidal_crossing_core.h",
     "src/momwire/_nec4_run_core.h",
     "src/momwire/_sinusoidal_run_core.h",
     "src/momwire/_nec5_seam_core.h",
@@ -634,6 +635,7 @@ _ACCEL_SOURCES = [
     # Its direct-field fill (momwire#1718 S7): a wire end on the ground
     # plane, over the S1 far fill core.
     "src/momwire/_sinusoidal_galerkin_direct_core.cpp",
+    "src/momwire/_sinusoidal_crossing_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a).
     "src/momwire/_nec4_run_core.cpp",

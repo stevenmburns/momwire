@@ -37,7 +37,7 @@ std::vector<cd> slope_at_complex(const Front &fr, const std::vector<ll> &eval_se
 
 std::vector<cd> basis_at(const Front &fr, const std::vector<ll> &eval_seg, const std::vector<double> &eval_s,
                          const std::vector<cd> &alpha) {
-    if (fr.buried) return basis_at_complex(fr, eval_seg, eval_s, alpha);
+    if (!fr.basis.k_entry.empty()) return basis_at_complex(fr, eval_seg, eval_s, alpha);
     const SegView &v = fr.basis;
     const double k = fr.k;
     std::vector<cd> out(eval_seg.size(), cd(0.0, 0.0));
@@ -59,7 +59,7 @@ std::vector<cd> basis_at(const Front &fr, const std::vector<ll> &eval_seg, const
 // `_evaluate_basis_slope_at_points(seg_view, eval_seg, eval_s, alpha)`
 std::vector<cd> slope_at(const Front &fr, const std::vector<ll> &eval_seg, const std::vector<double> &eval_s,
                          const std::vector<cd> &alpha) {
-    if (fr.buried) return slope_at_complex(fr, eval_seg, eval_s, alpha);
+    if (!fr.basis.k_entry.empty()) return slope_at_complex(fr, eval_seg, eval_s, alpha);
     const SegView &v = fr.basis;
     const double k = fr.k;
     std::vector<cd> out(eval_seg.size(), cd(0.0, 0.0));
@@ -83,16 +83,15 @@ std::vector<cd> slope_at(const Front &fr, const std::vector<ll> &eval_seg, const
 std::vector<cd> basis_at_complex(const Front &fr, const std::vector<ll> &eval_seg, const std::vector<double> &eval_s,
                                  const std::vector<cd> &alpha) {
     const SegView &v = fr.basis;
-    const cd k = fr.medium.k_m;
-    const cd half_k = cm(cd(0.5, 0.0), k);  // `0.5 * k_e`, an array product
     std::vector<cd> out(eval_seg.size(), cd(0.0, 0.0));
     for (std::size_t e = 0; e < eval_seg.size(); e++) {
         const std::size_t s = static_cast<std::size_t>(eval_seg[e]);
         const cd se(eval_s[e], 0.0);
-        const cd half = mw_libm_c::csin(cm(half_k, se));
-        const cd sin_e = mw_libm_c::csin(cm(k, se));
         for (ll q = v.starts[s]; q < v.starts[s + 1]; q++) {
             const std::size_t g = static_cast<std::size_t>(q);
+            const cd k = v.k_entry[g];
+            const cd half = mw_libm_c::csin(cm(cm(cd(0.5, 0.0), k), se));  // `0.5 * k_e * s_e`
+            const cd sin_e = mw_libm_c::csin(cm(k, se));
             const cd sig_ac = cm(sig(v.sigma[g]), v.AC[g]), sig_c = cm(sig(v.sigma[g]), v.C[g]);
             const cd f = csub(cadd(sig_ac, cm(v.B[g], sin_e)), cm(cm(cd(2.0, 0.0), sig_c), cm(half, half)));
             out[e] = cadd(out[e], cm(alpha.at(static_cast<std::size_t>(v.jbasis[g])), f));
@@ -106,14 +105,14 @@ std::vector<cd> basis_at_complex(const Front &fr, const std::vector<ll> &eval_se
 std::vector<cd> slope_at_complex(const Front &fr, const std::vector<ll> &eval_seg, const std::vector<double> &eval_s,
                                  const std::vector<cd> &alpha) {
     const SegView &v = fr.basis;
-    const cd k = fr.medium.k_m;
     std::vector<cd> out(eval_seg.size(), cd(0.0, 0.0));
     for (std::size_t e = 0; e < eval_seg.size(); e++) {
         const std::size_t s = static_cast<std::size_t>(eval_seg[e]);
-        const cd ks = cm(k, cd(eval_s[e], 0.0));
-        const cd cos_e = mw_libm_c::ccos(ks), sin_e = mw_libm_c::csin(ks);
         for (ll q = v.starts[s]; q < v.starts[s + 1]; q++) {
             const std::size_t g = static_cast<std::size_t>(q);
+            const cd k = v.k_entry[g];
+            const cd ks = cm(k, cd(eval_s[e], 0.0));
+            const cd cos_e = mw_libm_c::ccos(ks), sin_e = mw_libm_c::csin(ks);
             const cd fd = cm(k, csub(cm(v.B[g], cos_e), cm(cm(sig(v.sigma[g]), v.C[g]), sin_e)));
             out[e] = cadd(out[e], cm(alpha.at(static_cast<std::size_t>(v.jbasis[g])), fd));
         }
@@ -404,10 +403,17 @@ double loss_power_at(const Front &fr, const std::vector<cd> &coeffs, double omeg
     if (!wire_impedance_per_wire(fr, args, omega, z_wire)) return 0.0;
     const double k = omega / fr.c;
     // a wholly-buried deck's view is at k_m, built for the fill's omega
-    if (fr.buried && k != fr.k) throw nec4::Declined("a loss readout at another wavenumber than the fill's");
+    if ((fr.buried || fr.crossing) && k != fr.k)
+        throw nec4::Declined("a loss readout at another wavenumber than the fill's");
     // `_buried_wire_loss_power`: the shapes at k_m, the view the fill built
     // (`buried_medium` at omega / c is the front's medium)
-    const cd k_shape = fr.buried ? fr.medium.k_m : cd(k, 0.0);
+    // (a crossing deck: each segment at its medium's k, `np.where(below,
+    // k_m, k_p)`)
+    auto k_shape = [&](std::size_t s) {
+        if (fr.buried) return fr.medium.k_m;
+        if (fr.crossing) return fr.below_seg[s] ? fr.medium.k_m : cd(fr.medium.k_p, 0.0);
+        return cd(k, 0.0);
+    };
     // `_basis_coefs(geom, k)` at the readout's own k
     SegView other;
     if (k != fr.k) other = basis_coefs(fr, k);
@@ -431,7 +437,7 @@ double loss_power_at(const Front &fr, const std::vector<cd> &coeffs, double omeg
         for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) {
             const std::size_t s = static_cast<std::size_t>(i);
             const double h = g.seg_h[s];
-            const ShapeIntegrals si = abs_shape_integrals(k_shape, h);
+            const ShapeIntegrals si = abs_shape_integrals(k_shape(s), h);
             const double au = cabs(U[s]), aq = cabs(Q[s]), ar = cabs(R[s]);
             const cd ur = elide ? cm(std::conj(R[s]), U[s]) : cm(U[s], std::conj(R[s]));
             const double cross = 2.0 * cm(ur, std::conj(si.i_g)).real();

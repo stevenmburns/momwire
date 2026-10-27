@@ -10,6 +10,7 @@
 
 #include "_libm_complex_inline.h"
 #include "_sinusoidal_fill_core.h"
+#include "_sinusoidal_crossing_core.h"
 
 #include "_razor_front_core.h"
 #include "_razor_wire_loading_core.h"
@@ -760,15 +761,22 @@ struct SommBelow {
 // `_below_interface.serve_plan(...)`'s below/below section over the field
 // rule's nodes (`field_nodes`, q = `n_qp_buried_field(3)` = 6) with
 // bspline's `_pair_extents_below`: `r1_below`, or the grazing refusal
-double serve_plan_below(const Front &fr) {
+// over the below segments `segs` (every segment when null); `centres` adds
+// the below segments' midpoints, the collocation points a mixed deck's plan
+// joins (`_mixed_serve_plan`'s `test_obs`)
+double serve_plan_below(const Front &fr, const std::vector<ll> *segs = nullptr, bool centres = false) {
     const Geometry &g = fr.geometry;
-    const ll N = g.n_segs;
+    std::vector<ll> all;
+    if (segs == nullptr) {
+        for (ll i = 0; i < g.n_segs; i++) all.push_back(i);
+        segs = &all;
+    }
     const double gz = 0.0;
     const ll q = 6;  // max(n_qp_sommerfeld, N_QP_BURIED_FIELD) * near_q_factor(None, None)
     std::vector<double> xg, wg;
     if (!razor::leggauss(q, xg, wg)) throw std::logic_error("leggauss(6) is tabled");
     std::vector<double> x, y, d;
-    for (ll i = 0; i < N; i++) {
+    for (ll i : *segs) {
         const Point3 &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
         for (ll j = 0; j < q; j++) {
             const double tq = 0.5 * (xg[static_cast<std::size_t>(j)] + 1.0);
@@ -779,6 +787,13 @@ double serve_plan_below(const Front &fr) {
             d.push_back(gz - p[2]);
         }
     }
+    if (centres)
+        for (ll i : *segs) {
+            const Point3 &c = g.seg_centers[static_cast<std::size_t>(i)];
+            x.push_back(c[0]);
+            y.push_back(c[1]);
+            d.push_back(gz - c[2]);
+        }
     // `_pair_extents_below_all`: the upper triangle, diagonal included
     double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
     const std::size_t n = x.size();
@@ -864,7 +879,7 @@ void somm_below_prepare(const Front &fr, bool cos1, double r1_below, SommBelow &
 // `_replay_somm_remainder_below` for observer rows [i0, i1): S (3, M, N)
 std::vector<std::vector<cd>> somm_below_replay(const Front &fr, SommBelow &sb, ll i0, ll i1) {
     const Geometry &g = fr.geometry;
-    const ll N = g.n_segs, M = i1 - i0, q = sb.q;
+    const ll q = sb.q, N = sb.n_src / std::max<ll>(1, q), M = i1 - i0;  // the sources' count
     std::vector<std::vector<cd>> S(3, std::vector<cd>(static_cast<std::size_t>(M * N)));
     const ll chunk = std::max<ll>(1, kRemainderChunkElems / std::max<ll>(1, sb.n_src));  // `elem_rows`
     std::vector<double> obs, tob;
@@ -926,6 +941,196 @@ std::vector<std::vector<cd>> band_buried(const Front &fr, const Kernel &K, ll i0
             x = cd(x.real() - y.real(), x.imag() - y.imag());
         }
     return phi;
+}
+
+
+// --- a crossing deck (momwire#1607 B6b, `_assemble_Z_mixed`) ---------------
+//
+// Each medium's own block, `_class_bands`: its sources (the class's
+// segments) seen at its own midpoints, at its own (k, eta), with its own
+// ground, `Phi - (coef * Phi_img - S)`, the remainder prepared over the
+// class's geometry: above at k_p (the reduced kernel, the Sommerfeld
+// remainder, C2), below at k_m (the complex twin, the below remainder,
+// A_m). The cross quadrants are the point rows (`_crossing_point_rows`,
+// `_sinusoidal_crossing_core.cpp`), added to Z after the reduction.
+
+// `_sommerfeld_remainder_prepare(cls_geom, k_p, eps_t, cos_shape, r1_max)`
+// over the class's segments `idx`
+void somm_prepare_cls(const Front &fr, const nec4::SolverArgs &args, bool cos1, const std::vector<ll> &idx,
+                      Somm &sm) {
+    const Geometry &g = fr.geometry;
+    const ll N = static_cast<ll>(idx.size());
+    const double gz = 0.0;
+    sm.eps_t = cd(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+    sm.c2 = py_quot(cd(sm.eps_t.real() - 1.0, sm.eps_t.imag() - 0.0),
+                    cd(sm.eps_t.real() + 1.0, sm.eps_t.imag() + 0.0));
+    for (ll s : idx) {
+        const std::size_t z = static_cast<std::size_t>(s);
+        if (g.seg_l[z][2] - gz < -1e-12 || g.seg_r[z][2] - gz < -1e-12)
+            decline("an above class below the Sommerfeld ground (the reference raises)");
+    }
+    std::vector<double> gx, gw;
+    if (!razor::leggauss(kNQpSommerfeld, gx, gw)) throw std::logic_error("leggauss(3) is tabled");
+    const ll q = kNQpSommerfeld;
+    sm.q = q;
+    sm.n_src = N * q;
+    const double k = fr.k;
+    sm.srcf.resize(static_cast<std::size_t>(3 * N * q));
+    sm.t_src.resize(static_cast<std::size_t>(3 * N * q));
+    sm.shp_w.resize(static_cast<std::size_t>(3 * N * q));
+    for (ll n = 0; n < N; n++) {
+        const std::size_t nz = static_cast<std::size_t>(idx[static_cast<std::size_t>(n)]);
+        const double h_half = 0.5 * g.seg_h[nz];
+        for (ll j = 0; j < q; j++) {
+            const std::size_t jz = static_cast<std::size_t>(j);
+            const double zloc = h_half * gx[jz];
+            const std::size_t at = static_cast<std::size_t>(n * q + j);
+            for (int c = 0; c < 3; c++) {
+                sm.srcf[3 * at + static_cast<std::size_t>(c)] =
+                    g.seg_centers[nz][static_cast<std::size_t>(c)] + zloc * g.seg_tangents[nz][static_cast<std::size_t>(c)];
+                sm.t_src[3 * at + static_cast<std::size_t>(c)] = g.seg_tangents[nz][static_cast<std::size_t>(c)];
+            }
+            const double w_node = h_half * gw[jz];
+            double shp_cos;
+            if (cos1) {
+                const double s = std::sin(0.5 * k * zloc);
+                shp_cos = -2.0 * (s * s);
+            } else {
+                shp_cos = std::cos(k * zloc);
+            }
+            const double shp[3] = {1.0, std::sin(k * zloc), shp_cos};
+            for (int c = 0; c < 3; c++)
+                sm.shp_w[static_cast<std::size_t>((c * N + n) * q + j)] = shp[c] * w_node;
+        }
+    }
+    std::vector<double> sl(static_cast<std::size_t>(3 * N)), sr(static_cast<std::size_t>(3 * N));
+    for (ll n = 0; n < N; n++)
+        for (int c = 0; c < 3; c++) {
+            const std::size_t z = static_cast<std::size_t>(idx[static_cast<std::size_t>(n)]);
+            sl[static_cast<std::size_t>(3 * n + c)] = g.seg_l[z][static_cast<std::size_t>(c)];
+            sr[static_cast<std::size_t>(3 * n + c)] = g.seg_r[z][static_cast<std::size_t>(c)];
+        }
+    const double r1_max = razor::max_image_distance(sl.data(), sr.data(), static_cast<std::size_t>(N), gz);
+    const somm_core::Grid &grid = somm_core::get_grid_lazy(sm.eps_t, k, r1_max, fr.omega, kMu);
+    somm_core::ensure_nodes(grid, somm_core::all_nodes_of(grid));
+    sm.grid = &grid;
+    sm.n_reg = grid.regions.size();
+    if (sm.n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout this copy does not view");
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cd *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (std::size_t r = 0; r < sm.n_reg; r++) {
+        const somm_core::GridRegion &reg = grid.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    sm.view = std::make_shared<somm_proj::GridView>(somm_proj::build_grid_view(
+        grid.r1_max, grid.r_break, 30.0 * (M_PI / 180.0), grid.r_near, r0, dr, th0, dth, sm.n_reg, vals, shape0,
+        nr, nth));
+    const std::vector<cd> far = somm_core::far_pack(grid);
+    somm_proj::set_far(*sm.view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+}
+
+// `_replay_sommerfeld_remainder` over the class's sources, for global
+// observer rows [i0, i1): S (3, M, N_class)
+std::vector<std::vector<cd>> somm_replay_cls(const Front &fr, const Somm &sm, ll N, ll i0, ll i1) {
+    const Geometry &g = fr.geometry;
+    const ll M = i1 - i0, q = sm.q;
+    std::vector<std::vector<cd>> S(3, std::vector<cd>(static_cast<std::size_t>(M * N)));
+    const ll chunk = std::max<ll>(1, kRemainderChunkElems / std::max<ll>(1, sm.n_src));
+    std::vector<double> obs, tob;
+    for (ll a = 0; a < M; a += chunk) {
+        const ll b = std::min(a + chunk, M), m = b - a;
+        obs.assign(static_cast<std::size_t>(3 * m), 0.0);
+        tob.assign(static_cast<std::size_t>(3 * m), 0.0);
+        for (ll r = 0; r < m; r++)
+            for (int c = 0; c < 3; c++) {
+                obs[static_cast<std::size_t>(3 * r + c)] = g.seg_centers[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+                tob[static_cast<std::size_t>(3 * r + c)] = g.seg_tangents[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+            }
+        std::vector<cd> table(static_cast<std::size_t>(m * sm.n_src));
+        somm_core::field_proj_batch(*sm.view, sm.n_reg, m, sm.n_src, obs.data(), tob.data(), sm.srcf.data(),
+                                    sm.t_src.data(), 0.0, fr.k, table.data(), 0, true);
+        for (ll i = 0; i < m; i++) {
+            const cd *row = table.data() + i * N * q;
+            for (int s = 0; s < 3; s++) {
+                const double *w = sm.shp_w.data() + s * N * q;
+                for (ll n = 0; n < N; n++) {
+                    double are = 0.0, aim = 0.0;
+                    for (ll k = 0; k < q; k++) {
+                        const double r0 = w[n * q + k], i0w = 0.0;
+                        const double r1 = row[n * q + k].real(), i1 = row[n * q + k].imag();
+                        const double re = r0 * r1 - i0w * i1;
+                        const double im = r0 * i1 + i0w * r1;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    S[static_cast<std::size_t>(s)][static_cast<std::size_t>((a + i) * N + n)] = cd(are, aim);
+                }
+            }
+        }
+    }
+    return S;
+}
+
+// The class's sources (centres, tangents, lengths) and their mirror images.
+struct ClassSources {
+    std::vector<ll> idx;
+    std::vector<Point3> c, t, img_c, img_t;
+    std::vector<double> h;
+};
+ClassSources class_sources(const Front &fr, bool below_side) {
+    const Geometry &g = fr.geometry;
+    ClassSources cs;
+    for (ll s = 0; s < g.n_segs; s++) {
+        const std::size_t z = static_cast<std::size_t>(s);
+        if (fr.below_seg[z] != below_side) continue;
+        cs.idx.push_back(s);
+        cs.c.push_back(g.seg_centers[z]);
+        cs.t.push_back(g.seg_tangents[z]);
+        cs.h.push_back(g.seg_h[z]);
+        // `_ground_mirror`: `2 * ground_z - z`, `tangents * [1, 1, -1]`
+        cs.img_c.push_back({g.seg_centers[z][0], g.seg_centers[z][1], 2.0 * 0.0 - g.seg_centers[z][2]});
+        cs.img_t.push_back({g.seg_tangents[z][0] * 1.0, g.seg_tangents[z][1] * 1.0, g.seg_tangents[z][2] * -1.0});
+    }
+    return cs;
+}
+
+// `_field_tensor(geom_src, k, src_centers, src_tangents, obs_rows=(i0, i1))`
+// over a class's sources: the reduced kernel at a real k (one radius), or
+// the complex twin at k_m
+std::vector<std::vector<cd>> class_tensor(const Front &fr, const Kernel &K, ll i0, ll i1, const std::vector<Point3> &sc_,
+                                          const std::vector<Point3> &st_, const std::vector<double> &sh, bool complex_k,
+                                          cd k, cd eta, bool folded) {
+    const Geometry &g = fr.geometry;
+    const ll n = static_cast<ll>(sc_.size()), m = i1 - i0;
+    CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
+    CF sc = pts(sc_, 0, n), st = pts(st_, 0, n);
+    CF h = f64(sh.data(), {n});
+    const ll q = static_cast<ll>(K.gx.size());
+    CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
+    Tensors t;
+    if (complex_k) {
+        std::vector<double> a_obs(static_cast<std::size_t>(m), fr.radius_per_wire[0]);
+        CF ao = f64(a_obs.data(), {m});
+        t = sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+    } else {
+        t = sinusoidal_field_tensor(oc, ot, sc, st, h, fr.radius_per_wire[0], k.real(), eta.real(), gx, gw, 0);
+    }
+    std::vector<std::vector<cd>> out(3);
+    const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
+    for (int c = 0; c < 3; c++) {
+        if (parts[c]->size() != m * n) throw std::logic_error("field tensor: unexpected shape");
+        out[static_cast<std::size_t>(c)].assign(parts[c]->data(), parts[c]->data() + m * n);
+    }
+    return out;
 }
 
 // --- `_contact_charge_correction` over a Sommerfeld ground ------------------
@@ -1217,6 +1422,187 @@ void nec4_cap_columns(const Front &fr, bool pec, const Somm *somm, std::vector<c
     }
 }
 
+
+// `_assemble_Z_mixed(geom, eta)` on a crossing deck (momwire#1223)
+std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
+    if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
+    if (args.extended_kernel) decline("the extended kernel below the interface (the reference refuses)");
+    const razor::WireLoading loading = wire_loading(args);
+    const Geometry &g = fr.geometry;
+    const SegView &sv = fr.basis;
+    const ll N = g.n_segs;
+    const std::size_t Nz = static_cast<std::size_t>(N);
+    const Medium &md = fr.medium;
+    const ClassSources above = class_sources(fr, false), below = class_sources(fr, true);
+    // `_mixed_serve_plan(..., crossing=True)`: the below/below extents over
+    // the field nodes and the below midpoints
+    const double r1_below = serve_plan_below(fr, &below.idx, true);
+    // the shape set over every segment at its own |k| (`abs(k_m)`: CPython's)
+    const double k_m_abs = std::hypot(md.k_m.real(), md.k_m.imag());
+    double kd_min = std::numeric_limits<double>::infinity();
+    bool first = true;
+    for (std::size_t i = 0; i < Nz; i++) {
+        const double v = (fr.below_seg[i] ? k_m_abs : md.k_p) * g.seg_h[i];
+        if (first || v < kd_min || std::isnan(v)) kd_min = v;
+        first = false;
+    }
+    if (std::isnan(kd_min)) decline("a non-finite k*h");
+    const bool cos1 = kd_min < kWellScaledKd;
+    // the reduced kernel's folded shape is numpy's `_field_components`
+    // route, which this copy does not take
+    if (cos1) decline("the folded cos-1 shape on a crossing deck (the reduced kernel's numpy route is not copied)");
+    Entries E;
+    std::map<std::pair<ll, ll>, int> seen;
+    for (ll i = 0; i < N; i++)
+        for (ll e = sv.starts[static_cast<std::size_t>(i)]; e < sv.starts[static_cast<std::size_t>(i) + 1]; e++) {
+            const std::size_t ez = static_cast<std::size_t>(e);
+            if (++seen[{i, sv.jbasis[ez]}] > 1) decline("a repeated (segment, basis) entry on a crossing deck");
+            E.n.push_back(i);
+            E.j.push_back(sv.jbasis[ez]);
+            E.v[0].push_back(sig_mul(sv.sigma[ez], cos1 ? sv.AC[ez] : sv.A[ez]));
+            E.v[1].push_back(sv.B[ez]);
+            E.v[2].push_back(sig_mul(sv.sigma[ez], sv.C[ez]));
+        }
+    Kernel K;
+    K.fr = &fr;
+    if (!razor::leggauss(kNQpConst, K.gx, K.gw)) throw std::logic_error("leggauss(8) is tabled");
+    if (!fr.uniform_radius) decline("a crossing deck with several radii (the reference refuses)");
+    const cd eta_p(fr.eta, 0.0);
+    const cd eta_m = np_csqrt(py_quot(cd(kMu, 0.0), md.eps_m));
+    // the two classes' remainders, over each class's own geometry
+    Somm s_above;
+    somm_prepare_cls(fr, args, cos1, above.idx, s_above);
+    SommBelow s_below;
+    {
+        // `_somm_remainder_below_prepare(cls_geom, medium, r1_below)`
+        Front cls;  // the class geometry: only its segment arrays are read
+        cls.geometry.n_segs = static_cast<ll>(below.idx.size());
+        for (ll s : below.idx) {
+            const std::size_t z = static_cast<std::size_t>(s);
+            cls.geometry.seg_centers.push_back(g.seg_centers[z]);
+            cls.geometry.seg_tangents.push_back(g.seg_tangents[z]);
+            cls.geometry.seg_h.push_back(g.seg_h[z]);
+        }
+        cls.medium = md;
+        cls.omega = fr.omega;
+        somm_below_prepare(cls, cos1, r1_below, s_below);
+    }
+    // One class band's D: `P - (coef * Pi - Si)` over the class's sources,
+    // for global observer rows [s, e)
+    auto class_band = [&](bool is_below, ll s, ll e) {
+        const ClassSources &cs = is_below ? below : above;
+        const cd k = is_below ? md.k_m : cd(md.k_p, 0.0);
+        const cd eta = is_below ? eta_m : eta_p;
+        std::vector<std::vector<cd>> P = class_tensor(fr, K, s, e, cs.c, cs.t, cs.h, is_below, k, eta, cos1);
+        std::vector<std::vector<cd>> Pi = class_tensor(fr, K, s, e, cs.img_c, cs.img_t, cs.h, is_below, k, eta, cos1);
+        const ll nc = static_cast<ll>(cs.idx.size());
+        const std::vector<std::vector<cd>> S =
+            is_below ? somm_below_replay(fr, s_below, s, e) : somm_replay_cls(fr, s_above, nc, s, e);
+        const cd coef = is_below ? md.a_m : s_above.c2;
+        for (int c = 0; c < 3; c++)
+            for (std::size_t q = 0; q < Pi[static_cast<std::size_t>(c)].size(); q++) {
+                cd &y = Pi[static_cast<std::size_t>(c)][q];
+                y = nec5::replay::np_cmul(coef, y);
+                const cd si = S[static_cast<std::size_t>(c)][q];
+                y = cd(y.real() - si.real(), y.imag() - si.imag());
+                const cd x = P[static_cast<std::size_t>(c)][q];
+                y = cd(x.real() - y.real(), x.imag() - y.imag());  // np.subtract(P, Pi, out=Pi)
+            }
+        return Pi;
+    };
+    // The class's rows run by run (`_schedule.runs(idx)`): each row its own
+    // reduction, so any band height gives the same floats
+    auto runs_of = [](const std::vector<ll> &idx) {
+        std::vector<std::pair<ll, ll>> r;
+        for (std::size_t i = 0; i < idx.size();) {
+            std::size_t j = i + 1;
+            while (j < idx.size() && idx[j] == idx[j - 1] + 1) j++;
+            r.push_back({idx[i], idx[j - 1] + 1});
+            i = j;
+        }
+        return r;
+    };
+    std::vector<cd> G(Nz * Nz, cd(0.0, 0.0));
+    const bool dense = N < kDenseAssemblyThreshold;
+    if (dense) {
+        std::vector<std::vector<cd>> Phi(3, std::vector<cd>(Nz * Nz, cd(0.0, 0.0)));
+        for (int side = 0; side < 2; side++) {
+            const ClassSources &cs = side ? below : above;
+            const std::size_t nc = cs.idx.size();
+            for (const auto &run : runs_of(cs.idx)) {
+                const std::vector<std::vector<cd>> D = class_band(side == 1, run.first, run.second);
+                for (int c = 0; c < 3; c++)
+                    for (ll r = run.first; r < run.second; r++)
+                        for (std::size_t j = 0; j < nc; j++)
+                            Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
+                                D[static_cast<std::size_t>(c)][static_cast<std::size_t>(r - run.first) * nc + j];
+            }
+        }
+        std::vector<std::vector<cd>> M(3, std::vector<cd>(Nz * Nz, cd(0.0, 0.0)));
+        for (int c = 0; c < 3; c++)
+            for (std::size_t e = 0; e < E.n.size(); e++)
+                M[static_cast<std::size_t>(c)][static_cast<std::size_t>(E.n[e] * N + E.j[e])] = E.v[c][e];
+        std::vector<cd> tmp(Nz * Nz);
+        for (int c = 0; c < 3; c++) {
+            const nec5::Op a{Phi[static_cast<std::size_t>(c)].data(), N, N, N, 1};
+            const nec5::Op b{M[static_cast<std::size_t>(c)].data(), N, N, N, 1};
+            nec5::replay::np_matmul(np, a, b, c == 0 ? G.data() : tmp.data(), N, 1);
+            if (c > 0)
+                for (std::size_t i = 0; i < Nz * Nz; i++) G[i] = nec5::replay::c_add(G[i], tmp[i]);
+        }
+    } else {
+        // CSC by column, rows ascending
+        std::vector<ll> cptr(Nz + 1, 0);
+        for (ll j : E.j) cptr[static_cast<std::size_t>(j) + 1]++;
+        for (std::size_t j = 0; j < Nz; j++) cptr[j + 1] += cptr[j];
+        std::vector<ll> crow(E.n.size()), fillp(cptr.begin(), cptr.end() - 1);
+        std::vector<cd> cval[3];
+        for (int c = 0; c < 3; c++) cval[c].resize(E.n.size());
+        for (std::size_t e = 0; e < E.n.size(); e++) {
+            const std::size_t at = static_cast<std::size_t>(fillp[static_cast<std::size_t>(E.j[e])]++);
+            crow[at] = E.n[e];
+            for (int c = 0; c < 3; c++) cval[c][at] = E.v[c][e];
+        }
+        // Z bands of each class's runs (`_mixed_band_rows`): the band's Φ
+        // rows, its class's columns written, then the tiled reduction
+        const ll zband = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / ((3 + 2) * 16 * N));
+        for (int side = 0; side < 2; side++) {
+            const ClassSources &cs = side ? below : above;
+            const std::size_t nc = cs.idx.size();
+            for (const auto &run : runs_of(cs.idx))
+                for (ll z0 = run.first; z0 < run.second; z0 += zband) {
+                    const ll z1 = std::min(z0 + zband, run.second), m = z1 - z0;
+                    const std::vector<std::vector<cd>> D = class_band(side == 1, z0, z1);
+                    std::vector<std::vector<cd>> Phi(3, std::vector<cd>(static_cast<std::size_t>(m) * Nz, cd(0.0, 0.0)));
+                    for (int c = 0; c < 3; c++)
+                        for (ll r = 0; r < m; r++)
+                            for (std::size_t j = 0; j < nc; j++)
+                                Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
+                                    D[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * nc + j];
+                    for (ll r = 0; r < m; r++) {
+                        cd *grow = G.data() + (z0 + r) * N;
+                        const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+                        for (ll j = 0; j < N; j++) {
+                            double sr[3], si[3];
+                            for (int c = 0; c < 3; c++) {
+                                double yr = 0.0, yi = 0.0;
+                                for (ll e = cptr[static_cast<std::size_t>(j)]; e < cptr[static_cast<std::size_t>(j) + 1]; e++)
+                                    axpy1(cval[c][static_cast<std::size_t>(e)], phi[c][crow[static_cast<std::size_t>(e)]], yr, yi);
+                                sr[c] = yr;
+                                si[c] = yi;
+                            }
+                            grow[j] = cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
+                        }
+                    }
+                }
+        }
+    }
+    // the cross quadrants: the point rows, added to Z
+    crossing_point_rows(fr, G);
+    apply_loading(fr, loading, E, G);
+    return G;
+}
+
 }  // namespace
 
 bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega, std::vector<cd> &z) {
@@ -1228,6 +1614,7 @@ bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, doub
 }
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
+    if (fr.crossing) return assemble_Z_crossing(fr, args, np);
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
     // GN 2 / GN 3: the Sommerfeld composition (B5c)
     const bool pec = args.ground.kind == nec4::Ground::pec;

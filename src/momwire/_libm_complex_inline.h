@@ -10,6 +10,21 @@
 
 #include <complex>
 
+// Whether the platform's numpy / SciPy build contracts its plain-C complex
+// arithmetic: numpy's `CDOUBLE_divide` and scalar product
+// (`cdouble_ctype_multiply`), SciPy's sparsetools complex product. An x86-64
+// wheel's baseline has no FMA to contract into (unfused); an arm64 wheel's
+// compiler contracts each `a * b + c` into one fused multiply-add. Measured on
+// macOS 15 arm64 (numpy 2.5.4, SciPy 1.18.1): 4000 of 4000 random quotients
+// and scalar products, and 480 of 480 `csr_matvec(s)` outputs, in exactly the
+// fused forms the copies spell (momwire#1607 B6a / B6b). Linux aarch64's gcc
+// contracts by default too; that platform is unmeasured.
+#if defined(__aarch64__)
+#define MW_NUMPY_CONTRACTS 1
+#else
+#define MW_NUMPY_CONTRACTS 0
+#endif
+
 namespace mw_libm_c {
 
 using cd = std::complex<double>;
