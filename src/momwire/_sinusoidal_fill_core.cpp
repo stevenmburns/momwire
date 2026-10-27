@@ -937,8 +937,9 @@ std::vector<std::vector<cd>> band_buried(const Front &fr, const Kernel &K, ll i0
 // where the end is extended (`_contact_charge_ek_delta`), times the end's
 // basis values (`_contact_node_values`), subtracted from the columns of its
 // basis: `G[:, jb] -= sgn * R[:, None] * val[None, :]`. Every operation is
-// numpy's over the N observers; a product whose right operand is a fresh
-// complex temporary of 256 KiB (N >= 16384) is elided (B3's rule, `cmt`).
+// numpy's over the N observers. No product here depends on numpy's temporary
+// elision: the two whose right operand was a fresh temporary are spelled out
+// of it in Python (momwire#1718 S7), so they are computed as written.
 
 // numpy's real matmul `(N, 3) @ (3,)`: `DOUBLE_matmul`'s matrix-vector gemv,
 // `cblas_dgemv(ColMajor, Trans, 3, N, 1, a, 3, x, 1, 0, y, 1)`
@@ -962,7 +963,6 @@ void contact_correction(const Front &fr, const nec4::SolverArgs &args, const Ker
     const SegView &sv = fr.basis;
     const ll N = g.n_segs;
     const std::size_t Nz = static_cast<std::size_t>(N);
-    const bool elide = N >= 16384;
     const double k = fr.k;
     const double eta = fr.eta;
     // CPython scalars: -1j * eta / (4 pi k), 1j * k, -1j * k, con = 1j * eta / (4 pi k)
@@ -1013,7 +1013,7 @@ void contact_correction(const Front &fr, const nec4::SolverArgs &args, const Ker
             const double r0 = std::sqrt(r2 + rad[m] * rad[m]);
             const cd t1 = radd(1.0, cm(jk, cd(r0, 0.0)));
             const cd e = std::exp(cm(mjk, cd(r0, 0.0)));
-            pref[m] = cdr(cm(cmt(elide, pre0, t1), e), (r0 * r0) * r0);
+            pref[m] = cdr(cm(cm(pre0, t1), e), (r0 * r0) * r0);
             const Point3 &ot = g.seg_tangents[m];
             t_d[m] = (ot[0] * d[0] + ot[2] * d[2]) + ot[1] * d[1];
             R[m] = cr(cm(pref[m], one_minus_c2), t_d[m]);
@@ -1050,7 +1050,7 @@ void contact_correction(const Front &fr, const nec4::SolverArgs &args, const Ker
                 const Point3 &ot = g.seg_tangents[m];
                 const double rho_t = (rho_vec[0] * ot[0] + rho_vec[2] * ot[2]) + rho_vec[1] * ot[1];
                 const cd dt = csub(cadd(cr(ez, ts[m]), cr(erho_hat, rho_t)), cr(pref[m], t_d[m]));
-                const cd delta = csub(dt, cmt(elide, c2, dt));
+                const cd delta = csub(dt, cm(c2, dt));
                 R[m] = cadd(R[m], delta);
             }
         }
