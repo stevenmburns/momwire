@@ -16,12 +16,16 @@
 #include "_sinusoidal_nec4_core.h"
 #include "_somm_grid_core.h"
 #include "_somm_proj_core.h"
+#include "_somm_below_fill_core.h"
+#include "_somm_below_remainder_inline.h"
+#include "_fma_inline.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -673,6 +677,256 @@ std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool
     return phi;
 }
 
+
+// --- a wholly-buried deck (momwire#1607 B6a, `_operating_medium`) -----------
+//
+// The whole solve at the lower medium's k_m / eta_m: `_field_tensor` on the
+// complex twin (`sinusoidal_field_tensor_cplx`, both shape sets, a radius per
+// observer), the image at k_m weighted A_m, and the below-family remainder
+// (`_somm_remainder_below_prepare` / `_replay_somm_remainder_below`: the
+// below grid, `remainder_field_proj_below`, the source shapes at k_m),
+// composed `Phi - (A_m * Phi_img - S)` as the Sommerfeld band composes it.
+
+// numpy's complex absolute (`simd_cabsolute`, AVX2 and AVX512F alike):
+// larger * sqrt(fma(r, r, 1)), r = smaller / larger
+double np_cabs(cd z) {
+    const double re = std::fabs(z.real()), im = std::fabs(z.imag());
+    if (std::isnan(re) || std::isnan(im)) return std::numeric_limits<double>::quiet_NaN();
+    if (std::isinf(re) || std::isinf(im)) return std::numeric_limits<double>::infinity();
+    const double larger = std::max(re, im), smaller = std::min(im, re);
+    if (larger == 0.0) return larger;
+    const double r = smaller / larger;
+    return std::sqrt(mw_fma::exact(r, r, 1.0)) * larger;
+}
+
+// CPython 3.12's complex product (`_Py_c_prod`, a float promoted to (x, 0))
+cd py_prod(cd a, cd b) {
+    return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+}
+
+// numpy's complex sqrt (`npy_csqrt`: libm's csqrt)
+cd np_csqrt(cd z) {
+#if defined(__GNUC__)
+    __complex__ double c;
+    __real__ c = z.real();
+    __imag__ c = z.imag();
+    c = __builtin_csqrt(c);
+    return cd(__real__ c, __imag__ c);
+#else
+    return std::sqrt(z);
+#endif
+}
+
+// A ValueError the below remainder raises, as the refusal printout's words.
+struct BelowRefusal {
+    [[noreturn]] static void value(const std::string &m) { throw FrontError(m); }
+};
+
+// `_field_tensor(geom, k, src_c, src_t, obs_rows=(i0, i1), cos_shape)` at a
+// complex k: the complex twin over the band
+std::vector<std::vector<cd>> field_tensor_cplx(const Front &fr, const Kernel &K, ll i0, ll i1,
+                                               const std::vector<Point3> &src_c, const std::vector<Point3> &src_t,
+                                               cd k, cd eta, bool folded, const std::vector<double> &rad) {
+    const Geometry &g = fr.geometry;
+    const ll n = g.n_segs, m = i1 - i0;
+    std::vector<double> a_obs(static_cast<std::size_t>(m));
+    for (ll i = 0; i < m; i++)
+        a_obs[static_cast<std::size_t>(i)] = fr.uniform_radius ? fr.radius_per_wire[0] : rad[static_cast<std::size_t>(i0 + i)];
+    CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
+    CF ao = f64(a_obs.data(), {m});
+    CF sc = pts(src_c, 0, n), st = pts(src_t, 0, n);
+    CF h = f64(g.seg_h.data(), {n});
+    const ll q = static_cast<ll>(K.gx.size());
+    CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
+    const Tensors t = sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+    std::vector<std::vector<cd>> out(3);
+    const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
+    for (int c = 0; c < 3; c++) {
+        if (parts[c]->size() != m * n) throw std::logic_error("field tensor: unexpected shape");
+        out[static_cast<std::size_t>(c)].assign(parts[c]->data(), parts[c]->data() + m * n);
+    }
+    return out;
+}
+
+struct SommBelow {
+    cd k_m, a_m;
+    double k_p = 0;
+    ll q = 0, n_src = 0;
+    std::vector<cd> shp_w;  // (3, N, q)
+    somm_below::Remainder<BelowRefusal> rem;
+};
+
+// `_below_interface.serve_plan(...)`'s below/below section over the field
+// rule's nodes (`field_nodes`, q = `n_qp_buried_field(3)` = 6) with
+// bspline's `_pair_extents_below`: `r1_below`, or the grazing refusal
+double serve_plan_below(const Front &fr) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs;
+    const double gz = 0.0;
+    const ll q = 6;  // max(n_qp_sommerfeld, N_QP_BURIED_FIELD) * near_q_factor(None, None)
+    std::vector<double> xg, wg;
+    if (!razor::leggauss(q, xg, wg)) throw std::logic_error("leggauss(6) is tabled");
+    std::vector<double> x, y, d;
+    for (ll i = 0; i < N; i++) {
+        const Point3 &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
+        for (ll j = 0; j < q; j++) {
+            const double tq = 0.5 * (xg[static_cast<std::size_t>(j)] + 1.0);
+            double p[3];
+            for (int c = 0; c < 3; c++) p[c] = l[static_cast<std::size_t>(c)] + tq * (r[static_cast<std::size_t>(c)] - l[static_cast<std::size_t>(c)]);
+            x.push_back(p[0]);
+            y.push_back(p[1]);
+            d.push_back(gz - p[2]);
+        }
+    }
+    // `_pair_extents_below_all`: the upper triangle, diagonal included
+    double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
+    const std::size_t n = x.size();
+    for (std::size_t i = 0; i < n; i++)
+        for (std::size_t j = i; j < n; j++) {
+            const double dx = x[i] - x[j], dy = y[i] - y[j];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = d[i] + d[j];
+            const double hh2 = hh * hh;
+            const double r1sq = rho2 + hh2;
+            if (r1sq > r1sq_max) r1sq_max = r1sq;
+            const double qq = hh2 / rho2;
+            if (qq < q_min) q_min = qq;
+        }
+    const double r1_max = std::sqrt(r1sq_max), th_min = std::atan(std::sqrt(q_min));
+    const double lam_m = (2.0 * kPi) / std::hypot(fr.medium.k_m.real(), fr.medium.k_m.imag());
+    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);  // `plan_r1_cap(below_r1_cap(k_m))`
+    const double floor_deg = 0.05 - 2.0 * (0.05 / 3.0);  // _SOMM_BELOW_TH_MIN_DEG
+    const double floor = floor_deg * (kPi / 180.0);     // math.radians
+    if (th_min < floor) {
+        // past the cap Python asks the floor of the pairs inside it only
+        if (r1_max > r1_cap) decline("a grazing below/below pair past the cap (the capped walk is not copied)");
+        decline("a below/below pair under the grazing floor (the refusal's wording is not copied)");
+    }
+    return r1_max;
+}
+
+void somm_below_prepare(const Front &fr, bool cos1, double r1_below, SommBelow &sb) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs;
+    const double gz = 0.0;
+    const Medium &md = fr.medium;
+    sb.k_m = md.k_m;
+    sb.k_p = md.k_p;
+    sb.a_m = md.a_m;
+    std::vector<double> gx, gw;
+    if (!razor::leggauss(kNQpSommerfeld, gx, gw)) throw std::logic_error("leggauss(3) is tabled");
+    const ll q = kNQpSommerfeld;
+    sb.q = q;
+    sb.n_src = N * q;
+    std::vector<double> &src = sb.rem.src, &t_src = sb.rem.t_src;
+    src.resize(static_cast<std::size_t>(3 * N * q));
+    t_src.resize(static_cast<std::size_t>(3 * N * q));
+    sb.shp_w.resize(static_cast<std::size_t>(3 * N * q));
+    const cd half_k = py_prod(cd(0.5, 0.0), md.k_m);  // `0.5 * k_m`, CPython's
+    for (ll n = 0; n < N; n++) {
+        const std::size_t nz = static_cast<std::size_t>(n);
+        const double h_half = 0.5 * g.seg_h[nz];
+        for (ll j = 0; j < q; j++) {
+            const std::size_t jz = static_cast<std::size_t>(j);
+            const double zloc = h_half * gx[jz];
+            const std::size_t at = static_cast<std::size_t>(n * q + j);
+            for (int c = 0; c < 3; c++) {
+                src[3 * at + static_cast<std::size_t>(c)] =
+                    g.seg_centers[nz][static_cast<std::size_t>(c)] + zloc * g.seg_tangents[nz][static_cast<std::size_t>(c)];
+                t_src[3 * at + static_cast<std::size_t>(c)] = g.seg_tangents[nz][static_cast<std::size_t>(c)];
+            }
+            const double w_node = h_half * gw[jz];
+            const cd kz = nec5::replay::np_cmul(md.k_m, cd(zloc, 0.0));  // `k_m * zloc`
+            cd shp_cos;
+            if (cos1) {
+                const cd s = std::sin(nec5::replay::np_cmul(half_k, cd(zloc, 0.0)));
+                shp_cos = nec5::replay::np_cmul(cd(-2.0, 0.0), nec5::replay::np_cmul(s, s));  // -2 * sin(.)**2
+            } else {
+                shp_cos = std::cos(kz);
+            }
+            const cd shp[3] = {cd(1.0, 0.0), std::sin(kz), shp_cos};
+            for (int c = 0; c < 3; c++)
+                sb.shp_w[static_cast<std::size_t>((c * N + n) * q + j)] = nec5::replay::np_cmul(shp[c], cd(w_node, 0.0));
+        }
+    }
+    sb.rem.gz = gz;
+    sb.rem.k_p = md.k_p;
+    sb.rem.k_m = md.k_m;
+    sb.rem.d_src.resize(static_cast<std::size_t>(N * q));
+    for (std::size_t j = 0; j < sb.rem.d_src.size(); j++) sb.rem.d_src[j] = gz - src[3 * j + 2];
+    somm_below::Source *source = somm_below::source();
+    if (source == nullptr) decline("no below/below table source (the buried fill's grid)");
+    sb.rem.grid = &source->get(md.eps_t, md.k_p, r1_below, fr.omega, kMu, somm_below::SPACING_FILL);
+    sb.rem.build_view();
+}
+
+// `_replay_somm_remainder_below` for observer rows [i0, i1): S (3, M, N)
+std::vector<std::vector<cd>> somm_below_replay(const Front &fr, SommBelow &sb, ll i0, ll i1) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs, M = i1 - i0, q = sb.q;
+    std::vector<std::vector<cd>> S(3, std::vector<cd>(static_cast<std::size_t>(M * N)));
+    const ll chunk = std::max<ll>(1, kRemainderChunkElems / std::max<ll>(1, sb.n_src));  // `elem_rows`
+    std::vector<double> obs, tob;
+    for (ll a = 0; a < M; a += chunk) {
+        const ll b = std::min(a + chunk, M), m = b - a;
+        obs.assign(static_cast<std::size_t>(3 * m), 0.0);
+        tob.assign(static_cast<std::size_t>(3 * m), 0.0);
+        for (ll r = 0; r < m; r++)
+            for (int c = 0; c < 3; c++) {
+                obs[static_cast<std::size_t>(3 * r + c)] = g.seg_centers[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+                tob[static_cast<std::size_t>(3 * r + c)] = g.seg_tangents[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+            }
+        std::vector<cd> table(static_cast<std::size_t>(m * sb.n_src));
+        sb.rem.project(obs.data(), tob.data(), m, table.data());
+        // `remainder_shape_reduce(shp_w, table)`: per k numpy's unfused
+        // complex product, added to a +0.0 accumulator
+        for (ll i = 0; i < m; i++) {
+            const cd *row = table.data() + i * N * q;
+            for (int s = 0; s < 3; s++) {
+                const cd *w = sb.shp_w.data() + s * N * q;
+                for (ll n = 0; n < N; n++) {
+                    double are = 0.0, aim = 0.0;
+                    for (ll k = 0; k < q; k++) {
+                        const double r0 = w[n * q + k].real(), i0w = w[n * q + k].imag();
+                        const double r1 = row[n * q + k].real(), i1 = row[n * q + k].imag();
+                        const double re = r0 * r1 - i0w * i1;
+                        const double im = r0 * i1 + i0w * r1;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    S[static_cast<std::size_t>(s)][static_cast<std::size_t>((a + i) * N + n)] = cd(are, aim);
+                }
+            }
+        }
+    }
+    return S;
+}
+
+// One band of a wholly-buried fill: `Phi - (A_m * Phi_img - S)`
+std::vector<std::vector<cd>> band_buried(const Front &fr, const Kernel &K, ll i0, ll i1, bool cos1, cd eta,
+                                         const std::vector<Point3> &img_c, const std::vector<Point3> &img_t,
+                                         SommBelow &sb, const std::vector<double> &rad) {
+    const Geometry &g = fr.geometry;
+    std::vector<std::vector<cd>> phi =
+        field_tensor_cplx(fr, K, i0, i1, g.seg_centers, g.seg_tangents, sb.k_m, eta, cos1, rad);
+    std::vector<std::vector<cd>> img = field_tensor_cplx(fr, K, i0, i1, img_c, img_t, sb.k_m, eta, cos1, rad);
+    const std::vector<std::vector<cd>> S = somm_below_replay(fr, sb, i0, i1);
+    for (int c = 0; c < 3; c++)
+        for (std::size_t qq = 0; qq < img[static_cast<std::size_t>(c)].size(); qq++) {
+            cd &y = img[static_cast<std::size_t>(c)][qq];
+            y = nec5::replay::np_cmul(sb.a_m, y);  // np.multiply(a_m, Pi, out=Pi)
+            const cd s = S[static_cast<std::size_t>(c)][qq];
+            y = cd(y.real() - s.real(), y.imag() - s.imag());  // Pi -= Si
+        }
+    for (int c = 0; c < 3; c++)
+        for (std::size_t qq = 0; qq < phi[static_cast<std::size_t>(c)].size(); qq++) {
+            cd &x = phi[static_cast<std::size_t>(c)][qq];
+            const cd y = img[static_cast<std::size_t>(c)][qq];
+            x = cd(x.real() - y.real(), x.imag() - y.imag());
+        }
+    return phi;
+}
+
 // --- `_contact_charge_correction` over a Sommerfeld ground ------------------
 //
 // A wire end on the finite ground (`_contact_nodes`: every `ground_minus`
@@ -985,17 +1239,23 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // The NEC-4.2 slot builds every solver with the extended kernel; the
     // reduced-kernel route (`sinusoidal_field_tensor`) is wired below but no
     // deck reaches it, so it is declined rather than served ungated.
-    if (!args.extended_kernel && !fr.nec4) decline("the reduced-kernel fill (the NEC-4.2 slot never builds one)");
+    if (!args.extended_kernel && !fr.nec4 && !fr.buried)
+        decline("the reduced-kernel fill (the NEC-4.2 slot never builds one)");
+    // `_operating_medium`'s `refuse_out_of_scope`: the extended kernel has no
+    // medium below the interface (the reference refuses; not worded here)
+    if (fr.buried && args.extended_kernel) decline("the extended kernel below the interface (the reference refuses)");
     const Geometry &g = fr.geometry;
     const SegView &sv = fr.basis;
     const ll N = g.n_segs;
     if (N < 1) decline("a structure with no segments");
     const std::size_t Nz = static_cast<std::size_t>(N);
 
-    // kd_min = min(|k| h), and the shape it picks
-    double kd_min = std::fabs(fr.k) * g.seg_h[0];
+    // kd_min = min(|k| h), and the shape it picks (a wholly-buried deck's k
+    // is k_m, its `np.abs` numpy's complex absolute)
+    const double abs_k = fr.buried ? np_cabs(fr.medium.k_m) : std::fabs(fr.k);
+    double kd_min = abs_k * g.seg_h[0];
     for (std::size_t i = 1; i < Nz; i++) {
-        const double v = std::fabs(fr.k) * g.seg_h[i];
+        const double v = abs_k * g.seg_h[i];
         if (v < kd_min || std::isnan(v)) kd_min = v;
     }
     if (std::isnan(kd_min)) decline("a non-finite k*h");
@@ -1043,8 +1303,21 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // (`2 * ground_z - z`, `tangents * [1, 1, -1]`)
     std::vector<Point3> img_c, img_t;
     Somm somm;
-    if (finite) somm_prepare(fr, args, cos1, somm);
-    const Somm *sp = finite ? &somm : nullptr;
+    if (finite && !fr.buried) somm_prepare(fr, args, cos1, somm);
+    const Somm *sp = finite && !fr.buried ? &somm : nullptr;
+    // a wholly-buried deck: eta_m = np.sqrt(mu / eps_m) (CPython's quotient,
+    // numpy's csqrt), the serve plan's r1_below, the below remainder
+    cd eta_b(0.0, 0.0);
+    SommBelow below;
+    if (fr.buried) {
+        eta_b = np_csqrt(py_quot(cd(kMu, 0.0), fr.medium.eps_m));
+        const double r1_below = serve_plan_below(fr);
+        somm_below_prepare(fr, cos1, r1_below, below);
+    }
+    auto bandf = [&](ll i0, ll i1) {
+        return fr.buried ? band_buried(fr, K, i0, i1, cos1, eta_b, img_c, img_t, below, rad)
+                         : band(K, i0, i1, cos1, pec, img_c, img_t, sp);
+    };
     if (pec || finite)
         for (std::size_t i = 0; i < Nz; i++) {
             const Point3 &c = g.seg_centers[i], &t = g.seg_tangents[i];
@@ -1059,7 +1332,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         for (int c = 0; c < 3; c++)
             for (std::size_t e = 0; e < E.n.size(); e++)
                 M[static_cast<std::size_t>(c)][static_cast<std::size_t>(E.n[e] * N + E.j[e])] = E.v[c][e];
-        const std::vector<std::vector<cd>> Phi = band(K, 0, N, cos1, pec, img_c, img_t, sp);
+        const std::vector<std::vector<cd>> Phi = bandf(0, N);
         std::vector<cd> tmp(Nz * Nz);
         for (int c = 0; c < 3; c++) {
             const nec5::Op a{Phi[static_cast<std::size_t>(c)].data(), N, N, N, 1};
@@ -1069,7 +1342,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
                 for (std::size_t i = 0; i < Nz * Nz; i++) G[i] = nec5::replay::c_add(G[i], tmp[i]);
         }
         if (fr.nec4) nec4_cap_columns(fr, pec, sp, G);
-        if (finite && !fr.nec4) contact_correction(fr, args, K, np, G);
+        if (finite && !fr.nec4 && !fr.buried) contact_correction(fr, args, K, np, G);
         apply_loading(fr, loading, E, G);
         return G;
     }
@@ -1115,7 +1388,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     const ll chunk = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / row_bytes);
     for (ll i0 = 0; i0 < N; i0 += chunk) {
         const ll i1 = std::min(i0 + chunk, N);
-        const std::vector<std::vector<cd>> Phi = band(K, i0, i1, cos1, pec, img_c, img_t, sp);
+        const std::vector<std::vector<cd>> Phi = bandf(i0, i1);
         // `_reduce_phi_band` over this band: per tile, P_c = Mcᵀ @ Φc[a:b]ᵀ
         // (csr_matvecs into zeros), then (P0 + P1) + P2, written back transposed
         for (const auto &tile : reduce_tiles(i1 - i0)) {
@@ -1137,7 +1410,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         }
     }
     if (fr.nec4) nec4_cap_columns(fr, pec, sp, G);
-    if (finite && !fr.nec4) contact_correction(fr, args, K, np, G);
+    if (finite && !fr.nec4 && !fr.buried) contact_correction(fr, args, K, np, G);
     apply_loading(fr, loading, E, G);
     return G;
 }
@@ -1296,7 +1569,7 @@ std::string dump_fill(const std::string &text, const FillLinalg &la, std::size_t
                 matrix(o, q + ".coeffs", ps.coeffs, n, np_, whole);
                 matrix(o, q + ".y", ps.y, np_, np_, whole);
             } catch (const FrontError &e) {
-                o.line(q + " ! ValueError " + nec5::dump_hex(e.message));
+                o.line(q + " ! " + e.kind + " " + nec5::dump_hex(e.message));
             } catch (const Declined &e) {
                 o.line(q + " ? declined " + nec5::dump_hex(e.what()));
             }

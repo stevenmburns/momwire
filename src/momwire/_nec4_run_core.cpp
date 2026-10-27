@@ -861,9 +861,8 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     const BuildTables &bt = c.sb->tables;
     const PortalDeck &deck = c.ss->deck;
     RunResult r;
-    if (group.environment.ground.kind != Ground::none)
-        for (const GeometryWire &w : deck.structure.wires)
-            if (w.p1[2] < 0.0 || w.p2[2] < 0.0) decline("a wire below the ground plane (momwire#1607 B6)");
+    // a wire below the plane is the engine's to serve or decline
+    // (momwire#1607 B6: the sinusoidal front's `_wire_media`)
     r.point = point_for(*c.sb, freq, group.ek, group.environment);
     r.pec = group.environment.ground.kind == Ground::pec;
     r.finite = group.environment.ground.kind == Ground::finite;
@@ -1332,6 +1331,11 @@ PrintNearBlock near_field(Ctx &c, const nec5::Card &card, const RunResult &r) {
     const std::vector<double> points = rp::near_grid(rq);
     const std::vector<GeometryWire> &wires = c.ss->deck.structure.wires;
     if (wires.empty()) decline("a near field with no wire");
+    // `_refuse_finite_ground_near_field`: any point of a deck with a buried
+    // wire is refused (not worded here)
+    if (r.finite)
+        for (const GeometryWire &w : wires)
+            if (w.p1[2] < 0.0 || w.p2[2] < 0.0) decline("a near field over a buried wire (the reference refuses)");
     if (r.finite) {
         // `_refuse_finite_ground_near_field`: a point in the soil, or on a
         // wire end standing on the ground, is refused (not worded here)

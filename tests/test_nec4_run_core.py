@@ -38,8 +38,14 @@ masked, by exact pattern and with the same count on both sides, over:
   route, reversed, three times, made by GM, as a T's arm, over GN 1 and
   GN 2, under LD 5, with PQ / RP / NE; refused for a feed on the pair,
   differing segment counts, radii, and LD 2 / LD 5 on the copy alone;
+- a wholly-buried deck (momwire#1607 B6a): a dipole over GN 2 with PQ and
+  RP, GN 3 with LD 5, an FR sweep under EX 6, a buried hub, two radii with a
+  port load; the refusals in Python's words (a buried wire over GN 1, and
+  the crossing scope: two radii, a hub, an oblique node, two nodes, two
+  nodes too close);
 - the declines: a near-field point on a wire's finite-ground contact or in
-  the soil.
+  the soil, a near field over a buried wire, a crossing node inside the
+  scope (B6b), wires on both sides with no crossing.
 """
 
 from __future__ import annotations
@@ -82,6 +88,13 @@ def acc():
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
     return _accel.acc
+
+
+@pytest.fixture(autouse=True)
+def _below_anchors_off(monkeypatch):
+    # The below/below grid's anchors (momwire#1471) follow the frequencies a
+    # process has seen; the gates hold both copies to the exact grid.
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +157,8 @@ TEE = "GW 1 10 0 0 -.25 0 0 .25 .001\nGW 2 5 0 0 0 .3 0 0 .001\n"
 RP = "RP 0 7 4 1000 0 0 30 90\n"
 GD_DIPOLE = "GW 1 11 0 -.25 .6 0 .25 .6 .001\n"
 DUP_DIPOLE = "GW 1 41 0 0 -.25 0 0 .25 .001\n"
+BURIED_DIPOLE = "GW 1 21 -5 0 -.5 5 0 -.5 .001\n"
+BFR = "FR 0 1 0 0 7.15\n"
 DUP_PARASITE = "GW 2 31 .2 0 -.23 .2 0 .23 .001\n"
 GD_RP = "RP 0 19 4 1000 0 0 5 45\n"
 
@@ -450,6 +465,138 @@ CASES = [
             "LD 5 3 0 0 1e7\n" + FR + "EX 0 1 6 0 1\nXQ\n",
         ),
         "refused",
+    ),
+    # momwire#1607 B6a: a wholly-buried deck, solved at k_m (anchors off, as
+    # the exe audit runs: the below grid's anchors follow process history)
+    (
+        "buried_dipole_gn2_pq_rp",
+        deck(
+            BURIED_DIPOLE,
+            "GN 2 0 0 0 13 .005\n"
+            + BFR
+            + "EX 0 1 11 0 1\nPQ 0\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "buried_dipole_gn3_ld5",
+        deck(
+            "GW 1 15 -3 0 -.3 3 0 -.3 .002\n",
+            "GN 3 0 0 0 20 .01\nLD 5 0 0 0 5.8e7\n" + BFR + "EX 0 1 8 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "buried_sweep_ex6",
+        deck(
+            "GW 1 11 -3 0 -.3 3 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 3 0 0 7 0.5\nEX 6 1 6 0 1 0\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "buried_hub_of_three",
+        deck(
+            "GW 1 10 0 0 -.3 3 0 -.3 .001\nGW 2 10 0 0 -.3 -3 0 -.3 .001\nGW 3 10 0 0 -.3 0 3 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nPQ 0\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "buried_two_radii_port_load",
+        deck(
+            "GW 1 11 -3 0 -.3 3 0 -.3 .001\nGW 2 11 -3 1 -.3 3 1 -.3 .002\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 6 0 1\nLD 4 2 6 6 50 0\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "buried_over_pec_refused",
+        deck(
+            "GW 1 11 -3 0 -.3 3 0 -.3 .001\n",
+            "GN 1\n" + BFR + "EX 0 1 6 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_two_radii_refused",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .002\nGW 2 10 0 0 0 3 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_hub_refused",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 10 0 0 0 3 0 -.3 .001\nGW 3 10 0 0 0 -3 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_oblique_refused",
+        deck(
+            "GW 1 10 0 0 0 3 0 5 .001\nGW 2 10 0 0 0 3 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_two_nodes_refused",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 10 0 0 0 3 0 -.3 .001\n"
+            "GW 3 10 5 0 0 5 0 5 .001\nGW 4 10 5 0 0 8 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_close_nodes_refused",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 10 0 0 0 3 0 -.3 .001\n"
+            "GW 3 10 .5 0 0 .5 0 5 .001\nGW 4 10 .5 0 0 3 2 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "refused",
+    ),
+    (
+        "crossing_declines",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 5 0 0 0 0 0 -1 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "declined",
+    ),
+    (
+        "above_and_below_declines",
+        deck(
+            "GW 1 11 -3 0 -.3 3 0 -.3 .001\nGW 2 5 5 0 .5 5 0 2 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 2 3 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "declined",
+    ),
+    (
+        "buried_near_field_declines",
+        deck(
+            BURIED_DIPOLE,
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 11 0 1\nNE 0 1 1 1 0 0 1 0 0 0\n",
+            "GE -1",
+        ),
+        "declined",
     ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (

@@ -11,9 +11,29 @@
 #include "_sinusoidal_front_core.h"
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
+#include "_somm_below_fill_core.h"
 
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace {
+// The process's below/below grid source for a buried sinusoidal fill
+// (momwire#1607 B6a), installed for the call when none is.
+struct SinBelowSource {
+    bool installed = false;
+    SinBelowSource() {
+        static std::shared_ptr<somm_below::Source> s = somm_below::fill_source();
+        if (somm_below::source() == nullptr) {
+            somm_below::set_source(s);
+            installed = true;
+        }
+    }
+    ~SinBelowSource() {
+        if (installed) somm_below::set_source(nullptr);
+    }
+};
+}  // namespace
 
 void register_nec5_deck(py::module_ &m) {
     m.def(
@@ -96,6 +116,7 @@ void register_nec5_deck(py::module_ &m) {
             la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
             const std::string text = latin1;
             py::gil_scoped_release nogil;
+            SinBelowSource below;
             return mw::sinusoidal::dump_fill(text, la, whole);
         },
         py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,

@@ -37,9 +37,11 @@ RUN TIME =), and takes the same three forms and the same picking
 (momwire-nec42-sinusoidal-linux-avx2 / -sse2 beside it). Point the NEC-4.2
 engine setting at it; `nec42` in the name is what makes SimNEC write it
 NEC-4.2 decks. It is a preview: it serves free space, a perfect ground
-(GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire above it, a GD
-far-field ground (the second medium's cliff), wire loading, networks
-(TL / NT), helices and near fields, and it still refuses by name, for now:
-    - a wire below the ground plane (buried wires, momwire#1607 B6);
+(GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire above it or
+every wire buried below it, a GD far-field ground (the second medium's
+cliff), wire loading, networks (TL / NT), helices and near fields, and it
+still refuses by name, for now:
+    - wires on both sides of the ground plane: a crossing junction, or
+      buried wires beside raised ones (momwire#1607 B6);
     - an insulated wire (an IS card, momwire#1607 B5b).
 The Python command serves those decks.

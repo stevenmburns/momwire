@@ -77,6 +77,12 @@ def _one_blas_thread():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _below_anchors_off(monkeypatch):
+    # the below grid's anchors follow process history; the gate is the exact grid
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+
+
 def _decks(root):
     return [
         p
@@ -289,6 +295,25 @@ CASES = [
             dipole(11)
             + "GW 2 9 .2 0 -.23 .2 0 .23 .001\nGW 3 9 .2 0 -.23 .2 0 .23 .001\n",
             "LD 5 0 0 0 3.5e7\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    # momwire#1607 B6a: a wholly-buried deck at k_m, dense and sparse
+    (
+        "buried_dense",
+        deck(
+            dipole(21, 5.0).replace("0 0 -5.0 0 0 5.0", "-5 0 -.5 5 0 -.5"),
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 7.15\nEX 0 1 11 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
+    (
+        "buried_sparse_ld5",
+        deck(
+            "GW 1 71 -5 0 -.5 5 0 -.5 .001\n",
+            "GN 3 0 0 0 20 .01\nLD 5 0 0 0 5.8e7\nFR 0 1 0 0 7.15\nEX 0 1 36 0 1\nXQ\n",
+            "GE -1",
         ),
         "fills",
     ),

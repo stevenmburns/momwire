@@ -16,7 +16,8 @@ these tests hold the C++ dump equal to it over:
   frequency), and the segment-in-the-plane refusal;
 - a wire listed twice (momwire#1042): merged as it runs, merged reversed
   under wire loading, and refused when the copy carries the feed;
-- the decline: a buried wire (momwire#1607 B6).
+- a wholly-buried deck at k_m (momwire#1607 B6a), and the decline of one
+  with wires on both sides of the interface.
 """
 
 from __future__ import annotations
@@ -184,13 +185,32 @@ CASES = [
         "fronts",
     ),
     (
-        "buried_declines",
+        "buried_vertical_at_k_m",
         deck(
             "GW 1 11 0 0 -1 0 0 -.5 .001\n",
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
             ge="GE -1",
         ),
+        "fronts",
+    ),
+    (
+        "above_and_below_declines",
+        deck(
+            "GW 1 11 0 0 -1 0 0 -.5 .001\nGW 2 5 1 0 .5 1 0 2 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 2 3 0 1\nXQ\n",
+            ge="GE -1",
+        ),
         "declined",
+    ),
+    # momwire#1607 B6a: a wholly-buried deck's basis at k_m
+    (
+        "buried_at_k_m",
+        deck(
+            "GW 1 11 -3 0 -.3 3 0 -.3 .001\nGW 2 11 -3 1 -.3 3 1 -.3 .002\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+            ge="GE -1",
+        ),
+        "fronts",
     ),
     # momwire#1042: a wire listed twice is solved once, or refused by name
     (

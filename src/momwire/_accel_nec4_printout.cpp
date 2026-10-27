@@ -8,8 +8,10 @@
 #include "_nec4_printout_core.h"
 #include "_sinusoidal_galerkin_run_core.h"
 #include "_sinusoidal_run_core.h"
+#include "_somm_below_fill_core.h"
 
 #include <complex>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -331,6 +333,26 @@ mw::nec5::EngineStamp stamp_of(const std::string &version, const std::string &va
 
 }  // namespace
 
+
+namespace {
+// The process's below/below grid source for a buried sinusoidal solve
+// (momwire#1607 B6a): the in-process memo `fill_source` keeps, installed for
+// the call when no other caller has one, and put back after.
+struct SinBelowSource {
+    bool installed = false;
+    SinBelowSource() {
+        static std::shared_ptr<somm_below::Source> s = somm_below::fill_source();
+        if (somm_below::source() == nullptr) {
+            somm_below::set_source(s);
+            installed = true;
+        }
+    }
+    ~SinBelowSource() {
+        if (installed) somm_below::set_source(nullptr);
+    }
+};
+}  // namespace
+
 void register_nec4_printout(py::module_ &m) {
     m.def(
         "nec4_render_printout",
@@ -381,6 +403,7 @@ void register_nec4_printout(py::module_ &m) {
             bool ok;
             {
                 py::gil_scoped_release nogil;
+                SinBelowSource below;
                 ok = mw::sinusoidal::printout(text, st, la, out, why);
             }
             return py::make_tuple(ok, py::str(ok ? out : why));

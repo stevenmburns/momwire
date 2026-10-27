@@ -10,10 +10,13 @@
 #include "_sinusoidal_front_core.h"
 
 #include "_sinusoidal_nec4_core.h"
+#include "_fma_inline.h"
+#include "_somm_below_grid_core.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -413,6 +416,679 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
 }
 
 
+// --- the lower medium (momwire#1607 B6) --------------------------------------
+//
+// `_medium_spec.wire_media` (one label per wire, BELOW the interface or not),
+// `_below_interface.crossing_junctions` and this family's crossing scope
+// (`_crossing_junction_indices`), each refusal in Python's own sentence: a
+// refusal is a printout of its own, the reference's words.
+
+// `sinusoidal._COINCIDENT_CROSSING_MEMBERS_REFUSAL`
+const char *const kCoincidentCrossingMembersRefusal =
+    "crossing junction {j} joins members whose node-adjacent edges are geometrically COINCIDENT (wi"
+    "res {a} and {b} run the same path within one wire radius): this family cannot solve that deck."
+    " The thin-wire kernel regularizes a pair at zero separation to the wire radius, which is what "
+    "it does for a segment against ITSELF, so coincident members contribute near-identical rows and"
+    " columns and the matrix is ill-conditioned rather than wrong in any one entry. Measured in FRE"
+    "E SPACE, no ground and no junction at all, on N coincident wires each carrying its own distinc"
+    "t arm: max|alpha| runs 2.3 / 41 / 184 for N = 1 / 2 / 4 against BSplineSolver's 2.0e-3 / 4.0e-"
+    "3 / 9.0e-3, and over a Sommerfeld ground the same deck reaches 8.4e32. So this is a property o"
+    "f the family, not of the crossing serve, and it is refused here because a crossing junction is"
+    " where the spelling that provokes it is natural: writing each radial of a buried screen as far"
+    "-end -> hub -> RISE gives every radial the same rise. Respell the screen with ONE rise and the"
+    " radials joined to it at depth (the buried-hub spelling, which this serve covers and which agr"
+    "ees with BSplineSolver to 8.4e-03 on a 12-radial screen), or run each radial straight from its"
+    " far end to the node so no two members share a path.";
+
+// `sinusoidal._CROSSING_HUB_REFUSAL`
+const char *const kCrossingHubRefusal =
+    "SinusoidalSolver serves a crossing node joining exactly two members, one above and one below t"
+    "he interface (momwire#1223 stage 2); a buried hub has not been measured on the point-matched l"
+    "ane yet. Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve it";
+
+// `sinusoidal._CROSSING_JUNCTION_REFUSAL`
+const char *const kCrossingJunctionRefusal =
+    "SinusoidalSolver serves wires wholly below the interface and DETACHED decks (above and buried "
+    "wires with no junction in the plane), but not yet a junction joining the two media: the point-"
+    "matched crossing node needs its own basis condition (I continuous, I'_above = I'_below/eps_til"
+    "de), which is momwire#1220 stage 2. Solve this deck with SinusoidalGalerkinSolver or BSplineSo"
+    "lver, which both serve the crossing junction, or leave the buried wires detached";
+
+// `sinusoidal._CROSSING_MULTI_NODE_REFUSAL`
+const char *const kCrossingMultiNodeRefusal =
+    "SinusoidalSolver serves one crossing node per deck (momwire#1223 stage 2); a deck with several"
+    " has not been measured on the point-matched lane yet. Solve it with SinusoidalGalerkinSolver o"
+    "r BSplineSolver, which serve it";
+
+// `sinusoidal._CROSSING_OBLIQUE_REFUSAL`
+const char *const kCrossingObliqueRefusal =
+    "SinusoidalSolver serves a crossing node whose two members' tilts off the interface normal sum "
+    "to at most 30 degrees (momwire#1223 stage 2): its imposed node condition, I'_above = I'_below/"
+    "eps_tilde, is the charge match for a wire crossing the plane normally, and a node that leans c"
+    "onverges to a different slope ratio, leaving an impedance error that grows with the lean and d"
+    "oes not refine away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node slope"
+    " emerges from the solution";
+
+// `sinusoidal._CROSSING_TWO_RADIUS_REFUSAL`
+const char *const kCrossingTwoRadiusRefusal =
+    "SinusoidalSolver does not serve a TWO-RADIUS crossing node (one wire radius above the interfac"
+    "e and another below, momwire#1630): measured against NEC-5, this lane's impedance responds to "
+    "the node's radii with the physics swapped -- the buried wires' radius barely moves it and the "
+    "above wire's moves it several times too far -- because its radius-step junction misses NEC eve"
+    "n in free space (momwire#1632). Solve it with SinusoidalGalerkinSolver or BSplineSolver, which"
+    " serve the two-radius node and track NEC-5's radius response to under 0.5 ohm, or give every w"
+    "ire one radius";
+
+// `_medium_spec._REFUSE_BURIED_PEC`
+const char *const kRefuseBuriedPec =
+    "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = {gz:g}) over a PERFECTLY"
+    " CONDUCTING ground, which has no lower medium to put it in: the field inside a perfect conduct"
+    "or is identically zero, so a wire there is not buried, it is shorted out. A buried wire is ser"
+    "ved only under ground_model='sommerfeld' with a ground_eps, where the half-space below the int"
+    "erface is a real medium with a wavenumber k_m = k0*sqrt(eps_tilde) of its own (momwire#553). R"
+    "aise the wire to or above the plane, or give the solve a Sommerfeld ground";
+
+// `_medium_spec._REFUSE_CONTACT_WITH_BURIED`
+const char *const kRefuseContactWithBuried =
+    "wire {cw} stands an END in the ground plane (ground CONTACT) and wire {bw} is buried below it:"
+    " that COMBINATION is not served, though each half is. momwire's contact model continues the wi"
+    "re's current into the ground as the C2-scaled IMAGE (momwire#151), which is a fiction that wor"
+    "ks because no observer is ever inside the ground to look at it - and a buried wire is exactly "
+    "such an observer. What it should see is the contact current SPREADING in the lower medium - a "
+    "real soil current this deck has NO CONDUCTOR for. momwire#524 phase 2 measured every consisten"
+    "t spelling of the missing cross-medium physics against engine prints for exactly these decks -"
+    " and those prints have since been withdrawn as a reference (momwire#929). They were captured w"
+    "ith the ground card's two fields written in the wrong order (antennaknobs#1025), and this deck"
+    " class turns out to have no documented spelling at all: the flag that serves buried wires leav"
+    "es a conductor ENDING on the interface without a basis function there, and the flag that bonds"
+    " such an end is documented as not usable when wires are buried. So the ~3 ohm (lone) / ~6 ohm "
+    "(fan) residual was measured against a combination the engine does not document, and neither it"
+    " nor the point-electrode reading drawn from it is evidence about this deck. The refusal itself"
+    " is unchanged and rests on momwire's own physics: the contact model has no conductor for the s"
+    "preading current, so there is nothing honest to serve here in either convention. Serve it by g"
+    "iving the spreading current its conductor: respell the radial - or the whole SCREEN of them - "
+    "to RISE to the surface and junction-join the monopole at z = 0; that crossing junction is serv"
+    "ed for one above wire over N below wires (momwire#524 phase 2, fan widening), including the sc"
+    "reen's buried-hub spelling (one rise, N radials joined at depth). Or raise the above-ground wi"
+    "re clear of the interface (an elevated feed over a buried counterpoise is served), or solve th"
+    "e buried structure on its own";
+
+// `_medium_spec._REFUSE_CROSSING`
+const char *const kRefuseCrossing =
+    "wire {w} crosses the ground interface mid-span (polyline z runs {zmin:.6g} to {zmax:.6g} acros"
+    "s ground_z = {gz:g}): momwire serves wires wholly at or above the interface, wires strictly be"
+    "low it, and current CROSSING it only through a crossing junction (momwire#524 phase 2): split "
+    "the wire AT the interface into a below wire whose end stands in the plane and an above wire st"
+    "arting there, and declare the junction between them - that deck is served, with continuity of "
+    "current and the interface slope condition emerging from the fill itself. A single polyline wit"
+    "h points on both sides is not split for you here, because feeds, loads, junctions and per-wire"
+    " results are keyed on its wire index and a split would renumber them; the deck seams split a c"
+    "ard wire at the plane themselves and keep its addresses (the NEC-2 portal since momwire#667, t"
+    "he EZNEC seam since momwire#1281). Alternatively leave the buried part DETACHED (a buried radi"
+    "al screen under a base-fed vertical is served that way, momwire#553), or raise the whole wire "
+    "clear of the interface";
+
+// `_below_interface.BURIED_EXTENDED_KERNEL_REFUSAL`
+const char *const kBuriedExtendedKernelRefusal =
+    "extended_kernel=True + a wire below the ground plane is not served: the extended kernel extend"
+    "s every pair of the geometry, and momwire#553 measured neither what that means for a pair span"
+    "ning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor for the ima"
+    "ge of a buried source, which lands in the OTHER medium. Solve the buried deck with extended_ke"
+    "rnel=False, which is the default";
+
+// `_below_interface.BURIED_GRAZING_REFUSAL`
+const char *const kBuriedGrazingRefusal =
+    "this deck's buried wires reach a below/below pair elevation of theta = {th:.4g} deg among the "
+    "pairs inside the cap, below the {floor:g} deg grazing floor the below/below surfaces are tabul"
+    "ated from (the pair's two depths add to {depth:.4g} m, and theta = atan2(depth sum, horizontal"
+    " separation)). The floor is asked only of pairs inside the cap \xe2\x80\x94" " image distance "
+    "R1 within 4 in-medium wavelengths, the pairs whose remainder is evaluated; past it the remaind"
+    "er is served as zero (momwire#1053, #1187). Below the floor the surfaces carry the lateral wav"
+    "e's LOGARITHMIC structure \xe2\x80\x94" " measured drift 1.1 to 3.3 of scale between 2 and 0.0"
+    "5 deg \xe2\x80\x94" " which no uniform lattice resolves, and theta = 0 has no node at all beca"
+    "use h = 0 leaves the tail without its exponential decay. Bury the wires deeper, shorten them, "
+    "or wait for the log-spaced grazing band (momwire#553 U2's recorded follow-up)";
+
+
+const double kCrossingTiltSumMaxDeg = 30.0;   // sinusoidal._CROSSING_TILT_SUM_MAX_DEG
+const double kMinCrossingNodeSeparationM = 1.0;  // _below_interface.MIN_CROSSING_NODE_SEPARATION_M
+
+// Python's `format(x, ".Ng")` (and `"g"`, six digits) for a double
+std::string py_g(double x, int prec = 6) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.*g", prec, x);
+    return buf;
+}
+
+// `str.format` over `{name}` / `{name:spec}` fields, each value already
+// formatted by its caller
+std::string py_fill(const std::string &tmpl, const std::vector<std::pair<std::string, std::string>> &vals) {
+    std::string out;
+    for (std::size_t i = 0; i < tmpl.size(); i++) {
+        if (tmpl[i] != '{') {
+            out += tmpl[i];
+            continue;
+        }
+        const std::size_t close = tmpl.find('}', i);
+        std::string name = tmpl.substr(i + 1, close - i - 1);
+        const std::size_t colon = name.find(':');
+        if (colon != std::string::npos) name = name.substr(0, colon);
+        bool hit = false;
+        for (const auto &kv : vals)
+            if (kv.first == name) {
+                out += kv.second;
+                hit = true;
+                break;
+            }
+        if (!hit) throw std::logic_error("an unfilled refusal field: " + name);
+        i = close;
+    }
+    return out;
+}
+
+[[noreturn]] void refuse_impl(const std::string &m) { throw FrontError(m); }
+[[noreturn]] void refuse_ni(const std::string &m) { throw FrontError(m, "NotImplementedError"); }
+
+// `_ground_spec.contact_ends(polylines, gz)`: (wire, at start), sorted as
+// Python sorts ("end" < "start")
+std::vector<std::pair<ll, bool>> contact_ends(const std::vector<std::vector<Point3>> &pls, double gz) {
+    std::vector<std::pair<ll, bool>> out;
+    for (std::size_t w = 0; w < pls.size(); w++) {
+        const double tol = ground_touch_tol(pls[w]);
+        if (std::fabs(pls[w].back()[2] - gz) <= tol) out.push_back({static_cast<ll>(w), false});
+        if (std::fabs(pls[w].front()[2] - gz) <= tol) out.push_back({static_cast<ll>(w), true});
+    }
+    return out;
+}
+
+// `_medium_spec.grounded_crossing_exemption(polylines, gz, groups)`
+std::set<std::pair<ll, bool>> crossing_exemption(const std::vector<std::vector<Point3>> &pls, double gz,
+                                                 const std::vector<std::vector<std::pair<ll, bool>>> &groups) {
+    std::set<std::pair<ll, bool>> ends;
+    for (const auto &members : groups) {
+        if (members.size() < 2) continue;
+        const auto &pl = pls[static_cast<std::size_t>(members[0].first)];
+        const Point3 &pt = members[0].second ? pl.front() : pl.back();
+        if (std::fabs(pt[2] - gz) > ground_touch_tol(pl)) continue;
+        bool reaches = false;
+        for (const auto &m : members) {
+            const auto &plm = pls[static_cast<std::size_t>(m.first)];
+            double zmax = plm[0][2];
+            for (const Point3 &p : plm) zmax = std::max(zmax, p[2]);
+            if (zmax > gz + ground_touch_tol(plm)) reaches = true;
+        }
+        if (!reaches) continue;
+        ends.insert(members.begin(), members.end());
+    }
+    return ends;
+}
+
+// `_medium_spec.wire_media(polylines, gz, lower_medium=, pec=, crossing_ends=)`:
+// per wire true when BELOW the interface, or Python's ValueError
+std::vector<bool> wire_media(const std::vector<std::vector<Point3>> &pls, double gz, bool lower_medium, bool pec,
+                             const std::set<std::pair<ll, bool>> &crossing_ends) {
+    std::vector<bool> below(pls.size(), false);
+    bool any = false;
+    for (std::size_t w = 0; w < pls.size(); w++) {
+        const auto &pl = pls[w];
+        const double tol = ground_touch_tol(pl);
+        double zmin = pl[0][2], zmax = pl[0][2];
+        for (const Point3 &p : pl) {
+            if (std::isnan(p[2])) decline("a NaN height (the reference's min / max are numpy's)");
+            zmin = std::min(zmin, p[2]);
+            zmax = std::max(zmax, p[2]);
+        }
+        if (zmin >= gz - tol) continue;
+        if (zmax >= gz - tol) {
+            // `_is_crossing_below`
+            bool ok = !(zmax > gz + tol);
+            const bool ts = std::fabs(pl.front()[2] - gz) <= tol, te = std::fabs(pl.back()[2] - gz) <= tol;
+            if (!(ts || te)) ok = false;
+            for (std::size_t i = 1; i + 1 < pl.size(); i++)
+                if (pl[i][2] >= gz - tol) ok = false;
+            if (ts && !crossing_ends.count({static_cast<ll>(w), true})) ok = false;
+            if (te && !crossing_ends.count({static_cast<ll>(w), false})) ok = false;
+            if (!ok)
+                refuse_impl(py_fill(kRefuseCrossing, {{"w", std::to_string(w)},
+                                                      {"zmin", py_g(zmin)},
+                                                      {"zmax", py_g(zmax)},
+                                                      {"gz", py_g(gz)}}));
+        }
+        if (!lower_medium) {
+            if (!pec) decline("a buried wire over a reflection-coefficient ground");
+            refuse_impl(py_fill(kRefuseBuriedPec, {{"w", std::to_string(w)}, {"zmin", py_g(zmin)}, {"gz", py_g(gz)}}));
+        }
+        below[w] = true;
+        any = true;
+    }
+    if (any) {
+        std::size_t first_below = 0;
+        while (!below[first_below]) first_below++;
+        for (const auto &c : contact_ends(pls, gz))
+            if (!crossing_ends.count(c))
+                refuse_impl(py_fill(kRefuseContactWithBuried,
+                                    {{"cw", std::to_string(c.first)}, {"bw", std::to_string(first_below)}}));
+    }
+    return below;
+}
+
+// `_below_interface.crossing_junctions(media, groups, grounded, polylines,
+// gz, radii, two_radius=True)`
+std::vector<ll> crossing_junctions(const std::vector<bool> &below, const std::vector<std::vector<std::pair<ll, bool>>> &groups,
+                                   const std::set<ll> &grounded, const std::vector<std::vector<Point3>> &pls, double gz,
+                                   const std::vector<double> &radii) {
+    if (std::find(below.begin(), below.end(), true) == below.end()) return {};
+    std::vector<ll> crossing;
+    for (std::size_t j = 0; j < groups.size(); j++) {
+        if (!grounded.count(static_cast<ll>(j))) continue;
+        bool a = false, b = false;
+        for (const auto &m : groups[j]) (below[static_cast<std::size_t>(m.first)] ? b : a) = true;
+        if (a && b) crossing.push_back(static_cast<ll>(j));
+    }
+    std::set<std::pair<ll, bool>> earned;
+    for (ll j : crossing) earned.insert(groups[static_cast<std::size_t>(j)].begin(), groups[static_cast<std::size_t>(j)].end());
+    std::size_t first_below = 0;
+    while (!below[first_below]) first_below++;
+    for (const auto &c : contact_ends(pls, gz))
+        if (!earned.count(c))
+            refuse_impl(py_fill(kRefuseContactWithBuried,
+                                {{"cw", std::to_string(c.first)}, {"bw", std::to_string(first_below)}}));
+    if (crossing.empty()) return {};
+    if (crossing.size() > 1) {
+        // `_closest_crossing_nodes`: each node at its first member's end, the
+        // pairs in `np.triu_indices` order, numpy's hypot, the first argmin
+        std::vector<Point3> pts;
+        for (ll j : crossing) {
+            const auto &m0 = groups[static_cast<std::size_t>(j)][0];
+            const auto &pl = pls[static_cast<std::size_t>(m0.first)];
+            pts.push_back(m0.second ? pl.front() : pl.back());
+        }
+        double best = std::numeric_limits<double>::infinity();
+        std::size_t bi = 0, bj = 0;
+        bool first = true;
+        for (std::size_t i = 0; i < pts.size(); i++)
+            for (std::size_t j = i + 1; j < pts.size(); j++) {
+                const double sep = std::hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]);
+                if (std::isnan(sep)) decline("a NaN crossing-node separation");
+                if (first || sep < best) {
+                    best = sep;
+                    bi = i;
+                    bj = j;
+                    first = false;
+                }
+            }
+        if (best < kMinCrossingNodeSeparationM)
+            refuse_ni("crossing junctions " + std::to_string(crossing[bi]) + " and " + std::to_string(crossing[bj]) +
+                        ", at (" + py_g(pts[bi][0]) + ", " + py_g(pts[bi][1]) + ") and (" + py_g(pts[bj][0]) + ", " +
+                        py_g(pts[bj][1]) + "), stand " + py_g(best) +
+                        " m apart: the crossing serve completes several crossing nodes per deck from " +
+                        py_g(kMinCrossingNodeSeparationM) +
+                        " m apart, the closest separation its two-node collapse was gated at (antennaknobs plan "
+                        "U9), and closer crossing nodes have no measured completion");
+    }
+    for (ll j : crossing) {
+        ll n_above = 0;
+        for (const auto &m : groups[static_cast<std::size_t>(j)])
+            if (!below[static_cast<std::size_t>(m.first)]) n_above++;
+        if (n_above != 1)
+            refuse_ni("crossing junction with more than one above member: the crossing serve joins ONE above "
+                        "wire to N below wires at the interface (momwire#524 fan widening); the above-tent x "
+                        "above-tent interface corner has no measured convention");
+    }
+    for (std::size_t j = 0; j < groups.size(); j++) {
+        if (std::find(crossing.begin(), crossing.end(), static_cast<ll>(j)) != crossing.end()) continue;
+        bool a = false, b = false;
+        for (const auto &m : groups[j]) (below[static_cast<std::size_t>(m.first)] ? b : a) = true;
+        if (!grounded.count(static_cast<ll>(j)) && !(a && b)) continue;
+        refuse_ni("a deck with a crossing junction and an in-plane or media-mixing OTHER junction is not "
+                    "served: the complete crossing spelling completes every value-1 end on its axes, and a "
+                    "junction standing in the interface sits where the corner and image terms live, which has "
+                    "no measured completion (momwire#524 phase 2, momwire#1133)");
+    }
+    double rmin = radii[0], rmax = radii[0];
+    for (double r : radii) {
+        rmin = std::min(rmin, r);
+        rmax = std::max(rmax, r);
+    }
+    if (rmax - rmin > 0.0) {
+        // `crossing_side_radii(media, radii, crossing_above_member(...))`:
+        // the above side is the node's above member; the below side's spread
+        ll above_member = -1;
+        if (crossing.size() == 1)
+            for (const auto &m : groups[static_cast<std::size_t>(crossing[0])])
+                if (!below[static_cast<std::size_t>(m.first)]) {
+                    above_member = m.first;
+                    break;
+                }
+        for (int side = 0; side < 2; side++) {
+            if (side == 0 && above_member >= 0) continue;
+            double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+            for (std::size_t w = 0; w < below.size(); w++)
+                if (below[w] == (side == 1)) {
+                    lo = std::min(lo, radii[w]);
+                    hi = std::max(hi, radii[w]);
+                }
+            if (hi - lo > 0.0)
+                refuse_ni(std::string("crossing serve with per-wire radii that differ within the ") +
+                            (side == 0 ? "above" : "below") +
+                            " wires: the two-radius rule serves one radius per side of the interface (the node's "
+                            "point tests at the buried radius, antennaknobs plan U5); a spread within one side has "
+                            "no measured node radius");
+        }
+        if (crossing.size() > 1)
+            refuse_ni("a TWO-RADIUS crossing deck with " + std::to_string(crossing.size()) +
+                        " crossing junctions: the two-radius node (antennaknobs plan U5) and more than one crossing "
+                        "node (plan U9) were each measured alone, and a two-radius deck with several nodes has no "
+                        "measured completion");
+    }
+    return crossing;
+}
+
+// `SinusoidalSolver._node_edge_tilt_deg(w, end)`: numpy's degrees(arccos)
+double node_edge_tilt_deg(const std::vector<Point3> &pl, bool start) {
+    const Point3 &node = start ? pl[0] : pl[pl.size() - 1];
+    const Point3 &nxt = start ? pl[1] : pl[pl.size() - 2];
+    const Point3 d = sub(nxt, node);
+    const double cosv = std::fabs(d[2]) / norm3(d);
+    return (180.0 / kPi) * std::acos(std::min(1.0, cosv)) * 1.0;
+}
+
+// `_crossing_junction_indices`' scope checks: `_refuse_coincident_crossing_
+// members`, then `_refuse_crossing_scope` (two radii, several nodes, a hub,
+// `_refuse_oblique_crossing`)
+void refuse_crossing_scope(const std::vector<ll> &crossing, const std::vector<std::vector<std::pair<ll, bool>>> &groups,
+                           const std::vector<std::vector<Point3>> &pls, const std::vector<double> &radii) {
+    if (crossing.empty()) return;
+    for (ll j : crossing) {
+        const auto &members = groups[static_cast<std::size_t>(j)];
+        std::vector<std::pair<Point3, Point3>> edges;
+        for (const auto &m : members) {
+            const auto &pl = pls[static_cast<std::size_t>(m.first)];
+            edges.push_back(m.second ? std::make_pair(pl[0], pl[1])
+                                     : std::make_pair(pl[pl.size() - 1], pl[pl.size() - 2]));
+        }
+        for (std::size_t i = 0; i < edges.size(); i++)
+            for (std::size_t jj = i + 1; jj < edges.size(); jj++) {
+                const double a = std::max(radii[static_cast<std::size_t>(members[i].first)],
+                                          radii[static_cast<std::size_t>(members[jj].first)]);
+                if (norm3(sub(edges[i].first, edges[jj].first)) <= a &&
+                    norm3(sub(edges[i].second, edges[jj].second)) <= a)
+                    refuse_ni(py_fill(kCoincidentCrossingMembersRefusal, {{"j", std::to_string(j)},
+                                                                          {"a", std::to_string(members[i].first)},
+                                                                          {"b", std::to_string(members[jj].first)}}));
+            }
+    }
+    double rmin = radii[0], rmax = radii[0];
+    for (double r : radii) {
+        rmin = std::min(rmin, r);
+        rmax = std::max(rmax, r);
+    }
+    if (rmax - rmin > 0.0)
+        refuse_ni("crossing junction " + std::to_string(crossing[0]) + " joins wires of different radii: " +
+                    kCrossingTwoRadiusRefusal);
+    if (crossing.size() > 1)
+        refuse_ni(std::to_string(crossing.size()) + " crossing junctions: " + kCrossingMultiNodeRefusal);
+    for (ll j : crossing) {
+        const std::size_t nm = groups[static_cast<std::size_t>(j)].size();
+        if (nm != 2)
+            refuse_ni("crossing junction " + std::to_string(j) + " joins " + std::to_string(nm) +
+                        " members: " + kCrossingHubRefusal);
+    }
+    for (ll j : crossing) {
+        std::vector<double> tilts;
+        double sum = 0.0;
+        for (const auto &m : groups[static_cast<std::size_t>(j)]) {
+            tilts.push_back(node_edge_tilt_deg(pls[static_cast<std::size_t>(m.first)], m.second));
+            sum = sum + tilts.back();
+        }
+        if (sum > kCrossingTiltSumMaxDeg + 1e-9) {
+            std::string each;
+            for (std::size_t q = 0; q < tilts.size(); q++) {
+                char buf[64];
+                std::snprintf(buf, sizeof buf, "%.1f", tilts[q]);
+                each += (q ? " + " : "") + std::string(buf);
+            }
+            char tot[64];
+            std::snprintf(tot, sizeof tot, "%.1f", sum);
+            refuse_ni("crossing junction " + std::to_string(j) + ": its members' tilts off the interface normal sum to " +
+                        tot + " degrees (" + each + "): " + kCrossingObliqueRefusal);
+        }
+    }
+}
+
+
+// --- numpy's complex arithmetic, for the basis at a complex k ----------------
+//
+// An array product is numpy's fused one (each part one fused multiply-add,
+// `_cmul.cmul`); a product of two 0-d scalars is numpy's scalar math
+// (`cdouble_ctype_multiply`, unfused); a quotient is `CDOUBLE_divide` either
+// way; CPython's own complex scalars take `_Py_c_prod` / `_Py_c_quot`. A
+// real operand is promoted to (x, 0) first, as numpy promotes it.
+cd xmul(cd a, cd b) {  // array
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
+}
+cd smul(cd a, cd b) {  // numpy 0-d scalars
+    return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+}
+cd pmul(cd a, cd b) { return smul(a, b); }  // CPython 3.12's `_Py_c_prod`, the same formula
+cd xdiv(cd a, cd b) {                       // `CDOUBLE_divide`
+    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
+    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
+    if (in2r_abs >= in2i_abs) {
+        if (in2r_abs == 0 && in2i_abs == 0) return cd(in1r / in2r_abs, in1i / in2i_abs);
+        const double rat = in2i / in2r;
+        const double scl = 1.0 / (in2r + in2i * rat);
+        return cd((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+    }
+    const double rat = in2r / in2i;
+    const double scl = 1.0 / (in2i + in2r * rat);
+    return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+}
+cd pdiv(cd a, cd b) {  // CPython 3.12's `_Py_c_quot`
+    const double abs_breal = b.real() < 0 ? -b.real() : b.real();
+    const double abs_bimag = b.imag() < 0 ? -b.imag() : b.imag();
+    if (abs_breal >= abs_bimag) {
+        if (abs_breal == 0.0) decline("a complex division by zero (the reference raises)");
+        const double ratio = b.imag() / b.real();
+        const double denom = b.real() + b.imag() * ratio;
+        return cd((a.real() + a.imag() * ratio) / denom, (a.imag() - a.real() * ratio) / denom);
+    }
+    const double ratio = b.real() / b.imag();
+    const double denom = b.real() * ratio + b.imag();
+    return cd((a.real() * ratio + a.imag()) / denom, (a.imag() * ratio - a.real()) / denom);
+}
+cd xadd(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
+cd xsub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
+cd xneg(cd a) { return cd(-a.real(), -a.imag()); }
+cd re(double x) { return cd(x, 0.0); }
+bool nonzero(cd z) { return z.real() != 0.0 || z.imag() != 0.0; }
+// numpy's complex sin / cos / log: libm's csin / ccos / clog
+cd csin_(cd z) { return std::sin(z); }
+cd ccos_(cd z) { return std::cos(z); }
+cd clog_(cd z) { return std::log(z); }
+
+// `_basis_coefs(geom, k)` at a complex scalar k (a wholly-buried deck's k_m,
+// momwire#1222), the closed forms in numpy's complex arithmetic op for op.
+// `a_const` is a 0-d scalar when the radius is uniform (`ka = k * a` CPython's
+// product, the log numpy's), else per segment. No ground-junction patch: a
+// wire end on the plane beside a buried wire is refused upstream.
+void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
+    const Geometry &g = f.geometry;
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    for (std::size_t i = 0; i < n; i++)
+        if (g.ground_minus[i] || g.ground_plus[i] || g.crossing_minus[i] || g.crossing_plus[i])
+            decline("a ground or crossing end at a complex k (momwire#1607 B6b)");
+    const bool scalar = f.uniform_radius;
+    std::vector<cd> ac(n);
+    if (scalar) {
+        const cd ka = pmul(k, re(a[0]));
+        const cd lg = clog_(pdiv(re(2.0), ka));
+        const cd v = xdiv(re(1.0), cd(lg.real() - kEulerGamma, lg.imag() - 0.0));
+        std::fill(ac.begin(), ac.end(), v);
+    } else {
+        // `ka = k * a` over the per-segment radii: an array product
+        for (std::size_t i = 0; i < n; i++) {
+            const cd ka = xmul(k, re(a[i]));
+            const cd lg = clog_(xdiv(re(2.0), ka));
+            ac[i] = xdiv(re(1.0), xsub(lg, re(kEulerGamma)));
+        }
+    }
+    // a scalar times a scalar, or an array product
+    auto amul = [&](cd x, cd y) { return scalar ? smul(x, y) : xmul(x, y); };
+    std::vector<cd> kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), atom(n);
+    for (std::size_t i = 0; i < n; i++) {
+        kd[i] = xmul(k, re(g.seg_h[i]));
+        sin_kd[i] = csin_(kd[i]);
+        cos_kd[i] = ccos_(kd[i]);
+        s2[i] = csin_(xmul(re(0.5), kd[i]));
+        c2[i] = ccos_(xmul(re(0.5), kd[i]));
+        s4[i] = csin_(xmul(re(0.25), kd[i]));
+        // `_recip_sin_gap(kd)`
+        const cd r4 = csin_(xmul(re(0.25), kd[i]));
+        recip[i] = xdiv(xmul(r4, r4), xmul(csin_(xmul(re(0.5), kd[i])), ccos_(xmul(re(0.5), kd[i]))));
+        atom[i] = xmul(xdiv(s2[i], c2[i]), ac[i]);
+    }
+    std::vector<cd> Pm(n, cd(0.0, 0.0)), Pp(n, cd(0.0, 0.0));
+    for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+        cd &t = Pm[static_cast<std::size_t>(g.nm_basis[e])];
+        t = xadd(t, atom[static_cast<std::size_t>(g.nm_seg[e])]);
+    }
+    for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+        cd &t = Pp[static_cast<std::size_t>(g.np_basis[e])];
+        t = xadd(t, xneg(atom[static_cast<std::size_t>(g.np_seg[e])]));
+    }
+    std::vector<bool> has_minus(n), has_plus(n);
+    for (std::size_t i = 0; i < n; i++) {
+        has_minus[i] = g.nm_count[i] > 0;
+        has_plus[i] = g.np_count[i] > 0;
+    }
+    std::vector<cd> Qm(n), Qp(n), A(n), B(n), C(n), AC(n), sin_safe(n), omc(n), s4sq(n);
+    for (std::size_t i = 0; i < n; i++) {
+        const cd a_ = ac[i];
+        const cd aa = amul(a_, a_);
+        const cd D = xadd(xmul(xadd(xmul(Pm[i], Pp[i]), aa), sin_kd[i]),
+                          xmul(xmul(xsub(Pm[i], Pp[i]), a_), cos_kd[i]));
+        const cd D_safe = nonzero(D) ? D : re(1.0);
+        sin_safe[i] = nonzero(sin_kd[i]) ? sin_kd[i] : re(1.0);
+        omc[i] = xmul(xmul(re(2.0), s2[i]), s2[i]);
+        Qm[i] = xdiv(xsub(xmul(a_, omc[i]), xmul(Pp[i], sin_kd[i])), D_safe);
+        Qp[i] = xdiv(xsub(xmul(xneg(a_), omc[i]), xmul(Pm[i], sin_kd[i])), D_safe);
+        A[i] = re(-1.0);  // `np.full(n_segs, -1.0)`, cast at the concatenation
+        B[i] = xdiv(xmul(xmul(a_, xadd(Qm[i], Qp[i])), s2[i]), sin_safe[i]);
+        C[i] = xdiv(xmul(xmul(a_, xsub(Qm[i], Qp[i])), c2[i]), sin_safe[i]);
+        const cd dP = xsub(Pm[i], Pp[i]);
+        s4sq[i] = xmul(s4[i], s4[i]);
+        const cd t1 = xmul(xmul(amul(amul(re(4.0), a_), a_), s2[i]), s4sq[i]);
+        const cd t2 = xmul(xmul(amul(re(2.0), a_), dP), s4sq[i]);
+        const cd t3 = xmul(xmul(xmul(xmul(re(2.0), s2[i]), c2[i]), Pm[i]), Pp[i]);
+        const cd t4 = xmul(xmul(xmul(amul(re(2.0), a_), dP), s2[i]), s2[i]);
+        AC[i] = xdiv(xadd(xsub(xsub(t1, t2), t3), t4), D_safe);
+    }
+    bool any_branch = false;
+    for (std::size_t i = 0; i < n; i++) any_branch = any_branch || !(has_minus[i] && has_plus[i]);
+    if (any_branch) {
+        for (std::size_t i = 0; i < n; i++) {
+            const bool only_plus = has_plus[i] && !has_minus[i];
+            const bool only_minus = has_minus[i] && !has_plus[i];
+            const bool iso = !has_minus[i] && !has_plus[i];
+            const cd a_ = ac[i];
+            const cd dxs = nonzero(cos_kd[i]) ? cos_kd[i] : re(1.0);
+            const cd qpe1_d = xsub(xmul(a_, sin_kd[i]), xmul(Pp[i], cos_kd[i]));
+            const cd qpe1_s = nonzero(qpe1_d) ? qpe1_d : re(1.0);
+            const cd Q_plus_e1 = xdiv(xneg(omc[i]), qpe1_s);
+            const cd B_e1 = xdiv(xadd(s2[i], xmul(xmul(a_, Q_plus_e1), c2[i])), dxs);
+            const cd C_e1 = xdiv(xadd(c2[i], xmul(xmul(a_, Q_plus_e1), s2[i])), dxs);
+            const cd qme2_d = xadd(xmul(a_, sin_kd[i]), xmul(Pm[i], cos_kd[i]));
+            const cd qme2_s = nonzero(qme2_d) ? qme2_d : re(1.0);
+            const cd Q_minus_e2 = xdiv(omc[i], qme2_s);
+            const cd B_e2 = xdiv(xadd(xneg(s2[i]), xmul(xmul(a_, Q_minus_e2), c2[i])), dxs);
+            const cd C_e2 = xdiv(xsub(c2[i], xmul(xmul(a_, Q_minus_e2), s2[i])), dxs);
+            const cd c2s = nonzero(c2[i]) ? c2[i] : re(1.0);
+            const cd C_iso = xdiv(re(1.0), c2s);
+            if (only_plus || iso) Qm[i] = cd(0.0, 0.0);
+            if (only_minus) Qm[i] = Q_minus_e2;
+            if (only_minus || iso) Qp[i] = cd(0.0, 0.0);
+            if (only_plus) Qp[i] = Q_plus_e1;
+            if (only_plus) B[i] = B_e1;
+            if (only_minus) B[i] = B_e2;
+            if (iso) B[i] = cd(0.0, 0.0);
+            if (only_plus) C[i] = C_e1;
+            if (only_minus) C[i] = C_e2;
+            if (iso) C[i] = C_iso;
+            const cd cos_gap_e = xmul(xmul(re(2.0), csin_(xmul(re(0.75), kd[i]))), s4[i]);
+            const cd AC_e1 = xdiv(xadd(cos_gap_e, xmul(xmul(a_, Q_plus_e1), s2[i])), dxs);
+            const cd AC_e2 = xdiv(xsub(cos_gap_e, xmul(xmul(a_, Q_minus_e2), s2[i])), dxs);
+            const cd AC_iso = xdiv(xmul(re(2.0), s4sq[i]), c2s);
+            if (only_plus) AC[i] = AC_e1;
+            if (only_minus) AC[i] = AC_e2;
+            if (iso) AC[i] = AC_iso;
+        }
+    }
+    std::vector<ll> all_seg, all_basis;
+    std::vector<cd> all_A, all_B, all_C, all_AC;
+    std::vector<int8_t> all_sigma;
+    for (std::size_t i = 0; i < n; i++) {
+        all_seg.push_back(static_cast<ll>(i));
+        all_basis.push_back(static_cast<ll>(i));
+        all_A.push_back(A[i]);
+        all_B.push_back(B[i]);
+        all_C.push_back(C[i]);
+        all_AC.push_back(AC[i]);
+        all_sigma.push_back(1);
+    }
+    for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+        const std::size_t sgi = static_cast<std::size_t>(g.nm_seg[e]);
+        const cd an = ac[scalar ? 0 : sgi];
+        const cd q = Qm[static_cast<std::size_t>(g.nm_basis[e])];
+        all_seg.push_back(g.nm_seg[e]);
+        all_basis.push_back(g.nm_basis[e]);
+        all_A.push_back(xdiv(xmul(an, q), sin_kd[sgi]));
+        all_B.push_back(xdiv(xmul(an, q), xmul(re(2.0), c2[sgi])));
+        all_C.push_back(xdiv(xmul(xneg(an), q), xmul(re(2.0), s2[sgi])));
+        all_AC.push_back(xmul(xmul(an, q), recip[sgi]));
+        all_sigma.push_back(g.nm_sigma[e]);
+    }
+    for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+        const std::size_t sgi = static_cast<std::size_t>(g.np_seg[e]);
+        const cd an = ac[scalar ? 0 : sgi];
+        const cd q = Qp[static_cast<std::size_t>(g.np_basis[e])];
+        all_seg.push_back(g.np_seg[e]);
+        all_basis.push_back(g.np_basis[e]);
+        all_A.push_back(xdiv(xmul(xneg(an), q), sin_kd[sgi]));
+        all_B.push_back(xdiv(xmul(an, q), xmul(re(2.0), c2[sgi])));
+        all_C.push_back(xdiv(xmul(an, q), xmul(re(2.0), s2[sgi])));
+        all_AC.push_back(xmul(xmul(xneg(an), q), recip[sgi]));
+        all_sigma.push_back(g.np_sigma[e]);
+    }
+    std::vector<std::size_t> order(all_seg.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return all_seg[x] < all_seg[y]; });
+    SegView &v = f.basis;
+    v.starts.assign(n + 1, 0);
+    for (std::size_t i = 0; i < n; i++) v.starts[i + 1] = v.starts[i] + 1 + g.nm_count[i] + g.np_count[i];
+    for (std::size_t o : order) {
+        v.jbasis.push_back(all_basis[o]);
+        v.A.push_back(all_A[o]);
+        v.B.push_back(all_B[o]);
+        v.C.push_back(all_C[o]);
+        v.AC.push_back(all_AC[o]);
+        v.sigma.push_back(all_sigma[o]);
+    }
+}
+
+// `_crossing_fill.buried_medium(ground_eps, omega, eps, k)`
+Medium buried_medium(double eps_r, double sigma, double omega, double k) {
+    Medium m;
+    m.eps_t = cd(eps_r, (-sigma) / (omega * kEps));  // `complex(eps_r, -sigma / (omega * eps0))`
+    m.k_p = k;
+    m.k_m = somm_below::k_medium(m.eps_t, k);
+    m.eps_m = pmul(re(kEps), m.eps_t);  // `eps * eps_t`
+    m.c2 = pdiv(cd(m.eps_t.real() - 1.0, m.eps_t.imag() - 0.0), cd(m.eps_t.real() + 1.0, m.eps_t.imag() + 0.0));
+    m.a_m = pdiv(cd(1.0 - m.eps_t.real(), 0.0 - m.eps_t.imag()), cd(1.0 + m.eps_t.real(), 0.0 + m.eps_t.imag()));
+    return m;
+}
+
 // `_wire_spec.drop_duplicated_wires("SinusoidalSolver", ...)` (momwire#1042 /
 // #1333) over the NEC-4.2 build's arguments, which carry no junction-indexed
 // ports and no node drive: `out` is `in` with each wire listed twice dropped
@@ -642,13 +1318,8 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     const auto &pls = args.wires;
     if (args.ground.kind == nec4::Ground::finite_fast) decline("a reflection-coefficient ground");
     const bool has_ground = args.ground.kind != nec4::Ground::none;
+    const bool lower_medium = args.ground.kind == nec4::Ground::finite;  // the Sommerfeld half-space
     const double gz = 0.0;
-    if (has_ground)
-        for (const auto &pl : pls) {
-            double mn = pl[0][2];
-            for (const Point3 &p : pl) mn = std::min(mn, p[2]);
-            if (mn < gz - ground_touch_tol(pl)) decline("a wire below the ground plane (momwire#1607 B6)");
-        }
 
     // the constructor's constants
     double c = 1 / std::sqrt(kEps * kMu);
@@ -743,6 +1414,23 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
             const Point3 &pt = m0.second ? pl0.front() : pl0.back();
             if (std::fabs(pt[2] - gz) <= ground_touch_tol(pl0)) grounded.insert(static_cast<ll>(j));
         }
+    }
+    // momwire#1607 B6: `_wire_media` and, at a grounded junction over the
+    // Sommerfeld ground, `_crossing_junction_indices` with this family's scope
+    // (both raise in Python's words; the crossing fill itself is B6b's)
+    f.below_wire.assign(n_w, false);
+    if (has_ground) {
+        const std::set<std::pair<ll, bool>> exempt = crossing_exemption(pls, gz, f.junctions);
+        f.below_wire = wire_media(pls, gz, lower_medium, args.ground.kind == nec4::Ground::pec, exempt);
+        if (lower_medium && !grounded.empty() && !f.junctions.empty()) {
+            const std::vector<ll> crossing =
+                crossing_junctions(f.below_wire, f.junctions, grounded, pls, gz, f.radius_per_wire);
+            refuse_crossing_scope(crossing, f.junctions, pls, f.radius_per_wire);
+            if (!crossing.empty()) decline("a crossing junction (momwire#1607 B6b)");
+        }
+        const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
+        if (nb > 0 && nb < n_w) decline("wires both above and below the interface (momwire#1607 B6)");
+        f.buried = nb == n_w;
     }
     for (std::size_t j = 0; j < f.junctions.size(); j++) {
         if (grounded.count(static_cast<ll>(j))) continue;
@@ -848,6 +1536,14 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     } else {
         for (std::size_t w = 0; w < n_w; w++)
             for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = f.radius_per_wire[w];
+    }
+    if (f.buried) {
+        // `_operating_medium`: a wholly-buried deck is solved in the lower
+        // medium, its basis at k_m (`_readout_view`); `_nec4_live` is false
+        // below the interface
+        f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
+        basis_coefs_complex(f, a, f.medium.k_m);
+        return f;
     }
     if (args.junction_rule_nec42) {
         // momwire#1644: `_nec4_live` -- the deck has a node the rule solves
@@ -1172,7 +1868,7 @@ std::string dump_front(const std::string &text) {
             try {
                 dump_front_into(o, q, front(sb.points[j].args));
             } catch (const FrontError &e) {
-                o.line(q + " ! ValueError " + nec5::dump_hex(e.message));
+                o.line(q + " ! " + e.kind + " " + nec5::dump_hex(e.message));
             } catch (const Declined &e) {
                 o.line(q + " ? declined " + nec5::dump_hex(e.what()));
             }

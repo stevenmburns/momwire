@@ -31,8 +31,12 @@
 // A GD card's second medium is the far field's cliff (`_far_moments`'
 // `cliff`, B5d), reflected off on every RP over a ground.
 //
-// DECLINED (`Declined`), never misprinted: a wire below the ground plane
-// (B6), an insulated wire, two sources on one segment of a phased drive, a
+// A wire below the ground plane is the engine's question (the sinusoidal
+// front serves a wholly-buried deck, momwire#1607 B6a); a near field of a
+// deck with a buried wire is refused by the reference.
+//
+// DECLINED (`Declined`), never misprinted: a near field over a buried wire,
+// an insulated wire, two sources on one segment of a phased drive, a
 // near-field point in the soil or on a wire's finite-ground contact (the
 // reference refuses both in its own words), and any run Python would answer
 // with a refusal this copy does not word (a singular drive block, a current
