@@ -74,6 +74,10 @@ CORE_SOURCES = (
     # The sinusoidal free-space fill and port solve over it (momwire#1607
     # B3), linked into `sinusoidal_fill_driver.cpp`.
     "_sinusoidal_fill_core.cpp",
+    # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
+    # same front (momwire#1718 S2), linked into
+    # `sinusoidal_galerkin_fill_driver.cpp`.
+    "_sinusoidal_galerkin_fill_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a), linked into `nec4_sinusoidal_printout_driver.cpp`.
     "_nec4_run_core.cpp",
@@ -229,6 +233,7 @@ def driver(accel, tmp_path_factory):
         "sinusoidal_core_driver",
         "sinusoidal_front_driver",
         "sinusoidal_fill_driver",
+        "sinusoidal_galerkin_fill_driver",
         "nec4_sinusoidal_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
@@ -280,6 +285,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
     assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
     assert "_sinusoidal_fill_core.h" in seen, "the sinusoidal fill was not built"
+    assert "_sinusoidal_galerkin_fill_core.h" in seen, "the SG fill was not built"
     assert "_nec4_run_core.h" in seen, "the NEC-4.2 run half was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
@@ -499,6 +505,60 @@ def test_the_sinusoidal_fill_in_cxx_alone_is_pythons(driver):
         assert diff is None, (path, diff)
         compared += 1
     assert compared >= 30, compared
+
+
+@pytest.mark.slow  # the free-space NEC-4.2 fixtures, each solved twice
+def test_the_sinusoidal_galerkin_fill_in_cxx_alone_is_pythons(driver):
+    """momwire#1718 S2: the Sinusoidal-Galerkin mixed-potential fill and port
+    solve in free space (G, the coefficients, Y), built from the core TUs
+    alone (`sinusoidal_galerkin_fill_driver`, on the OpenBLAS SciPy bundles),
+    is `SinusoidalGalerkinSolver.compute_port_solution`'s at every operating
+    point the NEC-4.2 build makes of every free-space fixture deck, to the
+    bit."""
+    spec = importlib.util.spec_from_file_location(
+        "core_split_sinusoidal_galerkin_fill_compare",
+        SPLIT / "sinusoidal_galerkin_fill_compare.py",
+    )
+    nc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nc)
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures" / "eznec_nec42").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    run = subprocess.run(
+        [
+            str(driver[0]["sinusoidal_galerkin_fill_driver"]),
+            pc.scipy_openblas(),
+            pc.numpy_openblas(),
+            *map(str, decks),
+        ],
+        capture_output=True,
+        check=True,
+        env=dict(os.environ, **_ONE_THREAD),
+    )
+    dumps: dict[str, str] = {}
+    current = None
+    for line in run.stdout.decode("utf-8").splitlines(keepends=True):
+        if line.startswith("== "):
+            current = line[3:].rstrip("\n")
+            dumps[current] = ""
+        else:
+            dumps[current] += line
+    compared = 0
+    for path in decks:
+        cxx = dumps[str(path)]
+        if nc.classify(cxx) != "fills":
+            continue
+        diff = nc.dc.first_difference(
+            nc.py_fill(path.read_bytes().decode("latin-1")), cxx
+        )
+        assert diff is None, (path, diff)
+        compared += 1
+    assert compared >= 80, compared
 
 
 @pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.1

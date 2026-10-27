@@ -1,0 +1,83 @@
+// The Sinusoidal-Galerkin basis' MIXED-POTENTIAL FILL AND SOLVE in C++
+// (momwire#1718 S2), with no Python in it. Over the sinusoidal front half
+// (`sinusoidal::front`, which SinusoidalGalerkinSolver inherits: its geometry,
+// feed snap and `_basis_coefs`) it gives what
+// `SinusoidalGalerkinSolver.compute_port_solution` computes on the default
+// `fill="mixed-potential"` route in free space:
+// - `_assemble_Z_mp`: `_sinusoidal_mp.basis_csr`, then one `WindowFill`
+//   block (the direct sign, the extended kernel's every-pair labels with the
+//   source tube on a stepped radius) an observer window at a time
+//   (`WINDOW_BYTES`): the tiered pair moments from the B-spline core's
+//   sinusoidal kernels, one call per run of equal observer radius
+//   (`seg_seg_full_moments_sinusoidal_tiered[_ek]`, the solver's
+//   `DEFAULT_N_QP_PAIR` and `DEFAULT_PAIR_ORDER_LADDER`); the near pairs
+//   (`classify_pairs`, a plain scan that gives the cKDTree ball query's set,
+//   then the strict test and the lexsort order) overwritten by
+//   `near_pair_moments` -- the parallel reduction's kernel
+//   (`parallel_pair_moments_sinusoidal`) and numpy's own product rules for
+//   the rest (`_pair_moments_two_rules_batch`: the graded endpoint rule on a
+//   touching pair, `NEAR_N_QP` otherwise, numpy's elementwise order and its
+//   three-operand einsum); and the window's
+//   assembly (`assemble_Z_sinusoidal_windowed`) into G, F order;
+// - the port algebra: `_drive_columns` (the point gap, `-f_i(s0)` at
+//   `feed_xi`, `np.add.at`), `_solve_in_place` (`lu_factor` in place and
+//   `lu_solve`: getrf / getrs on whichever LAPACK the caller hands in) and
+//   `_port_currents` (`_feed_segment_current` at `feed_xi`) into Y.
+//
+// Python stays the reference: G, the coefficients and Y are Python's to the
+// bit, gated by `tests/test_sinusoidal_galerkin_fill_core.py` through
+// `scripts/core_split/sinusoidal_galerkin_fill_compare.py`.
+//
+// REFUSED as Python refuses (`SolverRefusal`, the exception's type and
+// words): a non-finite matrix (`lu_factor`'s check), a singular one
+// (`_solve_in_place`), the extended kernel at a stepped-radius junction;
+// the front's own refusals carry SinusoidalGalerkinSolver's name
+// (`sinusoidal::front(args, galerkin=true)`).
+//
+// DECLINED (`nec4::Declined`), never misread: a ground (S5), wire loading
+// (S6), a wire end on a ground plane (S7), a buried or plane-crossing
+// structure (S11), junction or node ports (S9).
+#pragma once
+
+#include "_sinusoidal_fill_core.h"
+
+#include <complex>
+#include <string>
+#include <vector>
+
+namespace mw {
+namespace sinusoidal_galerkin {
+
+// A refusal the solver's constructor raises with another exception type than
+// the front's ValueError (`NotImplementedError` for the extended kernel at a
+// stepped-radius junction): `kind` is its Python type name.
+struct SolverRefusal : std::runtime_error {
+    std::string kind, message;  // UTF-8
+    SolverRefusal(const std::string &k, const std::string &m) : std::runtime_error(m), kind(k), message(m) {}
+};
+
+struct PortSolution {
+    long long n = 0, n_ports = 0;
+    std::vector<std::complex<double>> G;       // (n, n), F order: `_assemble_Z`'s
+    std::vector<std::complex<double>> coeffs;  // (n, n_ports), F order (`lu_solve`'s)
+    std::vector<std::complex<double>> y;       // (n_ports, n_ports), C order
+};
+
+// The constructor's own refusals beyond the front's (`SolverRefusal`).
+void check_constructor(const sinusoidal::Front &fr, const nec4::SolverArgs &args);
+
+// `_assemble_Z(geom, k)` on the mixed-potential route in free space: G in F
+// order, (n, n).
+std::vector<std::complex<double>> assemble_Z(const sinusoidal::Front &fr, const nec4::SolverArgs &args);
+
+// `compute_port_solution()` in free space.
+PortSolution port_solution(const sinusoidal::Front &fr, const nec4::SolverArgs &args,
+                           const sinusoidal::FillLinalg &la);
+
+// The comparison format (`sinusoidal_galerkin_fill_compare.py`), per operating
+// point of each built structure of a deck: a matrix of up to `whole` columns
+// element by element, a wider one by row digest.
+std::string dump_fill(const std::string &latin1_text, const sinusoidal::FillLinalg &la, std::size_t whole = 64);
+
+}  // namespace sinusoidal_galerkin
+}  // namespace mw

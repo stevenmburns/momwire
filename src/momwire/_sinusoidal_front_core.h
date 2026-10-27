@@ -94,7 +94,9 @@ struct Front {
 
 // Throws FrontError where Python raises, nec4::Declined where this copy
 // declines.
-Front front(const nec4::SolverArgs &args);
+// `galerkin`: SinusoidalGalerkinSolver's constructor, which differs here only
+// in its name and its coincident-conductor sentence (momwire#1718 S3).
+Front front(const nec4::SolverArgs &args, bool galerkin = false);
 
 // The comparison format (`sinusoidal_front_compare.py`), per operating point
 // of each built structure of a deck (the NEC-4.2 build's own enumeration).

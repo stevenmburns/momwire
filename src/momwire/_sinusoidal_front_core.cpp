@@ -418,13 +418,19 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
 // ports and no node drive: `out` is `in` with each wire listed twice dropped
 // and every wire-indexed argument remapped (`in` itself when nothing is), and
 // the dedup says how. Refuses (FrontError) in the constructor's words.
-nec4::WireDedup drop_duplicated_wires(const nec4::SolverArgs &in, nec4::SolverArgs &out) {
-    static const char *const kFamily = "SinusoidalSolver";
-    static const char *const kCoincidentRefusal =
-        "this family cannot solve coincident conductors: its answer for them "
-        "depends on the CPU's rounding (momwire#1333). Solve the deck with "
-        "BSplineSolver, or join both copies to the same wires at each end so "
-        "they merge as one";
+nec4::WireDedup drop_duplicated_wires(const nec4::SolverArgs &in, nec4::SolverArgs &out, bool galerkin) {
+    // `type(self).__name__` and `type(self)._KEPT_COINCIDENT_REFUSAL`
+    // (SinusoidalGalerkinSolver's for the Galerkin basis, momwire#1718 S3)
+    const char *const kFamily = galerkin ? "SinusoidalGalerkinSolver" : "SinusoidalSolver";
+    const char *const kCoincidentRefusal =
+        galerkin ? "this family cannot solve coincident conductors: its Galerkin fill "
+                   "answers them from rounding (momwire#1333). Solve the deck with "
+                   "BSplineSolver, or join both copies to the same wires at each end so "
+                   "they merge as one"
+                 : "this family cannot solve coincident conductors: its answer for them "
+                   "depends on the CPU's rounding (momwire#1333). Solve the deck with "
+                   "BSplineSolver, or join both copies to the same wires at each end so "
+                   "they merge as one";
     nec4::WireDedup dd;
     out = in;
     const auto &pls = in.wires;
@@ -545,7 +551,7 @@ nec4::WireDedup drop_duplicated_wires(const nec4::SolverArgs &in, nec4::SolverAr
              "conductors written on one path rather than a wire listed twice, and " +
              kCoincidentRefusal + " - momwire#1333");
     if (removed.empty()) return dd;
-    const auto refuse = [](std::size_t r, std::size_t twin, const std::string &why) {
+    const auto refuse = [kFamily](std::size_t r, std::size_t twin, const std::string &why) {
         fail(std::string(kFamily) + ": wires " + std::to_string(twin) + " and " + std::to_string(r) +
              " are the same wire listed twice, and " + why + ", so they cannot be merged into one conductor. "
              "Delete wire " + std::to_string(r) + ", or make the two copies identical - momwire#1042");
@@ -626,12 +632,12 @@ nec4::WireDedup drop_duplicated_wires(const nec4::SolverArgs &in, nec4::SolverAr
 
 }  // namespace
 
-Front front(const nec4::SolverArgs &in) {
+Front front(const nec4::SolverArgs &in, bool galerkin) {
     Front f;
     if (in.wires.empty()) fail("wires must be non-empty");
     // momwire#1042: a wire listed twice is solved once; everything below
     // reads the solved wires
-    f.dedup = drop_duplicated_wires(in, f.args);
+    f.dedup = drop_duplicated_wires(in, f.args, galerkin);
     const nec4::SolverArgs &args = f.args;
     const auto &pls = args.wires;
     if (args.ground.kind == nec4::Ground::finite_fast) decline("a reflection-coefficient ground");
