@@ -21,6 +21,9 @@
 //   touching pair, `NEAR_N_QP` otherwise, numpy's elementwise order and its
 //   three-operand einsum); and the window's
 //   assembly (`assemble_Z_sinusoidal_windowed`) into G, F order;
+// - `_apply_loading` (momwire#1718 S6): the series wire impedance's Galerkin
+//   overlap, closed form on the shapes (`_loading_integrals`), subtracted
+//   pair by pair in `_shared_segment_pairs`' order;
 // - the port algebra: `_drive_columns` (the point gap, `-f_i(s0)` at
 //   `feed_xi`, `np.add.at`), `_solve_in_place` (`lu_factor` in place and
 //   `lu_solve`: getrf / getrs on whichever LAPACK the caller hands in) and
@@ -36,9 +39,9 @@
 // the front's own refusals carry SinusoidalGalerkinSolver's name
 // (`sinusoidal::front(args, galerkin=true)`).
 //
-// DECLINED (`nec4::Declined`), never misread: a Sommerfeld ground (S5b), wire loading
-// (S6), a wire end on a ground plane (S7), a buried or plane-crossing
-// structure (S11), junction or node ports (S9).
+// DECLINED (`nec4::Declined`), never misread: a Sommerfeld ground (S5b), an
+// insulated wire, a wire end on a ground plane (S7), a buried or
+// plane-crossing structure (S11), junction or node ports (S9).
 #pragma once
 
 #include "_sinusoidal_fill_core.h"
