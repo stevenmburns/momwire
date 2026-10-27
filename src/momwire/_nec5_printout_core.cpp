@@ -1213,6 +1213,7 @@ void linspace3(const double *a, const double *b, int64_t num, std::vector<double
 struct Grid {
     int64_t nt = 0, np_ = 0;
     std::vector<double> rx, ry, rz, sin_t, cos_t, sin_p, cos_p;
+    std::vector<double> theta;  // `np.radians(thetas_deg)`, for a cliff's `np.tan`
 };
 
 // `moments_of(centres, weights)`: Σ_n exp(j k r̂·r_n) w_n, the phase an einsum
@@ -1345,9 +1346,107 @@ void transmitted_moments(const Grid &g, double k_p, cd k_m, const std::vector<do
     }
 }
 
+// `_image_coeffs(eps_r, sigma, freq_hz, rx, ry, rz)` at one direction, given
+// `_eps_complex`'s value: `(rho_h, rho_v)`, numpy's array arithmetic.
+void image_coeffs(cd eps_c, double rx, double ry, double rz, cd &rho_h, cd &rho_v) {
+    const cd under(eps_c.real() - rx * rx, eps_c.imag() - 0.0);
+    const cd qq = np_csqrt(cd(under.real() - ry * ry, under.imag() - 0.0));
+    rho_h = np_cdiv(cd(rz - qq.real(), 0.0 - qq.imag()), cd(rz + qq.real(), 0.0 + qq.imag()));
+    const cd e_rz = np_cmul(eps_c, cd(rz, 0.0));
+    rho_v = np_cdiv(c_sub(e_rz, qq), c_add(e_rz, qq));
+}
+
+// `_cliff_image_moments(mid, moment, k, theta, phi, basis, ground, ground_z,
+// freq_hz, mode, cliff)` over the elements above the plane, the interface at
+// z = 0 (momwire#1607 B5d): the image carrier split by `_cliff_medium_2`
+// into the reflection points short of the cliff's edge and those beyond it,
+// the far half carrying the step's phase, each half weighted by its own
+// medium's `(rho_h, rho_v)`. The einsums over the elements are summed as in
+// `moments_of`; every array product is numpy's fused one.
+std::vector<cd> cliff_image_moments(const Grid &g, double k, const std::vector<double> &mid,
+                                    const std::vector<cd> &moment, FarGround ground, double eps_r,
+                                    double sigma, double freq_hz, const replay::FarCliff &cl) {
+    if (cl.mode != 3) throw Decline{"a far-field cliff other than the circular one"};
+    const std::size_t n = mid.size() / 3;
+    const int64_t nt = g.nt, np_ = g.np_;
+    // `_image_moments(mid, moment, ground_z)`
+    std::vector<double> mid_img = mid;
+    std::vector<cd> mom_img(moment.size());
+    for (std::size_t m = 0; m < n; m++) {
+        mid_img[3 * m + 2] = 2.0 * 0.0 - mid[3 * m + 2];
+        for (int c = 0; c < 3; c++) mom_img[3 * m + c] = c_mul_real(moment[3 * m + c], c == 2 ? 1.0 : -1.0);
+    }
+    // `1j * k` (CPython), then `np.exp(that * einsum(rhat, mid_img))`
+    const cd jk = py_cmul(cd(0.0, 1.0), cd(k, 0.0));
+    // `step = np.exp(-2j * k * cliff.height * np.cos(theta))`
+    const cd s0 = py_cmul(py_cmul(cd(-0.0, -2.0), cd(k, 0.0)), cd(cl.height, 0.0));
+    std::vector<cd> step(static_cast<std::size_t>(nt));
+    for (int64_t it = 0; it < nt; it++) step[it] = np_cexp(np_cmul(s0, cd(g.cos_t[it], 0.0)));
+    // `_cliff_medium_2`: `height = mid[:, 2] - ground_z`, `dr = np.tan(theta) * height`
+    std::vector<double> tan_t(static_cast<std::size_t>(nt));
+    for (int64_t it = 0; it < nt; it++) tan_t[it] = std::tan(g.theta[it]);
+    // the media's coefficients: perfect ground is (-1, +1), the second medium
+    // always a reflection coefficient
+    const cd eps_near = eps_complex(eps_r, sigma, freq_hz);
+    const cd eps_far = eps_complex(cl.eps_r2, cl.sigma2, freq_hz);
+    std::vector<cd> total(static_cast<std::size_t>(nt * np_ * 3));
+    for (int64_t i = 0; i < nt * np_; i++) {
+        const int64_t it = i / np_, ip = i % np_;
+        const double x = g.rx[i], y = g.ry[i], z = g.rz[i];
+        cd acc_near[3] = {cd(0.0, 0.0), cd(0.0, 0.0), cd(0.0, 0.0)};
+        cd acc_far[3] = {cd(0.0, 0.0), cd(0.0, 0.0), cd(0.0, 0.0)};
+        for (std::size_t m = 0; m < n; m++) {
+            const double *c = &mid_img[3 * m];
+            const double e = (x * c[0] + z * c[2]) + y * c[1];
+            const cd arg = np_cmul(jk, cd(e, 0.0));
+            const double ex = std::exp(arg.real());
+            const cd carrier(ex * std::cos(arg.imag()), ex * std::sin(arg.imag()));
+            // `along >= edge_distance` at the element's own specular point
+            const double *o = &mid[3 * m];
+            const double dr = tan_t[it] * (o[2] - 0.0);
+            const double along = dr * g.cos_p[ip] + o[0];
+            const double across = o[1] + dr * g.sin_p[ip];
+            const bool beyond = std::hypot(along, across) >= cl.edge_distance;
+            // `carrier * np.where(beyond, step, 0.0)`, then `carrier *= ~beyond`
+            const cd f_far = np_cmul(carrier, beyond ? step[it] : cd(0.0, 0.0));
+            const cd f_near = np_cmul(carrier, cd(beyond ? 0.0 : 1.0, 0.0));
+            for (int cc = 0; cc < 3; cc++) {
+                const cd w = mom_img[3 * m + cc];
+                acc_far[cc] = cd(acc_far[cc].real() + (f_far.real() * w.real() - f_far.imag() * w.imag()),
+                                 acc_far[cc].imag() + (f_far.real() * w.imag() + f_far.imag() * w.real()));
+                acc_near[cc] = cd(acc_near[cc].real() + (f_near.real() * w.real() - f_near.imag() * w.imag()),
+                                  acc_near[cc].imag() + (f_near.real() * w.imag() + f_near.imag() * w.real()));
+            }
+        }
+        const double cp = g.cos_p[ip], sp = g.sin_p[ip], ct = g.cos_t[it], st = g.sin_t[it];
+        const double h_hat[3] = {-sp, cp, 0.0};
+        const double v_hat[3] = {(-cp) * ct, (-sp) * ct, st};
+        cd near_h, near_v, far_h, far_v;
+        if (ground == FarGround::pec) {
+            near_h = cd(-1.0, 0.0);
+            near_v = cd(1.0, 0.0);
+        } else {
+            image_coeffs(eps_near, x, y, z, near_h, near_v);
+        }
+        image_coeffs(eps_far, x, y, z, far_h, far_v);
+        cd t[3] = {cd(0.0, 0.0), cd(0.0, 0.0), cd(0.0, 0.0)};
+        const cd *halves[2] = {acc_near, acc_far};
+        const cd rho_h[2] = {near_h, far_h}, rho_v[2] = {near_v, far_v};
+        for (int hf = 0; hf < 2; hf++) {
+            const cd half_h = dot3(halves[hf], h_hat), half_v = dot3(halves[hf], v_hat);
+            const cd a = np_cmul(rho_v[hf], half_v), b = np_cmul(rho_h[hf], half_h);
+            for (int c = 0; c < 3; c++) t[c] = c_add(t[c], c_mul_real(a, v_hat[c]));
+            for (int c = 0; c < 3; c++) t[c] = c_sub(t[c], c_mul_real(b, h_hat[c]));
+        }
+        for (int c = 0; c < 3; c++) total[static_cast<std::size_t>(3 * i + c)] = t[c];
+    }
+    return total;
+}
+
 void far_moments(const Grid &g, double k, const std::vector<double> &mid_all,
                  const std::vector<cd> &moment_all, FarGround ground, double eps_r, double sigma,
-                 double freq_hz, std::vector<cd> &m_theta, std::vector<cd> &m_phi) {
+                 double freq_hz, std::vector<cd> &m_theta, std::vector<cd> &m_phi,
+                 const replay::FarCliff *cliff = nullptr) {
     // `_below_elements`: the elements more than a hair below the plane radiate
     // through the interface, the rest direct + image (`mid[~below]`).
     std::vector<double> mid, mid_b;
@@ -1362,7 +1461,11 @@ void far_moments(const Grid &g, double k, const std::vector<double> &mid_all,
         throw Decline{"far field of a below element over a perfect ground"};
     const std::vector<cd> direct = moments_of(g, k, mid, moment);
     std::vector<cd> total = direct;
-    if (ground != FarGround::free) {
+    if (ground != FarGround::free && cliff != nullptr) {
+        // `m_direct + _cliff_image_moments(...)`
+        const std::vector<cd> refl = cliff_image_moments(g, k, mid, moment, ground, eps_r, sigma, freq_hz, *cliff);
+        for (std::size_t q = 0; q < total.size(); q++) total[q] = c_add(direct[q], refl[q]);
+    } else if (ground != FarGround::free) {
         std::vector<double> mid_img = mid;
         std::vector<cd> mom_img(moment.size());
         for (std::size_t m = 0; m < mid.size() / 3; m++) {
@@ -1433,7 +1536,8 @@ double gain_db(double g) {
 PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
                             const std::vector<cd> &moment, FarGround ground, double eps_r,
                             double sigma, double frequency_mhz, double wavelength, double p_in,
-                            bool lower, cd eps_c_medium, double p_radiated) {
+                            bool lower, cd eps_c_medium, double p_radiated,
+                            const replay::FarCliff *cliff = nullptr) {
     if (!rq.n_theta.fits_i64() || !rq.n_phi.fits_i64() || !rq.xnda.fits_i64())
         throw Decline{"a pattern count past 64 bits"};
     const int64_t nt = rq.n_theta.i64(), nph = rq.n_phi.i64();
@@ -1448,6 +1552,7 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     g.np_ = nph;
     for (double t : thetas) {
         const double r = t * DEG_TO_RAD;
+        g.theta.push_back(r);
         g.sin_t.push_back(std::sin(r));
         g.cos_t.push_back(std::cos(r));
     }
@@ -1463,7 +1568,7 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
             g.rz.push_back(g.cos_t[it]);
         }
     std::vector<cd> m_theta, m_phi;
-    far_moments(g, k, mid, moment, ground, eps_r, sigma, frequency_mhz * 1e6, m_theta, m_phi);
+    far_moments(g, k, mid, moment, ground, eps_r, sigma, frequency_mhz * 1e6, m_theta, m_phi, cliff);
     // `pattern_fields`
     const cd scale = py_cdiv(py_cmul(py_cmul(cd(-0.0, -1.0), cd(ETA0, 0.0)), cd(k, 0.0)),
                              cd(4.0 * 3.141592653589793, 0.0));
@@ -3590,11 +3695,12 @@ void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t
 }
 PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
                          const std::vector<cd> &moment, int ground, double eps_r, double sigma,
-                         double frequency_mhz, double wavelength, double p_in, double p_radiated) {
+                         double frequency_mhz, double wavelength, double p_in, double p_radiated,
+                         const FarCliff *cliff) {
     const FarGround fg = ground == 1 ? FarGround::pec : ground == 2 ? FarGround::refl : FarGround::free;
     const PatternBlockC c = nec5::pattern_block(rq, mid, moment, fg, eps_r, sigma,
                                                 frequency_mhz, wavelength, p_in, false,
-                                                cd(0.0, 0.0), p_radiated);
+                                                cd(0.0, 0.0), p_radiated, cliff);
     PatternBlock out;
     for (const PatternRowC &r : c.rows) {
         PatternRow row;

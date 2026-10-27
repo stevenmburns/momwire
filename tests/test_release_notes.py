@@ -95,7 +95,7 @@ def test_the_nec42_sinusoidal_exe_ships_in_the_linux_tarball_as_a_preview():
     assert "needs: [linux-artifact, linux, linux-nec42]" in workflow
     readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
     assert "PREVIEW: momwire-nec42-sinusoidal-linux" in readme_txt
-    for refusal in ("B6", "B5d"):
+    for refusal in ("B6",):
         assert refusal in readme_txt, refusal
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "NEC-4.2 sinusoidal engine on Linux, without Python (preview)" in readme

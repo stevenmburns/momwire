@@ -30,8 +30,12 @@ masked, by exact pattern and with the same count on both sides, over:
 - networks: a TL (straight, and crossed with shunts and its length taken
   between the segment centres), an NT beside a port load, a TL under a
   current source and under a phased drive, and a TL read after a run;
-- the declines: GD's far-field cliff, a near-field point on a
-  wire's finite-ground contact or in the soil.
+- GD's far-field cliff over GN 1, GN 2 and GN 3: an edge and a step
+  splitting the reflection points, with a range, an average, further tables,
+  a monopole on the ground, an empty second medium, and GD in free space
+  (its block printed, no number moved);
+- the declines: a near-field point on a wire's finite-ground contact or in
+  the soil.
 """
 
 from __future__ import annotations
@@ -134,6 +138,8 @@ DIPOLE = "GW 1 11 0 0 -.25 0 0 .25 .001\n"
 TWO = DIPOLE + "GW 2 11 .2 0 -.25 .2 0 .25 .001\n"
 TEE = "GW 1 10 0 0 -.25 0 0 .25 .001\nGW 2 5 0 0 0 .3 0 0 .001\n"
 RP = "RP 0 7 4 1000 0 0 30 90\n"
+GD_DIPOLE = "GW 1 11 0 -.25 .6 0 .25 .6 .001\n"
+GD_RP = "RP 0 19 4 1000 0 0 5 45\n"
 
 CASES = [
     ("ex0", deck(DIPOLE, FR + "EX 0 1 6 0 1\nXQ\n"), "printed"),
@@ -251,11 +257,87 @@ CASES = [
         "printed",
     ),
     (
-        "gd_declines",
+        "gd_under_xq",
         "CM run\nCE\nGW 1,11,0.,-.25,10.,0.,.25,10.,.0005\nGE 1,-1\n"
         "FR 0,1,0,0,299.7925\nGN 1,0,0,0,0.,0.\nEX 0,1,6,0,1.414214,0.\n"
         "GD 2,0,0,0,13.,.005,0.,0.\nXQ 0\nEN\n",
-        "declined",
+        "printed",
+    ),
+    # GD's second medium (B5d): the cliff's edge and step put some
+    # reflection points short of the edge and some beyond it
+    (
+        "gd_cliff_over_gn1",
+        deck(
+            GD_DIPOLE,
+            "GN 1\n" + FR + "EX 0 1 6 0 1\nGD 2 0 0 0 5 .001 .8 .1\n" + GD_RP,
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_cliff_over_gn1_range",
+        deck(
+            GD_DIPOLE,
+            "GN 1\n" + FR + "EX 0 1 6 0 1\nGD 2 0 0 0 5 .001 .8 -.2\n"
+            "RP 0 19 4 1000 0 0 5 45 1000\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_cliff_over_gn2",
+        deck(
+            GD_DIPOLE,
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nGD 2 0 0 0 5 .001 .8 .1\n"
+            "RP 0 37 4 1000 0 0 5 45\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_over_gn3_average",
+        deck(
+            GD_DIPOLE,
+            "GN 3 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nGD 2 0 0 0 20 .02 0 0\n"
+            "RP 0 19 2 1001 0 0 5 90\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_further_tables_over_gn2",
+        deck(
+            GD_DIPOLE,
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nGD 2 0 0 0 5 .001 .8 .1\n"
+            "RP 0 10 1 1000 0 0 10 0\nNE 0 1 1 2 .1 0 .1 0 0 .1\nRP 0 5 1 1000 0 0 20 0\n",
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_in_free_space",
+        deck(GD_DIPOLE, FR + "EX 0 1 6 0 1\nGD 2 0 0 0 5 .001 .8 .1\n" + RP),
+        "printed",
+    ),
+    (
+        "gd_monopole_on_gn1",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 1\n" + FR + "EX 0 1 1 0 1\nGD 2 0 0 0 5 .001 .3 .05\n" + GD_RP,
+            "GE 1",
+        ),
+        "printed",
+    ),
+    (
+        "gd_empty_second_medium",
+        deck(
+            GD_DIPOLE,
+            "GN 1\n"
+            + FR
+            + "EX 0 1 6 0 1\nGD 2 0 0 0 0 0 0 0\nRP 0 7 2 1000 0 0 15 90\n",
+            "GE 1",
+        ),
+        "printed",
     ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (

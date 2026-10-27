@@ -626,6 +626,13 @@ struct RunResult {
     bool pec = false;     // GN 1
     bool finite = false;  // GN 2 / GN 3 (the Sommerfeld half-space)
     double eps_r = 0, sigma = 0;
+    // `_far_ground_card(deck)` and the group's second medium: the printout's
+    // FAR FIELD GROUND PARAMETERS block, and over a ground the cliff every
+    // RP reflects off (momwire#1607 B5d)
+    bool has_far_field_ground = false;
+    PrintFarFieldGround far_field_ground;
+    bool cliff = false;
+    rp::FarCliff far_cliff;
 };
 
 struct Ctx {
@@ -819,12 +826,30 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     r.finite = group.environment.ground.kind == Ground::finite;
     r.eps_r = group.environment.ground.eps_r;
     r.sigma = group.environment.ground.sigma;
-    // GD's second medium: the far field's cliff (`_far_field_ground`) is not
-    // copied yet
-    bool gd = false;  // `_far_ground_card(deck)`
-    for (const nec5::Card &card : c.ss->deck.data_cards) gd = gd || card.mnemonic == "GD";
-    if ((r.pec || r.finite) && gd && group.environment.has_second_medium)
-        decline("a GD far-field ground (momwire#1607 B5d)");
+    // `_far_ground_card(deck)`: the deck's last GD; with the group's second
+    // medium it is `_far_field_ground(gd, second)`, and over a ground the
+    // cliff `_pattern` hands the row builder (`_CIRCULAR_CLIFF`)
+    const nec5::Card *gd = nullptr;
+    for (const nec5::Card &card : c.ss->deck.data_cards)
+        if (card.mnemonic == "GD") gd = &card;
+    if (gd != nullptr && group.environment.has_second_medium) {
+        if (!(gd->i(0) == nec5::Int(2))) decline("a GD card other than GD 2 (the slot refuses it)");
+        const SecondMedium &sm = group.environment.second_medium;
+        r.has_far_field_ground = true;
+        r.far_field_ground.kind = "CIRCLE CLIFF";
+        r.far_field_ground.edge_distance = sm.edge_distance;
+        r.far_field_ground.height = sm.height;
+        r.far_field_ground.eps_r2 = sm.eps_r;
+        r.far_field_ground.sigma2 = sm.sigma;
+        if (r.pec || r.finite) {
+            r.cliff = true;
+            r.far_cliff.mode = 3;
+            r.far_cliff.edge_distance = sm.edge_distance;
+            r.far_cliff.height = sm.height;
+            r.far_cliff.eps_r2 = sm.eps_r;
+            r.far_cliff.sigma2 = sm.sigma;
+        }
+    }
     const OperatingPoint &op = c.sb->points[r.point];
     const EngineSolve &es = c.engine->solve(r.point);
     r.fill_seconds = es.fill_seconds;
@@ -1152,7 +1177,7 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     rp::PatternBlock b;
     try {
         b = rp::far_pattern(rq, mid, moment, r.pec ? 1 : r.finite ? 2 : 0, r.eps_r, r.sigma, freq, r.wavelength,
-                            r.p_in, r.p_radiated);
+                            r.p_in, r.p_radiated, r.cliff ? &r.far_cliff : nullptr);
     } catch (const nec5::PrintoutDecline &e) {
         decline(e.reason);
     }
@@ -1316,6 +1341,8 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
     out.has_echo_through = has_echo;
     out.echo_through = echo_through;
     tables(c, group.has_report, group.report, r, freq, out.patterns, out.near_fields);
+    out.has_far_field_ground = r.has_far_field_ground;
+    out.far_field_ground = r.far_field_ground;
     if (group.has_pq && i64(group.pq.flag) != -1) {
         out.has_charges = true;
         out.charges = charge_rows(c, r, freq, local);
@@ -1484,6 +1511,8 @@ Nec4Printout solve_structure(Ctx &c) {
                     rep.has_echo_through = true;
                     rep.echo_through = nc.first;
                     tables(c, true, nc.second, last, last_freq, rep.patterns, rep.near_fields);
+                    rep.has_far_field_ground = last.has_far_field_ground;
+                    rep.far_field_ground = last.far_field_ground;
                     data.runs.push_back(rep);
                 }
         count++;

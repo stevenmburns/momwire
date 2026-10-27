@@ -361,11 +361,20 @@ struct PatternBlock {
     double average_power_gain = 0, solid_angle_pi = 0, power_radiated_4pi = 0;
     bool directive = false;
 };
+// A `GD` card's far-field ground on the NEC-4.2 slot (`_far_moments`'
+// `cliff`, momwire#1607 B5d): the cliff mode (3, circular, is the one the slot
+// asks for) and the second medium beyond its edge.
+struct FarCliff {
+    int mode = 3;
+    double edge_distance = 0, height = 0, eps_r2 = 0, sigma2 = 0;
+};
 // `ground`: 0 free space, 1 a perfect ground, 2 a finite one (the Fresnel
-// image, `eps_r` / `sigma`).
+// image, `eps_r` / `sigma`). `cliff`, when given over a ground, reflects the
+// image off the second medium beyond the cliff's edge.
 PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
                          const std::vector<cd> &moment, int ground, double eps_r, double sigma,
-                         double frequency_mhz, double wavelength, double p_in, double p_radiated);
+                         double frequency_mhz, double wavelength, double p_in, double p_radiated,
+                         const FarCliff *cliff = nullptr);
 // `DeckSolver._composed(reducer, y, z_load, wavelength, driven)` over the
 // seam's network solve: `y_eff` with the series loads folded in (`y` itself
 // when none), the flat network with `held` held, and `reduced_ports(...,
