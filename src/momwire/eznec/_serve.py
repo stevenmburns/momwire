@@ -737,13 +737,13 @@ _REFUSE_PROBE_AT_NETWORK_POINT = (
     "CURRENTS table"
 )
 _REFUSE_UNPINNED_PHANTOM = (
-    "{card} ends at {at} on GW {tag}, EZNEC's parked circuit wire, and that "
-    "node carries no LD pin; every deck EZNEC hands an engine pins each "
-    "parked node a network reaches (LD 4 ... 1.E+10 for an open), so this "
-    "deck was edited or saved by hand. Unpinned, the answer depends on "
-    "reading the parked wire as a wire (NEC-5 solves it as a few millimetres "
-    "of metal, about 1 % on momwire#1314's open-stub deck) or as a circuit "
-    "node (what EZNEC means) - add the LD 4 pin EZNEC writes, or 0 for a short"
+    "{card} ends at {at} on GW {tag}, EZNEC's parked circuit wire, and no LD "
+    "card pins that node; a deck EZNEC writes for an engine run pins a parked "
+    "node only one network card reaches (LD 4 ... 1.E+10 for an open), so "
+    "this one was edited by hand or saved as .nec. Unpinned, the answer "
+    "depends on reading the parked wire as a wire (NEC-5 solves it as a few "
+    "millimetres of metal, about 1 % on momwire#1314's open-stub deck) or as a "
+    "circuit node (what EZNEC means) - add the LD 4 pin EZNEC writes"
 )
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
@@ -4155,11 +4155,12 @@ def _check_pinned_phantoms(deck: Nec5Deck, by_address: dict[Nec5Node, _Site]) ->
     count: dict[Nec5Node, int] = {}
     for _card, at in ends:
         count[at] = count.get(at, 0) + 1
+    pinned = {load.at for load in deck.loads}
     for card, at in ends:
         site = by_address[at]
         if (
             site.spelling == "virtual"
-            and not site.load
+            and at not in pinned
             and not site.driven
             and count[at] == 1
         ):
