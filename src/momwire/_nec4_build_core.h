@@ -66,6 +66,21 @@ struct SolverArgs {
     bool junction_rule_nec42 = false;                   // junction_rule='nec42' (momwire#1644)
 };
 
+// `_wire_spec.WireDedup` (momwire#1042): how a solver's INPUT wires map onto
+// the wires it solves once a wire listed twice is dropped. `kept[i]` is the
+// input index of solved wire `i`; `removed` one (copy, kept twin, reversed)
+// per dropped copy, sorted by copy. Inactive: nothing was dropped.
+struct WireDedup {
+    bool active = false;
+    long long n_input = 0;
+    std::vector<long long> kept;
+    struct Dropped {
+        long long copy = 0, twin = 0;
+        bool reversed = false;
+    };
+    std::vector<Dropped> removed;
+};
+
 struct PortSite {
     long long wire = 0;
     double arclength = 0;

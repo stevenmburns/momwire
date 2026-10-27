@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -87,38 +88,6 @@ double ground_touch_tol(const std::vector<Point3> &pl) {
 double round9(double x) {
     double y = x * 1e9;
     return std::nearbyint(y) / 1e9;
-}
-
-// `_wire_spec.find_duplicated_wires`, as a yes / no
-bool has_duplicated_wires(const std::vector<std::vector<Point3>> &pls) {
-    double scale = 1.0;
-    for (const auto &pl : pls)
-        for (const Point3 &p : pl)
-            for (double c : p) scale = std::max(scale, std::fabs(c));
-    const double tol = 1e-12 * scale;
-    typedef std::vector<std::array<double, 3>> Key;
-    std::map<Key, std::size_t> seen;
-    for (std::size_t i = 0; i < pls.size(); i++) {
-        Key fwd, rev;
-        for (const Point3 &p : pls[i]) fwd.push_back({round9(p[0]), round9(p[1]), round9(p[2])});
-        rev.assign(fwd.rbegin(), fwd.rend());
-        const Key &key = std::min(fwd, rev);
-        auto it = seen.find(key);
-        if (it == seen.end()) {
-            seen[key] = i;
-            continue;
-        }
-        const auto &twin = pls[it->second];
-        if (twin.size() != pls[i].size()) continue;
-        double fmax = 0, rmax = 0;
-        for (std::size_t v = 0; v < twin.size(); v++)
-            for (int c = 0; c < 3; c++) {
-                fmax = std::max(fmax, std::fabs(twin[v][c] - pls[i][v][c]));
-                rmax = std::max(rmax, std::fabs(twin[v][c] - pls[i][pls[i].size() - 1 - v][c]));
-            }
-        if (fmax <= tol || rmax <= tol) return true;
-    }
-    return false;
 }
 
 // `_junction_rule.coincident_end_groups`
@@ -443,13 +412,228 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
     f.nec4 = true;
 }
 
+
+// `_wire_spec.drop_duplicated_wires("SinusoidalSolver", ...)` (momwire#1042 /
+// #1333) over the NEC-4.2 build's arguments, which carry no junction-indexed
+// ports and no node drive: `out` is `in` with each wire listed twice dropped
+// and every wire-indexed argument remapped (`in` itself when nothing is), and
+// the dedup says how. Refuses (FrontError) in the constructor's words.
+nec4::WireDedup drop_duplicated_wires(const nec4::SolverArgs &in, nec4::SolverArgs &out) {
+    static const char *const kFamily = "SinusoidalSolver";
+    static const char *const kCoincidentRefusal =
+        "this family cannot solve coincident conductors: its answer for them "
+        "depends on the CPU's rounding (momwire#1333). Solve the deck with "
+        "BSplineSolver, or join both copies to the same wires at each end so "
+        "they merge as one";
+    nec4::WireDedup dd;
+    out = in;
+    const auto &pls = in.wires;
+    const std::size_t n = pls.size();
+    // `find_duplicated_wires`
+    bool any = false;
+    double scale = 1.0;
+    for (const auto &pl : pls)
+        for (const Point3 &p : pl) {
+            any = true;
+            for (double c : p) scale = std::max(scale, std::fabs(c));
+        }
+    if (!any) return dd;
+    const double tol = 1e-12 * scale;
+    struct Dup {
+        std::size_t copy, first;
+        bool rev;
+    };
+    std::vector<Dup> dups;
+    typedef std::vector<std::array<double, 3>> Key;
+    std::map<Key, std::size_t> seen;
+    for (std::size_t i = 0; i < n; i++) {
+        Key fwd, rev;
+        for (const Point3 &p : pls[i]) fwd.push_back({round9(p[0]), round9(p[1]), round9(p[2])});
+        rev.assign(fwd.rbegin(), fwd.rend());
+        const Key &key = std::min(fwd, rev);
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen[key] = i;
+            continue;
+        }
+        const auto &twin = pls[it->second];
+        const auto &pl = pls[i];
+        if (twin.size() != pl.size()) continue;
+        // `np.max(np.abs(twin - pl)) <= tol`: a NaN difference fails it
+        bool fwd_ok = true, rev_ok = true;
+        double fmax = 0, rmax = 0;
+        for (std::size_t v = 0; v < twin.size(); v++)
+            for (int c = 0; c < 3; c++) {
+                const double df = std::fabs(twin[v][c] - pl[v][c]);
+                const double dr = std::fabs(twin[v][c] - pl[pl.size() - 1 - v][c]);
+                if (std::isnan(df)) fwd_ok = false;
+                if (std::isnan(dr)) rev_ok = false;
+                fmax = std::max(fmax, df);
+                rmax = std::max(rmax, dr);
+            }
+        if (fwd_ok && fmax <= tol)
+            dups.push_back({i, it->second, false});
+        else if (rev_ok && rmax <= tol)
+            dups.push_back({i, it->second, true});
+    }
+    if (dups.empty()) return dd;
+
+    // `_merge_connected_alike(wires, dups, junctions)`
+    std::vector<std::vector<std::pair<ll, bool>>> groups;  // (wire, at start)
+    if (in.junctions.empty()) {
+        groups = coincident_end_groups(pls);
+    } else {
+        for (const auto &g : in.junctions) {
+            std::vector<std::pair<ll, bool>> m;
+            for (const auto &e : g) m.push_back({e.polyline, e.start});
+            groups.push_back(m);
+        }
+    }
+    std::map<std::pair<ll, bool>, ll> node;
+    for (std::size_t j = 0; j < groups.size(); j++)
+        for (const auto &m : groups[j]) node[m] = static_cast<ll>(j);
+    const auto at = [&](ll w, bool start) {
+        auto it = node.find({w, start});
+        return it == node.end() ? ll(-1) : it->second;
+    };
+    // the ends named in the class's FIRST wire's direction
+    const auto joined = [&](std::size_t w, bool rev) {
+        const ll s = static_cast<ll>(w);
+        return std::make_pair(at(s, !rev), at(s, rev));
+    };
+    std::vector<std::size_t> class_order;
+    std::map<std::size_t, std::vector<std::pair<std::size_t, bool>>> classes;
+    for (const Dup &d : dups) {
+        auto it = classes.find(d.first);
+        if (it == classes.end()) {
+            class_order.push_back(d.first);
+            it = classes.emplace(d.first, std::vector<std::pair<std::size_t, bool>>{{d.first, false}}).first;
+        }
+        it->second.emplace_back(d.copy, d.rev);
+    }
+    std::map<std::size_t, std::pair<std::size_t, bool>> removed;
+    std::vector<std::size_t> removed_order;
+    std::vector<std::pair<std::size_t, std::size_t>> kept_coincident;
+    for (std::size_t first : class_order) {
+        struct Rep {
+            std::size_t w;
+            bool rev;
+            std::pair<ll, ll> key;
+        };
+        std::vector<Rep> reps;
+        for (const auto &member : classes[first]) {
+            const auto key = joined(member.first, member.second);
+            const Rep *match = nullptr;
+            for (const Rep &r : reps)
+                if (r.key == key) {
+                    match = &r;
+                    break;
+                }
+            if (match == nullptr) {
+                if (!reps.empty()) kept_coincident.push_back({member.first, reps.back().w});
+                reps.push_back({member.first, member.second, key});
+            } else {
+                removed[member.first] = {match->w, member.second != match->rev};
+                removed_order.push_back(member.first);
+            }
+        }
+    }
+    if (!kept_coincident.empty())
+        fail(std::string(kFamily) + ": wires " + std::to_string(kept_coincident[0].second) + " and " +
+             std::to_string(kept_coincident[0].first) +
+             " coincide, vertex for vertex, but are joined to different wires, so they are two "
+             "conductors written on one path rather than a wire listed twice, and " +
+             kCoincidentRefusal + " - momwire#1333");
+    if (removed.empty()) return dd;
+    const auto refuse = [](std::size_t r, std::size_t twin, const std::string &why) {
+        fail(std::string(kFamily) + ": wires " + std::to_string(twin) + " and " + std::to_string(r) +
+             " are the same wire listed twice, and " + why + ", so they cannot be merged into one conductor. "
+             "Delete wire " + std::to_string(r) + ", or make the two copies identical - momwire#1042");
+    };
+    // `_same` for a float entry (NaN equals NaN)
+    const auto same = [](double a, double b) { return (std::isnan(a) && std::isnan(b)) || a == b; };
+    for (std::size_t r : removed_order) {  // the dict's insertion order
+        const std::size_t twin = removed[r].first;
+        const bool rev = removed[r].second;
+        std::vector<ll> a = in.n_per_edge[twin], b = in.n_per_edge[r];
+        if (rev) std::reverse(b.begin(), b.end());
+        if (a != b) refuse(r, twin, "their segment counts differ");
+        if (!in.uniform_radius && !same(in.radii.at(r), in.radii.at(twin)))
+            refuse(r, twin, "their wire_radius entries differ");
+        if (in.has_conductivity && !same(in.conductivity.at(r), in.conductivity.at(twin)))
+            refuse(r, twin, "their wire_conductivity entries differ");
+        if (in.has_insulation) decline("an insulated wire listed twice");
+        if (in.has_distributed) {
+            const bool pr = in.distributed_present.at(r), pt = in.distributed_present.at(twin);
+            if (pr && pt) {
+                const nec4::DistributedRLC &x = in.distributed.at(r), &y = in.distributed.at(twin);
+                for (double v : {x.r, x.l, x.c, y.r, y.l, y.c})
+                    if (std::isnan(v)) decline("a NaN distributed load on a wire listed twice");
+                if (x != y) refuse(r, twin, "their distributed_rlc entries differ");
+            } else if (pr != pt) {
+                refuse(r, twin, "their distributed_rlc entries differ");
+            }
+        }
+        for (const auto &fd : in.feeds)
+            if (fd.polyline == static_cast<ll>(r) || fd.polyline == static_cast<ll>(twin))
+                refuse(r, twin, "feeds places a site on wire " + std::to_string(fd.polyline));
+    }
+    // declared junctions without the dropped members (no junction-indexed
+    // ports, so none is refused for it); inferred ones stay inferred
+    std::vector<std::vector<nec4::JunctionEnd>> junctions;
+    for (const auto &g : in.junctions) {
+        std::vector<nec4::JunctionEnd> kept;
+        for (const auto &m : g)
+            if (!removed.count(static_cast<std::size_t>(m.polyline))) kept.push_back(m);
+        if (!kept.empty()) junctions.push_back(kept);
+    }
+    dd.active = true;
+    dd.n_input = static_cast<ll>(n);
+    std::vector<ll> new_index(n, -1);
+    for (std::size_t w = 0; w < n; w++)
+        if (!removed.count(w)) {
+            new_index[w] = static_cast<ll>(dd.kept.size());
+            dd.kept.push_back(static_cast<ll>(w));
+        }
+    for (const auto &kv : removed)  // sorted by copy
+        dd.removed.push_back({static_cast<ll>(kv.first), static_cast<ll>(kv.second.first), kv.second.second});
+    out.wires.clear();
+    out.n_per_edge.clear();
+    if (!in.uniform_radius) out.radii.clear();
+    out.conductivity.clear();
+    out.distributed.clear();
+    out.distributed_present.clear();
+    for (ll w : dd.kept) {
+        const std::size_t u = static_cast<std::size_t>(w);
+        out.wires.push_back(in.wires[u]);
+        out.n_per_edge.push_back(in.n_per_edge[u]);
+        if (!in.uniform_radius) out.radii.push_back(in.radii.at(u));
+        if (in.has_conductivity) out.conductivity.push_back(in.conductivity.at(u));
+        if (in.has_distributed) {
+            out.distributed.push_back(in.distributed.at(u));
+            out.distributed_present.push_back(in.distributed_present.at(u));
+        }
+    }
+    for (auto &fd : out.feeds) fd.polyline = new_index[static_cast<std::size_t>(fd.polyline)];
+    out.junctions.clear();
+    for (const auto &g : junctions) {
+        std::vector<nec4::JunctionEnd> mm;
+        for (const auto &m : g) mm.push_back({new_index[static_cast<std::size_t>(m.polyline)], m.start});
+        out.junctions.push_back(mm);
+    }
+    return dd;
+}
+
 }  // namespace
 
-Front front(const nec4::SolverArgs &args) {
+Front front(const nec4::SolverArgs &in) {
     Front f;
+    if (in.wires.empty()) fail("wires must be non-empty");
+    // momwire#1042: a wire listed twice is solved once; everything below
+    // reads the solved wires
+    f.dedup = drop_duplicated_wires(in, f.args);
+    const nec4::SolverArgs &args = f.args;
     const auto &pls = args.wires;
-    if (pls.empty()) fail("wires must be non-empty");
-    if (has_duplicated_wires(pls)) decline("duplicated wires (the solver's merge rule is not copied)");
     if (args.ground.kind == nec4::Ground::finite_fast) decline("a reflection-coefficient ground");
     const bool has_ground = args.ground.kind != nec4::Ground::none;
     const double gz = 0.0;

@@ -14,7 +14,9 @@ these tests hold the C++ dump equal to it over:
   grounded junction (`ground_minus` / `ground_plus` and their P-sum atoms),
   the Sommerfeld ground above the plane, an FR sweep (one point per
   frequency), and the segment-in-the-plane refusal;
-- the declines: a buried wire (momwire#1607 B6) and duplicated wires.
+- a wire listed twice (momwire#1042): merged as it runs, merged reversed
+  under wire loading, and refused when the copy carries the feed;
+- the decline: a buried wire (momwire#1607 B6).
 """
 
 from __future__ import annotations
@@ -102,6 +104,8 @@ SQUARE = (
     "GW 3 4 .2 .2 0 0 .2 0 .001\nGW 4 4 0 .2 0 0 0 0 .001\n"
 )
 
+PARASITE = "GW 2 9 .2 0 -.23 .2 0 .23 .001\n"
+
 CASES = [
     ("dipole", deck(DIPOLE, FR + "EX 0 1 6 0 1\nXQ\n"), "fronts"),
     (
@@ -188,10 +192,27 @@ CASES = [
         ),
         "declined",
     ),
+    # momwire#1042: a wire listed twice is solved once, or refused by name
     (
-        "duplicate_declines",
+        "duplicate_merged",
+        deck(
+            DIPOLE + PARASITE + PARASITE.replace("GW 2", "GW 3"),
+            FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fronts",
+    ),
+    (
+        "duplicate_reversed_merged",
+        deck(
+            DIPOLE + PARASITE + "GW 3 9 .2 0 .23 .2 0 -.23 .001\n",
+            "LD 5 0 0 0 3.5e7\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fronts",
+    ),
+    (
+        "duplicate_fed_refused",
         deck(DIPOLE + "GW 2 11 0 0 -.25 0 0 .25 .001\n", FR + "EX 0 1 6 0 1\nXQ\n"),
-        "declined",
+        "fronts",
     ),
 ]
 

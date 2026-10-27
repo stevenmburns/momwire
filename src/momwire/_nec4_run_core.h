@@ -94,6 +94,13 @@ class RunEngine {
     // `solver.omega`, and the `solver.eps` its ground's eps~ is folded with.
     virtual double solver_omega(std::size_t index) = 0;
     virtual double solver_eps0(std::size_t index) = 0;
+    // `solver._wire_dedup` (momwire#1042): how the operating point's input
+    // wires map onto the wires the solver holds, or nullptr when none was
+    // dropped. Every readout above speaks the SOLVED wires.
+    virtual const WireDedup *dedup(std::size_t index) {
+        (void)index;
+        return nullptr;
+    }
 };
 
 // Builds the engine for one built structure (its operating points).

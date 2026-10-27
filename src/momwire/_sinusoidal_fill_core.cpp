@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -884,15 +885,19 @@ void apply_loading(const Front &fr, const razor::WireLoading &loading, const Ent
     std::vector<cd> z_seg(static_cast<std::size_t>(N));
     for (std::size_t w = 0; w < g.wire_first.size(); w++)
         for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) z_seg[static_cast<std::size_t>(i)] = z_wire.at(w);
-    std::size_t e = 0;
+    // numpy's `G[rows, cols] -= v`: every entry read before any is written,
+    // so a repeated (row, col) keeps the LAST entry's difference
+    std::vector<std::pair<std::size_t, cd>> writes;
     for (ll n = 0; n < N; n++)
-        for (ll q = sv.starts[static_cast<std::size_t>(n)]; q < sv.starts[static_cast<std::size_t>(n) + 1]; q++, e++) {
+        for (ll q = sv.starts[static_cast<std::size_t>(n)]; q < sv.starts[static_cast<std::size_t>(n) + 1]; q++) {
             const std::size_t qz = static_cast<std::size_t>(q);
             const cd ic = sig_mul(sv.sigma[qz], sv.AC[qz]);
             const cd t = nec5::replay::np_cmul(z_seg[static_cast<std::size_t>(n)], ic);
-            cd &x = G[static_cast<std::size_t>(n * N + sv.jbasis[qz])];
-            x = cd(x.real() - t.real(), x.imag() - t.imag());
+            const std::size_t at = static_cast<std::size_t>(n * N + sv.jbasis[qz]);
+            const cd x = G[at];
+            writes.push_back({at, cd(x.real() - t.real(), x.imag() - t.imag())});
         }
+    for (const auto &w : writes) G[w.first] = w.second;
     (void)E;
 }
 
@@ -997,13 +1002,16 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // momwire#1644: the NEC-4 kernel serves the literal shapes only
     const bool cos1 = !fr.nec4 && kd_min < kWellScaledKd;  // cos_shape == "cos-1"
 
-    // M_A, M_B, M_C's entries: n_idx = repeat(arange(N), diff(starts))
+    // M_A, M_B, M_C's entries: n_idx = repeat(arange(N), diff(starts)). A
+    // (segment, basis) pair can repeat (a wire's two ends in one junction,
+    // as a dropped duplicate leaves it, momwire#1042): the dense M keeps the
+    // LAST value numpy's fancy assignment writes, scipy's CSC sums them.
     Entries E;
-    std::set<std::pair<ll, ll>> seen;
+    std::map<std::pair<ll, ll>, int> seen;
     for (ll i = 0; i < N; i++)
         for (ll e = sv.starts[static_cast<std::size_t>(i)]; e < sv.starts[static_cast<std::size_t>(i) + 1]; e++) {
             const std::size_t ez = static_cast<std::size_t>(e);
-            if (!seen.insert({i, sv.jbasis[ez]}).second) decline("a repeated (segment, basis) entry");
+            if (++seen[{i, sv.jbasis[ez]}] > 2) decline("a (segment, basis) entry repeated three times");
             E.n.push_back(i);
             E.j.push_back(sv.jbasis[ez]);
             E.v[0].push_back(sig_mul(sv.sigma[ez], cos1 ? sv.AC[ez] : sv.A[ez]));
@@ -1078,6 +1086,27 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         const std::size_t at = static_cast<std::size_t>(fillp[static_cast<std::size_t>(E.j[e])]++);
         crow[at] = E.n[e];
         for (int c = 0; c < 3; c++) cval[c][at] = E.v[c][e];
+    }
+    if (E.n.size() != seen.size()) {
+        // `sum_duplicates`: a repeated row in a column is one entry, the sum
+        // of the two (in either order: one addition)
+        std::vector<ll> ptr2(Nz + 1, 0), row2;
+        std::vector<cd> val2[3];
+        for (std::size_t j = 0; j < Nz; j++) {
+            for (ll e = cptr[j]; e < cptr[j + 1]; e++) {
+                const std::size_t ez = static_cast<std::size_t>(e);
+                if (e > cptr[j] && crow[ez] == row2.back()) {
+                    for (int c = 0; c < 3; c++) val2[c].back() = nec5::replay::c_add(val2[c].back(), cval[c][ez]);
+                    continue;
+                }
+                row2.push_back(crow[ez]);
+                for (int c = 0; c < 3; c++) val2[c].push_back(cval[c][ez]);
+            }
+            ptr2[j + 1] = static_cast<ll>(row2.size());
+        }
+        cptr.swap(ptr2);
+        crow.swap(row2);
+        for (int c = 0; c < 3; c++) cval[c].swap(val2[c]);
     }
 
     // `_schedule.mb_rows(swept_mem_mb, _fill_row_bytes(N))` in free space
@@ -1261,7 +1290,7 @@ std::string dump_fill(const std::string &text, const FillLinalg &la, std::size_t
             std::string q = at(p + ".points", j);
             try {
                 const Front fr = front(sb.points[j].args);
-                const PortSolution ps = port_solution(fr, sb.points[j].args, la);
+                const PortSolution ps = port_solution(fr, fr.args, la);
                 const std::size_t n = static_cast<std::size_t>(ps.n), np_ = static_cast<std::size_t>(ps.n_ports);
                 matrix(o, q + ".G", ps.G, n, n, whole);
                 matrix(o, q + ".coeffs", ps.coeffs, n, np_, whole);
