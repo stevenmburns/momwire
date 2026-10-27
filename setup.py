@@ -428,6 +428,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
+    "src/momwire/_sinusoidal_galerkin_fill_core.h",
     "src/momwire/_nec4_run_core.h",
     "src/momwire/_sinusoidal_run_core.h",
     "src/momwire/_nec5_seam_core.h",
@@ -613,6 +614,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_sinusoidal_front_core.cpp",
     # The sinusoidal free-space fill and port solve over it (momwire#1607 B3).
     "src/momwire/_sinusoidal_fill_core.cpp",
+    # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
+    # same front (momwire#1718 S2), on the B-spline core's sinusoidal kernels.
+    "src/momwire/_sinusoidal_galerkin_fill_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a).
     "src/momwire/_nec4_run_core.cpp",

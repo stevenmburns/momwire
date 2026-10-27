@@ -7,6 +7,7 @@
 #include "_nec4_deck_core.h"
 #include "_nec4_build_core.h"
 #include "_sinusoidal_fill_core.h"
+#include "_sinusoidal_galerkin_fill_core.h"
 #include "_sinusoidal_front_core.h"
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
@@ -101,6 +102,30 @@ void register_nec5_deck(py::module_ &m) {
         "The C++ sinusoidal free-space fill and port solve (Z, coefficients, Y) "
         "at every operating point the NEC-4.2 build makes of a deck "
         "(scripts/core_split/sinusoidal_fill_compare.py writes the Python side).");
+    // The Sinusoidal-Galerkin mixed-potential fill and port solve in free
+    // space (`_sinusoidal_galerkin_fill_core.cpp`, momwire#1718 S2); `blas` as
+    // `sinusoidal_fill_dump`'s.
+    m.def(
+        "sinusoidal_galerkin_fill_dump",
+        [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole) -> std::string {
+            if (blas.size() != 7) throw py::value_error("blas: seven addresses");
+            mw::sinusoidal::FillLinalg la;
+            la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+            la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+            la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+            la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[3]);
+            la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[4]);
+            la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[5]);
+            la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
+            const std::string text = latin1;
+            py::gil_scoped_release nogil;
+            return mw::sinusoidal_galerkin::dump_fill(text, la, whole);
+        },
+        py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,
+        "The C++ Sinusoidal-Galerkin mixed-potential fill and port solve (G, "
+        "coefficients, Y) at every operating point the NEC-4.2 build makes of a "
+        "deck (scripts/core_split/sinusoidal_galerkin_fill_compare.py writes the "
+        "Python side).");
     m.def(
         "nec4_float_probe",
         [](const std::string &op, std::vector<double> v) -> py::object {
