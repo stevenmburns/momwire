@@ -288,6 +288,15 @@ if(MW_EXE_BASIS STREQUAL "sg42")
   # and its answers to the run half (momwire#1718 S2-S3)
   list(APPEND MW_CORE_SOURCES
     ${MW_SRC}/_bspline_core.cpp
+    # the Sommerfeld remainder (S5b): bs2's fused block kernel, its graded
+    # grazing pairs and their projection
+    ${MW_SRC}/_exact_kernel_coaxial_core.cpp
+    ${MW_SRC}/_somm_remainder_core.cpp
+    ${MW_SRC}/_somm_pairs_core.cpp
+    ${MW_SRC}/_somm_pairs_owned_core.cpp
+    ${MW_SRC}/_bspline_front_core.cpp
+    ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_run_core.cpp)
 endif()

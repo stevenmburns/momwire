@@ -25,6 +25,10 @@
 #include "_sinusoidal_galerkin_fill_core.h"
 
 #include "_bspline_core.h"
+#include "_bspline_fill_core.h"  // the graded remainder pairs (bs2's)
+#include "_somm_grid_core.h"
+#include "_somm_pairs_owned_core.h"
+#include "_somm_remainder_core.h"
 #include "_sinusoidal_series_inline.h"  // `sin_minus_arg`
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
@@ -754,6 +758,291 @@ void apply_loading(std::vector<cd> &G, std::size_t n_basis, const Front &fr, con
     }
 }
 
+// --- the Sommerfeld remainder above the plane (`_mp_remainder`, S5b) ---------
+
+// `_sinusoidal_mp.REMAINDER_Q_BYTES`, `REMAINDER_TAYLOR_DEGREE + 1`, bspline's
+// `_REMAINDER_GRADED_C` / `_REMAINDER_GRADED_EDGE_TOL`
+constexpr std::size_t REMAINDER_Q_BYTES = std::size_t(256) << 20;
+constexpr int REMAINDER_D1 = 13;
+constexpr double REMAINDER_GRADED_C = 4.0;
+constexpr double REMAINDER_GRADED_EDGE_TOL = 1e-9;
+constexpr double SOLVER_MU = 1.25663706127e-6;  // SinusoidalSolver.mu
+
+struct GridHold {  // `grid_cpp_args(grid)`'s view over a grid
+    somm_proj::GridView view;
+    std::vector<cd> far;
+};
+
+void grid_view(const somm_core::Grid &G0, GridHold &h) {
+    const std::size_t n_reg = G0.regions.size();
+    if (n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout past the view's regions");
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cd *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (std::size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = G0.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    // theta split `math.radians(30.0)`, and the far pack
+    h.view = somm_proj::build_grid_view(G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near, r0, dr, th0, dth,
+                                        n_reg, vals, shape0, nr, nth);
+    h.far = somm_core::far_pack(G0);
+    somm_proj::set_far(h.view, h.far.data(), static_cast<std::ptrdiff_t>(h.far.size()));
+}
+
+// `taylor_shape_coefs(k, h)`: tau (3, D1, n) C order
+std::vector<double> taylor_shape_coefs(double k, const std::vector<double> &h) {
+    const int D1 = REMAINDER_D1;
+    const std::size_t n = h.size();
+    double fact[REMAINDER_D1], kp[REMAINDER_D1], s_xi[REMAINDER_D1], c_xi[REMAINDER_D1], one[REMAINDER_D1];
+    double f = 1.0;
+    for (int m = 0; m < D1; m++) {
+        if (m > 0) f = f * static_cast<double>(m);  // math.factorial, exact here
+        fact[m] = f;
+    }
+    for (int m = 0; m < D1; m++) {
+        kp[m] = std::pow(k, static_cast<double>(m)) / fact[m];
+        const double sgn = (m / 2) % 2 == 0 ? 1.0 : -1.0;
+        s_xi[m] = (m % 2 == 1 ? sgn : 0.0) * kp[m];
+        c_xi[m] = (m % 2 == 0 && m > 0 ? sgn : 0.0) * kp[m];
+        one[m] = m == 0 ? 1.0 : 0.0;
+    }
+    double binom[REMAINDER_D1][REMAINDER_D1];
+    for (int mm = 0; mm < D1; mm++) {
+        double c = 1.0;  // math.comb(mm, j), exact here
+        for (int j = 0; j < D1; j++) {
+            binom[mm][j] = j <= mm ? c : 0.0;
+            if (j < mm) c = c * static_cast<double>(mm - j) / static_cast<double>(j + 1);
+        }
+    }
+    const double *series[3] = {one, s_xi, c_xi};
+    std::vector<double> out(3 * static_cast<std::size_t>(D1) * n);
+    for (std::size_t s = 0; s < n; s++) {
+        const double base = -0.5 * h[s];
+        double T[REMAINDER_D1][REMAINDER_D1];
+        for (int m = 0; m < D1; m++)
+            for (int j = 0; j < D1; j++) T[m][j] = binom[m][j] * std::pow(base, static_cast<double>(std::max(m - j, 0)));
+        for (int p = 0; p < 3; p++)
+            for (int j = 0; j < D1; j++) {
+                double acc = 0.0;  // einsum("m,mjn->jn"): from zero, m in order
+                for (int m = 0; m < D1; m++) acc = acc + series[p][m] * T[m][j];
+                out[(static_cast<std::size_t>(p) * D1 + static_cast<std::size_t>(j)) * n + s] = acc;
+            }
+    }
+    return out;
+}
+
+// `_mp_remainder(G, geom, seg_view, k, fg)` at a real k: `remainder_Q_above`
+// with `scale = REMAINDER_SIGN` (1.0), G F order.
+void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, double k, cd eps_t,
+                  double omega, int64_t q, const nec5::NumpyLinalg &np) {
+    const std::size_t N = s.n;
+    const double gz = 0.0;  // the NEC-4.2 dialect's interface
+    const double r1_max = razor::max_image_distance(s.l.data(), s.r.data(), N, gz);
+    const somm_core::Grid &G0 = somm_core::get_grid(eps_t, k, r1_max, omega, SOLVER_MU);
+    GridHold gh;
+    grid_view(G0, gh);
+    std::vector<double> t01, w01;
+    gl01(q, t01, w01);
+    const std::size_t qn = t01.size();
+    // nodes = seg_l + t01 (seg_r - seg_l); W = (h w01) S_p(xi), real
+    std::vector<double> nodes(N * qn * 3), W(3 * N * qn);
+    for (std::size_t i = 0; i < N; i++)
+        for (std::size_t a = 0; a < qn; a++) {
+            for (int d = 0; d < 3; d++)
+                nodes[(i * qn + a) * 3 + d] = s.l[3 * i + d] + t01[a] * (s.r[3 * i + d] - s.l[3 * i + d]);
+            const double xi = (t01[a] - 0.5) * s.h[i];
+            const double arg = k * xi;
+            const double half = std::sin(0.5 * arg);
+            const double S[3] = {1.0, std::sin(arg), -2.0 * half * half};
+            const double hw = s.h[i] * w01[a];
+            for (int p = 0; p < 3; p++) W[(static_cast<std::size_t>(p) * N + i) * qn + a] = hw * S[p];
+        }
+    for (const cd &c : csr.coef)
+        if (c.imag() != 0.0) decline("complex basis coefficients on the remainder (a complex k)");
+    // `basis_wings(starts, jbasis, coef, n_basis)`
+    const std::size_t nnz = csr.jbasis.size();
+    std::vector<int64_t> seg_of(nnz);
+    for (std::size_t i = 0; i < N; i++)
+        for (int64_t e = csr.starts[i]; e < csr.starts[i + 1]; e++) seg_of[static_cast<std::size_t>(e)] = static_cast<int64_t>(i);
+    std::vector<std::size_t> order(nnz);
+    for (std::size_t e = 0; e < nnz; e++) order[e] = e;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return csr.jbasis[x] < csr.jbasis[y]; });
+    std::vector<int64_t> counts(n_basis, 0);
+    for (std::size_t e = 0; e < nnz; e++) counts[static_cast<std::size_t>(csr.jbasis[e])]++;
+    std::vector<int64_t> rows_basis, row_start(n_basis + 1, 0);
+    for (std::size_t b = 0; b < n_basis; b++) {
+        const int64_t nr = (counts[b] + 2) / 3;
+        row_start[b + 1] = row_start[b] + nr;
+        for (int64_t r = 0; r < nr; r++) rows_basis.push_back(static_cast<int64_t>(b));
+    }
+    const std::size_t R = rows_basis.size();
+    if (16 * R * R > REMAINDER_Q_BYTES) decline("a remainder block past REMAINDER_Q_BYTES (its banded fold)");
+    std::vector<int64_t> loc(R * 3, 0);
+    std::vector<double> pl(R * 9, 0.0);
+    {
+        std::vector<int64_t> pos_in(n_basis, 0);
+        for (std::size_t o = 0; o < nnz; o++) {
+            const std::size_t e = order[o];
+            const std::size_t b = static_cast<std::size_t>(csr.jbasis[e]);
+            const int64_t pos = pos_in[b]++;
+            const std::size_t row = static_cast<std::size_t>(row_start[b] + pos / 3), slot = static_cast<std::size_t>(pos % 3);
+            loc[row * 3 + slot] = seg_of[e];
+            for (int p = 0; p < 3; p++) pl[(row * 3 + slot) * 3 + static_cast<std::size_t>(p)] = csr.coef[3 * e + static_cast<std::size_t>(p)].real();
+        }
+    }
+    std::vector<cd> Qr(R * R);
+    somm_core::remainder_bspline_Q(gh.view, gz, k, nodes.data(), s.t.data(), W.data(), static_cast<std::ptrdiff_t>(N),
+                                   nodes.data(), s.t.data(), W.data(), static_cast<std::ptrdiff_t>(N),
+                                   static_cast<std::ptrdiff_t>(qn), 3, loc.data(), pl.data(),
+                                   static_cast<std::ptrdiff_t>(R), loc.data(), pl.data(),
+                                   static_cast<std::ptrdiff_t>(R), true, 0, Qr.data(), 0);
+    // `fold_rows_into(G, Qr, rows_basis, scale)`: every basis has a row here
+    {
+        std::vector<std::size_t> first(n_basis);
+        for (std::size_t b = 0; b < n_basis; b++) first[b] = static_cast<std::size_t>(row_start[b]);
+        std::vector<std::size_t> extra;
+        for (std::size_t r = 0; r < R; r++)
+            if (static_cast<int64_t>(r) != row_start[static_cast<std::size_t>(rows_basis[r])]) extra.push_back(r);
+        if (!extra.empty()) {
+            std::vector<cd> rows(extra.size() * R);  // `Qr[extra]`, copied first
+            for (std::size_t i = 0; i < extra.size(); i++)
+                std::copy(Qr.begin() + static_cast<std::ptrdiff_t>(extra[i] * R),
+                          Qr.begin() + static_cast<std::ptrdiff_t>((extra[i] + 1) * R),
+                          rows.begin() + static_cast<std::ptrdiff_t>(i * R));
+            for (std::size_t i = 0; i < extra.size(); i++) {
+                const std::size_t t = first[static_cast<std::size_t>(rows_basis[extra[i]])];
+                for (std::size_t j = 0; j < R; j++) Qr[t * R + j] = cadd(Qr[t * R + j], rows[i * R + j]);
+            }
+            std::vector<cd> cols(extra.size() * R);  // `Qr.T[extra]`
+            for (std::size_t i = 0; i < extra.size(); i++)
+                for (std::size_t r = 0; r < R; r++) cols[i * R + r] = Qr[r * R + extra[i]];
+            for (std::size_t i = 0; i < extra.size(); i++) {
+                const std::size_t t = first[static_cast<std::size_t>(rows_basis[extra[i]])];
+                for (std::size_t r = 0; r < R; r++) Qr[r * R + t] = cadd(Qr[r * R + t], cols[i * R + r]);
+            }
+        }
+        for (std::size_t i = 0; i < n_basis; i++)
+            for (std::size_t j = 0; j < n_basis; j++) {
+                const cd blk = cm(Qr[first[i] * R + first[j]], cd(1.0, 0.0));  // `blk *= scale`
+                cd &gij = G[i + j * n_basis];
+                gij = cadd(gij, blk);
+            }
+    }
+    // the grazing pairs, on graded panels
+    std::vector<int64_t> I, J, Qp;
+    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), gz, q, REMAINDER_GRADED_C, REMAINDER_GRADED_EDGE_TOL,
+                             np, I, J, Qp);
+    if (I.empty()) return;
+    const std::size_t n = I.size();
+    const int D1 = REMAINDER_D1;
+    bspline::Geometry bg;
+    bg.n_segs_total = static_cast<int64_t>(N);
+    bg.seg_l = s.l;
+    bg.seg_r = s.r;
+    bg.tangents = s.t;
+    bg.h_per_seg = s.h;
+    // `_remainder_graded.pair_moments(..., D1)` through the bs2 core's exported
+    // hook, which also returns the base-order moments this route does not
+    // read: a new export there would move the codegen of that TU's kernels
+    std::vector<cd> dJm, unread;
+    bspline::debug_pair_moments(bg, gz, k, G0, D1, I, J, q, dJm, unread);
+    const std::vector<double> tau = taylor_shape_coefs(k, s.h);
+    // dJ = einsum("pmn,nmM,PMn->npP", tau[:, :, I], dJ_mono, tau[:, :, J])
+    std::vector<cd> dJ(n * 9);
+    for (std::size_t t = 0; t < n; t++) {
+        const std::size_t si = static_cast<std::size_t>(I[t]), sj = static_cast<std::size_t>(J[t]);
+        for (int p = 0; p < 3; p++)
+            for (int P = 0; P < 3; P++) {
+                double ar = 0.0, ai = 0.0;
+                for (int m = 0; m < D1; m++) {
+                    const cd a(tau[(static_cast<std::size_t>(p) * D1 + static_cast<std::size_t>(m)) * N + si], 0.0);
+                    for (int M = 0; M < D1; M++) {
+                        const cd c(tau[(static_cast<std::size_t>(P) * D1 + static_cast<std::size_t>(M)) * N + sj], 0.0);
+                        const cd v = e_mul(e_mul(a, dJm[(t * D1 + static_cast<std::size_t>(m)) * D1 + static_cast<std::size_t>(M)]), c);
+                        ar = v.real() + ar;
+                        ai = v.imag() + ai;
+                    }
+                }
+                dJ[t * 9 + static_cast<std::size_t>(p) * 3 + static_cast<std::size_t>(P)] = cd(ar, ai);
+            }
+    }
+    // the base-order moments these pairs were filled with: each observer node
+    // of I[n] against the q source nodes of J[n] (`remainder_field_proj_owned`)
+    const std::size_t S = n * qn * qn;
+    std::vector<double> obs(n * qn * 3), t_obs(n * qn * 3), src(S * 3), t_src(S * 3);
+    std::vector<int64_t> owner(S);
+    for (std::size_t t = 0; t < n; t++) {
+        const std::size_t si = static_cast<std::size_t>(I[t]), sj = static_cast<std::size_t>(J[t]);
+        for (std::size_t a = 0; a < qn; a++) {
+            const std::size_t o = t * qn + a;
+            for (int d = 0; d < 3; d++) {
+                obs[o * 3 + d] = nodes[(si * qn + a) * 3 + d];
+                t_obs[o * 3 + d] = s.t[3 * si + d];
+            }
+            for (std::size_t b = 0; b < qn; b++) {
+                const std::size_t r = o * qn + b;
+                owner[r] = static_cast<int64_t>(o);
+                for (int d = 0; d < 3; d++) {
+                    src[r * 3 + d] = nodes[(sj * qn + b) * 3 + d];
+                    t_src[r * 3 + d] = s.t[3 * sj + d];
+                }
+            }
+        }
+    }
+    std::vector<cd> F(S);
+    somm_core::remainder_field_proj_owned(gh.view, gz, k, obs.data(), t_obs.data(), src.data(), t_src.data(),
+                                          owner.data(), static_cast<std::ptrdiff_t>(S), F.data(), 0);
+    // lo = einsum("pnq,nqr,Pnr->npP", W[:, I, :], F, W[:, J, :]); dJ -= lo
+    for (std::size_t t = 0; t < n; t++) {
+        const std::size_t si = static_cast<std::size_t>(I[t]), sj = static_cast<std::size_t>(J[t]);
+        for (int p = 0; p < 3; p++)
+            for (int P = 0; P < 3; P++) {
+                double ar = 0.0, ai = 0.0;
+                for (std::size_t a = 0; a < qn; a++) {
+                    const cd wa(W[(static_cast<std::size_t>(p) * N + si) * qn + a], 0.0);
+                    for (std::size_t b = 0; b < qn; b++) {
+                        const cd wb(W[(static_cast<std::size_t>(P) * N + sj) * qn + b], 0.0);
+                        const cd v = e_mul(e_mul(wa, F[(t * qn + a) * qn + b]), wb);
+                        ar = v.real() + ar;
+                        ai = v.imag() + ai;
+                    }
+                }
+                cd &x = dJ[t * 9 + static_cast<std::size_t>(p) * 3 + static_cast<std::size_t>(P)];
+                x = csub(x, cd(ar, ai));
+            }
+    }
+    // `scatter_pair_moments(G, starts, jbasis, coef, I, J, dJ, scale)`
+    for (std::size_t t = 0; t < n; t++) {
+        const int64_t a0 = csr.starts[static_cast<std::size_t>(I[t])], a1 = csr.starts[static_cast<std::size_t>(I[t]) + 1];
+        const int64_t b0 = csr.starts[static_cast<std::size_t>(J[t])], b1 = csr.starts[static_cast<std::size_t>(J[t]) + 1];
+        for (int64_t ei = a0; ei < a1; ei++)
+            for (int64_t ej = b0; ej < b1; ej++) {
+                double ar = 0.0, ai = 0.0;  // einsum("ep,epP,eP->e")
+                for (int p = 0; p < 3; p++)
+                    for (int P = 0; P < 3; P++) {
+                        const cd v = e_mul(e_mul(csr.coef[3 * static_cast<std::size_t>(ei) + static_cast<std::size_t>(p)],
+                                                 dJ[t * 9 + static_cast<std::size_t>(p) * 3 + static_cast<std::size_t>(P)]),
+                                           csr.coef[3 * static_cast<std::size_t>(ej) + static_cast<std::size_t>(P)]);
+                        ar = v.real() + ar;
+                        ai = v.imag() + ai;
+                    }
+                const cd val = cm(cd(1.0, 0.0), cd(ar, ai));  // `scale * val`
+                cd &gij = G[static_cast<std::size_t>(csr.jbasis[static_cast<std::size_t>(ei)]) +
+                            static_cast<std::size_t>(csr.jbasis[static_cast<std::size_t>(ej)]) * n_basis];
+                gij = cadd(gij, val);
+            }
+    }
+}
+
 // `_basis_value(sigAC, B, sigC, k, xi)` at one entry
 cd basis_value(cd sigAC, cd B, cd sigC, double k, double xi) {
     const double half = std::sin(0.5 * k * xi);
@@ -800,12 +1089,13 @@ void check_constructor(const Front &fr, const nec4::SolverArgs &args) {
     }
 }
 
-std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
+std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg *np) {
     // GN 1 (and GD's perfect plane, whose cliff is the readout's): the image
     // block; a finite ground composes the Sommerfeld remainder (S5b)
     const bool pec = args.ground.kind == nec4::Ground::pec;
-    if (args.ground.kind != nec4::Ground::none && !pec)
-        decline("a Sommerfeld ground on the Sinusoidal-Galerkin fill (momwire#1718 S5b)");
+    const bool finite = args.ground.kind == nec4::Ground::finite;  // GN 2 / GN 3: Sommerfeld
+    if (args.ground.kind != nec4::Ground::none && !pec && !finite)
+        decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
     const Geometry &g = fr.geometry;
     for (std::size_t i = 0; i < g.ground_minus.size(); i++)
         if (g.ground_minus[i] || g.ground_plus[i]) decline("a wire end on the ground plane (momwire#1718 S7)");
@@ -823,7 +1113,11 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
             if (d.segs.a[i] != d.segs.a[0]) has_b = true;
     window_fill(G, n_basis, csr, d.segs, d.segs, k, fr.eta, cd(DIRECT_SIGN, 0.0), args.extended_kernel, has_b,
                 d.segs.a);
-    if (pec) {
+    // the Sommerfeld composition's eps~ and image coefficient C2 = (eps~ - 1) /
+    // (eps~ + 1), CPython complex arithmetic (`_ground_spec.ground_config`)
+    const cd eps_t(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+    const cd c2 = py_div(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0), cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+    if (pec || finite) {
         // `fg.image_sources()`: centres mirrored in z = 0 (`2 * ground_z - z`),
         // tangents z-flipped (`t * MIRROR`); the image keeps each segment's
         // length and radius. Scale `-DIRECT_SIGN * fg.image_coefficient`.
@@ -840,8 +1134,12 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
             img.t[3 * i + 2] = d.segs.t[3 * i + 2] * -1.0;
         }
         segment_ends(img);
-        window_fill(G, n_basis, csr, d.segs, img, k, fr.eta, cd(-DIRECT_SIGN * 1.0, 0.0), args.extended_kernel,
-                    has_b, d.segs.a);
+        const cd scale = pec ? cd(-DIRECT_SIGN * 1.0, 0.0) : py_mul(cd(-DIRECT_SIGN, 0.0), c2);
+        window_fill(G, n_basis, csr, d.segs, img, k, fr.eta, scale, args.extended_kernel, has_b, d.segs.a);
+        if (finite) {
+            if (np == nullptr) decline("no numpy products for the remainder's pair scan");
+            mp_remainder(G, n_basis, csr, d.segs, k, eps_t, fr.omega, 3, *np);  // n_qp_sommerfeld = 3
+        }
     }
     // `_apply_loading`: read at `k * self.c`, the fill's own k (an insulated
     // wire declines)
@@ -854,7 +1152,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
     if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
     check_constructor(fr, args);
     PortSolution ps;
-    ps.G = sinusoidal_galerkin::assemble_Z(fr, args);
+    ps.G = sinusoidal_galerkin::assemble_Z(fr, args, &la.np);
     const Geometry &g = fr.geometry;
     const SegView &v = fr.basis;
     const std::size_t N = static_cast<std::size_t>(g.n_segs), P = g.feed_segs.size();

@@ -24,7 +24,12 @@ these tests hold the C++ dump (G, the coefficients, Y) equal to it over:
 - wire loading (S6): LD 5 on every wire and on one, LD 2 / LD 3 per metre,
   LD 5 on a bent wire over GN 1 and on short segments (the overlap
   integrals' series branch);
-- the declines (a wire end on the plane, a Sommerfeld ground)
+- a Sommerfeld ground above the plane (S5b): the image at C2 and the
+  remainder (`remainder_Q_above`: the fused kernel, the wing rows' fold,
+  the grazing pairs' graded correction) on a vertical, a low horizontal, a
+  T junction (a basis of more than three wings) and a loaded vee on the
+  reduced kernel;
+- the declines (a wire end on the plane)
   and the constructor's refusal of the extended kernel at a stepped-radius
   junction.
 """
@@ -223,10 +228,46 @@ CASES = [
         "declined",
     ),
     (
-        "over_gn2_declines",
+        "vertical_over_gn2",
         deck(
             dipole(11).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        # low over the plane: the remainder's grazing pairs, on graded panels
+        "horizontal_low_over_gn3",
+        deck(
+            "GW 1 21 -.25 0 .01 .25 0 .01 .001\n",
+            "GN 3 0 0 0 5 .02\n" + FR + "EX 0 1 11 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        # a junction basis of more than three entries: its extra wing rows
+        "t_junction_over_gn2",
+        deck(
+            "GW 1 10 -.25 0 .2 .25 0 .2 .001\nGW 2 5 0 0 .2 0 .3 .2 .001\n"
+            "GW 3 5 0 0 .2 0 -.3 .2 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 5 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "inverted_vee_over_gn2_reduced_loaded",
+        deck(
+            "GW 1 8 -.3 0 .05 0 0 .3 .001\nGW 2 8 0 0 .3 .3 0 .05 .001\n",
+            "GN 2 0 0 0 13 .005\nEK -1\nLD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 8 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "monopole_on_gn2_declines",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nXQ\n",
+            ge="GE 1",
         ),
         "declined",
     ),
@@ -362,3 +403,31 @@ def test_a_wire_listed_twice_refuses_in_the_galerkin_solvers_name(acc):
         :300
     ]
     assert nc.dc.first_difference(nc.py_fill(text), cxx) is None
+
+
+def test_the_remainder_branches_are_reached(acc):
+    """Not vacuous: the low horizontal wire takes the graded correction and
+    the T junction folds a basis's extra wing rows."""
+    from momwire import _remainder_graded
+    from momwire import _sinusoidal_mp as mp
+
+    seen = {"graded": 0, "extra": 0}
+    graded, wings = _remainder_graded.pair_moments, mp.basis_wings
+
+    def spy_graded(*a, **kw):
+        seen["graded"] += 1
+        return graded(*a, **kw)
+
+    def spy_wings(starts, jbasis, coef, n_basis, width=mp.N_SHAPES):
+        out = wings(starts, jbasis, coef, n_basis, width)
+        seen["extra"] += out[0].size > n_basis
+        return out
+
+    _remainder_graded.pair_moments, mp.basis_wings = spy_graded, spy_wings
+    try:
+        cases = dict((c[0], c[1]) for c in CASES)
+        nc.py_fill(cases["horizontal_low_over_gn3"])
+        nc.py_fill(cases["t_junction_over_gn2"])
+    finally:
+        _remainder_graded.pair_moments, mp.basis_wings = graded, wings
+    assert seen["graded"] and seen["extra"], seen

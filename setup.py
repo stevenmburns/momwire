@@ -447,6 +447,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_proj_core.h",
     "src/momwire/_somm_remainder_core.h",
     "src/momwire/_somm_pairs_core.h",
+    "src/momwire/_somm_pairs_owned_core.h",
     "src/momwire/_somm_grid_core.h",
     "src/momwire/_accel_somm_proj_py.h",
 ]
@@ -494,6 +495,9 @@ _ACCEL_SOURCES = [
     # The graded rule's inner integral and the pair-order scan (momwire#1517
     # step 3); `_accel_somm_pairs.cpp` / `_accel_qp_pairs.cpp` bind them.
     "src/momwire/_somm_pairs_core.cpp",
+    # The owned-pair projection, its own TU for `proj_one`'s inlining
+    # (momwire#1718 S5b); `_accel_somm_pairs.cpp` binds it.
+    "src/momwire/_somm_pairs_owned_core.cpp",
     # The below/below remainder's projection, Python-free (momwire#1512 B2):
     # the kernel `remainder_field_proj_batch_below` binds, moved verbatim.
     "src/momwire/_somm_below_proj_core.cpp",
