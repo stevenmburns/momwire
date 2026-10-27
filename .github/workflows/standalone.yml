@@ -509,6 +509,67 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
 
+
+  # `linux-nec42-sg` (momwire#1718 S4): the NEC-4.2 slot's
+  # `momwire-nec42-sinusoidal-galerkin` as one no-Python executable
+  # (MW_EXE_BASIS=sg42), built here from source in both variants and held to
+  # the launcher by tests/test_standalone_nec42.py (every fixture deck, the
+  # launcher layer, the streaming call). Not in the release tarball yet
+  # (#1718 S-D), so no release job waits on it.
+  linux-nec42-sg:
+    needs: linux-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          save: false
+      - name: momwire environment
+        run: |
+          pip install --upgrade pip
+          pip install "setuptools>=61.0" wheel pybind11 cmake ninja
+          pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      - name: static OpenBLAS (linux-artifact's cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/mwx-openblas-manylinux/libmwxp.a
+          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
+          fail-on-cache-miss: true
+      - name: build (no-Python, avx2 and sse2)
+        run: |
+          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          for v in avx2 sse2; do
+            cmake -S standalone -B build-nec42-sg-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=sg42 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
+            cmake --build build-nec42-sg-$v
+          done
+          ldd build-nec42-sg-avx2/momwire-nec42-sinusoidal-galerkin-standalone
+        env:
+          CXX: ccache g++
+      - name: no-Python build against the launcher (avx2)
+        run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
+        env:
+          MOMWIRE_NEC42_SG_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-sg-avx2/momwire-nec42-sinusoidal-galerkin-standalone
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: no-Python build against the launcher (sse2)
+        run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
+        env:
+          MOMWIRE_NEC42_SG_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-sg-sse2/momwire-nec42-sinusoidal-galerkin-standalone
+          MOMWIRE_FORCE_VARIANT: sse2
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 90

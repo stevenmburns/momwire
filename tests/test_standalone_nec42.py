@@ -1,6 +1,7 @@
 """momwire-nec42-sinusoidal-standalone (standalone/, MW_EXE_BASIS=sin42,
 momwire#1607 B4b): the NEC-4.2 slot's sinusoidal launcher as one Python-free
-executable.
+executable; and the same for momwire-nec42-sinusoidal-galerkin-standalone
+(MW_EXE_BASIS=sg42, momwire#1718 S4), the Sinusoidal-Galerkin launcher.
 
 Every printout is held to `momwire-nec42-sinusoidal`'s (this environment's
 launcher) byte for byte, except the two lines the NEC-4.2 slot fills with
@@ -19,7 +20,8 @@ which are masked by exact line pattern, the same number on both sides
 
 The executable needs its OpenBLAS and a CMake build, which only the
 `standalone` workflow's Linux job makes, so this module runs only when
-MOMWIRE_NEC42_SIN_STANDALONE_EXE names one.
+MOMWIRE_NEC42_SIN_STANDALONE_EXE (or MOMWIRE_NEC42_SG_STANDALONE_EXE) names
+one.
 """
 
 from __future__ import annotations
@@ -37,12 +39,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 NEC42 = FIXTURES / "eznec_nec42"
-EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE")
-LAUNCHER = "momwire-nec42-sinusoidal"
+# The same gates hold `momwire-nec42-sinusoidal-galerkin-standalone`
+# (MW_EXE_BASIS=sg42, momwire#1718 S4) to `momwire-nec42-sinusoidal-galerkin`
+# when MOMWIRE_NEC42_SG_STANDALONE_EXE names it instead.
+_SG = os.environ.get("MOMWIRE_NEC42_SG_STANDALONE_EXE")
+EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE") or _SG
+BASIS = "sinusoidal-galerkin" if EXE is not None and EXE == _SG else "sinusoidal"
+LAUNCHER = f"momwire-nec42-{BASIS}"
 
 pytestmark = pytest.mark.skipif(
     not EXE,
-    reason="MOMWIRE_NEC42_SIN_STANDALONE_EXE does not name a built executable",
+    reason="neither MOMWIRE_NEC42_SIN_STANDALONE_EXE nor "
+    "MOMWIRE_NEC42_SG_STANDALONE_EXE names a built executable",
 )
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
@@ -148,7 +156,7 @@ def test_the_version_line_is_the_launchers():
     exe = subprocess.run([EXE, "-version"], capture_output=True, check=True)
     ref = subprocess.run([_launcher(), "-version"], capture_output=True, check=True)
     assert exe.stdout == ref.stdout
-    assert exe.stdout.startswith(b"NEC42 momwire-nec42-sinusoidal [sb] ")
+    assert exe.stdout.startswith(f"NEC42 {LAUNCHER} [sb] ".encode())
 
 
 def _decks(root: Path):
@@ -268,7 +276,7 @@ def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):
     want = tmp_path / "want.out"
     text = DIPOLE.read_bytes().decode("latin-1")
     _shell.write_printout(
-        want, _printout.render_refusal(text, line, basis="sinusoidal", dialect="nec4")
+        want, _printout.render_refusal(text, line, basis=BASIS, dialect="nec4")
     )
     got = out.read_bytes()
     assert got.split(b"\r\n")[2:] == want.read_bytes().split(b"\r\n")[2:]
