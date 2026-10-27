@@ -395,6 +395,39 @@ def test_a_hand_written_deck_has_the_same_fill(name, text, expect, acc):
     assert diff is None, diff
 
 
+@pytest.fixture(scope="module")
+def acc_fill_only():
+    """The accelerator alone: the fill (G) takes no BLAS, so these run where
+    numpy bundles no OpenBLAS (macOS's Accelerate build), the platform whose
+    libm and contracted plain C the full comparison above cannot reach."""
+    from momwire import _accel
+
+    if _accel.acc is None or not hasattr(_accel.acc, "sinusoidal_galerkin_fill_dump"):
+        pytest.skip("no compiled accelerator with the Sinusoidal-Galerkin fill")
+    return _accel.acc
+
+
+@pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
+def test_a_hand_written_deck_has_the_same_fill_on_every_platform(
+    name, text, expect, acc_fill_only
+):
+    """G alone, both copies, on every lane (test-macos included). A
+    Sommerfeld ground's remainder takes numpy's products, so it declines
+    by name here and is held by the full comparison above."""
+    cxx = nc.cxx_fill(text, acc_fill_only, g_only=True)
+    kind = nc.classify(cxx)
+    if expect == "declined":
+        assert kind == "declined", cxx[:500]
+        return
+    if kind == "declined":
+        why = bytes.fromhex(cxx.split(" ? declined ", 1)[1].split()[0]).decode()
+        assert "no numpy products" in why, why
+        return
+    assert kind == expect, cxx[:500]
+    diff = nc.dc.first_difference(nc.py_fill(text, g_only=True), cxx)
+    assert diff is None, diff
+
+
 def test_the_stepped_radius_junction_refuses_as_the_constructor_does(acc):
     """The extended kernel at a junction whose members differ in radius:
     `SinusoidalGalerkinSolver.__init__`'s NotImplementedError, word for

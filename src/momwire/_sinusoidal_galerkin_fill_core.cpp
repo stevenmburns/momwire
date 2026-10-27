@@ -1263,7 +1263,7 @@ void matrix(Out &o, const std::string &p, const std::vector<cd> &m, std::size_t 
 
 }  // namespace
 
-std::string dump_fill(const std::string &text, const sinusoidal::FillLinalg &la, std::size_t whole) {
+std::string dump_fill(const std::string &text, const sinusoidal::FillLinalg &la, std::size_t whole, bool g_only) {
     Out o;
     nec4::Build b;
     try {
@@ -1287,6 +1287,13 @@ std::string dump_fill(const std::string &text, const sinusoidal::FillLinalg &la,
                 nec4::SolverArgs args = sb.points[j].args;
                 args.junction_rule_nec42 = false;
                 const Front fr = sinusoidal::front(args, true);
+                if (g_only) {
+                    check_constructor(fr, fr.args);
+                    const std::vector<cd> G = sinusoidal_galerkin::assemble_Z(fr, fr.args, nullptr);
+                    const std::size_t n = static_cast<std::size_t>(std::llround(std::sqrt(double(G.size()))));
+                    matrix(o, q + ".G", G, n, n, whole);
+                    continue;
+                }
                 const PortSolution ps = sinusoidal_galerkin::port_solution(fr, fr.args, la);  // the solved wires
                 const std::size_t n = static_cast<std::size_t>(ps.n), np_ = static_cast<std::size_t>(ps.n_ports);
                 matrix(o, q + ".G", ps.G, n, n, whole);

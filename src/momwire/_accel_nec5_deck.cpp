@@ -129,8 +129,13 @@ void register_nec5_deck(py::module_ &m) {
     m.def(
         "sinusoidal_galerkin_fill_dump",
         [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole) -> std::string {
-            if (blas.size() != 7) throw py::value_error("blas: seven addresses");
             mw::sinusoidal::FillLinalg la;
+            if (blas.empty()) {  // the fill alone (G), on any platform
+                const std::string text = latin1;
+                py::gil_scoped_release nogil;
+                return mw::sinusoidal_galerkin::dump_fill(text, la, whole, true);
+            }
+            if (blas.size() != 7) throw py::value_error("blas: seven addresses, or none for the fill alone");
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
             la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
@@ -144,7 +149,7 @@ void register_nec5_deck(py::module_ &m) {
         },
         py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,
         "The C++ Sinusoidal-Galerkin mixed-potential fill and port solve (G, "
-        "coefficients, Y) at every operating point the NEC-4.2 build makes of a "
+        "coefficients, Y; G alone when `blas` is empty) at every operating point the NEC-4.2 build makes of a "
         "deck (scripts/core_split/sinusoidal_galerkin_fill_compare.py writes the "
         "Python side).");
     m.def(

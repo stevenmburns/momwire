@@ -81,7 +81,9 @@ def _matrix(m: np.ndarray, p: str, out: list[str], whole: int = WHOLE) -> None:
         out.append(f"{p}[{i}] = digest {d}")
 
 
-def _fill(kw: dict, p: str, out: list[str], whole: int = WHOLE) -> None:
+def _fill(
+    kw: dict, p: str, out: list[str], whole: int = WHOLE, g_only: bool = False
+) -> None:
     kw = {k: v for k, v in kw.items() if k != "junction_rule"}
     try:
         s = SinusoidalGalerkinSolver(**kw)
@@ -104,11 +106,13 @@ def _fill(kw: dict, p: str, out: list[str], whole: int = WHOLE) -> None:
         out.append(dc._error(p, exc))
         return
     _matrix(seen["G"], f"{p}.G", out, whole)
+    if g_only:
+        return
     _matrix(np.asarray(sol.coeffs), f"{p}.coeffs", out, whole)
     _matrix(np.asarray(sol.y), f"{p}.y", out, whole)
 
 
-def py_fill(text: str, whole: int = WHOLE) -> str:
+def py_fill(text: str, whole: int = WHOLE, g_only: bool = False) -> str:
     out: list[str] = []
     structures = split_structures(text)
     items = (
@@ -132,7 +136,7 @@ def py_fill(text: str, whole: int = WHOLE) -> str:
             p = f"fill.structures[{s}]"
             out.append(f"{p}.points : list {len(points)}")
             for j, kw in enumerate(points):
-                _fill(kw, f"{p}.points[{j}]", out, whole)
+                _fill(kw, f"{p}.points[{j}]", out, whole, g_only)
     return "".join(line + "\n" for line in out)
 
 
@@ -162,9 +166,17 @@ def blas_addresses() -> list[int]:
     return [ctypes.cast(getattr(lb, n), ctypes.c_void_p).value for lb, n in names]
 
 
-def cxx_fill(text: str, acc=None, blas=None, whole: int = WHOLE) -> str:
+def cxx_fill(
+    text: str, acc=None, blas=None, whole: int = WHOLE, g_only: bool = False
+) -> str:
+    """`g_only`: the fill alone (G), which takes no BLAS, so it runs where
+    numpy bundles no OpenBLAS (macOS's Accelerate build)."""
+    if g_only:
+        blas = []
+    elif blas is None:
+        blas = blas_addresses()
     return (acc or dc.accel()).sinusoidal_galerkin_fill_dump(
-        text.encode("latin-1"), blas or blas_addresses(), whole
+        text.encode("latin-1"), blas, whole
     )
 
 
