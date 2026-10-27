@@ -298,6 +298,11 @@ if(MW_EXE_BASIS STREQUAL "sg42")
     ${MW_SRC}/_bspline_fill_core.cpp
     ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
+    # the direct-field fill (S7): a wire end on the ground plane, over the
+    # Galerkin far fill core (S1) and its complex twin's sweep TU
+    ${MW_SRC}/_sinusoidal_galerkin_direct_core.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_core.cpp
+    ${MW_SRC}/_accel_sinusoidal_cplx.cpp
     ${MW_SRC}/_sinusoidal_galerkin_run_core.cpp)
 endif()
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
@@ -347,6 +352,7 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
   Faddeeva=mws_Faddeeva  # xsf/faddeeva.h keeps its own namespace, outside xsf (momwire#1595 D1b)
   razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
+  sg_cplx_phase_sweep=mws_sg_cplx_phase_sweep  # the SG complex fill's (momwire#1718 S7)
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
   somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
   ni_point=mws_ni_point near_buried=mws_near_buried  # the buried near-field readout (momwire#1653)

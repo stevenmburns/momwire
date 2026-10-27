@@ -29,8 +29,12 @@ these tests hold the C++ dump (G, the coefficients, Y) equal to it over:
   the grazing pairs' graded correction) on a vertical, a low horizontal, a
   T junction (a basis of more than three wings) and a loaded vee on the
   reduced kernel;
-- the declines (a wire end on the plane)
-  and the constructor's refusal of the extended kernel at a stepped-radius
+- a wire end on the plane (S7), on the direct-field fill: a monopole on GN 1,
+  GN 2 and GN 3, dense (N < 60) and banded, with the extended kernel and
+  without; an L and a T standing on the plane (momwire#299's end bracket, on
+  the free and the image block), a slanted contact (its image is not
+  coaxial with it), a loaded monopole, and the coincident-segment refusal;
+- the constructor's refusal of the extended kernel at a stepped-radius
   junction.
 """
 
@@ -39,6 +43,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import warnings
 
 import pytest
 
@@ -131,6 +136,90 @@ FAN = "".join(
     for w in range(20)
 )
 
+
+GN2 = "GN 2 0 0 0 13 .005\n"
+GN3 = "GN 3 0 0 0 5 .02\n"
+MONO = "GW 1 10 0 0 0 0 0 .25 .001\n"
+MONO70 = "GW 1 70 0 0 0 0 0 .25 .001\n"
+# the NEC-4.2 slot reads EK as a no-op; its kernel falls back to the reduced
+# one at a junction whose members' radii differ (the dialect default's rule)
+STEP = "GW 1 5 0 0 0 0 0 .1 .001\nGW 2 5 0 0 .1 0 0 .25 .002\n"
+STEP70 = "GW 1 35 0 0 0 0 0 .1 .001\nGW 2 35 0 0 .1 0 0 .25 .002\n"
+# a vertical, then a horizontal arm: a bend whose node the end bracket reduces
+ELL = "GW 1 8 0 0 0 0 0 .2 .001\nGW 2 8 0 0 .2 .2 0 .2 .001\n"
+ELL_BANDED = "GW 1 40 0 0 0 0 0 .2 .001\nGW 2 40 0 0 .2 .2 0 .2 .001\n"
+TEE = (
+    "GW 1 8 0 0 0 0 0 .2 .001\nGW 2 6 0 0 .2 .15 0 .2 .001\n"
+    "GW 3 6 0 0 .2 -.15 0 .2 .001\n"
+)
+
+CONTACT_CASES = [
+    ("monopole_on_pec", deck(MONO, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    ("monopole_on_gn2", deck(MONO, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    ("monopole_on_gn3", deck(MONO, GN3 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    (
+        "monopole_banded_on_pec",
+        deck(MONO70, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "monopole_banded_on_gn2",
+        deck(MONO70, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    ("ell_on_pec", deck(ELL, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    ("ell_on_gn2", deck(ELL, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    (
+        "ell_banded_on_pec",
+        deck(ELL_BANDED, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "ell_banded_on_gn2",
+        deck(ELL_BANDED, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    ("tee_on_gn2", deck(TEE, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1")),
+    (
+        "slanted_on_gn2",
+        deck(
+            "GW 1 10 0 0 0 .1 0 .25 .001\n", GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"
+        ),
+    ),
+    (
+        "monopole_loaded_on_pec",
+        deck(MONO, "GN 1\nLD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "two_monopoles_on_gn2",
+        deck(
+            MONO + "GW 2 10 .1 0 0 .1 0 .25 .001\n",
+            GN2 + FR + "EX 0 1 1 0 1\nEX 0 2 1 0 0 1\nXQ\n",
+            ge="GE 1",
+        ),
+    ),
+]
+
+# The NEC-4.2 slot's reduced kernel: the fill dump drives the solver with the
+# kernel the deck names (the dialect's extended one, refused at a radius-step
+# junction), so these reach the direct fill on the reduced kernel through the
+# run half's fallback, and `test_sinusoidal_galerkin_nec4_printout.py` gates
+# them by printout.
+CONTACT_STEP_CASES = [
+    (
+        "monopole_on_pec_reduced",
+        deck(STEP, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "monopole_on_gn2_reduced",
+        deck(STEP, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "monopole_banded_on_pec_reduced",
+        deck(STEP70, "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+    (
+        "monopole_banded_on_gn3_reduced",
+        deck(STEP70, GN3 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
+    ),
+]
+
 CASES = [
     ("dipole", deck(dipole(11), FR + "EX 0 1 6 0 1\nXQ\n"), "fills"),
     (
@@ -219,15 +308,6 @@ CASES = [
         "fills",
     ),
     (
-        "monopole_on_pec_declines",
-        deck(
-            "GW 1 10 0 0 0 0 0 .25 .001\n",
-            "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n",
-            ge="GE 1",
-        ),
-        "declined",
-    ),
-    (
         "vertical_over_gn2",
         deck(
             dipole(11).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
@@ -261,15 +341,6 @@ CASES = [
             "GN 2 0 0 0 13 .005\nEK -1\nLD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 8 0 1\nXQ\n",
         ),
         "fills",
-    ),
-    (
-        "monopole_on_gn2_declines",
-        deck(
-            "GW 1 10 0 0 0 0 0 .25 .001\n",
-            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nXQ\n",
-            ge="GE 1",
-        ),
-        "declined",
     ),
     (
         "ld5_copper",
@@ -309,6 +380,9 @@ CASES = [
         "fills",
     ),
 ]
+
+
+CASES += [(name, text, "fills") for name, text in CONTACT_CASES]
 
 
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
@@ -431,3 +505,57 @@ def test_the_remainder_branches_are_reached(acc):
     finally:
         _remainder_graded.pair_moments, mp.basis_wings = graded, wings
     assert seen["graded"] and seen["extra"], seen
+
+
+def test_the_direct_fill_branches_are_reached():
+    """Not vacuous: the contact decks take the direct-field fill, dense and
+    banded, over a folded PEC image and a composed Sommerfeld one, with the
+    end bracket's product (dense and banded) and the contact charge's EK
+    correction, on the extended kernel's labels and without them."""
+    from momwire import sinusoidal_galerkin as sgm
+
+    S = sgm.SinusoidalGalerkinSolver
+    names = (
+        "_assemble_G_banded",
+        "_scatter_coef_product",
+        "_tested_sommerfeld_remainder",
+        "_bracket_coef_product",
+        "_bracket_coef_mats",
+        "_contact_charge_ek_delta",
+        "_far_fill_accel",
+    )
+    seen = dict.fromkeys(names, 0)
+    seen.update(fold=0, compose=0, ek_far=0, reduced_far=0)
+    saved = {n: getattr(S, n) for n in names}
+    fold = S._fold_ground_block
+
+    def wrap(name):
+        def inner(self, *a, **kw):
+            seen[name] += 1
+            if name == "_far_fill_accel":
+                seen["ek_far" if kw.get("ek") is not None else "reduced_far"] += 1
+            return saved[name](self, *a, **kw)
+
+        return inner
+
+    def spy_fold(self, geom, k, ctx, contribs, fg, *a, **kw):
+        seen[fg.mode] += 1
+        return fold(self, geom, k, ctx, contribs, fg, *a, **kw)
+
+    for n in names:
+        setattr(S, n, wrap(n))
+    S._fold_ground_block = spy_fold
+    try:
+        for _name, text in CONTACT_CASES:
+            nc.py_fill(text)
+        from momwire.eznec import _nec4
+
+        for _name, text in CONTACT_STEP_CASES:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                _nec4.render(text, basis="sinusoidal-galerkin")
+    finally:
+        for n in names:
+            setattr(S, n, saved[n])
+        S._fold_ground_block = fold
+    assert all(seen.values()), seen

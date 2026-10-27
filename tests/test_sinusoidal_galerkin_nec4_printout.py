@@ -15,7 +15,10 @@ with only the two measured-time lines masked, over:
   and one it declines (a ground or route a later unit serves) is counted;
 - the dialect default's fallback to the reduced kernel at a radius-step
   junction, with its advisory (SinusoidalGalerkinSolver's declared refusal;
-  the point-matched basis has none).
+  the point-matched basis has none);
+- a wire end on the ground plane (momwire#1718 S7, the direct-field fill):
+  `test_sinusoidal_galerkin_fill_core.py`'s contact decks, and the
+  radius-step ones that reach it on the reduced kernel.
 """
 
 from __future__ import annotations
@@ -47,6 +50,9 @@ rc = _load(
     ROOT / "scripts" / "core_split" / "nec4_run_compare.py",
 )
 sin_cases = _load("test_nec4_run_core_cases", ROOT / "tests" / "test_nec4_run_core.py")
+fill_cases = _load(
+    "test_sg_fill_core_cases", ROOT / "tests" / "test_sinusoidal_galerkin_fill_core.py"
+)
 
 
 @pytest.fixture(scope="module")
@@ -132,3 +138,12 @@ def test_a_radius_step_junction_falls_back_to_the_reduced_kernel(acc):
     assert "radius step at a junction".encode().hex() in dump
     sin = acc.nec4_build_dump(STEP.encode("latin-1"), "sinusoidal")
     assert "points[0].extended_kernel = bool True" in sin
+
+
+CONTACT = fill_cases.CONTACT_CASES + fill_cases.CONTACT_STEP_CASES
+
+
+@pytest.mark.parametrize("name, text", CONTACT, ids=[c[0] for c in CONTACT])
+def test_a_wire_end_on_the_ground_prints_the_same(name, text, acc):
+    """The direct-field fill under the run half: printed, not declined."""
+    assert _same(text, acc) == "printed"
