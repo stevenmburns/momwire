@@ -647,6 +647,27 @@ const char *const kSinBuriedEk =
     "buried source, which lands in the OTHER medium. Solve the buried deck with extended_kernel=False, "
     "which is the default";
 
+}  // namespace
+
+// `sinusoidal_galerkin._EK_STEPPED_RADIUS_JUNCTION_REFUSAL`
+const char *const kSgEkSteppedJunction =
+    "extended_kernel=True with a radius step at a junction is not implemented on "
+    "SinusoidalGalerkinSolver: measured DIVERGENT, not merely inaccurate. On momwire#435's "
+    "two-wire step deck (10:1 radius step at the midspan junction, 10.19 m dipole @ 14.2 MHz) "
+    "the extrapolated continuum limit is 7.110 - 483.925j against NEC-5's 132.560 - 11.921j, "
+    "with the residual GROWING every rung refined (23.2 Ohm -> 285.8 Ohm) and a 286 Ohm dX "
+    "spread down the ladder \xe2\x80\x94 materially worse than the reduced `sg` row's ~20 Ohm "
+    "walk-away #435 already documents (that is a formulation gap; this is a divergence). The "
+    "mechanism is under the mixed end-condition constants the extended delta's end bracket "
+    "takes at a stepped node \xe2\x80\x94 the same node kind momwire#299 gates for the "
+    "UNIFORM-radius case, not yet derived here for a step. Use `extended_kernel=False` (the "
+    "reduced `sg` row, correctly documented as NEC-2-identified rather than NEC-5-accurate on "
+    "any radius step), or `BSplineSolver(extended_kernel=True)` / "
+    "`SinusoidalSolver(extended_kernel=True)`, both of which are served on a step "
+    "(taper-readiness study Sec 2-3, maintainer decision D2, stevenmburns/momwire#398)";
+
+namespace {
+
 double ground_touch_tol(const std::vector<Point3> &pl) {
     std::vector<double> l;
     for (std::size_t k = 0; k + 1 < pl.size(); k++) {
@@ -745,6 +766,20 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
     if (ek && fallback_default) {
         const char *reason = nullptr;
         if (basis == "sinusoidal" && !wires_below(a.wires, a.ground).empty()) reason = kSinBuriedEk;
+        // `extended_kernel_default_refusal`'s fourth case, which only the
+        // Sinusoidal-Galerkin row declares (momwire#1718 S3): a radius step at
+        // a junction (`len(set(radii)) > 1` and a junction whose members
+        // differ). Its buried case is a partial there, not a refusal.
+        if (basis == "sinusoidal-galerkin" && !reason) {
+            bool stepped = false;
+            if (std::any_of(a.radii.begin(), a.radii.end(), [&](double r) { return r != a.radii[0]; }))
+                for (const auto &members : a.junctions)
+                    for (const JunctionEnd &m : members)
+                        if (a.radii[static_cast<std::size_t>(m.polyline)] !=
+                            a.radii[static_cast<std::size_t>(members[0].polyline)])
+                            stepped = true;
+            if (stepped) reason = kSgEkSteppedJunction;
+        }
         if (reason) {
             ek = false;
             op.advisories.push_back("basis " + repr_str(basis) +
@@ -754,7 +789,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
                                     reason + " (momwire#1326)");
         }
     }
-    if (ek && basis == "bspline") {
+    if (ek && (basis == "bspline" || basis == "sinusoidal-galerkin")) {  // both declare the buried partial
         std::vector<ll> below = wires_below(a.wires, a.ground);
         if (!below.empty()) {
             if (fallback_default && below.size() == a.wires.size()) {
@@ -781,6 +816,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
     }
     a.extended_kernel = ek;
     op.extended_kernel = ek;
+    op.extended_kernel_asked = extended_kernel;
     op.wavelength = kC / (frequency_mhz * 1e6);
 
     // _port_signs over the constructor's arguments

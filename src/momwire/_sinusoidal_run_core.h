@@ -40,8 +40,11 @@ class Engine : public nec4::RunEngine {
     double solver_eps0(std::size_t index) override;
     const nec4::WireDedup *dedup(std::size_t index) override;
 
-  private:
+  protected:
+    // momwire#1718 S3: the Sinusoidal-Galerkin engine answers `solve` itself
+    // and reads its readouts through these, unchanged.
     const Front &front_at(std::size_t index);
+    bool galerkin_ = false;  // the front as SinusoidalGalerkinSolver builds it
     const nec4::StructureBuild &structure_;
     const FillLinalg &la_;
     std::vector<std::unique_ptr<Front>> fronts_;

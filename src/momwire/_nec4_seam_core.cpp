@@ -559,7 +559,7 @@ void dump_structure_seam(Out &o, const std::string &p, const StructureSeam &s) {
 }  // namespace
 
 Seam seam(const std::string &text, const std::string &basis) {
-    if (basis != "sinusoidal" && basis != "bspline")
+    if (basis != "sinusoidal" && basis != "bspline" && basis != "sinusoidal-galerkin")
         throw Declined("basis '" + basis + "' is not one this copy of the NEC-4.2 seam serves");
     Seam out;
     out.basis = basis;

@@ -11,9 +11,12 @@ exact pattern and counted per deck (`mask`):
     "                        FILL=<%9.3f> SEC.,  FACTOR=<%9.3f> SEC."
     " RUN TIME =<%10.3f>"
 
-A deck the C++ declines is counted apart, with its reason.
+A deck the C++ declines is counted apart, with its reason. `--basis
+sinusoidal-galerkin` holds `sinusoidal_galerkin_nec4_printout` (momwire#1718
+S3) to `_nec4.render(text, basis="sinusoidal-galerkin")` the same way.
 
     python scripts/core_split/nec4_run_compare.py DIR [DIR ...] [--show 3] [--out FILE]
+        [--basis sinusoidal|sinusoidal-galerkin]
 """
 
 from __future__ import annotations
@@ -33,6 +36,11 @@ import numpy as np
 HERE = pathlib.Path(__file__).resolve().parent
 SUFFIXES = {".nec", ".deck"}
 BASIS = "sinusoidal"
+# The basis -> its C++ printout binding
+BINDINGS = {
+    "sinusoidal": "sinusoidal_nec4_printout",
+    "sinusoidal-galerkin": "sinusoidal_galerkin_nec4_printout",
+}
 
 # The two measured-time lines, exactly (`_printout._timing`, `_closing`).
 FILL_LINE = re.compile(r"^ {24}FILL=[ 0-9.]{9} SEC\.,  FACTOR=[ 0-9.]{9} SEC\.$")
@@ -95,18 +103,20 @@ def blas_addresses() -> list[int]:
     return [ctypes.cast(getattr(lb, n), ctypes.c_void_p).value for lb, n in names]
 
 
-def py_printout(text: str) -> str:
+def py_printout(text: str, basis: str = BASIS) -> str:
     from momwire.eznec import _nec4
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return _nec4.render(text, basis=BASIS)
+        return _nec4.render(text, basis=basis)
 
 
-def cxx_printout(text: str, acc=None, blas=None) -> tuple[bool, str]:
+def cxx_printout(
+    text: str, acc=None, blas=None, basis: str = BASIS
+) -> tuple[bool, str]:
     acc = acc or pc.accel()
     version, variant, marker = pc.stamp()
-    return acc.sinusoidal_nec4_printout(
+    return getattr(acc, BINDINGS[basis])(
         text.encode("latin-1"), blas or blas_addresses(), version, variant, marker
     )
 
@@ -127,7 +137,7 @@ def deck_files(root: pathlib.Path) -> list[pathlib.Path]:
     return [p for p in sorted(root.rglob("*")) if p.is_file() and p.suffix in SUFFIXES]
 
 
-def compare(paths, out=None):
+def compare(paths, out=None, basis: str = BASIS):
     acc = pc.accel()
     blas = blas_addresses()
     counts = {"printed": 0, "declined": 0, "mismatch": 0, "py_raised": 0}
@@ -135,13 +145,13 @@ def compare(paths, out=None):
     masked_total = 0
     for path in paths:
         text = path.read_bytes().decode("latin-1")
-        ok, cxx = cxx_printout(text, acc, blas)
+        ok, cxx = cxx_printout(text, acc, blas, basis)
         detail = ""
         if not ok:
             kind, detail = "declined", cxx
         else:
             try:
-                py = py_printout(text)
+                py = py_printout(text, basis)
             except Exception as exc:  # noqa: BLE001 — recorded, the run goes on
                 kind, detail = "py_raised", f"{type(exc).__name__}: {exc}"[:300]
             else:
@@ -168,12 +178,13 @@ def main(argv=None) -> int:
     ap.add_argument("dirs", nargs="+", type=pathlib.Path)
     ap.add_argument("--show", type=int, default=3)
     ap.add_argument("--out", type=pathlib.Path)
+    ap.add_argument("--basis", default=BASIS, choices=sorted(BINDINGS))
     args = ap.parse_args(argv)
     out = open(args.out, "w") if args.out else None  # noqa: SIM115 — closed below
     bad = 0
     try:
         for root in args.dirs:
-            counts, mismatches = compare(deck_files(root), out)
+            counts, mismatches = compare(deck_files(root), out, args.basis)
             print(f"{root}: {counts}", flush=True)
             for label, diff in mismatches[: args.show]:
                 print(f"  MISMATCH {label}\n{diff}", flush=True)

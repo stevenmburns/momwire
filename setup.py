@@ -431,6 +431,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
     "src/momwire/_sinusoidal_galerkin_fill_core.h",
+    "src/momwire/_sinusoidal_galerkin_run_core.h",
     "src/momwire/_nec4_run_core.h",
     "src/momwire/_sinusoidal_run_core.h",
     "src/momwire/_nec5_seam_core.h",
@@ -626,6 +627,8 @@ _ACCEL_SOURCES = [
     # (momwire#1607 B4a).
     "src/momwire/_nec4_run_core.cpp",
     "src/momwire/_sinusoidal_run_core.cpp",
+    # The Sinusoidal-Galerkin basis' answers to it (momwire#1718 S3).
+    "src/momwire/_sinusoidal_galerkin_run_core.cpp",
     "src/momwire/_accel_nec4_printout.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
     # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh
