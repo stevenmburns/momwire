@@ -3403,9 +3403,56 @@ def _reduced_state(
     the generator actually delivered (0027, where one port is 1.4142 A of source
     and 3.3124E-09 A of structure, all of the difference having gone down two
     transmission lines).
+
+    A site that nothing reaches is HELD at its voltage, which is zero
+    (:func:`_unreached_sites`).  It is held only for the reducer: ``driven``,
+    which says whose termination current the printout reads, is unchanged.
     """
-    reducer = _reducer_for(cards, n_sites, voltages, driven)
+    held = tuple(driven) + tuple(
+        k for k in _unreached_sites(cards, y_eff) if k not in driven
+    )
+    reducer = _reducer_for(cards, n_sites, voltages, held)
     return reduced_ports(reducer, y_eff, wavelength, n_sites, driven)
+
+
+def _unreached_sites(cards: tuple[_Card, ...], y_eff: np.ndarray) -> list[int]:
+    """Network endpoints that no admittance reaches, from either side.
+
+    EZNEC saves a "parallel connected load" as a ONE-port ``NT`` — ``Y11``
+    only, its port 2 parked on a virtual wire with ``Y12 = Y22 = 0``
+    (momwire#1314, antennaknobs#1880).  The card stamps nothing at port 2, and
+    a virtual site has no antenna admittance (momwire#1139), so that site's
+    KCL row is identically zero and the reducer is singular.  The decks EZNEC
+    hands an engine pin those ends with ``LD 4 … 1.E+10``
+    (:func:`_series_loads`), which is the only thing that kept them solvable.
+
+    Holding such a site at zero volts is exact, not a guess at what the pin
+    would have done: with ``Y12 = 0`` and no antenna admittance, nothing else
+    in the system reads its voltage, so whatever it is set to moves no other
+    number.  A site the antenna does reach — a real segment whose ``NT``
+    happens to be zero there — is left floating, which is NEC's own reading:
+    no network current, so an open gap.
+    """
+    reached: set[int] = set()
+    endpoints: set[int] = set()
+    for entry in cards:
+        a, b = entry.site_a, entry.site_b
+        endpoints.update((a, b))
+        if entry.card.kind != "NT":
+            reached.update((a, b))
+            continue
+        y11, y12, y22 = (
+            complex(entry.card.payload[i], entry.card.payload[i + 1]) for i in (0, 2, 4)
+        )
+        if y11 or y12:
+            reached.add(a)
+        if y22 or y12:
+            reached.add(b)
+    return sorted(
+        k
+        for k in endpoints - reached
+        if not np.any(y_eff[k, :]) and not np.any(y_eff[:, k])
+    )
 
 
 def _series_loads(mesh: _Mesh, y: np.ndarray, z_load: np.ndarray) -> np.ndarray:
