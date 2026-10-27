@@ -173,7 +173,8 @@ def test_g984_a_healthy_geometry_still_does_not_fall_back():
 #     triangular_skyloop     probe 2.522e-03  ->  served   (rel dZ 2.60e-06)
 #     skyloop_lmatch         probe 1.205e+00  ->  fallback (rel dZ 4.67e-07)
 #     dipole_turnstile       probe 1.000e+00  ->  fallback (rel dZ 1.24e-10)
-#     horizontal_loop        probe 9.735e-01  ->  fallback (rel dZ 2.62e-06)
+#     horizontal_loop        probe 9.999e-01  ->  fallback (re-banked, #1469;
+#                                                   9.735e-01 on the old gap-wire feed)
 #     rhombic                probe 3.002e-05  ->  served   (rel dZ 2.66e-07)
 #     diamond_loop_turnstile probe 1.205e-04  ->  served   (rel dZ 1.64e-06)
 FALLBACK_VERDICTS = {
@@ -267,7 +268,10 @@ def test_g984_the_catalog_verdicts_are_what_the_threshold_promises(
 @pytest.mark.parametrize("design", sorted(FALLBACK_VERDICTS))
 def test_g988_the_fixtures_match_the_live_catalog(design):
     """The optional drift check -- THIS one may skip, because it compares the
-    bank against antennaknobs rather than protecting momwire."""
+    bank against antennaknobs rather than protecting momwire. It runs on no CI
+    lane, so a drift shows only on a box with antennaknobs installed (#1469).
+    The fixture's `_provenance` names the antennaknobs revision each cell was
+    banked from; re-bank with the script it names."""
     pytest.importorskip("antennaknobs", reason="drift check only (#988)")
     import importlib
 
