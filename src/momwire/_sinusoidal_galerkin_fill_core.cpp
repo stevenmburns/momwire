@@ -36,17 +36,7 @@
 #include "_sinusoidal_series_inline.h"  // `sin_minus_arg`
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 #include "_fma_inline.h"
-#include "_libm_complex_inline.h"  // libm's cexp (and, from momwire#1607 B6b, `MW_NUMPY_CONTRACTS`)
-
-// Whether numpy's build contracts its plain C (fused on arm64, unfused on
-// x86-64); `_libm_complex_inline.h` defines it once momwire#1607 B6b is in.
-#ifndef MW_NUMPY_CONTRACTS
-#if defined(__aarch64__)
-#define MW_NUMPY_CONTRACTS 1
-#else
-#define MW_NUMPY_CONTRACTS 0
-#endif
-#endif
+#include "_libm_complex_inline.h"  // libm's cexp, `MW_NUMPY_CONTRACTS`
 
 #include <algorithm>
 #include <cmath>
