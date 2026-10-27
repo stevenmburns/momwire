@@ -862,29 +862,59 @@ void refuse_crossing_scope(const std::vector<ll> &crossing, const std::vector<st
 //
 // An array product is numpy's fused one (each part one fused multiply-add,
 // `_cmul.cmul`); a product of two 0-d scalars is numpy's scalar math
-// (`cdouble_ctype_multiply`, unfused); a quotient is `CDOUBLE_divide` either
-// way; CPython's own complex scalars take `_Py_c_prod` / `_Py_c_quot`. A
-// real operand is promoted to (x, 0) first, as numpy promotes it.
+// (`cdouble_ctype_multiply`); a quotient is `CDOUBLE_divide` either way;
+// CPython's own complex scalars take `_Py_c_prod` / `_Py_c_quot`. A real
+// operand is promoted to (x, 0) first, as numpy promotes it.
+//
+// The scalar product and the quotient are numpy's plain C, so their bits are
+// numpy's BUILD's: an x86-64 wheel's baseline has no FMA to contract into
+// (unfused), while an arm64 wheel's compiler contracts each `a * b + c` into
+// one fused multiply-add (measured on macOS 15 arm64, numpy 2.5.4: 4000 of
+// 4000 random quotients and scalar products in exactly these forms, momwire#1607
+// B6a). CPython's `_Py_c_prod` / `_Py_c_quot` are unfused on both (CPython
+// builds without contraction). Linux aarch64's gcc contracts by default too;
+// that platform is unmeasured.
+#if defined(__aarch64__)
+#define MW_NUMPY_CONTRACTS 1
+#else
+#define MW_NUMPY_CONTRACTS 0
+#endif
 cd xmul(cd a, cd b) {  // array
     return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
               mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
-cd smul(cd a, cd b) {  // numpy 0-d scalars
+cd pmul(cd a, cd b) {  // CPython 3.12's `_Py_c_prod`
     return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
 }
-cd pmul(cd a, cd b) { return smul(a, b); }  // CPython 3.12's `_Py_c_prod`, the same formula
-cd xdiv(cd a, cd b) {                       // `CDOUBLE_divide`
+cd smul(cd a, cd b) {  // numpy 0-d scalars
+#if MW_NUMPY_CONTRACTS
+    return xmul(a, b);  // `a.r * b.r - a.i * b.i` contracted: the fused product
+#else
+    return pmul(a, b);
+#endif
+}
+cd xdiv(cd a, cd b) {  // `CDOUBLE_divide`
     const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
     const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
     if (in2r_abs >= in2i_abs) {
         if (in2r_abs == 0 && in2i_abs == 0) return cd(in1r / in2r_abs, in1i / in2i_abs);
         const double rat = in2i / in2r;
+#if MW_NUMPY_CONTRACTS
+        const double scl = 1.0 / mw_fma::exact(in2i, rat, in2r);
+        return cd(mw_fma::exact(in1i, rat, in1r) * scl, mw_fma::exact(-in1r, rat, in1i) * scl);
+#else
         const double scl = 1.0 / (in2r + in2i * rat);
         return cd((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+#endif
     }
     const double rat = in2r / in2i;
+#if MW_NUMPY_CONTRACTS
+    const double scl = 1.0 / mw_fma::exact(in2r, rat, in2i);
+    return cd(mw_fma::exact(in1r, rat, in1i) * scl, mw_fma::exact(in1i, rat, -in1r) * scl);
+#else
     const double scl = 1.0 / (in2i + in2r * rat);
     return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+#endif
 }
 cd pdiv(cd a, cd b) {  // CPython 3.12's `_Py_c_quot`
     const double abs_breal = b.real() < 0 ? -b.real() : b.real();
@@ -1322,6 +1352,15 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     const bool has_ground = args.ground.kind != nec4::Ground::none;
     const bool lower_medium = args.ground.kind == nec4::Ground::finite;  // the Sommerfeld half-space
     const double gz = 0.0;
+    // the Sinusoidal-Galerkin copy (momwire#1718) has no lower-medium fill:
+    // it keeps declining a buried wire, which SinusoidalGalerkinSolver
+    // answers in its own words (the point-matched lane's below are not its)
+    if (galerkin && has_ground)
+        for (const auto &pl : pls) {
+            double mn = pl[0][2];
+            for (const Point3 &p : pl) mn = std::min(mn, p[2]);
+            if (mn < gz - ground_touch_tol(pl)) decline("a wire below the ground plane (momwire#1607 B6)");
+        }
 
     // the constructor's constants
     double c = 1 / std::sqrt(kEps * kMu);
