@@ -84,7 +84,7 @@ def expm1_neg_j_from_half(half):
 
     so both parts come out of the same two transcendental calls. This is the
     spelling a kernel wants when it already holds a table of half phases --
-    `_accel_sinusoidal.cpp` builds one, because r_q = r_ref + delta_q makes
+    `_sinusoidal_galerkin_core.cpp` builds one, because r_q = r_ref + delta_q makes
     the half phase of r_q the SUM of two stored halves and no new sincos is
     needed for it at all. The numpy lane spells it the same way so the two
     share one form (momwire#799 rule 1); against :func:`expm1_neg_j` the

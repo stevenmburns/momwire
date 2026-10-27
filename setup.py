@@ -358,6 +358,8 @@ _ACCEL_HEADERS = [
     # The point-matched kernels' Python-free core and the series helpers it
     # shares with the Galerkin far fill (momwire#1607 B1).
     "src/momwire/_sinusoidal_core.h",
+    # The Sinusoidal-Galerkin far fill's Python-free core (momwire#1718 S1).
+    "src/momwire/_sinusoidal_galerkin_core.h",
     "src/momwire/_sinusoidal_nec4_core.h",
     "src/momwire/_sinusoidal_series_inline.h",
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
@@ -460,8 +462,11 @@ _ACCEL_SOURCES = [
     # extension TU's kernel text, moved verbatim, over `_mw_nd.h`'s arrays.
     "src/momwire/_bspline_core.cpp",
     # The point-matched sinusoidal kernels, Python-free (momwire#1607 B1);
-    # `_accel_sinusoidal.cpp` binds them beside the Galerkin far fill.
+    # `_accel_sinusoidal.cpp` binds them.
     "src/momwire/_sinusoidal_core.cpp",
+    # The Sinusoidal-Galerkin far fills, Python-free (momwire#1718 S1): the
+    # extension TU's text, moved verbatim; `_accel_sinusoidal.cpp` binds them.
+    "src/momwire/_sinusoidal_galerkin_core.cpp",
     "src/momwire/_accel_sinusoidal.cpp",
     # momwire#1644: the NEC-4 dialect's radius-step junction (its kernel, the
     # end-cap field, the junction-charge solve) and their binding. Their own
