@@ -4,9 +4,11 @@
 // feed snap and `_basis_coefs`) it gives what
 // `SinusoidalGalerkinSolver.compute_port_solution` computes on the default
 // `fill="mixed-potential"` route in free space:
-// - `_assemble_Z_mp`: `_sinusoidal_mp.basis_csr`, then one `WindowFill`
-//   block (the direct sign, the extended kernel's every-pair labels with the
-//   source tube on a stepped radius) an observer window at a time
+// - `_assemble_Z_mp`: `_sinusoidal_mp.basis_csr`, then `WindowFill`'s free
+//   block and, over a perfect ground (GN 1, momwire#1718 S5a), its image
+//   block (the sources mirrored in the plane, scale `-DIRECT_SIGN`); each
+//   block with the extended kernel's every-pair labels and the
+//   source tube on a stepped radius, an observer window at a time
 //   (`WINDOW_BYTES`): the tiered pair moments from the B-spline core's
 //   sinusoidal kernels, one call per run of equal observer radius
 //   (`seg_seg_full_moments_sinusoidal_tiered[_ek]`, the solver's
@@ -34,7 +36,7 @@
 // the front's own refusals carry SinusoidalGalerkinSolver's name
 // (`sinusoidal::front(args, galerkin=true)`).
 //
-// DECLINED (`nec4::Declined`), never misread: a ground (S5), wire loading
+// DECLINED (`nec4::Declined`), never misread: a Sommerfeld ground (S5b), wire loading
 // (S6), a wire end on a ground plane (S7), a buried or plane-crossing
 // structure (S11), junction or node ports (S9).
 #pragma once

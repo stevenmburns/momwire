@@ -18,8 +18,12 @@ these tests hold the C++ dump (G, the coefficients, Y) equal to it over:
   (one moment call per radius run, the extended kernel's source tube), the
   reduced kernel (EK -1), two sources, an off-centre feed request, an FR
   sweep and one segment;
-- the declines (a ground, wire loading) and the constructor's refusal of the
-  extended kernel at a stepped-radius junction.
+- a perfect ground (GN 1, S5a): the image block, a vertical and an inverted
+  vee above it, a horizontal wire parallel to its image, a detached radius
+  step (the image's source tube);
+- the declines (a wire end on the plane, a Sommerfeld ground, wire loading)
+  and the constructor's refusal of the extended kernel at a stepped-radius
+  junction.
 """
 
 from __future__ import annotations
@@ -174,10 +178,52 @@ CASES = [
     ("sweep", deck(dipole(11), "FR 0 4 0 0 250 25\nEX 0 1 6 0 1\nXQ\n"), "fills"),
     ("one_segment", deck(dipole(1, 0.05), FR + "EX 0 1 1 0 1\nXQ\n"), "fills"),
     (
-        "over_pec_declines",
+        "vertical_over_pec",
         deck(
             dipole(11).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
             "GN 1\n" + FR + "EX 0 1 6 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        # every segment parallel to its own image, near it
+        "horizontal_low_over_pec",
+        deck(
+            "GW 1 21 -.25 0 .02 .25 0 .02 .001\n",
+            "GN 1\n" + FR + "EX 0 1 11 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "inverted_vee_over_pec_reduced",
+        deck(
+            "GW 1 8 -.3 0 .1 0 0 .3 .001\nGW 2 8 0 0 .3 .3 0 .1 .001\n",
+            "GN 1\nEK -1\n" + FR + "EX 0 1 8 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "radius_step_detached_over_pec",
+        deck(
+            "GW 1 15 0 0 .05 0 0 .55 .001\nGW 2 15 .05 0 .05 .05 0 .55 .003\n",
+            "GN 1\n" + FR + "EX 0 1 8 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "monopole_on_pec_declines",
+        deck(
+            "GW 1 10 0 0 0 0 0 .25 .001\n",
+            "GN 1\n" + FR + "EX 0 1 1 0 1\nXQ\n",
+            ge="GE 1",
+        ),
+        "declined",
+    ),
+    (
+        "over_gn2_declines",
+        deck(
+            dipole(11).replace("0 0 -0.25 0 0 0.25", "0 0 .1 0 0 .6"),
+            "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nXQ\n",
         ),
         "declined",
     ),
