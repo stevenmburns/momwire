@@ -2276,7 +2276,7 @@ def test_the_exact_kernel_windows_print_as_python(driver, tmp_path):
 
 @pytest.mark.slow  # every fixture deck, printed by both copies
 def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
-    driver, tmp_path
+    driver, tmp_path, monkeypatch
 ):
     """momwire#1718 S8: every NEC deck in tests/fixtures through the
     Sinusoidal-Galerkin basis on the NEC-5 seam in a process with no Python
@@ -2285,8 +2285,11 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
     the inherited readouts in the caller's wire numbering, the run half and
     the writer. Every deck it prints is `_shell.render(text,
     basis="sinusoidal-galerkin")`'s, byte for byte, with Python's Y,
-    coefficients and port vectors, node gaps (S9) included. It declines, by
-    name, a wire end on the plane (S7) and a buried wire (S11)."""
+    coefficients and port vectors, node gaps (S9) and wholly-buried decks
+    (S11a, the below grids the exact fill on both sides) included. It
+    declines, by name, a wire end on the plane (S7) and wires on both sides
+    of the interface (S11)."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
     decks = [
         p
         for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
@@ -2296,5 +2299,5 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
         driver, decks, tmp_path, basis="sinusoidal-galerkin"
     )
     assert counts.get("served", 0) >= 350, counts
-    allowed = ("S7)", "B6)")
+    allowed = ("S7)", "S11b)")
     assert all(r.endswith(allowed) for r in reasons), reasons
