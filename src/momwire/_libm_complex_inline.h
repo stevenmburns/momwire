@@ -8,6 +8,7 @@
 // back to std:: elsewhere (MSVC, where no bit identity is promised).
 #pragma once
 
+#include <cmath>
 #include <complex>
 
 // Whether the platform's numpy / SciPy build contracts its plain-C complex
@@ -28,6 +29,20 @@
 namespace mw_libm_c {
 
 using cd = std::complex<double>;
+
+// A real sine and cosine, each its own C library call. Apple clang merges a
+// `sin(x)` and a `cos(x)` of one argument into one `__sincos_stret` call,
+// whose sine is not `sin`'s (68 of 40000 arguments in [0, 4) on macOS 15
+// arm64); numpy and CPython call `sin` and `cos` apart, so a copy that holds
+// their bits keeps the two calls in separate functions there (momwire#1733).
+// Elsewhere these are `std::sin` / `std::cos` exactly.
+#if defined(__APPLE__) && defined(__GNUC__)
+__attribute__((noinline)) inline double rsin(double x) { return std::sin(x); }
+__attribute__((noinline)) inline double rcos(double x) { return std::cos(x); }
+#else
+inline double rsin(double x) { return std::sin(x); }
+inline double rcos(double x) { return std::cos(x); }
+#endif
 
 #if defined(__GNUC__)
 #define MW_LIBM_C_CALL(builtin)                       \
