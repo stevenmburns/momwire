@@ -146,6 +146,9 @@ CORE_SOURCES = (
     "_bspline_fill_core.cpp",
     "_bspline_crossing_core.cpp",
     "_nec5_bspline_printout_core.cpp",
+    # The Sinusoidal-Galerkin basis on the NEC-5 seam (momwire#1718 S8),
+    # linked into `nec5_sinusoidal_galerkin_printout_driver.cpp`.
+    "_nec5_sinusoidal_galerkin_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -247,6 +250,7 @@ def driver(accel, tmp_path_factory):
         "sinusoidal_galerkin_fill_driver",
         "nec4_sinusoidal_printout_driver",
         "nec4_sinusoidal_galerkin_printout_driver",
+        "nec5_sinusoidal_galerkin_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, cmds = {}, [], []
@@ -1886,10 +1890,11 @@ BSPLINE_EXACT_DECKS = SPLIT / "bspline_exact_decks"
 BSPLINE_BURIED_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_buried"
 
 
-def _bspline_printouts(driver, decks, tmp_path):
+def _bspline_printouts(driver, decks, tmp_path, basis="bspline"):
     """bs2's driver against `_shell.render(text, basis="bspline")` over
     `decks`, both on one BLAS thread: every printed deck byte for byte, and
-    every finished run's arrays. Returns (counts, decline reasons)."""
+    every finished run's arrays. Returns (counts, decline reasons). `basis`
+    "sinusoidal-galerkin": that basis' driver (momwire#1718 S8)."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
@@ -1897,10 +1902,14 @@ def _bspline_printouts(driver, decks, tmp_path):
     os.environ.update(_ONE_THREAD)
     try:
         answers = pc.run_driver(
-            driver[0]["nec5_bspline_printout_driver"],
+            driver[0][
+                "nec5_sinusoidal_galerkin_printout_driver"
+                if basis == "sinusoidal-galerkin"
+                else "nec5_bspline_printout_driver"
+            ],
             decks,
             tmp_path,
-            basis="bspline",
+            basis=basis,
             arrays=True,
         )
     finally:
@@ -1919,7 +1928,7 @@ def _bspline_printouts(driver, decks, tmp_path):
             counts[key] = counts.get(key, 0) + 1
             py_runs = []
             ref = pc.python_printout(
-                path.read_bytes().decode("latin-1"), basis="bspline", runs=py_runs
+                path.read_bytes().decode("latin-1"), basis=basis, runs=py_runs
             )
             assert ans["printout"] == ref, (
                 f"{path}: {pc.first_difference(ref, ans['printout'])}"
@@ -2247,3 +2256,29 @@ def test_the_exact_kernel_windows_print_as_python(driver, tmp_path):
     assert len(decks) == 2
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     assert counts.get("served", 0) == 2 and not reasons, (counts, reasons)
+
+
+@pytest.mark.slow  # every fixture deck, printed by both copies
+def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
+    driver, tmp_path
+):
+    """momwire#1718 S8: every NEC deck in tests/fixtures through the
+    Sinusoidal-Galerkin basis on the NEC-5 seam in a process with no Python
+    -- the reader, the seam (the node spelling, no cuts), the sinusoidal
+    front with the knot feeds' `feed_xi`, the Galerkin fill and port solve,
+    the inherited readouts in the caller's wire numbering, the run half and
+    the writer. Every deck it prints is `_shell.render(text,
+    basis="sinusoidal-galerkin")`'s, byte for byte, with Python's Y,
+    coefficients and port vectors. It declines, by name, a node gap (S9), a
+    wire end on the plane (S7) and a buried wire (S11)."""
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    counts, reasons = _bspline_printouts(
+        driver, decks, tmp_path, basis="sinusoidal-galerkin"
+    )
+    assert counts.get("served", 0) >= 350, counts
+    allowed = ("S7)", "S9)", "B6)")
+    assert all(r.endswith(allowed) for r in reasons), reasons

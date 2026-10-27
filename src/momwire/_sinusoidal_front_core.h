@@ -119,6 +119,10 @@ struct Front {
 // in its name and its coincident-conductor sentence (momwire#1718 S3).
 Front front(const nec4::SolverArgs &args, bool galerkin = false);
 
+// `_basis_coefs(geom, k)` on `fr`'s geometry at another real k (a readout at
+// the caller's omega, momwire#1718 S8); declines a NEC-4 junction front.
+SegView basis_coefs(const Front &fr, double k);
+
 // The comparison format (`sinusoidal_front_compare.py`), per operating point
 // of each built structure of a deck (the NEC-4.2 build's own enumeration).
 std::string dump_front(const std::string &latin1_text);

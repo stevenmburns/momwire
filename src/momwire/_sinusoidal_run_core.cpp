@@ -234,8 +234,7 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
 }
 
 // `currents_at_knots(alpha)`: the knot path
-std::vector<std::vector<cd>> Engine::currents_at_knots(std::size_t index, const std::vector<cd> &alpha) {
-    const Front &fr = front_at(index);
+std::vector<std::vector<cd>> knot_currents(const Front &fr, const std::vector<cd> &alpha) {
     const Geometry &g = fr.geometry;
     std::vector<ll> eval_seg, target;
     std::vector<double> eval_s, weight;
@@ -267,12 +266,15 @@ std::vector<std::vector<cd>> Engine::currents_at_knots(std::size_t index, const 
     return out;
 }
 
+std::vector<std::vector<cd>> Engine::currents_at_knots(std::size_t index, const std::vector<cd> &alpha) {
+    return knot_currents(front_at(index), alpha);
+}
+
 // `currents_at_knots(alpha, s_array)` on one wire: a sample on an interior
 // knot (within 1e-12 of the wire's arc, or of 1 m) is the mean of the two
 // segments' edge values, any other the containing segment's value
-std::vector<cd> Engine::currents_at_arcs(std::size_t index, const std::vector<cd> &alpha, std::size_t w,
-                                         const std::vector<double> &sv) {
-    const Front &fr = front_at(index);
+std::vector<cd> arc_currents(const Front &fr, const std::vector<cd> &alpha, std::size_t w,
+                             const std::vector<double> &sv) {
     const Geometry &g = fr.geometry;
     if (w >= g.wire_first.size()) throw nec4::Declined("a sample on a wire the solver does not hold");
     const ll first = g.wire_first[w], n = g.wire_last[w] - first + 1;
@@ -332,6 +334,11 @@ std::vector<cd> Engine::currents_at_arcs(std::size_t index, const std::vector<cd
     return out;
 }
 
+std::vector<cd> Engine::currents_at_arcs(std::size_t index, const std::vector<cd> &alpha, std::size_t w,
+                                         const std::vector<double> &sv) {
+    return arc_currents(front_at(index), alpha, w, sv);
+}
+
 double Engine::solver_omega(std::size_t index) { return front_at(index).omega; }
 const nec4::WireDedup *Engine::dedup(std::size_t index) {
     const Front &fr = front_at(index);
@@ -343,9 +350,8 @@ double Engine::solver_eps0(std::size_t index) {
 }
 
 // `current_slopes(coeffs, s_array)`
-std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std::vector<cd> &alpha,
-                                                    const std::vector<std::vector<double>> &s) {
-    const Front &fr = front_at(index);
+std::vector<std::vector<cd>> slopes(const Front &fr, const std::vector<cd> &alpha,
+                                    const std::vector<std::vector<double>> &s) {
     const Geometry &g = fr.geometry;
     if (s.size() != g.wire_first.size()) throw nec4::Declined("a slope request for another wire count");
     std::vector<ll> segs;
@@ -382,21 +388,31 @@ std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std
     return out;
 }
 
+std::vector<std::vector<cd>> Engine::current_slopes(std::size_t index, const std::vector<cd> &alpha,
+                                                    const std::vector<std::vector<double>> &s) {
+    return slopes(front_at(index), alpha, s);
+}
+
 // `SinusoidalSolver.wire_loss_power(coeffs)[0]` (no lower medium, no
 // insulation): the I²R of each segment's current, |I|² integrated by
 // `_abs_shape_integrals`, summed per wire.
-double Engine::wire_loss_power(std::size_t index, const std::vector<cd> &coeffs) {
-    const Front &fr = front_at(index);
+double loss_power(const Front &fr, const std::vector<cd> &coeffs) { return loss_power_at(fr, coeffs, fr.omega); }
+
+double loss_power_at(const Front &fr, const std::vector<cd> &coeffs, double omega) {
     const nec4::SolverArgs &args = fr.args;  // the solved wires (momwire#1042)
     std::vector<cd> z_wire;
-    if (!wire_impedance_per_wire(fr, args, fr.omega, z_wire)) return 0.0;
-    const double k = fr.omega / fr.c;
-    if (k != fr.k) throw nec4::Declined("a loss readout at another wavenumber than the fill's");
+    if (!wire_impedance_per_wire(fr, args, omega, z_wire)) return 0.0;
+    const double k = omega / fr.c;
+    // a wholly-buried deck's view is at k_m, built for the fill's omega
+    if (fr.buried && k != fr.k) throw nec4::Declined("a loss readout at another wavenumber than the fill's");
     // `_buried_wire_loss_power`: the shapes at k_m, the view the fill built
     // (`buried_medium` at omega / c is the front's medium)
     const cd k_shape = fr.buried ? fr.medium.k_m : cd(k, 0.0);
+    // `_basis_coefs(geom, k)` at the readout's own k
+    SegView other;
+    if (k != fr.k) other = basis_coefs(fr, k);
     const Geometry &g = fr.geometry;
-    const SegView &v = fr.basis;
+    const SegView &v = k != fr.k ? other : fr.basis;
     const std::size_t n = static_cast<std::size_t>(g.n_segs);
     std::vector<cd> U(n, cd(0.0, 0.0)), Q(n, cd(0.0, 0.0)), R(n, cd(0.0, 0.0));
     for (std::size_t i = 0; i < n; i++)
@@ -423,6 +439,10 @@ double Engine::wire_loss_power(std::size_t index, const std::vector<cd> &coeffs)
             per_wire[w] = per_wire[w] + (0.5 * z_wire[w].real()) * i2;
         }
     return nec5::replay::np_pairwise(per_wire.data(), static_cast<int64_t>(per_wire.size()));
+}
+
+double Engine::wire_loss_power(std::size_t index, const std::vector<cd> &coeffs) {
+    return loss_power(front_at(index), coeffs);
 }
 
 nec4::RunEngine &Engines::engine_for(const nec4::StructureBuild &structure) {
