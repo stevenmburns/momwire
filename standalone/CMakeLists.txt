@@ -59,8 +59,8 @@ option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it"
 # Which formulation the executable answers for (momwire#1517 Phase A): razor2p
 # (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
 # route_bs2.cpp, no-Python builds only). Both from the same cores.
-set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bs2, sin42 or sg42")
-set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2 sin42 sg42)
+set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bs2, sin42, sg42 or sg5")
+set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2 sin42 sg42 sg5)
 if(MW_EXE_BASIS STREQUAL "bs2")
   if(NOT MW_EXE_NO_PYTHON)
     message(FATAL_ERROR "MW_EXE_BASIS=bs2 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
@@ -71,6 +71,13 @@ elseif(MW_EXE_BASIS STREQUAL "sin42")
   # matched; the hybrid (the embedded launcher answers what the C++ route
   # declines) or, with MW_EXE_NO_PYTHON, the no-Python build
   set(MW_ROUTE route_sin.cpp)
+elseif(MW_EXE_BASIS STREQUAL "sg5")
+  # `momwire-nec5-sinusoidal-galerkin` (momwire#1718 S10): bs2's route over
+  # the Sinusoidal-Galerkin engine (MW_ROUTE_SG); no-Python only
+  if(NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_BASIS=sg5 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
+  endif()
+  set(MW_ROUTE route_bs2.cpp)
 elseif(MW_EXE_BASIS STREQUAL "sg42")
   # `momwire-nec42-sinusoidal-galerkin` (momwire#1718 S4): the same slot and
   # route, over the Sinusoidal-Galerkin engine (MW_ROUTE_SG); no-Python only
@@ -81,7 +88,7 @@ elseif(MW_EXE_BASIS STREQUAL "sg42")
 elseif(MW_EXE_BASIS STREQUAL "razor2p")
   set(MW_ROUTE route.cpp)
 else()
-  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bs2, sin42 or sg42")
+  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bs2, sin42, sg42 or sg5")
 endif()
 # Which of the extension's two x86-64 variants the C++ core is compiled as
 # (setup.py `_VARIANTS`): avx2 (-mavx2 -mfma), or sse2, the x86-64 baseline
@@ -253,7 +260,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_crossing_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
-if(MW_EXE_BASIS STREQUAL "bs2")
+if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "sg5")
   # bs2 (momwire#1517): the B-spline kernels, the front half, the fill (its
   # exact kernel and Sommerfeld remainder), the NEC-5 seam and run half
   list(APPEND MW_CORE_SOURCES
@@ -267,7 +274,7 @@ if(MW_EXE_BASIS STREQUAL "bs2")
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
 endif()
-if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42")
+if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS STREQUAL "sg5")
   # the NEC-4.2 slot's reader, seam, build, printout writer and run half, and
   # the sinusoidal basis' point-matched kernels, front half, fill and answers
   # (momwire#1607 A1-B4a)
@@ -282,6 +289,21 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42")
     ${MW_SRC}/_sinusoidal_front_core.cpp
     ${MW_SRC}/_sinusoidal_fill_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
+endif()
+if(MW_EXE_BASIS STREQUAL "sg5")
+  # the Sinusoidal-Galerkin fill and run cores over the sin cores and bs2's
+  # (whose list above brings the B-spline core, its fill and the somm
+  # remainder), and its NEC-5 seam and run-half engine (momwire#1718 S8)
+  list(APPEND MW_CORE_SOURCES
+    ${MW_SRC}/_somm_pairs_owned_core.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
+    # the direct-field fill (S7): a wire end on the ground plane, over the
+    # Galerkin far fill core (S1) and its complex twin's sweep TU
+    ${MW_SRC}/_sinusoidal_galerkin_direct_core.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_core.cpp
+    ${MW_SRC}/_accel_sinusoidal_cplx.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_run_core.cpp
+    ${MW_SRC}/_nec5_sinusoidal_galerkin_core.cpp)
 endif()
 if(MW_EXE_BASIS STREQUAL "sg42")
   # the Sinusoidal-Galerkin fill on the B-spline core's sinusoidal kernels,
@@ -339,8 +361,9 @@ add_library(mw_core OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core PRIVATE ${MW_CORE_FLAGS} ${MW_OMP_FLAG})
 target_compile_definitions(mw_core PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX})
-if(MW_EXE_BASIS STREQUAL "sg42")
-  # route_sin.cpp answers for the Sinusoidal-Galerkin engine (both copies)
+if(MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS STREQUAL "sg5")
+  # route_sin.cpp / route_bs2.cpp answer for the Sinusoidal-Galerkin engine
+  # (both copies)
   set(MW_ROUTE_DEFS MW_ROUTE_SG=1)
 endif()
 target_compile_definitions(mw_core PRIVATE ${MW_ROUTE_DEFS})
@@ -387,6 +410,20 @@ elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sin42")
     MW_EXE_BASIS_NAME="sinusoidal"
     MW_EXE_PROGRAM="momwire-nec42-sinusoidal"
     MW_EXE_LAUNCHER="momwire-nec42-sinusoidal"
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}")
+elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sg5")
+  set(MW_EXE momwire-nec5-sinusoidal-galerkin-standalone)
+  add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
+                 $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_NO_PYTHON=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_BASIS_NAME="sinusoidal-galerkin"
+    MW_EXE_PROGRAM="momwire-nec5-sinusoidal-galerkin"
+    MW_EXE_LAUNCHER="momwire-nec5-sinusoidal-galerkin"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sg42")

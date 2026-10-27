@@ -9,12 +9,19 @@
 // OpenBLAS, the commit SciPy's wheel bundles (build_openblas.sh), and answers
 // numpy's CBLAS calls from it too, through the LP64 adapters below. The gate
 // (exe_compare --basis bspline) is what says their bits agree.
+//
+// MW_ROUTE_SG (momwire#1718 S10): the same route for
+// `momwire-nec5-sinusoidal-galerkin`, over the Sinusoidal-Galerkin engine
+// (`_nec5_sinusoidal_galerkin_core.h`); the adapters are this file's.
 #include "route.h"
 
 #include "_somm_below_fill_core.h"
 
 #include "_nec5_bspline_printout_core.h"
 #include "_nec5_bspline_seam_core.h"
+#if MW_ROUTE_SG
+#include "_nec5_sinusoidal_galerkin_core.h"
+#endif
 #include "_somm_grid_core.h"
 
 #include <algorithm>
@@ -121,6 +128,16 @@ void configure_grid_cache(const std::string &tag) {
 }
 
 long long largest_solve(const std::string &latin1_text, bool open_end) {
+#if MW_ROUTE_SG
+    const nec5::SeamResult rs = nec5::sinusoidal_galerkin_seam(latin1_text, open_end);
+    if (rs.route != nec5::SeamResult::served) return -1;
+    long long ns = 0;
+    for (const nec5::Prepared &p : rs.prepared) {
+        const auto *e = dynamic_cast<const nec5::SinusoidalGalerkinPrepared *>(p.engine.get());
+        if (e != nullptr && e->front) ns = std::max<long long>(ns, e->front->geometry.n_segs);
+    }
+    return ns;
+#endif
     const nec5::SeamResult r = nec5::bspline_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
@@ -155,8 +172,14 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     stamp.version = version;
     stamp.variant = variant;
     std::vector<nec5::RunArrays> arrays;
+#if MW_ROUTE_SG
+    (void)sym;
+    const nec5::PrintoutResult r = nec5::sinusoidal_galerkin_printout(
+        latin1_text, "sinusoidal-galerkin", stamp, lp, np, arrays_dir.empty() ? nullptr : &arrays, open_end);
+#else
     const nec5::PrintoutResult r = nec5::bspline_printout(latin1_text, "bspline", stamp, lp, sym, np,
                                                           arrays_dir.empty() ? nullptr : &arrays, open_end);
+#endif
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;
         if (failed) *failed = r.cxx_failed;

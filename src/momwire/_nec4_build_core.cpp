@@ -609,7 +609,7 @@ Prepared prepare_mesh(const Model &model) {
     Prepared p;
     p.mesh = to_polylines(model, positions);
     if (p.mesh.port_order.size() != sites.size())
-        decline("two port sites in one element (Python raises KeyError)");
+        decline("two port sites in one element (the reference raises KeyError)");
     std::vector<ll> solver_of_model(sites.size(), -1);
     for (std::size_t i = 0; i < p.mesh.port_order.size(); i++) {
         ll m = p.mesh.port_order[i];
