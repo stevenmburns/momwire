@@ -599,15 +599,17 @@ Deck deck_of(const Front &fr) {
     return d;
 }
 
-// `WindowFill(...).accumulate(c, t, h, a_row, c, t, h, scale, ek)` into G (F
-// order) over the deck's own segments as both observers and sources.
-void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, double k, double eta,
-                 double scale, bool ek, bool has_b_src, const std::vector<double> &b_src) {
+// `WindowFill(...).accumulate(c, t, h, a_row, src_c, src_t, h, scale, ek)` into
+// G (F order): the deck's segments `s` as the observers, `src` the sources
+// (the same segments, or their images). `scale` is the block's Python scalar
+// (a float as (x, 0)).
+void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src,
+                 double k, double eta, cd scale, bool ek, bool has_b_src, const std::vector<double> &b_src) {
     const cd c_a = py_mul(py_mul(cd(0.0, 1.0), cd(k, 0.0)), cd(eta, 0.0));  // 1j * k * eta
     const cd c_phi = py_div(cd(eta, 0.0), py_mul(cd(0.0, 1.0), cd(k, 0.0)));  // eta / (1j * k)
-    const cd c_a_s = py_mul(c_a, cd(scale, 0.0));
-    const cd c_phi_s = py_mul(c_phi, cd(scale, 0.0));
-    const std::size_t n_obs = s.n, n_src = s.n;
+    const cd c_a_s = py_mul(c_a, scale);
+    const cd c_phi_s = py_mul(c_phi, scale);
+    const std::size_t n_obs = s.n, n_src = src.n;
     const int64_t rows = std::max<int64_t>(
         1, WINDOW_BYTES / (N_SHAPES * N_SHAPES * 16 * std::max<int64_t>(static_cast<int64_t>(n_src), 1)));
     const LadderArrays L = ladder_arrays(DEFAULT_N_QP_PAIR, default_ladder());
@@ -616,7 +618,7 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
              tw = borrow(L.w, {static_cast<nd::ssize_t>(L.w.size())}),
              tr = borrow(L.ratio, {static_cast<nd::ssize_t>(L.ratio.size())});
     const CI tn = borrow(L.n, {static_cast<nd::ssize_t>(L.n.size())});
-    const CF sl_s = borrow(s.l, {NS, 3}), sr_s = borrow(s.r, {NS, 3});
+    const CF sl_s = borrow(src.l, {NS, 3}), sr_s = borrow(src.r, {NS, 3});
     std::vector<int64_t> every(n_src, 0);
     const CI gj = borrow(every, {NS});
     std::vector<int64_t> all_cols(n_src);
@@ -626,7 +628,7 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
              jb = borrow(csr.jbasis, {static_cast<nd::ssize_t>(csr.jbasis.size())});
     const nd::ssize_t nnz = static_cast<nd::ssize_t>(csr.jbasis.size());
     const CC cf = borrow(csr.coef, {nnz, 3}), dcf = borrow(csr.dcoef, {nnz, 3});
-    const CF tc = borrow(s.t, {NS, 3});
+    const CF tc = borrow(src.t, {NS, 3});
     // G as the assembler's writeable Z, F order
     nd::Buffer zb;
     zb.ptr = G.data();
@@ -674,7 +676,7 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
             r0 = r1;
         }
         // the near pairs overwrite their moments
-        const NearBlock nb = near_pair_moments(s, i0, i1, s, k, ek, has_b_src, b_src);
+        const NearBlock nb = near_pair_moments(s, i0, i1, src, k, ek, has_b_src, b_src);
         const std::size_t nn = nb.pairs.ii.size();
         for (std::size_t q = 0; q < nn; q++) {
             const std::size_t m = static_cast<std::size_t>(nb.pairs.ii[q]), j = static_cast<std::size_t>(nb.pairs.jj[q]);
@@ -738,7 +740,11 @@ void check_constructor(const Front &fr, const nec4::SolverArgs &args) {
 }
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
-    if (args.ground.kind != nec4::Ground::none) decline("a ground on the Sinusoidal-Galerkin fill (momwire#1718 S5)");
+    // GN 1 (and GD's perfect plane, whose cliff is the readout's): the image
+    // block; a finite ground composes the Sommerfeld remainder (S5b)
+    const bool pec = args.ground.kind == nec4::Ground::pec;
+    if (args.ground.kind != nec4::Ground::none && !pec)
+        decline("a Sommerfeld ground on the Sinusoidal-Galerkin fill (momwire#1718 S5b)");
     std::vector<cd> z_wire;
     if (sinusoidal::wire_impedance_per_wire(fr, args, fr.omega, z_wire))
         decline("wire loading on the Sinusoidal-Galerkin fill (momwire#1718 S6)");
@@ -757,7 +763,28 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
     if (args.extended_kernel)
         for (std::size_t i = 0; i < N; i++)
             if (d.segs.a[i] != d.segs.a[0]) has_b = true;
-    window_fill(G, n_basis, csr, d.segs, k, fr.eta, DIRECT_SIGN, args.extended_kernel, has_b, d.segs.a);
+    window_fill(G, n_basis, csr, d.segs, d.segs, k, fr.eta, cd(DIRECT_SIGN, 0.0), args.extended_kernel, has_b,
+                d.segs.a);
+    if (pec) {
+        // `fg.image_sources()`: centres mirrored in z = 0 (`2 * ground_z - z`),
+        // tangents z-flipped (`t * MIRROR`); the image keeps each segment's
+        // length and radius. Scale `-DIRECT_SIGN * fg.image_coefficient`.
+        Segs img;
+        img.n = N;
+        img.c = d.segs.c;
+        img.t = d.segs.t;
+        img.h = d.segs.h;
+        img.a = d.segs.a;
+        for (std::size_t i = 0; i < N; i++) {
+            img.c[3 * i + 2] = 2.0 * 0.0 - d.segs.c[3 * i + 2];
+            img.t[3 * i] = d.segs.t[3 * i] * 1.0;
+            img.t[3 * i + 1] = d.segs.t[3 * i + 1] * 1.0;
+            img.t[3 * i + 2] = d.segs.t[3 * i + 2] * -1.0;
+        }
+        segment_ends(img);
+        window_fill(G, n_basis, csr, d.segs, img, k, fr.eta, cd(-DIRECT_SIGN * 1.0, 0.0), args.extended_kernel,
+                    has_b, d.segs.a);
+    }
     return G;
 }
 
