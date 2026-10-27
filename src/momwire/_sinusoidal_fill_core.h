@@ -25,7 +25,12 @@
 //   below-family remainder (`_somm_remainder_below_prepare` / `_replay`: the
 //   below grid from `somm_below::source()`, `remainder_field_proj_below`
 //   through the shared `somm_below::Remainder`), sized by `serve_plan`'s
-//   below/below extents.
+//   below/below extents;
+// - a crossing deck (momwire#1607 B6b, `_assemble_Z_mixed`): each medium's
+//   class block over its own sources at its own (k, eta) and ground (above:
+//   the reduced kernel and the Sommerfeld remainder over the class; below:
+//   the complex twin and the below remainder), reduced into Z, then the
+//   point rows (`_sinusoidal_crossing_core.h`) and the loading.
 //
 // Python stays the reference: Z, the coefficients and Y are Python's to the
 // bit, gated by `tests/test_sinusoidal_fill_core.py` through
@@ -35,6 +40,8 @@
 // - a solver without the extended kernel above ground (the NEC-4.2 slot
 //   never builds one), and one with it below (the reference refuses);
 // - a below/below pair under the grazing floor (not worded here);
+// - on a crossing deck, the folded cos-1 shape (the reduced kernel's numpy
+//   route) and a repeated (segment, basis) entry;
 // - an insulated wire;
 // - a matrix scipy's solve would NOT take as general: exactly symmetric or
 //   Hermitian, or of lower or upper bandwidth at most 1 (its diagonal,

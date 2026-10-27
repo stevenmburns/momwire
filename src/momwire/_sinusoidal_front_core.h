@@ -21,16 +21,17 @@
 // pairwise_sum, and its float64 sin / cos / log are libm's under the
 // AVX-512 pins every momwire process sets (`momwire_serve_client.cpu_env`).
 //
-// - the lower medium (momwire#1607 B6a): `_wire_media`, the crossing
+// - the lower medium (momwire#1607 B6): `_wire_media`, the crossing
 //   junctions and this family's crossing scope, each refusal in Python's
-//   words; a wholly-buried deck's basis at k_m (`_basis_coefs(geom, k_m)` in
-//   numpy's complex arithmetic) and its `Medium`.
+//   words; a wholly-buried deck's basis at k_m, and a crossing deck's two-k
+//   view (`_basis_coefs(geom, np.where(below, k_m, k_p))`: the crossing node
+//   an ordinary junction, `_edge_weight` on its edges), each in numpy's
+//   complex arithmetic, with the `Medium`.
 //
-// DECLINED (`nec4::Declined`), never misread: a crossing junction inside the
-// scope (the crossing fill, B6b), wires on both sides of the interface with
-// no crossing (the transmitted block), a reflection-coefficient ground (not
-// served by the NEC-4.2 slot), a malformed argument the constructor would
-// refuse.
+// DECLINED (`nec4::Declined`), never misread: wires on both sides of the
+// interface with no crossing (the transmitted block), a reflection-
+// coefficient ground (not served by the NEC-4.2 slot), a malformed argument
+// the constructor would refuse.
 #pragma once
 
 #include "_nec4_build_core.h"
@@ -79,6 +80,9 @@ struct SegView {  // `_basis_coefs`' dict
     std::vector<long long> starts, jbasis;
     std::vector<std::complex<double>> A, B, C, AC;
     std::vector<int8_t> sigma;
+    // `k_entry` (a complex k's view, momwire#1607 B6): each entry's own k;
+    // empty at a real k
+    std::vector<std::complex<double>> k_entry;
 };
 
 // `_crossing_fill.Medium` (`buried_medium`): the lower medium of a solve,
@@ -111,6 +115,13 @@ struct Front {
     std::vector<bool> below_wire;
     bool buried = false;
     Medium medium;
+    // a crossing deck (momwire#1607 B6b, `_crossing_junction_indices`): its
+    // crossing junctions, each an ordinary junction of the point-matched
+    // lane; the basis is the two-k view (k_m below, k_p above), `below_seg`
+    // its per-segment medium
+    bool crossing = false;
+    std::vector<long long> crossing_junctions;
+    std::vector<bool> below_seg;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy

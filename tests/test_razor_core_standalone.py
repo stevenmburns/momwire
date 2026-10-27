@@ -84,6 +84,7 @@ CORE_SOURCES = (
     "_sinusoidal_galerkin_fill_core.cpp",
     # Its direct-field fill (momwire#1718 S7): a wire end on the ground plane.
     "_sinusoidal_galerkin_direct_core.cpp",
+    "_sinusoidal_crossing_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a), linked into `nec4_sinusoidal_printout_driver.cpp`.
     "_nec4_run_core.cpp",

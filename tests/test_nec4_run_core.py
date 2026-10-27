@@ -44,8 +44,11 @@ masked, by exact pattern and with the same count on both sides, over:
   the crossing scope: two radii, a hub, an oblique node, two nodes, two
   nodes too close);
 - the declines: a near-field point on a wire's finite-ground contact or in
-  the soil, a near field over a buried wire, a crossing node inside the
-  scope (B6b), wires on both sides with no crossing.
+  the soil, a near field over a buried wire, wires on both sides with no
+  crossing;
+- a crossing node (momwire#1607 B6b): a rise over a rod with PQ and RP, a
+  rise to a buried hub of two radials, a sparse fill under GN 3 with LD 5,
+  an FR sweep under EX 6, and beside a loaded parasite.
 """
 
 from __future__ import annotations
@@ -571,14 +574,55 @@ CASES = [
         ),
         "refused",
     ),
+    # momwire#1607 B6b: a crossing node, the two-k basis, the class
+    # blocks and the point rows
     (
-        "crossing_declines",
+        "crossing_rise_rod_pq_rp",
         deck(
             "GW 1 10 0 0 0 0 0 5 .001\nGW 2 5 0 0 0 0 0 -1 .001\n",
+            "GN 2 0 0 0 13 .005\n"
+            + BFR
+            + "EX 0 1 1 0 1\nPQ 0\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "crossing_rise_to_a_buried_hub",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 3 0 0 0 0 0 -.3 .001\n"
+            "GW 3 10 0 0 -.3 3 0 -.3 .001\nGW 4 10 0 0 -.3 -3 0 -.3 .001\n",
             "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
             "GE -1",
         ),
-        "declined",
+        "printed",
+    ),
+    (
+        "crossing_sparse_ld5",
+        deck(
+            "GW 1 30 0 0 0 0 0 10 .001\nGW 2 10 0 0 0 0 0 -.5 .001\nGW 3 30 0 0 -.5 8 0 -.5 .001\n",
+            "GN 3 0 0 0 20 .01\nLD 5 0 0 0 5.8e7\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "crossing_sweep_ex6",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 5 0 0 0 0 0 -1 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 2 0 0 7 0.3\nEX 6 1 1 0 1 0\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "crossing_beside_a_loaded_parasite",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 5 0 0 0 0 0 -1 .001\nGW 3 10 2 0 1 2 0 6 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nLD 4 3 5 5 50 0\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
     ),
     (
         "above_and_below_declines",

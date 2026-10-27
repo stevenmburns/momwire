@@ -867,18 +867,9 @@ void refuse_crossing_scope(const std::vector<ll> &crossing, const std::vector<st
 // operand is promoted to (x, 0) first, as numpy promotes it.
 //
 // The scalar product and the quotient are numpy's plain C, so their bits are
-// numpy's BUILD's: an x86-64 wheel's baseline has no FMA to contract into
-// (unfused), while an arm64 wheel's compiler contracts each `a * b + c` into
-// one fused multiply-add (measured on macOS 15 arm64, numpy 2.5.4: 4000 of
-// 4000 random quotients and scalar products in exactly these forms, momwire#1607
-// B6a). CPython's `_Py_c_prod` / `_Py_c_quot` are unfused on both (CPython
-// builds without contraction). Linux aarch64's gcc contracts by default too;
-// that platform is unmeasured.
-#if defined(__aarch64__)
-#define MW_NUMPY_CONTRACTS 1
-#else
-#define MW_NUMPY_CONTRACTS 0
-#endif
+// numpy's BUILD's (`MW_NUMPY_CONTRACTS`, `_libm_complex_inline.h`): fused on
+// arm64, unfused on x86-64. CPython's `_Py_c_prod` / `_Py_c_quot` are unfused
+// on both (CPython builds without contraction).
 cd xmul(cd a, cd b) {  // array
     return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
               mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
@@ -940,28 +931,31 @@ cd csin_(cd z) { return mw_libm_c::csin(z); }
 cd ccos_(cd z) { return mw_libm_c::ccos(z); }
 cd clog_(cd z) { return mw_libm_c::clog(z); }
 
-// `_basis_coefs(geom, k)` at a complex scalar k (a wholly-buried deck's k_m,
-// momwire#1222), the closed forms in numpy's complex arithmetic op for op.
-// `a_const` is a 0-d scalar when the radius is uniform (`ka = k * a` CPython's
-// product, the log numpy's), else per segment. No ground-junction patch: a
-// wire end on the plane beside a buried wire is refused upstream.
-void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
+// `_basis_coefs(geom, k)` at a complex k, in numpy's complex arithmetic op
+// for op: a scalar k (a wholly-buried deck's k_m, momwire#1222), or one k
+// per segment (a crossing deck's two-k view, momwire#1223: k_m below, k_p
+// above, `_edge_weight` on the edges that cross). `a_const` is a 0-d scalar
+// only when both k and the radius are (`ka = k * a` CPython's product, the
+// log numpy's); every other product is an array product. No ground-junction
+// patch: a wire end on the plane beside a buried wire is refused upstream.
+void basis_coefs_complex(Front &f, const std::vector<double> &a, const std::vector<cd> &kseg, bool per_seg_k) {
     const Geometry &g = f.geometry;
     const std::size_t n = static_cast<std::size_t>(g.n_segs);
     for (std::size_t i = 0; i < n; i++)
         if (g.ground_minus[i] || g.ground_plus[i] || g.crossing_minus[i] || g.crossing_plus[i])
-            decline("a ground or crossing end at a complex k (momwire#1607 B6b)");
-    const bool scalar = f.uniform_radius;
+            decline("a ground or crossing end at a complex k");
+    const bool scalar = f.uniform_radius && !per_seg_k;
+    auto kat = [&](std::size_t i) { return per_seg_k ? kseg[i] : kseg[0]; };
     std::vector<cd> ac(n);
     if (scalar) {
-        const cd ka = pmul(k, re(a[0]));
+        const cd ka = pmul(kseg[0], re(a[0]));
         const cd lg = clog_(pdiv(re(2.0), ka));
         const cd v = xdiv(re(1.0), cd(lg.real() - kEulerGamma, lg.imag() - 0.0));
         std::fill(ac.begin(), ac.end(), v);
     } else {
-        // `ka = k * a` over the per-segment radii: an array product
+        // `ka = k * a`: an array product (a per-segment k, or radius)
         for (std::size_t i = 0; i < n; i++) {
-            const cd ka = xmul(k, re(a[i]));
+            const cd ka = xmul(kat(i), re(f.uniform_radius ? a[0] : a[i]));
             const cd lg = clog_(xdiv(re(2.0), ka));
             ac[i] = xdiv(re(1.0), xsub(lg, re(kEulerGamma)));
         }
@@ -970,7 +964,7 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
     auto amul = [&](cd x, cd y) { return scalar ? smul(x, y) : xmul(x, y); };
     std::vector<cd> kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), atom(n);
     for (std::size_t i = 0; i < n; i++) {
-        kd[i] = xmul(k, re(g.seg_h[i]));
+        kd[i] = xmul(kat(i), re(g.seg_h[i]));
         sin_kd[i] = csin_(kd[i]);
         cos_kd[i] = ccos_(kd[i]);
         s2[i] = csin_(xmul(re(0.5), kd[i]));
@@ -982,13 +976,36 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
         atom[i] = xmul(xdiv(s2[i], c2[i]), ac[i]);
     }
     std::vector<cd> Pm(n, cd(0.0, 0.0)), Pp(n, cd(0.0, 0.0));
-    for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
-        cd &t = Pm[static_cast<std::size_t>(g.nm_basis[e])];
-        t = xadd(t, atom[static_cast<std::size_t>(g.nm_seg[e])]);
-    }
-    for (std::size_t e = 0; e < g.np_basis.size(); e++) {
-        cd &t = Pp[static_cast<std::size_t>(g.np_basis[e])];
-        t = xadd(t, xneg(atom[static_cast<std::size_t>(g.np_seg[e])]));
+    // the two-k recipe's edge constants (`_edge_weight`): a_i * k_j / k_i
+    // across the interface, NEC's a_j within one medium
+    std::vector<cd> w_nm, w_np;
+    if (per_seg_k) {
+        auto weight = [&](ll bi, ll sj) {
+            const std::size_t ib = static_cast<std::size_t>(bi), js = static_cast<std::size_t>(sj);
+            const cd k_i = kseg[ib], k_j = kseg[js];
+            return k_i != k_j ? xdiv(xmul(ac[ib], k_j), k_i) : ac[js];
+        };
+        for (std::size_t e = 0; e < g.nm_basis.size(); e++) w_nm.push_back(weight(g.nm_basis[e], g.nm_seg[e]));
+        for (std::size_t e = 0; e < g.np_basis.size(); e++) w_np.push_back(weight(g.np_basis[e], g.np_seg[e]));
+        std::vector<cd> tan_half(n);
+        for (std::size_t i = 0; i < n; i++) tan_half[i] = xdiv(s2[i], c2[i]);
+        for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+            cd &t = Pm[static_cast<std::size_t>(g.nm_basis[e])];
+            t = xadd(t, xmul(w_nm[e], tan_half[static_cast<std::size_t>(g.nm_seg[e])]));
+        }
+        for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+            cd &t = Pp[static_cast<std::size_t>(g.np_basis[e])];
+            t = xadd(t, xmul(xneg(w_np[e]), tan_half[static_cast<std::size_t>(g.np_seg[e])]));
+        }
+    } else {
+        for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
+            cd &t = Pm[static_cast<std::size_t>(g.nm_basis[e])];
+            t = xadd(t, atom[static_cast<std::size_t>(g.nm_seg[e])]);
+        }
+        for (std::size_t e = 0; e < g.np_basis.size(); e++) {
+            cd &t = Pp[static_cast<std::size_t>(g.np_basis[e])];
+            t = xadd(t, xneg(atom[static_cast<std::size_t>(g.np_seg[e])]));
+        }
     }
     std::vector<bool> has_minus(n), has_plus(n);
     for (std::size_t i = 0; i < n; i++) {
@@ -1071,7 +1088,7 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
     }
     for (std::size_t e = 0; e < g.nm_basis.size(); e++) {
         const std::size_t sgi = static_cast<std::size_t>(g.nm_seg[e]);
-        const cd an = ac[scalar ? 0 : sgi];
+        const cd an = per_seg_k ? w_nm[e] : ac[scalar ? 0 : sgi];
         const cd q = Qm[static_cast<std::size_t>(g.nm_basis[e])];
         all_seg.push_back(g.nm_seg[e]);
         all_basis.push_back(g.nm_basis[e]);
@@ -1083,7 +1100,7 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
     }
     for (std::size_t e = 0; e < g.np_basis.size(); e++) {
         const std::size_t sgi = static_cast<std::size_t>(g.np_seg[e]);
-        const cd an = ac[scalar ? 0 : sgi];
+        const cd an = per_seg_k ? w_np[e] : ac[scalar ? 0 : sgi];
         const cd q = Qp[static_cast<std::size_t>(g.np_basis[e])];
         all_seg.push_back(g.np_seg[e]);
         all_basis.push_back(g.np_basis[e]);
@@ -1106,6 +1123,8 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, cd k) {
         v.C.push_back(all_C[o]);
         v.AC.push_back(all_AC[o]);
         v.sigma.push_back(all_sigma[o]);
+        // `k_entry = k[all_seg[order]]`: each entry at its segment's own k
+        v.k_entry.push_back(kat(static_cast<std::size_t>(all_seg[o])));
     }
 }
 
@@ -1631,14 +1650,21 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
             const std::vector<ll> crossing =
                 crossing_junctions(f.below_wire, f.junctions, grounded, pls, gz, f.radius_per_wire);
             refuse_crossing_scope(crossing, f.junctions, pls, f.radius_per_wire);
-            if (!crossing.empty()) decline("a crossing junction (momwire#1607 B6b)");
+            f.crossing_junctions = crossing;
+            f.crossing = !crossing.empty();
         }
         const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
-        if (nb > 0 && nb < n_w) decline("wires both above and below the interface (momwire#1607 B6)");
+        if (nb > 0 && nb < n_w && !f.crossing)
+            decline("wires both above and below the interface with no crossing junction (momwire#1607 B6)");
         f.buried = nb == n_w;
     }
+    // the point-matched crossing node is an ordinary junction (`edges_at`)
+    auto is_crossing = [&](std::size_t j) {
+        return std::find(f.crossing_junctions.begin(), f.crossing_junctions.end(), static_cast<ll>(j)) !=
+               f.crossing_junctions.end();
+    };
     for (std::size_t j = 0; j < f.junctions.size(); j++) {
-        if (grounded.count(static_cast<ll>(j))) continue;
+        if (grounded.count(static_cast<ll>(j)) && !is_crossing(j)) continue;
         std::vector<std::pair<ll, bool>> members;  // (seg, side is L)
         for (const auto &m : f.junctions[j]) {
             if (m.second) {
@@ -1722,7 +1748,8 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
                 fail("segment(s) lying in the ground plane (both endpoints at ground_z) — degenerate over a "
                      "conducting ground");
         }
-        for (ll j : grounded)
+        for (ll j : grounded) {
+            if (is_crossing(static_cast<std::size_t>(j))) continue;  // its members are connected
             for (const auto &m : f.junctions[static_cast<std::size_t>(j)]) {
                 if (m.second) {
                     g.ground_minus[static_cast<std::size_t>(g.wire_first[static_cast<std::size_t>(m.first)])] = true;
@@ -1730,6 +1757,7 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
                     g.ground_plus[static_cast<std::size_t>(g.wire_last[static_cast<std::size_t>(m.first)])] = true;
                 }
             }
+        }
     }
     g.grounded_junctions.assign(grounded.begin(), grounded.end());
 
@@ -1747,7 +1775,22 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
         // medium, its basis at k_m (`_readout_view`); `_nec4_live` is false
         // below the interface
         f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
-        basis_coefs_complex(f, a, f.medium.k_m);
+        basis_coefs_complex(f, a, {f.medium.k_m}, false);
+        return f;
+    }
+    if (f.crossing) {
+        // `_mixed_view` on a crossing deck: `_basis_coefs(geom,
+        // np.where(below, k_m, k_p))`, the node condition in the basis
+        f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
+        f.below_seg.assign(n, false);
+        std::vector<cd> kseg(n);
+        for (std::size_t w = 0; w < n_w; w++)
+            for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) {
+                const std::size_t i = static_cast<std::size_t>(s);
+                f.below_seg[i] = f.below_wire[w];
+                kseg[i] = f.below_wire[w] ? f.medium.k_m : cd(f.medium.k_p, 0.0);
+            }
+        basis_coefs_complex(f, a, kseg, true);
         return f;
     }
     if (args.junction_rule_nec42) {
@@ -1878,7 +1921,7 @@ void dump_front_into(Out &o, const std::string &p, const Front &fr) {
     ints(o, k("grounded_junctions"), g.grounded_junctions);
     const SegView &v = fr.basis;
     std::string r = p + ".basis";
-    o.line(r + " : mapping 7");
+    o.line(r + " : mapping " + std::to_string(v.k_entry.empty() ? 7 : 8));
     key = 0;
     auto kb = [&](const char *name) {
         std::string t = r + "{" + std::to_string(key++) + "}";
@@ -1892,6 +1935,7 @@ void dump_front_into(Out &o, const std::string &p, const Front &fr) {
     cplx(o, kb("C"), v.C);
     cplx(o, kb("AC"), v.AC);
     ints(o, kb("sigma"), v.sigma);
+    if (!v.k_entry.empty()) cplx(o, kb("k_entry"), v.k_entry);
 }
 
 }  // namespace

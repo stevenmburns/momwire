@@ -317,6 +317,25 @@ CASES = [
         ),
         "fills",
     ),
+    # momwire#1607 B6b: a crossing node's class blocks and point rows
+    (
+        "crossing_dense",
+        deck(
+            "GW 1 10 0 0 0 0 0 5 .001\nGW 2 5 0 0 0 0 0 -1 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 7.15\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
+    (
+        "crossing_sparse_ld5",
+        deck(
+            "GW 1 30 0 0 0 0 0 10 .001\nGW 2 10 0 0 0 0 0 -.5 .001\nGW 3 30 0 0 -.5 8 0 -.5 .001\n",
+            "GN 3 0 0 0 20 .01\nLD 5 0 0 0 5.8e7\nFR 0 1 0 0 7.15\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
     (
         "duplicate_sparse_ld5",
         deck(
