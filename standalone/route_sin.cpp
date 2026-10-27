@@ -11,9 +11,23 @@
 // numpy's CBLAS calls from it through LP64 adapters. The audit
 // (scratch/standalone-audit-1021/run_audit_nec42.py in antennaknobs) is what
 // says their bits agree.
+//
+// MW_ROUTE_SG (momwire#1718 S4): the same route for
+// `momwire-nec42-sinusoidal-galerkin`, over the Sinusoidal-Galerkin engine
+// (`_sinusoidal_galerkin_run_core.h`, `_nec4.render(text,
+// basis="sinusoidal-galerkin")`); the adapters, the decline and failure
+// handling are this file's either way.
 #include "route.h"
 
 #include "_sinusoidal_run_core.h"
+#if MW_ROUTE_SG
+#include "_sinusoidal_galerkin_run_core.h"
+#define MW_ROUTE_ENGINE sinusoidal_galerkin
+#define MW_ROUTE_BASIS "sinusoidal-galerkin"
+#else
+#define MW_ROUTE_ENGINE sinusoidal
+#define MW_ROUTE_BASIS "sinusoidal"
+#endif
 
 #include <algorithm>
 #include <complex>
@@ -98,7 +112,7 @@ sinusoidal::FillLinalg linalg() {
 void configure_grid_cache(const std::string &tag) { (void)tag; }
 
 long long largest_solve(const std::string &latin1_text, bool open_end) {
-    return nec4::largest_solve(latin1_text, "sinusoidal", open_end);
+    return nec4::largest_solve(latin1_text, MW_ROUTE_BASIS, open_end);
 }
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
@@ -116,8 +130,8 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     std::string out, why;
     bool ok, go_on = false;
     try {
-        ok = open_end ? sinusoidal::printout_piece(latin1_text, stamp, la, out, why, go_on)
-                      : sinusoidal::printout(latin1_text, stamp, la, out, why);
+        ok = open_end ? MW_ROUTE_ENGINE::printout_piece(latin1_text, stamp, la, out, why, go_on)
+                      : MW_ROUTE_ENGINE::printout(latin1_text, stamp, la, out, why);
     } catch (const std::bad_alloc &) {
         if (failed) *failed = true;
         if (failure_kind) *failure_kind = "MemoryError";
