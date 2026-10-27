@@ -29,8 +29,12 @@ junction decks and a smaller free array; the x16/x32 decks are too slow for
 the suite, and the table above is their record.
 
 Negative controls, so a pass is evidence:
-* the EK tiered entry is counted, and its Z is NOT bit-equal to the flat
-  fill's -- a ladder that was silently ignored would be;
+* the EK tiered entry is counted, and its moments are NOT bit-equal to the
+  flat fill's plain-entry moments, call for call -- a ladder that was
+  silently ignored would be. The control reads the FILL, not Z_in: the
+  ladder moves Z_in by a few ULPs (8 on Haswell's sse2 build, 2026-10-27),
+  which a solve can round away -- on Skylake's sse2 build (GCC 13) the two
+  Z_in were bit-equal while the fill had moved (momwire#1481);
 * per pair, the EK tiered moments differ from the REDUCED tiered moments on
   exactly the eligible pairs, including pairs served by the lower tiers -- a
   kernel that dropped the factor on tiered pairs fails it, and so does the
@@ -109,8 +113,12 @@ def _numpy(monkeypatch, *args, **kwargs):
 
 
 class _Count:
+    """Counts the two EK entries' calls; `out` keeps each call's moments, in
+    call order, for the fill-level negative control."""
+
     def __init__(self, monkeypatch, reference=None):
         self.n = dict.fromkeys((EK_PLAIN, EK_TIERED), 0)
+        self.out = []
         for name in self.n:
             f = getattr(acc, name)
             if reference is not None:
@@ -118,7 +126,9 @@ class _Count:
 
             def counted(*a, _f=f, _name=name, **k):
                 self.n[_name] += 1
-                return _f(*a, **k)
+                r = _f(*a, **k)
+                self.out.append(np.array(r, copy=True))
+                return r
 
             monkeypatch.setattr(acc, name, counted)
 
@@ -276,7 +286,7 @@ def _z(monkeypatch, deck, **kw):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             z, _ = B.BSplineSolver(**deck, **kw).compute_impedance()
-    return complex(np.atleast_1d(z)[0]), c.n
+    return complex(np.atleast_1d(z)[0]), c
 
 
 @pytest.mark.parametrize("name", list(DECKS))
@@ -284,14 +294,18 @@ def test_an_ek_solve_on_the_ladder_is_the_flat_fill_within_the_derived_tolerance
     monkeypatch, name
 ):
     deck = DECKS[name]()
-    z_lad, n_lad = _z(monkeypatch, deck, extended_kernel=True)
-    z_flat, n_flat = _z(monkeypatch, deck, extended_kernel=True, pair_order_ladder=())
+    z_lad, lad = _z(monkeypatch, deck, extended_kernel=True)
+    z_flat, flat = _z(monkeypatch, deck, extended_kernel=True, pair_order_ladder=())
     rel = abs(z_lad - z_flat) / abs(z_flat)
     assert rel < Z_TOL, f"{name}: EK ladder vs flat {rel:.3e}"
-    # Negative controls: the ladder route ran and moved the bits (an ignored
-    # ladder would be the flat fill exactly) ...
+    # Negative controls: the ladder route ran and moved the bits of the fill
+    # (an ignored ladder would be the flat fill exactly). Not `z_lad !=
+    # z_flat`: Z_in moves by a few ULPs and can round back (momwire#1481).
+    n_lad, n_flat = lad.n, flat.n
     assert n_lad[EK_TIERED] >= 1 and n_flat[EK_TIERED] == 0, (n_lad, n_flat)
-    assert z_lad != z_flat
+    assert n_lad[EK_PLAIN] == 0 and n_flat[EK_PLAIN] == n_lad[EK_TIERED]
+    assert [a.shape for a in lad.out] == [b.shape for b in flat.out]
+    assert any(np.any(a != b) for a, b in zip(lad.out, flat.out, strict=True))
     # ... and EK itself is still on: the ladder fill with EK off sits far away.
     z_off, _ = _z(monkeypatch, deck, extended_kernel=False)
     assert abs(z_lad - z_off) / abs(z_off) > 1e3 * Z_TOL

@@ -1,6 +1,7 @@
 """The C++ Sommerfeld grid (`_somm_grid_core.cpp`, momwire#1479 Sommerfeld
 S2) against `_sommerfeld.get_grid`, call by call, bit for bit, and its `far_cpp_pack` (the momwire#1258 continuation's
-constants the remainder kernels take).
+constants the remainder kernels take). Values compare bit for bit up to the
+sign of a zero (`bits_match`, momwire#1538).
 
     python scripts/core_split/somm_grid_compare.py CALLS.jsonl [--random N]
 
@@ -34,6 +35,30 @@ ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
 SOURCES = ("_somm_kernel_core.cpp", "_somm_grid_core.cpp")
+
+
+def bits_match(got: bytes, want: bytes) -> bool:
+    """Two float64 byte strings, bit for bit except the sign of a zero
+    (momwire#1538). CPython 3.14 adopted C99 Annex G for mixed real/complex
+    operands: `-1j * omega` keeps a -0.0 real part and `eps - 1.0` keeps a
+    lossless eps's -0.0 imaginary part, where 3.10-3.13 promote the float to
+    complex first and give +0.0. The C++ spells the pre-3.14 values, so under
+    3.14 the far constants and a lossless soil's value tables differ in the
+    signs of zeros and nowhere else. No printout reads them: measured
+    2026-10-27 on Python 3.14, the golden corpus renders byte-identical with
+    the far constants' zeros folded to +0.0, and so does a lossless copy of
+    its Sommerfeld deck with the C++ value tables substituted for Python's.
+    Integer ops only, so -0.0 becomes +0.0 and every other bit pattern, NaN
+    payloads included, is compared as it stands.
+    """
+    if len(got) != len(want) or len(got) % 8:
+        return False
+
+    def fold(b: bytes) -> np.ndarray:
+        i = np.frombuffer(b, dtype=np.uint64)
+        return np.where(i == np.uint64(1 << 63), np.uint64(0), i)
+
+    return bool(np.array_equal(fold(got), fold(want)))
 
 
 def build_driver(out: Path) -> Path:
@@ -188,11 +213,11 @@ def main(argv=None):
             ]:
                 problems.append(f"region {r} lattice")
             raw = np.ascontiguousarray(reg["vals"], dtype=np.complex128).tobytes()
-            if blob[off : off + len(raw)] != raw:
+            if not bits_match(blob[off : off + len(raw)], raw):
                 problems.append(f"region {r} values")
             off += len(raw)
         far = np.ascontiguousarray(s.far_cpp_pack(g), dtype=np.complex128).tobytes()
-        if (work / f"{k}.far").read_bytes() != far:
+        if not bits_match((work / f"{k}.far").read_bytes(), far):
             problems.append("far pack")
         if problems:
             bad += 1
