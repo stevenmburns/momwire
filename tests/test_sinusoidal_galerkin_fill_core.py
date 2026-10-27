@@ -21,7 +21,10 @@ these tests hold the C++ dump (G, the coefficients, Y) equal to it over:
 - a perfect ground (GN 1, S5a): the image block, a vertical and an inverted
   vee above it, a horizontal wire parallel to its image, a detached radius
   step (the image's source tube);
-- the declines (a wire end on the plane, a Sommerfeld ground, wire loading)
+- wire loading (S6): LD 5 on every wire and on one, LD 2 / LD 3 per metre,
+  LD 5 on a bent wire over GN 1 and on short segments (the overlap
+  integrals' series branch);
+- the declines (a wire end on the plane, a Sommerfeld ground)
   and the constructor's refusal of the extended kernel at a stepped-radius
   junction.
 """
@@ -228,9 +231,41 @@ CASES = [
         "declined",
     ),
     (
-        "ld5_declines",
+        "ld5_copper",
         deck(dipole(11), "LD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
-        "declined",
+        "fills",
+    ),
+    (
+        "ld5_one_wire_of_two",
+        deck(
+            dipole(21, 0.5) + "GW 2 11 .3 0 -.25 .3 0 .25 .001\n",
+            "LD 5 2 0 0 3.5e7\n" + FR + "EX 0 1 11 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "ld2_series_per_metre",
+        deck(dipole(11), "LD 2 1 0 0 10 1e-7 0\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "ld3_parallel_per_metre",
+        deck(dipole(11), "LD 3 1 0 0 1e4 1e-6 0\n" + FR + "EX 0 1 6 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "ld5_bent_over_pec",
+        deck(
+            "GW 1 8 -.3 0 .1 0 0 .3 .001\nGW 2 8 0 0 .3 .3 0 .1 .001\n",
+            "GN 1\nLD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 8 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        # a short segment (k h ~ 1e-3): the overlap's series branch
+        "ld5_low_frequency",
+        deck(dipole(11), "LD 5 0 0 0 5.8e7\nFR 0 1 0 0 1\nEX 0 1 6 0 1\nXQ\n"),
+        "fills",
     ),
 ]
 

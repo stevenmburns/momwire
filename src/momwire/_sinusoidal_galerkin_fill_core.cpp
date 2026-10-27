@@ -25,6 +25,7 @@
 #include "_sinusoidal_galerkin_fill_core.h"
 
 #include "_bspline_core.h"
+#include "_sinusoidal_series_inline.h"  // `sin_minus_arg`
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
 #include <algorithm>
@@ -693,6 +694,66 @@ void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const 
     }
 }
 
+// `_loading_integrals(k, h)` at one segment, real k: (∫(cos kξ − 1),
+// ∫sin² kξ, ∫(cos kξ − 1)²), numpy's elementwise order
+void loading_integrals(double k, double h, double &i_g, double &i_ss, double &i_gg) {
+    const double x = (0.5 * k) * h;
+    const double s1 = sin_minus_arg(x);
+    const double s2 = sin_minus_arg(2.0 * x);
+    i_g = (2.0 / k) * s1;
+    i_ss = -s2 / (2.0 * k);
+    const double x2 = x * x;
+    // Horner over x², highest order first; each coefficient as CPython
+    // computes `(-1) ** m * (4.0 ** m - 4.0) / math.factorial(2 * m + 1)`
+    static const double fact[16] = {1.0, 1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0, 362880.0,
+                                    3628800.0, 39916800.0, 479001600.0, 6227020800.0, 87178291200.0,
+                                    1307674368000.0};
+    double series = 0.0;
+    for (int m = 7; m > 1; m--) {
+        const double sign = m % 2 == 0 ? 1.0 : -1.0;
+        const double coef = sign * (std::pow(4.0, static_cast<double>(m)) - 4.0) / fact[2 * m + 1];
+        series = series * x2 + coef;
+    }
+    series = series * x2 * x2 * x;
+    i_gg = (std::fabs(x) < 0.25 ? series : 0.5 * s2 - 4.0 * s1) / k;
+}
+
+// `_apply_loading(G, geom, seg_view, k)`: the Galerkin overlap of the series
+// wire impedance, `np.subtract.at` over every ordered pair of support entries
+// sharing a segment (`_shared_segment_pairs`' order), G F order.
+void apply_loading(std::vector<cd> &G, std::size_t n_basis, const Front &fr, const std::vector<cd> &z_wire) {
+    const Geometry &g = fr.geometry;
+    const SegView &v = fr.basis;
+    const double k = fr.k;
+    std::vector<cd> z_seg(static_cast<std::size_t>(g.n_segs));
+    for (std::size_t w = 0; w < g.wire_first.size(); w++)
+        for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) z_seg[static_cast<std::size_t>(i)] = z_wire.at(w);
+    const std::size_t nnz = v.jbasis.size();
+    std::vector<cd> U(nnz), R(nnz);
+    for (std::size_t e = 0; e < nnz; e++) {
+        const cd sg(static_cast<double>(v.sigma[e]), 0.0);
+        U[e] = cm(sg, v.AC[e]);
+        R[e] = cm(sg, v.C[e]);
+    }
+    for (std::size_t m = 0; m < static_cast<std::size_t>(g.n_segs); m++) {
+        const double h = g.seg_h[m];
+        double i_g, i_ss, i_gg;
+        loading_integrals(k, h, i_g, i_ss, i_gg);
+        for (ll e = v.starts[m]; e < v.starts[m + 1]; e++)
+            for (ll f = v.starts[m]; f < v.starts[m + 1]; f++) {
+                const std::size_t a = static_cast<std::size_t>(e), b = static_cast<std::size_t>(f);
+                const cd t1 = cr(cm(U[a], U[b]), h);
+                const cd t2 = cr(cadd(cm(U[a], R[b]), cm(R[a], U[b])), i_g);
+                const cd t3 = cr(cm(v.B[a], v.B[b]), i_ss);
+                const cd t4 = cr(cm(R[a], R[b]), i_gg);
+                const cd val = cm(cadd(cadd(cadd(t1, t2), t3), t4), z_seg[m]);
+                cd &slot = G[static_cast<std::size_t>(v.jbasis[a]) +
+                             static_cast<std::size_t>(v.jbasis[b]) * n_basis];
+                slot = csub(slot, val);
+            }
+    }
+}
+
 // `_basis_value(sigAC, B, sigC, k, xi)` at one entry
 cd basis_value(cd sigAC, cd B, cd sigC, double k, double xi) {
     const double half = std::sin(0.5 * k * xi);
@@ -745,9 +806,6 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
     const bool pec = args.ground.kind == nec4::Ground::pec;
     if (args.ground.kind != nec4::Ground::none && !pec)
         decline("a Sommerfeld ground on the Sinusoidal-Galerkin fill (momwire#1718 S5b)");
-    std::vector<cd> z_wire;
-    if (sinusoidal::wire_impedance_per_wire(fr, args, fr.omega, z_wire))
-        decline("wire loading on the Sinusoidal-Galerkin fill (momwire#1718 S6)");
     const Geometry &g = fr.geometry;
     for (std::size_t i = 0; i < g.ground_minus.size(); i++)
         if (g.ground_minus[i] || g.ground_plus[i]) decline("a wire end on the ground plane (momwire#1718 S7)");
@@ -785,6 +843,10 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args) {
         window_fill(G, n_basis, csr, d.segs, img, k, fr.eta, cd(-DIRECT_SIGN * 1.0, 0.0), args.extended_kernel,
                     has_b, d.segs.a);
     }
+    // `_apply_loading`: read at `k * self.c`, the fill's own k (an insulated
+    // wire declines)
+    std::vector<cd> z_wire;
+    if (sinusoidal::wire_impedance_per_wire(fr, args, k * fr.c, z_wire)) apply_loading(G, n_basis, fr, z_wire);
     return G;
 }
 
