@@ -281,10 +281,13 @@ log rule at every junction, the class default and what the NEC-2 launchers
 NEC-4 theory manual (UCRL-MA-109338): a small charge solve at each junction
 where wires of different radius meet (and at every junction of three or more
 wires), with NEC-4's thin-wire kernel and end caps. It is what the NEC-4.2
-launchers (`momwire-nec42*`, and the native `momwire-nec42-sinusoidal`) use,
-and on a tapered element it lands within about half an ohm of licensed
-NEC-4.2, where the NEC-2 rule is off by 10 to 20 ohms. A deck with no such
-junction solves exactly as before under either rule.
+launchers (`momwire-nec42*`, and the native `momwire-nec42-sinusoidal`) use.
+On radius steps, T and Y junctions, bends and tapered elements, with the feed
+anywhere including the segment beside the junction (momwire#1668), it lands
+within a few hundredths of an ohm of licensed NEC-4.2, where the NEC-2 rule
+is off by 10 to 200 ohms. At very short segments both codes drift apart by a
+few tenths of an ohm, as they do on a uniform wire with no junction at all. A
+deck with no such junction solves exactly as before under either rule.
 
 Each launcher's choice is only its default. Set `MOMWIRE_JUNCTION_RULE` to
 `nec2` or `nec42` in the environment the engine runs in to choose the other

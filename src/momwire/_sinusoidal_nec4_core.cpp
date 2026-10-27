@@ -334,6 +334,26 @@ double triangle(double k, double b, double z, double d) {
     return (d - z) * phi0(k, b, z, 0.0, d) + (s_sin(k * r_lo) - s_sin(k * r_hi)) / k;
 }
 
+// `_full_triangle`: the n = 3 expansion's middle function, 0 at the node,
+// d at s = d, 0 at s = 2d.
+double full_triangle(double k, double b, double z, double d, double tri) {
+    return d * phi0(k, b, z, 0.0, d) - tri + triangle(k, b, z - d, d);
+}
+
+// `_density`: member density at distance s from the node (or at it).
+double density(const double *q, double d, double s, bool at_node) {
+    if (at_node) return (q[0] + q[2]) * d;
+    const double f1 = s < d ? d - s : 0.0;
+    double f2;
+    if (s <= d)
+        f2 = s;
+    else if (s < 2.0 * d)
+        f2 = 2.0 * d - s;
+    else
+        f2 = 0.0;
+    return q[0] * f1 + q[1] * f2 + q[2] * d;
+}
+
 double semi_infinite(double k, double b, double z) {
     double out = -kHalfPi * bessel_y0(k * b);
     if (z > 0.0)
@@ -355,10 +375,14 @@ std::vector<double> junction_charge_factors(double k, const std::vector<std::arr
                                             const std::vector<double> &radii, const std::vector<double> &lengths,
                                             double first_factor) {
     const std::size_t m = radii.size();
-    const std::size_t n = 2 * m;
+    const std::size_t n = 3 * m;
+    // One length for every member: the mean of the junction segments'.
+    double dsum = 0.0;
+    for (std::size_t l = 0; l < m; l++) dsum = dsum + lengths[l];
+    const double dl = dsum / static_cast<double>(m);
     std::vector<std::vector<double>> mat;
     for (std::size_t i = 0; i < m; i++) {
-        const double ss[2] = {0.5 * lengths[i], lengths[i]};
+        const double ss[3] = {0.5 * dl, dl, 2.0 * dl};
         for (double s : ss) {
             const double p0 = s * dirs[i][0], p1 = s * dirs[i][1], p2 = s * dirs[i][2];
             std::vector<double> row;
@@ -373,9 +397,10 @@ std::vector<double> junction_charge_factors(double k, const std::vector<std::arr
                         "a junction member lies too far from another member's axis for the NEC-4 "
                         "junction-charge solve (k b = " +
                         fmt3g(k * b) + " > 8); shorten the segments at the junction (momwire#1644)");
-                const double delta = lengths[l];
-                row.push_back(triangle(k, b, z, delta));
-                row.push_back(delta * semi_infinite(k, b, z));
+                const double tri = triangle(k, b, z, dl);
+                row.push_back(tri);
+                row.push_back(full_triangle(k, b, z, dl, tri));
+                row.push_back(dl * semi_infinite(k, b, z));
             }
             mat.push_back(row);
         }
@@ -410,7 +435,8 @@ std::vector<double> junction_charge_factors(double k, const std::vector<std::arr
         x[rr] = acc / mat[rr][rr];
     }
     std::vector<double> dens(m);
-    for (std::size_t l = 0; l < m; l++) dens[l] = (x[2 * l] + x[2 * l + 1]) * lengths[l];
+    const bool at_node = m == 2;
+    for (std::size_t l = 0; l < m; l++) dens[l] = density(&x[3 * l], dl, 0.5 * lengths[l], at_node);
     const double scale = first_factor / dens[0];
     std::vector<double> out{first_factor};
     for (std::size_t l = 1; l < m; l++) out.push_back(dens[l] * scale);
