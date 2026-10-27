@@ -88,6 +88,17 @@ std::string refuse_two_drives_one_port(const std::string &first, const std::stri
            "wins";
 }
 
+std::string refuse_unpinned_phantom(const std::string &card, const std::string &at,
+                                    const std::string &tag) {
+    return card + " ends at " + at + " on GW " + tag +
+           ", EZNEC's parked circuit wire, and no LD card pins that node; a deck EZNEC writes "
+           "for an engine run pins a parked node only one network card reaches (LD 4 ... "
+           "1.E+10 for an open), so this one was edited by hand or saved as .nec. Unpinned, the "
+           "answer depends on reading the parked wire as a wire (NEC-5 solves it as a few "
+           "millimetres of metal, about 1 % on momwire#1314's open-stub deck) or as a circuit "
+           "node (what EZNEC means) - add the LD 4 pin EZNEC writes";
+}
+
 std::string refuse_buried_no_medium(const std::string &tag, double zmin, bool gd) {
     const char *card = gd ? "GD" : "GN 1";
     const char *why =
@@ -1341,6 +1352,36 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             if (it != seen.end())
                 throw Refusal{refuse_two_drives_one_port(at_of(it->second), at_of(s.at))};
             seen[site->column] = s.at;
+        }
+    }
+    // --- `_check_pinned_phantoms` (momwire#1314) ----------------------------
+    {
+        std::vector<std::pair<std::string, Node>> ends;
+        for (const TransmissionLine &t : d.transmission_lines) {
+            ends.emplace_back("a TL card", t.end_a);
+            ends.emplace_back("a TL card", t.end_b);
+        }
+        const auto nonzero = [](const double y[2]) { return y[0] != 0.0 || y[1] != 0.0; };
+        for (const Network &n : d.networks) {
+            if (nonzero(n.y11) || nonzero(n.y12)) ends.emplace_back("an NT card", n.end_a);
+            if (nonzero(n.y22) || nonzero(n.y12)) ends.emplace_back("an NT card", n.end_b);
+        }
+        for (const auto &end : ends) {
+            const Node &at = end.second;
+            long long count = 0;
+            for (const auto &other : ends)
+                if (same_node(other.second, at)) count++;
+            bool pinned = false, driven = false;
+            for (const Load &l : d.loads)
+                if (same_node(l.at, at)) pinned = true;
+            for (const Source &s : d.sources)
+                if (same_node(s.at, at)) driven = true;
+            const SeamSite *site = nullptr;
+            for (const SeamSite &x : mesh.sites)
+                if (same_node(x.at, at)) site = &x;
+            if (site != nullptr && site->spelling == SeamSite::virtual_ && !pinned && !driven &&
+                count == 1)
+                throw Refusal{refuse_unpinned_phantom(end.first, at_of(at), at.tag.str())};
         }
     }
     for (const Source &s : d.sources) {

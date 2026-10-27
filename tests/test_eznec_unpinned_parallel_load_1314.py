@@ -94,7 +94,7 @@ def _with(text: str, swaps) -> str:
 
 
 def test_an_unpinned_line_end_on_the_parked_wire_is_refused():
-    with pytest.raises(ServeRefusal, match=r"TL card ends at 4,1 .* no LD pin"):
+    with pytest.raises(ServeRefusal, match=r"TL card ends at 4,1 .* no LD card pins"):
         serve(parse_nec5(_with(_unpinned(), LINES)), basis="razor-2p")
 
 
