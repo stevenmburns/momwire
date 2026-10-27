@@ -7,11 +7,13 @@
 // numpy, as the sinusoidal fill core records): a complex product is
 // `np_cmul` in the written operand order with a float promoted to (x, 0);
 // a complex quotient `np_cdiv`; `np.exp` of a complex is libm's cexp;
-// `einsum("ij,ij->i")` over three is (x0 y0 + x2 y2) + x1 y1; `.sum(-1)`
+// `einsum("ij,ij->i")` over three is (x0 y0 + x2 y2) + x1 y1 (contracted
+// on arm64, `MW_NUMPY_CONTRACTS`); `.sum(-1)`
 // over three (p0 + p1) + p2; the three-operand
 // complex einsum of `_pair_moments_two_rules_batch` accumulates its (q, r)
-// terms from zero, q outer and r inner, each term `(a b) c` with CPython's
-// unfused complex product (measured against numpy 2.5's einsum). No product
+// terms from zero, q outer and r inner, each term `(a b) c` with the
+// unfused complex product on x86-64 and the contracted one on arm64
+// (measured against numpy 2.5's einsum). No product
 // here depends on numpy's temporary elision, which not every interpreter
 // performs: the one that did is spelled out of it in Python. An
 // expression of Python scalars alone (`1j * k * eta`) is CPython's
@@ -31,6 +33,18 @@
 #include "_somm_remainder_core.h"
 #include "_sinusoidal_series_inline.h"  // `sin_minus_arg`
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
+#include "_fma_inline.h"
+#include "_libm_complex_inline.h"  // libm's cexp (and, from momwire#1607 B6b, `MW_NUMPY_CONTRACTS`)
+
+// Whether numpy's build contracts its plain C (fused on arm64, unfused on
+// x86-64); `_libm_complex_inline.h` defines it once momwire#1607 B6b is in.
+#ifndef MW_NUMPY_CONTRACTS
+#if defined(__aarch64__)
+#define MW_NUMPY_CONTRACTS 1
+#else
+#define MW_NUMPY_CONTRACTS 0
+#endif
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -92,10 +106,19 @@ cd py_div(cd a, cd b) {
     const double denom = b.real() * ratio + b.imag();
     return cd((a.real() * ratio + a.imag()) / denom, (a.imag() * ratio - a.real()) / denom);
 }
-// numpy's einsum inner product of complex operands (`sum_of_products`):
-// never fused
+// numpy's einsum inner product of complex operands (`sum_of_products`),
+// plain C, so its bits are numpy's build's (`MW_NUMPY_CONTRACTS`): unfused
+// on x86-64; on arm64 each part contracted, `a.r * b.r - a.i * b.i` into
+// fma(a.r, b.r, -(a.i b.i)) and `a.r * b.i + a.i * b.r` into
+// fma(a.r, b.i, a.i b.r) (measured on macOS 15 arm64, numpy 2.5.4: 12 of
+// 12 "pnq,nqr,Pnr->pPn" and 7 of 7 "ep,epP,eP->e" outputs, momwire#1718)
 inline cd e_mul(cd a, cd b) {
+#if MW_NUMPY_CONTRACTS
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
+#else
     return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+#endif
 }
 
 // numpy's NaN-propagating maximum, and `np.clip`
@@ -103,7 +126,23 @@ inline double npmax(double a, double b) { return (a != a) ? a : (b != b) ? b : (
 inline double npmin(double a, double b) { return (a != a) ? a : (b != b) ? b : (a <= b ? a : b); }
 
 inline double norm3(const double *v) { return std::sqrt((v[0] * v[0] + v[1] * v[1]) + v[2] * v[2]); }
-inline double edot3(const double *a, const double *b) { return (a[0] * b[0] + a[2] * b[2]) + a[1] * b[1]; }
+// `einsum("ij,ij->i")` over three: (x0 y0 + x2 y2) + x1 y1 on x86-64; on
+// arm64 fma(x2, y2, x0 y0) + x1 y1 (4000 of 4000 measured, momwire#1718)
+inline double edot3(const double *a, const double *b) {
+#if MW_NUMPY_CONTRACTS
+    return mw_fma::exact(a[2], b[2], a[0] * b[0]) + a[1] * b[1];
+#else
+    return (a[0] * b[0] + a[2] * b[2]) + a[1] * b[1];
+#endif
+}
+// `einsum("m,mjn->jn")`'s step: acc + a b, fused on arm64 (12 of 12)
+inline double e_acc(double acc, double a, double b) {
+#if MW_NUMPY_CONTRACTS
+    return mw_fma::exact(a, b, acc);
+#else
+    return acc + a * b;
+#endif
+}
 
 // --- constants (`_sinusoidal_mp`, `bspline`) ---------------------------------
 
@@ -423,7 +462,7 @@ void two_rules_batch(const Segs &o, std::size_t i0, const Segs &s, const std::ve
                 const double d0 = pos_i[3 * a] - pos_j[3 * b], d1 = pos_i[3 * a + 1] - pos_j[3 * b + 1],
                              d2 = pos_i[3 * a + 2] - pos_j[3 * b + 2];
                 const double R = std::sqrt(((d0 * d0 + d1 * d1) + d2 * d2) + a2[m]);
-                const cd e = std::exp(cm(mjk, cd(R, 0.0)));
+                const cd e = mw_libm_c::cexp(cm(mjk, cd(R, 0.0)));
                 cd g = cdr(e, four_pi * R);
                 if (ek.on) g = cm(g, ek_factor(R, rho, k, ek.has_b, ek.has_b ? ek.b[m] : 0.0));
                 G[a * qj + b] = g;
@@ -833,7 +872,7 @@ std::vector<double> taylor_shape_coefs(double k, const std::vector<double> &h) {
         for (int p = 0; p < 3; p++)
             for (int j = 0; j < D1; j++) {
                 double acc = 0.0;  // einsum("m,mjn->jn"): from zero, m in order
-                for (int m = 0; m < D1; m++) acc = acc + series[p][m] * T[m][j];
+                for (int m = 0; m < D1; m++) acc = e_acc(acc, series[p][m], T[m][j]);
                 out[(static_cast<std::size_t>(p) * D1 + static_cast<std::size_t>(j)) * n + s] = acc;
             }
     }
