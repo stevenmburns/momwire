@@ -73,7 +73,10 @@ void check_constructor(const sinusoidal::Front &fr, const nec4::SolverArgs &args
 
 // `_assemble_Z(geom, k)` on the mixed-potential route in free space: G in F
 // order, (n, n).
-std::vector<std::complex<double>> assemble_Z(const sinusoidal::Front &fr, const nec4::SolverArgs &args);
+// `np`: numpy's products (the remainder's grazing-pair scan), needed over a
+// Sommerfeld ground.
+std::vector<std::complex<double>> assemble_Z(const sinusoidal::Front &fr, const nec4::SolverArgs &args,
+                                             const nec5::NumpyLinalg *np = nullptr);
 
 // `compute_port_solution()` in free space.
 PortSolution port_solution(const sinusoidal::Front &fr, const nec4::SolverArgs &args,

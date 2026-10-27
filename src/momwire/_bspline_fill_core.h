@@ -165,6 +165,15 @@ void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::G
                       int64_t j, std::vector<int64_t> &o_pair, std::vector<double> &s_o, std::vector<double> &w_o,
                       std::vector<cdouble> &v);
 
+// `_quadrature.remainder_qp_pairs(nodes, sl, sr, gz, base, cap, c,
+// edge_tol)` over the `n` segments `sl` -> `sr` ((n, 3) row-major, the nodes
+// at `_gl01(base)`), symmetrised, dilated to touching neighbours and
+// reduced to each pair's largest order: (I, J, Q) sorted by I then J. The
+// Sinusoidal-Galerkin route's grazing pairs too (momwire#1718 S5b).
+void raised_pairs_on(const std::vector<double> &sl, const std::vector<double> &sr, int64_t n, double gz, int64_t base,
+                     double c, double edge_tol, const nec5::NumpyLinalg &np, std::vector<int64_t> &I,
+                     std::vector<int64_t> &J, std::vector<int64_t> &Q);
+
 // `_remainder_qp_pairs(seg_l, seg_r, gz)` on the graded route: (I, J, Q)
 // of the segment pairs raised above `base`, sorted by I then J.
 void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const nec5::NumpyLinalg &np,

@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 #include "_accel_somm_proj_py.h"
 #include "_somm_pairs_core.h"
+#include "_somm_pairs_owned_core.h"
 
 // momwire#1201: the Sommerfeld remainder at LISTED (observer, source) pairs.
 //
@@ -59,23 +60,13 @@ static py::array_t<std::complex<double>> remainder_field_proj_owned(
     somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> out(S);
-    auto out_m = out.mutable_unchecked<1>();
-
+    std::complex<double> *outp = out.mutable_data();
+    const double *obp = obs.data(), *tobp = t_obs.data(), *sbp = src.data(), *tsbp = t_src.data();
+    const int64_t *ownp = owner.data();
     py::gil_scoped_release release;
-    MW_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(static)
-    for (py::ssize_t n = 0; n < S; ++n) {
-        MW_CANCEL_POLL();
-        const py::ssize_t m = own(n);
-        double ux, uy, th, tz;
-        somm_proj::tangent_decomp(tsb(n, 0), tsb(n, 1), tsb(n, 2), ux, uy, th,
-                                  tz);
-        out_m(n) = somm_proj::proj_one(G, ground_z, k, ob(m, 0), ob(m, 1),
-                                       ob(m, 2), tob(m, 0), tob(m, 1), tob(m, 2),
-                                       sb(n, 0), sb(n, 1), sb(n, 2), ux, uy, th,
-                                       tz);
-    }
-    MW_THROW_IF_ABORTED();
+    // the kernel is the core's (momwire#1718 S5b), so the C++ route's
+    // graded correction calls the same text
+    somm_core::remainder_field_proj_owned(G, ground_z, k, obp, tobp, sbp, tsbp, ownp, S, outp, cancel_flag);
     return out;
 }
 
