@@ -21,17 +21,18 @@ for each part of Z (R and X separately)
   junction physics, and it is radius-independent here: +0.04 ohm X at 20 and
   40 segments per 3 m half, -0.29 at 80 and -0.85 at 160, R under 0.005.
 * S, the STEP: NEC-4.2's own step response, Z_nec42(step) - Z_nec42(twin),
-  15 to 48 ohm of X on the ladder. 2 % of it is what the junction model may
-  leave unexplained. Measured with the feed away from the step: at most
-  1.5 % (0.10 to 0.57 ohm of X after the floor), where NEC-2's log rule
-  misses 45 to 75 % of it.
+  12 to 75 ohm of X on the ladder. A share of it is what the junction model
+  may leave unexplained: 0.2 % on the ladder (both feeds), 2 % on the Yagis.
 
-A feed on the segment BESIDE the step is reported separately and not held to
-this: the residual there grows with the mesh (-0.2 ohm at 1:2 x1 to -4.1 ohm
-at 1:10 x8) and is not explained -- the first of the two open cases, guarded
-only against regression. The second is an equal-radius T junction (+3.0 to
-+10.6 ohm, growing with the mesh), which NEC-4.2 solves (a symmetric Y it
-does not need to: it solves to equal factors).
+momwire#1644 shipped with the feed away from the step at most 1.5 % of S
+past the floor and two cases open: a feed on the segment BESIDE the step
+(-0.2 to -4.1 ohm of X, growing with the mesh) and an equal-radius T (+3.0
+to +10.6 ohm). momwire#1668 found both to be the members' charge RATIO
+alone and took NEC-4.2's readings of the junction solve (`_nec4_junction`'s
+docstring); since then every ladder rung, both feeds, is within 0.01 % of S
+of its floor, and the T within the uniform-wire floor of its mesh.
+`tests/test_nec4_junction_1668.py` holds the solve's three new readings to
+their own NEC-4.2 decks.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ def _forced_nec4(name, monkeypatch):
         return _momwire(name)
 
 
-def _within(name, twin, monkeypatch, share=0.02):
+def _within(name, twin, monkeypatch, share):
     z = _momwire(name)
     ref = _nec42(name)
     floor = _forced_nec4(twin, monkeypatch) - _nec42(twin)
@@ -132,10 +133,22 @@ def _quad(f, lo, hi, z):
 
 
 @pytest.mark.parametrize(
-    "b, z, d",
-    [(1e-3, 0.075, 0.15), (1e-3, -0.075, 0.15), (0.02, 0.009, 0.019), (0.1, 0.05, 0.1)],
+    "b, z, d, rel",
+    [
+        (1e-3, 0.075, 0.15, 1e-10),
+        (1e-3, -0.075, 0.15, 1e-10),
+        (0.02, 0.009, 0.019, 1e-10),
+        (0.1, 0.05, 0.1, 1e-10),
+        # the third match point, 2 Delta out (#1668): the semi-infinite
+        # constant's finite part then spans two segments with the remainder's
+        # kink at its far end, and the fixed rule's error grows to ~8e-9 absolute
+        # (mpmath agrees with the adaptive reference here)
+        (1e-3, 0.3, 0.15, 5e-9),
+        (1e-3, -0.3, 0.15, 5e-9),
+        (0.05, 0.21, 0.1, 5e-9),
+    ],
 )
-def test_the_solve_integrates_its_elements(b, z, d):
+def test_the_solve_integrates_its_elements(b, z, d, rel):
     """Appendix A's reductions against adaptive quadrature of the kernel's
     real part, cos(kR)/R."""
     k = K14
@@ -145,7 +158,13 @@ def test_the_solve_integrates_its_elements(b, z, d):
         return math.cos(k * r) / r
 
     tri = _quad(lambda s: (d - s) * g(s), 0.0, d, z)
-    assert nj._triangle(k, b, z, d) == pytest.approx(tri, rel=1e-10)
+    assert nj._triangle(k, b, z, d) == pytest.approx(tri, rel=rel)
+    # the n = 3 expansion's full triangle, 0 at the node, d at d, 0 at 2d
+    full = _quad(lambda s: s * g(s), 0.0, d, z) + _quad(
+        lambda s: (2 * d - s) * g(s), d, 2 * d, z
+    )
+    got = nj._full_triangle(k, b, z, d, nj._triangle(k, b, z, d))
+    assert got == pytest.approx(full, rel=rel)
     # the semi-infinite constant: the finite part plus -(pi/2) Y0(k b)
     from scipy.special import y0
 
@@ -153,7 +172,7 @@ def test_the_solve_integrates_its_elements(b, z, d):
         lambda u: math.cos(k * math.hypot(b, u)) / math.hypot(b, u), 0, abs(z), 0
     )
     semi = -0.5 * math.pi * y0(k * b) + math.copysign(fin, z)
-    assert nj._semi_infinite(k, b, z) == pytest.approx(semi, rel=1e-10)
+    assert nj._semi_infinite(k, b, z) == pytest.approx(semi, rel=rel)
     assert nj._bessel_y0(k * b) == pytest.approx(y0(k * b), rel=1e-13)
 
 
@@ -477,46 +496,51 @@ _MESH = (20, 40, 80, 160)
 def test_the_ladder_tracks_nec42_with_the_feed_away_from_the_step(
     step, twin, n, monkeypatch
 ):
-    _within(f"L_step{step}_away_n{n}", f"L_{twin}_away_n{n}", monkeypatch)
+    _within(f"L_step{step}_away_n{n}", f"L_{twin}_away_n{n}", monkeypatch, 0.002)
 
 
 @pytest.mark.parametrize("n", _MESH)
 @pytest.mark.parametrize("step, twin", _RATIOS, ids=["1:2", "1:5", "1:10"])
-def test_a_feed_beside_the_step_is_open_but_far_better_than_the_log_rule(step, twin, n):
-    """Open case 1 (not explained, growing with the mesh): guarded against
-    regression only, at 5 ohm X and 0.15 ohm R (the log rule is off by 19
-    to 196 ohm of X on these decks)."""
-    name = f"L_step{step}_step_n{n}"
-    d = _momwire(name) - _nec42(name)
-    assert abs(d.imag) <= 5.0 and abs(d.real) <= 0.15
+def test_the_ladder_tracks_nec42_with_the_feed_beside_the_step(
+    step, twin, n, monkeypatch
+):
+    """#1644's open case 1, closed by #1668: the n = 3 solve. Before it the
+    residual grew with the mesh, -0.2 ohm of X at 1:2 x1 to -4.1 at 1:10 x8
+    (the log rule: 19 to 196); now each rung is its floor."""
+    _within(f"L_step{step}_step_n{n}", f"L_{twin}_step_n{n}", monkeypatch, 0.002)
 
 
 @pytest.mark.parametrize("mult", (1, 2, 4, 8))
 def test_a_tapered_yagi_element_tracks_nec42(mult, monkeypatch):
-    _within(f"Y_elem_x{mult}", f"Yu_elem_x{mult}", monkeypatch)
+    _within(f"Y_elem_x{mult}", f"Yu_elem_x{mult}", monkeypatch, 0.02)
 
 
 @pytest.mark.parametrize("mult", (1, 2, 4, 8))
 def test_a_tapered_three_element_yagi_tracks_nec42(mult, monkeypatch):
-    _within(f"Y3_x{mult}", f"Yu3_x{mult}", monkeypatch)
+    _within(f"Y3_x{mult}", f"Yu3_x{mult}", monkeypatch, 0.02)
 
 
 @pytest.mark.parametrize(
     "name", ["J_Y_n10", "J_Y_n20", "J_Y_n40", "J_L_n21", "J_L_n41", "J_L_n81"]
 )
 def test_the_y_and_the_stepped_l_track_nec42(name):
-    """E4b / E4c: within half an ohm of X and 0.05 of R."""
+    """E4b / E4c: within 0.35 ohm of X and 0.005 of R (measured: the Y
+    +0.03, the L +0.04 at 21 and 41 segments and -0.30 at 81, its floor)."""
     d = _momwire(name) - _nec42(name)
-    assert abs(d.imag) <= 0.5 and abs(d.real) <= 0.05
+    assert abs(d.imag) <= 0.35 and abs(d.real) <= 0.005
 
 
 @pytest.mark.parametrize("n", (10, 20, 40, 80, 160))
-def test_an_equal_radius_t_is_open_but_nearer_than_the_log_rule(n):
-    """Open case 2: NEC-4.2 solves an equal-radius T, and this lane's solve
-    lands +3.0 to +10.6 ohm of X from it, growing with the mesh (the log
-    rule lands -15 to -19). Guarded against regression only."""
+def test_an_equal_radius_t_tracks_nec42(n):
+    """#1644's open case 2, closed by #1668: a node of three members reads
+    each member's density at its own segment centre. Before it the T landed
+    +3.0 to +10.6 ohm of X from NEC-4.2, growing with the mesh (the log rule
+    -15 to -19); now -0.003 to +0.03 at 10 to 40 segments per arm and -0.26
+    at 80 and 160, the short-segment floor the uniform decks here carry at
+    those lengths (-0.2 to -0.6 ohm)."""
     d = _momwire(f"J_T_n{n}") - _nec42(f"J_T_n{n}")
-    assert 2.5 <= d.imag <= 11.0 and abs(d.real) <= 0.03
+    bound = 0.1 if n <= 40 else 0.35
+    assert abs(d.imag) <= bound and abs(d.real) <= 0.005
 
 
 @pytest.mark.parametrize(
@@ -533,9 +557,10 @@ def test_an_equal_radius_t_is_open_but_nearer_than_the_log_rule(n):
 def test_steps_over_ground_track_nec42(name):
     """A stepped horizontal dipole over the perfect and the Sommerfeld
     ground, and a grounded stepped vertical over the perfect one: within
-    0.6 ohm of X and 0.05 of R (measured at most 0.47 and 0.035)."""
+    0.1 ohm of X and 0.01 of R (measured at most 0.031 and 0.002; before
+    #1668, 0.47 and 0.035)."""
     d = _momwire(name) - _nec42(name)
-    assert abs(d.imag) <= 0.6 and abs(d.real) <= 0.05
+    assert abs(d.imag) <= 0.1 and abs(d.real) <= 0.01
 
 
 @pytest.mark.parametrize(
@@ -560,7 +585,7 @@ def test_a_grounded_stepped_vertical_over_sommerfeld_tracks_nec42(n, monkeypatch
     """A wire end in contact with the GN 2 ground, a 10 mm / 2 mm step above
     it: the ladder's tolerance, against its uniform 10 mm twin. (The oracle is
     `nec42-release`: main-pre misreads a wire end on a Sommerfeld ground.)"""
-    _within(f"G_vert_somm_n{n}", f"G_vuni10_somm_n{n}", monkeypatch)
+    _within(f"G_vert_somm_n{n}", f"G_vuni10_somm_n{n}", monkeypatch, 0.02)
 
 
 @pytest.mark.parametrize(
