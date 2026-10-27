@@ -1195,20 +1195,126 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     return G;
 }
 
-PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const sinusoidal::FillLinalg &la) {
+namespace {
+
+// SinusoidalGalerkinSolver's constructor over `node_gaps=`
+// (`_wire_spec.normalize_node_gaps`, then the entries as node ports and
+// `_validate_node_ports` / `_check_shared_junction`): per gap, (junction,
+// side_a). ValueError in the constructor's words.
+struct NodePort {
+    std::size_t junction = 0;
+    std::vector<std::size_t> side_a;
+};
+
+std::vector<NodePort> node_ports_of(const Front &fr, const std::vector<NodeGap> &gaps) {
+    std::vector<NodePort> out;
+    const auto &J = fr.junctions;
+    const auto end_name = [](bool start) { return std::string(start ? "start" : "end"); };
+    std::vector<std::pair<long long, bool>> seen_members;
+    std::vector<std::size_t> seen_junctions;
+    for (std::size_t i = 0; i < gaps.size(); i++) {
+        const NodeGap &gp = gaps[i];
+        const std::string at = "node_gaps[" + std::to_string(i) + "]: ";
+        if (gp.wire < 0 || gp.wire >= static_cast<long long>(fr.radius_per_wire.size()))
+            throw SolverRefusal("ValueError", at + "wire_index " + std::to_string(gp.wire) + " out of range [0, " +
+                                                  std::to_string(fr.radius_per_wire.size()) + ")");
+        long long jfound = -1;
+        std::size_t mfound = 0;
+        for (std::size_t j = 0; j < J.size() && jfound < 0; j++)
+            for (std::size_t m = 0; m < J[j].size(); m++)
+                if (J[j][m].first == gp.wire && J[j][m].second == gp.start) {
+                    jfound = static_cast<long long>(j);
+                    mfound = m;
+                    break;
+                }
+        if (jfound < 0)
+            throw SolverRefusal("ValueError", at + "the " + end_name(gp.start) + " of wire " +
+                                                  std::to_string(gp.wire) +
+                                                  " is not a member of any junction group \xe2\x80\x94 a series "
+                                                  "node gap lives at a junction; for a feed inside a wire use feeds=");
+        const std::size_t j = static_cast<std::size_t>(jfound);
+        if (J[j].size() < 2) decline("a node gap at a one-member junction");
+        for (const auto &sm : seen_members)
+            if (sm.first == gp.wire && sm.second == gp.start)
+                throw SolverRefusal("ValueError", at + "the " + end_name(gp.start) + " of wire " +
+                                                      std::to_string(gp.wire) + " is listed twice");
+        if (J[j].size() == 2 && std::find(seen_junctions.begin(), seen_junctions.end(), j) != seen_junctions.end())
+            decline("a second node gap at a two-wire junction");
+        seen_members.push_back({gp.wire, gp.start});
+        seen_junctions.push_back(j);
+        NodePort np;
+        np.junction = j;
+        for (std::size_t m = 0; m < J[j].size(); m++)
+            if (m != mfound) np.side_a.push_back(m);
+        out.push_back(np);
+    }
+    // `_check_shared_junction`: a second port at one junction only as another
+    // branch cut (the seam's single-member spelling always cuts one branch)
+    std::vector<std::vector<std::size_t>> branches(J.size());
+    for (const NodePort &np : out) {
+        const std::size_t K = J[np.junction].size();
+        std::size_t branch = 0;  // side_a is every member but one: that one
+        for (std::size_t m = 0; m < K; m++)
+            if (std::find(np.side_a.begin(), np.side_a.end(), m) == np.side_a.end()) branch = m;
+        auto &b = branches[np.junction];
+        if (!b.empty() && (K == 2 || std::find(b.begin(), b.end(), branch) != b.end()))
+            decline("a node port listed twice at one junction");
+        b.push_back(branch);
+    }
+    return out;
+}
+
+}  // namespace
+
+void check_node_gaps(const Front &fr, const std::vector<NodeGap> &node_gaps) { (void)node_ports_of(fr, node_gaps); }
+
+PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const sinusoidal::FillLinalg &la,
+                           const std::vector<NodeGap> &node_gaps) {
     if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
     check_constructor(fr, args);
+    const std::vector<NodePort> nports = node_ports_of(fr, node_gaps);
+    if (!nports.empty() && fr.dedup.active) decline("a node gap on a deck with a wire listed twice");
+    if (!nports.empty() && args.ground.kind != nec4::Ground::none)
+        for (const NodePort &np : nports)
+            if (std::binary_search(fr.geometry.grounded_junctions.begin(), fr.geometry.grounded_junctions.end(),
+                                   static_cast<long long>(np.junction)))
+                throw SolverRefusal("ValueError",
+                                    "junction " + std::to_string(np.junction) +
+                                        " is both grounded and a node port \xe2\x80\x94 a node in the ground "
+                                        "plane carries current into its own image (#151), so the members' "
+                                        "currents do not close on each other and there is no through-current "
+                                        "to drive");
     PortSolution ps;
     ps.G = sinusoidal_galerkin::assemble_Z(fr, args, &la.np);
     const Geometry &g = fr.geometry;
     const SegView &v = fr.basis;
-    const std::size_t N = static_cast<std::size_t>(g.n_segs), P = g.feed_segs.size();
+    const std::size_t N = static_cast<std::size_t>(g.n_segs), NF = g.feed_segs.size(), P = NF + nports.size();
     ps.n = static_cast<long long>(N);
     ps.n_ports = static_cast<long long>(P);
     const double k = fr.k;
     // `_drive_columns`: U (N, P), C order as numpy allocates it
     std::vector<cd> U(N * P, cd(0.0, 0.0));
-    for (std::size_t j = 0; j < P; j++) {
+    // node port p: U[:, NF + p] = -(`_node_cut_vectors`), each member's
+    // current into the node at xi = sigma_m h_m / 2, `np.add.at` order
+    for (std::size_t p = 0; p < nports.size(); p++) {
+        std::vector<cd> cut(N, cd(0.0, 0.0));
+        for (std::size_t mi : nports[p].side_a) {
+            const auto &mem = fr.junctions[nports[p].junction][mi];
+            const std::size_t w = static_cast<std::size_t>(mem.first);
+            const long long m = mem.second ? g.wire_first[w] : g.wire_last[w];
+            const double sgn = mem.second ? -1.0 : 1.0;
+            const double half = 0.5 * g.seg_h[static_cast<std::size_t>(m)];
+            for (ll e = v.starts[static_cast<std::size_t>(m)]; e < v.starts[static_cast<std::size_t>(m) + 1]; e++) {
+                const std::size_t ez = static_cast<std::size_t>(e);
+                const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
+                const cd val = basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, half * sgn);
+                cd &slot = cut[static_cast<std::size_t>(v.jbasis[ez])];
+                slot = cadd(slot, cm(cd(sgn, 0.0), val));
+            }
+        }
+        for (std::size_t i = 0; i < N; i++) U[i * P + NF + p] = cneg(cut[i]);
+    }
+    for (std::size_t j = 0; j < NF; j++) {
         const std::size_t f = static_cast<std::size_t>(g.feed_segs[j]);
         const double xi = g.feed_xi[j];
         for (ll e = v.starts[f]; e < v.starts[f + 1]; e++) {
@@ -1245,11 +1351,22 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         la.lu.getrs(&trans, &n, &nrhs, lu.data(), &n, ipiv.data(), ps.coeffs.data(), &n, &info);
         if (info != 0) decline("getrs failed");
     }
-    // Y[:, j] = _port_currents(alphas[:, j], ...)
+    // Y[:, j] = _port_currents(alphas[:, j], ...): a gap feed's segment
+    // current at `feed_xi`; a node port's `-(U[:, port] @ alpha)`, numpy's
+    // vector-vector matmul (`cblas_zdotu_sub` over U's strided column)
     ps.y.assign(P * P, cd(0.0, 0.0));
+    if (!nports.empty() && la.np.zdotu_sub == nullptr) decline("no zdotu for the node ports' readout");
     for (std::size_t j = 0; j < P; j++)
-        for (std::size_t i = 0; i < P; i++)
-            ps.y[i * P + j] = feed_segment_current(v, ps.coeffs, j * N, g.feed_segs[i], k, g.feed_xi[i]);
+        for (std::size_t i = 0; i < P; i++) {
+            if (i < NF) {
+                ps.y[i * P + j] = feed_segment_current(v, ps.coeffs, j * N, g.feed_segs[i], k, g.feed_xi[i]);
+            } else {
+                cd dot(0.0, 0.0);
+                la.np.zdotu_sub(static_cast<nec5::np_int>(N), &U[i], static_cast<nec5::np_int>(P),
+                                &ps.coeffs[j * N], 1, &dot);
+                ps.y[i * P + j] = cneg(dot);
+            }
+        }
     return ps;
 }
 

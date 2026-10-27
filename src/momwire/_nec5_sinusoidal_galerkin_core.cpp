@@ -181,6 +181,13 @@ void SinusoidalGalerkinSeamEngine::solver_arguments(const Deck &d, Prepared &p, 
         if (below > 0 && below == static_cast<long long>(n)) ek = false;
     }
     a.extended_kernel = ek;
+    for (long long g : mesh.gaps) {
+        const SeamSite &site = mesh.sites[static_cast<std::size_t>(g)];
+        sinusoidal_galerkin::NodeGap gp;
+        gp.wire = site.piece;
+        gp.start = site.end == SeamSite::at_start;
+        part->node_gaps.push_back(gp);
+    }
     p.engine = std::move(part);
 }
 
@@ -194,10 +201,10 @@ SeamEngine::Built SinusoidalGalerkinSeamEngine::build(Prepared &p) const {
         b.unsolved = true;
         return b;
     };
-    if (!p.mesh.gaps.empty()) return decline("sinusoidal-galerkin-node-gaps (momwire#1718 S9)");
     try {
         auto fr = std::make_shared<sinusoidal::Front>(sinusoidal::front(part.args, true));
         sinusoidal_galerkin::check_constructor(*fr, fr->args);
+        sinusoidal_galerkin::check_node_gaps(*fr, part.node_gaps);
         part.front = std::move(fr);
     } catch (const sinusoidal::FrontError &e) {
         b.kind = Built::raised;  // the constructor's ValueError escapes the seam
@@ -227,7 +234,7 @@ Solved SinusoidalGalerkinPrintoutEngine::solve(const Prepared &p, const NumpyLin
     la.lu = lapack_;
     sinusoidal_galerkin::PortSolution ps;
     try {
-        ps = sinusoidal_galerkin::port_solution(fr, fr.args, la);
+        ps = sinusoidal_galerkin::port_solution(fr, fr.args, la, sg_part(p).node_gaps);
     } catch (const sinusoidal_galerkin::SolverRefusal &e) {
         throw PrintoutRaise{e.kind, e.message};
     } catch (const nec4::Declined &e) {

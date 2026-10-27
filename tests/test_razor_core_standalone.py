@@ -2270,8 +2270,8 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
     the inherited readouts in the caller's wire numbering, the run half and
     the writer. Every deck it prints is `_shell.render(text,
     basis="sinusoidal-galerkin")`'s, byte for byte, with Python's Y,
-    coefficients and port vectors. It declines, by name, a node gap (S9), a
-    wire end on the plane (S7) and a buried wire (S11)."""
+    coefficients and port vectors, node gaps (S9) included. It declines, by
+    name, a wire end on the plane (S7) and a buried wire (S11)."""
     decks = [
         p
         for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
@@ -2281,5 +2281,5 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
         driver, decks, tmp_path, basis="sinusoidal-galerkin"
     )
     assert counts.get("served", 0) >= 350, counts
-    allowed = ("S7)", "S9)", "B6)")
+    allowed = ("S7)", "B6)")
     assert all(r.endswith(allowed) for r in reasons), reasons

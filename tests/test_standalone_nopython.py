@@ -46,9 +46,6 @@ REFUSES = FIXTURES / "razor_printout_3a" / "chain_then_refusal.nec"
 RAISES = FIXTURES / "razor_printout_3a" / "echo_raises_inf_field.nec"
 BURIED = FIXTURES / "razor_printout_somm" / "gn0_buried_radial.nec"
 EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
-if BASIS == "sinusoidal-galerkin":
-    # momwire#1718 S10: the Galerkin build serves no node gap yet (S9)
-    DIPOLE = FIXTURES / "razor_printout_ld" / "ld_fixed_reactance_two_sources.nec"
 DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)
 # What a build does not serve yet, by deck name: the Galerkin build's
 # buried wires (S11), momwire#1718.

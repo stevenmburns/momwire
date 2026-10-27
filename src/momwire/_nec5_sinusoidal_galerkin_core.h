@@ -28,9 +28,12 @@
 //     `current_slopes`, the walk's sampler `currents_at_knots(coeffs, s)` and
 //     `wire_loss_power`.
 //
-// DECLINED, never misread: a node gap (the junction-port solve, S9), and
-// everything the Galerkin fill declines (a wire end on the plane before S7,
-// a buried or crossing deck before S11).
+// A node gap (momwire#1718 S9) is `node_gaps=`: a node port on the
+// mixed-potential fill, its drive the named member's cut current and its
+// readout the exact dual.
+//
+// DECLINED, never misread: everything the Galerkin fill declines (a wire
+// end on the plane before S7, a buried or crossing deck before S11).
 #pragma once
 
 #include "_nec5_printout_core.h"
@@ -48,6 +51,7 @@ namespace nec5 {
 
 struct SinusoidalGalerkinPrepared final : EnginePrepared {
     nec4::SolverArgs args;                      // `construct_solver`'s keyword arguments
+    std::vector<sinusoidal_galerkin::NodeGap> node_gaps;  // `node_gaps=` (passed when any)
     std::shared_ptr<sinusoidal::Front> front;  // set by `build`; reset on release
 };
 
