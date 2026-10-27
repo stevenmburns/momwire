@@ -65,6 +65,10 @@ CORE_SOURCES = (
     # The sinusoidal basis' point-matched field tensors (momwire#1607 B1):
     # the extension TU's text over `_mw_nd.h`'s arrays.
     "_sinusoidal_core.cpp",
+    # The Sinusoidal-Galerkin far fills (momwire#1718 S1): the extension TU's
+    # text over `_mw_nd.h`'s arrays, and the complex fill's sweep TU it calls.
+    "_sinusoidal_galerkin_core.cpp",
+    "_accel_sinusoidal_cplx.cpp",
     # The NEC-4 dialect's junction kernels and solve (momwire#1644), which
     # the front half and the fill call.
     "_sinusoidal_nec4_core.cpp",
@@ -231,6 +235,7 @@ def driver(accel, tmp_path_factory):
         "exact_kernel_coaxial_driver",
         "bspline_core_driver",
         "sinusoidal_core_driver",
+        "sinusoidal_galerkin_far_driver",
         "sinusoidal_front_driver",
         "sinusoidal_fill_driver",
         "sinusoidal_galerkin_fill_driver",
@@ -283,6 +288,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     assert "_bspline_core.h" in seen, "the B-spline kernels' core was not built"
     assert "_sinusoidal_core.h" in seen, "the sinusoidal kernels' core was not built"
+    assert "_sinusoidal_galerkin_core.h" in seen, "the SG far fill's core was not built"
     assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
     assert "_sinusoidal_fill_core.h" in seen, "the sinusoidal fill was not built"
     assert "_sinusoidal_galerkin_fill_core.h" in seen, "the SG fill was not built"
@@ -754,6 +760,183 @@ def test_the_sinusoidal_kernels_in_cxx_alone_are_the_extensions(
             got = (tmp_path / f"c{c}_{t}.bin").read_bytes()
             want = np.ascontiguousarray(out[t]).tobytes()
             assert got == want, (name, c, t)
+
+
+_SG_FAR_FILLS = (
+    "sinusoidal_galerkin_far_fill",
+    "sinusoidal_galerkin_far_fill_ek",
+    "sinusoidal_galerkin_far_fill_cplx",
+)
+
+
+def _sg_spec(value, tmp_path, name: str) -> str:
+    """One recorded argument in `sinusoidal_galerkin_far_driver`'s syntax."""
+    import struct
+
+    def bits(x: float) -> str:
+        return struct.pack(">d", float(x)).hex()
+
+    if isinstance(value, np.ndarray):
+        kind = {
+            np.dtype(np.float64): "A",
+            np.dtype(np.int64): "L",
+            np.dtype(np.complex128): "W",
+        }[value.dtype]
+        np.ascontiguousarray(value).tofile(tmp_path / name)
+        return f"{kind}:{name}:" + "x".join(str(d) for d in value.shape)
+    if isinstance(value, (bool, np.bool_)):
+        return f"B:{int(value)}"
+    if isinstance(value, complex):
+        return f"Z:{bits(value.real)}:{bits(value.imag)}"
+    if isinstance(value, float):
+        return f"D:{bits(value)}"
+    raise TypeError(f"no driver spelling for {type(value).__name__}")
+
+
+def test_the_sg_far_fills_in_cxx_alone_are_the_extensions(
+    driver, tmp_path, monkeypatch
+):
+    """momwire#1718 S1: the Sinusoidal-Galerkin far fills, built from the
+    core TUs alone (`sinusoidal_galerkin_far_driver`, the default host: memory
+    from `new`, no GIL), return the extension's bytes on every call the
+    direct fill's real solves make: free space with the staged real body and
+    with the reference one, the extended kernel (`_ek`), a PEC image folded
+    onto the free-space block (`out`, scale -1, both kernels), the
+    reflection-coefficient and Sommerfeld grounds' plain blocks, and a buried
+    wire at a complex wavenumber (`_cplx`). On top of those, every recorded
+    call is replayed through the extension once more with a general complex
+    fold scale (and the complex fill's reference body), so the fold's complex
+    arm and `reference=True` on `_cplx` are held too."""
+    import warnings
+
+    import momwire._accel as _accel
+    from momwire import sinusoidal_galerkin as sg
+
+    if not (sg._HAVE_GALERKIN_FAR_FILL_EK and sg._HAVE_GALERKIN_FAR_FILL_CPLX):
+        pytest.skip("no compiled Galerkin far fills in this build")
+    acc = _accel.acc
+    real = {name: getattr(acc, name) for name in _SG_FAR_FILLS}
+    calls = []
+
+    def spy(name):
+        def call(*args, **kw):
+            # Copies, taken at the call: a fold writes into `out`, and the
+            # solver works in place on what it is handed back.
+            kept = tuple(
+                np.array(a, copy=True) if isinstance(a, np.ndarray) else a for a in args
+            )
+            out0 = kw.get("out")
+            out0 = None if out0 is None else tuple(np.array(o, copy=True) for o in out0)
+            res = real[name](*args, **kw)
+            calls.append(
+                (
+                    name,
+                    kept,
+                    out0,
+                    kw.get("scale", 1 + 0j),
+                    bool(kw.get("reference", False)),
+                    tuple(np.array(o, copy=True) for o in res),
+                )
+            )
+            return res
+
+        return call
+
+    for name in _SG_FAR_FILLS:
+        monkeypatch.setattr(acc, name, spy(name))
+    c0 = 299792458.0
+    wl = c0 / 7e6 / 2.5
+    dipole = [np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 2.0)])]
+    raised = [np.array([(-2.0, 0.0, 3.0), (2.0, 0.0, 3.5)])]
+    buried = [np.array([(-2.0, 0.0, -0.5), (2.0, 0.0, -0.5)])]
+    soil = dict(ground_z=0.0, ground_eps=(13.0, 0.005))
+    somm = {**soil, "ground_model": "sommerfeld"}
+    cases = [
+        (dipole, {}, True),
+        (dipole, {}, False),
+        (dipole, {"extended_kernel": True}, True),
+        (raised, {"ground_z": 0.0}, True),
+        (raised, {"ground_z": 0.0, "extended_kernel": True}, True),
+        (raised, soil, True),
+        (raised, somm, True),
+        (buried, somm, True),
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for wires, kw, staged in cases:
+            monkeypatch.setattr(sg, "_SG_REAL_STAGED", staged)
+            sg.SinusoidalGalerkinSolver(
+                wires=wires,
+                n_per_edge_per_wire=[[15]],
+                feeds=[(0, 2.0, 1.0)],
+                wavelength=wl,
+                wire_radius=1e-3,
+                fill="direct",
+                **kw,
+            ).compute_port_solution()
+    monkeypatch.undo()
+    seen = {(name, out0 is not None, ref) for name, _a, out0, _s, ref, _o in calls}
+    for want in (
+        ("sinusoidal_galerkin_far_fill", False, False),
+        ("sinusoidal_galerkin_far_fill", False, True),
+        ("sinusoidal_galerkin_far_fill", True, False),
+        ("sinusoidal_galerkin_far_fill_ek", False, False),
+        ("sinusoidal_galerkin_far_fill_ek", True, False),
+        ("sinusoidal_galerkin_far_fill_cplx", False, False),
+    ):
+        assert want in seen, (want, seen)
+    # The general complex fold and the complex fill's reference body, through
+    # the extension, on the recorded arguments.
+    rng = np.random.default_rng(1718)
+    extra = []
+    for name, args, _out0, _scale, _ref, out in calls:
+        dst = tuple(
+            rng.standard_normal(o.shape) + 1j * rng.standard_normal(o.shape)
+            for o in out
+        )
+        kw = {"out": tuple(d.copy() for d in dst), "scale": 0.3 - 0.7j}
+        if name == "sinusoidal_galerkin_far_fill_cplx":
+            kw["reference"] = True
+        res = real[name](*args, **kw)
+        extra.append((name, args, dst, kw["scale"], kw.get("reference", False), res))
+    calls += extra
+    lines = []
+    for c, (name, args, out0, scale, ref, _out) in enumerate(calls):
+        specs = []
+        for j, value in enumerate(args):
+            if (
+                j == len(args) - 1
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
+                specs.append("U:0")  # the cancel flag: no cancellation in the replay
+            else:
+                specs.append(_sg_spec(value, tmp_path, f"c{c}_a{j}.bin"))
+        if out0 is None:
+            specs.append("N")
+        else:
+            files = []
+            for t, o in enumerate(out0):
+                np.ascontiguousarray(o).tofile(tmp_path / f"c{c}_f{t}.bin")
+                files.append(f"c{c}_f{t}.bin")
+            shape = "x".join(str(d) for d in out0[0].shape)
+            specs.append("F:" + ":".join(files) + ":" + shape)
+            specs.append(_sg_spec(complex(scale), tmp_path, ""))
+        if name != "sinusoidal_galerkin_far_fill_ek":
+            specs.append(f"B:{int(ref)}")
+        lines.append(f"{name} c{c} " + " ".join(specs))
+    (tmp_path / "calls.txt").write_text("\n".join(lines) + "\n")
+    run = subprocess.run(
+        [str(driver[0]["sinusoidal_galerkin_far_driver"]), str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    for c, (name, _args, out0, _s, ref, out) in enumerate(calls):
+        for t in range(3):
+            got = (tmp_path / f"c{c}_{t}.bin").read_bytes()
+            want = np.ascontiguousarray(out[t]).tobytes()
+            assert got == want, (name, c, t, out0 is not None, ref)
 
 
 @pytest.mark.parametrize("prefix", ["", "ek_"], ids=["reduced", "extended_kernel"])
