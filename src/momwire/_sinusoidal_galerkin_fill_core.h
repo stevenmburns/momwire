@@ -39,8 +39,10 @@
 // the front's own refusals carry SinusoidalGalerkinSolver's name
 // (`sinusoidal::front(args, galerkin=true)`).
 //
-// DECLINED (`nec4::Declined`), never misread: a Sommerfeld ground (S5b), an
-// insulated wire, a wire end on a ground plane (S7), a buried or
+// A wire end on a ground plane takes the direct-field fill
+// (`_sinusoidal_galerkin_direct_core.h`, momwire#1718 S7).
+//
+// DECLINED (`nec4::Declined`), never misread: an insulated wire, a buried or
 // plane-crossing structure (S11), junction or node ports (S9).
 #pragma once
 

@@ -24,6 +24,8 @@
 
 #include "_sinusoidal_galerkin_fill_core.h"
 
+#include "_sinusoidal_galerkin_direct_core.h"
+
 #include "_bspline_core.h"
 #include "_bspline_fill_core.h"  // the graded remainder pairs (bs2's)
 #include "_somm_grid_core.h"
@@ -1096,9 +1098,15 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     const bool finite = args.ground.kind == nec4::Ground::finite;  // GN 2 / GN 3: Sommerfeld
     if (args.ground.kind != nec4::Ground::none && !pec && !finite)
         decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
-    const Geometry &g = fr.geometry;
-    for (std::size_t i = 0; i < g.ground_minus.size(); i++)
-        if (g.ground_minus[i] || g.ground_plus[i]) decline("a wire end on the ground plane (momwire#1718 S7)");
+    // a wire end on the ground plane: the direct-field fill (S7), then the
+    // same `_apply_loading`
+    if (direct_route(fr, args)) {
+        std::vector<cd> G = assemble_Z_direct(fr, args, np);
+        std::vector<cd> z_wire;
+        if (sinusoidal::wire_impedance_per_wire(fr, args, fr.k * fr.c, z_wire))
+            apply_loading(G, static_cast<std::size_t>(fr.geometry.n_segs), fr, z_wire);
+        return G;
+    }
     const double k = fr.k;
     const Csr csr = basis_csr(fr.basis, k);
     const Deck d = deck_of(fr);

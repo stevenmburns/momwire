@@ -82,6 +82,8 @@ CORE_SOURCES = (
     # same front (momwire#1718 S2), linked into
     # `sinusoidal_galerkin_fill_driver.cpp`.
     "_sinusoidal_galerkin_fill_core.cpp",
+    # Its direct-field fill (momwire#1718 S7): a wire end on the ground plane.
+    "_sinusoidal_galerkin_direct_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a), linked into `nec4_sinusoidal_printout_driver.cpp`.
     "_nec4_run_core.cpp",
@@ -297,6 +299,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_sinusoidal_front_core.h" in seen, "the sinusoidal front half was not built"
     assert "_sinusoidal_fill_core.h" in seen, "the sinusoidal fill was not built"
     assert "_sinusoidal_galerkin_fill_core.h" in seen, "the SG fill was not built"
+    assert "_sinusoidal_galerkin_direct_core.h" in seen, "the SG direct fill is missing"
     assert "_nec4_run_core.h" in seen, "the NEC-4.2 run half was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
@@ -524,8 +527,9 @@ def test_the_sinusoidal_galerkin_fill_in_cxx_alone_is_pythons(driver):
     solve in free space (G, the coefficients, Y), built from the core TUs
     alone (`sinusoidal_galerkin_fill_driver`, on the OpenBLAS SciPy bundles),
     is `SinusoidalGalerkinSolver.compute_port_solution`'s at every operating
-    point the NEC-4.2 build makes of every free-space fixture deck, to the
-    bit."""
+    point the NEC-4.2 build makes of every fixture deck it fills, to the
+    bit -- since S7 the direct-field fill of the decks with a wire end on the
+    ground plane among them."""
     spec = importlib.util.spec_from_file_location(
         "core_split_sinusoidal_galerkin_fill_compare",
         SPLIT / "sinusoidal_galerkin_fill_compare.py",
@@ -559,7 +563,7 @@ def test_the_sinusoidal_galerkin_fill_in_cxx_alone_is_pythons(driver):
             dumps[current] = ""
         else:
             dumps[current] += line
-    compared = 0
+    compared = contact = 0
     for path in decks:
         cxx = dumps[str(path)]
         if nc.classify(cxx) != "fills":
@@ -569,7 +573,9 @@ def test_the_sinusoidal_galerkin_fill_in_cxx_alone_is_pythons(driver):
         )
         assert diff is None, (path, diff)
         compared += 1
+        contact += path.name.startswith(("0234_", "0235_", "m1_", "m2_", "p6_"))
     assert compared >= 80, compared
+    assert contact >= 5, contact
 
 
 @pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.1
