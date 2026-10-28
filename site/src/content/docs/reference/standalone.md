@@ -55,10 +55,13 @@ cd momwire-nec5-linux-x86_64
 `momwire-nec42-sinusoidal` answers for EZNEC's and SimNEC's NEC-4.2 slot,
 with its own avx2 and sse2 builds and picker. Point the NEC-4.2 engine
 setting at it. Its printout is the Python command's byte for byte except
-the two measured-time lines (`FILL= ... SEC.` and `RUN TIME =`). As a
-preview it still refuses by name a wire below the ground plane (buried
-wires), a GD far-field ground and an insulated wire (IS); the Python
-command serves those decks.
+the two measured-time lines (`FILL= ... SEC.` and `RUN TIME =`). It serves
+buried wires below a Sommerfeld ground (wholly below it, joined to the wires
+above through a crossing junction, or beside them with no junction, as a
+raised antenna over a separate buried counterpoise is) and a GD far-field
+ground. As a preview it still refuses by name buried wires beside raised
+ones with no crossing junction when the wires carry more than one radius,
+and an insulated wire (IS); the Python command serves those decks.
 
 **Sinusoidal-Galerkin, Linux (preview).** The Linux tarball also holds
 `momwire-nec42-sinusoidal-galerkin-linux` and

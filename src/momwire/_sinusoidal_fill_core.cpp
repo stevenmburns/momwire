@@ -11,6 +11,8 @@
 #include "_libm_complex_inline.h"
 #include "_sinusoidal_fill_core.h"
 #include "_sinusoidal_crossing_core.h"
+#include "_sinusoidal_transmitted_core.h"
+#include "_somm_transmitted_core.h"
 
 #include "_razor_front_core.h"
 #include "_razor_wire_loading_core.h"
@@ -945,7 +947,7 @@ struct SommBelow {
 // over the below segments `segs` (every segment when null); `centres` adds
 // the below segments' midpoints, the collocation points a mixed deck's plan
 // joins (`_mixed_serve_plan`'s `test_obs`)
-double serve_plan_below(const Front &fr, const std::vector<ll> *segs = nullptr, bool centres = false) {
+double serve_plan_below(const Front &fr, const std::vector<ll> *segs = nullptr, bool centres = false, ll q = 6) {
     const Geometry &g = fr.geometry;
     std::vector<ll> all;
     if (segs == nullptr) {
@@ -953,9 +955,10 @@ double serve_plan_below(const Front &fr, const std::vector<ll> *segs = nullptr, 
         segs = &all;
     }
     const double gz = 0.0;
-    const ll q = 6;  // max(n_qp_sommerfeld, N_QP_BURIED_FIELD) * near_q_factor(None, None)
+    // `q`: max(n_qp_sommerfeld, N_QP_BURIED_FIELD) * near_q_factor(...), 6
+    // unless a mixed deck's cross pairs raise it (momwire#1718 S12)
     std::vector<double> xg, wg;
-    if (!razor::leggauss(q, xg, wg)) throw std::logic_error("leggauss(6) is tabled");
+    if (!razor::leggauss(q, xg, wg)) decline("an untabled buried field order");
     std::vector<double> x, y, d;
     for (ll i : *segs) {
         const Point3 &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
@@ -1607,7 +1610,43 @@ void nec4_cap_columns(const Front &fr, bool pec, const Somm *somm, std::vector<c
 }
 
 
-// `_assemble_Z_mixed(geom, eta)` on a crossing deck (momwire#1223)
+// `_mixed_serve_plan(geom, below, medium, crossing=False)`'s cross section
+// (momwire#1718 S12): the field nodes at order `q` and the midpoints of each
+// class (`test_obs=None`, one per segment), through `serve_plan`'s
+// cross-medium extents
+somm_trans::CrossPlan mixed_cross_plan(const Front &fr, const std::vector<ll> &a_idx, const std::vector<ll> &b_idx,
+                                       ll q) {
+    const Geometry &g = fr.geometry;
+    std::vector<double> xg, wg;
+    if (!razor::leggauss(q, xg, wg)) decline("an untabled buried field order");
+    const auto points = [&](const std::vector<ll> &idx) {
+        std::vector<double> p;
+        for (ll i : idx) {
+            const Point3 &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
+            for (ll j = 0; j < q; j++) {
+                const double tq = 0.5 * (xg[static_cast<std::size_t>(j)] + 1.0);
+                for (int c = 0; c < 3; c++)
+                    p.push_back(l[static_cast<std::size_t>(c)] +
+                                tq * (r[static_cast<std::size_t>(c)] - l[static_cast<std::size_t>(c)]));
+            }
+        }
+        for (ll i : idx)
+            for (int c = 0; c < 3; c++) p.push_back(g.seg_centers[static_cast<std::size_t>(i)][static_cast<std::size_t>(c)]);
+        return p;
+    };
+    const std::vector<double> pa = points(a_idx), pb = points(b_idx);
+    try {
+        return somm_trans::cross_extents(pa.data(), pa.size() / 3, pb.data(), pb.size() / 3, 0.0, fr.medium.k_p,
+                                         fr.medium.k_m);
+    } catch (const somm_trans::Refused &e) {
+        decline(std::string("a mixed deck's cross pairs Python refuses (") + e.what() + ")");
+    }
+}
+
+// `_assemble_Z_mixed(geom, eta)` on a crossing deck (momwire#1223), and on a
+// mixed one -- wires on both sides with no crossing junction (momwire#1718
+// S12): the two transmitted pair classes over the below->above table in
+// place of the crossing's point rows
 std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
     if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
     if (args.extended_kernel) decline("the extended kernel below the interface (the reference refuses)");
@@ -1618,9 +1657,28 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     const std::size_t Nz = static_cast<std::size_t>(N);
     const Medium &md = fr.medium;
     const ClassSources above = class_sources(fr, false), below = class_sources(fr, true);
-    // `_mixed_serve_plan(..., crossing=True)`: the below/below extents over
-    // the field nodes and the below midpoints
-    const double r1_below = serve_plan_below(fr, &below.idx, true);
+    const bool mixed = !fr.crossing;
+    // `_mixed_serve_plan`: on a mixed deck the cross block's order first
+    // (`n_qp_buried_field` over `cross_pair_separation`, momwire#1004)
+    ll q_x = 6;
+    if (mixed) {
+        std::vector<double> sl, sr;
+        for (ll i = 0; i < N; i++)
+            for (int c = 0; c < 3; c++) {
+                sl.push_back(g.seg_l[static_cast<std::size_t>(i)][static_cast<std::size_t>(c)]);
+                sr.push_back(g.seg_r[static_cast<std::size_t>(i)][static_cast<std::size_t>(c)]);
+            }
+        const std::vector<int64_t> ai(above.idx.begin(), above.idx.end()), bi(below.idx.begin(), below.idx.end());
+        try {
+            q_x = 6 * somm_trans::near_q_factor(sl.data(), sr.data(), ai, bi);
+        } catch (const somm_trans::Refused &e) {
+            decline(std::string("a mixed deck's cross order (") + e.what() + ")");
+        }
+    }
+    // the below/below extents over the field nodes and the below midpoints
+    const double r1_below = serve_plan_below(fr, &below.idx, true, q_x);
+    somm_trans::CrossPlan cross_plan;
+    if (mixed) cross_plan = mixed_cross_plan(fr, above.idx, below.idx, q_x);
     // the shape set over every segment at its own |k| (`abs(k_m)`: CPython's)
     const double k_m_abs = std::hypot(md.k_m.real(), md.k_m.imag());
     double kd_min = std::numeric_limits<double>::infinity();
@@ -1632,6 +1690,10 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     }
     if (std::isnan(kd_min)) decline("a non-finite k*h");
     const bool cos1 = kd_min < kWellScaledKd;
+    // a mixed deck's transmitted blocks on the folded shape set
+    // (`-2 sin^2(k z / 2)` at the source medium's k) are not copied
+    if (cos1 && mixed)
+        decline("the folded cos-1 shape on a mixed deck (the transmitted blocks' folded shapes are not copied)");
     Entries E;
     std::map<std::pair<ll, ll>, int> seen;
     for (ll i = 0; i < N; i++)
@@ -1647,7 +1709,9 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     Kernel K;
     K.fr = &fr;
     if (!razor::leggauss(kNQpConst, K.gx, K.gw)) throw std::logic_error("leggauss(8) is tabled");
-    if (!fr.uniform_radius) decline("a crossing deck with several radii (the reference refuses)");
+    if (!fr.uniform_radius)
+        decline(mixed ? "a mixed deck with several radii (the class kernels read one)"
+                      : "a crossing deck with several radii (the reference refuses)");
     const cd eta_p(fr.eta, 0.0);
     const cd eta_m = np_csqrt(py_quot(cd(kMu, 0.0), md.eps_m));
     // the two classes' remainders, over each class's own geometry
@@ -1668,6 +1732,30 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
         cls.omega = fr.omega;
         somm_below_prepare(cls, cos1, r1_below, s_below);
     }
+    // a mixed deck's two transmitted pair classes, compact
+    // (`_transmitted_block`), before the class bands; `cross[side]` is the
+    // block whose OBSERVERS are that side's class, (3, n_obs, n_src)
+    std::vector<std::vector<cd>> cross[2];
+    if (mixed) {
+        cross[0] = transmitted_block(fr, cross_plan, q_x, kMu, false, above.idx, below.idx);
+        cross[1] = transmitted_block(fr, cross_plan, q_x, kMu, true, below.idx, above.idx);
+    }
+    // `P[:, cols] += t` onto a row band's zeros: rows `r0..r1` (global) of
+    // `side`'s class, its class row `r - first` taken from the class order
+    std::vector<ll> class_row(Nz, -1);
+    for (std::size_t i = 0; i < above.idx.size(); i++) class_row[static_cast<std::size_t>(above.idx[i])] = static_cast<ll>(i);
+    for (std::size_t i = 0; i < below.idx.size(); i++) class_row[static_cast<std::size_t>(below.idx[i])] = static_cast<ll>(i);
+    auto add_cross = [&](int side, ll r, cd *const phi_row[3]) {
+        if (!mixed) return;
+        const ClassSources &other = side ? above : below;
+        const std::size_t nc = other.idx.size(), a = static_cast<std::size_t>(class_row[static_cast<std::size_t>(r)]);
+        for (int c = 0; c < 3; c++)
+            for (std::size_t j = 0; j < nc; j++) {
+                cd &x = phi_row[c][static_cast<std::size_t>(other.idx[j])];
+                const cd t = cross[side][static_cast<std::size_t>(c)][a * nc + j];
+                x = cd(x.real() + t.real(), x.imag() + t.imag());
+            }
+    };
     // One class band's D: `P - (coef * Pi - Si)` over the class's sources,
     // for global observer rows [s, e)
     auto class_band = [&](bool is_below, ll s, ll e) {
@@ -1717,6 +1805,10 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
                         for (std::size_t j = 0; j < nc; j++)
                             Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
                                 D[static_cast<std::size_t>(c)][static_cast<std::size_t>(r - run.first) * nc + j];
+                for (ll r = run.first; r < run.second; r++) {
+                    cd *const rows[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+                    add_cross(side, r, rows);
+                }
             }
         }
         std::vector<std::vector<cd>> M(3, std::vector<cd>(Nz * Nz, cd(0.0, 0.0)));
@@ -1761,6 +1853,10 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
                                 Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
                                     D[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * nc + j];
                     for (ll r = 0; r < m; r++) {
+                        cd *const rows[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+                        add_cross(side, z0 + r, rows);
+                    }
+                    for (ll r = 0; r < m; r++) {
                         cd *grow = G.data() + (z0 + r) * N;
                         const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
                         for (ll j = 0; j < N; j++) {
@@ -1778,8 +1874,8 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
                 }
         }
     }
-    // the cross quadrants: the point rows, added to Z
-    crossing_point_rows(fr, G);
+    // the cross quadrants of a crossing deck: the point rows, added to Z
+    if (!mixed) crossing_point_rows(fr, G);
     apply_loading(fr, loading, E, G);
     return G;
 }
@@ -1795,7 +1891,7 @@ bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, doub
 }
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
-    if (fr.crossing) return assemble_Z_crossing(fr, args, np);
+    if (fr.crossing || fr.mixed) return assemble_Z_crossing(fr, args, np);
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
     // GN 2 / GN 3: the Sommerfeld composition (B5c)
     const bool pec = args.ground.kind == nec4::Ground::pec;

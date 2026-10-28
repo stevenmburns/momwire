@@ -434,6 +434,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
+    "src/momwire/_sinusoidal_transmitted_core.h",
     # numpy's complex sin / cos / log as the C library's (momwire#1607 B6a).
     "src/momwire/_libm_complex_inline.h",
     "src/momwire/_sinusoidal_galerkin_fill_core.h",
@@ -640,6 +641,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_sinusoidal_front_core.cpp",
     # The sinusoidal free-space fill and port solve over it (momwire#1607 B3).
     "src/momwire/_sinusoidal_fill_core.cpp",
+    # momwire#1718 S12: its transmitted pair classes on a mixed deck, its own
+    # TU so the fill core's kernels keep their codegen.
+    "src/momwire/_sinusoidal_transmitted_core.cpp",
     # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
     # same front (momwire#1718 S2), on the B-spline core's sinusoidal kernels.
     "src/momwire/_sinusoidal_galerkin_fill_core.cpp",

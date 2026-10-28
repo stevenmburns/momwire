@@ -296,6 +296,7 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS
     ${MW_SRC}/_sinusoidal_nec4_core.cpp
     ${MW_SRC}/_sinusoidal_front_core.cpp
     ${MW_SRC}/_sinusoidal_fill_core.cpp
+    ${MW_SRC}/_sinusoidal_transmitted_core.cpp
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
 endif()

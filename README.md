@@ -267,12 +267,14 @@ same `-avx2` / `-sse2` picking and the same three forms. Its printouts are
 the Python command's byte for byte, apart from the two lines that report
 measured time (`FILL= ... SEC.` and `RUN TIME =`). It serves free space, a
 perfect ground (GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire
-above it, buried wires (a deck wholly below it, or one joined to the wires
+above it, buried wires (a deck wholly below it, one joined to the wires
 above through a crossing junction, as a vertical over a buried radial screen
-is), a GD far-field ground (the second medium's cliff), wire loading, TL / NT
-networks, helices and near fields. It still refuses by name buried wires
-beside raised ones with no crossing junction between them and an insulated
-wire (IS); the Python command serves those decks.
+is, or one beside them with no junction, as a raised antenna over a separate
+buried counterpoise is), a GD far-field ground (the second medium's cliff),
+wire loading, TL / NT networks, helices and near fields. It still refuses by
+name buried wires beside raised ones with no crossing junction when the wires
+carry more than one radius, and an insulated wire (IS); the Python command
+serves those decks.
 
 ### The Sinusoidal-Galerkin engines on Linux, without Python (preview)
 
