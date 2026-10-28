@@ -55,6 +55,8 @@ def _one_engine_per_test():
     scope nests inside this one."""
     with nec_portal.engine_scope():
         yield
+
+
 ALL_NAMES = tuple(
     entry["name"]
     for entry in json.loads((FIXTURE_DIR / "manifest.json").read_text())["decks"]
