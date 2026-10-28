@@ -377,6 +377,25 @@ GW field <k> is not a finite number; a wire's tag, segment count, end coordinate
 GW tag <t> asks for more than 10000000 segments; this engine meshes at most 10000000 segments on one wire
 ```
 
+Every geometry card is then held to the wires it leaves behind, in every
+dialect and in the C++ readers: after each `GW`, `GA`, `GH`, `CW`, `GM`, `GS`
+or `GX`, a wire whose ends or radius are not finite numbers (a NaN or
+infinite field, or a `GS` / `GM` that scaled or moved it past the doubles), or
+that reaches more than 1e+299 m from the origin, refuses naming the card. A
+`GM` rotation or a `GH` helix whose fields make an infinite angle refuses
+first, as an integer field (a tag, a count, `ITS`, `PQ`'s four) that is not a
+finite number does, by card and field. A comment's `QQ` or `FF` directive
+that reads an infinity refuses; a `NaN` there still reads as no directive.
+
+```text
+<card> leaves tag <t> with a coordinate or radius that is not a finite number; a wire's ends and radius must stay finite
+<card> puts tag <t> more than 1e+299 m from the origin; this engine meshes wires within 1e+299 m of it
+<card> turns its fields into an infinite angle; a card's angles, turns and lengths must be finite numbers
+<card> field <k> is NaN; an integer field must be a finite number
+<card> field <k> is infinite; an integer field must be a finite number
+the <QQ|FF> directive in a comment reads <token>, which is not a finite number
+```
+
 ## GA — wire arc
 
 An arc of a circle in the XZ plane, centred on the origin, divided into equal

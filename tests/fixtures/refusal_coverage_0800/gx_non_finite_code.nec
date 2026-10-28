@@ -1,0 +1,9 @@
+CM refusal coverage, synthetic: a GX plane code that is not a finite number
+CE
+GW 1,11,.5,-2.5,5.,.5,2.5,5.,.001
+GX 10,nan
+GE 0,-1
+FR 0,1,0,0,30.
+EX 0,1,6,0,1.,0.
+RP 0,1,1,1000,90.,0.,0.,0.
+EN

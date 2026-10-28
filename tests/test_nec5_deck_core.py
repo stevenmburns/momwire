@@ -203,8 +203,10 @@ CASES = {
     "python float spellings": (
         deck(
             "GW 3,1_0,1.5D-3,2d2,-0.,.5,5.,+.5e-3,1_0e1_0",
+            # the largest double as the radius: a coordinate past 1e299 m
+            # refuses (`wire_geometry_refusal`), a radius is held finite only
             "GW 5,2,2.4703282292062327e-324,2.4703282292062328e-324,1e-310,"
-            "1.7976931348623157e308,-1e-400,0.1,1e23",
+            "1e23,-1e-400,0.1,1.7976931348623157e308",
         ),
         "parsed",
     ),
@@ -307,7 +309,10 @@ CASES = {
     "ge bare": (DIPOLE.replace("GE 0,-1", "GE"), "parsed"),
     "ge one field": (DIPOLE.replace("GE 0,-1", "GE 1"), "parsed"),
     "ge three fields": (DIPOLE.replace("GE 0,-1", "GE -1,5,7"), "parsed"),
-    "ge infinite second": (DIPOLE.replace("GE 0,-1", "GE 0,-inf"), "OverflowError"),
+    "ge infinite second": (
+        DIPOLE.replace("GE 0,-1", "GE 0,-inf"),
+        "DeckError GE field 2 is infinite; an integer field must be a finite number",
+    ),
     # GE's third field (momwire#1488): any nonzero integer asks for the .GMO
     # file; it is read as an integer at the GE card, so a non-finite one
     # raises there.
@@ -318,8 +323,14 @@ CASES = {
         "parsed",
     ),
     "ge third field negative": (DIPOLE.replace("GE 0,-1", "GE 0,-1,-1"), "parsed"),
-    "ge infinite third": (DIPOLE.replace("GE 0,-1", "GE 0,-1,inf"), "OverflowError"),
-    "ge nan third": (DIPOLE.replace("GE 0,-1", "GE 0,-1,nan"), "ValueError"),
+    "ge infinite third": (
+        DIPOLE.replace("GE 0,-1", "GE 0,-1,inf"),
+        "DeckError GE field 3",
+    ),
+    "ge nan third": (
+        DIPOLE.replace("GE 0,-1", "GE 0,-1,nan"),
+        "DeckError GE field 3 is NaN; an integer field must be a finite number",
+    ),
     # -- GN --
     "gn perfect": (deck("GN 1"), "parsed"),
     "gn sommerfeld": (deck("GN 0,0,0,0,13.,.005,1.,0."), "parsed"),
@@ -351,7 +362,7 @@ CASES = {
         deck("GN 0,0,0,0,13.,.005,1.0000001,1e-300"),
         "relative permeability 1+1e-300j",
     ),
-    "gn infinite code": (deck("GN inf"), "OverflowError"),
+    "gn infinite code": (deck("GN inf"), "DeckError GN field 1 is infinite"),
     # -- GD and the last ground card --
     "gd": (deck("GD 0,0,0,0,13.,.005,1.,0."), "parsed"),
     "gd odd flag": (deck("GD 7,8,9,9,13.,.005"), "parsed"),
@@ -403,7 +414,7 @@ CASES = {
     ),
     "ex end code unknown tag": (deck("EX 4,7,1,1,1.,0."), "EX names tag 7"),
     "ex end code rounds": (deck("EX 4,2,2.5,1.5,1.,0."), "parsed"),
-    "ex end code infinite": (deck("EX 4,2,1,inf,1.,0."), "OverflowError"),
+    "ex end code infinite": (deck("EX 4,2,1,inf,1.,0."), "DeckError EX field 4"),
     "ex end code on a huge wire": (
         deck("EX 4,3,1e300,1,1.,0.", wires=GW1 + "GW 3,1e300,0,0,0,1,0,0,.1\n"),
         "GW tag 3 asks for more than 10000000 segments",
@@ -520,7 +531,10 @@ CASES = {
     "rp short": (deck("RP 0,1,361,1000,90.,0.,0."), "parsed"),
     # Dan AC6LA's seven-field RP (0.79.2): the NEC-5 engine reads the rest as 0
     "rp seven fields": (deck("RP 0 91 1 1000 -90 0 2"), "parsed"),
-    "rp infinite count": (deck("RP 0,inf,nan,1000,90.,0.,0.,1."), "OverflowError"),
+    "rp infinite count": (
+        deck("RP 0,inf,nan,1000,90.,0.,0.,1."),
+        "DeckError RP field 2",
+    ),
     "ne": (deck("NE 0,1,1,1,0.,0.,0.,0.,0.,0."), "parsed"),
     "ne spherical counts floor": (deck("NE 1,0,5,-2,10.,30.,60.,0.,5.,5."), "parsed"),
     "nh": (deck("NH 0,5,5,1,-1.,-1.,1.,.5,.5,0."), "parsed"),
@@ -551,7 +565,7 @@ CASES = {
     "sp underscore literal": (deck("SP 0 1_0 1 0 0 0 0 1"), "surface-patch form"),
     "sp nan radius": (deck("SP 0 1 1 0 0 0 0 nan"), "SP (sphere)"),
     "sp fused": (deck("SP0 1 1 0 0 0 0 1"), "SP (sphere)"),
-    "sp huge count": (deck(f"SP 0 {BIG} 1 0 0 0 0 1"), "OverflowError"),
+    "sp huge count": (deck(f"SP 0 {BIG} 1 0 0 0 0 1"), "DeckError SP field 2"),
     # CW, the catenary (momwire#1697): read, and each refusal
     "cw sag": (deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 1 20 8\n"), "parsed"),
     "cw arch": (deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 2 10 -2\n"), "parsed"),
@@ -601,10 +615,14 @@ CASES = {
     ),
     "ga no sweep": (deck(wires=GW1 + "GA 3,8,2.,10.,10.,1E-3\n"), "has no length"),
     "ga no wire radius": (deck(wires=GW1 + "GA 3,8,2.,0.,90.,0.\n"), "no tapered arc"),
-    "ga nan radius": (deck(wires=GW1 + "GA 3,8,nan,0.,90.,1E-3\n"), "parsed"),
+    "ga nan radius": (
+        deck(wires=GW1 + "GA 3,8,nan,0.,90.,1E-3\n"),
+        "DeckError GA leaves tag 3 with a coordinate or radius that is not a finite "
+        "number; a wire's ends and radius must stay finite",
+    ),
     "ga huge count": (
         deck(wires=GW1 + f"GA 3,{BIG},2.,0.,90.,1E-3\n"),
-        "OverflowError",
+        "DeckError GA field 2 is infinite",
     ),
     "ga duplicate tag": (deck(wires=GW1 + "GA 1,8,2.,0.,90.,1E-3\n"), "another wire"),
     "gh": (deck(wires=GW1 + "GH 3,21,.5,3.,.5,.5,1E-3,1E-3\n"), "parsed"),
@@ -651,8 +669,58 @@ CASES = {
         deck(wires=GW1 + "GM 0,1,0.,0.,0.,0.,1.,0.,0.\n"),
         "another wire",
     ),
-    "gm nan its": (deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,nan\n"), "ValueError"),
-    "gm inf its": (deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,inf\n"), "OverflowError"),
+    "gm infinite rotation": (
+        deck(wires=GW1 + "GM 1,1,inf,0.,0.,0.,1.,0.,0.\n"),
+        "DeckError GM turns its fields into an infinite angle; a card's angles, "
+        "turns and lengths must be finite numbers",
+    ),
+    "gm moves past 1e299": (
+        deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,0.,2e299,0.\n"),
+        "DeckError GM puts tag 2 more than 1e+299 m from the origin; this engine "
+        "meshes wires within 1e+299 m of it",
+    ),
+    "gs scales past the doubles": (
+        deck(wires=GW1 + "GS 0,0,1e308\n"),
+        "DeckError GS puts tag 1 more than 1e+299 m",
+    ),
+    "gs nan scale": (
+        deck(wires=GW1 + "GS 0,0,nan\n"),
+        "DeckError GS leaves tag 1 with a coordinate or radius that is not a finite",
+    ),
+    "gs nan tag field": (
+        deck(wires=GW1 + "GS nan,0,2\n"),
+        "DeckError GS field 1 is NaN",
+    ),
+    "gh infinite turns": (
+        deck(wires=GW1 + "GH 3,21,inf,3.,.5,.5,1E-3,1E-3\n"),
+        "DeckError GH turns its fields into an infinite angle",
+    ),
+    "gh nan length": (
+        deck(wires=GW1 + "GH 3,21,1.,nan,.5,.5,1E-3,1E-3\n"),
+        "DeckError GH leaves tag 3 with a coordinate",
+    ),
+    "cw nan icat": (
+        deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 0.001 nan 20 8\n"),
+        "DeckError CW field 10 is NaN",
+    ),
+    "cw nan radius": (
+        deck(wires=GW1 + "CW 3 10 -20 0 15 20 0 15 nan 1 20 8\n"),
+        "DeckError CW leaves tag 3 with a coordinate or radius",
+    ),
+    "gx nan code": (deck(wires=GW1 + "GX 10,nan\n"), "DeckError GX field 2 is NaN"),
+    "pq infinite fourth field": (
+        deck("PQ 0,0,0,1e400"),
+        "DeckError PQ field 4 is infinite",
+    ),
+    "ld 5 nan conductivity stays served": (deck("LD 5,0,0,0,nan"), "parsed"),
+    "gm nan its": (
+        deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,nan\n"),
+        "DeckError GM field 9 is NaN",
+    ),
+    "gm inf its": (
+        deck(wires=GW1 + "GM 1,1,0.,0.,0.,0.,1.,0.,inf\n"),
+        "DeckError GM field 9 is infinite",
+    ),
     "gx three planes": (
         deck(wires="GW 1,11,.1,.25,.1,.2,.75,.3,.0005\nGX 10,111\n"),
         "parsed",
@@ -764,7 +832,7 @@ CASES = {
     ),
     "a run's own card overflows": (
         DIPOLE.replace("EN\n", "XQ\nEX 4,2,3,0,1.,0.\nXQ\nEX 4,inf,3,0,1,0\nXQ\nEN\n"),
-        "OverflowError",
+        "DeckError EX field 2 is infinite",
     ),
     "runs after a refused deck": (
         runs("XQ 0", "FR 0,1,0,0,7.", "XQ 0", "GN 3"),
@@ -800,6 +868,12 @@ CASES = {
     ),
     "second structure overflows": (
         DIPOLE.replace("EN\n", "NX\n") + deck("PQ inf"),
+        "NX (next structure)",
+    ),
+    # a structure that raises (a line of separators alone), so a chain still
+    # stops at an exception now that a NaN or infinite field refuses
+    "second structure raises": (
+        DIPOLE.replace("EN\n", "NX\n") + deck(", ,"),
         "NX (next structure)",
     ),
     "nx sniffed from a bad mnemonic": (

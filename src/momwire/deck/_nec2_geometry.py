@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from ._cards import Card, DeckError
+from ._cards import Card, DeckError, infinite_angle_refusal, wire_geometry_refusal
 
 __all__ = [
     "FlatWire",
@@ -279,6 +279,8 @@ def nec2_helix_vertices(card: Card) -> list[tuple[float, float, float]]:
     out = []
     for zk in z:
         angle = 2.0 * math.pi * zk / s
+        if math.isinf(angle):
+            raise DeckError(infinite_angle_refusal(card.mnemonic))
         if a2 == a1:
             x = a1 * math.cos(angle)
             y = (a1 if b1 == 0.0 else b1) * math.sin(angle)
@@ -313,6 +315,8 @@ def gm_transform(card: Card):
     and the nec5 one's (momwire#1669), which read the same seven reals."""
     rox, roy, roz = card.f(2) * _DEG, card.f(3) * _DEG, card.f(4) * _DEG
     xs, ys, zs = card.f(5), card.f(6), card.f(7)
+    if any(math.isinf(a) for a in (rox, roy, roz)):
+        raise DeckError(infinite_angle_refusal(card.mnemonic))
 
     sps, cps = math.sin(rox), math.cos(rox)
     sth, cth = math.sin(roy), math.cos(roy)
@@ -342,6 +346,7 @@ def _gm(card: Card, wires: list[FlatWire]) -> None:
     end of the list.
     """
     itgi, nrpt = card.i(0), card.i(1)
+    card.i(8)  # a NaN or infinite ITS refuses by card and field, as an integer
     its = int(card.f(8) + 0.5)
     xf = gm_transform(card)
 
@@ -974,6 +979,12 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
             continue
         before = (len(wires), sum(w.n_seg for w in wires))
         builders[card.mnemonic](card, wires)
+        for w in wires:
+            # every wire after every geometry card, so the card named is the
+            # one that made it so (a NaN field, a GS / GM past the doubles)
+            why = wire_geometry_refusal(card.mnemonic, w.tag, (w.p1, w.p2), w.radius)
+            if why is not None:
+                raise DeckError(why)
         symmetry = _symmetry_after(card, wires, before, symmetry)
 
     snap_connections(wires)

@@ -43,7 +43,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ._cards import _FUSED_FIELD_START, Card, DeckError, gw_field_refusal, parse_card
+from ._cards import (
+    _FUSED_FIELD_START,
+    Card,
+    DeckError,
+    gw_field_refusal,
+    parse_card,
+    wire_geometry_refusal,
+)
 from ._nec2_geometry import arc_vertices, gm_transform
 from ._nec4 import catenary_vertices, helix_vertices
 from .model import DistributedRLC, LoadSpec
@@ -660,6 +667,22 @@ _REFUSED_BY_NAME = MappingProxyType(
 # black-box, nec5cl-simd-d0c1383).  A finite GN missing its permittivity is
 # refused in `_gn`: the engine reads it as 0 and answers NaN.
 _MIN_FIELDS = MappingProxyType({"GW": 9})
+# A geometry card's fields its echo prints as integers (`_printout.
+# _geometry_echo`): the tag and segment count, CW's ICAT and GM's ITS. Every
+# card after GE echoes its first four (`_printout._card_echo`). The keys are
+# the geometry cards, after each of which every wire is held to
+# `wire_geometry_refusal`.
+_ECHOED_INTEGERS = MappingProxyType(
+    {
+        "GW": (0, 1),
+        "GA": (0, 1),
+        "GH": (0, 1),
+        "CW": (0, 1, 9),
+        "GM": (0, 1, 8),
+        "GX": (0, 1),
+        "GS": (0, 1),
+    }
+)
 
 # EX kinds the dialect emits: 4 (elementary current source) 47/49 captures,
 # 0 (voltage source) 2/49.  Every other NEC excitation — incident plane
@@ -2022,6 +2045,14 @@ class _Nec5Parser:
             )
         if card.mnemonic == "GW" and (why := gw_field_refusal(card)) is not None:
             raise DeckError(why)
+        # The printout echoes these fields as integers (`_printout.
+        # _geometry_echo`, `_card_echo`), whether or not this reader reads
+        # them, so each is read here first: `Card.i` refuses a NaN or an
+        # infinity by card and field rather than fail in the echo.
+        for k in _ECHOED_INTEGERS.get(
+            card.mnemonic, () if self.ge_flag is None else range(4)
+        ):
+            card.i(k)
         handler = {
             "GW": self._gw,
             "GA": self._ga,
@@ -2046,6 +2077,16 @@ class _Nec5Parser:
         }.get(card.mnemonic)
         if handler is not None:
             handler(card)
+            if card.mnemonic in _ECHOED_INTEGERS:
+                for wire in self.wires:
+                    why = wire_geometry_refusal(
+                        card.mnemonic,
+                        wire.tag,
+                        (wire.end1, wire.end2, *wire.path),
+                        wire.radius,
+                    )
+                    if why is not None:
+                        raise DeckError(why)
             return
         assert card.mnemonic == "XQ"  # the vocabulary's remainder
         self.requests.append(Nec5ExecuteRequest(flag=card.i(0)))

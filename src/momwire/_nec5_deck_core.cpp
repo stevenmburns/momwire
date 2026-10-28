@@ -677,6 +677,7 @@ std::vector<Point3> helix_points(const Card &card, long long n) {
     double dn = static_cast<double>(n);
     double q = py_float_pow(r2 / r1, 1.0 / dn);
     double step = 2.0 * kPi * turns / dn;
+    if (std::isinf(step)) deck_error(infinite_angle_refusal(card.mnemonic));
     double qn = py_float_pow(q, dn);
     std::vector<Point3> v;
     for (long long k = 0; k <= n; k++) {
@@ -1116,6 +1117,8 @@ struct Parser {
         }
         double rox = card.f(2) * kDeg, roy = card.f(3) * kDeg, roz = card.f(4) * kDeg;
         double xs = card.f(5), ys = card.f(6), zs = card.f(7);
+        if (std::isinf(rox) || std::isinf(roy) || std::isinf(roz))
+            deck_error(infinite_angle_refusal(card.mnemonic));  // `gm_transform`
         double sps = libm_sin(rox), cps = libm_cos(rox);
         double sth = libm_sin(roy), cth = libm_cos(roy);
         double sph = libm_sin(roz), cph = libm_cos(roz);
@@ -1725,14 +1728,39 @@ struct Parser {
         if (mn == "GW") {
             const std::string why = gw_field_refusal(c);
             if (!why.empty()) deck_error(why);
-            return gw(c);
         }
-        if (mn == "GA") return ga(c);
-        if (mn == "GH") return gh(c);
-        if (mn == "CW") return cw(c);
-        if (mn == "GM") return gm(c);
-        if (mn == "GX") return gx(c);
-        if (mn == "GS") return gs(c);
+        // `_ECHOED_INTEGERS`: the fields the printout echoes as integers,
+        // read here first so a NaN or an infinity refuses by card and field
+        const bool geometry = mn == "GW" || mn == "GA" || mn == "GH" || mn == "CW" ||
+                              mn == "GM" || mn == "GX" || mn == "GS";
+        if (geometry) {
+            c.i(0);
+            c.i(1);
+            if (mn == "CW") c.i(9);
+            if (mn == "GM") c.i(8);
+        } else if (has_ge) {
+            for (std::size_t k = 0; k < 4; k++) c.i(k);
+        }
+        if (geometry) {
+            if (mn == "GW") gw(c);
+            if (mn == "GA") ga(c);
+            if (mn == "GH") gh(c);
+            if (mn == "CW") cw(c);
+            if (mn == "GM") gm(c);
+            if (mn == "GX") gx(c);
+            if (mn == "GS") gs(c);
+            // every wire after every geometry card (`wire_geometry_refusal`)
+            for (const Wire &w : wires) {
+                bool finite = true, far = false;
+                wire_geometry_scan(w.end1, 3, finite, far);
+                wire_geometry_scan(w.end2, 3, finite, far);
+                for (const auto &q : w.path) wire_geometry_scan(q.data(), 3, finite, far);
+                if (!std::isfinite(w.radius)) finite = false;
+                const std::string why = wire_geometry_refusal(mn, w.tag, finite, far);
+                if (!why.empty()) deck_error(why);
+            }
+            return;
+        }
         if (mn == "PT") return pt_card(c);
         if (mn == "GE") return ge(c);
         if (mn == "GN") return gn(c);
@@ -2887,18 +2915,49 @@ std::string format_g(double x) { return py_g(x); }
 
 double Card::f(std::size_t k) const { return k < values.size() ? values[k] : 0.0; }
 
-// `Card.i`: an infinite / NaN field raises where Python's does, in its words
+// `Card.i`: an infinite / NaN field refuses the deck (a DeckError) where
+// Python's does, in its words
 Int Card::i(std::size_t k) const {
     double v = f(k);
     if (std::isnan(v))
-        throw ParseError(ErrorKind::value_error,
+        throw ParseError(ErrorKind::deck_error,
                          mnemonic + " field " + std::to_string(k + 1) +
                              " is NaN; an integer field must be a finite number");
     if (std::isinf(v))
-        throw ParseError(ErrorKind::overflow_error,
+        throw ParseError(ErrorKind::deck_error,
                          mnemonic + " field " + std::to_string(k + 1) +
                              " is infinite; an integer field must be a finite number");
     return py_round(v);
+}
+
+// `deck._cards.infinite_angle_refusal`
+std::string infinite_angle_refusal(const std::string &mnemonic) {
+    return mnemonic + " turns its fields into an infinite angle; a card's angles, turns and lengths must be finite numbers";
+}
+
+// `deck._cards.wire_geometry_refusal`, as a scan and a sentence: `scan`
+// folds a point's coordinates into the two flags (a radius only ever
+// clears `finite`, which its caller does).
+void wire_geometry_scan(const double *p, std::size_t n, bool &finite, bool &far) {
+    for (std::size_t k = 0; k < n; k++) {
+        if (!std::isfinite(p[k]))
+            finite = false;
+        else if (std::fabs(p[k]) > kMaxCoordinate)
+            far = true;
+    }
+}
+
+std::string wire_geometry_refusal(const std::string &mnemonic, const Int &tag, bool finite,
+                                  bool far) {
+    if (!finite)
+        return mnemonic + " leaves tag " + tag.str() +
+               " with a coordinate or radius that is not a finite number; a wire's ends and "
+               "radius must stay finite";
+    if (far)
+        return mnemonic + " puts tag " + tag.str() +
+               " more than 1e+299 m from the origin; this engine meshes wires within 1e+299 m "
+               "of it";
+    return std::string();
 }
 
 // `deck._cards.gw_field_refusal`: why a GW card is malformed past serving,

@@ -170,6 +170,13 @@ def _directive(text: str, keyword: str) -> int | None:
                 return int(float(parts[i + 1]))
             except ValueError:
                 return None
+            except OverflowError:
+                # an infinity: no directive anything can read (a NaN reads as
+                # no directive at all, as an unreadable number does)
+                raise DeckError(
+                    f"the {keyword} directive in a comment reads {parts[i + 1]}, "
+                    f"which is not a finite number"
+                ) from None
     return None
 
 
@@ -992,9 +999,12 @@ class _Nec2Parser:
         is PRINTED and changes nothing about the solve, so the deck model
         records nothing: the portal reads the card itself, the way it reads
         ``PT`` (see ``momwire.portal._portal.ChargePrintControl``, which
-        carries the measured form-by-form semantics).
+        carries the measured form-by-form semantics). Its four integers are
+        read here all the same, so a NaN or an infinity among them refuses by
+        card and field (`Card.i`) rather than fail in the printout.
         """
-        return None
+        for k in range(4):
+            card.i(k)
 
     def _multiprocessing_card(self, card: Card) -> tuple[int, int]:
         """``MP`` — advisory, and read strictly: NEC's integer-field reader

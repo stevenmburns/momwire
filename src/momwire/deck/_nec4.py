@@ -130,7 +130,7 @@ import math
 from dataclasses import replace
 from types import MappingProxyType
 
-from ._cards import Card, DeckError
+from ._cards import Card, DeckError, infinite_angle_refusal
 from ._nec2 import _GEOMETRY_CARDS, _Nec2Parser
 from ._nec2_geometry import _GEOMETRY_BUILDERS, FlatWire
 from ._nec2_geometry import arc_vertices as _arc_vertices
@@ -237,6 +237,8 @@ def helix_vertices(card: Card) -> list[tuple[float, float, float]]:
         )
     q = (r2 / r1) ** (1.0 / n_seg)
     step = 2.0 * math.pi * turns / n_seg
+    if math.isinf(step):
+        raise DeckError(infinite_angle_refusal(card.mnemonic))
     out = []
     for k in range(n_seg + 1):
         rho = r1 * q**k

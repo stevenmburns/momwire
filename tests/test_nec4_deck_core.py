@@ -338,6 +338,91 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "segment count must be >= 1, got 0",
     ),
     ("gw_zero_radius", ("nec2",), deck("GW 1 3 0 0 -.25 0 0 .25 0\n"), "tapered wire"),
+    # A coordinate past 1e299 m, a NaN or infinity a geometry card leaves in
+    # a wire, an infinite angle and a NaN integer field refuse in both readers
+    # (`deck._cards.wire_geometry_refusal`, `infinite_angle_refusal`,
+    # `Card.i`); a non-finite field a card ignores is still served
+    (
+        "gw_past_1e299",
+        ("nec2", "nec4"),
+        deck("GW 1 3 0 0 -1e308 0 0 1e308 .001\n"),
+        "GW puts tag 1 more than 1e+299 m from the origin; this engine meshes "
+        "wires within 1e+299 m of it",
+    ),
+    (
+        "gs_past_the_doubles",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GS 0 0 1e308\n"),
+        "GS puts tag 1 more than 1e+299 m",
+    ),
+    (
+        "gm_nan_translation",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GM 1 1 0 0 0 nan 0 0 0\n"),
+        "GM leaves tag 2 with a coordinate or radius that is not a finite number; "
+        "a wire's ends and radius must stay finite",
+    ),
+    (
+        "gm_infinite_rotation",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GM 1 1 0 -inf 0 1 0 0 0\n"),
+        "GM turns its fields into an infinite angle; a card's angles, turns and "
+        "lengths must be finite numbers",
+    ),
+    (
+        "gm_nan_its",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GM 1 1 0 0 0 1 0 0 nan\n"),
+        "GM field 9 is NaN",
+    ),
+    (
+        "ga_nan_tag",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GA nan 8 .5 0 90 .001\n"),
+        "GA field 1 is NaN",
+    ),
+    (
+        "ga_nan_radius",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GA 3 8 nan 0 90 .001\n"),
+        "GA leaves tag 3 with a coordinate",
+    ),
+    (
+        "gh_nec4_infinite_turns",
+        ("nec4",),
+        deck(DIPOLE + "GH 3 20 inf 3 .5 .3 .001 .001\n"),
+        "GH turns its fields into an infinite angle",
+    ),
+    (
+        "gh_nec2_infinite_length",
+        ("nec2",),
+        deck(DIPOLE + "GH 3 20 .5 inf .1 .1 .1 .1 .001\n"),
+        "GH turns its fields into an infinite angle",
+    ),
+    (
+        "gx_inf_code",
+        ("nec2", "nec4"),
+        deck(DIPOLE + "GX 10 inf\n"),
+        "GX field 2 is infinite",
+    ),
+    (
+        "cw_nan_radius",
+        ("nec4",),
+        deck(DIPOLE + "CW 3 10 -20 0 15 20 0 15 nan 1 20 8\n"),
+        "CW leaves tag 3 with a coordinate or radius",
+    ),
+    (
+        "pq_infinite_field",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "PQ 0 0 0 1e400"),
+        "PQ field 4 is infinite",
+    ),
+    (
+        "comment_directive_qq_inf",
+        ("nec2",),
+        "CM QQ inf\nCE\n" + deck(),
+        "the QQ directive in a comment reads inf",
+    ),
     # A malformed GW refuses on the card in both readers, in one sentence
     # (`deck._cards.gw_field_refusal`); these were declines, and Python's
     # own answer was the interpreter's float-to-int message
@@ -875,7 +960,7 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "comment_directive_inf",
         ("nec2",),
         "CM FF -inf\nCE\n" + deck(),
-        "cannot convert float infinity",
+        "the FF directive in a comment reads -inf, which is not a finite number",
     ),
     (
         "comment_latin1",
@@ -1235,12 +1320,12 @@ def test_a_hand_written_deck_reads_the_same(name, dialects, text, expect, acc):
     "text",
     [
         deck(DIPOLE, "LD 5 0 0 0 nan"),
-        deck("GW 1 3 0 0 -1e308 0 0 1e308 .001\n"),
+        deck(DIPOLE, "PQ 0 0 0 0 nan"),
         deck(DIPOLE, tail="FR 0 1e9 0 0 1 1\nEX 0 1 6 0 1\nXQ\nEN\n"),
     ],
     ids=[
         "nan_field",
-        "overflowing_length",
+        "nan_past_pq_integers",
         "huge_sweep",
     ],
 )
@@ -1248,6 +1333,20 @@ def test_what_the_reader_declines(text, acc):
     """The declines are a decline in both dialects, never a misread."""
     for dialect in ("nec2", "nec4"):
         assert nc.classify(nc.cxx_parse(text, dialect, acc)) == "declined"
+
+
+def test_a_non_finite_field_python_serves_still_declines(acc):
+    """NEC-2's GH reads an infinite turn spacing as no turning at all and
+    never reads B2 while A2 equals A1: Python serves both, and the C++ reader,
+    which lets a geometry card's NaN or infinity through to its builders for
+    the refusals above, declines them after the build rather than serve them
+    from its own arithmetic."""
+    for text in (
+        deck(DIPOLE + "GH 3 20 inf 1 .1 .1 .1 .1 .001\n"),
+        deck(DIPOLE + "GH 3 20 .5 1 .1 .1 .1 nan .001\n"),
+    ):
+        parse(text, dialect="nec2")
+        assert nc.classify(nc.cxx_parse(text, "nec2", acc)) == "declined"
 
 
 # --- Python's float rules ----------------------------------------------------
