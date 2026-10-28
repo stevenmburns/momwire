@@ -44,8 +44,9 @@ masked, by exact pattern and with the same count on both sides, over:
   the crossing scope: two radii, a hub, an oblique node, two nodes, two
   nodes too close);
 - the declines: a near-field point on a wire's finite-ground contact or in
-  the soil, a near field over a buried wire, wires on both sides with no
-  crossing;
+  the soil, a near field over a buried wire;
+- wires on both sides with no crossing (momwire#1718 S12): the stitched
+  basis and the two transmitted pair classes;
 - a crossing node (momwire#1607 B6b): a rise over a rod with PQ and RP, a
   rise to a buried hub of two radials, a sparse fill under GN 3 with LD 5,
   an FR sweep under EX 6, and beside a loaded parasite.
@@ -574,6 +575,19 @@ CASES = [
         ),
         "refused",
     ),
+    # momwire#1718 S12: a vertical over a separate buried wire, the stitched
+    # basis and the two transmitted pair classes
+    (
+        "mixed_vertical_over_buried_pq_rp",
+        deck(
+            "GW 1 10 0 0 .5 0 0 10 .001\nGW 2 10 -5 1 -.1 5 1 -.1 .001\n",
+            "GN 2 0 0 0 13 .005\n"
+            + BFR
+            + "EX 0 1 1 0 1\nPQ 0\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
     # momwire#1607 B6b: a crossing node, the two-k basis, the class
     # blocks and the point rows
     (
@@ -645,13 +659,14 @@ CASES = [
         "printed",
     ),
     (
-        "above_and_below_declines",
+        # momwire#1718 S12: served since the transmitted blocks
+        "above_and_below_prints",
         deck(
             "GW 1 11 -3 0 -.3 3 0 -.3 .001\nGW 2 5 5 0 .5 5 0 2 .001\n",
             "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 2 3 0 1\nXQ\n",
             "GE -1",
         ),
-        "declined",
+        "printed",
     ),
     (
         "buried_near_field_declines",

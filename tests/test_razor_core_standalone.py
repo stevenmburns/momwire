@@ -78,6 +78,7 @@ CORE_SOURCES = (
     # The sinusoidal free-space fill and port solve over it (momwire#1607
     # B3), linked into `sinusoidal_fill_driver.cpp`.
     "_sinusoidal_fill_core.cpp",
+    "_sinusoidal_transmitted_core.cpp",
     # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
     # same front (momwire#1718 S2), linked into
     # `sinusoidal_galerkin_fill_driver.cpp`.
@@ -631,6 +632,29 @@ def test_a_wholly_buried_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(
     assert _nec42_sinusoidal_printouts(driver, decks, "sinusoidal-galerkin") == len(
         decks
     )
+
+
+@pytest.mark.slow  # the mixed decks' transmitted tables, filled by both copies
+def test_the_mixed_decks_print_as_python_on_the_nec42_sinusoidal(driver, monkeypatch):
+    """momwire#1718 S12: wires on both sides of the interface with no
+    crossing junction through the point-matched lane in C++ alone -- the
+    stitched basis, the two transmitted pair classes over the table
+    `_somm_transmitted_core` fills, the class blocks -- byte for byte as
+    `_nec4.render(text, basis="sinusoidal")` prints them. Two decline by
+    name: two radii (the class kernels read one) and a near field over a
+    buried wire."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    decks = sorted(
+        (ROOT / "tests" / "fixtures" / "transmitted_mixed").glob("*.nec")
+    ) + [
+        ROOT
+        / "tests"
+        / "fixtures"
+        / "eznec_nec42"
+        / "probes"
+        / "p9_above_and_buried_gn2.nec"
+    ]
+    assert _nec42_sinusoidal_printouts(driver, decks) == len(decks) - 2
 
 
 def _nec42_sinusoidal_printouts(driver, decks, basis="sinusoidal") -> int:

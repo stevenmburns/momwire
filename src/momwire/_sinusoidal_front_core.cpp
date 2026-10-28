@@ -1655,8 +1655,9 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
             f.crossing = !crossing.empty();
         }
         const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
-        if (nb > 0 && nb < n_w && !f.crossing)
-            decline("wires both above and below the interface with no crossing junction (momwire#1607 B6)");
+        // wires on both sides with no crossing junction: the transmitted
+        // blocks (momwire#1718 S12)
+        f.mixed = nb > 0 && nb < n_w && !f.crossing;
         f.buried = nb == n_w;
     }
     // the point-matched crossing node is an ordinary junction (`edges_at`)
@@ -1777,6 +1778,36 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
         // below the interface
         f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
         basis_coefs_complex(f, a, {f.medium.k_m}, false);
+        return f;
+    }
+    if (f.mixed) {
+        // `_mixed_view` on a mixed deck: `_stitch_basis_coefs(geom, below,
+        // k_p, k_m)` -- one CSR topology, each entry's coefficients from its
+        // segment's medium's view (`_basis_coefs(geom, k_p)` above,
+        // `_basis_coefs(geom, k_m)` below), `k_entry` its k
+        f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
+        f.below_seg.assign(n, false);
+        for (std::size_t w = 0; w < n_w; w++)
+            for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) f.below_seg[static_cast<std::size_t>(s)] = f.below_wire[w];
+        const SegView view_p = basis_coefs_at(g, a, f.medium.k_p);
+        basis_coefs_complex(f, a, {f.medium.k_m}, false);
+        const SegView view_m = f.basis;
+        if (view_p.starts != view_m.starts || view_p.jbasis != view_m.jbasis || view_p.sigma != view_m.sigma)
+            decline("a stitched basis whose topology depends on k (the reference asserts)");
+        SegView out = view_p;
+        out.k_entry.assign(view_p.A.size(), cd(f.medium.k_p, 0.0));
+        for (std::size_t i = 0; i < n; i++) {
+            if (!f.below_seg[i]) continue;
+            for (ll e = view_p.starts[i]; e < view_p.starts[i + 1]; e++) {
+                const std::size_t z = static_cast<std::size_t>(e);
+                out.A[z] = view_m.A[z];
+                out.B[z] = view_m.B[z];
+                out.C[z] = view_m.C[z];
+                out.AC[z] = view_m.AC[z];
+                out.k_entry[z] = f.medium.k_m;
+            }
+        }
+        f.basis = out;
         return f;
     }
     if (f.crossing) {

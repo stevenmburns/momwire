@@ -11,6 +11,7 @@
 // Output per deck: "== <path>", then "printed <bytes>" and the printout, or
 // "declined <hex of the reason>".
 #include "_sinusoidal_run_core.h"
+#include "_somm_below_fill_core.h"
 
 #include <dlfcn.h>
 
@@ -79,6 +80,10 @@ int main(int argc, char **argv) {
     la.np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym_of(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));
     la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dgemm64_", "cblas_dgemm64_"}));
+    // the below/below table a buried deck's fill reads (momwire#1718 S12: a
+    // mixed deck's below class), filled in process as the executable's route
+    // does
+    somm_below::set_source(somm_below::fill_source());
     mw::nec5::EngineStamp stamp;
     stamp.version = argv[3];
     stamp.variant = argv[4];

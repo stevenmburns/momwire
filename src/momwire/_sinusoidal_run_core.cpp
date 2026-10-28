@@ -403,7 +403,7 @@ double loss_power_at(const Front &fr, const std::vector<cd> &coeffs, double omeg
     if (!wire_impedance_per_wire(fr, args, omega, z_wire)) return 0.0;
     const double k = omega / fr.c;
     // a wholly-buried deck's view is at k_m, built for the fill's omega
-    if ((fr.buried || fr.crossing) && k != fr.k)
+    if ((fr.buried || fr.crossing || fr.mixed) && k != fr.k)
         throw nec4::Declined("a loss readout at another wavenumber than the fill's");
     // `_buried_wire_loss_power`: the shapes at k_m, the view the fill built
     // (`buried_medium` at omega / c is the front's medium)
@@ -411,7 +411,7 @@ double loss_power_at(const Front &fr, const std::vector<cd> &coeffs, double omeg
     // k_m, k_p)`)
     auto k_shape = [&](std::size_t s) {
         if (fr.buried) return fr.medium.k_m;
-        if (fr.crossing) return fr.below_seg[s] ? fr.medium.k_m : cd(fr.medium.k_p, 0.0);
+        if (fr.crossing || fr.mixed) return fr.below_seg[s] ? fr.medium.k_m : cd(fr.medium.k_p, 0.0);
         return cd(k, 0.0);
     };
     // `_basis_coefs(geom, k)` at the readout's own k

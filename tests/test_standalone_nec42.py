@@ -55,7 +55,8 @@ pytestmark = pytest.mark.skipif(
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
 CURRENT = NEC42 / "0223_dipole-ex6.nec"
-# not served yet: wires on both sides of the interface (momwire#1607 B6)
+# wires on both sides of the interface with no crossing junction: served by
+# the point-matched copy (momwire#1718 S12), not yet by the Galerkin one
 GROUND = NEC42 / "probes" / "p9_above_and_buried_gn2.nec"
 REFUSED = NEC42 / "refused" / "r1_gd_after_a_run.nec"
 DECKS = (DIPOLE, CURRENT, GROUND, REFUSED)
@@ -251,16 +252,18 @@ def test_an_unreadable_deck(deck, tmp_path):
 
 def test_a_refused_deck_and_an_unserved_one(tmp_path):
     _same(*_both([REFUSED.name, "x.out"], tmp_path))
-    exe, _ref, de, _dl = _both([GROUND.name, "y.out"], tmp_path / "g")
-    # both copies serve a wholly-buried deck and decline the mixed one
-    # (momwire#1607 B6a, momwire#1718 S11a), each in its own words
-    why = (
-        b"wires on both sides of the interface"
-        if BASIS == "sinusoidal-galerkin"
-        else b"wires both above and below the interface"
-    )
+    run = _both([GROUND.name, "y.out"], tmp_path / "g")
+    if BASIS != "sinusoidal-galerkin":
+        # the point-matched copy serves the mixed deck as the launcher does
+        # (momwire#1718 S12: the transmitted blocks)
+        _same(*run)
+        assert b"NEC ERROR" not in (run[2] / "y.out").read_bytes()
+        return
+    # the Galerkin copy serves a wholly-buried deck and declines the mixed one
+    # (momwire#1718 S11a), in its own words
     assert (
-        b"NEC ERROR - not served by this build: " + why in (de / "y.out").read_bytes()
+        b"NEC ERROR - not served by this build: wires on both sides of the interface"
+        in (run[2] / "y.out").read_bytes()
     )
 
 

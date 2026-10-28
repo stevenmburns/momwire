@@ -38,12 +38,13 @@ RUN TIME =), and takes the same three forms and the same picking
 engine setting at it; `nec42` in the name is what makes SimNEC write it
 NEC-4.2 decks. It is a preview: it serves free space, a perfect ground
 (GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire above it,
-buried wires (wholly below it, or joined to the wires above through a
-crossing junction), a GD far-field ground (the second medium's cliff),
-wire loading, networks (TL / NT), helices and near fields, and it still
-refuses by name, for now:
-    - buried wires beside raised ones with no crossing junction between
-      them (momwire#1607 B6);
+buried wires (wholly below it, joined to the wires above through a
+crossing junction, or beside them with no junction, as a raised antenna
+over a separate buried counterpoise is), a GD far-field ground (the second
+medium's cliff), wire loading, networks (TL / NT), helices and near
+fields, and it still refuses by name, for now:
+    - buried wires beside raised ones with no crossing junction when the
+      wires carry more than one radius (momwire#1718 S12);
     - an insulated wire (an IS card, momwire#1607 B5b).
 The Python command serves those decks.
 

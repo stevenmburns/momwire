@@ -122,6 +122,11 @@ struct Front {
     bool crossing = false;
     std::vector<long long> crossing_junctions;
     std::vector<bool> below_seg;
+    // a mixed deck (momwire#1718 S12): wires on both sides with no crossing
+    // junction; the basis is D2's stitch (`_stitch_basis_coefs`: each entry
+    // from its segment's medium's view, `k_entry` its k), `below_seg` the
+    // per-segment medium as on a crossing deck
+    bool mixed = false;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy

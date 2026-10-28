@@ -16,8 +16,8 @@ these tests hold the C++ dump equal to it over:
   frequency), and the segment-in-the-plane refusal;
 - a wire listed twice (momwire#1042): merged as it runs, merged reversed
   under wire loading, and refused when the copy carries the feed;
-- a wholly-buried deck at k_m (momwire#1607 B6a), and the decline of one
-  with wires on both sides of the interface.
+- a wholly-buried deck at k_m (momwire#1607 B6a), and one with wires on
+  both sides of the interface and no crossing junction (momwire#1718 S12).
 """
 
 from __future__ import annotations
@@ -194,13 +194,15 @@ CASES = [
         "fronts",
     ),
     (
-        "above_and_below_declines",
+        # momwire#1718 S12: wires on both sides with no crossing junction,
+        # D2's stitched basis (each entry from its segment's medium's view)
+        "above_and_below_stitched",
         deck(
             "GW 1 11 0 0 -1 0 0 -.5 .001\nGW 2 5 1 0 .5 1 0 2 .001\n",
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 2 3 0 1\nXQ\n",
             ge="GE -1",
         ),
-        "declined",
+        "fronts",
     ),
     # momwire#1607 B6a: a wholly-buried deck's basis at k_m
     (

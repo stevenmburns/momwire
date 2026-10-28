@@ -317,6 +317,26 @@ CASES = [
         ),
         "fills",
     ),
+    # momwire#1718 S12: wires on both sides with no crossing junction, the
+    # two transmitted pair classes, dense and sparse
+    (
+        "mixed_dense",
+        deck(
+            "GW 1 10 0 0 .5 0 0 10 .001\nGW 2 10 -5 1 -.1 5 1 -.1 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 7.15\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
+    (
+        "mixed_sparse_ld5",
+        deck(
+            "GW 1 40 0 0 .5 0 0 10 .001\nGW 2 30 -5 1 -.1 5 1 -.1 .001\n",
+            "GN 3 0 0 0 20 .01\nLD 5 0 0 0 5.8e7\nFR 0 1 0 0 7.15\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
     # momwire#1607 B6b: a crossing node's class blocks and point rows
     (
         "crossing_dense",
