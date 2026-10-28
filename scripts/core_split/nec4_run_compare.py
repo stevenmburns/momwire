@@ -106,9 +106,13 @@ def blas_addresses(basis: str = BASIS) -> list[int]:
         (npl, "scipy_cblas_dgemv64_"),
         (npl, "scipy_cblas_ddot64_"),
         (spl, "scipy_zgesvx_"),
-        (npl, "scipy_cblas_zdotc_sub64_"),
-        (spl, "scipy_zgeqp3_"),
     )
+    if basis == "sinusoidal-galerkin":
+        # a crossing deck's ACA and its node's constrained solve (momwire#1718 S11b)
+        names += (
+            (npl, "scipy_cblas_zdotc_sub64_"),
+            (spl, "scipy_zgeqp3_"),
+        )
     if basis == "bspline":
         names += (
             (npl, "scipy_cblas_dsyrk64_"),
