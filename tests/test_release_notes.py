@@ -92,10 +92,37 @@ def test_the_nec42_sinusoidal_exe_ships_in_the_linux_tarball_as_a_preview():
     assert "momwire-nec42-sinusoidal-linux sin42" in script
     assert (root / "standalone" / "release" / "momwire-nec42-sinusoidal-linux").exists()
     workflow = (WORKFLOWS / "standalone.yml").read_text()
-    assert "needs: [linux-artifact, linux, linux-nec42]" in workflow
+    assert "needs: [linux-artifact, linux, linux-nec42" in workflow
     readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
     assert "PREVIEW: momwire-nec42-sinusoidal-linux" in readme_txt
     for refusal in ("B6",):
         assert refusal in readme_txt, refusal
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "NEC-4.2 sinusoidal engine on Linux, without Python (preview)" in readme
+
+
+def test_the_sinusoidal_galerkin_exes_ship_in_the_linux_tarball_as_previews():
+    """momwire#1718 S-D: the two Sinusoidal-Galerkin no-Python builds ride the
+    Linux tarball, each gated (the tarball's own bytes) before a tag attaches
+    it, and every note that lists them says they are previews and what they
+    still refuse."""
+    root = WORKFLOWS.parent.parent
+    script = (root / "standalone" / "build_release_linux.sh").read_text()
+    workflow = (WORKFLOWS / "standalone.yml").read_text()
+    readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    for cmd, basis in (
+        ("momwire-nec42-sinusoidal-galerkin-linux", "sg42"),
+        ("momwire-nec5-sinusoidal-galerkin-linux", "sg5"),
+    ):
+        assert f"{cmd} {basis}" in script, cmd
+        assert (root / "standalone" / "release" / cmd).exists(), cmd
+        assert f"momwire-nec5-linux-x86_64/{cmd}" in workflow, cmd
+        assert cmd in readme_txt and cmd in readme, cmd
+    assert (
+        "needs: [linux-artifact, linux, linux-nec42, linux-nec42-sg, linux-nec5-sg]"
+        in workflow
+    )
+    assert "PREVIEW: momwire-nec42-sinusoidal-galerkin-linux" in readme_txt
+    assert "wires on both sides of the ground" in readme_txt
+    assert "Sinusoidal-Galerkin engines on Linux, without Python (preview)" in readme

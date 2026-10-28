@@ -185,7 +185,28 @@ jobs:
             if grep -q "NEC ERROR" /tmp/nec42-stream.out; then exit 1; fi
             n=$(grep -c "INPUT LINE .* NX " /tmp/nec42-stream.out)
             echo "nec42 stream: $n structures"
-            test "$n" = 2'
+            test "$n" = 2
+            # the Sinusoidal-Galerkin engines (momwire#1718, previews): the
+            # same NEC-4.2 deck and stream, and a NEC-5 deck and stream
+            ldd momwire-nec42-sinusoidal-galerkin-linux-avx2
+            ./momwire-nec42-sinusoidal-galerkin-linux -version
+            ./momwire-nec5-sinusoidal-galerkin-linux -version
+            for v in avx2 sse2; do
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec42-sinusoidal-galerkin-linux \
+                $F/0224_dipole-ex0.nec /tmp/sg42-$v.out
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec5-sinusoidal-galerkin-linux \
+                /io/tests/fixtures/razor_printout_3a/node_gap_two_sources.nec /tmp/sg5-$v.out
+              sed -n 2p /tmp/sg42-$v.out /tmp/sg5-$v.out
+              if grep -q "NEC ERROR" /tmp/sg42-$v.out /tmp/sg5-$v.out; then exit 1; fi
+            done
+            sed "s/^EN/NX/" $F/0224_dipole-ex0.nec $F/0223_dipole-ex6.nec |
+              ./momwire-nec42-sinusoidal-galerkin-linux - - > /tmp/sg42-stream.out
+            if grep -q "NEC ERROR" /tmp/sg42-stream.out; then exit 1; fi
+            test "$(grep -c "INPUT LINE .* NX " /tmp/sg42-stream.out)" = 2
+            ./momwire-nec5-sinusoidal-galerkin-linux - - \
+              < /io/scripts/core_split/bs2_stream_decks/bs2_stream_beam_free.nec > /tmp/sg5-stream.out
+            if grep -q "NEC ERROR" /tmp/sg5-stream.out; then exit 1; fi
+            echo "sg5 stream: $(grep -c "INPUT LINE .* NX " /tmp/sg5-stream.out) structures"'
       - uses: actions/upload-artifact@v7
         with:
           name: momwire-nec5-linux-x86_64
@@ -200,7 +221,7 @@ jobs:
     name: attach the Linux executable to the release
     # every executable in the tarball gated: razor-2p and bs2 by `linux`,
     # the NEC-4.2 sinusoidal preview by `linux-nec42`
-    needs: [linux-artifact, linux, linux-nec42]
+    needs: [linux-artifact, linux, linux-nec42, linux-nec42-sg, linux-nec5-sg]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     permissions:
@@ -510,12 +531,14 @@ jobs:
           OMP_NUM_THREADS: "1"
 
 
-  # `linux-nec42-sg` (momwire#1718 S4): the NEC-4.2 slot's
+  # `linux-nec42-sg` (momwire#1718 S4, S-D): the NEC-4.2 slot's
   # `momwire-nec42-sinusoidal-galerkin` as one no-Python executable
-  # (MW_EXE_BASIS=sg42), built here from source in both variants and held to
-  # the launcher by tests/test_standalone_nec42.py (every fixture deck, the
-  # launcher layer, the streaming call). Not in the release tarball yet
-  # (#1718 S-D), so no release job waits on it.
+  # (MW_EXE_BASIS=sg42), shipped in the tarball as a PREVIEW. The builds
+  # gated are the release artifact's own bytes (linux-artifact's
+  # manylinux_2_28 build), held to the launcher by
+  # tests/test_standalone_nec42.py (every fixture deck, the launcher layer,
+  # the streaming call), and the picking script. `release-linux` needs this
+  # job, so a tag never attaches a build no gate ran.
   linux-nec42-sg:
     needs: linux-artifact
     runs-on: ubuntu-24.04
@@ -539,23 +562,41 @@ jobs:
         env:
           CC: ccache gcc
           CXX: ccache g++
-      - name: static OpenBLAS (linux-artifact's cache)
-        uses: actions/cache/restore@v4
+      # The release artifact's two no-Python builds, at the paths the gates
+      # below name: every no-Python gate here is of the bytes a tag ships.
+      - uses: actions/download-artifact@v8
         with:
-          path: ~/mwx-openblas-manylinux/libmwxp.a
-          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
-          fail-on-cache-miss: true
-      - name: build (no-Python, avx2 and sse2)
+          name: momwire-nec5-linux-x86_64
+      - name: the release build (avx2 and sse2)
         run: |
-          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          tar -xzf momwire-nec5-linux-x86_64.tar.gz
+          R=momwire-nec5-linux-x86_64
           for v in avx2 sse2; do
-            cmake -S standalone -B build-nec42-sg-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
-              -DMW_EXE_BASIS=sg42 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
-            cmake --build build-nec42-sg-$v
+            mkdir -p build-nec42-sg-$v
+            cp $R/momwire-nec42-sinusoidal-galerkin-linux-$v build-nec42-sg-$v/momwire-nec42-sinusoidal-galerkin-standalone
           done
           ldd build-nec42-sg-avx2/momwire-nec42-sinusoidal-galerkin-standalone
+      # The picking script: the build this runner's CPU runs (avx2), and the
+      # forced sse2, each the very binary's bytes (the time lines masked).
+      - name: the picking script
+        run: |
+          P=momwire-nec5-linux-x86_64/momwire-nec42-sinusoidal-galerkin-linux
+          B=momwire-nec42-sinusoidal-galerkin-standalone
+          D=tests/fixtures/eznec_nec42/0224_dipole-ex0.nec
+          test "$($P -version)" = "$(build-nec42-sg-avx2/$B -version)"
+          mask() { sed -E 's/^( +FILL=).*$/\1<t>/; s/^( RUN TIME =).*$/\1<t>/; s/^( +MATRIX .*TIME).*$/\1<t>/' "$1"; }
+          for v in avx2 sse2; do
+            MOMWIRE_FORCE_VARIANT=$v $P $D via-script-$v.out
+            build-nec42-sg-$v/$B $D direct-$v.out
+            cmp <(mask via-script-$v.out) <(mask direct-$v.out)
+            sed -n 2p via-script-$v.out
+          done
+          $P $D via-script.out
+          cmp <(mask via-script.out) <(mask via-script-avx2.out)
         env:
-          CXX: ccache g++
+          MOMWIRE_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
       - name: no-Python build against the launcher (avx2)
         run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
         env:
@@ -571,12 +612,13 @@ jobs:
           OMP_NUM_THREADS: "1"
 
 
-  # `linux-nec5-sg` (momwire#1718 S10): the NEC-5 dialect's
+  # `linux-nec5-sg` (momwire#1718 S10, S-D): the NEC-5 dialect's
   # `momwire-nec5-sinusoidal-galerkin` as one no-Python executable
-  # (MW_EXE_BASIS=sg5), built here from source in both variants: the
-  # launcher-layer contract tests, every fixture deck and the NX chains as
-  # the launcher answers them (exe_compare --standalone), and SimNEC's
-  # streaming call. Not in the release tarball yet (#1718 S-D).
+  # (MW_EXE_BASIS=sg5), shipped in the tarball as a PREVIEW. The builds
+  # gated are the release artifact's own bytes: the launcher-layer contract
+  # tests, every fixture deck and the NX chains as the launcher answers them
+  # (exe_compare --standalone), SimNEC's streaming call, and the picking
+  # script. `release-linux` needs this job.
   linux-nec5-sg:
     needs: linux-artifact
     runs-on: ubuntu-24.04
@@ -600,23 +642,41 @@ jobs:
         env:
           CC: ccache gcc
           CXX: ccache g++
-      - name: static OpenBLAS (linux-artifact's cache)
-        uses: actions/cache/restore@v4
+      # The release artifact's two no-Python builds, at the paths the gates
+      # below name: every no-Python gate here is of the bytes a tag ships.
+      - uses: actions/download-artifact@v8
         with:
-          path: ~/mwx-openblas-manylinux/libmwxp.a
-          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
-          fail-on-cache-miss: true
-      - name: build (no-Python, avx2 and sse2)
+          name: momwire-nec5-linux-x86_64
+      - name: the release build (avx2 and sse2)
         run: |
-          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          tar -xzf momwire-nec5-linux-x86_64.tar.gz
+          R=momwire-nec5-linux-x86_64
           for v in avx2 sse2; do
-            cmake -S standalone -B build-nec5-sg-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
-              -DMW_EXE_BASIS=sg5 -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$OB
-            cmake --build build-nec5-sg-$v
+            mkdir -p build-nec5-sg-$v
+            cp $R/momwire-nec5-sinusoidal-galerkin-linux-$v build-nec5-sg-$v/momwire-nec5-sinusoidal-galerkin-standalone
           done
           ldd build-nec5-sg-avx2/momwire-nec5-sinusoidal-galerkin-standalone
+      # The picking script: the build this runner's CPU runs (avx2), and the
+      # forced sse2, each the very binary's bytes (the time lines masked).
+      - name: the picking script
+        run: |
+          P=momwire-nec5-linux-x86_64/momwire-nec5-sinusoidal-galerkin-linux
+          B=momwire-nec5-sinusoidal-galerkin-standalone
+          D=tests/fixtures/razor_printout_3a/node_gap_two_sources.nec
+          test "$($P -version)" = "$(build-nec5-sg-avx2/$B -version)"
+          mask() { sed -E 's/^( +FILL=).*$/\1<t>/; s/^( RUN TIME =).*$/\1<t>/; s/^( +MATRIX .*TIME).*$/\1<t>/' "$1"; }
+          for v in avx2 sse2; do
+            MOMWIRE_FORCE_VARIANT=$v $P $D via-script-$v.out
+            build-nec5-sg-$v/$B $D direct-$v.out
+            cmp <(mask via-script-$v.out) <(mask direct-$v.out)
+            sed -n 2p via-script-$v.out
+          done
+          $P $D via-script.out
+          cmp <(mask via-script.out) <(mask via-script-avx2.out)
         env:
-          CXX: ccache g++
+          MOMWIRE_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
       - name: contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:

@@ -60,6 +60,16 @@ preview it still refuses by name a wire below the ground plane (buried
 wires), a GD far-field ground and an insulated wire (IS); the Python
 command serves those decks.
 
+**Sinusoidal-Galerkin, Linux (preview).** The Linux tarball also holds
+`momwire-nec42-sinusoidal-galerkin-linux` and
+`momwire-nec5-sinusoidal-galerkin-linux`, what the Python commands
+`momwire-nec42-sinusoidal-galerkin` (the NEC-4.2 slot) and
+`momwire-nec5-sinusoidal-galerkin` (SimNEC's NEC-5 engine) answer, each with
+its own avx2 and sse2 builds and picker. Their printouts are the Python
+commands' byte for byte except the two measured-time lines. As a preview
+they still refuse by name a deck with wires on both sides of the ground;
+the Python commands serve those decks.
+
 **Windows (preview).** The zip holds `momwire-nec5-razor2p-avx2.exe` and
 `momwire-nec5-bs2-avx2.exe`, the `-sse2` pair, and a `win7` folder with an
 sse2 pair built to run on Windows 7 SP1. The programs are signed with
