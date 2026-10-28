@@ -606,6 +606,26 @@ CASES = [
         ),
         "printed",
     ),
+    # momwire#1607: kΔ under `_WELL_SCALED_KD`, so the above class takes the
+    # folded cos-1 shape on numpy's reduced-kernel route (dense, then sparse)
+    (
+        "crossing_folded_rise_rod",
+        deck(
+            "GW 1 10 0 0 0 0 0 1 .001\nGW 2 5 0 0 0 0 0 -.5 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 0.5\nEX 0 1 1 0 1\nRP 0 10 4 1000 0 0 10 90\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
+    (
+        "crossing_folded_sparse",
+        deck(
+            "GW 1 40 0 0 0 0 0 4 .001\nGW 2 10 0 0 0 0 0 -.5 .001\nGW 3 30 0 0 -.5 8 0 -.5 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 0.5\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
     (
         "crossing_sweep_ex6",
         deck(
