@@ -26,6 +26,7 @@
 
 #include "_sinusoidal_galerkin_direct_core.h"
 
+#include "_libm_complex_inline.h"  // `rsin` / `rcos`: sin and cos as two calls (momwire#1733)
 #include "_razor_front_core.h"  // `leggauss`, `max_image_distance`
 #include "_razor_exact_core.h"  // `coaxial_labels`
 #include "_sinusoidal_galerkin_core.h"
@@ -529,7 +530,7 @@ inline cd expm1_neg_j(double w) {
 }
 // `_stable.expm1_neg_j_from_half(half)`: re + 1j * im
 inline cd expm1_neg_j_from_half(double half) {
-    const double h = std::sin(half), c = std::cos(half);
+    const double h = mw_libm_c::rsin(half), c = mw_libm_c::rcos(half);
     const double re = -2.0 * h * h;
     const double im = 2.0 * h * c;
     return radd(re, cm(kJ, cd(im, 0.0)));
@@ -599,8 +600,8 @@ F6 reduced_cos1(const KConst &K, double z, double rho, double H) {
     const cd ezb = csub(cdr(cm(cr(c12, dz2), G2), r2 * r2), cdr(cm(cr(c11, dz1), G1), r1 * r1));
     f.ezc = cm(cneg(K.pz), cadd(ezb, rc(k * k, int_G0)));
     // sine
-    const double sin2 = std::sin(k * H), cos2 = std::cos(k * H);
-    const double sin1 = std::sin(-k * H), cos1 = std::cos(-k * H);
+    const double sin2 = mw_libm_c::rsin(k * H), cos2 = mw_libm_c::rcos(k * H);
+    const double sin1 = mw_libm_c::rsin(-k * H), cos1 = mw_libm_c::rcos(-k * H);
     const cd b_sin_2 = radd((k * dz2) * cos2, cr(rsub(1.0, cdr(rc(dz2 * dz2, c12), r2 * r2)), sin2));
     const cd b_sin_1 = radd((k * dz1) * cos1, cr(rsub(1.0, cdr(rc(dz1 * dz1, c11), r1 * r1)), sin1));
     const cd d_sin = csub(cm(G2, b_sin_2), cm(G1, b_sin_1));
@@ -645,7 +646,7 @@ F6 reduced_cos1(const KConst &K, double z, double rho, double H) {
     const double A = kH + phi, Bv = kH - phi;
     const double d_lin = ((((-8.0 * std::pow(H, 3.0)) * z) * rho) * rho) /
                          ((((rho * rho + dz1 * dz2) + r1 * r2) * (r1 + r2)) * r1 * r2);
-    const double cph = std::cos(phi), sph = std::sin(phi);
+    const double cph = mw_libm_c::rcos(phi), sph = mw_libm_c::rsin(phi);
     const double w_even = (A * sin_minus(Bv) - Bv * sin_minus(A)) / kH + ((d_lin / H) * sin2) * cph;
     const cd w_odd = cr(cr(cm(kJ, cd(sin2, 0.0)), -((rho * rho) * X) / (r1 * r2)), sph);
     const cd W = cm(cm(cr(G2, r2), rsub(cph, cm(kJ, cd(sph, 0.0)))), radd(w_even, w_odd));
@@ -1190,7 +1191,7 @@ F6 end_bracket(const KConst &K, double H, double z, double rho, double src_a, do
     const cd dw_drho = rc(2.0 * rho, cadd(rc(2.0, g2), rc(rho2, g3)));
     const cd gain = cr(cm(K.prc, cd(src_a * src_a, 0.0)), sign);
     const double kxi = k * xi_end;
-    const double s_sin = std::sin(kxi), c_cos = std::cos(kxi);
+    const double s_sin = mw_libm_c::rsin(kxi), c_cos = mw_libm_c::rcos(kxi);
     const double hs = std::sin(0.5 * kxi);
     const double s_cos = -2.0 * (hs * hs), sp_cos = -k * s_sin;
     F6 f;

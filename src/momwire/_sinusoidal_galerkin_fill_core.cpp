@@ -1672,7 +1672,7 @@ cd cmath_sin(cd z) {
     const double x = -z.imag(), y = z.real();
     if (!std::isfinite(x) || !std::isfinite(y) || std::fabs(x) > 708.0)
         decline("cmath.sin past its ordinary branch");
-    const double r_re = std::cos(y) * std::sinh(x), r_im = std::sin(y) * std::cosh(x);
+    const double r_re = mw_libm_c::rcos(y) * std::sinh(x), r_im = mw_libm_c::rsin(y) * std::cosh(x);
     return cd(r_im, -r_re);
 }
 
