@@ -37,7 +37,7 @@ jobs:
   # A scheduled run on a commit the last green scheduled run already covered
   # measures nothing new.
   moved:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
@@ -60,7 +60,7 @@ jobs:
   test-nightly:
     needs: moved
     if: needs.moved.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
