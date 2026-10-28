@@ -126,6 +126,8 @@ CORE_SOURCES = (
     "_somm_below_proj_core.cpp",
     "_somm_below_grid_core.cpp",
     "_somm_below_fill_core.cpp",
+    # The transmitted table and projection (momwire#1718 S12).
+    "_somm_transmitted_core.cpp",
     "_near_interface_core.cpp",
     "_near_interface_eval.cpp",
     # The point-observer twin and the buried near-field readout over it
@@ -252,6 +254,7 @@ def driver(accel, tmp_path_factory):
         "nec4_sinusoidal_printout_driver",
         "nec4_sinusoidal_galerkin_printout_driver",
         "nec5_sinusoidal_galerkin_printout_driver",
+        "transmitted_core_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, cmds = {}, [], []
@@ -2303,3 +2306,194 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
     assert counts.get("served", 0) >= 350, counts
     allowed = ("S7)", "S11b)")
     assert all(r.endswith(allowed) for r in reasons), reasons
+
+
+# --- the transmitted family (momwire#1718 S12) ------------------------------
+
+
+def _hexs(xs):
+    return " ".join(float(x).hex() for x in xs)
+
+
+def _transmitted_driver(driver, requests):
+    run = subprocess.run(
+        [str(driver[0]["transmitted_core_driver"])],
+        input="\n".join(requests) + "\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return run.stdout.splitlines()
+
+
+def _floats(tokens):
+    return np.array([float.fromhex(t) for t in tokens])
+
+
+# (eps~, k2, r_max, zp_min, zp_max, r_min): one rung at the default floor,
+# and one with the log-R axis extended down (`r_min_bucket`)
+_SOIL = complex(13.0, -0.005 / (2 * np.pi * 7.15e6 * 8.8541878188e-12))
+_K2 = 2 * np.pi * 7.15e6 / 299792458.0
+_T_GRIDS = [
+    (_SOIL, _K2, 10.0, 0.1, 0.1, None),
+    (_SOIL, _K2, 6.0, 0.15, 0.15, 0.004),
+]
+# a z' ladder (more than one rung), the multi-rung interpolation's case
+_T_LADDER = (_SOIL, _K2, 6.0, 0.1, 0.16, None)
+
+
+def _check_transmitted_grid(driver, spec):
+    from momwire import _sommerfeld_transmitted as T
+
+    eps, k2, r_max, zlo, zhi, r_min = spec
+    omega = k2 * 299792458.0
+    g = T.TransmittedGrid(eps, k2, r_max, zlo, zhi, omega=omega, r_min=r_min)
+    req = "grid " + _hexs(
+        [eps.real, eps.imag, k2, r_max, zlo, zhi, omega, T._MU0]
+        + [r_min is not None, r_min or 0.0]
+    )
+    (line,) = _transmitted_driver(driver, [req])
+    tok = line.split()
+    assert tok[0] == "grid", line
+    assert (int(tok[1]), int(tok[2]), int(tok[3])) == (g.n_zp, g.n_r, g.n_th)
+    state = _floats(tok[4:13])
+    want = [g.zp_min, g.zp_max, g.r_min, g.r_max, g.th_min, g.dth, g.lnr0, g.lnz0]
+    want.append(g.dlnz)
+    assert np.array_equal(state, np.array(want)), (state, want)
+    vals = _floats(tok[13:])
+    assert np.array_equal(vals, g._vals.view(np.float64).ravel())
+
+
+@pytest.mark.parametrize("spec", _T_GRIDS, ids=["one-rung", "r-min-extended"])
+def test_the_transmitted_table_in_cxx_alone_is_pythons(driver, spec, monkeypatch):
+    """The below->above table a mixed deck's cross blocks read
+    (`_somm_transmitted_core.cpp`, the six integrals' node the extension's
+    own `_somm_transmitted_six_inline.h`), filled with no Python: every
+    lattice constant and every one of the five surfaces at every node is
+    `TransmittedGrid`'s, bit for bit."""
+    from momwire import _sommerfeld_transmitted as T
+
+    monkeypatch.setattr(T, "_FORCE_NUMPY", False)
+    if not T._use_transmitted_accel():
+        pytest.skip("the transmitted accelerator is not built")
+    _check_transmitted_grid(driver, spec)
+
+
+@pytest.mark.slow
+def test_the_transmitted_ladder_in_cxx_alone_is_pythons(driver):
+    """A z' ladder of several rungs (`ladder_nodes`' numpy linspace), each
+    rung's surfaces Python's bit for bit."""
+    from momwire import _sommerfeld_transmitted as T
+
+    if not T._use_transmitted_accel():
+        pytest.skip("the transmitted accelerator is not built")
+    _check_transmitted_grid(driver, _T_LADDER)
+
+
+def test_the_transmitted_projection_and_plan_in_cxx_alone_are_pythons(driver):
+    """Both directions' projected tables over the grid `get_grid_below_above`
+    keys and fills (the role-order kernel, with the downward table the
+    upward one's reciprocity transpose), and `serve_plan`'s cross-medium
+    extents and refusals, as the executables compute them."""
+    from momwire import _below_interface as bi
+    from momwire import _sommerfeld_transmitted as T
+    from momwire import bspline
+    from momwire._sommerfeld_below import lambda_medium
+
+    if not T._use_transmitted_accel():
+        pytest.skip("the transmitted accelerator is not built")
+    eps, k2 = _SOIL, _K2
+    omega = k2 * 299792458.0
+    k_m = T.k_medium(eps, k2)
+    rng = np.random.default_rng(1718)
+    above = np.column_stack(
+        [rng.uniform(-3, 3, 7), rng.uniform(-3, 3, 7), rng.uniform(0.2, 6, 7)]
+    )
+    below = np.column_stack(
+        [rng.uniform(-3, 3, 5), rng.uniform(-3, 3, 5), np.full(5, -0.15)]
+    )
+    t_a = rng.normal(size=(7, 3))
+    t_b = rng.normal(size=(5, 3))
+    seg = np.zeros((1, 3))
+    plan = bi.serve_plan(
+        0.0,
+        seg,
+        seg,
+        np.arange(1),
+        above,
+        below,
+        k2,
+        k_m,
+        crossing=False,
+        pair_extents=bspline._pair_extents_below,
+    )
+    req = (
+        "plan "
+        + _hexs([0.0, k2, k_m.real, k_m.imag, 7, 5])
+        + " "
+        + _hexs(above.ravel())
+    )
+    req += " " + _hexs(below.ravel())
+    grid_args = [
+        eps.real,
+        eps.imag,
+        k2,
+        plan["r_cross_max"],
+        plan["zp_min"],
+        plan["zp_max"],
+    ]
+    grid_args += [omega, T._MU0, plan["r_cross_min"]]
+    g = T.get_grid_below_above(
+        eps,
+        k2,
+        plan["r_cross_max"],
+        plan["zp_min"],
+        plan["zp_max"],
+        omega,
+        r_min=plan["r_cross_min"],
+    )
+    pts_a = " ".join(_hexs([*p, *t]) for p, t in zip(above, t_a, strict=True))
+    pts_b = " ".join(_hexs([*p, *t]) for p, t in zip(below, t_b, strict=True))
+    reqs = [req]
+    for tr in (0, 1):
+        head = _hexs(grid_args + [0.0, k2, k_m.real, k_m.imag, tr, 7, 5])
+        reqs.append(f"proj {head} {pts_a} {pts_b}")
+    lines = _transmitted_driver(driver, reqs)
+    tok = lines[0].split()
+    assert tok[0] == "plan", lines[0]
+    want = [plan["r_cross_max"], plan["r_cross_min"], plan["zp_min"], plan["zp_max"]]
+    assert np.array_equal(_floats(tok[1:]), np.array(want))
+    up = T.transmitted_field_proj_below_to_above(
+        above, t_a, below, t_b, 0.0, k2, k_m, g
+    )
+    down = T.transmitted_field_proj_above_to_below(
+        below, t_b, above, t_a, 0.0, k2, k_m, g
+    )
+    for line, want in zip(lines[1:], (up, down.T), strict=True):
+        tok = line.split()
+        assert tok[:2] == ["proj", "-"], line[:80]
+        assert np.array_equal(_floats(tok[2:]), want.view(np.float64).ravel())
+    # a source past the ladder's reach refuses by name, where Python raises
+    deep = below.copy()
+    deep[0, 2] = -0.25 * lambda_medium(eps, k2) - 0.1
+    with pytest.raises(ValueError):
+        bi.serve_plan(
+            0.0,
+            seg,
+            seg,
+            np.arange(1),
+            above,
+            deep,
+            k2,
+            k_m,
+            crossing=False,
+            pair_extents=bspline._pair_extents_below,
+        )
+    req = (
+        "plan "
+        + _hexs([0.0, k2, k_m.real, k_m.imag, 7, 5])
+        + " "
+        + _hexs(above.ravel())
+    )
+    (line,) = _transmitted_driver(driver, [req + " " + _hexs(deep.ravel())])
+    assert line == "refused buried-depth", line

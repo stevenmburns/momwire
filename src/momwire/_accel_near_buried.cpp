@@ -8,6 +8,7 @@
 #include "_near_buried_core.h"
 #include "_somm_below_fill_core.h"
 #include "_somm_below_grid_core.h"
+#include "_somm_transmitted_core.h"
 
 #include <complex>
 #include <memory>
@@ -70,6 +71,92 @@ py::array_t<cd> near_buried_parts(py::array_t<double, py::array::c_style | py::a
     return out;
 }
 
+// momwire#1718 S12: the executables' transmitted table and projection
+// (`_somm_transmitted_core.cpp`), bound for the unit gates against
+// `_sommerfeld_transmitted`. Python's own route does not call these.
+py::dict transmitted_grid_core(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                               double mu, py::object r_min) {
+    const bool has = !r_min.is_none();
+    const double rm = has ? r_min.cast<double>() : 0.0;
+    somm_trans::Grid g;
+    {
+        py::gil_scoped_release release;
+        g = somm_trans::make_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has, rm, 0);
+    }
+    py::array_t<cd> vals({static_cast<py::ssize_t>(g.n_zp), py::ssize_t(5), static_cast<py::ssize_t>(g.n_r),
+                          static_cast<py::ssize_t>(g.n_th)});
+    std::copy(g.vals.begin(), g.vals.end(), vals.mutable_data());
+    py::array_t<double> zp_nodes(static_cast<py::ssize_t>(g.zp_nodes.size()));
+    std::copy(g.zp_nodes.begin(), g.zp_nodes.end(), zp_nodes.mutable_data());
+    py::dict d;
+    d["vals"] = vals;
+    d["zp_nodes"] = zp_nodes;
+    d["k_m"] = g.k_m;
+    d["lam_p"] = g.lam_p;
+    d["lam_m"] = g.lam_m;
+    d["r_min"] = g.r_min;
+    d["r_cap"] = g.r_cap;
+    d["r_max"] = g.r_max;
+    d["zp_min"] = g.zp_min;
+    d["zp_max"] = g.zp_max;
+    d["lnr0"] = g.lnr0;
+    d["dlnr"] = g.dlnr;
+    d["n_r"] = g.n_r;
+    d["th_min"] = g.th_min;
+    d["th0"] = g.th0;
+    d["dth"] = g.dth;
+    d["n_th"] = g.n_th;
+    d["lnz0"] = g.lnz0;
+    d["dlnz"] = g.dlnz;
+    return d;
+}
+
+// `serve_plan`'s cross section and the cross-block order, as the
+// executables compute them: (r_cross_max, r_cross_min, zp_min, zp_max), or
+// the refusal's name (a str).
+py::object transmitted_cross_plan_core(py::array_t<double, py::array::c_style | py::array::forcecast> obs_a,
+                                       py::array_t<double, py::array::c_style | py::array::forcecast> obs_b,
+                                       double ground_z, double k_p, cd k_m) {
+    try {
+        const somm_trans::CrossPlan p =
+            somm_trans::cross_extents(obs_a.data(), static_cast<size_t>(obs_a.shape(0)), obs_b.data(),
+                                      static_cast<size_t>(obs_b.shape(0)), ground_z, k_p, k_m);
+        return py::make_tuple(p.r_cross_max, p.r_cross_min, p.zp_min, p.zp_max);
+    } catch (const somm_trans::Refused &e) {
+        return py::str(e.what());
+    }
+}
+
+int64_t transmitted_near_q_factor_core(py::array_t<double, py::array::c_style | py::array::forcecast> seg_l,
+                                       py::array_t<double, py::array::c_style | py::array::forcecast> seg_r,
+                                       std::vector<int64_t> a_idx, std::vector<int64_t> b_idx) {
+    return somm_trans::near_q_factor(seg_l.data(), seg_r.data(), a_idx, b_idx);
+}
+
+// The executables' projection over the grid `transmitted_grid_core` fills
+// for the same arguments (filled again here): the (A, B) role-order table
+// and the eval refusal's name ('' when served).
+py::tuple transmitted_proj_core(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                                double mu, double r_min,
+                                py::array_t<double, py::array::c_style | py::array::forcecast> above,
+                                py::array_t<double, py::array::c_style | py::array::forcecast> t_above,
+                                py::array_t<double, py::array::c_style | py::array::forcecast> below,
+                                py::array_t<double, py::array::c_style | py::array::forcecast> t_below,
+                                double ground_z, double k_p, cd k_m, bool transposed) {
+    const size_t A = static_cast<size_t>(above.shape(0)), B = static_cast<size_t>(below.shape(0));
+    py::array_t<cd> out({static_cast<py::ssize_t>(A), static_cast<py::ssize_t>(B)});
+    std::string why;
+    {
+        py::gil_scoped_release release;
+        const somm_trans::Grid &g = somm_trans::get_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, r_min, 0);
+        somm_trans::Extremes ext;
+        somm_trans::project(g, above.data(), t_above.data(), A, below.data(), t_below.data(), B, ground_z, k_p,
+                            k_m, transposed, out.mutable_data(), ext);
+        if (A && B) why = somm_trans::eval_refusal(g, ext);
+    }
+    return py::make_tuple(out, why);
+}
+
 }  // namespace
 
 void register_near_buried(py::module_ &m) {
@@ -83,4 +170,18 @@ void register_near_buried(py::module_ &m) {
           "plane (the caller adds the above/above composition first), below(...) "
           "+ the transmitted field of the above sources at a point below it. "
           "(n, 3) complex; counts is each wire's element count at `subdiv`.");
+    m.def("transmitted_grid_core", &transmitted_grid_core, py::arg("eps_t"), py::arg("k2"), py::arg("r_max"),
+          py::arg("zp_min"), py::arg("zp_max"), py::arg("omega"), py::arg("mu"), py::arg("r_min") = py::none(),
+          "momwire#1718 S12: `TransmittedGrid(...)` as the executables fill it (a dict of its state).");
+    m.def("transmitted_cross_plan_core", &transmitted_cross_plan_core, py::arg("obs_a"), py::arg("obs_b"),
+          py::arg("ground_z"), py::arg("k_p"), py::arg("k_m"),
+          "momwire#1718 S12: `serve_plan`'s cross-medium extents as the executables compute them.");
+    m.def("transmitted_near_q_factor_core", &transmitted_near_q_factor_core, py::arg("seg_l"), py::arg("seg_r"),
+          py::arg("a_idx"), py::arg("b_idx"),
+          "momwire#1718 S12: `near_q_factor(*cross_pair_separation(...))` as the executables compute it.");
+    m.def("transmitted_proj_core", &transmitted_proj_core, py::arg("eps_t"), py::arg("k2"), py::arg("r_max"),
+          py::arg("zp_min"), py::arg("zp_max"), py::arg("omega"), py::arg("mu"), py::arg("r_min"),
+          py::arg("above"), py::arg("t_above"), py::arg("below"), py::arg("t_below"), py::arg("ground_z"),
+          py::arg("k_p"), py::arg("k_m"), py::arg("transposed"),
+          "momwire#1718 S12: the executables' get_grid + projection (role-order table, eval refusal name).");
 }
