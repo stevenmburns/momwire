@@ -42,6 +42,19 @@ from momwire.portal import _portal as nec_portal
 from momwire.portal import deck_frame, main, run_deck
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
+
+
+@pytest.fixture(autouse=True)
+def _one_engine_per_test():
+    """Every test here runs inside :func:`engine_scope`, so a `--basis` one
+    test's `main()` selects (a `bspline-d1` gate, a `sinusoidal` one) cannot
+    outlive it: `configure_engine` sets the basis and never puts it back, and
+    which test follows which is xdist's choice, so the leak turned
+    `test_engine_scope_puts_the_basis_back_for_whatever_follows` red whenever
+    a `bspline-d1` test ran just before it on the same worker. A test's own
+    scope nests inside this one."""
+    with nec_portal.engine_scope():
+        yield
 ALL_NAMES = tuple(
     entry["name"]
     for entry in json.loads((FIXTURE_DIR / "manifest.json").read_text())["decks"]
