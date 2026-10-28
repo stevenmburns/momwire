@@ -69,9 +69,10 @@ and an insulated wire (IS); the Python command serves those decks.
 `momwire-nec42-sinusoidal-galerkin` (the NEC-4.2 slot) and
 `momwire-nec5-sinusoidal-galerkin` (SimNEC's NEC-5 engine) answer, each with
 its own avx2 and sse2 builds and picker. Their printouts are the Python
-commands' byte for byte except the two measured-time lines. As a preview
-they still refuse by name a deck with wires on both sides of the ground;
-the Python commands serve those decks.
+commands' byte for byte except the two measured-time lines. They serve a
+wire through the ground at a crossing junction; as a preview they still
+refuse by name a deck with wires on both sides of the ground and no
+crossing junction, which the Python commands serve.
 
 **NEC-4.2 default engine, Linux (preview).** The Linux tarball also holds
 `momwire-nec42-linux`, what the Python command `momwire-nec42` (the NEC-4.2

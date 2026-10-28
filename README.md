@@ -285,9 +285,9 @@ the Python commands `momwire-nec42-sinusoidal-galerkin` (EZNEC's and SimNEC's
 NEC-4.2 slot) and `momwire-nec5-sinusoidal-galerkin` (SimNEC's NEC-5 engine),
 with the same `-avx2` / `-sse2` picking and the same three forms. Their
 printouts are the Python commands' byte for byte, apart from the two lines
-that report measured time. They serve free space, a perfect ground (GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire above it or a wire end on it, a structure wholly below a Sommerfeld ground, wire loading, networks (TL / NT), node gaps and the extended kernel. They still refuse by
-name a deck with wires on both sides of the ground; the Python commands
-serve those decks.
+that report measured time. They serve free space, a perfect ground (GN 1), a Sommerfeld ground (GN 2 / GN 3) with every wire above it or a wire end on it, a structure wholly below a Sommerfeld ground, a wire through the ground at a crossing junction, wire loading, networks (TL / NT), node gaps and the extended kernel. They still refuse by
+name a deck with wires on both sides of the ground and no crossing
+junction; the Python commands serve those decks.
 
 ### The NEC-4.2 slot's default engine on Linux, without Python (preview)
 
