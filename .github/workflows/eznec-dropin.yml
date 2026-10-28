@@ -53,7 +53,7 @@ jobs:
   # entry.py stay INSIDE the filter (only probes and prose are outside):
   # this lane is their gate.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
     steps:
@@ -436,7 +436,7 @@ jobs:
     # every EZNEC user downloads. The standard zip stays a hard requirement
     # all the same: its download below fails the job if its leg failed.
     if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     permissions:
       contents: write
     steps:

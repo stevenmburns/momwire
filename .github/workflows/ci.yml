@@ -45,7 +45,7 @@ jobs:
   # `lint` is deliberately NOT guarded -- ruff runs over the repo in six
   # seconds and a docs PR can still carry a Python snippet.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     outputs:
       code: ${{ steps.filter.outputs.code }}
       native: ${{ steps.filter.outputs.native }}
@@ -85,7 +85,7 @@ jobs:
               - '.github/workflows/ci.yml'
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -118,7 +118,7 @@ jobs:
   test:
     needs: changes
     if: github.event_name != 'workflow_dispatch' || inputs.lanes == 'all'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -341,7 +341,7 @@ jobs:
     # `not slow` is load-bearing. A test can carry both markers, and without
     # the exclusion this lane sweeps in the certification solves and runs
     # 5:19 instead of 2:02.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     if: >-
       (github.event_name == 'workflow_dispatch'
        || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
@@ -414,7 +414,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -518,7 +518,7 @@ jobs:
     # run on pull_request: the `if` below is still the enforcement, and
     # `workflow_dispatch` is not `pull_request` — a branch can BUY this lane
     # deliberately without it becoming a gate everyone pays for.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     if: >-
       (github.event_name == 'workflow_dispatch'
        || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
@@ -575,7 +575,7 @@ jobs:
     # cycle. Must NOT run on pull_request: the `if` below is the enforcement
     # (this workflow's own `pull_request` trigger would otherwise start it);
     # `workflow_dispatch` is not `pull_request`, so buying it stays opt-in.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     if: >-
       (github.event_name == 'workflow_dispatch'
        || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
@@ -633,7 +633,7 @@ jobs:
     # Windows — now lives in python-necpp's own CI, which is its proper home;
     # this job only needs *a* working PyNEC to compare against.
     if: github.event_name != 'workflow_dispatch' || inputs.lanes == 'all'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

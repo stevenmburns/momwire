@@ -99,7 +99,7 @@ jobs:
   # exe-ships-only-on-a-tag trap, from the other side). Keep the filter
   # identical to ci.yml's `changes` job.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
       # Tags and dispatches skip the filter step, so `|| 'true'` keeps the
@@ -243,7 +243,7 @@ jobs:
     # five ways on every main push looking for wheels that were never built.
     name: which pythons to smoke
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     outputs:
       versions: ${{ steps.pick.outputs.versions }}
     steps:
@@ -432,7 +432,7 @@ jobs:
     name: Linux cross-engine (PyNEC + momwire wheel, shared libgomp)
     if: github.event_name == 'workflow_dispatch'
     needs: build_wheels
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -464,7 +464,7 @@ jobs:
     # it (the `packaging` output defaults to 'true' there), and the release
     # job still gets its sdist on every tag.
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.packaging == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     steps:
       - uses: actions/checkout@v7
       - name: Build sdist
@@ -493,7 +493,7 @@ jobs:
     # broken interpreters rather than the first one.
     needs: [build_wheels, make_sdist, wheel_smoke]
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     permissions:
       contents: write
     steps:
@@ -547,7 +547,7 @@ jobs:
     # broken interpreters rather than the first one.
     needs: [build_wheels, make_sdist, wheel_smoke]
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
     permissions:
       id-token: write
     steps:
