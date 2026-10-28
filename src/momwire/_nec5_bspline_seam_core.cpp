@@ -220,7 +220,11 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
-        return decline(std::string("bspline-") + e.what());
+        // a NotImplementedError in Python's words stays a decline on this
+        // route; the NEC-4.2 slot's engine prints it as the slot's refusal
+        Built d = decline(std::string("bspline-") + e.what());
+        if (e.python) d.error_kind = "NotImplementedError";
+        return d;
     } catch (const bspline::FrontValueError &e) {
         // Python's ValueError, which escapes to the INTERNAL ERROR frame
         b.kind = Built::raised;

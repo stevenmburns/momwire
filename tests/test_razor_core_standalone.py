@@ -92,6 +92,8 @@ CORE_SOURCES = (
     # The Sinusoidal-Galerkin basis' answers to the same run half
     # (momwire#1718 S3).
     "_sinusoidal_galerkin_run_core.cpp",
+    # The B-spline basis' answers to the same run half (momwire#1607 C1).
+    "_bspline_nec4_run_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
