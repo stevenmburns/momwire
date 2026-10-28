@@ -20,6 +20,7 @@
 #include "_somm_proj_core.h"
 #include "_somm_below_fill_core.h"
 #include "_somm_below_remainder_inline.h"
+#include "_sinusoidal_series_inline.h"  // `sin_minus_arg`, `asinh_minus_arg_from_t`
 #include "_fma_inline.h"
 
 #include <algorithm>
@@ -270,7 +271,7 @@ cd expm1_neg_j(double w) {
 
 // `_stable.expm1_neg_j_from_half(half)`: re + 1j * im
 cd expm1_neg_j_from_half(double half) {
-    const double h = std::sin(half), c = std::cos(half);
+    const double h = mw_libm_c::rsin(half), c = mw_libm_c::rcos(half);
     const double re = -2.0 * h * h;
     const double im = 2.0 * h * c;
     return radd(re, cm(kJ, cd(im, 0.0)));
@@ -478,6 +479,186 @@ std::vector<std::vector<cd>> field_tensor_cos1(const Kernel &K, ll i0, ll i1, co
             out[0][at] = cadd(rc(td, ez_const), rc(rpf, erho_const));
             out[1][at] = cadd(rc(td, ez_sin), rc(rpf, erho_sin));
             out[2][at] = cadd(rc(td, ez_cos), rc(rpf, erho_cos));
+        }
+    }
+    return out;
+}
+
+// --- the reduced kernel on the folded shape, numpy's route -------------------
+//
+// `_field_tensor(geom_src, k, src_centers, src_tangents, obs_rows=(i0, i1),
+// cos_shape="cos-1")` with the reduced kernel at a real k: the accelerated
+// kernels serve the literal cos only, so Python takes `_field_components`:
+// `_pair_geometry`, `_field_components_bcast` below its EK branch with
+// `_folded_cos_fields` for the third shape, then `td * Ez + rpf * Erho`.
+// Every numpy operation is elementwise, so each pair is computed alone, as
+// `field_tensor_cos1` above does for the extended kernel. Python names every
+// complex product's right-hand operand on this route (momwire#392), so
+// numpy's temporary elision moves nothing at any band size. On arm64 the
+// `...d,...d` einsum is contracted (`MW_NUMPY_CONTRACTS`); its complex
+// einsum against the real weights rounds the same either way.
+
+// `einsum("...d,...d->...")` over three (momwire#1718's measurement)
+inline double edot3(const double *a, const double *b) {
+#if MW_NUMPY_CONTRACTS
+    return mw_fma::exact(a[2], b[2], a[0] * b[0]) + a[1] * b[1];
+#else
+    return (a[0] * b[0] + a[2] * b[2]) + a[1] * b[1];
+#endif
+}
+// `(u * v).sum(axis=-1)` over three
+inline double sdot3(const double *a, const double *b) { return (a[0] * b[0] + a[1] * b[1]) + a[2] * b[2]; }
+
+struct Reduced {  // `_field_components_bcast`'s six tables at one pair
+    cd erc, ezc, ers, ezs, ero, ezo;
+};
+
+struct RedConst {  // the Python scalars and the rule the route reads
+    double k = 0;
+    cd jk, mjk, pz, prc, c_e;
+    double four_pi_k = 0, sw_hi = 0, sw_lo = 0;
+    std::vector<double> gx, gw;
+};
+
+RedConst red_const(double k, double eta, const std::vector<double> &gx, const std::vector<double> &gw) {
+    RedConst K;
+    K.k = k;
+    K.jk = py_mul(kJ, cd(k, 0.0));        // 1j * k
+    K.mjk = py_mul(kMinusJ, cd(k, 0.0));  // -1j * k
+    K.c_e = py_mul(kMinusJ, cd(eta, 0.0));  // -1j * eta
+    K.four_pi_k = 4.0 * kPi * k;
+    K.pz = py_div(py_mul(kJ, cd(eta, 0.0)), cd(K.four_pi_k, 0.0));  // 1j * eta / (4 pi k)
+    K.prc = py_div(K.c_e, cd(K.four_pi_k, 0.0));                     // -1j * eta / (4 pi k)
+    K.gx = gx;
+    K.gw = gw;
+    std::vector<double> hi, lo;  // gw[gx >= 0].sum(), gw[gx < 0].sum()
+    for (std::size_t q = 0; q < gx.size(); q++) (gx[q] >= 0.0 ? hi : lo).push_back(gw[q]);
+    K.sw_hi = nec5::replay::np_pairwise(hi.data(), static_cast<int64_t>(hi.size()));
+    K.sw_lo = nec5::replay::np_pairwise(lo.data(), static_cast<int64_t>(lo.size()));
+    return K;
+}
+
+// `_field_components_bcast(..., cos_shape="cos-1", ek=None)` at one pair
+Reduced reduced_cos1(const RedConst &K, double z, double rho, double H) {
+    const double k = K.k;
+    const double dz2 = z - H, dz1 = z + H;
+    const double r2 = std::sqrt(rho * rho + dz2 * dz2);
+    const double r1 = std::sqrt(rho * rho + dz1 * dz1);
+    const cd G2 = cdr(mw_libm_c::cexp(cm(K.mjk, cd(r2, 0.0))), r2);
+    const cd G1 = cdr(mw_libm_c::cexp(cm(K.mjk, cd(r1, 0.0))), r1);
+    // pref_rho = -1j * eta / (4.0 * np.pi * k * rho_eval)
+    const cd pref_rho = nec5::replay::np_cdiv(K.c_e, cd(K.four_pi_k * rho, 0.0));
+    const cd c12 = radd(1.0, cm(K.jk, cd(r2, 0.0)));  // 1.0 + 1j k r0_2
+    const cd c11 = radd(1.0, cm(K.jk, cd(r1, 0.0)));
+    Reduced f;
+    f.erc = cm(K.prc, csub(cdr(cm(cr(c12, rho), G2), r2 * r2), cdr(cm(cr(c11, rho), G1), r1 * r1)));
+    const double int_inv_r0 = asinh_diff(-dz1, -dz2, rho * rho, r1, r2);
+    const std::size_t nq = K.gx.size();
+    std::vector<double> dz_qp(nq), r_qp(nq);
+    double ar = 0.0, ai = 0.0;  // einsum("...q,q->...", reg_qp, gw), from zero
+    for (std::size_t q = 0; q < nq; q++) {
+        const double z_qp = H * K.gx[q];
+        dz_qp[q] = z - z_qp;
+        r_qp[q] = std::sqrt(rho * rho + dz_qp[q] * dz_qp[q]);
+        const cd reg = cdr(expm1_neg_j_from_half((-0.5 * k) * r_qp[q]), r_qp[q]);
+        const double w = K.gw[q];
+        ar = ar + (reg.real() * w - reg.imag() * 0.0);
+        ai = ai + (reg.real() * 0.0 + reg.imag() * w);
+    }
+    const cd int_G0 = radd(int_inv_r0, cr(cd(ar, ai), H));
+    const cd ezb = csub(cdr(cm(cr(c12, dz2), G2), r2 * r2), cdr(cm(cr(c11, dz1), G1), r1 * r1));
+    f.ezc = cm(cneg(K.pz), cadd(ezb, rc(k * k, int_G0)));
+    // the sine source
+    const double sin2 = mw_libm_c::rsin(k * H), cos2 = mw_libm_c::rcos(k * H);
+    const double sin1 = mw_libm_c::rsin(-k * H), cos1 = mw_libm_c::rcos(-k * H);
+    const cd b_sin_2 = radd((k * dz2) * cos2, cr(rsub(1.0, cdr(rc(dz2 * dz2, c12), r2 * r2)), sin2));
+    const cd b_sin_1 = radd((k * dz1) * cos1, cr(rsub(1.0, cdr(rc(dz1 * dz1, c11), r1 * r1)), sin1));
+    f.ers = cm(pref_rho, csub(cm(G2, b_sin_2), cm(G1, b_sin_1)));
+    const cd b_sin_z_2 = rsub(k * cos2, cr(cdr(cr(c12, dz2), r2 * r2), sin2));
+    const cd b_sin_z_1 = rsub(k * cos1, cr(cdr(cr(c11, dz1), r1 * r1), sin1));
+    f.ezs = cm(K.pz, csub(cm(G2, b_sin_z_2), cm(G1, b_sin_z_1)));
+    // `_folded_cos_fields`
+    const double kH = k * H;
+    const double sh = mw_libm_c::rsin(0.5 * kH);
+    const double cm1 = -2.0 * (sh * sh);
+    const cd T2 = cdr(cm(c12, G2), r2 * r2);
+    const cd T1 = cdr(cm(c11, G1), r1 * r1);
+    const bool outside = dz1 * dz2 >= 0.0;
+    const double s_den = outside ? dz1 * r2 + dz2 * r1 : 1.0;
+    const double X = outside ? ((2.0 * H) * (dz1 + dz2)) / s_den : (dz1 * r2 - dz2 * r1) / (rho * rho);
+    const double t_sing = std::fabs(X) < 1.0
+                              ? asinh_minus_arg_from_t(std::asinh(X)) +
+                                    ((((H * rho) * rho) * X) * X) / (((r1 + r2) * r1) * r2)
+                              : std::asinh(X) - H * (1.0 / r1 + 1.0 / r2);
+    const cd g1 = cdr(expm1_neg_j(k * r1), r1);
+    const cd g2 = cdr(expm1_neg_j(k * r2), r2);
+    const cd e2 = cr(G2, r2), e1 = cr(G1, r1);
+    double mr = 0.0, mi = 0.0;  // einsum("...q,q->...", dg, gw), from zero
+    for (std::size_t q = 0; q < nq; q++) {
+        const bool near2 = K.gx[q] >= 0.0;
+        const double r_ref = near2 ? r2 : r1;
+        const double dz_ref = near2 ? dz2 : dz1;
+        const cd g_ref = near2 ? g2 : g1;
+        const cd e_ref = near2 ? e2 : e1;
+        const double d_step = near2 ? H * (1.0 - K.gx[q]) : (-H) * (1.0 + K.gx[q]);
+        const double delta = (d_step * (dz_qp[q] + dz_ref)) / (r_qp[q] + r_ref);
+        const cd dg_phase = expm1_neg_j(k * delta);
+        const cd dg_num = csub(cm(e_ref, dg_phase), cr(g_ref, delta));
+        const cd dg = cdr(dg_num, r_qp[q]);
+        const double w = K.gw[q];
+        mr = mr + (dg.real() * w - dg.imag() * 0.0);
+        mi = mi + (dg.real() * 0.0 + dg.imag() * w);
+    }
+    const cd m_reg = cadd(cadd(cd(mr, mi), rc(K.sw_hi - 1.0, g2)), rc(K.sw_lo - 1.0, g1));
+    const cd d_int = csub(radd(t_sing, rc(H, m_reg)), rc(sin_minus_arg(kH) / k, cadd(G1, G2)));
+    f.ezo = cm(K.pz, csub(rc(k * k, d_int), rc(cm1, csub(rc(dz2, T2), rc(dz1, T1)))));
+    const double dr = ((4.0 * H) * z) / (r1 + r2);
+    const double phi = (0.5 * k) * dr;
+    const double A = kH + phi, Bv = kH - phi;
+    const double d_lin = ((((-8.0 * std::pow(H, 3.0)) * z) * rho) * rho) /
+                         ((((rho * rho + dz1 * dz2) + r1 * r2) * (r1 + r2)) * r1 * r2);
+    const double cph = mw_libm_c::rcos(phi), sph = mw_libm_c::rsin(phi);
+    const double w_even = (A * sin_minus_arg(Bv) - Bv * sin_minus_arg(A)) / kH + ((d_lin / H) * sin2) * cph;
+    const cd w_odd = cr(cr(cm(kJ, cd(sin2, 0.0)), -((rho * rho) * X) / (r1 * r2)), sph);
+    const cd W = cm(cm(cr(G2, r2), rsub(cph, cm(kJ, cd(sph, 0.0)))), radd(w_even, w_odd));
+    const cd e_rho_brk = cadd(rc(-k, W), rc((rho * rho) * cm1, csub(T2, T1)));
+    f.ero = cm(pref_rho, e_rho_brk);
+    return f;
+}
+
+// `_field_tensor(geom_src, k, src_centers=sc, src_tangents=st, obs_rows=(i0,
+// i1), cos_shape="cos-1")` at a real k with the reduced kernel and one
+// radius: (Phi_const, Phi_sin, Phi_cos), (i1 - i0, n) in C order, `sh` the
+// sources' full lengths
+std::vector<std::vector<cd>> field_tensor_reduced_cos1(const Front &fr, const Kernel &K, ll i0, ll i1,
+                                                       const std::vector<Point3> &sc_, const std::vector<Point3> &st_,
+                                                       const std::vector<double> &sh, double k, double eta) {
+    const Geometry &g = fr.geometry;
+    const ll n = static_cast<ll>(sc_.size());
+    const RedConst C = red_const(k, eta, K.gx, K.gw);
+    const double a = fr.radius_per_wire[0];
+    std::vector<std::vector<cd>> out(3, std::vector<cd>(static_cast<std::size_t>((i1 - i0) * n)));
+    for (ll i = i0; i < i1; i++) {
+        const Point3 &oc = g.seg_centers[static_cast<std::size_t>(i)];
+        const Point3 &ot = g.seg_tangents[static_cast<std::size_t>(i)];
+        for (ll j = 0; j < n; j++) {
+            const std::size_t jz = static_cast<std::size_t>(j);
+            const Point3 &sc = sc_[jz];
+            const Point3 &st = st_[jz];
+            // `_pair_geometry`
+            const double rv[3] = {oc[0] - sc[0], oc[1] - sc[1], oc[2] - sc[2]};
+            const double z = edot3(rv, st.data());
+            double rho_vec[3];
+            for (int c = 0; c < 3; c++) rho_vec[c] = rv[c] - z * st[static_cast<std::size_t>(c)];
+            const double rho_axis = std::sqrt((rho_vec[0] * rho_vec[0] + rho_vec[1] * rho_vec[1]) + rho_vec[2] * rho_vec[2]);
+            const double rho = std::sqrt(rho_axis * rho_axis + a * a);
+            const double td = sdot3(ot.data(), st.data());
+            const double rpf = sdot3(rho_vec, ot.data()) / rho;
+            const Reduced f = reduced_cos1(C, z, rho, 0.5 * sh[jz]);
+            const std::size_t at = static_cast<std::size_t>((i - i0) * n + j);
+            out[0][at] = cadd(rc(td, f.ezc), rc(rpf, f.erc));
+            out[1][at] = cadd(rc(td, f.ezs), rc(rpf, f.ers));
+            out[2][at] = cadd(rc(td, f.ezo), rc(rpf, f.ero));
         }
     }
     return out;
@@ -1121,6 +1302,9 @@ std::vector<std::vector<cd>> class_tensor(const Front &fr, const Kernel &K, ll i
         std::vector<double> a_obs(static_cast<std::size_t>(m), fr.radius_per_wire[0]);
         CF ao = f64(a_obs.data(), {m});
         t = sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+    } else if (folded) {
+        // the accelerated kernel serves the literal cos only: numpy's route
+        return field_tensor_reduced_cos1(fr, K, i0, i1, sc_, st_, sh, k.real(), eta.real());
     } else {
         t = sinusoidal_field_tensor(oc, ot, sc, st, h, fr.radius_per_wire[0], k.real(), eta.real(), gx, gw, 0);
     }
@@ -1448,9 +1632,6 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     }
     if (std::isnan(kd_min)) decline("a non-finite k*h");
     const bool cos1 = kd_min < kWellScaledKd;
-    // the reduced kernel's folded shape is numpy's `_field_components`
-    // route, which this copy does not take
-    if (cos1) decline("the folded cos-1 shape on a crossing deck (the reduced kernel's numpy route is not copied)");
     Entries E;
     std::map<std::pair<ll, ll>, int> seen;
     for (ll i = 0; i < N; i++)

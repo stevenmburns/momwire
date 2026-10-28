@@ -327,6 +327,26 @@ CASES = [
         ),
         "fills",
     ),
+    # momwire#1607: the folded cos-1 shape on a crossing deck (kΔ under
+    # `_WELL_SCALED_KD`), dense and sparse
+    (
+        "crossing_folded_dense",
+        deck(
+            "GW 1 10 0 0 0 0 0 1 .001\nGW 2 5 0 0 0 0 0 -.5 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 0.5\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
+    (
+        "crossing_folded_sparse",
+        deck(
+            "GW 1 40 0 0 0 0 0 4 .001\nGW 2 10 0 0 0 0 0 -.5 .001\nGW 3 30 0 0 -.5 8 0 -.5 .001\n",
+            "GN 2 0 0 0 13 .005\nFR 0 1 0 0 0.5\nEX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "fills",
+    ),
     (
         "crossing_sparse_ld5",
         deck(
