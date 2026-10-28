@@ -91,6 +91,10 @@ struct PortSolution {
     long long n = 0, n_ports = 0;
     std::vector<std::complex<double>> G;       // (n, n), F order: `_assemble_Z`'s
     std::vector<std::complex<double>> coeffs;  // (n, n_ports), F order (`lu_solve`'s)
+    // numpy holds the coefficients in C order (`_solve_constrained`'s `x`,
+    // momwire#1718 S11b), F order otherwise; `coeffs` is F order either way,
+    // and a reader whose BLAS calls follow the strides takes this
+    bool c_order = false;
     std::vector<std::complex<double>> y;       // (n_ports, n_ports), C order
 };
 
