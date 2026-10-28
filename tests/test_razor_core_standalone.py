@@ -2039,15 +2039,15 @@ def test_the_mixed_decks_print_as_python(driver, tmp_path):
     crossing junction -- a vertical over a separate buried screen, a dipole
     over a buried wire, two radii, loads, buried wires at two depths (a z'
     ladder of several rungs), a pair closer than a segment (the cross
-    block's raised order) and a pattern with a near field -- through the two
-    transmitted blocks over the below->above table filled in C++
-    (`_somm_transmitted_core`), byte for byte as `_shell.render(text,
+    block's raised order), a pattern with and without a near field --
+    through the two transmitted blocks over the below->above table filled in
+    C++ (`_somm_transmitted_core`), byte for byte as `_shell.render(text,
     basis="bspline")` prints them. GN 3 and a NEC-4 load spelling refuse in
     this dialect, in its own words."""
     decks = sorted(MIXED_DECKS.glob("*.nec"))
-    assert len(decks) == 9
+    assert len(decks) == 10
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
-    assert counts.get("served", 0) == 7 and not reasons, (counts, reasons)
+    assert counts.get("served", 0) == 8 and not reasons, (counts, reasons)
     assert counts.get("refused", 0) == 2, counts
 
 
