@@ -307,6 +307,7 @@ if(MW_EXE_BASIS STREQUAL "sg5")
   list(APPEND MW_CORE_SOURCES
     ${MW_SRC}/_somm_pairs_owned_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_crossing_core.cpp
     # the direct-field fill (S7): a wire end on the ground plane, over the
     # Galerkin far fill core (S1) and its complex twin's sweep TU
     ${MW_SRC}/_sinusoidal_galerkin_direct_core.cpp
@@ -331,6 +332,7 @@ if(MW_EXE_BASIS STREQUAL "sg42")
     ${MW_SRC}/_bspline_transmitted_core.cpp
     ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
+    ${MW_SRC}/_sinusoidal_galerkin_crossing_core.cpp
     # the direct-field fill (S7): a wire end on the ground plane, over the
     # Galerkin far fill core (S1) and its complex twin's sweep TU
     ${MW_SRC}/_sinusoidal_galerkin_direct_core.cpp

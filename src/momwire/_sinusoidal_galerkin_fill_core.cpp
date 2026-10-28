@@ -26,6 +26,7 @@
 
 #include "_sinusoidal_galerkin_fill_core.h"
 
+#include "_sinusoidal_galerkin_crossing_core.h"
 #include "_sinusoidal_galerkin_direct_core.h"
 
 #include "_bspline_core.h"
@@ -48,6 +49,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -766,24 +768,36 @@ Deck deck_of(const Front &fr) {
 // products as the caller's operand types make them: `cplx` is a complex k (a
 // wholly-buried deck's k_m, momwire#1718 S11a), whose near pairs take the
 // complex product rule.
+// A class block of a crossing deck (momwire#1718 S11b): the pair order
+// and ladder (bspline's `BURIED_*` in the medium), and the GLOBAL segment ids
+// of the observer and source lists (`obs_idx` / `src_idx`, identity when null)
+struct WinOpts {
+    int64_t n_qp = DEFAULT_N_QP_PAIR;
+    const std::vector<std::pair<double, int64_t>> *ladder = nullptr;  // null: `DEFAULT_PAIR_ORDER_LADDER`
+    const std::vector<int64_t> *obs_idx = nullptr, *src_idx = nullptr;
+};
+
 void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src, cd k,
-                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src);
+                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src,
+                    const WinOpts &wo = WinOpts());
 
 void window_fill(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src,
-                 double k, double eta, cd scale, bool ek, bool has_b_src, const std::vector<double> &b_src) {
+                 double k, double eta, cd scale, bool ek, bool has_b_src, const std::vector<double> &b_src,
+                 const WinOpts &wo = WinOpts()) {
     const cd c_a = py_mul(py_mul(cd(0.0, 1.0), cd(k, 0.0)), cd(eta, 0.0));  // 1j * k * eta
     const cd c_phi = py_div(cd(eta, 0.0), py_mul(cd(0.0, 1.0), cd(k, 0.0)));  // eta / (1j * k)
     const cd c_a_s = py_mul(c_a, scale);
     const cd c_phi_s = py_mul(c_phi, scale);
-    window_fill_at(G, n_basis, csr, s, src, cd(k, 0.0), false, c_a_s, c_phi_s, ek, has_b_src, b_src);
+    window_fill_at(G, n_basis, csr, s, src, cd(k, 0.0), false, c_a_s, c_phi_s, ek, has_b_src, b_src, wo);
 }
 
 void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s, const Segs &src, cd k,
-                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src) {
+                    bool cplx, cd c_a_s, cd c_phi_s, bool ek, bool has_b_src, const std::vector<double> &b_src,
+                    const WinOpts &wo) {
     const std::size_t n_obs = s.n, n_src = src.n;
     const int64_t rows = std::max<int64_t>(
         1, WINDOW_BYTES / (N_SHAPES * N_SHAPES * 16 * std::max<int64_t>(static_cast<int64_t>(n_src), 1)));
-    const LadderArrays L = ladder_arrays(DEFAULT_N_QP_PAIR, default_ladder());
+    const LadderArrays L = ladder_arrays(wo.n_qp, wo.ladder ? *wo.ladder : default_ladder());
     const nd::ssize_t NS = static_cast<nd::ssize_t>(n_src);
     const CF tt = borrow(L.t, {static_cast<nd::ssize_t>(L.t.size())}),
              tw = borrow(L.w, {static_cast<nd::ssize_t>(L.w.size())}),
@@ -793,7 +807,7 @@ void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, con
     std::vector<int64_t> every(n_src, 0);
     const CI gj = borrow(every, {NS});
     std::vector<int64_t> all_cols(n_src);
-    for (std::size_t j = 0; j < n_src; j++) all_cols[j] = static_cast<int64_t>(j);
+    for (std::size_t j = 0; j < n_src; j++) all_cols[j] = wo.src_idx ? (*wo.src_idx)[j] : static_cast<int64_t>(j);
     const CI cols = borrow(all_cols, {NS});
     const CI st = borrow(csr.starts, {static_cast<nd::ssize_t>(csr.starts.size())}),
              jb = borrow(csr.jbasis, {static_cast<nd::ssize_t>(csr.jbasis.size())});
@@ -854,7 +868,7 @@ void window_fill_at(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, con
             for (std::size_t pq = 0; pq < 9; pq++) J[(pq * nw + m) * n_src + j] = nb.J[pq * nn + q];
         }
         std::vector<int64_t> rows_seg(nw);
-        for (std::size_t m = 0; m < nw; m++) rows_seg[m] = static_cast<int64_t>(i0 + m);
+        for (std::size_t m = 0; m < nw; m++) rows_seg[m] = wo.obs_idx ? (*wo.obs_idx)[i0 + m] : static_cast<int64_t>(i0 + m);
         std::vector<double> t_rows(s.t.begin() + static_cast<std::ptrdiff_t>(3 * i0),
                                    s.t.begin() + static_cast<std::ptrdiff_t>(3 * i1));
         const nd::ssize_t NW = static_cast<nd::ssize_t>(nw);
@@ -1071,10 +1085,14 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
                                    static_cast<std::ptrdiff_t>(qn), 3, loc.data(), pl.data(),
                                    static_cast<std::ptrdiff_t>(R), loc.data(), pl.data(),
                                    static_cast<std::ptrdiff_t>(R), true, 0, Qr.data(), 0);
-    // `fold_rows_into(G, Qr, rows_basis, scale)`: every basis has a row here
+    // `fold_rows_into(G, Qr, rows_basis, scale)`: onto the bases with a row
+    // (every basis on a whole deck; a class block's own, momwire#1718 S11b)
     {
         std::vector<std::size_t> first(n_basis);
         for (std::size_t b = 0; b < n_basis; b++) first[b] = static_cast<std::size_t>(row_start[b]);
+        std::vector<std::size_t> bases;
+        for (std::size_t b = 0; b < n_basis; b++)
+            if (counts[b] > 0) bases.push_back(b);
         std::vector<std::size_t> extra;
         for (std::size_t r = 0; r < R; r++)
             if (static_cast<int64_t>(r) != row_start[static_cast<std::size_t>(rows_basis[r])]) extra.push_back(r);
@@ -1096,8 +1114,8 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
                 for (std::size_t r = 0; r < R; r++) Qr[r * R + t] = cadd(Qr[r * R + t], cols[i * R + r]);
             }
         }
-        for (std::size_t i = 0; i < n_basis; i++)
-            for (std::size_t j = 0; j < n_basis; j++) {
+        for (std::size_t i : bases)
+            for (std::size_t j : bases) {
                 const cd blk = cm(Qr[first[i] * R + first[j]], cd(1.0, 0.0));  // `blk *= scale`
                 cd &gij = G[i + j * n_basis];
                 gij = cadd(gij, blk);
@@ -1410,8 +1428,12 @@ void scatter_pair_moments(std::vector<cd> &G, std::size_t n_basis, const Csr &cs
 // `_mp_remainder_below(G, geom, seg_view, ctx, fg, keep=all, medium, r1_below)`:
 // `remainder_Q_field(G, ..., segs=all, k_m, n_qp_sommerfeld=3, proj, gz=0,
 // scale=REMAINDER_SIGN)`, G F order
+// `segs`: the class's GLOBAL segment ids, `s` the class's own arrays in that
+// order, `csr` the whole view's tables (a crossing deck's below class,
+// momwire#1718 S11b; every segment on a wholly-buried deck)
 void mp_remainder_below(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const Segs &s,
-                        const sinusoidal::Medium &md, double r1_below, double omega, const nec5::NumpyLinalg &np) {
+                        const std::vector<int64_t> &segs, const sinusoidal::Medium &md, double r1_below, double omega,
+                        const nec5::NumpyLinalg &np) {
     const std::size_t N = s.n;
     const int64_t q = 3;  // n_qp_sommerfeld
     const std::size_t Q = static_cast<std::size_t>(q);
@@ -1419,10 +1441,10 @@ void mp_remainder_below(std::vector<cd> &G, std::size_t n_basis, const Csr &csr,
     somm_below::Source *source = somm_below::source();
     if (source == nullptr) decline("no below/below table source (the buried fill's grid)");
     somm_below::Grid *grid = &source->get(md.eps_t, md.k_p, r1_below, omega, SOLVER_MU, somm_below::SPACING_FILL);
-    std::vector<int64_t> segs(N);
-    for (std::size_t i = 0; i < N; i++) segs[i] = static_cast<int64_t>(i);
-    const FieldNodes f = field_nodes(s, segs, q);
-    const std::vector<cd> W = shape_weights_c(k, s, segs, f);
+    std::vector<int64_t> local(N);
+    for (std::size_t i = 0; i < N; i++) local[i] = static_cast<int64_t>(i);
+    const FieldNodes f = field_nodes(s, local, q);
+    const std::vector<cd> W = shape_weights_c(k, s, local, f);
     BelowRemainder rem;
     below_remainder_for(rem, md, grid, f);
     // the assembler's tables: unit tangents (F carries the projection), no
@@ -1463,10 +1485,23 @@ void mp_remainder_below(std::vector<cd> &G, std::size_t n_basis, const Csr &csr,
                                                 nd::none(), Z, 0);
     }
     // the pairs the geometry raises (`remainder_raised_pairs`), each at its
-    // own order minus the base fill's
+    // own order minus the base fill's. Listed over the class's own arrays,
+    // then read through `loc` (global id -> class position) as the
+    // reference reads them, and kept where both ends land in the class
+    std::vector<int64_t> I0, J0, Q0;
+    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), 0.0, q, 1.0, 0.0, np, I0, J0, Q0);
+    if (I0.empty()) return;
+    const std::size_t n_total = csr.starts.size() - 1;
+    std::vector<int64_t> loc(n_total, -1);
+    for (std::size_t i = 0; i < N; i++) loc[static_cast<std::size_t>(segs[i])] = static_cast<int64_t>(i);
     std::vector<int64_t> I, Jl, Qp;
-    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), 0.0, q, 1.0, 0.0, np, I, Jl, Qp);
-    if (I.empty()) return;
+    for (std::size_t t = 0; t < I0.size(); t++) {
+        const int64_t a = loc.at(static_cast<std::size_t>(I0[t])), b = loc.at(static_cast<std::size_t>(J0[t]));
+        if (a < 0 || b < 0) continue;
+        I.push_back(a);
+        Jl.push_back(b);
+        Qp.push_back(Q0[t]);
+    }
     const std::size_t n = I.size();
     std::vector<cd> dJ(9 * n, cd(0.0, 0.0));
     auto moments = [&](const std::vector<int64_t> &obs, const std::vector<int64_t> &src, int64_t qq) {
@@ -1505,7 +1540,12 @@ void mp_remainder_below(std::vector<cd> &G, std::size_t n_basis, const Csr &csr,
             }
         }
     }
-    scatter_pair_moments(G, n_basis, csr, I, Jl, dJ);
+    std::vector<int64_t> Ig(n), Jg(n);
+    for (std::size_t t = 0; t < n; t++) {
+        Ig[t] = segs[static_cast<std::size_t>(I[t])];
+        Jg[t] = segs[static_cast<std::size_t>(Jl[t])];
+    }
+    scatter_pair_moments(G, n_basis, csr, Ig, Jg, dJ);
 }
 
 // numpy's complex absolute (`simd_cabsolute`): larger * sqrt(fma(r, r, 1)),
@@ -1636,7 +1676,9 @@ std::vector<cd> assemble_Z_buried(const Front &fr, const nec4::SolverArgs &args,
     segment_ends(img);
     const cd scale = py_mul(cd(-DIRECT_SIGN, 0.0), md.a_m);
     window_fill_at(G, n_basis, csr, d.segs, img, k, true, smul(c_a, scale), smul(c_phi, scale), false, false, none_b);
-    mp_remainder_below(G, n_basis, csr, d.segs, md, r1_below, fr.omega, *np);
+    std::vector<int64_t> every(N);
+    for (std::size_t i = 0; i < N; i++) every[i] = static_cast<int64_t>(i);
+    mp_remainder_below(G, n_basis, csr, d.segs, every, md, r1_below, fr.omega, *np);
     // `_apply_loading(G, geom, seg_view, k_m)`: the overlap's integrals at the
     // complex k are not copied yet
     std::vector<cd> z_wire;
@@ -1663,6 +1705,15 @@ cd basis_value_c(cd sigAC, cd B, cd sigC, cd k, double xi) {
     const cd t1 = cm(B, s);
     const cd t2 = cm(cm(cd(2.0, 0.0), sigC), smul(half, half));
     return csub(cadd(sigAC, t1), t2);
+}
+
+// `_basis_value(sigAC, B, sigC, k, xi)` with `k` an array (`_entry_k` on a
+// view carrying `k_entry`, a crossing deck's, momwire#1718 S11b): numpy's
+// array products throughout
+cd basis_value_e(cd sigAC, cd B, cd sigC, cd k, double xi) {
+    const cd half = mw_libm_c::csin(cm(cm(cd(0.5, 0.0), k), cd(xi, 0.0)));
+    const cd s = mw_libm_c::csin(cm(k, cd(xi, 0.0)));
+    return csub(cadd(sigAC, cm(B, s)), cm(cm(cd(2.0, 0.0), sigC), cm(half, half)));
 }
 
 // CPython 3.12's `cmath.sin(z)` at a finite z of moderate size:
@@ -1696,6 +1747,21 @@ cd feed_segment_current_c(const SegView &v, const std::vector<cd> &alpha, std::s
     return rp::np_csum(terms);
 }
 
+// `_feed_segment_current(alpha, seg_view, feed_seg, xi)` off the centre on a
+// view carrying `k_entry`: `_basis_value` at each entry's own k, then
+// `(amp * f).sum()`
+cd feed_segment_current_e(const SegView &v, const std::vector<cd> &alpha, std::size_t off, ll fi, double xi) {
+    const std::size_t f = static_cast<std::size_t>(fi);
+    std::vector<cd> terms;
+    for (ll e = v.starts[f]; e < v.starts[f + 1]; e++) {
+        const std::size_t ez = static_cast<std::size_t>(e);
+        const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
+        const cd amp = alpha[off + static_cast<std::size_t>(v.jbasis[ez])];
+        terms.push_back(cm(amp, basis_value_e(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), v.k_entry[ez], xi)));
+    }
+    return rp::np_csum(terms);
+}
+
 // `_feed_segment_current(alpha, seg_view, feed_seg, xi)` for a real k
 cd feed_segment_current(const SegView &v, const std::vector<cd> &alpha, std::size_t off, ll fi, double k, double xi) {
     const std::size_t f = static_cast<std::size_t>(fi);
@@ -1716,6 +1782,310 @@ cd feed_segment_current(const SegView &v, const std::vector<cd> &alpha, std::siz
         }
     }
     return rp::np_csum(terms);
+}
+
+
+// --- a crossing deck (momwire#1718 S11b, `_assemble_Z_mp_mixed`) -----------
+
+const std::vector<std::pair<double, int64_t>> &buried_ladder() {  // `BURIED_PAIR_ORDER_LADDER`
+    static const std::vector<std::pair<double, int64_t>> l{{2.0, 8}, {16.0, 4}};
+    return l;
+}
+constexpr int64_t BURIED_N_QP_PAIR = 32;
+
+// `basis_csr(seg_view, k_p)` on a view carrying `k_entry`: `dshape_coefs`
+// at each entry's own k (`-k` the array's negation)
+Csr basis_csr_entry(const SegView &v) {
+    Csr c;
+    c.starts.assign(v.starts.begin(), v.starts.end());
+    c.jbasis.assign(v.jbasis.begin(), v.jbasis.end());
+    const std::size_t nnz = v.jbasis.size();
+    c.coef.resize(3 * nnz);
+    c.dcoef.resize(3 * nnz);
+    for (std::size_t e = 0; e < nnz; e++) {
+        const cd k = v.k_entry[e], mk(-k.real(), -k.imag());
+        const cd sig(static_cast<double>(v.sigma[e]), 0.0);
+        const cd c1 = v.B[e];
+        const cd c2 = cm(sig, v.C[e]);
+        c.coef[3 * e] = cm(sig, v.AC[e]);
+        c.coef[3 * e + 1] = c1;
+        c.coef[3 * e + 2] = c2;
+        c.dcoef[3 * e] = cm(k, c1);
+        c.dcoef[3 * e + 1] = cm(mk, c2);
+        c.dcoef[3 * e + 2] = cm(k, c1);
+    }
+    return c;
+}
+
+// `csr_subset(starts, jbasis, coef, dcoef, idx)`: the segments `idx`' entries,
+// bases unrenumbered
+Csr csr_subset(const Csr &c, const std::vector<int64_t> &idx) {
+    Csr o;
+    o.starts.push_back(0);
+    for (int64_t s : idx) {
+        for (int64_t e = c.starts[static_cast<std::size_t>(s)]; e < c.starts[static_cast<std::size_t>(s) + 1]; e++) {
+            const std::size_t ez = static_cast<std::size_t>(e);
+            o.jbasis.push_back(c.jbasis[ez]);
+            for (int p = 0; p < 3; p++) {
+                o.coef.push_back(c.coef[3 * ez + static_cast<std::size_t>(p)]);
+                o.dcoef.push_back(c.dcoef[3 * ez + static_cast<std::size_t>(p)]);
+            }
+        }
+        o.starts.push_back(static_cast<int64_t>(o.jbasis.size()));
+    }
+    return o;
+}
+
+// One class's segment tables (`c[idx]`, `t[idx]`, `h[idx]`, `a_row[idx]`),
+// and the class's image (`fg.image_sources()[idx]`)
+Segs class_segs(const Segs &all, const std::vector<int64_t> &idx) {
+    Segs s;
+    s.n = idx.size();
+    for (int64_t i : idx) {
+        const std::size_t z = static_cast<std::size_t>(i);
+        for (int q = 0; q < 3; q++) {
+            s.c.push_back(all.c[3 * z + static_cast<std::size_t>(q)]);
+            s.t.push_back(all.t[3 * z + static_cast<std::size_t>(q)]);
+        }
+        s.h.push_back(all.h[z]);
+        s.a.push_back(all.a[z]);
+    }
+    segment_ends(s);
+    return s;
+}
+Segs image_of(const Segs &s) {
+    Segs img = s;
+    for (std::size_t i = 0; i < s.n; i++) {
+        img.c[3 * i + 2] = 2.0 * 0.0 - s.c[3 * i + 2];
+        img.t[3 * i] = s.t[3 * i] * 1.0;
+        img.t[3 * i + 1] = s.t[3 * i + 1] * 1.0;
+        img.t[3 * i + 2] = s.t[3 * i + 2] * -1.0;
+    }
+    segment_ends(img);
+    return img;
+}
+
+// `_mixed_serve_plan(..., crossing=True)`'s below/below section: bspline's
+// `_pair_extents_below` over the below segments' field nodes (q 6) and their
+// Galerkin test nodes (`n_qp_test` 8, the `ctx["obs_c"]` the plan joins)
+double serve_plan_crossing(const Front &fr, const std::vector<int64_t> &b_idx) {
+    const Geometry &g = fr.geometry;
+    const double gz = 0.0;
+    std::vector<double> x, y, d;
+    {
+        std::vector<double> xg, wg;
+        leggauss(6, xg, wg);
+        for (int64_t i : b_idx) {
+            const auto &l = g.seg_l[static_cast<std::size_t>(i)], &r = g.seg_r[static_cast<std::size_t>(i)];
+            for (std::size_t j = 0; j < xg.size(); j++) {
+                const double tq = 0.5 * (xg[j] + 1.0);
+                double p[3];
+                for (int c = 0; c < 3; c++)
+                    p[c] = l[static_cast<std::size_t>(c)] + tq * (r[static_cast<std::size_t>(c)] - l[static_cast<std::size_t>(c)]);
+                x.push_back(p[0]);
+                y.push_back(p[1]);
+                d.push_back(gz - p[2]);
+            }
+        }
+    }
+    {
+        std::vector<double> gx, gw;
+        leggauss(8, gx, gw);
+        for (int64_t i : b_idx) {
+            const std::size_t z = static_cast<std::size_t>(i);
+            const double hh = 0.5 * g.seg_h[z];
+            for (std::size_t q = 0; q < gx.size(); q++) {
+                const double xi = hh * gx[q];
+                double p[3];
+                for (int c = 0; c < 3; c++)
+                    p[c] = g.seg_centers[z][static_cast<std::size_t>(c)] + xi * g.seg_tangents[z][static_cast<std::size_t>(c)];
+                x.push_back(p[0]);
+                y.push_back(p[1]);
+                d.push_back(gz - p[2]);
+            }
+        }
+    }
+    double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
+    const std::size_t n = x.size();
+    for (std::size_t i = 0; i < n; i++)
+        for (std::size_t j = i; j < n; j++) {
+            const double dx = x[i] - x[j], dy = y[i] - y[j];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = d[i] + d[j];
+            const double hh2 = hh * hh;
+            const double r1sq = rho2 + hh2;
+            if (r1sq > r1sq_max) r1sq_max = r1sq;
+            const double qq = hh2 / rho2;
+            if (qq < q_min) q_min = qq;
+        }
+    const double r1_max = std::sqrt(r1sq_max), th_min = std::atan(std::sqrt(q_min));
+    const double lam_m = (2.0 * M_PI) / std::hypot(fr.medium.k_m.real(), fr.medium.k_m.imag());
+    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
+    const double floor_deg = 0.05 - 2.0 * (0.05 / 3.0);  // _SOMM_BELOW_TH_MIN_DEG
+    const double floor = floor_deg * (M_PI / 180.0);
+    if (th_min < floor && r1_max > r1_cap) {
+        // `_pair_extents_below_numpy(..., r1_cap)`: the floor over the pairs
+        // inside the cap only (momwire#1187), every ordered pair, hh / rho
+        const double cap2 = r1_cap * r1_cap;
+        double ratio_min = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < n; i++)
+            for (std::size_t j = 0; j < n; j++) {
+                const double dx = x[i] - x[j], dy = y[i] - y[j];
+                const double rho2 = dx * dx + dy * dy;
+                const double hh = d[i] + d[j];
+                const double r1sq = rho2 + hh * hh;
+                const double rho = std::sqrt(rho2);
+                if (!(rho > 0.0) || !(r1sq <= cap2)) continue;
+                const double ratio = hh / rho;
+                if (ratio < ratio_min) ratio_min = ratio;
+            }
+        if (std::atan(ratio_min) >= floor) return r1_max;
+    }
+    if (th_min < floor) decline("a below/below pair under the grazing floor (the refusal's wording is not copied)");
+    return r1_max;
+}
+
+// `_loading_integrals(k, h)` with `k` an array (a mixed view's `k_entry` per
+// pair), one element: the array's quotients and products
+void loading_integrals_e(cd k, double h, cd &i_g, cd &i_ss, cd &i_gg) {
+    const cd x = cm(cm(cd(0.5, 0.0), k), cd(h, 0.0));
+    const cd s1 = sin_minus_arg_c(x);
+    const cd s2 = sin_minus_arg_c(cm(cd(2.0, 0.0), x));
+    i_g = cm(xdiv(cd(2.0, 0.0), k), s1);           // (2.0 / k) * s1
+    i_ss = xdiv(cneg(s2), cm(cd(2.0, 0.0), k));    // -s2 / (2.0 * k)
+    const cd x2 = cm(x, x);
+    static const double fact[16] = {1.0, 1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0, 362880.0,
+                                    3628800.0, 39916800.0, 479001600.0, 6227020800.0, 87178291200.0,
+                                    1307674368000.0};
+    cd series(0.0, 0.0);
+    bool first = true;
+    for (int m = 7; m > 1; m--) {
+        const double sign = m % 2 == 0 ? 1.0 : -1.0;
+        const double coef = sign * (std::pow(4.0, static_cast<double>(m)) - 4.0) / fact[2 * m + 1];
+        const cd prod = first ? cm(cd(0.0, 0.0), x2) : cm(series, x2);
+        series = cd(prod.real() + coef, prod.imag() + 0.0);
+        first = false;
+    }
+    series = cm(cm(cm(series, x2), x2), x);
+    const cd lit = csub(cm(cd(0.5, 0.0), s2), cm(cd(4.0, 0.0), s1));
+    i_gg = xdiv(np_cabs(x) < 0.25 ? series : lit, k);
+}
+
+// `_apply_loading(G, geom, seg_view, None, medium=medium)` on a view with
+// `k_entry` (momwire#1156): each pair's shapes at its left entry's k, the
+// series impedance at the real omega `medium.k_p * c`, `np.subtract.at` in
+// `_shared_segment_pairs`' order
+void apply_loading_e(std::vector<cd> &G, std::size_t n_basis, const Front &fr, const std::vector<cd> &z_wire) {
+    const Geometry &g = fr.geometry;
+    const SegView &v = fr.basis;
+    std::vector<cd> z_seg(static_cast<std::size_t>(g.n_segs));
+    for (std::size_t w = 0; w < g.wire_first.size(); w++)
+        for (ll i = g.wire_first[w]; i <= g.wire_last[w]; i++) z_seg[static_cast<std::size_t>(i)] = z_wire.at(w);
+    const std::size_t nnz = v.jbasis.size();
+    std::vector<cd> U(nnz), R(nnz);
+    for (std::size_t e = 0; e < nnz; e++) {
+        const cd sg(static_cast<double>(v.sigma[e]), 0.0);
+        U[e] = cm(sg, v.AC[e]);
+        R[e] = cm(sg, v.C[e]);
+    }
+    for (std::size_t m = 0; m < static_cast<std::size_t>(g.n_segs); m++) {
+        const double h = g.seg_h[m];
+        for (ll e = v.starts[m]; e < v.starts[m + 1]; e++) {
+            cd i_g, i_ss, i_gg;
+            loading_integrals_e(v.k_entry[static_cast<std::size_t>(e)], h, i_g, i_ss, i_gg);
+            for (ll f = v.starts[m]; f < v.starts[m + 1]; f++) {
+                const std::size_t a = static_cast<std::size_t>(e), b = static_cast<std::size_t>(f);
+                const cd t1 = cr(cm(U[a], U[b]), h);
+                const cd t2 = cm(cadd(cm(U[a], R[b]), cm(R[a], U[b])), i_g);
+                const cd t3 = cm(cm(v.B[a], v.B[b]), i_ss);
+                const cd t4 = cm(cm(R[a], R[b]), i_gg);
+                const cd val = cm(cadd(cadd(cadd(t1, t2), t3), t4), z_seg[m]);
+                cd &slot = G[static_cast<std::size_t>(v.jbasis[a]) + static_cast<std::size_t>(v.jbasis[b]) * n_basis];
+                slot = csub(slot, val);
+            }
+        }
+    }
+}
+
+// `_assemble_Z_mp_mixed(geom, eta, below, medium, seg_view, ctx, plan)`: the
+// two within-medium classes in mixed-potential form (above at k_p with the
+// extended kernel's labels when asked, its image and the Sommerfeld
+// remainder; below at k_m with bspline's buried pair ladder, the image
+// weighted A_m and the below remainder), then the crossing pair
+// (`_crossing_rows`, `G[rows] += t_rows; G[:, rows] += t_cols.T`), the self
+// completions with G's sign, and the loading. G (n_basis, n_basis) F order.
+std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg *np) {
+    if (np == nullptr) decline("no numpy products for the crossing fill");
+    if (args.ground.kind != nec4::Ground::finite) decline("a crossing deck over a ground with no lower medium");
+    const sinusoidal::Medium &md = fr.medium;
+    const Deck d = deck_of(fr);
+    const std::size_t N = d.segs.n, n_basis = N + static_cast<std::size_t>(fr.n_wings);
+    std::vector<int64_t> a_idx, b_idx;
+    for (std::size_t i = 0; i < N; i++) (fr.below_seg[i] ? b_idx : a_idx).push_back(static_cast<int64_t>(i));
+    const double r1_below = serve_plan_crossing(fr, b_idx);
+    // the crossing pair first (its transients never sit beside G)
+    const CrossingRows cr = crossing_rows(fr, *np);
+    const Csr csr = basis_csr_entry(fr.basis);
+    std::vector<cd> G(n_basis * n_basis, cd(0.0, 0.0));
+    // the above class: k_p, the free route with the Sommerfeld composition
+    {
+        const Segs s = class_segs(d.segs, a_idx);
+        const double k = md.k_p;
+        bool has_b = false;
+        if (args.extended_kernel)
+            for (std::size_t i = 0; i < s.n; i++)
+                if (s.a[i] != s.a[0]) has_b = true;
+        WinOpts wo;
+        wo.obs_idx = wo.src_idx = &a_idx;
+        window_fill(G, n_basis, csr, s, s, k, fr.eta, cd(DIRECT_SIGN, 0.0), args.extended_kernel, has_b, s.a, wo);
+        const cd eps_t(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+        const cd c2 = py_div(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0), cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+        const Segs img = image_of(s);
+        window_fill(G, n_basis, csr, s, img, k, fr.eta, py_mul(cd(-DIRECT_SIGN, 0.0), c2), args.extended_kernel,
+                    has_b, s.a, wo);
+        const Csr sub = csr_subset(csr, a_idx);
+        mp_remainder(G, n_basis, sub, s, k, eps_t, fr.omega, 3, *np);  // n_qp_sommerfeld = 3
+    }
+    // the below class: k_m / eta_m, bspline's buried pair order and ladder
+    {
+        const Segs s = class_segs(d.segs, b_idx);
+        const cd k = md.k_m;
+        const cd eta = mw_libm_c::csqrt(py_div(cd(SOLVER_MU, 0.0), md.eps_m));  // np.sqrt(self.mu / medium.eps_m)
+        const cd jk = py_mul(cd(0.0, 1.0), k);
+        const cd c_a = smul(jk, eta), c_phi = xdiv(eta, jk);
+        WinOpts wo;
+        wo.n_qp = BURIED_N_QP_PAIR;
+        wo.ladder = &buried_ladder();
+        wo.obs_idx = wo.src_idx = &b_idx;
+        const std::vector<double> none_b;
+        window_fill_at(G, n_basis, csr, s, s, k, true, smul(c_a, cd(DIRECT_SIGN, 0.0)),
+                       smul(c_phi, cd(DIRECT_SIGN, 0.0)), false, false, none_b, wo);
+        const Segs img = image_of(s);
+        const cd scale = py_mul(cd(-DIRECT_SIGN, 0.0), md.a_m);
+        window_fill_at(G, n_basis, csr, s, img, k, true, smul(c_a, scale), smul(c_phi, scale), false, false, none_b,
+                       wo);
+        mp_remainder_below(G, n_basis, csr, s, b_idx, md, r1_below, fr.omega, *np);
+    }
+    // the crossing pair, as `_add_crossing_blocks` adds it
+    const std::size_t nr = cr.rows.size();
+    for (std::size_t i = 0; i < nr; i++) {
+        const std::size_t r = static_cast<std::size_t>(cr.rows[i]);
+        for (std::size_t j = 0; j < n_basis; j++) {
+            cd &x = G[r + j * n_basis];
+            x = cadd(x, cr.t_rows[i * n_basis + j]);
+        }
+    }
+    for (std::size_t i = 0; i < nr; i++) {
+        const std::size_t c = static_cast<std::size_t>(cr.rows[i]);
+        for (std::size_t j = 0; j < n_basis; j++) {
+            cd &x = G[j + c * n_basis];
+            x = cadd(x, cr.t_cols[i * n_basis + j]);
+        }
+    }
+    crossing_completions(fr, *np, G);
+    std::vector<cd> z_wire;
+    if (sinusoidal::wire_impedance_per_wire(fr, args, md.k_p * fr.c, z_wire)) apply_loading_e(G, n_basis, fr, z_wire);
+    return G;
 }
 
 }  // namespace
@@ -1744,7 +2114,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // same `_apply_loading`
     // a wholly-buried deck (momwire#1718 S11a): the mixed-potential fill in
     // the lower medium; a mixed or crossing deck declines in the front
-    if (fr.crossing) decline("a crossing junction (momwire#1718 S11b)");
+    if (fr.crossing) return assemble_Z_crossing(fr, args, np);  // momwire#1718 S11b
     if (fr.buried) {
         if (direct_route(fr, args)) decline("a wire end on the plane beside a buried wire");
         return assemble_Z_buried(fr, args, np);
@@ -1878,6 +2248,159 @@ std::vector<NodePort> node_ports_of(const Front &fr, const std::vector<NodeGap> 
 
 void check_node_gaps(const Front &fr, const std::vector<NodeGap> &node_gaps) { (void)node_ports_of(fr, node_gaps); }
 
+namespace {
+
+// `_solve_in_place(A, B)`: `lu_factor(A, overwrite_a=True)` (the finite
+// check, getrf, the diagonal check) and `lu_solve` (B's finite check, getrs),
+// A (n, n) and B (n, nrhs) F order; B overwritten with the solution
+void solve_in_place(const sinusoidal::FillLinalg &la, std::vector<cd> &A, std::size_t N, std::vector<cd> &B,
+                    std::size_t P) {
+    for (const cd &z : A)
+        if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
+            throw SolverRefusal("ValueError", "array must not contain infs or NaNs");
+    std::vector<int> ipiv(std::max<std::size_t>(N, 1));
+    int n = static_cast<int>(N), info = 0;
+    la.lu.getrf(&n, &n, A.data(), &n, ipiv.data(), &info);
+    if (info < 0) decline("getrf: an illegal argument");
+    for (std::size_t i = 0; i < N; i++)
+        if (A[i * N + i] == cd(0.0, 0.0)) throw SolverRefusal("LinAlgError", "singular matrix");
+    if (P == 0) return;
+    for (const cd &z : B)
+        if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
+            throw SolverRefusal("ValueError", "array must not contain infs or NaNs");
+    int nrhs = static_cast<int>(P);
+    char trans = 'N';
+    la.lu.getrs(&trans, &n, &nrhs, A.data(), &n, ipiv.data(), B.data(), &n, &info);
+    if (info != 0) decline("getrs failed");
+}
+
+// `_node_inflow(geom, seg_view, k, j, every member)`: each basis's current
+// into the node along every member, at each entry's own k (a crossing view)
+std::vector<cd> node_inflow_all(const Front &fr, std::size_t j, std::size_t n_basis) {
+    const Geometry &g = fr.geometry;
+    const SegView &v = fr.basis;
+    std::vector<cd> out(n_basis, cd(0.0, 0.0));
+    for (const auto &mem : fr.junctions[j]) {
+        const std::size_t w = static_cast<std::size_t>(mem.first);
+        const long long m = mem.second ? g.wire_first[w] : g.wire_last[w];
+        const double sgn = mem.second ? -1.0 : 1.0;
+        const double half = 0.5 * g.seg_h[static_cast<std::size_t>(m)];
+        for (ll e = v.starts[static_cast<std::size_t>(m)]; e < v.starts[static_cast<std::size_t>(m) + 1]; e++) {
+            const std::size_t ez = static_cast<std::size_t>(e);
+            const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
+            const cd val = basis_value_e(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), v.k_entry[ez], half * sgn);
+            cd &slot = out[static_cast<std::size_t>(v.jbasis[ez])];
+            slot = cadd(slot, cm(cd(sgn, 0.0), val));
+        }
+    }
+    return out;
+}
+
+// `_solve_constrained(G, U, C)` (momwire#1282 / #1630): G x = U on C x = 0,
+// C the continuity rows of `cont`. The pivots from `scipy.linalg.qr(C,
+// pivoting=True)` (zgeqp3 after its workspace query), T = -solve(C_p, C_r)
+// (numpy's zgesv), the reduced system `G_rr + T^T G_pr + G_rp T + (T^T G_pp)
+// T` and right-hand side through numpy's matmul, `_solve_in_place`, then
+// x_p = T x_r. G F order (N, N), U C order (N, P); the answer F order.
+std::vector<cd> solve_constrained(const Front &fr, const sinusoidal::FillLinalg &la, const std::vector<cd> &G,
+                                  std::size_t N, const std::vector<cd> &U, std::size_t P,
+                                  const std::vector<long long> &cont) {
+    if (la.lu.geqp3 == nullptr) decline("no zgeqp3 for the crossing node's constrained solve");
+    if (la.np.zgesv == nullptr) decline("no zgesv for the crossing node's constrained solve");
+    const std::size_t m = cont.size(), n = N;
+    if (m >= n) decline("a constrained solve with no free unknowns");
+    std::vector<cd> C(m * n);  // C order
+    for (std::size_t i = 0; i < m; i++) {
+        const std::vector<cd> row = node_inflow_all(fr, static_cast<std::size_t>(cont[i]), n);
+        std::copy(row.begin(), row.end(), C.begin() + static_cast<std::ptrdiff_t>(i * n));
+    }
+    for (const cd &z : C)
+        if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
+            throw SolverRefusal("ValueError", "array must not contain infs or NaNs");
+    // the pivots
+    std::vector<cd> a(m * n);
+    for (std::size_t i = 0; i < m; i++)
+        for (std::size_t j = 0; j < n; j++) a[i + j * m] = C[i * n + j];
+    int mi = static_cast<int>(m), ni = static_cast<int>(n), lda = mi, info = 0, lwork = -1;
+    std::vector<int> jpvt(n, 0);
+    std::vector<cd> tau(std::max<std::size_t>(std::min(m, n), 1)), wq(1);
+    std::vector<double> rwork(2 * n);
+    la.lu.geqp3(&mi, &ni, a.data(), &lda, jpvt.data(), tau.data(), wq.data(), &lwork, rwork.data(), &info);
+    if (info != 0) decline("zgeqp3's workspace query failed");
+    lwork = static_cast<int>(static_cast<long long>(wq[0].real()));  // `.real.astype(numpy.int_)`
+    std::vector<cd> work(static_cast<std::size_t>(std::max(lwork, 1)));
+    la.lu.geqp3(&mi, &ni, a.data(), &lda, jpvt.data(), tau.data(), work.data(), &lwork, rwork.data(), &info);
+    if (info != 0) decline("zgeqp3 failed");
+    std::vector<int64_t> p_idx, r_idx;
+    std::vector<bool> is_p(n, false);
+    for (std::size_t i = 0; i < m; i++) is_p[static_cast<std::size_t>(jpvt[i] - 1)] = true;
+    for (std::size_t j = 0; j < n; j++) (is_p[j] ? p_idx : r_idx).push_back(static_cast<int64_t>(j));
+    const std::size_t nr = r_idx.size();
+    // T = -np.linalg.solve(C[:, p], C[:, r]): (m, nr) C order
+    std::vector<cd> T(m * nr);
+    {
+        std::vector<cd> af(m * m), bf(m * nr);
+        for (std::size_t j = 0; j < m; j++)
+            for (std::size_t i = 0; i < m; i++) af[i + j * m] = C[i * n + static_cast<std::size_t>(p_idx[j])];
+        for (std::size_t j = 0; j < nr; j++)
+            for (std::size_t i = 0; i < m; i++) bf[i + j * m] = C[i * n + static_cast<std::size_t>(r_idx[j])];
+        const nec5::np_int nn = static_cast<nec5::np_int>(m), nrhs = static_cast<nec5::np_int>(nr);
+        std::vector<nec5::np_int> ipiv(std::max<std::size_t>(m, 1));
+        nec5::np_int ld = nn, inf = 0;
+        la.np.zgesv(&nn, &nrhs, af.data(), &ld, ipiv.data(), bf.data(), &ld, &inf);
+        if (inf > 0) decline("a singular continuity block (the reference raises)");
+        for (std::size_t i = 0; i < m; i++)
+            for (std::size_t j = 0; j < nr; j++) T[i * nr + j] = cneg(bf[i + j * m]);
+    }
+    const auto Gat = [&](std::size_t i, std::size_t j) { return G[i + j * N]; };
+    std::vector<cd> Grr(nr * nr), Gpr(m * nr), Grp(nr * m), Gpp(m * m);  // `G[np.ix_(...)]`, C order
+    for (std::size_t i = 0; i < nr; i++)
+        for (std::size_t j = 0; j < nr; j++) Grr[i * nr + j] = Gat(static_cast<std::size_t>(r_idx[i]), static_cast<std::size_t>(r_idx[j]));
+    for (std::size_t i = 0; i < m; i++)
+        for (std::size_t j = 0; j < nr; j++) {
+            Gpr[i * nr + j] = Gat(static_cast<std::size_t>(p_idx[i]), static_cast<std::size_t>(r_idx[j]));
+            Grp[j * m + i] = Gat(static_cast<std::size_t>(r_idx[j]), static_cast<std::size_t>(p_idx[i]));
+        }
+    for (std::size_t i = 0; i < m; i++)
+        for (std::size_t j = 0; j < m; j++) Gpp[i * m + j] = Gat(static_cast<std::size_t>(p_idx[i]), static_cast<std::size_t>(p_idx[j]));
+    const int64_t M = static_cast<int64_t>(m), NR = static_cast<int64_t>(nr), PP = static_cast<int64_t>(P);
+    const nec5::Op TT{T.data(), NR, M, 1, NR};  // `T.T`, F order
+    const nec5::Op Tc{T.data(), M, NR, NR, 1};
+    std::vector<cd> A1(nr * nr), A2(nr * nr), A3a(nr * m), A3(nr * nr);
+    nec5::replay::np_matmul(la.np, TT, nec5::Op{Gpr.data(), M, NR, NR, 1}, A1.data(), NR, 1);
+    nec5::replay::np_matmul(la.np, nec5::Op{Grp.data(), NR, M, M, 1}, Tc, A2.data(), NR, 1);
+    nec5::replay::np_matmul(la.np, TT, nec5::Op{Gpp.data(), M, M, M, 1}, A3a.data(), M, 1);
+    nec5::replay::np_matmul(la.np, nec5::Op{A3a.data(), NR, M, M, 1}, Tc, A3.data(), NR, 1);
+    // `np.asfortranarray(Gc)`
+    std::vector<cd> Gc(nr * nr);
+    for (std::size_t i = 0; i < nr; i++)
+        for (std::size_t j = 0; j < nr; j++) {
+            const std::size_t q = i * nr + j;
+            Gc[i + j * nr] = cadd(cadd(cadd(Grr[q], A1[q]), A2[q]), A3[q]);
+        }
+    // rhs_c = rhs[r] + mm(T.T, rhs[p])
+    std::vector<cd> Up(m * P), B1(nr * P);
+    for (std::size_t i = 0; i < m; i++)
+        for (std::size_t j = 0; j < P; j++) Up[i * P + j] = U[static_cast<std::size_t>(p_idx[i]) * P + j];
+    if (P > 0) nec5::replay::np_matmul(la.np, TT, nec5::Op{Up.data(), M, PP, PP, 1}, B1.data(), PP, 1);
+    std::vector<cd> xr(nr * P);  // F order: `lu_solve`'s Fortran copy of rhs_c
+    for (std::size_t i = 0; i < nr; i++)
+        for (std::size_t j = 0; j < P; j++)
+            xr[i + j * nr] = cadd(U[static_cast<std::size_t>(r_idx[i]) * P + j], B1[i * P + j]);
+    solve_in_place(la, Gc, nr, xr, P);
+    // x[p] = mm(T, x_r)
+    std::vector<cd> xp(m * P);
+    if (P > 0) nec5::replay::np_matmul(la.np, Tc, nec5::Op{xr.data(), NR, PP, 1, NR}, xp.data(), PP, 1);
+    std::vector<cd> x(N * P);
+    for (std::size_t j = 0; j < P; j++) {
+        for (std::size_t i = 0; i < nr; i++) x[static_cast<std::size_t>(r_idx[i]) + j * N] = xr[i + j * nr];
+        for (std::size_t i = 0; i < m; i++) x[static_cast<std::size_t>(p_idx[i]) + j * N] = xp[i * P + j];
+    }
+    return x;
+}
+
+}  // namespace
+
 PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const sinusoidal::FillLinalg &la,
                            const std::vector<NodeGap> &node_gaps) {
     if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
@@ -1886,8 +2409,12 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
     if (!nports.empty() && fr.dedup.active) decline("a node gap on a deck with a wire listed twice");
     if (!nports.empty() && args.ground.kind != nec4::Ground::none)
         for (const NodePort &np : nports)
+            // a crossing junction is grounded by geometry but not shorted to
+            // the plane: its node port takes the continuity row (momwire#1282)
             if (std::binary_search(fr.geometry.grounded_junctions.begin(), fr.geometry.grounded_junctions.end(),
-                                   static_cast<long long>(np.junction)))
+                                   static_cast<long long>(np.junction)) &&
+                std::find(fr.crossing_junctions.begin(), fr.crossing_junctions.end(),
+                          static_cast<long long>(np.junction)) == fr.crossing_junctions.end())
                 throw SolverRefusal("ValueError",
                                     "junction " + std::to_string(np.junction) +
                                         " is both grounded and a node port \xe2\x80\x94 a node in the ground "
@@ -1898,7 +2425,22 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
     ps.G = sinusoidal_galerkin::assemble_Z(fr, args, &la.np);
     const Geometry &g = fr.geometry;
     const SegView &v = fr.basis;
-    const std::size_t N = static_cast<std::size_t>(g.n_segs), NF = g.feed_segs.size(), P = NF + nports.size();
+    // a crossing deck's basis carries the node wings after the N segment
+    // bases (`_n_extra_cols`, momwire#1718 S11b)
+    const std::size_t N = static_cast<std::size_t>(g.n_segs + fr.n_wings), NF = g.feed_segs.size(),
+                      P = NF + nports.size();
+    // `_crossing_continuity_rows`: the crossing junctions a node port names,
+    // and every crossing junction of a two-radius deck, ascending
+    std::vector<long long> cont;
+    if (fr.crossing) {
+        std::set<long long> cj;
+        for (const NodePort &np : nports)
+            if (std::find(fr.crossing_junctions.begin(), fr.crossing_junctions.end(),
+                          static_cast<long long>(np.junction)) != fr.crossing_junctions.end())
+                cj.insert(static_cast<long long>(np.junction));
+        if (fr.two_radius) cj.insert(fr.crossing_junctions.begin(), fr.crossing_junctions.end());
+        cont.assign(cj.begin(), cj.end());
+    }
     ps.n = static_cast<long long>(N);
     ps.n_ports = static_cast<long long>(P);
     const double k = fr.k;
@@ -1917,9 +2459,12 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
             for (ll e = v.starts[static_cast<std::size_t>(m)]; e < v.starts[static_cast<std::size_t>(m) + 1]; e++) {
                 const std::size_t ez = static_cast<std::size_t>(e);
                 const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
-                // at k_m on a wholly-buried deck (`_entry_k` of the fill's view)
-                const cd val = fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, half * sgn)
-                                         : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, half * sgn);
+                // at k_m on a wholly-buried deck, each entry's own k on a
+                // crossing one (`_entry_k` of the fill's view)
+                const cd val =
+                    fr.crossing ? basis_value_e(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), v.k_entry[ez], half * sgn)
+                    : fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, half * sgn)
+                                : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, half * sgn);
                 cd &slot = cut[static_cast<std::size_t>(v.jbasis[ez])];
                 slot = cadd(slot, cm(cd(sgn, 0.0), val));
             }
@@ -1932,13 +2477,18 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         for (ll e = v.starts[f]; e < v.starts[f + 1]; e++) {
             const std::size_t ez = static_cast<std::size_t>(e);
             const cd sg(static_cast<double>(v.sigma[ez]), 0.0);
-            // at k_m on a wholly-buried deck (`_operating_medium`'s self.k)
-            const cd col = cneg(fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, xi)
-                                          : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, xi));
+            // at k_m on a wholly-buried deck (`_operating_medium`'s self.k);
+            // at each entry's own k on a crossing deck (`_entry_k`)
+            const cd col = cneg(fr.crossing ? basis_value_e(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), v.k_entry[ez], xi)
+                                : fr.buried ? basis_value_c(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), fr.medium.k_m, xi)
+                                            : basis_value(cm(sg, v.AC[ez]), v.B[ez], cm(sg, v.C[ez]), k, xi));
             cd &slot = U[static_cast<std::size_t>(v.jbasis[ez]) * P + j];
             slot = cadd(slot, col);
         }
     }
+    if (!cont.empty()) {
+        ps.coeffs = solve_constrained(fr, la, ps.G, N, U, P, cont);
+    } else {
     // `_solve_in_place(G, U)`: lu_factor(G, overwrite_a=True), the diagonal
     // check, lu_solve
     // scipy's `asarray_chkfinite` and `_solve_in_place`'s singular check
@@ -1965,6 +2515,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         la.lu.getrs(&trans, &n, &nrhs, lu.data(), &n, ipiv.data(), ps.coeffs.data(), &n, &info);
         if (info != 0) decline("getrs failed");
     }
+    }
     // Y[:, j] = _port_currents(alphas[:, j], ...): a gap feed's segment
     // current at `feed_xi`; a node port's `-(U[:, port] @ alpha)`, numpy's
     // vector-vector matmul (`cblas_zdotu_sub` over U's strided column)
@@ -1974,7 +2525,10 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         for (std::size_t i = 0; i < P; i++) {
             if (i < NF) {
                 ps.y[i * P + j] =
-                    fr.buried && g.feed_xi[i] != 0.0
+                    fr.crossing && g.feed_xi[i] != 0.0
+                        // off the centre on a crossing deck: each entry at its own k
+                        ? feed_segment_current_e(v, ps.coeffs, j * N, g.feed_segs[i], g.feed_xi[i])
+                    : fr.buried && g.feed_xi[i] != 0.0
                         // off the centre at k_m: `cmath.sin` (the readout's #980 branch)
                         ? feed_segment_current_c(v, ps.coeffs, j * N, g.feed_segs[i], fr.medium.k_m, g.feed_xi[i])
                         : feed_segment_current(v, ps.coeffs, j * N, g.feed_segs[i], k, g.feed_xi[i]);
@@ -2077,7 +2631,7 @@ std::string dump_fill(const std::string &text, const sinusoidal::FillLinalg &la,
                     for (std::size_t c = 0; c < np_; c++) yf[r + c * np_] = ps.y[r * np_ + c];
                 matrix(o, q + ".y", yf, np_, np_, whole);
             } catch (const sinusoidal::FrontError &e) {
-                o.line(q + " ! ValueError " + nec5::dump_hex(e.message));
+                o.line(q + " ! " + e.kind + " " + nec5::dump_hex(e.message));
             } catch (const SolverRefusal &e) {
                 o.line(q + " ! " + e.kind + " " + nec5::dump_hex(e.message));
             } catch (const Declined &e) {

@@ -207,8 +207,11 @@ SeamEngine::Built SinusoidalGalerkinSeamEngine::build(Prepared &p) const {
         sinusoidal_galerkin::check_node_gaps(*fr, part.node_gaps);
         part.front = std::move(fr);
     } catch (const sinusoidal::FrontError &e) {
-        b.kind = Built::raised;  // the constructor's ValueError escapes the seam
-        b.error_kind = "ValueError";
+        // the constructor's ValueError escapes the seam; its
+        // NotImplementedError (a crossing junction's scope, momwire#1718
+        // S11b) is `_prepare`'s refusal
+        b.kind = e.kind == "NotImplementedError" ? Built::refused : Built::raised;
+        b.error_kind = e.kind;
         b.message = e.message;
         return b;
     } catch (const sinusoidal_galerkin::SolverRefusal &e) {
@@ -336,8 +339,16 @@ double SinusoidalGalerkinPrintoutEngine::wire_loss_power(const Prepared &p, cons
     const sinusoidal::Front &fr = front_of(p);
     // a wholly-buried deck's readout at the run's omega: the medium and the
     // shapes at that omega's k_m (`_buried_wire_loss_power`)
-    if (fr.buried && omega / fr.c != fr.k) return sinusoidal::loss_power_at(sinusoidal::buried_at(fr, omega), coeffs, omega);
-    return sinusoidal::loss_power_at(fr, coeffs, omega);
+    // (a crossing deck's: its stitched view with the wings at that omega)
+    try {
+        if (fr.buried && omega / fr.c != fr.k)
+            return sinusoidal::loss_power_at(sinusoidal::buried_at(fr, omega), coeffs, omega);
+        if (fr.crossing && omega / fr.c != fr.k)
+            return sinusoidal::loss_power_at(sinusoidal::crossing_at(fr, omega), coeffs, omega);
+        return sinusoidal::loss_power_at(fr, coeffs, omega);
+    } catch (const nec4::Declined &e) {
+        throw PrintoutDecline{std::string("sinusoidal-galerkin: ") + e.what()};
+    }
 }
 
 double SinusoidalGalerkinPrintoutEngine::solver_omega(const Prepared &p) const { return front_of(p).omega; }

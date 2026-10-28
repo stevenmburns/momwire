@@ -106,6 +106,8 @@ def blas_addresses(basis: str = BASIS) -> list[int]:
         (npl, "scipy_cblas_dgemv64_"),
         (npl, "scipy_cblas_ddot64_"),
         (spl, "scipy_zgesvx_"),
+        (npl, "scipy_cblas_zdotc_sub64_"),
+        (spl, "scipy_zgeqp3_"),
     )
     if basis == "bspline":
         names += (

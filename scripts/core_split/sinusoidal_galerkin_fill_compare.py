@@ -142,8 +142,9 @@ def py_fill(text: str, whole: int = WHOLE, g_only: bool = False) -> str:
 
 def blas_addresses() -> list[int]:
     """numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub, SciPy's LP64 zgetrf /
-    zgetrs, and numpy's cblas_dgemv / ddot, as `sinusoidal_galerkin_fill_dump`
-    takes them."""
+    zgetrs, numpy's cblas_dgemv / ddot / zdotc_sub, SciPy's zgeqp3 and numpy's
+    zgesv (a crossing deck's ACA and constrained solve), as
+    `sinusoidal_galerkin_fill_dump` takes them."""
     import scipy
 
     def lib(pkg, pattern):
@@ -162,6 +163,9 @@ def blas_addresses() -> list[int]:
         (spl, "scipy_zgetrs_"),
         (npl, "scipy_cblas_dgemv64_"),
         (npl, "scipy_cblas_ddot64_"),
+        (npl, "scipy_cblas_zdotc_sub64_"),
+        (spl, "scipy_zgeqp3_"),
+        (npl, "scipy_zgesv_64_"),
     )
     return [ctypes.cast(getattr(lb, n), ctypes.c_void_p).value for lb, n in names]
 

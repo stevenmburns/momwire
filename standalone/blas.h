@@ -24,6 +24,8 @@ void MWX(openblas_set_num_threads)(int);
 void MWX(zgetrf_)(int *, int *, std::complex<double> *, int *, int *, int *);
 void MWX(zgetrs_)(char *, int *, int *, std::complex<double> *, int *, int *,
                   std::complex<double> *, int *, int *);
+void MWX(zgeqp3_)(int *, int *, std::complex<double> *, int *, int *, std::complex<double> *,
+                  std::complex<double> *, int *, double *, int *);
 void MWX(dgetrf_)(int *, int *, double *, int *, int *, int *);
 void MWX(dgetrs_)(char *, int *, int *, double *, int *, int *, double *, int *, int *);
 void MWX(zgemm_)(const char *, const char *, const int *, const int *, const int *, const void *,

@@ -386,8 +386,14 @@ void register_nec4_printout(py::module_ &m) {
         "sinusoidal_nec4_printout",
         [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
            const std::string &variant, const std::string &marker) -> py::tuple {
-            if (blas.size() != 10) throw py::value_error("blas: ten addresses");
+            if (blas.size() != 10 && blas.size() != 12) throw py::value_error("blas: ten or twelve addresses");
             mw::sinusoidal::FillLinalg la;
+            if (blas.size() == 12) {
+                // numpy's cblas_zdotc_sub and SciPy's LP64 zgeqp3 (a crossing
+                // deck's ACA and its node's constrained solve, momwire#1718 S11b)
+                la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[10]);
+                la.lu.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(blas[11]);
+            }
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
             la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
@@ -417,8 +423,14 @@ void register_nec4_printout(py::module_ &m) {
         "sinusoidal_galerkin_nec4_printout",
         [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
            const std::string &variant, const std::string &marker) -> py::tuple {
-            if (blas.size() != 10) throw py::value_error("blas: ten addresses");
+            if (blas.size() != 10 && blas.size() != 12) throw py::value_error("blas: ten or twelve addresses");
             mw::sinusoidal::FillLinalg la;
+            if (blas.size() == 12) {
+                // numpy's cblas_zdotc_sub and SciPy's LP64 zgeqp3 (a crossing
+                // deck's ACA and its node's constrained solve, momwire#1718 S11b)
+                la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[10]);
+                la.lu.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(blas[11]);
+            }
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
             la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);

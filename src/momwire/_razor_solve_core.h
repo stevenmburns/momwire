@@ -40,9 +40,15 @@ typedef void (*zgetrf_fn)(int *m, int *n, cd *a, int *lda, int *ipiv, int *info)
 typedef void (*zgetrs_fn)(char *trans, int *n, int *nrhs, cd *a, int *lda,
                           int *ipiv, cd *b, int *ldb, int *info);
 
+// `scipy.linalg.qr(..., pivoting=True)`'s column-pivoted QR (the
+// Sinusoidal-Galerkin crossing node's constrained solve, momwire#1718 S11b)
+typedef void (*zgeqp3_fn)(int *m, int *n, cd *a, int *lda, int *jpvt, cd *tau, cd *work, int *lwork,
+                          double *rwork, int *info);
+
 struct Lapack {
     zgetrf_fn getrf = nullptr;
     zgetrs_fn getrs = nullptr;
+    zgeqp3_fn geqp3 = nullptr;  // null: a constrained solve declines
 };
 
 // One source set's arguments: the real segments or their mirror images. The

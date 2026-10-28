@@ -57,12 +57,18 @@ int main(int argc, char **argv) {
     mw::sinusoidal::FillLinalg la;
     la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym_of(scipy_lib, {"scipy_zgetrf_", "zgetrf_"}));
     la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym_of(scipy_lib, {"scipy_zgetrs_", "zgetrs_"}));
+    // a crossing node's constrained solve (momwire#1718 S11b)
+    la.lu.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(sym_of(scipy_lib, {"scipy_zgeqp3_", "zgeqp3_"}));
     la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zgemm64_", "cblas_zgemm64_"}));
     la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
     la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_zdotc_sub64_", "cblas_zdotc_sub64_"}));  // the crossing ACA
+    // the crossing node's constrained solve (`np.linalg.solve`)
+    la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym_of(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
     la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dgemv64_", "cblas_dgemv64_"}));
     la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(
