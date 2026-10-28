@@ -120,9 +120,28 @@ def test_the_sinusoidal_galerkin_exes_ship_in_the_linux_tarball_as_previews():
         assert f"momwire-nec5-linux-x86_64/{cmd}" in workflow, cmd
         assert cmd in readme_txt and cmd in readme, cmd
     assert (
-        "needs: [linux-artifact, linux, linux-nec42, linux-nec42-sg, linux-nec5-sg]"
+        "needs: [linux-artifact, linux, linux-nec42, linux-nec42-sg, linux-nec5-sg"
         in workflow
     )
     assert "PREVIEW: momwire-nec42-sinusoidal-galerkin-linux" in readme_txt
     assert "wires on both sides of the ground" in readme_txt
     assert "Sinusoidal-Galerkin engines on Linux, without Python (preview)" in readme
+
+
+def test_the_nec42_default_exe_ships_in_the_linux_tarball_as_a_preview():
+    """momwire#1607 Phase C2: `momwire-nec42`'s no-Python build (bs2) rides
+    the Linux tarball, gated (the tarball's own bytes) before a tag attaches
+    it, and every note that lists it says it is a preview and what it still
+    refuses."""
+    root = WORKFLOWS.parent.parent
+    script = (root / "standalone" / "build_release_linux.sh").read_text()
+    workflow = (WORKFLOWS / "standalone.yml").read_text()
+    readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "momwire-nec42-linux bs42 momwire-nec42-standalone" in script
+    assert (root / "standalone" / "release" / "momwire-nec42-linux").exists()
+    assert "momwire-nec5-linux-x86_64/momwire-nec42-linux" in workflow
+    assert "linux-nec5-sg, linux-nec42-bs]" in workflow
+    assert "PREVIEW: momwire-nec42-linux" in readme_txt
+    assert "an insulated wire (an IS card)" in readme_txt
+    assert "default engine on Linux, without Python (preview)" in readme

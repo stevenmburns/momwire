@@ -73,6 +73,14 @@ commands' byte for byte except the two measured-time lines. As a preview
 they still refuse by name a deck with wires on both sides of the ground;
 the Python commands serve those decks.
 
+**NEC-4.2 default engine, Linux (preview).** The Linux tarball also holds
+`momwire-nec42-linux`, what the Python command `momwire-nec42` (the NEC-4.2
+slot's default, bs2) answers, with its own avx2 and sse2 builds and picker.
+Its printout is the Python command's byte for byte except the two
+measured-time lines. As a preview it still refuses by name a near field over
+a buried wire (as the Python command does) and an insulated wire (IS); the
+Python command serves the insulated wire.
+
 **Windows (preview).** The zip holds `momwire-nec5-razor2p-avx2.exe` and
 `momwire-nec5-bs2-avx2.exe`, the `-sse2` pair, and a `win7` folder with an
 sse2 pair built to run on Windows 7 SP1. The programs are signed with

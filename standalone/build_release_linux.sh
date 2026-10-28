@@ -7,7 +7,7 @@
 #         standalone/build_release_linux.sh OPENBLAS_DIR OUT_DIR
 #
 # -> OUT_DIR/momwire-nec5-linux-x86_64.tar.gz, which unpacks to one
-# directory holding five engines, each a command and its two builds:
+# directory holding six engines, each a command and its two builds:
 #
 #   momwire-nec5-razor2p-linux        razor-2p: picks the build this CPU runs
 #   momwire-nec5-razor2p-linux-avx2   the C++ core compiled -mavx2 -mfma
@@ -21,11 +21,15 @@
 #   momwire-nec42-sinusoidal-galerkin-linux[-avx2|-sse2]  PREVIEW (momwire#1718):
 #   momwire-nec5-sinusoidal-galerkin-linux[-avx2|-sse2]   the Sinusoidal-Galerkin
 #                                        basis for the NEC-4.2 slot and NEC-5
+#   momwire-nec42-linux[-avx2|-sse2]     PREVIEW (momwire#1607 Phase C): the
+#                                        NEC-4.2 slot's default `momwire-nec42`
+#                                        (bs2)
 #   README.txt
 #
 # Each build is `momwire-razor2p-standalone` / `momwire-bs2-standalone` /
 # `momwire-nec42-sinusoidal-standalone` / the two
-# `momwire-nec{42,5}-sinusoidal-galerkin-standalone` (MW_EXE_NO_PYTHON), renamed: `nec5`
+# `momwire-nec{42,5}-sinusoidal-galerkin-standalone` / `momwire-nec42-standalone`
+# (MW_EXE_NO_PYTHON), renamed: `nec5`
 # in the name is what makes SimNEC write it NEC-5 decks (momwire#1239), and
 # `nec42` NEC-4.2 decks (momwire#1443). OpenBLAS, libstdc++, libgcc and (where the
 # toolchain has an archive of it) libgomp are linked in; glibc stays shared,
@@ -57,7 +61,8 @@ for engine in "$NAME razor2p momwire-razor2p-standalone" \
               "momwire-nec5-bs2-linux bs2 momwire-bs2-standalone" \
               "momwire-nec42-sinusoidal-linux sin42 momwire-nec42-sinusoidal-standalone" \
               "momwire-nec42-sinusoidal-galerkin-linux sg42 momwire-nec42-sinusoidal-galerkin-standalone" \
-              "momwire-nec5-sinusoidal-galerkin-linux sg5 momwire-nec5-sinusoidal-galerkin-standalone"; do
+              "momwire-nec5-sinusoidal-galerkin-linux sg5 momwire-nec5-sinusoidal-galerkin-standalone" \
+              "momwire-nec42-linux bs42 momwire-nec42-standalone"; do
     set -- $engine
     cmd=$1 basis=$2 target=$3
     for v in avx2 sse2; do

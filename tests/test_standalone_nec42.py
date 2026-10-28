@@ -1,7 +1,9 @@
 """momwire-nec42-sinusoidal-standalone (standalone/, MW_EXE_BASIS=sin42,
 momwire#1607 B4b): the NEC-4.2 slot's sinusoidal launcher as one Python-free
 executable; and the same for momwire-nec42-sinusoidal-galerkin-standalone
-(MW_EXE_BASIS=sg42, momwire#1718 S4), the Sinusoidal-Galerkin launcher.
+(MW_EXE_BASIS=sg42, momwire#1718 S4), the Sinusoidal-Galerkin launcher, and
+for momwire-nec42-standalone (MW_EXE_BASIS=bs42, momwire#1607 Phase C2), the
+slot's default launcher `momwire-nec42` (bs2).
 
 Every printout is held to `momwire-nec42-sinusoidal`'s (this environment's
 launcher) byte for byte, except the two lines the NEC-4.2 slot fills with
@@ -20,8 +22,8 @@ which are masked by exact line pattern, the same number on both sides
 
 The executable needs its OpenBLAS and a CMake build, which only the
 `standalone` workflow's Linux job makes, so this module runs only when
-MOMWIRE_NEC42_SIN_STANDALONE_EXE (or MOMWIRE_NEC42_SG_STANDALONE_EXE) names
-one.
+MOMWIRE_NEC42_SIN_STANDALONE_EXE (or MOMWIRE_NEC42_SG_STANDALONE_EXE, or
+MOMWIRE_NEC42_STANDALONE_EXE) names one.
 """
 
 from __future__ import annotations
@@ -42,15 +44,25 @@ NEC42 = FIXTURES / "eznec_nec42"
 # The same gates hold `momwire-nec42-sinusoidal-galerkin-standalone`
 # (MW_EXE_BASIS=sg42, momwire#1718 S4) to `momwire-nec42-sinusoidal-galerkin`
 # when MOMWIRE_NEC42_SG_STANDALONE_EXE names it instead.
+# And `momwire-nec42-standalone` (MW_EXE_BASIS=bs42, momwire#1607 Phase C2)
+# to `momwire-nec42`, the slot's default (bs2), under
+# MOMWIRE_NEC42_STANDALONE_EXE.
 _SG = os.environ.get("MOMWIRE_NEC42_SG_STANDALONE_EXE")
-EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE") or _SG
-BASIS = "sinusoidal-galerkin" if EXE is not None and EXE == _SG else "sinusoidal"
-LAUNCHER = f"momwire-nec42-{BASIS}"
+_BS = os.environ.get("MOMWIRE_NEC42_STANDALONE_EXE")
+EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE") or _SG or _BS
+if EXE is not None and EXE == _SG:
+    BASIS = "sinusoidal-galerkin"
+elif EXE is not None and EXE == _BS:
+    BASIS = "bspline"
+else:
+    BASIS = "sinusoidal"
+LAUNCHER = "momwire-nec42" if BASIS == "bspline" else f"momwire-nec42-{BASIS}"
 
 pytestmark = pytest.mark.skipif(
     not EXE,
-    reason="neither MOMWIRE_NEC42_SIN_STANDALONE_EXE nor "
-    "MOMWIRE_NEC42_SG_STANDALONE_EXE names a built executable",
+    reason="none of MOMWIRE_NEC42_SIN_STANDALONE_EXE, "
+    "MOMWIRE_NEC42_SG_STANDALONE_EXE, MOMWIRE_NEC42_STANDALONE_EXE names a "
+    "built executable",
 )
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
