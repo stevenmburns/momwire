@@ -1,0 +1,11 @@
+CM unit 3a: PQ's fourth field is infinite; the echo prints it as an integer,
+CM so the reader refuses the card by field (it once raised in the echo).
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+FR 0,1,0,0,299.793
+GN -1
+EX 4,1,6,0,1.414214,0.
+PQ 0,0,0,1e400
+XQ 0
+EN

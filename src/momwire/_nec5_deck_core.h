@@ -218,6 +218,17 @@ constexpr long long kMaxWireSegments = 10000000;
 // for a card every reader goes on to read.
 std::string gw_field_refusal(const Card &card);
 
+// `deck._cards.MAX_COORDINATE` and `wire_geometry_refusal`: `wire_geometry_scan`
+// folds `n` coordinates into the two flags the sentence reads (a radius only
+// clears `finite`); `wire_geometry_refusal` is the sentence, or "".
+constexpr double kMaxCoordinate = 1e299;
+// `deck._cards.infinite_angle_refusal`: a GM rotation or GH helix angle that
+// is infinite.
+std::string infinite_angle_refusal(const std::string &mnemonic);
+void wire_geometry_scan(const double *p, std::size_t n, bool &finite, bool &far);
+std::string wire_geometry_refusal(const std::string &mnemonic, const Int &tag, bool finite,
+                                  bool far);
+
 // The `TOTAL LENGTH OF WIRE IN THE SPIRAL` a GH card's echo prints
 // (`_printout._geometry_echo`, momwire#1669): its chords' lengths summed.
 double gh_spiral_length(const Card &card);

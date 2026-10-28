@@ -1368,7 +1368,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     # Not vacuous: results, refusals and the last line of defence all print,
     # and the three run-half declines are reached by name.
     assert counts.get("served", 0) >= 25 and counts.get("refused", 0) >= 50, counts
-    assert counts.get("served|frame", 0) >= 2, counts
+    # one deck still raises in the echo (`echo_raises_nxq`); the infinite PQ
+    # field that did now refuses on the card (`echo_refuses_inf_field`)
+    assert counts.get("served|frame", 0) >= 1, counts
     assert counts.get("runs", 0) >= 30 and counts.get("multi-port", 0) >= 5, counts
     # The run half declines nothing by name any more: LD 0 / 1 / 4, RP and
     # NE / NH all print (what is left declines in the seam, before it).
@@ -1433,8 +1435,8 @@ def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
     }
     assert routes == {
         "chain_then_refusal": ("printed", "refused", ""),
-        "echo_raises_inf_field": ("printed", "served", "OverflowError"),
         "echo_raises_nxq": ("printed", "served", "DeckError"),
+        "echo_refuses_inf_field": ("printed", "refused", ""),
         "multi_run_three_ports": ("printed", "served", ""),
         "node_gap_ex4_complex": ("printed", "served", ""),
         "node_gap_two_sources": ("printed", "served", ""),

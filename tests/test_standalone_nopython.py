@@ -43,7 +43,7 @@ pytestmark = pytest.mark.skipif(
 
 DIPOLE = FIXTURES / "razor_printout_3a" / "node_gap_two_sources.nec"
 REFUSES = FIXTURES / "razor_printout_3a" / "chain_then_refusal.nec"
-RAISES = FIXTURES / "razor_printout_3a" / "echo_raises_inf_field.nec"
+RAISES = FIXTURES / "razor_printout_3a" / "echo_raises_nxq.nec"
 BURIED = FIXTURES / "razor_printout_somm" / "gn0_buried_radial.nec"
 EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
 DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)

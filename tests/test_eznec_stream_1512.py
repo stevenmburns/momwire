@@ -27,7 +27,7 @@ from momwire.eznec import _shell
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "razor_printout_3a"
 DIPOLE = (FIXTURES / "node_gap_two_sources.nec").read_text(encoding="latin-1")
 CHAIN_THEN_REFUSAL = (FIXTURES / "chain_then_refusal.nec").read_text(encoding="latin-1")
-RAISES = (FIXTURES / "echo_raises_inf_field.nec").read_text(encoding="latin-1")
+RAISES = (FIXTURES / "echo_raises_nxq.nec").read_text(encoding="latin-1")
 BASIS = "razor-2p"
 
 
@@ -120,8 +120,8 @@ def test_an_exception_is_the_internal_error_printout_and_ends_the_stream():
     text = _body(DIPOLE) + "NX\n" + piece + _body(DIPOLE) + "NX\n"
     writes, _ = _streamed([text.encode()])
     assert len(writes) == 2
-    assert b"INTERNAL ERROR IN MOMWIRE ENGINE - OverflowError" in writes[1]
-    assert b"unit 3a: PQ's fourth field" in writes[1]
+    assert b"INTERNAL ERROR IN MOMWIRE ENGINE - DeckError" in writes[1]
+    assert b"unit 3a: the stream splitter" in writes[1]
 
 
 def test_cards_left_when_stdin_closes_are_a_truncated_deck():

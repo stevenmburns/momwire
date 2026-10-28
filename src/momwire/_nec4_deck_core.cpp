@@ -430,9 +430,12 @@ Int next_tag(const Int &tag, const Int &increment) {
 
 void gm(const Card &card, std::vector<FlatWire> &wires) {
     Int itgi = card.i(0), nrpt = card.i(1);
+    card.i(8);  // a NaN or infinite ITS refuses by card and field, as an integer
     double rox = card.f(2) * kDeg, roy = card.f(3) * kDeg, roz = card.f(4) * kDeg;
     double xs = card.f(5), ys = card.f(6), zs = card.f(7);
     Int its = py_int_trunc(card.f(8) + 0.5);
+    if (std::isinf(rox) || std::isinf(roy) || std::isinf(roz))
+        deck_error(nec5::infinite_angle_refusal(card.mnemonic));  // `gm_transform`
     double sps = libm_sin(rox), cps = libm_cos(rox);
     double sth = libm_sin(roy), cth = libm_cos(roy);
     double sph = libm_sin(roz), cph = libm_cos(roz);
@@ -585,6 +588,7 @@ void gh_nec2(const Card &card, std::vector<FlatWire> &wires) {
     for (ll k = 0; k <= n; k++) {
         if (k) zk = zk + zinc;
         double angle = 2.0 * kPi * zk / s;
+        if (std::isinf(angle)) deck_error(nec5::infinite_angle_refusal(card.mnemonic));
         double x, y;
         if (a2 == a1) {
             x = a1 * libm_cos(angle);
@@ -623,6 +627,7 @@ std::vector<std::array<double, 3>> helix_points(const Card &card) {
     double dn = static_cast<double>(n);
     double q = py_float_pow(r2 / r1, 1.0 / dn);
     double step = 2.0 * kPi * turns / dn;
+    if (std::isinf(step)) deck_error(nec5::infinite_angle_refusal(card.mnemonic));
     double qn = py_float_pow(q, dn);
     std::vector<std::array<double, 3>> v;
     for (ll k = 0; k <= n; k++) {
@@ -978,6 +983,14 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
         } else {
             gr(card, wires);
         }
+        // `wire_geometry_refusal`: every wire after every geometry card
+        for (const FlatWire &w : wires) {
+            bool finite = std::isfinite(w.radius), far = false;
+            nec5::wire_geometry_scan(w.p1, 3, finite, far);
+            nec5::wire_geometry_scan(w.p2, 3, finite, far);
+            const std::string why = nec5::wire_geometry_refusal(m, w.tag, finite, far);
+            if (!why.empty()) deck_error(why);
+        }
         symmetry_after(card, wires, before, s.has_symmetry, s.symmetry);
     }
     ll total = 0;
@@ -1087,7 +1100,8 @@ bool directive(const std::string &latin1_text, const char *keyword, Int &value) 
             if (!nec5::latin1_float(parts[i + 1], v)) return false;
             if (std::isnan(v)) return false;  // int(nan) is the ValueError caught
             if (std::isinf(v))
-                throw ParseError(ErrorKind::overflow_error, "cannot convert float infinity to integer");
+                deck_error(std::string("the ") + keyword + " directive in a comment reads " +
+                           nec5::latin1_to_utf8(parts[i + 1]) + ", which is not a finite number");
             value = py_int_trunc(v);
             return true;
         }
@@ -1115,15 +1129,29 @@ class Parser {
             if (!nec5::read_card(line, card)) continue;
             if (card.mnemonic == "NX" || card.mnemonic == "EN") break;
             // `_Nec2Parser.card`: a malformed GW refuses on the card, in the
-            // words every reader uses; any other card's non-finite field is
-            // Python's to read (an LD 5 NaN conductivity is served)
+            // words every reader uses
             if (card.mnemonic == "GW") {
                 const std::string why = nec5::gw_field_refusal(card);
                 if (!why.empty()) deck_error(why);
             }
             if (card.mnemonic != "CM" && card.mnemonic != "CE") {
-                for (double v : card.values)
-                    if (!std::isfinite(v)) decline("a non-finite field on a " + card.mnemonic + " card");
+                bool finite = true;
+                for (double v : card.values) finite = finite && std::isfinite(v);
+                // `_pq`: the four integers the printout reads, refused on the card
+                if (!finite && card.mnemonic == "PQ")
+                    for (std::size_t k = 0; k < 4; k++) card.i(k);
+                // A geometry card's NaN or infinity reaches the builders, which
+                // refuse it where Python does (`Card.i`, and
+                // `wire_geometry_refusal` after the card); a deck that survives
+                // them still declines after the build (`structure`). Any
+                // other card's is Python's to read (an LD 5 NaN conductivity
+                // is served).
+                const bool geometry =
+                    in(card.mnemonic, kGeometryCards) || card.mnemonic == "CW";
+                if (!finite && geometry)
+                    nonfinite_geometry_ = true;
+                else if (!finite)
+                    decline("a non-finite field on a " + card.mnemonic + " card");
             }
             this->card(card);
         }
@@ -1141,6 +1169,7 @@ class Parser {
 
     std::vector<Card> geometry_cards_;
     bool structure_built_ = false;
+    bool nonfinite_geometry_ = false;  // a geometry card carried a NaN or infinity
     Structure structure_;
 
     std::vector<bool> ran_;
@@ -1182,6 +1211,11 @@ class Parser {
         if (!structure_built_) {
             structure_ = build_geometry(geometry_cards_, dialect_);
             structure_built_ = true;
+            // a geometry card's NaN or infinity no builder refused (a field
+            // the card's reading ignores, a spacing NEC-2's GH divides by):
+            // Python serves the deck, from arithmetic this copy does not hold
+            // itself to on such values
+            if (nonfinite_geometry_) decline("a non-finite field on a geometry card");
         }
         return structure_;
     }
@@ -1786,7 +1820,10 @@ class Parser {
         if (m == "IS") return is_card(card);
         if (m == "EK") return ek(card);
         if (m == "PT") return print_control_card(card);
-        if (m == "PQ") return;
+        if (m == "PQ") {
+            for (std::size_t k = 0; k < 4; k++) card.i(k);  // `_pq`
+            return;
+        }
         if (m == "MP") return multiprocessing_card(card);
         if (in(m, kExecuteCards)) return execute(card);
         deck_error("unrecognised NEC card " + repr_utf8_alpha(m));

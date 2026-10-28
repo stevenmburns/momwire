@@ -510,14 +510,43 @@ def test_the_serve_layer_names_its_refusal_constants_as_this_file_reads_them():
 # Each deck once failed deep in the mesh with Python's own float-to-int or
 # numpy's allocation message, as an INTERNAL ERROR frame the C++ seams copied.
 # Now every reader refuses it on the card, in one sentence.
+ALL = ("nec5", "nec4", "nec2")
+NONFINITE = "with a coordinate or radius that is not a finite number; a wire's ends and radius must stay finite"
+FAR = (
+    "more than 1e+299 m from the origin; this engine meshes wires within 1e+299 m of it"
+)
+ANGLE = "turns its fields into an infinite angle; a card's angles, turns and lengths must be finite numbers"
+# deck: (sentence, the dialects that read it so; the others read the card
+# their own way: NEC-2's GH spacing, no CW in NEC-2, no FF in NEC-5)
 MALFORMED = {
     "gw_non_finite_field.nec": (
         "GW field 4 is not a finite number; a wire's tag, segment count, end "
-        "coordinates and radius must all be finite"
+        "coordinates and radius must all be finite",
+        ALL,
     ),
     "gw_too_many_segments.nec": (
         "GW tag 2 asks for more than 10000000 segments; this engine meshes at "
-        "most 10000000 segments on one wire"
+        "most 10000000 segments on one wire",
+        ALL,
+    ),
+    "gw_past_1e299.nec": (f"GW puts tag 2 {FAR}", ALL),
+    "ga_non_finite_radius.nec": (f"GA leaves tag 2 {NONFINITE}", ALL),
+    "gh_infinite_turns.nec": (f"GH {ANGLE}", ("nec5", "nec4")),
+    "cw_non_finite_radius.nec": (f"CW leaves tag 2 {NONFINITE}", ("nec5", "nec4")),
+    "gm_moves_past_1e299.nec": (f"GM puts tag 2 {FAR}", ALL),
+    "gm_infinite_rotation.nec": (f"GM {ANGLE}", ALL),
+    "gs_scales_past_the_doubles.nec": (f"GS leaves tag 1 {NONFINITE}", ALL),
+    "gx_non_finite_code.nec": (
+        "GX field 2 is NaN; an integer field must be a finite number",
+        ALL,
+    ),
+    "pq_infinite_field.nec": (
+        "PQ field 4 is infinite; an integer field must be a finite number",
+        ALL,
+    ),
+    "comment_ff_infinite.nec": (
+        "the FF directive in a comment reads -inf, which is not a finite number",
+        ("nec4", "nec2"),
     ),
 }
 
@@ -531,23 +560,24 @@ def test_a_malformed_deck_is_one_plain_refusal_everywhere(name):
     from momwire.deck import DeckError, parse
     from momwire.deck._nec5 import parse_nec5
 
-    sentence = MALFORMED[name]
+    sentence, dialects = MALFORMED[name]
     text = (OWN / name).read_text(encoding="latin-1")
-    with pytest.raises(DeckError) as nec5:
-        parse_nec5(text)
-    assert str(nec5.value) == sentence
-    for dialect in ("nec2", "nec4"):
+    if "nec5" in dialects:
+        with pytest.raises(DeckError) as nec5:
+            parse_nec5(text)
+        assert str(nec5.value) == sentence
+    for dialect in {"nec2", "nec4"} & set(dialects):
         with pytest.raises(DeckError) as other:
             parse(text, dialect=dialect)
         assert str(other.value) == sentence, dialect
     acc = _accel.acc
     if acc is None or not all(hasattr(acc, s) for s in SEAMS.values()):
         pytest.skip("no accelerator with the C++ seams loaded")
-    for seam in SEAMS.values():
+    for seam in SEAMS.values() if "nec5" in dialects else ():
         answer = getattr(acc, seam)((OWN / name).read_bytes())
         assert (answer["route"], answer["message"]) == ("refused", sentence), seam
     if hasattr(acc, "nec4_deck_dump"):
-        for dialect in ("nec2", "nec4"):
+        for dialect in sorted({"nec2", "nec4"} & set(dialects)):
             first = acc.nec4_deck_dump(text.encode("latin-1"), dialect).split("\n")[0]
             assert first.startswith("parse ! DeckError "), (dialect, first)
             assert bytes.fromhex(first.split(" ")[3]).decode("utf-8") == sentence

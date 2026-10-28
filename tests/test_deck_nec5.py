@@ -764,8 +764,8 @@ def test_the_sp_classifier_reads_the_form_not_the_values(card, shape):
 def test_the_reader_names_tokens_and_fields_in_plain_text():
     """Every message the reader builds from deck text spells that text as
     written -- no Python repr quoting -- and an integer field that has no
-    integer (inf, nan) says so in the reader's own words, keeping the
-    exception type the conversion raises. The C++ reader
+    integer (inf, nan) says so in the reader's own words, as a refusal (a
+    DeckError, never the conversion's crash). The C++ reader
     (`_nec5_deck_core.cpp`) raises the same text."""
     body = DIPOLE.replace("GN -1", "{}")
     cases = {
@@ -775,7 +775,7 @@ def test_the_reader_names_tokens_and_fields_in_plain_text():
         ),
         "GN 1 NOFILE": (DeckError, "GN 1 carries a trailing token NOFILE; only a"),
         "GN inf": (
-            OverflowError,
+            DeckError,
             "GN field 1 is infinite; an integer field must be a finite number",
         ),
     }
@@ -783,7 +783,7 @@ def test_the_reader_names_tokens_and_fields_in_plain_text():
         with pytest.raises(kind) as exc:
             parse_nec5(body.format(card))
         assert text in str(exc.value), str(exc.value)
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(DeckError) as exc:
         parse_nec5(DIPOLE.replace("FR 0,1,0,0", "FR 0,nan,0,0"))
     assert str(exc.value) == (
         "FR field 2 is NaN; an integer field must be a finite number"
