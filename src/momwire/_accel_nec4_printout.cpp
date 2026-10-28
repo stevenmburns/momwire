@@ -5,6 +5,7 @@
 // fills) into the C++ record, field by field, so `tests/test_nec4_printout_core.py`
 // can hand the C++ writer exactly the numbers Python's own writer got.
 #include "_accel_common.h"
+#include "_bspline_nec4_run_core.h"
 #include "_nec4_printout_core.h"
 #include "_sinusoidal_galerkin_run_core.h"
 #include "_sinusoidal_run_core.h"
@@ -442,4 +443,55 @@ void register_nec4_printout(py::module_ &m) {
         py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
         "(True, the slot's printout) for basis 'sinusoidal-galerkin' from the C++ run half, "
         "or (False, why it declines).");
+    // The B-spline basis on the same run half (momwire#1607 Phase C1).
+    // `blas`: the ten above, then numpy's ILP64 cblas_dsyrk and
+    // cblas_zdotc_sub, and SciPy's LP64 zsytrf and zsytrs. `arrays`: also
+    // return each solve's (Z, B, X, Y) in solve order.
+    m.def(
+        "bspline_nec4_printout",
+        [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
+           const std::string &variant, const std::string &marker, bool arrays) -> py::tuple {
+            if (blas.size() != 14) throw py::value_error("blas: fourteen addresses");
+            mw::bspline_nec4::Linalg la;
+            la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+            la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+            la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+            la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+            la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[4]);
+            la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[5]);
+            la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[6]);
+            la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[7]);
+            la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[8]);
+            la.np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(blas[9]);
+            la.np.dsyrk = reinterpret_cast<mw::nec5::cblas_dsyrk_fn>(blas[10]);
+            la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[11]);
+            la.sym.sytrf = reinterpret_cast<mw::bspline::zsytrf_fn>(blas[12]);
+            la.sym.sytrs = reinterpret_cast<mw::bspline::zsytrs_fn>(blas[13]);
+            const std::string text = latin1_text;
+            const mw::nec5::EngineStamp st = stamp_of(version, variant, marker);
+            std::string out, why;
+            std::vector<mw::bspline_nec4::SolveArrays> got;
+            bool ok;
+            {
+                py::gil_scoped_release nogil;
+                SinBelowSource below;  // a buried deck's below/below table
+                ok = mw::bspline_nec4::printout(text, st, la, out, why, arrays ? &got : nullptr);
+            }
+            py::list solves;
+            for (const auto &a : got) {
+                const py::ssize_t n = a.n_basis, p = a.n_ports;
+                py::array_t<std::complex<double>> Z({n, n}), X({n, p}), Y({p, p});
+                py::array_t<double> B({n, p});
+                std::copy(a.Z.begin(), a.Z.end(), Z.mutable_data());
+                std::copy(a.X.begin(), a.X.end(), X.mutable_data());
+                std::copy(a.Y.begin(), a.Y.end(), Y.mutable_data());
+                std::copy(a.B.begin(), a.B.end(), B.mutable_data());
+                solves.append(py::make_tuple(Z, B, X, Y));
+            }
+            return py::make_tuple(ok, py::str(ok ? out : why), solves);
+        },
+        py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
+        py::arg("arrays") = false,
+        "(True, the slot's printout, solves) for basis 'bspline' from the C++ run half, or "
+        "(False, why it declines, solves); `solves` is each solve's (Z, B, X, Y) when `arrays`.");
 }

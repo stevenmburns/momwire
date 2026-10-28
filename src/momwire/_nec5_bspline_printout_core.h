@@ -31,6 +31,17 @@
 namespace mw {
 namespace nec5 {
 
+// `compute_port_solution()` over one built front (`BSplineSeamEngine::
+// build`): the fill (dense, chunked or buried), the exact-kernel correction,
+// the ground's image and Sommerfeld remainder, the loading, then the KCL
+// port solve. Shared by the NEC-5 engine below and the NEC-4.2 slot's
+// (`_bspline_nec4_run_core.h`, momwire#1607 Phase C); `Z_out` / `B_out`, when
+// given, receive the operator and the port columns the solve takes (the
+// gates' arrays). A front the C++ does not serve throws PrintoutDecline.
+Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, const bspline::SymLapack &sym,
+                           const NumpyLinalg &np, std::vector<cd> *Z_out = nullptr,
+                           std::vector<double> *B_out = nullptr);
+
 class BSplinePrintoutEngine final : public PrintoutEngine {
   public:
     BSplinePrintoutEngine(const razor::Lapack &lapack, const bspline::SymLapack &sym)

@@ -85,6 +85,11 @@ struct FrontValueError : std::runtime_error {
 };
 struct FrontNotPorted : std::runtime_error {
     using std::runtime_error::runtime_error;
+    // `python`: the message is Python's own NotImplementedError sentence (the
+    // crossing serve's scope, `_below_interface.crossing_junctions`), which a
+    // caller may print as the solver's refusal; else this copy's label
+    FrontNotPorted(const std::string &m, bool py) : std::runtime_error(m), python(py) {}
+    bool python = false;
 };
 
 // `drop_duplicated_wires("BSplineSolver", ...)` with no junction-indexed

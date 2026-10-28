@@ -8,8 +8,11 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
+#include <cstdio>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -311,9 +314,12 @@ int64_t search_right(const std::vector<double> &t, double x) {
 // (the crossing mid-span, a buried wire with no lower medium, a ground
 // contact beside a buried wire) declines instead: step 4 ports the labels,
 // not the sentences.
+const double kMinCrossingNodeSeparationM = 1.0;  // _below_interface.MIN_CROSSING_NODE_SEPARATION_M
+
 std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polylines,
                                 const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
-                                double gz, bool lower_medium, std::vector<int64_t> &crossing) {
+                                double gz, bool lower_medium, const std::vector<double> &radii,
+                                std::vector<int64_t> &crossing) {
     const size_t n_w = polylines.size();
     std::vector<uint8_t> below(n_w, 0);
     crossing.clear();
@@ -391,6 +397,104 @@ std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polyline
     }
     for (const auto &c : contacts)
         if (!earned.count(c)) throw FrontNotPorted("buried-refusal-unearned");
+    if (crossing.empty()) return below;
+    // the crossing serve's scope (`crossing_junctions(..., two_radius=True)`),
+    // refused in Python's NotImplementedError sentences (momwire#1607 C1)
+    const auto refuse = [](const std::string &m) { throw FrontNotPorted(m, true); };
+    const auto g6 = [](double x) {  // Python's `f"{x:.6g}"`
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%.6g", x);
+        return std::string(buf);
+    };
+    if (crossing.size() > 1) {
+        // `_closest_crossing_nodes`: each node at its first member's end, the
+        // pairs in `np.triu_indices` order, numpy's hypot, the first argmin
+        std::vector<std::array<double, 2>> pts;
+        for (int64_t j : crossing) {
+            const auto &m0 = junctions[static_cast<size_t>(j)][0];
+            const std::vector<double> &pl = polylines[static_cast<size_t>(m0.first)];
+            const size_t at = m0.second ? 0 : pl.size() - 3;
+            pts.push_back({pl[at], pl[at + 1]});
+        }
+        double best = 0.0;
+        size_t bi = 0, bj = 0;
+        bool first = true;
+        for (size_t i = 0; i < pts.size(); i++)
+            for (size_t j = i + 1; j < pts.size(); j++) {
+                const double sep = std::hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]);
+                if (std::isnan(sep)) throw FrontNotPorted("a NaN crossing-node separation");
+                if (first || sep < best) {
+                    best = sep;
+                    bi = i;
+                    bj = j;
+                    first = false;
+                }
+            }
+        if (best < kMinCrossingNodeSeparationM)
+            refuse("crossing junctions " + std::to_string(crossing[bi]) + " and " + std::to_string(crossing[bj]) +
+                   ", at (" + g6(pts[bi][0]) + ", " + g6(pts[bi][1]) + ") and (" + g6(pts[bj][0]) + ", " +
+                   g6(pts[bj][1]) + "), stand " + g6(best) +
+                   " m apart: the crossing serve completes several crossing nodes per deck from 1 m apart, the "
+                   "closest separation its two-node collapse was gated at (antennaknobs plan U9), and closer "
+                   "crossing nodes have no measured completion");
+    }
+    for (int64_t j : crossing) {
+        int64_t n_above = 0;
+        for (const auto &m : junctions[static_cast<size_t>(j)])
+            if (!below[static_cast<size_t>(m.first)]) n_above++;
+        if (n_above != 1)
+            refuse("crossing junction with more than one above member: the crossing serve joins ONE above wire "
+                   "to N below wires at the interface (momwire#524 fan widening); the above-tent x above-tent "
+                   "interface corner has no measured convention");
+    }
+    for (size_t j = 0; j < junctions.size(); j++) {
+        if (std::find(crossing.begin(), crossing.end(), static_cast<int64_t>(j)) != crossing.end()) continue;
+        const auto &m0 = junctions[j][0];
+        const bool grounded = std::fabs(end_z(m0.first, m0.second) - gz) <= tol[static_cast<size_t>(m0.first)];
+        bool a = false, b = false;
+        for (const auto &m : junctions[j]) (below[static_cast<size_t>(m.first)] ? b : a) = true;
+        if (!grounded && !(a && b)) continue;
+        refuse("a deck with a crossing junction and an in-plane or media-mixing OTHER junction is not served: "
+               "the complete crossing spelling completes every value-1 end on its axes, and a junction standing "
+               "in the interface sits where the corner and image terms live, which has no measured completion "
+               "(momwire#524 phase 2, momwire#1133)");
+    }
+    double rmin = radii[0], rmax = radii[0];
+    for (double r : radii) {
+        rmin = std::min(rmin, r);
+        rmax = std::max(rmax, r);
+    }
+    if (rmax - rmin > 0.0) {
+        // `crossing_side_radii(media, radii, crossing_above_member(...))`:
+        // the above side is the node's above member; the below side's spread
+        int64_t above_member = -1;
+        if (crossing.size() == 1)
+            for (const auto &m : junctions[static_cast<size_t>(crossing[0])])
+                if (!below[static_cast<size_t>(m.first)]) {
+                    above_member = m.first;
+                    break;
+                }
+        for (int side = 0; side < 2; side++) {
+            if (side == 0 && above_member >= 0) continue;
+            double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+            for (size_t w = 0; w < below.size(); w++)
+                if ((below[w] != 0) == (side == 1)) {
+                    lo = std::min(lo, radii[w]);
+                    hi = std::max(hi, radii[w]);
+                }
+            if (hi - lo > 0.0)
+                refuse(std::string("crossing serve with per-wire radii that differ within the ") +
+                       (side == 0 ? "above" : "below") +
+                       " wires: the two-radius rule serves one radius per side of the interface (the node's point "
+                       "tests at the buried radius, antennaknobs plan U5); a spread within one side has no measured "
+                       "node radius");
+        }
+        if (crossing.size() > 1)
+            refuse("a TWO-RADIUS crossing deck with " + std::to_string(crossing.size()) +
+                   " crossing junctions: the two-radius node (antennaknobs plan U5) and more than one crossing node "
+                   "(plan U9) were each measured alone, and a two-radius deck with several nodes has no measured "
+                   "completion");
+    }
     return below;
 }
 
@@ -417,7 +521,7 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
     b.below_wire.assign(n_w, 0);
     if (has_ground) {
         const double gz = ground_z;
-        b.below_wire = wire_media(polylines, junctions, gz, lower_medium, b.crossing);
+        b.below_wire = wire_media(polylines, junctions, gz, lower_medium, radii, b.crossing);
         for (size_t w = 0; w < n_w; w++) {
             // strictly below the interface: no contact to tag, no in-plane
             // edge to diagnose (`_wire_endpoint_status`)
