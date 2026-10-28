@@ -45,6 +45,7 @@ import pathlib
 import sys
 import warnings
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -394,8 +395,9 @@ CASES += [(name, text, "fills") for name, text in CONTACT_CASES]
 
 # A wholly-buried deck (momwire#1718 S11a): the mixed-potential fill in the
 # lower medium, at k_m and eta_m, with the below family's remainder. Each
-# refusal is the reference's, in its words; a deck on both sides of the
-# interface declines (the transmitted blocks; a crossing junction is S11b).
+# refusal is the reference's, in its words; a deck with wires on both sides
+# of the interface and no crossing junction declines (the transmitted
+# blocks, S12).
 BURIED = "GW 1 11 -.25 0 -.1 .25 0 -.1 .001\n"
 BURIED_CASES = [
     ("buried_dipole_gn2", deck(BURIED, GN2 + FR + "EX 0 1 6 0 1\nXQ\n"), "fills"),
@@ -444,12 +446,12 @@ BURIED_CASES = [
         deck(MONO + BURIED, GN2 + FR + "EX 0 1 1 0 1\nXQ\n", ge="GE 1"),
         "fills",
     ),
-    # wires on both sides of the interface decline: detached, and a card
-    # wire through the plane, which the slot splits into a crossing junction
+    # a card wire through the plane, which the slot splits into a crossing
+    # junction (S11b); a detached deck on both sides declines (S12)
     (
         "buried_split_at_the_plane",
         deck("GW 1 11 0 0 -.2 0 0 .2 .001\n", GN2 + FR + "EX 0 1 6 0 1\nXQ\n"),
-        "declined",
+        "fills",
     ),
     (
         "buried_beside_elevated",
@@ -461,6 +463,110 @@ BURIED_CASES = [
     ),
 ]
 CASES += BURIED_CASES
+
+# A crossing deck (momwire#1718 S11b, `_assemble_Z_mp_mixed`): the two
+# classes' fills, the crossing pair through the split (its far blocks by
+# ACA past the guard), the node's self completions, and at a two-radius node
+# or a node gap the continuity row's constrained solve. Each refusal is the
+# reference's, in its words.
+RISE = "GW 1 6 0 0 0 0 0 .25 .001\n"
+
+
+def radials(
+    n: int, length: float = 0.3, depth: float = 0.05, r: float = 0.001, segs: int = 6
+) -> str:
+    out = ""
+    for i in range(n):
+        a = 2 * np.pi * i / n
+        x, y = length * np.cos(a), length * np.sin(a)
+        out += f"GW {i + 2} {segs} 0 0 0 {x:.6f} {y:.6f} {-depth} {r}\n"
+    return out
+
+
+CROSSING_CASES = [
+    (
+        "crossing_rise_one_radial",
+        deck(RISE + radials(1), GN2 + FR + "EX 0 1 1 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "crossing_hub_three",
+        deck(RISE + radials(3), GN2 + FR + "EX 0 1 1 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "crossing_hub_gn3",
+        deck(RISE + radials(2), GN3 + FR + "EX 0 1 2 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "crossing_ek",
+        deck(RISE + radials(2), "EK\n" + GN2 + FR + "EX 0 1 2 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "crossing_loaded",
+        deck(RISE + radials(2), GN2 + "LD 5 0 0 0 5.8e7\n" + FR + "EX 0 1 2 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        "crossing_two_radius",
+        deck(
+            "GW 1 6 0 0 0 0 0 .25 .002\n" + radials(2), GN2 + FR + "EX 0 1 2 0 1\nXQ\n"
+        ),
+        "fills",
+    ),
+    (
+        "crossing_two_nodes",
+        deck(
+            RISE
+            + radials(1)
+            + "GW 3 6 2 0 0 2 0 .25 .001\nGW 4 6 2 0 0 2.3 0 -.05 .001\n",
+            GN2 + FR + "EX 0 1 2 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+    (
+        "crossing_sweep",
+        deck(RISE + radials(2), GN2 + "FR 0 2 0 0 280 20\nEX 0 1 2 0 1\nXQ\n"),
+        "fills",
+    ),
+    (
+        # two members above the node: the shared rules' refusal
+        "crossing_two_above_refuses",
+        deck(
+            RISE + "GW 2 6 0 0 0 .2 0 .2 .001\n" + radials(1),
+            GN2 + FR + "EX 0 1 2 0 1\nXQ\n",
+        ),
+        "fills",
+    ),
+]
+CASES += CROSSING_CASES
+
+# the far blocks past the ACA guard (its own test: the reference's fill is
+# the slow half)
+CROSSING_ACA = [
+    (
+        # a mast over a stake: the split's far blocks past the guard
+        "crossing_stake_aca",
+        deck(
+            "GW 1 120 0 0 0 0 0 20.1 .001\nGW 2 30 0 0 0 0 0 -2 .001\n",
+            GN3 + "EK\nFR 0 1 0 0 7.2 0\nEX 0 1 5 0 1\nXQ\n",
+            ge="GE -1",
+        ),
+        "fills",
+    ),
+]
+
+
+@pytest.mark.slow  # the reference's split fill over a screen
+@pytest.mark.parametrize(
+    "name, text, expect", CROSSING_ACA, ids=[c[0] for c in CROSSING_ACA]
+)
+def test_a_crossing_screen_with_far_blocks_has_the_same_fill(name, text, expect, acc):
+    """momwire#1718 S11b: the crossing split's far blocks by ACA (the row and
+    column halves through numpy's matmul of exactly those shapes)."""
+    test_a_hand_written_deck_has_the_same_fill(name, text, expect, acc)
 
 
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])

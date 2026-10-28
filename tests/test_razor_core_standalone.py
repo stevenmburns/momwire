@@ -83,6 +83,7 @@ CORE_SOURCES = (
     # same front (momwire#1718 S2), linked into
     # `sinusoidal_galerkin_fill_driver.cpp`.
     "_sinusoidal_galerkin_fill_core.cpp",
+    "_sinusoidal_galerkin_crossing_core.cpp",
     # Its direct-field fill (momwire#1718 S7): a wire end on the ground plane.
     "_sinusoidal_galerkin_direct_core.cpp",
     "_sinusoidal_crossing_core.cpp",
@@ -2340,10 +2341,10 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
     the inherited readouts in the caller's wire numbering, the run half and
     the writer. Every deck it prints is `_shell.render(text,
     basis="sinusoidal-galerkin")`'s, byte for byte, with Python's Y,
-    coefficients and port vectors, node gaps (S9) and wholly-buried decks
-    (S11a, the below grids the exact fill on both sides) included. It
-    declines, by name, a wire end on the plane (S7) and wires on both sides
-    of the interface (S11)."""
+    coefficients and port vectors, node gaps (S9), wholly-buried decks
+    (S11a, the below grids the exact fill on both sides) and crossing decks
+    (S11b) included. It declines, by name, a wire end on the plane (S7) and
+    wires on both sides of the interface with no crossing junction (S12)."""
     monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
     decks = [
         p
@@ -2354,7 +2355,7 @@ def test_deck_text_to_nec5_printout_in_cxx_alone_is_sinusoidal_galerkins(
         driver, decks, tmp_path, basis="sinusoidal-galerkin"
     )
     assert counts.get("served", 0) >= 350, counts
-    allowed = ("S7)", "S11b)")
+    allowed = ("S7)", "S12)")
     assert all(r.endswith(allowed) for r in reasons), reasons
 
 

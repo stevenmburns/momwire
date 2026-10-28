@@ -162,3 +162,16 @@ def test_a_wholly_buried_deck_prints_the_same(name, text, expect, acc, monkeypat
     the exact fill on both copies (the anchors read the process's history)."""
     monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
     assert _same(text, acc) == ("declined" if expect == "declined" else "printed")
+
+
+CROSSING = fill_cases.CROSSING_CASES
+
+
+@pytest.mark.parametrize("name, text, expect", CROSSING, ids=[c[0] for c in CROSSING])
+def test_a_crossing_deck_prints_the_same(name, text, expect, acc, monkeypatch):
+    """The crossing fill under the run half (momwire#1718 S11b): the
+    printout's currents and loss power through the stitched view and its
+    node wings, the constrained solve at a two-radius node, or the
+    reference's refusal."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    assert _same(text, acc) == "printed"
