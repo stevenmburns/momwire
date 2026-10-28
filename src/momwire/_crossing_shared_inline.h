@@ -8,6 +8,7 @@
 #pragma once
 
 #include "_fma_inline.h"
+#include "_libm_complex_inline.h"  // `MW_NUMPY_CONTRACTS`
 #include "_near_interface_eval.h"
 
 #include <algorithm>
@@ -85,11 +86,15 @@ double on_plane_side(double z, bool above, const char *what) {
     return 0.0;
 }
 
-struct CSR {
+// A CSR of real samples (bspline's, razor's) or of complex ones (the
+// sinusoidal sampler's, momwire#1718 S11b): `W` is the value type.
+template <class W>
+struct CSRT {
     int64_t n_rows = 0, n_cols = 0;
     std::vector<int64_t> indptr, indices;
-    std::vector<double> data;
+    std::vector<W> data;
 };
+using CSR = CSRT<double>;
 
 // Rows (r, c, v) to a canonical CSR (indices sorted within each row; no
 // duplicates in our inputs).
@@ -112,22 +117,26 @@ CSR to_csr(int64_t n_rows, int64_t n_cols, std::vector<std::tuple<int64_t, int64
     return m;
 }
 
-struct End {
+template <class W>
+struct EndT {
     double pt[3];
     double sign;
-    std::vector<double> fv;  // (n_basis)
+    std::vector<W> fv;  // (n_basis)
 };
+using End = EndT<double>;
 
-struct Axis {
+template <class W>
+struct AxisT {
     int64_t n_basis = 0;
     std::vector<double> nodes, t, w;  // (n, 3), (n, 3), (n)
-    CSR F, Fd;
-    std::vector<End> ends;
+    CSRT<W> F, Fd;
+    std::vector<EndT<W>> ends;
     bool path_tested = false;
     std::vector<int64_t> segof;
     std::map<int64_t, std::vector<int64_t>> seg_rows;
     size_t n_nodes() const { return w.size(); }
 };
+using Axis = AxisT<double>;
 
 // `_graded_u(h, toward_end, a, growth, gx, gw)`.
 void graded_u(double h, bool toward_hi, double a, double growth, const std::vector<double> &gx,
@@ -280,11 +289,13 @@ void axpy_gather(cd *__restrict y, const cd *__restrict tab, const uint32_t *__r
 // vV, vW) with vV = Fd_line (w V), vW = F_line (w tz W); the tables from
 // `_end_tables`' labelled spans through the block's memo. `end_above`: the
 // end in the z slot (`_above_end_args`), else in z' (`_below_end_args`).
-struct EndVec {
+template <class W>
+struct EndVecT {
     double sign;
-    const std::vector<double> *fv;
+    const std::vector<W> *fv;
     std::vector<cd> vV, vW;
 };
+using EndVec = EndVecT<double>;
 
 std::vector<cd> real_matvec(const CSR &M, const std::vector<cd> &v) {
     std::vector<cd> out(static_cast<size_t>(M.n_rows));
@@ -297,10 +308,45 @@ std::vector<cd> real_matvec(const CSR &M, const std::vector<cd> &v) {
     return out;
 }
 
-template <class P, class CX>
-std::vector<EndVec> end_vectors(const CX &c, BlockEval &be, double a_wire, const std::vector<End> &ends,
-                                const Axis &line, bool end_above) {
-    std::vector<EndVec> out;
+// `_real_matvec_c_numpy(M, v)` for a COMPLEX CSR (the sinusoidal sampler's
+// samples, which `end_matvecs` does not serve, momwire#1718 S11b): `(M @
+// v.real) + 1j * (M @ v.imag)`, each half scipy's `csr_matvec` of the CSR
+// against the part promoted to (x, 0) (sparsetools' complex product, plain
+// on x86-64 and contracted on arm64, then the sum from zero), `1j * y`
+// numpy's product, then numpy's sum.
+inline std::vector<cd> real_matvec(const CSRT<cd> &M, const std::vector<cd> &v) {
+    std::vector<cd> out(static_cast<size_t>(M.n_rows));
+    for (int64_t i = 0; i < M.n_rows; i++) {
+        double ar = 0.0, ai = 0.0, br = 0.0, bi = 0.0;
+        for (int64_t jj = M.indptr[static_cast<size_t>(i)]; jj < M.indptr[static_cast<size_t>(i) + 1]; jj++) {
+            const cd d = M.data[static_cast<size_t>(jj)];
+            const cd x = v[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])];
+#if MW_NUMPY_CONTRACTS
+            const double p_r = mw_fma::exact(d.real(), x.real(), -(d.imag() * 0.0));
+            const double p_i = mw_fma::exact(d.real(), 0.0, d.imag() * x.real());
+            const double q_r = mw_fma::exact(d.real(), x.imag(), -(d.imag() * 0.0));
+            const double q_i = mw_fma::exact(d.real(), 0.0, d.imag() * x.imag());
+#else
+            const double p_r = d.real() * x.real() - d.imag() * 0.0;
+            const double p_i = d.real() * 0.0 + d.imag() * x.real();
+            const double q_r = d.real() * x.imag() - d.imag() * 0.0;
+            const double q_i = d.real() * 0.0 + d.imag() * x.imag();
+#endif
+            ar = ar + p_r;
+            ai = ai + p_i;
+            br = br + q_r;
+            bi = bi + q_i;
+        }
+        const cd j = np_cmul(cd(0.0, 1.0), cd(br, bi));
+        out[static_cast<size_t>(i)] = cd(ar + j.real(), ai + j.imag());
+    }
+    return out;
+}
+
+template <class P, class CX, class WT>
+std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, const std::vector<EndT<WT>> &ends,
+                                     const AxisT<WT> &line, bool end_above) {
+    std::vector<EndVecT<WT>> out;
     const size_t n = line.n_nodes();
     if (ends.empty()) return out;
     // `_LineZ`: the line's plane-side z, formed once (refusing at the first end).
@@ -336,7 +382,7 @@ std::vector<EndVec> end_vectors(const CX &c, BlockEval &be, double a_wire, const
 #endif
         for (std::ptrdiff_t ep = 0; ep < nep; ep++) {
             const size_t e = static_cast<size_t>(ep);
-            const End &E = ends[g0 + e];
+            const EndT<WT> &E = ends[g0 + e];
             for (size_t k = 0; k < n; k++) {
                 const double *q = &line.nodes[3 * k];
                 const size_t i = e * n + k;
@@ -365,7 +411,7 @@ std::vector<EndVec> end_vectors(const CX &c, BlockEval &be, double a_wire, const
                 V[k] = np_cmul(cd(w[k], 0.0), s[K_V]);
                 W[k] = np_cmul(cd(w_tz[k], 0.0), s[K_W]);
             }
-            EndVec &ev = out[g0 + e];
+            EndVecT<WT> &ev = out[g0 + e];
             ev.sign = ends[g0 + e].sign;
             ev.fv = &ends[g0 + e].fv;
             ev.vV = real_matvec(line.Fd, V);
