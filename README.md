@@ -289,6 +289,21 @@ that report measured time. They serve free space, a perfect ground (GN 1), a Som
 name a deck with wires on both sides of the ground; the Python commands
 serve those decks.
 
+### The NEC-4.2 slot's default engine on Linux, without Python (preview)
+
+**Preview:** the same tarball also carries `momwire-nec42-linux`
+(momwire#1607 Phase C), the native twin of the Python command
+`momwire-nec42`, the NEC-4.2 slot's default (bs2, the B-spline basis), with
+the same `-avx2` / `-sse2` picking and the same three forms. Its printouts
+are the Python command's byte for byte, apart from the two lines that report
+measured time. It serves free space, a perfect ground (GN 1), a Sommerfeld
+ground (GN 2 / GN 3), buried wires (wholly below it, joined to the wires
+above through crossing junctions, or beside raised ones with no junction
+between them), wire loading, networks (TL / NT) and the extended and exact
+kernels. It still refuses by name a near field over a buried wire (as the
+Python command does) and an insulated wire (IS); the Python command serves
+the insulated wire.
+
 ### Radius steps and junctions on the sinusoidal basis: the junction rule
 
 The point-matched sinusoidal basis takes a junction rule,

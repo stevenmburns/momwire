@@ -63,3 +63,19 @@ the extended kernel, and still refuse by name, for now:
     - a deck with wires on both sides of the ground (momwire#1718 S11b and
       S12).
 The Python commands serve those decks.
+
+PREVIEW: momwire-nec42-linux is the same kind of program for the NEC-4.2
+slot's default engine, momwire's bs2 formulation (the B-spline basis,
+momwire#1607 Phase C): the native twin of the Python command
+`momwire-nec42`. It answers a NEC-4.2 deck as that command does, byte for
+byte apart from the two lines that report measured time, and takes the
+same three forms and the same picking (-avx2 / -sse2 beside it). It serves
+free space, a perfect ground (GN 1), a Sommerfeld ground (GN 2 / GN 3),
+buried wires (wholly below it, joined to the wires above through crossing
+junctions, or beside raised ones with no junction between them), wire
+loading, networks (TL / NT), the extended and exact kernels, and still
+refuses by name, for now:
+    - a near field (NE / NH) over a buried wire (the Python command
+      refuses it too);
+    - an insulated wire (an IS card).
+The Python command serves the insulated wire.

@@ -13,7 +13,15 @@
 // MW_ROUTE_SG (momwire#1718 S10): the same route for
 // `momwire-nec5-sinusoidal-galerkin`, over the Sinusoidal-Galerkin engine
 // (`_nec5_sinusoidal_galerkin_core.h`); the adapters are this file's.
+//
+// MW_ROUTE_NEC4 (momwire#1607 Phase C2): the same route for `momwire-nec42`,
+// the NEC-4.2 slot's default basis: bs2 on the slot's run half
+// (`_bspline_nec4_run_core.h`, `_nec4.render(text, basis="bspline")`), on the
+// same adapters.
 #include "route.h"
+#if MW_ROUTE_NEC4
+#include "_bspline_nec4_run_core.h"
+#endif
 
 #include "_somm_below_fill_core.h"
 
@@ -101,6 +109,7 @@ void a_zgesv(const np_int *n, const np_int *nrhs, void *a, const np_int *lda, np
     *info = inf;
 }
 
+#if !MW_ROUTE_NEC4
 void dump_arrays(const std::string &dir, const std::vector<nec5::RunArrays> &arrays) {
     for (std::size_t k = 0; k < arrays.size(); k++) {
         const nec5::RunArrays &a = arrays[k];
@@ -116,6 +125,7 @@ void dump_arrays(const std::string &dir, const std::vector<nec5::RunArrays> &arr
         }
     }
 }
+#endif
 
 }  // namespace
 
@@ -128,6 +138,9 @@ void configure_grid_cache(const std::string &tag) {
 }
 
 long long largest_solve(const std::string &latin1_text, bool open_end) {
+#if MW_ROUTE_NEC4
+    return nec4::largest_solve(latin1_text, "bspline", open_end);
+#endif
 #if MW_ROUTE_SG
     const nec5::SeamResult rs = nec5::sinusoidal_galerkin_seam(latin1_text, open_end);
     if (rs.route != nec5::SeamResult::served) return -1;
@@ -171,6 +184,41 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     nec5::EngineStamp stamp;
     stamp.version = version;
     stamp.variant = variant;
+#if MW_ROUTE_NEC4
+    // the NEC-4.2 slot's printout (route_sin.cpp's handling, over bs2)
+    (void)arrays_dir;
+    if (failed) *failed = false;
+    if (raised_kind) raised_kind->clear();
+    bspline_nec4::Linalg la;
+    la.lu = lp;
+    la.sym = sym;
+    la.np = np;
+    std::string out, why;
+    bool ok, go_on = false;
+    try {
+        ok = open_end ? bspline_nec4::printout_piece(latin1_text, stamp, la, out, why, go_on)
+                      : bspline_nec4::printout(latin1_text, stamp, la, out, why);
+    } catch (const std::bad_alloc &) {
+        if (failed) *failed = true;
+        if (failure_kind) *failure_kind = "MemoryError";
+        if (failure_message) *failure_message = "std::bad_alloc";
+        reason = "an allocation failed";
+        return false;
+    } catch (const std::exception &e) {
+        if (failed) *failed = true;
+        if (failure_kind) *failure_kind = "RuntimeError";
+        if (failure_message) *failure_message = e.what();
+        reason = e.what();
+        return false;
+    }
+    if (!ok) {
+        reason = why;
+        return false;
+    }
+    printout = nec5::printout_bytes(out);
+    if (served) *served = go_on;
+    return true;
+#else
     std::vector<nec5::RunArrays> arrays;
 #if MW_ROUTE_SG
     (void)sym;
@@ -192,6 +240,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     if (served) *served = r.seam == nec5::SeamResult::served && r.raised_kind.empty();
     if (!arrays_dir.empty()) dump_arrays(arrays_dir, arrays);
     return true;
+#endif
 }
 
 }  // namespace exe
