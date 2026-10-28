@@ -124,5 +124,5 @@ def test_the_sinusoidal_galerkin_exes_ship_in_the_linux_tarball_as_previews():
         in workflow
     )
     assert "PREVIEW: momwire-nec42-sinusoidal-galerkin-linux" in readme_txt
-    assert "wires on both sides of the ground" in readme_txt
+    assert "wires on both sides of the ground and no crossing" in readme_txt
     assert "Sinusoidal-Galerkin engines on Linux, without Python (preview)" in readme

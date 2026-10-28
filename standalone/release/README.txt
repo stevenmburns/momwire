@@ -58,8 +58,9 @@ byte apart from the two lines that report measured time, and takes the
 same three forms and the same picking (-avx2 / -sse2 beside it). They
 serve free space, a perfect ground (GN 1), a Sommerfeld ground (GN 2 /
 GN 3) with every wire above it or a wire end on it, a structure wholly
-below a Sommerfeld ground, wire loading, networks (TL / NT), node gaps and
-the extended kernel, and still refuse by name, for now:
-    - a deck with wires on both sides of the ground (momwire#1718 S11b and
-      S12).
+below a Sommerfeld ground, a wire through the ground at a crossing
+junction, wire loading, networks (TL / NT), node gaps and the extended
+kernel, and still refuse by name, for now:
+    - a deck with wires on both sides of the ground and no crossing
+      junction (momwire#1718 S12).
 The Python commands serve those decks.
