@@ -1639,7 +1639,7 @@ somm_trans::CrossPlan mixed_cross_plan(const Front &fr, const std::vector<ll> &a
         return somm_trans::cross_extents(pa.data(), pa.size() / 3, pb.data(), pb.size() / 3, 0.0, fr.medium.k_p,
                                          fr.medium.k_m);
     } catch (const somm_trans::Refused &e) {
-        decline(std::string("a mixed deck's cross pairs Python refuses (") + e.what() + ")");
+        decline(std::string("a mixed deck's cross pairs the reference refuses (") + e.what() + ")");
     }
 }
 

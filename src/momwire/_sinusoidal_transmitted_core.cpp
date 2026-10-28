@@ -101,7 +101,7 @@ std::vector<std::vector<cd>> transmitted_block(const Front &fr, const somm_trans
         grid = &somm_trans::get_grid(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max, fr.omega, mu,
                                      plan.r_cross_min);
     } catch (const somm_trans::Refused &e) {
-        throw nec4::Declined(std::string("a transmitted grid Python refuses (") + e.what() + ")");
+        throw nec4::Declined(std::string("a transmitted grid the reference refuses (") + e.what() + ")");
     }
     const std::size_t S = ns * Q;
     std::vector<cd> proj(no * S);  // (n_obs, n_src q)
