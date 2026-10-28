@@ -135,7 +135,15 @@ void register_nec5_deck(py::module_ &m) {
                 py::gil_scoped_release nogil;
                 return mw::sinusoidal_galerkin::dump_fill(text, la, whole, true);
             }
-            if (blas.size() != 7) throw py::value_error("blas: seven addresses, or none for the fill alone");
+            if (blas.size() != 7 && blas.size() != 10)
+                throw py::value_error("blas: seven or ten addresses, or none for the fill alone");
+            // numpy's cblas_zdotc_sub, SciPy's LP64 zgeqp3 and numpy's zgesv (a
+            // crossing deck's ACA and its node's constrained solve, momwire#1718 S11b)
+            if (blas.size() == 10) {
+                la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[7]);
+                la.lu.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(blas[8]);
+                la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[9]);
+            }
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
             la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
             la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);

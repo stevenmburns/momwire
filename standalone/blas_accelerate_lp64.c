@@ -28,6 +28,12 @@ void mwa_dgetrs_(char *trans, int *n, int *nrhs, double *a, int *lda, int *ipiv,
                  int *info) {
     dgetrs_(trans, n, nrhs, a, lda, ipiv, b, ldb, info);
 }
+/* `scipy.linalg.qr(..., pivoting=True)` (the Sinusoidal-Galerkin crossing
+ * node's constrained solve, momwire#1718 S11b) */
+void mwa_zgeqp3_(int *m, int *n, void *a, int *lda, int *jpvt, void *tau, void *work, int *lwork, double *rwork,
+                 int *info) {
+    zgeqp3_(m, n, a, lda, jpvt, tau, work, lwork, rwork, info);
+}
 void mwa_zsytrf_(char *uplo, int *n, void *a, int *lda, int *ipiv, void *work, int *lwork, int *info) {
     zsytrf_(uplo, n, a, lda, ipiv, work, lwork, info);
 }

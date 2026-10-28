@@ -408,6 +408,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_crossing_core.h",
     # The crossing fill's shared pieces, razor's and bs2's (momwire#1517 step 4).
     "src/momwire/_crossing_shared_inline.h",
+    "src/momwire/_crossing_split_inline.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
     # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
@@ -438,6 +439,7 @@ _ACCEL_HEADERS = [
     # numpy's complex sin / cos / log as the C library's (momwire#1607 B6a).
     "src/momwire/_libm_complex_inline.h",
     "src/momwire/_sinusoidal_galerkin_fill_core.h",
+    "src/momwire/_sinusoidal_galerkin_crossing_core.h",
     "src/momwire/_sinusoidal_galerkin_direct_core.h",
     "src/momwire/_sinusoidal_galerkin_run_core.h",
     "src/momwire/_bspline_nec4_run_core.h",
@@ -647,6 +649,7 @@ _ACCEL_SOURCES = [
     # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
     # same front (momwire#1718 S2), on the B-spline core's sinusoidal kernels.
     "src/momwire/_sinusoidal_galerkin_fill_core.cpp",
+    "src/momwire/_sinusoidal_galerkin_crossing_core.cpp",
     # Its direct-field fill (momwire#1718 S7): a wire end on the ground
     # plane, over the S1 far fill core.
     "src/momwire/_sinusoidal_galerkin_direct_core.cpp",

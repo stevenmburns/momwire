@@ -167,6 +167,10 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     razor::Lapack lp;
     lp.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     lp.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
+#if MW_ROUTE_SG
+    // a crossing node's constrained solve (momwire#1718 S11b)
+    lp.geqp3 = reinterpret_cast<razor::zgeqp3_fn>(&MWX(zgeqp3_));
+#endif
     bspline::SymLapack sym;
     sym.sytrf = &MWX(zsytrf_);
     sym.sytrs = &MWX(zsytrs_);

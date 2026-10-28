@@ -52,9 +52,19 @@
 // loading's overlap at k_m, the drive and the gap readout at k_m (off the
 // segment centre CPython's `cmath.sin`).
 //
+// A CROSSING deck (momwire#1718 S11b, `_assemble_Z_mp_mixed`): the above
+// class at k_p (the extended kernel's labels when asked, its image, the
+// Sommerfeld remainder) and the below class at k_m (bspline's buried pair
+// ladder, the image weighted A_m, the below remainder), each on its own
+// segments, the crossing pair and the node's self completions
+// (`_sinusoidal_galerkin_crossing_core.h`), the loading's overlap at each
+// entry's own k; the drive and readouts likewise; a two-radius node or a node
+// gap at a crossing junction takes the continuity row's constrained solve
+// (`_solve_constrained`: zgeqp3's pivots, numpy's zgesv, the reduced system).
+//
 // DECLINED (`nec4::Declined`), never misread: an insulated wire, wires on
-// both sides of the interface (the transmitted blocks; a crossing junction
-// is S11b), junction ports (the direct route; no
+// both sides of the interface with no crossing junction (the transmitted
+// blocks, S12), junction ports (the direct route; no
 // corpus deck carries one, S0), node gaps on a deck the duplicate drop has
 // reduced, a below/below pair under the
 // grazing floor (the refusal's words are not copied).

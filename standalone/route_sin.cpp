@@ -49,6 +49,9 @@ void MWX(cblas_zgemv)(int, int, int, int, const void *, const void *, int, const
                       void *, int);
 void MWX(cblas_zdotu_sub)(int, const void *, int, const void *, int, void *);
 void MWX(zgesv_)(const int *, const int *, void *, const int *, int *, void *, const int *, int *);
+#if MW_ROUTE_SG
+void MWX(cblas_zdotc_sub)(int, const void *, int, const void *, int, void *);
+#endif
 }
 
 namespace mw {
@@ -82,6 +85,11 @@ void a_zgemv(int order, int trans, np_int m, np_int n, const void *alpha, const 
 void a_zdotu(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
     MWX(cblas_zdotu_sub)(i32(n), x, i32(incx), y, i32(incy), out);
 }
+#if MW_ROUTE_SG
+void a_zdotc(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
+    MWX(cblas_zdotc_sub)(i32(n), x, i32(incx), y, i32(incy), out);
+}
+#endif
 void a_zgesv(const np_int *n, const np_int *nrhs, void *a, const np_int *lda, np_int *ipiv, void *b,
              const np_int *ldb, np_int *info) {
     const int nn = i32(*n), nr = i32(*nrhs), la = i32(*lda), lb = i32(*ldb);
@@ -104,6 +112,12 @@ sinusoidal::FillLinalg linalg() {
     la.np.zdotu_sub = &a_zdotu;
     la.np.zgesv = &a_zgesv;
     la.np.zgesvx = &MWX(zgesvx_);  // the network solve's expert driver (SciPy's)
+#if MW_ROUTE_SG
+    // a crossing deck (momwire#1718 S11b): `np.vdot` in the split's ACA, and
+    // `scipy.linalg.qr(pivoting=True)` in its node's constrained solve
+    la.np.zdotc_sub = &a_zdotc;
+    la.lu.geqp3 = reinterpret_cast<razor::zgeqp3_fn>(&MWX(zgeqp3_));
+#endif
     return la;
 }
 

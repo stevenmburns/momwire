@@ -88,6 +88,8 @@ int main(int argc, char **argv) {
     mw::razor::Lapack lp;
     lp.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym_of(scipy_lib, {"scipy_zgetrf_", "zgetrf_"}));
     lp.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym_of(scipy_lib, {"scipy_zgetrs_", "zgetrs_"}));
+    // a crossing node's constrained solve (momwire#1718 S11b)
+    lp.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(sym_of(scipy_lib, {"scipy_zgeqp3_", "zgeqp3_"}));
     mw::nec5::NumpyLinalg np;
     np.dsyrk = reinterpret_cast<mw::nec5::cblas_dsyrk_fn>(
         sym_of(numpy_lib, {"scipy_cblas_dsyrk64_", "cblas_dsyrk64_"}));

@@ -796,9 +796,11 @@ double node_edge_tilt_deg(const std::vector<Point3> &pl, bool start) {
 
 // `_crossing_junction_indices`' scope checks: `_refuse_coincident_crossing_
 // members`, then `_refuse_crossing_scope` (two radii, several nodes, a hub,
-// `_refuse_oblique_crossing`)
+// `_refuse_oblique_crossing`). `galerkin`: SinusoidalGalerkinSolver's, whose
+// `_refuse_crossing_scope` refuses nothing (momwire#1718 S11b)
 void refuse_crossing_scope(const std::vector<ll> &crossing, const std::vector<std::vector<std::pair<ll, bool>>> &groups,
-                           const std::vector<std::vector<Point3>> &pls, const std::vector<double> &radii) {
+                           const std::vector<std::vector<Point3>> &pls, const std::vector<double> &radii,
+                           bool galerkin) {
     if (crossing.empty()) return;
     for (ll j : crossing) {
         const auto &members = groups[static_cast<std::size_t>(j)];
@@ -819,6 +821,7 @@ void refuse_crossing_scope(const std::vector<ll> &crossing, const std::vector<st
                                                                           {"b", std::to_string(members[jj].first)}}));
             }
     }
+    if (galerkin) return;
     double rmin = radii[0], rmax = radii[0];
     for (double r : radii) {
         rmin = std::min(rmin, r);
@@ -941,9 +944,10 @@ cd clog_(cd z) { return mw_libm_c::clog(z); }
 void basis_coefs_complex(Front &f, const std::vector<double> &a, const std::vector<cd> &kseg, bool per_seg_k) {
     const Geometry &g = f.geometry;
     const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    // a crossing node's C0 end (SinusoidalGalerkinSolver's, momwire#1718
+    // S11b) takes the interior branch with no atom: `has_minus` / `has_plus`
     for (std::size_t i = 0; i < n; i++)
-        if (g.ground_minus[i] || g.ground_plus[i] || g.crossing_minus[i] || g.crossing_plus[i])
-            decline("a ground or crossing end at a complex k");
+        if (g.ground_minus[i] || g.ground_plus[i]) decline("a ground end at a complex k");
     const bool scalar = f.uniform_radius && !per_seg_k;
     auto kat = [&](std::size_t i) { return per_seg_k ? kseg[i] : kseg[0]; };
     std::vector<cd> ac(n);
@@ -1009,8 +1013,8 @@ void basis_coefs_complex(Front &f, const std::vector<double> &a, const std::vect
     }
     std::vector<bool> has_minus(n), has_plus(n);
     for (std::size_t i = 0; i < n; i++) {
-        has_minus[i] = g.nm_count[i] > 0;
-        has_plus[i] = g.np_count[i] > 0;
+        has_minus[i] = g.nm_count[i] > 0 || g.crossing_minus[i];
+        has_plus[i] = g.np_count[i] > 0 || g.crossing_plus[i];
     }
     std::vector<cd> Qm(n), Qp(n), A(n), B(n), C(n), AC(n), sin_safe(n), omc(n), s4sq(n);
     for (std::size_t i = 0; i < n; i++) {
@@ -1523,6 +1527,115 @@ static SegView basis_coefs_at(const Geometry &g, const std::vector<double> &a, d
     return view;
 }
 
+// `_stitch_basis_coefs(geom, below, k_p, k_m)` (SinusoidalGalerkinSolver's
+// crossing view, momwire#1718 S11b): `_basis_coefs` at the real k_p and at
+// the complex k_m, one CSR topology, each segment's entries from its own
+// medium's view, `k_entry = np.where(entry_below, k_m, k_p)`
+void stitch_basis_coefs(Front &f, const std::vector<double> &a) {
+    const Geometry &g = f.geometry;
+    const SegView view_p = basis_coefs_at(g, a, f.k);
+    f.basis = SegView();
+    basis_coefs_complex(f, a, {f.medium.k_m}, false);
+    SegView &v = f.basis;  // view_m
+    if (v.starts != view_p.starts || v.jbasis != view_p.jbasis || v.sigma != view_p.sigma)
+        throw std::logic_error("the D2 basis stitch: the CSR topology depends on k");
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    for (std::size_t i = 0; i < n; i++)
+        for (ll q = v.starts[i]; q < v.starts[i + 1]; q++) {
+            const std::size_t e = static_cast<std::size_t>(q);
+            if (f.below_seg[i]) {
+                v.k_entry[e] = f.medium.k_m;
+                continue;
+            }
+            v.A[e] = view_p.A[e];
+            v.B[e] = view_p.B[e];
+            v.C[e] = view_p.C[e];
+            v.AC[e] = view_p.AC[e];
+            v.k_entry[e] = re(f.medium.k_p);
+        }
+}
+
+// `_crossing_wing_view(geom, base_view, below, medium)`: one node-wing column
+// per crossing-junction member (junctions ascending, members in order), the
+// three-term extension at the member segment's own k normalised to unit
+// inflow, appended after the N segment bases and stably sorted into its
+// segment's entries. A buried member's coefficients in CPython's complex
+// arithmetic and numpy's complex scalars (`np.cos` of a Python complex, the
+// scalars' products and quotients, `_recip_sin_gap`'s 0-d arrays); an above
+// member's in floats.
+void crossing_wing_view(Front &f) {
+    const Geometry &g = f.geometry;
+    std::vector<ll> cj(f.crossing_junctions);
+    std::sort(cj.begin(), cj.end());
+    const std::size_t N = static_cast<std::size_t>(g.n_segs);
+    ll col = static_cast<ll>(N);
+    std::vector<ll> segs, bases;
+    std::vector<cd> A, B, C, AC, kent;
+    std::vector<int8_t> sig;
+    for (ll j : cj)
+        for (const auto &mem : f.junctions[static_cast<std::size_t>(j)]) {
+            const std::size_t w = static_cast<std::size_t>(mem.first);
+            const ll m = mem.second ? g.wire_first[w] : g.wire_last[w];
+            const int8_t sgn = mem.second ? -1 : 1;
+            const double h = g.seg_h[static_cast<std::size_t>(m)];
+            if (f.below_seg[static_cast<std::size_t>(m)]) {
+                const cd k = f.medium.k_m;
+                const cd kd = pmul(k, re(h));
+                const cd half = pmul(re(0.5), kd);
+                const cd q = xdiv(ccos_(half), csin_(half));
+                A.push_back(xdiv(q, csin_(kd)));
+                B.push_back(xdiv(q, smul(re(2.0), ccos_(half))));
+                C.push_back(xdiv(xneg(q), smul(re(2.0), csin_(half))));
+                // `_recip_sin_gap(kd)` over a 0-d array
+                const cd s4 = csin_(xmul(re(0.25), kd));
+                const cd rs = xdiv(smul(s4, s4), smul(csin_(xmul(re(0.5), kd)), ccos_(xmul(re(0.5), kd))));
+                AC.push_back(smul(q, rs));
+                kent.push_back(k);
+            } else {
+                const double k = f.medium.k_p;
+                const double kd = k * h;
+                const double q = mw_libm_c::rcos(0.5 * kd) / mw_libm_c::rsin(0.5 * kd);
+                A.push_back(re(q / mw_libm_c::rsin(kd)));
+                B.push_back(re(q / (2.0 * mw_libm_c::rcos(0.5 * kd))));
+                C.push_back(re(-q / (2.0 * mw_libm_c::rsin(0.5 * kd))));
+                const double s4 = mw_libm_c::rsin(0.25 * kd);
+                AC.push_back(re(q * (s4 * s4 / (mw_libm_c::rsin(0.5 * kd) * mw_libm_c::rcos(0.5 * kd)))));
+                kent.push_back(re(k));
+            }
+            segs.push_back(m);
+            bases.push_back(col);
+            sig.push_back(sgn);
+            col++;
+        }
+    f.n_wings = static_cast<ll>(segs.size());
+    if (segs.empty()) return;
+    const SegView base = f.basis;
+    std::vector<ll> all_seg;
+    for (std::size_t i = 0; i < N; i++)
+        for (ll q = base.starts[i]; q < base.starts[i + 1]; q++) all_seg.push_back(static_cast<ll>(i));
+    const std::size_t nb = all_seg.size();
+    all_seg.insert(all_seg.end(), segs.begin(), segs.end());
+    std::vector<std::size_t> order(all_seg.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return all_seg[x] < all_seg[y]; });
+    SegView &v = f.basis;
+    v = SegView();
+    v.starts.assign(N + 1, 0);
+    for (ll s : all_seg) v.starts[static_cast<std::size_t>(s) + 1]++;
+    for (std::size_t i = 0; i < N; i++) v.starts[i + 1] += v.starts[i];
+    for (std::size_t o : order) {
+        const bool b = o < nb;
+        const std::size_t x = b ? o : o - nb;
+        v.jbasis.push_back(b ? base.jbasis[x] : bases[x]);
+        v.A.push_back(b ? base.A[x] : A[x]);
+        v.B.push_back(b ? base.B[x] : B[x]);
+        v.C.push_back(b ? base.C[x] : C[x]);
+        v.AC.push_back(b ? base.AC[x] : AC[x]);
+        v.sigma.push_back(b ? base.sigma[x] : sig[x]);
+        v.k_entry.push_back(b ? base.k_entry[x] : kent[x]);
+    }
+}
+
 Front front(const nec4::SolverArgs &in, bool galerkin) {
     Front f;
     if (in.wires.empty()) fail("wires must be non-empty");
@@ -1637,28 +1750,49 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     if (has_ground) {
         const std::set<std::pair<ll, bool>> exempt = crossing_exemption(pls, gz, f.junctions);
         f.below_wire = wire_media(pls, gz, lower_medium, args.ground.kind == nec4::Ground::pec, exempt);
-        // the Sinusoidal-Galerkin copy (momwire#1718) fills a WHOLLY buried
-        // deck (S11a); wires on both sides of the interface decline here,
-        // before the point-matched lane's crossing scope, whose refusals
-        // are not SinusoidalGalerkinSolver's
-        if (galerkin) {
-            const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
-            if (nb > 0 && nb < n_w)
-                decline("wires on both sides of the interface (momwire#1718: the transmitted blocks, S11a, or a "
-                        "crossing junction, S11b)");
-        }
+        // the Sinusoidal-Galerkin copy (momwire#1718) fills a wholly buried
+        // deck (S11a) and a crossing one (S11b), with its own crossing scope
+        // (`_refuse_crossing_scope` refuses nothing there)
         if (lower_medium && !grounded.empty() && !f.junctions.empty()) {
             const std::vector<ll> crossing =
                 crossing_junctions(f.below_wire, f.junctions, grounded, pls, gz, f.radius_per_wire);
-            refuse_crossing_scope(crossing, f.junctions, pls, f.radius_per_wire);
+            refuse_crossing_scope(crossing, f.junctions, pls, f.radius_per_wire, galerkin);
             f.crossing_junctions = crossing;
             f.crossing = !crossing.empty();
         }
         const std::size_t nb = static_cast<std::size_t>(std::count(f.below_wire.begin(), f.below_wire.end(), true));
         // wires on both sides with no crossing junction: the transmitted
-        // blocks (momwire#1718 S12)
+        // blocks (momwire#1718 S12), served on the point-matched lane; the
+        // Galerkin copy declines them by name
         f.mixed = nb > 0 && nb < n_w && !f.crossing;
+        if (galerkin && f.mixed)
+            decline("wires on both sides of the interface with no crossing junction (momwire#1718: the "
+                    "transmitted blocks, S12)");
         f.buried = nb == n_w;
+        if (galerkin && f.crossing) {
+            // `_two_radius_crossing` (`two_radius_crossing(media, radii,
+            // crossing, groups)`): the node's above member's radius and the
+            // buried one (a spread below was refused above)
+            double rmin = f.radius_per_wire[0], rmax = f.radius_per_wire[0];
+            for (double r : f.radius_per_wire) {
+                rmin = std::min(rmin, r);
+                rmax = std::max(rmax, r);
+            }
+            if (rmax - rmin > 0.0) {
+                f.two_radius = true;
+                ll above_member = -1;
+                if (f.crossing_junctions.size() == 1)
+                    for (const auto &m : f.junctions[static_cast<std::size_t>(f.crossing_junctions[0])])
+                        if (!f.below_wire[static_cast<std::size_t>(m.first)]) {
+                            above_member = m.first;
+                            break;
+                        }
+                if (above_member < 0) decline("a two-radius crossing deck without one above member at its node");
+                f.a_above = f.radius_per_wire[static_cast<std::size_t>(above_member)];
+                for (std::size_t w = 0; w < n_w; w++)
+                    if (f.below_wire[w]) f.a_below = f.radius_per_wire[w];
+            }
+        }
     }
     // the point-matched crossing node is an ordinary junction (`edges_at`)
     auto is_crossing = [&](std::size_t j) {
@@ -1666,7 +1800,9 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
                f.crossing_junctions.end();
     };
     for (std::size_t j = 0; j < f.junctions.size(); j++) {
-        if (grounded.count(static_cast<ll>(j)) && !is_crossing(j)) continue;
+        // SinusoidalGalerkinSolver's crossing node is C0 with no condition in
+        // the basis (`_crossing_node_in_basis` False): a grounded junction
+        if (grounded.count(static_cast<ll>(j)) && (galerkin || !is_crossing(j))) continue;
         std::vector<std::pair<ll, bool>> members;  // (seg, side is L)
         for (const auto &m : f.junctions[j]) {
             if (m.second) {
@@ -1751,12 +1887,18 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
                      "conducting ground");
         }
         for (ll j : grounded) {
-            if (is_crossing(static_cast<std::size_t>(j))) continue;  // its members are connected
+            // the point-matched crossing node's members are connected; the
+            // Galerkin one's take the C0 ends (`crossing_minus` /
+            // `crossing_plus`: the interior branch, no atom)
+            const bool cross = is_crossing(static_cast<std::size_t>(j));
+            if (cross && !galerkin) continue;
             for (const auto &m : f.junctions[static_cast<std::size_t>(j)]) {
                 if (m.second) {
-                    g.ground_minus[static_cast<std::size_t>(g.wire_first[static_cast<std::size_t>(m.first)])] = true;
+                    const std::size_t sg = static_cast<std::size_t>(g.wire_first[static_cast<std::size_t>(m.first)]);
+                    (cross ? g.crossing_minus : g.ground_minus)[sg] = true;
                 } else {
-                    g.ground_plus[static_cast<std::size_t>(g.wire_last[static_cast<std::size_t>(m.first)])] = true;
+                    const std::size_t sg = static_cast<std::size_t>(g.wire_last[static_cast<std::size_t>(m.first)]);
+                    (cross ? g.crossing_plus : g.ground_plus)[sg] = true;
                 }
             }
         }
@@ -1778,6 +1920,18 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
         // below the interface
         f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
         basis_coefs_complex(f, a, {f.medium.k_m}, false);
+        return f;
+    }
+    if (f.crossing && galerkin) {
+        // SinusoidalGalerkinSolver's crossing view (momwire#1718 S11b):
+        // `_stitch_basis_coefs(geom, below, k_p, k_m)`, then the node wings
+        // (`_crossing_wing_view`)
+        f.medium = buried_medium(args.ground.eps_r, args.ground.sigma, f.omega, f.k);
+        f.below_seg.assign(n, false);
+        for (std::size_t w = 0; w < n_w; w++)
+            for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) f.below_seg[static_cast<std::size_t>(s)] = f.below_wire[w];
+        stitch_basis_coefs(f, a);
+        crossing_wing_view(f);
         return f;
     }
     if (f.mixed) {
@@ -2000,6 +2154,26 @@ Front buried_at(const Front &fr, double omega) {
     }
     f.basis = SegView();
     basis_coefs_complex(f, a, {f.medium.k_m}, false);
+    return f;
+}
+
+Front crossing_at(const Front &fr, double omega) {
+    if (!fr.crossing || fr.below_seg.empty())
+        throw nec4::Declined("a crossing readout on a deck that is not a Galerkin crossing deck");
+    Front f = fr;
+    f.k = omega / fr.c;
+    f.medium = buried_medium(fr.args.ground.eps_r, fr.args.ground.sigma, omega, f.k);
+    const Geometry &g = f.geometry;
+    std::vector<double> a(static_cast<std::size_t>(g.n_segs));
+    if (f.uniform_radius) {
+        std::fill(a.begin(), a.end(), f.radius_per_wire[0]);
+    } else {
+        for (std::size_t w = 0; w < g.wire_first.size(); w++)
+            for (long long s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = f.radius_per_wire[w];
+    }
+    f.basis = SegView();
+    stitch_basis_coefs(f, a);
+    crossing_wing_view(f);
     return f;
 }
 

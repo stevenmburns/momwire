@@ -127,6 +127,15 @@ struct Front {
     // from its segment's medium's view, `k_entry` its k), `below_seg` the
     // per-segment medium as on a crossing deck
     bool mixed = false;
+    // SinusoidalGalerkinSolver's crossing deck (momwire#1718 S11b): the node
+    // is C0 (each member a `crossing_minus` / `crossing_plus` end), the basis
+    // `_stitch_basis_coefs` (k_p above, k_m below, per entry) with one node
+    // wing column per member appended (`_crossing_wing_view`, `n_wings` of
+    // them after the N segment bases), and a TWO-RADIUS node's radii
+    // (`_two_radius_crossing`)
+    long long n_wings = 0;
+    bool two_radius = false;
+    double a_above = 0, a_below = 0;
 };
 
 // Throws FrontError where Python raises, nec4::Declined where this copy
@@ -144,6 +153,12 @@ SegView basis_coefs(const Front &fr, double k);
 // medium.k_m)`, momwire#1718 S11a): a copy whose k, medium and basis are
 // that omega's.
 Front buried_at(const Front &fr, double omega);
+
+// A SinusoidalGalerkinSolver crossing front read at another omega
+// (`_buried_wire_loss_power`'s `buried_medium(ground_eps, omega, eps, omega /
+// c)` and `_mixed_view`, momwire#1718 S11b): a copy whose k, medium and
+// stitched view with its node wings are that omega's.
+Front crossing_at(const Front &fr, double omega);
 
 // The comparison format (`sinusoidal_front_compare.py`), per operating point
 // of each built structure of a deck (the NEC-4.2 build's own enumeration).
