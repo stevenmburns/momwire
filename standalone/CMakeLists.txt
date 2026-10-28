@@ -260,6 +260,13 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_crossing_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
+if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42" OR
+   MW_EXE_BASIS STREQUAL "sg5")
+  # the transmitted family (momwire#1718 S12): the below->above table and its
+  # projection, which a mixed deck's cross blocks read on every basis that
+  # fills them
+  list(APPEND MW_CORE_SOURCES ${MW_SRC}/_somm_transmitted_core.cpp)
+endif()
 if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "sg5")
   # bs2 (momwire#1517): the B-spline kernels, the front half, the fill (its
   # exact kernel and Sommerfeld remainder), the NEC-5 seam and run half
@@ -379,6 +386,7 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   sg_cplx_phase_sweep=mws_sg_cplx_phase_sweep  # the SG complex fill's (momwire#1718 S7)
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
   somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
+  somm_trans=mws_somm_trans  # the transmitted table's (momwire#1718 S12)
   ni_point=mws_ni_point near_buried=mws_near_buried  # the buried near-field readout (momwire#1653)
   offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym  # bs2's (momwire#1517)
   mw_fg=mws_fg)  # the field-form assembler's inline text: one copy per runtime

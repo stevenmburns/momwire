@@ -322,6 +322,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",
     "src/momwire/_somm_below_six_inline.h",
+    # momwire#1718 S12: the transmitted family's integrand, node and pair
+    # kernel, shared by `_accel_mw568.cpp` and `_somm_transmitted_core.cpp`.
+    "src/momwire/_somm_transmitted_six_inline.h",
     # The shared preamble of the split TUs (momwire#687): includes, the OpenMP
     # simd declarations and the cancellation machinery. Every accelerator TU
     # includes it, so an edit here must rebuild all of them -- the momwire#568
@@ -388,6 +391,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_proj_core.h",
     "src/momwire/_somm_below_grid_core.h",
     "src/momwire/_somm_below_fill_core.h",
+    "src/momwire/_somm_transmitted_core.h",
     # The below/below remainder's batch projection, shared by razor's buried
     # fill and bs2's (momwire#1517 step 4).
     "src/momwire/_somm_below_remainder_inline.h",
@@ -513,6 +517,11 @@ _ACCEL_SOURCES = [
     # one-node contour are `_somm_below_six_inline.h`, which
     # `_accel_mw568.cpp` includes too: one code, one set of bits).
     "src/momwire/_somm_below_fill_core.cpp",
+    # momwire#1718 S12: the transmitted table and projection with no Python
+    # (the integrand, node and pair kernel are `_somm_transmitted_six_
+    # inline.h`, which `_accel_mw568.cpp` includes too); `_accel_near_
+    # buried.cpp` binds it for the unit gates.
+    "src/momwire/_somm_transmitted_core.cpp",
     # S3: the grid itself, which the C++ front half builds for the composing
     # ground (`_razor_front_core.cpp`, linked here as well).
     "src/momwire/_somm_grid_core.cpp",
