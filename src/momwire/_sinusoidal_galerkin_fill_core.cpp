@@ -2488,6 +2488,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
     }
     if (!cont.empty()) {
         ps.coeffs = solve_constrained(fr, la, ps.G, N, U, P, cont);
+        ps.c_order = true;  // `np.empty` then the two slices
     } else {
     // `_solve_in_place(G, U)`: lu_factor(G, overwrite_a=True), the diagonal
     // check, lu_solve

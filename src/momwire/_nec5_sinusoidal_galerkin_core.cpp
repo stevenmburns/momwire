@@ -246,8 +246,14 @@ Solved SinusoidalGalerkinPrintoutEngine::solve(const Prepared &p, const NumpyLin
     Solved s;
     s.n_basis = ps.n;
     s.n_ports = ps.n_ports;
-    s.x_c_order = false;  // `lu_solve`'s F order
+    // `lu_solve`'s F order, or the constrained solve's C order
+    s.x_c_order = ps.c_order;
     s.x = ps.coeffs;
+    if (ps.c_order) {
+        const std::size_t n = static_cast<std::size_t>(ps.n), np_ = static_cast<std::size_t>(ps.n_ports);
+        for (std::size_t i = 0; i < n; i++)
+            for (std::size_t j = 0; j < np_; j++) s.x[i * np_ + j] = ps.coeffs[i + j * n];
+    }
     s.y = CMat(s.n_ports, s.n_ports);
     s.y.v = ps.y;
     return s;

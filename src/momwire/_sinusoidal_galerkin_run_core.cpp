@@ -38,6 +38,14 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
         es->x = ps.coeffs;  // `lu_solve` returns F order
         es->x_s0 = 1;
         es->x_s1 = ps.n;
+        if (ps.c_order) {
+            // the constrained solve's `x` is C order (momwire#1718 S11b)
+            const std::size_t n = static_cast<std::size_t>(ps.n), np_ = static_cast<std::size_t>(ps.n_ports);
+            for (std::size_t i = 0; i < n; i++)
+                for (std::size_t j = 0; j < np_; j++) es->x[i * np_ + j] = ps.coeffs[i + j * n];
+            es->x_s0 = ps.n_ports;
+            es->x_s1 = 1;
+        }
         solves_[index] = std::move(es);
     }
     return *solves_[index];
