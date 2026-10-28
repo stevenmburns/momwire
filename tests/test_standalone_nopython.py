@@ -47,15 +47,9 @@ RAISES = FIXTURES / "razor_printout_3a" / "echo_raises_nxq.nec"
 BURIED = FIXTURES / "razor_printout_somm" / "gn0_buried_radial.nec"
 EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
 DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)
-# What a build does not serve yet, by deck name: the Galerkin build's
-# buried wires (S11), momwire#1718.
-_NOT_YET = (
-    {
-        "buried_radials.nec": "a crossing junction (momwire#1718 S11b)",
-    }
-    if BASIS == "sinusoidal-galerkin"
-    else {}
-)
+# What a build does not serve yet, by deck name (none since the Galerkin
+# build's crossing decks, momwire#1718 S11b).
+_NOT_YET: dict[str, str] = {}
 
 
 def _skip_unserved(*decks):
