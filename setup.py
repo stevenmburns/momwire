@@ -447,6 +447,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_bspline_seam_core.h",
     "src/momwire/_bspline_front_core.h",
     "src/momwire/_bspline_fill_core.h",
+    "src/momwire/_bspline_transmitted_core.h",
     "src/momwire/_bspline_crossing_core.h",
     "src/momwire/_nec5_bspline_printout_core.h",
     "src/momwire/_nec5_sinusoidal_galerkin_core.h",
@@ -665,6 +666,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_nec5_bspline_seam_core.cpp",
     "src/momwire/_bspline_front_core.cpp",
     "src/momwire/_bspline_fill_core.cpp",
+    # momwire#1718 S12: bs2's transmitted blocks, its own TU so the fill core's
+    # kernels keep their codegen.
+    "src/momwire/_bspline_transmitted_core.cpp",
     "src/momwire/_bspline_crossing_core.cpp",
     "src/momwire/_nec5_bspline_printout_core.cpp",
     # The Sinusoidal-Galerkin basis on the NEC-5 seam and run half

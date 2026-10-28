@@ -147,6 +147,7 @@ CORE_SOURCES = (
     "_nec5_bspline_seam_core.cpp",
     "_bspline_front_core.cpp",
     "_bspline_fill_core.cpp",
+    "_bspline_transmitted_core.cpp",
     "_bspline_crossing_core.cpp",
     "_nec5_bspline_printout_core.cpp",
     # The Sinusoidal-Galerkin basis on the NEC-5 seam (momwire#1718 S8),
@@ -1977,10 +1978,11 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     vectors -- wire loading (LD 5 / 2 / 3) and the exact ring-kernel
     correction (step 2), a perfect ground's image term (step 3a) and the
     Sommerfeld composition with its graded raised pairs (steps 3b, 3c) and a
-    wholly-buried structure (step 4a) included. What it declines is a deck
-    with wires on both sides of the interface and no crossing node (the
-    transmitted blocks, step 4c) and a geometry Python refuses by medium
-    (its sentence not yet ported), by name, and nothing else. The exact
+    wholly-buried structure (step 4a) included, and since momwire#1718 S12 a
+    deck with wires on both sides of the interface and no crossing node (the
+    transmitted blocks, step 4c). What it declines is a geometry Python
+    refuses by medium (its sentence not yet ported), by name, and nothing
+    else. The exact
     kernel's cross job across a radius step is served (momwire#1615). A
     one-radius crossing node is served
     (step 4b), a node gap on one included (its KCL row, momwire#1282 /
@@ -2004,7 +2006,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert set(reasons) <= {
         "front:bspline-buried-two-radius-spread",
         "front:bspline-buried-two-radius-nodes",
-        "front:bspline-buried-mixed",
         "front:bspline-buried-refusal-crossing",
         "front:bspline-buried-refusal-medium",
         "front:bspline-buried-refusal-contact",
@@ -2027,6 +2028,27 @@ def test_the_wholly_buried_decks_print_as_python(driver, tmp_path):
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     assert counts.get("served", 0) == 6 and not reasons, (counts, reasons)
     assert counts.get("runs", 0) == 7, counts
+
+
+MIXED_DECKS = ROOT / "tests" / "fixtures" / "transmitted_mixed"
+
+
+@pytest.mark.slow
+def test_the_mixed_decks_print_as_python(driver, tmp_path):
+    """momwire#1718 S12: wires on both sides of a Sommerfeld ground with no
+    crossing junction -- a vertical over a separate buried screen, a dipole
+    over a buried wire, two radii, loads, buried wires at two depths (a z'
+    ladder of several rungs), a pair closer than a segment (the cross
+    block's raised order) and a pattern with a near field -- through the two
+    transmitted blocks over the below->above table filled in C++
+    (`_somm_transmitted_core`), byte for byte as `_shell.render(text,
+    basis="bspline")` prints them. GN 3 and a NEC-4 load spelling refuse in
+    this dialect, in its own words."""
+    decks = sorted(MIXED_DECKS.glob("*.nec"))
+    assert len(decks) == 9
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 7 and not reasons, (counts, reasons)
+    assert counts.get("refused", 0) == 2, counts
 
 
 GRAZING_1672_DECKS = ROOT / "tests" / "fixtures" / "buried_grazing_1672"

@@ -25,9 +25,9 @@ B-spline formulation (bs2): it answers a deck as the Python command
 `momwire-nec5-bspline` does, byte for byte, and takes the same three forms
 and the same picking (momwire-nec5-bs2-linux-avx2 / -sse2 beside it). It
 serves free space, wire loading, networks, the extended kernel, wires above
-a perfect or Sommerfeld ground and a structure wholly below a Sommerfeld
-ground; a deck with wires on both sides of the ground is refused by name
-for now.
+a perfect or Sommerfeld ground, a structure wholly below a Sommerfeld
+ground, and wires on both sides of it (joined through a crossing junction,
+or a raised antenna over a separate buried counterpoise).
 
 PREVIEW: momwire-nec42-sinusoidal-linux is the same kind of program for
 EZNEC's and SimNEC's NEC-4.2 slot (momwire#1607). It answers a NEC-4.2

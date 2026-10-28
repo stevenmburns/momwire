@@ -209,9 +209,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
             const auto &cj = fr->basis.crossing;
             if (cj.empty()) {
                 // wires on both sides with no crossing node: the transmitted
-                // blocks (step 4c)
-                for (uint8_t v : fr->basis.below_wire)
-                    if (!v) return decline("bspline-buried-mixed");
+                // blocks (step 4c), filled over the below->above grid
+                // (`_somm_transmitted_core`, momwire#1718 S12)
             } else {
                 // a two-radius node (antennaknobs plan U5) and a node gap on
                 // a crossing node keep the junction's KCL row (`build_basis`'

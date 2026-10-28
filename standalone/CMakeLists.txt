@@ -277,6 +277,7 @@ if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "sg5")
     ${MW_SRC}/_somm_pairs_core.cpp
     ${MW_SRC}/_bspline_front_core.cpp
     ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_bspline_transmitted_core.cpp
     ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
@@ -326,6 +327,7 @@ if(MW_EXE_BASIS STREQUAL "sg42")
     ${MW_SRC}/_somm_pairs_owned_core.cpp
     ${MW_SRC}/_bspline_front_core.cpp
     ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_bspline_transmitted_core.cpp
     ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_galerkin_fill_core.cpp
     # the direct-field fill (S7): a wire end on the ground plane, over the

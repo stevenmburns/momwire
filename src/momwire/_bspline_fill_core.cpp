@@ -11,6 +11,8 @@
 #include "_somm_proj_core.h"
 #include "_somm_below_remainder_inline.h"
 #include "_somm_below_fill_core.h"
+#include "_somm_transmitted_core.h"
+#include "_bspline_transmitted_core.h"
 #include "_field_galerkin_inline.h"
 #include "_somm_pairs_core.h"
 #include "_somm_remainder_core.h"
@@ -3766,11 +3768,31 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     std::vector<int64_t> a_idx, b_idx;
     for (int64_t s2 = 0; s2 < N; s2++) (below[static_cast<size_t>(s2)] ? b_idx : a_idx).push_back(s2);
     const bool crossing = !a_idx.empty() && !b.crossing.empty();
-    if (!a_idx.empty() && !crossing) throw FrontNotPorted("buried-transmitted");
+    // wires on both sides with no crossing node (momwire#1718 S12): the two
+    // transmitted blocks over the below->above grid (`_somm_transmitted_core`)
+    const bool mixed = !a_idx.empty() && !crossing;
     const int64_t q = std::max<int64_t>(n_qp_sommerfeld, 6);  // `n_qp_buried_field`
     std::vector<double> obs_a, t_a, W_a, obs_b, t_b, W_b;
     buried_nodes(g, a_idx, q, nd, obs_a, t_a, W_a);
     buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
+    // the cross block's own order (`near_q_factor` over `cross_pair_
+    // separation`, momwire#1004): the raised nodes join the plan
+    int64_t q_x = q;
+    std::vector<double> obs_ax, t_ax, W_ax, obs_bx, t_bx, W_bx;
+    if (mixed) {
+        int64_t qf = 1;
+        try {
+            qf = somm_trans::near_q_factor(g.seg_l.data(), g.seg_r.data(), a_idx, b_idx);
+        } catch (const somm_trans::Refused &e) {
+            throw FrontNotPorted(std::string("buried-") + e.what());
+        }
+        q_x = q * qf;
+        if (qf > 1) {
+            buried_nodes(g, a_idx, q_x, nd, obs_ax, t_ax, W_ax);
+            buried_nodes(g, b_idx, q_x, nd, obs_bx, t_bx, W_bx);
+        }
+    }
+    const bool raised_x = q_x != q;
     // momwire#1672 (`BSplineSolver._below_remainder_pairs`): the below/below
     // pairs the remainder needs more than the base order for, a buried wire
     // within a segment of the surface; their raised-order nodes join the
@@ -3805,10 +3827,12 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
     const double floor = (0.05 - 2.0 * (0.05 / 3.0)) * (PI_ / 180.0);
     double r1_max = 0.0, th_min = 0.0;
+    somm_trans::CrossPlan cross_plan;
     // `plan_buried`'s backoff: the raised pairs halve until the plan's
     // grazing floor serves them (`_halved`), the base fill when none remain
     for (;;) {
         std::vector<double> plan_b(obs_b);
+        if (raised_x) plan_b.insert(plan_b.end(), obs_bx.begin(), obs_bx.end());
         if (!bbI.empty()) {
             std::vector<int64_t> qmax(b_idx.size(), 0);
             for (size_t t = 0; t < bbI.size(); t++) {
@@ -3847,7 +3871,24 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         // past the cap Python asks the floor of the pairs inside it only,
         // which this walk does not: decline rather than choose differently
         if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
-        if (!(th_min < floor)) break;
+        bool graze = th_min < floor;
+        if (!graze && mixed) {
+            // `serve_plan`'s cross-medium section over the union of both
+            // rules' nodes; its grazing refusal backs the raised pairs off
+            // like the below one (`_is_grazing_refusal`)
+            std::vector<double> plan_a(obs_a);
+            if (raised_x) plan_a.insert(plan_a.end(), obs_ax.begin(), obs_ax.end());
+            try {
+                cross_plan = somm_trans::cross_extents(plan_a.data(), plan_a.size() / 3, plan_b.data(), n_obs, gz,
+                                                       bm.k_p, bm.k_m);
+            } catch (const somm_trans::Refused &e) {
+                if (std::string(e.what()) != "buried-cross-grazing")
+                    throw FrontNotPorted(std::string("buried-refusal: ") + e.what());
+                if (bbI.empty()) throw FrontNotPorted("buried-cross-grazing-refusal");
+                graze = true;
+            }
+        }
+        if (!graze) break;
         if (bbI.empty()) throw FrontNotPorted("buried-grazing-refusal");
         std::vector<int64_t> hI, hJ, hQ;
         for (size_t t = 0; t < bbI.size(); t++)
@@ -4081,6 +4122,29 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     }
     if (!bbI.empty())
         below_pair_correction(Z, g, b, b_idx, bbI, bbJ, bbQ, q, nd, obs_b, t_b, W_b, rem);
+    // the two transmitted blocks (`compute_Z_operator_buried`'s mixed
+    // branch): `_field_galerkin_block` over the below->above table, observer
+    // chunks of `_FIELD_GALERKIN_CHUNK_ELEMS / (n_src q q)`, each upward pair
+    // read by `transmitted_field_proj_below_to_above` and each downward one by
+    // the reciprocity transpose over the same grid
+    if (mixed) {
+        const somm_trans::Grid *gt = nullptr;
+        try {
+            gt = &somm_trans::get_grid(bm.eps_t, bm.k_p, cross_plan.r_cross_max, cross_plan.zp_min,
+                                       cross_plan.zp_max, omega, mu, cross_plan.r_cross_min);
+        } catch (const somm_trans::Refused &e) {
+            throw FrontNotPorted(std::string("buried-") + e.what());
+        }
+        TransmittedSide up{raised_x ? &obs_ax : &obs_a, raised_x ? &t_ax : &t_a, raised_x ? &W_ax : &W_a, &pos_a,
+                           static_cast<int64_t>(a_idx.size())};
+        TransmittedSide down{raised_x ? &obs_bx : &obs_b, raised_x ? &t_bx : &t_b, raised_x ? &W_bx : &W_b, &pos,
+                             n_b};
+        try {
+            transmitted_blocks(Z, b.polys, b.supp_seg, nd, n_basis, q_x, *gt, gz, bm.k_p, bm.k_m, up, down);
+        } catch (const somm_trans::Refused &e) {
+            throw FrontNotPorted(std::string("buried-") + e.what());
+        }
+    }
     // the crossing serve (`_crossing_fill`, momwire#524 phase 2): the cross
     // block's split fill and the self completions, on a one-radius deck
     if (crossing && !stop_before_cross) {
