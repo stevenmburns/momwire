@@ -95,20 +95,26 @@ def _z(q):
     put three of them over the suite's 20 s hard ceiling.
     """
     if q not in _Z_CACHE:
+        # #906's far rungs only: since momwire#1752 S2 the default ladder also
+        # carries near rungs (32 from 0.1, 16 from 1.5) that would hold every
+        # base order above 32 to one answer on this deck, which has no pair
+        # under the 0.1 rung -- and this module measures the base order.
         _Z_CACHE[q] = BSplineSolver(
-            **dict(crossing_deck(1), n_qp_pair=q)
+            **dict(crossing_deck(1), n_qp_pair=q, pair_order_ladder=_FAR_RUNGS)
         ).compute_impedance()[0]
     return _Z_CACHE[q]
 
 
 REF_Q = 128
+_FAR_RUNGS = ((2.0, 8), (16.0, 4))
 
 
 @pytest.mark.slow
 def test_the_resolved_default_lands_inside_a_stated_bar():
     """The substantive gate: at the resolved order the deck is converged to
     0.01 ohm against a q=128 reference."""
-    assert abs(_z(BURIED_N_QP_PAIR) - _z(REF_Q)) < 0.01
+    z_default = BSplineSolver(**crossing_deck(1)).compute_impedance()[0]
+    assert abs(z_default - _z(REF_Q)) < 0.01
 
 
 @pytest.mark.slow

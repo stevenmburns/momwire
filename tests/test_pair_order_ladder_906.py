@@ -579,7 +579,7 @@ def test_g921_the_gate_is_not_vacuous_a_uniform_buried_deck_does_tier():
     assert with_far, "no window holds a far pair"
     assert len({e for _, e in with_far}) == 1, seen
     eff = with_far[0][1]
-    assert eff == ((2.0, 8), (16.0, 4)), eff
+    assert eff == BURIED_PAIR_ORDER_LADDER, eff
 
 
 @pytest.mark.filterwarnings("ignore:crossing node")
