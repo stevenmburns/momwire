@@ -428,3 +428,58 @@ def test_momwire_times_streams_a_line_per_structure(tmp_path):
     assert lines[0]["start_ms"] > 0.0 and lines[1]["start_ms"] == 0.0
     fills, runs = tc.printout_timing(run.stdout)
     assert len(fills) == 2 and runs == []
+
+
+# --- the transmitted grid's store (momwire#1752 T1) ----------------------------
+
+MIXED = FIXTURES / "transmitted_mixed" / "m3_two_radii.nec"
+
+
+@pytest.mark.skipif(
+    BASIS != "bspline", reason="the transmitted blocks are bs2's (and sg5's) fill"
+)
+def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
+    """A mixed deck (wires above and below, no crossing node) fills the
+    below->above grid; the executable keeps it in its Sommerfeld store as
+    Python keeps it in `_somm_disk_cache`. Run cold, the store holds one
+    `trans-*.grid`; a second run reads it (MOMWIRE_TIMES counts no build) and
+    leaves it as it was; a damaged file is a miss, refilled to the same bytes;
+    every printout is the launcher's."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    store = tmp_path / "store"
+    env = dict(os.environ, MOMWIRE_SOMM_CACHE_DIR=str(store), MOMWIRE_SOMM_CACHE="1")
+    ref = subprocess.run(
+        [_launcher(), str(MIXED), str(tmp_path / "ref.out")],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert ref.returncode == 0, ref.stderr
+    want = (tmp_path / "ref.out").read_bytes()
+
+    def exe_run(name):
+        r = subprocess.run(
+            [EXE, str(MIXED), str(tmp_path / f"{name}.out")],
+            cwd=tmp_path,
+            env=dict(env, MOMWIRE_TIMES="1"),
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        got = (tmp_path / f"{name}.out").read_bytes().decode("latin-1")
+        assert tc.zero_timing(got).encode("latin-1") == want, name
+        (line,) = tc.times_lines(r.stderr)
+        return line
+
+    exe_run("cold")
+    (grid,) = sorted((store / "exe").glob("*/trans-*.grid"))
+    stamp = grid.read_bytes()
+    warm = exe_run("warm")
+    assert warm["ground_built"] == 0, warm
+    assert grid.read_bytes() == stamp
+    grid.write_bytes(stamp[:-9] + b"\0" * 9)
+    exe_run("damaged")
+    assert grid.read_bytes() == stamp
