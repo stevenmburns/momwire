@@ -489,3 +489,58 @@ def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
     grid.write_bytes(stamp[:-9] + b"\0" * 9)
     exe_run("damaged")
     assert grid.read_bytes() == stamp
+
+
+# --- the near-interface sheets' store (the perf-1028 study) -------------------
+
+NEAR_BURIED = FIXTURES / "near_buried_1653" / "d1_buried_dipole.nec5.nec"
+
+
+def test_the_near_field_sheets_are_stored_and_move_no_byte(tmp_path):
+    """A buried deck's near field above and below the plane reads the
+    designed near-interface tables, whose sheets Python keeps in process
+    across renders; the executable keeps them in its Sommerfeld store. Run
+    cold, the store holds `nisheet-*.grid`; a second run reads every one
+    (MOMWIRE_TIMES counts no build) and leaves the files as they were; a
+    damaged file is a miss, refilled to the same bytes; every printout is the
+    launcher's."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    store = tmp_path / "store"
+    env = dict(os.environ, MOMWIRE_SOMM_CACHE_DIR=str(store), MOMWIRE_SOMM_CACHE="1")
+    ref = subprocess.run(
+        [_launcher(), str(NEAR_BURIED), str(tmp_path / "ref.out")],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert ref.returncode == 0, ref.stderr
+    want = (tmp_path / "ref.out").read_bytes()
+
+    def exe_run(name):
+        r = subprocess.run(
+            [EXE, str(NEAR_BURIED), str(tmp_path / f"{name}.out")],
+            cwd=tmp_path,
+            env=dict(env, MOMWIRE_TIMES="1"),
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        got = (tmp_path / f"{name}.out").read_bytes().decode("latin-1")
+        assert tc.zero_timing(got).encode("latin-1") == want, name
+        (line,) = tc.times_lines(r.stderr)
+        return line
+
+    cold = exe_run("cold")
+    sheets = sorted((store / "exe").glob("*/nisheet-*.grid"))
+    assert sheets, sorted(p.name for p in store.rglob("*"))
+    stamps = [p.read_bytes() for p in sheets]
+    warm = exe_run("warm")
+    assert cold["ground_built"] > 0 and warm["ground_built"] == 0, (cold, warm)
+    assert warm["ground_disk"] >= len(sheets), warm
+    assert [p.read_bytes() for p in sheets] == stamps
+    sheets[0].write_bytes(stamps[0][:-9] + b"\0" * 9)
+    exe_run("damaged")
+    assert [p.read_bytes() for p in sheets] == stamps
