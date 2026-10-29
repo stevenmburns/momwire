@@ -1294,7 +1294,7 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bo
         fp.degree = fr.basis.degree;
         // `BURIED_N_QP_PAIR` / `BURIED_PAIR_ORDER_LADDER` (momwire#1752 S2)
         fp.n_qp_pair = 128;
-        fp.ladder = {{0.1, 32}, {1.5, 16}, {2.0, 8}, {16.0, 4}};
+        fp.ladder = {{0.1, 32}, {1.5, 16}, {2.0, 8}, {4.0, 4}};
         fp.n_qp_same_edge = 4;
         fp.extended_kernel = fr.extended_kernel;
         try {
