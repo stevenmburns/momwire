@@ -6713,35 +6713,51 @@ seg_seg_reg_moments_bspline_cplx(
             }
         }
         const long long n_out = (long long)(nd * nd * n);
-#pragma omp parallel for schedule(dynamic, 4)
-        for (long long o = 0; o < n_out; ++o) {
-            const size_t p = (size_t)o / (nd * n), P = ((size_t)o / n) % nd, i = (size_t)o % n;
-            for (size_t j = 0; j < n; j++) {
-                double ar = 0.0, ai = 0.0;
+#pragma omp parallel
+        {
+            // per output j, its partials in the order numpy's iterator takes
+            // them: r innermost from zero, each q's partial added in turn. The
+            // j loop is innermost so the compiler can run outputs side by
+            // side; each output's operations and their order are unchanged.
+            std::vector<double> ar(n), ai(n), lr(n), li(n);
+#pragma omp for schedule(dynamic, 4)
+            for (long long o = 0; o < n_out; ++o) {
+                const size_t p = (size_t)o / (nd * n), P = ((size_t)o / n) % nd, i = (size_t)o % n;
+                const double *vP = wu + P * n * q;
                 if (n == 1) {
+                    double sr = 0.0, si = 0.0;
                     for (size_t a = 0; a < q; a++)
                         for (size_t b2 = 0; b2 < q; b2++) {
                             const double w = wu[(p * n + i) * q + a];
-                            const double v = wu[(P * n + j) * q + b2];
-                            const size_t t = (i * q + a) * nq + j * q + b2;
-                            ar += (w * Gr[t]) * v;
-                            ai += (w * Gi[t]) * v;
+                            const double v = vP[b2];
+                            const size_t t = (i * q + a) * nq + b2;
+                            sr += (w * Gr[t]) * v;
+                            si += (w * Gi[t]) * v;
                         }
-                } else {
-                    for (size_t a = 0; a < q; a++) {
-                        const double w = wu[(p * n + i) * q + a];
-                        double lr = 0.0, li = 0.0;
-                        for (size_t b2 = 0; b2 < q; b2++) {
-                            const double v = wu[(P * n + j) * q + b2];
-                            const size_t t = (i * q + a) * nq + j * q + b2;
-                            lr += (w * Gr[t]) * v;
-                            li += (w * Gi[t]) * v;
+                    op[((p * nd + P) * n + i) * n] = std::complex<double>(sr, si);
+                    continue;
+                }
+                std::fill(ar.begin(), ar.end(), 0.0);
+                std::fill(ai.begin(), ai.end(), 0.0);
+                for (size_t a = 0; a < q; a++) {
+                    const double w = wu[(p * n + i) * q + a];
+                    const double *gr = &Gr[(i * q + a) * nq];
+                    const double *gi = &Gi[(i * q + a) * nq];
+                    std::fill(lr.begin(), lr.end(), 0.0);
+                    std::fill(li.begin(), li.end(), 0.0);
+                    for (size_t b2 = 0; b2 < q; b2++)
+                        for (size_t j = 0; j < n; j++) {
+                            const double v = vP[j * q + b2];
+                            lr[j] += (w * gr[j * q + b2]) * v;
+                            li[j] += (w * gi[j * q + b2]) * v;
                         }
-                        ar += lr;
-                        ai += li;
+                    for (size_t j = 0; j < n; j++) {
+                        ar[j] += lr[j];
+                        ai[j] += li[j];
                     }
                 }
-                op[((p * nd + P) * n + i) * n + j] = std::complex<double>(ar, ai);
+                std::complex<double> *orow = op + ((p * nd + P) * n + i) * n;
+                for (size_t j = 0; j < n; j++) orow[j] = std::complex<double>(ar[j], ai[j]);
             }
         }
     }
