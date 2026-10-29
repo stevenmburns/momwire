@@ -1135,10 +1135,11 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
     bg.tangents = s.t;
     bg.h_per_seg = s.h;
     // `_remainder_graded.pair_moments(..., D1)` through the bs2 core's exported
-    // hook, which also returns the base-order moments this route does not
-    // read: a new export there would move the codegen of that TU's kernels
+    // hook, without the base-order moments it can also return (this route
+    // takes them from `remainder_field_proj_owned` below, as Python does):
+    // computing them pair by pair was ~90 % of an above-ground screen's fill
     std::vector<cd> dJm, unread;
-    bspline::debug_pair_moments(bg, gz, k, G0, D1, I, J, q, dJm, unread);
+    bspline::debug_pair_moments(bg, gz, k, G0, D1, I, J, q, dJm, unread, false);
     const std::vector<double> tau = taylor_shape_coefs(k, s.h);
     // dJ = einsum("pmn,nmM,PMn->npP", tau[:, :, I], dJ_mono, tau[:, :, J])
     std::vector<cd> dJ(n * 9);

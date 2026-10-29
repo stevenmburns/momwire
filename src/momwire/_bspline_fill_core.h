@@ -156,10 +156,13 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
 
 // TEST HOOK: `_remainder_graded.pair_moments(..., I, J, ...)` on `grid`
 // (n, d1, d1) and the base-order `_remainder_pair_moments` of each (I[n],
-// J[n]) alone.
+// J[n]) alone. `with_fixed` false leaves `fixed` empty: the
+// Sinusoidal-Galerkin fill reads only `graded` (its base-order moments come
+// from `remainder_field_proj_owned`), and the per-pair base-order calls were
+// ~90 % of its above-ground fill (perf-1028 finding 4).
 void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
                         const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
-                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed);
+                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed, bool with_fixed = true);
 
 void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,
                       int64_t j, std::vector<int64_t> &o_pair, std::vector<double> &s_o, std::vector<double> &w_o,
