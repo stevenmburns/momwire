@@ -344,14 +344,16 @@ double key_at(const Key &k, int i) {
     return v[i];
 }
 
+// The key's hash names the file and the file carries the key itself, which a
+// read checks bit for bit (a collision is a miss). A short name, because nine
+// spelled-out keys would be ~160 characters, and under a deep temporary
+// directory that passes Windows' 260-character MAX_PATH.
 std::string file_name(const Key &k) {
-    std::string s = "trans";
-    char buf[24];
-    for (int i = 0; i < 9; i++) {
-        std::snprintf(buf, sizeof buf, "-%016llx", static_cast<unsigned long long>(bits(key_at(k, i))));
-        s += buf;
-    }
-    return s + ".grid";
+    std::string kb;
+    for (int i = 0; i < 9; i++) put(kb, key_at(k, i));
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "trans-%016llx.grid", static_cast<unsigned long long>(fnv1a(kb)));
+    return buf;
 }
 
 std::string serialize(const std::string &tag, const Key &k, const Grid &g) {
