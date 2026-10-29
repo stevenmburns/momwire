@@ -5,6 +5,8 @@
 #include "_fma_inline.h"
 
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
+#include "_somm_grid_core.h"   // the executable's store (disk_read / disk_write)
+#include "_mw_times.h"         // MOMWIRE_TIMES' ground counts
 
 #include <algorithm>
 #include <cmath>
@@ -246,7 +248,117 @@ class PlaneSheet {
             vals_.insert(vals_.end(), kv.second.begin(), kv.second.end());
         }
         flat_ok_ = false;
+        grown_ = true;
+        mw_times::count_built();
     }
+
+    // The executable's store (`somm_core::disk_read` / `disk_write`; off in
+    // the extension, which keeps its sheets in process across renders as
+    // `g_sheets` does here). A sheet is its strips (a pure function of the
+    // key and the strip's index, recomputed and checked on read), its
+    // blocks' offsets and its node values: a node's value never depends on
+    // how far its sheet was grown, so a stored sheet serves the rows a fresh
+    // one would, bit for bit, and a run that grows it writes it back.
+    // MWNISHEET1: magic, the key's bits, nk, the strip counts and strips,
+    // the offsets, the values, an FNV-1a over all of it. Any mismatch is a
+    // miss.
+    bool grown() const { return grown_; }
+    PlaneSheet blank() const { return PlaneSheet(k_p_, k_m_, zp_, height_, depth_, point_); }
+    std::string serialize() const {
+        std::string b(SHEET_MAGIC);
+        put_key(b);
+        put(b, static_cast<int64_t>(nk_));
+        for (int ax = 0; ax < 2; ax++) {
+            put(b, static_cast<uint64_t>(strips_[ax].size()));
+            for (const Strip &st : strips_[ax]) {
+                put(b, st.lo);
+                put(b, st.hi);
+                put(b, st.n);
+            }
+        }
+        put(b, static_cast<uint64_t>(off_.size()));
+        for (const auto &kv : off_) {
+            put(b, static_cast<int64_t>(kv.first.first));
+            put(b, static_cast<int64_t>(kv.first.second));
+            put(b, kv.second);
+        }
+        put(b, static_cast<uint64_t>(vals_.size()));
+        b.append(reinterpret_cast<const char *>(vals_.data()), vals_.size() * sizeof(cd));
+        put(b, somm_core::disk_hash(b));
+        return b;
+    }
+    // A stored sheet into this fresh one (false, and this one untouched in
+    // what it serves: the file is not this sheet's whole state).
+    bool restore(const std::string &b) {
+        const size_t m = sizeof(SHEET_MAGIC) - 1;
+        if (b.size() < m + sizeof(uint64_t) || b.compare(0, m, SHEET_MAGIC) != 0) return false;
+        uint64_t sum;
+        std::memcpy(&sum, b.data() + b.size() - sizeof sum, sizeof sum);
+        if (somm_core::disk_hash(b.substr(0, b.size() - sizeof sum)) != sum) return false;
+        std::string mine;
+        put_key(mine);
+        if (b.compare(m, mine.size(), mine) != 0) return false;
+        size_t at = m + mine.size();
+        int64_t nk;
+        if (!get(b, at, nk) || nk != nk_) return false;
+        std::vector<Strip> strips[2];
+        std::vector<Cell> cells[2];
+        for (int ax = 0; ax < 2; ax++) {
+            uint64_t ns;
+            if (!get(b, at, ns) || ns > 4096) return false;
+            const bool rho_axis = ax == 0;
+            for (uint64_t i = 0; i < ns; i++) {
+                Strip f, st;
+                if (!get(b, at, f.lo) || !get(b, at, f.hi) || !get(b, at, f.n)) return false;
+                if (!sheet_strip(k_p_, k_m_, d_, static_cast<int>(i), rho_axis, rho_axis ? -1 : depth_, st))
+                    return false;
+                if (bits(f.lo) != bits(st.lo) || bits(f.hi) != bits(st.hi) || f.n != st.n) return false;
+                strips[ax].push_back(st);
+                push_cells(cells[ax], st, static_cast<int>(i));
+            }
+            if (cells[ax].empty()) return false;
+        }
+        const size_t n_r = cells[0].size(), n_s = cells[1].size();
+        const size_t blk = static_cast<size_t>(SHEET_P * SHEET_P) * static_cast<size_t>(nk_);
+        uint64_t n_off;
+        if (!get(b, at, n_off) || n_off != n_r * n_s) return false;  // every cell's block
+        std::map<std::pair<int, int>, int64_t> off;
+        for (uint64_t q = 0; q < n_off; q++) {
+            int64_t i, j, o;
+            if (!get(b, at, i) || !get(b, at, j) || !get(b, at, o)) return false;
+            if (i < 0 || j < 0 || static_cast<size_t>(i) >= n_r || static_cast<size_t>(j) >= n_s || o < 0)
+                return false;
+            off[{static_cast<int>(i), static_cast<int>(j)}] = o;
+        }
+        if (off.size() != n_off) return false;
+        uint64_t nv;
+        if (!get(b, at, nv) || nv > (b.size() - at) / sizeof(cd) || nv % static_cast<uint64_t>(nk_) != 0) return false;
+        for (const auto &kv : off)
+            if (static_cast<uint64_t>(kv.second) * static_cast<uint64_t>(nk_) + blk > nv) return false;
+        if (at + nv * sizeof(cd) + sizeof(uint64_t) != b.size()) return false;
+        std::vector<cd> vals(nv);
+        std::memcpy(vals.data(), b.data() + at, nv * sizeof(cd));
+        for (int ax = 0; ax < 2; ax++) {
+            strips_[ax] = std::move(strips[ax]);
+            cells_[ax] = std::move(cells[ax]);
+        }
+        off_ = std::move(off);
+        vals_ = std::move(vals);
+        flat_ok_ = false;
+        grown_ = false;
+        return true;
+    }
+    // The strips held on each axis (a stored sheet that holds at least as
+    // many on both is not overwritten by this one).
+    size_t n_strips(int ax) const { return strips_[ax].size(); }
+    std::string file_name() const {
+        std::string kb;
+        put_key(kb);
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "nisheet-%016llx.grid", static_cast<unsigned long long>(somm_core::disk_hash(kb)));
+        return buf;
+    }
+    void stored() { grown_ = false; }
 
     // `out` is (m, nk) row-major (for the six keys, a Six is N_KEYS
     // contiguous complexes), and grid_sheet writes only rows idx: in place.
@@ -279,6 +391,41 @@ class PlaneSheet {
     bool flat_ok_ = false;
     std::vector<double> rho_edges_, s_edges_;
     std::vector<int64_t> cell_off_;
+    bool grown_ = false;  // cells evaluated since the sheet was read or stored
+
+    static constexpr char SHEET_MAGIC[] = "MWNISHEET1\n";
+    template <class T>
+    static void put(std::string &b, const T &v) {
+        b.append(reinterpret_cast<const char *>(&v), sizeof(T));
+    }
+    template <class T>
+    static bool get(const std::string &b, size_t &at, T &v) {
+        if (at > b.size() || b.size() - at < sizeof(T)) return false;
+        std::memcpy(&v, b.data() + at, sizeof(T));
+        at += sizeof(T);
+        return true;
+    }
+    // what a node depends on (`g_sheets`' key), exact bits
+    void put_key(std::string &b) const {
+        put(b, static_cast<uint8_t>(point_));
+        put(b, static_cast<uint8_t>(height_));
+        put(b, depth_);
+        put(b, k_p_);
+        put(b, k_m_.real());
+        put(b, k_m_.imag());
+        put(b, zp_);
+    }
+
+    // a strip's cells, in `grow`'s order and arithmetic
+    static void push_cells(std::vector<Cell> &cells, const Strip &st, int i) {
+        for (int64_t q = 0; q < st.n; q++) {
+            const double a = st.lo + (st.hi - st.lo) * static_cast<double>(q) / static_cast<double>(st.n);
+            const double b = q == st.n - 1 ? st.hi
+                                           : st.lo + (st.hi - st.lo) * static_cast<double>(q + 1) /
+                                                         static_cast<double>(st.n);
+            cells.push_back(Cell{a, b, i});
+        }
+    }
 
     std::vector<int> grow(bool rho_axis, double reach) {
         std::vector<Strip> &have = strips_[rho_axis ? 0 : 1];
@@ -288,13 +435,7 @@ class PlaneSheet {
             fresh.push_back(static_cast<int>(i));
             const Strip &st = want[i];
             have.push_back(st);
-            for (int64_t q = 0; q < st.n; q++) {
-                const double a = st.lo + (st.hi - st.lo) * static_cast<double>(q) / static_cast<double>(st.n);
-                const double b = q == st.n - 1 ? st.hi
-                                               : st.lo + (st.hi - st.lo) * static_cast<double>(q + 1) /
-                                                             static_cast<double>(st.n);
-                cells_[rho_axis ? 0 : 1].push_back(Cell{a, b, static_cast<int>(i)});
-            }
+            push_cells(cells_[rho_axis ? 0 : 1], st, static_cast<int>(i));
         }
         return fresh;
     }
@@ -331,14 +472,40 @@ std::mutex g_sheet_mutex;
 std::map<std::tuple<bool, bool, double, double, double, double, double>, std::unique_ptr<PlaneSheet>>
     g_sheets;
 
+// A sheet new to this process starts from the executable's store when it
+// holds one (`PlaneSheet::restore`).
 PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth, bool point = false) {
     const auto key = std::make_tuple(point, height, height ? depth : -1.0, k_p, k_m.real(), k_m.imag(), zp);
     auto it = g_sheets.find(key);
-    if (it == g_sheets.end())
-        it = g_sheets
-                 .emplace(key, std::unique_ptr<PlaneSheet>(new PlaneSheet(k_p, k_m, zp, height, depth, point)))
-                 .first;
+    if (it == g_sheets.end()) {
+        std::unique_ptr<PlaneSheet> sh(new PlaneSheet(k_p, k_m, zp, height, depth, point));
+        std::string b;
+        if (somm_core::disk_read(sh->file_name(), b)) {
+            if (sh->restore(b))
+                mw_times::count_disk();
+            else
+                sh.reset(new PlaneSheet(k_p, k_m, zp, height, depth, point));
+        }
+        it = g_sheets.emplace(key, std::move(sh)).first;
+    }
     return *it->second;
+}
+
+// After a `cover` that evaluated cells, the sheet back to the store -- unless
+// the stored one (another run's) already holds as many strips on both axes.
+void store_sheet(PlaneSheet &sh) {
+    if (!sh.grown()) return;
+    const std::string name = sh.file_name();
+    std::string b;
+    if (somm_core::disk_read(name, b)) {
+        PlaneSheet other = sh.blank();
+        if (other.restore(b) && other.n_strips(0) >= sh.n_strips(0) && other.n_strips(1) >= sh.n_strips(1)) {
+            sh.stored();
+            return;
+        }
+    }
+    somm_core::disk_write(name, sh.serialize());
+    sh.stored();
 }
 
 // --------------------------------------------------------------------------
@@ -865,6 +1032,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             const double s_max = height ? v - ext : ext - v;
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth);
             sh.cover(rho_max, s_max, ev.n_threads);
+            store_sheet(sh);
             static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
             sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
         }
@@ -1016,6 +1184,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             const double s_max = height ? v - ext : ext - v;
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth, true);
             sh.cover(rho_max, s_max, ev.n_threads);
+            store_sheet(sh);
             sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
         }
     }

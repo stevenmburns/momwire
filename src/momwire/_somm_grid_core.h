@@ -120,6 +120,16 @@ DiskStats disk_stats();
 // share the directory and the size bound (`_somm_below_fill_core`).
 bool disk_location(std::filesystem::path &dir, std::string &tag);
 void disk_evict(const std::filesystem::path &keep);
+// The same store's file I/O for a kind kept beside the masters (the
+// near-interface sheets of `_near_interface_eval.cpp`): `name` is a file in
+// its directory (a `.grid`, so the size bound and the eviction count it).
+// `disk_read` is false while the store is off or the file is unreadable,
+// and a read refreshes the file's LRU time; `disk_write` writes a unique
+// temporary renamed into place, then evicts. Neither ever raises.
+// `disk_hash` is the masters' FNV-1a, for a kind's file name.
+bool disk_read(const std::string &name, std::string &bytes);
+void disk_write(const std::string &name, const std::string &bytes);
+uint64_t disk_hash(const std::string &bytes);
 
 // CPython 3.12's complex division (`_Py_c_quot`), for a caller spelling a
 // Python complex expression (C2 = (eps~ - 1) / (eps~ + 1)).
