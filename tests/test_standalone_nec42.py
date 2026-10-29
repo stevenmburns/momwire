@@ -2,7 +2,7 @@
 momwire#1607 B4b): the NEC-4.2 slot's sinusoidal launcher as one Python-free
 executable; and the same for momwire-nec42-sinusoidal-galerkin-standalone
 (MW_EXE_BASIS=sg42, momwire#1718 S4), the Sinusoidal-Galerkin launcher, and
-for momwire-nec42-standalone (MW_EXE_BASIS=bs42, momwire#1607 Phase C2), the
+for momwire-nec42-standalone (MW_EXE_BASIS=bs2_nec42, momwire#1607 Phase C2), the
 slot's default launcher `momwire-nec42` (bs2).
 
 Every printout is held to `momwire-nec42-sinusoidal`'s (this environment's
@@ -44,7 +44,7 @@ NEC42 = FIXTURES / "eznec_nec42"
 # The same gates hold `momwire-nec42-sinusoidal-galerkin-standalone`
 # (MW_EXE_BASIS=sg42, momwire#1718 S4) to `momwire-nec42-sinusoidal-galerkin`
 # when MOMWIRE_NEC42_SG_STANDALONE_EXE names it instead.
-# And `momwire-nec42-standalone` (MW_EXE_BASIS=bs42, momwire#1607 Phase C2)
+# And `momwire-nec42-standalone` (MW_EXE_BASIS=bs2_nec42, momwire#1607 Phase C2)
 # to `momwire-nec42`, the slot's default (bs2), under
 # MOMWIRE_NEC42_STANDALONE_EXE.
 _SG = os.environ.get("MOMWIRE_NEC42_SG_STANDALONE_EXE")

@@ -212,14 +212,14 @@ jobs:
             ldd momwire-nec42-linux-avx2
             ./momwire-nec42-linux -version
             for v in avx2 sse2; do
-              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec42-linux $F/0224_dipole-ex0.nec /tmp/bs42-$v.out
-              sed -n 2p /tmp/bs42-$v.out
-              if grep -q "NEC ERROR" /tmp/bs42-$v.out; then exit 1; fi
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec42-linux $F/0224_dipole-ex0.nec /tmp/bs2_nec42-$v.out
+              sed -n 2p /tmp/bs2_nec42-$v.out
+              if grep -q "NEC ERROR" /tmp/bs2_nec42-$v.out; then exit 1; fi
             done
             sed "s/^EN/NX/" $F/0224_dipole-ex0.nec $F/0223_dipole-ex6.nec |
-              ./momwire-nec42-linux - - > /tmp/bs42-stream.out
-            if grep -q "NEC ERROR" /tmp/bs42-stream.out; then exit 1; fi
-            test "$(grep -c "INPUT LINE .* NX " /tmp/bs42-stream.out)" = 2'
+              ./momwire-nec42-linux - - > /tmp/bs2_nec42-stream.out
+            if grep -q "NEC ERROR" /tmp/bs2_nec42-stream.out; then exit 1; fi
+            test "$(grep -c "INPUT LINE .* NX " /tmp/bs2_nec42-stream.out)" = 2'
       - uses: actions/upload-artifact@v7
         with:
           name: momwire-nec5-linux-x86_64
@@ -629,7 +629,7 @@ jobs:
 
   # `linux-nec42-bs` (momwire#1607 Phase C): the NEC-4.2 slot's default
   # `momwire-nec42` (bs2) as one no-Python executable
-  # (MW_EXE_BASIS=bs42), shipped in the tarball as a PREVIEW. The builds
+  # (MW_EXE_BASIS=bs2_nec42), shipped in the tarball as a PREVIEW. The builds
   # gated are the release artifact's own bytes (linux-artifact's
   # manylinux_2_28 build), held to the launcher by
   # tests/test_standalone_nec42.py (every fixture deck, the launcher layer,
