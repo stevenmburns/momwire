@@ -1204,7 +1204,7 @@ seg_seg_full_moments_bspline_kernel_impl(
         alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
         alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
         alignas(ALIGN) double decay[BSPLINE_QR_TILE * LN];
-        MW_OMP_FOR_COLLAPSE2
+        MW_OMP_FOR_COLLAPSE2_DYNAMIC
         for (size_t i = 0; i < N_i; i++) {
             for (size_t g = 0; g < n_grp; g++) {
                 const size_t j0 = g * LN;
@@ -1350,7 +1350,7 @@ seg_seg_full_moments_bspline_kernel_impl(
     bool w_held = false;
     size_t w_tier = 0;
     double w_Li = 0.0, w_Lj = 0.0;
-    MW_OMP_FOR_COLLAPSE2
+    MW_OMP_FOR_COLLAPSE2_DYNAMIC
 #else
     MW_OMP_PARALLEL_FOR_COLLAPSE2
 #endif

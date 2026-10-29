@@ -223,6 +223,12 @@ constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 // that keeps per-thread state across its iterations.
 #  define MW_OMP_FOR_COLLAPSE2 _Pragma("omp for collapse(2) schedule(static)")
 #endif
+// The same work-sharing loop handed out in small dynamic chunks
+// (momwire#1752 T4): for the off-edge pair kernels, whose pairs cost from 16
+// kernel reads to 16384 by their ladder tier, so equal static chunks leave
+// the threads holding the near rows waiting on. Each pair's arithmetic is its
+// own, so where it runs moves no bit.
+#define MW_OMP_FOR_COLLAPSE2_DYNAMIC _Pragma("omp for collapse(2) schedule(dynamic, 4)")
 
 // `omp simd` neutralization for MSVC. MSVC's /openmp:llvm (which we build with,
 // for its collapse + unsigned-index support) rejects the `omp simd` directive
