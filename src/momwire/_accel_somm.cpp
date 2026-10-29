@@ -4,7 +4,9 @@
 #include "_fma_inline.h"
 #include "_somm_six_lanes_inline.h"
 
+#include <atomic>
 #include <cstring>
+#include <string>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -336,6 +338,151 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
 }
 
 
+// momwire#1752 K2: many `sommerfeld_remainder_bspline_Q` calls of one shape
+// in one: the keyed remainder runs of `_remainder_pair_correction`, each one
+// source segment against a column of observer segments with one-hot
+// pseudo-bases, as `BSplineSolver._remainder_pair_moments` hands them.
+// `nodes[g]` (n_seg, q_g, 3), `W[g]` (d1, n_seg, q_g) are every segment's
+// nodes and moment weights at rule g; request r is (rule `req_rule[r]`,
+// source `req_src[r]`, observers `req_obs[req_ptr[r] : req_ptr[r+1]]`). Each
+// request is the single call's arguments gathered exactly as numpy indexes
+// them, and the call itself is `somm_core::remainder_bspline_Q`, with the
+// symmetric route taken where the single call's `same_array` test would take
+// it (one observer, the source itself). Returns (sum of observers, d1, d1):
+// request r's rows are `Jf[a, 0, p, P]` of its single call. The requests run
+// in parallel, each one's kernel on its thread alone; a request's arithmetic
+// is its own, and the kernel's is the same at any thread count.
+static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_runs(
+    std::vector<py::array_t<double, py::array::c_style | py::array::forcecast>> nodes,
+    std::vector<py::array_t<double, py::array::c_style | py::array::forcecast>> W,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tang,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> req_rule,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> req_src,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> req_ptr,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> req_obs,
+    double ground_z, double k, double r1_max, double r_break, double th_split,
+    double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
+    uintptr_t cancel_flag = 0) {
+    using somm_proj::cd;
+    const size_t n_rule = nodes.size();
+    if (W.size() != n_rule) throw std::runtime_error("nodes and W: one per rule");
+    if (tang.ndim() != 2 || tang.shape(1) != 3) throw std::runtime_error("tang must be (n_seg, 3)");
+    const py::ssize_t n_seg = tang.shape(0);
+    std::vector<py::ssize_t> qs(n_rule);
+    int d1 = -1;
+    for (size_t g = 0; g < n_rule; ++g) {
+        if (nodes[g].ndim() != 3 || nodes[g].shape(0) != n_seg || nodes[g].shape(2) != 3)
+            throw std::runtime_error("nodes[g] must be (n_seg, q, 3)");
+        qs[g] = nodes[g].shape(1);
+        if (W[g].ndim() != 3 || W[g].shape(1) != n_seg || W[g].shape(2) != qs[g])
+            throw std::runtime_error("W[g] must be (d1, n_seg, q)");
+        if (d1 < 0) d1 = (int)W[g].shape(0);
+        if ((int)W[g].shape(0) != d1) throw std::runtime_error("one degree throughout");
+    }
+    const py::ssize_t n_req = req_rule.shape(0);
+    if (req_src.shape(0) != n_req || req_ptr.shape(0) != n_req + 1)
+        throw std::runtime_error("req_rule, req_src, req_ptr: one per request (+1)");
+    const int64_t *rr = req_rule.data(), *rs = req_src.data(), *rp = req_ptr.data(), *ro = req_obs.data();
+    if (rp[0] != 0 || rp[n_req] != (int64_t)req_obs.shape(0)) throw std::runtime_error("req_ptr must span req_obs");
+    for (py::ssize_t r = 0; r < n_req; ++r) {
+        if (rr[r] < 0 || (size_t)rr[r] >= n_rule || rs[r] < 0 || rs[r] >= n_seg || rp[r + 1] < rp[r])
+            throw std::runtime_error("a request out of range");
+        for (int64_t t = rp[r]; t < rp[r + 1]; ++t)
+            if (ro[t] < 0 || ro[t] >= n_seg) throw std::runtime_error("an observer out of range");
+    }
+    if (d1 < 1) d1 = 1;
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
+    somm_proj::set_far(G, far);
+    const py::ssize_t n_out = req_obs.shape(0);
+    py::array_t<std::complex<double>> out({n_out, (py::ssize_t)d1, (py::ssize_t)d1});
+    cd *op = out.mutable_data();
+    const double *tg = tang.data();
+    std::vector<const double *> nd(n_rule), wd(n_rule);
+    for (size_t g = 0; g < n_rule; ++g) {
+        nd[g] = nodes[g].data();
+        wd[g] = W[g].data();
+    }
+    std::atomic<bool> failed(false), aborted(false);
+    std::string fail_what;
+    {
+        py::gil_scoped_release release;
+#pragma omp parallel for schedule(dynamic)
+        for (py::ssize_t r = 0; r < n_req; ++r) {
+            if (failed.load()) continue;
+            try {
+                const size_t g = (size_t)rr[r];
+                const py::ssize_t q = qs[g];
+                const int64_t src = rs[r];
+                const py::ssize_t no = (py::ssize_t)(rp[r + 1] - rp[r]);
+                const int64_t *obs = ro + rp[r];
+                // the single call's arrays, gathered as numpy fancy-indexes
+                std::vector<double> on((size_t)no * q * 3), ot((size_t)no * 3), ow((size_t)d1 * no * q);
+                for (py::ssize_t a = 0; a < no; ++a) {
+                    std::memcpy(&on[(size_t)a * q * 3], nd[g] + (size_t)obs[a] * q * 3, sizeof(double) * q * 3);
+                    std::memcpy(&ot[(size_t)a * 3], tg + (size_t)obs[a] * 3, sizeof(double) * 3);
+                    for (int p = 0; p < d1; ++p)
+                        std::memcpy(&ow[((size_t)p * no + a) * q], wd[g] + ((size_t)p * n_seg + obs[a]) * q,
+                                    sizeof(double) * q);
+                }
+                std::vector<double> sn((size_t)q * 3), st(3), sw((size_t)d1 * q);
+                std::memcpy(sn.data(), nd[g] + (size_t)src * q * 3, sizeof(double) * q * 3);
+                std::memcpy(st.data(), tg + (size_t)src * 3, sizeof(double) * 3);
+                for (int p = 0; p < d1; ++p)
+                    std::memcpy(&sw[(size_t)p * q], wd[g] + ((size_t)p * n_seg + src) * q, sizeof(double) * q);
+                // the pseudo-bases: one per (segment, power), one-hot on wing 0
+                const auto pseudo = [&](py::ssize_t n, std::vector<int64_t> &loc, std::vector<double> &poly) {
+                    loc.assign((size_t)n * d1 * d1, 0);
+                    poly.assign((size_t)n * d1 * d1 * d1, 0.0);
+                    for (py::ssize_t s = 0; s < n; ++s)
+                        for (int e = 0; e < d1; ++e) {
+                            const size_t row = (size_t)s * d1 + e;
+                            for (int a = 0; a < d1; ++a) loc[row * d1 + a] = s;
+                            poly[(row * d1 + 0) * d1 + e] = 1.0;
+                        }
+                };
+                std::vector<int64_t> lo, ls;
+                std::vector<double> po, ps;
+                pseudo(no, lo, po);
+                pseudo(1, ls, ps);
+                // `same_array` over the five pairs: equal shapes and bytes,
+                // i.e. one observer that is the source itself
+                const bool symmetric = no == 1 && obs[0] == src;
+                std::vector<cd> Q((size_t)no * d1 * d1);
+                somm_core::remainder_bspline_Q(G, ground_z, k, on.data(), ot.data(), ow.data(), no, sn.data(),
+                                               st.data(), sw.data(), 1, q, d1, lo.data(), po.data(), no * d1,
+                                               ls.data(), ps.data(), d1, symmetric, 0, Q.data(), cancel_flag);
+                // out[a*d1 + p, P] -> Jf[a, 0, p, P]
+                cd *dst = op + (size_t)rp[r] * d1 * d1;
+                std::memcpy(dst, Q.data(), sizeof(cd) * Q.size());
+            } catch (const AbortedError &) {
+                aborted.store(true);
+                failed.store(true);
+            } catch (const std::exception &e) {
+#pragma omp critical(mw_k2_fail)
+                {
+                    if (!failed.load()) fail_what = e.what();
+                    failed.store(true);
+                }
+            }
+        }
+    }
+    if (aborted.load()) throw AbortedError{};
+    if (failed.load()) throw std::runtime_error(fail_what);
+    return out;
+}
+
+
 void register_somm(py::module_ &m) {
 
     m.def("somm_six_integrals_batch", &somm_six_integrals_batch,
@@ -399,6 +546,16 @@ void register_somm(py::module_ &m) {
           "How many pairs remainder_field_proj_batch has sent through its "
           "AVX2 lanes in this process (perf item 9): the lanes' output equals "
           "the per-pair loop's, so only this says which ran.");
+    m.def("sommerfeld_remainder_bspline_runs", &sommerfeld_remainder_bspline_runs,
+          "Many sommerfeld_remainder_bspline_Q calls of the keyed-run shape "
+          "(one source segment, a column of observers, one-hot pseudo-bases) "
+          "in one, in parallel over the calls; each call's bytes (momwire#1752).",
+          py::arg("nodes"), py::arg("W"), py::arg("tang"), py::arg("req_rule"),
+          py::arg("req_src"), py::arg("req_ptr"), py::arg("req_obs"),
+          py::arg("ground_z"), py::arg("k"), py::arg("r1_max"), py::arg("r_break"),
+          py::arg("th_split"), py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
+          py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
+          py::arg("cancel_flag") = 0);
     m.def("sommerfeld_remainder_bspline_Q", &sommerfeld_remainder_bspline_Q,
           "Fully-fused b-spline Galerkin Sommerfeld remainder over an obs/src "
           "rectangle: interpolate + project + moment-quadrature + basis-assemble "

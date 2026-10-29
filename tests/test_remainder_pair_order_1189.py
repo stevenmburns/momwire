@@ -164,6 +164,14 @@ def test_the_fill_runs_the_orders_it_was_given(monkeypatch):
         return orig(self, geom, obs, src, q, grid, cache)
 
     monkeypatch.setattr(BSplineSolver, "_remainder_pair_moments", spy)
+    orig_runs = BSplineSolver._remainder_runs_batched
+
+    def spy_runs(self, geom, grid, requests):  # momwire#1752 K2's one call
+        for obs, src, q in requests:
+            seen.extend((int(i), int(src), int(q)) for i in obs)
+        return orig_runs(self, geom, grid, requests)
+
+    monkeypatch.setattr(BSplineSolver, "_remainder_runs_batched", spy_runs)
     _z, s = _solve(kw, _REMAINDER_GRADED=False)
     census = s._last_remainder_orders
     base, cap = s.n_qp_sommerfeld, _bs._REMAINDER_QP_CAP
