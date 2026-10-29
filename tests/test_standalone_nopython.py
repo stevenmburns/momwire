@@ -478,12 +478,13 @@ def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
     (grid,) = sorted((store / "exe").glob("*/trans-*.grid"))
     stamp = grid.read_bytes()
     warm = exe_run("warm")
-    # Fewer builds and a store hit, rather than none built: on Windows the
-    # below table's own file name (nine spelled-out key fields) passes
-    # MAX_PATH under pytest's deep temporary directory and is not kept, which
-    # is that store's limitation, not this one's.
-    assert warm["ground_built"] < cold["ground_built"], (cold, warm)
+    # Nothing built: since the stores name their files by the key's hash
+    # (momwire#1752) every grid of the deck is kept, Windows' MAX_PATH under
+    # pytest's deep temporary directory included.
+    assert cold["ground_built"] > 0 and warm["ground_built"] == 0, (cold, warm)
     assert warm["ground_disk"] >= 1, warm
+    names = sorted(p.name for p in (store / "exe").glob("*/*.grid"))
+    assert names and all(len(n) <= 32 for n in names), names
     assert grid.read_bytes() == stamp
     grid.write_bytes(stamp[:-9] + b"\0" * 9)
     exe_run("damaged")

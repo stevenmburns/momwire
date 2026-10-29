@@ -679,6 +679,18 @@ struct SKey {
         }
         return s;
     }
+    // The store's file for this key (momwire#1752): the hash of the key's
+    // exact bits, the key itself inside the file and checked bit for bit on
+    // read. Spelled out (`name`, still the in-process anchors' key), the nine
+    // fields made a ~160-character name, which under a deep directory passes
+    // Windows' 260-character MAX_PATH, so the table was silently not kept.
+    std::string file_name(const char *kind) const {
+        std::string kb;
+        for (double x : v) kb.append(reinterpret_cast<const char *>(&x), sizeof x);
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "%s-%016llx.grid", kind, static_cast<unsigned long long>(fnv1a(kb)));
+        return buf;
+    }
 };
 
 // MWBELOWGRID1: a filled region's every node (the eager table's files).
@@ -782,7 +794,7 @@ bool deserialize(const std::string &b, const SKey &k, Grid &g) {
 
 std::unique_ptr<Grid> store_fetch(const char *kind, const SKey &k, const Key &key) {
     if (!g_store.on) return nullptr;
-    const fs::path path = g_store.dir / (k.name(kind) + ".grid");
+    const fs::path path = g_store.dir / k.file_name(kind);
     std::ifstream in(path, std::ios::binary);
     if (!in) return nullptr;
     std::stringstream ss;
@@ -819,7 +831,7 @@ void write_atomic(const fs::path &path, const std::string &bytes) {
 
 void store_put(const char *kind, const SKey &k, const Grid &g) {
     if (!g_store.on) return;
-    const fs::path path = g_store.dir / (k.name(kind) + ".grid");
+    const fs::path path = g_store.dir / k.file_name(kind);
     write_atomic(path, serialize(k, g));
     somm_core::disk_evict(path);
 }
