@@ -3524,22 +3524,65 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
     const int64_t n_sub = static_cast<int64_t>(seg_idx.size());
     const int64_t row_bytes = static_cast<int64_t>(nd * nd) * n_sub * 16;
     const int64_t chunk = std::max<int64_t>(1, (swept_mem_mb * 1024 * 1024) / row_bytes);
+    const auto window = [&](int64_t i0, int64_t i1, int64_t j0, int64_t j1) {
+        const std::vector<size_t> rows = range(i0, i1), cols = range(j0, j1);
+        const std::vector<double> a_sub(a_row.begin() + i0, a_row.begin() + i1);
+        accumulate(offedge(real.take(rows), src.take(cols), a_sub, k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
+                           fp.ladder),
+                   i0, i1, j0, j1);
+    };
+    // `_SUBSET_SKIP_SAME_EDGE` (momwire#1752 L2): a direct block's sweep
+    // leaves each subset wire's edges' own blocks out, and the fixup adds the
+    // same-edge moments alone. `edge_lo`/`edge_hi` name each such row's edge.
+    std::vector<bool> on_subset(static_cast<size_t>(N), false);
+    for (int64_t s2 : seg_idx) on_subset[static_cast<size_t>(s2)] = true;
+    const bool skip = !mirror;
+    std::vector<int64_t> edge_lo, edge_hi;
+    if (skip) {
+        edge_lo.assign(static_cast<size_t>(N), -1);
+        edge_hi.assign(static_cast<size_t>(N), -1);
+        for (size_t w = 0; w < g.per_wire.size(); w++) {
+            if (!on_subset[static_cast<size_t>(g.seg_offsets[w])]) continue;
+            const WireGeometry &pw = g.per_wire[w];
+            for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+                const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+                for (int64_t s2 = s0; s2 < s1; s2++) {
+                    edge_lo[static_cast<size_t>(s2)] = s0;
+                    edge_hi[static_cast<size_t>(s2)] = s1;
+                }
+            }
+        }
+    }
     for (const auto &run : runs)
         for (int64_t c0 = run.first; c0 < run.second; c0 += chunk) {
             const int64_t c1 = std::min(c0 + chunk, run.second);
-            const std::vector<size_t> rows = range(c0, c1);
-            const std::vector<double> a_sub(a_row.begin() + c0, a_row.begin() + c1);
             for (const auto &srun : runs) {
-                const std::vector<size_t> cols = range(srun.first, srun.second);
-                accumulate(offedge(real.take(rows), src.take(cols), a_sub, k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
-                                   fp.ladder),
-                           c0, c1, srun.first, srun.second);
+                const int64_t j0 = srun.first, j1 = srun.second;
+                if (!skip) {
+                    window(c0, c1, j0, j1);
+                    continue;
+                }
+                // the rows in runs of one fixed edge (or of none), each run's
+                // window less that edge's own columns: before, then after
+                for (int64_t r = c0; r < c1;) {
+                    const int64_t lo = edge_lo[static_cast<size_t>(r)];
+                    if (lo < 0) {
+                        int64_t r1 = r + 1;
+                        while (r1 < c1 && edge_lo[static_cast<size_t>(r1)] < 0) r1++;
+                        window(r, r1, j0, j1);
+                        r = r1;
+                        continue;
+                    }
+                    const int64_t hi = edge_hi[static_cast<size_t>(r)];
+                    const int64_t r1 = std::min(hi, c1);
+                    if (j0 < lo) window(r, r1, j0, std::min(j1, lo));
+                    if (j1 > hi) window(r, r1, std::max(j0, hi), j1);
+                    r = r1;
+                }
             }
         }
     if (mirror) return;
     // the same-edge fixup, per edge of each subset wire (wire order)
-    std::vector<bool> on_subset(static_cast<size_t>(N), false);
-    for (int64_t s2 : seg_idx) on_subset[static_cast<size_t>(s2)] = true;
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         const WireGeometry &pw = g.per_wire[w];
         if (!on_subset[static_cast<size_t>(g.seg_offsets[w])]) continue;
@@ -3559,17 +3602,10 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
             } else {
                 A_reg = reg_moments_real(arc, a_w, k, d, fp.n_qp_same_edge, ek.on);
             }
-            const std::vector<size_t> rows = range(s0, s1);
-            const std::vector<double> a_sub(a_row.begin() + s0, a_row.begin() + s1);
-            const Block J_edge =
-                offedge(real.take(rows), real.take(rows), a_sub, k, d, fp.n_qp_pair, ek_cut(ek, &rows, &rows), fp.ladder);
-            // corr = (A_st + A_reg) - J_edge
+            // `A_st + A_reg`: the sweep left this block out (momwire#1752 L2)
             Block corr(A_reg.size(), false);
             const double *st = A_st.data();
-            for (size_t t = 0; t < corr.size(); t++) {
-                const cdouble an(st[t] + A_reg[t].real(), 0.0 + A_reg[t].imag());
-                corr[t] = cdouble(an.real() - J_edge[t].real(), an.imag() - J_edge[t].imag());
-            }
+            for (size_t t = 0; t < corr.size(); t++) corr[t] = cdouble(st[t] + A_reg[t].real(), 0.0 + A_reg[t].imag());
             accumulate(corr, s0, s1, s0, s1);
         }
     }
