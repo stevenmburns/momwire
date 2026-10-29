@@ -159,9 +159,9 @@ def test_the_fill_runs_the_orders_it_was_given(monkeypatch):
     seen = []
     orig = BSplineSolver._remainder_pair_moments
 
-    def spy(self, geom, obs, src, q, grid):
+    def spy(self, geom, obs, src, q, grid, cache=None):
         seen.extend((int(i), int(j), int(q)) for i in obs for j in src)
-        return orig(self, geom, obs, src, q, grid)
+        return orig(self, geom, obs, src, q, grid, cache)
 
     monkeypatch.setattr(BSplineSolver, "_remainder_pair_moments", spy)
     _z, s = _solve(kw, _REMAINDER_GRADED=False)
