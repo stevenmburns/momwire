@@ -65,8 +65,13 @@ PINNED = {
     # 4.2 milliohm, toward NEC-5 on all four (bspline 1.9271 -> 1.9232 and
     # 2.2120 -> 2.2078 ohm). Measured on Skylake at 94c0b16b; the razor and
     # sinusoidal rows read their pins to the last digit there.
-    "bspline": (71.1222331958 + 1.1974414978j, 71.7035730045 + 2.1820406785j),
-    "bspline-d1": (71.0004567564 + 0.9485060802j, 71.6033974267 + 1.6890268420j),
+    # momwire#1752 S1: the below/below remainder at its own order 3 moved
+    # both B-spline rows by 2.0 milliohm, toward NEC-5 on all four (bspline
+    # 1.9232 -> 1.9215 and 2.2078 -> 2.2061 ohm). Before: 71.1222331958 +
+    # 1.1974414978j / 71.7035730045 + 2.1820406785j (bspline) and
+    # 71.0004567564 + 0.9485060802j / 71.6033974267 + 1.6890268420j (d1).
+    "bspline": (71.1209327873 + 1.1959561344j, 71.7022582105 + 2.1805195725j),
+    "bspline-d1": (70.9991655466 + 0.9470253701j, 71.6020801445 + 1.6875193744j),
     # momwire#1354: the mixed-potential fill. The direct fill read
     # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
     # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
