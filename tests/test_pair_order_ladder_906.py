@@ -230,10 +230,26 @@ def test_g906_5_a_ladder_is_validated_not_reordered():
         _normalize_ladder(((2, 0),), 32)
 
 
+# The buried ladder less #906's two rungs (momwire#1752 S2): what g906-7 and
+# g921 hold the default against.
+_NEAR_RUNGS = tuple(t for t in BURIED_PAIR_ORDER_LADDER if t[0] < 2.0)
+
+
 def test_g906_6_resolution_follows_the_deck():
     buried = BSplineSolver(**hub_deck())
     assert buried.n_qp_pair == BURIED_N_QP_PAIR
-    assert buried.pair_order_ladder == BURIED_PAIR_ORDER_LADDER == ((2.0, 8), (16.0, 4))
+    # momwire#1752 S2: the near-contact rung (base 128 under a tenth of a
+    # length, 32 to 1.5, 16 to 2) below #906's two
+    assert (
+        buried.pair_order_ladder
+        == BURIED_PAIR_ORDER_LADDER
+        == (
+            (0.1, 32),
+            (1.5, 16),
+            (2.0, 8),
+            (16.0, 4),
+        )
+    )
     assert BSplineSolver(**hub_deck(pair_order_ladder=())).pair_order_ladder == ()
     assert BSplineSolver(**hub_deck(pair_order_ladder=((3, 6),))).pair_order_ladder == (
         (3.0, 6),
@@ -266,7 +282,12 @@ def test_g906_7_the_buried_hub_z_is_unmoved_by_the_default_ladder(spy, record_pr
     z_ladder, _ = BSplineSolver(**hub_deck()).compute_impedance()
     assert spy.counts[TIERED_CPLX] >= 2, spy.counts
     assert spy.counts[PLAIN_CPLX] == 0, spy.counts
-    z_flat, _ = BSplineSolver(**hub_deck(pair_order_ladder=())).compute_impedance()
+    # #906's two rungs move nothing: the reference is the same ladder without
+    # them (since momwire#1752 S2 the buried ladder carries near-contact rungs
+    # under its base 128, which a flat fill at 128 does not)
+    z_flat, _ = BSplineSolver(
+        **hub_deck(pair_order_ladder=_NEAR_RUNGS)
+    ).compute_impedance()
     record_property("z_ladder", f"{z_ladder:.9f}")
     record_property("z_flat", f"{z_flat:.9f}")
     assert abs(z_ladder - z_flat) < 1e-6, f"{z_ladder} vs {z_flat}"
@@ -522,7 +543,7 @@ def test_g921_one_fill_resolves_one_ladder_on_the_buried_path():
     geom = s._build_geometry()
     seg_l, seg_r = geom["seg_l"], geom["seg_r"]
     lad = s.pair_order_ladder
-    assert lad == ((2.0, 8), (16.0, 4))
+    assert lad == BURIED_PAIR_ORDER_LADDER
     assert s._fill_ladder(k, seg_l, seg_r, None) == lad
 
     ref = _pair_orders(seg_l, seg_r, seg_l, seg_r, k, s.n_qp_pair, lad)
@@ -566,7 +587,9 @@ def test_g921_the_buried_hub_z_is_unchanged(record_property):
     """The fix must not move the deck #906 certified on."""
     z, _ = BSplineSolver(**hub_deck()).compute_impedance()
     record_property("z_hub", f"{z:.9f}")
-    z_flat, _ = BSplineSolver(**hub_deck(pair_order_ladder=())).compute_impedance()
+    z_flat, _ = BSplineSolver(
+        **hub_deck(pair_order_ladder=_NEAR_RUNGS)
+    ).compute_impedance()
     assert abs(z - z_flat) < 1e-6, f"{z} vs {z_flat}"
 
 
@@ -664,7 +687,7 @@ def test_g920_the_radial_screens_never_split(n_radials):
     geom = s._build_geometry()
     seg_l, seg_r = geom["seg_l"], geom["seg_r"]
     lad = s.pair_order_ladder
-    assert lad == ((2.0, 8), (16.0, 4))
+    assert lad == BURIED_PAIR_ORDER_LADDER
     # the ladder reaches the kernel intact ...
     assert s._fill_ladder(s.k, seg_l, seg_r, None) == lad
     # ... and no pair disagrees with any other about the guard, so no split.
