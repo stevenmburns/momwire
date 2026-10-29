@@ -529,15 +529,16 @@ uint64_t bits(double x) {
     return u;
 }
 
-// The file for one master: its key's exact bits, in hex.
+// The file for one master: the hash of its key's exact bits (momwire#1752).
+// The file carries the key itself, which a read checks bit for bit, so a
+// collision is a miss. Spelled out, the five fields made a ~90-character
+// name, which under a deep directory passes Windows' 260-character MAX_PATH.
 fs::path master_path(const double key[5]) {
-    std::string name = "master";
-    char buf[24];
-    for (int i = 0; i < 5; i++) {
-        std::snprintf(buf, sizeof buf, "-%016llx", static_cast<unsigned long long>(bits(key[i])));
-        name += buf;
-    }
-    return g_disk.dir / (name + ".grid");
+    std::string kb;
+    for (int i = 0; i < 5; i++) put(kb, key[i]);
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "master-%016llx.grid", static_cast<unsigned long long>(fnv1a(kb)));
+    return g_disk.dir / buf;
 }
 
 std::string serialize(const double key[5], const Grid &g) {
