@@ -3389,7 +3389,7 @@ class BSplineSolver(
         k2, jj = _csr_expand(ptr, idx, J)
         return _pair_max(I[k2], jj, Q[k2], n)
 
-    def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid):
+    def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid, cache=None):
         """Segment-pair remainder moments `Jf[a, b, p, P]` over the rectangle
         `obs_segs x src_segs`, at Gauss order `q` on both sides.
 
@@ -3412,7 +3412,7 @@ class BSplineSolver(
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
 
-        def side(segs):
+        def side_of(segs):
             sl, sr = seg_l[segs], seg_r[segs]
             nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
             u_phys = h[segs][:, None] * tq[None, :]
@@ -3420,6 +3420,24 @@ class BSplineSolver(
             W = w_node[None] * np.float_power(
                 u_phys[None], np.arange(d1)[:, None, None]
             )
+            return nodes, W
+
+        # `cache` (momwire#1752 K1): one dict for a run of calls over the same
+        # geometry and grid. Every segment's nodes and weights at order q are
+        # built once and indexed (each is an elementwise product of that
+        # segment's own numbers, so a slice of the whole is the subset's
+        # value bit for bit), and so are the pseudo-bases.
+        if cache is not None:
+            key = ("side", q)
+            if key not in cache:
+                cache[key] = side_of(np.arange(seg_l.shape[0]))
+
+        def side(segs):
+            if cache is None:
+                nodes, W = side_of(segs)
+            else:
+                all_nodes, all_W = cache[("side", q)]
+                nodes, W = all_nodes[segs], all_W[:, segs]
             return nodes, np.ascontiguousarray(tang[segs], dtype=np.float64), W
 
         nodes_o, tang_o, W_o = side(obs_segs)
@@ -3427,12 +3445,23 @@ class BSplineSolver(
         gz = self.ground_z
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
 
-            def pseudo(n):
+            def pseudo_of(n):
                 loc = np.repeat(np.arange(n, dtype=np.int64), d1)[:, None]
                 loc = np.ascontiguousarray(np.broadcast_to(loc, (n * d1, d1)))
                 poly = np.zeros((n * d1, d1, d1))
                 poly[:, 0, :] = np.tile(np.eye(d1), (n, 1))
                 return loc, poly
+
+            def pseudo(n):
+                if cache is None:
+                    return pseudo_of(n)
+                key = ("pseudo", n, d1)
+                if key not in cache:
+                    cache[key] = pseudo_of(n)
+                return cache[key]
+
+            # not cached: a lazy grid may take regions between two calls
+            gargs = _sommerfeld.grid_cpp_args(grid)
 
             loc_o, p_o = pseudo(no)
             loc_s, p_s = pseudo(ns)
@@ -3449,7 +3478,7 @@ class BSplineSolver(
                 p_s,
                 float(gz),
                 float(self.k),
-                *_sommerfeld.grid_cpp_args(grid),
+                *gargs,
                 int(self._cancel_flag),
             )
             # out[a*d1 + p, b*d1 + P] -> Jf[a, b, p, P]
@@ -3544,16 +3573,17 @@ class BSplineSolver(
         grp = np.lexsort((J, key_q))
         kq, kj = key_q[grp], J[grp]
         cuts = np.flatnonzero((np.diff(kq) != 0) | (np.diff(kj) != 0)) + 1
+        run_cache = {}  # momwire#1752 K1: the runs share one geometry and grid
         for run in np.split(grp, cuts):
             self._checkpoint()
             src = J[run[:1]]
             obs = I[run]
-            lo = self._remainder_pair_moments(geom, obs, src, base, grid)
+            lo = self._remainder_pair_moments(geom, obs, src, base, grid, run_cache)
             if on_panels[run[0]]:
                 dJ[run] -= lo[:, 0]
                 continue
             q = int(Qp[run[0]])
-            hi = self._remainder_pair_moments(geom, obs, src, q, grid)
+            hi = self._remainder_pair_moments(geom, obs, src, q, grid, run_cache)
             dJ[run] = (hi - lo)[:, 0]
 
         ent = self._segment_wing_table(supp_seg, polys, n_seg)
