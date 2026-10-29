@@ -14,14 +14,20 @@
 #include "_somm_below_grid_core.h"
 #include "_somm_grid_core.h"
 #include "_somm_transmitted_six_inline.h"
+#include "_mw_times.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <random>
+#include <sstream>
 #include <tuple>
 
 namespace somm_trans {
@@ -288,6 +294,189 @@ using Key = std::tuple<double, double, double, double, double, double, double, d
 std::map<Key, std::unique_ptr<Grid>> g_grids;
 std::mutex g_mutex;
 
+// ---- the executable's persistent store (momwire#1752 T1) --------------------
+//
+// Python keeps this grid in `_somm_disk_cache` (momwire#1224); the executable
+// kept it in process only, so every run of a mixed deck (wires on both sides,
+// no crossing node) refilled it -- 80 % of `mixed_vert_over_buried8`'s exe
+// run, against a Python warm call that reads it from memory. The store is the
+// one the above masters and the below table use (`somm_core::disk_location`:
+// on only in the executables, keyed by the build's tag, the same LRU bound),
+// one file per Python key, exact bits; a file that does not read back whole
+// (magic, tag, key, sizes, checksum) is a miss and is overwritten. A hit is
+// the fill's own bytes, so the answer moves no bit.
+
+namespace fs = std::filesystem;
+
+const char MAGIC[] = "MWTRANSGRID1\n";
+
+uint64_t fnv1a(const std::string &b) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : b) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+template <class T>
+void put(std::string &b, const T &v) {
+    b.append(reinterpret_cast<const char *>(&v), sizeof(T));
+}
+
+template <class T>
+bool get(const std::string &b, size_t &at, T &v) {
+    if (at > b.size() || b.size() - at < sizeof(T)) return false;
+    std::memcpy(&v, b.data() + at, sizeof(T));
+    at += sizeof(T);
+    return true;
+}
+
+uint64_t bits(double x) {
+    uint64_t u;
+    std::memcpy(&u, &x, sizeof u);
+    return u;
+}
+
+double key_at(const Key &k, int i) {
+    const double v[9] = {std::get<0>(k), std::get<1>(k), std::get<2>(k), std::get<3>(k), std::get<4>(k),
+                         std::get<5>(k), std::get<6>(k), std::get<7>(k), std::get<8>(k)};
+    return v[i];
+}
+
+std::string file_name(const Key &k) {
+    std::string s = "trans";
+    char buf[24];
+    for (int i = 0; i < 9; i++) {
+        std::snprintf(buf, sizeof buf, "-%016llx", static_cast<unsigned long long>(bits(key_at(k, i))));
+        s += buf;
+    }
+    return s + ".grid";
+}
+
+std::string serialize(const std::string &tag, const Key &k, const Grid &g) {
+    std::string b(MAGIC);
+    put(b, static_cast<uint64_t>(tag.size()));
+    b += tag;
+    for (int i = 0; i < 9; i++) put(b, key_at(k, i));
+    const double sc[19] = {g.eps_t.real(), g.eps_t.imag(), g.k_m.real(), g.k_m.imag(), g.k2,     g.omega, g.mu,
+                           g.lam_p,        g.lam_m,        g.r_min,      g.r_cap,      g.r_max,  g.zp_min,
+                           g.zp_max,       g.lnr0,         g.dlnr,       g.th_min,     g.th0,    g.dth};
+    for (double x : sc) put(b, x);
+    put(b, g.lnz0);
+    put(b, g.dlnz);
+    put(b, g.n_zp);
+    put(b, g.n_r);
+    put(b, g.n_th);
+    put(b, static_cast<uint64_t>(g.zp_nodes.size()));
+    for (double x : g.zp_nodes) put(b, x);
+    put(b, static_cast<uint64_t>(g.vals.size()));
+    b.append(reinterpret_cast<const char *>(g.vals.data()), g.vals.size() * sizeof(cd));
+    put(b, fnv1a(b));
+    return b;
+}
+
+bool deserialize(const std::string &b, const std::string &tag, const Key &k, Grid &g) {
+    const size_t m = sizeof(MAGIC) - 1;
+    if (b.size() < m + 8 || b.compare(0, m, MAGIC) != 0) return false;
+    uint64_t sum;
+    std::memcpy(&sum, b.data() + b.size() - sizeof sum, sizeof sum);
+    if (fnv1a(b.substr(0, b.size() - sizeof sum)) != sum) return false;
+    size_t at = m;
+    uint64_t tl;
+    if (!get(b, at, tl) || tl != tag.size() || b.size() - at < tl || b.compare(at, tl, tag) != 0) return false;
+    at += tl;
+    for (int i = 0; i < 9; i++) {
+        double y;
+        if (!get(b, at, y) || bits(y) != bits(key_at(k, i))) return false;
+    }
+    double sc[19];
+    for (double &x : sc)
+        if (!get(b, at, x)) return false;
+    g.eps_t = cd(sc[0], sc[1]);
+    g.k_m = cd(sc[2], sc[3]);
+    g.k2 = sc[4];
+    g.omega = sc[5];
+    g.mu = sc[6];
+    g.lam_p = sc[7];
+    g.lam_m = sc[8];
+    g.r_min = sc[9];
+    g.r_cap = sc[10];
+    g.r_max = sc[11];
+    g.zp_min = sc[12];
+    g.zp_max = sc[13];
+    g.lnr0 = sc[14];
+    g.dlnr = sc[15];
+    g.th_min = sc[16];
+    g.th0 = sc[17];
+    g.dth = sc[18];
+    uint64_t nz, nv;
+    if (!get(b, at, g.lnz0) || !get(b, at, g.dlnz) || !get(b, at, g.n_zp) || !get(b, at, g.n_r) ||
+        !get(b, at, g.n_th) || !get(b, at, nz))
+        return false;
+    if (g.n_zp < 1 || g.n_r < 0 || g.n_th < 0 || g.n_r > (1 << 24) || g.n_th > (1 << 24) ||
+        nz != static_cast<uint64_t>(g.n_zp) || nz > (b.size() - at) / sizeof(double))
+        return false;
+    g.zp_nodes.resize(static_cast<size_t>(nz));
+    for (double &x : g.zp_nodes)
+        if (!get(b, at, x)) return false;
+    if (!get(b, at, nv)) return false;
+    const uint64_t want = static_cast<uint64_t>(g.n_zp) * 5u * static_cast<uint64_t>(g.n_r) *
+                          static_cast<uint64_t>(g.n_th);
+    if (nv != want || nv > (b.size() - at) / sizeof(cd)) return false;
+    g.vals.resize(static_cast<size_t>(nv));
+    std::memcpy(g.vals.data(), b.data() + at, static_cast<size_t>(nv) * sizeof(cd));
+    at += static_cast<size_t>(nv) * sizeof(cd);
+    return at + sizeof(uint64_t) == b.size();
+}
+
+std::unique_ptr<Grid> store_fetch(const Key &k) {
+    fs::path dir;
+    std::string tag;
+    if (!somm_core::disk_location(dir, tag)) return nullptr;
+    const fs::path path = dir / file_name(k);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return nullptr;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::unique_ptr<Grid> g(new Grid());
+    if (!deserialize(ss.str(), tag, k, *g)) return nullptr;
+    std::error_code ec;
+    fs::last_write_time(path, fs::file_time_type::clock::now(), ec);  // LRU
+    return g;
+}
+
+void store_put(const Key &k, const Grid &g) {
+    fs::path dir;
+    std::string tag;
+    if (!somm_core::disk_location(dir, tag)) return;
+    const fs::path path = dir / file_name(k);
+    const std::string bytes = serialize(tag, k, g);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec) return;
+    std::random_device rd;
+    char tmpname[64];
+    std::snprintf(tmpname, sizeof tmpname, ".%08x%08x.tmp", rd(), rd());
+    const fs::path tmp = dir / (path.filename().string() + tmpname);
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return;
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!out) {
+            out.close();
+            fs::remove(tmp, ec);
+            return;
+        }
+    }
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        return;
+    }
+    somm_core::disk_evict(path);
+}
+
 }  // namespace
 
 const Grid &get_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
@@ -299,8 +488,16 @@ const Grid &get_grid(cd eps_t, double k2, double r_max, double zp_min, double zp
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = g_grids.find(key);
     if (it != g_grids.end()) return *it->second;
-    auto g = std::make_unique<Grid>(
-        make_grid(eps_t, k2, rb_wl * lam_p, zp_min, zp_max, omega, mu, true, r_min_b, cancel_flag));
+    const mw_times::Scope timed(mw_times::ground);
+    std::unique_ptr<Grid> g = store_fetch(key);
+    if (g != nullptr) {
+        mw_times::count_disk();
+    } else {
+        mw_times::count_built();
+        g = std::make_unique<Grid>(
+            make_grid(eps_t, k2, rb_wl * lam_p, zp_min, zp_max, omega, mu, true, r_min_b, cancel_flag));
+        store_put(key, *g);
+    }
     const Grid &ref = *g;
     g_grids.emplace(key, std::move(g));
     return ref;
