@@ -173,7 +173,12 @@ DEFAULT_PAIR_ORDER_LADDER = ((16.0, 4),)
 # 8.7e-2), and from 1.5 every deck measured reads its 32-point answer. Pairs
 # past two lengths are #906's ladder, unchanged. Was ((2.0, 8), (16.0, 4))
 # under the base 32.
-BURIED_PAIR_ORDER_LADDER = ((0.1, 32), (1.5, 16), (2.0, 8), (16.0, 4))
+# momwire#1752 H2 (proposed): the order-4 rung from 4 lengths instead of 16.
+# #906 measured order 4 at 6e-10 per pair over [4, 16); on the 15-deck set
+# Z_in moves at most 2e-10 of max|Z| and no deck's error against q = 256
+# moves at the second digit, while the hubs' mid-range cross-radial pairs
+# (the bulk of their fill) drop from 64 to 16 kernel reads.
+BURIED_PAIR_ORDER_LADDER = ((0.1, 32), (1.5, 16), (2.0, 8), (4.0, 4))
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
