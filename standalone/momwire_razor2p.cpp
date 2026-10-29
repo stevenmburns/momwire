@@ -111,6 +111,10 @@
 #include "blas.h"
 
 extern "C" void omp_set_num_threads(int);
+#if defined(__linux__)
+// The static OpenBLAS's pool teardown (a missing one fails the link).
+extern "C" int MWX(blas_thread_shutdown_)(void);
+#endif
 
 namespace {
 
@@ -336,6 +340,19 @@ int threads_for(long long n_basis) {
 // its numpy and scipy read.
 void set_threads(int n, bool omp) {
     MWX(openblas_set_num_threads)(n);
+#if defined(__linux__)
+    // Growing the pool starts its new server threads AWAKE: each spins for
+    // OpenBLAS's thread timeout (2^28 cycles, ~70 ms) before it sleeps, BLAS
+    // call or not, so on a short deck they compete with the OpenMP team for
+    // the whole run (perf-1028: fx_d1_buried_dipole's near field at 4
+    // threads, 60 ms against Python's 36, with blas_thread_server at 43 % of
+    // the samples and no BLAS call made). Shut the pool down instead: the
+    // first threaded BLAS call starts it again at the same count
+    // (`exec_blas` -> `blas_thread_init`), which is how numpy's pool sits in
+    // a warm Python process -- asleep until asked. The thread count, and so
+    // every partition and every bit, is unchanged.
+    if (n > 1) MWX(blas_thread_shutdown_)();
+#endif
     if (omp) omp_set_num_threads(n);
     set_env("OPENBLAS_NUM_THREADS", std::to_string(n));
     set_env("OMP_NUM_THREADS", std::to_string(n));
