@@ -217,6 +217,11 @@ _HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_CPLX_TIERED_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_cplx_tiered"
 )
+# momwire#1752 L4: the same-edge smooth-kernel moments at a complex k. Read
+# at call time, so a test can take the numpy reference by setting it False.
+_HAVE_BSPLINE_REG_CPLX_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_reg_moments_bspline_cplx"
+)
 # READ FROM THE BINARY, not restated here (momwire#999 step 3). The extension
 # module exports the degree its dispatch actually covers, so this cannot drift
 # from the kernels the way it did between #883 and #999: #883 raised the
@@ -1132,6 +1137,15 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     # the a → 0, kR → 0 limit; no quadrature pathology. The remainder is
     # spelled cancellation-free (momwire#799) — the literal subtraction returns
     # its real part to an ABSOLUTE ε, which is 7e-11 relative at kR = 1e-3.
+    if in_medium and not windowed and _HAVE_BSPLINE_REG_CPLX_ACCEL:
+        # momwire#1752 L4: the kernel and the einsum below, in C++ and in
+        # parallel, the same bytes (the executables' fill calls the same
+        # kernel, so the exe audits hold the two to each other).
+        return _acc.seg_seg_reg_moments_bspline_cplx(
+            np.ascontiguousarray(R, dtype=np.float64),
+            np.ascontiguousarray(wu_pow, dtype=np.float64),
+            complex(k),
+        )
     G_reg = _reg_cplx_G(k, R) if in_medium else _expm1_neg_jkR(k, R) / (4 * np.pi * R)
     G_block = G_reg.reshape(n_row, n_qp, N, n_qp)
     # J_reg[p, P, i, j] = sum_{q, r} wu_row[p, i, q] G[i, q, j, r] wu_pow[P, j, r]

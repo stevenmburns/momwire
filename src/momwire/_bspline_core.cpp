@@ -31,6 +31,7 @@
 // Explicit fused multiply-adds, since the build no longer contracts on its
 // own (momwire#1194).
 #include "_fma_inline.h"
+#include "_libm_complex_inline.h"
 
 #include "_mw_core.h"
 #include "_mw_nd.h"
@@ -6651,6 +6652,102 @@ toeplitz_gather_rows(
     return out;
 }
 
+// `_seg_seg_reg_moments_from_geometry` at an in-medium (complex) k, on the
+// square geometry: `G = expm1_neg_jkR(k, R) / (4 pi R)` element by element
+// (libm's expm1, cos, sin, exp -- each sine and cosine its own call, as
+// numpy's are; `re - 1j * im`; numpy's division by the real denominator,
+// whose zero ratio makes every product exact, so contraction cannot move it)
+// and then `einsum("piq,iqjr,Pjr->pPij", wu, G, wu)` as numpy's iterator
+// sums it: each output's (q, r) terms ((w G.re) v, (w G.im) v), r innermost
+// from zero and each q's partial added to the output in turn -- one run over
+// (q, r) when the source axis has extent 1, which the iterator drops.
+//
+// Shared by the extension (momwire#1752 L4: the numpy einsum it replaces was
+// a quarter of a long buried wire's Python fill) and by the executables' fill
+// (`_bspline_fill_core`'s `reg_moments_cplx`), so the two cannot part. R is
+// one edge's nodes against themselves and G a function of R alone, and
+// R[u][v] is R[v][u] to the bit (a difference and its negation square alike),
+// so each unordered node pair's G is evaluated once and copied to its mirror.
+// Rows and outputs are independent, so the threads move no bit.
+static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    std::complex<double> k) {
+    if (wu_pow.ndim() != 3 || R_arr.ndim() != 2)
+        throw std::runtime_error("seg_seg_reg_moments_bspline_cplx: R (nq, nq), wu_pow (nd, n, q)");
+    const size_t nd = (size_t)wu_pow.shape(0), n = (size_t)wu_pow.shape(1), q = (size_t)wu_pow.shape(2);
+    const size_t nq = n * q;
+    if ((size_t)R_arr.shape(0) != nq || (size_t)R_arr.shape(1) != nq)
+        throw std::runtime_error("seg_seg_reg_moments_bspline_cplx: R must be (n q, n q)");
+    const double *Rp = R_arr.data();
+    const double *wu = wu_pow.data();
+    py::array_t<std::complex<double>> out({nd, nd, n, n});
+    std::complex<double> *op = out.mutable_data();
+    {
+        py::gil_scoped_release release;
+        std::vector<double> Gr(nq * nq), Gi(nq * nq);
+        const double four_pi = 4.0 * 3.141592653589793;
+        const double kr = k.real(), ki = k.imag();
+#pragma omp parallel for schedule(dynamic, 16)
+        for (long long uu = 0; uu < (long long)nq; ++uu) {
+            const size_t u = (size_t)uu;
+            for (size_t v = u; v < nq; v++) {
+                const size_t t = u * nq + v;
+                const double r = Rp[t];
+                const double a = ki * r, y = kr * r;
+                const double half = mw_libm_c::rsin(0.5 * y);
+                double re = std::expm1(a) * mw_libm_c::rcos(y);
+                re = re - 2.0 * half * half;
+                const double im = std::exp(a) * mw_libm_c::rsin(y);
+                // numpy's CDOUBLE_divide by (4 pi r, 0): the real-|b| branch
+                const double in2r = four_pi * r;
+                const double rat = 0.0 / in2r;
+                const double scl = 1.0 / (in2r + 0.0 * rat);
+                const double in1i = 0.0 - im;
+                const double gr = (re + in1i * rat) * scl, gi = (in1i - re * rat) * scl;
+                Gr[t] = gr;
+                Gi[t] = gi;
+                Gr[v * nq + u] = gr;
+                Gi[v * nq + u] = gi;
+            }
+        }
+        const long long n_out = (long long)(nd * nd * n);
+#pragma omp parallel for schedule(dynamic, 4)
+        for (long long o = 0; o < n_out; ++o) {
+            const size_t p = (size_t)o / (nd * n), P = ((size_t)o / n) % nd, i = (size_t)o % n;
+            for (size_t j = 0; j < n; j++) {
+                double ar = 0.0, ai = 0.0;
+                if (n == 1) {
+                    for (size_t a = 0; a < q; a++)
+                        for (size_t b2 = 0; b2 < q; b2++) {
+                            const double w = wu[(p * n + i) * q + a];
+                            const double v = wu[(P * n + j) * q + b2];
+                            const size_t t = (i * q + a) * nq + j * q + b2;
+                            ar += (w * Gr[t]) * v;
+                            ai += (w * Gi[t]) * v;
+                        }
+                } else {
+                    for (size_t a = 0; a < q; a++) {
+                        const double w = wu[(p * n + i) * q + a];
+                        double lr = 0.0, li = 0.0;
+                        for (size_t b2 = 0; b2 < q; b2++) {
+                            const double v = wu[(P * n + j) * q + b2];
+                            const size_t t = (i * q + a) * nq + j * q + b2;
+                            lr += (w * Gr[t]) * v;
+                            li += (w * Gi[t]) * v;
+                        }
+                        ar += lr;
+                        ai += li;
+                    }
+                }
+                op[((p * nd + P) * n + i) * n + j] = std::complex<double>(ar, ai);
+            }
+        }
+    }
+    return out;
+}
+
 // `R = s_row[:, None] - s_col[None, :]; R *= R; R += a2; sqrt(R)`, as
 // `_seg_seg_reg_geometry` builds it in place: the difference, its square,
 // plus `a * a` (the caller passes that product, formed as numpy formed it),
@@ -7497,6 +7594,13 @@ py::array_t<double> reg_distance_table(
     py::array_t<double, py::array::c_style | py::array::forcecast> s_col,
     double a2) {
     return ::reg_distance_table(s_row, s_col, a2);
+}
+
+py::array_t<std::complex<double>> seg_seg_reg_moments_bspline_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    std::complex<double> k) {
+    return ::seg_seg_reg_moments_bspline_cplx(R, wu_pow, k);
 }
 
 py::array_t<std::complex<double>> same_edge_corr_combine(
