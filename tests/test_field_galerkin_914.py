@@ -121,13 +121,17 @@ DECKS = {
 # _SOMM_BELOW_SPACING_FILL`) moved them again, by 1.5e-5, 6.3e-8 and 1.3e-5
 # relative: hub 148.634045567−30.463037886j, crossing 169.775596898−
 # 82.280023587j, screen12 105.070030090−54.251084913j before it.
+# The below/below remainder's own order 3 (momwire#1752 S1, Steve 10-28; the
+# cross block keeps 6) moved them by 1.2e-5, 4.6e-6 and 1.6e-5 relative:
+# hub 148.632121115−30.461875786j, crossing 169.775598952−82.280012977j,
+# screen12 105.068535264−54.251499350j before it.
 Z_PINNED = {
-    "hub": 148.632121115 - 30.461875786j,
-    "crossing": 169.775598952 - 82.280012977j,
+    "hub": 148.631808530 - 30.460150040j,
+    "crossing": 169.775292960 - 82.279288172j,
     # Measured on the NUMPY path at f537080 and asserted equal on both here;
     # this deck is new with these tests, so the pin is a same-commit record of
     # the reference's answer rather than a value inherited from before it.
-    "screen12": 105.068535264 - 54.251499350j,
+    "screen12": 105.067748256 - 54.249817230j,
 }
 
 
