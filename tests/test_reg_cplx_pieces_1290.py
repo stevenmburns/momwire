@@ -35,6 +35,8 @@ def _bits(a):
 
 
 def _moments(n_seg, n_qp, monkeypatch, pieces, rows=None):
+    # the numpy route (momwire#1752 L4 serves the square geometry in C++)
+    monkeypatch.setattr(bk, "_HAVE_BSPLINE_REG_CPLX_ACCEL", False)
     monkeypatch.setattr(bk, "_REG_CPLX_PIECES", pieces)
     ends = np.cumsum(np.r_[0.0, 0.05 + 0.01 * np.sin(np.arange(n_seg))])
     geo = bk._seg_seg_reg_geometry(ends, 1e-3, 2, n_qp, rows=rows)
@@ -72,7 +74,10 @@ def test_g1290_p2_the_thread_count_does_not_reach_the_answer(monkeypatch):
 
 @pytest.mark.slow
 def test_g1290_p3_the_buried_z_with_and_without_the_pieces(monkeypatch):
-    def fill(pieces):
+    def fill(pieces, accel=False):
+        # the numpy route the pieces live on; since momwire#1752 L4 the
+        # square geometry is the C++ kernel's when the extension has it
+        monkeypatch.setattr(bk, "_HAVE_BSPLINE_REG_CPLX_ACCEL", accel)
         monkeypatch.setattr(bk, "_REG_CPLX_PIECES", pieces)
         ran = {"pieces": 0}
         real = bk._reg_cplx_pool
@@ -96,3 +101,7 @@ def test_g1290_p3_the_buried_z_with_and_without_the_pieces(monkeypatch):
     Zw, n_w = fill(False)
     assert n_p > 0 and n_w == 0, (n_p, n_w)
     assert np.array_equal(_bits(Zp), _bits(Zw))
+    if bk._acc is not None and hasattr(bk._acc, "seg_seg_reg_moments_bspline_cplx"):
+        Zc, n_c = fill(True, accel=True)  # momwire#1752 L4: the same bits again
+        assert n_c == 0, n_c
+        assert np.array_equal(_bits(Zc), _bits(Zp))
