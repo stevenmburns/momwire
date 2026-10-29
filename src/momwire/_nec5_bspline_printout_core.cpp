@@ -60,8 +60,9 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     // (`BURIED_N_QP_PAIR`, `BURIED_PAIR_ORDER_LADDER`)
     std::vector<cd> Z;
     if (fr.buried) {
-        fp.n_qp_pair = 32;
-        fp.ladder = {{2.0, 8}, {16.0, 4}};
+        // `BURIED_N_QP_PAIR` / `BURIED_PAIR_ORDER_LADDER` (momwire#1752 S2)
+        fp.n_qp_pair = 128;
+        fp.ladder = {{0.1, 32}, {1.5, 16}, {2.0, 8}, {16.0, 4}};
         try {
             Z = bspline::fill_buried(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, fr.ground_z,
                                      fr.ground_eps_r, fr.ground_sigma, 3, 256, np);

@@ -4972,11 +4972,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (`DEFAULT_*` above, `BURIED_*` in the medium).
         """
         from .bspline import (
-            BURIED_N_QP_PAIR,
-            BURIED_PAIR_ORDER_LADDER,
             DEFAULT_N_QP_PAIR,
             DEFAULT_PAIR_ORDER_LADDER,
         )
+
+        # bspline's buried base order and ladder until momwire#1752 S2 gave
+        # bs2 its near-contact rung; this fill keeps them (its C++ twin's
+        # `BURIED_N_QP_PAIR` and ladder)
+        BURIED_N_QP_PAIR = 32
+        BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
 
         N = int(geom["n_segs"])
         n_basis = N + self._n_extra_cols()

@@ -116,7 +116,15 @@ from ._vec3 import norm3, dot3
 # Two constants because there are two fills; see that property for the
 # measurements and for why the buried order is not applied everywhere.
 DEFAULT_N_QP_PAIR = 8
-BURIED_N_QP_PAIR = 32
+# The buried base order serves only the pairs under the ladder's first rung
+# (`BURIED_PAIR_ORDER_LADDER`): since momwire#1752 S2 (Steve's option (b),
+# 10-29), the NEAR-CONTACT pairs, centre distance under a tenth of the longer
+# segment -- in practice a buried wire's own image where it climbs to a
+# crossing node at the surface. 32 (momwire#760) was not converged there:
+# fx_slant_base_source read 86.905-17.784j at 32, 86.653-18.783j at 64,
+# 86.622-18.923j at 128 and 86.6215-18.9278j at 256/512, a 1.18 ohm
+# quadrature error against a 0.52 ohm mesh error. 128 lands within 0.004 ohm.
+BURIED_N_QP_PAIR = 128
 
 # The distance-adaptive pair-order LADDER (momwire#906), resolved per deck by
 # `BSplineSolver.pair_order_ladder` alongside `n_qp_pair`: a pair whose centre
@@ -157,7 +165,15 @@ BURIED_N_QP_PAIR = 32
 # answer is CLOSER to flat-32 than the untiered one (1.4e-12 against
 # 4.4e-12), so this is noise, not a bias.
 DEFAULT_PAIR_ORDER_LADDER = ((16.0, 4),)
-BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
+# momwire#1752 S2 (option (b)): above the near-contact rung the buried
+# fill keeps today's 32 out to 1.5 segment lengths and takes 16 from 1.5 to
+# 2. The 16 rung cannot start lower: from 1.0 it moved the dense-hub test
+# screens 0.01 ohm off their q = 128 answers (screen12: 1.0e-2 against 1.5e-4
+# at 32, its mesh error 7.2e-3; the 4-radial hub 9.6e-3 against 7.8e-5, mesh
+# 8.7e-2), and from 1.5 every deck measured reads its 32-point answer. Pairs
+# past two lengths are #906's ladder, unchanged. Was ((2.0, 8), (16.0, 4))
+# under the base 32.
+BURIED_PAIR_ORDER_LADDER = ((0.1, 32), (1.5, 16), (2.0, 8), (16.0, 4))
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -1307,7 +1323,8 @@ class BSplineSolver(
         whose centre distance over the longer segment meets a tier's ratio
         takes that tier's order; the rest pay `n_qp_pair`. Resolved from the
         deck like `n_qp_pair` when None: buried decks get
-        `BURIED_PAIR_ORDER_LADDER` = ((2, 8), (16, 4)), free-space decks
+        `BURIED_PAIR_ORDER_LADDER` = ((0.1, 32), (1.5, 16), (2, 8), (16, 4))
+        under the base 128 (momwire#1752 S2), free-space decks
         `DEFAULT_PAIR_ORDER_LADDER` = ((16, 4),) since momwire#907 — one tier
         there, because the base order 8 already IS the order-8 rung. Tiers at
         or above the base order are dropped, so an explicit `n_qp_pair=8`
