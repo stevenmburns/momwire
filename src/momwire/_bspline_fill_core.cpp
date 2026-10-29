@@ -3287,21 +3287,6 @@ namespace {
 
 constexpr double PI_ = 3.141592653589793;
 
-// numpy's complex division (`CDOUBLE_divide`, Smith's)
-inline cdouble np_cdiv(cdouble a, cdouble b) {
-    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
-    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
-    if (in2r_abs >= in2i_abs) {
-        if (in2r_abs == 0 && in2i_abs == 0) return cdouble(in1r / in2r_abs, in1i / in2i_abs);
-        const double rat = in2i / in2r;
-        const double scl = 1.0 / (in2r + in2i * rat);
-        return cdouble((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
-    }
-    const double rat = in2r / in2i;
-    const double scl = 1.0 / (in2i + in2r * rat);
-    return cdouble((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
-}
-
 // `_seg_seg_reg_moments(arc, a, k, max_d, n_qp)` at a complex k (the lower
 // medium's): numpy's branch. R from `reg_distance_table`, the kernel
 // `expm1_neg_jkR(k, R) / (4 pi R)` element by element (libm's expm1, cos,
@@ -3327,7 +3312,6 @@ Block reg_moments_cplx(const std::vector<double> &arc, double a_w, cdouble k, in
     }
     const CF sq = borrow(s_q, {static_cast<nd::ssize_t>(n * q)});
     const nd::array_t<double> R = reg_distance_table(sq, sq, a_w * a_w);
-    const double *Rp = R.data();
     std::vector<double> wu(static_cast<size_t>(nd) * n * q);
     for (int p = 0; p < nd; p++)
         for (size_t i = 0; i < n * q; i++) {
@@ -3335,52 +3319,10 @@ Block reg_moments_cplx(const std::vector<double> &arc, double a_w, cdouble k, in
             const double up = p == 0 ? 1.0 : p == 1 ? u : p == 2 ? u * u : std::pow(u, static_cast<double>(p));
             wu[static_cast<size_t>(p) * n * q + i] = w_q[i] * up;
         }
-    const size_t nq = n * q;
-    std::vector<double> Gr(nq * nq), Gi(nq * nq);
-    const double four_pi = 4.0 * PI_;
-    for (size_t t = 0; t < nq * nq; t++) {
-        const double r = Rp[t];
-        const double a = k.imag() * r, y = k.real() * r;
-        const double half = std::sin(0.5 * y);
-        double re = std::expm1(a) * std::cos(y);
-        re = re - 2.0 * half * half;
-        const double im = std::exp(a) * std::sin(y);
-        const cdouble g = np_cdiv(cdouble(re, 0.0 - im), cdouble(four_pi * r, 0.0));
-        Gr[t] = g.real();
-        Gi[t] = g.imag();
-    }
-    Block out(static_cast<size_t>(nd * nd) * n * n, false);
-    for (int p = 0; p < nd; p++)
-        for (int P = 0; P < nd; P++)
-            for (size_t i = 0; i < n; i++)
-                for (size_t j = 0; j < n; j++) {
-                    double ar = 0.0, ai = 0.0;
-                    if (n == 1) {
-                        for (size_t a = 0; a < q; a++)
-                            for (size_t b2 = 0; b2 < q; b2++) {
-                                const double w = wu[(static_cast<size_t>(p) * n + i) * q + a];
-                                const double v = wu[(static_cast<size_t>(P) * n + j) * q + b2];
-                                const size_t t = (i * q + a) * nq + j * q + b2;
-                                ar += (w * Gr[t]) * v;
-                                ai += (w * Gi[t]) * v;
-                            }
-                    } else {
-                        for (size_t a = 0; a < q; a++) {
-                            const double w = wu[(static_cast<size_t>(p) * n + i) * q + a];
-                            double lr = 0.0, li = 0.0;
-                            for (size_t b2 = 0; b2 < q; b2++) {
-                                const double v = wu[(static_cast<size_t>(P) * n + j) * q + b2];
-                                const size_t t = (i * q + a) * nq + j * q + b2;
-                                lr += (w * Gr[t]) * v;
-                                li += (w * Gi[t]) * v;
-                            }
-                            ar += lr;
-                            ai += li;
-                        }
-                    }
-                    out[((static_cast<size_t>(p) * nd + P) * n + i) * n + j] = cdouble(ar, ai);
-                }
-    return out;
+    // the kernel and the einsum: the extension's own (momwire#1752 L4)
+    const CF Rv = CF::borrow(R.buffer());
+    const CF wua = borrow(wu, {nd, static_cast<nd::ssize_t>(n), static_cast<nd::ssize_t>(q)});
+    return Block::adopt(seg_seg_reg_moments_bspline_cplx(Rv, wua, k));
 }
 
 // `_seg_seg_reg_moments(arc, a, k, max_d, n_qp, ek=...)` at a real k: the

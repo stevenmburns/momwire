@@ -473,6 +473,16 @@ reg_distance_table(
 }
 
 static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    std::complex<double> k) {
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    return ndb::out(mw::bspline::seg_seg_reg_moments_bspline_cplx(ndb::in(R), ndb::in(wu_pow), k));
+}
+
+static py::array_t<std::complex<double>>
 same_edge_corr_combine(
     py::array_t<double, py::array::c_style | py::array::forcecast> A_st,
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> A_reg,
@@ -1256,6 +1266,11 @@ void register_bspline(py::module_ &m) {
           py::arg("s_row"), py::arg("s_col"), py::arg("a2"),
           "sqrt((s_row[:, None] - s_col[None, :])**2 + a2), numpy's in-place "
           "order, in parallel; bit-identical (momwire#1441).");
+    m.def("seg_seg_reg_moments_bspline_cplx", &seg_seg_reg_moments_bspline_cplx,
+          py::arg("R"), py::arg("wu_pow"), py::arg("k"),
+          "_seg_seg_reg_moments_from_geometry at a complex k on the square "
+          "geometry: numpy's expm1_neg_jkR / (4 pi R) and its einsum, bit for "
+          "bit, in parallel (momwire#1752).");
     m.def("same_edge_corr_combine", &same_edge_corr_combine,
           py::arg("A_st"), py::arg("A_reg"), py::arg("J"),
           "(A_st + A_reg) - J with numpy's float-to-complex promotion, in "
