@@ -3775,6 +3775,12 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     std::vector<double> obs_a, t_a, W_a, obs_b, t_b, W_b;
     buried_nodes(g, a_idx, q, nd, obs_a, t_a, W_a);
     buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
+    // the below/below remainder's own order (`N_QP_BELOW_REMAINDER`,
+    // momwire#1752 S1); its nodes stay out of the plan, inside the base
+    // nodes' hull (`plan_buried`)
+    const int64_t q_bb = std::max<int64_t>(n_qp_sommerfeld, 3);
+    std::vector<double> obs_bb, t_bb, W_bb;
+    buried_nodes(g, b_idx, q_bb, nd, obs_bb, t_bb, W_bb);
     // the cross block's own order (`near_q_factor` over `cross_pair_
     // separation`, momwire#1004): the raised nodes join the plan
     int64_t q_x = q;
@@ -3805,7 +3811,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
                 sl.push_back(g.seg_l[3 * static_cast<size_t>(s2) + c]);
                 sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
             }
-        raised_pairs_on(sl, sr, static_cast<int64_t>(b_idx.size()), gz, q, 1.0, 0.0, np, bbI, bbJ, bbQ);
+        raised_pairs_on(sl, sr, static_cast<int64_t>(b_idx.size()), gz, q_bb, 1.0, 0.0, np, bbI, bbJ, bbQ);
         // `_same_wire`: only the pairs along one wire are raised
         const auto wire_of = [&](int64_t s2) {
             return static_cast<int64_t>(std::upper_bound(g.seg_offsets.begin(), g.seg_offsets.end(), s2) -
@@ -3892,7 +3898,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         if (bbI.empty()) throw FrontNotPorted("buried-grazing-refusal");
         std::vector<int64_t> hI, hJ, hQ;
         for (size_t t = 0; t < bbI.size(); t++)
-            if (bbQ[t] / 2 > q) {
+            if (bbQ[t] / 2 > q_bb) {
                 hI.push_back(bbI[t]);
                 hJ.push_back(bbJ[t]);
                 hQ.push_back(bbQ[t] / 2);
@@ -4064,30 +4070,31 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     rem.gz = gz;
     rem.k_p = bm.k_p;
     rem.k_m = bm.k_m;
+    const size_t QB = static_cast<size_t>(q_bb);
     const int64_t n_b = static_cast<int64_t>(b_idx.size());
     // `_FIELD_GALERKIN_SYM_CHUNKS` (momwire#1752 L1): at least 8 observer
     // chunks, so the mirror serves the upper rectangle on a small deck too
     const int64_t chunk = std::min<int64_t>(
-        std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q * q, 1)),
+        std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q_bb * q_bb, 1)),
         std::max<int64_t>(1, (n_b + 7) / 8));
     for (int64_t i0 = 0; i0 < n_b; i0 += chunk) {
         const int64_t i1 = std::min(i0 + chunk, n_b);
-        const size_t m = static_cast<size_t>(i1 - i0) * Q, S = static_cast<size_t>(n_b - i0) * Q;
-        rem.src.assign(obs_b.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q, obs_b.end());
-        rem.t_src.assign(t_b.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q, t_b.end());
+        const size_t m = static_cast<size_t>(i1 - i0) * QB, S = static_cast<size_t>(n_b - i0) * QB;
+        rem.src.assign(obs_bb.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q_bb, obs_bb.end());
+        rem.t_src.assign(t_bb.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q_bb, t_bb.end());
         rem.d_src.resize(S);
         for (size_t j = 0; j < S; j++) rem.d_src[j] = gz - rem.src[3 * j + 2];
         std::vector<cdouble> proj(m * S);
-        rem.project(&obs_b[3 * static_cast<size_t>(i0) * Q], &t_b[3 * static_cast<size_t>(i0) * Q],
+        rem.project(&obs_bb[3 * static_cast<size_t>(i0) * QB], &t_bb[3 * static_cast<size_t>(i0) * QB],
                     static_cast<std::ptrdiff_t>(m), proj.data());
-        std::vector<double> W_rows(static_cast<size_t>(nd) * (i1 - i0) * Q), W_cols(static_cast<size_t>(nd) * S);
+        std::vector<double> W_rows(static_cast<size_t>(nd) * (i1 - i0) * QB), W_cols(static_cast<size_t>(nd) * S);
         for (int p = 0; p < nd; p++) {
-            std::copy(W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q,
-                      W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i1) * q,
-                      W_rows.begin() + static_cast<std::ptrdiff_t>(p) * (i1 - i0) * q);
-            std::copy(W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q,
-                      W_b.begin() + (static_cast<std::ptrdiff_t>(p) + 1) * n_b * q,
-                      W_cols.begin() + static_cast<std::ptrdiff_t>(p) * (n_b - i0) * q);
+            std::copy(W_bb.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q_bb,
+                      W_bb.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i1) * q_bb,
+                      W_rows.begin() + static_cast<std::ptrdiff_t>(p) * (i1 - i0) * q_bb);
+            std::copy(W_bb.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q_bb,
+                      W_bb.begin() + (static_cast<std::ptrdiff_t>(p) + 1) * n_b * q_bb,
+                      W_cols.begin() + static_cast<std::ptrdiff_t>(p) * (n_b - i0) * q_bb);
         }
         std::vector<int64_t> pos_s(pos.size()), pos_m(pos.size());
         for (size_t t = 0; t < pos.size(); t++) {
@@ -4104,7 +4111,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         args.ps = pos_s.data();
         args.P = nd;
         args.nc = i1 - i0;
-        args.q = q;
+        args.q = q_bb;
         args.ns = n_b - i0;
         args.nb = n_basis;
         args.A = nd;
@@ -4125,7 +4132,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         mw_fg::assemble(args);
     }
     if (!bbI.empty())
-        below_pair_correction(Z, g, b, b_idx, bbI, bbJ, bbQ, q, nd, obs_b, t_b, W_b, rem);
+        below_pair_correction(Z, g, b, b_idx, bbI, bbJ, bbQ, q_bb, nd, obs_bb, t_bb, W_bb, rem);
     // the two transmitted blocks (`compute_Z_operator_buried`'s mixed
     // branch): `_field_galerkin_block` over the below->above table, observer
     // chunks of `_FIELD_GALERKIN_CHUNK_ELEMS / (n_src q q)`, each upward pair

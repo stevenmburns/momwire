@@ -6668,6 +6668,22 @@ class BSplineSolver(
         W = w_node[None] * np.float_power(u_phys[None], np.arange(d + 1)[:, None, None])
         return nodes, tang, W
 
+    def _buried_remainder_nodes(self, geom, seg_idx):
+        """`_buried_nodes` at the below/below remainder's own order,
+        `max(n_qp_sommerfeld, N_QP_BELOW_REMAINDER)` (momwire#1752 S1): the
+        cross block keeps `_n_qp_buried_field`'s 6."""
+        q = max(int(self.n_qp_sommerfeld), _below_interface.N_QP_BELOW_REMAINDER)
+        nodes, tang, u_phys, w_node = _below_interface.field_nodes(
+            geom["seg_l"][seg_idx],
+            geom["seg_r"][seg_idx],
+            geom["tangents"][seg_idx],
+            geom["h_per_seg"][seg_idx],
+            q,
+        )
+        d = self.degree
+        W = w_node[None] * np.float_power(u_phys[None], np.arange(d + 1)[:, None, None])
+        return nodes, tang, W
+
     def _field_galerkin_block(
         self,
         supp_seg,
@@ -7398,6 +7414,7 @@ class BSplineSolver(
                 serve_plan_fn=self._buried_serve_plan,
                 below_pairs_fn=self._below_remainder_pairs,
                 ground_z=self.ground_z,
+                remainder_nodes=self._buried_remainder_nodes,
             )
         except (ValueError, NotImplementedError) as exc:
             return str(exc)
@@ -7444,6 +7461,7 @@ class BSplineSolver(
                 apply_loading=self._apply_loading,
                 compact_ok=_HAVE_WINDOWED_ROW_OF and _HAVE_FIELD_GALERKIN_ROW_OF,
                 below_remainder_pairs=self._below_remainder_pairs,
+                remainder_nodes=self._buried_remainder_nodes,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,

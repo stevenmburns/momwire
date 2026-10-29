@@ -197,9 +197,10 @@ def test_g912_5_the_decks_z_are_unchanged(solved, record_property):
     pinned = {
         # Printed by these decks on main 624897f, before the edit; re-pinned
         # by momwire#956 (k²V + ∂z′W and the TW end term) and again by the
-        # below/below fill spacing — see test_field_galerkin_914.Z_PINNED for
-        # the before/after.
-        "hub": 148.632121115 - 30.461875786j,
-        "crossing": 169.775598952 - 82.280012977j,
+        # below/below fill spacing, and by the below/below remainder's order 3
+        # (momwire#1752 S1) — see test_field_galerkin_914.Z_PINNED for the
+        # before/after.
+        "hub": 148.631808530 - 30.460150040j,
+        "crossing": 169.775292960 - 82.279288172j,
     }[name]
     assert abs(z - pinned) < 5e-7, (z, pinned)

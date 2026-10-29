@@ -534,7 +534,9 @@ FIELD_CASES = {
     ),
     "hub-numpy-forced": (
         lambda: hub_deck(n_radials=4),
-        dict(elems=SHIPPED // 64, symmetric=False, accel=False),
+        # 256 since the below/below remainder's order went 6 -> 3
+        # (momwire#1752 S1): the same chunk count as 64 gave at q = 6
+        dict(elems=SHIPPED // 256, symmetric=False, accel=False),
     ),
 }
 

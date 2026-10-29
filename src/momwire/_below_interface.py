@@ -51,6 +51,15 @@ from ._vec3 import norm3
 # inversion, measured at ε̃ = 1 against the free-space block).
 N_QP_BURIED_FIELD = 6
 
+# ...and for the below/below REMAINDER block alone since momwire#1752 S1
+# (Steve, 10-28): 3, the order `n_qp_buried_field`'s own measurement says a
+# remainder is served by (the 6 is the CROSS block's, whose integrand is the
+# whole field and falls like 1/R^3). The block's grazing pairs are still
+# raised past it by the #1672 rule, now keyed off this base. Measured in the
+# PR: Z_in moves at most 6e-4 ohm at the decks' own mesh, against a mesh error
+# of ohms; razor-2p's below remainder reads 3 source nodes a segment too.
+N_QP_BELOW_REMAINDER = 3
+
 # The named refusals a buried deck may draw. Every one names the geometry AND
 # the limit in the same sentence, because the two buried Sommerfeld families
 # refuse rather than clamp — there is no negligible tail to freeze below the
@@ -1001,6 +1010,10 @@ class BuriedFills(NamedTuple):
     # pairs whose remainder needs more than the base order, keyed to grazing
     # height (momwire#1672), local to the below segments; None lists none.
     below_remainder_pairs: Callable | None = None
+    # `(geom, seg_idx) -> (points, tangents, W)` at the below/below
+    # remainder's own order (momwire#1752 S1); None reads `nodes`' (the
+    # cross block's) for it, as before.
+    remainder_nodes: Callable | None = None
 
 
 class BuriedPlan(NamedTuple):
@@ -1035,6 +1048,11 @@ class BuriedPlan(NamedTuple):
     # momwire#1672: the below/below pairs raised above the base order
     # (`BuriedFills.below_remainder_pairs`), or None.
     bb_pairs: object = None
+    # momwire#1752 S1: the below/below remainder's nodes at its own order
+    # (`obs_b`'s when the caller names no `remainder_nodes`).
+    obs_bb: object = None
+    t_bb: object = None
+    W_bb: object = None
 
 
 def plan_buried(
@@ -1048,6 +1066,7 @@ def plan_buried(
     serve_plan_fn,
     below_pairs_fn=None,
     ground_z=None,
+    remainder_nodes=None,
 ):
     """Everything the buried fill decides before it fills a grid, in the
     order it decides it: the solver's out-of-scope configurations, the
@@ -1124,10 +1143,19 @@ def plan_buried(
     # above-ground remainder keys its order by (momwire#631/#1189), and their
     # raised-order nodes join the plan, which sizes the grid on the union of
     # every node rule the fill will query.
+    # momwire#1752 S1: the below/below remainder's own order. Its nodes do
+    # not join the plan: an n-point Gauss rule's nodes lie inside the hull of
+    # an m-point rule's for n < m, so the base nodes' extents already cover
+    # them (R1 is convex over a segment pair, the depth sum linear), and the
+    # grid and the cross block's sizing stay exactly what they were.
+    if remainder_nodes is not None and b_idx.size:
+        obs_bb, t_bb, W_bb = remainder_nodes(geom, b_idx)
+    else:
+        obs_bb, t_bb, W_bb = obs_b, t_b, W_b
     bb_pairs = None
     q_base = 0
     if below_pairs_fn is not None and b_idx.size:
-        q_base = obs_b.shape[0] // b_idx.size
+        q_base = obs_bb.shape[0] // b_idx.size
         bb_pairs = below_pairs_fn(
             geom["seg_l"][b_idx], geom["seg_r"][b_idx], float(ground_z), q_base
         )
@@ -1184,6 +1212,9 @@ def plan_buried(
         W_bx,
         plan,
         bb_pairs,
+        obs_bb,
+        t_bb,
+        W_bb,
     )
 
 
@@ -1567,6 +1598,9 @@ def compute_Z_operator_buried(
         W_bx,
         plan,
         bb_pairs,
+        obs_bb,
+        t_bb,
+        W_bb,
     ) = plan_buried(
         geom,
         nodes=f.nodes,
@@ -1577,6 +1611,7 @@ def compute_Z_operator_buried(
         serve_plan_fn=serve_plan_fn,
         below_pairs_fn=f.below_remainder_pairs,
         ground_z=ground_z,
+        remainder_nodes=f.remainder_nodes,
     )
     gz = ground_z
     # momwire#1132: the row-compact target, resolved before any fill so a
@@ -1773,7 +1808,7 @@ def compute_Z_operator_buried(
             o, to, s, ts, gz, k_p, k_m, grid_below, cancel_flag
         )
 
-    o_b, ot_b, oW_b = _narrow(b_idx, obs_b_idx, obs_b, t_b, W_b)
+    o_b, ot_b, oW_b = _narrow(b_idx, obs_b_idx, obs_bb, t_bb, W_bb)
     _sub_field_galerkin(
         Z,
         f,
@@ -1785,9 +1820,9 @@ def compute_Z_operator_buried(
         o_b,
         ot_b,
         oW_b,
-        obs_b,
-        t_b,
-        W_b,
+        obs_bb,
+        t_bb,
+        W_bb,
         # momwire#1224: unrestricted, the below/below block's two axes are
         # one node set and its table is reciprocal, so each unordered pair
         # is projected once (`_field_galerkin_block_symmetric`). An observer
@@ -1803,8 +1838,8 @@ def compute_Z_operator_buried(
             supp_seg,
             polys,
             proj_bb,
-            obs_b,
-            W_b,
+            obs_bb,
+            W_bb,
             keep_obs=None if rows is None else obs_b_idx,
             row_of=row_of,
         )
