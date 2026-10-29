@@ -259,6 +259,14 @@ _FIELD_GALERKIN_CHUNK_ELEMS = 1 << 19
 # the reciprocal table's (6e-17 relative, momwire#1224).
 _FIELD_GALERKIN_SYM_CHUNKS = 8
 
+# The buried fill's chunked direct blocks (`_accumulate_Z_subset_chunked`)
+# leave each fixed edge's own block out of the off-edge sweep and add the
+# same-edge moments alone (momwire#1752 L2). Read at call time; False is the
+# reference route (sweep everything, subtract it back), which the gates pin
+# this one against at the chunked route's 1e-12, and the C++ twin
+# (`accumulate_subset`) has only the True route.
+_SUBSET_SKIP_SAME_EDGE = True
+
 
 def _fg_lanes_kw():
     """`lanes=False` for the kernel when the reference is asked for."""
@@ -7280,7 +7288,7 @@ class BSplineSolver(
         row_bytes = (d + 1) ** 2 * n_sub * 16
         chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
 
-        def _subset_block(i0, i1, j0, j1):
+        def _window(i0, i1, j0, j1):
             J_win = _seg_seg_full_moments_offedge(
                 seg_l[i0:i1],
                 seg_r[i0:i1],
@@ -7295,6 +7303,62 @@ class BSplineSolver(
             )
             _accumulate(J_win, i0, i1, j0, j1)
 
+        # The edges whose same-edge block the fixup below overwrites: those
+        # of a subset wire on both axes (momwire#1029).
+        seg_off = geom["seg_offsets"]
+        on_subset = np.zeros(int(geom["n_segs_total"]), dtype=bool)
+        on_subset[seg_idx] = True
+        on_obs = on_subset
+        if obs_idx is not None:
+            on_obs = np.zeros_like(on_subset)
+            on_obs[np.asarray(obs_idx, dtype=np.int64)] = True
+
+        def _fixed(e):
+            return on_subset[seg_off[e[0]]] and on_obs[seg_off[e[0]]]
+
+        edges = self._edge_ingredients(geom)
+        # momwire#1752 L2: a direct block's sweep leaves those edges' own
+        # blocks out, and the fixup adds `A_st + A_reg` instead of
+        # `(A_st + A_reg) - J_edge`. The sweep used to integrate every
+        # same-edge pair through the off-edge kernel -- the buried ladder's
+        # 32 x 32 rule on each pair within two lengths, nearly all of them
+        # same-edge -- for the fixup to integrate them again and subtract
+        # both. Only the association of Z's adds moves (measured at most
+        # 9e-16 of max|Z| on eight buried decks).
+        skip = not mirror_sources and _SUBSET_SKIP_SAME_EDGE
+        if skip:
+            edge_lo = np.full(int(geom["n_segs_total"]), -1, dtype=np.int64)
+            edge_hi = np.full(int(geom["n_segs_total"]), -1, dtype=np.int64)
+            for e in edges:
+                if _fixed(e):
+                    edge_lo[e[1]] = e[1].start
+                    edge_hi[e[1]] = e[1].stop
+
+        def _subset_block(i0, i1, j0, j1):
+            if not skip:
+                _window(i0, i1, j0, j1)
+                return
+            # The observer rows in runs of one fixed edge (or of none), each
+            # run's source window less that edge's own columns: the part
+            # before it, then the part after.
+            r = i0
+            while r < i1:
+                lo = int(edge_lo[r])
+                if lo < 0:
+                    r1 = r + 1
+                    while r1 < i1 and edge_lo[r1] < 0:
+                        r1 += 1
+                    _window(r, r1, j0, j1)
+                    r = r1
+                    continue
+                hi = int(edge_hi[r])
+                r1 = min(hi, i1)
+                if j0 < lo:
+                    _window(r, r1, j0, min(j1, lo))
+                if j1 > hi:
+                    _window(r, r1, max(j0, hi), j1)
+                r = r1
+
         # Every (observer chunk x source run) rectangle, one window live at a
         # time (#338), a checkpoint per observer chunk.
         _schedule.sweep(
@@ -7305,19 +7369,15 @@ class BSplineSolver(
             return
         # Same-edge fixup, per edge of each subset wire (the dense path's
         # overwrite, as a correction window).
-        seg_off = geom["seg_offsets"]
-        on_subset = np.zeros(int(geom["n_segs_total"]), dtype=bool)
-        on_subset[seg_idx] = True
-        on_obs = on_subset
-        if obs_idx is not None:
-            on_obs = np.zeros_like(on_subset)
-            on_obs[np.asarray(obs_idx, dtype=np.int64)] = True
 
         def _fix_edge(w, sl, arc, a_w):
             A_st = _seg_seg_static_moments(arc, a_w, max_d=d, **ek_se_kw)
             A_reg = _seg_seg_reg_moments(
                 arc, a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge, **ek_se_kw
             )
+            if skip:  # the sweep left this block out (momwire#1752 L2)
+                _accumulate(A_st + A_reg, sl.start, sl.stop, sl.start, sl.stop)
+                return
             J_edge = _seg_seg_full_moments_offedge(
                 seg_l[sl],
                 seg_r[sl],
@@ -7336,12 +7396,7 @@ class BSplineSolver(
 
         # The same-edge correction is a DIAGONAL block, so it is written only
         # where the wire is on both axes (momwire#1029).
-        _schedule.walk(
-            self._edge_ingredients(geom),
-            _fix_edge,
-            checkpoint=self._checkpoint,
-            keep=lambda e: on_subset[seg_off[e[0]]] and on_obs[seg_off[e[0]]],
-        )
+        _schedule.walk(edges, _fix_edge, checkpoint=self._checkpoint, keep=_fixed)
 
     def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=False):
         """Grid extents for the three field-form blocks, or a named refusal —
