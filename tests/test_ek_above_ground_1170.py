@@ -209,9 +209,11 @@ def test_the_pairs_are_counted_per_kernel(monkeypatch, route):
 
     air_pairs, air_ext = census.pairs("air")
     soil_pairs, soil_ext = census.pairs("soil")
-    # Direct and image, each over the class's own segments. The chunked
-    # route also refills each wire's same-edge block to subtract it.
-    passes = 3 if route == "chunked" else 2
+    # Direct and image, each over the class's own segments. Each class is one
+    # straight wire, one edge: the chunked route's direct sweep leaves that
+    # edge's own block to the same-edge fixup (momwire#1752 L2), so only the
+    # image pass reaches the off-edge kernel there.
+    passes = 1 if route == "chunked" else 2
     assert (air_pairs, air_ext) == (passes * N_A * N_A, passes * N_A * N_A)
     assert (soil_pairs, soil_ext) == (passes * N_B * N_B, 0)
     assert all(row[3] for row in census.offedge if row[0] == "air")
