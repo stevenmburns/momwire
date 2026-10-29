@@ -4065,7 +4065,11 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     rem.k_p = bm.k_p;
     rem.k_m = bm.k_m;
     const int64_t n_b = static_cast<int64_t>(b_idx.size());
-    const int64_t chunk = std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q * q, 1));
+    // `_FIELD_GALERKIN_SYM_CHUNKS` (momwire#1752 L1): at least 8 observer
+    // chunks, so the mirror serves the upper rectangle on a small deck too
+    const int64_t chunk = std::min<int64_t>(
+        std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q * q, 1)),
+        std::max<int64_t>(1, (n_b + 7) / 8));
     for (int64_t i0 = 0; i0 < n_b; i0 += chunk) {
         const int64_t i1 = std::min(i0 + chunk, n_b);
         const size_t m = static_cast<size_t>(i1 - i0) * Q, S = static_cast<size_t>(n_b - i0) * Q;

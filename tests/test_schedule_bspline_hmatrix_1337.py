@@ -181,6 +181,9 @@ def old_field_galerkin_block(
         and row_of is None
         and _bs._HAVE_FIELD_GALERKIN_STRIDED
     ):
+        # momwire#1752 L1, carried into the reference loop so this file keeps
+        # gating the schedule layer's walk rather than the chunk rule.
+        chunk = min(chunk, max(1, -(-n_obs // _bs._FIELD_GALERKIN_SYM_CHUNKS)))
         old_field_galerkin_block_symmetric(
             self,
             supp_seg,
@@ -476,6 +479,10 @@ class FieldFill:
                     and kw.get("row_of") is None
                     and _bs._HAVE_FIELD_GALERKIN_STRIDED
                 )
+                if sym:  # momwire#1752 L1: the symmetric route's least chunk count
+                    chunk = min(
+                        chunk, max(1, -(-n_obs // _bs._FIELD_GALERKIN_SYM_CHUNKS))
+                    )
                 calls.append((n_obs, chunk, sym))
             return impl(self_, *a, **kw)
 

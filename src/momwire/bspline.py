@@ -250,6 +250,15 @@ _FIELD_GALERKIN_LANES = True
 # through the production rule (momwire#1337); nothing else should change it.
 _FIELD_GALERKIN_CHUNK_ELEMS = 1 << 19
 
+# The symmetric field-form block's (`_field_galerkin_block_symmetric`) least
+# number of observer chunks (momwire#1752 L1): each pair the mirror serves is
+# projected once, so more chunks project less of the square -- 1/2 + 1/(2c)
+# of it -- at one kernel call per chunk. Measured on the buried 101-segment
+# dipole: 1 chunk 28 ms, 4 21, 8 21, 16 20, 32 21; on a 29-segment pair 16
+# chunks of two segments were slower than 8, so 8. The rounding it moves is
+# the reciprocal table's (6e-17 relative, momwire#1224).
+_FIELD_GALERKIN_SYM_CHUNKS = 8
+
 
 def _fg_lanes_kw():
     """`lanes=False` for the kernel when the reference is asked for."""
@@ -6764,6 +6773,12 @@ class BSplineSolver(
             and row_of is None
             and _HAVE_FIELD_GALERKIN_STRIDED
         ):
+            # momwire#1752 L1: the mirror saves only BETWEEN chunks, so a block
+            # the element budget leaves as one chunk (under ~140 segments at
+            # q = 6) projected the whole square. At least
+            # `_FIELD_GALERKIN_SYM_CHUNKS` chunks project 1/2 + 1/(2 x that)
+            # of it. The C++ twin (`fill_buried`) takes the same cap.
+            chunk = min(chunk, max(1, -(-n_obs // _FIELD_GALERKIN_SYM_CHUNKS)))
             self._field_galerkin_block_symmetric(
                 supp_seg,
                 polys,
