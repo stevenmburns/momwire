@@ -239,7 +239,8 @@ def test_g906_6_resolution_follows_the_deck():
     buried = BSplineSolver(**hub_deck())
     assert buried.n_qp_pair == BURIED_N_QP_PAIR
     # momwire#1752 S2: the near-contact rung (base 128 under a tenth of a
-    # length, 32 to 1.5, 16 to 2) below #906's two
+    # length, 32 to 1.5, 16 to 2) below #906's two; H2 starts the order-4
+    # rung at 4 lengths rather than 16
     assert (
         buried.pair_order_ladder
         == BURIED_PAIR_ORDER_LADDER
@@ -247,7 +248,7 @@ def test_g906_6_resolution_follows_the_deck():
             (0.1, 32),
             (1.5, 16),
             (2.0, 8),
-            (16.0, 4),
+            (4.0, 4),
         )
     )
     assert BSplineSolver(**hub_deck(pair_order_ladder=())).pair_order_ladder == ()
@@ -255,7 +256,7 @@ def test_g906_6_resolution_follows_the_deck():
         (3.0, 6),
     )
     # An explicit base order drops the tiers it no longer sits above.
-    assert BSplineSolver(**hub_deck(n_qp_pair=8)).pair_order_ladder == ((16.0, 4),)
+    assert BSplineSolver(**hub_deck(n_qp_pair=8)).pair_order_ladder == ((4.0, 4),)
     assert BSplineSolver(**hub_deck(n_qp_pair=4)).pair_order_ladder == ()
     free = BSplineSolver(
         wires=[np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]])],
