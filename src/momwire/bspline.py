@@ -674,6 +674,25 @@ _REMAINDER_GRADED = True
 # threshold is set by that measurement, not by cost.
 _REMAINDER_GRADED_C = 4.0
 
+# ...but only where the spike is narrow (momwire#1752 S3, Steve 10-28): a
+# listed pair whose keyed order (the listing rule's `ceil(c len / R_min)` at
+# this c, clipped to [base, cap]) is under `_REMAINDER_GRADED_MIN_Q` takes the
+# keyed Gauss rule at that order instead, which is the brute-force ladder
+# itself at that order and costs Q^2 kernel reads against the ~800 a graded
+# pair spends. Measured against REF_48 (the 48-radial surface screen, #1201's
+# 1e-6 bar), by threshold:
+#
+#   threshold        0 (all graded)  8        16       32       64
+#   |Z - REF_48|     2.2e-7          1.7e-7   1.5e-7   1.5e-7   1.3e-7
+#   pairs graded     27135           18973    11481    11001    10039
+#
+# and the 12-radial screen moves from 5.6e-9 to 3.7e-8 of REF_12 at 16. On
+# the 16-radial screen 0.5 m up (no pair with a narrow spike) every listed
+# pair leaves the panels and Z_in moves 3e-6 ohm. 16 is under the ~28 where
+# the keyed rule's Q^2 overtakes a graded pair's cost. 0 is the #1201 route
+# (every listed pair graded), kept as the reference.
+_REMAINDER_GRADED_MIN_Q = 16
+
 # ...with the broadside guard widened by this much of a segment, so a foot
 # landing exactly on a segment end (radials and a mast meeting at a hub) is
 # decided the same way in every rotated copy of a symmetric deck (see
@@ -3501,31 +3520,36 @@ class BSplineSolver(
         d1 = self.degree + 1
         n_seg = geom["seg_l"].shape[0]
         graded = _REMAINDER_GRADED
-        if graded:
+        dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
+        # momwire#1752 S3: graded panels only where the spike is narrow, the
+        # pair's keyed order at least `_REMAINDER_GRADED_MIN_Q`; a pair with
+        # a wider spike takes the keyed Gauss rule at that order (the #1189
+        # route, which is the brute-force ladder itself at that order).
+        on_panels = (
+            Qp >= _REMAINDER_GRADED_MIN_Q if graded else np.zeros(I.size, dtype=bool)
+        )
+        if on_panels.any():
             # momwire#1201: the listed pairs on graded panels; only the
             # base-order moments the dense fill added are taken back out
             # below, one source column at a time.
-            dJ = self._remainder_pair_moments_graded(geom, I, J, grid)
-            self._last_remainder_graded = int(I.size)
-            grp = np.argsort(J, kind="stable")
-            cuts = np.flatnonzero(np.diff(J[grp]) != 0) + 1
-        else:
-            dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
-            self._last_remainder_graded = 0
-            # One kernel call per (order, source segment), its observers that
-            # column of the pair list, so nothing outside the list is
-            # evaluated. Column-wise rather than row-wise because the kernel
-            # threads over its observer segments; the list is symmetric, so
-            # either walk covers it.
-            grp = np.lexsort((J, Qp))
-            key_q, key_j = Qp[grp], J[grp]
-            cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_j) != 0)) + 1
+            sel = np.flatnonzero(on_panels)
+            dJ[sel] = self._remainder_pair_moments_graded(geom, I[sel], J[sel], grid)
+        self._last_remainder_graded = int(on_panels.sum())
+        # One kernel call per (route, order, source segment), its observers
+        # that column of the pair list, so nothing outside the list is
+        # evaluated. Column-wise rather than row-wise because the kernel
+        # threads over its observer segments; the list is symmetric, so
+        # either walk covers it. A graded run's key order is 0.
+        key_q = np.where(on_panels, 0, Qp)
+        grp = np.lexsort((J, key_q))
+        kq, kj = key_q[grp], J[grp]
+        cuts = np.flatnonzero((np.diff(kq) != 0) | (np.diff(kj) != 0)) + 1
         for run in np.split(grp, cuts):
             self._checkpoint()
             src = J[run[:1]]
             obs = I[run]
             lo = self._remainder_pair_moments(geom, obs, src, base, grid)
-            if graded:
+            if on_panels[run[0]]:
                 dJ[run] -= lo[:, 0]
                 continue
             q = int(Qp[run[0]])

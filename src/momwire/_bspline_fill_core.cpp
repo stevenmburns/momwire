@@ -2250,6 +2250,7 @@ std::vector<double> remainder_nodes(const Geometry &g, const std::vector<double>
 }
 
 constexpr double REMAINDER_GRADED_C = 4.0;  // `_REMAINDER_GRADED_C`
+constexpr int64_t REMAINDER_GRADED_MIN_Q = 16;  // `_REMAINDER_GRADED_MIN_Q` (momwire#1752 S3)
 
 }  // namespace
 
@@ -3080,29 +3081,59 @@ void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const ne
 // graded route: Q += P (Jf_graded - Jf_base) P over each pair's wings
 void remainder_pair_correction(std::vector<cdouble> &Qm, const Geometry &g, const Basis &b, double gz, double k,
                                const somm_proj::GridView &view, const somm_core::Grid &grid,
-                               const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
-                               const nec5::NumpyLinalg &np) {
+                               const std::vector<int64_t> &I, const std::vector<int64_t> &J,
+                               const std::vector<int64_t> &Qp, int64_t base, const nec5::NumpyLinalg &np) {
     const int d1 = b.degree + 1;
     const int64_t n_seg = g.n_segs_total, n_basis = b.n_basis;
-    GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
-    if (!razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg)) throw FrontNotPorted("no graded rule");
-    std::vector<cdouble> dJ = graded_pair_moments(ctx, I, J);
-    // runs by J (stable), each against the base order
+    const size_t dd2 = static_cast<size_t>(d1 * d1);
+    // `_REMAINDER_GRADED_MIN_Q` (momwire#1752 S3): graded panels for a pair
+    // keyed at that order or more, the keyed Gauss rule below it
+    std::vector<int64_t> key(I.size());
+    std::vector<int64_t> gI, gJ;
+    std::vector<size_t> gpos;
+    for (size_t t = 0; t < I.size(); t++) {
+        const bool on = Qp[t] >= REMAINDER_GRADED_MIN_Q;
+        key[t] = on ? 0 : Qp[t];
+        if (on) {
+            gI.push_back(I[t]);
+            gJ.push_back(J[t]);
+            gpos.push_back(t);
+        }
+    }
+    std::vector<cdouble> dJ(I.size() * dd2, cdouble(0.0, 0.0));
+    if (!gI.empty()) {
+        GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+        if (!razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg)) throw FrontNotPorted("no graded rule");
+        const std::vector<cdouble> gd = graded_pair_moments(ctx, gI, gJ);
+        for (size_t u = 0; u < gpos.size(); u++)
+            std::copy(gd.begin() + static_cast<std::ptrdiff_t>(u * dd2),
+                      gd.begin() + static_cast<std::ptrdiff_t>((u + 1) * dd2),
+                      dJ.begin() + static_cast<std::ptrdiff_t>(gpos[u] * dd2));
+    }
+    // runs by (route/order, J) (`np.lexsort((J, key_q))`, stable), each
+    // against the base order; a keyed run also at its own order
     std::vector<size_t> grp(I.size());
     for (size_t t = 0; t < grp.size(); t++) grp[t] = t;
-    std::stable_sort(grp.begin(), grp.end(), [&](size_t x, size_t y) { return J[x] < J[y]; });
-    const size_t dd2 = static_cast<size_t>(d1 * d1);
+    std::stable_sort(grp.begin(), grp.end(),
+                     [&](size_t x, size_t y) { return key[x] != key[y] ? key[x] < key[y] : J[x] < J[y]; });
     for (size_t r0 = 0; r0 < grp.size();) {
         size_t r1 = r0 + 1;
-        while (r1 < grp.size() && J[grp[r1]] == J[grp[r0]]) r1++;
+        while (r1 < grp.size() && J[grp[r1]] == J[grp[r0]] && key[grp[r1]] == key[grp[r0]]) r1++;
         std::vector<int64_t> obs;
         for (size_t t = r0; t < r1; t++) obs.push_back(I[grp[t]]);
         const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], base);
-        for (size_t t = r0; t < r1; t++)
-            for (size_t e = 0; e < dd2; e++) {
-                cdouble &x = dJ[grp[t] * dd2 + e];
-                x = nec5::replay::c_sub(x, lo[(t - r0) * dd2 + e]);
-            }
+        if (key[grp[r0]] == 0) {
+            for (size_t t = r0; t < r1; t++)
+                for (size_t e = 0; e < dd2; e++) {
+                    cdouble &x = dJ[grp[t] * dd2 + e];
+                    x = nec5::replay::c_sub(x, lo[(t - r0) * dd2 + e]);
+                }
+        } else {
+            const std::vector<cdouble> hi = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], key[grp[r0]]);
+            for (size_t t = r0; t < r1; t++)
+                for (size_t e = 0; e < dd2; e++)
+                    dJ[grp[t] * dd2 + e] = nec5::replay::c_sub(hi[(t - r0) * dd2 + e], lo[(t - r0) * dd2 + e]);
+        }
         r0 = r1;
     }
     // `_segment_wing_table`: per segment its real wings (flat basis*d1+wing)
@@ -3209,7 +3240,7 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
     somm_core::remainder_bspline_Q(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, nodes.data(),
                                    g.tangents.data(), W.data(), N, q, nd, b.supp_seg.data(), b.polys.data(),
                                    n_basis, b.supp_seg.data(), b.polys.data(), n_basis, true, 0, Q.data(), 0);
-    if (!pI.empty()) remainder_pair_correction(Q, g, b, ground_z, k, view, G0, pI, pJ, n_qp_sommerfeld, np);
+    if (!pI.empty()) remainder_pair_correction(Q, g, b, ground_z, k, view, G0, pI, pJ, pQ, n_qp_sommerfeld, np);
     for (size_t t = 0; t < Z.size(); t++) Z[t] = cdouble(Z[t].real() - Q[t].real(), Z[t].imag() - Q[t].imag());
 }
 
