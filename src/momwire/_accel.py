@@ -440,6 +440,7 @@ _CANCELLABLE_KERNELS = (
     # whose signature takes `cancel_flag` and is missing here, so the next
     # one cannot be added with the same hole.
     "sommerfeld_remainder_bspline_Q",
+    "sommerfeld_remainder_bspline_runs",
     "remainder_field_proj_batch",
     "assemble_Z_bspline_weighted",
     "assemble_Z_bspline_cplx_eps",

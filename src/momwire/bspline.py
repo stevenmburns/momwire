@@ -721,6 +721,17 @@ _REMAINDER_GRADED_MIN_Q = 16
 _REMAINDER_GRADED_EDGE_TOL = 1e-9
 
 
+def _remainder_side(seg_l, seg_r, h, segs, tq, wg, d1):
+    """`_remainder_pair_moments`' per-side nodes `(n, q, 3)` and moment
+    weights `W[p, n, q] = (h/2 w_q) (h t_q)^p` over `segs`, one rule."""
+    sl, sr = seg_l[segs], seg_r[segs]
+    nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
+    u_phys = h[segs][:, None] * tq[None, :]
+    w_node = 0.5 * h[segs][:, None] * wg[None, :]
+    W = w_node[None] * np.float_power(u_phys[None], np.arange(d1)[:, None, None])
+    return nodes, W
+
+
 def _solved_wires(inputs, dedup):
     """Input wire indices as the solved wires' (momwire#1649): unchanged with
     no duplicate dropped, else the solved wires whose kept input is named."""
@@ -3406,6 +3417,54 @@ class BSplineSolver(
         k2, jj = _csr_expand(ptr, idx, J)
         return _pair_max(I[k2], jj, Q[k2], n)
 
+    def _remainder_runs_batched(self, geom, grid, requests):
+        """`_remainder_pair_moments(geom, obs, [src], q, grid)[:, 0]` for each
+        request `(obs, src, q)`, in one C++ call (momwire#1752 K2): the
+        keyed runs of `_remainder_pair_correction` in parallel. Each request's
+        arrays are the single call's, gathered from every segment's nodes and
+        weights at its order, and its kernel is the single call's kernel, so
+        each result is that call's bytes. None when the extension lacks it."""
+        if _acc is None or not hasattr(_acc, "sommerfeld_remainder_bspline_runs"):
+            return None
+        seg_l, seg_r, h = geom["seg_l"], geom["seg_r"], geom["h_per_seg"]
+        d1 = self.degree + 1
+        everyone = np.arange(seg_l.shape[0])
+        rules, nodes, Ws = {}, [], []
+        rule = np.empty(len(requests), dtype=np.int64)
+        src = np.empty(len(requests), dtype=np.int64)
+        ptr = np.zeros(len(requests) + 1, dtype=np.int64)
+        for r, (obs, s_, q) in enumerate(requests):
+            q = int(q)
+            if q not in rules:
+                xg, wg = leggauss(q)
+                tq = 0.5 * (xg + 1.0)
+                nd, W = _remainder_side(seg_l, seg_r, h, everyone, tq, wg, d1)
+                rules[q] = len(nodes)
+                nodes.append(np.ascontiguousarray(nd))
+                Ws.append(np.ascontiguousarray(W))
+            rule[r] = rules[q]
+            src[r] = int(s_)
+            ptr[r + 1] = ptr[r] + len(obs)
+        obs_all = (
+            np.concatenate([np.asarray(o, dtype=np.int64) for o, _s, _q in requests])
+            if requests
+            else np.zeros(0, dtype=np.int64)
+        )
+        out = _acc.sommerfeld_remainder_bspline_runs(
+            nodes,
+            Ws,
+            np.ascontiguousarray(geom["tangents"], dtype=np.float64),
+            rule,
+            src,
+            ptr,
+            obs_all,
+            float(self.ground_z),
+            float(self.k),
+            *_sommerfeld.grid_cpp_args(grid),
+            int(self._cancel_flag),
+        )
+        return [out[ptr[r] : ptr[r + 1]] for r in range(len(requests))]
+
     def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid, cache=None):
         """Segment-pair remainder moments `Jf[a, b, p, P]` over the rectangle
         `obs_segs x src_segs`, at Gauss order `q` on both sides.
@@ -3430,14 +3489,7 @@ class BSplineSolver(
         tq = 0.5 * (xg + 1.0)
 
         def side_of(segs):
-            sl, sr = seg_l[segs], seg_r[segs]
-            nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
-            u_phys = h[segs][:, None] * tq[None, :]
-            w_node = 0.5 * h[segs][:, None] * wg[None, :]
-            W = w_node[None] * np.float_power(
-                u_phys[None], np.arange(d1)[:, None, None]
-            )
-            return nodes, W
+            return _remainder_side(seg_l, seg_r, h, segs, tq, wg, d1)
 
         # `cache` (momwire#1752 K1): one dict for a run of calls over the same
         # geometry and grid. Every segment's nodes and weights at order q are
@@ -3590,18 +3642,40 @@ class BSplineSolver(
         grp = np.lexsort((J, key_q))
         kq, kj = key_q[grp], J[grp]
         cuts = np.flatnonzero((np.diff(kq) != 0) | (np.diff(kj) != 0)) + 1
+        runs = np.split(grp, cuts)
+        # momwire#1752 K2: every run's base and keyed moments in one call
+        requests = []
+        for run in runs:
+            requests.append((I[run], int(J[run[0]]), base))
+            if not on_panels[run[0]]:
+                requests.append((I[run], int(J[run[0]]), int(Qp[run[0]])))
+        self._checkpoint()
+        got = self._remainder_runs_batched(geom, grid, requests) if runs else None
         run_cache = {}  # momwire#1752 K1: the runs share one geometry and grid
-        for run in np.split(grp, cuts):
-            self._checkpoint()
-            src = J[run[:1]]
-            obs = I[run]
-            lo = self._remainder_pair_moments(geom, obs, src, base, grid, run_cache)
+        k = 0
+        for run in runs:
+            if got is None:
+                self._checkpoint()
+                src = J[run[:1]]
+                obs = I[run]
+                lo = self._remainder_pair_moments(
+                    geom, obs, src, base, grid, run_cache
+                )[:, 0]
+                if not on_panels[run[0]]:
+                    q = int(Qp[run[0]])
+                    hi = self._remainder_pair_moments(
+                        geom, obs, src, q, grid, run_cache
+                    )[:, 0]
+            else:
+                lo = got[k]
+                k += 1
+                if not on_panels[run[0]]:
+                    hi = got[k]
+                    k += 1
             if on_panels[run[0]]:
-                dJ[run] -= lo[:, 0]
+                dJ[run] -= lo
                 continue
-            q = int(Qp[run[0]])
-            hi = self._remainder_pair_moments(geom, obs, src, q, grid, run_cache)
-            dJ[run] = (hi - lo)[:, 0]
+            dJ[run] = hi - lo
 
         ent = self._segment_wing_table(supp_seg, polys, n_seg)
         self._last_pair_wing_width = int(ent.shape[1])
