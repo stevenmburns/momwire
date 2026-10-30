@@ -335,6 +335,23 @@ int threads_for(long long n_basis) {
     return cores;
 }
 
+// One thread on the OpenMP copy instead of the serial one: the
+// Sinusoidal-Galerkin build on Linux. Its window assembly
+// (`assemble_Z_sinusoidal_windowed`) compiles ~19 % slower without -fopenmp,
+// where the parallel region's body is not outlined (fs_yagi820 sg5 at one
+// thread on Skylake: 414 ms serial, 387 ms on the OpenMP copy, 383 ms
+// Python warm), and on Linux starting a one-thread team costs nothing
+// measurable (sd_fs_dipole21: 3.4 / 3.3 ms). The copies are one source with
+// one arithmetic; the other builds measured within noise, and Windows keeps
+// the serial copy for its OpenMP start-up cost.
+bool omp_copy_at_one_thread() {
+#if defined(__linux__)
+    return std::strcmp(BASIS, "sinusoidal-galerkin") == 0;
+#else
+    return false;
+#endif
+}
+
 // The executable's OpenBLAS, OpenMP (only when `omp`: the serial route never
 // enters the OpenMP runtime) and, for an embedded Python, the environment
 // its numpy and scipy read.
@@ -1074,13 +1091,19 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
     std::string printout, why, kind, message, raised_kind;
     bool failed = false, printed;
-    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
-    if (serial) {
+    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads" && !omp_copy_at_one_thread();
+    if (threads == 1 && env("MW_EXE_COPY") != "threads") {
         const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
         set_threads(blas, false);
         times_threads(1, blas);
-        printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
-                                   &message, &raised_kind, open_end, served);
+        if (serial) {
+            printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+                                       &message, &raised_kind, open_end, served);
+        } else {
+            omp_set_num_threads(1);
+            printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+                                      &message, &raised_kind, open_end, served);
+        }
     } else {
         set_threads(threads, true);
         times_threads(threads, threads);
