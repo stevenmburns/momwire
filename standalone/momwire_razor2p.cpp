@@ -111,6 +111,9 @@
 #include "blas.h"
 
 extern "C" void omp_set_num_threads(int);
+#if defined(__GLIBC__)
+#include <malloc.h>  // mallopt
+#endif
 #if defined(__linux__)
 // The static OpenBLAS's pool teardown (a missing one fails the link).
 extern "C" int MWX(blas_thread_shutdown_)(void);
@@ -1405,6 +1408,7 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
 #include <sys/mman.h>
 
+#include <atomic>
 #include <map>
 #include <mutex>
 
@@ -1456,7 +1460,36 @@ bool big_delete(void *p) {
 
 }  // namespace
 
+// glibc maps a block of 128 KiB and up on its own (the threshold then
+// follows the largest block freed) and trims the heap's top whenever 2x that
+// is free, so a fill that frees and asks again -- window buffers, per-pair
+// tables -- faults its pages in afresh each time, where a warm Python process
+// has long since grown its heap. Once this process has asked for 64 MiB in
+// blocks of 64 KiB and up (a medium or large deck; a small one never does),
+// blocks under 4 MiB come from the heap and its top is kept up to 16 MiB.
+// Measured on Skylake, exe wall: sin42 fs_yagi820 248 -> 160 ms at one
+// thread (Python 229), fs_yagi3030 4055 -> 2864 (3545). Applied from the
+// start it also cost small decks up to +5 MB (+33 %) of peak RSS; a fixed
+// 1 MiB threshold instead slowed bspline's buried fills 5-20 %. A caller's
+// own GLIBC_TUNABLES naming either threshold is kept.
+#if defined(__GLIBC__)
+void heap_churn(std::size_t n) {
+    static std::atomic<std::size_t> churn{0};
+    static std::atomic<bool> done{false};
+    if (n < (std::size_t(64) << 10) || done.load(std::memory_order_relaxed)) return;
+    if (churn.fetch_add(n, std::memory_order_relaxed) + n < (std::size_t(64) << 20)) return;
+    if (done.exchange(true)) return;
+    const char *tun = std::getenv("GLIBC_TUNABLES");
+    if (tun != nullptr && (std::strstr(tun, "mmap_threshold") || std::strstr(tun, "trim_threshold"))) return;
+    mallopt(M_MMAP_THRESHOLD, 4 << 20);
+    mallopt(M_TRIM_THRESHOLD, 16 << 20);
+}
+#endif
+
 void *operator new(std::size_t n) {
+#if defined(__GLIBC__)
+    heap_churn(n);
+#endif
     if (n >= BIG_MIN)
         if (void *p = big_new(n)) return p;
     if (void *p = std::malloc(n ? n : 1)) return p;
