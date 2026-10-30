@@ -25,6 +25,8 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <exception>
 #include <array>
 #include <climits>
 #include <cmath>
@@ -399,7 +401,16 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
             J = offedge(s, s, seg_a, fp.k, d, fp.n_qp_pair, ek, fp.ladder);
         }
     }
-    // the same-edge blocks: `A_st + A_reg`
+    // the same-edge blocks: `A_st + A_reg`. A block is a function of its
+    // edge's arc table and radius alone, so an edge that repeats an earlier
+    // one to the bit -- a screen's radials -- copies that one's block out of
+    // J (momwire#1772): the same doubles its own evaluation would produce.
+    struct DoneEdge {
+        const std::vector<double> *arc;
+        double a_w;
+        size_t base;
+    };
+    std::vector<DoneEdge> done;
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         const WireGeometry &pw = g.per_wire[w];
         const double a_w = radius_per_wire[w];
@@ -408,6 +419,26 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
             const size_t base = static_cast<size_t>(g.seg_offsets[w] + pw.edge_offsets[e]);
             const size_t n = arc.size() - 1;
             if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+            const DoneEdge *hit = nullptr;
+            for (const DoneEdge &de : done) {
+                if (de.a_w == a_w && de.arc->size() == arc.size() &&
+                    std::memcmp(de.arc->data(), arc.data(), arc.size() * sizeof(double)) == 0) {
+                    hit = &de;
+                    break;
+                }
+            }
+            if (hit != nullptr) {
+                for (int p = 0; p < nd; p++)
+                    for (int pp = 0; pp < nd; pp++)
+                        for (size_t i = 0; i < n; i++) {
+                            const size_t row = (static_cast<size_t>(p) * nd + pp) * N;
+                            std::copy(&J[(row + hit->base + i) * N + hit->base],
+                                      &J[(row + hit->base + i) * N + hit->base] + n,
+                                      &J[(row + base + i) * N + base]);
+                        }
+                continue;
+            }
+            done.push_back({&arc, a_w, base});
             const double h = arc[1] - arc[0];
             const nd::array_t<double> A_st =
                 fp.extended_kernel
@@ -3116,26 +3147,55 @@ void remainder_pair_correction(std::vector<cdouble> &Qm, const Geometry &g, cons
     for (size_t t = 0; t < grp.size(); t++) grp[t] = t;
     std::stable_sort(grp.begin(), grp.end(),
                      [&](size_t x, size_t y) { return key[x] != key[y] ? key[x] < key[y] : J[x] < J[y]; });
+    std::vector<std::pair<size_t, size_t>> runs;
     for (size_t r0 = 0; r0 < grp.size();) {
         size_t r1 = r0 + 1;
         while (r1 < grp.size() && J[grp[r1]] == J[grp[r0]] && key[grp[r1]] == key[grp[r0]]) r1++;
-        std::vector<int64_t> obs;
-        for (size_t t = r0; t < r1; t++) obs.push_back(I[grp[t]]);
-        const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], base);
-        if (key[grp[r0]] == 0) {
-            for (size_t t = r0; t < r1; t++)
-                for (size_t e = 0; e < dd2; e++) {
-                    cdouble &x = dJ[grp[t] * dd2 + e];
-                    x = nec5::replay::c_sub(x, lo[(t - r0) * dd2 + e]);
-                }
-        } else {
-            const std::vector<cdouble> hi = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], key[grp[r0]]);
-            for (size_t t = r0; t < r1; t++)
-                for (size_t e = 0; e < dd2; e++)
-                    dJ[grp[t] * dd2 + e] = nec5::replay::c_sub(hi[(t - r0) * dd2 + e], lo[(t - r0) * dd2 + e]);
-        }
+        runs.push_back({r0, r1});
         r0 = r1;
     }
+    // The runs side by side (momwire#1772), as the Python route's one batched
+    // call runs them (`sommerfeld_remainder_bspline_runs`, momwire#1752 K2):
+    // each run writes its own pairs' rows of dJ, and its kernel calls are
+    // their own arithmetic at any thread count (nested inside this region
+    // they run on their thread alone). One run at a time was the screens'
+    // serial stage past one thread.
+    std::exception_ptr err = nullptr;
+    std::atomic<bool> failed(false);
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (std::ptrdiff_t u = 0; u < static_cast<std::ptrdiff_t>(runs.size()); u++) {
+        if (failed.load()) continue;
+        try {
+            const size_t r0 = runs[static_cast<size_t>(u)].first, r1 = runs[static_cast<size_t>(u)].second;
+            std::vector<int64_t> obs;
+            for (size_t t = r0; t < r1; t++) obs.push_back(I[grp[t]]);
+            const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], base);
+            if (key[grp[r0]] == 0) {
+                for (size_t t = r0; t < r1; t++)
+                    for (size_t e = 0; e < dd2; e++) {
+                        cdouble &x = dJ[grp[t] * dd2 + e];
+                        x = nec5::replay::c_sub(x, lo[(t - r0) * dd2 + e]);
+                    }
+            } else {
+                const std::vector<cdouble> hi =
+                    pair_moments_fixed(g, view, gz, k, d1, obs, J[grp[r0]], key[grp[r0]]);
+                for (size_t t = r0; t < r1; t++)
+                    for (size_t e = 0; e < dd2; e++)
+                        dJ[grp[t] * dd2 + e] = nec5::replay::c_sub(hi[(t - r0) * dd2 + e], lo[(t - r0) * dd2 + e]);
+            }
+        } catch (...) {
+#if defined(_OPENMP)
+            #pragma omp critical(mw_remainder_runs_err)
+#endif
+            {
+                if (!failed.load()) err = std::current_exception();
+                failed.store(true);
+            }
+        }
+    }
+    if (err) std::rethrow_exception(err);
     // `_segment_wing_table`: per segment its real wings (flat basis*d1+wing)
     std::vector<std::vector<int64_t>> wings(static_cast<size_t>(n_seg));
     for (int64_t m = 0; m < n_basis; m++)
@@ -3556,7 +3616,17 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
             }
         }
     if (mirror) return;
-    // the same-edge fixup, per edge of each subset wire (wire order)
+    // the same-edge fixup, per edge of each subset wire (wire order). An
+    // edge's block is a function of its arc table and radius alone (and of
+    // this block's k and kernel), so an edge that repeats one already done
+    // to the bit -- a hub's radials -- takes that one's block (momwire#1772):
+    // the same doubles its own evaluation would produce.
+    struct SameEdge {
+        const std::vector<double> *arc;
+        double a_w;
+        Block corr;
+    };
+    std::vector<SameEdge> done;
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         const WireGeometry &pw = g.per_wire[w];
         if (!on_subset[static_cast<size_t>(g.seg_offsets[w])]) continue;
@@ -3566,6 +3636,18 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
             const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
             const size_t n = arc.size() - 1;
             if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+            const SameEdge *hit = nullptr;
+            for (const SameEdge &d : done) {
+                if (d.a_w == a_w && d.arc->size() == arc.size() &&
+                    std::memcmp(d.arc->data(), arc.data(), arc.size() * sizeof(double)) == 0) {
+                    hit = &d;
+                    break;
+                }
+            }
+            if (hit != nullptr) {
+                accumulate(Block(hit->corr.begin(), hit->corr.end()), s0, s1, s0, s1);
+                continue;
+            }
             const double h = arc[1] - arc[0];
             // `_EK_SAME_EDGE` with the extended kernel on this block
             const nd::array_t<double> A_st = ek.on ? seg_seg_static_moments_bspline_uniform_ek(h, a_w, n, d, a_w, 0)
@@ -3580,6 +3662,19 @@ void accumulate_subset(std::vector<cdouble> &Z, const Geometry &g, const Basis &
             Block corr(A_reg.size(), false);
             const double *st = A_st.data();
             for (size_t t = 0; t < corr.size(); t++) corr[t] = cdouble(st[t] + A_reg[t].real(), 0.0 + A_reg[t].imag());
+            // held only where a later edge repeats it (a held block is a
+            // copy: `accumulate` may scale its argument in place)
+            bool repeats = false;
+            for (size_t w2 = w; w2 < g.per_wire.size() && !repeats; w2++) {
+                const WireGeometry &pw2 = g.per_wire[w2];
+                if (!on_subset[static_cast<size_t>(g.seg_offsets[w2])] || radius_per_wire[w2] != a_w) continue;
+                for (size_t e2 = (w2 == w ? e + 1 : 0); e2 + 1 < pw2.edge_offsets.size() && !repeats; e2++) {
+                    const std::vector<double> &arc2 = pw2.edge_arc_edges[e2];
+                    repeats = arc2.size() == arc.size() &&
+                              std::memcmp(arc2.data(), arc.data(), arc.size() * sizeof(double)) == 0;
+                }
+            }
+            if (repeats) done.push_back({&arc, a_w, Block(corr.begin(), corr.end())});
             accumulate(corr, s0, s1, s0, s1);
         }
     }
@@ -3762,6 +3857,81 @@ BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps,
     return m;
 }
 
+// `_pair_extents_below`'s two reductions over every unordered node pair
+// (i <= j) of the below plan: the largest r1^2 = rho^2 + (d_i + d_j)^2 and
+// the smallest (d_i + d_j)^2 / rho^2, by `x > max` / `x < min` (a NaN never
+// taken). A largest and a smallest are the same whatever order the pairs
+// come in, so the rows run side by side and W pairs a step (momwire#1772:
+// one thread's quadratic walk was the hubs' serial stage past one thread),
+// each pair's r1^2 and ratio the same expressions as one at a time.
+static void plan_extents(const std::vector<double> &plan_b, const std::vector<double> &d_b, double &r1sq_max,
+                  double &q_min) {
+    const size_t n_obs = plan_b.size() / 3;
+    std::vector<double> X(n_obs), Y(n_obs);
+    for (size_t i = 0; i < n_obs; i++) {
+        X[i] = plan_b[3 * i];
+        Y[i] = plan_b[3 * i + 1];
+    }
+    const double *xs = X.data(), *ys = Y.data(), *ds = d_b.data();
+    double r_all = r1sq_max, q_all = q_min;
+#if defined(_OPENMP)
+    #pragma omp parallel
+#endif
+    {
+        double r_my = r_all, q_my = q_all;
+        const auto one = [&](size_t i, size_t j) {
+            const double dx = xs[i] - xs[j], dy = ys[i] - ys[j];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = ds[i] + ds[j];
+            const double hh2 = hh * hh;
+            const double r1sq = rho2 + hh2;
+            if (r1sq > r_my) r_my = r1sq;
+            const double qq = hh2 / rho2;
+            if (qq < q_my) q_my = qq;
+        };
+#if defined(_OPENMP)
+        #pragma omp for schedule(dynamic, 16)
+#endif
+        for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(n_obs); ii++) {
+            const size_t i = static_cast<size_t>(ii);
+            size_t j = i;
+#if MW_LANES_SIMD
+            using namespace mw_lanes;
+            for (; j < n_obs && j % static_cast<size_t>(W) != 0; j++) one(i, j);
+            const vd xi = set1(xs[i]), yi = set1(ys[i]), di = set1(ds[i]);
+            vd vr = set1(r_my), vq = set1(q_my);
+            for (; j + static_cast<size_t>(W) <= n_obs; j += static_cast<size_t>(W)) {
+                const vd dx = sub(xi, loadu(xs + j)), dy = sub(yi, loadu(ys + j));
+                const vd rho2 = add(mul(dx, dx), mul(dy, dy));
+                const vd hh = add(di, loadu(ds + j));
+                const vd hh2 = mul(hh, hh);
+                const vd r1sq = add(rho2, hh2);
+                vr = blend(vr, r1sq, cmp_gt(r1sq, vr));
+                const vd qq = div(hh2, rho2);
+                vq = blend(vq, qq, cmp_lt(qq, vq));
+            }
+            alignas(64) double lr[W], lq[W];
+            storeu(lr, vr);
+            storeu(lq, vq);
+            for (int l = 0; l < W; l++) {
+                if (lr[l] > r_my) r_my = lr[l];
+                if (lq[l] < q_my) q_my = lq[l];
+            }
+#endif
+            for (; j < n_obs; j++) one(i, j);
+        }
+#if defined(_OPENMP)
+        #pragma omp critical(mw_plan_extents)
+#endif
+        {
+            if (r_my > r_all) r_all = r_my;
+            if (q_my < q_all) q_all = q_my;
+        }
+    }
+    r1sq_max = r_all;
+    q_min = q_all;
+}
+
 std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
@@ -3871,17 +4041,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         std::vector<double> d_b(n_obs);
         for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - plan_b[3 * i + 2];
         double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
-        for (size_t i = 0; i < n_obs; i++)
-            for (size_t j = i; j < n_obs; j++) {
-                const double dx = plan_b[3 * i] - plan_b[3 * j], dy = plan_b[3 * i + 1] - plan_b[3 * j + 1];
-                const double rho2 = dx * dx + dy * dy;
-                const double hh = d_b[i] + d_b[j];
-                const double hh2 = hh * hh;
-                const double r1sq = rho2 + hh2;
-                if (r1sq > r1sq_max) r1sq_max = r1sq;
-                const double qq = hh2 / rho2;
-                if (qq < q_min) q_min = qq;
-            }
+        plan_extents(plan_b, d_b, r1sq_max, q_min);
         r1_max = std::sqrt(r1sq_max);
         th_min = std::atan(std::sqrt(q_min));
         // past the cap Python asks the floor of the pairs inside it only,
