@@ -58,11 +58,11 @@ STAGE=$(mktemp -d)/$PKG
 mkdir -p "$STAGE" "$OUT"
 # engine: command name, CMake basis, the target it builds
 for engine in "$NAME razor2p momwire-razor2p-standalone" \
-              "momwire-nec5-bs2-linux bs2 momwire-bs2-standalone" \
+              "momwire-nec5-bs2-linux bspline_nec5 momwire-bs2-standalone" \
               "momwire-nec42-sinusoidal-linux sin42 momwire-nec42-sinusoidal-standalone" \
               "momwire-nec42-sinusoidal-galerkin-linux sg42 momwire-nec42-sinusoidal-galerkin-standalone" \
               "momwire-nec5-sinusoidal-galerkin-linux sg5 momwire-nec5-sinusoidal-galerkin-standalone" \
-              "momwire-nec42-linux bs2_nec42 momwire-nec42-standalone"; do
+              "momwire-nec42-linux bspline_nec42 momwire-nec42-standalone"; do
     set -- $engine
     cmd=$1 basis=$2 target=$3
     for v in avx2 sse2; do
