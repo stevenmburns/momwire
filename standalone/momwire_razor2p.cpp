@@ -393,10 +393,28 @@ void set_threads(int n, bool omp) {
 // pool that then sleeps wakes on the next call. It sets only how long an idle
 // thread spins: what a call computes, and on how many threads, is unchanged.
 // A caller's own OPENBLAS_THREAD_TIMEOUT is kept.
+//
+// The OpenMP team's idle threads have the same habit the other way round:
+// libgomp's default spins 300,000 iterations at each wait before a thread
+// sleeps, so a fill's last parallel region leaves its team spinning through
+// the factor that follows, against OpenBLAS's threads (Linux: libgomp reads
+// GOMP_SPINCOUNT in its own load-time constructor, after this one). Measured
+// on Skylake (4 cores / 8 threads), exe wall at MOMWIRE_THREADS = 8:
+// sd_gn2_dipole101 razor-2p 63.7 -> 9.7 ms, ak_yagi_free 52.5 -> 7.8,
+// fs_yagi820 72.9 -> 44.9, gn2_dipole401 sg5 164.8 -> 106.0, bs2 159.9 ->
+// 124.9; at 4: fs_yagi820 razor-2p 55.4 -> 47.2, sd_fs_yagi805 sg5 133.3 ->
+// 124.4; at 2 within noise. The cost is a wake where a region follows a wait
+// longer than the spin: the buried bs2 fills at 3-4 threads, +1-2 %. 30,000
+// iterations is the knee (10,000 and passive cost those fills 5-13 %). Only
+// how long an idle thread spins changes; a caller's own GOMP_SPINCOUNT or
+// OMP_WAIT_POLICY is kept.
 #if defined(__GNUC__) && !defined(_WIN32)
 __attribute__((constructor(101))) void one_blas_thread_at_load() {
     setenv("OPENBLAS_NUM_THREADS", "1", 1);
     setenv("OPENBLAS_THREAD_TIMEOUT", "16", 0);
+#if defined(__linux__)
+    if (std::getenv("OMP_WAIT_POLICY") == nullptr) setenv("GOMP_SPINCOUNT", "30000", 0);
+#endif
 }
 #endif
 
