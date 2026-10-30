@@ -1,12 +1,12 @@
 # momwire-razor2p: `momwire-nec5-razor-2p` as one native executable
-# (momwire_razor2p.cpp's header says what it does). -DMW_EXE_BASIS=bs2 with
+# (momwire_razor2p.cpp's header says what it does). -DMW_EXE_BASIS=bspline_nec5 with
 # MW_EXE_NO_PYTHON builds `momwire-bs2-standalone`, `momwire-nec5-bspline`'s
 # twin, from the same cores (momwire#1517). -DMW_EXE_BASIS=sin42 builds the
 # NEC-4.2 slot's `momwire-nec42-sinusoidal` (momwire#1607 B4b): the hybrid,
 # or with MW_EXE_NO_PYTHON `momwire-nec42-sinusoidal-standalone`.
 # -DMW_EXE_BASIS=sg42 with MW_EXE_NO_PYTHON builds
 # `momwire-nec42-sinusoidal-galerkin-standalone`, the same slot's
-# Sinusoidal-Galerkin launcher (momwire#1718 S4). -DMW_EXE_BASIS=bs2_nec42 with
+# Sinusoidal-Galerkin launcher (momwire#1718 S4). -DMW_EXE_BASIS=bspline_nec42 with
 # MW_EXE_NO_PYTHON builds `momwire-nec42-standalone`, the slot's default
 # launcher `momwire-nec42` (bs2, momwire#1607 Phase C2).
 #
@@ -35,7 +35,7 @@
 # its exports, below) and shipped beside the executable:
 #
 #   cmake -S standalone -B build -A x64 -DMW_EXE_NO_PYTHON=ON \
-#         -DMW_EXE_BASIS=razor2p|bs2 -DMW_EXE_VARIANT=avx2|sse2 \
+#         -DMW_EXE_BASIS=razor2p|bspline_nec5 -DMW_EXE_VARIANT=avx2|sse2 \
 #         -DMW_OPENBLAS_LIB=.../scipy_openblas32/lib/libscipy_openblas.dll \
 #         -DMW_BLAS_PREFIX=scipy_
 #   cmake --build build --config Release
@@ -45,7 +45,7 @@
 # Homebrew's libomp (`brew install libomp`; LIBOMP_PREFIX or
 # MW_LIBOMP_PREFIX names another keg), one variant (`legacy`):
 #
-#   cmake -S standalone -B build -DMW_EXE_NO_PYTHON=ON -DMW_EXE_BASIS=razor2p|bs2
+#   cmake -S standalone -B build -DMW_EXE_NO_PYTHON=ON -DMW_EXE_BASIS=razor2p|bspline_nec5
 #   cmake --build build
 cmake_minimum_required(VERSION 3.20)
 project(momwire_razor2p LANGUAGES CXX)
@@ -61,11 +61,11 @@ option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it"
 # Which formulation the executable answers for (momwire#1517 Phase A): razor2p
 # (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
 # route_bs2.cpp, no-Python builds only). Both from the same cores.
-set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bs2, bs2_nec42, sin42, sg42 or sg5")
-set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2 bs2_nec42 sin42 sg42 sg5)
-if(MW_EXE_BASIS STREQUAL "bs2")
+set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bspline_nec5, bspline_nec42, sin42, sg42 or sg5")
+set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bspline_nec5 bspline_nec42 sin42 sg42 sg5)
+if(MW_EXE_BASIS STREQUAL "bspline_nec5")
   if(NOT MW_EXE_NO_PYTHON)
-    message(FATAL_ERROR "MW_EXE_BASIS=bs2 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
+    message(FATAL_ERROR "MW_EXE_BASIS=bspline_nec5 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
   endif()
   set(MW_ROUTE route_bs2.cpp)
 elseif(MW_EXE_BASIS STREQUAL "sin42")
@@ -87,18 +87,18 @@ elseif(MW_EXE_BASIS STREQUAL "sg42")
     message(FATAL_ERROR "MW_EXE_BASIS=sg42 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
   endif()
   set(MW_ROUTE route_sin.cpp)
-elseif(MW_EXE_BASIS STREQUAL "bs2_nec42")
+elseif(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # `momwire-nec42` (momwire#1607 Phase C2): the NEC-4.2 slot's default
   # basis, bs2 on the slot's run half, over bs2's route (MW_ROUTE_NEC4);
   # no-Python only
   if(NOT MW_EXE_NO_PYTHON)
-    message(FATAL_ERROR "MW_EXE_BASIS=bs2_nec42 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
+    message(FATAL_ERROR "MW_EXE_BASIS=bspline_nec42 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
   endif()
   set(MW_ROUTE route_bs2.cpp)
 elseif(MW_EXE_BASIS STREQUAL "razor2p")
   set(MW_ROUTE route.cpp)
 else()
-  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bs2, bs2_nec42, sin42, sg42 or sg5")
+  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bspline_nec5, bspline_nec42, sin42, sg42 or sg5")
 endif()
 # Which of the extension's two x86-64 variants the C++ core is compiled as
 # (setup.py `_VARIANTS`): avx2 (-mavx2 -mfma), or sse2, the x86-64 baseline
@@ -270,14 +270,14 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_crossing_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
-if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "bs2_nec42" OR MW_EXE_BASIS STREQUAL "sin42" OR
+if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "sin42" OR
    MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS STREQUAL "sg5")
   # the transmitted family (momwire#1718 S12): the below->above table and its
   # projection, which a mixed deck's cross blocks read on every basis that
   # fills them
   list(APPEND MW_CORE_SOURCES ${MW_SRC}/_somm_transmitted_core.cpp)
 endif()
-if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "bs2_nec42" OR MW_EXE_BASIS STREQUAL "sg5")
+if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "sg5")
   # bs2 (momwire#1517): the B-spline kernels, the front half, the fill (its
   # exact kernel and Sommerfeld remainder), the NEC-5 seam and run half
   list(APPEND MW_CORE_SOURCES
@@ -293,7 +293,7 @@ if(MW_EXE_BASIS STREQUAL "bs2" OR MW_EXE_BASIS STREQUAL "bs2_nec42" OR MW_EXE_BA
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
 endif()
 if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS STREQUAL "sg5" OR
-   MW_EXE_BASIS STREQUAL "bs2_nec42")
+   MW_EXE_BASIS STREQUAL "bspline_nec42")
   # the NEC-4.2 slot's reader, seam, build, printout writer and run half, and
   # the sinusoidal basis' point-matched kernels, front half, fill and answers
   # (momwire#1607 A1-B4a)
@@ -311,7 +311,7 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
 endif()
-if(MW_EXE_BASIS STREQUAL "bs2_nec42")
+if(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # bs2's answers to the NEC-4.2 slot's run half (momwire#1607 Phase C1)
   list(APPEND MW_CORE_SOURCES ${MW_SRC}/_bspline_nec4_run_core.cpp)
 endif()
@@ -394,7 +394,7 @@ if(MW_EXE_BASIS STREQUAL "sg42" OR MW_EXE_BASIS STREQUAL "sg5")
   # (both copies)
   set(MW_ROUTE_DEFS MW_ROUTE_SG=1)
 endif()
-if(MW_EXE_BASIS STREQUAL "bs2_nec42")
+if(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # route_bs2.cpp answers for the NEC-4.2 slot (both copies)
   set(MW_ROUTE_DEFS MW_ROUTE_NEC4=1)
 endif()
@@ -416,7 +416,7 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   mw_fg=mws_fg)  # the field-form assembler's inline text: one copy per runtime
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
-if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
+if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")
   set(MW_EXE momwire-bs2-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
@@ -430,7 +430,7 @@ if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
     MW_EXE_LAUNCHER="momwire-nec5-bspline"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
-elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2_nec42")
+elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec42")
   set(MW_EXE momwire-nec42-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
