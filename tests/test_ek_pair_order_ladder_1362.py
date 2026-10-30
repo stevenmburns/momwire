@@ -64,7 +64,7 @@ from momwire._bspline_kernels import (
     _pair_ratio,
     _seg_seg_full_moments_offedge,
 )
-from _lane_gate import assert_lanes_match, moved_pairs
+from _lane_gate import LANE_RTOL_WIN32, WIN32, assert_lanes_match, moved_pairs
 
 acc = _bk._acc
 
@@ -204,7 +204,14 @@ def test_every_served_ek_pair_is_within_1e_9_of_the_base_order():
     assert err.max() < 1e-9, f"worst pair {err.max():.3e}"
     served_8 = (ratio >= 2.0) & (ratio < 16.0)
     assert err[served_8].max() < 1e-11, f"order-8 tier worst {err[served_8].max():.3e}"
-    assert np.array_equal(err[ratio < 2.0], np.zeros(int((ratio < 2.0).sum())))
+    # the order-32 pairs: one rule's to the bit, but on Windows (/fp:fast)
+    # within the derived lane tolerance -- since momwire#1772 the base call
+    # runs them in lanes of consecutive columns and the ladder call partly
+    # in gathered ones, which MSVC spells differently (momwire#1371)
+    if WIN32:
+        assert err[ratio < 2.0].max() < LANE_RTOL_WIN32
+    else:
+        assert np.array_equal(err[ratio < 2.0], np.zeros(int((ratio < 2.0).sum())))
 
 
 def test_the_factor_is_applied_on_the_tiered_pairs_and_only_the_eligible_ones():
