@@ -7324,7 +7324,11 @@ seg_seg_reg_moments_bspline_cplx(
     std::complex<double> *op = out.mutable_data();
     {
         py::gil_scoped_release release;
-        std::vector<double> Gr(nq * nq), Gi(nq * nq);
+        // every entry written below (each unordered pair and its mirror), so
+        // not zero-filled first: on a 401-segment edge that fill was two
+        // 20 MB passes on one thread (momwire#1772)
+        std::unique_ptr<double[]> Gr_buf(new double[nq * nq]), Gi_buf(new double[nq * nq]);
+        double *const Gr = Gr_buf.get(), *const Gi = Gi_buf.get();
         const double four_pi = 4.0 * 3.141592653589793;
         const double kr = k.real(), ki = k.imag();
 #pragma omp parallel for schedule(dynamic, 16)
