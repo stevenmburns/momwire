@@ -43,7 +43,7 @@ import pytest
 from momwire import _accel
 from momwire import _bspline_kernels as BK
 from momwire import bspline as B
-from _lane_gate import assert_lanes_match
+from _lane_gate import WIN32, assert_lanes_match
 
 acc = BK._acc
 
@@ -265,7 +265,12 @@ def test_the_tier_table_is_the_rule(n_qp, ladder):
         np.testing.assert_array_equal(got, _rule_tiers(*blk, ratios))
     # pairs ON each threshold: a unit observer at the origin, sources of the
     # same length centred at the threshold's distance and a few ulps either
-    # side, along assorted directions
+    # side, along assorted directions. Not on Windows: MSVC's /fp:fast
+    # spells the rule's sqrt and divide its own way, so a pair within ulps of
+    # a threshold can land on either side of it there (its gates are a
+    # derived tolerance, not bits, momwire#1371).
+    if WIN32:
+        return
     rng = np.random.default_rng(7)
     sl_i = np.array([[-0.5, 0.0, 0.0]])
     sr_i = np.array([[0.5, 0.0, 0.0]])
