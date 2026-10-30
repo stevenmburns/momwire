@@ -29,6 +29,7 @@
 #define MW_ROUTE_BASIS "sinusoidal"
 #endif
 #include "_somm_below_fill_core.h"
+#include "_somm_grid_core.h"
 
 #include <algorithm>
 #include <complex>
@@ -123,11 +124,15 @@ sinusoidal::FillLinalg linalg() {
 
 }  // namespace
 
-// No Sommerfeld ground here (B5): nothing to keep.
+// The Sommerfeld store, as route.cpp and route_bs2.cpp keep it: the
+// masters a GN 2 / GN 3 deck's fill reads (`somm_core::get_grid`) and the
+// below/below table a buried deck's fill reads (momwire#1607 B6a), each
+// kept on disk between runs. A stored value is the fill's, bit for bit, so
+// a warm run prints what a cold one does; without it every run refilled
+// both (exe warm == exe cold, the perf-1028 study's finding 3).
 void configure_grid_cache(const std::string &tag) {
-    (void)tag;
-    // the below/below table a wholly-buried deck's fill reads (momwire#1607
-    // B6a), filled here in process
+    somm_core::configure_disk_cache(tag);
+    somm_below::configure_below_store(true);
     somm_below::set_source(somm_below::fill_source());
 }
 

@@ -363,3 +363,50 @@ def test_the_streaming_call(stream, tmp_path):
         return
     assert _mask(exe.stdout) == _mask(ref.stdout)
     assert exe.stderr == b""
+
+
+# --- the Sommerfeld store (the perf-1028 study's finding 3) --------------------
+
+GN2 = NEC42 / "0231_dipole-10m-gn2.nec"
+BURIED = NEC42 / "0239_dipole-buried-gn3.nec"
+
+
+@pytest.mark.parametrize("deck", [GN2, BURIED], ids=["gn2 masters", "buried table"])
+def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
+    """Every NEC-4.2 executable keeps its Sommerfeld masters (GN 2 above the
+    plane) and its below/below table (a buried deck) in the store between
+    runs, as the NEC-5 ones do: run cold, the store holds the grids; a second
+    run reads them (MOMWIRE_TIMES counts no build) and prints the cold run's
+    bytes, which are the launcher's under the time mask. Until the sinusoidal
+    route configured the store, its warm run refilled every grid."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    store = tmp_path / "store"
+    env = _env(MOMWIRE_SOMM_CACHE_DIR=str(store), MOMWIRE_SOMM_CACHE="1")
+    ref = subprocess.run(
+        [_launcher(), str(deck), str(tmp_path / "ref.out")],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert ref.returncode == 0, ref.stderr
+    want = _mask((tmp_path / "ref.out").read_bytes())
+
+    def exe_run(name):
+        r = subprocess.run(
+            [EXE, str(deck), str(tmp_path / f"{name}.out")],
+            env=dict(env, MOMWIRE_TIMES="1"),
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        assert _mask((tmp_path / f"{name}.out").read_bytes()) == want, name
+        (line,) = tc.times_lines(r.stderr)
+        return line
+
+    cold = exe_run("cold")
+    assert sorted((store / "exe").glob("*/*.grid")), "nothing kept"
+    warm = exe_run("warm")
+    assert cold["ground_built"] > 0 and warm["ground_built"] == 0, (cold, warm)
+    assert warm["ground_disk"] >= 1, warm

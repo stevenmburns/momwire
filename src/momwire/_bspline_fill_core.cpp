@@ -3279,7 +3279,7 @@ void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::G
 
 void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
                         const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
-                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed) {
+                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed, bool with_fixed) {
     const size_t n_reg = grid.regions.size();
     double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
         dth[somm_proj::MAX_REGIONS];
@@ -3304,6 +3304,7 @@ void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core:
     razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg);
     graded = graded_pair_moments(ctx, I, J);
     fixed.clear();
+    if (!with_fixed) return;
     for (size_t t = 0; t < I.size(); t++) {
         const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], base);
         fixed.insert(fixed.end(), lo.begin(), lo.end());
