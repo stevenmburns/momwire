@@ -3,8 +3,10 @@
 `seg_seg_full_moments_bspline` (and its complex-k and tiered twins) builds the
 off-edge moment tensor every bs2 fill reads: free space, the above-ground
 image term and the buried subset fill. The AVX2 build now runs four column
-pairs (i, j0..j0+3) at a time, one per vector lane, wherever the four share
-a tier of even order that fits one qr chunk; everything else is the per-pair
+pairs of one row at a time, one per vector lane, wherever the four share a
+tier of even order (a rule over more than one qr chunk runs chunk by chunk,
+and a row's pairs of a tier that straddle a group of four consecutive columns
+are gathered four at a time, momwire#1772); everything else is the per-pair
 walk. Each lane's arithmetic is the walk's operation for operation, and
 `reference=True` still runs the walk alone, so the gates here are bit
 equality against it, not tolerance:
@@ -219,3 +221,67 @@ def test_a_buried_solve_is_the_reference_to_the_bit(monkeypatch):
     assert n_ref == n > 0
     assert_lanes_match(z, z_ref)
     assert_lanes_match(c, c_ref)
+
+
+# momwire#1772: the kernels route by a per-pair tier table built without
+# the ratio's square root and divide on all but the pairs near a threshold.
+# Both spellings of the kernel read that one table, so the bit gates above
+# cannot see it; this holds the table to the rule itself -- numpy's sqrt and
+# divide are the correctly rounded ones the rule spells -- at pairs built to
+# sit on every threshold and a few ulps either side.
+def _rule_tiers(sl_i, sr_i, sl_j, sr_j, ratios):
+    c_i, c_j = 0.5 * (sl_i + sr_i), 0.5 * (sl_j + sr_j)
+
+    def lens(sl, sr):
+        d = sr - sl
+        return np.sqrt(d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1] + d[:, 2] * d[:, 2])
+
+    li, lj = lens(sl_i, sr_i), lens(sl_j, sr_j)
+    d = c_i[:, None, :] - c_j[None, :, :]
+    r = np.sqrt(d[..., 0] * d[..., 0] + d[..., 1] * d[..., 1] + d[..., 2] * d[..., 2])
+    ratio = r / np.maximum(li[:, None], lj[None, :])
+    tier = np.zeros(ratio.shape, dtype=np.int64)
+    alive = np.ones(ratio.shape, dtype=bool)
+    for t in range(1, len(ratios)):
+        alive &= ratio >= ratios[t]
+        tier[alive] = t
+    return tier
+
+
+@pytest.mark.parametrize(
+    "n_qp, ladder",
+    [(8, B.DEFAULT_PAIR_ORDER_LADDER), (32, B.BURIED_PAIR_ORDER_LADDER)],
+    ids=["free_ladder", "buried_ladder"],
+)
+def test_the_tier_table_is_the_rule(n_qp, ladder):
+    if not hasattr(acc, "bspline_pair_tiers"):
+        pytest.skip("the .so predates the tier table: rebuild (`make build`)")
+    arrs = BK._ladder_arrays(n_qp, ladder)
+    ratios = arrs[3]
+    # random blocks: near and far pairs of assorted lengths
+    for seed in range(4):
+        blk = _block(10 + seed, 37, 83, graded=bool(seed % 2))
+        got = acc.bspline_pair_tiers(*blk, *arrs)
+        np.testing.assert_array_equal(got, _rule_tiers(*blk, ratios))
+    # pairs ON each threshold: a unit observer at the origin, sources of the
+    # same length centred at the threshold's distance and a few ulps either
+    # side, along assorted directions
+    rng = np.random.default_rng(7)
+    sl_i = np.array([[-0.5, 0.0, 0.0]])
+    sr_i = np.array([[0.5, 0.0, 0.0]])
+    rows_l, rows_r = [], []
+    for thr in ratios[1:]:
+        for _ in range(16):
+            u = rng.normal(size=3)
+            u /= np.linalg.norm(u)
+            c = thr * u
+            for nudge in range(-4, 5):
+                cc = c * (1.0 + nudge * 2.0**-52)
+                rows_l.append(cc - [0.5, 0.0, 0.0])
+                rows_r.append(cc + [0.5, 0.0, 0.0])
+    sl_j, sr_j = np.array(rows_l), np.array(rows_r)
+    got = acc.bspline_pair_tiers(sl_i, sr_i, sl_j, sr_j, *arrs)
+    want = _rule_tiers(sl_i, sr_i, sl_j, sr_j, ratios)
+    np.testing.assert_array_equal(got, want)
+    # the band is exercised: both sides of some threshold occur
+    assert len(np.unique(want)) == len(ratios)
