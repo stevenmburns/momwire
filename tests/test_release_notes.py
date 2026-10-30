@@ -138,7 +138,7 @@ def test_the_nec42_default_exe_ships_in_the_linux_tarball_as_a_preview():
     workflow = (WORKFLOWS / "standalone.yml").read_text()
     readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
     readme = (root / "README.md").read_text(encoding="utf-8")
-    assert "momwire-nec42-linux bs2_nec42 momwire-nec42-standalone" in script
+    assert "momwire-nec42-linux bspline_nec42 momwire-nec42-standalone" in script
     assert (root / "standalone" / "release" / "momwire-nec42-linux").exists()
     assert "momwire-nec5-linux-x86_64/momwire-nec42-linux" in workflow
     assert "linux-nec5-sg, linux-nec42-bs]" in workflow
