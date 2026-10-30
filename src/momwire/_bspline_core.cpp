@@ -1039,6 +1039,169 @@ static void lane_group(const LaneCtx &c, LaneScratch<(D + 1) * (D + 1)> &S,
         }
     }
 }
+
+// A lane group of pairs from DIFFERENT rows (momwire#1772): (il[l], jl[l]),
+// all of one tier of even order, the rows' pairs that `lane_group`'s per-row
+// groups of W leave over. The observer side is per lane too -- its points
+// gathered lane-major, its length a vector -- and every lane's arithmetic is
+// still its pair's walk, operation for operation: the same R expression
+// (dx = px - xj, ...), wij = wi * wj, (wij * ui^p) * uj^P, the same G and
+// the same ascending-t stage 2.
+template<int D, bool COMPLEX_K, bool EK>
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+static void lane_group_mixed(const LaneCtx &c, LaneScratch<(D + 1) * (D + 1)> &S,
+                             size_t tier, const size_t *il, const size_t *jl,
+                             double *piG) {
+    constexpr int NM = D + 1;
+    constexpr int NMM = NM * NM;
+    constexpr size_t LN = W;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    const double k = c.k, k_im = c.k_im;
+    const vd v_a2 = set1(c.a_squared);
+    const size_t N_i = c.N_i, N_j = c.N_j;
+    double *const R = S.R, *const inv_R_4pi = S.inv_R_4pi, *const phases = S.phases;
+    double *const cos_phases = S.cos_phases, *const sin_phases = S.sin_phases;
+    double *const G_re = S.G_re, *const G_im = S.G_im, *const decay = S.decay;
+    double *const wv = S.wv, *const acc_re = S.acc_re, *const acc_im = S.acc_im;
+    const size_t n_qp = c.ladder->n_qp(tier);
+    const size_t m_all = n_qp * n_qp;
+    const double *gt = c.ladder->t_at(tier);
+    const double *gw = c.ladder->w_at(tier);
+    double Li[LN], Lj[LN];
+    for (size_t l = 0; l < LN; l++) {
+        Li[l] = c.len_i[il[l]];
+        Lj[l] = c.len_j[jl[l]];
+    }
+    // observers (q, c, lane) and sources (c, r, lane), lane-major
+    {
+        const double *pit = c.pos_i[tier].get();
+        const double *pjt = c.pos_j[tier].get();
+        for (size_t l = 0; l < LN; l++) {
+            const double *srci = pit + il[l] * n_qp * 3;
+            for (size_t u = 0; u < 3 * n_qp; u++) piG[u * LN + l] = srci[u];
+            const double *srcj = pjt + jl[l] * 3 * n_qp;
+            for (size_t u = 0; u < 3 * n_qp; u++) S.pjG[u * LN + l] = srcj[u];
+        }
+    }
+    const double *pT = S.pjG;
+    const vd vLi = loadu(Li), vLj = loadu(Lj);
+    for (size_t base = 0; base < m_all; base += BSPLINE_QR_TILE) {
+        const size_t m = std::min(m_all - base, (size_t)BSPLINE_QR_TILE);
+        const size_t m4 = m * LN;
+        size_t q = base / n_qp, r = base % n_qp;
+        for (size_t t = 0; t < m; t++) {
+            // R: the walk's `dx*dx + dy*dy + dz*dz + a_squared`, left to right
+            const vd dx = sub(load(piG + (q*3 + 0) * LN), load(pT + r * LN));
+            const vd dy = sub(load(piG + (q*3 + 1) * LN), load(pT + (n_qp + r) * LN));
+            const vd dz = sub(load(piG + (q*3 + 2) * LN), load(pT + (2 * n_qp + r) * LN));
+            vd sq = add(mul(dx, dx), mul(dy, dy));
+            sq = add(sq, mul(dz, dz));
+            sq = add(sq, v_a2);
+            store(R + t * LN, sqrt(sq));
+            // the moment weights: wi = gw[q]*Li, ui = gt[q]*Li, wj, uj alike
+            const vd wi = mul(set1(gw[q]), vLi);
+            const vd ui = mul(set1(gt[q]), vLi);
+            const vd wj = mul(set1(gw[r]), vLj);
+            const vd uj = mul(set1(gt[r]), vLj);
+            vd uip[NM], ujp[NM];
+            uip[0] = set1(1.0);
+            ujp[0] = set1(1.0);
+            for (int e = 1; e < NM; e++) {
+                uip[e] = mul(uip[e-1], ui);
+                ujp[e] = mul(ujp[e-1], uj);
+            }
+            const vd wij = mul(wi, wj);
+            for (int pp = 0; pp < NM; pp++) {
+                const vd x = mul(wij, uip[pp]);
+                for (int PP = 0; PP < NM; PP++) {
+                    store(wv + (t * NMM + pp * NM + PP) * W, mul(x, ujp[PP]));
+                }
+            }
+            if (++r == n_qp) { r = 0; ++q; }
+        }
+        S.v_held = false;
+
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            phases[t] = -k * R[t];
+        }
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            cos_phases[t] = std::cos(phases[t]);
+        }
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            sin_phases[t] = std::sin(phases[t]);
+        }
+        if (COMPLEX_K) {
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                decay[t] = std::exp(k_im * R[t]);
+            }
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                inv_R_4pi[t] = inv_4pi / R[t];
+                const double sc = decay[t] * inv_R_4pi[t];
+                G_re[t] = cos_phases[t] * sc;
+                G_im[t] = sin_phases[t] * sc;
+            }
+        } else {
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                inv_R_4pi[t] = inv_4pi / R[t];
+                G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                G_im[t] = sin_phases[t] * inv_R_4pi[t];
+            }
+        }
+        if (EK) {
+            bool e[LN];
+            bool any_e = false;
+            for (size_t l = 0; l < LN; l++) {
+                const int64_t gi = c.grp_i[il[l]];
+                e[l] = gi >= 0 && c.grp_j[jl[l]] == gi;
+                any_e = any_e || e[l];
+            }
+            if (any_e) {
+                const vm emask = mask_from(e);
+                const vd v_k = set1(k);
+                const vd v_t1n = set1(0.25 * c.a4_ek);
+                const vd v_t2n = set1(0.5 * c.a2_ek);
+                const vd v_bek = set1(c.b_ek);
+                for (size_t t = 0; t < m; t++) {
+                    vd Rq = load(R + t * LN);
+                    if (c.ek_floor) Rq = max(Rq, v_bek);
+                    const vd r2 = mul(Rq, Rq);
+                    const vd r4 = mul(r2, r2);
+                    ek_factor(G_re + t * LN, G_im + t * LN, div(v_t1n, r4),
+                              div(v_t2n, r2), mul(v_k, Rq), emask);
+                }
+            }
+        }
+        vd acc[NMM];
+        if (base == 0) {
+            stage2<NMM>(G_re, wv, m, acc);
+        } else {
+            for (int pP = 0; pP < NMM; pP++) acc[pP] = load(acc_re + pP * LN);
+            stage2_more<NMM>(G_re, wv, m, acc);
+        }
+        for (int pP = 0; pP < NMM; pP++) store(acc_re + pP * LN, acc[pP]);
+        if (base == 0) {
+            stage2<NMM>(G_im, wv, m, acc);
+        } else {
+            for (int pP = 0; pP < NMM; pP++) acc[pP] = load(acc_im + pP * LN);
+            stage2_more<NMM>(G_im, wv, m, acc);
+        }
+        for (int pP = 0; pP < NMM; pP++) store(acc_im + pP * LN, acc[pP]);
+    }
+    for (int pP = 0; pP < NMM; pP++) {
+        for (size_t l = 0; l < LN; l++) {
+            c.J[((size_t)pP * N_i + il[l]) * N_j + jl[l]] =
+                std::complex<double>(acc_re[pP * LN + l], acc_im[pP * LN + l]);
+        }
+    }
+}
 }  // namespace offedge_lanes
 #endif
 
@@ -1301,12 +1464,18 @@ seg_seg_full_moments_bspline_kernel_impl(
         }
         for (size_t i = 0; i < N_i; i++)
             for (size_t t = 0; t < n_tiers; t++) tier_pairs[t] += row_cnt[i * n_tiers + t];
-        for (size_t t = 0; t < n_tiers; t++) {
-            if (tier_pairs[t] == 0) continue;
-            uint8_t *nj = &need_j[t * N_j];
-            for (size_t i = 0; i < N_i; i++) {
-                const uint8_t *row = tp + i * N_j;
-                for (size_t j = 0; j < N_j; j++) nj[j] |= row[j] == t;
+        // column blocks side by side, each its own columns' flags
+        const size_t JB = 512, n_jb = (N_j + JB - 1) / JB;
+        #pragma omp parallel for schedule(static)
+        for (size_t jb = 0; jb < n_jb; jb++) {
+            const size_t j0 = jb * JB, j1 = std::min(N_j, j0 + JB);
+            for (size_t t = 0; t < n_tiers; t++) {
+                if (tier_pairs[t] == 0) continue;
+                uint8_t *nj = &need_j[t * N_j];
+                for (size_t i = 0; i < N_i; i++) {
+                    const uint8_t *row = tp + i * N_j;
+                    for (size_t j = j0; j < j1; j++) nj[j] |= row[j] == t;
+                }
             }
         }
     } else {
@@ -1329,6 +1498,7 @@ seg_seg_full_moments_bspline_kernel_impl(
         if (std::find(ni, ni + N_i, 1) != ni + N_i) {
             pos_i[tier].reset(new double[N_i * n_qp * 3]);
             double *pi_t = pos_i[tier].get();
+            #pragma omp parallel for schedule(static)
             for (size_t i = 0; i < N_i; i++) {
                 if (!ni[i]) continue;
                 for (size_t q = 0; q < n_qp; q++) {
@@ -1342,6 +1512,7 @@ seg_seg_full_moments_bspline_kernel_impl(
         if (std::find(nj, nj + N_j, 1) != nj + N_j) {
             pos_j[tier].reset(new double[N_j * n_qp * 3]);
             double *pj_t = pos_j[tier].get();
+            #pragma omp parallel for schedule(static)
             for (size_t j = 0; j < N_j; j++) {
                 if (!nj[j]) continue;
                 for (size_t r = 0; r < n_qp; r++) {
@@ -1617,6 +1788,7 @@ seg_seg_full_moments_bspline_kernel_impl(
             const double *pj_t = pos_j[tier].get();
             pjT_all[tier].reset(new double[3 * n_qp * N_j]);
             double *out_t = pjT_all[tier].get();
+            #pragma omp parallel for schedule(static)
             for (size_t j = 0; j < N_j; j++) {
                 if (!nj[j]) continue;
                 for (size_t c = 0; c < 3; c++) {
@@ -1647,6 +1819,17 @@ seg_seg_full_moments_bspline_kernel_impl(
             return ladder.n_qp(tier) % 2 == 0;
         };
 
+        // the second pass's work: a lane group (n = W) or one walked pair
+        // (kind 0: a walked pair (i[0], j[0]); 1: a lane group of row i[0];
+        // 2: a lane group across rows, lane l the pair (i[l], j[l]))
+        struct WaitItem {
+            uint32_t kind, tier;
+            uint32_t i[LN], j[LN];
+        };
+        std::vector<std::vector<WaitItem>> row_items(N_i);
+        // a row's last < W pairs of each tier: (tier, j)
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> row_left(N_i);
+        std::vector<WaitItem> all_items;
         #pragma omp parallel
         {
         alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
@@ -1658,10 +1841,12 @@ seg_seg_full_moments_bspline_kernel_impl(
         std::vector<double> pjG_buf(3 * max_qp * LN + ALIGN / sizeof(double));
         scr.pjG = pjG_buf.data();
         while (reinterpret_cast<std::uintptr_t>(scr.pjG) % ALIGN != 0) scr.pjG++;
+        std::vector<double> piG_buf(3 * max_qp * LN + ALIGN / sizeof(double));
+        double *piG = piG_buf.data();
+        while (reinterpret_cast<std::uintptr_t>(piG) % ALIGN != 0) piG++;
         // the second pass's waiting columns of one row, per tier
         std::vector<std::vector<uint32_t>> wait(n_tiers);
 
-        // One group: the pairs (i, jl[0..W-1]), all of `tier` (even order).
         LaneCtx ctx;
         ctx.ladder = &ladder;
         ctx.pos_i = pos_i.data();
@@ -1703,8 +1888,10 @@ seg_seg_full_moments_bspline_kernel_impl(
             }
         }
         // Second pass: per row, the waiting pairs of each even tier, W at a
-        // time in ascending column order; the last < W walked.
-        #pragma omp for schedule(dynamic, 4)
+        // time in ascending column order; the last < W walked. Listed per
+        // row, then handed out one item at a time: a hub's near rows hold
+        // most of this pass's work, and its blocks can have few rows.
+        #pragma omp for schedule(static)
         for (size_t i = 0; i < N_i; i++) {
             for (auto &w : wait) w.clear();
             for (size_t g = 0; g < n_grp; g++) {
@@ -1716,17 +1903,66 @@ seg_seg_full_moments_bspline_kernel_impl(
                     if (ladder.n_qp(t) % 2 == 0) wait[t].push_back(static_cast<uint32_t>(j));
                 }
             }
+            std::vector<WaitItem> &items = row_items[i];
             for (size_t t = 0; t < n_tiers; t++) {
                 const std::vector<uint32_t> &w = wait[t];
                 size_t u = 0;
                 for (; u + LN <= w.size(); u += LN) {
-                    size_t jl[LN];
-                    for (size_t l = 0; l < LN; l++) jl[l] = w[u + l];
-                    lane_group<D, COMPLEX_K, EK>(ctx, scr, i, t, jl);
+                    WaitItem it;
+                    it.kind = 1;
+                    it.tier = static_cast<uint32_t>(t);
+                    it.i[0] = static_cast<uint32_t>(i);
+                    for (size_t l = 0; l < LN; l++) it.j[l] = w[u + l];
+                    items.push_back(it);
                 }
-                for (; u < w.size(); u++) {
-                    pair_walk(i, w[u], wuwu, w_held, w_tier, w_Li, w_Lj);
+                for (; u < w.size(); u++) row_left[i].push_back({static_cast<uint32_t>(t), w[u]});
+            }
+        }
+        // the rows' leftovers of each tier, W at a time across rows (row
+        // order); a tier's last < W walked
+        #pragma omp single
+        {
+            for (const auto &r : row_items) all_items.insert(all_items.end(), r.begin(), r.end());
+            for (size_t t = 0; t < n_tiers; t++) {
+                WaitItem it;
+                it.tier = static_cast<uint32_t>(t);
+                size_t n_in = 0;
+                for (size_t i = 0; i < N_i; i++) {
+                    for (const auto &tj : row_left[i]) {
+                        if (tj.first != t) continue;
+                        it.i[n_in] = static_cast<uint32_t>(i);
+                        it.j[n_in] = tj.second;
+                        if (++n_in == LN) {
+                            it.kind = 2;
+                            all_items.push_back(it);
+                            n_in = 0;
+                        }
+                    }
                 }
+                for (size_t l = 0; l < n_in; l++) {
+                    WaitItem one;
+                    one.kind = 0;
+                    one.tier = it.tier;
+                    one.i[0] = it.i[l];
+                    one.j[0] = it.j[l];
+                    all_items.push_back(one);
+                }
+            }
+        }
+        #pragma omp for schedule(dynamic, 1)
+        for (size_t u = 0; u < all_items.size(); u++) {
+            const WaitItem &it = all_items[u];
+            size_t il[LN], jl[LN];
+            for (size_t l = 0; l < LN; l++) {
+                il[l] = it.i[l];
+                jl[l] = it.j[l];
+            }
+            if (it.kind == 1) {
+                lane_group<D, COMPLEX_K, EK>(ctx, scr, il[0], it.tier, jl);
+            } else if (it.kind == 2) {
+                lane_group_mixed<D, COMPLEX_K, EK>(ctx, scr, it.tier, il, jl, piG);
+            } else {
+                pair_walk(il[0], jl[0], wuwu, w_held, w_tier, w_Li, w_Lj);
             }
         }
         }
