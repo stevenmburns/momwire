@@ -383,9 +383,20 @@ void set_threads(int n, bool omp) {
 // start at one thread; `set_threads` grows it only on a route that wants
 // more. The fallback's numpy and scipy still read the count set_threads
 // exports before CPython starts.
+//
+// The pool's threads also spin after each call for OpenBLAS's default
+// THREAD_TIMEOUT, 2^28 cycles (~0.1 s), before they sleep (momwire#1772).
+// Between the BLAS calls of a fill -- the image weights, the loading Gram --
+// that spin took the CPUs the fill's OpenMP threads needed: at four threads
+// on a four-core Haswell it cost the buried and screen fills 15-28 %, razor-2p
+// as much as bs2. 2^16 cycles still catches a call that follows at once; a
+// pool that then sleeps wakes on the next call. It sets only how long an idle
+// thread spins: what a call computes, and on how many threads, is unchanged.
+// A caller's own OPENBLAS_THREAD_TIMEOUT is kept.
 #if defined(__GNUC__) && !defined(_WIN32)
 __attribute__((constructor(101))) void one_blas_thread_at_load() {
     setenv("OPENBLAS_NUM_THREADS", "1", 1);
+    setenv("OPENBLAS_THREAD_TIMEOUT", "16", 0);
 }
 #endif
 
