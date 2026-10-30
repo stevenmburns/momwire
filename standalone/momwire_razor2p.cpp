@@ -1334,3 +1334,84 @@ int main(int argc, char **argv) {
     return run_deck(args[0], args[1], en_optional, forced_threads);
 }
 #endif  // MW_EXE_NO_PYTHON
+
+// --- large blocks on huge pages (Linux) ---------------------------------------
+//
+// A warm Python process works on pages it has touched before; every
+// executable run is a fresh process whose matrices and window buffers are
+// first touched in that run, at one page fault per 4 KiB. On a medium or
+// large deck the faults are a visible share of the run (fs_yagi820 sg5 at
+// one thread on Skylake: 31,000 faults, ~60 ms of system time in 460 ms,
+// against Python's 380 ms warm). So a block of 4 MiB and up is its own
+// 2 MiB-aligned anonymous map marked MADV_HUGEPAGE, which the kernel backs
+// with 2 MiB pages where it can (`transparent_hugepage` "madvise" or
+// "always"): one fault per 2 MiB. It is unmapped when freed, as glibc does
+// with its own large blocks. The smaller threshold (1 MiB) and keeping freed
+// blocks for re-use were measured too: no faster, and up to +40 % peak RSS
+// on small decks from rounding to 2 MiB. Allocation is all this changes: no
+// value moves.
+#if defined(__linux__)
+#include <sys/mman.h>
+
+#include <map>
+#include <mutex>
+
+namespace {
+
+constexpr std::size_t BIG_MIN = std::size_t(4) << 20;
+constexpr std::size_t HUGE_PAGE = std::size_t(2) << 20;
+
+struct BigBlocks {
+    std::mutex mu;
+    std::map<void *, std::size_t> live;  // block -> mapped length
+};
+BigBlocks &big_blocks() {
+    static BigBlocks *b = new BigBlocks();  // never destroyed: a delete may follow exit's destructors
+    return *b;
+}
+
+void *big_new(std::size_t n) {
+    const std::size_t len = (n + HUGE_PAGE - 1) & ~(HUGE_PAGE - 1);
+    void *m = mmap(nullptr, len + HUGE_PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m == MAP_FAILED) return nullptr;
+    const std::uintptr_t a = reinterpret_cast<std::uintptr_t>(m);
+    const std::uintptr_t s = (a + HUGE_PAGE - 1) & ~(HUGE_PAGE - 1);
+    if (s > a) munmap(m, s - a);
+    if (a + len + HUGE_PAGE > s + len) munmap(reinterpret_cast<void *>(s + len), a + len + HUGE_PAGE - (s + len));
+    void *p = reinterpret_cast<void *>(s);
+    madvise(p, len, MADV_HUGEPAGE);
+    BigBlocks &b = big_blocks();
+    std::lock_guard<std::mutex> lock(b.mu);
+    b.live[p] = len;
+    return p;
+}
+
+// true: `p` was one of these blocks (now unmapped)
+bool big_delete(void *p) {
+    if ((reinterpret_cast<std::uintptr_t>(p) & (HUGE_PAGE - 1)) != 0) return false;
+    std::size_t len = 0;
+    {
+        BigBlocks &b = big_blocks();
+        std::lock_guard<std::mutex> lock(b.mu);
+        auto it = b.live.find(p);
+        if (it == b.live.end()) return false;
+        len = it->second;
+        b.live.erase(it);
+    }
+    munmap(p, len);
+    return true;
+}
+
+}  // namespace
+
+void *operator new(std::size_t n) {
+    if (n >= BIG_MIN)
+        if (void *p = big_new(n)) return p;
+    if (void *p = std::malloc(n ? n : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void *p) noexcept {
+    if (p != nullptr && !big_delete(p)) std::free(p);
+}
+void operator delete(void *p, std::size_t) noexcept { operator delete(p); }
+#endif
