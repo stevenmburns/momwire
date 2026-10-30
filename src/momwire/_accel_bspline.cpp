@@ -193,6 +193,22 @@ seg_seg_full_moments_bspline_cplx_tiered(
             ndb::in(tier_w), ndb::in(tier_n_qp), ndb::in(tier_ratio), reference));
 }
 
+static py::array_t<int64_t> bspline_pair_tiers(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio) {
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    return ndb::out(mw::bspline::bspline_pair_tiers(ndb::in(seg_l_i), ndb::in(seg_r_i), ndb::in(seg_l_j),
+                                                    ndb::in(seg_r_j), ndb::in(tier_t), ndb::in(tier_w),
+                                                    ndb::in(tier_n_qp), ndb::in(tier_ratio)));
+}
+
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_sinusoidal_tiered(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
@@ -1087,6 +1103,12 @@ void register_bspline(py::module_ &m) {
           py::arg("tier_t"), py::arg("tier_w"),
           py::arg("tier_n_qp"), py::arg("tier_ratio"),
           py::arg("reference") = false);
+    m.def("bspline_pair_tiers", &bspline_pair_tiers,
+          "The pair-order ladder's tier of every pair (i, j) of a block, "
+          "(N_i, N_j) int64 (momwire#1772): the table the tiered off-edge "
+          "kernels route by, for the tests.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"), py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("tier_t"), py::arg("tier_w"), py::arg("tier_n_qp"), py::arg("tier_ratio"));
     m.def("seg_seg_full_moments_bspline_cplx_tiered",
           &seg_seg_full_moments_bspline_cplx_tiered,
           "In-medium (complex-k) twin of seg_seg_full_moments_bspline_tiered "

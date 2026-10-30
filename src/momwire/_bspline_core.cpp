@@ -25,6 +25,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <memory>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -751,6 +753,72 @@ MW_LANES_INLINE void ek_factor(double *gre_p, double *gim_p, vd t1, vd t2,
     store(gim_p, blend(gim, nim, emask));
 }
 
+// R at the W pairs of one multi-chunk group (momwire#1772), the walk's chunk
+// [base, base+m) of qr = q*n_qp + r: the same expression as `r_bcast`'s, over
+// a lane-major (c, r, j) source table as `r_bcast` reads it.
+MW_LANES_INLINE void r_chunk(double *R, const double *pi, const double *pT,
+                             size_t n_qp, size_t N_j, size_t j0, size_t base,
+                             size_t m, vd v_a2) {
+    size_t q = base / n_qp, r = base % n_qp;
+    for (size_t t = 0; t < m; t++) {
+        const vd px = set1(pi[q*3 + 0]);
+        const vd py = set1(pi[q*3 + 1]);
+        const vd pz = set1(pi[q*3 + 2]);
+        const vd dx = sub(px, loadu(pT + r * N_j + j0));
+        const vd dy = sub(py, loadu(pT + (n_qp + r) * N_j + j0));
+        const vd dz = sub(pz, loadu(pT + (2 * n_qp + r) * N_j + j0));
+        vd s = add(mul(dx, dx), mul(dy, dy));
+        s = add(s, mul(dz, dz));
+        s = add(s, v_a2);
+        store(R + t * W, sqrt(s));
+        if (++r == n_qp) { r = 0; ++q; }
+    }
+}
+
+// The moment weights of one multi-chunk group's chunk, wv[t][pP][lane], per
+// lane in the walk's order: wij = wi*wj, then (wij*ui^p)*uj^P.
+template<int NM>
+MW_LANES_INLINE void wv_chunk(double *wv, const double *gt, const double *gw,
+                              size_t n_qp, size_t base, size_t m, double Li,
+                              const double *Lj) {
+    constexpr int NMM = NM * NM;
+    const vd vLj = loadu(Lj);
+    size_t q = base / n_qp, r = base % n_qp;
+    for (size_t t = 0; t < m; t++) {
+        const double wi = gw[q] * Li;
+        const double ui = gt[q] * Li;
+        double ui_pow[NM];
+        ui_pow[0] = 1.0;
+        for (int e = 1; e < NM; e++) ui_pow[e] = ui_pow[e-1] * ui;
+        const vd wj = mul(set1(gw[r]), vLj);
+        const vd uj = mul(set1(gt[r]), vLj);
+        vd ujp[NM];
+        ujp[0] = set1(1.0);
+        for (int e = 1; e < NM; e++) ujp[e] = mul(ujp[e-1], uj);
+        const vd wij = mul(set1(wi), wj);
+        for (int pp = 0; pp < NM; pp++) {
+            const vd x = mul(wij, set1(ui_pow[pp]));
+            for (int PP = 0; PP < NM; PP++) {
+                store(wv + (t * NMM + pp * NM + PP) * W, mul(x, ujp[PP]));
+            }
+        }
+        if (++r == n_qp) { r = 0; ++q; }
+    }
+}
+
+// `stage2` continued: the chains carried in from an earlier chunk.
+template<int NMM>
+MW_LANES_INLINE void stage2_more(const double *G, const double *wv, size_t m,
+                                 vd *acc) {
+    for (size_t t = 0; t < m; t++) {
+        const vd gv = load(G + t * W);
+        const double *w_t = wv + t * NMM * W;
+        for (int pP = 0; pP < NMM; pP++) {
+            acc[pP] = add(acc[pP], mul(load(w_t + pP * W), gv));
+        }
+    }
+}
+
 // Stage 2, one part (re or im) of G: per moment and lane, the walk's chain --
 // start at 0.0, add w*G in ascending t, one rounded multiply and one rounded
 // add per term. NMM vector accumulators; the parts never mixed in the walk.
@@ -766,8 +834,332 @@ MW_LANES_INLINE void stage2(const double *G, const double *wv, size_t m,
         }
     }
 }
+
+// The lane kernel's inputs that do not change across one call's groups.
+struct LaneCtx {
+    const PairOrderLadder *ladder;
+    const std::unique_ptr<double[]> *pos_i, *pos_j, *pjT_all;
+    const double *len_i, *len_j;
+    size_t N_i, N_j;
+    double k, k_im, a_squared;
+    const int64_t *grp_i, *grp_j;
+    double a2_ek, a4_ek, b_ek;
+    bool ek_floor;
+    std::complex<double> *J;  // (NM, NM, N_i, N_j), C order
+};
+
+// One thread's scratch, and the moment-weight table it holds across groups:
+// [t][lane] buffers, lane l holding point t of its pair's chunk.
+template<int NMM>
+struct LaneScratch {
+    alignas(ALIGN) double wv[BSPLINE_QR_TILE * NMM * W];
+    alignas(ALIGN) double R[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double inv_R_4pi[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double phases[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double cos_phases[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double sin_phases[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double G_re[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double G_im[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double decay[BSPLINE_QR_TILE * W];
+    alignas(ALIGN) double acc_re[NMM * W];
+    alignas(ALIGN) double acc_im[NMM * W];
+    bool v_held = false;
+    size_t v_tier = 0;
+    double v_Li = 0.0;
+    double v_Lj[W] = {};
+    double *pjG = nullptr;  // a gathered group's source points, (c, r, lane)
+};
+
+// One lane group (momwire#1290; #1767 the gathered and multi-chunk ones):
+// the pairs (i, jl[0..W-1]), all of one tier of even order. Its own
+// function, so its loops get the registers to themselves: inlined into the
+// kernel's two passes they spilled their constants.
+template<int D, bool COMPLEX_K, bool EK>
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+static void lane_group(const LaneCtx &c, LaneScratch<(D + 1) * (D + 1)> &S,
+                       size_t i, size_t tier, const size_t *jl) {
+    constexpr int NM = D + 1;
+    constexpr int NMM = NM * NM;
+    constexpr size_t LN = W;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    const double k = c.k, k_im = c.k_im;
+    const vd v_a2 = set1(c.a_squared);
+    const size_t N_i = c.N_i, N_j = c.N_j;
+    double *const R = S.R, *const inv_R_4pi = S.inv_R_4pi, *const phases = S.phases;
+    double *const cos_phases = S.cos_phases, *const sin_phases = S.sin_phases;
+    double *const G_re = S.G_re, *const G_im = S.G_im, *const decay = S.decay;
+    double *const wv = S.wv, *const acc_re = S.acc_re, *const acc_im = S.acc_im;
+    bool run = true;  // W consecutive columns: one interleaved store
+    for (size_t l = 1; l < LN; l++) run = run && jl[l] == jl[0] + l;
+    const size_t n_qp = c.ladder->n_qp(tier);
+    const size_t m_all = n_qp * n_qp;
+    const double *gt = c.ladder->t_at(tier);
+    const double *gw = c.ladder->w_at(tier);
+    const double *pi = &c.pos_i[tier][i * n_qp * 3];
+    const double Li = c.len_i[i];
+    double Lj[LN];
+    for (size_t l = 0; l < LN; l++) Lj[l] = c.len_j[jl[l]];
+    // the group's source table: the tier's full one at a run of columns,
+    // else gathered from pos_j's (j, c, r)
+    const double *pT;
+    size_t pT_stride, pT_j0;
+    if (run && c.pjT_all[tier]) {
+        pT = c.pjT_all[tier].get();
+        pT_stride = N_j;
+        pT_j0 = jl[0];
+    } else {
+        const double *pjt = c.pos_j[tier].get();
+        for (size_t l = 0; l < LN; l++) {
+            const double *src = pjt + jl[l] * 3 * n_qp;
+            for (size_t u = 0; u < 3 * n_qp; u++) S.pjG[u * LN + l] = src[u];
+        }
+        pT = S.pjG;
+        pT_stride = LN;
+        pT_j0 = 0;
+    }
+    const bool one_chunk = m_all <= BSPLINE_QR_TILE;
+    for (size_t base = 0; base < m_all; base += BSPLINE_QR_TILE) {
+        const size_t m = std::min(m_all - base, (size_t)BSPLINE_QR_TILE);
+        const size_t m4 = m * LN;
+        if (one_chunk) {
+            r_bcast(R, pi, pT, n_qp, pT_stride, pT_j0, v_a2);
+            // A mesh's segment lengths agree to the bit far less often than
+            // they agree on paper, so this refill runs on most groups and is
+            // worth the vectors.
+            bool same = S.v_held && tier == S.v_tier && Li == S.v_Li;
+            for (size_t l = 0; l < LN; l++) same = same && Lj[l] == S.v_Lj[l];
+            if (!same) {
+                wv_bcast<NM>(wv, gt, gw, n_qp, Li, Lj);
+                S.v_held = true;
+                S.v_tier = tier;
+                S.v_Li = Li;
+                for (size_t l = 0; l < LN; l++) S.v_Lj[l] = Lj[l];
+            }
+        } else {
+            // a rule over one chunk: the walk's chunk [base, base+m) of
+            // qr = q*n_qp + r, its table refilled per chunk as the walk
+            // refills wuwu (never held)
+            r_chunk(R, pi, pT, n_qp, pT_stride, pT_j0, base, m, v_a2);
+            wv_chunk<NM>(wv, gt, gw, n_qp, base, m, Li, Lj);
+            S.v_held = false;
+        }
+
+        // Stage 1, the walk's loops over all the lanes' points.
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            phases[t] = -k * R[t];
+        }
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            cos_phases[t] = std::cos(phases[t]);
+        }
+        MW_OMP_SIMD()
+        for (size_t t = 0; t < m4; t++) {
+            sin_phases[t] = std::sin(phases[t]);
+        }
+        if (COMPLEX_K) {
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                decay[t] = std::exp(k_im * R[t]);
+            }
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                inv_R_4pi[t] = inv_4pi / R[t];
+                const double sc = decay[t] * inv_R_4pi[t];
+                G_re[t] = cos_phases[t] * sc;
+                G_im[t] = sin_phases[t] * sc;
+            }
+        } else {
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m4; t++) {
+                inv_R_4pi[t] = inv_4pi / R[t];
+                G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                G_im[t] = sin_phases[t] * inv_R_4pi[t];
+            }
+        }
+
+        // EK (momwire#1362): the walk's coaxial factor, per lane
+        // (`ek_factor`), from the floored R where the walk floors it.
+        if (EK && c.grp_i[i] >= 0) {
+            const int64_t gi = c.grp_i[i];
+            bool e[LN];
+            bool any_e = false;
+            for (size_t l = 0; l < LN; l++) {
+                e[l] = c.grp_j[jl[l]] == gi;
+                any_e = any_e || e[l];
+            }
+            if (any_e) {
+                const vm emask = mask_from(e);
+                const vd v_k = set1(k);
+                const vd v_t1n = set1(0.25 * c.a4_ek);
+                const vd v_t2n = set1(0.5 * c.a2_ek);
+                const vd v_bek = set1(c.b_ek);
+                for (size_t t = 0; t < m; t++) {
+                    vd Rq = load(R + t * LN);
+                    if (c.ek_floor) Rq = max(Rq, v_bek);
+                    const vd r2 = mul(Rq, Rq);
+                    const vd r4 = mul(r2, r2);
+                    ek_factor(G_re + t * LN, G_im + t * LN, div(v_t1n, r4),
+                              div(v_t2n, r2), mul(v_k, Rq), emask);
+                }
+            }
+        }
+
+        // Stage 2, the real and imaginary sums in separate passes so each
+        // holds NMM accumulators, not 2 NMM, in registers; carried across a
+        // multi-chunk rule's chunks in ascending t as the walk carries its
+        // acc_re / acc_im.
+        vd acc[NMM];
+        if (base == 0) {
+            stage2<NMM>(G_re, wv, m, acc);
+        } else {
+            for (int pP = 0; pP < NMM; pP++) acc[pP] = load(acc_re + pP * LN);
+            stage2_more<NMM>(G_re, wv, m, acc);
+        }
+        for (int pP = 0; pP < NMM; pP++) store(acc_re + pP * LN, acc[pP]);
+        if (base == 0) {
+            stage2<NMM>(G_im, wv, m, acc);
+        } else {
+            for (int pP = 0; pP < NMM; pP++) acc[pP] = load(acc_im + pP * LN);
+            stage2_more<NMM>(G_im, wv, m, acc);
+        }
+        for (int pP = 0; pP < NMM; pP++) store(acc_im + pP * LN, acc[pP]);
+    }
+    for (int pP = 0; pP < NMM; pP++) {
+        std::complex<double> *row = c.J + ((size_t)pP * N_i + i) * N_j;
+        if (run) {
+            store_interleaved(reinterpret_cast<double *>(row + jl[0]),
+                              load(acc_re + pP * LN), load(acc_im + pP * LN));
+        } else {
+            for (size_t l = 0; l < LN; l++) {
+                row[jl[l]] = std::complex<double>(acc_re[pP * LN + l], acc_im[pP * LN + l]);
+            }
+        }
+    }
+}
 }  // namespace offedge_lanes
 #endif
+
+// The pair-order ladder's tier of every pair (i, j) of a block, into
+// tp[i * N_j + j] (momwire#1772): the highest tier whose ratio threshold
+// the pair meets, the ratio being sqrt(dx*dx + dy*dy + dz*dz) /
+// max(len_i[i], len_j[j]) over the two segment centres (thresholds strictly
+// ascending, validated at construction).
+//
+// A row at a time, without the ratio's square root and divide on all but a
+// few pairs: against the squared thresholds, widened by a relative 1e-9
+// either side -- far past the few roundings in either form -- a pair's
+// squared distance decides each threshold exactly as the rule's ratio would,
+// and a pair inside a band (or with a zero distance or length, a NaN, or a
+// threshold that is not positive) is decided by the rule itself. With the
+// thresholds ascending, the rule's walk-until-below tier is the count of
+// thresholds met. So every pair's tier is the rule's
+// (`tests/test_offedge_lanes_1290.py` holds the table to the rule at pairs
+// built to sit on, and one ulp either side of, every threshold).
+static void pair_tier_table(const double *c_i, const double *c_j,
+                            const double *len_i, const double *len_j,
+                            size_t N_i, size_t N_j,
+                            const PairOrderLadder &ladder, uint8_t *tp) {
+    const size_t n_tiers = ladder.n_tiers();
+    std::vector<double> th_hi(n_tiers, 0.0), th_lo(n_tiers, 0.0);
+    for (size_t t = 1; t < n_tiers; t++) {
+        const double r = ladder.ratio[t];
+        if (r > 0.0 && r < 1e100) {
+            th_hi[t] = (r * r) * (1.0 + 1e-9);
+            th_lo[t] = (r * r) * (1.0 - 1e-9);
+        } else {  // every pair to the rule
+            th_hi[t] = std::numeric_limits<double>::infinity();
+            th_lo[t] = -std::numeric_limits<double>::infinity();
+        }
+    }
+    #pragma omp parallel
+    {
+    std::vector<double> d2v(N_j), llv(N_j);
+    std::vector<uint8_t> cnt_t(N_j), amb(N_j);
+    #pragma omp for schedule(static)
+    for (size_t i = 0; i < N_i; i++) {
+        const double cx = c_i[i*3 + 0], cy = c_i[i*3 + 1], cz = c_i[i*3 + 2];
+        const double li = len_i[i];
+        double *d2 = d2v.data(), *ll = llv.data();
+        uint8_t *ct = cnt_t.data(), *am = amb.data();
+        for (size_t j = 0; j < N_j; j++) {
+            const double dx = cx - c_j[j*3 + 0];
+            const double dy = cy - c_j[j*3 + 1];
+            const double dz = cz - c_j[j*3 + 2];
+            const double L = std::max(li, len_j[j]);
+            d2[j] = dx*dx + dy*dy + dz*dz;
+            ll[j] = L * L;
+            ct[j] = 0;
+            am[j] = !(d2[j] > 0.0) || !(ll[j] > 0.0);
+        }
+        for (size_t t = 1; t < n_tiers; t++) {
+            const double hi = th_hi[t], lo = th_lo[t];
+            for (size_t j = 0; j < N_j; j++) {
+                const bool above = d2[j] >= hi * ll[j];
+                const bool below = d2[j] <= lo * ll[j];
+                ct[j] += above ? 1 : 0;
+                am[j] |= !(above || below);
+            }
+        }
+        uint8_t *row = tp + i * N_j;
+        for (size_t j = 0; j < N_j; j++) row[j] = ct[j];
+        for (size_t j = 0; j < N_j; j++) {
+            if (!am[j]) continue;
+            const double dx = cx - c_j[j*3 + 0];
+            const double dy = cy - c_j[j*3 + 1];
+            const double dz = cz - c_j[j*3 + 2];
+            const double ratio = std::sqrt(dx*dx + dy*dy + dz*dz)
+                                 / std::max(li, len_j[j]);
+            size_t tier = 0;
+            for (size_t t = 1; t < n_tiers; t++) {
+                if (ratio >= ladder.ratio[t]) tier = t; else break;
+            }
+            row[j] = static_cast<uint8_t>(tier);
+        }
+    }
+    }
+}
+
+// The table alone, for the tests (momwire#1772): the tiers the kernel
+// gives the pairs of this block, from the same centres and lengths.
+static py::array_t<int64_t> pair_tiers_impl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    const PairOrderLadder &ladder) {
+    auto sli = seg_l_i.unchecked<2>();
+    auto sri = seg_r_i.unchecked<2>();
+    auto slj = seg_l_j.unchecked<2>();
+    auto srj = seg_r_j.unchecked<2>();
+    const size_t N_i = sli.shape(0), N_j = slj.shape(0);
+    std::vector<double> len_i(N_i), len_j(N_j), c_i(N_i * 3), c_j(N_j * 3);
+    for (size_t i = 0; i < N_i; i++) {
+        double dx = sri(i,0) - sli(i,0);
+        double dy = sri(i,1) - sli(i,1);
+        double dz = sri(i,2) - sli(i,2);
+        len_i[i] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (int d = 0; d < 3; d++) c_i[i*3 + d] = 0.5 * (sli(i,d) + sri(i,d));
+    }
+    for (size_t j = 0; j < N_j; j++) {
+        double dx = srj(j,0) - slj(j,0);
+        double dy = srj(j,1) - slj(j,1);
+        double dz = srj(j,2) - slj(j,2);
+        len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (int d = 0; d < 3; d++) c_j[j*3 + d] = 0.5 * (slj(j,d) + srj(j,d));
+    }
+    std::vector<uint8_t> tp(N_i * N_j, 0);
+    if (ladder.n_tiers() > 1) {
+        pair_tier_table(c_i.data(), c_j.data(), len_i.data(), len_j.data(), N_i, N_j, ladder, tp.data());
+    }
+    py::array_t<int64_t> out({N_i, N_j});
+    auto o = out.mutable_unchecked<2>();
+    for (size_t i = 0; i < N_i; i++)
+        for (size_t j = 0; j < N_j; j++) o(i, j) = tp[i * N_j + j];
+    return out;
+}
 
 // EK (momwire#1362): the extended-kernel twin is this kernel with NEC Eq 89's
 // coaxial factor applied to G on the pairs whose group labels match
@@ -859,34 +1251,6 @@ seg_seg_full_moments_bspline_kernel_impl(
         double dz = srj(j,2) - slj(j,2);
         len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
     }
-    std::vector<std::vector<double>> pos_i(n_tiers);
-    std::vector<std::vector<double>> pos_j(n_tiers);
-    for (size_t tier = 0; tier < n_tiers; tier++) {
-        const size_t n_qp = ladder.n_qp(tier);
-        const double *gt = ladder.t_at(tier);
-        pos_i[tier].resize(N_i * n_qp * 3);
-        pos_j[tier].resize(N_j * n_qp * 3);
-        std::vector<double>& pi_t = pos_i[tier];
-        std::vector<double>& pj_t = pos_j[tier];
-        for (size_t i = 0; i < N_i; i++) {
-            for (size_t q = 0; q < n_qp; q++) {
-                double t = gt[q];
-                pi_t[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
-                pi_t[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
-                pi_t[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
-            }
-        }
-        for (size_t j = 0; j < N_j; j++) {
-            for (size_t r = 0; r < n_qp; r++) {
-                double t = gt[r];
-                // Source points coordinate-major per segment, (j, c, r), so
-                // the R loop below reads each coordinate as a unit-stride run.
-                pj_t[(j*3 + 0)*n_qp + r] = (1.0 - t) * slj(j,0) + t * srj(j,0);
-                pj_t[(j*3 + 1)*n_qp + r] = (1.0 - t) * slj(j,1) + t * srj(j,1);
-                pj_t[(j*3 + 2)*n_qp + r] = (1.0 - t) * slj(j,2) + t * srj(j,2);
-            }
-        }
-    }
     // Segment centres, only read when there is a tier to choose (#906): the
     // selector is centre distance over the longer segment, the O(1)-per-pair
     // quantity the study binned by.
@@ -902,24 +1266,93 @@ seg_seg_full_moments_bspline_kernel_impl(
         }
     }
 
-    // The pair's tier: the highest whose ratio threshold the pair meets
-    // (thresholds ascend, validated at construction). One function for the
-    // per-pair walk and the lane groups below, so the two cannot disagree
-    // about a pair's rule.
-    auto pair_tier = [&](size_t i, size_t j) -> size_t {
-        size_t tier = 0;
-        if (n_tiers > 1) {
-            const double dx = c_i[i*3 + 0] - c_j[j*3 + 0];
-            const double dy = c_i[i*3 + 1] - c_j[j*3 + 1];
-            const double dz = c_i[i*3 + 2] - c_j[j*3 + 2];
-            const double ratio = std::sqrt(dx*dx + dy*dy + dz*dz)
-                                 / std::max(len_i[i], len_j[j]);
-            for (size_t t = 1; t < n_tiers; t++) {
-                if (ratio >= ladder.ratio[t]) tier = t; else break;
+    // The pair's tier (`pair_tier_table`), evaluated once per pair up front
+    // (momwire#1772) into a table that the per-pair walk and the lane
+    // groups below both read, so the two cannot disagree about a pair's
+    // rule. The table is also what says which (segment, tier) positions any
+    // pair reads, so only those are built -- a 5-tier buried ladder's order-128 rung reads a handful of
+    // pairs, and building every segment's 128 points for it on every block
+    // was a tenth of a hub's fill. N_i x N_j bytes, beside a J of 16 NMM
+    // bytes a pair.
+    if (n_tiers > 255) {
+        throw std::runtime_error("pair-order ladder: at most 255 tiers");
+    }
+    std::unique_ptr<uint8_t[]> tij;
+    // need_i[tier * N_i + i]: some pair reads row i's points at that tier;
+    // tier_pairs: the pairs per tier
+    std::vector<uint8_t> need_i(n_tiers * N_i, n_tiers > 1 ? 0 : 1);
+    std::vector<uint8_t> need_j(n_tiers * N_j, n_tiers > 1 ? 0 : 1);
+    std::vector<size_t> tier_pairs(n_tiers, 0);
+    if (n_tiers > 1) {
+        tij.reset(new uint8_t[N_i * N_j]);
+        uint8_t *tp = tij.get();
+        std::vector<size_t> row_cnt(N_i * n_tiers, 0);
+        pair_tier_table(c_i.data(), c_j.data(), len_i.data(), len_j.data(), N_i, N_j, ladder, tp);
+        #pragma omp parallel for schedule(static)
+        for (size_t i = 0; i < N_i; i++) {
+            const uint8_t *row = tp + i * N_j;
+            size_t *cnt = &row_cnt[i * n_tiers];
+            for (size_t t = 0; t < n_tiers; t++) {
+                size_t n_t = 0;
+                for (size_t j = 0; j < N_j; j++) n_t += row[j] == t;
+                cnt[t] = n_t;
+                need_i[t * N_i + i] = n_t != 0;
             }
         }
-        return tier;
+        for (size_t i = 0; i < N_i; i++)
+            for (size_t t = 0; t < n_tiers; t++) tier_pairs[t] += row_cnt[i * n_tiers + t];
+        for (size_t t = 0; t < n_tiers; t++) {
+            if (tier_pairs[t] == 0) continue;
+            uint8_t *nj = &need_j[t * N_j];
+            for (size_t i = 0; i < N_i; i++) {
+                const uint8_t *row = tp + i * N_j;
+                for (size_t j = 0; j < N_j; j++) nj[j] |= row[j] == t;
+            }
+        }
+    } else {
+        tier_pairs[0] = N_i * N_j;
+    }
+    auto pair_tier = [&](size_t i, size_t j) -> size_t {
+        return n_tiers > 1 ? static_cast<size_t>(tij[i * N_j + j]) : 0;
     };
+    // Per tier the quadrature points of the segments that read it, by the
+    // expressions every point always was; the rest left unwritten (no pair
+    // reads them). (i, q, c) for the observers; (j, c, r) for the sources,
+    // so the R loop below reads each coordinate as a unit-stride run.
+    std::vector<std::unique_ptr<double[]>> pos_i(n_tiers);
+    std::vector<std::unique_ptr<double[]>> pos_j(n_tiers);
+    for (size_t tier = 0; tier < n_tiers; tier++) {
+        const size_t n_qp = ladder.n_qp(tier);
+        const double *gt = ladder.t_at(tier);
+        const uint8_t *ni = &need_i[tier * N_i];
+        const uint8_t *nj = &need_j[tier * N_j];
+        if (std::find(ni, ni + N_i, 1) != ni + N_i) {
+            pos_i[tier].reset(new double[N_i * n_qp * 3]);
+            double *pi_t = pos_i[tier].get();
+            for (size_t i = 0; i < N_i; i++) {
+                if (!ni[i]) continue;
+                for (size_t q = 0; q < n_qp; q++) {
+                    double t = gt[q];
+                    pi_t[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
+                    pi_t[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
+                    pi_t[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
+                }
+            }
+        }
+        if (std::find(nj, nj + N_j, 1) != nj + N_j) {
+            pos_j[tier].reset(new double[N_j * n_qp * 3]);
+            double *pj_t = pos_j[tier].get();
+            for (size_t j = 0; j < N_j; j++) {
+                if (!nj[j]) continue;
+                for (size_t r = 0; r < n_qp; r++) {
+                    double t = gt[r];
+                    pj_t[(j*3 + 0)*n_qp + r] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+                    pj_t[(j*3 + 1)*n_qp + r] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+                    pj_t[(j*3 + 2)*n_qp + r] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+                }
+            }
+        }
+    }
 
     // TILED OVER qr (momwire#762). The scratch stays [64] — an L1 blocking
     // width, not a limit — and the qr range is walked in chunks of at most
@@ -1124,12 +1557,20 @@ seg_seg_full_moments_bspline_kernel_impl(
 
 #if MW_OFFEDGE_LANES_1290
     if (!reference) {
-        // The lane kernel (momwire#1290): W columns (i, j0..j0+W-1) at a
-        // time, lane l holding the pair (i, j0+l), wherever the W share a
-        // tier whose rule is one qr chunk of an EVEN order. Anything else --
-        // a group with mixed tiers, an odd order, a rule over
-        // BSPLINE_QR_TILE points, the N_j % W tail -- is walked pair by pair
-        // by `pair_walk` above, unchanged.
+        // The lane kernel (momwire#1290): W pairs (i, j) of one row at a
+        // time, lane l holding one pair, wherever the W share a tier of an
+        // EVEN order (`lane_group`). A rule over BSPLINE_QR_TILE points runs
+        // chunk by chunk as the walk does, its sums carried across chunks
+        // (momwire#1772; before, such a rule was walked). The W are
+        // consecutive columns where they can be, else a row's pairs of that
+        // tier gathered W at a time (below). An odd order, and a row's last
+        // < W pairs of a tier, are walked pair by pair by `pair_walk` above,
+        // unchanged.
+        //
+        // A multi-chunk rule's chunks are BSPLINE_QR_TILE points each but the
+        // last, n_qp^2 mod BSPLINE_QR_TILE, which an even order makes a
+        // multiple of 4 too: every chunk of the walk's loops is whole vectors
+        // as below.
         //
         // Each lane's arithmetic is the walk's for its pair, operation for
         // operation: the same R expression, the same G, the same wuwu
@@ -1140,8 +1581,8 @@ seg_seg_full_moments_bspline_kernel_impl(
         // SCALAR libm function for a remainder, and the two differ in the
         // last bit. So the order must be even: m = n_qp^2 is then a multiple
         // of 4, the walk has no remainder, and both routes (the lanes' loops
-        // are m W long) put every point through the vector entry. An odd order leaves m % 4 == 1, whose
-        // remainder point the walk sends to scalar libm, so it stays on the
+        // are m W long) put every point through the vector entry. An odd order
+        // leaves m % 4 == 1, whose remainder point the walk sends to scalar libm, so it stays on the
         // walk. The moments are the walk's to the bit, and `reference=True`
         // keeps the walk reachable as the gate
         // (`tests/test_offedge_lanes_1290.py`).
@@ -1163,15 +1604,21 @@ seg_seg_full_moments_bspline_kernel_impl(
         using namespace offedge_lanes;
         constexpr size_t LN = W;
         const size_t n_grp = (N_j + LN - 1) / LN;
-        // Source points lane-major per tier, (c, r, j): a group reads one
-        // coordinate of one node for its W columns as a single load.
-        std::vector<std::vector<double>> pjT(n_tiers);
+        // Source points lane-major per tier, (c, r, j): a group of W
+        // consecutive columns reads one coordinate of one node as a single
+        // load. Built for a tier with at least W pairs a column (every
+        // free-space block's), its unread columns left unwritten; a group of
+        // a sparser tier gathers its W columns from pos_j instead.
+        std::vector<std::unique_ptr<double[]>> pjT_all(n_tiers);
         for (size_t tier = 0; tier < n_tiers; tier++) {
             const size_t n_qp = ladder.n_qp(tier);
-            const std::vector<double>& pj_t = pos_j[tier];
-            std::vector<double>& out_t = pjT[tier];
-            out_t.resize(3 * n_qp * N_j);
+            if (n_qp % 2 != 0 || tier_pairs[tier] < LN * std::max<size_t>(N_j, 1)) continue;
+            const uint8_t *nj = &need_j[tier * N_j];
+            const double *pj_t = pos_j[tier].get();
+            pjT_all[tier].reset(new double[3 * n_qp * N_j]);
+            double *out_t = pjT_all[tier].get();
             for (size_t j = 0; j < N_j; j++) {
+                if (!nj[j]) continue;
                 for (size_t c = 0; c < 3; c++) {
                     for (size_t r = 0; r < n_qp; r++) {
                         out_t[(c * n_qp + r) * N_j + j] = pj_t[(j*3 + c)*n_qp + r];
@@ -1179,7 +1626,26 @@ seg_seg_full_moments_bspline_kernel_impl(
                 }
             }
         }
-        const vd v_a2 = set1(a_squared);
+        size_t max_qp = 0;
+        for (size_t tier = 0; tier < n_tiers; tier++) max_qp = std::max(max_qp, ladder.n_qp(tier));
+        // A group of W consecutive columns of one even tier runs in lanes in
+        // the first pass. The pairs of the groups that straddle a tier
+        // boundary (or the N_j % W tail) wait for the second, which runs a
+        // row's waiting pairs of each even tier W at a time, whichever
+        // columns they are (momwire#1772: on a hub's near rows the straddling
+        // groups were most of the pairs, and all of them were walked). A
+        // lane's arithmetic is its pair's whichever columns sit beside it,
+        // so where a pair runs moves no bit. What is left -- an odd order, a
+        // row's last < W pairs of a tier -- is walked.
+        auto group_lanes = [&](size_t i, size_t g, size_t &tier) -> bool {
+            const size_t j0 = g * LN;
+            if (j0 + LN > N_j) return false;
+            tier = pair_tier(i, j0);
+            for (size_t l = 1; l < LN; l++) {
+                if (pair_tier(i, j0 + l) != tier) return false;
+            }
+            return ladder.n_qp(tier) % 2 == 0;
+        };
 
         #pragma omp parallel
         {
@@ -1187,143 +1653,79 @@ seg_seg_full_moments_bspline_kernel_impl(
         bool w_held = false;
         size_t w_tier = 0;
         double w_Li = 0.0, w_Lj = 0.0;
-        // The lane twin of `wuwu`, [t][pP][lane], held by the same rule with
-        // one Lj per lane.
-        alignas(ALIGN) double wv[BSPLINE_QR_TILE * NMM * LN];
-        bool v_held = false;
-        size_t v_tier = 0;
-        double v_Li = 0.0;
-        double v_Lj[LN];
-        for (size_t l = 0; l < LN; l++) v_Lj[l] = 0.0;
-        // [t][lane]: point t of the walk's chunk for column j0 + lane.
-        alignas(ALIGN) double R[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double inv_R_4pi[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double phases[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double cos_phases[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double sin_phases[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
-        alignas(ALIGN) double decay[BSPLINE_QR_TILE * LN];
+        // the lane groups' scratch, this thread's
+        LaneScratch<NMM> scr;
+        std::vector<double> pjG_buf(3 * max_qp * LN + ALIGN / sizeof(double));
+        scr.pjG = pjG_buf.data();
+        while (reinterpret_cast<std::uintptr_t>(scr.pjG) % ALIGN != 0) scr.pjG++;
+        // the second pass's waiting columns of one row, per tier
+        std::vector<std::vector<uint32_t>> wait(n_tiers);
+
+        // One group: the pairs (i, jl[0..W-1]), all of `tier` (even order).
+        LaneCtx ctx;
+        ctx.ladder = &ladder;
+        ctx.pos_i = pos_i.data();
+        ctx.pos_j = pos_j.data();
+        ctx.pjT_all = pjT_all.data();
+        ctx.len_i = len_i.data();
+        ctx.len_j = len_j.data();
+        ctx.N_i = N_i;
+        ctx.N_j = N_j;
+        ctx.k = k;
+        ctx.k_im = k_im;
+        ctx.a_squared = a_squared;
+        ctx.grp_i = grp_i;
+        ctx.grp_j = grp_j;
+        ctx.a2_ek = a2_ek;
+        ctx.a4_ek = a4_ek;
+        ctx.b_ek = b_ek;
+        ctx.ek_floor = ek_floor;
+        ctx.J = N_i * N_j > 0 ? &j_view(0, 0, 0, 0) : nullptr;
+
+        // First pass: whole groups of consecutive columns; an odd order's
+        // pairs are walked here, an even one's that straddle wait.
         MW_OMP_FOR_COLLAPSE2_DYNAMIC
         for (size_t i = 0; i < N_i; i++) {
             for (size_t g = 0; g < n_grp; g++) {
-                const size_t j0 = g * LN;
-                bool lanes = j0 + LN <= N_j;
                 size_t tier = 0;
-                if (lanes) {
-                    tier = pair_tier(i, j0);
-                    for (size_t l = 1; l < LN; l++) {
-                        lanes = lanes && pair_tier(i, j0 + l) == tier;
-                    }
-                    const size_t nq = ladder.n_qp(tier);
-                    lanes = lanes && nq % 2 == 0 && nq * nq <= BSPLINE_QR_TILE;
-                }
-                if (!lanes) {
-                    const size_t j1 = std::min(j0 + LN, N_j);
-                    for (size_t j = j0; j < j1; j++) {
-                        pair_walk(i, j, wuwu, w_held, w_tier, w_Li, w_Lj);
-                    }
+                if (group_lanes(i, g, tier)) {
+                    size_t jl[LN];
+                    for (size_t l = 0; l < LN; l++) jl[l] = g * LN + l;
+                    lane_group<D, COMPLEX_K, EK>(ctx, scr, i, tier, jl);
                     continue;
                 }
-
-                const size_t n_qp = ladder.n_qp(tier);
-                const size_t m = n_qp * n_qp;
-                const size_t m4 = m * LN;
-                const double *gt = ladder.t_at(tier);
-                const double *gw = ladder.w_at(tier);
-                const double *pi = &pos_i[tier][i * n_qp * 3];
-                const double Li = len_i[i];
-                double Lj[LN];
-                for (size_t l = 0; l < LN; l++) Lj[l] = len_j[j0 + l];
-
-                r_bcast(R, pi, pjT[tier].data(), n_qp, N_j, j0, v_a2);
-
-                // A mesh's segment lengths agree to the bit far less often
-                // than they agree on paper, so this refill runs on most
-                // groups and is worth the vectors.
-                bool same = v_held && tier == v_tier && Li == v_Li;
-                for (size_t l = 0; l < LN; l++) same = same && Lj[l] == v_Lj[l];
-                if (!same) {
-                    wv_bcast<NM>(wv, gt, gw, n_qp, Li, Lj);
-                    v_held = true;
-                    v_tier = tier;
-                    v_Li = Li;
-                    for (size_t l = 0; l < LN; l++) v_Lj[l] = Lj[l];
-                }
-
-                // Stage 1, the walk's loops over all the lanes' points.
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m4; t++) {
-                    phases[t] = -k * R[t];
-                }
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m4; t++) {
-                    cos_phases[t] = std::cos(phases[t]);
-                }
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m4; t++) {
-                    sin_phases[t] = std::sin(phases[t]);
-                }
-                if (COMPLEX_K) {
-                    MW_OMP_SIMD()
-                    for (size_t t = 0; t < m4; t++) {
-                        decay[t] = std::exp(k_im * R[t]);
-                    }
-                    MW_OMP_SIMD()
-                    for (size_t t = 0; t < m4; t++) {
-                        inv_R_4pi[t] = inv_4pi / R[t];
-                        const double sc = decay[t] * inv_R_4pi[t];
-                        G_re[t] = cos_phases[t] * sc;
-                        G_im[t] = sin_phases[t] * sc;
-                    }
-                } else {
-                    MW_OMP_SIMD()
-                    for (size_t t = 0; t < m4; t++) {
-                        inv_R_4pi[t] = inv_4pi / R[t];
-                        G_re[t] = cos_phases[t] * inv_R_4pi[t];
-                        G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                const size_t j1 = std::min(g * LN + LN, N_j);
+                for (size_t j = g * LN; j < j1; j++) {
+                    if (ladder.n_qp(pair_tier(i, j)) % 2 != 0) {
+                        pair_walk(i, j, wuwu, w_held, w_tier, w_Li, w_Lj);
                     }
                 }
-
-                // EK (momwire#1362): the walk's coaxial factor, per lane
-                // (`ek_factor`), from the floored R where the walk floors it.
-                if (EK && grp_i[i] >= 0) {
-                    const int64_t gi = grp_i[i];
-                    bool e[LN];
-                    bool any_e = false;
-                    for (size_t l = 0; l < LN; l++) {
-                        e[l] = grp_j[j0 + l] == gi;
-                        any_e = any_e || e[l];
-                    }
-                    if (any_e) {
-                        const vm emask = mask_from(e);
-                        const vd v_k = set1(k);
-                        const vd v_t1n = set1(0.25 * a4_ek);
-                        const vd v_t2n = set1(0.5 * a2_ek);
-                        const vd v_bek = set1(b_ek);
-                        for (size_t t = 0; t < m; t++) {
-                            vd Rq = load(R + t * LN);
-                            if (ek_floor) Rq = max(Rq, v_bek);
-                            const vd r2 = mul(Rq, Rq);
-                            const vd r4 = mul(r2, r2);
-                            ek_factor(G_re + t * LN, G_im + t * LN, div(v_t1n, r4),
-                                      div(v_t2n, r2), mul(v_k, Rq), emask);
-                        }
-                    }
+            }
+        }
+        // Second pass: per row, the waiting pairs of each even tier, W at a
+        // time in ascending column order; the last < W walked.
+        #pragma omp for schedule(dynamic, 4)
+        for (size_t i = 0; i < N_i; i++) {
+            for (auto &w : wait) w.clear();
+            for (size_t g = 0; g < n_grp; g++) {
+                size_t tier = 0;
+                if (group_lanes(i, g, tier)) continue;
+                const size_t j1 = std::min(g * LN + LN, N_j);
+                for (size_t j = g * LN; j < j1; j++) {
+                    const size_t t = pair_tier(i, j);
+                    if (ladder.n_qp(t) % 2 == 0) wait[t].push_back(static_cast<uint32_t>(j));
                 }
-
-                // Stage 2, the real and imaginary sums in separate passes so
-                // each holds NMM accumulators, not 2 NMM, in registers.
-                // `phases` holds the real sums once its points are spent; the
-                // imaginary pass writes each moment's W complex outputs.
-                vd acc[NMM];
-                stage2<NMM>(G_re, wv, m, acc);
-                for (int pP = 0; pP < NMM; pP++) store(phases + pP * LN, acc[pP]);
-                stage2<NMM>(G_im, wv, m, acc);
-                for (int pP = 0; pP < NMM; pP++) {
-                    store_interleaved(
-                        reinterpret_cast<double *>(&j_view(pP / NM, pP % NM, i, j0)),
-                        load(phases + pP * LN), acc[pP]);
+            }
+            for (size_t t = 0; t < n_tiers; t++) {
+                const std::vector<uint32_t> &w = wait[t];
+                size_t u = 0;
+                for (; u + LN <= w.size(); u += LN) {
+                    size_t jl[LN];
+                    for (size_t l = 0; l < LN; l++) jl[l] = w[u + l];
+                    lane_group<D, COMPLEX_K, EK>(ctx, scr, i, t, jl);
+                }
+                for (; u < w.size(); u++) {
+                    pair_walk(i, w[u], wuwu, w_held, w_tier, w_Li, w_Lj);
                 }
             }
         }
@@ -7398,6 +7800,19 @@ py::array_t<std::complex<double>> seg_seg_full_moments_bspline_cplx_tiered(
     bool reference) {
     return ::seg_seg_full_moments_bspline_cplx_tiered(seg_l_i, seg_r_i, seg_l_j, seg_r_j,
         a_squared, k, max_d, tier_t, tier_w, tier_n_qp, tier_ratio, reference);
+}
+
+py::array_t<int64_t> bspline_pair_tiers(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio) {
+    return ::pair_tiers_impl(seg_l_i, seg_r_i, seg_l_j, seg_r_j,
+                             ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio));
 }
 
 py::array_t<std::complex<double>> seg_seg_full_moments_sinusoidal_tiered(

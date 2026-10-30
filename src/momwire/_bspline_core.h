@@ -125,6 +125,18 @@ nd::array_t<std::complex<double>> seg_seg_full_moments_bspline_tiered(
     nd::array_t<double, nd::array::c_style | nd::array::forcecast> tier_ratio,
     bool reference);
 
+// The pair-order ladder's tier of every pair of a block (momwire#1772):
+// the table the tiered kernels route by, for the tests.
+nd::array_t<int64_t> bspline_pair_tiers(
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_l_i,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_r_i,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_l_j,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_r_j,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> tier_t,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> tier_w,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> tier_n_qp,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> tier_ratio);
+
 nd::array_t<std::complex<double>> seg_seg_full_moments_bspline_cplx_tiered(
     nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_l_i,
     nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_r_i,
