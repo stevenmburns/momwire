@@ -27,6 +27,8 @@
 
 #include <chrono>
 #include <functional>
+#include <stdexcept>
+#include <utility>
 
 namespace somm_proj {
 struct GridView;
@@ -165,6 +167,17 @@ class SolveContext {
     void add_at(const int64_t *rows, const int64_t *cols, const cd *vals, size_t n);
     // Z (n, n) column-major, filled elsewhere (the buried fill), copied in.
     void set_z(const cd *z, ptrdiff_t n);
+    // The same, MOVED in: the context takes the caller's buffer (n * n
+    // entries) instead of holding a second copy of it, which on a large
+    // deck is a whole n_basis^2 matrix of peak memory.
+    // Inline here, not in the .cpp, so razor's own translation unit is not
+    // touched (a .cpp edit can move unrelated results through inlining).
+    void take_z(std::vector<cd> &&z, ptrdiff_t n) {
+        if (z.size() != static_cast<size_t>(n) * static_cast<size_t>(n))
+            throw std::invalid_argument("razor_solve: take_z needs an n x n buffer");
+        n_ = n;
+        z_ = std::move(z);
+    }
 
     // Free Z and the window pool (a big solve's buffers are not held until
     // the next one); the counters are kept.
