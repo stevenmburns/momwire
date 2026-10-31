@@ -217,7 +217,10 @@ struct SymLapack {
     zsytrs_fn sytrs = nullptr;
 };
 
-PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
+// Z is taken BY VALUE and consumed: it becomes the LU's buffer. A caller
+// that is done with its operator moves it in (the NEC-5 / NEC-4.2 printout
+// does), so the solve holds one n_basis^2 matrix rather than three.
+PortSolve solve_ports(std::vector<cdouble> Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np,
                       const SymLapack *sym = nullptr);
