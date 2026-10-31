@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <utility>
 #include <exception>
 #include <array>
 #include <climits>
@@ -819,19 +820,21 @@ std::vector<cdouble> assemble_Z(const CArray &J, const Basis &b, const Geometry 
     return std::vector<cdouble>(Z.data(), Z.data() + Z.size());
 }
 
-PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
+PortSolve solve_ports(std::vector<cdouble> Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np, const SymLapack *sym) {
     const mw_times::Scope timed(mw_times::factor);
     using nec5::Op;
     PortSolve out;
     const size_t nb = static_cast<size_t>(n_b), np_ = static_cast<size_t>(n_p), nc = static_cast<size_t>(n_c);
-    // `lu_factor`: Z's Fortran copy
-    std::vector<cdouble> zf(nb * nb);
+    // `lu_factor`: Z's Fortran copy. Python's is a copy; here it is the
+    // same values transposed IN PLACE in the buffer this call owns, then
+    // moved into the context, so the solve holds one n_basis^2 matrix where
+    // it used to hold three (the caller's Z, this copy and the context's).
     for (size_t i = 0; i < nb; i++)
-        for (size_t j = 0; j < nb; j++) zf[j * nb + i] = Z[i * nb + j];
+        for (size_t j = i + 1; j < nb; j++) std::swap(Z[i * nb + j], Z[j * nb + i]);
     razor::SolveContext ctx;
-    ctx.set_z(zf.data(), static_cast<ptrdiff_t>(n_b));
+    ctx.take_z(std::move(Z), static_cast<ptrdiff_t>(n_b));
     // B as numpy holds it: complex128, C order (`np.hstack`)
     std::vector<cdouble> Bc(nb * np_);
     for (size_t q = 0; q < Bc.size(); q++) Bc[q] = cdouble(B[q], 0.0);

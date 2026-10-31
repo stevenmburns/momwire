@@ -116,8 +116,9 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     if (Z_out) *Z_out = Z;
     if (B_out) *B_out = fr.B;
     const bspline::PortSolve ps =
-        bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack, np,
-                             &sym);
+        // Z moves in: the solve's LU runs in its buffer (Z_out took its copy)
+        bspline::solve_ports(std::move(Z), fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl,
+                             lapack, np, &sym);
     // A singular system: SciPy warns or raises in its own words, per solver
     if (ps.info != 0) throw PrintoutDecline{"bspline: a singular system"};
     Solved s;
