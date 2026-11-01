@@ -127,7 +127,7 @@ jobs:
       # The manylinux image's OpenBLAS (its own compiler): keyed apart from
       # the runner's, by the same script hash.
       - name: static OpenBLAS, manylinux_2_28 (cached)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/mwx-openblas-manylinux/libmwxp.a
           key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
@@ -462,7 +462,7 @@ jobs:
           CC: ccache gcc
           CXX: ccache g++
       - name: static OpenBLAS (linux-artifact's cache)
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/mwx-openblas-manylinux/libmwxp.a
           key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
