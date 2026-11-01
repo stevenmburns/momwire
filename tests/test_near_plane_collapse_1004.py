@@ -271,6 +271,8 @@ def test_the_raised_order_is_what_buys_it(base, monkeypatch, record_property):
 # ----------------------------------------------------------------------
 
 
+# Default-lane budget is 5 s; CI median 5.7 s Linux (momwire 0.85.0 release prep).
+@pytest.mark.slow
 def test_the_two_bases_agree_on_the_near_plane_deck(record_property):
     """The arbiter the suite uses to adjudicate this family, at the rung the
     fix is for. Before the fix the two disagreed by 6x (bspline 4.24 against

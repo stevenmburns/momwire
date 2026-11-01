@@ -388,7 +388,16 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
+# Default-lane budget is 5 s; CI median 7.1 s Linux for crossing_folded_dense
+# (momwire 0.85.0 release prep). The other cases stay as the PR guard.
+_SLOW = {"crossing_folded_dense"}
+
+
+@pytest.mark.parametrize(
+    "name, text, expect",
+    [pytest.param(*c, marks=pytest.mark.slow) if c[0] in _SLOW else c for c in CASES],
+    ids=[c[0] for c in CASES],
+)
 def test_a_hand_written_deck_has_the_same_fill(name, text, expect, acc):
     cxx = nc.cxx_fill(text, acc)
     assert nc.classify(cxx) == expect, cxx[:500]
@@ -398,6 +407,9 @@ def test_a_hand_written_deck_has_the_same_fill(name, text, expect, acc):
     assert diff is None, diff
 
 
+# Default-lane budget is 5 s; CI median 8.1 s Linux (momwire 0.85.0 release prep). The per-deck
+# test_a_hand_written_deck_has_the_same_fill cases stay as the PR guard.
+@pytest.mark.slow
 def test_the_routes_are_reached(acc):
     """Not vacuous: whole dumps below the threshold, row digests above it,
     several ports and several points."""

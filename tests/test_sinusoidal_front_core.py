@@ -72,6 +72,8 @@ def test_the_nec42_fixtures_have_the_same_front(acc):
     assert counts["fronts"] >= 50, counts
 
 
+# Default-lane budget is 5 s; CI median 5.4 s Linux (momwire 0.85.0 release prep).
+@pytest.mark.slow
 def test_every_fixture_deck_has_the_same_front(acc):
     counts, mismatches = nc.compare(_decks(FIXTURES))
     assert not mismatches, mismatches[:2]
