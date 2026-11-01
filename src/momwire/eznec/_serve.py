@@ -747,8 +747,9 @@ _REFUSE_UNPINNED_PHANTOM = (
 )
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
-    "second generator in series across the same gap - no captured deck writes "
-    "that, and this seam will not decide how two set currents share one path"
+    "second generator in series across the same gap - the one repeat served is "
+    "EZNEC's 1e-10 V load probe beside an EX 4, and this seam will not decide "
+    "how two set currents share one path"
 )
 _REFUSE_TWO_DRIVES_ONE_PORT = (
     "{first} and {second} are the two sides of ONE cut and an EX card drives "
@@ -1695,13 +1696,25 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
     # momwire#1110 (tests/fixtures/eznec_load_probes_1110/), and several EX 0
     # THROUGH a network since momwire#1105 - one row per card either way, and
     # the drive row unmoved by the probe.
-    seen: set[Nec5Node] = set()
+    #
+    # A repeated address is served in ONE shape (momwire#1787): every card at
+    # it is one of those load probes, on a mixed deck, so `_load_probe_refusal`
+    # above has already vetted each of them.  EZNEC writes one probe per
+    # lumped load, so two loads at one node - stacked traps - give two
+    # identical probes at one address.  NEC-5 solves that as ONE passive probe
+    # (the drive row is the one-probe deck's to every printed digit) and
+    # prints its row once per card; the excitation below writes one value per
+    # port, so the repeat collapses there by construction and each card still
+    # gets its row.  Anything else at a repeated address stays refused.
+    probes = bool(voltages) and voltages != len(kinds)
+    seen: dict[Nec5Node, int] = {}
     for source in deck.sources:
-        if source.at in seen:
+        first = seen.get(source.at)
+        if first is not None and not (probes and first == 0 and source.kind == 0):
             return _REFUSE_DUPLICATE_EX.format(
                 at=f"{source.at.tag},{source.at.written}"
             )
-        seen.add(source.at)
+        seen.setdefault(source.at, source.kind)
     return None
 
 
@@ -4112,7 +4125,10 @@ def _check_one_port_per_drive(
         if site.column < 0:
             continue
         first = seen.get(site.column)
-        if first is not None:
+        # The SAME address twice reached here only as EZNEC's repeated load
+        # probe, which :func:`_drive_refusal` serves (momwire#1787); this
+        # check is for two different addresses on one cut.
+        if first is not None and first != source.at:
             raise ServeRefusal(
                 _REFUSE_TWO_DRIVES_ONE_PORT.format(
                     first=f"{first.tag},{first.written}",

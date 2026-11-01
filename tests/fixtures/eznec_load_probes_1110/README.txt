@@ -56,6 +56,17 @@ stay untouched (tests/test_eznec_reproducibility.py).
                  byte the host reads, never reproduce a wrong answer).
                  Hand-edited from 0120, not an EZNEC session.
 
+  M_0195_two_loads_one_node.nec/.out
+                 momwire#1787 (QRZ, 2026-11-01): two parallel-LC traps at ONE
+                 node, the shape EZNEC writes for stacked traps - one 1e-10 V
+                 probe per lumped load, so two identical EX 0 cards at 1,8.
+                 Capture 0195 with a second LD 1 at 1,8 (2e-7 H, 3e-12 F) and
+                 its probe; hand-edited, not an EZNEC session, run through the
+                 licensed NEC-5 (2026-11-01). NEC-5 solves the pair as ONE
+                 passive probe: the drive row equals the one-probe deck's to
+                 every printed digit, and the probe row is printed once per
+                 card, identically (not as a 2e-10 V source).
+
   0202.nec/.out  The deck Dan AC6LA's "first blood" post (QRZ 1003328 #100,
                  2026-09-17) describes: EZNEC Pro/2+ 7.0.4's Cardioid.ez (the
                  plain 6-segment one), both sources type I as shipped, an

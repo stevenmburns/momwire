@@ -76,8 +76,8 @@ std::string refuse_mixed_drive_kinds(long long count, long long voltages, long l
 std::string refuse_duplicate_ex(const std::string &at) {
     return "two EX cards address " + at +
            "; one node is one port, so the second card is a second generator in series "
-           "across the same gap - no captured deck writes that, and this seam will not decide "
-           "how two set currents share one path";
+           "across the same gap - the one repeat served is EZNEC's 1e-10 V load probe beside "
+           "an EX 4, and this seam will not decide how two set currents share one path";
 }
 
 std::string refuse_two_drives_one_port(const std::string &first, const std::string &second) {
@@ -280,10 +280,16 @@ std::string drive_refusal(const Deck &d) {
         std::string mixed = load_probe_refusal(d);
         if (!mixed.empty()) return mixed;
     }
-    std::set<Node, NodeLess> seen;
+    // A repeated address is served only as EZNEC's repeated load probe
+    // (momwire#1787): every card at it an EX 0 on a mixed deck, which
+    // `load_probe_refusal` above has already vetted.
+    const bool probes = voltages != 0 && voltages != static_cast<long long>(d.sources.size());
+    std::map<Node, bool, NodeLess> seen;  // address -> its first card is an EX 0
     for (const Source &s : d.sources) {
-        if (seen.count(s.at)) return refuse_duplicate_ex(at_of(s.at));
-        seen.insert(s.at);
+        auto it = seen.find(s.at);
+        if (it != seen.end() && !(probes && it->second && s.kind.is_zero()))
+            return refuse_duplicate_ex(at_of(s.at));
+        seen.emplace(s.at, s.kind.is_zero());
     }
     return "";
 }
@@ -1344,7 +1350,9 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                 if (same_node(x.at, s.at)) site = &x;
             if (site == nullptr || site->column < 0) continue;
             auto it = seen.find(site->column);
-            if (it != seen.end())
+            // the same address twice is `drive_refusal`'s served repeated
+            // probe (momwire#1787); this is two addresses on one cut
+            if (it != seen.end() && !same_node(it->second, s.at))
                 throw Refusal{refuse_two_drives_one_port(at_of(it->second), at_of(s.at))};
             seen[site->column] = s.at;
         }
