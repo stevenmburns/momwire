@@ -119,9 +119,26 @@ def _solve(monkeypatch, deck, *, accel, **kw):
     return complex(np.asarray(z).ravel()[0])
 
 
-@pytest.mark.parametrize("lane", sorted(LANES))
-@pytest.mark.parametrize("model", GROUNDS)
-@pytest.mark.parametrize("n", [80, 160])
+# Default-lane budget is 5 s; CI median 6.3 s Linux for n=160 / sommerfeld /
+# gauss-legendre (momwire 0.85.0 release prep). The other seven configurations
+# stay as the PR guard.
+@pytest.mark.parametrize(
+    "lane, model, n",
+    [
+        pytest.param(
+            lane,
+            model,
+            n,
+            id=f"{n}-{model}-{lane}",
+            marks=pytest.mark.slow
+            if (n, model, lane) == (160, "sommerfeld", "gauss-legendre")
+            else (),
+        )
+        for lane in sorted(LANES)
+        for model in GROUNDS
+        for n in [80, 160]
+    ],
+)
 def test_both_grounds_and_lanes_agree_with_numpy(monkeypatch, lane, model, n):
     """Every configuration the kernel serves, against the numpy closure.
 

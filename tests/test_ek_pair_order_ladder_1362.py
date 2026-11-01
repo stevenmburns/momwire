@@ -136,8 +136,15 @@ class _Count:
 # --- kernel level ----------------------------------------------------------
 
 
+# Default-lane budget is 5 s; CI median 5.4 s / 5.1 s macOS for the b32 rung
+# with scalar-a / mixed-a (momwire 0.85.0 release prep). The f8 rung stays as
+# the PR guard.
 @pytest.mark.parametrize(
-    "n_qp, ladder", [(32, LADDER_BURIED_SHAPE), (8, LADDER_FREE)], ids=["b32", "f8"]
+    "n_qp, ladder",
+    [
+        pytest.param(32, LADDER_BURIED_SHAPE, id="b32", marks=pytest.mark.slow),
+        pytest.param(8, LADDER_FREE, id="f8"),
+    ],
 )
 @pytest.mark.parametrize("mixed", [False, True], ids=["scalar-a", "mixed-a"])
 def test_the_ek_tiered_accelerator_matches_its_numpy_twin(

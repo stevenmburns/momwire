@@ -810,7 +810,16 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
+# Default-lane budget is 5 s; CI median 9.3 s Linux for crossing_folded_rise_rod
+# (momwire 0.85.0 release prep). The other cases stay as the PR guard.
+_SLOW = {"crossing_folded_rise_rod"}
+
+
+@pytest.mark.parametrize(
+    "name, text, expect",
+    [pytest.param(*c, marks=pytest.mark.slow) if c[0] in _SLOW else c for c in CASES],
+    ids=[c[0] for c in CASES],
+)
 def test_a_hand_written_deck_prints_the_same(name, text, expect, acc):
     # "refused": printed, and the printout is the reference's refusal
     ok, cxx = rc.cxx_printout(text, acc)

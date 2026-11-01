@@ -287,6 +287,8 @@ def _raised_route_naming_refusals():
     return found
 
 
+# Default-lane budget is 5 s; CI median 5.4 s macOS (momwire 0.85.0 release prep).
+@pytest.mark.slow
 def test_every_route_naming_refusal_has_a_route_check():
     """A new refusal that recommends a route must bring a check with it.
 

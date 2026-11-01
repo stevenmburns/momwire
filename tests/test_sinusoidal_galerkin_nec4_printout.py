@@ -116,6 +116,9 @@ def test_a_hand_written_deck_prints_the_same(name, text, _expect, acc):
     _same(text, acc)
 
 
+# Default-lane budget is 5 s; CI median 8.5 s Linux (momwire 0.85.0 release prep). The per-deck
+# test_a_hand_written_deck_prints_the_same cases stay as the PR guard.
+@pytest.mark.slow
 def test_most_hand_written_decks_print(acc):
     """Not vacuous: the free-space and GN 1 cases print rather than
     decline."""
