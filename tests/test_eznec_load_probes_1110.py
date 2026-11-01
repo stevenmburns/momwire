@@ -83,6 +83,10 @@ SERVED = (
     # so two EX 4 and two probes. It replaces the hand reconstruction that
     # stood here for a day (README); NEC-5's printout for it is the oracle.
     "0202",
+    # momwire#1787 (QRZ, 2026-11-01): two parallel-LC traps at ONE node, so
+    # EZNEC writes two identical probes at one address. Hand-edited from 0195;
+    # NEC-5's printout for it is the oracle.
+    "M_0195_two_loads_one_node",
 )
 # EZNEC writes exactly this card per lumped load, and the CM line above it says
 # so in words.  Stripping them is how the "the probe moves nothing" gate gets
@@ -295,3 +299,33 @@ def test_a_tiny_voltage_at_an_unloaded_node_is_not_a_load_probe():
     stray = deck("0193").replace("EX 0,1,8,0,1.E-10,0.", "EX 0,1,4,0,1.E-10,0.")
     reason = _refusal(stray)
     assert "the EX 0 at 1,4 sits at a node no LD card loads" in reason
+
+
+def test_two_probes_at_one_node_answer_as_one_probe_printed_once_per_card():
+    """momwire#1787: stacked traps give two identical probes at one address.
+
+    NEC-5 solves them as ONE passive probe: the drive row matches the
+    one-probe deck to every printed digit, and the probe row is printed once
+    per card, identically, rather than as one 2e-10 V source.  The seam holds
+    the same identity on its own render, byte for byte.
+    """
+    name = "M_0195_two_loads_one_node"
+    lines = deck(name).splitlines()
+    last = max(i for i, line in enumerate(lines) if PROBE_LINE.match(line))
+    one_probe = "".join(line + "\n" for i, line in enumerate(lines) if i != last)
+    theirs = _rows(oracle(name))
+    assert len(theirs) == 3 and theirs[1] == theirs[2]
+    ours = _rows(render(deck(name)).splitlines())
+    assert len(ours) == 3 and ours[1] == ours[2]
+    assert ours[:2] == _rows(render(one_probe).splitlines())
+
+
+def test_a_repeated_address_that_is_not_all_probes_still_refuses():
+    """The repeat served is the probe's alone: a second EX 4 at the drive's
+    own address is two set currents on one gap, and stays refused by name."""
+    doubled = deck("0195").replace(
+        "EX 4,1,6,0,1.414214,0.", "EX 4,1,6,0,1.414214,0.\nEX 4,1,6,0,1.414214,0."
+    )
+    reason = _refusal(doubled)
+    assert reason.startswith("two EX cards address 1,6")
+    assert "second generator in series across the same gap" in reason
