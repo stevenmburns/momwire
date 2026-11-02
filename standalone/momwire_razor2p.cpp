@@ -1472,12 +1472,23 @@ bool big_delete(void *p) {
 // start it also cost small decks up to +5 MB (+33 %) of peak RSS; a fixed
 // 1 MiB threshold instead slowed bspline's buried fills 5-20 %. A caller's
 // own GLIBC_TUNABLES naming either threshold is kept.
+//
+// The sg5 build (MW_EXE_HEAP_FROM_START, CMakeLists.txt) applies it from its
+// first allocation instead: Steve accepted the up-to-5 MB for the 9-10 %
+// that small sg5 decks gain (ak_yagi_gn2 T=1 62 -> 56 ms; ak_yagi_free T=4
+// 16 -> 21 MB, #1781). The other builds keep the 64 MiB wait: a fixed early
+// threshold slowed bspline_nec5's buried fills.
 #if defined(__GLIBC__)
+#ifdef MW_EXE_HEAP_FROM_START
+constexpr std::size_t HEAP_BLOCK_MIN = 0, HEAP_CHURN_MIN = 0;
+#else
+constexpr std::size_t HEAP_BLOCK_MIN = std::size_t(64) << 10, HEAP_CHURN_MIN = std::size_t(64) << 20;
+#endif
 void heap_churn(std::size_t n) {
     static std::atomic<std::size_t> churn{0};
     static std::atomic<bool> done{false};
-    if (n < (std::size_t(64) << 10) || done.load(std::memory_order_relaxed)) return;
-    if (churn.fetch_add(n, std::memory_order_relaxed) + n < (std::size_t(64) << 20)) return;
+    if (n < HEAP_BLOCK_MIN || done.load(std::memory_order_relaxed)) return;
+    if (churn.fetch_add(n, std::memory_order_relaxed) + n < HEAP_CHURN_MIN) return;
     if (done.exchange(true)) return;
     const char *tun = std::getenv("GLIBC_TUNABLES");
     if (tun != nullptr && (std::strstr(tun, "mmap_threshold") || std::strstr(tun, "trim_threshold"))) return;

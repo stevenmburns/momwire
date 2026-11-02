@@ -469,6 +469,7 @@ elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sg5")
     NDEBUG
     MW_EXE_NO_PYTHON=1
     MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_HEAP_FROM_START=1
     MW_EXE_BASIS_NAME="sinusoidal-galerkin"
     MW_EXE_PROGRAM="momwire-nec5-sinusoidal-galerkin"
     MW_EXE_LAUNCHER="momwire-nec5-sinusoidal-galerkin"
