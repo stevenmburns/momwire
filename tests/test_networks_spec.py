@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -609,6 +610,42 @@ def test_from_cable_refuses_a_catalog_NAME_and_says_where_the_catalog_is():
         TL.from_cable("RG-8X", "rig", "feed", 30.48)
     msg = str(exc.value)
     assert "'RG-8X'" in msg and "cable_from_catalog" in msg
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("rig", "feed", 50.0, 10.0),  # z0 and length are both plain numbers
+        ("rig", "feed", 50.0, 10.0, 0.82, 0.27, 0.0055),  # the #1792 slot slip
+    ],
+)
+def test_tl_refuses_positional_line_values_1792(args):
+    """Everything after the two ports is keyword-only (momwire#1792): every
+    slot takes a number, so a positional call can only be right by luck. The
+    #1792 call put vf in `transposed` (truthy: a crossed line) and shifted
+    k1/k2 into vf/k1, and solved without a word."""
+    with pytest.raises(TypeError):
+        TL(*args)
+
+
+@pytest.mark.parametrize("bad", [0.82, 1, 0, "yes", None])
+def test_tl_transposed_refuses_a_non_bool_by_name_1792(bad):
+    with pytest.raises(TypeError) as exc:
+        TL("rig", "feed", z0=50.0, length=10.0, transposed=bad)
+    msg = str(exc.value)
+    assert "transposed must be True or False" in msg and "'rig'->'feed'" in msg
+
+
+def test_tl_keyword_form_and_numpy_bool_still_work_1792():
+    tl = TL("rig", "feed", z0=50.0, length=10.0, vf=0.82, k1=0.27, k2=0.0055)
+    assert (tl.z0, tl.length, tl.transposed, tl.vf, tl.k1, tl.k2) == (
+        50.0, 10.0, False, 0.82, 0.27, 0.0055,
+    )  # fmt: skip
+    # A comparison on numpy values (an importer reading a negative z0 as a
+    # crossed line) yields numpy.bool_, which is a real boolean.
+    assert TL("a", "b", z0=50.0, length=1.0, transposed=np.float64(-1.0) < 0).transposed
+    # The ports stay positional, and replace() still works on the frozen spec.
+    assert replace(tl, length=12.0).length == 12.0
 
 
 def test_from_cable_line_solves_the_same_as_a_hand_built_one():
