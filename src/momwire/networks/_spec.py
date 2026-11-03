@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import math
 import numbers
-from dataclasses import dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 from typing import Optional, Protocol, Union
 
 import numpy as np
@@ -273,6 +273,12 @@ class TL:
     """Transmission line between two ports — lossless by default, lossy when
     matched-loss coefficients are given (issue #297).
 
+    Everything after the two port names is KEYWORD-ONLY (momwire#1792):
+    ``TL("rig", "feed", z0=50.0, length=10.0, vf=0.82, k1=0.27, k2=0.0055)``.
+    Every slot takes a number, so a positional call that put the cable's
+    numbers in another order (z0, length, vf, k1, k2) used to solve wrong
+    without a word; now it raises TypeError. The ports stay positional.
+
     z0:     characteristic impedance in Ω
     length: physical length in meters
 
@@ -303,12 +309,24 @@ class TL:
 
     a: str  # port name
     b: str
+    _: KW_ONLY
     z0: float
     length: float
     transposed: bool = False
     vf: float = 1.0
     k1: float = 0.0
     k2: float = 0.0
+
+    def __post_init__(self):
+        # A number here is always a slot slip (momwire#1792): a non-zero float
+        # is truthy, so it would silently cross the line.
+        if not isinstance(self.transposed, (bool, np.bool_)):
+            raise TypeError(
+                f"TL {self.a!r}->{self.b!r}: transposed must be True or False, "
+                f"got {self.transposed!r} ({type(self.transposed).__name__}); "
+                "a number here is usually a cable value in the wrong slot — "
+                "pass z0=, length=, vf=, k1=, k2= by keyword"
+            )
 
     @classmethod
     def from_cable(cls, cable, a, b, length, transposed=False):
