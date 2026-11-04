@@ -43,8 +43,9 @@ masked, by exact pattern and with the same count on both sides, over:
   port load; the refusals in Python's words (a buried wire over GN 1, and
   the crossing scope: two radii, a hub, an oblique node, two nodes, two
   nodes too close);
-- the declines: a near-field point on a wire's finite-ground contact or in
-  the soil, a near field over a buried wire;
+- the near-field refusals in Python's words over a finite ground: a point
+  on a wire's ground contact or in the soil, a field of a deck with a buried
+  wire;
 - wires on both sides with no crossing (momwire#1718 S12): the stitched
   basis and the two transmitted pair classes;
 - a crossing node (momwire#1607 B6b): a rise over a rod with PQ and RP, a
@@ -669,13 +670,13 @@ CASES = [
         "printed",
     ),
     (
-        "buried_near_field_declines",
+        "buried_near_field_refuses",
         deck(
             BURIED_DIPOLE,
             "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 11 0 1\nNE 0 1 1 1 0 0 1 0 0 0\n",
             "GE -1",
         ),
-        "declined",
+        "refused",
     ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (
@@ -749,21 +750,21 @@ CASES = [
         "printed",
     ),
     (
-        "ne_on_the_gn2_contact_declines",
+        "ne_on_the_gn2_contact_refuses",
         deck(
             "GW 1 10 0 0 0 0 0 .25 .001\n",
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 1 0 1\nNE 0 1 1 1 0 0 0 0 0 0\n",
             "GE 1",
         ),
-        "declined",
+        "refused",
     ),
     (
-        "ne_in_the_soil_declines",
+        "ne_in_the_soil_refuses",
         deck(
             "GW 1 11 0 0 .3 0 0 .8 .001\n",
             "GN 2 0 0 0 13 .005\n" + FR + "EX 0 1 6 0 1\nNE 0 1 1 2 .2 0 -.1 0 0 .2\n",
         ),
-        "declined",
+        "refused",
     ),
     (
         "helix",
