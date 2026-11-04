@@ -78,9 +78,10 @@ crossing junction, which the Python commands serve.
 `momwire-nec42-linux`, what the Python command `momwire-nec42` (the NEC-4.2
 slot's default, bs2) answers, with its own avx2 and sse2 builds and picker.
 Its printout is the Python command's byte for byte except the two
-measured-time lines. As a preview it still refuses by name a near field over
-a buried wire (as the Python command does) and an insulated wire (IS); the
-Python command serves the insulated wire.
+measured-time lines. It refuses a near field over a buried wire in the
+Python command's own words (the Python command refuses it too). As a preview
+it still refuses by name an insulated wire (IS), which the Python command
+serves.
 
 **Windows (preview).** The zip holds `momwire-nec5-razor2p-avx2.exe` and
 `momwire-nec5-bs2-avx2.exe`, the `-sse2` pair, and a `win7` folder with an

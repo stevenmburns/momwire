@@ -678,6 +678,21 @@ CASES = [
         ),
         "refused",
     ),
+    (
+        # a rise of nine chained pieces (one polyline of ten anchors: the
+        # B-spline front's pairwise length) beside a buried wire
+        "mixed_rise_of_nine_pieces",
+        deck(
+            "".join(
+                f"GW {i + 1} 2 0 0 {0.5 + 0.5 * i:g} 0 0 {1.0 + 0.5 * i:g} .001\n"
+                for i in range(9)
+            )
+            + "GW 10 21 -5 0 -.3 5 0 -.3 .001\n",
+            "GN 2 0 0 0 13 .005\n" + BFR + "EX 0 1 1 0 1\nXQ\n",
+            "GE -1",
+        ),
+        "printed",
+    ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
     (
         "tl_crossed_shunts_zero_length",

@@ -300,9 +300,9 @@ measured time. It serves free space, a perfect ground (GN 1), a Sommerfeld
 ground (GN 2 / GN 3), buried wires (wholly below it, joined to the wires
 above through crossing junctions, or beside raised ones with no junction
 between them), wire loading, networks (TL / NT) and the extended and exact
-kernels. It still refuses by name a near field over a buried wire (as the
-Python command does) and an insulated wire (IS); the Python command serves
-the insulated wire.
+kernels. It refuses a near field over a buried wire in the Python command's
+own words (the Python command refuses it too), and it still refuses by name an
+insulated wire (IS), which the Python command serves.
 
 ### Radius steps and junctions on the sinusoidal basis: the junction rule
 
