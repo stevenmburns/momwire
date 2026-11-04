@@ -32,15 +32,15 @@
 // `cliff`, B5d), reflected off on every RP over a ground.
 //
 // A wire below the ground plane is the engine's question (the sinusoidal
-// front serves a wholly-buried deck, momwire#1607 B6a); a near field of a
-// deck with a buried wire is refused by the reference.
+// front serves a wholly-buried deck, momwire#1607 B6a); a near field over
+// a finite ground of a deck with a buried wire, at a point in the soil or at
+// a wire's ground contact is refused in the reference's own words
+// (`_refuse_finite_ground_near_field`).
 //
-// DECLINED (`Declined`), never misprinted: a near field over a buried wire,
-// an insulated wire, two sources on one segment of a phased drive, a
-// near-field point in the soil or on a wire's finite-ground contact (the
-// reference refuses both in its own words), and any run Python would answer
-// with a refusal this copy does not word (a singular drive block, a current
-// source on a port that takes no current).
+// DECLINED (`Declined`), never misprinted: an insulated wire, two sources on
+// one segment of a phased drive, and any run Python would answer with a
+// refusal this copy does not word (a singular drive block, a current source
+// on a port that takes no current).
 #pragma once
 
 #include "_nec4_printout_core.h"
