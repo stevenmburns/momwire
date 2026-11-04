@@ -1357,6 +1357,35 @@ Csr basis_csr_c(const SegView &v, cd k) {
     return c;
 }
 
+// `_below_interface.BURIED_GRAZING_REFUSAL` (the point-matched front's copy,
+// `_sinusoidal_front_core.cpp`, is that TU's own), raised as `serve_plan`
+// raises it: `theta` the plan's th_min in degrees (`math.degrees`), the
+// depth sum `min(d_b) + min(d_b)`, a ValueError in Python's words.
+const char *const kSgBuriedGrazingRefusal =
+    "this deck's buried wires reach a below/below pair elevation of theta = {th} deg among the "
+    "pairs inside the cap, below the {floor} deg grazing floor the below/below surfaces are tabul"
+    "ated from (the pair's two depths add to {depth} m, and theta = atan2(depth sum, horizontal"
+    " separation)). The floor is asked only of pairs inside the cap \xe2\x80\x94" " image distance "
+    "R1 within 4 in-medium wavelengths, the pairs whose remainder is evaluated; past it the remaind"
+    "er is served as zero (momwire#1053, #1187). Below the floor the surfaces carry the lateral wav"
+    "e's LOGARITHMIC structure \xe2\x80\x94" " measured drift 1.1 to 3.3 of scale between 2 and 0.0"
+    "5 deg \xe2\x80\x94" " which no uniform lattice resolves, and theta = 0 has no node at all beca"
+    "use h = 0 leaves the tail without its exponential decay. Bury the wires deeper, shorten them, "
+    "or wait for the log-spaced grazing band (momwire#553 U2's recorded follow-up)";
+
+[[noreturn]] void refuse_grazing(double th_min, double floor_deg, const std::vector<double> &d) {
+    double dmin = d.empty() ? 0.0 : d[0];
+    for (double v : d) dmin = (v != v || dmin != dmin) ? std::numeric_limits<double>::quiet_NaN() : std::min(dmin, v);
+    char th[64], fl[64], de[64];
+    std::snprintf(th, sizeof th, "%.4g", th_min * (180.0 / M_PI));  // `math.degrees`, `{th:.4g}`
+    std::snprintf(fl, sizeof fl, "%g", floor_deg);
+    std::snprintf(de, sizeof de, "%.4g", dmin + dmin);
+    std::string msg = kSgBuriedGrazingRefusal;
+    const std::pair<const char *, const char *> fields[3] = {{"{th}", th}, {"{floor}", fl}, {"{depth}", de}};
+    for (const auto &f : fields) msg.replace(msg.find(f.first), std::strlen(f.first), f.second);
+    throw SolverRefusal("ValueError", msg);
+}
+
 // `_operating_medium`'s `serve_plan` over the field rule's nodes
 // (`field_nodes`, q = `n_qp_buried_field(3)` = 6) with bspline's
 // `_pair_extents_below`: `r1_below`, or the grazing refusal, which is not
@@ -1404,7 +1433,7 @@ double serve_plan_below(const Front &fr) {
     if (th_min < floor) {
         // past the cap Python asks the floor of the pairs inside it only
         if (r1_max > r1_cap) decline("a grazing below/below pair past the cap (the capped walk is not copied)");
-        decline("a below/below pair under the grazing floor (the refusal's wording is not copied)");
+        refuse_grazing(th_min, floor_deg, d);
     }
     return r1_max;
 }
@@ -2032,8 +2061,9 @@ double serve_plan_crossing(const Front &fr, const std::vector<int64_t> &b_idx) {
                 if (ratio < ratio_min) ratio_min = ratio;
             }
         if (std::atan(ratio_min) >= floor) return r1_max;
+        refuse_grazing(std::atan(ratio_min), floor_deg, d);  // `np.arctan(ratio_min)`
     }
-    if (th_min < floor) decline("a below/below pair under the grazing floor (the refusal's wording is not copied)");
+    if (th_min < floor) refuse_grazing(th_min, floor_deg, d);
     return r1_max;
 }
 
