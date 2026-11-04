@@ -2592,6 +2592,9 @@ struct GradedCtx {
     Lattice lat;
     std::vector<double> xg, wg;  // `leggauss(N_PANEL)`
     int d1;
+    // Set: the lazy grid's census instead of the moments (the reads are
+    // marked, the moments come back zero).
+    somm_proj::NodeMarks *census = nullptr;
     V3 at(const std::vector<double> &a, int64_t s) const {
         return {a[3 * static_cast<size_t>(s)], a[3 * static_cast<size_t>(s) + 1], a[3 * static_cast<size_t>(s) + 2]};
     }
@@ -2656,6 +2659,12 @@ void inner_moments(const GradedCtx &c, const std::vector<V3> &obs, const std::ve
         }
     }
     v.assign(n_o * static_cast<size_t>(c.d1), cdouble(0.0, 0.0));
+    if (c.census != nullptr) {
+        somm_core::graded_inner_nodes(c.view, c.gz, ob.data(), ao.data(), dvo.data(), ptr.data(),
+                                      static_cast<std::ptrdiff_t>(n_o), p0.data(), p1.data(), c.xg.data(),
+                                      static_cast<std::ptrdiff_t>(c.xg.size()), *c.census);
+        return;
+    }
     somm_core::remainder_graded_inner(c.view, c.gz, c.k, ob.data(), tob.data(), ao.data(), dvo.data(), tso.data(),
                                       Lj_o.data(), ptr.data(), static_cast<std::ptrdiff_t>(n_o), p0.data(), p1.data(),
                                       c.xg.data(), c.wg.data(), static_cast<std::ptrdiff_t>(c.xg.size()), c.d1,
@@ -2849,7 +2858,8 @@ std::vector<cdouble> graded_pair_moments(const GradedCtx &c, const std::vector<i
 
 // `_remainder_pair_moments(geom, obs_segs, [src], q, grid)[:, 0]`: (no, d1, d1)
 std::vector<cdouble> pair_moments_fixed(const Geometry &g, const somm_proj::GridView &view, double gz, double k,
-                                        int d1, const std::vector<int64_t> &obs_segs, int64_t src, int64_t q) {
+                                        int d1, const std::vector<int64_t> &obs_segs, int64_t src, int64_t q,
+                                        somm_proj::NodeMarks *census = nullptr) {
     std::vector<double> xg, wg, tq;
     if (!razor::leggauss(q, xg, wg)) throw FrontNotPorted("a remainder order past the frozen rules");
     for (double x : xg) tq.push_back(0.5 * (x + 1.0));
@@ -2889,6 +2899,13 @@ std::vector<cdouble> pair_moments_fixed(const Geometry &g, const somm_proj::Grid
             }
     };
     const size_t no = obs_segs.size();
+    if (census != nullptr) {
+        // the lazy grid's census: `remainder_bspline_Q` reads (a subset of)
+        // every obs node against every source node
+        somm_core::field_proj_nodes(view, static_cast<std::ptrdiff_t>(no * static_cast<size_t>(q)),
+                                    static_cast<std::ptrdiff_t>(q), no_.data(), ns_.data(), gz, *census);
+        return std::vector<cdouble>(no * static_cast<size_t>(d1 * d1), cdouble(0.0, 0.0));
+    }
     std::vector<int64_t> lo_, ls_;
     std::vector<double> po_, ps_;
     pseudo(no, lo_, po_);
@@ -3256,6 +3273,31 @@ void remainder_pair_correction(At &&at, const Geometry &g, const Basis &b, doubl
     }
 }
 
+// The census of `remainder_pair_correction`'s reads (the lazy grid,
+// momwire#1512): the graded pairs' panels and every pair's keyed Gauss rule at
+// the base order, and a keyed pair's own order too.
+void remainder_pair_census(const Geometry &g, const Basis &b, double gz, double k, const somm_proj::GridView &view,
+                           const somm_core::Grid &grid, const std::vector<int64_t> &I, const std::vector<int64_t> &J,
+                           const std::vector<int64_t> &Qp, int64_t base, somm_proj::NodeMarks &marks) {
+    const int d1 = b.degree + 1;
+    std::vector<int64_t> gI, gJ;
+    for (size_t t = 0; t < I.size(); t++)
+        if (Qp[t] >= REMAINDER_GRADED_MIN_Q) {
+            gI.push_back(I[t]);
+            gJ.push_back(J[t]);
+        }
+    if (!gI.empty()) {
+        GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+        if (!razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg)) throw FrontNotPorted("no graded rule");
+        ctx.census = &marks;
+        (void)graded_pair_moments(ctx, gI, gJ);
+    }
+    for (size_t t = 0; t < I.size(); t++) {
+        (void)pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], base, &marks);
+        if (Qp[t] < REMAINDER_GRADED_MIN_Q) (void)pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], Qp[t], &marks);
+    }
+}
+
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                                    double ground_z, cdouble eps_t, double k, double omega, double mu,
                                    int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np) {
@@ -3276,7 +3318,9 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
                 W[static_cast<size_t>((p * N + s) * q + j)] = w * std::pow(u, static_cast<double>(p));
             }
     const double r1_max = razor::max_image_distance(g.seg_l.data(), g.seg_r.data(), static_cast<size_t>(N), ground_z);
-    const somm_core::Grid &G0 = somm_core::get_grid(eps_t, k, r1_max, omega, mu);
+    // The lazy view (momwire#1512): its nodes are filled below, once the
+    // census of the block's and the raised pairs' reads has named them.
+    const somm_core::Grid &G0 = somm_core::get_grid_lazy(eps_t, k, r1_max, omega, mu);
     const size_t n_reg = G0.regions.size();
     if (n_reg > somm_proj::MAX_REGIONS) throw FrontNotPorted("a grid layout past the view's regions");
     double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
@@ -3302,6 +3346,29 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
     // `_remainder_qp_pairs`: the pairs raised above the base order
     std::vector<int64_t> pI, pJ, pQ;
     remainder_raised_pairs(g, ground_z, n_qp_sommerfeld, np, pI, pJ, pQ);
+    {
+        // Collect, then fill: the block reads every node against every node
+        // (`remainder_bspline_Q`), the raised pairs their own rules.
+        std::vector<std::vector<uint8_t>> need(n_reg);
+        somm_proj::NodeMarks marks;
+        marks.n_reg = n_reg;
+        for (size_t r = 0; r < n_reg; r++) {
+            need[r].assign(static_cast<size_t>(G0.regions[r].n_r * G0.regions[r].n_th), 0);
+            marks.m[r] = need[r].data();
+            marks.nR[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_r);
+            marks.nTh[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_th);
+        }
+        const double n_pairs = static_cast<double>(N * q) * static_cast<double>(N * q);
+        if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(G0))) {
+            somm_core::field_proj_nodes(view, static_cast<std::ptrdiff_t>(N * q), static_cast<std::ptrdiff_t>(N * q),
+                                        nodes.data(), nodes.data(), ground_z, marks);
+            if (!pI.empty())
+                remainder_pair_census(g, b, ground_z, k, view, G0, pI, pJ, pQ, n_qp_sommerfeld, marks);
+        } else {
+            need = somm_core::all_nodes_of(G0);  // the census would cost more than it saves
+        }
+        somm_core::ensure_nodes(G0, need);
+    }
     // `remainder.fold_into(Z, -1, ...)` (momwire#1798): each finished Q entry
     // is subtracted from Z as the symmetric route forms it, so no n_basis^2 Q
     // is held beside Z. The entries the raised pairs add to are exempted
@@ -3353,6 +3420,7 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
         cdouble &z = Z[static_cast<size_t>(ex[t])];
         z = cdouble(z.real() - side[t].real(), z.imag() - side[t].imag());
     }
+    if (somm_core::lazy_check()) somm_core::check_read(Z.data(), Z.size(), "bspline sommerfeld remainder");
 }
 
 void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,
@@ -3420,6 +3488,34 @@ void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core:
         const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], base);
         fixed.insert(fixed.end(), lo.begin(), lo.end());
     }
+}
+
+void debug_pair_census(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
+                       const std::vector<int64_t> &I, const std::vector<int64_t> &J, somm_proj::NodeMarks &marks) {
+    const size_t n_reg = grid.regions.size();
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cdouble *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = grid.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    somm_proj::GridView view = somm_proj::build_grid_view(grid.r1_max, grid.r_break, 30.0 * (M_PI / 180.0),
+                                                          grid.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+    const std::vector<cdouble> far = somm_core::far_pack(grid);
+    somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    GradedCtx ctx{g, gz, k, view, lattice_of(grid), {}, {}, d1};
+    razor::leggauss(GRADED_N_PANEL, ctx.xg, ctx.wg);
+    ctx.census = &marks;
+    (void)graded_pair_moments(ctx, I, J);
 }
 
 // ---------------------------------------------------------------------------

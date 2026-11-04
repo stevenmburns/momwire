@@ -26,6 +26,12 @@ void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdi
                       const double *obs, const double *src, double ground_z,
                       somm_proj::NodeMarks &marks);
 
+// The census of `remainder_graded_inner` (_somm_pairs_core.h) over the same
+// arguments: every node its reads take, marked.
+void graded_inner_nodes(const somm_proj::GridView &G, double ground_z, const double *obs, const double *a0,
+                        const double *dvec, const int64_t *ptr, std::ptrdiff_t M, const double *p0,
+                        const double *p1, const double *xg, std::ptrdiff_t ng, somm_proj::NodeMarks &marks);
+
 // Whether this build has the projection's lanes, and how many pairs went
 // through them in this process.
 bool proj_lanes_built();

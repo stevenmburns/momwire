@@ -546,6 +546,54 @@ def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
     assert again["ground_built"] == 0 and again["ground_disk"] >= 1, again
 
 
+LAZY_ABOVE = FIXTURES / "lazy_above" / "gn2_dipole41.nec"
+LAZY_ABOVE_READER = {
+    "bspline": "bspline sommerfeld remainder",
+    "sinusoidal-galerkin": "sg sommerfeld remainder block",
+}
+
+
+@pytest.mark.skipif(
+    BASIS not in LAZY_ABOVE_READER,
+    reason="razor-2p's windows took their census already (momwire#1512)",
+)
+def test_the_above_remainder_fills_only_the_nodes_it_reads(tmp_path):
+    """bs2's and the Sinusoidal-Galerkin fill's above-ground remainder read a
+    LAZY grid: a census of the block's and the graded pairs' reads names the
+    nodes, and only those are filled (a node is its own contour, so its value
+    is the whole grid's). Every read is checked finite (a node not filled
+    reads NaN), the printout is the eager grid's (MOMWIRE_SOMM_LAZY=0) and the
+    launcher's byte for byte."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    def run(prog, name, **extra):
+        env = dict(
+            os.environ,
+            MOMWIRE_SOMM_CACHE_DIR=str(tmp_path / f"store-{name}"),
+            MOMWIRE_SOMM_CACHE="1",
+            MOMWIRE_TIMES="1",
+            **extra,
+        )
+        r = subprocess.run(
+            [prog, str(LAZY_ABOVE), str(tmp_path / f"{name}.out")],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        text = (tmp_path / f"{name}.out").read_bytes().decode("latin-1")
+        return tc.zero_timing(text), r.stderr.decode("latin-1")
+
+    lazy, err = run(EXE, "lazy", MOMWIRE_SOMM_LAZY_CHECK="1")
+    assert f"LAZY_CHECK ok: {LAZY_ABOVE_READER[BASIS]}" in err, err
+    eager, _ = run(EXE, "eager", MOMWIRE_SOMM_LAZY="0")
+    assert lazy == eager
+    ref, _ = run(_launcher(), "ref")
+    assert lazy == ref
+
+
 # --- the near-interface sheets' store (the perf-1028 study) -------------------
 
 NEAR_BURIED = FIXTURES / "near_buried_1653" / "d1_buried_dipole.nec5.nec"

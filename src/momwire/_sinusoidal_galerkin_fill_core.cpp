@@ -32,6 +32,7 @@
 #include "_bspline_core.h"
 #include "_bspline_fill_core.h"  // the graded remainder pairs (bs2's)
 #include "_somm_grid_core.h"
+#include "_somm_proj_core.h"  // field_proj_nodes: the lazy grid's census
 #include "_somm_pairs_owned_core.h"
 #include "_somm_remainder_core.h"
 #include "_sinusoidal_series_inline.h"  // `sin_minus_arg`
@@ -1027,7 +1028,9 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
     const std::size_t N = s.n;
     const double gz = 0.0;  // the NEC-4.2 dialect's interface
     const double r1_max = razor::max_image_distance(s.l.data(), s.r.data(), N, gz);
-    const somm_core::Grid &G0 = somm_core::get_grid(eps_t, k, r1_max, omega, SOLVER_MU);
+    // The lazy view (momwire#1512): its nodes are filled below, once the
+    // census of the block's and the grazing pairs' reads has named them.
+    const somm_core::Grid &G0 = somm_core::get_grid_lazy(eps_t, k, r1_max, omega, SOLVER_MU);
     GridHold gh;
     grid_view(G0, gh);
     std::vector<double> t01, w01;
@@ -1079,6 +1082,40 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
             for (int p = 0; p < 3; p++) pl[(row * 3 + slot) * 3 + static_cast<std::size_t>(p)] = csr.coef[3 * e + static_cast<std::size_t>(p)].real();
         }
     }
+    // the grazing pairs, on graded panels (named here for the census; used below)
+    std::vector<int64_t> I, J, Qp;
+    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), gz, q, REMAINDER_GRADED_C, REMAINDER_GRADED_EDGE_TOL,
+                             np, I, J, Qp);
+    bspline::Geometry bg;
+    bg.n_segs_total = static_cast<int64_t>(N);
+    bg.seg_l = s.l;
+    bg.seg_r = s.r;
+    bg.tangents = s.t;
+    bg.h_per_seg = s.h;
+    {
+        // Collect, then fill: the block reads every node against every node
+        // (`remainder_bspline_Q`; `remainder_field_proj_owned` below reads a
+        // subset of the same pairs), the grazing pairs their graded panels.
+        const std::size_t n_reg = G0.regions.size();
+        std::vector<std::vector<uint8_t>> need(n_reg);
+        somm_proj::NodeMarks marks;
+        marks.n_reg = n_reg;
+        for (std::size_t r = 0; r < n_reg; r++) {
+            need[r].assign(static_cast<std::size_t>(G0.regions[r].n_r * G0.regions[r].n_th), 0);
+            marks.m[r] = need[r].data();
+            marks.nR[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_r);
+            marks.nTh[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_th);
+        }
+        const double n_pairs = static_cast<double>(N * qn) * static_cast<double>(N * qn);
+        if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(G0))) {
+            somm_core::field_proj_nodes(gh.view, static_cast<std::ptrdiff_t>(N * qn), static_cast<std::ptrdiff_t>(N * qn),
+                                        nodes.data(), nodes.data(), gz, marks);
+            if (!I.empty()) bspline::debug_pair_census(bg, gz, k, G0, REMAINDER_D1, I, J, marks);
+        } else {
+            need = somm_core::all_nodes_of(G0);  // the census would cost more than it saves
+        }
+        somm_core::ensure_nodes(G0, need);
+    }
     std::vector<cd> Qr(R * R);
     somm_core::remainder_bspline_Q(gh.view, gz, k, nodes.data(), s.t.data(), W.data(), static_cast<std::ptrdiff_t>(N),
                                    nodes.data(), s.t.data(), W.data(), static_cast<std::ptrdiff_t>(N),
@@ -1121,25 +1158,17 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
                 gij = cadd(gij, blk);
             }
     }
-    // the grazing pairs, on graded panels
-    std::vector<int64_t> I, J, Qp;
-    bspline::raised_pairs_on(s.l, s.r, static_cast<int64_t>(N), gz, q, REMAINDER_GRADED_C, REMAINDER_GRADED_EDGE_TOL,
-                             np, I, J, Qp);
+    if (somm_core::lazy_check()) somm_core::check_read(Qr.data(), Qr.size(), "sg sommerfeld remainder block");
     if (I.empty()) return;
     const std::size_t n = I.size();
     const int D1 = REMAINDER_D1;
-    bspline::Geometry bg;
-    bg.n_segs_total = static_cast<int64_t>(N);
-    bg.seg_l = s.l;
-    bg.seg_r = s.r;
-    bg.tangents = s.t;
-    bg.h_per_seg = s.h;
     // `_remainder_graded.pair_moments(..., D1)` through the bs2 core's exported
     // hook, without the base-order moments it can also return (this route
     // takes them from `remainder_field_proj_owned` below, as Python does):
     // computing them pair by pair was ~90 % of an above-ground screen's fill
     std::vector<cd> dJm, unread;
     bspline::debug_pair_moments(bg, gz, k, G0, D1, I, J, q, dJm, unread, false);
+    if (somm_core::lazy_check()) somm_core::check_read(dJm.data(), dJm.size(), "sg sommerfeld remainder graded");
     const std::vector<double> tau = taylor_shape_coefs(k, s.h);
     // dJ = einsum("pmn,nmM,PMn->npP", tau[:, :, I], dJ_mono, tau[:, :, J])
     std::vector<cd> dJ(n * 9);
@@ -1186,6 +1215,7 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
     std::vector<cd> F(S);
     somm_core::remainder_field_proj_owned(gh.view, gz, k, obs.data(), t_obs.data(), src.data(), t_src.data(),
                                           owner.data(), static_cast<std::ptrdiff_t>(S), F.data(), 0);
+    if (somm_core::lazy_check()) somm_core::check_read(F.data(), F.size(), "sg sommerfeld remainder owned");
     // lo = einsum("pnq,nqr,Pnr->npP", W[:, I, :], F, W[:, J, :]); dJ -= lo
     for (std::size_t t = 0; t < n; t++) {
         const std::size_t si = static_cast<std::size_t>(I[t]), sj = static_cast<std::size_t>(J[t]);

@@ -12,6 +12,7 @@
 #include "_nec5_printout_core.h"
 #include "_razor_solve_core.h"
 #include "_somm_grid_core.h"
+#include "_accel_somm_proj_inline.h"  // somm_proj::NodeMarks
 
 #include <algorithm>
 #include <complex>
@@ -163,6 +164,12 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
 void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
                         const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
                         std::vector<cdouble> &graded, std::vector<cdouble> &fixed, bool with_fixed = true);
+
+// The census of `debug_pair_moments`' graded reads (the lazy grid,
+// momwire#1512): every node they take, marked in `marks` (a mask per region
+// of `grid`).
+void debug_pair_census(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
+                       const std::vector<int64_t> &I, const std::vector<int64_t> &J, somm_proj::NodeMarks &marks);
 
 void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,
                       int64_t j, std::vector<int64_t> &o_pair, std::vector<double> &s_o, std::vector<double> &w_o,
