@@ -1343,6 +1343,21 @@ def test_what_the_reader_declines(text, acc):
         assert nc.classify(nc.cxx_parse(text, dialect, acc)) == "declined"
 
 
+def test_a_later_cards_refusal_wins_over_a_non_finite_decline(acc):
+    """A non-finite field on a card Python reads (an LD 5 NaN conductivity)
+    declines at the end of the cards, not on its own card: a later card that
+    Python refuses (an EX 4 in the nec4 dialect) is then refused in Python's
+    words, as the NEC-4.2 exes print it, rather than declined."""
+    text = deck(
+        DIPOLE,
+        "LD 5 0 0 0 nan",
+        tail="FR 0 1 0 0 299.7925\nEX 4 1 6 0 1 0\nXQ\nEN\n",
+    )
+    with pytest.raises(Exception, match="EX 4 is not served"):
+        parse(text, dialect="nec4")
+    assert _same(text, "nec4", acc) == "refused"
+
+
 def test_a_non_finite_field_python_serves_still_declines(acc):
     """NEC-2's GH reads an infinite turn spacing as no turning at all and
     never reads B2 while A2 equals A1: Python serves both, and the C++ reader,
