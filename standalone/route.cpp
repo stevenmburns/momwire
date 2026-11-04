@@ -64,8 +64,8 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     lp.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     lp.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
     nec5::NumpyLinalg np;
-    np.host.zgemm = &MWX(zgemm_);
-    np.host.zgemv = &MWX(zgemv_);
+    np.host.zgemm = &MWN(zgemm_);
+    np.host.zgemv = &MWN(zgemv_);
     np.host.getrf = lp.getrf;
     np.host.getrs = lp.getrs;
     np.zgesvx = &MWX(zgesvx_);  // the network solve's expert driver

@@ -115,8 +115,12 @@ extern "C" void omp_set_num_threads(int);
 #include <malloc.h>  // mallopt
 #endif
 #if defined(__linux__)
-// The static OpenBLAS's pool teardown (a missing one fails the link).
+// The static OpenBLAS's pool teardown (a missing one fails the link); the
+// numpy library's too where it is a second archive (blas.h, momwire#1751).
 extern "C" int MWX(blas_thread_shutdown_)(void);
+#if MW_BLAS_TWO_LIBS
+extern "C" int MWN(blas_thread_shutdown_)(void);
+#endif
 #endif
 
 namespace {
@@ -360,6 +364,9 @@ bool omp_copy_at_one_thread() {
 // its numpy and scipy read.
 void set_threads(int n, bool omp) {
     MWX(openblas_set_num_threads)(n);
+#if MW_BLAS_TWO_LIBS
+    MWN(openblas_set_num_threads)(n);  // numpy's library, the same count
+#endif
 #if defined(__linux__)
     // Growing the pool starts its new server threads AWAKE: each spins for
     // OpenBLAS's thread timeout (2^28 cycles, ~70 ms) before it sleeps, BLAS
@@ -371,7 +378,12 @@ void set_threads(int n, bool omp) {
     // (`exec_blas` -> `blas_thread_init`), which is how numpy's pool sits in
     // a warm Python process -- asleep until asked. The thread count, and so
     // every partition and every bit, is unchanged.
-    if (n > 1) MWX(blas_thread_shutdown_)();
+    if (n > 1) {
+        MWX(blas_thread_shutdown_)();
+#if MW_BLAS_TWO_LIBS
+        MWN(blas_thread_shutdown_)();
+#endif
+    }
 #endif
     if (omp) omp_set_num_threads(n);
     set_env("OPENBLAS_NUM_THREADS", std::to_string(n));
@@ -693,8 +705,8 @@ int run_python(const std::string &home, const std::string &code) {
                   (unsigned long long)(uintptr_t)&MWX(zgetrs_),
                   (unsigned long long)(uintptr_t)&MWX(dgetrf_),
                   (unsigned long long)(uintptr_t)&MWX(dgetrs_),
-                  (unsigned long long)(uintptr_t)&MWX(zgemm_),
-                  (unsigned long long)(uintptr_t)&MWX(zgemv_));
+                  (unsigned long long)(uintptr_t)&MWN(zgemm_),
+                  (unsigned long long)(uintptr_t)&MWN(zgemv_));
     if (py.p_PyRun_SimpleString(table) != 0) die("could not publish the library");
     // The release check, again, as the stamp reads it.
     const std::string check =
@@ -708,7 +720,7 @@ int run_python(const std::string &home, const std::string &code) {
         // AVX-512 off for the embedded numpy and SciPy, before momwire imports
         // them: the launcher's own pin (momwire_serve_client.pin_cpu_env).
         // The static OpenBLAS build_openblas.sh makes carries no AVX-512
-        // kernels at all; the Windows build's release DLL does, and reads
+        // kernels at all; the Windows build's DLL (scipy-openblas32) does, and reads
         // its core type at load, before this line can set one.
         "_msc.pin_cpu_env()\n";
     if (py.p_PyRun_SimpleString(check.c_str()) != 0) std::exit(3);
