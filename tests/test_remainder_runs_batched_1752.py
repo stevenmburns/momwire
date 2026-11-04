@@ -37,7 +37,11 @@ def _Z(monkeypatch, batched):
 
     if batched:
         monkeypatch.setattr(BSplineSolver, "_remainder_runs_batched", count)
-    s = BSplineSolver(**surface_screen_deck(12))
+    # Six radials, not twelve (momwire 0.86.0 release prep): the default-lane
+    # budget is 5 s and twelve took a 5.2 s CI median. This is the file's only
+    # test, so it stays in the default lane as #1752's PR guard; `n == 1` below
+    # still proves the batched path ran.
+    s = BSplineSolver(**surface_screen_deck(6))
     geom = s._build_geometry()
     supp_seg, polys, *_ = s._build_basis_polynomials(geom)
     with warnings.catch_warnings():

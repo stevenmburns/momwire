@@ -811,8 +811,9 @@ CASES = [
 
 
 # Default-lane budget is 5 s; CI median 9.3 s Linux for crossing_folded_rise_rod
-# (momwire 0.85.0 release prep). The other cases stay as the PR guard.
-_SLOW = {"crossing_folded_rise_rod"}
+# (momwire 0.85.0 release prep) and 6.7 s for crossing_folded_sparse (0.86.0
+# prep). The other cases stay as the PR guard.
+_SLOW = {"crossing_folded_rise_rod", "crossing_folded_sparse"}
 
 
 @pytest.mark.parametrize(

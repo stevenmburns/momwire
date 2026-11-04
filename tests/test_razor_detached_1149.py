@@ -157,6 +157,9 @@ def test_mixed_radii_are_served_since_u2b():
     assert s._detached
 
 
+# Default-lane budget is 5 s; CI median 5.05 s macOS (momwire 0.86.0 release
+# prep). The file's other detached-razor tests stay as the PR guard.
+@pytest.mark.slow
 def test_the_extended_kernel_is_served_above_ground_by_the_declared_sentence():
     """momwire#1614 (a refusal until then): the above wire takes the
     extended kernel, the buried one keeps the reduced kernel, and the fill
