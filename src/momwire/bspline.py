@@ -653,6 +653,13 @@ def _fortran_in_place(Z):
     return Z.T
 
 
+def _junction_reduce_on():
+    """momwire#1799 prototype switch: MOMWIRE_BS2_JUNCTION_REDUCE=1."""
+    import os
+
+    return os.environ.get("MOMWIRE_BS2_JUNCTION_REDUCE", "") == "1"
+
+
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
@@ -8846,6 +8853,122 @@ class BSplineSolver(
         self._rotational_route_serves_one_drive("compute_y_matrix")
         return self.compute_port_solution().y
 
+    # ------------------------------------------------------------------
+    # momwire#1799 PROTOTYPE: junction-constrained bases eliminated before
+    # the solve (null-space method). NOT the shipped route; opt in with
+    # MOMWIRE_BS2_JUNCTION_REDUCE=1.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _junction_null_space(kcl_con, n_basis):
+        """`(T, free)`: T (n_basis, n_free) CSR with kcl_con @ T == 0 and
+        x = T y spanning every x the constraints allow.
+
+        Each KCL row ties the directional bases of one junction (+-1 outflow
+        signs) and no basis sits in two rows, so each row eliminates its LAST
+        basis p: a_p = -sum_i (s_i / s_p) a_i. Every other basis keeps its own
+        reduced column (coefficient 1); p's row of T carries -s_i / s_p in its
+        partners' columns. Exact: the reduced system T^T Z T y = T^T v has
+        the saddle-point solve's solution, x = T y, in exact arithmetic.
+        """
+        A = scipy.sparse.csr_matrix(kcl_con)
+        A.eliminate_zeros()
+        rows, cols = A.nonzero()
+        if np.unique(cols).size != cols.size:
+            raise NotImplementedError("a basis in two constraint rows")
+        piv = np.full(A.shape[0], -1, dtype=np.int64)
+        for r in range(A.shape[0]):
+            c = A.indices[A.indptr[r] : A.indptr[r + 1]]
+            if c.size:
+                piv[r] = c.max()
+        is_piv = np.zeros(n_basis, dtype=bool)
+        is_piv[piv[piv >= 0]] = True
+        free = np.flatnonzero(~is_piv)
+        col_of = np.full(n_basis, -1, dtype=np.int64)
+        col_of[free] = np.arange(free.size)
+        ti, tj, tv = [free], [np.arange(free.size)], [np.ones(free.size)]
+        for r in range(A.shape[0]):
+            if piv[r] < 0:
+                continue
+            lo, hi = A.indptr[r], A.indptr[r + 1]
+            c, v = A.indices[lo:hi], A.data[lo:hi]
+            sp = v[c == piv[r]][0]
+            m = c != piv[r]
+            ti.append(np.full(int(m.sum()), piv[r]))
+            tj.append(col_of[c[m]])
+            tv.append(-v[m] / sp)
+        T = scipy.sparse.csr_matrix(
+            (np.concatenate(tv), (np.concatenate(ti), np.concatenate(tj))),
+            shape=(n_basis, free.size),
+        )
+        return T, free
+
+    def _junction_wire_bands(self, geom, supp_seg, row_budget):
+        """Bands of whole wires, as segment arrays, each holding about
+        `row_budget` basis rows (at least one wire)."""
+        offs = list(geom["seg_offsets"]) + [int(geom["n_segs_total"])]
+        first_seg = supp_seg[:, 0]
+        bands, cur, cur_rows = [], [], 0
+        for w in range(len(geom["per_wire"])):
+            s0, s1 = int(offs[w]), int(offs[w + 1])
+            nrow = int(np.count_nonzero((first_seg >= s0) & (first_seg < s1)))
+            if cur and cur_rows + nrow > row_budget:
+                bands.append(np.concatenate(cur))
+                cur, cur_rows = [], 0
+            cur.append(np.arange(s0, s1, dtype=np.int64))
+            cur_rows += nrow
+        if cur:
+            bands.append(np.concatenate(cur))
+        return bands
+
+    def _junction_reduced_solve(
+        self, geom, supp_seg, polys, B, kcl_con, same_edge_prep
+    ):
+        """`(X, Y)` of the port solve through Z_red = T^T Z T.
+
+        Z_red is accumulated from observer-row bands of whole wires (the
+        restricted fill, momwire#1131, whose rows are the dense fill's), so
+        the full n_basis^2 Z is never held: the peak is Z_red plus one band.
+        A deck whose dense fill would apply the exact kernel (which the
+        restricted route does not serve) fills Z whole and reduces it, so the
+        answer never silently drops the correction.
+        """
+        n_basis = supp_seg.shape[0]
+        T, free = self._junction_null_space(kcl_con, n_basis)
+        n_free = free.size
+        self._last_junction_reduce = {"n_basis": n_basis, "n_free": int(n_free)}
+        Tt = T.T.tocsr()
+        whole = bool(self.exact_kernel) and (
+            self._exact_kernel_route_refusal(None, False) is None
+        )
+        if whole:
+            Z = self._compute_Z_operator(
+                geom, supp_seg, polys, same_edge_prep=same_edge_prep
+            )
+            Zr = np.asarray(Tt @ (T.T @ Z.T).T)
+            del Z
+        else:
+            Zr = np.zeros((n_free, n_free), dtype=np.complex128)
+            budget = max(1, (256 << 20) // (16 * n_basis))
+            for seg_rows in self._junction_wire_bands(geom, supp_seg, budget):
+                Zb, R = self._compute_Z_operator(
+                    geom, supp_seg, polys, rows=seg_rows, compact=True
+                )
+                D = np.asarray((T.T @ Zb.T).T)  # (len(R), n_free) = Zb @ T
+                del Zb
+                TR = T[R].tocoo()  # (len(R), n_free)
+                o = np.argsort(TR.col, kind="stable")
+                cols, start = np.unique(TR.col[o], return_index=True)
+                Zr[cols] += np.add.reduceat(TR.data[o, None] * D[TR.row[o]], start)
+                del D
+        self._last_junction_reduce["whole_fill"] = whole
+        Br = np.asarray(Tt @ B)
+        Zf = _fortran_in_place(Zr)
+        Xr = _lu_solve(Zf, np.asfortranarray(Br), overwrite_a=True, overwrite_b=True)
+        X = np.asarray(T @ Xr)
+        Y = _lapack.matmul(B.T, X)
+        return X, Y
+
     def compute_port_solution(self, same_edge_prep=None) -> PortSolution:
         """Solve every port from ONE fill and ONE factorisation.
 
@@ -8882,6 +9005,30 @@ class BSplineSolver(
             self._build_basis_polynomials(geom)
         )
         n_basis_total = supp_seg.shape[0]
+
+        if _junction_reduce_on() and not self.use_singular_enrichment:
+            # momwire#1799 PROTOTYPE: the junction constraints eliminated
+            # before the solve, Z_red = T^T Z T assembled band by band.
+            B, kcl_con = self._port_columns(
+                geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+            )
+            if kcl_con.shape[0]:
+                X, Y = self._junction_reduced_solve(
+                    geom, supp_seg, polys, B, kcl_con, same_edge_prep
+                )
+                return PortSolution(
+                    y=Y,
+                    coeffs=X,
+                    port_currents=Y,
+                    basis=_SplineBasis(
+                        geom=geom,
+                        supp_seg=supp_seg,
+                        polys=polys,
+                        wire_knots=wire_knots,
+                        wire_basis_global=wire_basis_global,
+                        n_poly=n_basis_total,
+                    ),
+                )
 
         Z = self._compute_Z_operator(
             geom, supp_seg, polys, same_edge_prep=same_edge_prep
