@@ -1145,16 +1145,20 @@ class Parser {
                 // `wire_geometry_refusal` after the card); a deck that survives
                 // them still declines after the build (`structure`). Any
                 // other card's is Python's to read (an LD 5 NaN conductivity
-                // is served).
+                // is served). Its decline waits for the end of the cards, so
+                // a later card's refusal (an EX 4) is Python's, in its words
+                // and its order; the card itself is read as Python reads it
+                // (`Card.i` refuses a NaN integer field in Python's words).
                 const bool geometry =
                     in(card.mnemonic, kGeometryCards) || card.mnemonic == "CW";
                 if (!finite && geometry)
                     nonfinite_geometry_ = true;
-                else if (!finite)
-                    decline("a non-finite field on a " + card.mnemonic + " card");
+                else if (!finite && nonfinite_card_.empty())
+                    nonfinite_card_ = card.mnemonic;
             }
             this->card(card);
         }
+        if (!nonfinite_card_.empty()) decline("a non-finite field on a " + nonfinite_card_ + " card");
         structure();
     }
 
@@ -1170,6 +1174,7 @@ class Parser {
     std::vector<Card> geometry_cards_;
     bool structure_built_ = false;
     bool nonfinite_geometry_ = false;  // a geometry card carried a NaN or infinity
+    std::string nonfinite_card_;       // the first other card that carried one
     Structure structure_;
 
     std::vector<bool> ran_;
