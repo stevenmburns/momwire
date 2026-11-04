@@ -1,0 +1,10 @@
+CM a 21 m dipole 8 m over GN 2 (average soil): the above-ground Sommerfeld
+CM remainder of the bs2 and Sinusoidal-Galerkin executables on a lazy grid
+CE
+GW 1 41 -10.5 0 8 10.5 0 8 .002
+GE 1
+GN 2 0 0 0 13 .005
+FR 0 1 0 0 7.1
+EX 0 1 21 0 1 0
+XQ
+EN

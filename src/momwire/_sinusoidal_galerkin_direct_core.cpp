@@ -860,7 +860,7 @@ struct Somm {
 };
 
 // `_sommerfeld_remainder_prepare(geom, k, eps_t, cos_shape="cos-1")`
-void somm_prepare(const Front &fr, const Deck &d, Somm &sm) {
+void somm_prepare(const Front &fr, const Deck &d, const Ctx &x, Somm &sm) {
     const Geometry &g = fr.geometry;
     const ll N = d.N;
     for (ll i = 0; i < N; i++) {
@@ -901,7 +901,10 @@ void somm_prepare(const Front &fr, const Deck &d, Somm &sm) {
             sr[static_cast<std::size_t>(3 * n + c)] = g.seg_r[static_cast<std::size_t>(n)][static_cast<std::size_t>(c)];
         }
     const double r1_max = razor::max_image_distance(sl.data(), sr.data(), static_cast<std::size_t>(N), 0.0);
-    const somm_core::Grid &grid = somm_core::get_grid(sm.eps_t, k, r1_max, fr.omega, kMu);
+    // The lazy view (momwire#1512): its nodes are filled below, once the
+    // census of `somm_subtract`'s reads (every test observer against every
+    // source) has named them.
+    const somm_core::Grid &grid = somm_core::get_grid_lazy(sm.eps_t, k, r1_max, fr.omega, kMu);
     sm.n_reg = grid.regions.size();
     if (sm.n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout this copy does not view");
     double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
@@ -924,6 +927,22 @@ void somm_prepare(const Front &fr, const Deck &d, Somm &sm) {
         nth));
     sm.far = somm_core::far_pack(grid);
     somm_proj::set_far(*sm.view, sm.far.data(), static_cast<std::ptrdiff_t>(sm.far.size()));
+    std::vector<std::vector<uint8_t>> need(sm.n_reg);
+    somm_proj::NodeMarks marks;
+    marks.n_reg = sm.n_reg;
+    for (std::size_t r = 0; r < sm.n_reg; r++) {
+        need[r].assign(static_cast<std::size_t>(grid.regions[r].n_r * grid.regions[r].n_th), 0);
+        marks.m[r] = need[r].data();
+        marks.nR[r] = static_cast<std::ptrdiff_t>(grid.regions[r].n_r);
+        marks.nTh[r] = static_cast<std::ptrdiff_t>(grid.regions[r].n_th);
+    }
+    const ll M = static_cast<ll>(x.obs_c.size() / 3);
+    if (somm_core::census_pays(static_cast<double>(M) * static_cast<double>(sm.n_src), somm_core::unfilled_nodes(grid)))
+        somm_core::field_proj_nodes(*sm.view, static_cast<std::ptrdiff_t>(M), static_cast<std::ptrdiff_t>(sm.n_src),
+                                    x.obs_c.data(), sm.srcf.data(), 0.0, marks);
+    else
+        need = somm_core::all_nodes_of(grid);  // the census would cost more than it saves
+    somm_core::ensure_nodes(grid, need);
 }
 
 // The remainder replayed at the band's test observers, each chunk reduced
@@ -942,6 +961,7 @@ void somm_subtract(const Deck &d, const Ctx &x, const Band &b, const Somm &sm, V
         table.assign(static_cast<std::size_t>(m * sm.n_src), cd(0.0, 0.0));
         somm_core::field_proj_batch(*sm.view, sm.n_reg, m, sm.n_src, obs, tob, sm.srcf.data(), sm.t_src.data(), 0.0,
                                     d.k, table.data(), 0, true);
+        if (somm_core::lazy_check()) somm_core::check_read(table.data(), table.size(), "sg direct sommerfeld remainder");
         // `remainder_shape_reduce(shp_w, table)`: block (3, m, N)
         blk.assign(static_cast<std::size_t>(3 * m * N), cd(0.0, 0.0));
         for (ll i = 0; i < m; i++) {
@@ -1660,7 +1680,7 @@ std::vector<cd> assemble_Z_direct(const Front &fr, const nec4::SolverArgs &args,
     }
     bl.near_free = near_cells(d, K, d.c, d.t, bl.ek ? &bl.lab_free : nullptr);
     if (pec || finite) bl.near_img = near_cells(d, K, bl.img_c, bl.img_t, bl.ek ? &bl.lab_img : nullptr);
-    if (finite) somm_prepare(fr, d, *bl.somm);
+    if (finite) somm_prepare(fr, d, x, *bl.somm);
 
     const ll N = d.N, nb = d.n_basis;
     const std::size_t nbz = static_cast<std::size_t>(nb);

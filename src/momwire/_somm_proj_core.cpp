@@ -296,6 +296,33 @@ void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdi
     rows(0, M, marks);
 }
 
+void graded_inner_nodes(const somm_proj::GridView &G, double ground_z, const double *obs, const double *a0,
+                        const double *dvec, const int64_t *ptr, std::ptrdiff_t M, const double *p0,
+                        const double *p1, const double *xg, std::ptrdiff_t ng, somm_proj::NodeMarks &marks) {
+    // `remainder_graded_inner`'s reads: each observer against its panels'
+    // rule nodes, the source point and the pair geometry spelled as that
+    // kernel spells them (the builds pass -ffp-contract=off, so the same
+    // expression is the same float here).
+    for (std::ptrdiff_t m = 0; m < M; ++m) {
+        const double ox = obs[m * 3], oy = obs[m * 3 + 1], oz = obs[m * 3 + 2];
+        for (std::ptrdiff_t p = ptr[m]; p < ptr[m + 1]; ++p) {
+            const double half = 0.5 * (p1[p] - p0[p]);
+            for (std::ptrdiff_t g = 0; g < ng; ++g) {
+                const double t = p0[p] + half * (xg[g] + 1.0);
+                const double sx = a0[m * 3] + t * dvec[m * 3];
+                const double sy = a0[m * 3 + 1] + t * dvec[m * 3 + 1];
+                const double sz = a0[m * 3 + 2] + t * dvec[m * 3 + 2];
+                double dx, dy, rho, hh, r1, theta, fr, ft;
+                int i0, j0;
+                somm_proj::pair_geometry(ground_z, ox, oy, oz, sx, sy, sz, dx, dy, rho, hh);
+                somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
+                const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
+                marks.mark(reg, i0, j0);
+            }
+        }
+    }
+}
+
 void moment_reduce(const std::complex<double> *proj, const double *W,
                    std::ptrdiff_t P, std::ptrdiff_t N, std::ptrdiff_t q,
                    std::ptrdiff_t M, std::complex<double> *out) {
