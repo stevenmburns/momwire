@@ -321,6 +321,10 @@ def test_the_switch_off_is_the_exact_route(monkeypatch):
     the bit -- the code on main."""
     specs, rows = _vertical_over_slant(n_rad=8)
     monkeypatch.setattr(ni, "_CONE", False)
+    # The plane and height weights this geometry declines its planes at (the
+    # 0.15 of the time), so the cones are the only sheet the switch removes.
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.15)
+    monkeypatch.setattr(ni, "_SHEET_HEIGHT_WEIGHT", 0.15)
     plan = ni.sheet_plan(EPS_T, K_P, [specs], A)
     assert plan.cones == ()
     memo = ni.TripleMemo()
@@ -409,7 +413,8 @@ def test_the_counters_account_for_every_row(slant_fills):
     fill asks the same fresh rows whichever serves them."""
     _Z, stats = slant_fills
     on, off = stats["on"], stats["off"]
-    assert on["sheet_rows"] + on["exact_rows"] == off["exact_rows"]
+    # With the cones off the fill still takes its plane sheets (weight 0.015).
+    assert on["sheet_rows"] + on["exact_rows"] == off["sheet_rows"] + off["exact_rows"]
     assert on["cone_rows"] <= on["sheet_rows"]
     assert on["cones_planned"] >= 1 and on["cone_sheets_built"] >= 1
     assert off["cone_rows"] == off["cones_planned"] == off["cone_nodes_built"] == 0

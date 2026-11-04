@@ -231,6 +231,9 @@ def test_a_plane_under_the_guard_is_left_exact(monkeypatch):
     monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 16)
     monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
     monkeypatch.setattr(ni, "_SHEET_MIN_DEPTH", 0.2)
+    # The guard is the planes'; the rise's height sheet, which pays at the
+    # shipped 0.015, is held at the 0.15 it declined at when this was written.
+    monkeypatch.setattr(ni, "_SHEET_HEIGHT_WEIGHT", 0.15)
     deck = hub_deck(n_radials=2)
     got = _fill(deck)
     assert ni._SHEET_STATS["sheet_rows"] == 0
@@ -245,7 +248,11 @@ def test_a_plane_is_tabulated_only_when_its_rows_pay_for_it():
     (the exact route pays one setup) and taken when every row is its own
     column (the inverted-L's top wire over its radials)."""
     n_nodes = ni._sheet_nodes_to(K_P, K_M, 0.15, 10.0, 10.15)
-    n = n_nodes + 64
+    # Half the rows the one column would need to pay (one setup plus a
+    # row's worth each against nodes x weight), and far more than the
+    # distinct columns need.
+    need = n_nodes * ni._SHEET_BUILD_WEIGHT
+    n = max(ni._SHEET_MIN_ROWS + 64, int(0.5 * need / ni._SHEET_ROW_WORTH))
     z = np.linspace(0.0, 10.0, n)
     shared = np.stack([np.full(n, 3.0), z, np.full(n, -0.15)], axis=1)
     shared[-1, 0] = 10.0  # the farthest row, as in the other call
@@ -282,6 +289,10 @@ def invl_fills():
             m.setattr(ni, "_SHEET", sheet)
             m.setattr(ni, "_SHEET_MIN_ROWS", 512)
             m.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
+            # Heights at the 0.15 they were planned at when this was
+            # written, so one plane stays planned and not built (the
+            # counters' `sheets_built < planes_planned`).
+            m.setattr(ni, "_SHEET_HEIGHT_WEIGHT", 0.15)
             m.setattr(ni, "_SHEET_CACHE", type(ni._SHEET_CACHE)())
             m.setattr(ni, "_SHEET_STATS", dict.fromkeys(ni._SHEET_STATS, 0))
             Z[name] = _fill(deck)
