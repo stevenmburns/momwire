@@ -338,6 +338,80 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
 }
 
 
+// momwire#1798: the dense block's symmetric route with each finished entry
+// folded into `T` (sign -1: T -= Q, +1: T += Q; T complex128, 2-D, any
+// strides, written in place), so no n_basis^2 Q is held beside it. Entries
+// named by the row-CSR exemption (`ex_ptr` (nb + 1), `ex_col`) go to
+// `side[pos]` instead, left out of T. Same entries, same bits, as
+// `sommerfeld_remainder_bspline_Q`'s symmetric route.
+static void sommerfeld_remainder_bspline_Q_into(
+    py::array_t<double, py::array::c_style | py::array::forcecast> nodes,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tang,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> loc,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    double ground_z, double k, double r1_max, double r_break, double th_split,
+    double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
+    py::array T, int sign,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_ptr,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_col,
+    py::array side, uintptr_t cancel_flag = 0) {
+    using somm_proj::cd;
+    if (nodes.ndim() != 3 || nodes.shape(2) != 3)
+        throw std::runtime_error("nodes must be (n_seg, q, 3)");
+    const py::ssize_t ns = nodes.shape(0), q = nodes.shape(1);
+    const int d1 = (int)W.shape(0);
+    const py::ssize_t nb = loc.shape(0);
+    if (tang.shape(0) != ns || W.shape(1) != ns || W.shape(2) != q || loc.shape(1) != d1 ||
+        polys.shape(0) != nb || polys.shape(1) != d1 || polys.shape(2) != d1)
+        throw std::runtime_error("nodes/tang/W/loc/polys inconsistent");
+    // T and side are written in place: never a converted copy
+    if (!T.dtype().is(py::dtype::of<cd>()) || T.ndim() != 2 || T.shape(0) != nb ||
+        T.shape(1) != nb || !T.writeable())
+        throw std::runtime_error("T must be a writeable (nb, nb) complex128 array");
+    if (T.strides(0) % (py::ssize_t)sizeof(cd) || T.strides(1) % (py::ssize_t)sizeof(cd))
+        throw std::runtime_error("T's strides must be whole elements");
+    if (sign != -1 && sign != 1) throw std::runtime_error("sign must be -1 or +1");
+    if (ex_ptr.ndim() != 1 || ex_ptr.shape(0) != nb + 1)
+        throw std::runtime_error("ex_ptr must be (nb + 1,)");
+    const int64_t n_ex = ex_ptr.data()[nb];
+    if (ex_col.shape(0) != n_ex)
+        throw std::runtime_error("ex_col must hold ex_ptr[-1] entries");
+    if (!side.dtype().is(py::dtype::of<cd>()) || side.ndim() != 1 ||
+        side.shape(0) != n_ex || !side.writeable() ||
+        (n_ex > 1 && side.strides(0) != (py::ssize_t)sizeof(cd)))
+        throw std::runtime_error("side must be a writeable contiguous (n_ex,) complex128 array");
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
+    somm_proj::set_far(G, far);
+    somm_core::RemainderSink K;
+    K.T = static_cast<cd *>(T.mutable_data());
+    K.rs = T.strides(0) / (py::ssize_t)sizeof(cd);
+    K.cs = T.strides(1) / (py::ssize_t)sizeof(cd);
+    K.fold = sign;
+    if (n_ex > 0) {
+        K.ex_ptr = ex_ptr.data();
+        K.ex_col = ex_col.data();
+        K.side = static_cast<cd *>(side.mutable_data());
+    }
+    g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
+    const double *nd = nodes.data(), *tg = tang.data(), *w = W.data(), *pl = polys.data();
+    const int64_t *lc = loc.data();
+    py::gil_scoped_release release;
+    somm_core::remainder_bspline_Q_sink(G, ground_z, k, nd, tg, w, ns, q, d1, lc, pl, nb, 0, K,
+                                        cancel_flag);
+}
+
 // momwire#1752 K2: many `sommerfeld_remainder_bspline_Q` calls of one shape
 // in one: the keyed remainder runs of `_remainder_pair_correction`, each one
 // source segment against a column of observer segments with one-hot
@@ -579,6 +653,18 @@ void register_somm(py::module_ &m) {
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
           py::arg("reference") = false);
+    m.def("sommerfeld_remainder_bspline_Q_into", &sommerfeld_remainder_bspline_Q_into,
+          "The dense block's symmetric route folded straight into T "
+          "(sign -1: T -= Q, +1: T += Q) with no Q held; entries in the "
+          "row-CSR exemption go to `side` instead (momwire#1798). The same "
+          "entries, to the bit, as sommerfeld_remainder_bspline_Q.",
+          py::arg("nodes"), py::arg("tang"), py::arg("W"), py::arg("loc"),
+          py::arg("polys"), py::arg("ground_z"), py::arg("k"),
+          py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"), py::arg("T"),
+          py::arg("sign"), py::arg("ex_ptr"), py::arg("ex_col"), py::arg("side"),
+          py::arg("cancel_flag") = 0);
     m.def("remainder_q_symmetric_calls",
           []() { return g_remainder_symmetric_calls.load(); },
           "How many sommerfeld_remainder_bspline_Q calls the symmetric route "

@@ -177,12 +177,33 @@ static inline void node_block(const somm_proj::GridView &G, double ground_z,
     }
 }
 
+// One finished entry into the sink (`RemainderSink`): stored, or folded into
+// T componentwise, or -- an exempted entry -- stored on the side.
+static inline void put(const somm_core::RemainderSink &K, std::ptrdiff_t m,
+                       std::ptrdiff_t n, const cd &v) {
+    if (K.ex_ptr != nullptr && K.ex_ptr[m + 1] > K.ex_ptr[m]) {
+        const int64_t *c0 = K.ex_col + K.ex_ptr[m], *c1 = K.ex_col + K.ex_ptr[m + 1];
+        const int64_t *hit = std::lower_bound(c0, c1, (int64_t)n);
+        if (hit != c1 && *hit == (int64_t)n) {
+            K.side[hit - K.ex_col] = v;
+            return;
+        }
+    }
+    cd &t = K.T[m * K.rs + n * K.cs];
+    if (K.fold == 0)
+        t = v;
+    else if (K.fold < 0)
+        t = cd(t.real() - v.real(), t.imag() - v.imag());
+    else
+        t = cd(t.real() + v.real(), t.imag() + v.imag());
+}
+
 // Q[m, n] for m under tile T (row role, its local wing indices xl) and n
 // under tile U, from J laid out [(x * ny + y) * dd + p * d1 + P]. Wings of m
 // in `ord` order, each against b ascending; inner sums as the banded kernel.
 static inline void finish_block(const Tile &T, const Tile &U, std::ptrdiff_t ny,
                                 int d1, const int32_t *ord, const double *pl,
-                                const cd *J, cd *Q, std::ptrdiff_t nb) {
+                                const cd *J, const somm_core::RemainderSink &K) {
     const int dd = d1 * d1;
     for (std::ptrdiff_t m = T.m0; m < T.m1; ++m) {
         const int32_t *xm = &T.loc[(size_t)(m - T.m0) * d1];
@@ -208,7 +229,7 @@ static inline void finish_block(const Tile &T, const Tile &U, std::ptrdiff_t ny,
                     qmn += inner;
                 }
             }
-            Q[(size_t)m * nb + n] = qmn;
+            put(K, m, n, qmn);
         }
     }
 }
@@ -219,7 +240,7 @@ static inline void finish_block(const Tile &T, const Tile &U, std::ptrdiff_t ny,
 static void remainder_Q_symmetric(
     const somm_proj::GridView &G, double ground_z, double k,
     somm_sym::Side &S, int d1, const int64_t *loc, const double *pl,
-    std::ptrdiff_t nb, std::ptrdiff_t band, size_t budget, std::complex<double> *Q,
+    std::ptrdiff_t nb, std::ptrdiff_t band, size_t budget, const somm_core::RemainderSink &K,
     const volatile int32_t *pysim_cancel, std::atomic<bool> &pysim_aborted) {
     using somm_proj::cd;
     using somm_sym::Tile;
@@ -312,11 +333,10 @@ static void remainder_Q_symmetric(
                     somm_sym::contract(S, d1, sj, si, bw.data(), rows.data(), jyx);
                 }
             }
-            somm_sym::finish_block(TA, TB, ny, d1, ord.data(), pl, JAB.data(),
-                                   Q, nb);
+            somm_sym::finish_block(TA, TB, ny, d1, ord.data(), pl, JAB.data(), K);
             if (!diag)
                 somm_sym::finish_block(TB, TA, nx, d1, ord.data(), pl,
-                                       JBA.data(), Q, nb);
+                                       JBA.data(), K);
         }
     }
 }
@@ -371,9 +391,12 @@ void remainder_bspline_Q(const somm_proj::GridView &G, double ground_z, double k
         for (std::ptrdiff_t j = 0; j < nsI; ++j)
             somm_proj::tangent_decomp(tgI(j, 0), tgI(j, 1), tgI(j, 2), S.ux[j],
                                       S.uy[j], S.th[j], S.tz[j]);
+        RemainderSink K;
+        K.T = Q;
+        K.rs = nJ;
         MW_CANCEL_SETUP(cancel_flag);
         remainder_Q_symmetric(G, ground_z, k, S, d1, loc_I, pI, nI, band,
-                              budget, Q, pysim_cancel, pysim_aborted);
+                              budget, K, pysim_cancel, pysim_aborted);
         MW_THROW_IF_ABORTED();
         return;
     }
@@ -481,6 +504,42 @@ void remainder_bspline_Q(const somm_proj::GridView &G, double ground_z, double k
         }
         MW_THROW_IF_ABORTED();
     }
+}
+
+void remainder_bspline_Q_sink(const somm_proj::GridView &G, double ground_z, double k,
+                              const double *nodes, const double *tang, const double *W,
+                              std::ptrdiff_t ns, std::ptrdiff_t q, int d1, const int64_t *loc,
+                              const double *polys, std::ptrdiff_t nb, size_t max_jf_bytes,
+                              const RemainderSink &sink, uintptr_t cancel_flag) {
+    using somm_proj::cd;
+    // `remainder_bspline_Q`'s band height (read for the wing order alone)
+    // and budget, for the same obs == src call
+    const size_t budget = max_jf_bytes ? max_jf_bytes : MAX_JF_SLAB_BYTES;
+    const size_t row_bytes = sizeof(cd) * (size_t)d1 * d1 * (size_t)ns;
+    std::ptrdiff_t band = ns;
+    if (row_bytes > 0) {
+        size_t fit = budget / row_bytes;
+        if (fit < 1) fit = 1;
+        if ((std::ptrdiff_t)fit < band) band = (std::ptrdiff_t)fit;
+    }
+    if (band < 1) band = 1;
+    somm_sym::Side S;
+    S.nodes = nodes;
+    S.tang = tang;
+    S.W = W;
+    S.ns = ns;
+    S.q = q;
+    S.ux.resize(ns);
+    S.uy.resize(ns);
+    S.th.resize(ns);
+    S.tz.resize(ns);
+    for (std::ptrdiff_t j = 0; j < ns; ++j)
+        somm_proj::tangent_decomp(tang[j * 3 + 0], tang[j * 3 + 1], tang[j * 3 + 2], S.ux[j],
+                                  S.uy[j], S.th[j], S.tz[j]);
+    MW_CANCEL_SETUP(cancel_flag);
+    remainder_Q_symmetric(G, ground_z, k, S, d1, loc, polys, nb, band, budget, sink,
+                          pysim_cancel, pysim_aborted);
+    MW_THROW_IF_ABORTED();
 }
 
 }  // namespace somm_core
