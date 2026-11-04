@@ -3,8 +3,9 @@
 #
 # `linux-artifact`: the Linux release artifact (momwire#1512),
 # momwire-nec5-linux-x86_64.tar.gz -- the no-Python build
-# (MW_EXE_NO_PYTHON) in avx2 and sse2 against the static OpenBLAS pinned to
-# SciPy's build (standalone/build_openblas.sh), and the script that picks one
+# (MW_EXE_NO_PYTHON) in avx2 and sse2 against the two static OpenBLAS
+# archives pinned to numpy's and SciPy's builds (standalone/build_openblas.sh,
+# momwire#1751), and the script that picks one
 # by CPU -- built in the manylinux_2_28 image the wheels are built in
 # (standalone/build_release_linux.sh: glibc 2.28 floor, libstdc++, libgcc and
 # libgomp linked in), run once on AlmaLinux 8 (glibc 2.28), and uploaded as a
@@ -21,16 +22,20 @@
 # corpus and harvest gates stay on the fleet (they need decks the repo does
 # not carry).
 #
-# `windows`: the hybrid build under MSVC. Its OpenBLAS is the project's own
-# Windows release (a DLL, unprefixed names: MW_BLAS_PREFIX empty), which is
-# NOT SciPy's Windows build, so the corpus comparison there is recorded
-# rather than required: what that job requires is the build and the launcher
-# contract (tests/test_standalone_exe.py). Windows identity is measured on
-# the Windows builder.
+# `windows`: the hybrid build under MSVC, against the same OpenBLAS DLL as
+# `windows-nopython` (scipy-openblas32 at numpy's version, momwire#1751;
+# MW_BLAS_PREFIX=scipy_). The corpus comparison there is recorded rather than
+# required: what that job requires is the build and the launcher contract
+# (tests/test_standalone_exe.py). Windows identity is measured on the Windows
+# builder.
 #
 # `windows-nopython` (momwire#1558): the no-Python builds under MSVC,
-# razor-2p and bs2, avx2 and sse2, against SciPy's own OpenBLAS DLL
-# (scipy-openblas32, the build SciPy's Windows wheels bundle), which ships
+# razor-2p and bs2, avx2 and sse2, against the OpenBLAS DLL of numpy's
+# release (scipy-openblas32 at the NUMPY_OPENBLAS_VERSION
+# standalone/build_openblas.sh records, the LP64 twin of the scipy-openblas64
+# numpy's wheels bundle, momwire#1751): ONE library on Windows, where Linux
+# links numpy's and SciPy's apart (Windows is held to a tolerance, not to
+# the bit), which ships
 # beside them, delay-loaded; with the VC++ runtime and the LLVM OpenMP
 # runtime beside them too, so the directory needs nothing installed. Gated:
 # the launcher-layer contract tests, and every fixture deck and NX chain
@@ -129,7 +134,9 @@ jobs:
       - name: static OpenBLAS, manylinux_2_28 (cached)
         uses: actions/cache@v4
         with:
-          path: ~/mwx-openblas-manylinux/libmwxp.a
+          path: |
+            ~/mwx-openblas-manylinux/libmwxp.a
+            ~/mwx-openblas-manylinux/libmwnp.a
           key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
       - name: build (manylinux_2_28)
         run: |
@@ -373,7 +380,7 @@ jobs:
           OMP_NUM_THREADS: "1"
       # The bs2 executable (momwire#1517 Phase A): every fixture deck and the
       # NX chains as `momwire-nec5-bspline` answers them, avx2 and sse2 (its
-      # one static OpenBLAS standing in for both of numpy's and SciPy's), a
+      # two static OpenBLAS archives answering as numpy's and SciPy's), a
       # deck it does not serve refused by name; and SimNEC's streaming call.
       - name: bs2 executable, every fixture deck and the NX chains (avx2 and sse2)
         run: |
@@ -464,7 +471,9 @@ jobs:
       - name: static OpenBLAS (linux-artifact's cache)
         uses: actions/cache/restore@v4
         with:
-          path: ~/mwx-openblas-manylinux/libmwxp.a
+          path: |
+            ~/mwx-openblas-manylinux/libmwxp.a
+            ~/mwx-openblas-manylinux/libmwnp.a
           key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
           fail-on-cache-miss: true
       # The release artifact's two no-Python builds, at the paths the gates
@@ -506,9 +515,10 @@ jobs:
           OMP_NUM_THREADS: "1"
       - name: build (hybrid avx2, not shipped)
         run: |
-          OB=$HOME/mwx-openblas-manylinux/libmwxp.a
+          OB=$HOME/mwx-openblas-manylinux
           cmake -S standalone -B build-nec42-hybrid -G Ninja -DMW_EXE_BASIS=sin42 \
-            -DMW_EXE_VARIANT=avx2 -DMW_OPENBLAS_LIB=$OB \
+            -DMW_EXE_VARIANT=avx2 -DMW_OPENBLAS_LIB=$OB/libmwxp.a \
+            -DMW_OPENBLAS_NUMPY_LIB=$OB/libmwnp.a \
             -DMW_DEFAULT_PYTHON_HOME="$(python -c 'import sys; print(sys.prefix)')" \
             -DPython3_EXECUTABLE="$(command -v python)"
           cmake --build build-nec42-hybrid
@@ -821,12 +831,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: OpenBLAS 0.3.31 (x64 release)
+      # numpy's OpenBLAS release, as windows-nopython takes it (momwire#1751)
+      - name: numpy's OpenBLAS (scipy-openblas32)
         shell: pwsh
         run: |
-          Invoke-WebRequest https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.31/OpenBLAS-0.3.31-x64.zip -OutFile ob.zip
-          Expand-Archive ob.zip -DestinationPath ob
-          Get-ChildItem -Recurse ob -Include *.lib,*.dll | Select-Object FullName
+          $v = (Select-String -Path standalone/build_openblas.sh -Pattern '^NUMPY_OPENBLAS_VERSION=(.+)$').Matches[0].Groups[1].Value
+          python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$v" -d obwhl
+          python -m zipfile -e (Get-ChildItem obwhl\*.whl).FullName ob
+          Get-Item ob\scipy_openblas32\lib\libscipy_openblas.dll | Select-Object FullName, Length
       - name: momwire environment
         shell: pwsh
         run: |
@@ -836,15 +848,15 @@ jobs:
       - name: configure + build (MSVC)
         shell: pwsh
         run: |
-          $lib = (Get-ChildItem -Recurse ob -Filter libopenblas.lib | Select-Object -First 1).FullName
+          $lib = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
           cmake -S standalone -B build-exe -A x64 `
-            "-DMW_OPENBLAS_LIB=$lib" "-DMW_DEFAULT_PYTHON_HOME=$PWD\venv" `
+            "-DMW_OPENBLAS_LIB=$lib" -DMW_BLAS_PREFIX=scipy_ "-DMW_DEFAULT_PYTHON_HOME=$PWD\venv" `
             "-DPython3_EXECUTABLE=$((Get-Command python).Source)"
           cmake --build build-exe --config Release
       - name: contract tests
         shell: pwsh
         run: |
-          $dll = (Get-ChildItem -Recurse ob -Filter libopenblas.dll | Select-Object -First 1).DirectoryName
+          $dll = "$PWD\ob\scipy_openblas32\lib"
           $py = Split-Path (Get-Command python).Source
           $env:PATH = "$dll;$py;$PWD\venv\Scripts;$env:PATH"
           $env:MOMWIRE_LIBPYTHON = "$py\python312.dll"
@@ -854,7 +866,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $dll = (Get-ChildItem -Recurse ob -Filter libopenblas.dll | Select-Object -First 1).DirectoryName
+          $dll = "$PWD\ob\scipy_openblas32\lib"
           $py = Split-Path (Get-Command python).Source
           $env:PATH = "$dll;$py;$PWD\venv\Scripts;$env:PATH"
           $env:MOMWIRE_LIBPYTHON = "$py\python312.dll"
@@ -865,13 +877,11 @@ jobs:
             tests/fixtures/razor_printout_3a tests/fixtures/eznec
 
   # The no-Python executables on Windows (momwire#1558): MSVC 14.44, razor-2p
-  # and bs2, avx2 and sse2, against SciPy's OpenBLAS DLL, signed, with a
+  # and bs2, avx2 and sse2, against numpy's OpenBLAS DLL, signed, with a
   # Windows 7 folder: the preview release asset (see the header).
   windows-nopython:
     runs-on: windows-latest
     timeout-minutes: 150
-    env:
-      OB_VERSION: "0.3.31.22.1"  # scipy-openblas32: the build SciPy bundles
     steps:
       - uses: actions/checkout@v7
         with:
@@ -879,10 +889,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: SciPy's OpenBLAS (scipy-openblas32)
+      # scipy-openblas32 at numpy's version, read from build_openblas.sh (one
+      # place: tests/test_standalone_openblas_pin.py holds numpy to it)
+      - name: numpy's OpenBLAS (scipy-openblas32)
         shell: pwsh
         run: |
-          python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$env:OB_VERSION" -d obwhl
+          $v = (Select-String -Path standalone/build_openblas.sh -Pattern '^NUMPY_OPENBLAS_VERSION=(.+)$').Matches[0].Groups[1].Value
+          "scipy-openblas32==$v"
+          python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$v" -d obwhl
           python -m zipfile -e (Get-ChildItem obwhl\*.whl).FullName ob
           Get-Item ob\scipy_openblas32\lib\libscipy_openblas.dll | Select-Object FullName, Length
       # The Python reference the gates compare with: the user's own momwire,
@@ -1009,7 +1023,7 @@ jobs:
           build-razor2p-avx2/momwire-razor2p-standalone.exe build-razor2p-sse2/momwire-razor2p-standalone.exe
           build-bs2-avx2/momwire-bs2-standalone.exe build-bs2-sse2/momwire-bs2-standalone.exe
       # The zip's tree: the four programs under their release names with the
-      # DLLs they load beside them -- SciPy's OpenBLAS, the 14.44 toolset's own
+      # DLLs they load beside them -- numpy's OpenBLAS, the 14.44 toolset's own
       # VC++ runtime and LLVM's OpenMP runtime (the System32 copy, as
       # scripts/eznec_freeze/build.py bundles it, and as that freeze's Win7 leg
       # ships it through the same import gate) -- and win7\, the two sse2

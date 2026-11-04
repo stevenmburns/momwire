@@ -12,13 +12,15 @@
 #
 #   cmake -S standalone -B build-exe -G Ninja \
 #         -DMW_OPENBLAS_LIB=/path/to/libmwxp.a \
+#         -DMW_OPENBLAS_NUMPY_LIB=/path/to/libmwnp.a \
 #         -DMW_DEFAULT_PYTHON_HOME=/path/to/momwire/.venv
 #   cmake --build build-exe
 #
 # MW_OPENBLAS_LIB is a STATIC OpenBLAS whose every global symbol carries the
 # `mwx_` prefix (standalone/build_openblas.sh makes one from the commit SciPy's
-# wheel bundles), so it can never bind to, or be bound by, the copies numpy and
-# scipy load into the same process.
+# wheel bundles), and MW_OPENBLAS_NUMPY_LIB the same from numpy's, prefixed
+# `mwn_` (momwire#1751), so neither can bind to, or be bound by, the copies
+# numpy and scipy load into the same process.
 #
 # CPython is never linked: its headers give PyConfig's layout, and the library
 # is opened at run time only for a deck the C++ route declines. The Python
@@ -30,7 +32,7 @@
 # (launcher.cpp), and a deck the C++ route declines is a refusal printout
 # naming why. No Python is needed to configure or build it.
 #
-# Windows, no-Python (momwire#1558): MSVC, against SciPy's OpenBLAS DLL from
+# Windows, no-Python (momwire#1558): MSVC, against numpy's OpenBLAS DLL from
 # the scipy-openblas32 wheel, named directly (an import library is made from
 # its exports, below) and shipped beside the executable:
 #
@@ -152,8 +154,20 @@ set(MW_BLAS_PREFIX "${_mw_prefix_default}" CACHE STRING "symbol prefix of MW_OPE
 if(NOT MW_OPENBLAS_LIB AND NOT MW_ACCELERATE)
   message(FATAL_ERROR "set MW_OPENBLAS_LIB to an mwx_-prefixed static OpenBLAS")
 endif()
+# numpy's OpenBLAS beside SciPy's (momwire#1751, blas.h): build_openblas.sh's
+# libmwnp.a, every symbol `mwn_`. The products and numpy's solve (MWN) then
+# run on numpy's release and the LAPACK (MWX) on SciPy's, as the launcher's
+# do. Unset (Windows, macOS, a one-library build) MWN is MWX.
+set(MW_OPENBLAS_NUMPY_LIB "" CACHE FILEPATH "numpy's static OpenBLAS, symbols prefixed mwn_")
+set(MW_BLAS_NP_PREFIX "mwn_" CACHE STRING "symbol prefix of MW_OPENBLAS_NUMPY_LIB")
+if(MW_OPENBLAS_NUMPY_LIB)
+  if(MW_BLAS_NP_PREFIX STREQUAL MW_BLAS_PREFIX)
+    message(FATAL_ERROR "MW_BLAS_NP_PREFIX must differ from MW_BLAS_PREFIX")
+  endif()
+  add_compile_definitions(MW_BLAS_NP_PREFIX=${MW_BLAS_NP_PREFIX} MW_BLAS_TWO_LIBS=1)
+endif()
 # Windows, no-Python (momwire#1558): MW_OPENBLAS_LIB may name the OpenBLAS DLL
-# itself (SciPy's, from the scipy-openblas32 wheel). Its own `.lib` is a MinGW
+# itself (numpy's release, from the scipy-openblas32 wheel). Its own `.lib` is a MinGW
 # import library, which MSVC links but cannot delay-load, so the import
 # library is made here from the DLL's export table, in MSVC's short-import
 # form: `dumpbin /exports` to a .def, `lib /def` to the .lib.
@@ -542,11 +556,11 @@ if(MW_ACCELERATE)
   target_sources(${MW_EXE} PRIVATE blas_accelerate_lp64.c blas_accelerate_ilp64.c)
   target_link_libraries(${MW_EXE} PRIVATE "-framework Accelerate")
 else()
-  target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB})
+  target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB} ${MW_OPENBLAS_NUMPY_LIB})
 endif()
 if(MSVC AND MW_EXE_NO_PYTHON AND MW_OPENBLAS_DLL)
   # The Windows release (momwire#1558): the OpenBLAS DLL ships beside the
-  # executable (SciPy's, scipy-openblas32; MW_BLAS_PREFIX=scipy_), and is
+  # executable (numpy's release, scipy-openblas32; MW_BLAS_PREFIX=scipy_), and is
   # delay-loaded, so main() sets its thread count and core type before its
   # load-time constructor reads them (momwire_razor2p.cpp,
   # `blas_env_before_load`), and `-version` answers without loading it.
@@ -588,7 +602,7 @@ endif()
 if(MW_ACCELERATE)
   message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, Accelerate")
 elseif(MW_EXE_NO_PYTHON)
-  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, OpenBLAS ${MW_OPENBLAS_LIB}")
+  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, OpenBLAS ${MW_OPENBLAS_LIB} ${MW_OPENBLAS_NUMPY_LIB}")
 else()
-  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")
+  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB} ${MW_OPENBLAS_NUMPY_LIB}")
 endif()

@@ -1,13 +1,14 @@
 // The C++ route of `momwire-nec5-bs2` (route.h, momwire#1517 Phase A):
 // `momwire-nec5-bspline`'s printout for the decks bs2's C++ serves, on the
-// executable's one OpenBLAS. Compiled once per namespace, as route.cpp.
+// executable's OpenBLAS. Compiled once per namespace, as route.cpp.
 //
-// ONE LIBRARY FOR BOTH OF PYTHON'S. The launcher runs bs2 on two OpenBLAS
-// builds: numpy's ILP64 one (the products: `tangents @ tangents.T`, the
-// image weights, the loading Gram, the run half's matmuls) and SciPy's LP64
-// one (the LU and the symmetric factor). The executable links one static
-// OpenBLAS, the commit SciPy's wheel bundles (build_openblas.sh), and answers
-// numpy's CBLAS calls from it too, through the LP64 adapters below. The gate
+// PYTHON'S TWO LIBRARIES. The launcher runs bs2 on two OpenBLAS builds:
+// numpy's ILP64 one (the products: `tangents @ tangents.T`, the image
+// weights, the loading Gram, the run half's matmuls) and SciPy's LP64 one
+// (the LU and the symmetric factor). On Linux the executable links both, at
+// their wheels' commits (build_openblas.sh, momwire#1751): numpy's CBLAS
+// calls go to numpy's (MWN, through the LP64 adapters below), the LAPACK to
+// SciPy's (MWX). Elsewhere one library answers both. The gate
 // (exe_compare --basis bspline) is what says their bits agree.
 //
 // MW_ROUTE_SG (momwire#1718 S10): the same route for
@@ -43,19 +44,19 @@
 
 extern "C" {
 // The CBLAS face of the same static library (LP64: int dimensions).
-void MWX(cblas_dsyrk)(int, int, int, int, int, double, const double *, int, double, double *, int);
-void MWX(cblas_dgemm)(int, int, int, int, int, int, double, const double *, int, const double *, int, double,
+void MWN(cblas_dsyrk)(int, int, int, int, int, double, const double *, int, double, double *, int);
+void MWN(cblas_dgemm)(int, int, int, int, int, int, double, const double *, int, const double *, int, double,
                       double *, int);
-void MWX(cblas_dgemv)(int, int, int, int, double, const double *, int, const double *, int, double, double *,
+void MWN(cblas_dgemv)(int, int, int, int, double, const double *, int, const double *, int, double, double *,
                       int);
-double MWX(cblas_ddot)(int, const double *, int, const double *, int);
-void MWX(cblas_zgemm)(int, int, int, int, int, int, const void *, const void *, int, const void *, int,
+double MWN(cblas_ddot)(int, const double *, int, const double *, int);
+void MWN(cblas_zgemm)(int, int, int, int, int, int, const void *, const void *, int, const void *, int,
                       const void *, void *, int);
-void MWX(cblas_zgemv)(int, int, int, int, const void *, const void *, int, const void *, int, const void *,
+void MWN(cblas_zgemv)(int, int, int, int, const void *, const void *, int, const void *, int, const void *,
                       void *, int);
-void MWX(cblas_zdotu_sub)(int, const void *, int, const void *, int, void *);
-void MWX(cblas_zdotc_sub)(int, const void *, int, const void *, int, void *);
-void MWX(zgesv_)(const int *, const int *, void *, const int *, int *, void *, const int *, int *);
+void MWN(cblas_zdotu_sub)(int, const void *, int, const void *, int, void *);
+void MWN(cblas_zdotc_sub)(int, const void *, int, const void *, int, void *);
+void MWN(zgesv_)(const int *, const int *, void *, const int *, int *, void *, const int *, int *);
 void MWX(zsytrf_)(char *, int *, std::complex<double> *, int *, int *, std::complex<double> *, int *, int *);
 void MWX(zsytrs_)(char *, int *, int *, std::complex<double> *, int *, int *, std::complex<double> *, int *,
                   int *);
@@ -72,39 +73,39 @@ int i32(np_int v) { return static_cast<int>(v); }
 
 void a_dsyrk(int order, int uplo, int trans, np_int n, np_int k, double alpha, const double *a, np_int lda,
              double beta, double *c, np_int ldc) {
-    MWX(cblas_dsyrk)(order, uplo, trans, i32(n), i32(k), alpha, a, i32(lda), beta, c, i32(ldc));
+    MWN(cblas_dsyrk)(order, uplo, trans, i32(n), i32(k), alpha, a, i32(lda), beta, c, i32(ldc));
 }
 void a_dgemm(int order, int ta, int tb, np_int m, np_int n, np_int k, double alpha, const double *a, np_int lda,
              const double *b, np_int ldb, double beta, double *c, np_int ldc) {
-    MWX(cblas_dgemm)(order, ta, tb, i32(m), i32(n), i32(k), alpha, a, i32(lda), b, i32(ldb), beta, c, i32(ldc));
+    MWN(cblas_dgemm)(order, ta, tb, i32(m), i32(n), i32(k), alpha, a, i32(lda), b, i32(ldb), beta, c, i32(ldc));
 }
 void a_dgemv(int order, int trans, np_int m, np_int n, double alpha, const double *a, np_int lda, const double *x,
              np_int incx, double beta, double *y, np_int incy) {
-    MWX(cblas_dgemv)(order, trans, i32(m), i32(n), alpha, a, i32(lda), x, i32(incx), beta, y, i32(incy));
+    MWN(cblas_dgemv)(order, trans, i32(m), i32(n), alpha, a, i32(lda), x, i32(incx), beta, y, i32(incy));
 }
 double a_ddot(np_int n, const double *x, np_int incx, const double *y, np_int incy) {
-    return MWX(cblas_ddot)(i32(n), x, i32(incx), y, i32(incy));
+    return MWN(cblas_ddot)(i32(n), x, i32(incx), y, i32(incy));
 }
 void a_zgemm(int order, int ta, int tb, np_int m, np_int n, np_int k, const void *alpha, const void *a, np_int lda,
              const void *b, np_int ldb, const void *beta, void *c, np_int ldc) {
-    MWX(cblas_zgemm)(order, ta, tb, i32(m), i32(n), i32(k), alpha, a, i32(lda), b, i32(ldb), beta, c, i32(ldc));
+    MWN(cblas_zgemm)(order, ta, tb, i32(m), i32(n), i32(k), alpha, a, i32(lda), b, i32(ldb), beta, c, i32(ldc));
 }
 void a_zgemv(int order, int trans, np_int m, np_int n, const void *alpha, const void *a, np_int lda, const void *x,
              np_int incx, const void *beta, void *y, np_int incy) {
-    MWX(cblas_zgemv)(order, trans, i32(m), i32(n), alpha, a, i32(lda), x, i32(incx), beta, y, i32(incy));
+    MWN(cblas_zgemv)(order, trans, i32(m), i32(n), alpha, a, i32(lda), x, i32(incx), beta, y, i32(incy));
 }
 void a_zdotu(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
-    MWX(cblas_zdotu_sub)(i32(n), x, i32(incx), y, i32(incy), out);
+    MWN(cblas_zdotu_sub)(i32(n), x, i32(incx), y, i32(incy), out);
 }
 void a_zdotc(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
-    MWX(cblas_zdotc_sub)(i32(n), x, i32(incx), y, i32(incy), out);
+    MWN(cblas_zdotc_sub)(i32(n), x, i32(incx), y, i32(incy), out);
 }
 void a_zgesv(const np_int *n, const np_int *nrhs, void *a, const np_int *lda, np_int *ipiv, void *b,
              const np_int *ldb, np_int *info) {
     const int nn = i32(*n), nr = i32(*nrhs), la = i32(*lda), lb = i32(*ldb);
     std::vector<int> piv(static_cast<std::size_t>(std::max(nn, 1)));
     int inf = 0;
-    MWX(zgesv_)(&nn, &nr, a, &la, piv.data(), b, &lb, &inf);
+    MWN(zgesv_)(&nn, &nr, a, &la, piv.data(), b, &lb, &inf);
     for (int i = 0; i < nn; i++) ipiv[i] = piv[static_cast<std::size_t>(i)];
     *info = inf;
 }

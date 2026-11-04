@@ -48,7 +48,7 @@ if ! command -v cmake > /dev/null || ! command -v ninja > /dev/null; then
     export PATH="$(dirname "$PY"):$PATH"
 fi
 
-[ -f "$OB/libmwxp.a" ] || "$ROOT/standalone/build_openblas.sh" "$OB"
+[ -f "$OB/libmwxp.a" ] && [ -f "$OB/libmwnp.a" ] || "$ROOT/standalone/build_openblas.sh" "$OB"
 
 GOMP=$(gcc -print-file-name=libgomp.a)
 STATIC_GOMP=OFF
@@ -68,7 +68,7 @@ for engine in "$NAME razor2p momwire-razor2p-standalone" \
     for v in avx2 sse2; do
         B=$(mktemp -d)
         cmake -S "$ROOT/standalone" -B "$B" -G Ninja -DMW_EXE_NO_PYTHON=ON \
-            -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB="$OB/libmwxp.a" \
+            -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB="$OB/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$OB/libmwnp.a" \
             -DMW_EXE_STATIC_GOMP=$STATIC_GOMP
         cmake --build "$B"
         cp "$B/$target" "$STAGE/$cmd-$v"
