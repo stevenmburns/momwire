@@ -491,6 +491,61 @@ def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
     assert grid.read_bytes() == stamp
 
 
+MIXED_MORE = FIXTURES / "transmitted_store" / "m3_plus_short_vertical.nec"
+
+
+@pytest.mark.skipif(
+    BASIS != "bspline", reason="the transmitted blocks are bs2's (and sg5's) fill"
+)
+def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
+    """The executable fills the below->above grid node by node, only where
+    the deck's pairs read it. A second deck on the same grid key (the same
+    buried wire, a second vertical) reads more of the lattice: it fills what
+    it adds and writes the union back (still one `trans-*.grid`), and the
+    first deck run again builds nothing. Every printout is the launcher's,
+    which fills the whole grid."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    store = tmp_path / "store"
+    env = dict(os.environ, MOMWIRE_SOMM_CACHE_DIR=str(store), MOMWIRE_SOMM_CACHE="1")
+    want = {}
+    for deck in (MIXED, MIXED_MORE):
+        ref = subprocess.run(
+            [_launcher(), str(deck), str(tmp_path / f"{deck.stem}.ref")],
+            cwd=tmp_path,
+            env=dict(env, MOMWIRE_SOMM_CACHE_DIR=str(tmp_path / "ref-store")),
+            capture_output=True,
+            check=False,
+        )
+        assert ref.returncode == 0, ref.stderr
+        want[deck] = (tmp_path / f"{deck.stem}.ref").read_bytes()
+
+    def exe_run(deck, name):
+        r = subprocess.run(
+            [EXE, str(deck), str(tmp_path / f"{name}.out")],
+            cwd=tmp_path,
+            env=dict(env, MOMWIRE_TIMES="1"),
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        got = (tmp_path / f"{name}.out").read_bytes().decode("latin-1")
+        assert tc.zero_timing(got).encode("latin-1") == want[deck], name
+        (line,) = tc.times_lines(r.stderr)
+        return line
+
+    exe_run(MIXED, "first")
+    (grid,) = sorted((store / "exe").glob("*/trans-*.grid"))
+    first = grid.read_bytes()
+    more = exe_run(MIXED_MORE, "more")
+    assert more["ground_built"] > 0, more
+    assert sorted((store / "exe").glob("*/trans-*.grid")) == [grid]
+    assert len(grid.read_bytes()) == len(first) + 8 and grid.read_bytes() != first
+    again = exe_run(MIXED, "again")
+    assert again["ground_built"] == 0 and again["ground_disk"] >= 1, again
+
+
 # --- the near-interface sheets' store (the perf-1028 study) -------------------
 
 NEAR_BURIED = FIXTURES / "near_buried_1653" / "d1_buried_dipole.nec5.nec"
