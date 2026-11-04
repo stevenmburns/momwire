@@ -1,6 +1,7 @@
 // momwire#1517 step 1: see `_bspline_front_core.h`. Each step is
 // numpy's operation as `bspline.py` spells it, one IEEE operation at a time.
 #include "_bspline_front_core.h"
+#include "_nec5_seam_core.h"
 
 #if defined(_MSC_VER)
 #pragma float_control(precise, on)
@@ -282,7 +283,8 @@ Geometry build_geometry(const std::vector<std::vector<double>> &polylines,
 namespace {
 
 // `_ground_spec.ground_touch_tol(polyline)`: 1e-6 of its length, each edge
-// `sqrt(add.reduce(d*d))`, the edges `add.reduce`d (pairwise past 8).
+// `sqrt(add.reduce(d*d))`, the edges `add.reduce`d (numpy's pairwise sum,
+// which is sequential below 8 edges)
 double polyline_touch_tol(const std::vector<double> &pl) {
     const size_t m = pl.size() / 3;
     std::vector<double> len;
@@ -294,9 +296,7 @@ double polyline_touch_tol(const std::vector<double> &pl) {
         }
         len.push_back(std::sqrt(sq));
     }
-    if (len.size() >= 8) throw FrontNotPorted("a polyline of 9 or more anchors");
-    double length = 0.0;
-    for (double l : len) length += l;
+    const double length = nec5::np_pairwise_sum(len.data(), static_cast<long long>(len.size()));
     return 1e-6 * std::max(length, 1e-30);
 }
 
