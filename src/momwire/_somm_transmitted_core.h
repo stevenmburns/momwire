@@ -57,6 +57,12 @@ struct Grid {
     int64_t n_th = 0;
     double lnz0 = 0, dlnz = 0;
     std::vector<cd> vals;  // (n_zp, 5, n_r, n_th), C order: TrhoV TzV TrhoH TphiH TzH
+    // (n_zp, n_r, n_th): the nodes filled. `make_grid` and `get_grid` fill
+    // every one; `get_grid_reading` only those its pairs read (the rest NaN).
+    std::vector<uint8_t> have;
+    // The fingerprints of the pair sets `get_grid_reading` has filled for:
+    // their nodes are held, so a repeat set skips the census.
+    std::vector<uint64_t> served;
 };
 
 // `r_min_bucket(r_min, lam_p)`; `has_r_min` false is `r_min=None`.
@@ -86,6 +92,22 @@ Grid make_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, 
 // repeat frequency reads the grid it filled.
 const Grid &get_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
                      double r_min, uintptr_t cancel_flag = 0);
+
+// `get_grid` with only the nodes the given pairs' projections read filled:
+// `above` (A, 3) and `below` (B, 3) are the points `project` will be handed
+// in role order (either direction of travel reads the same stencil). A node
+// is its own arithmetic, so every value read is the whole grid's bit for bit;
+// a later call reading other pairs fills what it adds. A mixed deck reads
+// about half of the lattice (`mixed_vert_over_buried8`: 925 of 1,953 nodes,
+// 739 of 1,516 ms of the fill).
+const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                             double mu, double r_min, const double *above, size_t A, const double *below,
+                             size_t B, double ground_z, uintptr_t cancel_flag = 0);
+
+// `tgrid_eval`'s nodes over every (above, below) pair: the (n_zp, n_r, n_th)
+// mask `get_grid_reading` fills.
+std::vector<uint8_t> read_nodes(const Grid &g, const double *above, size_t A, const double *below, size_t B,
+                                double ground_z);
 
 // The query's extremes over one projection call (`transmitted_field_proj_
 // batch`'s six returns).

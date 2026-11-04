@@ -228,8 +228,12 @@ void t_surfaces(cd eps_t, double k2, double omega, double mu, const double *rho,
 
 // ---- TransmittedGrid --------------------------------------------------------
 
-Grid make_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
-               bool has_r_min, double r_min, uintptr_t cancel_flag) {
+namespace {
+
+// `TransmittedGrid(...)`'s layout -- the ladder and the (ln R, theta)
+// lattice -- with no node filled: `vals` NaN, `have` clear.
+Grid layout_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                 bool has_r_min, double r_min) {
     Grid g;
     g.eps_t = eps_t;
     g.k2 = k2;
@@ -262,7 +266,21 @@ Grid make_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, 
     const int64_t n_int = std::max<int64_t>(static_cast<int64_t>(std::nearbyint((90.0 - deg) / DTH_DEG)), 4);
     g.n_th = n_int + 1;
     g.dth = (0.5 * PI - g.th_min) / static_cast<double>(n_int);
+    g.lnz0 = std::log(g.zp_min);
+    g.dlnz = g.n_zp > 1 ? (std::log(g.zp_max) - g.lnz0) / static_cast<double>(g.n_zp - 1) : 0.0;
 
+    const size_t npl = static_cast<size_t>(g.n_r) * static_cast<size_t>(g.n_th);
+    g.vals.assign(static_cast<size_t>(g.n_zp) * 5 * npl, cd(std::nan(""), std::nan("")));
+    g.have.assign(static_cast<size_t>(g.n_zp) * npl, 0);
+    return g;
+}
+
+// The nodes `need` names ((n_zp, n_r, n_th), C order) that `g` does not
+// hold, filled: per rung, those nodes' (rho, z) as the whole lattice spells
+// them, through one `t_surfaces` call. A node is its own six integrals and
+// its own divide-out, so which nodes share the call moves no bit: a node
+// filled here is the node the whole-grid fill computed. Returns the count.
+size_t fill_nodes(Grid &g, const std::vector<uint8_t> &need, uintptr_t cancel_flag) {
     const size_t nr = static_cast<size_t>(g.n_r), nt = static_cast<size_t>(g.n_th), npl = nr * nt;
     std::vector<double> r_nodes(nr), cth(nt), sth(nt);
     for (size_t i = 0; i < nr; i++) r_nodes[i] = std::exp(g.lnr0 + g.dlnr * static_cast<double>(i));
@@ -271,21 +289,102 @@ Grid make_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, 
         cth[j] = mw_libm_c::rcos(th);
         sth[j] = mw_libm_c::rsin(th);
     }
-    std::vector<double> rho(npl), zz(npl);
-    for (size_t i = 0; i < nr; i++)
-        for (size_t j = 0; j < nt; j++) {
-            const double x = r_nodes[i] * cth[j], y = r_nodes[i] * sth[j];
-            rho[i * nt + j] = x >= 0.0 ? x : 0.0;  // np.maximum(x, 0.0)
-            zz[i * nt + j] = y >= 0.0 ? y : 0.0;
-        }
-    g.vals.assign(static_cast<size_t>(g.n_zp) * 5 * npl, cd(0.0, 0.0));
+    size_t filled = 0;
+    std::vector<size_t> at;
+    std::vector<double> rho, zz;
+    std::vector<cd> sub;
     for (int64_t k = 0; k < g.n_zp; k++) {
-        t_surfaces(g.eps_t, g.k2, g.omega, g.mu, rho.data(), zz.data(), -g.zp_nodes[static_cast<size_t>(k)], npl,
-                   g.vals.data() + static_cast<size_t>(k) * 5 * npl, cancel_flag);
+        const size_t base = static_cast<size_t>(k) * npl;
+        at.clear();
+        rho.clear();
+        zz.clear();
+        for (size_t q = 0; q < npl; q++) {
+            if (!need[base + q] || g.have[base + q]) continue;
+            const size_t i = q / nt, j = q % nt;
+            const double x = r_nodes[i] * cth[j], y = r_nodes[i] * sth[j];
+            at.push_back(q);
+            rho.push_back(x >= 0.0 ? x : 0.0);  // np.maximum(x, 0.0)
+            zz.push_back(y >= 0.0 ? y : 0.0);
+        }
+        const size_t n = at.size();
+        if (n == 0) continue;
+        sub.assign(5 * n, cd(0.0, 0.0));
+        t_surfaces(g.eps_t, g.k2, g.omega, g.mu, rho.data(), zz.data(), -g.zp_nodes[static_cast<size_t>(k)], n,
+                   sub.data(), cancel_flag);
+        cd *plane = g.vals.data() + static_cast<size_t>(k) * 5 * npl;
+        for (size_t u = 0; u < n; u++) {
+            for (size_t c = 0; c < 5; c++) plane[c * npl + at[u]] = sub[c * n + u];
+            g.have[base + at[u]] = 1;
+        }
+        filled += n;
     }
-    g.lnz0 = std::log(g.zp_min);
-    g.dlnz = g.n_zp > 1 ? (std::log(g.zp_max) - g.lnz0) / static_cast<double>(g.n_zp - 1) : 0.0;
+    return filled;
+}
+
+}  // namespace
+
+Grid make_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+               bool has_r_min, double r_min, uintptr_t cancel_flag) {
+    Grid g = layout_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has_r_min, r_min);
+    fill_nodes(g, std::vector<uint8_t>(g.have.size(), 1), cancel_flag);
     return g;
+}
+
+std::vector<uint8_t> read_nodes(const Grid &g, const double *above, size_t A, const double *below, size_t B,
+                                double ground_z) {
+    // `tgrid_eval`'s stencil at every (above, below) pair, from
+    // `proj_one_transmitted`'s geometry spelled as it spells it: the same
+    // floats, so the same corner (i0, j0, k0) and the same 4 x 4 (x 4) nodes.
+    const std::ptrdiff_t nth = static_cast<std::ptrdiff_t>(g.n_th), nr = static_cast<std::ptrdiff_t>(g.n_r);
+    const size_t npl = static_cast<size_t>(nr * nth);
+    const double half_pi = 0.5 * M_PI;
+    std::vector<uint8_t> need(static_cast<size_t>(g.n_zp) * npl, 0);
+    const std::ptrdiff_t An = static_cast<std::ptrdiff_t>(A);
+#pragma omp parallel
+    {
+        std::vector<uint8_t> mine(need.size(), 0);
+#pragma omp for schedule(static)
+        for (std::ptrdiff_t a = 0; a < An; ++a) {
+            const double ax = above[3 * a], ay = above[3 * a + 1], az = above[3 * a + 2];
+            for (size_t b = 0; b < B; ++b) {
+                const double z = az - ground_z;
+                const double depth = ground_z - below[3 * b + 2];
+                const double dx = ax - below[3 * b];
+                const double dy = ay - below[3 * b + 1];
+                const double rho = std::hypot(dx, dy);
+                const double r_obs = std::hypot(rho, z);
+                const double theta = std::atan2(z, rho);
+                const double fr = (std::log(std::max(r_obs, 1e-300)) - g.lnr0) / g.dlnr;
+                int i0 = (int)std::floor(fr) - 1;
+                if (i0 < 0) i0 = 0;
+                else if (i0 > (int)nr - 4) i0 = (int)nr - 4;
+                double thc = theta;
+                if (thc < 0.0) thc = 0.0;
+                else if (thc > half_pi) thc = half_pi;
+                const double ft = (thc - g.th0) / g.dth;
+                int j0 = (int)std::floor(ft) - 1;
+                if (j0 < 0) j0 = 0;
+                else if (j0 > (int)nth - 4) j0 = (int)nth - 4;
+                int k0 = 0, nk = 1;
+                if (g.n_zp != 1) {
+                    const double fz = (std::log(std::max(depth, 1e-300)) - g.lnz0) / g.dlnz;
+                    k0 = (int)std::floor(fz) - 1;
+                    if (k0 < 0) k0 = 0;
+                    else if (k0 > (int)g.n_zp - 4) k0 = (int)g.n_zp - 4;
+                    nk = 4;
+                }
+                for (int kk = 0; kk < nk; ++kk)
+                    for (int i = 0; i < 4; ++i) {
+                        uint8_t *row = mine.data() + static_cast<size_t>(k0 + kk) * npl +
+                                       static_cast<size_t>(i0 + i) * static_cast<size_t>(nth) + static_cast<size_t>(j0);
+                        row[0] = row[1] = row[2] = row[3] = 1;
+                    }
+            }
+        }
+#pragma omp critical
+        for (size_t q = 0; q < need.size(); q++) need[q] |= mine[q];
+    }
+    return need;
 }
 
 namespace {
@@ -305,10 +404,16 @@ std::mutex g_mutex;
 // one file per Python key, exact bits; a file that does not read back whole
 // (magic, tag, key, sizes, checksum) is a miss and is overwritten. A hit is
 // the fill's own bytes, so the answer moves no bit.
+//
+// MWTRANSGRID2: the grid is filled node by node as its reads ask
+// (`get_grid_reading`), so a file carries each node's held mark after the
+// values (NaN where the mark is clear) and the fingerprints of the pair sets
+// it has served; a later run that reads more of the lattice fills the rest
+// and writes the union back.
 
 namespace fs = std::filesystem;
 
-const char MAGIC[] = "MWTRANSGRID1\n";
+const char MAGIC[] = "MWTRANSGRID2\n";
 
 uint64_t fnv1a(const std::string &b) {
     uint64_t h = 1469598103934665603ull;
@@ -374,6 +479,10 @@ std::string serialize(const std::string &tag, const Key &k, const Grid &g) {
     for (double x : g.zp_nodes) put(b, x);
     put(b, static_cast<uint64_t>(g.vals.size()));
     b.append(reinterpret_cast<const char *>(g.vals.data()), g.vals.size() * sizeof(cd));
+    put(b, static_cast<uint64_t>(g.have.size()));
+    b.append(reinterpret_cast<const char *>(g.have.data()), g.have.size());
+    put(b, static_cast<uint64_t>(g.served.size()));
+    for (uint64_t h : g.served) put(b, h);
     put(b, fnv1a(b));
     return b;
 }
@@ -429,6 +538,16 @@ bool deserialize(const std::string &b, const std::string &tag, const Key &k, Gri
     g.vals.resize(static_cast<size_t>(nv));
     std::memcpy(g.vals.data(), b.data() + at, static_cast<size_t>(nv) * sizeof(cd));
     at += static_cast<size_t>(nv) * sizeof(cd);
+    uint64_t nh;
+    if (!get(b, at, nh) || nh != nv / 5u || nh > b.size() - at) return false;
+    g.have.resize(static_cast<size_t>(nh));
+    std::memcpy(g.have.data(), b.data() + at, static_cast<size_t>(nh));
+    at += static_cast<size_t>(nh);
+    uint64_t ns;
+    if (!get(b, at, ns) || ns > (b.size() - at) / sizeof(uint64_t)) return false;
+    g.served.resize(static_cast<size_t>(ns));
+    for (uint64_t &h : g.served)
+        if (!get(b, at, h)) return false;
     return at + sizeof(uint64_t) == b.size();
 }
 
@@ -481,28 +600,125 @@ void store_put(const Key &k, const Grid &g) {
 
 }  // namespace
 
-const Grid &get_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
-                     double r_min, uintptr_t cancel_flag) {
+namespace {
+
+// Whether `need` names a node `g` does not hold.
+bool missing(const Grid &g, const std::vector<uint8_t> &need) {
+    for (size_t q = 0; q < need.size(); q++)
+        if (need[q] && !g.have[q]) return true;
+    return false;
+}
+
+// The fingerprints a grid keeps (the newest; an older set is censused again).
+constexpr size_t SERVED_KEEP = 32;
+
+void add_served(Grid &g, uint64_t h) {
+    g.served.push_back(h);
+    if (g.served.size() > SERVED_KEEP) g.served.erase(g.served.begin());
+}
+
+// The stored copy's held nodes that `g` lacks, copied in (the file's grid is
+// the same key's, so the same lattice). Whether a file was read.
+bool store_merge(const Key &k, Grid &g) {
+    std::unique_ptr<Grid> f = store_fetch(k);
+    if (f == nullptr || f->have.size() != g.have.size() || f->vals.size() != g.vals.size()) return false;
+    const size_t npl = static_cast<size_t>(g.n_r) * static_cast<size_t>(g.n_th);
+    for (size_t q = 0; q < g.have.size(); q++) {
+        if (!f->have[q] || g.have[q]) continue;
+        const size_t k0 = q / npl, at = q % npl;
+        for (size_t c = 0; c < 5; c++) g.vals[(k0 * 5 + c) * npl + at] = f->vals[(k0 * 5 + c) * npl + at];
+        g.have[q] = 1;
+    }
+    for (uint64_t h : f->served)
+        if (std::find(g.served.begin(), g.served.end(), h) == g.served.end()) add_served(g, h);
+    return true;
+}
+
+// The pair set's fingerprint: its points' exact bytes, counts and the
+// interface height. A grid that has served a set holds every node the set
+// reads (nodes are never dropped), so a repeat of it skips the census.
+uint64_t reads_hash(const double *above, size_t A, const double *below, size_t B, double ground_z) {
+    std::string b;
+    b.reserve(sizeof(double) * (3 * (A + B) + 1) + 2 * sizeof(uint64_t));
+    put(b, static_cast<uint64_t>(A));
+    put(b, static_cast<uint64_t>(B));
+    put(b, ground_z);
+    b.append(reinterpret_cast<const char *>(above), 3 * A * sizeof(double));
+    b.append(reinterpret_cast<const char *>(below), 3 * B * sizeof(double));
+    return fnv1a(b);
+}
+
+// The pairs a fill will project, (above, below) in role order.
+struct Reads {
+    const double *above;
+    size_t A;
+    const double *below;
+    size_t B;
+    double ground_z;
+};
+
+// `get_grid_below_above`'s grid with the nodes `reads` names held (every
+// node when `reads` is null): the process's memo under the Python key,
+// then the store, then the fill of what is still missing, written back.
+const Grid &ensure_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                        double r_min, uintptr_t cancel_flag, const Reads *reads) {
     const double lam_p = (2.0 * PI) / k2;
     const double rb_wl = somm_core::r1_bucket_wl(std::min(r_max / lam_p, R_CAP_LAMBDA_P));
     const double r_min_b = r_min_bucket(true, r_min, lam_p);
     const Key key{eps_t.real(), eps_t.imag(), k2, rb_wl, r_min_b, std::fabs(zp_min), std::fabs(zp_max), omega, mu};
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = g_grids.find(key);
-    if (it != g_grids.end()) return *it->second;
-    const mw_times::Scope timed(mw_times::ground);
-    std::unique_ptr<Grid> g = store_fetch(key);
-    if (g != nullptr) {
-        mw_times::count_disk();
-    } else {
-        mw_times::count_built();
-        g = std::make_unique<Grid>(
-            make_grid(eps_t, k2, rb_wl * lam_p, zp_min, zp_max, omega, mu, true, r_min_b, cancel_flag));
-        store_put(key, *g);
+    bool fresh = false;
+    if (it == g_grids.end()) {
+        std::unique_ptr<Grid> g(new Grid(layout_grid(eps_t, k2, rb_wl * lam_p, zp_min, zp_max, omega, mu, true, r_min_b)));
+        it = g_grids.emplace(key, std::move(g)).first;
+        fresh = true;
     }
-    const Grid &ref = *g;
-    g_grids.emplace(key, std::move(g));
-    return ref;
+    Grid &g = *it->second;
+    const mw_times::Scope timed(mw_times::ground);
+    // The store once per process, on the key's first use (as the whole grid
+    // was read then); a later call adds only what it fills itself.
+    const bool from_disk = fresh && store_merge(key, g);
+    const uint64_t h = reads ? reads_hash(reads->above, reads->A, reads->below, reads->B, reads->ground_z) : 0;
+    const bool seen = reads && std::find(g.served.begin(), g.served.end(), h) != g.served.end();
+    if (!seen) {
+        const std::vector<uint8_t> need =
+            reads ? read_nodes(g, reads->above, reads->A, reads->below, reads->B, reads->ground_z)
+                  : std::vector<uint8_t>(g.have.size(), 1);
+        if (missing(g, need)) {
+            // Another run may have filled these since this one read the store.
+            if (!fresh) store_merge(key, g);
+            if (missing(g, need)) {
+                mw_times::count_built();
+                fill_nodes(g, need, cancel_flag);
+                if (reads) add_served(g, h);
+                store_put(key, g);
+                return g;
+            }
+        }
+        if (reads) {
+            // Held already (the store's or an earlier call's nodes): kept so
+            // the next run of these pairs skips the census too.
+            add_served(g, h);
+            store_put(key, g);
+        }
+    }
+    if (from_disk) mw_times::count_disk();
+    return g;
+}
+
+}  // namespace
+
+const Grid &get_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                     double r_min, uintptr_t cancel_flag) {
+    return ensure_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, r_min, cancel_flag, nullptr);
+}
+
+const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                             double mu, double r_min, const double *above, size_t A, const double *below,
+                             size_t B, double ground_z, uintptr_t cancel_flag) {
+    const Reads r{above, A, below, B, ground_z};
+    return ensure_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, r_min, cancel_flag, &r);
 }
 
 // ---- the projection ---------------------------------------------------------
