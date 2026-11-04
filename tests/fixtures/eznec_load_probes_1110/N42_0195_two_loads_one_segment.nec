@@ -1,0 +1,12 @@
+CM Dipole in free space, two parallel-LC traps on one segment (NEC-4.2 form of momwire#1787)
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+LD 1,1,8,0,0.,.0000001,5.E-12
+LD 1,1,8,0,0.,.0000002,3.E-12
+FR 0,1,0,0,299.7925
+GN -1
+EX 6,1,6,0,1.414214,0.
+PQ 0
+RP 0,1,361,1000,90.,0.,0.,1.,0.
+EN

@@ -744,10 +744,10 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
     at: dict[tuple[int, float], int] = {}
     feed_ports: list[int] = []
     load_ports: list[int] = []
-    # Which loads share a group (momwire#1069).  Two loads at one position
-    # that are never in force together — one before an `LD -1`, one after —
-    # are one gap stamped differently per group, not two loads on a segment.
-    together = [set(live) for live in group_loads(model)]
+    # Two loads at one position share its gap.  Never in force together
+    # (one before an `LD -1`, one after, momwire#1069) the gap is stamped
+    # differently per group; in force together (a stacked pair, momwire#1807)
+    # the per-group stamp ADDS them, which is what NEC-4.2 and nec2c do.
 
     for index, (wire, arclength, _volts) in enumerate(model.feeds):
         key = (wire, arclength)
@@ -772,17 +772,9 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
             continue
         site = sites[existing]
         if site.load is not None:
-            others = [
-                k for k, entry in enumerate(model.loads[:index]) if entry[:2] == key
-            ]
-            if any(index in live and k in live for live in together for k in others):
-                raise ValueError(
-                    f"load {index} shares its position with load {site.load} — "
-                    f"one gap cannot carry two loads"
-                )
             # The site keeps its first load's spec: `PortSite.load_spec` is
-            # what `loaded_ports` and a natively-loading fill read, and a
-            # per-group consumer reads the spec off `DeckModel.loads` instead.
+            # what `loaded_ports` reads, and a per-group consumer (and
+            # `_lumped_loads`) reads every spec off `DeckModel.loads` instead.
             load_ports.append(existing)
             continue
         load_ports.append(existing)
@@ -885,7 +877,8 @@ def _wire_loading(materials) -> dict[str, object]:
 
 
 def _lumped_loads(
-    sites: tuple[PortSite, ...],
+    model: DeckModel,
+    plan: PortPlan,
     ports: tuple[tuple[int, float], ...],
     freq_hz: float,
 ) -> list[tuple[int, float, complex]]:
@@ -904,10 +897,22 @@ def _lumped_loads(
     "translate once, fill many times" — an OPERATING POINT, unlike the
     geometry, is not reused across steps), so evaluating per call already
     is the swept behaviour, not an approximation of it.
+
+    One entry per SITE, carrying the sum of every load in force there: two
+    loads stacked on one segment (momwire#1807) are in series, as NEC adds
+    them, and a card written twice counts twice.  The caller has checked
+    that every group carries the same loads, so the first group's are all
+    of them; ``plan.load_ports`` is parallel to ``model.loads``.
     """
+    total: dict[int, complex] = {}
+    for index in group_loads(model)[0]:
+        port = plan.load_ports[index]
+        total[port] = total.get(port, 0j) + model.loads[index][2].impedance(freq_hz)
     return [
-        (polyline, arclength, site.load_spec.impedance(freq_hz))
-        for site, (polyline, arclength) in zip(sites, ports)
+        (polyline, arclength, total[index])
+        for index, (site, (polyline, arclength)) in enumerate(
+            zip(plan.sites, ports, strict=True)
+        )
         if site.load_spec is not None
     ]
 
@@ -1264,7 +1269,11 @@ def build_solver(
     ]
     loads = None
     if issubclass(solver_class, _NATIVE_LOADING):
-        if any(len(live) != len(model.loads) for live in group_loads(model)):
+        lives = group_loads(model)
+        if any(
+            live != lives[0] or set(live) != set(range(len(model.loads)))
+            for live in lives
+        ):
             # The fill carries every load; per-group scoping (momwire#1069)
             # is port algebra this family does not do.
             raise ValueError(
@@ -1281,7 +1290,7 @@ def build_solver(
             plan.sites[index].feed is not None or plan.sites[index].network
             for index in range(len(built_mesh.ports))
         ]
-        loads = _lumped_loads(plan.sites, built_mesh.ports, frequency_mhz * 1e6)
+        loads = _lumped_loads(model, plan, built_mesh.ports, frequency_mhz * 1e6)
     else:
         _has_port = [True] * len(built_mesh.ports)
     feeds = [

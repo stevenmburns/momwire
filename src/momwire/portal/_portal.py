@@ -544,6 +544,10 @@ _APPROX_INTEGRATION = (
 )
 
 _LOADING_HEADER = "                          ------ STRUCTURE IMPEDANCE LOADING ------"
+# nec2c's line after the rows when a segment carries two loads (momwire#1807).
+_LOADED_TWICE = (
+    "  NOTE, SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE - IMPEDANCES ADDED"
+)
 _LOADING_NONE = "                                 THIS STRUCTURE IS NOT LOADED"
 _LOADING_TABLE_HEADER = (
     "  LOCATION        RESISTANCE  INDUCTANCE  CAPACITANCE     IMPEDANCE (OHMS)"
@@ -2086,6 +2090,20 @@ class DeckSolver:
         entry = self._entry(self._build(freq_mhz, extended_kernel, environment))
         self._cache[key] = entry
         return entry
+
+    def loaded_twice(self, group_index: int) -> bool:
+        """Do two lumped loads in force at execute group ``group_index``
+        share a segment (momwire#1807)?
+
+        Both oracles then add the two impedances and close the loading table
+        with a "LOADED TWICE - IMPEDANCES ADDED" note (nec2c and the licensed
+        NEC-4.2, each in its own layout).  Read off the model, where a stacked
+        pair is two entries at one position and a card written twice is one
+        entry in force twice.
+        """
+        live = self._group_loads.get(group_index, ())
+        at = [self.model.loads[k][:2] for k in live]
+        return len(set(at)) != len(at)
 
     def _load_impedances(
         self, omega: float, group_index: int | None = None
@@ -3774,6 +3792,8 @@ def _render_run_block(
         rows = _loading_rows(group.loads)
         if rows:
             out += [*_LOADING_TABLE_HEADER, *rows]
+            if solver.loaded_twice(group_index):
+                out.append(_LOADED_TWICE)
         else:
             out.append(_LOADING_NONE)
         out += ["", ""]

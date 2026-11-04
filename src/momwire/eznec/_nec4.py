@@ -589,6 +589,7 @@ def _run(
                 loads=tuple(_load_row(card) for card in group.loads),
                 fill_seconds=result.fill_ms / 1000.0,
                 factor_seconds=0.0,
+                loaded_twice=solver.loaded_twice(index),
             )
             if preamble
             else None

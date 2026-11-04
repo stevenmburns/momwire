@@ -111,9 +111,19 @@ def test_one_segment_loaded_differently_in_two_runs_is_one_gap():
     assert scoped[1] == pytest.approx(alone[0], rel=1e-12)
 
 
-def test_two_loads_in_force_together_at_one_position_still_refuse():
+def test_two_consecutive_loads_at_one_position_add():
+    """momwire#1807: consecutive LD cards on one segment stack, as NEC adds
+    them (tests/test_two_loads_one_segment_1807.py has the oracles)."""
+    stacked = _group_impedances(
+        DIPOLE + "LD 0 1 3 3 50. 0. 0.\nLD 4 1 3 3 10. 5.\n" + DRIVE + "XQ\n"
+    )
+    summed = _group_impedances(DIPOLE + "LD 4 1 3 3 60. 5.\n" + DRIVE + "XQ\n")
+    assert stacked[0] == pytest.approx(summed[0], rel=1e-12)
+
+
+def test_two_loads_at_one_position_separated_by_a_card_still_refuse():
     with pytest.raises(DeckError, match="already carries a load"):
-        parse(DIPOLE + "LD 0 1 3 3 50. 0. 0.\nLD 4 1 3 3 10. 5.\n" + DRIVE + "XQ\n")
+        parse(DIPOLE + "LD 0 1 3 3 50. 0. 0.\n" + DRIVE + "LD 4 1 3 3 10. 5.\nXQ\n")
 
 
 def test_wire_loading_that_changes_between_runs_refuses():

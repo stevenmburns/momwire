@@ -67,6 +67,39 @@ stay untouched (tests/test_eznec_reproducibility.py).
                  every printed digit, and the probe row is printed once per
                  card, identically (not as a 2e-10 V source).
 
+  N42_*.nec/.out, N2_*.nec/.out
+                 momwire#1807: two lumped loads on ONE SEGMENT in the NEC-4.2
+                 and NEC-2 dialects, which write no probes (the NEC-4.2 form
+                 of M_0195 above). Synthetic decks on 0183's 11-segment
+                 dipole, not EZNEC sessions. The N42_ printouts are licensed
+                 NEC-4.2's, the release build nec42-release (sha256
+                 5fc0d508e4cd0926...) on Haswell, each deck copied as m.nec
+                 into a fresh directory and run as `nec42-release m.nec
+                 m.out` with OMP_NUM_THREADS=1; the N2_ printouts are nec2c
+                 1.3's (`nec2c -i deck -o out`). Run 2026-11-04, black box,
+                 numbers only.
+                   N42_0195_two_loads_one_segment  the issue's repro: the
+                                 two parallel-LC traps of M_0195 at 1,8,
+                                 EX 6 drive. NEC-4.2: 57.4228 - j197.494,
+                                 the drive row of one LD 4 of their summed
+                                 reactance (-j577.06).
+                   N42_series_r_pair / _single     10 + 20 ohm series R
+                                 against one 30 ohm: identical drive rows.
+                   N42_mixed_three                 LD 0, LD 4 and a ranged
+                                 LD 1 overlapping on segment 8.
+                   N42_separated_by_ex / _single   an EX card between the
+                                 two LDs: NEC-4.2 DISCARDS the first, and
+                                 prints the second card's deck exactly.
+                   N2_series_r_pair / _single, N2_mixed_three  the same
+                                 shapes on nec2c, which agrees.
+                 Both engines ADD the impedances of consecutive LD cards on
+                 one segment and close the loading table with a "LOADED
+                 TWICE - IMPEDANCES ADDED" note, each in its own layout; any
+                 other card between two LD cards discards the earlier
+                 loads. tests/test_two_loads_one_segment_1807.py holds the
+                 loading tables byte for byte and the drive rows to the
+                 slot's gap (the bare dipole is itself 0.97 % of |Z| off).
+
   0202.nec/.out  The deck Dan AC6LA's "first blood" post (QRZ 1003328 #100,
                  2026-09-17) describes: EZNEC Pro/2+ 7.0.4's Cardioid.ez (the
                  plain 6-segment one), both sources type I as shipped, an

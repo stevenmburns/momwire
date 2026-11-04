@@ -1514,13 +1514,24 @@ def test_ld_over_eight_segments_is_refused():
     )
 
 
-def test_ld_refuses_a_second_load_on_the_same_segment():
-    """§#ld--loading."""
+def test_ld_stacks_consecutive_loads_on_the_same_segment():
+    """§#ld--loading (momwire#1807): both stay in force, one entry each, and
+    the port algebra adds them."""
+    model = parse(BODY + "LD 0 1 2 2 50. 0. 0.\nLD 4 1 2 2 10. 5.\nXQ\nNX\n")
+    assert [spec.kind for _w, _a, spec in model.loads] == ["series", "fixed"]
+    assert model.loads[0][:2] == model.loads[1][:2]
+    assert model.groups[0].loads == (0, 1)
+
+
+def test_ld_refuses_a_second_load_on_the_same_segment_after_another_card():
+    """§#ld--loading: NEC discards the earlier card's loads here."""
     with pytest.raises(DeckError) as exc:
-        parse(BODY + "LD 0 1 2 2 50. 0. 0.\nLD 4 1 2 2 10. 5.\nXQ\nNX\n")
+        parse(BODY + "LD 0 1 2 2 50. 0. 0.\nEK\nLD 4 1 2 2 10. 5.\nXQ\nNX\n")
     assert str(exc.value) == (
-        "LD on a segment that already carries a load is not supported by "
-        "this engine — a second load on one segment is not merged"
+        "LD on a segment that already carries a load from an earlier run of "
+        "LD cards is not supported by this engine — NEC discards loads when "
+        "another card separates two LD cards, and adds them only when the LD "
+        "cards are consecutive"
     )
 
 
@@ -1715,15 +1726,25 @@ def test_replication_does_not_trip_the_doubled_load_refusal():
     assert len(model.loads) == 4
 
 
-def test_two_cell_cards_on_one_segment_still_refuse():
-    """§#ld--loading: replication widens the dedup set, it does not weaken
-    it — a deck that genuinely double-loads a cell segment refuses as it
-    always did."""
+def test_two_cell_cards_on_one_segment_stack_on_every_copy():
+    """§#ld--loading (momwire#1807): two consecutive cell cards on one
+    segment stack, and replication stacks them on every copy (nec2c and
+    NEC-4.2 print a GR 1 4 deck with LD 4 50 + LD 0 10 on the cell's
+    segment 2 exactly as the deck with one LD 4 60)."""
+    model = parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nLD 0 1 1 1 10. 0. 0.\n"))
+    assert [wire for wire, _, _ in model.loads] == [0, 1, 0, 1]
+
+
+def test_two_cell_cards_on_one_segment_separated_by_a_card_still_refuse():
+    """§#ld--loading: replication widens the "already loaded" set, it does
+    not weaken it."""
     with pytest.raises(DeckError) as exc:
-        parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nLD 0 1 1 1 10. 0. 0.\n"))
+        parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nEK\nLD 0 1 1 1 10. 0. 0.\n"))
     assert str(exc.value) == (
-        "LD on a segment that already carries a load is not supported by "
-        "this engine — a second load on one segment is not merged"
+        "LD on a segment that already carries a load from an earlier run of "
+        "LD cards is not supported by this engine — NEC discards loads when "
+        "another card separates two LD cards, and adds them only when the LD "
+        "cards are consecutive"
     )
 
 

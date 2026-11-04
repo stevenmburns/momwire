@@ -17,6 +17,7 @@
 #include <limits>
 #include <array>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -502,6 +503,19 @@ std::vector<cd> load_impedances(const BuildTables &bt, ll n_ports, double omega,
         slot = cd(slot.real() + add.real(), slot.imag() + add.imag());
     }
     return z;
+}
+
+// `DeckSolver.loaded_twice(group_index)` (momwire#1807): two loads in force
+// at one position share one port, so a repeated port is a stacked pair (no
+// nec4 basis carries its loads natively, so every load has a port).
+bool loaded_twice(const BuildTables &bt, ll group_index) {
+    for (const auto &g : bt.group_loads) {
+        if (g.first != group_index) continue;
+        std::set<ll> seen;
+        for (ll k : g.second)
+            if (!seen.insert(bt.model_loads.at(static_cast<std::size_t>(k)).first).second) return true;
+    }
+    return false;
 }
 
 // `portal._wire_arc_at_knot` / the knot walk `_element_match` and
@@ -1458,6 +1472,7 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
             }
         }
         for (const nec5::Card &ld : group.loads) p.loads.push_back(load_row(ld));
+        p.loaded_twice = loaded_twice(c.sb->tables, index);
         p.fill_seconds = static_cast<double>(static_cast<ll>(std::nearbyint(r.fill_seconds * 1000.0))) / 1000.0;
         p.factor_seconds = 0.0;
     }

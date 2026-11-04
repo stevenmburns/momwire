@@ -506,11 +506,6 @@ struct Prepared {
     PortPlan ports;
 };
 
-std::string load_index_message(ll index, ll other) {
-    return "load " + std::to_string(index) + " shares its position with load " + std::to_string(other) +
-           " — one gap cannot carry two loads";
-}
-
 // `_solver._sites` then `prepare_mesh`
 Prepared prepare_mesh(const Model &model) {
     std::vector<PortSite> sites;
@@ -521,20 +516,6 @@ Prepared prepare_mesh(const Model &model) {
         return -1;
     };
     std::vector<ll> feed_ports, load_ports;
-    std::vector<std::set<ll>> together;
-    {
-        bool any = false;
-        for (std::size_t g = 0; g < model.groups.size(); g++)
-            if (model.group_ran[g]) {
-                any = true;
-                together.push_back(std::set<ll>(model.groups[g].loads.begin(), model.groups[g].loads.end()));
-            }
-        if (!any) {
-            std::set<ll> every;
-            for (std::size_t k = 0; k < model.loads.size(); k++) every.insert(static_cast<ll>(k));
-            together.push_back(every);
-        }
-    }
     for (std::size_t index = 0; index < model.feeds.size(); index++) {
         const Feed &f = model.feeds[index];
         ll existing = find(f.wire, f.arclength);
@@ -567,13 +548,8 @@ Prepared prepare_mesh(const Model &model) {
         }
         PortSite &site = sites[static_cast<std::size_t>(existing)];
         if (site.load >= 0) {
-            for (std::size_t k = 0; k < index; k++) {
-                const Load &o = model.loads[k];
-                if (!(o.wire == l.wire && o.arclength == l.arclength)) continue;
-                for (const auto &live : together)
-                    if (live.count(static_cast<ll>(index)) && live.count(static_cast<ll>(k)))
-                        refuse(load_index_message(static_cast<ll>(index), site.load));
-            }
+            // two loads at one position share its gap; in force together
+            // (a stacked pair, momwire#1807) the per-group stamp adds them
             load_ports.push_back(existing);
             continue;
         }

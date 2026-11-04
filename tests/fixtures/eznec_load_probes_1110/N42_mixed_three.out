@@ -1,0 +1,191 @@
+1
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)  *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          momwire#1807: series R, R+jX and parallel R stacked on one segment           
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+
+  WIRE                                                                               NO. OF    FIRST  LAST     TAG
+  NO.        X1         Y1         Z1          X2         Y2         Z2      RADIUS   SEG.     SEG.   SEG.     NO.
+     1    0.00000   -0.25000    0.00000     0.00000    0.25000    0.00000    0.00050     11        1    11       1
+
+   TOTAL SEGMENTS USED=   11     NO. SEG. IN A SYMMETRIC CELL=   11     SYMMETRY FLAG=  0
+
+
+         - MULTIPLE WIRE JUNCTIONS -
+ JUNCTION    SEGMENTS  (- FOR END 1, + FOR END 2)
+  NONE
+
+
+
+
+                                 - - - - SEGMENTATION DATA - - - -
+
+                                        COORDINATES IN METERS
+
+                         I+ AND I- INDICATE THE SEGMENTS BEFORE AND AFTER I
+
+
+  SEG.   COORDINATES OF SEG. CENTER     SEG.     ORIENTATION ANGLES    WIRE    CONNECTION DATA   TAG
+  NO.       X         Y         Z       LENGTH     ALPHA     BETA      RADIUS    I-   I    I+    NO.
+     1   0.00000  -0.22727   0.00000   0.04545    0.00000  90.00000   0.00050     0    1    2      1
+     2   0.00000  -0.18182   0.00000   0.04545    0.00000  90.00000   0.00050     1    2    3      1
+     3   0.00000  -0.13636   0.00000   0.04545    0.00000  90.00000   0.00050     2    3    4      1
+     4   0.00000  -0.09091   0.00000   0.04545    0.00000  90.00000   0.00050     3    4    5      1
+     5   0.00000  -0.04545   0.00000   0.04545    0.00000  90.00000   0.00050     4    5    6      1
+     6   0.00000   0.00000   0.00000   0.04545    0.00000  90.00000   0.00050     5    6    7      1
+     7   0.00000   0.04545   0.00000   0.04545    0.00000  90.00000   0.00050     6    7    8      1
+     8   0.00000   0.09091   0.00000   0.04545    0.00000  90.00000   0.00050     7    8    9      1
+     9   0.00000   0.13636   0.00000   0.04545    0.00000  90.00000   0.00050     8    9   10      1
+    10   0.00000   0.18182   0.00000   0.04545    0.00000  90.00000   0.00050     9   10   11      1
+    11   0.00000   0.22727   0.00000   0.04545    0.00000  90.00000   0.00050    10   11    0      1
+
+
+
+
+ ***** INPUT LINE  1  LD   0    1    8    8  1.00000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  LD   4    1    8    8  5.00000E+00 -1.00000E+02  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  LD   1    1    7    9  5.00000E+02  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  4  FR   0    1    0    0  2.99793E+02  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  5  GN  -1    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  6  EX   6    1    6    0  1.41421E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  7  PQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  8  RP   0    1    1 1000  9.00000E+01  0.00000E+00  0.00000E+00  1.00000E+00  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 2.9979E+02 MHZ
+                                    WAVELENGTH= 1.0000E+00 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+                                            FREE SPACE
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+
+       LOCATION          RESISTANCE   INDUCTANCE  CAPACITANCE       IMPEDANCE (OHMS)     CONDUCTIVITY    TYPE
+    ITAG FROM THRU          OHMS        HENRYS       FARADS        REAL      IMAGINARY    MHOS/METER
+
+       1    8    8      1.0000E+01                                                                     SERIES 
+
+       1    8    8                                             5.0000E+00  -1.0000E+02                FIXED IMPEDANCE 
+
+       1    7    9      5.0000E+02                                                                    PARALLEL
+
+          NOTE: SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE - IMPEDANCES ADDED
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.000 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+     1     6 6.06162E+02-6.25854E+02 1.41421E+00 0.00000E+00 4.28621E+02-4.42546E+02 1.12925E-03 1.16594E-03 4.28621E+02
+
+
+
+                             - - - CURRENTS AND LOCATION - - -
+
+                     LENGTHS NORMALIZED BY WAVELENGTH (OR 2.*PI/CABS(K))
+
+  SEG.  TAG    COORD. OF SEG. CENTER     SEG.            - - - CURRENT (AMPS) - - -
+  NO.   NO.     X        Y        Z      LENGTH     REAL        IMAG.       MAG.        PHASE
+     1    1   0.0000  -0.2273   0.0000  0.04545   2.4728E-01 -2.0584E-02  2.4814E-01   -4.758
+     2    1   0.0000  -0.1818   0.0000  0.04545   6.5137E-01 -4.5764E-02  6.5298E-01   -4.019
+     3    1   0.0000  -0.1364   0.0000  0.04545   9.8090E-01 -5.3468E-02  9.8236E-01   -3.120
+     4    1   0.0000  -0.0909   0.0000  0.04545   1.2323E+00 -4.1883E-02  1.2330E+00   -1.947
+     5    1   0.0000  -0.0455   0.0000  0.04545   1.4015E+00 -1.7902E-03  1.4016E+00   -0.073
+     6    1   0.0000   0.0000   0.0000  0.04545   1.4142E+00 -1.1102E-16  1.4142E+00   -0.000
+     7    1   0.0000   0.0455   0.0000  0.04545   8.1996E-01 -4.4987E-01  9.3526E-01  -28.751
+     8    1   0.0000   0.0909   0.0000  0.04545   3.1526E-01 -5.5882E-01  6.4161E-01  -60.571
+     9    1   0.0000   0.1364   0.0000  0.04545   8.5617E-02 -4.8415E-01  4.9167E-01  -79.972
+    10    1   0.0000   0.1818   0.0000  0.04545   5.7708E-02 -3.2665E-01  3.3171E-01  -79.981
+    11    1   0.0000   0.2273   0.0000  0.04545   2.5766E-02 -1.2535E-01  1.2798E-01  -78.385
+
+
+
+                                  - - - CHARGE DENSITIES - - -
+
+                       LENGTHS NORMALIZED TO WAVELENGTH (OR 2.*PI/CABS(K))
+
+
+  SEG.  TAG    COORD. OF SEG. CENTER     SEG.          CHARGE DENSITY (COULOMBS/METER)
+  NO.   NO.     X        Y        Z      LENGTH     REAL        IMAG.       MAG.        PHASE
+     1E   1   0.0000  -0.2500   0.0000  0.04545   5.3442E-10  6.0291E-09  6.0527E-09   84.935
+     1    1   0.0000  -0.2273   0.0000  0.04545   4.1386E-10  5.3713E-09  5.3873E-09   85.594
+     2    1   0.0000  -0.1818   0.0000  0.04545   1.9077E-10  4.2662E-09  4.2705E-09   87.440
+     3    1   0.0000  -0.1364   0.0000  0.04545  -1.7053E-11  3.4198E-09  3.4198E-09   90.286
+     4    1   0.0000  -0.0909   0.0000  0.04545  -2.7015E-10  2.4467E-09  2.4616E-09   96.301
+     5    1   0.0000  -0.0455   0.0000  0.04545  -7.8322E-10  1.6179E-09  1.7975E-09  115.832
+     6    1   0.0000   0.0000   0.0000  0.04545   2.9842E-09 -3.6028E-09  4.6782E-09  -50.365
+     7    1   0.0000   0.0455   0.0000  0.04545   3.8969E-09 -7.2720E-09  8.2503E-09  -61.814
+     8    1   0.0000   0.0909   0.0000  0.04545  -1.4420E-10 -4.3148E-09  4.3172E-09  -91.914
+     9    1   0.0000   0.1364   0.0000  0.04545  -1.4383E-09 -1.2635E-09  1.9145E-09 -138.702
+    10    1   0.0000   0.1818   0.0000  0.04545  -2.1126E-09 -1.6724E-10  2.1192E-09 -175.474
+    11    1   0.0000   0.2273   0.0000  0.04545  -2.7062E-09 -5.3124E-10  2.7578E-09 -168.894
+    11E   1   0.0000   0.2500   0.0000  0.04545  -3.0727E-09 -6.5603E-10  3.1419E-09 -167.948
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 4.2862E+02 WATTS
+                                           RADIATED POWER= 4.3503E+01 WATTS
+                                           WIRE LOSS     = 3.8512E+02 WATTS
+                                           EFFICIENCY    =  10.15 PERCENT
+
+
+
+                                                - - - RADIATION PATTERNS - - -
+
+  - - ANGLES - -          - POWER GAINS -        - - - POLARIZATION - - -    - - - E(THETA) - - -    - - - E(PHI) - - -
+  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE 
+ DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.               VOLTS     DEGREES       VOLTS     DEGREES
+   90.00     0.00    -999.99   -7.94   -7.94    0.00000   -90.00  LINEAR    0.00000E+00     0.00    6.42686E+01  -106.21
+
+
+
+
+
+
+ ***** INPUT LINE  9  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.001

@@ -741,11 +741,19 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         deck(DIPOLE, "LD 4 1 -3 2 50 0"),
         "already carries a load",
     ),
+    # consecutive LD cards on one segment stack (momwire#1807)
     (
         "ld_double",
         ("nec2", "nec4"),
         deck(DIPOLE, "LD 4 1 4 4 50 0", "LD 0 1 4 4 5"),
-        "already carries a load",
+        "parsed",
+    ),
+    # another card between them: NEC discards the first, this reader refuses
+    (
+        "ld_double_separated",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "LD 4 1 4 4 50 0", "EK", "LD 0 1 4 4 5"),
+        "earlier run of LD cards",
     ),
     (
         "ld_clear_and_restate",

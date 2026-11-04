@@ -449,6 +449,9 @@ Lines loading(const PrintPreamble &p) {
     lines.push_back("");
     add(lines, loading_columns());
     for (const PrintLoadRow &r : p.loads) add(lines, {"", load_row(r)});
+    // `_nec4_printout._LOADED_TWICE` (momwire#1807)
+    if (p.loaded_twice)
+        add(lines, {"", sp(10) + "NOTE: SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE - IMPEDANCES ADDED"});
     return lines;
 }
 
