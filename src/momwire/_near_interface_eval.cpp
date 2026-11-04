@@ -33,8 +33,9 @@ constexpr int SHEET_P = 12;
 constexpr double SHEET_WAVES = 0.7;
 constexpr double SHEET_DEAD = 18.0;
 constexpr double SHEET_ROW_WORTH = 1.0 / 40.0;
-constexpr double SHEET_BUILD_WEIGHT = 0.15;
-constexpr double SHEET_HEIGHT_WEIGHT = 0.15;
+// `_near_interface.py`'s `_SHEET_BUILD_WEIGHT` / `_SHEET_HEIGHT_WEIGHT`.
+constexpr double SHEET_BUILD_WEIGHT = 0.015;
+constexpr double SHEET_HEIGHT_WEIGHT = 0.015;
 constexpr double SHEET_MIN_ROWS = 512;
 constexpr double SHEET_MIN_DEPTH = 1e-3;
 constexpr int64_t CENSUS_CHUNK = 1 << 18;
@@ -61,6 +62,26 @@ const std::vector<double> &gw24() {
     static const std::vector<double> w = [] {
         std::vector<double> a, b;
         mw::razor::leggauss(24, a, b);
+        return b;
+    }();
+    return w;
+}
+
+// The column twin's head and mid rule (`_near_interface.py`'s
+// `_TWIN_GX` / `_TWIN_GW`): 16 points, where the sheets keep 24.
+constexpr int TWIN_NG = 16;
+const std::vector<double> &gx_twin() {
+    static const std::vector<double> x = [] {
+        std::vector<double> a, b;
+        mw::razor::leggauss(TWIN_NG, a, b);
+        return a;
+    }();
+    return x;
+}
+const std::vector<double> &gw_twin() {
+    static const std::vector<double> w = [] {
+        std::vector<double> a, b;
+        mw::razor::leggauss(TWIN_NG, a, b);
         return b;
     }();
     return w;
@@ -787,7 +808,7 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
     std::vector<cd> vals(m * N_KEYS);
     ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc),
                          zs.data(), zps.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P,
-                         DETOUR, ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache,
+                         DETOUR, ev.n_threads, gx_twin().data(), gw_twin().data(), TWIN_NG, ev.cancel_flag, cache,
                          vals.data());
     for (size_t j = 0; j < m; j++)
         for (int k = 0; k < N_KEYS; k++) out[member_order[j]][k] = vals[j * N_KEYS + k];

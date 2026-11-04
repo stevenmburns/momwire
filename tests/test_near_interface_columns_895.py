@@ -404,9 +404,9 @@ def test_g895_10_real_ble_columns_are_a_converged_pair():
 
 
 def test_g895_7c_the_cxx_tail_rule_is_the_frozen_table():
-    """momwire#1595 D2: the C++ twin's tail rays carry their own 16-point
+    """momwire#1595 D2: the C++ twin's tail rays carry their own 12-point
     table (MW_TAIL_GX / MW_TAIL_GW, `_near_interface_columns_inline.h`). It
-    must be the frozen order-16 rule `_column_rule` uses, bit for bit, or the
+    must be the frozen order-12 rule `_column_rule` uses, bit for bit, or the
     exe and the Python walk build different tails and only the twin gates at
     1e-12 would notice."""
     import re
@@ -417,10 +417,10 @@ def test_g895_7c_the_cxx_tail_rule_is_the_frozen_table():
     text = Path(ni.__file__).with_name("_near_interface_columns_inline.h").read_text()
     got = {}
     for name in ("MW_TAIL_GX", "MW_TAIL_GW"):
-        body = re.search(name + r"\[16\] = \{([^}]*)\}", text).group(1)
+        body = re.search(name + r"\[12\] = \{([^}]*)\}", text).group(1)
         got[name] = np.array([float(v) for v in body.split(",")])
-    gx, gw = leggauss(16)
-    assert ni._COLUMN_NG == 16
+    gx, gw = leggauss(12)
+    assert ni._COLUMN_NG == 12
     assert np.array_equal(got["MW_TAIL_GX"], gx)
     assert np.array_equal(got["MW_TAIL_GW"], gw)
     assert np.array_equal(ni._COLUMN_GX, gx) and np.array_equal(ni._COLUMN_GW, gw)

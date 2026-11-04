@@ -471,13 +471,15 @@ static void column_head_mid(double rho, double k_p, const cd &k_m,
 
 }
 
-// The tail rays' 16-point Gauss rule (momwire#1595 D2): the frozen table's
-// order 16 (`_leggauss_table.h`, `_quadrature.leggauss`), digit for digit, so this twin and `_near_interface.py`'s
-// `_COLUMN_GX` / `_COLUMN_GW` build the same nodes. The head and mid keep the
-// caller's 24-point table (the measurement is in `_near_interface.py`).
-static const double MW_TAIL_GX[16] = {-0.9894009349916499, -0.9445750230732326, -0.8656312023878318, -0.755404408355003, -0.6178762444026438, -0.45801677765722737, -0.2816035507792589, -0.09501250983763744, 0.09501250983763744, 0.2816035507792589, 0.45801677765722737, 0.6178762444026438, 0.755404408355003, 0.8656312023878318, 0.9445750230732326, 0.9894009349916499};
-static const double MW_TAIL_GW[16] = {0.027152459411754176, 0.062253523938647456, 0.0951585116824926, 0.12462897125553407, 0.1495959888165767, 0.16915651939500265, 0.18260341504492364, 0.18945061045506864, 0.18945061045506864, 0.18260341504492364, 0.16915651939500265, 0.1495959888165767, 0.12462897125553407, 0.0951585116824926, 0.062253523938647456, 0.027152459411754176};
-static const int MW_TAIL_NG = 16;
+// The tail rays' 12-point Gauss rule (momwire#1595 D2, lowered from 16 in
+// phase 2 of the exe gap plan): the frozen table's order 12
+// (`_leggauss_table.h`, `_quadrature.leggauss`), digit for digit, so this
+// twin and `_near_interface.py`'s `_COLUMN_GX` / `_COLUMN_GW` build the same
+// nodes. The head and mid keep the caller's table (the measurement is in
+// `_near_interface.py`).
+static const double MW_TAIL_GX[12] = {-0.9815606342467192, -0.9041172563704748, -0.7699026741943047, -0.5873179542866175, -0.3678314989981802, -0.1252334085114689, 0.1252334085114689, 0.3678314989981802, 0.5873179542866175, 0.7699026741943047, 0.9041172563704748, 0.9815606342467192};
+static const double MW_TAIL_GW[12] = {0.04717533638651141, 0.10693932599531907, 0.16007832854334642, 0.20316742672306573, 0.2334925365383546, 0.2491470458134027, 0.2491470458134027, 0.2334925365383546, 0.20316742672306573, 0.16007832854334642, 0.10693932599531907, 0.04717533638651141};
+static const int MW_TAIL_NG = 12;
 
 // The tail nodes, appended to s.lam / s.w: rho, s_min and lam_top.
 static void column_tail(double rho, double s_min, double lam_top, int p,
