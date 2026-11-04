@@ -705,6 +705,37 @@ cd py_quot(cd a, cd b) {
     return cd((a.real() * ratio + a.imag()) / denom, (a.imag() * ratio - a.real()) / denom);
 }
 
+// The census of the replays' reads (`somm_replay` / `somm_replay_cls`):
+// every segment centre (the observer rows any replay takes) against the
+// sources, each read's stencil marked; then the marked nodes filled. A census
+// that would cost more than the fill it saves asks every node instead (the
+// eager grid, the same values).
+void somm_census(const Geometry &g, const Somm &sm, const somm_core::Grid &grid) {
+    const std::size_t n_reg = grid.regions.size();
+    std::vector<std::vector<uint8_t>> need(n_reg);
+    somm_proj::NodeMarks marks;
+    marks.n_reg = n_reg;
+    for (std::size_t r = 0; r < n_reg; r++) {
+        need[r].assign(static_cast<std::size_t>(grid.regions[r].n_r * grid.regions[r].n_th), 0);
+        marks.m[r] = need[r].data();
+        marks.nR[r] = static_cast<std::ptrdiff_t>(grid.regions[r].n_r);
+        marks.nTh[r] = static_cast<std::ptrdiff_t>(grid.regions[r].n_th);
+    }
+    const ll M = static_cast<ll>(g.seg_centers.size());
+    const double n_pairs = static_cast<double>(M) * static_cast<double>(sm.n_src);
+    if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(grid))) {
+        std::vector<double> obs(static_cast<std::size_t>(3 * M));
+        for (ll i = 0; i < M; i++)
+            for (int c = 0; c < 3; c++)
+                obs[static_cast<std::size_t>(3 * i + c)] = g.seg_centers[static_cast<std::size_t>(i)][static_cast<std::size_t>(c)];
+        somm_core::field_proj_nodes(*sm.view, static_cast<std::ptrdiff_t>(M), static_cast<std::ptrdiff_t>(sm.n_src),
+                                    obs.data(), sm.srcf.data(), 0.0, marks);
+    } else {
+        need = somm_core::all_nodes_of(grid);
+    }
+    somm_core::ensure_nodes(grid, need);
+}
+
 void somm_prepare(const Front &fr, const nec4::SolverArgs &args, bool cos1, Somm &sm) {
     const Geometry &g = fr.geometry;
     const ll N = g.n_segs;
@@ -759,9 +790,9 @@ void somm_prepare(const Front &fr, const nec4::SolverArgs &args, bool cos1, Somm
             sr[static_cast<std::size_t>(3 * n + c)] = g.seg_r[static_cast<std::size_t>(n)][static_cast<std::size_t>(c)];
         }
     const double r1_max = razor::max_image_distance(sl.data(), sr.data(), static_cast<std::size_t>(N), gz);
+    // The lazy view (momwire#1512): its nodes are filled once the census of
+    // the replay's reads has named them (`somm_census`, after the view).
     const somm_core::Grid &grid = somm_core::get_grid_lazy(sm.eps_t, k, r1_max, fr.omega, kMu);
-    // the eager grid: every node (`get_grid(..., lazy=False)`), the same values
-    somm_core::ensure_nodes(grid, somm_core::all_nodes_of(grid));
     sm.grid = &grid;
     sm.n_reg = grid.regions.size();
     if (sm.n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout this copy does not view");
@@ -786,6 +817,7 @@ void somm_prepare(const Front &fr, const nec4::SolverArgs &args, bool cos1, Somm
         nr, nth));
     const std::vector<cd> far = somm_core::far_pack(grid);
     somm_proj::set_far(*sm.view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    somm_census(g, sm, grid);
 }
 
 // `_replay_sommerfeld_remainder` for observer rows [i0, i1): S (3, M, N)
@@ -807,6 +839,7 @@ std::vector<std::vector<cd>> somm_replay(const Front &fr, const Somm &sm, ll i0,
         std::vector<cd> table(static_cast<std::size_t>(m * sm.n_src));
         somm_core::field_proj_batch(*sm.view, sm.n_reg, m, sm.n_src, obs.data(), tob.data(), sm.srcf.data(),
                                     sm.t_src.data(), 0.0, fr.k, table.data(), 0, true);
+        if (somm_core::lazy_check()) somm_core::check_read(table.data(), table.size(), "sinusoidal sommerfeld remainder");
         // `remainder_shape_reduce(shp_w, table)`: per k numpy's unfused
         // complex product against (w + 0j), added to a +0.0 accumulator
         for (ll i = 0; i < m; i++) {
@@ -1195,8 +1228,9 @@ void somm_prepare_cls(const Front &fr, const nec4::SolverArgs &args, bool cos1, 
             sr[static_cast<std::size_t>(3 * n + c)] = g.seg_r[z][static_cast<std::size_t>(c)];
         }
     const double r1_max = razor::max_image_distance(sl.data(), sr.data(), static_cast<std::size_t>(N), gz);
+    // The lazy view (momwire#1512): its nodes are filled once the census of
+    // the replay's reads has named them (`somm_census`, after the view).
     const somm_core::Grid &grid = somm_core::get_grid_lazy(sm.eps_t, k, r1_max, fr.omega, kMu);
-    somm_core::ensure_nodes(grid, somm_core::all_nodes_of(grid));
     sm.grid = &grid;
     sm.n_reg = grid.regions.size();
     if (sm.n_reg > somm_proj::MAX_REGIONS) decline("a Sommerfeld grid layout this copy does not view");
@@ -1220,6 +1254,7 @@ void somm_prepare_cls(const Front &fr, const nec4::SolverArgs &args, bool cos1, 
         nr, nth));
     const std::vector<cd> far = somm_core::far_pack(grid);
     somm_proj::set_far(*sm.view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    somm_census(g, sm, grid);
 }
 
 // `_replay_sommerfeld_remainder` over the class's sources, for global
@@ -1242,6 +1277,7 @@ std::vector<std::vector<cd>> somm_replay_cls(const Front &fr, const Somm &sm, ll
         std::vector<cd> table(static_cast<std::size_t>(m * sm.n_src));
         somm_core::field_proj_batch(*sm.view, sm.n_reg, m, sm.n_src, obs.data(), tob.data(), sm.srcf.data(),
                                     sm.t_src.data(), 0.0, fr.k, table.data(), 0, true);
+        if (somm_core::lazy_check()) somm_core::check_read(table.data(), table.size(), "sinusoidal sommerfeld remainder");
         for (ll i = 0; i < m; i++) {
             const cd *row = table.data() + i * N * q;
             for (int s = 0; s < 3; s++) {
