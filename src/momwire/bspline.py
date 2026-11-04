@@ -619,6 +619,41 @@ def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
     return _lapack.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
 
 
+# Block edge of `_fortran_in_place`'s swap: two (b, b) complex tiles of
+# scratch, 1 MiB each at 256.
+_TRANSPOSE_BLOCK = 256
+
+
+def _fortran_in_place(Z):
+    """Z's own buffer rearranged so that `Z.T` is the same matrix in
+    Fortran order, which `_lu_solve(overwrite_a=True)` then factors in place
+    (momwire#1798). A C-order Z handed to `lu_factor` is copied to Fortran
+    order first -- a second n_basis^2 matrix at the LU on every dense
+    (C-order) fill. The swap moves values without arithmetic, so the factor
+    and the solve see the bits the copy held. Z itself is consumed: read the
+    returned view, never Z. An F-ordered or non-square Z is returned as is.
+    """
+    n = Z.shape[0]
+    if (
+        Z.ndim != 2
+        or Z.shape[1] != n
+        or Z.flags.f_contiguous
+        or not Z.flags.c_contiguous
+    ):
+        return Z
+    b = _TRANSPOSE_BLOCK
+    for i0 in range(0, n, b):
+        i1 = min(i0 + b, n)
+        D = Z[i0:i1, i0:i1]
+        D[...] = D.T.copy()
+        for j0 in range(i1, n, b):
+            j1 = min(j0 + b, n)
+            t = Z[i0:i1, j0:j1].copy()
+            Z[i0:i1, j0:j1] = Z[j0:j1, i0:i1].T
+            Z[j0:j1, i0:i1] = t.T
+    return Z.T
+
+
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
@@ -3636,7 +3671,7 @@ class BSplineSolver(
         )
 
     def _remainder_pair_correction(
-        self, Q, geom, supp_seg, polys, grid, pairs, restrict=None
+        self, Q, geom, supp_seg, polys, grid, pairs, restrict=None, entries=None
     ):
         """Raise the listed segment pairs of the base-order Q to their own
         orders, in place (momwire#1189).
@@ -3653,6 +3688,11 @@ class BSplineSolver(
         segment is requested are evaluated, in the list's own order, and
         their adds land at each row's position in R -- the same products added
         to the same entries in the same sequence, so the rows stay bitwise.
+
+        `entries` (momwire#1798, `_Z_sommerfeld_remainder_into`): `Q` is
+        instead the 1-D side store of the exempted entries, `entries` their
+        sorted flat indices `m * n_basis + n` (`_remainder_pair_entries`);
+        each add lands at its entry's position there, in the same sequence.
         """
         I, J, Qp = pairs
         row_pos = None
@@ -3742,7 +3782,10 @@ class BSplineSolver(
             rows = np.broadcast_to(m_of[Ic][:, :, None], contrib.shape)
             cols = np.broadcast_to(m_of[Jc][:, None, :], contrib.shape)
             keep = valid[Ic][:, :, None] & valid[Jc][:, None, :]
-            if row_pos is None:
+            if entries is not None:
+                flat = rows[keep] * supp_seg.shape[0] + cols[keep]
+                np.add.at(Q, np.searchsorted(entries, flat), contrib[keep])
+            elif row_pos is None:
                 np.add.at(Q, (rows[keep], cols[keep]), contrib[keep])
             else:
                 r = row_pos[rows[keep]]
@@ -4224,45 +4267,19 @@ class BSplineSolver(
         remainder = ground.remainder()
         if remainder is None:
             return M
-        return M + remainder.evaluate(supp_seg, polys)
+        # `M + Q`, folded into M's own buffer (momwire#1798)
+        return remainder.fold_into(M, +1, supp_seg, polys)
 
     def _somm_grid(self, eps_t, r1_max, lazy=False):
         return _below_interface.somm_grid(
             eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag, lazy=lazy
         )
 
-    def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t, restrict=None):
-        """Galerkin block Q[m,n] = ∫∫ f_m f_n · t_m·F(r, r')·t_n of the
-        smooth Sommerfeld remainder field F (theory manual eqs 143-147:
-        the ground field minus its C2-scaled exact-image part). The EFIE
-        contribution is -Q; `_ground_finite_Z` returns C2-image + Q so the
-        seams' single subtraction lands both terms.
-
-        Field-form, not mixed-potential: F is the total E-field of a unit
-        current element over ground (endpoint charges inherent in the
-        element superposition), interpolated from the four SommerfeldGrid
-        surfaces, combined per source-tangent vertical/horizontal
-        decomposition (eqs 143-147 azimuth factors), projected on the
-        observer tangent, and integrated with the basis polynomials by
-        per-segment Gauss quadrature.
-
-        BOTH paths band the assembly over observer segments so no
-        (d+1)^2 * N^2 moment tensor is ever live (issue #343): the fused
-        kernel bands internally (64 MiB slab), the numpy fallback below
-        assembles each chunk into Q as it goes.
-
-        `restrict` (an `_ObserverRows`, momwire#1131) returns only the
-        `(len(R), n_basis)` rows R it names. On the fused kernel that is its
-        own rectangular form with the requested segments as observers: every
-        observer segment's moment slab is computed independently of the
-        others, and the kernel's banding is order-preserving (see its
-        header), so each row is the square block's row bit for bit. The grid
-        extent and the quadrature orders (the base order and momwire#1189's
-        raised-pair list) are sized from the WHOLE mesh either way; the raised
-        pairs are then applied to the requested rows only
-        (`_remainder_pair_correction`). The numpy fallback fills the square
-        block and slices it.
-        """
+    def _remainder_prep(self, geom, eps_t):
+        """What `_Z_sommerfeld_remainder` and `_Z_sommerfeld_remainder_into`
+        both fill from: the order (and #1189's raised pairs), the quadrature
+        nodes and moment weights, and the grid -- one copy of the code, so the
+        two fills cannot drift apart (momwire#1798)."""
         gz = self.ground_z
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
@@ -4308,6 +4325,43 @@ class BSplineSolver(
         # endpoint pairs.
         r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         grid = self._somm_grid(eps_t, r1_max)
+        return gz, seg_l, seg_r, tang, h, n_seg, d, pairs, q, nodes, W, grid
+
+    def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t, restrict=None):
+        """Galerkin block Q[m,n] = ∫∫ f_m f_n · t_m·F(r, r')·t_n of the
+        smooth Sommerfeld remainder field F (theory manual eqs 143-147:
+        the ground field minus its C2-scaled exact-image part). The EFIE
+        contribution is -Q; `_ground_finite_Z` returns C2-image + Q so the
+        seams' single subtraction lands both terms.
+
+        Field-form, not mixed-potential: F is the total E-field of a unit
+        current element over ground (endpoint charges inherent in the
+        element superposition), interpolated from the four SommerfeldGrid
+        surfaces, combined per source-tangent vertical/horizontal
+        decomposition (eqs 143-147 azimuth factors), projected on the
+        observer tangent, and integrated with the basis polynomials by
+        per-segment Gauss quadrature.
+
+        BOTH paths band the assembly over observer segments so no
+        (d+1)^2 * N^2 moment tensor is ever live (issue #343): the fused
+        kernel bands internally (64 MiB slab), the numpy fallback below
+        assembles each chunk into Q as it goes.
+
+        `restrict` (an `_ObserverRows`, momwire#1131) returns only the
+        `(len(R), n_basis)` rows R it names. On the fused kernel that is its
+        own rectangular form with the requested segments as observers: every
+        observer segment's moment slab is computed independently of the
+        others, and the kernel's banding is order-preserving (see its
+        header), so each row is the square block's row bit for bit. The grid
+        extent and the quadrature orders (the base order and momwire#1189's
+        raised-pair list) are sized from the WHOLE mesh either way; the raised
+        pairs are then applied to the requested rows only
+        (`_remainder_pair_correction`). The numpy fallback fills the square
+        block and slices it.
+        """
+        gz, seg_l, seg_r, tang, h, n_seg, d, pairs, q, nodes, W, grid = (
+            self._remainder_prep(geom, eps_t)
+        )
 
         # Fully-fused C++ path: interpolate + project + moment-quadrature +
         # basis-assemble straight into Q, skipping the Python-side Jf tensor
@@ -4425,6 +4479,99 @@ class BSplineSolver(
         if pairs is not None and pairs[0].size:
             self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
         return Q
+
+    def _Z_sommerfeld_remainder_into(self, T, sign, geom, supp_seg, polys, eps_t):
+        """`T -= Q` (sign -1) or `T += Q` (sign +1) for the dense block
+        `_Z_sommerfeld_remainder` returns, in place, with no n_basis^2 Q
+        held beside T (momwire#1798): on the ELT whip that second matrix was
+        2.5 GB of a 5.0 GB peak.
+
+        The fused kernel's symmetric route forms every entry completely
+        before it lands (a Q entry lives in one tile pair), so it folds each
+        one into T as it finishes: `T[m, n] - Q[m, n]`, componentwise, the
+        subtraction numpy's `Z -= Q` makes. The raised pairs (#1189) are the
+        one wrinkle: the dense route adds their corrections to Q BEFORE the
+        fold, so the entries they touch are exempted from it -- the kernel
+        stores those few on the side, the correction adds to them there in
+        its own order, and they fold last. Every entry of T is therefore the
+        bits the dense route gives it.
+
+        Without the fused kernel this is the dense route itself.
+        """
+        # Both bindings, so a caller that takes the dense kernel away (a test
+        # forcing the numpy route) takes the fold away with it.
+        if not (
+            _acc is not None
+            and hasattr(_acc, "sommerfeld_remainder_bspline_Q")
+            and hasattr(_acc, "sommerfeld_remainder_bspline_Q_into")
+        ):
+            Q = self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+            if sign < 0:
+                T -= Q
+            else:
+                T += Q
+            return T
+        gz, _sl, _sr, tang, _h, n_seg, _d, pairs, _q, nodes, W, grid = (
+            self._remainder_prep(geom, eps_t)
+        )
+        nb = supp_seg.shape[0]
+        raised = pairs is not None and pairs[0].size
+        if raised:
+            E = self._remainder_pair_entries(supp_seg, polys, n_seg, pairs[0], pairs[1])
+        else:
+            E = np.zeros(0, dtype=np.int64)
+        ex_row, ex_col = np.divmod(E, nb)
+        ex_ptr = np.searchsorted(ex_row, np.arange(nb + 1), side="left").astype(
+            np.int64
+        )
+        side = np.zeros(E.size, dtype=np.complex128)
+        _acc.sommerfeld_remainder_bspline_Q_into(
+            np.ascontiguousarray(nodes, dtype=np.float64),
+            np.ascontiguousarray(tang, dtype=np.float64),
+            np.ascontiguousarray(W, dtype=np.float64),
+            np.ascontiguousarray(supp_seg, dtype=np.int64),
+            np.ascontiguousarray(polys, dtype=np.float64),
+            float(gz),
+            float(self.k),
+            *_sommerfeld.grid_cpp_args(grid),
+            T,
+            int(sign),
+            ex_ptr,
+            np.ascontiguousarray(ex_col, dtype=np.int64),
+            side,
+            int(self._cancel_flag),
+            **self._remainder_reuse_args(geom, gz),
+        )
+        if raised:
+            self._remainder_pair_correction(
+                side, geom, supp_seg, polys, grid, pairs, entries=E
+            )
+            if sign < 0:
+                T[ex_row, ex_col] -= side
+            else:
+                T[ex_row, ex_col] += side
+        return T
+
+    def _remainder_pair_entries(self, supp_seg, polys, n_seg, I, J):
+        """Sorted unique flat indices `m * n_basis + n` of every Q entry
+        `_remainder_pair_correction` adds to for the pairs (I, J): the same
+        wing table and the same `keep` mask its scatter uses, so the set is
+        exactly the entries its `np.add.at` names."""
+        nb = supp_seg.shape[0]
+        d1 = self.degree + 1
+        ent = self._segment_wing_table(supp_seg, polys, n_seg)
+        valid = ent >= 0
+        m_of = np.where(valid, ent // d1, 0).astype(np.int64)
+        out = []
+        for c0 in range(0, I.size, _PAIR_SCATTER_CHUNK):
+            c1 = min(c0 + _PAIR_SCATTER_CHUNK, I.size)
+            Ic, Jc = I[c0:c1], J[c0:c1]
+            flat = m_of[Ic][:, :, None] * nb + m_of[Jc][:, None, :]
+            keep = valid[Ic][:, :, None] & valid[Jc][:, None, :]
+            out.append(np.unique(flat[keep]))
+        if not out:
+            return np.zeros(0, dtype=np.int64)
+        return np.unique(np.concatenate(out))
 
     @staticmethod
     def _segment_wing_table(supp_seg, polys, n_seg):
@@ -6264,9 +6411,13 @@ class BSplineSolver(
 
         `overwrite=True` lets LAPACK factor Z in place instead of copying
         it — a full n_basis²-complex saving (2.5 GB at whip-benchmark
-        scale). Callers pass it only where Z is dead after the solve. The
+        scale). Callers pass it only where Z is dead after the solve. A
+        C-order Z is first transposed in its own buffer
+        (`_fortran_in_place`, momwire#1798), so it is consumed either way. The
         locally-built rhs is always overwritten; the caller's `v` never is.
         """
+        if overwrite:
+            Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
             return _lu_solve(Z, v, overwrite_a=overwrite)
         n_b = Z.shape[0]
@@ -6287,6 +6438,8 @@ class BSplineSolver(
         constraint columns. `overwrite` as in `_solve_with_kcl`; the
         caller's V is never overwritten.
         """
+        if overwrite:
+            Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
             return _lu_solve(Z, V, overwrite_a=overwrite)
         n_b, n_p = V.shape
@@ -8037,7 +8190,8 @@ class BSplineSolver(
                 )
                 remainder = ground.remainder()
                 if remainder is not None:
-                    Z -= remainder.evaluate(supp_seg, polys)
+                    # `Z -= Q` with no Q held (momwire#1798)
+                    remainder.fold_into(Z, -1, supp_seg, polys)
             else:
                 J_img = self._build_J_image_blocks(geom, self.k, ground=ground)
                 # In-place subtract (issue #334): `Z = Z - ...` held the

@@ -565,6 +565,14 @@ class Remainder:
             self._geom, supp_seg, polys, self._eps_tilde, restrict=restrict
         )
 
+    def fold_into(self, T, sign, supp_seg, polys):
+        """`T -= evaluate(supp_seg, polys)` (sign -1) or `T += ...` (sign
+        +1), in place and to the same bits, without the n_basis^2 Q
+        (momwire#1798, `_Z_sommerfeld_remainder_into`). Returns T."""
+        return self._solver._Z_sommerfeld_remainder_into(
+            T, sign, self._geom, supp_seg, polys, self._eps_tilde
+        )
+
 
 # The directions `_r1_max_below` bounds the horizontal extent with: the
 # maximum over pairs of |o − e| is at most max_k u_k·(o − e) / cos(π/K) for

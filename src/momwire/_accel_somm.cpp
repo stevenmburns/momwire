@@ -264,6 +264,51 @@ static bool same_array(const py::array_t<T, py::array::c_style | py::array::forc
     return std::memcmp(a.data(), b.data(), sizeof(T) * (size_t)a.size()) == 0;
 }
 
+// Pair reuse (momwire#1809): the symmetric route only. Edge e is the run
+// of segments [edge_seg0[e], edge_seg0[e + 1]) (n_edges + 1 entries);
+// seg_edge (nsI) names each segment's edge or -1; src (n_edges, n_edges) the
+// source ordered pair (sa * n_edges + sb) or -1. `holds` keeps the converted
+// arrays `reuse` points into alive; false (reuse untouched) when src is None.
+struct ReuseArrays {
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> r_seg0;
+    py::array_t<int32_t, py::array::c_style | py::array::forcecast> r_seg_edge, r_src, r_nseg;
+};
+static bool parse_pair_reuse(const py::object &reuse_edge_seg0, const py::object &reuse_seg_edge,
+                             const py::object &reuse_src, py::ssize_t nsI, ReuseArrays &holds,
+                             somm_core::PairReuse &reuse) {
+    using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
+    using I32 = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
+    if (reuse_src.is_none()) return false;
+    I64 &r_seg0 = holds.r_seg0;
+    I32 &r_seg_edge = holds.r_seg_edge, &r_src = holds.r_src, &r_nseg = holds.r_nseg;
+    r_seg0 = I64::ensure(reuse_edge_seg0);
+    r_seg_edge = I32::ensure(reuse_seg_edge);
+    r_src = I32::ensure(reuse_src);
+    if (!r_seg0 || !r_seg_edge || !r_src)
+        throw std::invalid_argument("pair reuse: arrays required");
+    const py::ssize_t E = r_seg0.size() - 1;
+    if (E < 1 || r_seg_edge.size() != nsI || r_src.size() != E * E)
+        throw std::invalid_argument("pair reuse: inconsistent array shapes");
+    const int64_t *s0 = r_seg0.data();
+    r_nseg = I32(E);
+    int32_t *ns = r_nseg.mutable_data();
+    for (py::ssize_t e = 0; e < E; ++e) {
+        if (s0[e] < 0 || s0[e + 1] <= s0[e] || s0[e + 1] > nsI)
+            throw std::invalid_argument("pair reuse: bad edge segment ranges");
+        ns[e] = (int32_t)(s0[e + 1] - s0[e]);
+    }
+    const int32_t *se = r_seg_edge.data();
+    for (py::ssize_t i = 0; i < nsI; ++i)
+        if (se[i] >= 0 && (se[i] >= E || i < s0[se[i]] || i >= s0[se[i] + 1]))
+            throw std::invalid_argument("pair reuse: seg_edge disagrees with edge_seg0");
+    reuse.n_edges = E;
+    reuse.edge_seg0 = s0;
+    reuse.edge_nseg = ns;
+    reuse.seg_edge = se;
+    reuse.src = r_src.data();
+    return true;
+}
+
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_nodes,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tang,
@@ -330,43 +375,11 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         same_array(obs_tang, src_tang) && same_array(W_obs, W_src) &&
         same_array(loc_I, loc_J) && same_array(pI, pJ);
 
-    // Pair reuse (momwire#1809): the symmetric route only. Edge e is the run
-    // of segments [edge_seg0[e], edge_seg0[e + 1]) (n_edges + 1 entries);
-    // seg_edge (nsI) names each segment's edge or -1; src (n_edges,
-    // n_edges) the source ordered pair (sa * n_edges + sb) or -1.
-    using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
-    using I32 = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
-    I64 r_seg0;
-    I32 r_seg_edge, r_src, r_nseg;
+    // Pair reuse (momwire#1809): the symmetric route only (`parse_pair_reuse`).
+    ReuseArrays holds;
     somm_core::PairReuse reuse;
-    const bool use_reuse = symmetric && !reuse_src.is_none();
-    if (use_reuse) {
-        r_seg0 = I64::ensure(reuse_edge_seg0);
-        r_seg_edge = I32::ensure(reuse_seg_edge);
-        r_src = I32::ensure(reuse_src);
-        if (!r_seg0 || !r_seg_edge || !r_src)
-            throw std::invalid_argument("pair reuse: arrays required");
-        const py::ssize_t E = r_seg0.size() - 1;
-        if (E < 1 || r_seg_edge.size() != nsI || r_src.size() != E * E)
-            throw std::invalid_argument("pair reuse: inconsistent array shapes");
-        const int64_t *s0 = r_seg0.data();
-        r_nseg = I32(E);
-        int32_t *ns = r_nseg.mutable_data();
-        for (py::ssize_t e = 0; e < E; ++e) {
-            if (s0[e] < 0 || s0[e + 1] <= s0[e] || s0[e + 1] > nsI)
-                throw std::invalid_argument("pair reuse: bad edge segment ranges");
-            ns[e] = (int32_t)(s0[e + 1] - s0[e]);
-        }
-        const int32_t *se = r_seg_edge.data();
-        for (py::ssize_t i = 0; i < nsI; ++i)
-            if (se[i] >= 0 && (se[i] >= E || i < s0[se[i]] || i >= s0[se[i] + 1]))
-                throw std::invalid_argument("pair reuse: seg_edge disagrees with edge_seg0");
-        reuse.n_edges = E;
-        reuse.edge_seg0 = s0;
-        reuse.edge_nseg = ns;
-        reuse.seg_edge = se;
-        reuse.src = r_src.data();
-    }
+    const bool use_reuse =
+        symmetric && parse_pair_reuse(reuse_edge_seg0, reuse_seg_edge, reuse_src, nsI, holds, reuse);
 
     py::array_t<std::complex<double>> Q({nI, nJ});
     if (symmetric) g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
@@ -386,6 +399,89 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     return Q;
 }
 
+
+// momwire#1798: the dense block's symmetric route with each finished entry
+// folded into `T` (sign -1: T -= Q, +1: T += Q; T complex128, 2-D, any
+// strides, written in place), so no n_basis^2 Q is held beside it. Entries
+// named by the row-CSR exemption (`ex_ptr` (nb + 1), `ex_col`) go to
+// `side[pos]` instead, left out of T. Same entries, same bits, as
+// `sommerfeld_remainder_bspline_Q`'s symmetric route.
+static void sommerfeld_remainder_bspline_Q_into(
+    py::array_t<double, py::array::c_style | py::array::forcecast> nodes,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tang,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> loc,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    double ground_z, double k, double r1_max, double r_break, double th_split,
+    double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
+    py::array T, int sign,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_ptr,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_col,
+    py::array side, uintptr_t cancel_flag = 0, py::object reuse_edge_seg0 = py::none(),
+    py::object reuse_seg_edge = py::none(), py::object reuse_src = py::none()) {
+    using somm_proj::cd;
+    if (nodes.ndim() != 3 || nodes.shape(2) != 3)
+        throw std::runtime_error("nodes must be (n_seg, q, 3)");
+    const py::ssize_t ns = nodes.shape(0), q = nodes.shape(1);
+    const int d1 = (int)W.shape(0);
+    const py::ssize_t nb = loc.shape(0);
+    if (tang.shape(0) != ns || W.shape(1) != ns || W.shape(2) != q || loc.shape(1) != d1 ||
+        polys.shape(0) != nb || polys.shape(1) != d1 || polys.shape(2) != d1)
+        throw std::runtime_error("nodes/tang/W/loc/polys inconsistent");
+    // T and side are written in place: never a converted copy
+    if (!T.dtype().is(py::dtype::of<cd>()) || T.ndim() != 2 || T.shape(0) != nb ||
+        T.shape(1) != nb || !T.writeable())
+        throw std::runtime_error("T must be a writeable (nb, nb) complex128 array");
+    if (T.strides(0) % (py::ssize_t)sizeof(cd) || T.strides(1) % (py::ssize_t)sizeof(cd))
+        throw std::runtime_error("T's strides must be whole elements");
+    if (sign != -1 && sign != 1) throw std::runtime_error("sign must be -1 or +1");
+    if (ex_ptr.ndim() != 1 || ex_ptr.shape(0) != nb + 1)
+        throw std::runtime_error("ex_ptr must be (nb + 1,)");
+    const int64_t n_ex = ex_ptr.data()[nb];
+    if (ex_col.shape(0) != n_ex)
+        throw std::runtime_error("ex_col must hold ex_ptr[-1] entries");
+    if (!side.dtype().is(py::dtype::of<cd>()) || side.ndim() != 1 ||
+        side.shape(0) != n_ex || !side.writeable() ||
+        (n_ex > 1 && side.strides(0) != (py::ssize_t)sizeof(cd)))
+        throw std::runtime_error("side must be a writeable contiguous (n_ex,) complex128 array");
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
+    somm_proj::set_far(G, far);
+    somm_core::RemainderSink K;
+    K.T = static_cast<cd *>(T.mutable_data());
+    K.rs = T.strides(0) / (py::ssize_t)sizeof(cd);
+    K.cs = T.strides(1) / (py::ssize_t)sizeof(cd);
+    K.fold = sign;
+    if (n_ex > 0) {
+        K.ex_ptr = ex_ptr.data();
+        K.ex_col = ex_col.data();
+        K.side = static_cast<cd *>(side.mutable_data());
+    }
+    ReuseArrays holds;
+    somm_core::PairReuse reuse;
+    const bool use_reuse =
+        parse_pair_reuse(reuse_edge_seg0, reuse_seg_edge, reuse_src, ns, holds, reuse);
+    g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
+    const double *nd = nodes.data(), *tg = tang.data(), *w = W.data(), *pl = polys.data();
+    const int64_t *lc = loc.data();
+    {
+        py::gil_scoped_release release;
+        somm_core::remainder_bspline_Q_sink(G, ground_z, k, nd, tg, w, ns, q, d1, lc, pl, nb, 0, K,
+                                            cancel_flag, use_reuse ? &reuse : nullptr);
+    }
+    if (use_reuse)
+        g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
+}
 
 // momwire#1752 K2: many `sommerfeld_remainder_bspline_Q` calls of one shape
 // in one: the keyed remainder runs of `_remainder_pair_correction`, each one
@@ -628,6 +724,20 @@ void register_somm(py::module_ &m) {
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
           py::arg("reference") = false, py::arg("reuse_edge_seg0") = py::none(),
+          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none());
+    m.def("sommerfeld_remainder_bspline_Q_into", &sommerfeld_remainder_bspline_Q_into,
+          "The dense block's symmetric route folded straight into T "
+          "(sign -1: T -= Q, +1: T += Q) with no Q held; entries in the "
+          "row-CSR exemption go to `side` instead (momwire#1798). The same "
+          "entries, to the bit, as sommerfeld_remainder_bspline_Q, the "
+          "pair-reuse map included (momwire#1809).",
+          py::arg("nodes"), py::arg("tang"), py::arg("W"), py::arg("loc"),
+          py::arg("polys"), py::arg("ground_z"), py::arg("k"),
+          py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"), py::arg("T"),
+          py::arg("sign"), py::arg("ex_ptr"), py::arg("ex_col"), py::arg("side"),
+          py::arg("cancel_flag") = 0, py::arg("reuse_edge_seg0") = py::none(),
           py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none());
     m.def("remainder_q_symmetric_calls",
           []() { return g_remainder_symmetric_calls.load(); },

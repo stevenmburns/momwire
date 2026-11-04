@@ -3113,7 +3113,10 @@ void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const ne
 
 // `_remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)` on the
 // graded route: Q += P (Jf_graded - Jf_base) P over each pair's wings
-void remainder_pair_correction(std::vector<cdouble> &Qm, const Geometry &g, const Basis &b, double gz, double k,
+// `at(m, n)` is the entry the add lands on: Q's own (the dense route) or the
+// side store of an exempted entry (momwire#1798).
+template <class At>
+void remainder_pair_correction(At &&at, const Geometry &g, const Basis &b, double gz, double k,
                                const somm_proj::GridView &view, const somm_core::Grid &grid,
                                const std::vector<int64_t> &I, const std::vector<int64_t> &J,
                                const std::vector<int64_t> &Qp, int64_t base, const nec5::NumpyLinalg &np) {
@@ -3246,7 +3249,7 @@ void remainder_pair_correction(std::vector<cdouble> &Qm, const Geometry &g, cons
             for (size_t u = 0; u < W; u++)
                 for (size_t v = 0; v < W; v++) {
                     if (u >= wi.size() || v >= wj.size()) continue;  // keep: both wings real
-                    cdouble &qq = Qm[static_cast<size_t>(m_of(si, u) * n_basis + m_of(sj, v))];
+                    cdouble &qq = at(m_of(si, u), m_of(sj, v));
                     qq = nec5::replay::c_add(qq, out[u * W + v]);
                 }
         }
@@ -3299,12 +3302,57 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
     // `_remainder_qp_pairs`: the pairs raised above the base order
     std::vector<int64_t> pI, pJ, pQ;
     remainder_raised_pairs(g, ground_z, n_qp_sommerfeld, np, pI, pJ, pQ);
-    std::vector<cdouble> Q(static_cast<size_t>(n_basis * n_basis));
-    somm_core::remainder_bspline_Q(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, nodes.data(),
-                                   g.tangents.data(), W.data(), N, q, nd, b.supp_seg.data(), b.polys.data(),
-                                   n_basis, b.supp_seg.data(), b.polys.data(), n_basis, true, 0, Q.data(), 0);
-    if (!pI.empty()) remainder_pair_correction(Q, g, b, ground_z, k, view, G0, pI, pJ, pQ, n_qp_sommerfeld, np);
-    for (size_t t = 0; t < Z.size(); t++) Z[t] = cdouble(Z[t].real() - Q[t].real(), Z[t].imag() - Q[t].imag());
+    // `remainder.fold_into(Z, -1, ...)` (momwire#1798): each finished Q entry
+    // is subtracted from Z as the symmetric route forms it, so no n_basis^2 Q
+    // is held beside Z. The entries the raised pairs add to are exempted
+    // (`_remainder_pair_entries`): stored on the side, corrected there in the
+    // correction's own order, and subtracted last, which is `Z -= Q` after
+    // `Q += corrections` entry for entry.
+    std::vector<int64_t> ex;
+    if (!pI.empty()) {
+        // `_segment_wing_table`: per segment its real wings (flat basis*d1+wing)
+        std::vector<std::vector<int64_t>> wings(static_cast<size_t>(N));
+        for (int64_t m = 0; m < n_basis; m++)
+            for (int a = 0; a < nd; a++) {
+                bool real = false;
+                for (int p = 0; p < nd; p++) real = real || b.polys[static_cast<size_t>((m * nd + a) * nd + p)] != 0.0;
+                if (real) wings[static_cast<size_t>(b.supp_seg[static_cast<size_t>(m * nd + a)])].push_back(m * nd + a);
+            }
+        for (size_t t = 0; t < pI.size(); t++)
+            for (const int64_t u : wings[static_cast<size_t>(pI[t])])
+                for (const int64_t v : wings[static_cast<size_t>(pJ[t])]) ex.push_back((u / nd) * n_basis + v / nd);
+        std::sort(ex.begin(), ex.end());
+        ex.erase(std::unique(ex.begin(), ex.end()), ex.end());
+    }
+    std::vector<int64_t> ex_ptr(static_cast<size_t>(n_basis + 1), 0), ex_col(ex.size());
+    for (size_t t = 0; t < ex.size(); t++) {
+        ex_ptr[static_cast<size_t>(ex[t] / n_basis) + 1]++;
+        ex_col[t] = ex[t] % n_basis;
+    }
+    for (int64_t m = 0; m < n_basis; m++) ex_ptr[static_cast<size_t>(m + 1)] += ex_ptr[static_cast<size_t>(m)];
+    std::vector<cdouble> side(ex.size(), cdouble(0.0, 0.0));
+    somm_core::RemainderSink sink;
+    sink.T = Z.data();
+    sink.rs = static_cast<std::ptrdiff_t>(n_basis);
+    sink.fold = -1;
+    if (!ex.empty()) {
+        sink.ex_ptr = ex_ptr.data();
+        sink.ex_col = ex_col.data();
+        sink.side = side.data();
+    }
+    somm_core::remainder_bspline_Q_sink(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, q, nd,
+                                        b.supp_seg.data(), b.polys.data(), n_basis, 0, sink, 0);
+    if (!pI.empty()) {
+        const auto at = [&](int64_t m, int64_t n) -> cdouble & {
+            const int64_t f = m * n_basis + n;
+            return side[static_cast<size_t>(std::lower_bound(ex.begin(), ex.end(), f) - ex.begin())];
+        };
+        remainder_pair_correction(at, g, b, ground_z, k, view, G0, pI, pJ, pQ, n_qp_sommerfeld, np);
+    }
+    for (size_t t = 0; t < ex.size(); t++) {
+        cdouble &z = Z[static_cast<size_t>(ex[t])];
+        z = cdouble(z.real() - side[t].real(), z.imag() - side[t].imag());
+    }
 }
 
 void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,

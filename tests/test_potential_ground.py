@@ -515,12 +515,22 @@ def test_one_ground_per_fill_and_the_remainder_only_composes(monkeypatch):
         calls["remainder"] += 1
         return real_eval(self, *a, **kw)
 
+    # momwire#1798: the dense fill folds the remainder into Z
+    # (`Remainder.fold_into`) rather than evaluating it beside Z; either is
+    # the one remainder evaluation counted here.
+    real_fold = _potential_ground.Remainder.fold_into
+
+    def spy_fold(self, *a, **kw):
+        calls["remainder"] += 1
+        return real_fold(self, *a, **kw)
+
     monkeypatch.setattr(_potential_ground, "potential_ground_for", spy_factory)
     monkeypatch.setattr(
         _potential_ground.PotentialGround, "weight_windows", spy_windows
     )
     monkeypatch.setattr(_potential_ground.PotentialGround, "weight_tables", spy_tables)
     monkeypatch.setattr(_potential_ground.Remainder, "evaluate", spy_eval)
+    monkeypatch.setattr(_potential_ground.Remainder, "fold_into", spy_fold)
 
     for ground in ("free", "pec", "refl-coef", "sommerfeld"):
         for key in calls:
