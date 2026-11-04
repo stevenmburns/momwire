@@ -126,7 +126,9 @@ concurrency:
 jobs:
   linux-artifact:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # ~40 min with the OpenBLAS cache warm; a cache miss builds both archives
+    # (build_openblas.sh: numpy's and SciPy's, momwire#1751) first
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       # The manylinux image's OpenBLAS (its own compiler): keyed apart from
