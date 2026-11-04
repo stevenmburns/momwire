@@ -643,9 +643,9 @@ def test_the_mixed_decks_print_as_python_on_the_nec42_sinusoidal(driver, monkeyp
     crossing junction through the point-matched lane in C++ alone -- the
     stitched basis, the two transmitted pair classes over the table
     `_somm_transmitted_core` fills, the class blocks -- byte for byte as
-    `_nec4.render(text, basis="sinusoidal")` prints them. Two decline by
-    name: two radii (the class kernels read one) and a near field over a
-    buried wire."""
+    `_nec4.render(text, basis="sinusoidal")` prints them. One declines by
+    name: two radii (the class kernels read one). A near field over a buried
+    wire is refused in Python's words, and that refusal prints as Python's."""
     monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
     decks = sorted(
         (ROOT / "tests" / "fixtures" / "transmitted_mixed").glob("*.nec")
@@ -657,7 +657,7 @@ def test_the_mixed_decks_print_as_python_on_the_nec42_sinusoidal(driver, monkeyp
         / "probes"
         / "p9_above_and_buried_gn2.nec"
     ]
-    assert _nec42_sinusoidal_printouts(driver, decks) == len(decks) - 2
+    assert _nec42_sinusoidal_printouts(driver, decks) == len(decks) - 1
 
 
 def _nec42_sinusoidal_printouts(driver, decks, basis="sinusoidal") -> int:
