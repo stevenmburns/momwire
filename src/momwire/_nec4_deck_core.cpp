@@ -1201,6 +1201,7 @@ class Parser {
     std::vector<ll> live_;
     std::set<Pair> loaded_;
     std::map<Pair, LoadSpec> load_spec_at_;
+    std::set<Pair> ld_run_;  // `_ld_run` (momwire#1807)
     MaterialState materials_;
     std::map<ll, std::pair<double, double>> wire_insulation_;  // (radius, eps_r)
 
@@ -1457,6 +1458,7 @@ class Parser {
             live_.clear();
             loaded_.clear();
             load_spec_at_.clear();
+            ld_run_.clear();
             materials_ = MaterialState();
             return;
         }
@@ -1481,15 +1483,27 @@ class Parser {
                        " segments expand into per-segment loads");
         LoadSpec spec;
         if (!load_spec(ldtyp, card, spec)) return;
+        std::set<Pair> this_card;
         for (const Pair &p : cell_rule(pairs, &spec)) {
             const Structure &s2 = structure();
             Pair key = s2.element_of(p.first, p.second);
-            if (loaded_.count(key))
+            if (!this_card.insert(key).second)
                 deck_error(
                     "LD on a segment that already carries a load is not supported by this engine — a "
                     "second load on one segment is not merged");
-            loaded_.insert(key);
-            load_spec_at_[key] = spec;
+            if (ld_run_.count(key)) {
+                // stacked in one run of LD cards: both stay in force
+                load_spec_at_.erase(key);
+            } else if (loaded_.count(key)) {
+                deck_error(
+                    "LD on a segment that already carries a load from an earlier run of LD cards is not "
+                    "supported by this engine — NEC discards loads when another card separates two LD "
+                    "cards, and adds them only when the LD cards are consecutive");
+            } else {
+                loaded_.insert(key);
+                ld_run_.insert(key);
+                load_spec_at_[key] = spec;
+            }
             std::pair<ll, double> ra = s2.resolve_of(p.first, p.second);
             LogEntry entry{key.first, ra.second, spec};
             ll index = -1;
@@ -1780,6 +1794,8 @@ class Parser {
 
     void card(const Card &card) {
         const std::string &m = card.mnemonic;
+        // `_ld_run` (momwire#1807): any other card ends the run of LD cards
+        if (m != "LD") ld_run_.clear();
         if (m == "CM" || m == "CE") {
             std::string text = card.text();
             comments_.push_back(nec5::latin1_to_utf8(text));

@@ -268,6 +268,9 @@ class Preamble:
     # The Sommerfeld-table file a ``GN 2`` card names (momwire#1317), which
     # this engine never opens; ``None`` when the card names none.
     ground_file: str | None = None
+    # Whether two lumped loads in force share a segment (momwire#1807):
+    # NEC-4.2 then closes the table with its "LOADED TWICE" note.
+    loaded_twice: bool = False
 
 
 @dataclass(frozen=True)
@@ -634,7 +637,18 @@ def _loading(data: Preamble) -> list[str]:
     lines += ["", *_printout._LOADING_COLUMNS]
     for row in data.loads:
         lines += ["", _load_row(row)]
+    if data.loaded_twice:
+        lines += ["", _LOADED_TWICE]
     return lines
+
+
+# NEC-4.2's closing note when a segment carries two loads (momwire#1807),
+# measured on the licensed release build: one blank line after the last row,
+# then this line, and the table's usual trailing blanks.
+_LOADED_TWICE = (
+    " " * 10
+    + "NOTE: SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE - IMPEDANCES ADDED"
+)
 
 
 def _network_data(data: Nec4Run) -> list[str]:

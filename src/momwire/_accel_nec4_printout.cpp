@@ -196,6 +196,7 @@ PrintRun run(const py::handle &h) {
             py::object file = at(pre, "ground_file");
             p.has_ground_file = !none(file);
             if (p.has_ground_file) p.ground_file = st(file);
+            p.loaded_twice = py::cast<bool>(at(pre, "loaded_twice"));
         }
         for (const py::handle &n : at(h, "networks")) r.networks.push_back(network_row(n));
         for (const py::handle &n : at(h, "network_excitation")) r.network_excitation.push_back(port_row(n));

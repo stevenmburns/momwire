@@ -293,8 +293,9 @@ class _Nec2Parser:
 
         # LD / IS (spec ``#ld--loading`` / ``#is--insulated-sheath``).
         # `_load_log` / `_live` (below) are the per-segment port loads (types
-        # 0, 1, 4); `_loaded` is their (model wire, element) dedup set, so a
-        # second load on one segment refuses rather than merges.  `LD -1`
+        # 0, 1, 4); `_loaded` is their (model wire, element) set, so a
+        # second load on one segment refuses unless it stacks within one
+        # run of LD cards (`_ld_run`, momwire#1807).  `LD -1`
         # clears `_live` and `_loaded`, and also the LD-family conductivity
         # state (type 5 is read under the LD mnemonic too) — but never
         # `_wire_insulation`, which is IS's own card and a wire property, not
@@ -319,8 +320,19 @@ class _Nec2Parser:
         # test (momwire#471). `_loaded` answers "is this taken", which the
         # double-load refusal needs; this answers "taken by WHAT", which
         # deciding whether a copy-addressed card is a redundant restatement
-        # or a genuine disagreement needs. Same keys, cleared together.
+        # or a genuine disagreement needs. Same keys, cleared together,
+        # except that an element carrying a stacked pair (momwire#1807) has
+        # no single spec and is absent here.
         self._load_spec_at: dict[tuple[int, int], LoadSpec] = {}
+        # The elements loaded by the CURRENT unbroken run of LD cards
+        # (momwire#1807).  A second lumped load on one of them is served:
+        # NEC-4.2 and nec2c both add the two impedances (an R of 10 and of
+        # 20 ohm answer as one of 30, to every printed digit) and print the
+        # "LOADED TWICE - IMPEDANCES ADDED" note.  Any other card between
+        # the two LDs empties this set, because both engines then DISCARD
+        # the first card's loads (10 ohm, FR, 20 ohm answers as 20 alone)
+        # rather than add them, and this reader keeps refusing that shape.
+        self._ld_run: set[tuple[int, int]] = set()
         self._global_conductivity: float | None = None
         self._wire_conductivity: dict[int, float] = {}
         self._wire_insulation: dict[int, tuple[float, float]] = {}
@@ -568,6 +580,7 @@ class _Nec2Parser:
             self._live = []
             self._loaded = set()
             self._load_spec_at = {}
+            self._ld_run = set()
             self._global_conductivity = None
             self._wire_conductivity = {}
             self._global_distributed = None
@@ -609,17 +622,41 @@ class _Nec2Parser:
         # byte-identical to omitting the card is not refused for a rule it
         # cannot trip — and after the expansion limit, which counts the card
         # AS WRITTEN (see `_LD_EXPAND_MAX`).
+        this_card: set[tuple[int, int]] = set()
         for wire, seg in self._cell_rule(pairs, spec):
             piece_index, elem = self.structure.element_of(wire, seg)
             key = (piece_index, elem)
-            if key in self._loaded:
+            if key in this_card:
+                # One card reaching one element twice (a range whose
+                # addresses resolve onto the same segment, such as a
+                # negative FROM) is not a stack: NEC-4.2 prints ONE load
+                # row and a different antenna for such a card (momwire#1807,
+                # the momwire#1300 junction decks), so it keeps the refusal
+                # it always had.
                 raise DeckError(
                     "LD on a segment that already carries a load is not "
                     "supported by this engine — a second load on one "
                     "segment is not merged"
                 )
-            self._loaded.add(key)
-            self._load_spec_at[key] = spec
+            this_card.add(key)
+            if key in self._ld_run:
+                # Stacked in one run of LD cards (momwire#1807): both loads
+                # stay in force and the port algebra adds them.  The element
+                # no longer carries ONE spec, so no copy-addressed card can
+                # be a restatement of it (`_restates_the_replication`).
+                self._load_spec_at.pop(key, None)
+            elif key in self._loaded:
+                raise DeckError(
+                    "LD on a segment that already carries a load from an "
+                    "earlier run of LD cards is not supported by this engine "
+                    "— NEC discards loads when another card separates two "
+                    "LD cards, and adds them only when the LD cards are "
+                    "consecutive"
+                )
+            else:
+                self._loaded.add(key)
+                self._ld_run.add(key)
+                self._load_spec_at[key] = spec
             _, arclength = self.structure.resolve_of(wire, seg)
             entry = (piece_index, arclength, spec)
             if entry in self._load_log:
@@ -1123,6 +1160,10 @@ class _Nec2Parser:
         _ = self.structure
 
     def card(self, card: Card) -> None:
+        if card.mnemonic != "LD":
+            # Any other card, a comment included, ends the run of LD cards
+            # a stacked load may join (momwire#1807, see `_ld_run`).
+            self._ld_run = set()
         if card.mnemonic in ("CM", "CE"):
             text = card.text
             self.comments.append(text)

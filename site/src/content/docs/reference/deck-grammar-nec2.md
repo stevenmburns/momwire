@@ -631,7 +631,10 @@ that has no width. So `LD 4 1 1 8 ...` under a `GR 1 4` serves as thirty-two
 loads, and it is the ninth *typed* segment that refuses. The
 [doubled-load refusal](#ld--loading) is unaffected in the other direction:
 replication widens the "already loaded" set rather than weakening it, so a
-deck that genuinely loads one cell segment through two cards still refuses.
+deck that loads one cell segment through two cards separated by another card
+still refuses, and two consecutive cell cards on one segment stack on every
+copy (nec2c and NEC-4.2 print a `GR 1 4` deck with `LD 4` 50 Ω and `LD 0`
+10 Ω on one cell segment exactly as the deck with one `LD 4` of 60 Ω).
 
 **`EX` is exempt.** Excitation is the right-hand side, not the operator, and
 an asymmetric drive is exact under symmetry decomposition (even/odd for a
@@ -1006,6 +1009,17 @@ outside the solver, so a loaded segment costs a gap in the fill and nothing
 else. A range wider than **8 segments** is refused rather than silently
 truncated.
 
+**Two loads on one segment** (momwire#1807) are served when the cards are
+**consecutive**: both stay in force and their impedances add, which is what
+nec2c and NEC-4.2 both do (10 Ω and 20 Ω series R print the 30 Ω deck's
+input impedance to every digit), and the loading table lists each card and
+closes with nec2c's `NOTE, SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE
+- IMPEDANCES ADDED`. A card written twice counts twice. When any other card
+separates two `LD` cards, both engines instead **discard** the earlier
+card's loads, and this dialect carries loads across such a card rather than
+discarding them, so a second load on a segment loaded by an earlier run of
+`LD` cards is refused.
+
 **Type 5** is a material property, not a lumped element. The whole-structure
 form (`I2 = 0`, `I3 = 0`) sets the conductivity of every wire; a ranged form
 sets it per wire, and the range must cover each touched wire **in full** —
@@ -1045,7 +1059,7 @@ LD type <t> is not supported by this engine
 LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads
 LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only
 LD 2 per-unit-length loading on a partial-wire segment range is not supported by this engine — a distributed RLC is a wire property and covers whole wires only
-LD on a segment that already carries a load is not supported by this engine — a second load on one segment is not merged
+LD on a segment that already carries a load from an earlier run of LD cards is not supported by this engine — NEC discards loads when another card separates two LD cards, and adds them only when the LD cards are consecutive
 ```
 
 While a [`GX`/`GR` symmetric cell](#the-symmetric-cell) is live, an `LD` is
@@ -1628,7 +1642,7 @@ unrecognised NEC card '<XX>'
 | `LD` | `I1 ∈ {2, 3, 6, 7}` or unknown | `LD type <t> is not supported by this engine` |
 | `LD` | range > 8 segments | `LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads` |
 | `LD 5` | partial-wire range | `LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only` |
-| `LD` | segment already loaded | `LD on a segment that already carries a load is not supported by this engine — a second load on one segment is not merged` |
+| `LD` | segment loaded by an earlier run of `LD` cards | `LD on a segment that already carries a load from an earlier run of LD cards is not supported by this engine — NEC discards loads when another card separates two LD cards, and adds them only when the LD cards are consecutive` |
 | `IS` | after an execute card | `IS after an execute request is not supported by this engine: wire insulation is part of the structure, so it cannot change between runs` |
 | `IS` | `F2 ≠ 0` | `IS with a conductive sheath (F2 != 0) is not modelled by this engine — the insulation jacket is a lossless dielectric; set the sheath conductivity to 0` |
 | `IS` | partial-wire range | `IS: insulation on a partial-wire segment range — per-wire specs cover whole wires only` |
@@ -1683,7 +1697,7 @@ anyone moving a deck between them:
 | `EX` edge form | recognises NEC-5's segment-end source (negative segment, or `I4 = 2`) and imports it as a vertex port | refused as a non-zero excitation type; the seam for it is the model's `node_gaps`, reserved for a NEC-5 dialect |
 | `EX` duplicates | a segment driven twice is an error | the port set is a union over groups, so one segment may be driven in several groups |
 | `LD 6` / `LD 7` | translated (LC trap, insulated wire) | refused |
-| `LD` over long ranges, doubled loads, partial-wire `LD 5` | skipped, with a note in an "ignored" list | refused |
+| `LD` over long ranges, doubled loads, partial-wire `LD 5` | skipped, with a note in an "ignored" list | refused, except two consecutive `LD` cards on one segment, which [add](#ld--loading) as NEC adds them (momwire#1807) |
 | unmodellable `IS` | skipped, with a note | refused |
 | `SY` | 4nec2 symbolic variables are evaluated | refused |
 | `'` comments | a leading apostrophe comments out a line; an inline one truncates it | not recognised — an apostrophe is a mnemonic error |

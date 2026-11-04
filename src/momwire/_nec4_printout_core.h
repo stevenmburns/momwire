@@ -139,6 +139,7 @@ struct PrintPreamble {
     double fill_seconds = 0, factor_seconds = 0;
     bool has_ground_file = false;
     std::string ground_file;  // UTF-8
+    bool loaded_twice = false;  // two lumped loads share a segment (momwire#1807)
 };
 
 struct PrintRun {  // Nec4Run | Nec4Report

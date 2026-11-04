@@ -1,0 +1,122 @@
+
+
+
+                               __________________________________________
+                              |                                          |
+                              |  NUMERICAL ELECTROMAGNETICS CODE (nec2c) |
+                              |   Translated to 'C' in Double Precision  |
+                              |__________________________________________|
+
+
+
+                               ---------------- COMMENTS ----------------
+                               momwire#1807: the same segment carrying one 30 ohm series R, NEC-2
+                              
+
+
+
+                               -------- STRUCTURE SPECIFICATION --------
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+  WIRE                                                                                 SEG FIRST  LAST  TAG
+   No:        X1         Y1         Z1         X2         Y2         Z2       RADIUS   No:   SEG   SEG  No:
+     1     0.00000   -0.25000    0.00000    0.00000    0.25000    0.00000    0.00050    11     1    11    1
+
+     TOTAL SEGMENTS USED: 11   SEGMENTS IN A SYMMETRIC CELL: 11   SYMMETRY FLAG: 0
+
+
+                               ---------- SEGMENTATION DATA ----------
+                                        COORDINATES IN METERS
+                            I+ AND I- INDICATE THE SEGMENTS BEFORE AND AFTER I
+
+   SEG    COORDINATES OF SEGM CENTER     SEGM    ORIENTATION ANGLES    WIRE    CONNECTION DATA   TAG
+   No:       X         Y         Z      LENGTH     ALPHA      BETA    RADIUS    I-     I    I+   No:
+     1    0.0000   -0.2273    0.0000    0.0455    0.0000   90.0000    0.0005     0     1     2     1
+     2    0.0000   -0.1818    0.0000    0.0455    0.0000   90.0000    0.0005     1     2     3     1
+     3    0.0000   -0.1364    0.0000    0.0455    0.0000   90.0000    0.0005     2     3     4     1
+     4    0.0000   -0.0909    0.0000    0.0455    0.0000   90.0000    0.0005     3     4     5     1
+     5    0.0000   -0.0455    0.0000    0.0455    0.0000   90.0000    0.0005     4     5     6     1
+     6    0.0000    0.0000    0.0000    0.0455    0.0000   90.0000    0.0005     5     6     7     1
+     7    0.0000    0.0455    0.0000    0.0455    0.0000   90.0000    0.0005     6     7     8     1
+     8    0.0000    0.0909    0.0000    0.0455    0.0000   90.0000    0.0005     7     8     9     1
+     9    0.0000    0.1364    0.0000    0.0455    0.0000   90.0000    0.0005     8     9    10     1
+    10    0.0000    0.1818    0.0000    0.0455    0.0000   90.0000    0.0005     9    10    11     1
+    11    0.0000    0.2273    0.0000    0.0455    0.0000   90.0000    0.0005    10    11     0     1
+
+
+
+  DATA CARD No:   1 LD   0     1     8     8  3.00000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   2 FR   0     1     0     0  2.99793E+02  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   3 GN  -1     0     0     0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   4 EX   0     1     6     0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   5 RP   0     1     1  1000  9.00000E+01  0.00000E+00  0.00000E+00  1.00000E+00  0.00000E+00  0.00000E+00
+
+
+                               --------- FREQUENCY --------
+                                FREQUENCY : 2.9979E+02 MHz
+                                WAVELENGTH: 1.0000E+00 Mtr
+
+                        APPROXIMATE INTEGRATION EMPLOYED FOR SEGMENTS 
+                        THAT ARE MORE THAN 1.000 WAVELENGTHS APART
+
+
+                          ------ STRUCTURE IMPEDANCE LOADING ------
+  LOCATION        RESISTANCE  INDUCTANCE  CAPACITANCE     IMPEDANCE (OHMS)   CONDUCTIVITY  CIRCUIT
+  ITAG FROM THRU     OHMS       HENRYS      FARADS       REAL     IMAGINARY   MHOS/METER      TYPE
+     1    8    8  3.0000E+01                                                                SERIES 
+
+
+                            -------- ANTENNA ENVIRONMENT --------
+                            FREE SPACE
+
+
+                             ---------- MATRIX TIMING ----------
+                               FILL: 0 msec  FACTOR: 0 msec
+
+
+                        --------- ANTENNA INPUT PARAMETERS ---------
+  TAG   SEG       VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)     POWER
+  No:   No:     REAL      IMAGINARY     REAL      IMAGINARY     REAL      IMAGINARY    REAL       IMAGINARY   (WATTS)
+    1     6  1.0000E+00  0.0000E+00  8.2001E-03 -3.3252E-03  1.0473E+02  4.2468E+01  8.2001E-03 -3.3252E-03  4.1001E-03
+
+
+                           -------- CURRENTS AND LOCATION --------
+                                  DISTANCES IN WAVELENGTHS
+
+   SEG  TAG    COORDINATES OF SEGM CENTER     SEGM    ------------- CURRENT (AMPS) -------------
+   No:  No:       X         Y         Z      LENGTH     REAL      IMAGINARY    MAGN        PHASE
+     1    1    0.0000   -0.2273    0.0000   0.04545  1.4113E-03 -7.5599E-04  1.6010E-03  -28.177
+     2    1    0.0000   -0.1818    0.0000   0.04545  3.7266E-03 -1.9279E-03  4.1958E-03  -27.354
+     3    1    0.0000   -0.1364    0.0000   0.04545  5.6188E-03 -2.7887E-03  6.2728E-03  -26.396
+     4    1    0.0000   -0.0909    0.0000   0.04545  7.0482E-03 -3.3209E-03  7.7914E-03  -25.229
+     5    1    0.0000   -0.0455    0.0000   0.04545  7.9283E-03 -3.4725E-03  8.6554E-03  -23.653
+     6    1    0.0000    0.0000    0.0000   0.04545  8.2001E-03 -3.3252E-03  8.8487E-03  -22.073
+     7    1    0.0000    0.0455    0.0000   0.04545  7.8431E-03 -3.6331E-03  8.6437E-03  -24.855
+     8    1    0.0000    0.0909    0.0000   0.04545  6.8919E-03 -3.6158E-03  7.7828E-03  -27.684
+     9    1    0.0000    0.1364    0.0000   0.04545  5.4904E-03 -3.0296E-03  6.2708E-03  -28.890
+    10    1    0.0000    0.1818    0.0000   0.04545  3.6435E-03 -2.0829E-03  4.1969E-03  -29.756
+    11    1    0.0000    0.2273    0.0000   0.04545  1.3800E-03 -8.1405E-04  1.6022E-03  -30.536
+
+
+                               ---------- POWER BUDGET ---------
+                               INPUT POWER   =  4.1001E-03 Watts
+                               RADIATED POWER=  3.1915E-03 Watts
+                               STRUCTURE LOSS=  9.0858E-04 Watts
+                               NETWORK LOSS  =  0.0000E+00 Watts
+                               EFFICIENCY    =   77.84 Percent
+
+
+                             ---------- RADIATION PATTERNS -----------
+
+ ---- ANGLES -----     ----- POWER GAINS -----       ---- POLARIZATION ----   ---- E(THETA) ----    ----- E(PHI) ------
+  THETA      PHI       VERTC    HORIZ    TOTAL       AXIAL      TILT  SENSE   MAGNITUDE    PHASE    MAGNITUDE     PHASE
+ DEGREES   DEGREES        DB       DB       DB       RATIO   DEGREES            VOLTS/M   DEGREES     VOLTS/M   DEGREES
+   90.00      0.00   -999.99     1.07     1.07      0.0000    -90.00 LINEAR  0.0000E+00      0.00  5.6101E-01   -115.91
+
+
+
+  DATA CARD No:   6 EN   0     0     0     0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+  TOTAL RUN TIME: 0 msec
