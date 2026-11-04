@@ -96,14 +96,18 @@ std::vector<std::vector<cd>> transmitted_block(const Front &fr, const somm_trans
             ot[3 * m + static_cast<std::size_t>(c)] = g.seg_tangents[z][static_cast<std::size_t>(c)];
         }
     }
+    const std::size_t S = ns * Q;
+    // The grid with the nodes this block's pairs read (role order: the above
+    // points, then the below ones), which are the whole grid's bit for bit.
     const somm_trans::Grid *grid = nullptr;
     try {
-        grid = &somm_trans::get_grid(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max, fr.omega, mu,
-                                     plan.r_cross_min);
+        grid = &somm_trans::get_grid_reading(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max,
+                                             fr.omega, mu, plan.r_cross_min, obs_below ? nodes.data() : oc.data(),
+                                             obs_below ? S : no, obs_below ? oc.data() : nodes.data(),
+                                             obs_below ? no : S, gz);
     } catch (const somm_trans::Refused &e) {
         throw nec4::Declined(std::string("a transmitted grid the reference refuses (") + e.what() + ")");
     }
-    const std::size_t S = ns * Q;
     std::vector<cd> proj(no * S);  // (n_obs, n_src q)
     somm_trans::Extremes ext;
     if (!obs_below) {

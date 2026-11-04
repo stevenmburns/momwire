@@ -4360,17 +4360,22 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     // read by `transmitted_field_proj_below_to_above` and each downward one by
     // the reciprocity transpose over the same grid
     if (mixed) {
-        const somm_trans::Grid *gt = nullptr;
-        try {
-            gt = &somm_trans::get_grid(bm.eps_t, bm.k_p, cross_plan.r_cross_max, cross_plan.zp_min,
-                                       cross_plan.zp_max, omega, mu, cross_plan.r_cross_min);
-        } catch (const somm_trans::Refused &e) {
-            throw FrontNotPorted(std::string("buried-") + e.what());
-        }
         TransmittedSide up{raised_x ? &obs_ax : &obs_a, raised_x ? &t_ax : &t_a, raised_x ? &W_ax : &W_a, &pos_a,
                            static_cast<int64_t>(a_idx.size())};
         TransmittedSide down{raised_x ? &obs_bx : &obs_b, raised_x ? &t_bx : &t_b, raised_x ? &W_bx : &W_b, &pos,
                              n_b};
+        // Both blocks project the above nodes against the below ones (the
+        // downward one in role order), so the grid fills only the nodes
+        // those pairs read: every value read is the whole grid's.
+        const somm_trans::Grid *gt = nullptr;
+        try {
+            gt = &somm_trans::get_grid_reading(
+                bm.eps_t, bm.k_p, cross_plan.r_cross_max, cross_plan.zp_min, cross_plan.zp_max, omega, mu,
+                cross_plan.r_cross_min, up.nodes->data(), static_cast<size_t>(up.n * q_x), down.nodes->data(),
+                static_cast<size_t>(down.n * q_x), gz);
+        } catch (const somm_trans::Refused &e) {
+            throw FrontNotPorted(std::string("buried-") + e.what());
+        }
         try {
             transmitted_blocks(Z, b.polys, b.supp_seg, nd, n_basis, q_x, *gt, gz, bm.k_p, bm.k_m, up, down);
         } catch (const somm_trans::Refused &e) {
