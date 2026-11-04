@@ -733,16 +733,29 @@ _NEAR_HEADERS = [
     "src/momwire/_lanes.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
+
 # Compile the accelerator's translation units concurrently (momwire#687). With
 # the old single-TU monolith this bought nothing; with the split it is what
 # makes a COLD build -- CI's first run, and every wheel-matrix job -- cheaper
 # rather than merely no worse, since splitting a TU adds total compiler work
 # (the shared preamble is parsed once per TU) even as it shrinks the
-# incremental edit. Honours NPY_NUM_BUILD_JOBS; defaults to the CPU count, and
-# `NPY_NUM_BUILD_JOBS=1` restores serial compilation for a constrained runner.
+# incremental edit. How many at once is `src/momwire/_build_jobs.py`'s rule:
+# MOMWIRE_BUILD_JOBS if set, else the physical cores, capped by the memory
+# available at 1 GiB per compiler; `MOMWIRE_BUILD_JOBS=1` compiles serially.
+# Loaded by path: momwire is not importable while it is being built.
 # GCC/clang only: MSVC's compiler class overrides the compile() this patches,
 # so on Windows the parallelism comes from /MP in extra_compile_args above.
-ParallelCompile("NPY_NUM_BUILD_JOBS").install()
+def _load_build_jobs():
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "src" / "momwire" / "_build_jobs.py"
+    spec = importlib.util.spec_from_file_location("_momwire_build_jobs", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_jobs()
+
+
+ParallelCompile(default=_load_build_jobs()).install()
 
 # ---------------------------------------------------------------------------
 # The double build (momwire#1032)

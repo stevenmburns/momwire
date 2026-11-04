@@ -37,6 +37,8 @@ import sysconfig
 import numpy as np
 import pytest
 
+from momwire._build_jobs import build_jobs
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
@@ -268,11 +270,11 @@ def driver(accel, tmp_path_factory):
         cmds.append([*base, "-MD", "-MF", str(dep), "-c", str(src), "-o", str(obj)])
         objects[src.stem] = str(obj)
         deps.append(dep)
-    # Concurrently, as setup.py's ParallelCompile does and with its knob and
-    # default (momwire#1703): at most NPY_NUM_BUILD_JOBS compilers, the CPU
-    # count when it is unset or 0. All 61 at once peaked near 20 GB (an -O3
-    # core TU is 330-380 MB) and OOM-killed a 15 GB machine.
-    jobs = int(os.environ.get("NPY_NUM_BUILD_JOBS") or 0) or os.cpu_count() or 1
+    # Concurrently, by setup.py's own rule (momwire#1703, `_build_jobs`):
+    # MOMWIRE_BUILD_JOBS, else the physical cores capped by available memory.
+    # All 61 at once peaked near 20 GB (an -O3 core TU is 330-380 MB) and
+    # OOM-killed a 15 GB machine.
+    jobs = build_jobs()
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
         runs = list(
             pool.map(
