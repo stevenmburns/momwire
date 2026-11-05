@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #ifdef _OPENMP
 #include <omp.h>
@@ -247,6 +248,9 @@ static std::vector<py::array_t<uint8_t>> reflected_field_nodes_impl(
 // Calls served by the symmetric route, so a gate can show the route ran
 // rather than infer it from agreement (an untaken route agrees trivially).
 static std::atomic<long long> g_remainder_symmetric_calls{0};
+// Segment pairs the symmetric route served from a pair-reuse cache
+// (momwire#1809): the evidence a gate needs that the copies happened.
+static std::atomic<long long> g_remainder_reused_pairs{0};
 
 // True when the obs and src halves of the call are the same data -- the
 // dense block's call shape -- so the symmetric route serves it.
@@ -281,7 +285,9 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
                             py::array::c_style | py::array::forcecast>> reg_vals,
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         far,
-    uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0, bool reference = false) {
+    uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0, bool reference = false,
+    py::object reuse_edge_seg0 = py::none(), py::object reuse_seg_edge = py::none(),
+    py::object reuse_src = py::none()) {
     using somm_proj::cd;
     auto ndI = obs_nodes.unchecked<3>();
     auto tgI = obs_tang.unchecked<2>();
@@ -324,6 +330,44 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         same_array(obs_tang, src_tang) && same_array(W_obs, W_src) &&
         same_array(loc_I, loc_J) && same_array(pI, pJ);
 
+    // Pair reuse (momwire#1809): the symmetric route only. Edge e is the run
+    // of segments [edge_seg0[e], edge_seg0[e + 1]) (n_edges + 1 entries);
+    // seg_edge (nsI) names each segment's edge or -1; src (n_edges,
+    // n_edges) the source ordered pair (sa * n_edges + sb) or -1.
+    using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
+    using I32 = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
+    I64 r_seg0;
+    I32 r_seg_edge, r_src, r_nseg;
+    somm_core::PairReuse reuse;
+    const bool use_reuse = symmetric && !reuse_src.is_none();
+    if (use_reuse) {
+        r_seg0 = I64::ensure(reuse_edge_seg0);
+        r_seg_edge = I32::ensure(reuse_seg_edge);
+        r_src = I32::ensure(reuse_src);
+        if (!r_seg0 || !r_seg_edge || !r_src)
+            throw std::invalid_argument("pair reuse: arrays required");
+        const py::ssize_t E = r_seg0.size() - 1;
+        if (E < 1 || r_seg_edge.size() != nsI || r_src.size() != E * E)
+            throw std::invalid_argument("pair reuse: inconsistent array shapes");
+        const int64_t *s0 = r_seg0.data();
+        r_nseg = I32(E);
+        int32_t *ns = r_nseg.mutable_data();
+        for (py::ssize_t e = 0; e < E; ++e) {
+            if (s0[e] < 0 || s0[e + 1] <= s0[e] || s0[e + 1] > nsI)
+                throw std::invalid_argument("pair reuse: bad edge segment ranges");
+            ns[e] = (int32_t)(s0[e + 1] - s0[e]);
+        }
+        const int32_t *se = r_seg_edge.data();
+        for (py::ssize_t i = 0; i < nsI; ++i)
+            if (se[i] >= 0 && (se[i] >= E || i < s0[se[i]] || i >= s0[se[i] + 1]))
+                throw std::invalid_argument("pair reuse: seg_edge disagrees with edge_seg0");
+        reuse.n_edges = E;
+        reuse.edge_seg0 = s0;
+        reuse.edge_nseg = ns;
+        reuse.seg_edge = se;
+        reuse.src = r_src.data();
+    }
+
     py::array_t<std::complex<double>> Q({nI, nJ});
     if (symmetric) g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
     cd *Qp = Q.mutable_data();
@@ -331,9 +375,14 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     const double *sn = src_nodes.data(), *st = src_tang.data(), *sw = W_src.data();
     const int64_t *li = loc_I.data(), *lj = loc_J.data();
     const double *pi = pI.data(), *pj = pJ.data();
-    py::gil_scoped_release release;
-    somm_core::remainder_bspline_Q(G, ground_z, k, on, ot, ow, nsI, sn, st, sw, nsJ, q, d1, li, pi,
-                                   nI, lj, pj, nJ, symmetric, max_jf_bytes, Qp, cancel_flag);
+    {
+        py::gil_scoped_release release;
+        somm_core::remainder_bspline_Q(G, ground_z, k, on, ot, ow, nsI, sn, st, sw, nsJ, q, d1,
+                                       li, pi, nI, lj, pj, nJ, symmetric, max_jf_bytes, Qp,
+                                       cancel_flag, use_reuse ? &reuse : nullptr);
+    }
+    if (use_reuse)
+        g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
     return Q;
 }
 
@@ -578,10 +627,15 @@ void register_somm(py::module_ &m) {
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
-          py::arg("reference") = false);
+          py::arg("reference") = false, py::arg("reuse_edge_seg0") = py::none(),
+          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none());
     m.def("remainder_q_symmetric_calls",
           []() { return g_remainder_symmetric_calls.load(); },
           "How many sommerfeld_remainder_bspline_Q calls the symmetric route "
           "has served in this process (a gate's evidence that it ran).");
+    m.def("remainder_q_reused_pairs",
+          []() { return g_remainder_reused_pairs.load(); },
+          "How many segment pairs the symmetric route has copied from a "
+          "pair-reuse cache in this process (momwire#1809).");
 }
 
