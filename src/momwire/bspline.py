@@ -51,6 +51,7 @@ Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
 import math
+import itertools
 import warnings
 from dataclasses import dataclass
 
@@ -792,6 +793,42 @@ _PAIR_SCATTER_CHUNK = 1 << 15
 # `_build_J_blocks` fills only the off-edge pairs, one kernel call per edge,
 # up to this many edges (momwire#1517); past it, one whole-mesh call.
 _OFFEDGE_SPLIT_MAX_EDGES = 32
+
+
+class PairReuseDropped(UserWarning):
+    """Some edge pairs a `pair_reuse` hint named do not share a pose in this
+    solver's geometry; they were filled normally (momwire#1809)."""
+
+
+#: How closely a claimed member's end points must reproduce its
+#: representative's distances, relative to the structure's size. Copying a block
+#: is exact only for an exact repeat; a front end's looser match (antennaknobs
+#: compares at 0.1 mm) is refused here rather than copied approximately.
+_PAIR_REUSE_RTOL = 1e-12
+
+
+def _pair_reuse_to_solved(hint, dedup):
+    """The hint's ``((wa, ea), (wb, eb))`` edge references renumbered to the
+    solved wires; a member naming a dropped duplicate wire is left out."""
+    if not hint:
+        return None
+    kept = list(dedup.kept) if dedup is not None else None
+
+    def solved(w):
+        if kept is None:
+            return int(w)
+        return kept.index(int(w)) if int(w) in kept else None
+
+    out = []
+    for cls in hint:
+        members = []
+        for (wa, ea), (wb, eb) in cls:
+            sa, sb = solved(wa), solved(wb)
+            if sa is not None and sb is not None:
+                members.append(((sa, int(ea)), (sb, int(eb))))
+        if len(members) > 1:
+            out.append(members)
+    return out or None
 
 
 def _ek_slice(ek, rows=None, cols=None):
@@ -1737,6 +1774,7 @@ class BSplineSolver(
         auto_tap_ratio_threshold=0.3,
         swept_mem_mb=256,
         rotational_symmetry=False,
+        pair_reuse=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1780,6 +1818,12 @@ class BSplineSolver(
             feed_wire_index = _sites["feed_wire_index"][0][0]
         node_gaps = _sites["node_gaps"]
         self._cancel = cancel
+        # momwire#1809: edge pairs a front end says share a pose (antennaknobs
+        # computes them from the design). Checked against this solver's own
+        # geometry before any block is copied (`_pair_reuse_plan`).
+        self._pair_reuse = _pair_reuse_to_solved(pair_reuse, self._wire_dedup)
+        self._pair_reuse_plan_cache = None
+        self.pair_reuse_dropped = ()
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -4852,6 +4896,106 @@ class BSplineSolver(
                 out.append(slice(base + ed_off[i_e], base + ed_off[i_e + 1]))
         return out
 
+    def _pair_reuse_plan(self, geom):
+        """``{(target edge, target edge): (source edge, source edge)}`` over
+        same-edge slice indices: the ordered blocks a `pair_reuse` hint lets
+        `_build_J_blocks` copy instead of fill, after checking each member
+        against this geometry. A member is kept when its two edges have the
+        representative's segment counts, per-segment radii and extended-kernel
+        eligibility pattern, and its four end points the representative's six
+        distances within `_PAIR_REUSE_RTOL` of the structure's size, in the
+        hint's order (no direction flip). Then an isometry carries every
+        segment pair of the representative onto the member's, and the
+        free-space moments, which depend on distances alone, are the same
+        numbers. Members that fail are dropped, named in
+        `pair_reuse_dropped`, and filled normally."""
+        if self._pair_reuse is None:
+            return {}
+        if (
+            self._pair_reuse_plan_cache is not None
+            and self._pair_reuse_plan_cache[0] is geom
+        ):
+            return self._pair_reuse_plan_cache[1]
+        slices = self._same_edge_slices(geom)
+        index, base = {}, 0
+        for w, pw in enumerate(geom["per_wire"]):
+            for e in range(len(pw["edge_offsets"]) - 1):
+                index[(w, e)] = base
+                base += 1
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        scale = float(max(np.max(np.abs(seg_l)), np.max(np.abs(seg_r)), 1e-30))
+        tol = _PAIR_REUSE_RTOL * scale
+        radius = np.asarray(self._seg_radius(geom), dtype=np.float64)
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        groups = (
+            None if ek is None else (np.asarray(ek.group_i), np.asarray(ek.group_j))
+        )
+
+        def ends(e):
+            sl = slices[e]
+            return seg_l[sl.start], seg_r[sl.stop - 1]
+
+        def dists(a, b):
+            pts = (*ends(a), *ends(b))
+            return np.array(
+                [np.linalg.norm(u - v) for u, v in itertools.combinations(pts, 2)]
+            )
+
+        def same_block(a, b, a2, b2):
+            sa, sb, sa2, sb2 = slices[a], slices[b], slices[a2], slices[b2]
+            if (sa.stop - sa.start, sb.stop - sb.start) != (
+                sa2.stop - sa2.start,
+                sb2.stop - sb2.start,
+            ):
+                return False
+            if not (
+                np.array_equal(radius[sa], radius[sa2])
+                and np.array_equal(radius[sb], radius[sb2])
+            ):
+                return False
+            if groups is not None:
+                gi, gj = groups
+                if not np.array_equal(
+                    gi[sa][:, None] == gj[sb][None, :],
+                    gi[sa2][:, None] == gj[sb2][None, :],
+                ):
+                    return False
+                if not np.array_equal(
+                    gi[sb][:, None] == gj[sa][None, :],
+                    gi[sb2][:, None] == gj[sa2][None, :],
+                ):
+                    return False
+            return bool(np.max(np.abs(dists(a, b) - dists(a2, b2))) <= tol)
+
+        plan, dropped = {}, []
+        for cls in self._pair_reuse:
+            (ra, rb), *members = [(index.get(x), index.get(y)) for x, y in cls]
+            if ra is None or rb is None:
+                dropped += cls[1:]
+                continue
+            for (ma, mb), named in zip(members, cls[1:], strict=True):
+                if ma is None or mb is None or (ma, mb) in plan or (ma, mb) == (ra, rb):
+                    dropped.append(named)
+                    continue
+                if (ma == mb) != (ra == rb) or not same_block(ra, rb, ma, mb):
+                    dropped.append(named)
+                    continue
+                plan[(ma, mb)] = (ra, rb)
+                if ma != mb:
+                    plan[(mb, ma)] = (rb, ra)
+        # A source must be filled, never itself a copy.
+        plan = {t: s for t, s in plan.items() if s not in plan}
+        if dropped:
+            self.pair_reuse_dropped = tuple(dropped)
+            warnings.warn(
+                f"pair_reuse: {len(dropped)} claimed edge pair(s) do not repeat their "
+                "representative in this geometry and were filled normally",
+                PairReuseDropped,
+                stacklevel=3,
+            )
+        self._pair_reuse_plan_cache = (geom, plan)
+        return plan
+
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
         every (i, j) global segment pair. Returns shape (d+1, d+1, N, N).
@@ -4885,6 +5029,13 @@ class BSplineSolver(
             else self._same_edge_slices(geom)
         )
         n_total = int(seg_l.shape[0])
+        # momwire#1809: blocks a checked `pair_reuse` hint lets us copy. With a
+        # plan the per-edge route is taken at any edge count (it is the
+        # whole-mesh call's J bit for bit, below), so each representative is
+        # filled exactly as without the hint and only the copies are skipped.
+        plan = self._pair_reuse_plan(geom)
+        if plan and same_slices != self._same_edge_slices(geom):
+            plan = {}
 
         # All-pairs full kernel (same a² regularization handles touching
         # segments at kink corners and at junctions to within ~1e-5 at
@@ -4900,7 +5051,7 @@ class BSplineSolver(
         # single-edge deck, so this is the commonest shape there is.
         if len(same_slices) == 1 and same_slices[0] == slice(0, n_total):
             J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
-        elif len(same_slices) <= _OFFEDGE_SPLIT_MAX_EDGES:
+        elif plan or len(same_slices) <= _OFFEDGE_SPLIT_MAX_EDGES:
             # The off-edge pairs only (momwire#1517): each edge's rows against
             # every column off it. The same-edge blocks are overwritten below,
             # and a pair's moments do not depend on which pairs share its call
@@ -4910,8 +5061,20 @@ class BSplineSolver(
             # pay a call each for little.
             ladder = self._fill_ladder(k, seg_l, seg_r, ek)
             J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
-            for sl in same_slices:
-                cols = np.r_[0 : sl.start, sl.stop : n_total]
+            for a_idx, sl in enumerate(same_slices):
+                if plan:
+                    keep = [
+                        same_slices[b]
+                        for b in range(len(same_slices))
+                        if b != a_idx and (a_idx, b) not in plan
+                    ]
+                    cols = (
+                        np.concatenate([np.arange(c.start, c.stop) for c in keep])
+                        if keep
+                        else np.zeros(0, dtype=np.intp)
+                    )
+                else:
+                    cols = np.r_[0 : sl.start, sl.stop : n_total]
                 if cols.size == 0:
                     continue
                 J[:, :, sl, cols] = _seg_seg_full_moments_offedge(
@@ -4940,10 +5103,18 @@ class BSplineSolver(
                 ladder=self._fill_ladder(k, seg_l, seg_r, ek),
             )  # (d+1, d+1, N, N) complex
 
+        # The off-edge copies (momwire#1809).
+        for (ta, tb), (sa, sb) in plan.items():
+            if ta != tb:
+                J[:, :, same_slices[ta], same_slices[tb]] = J[
+                    :, :, same_slices[sa], same_slices[sb]
+                ]
+
         # Overwrite each same-edge block with analytic static + reg
         if same_edge_prep is None:
             per_wire = geom["per_wire"]
             seg_off = geom["seg_offsets"]
+            e_idx = -1
             for w in range(len(per_wire)):
                 pw = per_wire[w]
                 ed_off = pw["edge_offsets"]
@@ -4951,6 +5122,9 @@ class BSplineSolver(
                 base = seg_off[w]
                 a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
+                    e_idx += 1
+                    if (e_idx, e_idx) in plan:
+                        continue
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                     A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
                     A_reg = _seg_seg_reg_moments(
@@ -4963,7 +5137,9 @@ class BSplineSolver(
                     )
                     J[:, :, sl, sl] = A_st + A_reg
         else:
-            for sl, A_st, reg in same_edge_prep:
+            for e_idx, (sl, A_st, reg) in enumerate(same_edge_prep):
+                if (e_idx, e_idx) in plan:
+                    continue
                 # `reg` is either a reg-geometry dict (compute this k's block
                 # now) or a precomputed (max_d+1, max_d+1, N, N) moment block
                 # for this k (swept caller batched it across frequencies).
@@ -4973,6 +5149,13 @@ class BSplineSolver(
                     else reg
                 )
                 J[:, :, sl, sl] = A_st + A_reg
+
+        # The same-edge copies: a congruent edge's own block (momwire#1809).
+        for (ta, tb), (sa, _sb) in plan.items():
+            if ta == tb:
+                J[:, :, same_slices[ta], same_slices[ta]] = J[
+                    :, :, same_slices[sa], same_slices[sa]
+                ]
 
         return J
 
