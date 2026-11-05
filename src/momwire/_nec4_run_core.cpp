@@ -963,7 +963,13 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
                 const nec5::Op vo{v_gap.data(), P, 1, 1, 0};
                 rp::np_matmul(*c.np, y.op(), vo, i_port.data(), 1, 0);
             }
-            v_applied = v_gap;
+            // the gap's voltage plus the drop across a load on the driven
+            // segment, `v_gap + z_load * i_port` (momwire#1813)
+            v_applied.assign(static_cast<std::size_t>(P), cd(0.0, 0.0));
+            for (ll k = 0; k < P; k++) {
+                const std::size_t q = static_cast<std::size_t>(k);
+                v_applied[q] = cadd(v_gap[q], cm(z_load[q], i_port[q]));
+            }
             i_source = i_port;
             return;
         }

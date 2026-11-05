@@ -1015,6 +1015,9 @@ const char *const kExecuteCards[] = {"XQ", "RP", "NE", "NH"};
 const char *const kArmingCards[] = {"EX", "FR", "LD", "GN", "EK", "TL", "NT"};
 const char *const kOperatorCards[] = {"GN", "EK", "LD"};
 const char *const kNetworkTransparent[] = {"PT", "PQ", "MP"};
+// `_LD_RUN_TRANSPARENT` (momwire#1812): the cards an LD run survives; the nec4
+// dialect adds EK
+const char *const kLdRunTransparent[] = {"PT", "PQ", "MP", "CM", "CE"};
 
 template <std::size_t N>
 bool in(const std::string &m, const char *const (&set)[N]) {
@@ -1201,7 +1204,7 @@ class Parser {
     std::vector<ll> live_;
     std::set<Pair> loaded_;
     std::map<Pair, LoadSpec> load_spec_at_;
-    std::set<Pair> ld_run_;  // `_ld_run` (momwire#1807)
+    bool ld_run_open_ = false;  // `_ld_run_open` (momwire#1812)
     MaterialState materials_;
     std::map<ll, std::pair<double, double>> wire_insulation_;  // (radius, eps_r)
 
@@ -1444,6 +1447,14 @@ class Parser {
         return true;
     }
 
+    // `_discard_loads`: LD -1, and the first LD of a new run (momwire#1812)
+    void discard_loads() {
+        live_.clear();
+        loaded_.clear();
+        load_spec_at_.clear();
+        materials_ = MaterialState();
+    }
+
     void ld(const Card &card) {
         if (dialect_ == Dialect::nec4) {
             Int t = card.i(0);
@@ -1455,11 +1466,7 @@ class Parser {
         }
         Int ldtyp_i = card.i(0);
         if (ldtyp_i == Int(-1)) {
-            live_.clear();
-            loaded_.clear();
-            load_spec_at_.clear();
-            ld_run_.clear();
-            materials_ = MaterialState();
+            discard_loads();
             return;
         }
         bool known = false;
@@ -1491,17 +1498,11 @@ class Parser {
                 deck_error(
                     "LD on a segment that already carries a load is not supported by this engine — a "
                     "second load on one segment is not merged");
-            if (ld_run_.count(key)) {
+            if (loaded_.count(key)) {
                 // stacked in one run of LD cards: both stay in force
                 load_spec_at_.erase(key);
-            } else if (loaded_.count(key)) {
-                deck_error(
-                    "LD on a segment that already carries a load from an earlier run of LD cards is not "
-                    "supported by this engine — NEC discards loads when another card separates two LD "
-                    "cards, and adds them only when the LD cards are consecutive");
             } else {
                 loaded_.insert(key);
-                ld_run_.insert(key);
                 load_spec_at_[key] = spec;
             }
             std::pair<ll, double> ra = s2.resolve_of(p.first, p.second);
@@ -1794,8 +1795,14 @@ class Parser {
 
     void card(const Card &card) {
         const std::string &m = card.mnemonic;
-        // `_ld_run` (momwire#1807): any other card ends the run of LD cards
-        if (m != "LD") ld_run_.clear();
+        // `_ld_run_open` (momwire#1812): the first LD of a new run discards
+        // every earlier load; any card but the transparent ones ends a run
+        if (m == "LD") {
+            if (!ld_run_open_) discard_loads();
+            ld_run_open_ = true;
+        } else if (!in(m, kLdRunTransparent) && !(m == "EK" && dialect_ == Dialect::nec4)) {
+            ld_run_open_ = false;
+        }
         if (m == "CM" || m == "CE") {
             std::string text = card.text();
             comments_.push_back(nec5::latin1_to_utf8(text));

@@ -100,6 +100,36 @@ stay untouched (tests/test_eznec_reproducibility.py).
                  loading tables byte for byte and the drive rows to the
                  slot's gap (the bare dipole is itself 0.97 % of |Z| off).
 
+  N42_run_*, N42_ex*_fed_load_*, N42_ex6_phased_*, N2_run_*
+                 momwire#1812 and momwire#1813, the same dipole and the same
+                 two engines, run the same way on 2026-11-05 (nec2c 1.3-4).
+                   N42_run_fr_other_segment / _single_segment3  10 ohm on
+                                 segment 8, FR, 20 ohm on segment 3: the deck
+                                 answers as the 20 ohm deck alone.
+                   N42_run_ld5_dropped   an LD 5 conductivity, FR, 20 ohm:
+                                 the conductivity is dropped too.
+                   N42_run_zero_drops    10 ohm, FR, a zero-valued LD: the
+                                 bare dipole (N42_run_bare).
+                   N42_run_ek_keeps / _cm_keeps  an EK or a CM between two
+                                 LD cards on one segment: the run is kept and
+                                 the pair stacks (as N42_series_r_single).
+                   N42_run_pq_keeps      a PQ between two LD cards on
+                                 different segments: both loads stay.
+                   N42_ex6_fed_load_* / N42_ex0_fed_load_*  EX 6 and EX 0 on
+                                 segment 6 with an LD 0 (30 ohm), LD 1
+                                 (500 ohm parallel 1e-7 H) or LD 4 (30-j40)
+                                 on that segment: identical drive impedances,
+                                 the load included.
+                   N42_ex6_phased_fed_load / _unloaded  EX 6 on the loaded
+                                 segment 6 beside an EX 0 on segment 3: the
+                                 EX 6 row moves by the 30 ohm, exactly.
+                   N2_run_fr_other_segment / _single_segment3, _ld5_dropped
+                                 the nec2c forms, which agree.
+                   N2_run_ek_breaks / _ek_single  nec2c's EK ENDS a run,
+                                 where NEC-4.2's does not.
+                   N2_run_pt_keeps       a PT keeps the run; the pair stacks.
+                 tests/test_ld_runs_1812.py holds them.
+
   0202.nec/.out  The deck Dan AC6LA's "first blood" post (QRZ 1003328 #100,
                  2026-09-17) describes: EZNEC Pro/2+ 7.0.4's Cardioid.ez (the
                  plain 6-segment one), both sources type I as shipped, an

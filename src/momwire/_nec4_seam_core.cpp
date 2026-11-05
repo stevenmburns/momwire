@@ -74,6 +74,7 @@ PortalDeck parse_deck(const std::string &text) {
     Int mp[2];
     CardFields4 pt, pq;
     bool sources_stale = false;
+    bool ld_run_open = false;  // `ld_run_open` (momwire#1812)
     std::size_t executes = 0;
     for (const std::string &line : nec5::latin1_splitlines(text)) {
         Card card;
@@ -89,12 +90,13 @@ PortalDeck parse_deck(const std::string &text) {
             continue;
         }
         d.data_cards.push_back(card);
+        // the run of LD cards (momwire#1812): the first LD of a new run clears
+        // the table as LD -1 does; PT, PQ, MP and EK (nec4) keep a run open
+        const bool opens_a_run = m == "LD" && !ld_run_open;
+        if (!one_of(m, {"PT", "PQ", "MP", "EK"})) ld_run_open = m == "LD";
         if (m == "LD") {
-            if (card.i(0) == Int(-1)) {
-                loads.clear();
-            } else {
-                loads.push_back(card);
-            }
+            if (card.i(0) == Int(-1) || opens_a_run) loads.clear();
+            if (card.i(0) != Int(-1)) loads.push_back(card);
         } else if (m == "MP") {
             has_mp = true;
             mp[0] = card.i(0);

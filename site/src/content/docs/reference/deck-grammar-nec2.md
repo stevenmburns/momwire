@@ -31,7 +31,10 @@ and card mnemonics stop at the parser.
 decks EZNEC's External NEC-4.2 slot writes (momwire#1295). It is this dialect
 plus three deltas measured from captures: `EX 6` is a current source, `GE -1`
 may carry a structure below ground, and `GN 3` is the same Sommerfeld ground
-as `GN 2`. Every other card means what this page says.
+as `GN 2`. Every other card means what this page says, except that an `EK`
+does not end a [run of `LD` cards](#ld--loading) there. An `EX 6`'s
+impedance includes an `LD` on its own segment, as an `EX 0`'s does, which
+NEC-4.2 prints under every load type (momwire#1813).
 
 ### What the dialect describes, and what it excludes
 
@@ -629,11 +632,11 @@ The [≤ 8-segment expansion limit](#ld--loading) counts the range the deck
 replicas as a range — they are stamped on one segment at a time, by a rule
 that has no width. So `LD 4 1 1 8 ...` under a `GR 1 4` serves as thirty-two
 loads, and it is the ninth *typed* segment that refuses. The
-[doubled-load refusal](#ld--loading) is unaffected in the other direction:
-replication widens the "already loaded" set rather than weakening it, so a
-deck that loads one cell segment through two cards separated by another card
-still refuses, and two consecutive cell cards on one segment stack on every
-copy (nec2c and NEC-4.2 print a `GR 1 4` deck with `LD 4` 50 Ω and `LD 0`
+[run of `LD` cards](#ld--loading) is unaffected in the other direction:
+replication widens the loaded set rather than weakening it, so a deck that
+loads one cell segment through two cards separated by another card keeps the
+second card on every copy, and two consecutive cell cards on one segment
+stack on every copy (nec2c and NEC-4.2 print a `GR 1 4` deck with `LD 4` 50 Ω and `LD 0`
 10 Ω on one cell segment exactly as the deck with one `LD 4` of 60 Ω).
 
 **`EX` is exempt.** Excitation is the right-hand side, not the operator, and
@@ -1014,11 +1017,26 @@ truncated.
 nec2c and NEC-4.2 both do (10 Ω and 20 Ω series R print the 30 Ω deck's
 input impedance to every digit), and the loading table lists each card and
 closes with nec2c's `NOTE, SOME OF THE ABOVE SEGMENTS HAVE BEEN LOADED TWICE
-- IMPEDANCES ADDED`. A card written twice counts twice. When any other card
-separates two `LD` cards, both engines instead **discard** the earlier
-card's loads, and this dialect carries loads across such a card rather than
-discarding them, so a second load on a segment loaded by an earlier run of
-`LD` cards is refused.
+- IMPEDANCES ADDED`. A card written twice counts twice.
+
+**A run of `LD` cards** (momwire#1812). The loads in force are one run's:
+the first `LD` card after any other card starts a new run and **discards
+every load read before it**, on every segment, whichever segments the new
+run names. This is what nec2c and NEC-4.2 both do, measured on a dipole with
+10 Ω on one segment, another card, and 20 Ω on a different segment: the deck
+answers as the 20 Ω deck to every digit. The discard takes every type, 0 to
+5, so an `LD 5` conductivity is dropped by a later run too, and a
+zero-valued card that starts a run still discards. `IS` is not a load and is
+never discarded. Each execute card solves with the run in force when it is
+read, as after an `LD -1`.
+
+| card between two `LD` cards | `nec2` dialect (nec2c) | `nec4` dialect (NEC-4.2) |
+|---|---|---|
+| `FR`, `GN`, `GD`, `EX`, `TL`, `NT`, `XQ`, `RP`, `NE`, `NH`, `IS` | new run | new run |
+| `EK` | new run | same run |
+| `PT`, `PQ` | same run | same run |
+| `CM` / `CE` | same run (nec2c rejects the deck) | same run |
+| `MP` | same run (this engine's advisory card) | same run |
 
 **Type 5** is a material property, not a lumped element. The whole-structure
 form (`I2 = 0`, `I3 = 0`) sets the conductivity of every wire; a ranged form
@@ -1059,7 +1077,6 @@ LD type <t> is not supported by this engine
 LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads
 LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only
 LD 2 per-unit-length loading on a partial-wire segment range is not supported by this engine — a distributed RLC is a wire property and covers whole wires only
-LD on a segment that already carries a load from an earlier run of LD cards is not supported by this engine — NEC discards loads when another card separates two LD cards, and adds them only when the LD cards are consecutive
 ```
 
 While a [`GX`/`GR` symmetric cell](#the-symmetric-cell) is live, an `LD` is
@@ -1642,7 +1659,6 @@ unrecognised NEC card '<XX>'
 | `LD` | `I1 ∈ {2, 3, 6, 7}` or unknown | `LD type <t> is not supported by this engine` |
 | `LD` | range > 8 segments | `LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads` |
 | `LD 5` | partial-wire range | `LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only` |
-| `LD` | segment loaded by an earlier run of `LD` cards | `LD on a segment that already carries a load from an earlier run of LD cards is not supported by this engine — NEC discards loads when another card separates two LD cards, and adds them only when the LD cards are consecutive` |
 | `IS` | after an execute card | `IS after an execute request is not supported by this engine: wire insulation is part of the structure, so it cannot change between runs` |
 | `IS` | `F2 ≠ 0` | `IS with a conductive sheath (F2 != 0) is not modelled by this engine — the insulation jacket is a lossless dielectric; set the sheath conductivity to 0` |
 | `IS` | partial-wire range | `IS: insulation on a partial-wire segment range — per-wire specs cover whole wires only` |
@@ -1697,7 +1713,7 @@ anyone moving a deck between them:
 | `EX` edge form | recognises NEC-5's segment-end source (negative segment, or `I4 = 2`) and imports it as a vertex port | refused as a non-zero excitation type; the seam for it is the model's `node_gaps`, reserved for a NEC-5 dialect |
 | `EX` duplicates | a segment driven twice is an error | the port set is a union over groups, so one segment may be driven in several groups |
 | `LD 6` / `LD 7` | translated (LC trap, insulated wire) | refused |
-| `LD` over long ranges, doubled loads, partial-wire `LD 5` | skipped, with a note in an "ignored" list | refused, except two consecutive `LD` cards on one segment, which [add](#ld--loading) as NEC adds them (momwire#1807) |
+| `LD` over long ranges, doubled loads, partial-wire `LD 5` | skipped, with a note in an "ignored" list | refused, except two consecutive `LD` cards on one segment, which [add](#ld--loading) as NEC adds them (momwire#1807); a later run of `LD` cards [discards](#ld--loading) the earlier one, as NEC does (momwire#1812) |
 | unmodellable `IS` | skipped, with a note | refused |
 | `SY` | 4nec2 symbolic variables are evaluated | refused |
 | `'` comments | a leading apostrophe comments out a line; an inline one truncates it | not recognised — an apostrophe is a mnemonic error |

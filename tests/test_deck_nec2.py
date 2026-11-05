@@ -1523,16 +1523,16 @@ def test_ld_stacks_consecutive_loads_on_the_same_segment():
     assert model.groups[0].loads == (0, 1)
 
 
-def test_ld_refuses_a_second_load_on_the_same_segment_after_another_card():
-    """§#ld--loading: NEC discards the earlier card's loads here."""
-    with pytest.raises(DeckError) as exc:
-        parse(BODY + "LD 0 1 2 2 50. 0. 0.\nEK\nLD 4 1 2 2 10. 5.\nXQ\nNX\n")
-    assert str(exc.value) == (
-        "LD on a segment that already carries a load from an earlier run of "
-        "LD cards is not supported by this engine — NEC discards loads when "
-        "another card separates two LD cards, and adds them only when the LD "
-        "cards are consecutive"
-    )
+def test_a_second_load_on_the_same_segment_after_another_card_replaces_it():
+    """§#ld--loading (momwire#1812): NEC discards the earlier run's loads
+    when another card separates two LD cards, so the second card is the
+    segment's only load.  nec2c's EK ends a run; NEC-4.2's does not, so the
+    nec4 dialect stacks the same deck."""
+    text = BODY + "LD 0 1 2 2 50. 0. 0.\nEK\nLD 4 1 2 2 10. 5.\nXQ\nNX\n"
+    assert [spec for _w, _a, spec in parse(text).loads] == [
+        LoadSpec(kind="fixed", r=10.0, x=5.0)
+    ]
+    assert len(parse(text, dialect="nec4").loads) == 2
 
 
 _K9AY_DECK = K9AY + "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
@@ -1735,17 +1735,14 @@ def test_two_cell_cards_on_one_segment_stack_on_every_copy():
     assert [wire for wire, _, _ in model.loads] == [0, 1, 0, 1]
 
 
-def test_two_cell_cards_on_one_segment_separated_by_a_card_still_refuse():
-    """§#ld--loading: replication widens the "already loaded" set, it does
-    not weaken it."""
-    with pytest.raises(DeckError) as exc:
-        parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nEK\nLD 0 1 1 1 10. 0. 0.\n"))
-    assert str(exc.value) == (
-        "LD on a segment that already carries a load from an earlier run of "
-        "LD cards is not supported by this engine — NEC discards loads when "
-        "another card separates two LD cards, and adds them only when the LD "
-        "cards are consecutive"
+def test_two_cell_cards_on_one_segment_separated_by_a_card_keep_the_second():
+    """§#ld--loading (momwire#1812): the second run discards the first on
+    every copy, so the deck reads as the second card alone."""
+    broken = parse(
+        _CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nEK\nLD 0 1 1 1 10. 0. 0.\n")
     )
+    alone = parse(_CELL_PAIR.format(ld="EK\nLD 0 1 1 1 10. 0. 0.\n"))
+    assert broken.loads == alone.loads and len(alone.loads) == 2
 
 
 def test_the_expansion_limit_counts_the_card_as_written_not_the_replicas():
