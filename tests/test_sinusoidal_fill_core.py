@@ -389,8 +389,9 @@ CASES = [
 
 
 # Default-lane budget is 5 s; CI median 7.1 s Linux for crossing_folded_dense
-# (momwire 0.85.0 release prep). The other cases stay as the PR guard.
-_SLOW = {"crossing_folded_dense"}
+# (momwire 0.85.0 release prep) and 7.2 s for crossing_folded_sparse (0.87.0
+# prep). The other cases stay as the PR guard.
+_SLOW = {"crossing_folded_dense", "crossing_folded_sparse"}
 
 
 @pytest.mark.parametrize(

@@ -111,7 +111,17 @@ def test_the_nec42_fixtures_print_the_same(acc):
 CASES = sin_cases.CASES
 
 
-@pytest.mark.parametrize("name, text, _expect", CASES, ids=[c[0] for c in CASES])
+# Default-lane budget is 5 s; CI median 6.7 s Linux for crossing_folded_rise_rod
+# and 6.3 s for crossing_folded_sparse (momwire 0.87.0 release prep). The other
+# cases stay as the PR guard.
+_SLOW = {"crossing_folded_rise_rod", "crossing_folded_sparse"}
+
+
+@pytest.mark.parametrize(
+    "name, text, _expect",
+    [pytest.param(*c, marks=pytest.mark.slow) if c[0] in _SLOW else c for c in CASES],
+    ids=[c[0] for c in CASES],
+)
 def test_a_hand_written_deck_prints_the_same(name, text, _expect, acc):
     _same(text, acc)
 
