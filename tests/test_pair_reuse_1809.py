@@ -149,3 +149,94 @@ def test_a_hint_over_ground_leaves_the_image_term_alone():
     _, z0 = _z(6, None, ground=True)
     _, z1 = _z(6, _director_hint(6), ground=True)
     assert np.max(np.abs(z1 - z0) / np.abs(z0)) <= 1e-13
+
+
+# ---- The Sommerfeld remainder (the fused kernel's symmetric route) ----------
+
+SOMM = {"ground_z": 0.0, "ground_eps": (13.0, 0.005), "ground_model": "sommerfeld"}
+
+
+def _acc_or_skip():
+    import momwire.bspline as bs
+
+    acc = bs._acc
+    if acc is None or not hasattr(acc, "remainder_q_reused_pairs"):
+        pytest.skip("fused sommerfeld kernel with pair reuse unavailable")
+    return acc
+
+
+def _z_somm(wires, n, hint):
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(1, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.006,
+        pair_reuse=hint,
+        **SOMM,
+    )
+    return np.atleast_1d(np.asarray(s.compute_impedance()[0], dtype=complex))
+
+
+def test_sommerfeld_no_hint_is_the_fill_bit_for_bit():
+    _acc_or_skip()
+    wires, n = _yagi(3, h=15.0)
+    z0 = _z_somm(wires, n, None)
+    z1 = _z_somm(wires, n, [])
+    assert np.array_equal(z0.view(np.uint64), z1.view(np.uint64))
+
+
+def test_sommerfeld_copies_the_remainder_blocks():
+    """Over Sommerfeld ground the remainder copies too: every ordered target
+    segment pair at least once (a segment under two basis tiles is visited by
+    both), and Z moves by a few ulp."""
+    acc = _acc_or_skip()
+    wires, n = _yagi(3, h=15.0)
+    z0 = _z_somm(wires, n, None)
+    c0 = acc.remainder_q_reused_pairs()
+    z1 = _z_somm(wires, n, _director_hint(3))
+    copied = acc.remainder_q_reused_pairs() - c0
+    # Directors 2, 3, 4 of 20 segments: (3,3) and (4,4) copy (2,2); (3,4)
+    # and (4,3) copy (2,3) and (3,2). Four ordered blocks of 400.
+    assert copied >= 4 * 400
+    assert np.max(np.abs(z1 - z0) / np.abs(z0)) <= 1e-13
+
+
+def test_sommerfeld_does_not_copy_across_heights():
+    """Three identical dipoles stacked vertically repeat in free space (a
+    translation in z), so the free-space moments are copied, but the
+    remainder reads heights, so none of its blocks are."""
+    acc = _acc_or_skip()
+    L = 0.47 * LAM
+    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]]) for h in (8.0, 16.0, 24.0)]
+    n = [[21]] * 3
+    hint = [
+        [((0, 0), (0, 0)), ((1, 0), (1, 0)), ((2, 0), (2, 0))],
+        [((0, 0), (1, 0)), ((1, 0), (2, 0))],
+    ]
+    z0 = _z_somm(wires, n, None)
+    c0 = acc.remainder_q_reused_pairs()
+    k0 = acc.remainder_q_symmetric_calls()
+    z1 = _z_somm(wires, n, hint)
+    assert acc.remainder_q_symmetric_calls() > k0  # the route ran
+    assert acc.remainder_q_reused_pairs() == c0
+    assert np.max(np.abs(z1 - z0) / np.abs(z0)) <= 1e-13
+
+
+def test_sommerfeld_refuses_a_malformed_map(monkeypatch):
+    """The kernel checks the map's shape: a source that is itself a copy is
+    an error, not a silent wrong block."""
+    _acc_or_skip()
+    wires, n = _yagi(3, h=15.0)
+    E = 5
+    src = np.full((E, E), -1, dtype=np.int32)
+    src[3, 3] = 2 * E + 2
+    src[4, 4] = 3 * E + 3  # (3,3) is a copy, so it cannot be a source
+    bad = {
+        "reuse_edge_seg0": np.array([0, 22, 43, 63, 83, 103], dtype=np.int64),
+        "reuse_seg_edge": np.repeat(np.arange(E, dtype=np.int32), [22, 21, 20, 20, 20]),
+        "reuse_src": src,
+    }
+    monkeypatch.setattr(BSplineSolver, "_remainder_reuse_args", lambda self, g, gz: bad)
+    with pytest.raises(ValueError, match="pair reuse"):
+        _z_somm(wires, n, None)

@@ -4375,6 +4375,7 @@ class BSplineSolver(
                 float(self.k),
                 *_sommerfeld.grid_cpp_args(grid),
                 int(self._cancel_flag),
+                **self._remainder_reuse_args(geom, gz),
             )
             if pairs is not None and pairs[0].size:
                 self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
@@ -4995,6 +4996,54 @@ class BSplineSolver(
             )
         self._pair_reuse_plan_cache = (geom, plan)
         return plan
+
+    def _remainder_reuse_args(self, geom, gz):
+        """The `pair_reuse` plan as the fused Sommerfeld remainder kernel's
+        copy map (momwire#1809), or ``{}`` for none. The remainder reads each
+        node pair's horizontal distance and height sum, so a block is copied
+        only when, beyond `_pair_reuse_plan`'s free-space checks, every end
+        point of the pair keeps its height above the ground: then the
+        isometry is a horizontal one, and the remainder's dyad, projected on
+        the moved tangents, is the same number up to rounding."""
+        plan = self._pair_reuse_plan(geom)
+        if not plan:
+            return {}
+        slices = self._same_edge_slices(geom)
+        starts = [sl.start for sl in slices]
+        n_seg = geom["seg_l"].shape[0]
+        # The kernel takes edges as consecutive runs; anything else is filled.
+        if (
+            starts[0] != 0
+            or slices[-1].stop != n_seg
+            or any(a.stop != b.start for a, b in itertools.pairwise(slices))
+        ):
+            return {}
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        scale = float(max(np.max(np.abs(seg_l)), np.max(np.abs(seg_r)), 1e-30))
+        tol = _PAIR_REUSE_RTOL * scale
+
+        def heights(e):
+            sl = slices[e]
+            return np.array([seg_l[sl.start, 2], seg_r[sl.stop - 1, 2]]) - gz
+
+        E = len(slices)
+        src = np.full((E, E), -1, dtype=np.int32)
+        for (ta, tb), (sa, sb) in plan.items():
+            if (
+                np.max(np.abs(heights(ta) - heights(sa))) <= tol
+                and np.max(np.abs(heights(tb) - heights(sb))) <= tol
+            ):
+                src[ta, tb] = sa * E + sb
+        if not np.any(src >= 0):
+            return {}
+        seg_edge = np.full(n_seg, -1, dtype=np.int32)
+        for e, sl in enumerate(slices):
+            seg_edge[sl] = e
+        return {
+            "reuse_edge_seg0": np.array([*starts, n_seg], dtype=np.int64),
+            "reuse_seg_edge": seg_edge,
+            "reuse_src": src,
+        }
 
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
