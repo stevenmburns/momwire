@@ -50,6 +50,8 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+import functools
+import inspect
 import math
 import itertools
 import warnings
@@ -59,6 +61,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
+from ._bspline_kernels import offset_reuse_scope
 from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
@@ -1296,6 +1299,40 @@ def _exact_kernel_refusals(use_singular_enrichment, rotational_symmetry):
     ]
 
 
+def _offset_reuse_fill(method):
+    """Run a fill method under its solver's `offset_reuse` (momwire#1809).
+
+    A generator method's body runs at each step, not at the call, so its
+    scope is set around every step: set around the call alone, the body
+    would run after the scope had closed (dense, silently), and set across
+    a yield it would leak into the consumer between steps."""
+    if inspect.isgeneratorfunction(method):
+
+        @functools.wraps(method)
+        def gen_wrapper(self, *args, **kwargs):
+            gen = method(self, *args, **kwargs)
+            if not getattr(self, "_offset_reuse", False):
+                return (yield from gen)
+            while True:
+                with offset_reuse_scope(True):
+                    try:
+                        item = next(gen)
+                    except StopIteration as stop:
+                        return stop.value
+                yield item
+
+        return gen_wrapper
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not getattr(self, "_offset_reuse", False):
+            return method(self, *args, **kwargs)
+        with offset_reuse_scope(True):
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class BSplineSolver(
     _exact_kernel_seam.ExactKernelOption,
     _ElementCurrents,
@@ -1810,6 +1847,7 @@ class BSplineSolver(
         swept_mem_mb=256,
         rotational_symmetry=False,
         pair_reuse=None,
+        offset_reuse=False,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1859,6 +1897,10 @@ class BSplineSolver(
         self._pair_reuse = _pair_reuse_to_solved(pair_reuse, self._wire_dedup)
         self._pair_reuse_plan_cache = None
         self.pair_reuse_dropped = ()
+        # momwire#1809, inside a block: a uniform edge's same-edge reg moments
+        # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
+        # `pair_reuse`: off is the dense fill, bit for bit.
+        self._offset_reuse = bool(offset_reuse)
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -3862,6 +3904,7 @@ class BSplineSolver(
                 out.append((sl, arc, float(np.sqrt(a_w * a_w + two_h * two_h))))
         return out
 
+    @_offset_reuse_fill
     def _near_image_analytic_block(self, arc, a_eff, k):
         """The closed-form near-image moment block for one horizontal edge.
 
@@ -4903,6 +4946,7 @@ class BSplineSolver(
             return (True,) * n
         return tuple(m != _medium_spec.BELOW for m in self._wire_media())
 
+    @_offset_reuse_fill
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
         loop: each edge's analytic static-moment block, plus the O(N_e)
@@ -4954,6 +4998,7 @@ class BSplineSolver(
                 out.append((w, sl, ed_arc[i_e], a_w))
         return out
 
+    @_offset_reuse_fill
     def _same_edge_prep_swept_chunks(self, prep, k_array):
         """Yield `(ki, k, same_edge_k)` per sweep point, where `same_edge_k`
         is the per-k `same_edge_prep` list the fallback sweeps hand to
@@ -7523,6 +7568,7 @@ class BSplineSolver(
                 )
             del proj
 
+    @_offset_reuse_fill
     def _build_J_blocks_subset(
         self, geom, k, seg_idx, mirror_sources=False, *, obs_idx=None
     ):
@@ -7657,6 +7703,7 @@ class BSplineSolver(
             and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
         )
 
+    @_offset_reuse_fill
     def _accumulate_Z_subset_chunked(
         self,
         Z,
@@ -8077,6 +8124,7 @@ class BSplineSolver(
         )
         return _schedule.fits_mb(tensor_bytes, self.swept_mem_mb)
 
+    @_offset_reuse_fill
     def _compute_Z_operator(
         self, geom, supp_seg, polys, same_edge_prep=None, rows=None, compact=False
     ):
@@ -9318,6 +9366,7 @@ class BSplineSolver(
             and self._accel_serves_n_qp_pair
         )
 
+    @_offset_reuse_fill
     def _swept_batched_z_chunks(self, k_array, geom, supp_seg, polys):
         """Yield (c0, ks, Z) stacks of the batched swept assembly, where
         Z is (len(ks), n_basis, n_basis) for k_array[c0 : c0 + len(ks)].
