@@ -118,6 +118,8 @@ bits between `np.arcsinh` and `std::asinh` (measured ~1e-15 relative, the same
 class the reduced kernels have always had).
 """
 
+import contextlib
+import contextvars
 import os
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -838,7 +840,9 @@ def _seg_seg_static_moments(
     return out
 
 
-def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
+def _seg_seg_reg_geometry(
+    seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None, dense=False
+):
     """k-independent precompute for `_seg_seg_reg_moments`.
 
     Everything in the smooth-kernel moment integral except the `exp(-jkR)`
@@ -848,12 +852,31 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
     `_seg_seg_reg_moments_from_geometry`). Bounded memory — one edge's
     (N·n_qp, N·n_qp) R table at a time, same as the per-k path.
 
+    A uniform edge of `_REG_TOEPLITZ_MIN_N` segments or more returns the
+    Toeplitz form (momwire#1809): one row of offsets, no (N·n_qp)² table.
+    `dense=True` asks for the table anyway, for a caller (or an oracle) that
+    reads ``R`` and ``wu_pow`` itself.
+
     Returns a dict consumed by `_seg_seg_reg_moments_from_geometry`. The
     extended-kernel spec rides in that dict rather than in the per-k call
     signature: `a` is k-independent geometry, so the EK-aware remainder needs
     nothing per k that the reduced one does not (momwire#249 §5, the
     swept-path row).
     """
+    if not dense and _REG_TOEPLITZ.get() and _static_is_toeplitz(seg_endpoints):
+        N = len(seg_endpoints) - 1
+        if N >= _REG_TOEPLITZ_MIN_N:
+            # A window (`rows=`, momwire#968) is served from the same table as
+            # the whole block, so the two stay equal bit for bit.
+            return _seg_seg_reg_geometry_toeplitz(
+                float(seg_endpoints[1] - seg_endpoints[0]),
+                N,
+                a,
+                max_d,
+                n_qp,
+                ek=ek,
+                rows=None if rows is None else rows.indices(N)[:2],
+            )
     gl_xi, gl_w = leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
@@ -909,6 +932,75 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
         geo["wu_row"] = np.ascontiguousarray(wu_pow[:, r0:r1, :])
         geo["n_row"] = max(0, r1 - r0)
     return geo
+
+
+# momwire#1809 (offset reuse): on a uniform straight edge the smooth kernel
+# (e^{-jkR} - 1)/(4πR) depends on the pair only through j - i, exactly as the
+# static part does (`_static_is_toeplitz`), so the (N, N) block of every moment
+# is Toeplitz: 2N - 1 distinct entries, not N². They are one row of a uniform
+# edge of 2N - 1 segments, its centre segment against all of them, which is a
+# one-row window of the ordinary geometry (`rows=`), so the same kernels serve
+# it.
+#
+# Opt-in (momwire#1809): `BSplineSolver(offset_reuse=True)` sets this for its
+# own fills (`offset_reuse_scope`). Off, the dense table below is the fill as
+# it always was, bit for bit -- the default path, and the standalone
+# executable's, which fills the same-edge reg densely in C++.
+_REG_TOEPLITZ = contextvars.ContextVar("momwire_reg_toeplitz", default=False)
+
+
+@contextlib.contextmanager
+def offset_reuse_scope(on):
+    """Fill uniform edges' same-edge reg moments by offset inside the block."""
+    token = _REG_TOEPLITZ.set(bool(on))
+    try:
+        yield
+    finally:
+        _REG_TOEPLITZ.reset(token)
+
+
+# Below this many segments the dense table is cheaper (measured: 0.68x at 8,
+# 1.65x at 16, 9x at 64, 16x at 128 on one reg block).
+_REG_TOEPLITZ_MIN_N = 12
+# Edges whose reg geometry took the Toeplitz form in this process: a gate's
+# evidence that the route ran (an untaken route agrees trivially).
+REG_TOEPLITZ_EDGES = 0
+
+
+def _seg_seg_reg_geometry_toeplitz(h, N, a, max_d, n_qp, *, ek=None, rows=None):
+    """The Toeplitz form of `_seg_seg_reg_geometry` for a uniform edge of N
+    segments of length `h`: the geometry of one observer row (the centre of a
+    2N - 1 segment edge, arc 0..h) against every offset -(N-1)..N-1. `rows`
+    is an observer window ``(r0, r1)``, or None for the whole block."""
+    offsets = np.arange(-(N - 1), N + 1, dtype=np.float64) * h
+    row = _seg_seg_reg_geometry(
+        offsets, a, max_d, n_qp, ek=ek, rows=slice(N - 1, N), dense=True
+    )
+    r0, r1 = (0, N) if rows is None else rows
+    global REG_TOEPLITZ_EDGES
+    REG_TOEPLITZ_EDGES += 1
+    return {
+        "toeplitz": True,
+        "row": row,
+        "N": N,
+        "r0": r0,
+        "r1": r1,
+        "n_qp": n_qp,
+        "a": a,
+        "ek": ek,
+    }
+
+
+def _toeplitz_reg_gather(table, geo):
+    """(..., n_d, n_d, 1, 2N-1) offset table -> (..., n_d, n_d, r1-r0, N)
+    block, entry (i, j) taken from offset j - i."""
+    N, r0, r1 = geo["N"], geo["r0"], geo["r1"]
+    # A strided view, no copy: windows w[k, j] = t[k + j], so row i of the
+    # block is window N - 1 - i. Read-only; every consumer copies or adds it
+    # into its own block.
+    t = np.ascontiguousarray(table[..., 0, :])
+    w = np.lib.stride_tricks.sliding_window_view(t, N, axis=-1)
+    return w[..., ::-1, :][..., r0:r1, :]
 
 
 def _seg_seg_reg_nodes(seg_endpoints, max_d, n_qp):
@@ -1058,6 +1150,10 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     geometry dict is k-independent and so serves both. A complex k takes
     the numpy branches below — the C++ twins are `double`-typed.
     """
+    if geo.get("toeplitz"):
+        return _toeplitz_reg_gather(
+            _seg_seg_reg_moments_from_geometry(geo["row"], k), geo
+        )
     R = geo["R"]
     wu_pow = geo["wu_pow"]
     N = geo["N"]
@@ -1173,6 +1269,14 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     it for the whole sweep is cheap relative to the per-k full-J the caller
     already materializes.
     """
+    if geo.get("toeplitz"):
+        # One O(N) row per k (the swept kernels take no window); the gather
+        # makes each k's (N, N) block.
+        rows = [
+            _seg_seg_reg_moments_from_geometry(geo["row"], kk)
+            for kk in _k_array_asarray(k_array)
+        ]
+        return _toeplitz_reg_gather(np.stack(rows), geo)
     R = geo["R"]
     wu_pow = geo["wu_pow"]
     N = geo["N"]
