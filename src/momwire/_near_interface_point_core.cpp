@@ -146,7 +146,7 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
         edges.push_back(edges.back() + step);
         step *= 2.0;
     }
-    // The tail's own 16-point rule, as `column_tail` builds it (momwire#1595 D2).
+    // The tail's own rule (`MW_TAIL_NG` points), as `column_tail` builds it (momwire#1595 D2).
     mw899::fixed_gauss(edges, p, mw899::MW_TAIL_GX, mw899::MW_TAIL_GW, mw899::MW_TAIL_NG, t, wt);
     const cd ray = std::exp(cd(0.0, 0.25 * MW_PI));
     if (rho == 0.0) {

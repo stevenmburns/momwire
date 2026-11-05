@@ -201,19 +201,36 @@ _RAYS_FROM_HEAD = 1.0
 # on the adaptive walk's 24-point `_GX` / `_GW` everywhere, and `_COLUMN_P`'s
 # note already says p = 0 carries four decades of margin. On the rays the
 # margin is in the ORDER too: the integrand there is smooth and decaying
-# (e^{-t (s + rho) / sqrt 2}, no branch point or pole on the path), so 16
-# points per geometric panel pass every gate in tests/
-# test_near_interface_columns_895.py (the eps = 1 identity, the p / p+1
-# converged pair at 1e-12, the ledger) where 12 already fails one.
-# The HEAD and MID keep 24: tried at 16, the eps = 1 head -- where gamma_p
-# and gamma_m coincide -- reads p / p+1 at 2.2e-9 against the 1e-12 gate.
-# The tail is 384 of a near-node column's 816 nodes, so this is 128 nodes
-# off every column with rho > 0, on every CPU. The C++ twin carries the same
-# 16 numbers (MW_TAIL_GX / MW_TAIL_GW in _near_interface_columns_inline.h),
-# copied from this frozen table (`_quadrature.leggauss`, the same numbers
-# as `_leggauss_table.h`) so the two rules agree bit for bit.
-_COLUMN_NG = 16
+# (e^{-t (s + rho) / sqrt 2}, no branch point or pole on the path). D2 set 16
+# points per geometric panel, the order that passed every per-element gate in
+# tests/test_near_interface_columns_895.py at 1e-12; phase 2 of the exe gap
+# plan lowered it to 12, the setting whose cost a FILL measures: Z over the
+# NEC-5 610 / harvest / NEC-4.2 finite-ground corpora moved by at most the
+# bound the PR records (<= 1e-11 relative), against a shorter fill on the
+# buried / crossing decks (the PR's paired timings). The per-element gate
+# that 12 does not meet (the ledger's p / p+1 pair) is re-pinned at the
+# measured value, not hidden.
+# The tail is a third or more of a near-node column's nodes, so this is a
+# quarter of them off every column with rho > 0, on every CPU. The C++ twin
+# carries the same 12 numbers (MW_TAIL_GX / MW_TAIL_GW in
+# _near_interface_columns_inline.h), copied from this frozen table
+# (`_quadrature.leggauss`, the same numbers as `_leggauss_table.h`) so the two
+# rules agree bit for bit. The point family's tail (`_column_rule_j1`, the
+# twin's `_near_interface_point_core.cpp`) reads the same table, so a column
+# of either family still has the same nodes.
+_COLUMN_NG = 12
 _COLUMN_GX, _COLUMN_GW = leggauss(_COLUMN_NG)
+
+# The column TWIN's head and mid order (phase 2 of the exe gap plan): 16
+# points per panel where the walk, the numpy `six_columns` and the sheets
+# keep 24. Measured on the eps = 1 head -- where gamma_p and gamma_m
+# coincide -- p / p+1 at 16 reads 2.2e-9 per element, but a fill's Z moved by
+# at most the bound the PR records (<= 1e-11 relative) over the finite-ground
+# corpora, and the head is the larger part of a near column's nodes. The
+# exes' C++ evaluator passes the same order (`TWIN_NG`,
+# `_near_interface_eval.cpp`).
+_TWIN_NG = 16
+_TWIN_GX, _TWIN_GW = leggauss(_TWIN_NG)
 
 # The steepest-descent route for FAR columns (momwire#1595 D1b). With
 # lam = k_p sin w and gamma_p = j k_p cos w (analytic in w), the H0^(2) half of
@@ -568,7 +585,7 @@ def _fixed_gauss(edges, p, gx=None, gw=None):
 
     The fixed stand-in for `_adaptive_segment`: the same per-interval scope,
     bisection depth read off `p` instead of off the integrand, on the
-    column's own `_COLUMN_GX` / `_COLUMN_GW` (16 points, momwire#1595 D2)
+    column's own `_COLUMN_GX` / `_COLUMN_GW` (`_COLUMN_NG` points, momwire#1595 D2)
     rather than the walk's 24. p = 0 is one panel per seeded interval.
     """
     xs, ws = [], []
@@ -2584,8 +2601,8 @@ def _column_twin(
         int(_COLUMN_P),
         float(_DETOUR),
         _physical_cpu_count(),
-        _GX,
-        _GW,
+        _TWIN_GX,
+        _TWIN_GW,
         cancel_flag=_cancel.ptr(),
         cache=column_cache,
         **_columns_lanes_kw(),
@@ -4388,8 +4405,8 @@ def _designed_tables_reference(
                     int(_COLUMN_P),
                     float(_DETOUR),
                     _physical_cpu_count(),
-                    _GX,
-                    _GW,
+                    _TWIN_GX,
+                    _TWIN_GW,
                     cancel_flag=_cancel.ptr(),
                     **_columns_lanes_kw(),
                 )
