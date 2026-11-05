@@ -121,9 +121,14 @@ def test_two_consecutive_loads_at_one_position_add():
     assert stacked[0] == pytest.approx(summed[0], rel=1e-12)
 
 
-def test_two_loads_at_one_position_separated_by_a_card_still_refuse():
-    with pytest.raises(DeckError, match="already carries a load"):
-        parse(DIPOLE + "LD 0 1 3 3 50. 0. 0.\n" + DRIVE + "LD 4 1 3 3 10. 5.\nXQ\n")
+def test_two_loads_at_one_position_separated_by_a_card_keep_the_second():
+    """momwire#1812: the first LD after another card starts a new run, which
+    discards the earlier one (tests/test_ld_runs_1812.py has the oracles)."""
+    broken = _group_impedances(
+        DIPOLE + "LD 0 1 3 3 50. 0. 0.\n" + DRIVE + "LD 4 1 3 3 10. 5.\nXQ\n"
+    )
+    alone = _group_impedances(DIPOLE + DRIVE + "LD 4 1 3 3 10. 5.\nXQ\n")
+    assert broken == alone
 
 
 def test_wire_loading_that_changes_between_runs_refuses():

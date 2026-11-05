@@ -131,7 +131,7 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from ._cards import Card, DeckError, infinite_angle_refusal
-from ._nec2 import _GEOMETRY_CARDS, _Nec2Parser
+from ._nec2 import _GEOMETRY_CARDS, _LD_RUN_TRANSPARENT, _Nec2Parser
 from ._nec2_geometry import _GEOMETRY_BUILDERS, FlatWire
 from ._nec2_geometry import arc_vertices as _arc_vertices
 from .model import DeckModel
@@ -481,6 +481,9 @@ class _Nec4Parser(_Nec2Parser):
 
     _geometry_mnemonics = _GEOMETRY_CARDS | {"CW"}
     _geometry_builders = _NEC4_GEOMETRY_BUILDERS
+    # NEC-4.2 reads past EK (`_ek`), and an EK between two LD cards keeps
+    # their run there (momwire#1812), where nec2c's EK ends it.
+    _ld_run_transparent = _LD_RUN_TRANSPARENT | {"EK"}
 
     def __init__(self) -> None:
         super().__init__()

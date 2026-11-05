@@ -15,8 +15,8 @@ both answer it the same way, measured 2026-11-04 on an 11-segment dipole at
 * only CONSECUTIVE ``LD`` cards stack.  Any other card between two of them
   (FR, GN, EX, XQ) makes both engines DISCARD the earlier card's loads: with
   an EX between 10 and 20 ohm the drive row is the 20 ohm deck's, 97.1142 +
-  j43.8649.  That shape keeps a refusal by name, because this reader carries
-  loads across such a card rather than discarding them.
+  j43.8649.  This reader discards them too since momwire#1812
+  (``tests/test_ld_runs_1812.py``).
 
 Fixtures: ``tests/fixtures/eznec_load_probes_1110/N42_*`` (licensed NEC-4.2
 printouts) and ``N2_*`` (nec2c 1.3), beside ``M_0195_two_loads_one_node``;
@@ -113,15 +113,16 @@ def test_the_order_of_the_two_cards_does_not_matter():
     assert drive_row(ours42(swapped)) == drive_row(ours42(text))
 
 
-def test_two_loads_separated_by_another_card_still_refuse():
+def test_two_loads_separated_by_another_card_answer_as_the_second():
     """The oracle DISCARDS the first card's load here: the drive row is the
-    second card's alone, with no note.  This reader keeps loads across an
-    intervening card, so it refuses rather than add them."""
+    second card's alone, with no note.  Since momwire#1812 this reader does
+    the same, rather than refuse."""
     theirs = oracle("N42_separated_by_ex")
     assert drive_row(theirs) == drive_row(oracle("N42_separated_single"))
     assert not any(TWICE in line for line in theirs)
-    with pytest.raises(DeckError, match="earlier run of LD cards"):
-        parse(deck("N42_separated_by_ex"), dialect="nec4")
+    ours = ours42(deck("N42_separated_by_ex"))
+    assert drive_row(ours) == drive_row(ours42(deck("N42_separated_single")))
+    assert not any(TWICE in line for line in ours)
 
 
 @pytest.mark.parametrize("name", N2_SERVED)

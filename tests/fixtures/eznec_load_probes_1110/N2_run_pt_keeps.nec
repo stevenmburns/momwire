@@ -1,0 +1,12 @@
+CM momwire#1812: a PT between two LD cards on one segment keeps the run
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0
+LD 0,1,8,8,10.,0.,0.
+PT -1,0,0,0
+LD 0,1,8,8,20.,0.,0.
+FR 0,1,0,0,299.7925
+GN -1
+EX 0,1,6,0,1.,0.
+XQ
+EN

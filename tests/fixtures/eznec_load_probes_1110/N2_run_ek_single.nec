@@ -1,0 +1,11 @@
+CM momwire#1812: the second card of run_ek_breaks alone
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0
+EK
+LD 0,1,8,8,20.,0.,0.
+FR 0,1,0,0,299.7925
+GN -1
+EX 0,1,6,0,1.,0.
+XQ
+EN

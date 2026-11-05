@@ -748,12 +748,49 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         deck(DIPOLE, "LD 4 1 4 4 50 0", "LD 0 1 4 4 5"),
         "parsed",
     ),
-    # another card between them: NEC discards the first, this reader refuses
+    # momwire#1812: another card between two LD cards ends the run, and the
+    # first LD of the next run discards every earlier load (nec2c's EK ends
+    # it, NEC-4.2's does not, so the nec4 dialect stacks the pair)
     (
         "ld_double_separated",
         ("nec2", "nec4"),
         deck(DIPOLE, "LD 4 1 4 4 50 0", "EK", "LD 0 1 4 4 5"),
-        "earlier run of LD cards",
+        "parsed",
+    ),
+    (
+        "ld_run_broken_other_segment",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "LD 0 1 8 8 10", "FR 0 1 0 0 299.7925", "LD 0 1 3 3 20"),
+        "parsed",
+    ),
+    (
+        "ld_run_kept_across_print_and_comment_cards",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "LD 0 1 8 8 10", "PT -1", "PQ -1", "CM x", "LD 0 1 8 8 20"),
+        "parsed",
+    ),
+    (
+        "ld_run_drops_materials",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "LD 5 0 0 0 1e6", "LD 2 1 0 0 100", "GN -1", "LD 0 1 3 3 20"),
+        "parsed",
+    ),
+    (
+        "ld_run_zero_card_still_drops",
+        ("nec2", "nec4"),
+        deck(DIPOLE, "LD 0 1 8 8 10", "GN -1", "LD 0 1 3 3 0"),
+        "parsed",
+    ),
+    (
+        "ld_run_per_group",
+        ("nec2", "nec4"),
+        deck(
+            DIPOLE,
+            "LD 0 1 8 8 10",
+            tail="FR 0 1 0 0 300\nEX 0 1 6 0 1\nXQ\nLD 0 1 8 8 20\nLD 0 1 3 3 5\n"
+            "XQ\nEN\n",
+        ),
+        "parsed",
     ),
     (
         "ld_clear_and_restate",
