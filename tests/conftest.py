@@ -305,10 +305,11 @@ def pytest_collection_modifyitems(config, items):
 #              held to the bit with most of their rows interpolated. The plan
 #              is the FILL's, decided before any cut of its rows, which is
 #              what makes that possible; phase 1 decided per call and ran
-#              these modules with the sheets off. The smallest decks
-#              (crossing_deck(1), the detached and fan decks, the sloped
-#              radials) plan no sheet even so and are exact-route gates in
-#              both modes; the height sheet's cuts are also gated on a
+#              these modules with the sheets off. Since the shipped weights
+#              fell to 0.015 (phase 2 of the exe gap plan) even the smallest
+#              decks may plan a sheet here (crossing_deck(1) does); a gate
+#              that needs the exact columns sets `_SHEET` off itself
+#              (`test_negative_controls_move_z`'s "split"); the height sheet's cuts are also gated on a
 #              miniature Beverage in `test_plane_sheet_1173`. A fill that
 #              planned a sheet and served no row from it fails at teardown,
 #              so a green "sheets" row cannot be a sheet that never ran.

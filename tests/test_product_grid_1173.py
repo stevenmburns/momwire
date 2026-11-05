@@ -254,11 +254,19 @@ def test_chunked_product_tables_are_the_grid_routes(budget):
 
 
 @pytest.mark.parametrize("control", ["transpose", "split", "row"])
-def test_negative_controls_move_z(control):
+def test_negative_controls_move_z(control, monkeypatch):
     """ "transpose" maps a one-group product's rows back to the grid in the
     other factor's order (the product order permuted), "split" evaluates the
     rows as two calls (columns' s_min change), "row" serves every fast end one
-    product row off. Each must move Z, so the gate above can see each."""
+    product row off. Each must move Z, so the gate above can see each.
+
+    "split" is a control on the EXACT columns: a sheet row is a function of
+    the row alone whatever call it arrives in (the plan is the fill's), so
+    at the sheet weight of phase 2 of the exe gap plan, where the "sheets"
+    mode takes this deck's plane, the cut moves nothing by design. It runs
+    with the sheets off in both modes."""
+    if control == "split":
+        monkeypatch.setattr(ni, "_SHEET", False)
     make = lambda: _razor(crossing_deck(1))  # noqa: E731
     ref, _r = _fill(make, off=True)
     got, r = _fill(make, **{"cf._PRODUCT_NEG_CONTROL": control})
