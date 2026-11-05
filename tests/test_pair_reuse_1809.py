@@ -14,6 +14,7 @@ is filled normally and named. So:
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import numpy as np
@@ -240,3 +241,43 @@ def test_sommerfeld_refuses_a_malformed_map(monkeypatch):
     monkeypatch.setattr(BSplineSolver, "_remainder_reuse_args", lambda self, g, gz: bad)
     with pytest.raises(ValueError, match="pair reuse"):
         _z_somm(wires, n, None)
+
+
+def test_sommerfeld_fold_copies_as_the_dense_route_does():
+    """The fill folds the remainder into Z with no Q held (momwire#1798),
+    and that route takes the copy map too: the same copies, and the same
+    bits, as the dense block `Z -= Q` with the same hint."""
+    acc = _acc_or_skip()
+    if not hasattr(acc, "sommerfeld_remainder_bspline_Q_into"):
+        pytest.skip("fused sommerfeld fold kernel unavailable")
+    from momwire import _ground_refl
+
+    wires, n = _yagi(3, h=15.0)
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(1, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.006,
+        pair_reuse=_director_hint(3),
+        **SOMM,
+    )
+    geom = s._build_geometry()
+    supp_seg, polys, *_rest = s._build_basis_polynomials(geom)
+    eps_t = _ground_refl.eps_tilde(s.ground_eps, s.omega, s.eps)
+    c0 = acc.remainder_q_reused_pairs()
+    Q = s._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+    dense = acc.remainder_q_reused_pairs() - c0
+    nb = Q.shape[0]
+    rng = np.random.default_rng(1809)
+    Z0 = rng.standard_normal((nb, nb)) + 1j * rng.standard_normal((nb, nb))
+    T = np.array(Z0, order="F")
+    c1 = acc.remainder_q_reused_pairs()
+    s._Z_sommerfeld_remainder_into(T, -1, geom, supp_seg, polys, eps_t)
+    assert acc.remainder_q_reused_pairs() - c1 == dense >= 4 * 400
+    ref = np.ascontiguousarray(Z0 - Q)
+    got = np.ascontiguousarray(T)
+    if sys.platform != "win32":
+        assert got.tobytes() == ref.tobytes()
+    else:
+        assert np.abs(got - ref).max() <= 1e-13 * np.abs(ref).max()
