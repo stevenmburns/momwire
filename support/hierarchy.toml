@@ -18,7 +18,7 @@
 id = "ak-linux-avx2"
 description = "antennaknobs on Linux avx2: the hosted app"
 jobs = [
-    "ci.yml:test",  # the Linux default lane
+    "ci.yml:test",  # the Linux default lane; runs the stable-path tripwire (tests/test_stable_path_tripwire.py)
     "ci.yml:test-slow",  # the slow lane
     "ci.yml:test-integration",
     "ci.yml:test-crossgate",

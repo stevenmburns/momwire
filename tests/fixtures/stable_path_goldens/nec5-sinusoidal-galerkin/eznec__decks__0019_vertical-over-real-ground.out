@@ -1,0 +1,147 @@
+1
+ momwire <version> sinusoidal-galerkin avx2
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          Vertical over real ground                                                    
+                                                                                                       
+                          EZNEC Pro/2+ v. 7.0.4  2026-08-16 16:53:32                                   
+                                                                                                       
+                          ! Written by EZNEC/Pro+ v. 7.0 in NEC-5 format.                              
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+ Model definition commands:
+
+ GW    1    10  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  1.03000E+01  2.00000E-02
+ GE    1   -1
+
+   GROUND PLANE SPECIFIED.
+
+   WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE INTERPOLATED TO IMAGE IN GROUND PLANE.
+
+
+ Number of nodes :    11
+ Number of wire elements :    10
+ Number of patch elements:     0
+ Number unknowns:    10
+
+
+
+
+ ***** INPUT LINE  1  FR   0    1    0    0  7.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  GN   1    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  EX   4    1   -1    0  1.41421E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  4  PQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  5  XQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 7.0000E+00 MHZ
+                                    WAVELENGTH= 4.2829E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+                                          PERFECT GROUND
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+                                   THIS STRUCTURE IS NOT LOADED
+ALLOCATE CM:            100
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.000 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+   1     1 2  5.1526E+01  3.5855E+00  1.4142E+00  0.0000E+00  3.6434E+01  2.5353E+00  2.7314E-02 -1.9007E-03  3.6434E+01
+
+
+
+                                       - - - Wire Currents - - -
+
+                             Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  Elem.  Tag            Coord. of seg. center          Seg.            - - - Current (Amps) - - -
+   No.   No.     X            Y            Z           Length       Real         Imag.        Mag.         Phase
+      1    1  0.00000E+00  0.00000E+00  1.20247E-02  2.40494E-02  1.40694E+00 -9.21821E-03  1.40697E+00   -0.3754
+      2    1  0.00000E+00  0.00000E+00  3.60740E-02  2.40494E-02  1.37694E+00 -3.10411E-02  1.37729E+00   -1.2914
+      3    1  0.00000E+00  0.00000E+00  6.01234E-02  2.40494E-02  1.31583E+00 -5.01222E-02  1.31679E+00   -2.1814
+      4    1  0.00000E+00  0.00000E+00  8.41728E-02  2.40494E-02  1.22442E+00 -6.09950E-02  1.22594E+00   -2.8519
+      5    1  0.00000E+00  0.00000E+00  1.08222E-01  2.40494E-02  1.10464E+00 -6.67525E-02  1.10666E+00   -3.4581
+      6    1  0.00000E+00  0.00000E+00  1.32272E-01  2.40494E-02  9.58525E-01 -6.68480E-02  9.60853E-01   -3.9894
+      7    1  0.00000E+00  0.00000E+00  1.56321E-01  2.40494E-02  7.88698E-01 -6.16991E-02  7.91108E-01   -4.4731
+      8    1  0.00000E+00  0.00000E+00  1.80370E-01  2.40494E-02  5.96672E-01 -5.12888E-02  5.98872E-01   -4.9130
+      9    1  0.00000E+00  0.00000E+00  2.04420E-01  2.40494E-02  3.85903E-01 -3.59077E-02  3.87570E-01   -5.3160
+     10    1  0.00000E+00  0.00000E+00  2.28469E-01  2.40494E-02  1.38352E-01 -1.35266E-02  1.39012E-01   -5.5840
+
+
+
+                             - - - Wire Charge Densities - - -
+
+                     Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  ELEM.  TAG          Coord. of Seg. Center           Seg.        Charge Density (C/m)
+   No.   No.     X            Y            Z          Length        Mag.         Phase
+      1    1  0.00000E+00  0.00000E+00  1.20247E-02  2.40494E-02  5.18970E-10  -38.2856
+      2    1  0.00000E+00  0.00000E+00  3.60740E-02  2.40494E-02  1.14835E-09  -60.9842
+      3    1  0.00000E+00  0.00000E+00  6.01234E-02  2.40494E-02  1.72003E-09  -80.4221
+      4    1  0.00000E+00  0.00000E+00  8.41728E-02  2.40494E-02  2.35154E-09  -85.2608
+      5    1  0.00000E+00  0.00000E+00  1.08222E-01  2.40494E-02  2.95013E-09  -88.8319
+      6    1  0.00000E+00  0.00000E+00  1.32272E-01  2.40494E-02  3.50790E-09  -90.9134
+      7    1  0.00000E+00  0.00000E+00  1.56321E-01  2.40494E-02  4.00096E-09  -92.4584
+      8    1  0.00000E+00  0.00000E+00  1.80370E-01  2.40494E-02  4.49769E-09  -93.6767
+      9    1  0.00000E+00  0.00000E+00  2.04420E-01  2.40494E-02  4.84136E-09  -94.6357
+     10    1  0.00000E+00  0.00000E+00  2.28469E-01  2.40494E-02  6.14300E-09  -95.5840
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 3.6434E+01 WATTS
+                                           RADIATED POWER= 3.6434E+01 WATTS
+                                           WIRE LOSS     = 0.0000E+00 WATTS
+                                           EFFICIENCY    = 100.00 PERCENT
+
+
+
+
+ ***** INPUT LINE  6  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.000
