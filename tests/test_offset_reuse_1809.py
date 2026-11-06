@@ -60,6 +60,12 @@ def _Z(s):
     return s._compute_Z_operator(geom, supp, polys)
 
 
+def _FREE_EDGES():
+    import momwire.bspline as B
+
+    return B.FREE_OFFSET_EDGES
+
+
 def _rel(Z1, Z0):
     return float(np.max(np.abs(Z1 - Z0)) / np.max(np.abs(Z0)))
 
@@ -76,9 +82,11 @@ def _rel(Z1, Z0):
 )
 def test_on_runs_and_moves_z_by_roundoff(kw):
     Z0 = _Z(_solver(81, False, **kw))
-    c0 = K.REG_TOEPLITZ_EDGES
+    c0 = K.REG_TOEPLITZ_EDGES + _FREE_EDGES()
     Z1 = _Z(_solver(81, True, **kw))
-    assert K.REG_TOEPLITZ_EDGES > c0  # the Toeplitz form was built
+    # The Toeplitz reg form was built, or (since step 2, on a whole-mesh
+    # fill) the edge's own block was assembled by offset instead.
+    assert K.REG_TOEPLITZ_EDGES + _FREE_EDGES() > c0
     assert _rel(Z1, Z0) <= 1e-13
 
 
@@ -238,3 +246,47 @@ def test_the_full_block_and_the_fold_agree():
         T = np.zeros_like(Q)
         s._Z_sommerfeld_remainder_into(T, 1, g, supp, polys, eps_t)
     assert np.array_equal(T, Q)
+
+
+# -- step 2: an offset edge's own free-space block ---------------------------
+
+_FREE_DECKS = {
+    "horizontal": ([np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]])], [[41]]),
+    # free space has no preferred direction: a sloped edge qualifies here
+    "sloped": ([np.array([[0.0, 0.0, 1.0], [8.0, 0.0, 7.0]])], [[41]]),
+    # two uniform pieces at different segment lengths, joined
+    "graded": (
+        [np.array([[0.0, -5.0, 10.0], [0.0, 0.1, 10.0], [0.0, 5.0, 10.0]])],
+        [[27, 54]],
+    ),
+    "inverted_l": _GROUND_DECKS["inverted_l"],
+    "two_wires": _GROUND_DECKS["two_wires"],
+}
+
+
+@pytest.mark.parametrize("ek", [False, True], ids=["thin", "ek"])
+@pytest.mark.parametrize("deck", sorted(_FREE_DECKS))
+def test_the_free_space_block_by_offset(deck, ek):
+    wires, segs = _FREE_DECKS[deck]
+
+    def free(reuse):
+        return BSplineSolver(
+            wires=wires,
+            n_per_edge_per_wire=segs,
+            feeds=[(0, None, 1.0 + 0j)],
+            wavelength=LAM,
+            wire_radius=0.001,
+            offset_reuse=reuse,
+            extended_kernel=ek,
+        )
+
+    Z0 = _Z(free(False))
+    c0 = _B.FREE_OFFSET_EDGES
+    Z1 = _Z(free(True))
+    assert _B.FREE_OFFSET_EDGES > c0  # the offset block was assembled
+    assert _rel(Z1, Z0) <= 1e-14
+    z0 = free(False).compute_impedance()[0]
+    z1 = free(True).compute_impedance()[0]
+    # Z moves by roundoff (<= 6e-16 measured); the extended kernel's worse
+    # conditioning carries that to ~1.3e-12 in Zin on these decks.
+    assert abs(z1 - z0) / abs(z0) <= (3e-12 if ek else 1e-12)
