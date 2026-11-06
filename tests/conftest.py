@@ -249,6 +249,28 @@ _EZNEC_CORPUS_GROUP_FILES = (
 )
 
 
+# `reach(N)` (src/momwire/_features.py): a test of an experimental feature
+# certified through support level N is skipped on a lane whose
+# MOMWIRE_CI_LEVEL is past N. Unset (a dev box, and every lane until the CI
+# selector sets it), everything runs.
+def _skip_past_reach(items):
+    raw = os.environ.get("MOMWIRE_CI_LEVEL", "").strip()
+    if not raw:
+        return
+    level = int(raw)
+    for item in items:
+        marker = item.get_closest_marker("reach")
+        if marker is None:
+            continue
+        reach = int(marker.args[0])
+        if level > reach:
+            item.add_marker(
+                _pytest.mark.skip(
+                    reason=f"reach({reach}): not certified at MOMWIRE_CI_LEVEL={level}"
+                )
+            )
+
+
 # tryfirst is LOAD-BEARING (momwire#403). xdist's worker hook rewrites each
 # grouped item's nodeid to "id@group" in its own pytest_collection_modifyitems,
 # and that hook runs BEFORE a conftest's plain hookimpl — so a group marker
@@ -259,6 +281,7 @@ _EZNEC_CORPUS_GROUP_FILES = (
 # only a hook can see.
 @_pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _skip_past_reach(items)
     for item in items:
         if item.get_closest_marker("memgate") is not None:
             item.add_marker(_pytest.mark.xdist_group("memgate"))

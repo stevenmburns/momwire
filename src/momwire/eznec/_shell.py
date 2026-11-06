@@ -84,7 +84,7 @@ from pathlib import Path
 
 import momwire_serve_client as _mech
 
-from .. import _times
+from .. import _features, _times
 from ..deck import DeckError
 from ..deck._nec5 import (
     Nec5Deck,
@@ -388,6 +388,7 @@ def render_files(
     return printout, gmo
 
 
+@_features.in_context("portal")
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 

@@ -253,6 +253,10 @@ markers = [
     # installed runs them by default and everyone else skips cleanly.
     # Deselect explicitly with `-m "not oracle_binary"`.
     "oracle_binary: shells out to SimNEC's nec2c oracle; skipped when it is not installed",
+    # An experimental feature's tests (src/momwire/_features.py): reach(N) is
+    # the feature's reach, and a lane whose MOMWIRE_CI_LEVEL (its level in
+    # support/hierarchy.toml) is past N skips them. Unset, everything runs.
+    "reach(n): an experimental feature's test, certified through support level n; skipped when MOMWIRE_CI_LEVEL > n",
 ]
 # Default local run: skip the slow convergence ladders/oracle sweeps and the
 # memgate certification gates, and run PARALLEL — `-n auto --dist loadgroup`

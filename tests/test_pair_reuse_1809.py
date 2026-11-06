@@ -22,6 +22,9 @@ import pytest
 
 from momwire.bspline import BSplineSolver, PairReuseDropped
 
+# An experimental feature (`momwire._features`, reach 1).
+pytestmark = pytest.mark.reach(1)
+
 LAM = 21.1
 
 

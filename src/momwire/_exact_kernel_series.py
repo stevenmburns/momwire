@@ -67,13 +67,13 @@ from e^{Im(k) R} -- and the callers, which refuse a complex k before here.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from math import comb
 
 import numpy as np
 
 from . import _exact_kernel as _ek
+from . import _features
 
 # With R_c = 0 the series is used while k·R ≤ X_MAX over the pair. The terms
 # of e^{-jx} peak at x^n/n! ≈ e^x/√(2πx): at x = 4 the largest is 10.7, so
@@ -97,7 +97,12 @@ PAIR_NBYTES = 2 * 8 * N_CAP + 96
 # rule to ~1e-15 of a moment, which is inside the drift budget but does flip
 # the last printed digit of a few printouts (the PR's byte gate lists them),
 # and a printed digit moving is a decision, not a side effect.
-ENABLED = os.environ.get("MOMWIRE_EXACT_KERNEL_SERIES", "0") == "1"
+#
+# Registered in `_features` as `exact_kernel_series` (a native feature, reach
+# 1): MOMWIRE_X_EXACT_KERNEL_SERIES, with the old name kept as an alias. Read
+# here without the reach check, which `RazorSolver` makes where the series
+# would serve, so importing momwire never refuses.
+ENABLED = "exact_kernel_series" in _features.active()
 
 
 def n_terms(x):

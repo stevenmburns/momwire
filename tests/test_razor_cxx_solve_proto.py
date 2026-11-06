@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from momwire import CancelToken, RazorSolver, SolveAborted, razor
+from momwire import _features
 
 pytestmark = pytest.mark.skipif(
     not razor._HAVE_RAZOR_SOLVE_CXX, reason="accelerator without razor_solve_proto"
@@ -150,10 +151,20 @@ def test_the_default_is_the_python_route(monkeypatch):
     assert razor._CXX_ROUTE == {}
 
 
-def test_the_environment_switch_routes(monkeypatch):
+@pytest.mark.reach(1)
+@pytest.mark.parametrize("var", ["MOMWIRE_X_RAZOR_CXX", "MOMWIRE_RAZOR_CXX"])
+def test_the_environment_switch_routes(monkeypatch, var):
+    # `razor_cxx` is a native feature of reach 1 (`momwire._features`): the
+    # switch routes where that is certified and refuses elsewhere. The old
+    # name is its alias.
     monkeypatch.setattr(razor, "_RAZOR_CXX", None)
-    monkeypatch.setenv("MOMWIRE_RAZOR_CXX", "1")
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_CXX", raising=False)
+    monkeypatch.setenv(var, "1")
     monkeypatch.setattr(razor, "_CXX_ROUTE", {})
+    if not _features.certified("razor_cxx"):
+        with pytest.raises(_features.FeatureNotCertified, match="razor_cxx"):
+            RazorSolver(**BASE, **CASES["free"]).compute_port_solution()
+        return
     RazorSolver(**BASE, **CASES["free"]).compute_port_solution()
     assert razor._CXX_ROUTE == {"cxx": 1}
 

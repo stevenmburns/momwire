@@ -26,6 +26,7 @@ import pytest
 from _lane_gate import WIN32, lanes_match
 
 from momwire import RazorSolver, razor
+from momwire import _features
 from momwire._accel import acc
 from momwire._feed_snap import AmbiguousSite
 
@@ -411,11 +412,21 @@ def test_the_default_is_the_python_route(monkeypatch):
     assert razor._CXX_ROUTE == {} and razor._CXX_FRONT_ROUTE == {}
 
 
-def test_the_environment_switch_routes(monkeypatch):
+@pytest.mark.reach(1)
+@pytest.mark.parametrize("var", ["MOMWIRE_X_RAZOR_CXX", "MOMWIRE_RAZOR_CXX"])
+def test_the_environment_switch_routes(monkeypatch, var):
+    # `razor_cxx` is a native feature of reach 1 (`momwire._features`): the
+    # switch routes where that is certified and refuses elsewhere. The old
+    # name is its alias.
     monkeypatch.setattr(razor, "_RAZOR_CXX", None)
-    monkeypatch.setenv("MOMWIRE_RAZOR_CXX", "1")
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_CXX", raising=False)
+    monkeypatch.setenv(var, "1")
     monkeypatch.setattr(razor, "_CXX_ROUTE", {})
     monkeypatch.setattr(razor, "_CXX_FRONT_ROUTE", {})
+    if not _features.certified("razor_cxx"):
+        with pytest.raises(_features.FeatureNotCertified, match="razor_cxx"):
+            RazorSolver(**BASE, **CASES["free"]).compute_port_solution()
+        return
     RazorSolver(**BASE, **CASES["free"]).compute_port_solution()
     assert razor._CXX_ROUTE == {"cxx-front": 1}
 
