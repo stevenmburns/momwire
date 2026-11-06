@@ -1,0 +1,763 @@
+{
+ "commit": "78fab8f6dda186392087b1847d06d99a200c7789",
+ "generator": "scripts/golden_printouts.py --corpus stable",
+ "version_mask": "<version>",
+ "regime": {
+  "momwire": "0.87.1",
+  "accelerator_variant": "avx2",
+  "numpy": "2.5.4",
+  "scipy": "1.18.1",
+  "python": "3.12.15",
+  "machine": "x86_64",
+  "system": "Linux",
+  "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+  "threadpools_during_render": [
+   {
+    "user_api": "blas",
+    "internal_api": "openblas",
+    "num_threads": 1,
+    "filepath": "libscipy_openblas64_-f48b354e.so",
+    "version": "0.3.34.106.0",
+    "architecture": "Haswell"
+   },
+   {
+    "user_api": "blas",
+    "internal_api": "openblas",
+    "num_threads": 1,
+    "filepath": "libscipy_openblas-5f890258.so",
+    "version": "0.3.31.dev",
+    "architecture": "Haswell"
+   },
+   {
+    "user_api": "openmp",
+    "internal_api": "openmp",
+    "num_threads": 1,
+    "filepath": "libgomp.so.1.0.0",
+    "version": null
+   }
+  ],
+  "somm_disk_cache": "0"
+ },
+ "entries": [
+  {
+   "deck": "eznec_nec42/0223_dipole-ex6.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0223_dipole-ex6.out",
+   "deck_sha256": "4acf2dfb07eafe7fa005d01db4f17656d7b79888d5f865698498da3acdbe6d12",
+   "printout_sha256": "5a34515af89dd3173e4cca7ba354679ee6ef6be73fb1345fa5881588277ffb26"
+  },
+  {
+   "deck": "eznec_nec42/0224_dipole-ex0.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0224_dipole-ex0.out",
+   "deck_sha256": "056e3194441b82b348547010c4660d841baaba9f9786790305738ab8d3299306",
+   "printout_sha256": "e59784500f73ec3079d7e5fb0c43423f00c78091b2d84cb7fe76b520a32a62ee"
+  },
+  {
+   "deck": "eznec_nec42/0225_dipole-ld4.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0225_dipole-ld4.out",
+   "deck_sha256": "b4b645e6e42c1d9956243aae866e1e1e78dfc172cfb649cc0198ff8a656684b4",
+   "printout_sha256": "821823b4ff8f82fdd9568836b357efa0d69a8cf77ab4b3fb35f6a673fd8db1e7"
+  },
+  {
+   "deck": "eznec_nec42/0227_dipole-ld5-copper.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0227_dipole-ld5-copper.out",
+   "deck_sha256": "938db971ced68bb3b65e6a11a089c6f6bbf10328cc01d74cc38a186dc5f01ae7",
+   "printout_sha256": "6106359544dd4d5577bc1ef07b2695f21cd23f9d50ef6056cfdd2ffc9e37af59"
+  },
+  {
+   "deck": "eznec_nec42/0228_dipole-10m-free.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0228_dipole-10m-free.out",
+   "deck_sha256": "680f31f9591407bda788c963d9518306486909bf3033be8c4b71f919926d4b4a",
+   "printout_sha256": "1157aa5a1f35a63844f423f93d8165fca3a3fd90f5af179f40345738aee25b5a"
+  },
+  {
+   "deck": "eznec_nec42/0229_dipole-10m-gn1.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0229_dipole-10m-gn1.out",
+   "deck_sha256": "77fb0fac304eacff041e36c4e34a10fce2f87225886d1ebf1e57a6ad8e17de9f",
+   "printout_sha256": "7dff7165eb8f32dcc355445f909a72b5a72baade9fa78cd5cef16a11cdb3431a"
+  },
+  {
+   "deck": "eznec_nec42/0230_dipole-10m-gn1-gd.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0230_dipole-10m-gn1-gd.out",
+   "deck_sha256": "da7d600d1e3a09cf5507f034a4bcff8f6fa65c24ca6bc004a350e51767bf0c02",
+   "printout_sha256": "54acd9106bee44eaa3616806578a91ea260176458d4ad72090f57c2a197e4c50"
+  },
+  {
+   "deck": "eznec_nec42/0231_dipole-10m-gn2.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0231_dipole-10m-gn2.out",
+   "deck_sha256": "2d8bf1016f5c1e9ffc9bfaeb49623886af4964a322c5730b1356795db69bd78f",
+   "printout_sha256": "ae879975ab60decf309a0b40daeec825f1e3edddfb2fd6baa4b6d7a02b202210"
+  },
+  {
+   "deck": "eznec_nec42/0232_dipole-10m-gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0232_dipole-10m-gn3.out",
+   "deck_sha256": "ee2685e61c4072fa575830e118e02fdb6df5f91090bf25dbacb59200cccada3e",
+   "printout_sha256": "9497e4dcd107587ca562bd34669ce2b95c0f39977b8e93531d0f6a68dd572616"
+  },
+  {
+   "deck": "eznec_nec42/0233_dipole-13p9mhz-xq.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0233_dipole-13p9mhz-xq.out",
+   "deck_sha256": "1717c28f1c42d3e0581e300de04fd298a32079b690b7e4b995579e4908652480",
+   "printout_sha256": "d31639e18c16a90b252da6e93f3a5eadaf50059fe923d6c4658769fa6273cda9"
+  },
+  {
+   "deck": "eznec_nec42/0234_cardioid-l-network.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0234_cardioid-l-network.out",
+   "deck_sha256": "6a9818ec1ffba10a45f2c2898d903d1fdf77aaeb6bdb7a8f712ec8a39a08bf62",
+   "printout_sha256": "e0149c66df9a1f01912bd920acc981cb021f92d4cfa7cc9e288621d64a07f01c"
+  },
+  {
+   "deck": "eznec_nec42/0235_foursquare-tl.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0235_foursquare-tl.out",
+   "deck_sha256": "a8f383c071c1dd21c193101cc071939b97849a6e674c34cb973c24dc4f547b05",
+   "printout_sha256": "e16054717148ca5c43f8443732904634bb561132934a0fa8bbdb38a4cbb7f607"
+  },
+  {
+   "deck": "eznec_nec42/0237_dipole-ex6-elevation.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0237_dipole-ex6-elevation.out",
+   "deck_sha256": "350ab569dfea9eaa5c2eb40b8bcc4b7f22da3bd47f2e68950dfd904064b679b8",
+   "printout_sha256": "e8529c83e8821ab525b0de4c353a46623332b7424dc0ce8acbbd64be8c2345ad"
+  },
+  {
+   "deck": "eznec_nec42/0238_dipole-ex6-3d.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0238_dipole-ex6-3d.out",
+   "deck_sha256": "fdcf569b473f478729c4431f7b1535f03d79f5a8cc6fe4bd922c998b1bdd4796",
+   "printout_sha256": "afd1849d6cbfac3c71d22134e9f122cfb69ee9bf436c02ebe64ee5ec135d17fa"
+  },
+  {
+   "deck": "eznec_nec42/0239_dipole-buried-gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__0239_dipole-buried-gn3.out",
+   "deck_sha256": "763dd1f760be6c62bd90d29081e64b53d308a173d837d2e713d485cdacf0e453",
+   "printout_sha256": "a827ab42aab7ecb5965eae3ce785512a861fc77eec0a8f342ea55e91befbf1e5"
+  },
+  {
+   "deck": "eznec_nec42/multisource/m1_cardioid-2-current-sources.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__multisource__m1_cardioid-2-current-sources.out",
+   "deck_sha256": "1bb76f742b99776839daa32b07143a350d2032872bdc2cc400c1731fe9f481a0",
+   "printout_sha256": "08e0fb5896b5ef328068a134136740d78453c1d9ebbb7d73c725551f506c5603"
+  },
+  {
+   "deck": "eznec_nec42/multisource/m2_foursquare-4-current-sources.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__multisource__m2_foursquare-4-current-sources.out",
+   "deck_sha256": "4b74e10c52431d59b459be1b37500562646b639eda4220f37549c98d1815f37e",
+   "printout_sha256": "92c1aa4ef02a8407b865d3c2dbe9b8cda93118c0df05075a34810f77a49a6d68"
+  },
+  {
+   "deck": "eznec_nec42/probes/p1_junction.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p1_junction.out",
+   "deck_sha256": "eeb754c19b334e5e1dba5c6b649a4dd2777c05f90588e9dc008362da3ca0edea",
+   "printout_sha256": "7ff376ed1a721b04d81ba060d65774760f1fc1ab95dd7ed6da0b09efcef98995"
+  },
+  {
+   "deck": "eznec_nec42/probes/p2_three_frequencies.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p2_three_frequencies.out",
+   "deck_sha256": "629706900c015e18476059dfe453a0e83627b5091056c76e8b83a5b4ac93ab10",
+   "printout_sha256": "4648ec2c3d7c716e242046adf4d473c866f62ece1b739d15f4f828c6b6b4170b"
+  },
+  {
+   "deck": "eznec_nec42/probes/p3_rlc_loads.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p3_rlc_loads.out",
+   "deck_sha256": "5f2024af2b478ad44c1471c17d4126100224cca1e280ddeb27d9957fe9124df2",
+   "printout_sha256": "840826a751e4a191bbfe030d013bbdea33179c5c36f4ddaa4b6accc5ed808f67"
+  },
+  {
+   "deck": "eznec_nec42/probes/p4_near_field.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p4_near_field.out",
+   "deck_sha256": "3c0b8ea9813fdbf550aba73182bbc381d693eea5f67c71a37f54e903c2b93f32",
+   "printout_sha256": "934a69351f72267011de3d7817b934580016198e79a1dea0fcb30065e87fe0b1"
+  },
+  {
+   "deck": "eznec_nec42/probes/p5_gd_xq.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p5_gd_xq.out",
+   "deck_sha256": "efd246b5547001ad2d02e5c29c89fddf682208645c83dd5c2ed26ce80ac5c36b",
+   "printout_sha256": "5a1b0727a0e936775527a463a1517b80ea7ecbf1e3f598d51350c698c1ec401d"
+  },
+  {
+   "deck": "eznec_nec42/probes/p6_voltage_source_on_network.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p6_voltage_source_on_network.out",
+   "deck_sha256": "580512bb31306be475f2930c8647300b2531b5edc27455c4d0a7672e4e58258e",
+   "printout_sha256": "dc5a150f8481d306f7ccb2ec5a15fd4586dbbcc632888c996f23f4f598294652"
+  },
+  {
+   "deck": "eznec_nec42/probes/p7_gn2_7mhz.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p7_gn2_7mhz.out",
+   "deck_sha256": "fd7f868621107977ef20a3548320470f132baba9ad4de2899bac434b2a085fdf",
+   "printout_sha256": "0f166f36652660201eed45d8d7cb66de38a9902904007ad21c5cb328bc3ed278"
+  },
+  {
+   "deck": "eznec_nec42/probes/p8_two_runs.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p8_two_runs.out",
+   "deck_sha256": "fdad616bcca47bcd2bbff86dcd47a839e3c301079171ce5f400d51f38d914764",
+   "printout_sha256": "57839eb621bfd05a7c2ecf4e39ce903d70db6b7db2722a7438a2deddfc278ae0"
+  },
+  {
+   "deck": "eznec_nec42/probes/p9_above_and_buried_gn2.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p9_above_and_buried_gn2.out",
+   "deck_sha256": "d1ba8fc89f72baaa6d6425cc1e283cda4635a8adb2ada0af559bbba3931a64a2",
+   "printout_sha256": "317f31dfc287b3bee0b3677485d9835f37402918a154fcf25b10cc4bc31b7d39"
+  },
+  {
+   "deck": "eznec_nec42/probes/p10_fat_dipole.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p10_fat_dipole.out",
+   "deck_sha256": "30e417dfb4565250e8b20288e95a93815fe0fdb80ab137aa47ba0672f328f758",
+   "printout_sha256": "9e81775e3b24927b26a08b90ce3a5858618ede0e07b5e82643723971aef746e6"
+  },
+  {
+   "deck": "eznec_nec42/probes/p13_ne1_gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p13_ne1_gn3.out",
+   "deck_sha256": "8c0ffea44273c07a834eabad8322f3654607f6750942a1218eb11adaa2eb1cac",
+   "printout_sha256": "0b60559abb91e1a3e984a4319014d783fe18d9f84075a5b020eb0ad8b4fc19e5"
+  },
+  {
+   "deck": "eznec_nec42/probes/p15_ne1_gn2.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p15_ne1_gn2.out",
+   "deck_sha256": "531c4b7530d3228c1c57869046c2dfbf76aedf5ebd9e961399cb9dc87e63273d",
+   "printout_sha256": "b5482041f68d0977de88194718d8e3bfd81cc9dd41b3af65f85960ab1103426b"
+  },
+  {
+   "deck": "eznec_nec42/probes/p16_rp_range_gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p16_rp_range_gn3.out",
+   "deck_sha256": "5008d6d02f2472a728afb80824309f2c9c519b77a35b7f992c4600f408cfaa08",
+   "printout_sha256": "ea9011a90427ecdeae1a5f7b77b4ae2cb563f82588b61a801899f8d46a074adc"
+  },
+  {
+   "deck": "eznec_nec42/probes/p29_rp_range_gn1.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p29_rp_range_gn1.out",
+   "deck_sha256": "eefe20d50f7d6aff3362a843106254f1bd1fd5d263f7ff930993b274a489fe4c",
+   "printout_sha256": "5c3eb80a61f9f66f15cbcdf049380a0ab0ea5c1abed1acd19ac3e645d538a4dd"
+  },
+  {
+   "deck": "eznec_nec42/probes/p31_rp_below_horizon_gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal",
+   "golden": "nec4-sinusoidal/eznec_nec42__probes__p31_rp_below_horizon_gn3.out",
+   "deck_sha256": "eae6a9351d90604282717b29f96b86c11744aaa05f3be9424ebc675bb4168366",
+   "printout_sha256": "a9a3d2c525ea85f466432a53d1f40ca25b00c0834bf6b6efd6a3d7b5c2479cbe"
+  },
+  {
+   "deck": "eznec_nec42/0223_dipole-ex6.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0223_dipole-ex6.out",
+   "deck_sha256": "4acf2dfb07eafe7fa005d01db4f17656d7b79888d5f865698498da3acdbe6d12",
+   "printout_sha256": "5bd4265010573a49ccb4eb09476674cb7b93a70a62a516603f40af815d0ff850"
+  },
+  {
+   "deck": "eznec_nec42/0224_dipole-ex0.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0224_dipole-ex0.out",
+   "deck_sha256": "056e3194441b82b348547010c4660d841baaba9f9786790305738ab8d3299306",
+   "printout_sha256": "f13b32c647cc9ff8a9093b9b6bc601ebfc5c2b7e64e05013d59510eb5d5c2d2d"
+  },
+  {
+   "deck": "eznec_nec42/0225_dipole-ld4.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0225_dipole-ld4.out",
+   "deck_sha256": "b4b645e6e42c1d9956243aae866e1e1e78dfc172cfb649cc0198ff8a656684b4",
+   "printout_sha256": "e173b0841aed04588aae346be7fe512bc2f7621e3baeed8ba05550892214a1a3"
+  },
+  {
+   "deck": "eznec_nec42/0227_dipole-ld5-copper.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0227_dipole-ld5-copper.out",
+   "deck_sha256": "938db971ced68bb3b65e6a11a089c6f6bbf10328cc01d74cc38a186dc5f01ae7",
+   "printout_sha256": "2ac107d14669b48c01415157bcd31da43a3b69d4b2dc76d5cf0202fa9a898cca"
+  },
+  {
+   "deck": "eznec_nec42/0228_dipole-10m-free.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0228_dipole-10m-free.out",
+   "deck_sha256": "680f31f9591407bda788c963d9518306486909bf3033be8c4b71f919926d4b4a",
+   "printout_sha256": "25c80f588ef4ace9dd16388807fc7d254dd9f32f565aa42d545aba490ed1a704"
+  },
+  {
+   "deck": "eznec_nec42/0229_dipole-10m-gn1.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0229_dipole-10m-gn1.out",
+   "deck_sha256": "77fb0fac304eacff041e36c4e34a10fce2f87225886d1ebf1e57a6ad8e17de9f",
+   "printout_sha256": "0ff1c71350ef4d54705361a1376b5c09e352fa5031e6da9366f9db4b877a8c5a"
+  },
+  {
+   "deck": "eznec_nec42/0230_dipole-10m-gn1-gd.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0230_dipole-10m-gn1-gd.out",
+   "deck_sha256": "da7d600d1e3a09cf5507f034a4bcff8f6fa65c24ca6bc004a350e51767bf0c02",
+   "printout_sha256": "12377a859449df4e37c8716d4fc0ec0c3672b2de4156840729e4b7cc0a373db0"
+  },
+  {
+   "deck": "eznec_nec42/0231_dipole-10m-gn2.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0231_dipole-10m-gn2.out",
+   "deck_sha256": "2d8bf1016f5c1e9ffc9bfaeb49623886af4964a322c5730b1356795db69bd78f",
+   "printout_sha256": "72c6175c911751ce20e7b874bef4618538e041153594ba40ecbf5a137a70b43f"
+  },
+  {
+   "deck": "eznec_nec42/0232_dipole-10m-gn3.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0232_dipole-10m-gn3.out",
+   "deck_sha256": "ee2685e61c4072fa575830e118e02fdb6df5f91090bf25dbacb59200cccada3e",
+   "printout_sha256": "0b85dd2f09286105f7cae789029624068469992a74b298403faf92cd921dc661"
+  },
+  {
+   "deck": "eznec_nec42/0233_dipole-13p9mhz-xq.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0233_dipole-13p9mhz-xq.out",
+   "deck_sha256": "1717c28f1c42d3e0581e300de04fd298a32079b690b7e4b995579e4908652480",
+   "printout_sha256": "c61b5eab72931f49b90b1bf1e997fd5e4ef3ac5695e276761d3efd67e635af59"
+  },
+  {
+   "deck": "eznec_nec42/0234_cardioid-l-network.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0234_cardioid-l-network.out",
+   "deck_sha256": "6a9818ec1ffba10a45f2c2898d903d1fdf77aaeb6bdb7a8f712ec8a39a08bf62",
+   "printout_sha256": "ea1df26c033aa19b583b1dddc627c62877c6660160a2be6a4613509bf7e56248"
+  },
+  {
+   "deck": "eznec_nec42/0235_foursquare-tl.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0235_foursquare-tl.out",
+   "deck_sha256": "a8f383c071c1dd21c193101cc071939b97849a6e674c34cb973c24dc4f547b05",
+   "printout_sha256": "6d9483e3a395fa86938d000f3bfeb67e67adb702465e952a0ba691b546cb4789"
+  },
+  {
+   "deck": "eznec_nec42/0237_dipole-ex6-elevation.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0237_dipole-ex6-elevation.out",
+   "deck_sha256": "350ab569dfea9eaa5c2eb40b8bcc4b7f22da3bd47f2e68950dfd904064b679b8",
+   "printout_sha256": "115eaa3f86bcfd8833d58a8c589317facbb7372381acb6963edf25fca4855425"
+  },
+  {
+   "deck": "eznec_nec42/0238_dipole-ex6-3d.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0238_dipole-ex6-3d.out",
+   "deck_sha256": "fdcf569b473f478729c4431f7b1535f03d79f5a8cc6fe4bd922c998b1bdd4796",
+   "printout_sha256": "f75fae7dfda75ec21d4f360ded3db0f50c1b915dc1a971f3ebc0383afe1ca02f"
+  },
+  {
+   "deck": "eznec_nec42/0239_dipole-buried-gn3.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__0239_dipole-buried-gn3.out",
+   "deck_sha256": "763dd1f760be6c62bd90d29081e64b53d308a173d837d2e713d485cdacf0e453",
+   "printout_sha256": "10ab095f169c751ac77c349664bff8ad5d49ca588ad4be3db124e8f1d1613d38"
+  },
+  {
+   "deck": "eznec_nec42/multisource/m1_cardioid-2-current-sources.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__multisource__m1_cardioid-2-current-sources.out",
+   "deck_sha256": "1bb76f742b99776839daa32b07143a350d2032872bdc2cc400c1731fe9f481a0",
+   "printout_sha256": "06ffa3312821dab5cd8f6575e7dfdcdfa47b2846e622f75c0b83326ca785518f"
+  },
+  {
+   "deck": "eznec_nec42/multisource/m2_foursquare-4-current-sources.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__multisource__m2_foursquare-4-current-sources.out",
+   "deck_sha256": "4b74e10c52431d59b459be1b37500562646b639eda4220f37549c98d1815f37e",
+   "printout_sha256": "c5701bd9100582dcdf9e35b63e4155b5cd63d01bcb335a6a662337d053ff775c"
+  },
+  {
+   "deck": "eznec_nec42/probes/p1_junction.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p1_junction.out",
+   "deck_sha256": "eeb754c19b334e5e1dba5c6b649a4dd2777c05f90588e9dc008362da3ca0edea",
+   "printout_sha256": "20769f40284c70452b21585734cc8432b50b5386bbec2969f619fd5a81e9453c"
+  },
+  {
+   "deck": "eznec_nec42/probes/p2_three_frequencies.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p2_three_frequencies.out",
+   "deck_sha256": "629706900c015e18476059dfe453a0e83627b5091056c76e8b83a5b4ac93ab10",
+   "printout_sha256": "f9e09f3e918eeadc8baad1660201e5bda94f2517004ef51d5f57de532e1ec05e"
+  },
+  {
+   "deck": "eznec_nec42/probes/p3_rlc_loads.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p3_rlc_loads.out",
+   "deck_sha256": "5f2024af2b478ad44c1471c17d4126100224cca1e280ddeb27d9957fe9124df2",
+   "printout_sha256": "387160b82724a5f88e3637f1a701ae9bb6b5c65c7cfe005f83c6aaa8b267dea5"
+  },
+  {
+   "deck": "eznec_nec42/probes/p4_near_field.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p4_near_field.out",
+   "deck_sha256": "3c0b8ea9813fdbf550aba73182bbc381d693eea5f67c71a37f54e903c2b93f32",
+   "printout_sha256": "1ddae23b0d72b2bf96b25e0a3dc015df4f057134d5361c53b4eb7b0e6cb86c4a"
+  },
+  {
+   "deck": "eznec_nec42/probes/p5_gd_xq.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p5_gd_xq.out",
+   "deck_sha256": "efd246b5547001ad2d02e5c29c89fddf682208645c83dd5c2ed26ce80ac5c36b",
+   "printout_sha256": "1222ffe25ab4d4472d17501f666a491f599ea330104b39df29ce75936f95dd21"
+  },
+  {
+   "deck": "eznec_nec42/probes/p6_voltage_source_on_network.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p6_voltage_source_on_network.out",
+   "deck_sha256": "580512bb31306be475f2930c8647300b2531b5edc27455c4d0a7672e4e58258e",
+   "printout_sha256": "48e77cd8cd6d534bda3942dde99b72104612006e8976b3e65ceab37723ded83e"
+  },
+  {
+   "deck": "eznec_nec42/probes/p7_gn2_7mhz.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p7_gn2_7mhz.out",
+   "deck_sha256": "fd7f868621107977ef20a3548320470f132baba9ad4de2899bac434b2a085fdf",
+   "printout_sha256": "6b60ae65b52e958bec37e53f028ad0a11c9d37258076625a5cf634d593bfc26a"
+  },
+  {
+   "deck": "eznec_nec42/probes/p8_two_runs.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p8_two_runs.out",
+   "deck_sha256": "fdad616bcca47bcd2bbff86dcd47a839e3c301079171ce5f400d51f38d914764",
+   "printout_sha256": "23276c60eb2b4aa9be98f4956ddaad51991017fafe66f1ae8f149d5fc79ea45c"
+  },
+  {
+   "deck": "eznec_nec42/probes/p9_above_and_buried_gn2.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p9_above_and_buried_gn2.out",
+   "deck_sha256": "d1ba8fc89f72baaa6d6425cc1e283cda4635a8adb2ada0af559bbba3931a64a2",
+   "printout_sha256": "edcfbd6a4d9badfb1c4a496dbddfb190f6a965c3245e97cbeda7c74377716ebe"
+  },
+  {
+   "deck": "eznec_nec42/probes/p10_fat_dipole.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p10_fat_dipole.out",
+   "deck_sha256": "30e417dfb4565250e8b20288e95a93815fe0fdb80ab137aa47ba0672f328f758",
+   "printout_sha256": "912a730240f7911aba8d13b512c7a8ce8206229e0341c9651f7a3d0b77caa6ee"
+  },
+  {
+   "deck": "eznec_nec42/probes/p13_ne1_gn3.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p13_ne1_gn3.out",
+   "deck_sha256": "8c0ffea44273c07a834eabad8322f3654607f6750942a1218eb11adaa2eb1cac",
+   "printout_sha256": "4fb42077cfb605d165efd3fedbeae0e874576ab77cf740bfb12e500453f4d96b"
+  },
+  {
+   "deck": "eznec_nec42/probes/p15_ne1_gn2.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p15_ne1_gn2.out",
+   "deck_sha256": "531c4b7530d3228c1c57869046c2dfbf76aedf5ebd9e961399cb9dc87e63273d",
+   "printout_sha256": "e2130d1e2edf173433c24dcb9bca0176217926803c3afb4e495d97ba61b32e83"
+  },
+  {
+   "deck": "eznec_nec42/probes/p16_rp_range_gn3.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p16_rp_range_gn3.out",
+   "deck_sha256": "5008d6d02f2472a728afb80824309f2c9c519b77a35b7f992c4600f408cfaa08",
+   "printout_sha256": "b7e68fe1eaf65de1a57f9cf26afdf66da23d8a39d06a241049d1a960f0710928"
+  },
+  {
+   "deck": "eznec_nec42/probes/p29_rp_range_gn1.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p29_rp_range_gn1.out",
+   "deck_sha256": "eefe20d50f7d6aff3362a843106254f1bd1fd5d263f7ff930993b274a489fe4c",
+   "printout_sha256": "ddece10efd7229e0859d55b031f19fae3da1c6357b7c5edaf0f6d2625d2d31cf"
+  },
+  {
+   "deck": "eznec_nec42/probes/p31_rp_below_horizon_gn3.nec",
+   "dialect": "nec4",
+   "basis": "bspline",
+   "golden": "nec4-bspline/eznec_nec42__probes__p31_rp_below_horizon_gn3.out",
+   "deck_sha256": "eae6a9351d90604282717b29f96b86c11744aaa05f3be9424ebc675bb4168366",
+   "printout_sha256": "f69080393799758a43c6d522b391382edbeb7246df40c429769b1adc32f6fe3d"
+  },
+  {
+   "deck": "eznec/decks/0036_dipole-in-free-space.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0036_dipole-in-free-space.out",
+   "deck_sha256": "c237d074adcbae06b00312ebc182eb88e5d2543cfb1899c84e16783d791f93ce",
+   "printout_sha256": "430747e4ce499383165850dab279c00897bc3782ae834f22d06d345fba26f8e6"
+  },
+  {
+   "deck": "eznec/decks/0014_network-connection-test.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0014_network-connection-test.out",
+   "deck_sha256": "c0c5a157761929c210c43f6c048de0f512feeb72b28a911f34ee4b9413320734",
+   "printout_sha256": "36c46cf90828eada08cf32442fb8c4db73d565d8c9140c3bd56119dba11e3fcc"
+  },
+  {
+   "deck": "eznec/decks/0063_15m-quad-ant-book-p-12-2.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0063_15m-quad-ant-book-p-12-2.out",
+   "deck_sha256": "d561b8d867dfbfdb824085a681f24aed16e773cd8fdc5780fe1244ad720ec745",
+   "printout_sha256": "6f2162d8f16290743621794b3d474163961be0fd09669bba73db10c7d8a97156"
+  },
+  {
+   "deck": "eznec/decks/0067_nbs-yagi-ant-book-p-18-7.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0067_nbs-yagi-ant-book-p-18-7.out",
+   "deck_sha256": "e149360e7dedaa97836f42ce98965b4b028bf6f7eb9a2fb1033c55997a46f9e9",
+   "printout_sha256": "054b11932cae2b6ef177b913db044f222d9485eb0b6b6e269ce77f5eb1f858dc"
+  },
+  {
+   "deck": "eznec/decks/0019_vertical-over-real-ground.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0019_vertical-over-real-ground.out",
+   "deck_sha256": "e359aadb637c9437a758679aa5d0c787ab401a857db761d30a78f82ad242a134",
+   "printout_sha256": "76e9b0c7dba909d9e2da347d2eee4b0ab8c8d0de20e081715cd67447eeead356"
+  },
+  {
+   "deck": "eznec/decks/0032_cardioid.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0032_cardioid.out",
+   "deck_sha256": "bd711845eac05e3a241bf79d4fffe9c517cb7a2a1b9d11101b2c81f7a6c762b8",
+   "printout_sha256": "6bce8d705ebe6509c1bb3f54d408d18c6e7a6afcd44608000b551646d25eb8c9"
+  },
+  {
+   "deck": "eznec/decks/0000_cardioid-l-network-feed.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0000_cardioid-l-network-feed.out",
+   "deck_sha256": "412d1ea2fb78fab04dc211dedd04d9c53a5feeac59af73c782f81a94dc2e0c95",
+   "printout_sha256": "f54fa36af79a92a84f34f6aef7ca17d468644b659ed4518ee3290095f9618700"
+  },
+  {
+   "deck": "eznec/decks/0020_vertical-over-real-ground.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0020_vertical-over-real-ground.out",
+   "deck_sha256": "20d569af0549771e9784b8b46158edf9ff7013271dccfb521d05ec9bb8ea999e",
+   "printout_sha256": "431fbfb709d9ee3eb723a623966cebe304581817d7e58dc790920d0e8411b3c7"
+  },
+  {
+   "deck": "eznec/decks/0084_n4pc-loop-cq-dec-1990.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0084_n4pc-loop-cq-dec-1990.out",
+   "deck_sha256": "9f9c23e9246c4999178f8684886a667a81772f0802e9e1f3b0ad9a648f4a22de",
+   "printout_sha256": "9ddd51faa5825f8005160bd3df30f49c8e49a3594e30cbcef6abf97726dcd21d"
+  },
+  {
+   "deck": "eznec/decks/0079_k5rp.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0079_k5rp.out",
+   "deck_sha256": "a2ff201e8bd20d64cfd95a28ae98ba6b417eece0fd93f779c8fb970f8c81b2d8",
+   "printout_sha256": "97a831b5e13a08d33e5b04022348eada71778f8091dbfb5a30299ec1895c4838"
+  },
+  {
+   "deck": "eznec/decks/0113_back-yard-dipole.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0113_back-yard-dipole.out",
+   "deck_sha256": "fe2fc23abbfc92b0d2f166d6c5939591b23043d2dc50753ad0b01e677df8abb7",
+   "printout_sha256": "8e34695a572a15fb3a2bffdcd8f509274942aabb5ce51783bf995e39fe694fdb"
+  },
+  {
+   "deck": "eznec/decks/0059_back-yard-inverted-vee.nec",
+   "dialect": "nec5",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec5-sinusoidal-galerkin/eznec__decks__0059_back-yard-inverted-vee.out",
+   "deck_sha256": "b85aac6a9758f67c489909229e2178c71c9ec0011538cb291346f2cc2f7e843b",
+   "printout_sha256": "7f8065315755d6ff1d8c17b32596ee0f625c09990c97a2ceb296d92cc42a551e"
+  },
+  {
+   "deck": "eznec_nec42/0229_dipole-10m-gn1.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec4-sinusoidal-galerkin/eznec_nec42__0229_dipole-10m-gn1.out",
+   "deck_sha256": "77fb0fac304eacff041e36c4e34a10fce2f87225886d1ebf1e57a6ad8e17de9f",
+   "printout_sha256": "897181175645734246dccfcd6171215ffb07e0ebfaa3bfdaf437446bc2728718"
+  },
+  {
+   "deck": "eznec_nec42/0230_dipole-10m-gn1-gd.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec4-sinusoidal-galerkin/eznec_nec42__0230_dipole-10m-gn1-gd.out",
+   "deck_sha256": "da7d600d1e3a09cf5507f034a4bcff8f6fa65c24ca6bc004a350e51767bf0c02",
+   "printout_sha256": "667cb7602fdfe04e30a0512819372507b63c3d47af107ba9bf28583d723ee897"
+  },
+  {
+   "deck": "eznec_nec42/0231_dipole-10m-gn2.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec4-sinusoidal-galerkin/eznec_nec42__0231_dipole-10m-gn2.out",
+   "deck_sha256": "2d8bf1016f5c1e9ffc9bfaeb49623886af4964a322c5730b1356795db69bd78f",
+   "printout_sha256": "8ccc8e259c9dffcbe5b28db6d1e5ccf70e52300d75bcf0afe89b0031cf4b4e1b"
+  },
+  {
+   "deck": "eznec_nec42/0232_dipole-10m-gn3.nec",
+   "dialect": "nec4",
+   "basis": "sinusoidal-galerkin",
+   "golden": "nec4-sinusoidal-galerkin/eznec_nec42__0232_dipole-10m-gn3.out",
+   "deck_sha256": "ee2685e61c4072fa575830e118e02fdb6df5f91090bf25dbacb59200cccada3e",
+   "printout_sha256": "7a3cf674b8a1c606e160508b56a616cefc4ba97a645cc5f22a5aae647f9e3f95"
+  },
+  {
+   "deck": "eznec/decks/0020_vertical-over-real-ground.nec",
+   "dialect": "nec5",
+   "basis": "bspline",
+   "golden": "nec5-bspline/eznec__decks__0020_vertical-over-real-ground.out",
+   "deck_sha256": "20d569af0549771e9784b8b46158edf9ff7013271dccfb521d05ec9bb8ea999e",
+   "printout_sha256": "9de285c6480543b111d930abd5ac1314ae85fcd74e29e8058bf715294e4fb112"
+  },
+  {
+   "deck": "eznec/decks/0020_vertical-over-real-ground.nec",
+   "dialect": "nec5",
+   "basis": "razor-2p",
+   "golden": "nec5-razor-2p/eznec__decks__0020_vertical-over-real-ground.out",
+   "deck_sha256": "20d569af0549771e9784b8b46158edf9ff7013271dccfb521d05ec9bb8ea999e",
+   "printout_sha256": "397af83d5fb18699817d571732ac594442b0d9efdda27b443ad2ef720db1c00c"
+  },
+  {
+   "deck": "eznec/decks/0084_n4pc-loop-cq-dec-1990.nec",
+   "dialect": "nec5",
+   "basis": "bspline",
+   "golden": "nec5-bspline/eznec__decks__0084_n4pc-loop-cq-dec-1990.out",
+   "deck_sha256": "9f9c23e9246c4999178f8684886a667a81772f0802e9e1f3b0ad9a648f4a22de",
+   "printout_sha256": "6374de28e80ae93224cdb577222b0dc0f129951870f98a57cd2ee047b4ee9e5d"
+  },
+  {
+   "deck": "eznec/decks/0084_n4pc-loop-cq-dec-1990.nec",
+   "dialect": "nec5",
+   "basis": "razor-2p",
+   "golden": "nec5-razor-2p/eznec__decks__0084_n4pc-loop-cq-dec-1990.out",
+   "deck_sha256": "9f9c23e9246c4999178f8684886a667a81772f0802e9e1f3b0ad9a648f4a22de",
+   "printout_sha256": "b76a6df8478d44d2b488dfdcee84d1062d2b41b40d10afd2ebd033f2ee9f3b9d"
+  },
+  {
+   "deck": "eznec/decks/0059_back-yard-inverted-vee.nec",
+   "dialect": "nec5",
+   "basis": "bspline",
+   "golden": "nec5-bspline/eznec__decks__0059_back-yard-inverted-vee.out",
+   "deck_sha256": "b85aac6a9758f67c489909229e2178c71c9ec0011538cb291346f2cc2f7e843b",
+   "printout_sha256": "2013cfbf61522c6e4bfb2ad3c00d3e6e34167b199c1c04bc974ee1a092614263"
+  },
+  {
+   "deck": "eznec/decks/0059_back-yard-inverted-vee.nec",
+   "dialect": "nec5",
+   "basis": "razor-2p",
+   "golden": "nec5-razor-2p/eznec__decks__0059_back-yard-inverted-vee.out",
+   "deck_sha256": "b85aac6a9758f67c489909229e2178c71c9ec0011538cb291346f2cc2f7e843b",
+   "printout_sha256": "a818154d4679b7922411b9526524f31f9abee6eca16c951ee1d8d67793e3df3c"
+  },
+  {
+   "deck": "eznec/decks/0080_k5rp.nec",
+   "dialect": "nec5",
+   "basis": "bspline",
+   "golden": "nec5-bspline/eznec__decks__0080_k5rp.out",
+   "deck_sha256": "60a0cd028acd9d57ec758d5c30dee05761d3ace4ef79185de8860d1cb58bba27",
+   "printout_sha256": "93fd8c6452d8ac1fcdf10c85dd79f7d416af1786a0915d52ddff3808b735ad91"
+  },
+  {
+   "deck": "eznec/decks/0080_k5rp.nec",
+   "dialect": "nec5",
+   "basis": "razor-2p",
+   "golden": "nec5-razor-2p/eznec__decks__0080_k5rp.out",
+   "deck_sha256": "60a0cd028acd9d57ec758d5c30dee05761d3ace4ef79185de8860d1cb58bba27",
+   "printout_sha256": "20f5e824b36111efefaeb8c53932f357981bbd5c343d2d5740d819d05b13ffe0"
+  },
+  {
+   "deck": "bspline_printout_buried/ab_hub8.nec",
+   "dialect": "nec5",
+   "basis": "bspline",
+   "golden": "nec5-bspline/bspline_printout_buried__ab_hub8.out",
+   "deck_sha256": "dbce33efe9211711860aa1ef03ebedd10de0030832328853c9b235885b707a84",
+   "printout_sha256": "04ff6a9b55cc66791deecff95c01a55702e5f204b415653c55c43360043b00bc"
+  },
+  {
+   "deck": "bspline_printout_buried/ab_hub8.nec",
+   "dialect": "nec5",
+   "basis": "razor-2p",
+   "golden": "nec5-razor-2p/bspline_printout_buried__ab_hub8.out",
+   "deck_sha256": "dbce33efe9211711860aa1ef03ebedd10de0030832328853c9b235885b707a84",
+   "printout_sha256": "be72e4f48f90ff6fa0b1df120b50d8ccecef6e48ac0bbd4330eba12bf68c325c"
+  }
+ ]
+}
