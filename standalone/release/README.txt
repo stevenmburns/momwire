@@ -8,6 +8,14 @@ does, byte for byte, without installing Python or momwire:
     ./momwire-nec5-razor2p-linux - -                     (SimNEC's streaming form)
     ./momwire-nec5-razor2p-linux -version
 
+The -version line is the Python command's with "-standalone" and the build
+that answered added to the name, e.g.
+
+    NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1
+
+so SimNEC (and the "CM version" card it puts on each deck) shows which one
+ran. The bs2 and NEC-4.2 programs below do the same.
+
 To use it from SimNEC, point the NEC-5 engine setting at
 momwire-nec5-razor2p-linux in this folder. Keep the three programs together:
 momwire-nec5-razor2p-linux picks momwire-nec5-razor2p-linux-avx2 on a

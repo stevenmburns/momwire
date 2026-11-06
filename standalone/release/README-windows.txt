@@ -13,6 +13,14 @@ answers) and bs2, momwire's default B-spline formulation (what
     momwire-nec5-razor2p-avx2.exe - -                     (SimNEC's streaming form)
     momwire-nec5-razor2p-avx2.exe -version
 
+The -version line is the Python command's with "-standalone" and the build
+added to the name, e.g.
+
+    NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1
+
+so SimNEC (and the "CM version" card it puts on each deck) shows which
+program ran.
+
 WHICH PROGRAM TO USE
 
   Windows 10 or 11, 64-bit, on a processor with AVX2 (Intel from 2013's

@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _standalone_version import assert_standalone_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -186,14 +187,23 @@ def test_a_deck_answers_as_the_launcher(deck, tmp_path):
         ["a.nec", "b.out", "c"],
         ["-", "-"],
         ["x.nec", "-"],
-        ["-version"],
     ],
-    ids=["one argument", "three arguments", "streaming", "streaming out", "version"],
+    ids=["one argument", "three arguments", "streaming", "streaming out"],
 )
 def test_the_command_line_edges(argv, tmp_path):
     exe, ref, de, dl = _both(argv, tmp_path)
     _same(exe, ref, de, dl)
     assert exe.stderr.strip() == ref.stderr.strip()
+
+
+def test_the_version_line_marks_the_executable(tmp_path):
+    """The launcher's line, NAME suffixed `-standalone-<variant>` (momwire#1831):
+    nothing else differs, and neither writes a file or a word on stderr."""
+    exe, ref, de, dl = _both(["-version"], tmp_path)
+    assert exe.returncode == ref.returncode == 0
+    assert_standalone_line(exe.stdout, ref.stdout)
+    assert exe.stderr.strip() == ref.stderr.strip()
+    assert sorted(p.name for p in de.iterdir()) == sorted(p.name for p in dl.iterdir())
 
 
 def _cards(deck: Path) -> bytes:

@@ -87,6 +87,32 @@ def test_deployed_simnec_reads_the_right_engine_number(line, number):
     assert VERSION_NECD.match(line)
 
 
+@pytest.mark.parametrize(
+    ("launcher", "number"),
+    [
+        ("momwire-nec5-razor-2p", "5"),
+        ("momwire-nec5-bspline", "5"),
+        ("momwire-nec42", "4"),
+        ("momwire-nec42-sinusoidal", "4"),
+    ],
+)
+@pytest.mark.parametrize("variant", ["avx2", "sse2", "legacy"])
+def test_a_standalone_executables_line_reads_as_its_launchers(
+    launcher, number, variant
+):
+    """The C++ executables (`standalone/`) answer the launcher's line with
+    NAME suffixed ``-standalone-<variant>`` (momwire#1831). SimNEC must read
+    it exactly as it reads the launcher's: one name field starting
+    ``momwire``, the same engine number from the line's first digit."""
+    ref = eznec_client.probe_version(launcher)
+    dialect, name, modes, version = ref.split(" ")
+    line = f"{dialect} {name}-standalone-{variant} {modes} {version}"
+    assert LINE.fullmatch(line), line
+    assert line.split()[1].startswith("momwire")
+    assert _engine_number(line) == number == _engine_number(ref)
+    assert VERSION_NECD.match(line)
+
+
 def test_the_version_is_the_full_one():
     version = mech.momwire_version()
     assert version is not None and version.count(".") == 2

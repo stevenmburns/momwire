@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _standalone_version import assert_standalone_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -124,14 +125,21 @@ def test_the_stdin_form(tmp_path):
 
 @pytest.mark.parametrize(
     "argv",
-    [["only-one.nec"], ["a.nec", "b.out", "c"], ["-", "-"], ["-version"]],
-    ids=["one argument", "three arguments", "streaming", "version"],
+    [["only-one.nec"], ["a.nec", "b.out", "c"], ["-", "-"]],
+    ids=["one argument", "three arguments", "streaming"],
 )
 def test_the_command_line_edges_answer_as_the_launcher(argv, tmp_path):
     exe, ref, _de, _dl = _both(argv, tmp_path)
     assert (exe.returncode, exe.stdout) == (ref.returncode, ref.stdout)
     if argv == ["-", "-"]:
         assert exe.stderr.strip() == ref.stderr.strip()
+
+
+def test_the_version_line_marks_the_executable(tmp_path):
+    """The launcher's line, NAME suffixed `-standalone-<variant>` (momwire#1831)."""
+    exe, ref, _de, _dl = _both(["-version"], tmp_path)
+    assert exe.returncode == ref.returncode == 0
+    assert_standalone_line(exe.stdout, ref.stdout)
 
 
 def test_another_release_beside_it_is_refused_in_the_printout(tmp_path):

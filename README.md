@@ -237,7 +237,9 @@ Each release also carries **`momwire-nec5-linux-x86_64.tar.gz`**: two of
 momwire's NEC-5 engines as native programs, with no Python in them. They are
 razor-2p (`momwire-nec5-razor-2p`) and bs2, the default B-spline formulation
 (`momwire-nec5-bspline`). You do not need Python, pip or momwire installed.
-Their printouts are byte for byte the Python commands'.
+Their printouts are byte for byte the Python commands'. Their `-version` line
+is the command's with `-standalone` and the build added to the name, e.g.
+`NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] <version>`.
 
 ```bash
 tar -xzf momwire-nec5-linux-x86_64.tar.gz
