@@ -499,6 +499,50 @@ def filename_nec4(prog: str) -> tuple[bool, str | None]:
 # starts with NUL, so the line cannot be mistaken for a card.
 EN_OPTIONAL_REQUEST = b"\x00EN-OPTIONAL\n"
 
+# momwire#1822: the deck's frame is its LENGTH, never the client's EOF. A
+# launcher sends DECK_FRAME_TAG, a space, the byte count in ASCII digits and
+# "\n", then exactly that many bytes (EN_OPTIONAL_REQUEST and TIMES_REQUEST
+# ride inside them as before), and never half-closes. macOS loses the EOF of a
+# `shutdown(SHUT_WR)` that races the server's blocking `recv` -- the call
+# succeeds, every byte arrives, the EOF never does, about once in 10^4
+# connections on a macos-15 runner -- so a wire whose frame was that EOF
+# deadlocked: the server waiting for the end of the deck, the launcher for the
+# answer. The answer's frame is still the
+# server's close, which is a full close, not a half-close. A deck never starts
+# with NUL, so the tag cannot be mistaken for a card; the server still reads a
+# request without it to EOF, as the pre-#1822 wire did.
+DECK_FRAME_TAG = b"\x00DECK"
+# The longest frame line the server reads before deciding it has none.
+DECK_FRAME_LINE_MAX = 32
+# Hashed into every launcher's server key, so a launcher that frames never
+# reaches a resident server of the same minor version that reads to EOF.
+WIRE = "wire=deck-length"
+
+
+def deck_frame(body: bytes) -> bytes:
+    """``body`` as the resident engine reads a deck: its length, then it."""
+    return DECK_FRAME_TAG + b" " + str(len(body)).encode("ascii") + b"\n" + body
+
+
+def read_deck_frame(stream) -> bytes | None:
+    """The deck off a binary ``stream`` the way :func:`deck_frame` wrote it.
+
+    ``None`` when the frame is cut short (the launcher died mid-deck) or its
+    length is not digits: neither is a deck, and solving the fragment would
+    answer a question nobody asked. A request without the tag is the
+    pre-#1822 wire, and its frame is EOF.
+    """
+    first = stream.readline(DECK_FRAME_LINE_MAX)
+    if not first.startswith(DECK_FRAME_TAG + b" "):
+        return first + stream.read()
+    digits = first[len(DECK_FRAME_TAG) + 1 :]
+    if not digits.endswith(b"\n") or not digits[:-1].isdigit():
+        return None
+    size = int(digits[:-1])
+    body = stream.read(size)
+    return body if len(body) == size else None
+
+
 # An answer that carries a `.GMO` file starts with GMO_FRAME_START, then the
 # file's bytes, then GMO_FRAME_END, then the printout's bytes. A printout never
 # starts with NUL and a `.GMO` file holds digits, signs, points, `E`, spaces

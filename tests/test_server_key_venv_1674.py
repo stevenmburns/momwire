@@ -63,8 +63,9 @@ def test_one_venv_keeps_one_key(interpreter):
 
 
 def test_outside_a_venv_the_key_is_the_one_it_was(interpreter):
-    """No venv element: the key is the realpath-only digest the C launcher
-    and every earlier release compute."""
+    """No venv element: the key is the realpath-only digest earlier releases
+    computed, plus the wire element since momwire#1822 (a framing launcher
+    must not reach a server that reads to EOF)."""
     interpreter(None)
     assert mech.interpreter_identity() == [BASE]
     major, minor = mech.dist_version()
@@ -73,6 +74,7 @@ def test_outside_a_venv_the_key_is_the_one_it_was(interpreter):
             f"eznec.{major}.{minor}",
             BASE,
             repr(600.0),
+            mech.WIRE,
             "default",
             *mech.junction_rule_identity(),
         ]

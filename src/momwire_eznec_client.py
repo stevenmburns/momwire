@@ -9,10 +9,12 @@ nobody is listening), write the answered bytes to the printout path, exit 0.
 The daemon transcodes (latin-1, CRLF), so what arrives IS the file — this
 client never inspects, decodes, or frames anything.
 
-The wire protocol is the seam's degenerate session (#719 U4): send the deck,
-``shutdown(SHUT_WR)``, and EOF is the frame — the server answers once and
-closes. No length prefixes; the native client of the arc's phase 3
-reimplements exactly this exchange in C.
+The wire protocol is the seam's degenerate session (#719 U4): send the deck
+behind its length (``momwire_serve_client.deck_frame``), and the server
+answers once and closes. The length is the frame, not a half-close: macOS can
+lose the EOF of a ``shutdown(SHUT_WR)`` (momwire#1822), and a wire framed by
+that EOF deadlocked. The native client of the arc's phase 3 reimplements
+exactly this exchange in C.
 
 The fallback ladder, designed in from the start so the worst case of the
 feature is "as slow as today", never "the engine is broken":
@@ -91,12 +93,17 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
     momwire#1295: the EZNEC slot is identity too — a NEC-5 server must never
     answer a NEC-4.2 deck — so a nec4 key carries ``"dialect=nec4"`` ahead of
     the basis element.  A nec5 key carries nothing new and is the key it was.
+
+    momwire#1822: so is the wire. A launcher that frames its deck by length
+    must never reach a server of the same minor version that reads to EOF,
+    which would solve the frame line as deck text.
     """
     major, minor = _mech.dist_version()
     elements = [
         f"eznec.{major}.{minor}",
         *_mech.interpreter_identity(),
         f"{idle_timeout!r}",
+        _mech.WIRE,
     ]
     if dialect != "nec5":
         elements.append(f"dialect={dialect}")
@@ -147,10 +154,9 @@ def _served_bytes(
         log_path,
     )
     try:
-        conn.sendall(deck_bytes)
-        import socket as _socket
-
-        conn.shutdown(_socket.SHUT_WR)
+        # The deck's length is its frame, and the write side stays open: the
+        # EOF of a half-close is what macOS can lose (momwire#1822).
+        conn.sendall(_mech.deck_frame(deck_bytes))
         chunks: list[bytes] = []
         while True:
             chunk = conn.recv(_RECV_CHUNK)
