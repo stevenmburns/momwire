@@ -519,7 +519,8 @@ jobs:
       - name: the hybrid's two routes
         run: |
           E=build-nec42-hybrid/momwire-nec42-sinusoidal
-          test "$($E -version)" = "$(momwire-nec42-sinusoidal -version)"
+          # the launcher's line, NAME suffixed -standalone-<variant> (momwire#1831)
+          test "$($E -version)" = "$(momwire-nec42-sinusoidal -version | sed 's/ /-standalone-avx2 /2')"
           F=tests/fixtures/eznec_nec42
           MW_EXE_ROUTE_LOG=route-cxx $E $F/0224_dipole-ex0.nec cxx.out
           # a deck the C++ route declines and Python serves (momwire#1718

@@ -12,7 +12,7 @@
 //     LU and the run half (`_nec5_razor_printout_core.h`), for every deck it
 //     covers. No Python is loaded.
 //   * the fallback: everything else -- a declined deck (`route == declined`),
-//     a deck asking for a `.GMO` file, the stdin form, `-version`, an
+//     a deck asking for a `.GMO` file, the stdin form, an
 //     argument error, a deck that cannot be read. CPython is LOADED here, not
 //     linked (dlopen / LoadLibrary), from the momwire environment beside the
 //     executable, and runs the launcher's own one-shot path, `_shell.main`,
@@ -141,9 +141,8 @@ namespace {
 #ifndef MW_EXE_PROGRAM
 #define MW_EXE_PROGRAM "momwire-razor2p"
 #endif
-// The name the `-version` line gives this executable (momwire#1606): the
-// Python launcher it stands in for, whose line it answers byte for byte
-// (tests/test_standalone_exe.py); CMakeLists.txt sets bs2's.
+// The Python launcher this executable stands in for (CMakeLists.txt sets it
+// per basis): its printouts are that launcher's, byte for byte.
 #ifndef MW_EXE_LAUNCHER
 #define MW_EXE_LAUNCHER "momwire-nec5-razor-2p"
 #endif
@@ -152,6 +151,12 @@ namespace {
 #ifndef MW_EXE_DIALECT_NEC4
 #define MW_EXE_DIALECT_NEC4 0
 #endif
+// The slot's version-line dialect, the line's first field.
+#if MW_EXE_DIALECT_NEC4
+#define MW_EXE_VERSION_DIALECT "NEC42"
+#else
+#define MW_EXE_VERSION_DIALECT "NEC5"
+#endif
 const char *const BASIS = MW_EXE_BASIS_NAME;
 const char *const VERSION = MW_VERSION;
 // The C++ core's variant, as the printout's stamp names it (CMakeLists.txt).
@@ -159,6 +164,13 @@ const char *const VERSION = MW_VERSION;
 #define MW_EXE_VARIANT "avx2"
 #endif
 const char *const EXE_VARIANT = MW_EXE_VARIANT;
+// The NAME field of the `-version` line (momwire#1606), the one place every
+// build gets it: the launcher's name, then `-standalone` and the C++ core's
+// variant, e.g. `momwire-nec5-razor-2p-standalone-avx2` (momwire#1831), so a
+// SimNEC user (or the `CM version` card SimNEC echoes on every deck) can tell
+// this executable from the Python launcher of the same name, and the avx2
+// build from the sse2 one. Everything else in the line is the launcher's.
+#define MW_EXE_VERSION_NAME MW_EXE_LAUNCHER "-standalone-" MW_EXE_VARIANT
 
 using Clock = std::chrono::steady_clock;
 const Clock::time_point T0 = Clock::now();
@@ -802,13 +814,11 @@ int run_python(const std::string &home, const std::string &code) {
 // printout) with the resident-server rung skipped and the one-shot rung,
 // `_shell.main(..., basis, en_optional)`, run in this process instead of a
 // child interpreter.
-// The slot's words, for the fallback's text: its version-line dialect and
-// the shell's keyword (the NEC-4.2 slot's `dialect="nec4"`, momwire#1607 B4b).
+// The slot's word for the fallback's text: the shell's keyword (the NEC-4.2
+// slot's `dialect="nec4"`, momwire#1607 B4b).
 #if MW_EXE_DIALECT_NEC4
-#define MW_EXE_VERSION_DIALECT "NEC42"
 #define MW_EXE_SHELL_KW ", dialect=\"nec4\""
 #else
-#define MW_EXE_VERSION_DIALECT "NEC5"
 #define MW_EXE_SHELL_KW ""
 #endif
 const char *const FALLBACK_PY = R"PY(
@@ -816,7 +826,7 @@ import momwire_eznec_client as _c
 def _launcher(args):
     en_optional = False
     if args == ["-version"]:
-        print(_c._mech.version_line(")PY" MW_EXE_VERSION_DIALECT R"PY(", ")PY" MW_EXE_LAUNCHER R"PY("))
+        print(_c._mech.version_line(")PY" MW_EXE_VERSION_DIALECT R"PY(", ")PY" MW_EXE_VERSION_NAME R"PY("))
         return 0
     if not args:
         from_stdin = _c._mech.stdin_paths()
@@ -1027,14 +1037,11 @@ const char *const STREAMING_REFUSAL =
 const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 
 // `probe_version`: `momwire_serve_client.version_line`'s line (momwire#1606),
-// the dialect, this executable's name, its interface modes and this build's
-// full release, e.g. `NEC5 momwire-nec5-razor-2p [sb] 0.82.0`.
+// the dialect, this executable's name (MW_EXE_VERSION_NAME), its interface
+// modes and this build's full release, e.g.
+// `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.82.0`.
 std::string probe_version() {
-#if MW_EXE_DIALECT_NEC4
-    return std::string("NEC42 ") + MW_EXE_LAUNCHER + " [sb] " + VERSION;
-#else
-    return std::string("NEC5 ") + MW_EXE_LAUNCHER + " [sb] " + VERSION;
-#endif
+    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_VERSION_NAME + " [sb] " + VERSION;
 }
 
 // `_shell.read_deck`: the file's bytes, false for anything open/read refuses

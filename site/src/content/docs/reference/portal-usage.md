@@ -210,7 +210,13 @@ NEC2 momwire-nec2c [sb] 0.82.0
 ```
 
 1. The deck dialect the launcher reads: `NEC2`, `NEC42` or `NEC5`.
-2. The launcher's name, which always starts with `momwire`.
+2. The launcher's name, which always starts with `momwire`. A no-Python
+   executable from the [standalone downloads](/reference/standalone/) adds
+   `-standalone` and the build it is (`avx2`, `sse2`, or `legacy` on macOS)
+   to the name of the Python command it stands in for, e.g.
+   `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1` beside the
+   command's `NEC5 momwire-nec5-razor-2p [sb] 0.87.1` (momwire#1831). That is
+   the only difference: the printouts are the same.
 3. The interface modes it serves beyond one deck per call, in square
    brackets: `s` for streaming, `b` for batch (decks chained by `NX`). Every
    launcher answers `[sb]`.

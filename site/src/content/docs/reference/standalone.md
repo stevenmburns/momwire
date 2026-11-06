@@ -18,6 +18,16 @@ momwire-nec5-razor2p-linux - - < chain.nec     # SimNEC's streaming form
 momwire-nec5-razor2p-linux -version
 ```
 
+The `-version` line names the Python command the program stands in for,
+then `-standalone` and the build that answered (`avx2` or `sse2`; `legacy`
+on macOS), so SimNEC's `NECVersion` row and the `CM version` card it puts on
+each deck tell the two apart:
+
+```text
+NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1    this program
+NEC5 momwire-nec5-razor-2p [sb] 0.87.1                    the Python command
+```
+
 To use one from SimNEC or EZNEC, point the NEC-5 engine setting at the
 program, inside its unpacked folder. A deck an engine does not serve yet is
 refused in the printout by name (`not served by this build: ...`), and the

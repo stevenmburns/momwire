@@ -35,6 +35,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from _standalone_version import assert_standalone_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -163,11 +164,12 @@ def test_no_python_anywhere_in_the_executable():
         assert word not in blob, word
 
 
-def test_the_version_line_is_the_launchers():
+def test_the_version_line_marks_the_executable():
+    """The launcher's line, NAME suffixed `-standalone-<variant>` (momwire#1831)."""
     exe = subprocess.run([EXE, "-version"], capture_output=True, check=True)
     ref = subprocess.run([_launcher(), "-version"], capture_output=True, check=True)
-    assert exe.stdout == ref.stdout
-    assert exe.stdout.startswith(f"NEC42 {LAUNCHER} [sb] ".encode())
+    assert_standalone_line(exe.stdout, ref.stdout)
+    assert exe.stdout.startswith(f"NEC42 {LAUNCHER}-standalone-".encode())
 
 
 def _decks(root: Path):
@@ -220,8 +222,8 @@ def test_the_corpus_is_mostly_served(tmp_path):
 
 @pytest.mark.parametrize(
     "argv",
-    [["only-one.nec"], ["a.nec", "b.out", "c"], ["x.nec", "-"], ["-version"]],
-    ids=["one argument", "three arguments", "streaming out", "version"],
+    [["only-one.nec"], ["a.nec", "b.out", "c"], ["x.nec", "-"]],
+    ids=["one argument", "three arguments", "streaming out"],
 )
 def test_the_command_line_edges(argv, tmp_path):
     exe, ref, de, dl = _both(argv, tmp_path)
