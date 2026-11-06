@@ -1,0 +1,58 @@
+name: diag-mac-hang
+# Scratch diagnosis of the intermittent macos-nopython hang (0.87.0 pre-tag).
+# Never merged: runs on pushes to its own branch only.
+on:
+  push:
+    branches: [diag/mac-hang-0870]
+  workflow_dispatch:
+
+jobs:
+  hang:
+    runs-on: macos-15
+    timeout-minutes: 115
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [replica-1, replica-2, replica-3, exe-1]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: libomp
+        run: |
+          brew install libomp
+          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+      - name: momwire environment
+        run: |
+          python -m venv venv
+          venv/bin/python -m pip install -q -U pip setuptools wheel pybind11
+          venv/bin/python -m pip install -q -e ".[test]"
+          sudo -H python -m pip install -q py-spy || true
+          venv/bin/python -c "import numpy, momwire; print(numpy.__version__, 'variant', momwire.accelerator_variant)"
+      - name: build (as macos-nopython)
+        run: |
+          for b in razor2p bs2; do
+            cmake -S standalone -B build-$b -DMW_EXE_NO_PYTHON=ON -DMW_EXE_BASIS=$([ $b = bs2 ] && echo bspline_nec5 || echo $b) -DCMAKE_BUILD_TYPE=Release
+            cmake --build build-$b -j 3
+          done
+          D=dist/momwire-nec5-macos-arm64
+          mkdir -p $D
+          cp build-razor2p/momwire-razor2p-standalone $D/momwire-nec5-razor2p-macos
+          cp build-bs2/momwire-bs2-standalone $D/momwire-nec5-bs2-macos
+          otool -L $D/*
+      - name: watch
+        run: |
+          mode=${LEG%-*}
+          venv/bin/python scripts/diag_hang/watch.py $mode diag-out 5100
+        env:
+          LEG: ${{ matrix.leg }}
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diag-${{ matrix.leg }}
+          path: diag-out
+          if-no-files-found: ignore
