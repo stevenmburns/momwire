@@ -11,10 +11,6 @@
 // SciPy's (MWX). Elsewhere one library answers both. The gate
 // (exe_compare --basis bspline) is what says their bits agree.
 //
-// MW_ROUTE_SG (momwire#1718 S10): the same route for
-// `momwire-nec5-sinusoidal-galerkin`, over the Sinusoidal-Galerkin engine
-// (`_nec5_sinusoidal_galerkin_core.h`); the adapters are this file's.
-//
 // MW_ROUTE_NEC4 (momwire#1607 Phase C2): the same route for `momwire-nec42`,
 // the NEC-4.2 slot's default basis: bs2 on the slot's run half
 // (`_bspline_nec4_run_core.h`, `_nec4.render(text, basis="bspline")`), on the
@@ -28,9 +24,6 @@
 
 #include "_nec5_bspline_printout_core.h"
 #include "_nec5_bspline_seam_core.h"
-#if MW_ROUTE_SG
-#include "_nec5_sinusoidal_galerkin_core.h"
-#endif
 #include "_somm_grid_core.h"
 
 #include <algorithm>
@@ -142,16 +135,6 @@ long long largest_solve(const std::string &latin1_text, bool open_end) {
 #if MW_ROUTE_NEC4
     return nec4::largest_solve(latin1_text, "bspline", open_end);
 #endif
-#if MW_ROUTE_SG
-    const nec5::SeamResult rs = nec5::sinusoidal_galerkin_seam(latin1_text, open_end);
-    if (rs.route != nec5::SeamResult::served) return -1;
-    long long ns = 0;
-    for (const nec5::Prepared &p : rs.prepared) {
-        const auto *e = dynamic_cast<const nec5::SinusoidalGalerkinPrepared *>(p.engine.get());
-        if (e != nullptr && e->front) ns = std::max<long long>(ns, e->front->geometry.n_segs);
-    }
-    return ns;
-#endif
     const nec5::SeamResult r = nec5::bspline_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
@@ -168,10 +151,6 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     razor::Lapack lp;
     lp.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     lp.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
-#if MW_ROUTE_SG
-    // a crossing node's constrained solve (momwire#1718 S11b)
-    lp.geqp3 = reinterpret_cast<razor::zgeqp3_fn>(&MWX(zgeqp3_));
-#endif
     bspline::SymLapack sym;
     sym.sytrf = &MWX(zsytrf_);
     sym.sytrs = &MWX(zsytrs_);
@@ -225,14 +204,8 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     return true;
 #else
     std::vector<nec5::RunArrays> arrays;
-#if MW_ROUTE_SG
-    (void)sym;
-    const nec5::PrintoutResult r = nec5::sinusoidal_galerkin_printout(
-        latin1_text, "sinusoidal-galerkin", stamp, lp, np, arrays_dir.empty() ? nullptr : &arrays, open_end);
-#else
     const nec5::PrintoutResult r = nec5::bspline_printout(latin1_text, "bspline", stamp, lp, sym, np,
                                                           arrays_dir.empty() ? nullptr : &arrays, open_end);
-#endif
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;
         if (failed) *failed = r.cxx_failed;
