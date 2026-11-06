@@ -117,3 +117,98 @@ def test_the_scope_ends_with_the_fill():
     c0 = K.REG_TOEPLITZ_EDGES
     _Z(_solver(61, False))
     assert K.REG_TOEPLITZ_EDGES == c0
+
+
+# -- step 2: the Sommerfeld remainder's own block of an offset edge ----------
+
+import momwire.bspline as _B  # noqa: E402
+
+
+def _ground_solver(wires, segs, reuse, **kw):
+    return BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=segs,
+        feeds=[(0, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.001,
+        offset_reuse=reuse,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+        **kw,
+    )
+
+
+_GROUND_DECKS = {
+    # horizontal: the remainder's pair (i, j) depends on j - i
+    "horizontal": ([np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]])], [[41]]),
+    # low enough that #1189 raises some pairs' order: those are corrected
+    # after the offset fill, as after the dense one
+    "horizontal_low": ([np.array([[0.0, -5.0, 0.05], [0.0, 5.0, 0.05]])], [[41]]),
+    # vertical: on i + j
+    "vertical": ([np.array([[0.0, 0.0, 0.5], [0.0, 0.0, 10.5]])], [[41]]),
+    # one of each, joined: a basis straddles the corner
+    "inverted_l": (
+        [np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 6.0], [20.0, 0.0, 6.0]])],
+        [[24, 41]],
+    ),
+    # two separate offset edges, and the cross block between them
+    "two_wires": (
+        [
+            np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]]),
+            np.array([[3.0, -5.0, 10.0], [3.0, 5.0, 10.0]]),
+        ],
+        [[31], [31]],
+    ),
+}
+
+
+@pytest.mark.parametrize("deck", sorted(_GROUND_DECKS))
+def test_the_remainder_by_offset_runs_and_moves_z_by_roundoff(deck):
+    wires, segs = _GROUND_DECKS[deck]
+    Z0 = _Z(_ground_solver(wires, segs, False))
+    c0 = _B.REMAINDER_OFFSET_EDGES
+    s1 = _ground_solver(wires, segs, True)
+    Z1 = _Z(s1)
+    assert _B.REMAINDER_OFFSET_EDGES > c0  # the offset route ran
+    assert _rel(Z1, Z0) <= 1e-13
+    z0 = _ground_solver(wires, segs, False).compute_impedance()[0]
+    z1 = _ground_solver(wires, segs, True).compute_impedance()[0]
+    assert abs(z1 - z0) / abs(z0) <= 1e-12
+    if deck == "horizontal_low":
+        orders = s1._last_remainder_orders
+        assert len(orders) > 1  # raised pairs were present, and corrected
+
+
+def test_a_sloped_edge_keeps_the_dense_remainder():
+    """Height sum and separation both vary along a sloped edge: nothing
+    repeats, and the remainder is the dense fill."""
+    wires = [np.array([[0.0, 0.0, 1.0], [8.0, 0.0, 7.0]])]
+    c0 = _B.REMAINDER_OFFSET_EDGES
+    _Z(_ground_solver(wires, [[41]], True))
+    assert _B.REMAINDER_OFFSET_EDGES == c0
+
+
+def test_the_full_block_and_the_fold_agree():
+    """`_Z_sommerfeld_remainder` (the block) and `_into` (folded into T) take
+    the same offset route and land the same numbers."""
+    wires, segs = _GROUND_DECKS["inverted_l"]
+    s = _ground_solver(wires, segs, True)
+    cap = {}
+    orig = BSplineSolver._Z_sommerfeld_remainder_into
+
+    def spy(self, T, sign, geom, supp, polys, eps_t):
+        cap.update(geom=geom, supp=supp, polys=polys, eps_t=eps_t)
+        return orig(self, T, sign, geom, supp, polys, eps_t)
+
+    try:
+        BSplineSolver._Z_sommerfeld_remainder_into = spy
+        _Z(s)
+    finally:
+        BSplineSolver._Z_sommerfeld_remainder_into = orig
+    g, supp, polys, eps_t = cap["geom"], cap["supp"], cap["polys"], cap["eps_t"]
+    with K.offset_reuse_scope(True):
+        Q = s._Z_sommerfeld_remainder(g, supp, polys, eps_t)
+        T = np.zeros_like(Q)
+        s._Z_sommerfeld_remainder_into(T, 1, g, supp, polys, eps_t)
+    assert np.array_equal(T, Q)

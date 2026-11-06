@@ -844,6 +844,11 @@ class PairReuseDropped(UserWarning):
 #: compares at 0.1 mm) is refused here rather than copied approximately.
 _PAIR_REUSE_RTOL = 1e-12
 
+# momwire#1809 step 2: the Sommerfeld remainder's own block of a uniform
+# straight horizontal or vertical edge, filled from its distinct offsets
+# (`_remainder_offset_edges`). Counted so a gate can show the route ran.
+REMAINDER_OFFSET_EDGES = 0
+
 
 def _pair_reuse_to_solved(hint, dedup):
     """The hint's ``((wa, ea), (wb, eb))`` edge references renumbered to the
@@ -4457,6 +4462,16 @@ class BSplineSolver(
                         Q, geom, supp_seg, polys, grid, pairs, restrict=restrict
                     )
                 return Q
+            edges = self._remainder_offset_edges(geom, gz)
+            if edges:
+                Q = np.zeros((supp_c.shape[0],) * 2, dtype=np.complex128)
+                if (
+                    self._remainder_offset_fold(
+                        Q, 1, geom, supp_seg, polys, eps_t, edges
+                    )
+                    is not None
+                ):
+                    return Q
             Q = _acc.sommerfeld_remainder_bspline_Q(
                 nodes_c,
                 tang_c,
@@ -4554,6 +4569,17 @@ class BSplineSolver(
             else:
                 T += Q
             return T
+        edges = self._remainder_offset_edges(geom, self.ground_z)
+        if edges:
+            # Each block lands in T as it is formed: the offset edges' own
+            # blocks (n_e^2 each) and one edge's rows of the rest at a time,
+            # so no n_basis^2 Q is held beside T (#1798's bound). The fold
+            # checks every edge before touching T.
+            done = self._remainder_offset_fold(
+                T, sign, geom, supp_seg, polys, eps_t, edges
+            )
+            if done is not None:
+                return done
         gz, _sl, _sr, tang, _h, n_seg, _d, pairs, _q, nodes, W, grid = (
             self._remainder_prep(geom, eps_t)
         )
@@ -5236,6 +5262,315 @@ class BSplineSolver(
             "reuse_seg_edge": seg_edge,
             "reuse_src": src,
         }
+
+    def _remainder_offset_edges(self, geom, gz):
+        """The edges whose own Sommerfeld remainder block is filled by offset
+        (momwire#1809 step 2), as ``[(slice, kind)]``; ``[]`` for the dense
+        fill.
+
+        The remainder between two points depends on their horizontal
+        separation and on the sum of their heights only, and the dyad on the
+        two tangents. On a uniform straight edge of segment length h:
+
+        - **horizontal** (both ends at one height): the pair (i, j) depends
+          on j - i alone ("toeplitz");
+        - **vertical**: the separation is zero and the height sum grows with
+          i + j, so the pair depends on i + j alone ("hankel");
+        - **sloped**: on both, so nothing repeats; the edge is filled densely.
+
+        Opt-in with `offset_reuse`. The fused kernel must be loaded, since
+        the rest of the block is still its fill. An edge shorter than
+        `_REG_TOEPLITZ_MIN_N` keeps the dense fill, as in step 1. When a
+        `pair_reuse` plan applies, the offset route (which cannot take that
+        plan's copy map) is used only where the offset edges hold at least
+        half of the segment pairs."""
+        if not getattr(self, "_offset_reuse", False):
+            return []
+        if not (
+            _acc is not None
+            and hasattr(_acc, "sommerfeld_remainder_bspline_Q")
+            and hasattr(_acc, "remainder_field_proj_batch")
+        ):
+            return []
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        scale = float(max(np.max(np.abs(seg_l)), np.max(np.abs(seg_r)), 1e-30))
+        tol = _PAIR_REUSE_RTOL * scale
+        out = []
+        for sl in self._same_edge_slices(geom):
+            n = sl.stop - sl.start
+            if n < _bspline_kernels._REG_TOEPLITZ_MIN_N:
+                continue
+            L, R = seg_l[sl], seg_r[sl]
+            v = R - L
+            h = np.linalg.norm(v, axis=1)
+            if not np.allclose(h, h[0], rtol=1e-12, atol=0.0):
+                continue
+            if np.max(np.abs(v - v[0])) > tol or np.max(np.abs(L[1:] - R[:-1])) > tol:
+                continue
+            ends = np.concatenate([L, R[-1:]])
+            if np.max(np.abs(ends[:, 2] - ends[0, 2])) <= tol:
+                out.append((sl, "toeplitz"))
+            elif np.max(np.abs(ends[:, :2] - ends[0, :2])) <= tol:
+                out.append((sl, "hankel"))
+        if out and self._remainder_reuse_args(geom, gz):
+            n_seg = seg_l.shape[0]
+            share = sum((sl.stop - sl.start) ** 2 for sl, _ in out) / n_seg**2
+            if share < 0.5:
+                return []
+        return out
+
+    def _remainder_offset_table(self, sl, kind, nodes, tang, W, gz, grid, q):
+        """The distinct base-order remainder moments of one offset edge:
+        ``(d+1, d+1, 2n - 1)``, entry ``[p, P, k]`` the pair moment at
+        offset ``k - (n - 1)`` = j - i ("toeplitz") or at height-sum index
+        ``k`` = i + j ("hankel"). One observer segment against the edge gives
+        n of them; toeplitz takes the other n - 1 from reciprocity
+        (``M[p, P, i, j] = M[P, p, j, i]``), hankel from the last segment."""
+        n = sl.stop - sl.start
+        s0 = sl.start
+        src = np.ascontiguousarray(nodes[sl].reshape(-1, 3))
+        t_src = np.ascontiguousarray(np.repeat(tang[sl], q, axis=0))
+        Wsrc = W[:, sl]
+
+        def row(i):
+            o = s0 + i
+            F = _sommerfeld.remainder_field_proj(
+                np.ascontiguousarray(nodes[o]),
+                np.ascontiguousarray(np.repeat(tang[o : o + 1], q, axis=0)),
+                src,
+                t_src,
+                gz,
+                self.k,
+                grid,
+                int(self._cancel_flag),
+            ).reshape(q, n, q)
+            return np.einsum("pq,qjr,Pjr->pPj", W[:, o], F, Wsrc, optimize=True)
+
+        d1 = W.shape[0]
+        tab = np.empty((d1, d1, 2 * n - 1), dtype=np.complex128)
+        first = row(0)
+        if kind == "toeplitz":
+            tab[:, :, n - 1 :] = first
+            tab[:, :, : n - 1] = np.swapaxes(first, 0, 1)[:, :, :0:-1]
+        else:
+            tab[:, :, :n] = first
+            tab[:, :, n:] = row(n - 1)[:, :, 1:]
+        return tab
+
+    def _remainder_offset_block(self, sl, kind, tab, rows, on_edge, supp_seg, polys):
+        """The edge's own contribution to Q over its basis ``rows``:
+        ``(len(rows), len(rows))``, wings off the edge excluded.
+
+        The bases whose wings all rest on consecutive segments of the edge
+        with the interior polynomials (equal to 1e-12 relative) are
+        translates of one another, so their block is itself toeplitz (or
+        hankel) and comes from one value per distinct offset. The rest (the
+        end bases, and a basis straddling a junction) are formed row by row
+        from the moment table, and their columns by symmetry, the block being
+        reciprocal like the moments. Returns None when too few bases are
+        regular for that to pay; the caller then fills the edge densely."""
+        n = sl.stop - sl.start
+        d1 = polys.shape[1]
+        P = polys[rows] * on_edge[rows][:, :, None]
+        ls = np.where(on_edge[rows], supp_seg[rows] - sl.start, 0)
+        first = ls[:, 0]
+        cons = np.all(on_edge[rows], axis=1) & np.all(
+            ls == first[:, None] + np.arange(d1)[None, :], axis=1
+        )
+        cand = np.flatnonzero(cons)
+        if cand.size == 0:
+            return None
+        ref = P[cand[np.argmin(np.abs(first[cand] - (n - d1) // 2))]]
+        tol = 1e-12 * float(np.max(np.abs(ref)))
+        reg = np.zeros(rows.size, dtype=bool)
+        reg[cand] = np.max(np.abs(P[cand] - ref[None]), axis=(1, 2)) <= tol
+        if 2 * int(reg.sum()) < rows.size:
+            return None
+        toep = kind == "toeplitz"
+        if toep:
+            D = np.arange(-(n - d1), n - d1 + 1)  # s0(n) - s0(m)
+            f = np.zeros(D.size, dtype=np.complex128)
+            for a in range(d1):
+                for b in range(d1):
+                    f += np.einsum(
+                        "p,pPk,P->k", ref[a], tab[:, :, D + b - a + n - 1], ref[b]
+                    )
+        else:
+            S = np.arange(0, 2 * (n - d1) + 1)  # s0(m) + s0(n)
+            f = np.zeros(S.size, dtype=np.complex128)
+            for a in range(d1):
+                for b in range(d1):
+                    f += np.einsum("p,pPk,P->k", ref[a], tab[:, :, S + a + b], ref[b])
+        nr = rows.size
+        B = np.empty((nr, nr), dtype=np.complex128)
+        ri = np.flatnonzero(reg)
+        fr = first[ri]
+        if toep:
+            B[np.ix_(ri, ri)] = f[fr[None, :] - fr[:, None] + (n - d1)]
+        else:
+            B[np.ix_(ri, ri)] = f[fr[:, None] + fr[None, :]]
+        ir = np.flatnonzero(~reg)
+        if ir.size:
+            Rw = np.zeros((ir.size, nr), dtype=np.complex128)
+            m_ix = np.arange(ir.size)[:, None]
+            for a in range(d1):
+                A = np.einsum("mp,pPk->mPk", P[ir, a, :], tab)
+                for b in range(d1):
+                    if toep:
+                        idx = ls[None, :, b] - ls[ir, a][:, None] + n - 1
+                    else:
+                        idx = ls[ir, a][:, None] + ls[None, :, b]
+                    Rw += np.einsum("mnP,nP->mn", A[m_ix, :, idx], P[:, b, :])
+            B[ir, :] = Rw
+            B[:, ir] = Rw.T
+        return B
+
+    def _remainder_kernel_block(
+        self,
+        obs,
+        src,
+        on_o,
+        rows,
+        on_s,
+        supp_seg,
+        real,
+        nodes,
+        tang,
+        W,
+        polys,
+        gz,
+        grid,
+    ):
+        """The fused kernel's remainder block between observer segments `obs`
+        and source segments `src` (both sorted), over the basis `rows` whose
+        wings `on_o` rests on `obs` and the columns whose wings `on_s` rests on
+        `src`; a wing elsewhere contributes nothing (zero polynomial, a valid
+        local index). Returns ``(Qb, cols)``."""
+        on_s = on_s & real
+        cols = np.flatnonzero(on_s.any(axis=1))
+        if cols.size == 0:
+            return np.zeros((rows.size, 0), dtype=np.complex128), cols
+        loc_o = np.where(on_o[rows], np.searchsorted(obs, supp_seg[rows]), 0)
+        loc_s = np.where(on_s[cols], np.searchsorted(src, supp_seg[cols]), 0)
+        Qb = _acc.sommerfeld_remainder_bspline_Q(
+            np.ascontiguousarray(nodes[obs]),
+            np.ascontiguousarray(tang[obs]),
+            np.ascontiguousarray(W[:, obs, :]),
+            np.ascontiguousarray(nodes[src]),
+            np.ascontiguousarray(tang[src]),
+            np.ascontiguousarray(W[:, src, :]),
+            np.ascontiguousarray(loc_o, dtype=np.int64),
+            np.ascontiguousarray(polys[rows] * on_o[rows][:, :, None]),
+            np.ascontiguousarray(loc_s, dtype=np.int64),
+            np.ascontiguousarray(polys[cols] * on_s[cols][:, :, None]),
+            float(gz),
+            float(self.k),
+            *_sommerfeld.grid_cpp_args(grid),
+            int(self._cancel_flag),
+        )
+        return Qb, cols
+
+    def _remainder_offset_fold(self, T, sign, geom, supp_seg, polys, eps_t, edges):
+        """``T += sign * Q`` for the remainder block with `edges` filled by
+        offset (momwire#1809 step 2): each offset edge's own block from its
+        distinct moments, every other segment pair by the fused kernel with
+        one edge's segments as observers at a time, and #1189's raised pairs
+        added last, as the dense route adds them. Returns T, or None when an
+        edge turns out not to pay (the caller then fills densely, T
+        untouched)."""
+        global REMAINDER_OFFSET_EDGES
+        gz, _sl, _sr, tang, _h, n_seg, _d, pairs, q, nodes, W, grid = (
+            self._remainder_prep(geom, eps_t)
+        )
+        slices = self._same_edge_slices(geom)
+        seg_edge = np.full(n_seg, -1, dtype=np.int64)
+        for e, sl in enumerate(slices):
+            seg_edge[sl] = e
+        kind_of = {sl.start: kind for sl, kind in edges}
+        real = np.any(polys != 0.0, axis=2)
+        wing_edge = np.where(real, seg_edge[supp_seg], -1)
+        nodes_c = np.ascontiguousarray(nodes, dtype=np.float64)
+        tang_c = np.ascontiguousarray(tang, dtype=np.float64)
+        W_c = np.ascontiguousarray(W, dtype=np.float64)
+        polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+        blocks = []
+        for e, sl in enumerate(slices):
+            kind = kind_of.get(sl.start)
+            if kind is None:
+                continue
+            on_e = wing_edge == e
+            rows = np.flatnonzero(on_e.any(axis=1))
+            tab = self._remainder_offset_table(
+                sl, kind, nodes_c, tang_c, W_c, gz, grid, q
+            )
+            B = self._remainder_offset_block(sl, kind, tab, rows, on_e, supp_seg, polys)
+            if B is None:
+                return None
+            blocks.append((rows, B))
+        for rows, B in blocks:
+            T[np.ix_(rows, rows)] += sign * B
+        REMAINDER_OFFSET_EDGES += len(blocks)
+        # The rest by the fused kernel, one observer edge at a time: its own
+        # block when it is not an offset edge, and its block against every
+        # LATER edge, landed with its transpose (the remainder is reciprocal,
+        # so the dense fill's (f, e) block is the (e, f) one transposed up to
+        # rounding). Each segment pair is evaluated once, as in the dense
+        # symmetric route.
+        for e, sl in enumerate(slices):
+            own = np.arange(sl.start, sl.stop)
+            on_o = wing_edge == e
+            rows = np.flatnonzero(on_o.any(axis=1))
+            if rows.size == 0:
+                continue
+            if sl.start not in kind_of:
+                Qb, cols = self._remainder_kernel_block(
+                    own,
+                    own,
+                    on_o,
+                    rows,
+                    wing_edge == e,
+                    supp_seg,
+                    real,
+                    nodes_c,
+                    tang_c,
+                    W_c,
+                    polys_c,
+                    gz,
+                    grid,
+                )
+                T[np.ix_(rows, cols)] += sign * Qb
+            later = np.arange(sl.stop, n_seg)
+            if later.size == 0:
+                continue
+            on_s = (wing_edge > e) & np.isin(supp_seg, later)
+            Qb, cols = self._remainder_kernel_block(
+                own,
+                later,
+                on_o,
+                rows,
+                on_s,
+                supp_seg,
+                real,
+                nodes_c,
+                tang_c,
+                W_c,
+                polys_c,
+                gz,
+                grid,
+            )
+            if cols.size:
+                T[np.ix_(rows, cols)] += sign * Qb
+                T[np.ix_(cols, rows)] += sign * Qb.T
+        if pairs is not None and pairs[0].size:
+            nb = supp_seg.shape[0]
+            E = self._remainder_pair_entries(supp_seg, polys, n_seg, pairs[0], pairs[1])
+            side = np.zeros(E.size, dtype=np.complex128)
+            self._remainder_pair_correction(
+                side, geom, supp_seg, polys, grid, pairs, entries=E
+            )
+            ex_row, ex_col = np.divmod(E, nb)
+            T[ex_row, ex_col] += sign * side
+        return T
 
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
