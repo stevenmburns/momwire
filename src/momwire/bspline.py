@@ -871,6 +871,7 @@ def _add_block(T, rows, cols, B, sign=1):
 
 
 IMAGE_OFFSET_EDGES = 0
+FREE_OFFSET_EDGES = 0
 
 
 def _pair_reuse_to_solved(hint, dedup):
@@ -5318,7 +5319,7 @@ class BSplineSolver(
         return out
 
     @staticmethod
-    def _offset_table(row, n, kind):
+    def _offset_table(row, n, kind, reciprocal=True):
         """``(d+1, d+1, 2n - 1)`` distinct pair moments of an offset edge from
         `row(i)`, the ``(d+1, d+1, n)`` moments of local observer segment i
         against the edge: toeplitz entry ``[p, P, k]`` is offset
@@ -5328,9 +5329,14 @@ class BSplineSolver(
         first = row(0)
         d1 = first.shape[0]
         tab = np.empty((d1, d1, 2 * n - 1), dtype=np.complex128)
-        if kind == "toeplitz":
+        if kind == "toeplitz" and reciprocal:
             tab[:, :, n - 1 :] = first
             tab[:, :, : n - 1] = np.swapaxes(first, 0, 1)[:, :, :0:-1]
+        elif kind == "toeplitz":
+            # The negative offsets from the last observer segment: j - (n-1)
+            # runs over -(n-1)..0, each as the fill itself computes it.
+            tab[:, :, n - 1 :] = first
+            tab[:, :, : n - 1] = row(n - 1)[:, :, : n - 1]
         else:
             tab[:, :, :n] = first
             tab[:, :, n:] = row(n - 1)[:, :, 1:]
@@ -6047,7 +6053,56 @@ class BSplineSolver(
         # does not.
         ladder = self._fill_ladder(k, seg_l, seg_r, ek)
 
+        # momwire#1809 step 2: a uniform straight edge's own free-space block
+        # is assembled from its distinct same-edge moments
+        # (`_free_offset_block`), so the sweep skips its columns for its rows
+        # and the fixup below skips it. Whole-mesh fills only.
+        offset = (
+            {sl.start: sl for sl in self._free_offset_edges(geom)}
+            if restrict is None and same_edge_prep is None
+            else {}
+        )
+        cuts = sorted({b for sl in offset.values() for b in (sl.start, sl.stop)})
+
+        def _moments(r0, r1, c0, c1):
+            return _seg_seg_full_moments_offedge(
+                seg_l[r0:r1],
+                seg_r[r0:r1],
+                seg_l[c0:c1],
+                seg_r[c0:c1],
+                a_row[r0:r1],
+                k,
+                d,
+                self.n_qp_pair,
+                ek=_ek_slice(ek, rows=slice(r0, r1), cols=slice(c0, c1)),
+                ladder=ladder,
+            )
+
         def _sweep_block(w0, w1, j0, j1):
+            if offset:
+                bounds = [w0, *(c for c in cuts if w0 < c < w1), w1]
+                for r0, r1 in itertools.pairwise(bounds):
+                    sl = next(
+                        (v for v in offset.values() if v.start <= r0 < v.stop), None
+                    )
+                    spans = (
+                        [(0, n_segs)]
+                        if sl is None
+                        else [(0, sl.start), (sl.stop, n_segs)]
+                    )
+                    m_idx = _bases_touching(r0, r1)
+                    for c0, c1 in spans:
+                        if c1 > c0:
+                            _accumulate(
+                                _moments(r0, r1, c0, c1),
+                                r0,
+                                r1,
+                                c0,
+                                c1,
+                                m_idx,
+                                _bases_touching(c0, c1),
+                            )
+                return
             J_chunk = _seg_seg_full_moments_offedge(
                 seg_l[w0:w1],
                 seg_r[w0:w1],
@@ -6226,37 +6281,43 @@ class BSplineSolver(
 
         # One checkpoint per same-edge block. An unrequested edge writes only
         # its own wire's rows, so a restricted fill skips it whole.
+        if offset:
+            entries = [e for e in entries if e[0].start not in offset]
         _schedule.walk(
             entries,
             _fix_edge,
             checkpoint=self._checkpoint,
             keep=None if restrict is None else (lambda e: restrict.covers(e[0])),
         )
+        if offset:
+            global FREE_OFFSET_EDGES
+            arcs = {
+                sl.start: (arc, a_w)
+                for _w, sl, arc, a_w in self._edge_ingredients(geom)
+            }
+            for sl in offset.values():
+                self._checkpoint()
+                self._free_offset_block(
+                    Z, sl, *arcs[sl.start], k, ek_se, supp_c, polys_c, tan_c
+                )
+            FREE_OFFSET_EDGES += len(offset)
         return Z
 
-    def _image_offset_block(self, Z, sl, kind, moments, weights_fn, supp, polys):
-        """Subtract an offset edge's own image block from Z (momwire#1809
-        step 2), wings off the edge excluded.
+    def _offset_basis_block(self, Z, sl, kind, tab, supp, polys, assemble):
+        """Add an offset edge's own block to Z from its distinct pair moments
+        `tab` (`_offset_table`), wings off the edge excluded (momwire#1809
+        step 2).
 
-        The image of a horizontal edge is a parallel edge, so its pair
-        moments depend on j - i; a vertical edge's image runs down from the
-        plane, so they depend on i + j (`_offset_table`, from the image
-        kernel itself). With the weights the block is reciprocal and, over
-        the edge's regular bases (all wings on consecutive segments, the
-        interior polynomials to 1e-12), a function of the offset (or sum) of
-        their first segments. So the weighted assembler forms only a few
-        rows, each against the edge, on a basis subset of its own: the first
-        regular basis (and the last, for hankel) and every irregular one
-        (ends, junctions). The regular block is spread from the first, the
-        irregular rows and their columns (by symmetry) land as formed."""
+        Row chunks of the edge's moment window are served from `tab` through
+        a strided view (offset j - i, or sum i + j: a constant stride on each
+        axis), copied at memcpy speed, never gathered pair by pair, and
+        `assemble(J, sub_supp, sub_polys, r0, r1, m_idx, out)` (the caller's
+        assembler and weights; `r0:r1` absolute observer segments) lands
+        them on a basis subset of the edge's own. Every row is formed from
+        its own polynomials: spreading one row over the translates instead
+        reads their polynomials as equal, which they are only to ~3e-14, and
+        that moved Zin by 1.7e-12 on a sloped wire."""
         n = sl.stop - sl.start
-        d1 = polys.shape[1]
-
-        def row(i):
-            o = sl.start + i
-            return moments(o, o + 1, sl.start, sl.stop)[:, :, 0, :]
-
-        tab = self._offset_table(row, n, kind)
         real = np.any(polys != 0.0, axis=2)
         on = real & (supp >= sl.start) & (supp < sl.stop)
         sel = np.flatnonzero(on.any(axis=1)).astype(np.int64)
@@ -6266,38 +6327,144 @@ class BSplineSolver(
         park = np.where(on[sel], supp[sel], np.iinfo(np.int64).max).min(axis=1)
         sub_supp = np.ascontiguousarray(np.where(on[sel], supp[sel], park[:, None]))
         sub_polys = np.ascontiguousarray(polys[sel] * on[sel][:, :, None])
-        ls = sub_supp - sl.start
-        first = ls[:, 0]
-        cons = np.all(on[sel], axis=1) & np.all(
-            ls == first[:, None] + np.arange(d1)[None, :], axis=1
-        )
-        cand = np.flatnonzero(cons)
         k_sel = sel.size
-        all_n = np.arange(k_sel, dtype=np.int64)
-        reg = np.zeros(k_sel, dtype=bool)
-        if cand.size:
-            ref = sub_polys[cand[np.argmin(np.abs(first[cand] - (n - d1) // 2))]]
-            tol = 1e-12 * float(np.max(np.abs(ref)))
-            reg[cand] = np.max(np.abs(sub_polys[cand] - ref[None]), axis=(1, 2)) <= tol
+        B = np.zeros((k_sel, k_sel), dtype=np.complex128)
+        tab = np.ascontiguousarray(tab)
+        d1 = tab.shape[0]
+        st = tab.strides
+        row_bytes = d1 * d1 * n * 16
+        # A few MB per chunk, not the fill budget: the copy then stays in
+        # cache for the assembler, and the allocator reuses it chunk to chunk.
+        chunk = max(1, min(n, _schedule.mb_rows(min(self.swept_mem_mb, 8), row_bytes)))
+        for c0 in range(0, n, chunk):
+            c1 = min(n, c0 + chunk)
+            if kind == "toeplitz":
+                # J[.., i, j] = tab[.., j - i + n - 1]: start at i = c0, j = 0
+                base = tab[:, :, n - 1 - c0 :]
+                view = np.lib.stride_tricks.as_strided(
+                    base,
+                    shape=(d1, d1, c1 - c0, n),
+                    strides=(st[0], st[1], -st[2], st[2]),
+                )
+            else:
+                base = tab[:, :, c0:]
+                view = np.lib.stride_tricks.as_strided(
+                    base,
+                    shape=(d1, d1, c1 - c0, n),
+                    strides=(st[0], st[1], st[2], st[2]),
+                )
+            J = np.ascontiguousarray(view)
+            lo, hi = sl.start + c0, sl.start + c1
+            m_idx = np.flatnonzero(((sub_supp >= lo) & (sub_supp < hi)).any(axis=1))
+            assemble(J, sub_supp, sub_polys, lo, hi, m_idx.astype(np.int64), B)
+            del J
+        _add_block(Z, sel, sel, B)
 
-        def assembled_row(mloc):
-            """Row `mloc` of the edge's own image block, over the subset."""
-            r0 = int(ls[mloc].min())
-            r1 = int(ls[mloc].max()) + 1
-            li = np.arange(r0, r1)
-            J = np.ascontiguousarray(self._offset_rows(tab, n, kind, li))
-            w_A, w_Phi = weights_fn(sl.start + r0, sl.start + r1)
-            out = np.zeros((k_sel, k_sel), dtype=np.complex128)
+    def _free_offset_edges(self, geom):
+        """The edges whose own free-space block is assembled by offset under
+        `offset_reuse` (momwire#1809 step 2): every uniform straight edge of
+        `_REG_TOEPLITZ_MIN_N` segments or more, at any orientation (free
+        space has no preferred direction), as slices. Needs the windowed
+        assembler; ``[]`` otherwise."""
+        if not (
+            getattr(self, "_offset_reuse", False)
+            and _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and self._accel_serves_n_qp_pair
+        ):
+            return []
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        scale = float(max(np.max(np.abs(seg_l)), np.max(np.abs(seg_r)), 1e-30))
+        tol = _PAIR_REUSE_RTOL * scale
+        out = []
+        for sl in self._same_edge_slices(geom):
+            if sl.stop - sl.start < _bspline_kernels._REG_TOEPLITZ_MIN_N:
+                continue
+            L, R = seg_l[sl], seg_r[sl]
+            v = R - L
+            h = np.linalg.norm(v, axis=1)
+            if not np.allclose(h, h[0], rtol=1e-12, atol=0.0):
+                continue
+            if np.max(np.abs(v - v[0])) > tol or np.max(np.abs(L[1:] - R[:-1])) > tol:
+                continue
+            out.append(sl)
+        return out
+
+    def _free_offset_block(self, Z, sl, arc, a_w, k, ek_se, supp, polys, tangents):
+        """Add a uniform straight edge's own free-space block to Z from its
+        distinct same-edge moments (the analytic static part plus the
+        regularised smooth part, one observer row, the rest by reciprocity:
+        they depend on j - i alone), assembled at the basis level."""
+        n = sl.stop - sl.start
+        d = self.degree
+
+        def row(i):
+            win = slice(i, i + 1)
+            A_st = _seg_seg_static_moments(arc, a_w, max_d=d, ek=ek_se, rows=win)
+            A_reg = _seg_seg_reg_moments_from_geometry(
+                _seg_seg_reg_geometry(
+                    arc,
+                    a_w,
+                    max_d=d,
+                    n_qp=self.n_qp_pair_same_edge,
+                    ek=ek_se,
+                    rows=win,
+                    dense=True,
+                ),
+                k,
+            )
+            return (A_st + A_reg)[:, :, 0, :]
+
+        tab = self._offset_table(row, n, "toeplitz", reciprocal=False)
+
+        def assemble(J, sub_supp, sub_polys, r0, r1, m_idx, out):
+            _acc.assemble_Z_bspline_windowed(
+                J,
+                sub_supp,
+                sub_polys,
+                tangents,
+                m_idx,
+                np.arange(out.shape[0], dtype=np.int64),
+                int(r0),
+                int(r1),
+                int(sl.start),
+                int(sl.stop),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                out,
+                self._cancel_flag,
+            )
+
+        self._offset_basis_block(Z, sl, "toeplitz", tab, supp, polys, assemble)
+
+    def _image_offset_block(self, Z, sl, kind, moments, weights_fn, supp, polys):
+        """Subtract an offset edge's own image block from Z (momwire#1809
+        step 2). The image of a horizontal edge is a parallel edge, so its
+        pair moments depend on j - i; a vertical edge's image runs down from
+        the plane, so they depend on i + j (`_offset_table`, from the image
+        kernel itself); `_offset_basis_block` assembles it with the ground's
+        weights."""
+        n = sl.stop - sl.start
+
+        def row(i):
+            o = sl.start + i
+            return moments(o, o + 1, sl.start, sl.stop)[:, :, 0, :]
+
+        tab = self._offset_table(row, n, kind)
+
+        def assemble(J, sub_supp, sub_polys, r0, r1, m_idx, out):
+            w_A, w_Phi = weights_fn(r0, r1)
             _acc.assemble_Z_bspline_weighted_windowed(
                 J,
                 sub_supp,
                 sub_polys,
                 np.ascontiguousarray(w_A[:, sl]),
                 np.ascontiguousarray(w_Phi[:, sl]),
-                np.array([mloc], dtype=np.int64),
-                all_n,
-                int(sl.start + r0),
-                int(sl.start + r1),
+                m_idx,
+                np.arange(out.shape[0], dtype=np.int64),
+                int(r0),
+                int(r1),
                 int(sl.start),
                 int(sl.stop),
                 float(self.omega),
@@ -6307,35 +6474,8 @@ class BSplineSolver(
                 out,
                 self._cancel_flag,
             )
-            return out[mloc]
 
-        B = np.zeros((k_sel, k_sel), dtype=np.complex128)
-        ri = np.flatnonzero(reg)
-        if ri.size >= 2:
-            fr = first[ri]
-            lo, hi = int(fr.min()), int(fr.max())
-            m_lo = int(ri[np.argmin(fr)])
-            r_lo = assembled_row(m_lo)
-            g = np.zeros(2 * (hi - lo) + 1, dtype=np.complex128)
-            if kind == "toeplitz":
-                # g[D] for D = s0(n) - s0(m) >= 0 from the first row, and
-                # D < 0 by symmetry.
-                g[fr - lo] = r_lo[ri]
-                B[np.ix_(ri, ri)] = g[np.abs(fr[None, :] - fr[:, None])]
-            else:
-                # g[S - 2 lo] for S = s0(m) + s0(n): the first row gives
-                # S <= lo + hi, the last row the rest.
-                g[fr - lo] = r_lo[ri]
-                r_hi = assembled_row(int(ri[np.argmax(fr)]))
-                g[fr - lo + (hi - lo)] = r_hi[ri]
-                B[np.ix_(ri, ri)] = g[fr[:, None] + fr[None, :] - 2 * lo]
-        else:
-            reg[:] = False
-        for mloc in np.flatnonzero(~reg):
-            r = assembled_row(int(mloc))
-            B[mloc, :] = r
-            B[:, mloc] = r
-        _add_block(Z, sel, sel, B)
+        self._offset_basis_block(Z, sl, kind, tab, supp, polys, assemble)
 
     def _accumulate_Z_image_chunked(
         self, Z, geom, k, supp_seg, polys, weights_fn, *, restrict=None
@@ -8762,7 +8902,7 @@ class BSplineSolver(
         if (
             _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
             and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
-            and not dense_tensor_fits
+            and (not dense_tensor_fits or self._free_offset_edges(geom))
             and self._accel_serves_n_qp_pair
         ):
             # Chunked fill+assemble: never materialises the full
