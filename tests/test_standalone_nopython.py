@@ -47,8 +47,7 @@ RAISES = FIXTURES / "razor_printout_3a" / "echo_raises_nxq.nec"
 BURIED = FIXTURES / "razor_printout_somm" / "gn0_buried_radial.nec"
 EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
 DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)
-# What a build does not serve yet, by deck name (none since the Galerkin
-# build's crossing decks, momwire#1718 S11b).
+# What a build does not serve yet, by deck name (none today).
 _NOT_YET: dict[str, str] = {}
 
 
@@ -435,9 +434,7 @@ def test_momwire_times_streams_a_line_per_structure(tmp_path):
 MIXED = FIXTURES / "transmitted_mixed" / "m3_two_radii.nec"
 
 
-@pytest.mark.skipif(
-    BASIS != "bspline", reason="the transmitted blocks are bs2's (and sg5's) fill"
-)
+@pytest.mark.skipif(BASIS != "bspline", reason="the transmitted blocks are bs2's fill")
 def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
     """A mixed deck (wires above and below, no crossing node) fills the
     below->above grid; the executable keeps it in its Sommerfeld store as
@@ -494,9 +491,7 @@ def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
 MIXED_MORE = FIXTURES / "transmitted_store" / "m3_plus_short_vertical.nec"
 
 
-@pytest.mark.skipif(
-    BASIS != "bspline", reason="the transmitted blocks are bs2's (and sg5's) fill"
-)
+@pytest.mark.skipif(BASIS != "bspline", reason="the transmitted blocks are bs2's fill")
 def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
     """The executable fills the below->above grid node by node, only where
     the deck's pairs read it. A second deck on the same grid key (the same
@@ -549,7 +544,6 @@ def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
 LAZY_ABOVE = FIXTURES / "lazy_above" / "gn2_dipole41.nec"
 LAZY_ABOVE_READER = {
     "bspline": "bspline sommerfeld remainder",
-    "sinusoidal-galerkin": "sg sommerfeld remainder block",
 }
 
 
@@ -558,7 +552,7 @@ LAZY_ABOVE_READER = {
     reason="razor-2p's windows took their census already (momwire#1512)",
 )
 def test_the_above_remainder_fills_only_the_nodes_it_reads(tmp_path):
-    """bs2's and the Sinusoidal-Galerkin fill's above-ground remainder read a
+    """bs2's above-ground remainder reads a
     LAZY grid: a census of the block's and the graded pairs' reads names the
     nodes, and only those are filled (a node is its own contour, so its value
     is the whole grid's). Every read is checked finite (a node not filled

@@ -342,23 +342,6 @@ int threads_for(long long n_basis) {
     return cores;
 }
 
-// One thread on the OpenMP copy instead of the serial one: the
-// Sinusoidal-Galerkin build on Linux. Its window assembly
-// (`assemble_Z_sinusoidal_windowed`) compiles ~19 % slower without -fopenmp,
-// where the parallel region's body is not outlined (fs_yagi820 sg5 at one
-// thread on Skylake: 414 ms serial, 387 ms on the OpenMP copy, 383 ms
-// Python warm), and on Linux starting a one-thread team costs nothing
-// measurable (sd_fs_dipole21: 3.4 / 3.3 ms). The copies are one source with
-// one arithmetic; the other builds measured within noise, and Windows keeps
-// the serial copy for its OpenMP start-up cost.
-bool omp_copy_at_one_thread() {
-#if defined(__linux__)
-    return std::strcmp(BASIS, "sinusoidal-galerkin") == 0;
-#else
-    return false;
-#endif
-}
-
 // The executable's OpenBLAS, OpenMP (only when `omp`: the serial route never
 // enters the OpenMP runtime) and, for an embedded Python, the environment
 // its numpy and scipy read.
@@ -1135,7 +1118,7 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
     std::string printout, why, kind, message, raised_kind;
     bool failed = false, printed;
-    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads" && !omp_copy_at_one_thread();
+    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
     if (threads == 1 && env("MW_EXE_COPY") != "threads") {
         const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
         set_threads(blas, false);
@@ -1484,18 +1467,8 @@ bool big_delete(void *p) {
 // start it also cost small decks up to +5 MB (+33 %) of peak RSS; a fixed
 // 1 MiB threshold instead slowed bspline's buried fills 5-20 %. A caller's
 // own GLIBC_TUNABLES naming either threshold is kept.
-//
-// The sg5 build (MW_EXE_HEAP_FROM_START, CMakeLists.txt) applies it from its
-// first allocation instead: Steve accepted the up-to-5 MB for the 9-10 %
-// that small sg5 decks gain (ak_yagi_gn2 T=1 62 -> 56 ms; ak_yagi_free T=4
-// 16 -> 21 MB, #1781). The other builds keep the 64 MiB wait: a fixed early
-// threshold slowed bspline_nec5's buried fills.
 #if defined(__GLIBC__)
-#ifdef MW_EXE_HEAP_FROM_START
-constexpr std::size_t HEAP_BLOCK_MIN = 0, HEAP_CHURN_MIN = 0;
-#else
 constexpr std::size_t HEAP_BLOCK_MIN = std::size_t(64) << 10, HEAP_CHURN_MIN = std::size_t(64) << 20;
-#endif
 void heap_churn(std::size_t n) {
     static std::atomic<std::size_t> churn{0};
     static std::atomic<bool> done{false};

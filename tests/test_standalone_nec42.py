@@ -1,8 +1,6 @@
 """momwire-nec42-sinusoidal-standalone (standalone/, MW_EXE_BASIS=sin42,
 momwire#1607 B4b): the NEC-4.2 slot's sinusoidal launcher as one Python-free
-executable; and the same for momwire-nec42-sinusoidal-galerkin-standalone
-(MW_EXE_BASIS=sg42, momwire#1718 S4), the Sinusoidal-Galerkin launcher, and
-for momwire-nec42-standalone (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2), the
+executable; and the same for momwire-nec42-standalone (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2), the
 slot's default launcher `momwire-nec42` (bs2).
 
 Every printout is held to `momwire-nec42-sinusoidal`'s (this environment's
@@ -22,8 +20,8 @@ which are masked by exact line pattern, the same number on both sides
 
 The executable needs its OpenBLAS and a CMake build, which only the
 `standalone` workflow's Linux job makes, so this module runs only when
-MOMWIRE_NEC42_SIN_STANDALONE_EXE (or MOMWIRE_NEC42_SG_STANDALONE_EXE, or
-MOMWIRE_NEC42_STANDALONE_EXE) names one.
+MOMWIRE_NEC42_SIN_STANDALONE_EXE (or MOMWIRE_NEC42_STANDALONE_EXE) names
+one.
 """
 
 from __future__ import annotations
@@ -41,18 +39,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 NEC42 = FIXTURES / "eznec_nec42"
-# The same gates hold `momwire-nec42-sinusoidal-galerkin-standalone`
-# (MW_EXE_BASIS=sg42, momwire#1718 S4) to `momwire-nec42-sinusoidal-galerkin`
-# when MOMWIRE_NEC42_SG_STANDALONE_EXE names it instead.
-# And `momwire-nec42-standalone` (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2)
+# The same gates hold `momwire-nec42-standalone` (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2)
 # to `momwire-nec42`, the slot's default (bs2), under
 # MOMWIRE_NEC42_STANDALONE_EXE.
-_SG = os.environ.get("MOMWIRE_NEC42_SG_STANDALONE_EXE")
 _BS = os.environ.get("MOMWIRE_NEC42_STANDALONE_EXE")
-EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE") or _SG or _BS
-if EXE is not None and EXE == _SG:
-    BASIS = "sinusoidal-galerkin"
-elif EXE is not None and EXE == _BS:
+EXE = os.environ.get("MOMWIRE_NEC42_SIN_STANDALONE_EXE") or _BS
+if EXE is not None and EXE == _BS:
     BASIS = "bspline"
 else:
     BASIS = "sinusoidal"
@@ -60,15 +52,14 @@ LAUNCHER = "momwire-nec42" if BASIS == "bspline" else f"momwire-nec42-{BASIS}"
 
 pytestmark = pytest.mark.skipif(
     not EXE,
-    reason="none of MOMWIRE_NEC42_SIN_STANDALONE_EXE, "
-    "MOMWIRE_NEC42_SG_STANDALONE_EXE, MOMWIRE_NEC42_STANDALONE_EXE names a "
-    "built executable",
+    reason="neither MOMWIRE_NEC42_SIN_STANDALONE_EXE nor "
+    "MOMWIRE_NEC42_STANDALONE_EXE names a built executable",
 )
 
 DIPOLE = NEC42 / "0224_dipole-ex0.nec"
 CURRENT = NEC42 / "0223_dipole-ex6.nec"
 # wires on both sides of the interface with no crossing junction: served by
-# the point-matched copy (momwire#1718 S12), not yet by the Galerkin one
+# the point-matched copy (momwire#1718 S12: the transmitted blocks)
 GROUND = NEC42 / "probes" / "p9_above_and_buried_gn2.nec"
 REFUSED = NEC42 / "refused" / "r1_gd_after_a_run.nec"
 DECKS = (DIPOLE, CURRENT, GROUND, REFUSED)
@@ -265,18 +256,10 @@ def test_an_unreadable_deck(deck, tmp_path):
 def test_a_refused_deck_and_an_unserved_one(tmp_path):
     _same(*_both([REFUSED.name, "x.out"], tmp_path))
     run = _both([GROUND.name, "y.out"], tmp_path / "g")
-    if BASIS != "sinusoidal-galerkin":
-        # the point-matched copy serves the mixed deck as the launcher does
-        # (momwire#1718 S12: the transmitted blocks)
-        _same(*run)
-        assert b"NEC ERROR" not in (run[2] / "y.out").read_bytes()
-        return
-    # the Galerkin copy serves a wholly-buried deck and declines the mixed one
-    # (momwire#1718 S11a), in its own words
-    assert (
-        b"NEC ERROR - not served by this build: wires on both sides of the interface"
-        in (run[2] / "y.out").read_bytes()
-    )
+    # the mixed deck is served as the launcher serves it (momwire#1718 S12:
+    # the transmitted blocks)
+    _same(*run)
+    assert b"NEC ERROR" not in (run[2] / "y.out").read_bytes()
 
 
 def test_an_unwritable_printout(tmp_path):

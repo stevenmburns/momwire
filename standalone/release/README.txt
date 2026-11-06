@@ -48,23 +48,6 @@ fields, and it still refuses by name, for now:
     - an insulated wire (an IS card, momwire#1607 B5b).
 The Python command serves those decks.
 
-PREVIEW: momwire-nec42-sinusoidal-galerkin-linux and
-momwire-nec5-sinusoidal-galerkin-linux are the same kind of program for
-momwire's Sinusoidal-Galerkin formulation (momwire#1718), the native twins
-of the Python commands `momwire-nec42-sinusoidal-galerkin` (EZNEC's and
-SimNEC's NEC-4.2 slot) and `momwire-nec5-sinusoidal-galerkin` (SimNEC's
-NEC-5 engine). Each answers a deck as its Python command does, byte for
-byte apart from the two lines that report measured time, and takes the
-same three forms and the same picking (-avx2 / -sse2 beside it). They
-serve free space, a perfect ground (GN 1), a Sommerfeld ground (GN 2 /
-GN 3) with every wire above it or a wire end on it, a structure wholly
-below a Sommerfeld ground, a wire through the ground at a crossing
-junction, wire loading, networks (TL / NT), node gaps and the extended
-kernel, and still refuse by name, for now:
-    - a deck with wires on both sides of the ground and no crossing
-      junction (momwire#1718 S12).
-The Python commands serve those decks.
-
 PREVIEW: momwire-nec42-linux is the same kind of program for the NEC-4.2
 slot's default engine, momwire's bs2 formulation (the B-spline basis,
 momwire#1607 Phase C): the native twin of the Python command

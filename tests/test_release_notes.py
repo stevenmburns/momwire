@@ -101,31 +101,27 @@ def test_the_nec42_sinusoidal_exe_ships_in_the_linux_tarball_as_a_preview():
     assert "NEC-4.2 sinusoidal engine on Linux, without Python (preview)" in readme
 
 
-def test_the_sinusoidal_galerkin_exes_ship_in_the_linux_tarball_as_previews():
-    """momwire#1718 S-D: the two Sinusoidal-Galerkin no-Python builds ride the
-    Linux tarball, each gated (the tarball's own bytes) before a tag attaches
-    it, and every note that lists them says they are previews and what they
-    still refuse."""
+def test_the_sinusoidal_galerkin_exes_no_longer_ship():
+    """The two Sinusoidal-Galerkin no-Python builds (sg42, sg5; momwire#1718
+    S-D) were removed: SG is a reference engine, served by its Python
+    commands, and its executables are no longer built, gated or attached.
+    Nothing that builds or describes the tarball may name them again."""
     root = WORKFLOWS.parent.parent
     script = (root / "standalone" / "build_release_linux.sh").read_text()
+    cmake = (root / "standalone" / "CMakeLists.txt").read_text()
     workflow = (WORKFLOWS / "standalone.yml").read_text()
     readme_txt = (root / "standalone" / "release" / "README.txt").read_text()
-    readme = (root / "README.md").read_text(encoding="utf-8")
-    for cmd, basis in (
-        ("momwire-nec42-sinusoidal-galerkin-linux", "sg42"),
-        ("momwire-nec5-sinusoidal-galerkin-linux", "sg5"),
+    for cmd in (
+        "momwire-nec42-sinusoidal-galerkin-linux",
+        "momwire-nec5-sinusoidal-galerkin-linux",
     ):
-        assert f"{cmd} {basis}" in script, cmd
-        assert (root / "standalone" / "release" / cmd).exists(), cmd
-        assert f"momwire-nec5-linux-x86_64/{cmd}" in workflow, cmd
-        assert cmd in readme_txt and cmd in readme, cmd
-    assert (
-        "needs: [linux-artifact, linux, linux-nec42, linux-nec42-sg, linux-nec5-sg"
-        in workflow
-    )
-    assert "PREVIEW: momwire-nec42-sinusoidal-galerkin-linux" in readme_txt
-    assert "wires on both sides of the ground and no crossing" in readme_txt
-    assert "Sinusoidal-Galerkin engines on Linux, without Python (preview)" in readme
+        assert not (root / "standalone" / "release" / cmd).exists(), cmd
+        for text in (script, workflow, readme_txt):
+            assert cmd not in text, cmd
+    for basis in ("sg42", "sg5"):
+        assert f" {basis} " not in script, basis
+        assert f'"{basis}"' not in cmake, basis
+    assert "linux-nec42-sg" not in workflow and "linux-nec5-sg" not in workflow
 
 
 def test_the_nec42_default_exe_ships_in_the_linux_tarball_as_a_preview():
@@ -141,7 +137,7 @@ def test_the_nec42_default_exe_ships_in_the_linux_tarball_as_a_preview():
     assert "momwire-nec42-linux bspline_nec42 momwire-nec42-standalone" in script
     assert (root / "standalone" / "release" / "momwire-nec42-linux").exists()
     assert "momwire-nec5-linux-x86_64/momwire-nec42-linux" in workflow
-    assert "linux-nec5-sg, linux-nec42-bs]" in workflow
+    assert "linux-nec42, linux-nec42-bs]" in workflow
     assert "PREVIEW: momwire-nec42-linux" in readme_txt
     assert "an insulated wire (an IS card)" in readme_txt
     assert "default engine on Linux, without Python (preview)" in readme
