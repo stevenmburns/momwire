@@ -41,6 +41,7 @@ def server(argv):
     blocking = "--blocking" in argv
     ack = "--ack" in argv
     sentinel = "--sentinel" in argv
+    retry = _arg(argv, "--retry-timeout", 0.0, float)
     log = open(log_path, "a", buffering=1)
     lock = threading.Lock()
 
@@ -63,6 +64,29 @@ def server(argv):
         try:
             if ack:
                 conn.sendall(b"\x06")
+            if retry:
+                # lost wakeup or lost state? read raw with a timeout; on a
+                # timeout, ask again: an EOF found on the retry was there all
+                # along (a lost wakeup), none means the state itself was lost
+                conn.settimeout(retry)
+                nbytes, waits, raw = 0, 0, b""
+                while True:
+                    try:
+                        chunk = conn.recv(65536)
+                    except TimeoutError:
+                        waits += 1
+                        note(f"wait {number} after {nbytes} bytes (wait {waits})")
+                        continue
+                    if not chunk:
+                        break
+                    if not raw:
+                        note(f"first {number} {chunk.split(b'\r')[0].decode()}")
+                    raw += chunk
+                    nbytes += len(chunk)
+                note(f"eof {number} {nbytes} waits={waits}")
+                conn.settimeout(None)
+                conn.sendall(b"X" * (71 * ANSWER_LINES + ANSWER_LINES))
+                return
             rx = io.TextIOWrapper(conn.makefile("rb"), encoding="latin-1")
             tx = io.TextIOWrapper(conn.makefile("wb"), encoding="latin-1", newline="\r\n")
             ident = None

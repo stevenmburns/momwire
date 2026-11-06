@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [base, sent, delay]
+        leg: [serial, wakeup]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

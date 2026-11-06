@@ -32,6 +32,11 @@ for n in stuck[:20]:
 PY
 }
 case $LEG in
+  serial)
+    run proc1 "" 1 proc
+    run thread1 "" 1 thread ;;
+  wakeup)
+    run retry "--retry-timeout 2" 3 thread ;;
   base)
     run thread3 "" 3 thread
     run ack3 "--ack" 3 thread --ack ;;
