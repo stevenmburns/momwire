@@ -60,7 +60,11 @@ class Level:
 # no repo-root file and the Python floor (3.10) has no tomllib;
 # tests/test_features_registry.py holds the two equal.
 LEVELS: tuple[Level, ...] = (
-    Level("ak-linux-avx2", "antennaknobs on Linux avx2: the hosted app"),
+    Level("ak-linux-avx2", "antennaknobs on Linux, avx2 variant only: the hosted app"),
+    Level(
+        "ak-linux-sse2",
+        "momwire Python on Linux with the sse2 variant (pre-AVX2 CPUs)",
+    ),
     Level("ak-windows", "antennaknobs on Windows, avx2 and sse2"),
     Level(
         "portal-linux-windows",
@@ -79,6 +83,16 @@ LEVELS: tuple[Level, ...] = (
     Level("exe-sin42", "the sin42 executable, all platforms"),
 )
 DEEPEST = len(LEVELS)
+
+
+def _level(level_id: str) -> int:
+    """The 1-based number of the level named `level_id`. Every number below
+    comes from here, so a re-rank is an edit of the TOML and of LEVELS."""
+    for number, level in enumerate(LEVELS, start=1):
+        if level.id == level_id:
+            return number
+    raise KeyError(level_id)
+
 
 ENV_PREFIX = "MOMWIRE_X_"
 # Values that turn a variable on, case-insensitively; anything else (unset,
@@ -252,27 +266,59 @@ def _os(platform: str | None) -> str:
     raise ValueError(f"no support level for platform {p!r}")
 
 
+_UNSET: object = object()
+
+
+def _loaded_variant() -> str | None:
+    """The accelerator variant this process loaded (``"avx2"``, ``"sse2"``,
+    ``"legacy"``), or None when it runs pure Python. Read from `_accel`,
+    whose import is deferred to the call so this module stays light."""
+    from . import _accel
+
+    return _accel.VARIANT
+
+
 def current_level(
-    context: str = "python", *, basis: str | None = None, platform: str | None = None
+    context: str = "python",
+    *,
+    basis: str | None = None,
+    platform: str | None = None,
+    variant: str | None = _UNSET,  # type: ignore[assignment]
 ) -> int:
     """The support level (1-based) of the running configuration.
 
     `context` is ``"python"`` (momwire imported by a Python program, as
     antennaknobs does), ``"portal"`` (the drop-in portal) or ``"exe"`` (a
     standalone executable, whose `basis` then names it). `platform` defaults
-    to this process's ``sys.platform``."""
+    to this process's ``sys.platform``.
+
+    On Linux the Python context splits by accelerator `variant`: ``"avx2"``
+    is level 1 (the hosted app), anything else is ``ak-linux-sse2``. That
+    covers ``"sse2"``, the ``"legacy"`` build, and None (no accelerator
+    loaded, pure Python), which runs on the CPUs the sse2 variant is for or
+    on a failed load, and is no more certified than they are. `variant`
+    defaults to the loaded one (:func:`_loaded_variant`); it is read only
+    for Linux Python."""
     os_name = _os(platform)
     if context == "python":
-        return {"linux": 1, "windows": 2, "macos": 4}[os_name]
+        if os_name == "linux":
+            if variant is _UNSET:
+                variant = _loaded_variant()
+            return _level("ak-linux-avx2" if variant == "avx2" else "ak-linux-sse2")
+        return _level("ak-windows" if os_name == "windows" else "macos")
     if context == "portal":
-        return 4 if os_name == "macos" else 3
+        return _level("macos" if os_name == "macos" else "portal-linux-windows")
     if context == "exe":
         family = _EXE_BASES.get(basis or "")
         if family is None:
             raise ValueError(f"no standalone executable for basis {basis!r}")
         if family == "bs2-razor":
-            return 5 if os_name == "windows" else 6
-        return 7 if family == "bs42" else 8
+            return _level(
+                "exe-bs2-razor-windows"
+                if os_name == "windows"
+                else "exe-bs2-razor-linux-macos"
+            )
+        return _level("exe-bs42" if family == "bs42" else "exe-sin42")
     raise ValueError(f"context must be python, portal or exe, not {context!r}")
 
 
@@ -282,9 +328,10 @@ def certified(
     *,
     basis: str | None = None,
     platform: str | None = None,
+    variant: str | None = _UNSET,  # type: ignore[assignment]
 ) -> bool:
     """Whether `name` is certified where it is running."""
-    level = current_level(context, basis=basis, platform=platform)
+    level = current_level(context, basis=basis, platform=platform, variant=variant)
     return level <= FEATURES[name].reach
 
 

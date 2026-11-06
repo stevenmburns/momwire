@@ -1,5 +1,5 @@
 # The support hierarchy: the ORDER in which a change is certified, from the
-# configuration most users run (1) to the one fewest do (8).
+# configuration most users run (1) to the one fewest do (9).
 #
 # Order only. No gates and no feature names live here: a feature's REACH (the
 # deepest level it is certified at) is in `src/momwire/_features.py`, and a
@@ -16,7 +16,7 @@
 
 [[level]]
 id = "ak-linux-avx2"
-description = "antennaknobs on Linux avx2: the hosted app"
+description = "antennaknobs on Linux, avx2 variant only: the hosted app"
 jobs = [
     "ci.yml:test",  # the Linux default lane
     "ci.yml:test-slow",  # the slow lane
@@ -26,6 +26,15 @@ jobs = [
     "ci.yml:test-pynec",
     "wheels.yml:linux_cross_engine",
 ]
+
+[[level]]
+id = "ak-linux-sse2"
+description = "momwire Python on Linux with the sse2 variant (pre-AVX2 CPUs)"
+# No CI job runs the Python test suite with the sse2 variant on Linux today:
+# standalone.yml forces sse2 only for the executables (and the launcher
+# comparisons around them). This level is certified by the nightly's sse2
+# rotation cells (rollout step 5, not built yet).
+jobs = []
 
 [[level]]
 id = "ak-windows"
