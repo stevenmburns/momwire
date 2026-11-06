@@ -70,6 +70,22 @@ from momwire.eznec._shell import close_deck  # noqa: E402
 
 ARRAYS = pc.ARRAYS
 
+# A diagnosability bound, not a gate (momwire#1822): a child that outlives it
+# fails the run naming WHICH child and which deck, where a hang used to run to
+# the job's 120-minute limit and say nothing. Far above any one answer here.
+CHILD_TIMEOUT_S = 1200
+
+
+def _run(what: str, deck: Path, command, **kwargs):
+    """``subprocess.run`` under CHILD_TIMEOUT_S, its stall named."""
+    try:
+        return subprocess.run(command, timeout=CHILD_TIMEOUT_S, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"{what} on {deck} did not finish in {CHILD_TIMEOUT_S} s: {command}"
+        ) from None
+
+
 # The no-Python executables' printouts against Python's on Windows (MSVC
 # /fp:fast against numpy), by printout_tolerance.ratio. DERIVED, not chosen
 # (momwire#1558), as tests/_lane_gate.py's LANE_RTOL_WIN32 was: measured over
@@ -147,7 +163,9 @@ def _answer(
     if threads != "auto":
         env["MOMWIRE_THREADS"] = threads
     (work / "cxx").mkdir()
-    subprocess.run(
+    _run(
+        "the executable",
+        deck,
         [exe, str(deck), str(work / "exe.out")],
         env=dict(
             env, MW_EXE_ROUTE_LOG=str(work / "route"), MW_EXE_ARRAYS=str(work / "cxx")
@@ -165,7 +183,9 @@ def _answer(
     else:
         _fallback(exe, deck, work, env, out)
     if launcher is not None:
-        subprocess.run(
+        _run(
+            "the launcher",
+            deck,
             [launcher, str(deck), str(work / "launcher.out")],
             env=launcher_env,
             capture_output=True,
@@ -177,7 +197,9 @@ def _answer(
 
 def _fallback(exe, deck, work, env, out) -> None:
     (work / "py").mkdir()
-    subprocess.run(
+    _run(
+        "the executable's fallback",
+        deck,
         [exe, str(deck), str(work / "fallback.out")],
         env=dict(
             env,

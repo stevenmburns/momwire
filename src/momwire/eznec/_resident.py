@@ -8,12 +8,14 @@ client (``momwire_eznec_client`` today, the native exe of the arc's phase 3
 eventually) forwards deck bytes and writes the answer to the file EZNEC reads.
 
 The wire contract is the seam's degenerate session, verbatim (#719 U4): one
-connection is one deck — the client sends the deck bytes and shuts down its
-write side, EOF is the frame, :func:`momwire.serve.run_session` answers once,
-the connection closes. No length prefixes, no framing of our own, and the
-printout that comes back is byte-for-byte the file to write: the transcoding
-the one-shot shell does at :func:`~momwire.eznec._shell.write_printout`
-(latin-1, CRLF) happens HERE, in the connection's own text wrapper, so a
+connection is one deck — the client sends the deck's length and then its
+bytes (:func:`momwire_serve_client.deck_frame`, momwire#1822: the frame used
+to be the client's half-close, whose EOF macOS can lose),
+:func:`momwire.serve.run_session` answers once, the connection closes. One
+length line and no other framing of our own, and the printout that comes back
+is byte-for-byte the file to write: the transcoding the one-shot shell does
+at :func:`~momwire.eznec._shell.write_printout` (latin-1, CRLF) happens HERE,
+in the connection's own text wrapper, so a
 client stays a dumb pipe and cannot get it wrong.
 
 ``--basis`` is per-server, not per-request: the socket's name already hashes
@@ -26,6 +28,8 @@ from __future__ import annotations
 
 import io
 import sys
+
+import momwire_serve_client as _mech
 
 from ..serve import run_session
 from ..serve._pool import WorkerPool, configured_max_workers
@@ -64,9 +68,17 @@ def _connection(
 
         the_seam = pool.bind(the_seam, crashed, label=f"[conn {number}] ")
         solve_lock = None
-    rx = tx = None
+    raw = rx = tx = None
     try:
-        rx = io.TextIOWrapper(conn.makefile("rb"), encoding=_CODEC, errors="replace")
+        # The deck is read whole, by its length, before the session sees it
+        # (momwire#1822): the session then ends at the end of a buffer, never
+        # at an EOF the client's kernel may not deliver.
+        raw = conn.makefile("rb")
+        body = _mech.read_deck_frame(raw)
+        if body is None:
+            log.write(f"[conn {number}] deck frame cut short; no answer\n")
+            return
+        rx = io.TextIOWrapper(io.BytesIO(body), encoding=_CODEC, errors="replace")
         tx = io.TextIOWrapper(
             conn.makefile("wb"),
             encoding=_CODEC,
@@ -81,7 +93,7 @@ def _connection(
             solve_lock,
         )
     finally:
-        for handle in (tx, rx):
+        for handle in (tx, rx, raw):
             if handle is None:
                 continue
             try:
