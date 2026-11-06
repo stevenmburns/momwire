@@ -1,0 +1,28 @@
+name: diag-1822
+# Scratch diagnosis of momwire#1822 (minimal unix-socket repro, no momwire).
+# Never merged: runs on pushes to its own branch only.
+on:
+  push:
+    branches: [diag/1822-minimal]
+  workflow_dispatch:
+
+jobs:
+  repro:
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [idle, load, shape]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: sw_vers; uname -a; python3 -V
+      - run: scratch_1822/run_leg.sh ${{ matrix.leg }} out 200
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diag1822-${{ matrix.leg }}
+          path: out
