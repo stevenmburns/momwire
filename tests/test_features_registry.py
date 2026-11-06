@@ -82,8 +82,9 @@ def test_reach_kind_and_dates_are_valid():
 
 def test_every_feature_is_below_the_executables():
     # The executables' refusal is a generic scan, which is right only while
-    # no feature reaches an executable's level (5 and up).
-    assert all(f.reach < 5 for f in F.FEATURES.values())
+    # no feature reaches an executable's level.
+    first_exe = F._level("exe-bs2-razor-windows")
+    assert all(f.reach < first_exe for f in F.FEATURES.values())
 
 
 def test_the_kwarg_overrides_the_env(no_features):
@@ -135,7 +136,9 @@ def test_the_toml_and_the_module_carry_the_same_levels():
     ]
     for lv in levels:
         assert set(lv) == {"id", "description", "jobs"}, lv["id"]
-        assert lv["jobs"], lv["id"]
+        # ak-linux-sse2 names none: no job runs the Python suite on the sse2
+        # variant yet (the nightly's sse2 rotation, rollout step 5).
+        assert lv["jobs"] or lv["id"] == "ak-linux-sse2", lv["id"]
 
 
 def _workflow_jobs():
@@ -168,27 +171,43 @@ def test_every_ci_job_is_placed_once_or_unassigned():
 
 
 @pytest.mark.parametrize(
-    ("context", "platform", "basis", "level"),
+    ("context", "platform", "basis", "variant", "level"),
     [
-        ("python", "linux", None, 1),
-        ("python", "win32", None, 2),
-        ("python", "darwin", None, 4),
-        ("portal", "linux", None, 3),
-        ("portal", "win32", None, 3),
-        ("portal", "darwin", None, 4),
-        ("exe", "win32", "razor2p", 5),
-        ("exe", "win32", "bspline_nec5", 5),
-        ("exe", "linux", "razor2p", 6),
-        ("exe", "darwin", "bspline_nec5", 6),
-        ("exe", "linux", "bspline_nec42", 7),
-        ("exe", "win32", "sin42", 8),
+        ("python", "linux", None, "avx2", 1),
+        ("python", "linux", None, "sse2", 2),
+        ("python", "linux", None, "legacy", 2),
+        ("python", "linux", None, None, 2),  # no accelerator: pure Python
+        ("python", "win32", None, "avx2", 3),
+        ("python", "win32", None, "sse2", 3),
+        ("python", "darwin", None, "legacy", 5),
+        ("portal", "linux", None, "avx2", 4),
+        ("portal", "linux", None, "sse2", 4),
+        ("portal", "win32", None, None, 4),
+        ("portal", "darwin", None, None, 5),
+        ("exe", "win32", "razor2p", None, 6),
+        ("exe", "win32", "bspline_nec5", None, 6),
+        ("exe", "linux", "razor2p", None, 7),
+        ("exe", "darwin", "bspline_nec5", None, 7),
+        ("exe", "linux", "bspline_nec42", None, 8),
+        ("exe", "win32", "sin42", None, 9),
     ],
 )
-def test_current_level(context, platform, basis, level):
-    assert F.current_level(context, basis=basis, platform=platform) == level
-    assert F.certified("offset_reuse", context, basis=basis, platform=platform) == (
-        level <= 1
-    )
+def test_current_level(context, platform, basis, variant, level):
+    kw = dict(basis=basis, platform=platform, variant=variant)
+    assert F.current_level(context, **kw) == level
+    assert F.certified("offset_reuse", context, **kw) == (level <= 1)
+
+
+def test_the_level_numbers_follow_the_ids():
+    assert [F._level(lv.id) for lv in F.LEVELS] == list(range(1, len(F.LEVELS) + 1))
+
+
+def test_the_default_variant_is_the_loaded_one(monkeypatch):
+    from momwire import _accel
+
+    for loaded, level in (("avx2", 1), ("sse2", 2), (None, 2)):
+        monkeypatch.setattr(_accel, "VARIANT", loaded)
+        assert F.current_level("python", platform="linux") == level
 
 
 # --- the split rule -------------------------------------------------------------
@@ -201,7 +220,7 @@ def test_a_native_feature_outside_its_reach_refuses(no_features, monkeypatch):
         F.Feature("probe", 1, "MOMWIRE_X_PROBE", "native", 1, "2026-11-06"),
     )
     no_features.setenv("MOMWIRE_X_PROBE", "1")
-    # The portal is level 3 or 4 on every platform: past reach 1.
+    # The portal is past reach 1 on every platform.
     with pytest.raises(F.FeatureNotCertified, match=r"^probe is not certified"):
         F.enabled("probe", context="portal")
     assert F.enabled("probe", False, context="portal") is False
@@ -233,7 +252,7 @@ def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
         assert _printout.engine_stamp("bspline") == (
             _bare_stamp("bspline") + " +offset_reuse uncertified on this platform"
         )
-    # Outside a portal entry the route is Python's: level 1 on Linux.
+    # Outside a portal entry the route is Python's: level 1 on Linux avx2.
     plain = "" if F.certified("offset_reuse") else " uncertified on this platform"
     assert F.stamp() == "+offset_reuse" + plain
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
