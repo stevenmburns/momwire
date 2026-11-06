@@ -39,9 +39,11 @@
  * the tests hold this copy to it.
  *
  * THE WIRE PROTOCOL (momwire.eznec._resident, pinned by
- * tests/test_serve_resident.py): connect, send the deck bytes verbatim, shut
- * the write side down, read to EOF.  EOF is the frame; there are no length
- * prefixes and no framing of our own.  The server transcodes (latin-1, CRLF),
+ * tests/test_serve_resident.py): connect, send DECK_FRAME_TAG, the deck's
+ * length and the deck bytes verbatim, read to EOF.  The length is the deck's
+ * frame and the server's close is the answer's; the write side is never shut
+ * down, because macOS can lose that EOF (momwire#1822).  There is no other
+ * framing of our own.  The server transcodes (latin-1, CRLF),
  * so what comes back IS the file -- this client never inspects or decodes
  * anything, and an EMPTY answer is a server that died mid-solve, never a
  * printout.
@@ -216,6 +218,15 @@ typedef int lock_t;
  * one of them starts with NUL. */
 static const char EN_OPTIONAL_REQUEST[] = "\0EN-OPTIONAL\n";
 #define EN_OPTIONAL_REQUEST_LEN (sizeof EN_OPTIONAL_REQUEST - 1)
+/* momwire#1822: the deck's frame is its length -- DECK_FRAME_TAG, a space,
+ * the byte count, "\n", then the bytes -- and the write side is never
+ * half-closed, because macOS can lose the EOF of a shutdown() that races the
+ * server's recv().  `momwire_serve_client.deck_frame` spells it; WIRE_KEY_ELEMENT
+ * is hashed into the key so this launcher never reaches a server of the same
+ * version that still reads a deck to EOF. */
+static const char DECK_FRAME_TAG[] = "\0DECK";
+#define DECK_FRAME_TAG_LEN (sizeof DECK_FRAME_TAG - 1)
+#define WIRE_KEY_ELEMENT "wire=deck-length"
 static const char GMO_FRAME_START[] = "\0GMO\r\n";
 #define GMO_FRAME_START_LEN (sizeof GMO_FRAME_START - 1)
 static const char GMO_FRAME_END[] = "\0\r\n";
@@ -869,6 +880,8 @@ static void config_key(const char *engine_resolved, int nec4, int named_basis,
     sha256_update(&hash, engine_resolved, strlen(engine_resolved));
     sha256_update(&hash, &nul, 1);
     sha256_update(&hash, IDLE_TIMEOUT_REPR, strlen(IDLE_TIMEOUT_REPR));
+    sha256_update(&hash, &nul, 1);
+    sha256_update(&hash, WIRE_KEY_ELEMENT, strlen(WIRE_KEY_ELEMENT));
     sha256_update(&hash, &nul, 1);
     if (nec4) {
         sha256_update(&hash, NEC4_KEY_ELEMENT, strlen(NEC4_KEY_ELEMENT));
@@ -1880,6 +1893,8 @@ static int served(const setup_t *setup, const char *deck_path,
 {
     buf_t deck = {NULL, 0, 0};
     buf_t answer = {NULL, 0, 0};
+    buf_t wire = {NULL, 0, 0};
+    char frame_line[32];
     sock_t sock;
     int status = -1;
 
@@ -1898,14 +1913,21 @@ static int served(const setup_t *setup, const char *deck_path,
         buf_free(&deck);
         return -1;
     }
-    if (send_all(sock, deck.data, deck.len) == 0) {
-        /* EOF is the frame: the server answers once and closes, so the write
-         * side has to go down before anything comes back. */
-#ifdef _WIN32
-        shutdown(sock, SD_SEND);
-#else
-        shutdown(sock, SHUT_WR);
-#endif
+    /* One buffer and one send: three small writes on the loopback-TCP path
+     * would meet Nagle and a delayed ACK. */
+    snprintf(frame_line, sizeof frame_line, " %lu\n", (unsigned long)deck.len);
+    if (buf_add(&wire, DECK_FRAME_TAG, DECK_FRAME_TAG_LEN) != 0 ||
+        buf_add(&wire, frame_line, strlen(frame_line)) != 0 ||
+        buf_add(&wire, deck.data, deck.len) != 0) {
+        note("out of memory framing %s", deck_path);
+        close_sock(sock);
+        buf_free(&wire);
+        buf_free(&deck);
+        return -1;
+    }
+    if (send_all(sock, wire.data, wire.len) == 0) {
+        /* The length is the frame, so nothing is half-closed: the server
+         * answers once and closes, and its close is the answer's frame. */
         status = recv_to_eof(sock, &answer);
         if (status != 0) {
             note("the resident engine closed mid-answer");
@@ -1914,6 +1936,7 @@ static int served(const setup_t *setup, const char *deck_path,
         note("the resident engine closed while the deck was being sent");
     }
     close_sock(sock);
+    buf_free(&wire);
     buf_free(&deck);
 
     if (status != 0) {

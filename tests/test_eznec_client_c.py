@@ -898,7 +898,7 @@ answer = mech.GMO_FRAME_START + {gmo!r} + mech.GMO_FRAME_END + {printout!r}
 
 def connection(conn, number, log, solve_lock, pool=None):
     reader = conn.makefile("rb")
-    reader.read()
+    mech.read_deck_frame(reader)
     reader.close()
     conn.sendall(answer)
 
