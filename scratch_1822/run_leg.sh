@@ -32,6 +32,15 @@ for n in stuck[:20]:
 PY
 }
 case $LEG in
+  base)
+    run thread3 "" 3 thread
+    run ack3 "--ack" 3 thread --ack ;;
+  sent)
+    run sentinel3 "--sentinel" 3 thread --sentinel
+    run ackproc "--ack" 3 proc --ack ;;
+  delay)
+    run blocking "--blocking" 3 thread
+    run ack3b "--ack" 3 thread --ack ;;
   idle)
     run proc3 "" 3 proc
     run thread3 "" 3 thread ;;

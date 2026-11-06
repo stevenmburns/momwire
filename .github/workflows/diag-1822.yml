@@ -13,14 +13,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [idle, load, shape]
+        leg: [base, sent, delay]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: sw_vers; uname -a; python3 -V
-      - run: scratch_1822/run_leg.sh ${{ matrix.leg }} out 200
+      - run: scratch_1822/run_leg.sh ${{ matrix.leg }} out 240
       - if: always()
         uses: actions/upload-artifact@v7
         with:

@@ -39,6 +39,8 @@ def server(argv):
     path, log_path = argv[0], argv[1]
     accept_delay = _arg(argv, "--accept-delay", 0.0, float)
     blocking = "--blocking" in argv
+    ack = "--ack" in argv
+    sentinel = "--sentinel" in argv
     log = open(log_path, "a", buffering=1)
     lock = threading.Lock()
 
@@ -59,6 +61,8 @@ def server(argv):
 
     def serve(conn, number):
         try:
+            if ack:
+                conn.sendall(b"\x06")
             rx = io.TextIOWrapper(conn.makefile("rb"), encoding="latin-1")
             tx = io.TextIOWrapper(conn.makefile("wb"), encoding="latin-1", newline="\r\n")
             ident = None
@@ -68,6 +72,8 @@ def server(argv):
                     ident = line.strip()
                     note(f"first {number} {ident} timeout={conn.gettimeout()}")
                 nbytes += len(line)
+                if sentinel and line.startswith("END-OF-DECK"):
+                    break
             note(f"eof {number} {ident} {nbytes}")
             tx.write(("X" * 70 + "\n") * ANSWER_LINES)
             tx.flush()
@@ -92,14 +98,23 @@ def server(argv):
         threading.Thread(target=serve, args=(conn, served), daemon=True).start()
 
 
-def client_once(path, ident, pre_shutdown_delay=0.0, timeout=20.0):
+def client_once(path, ident, pre_shutdown_delay=0.0, timeout=20.0, ack=False, sentinel=False):
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.connect(path)
     try:
-        conn.sendall(f"ID {ident}\r\n".encode() + DECK)
+        if ack:
+            conn.settimeout(timeout)
+            try:
+                if conn.recv(1) != b"\x06":
+                    return f"NOACK {ident}"
+            except TimeoutError:
+                return f"HANG-ACK {ident}"
+            conn.settimeout(None)
+        conn.sendall(f"ID {ident}\r\n".encode() + DECK + (b"END-OF-DECK\r\n" if sentinel else b""))
         if pre_shutdown_delay:
             time.sleep(pre_shutdown_delay)
-        conn.shutdown(socket.SHUT_WR)
+        if not sentinel:
+            conn.shutdown(socket.SHUT_WR)
         conn.settimeout(timeout)
         got = 0
         while True:
@@ -118,7 +133,7 @@ def client_once(path, ident, pre_shutdown_delay=0.0, timeout=20.0):
 def client(argv):
     path, ident = argv[0], argv[1]
     d = _arg(argv, "--pre-shutdown-delay", 0.0, float)
-    r = client_once(path, ident, d)
+    r = client_once(path, ident, d, ack="--ack" in argv, sentinel="--sentinel" in argv)
     print(r)
     return 0 if r == "ok" else 1
 
@@ -127,6 +142,7 @@ def drive(argv):
     path, log_path, n, conc, mode = argv[0], argv[1], int(argv[2]), int(argv[3]), argv[4]
     rest = argv[5:]
     d = _arg(list(rest), "--pre-shutdown-delay", 0.0, float)
+    ack, sentinel = "--ack" in rest, "--sentinel" in rest
     seconds = _arg(rest, "--seconds", 1e9, float)
     stop = time.monotonic() + seconds
     counter = iter(range(n))
@@ -141,7 +157,7 @@ def drive(argv):
             if i is None:
                 return
             if mode == "thread":
-                r = client_once(path, str(i), d)
+                r = client_once(path, str(i), d, ack=ack, sentinel=sentinel)
             else:
                 p = subprocess.run(
                     [sys.executable, "-I", __file__, "client", path, str(i), *rest],
