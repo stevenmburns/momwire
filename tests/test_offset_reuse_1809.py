@@ -167,10 +167,12 @@ _GROUND_DECKS = {
 def test_the_remainder_by_offset_runs_and_moves_z_by_roundoff(deck):
     wires, segs = _GROUND_DECKS[deck]
     Z0 = _Z(_ground_solver(wires, segs, False))
-    c0 = _B.REMAINDER_OFFSET_EDGES
+    c0, i0 = _B.REMAINDER_OFFSET_EDGES, _B.IMAGE_OFFSET_EDGES
     s1 = _ground_solver(wires, segs, True)
     Z1 = _Z(s1)
     assert _B.REMAINDER_OFFSET_EDGES > c0  # the offset route ran
+    # ... and on the image, except where the near-image fixup owns the block
+    assert (_B.IMAGE_OFFSET_EDGES > i0) == (deck != "horizontal_low")
     assert _rel(Z1, Z0) <= 1e-13
     z0 = _ground_solver(wires, segs, False).compute_impedance()[0]
     z1 = _ground_solver(wires, segs, True).compute_impedance()[0]
@@ -180,13 +182,37 @@ def test_the_remainder_by_offset_runs_and_moves_z_by_roundoff(deck):
         assert len(orders) > 1  # raised pairs were present, and corrected
 
 
+@pytest.mark.parametrize("deck", ["horizontal", "vertical", "inverted_l"])
+def test_the_image_by_offset_over_a_perfect_ground(deck):
+    """The image term alone (no remainder over PEC) by offset."""
+    wires, segs = _GROUND_DECKS[deck]
+
+    def pec(reuse):
+        return BSplineSolver(
+            wires=wires,
+            n_per_edge_per_wire=segs,
+            feeds=[(0, None, 1.0 + 0j)],
+            wavelength=LAM,
+            wire_radius=0.001,
+            offset_reuse=reuse,
+            ground_z=0.0,
+        )
+
+    Z0 = _Z(pec(False))
+    i0 = _B.IMAGE_OFFSET_EDGES
+    Z1 = _Z(pec(True))
+    assert _B.IMAGE_OFFSET_EDGES > i0
+    assert _rel(Z1, Z0) <= 1e-13
+
+
 def test_a_sloped_edge_keeps_the_dense_remainder():
     """Height sum and separation both vary along a sloped edge: nothing
     repeats, and the remainder is the dense fill."""
     wires = [np.array([[0.0, 0.0, 1.0], [8.0, 0.0, 7.0]])]
-    c0 = _B.REMAINDER_OFFSET_EDGES
+    c0, i0 = _B.REMAINDER_OFFSET_EDGES, _B.IMAGE_OFFSET_EDGES
     _Z(_ground_solver(wires, [[41]], True))
     assert _B.REMAINDER_OFFSET_EDGES == c0
+    assert _B.IMAGE_OFFSET_EDGES == i0
 
 
 def test_the_full_block_and_the_fold_agree():
