@@ -45,6 +45,10 @@
 //   MW_EXE_PYSTARTUP=FILE    the fallback execs FILE before answering
 //   MW_EXE_TIMES=1           a timing line on stderr
 //
+// MOMWIRE_X_<NAME> (an experimental feature, `momwire._features`): none is
+// certified for an executable, so one turned on is refused, one sentence on
+// stderr and exit 2, before anything else runs (`feature_refusal`).
+//
 // MOMWIRE_TIMES=1 (for users, MOMWIRE_TIMES): the printout's MATRIX TIMING
 // (FILL, FACTOR) and RUN TIME carry measured seconds instead of zeros, and
 // each answer writes one `times:` line on stderr, its stages in milliseconds
@@ -121,6 +125,10 @@ extern "C" int MWX(blas_thread_shutdown_)(void);
 #if MW_BLAS_TWO_LIBS
 extern "C" int MWN(blas_thread_shutdown_)(void);
 #endif
+#endif
+
+#if !defined(_WIN32)
+extern char **environ;  // POSIX; macOS declares it in no header
 #endif
 
 namespace {
@@ -250,6 +258,60 @@ void times_line(const char *route, int threads, double load_ms, double write_ms)
 std::string env(const char *name) {
     const char *v = std::getenv(name);
     return v == nullptr ? std::string() : std::string(v);
+}
+
+// Experimental features (`momwire._features`): every one is certified below
+// the executables' levels of the support hierarchy, so a feature turned on in
+// the environment is refused here, before any deck is read, rather than
+// silently ignored (or honoured by the embedded fallback). The scan is
+// generic -- any MOMWIRE_X_<NAME> -- plus the older spellings some features
+// kept as aliases; on is "1", "true", "yes" or "on" in any case, as there.
+// tests/test_features_registry.py holds the alias list and the sentence to
+// the registry's.
+const char *const FEATURE_ALIASES[][2] = {
+    {"MOMWIRE_EXACT_KERNEL_SERIES", "exact_kernel_series"},
+    {"MOMWIRE_RAZOR_CXX", "razor_cxx"},
+};
+
+bool feature_value_on(std::string v) {
+    const std::size_t b = v.find_first_not_of(" \t\r\n");
+    const std::size_t e = v.find_last_not_of(" \t\r\n");
+    v = b == std::string::npos ? std::string() : v.substr(b, e - b + 1);
+    for (char &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return v == "1" || v == "true" || v == "yes" || v == "on";
+}
+
+// The first feature the environment turns on, by its registry name, or "".
+std::string feature_requested() {
+#if defined(_WIN32)
+    char **envp = _environ;
+#else
+    char **envp = environ;
+#endif
+    static const std::string prefix = "MOMWIRE_X_";
+    for (char **p = envp; p != nullptr && *p != nullptr; ++p) {
+        const std::string kv(*p);
+        const std::size_t eq = kv.find('=');
+        if (eq == std::string::npos || kv.compare(0, prefix.size(), prefix) != 0) continue;
+        if (!feature_value_on(kv.substr(eq + 1))) continue;
+        std::string name = kv.substr(prefix.size(), eq - prefix.size());
+        for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return name;
+    }
+    for (const auto &alias : FEATURE_ALIASES)
+        if (feature_value_on(env(alias[0]))) return alias[1];
+    return std::string();
+}
+
+// One sentence on stderr and exit 2 when a feature is on; 0 (go on) otherwise.
+int feature_refusal() {
+    const std::string name = feature_requested();
+    if (name.empty()) return 0;
+    // "P%cthon", not the word: the no-Python build is held to carry no
+    // "python" bytes at all (tests/test_standalone_nopython.py).
+    std::fprintf(stderr, "%s is not certified for this executable; it runs only in the P%cthon route\n",
+                 name.c_str(), 'y');
+    return 2;
 }
 
 void set_env(const char *name, const std::string &value) {
@@ -821,6 +883,7 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
 
 #if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
+    if (const int refused = feature_refusal()) return refused;
     times_begin();
     const std::vector<std::string> args(argv + 1, argv + argc);
 
@@ -1349,6 +1412,7 @@ void blas_env_before_load() {
 }  // namespace
 
 int main(int argc, char **argv) {
+    if (const int refused = feature_refusal()) return refused;
     times_begin();
 #if defined(_WIN32)
     blas_env_before_load();

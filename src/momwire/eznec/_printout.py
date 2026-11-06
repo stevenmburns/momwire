@@ -58,6 +58,7 @@ import os
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from .. import _features
 from ..deck._cards import Card, parse_card
 from ..deck._nec4 import catenary_length, helix_vertices
 from ..deck._nec5 import Nec5Deck
@@ -220,7 +221,13 @@ def _stamp_field(text: object) -> str:
 
 
 def engine_stamp(basis: str) -> str:
-    """Line 2: ``" momwire <version> <basis> <variant>[ (stale: <v>,...)]"``.
+    """Line 2: ``" momwire <version> <basis> <variant>[ (stale: <v>,...)][ +<feature>...]"``.
+
+    The ``+<feature>`` tail names the experimental features that are on
+    (:func:`momwire._features.stamp`), with ``uncertified on this platform``
+    after them when the running route (the portal, under
+    :func:`momwire.eznec._shell.render`) is outside a feature's reach here;
+    it is absent when every feature is off.
 
     The trailing marker appears only in an OVERLAID frozen bundle
     (:func:`_overlay_marker`).  It rides on line 2 rather than on a line of
@@ -237,6 +244,12 @@ def engine_stamp(basis: str) -> str:
     variant = _stamp_field(_accelerator_variant()) or _STAMP_NO_VARIANT
     marker = _overlay_marker(version)
     tail = f" {marker}" if marker else ""
+    # The experimental features the environment turned on (`_features`), and
+    # whether this platform is outside any one's reach. Nothing when none is
+    # on, so a flags-off line 2 is the line it always was.
+    features = _features.stamp()
+    if features:
+        tail += f" {features}"
     # The marker's room is reserved BEFORE the basis is cut, so a long
     # launcher name loses its own tail rather than the overlay warning.
     room = (

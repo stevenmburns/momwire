@@ -61,6 +61,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
+from . import _features
 from ._bspline_kernels import offset_reuse_scope
 from ._bspline_kernels import (
     _EK,
@@ -1876,7 +1877,7 @@ class BSplineSolver(
         swept_mem_mb=256,
         rotational_symmetry=False,
         pair_reuse=None,
-        offset_reuse=False,
+        offset_reuse=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1923,13 +1924,18 @@ class BSplineSolver(
         # momwire#1809: edge pairs a front end says share a pose (antennaknobs
         # computes them from the design). Checked against this solver's own
         # geometry before any block is copied (`_pair_reuse_plan`).
+        # Registered in `_features` (reach 1, a Python route): a hint passed
+        # is the keyword, so it is on; with none there is nothing to reuse.
+        if not _features.enabled("pair_reuse", None if pair_reuse is None else True):
+            pair_reuse = None
         self._pair_reuse = _pair_reuse_to_solved(pair_reuse, self._wire_dedup)
         self._pair_reuse_plan_cache = None
         self.pair_reuse_dropped = ()
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
-        # `pair_reuse`: off is the dense fill, bit for bit.
-        self._offset_reuse = bool(offset_reuse)
+        # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
+        # defers to MOMWIRE_X_OFFSET_REUSE (`_features`, reach 1).
+        self._offset_reuse = _features.enabled("offset_reuse", offset_reuse)
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:

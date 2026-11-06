@@ -373,6 +373,7 @@ from . import (
     _exact_kernel,
     _exact_kernel_seam,
     _exact_kernel_series,
+    _features,
     _near_interface,
     _potential_ground,
     _razor_class,
@@ -1300,7 +1301,9 @@ _CXX_WANT_FRONT = False
 def _razor_cxx_wanted():
     if _RAZOR_CXX is not None:
         return bool(_RAZOR_CXX)
-    return os.environ.get("MOMWIRE_RAZOR_CXX") == "1"
+    # `_features`' razor_cxx (native, reach 1); MOMWIRE_RAZOR_CXX is its
+    # older name, kept as an alias.
+    return _features.enabled("razor_cxx")
 
 
 def _cxx_context():
@@ -4883,6 +4886,8 @@ class RazorSolver(
         # geometry-only coefficients where the group is short enough at this
         # k (`_exact_kernel_series.serves`), the direct rule otherwise. The
         # choice reads the geometry and k alone, never what is cached.
+        if _exact_kernel_series.ENABLED and "exact_kernel_series" in _features.active():
+            _features.check("exact_kernel_series")
         ser_on = _exact_kernel_series.ENABLED and _exact_kernel_series.accel_serves(
             k, 2
         )
