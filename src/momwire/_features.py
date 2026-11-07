@@ -120,6 +120,12 @@ class Feature:
     # Older spellings of the variable, still honoured. The canonical
     # ``env`` wins when both are set.
     aliases: tuple[str, ...] = ()
+    # The files that are this feature's alone (globs, from the repo root).
+    # A pull request touching one is FEATURE work: it must pass the PR jobs
+    # of levels 1..reach, and no more (scripts/support_matrix.py). A file
+    # the feature shares with stable code (bspline.py, razor.py) does not
+    # belong here: a change to it is a stable-path change.
+    paths: tuple[str, ...] = ()
 
     @property
     def stable(self) -> bool:
@@ -142,6 +148,7 @@ FEATURES: dict[str, Feature] = {
             issue=1809,
             since="2026-11-04",
             kwarg="pair_reuse",
+            paths=("tests/test_pair_reuse_1809.py",),
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
         # (PR #1815): the shipped kernels, summed in another order.
@@ -153,6 +160,7 @@ FEATURES: dict[str, Feature] = {
             issue=1809,
             since="2026-11-05",
             kwarg="offset_reuse",
+            paths=("tests/test_offset_reuse_1809.py",),
         ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
@@ -164,6 +172,12 @@ FEATURES: dict[str, Feature] = {
             issue=1454,
             since="2026-10-13",
             aliases=("MOMWIRE_EXACT_KERNEL_SERIES",),
+            # Not _exact_kernel_series.py: razor's flags-off plan reads its
+            # constants and group_reach, so that module is stable code.
+            paths=(
+                "src/momwire/_accel_exact_kernel_series.cpp",
+                "tests/test_exact_kernel_series_1454.py",
+            ),
         ),
         # razor-2p's solve in one C++ call from Python (the prototype, PR
         # #1479).
@@ -175,6 +189,13 @@ FEATURES: dict[str, Feature] = {
             issue=1479,
             since="2026-10-14",
             aliases=("MOMWIRE_RAZOR_CXX",),
+            # Its C++ cores (_razor_solve_core, _razor_front_core) build the
+            # razor2p executable too, so they are stable code; only the tests
+            # of the opt-in route are its own.
+            paths=(
+                "tests/test_razor_cxx_front.py",
+                "tests/test_razor_cxx_solve_proto.py",
+            ),
         ),
     )
 }
