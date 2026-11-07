@@ -39,7 +39,7 @@ from momwire.deck._nec5 import (
     Nec5SommerfeldGround,
     parse_nec5,
 )
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 DECKS = Path(__file__).parent / "fixtures" / "eznec" / "decks"
 CORPUS = sorted(DECKS.glob("*.nec"))
@@ -385,7 +385,7 @@ def test_gn_nofile_trailer_parses_and_solves_identically_to_a_bare_gn():
     Deck 0021 (``vertical-over-real-ground``) is an existing finite-ground
     capture; the two forms below differ only in that trailer, so both
     :attr:`~momwire.deck._nec5.Nec5Deck.ground` and a same-process
-    :func:`~momwire.eznec._serve.serve` solve must agree — a SAME-PARSE
+    :func:`~momwire.dropin.nec5._serve.serve` solve must agree — a SAME-PARSE
     identity, not a cross-machine pin.
     """
     (path,) = DECKS.glob("0021_*.nec")

@@ -58,10 +58,10 @@ import os
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from .. import _features
-from ..deck._cards import Card, parse_card
-from ..deck._nec4 import catenary_length, helix_vertices
-from ..deck._nec5 import Nec5Deck
+from ... import _features
+from ...deck._cards import Card, parse_card
+from ...deck._nec4 import catenary_length, helix_vertices
+from ...deck._nec5 import Nec5Deck
 
 __all__ = [
     "STUB_REFUSAL",
@@ -205,7 +205,7 @@ def _accelerator_variant() -> str:
     import: the package attribute is the one owner of that label, and the
     stamp has to report the process it is printing from.
     """
-    from .. import accelerator_variant
+    from ... import accelerator_variant
 
     return _STAMP_NO_VARIANT if accelerator_variant is None else accelerator_variant
 
@@ -226,7 +226,7 @@ def engine_stamp(basis: str) -> str:
     The ``+<feature>`` tail names the experimental features that are on
     (:func:`momwire._features.stamp`), with ``uncertified on this platform``
     after them when the running route (the portal, under
-    :func:`momwire.eznec._shell.render`) is outside a feature's reach here;
+    :func:`momwire.dropin.nec5._shell.render`) is outside a feature's reach here;
     it is absent when every feature is off.
 
     The trailing marker appears only in an OVERLAID frozen bundle
@@ -547,7 +547,7 @@ class PortRow:
     read from is different and the mapping is the INVERSE of the naive
     guess: measured against our licensed materials, an explicit end 1
     prints 2 and an explicit end 2 prints 1 —
-    :func:`~momwire.eznec._serve._source_segment_and_end` is where that
+    :func:`~momwire.dropin.nec5._serve._source_segment_and_end` is where that
     read happens for this row's producer.
     """
 
@@ -1478,7 +1478,7 @@ def _times_environment() -> list[str]:
     """MOMWIRE_TIMES only: the environment in effect, at the top of the
     printout (the standalone executables print the same text); nothing when
     it is off."""
-    from .. import _somm_disk_cache, _sommerfeld_below, _times
+    from ... import _somm_disk_cache, _sommerfeld_below, _times
 
     if _times.current() is None:
         return []
@@ -1857,7 +1857,7 @@ def _closing(seconds: float, *, closing: bool) -> list[str]:
     deck)."""
     if not closing:
         return []
-    from .. import _times
+    from ... import _times
 
     if _times.current() is not None:  # MOMWIRE_TIMES: measured, and says so
         return ["", f"{_RUN_TIME_LABEL}{seconds:10.3f} SEC. (WALL CLOCK)"]

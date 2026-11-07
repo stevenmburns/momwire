@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve, _shell
+from momwire.dropin.nec5 import _serve, _shell
 
 HERE = Path(__file__).parent
 PROBE = HERE / "fixtures" / "eznec_phantom_1580" / "probe_transfer.nec"

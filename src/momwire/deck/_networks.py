@@ -13,7 +13,7 @@ Nothing here knows about a solver.  It takes a model, a
 each endpoint landed on, and returns a flat
 :class:`~momwire.networks.Network` plus the ``port_to_idx`` map its reducer
 takes.  Composing that with an antenna admittance is
-:class:`~momwire.portal.DeckSolver`'s job.
+:class:`~momwire.dropin.nec2c.DeckSolver`'s job.
 
 The translation, card by card
 -----------------------------
@@ -122,7 +122,7 @@ def live_cards(
 
     **This is the only place that comparison is written.**  It briefly lived in
     four — here, the port-pair walk beside it, and both printout walks in
-    ``momwire.portal`` — and four copies of a scoping rule is four chances to
+    ``momwire.dropin.nec2c`` — and four copies of a scoping rule is four chances to
     answer one group with another group's networks, silently.  Returning the
     card WITH its ports rather than the card alone is what lets every caller
     share it: they all need both, and pairing them here means a filtered card
@@ -233,7 +233,7 @@ def build_network(
 
     ``held`` names the ports that are sources whatever their voltage in THIS
     vector (momwire#1295's phased current drive, the portal twin of
-    ``momwire.eznec._serve._reducer_for``'s parameter).  A unit probe puts
+    ``momwire.dropin.nec5._serve._reducer_for``'s parameter).  A unit probe puts
     zero volts on every driven port but one, and a driven endpoint that
     floated between the probes and the final solve would make them columns of
     two different circuits.  Empty, the rule above is unchanged.

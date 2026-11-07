@@ -1,9 +1,9 @@
 """PyInstaller entry point for the packaged EZNEC drop-in executable.
 
-The frozen program is :mod:`momwire.eznec`'s process shell and nothing else:
+The frozen program is :mod:`momwire.dropin.nec5`'s process shell and nothing else:
 ``momwire-engine <deck> <printout>``, the same two-argument protocol EZNEC
 Pro+ v7 uses to launch its external NEC-5 console engine.  A separate script
-(rather than ``-m momwire.eznec``) exists only because PyInstaller wants a
+(rather than ``-m momwire.dropin.nec5``) exists only because PyInstaller wants a
 file to trace from.
 
 **The executable's NAME picks the formulation** (momwire#593).  EZNEC owns
@@ -37,7 +37,7 @@ worker and nothing else.
 The frozen exe is also the resident daemon (momwire#718 phase 3): in a
 deployed bundle there is no system Python, so the native client's only spawn
 target is the bundle's own exe, and ``--serve`` dispatches it exactly as
-``python -m momwire.eznec --serve`` does.  This is not a flag on the
+``python -m momwire.dropin.nec5 --serve`` does.  This is not a flag on the
 EZNEC-facing path — EZNEC's spelling, two quoted cwd-relative paths, can
 never produce it — it is machinery only the thin client speaks.
 """
@@ -56,8 +56,8 @@ from momwire.deck._solver import (  # noqa: E402 - after the AVX-512 pin
     dialect_from_program_name,
     nec4_basis_from_program_name,
 )
-from momwire.eznec import _serve  # noqa: E402 - after the AVX-512 pin
-from momwire.eznec._shell import main  # noqa: E402 - after the AVX-512 pin
+from momwire.dropin.nec5 import _serve  # noqa: E402 - after the AVX-512 pin
+from momwire.dropin.nec5._shell import main  # noqa: E402 - after the AVX-512 pin
 from momwire.serve._pool import WORKER_FLAG  # noqa: E402 - after the AVX-512 pin
 
 MARKER = "eznec-"
@@ -147,7 +147,7 @@ def run(argv: list[str]) -> int:
     basis = basis_for(argv[0])
     dialect = dialect_for(argv[0])
     if "--serve" in rest:
-        from momwire.eznec._resident import serve_main
+        from momwire.dropin.nec5._resident import serve_main
 
         if "--basis" not in rest:
             rest = [*rest, "--basis", basis]

@@ -6,7 +6,7 @@ with the solved cells masked, or momwire-against-momwire reproducibility in one
 process. None of them pins momwire's own NUMBERS, so moving a unit of the
 pipeline into C++ had nothing to be byte-identical TO. This is that thing: a
 corpus of printouts rendered through the very entry EZNEC launches
-(`momwire.eznec._shell.render`), for both bases a drop-in launcher serves
+(`momwire.dropin.nec5._shell.render`), for both bases a drop-in launcher serves
 (``bspline``, the `momwire-nec5` default, and ``razor-2p``), over the NEC-5
 fixture decks the seam serves in about a second or less.
 
@@ -260,7 +260,7 @@ def render_raw(deck: str, basis: str, dialect: str = "nec5") -> str:
     case answers the same whichever cases ran before it."""
     from threadpoolctl import threadpool_limits
 
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     below = sys.modules.get("momwire._sommerfeld_below")
     if below is not None:
@@ -323,7 +323,7 @@ def render(deck: str, basis: str) -> str:
     """One deck's printout, as the EZNEC entry renders it, in the pinned regime."""
     from threadpoolctl import threadpool_limits
 
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     text = _shell.read_deck(FIXTURES / deck)
     if text is None:

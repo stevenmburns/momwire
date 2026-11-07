@@ -19,8 +19,8 @@ import ast
 from pathlib import Path
 
 from momwire.deck import _nec5
-from momwire.eznec import _serve, _shell
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve, _shell
+from momwire.dropin.nec5._shell import render
 
 DECK = (
     "CM refusal encoding\nCE\n"

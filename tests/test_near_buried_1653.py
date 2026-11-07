@@ -36,7 +36,7 @@ from momwire import _sommerfeld_transmitted
 from momwire._far_readout import ETA0, _element_fields, transmitted_moments
 from momwire._sommerfeld_below import k_medium
 from momwire.bspline import BSplineSolver
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 C0 = 299792458.0
 F7 = 7e6

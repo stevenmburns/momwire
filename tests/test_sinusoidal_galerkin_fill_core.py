@@ -789,7 +789,7 @@ def test_the_direct_fill_branches_are_reached():
     try:
         for _name, text in CONTACT_CASES:
             nc.py_fill(text)
-        from momwire.eznec import _nec4
+        from momwire.dropin.nec5 import _nec4
 
         for _name, text in CONTACT_STEP_CASES:
             with warnings.catch_warnings():

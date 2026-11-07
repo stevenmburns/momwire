@@ -31,8 +31,8 @@ import pytest
 
 from momwire.deck import DeckError, parse_nec5
 from momwire.deck._nec5 import split_structures
-from momwire.eznec import _shell
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _shell
+from momwire.dropin.nec5._shell import render
 
 EZNEC_DECKS = Path(__file__).parent / "fixtures" / "eznec" / "decks"
 BASES = ("bspline", "razor-2p")

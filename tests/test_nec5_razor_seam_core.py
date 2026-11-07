@@ -542,7 +542,7 @@ def test_the_multi_run_deck_shares_its_preparation(tools):
 
 
 def test_the_constants_are_the_seams(tools):
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     acc, _fc, _sc = tools
     k = acc.nec5_seam_constants()

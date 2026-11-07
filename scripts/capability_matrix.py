@@ -128,11 +128,11 @@ def render() -> str:
         "",
         "What a `--basis` name selects. Several names share one class, differing",
         "only in a bound keyword, so they share its row. The `nec2` column is",
-        "`deck.NEC2_BASES`: the names the nec2 front door (`momwire.portal`, the",
+        "`deck.NEC2_BASES`: the names the nec2 front door (`momwire.dropin.nec2c`, the",
         "`momwire-nec2c-*` commands) serves, which is exactly the `centre_feeds`",
         "column below — that dialect addresses segment centres, and a family",
         "that snaps to knots is refused there by name (momwire#821). The NEC-5",
-        "dialect (`momwire.eznec`) addresses nodes and reads the whole roster.",
+        "dialect (`momwire.dropin.nec5`) addresses nodes and reads the whole roster.",
         "",
     ]
     lines += _table(

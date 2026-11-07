@@ -33,11 +33,11 @@ from pathlib import Path
 
 import pytest
 
-import momwire.eznec._serve as _serve
+import momwire.dropin.nec5._serve as _serve
 from momwire.deck._cards import DeckError
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import serve
-from momwire.eznec._serve import (
+from momwire.dropin.nec5 import serve
+from momwire.dropin.nec5._serve import (
     SPEED_OF_LIGHT_MHZ_M,
     _gyrator_drives,
     _phantom_tags,
@@ -162,7 +162,7 @@ def test_the_gyrator_row_is_the_connection_point_the_solve_already_carried():
     """No second solve, and no second opinion.
 
     The real node is an ``NT`` endpoint, so the reducer already solved it and
-    :class:`~momwire.eznec._serve._PortState` already carried it. The moved
+    :class:`~momwire.dropin.nec5._serve._PortState` already carried it. The moved
     row must therefore be the STRUCTURE EXCITATION DATA row at that same site,
     to the round-off the restore rule removes from the current - which is what
     says this change touched the readout and not the circuit.

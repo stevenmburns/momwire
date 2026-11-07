@@ -7,7 +7,7 @@ one-radius-per-side census (antennaknobs plan U5) and no longer sizes the
 Sommerfeld grid. Its addressed nodes become circuit nodes with no momwire
 port, which is what antennaknobs' ``PortVirtual`` already made of them.
 
-The line is drawn at the MESH and not at :func:`~momwire.eznec._serve.
+The line is drawn at the MESH and not at :func:`~momwire.dropin.nec5._serve.
 structure_of`: the four STRUCTURE SPECIFICATION counts and the current and
 charge tables are the ENGINE's, which solves the phantom as real geometry and
 prints a row per element, so the rows stay and carry an exact zero.
@@ -40,7 +40,7 @@ import pytest
 from momwire import BSplineSolver, _sommerfeld
 from momwire.deck._nec5 import parse_nec5
 from momwire.deck._solver import basis_entry
-from momwire.eznec import _serve, serve
+from momwire.dropin.nec5 import _serve, serve
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_phantom_1139"
 CORPUS = Path(__file__).parent / "fixtures" / "eznec"
@@ -353,8 +353,8 @@ def test_the_printout_still_counts_and_addresses_the_phantom():
     ``NETWORK DATA`` and ``ANTENNA INPUT PARAMETERS`` tables print, and there
     is a current and a charge row for each.  A printout that dropped any of
     that would stop being the engine's printout, whatever it did with the
-    physics - so :func:`~momwire.eznec._serve.structure_of` still sees every
-    ``GW`` and only :func:`~momwire.eznec._serve.build_mesh` does not.
+    physics - so :func:`~momwire.dropin.nec5._serve.structure_of` still sees every
+    ``GW`` and only :func:`~momwire.dropin.nec5._serve.build_mesh` does not.
 
     Every assertion below holds on BOTH sides of the fix, which is the point
     of them; the one line that does not is the first, which checks the pinned

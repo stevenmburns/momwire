@@ -135,7 +135,7 @@ import re
 import numpy as np
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 _NUM = re.compile(r"[-+]?\d+\.\d+E[-+]\d+")
 

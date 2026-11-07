@@ -152,7 +152,7 @@ def _cold_grids():
 
 
 def test_g1441_l3_a_buried_deck_with_and_without_the_lanes(monkeypatch, tmp_path):
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "0")
     targets = (

@@ -21,7 +21,7 @@ from momwire.deck._solver import (
     dialect_from_program_name,
     nec4_basis_from_program_name,
 )
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "scripts" / "eznec_freeze" / "build.py"

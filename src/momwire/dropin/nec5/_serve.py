@@ -484,11 +484,11 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from ..bspline import BSplineSolver
-from ..deck._cards import tokenize
-from .. import _ground_spec, _medium_spec
-from .. import _cmul, _lapack, _times
-from ..deck._nec5 import (
+from ...bspline import BSplineSolver
+from ...deck._cards import tokenize
+from ... import _ground_spec, _medium_spec
+from ... import _cmul, _lapack, _times
+from ...deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
     Nec5DistributedRLC,
@@ -515,10 +515,10 @@ from ..deck._nec5 import (
 # per-reader, semantics once*).  This module resolves the ADDRESSING, which is
 # the dialect's own, and hands the semantics a record with its fields already
 # in NEC's order.
-from ..deck._networks import flat_network, reduced_ports
-from ..deck._solver import _NATIVE_LOADING, basis_entry, construct_solver
-from ..deck.model import NetworkCard
-from ..networks import NetworkReducer
+from ...deck._networks import flat_network, reduced_ports
+from ...deck._solver import _NATIVE_LOADING, basis_entry, construct_solver
+from ...deck.model import NetworkCard
+from ...networks import NetworkReducer
 
 # The far-field readout has ONE owner, and since momwire#719 U1 it is a
 # neutral module: element currents to E(THETA)/E(PHI), the gain columns and
@@ -526,7 +526,7 @@ from ..networks import NetworkReducer
 # fixtures — no longer the portal's alone to keep right, and no longer a
 # cross-seam import. (The ranked extraction backlog, momwire#429, is the
 # audit that named this reach as debt; U1 is where it was paid off.)
-from .._far_readout import (
+from ..._far_readout import (
     Ground,
     _FIELD_FLOOR2,
     _gain_db_grid,
@@ -540,14 +540,14 @@ from .._far_readout import (
 # The near field has ONE owner too (momwire#1336): the element sum, the
 # image, the finite-ground composition and the grid walk are every seam's,
 # so a deck asks the same question of the same arithmetic on either door.
-from .._near_readout import (
+from ..._near_readout import (
     NEAR_FIELD_SUBDIV as _NEAR_FIELD_SUBDIV,
     grid_points,
     near_field_at,
     near_ground,
     near_point_refusal,
 )
-from .._near_buried import element_counts
+from ..._near_buried import element_counts
 
 from ._printout import (
     ENVIRONMENT_FINITE_GROUND,
@@ -570,7 +570,7 @@ from ._printout import (
     execution_groups,
     post_ge_cards,
 )
-from .._vec3 import norm3
+from ..._vec3 import norm3
 
 # The printed-dust floor for THIS seam, and its own number — the portal's
 # ``_PRINTED_DUST_FLOOR2`` is not imported on purpose (momwire#578). That
@@ -3293,7 +3293,7 @@ def _source_segment_and_end(
 
     ``end_code == 0`` (EZNEC's own spelling, all 49 captures) is
     :func:`_segment_of` on the decoded node plus the sign rule
-    :class:`~momwire.eznec._printout.PortRow` documents, unchanged.
+    :class:`~momwire.dropin.nec5._printout.PortRow` documents, unchanged.
 
     ``end_code in (1, 2)`` (antennaknobs' explicit end code, momwire#1092)
     prints DIFFERENTLY even when it names the same node as some signed
@@ -4669,7 +4669,7 @@ def _check_basis_can_host(
 
     Every sentence here is a refusal momwire would raise anyway, moved
     forward one step so it arrives as a printout rather than as the internal
-    error :func:`~momwire.eznec._shell.main` writes when nothing has a
+    error :func:`~momwire.dropin.nec5._shell.main` writes when nothing has a
     sentence.  The prose is not written here: it is read off the solver's own
     :class:`~momwire._capabilities.Capabilities` row, which exists so a
     consumer stops keeping its own copy of what each family serves.
@@ -5115,7 +5115,7 @@ def _port_solution(solver, shared: dict | None):
     """
     if shared is None:
         return solver.compute_port_solution()
-    from ..razor import RazorSolver
+    from ...razor import RazorSolver
 
     if (
         type(solver).compute_port_solution is BSplineSolver.compute_port_solution

@@ -172,7 +172,7 @@ def _alarm(*_):
 
 
 def _python(text: str, basis: str, dialect: str) -> tuple[bytes, str | None]:
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     kw = dict(basis=basis) if dialect == "nec5" else dict(basis=basis, dialect="nec4")
     signal.signal(signal.SIGALRM, _alarm)

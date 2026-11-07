@@ -22,8 +22,8 @@ import pytest
 
 from momwire.deck import DeckError
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from test_eznec_ld5_conductivity_1082 import _loading_table_block
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_ld5_virtual_1096"

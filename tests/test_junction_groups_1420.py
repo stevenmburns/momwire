@@ -23,7 +23,7 @@ import pytest
 from momwire._vec3 import norm3
 from momwire import _junction_rule
 from momwire._junction_rule import JUNCTION_TOL, coincident_groups
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 from momwire.razor import RazorSolver
 
 

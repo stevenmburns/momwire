@@ -120,7 +120,7 @@ BASES = MappingProxyType(
         # has h/a < `EXACT_KERNEL_AUTO_H_OVER_A` (3, `_exact_kernel_seam`), so every
         # mesh above that builds the call it always did, bit for bit. It is
         # bound HERE, on the roster name, so every front end that reads
-        # `bspline` -- the NEC-5 and NEC-4.2 seams (`momwire.eznec`, SimNEC's
+        # `bspline` -- the NEC-5 and NEC-4.2 seams (`momwire.dropin.nec5`, SimNEC's
         # and EZNEC's `momwire-nec5-bspline`), the nec2 portal and
         # `build_solver` -- solves the deck antennaknobs' bs2 solves
         # (antennaknobs#1965 passes "auto" there by default). Not on
@@ -181,7 +181,7 @@ BASES = MappingProxyType(
         #
         # Neither razor name serves the `nec2` dialect (momwire#821): see
         # `NEC2_BASES` below. Both stay in THIS roster because the NEC-5
-        # dialect (`momwire.eznec`) reads it and serves them.
+        # dialect (`momwire.dropin.nec5`) reads it and serves them.
         "razor-nec5": (
             RazorSolver,
             MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
@@ -395,7 +395,7 @@ def basis_from_program_name(
     ``<anything><marker><basis>`` — everything after ``marker`` in the
     program's basename, with a Windows ``.exe`` stripped first.  ``None`` —
     "this name asks for nothing, serve the default" — is returned for a name
-    without the marker at all: ``python -m momwire.portal``, a pytest runner,
+    without the marker at all: ``python -m momwire.dropin.nec2c``, a pytest runner,
     a bare ``momwire-nec2c``.
 
     ``consumed`` is a program's own trailing segment (``"engine"`` for the
@@ -1050,7 +1050,7 @@ def construct_solver(
 
     The second half of :func:`build_solver`, and the whole of it for a
     dialect that meshes its own way: the NEC-5 seam addresses NODES and cuts
-    its own pieces (``momwire.eznec._serve.build_mesh``), so it cannot use
+    its own pieces (``momwire.dropin.nec5._serve.build_mesh``), so it cannot use
     :func:`prepare_mesh`, but it constructs exactly this solver (momwire#1336
     — it kept its own copy of this call until then).  Every front end hands
     over polylines, element counts, ports, a wavelength, wire loading and

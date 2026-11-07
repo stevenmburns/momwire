@@ -318,7 +318,7 @@ def test_non_complex128_products_are_numpys_own(x, y):
 # `cmul` calls each spells (`_port_state`'s `z_series * i_port` is written
 # once in each branch, so #1497's eight products are nine calls). A `*` in these functions is a complex product by
 # construction (every operand is a port quantity), so none may remain.
-CMUL_SITES = {"eznec/_serve.py": {"_port_state": 7, "_multi_drive_state": 2}}
+CMUL_SITES = {"dropin/nec5/_serve.py": {"_port_state": 7, "_multi_drive_state": 2}}
 
 
 def _functions(tree):
@@ -376,7 +376,7 @@ def test_the_run_path_complex_products_go_through_cmul():
     ],
 )
 def test_a_render_runs_the_accelerated_route(deck, at_least):
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     text = next(DECKS.glob(f"{deck}_*.nec")).read_text()
     before = dict(_cmul.CALLS)

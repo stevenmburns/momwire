@@ -39,8 +39,8 @@ from momwire.deck._solver import (
     basis_from_program_name,
     port_kwargs,
 )
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from momwire.harrington import HarringtonSolver
 from momwire.pulse import PulseSolver
 from momwire.razor import RazorSolver
@@ -359,7 +359,7 @@ def test_the_frozen_entry_serves_under_the_names_basis(monkeypatch, prog, expect
     serves its name's basis, not the default."""
     seen = {}
     monkeypatch.setattr(
-        "momwire.eznec._resident.serve_main",
+        "momwire.dropin.nec5._resident.serve_main",
         lambda argv: seen.update(argv=argv) or 0,
     )
     assert _entry_module().run([prog, "--serve", "--socket", "S"]) == 0
@@ -372,7 +372,7 @@ def test_an_explicit_serve_basis_is_believed(monkeypatch):
     entry must not second-guess it from the filename."""
     seen = {}
     monkeypatch.setattr(
-        "momwire.eznec._resident.serve_main",
+        "momwire.dropin.nec5._resident.serve_main",
         lambda argv: seen.update(argv=argv) or 0,
     )
     argv = ["--serve", "--socket", "S", "--basis", "hmatrix"]
@@ -819,7 +819,7 @@ def test_the_crossing_source_spelling_is_read_off_the_capability_row():
     ``issubclass(RazorSolver)``.  The table is what the class test answered
     for every roster entry before the move, so the move is pinned to change
     nothing."""
-    from momwire.eznec._serve import _crossing_spelling
+    from momwire.dropin.nec5._serve import _crossing_spelling
 
     assert {name: _crossing_spelling(cls) for name, (cls, _) in BASES.items()} == {
         "bspline": "node",

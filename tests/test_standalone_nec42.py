@@ -279,7 +279,7 @@ def test_an_unwritable_printout(tmp_path):
     ],
 )
 def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):
-    from momwire.eznec import _printout, _shell
+    from momwire.dropin.nec5 import _printout, _shell
 
     out = tmp_path / "x.out"
     r = subprocess.run(

@@ -28,7 +28,7 @@ from momwire.deck import _cards
 from momwire.deck import _nec5
 from momwire.deck._cards import DeckError
 from momwire.deck._nec5 import parse_nec5, parse_nec5_shared
-from momwire.eznec import _printout, _serve, _shell
+from momwire.dropin.nec5 import _printout, _serve, _shell
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

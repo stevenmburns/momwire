@@ -7,7 +7,7 @@ what kept the NEC-5 formulation twin off its own dialect — not the physics.
 ``RazorSolver`` has no node gaps, and a cut that lands one element from a
 wire's end leaves a one-segment polyline it refuses outright.
 
-So :func:`~momwire.eznec._serve.build_mesh` now takes the solver class and
+So :func:`~momwire.dropin.nec5._serve.build_mesh` now takes the solver class and
 reads ``capabilities.node_gaps`` off it.  Three gates carry the unit:
 
 **Nothing moves for bspline.**  Not tested here — it is tested by the 75
@@ -41,8 +41,8 @@ import pytest
 
 from momwire import BSplineSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from momwire.razor import RazorSolver
 from test_eznec_printout import MANIFEST, deck_text, printout_text
 
@@ -218,7 +218,7 @@ def test_razor_reads_a_k2_junction_knot_and_an_interior_knot_alike():
 
     And the two ways to NAME that joint are bit for bit equal to each other,
     because the port does not know which address reached it — which is why
-    :func:`~momwire.eznec._serve._assign_columns` signs a junction gap off
+    :func:`~momwire.dropin.nec5._serve._assign_columns` signs a junction gap off
     the junction's own side A rather than off arrival order.
     """
     wavelength, half = 299.792458 / 30.0, 6.0
@@ -278,7 +278,7 @@ def test_the_junction_gap_is_signed_off_side_a_and_not_arrival_order():
     are opposite.  Which one is ``+1`` is momwire's, not this seam's: ``+1 A``
     of a junction tent flows IN along the group's first end
     (:meth:`RazorSolver._junction_wings`), and first means
-    :func:`~momwire.eznec._serve._canonical_end`'s order — wire, then start
+    :func:`~momwire.dropin.nec5._serve._canonical_end`'s order — wire, then start
     before end — which is what ``canonical_groups`` promises a declared spec
     is normalized to.
     """
@@ -332,7 +332,7 @@ def test_razor_nec5_serves_every_capture_but_the_three_named(cid):
 
     Every unserved deck comes back as a PRINTOUT carrying a ``NEC ERROR``
     line, never as an exception — which is the whole point of routing the
-    capability refusals through :func:`~momwire.eznec._serve.serve` rather
+    capability refusals through :func:`~momwire.dropin.nec5._serve.serve` rather
     than letting a constructor raise into EZNEC's face.
     """
     text = render(deck_text(cid), basis="razor-nec5")

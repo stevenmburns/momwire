@@ -26,8 +26,8 @@ import sys
 
 import pytest
 
-from momwire.eznec import _nec4_printout as n4p
-from momwire.eznec import _printout as p
+from momwire.dropin.nec5 import _nec4_printout as n4p
+from momwire.dropin.nec5 import _printout as p
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"

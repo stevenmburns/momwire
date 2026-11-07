@@ -39,8 +39,8 @@ import subprocess
 import sys
 
 from momwire.deck._nec5 import ends_on_nx, split_structures
-from momwire.eznec import _nec4, _printout
-from momwire.portal import _portal
+from momwire.dropin.nec5 import _nec4, _printout
+from momwire.dropin.nec2c import _portal
 
 HERE = pathlib.Path(__file__).resolve().parent
 SUFFIXES = {".nec", ".deck"}

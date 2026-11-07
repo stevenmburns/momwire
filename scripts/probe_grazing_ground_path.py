@@ -741,7 +741,7 @@ def mode_reflcoef() -> list[dict]:
     the deck, the drive, the mesh and the whole route fixed and moves exactly
     one thing.
     """
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
     if not exe.is_file():

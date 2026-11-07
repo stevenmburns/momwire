@@ -3,7 +3,7 @@
 momwire#1295.  EZNEC Pro+ v7, with its engine option set to External NEC-4.2,
 writes a NEC-4.2-dialect deck and launches the engine as
 ``"<engine>.exe" "EZ.NEC" "NEC.OUT"`` with the engine's own folder as cwd.
-:mod:`momwire.eznec` serves that slot when its executable's NAME carries
+:mod:`momwire.dropin.nec5` serves that slot when its executable's NAME carries
 ``nec4`` (:func:`~momwire.deck._solver.dialect_from_program_name`); this module
 is the deck reader behind it.
 

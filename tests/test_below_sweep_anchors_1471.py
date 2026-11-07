@@ -13,7 +13,7 @@ Three kinds of test, and which is which matters:
   against a fresh one, bit for bit.
 * **The real kernel, slow.** Per-surface interpolation error over every region
   the issue's deck reads, and a sweep of that deck through the served seam
-  (`momwire.eznec._shell`), counting fills and comparing feed impedance with
+  (`momwire.dropin.nec5._shell`), counting fills and comparing feed impedance with
   the exact fill.
 
 Every tolerance below is a multiple of a number measured on 2026-10-13
@@ -631,7 +631,7 @@ EN
 
 
 def _feed_z(f_mhz):
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     answered = _shell._answer(_DECK.format(f=f_mhz), basis="bspline")
     assert not isinstance(answered, str), answered[-800:]

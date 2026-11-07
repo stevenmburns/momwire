@@ -38,7 +38,7 @@ import sys
 from collections.abc import Mapping
 
 from momwire.deck._nec5 import parse_nec5, split_structures
-from momwire.eznec import _printout, _serve, _shell
+from momwire.dropin.nec5 import _printout, _serve, _shell
 
 SUFFIXES = {".nec", ".deck"}
 

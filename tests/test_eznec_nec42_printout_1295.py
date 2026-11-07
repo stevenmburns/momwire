@@ -12,7 +12,7 @@ used as black-box OUTPUT only.
 Three kinds of gate, cheapest first:
 
 * **round trip** (default lane, no solve): every licensed printout is read
-  back into a :class:`~momwire.eznec._nec4_printout.Nec4Printout` by fixed
+  back into a :class:`~momwire.dropin.nec5._nec4_printout.Nec4Printout` by fixed
   columns and re-rendered; the result must be the licensed bytes, line 2 (the
   engine stamp) and the Sommerfeld-table cache lines aside.  A width, a blank
   run or a heading that is wrong anywhere is a failing test here.
@@ -36,8 +36,8 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._cards import parse_card
-from momwire.eznec import _nec4, _printout, _shell
-from momwire.eznec._nec4_printout import (
+from momwire.dropin.nec5 import _nec4, _printout, _shell
+from momwire.dropin.nec5._nec4_printout import (
     ArcRow,
     FarFieldGround,
     HelixRow,
@@ -53,7 +53,7 @@ from momwire.eznec._nec4_printout import (
     WireRow,
     render_nec4_printout,
 )
-from momwire.eznec._printout import (
+from momwire.dropin.nec5._printout import (
     GroundMedium,
     LineRow,
     LoadRow,
@@ -65,8 +65,8 @@ from momwire.eznec._printout import (
     PortRow,
     PowerBudget,
 )
-from momwire.eznec._shell import render
-from momwire.portal._portal import parse_deck
+from momwire.dropin.nec5._shell import render
+from momwire.dropin.nec2c._portal import parse_deck
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
@@ -811,8 +811,8 @@ def test_the_wire_table_is_the_licensed_bytes(capture):
     """Every entry of the STRUCTURE SPECIFICATION wire table, read off the
     deck alone (a GW row, a GA row, a GH card's three lines with its chords'
     total length, a GS or GM card's lines), is the licensed printout's."""
-    from momwire.eznec._nec4_printout import _structure_rows
-    from momwire.portal._portal import parse_deck
+    from momwire.dropin.nec5._nec4_printout import _structure_rows
+    from momwire.dropin.nec2c._portal import parse_deck
 
     deck = parse_deck(deck_text(capture), dialect="nec4")
     ours = [ln for row in _nec4._wire_rows(deck) for ln in _structure_rows(row)]
@@ -826,7 +826,7 @@ def test_the_arc_and_helix_segments_are_the_licensed_ones(capture):
     SEGMENTATION DATA to its printed digits.  BETA is the azimuth of a
     segment's direction, so it is held modulo 360 and not at all on a
     vertical segment, where it has no value (NEC-4.2 prints 0 there)."""
-    from momwire.portal._portal import parse_deck
+    from momwire.dropin.nec2c._portal import parse_deck
 
     deck = deck_text(capture)
     want = parse_printout(deck, licensed(capture)).segments

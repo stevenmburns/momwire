@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 TAIL = "GE -1\nFR 0,1,0,0,14.\nGN 2,0,0,0,13.,.005\nEX 0,1,2,0,1.,0.\nXQ\nEN\n"
 

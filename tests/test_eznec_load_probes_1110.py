@@ -55,7 +55,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_load_probes_1110"
 

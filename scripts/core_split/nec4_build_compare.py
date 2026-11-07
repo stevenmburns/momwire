@@ -46,8 +46,8 @@ import numpy as np
 
 from momwire.deck import _solver as deck_solver
 from momwire.deck._nec5 import ends_on_nx, split_structures
-from momwire.eznec import _nec4
-from momwire.portal import _portal
+from momwire.dropin.nec5 import _nec4
+from momwire.dropin.nec2c import _portal
 
 HERE = pathlib.Path(__file__).resolve().parent
 SUFFIXES = {".nec", ".deck"}

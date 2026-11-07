@@ -74,7 +74,7 @@ import pytest
 
 from momwire.deck import parse
 from momwire.deck._nec2_geometry import Symmetry
-from momwire.portal._portal import DeckSolver, parse_deck
+from momwire.dropin.nec2c._portal import DeckSolver, parse_deck
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec2_symmetry"
 

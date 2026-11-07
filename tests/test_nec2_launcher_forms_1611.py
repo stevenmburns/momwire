@@ -4,7 +4,7 @@
 ``momwire-nec2c*`` answered one call form until now: SimNEC's, no arguments,
 ``NX``-chained decks on stdin and printouts on stdout.  ``momwire-nec2c deck
 out`` printed a banner and wrote nothing.  They now answer the forms every
-momwire launcher answers, through :func:`momwire.eznec._shell.main` with
+momwire launcher answers, through :func:`momwire.dropin.nec5._shell.main` with
 ``dialect="nec2"``:
 
 * ``in out``: the deck file's printout written to ``out``;
@@ -28,9 +28,9 @@ import pytest
 
 import momwire_nec2c_client as nec2c_client
 import momwire_serve_client as mech
-from momwire.eznec import _shell
-from momwire.portal import _portal as nec_portal
-from momwire.portal import engine_scope, main
+from momwire.dropin.nec5 import _shell
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec2c import engine_scope, main
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 CORPUS = sorted(p.stem for p in FIXTURE_DIR.glob("*.deck"))
@@ -296,7 +296,7 @@ def test_the_shared_client_keeps_paths_out_of_the_engine_identity(engine, flags,
 def test_the_stock_command_serves_the_file_form_in_a_real_process(tmp_path):
     (tmp_path / "d.nec").write_text(DIPOLE + "EN\n")
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal", "d.nec", "d.out"],
+        [sys.executable, "-m", "momwire.dropin.nec2c", "d.nec", "d.out"],
         cwd=tmp_path,
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -312,7 +312,7 @@ def test_the_stock_command_reads_4nec2s_names_from_a_redirected_file(tmp_path):
     (tmp_path / "nec2d.tmp").write_text("d.inp\nd.out\n")
     with open(tmp_path / "nec2d.tmp", "rb") as names:
         proc = subprocess.run(
-            [sys.executable, "-m", "momwire.portal"],
+            [sys.executable, "-m", "momwire.dropin.nec2c"],
             cwd=tmp_path,
             stdin=names,
             capture_output=True,
@@ -326,13 +326,13 @@ def test_the_stock_command_reads_4nec2s_names_from_a_redirected_file(tmp_path):
 def test_the_stock_command_streams_with_two_dashes(tmp_path):
     text = DIPOLE + "NX\n" + DIPOLE + "NX\n"
     bare = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         input=text.encode(),
         capture_output=True,
         timeout=180,
     )
     dashed = subprocess.run(
-        [sys.executable, "-m", "momwire.portal", "-", "-"],
+        [sys.executable, "-m", "momwire.dropin.nec2c", "-", "-"],
         input=text.encode(),
         capture_output=True,
         timeout=180,

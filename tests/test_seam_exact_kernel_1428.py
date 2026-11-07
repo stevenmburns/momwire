@@ -8,7 +8,7 @@ X = -2.511 ohm through the seam against -0.144 ohm from bs2 with "auto"
 (momwire#1422). The roster now binds "auto" on the ``bspline`` name.
 
 The gates drive the REAL seams -- the resident server's connection handler
-(``momwire.eznec._resident._connection``, the function the warm daemon runs
+(``momwire.dropin.nec5._resident._connection``, the function the warm daemon runs
 per deck and the worker pool builds by name), the one-shot ``render``, the
 NEC-4.2 slot and the nec2 portal's ``run_deck`` -- and count the exact-kernel
 correction where it runs, so a green result is one where the branch was
@@ -32,8 +32,8 @@ import pytest
 from momwire import BSplineSolver
 from momwire.deck import _solver
 from momwire.deck._solver import BASES, NEC2_BASES
-from momwire.eznec import _resident, _serve, _shell
-from momwire.eznec._nec4 import render as render_nec4
+from momwire.dropin.nec5 import _resident, _serve, _shell
+from momwire.dropin.nec5._nec4 import render as render_nec4
 
 # A half-metre dipole at 299.7925 MHz (lambda = 1 m), the shape of capture
 # 0010 but twelve segments, so NEC-5's node 6 is the centre. h = 41.7 mm.
@@ -256,7 +256,7 @@ def test_the_nec42_slot_runs_it_too(corrections):
 
 
 def test_the_portal_runs_it_too(corrections):
-    from momwire.portal import _portal
+    from momwire.dropin.nec2c import _portal
 
     out, err = io.StringIO(), io.StringIO()
     with _portal.engine_scope():

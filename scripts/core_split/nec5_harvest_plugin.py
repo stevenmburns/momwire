@@ -22,7 +22,7 @@ import os
 
 import momwire.deck
 from momwire.deck import _nec5
-from momwire.eznec import _serve, _shell
+from momwire.dropin.nec5 import _serve, _shell
 
 _SEEN: dict[str, None] = {}
 

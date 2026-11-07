@@ -26,8 +26,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_multi_run_1237"
 DECKS = ("two-port", "two-port-xq", "two-port-ground")

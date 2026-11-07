@@ -202,7 +202,7 @@ FEATURES: dict[str, Feature] = {
 
 
 # Which route this code is running under: "python" unless a portal entry
-# (`momwire.eznec._shell.render`, `momwire.portal`'s `render_deck`) set
+# (`momwire.dropin.nec5._shell.render`, `momwire.dropin.nec2c`'s `render_deck`) set
 # "portal" around its deck. Read by `check` and `stamp` when no context is
 # passed.
 _CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(

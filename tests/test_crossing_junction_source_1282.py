@@ -36,8 +36,8 @@ import pytest
 
 from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _printout, _serve, _shell
-from momwire.eznec._resident import _CODEC as _RESIDENT_CODEC
+from momwire.dropin.nec5 import _printout, _serve, _shell
+from momwire.dropin.nec5._resident import _CODEC as _RESIDENT_CODEC
 from momwire.razor import RazorSolver
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_crossing_source_1282"

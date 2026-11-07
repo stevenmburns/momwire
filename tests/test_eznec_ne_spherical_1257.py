@@ -38,8 +38,8 @@ import pytest
 import momwire_serve_client as mech
 from momwire._near_readout import cos_sin_deg
 from momwire.deck import DeckError, Nec5NearFieldRequest, parse_nec5
-from momwire.eznec import _resident, _serve, _shell
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _resident, _serve, _shell
+from momwire.dropin.nec5._shell import render
 from momwire.serve._server import Server
 from test_serve_resident import _ask, short_room, transport  # noqa: F401 - fixtures
 

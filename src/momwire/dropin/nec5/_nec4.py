@@ -15,9 +15,9 @@ capability holds.  A basis outside it (razor-2p, razor-nec5) is refused BY
 NAME in the printout before any deck is read: razor places a gap only on a
 knot, and moving a centre feed half a cell silently is momwire#821's failure.
 
-The solve is the portal's :class:`~momwire.portal._portal.DeckSolver`, the
+The solve is the portal's :class:`~momwire.dropin.nec2c._portal.DeckSolver`, the
 one that already serves centre-addressed decks; :func:`solve` turns its
-records into a :class:`~momwire.eznec._nec4_printout.Nec4Printout` and
+records into a :class:`~momwire.dropin.nec5._nec4_printout.Nec4Printout` and
 :mod:`._nec4_printout` lays that out in the licensed NEC-4.2's columns.
 
 What the printout serves is what the captured NEC-4.2 printouts show.  A deck
@@ -35,8 +35,8 @@ from dataclasses import replace
 
 import numpy as np
 
-from ..deck import BASES, NEC2_BASES
-from ..deck._nec5 import Nec5Structure, ends_on_nx, split_structures
+from ...deck import BASES, NEC2_BASES
+from ...deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
 from ._nec4_printout import (
     ArcRow,
@@ -67,7 +67,7 @@ from ._printout import (
     PortRow,
     PowerBudget,
 )
-from .._vec3 import norm3
+from ..._vec3 import norm3
 
 __all__ = ["Nec4Refusal", "basis_refusal", "render", "solve"]
 
@@ -200,7 +200,7 @@ def render_structure(
 def _render_chain(structures: list[Nec5Structure], *, basis: str) -> str:
     """An ``NX``-chained deck's printout (momwire#1592): each structure's own
     printout in turn, as the NEC-5 slot lays a chain out
-    (:func:`momwire.eznec._shell._render_chain`).
+    (:func:`momwire.dropin.nec5._shell._render_chain`).
 
     SimNEC's batch and stream modes queue several runs into one engine call
     with ``NX`` between them, and read each run's printout up to its ``NX``
@@ -350,7 +350,7 @@ def _a_new_frequency(cards, previous: int, number: int) -> bool:
     beside it.
 
     That is the NEC-5 program reading's later run
-    (:func:`~momwire.eznec._serve.split_sequence`, the same card set), and
+    (:func:`~momwire.dropin.nec5._serve.split_sequence`, the same card set), and
     the shape probe p37 (Dan AC6LA's ``FR / EX / XQ / FR / RP``) measures on
     NEC-4.2: the run at the new ``FR`` prints every frequency's whole block,
     FREQUENCY to pattern, after its card echo (momwire#1592).  A ground,
@@ -450,7 +450,7 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
     :class:`Nec4Refusal` carrying its sentence.
     """
     # Imported on use: the NEC-5 slot's one-shot never pays for the portal.
-    from ..portal._portal import (
+    from ..nec2c._portal import (
         _DECK_REFUSALS,
         DeckSolver,
         PortalError,
@@ -674,7 +674,7 @@ def _connections(solver, deck) -> list[tuple[int, int]]:
     junction row's order (p1: junction ``6 -7 -13`` prints 7 after 6, -13
     before 7 and 6 before 13), where the portal names the first other one.
     """
-    from ..portal._portal import _connection_data, _segment_end_nodes
+    from ..nec2c._portal import _connection_data, _segment_end_nodes
 
     connections = _connection_data(solver.wires, deck.ground_plane_interpolates)
     ends, _order = _segment_end_nodes(solver.wires)
@@ -710,7 +710,7 @@ def _symmetry(deck) -> tuple[int, int, int]:
     whole-structure ``GM``, a ``GS`` or another ``GX`` does not).  A live one
     was declared by the deck's last ``GX``, whose planes are counted; the
     flag is 2 when Z is among them and 1 otherwise."""
-    from ..deck._nec2_geometry import _planes
+    from ...deck._nec2_geometry import _planes
 
     symmetry = deck.structure.symmetry
     if symmetry is None:
@@ -740,8 +740,8 @@ def _wire_rows(deck) -> tuple[StructureRow, ...]:
     ``(tag, segments)`` per wire, read as ``deck._nec2_geometry`` builds it
     (``_gx``: images in Z, Y, X order, the increment doubling; ``_gm``: the
     block from the first wire carrying ``ITS``), for a ``GM``'s block."""
-    from ..deck._nec2_geometry import _planes
-    from ..deck._nec4 import catenary_length, catenary_vertices, helix_vertices
+    from ...deck._nec2_geometry import _planes
+    from ...deck._nec4 import catenary_length, catenary_vertices, helix_vertices
 
     rows: list[StructureRow] = []
     first = 1
@@ -979,8 +979,8 @@ def _networks(solver, result, index: int):
     nec2c order moves EVERY driven point to the end, which 0234's EX 6 point,
     printed first, contradicts.
     """
-    from ..deck._networks import card_branches, live_cards
-    from ..portal._portal import _PRINTED_DUST_FLOOR2
+    from ...deck._networks import card_branches, live_cards
+    from ..nec2c._portal import _PRINTED_DUST_FLOOR2
 
     rows: list[NetworkRow | LineRow] = []
     seen: list[int] = []
@@ -1062,7 +1062,7 @@ def _charges(solver, result, connections, freq_mhz: float):
     position, since chaining may merge or reverse the deck's wires; a charge
     is a scalar, so a reversed walk does not change it.
     """
-    from ..portal._portal import _wire_arc_at_knot
+    from ..nec2c._portal import _wire_arc_at_knot
 
     momwire = result.solver
     omega = 2.0 * math.pi * freq_mhz * 1e6
@@ -1178,7 +1178,7 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
     on EVERY ``RP`` here, not only on a cliff mode as in NEC-2, and its edge
     distance of 0 puts every specular point on the second medium.
     """
-    from ..deck._nec5 import Nec5FarFieldRequest
+    from ...deck._nec5 import Nec5FarFieldRequest
     from ._serve import _pattern as pattern_block
 
     request = Nec5FarFieldRequest(
@@ -1304,13 +1304,13 @@ def _near_field(card, result, deck_solver) -> NearFieldBlock:
     (``_refuse_finite_ground_near_field``), the same geometry asked the same
     way.
     """
-    from .._near_readout import (
+    from ..._near_readout import (
         NEAR_FIELD_SUBDIV,
         grid_points,
         near_field_at,
         near_ground,
     )
-    from ..portal._portal import _refuse_finite_ground_near_field
+    from ..nec2c._portal import _refuse_finite_ground_near_field
     from ._serve import near_field_block
 
     magnetic = card.mnemonic == "NH"

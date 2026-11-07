@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 import momwire_eznec_client
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 
 @pytest.mark.parametrize("main", [momwire_eznec_client.main, _shell.main])

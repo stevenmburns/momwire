@@ -3,7 +3,7 @@
     python scripts/core_split/cxx_solve_corpus.py OUT.jsonl DECK_OR_DIR...
 
 Every deck is served as `momwire-nec5-razor-2p` serves it
-(`momwire.eznec._shell.render(text, basis="razor-2p")`), twice:
+(`momwire.dropin.nec5._shell.render(text, basis="razor-2p")`), twice:
 
 1. with `compute_port_solution` instrumented: each call runs the PYTHON
    route first (Z captured as `_bspline._lu_solve` receives it) and then the
@@ -42,7 +42,7 @@ def main():
     import numpy as np
 
     from momwire import RazorSolver, razor
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import front_compare as fc

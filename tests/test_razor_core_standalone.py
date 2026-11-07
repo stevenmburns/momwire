@@ -401,7 +401,7 @@ def test_the_nec4_refusal_printouts_in_cxx_alone_are_the_slots(driver, basis):
     """momwire#1607 A3: every fixture deck the NEC-4.2 slot refuses before a
     solve prints, from the core TUs alone (`nec4_printout_driver`: the C++
     reader, seam, build and writer), the text `_nec4.render` writes."""
-    from momwire.eznec import _nec4, _printout
+    from momwire.dropin.nec5 import _nec4, _printout
 
     version = _printout._stamp_field(_printout._momwire_version()) or "unknown"
     variant = _printout._stamp_field(_printout._accelerator_variant()) or "none"
@@ -1756,7 +1756,7 @@ def test_the_printout_spells_outside_latin1_as_python_does(driver):
     sentences carry outside latin-1 (and the two `str.upper` takes a latin-1
     letter to), the em dash's spacing rule, and a character no table names,
     through the C++ writer and through Python's codec, the same bytes."""
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     chars = set()
     for p in (ROOT / "src" / "momwire").rglob("*.py"):

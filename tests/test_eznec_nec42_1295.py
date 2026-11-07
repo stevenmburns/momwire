@@ -31,9 +31,9 @@ from momwire.deck._solver import (
     dialect_from_program_name,
     nec4_basis_from_program_name,
 )
-from momwire.eznec import _serve
-from momwire.eznec._nec4 import basis_refusal
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._nec4 import basis_refusal
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 ENTRY = Path(__file__).resolve().parent.parent / "scripts" / "eznec_freeze" / "entry.py"
@@ -191,7 +191,7 @@ def test_the_engine_one_shot_takes_the_slot_as_a_leading_flag(monkeypatch):
 def test_a_nec4_named_daemon_serves_the_nec4_slot(monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        "momwire.eznec._resident.serve_main",
+        "momwire.dropin.nec5._resident.serve_main",
         lambda argv: seen.update(argv=argv) or 0,
     )
     assert _entry_module().run(["momwire-nec42-pulse.exe", "--serve"]) == 0
@@ -457,7 +457,7 @@ def _aip_row(capture: str, basis: str):
 
 
 def _aip_row_of(text: str, basis: str):
-    from momwire.portal._portal import DeckSolver, _run_records, parse_deck
+    from momwire.dropin.nec2c._portal import DeckSolver, _run_records, parse_deck
 
     deck = parse_deck(text, dialect="nec4")
     solver = DeckSolver(deck, basis=basis)
@@ -516,7 +516,7 @@ MIXED_NEC4 = CARDIOID_NEC4.replace("EX 6,2,1,0,0.,-1.414214", "EX 0,2,1,0,0.,-1.
 
 
 def _phased_records(text: str, basis: str = "bspline"):
-    from momwire.portal._portal import DeckSolver, _run_records, parse_deck
+    from momwire.dropin.nec2c._portal import DeckSolver, _run_records, parse_deck
 
     deck = parse_deck(text, dialect="nec4")
     solver = DeckSolver(deck, basis=basis)

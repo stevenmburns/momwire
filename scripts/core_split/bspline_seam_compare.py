@@ -34,7 +34,7 @@ class _Stop(Exception):
 
 def python_seam(text):
     from momwire import BSplineSolver
-    from momwire.eznec import _printout, _serve, _shell
+    from momwire.dropin.nec5 import _printout, _serve, _shell
 
     rec = {"prepared": [], "refusals": []}
     current = {}

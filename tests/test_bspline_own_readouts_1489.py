@@ -343,12 +343,12 @@ def test_import_and_a_bs2_render_load_no_scipy_interpolate(tmp_path):
     out = tmp_path / "dipole.out"
     probe = (
         "import sys\n"
-        "import momwire, momwire.eznec._shell\n"
+        "import momwire, momwire.dropin.nec5._shell\n"
         "def heavy():\n"
         "    return sorted(m for m in sys.modules if m.split('.')[:2] in\n"
         "                  (['scipy', 'interpolate'], ['scipy', 'optimize']))\n"
         "print('import', heavy())\n"
-        "from momwire.eznec._shell import main\n"
+        "from momwire.dropin.nec5._shell import main\n"
         "rc = main([sys.argv[1], sys.argv[2]], basis='bspline')\n"
         "print('render', rc, heavy())\n"
     )

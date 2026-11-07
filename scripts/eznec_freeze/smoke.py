@@ -10,7 +10,7 @@ gate below runs the bundle end to end: launcher, spawned engine, printout.
 Twelve gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
-   equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
+   equal ``python -m momwire.dropin.nec5``'s byte for byte (the printout carries no
    wall-clock, so packaging may not change a single byte, CRLF included).
 2. **The refusal frame travels** — a deck the seam refuses must still produce
    a printout carrying the ``NEC ERROR`` line, exit 0 (the file is the only
@@ -398,7 +398,7 @@ def _gate_self_contained(exe: Path, work: Path, room: Path) -> int:
     # reads them, and two spellings of one fact is how a gate ends up
     # certifying nothing.  Local because the module import costs a NumPy load
     # that the POSIX skip above has no reason to pay.
-    from momwire.eznec._resident import ACCEL_OK, OMP_LINE
+    from momwire.dropin.nec5._resident import ACCEL_OK, OMP_LINE
 
     failures = 0
     bundle = exe.parent
@@ -553,7 +553,7 @@ def _gate_overlay(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int
     to keep the build's version and to say the folder is mixed.  The plant is
     removed in ``finally``: every other gate needs a clean bundle.
     """
-    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
+    from momwire.dropin.nec5._serve import BASIS as DEFAULT_BASIS
 
     internal = exe.parent / "_internal"
     if not internal.is_dir():
@@ -592,7 +592,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     # markers: the default has ONE owner, and a second spelling here is how a
     # gate comes to certify a name nothing uses.  Local because the import
     # costs a NumPy load the gates that only launch subprocesses never pay.
-    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
+    from momwire.dropin.nec5._serve import BASIS as DEFAULT_BASIS
 
     # gate 6 — the launcher goes RESIDENT.
     #
@@ -605,7 +605,10 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     stem = SERVE_IDS[0]
     deck = FIXTURES / f"{stem}.nec"
     module_out = work / f"{stem}.resident.module.out"
-    run([sys.executable, "-m", "momwire.eznec", str(deck), str(module_out)], module_out)
+    run(
+        [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(module_out)],
+        module_out,
+    )
     expected = module_out.read_bytes()
     answers = []
     warm = 0.0
@@ -661,7 +664,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
         module_out = work / f"{stem}.module.out"
         elapsed = run([str(exe), str(deck), str(frozen_out)], frozen_out, env=env)
         run(
-            [sys.executable, "-m", "momwire.eznec", str(deck), str(module_out)],
+            [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(module_out)],
             module_out,
         )
         frozen = frozen_out.read_bytes()
@@ -702,7 +705,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     # exists by coincidence is a gate that disarms itself when a list moves.
     default_out = work / f"{BASIS_DECK}.default.module.out"
     run(
-        [sys.executable, "-m", "momwire.eznec", str(deck), str(default_out)],
+        [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(default_out)],
         default_out,
     )
     default = default_out.read_bytes()
@@ -739,7 +742,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys;from momwire.eznec._shell import main;"
+                "import sys;from momwire.dropin.nec5._shell import main;"
                 f"sys.exit(main(sys.argv[1:], basis={basis!r}))",
                 str(deck),
                 str(m_out),
@@ -824,7 +827,7 @@ def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys;from momwire.eznec._shell import main;"
+                "import sys;from momwire.dropin.nec5._shell import main;"
                 f"sys.exit(main(sys.argv[1:], basis={basis!r}) if {basis!r} "
                 "else main(sys.argv[1:]))",
                 str(deck),
@@ -893,7 +896,7 @@ def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys;from momwire.eznec._shell import main;"
+                "import sys;from momwire.dropin.nec5._shell import main;"
                 f"kw = {{'basis': {basis!r}}} if {basis!r} else {{}};"
                 "sys.exit(main(sys.argv[1:], en_optional=True, **kw))",
                 str(deck),
@@ -956,7 +959,7 @@ def _gate_stream(exe: Path, work: Path, env: dict[str, str]) -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys;from momwire.eznec._shell import main;"
+                "import sys;from momwire.dropin.nec5._shell import main;"
                 f"kw = {{'basis': {basis!r}}} if {basis!r} else {{}};"
                 "sys.exit(main(['-', '-'], **kw))",
             ],
@@ -1003,7 +1006,7 @@ def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
     a refusal are byte-equal too, gate 4's blind spot).
     """
     from momwire.deck._solver import nec4_basis_from_program_name
-    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
+    from momwire.dropin.nec5._serve import BASIS as DEFAULT_BASIS
 
     failures = 0
     deck = NEC4_FIXTURES / f"{NEC4_DECK}.nec"
@@ -1025,7 +1028,7 @@ def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys;from momwire.eznec._shell import main;"
+                "import sys;from momwire.dropin.nec5._shell import main;"
                 f"sys.exit(main(sys.argv[1:], basis={basis!r}, dialect='nec4') "
                 f"if {basis!r} else main(sys.argv[1:], dialect='nec4'))",
                 str(deck),
@@ -1098,7 +1101,7 @@ def main() -> int:
         return 2
 
     # AVX-512 off for every child this smoke starts, the module side's
-    # `python -m momwire.eznec` above all: the frozen engine pins it itself
+    # `python -m momwire.dropin.nec5` above all: the frozen engine pins it itself
     # (entry.py), and the two sides must answer in one regime to be compared
     # byte for byte. GitHub's Windows runners can have AVX-512.
     import momwire_serve_client

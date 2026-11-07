@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nec5_sequence" / "fr_after_xq.nec"
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -146,7 +146,7 @@ def test_an_rp_and_an_ne_before_one_xq_print_in_nec5s_order(basis):
     the near field before the pattern): the echo stops at the RP, the run's
     tables and pattern print, then the NE is echoed and its near field read
     from the standing solution, then the XQ is echoed. One of each."""
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     text = RP_NE_ONE.read_text()
     assert _serve.split_sequence(text) is not None

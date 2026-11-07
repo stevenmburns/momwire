@@ -17,8 +17,8 @@ import pytest
 
 import momwire_nec2c_client as client
 from momwire.deck import parse
-from momwire.portal import _portal as nec_portal
-from momwire.portal import main
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec2c import main
 
 _DECK = (
     "CM version SimNEC test\n"

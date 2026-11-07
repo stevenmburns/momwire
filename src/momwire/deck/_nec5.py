@@ -255,7 +255,7 @@ class Nec5Load:
     ``"series"``/``"parallel"`` for LD 0/1 — kept SYMBOLIC here because a
     deck may write ``LD`` before ``FR`` (card order is not evaluation
     order); a solve stamps :meth:`~momwire.deck.model.LoadSpec.impedance`
-    at the deck's own frequency, in :func:`~momwire.eznec._serve.serve`,
+    at the deck's own frequency, in :func:`~momwire.dropin.nec5._serve.serve`,
     the same seam the nec2 dialect's ``_lumped_loads`` does it in.
 
     :attr:`end_code` is the card's LDTAGT field (the manual's name, LD
@@ -2095,7 +2095,7 @@ class _Nec5Parser:
 
     def _resolved_conductivity(self) -> Mapping[int, float]:
         """``conductivities`` fanned out to ``{tag: sigma}``, one entry per
-        wire — what :func:`~momwire.eznec._serve._solver_for` reads.
+        wire — what :func:`~momwire.dropin.nec5._serve._solver_for` reads.
 
         A later ``LD 5`` overwrites an earlier one on the same wire, LAST
         CARD WINS, the same rule every other last-one-standing state in this
@@ -2394,7 +2394,7 @@ def parse_nec5_shared(texts) -> list[Nec5Deck | Exception]:
     order it always did.
 
     The lines every text starts with are read ONCE (momwire#1420): a
-    multi-run deck and the single-run decks :func:`~momwire.eznec._serve.
+    multi-run deck and the single-run decks :func:`~momwire.dropin.nec5._serve.
     split_runs` makes of it all begin with the same comment block and
     geometry, and parsing those four times was a tenth of a small SimNEC
     call. The parser is a straight-line reader, so its state after the

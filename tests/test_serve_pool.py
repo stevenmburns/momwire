@@ -13,7 +13,7 @@ start a worker still answers.
 
 Two levels. The pool's own tests drive ``WorkerPool`` against the stub seams
 in ``tests/_pool_seams.py`` (built inside the worker, like a real seam); the
-end-to-end tests start the REAL daemon, ``python -m momwire.eznec --serve``,
+end-to-end tests start the REAL daemon, ``python -m momwire.dropin.nec5 --serve``,
 and talk to it over its socket the way the native launcher does.
 """
 
@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 
 import momwire_serve_client as mech
-from momwire.eznec import _resident, _shell
+from momwire.dropin.nec5 import _resident, _shell
 from momwire.serve import _pool
 from momwire.serve._pool import (
     WorkerLost,
@@ -502,7 +502,7 @@ def daemon(short_room):
         [
             sys.executable,
             "-m",
-            "momwire.eznec",
+            "momwire.dropin.nec5",
             "--serve",
             "--socket",
             path,

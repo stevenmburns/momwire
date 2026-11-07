@@ -95,7 +95,7 @@ def build_driver(out: Path) -> Path:
 
 def record(out: Path, decks: list[str]) -> None:
     from momwire import _sommerfeld as s  # noqa: PLC0415
-    from momwire.eznec import _shell  # noqa: PLC0415
+    from momwire.dropin.nec5 import _shell  # noqa: PLC0415
 
     calls = set()
     orig = s.get_grid

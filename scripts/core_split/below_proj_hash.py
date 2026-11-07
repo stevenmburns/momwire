@@ -31,7 +31,7 @@ def _decks(args):
 
 def record(out_dir, decks, per_deck=3):
     from momwire import _accel, razor
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     acc = _accel.acc
     orig = acc.remainder_field_proj_batch_below

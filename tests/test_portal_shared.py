@@ -45,8 +45,8 @@ import pytest
 import tomllib
 
 import momwire_nec2c_client as client
-from momwire.portal import _portal as nec_portal
-from momwire.portal import main as portal_main
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec2c import main as portal_main
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "nec_portal"
@@ -664,7 +664,7 @@ def test_the_portal_daemon_logs_whether_its_accelerator_is_live(runtime):
     looking. Either verdict passes -- a box without the extensions built is
     not a failing box -- but it must have committed to one of them.
     """
-    from momwire.eznec._resident import ACCEL_OK
+    from momwire.dropin.nec5._resident import ACCEL_OK
 
     served = run_client(runtime, fixture_deck("dipole_free_space"))
     assert served.returncode == 0
@@ -914,7 +914,7 @@ def test_two_clients_choosing_by_environment_do_not_share_one_server(
 @pytest.mark.integration
 def test_a_basis_chosen_by_the_executable_name_reaches_the_server(runtime, tmp_path):
     """The #528 idiom on this sibling. It used to select NOTHING — the client
-    never read `argv[0]`, and the server's own is `python -m momwire.portal`,
+    never read `argv[0]`, and the server's own is `python -m momwire.dropin.nec2c`,
     so a user who copied the command to a named-engine spelling got bspline in
     silence."""
     link = tmp_path / "momwire-nec2c-shared-sinusoidal"
@@ -1282,7 +1282,7 @@ def test_the_stock_console_script_is_untouched():
     """The stock engine is the supported default and this issue does not move
     it. Pinned here as well as in ``test_portal.py`` because the risk being
     guarded is a future tidy-up that rewires BOTH entries at once."""
-    assert _console_scripts()["momwire-nec2c"] == "momwire.portal:main"
+    assert _console_scripts()["momwire-nec2c"] == "momwire.dropin.nec2c:main"
 
 
 def test_every_momwire_subpackage_is_shipped():

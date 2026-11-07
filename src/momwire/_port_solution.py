@@ -13,7 +13,7 @@ EVERY exported family implements it, as of momwire#564 — and that sentence is
 worth stating carefully, because it was false for a year and the previous
 version of this paragraph is why. `PulseSolver` and `HarringtonSolver` had
 neither this method nor `_port_count`, which is exactly why the pulse family
-had no portal surface: `momwire.portal`'s `_y_and_port_coeffs` calls it
+had no portal surface: `momwire.dropin.nec2c`'s `_y_and_port_coeffs` calls it
 unconditionally, so momwire#559's roster entry raised `AttributeError` on
 EVERY deck, and an escaping exception is not a refusal — it takes the daemon
 down mid-frame while the host waits on a sentinel that never comes. Rostering

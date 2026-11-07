@@ -10,7 +10,7 @@ interrupt. It does not hold at an end standing IN the ground plane: there the
 current path is the ground contact, the image supplies the other side of the
 gap, and it is exactly the drive `test_contact_nec5_lane.py` certifies against
 NEC-5 over five grounds and five densities at `feed_arclength=0.0`.
-`momwire.eznec.serve` places a deck's contact feed there too.
+`momwire.dropin.nec5.serve` places a deck's contact feed there too.
 
 So the solver served it and the certified lane used it, while the port type
 forbade saying it — which cost antennaknobs a real defect (AK#1598 settled for

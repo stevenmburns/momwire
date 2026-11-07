@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_probe_ex_1099"
 PROBE = (FIXTURES / "synthetic_probe_ex.nec").read_text()

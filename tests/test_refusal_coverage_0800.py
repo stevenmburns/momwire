@@ -1,8 +1,8 @@
 """momwire 0.80.0: every refusal the NEC-5 serve layer can print is reached by
 a fixture deck that the C++-vs-Python gates run.
 
-Each refusal exists twice, once in Python (``eznec/_serve.py``,
-``eznec/_shell.py``) and once in C++ (``_nec5_seam_core.cpp``, the razor and
+Each refusal exists twice, once in Python (``dropin/nec5/_serve.py``,
+``dropin/nec5/_shell.py``) and once in C++ (``_nec5_seam_core.cpp``, the razor and
 bspline seam cores, and the deck core's stepping and sequence rungs). The
 gates compare the two word for word, but only on decks that reach the
 refusal: ``test_nec5_razor_seam_core``'s fixture sweep, the standalone
@@ -40,14 +40,17 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._solver import basis_entry
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "momwire"
 FIXTURES = ROOT / "tests" / "fixtures"
 OWN = FIXTURES / "refusal_coverage_0800"
 
-PYTHON_SOURCES = (SRC / "eznec" / "_serve.py", SRC / "eznec" / "_shell.py")
+PYTHON_SOURCES = (
+    SRC / "dropin" / "nec5" / "_serve.py",
+    SRC / "dropin" / "nec5" / "_shell.py",
+)
 # The deck reader's sentences: its own, and the card-level ones every
 # dialect's reader shares (`_cards.gw_field_refusal`).
 READER_SOURCES = (SRC / "deck" / "_nec5.py", SRC / "deck" / "_cards.py")
@@ -285,7 +288,7 @@ def test_every_allowance_holds(printed):
         )
         if why.startswith("declined:"):
             from momwire import _accel
-            from momwire.eznec._shell import render
+            from momwire.dropin.nec5._shell import render
 
             deck = OWN / why.split(":", 1)[1]
             for seam in SEAMS.values():
@@ -349,7 +352,9 @@ def _has(caps, cell):
 def test_the_relays_are_what_they_say():
     """The ladder relay prints only the named constants: `refusal` and its
     rungs return a constant's text or None."""
-    tree = ast.parse((SRC / "eznec" / "_serve.py").read_text(encoding="utf-8"))
+    tree = ast.parse(
+        (SRC / "dropin" / "nec5" / "_serve.py").read_text(encoding="utf-8")
+    )
     rungs = {
         f.name: f
         for f in ast.walk(tree)

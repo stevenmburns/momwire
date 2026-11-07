@@ -116,7 +116,7 @@ def _budget(name, basis):
     from test_eznec_split_crossing_1281 import fixture
 
     from momwire.deck._nec5 import parse_nec5
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

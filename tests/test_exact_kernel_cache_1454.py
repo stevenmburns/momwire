@@ -250,7 +250,7 @@ def test_the_seam_sequence_matches_fresh_printouts():
     the same deck at a second frequency, a second geometry, the first again,
     then the first over two grounds -- every printout byte-identical to the uncached route's, and the
     repeats hit."""
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     deck = (
         "CM fat-wire dipole (momwire#1454)\nCE\n"

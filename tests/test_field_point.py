@@ -90,7 +90,7 @@ import pytest
 from momwire import _field_point, _ground_refl, _ground_spec, _sommerfeld
 from momwire._far_readout import _element_fields, _image_moments
 from momwire.deck._nec5 import Nec5MininecGround, Nec5NearFieldRequest, parse_nec5
-from momwire.eznec._serve import (
+from momwire.dropin.nec5._serve import (
     SPEED_OF_LIGHT_MHZ_M,
     _NEAR_FIELD_SUBDIV,
     _cards,

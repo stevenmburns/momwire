@@ -28,7 +28,7 @@ import pytest
 import momwire_eznec_client as eznec_client
 import momwire_serve_client as mech
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _gmo, _serve, _shell
+from momwire.dropin.nec5 import _gmo, _serve, _shell
 
 HERE = Path(__file__).resolve().parent
 EXAMPLE3 = HERE / "fixtures" / "4nec2_example3"

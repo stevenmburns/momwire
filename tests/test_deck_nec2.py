@@ -1063,7 +1063,7 @@ def test_pq_is_accepted_in_every_form_and_changes_no_physics(flag):
     and what is left is the property that survives it: ``PQ`` selects what is
     PRINTED and moves nothing in the model. Which is also why the parsed deck
     records no ``PQ`` state at all — the portal reads the card itself, the way
-    it reads ``PT`` (``momwire.portal._portal.ChargePrintControl``), and the
+    it reads ``PT`` (``momwire.dropin.nec2c._portal.ChargePrintControl``), and the
     forms are gated there against the oracle.
     """
     assert parse(BODY + f"PQ {flag}\nXQ\nNX\n") == parse(BODY + "XQ\nNX\n")

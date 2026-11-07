@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec import _nec4, _shell
+from momwire.dropin.nec5 import _nec4, _shell
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 BASIS = "bspline"

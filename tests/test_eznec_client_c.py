@@ -38,7 +38,7 @@ from pathlib import Path
 import pytest
 
 import momwire_serve_client as mech
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 REPO = Path(__file__).resolve().parent.parent
 SOURCE = REPO / "scripts" / "eznec_client_c" / "momwire_eznec_client.c"

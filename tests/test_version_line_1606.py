@@ -23,7 +23,7 @@ import pytest
 import momwire_eznec_client as eznec_client
 import momwire_nec2c_client as nec2c_client
 import momwire_serve_client as mech
-from momwire.portal import _portal as nec_portal
+from momwire.dropin.nec2c import _portal as nec_portal
 
 # SimNEC's own patterns (nec2/Options, nec2/Execute), read from its jar.
 OPTIONS_ENGINE_PIECE = re.compile(r"[a-zA-Z]*([0-9])+?(.*)")

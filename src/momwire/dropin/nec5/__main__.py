@@ -1,9 +1,9 @@
-"""``python -m momwire.eznec <deck> <printout>`` — the engine EZNEC launches.
+"""``python -m momwire.dropin.nec5 <deck> <printout>`` — the engine EZNEC launches.
 
 The invocation is positional and cwd-relative, exactly as EZNEC spells it for
 its own console engine:
 
-    python -m momwire.eznec EZN5.NEC NEC5.OUT
+    python -m momwire.dropin.nec5 EZN5.NEC NEC5.OUT
 
 Quoting is the shell's business — EZNEC quotes both paths, and argv arrives
 already unquoted, so a path with spaces needs nothing special here.

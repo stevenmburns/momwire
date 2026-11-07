@@ -30,8 +30,8 @@ from unittest import mock
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 
 FIX = Path(__file__).parent / "fixtures" / "eznec_split_1281"
 RAD = "1.02616E-3"

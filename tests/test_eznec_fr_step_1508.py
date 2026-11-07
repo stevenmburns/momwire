@@ -26,8 +26,8 @@ import pytest
 
 from momwire.deck._cards import DeckError
 from momwire.deck._nec5 import _stepped_frequencies, parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_fr_step_1508"
 FREE_SPACE = (

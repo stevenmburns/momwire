@@ -19,7 +19,7 @@ import pytest
 
 import momwire_serve_client as _mech
 from momwire import _times
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 import times_check as tc
 

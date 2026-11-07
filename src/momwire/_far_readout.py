@@ -8,11 +8,11 @@ need this arithmetic — the NEC-2 portal's ``RP``/``NE``/``NH`` tables and the
 EZNEC seam's pattern and near-field requests — and until momwire#719 U1 only
 one of them owned it. The second seam paid for the first copy by reaching
 across a package boundary for eight private names out of
-``momwire.portal._portal`` (the ranked extraction backlog, momwire#429, is
+``momwire.dropin.nec2c._portal`` (the ranked extraction backlog, momwire#429, is
 what marked that reach as debt rather than as done). This module is the
 payoff: the physics moves to a home neither seam is privileged over, and
-``momwire.portal._portal`` imports it back for its own internal use and
-re-exports the same names, so ``from momwire.portal._portal import
+``momwire.dropin.nec2c._portal`` imports it back for its own internal use and
+re-exports the same names, so ``from momwire.dropin.nec2c._portal import
 _far_moments``-style call sites are unaffected.
 
 Every derivation comment below was unmoved from its old home in
