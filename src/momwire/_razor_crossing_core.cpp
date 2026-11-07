@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <utility>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -610,16 +611,17 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
                 // `cross_complete_block_reversed(ctx_r, P, ax)`: the main
                 // sandwich over (above source Q = ax, below test P),
                 // transposed; the ends with the rows below.
-                const std::vector<cd> tba = main_sandwich(c, be, r, ax, P);
-                t.resize(static_cast<size_t>(n * n));
+                // Transposed in place (n x n), so the block is held once.
+                t = main_sandwich(c, be, r, ax, P);
                 const int ntt = team(be, t.size());
 #if defined(_OPENMP)
-                #pragma omp parallel for schedule(static) num_threads(ntt) if (ntt > 1)
+                #pragma omp parallel for schedule(dynamic, 16) num_threads(ntt) if (ntt > 1)
 #else
                 (void)ntt;
 #endif
                 for (int64_t i = 0; i < n; i++)
-                    for (int64_t j = 0; j < n; j++) t[static_cast<size_t>(i * n + j)] = tba[static_cast<size_t>(j * n + i)];
+                    for (int64_t j = i + 1; j < n; j++)
+                        std::swap(t[static_cast<size_t>(i * n + j)], t[static_cast<size_t>(j * n + i)]);
                 add_end_terms<RazorPolicy>(c, be, r, P, ax, false, t);
             }
             // The fold: `Z[rows, cols] -= t`, columns apart.
