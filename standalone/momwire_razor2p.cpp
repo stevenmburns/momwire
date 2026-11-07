@@ -5,7 +5,7 @@
 //     momwire-razor2p - -                  (SimNEC's streaming call, momwire#1512)
 //     momwire-razor2p -version
 //
-// The contract is the launcher's (`momwire.eznec._shell`): the printout file
+// The contract is the launcher's (`momwire.dropin.nec5._shell`): the printout file
 // is the channel, exit 0. Two routes answer it, and they write the same bytes:
 //
 //   * C++: the deck reader, the structure half, the front half, the fill, the
@@ -842,12 +842,12 @@ def _launcher(args):
     deck_path, printout_path = args
     if "-" in (deck_path, printout_path):
         if args == ["-", "-"]:
-            from momwire.eznec._shell import main as _main
+            from momwire.dropin.nec5._shell import main as _main
             return _main(args, basis=")PY" MW_EXE_BASIS_NAME R"PY(")PY" MW_EXE_SHELL_KW R"PY()
         print(_c.STREAMING_REFUSAL, file=sys.stderr)
         return 2
     try:
-        from momwire.eznec._shell import main as _main
+        from momwire.dropin.nec5._shell import main as _main
         _main([deck_path, printout_path], basis=")PY" MW_EXE_BASIS_NAME R"PY(")PY" MW_EXE_SHELL_KW R"PY(, en_optional=en_optional)
     except Exception as exc:  # the client's rung 4: the file is the only channel
         _c._last_ditch(printout_path, f"MOMWIRE ENGINE UNAVAILABLE - {type(exc).__name__}: {exc}")
@@ -994,7 +994,7 @@ int main(int argc, char **argv) {
 
 #if MW_EXE_NO_PYTHON
 // ============================================================================
-// The no-Python build (momwire#1512 step 1): `momwire-razor2p-standalone`.
+// The no-Python build (momwire#1512 step 1): `momwire-nec5-razor-2p-standalone`.
 //
 // Everything the launcher does, in this process, with nothing loaded: the
 // client's argv rules (`momwire_eznec_client.main`: `-version`, 4nec2's

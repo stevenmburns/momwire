@@ -31,7 +31,7 @@ Each deck is counted by the route that answered it in the ``exe`` pass
 took the fallback measures nothing, so both counts are printed. One JSON line
 per deck; a summary on stdout; exit status 1 on any mismatch.
 
-``--standalone``: EXE is the no-Python build (`momwire-razor2p-standalone`,
+``--standalone``: EXE is the no-Python build (`momwire-nec5-razor-2p-standalone`,
 momwire#1512). There is no fallback to force, so each deck is answered by the
 executable, the launcher and ``python`` only. A deck the C++ route serves,
 refuses or raises on must print the launcher's bytes; a deck it declines

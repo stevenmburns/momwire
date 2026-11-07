@@ -3901,7 +3901,7 @@ def _run_block(
     return _render_run_block(deck, solver, group, freq_mhz, records, group_index)
 
 
-@_features.in_context("portal")
+@_features.in_context("dropin")
 def render_deck(body: str) -> tuple[list[str], list[str]]:
     """(stdout lines, stderr lines) for one deck body — no banner, no ``NX``.
 

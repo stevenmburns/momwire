@@ -83,7 +83,7 @@ def test_reach_kind_and_dates_are_valid():
 def test_every_feature_is_below_the_executables():
     # The executables' refusal is a generic scan, which is right only while
     # no feature reaches an executable's level.
-    first_exe = F._level("exe-bs2-razor-windows")
+    first_exe = F._level("exe-nec5-bspline-razor-2p-windows")
     assert all(f.reach < first_exe for f in F.FEATURES.values())
 
 
@@ -180,16 +180,21 @@ def test_every_ci_job_is_placed_once_or_unassigned():
         ("python", "win32", None, "avx2", 3),
         ("python", "win32", None, "sse2", 3),
         ("python", "darwin", None, "legacy", 5),
-        ("portal", "linux", None, "avx2", 4),
-        ("portal", "linux", None, "sse2", 4),
-        ("portal", "win32", None, None, 4),
-        ("portal", "darwin", None, None, 5),
+        ("dropin", "linux", None, "avx2", 4),
+        ("dropin", "linux", None, "sse2", 4),
+        ("dropin", "win32", None, None, 4),
+        ("dropin", "darwin", None, None, 5),
         ("exe", "win32", "razor2p", None, 6),
         ("exe", "win32", "bspline_nec5", None, 6),
         ("exe", "linux", "razor2p", None, 7),
         ("exe", "darwin", "bspline_nec5", None, 7),
         ("exe", "linux", "bspline_nec42", None, 8),
         ("exe", "win32", "sin42", None, 9),
+        # the long forms (momwire#1831)
+        ("exe", "win32", "nec5-razor-2p", None, 6),
+        ("exe", "linux", "nec5-bspline", None, 7),
+        ("exe", "darwin", "nec42-bspline", None, 8),
+        ("exe", "linux", "nec42-sinusoidal", None, 9),
     ],
 )
 def test_current_level(context, platform, basis, variant, level):
@@ -220,16 +225,16 @@ def test_a_native_feature_outside_its_reach_refuses(no_features, monkeypatch):
         F.Feature("probe", 1, "MOMWIRE_X_PROBE", "native", 1, "2026-11-06"),
     )
     no_features.setenv("MOMWIRE_X_PROBE", "1")
-    # The portal is past reach 1 on every platform.
+    # The drop-in is past reach 1 on every platform.
     with pytest.raises(F.FeatureNotCertified, match=r"^probe is not certified"):
-        F.enabled("probe", context="portal")
-    assert F.enabled("probe", False, context="portal") is False
+        F.enabled("probe", context="dropin")
+    assert F.enabled("probe", False, context="dropin") is False
 
 
 def test_a_python_feature_outside_its_reach_runs(no_features):
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
     assert F.FEATURES["offset_reuse"].kind == "python"
-    assert F.enabled("offset_reuse", context="portal") is True
+    assert F.enabled("offset_reuse", context="dropin") is True
 
 
 # --- the stamp ------------------------------------------------------------------
@@ -243,23 +248,23 @@ def _bare_stamp(basis):
 
 
 def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
-    assert F.stamp() == "" and F.stamp("portal") == ""
+    assert F.stamp() == "" and F.stamp("dropin") == ""
     assert _printout.engine_stamp("bspline") == _bare_stamp("bspline")
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    # The portal is past reach 1 everywhere, so the platform is named.
-    with F.context_scope("portal"):
+    # The drop-in is past reach 1 everywhere, so the platform is named.
+    with F.context_scope("dropin"):
         assert F.stamp() == "+offset_reuse uncertified on this platform"
         assert _printout.engine_stamp("bspline") == (
             _bare_stamp("bspline") + " +offset_reuse uncertified on this platform"
         )
-    # Outside a portal entry the route is Python's: level 1 on Linux avx2.
+    # Outside a drop-in entry the route is Python's: level 1 on Linux avx2.
     plain = "" if F.certified("offset_reuse") else " uncertified on this platform"
     assert F.stamp() == "+offset_reuse" + plain
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    assert F.stamp("portal") == "+pair_reuse+offset_reuse uncertified on this platform"
+    assert F.stamp("dropin") == "+pair_reuse+offset_reuse uncertified on this platform"
 
 
-def test_the_portal_entry_runs_as_the_portal(no_features):
+def test_the_dropin_entry_runs_as_the_dropin(no_features):
     from momwire.dropin.nec5 import _shell
 
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
@@ -272,7 +277,7 @@ def test_the_portal_entry_runs_as_the_portal(no_features):
 
 def test_a_long_basis_keeps_the_feature_tail(no_features):
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    with F.context_scope("portal"):
+    with F.context_scope("dropin"):
         line = _printout.engine_stamp("b" * 200)
     assert len(line) <= 79
     assert line.endswith(" +offset_reuse uncertified on this platform")

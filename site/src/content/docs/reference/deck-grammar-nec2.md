@@ -1695,7 +1695,8 @@ no wire has tag <t>
 antennaknobs reads NEC decks too, with `nec_import.parse_nec`, and keeps the
 **full** grammar — networks, 4nec2 extensions, NEC-5 spellings and all — for
 its `.nec` import feature. Where the two readers disagree, this dialect
-follows the portal, which is the engine-facing contract. The differences, for
+follows the NEC-2 drop-in engine (`momwire.dropin.nec2c`), which is the
+engine-facing contract. The differences, for
 anyone moving a deck between them:
 
 | topic | antennaknobs importer | this dialect |

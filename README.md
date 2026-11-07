@@ -128,7 +128,8 @@ launcher (`momwire-nec2c` and its siblings), a resident NEC engine speaking
 the protocol [SimNEC](https://ae6ty.com/smith_charts/) uses to drive `nec2c`,
 with momwire's solver behind it. Point SimNEC's NEC portal
 dialog at that command and its Smith chart, tuner and sweeps run on momwire.
-`python -m momwire.portal` is the long spelling, and `--selftest` is the
+`python -m momwire.dropin.nec2c` is the long spelling (`python -m momwire.portal`
+still works), and `--selftest` is the
 deployment smoke.
 
 ```bash
@@ -145,9 +146,10 @@ Setup, the two filename rules SimNEC enforces, `--basis`, the caching flags
 and what refusals look like:
 **[momwire.dev/reference/portal-usage/](https://momwire.dev/reference/portal-usage/)**.
 
-`momwire.portal` may use the solver API and `momwire.deck`; nothing else in
-momwire may import from it. The SimNEC protocol is the portal's business
-alone, and a test enforces that.
+`momwire.dropin` (the Python drop-in engine, NEC-2 / NEC-4.2 / NEC-5 dialects:
+`momwire.dropin.nec2c` and `momwire.dropin.nec5`) may use the solver API and
+`momwire.deck`; nothing else in momwire may import from it. The hosts'
+protocols are the drop-in's business alone, and a test enforces that.
 
 ## Public names
 
@@ -235,7 +237,7 @@ warns and falls back to the slower pure-Python path. On Linux the system
 
 Each release also carries **`momwire-nec5-linux-x86_64.tar.gz`**: two of
 momwire's NEC-5 engines as native programs, with no Python in them. They are
-razor-2p (`momwire-nec5-razor-2p`) and bs2, the default B-spline formulation
+nec5-razor-2p (`momwire-nec5-razor-2p`) and nec5-bspline, the default B-spline formulation
 (`momwire-nec5-bspline`). You do not need Python, pip or momwire installed.
 Their printouts are byte for byte the Python commands'. Their `-version` line
 is the command's with `-standalone` and the build added to the name, e.g.
@@ -247,7 +249,7 @@ cd momwire-nec5-linux-x86_64
 ./momwire-nec5-razor2p-linux -version
 ./momwire-nec5-razor2p-linux deck.nec deck.out   # EZNEC's and SimNEC's form
 ./momwire-nec5-razor2p-linux - - < chain.nec     # SimNEC's streaming form
-./momwire-nec5-bs2-linux deck.nec deck.out       # the same forms, bs2
+./momwire-nec5-bs2-linux deck.nec deck.out       # the same forms, nec5-bspline
 ```
 
 For SimNEC, point the NEC-5 engine setting at `momwire-nec5-razor2p-linux`
@@ -282,7 +284,7 @@ serves those decks.
 
 **Preview:** the same tarball also carries `momwire-nec42-linux`
 (momwire#1607 Phase C), the native twin of the Python command
-`momwire-nec42`, the NEC-4.2 slot's default (bs2, the B-spline basis), with
+`momwire-nec42`, the NEC-4.2 slot's default (nec42-bspline, the B-spline basis), with
 the same `-avx2` / `-sse2` picking and the same three forms. Its printouts
 are the Python command's byte for byte, apart from the two lines that report
 measured time. It serves free space, a perfect ground (GN 1), a Sommerfeld

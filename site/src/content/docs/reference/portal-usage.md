@@ -33,7 +33,7 @@ which momwire-nec2c        # e.g. ~/.venvs/momwire/bin/momwire-nec2c
 momwire-nec2c -version     # NEC2 momwire-nec2c [sb] <version>
 ```
 
-`python -m momwire.portal` is the same program under its long name, for an
+`python -m momwire.dropin.nec2c` is the same program under its long name, for an
 environment where the console script is awkward to reach.
 
 Before a live session, run the built-in smoke. It needs no checkout: it
@@ -74,7 +74,7 @@ puts all of these on your path, and SimNEC's engine dialog takes any of them
 directly, no arguments and no wrapper scripts:
 
 ```text
-momwire-nec2c                                # the default — degree-2 B-spline (bs2)
+momwire-nec2c                                # the default — degree-2 B-spline (bspline)
 momwire-nec2c-bspline-d1                     # the same physics at degree 1 (tent basis)
 momwire-nec2c-sinusoidal                     # NEC-2's own formulation
 momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
@@ -115,7 +115,7 @@ if they do not, the deck is telling you about conditioning, not about basis.
 NEC-5 identifies with (`razor-2p`) is not a nec2 engine: a NEC-2 deck puts
 its source at a segment *centre* and razor places its gap at a *knot*, so
 it would answer for an antenna half a segment from the one you drew. Since
-momwire#821 the portal refuses the name at configure time rather than serve
+momwire#821 the NEC-2 drop-in refuses the name at configure time rather than serve
 that — `momwire-nec2c-razor-nec5` and `momwire-nec2c-razor-2p`, which
 shipped from 0.36.1 to 0.46.0, are gone, and a copy you kept fails the
 version probe with the reason. Razor is served where its grid is the deck's:
@@ -175,12 +175,12 @@ containing `nec5` gets NEC-5 decks. So the NEC-5 slot takes a different family
 of commands, and the `momwire-nec2c` names above will not work there:
 
 ```bash
-momwire-nec5                        # the default — degree-2 B-spline (bs2)
+momwire-nec5                        # the default — degree-2 B-spline (nec5-bspline)
 momwire-nec5-razor-2p               # NEC-5's own formulation (tent basis, razor testing)
 momwire-nec5-bspline-d1             # degree-1 B-spline
 momwire-nec5-sinusoidal-galerkin    # sinusoidal basis, tested variationally
-momwire-nec5-hmatrix                # bs2, hierarchical (ACA) solve
-momwire-nec5-arrayblock             # bs2, element-block/FFT solve
+momwire-nec5-hmatrix                # nec5-bspline, hierarchical (ACA) solve
+momwire-nec5-arrayblock             # nec5-bspline, element-block/FFT solve
 ```
 
 `razor-2p` is the one to pick for agreement with the licensed NEC-5: it runs
@@ -242,7 +242,7 @@ that name.
 
 ## Running a deck from the command line
 
-The portal reads a deck file directly, the way you would test any NEC engine:
+The NEC-2 drop-in reads a deck file directly, the way you would test any NEC engine:
 
 ```bash
 momwire-nec2c --basis sinusoidal < dipole.nec > dipole.printout

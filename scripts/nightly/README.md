@@ -26,11 +26,11 @@ It is not `.github/workflows/nightly.yml`. That one is the GitHub-hosted
    `audit.py` says). The printouts must be byte-identical, with only the
    NEC-4.2 slot's two measured-time lines masked:
 
-   | label | CMake target (today's name) | Python basis | dialect |
+   | label | CMake target | Python basis | dialect |
    |---|---|---|---|
-   | nec5-bspline | `momwire-bs2-standalone` | bspline | NEC-5 |
-   | nec5-razor-2p | `momwire-razor2p-standalone` | razor-2p | NEC-5 |
-   | nec42-bspline | `momwire-nec42-standalone` | bspline | NEC-4.2 |
+   | nec5-bspline | `momwire-nec5-bspline-standalone` | bspline | NEC-5 |
+   | nec5-razor-2p | `momwire-nec5-razor-2p-standalone` | razor-2p | NEC-5 |
+   | nec42-bspline | `momwire-nec42-bspline-standalone` | bspline | NEC-4.2 |
    | nec42-sinusoidal | `momwire-nec42-sinusoidal-standalone` | sinusoidal | NEC-4.2 |
 
    The SG executables were removed in #1828 and are not here. Environment:

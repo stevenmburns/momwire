@@ -50,8 +50,8 @@ jobs = [
 ]
 
 [[level]]
-id = "portal-linux-windows"
-description = "the drop-in portal on Linux and Windows, avx2 and sse2"
+id = "dropin-linux-windows"
+description = "the Python drop-in engine (NEC-2 / NEC-4.2 / NEC-5 dialects) on Linux and Windows, avx2 and sse2"
 jobs = [
     "eznec-dropin.yml:freeze",  # standard (avx2) and win7 (sse2) bundles
     "eznec-dropin.yml:resident-smoke",
@@ -59,7 +59,7 @@ jobs = [
 
 [[level]]
 id = "macos"
-description = "antennaknobs and the portal on macOS"
+description = "antennaknobs and the Python drop-in engine (NEC-2 / NEC-4.2 / NEC-5 dialects) on macOS"
 jobs = [
     "ci.yml:test-macos",
     "wheels.yml:wheel_smoke",  # its macos-15 cells
@@ -67,31 +67,31 @@ jobs = [
 ]
 
 [[level]]
-id = "exe-bs2-razor-windows"
-description = "the bspline_nec5 and razor2p executables on Windows, avx2 and sse2"
+id = "exe-nec5-bspline-razor-2p-windows"
+description = "the nec5-bspline and nec5-razor-2p executables on Windows, avx2 and sse2"
 jobs = [
-    "standalone.yml:windows",  # razor2p with its embedded-Python fallback
-    "standalone.yml:windows-nopython",  # razor2p and bs2, avx2 and sse2
+    "standalone.yml:windows",  # nec5-razor-2p with its embedded-Python fallback
+    "standalone.yml:windows-nopython",  # nec5-razor-2p and nec5-bspline, avx2 and sse2
 ]
 
 [[level]]
-id = "exe-bs2-razor-linux-macos"
-description = "the bspline_nec5 and razor2p executables on Linux and macOS"
+id = "exe-nec5-bspline-razor-2p-linux-macos"
+description = "the nec5-bspline and nec5-razor-2p executables on Linux and macOS"
 jobs = [
     "standalone.yml:linux",
     "standalone.yml:macos-nopython",
 ]
 
 [[level]]
-id = "exe-bs42"
-description = "the bspline_nec42 executable, all platforms"
+id = "exe-nec42-bspline"
+description = "the nec42-bspline executable, all platforms"
 jobs = [
     "standalone.yml:linux-nec42-bs",  # Linux only today
 ]
 
 [[level]]
-id = "exe-sin42"
-description = "the sin42 executable, all platforms"
+id = "exe-nec42-sinusoidal"
+description = "the nec42-sinusoidal executable, all platforms"
 jobs = [
     "standalone.yml:linux-nec42",  # Linux only today
 ]

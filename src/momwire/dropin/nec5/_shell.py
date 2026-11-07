@@ -388,7 +388,7 @@ def render_files(
     return printout, gmo
 
 
-@_features.in_context("portal")
+@_features.in_context("dropin")
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
