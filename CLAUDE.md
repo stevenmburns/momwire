@@ -3,6 +3,98 @@
 Scope: things that are easy to get wrong here and are not obvious from the
 code. Deliberately not a codebase tour.
 
+## Dev flow: new work is an opt-in feature with a REACH
+
+Since 2026-11 (rollout #1828–#1838), new numerical work starts as an
+opt-in feature, in Linux Python first, and is certified outward one support
+level at a time. Exe ports, other platforms and perf checks catch up when the
+feature is PROMOTED, not on the PR that adds it. Do not hold a reach-1 PR to
+the old per-PR bars.
+
+Where it lives:
+- `support/hierarchy.toml`: nine levels, in order of who runs them, from
+  `ak-linux-avx2` (the hosted app) down to the NEC-4.2 sinusoidal exes. It
+  holds the order only.
+- `src/momwire/_features.py`: each feature's reach, its env variable
+  `MOMWIRE_X_<NAME>`, its kwarg and its kind.
+- `tests/test_stable_path_tripwire.py`: holds the flag-off bytes.
+- `required`: chooses each PR's checks.
+- `scripts/nightly/`: the Skylake nightly.
+
+**The one global rule: with every flag off, the stable path is byte-identical.**
+- The tripwire holds 198 printouts across all engines and dialects, including
+  NEC-4.2, ground and buried. It runs in the Linux default lane, avx2 only.
+- A PR that moves a golden on purpose is a STABLE change, not an experimental
+  one. It regenerates with `python scripts/golden_printouts.py --corpus stable`
+  and says why in its body.
+
+**Flag on, a feature is gated only by levels 1..reach.**
+- A reach-1 feature needs Linux avx2 and nothing else. Do not port it to C++,
+  run sse2 or T4 audits, or time it on Skylake for that PR.
+- Exe parity before merge, exe never slower than Python, and the slow lane run
+  on base and on the change for numeric C++ all apply when reach is RAISED.
+- Promotion means raising `reach` in `_features.py` in its own PR. That PR then
+  selects the new level's jobs.
+
+**Outside its reach, a feature acts by its kind.**
+- `kind="python"` (a route over kernels that already shipped) runs, and
+  printout line 2 gains ` +a+b uncertified on this platform`.
+- `kind="native"` (new C++ or a new numerical path) refuses with
+  `FeatureNotCertified`.
+- The exes certify no feature. Any `MOMWIRE_X_*` variable, or a legacy alias
+  such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before it reads
+  a deck.
+- The word Python in that sentence is printed through `P%cthon`, because the
+  no-Python test greps the binary for "python". Do not "fix" the spelling.
+
+**Adding a feature.**
+- Add one `Feature(...)` entry with `reach=1`, its issue, `since`, `kind`, a
+  kwarg and `paths`.
+- Read it with `enabled(name, kwarg_value)` at the call site.
+- Mark its tests `@pytest.mark.reach(1)`.
+- `paths` lists only the feature's own test files. A PR that also edits a
+  shared file such as `bspline.py` is therefore selected as stable path, with
+  every path filter. That is conservative on purpose: the tripwire is what
+  makes flags-in-shared-files safe.
+
+**Merging.**
+- Branch protection on `main` requires one check, `required`. It waits for the
+  jobs it chose, polling every 3 min, with a 150-min deadline. A skipped job it
+  chose counts as a failure.
+- **Re-running a failed job does not re-run `required`.** It keeps its earlier
+  verdict, so re-run it as well.
+- `support/README.md` has the selection rules.
+
+**The nightly** (`scripts/nightly/README.md`).
+- Skylake runs it at 01:30 Pacific against `main`, and skips a night when
+  `main` has not moved since the last green one.
+- Every night: avx2 at one thread, exe == Python byte for byte, for all four
+  exes, over the in-repo corpus (`scripts/nightly/corpus.txt`). Plus the fast
+  perf sweep.
+- Plus one rotating cell of {avx2, sse2} × {T1, T2, T4}. Its sse2 cells are
+  what certify level 2, `ak-linux-sse2`, which has no PR job.
+- Status goes to the pinned issue #1837.
+
+**A red night.** The script proposes a severity, finds the first bad commit,
+and does nothing else. **No agent reverts on its own:** propose, and Steve
+decides.
+
+| severity | what triggers it | response |
+|---|---|---|
+| severe | Z moves above 5e-12 relative, exe ≠ Python on a served deck, or a new sweep OUTCOME regression | revert within the day |
+| moderate | smaller numeric drift, or a MEM or TIME flag | an issue, fixed before the next release |
+| minor | anything else | an entry in `scripts/nightly/known.json` |
+
+Each `known.json` entry names the issue that will retire it. Delete the entry
+when that issue closes.
+
+**Engine names: the long form only**, dialect first as in the launchers:
+`nec5-bspline`, `nec42-bspline`, `nec5-razor-2p`, `nec42-sinusoidal`.
+- Never write `bs42`: it drops the d=2. In new text, `bs2` and `sin42` are
+  retired too.
+- The level ids, CMake targets and exe file names that still carry the old
+  names are renamed under #1831, the file names at a release.
+
 ## Lanes: run CI's commands, not your own
 
 `Makefile` mirrors `.github/workflows/ci.yml` lane for lane — `make lint`,
