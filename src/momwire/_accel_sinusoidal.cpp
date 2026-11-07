@@ -142,6 +142,32 @@ sinusoidal_galerkin_far_fill_cplx(
         galerkin_fold_view(folding, fold, view), reference));
 }
 
+// The point-matched complex field tensor on the staged complex rows
+// (momwire#1849, the opt-in feature `point_cplx_staged`).
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+point_field_tensor_cplx_staged(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    std::complex<double> k, std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    bool folded,
+    uintptr_t cancel_flag = 0
+) {
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    return ndb::out_tuple(sgc::point_field_tensor_cplx_staged(
+        ndb::in(obs_centers), ndb::in(obs_tangents), ndb::in(obs_radius),
+        ndb::in(src_centers), ndb::in(src_tangents), ndb::in(seg_h), k, eta,
+        ndb::in(gl_t), ndb::in(gl_w), folded, cancel_flag));
+}
+
 
 // The reduced entry point. Byte-frozen against its pre-#246 build: the
 // instantiation below has WITH_EK false, so not one line of the delta is
@@ -505,6 +531,19 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("out") = py::none(),
           py::arg("scale") = std::complex<double>(1.0, 0.0),
           py::arg("reference") = false);
+    m.def("point_field_tensor_cplx_staged",
+          &point_field_tensor_cplx_staged,
+          "sinusoidal_field_tensor_cplx's tensor (both shape sets), computed "
+          "on the complex Galerkin far fill's staged rows (momwire#1849, the "
+          "opt-in feature point_cplx_staged): one observer per row, no test "
+          "reduction. Close to sinusoidal_field_tensor_cplx, not bit-identical "
+          "(the libmvec sweep rounds differently from scalar complex libm).",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("obs_radius"),
+          py::arg("src_centers"), py::arg("src_tangents"), py::arg("seg_h"),
+          py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"), py::arg("folded"),
+          py::arg("cancel_flag") = 0);
     m.def("sg_real_far_fill_calls",
           []() {
               auto calls = sgc::sg_real_far_fill_calls();
