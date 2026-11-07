@@ -167,6 +167,22 @@ FEATURES: dict[str, Feature] = {
             kwarg="offset_reuse",
             paths=("tests/test_offset_reuse_1809.py",),
         ),
+        # The transmitted (below->above) grid blended from frequency anchors
+        # on a lattice fixed in metres (momwire#1847), so a sweep shares its
+        # tables: the shipped evaluator, interpolated in ln f.
+        Feature(
+            name="transmitted_anchors",
+            reach=1,
+            env="MOMWIRE_X_TRANSMITTED_ANCHORS",
+            kind="python",
+            issue=1847,
+            since="2026-11-07",
+            kwarg="transmitted_anchors",
+            paths=(
+                "src/momwire/_transmitted_anchors.py",
+                "tests/test_transmitted_anchors_1847.py",
+            ),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(

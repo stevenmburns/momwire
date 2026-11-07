@@ -49,6 +49,7 @@ import scipy.sparse
 from . import (
     _below_interface,
     _crossing_fill,
+    _features,
     _feed_snap,
     _field_ground,
     _ground_mirror,
@@ -1178,6 +1179,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         swept_mem_mb=256,
         cancel=None,
         junction_rule="nec2",
+        transmitted_anchors=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1276,6 +1278,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_ek_gating: tuple | None = None
         self._cached_nec4_live: tuple | None = None
         self._cancel = cancel
+        # momwire#1847: the below->above grid from frequency anchors, so a
+        # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
+        # (`_features`, reach 1); off is the exact grid, bit for bit.
+        self._transmitted_anchors = _features.enabled(
+            "transmitted_anchors", transmitted_anchors
+        )
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -5818,6 +5826,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             mu=self.mu,
             r_min=plan["r_cross_min"],
             cancel_flag=self._cancel_flag,
+            anchors=self._transmitted_anchors,
         )
         proj_fn = (
             _sommerfeld_transmitted.transmitted_field_proj_above_to_below

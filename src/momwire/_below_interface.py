@@ -1014,6 +1014,9 @@ class BuriedFills(NamedTuple):
     # remainder's own order (momwire#1752 S1); None reads `nodes`' (the
     # cross block's) for it, as before.
     remainder_nodes: Callable | None = None
+    # Serve the below->above grid from frequency anchors (momwire#1847, the
+    # opt-in feature `transmitted_anchors`); False is the exact grid.
+    transmitted_anchors: bool = False
 
 
 class BuriedPlan(NamedTuple):
@@ -1929,6 +1932,7 @@ def compute_Z_operator_buried(
             mu=mu,
             r_min=plan["r_cross_min"],
             cancel_flag=cancel_flag,
+            anchors=f.transmitted_anchors,
         )
 
         def proj_ab(o, to, s, ts):

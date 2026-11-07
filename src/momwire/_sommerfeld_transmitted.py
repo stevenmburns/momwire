@@ -1352,8 +1352,14 @@ def get_grid_below_above(
     health=None,
     r_min=None,
     cancel_flag=0,
+    anchors=False,
 ):
     """Cached `TransmittedGrid`, sharing `_sommerfeld`'s grid cache.
+
+    `anchors` (momwire#1847, the opt-in feature ``transmitted_anchors``):
+    serve the grid blended from frequency anchors on a lattice fixed in
+    metres (`_transmitted_anchors`) when they can serve it; False is the
+    exact grid below, byte for byte.
 
     `cancel_flag` as in `_sommerfeld_below.get_grid_below` (momwire#1348):
     ambient for the fill only, polled per contour node; an aborted fill
@@ -1380,6 +1386,23 @@ def get_grid_below_above(
     every rung — there is no such coincidence to exploit, and a deck's
     buried depths are a fixed set anyway.
     """
+    if anchors and health is None:
+        from . import _transmitted_anchors
+
+        grid = _transmitted_anchors.get_grid(
+            eps_t,
+            k2,
+            r_max,
+            zp_min,
+            zp_max,
+            omega,
+            mu,
+            r_min=r_min,
+            rtol=rtol,
+            cancel_flag=cancel_flag,
+        )
+        if grid is not None:
+            return grid
     k2 = float(k2)
     eps_t = complex(eps_t)
     lam_p = 2.0 * np.pi / k2
