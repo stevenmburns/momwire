@@ -355,6 +355,9 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             probe_version(),
             *_mech.interpreter_identity(),
             f"{idle_timeout!r}",
+            # momwire#1831: the framed wire. A framing client must never
+            # reach a resident server of the same version that reads to EOF.
+            _mech.WIRE,
             *(f"{flag}={value}" for flag, value in pairs),
             *_mech.junction_rule_identity(),
         ]
@@ -451,25 +454,29 @@ def pump(conn, stdin_fd: int, stdout_fd: int, prefix: bytes = b"") -> int:
     already computed. Queueing what will not go out and coming back for it
     when the socket says so is what makes that unreachable.
 
-    Closing stdin (SimNEC's ``Process.destroy()``, or a redirect running out)
-    half-closes the socket rather than dropping it, so the server sees a clean
-    EOF, finishes the deck it is on, and the remaining output is drained
-    before we go.
+    The wire is framed (momwire#1831): each piece of stdin goes out as one
+    ``momwire_serve_client.deck_frame``, and closing stdin (SimNEC's
+    ``Process.destroy()``, or a redirect running out) sends the empty frame,
+    ``STREAM_END``, so the server sees a clean end of input, finishes the
+    deck it is on, and the remaining output is drained before we go. The
+    socket is never half-closed: macOS can lose the EOF of a
+    ``shutdown(SHUT_WR)`` (momwire#1822), and a session whose end was that
+    EOF would wait forever for it.
 
     ``prefix`` is stdin already read (the first line :func:`main` looked at
     to tell decks from 4nec2's names, momwire#1611), sent ahead of the rest.
     """
     import selectors
-    import socket as _socket
 
     selector = _make_selector(stdin_fd)
     selector.register(conn, selectors.EVENT_READ)
     conn.setblocking(False)
 
-    pending = bytearray(prefix)
+    # Never an empty data frame: the empty frame is the stream's end.
+    pending = bytearray(_mech.deck_frame(prefix) if prefix else b"")
     stdin_open = stdin_fd >= 0
     watching_stdin = stdin_open
-    half_closed = False
+    ended = False
 
     try:
         while True:
@@ -477,6 +484,11 @@ def pump(conn, stdin_fd: int, stdout_fd: int, prefix: bytes = b"") -> int:
             # at each of the places that could change it — the registrations
             # are then idempotent by construction and cannot drift out of step
             # with the buffer they describe.
+            if not stdin_open and not ended:
+                # Nothing left to send it from: tell the server so, in the
+                # frame, and stay to drain the answer it still owes.
+                pending += _mech.STREAM_END
+                ended = True
             selector.modify(
                 conn,
                 selectors.EVENT_READ | (selectors.EVENT_WRITE if pending else 0),
@@ -487,17 +499,12 @@ def pump(conn, stdin_fd: int, stdout_fd: int, prefix: bytes = b"") -> int:
                     selector.register(stdin_fd, selectors.EVENT_READ)
                 else:
                     selector.unregister(stdin_fd)
-            if not stdin_open and not pending and not half_closed:
-                # Nothing left to send and nothing left to send it from: tell
-                # the server so, and stay to drain the answer it still owes.
-                conn.shutdown(_socket.SHUT_WR)
-                half_closed = True
 
             for key, events in selector.select():
                 if key.fileobj is not conn:
                     data = os.read(stdin_fd, _PUMP_CHUNK)
                     if data:
-                        pending += data
+                        pending += _mech.deck_frame(data)
                     else:
                         selector.unregister(stdin_fd)
                         stdin_open = watching_stdin = False

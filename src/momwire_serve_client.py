@@ -26,6 +26,7 @@ the word Windows.
 
 from __future__ import annotations
 
+import io
 import os
 
 # How long a client waits for a server it spawned before giving up. Generous
@@ -524,6 +525,17 @@ def deck_frame(body: bytes) -> bytes:
     return DECK_FRAME_TAG + b" " + str(len(body)).encode("ascii") + b"\n" + body
 
 
+def _frame_size(line: bytes) -> int | None:
+    """The byte count a frame line announces; ``None`` for a line without
+    the tag, ``-1`` for a tagged line whose length is not digits."""
+    if not line.startswith(DECK_FRAME_TAG + b" "):
+        return None
+    digits = line[len(DECK_FRAME_TAG) + 1 :]
+    if not digits.endswith(b"\n") or not digits[:-1].isdigit():
+        return -1
+    return int(digits[:-1])
+
+
 def read_deck_frame(stream) -> bytes | None:
     """The deck off a binary ``stream`` the way :func:`deck_frame` wrote it.
 
@@ -533,14 +545,80 @@ def read_deck_frame(stream) -> bytes | None:
     pre-#1822 wire, and its frame is EOF.
     """
     first = stream.readline(DECK_FRAME_LINE_MAX)
-    if not first.startswith(DECK_FRAME_TAG + b" "):
+    size = _frame_size(first)
+    if size is None:
         return first + stream.read()
-    digits = first[len(DECK_FRAME_TAG) + 1 :]
-    if not digits.endswith(b"\n") or not digits[:-1].isdigit():
+    if size < 0:
         return None
-    size = int(digits[:-1])
     body = stream.read(size)
     return body if len(body) == size else None
+
+
+# momwire#1831: the NEC-2 drop-in's STREAM rides the same frame. Its session
+# is a stream of decks on stdin (``NX``-framed, answered as they arrive), so no
+# one length frames it: the launcher sends each piece of stdin as one
+# :func:`deck_frame` as it reads it, and at stdin's end the EMPTY frame,
+# STREAM_END. The empty frame is the stream's end, never the client's
+# half-close, for the reason above. A NEC-5 request is the one-frame case.
+STREAM_END = DECK_FRAME_TAG + b" 0\n"
+
+
+class FrameReader(io.RawIOBase):
+    """The bytes a framing launcher streamed, frame bodies in order.
+
+    Ends at :data:`STREAM_END`, at the peer's EOF, at a frame cut short (the
+    launcher died mid-frame: its fragment is dropped, as
+    :func:`read_deck_frame` drops one) and at a malformed frame line. A
+    stream whose first line carries no tag is the unframed wire, read through
+    to EOF, as a hand-driven ``nc -U`` speaks it.
+
+    Nothing is read until the first ``readinto``: the NEC-2 server greets
+    before it reads, and a client may wait for the greeting before it sends.
+    Each ``readinto`` returns at most one frame's bytes, so a reader is
+    answered as soon as a frame is in rather than when its buffer is full.
+    """
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self._framed: bool | None = None
+        self._body = b""
+        self._done = False
+
+    def readable(self) -> bool:
+        return True
+
+    def _next(self) -> None:
+        line = self._stream.readline(DECK_FRAME_LINE_MAX)
+        size = _frame_size(line)
+        if self._framed is None:
+            self._framed = size is not None
+            if not self._framed:
+                self._body = line
+                return
+        if size is None or size <= 0:
+            self._done = True
+            return
+        body = self._stream.read(size)
+        if len(body) != size:
+            self._done = True
+            return
+        self._body = body
+
+    def readinto(self, buffer) -> int:
+        while not self._body:
+            if self._done:
+                return 0
+            if self._framed is False:
+                self._body = self._stream.read1(len(buffer))
+                if not self._body:
+                    self._done = True
+                    return 0
+                break
+            self._next()
+        count = min(len(buffer), len(self._body))
+        buffer[:count] = self._body[:count]
+        self._body = self._body[count:]
+        return count
 
 
 # An answer that carries a `.GMO` file starts with GMO_FRAME_START, then the

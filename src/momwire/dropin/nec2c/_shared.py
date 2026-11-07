@@ -58,9 +58,12 @@ Failure modes, and where each one stops:
 
 from __future__ import annotations
 
+import io
 import os
 import signal
 import sys
+
+import momwire_serve_client as _mech
 
 from ...serve._server import ConnLog, serve_forever, take_value
 from ._portal import _SELFTEST_DECKS, configure_engine, resident_loop
@@ -73,7 +76,16 @@ def _connection(conn, number: int, log, solve_lock) -> None:
     wrapping and the session)."""
     rx = tx = None
     try:
-        rx = conn.makefile("r", encoding="utf-8", errors="replace")
+        # momwire#1831: the client streams stdin as length frames and ends it
+        # with the empty frame, never with a half-close (macOS can lose that
+        # EOF, momwire#1822). `FrameReader` turns the frames back into the
+        # byte stream the session reads; an unframed stream reads to EOF as
+        # before. Decoded as `makefile("r", encoding=..., errors=...)` does.
+        rx = io.TextIOWrapper(
+            io.BufferedReader(_mech.FrameReader(conn.makefile("rb"))),
+            encoding="utf-8",
+            errors="replace",
+        )
         tx = conn.makefile("w", encoding="utf-8", errors="replace", newline="\n")
         resident_loop(rx, tx, ConnLog(log, f"[conn {number}] "), solve_lock)
     finally:
