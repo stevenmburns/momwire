@@ -13,6 +13,10 @@
 # `src/momwire/_features.py` carries the same ids and descriptions in the same
 # order (an installed wheel reads no TOML, and the floor is Python 3.10, which
 # has no tomllib); `tests/test_features_registry.py` holds the two equal.
+#
+# A pull request's required checks are chosen from this file: re-ranking a
+# level or moving a job here changes them, with no GitHub setting to edit
+# (`scripts/support_matrix.py`, the `required` check; support/README.md).
 
 [[level]]
 id = "ak-linux-avx2"
@@ -97,6 +101,7 @@ jobs = [
 [unassigned]
 "ci.yml:changes" = "path filter"
 "ci.yml:lint" = "ruff; not a platform"
+"required.yml:required" = "the one check branch protection names; waits on the jobs scripts/support_matrix.py selects"
 "eznec-dropin.yml:changes" = "path filter"
 "eznec-dropin.yml:release" = "attaches the drop-in to a release"
 "standalone.yml:linux-artifact" = "builds every Linux executable (all four bases); the exe levels' jobs test what it builds"

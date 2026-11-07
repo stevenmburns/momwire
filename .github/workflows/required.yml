@@ -1,0 +1,71 @@
+name: required
+
+# The ONE check branch protection on main names. It passes exactly when the
+# jobs this pull request needs have passed, and those are chosen per PR by
+# scripts/support_matrix.py from support/hierarchy.toml, the feature registry
+# (src/momwire/_features.py) and the diff -- so re-ranking a level or adding a
+# feature never means editing GitHub settings. support/README.md has the rules.
+#
+# Why a separate workflow that polls, not a `needs:` job: the jobs it waits on
+# live in several workflows (ci.yml, standalone.yml, site.yml) and `needs:`
+# cannot cross a workflow; a `workflow_run` trigger reports on the default
+# branch, not on the PR's head commit, so it could never be a required check.
+#
+# It builds nothing and imports nothing from momwire: the registry is read
+# with `ast`, the workflows with PyYAML.
+#
+# After re-running a failed job, re-run this one too: it gave its verdict
+# when that job failed.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: read   # the check runs of the head commit
+  actions: read  # which workflow each check suite belongs to
+
+# A newer push supersedes the older head commit's verdict.
+concurrency:
+  group: required-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  required:
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
+    # The waiter's own deadline is 150 min (scripts/support_matrix.py wait);
+    # the longest PR lane, standalone.yml, took a median 65 min wall time
+    # over its last 25 successful PR runs (43-80 min, two queue outliers at
+    # 122 and 168). This bound only catches a hung waiter.
+    timeout-minutes: 165
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # The diff needs history back to the merge base; trees only, the
+          # one blob read (the base registry) is fetched on demand.
+          fetch-depth: 0
+          filter: blob:none
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml==6.0.3
+      - name: select the required jobs
+        run: >
+          python scripts/support_matrix.py select
+          --base ${{ github.event.pull_request.base.sha }}
+          --head ${{ github.event.pull_request.head.sha }}
+          --out selection.json
+      - name: wait for them
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          python scripts/support_matrix.py wait
+          --selection selection.json
+          --repo ${{ github.repository }}
+          --sha ${{ github.event.pull_request.head.sha }}
+          --own-run-id ${{ github.run_id }}
+          --interval 180
+          --appear-minutes 30
+          --deadline-minutes 150

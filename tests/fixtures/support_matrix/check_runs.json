@@ -1,0 +1,411 @@
+{
+ "_source": "check runs of momwire 6d99dc315 (push to main) and 1c0adb5f3 (PR #1833 head), from GET /repos/stevenmburns/momwire/commits/<sha>/check-runs joined to /actions/runs on check_suite_id; captured 2026-11-06 for tests/test_support_matrix.py",
+ "check_runs": [
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "changes",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "lint",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-crossgate",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-integration",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-macos",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-memgate",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-pynec",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "ci.yml",
+   "name": "test-slow (${{ matrix.shard }}/3)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "site.yml",
+   "name": "build",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "attach the Linux executable to the release",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "attach the Windows executables to the release (preview)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "attach the macOS executables to the release (preview)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "linux",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "linux-artifact",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "linux-nec42",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "linux-nec42-bs",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "macos-nopython",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "windows",
+   "conclusion": "success"
+  },
+  {
+   "sha": "1c0adb5f3",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "windows-nopython",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "changes",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "lint",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-crossgate",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-integration",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-macos",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-memgate",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-pynec",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-slow (1/3)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-slow (2/3)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "ci.yml",
+   "name": "test-slow (3/3)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "eznec-dropin.yml",
+   "name": "attach drop-in to release",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "eznec-dropin.yml",
+   "name": "changes",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "eznec-dropin.yml",
+   "name": "freeze + smoke (windows, standard)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "eznec-dropin.yml",
+   "name": "freeze + smoke (windows, win7)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "eznec-dropin.yml",
+   "name": "resident transport smoke (windows)",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "site.yml",
+   "name": "build",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "attach the macOS executables to the release (preview)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "linux",
+   "conclusion": null
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "linux-artifact",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "linux-nec42",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "linux-nec42-bs",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "macos-nopython",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "windows",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "standalone.yml",
+   "name": "windows-nopython",
+   "conclusion": null
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "Linux cross-engine (PyNEC + momwire wheel, shared libgomp)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "Windows cross-engine (PyNEC + momwire wheel, distinct OpenMP runtimes)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "attach wheels + sdist to release",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "changes",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "macOS cross-engine (PyNEC + momwire wheel, shared libomp)",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "publish to PyPI",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "sdist",
+   "conclusion": "skipped"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "smoke 3.12 wheel on macos-15",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "smoke 3.12 wheel on windows-latest",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "wheels macos-15",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "wheels ubuntu-latest",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "wheels windows-latest",
+   "conclusion": "success"
+  },
+  {
+   "sha": "6d99dc315",
+   "event": "push",
+   "workflow": "wheels.yml",
+   "name": "which pythons to smoke",
+   "conclusion": "success"
+  }
+ ]
+}
