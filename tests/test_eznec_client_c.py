@@ -532,6 +532,7 @@ def test_the_key_is_the_d2_digest_and_not_a_private_hash(
             f"eznec.{major}.{minor}",
             os.path.realpath(str(bundle / ENGINE_NAME)),
             repr(900.0),
+            mech.WIRE,
             basis_element,
         ]
     )
@@ -643,6 +644,7 @@ def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
             f"eznec.{major}.{minor}",
             os.path.realpath(str(bundle / ENGINE_NAME)),
             repr(900.0),
+            mech.WIRE,
             "dialect=nec4",
             "basis=sinusoidal",
         ]
