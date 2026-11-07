@@ -5,7 +5,8 @@
    "kind": "exe-declines",
    "exe": "nec42-sinusoidal",
    "match": "tests/fixtures/transmitted_*/m3_*.nec",
-   "note": "pre-existing at the nightly's first run (2026-11-06, main 78244662): the C++ sinusoidal route declines a mixed deck with several radii (the class kernels read one) that Python serves. No issue yet: file one and name it here."
+   "note": "pre-existing at the nightly's first run (2026-11-06, main 78244662): the C++ sinusoidal route declines a mixed deck with several radii (the class kernels read one) that Python serves. Moderate; retired by momwire#1839.",
+   "issue": 1839
   }
  ]
 }
