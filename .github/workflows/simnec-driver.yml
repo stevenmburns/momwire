@@ -44,7 +44,7 @@ jobs:
             libomp: yes
           - os: macos-15
             libomp: no
-          - os: ubuntu-latest
+          - os: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
           - os: windows-latest
     steps:
       - uses: actions/checkout@v7
