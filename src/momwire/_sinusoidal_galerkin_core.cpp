@@ -2553,6 +2553,252 @@ galerkin_far_fill_cplx_impl(
     return std::make_tuple(out_const, out_sin, out_cos);
 }
 
+// ---------------------------------------------------------------------------
+// The POINT-MATCHED complex field tensor on the staged rows (momwire#1849,
+// the opt-in feature `point_cplx_staged`).
+//
+// The point-matched sinusoidal basis fills a buried class with
+// `sinusoidal_field_tensor_cplx` (`_sinusoidal_core.cpp`): per (observer,
+// source) pair, scalar complex std::exp / std::sin at both endpoints and at
+// every source node, ~0.9 us a pair -- 12.6 s of a 16.5 s nec42-sinusoidal
+// solve of a 48-radial buried vertical (2,598 buried segments, Rocketlake).
+// Its per-pair arithmetic is the complex Galerkin far fill's (its own note
+// says so: that body with the test reduction removed, one observer one row),
+// so this runs `sg_cplx_tile` -- stages A to C, the libmvec sweep included --
+// at each observer and keeps the tile's projected-field rows (SGC_PC*) as the
+// tensor's row, instead of reducing them over test nodes (stage R).
+//
+// Both shape sets, as the scalar kernel: `folded` the #205 cos k(xi) - 1 the
+// staged rows assemble, else the literal cosine, formed after the tile from
+// its endpoint rows. `src_h` is the source FULL length, as `sinusoidal_field_tensor_cplx`
+// takes it; the rows take the half length. The per-source scalars and per-pair
+// constants are formed exactly as `galerkin_far_fill_cplx_impl` forms them.
+//
+// NOT bit-identical to `sinusoidal_field_tensor_cplx`: the sweep's exp / sin
+// and the hoisted (sin kH - kH)/k round differently from the scalar complex
+// libm calls, at the last bits. It is bit-identical to itself at any thread
+// count and source position (the sweep is padded per tile).
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+point_field_tensor_cplx_staged_impl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    std::complex<double> k, std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    bool folded,
+    uintptr_t cancel_flag
+) {
+    typedef std::complex<double> C;
+    const C J(0.0, 1.0);
+
+    auto oc = obs_centers.unchecked<2>();
+    auto ot = obs_tangents.unchecked<2>();
+    auto ar = obs_radius.unchecked<1>();
+    auto sc = src_centers.unchecked<2>();
+    auto st = src_tangents.unchecked<2>();
+    auto sh = seg_h.unchecked<1>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+
+    if (oc.shape(1) != 3 || ot.shape(1) != 3 ||
+        sc.shape(1) != 3 || st.shape(1) != 3) {
+        throw std::runtime_error("center/tangent arrays must have shape (N, 3)");
+    }
+    if (oc.shape(0) != ot.shape(0) || oc.shape(0) != ar.shape(0)) {
+        throw std::runtime_error(
+            "obs_centers, obs_tangents and obs_radius must have matching M");
+    }
+    if (sc.shape(0) != st.shape(0) || sc.shape(0) != sh.shape(0)) {
+        throw std::runtime_error("src arrays must all have matching N");
+    }
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    if (k.imag() > 0.0) {
+        throw std::runtime_error(
+            "complex k with Im k > 0: e^{+jwt} requires Im k <= 0 so that "
+            "e^{-jkR} decays");
+    }
+
+    const size_t M = oc.shape(0);
+    const size_t N = sc.shape(0);
+    const size_t n_qp = glt.shape(0);
+
+    py::array_t<std::complex<double>> Phi_const({M, N});
+    py::array_t<std::complex<double>> Phi_sin({M, N});
+    py::array_t<std::complex<double>> Phi_cos({M, N});
+    C *pc = Phi_const.mutable_data();
+    C *ps = Phi_sin.mutable_data();
+    C *pco = Phi_cos.mutable_data();
+
+    py::gil_scoped_release release;
+
+    // `galerkin_far_fill_cplx_impl`'s per-source scalars, at H = h/2.
+    std::vector<double> H_n(N);
+    std::vector<double> soa(16 * N);
+    double *p = soa.data();
+    double *sx = p, *sy = p + N, *sz = p + 2 * N;
+    double *tx = p + 3 * N, *ty = p + 4 * N, *tz = p + 5 * N;
+    double *sin_r = p + 6 * N, *sin_i = p + 7 * N;
+    double *cos_r = p + 8 * N, *cos_i = p + 9 * N;
+    double *cm1_r = p + 10 * N, *cm1_i = p + 11 * N;
+    double *smk_r = p + 12 * N, *smk_i = p + 13 * N;
+    double *ikh_r = p + 14 * N, *ikh_i = p + 15 * N;
+    for (size_t n = 0; n < N; n++) {
+        H_n[n] = 0.5 * sh(n);
+        C kH = k * H_n[n];
+        C sin_kH = std::sin(kH);
+        C cos_kH = std::cos(kH);
+        C hs = std::sin(0.5 * kH);
+        C cos_kH_m1 = -2.0 * hs * hs;
+        C smarg_kH_k = sin_minus_arg(kH) / k;
+        C inv_kH = 1.0 / kH;
+        sx[n] = sc(n, 0); sy[n] = sc(n, 1); sz[n] = sc(n, 2);
+        tx[n] = st(n, 0); ty[n] = st(n, 1); tz[n] = st(n, 2);
+        sin_r[n] = sin_kH.real(); sin_i[n] = sin_kH.imag();
+        cos_r[n] = cos_kH.real(); cos_i[n] = cos_kH.imag();
+        cm1_r[n] = cos_kH_m1.real(); cm1_i[n] = cos_kH_m1.imag();
+        smk_r[n] = smarg_kH_k.real(); smk_i[n] = smarg_kH_k.imag();
+        ikh_r[n] = inv_kH.real(); ikh_i[n] = inv_kH.imag();
+    }
+    std::vector<double> glt_v(n_qp), glw_v(n_qp), gl_step(n_qp);
+    std::vector<char> gl_near2(n_qp);
+    double w_hi = 0.0, w_lo = 0.0;
+    for (size_t q = 0; q < n_qp; q++) {
+        glt_v[q] = glt(q);
+        glw_v[q] = glw(q);
+        gl_near2[q] = glt_v[q] >= 0.0;
+        gl_step[q] = gl_near2[q] ? (1.0 - glt_v[q]) : -(1.0 + glt_v[q]);
+        (gl_near2[q] ? w_hi : w_lo) += glw_v[q];
+    }
+    w_hi -= 1.0;
+    w_lo -= 1.0;
+
+    const C four_pi_k = 4.0 * M_PI * k;
+    const C pref_z = eta / four_pi_k;
+    const C pref_rho_const = -eta / four_pi_k;
+
+    SgCplxRows rows{};
+    rows.N = N; rows.nq = 1; rows.n_qp = n_qp;
+    rows.oc = obs_centers.data(); rows.ot = obs_tangents.data();
+    rows.ar = obs_radius.data();
+    rows.sx = sx; rows.sy = sy; rows.sz = sz;
+    rows.tx = tx; rows.ty = ty; rows.tz = tz;
+    rows.H = H_n.data();
+    rows.sin_r = sin_r; rows.sin_i = sin_i;
+    rows.cos_r = cos_r; rows.cos_i = cos_i;
+    rows.cm1_r = cm1_r; rows.cm1_i = cm1_i;
+    rows.smk_r = smk_r; rows.smk_i = smk_i;
+    rows.ikh_r = ikh_r; rows.ikh_i = ikh_i;
+    rows.glt = glt_v.data(); rows.glw = glw_v.data();
+    rows.gl_step = gl_step.data(); rows.gl_near2 = gl_near2.data();
+    rows.w_hi = w_hi; rows.w_lo = w_lo;
+    rows.k = k; rows.k_sq = k * k;
+    rows.Jk = J * k;
+    rows.Jpz = J * pref_z;
+    rows.mJpz = -J * pref_z;
+    rows.Jprc = J * pref_rho_const;
+    rows.mk = -k;
+    rows.prc = pref_rho_const;
+    rows.w = nullptr;
+
+    int nt = 1;
+#ifdef _OPENMP
+    nt = omp_get_max_threads();
+#endif
+    std::vector<SgCplxScratch> scratch(nt);
+
+    const size_t S = n_qp + 5;
+    const size_t Nv = SGC_TILE_SRC;
+    const size_t Pv = S * Nv;
+
+    MW_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; m++) {
+        MW_CANCEL_POLL();
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        SgCplxScratch &sc_ = scratch[tid];
+        // `sg_cplx_rows_staged`'s scratch layout, aligned the same way.
+        if (sc_.tab.size() < 5 * Pv + 4) sc_.tab.resize(5 * Pv + 4, 0.0);
+        double *tab = sc_.tab.data();
+        tab += ((32 - (reinterpret_cast<uintptr_t>(tab) & 31)) & 31) / sizeof(double);
+        const size_t n_rows = (size_t)SGC_N_ROWS * Nv + n_qp * Nv;
+        if (sc_.rows.size() < n_rows) sc_.rows.resize(n_rows, 0.0);
+        double *R[SGC_N_ROWS];
+        for (int r = 0; r < SGC_N_ROWS; r++) R[r] = sc_.rows.data() + (size_t)r * Nv;
+        double *r0q_inv = sc_.rows.data() + (size_t)SGC_N_ROWS * Nv;
+        const double *pcr = R[SGC_PCR], *pci = R[SGC_PCI], *psr = R[SGC_PSR];
+        const double *psi = R[SGC_PSI], *pcor = R[SGC_PCOR], *pcoi = R[SGC_PCOI];
+
+        const double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
+        const double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
+        const double a_sq = ar(m) * ar(m);
+        for (size_t nb = 0; nb < N; nb += Nv) {
+            const size_t ne = std::min(N, nb + Nv), ntile = ne - nb;
+            SgCplxRows Pt = rows;
+            Pt.N = ntile;
+            Pt.sx += nb; Pt.sy += nb; Pt.sz += nb;
+            Pt.tx += nb; Pt.ty += nb; Pt.tz += nb;
+            Pt.H += nb;
+            Pt.sin_r += nb; Pt.sin_i += nb; Pt.cos_r += nb; Pt.cos_i += nb;
+            Pt.cm1_r += nb; Pt.cm1_i += nb; Pt.smk_r += nb; Pt.smk_i += nb;
+            Pt.ikh_r += nb; Pt.ikh_i += nb;
+            sg_cplx_tile(Pt, cmx, cmy, cmz, tmx, tmy, tmz, a_sq, Nv, tab, R,
+                         r0q_inv);
+            C *rc = pc + m * N + nb, *rs = ps + m * N + nb, *rco = pco + m * N + nb;
+            for (size_t n = 0; n < ntile; n++) {
+                rc[n] = C(pcr[n], pci[n]);
+                rs[n] = C(psr[n], psi[n]);
+                rco[n] = C(pcor[n], pcoi[n]);
+            }
+            if (!folded) {
+                // The LITERAL cosine (the scalar kernel's `!folded` arm): the
+                // const and sine rows do not depend on the cosine's form, and
+                // this one is built from the tile's own endpoint rows, which
+                // hold every value it reads.
+                const double *rho_a = R[SGC_RHO], *dz1_a = R[SGC_DZ1];
+                const double *dz2_a = R[SGC_DZ2], *r01_a = R[SGC_R01];
+                const double *r02_a = R[SGC_R02], *ir01_a = R[SGC_IR01];
+                const double *ir02_a = R[SGC_IR02], *td_a = R[SGC_TD];
+                const double *rpf_a = R[SGC_RPF];
+                const double *ef2r = R[SGC_EF2R], *ef2i = R[SGC_EF2I];
+                const double *ef1r = R[SGC_EF1R], *ef1i = R[SGC_EF1I];
+                for (size_t n = 0; n < ntile; n++) {
+                    const size_t g = nb + n;
+                    C G0_2 = C(ef2r[n], ef2i[n]) * ir02_a[n];
+                    C G0_1 = C(ef1r[n], ef1i[n]) * ir01_a[n];
+                    C one_jkr_2 = (1.0 + J * k * r02_a[n]) * (ir02_a[n] * ir02_a[n]);
+                    C one_jkr_1 = (1.0 + J * k * r01_a[n]) * (ir01_a[n] * ir01_a[n]);
+                    double dz2 = dz2_a[n], dz1 = dz1_a[n];
+                    C sin2(sin_r[g], sin_i[g]), cos2(cos_r[g], cos_i[g]);
+                    C sin1 = -sin2, cos1 = cos2;
+                    C inner_2 = 1.0 - dz2 * dz2 * one_jkr_2;
+                    C inner_1 = 1.0 - dz1 * dz1 * one_jkr_1;
+                    C pref_rho = pref_rho_const / rho_a[n];
+                    C bcos2 = G0_2 * (-k * dz2 * sin2 + inner_2 * cos2);
+                    C bcos1 = G0_1 * (-k * dz1 * sin1 + inner_1 * cos1);
+                    C Erho_cos = J * pref_rho * (bcos2 - bcos1);
+                    C bczin2 = G0_2 * (-k * sin2 - dz2 * one_jkr_2 * cos2);
+                    C bczin1 = G0_1 * (-k * sin1 - dz1 * one_jkr_1 * cos1);
+                    C Ez_cos = J * pref_z * (bczin2 - bczin1);
+                    rco[n] = td_a[n] * Ez_cos + rpf_a[n] * Erho_cos;
+                }
+            }
+        }
+    }
+    MW_THROW_IF_ABORTED();
+    return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
+}
+
 // ===========================================================================
 // The entry points: the bound functions, by name (`_sinusoidal_galerkin_core.h`).
 
@@ -2664,6 +2910,23 @@ sinusoidal_galerkin_far_fill_cplx(
     const GalerkinFoldBlock *fold,
     bool reference) {
     return ::galerkin_far_fill_cplx_impl(obs_centers, obs_tangents, obs_radius, src_centers, src_tangents, src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, fold, reference);
+}
+
+std::tuple<py::array_t<std::complex<double>>, py::array_t<std::complex<double>>, py::array_t<std::complex<double>>>
+point_field_tensor_cplx_staged(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    std::complex<double> k,
+    std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    bool folded,
+    uintptr_t cancel_flag) {
+    return ::point_field_tensor_cplx_staged_impl(obs_centers, obs_tangents, obs_radius, src_centers, src_tangents, seg_h, k, eta, gl_t, gl_w, folded, cancel_flag);
 }
 
 std::pair<unsigned long long, unsigned long long> sg_real_far_fill_calls() {

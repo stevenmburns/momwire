@@ -179,6 +179,24 @@ sinusoidal_galerkin_far_fill_cplx(
     const GalerkinFoldBlock *fold = nullptr,
     bool reference = false);
 
+// The point-matched complex field tensor (`sinusoidal_field_tensor_cplx`'s
+// arguments) on the complex fill's staged rows
+// (momwire#1849, the opt-in feature `point_cplx_staged`).
+std::tuple<nd::array_t<std::complex<double>>, nd::array_t<std::complex<double>>, nd::array_t<std::complex<double>>>
+point_field_tensor_cplx_staged(
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> obs_centers,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> obs_tangents,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> obs_radius,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> src_centers,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> src_tangents,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> seg_h,
+    std::complex<double> k,
+    std::complex<double> eta,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> gl_t,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> gl_w,
+    bool folded,
+    uintptr_t cancel_flag = 0);
+
 // (staged, reference): how many reduced (EK-off) real fills, and how many
 // complex fills, each body has served in this process (perf item 9,
 // momwire#1224). The bodies' outputs are bit-identical, so this is the only

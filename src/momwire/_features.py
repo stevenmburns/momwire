@@ -183,6 +183,19 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_transmitted_anchors_1847.py",
             ),
         ),
+        # The point-matched sinusoidal fill's complex-k field tensor on the
+        # complex Galerkin fill's staged rows (momwire#1849): a new C++ path,
+        # close to the scalar kernel and not bit-identical to it.
+        Feature(
+            name="point_cplx_staged",
+            reach=1,
+            env="MOMWIRE_X_POINT_CPLX_STAGED",
+            kind="native",
+            issue=1849,
+            since="2026-11-07",
+            kwarg="point_cplx_staged",
+            paths=("tests/test_point_cplx_staged_1849.py",),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(

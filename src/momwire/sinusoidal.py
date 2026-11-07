@@ -89,6 +89,11 @@ _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor
 _HAVE_FIELD_TENSOR_CPLX = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_cplx"
 )
+# momwire#1849 (the opt-in feature `point_cplx_staged`): the complex twin's
+# folded tensor on the complex Galerkin fill's staged rows.
+_HAVE_POINT_CPLX_STAGED = _acc is not None and hasattr(
+    _acc, "point_field_tensor_cplx_staged"
+)
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_refl"
 )
@@ -1180,6 +1185,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cancel=None,
         junction_rule="nec2",
         transmitted_anchors=None,
+        point_cplx_staged=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1283,6 +1289,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (`_features`, reach 1); off is the exact grid, bit for bit.
         self._transmitted_anchors = _features.enabled(
             "transmitted_anchors", transmitted_anchors
+        )
+        # momwire#1849: a buried class's own block (complex k, folded shape)
+        # on the staged complex rows. None defers to
+        # MOMWIRE_X_POINT_CPLX_STAGED (`_features`, reach 1, native); off is
+        # `sinusoidal_field_tensor_cplx`, bit for bit.
+        self._point_cplx_staged = _features.enabled(
+            "point_cplx_staged", point_cplx_staged
         )
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -3116,6 +3129,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if self._uniform_radius is not None
                 else np.ascontiguousarray(self._seg_radius(geom)[win], dtype=np.float64)
             )
+            if self._point_cplx_staged and _HAVE_POINT_CPLX_STAGED:
+                return _acc.point_field_tensor_cplx_staged(
+                    obs_c,
+                    np.ascontiguousarray(seg_t[win], dtype=np.float64),
+                    a_obs,
+                    np.ascontiguousarray(src_c, dtype=np.float64),
+                    np.ascontiguousarray(src_t, dtype=np.float64),
+                    np.ascontiguousarray(seg_h, dtype=np.float64),
+                    complex(k),
+                    complex(eta),
+                    gx,
+                    gw,
+                    cos_shape == "cos-1",
+                    self._cancel_flag,
+                )
             return _acc.sinusoidal_field_tensor_cplx(
                 obs_c,
                 np.ascontiguousarray(seg_t[win], dtype=np.float64),
