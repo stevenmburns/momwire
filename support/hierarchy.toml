@@ -36,8 +36,9 @@ id = "ak-linux-sse2"
 description = "momwire Python on Linux with the sse2 variant (pre-AVX2 CPUs)"
 # No CI job runs the Python test suite with the sse2 variant on Linux today:
 # standalone.yml forces sse2 only for the executables (and the launcher
-# comparisons around them). This level is certified by the nightly's sse2
-# rotation cells (rollout step 5, not built yet).
+# comparisons around them). This level is certified by the Skylake
+# nightly's sse2 rotation cells (scripts/nightly, not a GitHub workflow, so
+# no job is listed): sse2-T1, -T2 and -T4 each run one night in five.
 jobs = []
 
 [[level]]
