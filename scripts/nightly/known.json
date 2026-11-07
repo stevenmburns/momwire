@@ -1,0 +1,11 @@
+{
+ "about": "Findings the Skylake nightly has seen and accepted (scripts/nightly/README.md, 'The known list'). Each entry matches a finding by kind, and by fnmatch patterns on the deck label or sweep case id (match), the executable (exe) and the cell (cell); a missing pattern matches anything. A matched finding is reported as known and does not turn a night red. Say why in note, and name the issue that will retire it.",
+ "known": [
+  {
+   "kind": "exe-declines",
+   "exe": "nec42-sinusoidal",
+   "match": "tests/fixtures/transmitted_*/m3_*.nec",
+   "note": "pre-existing at the nightly's first run (2026-11-06, main 78244662): the C++ sinusoidal route declines a mixed deck with several radii (the class kernels read one) that Python serves. No issue yet: file one and name it here."
+  }
+ ]
+}

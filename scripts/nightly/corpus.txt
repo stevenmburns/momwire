@@ -1,0 +1,70 @@
+# The Skylake nightly's committed corpus (scripts/nightly/audit.py).
+#
+# "<dialects> <directory>": every *.nec and *.deck directly in the directory
+# (not recursive), from the repo root. nec5 decks go to the nec5-bspline
+# and nec5-razor-2p executables, nec42 decks to nec42-bspline and
+# nec42-sinusoidal. Every line names an in-repo fixture directory only: a deck the nightly reports by name is one
+# anyone can open. tests/test_skylake_nightly.py fails if a line names a
+# directory that holds no deck.
+nec5,nec42 scripts/core_split/bs2_stream_decks
+nec5,nec42 scripts/core_split/bspline_chunked_decks
+nec5,nec42 scripts/core_split/bspline_exact_decks
+nec5,nec42 scripts/core_split/nx_decks
+nec5,nec42 tests/fixtures/bspline_printout_buried
+nec5,nec42 tests/fixtures/bspline_printout_crossing
+nec5,nec42 tests/fixtures/bspline_printout_ek
+nec5,nec42 tests/fixtures/bspline_printout_kcl_sym
+nec5,nec42 tests/fixtures/buried_grazing_1672
+nec5,nec42 tests/fixtures/eznec_crossing_source_1282
+nec5,nec42 tests/fixtures/eznec/decks
+nec5,nec42 tests/fixtures/eznec_endcode_1092
+nec5,nec42 tests/fixtures/eznec_exact_buried_1619
+nec5,nec42 tests/fixtures/eznec_fr_step_1508
+nec5,nec42 tests/fixtures/eznec_gyrator_1134
+nec5,nec42 tests/fixtures/eznec_ld01_1085
+nec5,nec42 tests/fixtures/eznec_ld23_1088
+nec5,nec42 tests/fixtures/eznec_ld5_1082
+nec5,nec42 tests/fixtures/eznec_ld5_virtual_1096
+nec5,nec42 tests/fixtures/eznec_load_probes_1110
+nec5,nec42 tests/fixtures/eznec_multi_run_1237
+nec5,nec42 tests/fixtures/eznec_multi_voltage_network_1105
+nec42 tests/fixtures/eznec_nec42
+nec42 tests/fixtures/eznec_nec42/multisource
+nec42 tests/fixtures/eznec_nec42/probes
+nec42 tests/fixtures/eznec_nec42/refused
+nec5,nec42 tests/fixtures/eznec_ne_spherical_1257
+nec5,nec42 tests/fixtures/eznec_one_field_ge_1116
+nec5,nec42 tests/fixtures/eznec_phantom_1139
+nec5,nec42 tests/fixtures/eznec_phantom_1580
+nec5,nec42 tests/fixtures/eznec_probe_ex_1099
+nec5,nec42 tests/fixtures/eznec_simnec_1230
+nec5,nec42 tests/fixtures/eznec_split_1281
+nec5,nec42 tests/fixtures/eznec_xnda_1503
+nec5,nec42 tests/fixtures/lazy_above
+nec5,nec42 tests/fixtures/momwire_times
+nec5,nec42 tests/fixtures/near_buried_1653
+nec5,nec42 tests/fixtures/nec2_ga_gh_1651
+nec5,nec42 tests/fixtures/nec2_symmetry
+nec42 tests/fixtures/nec42_junction_1668/decks
+nec42 tests/fixtures/nec42_radius_step_1644/decks
+nec5,nec42 tests/fixtures/nec5_4nec2_cards_1669
+nec5,nec42 tests/fixtures/nec5_sequence
+nec5,nec42 tests/fixtures/nec5_short_cards
+nec5,nec42 tests/fixtures/nec_cw_catenary_1697
+nec5,nec42 tests/fixtures/nec_portal
+nec5,nec42 tests/fixtures/razor_printout_3a
+nec5,nec42 tests/fixtures/razor_printout_crossing
+nec5,nec42 tests/fixtures/razor_printout_ek
+nec5,nec42 tests/fixtures/razor_printout_ld
+nec5,nec42 tests/fixtures/razor_printout_ne
+nec5,nec42 tests/fixtures/razor_printout_net
+nec5,nec42 tests/fixtures/razor_printout_nx
+nec5,nec42 tests/fixtures/razor_printout_rp
+nec5,nec42 tests/fixtures/razor_printout_small
+nec5,nec42 tests/fixtures/razor_printout_somm
+nec5,nec42 tests/fixtures/razor_printout_wl
+nec5,nec42 tests/fixtures/refusal_coverage_0800
+nec5,nec42 tests/fixtures/sg_two_radius_1630
+nec5,nec42 tests/fixtures/somm_far_1258
+nec5,nec42 tests/fixtures/transmitted_mixed
+nec5,nec42 tests/fixtures/transmitted_store
