@@ -1,12 +1,12 @@
 # momwire-razor2p: `momwire-nec5-razor-2p` as one native executable
 # (momwire_razor2p.cpp's header says what it does). -DMW_EXE_BASIS=bspline_nec5 with
-# MW_EXE_NO_PYTHON builds `momwire-bs2-standalone`, `momwire-nec5-bspline`'s
+# MW_EXE_NO_PYTHON builds `momwire-nec5-bspline-standalone`, `momwire-nec5-bspline`'s
 # twin, from the same cores (momwire#1517). -DMW_EXE_BASIS=sin42 builds the
 # NEC-4.2 slot's `momwire-nec42-sinusoidal` (momwire#1607 B4b): the hybrid,
 # or with MW_EXE_NO_PYTHON `momwire-nec42-sinusoidal-standalone`.
 # -DMW_EXE_BASIS=bspline_nec42 with
-# MW_EXE_NO_PYTHON builds `momwire-nec42-standalone`, the slot's default
-# launcher `momwire-nec42` (bs2, momwire#1607 Phase C2).
+# MW_EXE_NO_PYTHON builds `momwire-nec42-bspline-standalone`, the slot's default
+# launcher `momwire-nec42` (nec42-bspline, momwire#1607 Phase C2).
 #
 #   cmake -S standalone -B build-exe -G Ninja \
 #         -DMW_OPENBLAS_LIB=/path/to/libmwxp.a \
@@ -24,7 +24,7 @@
 # is opened at run time only for a deck the C++ route declines. The Python
 # found here must be the minor version the momwire environment runs.
 #
-# -DMW_EXE_NO_PYTHON=ON builds `momwire-razor2p-standalone` instead
+# -DMW_EXE_NO_PYTHON=ON builds `momwire-nec5-razor-2p-standalone` instead
 # (momwire#1512): no embedded interpreter, no Python headers, no version
 # check against an installed momwire; the launcher layer is C++
 # (launcher.cpp), and a deck the C++ route declines is a refusal printout
@@ -57,7 +57,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it" OFF)
+option(MW_EXE_NO_PYTHON "build momwire-nec5-razor-2p-standalone, with no Python in it" OFF)
 # Which formulation the executable answers for (momwire#1517 Phase A): razor2p
 # (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
 # route_bs2.cpp, no-Python builds only). Both from the same cores.
@@ -367,7 +367,7 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")
-  set(MW_EXE momwire-bs2-standalone)
+  set(MW_EXE momwire-nec5-bspline-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
   target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
@@ -381,7 +381,7 @@ if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec42")
-  set(MW_EXE momwire-nec42-standalone)
+  set(MW_EXE momwire-nec42-bspline-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
   target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
@@ -411,7 +411,7 @@ elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sin42")
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON)
-  set(MW_EXE momwire-razor2p-standalone)
+  set(MW_EXE momwire-nec5-razor-2p-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
   target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})

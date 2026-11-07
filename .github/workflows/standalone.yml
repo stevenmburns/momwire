@@ -270,41 +270,41 @@ jobs:
           R=momwire-nec5-linux-x86_64
           for v in avx2 sse2; do
             mkdir -p build-$v
-            cp $R/momwire-nec5-razor2p-linux-$v build-$v/momwire-razor2p-standalone
-            cp $R/momwire-nec5-bs2-linux-$v build-$v/momwire-bs2-standalone
+            cp $R/momwire-nec5-razor2p-linux-$v build-$v/momwire-nec5-razor-2p-standalone
+            cp $R/momwire-nec5-bs2-linux-$v build-$v/momwire-nec5-bspline-standalone
           done
-          ldd build-avx2/momwire-razor2p-standalone
+          ldd build-avx2/momwire-nec5-razor-2p-standalone
       # The picking script: the build this runner's CPU runs (avx2), and the
       # forced sse2, each the very binary's bytes.
       - name: the picking script
         run: |
           R=momwire-nec5-linux-x86_64
           D=tests/fixtures/razor_printout_3a/node_gap_two_sources.nec
-          test "$($R/momwire-nec5-razor2p-linux -version)" = "$(build-avx2/momwire-razor2p-standalone -version)"
+          test "$($R/momwire-nec5-razor2p-linux -version)" = "$(build-avx2/momwire-nec5-razor-2p-standalone -version)"
           $R/momwire-nec5-razor2p-linux $D via-script.out
-          build-avx2/momwire-razor2p-standalone $D direct.out
+          build-avx2/momwire-nec5-razor-2p-standalone $D direct.out
           cmp via-script.out direct.out
           MOMWIRE_FORCE_VARIANT=sse2 $R/momwire-nec5-razor2p-linux $D via-script-sse2.out
-          build-sse2/momwire-razor2p-standalone $D direct-sse2.out
+          build-sse2/momwire-nec5-razor-2p-standalone $D direct-sse2.out
           cmp via-script-sse2.out direct-sse2.out
           for f in via-script.out via-script-sse2.out; do sed -n 2p $f; done
           # bs2's picking script (momwire#1517)
           $R/momwire-nec5-bs2-linux $D bs2-via-script.out
-          build-avx2/momwire-bs2-standalone $D bs2-direct.out
+          build-avx2/momwire-nec5-bspline-standalone $D bs2-direct.out
           cmp bs2-via-script.out bs2-direct.out
           MOMWIRE_FORCE_VARIANT=sse2 $R/momwire-nec5-bs2-linux $D bs2-via-script-sse2.out
-          build-sse2/momwire-bs2-standalone $D bs2-direct-sse2.out
+          build-sse2/momwire-nec5-bspline-standalone $D bs2-direct-sse2.out
           cmp bs2-via-script-sse2.out bs2-direct-sse2.out
       - name: contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:
-          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-razor2p-standalone
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-nec5-razor-2p-standalone
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
       - name: every fixture deck, as the launcher (avx2)
         run: |
           python scripts/core_split/exe_compare.py exe-linux-avx2.jsonl --standalone \
-            --exe build-avx2/momwire-razor2p-standalone \
+            --exe build-avx2/momwire-nec5-razor-2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 tests/fixtures
         env:
           OPENBLAS_NUM_THREADS: "1"
@@ -314,7 +314,7 @@ jobs:
       - name: every fixture deck, as the launcher (sse2)
         run: |
           python scripts/core_split/exe_compare.py exe-linux-sse2.jsonl --standalone \
-            --exe build-sse2/momwire-razor2p-standalone \
+            --exe build-sse2/momwire-nec5-razor-2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 tests/fixtures
         env:
           OPENBLAS_NUM_THREADS: "1"
@@ -327,7 +327,7 @@ jobs:
       - name: NX chains, as the launcher (avx2, anchors off)
         run: |
           python scripts/core_split/exe_compare.py exe-linux-nx.jsonl --standalone \
-            --exe build-avx2/momwire-razor2p-standalone \
+            --exe build-avx2/momwire-nec5-razor-2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
             scripts/core_split/nx_decks
         env:
@@ -341,12 +341,12 @@ jobs:
       - name: streaming call, as the launcher (avx2 and sse2, anchors off)
         run: |
           python scripts/core_split/stream_compare.py exe-linux-stream-avx2.jsonl \
-            --exe build-avx2/momwire-razor2p-standalone \
+            --exe build-avx2/momwire-nec5-razor-2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
             scripts/core_split/nx_decks/simnec_stream_*.nec
           MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/stream_compare.py \
             exe-linux-stream-sse2.jsonl \
-            --exe build-sse2/momwire-razor2p-standalone \
+            --exe build-sse2/momwire-nec5-razor-2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
             scripts/core_split/nx_decks/simnec_stream_*.nec
         env:
@@ -355,7 +355,7 @@ jobs:
       - name: bs2 contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:
-          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-bs2-standalone
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-nec5-bspline-standalone
           MOMWIRE_STANDALONE_BASIS: bspline
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
@@ -367,12 +367,12 @@ jobs:
         run: |
           L="$(command -v momwire-nec5-bspline)"
           python scripts/core_split/exe_compare.py exe-linux-bs2-avx2.jsonl --standalone \
-            --basis bspline --exe build-avx2/momwire-bs2-standalone --launcher "$L" \
+            --basis bspline --exe build-avx2/momwire-nec5-bspline-standalone --launcher "$L" \
             --workers 4 tests/fixtures scripts/core_split/nx_decks \
             scripts/core_split/bs2_stream_decks
           MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/exe_compare.py \
             exe-linux-bs2-sse2.jsonl --standalone --basis bspline \
-            --exe build-sse2/momwire-bs2-standalone --launcher "$L" \
+            --exe build-sse2/momwire-nec5-bspline-standalone --launcher "$L" \
             --workers 4 tests/fixtures scripts/core_split/nx_decks \
             scripts/core_split/bs2_stream_decks
         env:
@@ -382,11 +382,11 @@ jobs:
         run: |
           L="$(command -v momwire-nec5-bspline)"
           python scripts/core_split/stream_compare.py exe-linux-bs2-stream-avx2.jsonl \
-            --exe build-avx2/momwire-bs2-standalone --launcher "$L" --workers 4 \
+            --exe build-avx2/momwire-nec5-bspline-standalone --launcher "$L" --workers 4 \
             scripts/core_split/bs2_stream_decks
           MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/stream_compare.py \
             exe-linux-bs2-stream-sse2.jsonl \
-            --exe build-sse2/momwire-bs2-standalone --launcher "$L" --workers 4 \
+            --exe build-sse2/momwire-nec5-bspline-standalone --launcher "$L" --workers 4 \
             scripts/core_split/bs2_stream_decks
         env:
           OPENBLAS_NUM_THREADS: "1"
@@ -580,15 +580,15 @@ jobs:
           R=momwire-nec5-linux-x86_64
           for v in avx2 sse2; do
             mkdir -p build-nec42-bs-$v
-            cp $R/momwire-nec42-linux-$v build-nec42-bs-$v/momwire-nec42-standalone
+            cp $R/momwire-nec42-linux-$v build-nec42-bs-$v/momwire-nec42-bspline-standalone
           done
-          ldd build-nec42-bs-avx2/momwire-nec42-standalone
+          ldd build-nec42-bs-avx2/momwire-nec42-bspline-standalone
       # The picking script: the build this runner's CPU runs (avx2), and the
       # forced sse2, each the very binary's bytes (the time lines masked).
       - name: the picking script
         run: |
           P=momwire-nec5-linux-x86_64/momwire-nec42-linux
-          B=momwire-nec42-standalone
+          B=momwire-nec42-bspline-standalone
           D=tests/fixtures/eznec_nec42/0224_dipole-ex0.nec
           test "$($P -version)" = "$(build-nec42-bs-avx2/$B -version)"
           mask() { sed -E 's/^( +FILL=).*$/\1<t>/; s/^( RUN TIME =).*$/\1<t>/; s/^( +MATRIX .*TIME).*$/\1<t>/' "$1"; }
@@ -607,13 +607,13 @@ jobs:
       - name: no-Python build against the launcher (avx2)
         run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
         env:
-          MOMWIRE_NEC42_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-bs-avx2/momwire-nec42-standalone
+          MOMWIRE_NEC42_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-bs-avx2/momwire-nec42-bspline-standalone
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
       - name: no-Python build against the launcher (sse2)
         run: pytest -q -n 4 tests/test_standalone_nec42.py -rs
         env:
-          MOMWIRE_NEC42_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-bs-sse2/momwire-nec42-standalone
+          MOMWIRE_NEC42_STANDALONE_EXE: ${{ github.workspace }}/build-nec42-bs-sse2/momwire-nec42-bspline-standalone
           MOMWIRE_FORCE_VARIANT: sse2
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
@@ -818,8 +818,8 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_SECRET || '' }}
         run: >-
           python standalone/sign_windows.py
-          build-razor2p-avx2/momwire-razor2p-standalone.exe build-razor2p-sse2/momwire-razor2p-standalone.exe
-          build-bs2-avx2/momwire-bs2-standalone.exe build-bs2-sse2/momwire-bs2-standalone.exe
+          build-razor2p-avx2/momwire-nec5-razor-2p-standalone.exe build-razor2p-sse2/momwire-nec5-razor-2p-standalone.exe
+          build-bs2-avx2/momwire-nec5-bspline-standalone.exe build-bs2-sse2/momwire-nec5-bspline-standalone.exe
       # The zip's tree: the four programs under their release names with the
       # DLLs they load beside them -- numpy's OpenBLAS, the 14.44 toolset's own
       # VC++ runtime and LLVM's OpenMP runtime (the System32 copy, as
@@ -834,11 +834,15 @@ jobs:
           $D = "dist\momwire-nec5-windows-x64"
           $W7 = "$D\win7"
           New-Item -ItemType Directory -Force $W7 | Out-Null
+          # The CMake target (long form, momwire#1831) for each release file
+          # name; the file names change only at a release.
+          $target = @{ 'razor2p' = 'momwire-nec5-razor-2p-standalone'; 'bs2' = 'momwire-nec5-bspline-standalone' }
           foreach ($b in 'razor2p', 'bs2') {
+            $t = $target[$b]
             foreach ($v in 'avx2', 'sse2') {
-              Copy-Item "build-$b-$v\momwire-$b-standalone.exe" "$D\momwire-nec5-$b-$v.exe"
+              Copy-Item "build-$b-$v\$t.exe" "$D\momwire-nec5-$b-$v.exe"
             }
-            Copy-Item "build-$b-sse2\momwire-$b-standalone.exe" "$W7\momwire-nec5-$b-sse2.exe"
+            Copy-Item "build-$b-sse2\$t.exe" "$W7\momwire-nec5-$b-sse2.exe"
           }
           $crt = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
           $ucrt = Join-Path $env:UniversalCRTSdkDir "Redist\$($env:UCRTVersion)\ucrt\DLLs\x64"
@@ -1013,8 +1017,8 @@ jobs:
         run: |
           D=dist/momwire-nec5-macos-arm64
           mkdir -p $D
-          cp build-razor2p/momwire-razor2p-standalone $D/momwire-nec5-razor2p-macos
-          cp build-bs2/momwire-bs2-standalone $D/momwire-nec5-bs2-macos
+          cp build-razor2p/momwire-nec5-razor-2p-standalone $D/momwire-nec5-razor2p-macos
+          cp build-bs2/momwire-nec5-bspline-standalone $D/momwire-nec5-bs2-macos
           cp standalone/release/README-macos.txt $D/README.txt
           for f in $D/*; do
             file -b "$f" | grep -q Mach-O || continue

@@ -1,6 +1,6 @@
 """momwire-nec42-sinusoidal-standalone (standalone/, MW_EXE_BASIS=sin42,
 momwire#1607 B4b): the NEC-4.2 slot's sinusoidal launcher as one Python-free
-executable; and the same for momwire-nec42-standalone (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2), the
+executable; and the same for momwire-nec42-bspline-standalone (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2), the
 slot's default launcher `momwire-nec42` (bs2).
 
 Every printout is held to `momwire-nec42-sinusoidal`'s (this environment's
@@ -40,7 +40,7 @@ from _standalone_version import assert_standalone_line
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 NEC42 = FIXTURES / "eznec_nec42"
-# The same gates hold `momwire-nec42-standalone` (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2)
+# The same gates hold `momwire-nec42-bspline-standalone` (MW_EXE_BASIS=bspline_nec42, momwire#1607 Phase C2)
 # to `momwire-nec42`, the slot's default (bs2), under
 # MOMWIRE_NEC42_STANDALONE_EXE.
 _BS = os.environ.get("MOMWIRE_NEC42_STANDALONE_EXE")

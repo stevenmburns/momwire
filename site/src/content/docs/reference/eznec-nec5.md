@@ -1,6 +1,6 @@
 ---
 title: "Running momwire as EZNEC's NEC-5 engine"
-description: The momwire.eznec portal serves EZNEC Pro+'s external-engine slot in the NEC-5 dialect — decks in, byte-compatible printouts out, and every deck either serves or refuses by name.
+description: The momwire.dropin.nec5 drop-in engine serves EZNEC Pro+'s external-engine slot in the NEC-5 dialect — decks in, byte-compatible printouts out, and every deck either serves or refuses by name.
 ---
 
 EZNEC Pro+ can drive an external NEC-5 console engine: it writes a deck
@@ -113,12 +113,12 @@ choice is the engine PATH you set. One family per EZNEC engine option:
 
 ```text
 EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
-momwire-nec5.exe              the default — degree-2 B-spline (bs2)
+momwire-nec5.exe              the default — degree-2 B-spline (nec5-bspline)
 momwire-nec5-razor-2p.exe     the tent basis with razor-blade path testing,
                               at NEC-5's two-point rule
 
 EZNEC's External NEC-4.2 slot:
-momwire-nec42.exe             the default — degree-2 B-spline (bs2)
+momwire-nec42.exe             the default — degree-2 B-spline (nec42-bspline)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
 momwire-engine.exe            the compute engine the launchers run
@@ -222,7 +222,7 @@ segments" is a NEC-2 convention, where sources sit at segment centres.
 Measured on a 0.476 λ dipole in free space, even meshes, one deck per rung —
 momwire through this seam, the licensed engine on the same deck text:
 
-| segments | licensed NEC-5 | bs2 | razor-2p | \|razor − NEC-5\| |
+| segments | licensed NEC-5 | nec5-bspline | nec5-razor-2p | \|razor − NEC-5\| |
 |---|---|---|---|---|
 | 4 | 56.118 − 108.593j | 67.645 − 31.146j | 56.116 − 108.586j | **0.007** |
 | 20 | 66.667 − 35.880j | 67.739 − 29.155j | 66.665 − 35.877j | **0.003** |
@@ -237,7 +237,7 @@ asks each basis about **itself**: the same decks through the same seam, each
 basis scored against **its own N = 160 answer** — the finest rung of the
 table above, so every number here can be read off it.
 
-| segments | bs2 error | razor-2p error |
+| segments | nec5-bspline error | nec5-razor-2p error |
 |---|---|---|
 | 4 | 2.81 Ω | 80.14 Ω |
 | 20 | 0.82 Ω | 6.67 Ω |
@@ -246,19 +246,19 @@ table above, so every number here can be read off it.
 Both converge. At matched mesh the B-spline basis is 5.8–28× nearer its own
 limit, which is the O(1/N) walk of razor-blade testing priced in segments.
 
-Neither is "converged at coarse mesh" — bs2 is still 2.8 Ω out at four
+Neither is "converged at coarse mesh" — nec5-bspline is still 2.8 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is
 there.
 
 **Where the last ohm actually lives** (measured 2026-08-26; `parity_limits()`
 in the probe script is the receipt). Extrapolate both ladders and the two
-formulations nearly meet: razor-2p's limit lands 0.08–0.21 Ω from bs2's,
+formulations nearly meet: nec5-razor-2p's limit lands 0.08–0.21 Ω from nec5-bspline's,
 depending on the extrapolation model. Of the roughly one ohm between the
 bases at N = 160 (0.95 Ω through this seam, 1.05 Ω on the probe's direct
 ladder), almost all is the twin still descending the O(1/N) path it shares
 with the licensed engine, and only the fraction-of-an-ohm remainder is
 formulation. The same run settles a tooling question: with the feed
-pinned at the exact centre, bs2's limit is the same whether that centre is a
+pinned at the exact centre, nec5-bspline's limit is the same whether that centre is a
 knot (even N) or the middle of a span (odd N) — 0.009 Ω apart — so the
 knot-feed machinery is not what separates the bases. One deck, free space;
 but on it, the second table sharpens: the default is not merely nearer *its
@@ -321,7 +321,7 @@ negative instead of settling. Every engine does this, the licensed NEC-5
 included. They differ only in how fine a mesh it takes (momwire#1675). For a 38 mm
 vertical over perfect ground at 14 MHz, base-fed, X in ohms:
 
-| segs/λ | Δ/a at the feed | licensed NEC-5 | razor-2p | bs2 |
+| segs/λ | Δ/a at the feed | licensed NEC-5 | nec5-razor-2p | nec5-bspline |
 |---|---|---|---|---|
 | 200 | 2.8 | −0.52 | −0.53 | +0.01 |
 | 400 | 1.4 | −0.08 | −0.09 | −0.05 |
@@ -329,18 +329,18 @@ vertical over perfect ground at 14 MHz, base-fed, X in ohms:
 | 1600 | 0.35 | −0.01 | −0.17 | −0.31 |
 | 3200 | 0.18 | −0.14 | −0.26 | −0.34 |
 
-`bs2` gets near its converged value at a far coarser mesh than the other two,
+`nec5-bspline` gets near its converged value at a far coarser mesh than the other two,
 then starts sliding first, at about Δ/a = 1. On a convergence chart that looks
 like a curve that never settles. It is the feed model, not the antenna, and on a
 fat wire the tail is a few tenths of an ohm. Keep the segments at a feed no
 shorter than the wire's radius. Below that, the engine raises a `GapMeshFloor`
 advisory naming the source. Only a source of fixed width converges past it,
-and no deck card asks for one. Through momwire's own API, bs2's end-port
+and no deck card asks for one. Through momwire's own API, nec5-bspline's end-port
 feed does: two facing wire ends a real gap apart, under the exact kernel.
 
 :::caution[Not a supported configuration]
 No part of EZNEC knows momwire exists, and nothing here has been reviewed or
-endorsed by EZNEC's author. The portal was built black-box, from the decks
+endorsed by EZNEC's author. The drop-in engine was built black-box, from the decks
 and printouts of our own licensed EZNEC and NEC-5 installation and the
 engine's public documentation — no NEC-5 source was consulted. Treat it as a
 cross-check you can run yourself.
@@ -596,19 +596,19 @@ capability statements rather than deck errors:
 
 ## What answers underneath
 
-The solver behind the portal is whichever of the two bundled engines you
+The solver behind the drop-in engine is whichever of the two bundled engines you
 pointed EZNEC at, defaulting to momwire's degree-2 B-spline — the same
 physics as [the NEC-2 launcher's](/reference/portal-usage/) default, where the
 full eight-engine roster and the cross-basis validation workflow are
 documented. On the models where we hold a licensed NEC-5 reference, the
-portal's printouts agree with the engine's element for element at the
+drop-in's printouts agree with the engine's element for element at the
 sub-percent level, and the in-house razor-blade formulation
 (`razor-2p`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
 
 ## The standalone executables
 
-Each release since 0.79 also carries the razor-2p and bs2 engines as native
+Each release since 0.79 also carries the nec5-razor-2p and nec5-bspline engines as native
 programs with no Python in them, for Linux and, as previews, for Windows and
 macOS. They write the Python engines' printouts, one process per
 run, and SimNEC's streaming call works with them.
@@ -618,7 +618,7 @@ drop-in is still the supported route.
 
 ## From a source checkout
 
-The bundle's engine is the `momwire.eznec` module frozen with PyInstaller
+The bundle's engine is the `momwire.dropin.nec5` module frozen with PyInstaller
 (the launcher in front of it is a small C program speaking one socket
 protocol), and CI gates the routes against each other: the same deck through
 the launcher, the frozen engine, or the module produces byte-identical
@@ -626,7 +626,7 @@ printouts. So if you already have a Python environment, the module is there:
 
 ```bash
 pip install momwire
-python -m momwire.eznec EZN5.NEC NEC5.OUT
+python -m momwire.dropin.nec5 EZN5.NEC NEC5.OUT
 ```
 
 The arguments are exactly EZNEC's own — positional, cwd-relative, no flags.

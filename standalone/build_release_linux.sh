@@ -23,8 +23,8 @@
 #                                        (bs2)
 #   README.txt
 #
-# Each build is `momwire-razor2p-standalone` / `momwire-bs2-standalone` /
-# `momwire-nec42-sinusoidal-standalone` / `momwire-nec42-standalone`
+# Each build is `momwire-nec5-razor-2p-standalone` / `momwire-nec5-bspline-standalone` /
+# `momwire-nec42-sinusoidal-standalone` / `momwire-nec42-bspline-standalone`
 # (MW_EXE_NO_PYTHON), renamed: `nec5`
 # in the name is what makes SimNEC write it NEC-5 decks (momwire#1239), and
 # `nec42` NEC-4.2 decks (momwire#1443). OpenBLAS, libstdc++, libgcc and (where the
@@ -53,10 +53,10 @@ STATIC_GOMP=OFF
 STAGE=$(mktemp -d)/$PKG
 mkdir -p "$STAGE" "$OUT"
 # engine: command name, CMake basis, the target it builds
-for engine in "$NAME razor2p momwire-razor2p-standalone" \
-              "momwire-nec5-bs2-linux bspline_nec5 momwire-bs2-standalone" \
+for engine in "$NAME razor2p momwire-nec5-razor-2p-standalone" \
+              "momwire-nec5-bs2-linux bspline_nec5 momwire-nec5-bspline-standalone" \
               "momwire-nec42-sinusoidal-linux sin42 momwire-nec42-sinusoidal-standalone" \
-              "momwire-nec42-linux bspline_nec42 momwire-nec42-standalone"; do
+              "momwire-nec42-linux bspline_nec42 momwire-nec42-bspline-standalone"; do
     set -- $engine
     cmd=$1 basis=$2 target=$3
     for v in avx2 sse2; do

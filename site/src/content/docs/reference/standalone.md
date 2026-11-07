@@ -1,11 +1,11 @@
 ---
 title: "The standalone executables"
-description: momwire's razor-2p and bs2 NEC-5 engines as native programs with no Python in them — downloads for Linux, Windows and macOS, which program to run, and how to set the thread count.
+description: momwire's nec5-razor-2p and nec5-bspline engines as native programs with no Python in them — downloads for Linux, Windows and macOS, which program to run, and how to set the thread count.
 ---
 
 Each release since 0.79 carries two of momwire's NEC-5 engines as native
-programs with no Python in them: **razor-2p** (what the Python command
-`momwire-nec5-razor-2p` answers) and **bs2**, the default degree-2 B-spline
+programs with no Python in them: **nec5-razor-2p** (what the Python command
+`momwire-nec5-razor-2p` answers) and **nec5-bspline**, the default degree-2 B-spline
 formulation (what `momwire-nec5-bspline` answers). They read a NEC-5 deck
 and write the same printout the Python engines write. Nothing needs
 installing: no Python, no pip, no momwire.
@@ -75,7 +75,7 @@ and an insulated wire (IS); the Python command serves those decks.
 
 **NEC-4.2 default engine, Linux (preview).** The Linux tarball also holds
 `momwire-nec42-linux`, what the Python command `momwire-nec42` (the NEC-4.2
-slot's default, bs2) answers, with its own avx2 and sse2 builds and picker.
+slot's default, nec42-bspline) answers, with its own avx2 and sse2 builds and picker.
 Its printout is the Python command's byte for byte except the two
 measured-time lines. It refuses a near field over a buried wire in the
 Python command's own words (the Python command refuses it too). As a preview
@@ -121,7 +121,7 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
   the top of the zip. On Windows 7 SP1 use the `win7` folder; it carries
   Microsoft's Universal C Runtime for Windows 7, and its programs also run
   on Windows 10 and 11.
-- **razor-2p or bs2.** The same choice as between the Python engines: see
+- **nec5-razor-2p or nec5-bspline.** The same choice as between the Python engines: see
   [Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation).
 
 ## How they differ from the EZNEC drop-in

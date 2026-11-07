@@ -1,4 +1,4 @@
-"""momwire-razor2p-standalone (standalone/, MW_EXE_NO_PYTHON, momwire#1512):
+"""momwire-nec5-razor-2p-standalone (standalone/, MW_EXE_NO_PYTHON, momwire#1512):
 the launcher layer with no Python in the process.
 
 The corpus gate (`scripts/core_split/exe_compare.py --standalone`) holds every
@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
 # Which formulation the executable is (momwire#1517 Phase A): razor-2p (the
-# default), or bspline for `momwire-bs2-standalone`, compared with
+# default), or bspline for `momwire-nec5-bspline-standalone`, compared with
 # `momwire-nec5-bspline`.
 BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor-2p")
 

@@ -67,20 +67,25 @@ LEVELS: tuple[Level, ...] = (
     ),
     Level("ak-windows", "antennaknobs on Windows, avx2 and sse2"),
     Level(
-        "portal-linux-windows",
-        "the drop-in portal on Linux and Windows, avx2 and sse2",
-    ),
-    Level("macos", "antennaknobs and the portal on macOS"),
-    Level(
-        "exe-bs2-razor-windows",
-        "the bspline_nec5 and razor2p executables on Windows, avx2 and sse2",
+        "dropin-linux-windows",
+        "the Python drop-in engine (NEC-2 / NEC-4.2 / NEC-5 dialects) on Linux"
+        " and Windows, avx2 and sse2",
     ),
     Level(
-        "exe-bs2-razor-linux-macos",
-        "the bspline_nec5 and razor2p executables on Linux and macOS",
+        "macos",
+        "antennaknobs and the Python drop-in engine (NEC-2 / NEC-4.2 / NEC-5"
+        " dialects) on macOS",
     ),
-    Level("exe-bs42", "the bspline_nec42 executable, all platforms"),
-    Level("exe-sin42", "the sin42 executable, all platforms"),
+    Level(
+        "exe-nec5-bspline-razor-2p-windows",
+        "the nec5-bspline and nec5-razor-2p executables on Windows, avx2 and sse2",
+    ),
+    Level(
+        "exe-nec5-bspline-razor-2p-linux-macos",
+        "the nec5-bspline and nec5-razor-2p executables on Linux and macOS",
+    ),
+    Level("exe-nec42-bspline", "the nec42-bspline executable, all platforms"),
+    Level("exe-nec42-sinusoidal", "the nec42-sinusoidal executable, all platforms"),
 )
 DEEPEST = len(LEVELS)
 
@@ -201,9 +206,9 @@ FEATURES: dict[str, Feature] = {
 }
 
 
-# Which route this code is running under: "python" unless a portal entry
-# (`momwire.dropin.nec5._shell.render`, `momwire.dropin.nec2c`'s `render_deck`) set
-# "portal" around its deck. Read by `check` and `stamp` when no context is
+# Which route this code is running under: "python" unless a drop-in entry
+# (`momwire.dropin.nec5._shell.render`, `momwire.dropin.nec2c`'s `render_deck`)
+# set "dropin" around its deck. Read by `check` and `stamp` when no context is
 # passed.
 _CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
     "momwire_feature_context", default="python"
@@ -212,7 +217,7 @@ _CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 @contextlib.contextmanager
 def context_scope(context: str):
-    """Run the body as `context` (``"python"`` or ``"portal"``)."""
+    """Run the body as `context` (``"python"`` or ``"dropin"``)."""
     token = _CONTEXT.set(context)
     try:
         yield
@@ -264,15 +269,20 @@ def active() -> list[str]:
     return [name for name, f in FEATURES.items() if _env_on(f)]
 
 
+# The executable a basis name selects, by its level family. Keys are the
+# names an executable or a caller may spell: the long form, the build tokens
+# (`MW_EXE_BASIS`) and the solver model values.
 _EXE_BASES = {
-    "razor2p": "bs2-razor",
-    "razor-2p": "bs2-razor",
-    "bspline_nec5": "bs2-razor",
-    "bs2": "bs2-razor",
-    "bspline": "bs2-razor",
-    "bspline_nec42": "bs42",
-    "bs42": "bs42",
-    "sin42": "sin42",
+    "nec5-razor-2p": "nec5-bspline-razor-2p",
+    "razor-2p": "nec5-bspline-razor-2p",
+    "razor2p": "nec5-bspline-razor-2p",
+    "nec5-bspline": "nec5-bspline-razor-2p",
+    "bspline_nec5": "nec5-bspline-razor-2p",
+    "bspline": "nec5-bspline-razor-2p",
+    "nec42-bspline": "nec42-bspline",
+    "bspline_nec42": "nec42-bspline",
+    "nec42-sinusoidal": "nec42-sinusoidal",
+    "sin42": "nec42-sinusoidal",
 }
 
 
@@ -309,7 +319,7 @@ def current_level(
     """The support level (1-based) of the running configuration.
 
     `context` is ``"python"`` (momwire imported by a Python program, as
-    antennaknobs does), ``"portal"`` (the drop-in portal) or ``"exe"`` (a
+    antennaknobs does), ``"dropin"`` (the Python drop-in engine) or ``"exe"`` (a
     standalone executable, whose `basis` then names it). `platform` defaults
     to this process's ``sys.platform``.
 
@@ -327,20 +337,20 @@ def current_level(
                 variant = _loaded_variant()
             return _level("ak-linux-avx2" if variant == "avx2" else "ak-linux-sse2")
         return _level("ak-windows" if os_name == "windows" else "macos")
-    if context == "portal":
-        return _level("macos" if os_name == "macos" else "portal-linux-windows")
+    if context == "dropin":
+        return _level("macos" if os_name == "macos" else "dropin-linux-windows")
     if context == "exe":
         family = _EXE_BASES.get(basis or "")
         if family is None:
             raise ValueError(f"no standalone executable for basis {basis!r}")
-        if family == "bs2-razor":
+        if family == "nec5-bspline-razor-2p":
             return _level(
-                "exe-bs2-razor-windows"
+                "exe-nec5-bspline-razor-2p-windows"
                 if os_name == "windows"
-                else "exe-bs2-razor-linux-macos"
+                else "exe-nec5-bspline-razor-2p-linux-macos"
             )
-        return _level("exe-bs42" if family == "bs42" else "exe-sin42")
-    raise ValueError(f"context must be python, portal or exe, not {context!r}")
+        return _level(f"exe-{family}")
+    raise ValueError(f"context must be python, dropin or exe, not {context!r}")
 
 
 def certified(

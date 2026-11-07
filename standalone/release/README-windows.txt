@@ -5,9 +5,9 @@ This is a preview. The drop-in, momwire-windows.zip, is still the
 supported way to run momwire under EZNEC, SimNEC or 4nec2 on
 Windows.
 
-The engines are razor-2p (what the Python command `momwire-nec5-razor-2p`
-answers) and bs2, momwire's default B-spline formulation (what
-`momwire-nec5-bspline` answers). Each takes the forms the real engine takes:
+The engines are nec5-razor-2p (what the Python command
+`momwire-nec5-razor-2p` answers) and nec5-bspline, momwire's default B-spline
+formulation (what `momwire-nec5-bspline` answers). Each takes the forms the real engine takes:
 
     momwire-nec5-razor2p-avx2.exe DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
     momwire-nec5-razor2p-avx2.exe - -                     (SimNEC's streaming form)
@@ -48,6 +48,6 @@ To use one from EZNEC or SimNEC, point the NEC-5 engine setting at the
 program you chose, in this folder.
 
 A deck an engine does not serve yet is refused in the printout by name
-("not served by this build: ..."). The Python commands, or the EZNEC drop-in,
-serve it. On Windows the printouts match the Python commands' to the printed
+("not served by this build: ..."). The Python commands, or the Python drop-in
+engine (momwire-windows.zip), serve it. On Windows the printouts match the Python commands' to the printed
 digit, apart from round-off in values that are zero in exact arithmetic.

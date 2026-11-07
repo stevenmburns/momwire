@@ -8,12 +8,12 @@ list) is answered by each of the four no-Python executables that serve its
 dialect and by the Python route those executables replay, in this process's
 workers (`_shell.render_files`, written as `_shell.printout_bytes` writes it):
 
-    nec5-bspline      momwire-bs2-standalone               basis bspline,    NEC-5
-    nec5-razor-2p     momwire-razor2p-standalone           basis razor-2p,   NEC-5
-    nec42-bspline     momwire-nec42-standalone             basis bspline,    NEC-4.2
+    nec5-bspline      momwire-nec5-bspline-standalone      basis bspline,    NEC-5
+    nec5-razor-2p     momwire-nec5-razor-2p-standalone     basis razor-2p,   NEC-5
+    nec42-bspline     momwire-nec42-bspline-standalone     basis bspline,    NEC-4.2
     nec42-sinusoidal  momwire-nec42-sinusoidal-standalone  basis sinusoidal, NEC-4.2
 
-(the CMake target names are today's; momwire#1831 renames them).
+(the CMake target names, long form since momwire#1831).
 
 A cell is a variant and a thread count, `<avx2|sse2>-T<n>`: the executables
 built for that variant, Python's accelerator forced to it
@@ -50,9 +50,24 @@ HERE = Path(__file__).resolve().parent
 
 # name -> (CMake MW_EXE_BASIS, the target it builds, the Python basis, dialect)
 EXES = {
-    "nec5-bspline": ("bspline_nec5", "momwire-bs2-standalone", "bspline", "nec5"),
-    "nec5-razor-2p": ("razor2p", "momwire-razor2p-standalone", "razor-2p", "nec5"),
-    "nec42-bspline": ("bspline_nec42", "momwire-nec42-standalone", "bspline", "nec42"),
+    "nec5-bspline": (
+        "bspline_nec5",
+        "momwire-nec5-bspline-standalone",
+        "bspline",
+        "nec5",
+    ),
+    "nec5-razor-2p": (
+        "razor2p",
+        "momwire-nec5-razor-2p-standalone",
+        "razor-2p",
+        "nec5",
+    ),
+    "nec42-bspline": (
+        "bspline_nec42",
+        "momwire-nec42-bspline-standalone",
+        "bspline",
+        "nec42",
+    ),
     "nec42-sinusoidal": (
         "sin42",
         "momwire-nec42-sinusoidal-standalone",

@@ -92,7 +92,7 @@ junction-heavy gaps collapse to 0.01–0.33 %.
 Dense cost scales as N² in memory and N²–N³ in fill/factor time, so an
 engine that converges at one-third the mesh is roughly an order of
 magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
-`bspline` d=2 is the default in every portal and every host.
+`bspline` d=2 is the default in every drop-in engine and every host.
 
 ## The razor lane, and its certification twin
 
