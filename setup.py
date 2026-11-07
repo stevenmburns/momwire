@@ -877,6 +877,11 @@ setup(
     packages=[
         "momwire",
         "momwire.deck",
+        "momwire.dropin",
+        "momwire.dropin.nec2c",
+        "momwire.dropin.nec5",
+        # momwire#1831: the old names, kept importable as shims onto
+        # momwire.dropin for antennaknobs and the scripts.
         "momwire.eznec",
         "momwire.networks",
         "momwire.portal",

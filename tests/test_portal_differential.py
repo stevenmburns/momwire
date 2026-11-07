@@ -301,7 +301,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.portal import main, run_deck
+from momwire.dropin.nec2c import main, run_deck
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 MANIFEST = json.loads((FIXTURE_DIR / "manifest.json").read_text())

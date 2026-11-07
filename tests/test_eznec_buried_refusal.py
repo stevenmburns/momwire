@@ -34,8 +34,8 @@ interface under it.
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec._serve import refusal
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._serve import refusal
+from momwire.dropin.nec5._shell import render
 
 # The anchors, their envelope and the printed-Z reader all live somewhere
 # else already; two copies of an anchor print would be two numbers to keep

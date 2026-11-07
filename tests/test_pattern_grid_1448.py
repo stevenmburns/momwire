@@ -33,8 +33,8 @@ from momwire._far_readout import (
     _polarisation,
     _polarisation_grid,
 )
-from momwire.eznec import _serve
-from momwire.eznec._printout import (
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._printout import (
     ChargeRow,
     PatternBlock,
     PatternRow,

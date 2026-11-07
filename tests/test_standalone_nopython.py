@@ -350,7 +350,7 @@ def test_an_unwritable_gmo(tmp_path):
 def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):
     """An exception from the C++ side (memory, ...) is `_shell`'s last line of
     defence: the refusal printout with the deck's echo, never a crash."""
-    from momwire.eznec import _printout, _shell
+    from momwire.dropin.nec5 import _printout, _shell
 
     out = tmp_path / "x.out"
     r = subprocess.run(

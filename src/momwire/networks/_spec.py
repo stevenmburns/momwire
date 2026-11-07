@@ -72,7 +72,7 @@ class PortOnWire:
     supplies the other side of the gap, `tests/test_contact_nec5_lane.py`
     drives its base-fed monopoles at ``feed_arclength=0.0`` and certifies them
     against NEC-5 over five grounds and five densities, and
-    ``momwire.eznec.serve`` places a deck's contact feed there. A FREE wire
+    ``momwire.dropin.nec5.serve`` places a deck's contact feed there. A FREE wire
     end still has nothing to interrupt — the current is zero there — and this
     type cannot tell the two apart, because ground is not in its vocabulary.
     So the endpoints are ADMITTED here and the physics is gated where the

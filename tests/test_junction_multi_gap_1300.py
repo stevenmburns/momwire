@@ -26,7 +26,7 @@ import pytest
 
 from momwire import BSplineSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 from momwire.razor import RazorSolver
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 

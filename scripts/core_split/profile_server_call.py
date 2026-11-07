@@ -8,7 +8,7 @@ Two measurements:
   OUT`) against the resident server it spawns on first use, timed end to
   end after warm-up; beside it, a bare `python -S -c pass` and `python -c
   "import momwire_eznec_client"` (the launcher's own interpreter start).
-* **in-server**: the server's body, `momwire.eznec._shell.render(text,
+* **in-server**: the server's body, `momwire.dropin.nec5._shell.render(text,
   basis="razor-2p")`, timed in this process with its phases wrapped: deck
   parse (`parse_nec5_shared`), `_serve.serve` (of which solver construction,
   `compute_port_solution` and the C++ call when routed), and the printout
@@ -59,7 +59,7 @@ def main():
     )
 
     from momwire import RazorSolver
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     rec = {}
 

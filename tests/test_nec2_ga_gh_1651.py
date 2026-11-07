@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from momwire.deck import DeckError, parse
-from momwire.portal._portal import file_printout
+from momwire.dropin.nec2c._portal import file_printout
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "nec2_ga_gh_1651"
 DECKS = tuple(sorted(p.stem for p in FIXTURES.glob("*.nec")))
@@ -134,7 +134,7 @@ def test_the_two_dialects_read_gh_differently():
     deck = f"CM\nCE\n{card}\nGE 0\nFR 0 1 0 0 100 0\nEX 0 1 6 0 1\nXQ\nEN\n"
 
     def sweep(dialect: str) -> float:
-        from momwire.portal._portal import parse_deck
+        from momwire.dropin.nec2c._portal import parse_deck
 
         wires = parse_deck(deck, dialect=dialect).structure.wires
         angles = [

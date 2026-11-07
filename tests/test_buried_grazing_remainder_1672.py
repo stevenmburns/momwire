@@ -28,7 +28,7 @@ import pytest
 
 from momwire import _below_interface
 from momwire.bspline import BSplineSolver
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "buried_grazing_1672"
 

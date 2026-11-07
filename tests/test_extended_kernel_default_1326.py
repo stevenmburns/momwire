@@ -30,8 +30,8 @@ from momwire import BSplineSolver
 from momwire._wire_spec import GapMeshFloor
 from momwire.deck import DeckError, ExtendedKernelDefault, _solver, build_solver, parse
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._nec4 import render as render_nec4
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._nec4 import render as render_nec4
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

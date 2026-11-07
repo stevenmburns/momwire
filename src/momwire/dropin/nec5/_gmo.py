@@ -18,7 +18,7 @@ read.  The layout, in the sample's own terms:
 * CRLF after every line, the last included.
 
 The numbering is the one the printout's ``Number of nodes`` already counts
-(:func:`momwire.eznec._serve.structure_of`): a node is a fused point on the
+(:func:`momwire.dropin.nec5._serve.structure_of`): a node is a fused point on the
 1 µm grid, so a junction is ONE node, and the sample's one-segment centre
 wire adds no node of its own because both its ends fuse into the arms'.
 Nodes are numbered in order of first appearance, walking the ``GW`` cards in
@@ -48,9 +48,9 @@ from __future__ import annotations
 
 import momwire_serve_client as _mech
 
-from ..deck import DeckError
-from ..deck._cards import parse_card
-from ..deck._nec5 import Nec5Deck, parse_nec5, split_structures
+from ...deck import DeckError
+from ...deck._cards import parse_card
+from ...deck._nec5 import Nec5Deck, parse_nec5, split_structures
 from ._serve import _wire_nodes
 
 __all__ = [

@@ -28,8 +28,8 @@ import pytest
 
 from momwire import _ground_spec
 from momwire.deck._nec5 import DeckError, parse_nec5
-from momwire.eznec import _serve as S
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve as S
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

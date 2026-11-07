@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._nec5 import next_structure, split_structures
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "razor_printout_3a"
 DIPOLE = (FIXTURES / "node_gap_two_sources.nec").read_text(encoding="latin-1")

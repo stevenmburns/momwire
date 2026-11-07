@@ -63,7 +63,7 @@ def test_the_inert_wire_refusal_names_the_basis_without_a_repr():
     """The seam's inert one-segment wire refusal (momwire#608) names the
     basis plainly, not as a Python string repr, so the C++ seam (#1479) says
     the same words."""
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
     from momwire.deck._nec5 import parse_nec5
 
     deck = parse_nec5(

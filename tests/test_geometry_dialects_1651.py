@@ -118,13 +118,13 @@ def _helix_turns(rows: list[tuple]) -> float:
 
 
 def _nec2_python(name: str) -> list[tuple]:
-    from momwire.portal._portal import file_printout
+    from momwire.dropin.nec2c._portal import file_printout
 
     return _nec2c_rows(file_printout((NEC2C / f"{name}.nec").read_text()))
 
 
 def _nec42_python(name: str) -> list[tuple]:
-    from momwire.eznec._shell import render
+    from momwire.dropin.nec5._shell import render
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

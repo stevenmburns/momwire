@@ -38,8 +38,8 @@ from pathlib import Path
 
 import pytest
 
-from momwire.portal import _portal as nec_portal
-from momwire.portal import deck_frame, main, run_deck
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec2c import deck_frame, main, run_deck
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 
@@ -2873,7 +2873,7 @@ def test_the_entry_point_runs_from_an_unrelated_cwd(tmp_path):
         **os.environ,
         "PYTHONPATH": os.pathsep.join([src_root, os.environ.get("PYTHONPATH", "")]),
     }
-    argv = [sys.executable, "-m", "momwire.portal"]
+    argv = [sys.executable, "-m", "momwire.dropin.nec2c"]
 
     probe = subprocess.run(
         [*argv, "-version"],
@@ -2908,7 +2908,7 @@ def test_selftest_passes_and_reports(tmp_path, monkeypatch):
     unrelated cwd, and print the PASS verdict on its own line."""
     import io
 
-    from momwire.portal import main
+    from momwire.dropin.nec2c import main
 
     monkeypatch.chdir(tmp_path)
     out = io.StringIO()
@@ -2925,7 +2925,7 @@ def test_selftest_passes_and_reports(tmp_path, monkeypatch):
 def _run_main(argv, deck="", prog=None):
     import io
 
-    from momwire.portal import _portal as nec_portal
+    from momwire.dropin.nec2c import _portal as nec_portal
 
     out = io.StringIO()
     err = io.StringIO()
@@ -2947,7 +2947,7 @@ def test_basis_flag_unknown_name_fails_fast_and_nonzero():
 def test_basis_flag_rides_the_version_probe():
     """SimNEC probes `<full command line> -version`; the probe line must be
     unchanged (Double-parsed by Execute) with any valid --basis present."""
-    from momwire.portal import PROBE_VERSION
+    from momwire.dropin.nec2c import PROBE_VERSION
 
     rc, out, _ = _run_main(["--basis", "sinusoidal-galerkin", "-version"])
     assert rc == 0 and out == f"{PROBE_VERSION}\n"
@@ -3520,7 +3520,7 @@ def test_the_accelerators_stamp_the_banner(basis, suffix):
 @pytest.mark.integration
 @pytest.mark.parametrize("basis", ["hmatrix", "arrayblock"])
 def test_the_accelerators_ride_the_version_probe_unchanged(basis):
-    from momwire.portal import PROBE_VERSION
+    from momwire.dropin.nec2c import PROBE_VERSION
 
     rc, out, _err = _run_main(["--basis", basis, "-version"])
     assert rc == 0 and out == f"{PROBE_VERSION}\n"
@@ -4024,7 +4024,7 @@ def test_a_served_deck_matches_a_genuinely_fresh_process(name):
     table rather than a wrong impedance."""
     text = fixture_deck(name) + "\nNX\n"
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         input=text,
         capture_output=True,
         text=True,
@@ -4262,7 +4262,7 @@ def test_a_gd_card_change_hits_the_cache_and_still_answers_fresh():
     assert cache_counts()["hits"] == before["hits"] + 1
     assert "ERROR-NEC2C" not in served, served
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         input=moved + "NX\n",
         capture_output=True,
         text=True,
@@ -4312,7 +4312,7 @@ def test_a_second_medium_change_through_a_warm_cache_moves_the_cliff_pattern():
         "the warm-cache answer ignored the new second medium"
     )
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         # fixture_deck strips the framing NX AND the trailing newline.
         input=moved + "\nNX\n",
         capture_output=True,
@@ -4609,7 +4609,7 @@ def test_a_dry_run_answers_exactly_what_a_stock_process_answers(tmp_path):
     path = tmp_path / "stats.json"
     text = fixture_deck("dipole_rp_pattern") + "\nNX\n"
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         input=text,
         capture_output=True,
         text=True,
@@ -4725,7 +4725,12 @@ def test_an_unwritable_stats_path_costs_the_measurement_not_the_session(tmp_path
 # --------------------------------------------------------------------------
 
 PORTAL_DIR = Path(nec_portal.__file__).resolve().parent
-MOMWIRE_SRC = PORTAL_DIR.parent
+# momwire#1831: the portal is `momwire.dropin.nec2c`, beside the NEC-5 drop-in;
+# the isolation rule now walls in the whole `momwire/dropin/` package.
+DROPIN_DIR = PORTAL_DIR.parent
+MOMWIRE_SRC = DROPIN_DIR.parent
+# The old names, kept as shims onto `momwire.dropin`: importing it is their job.
+LEGACY_SHIM_DIRS = (MOMWIRE_SRC / "portal", MOMWIRE_SRC / "eznec")
 
 
 def _import_lines(path: Path) -> list[tuple[int, str]]:
@@ -4748,7 +4753,7 @@ def test_the_portal_imports_nothing_from_antennaknobs():
 
     The portal's whole point is that it is momwire's front door — it must
     install and run with momwire and nothing else, which is what let phase III
-    move the file into ``momwire/portal/`` at all. Before the phase II rewire
+    move the file into ``momwire/dropin/nec2c/`` at all. Before the phase II rewire
     it reached for five antennaknobs internals: ``AntennaBuilder``,
     ``MomwireEngine``, ``parse_nec``, ``network._series_rlc_impedance`` and
     ``network_reduce``'s TL pair. There are none left, and there may be none
@@ -4762,7 +4767,7 @@ def test_the_portal_imports_nothing_from_antennaknobs():
         if re.search(r"\bantennaknobs\b", line)
     ]
     assert not offenders, (
-        "momwire/portal must depend on momwire alone (#846); found:\n  "
+        "momwire/dropin/nec2c must depend on momwire alone (#846); found:\n  "
         + "\n  ".join(offenders)
     )
 
@@ -4771,9 +4776,9 @@ def test_nothing_outside_the_portal_imports_from_the_portal():
     """Half two, and the one that keeps the engine's identity: the isolation
     rule of design doc #846 §4, enforced as a test rather than a convention.
 
-    ``momwire/portal/`` may import momwire's public solver API and
-    ``momwire.deck``. **Nothing outside ``momwire/portal/`` may import from
-    ``momwire.portal``.** Colocation is what deleted portal-vs-solver version
+    ``momwire/dropin/nec2c/`` may import momwire's public solver API and
+    ``momwire.deck``. **Nothing outside ``momwire/dropin/nec2c/`` may import from
+    ``momwire.dropin.nec2c``.** Colocation is what deleted portal-vs-solver version
     skew; this rule is what stops it costing momwire its identity. SimNEC
     protocol cruft — banner spoofing, column-exact NEC-2 tables, timing
     canonicalization, the ``out`` lore — now lives in the physics repo, and
@@ -4785,7 +4790,7 @@ def test_nothing_outside_the_portal_imports_from_the_portal():
     function would satisfy any check of what got loaded at import time.
 
     Mutation-verified at authoring time with the hardest case: a
-    ``from momwire.portal import PROBE_VERSION`` added INSIDE A FUNCTION in
+    ``from momwire.dropin.nec2c import PROBE_VERSION`` added INSIDE A FUNCTION in
     ``src/momwire/razor.py`` fails this test by name and file, while both its
     neighbours below stay green — which is exactly the reach a ``sys.modules``
     check cannot see.
@@ -4793,15 +4798,18 @@ def test_nothing_outside_the_portal_imports_from_the_portal():
     offenders = [
         f"{path.relative_to(MOMWIRE_SRC)}:{number}: {line}"
         for path in sorted(MOMWIRE_SRC.rglob("*.py"))
-        if PORTAL_DIR not in path.parents
+        if DROPIN_DIR not in path.parents
+        and not any(shim in path.parents for shim in LEGACY_SHIM_DIRS)
         for number, line in _import_lines(path)
         if re.search(
-            r"\bmomwire\.portal\b|\bfrom\s+\.portal\b|\bfrom\s+\.\s+import\s+.*\bportal\b",
+            r"\bmomwire\.(dropin|portal|eznec)\b"
+            r"|\bfrom\s+\.+(dropin|portal|eznec)\b"
+            r"|\bfrom\s+\.+\s+import\s+.*\b(dropin|portal|eznec)\b",
             line,
         )
     ]
     assert not offenders, (
-        "nothing outside momwire/portal may import from it (#846 §4); found:\n  "
+        "nothing outside momwire/dropin may import from it (#846 §4); found:\n  "
         + "\n  ".join(offenders)
     )
 
@@ -4819,7 +4827,7 @@ def test_importing_momwire_does_not_drag_in_the_portal():
         [
             sys.executable,
             "-c",
-            "import momwire, sys; print('momwire.portal' in sys.modules)",
+            "import momwire, sys; print('momwire.dropin.nec2c' in sys.modules)",
         ],
         capture_output=True,
         text=True,
@@ -5051,7 +5059,7 @@ def test_filename_suffix_selects_the_basis():
     the suffix, and the -version line names that launcher (momwire#1606: the
     line carries the launcher's own name, so a caller can tell the copies
     apart; ``--basis`` and the environment never change it)."""
-    from momwire.portal._portal import probe_version
+    from momwire.dropin.nec2c._portal import probe_version
 
     rc, out, _ = _run_main(
         ["-version"], prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin"
@@ -5095,7 +5103,7 @@ def test_explicit_basis_beats_the_filename():
 @pytest.mark.integration
 def test_plain_name_and_module_spelling_select_nothing(monkeypatch):
     monkeypatch.delenv("MOMWIRE_NEC2C_BASIS", raising=False)
-    for prog in ("/usr/local/bin/momwire-nec2c", "/x/momwire/portal/__main__.py"):
+    for prog in ("/usr/local/bin/momwire-nec2c", "/x/momwire/dropin/nec2c/__main__.py"):
         rc, out, _ = _run_main([], deck=_SG_DECK, prog=prog)
         assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out, prog
 
@@ -5127,7 +5135,7 @@ def test_every_basis_ships_as_a_named_entry_point():
     from pathlib import Path
 
     from momwire.deck import BASES, NEC2_BASES
-    from momwire.portal import _portal as nec_portal
+    from momwire.dropin.nec2c import _portal as nec_portal
 
     scripts = tomllib.loads(
         (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
@@ -5138,7 +5146,7 @@ def test_every_basis_ships_as_a_named_entry_point():
         if name.startswith("momwire-nec2c-") and name != "momwire-nec2c-shared"
     }
     for name, target in named.items():
-        assert target == "momwire.portal:main", name
+        assert target == "momwire.dropin.nec2c:main", name
         suffix = nec_portal._filename_basis(name)
         assert suffix in NEC2_BASES, name
     assert set(NEC2_BASES) == {nec_portal._filename_basis(n) for n in named}, (

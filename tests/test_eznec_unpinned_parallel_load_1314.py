@@ -22,8 +22,8 @@ import numpy as np
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import serve
-from momwire.eznec._serve import ServeRefusal
+from momwire.dropin.nec5 import serve
+from momwire.dropin.nec5._serve import ServeRefusal
 
 DECK = (
     Path(__file__).parent

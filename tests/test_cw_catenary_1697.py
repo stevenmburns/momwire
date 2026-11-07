@@ -27,7 +27,7 @@ from momwire.deck import DeckError, parse
 from momwire.deck._cards import parse_card
 from momwire.deck._nec4 import catenary_length, catenary_vertices
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "nec_cw_catenary_1697"
 PROBES = sorted(p.stem for p in FIXTURES.glob("*.nec"))

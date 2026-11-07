@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec._serve import SPEED_OF_LIGHT_MHZ_M, refusal
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._serve import SPEED_OF_LIGHT_MHZ_M, refusal
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_simnec_1230"
 RANGE_M = 1000.0

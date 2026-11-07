@@ -35,8 +35,8 @@ import pytest
 
 from momwire.deck import DeckError, parse
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.portal import _portal
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec2c import _portal
 
 # The table-scale bar and the phase bar, each ~2.4x the 21/20 measurement.
 WORST_MAGNITUDE = 5.0e-3

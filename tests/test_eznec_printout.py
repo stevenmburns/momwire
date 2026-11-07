@@ -4,9 +4,9 @@ One gate carries this unit: **extract and re-render**.  For each of the
 fifty-seven captured printouts under ``tests/fixtures/eznec/printouts/`` (ten
 when the unit landed; #504 U1/U2/U3 quadrupled them and momwire#511/#516 took
 them past fifty), :func:`extract` reads the file back into a
-:class:`~momwire.eznec.RunData` — every number lifted from the engine's own
+:class:`~momwire.dropin.nec5.RunData` — every number lifted from the engine's own
 text, none of them recomputed — and
-:func:`~momwire.eznec.render_printout` writes it out again.  The result has
+:func:`~momwire.dropin.nec5.render_printout` writes it out again.  The result has
 to be the captured file, byte for byte.
 
 That shape is deliberate.  U3 renders FORMAT ONLY: it is handed numbers and
@@ -32,7 +32,7 @@ numbers come from a solver and a machine's clock instead of from the file.
 
 The manifest's FIFTH is needed here and is NOT applied at the reader:
 :func:`mask_engine_stamp`, for line 2.  It is the one line this engine prints
-differently on purpose (``momwire.eznec._printout.engine_stamp``), so both
+differently on purpose (``momwire.dropin.nec5._printout.engine_stamp``), so both
 sides of every byte compare get it masked — masking only the captured side
 would leave the comparison asserting that our stamp equals a placeholder, and
 masking at the reader would hide a stamp that went missing.
@@ -49,9 +49,9 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _printout
-from momwire.portal import _portal as nec_portal
-from momwire.eznec._printout import (
+from momwire.dropin.nec5 import _printout
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec5._printout import (
     ChargeRow,
     LineRow,
     LoadRow,
@@ -79,7 +79,7 @@ MANIFEST = json.loads((FIXTURE_DIR / "manifest.json").read_text())
 # real thing to be able to say — but nothing wears it today.
 #
 # Rendering a block is not serving it.  Six of the seven near-field captures
-# stand over a finite ground, whose numbers :mod:`momwire.eznec._serve`
+# stand over a finite ground, whose numbers :mod:`momwire.dropin.nec5._serve`
 # refuses by name; their printouts round-trip here all the same, because this
 # unit is handed the engine's own numbers and asked only whether it prints the
 # file the engine printed.
@@ -124,7 +124,7 @@ def drop_sommpd_blocks(text: str) -> str:
     """Every ``SOMMPD.NEX`` cache block, blank line and all.
 
     A block is ONE BLANK LINE followed by a run of cache lines, and the blank
-    belongs to it — see :func:`~momwire.eznec._printout._environment`, where
+    belongs to it — see :func:`~momwire.dropin.nec5._printout._environment`, where
     that reading is what leaves a finite-ground environment block the same
     shape as ``FREE SPACE``'s.  The rule is uniform over all four observed
     forms and over a two-frequency run's TWO consecutive blocks, which is what
@@ -319,7 +319,7 @@ def _power_budget(lines: list[str], start: int) -> PowerBudget:
 def extract(text: str) -> RunData:
     """A captured printout, read back into the numbers that produced it.
 
-    The inverse of :func:`~momwire.eznec.render_printout` over everything the
+    The inverse of :func:`~momwire.dropin.nec5.render_printout` over everything the
     renderer does not take from the deck.  Written for the gate, and shaped
     so U4 can read it as the worked example of what a served run must fill
     in.
@@ -830,7 +830,7 @@ def test_a_dust_e_field_prints_as_a_clean_zero_rather_than_its_own_angle():
     which are asserted byte-identical. 0015 printed `2.45557E-14 / 72.65` and
     `2.44145E-14 / 73.74` for the same row on the same machine.
     """
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     floor = math.sqrt(_serve._PRINTED_DUST_FLOOR2)
     assert _serve._PRINTED_DUST_FLOOR2 != nec_portal._PRINTED_DUST_FLOOR2, (
@@ -857,7 +857,7 @@ def test_the_dust_floor_clears_what_moves_and_spares_what_does_not():
     is still empty end to end. With the bar ON, nothing in the pattern tables
     moves between the two thread counts at all.
     """
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     floor = math.sqrt(_serve._PRINTED_DUST_FLOOR2)
     assert floor > 1.65e-9 * 10, "the bar must clear everything measured to move"

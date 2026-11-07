@@ -63,7 +63,7 @@ def python_seam(text):
     import numpy as np
 
     from momwire import RazorSolver, razor
-    from momwire.eznec import _printout, _serve, _shell
+    from momwire.dropin.nec5 import _printout, _serve, _shell
 
     rec = {"prepared": [], "refusals": []}
     current = {}
@@ -107,12 +107,12 @@ def python_seam(text):
         rec["outcome"] = "raised"
         rec["message"] = str(exc)
         rec["error_kind"] = type(exc).__name__
-        # Raised while WRITING a printout (`eznec/_printout.py`), after the
+        # Raised while WRITING a printout (`dropin/nec5/_printout.py`), after the
         # solves it reports: the run half's (unit 3), not this seam's.
         tb = exc.__traceback__
         while tb is not None:
             if tb.tb_frame.f_code.co_filename.replace("\\", "/").endswith(
-                "eznec/_printout.py"
+                "dropin/nec5/_printout.py"
             ):
                 rec["outcome"] = "printout-raised"
                 break

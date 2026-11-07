@@ -67,13 +67,13 @@ check() { # check <description> <condition-already-evaluated-as-exit-status>
   if [[ $2 -eq 0 ]]; then note "ok    $1"; else note "FAIL  $1"; fail=1; fi
 }
 
-echo "engine: $python -m momwire.portal"
+echo "engine: $python -m momwire.dropin.nec2c"
 echo "cwd:    $work  (unrelated to $repo, as SimNEC's sh -c would be)"
 echo
 
 # ---------------------------------------------------------------- version ---
 echo "version probe"
-probe=$(cd "$work" && "$python" -m momwire.portal -version 2>"$work/probe.err")
+probe=$(cd "$work" && "$python" -m momwire.dropin.nec2c -version 2>"$work/probe.err")
 probe_rc=$?
 check "exit 0" $probe_rc
 [[ $(printf '%s\n' "$probe" | wc -l) -eq 1 ]]
@@ -92,7 +92,7 @@ for d in "${decks[@]}"; do
   cat "$fixtures/$d.deck"
 done >"$work/in.deck"
 
-(cd "$work" && "$python" -m momwire.portal <"$work/in.deck" \
+(cd "$work" && "$python" -m momwire.dropin.nec2c <"$work/in.deck" \
   >"$work/out.txt" 2>"$work/out.err")
 run_rc=$?
 check "exit 0" $run_rc

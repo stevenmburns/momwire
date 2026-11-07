@@ -218,7 +218,7 @@ def test_default_route_raises_and_warns_as_the_replaced_call(no_host):
 def test_default_route_on_moment_matrices_from_real_decks(no_host, monkeypatch):
     """Z matrices captured at the seam during real solves, then re-factored
     through the seam and through scipy directly: the same bits."""
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     captured = []
     real_factor = _lapack.lu_factor
@@ -401,8 +401,8 @@ NEC2_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 
 
 def _printouts():
-    from momwire.eznec import _shell
-    from momwire.portal import _portal
+    from momwire.dropin.nec5 import _shell
+    from momwire.dropin.nec2c import _portal
 
     out = {}
     for d in NEC5_DECKS:
@@ -442,8 +442,8 @@ def test_fake_host_printouts_are_byte_identical_end_to_end(monkeypatch):
         "momwire.sinusoidal",
         "momwire.sinusoidal_galerkin",
         "momwire.pulse",
-        "momwire.eznec._serve",
-        "momwire.portal._portal",
+        "momwire.dropin.nec5._serve",
+        "momwire.dropin.nec2c._portal",
     ):
         assert module in callers, module
 
@@ -692,7 +692,7 @@ def test_fake_host_products_skip_what_the_host_cannot_take(fake_host2):
 # Where the NEC-5 run path forms its dense complex products, by module and
 # function; each must reach them through `_lapack.matmul` only.
 PRODUCT_SITES = {
-    "eznec/_serve.py": ("_port_state", "_multi_drive_state", "_finish_run"),
+    "dropin/nec5/_serve.py": ("_port_state", "_multi_drive_state", "_finish_run"),
     "razor.py": ("RazorSolver.compute_port_solution",),
     "bspline.py": ("BSplineSolver.compute_port_solution",),
     "sinusoidal_galerkin.py": (
@@ -784,7 +784,7 @@ def test_fake_host_products_run_end_to_end(monkeypatch):
     assert _lapack.HOST_CALLS["gemm"] - before["gemm"] >= len(NEC5_DECKS) * 2
     assert _lapack.HOST_CALLS["gemv"] - before["gemv"] >= len(NEC5_DECKS) * 2
     for module in (
-        "momwire.eznec._serve",
+        "momwire.dropin.nec5._serve",
         "momwire.razor",
         "momwire.bspline",
         "momwire.deck._networks",

@@ -61,7 +61,7 @@ def python_stages(text):
     """``[dict(kwargs, stages={name: Z})]`` per RazorSolver the Python route
     solved, in order."""
     from momwire import RazorSolver, razor
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     solves = []
     current = {}

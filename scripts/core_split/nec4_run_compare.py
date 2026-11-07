@@ -124,7 +124,7 @@ def blas_addresses(basis: str = BASIS) -> list[int]:
 
 
 def py_printout(text: str, basis: str = BASIS) -> str:
-    from momwire.eznec import _nec4
+    from momwire.dropin.nec5 import _nec4
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

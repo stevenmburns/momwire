@@ -353,7 +353,7 @@ def _seam_counted(monkeypatch):
 
 @pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
 def test_the_seam_runs_the_exact_kernel_on_a_fat_wire(monkeypatch, basis):
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     seen = _seam_counted(monkeypatch)
     _shell.render(_SEAM_DECK.format(a="0.02"), basis=basis)  # h/a 2.08
@@ -365,7 +365,7 @@ def test_the_seam_prints_the_same_bytes_above_the_gate(monkeypatch, a):
     from types import MappingProxyType
 
     from momwire.deck import _solver
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     seen = _seam_counted(monkeypatch)
     ours = _shell.render(_SEAM_DECK.format(a=a), basis="razor-2p")

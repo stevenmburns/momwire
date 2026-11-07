@@ -2,7 +2,7 @@
 
 momwire#564. Before it, `PulseSolver` and `HarringtonSolver` had neither
 `compute_port_solution` nor `_port_count` nor `current_slopes`, and that is
-the whole of why the family had no portal surface — `momwire.portal` calls the
+the whole of why the family had no portal surface — `momwire.dropin.nec2c` calls the
 first and third unconditionally, so momwire#559's roster entry raised
 `AttributeError` on every deck. An escaping exception is not a refusal: it
 takes the daemon down mid-frame while the host waits on a sentinel that never

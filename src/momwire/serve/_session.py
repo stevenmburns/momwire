@@ -10,7 +10,7 @@ exactly one deck. This module owns the session shape; everything
 dialect-specific (grammar, framing bytes, refusal prose, banners) lives
 behind a :class:`Seam`.
 
-The loop here is :func:`momwire.portal._portal.resident_loop`'s, moved
+The loop here is :func:`momwire.dropin.nec2c._portal.resident_loop`'s, moved
 verbatim and parameterized — that function now delegates here, because the
 only way to guarantee a served printout is byte-identical to the stock
 daemon's is for it to be the same loop rather than a second copy of it

@@ -32,7 +32,7 @@ import warnings
 import pytest
 
 from momwire import _nec4_junction as nj
-from momwire.eznec._nec4 import solve as nec4_solve
+from momwire.dropin.nec5._nec4 import solve as nec4_solve
 
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "nec42_junction_1668"
 K14 = 2 * math.pi * 14e6 / 299792458.0

@@ -6,7 +6,7 @@ EZNEC Pro+ v7 runs its NEC-5 console engine once per calculation, as
 
 — two quoted positional arguments (input deck, output printout), resolved
 against the current directory, stdin never read, stderr empty, exit 0.  This
-module is that protocol and nothing else; :mod:`momwire.eznec._printout` owns
+module is that protocol and nothing else; :mod:`momwire.dropin.nec5._printout` owns
 the bytes it writes, and U2 onward own what goes below the header.
 
 Everything here is derived from CAPTURED INPUT/OUTPUT ONLY — the launch lines,
@@ -65,7 +65,7 @@ licensed NEC-4.2 directly the same way (momwire#1592).  And any NEC-5 deck
 whose ``GE`` card
 carries a third field of 1 (``GE 0 0 1``, momwire#1488) gets a
 ``<printout stem>.GMO`` geometry file beside its printout
-(:mod:`momwire.eznec._gmo`), which 4nec2's NEC-5 package rebuilds its
+(:mod:`momwire.dropin.nec5._gmo`), which 4nec2's NEC-5 package rebuilds its
 SEGMENTATION DATA table from; no EZNEC or SimNEC deck has a third ``GE``
 field, so their runs write exactly what they wrote before.
 """
@@ -84,9 +84,9 @@ from pathlib import Path
 
 import momwire_serve_client as _mech
 
-from .. import _features, _times
-from ..deck import DeckError
-from ..deck._nec5 import (
+from ... import _features, _times
+from ...deck import DeckError
+from ...deck._nec5 import (
     Nec5Deck,
     Nec5Structure,
     ends_on_nx,
@@ -95,7 +95,7 @@ from ..deck._nec5 import (
     parse_nec5_shared,
     split_structures,
 )
-from ..serve import Seam
+from ...serve import Seam
 from . import _gmo, _nec4, _printout, _serve
 
 __all__ = [
@@ -129,7 +129,7 @@ ARGUMENT_ERROR_INPUT = "ERROR getting input file from command line"
 
 # The two EZNEC slots this shell answers (momwire#1295): ``nec5`` is the
 # External NEC-5 slot every release has served, ``nec4`` the External NEC-4.2
-# one (`momwire.eznec._nec4`).  The process protocol is identical for both;
+# one (`momwire.dropin.nec5._nec4`).  The process protocol is identical for both;
 # the program's NAME picks which deck dialect and printout answer it.
 DIALECTS = ("nec5", "nec4")
 
@@ -393,12 +393,12 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
     """One deck's text as a printout: the results, or a refusal that says why.
 
     ``dialect`` is the EZNEC slot (:data:`DIALECTS`).  ``"nec4"`` hands the
-    whole deck to :func:`momwire.eznec._nec4.render`; everything below this
+    whole deck to :func:`momwire.dropin.nec5._nec4.render`; everything below this
     paragraph describes the ``"nec5"`` path, which it leaves untouched.  An
     unknown dialect is a refusal naming it, like an unknown basis.
 
     ``basis`` picks which momwire formulation answers it (momwire#603 U3) and
-    is passed straight to :func:`~momwire.eznec._serve.serve`, whose default
+    is passed straight to :func:`~momwire.dropin.nec5._serve.serve`, whose default
     is the one every committed printout is gated against.  A name the roster
     does not know, and a basis this deck's own geometry cannot be hosted by,
     both come back through gate 3 below as a refusal naming the basis.
@@ -407,7 +407,7 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
 
     1. the dialect front end (U2) refuses a card that is not in the observed
        vocabulary, or a field form no capture has shown;
-    2. :func:`~momwire.eznec._serve.refusal` refuses a deck that parses but
+    2. :func:`~momwire.dropin.nec5._serve.refusal` refuses a deck that parses but
        is above the served rungs of the scored ladder — a near field, an
        interleaved network table, a multi-source drive in one of the shapes
        no capture writes;
@@ -785,7 +785,7 @@ def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str,
 
     ``dialect`` is the EZNEC slot, as for :func:`render`: the NEC-4.2 slot
     streams the same way, each structure in its own printout
-    (:func:`momwire.eznec._nec4.render_structure`, momwire#1592).
+    (:func:`momwire.dropin.nec5._nec4.render_structure`, momwire#1592).
     """
     try:
         structures = split_structures(text, open_end=True)

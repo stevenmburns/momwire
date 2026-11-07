@@ -4,7 +4,7 @@ momwire#532, the EZNEC leg of the #718 arc: EZNEC runs its external engine
 once per calculation as ``engine.exe <deck> <printout>`` and today's frozen
 one-shot pays ~1 s of interpreter + NumPy import per launch. This client is
 the same argv contract with the import deleted: forward the deck bytes to
-the resident ``python -m momwire.eznec --serve`` daemon (spawning it if
+the resident ``python -m momwire.dropin.nec5 --serve`` daemon (spawning it if
 nobody is listening), write the answered bytes to the printout path, exit 0.
 The daemon transcodes (latin-1, CRLF), so what arrives IS the file — this
 client never inspects, decodes, or frames anything.
@@ -22,7 +22,7 @@ feature is "as slow as today", never "the engine is broken":
 1. a warm server answers — the fast path, milliseconds;
 2. nobody listening — spawn the server under the lock and wait for it;
 3. the resident path fails ANYWHERE (spawn, timeout, socket death, an empty
-   answer) — run the stock one-shot ``python -m momwire.eznec`` in-process
+   answer) — run the stock one-shot ``python -m momwire.dropin.nec5`` in-process
    of a child, which is correct at today's speed;
 4. even that fails — write a printout carrying a named ``NEC ERROR`` line,
    because the file is the only channel EZNEC reads (rule 2 of the shell's
@@ -55,6 +55,9 @@ import momwire_serve_client as _mech
 # selects the twin; the ``client`` segment itself selects nothing.
 _FILENAME_MARKER = "eznec-"
 _CLIENT_SEGMENT = "client"
+# momwire#1831: `momwire-dropin-client[-<basis>]`, the client under the
+# package's name, reads its basis the same way; the old marker is read first.
+_DROPIN_MARKER = "dropin-"
 # momwire#1239: the SimNEC spelling. SimNEC picks its engine CLASS, and so
 # the deck syntax it writes, from a substring of the engine's path: `nec2c`
 # -> NEC-2 decks, `nec5` -> NEC-5 decks. A NEC-5 command therefore has to
@@ -122,7 +125,7 @@ def _server_command(
     command = [
         sys.executable,
         "-m",
-        "momwire.eznec",
+        "momwire.dropin.nec5",
         "--serve",
         "--socket",
         path,
@@ -188,7 +191,7 @@ def _one_shot(
     """
     import subprocess
 
-    command = [sys.executable, "-m", "momwire.eznec", deck_path, printout_path]
+    command = [sys.executable, "-m", "momwire.dropin.nec5", deck_path, printout_path]
     kwargs = []
     if basis is not None:
         # The module entry has no basis flag (EZNEC's argv contract); the
@@ -208,7 +211,7 @@ def _one_shot(
         command = [
             sys.executable,
             "-c",
-            "import sys; from momwire.eznec._shell import main; "
+            "import sys; from momwire.dropin.nec5._shell import main; "
             f"sys.exit(main(sys.argv[1:], {', '.join(kwargs)}))",
             deck_path,
             printout_path,
@@ -233,6 +236,15 @@ def _last_ditch(printout_path: str, reason: str) -> None:
         print(f"NEC ERROR - {reason}")
 
 
+def _client_basis(prog: str) -> str | None:
+    """The basis a ``momwire-eznec-client[-<basis>]`` or
+    ``momwire-dropin-client[-<basis>]`` name selects; ``None`` for neither."""
+    basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+    if basis is None:
+        basis = _mech.filename_basis(prog, _DROPIN_MARKER, consumed=_CLIENT_SEGMENT)
+    return basis
+
+
 def probe_version(prog: str = "momwire-eznec-client") -> str:
     """The ``-version`` line, answered without importing momwire.
 
@@ -255,7 +267,7 @@ def launcher_name(prog: str) -> str:
     rules :func:`main` reads the slot and the basis with."""
     is_nec4, basis = _mech.filename_nec4(prog)
     if not is_nec4:
-        basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+        basis = _client_basis(prog)
         if basis is None:
             basis = _mech.filename_basis(prog, _NEC5_MARKER)
     stem = "momwire-nec42" if is_nec4 else "momwire-nec5"
@@ -270,7 +282,7 @@ STREAMING_REFUSAL = (
 
 def _stream(basis: str | None, dialect: str = "nec5") -> int:
     """SimNEC's streaming call (``- -``, momwire#1512): the one-shot shell's
-    :func:`momwire.eznec._shell.stream`, in a child that inherits this
+    :func:`momwire.dropin.nec5._shell.stream`, in a child that inherits this
     process's stdin and stdout. One interpreter start per stream, which is
     the whole point of the mode; the resident server answers one deck per
     connection, and a stream is one long conversation. ``dialect`` is the
@@ -283,7 +295,7 @@ def _stream(basis: str | None, dialect: str = "nec5") -> int:
     command = [
         sys.executable,
         "-c",
-        "import sys; from momwire.eznec._shell import main; "
+        "import sys; from momwire.dropin.nec5._shell import main; "
         f"sys.exit(main(['-', '-']{kwargs}))",
     ]
     try:
@@ -356,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     deck_path, printout_path = args
     if not is_nec4:
-        basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+        basis = _client_basis(prog)
         if basis is None:
             basis = _mech.filename_basis(prog, _NEC5_MARKER)
     dialect = "nec4" if is_nec4 else "nec5"

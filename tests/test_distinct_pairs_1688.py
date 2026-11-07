@@ -12,7 +12,7 @@ import math
 import numpy as np
 
 from momwire import _near_interface as ni
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 LAM = 299.8 / 14.0
 

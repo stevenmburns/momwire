@@ -1048,7 +1048,7 @@ class _Nec2Parser:
         ``CHARGE DENSITIES`` report the card asks for.  The card selects what
         is PRINTED and changes nothing about the solve, so the deck model
         records nothing: the portal reads the card itself, the way it reads
-        ``PT`` (see ``momwire.portal._portal.ChargePrintControl``, which
+        ``PT`` (see ``momwire.dropin.nec2c._portal.ChargePrintControl``, which
         carries the measured form-by-form semantics). Its four integers are
         read here all the same, so a NaN or an infinity among them refuses by
         card and field (`Card.i`) rather than fail in the printout.

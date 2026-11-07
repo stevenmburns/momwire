@@ -11,7 +11,7 @@ This module is the other half of the fix. It is what SimNEC spawns, and it
 does no work: it finds (or starts) ONE long-lived server holding one warm
 cache and one thread-pool budget, then pumps stdin to it and its answers back
 to stdout until SimNEC closes the pipe. The server is
-``python -m momwire.portal --serve`` — today's daemon behind an ``accept()``.
+``python -m momwire.dropin.nec2c --serve`` — today's daemon behind an ``accept()``.
 
 **Nothing here may import ``momwire``**, and that is the entire point rather
 than a style rule: ``import momwire`` pulls NumPy and SciPy, which is the
@@ -52,7 +52,7 @@ socket and the loser was served the other's physics with a banner naming it
 The call forms every momwire launcher answers (momwire#1611) are served
 here too: ``- -`` is the protocol this client already pumps, and ``in out``
 or 4nec2's two names on stdin, one deck file each, are handed to the stock
-engine (``python -m momwire.portal`` with the same flags), which answers them
+engine (``python -m momwire.dropin.nec2c`` with the same flags), which answers them
 through the shared launcher shell at the stock engine's speed.
 
 POSIX only. The transport is an AF_UNIX socket; Windows CPython gained
@@ -124,7 +124,7 @@ def probe_version(suffix: str | None = None) -> str:
     """The ``-version`` line, answered without importing momwire.
 
     :func:`momwire_serve_client.version_line` (momwire#1606), the same line
-    ``momwire.portal.probe_version`` builds from the same owner, so the probe
+    ``momwire.dropin.nec2c.probe_version`` builds from the same owner, so the probe
     never has to spawn anything. ``suffix`` is what this launcher's own file
     name selects (:func:`filename_basis`); ``--basis`` never moves the line.
     An editable install reports the version recorded at ``pip install -e``
@@ -134,7 +134,7 @@ def probe_version(suffix: str | None = None) -> str:
 
 
 def nec2_launcher_name(suffix: str | None) -> str:
-    """``momwire.portal._portal.nec2_launcher_name`` restated (importing it
+    """``momwire.dropin.nec2c._portal.nec2_launcher_name`` restated (importing it
     would cost the NumPy start-up), pinned equal by
     ``tests/test_version_line_1606.py``."""
     return f"momwire-nec2c-{suffix}" if suffix else "momwire-nec2c"
@@ -378,7 +378,7 @@ def _server_command(
     return [
         sys.executable,
         "-m",
-        "momwire.portal",
+        "momwire.dropin.nec2c",
         "--serve",
         "--socket",
         path,
@@ -525,11 +525,13 @@ def _write_all(fd: int, data: bytes) -> None:
 
 def _stock(engine: list[str], paths: list[str]) -> None:
     """Become the stock engine for one deck file's call form (``in out``,
-    or 4nec2's names, momwire#1611): ``python -m momwire.portal`` with the
+    or 4nec2's names, momwire#1611): ``python -m momwire.dropin.nec2c`` with the
     same engine flags and the paths on its command line, which answers them
     through the launcher shell.  Never returns."""
     sys.stdout.flush()
-    os.execv(sys.executable, [sys.executable, "-m", "momwire.portal", *engine, *paths])
+    os.execv(
+        sys.executable, [sys.executable, "-m", "momwire.dropin.nec2c", *engine, *paths]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -583,7 +585,13 @@ def main(argv: list[str] | None = None) -> int:
         # module keeps the embedded decks in one file.
         os.execv(
             sys.executable,
-            [sys.executable, "-m", "momwire.portal", "--shared-selftest", *engine],
+            [
+                sys.executable,
+                "-m",
+                "momwire.dropin.nec2c",
+                "--shared-selftest",
+                *engine,
+            ],
         )
 
     try:

@@ -4,7 +4,7 @@ network - the last multi-``EX`` shape this seam refused by name.
 momwire#511 served several ``EX 4`` (set-current) sources reaching the
 structure through a network, and momwire#1099 served several ``EX 0`` with no
 network on the deck.  Between them sat the fourth cell of the table
-:func:`momwire.eznec._serve._multi_drive_state` narrates: several ``EX 0``
+:func:`momwire.dropin.nec5._serve._multi_drive_state` narrates: several ``EX 0``
 THROUGH a network.  Nothing had printed a row to say what NEC-5 does with the
 pair, so the seam refused it by name until this issue.
 
@@ -28,7 +28,7 @@ Gates:
    the same four TAG/SEG addresses as the oracle's, in the same discovery
    order (both driven sites are themselves connection points here, which is
    what makes this deck a real gate for the restore in
-   :func:`momwire.eznec._serve._multi_drive_state` rather than a no-op);
+   :func:`momwire.dropin.nec5._serve._multi_drive_state` rather than a no-op);
 5. the network-free all-voltage shape (momwire#1099) is unmoved: that gate
    lives in test_eznec_serve.py (the 0032 rewrite) and
    test_eznec_probe_ex_1099.py, not here - 0187 in this fixture directory is
@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_multi_voltage_network_1105"
 DECK = (FIXTURES / "V_0120_two_voltage_through_network.nec").read_text()
@@ -126,12 +126,12 @@ def test_the_network_connection_table_carries_the_oracles_four_addresses():
     """Both driven sites are themselves network connection points here (each
     ``EX 0`` sits exactly at a ``TL`` end), so this table is where a stale,
     unrestored ``v_applied`` at a V-set site would show up - see the restore
-    in :func:`momwire.eznec._serve._multi_drive_state`.
+    in :func:`momwire.dropin.nec5._serve._multi_drive_state`.
 
     The oracle's own row ORDER differs between this deck and its current-driven
     (``EX 4``) twin even though the network topology is identical - NEC-5's
     internal ordering is not deck order the way this seam's is
-    (:func:`momwire.eznec._serve._connection_points`, deck order, unmoved by
+    (:func:`momwire.dropin.nec5._serve._connection_points`, deck order, unmoved by
     this fix and already byte-gated on 47 other captures).  So this gate
     checks the ADDRESS SET the table carries, not the row sequence.
     """

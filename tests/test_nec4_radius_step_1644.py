@@ -49,7 +49,7 @@ import pytest
 from momwire import _nec4_junction as nj
 from momwire import _sinusoidal_nec4 as sn
 from momwire.deck import build_solver, parse
-from momwire.eznec._nec4 import solve as nec4_solve
+from momwire.dropin.nec5._nec4 import solve as nec4_solve
 from momwire.sinusoidal import (
     _EULER_GAMMA,
     RadiusStepJunction,
@@ -571,7 +571,7 @@ def test_a_singular_node_keeps_the_log_rule(deck):
     """Coincident members (a wire left in place twice) give the junction
     solve no unique split; that node keeps the log rule and the deck prints
     as it did rather than raising."""
-    from momwire.eznec import _nec4
+    from momwire.dropin.nec5 import _nec4
 
     text = (
         pathlib.Path(__file__).parent / "fixtures" / "razor_printout_small" / deck

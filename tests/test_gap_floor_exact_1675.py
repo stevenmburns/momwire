@@ -15,7 +15,7 @@ import warnings
 import pytest
 
 from momwire import _wire_spec
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 LAM = 299.8 / 14.0
 H, A = 5.05283, 0.0381

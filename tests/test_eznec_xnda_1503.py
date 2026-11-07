@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from momwire.deck._nec5 import DeckError, parse_nec5
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_xnda_1503"
 ROW_PREFIX_WIDTH = 17  # "%8.2f%9.2f": a pattern row starts with two angles
@@ -167,7 +167,7 @@ def test_d1_is_the_power_gain_over_the_radiated_power_bit_for_bit():
     """momwire's directive rows are the power-gain rows scaled by Pin / Prad
     before the dB, so 1011 and 1001 differ in the gain cells alone: the
     angles, the fields and the ellipse are the same numbers."""
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
     from momwire.deck._nec5 import parse_nec5 as parse
 
     text = (FIXTURES / "lossy1011.nec").read_text(encoding="latin-1")

@@ -87,7 +87,7 @@ def stock(decks: str) -> str:
     # In-process, same reasoning as tests/test_portal_shared.py's stock():
     # configure_engine resets the basis and the cache on entry, so this call
     # is indistinguishable from a fresh process.
-    from momwire.portal import main as portal_main
+    from momwire.dropin.nec2c import main as portal_main
 
     out = io.StringIO()
     rc = portal_main([], io.StringIO(decks), out, io.StringIO())

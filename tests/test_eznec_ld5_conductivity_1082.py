@@ -42,8 +42,8 @@ from momwire.bspline import BSplineSolver
 from momwire.deck import DeckError
 from momwire.deck import parse as parse_nec2
 from momwire.deck._nec5 import Nec5Conductivity, parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from momwire._wire_loading import wire_internal_impedance
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_ld5_1082"

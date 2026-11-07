@@ -96,7 +96,7 @@ def test_razor_names_are_roster_entries_but_not_nec2_front_door_entries():
     import tomllib
 
     from momwire.deck import NEC2_BASES
-    from momwire.portal._portal import _BANNER_SUFFIXES, basis_from_program_name
+    from momwire.dropin.nec2c._portal import _BANNER_SUFFIXES, basis_from_program_name
     from momwire_nec2c_client import BASIS_NAMES
 
     root = pathlib.Path(__file__).resolve().parent.parent

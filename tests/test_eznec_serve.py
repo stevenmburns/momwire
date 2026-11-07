@@ -73,8 +73,8 @@ import pytest
 
 from momwire import BSplineSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 
 # The far-field readout the seam imports, imported here for the one gate that
 # is ABOUT that import: `refl` and `sommerfeld` are one branch of it.
@@ -971,7 +971,7 @@ def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
     out = tmp_path / "NEC5.OUT"
 
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+        [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(out)],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -1398,7 +1398,7 @@ def test_the_engine_writes_no_sommerfeld_cache_and_reads_none(tmp_path):
         if cache:
             (room / "SOMMPD.NEX").write_bytes(junk)
         proc = subprocess.run(
-            [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+            [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(out)],
             capture_output=True,
             text=True,
             cwd=room,
@@ -1467,7 +1467,7 @@ def test_the_epsilon_c_constant_is_the_engine_s_own_and_not_the_si_fold():
 #
 # A bare `GD` and a `GN 0` carry the same two media fields, print the same four
 # environment lines and mean two different grounds (module docstring of
-# `momwire.eznec._serve`, "One medium, two things to do with it").  Each gate
+# `momwire.dropin.nec5._serve`, "One medium, two things to do with it").  Each gate
 # below is one way they differ or one way they deliberately do not, and each is
 # written so that the ALIASING bug — routing `GD` down the `GN 0` branch, or
 # down `GN 1`'s all the way to the pattern — fails it loudly.
@@ -2062,7 +2062,7 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     out = tmp_path / "NEC5.OUT"
 
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+        [sys.executable, "-m", "momwire.dropin.nec5", str(deck), str(out)],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -2891,6 +2891,6 @@ def test_the_module_never_reaches_for_a_second_far_field_implementation():
     cross-import existed; now it asserts the import is gone and the neutral
     one is there instead."""
     source = Path(_serve.__file__).read_text()
-    assert "from ..portal" not in source
-    assert "from .._far_readout import" in source
+    assert "from ..nec2c" not in source
+    assert "from ..._far_readout import" in source
     assert "def _far_moments" not in source

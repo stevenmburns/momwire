@@ -1078,7 +1078,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         solution and NOT across solves.
 
         Without this method the pulse family had no portal surface at all —
-        `momwire.portal`'s `_y_and_port_coeffs` calls it unconditionally, so
+        `momwire.dropin.nec2c`'s `_y_and_port_coeffs` calls it unconditionally, so
         a roster entry without it raised `AttributeError` on EVERY deck, and
         an escaping exception is not a refusal (momwire#559, #564).
         """

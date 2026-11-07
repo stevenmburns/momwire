@@ -78,7 +78,7 @@ validation = [
 
 # Console scripts.
 #
-# `momwire-nec2c` is the NEC-2 launcher (momwire.portal, issue #846 phase III;
+# `momwire-nec2c` is the NEC-2 launcher (momwire.dropin.nec2c, issue #846 phase III;
 # momwire#1658 for the name) — momwire standing in for the nec2c binary that
 # its two front ends, SimNEC and 4nec2, shell out to. The NAME IS PART OF THE CONTRACT
 # and must not be "prettified": `nec2/NEC2PortalDialog` accepts a configured
@@ -93,7 +93,7 @@ validation = [
 # `versionNECd`, `(NEC\d+\D.*)`. The launcher answers the four-field line every
 # momwire launcher shares (momwire#1606), `NEC2 momwire-nec2c [sb] <version>`:
 # it must start `NEC2` with a non-digit after the 2, and the tail is free (see
-# the comment above `probe_version` in momwire/portal/_portal.py). SimNEC
+# the comment above `probe_version` in momwire/dropin/nec2c/_portal.py). SimNEC
 # afterwards runs the command through `sh -c` with cwd=$HOME, so the entry point must never depend on the working
 # directory. Both properties are pinned in tests/test_portal.py.
 #
@@ -101,19 +101,23 @@ validation = [
 # forwarder to one long-lived server process, for a session where SimNEC's
 # spawn-per-evaluation-burst behaviour makes the cold start (Python + NumPy +
 # parse + mesh + first fill) the dominant cost. It must NOT resolve into
-# `momwire.portal` — importing the package is the ~680 ms it exists to delete —
+# `momwire.dropin.nec2c` — importing the package is the ~680 ms it exists to delete —
 # so it lives in its own top-level module with no momwire import in it, and the
 # `py_modules` entry in setup.py is what ships it. The name obeys the same two
 # filename rules as its stock sibling: it CONTAINS `nec2c` and it contains no
 # `out`, `nec5` or `nec42`. Both entries are pinned in tests/test_portal.py.
 [project.scripts]
-momwire-nec2c = "momwire.portal:main"
+momwire-nec2c = "momwire.dropin.nec2c:main"
 momwire-nec2c-shared = "momwire_nec2c_client:main"
 # The EZNEC leg's thin client (momwire#532 / #718 phase 2): same argv contract
 # as the engine (two positional paths), forwards to the resident
-# `python -m momwire.eznec --serve` daemon; the basis rides on a copy's own
+# `python -m momwire.dropin.nec5 --serve` daemon; the basis rides on a copy's own
 # filename past the `eznec-` marker, exactly as the frozen twins spell it.
 momwire-eznec-client = "momwire_eznec_client:main"
+# momwire#1831: the same client under the package's name, `momwire.dropin`.
+# `momwire-eznec-client` above stays as an alias; the basis rides past
+# `dropin-` exactly as it rides past `eznec-`.
+momwire-dropin-client = "momwire_eznec_client:main"
 # The NEC-5 family (momwire#1239): the same thin client under names carrying
 # `nec5`, which is what SimNEC reads to write NEC-5 decks. The basis rides on
 # the name past `nec5-`; plain `momwire-nec5` is the default basis, and
@@ -148,18 +152,18 @@ momwire-nec42-pulse = "momwire_eznec_client:main"
 # filename-only host dialog (SimNEC's, and Windows generally — no symlinks
 # needed) selects the solver by pointing at the right name. No code behind
 # these beyond portal:main — argv[0]'s "nec2c-<suffix>" does the selection.
-momwire-nec2c-bspline = "momwire.portal:main"
-momwire-nec2c-bspline-d1 = "momwire.portal:main"
-momwire-nec2c-hmatrix = "momwire.portal:main"
-momwire-nec2c-arrayblock = "momwire.portal:main"
-momwire-nec2c-sinusoidal = "momwire.portal:main"
-momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
+momwire-nec2c-bspline = "momwire.dropin.nec2c:main"
+momwire-nec2c-bspline-d1 = "momwire.dropin.nec2c:main"
+momwire-nec2c-hmatrix = "momwire.dropin.nec2c:main"
+momwire-nec2c-arrayblock = "momwire.dropin.nec2c:main"
+momwire-nec2c-sinusoidal = "momwire.dropin.nec2c:main"
+momwire-nec2c-sinusoidal-galerkin = "momwire.dropin.nec2c:main"
 # No razor name here (momwire#821): the nec2 dialect addresses segment
 # centres and razor places gaps at knots, so `deck.build_solver` refuses every
 # nec2 deck under it. `momwire-nec2c-razor-2p` / `-razor-nec5` shipped from
 # v0.36.1 to v0.46.0 and are retired; razor is served by the NEC-5 dialect's
 # launchers (`momwire-nec5-razor-2p`).
-momwire-nec2c-pulse = "momwire.portal:main"
+momwire-nec2c-pulse = "momwire.dropin.nec2c:main"
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/momwire"

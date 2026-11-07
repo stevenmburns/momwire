@@ -27,7 +27,7 @@ import pytest
 from momwire import BSplineSolver
 from momwire.deck._polylines import split_at_plane, to_polylines
 from momwire.deck.model import DeckModel, DeckWire
-from momwire.portal._portal import main as portal_main
+from momwire.dropin.nec2c._portal import main as portal_main
 
 SOIL = (13.0, 0.005)
 F_MHZ = 7.1

@@ -105,7 +105,7 @@ def numpy_openblas():
 
 def stamp_fields():
     """Line 2's version, variant and overlay marker, as this process stamps them."""
-    from momwire.eznec import _printout
+    from momwire.dropin.nec5 import _printout
 
     version = _printout._stamp_field(_printout._momwire_version()) or "unknown"
     variant = _printout._stamp_field(_printout._accelerator_variant()) or "none"
@@ -122,7 +122,7 @@ def python_printout(text: str, basis: str = BASIS, runs: list | None = None) -> 
     arrays there, in execution order (`ARRAYS`: the solve's Y, the
     coefficients `_finish` reads its currents from, `_port_state`'s four
     vectors)."""
-    from momwire.eznec import _serve, _shell
+    from momwire.dropin.nec5 import _serve, _shell
 
     orig_finish, orig_state = _serve._finish, _serve._port_state
     if runs is not None:

@@ -1,4 +1,4 @@
-"""``python -m momwire.eznec --serve`` — the EZNEC seam behind a warm socket.
+"""``python -m momwire.dropin.nec5 --serve`` — the EZNEC seam behind a warm socket.
 
 The #718 arc's whole saving (momwire#532): EZNEC launches its external engine
 once per frequency point and the frozen one-shot pays ~1 s of interpreter and
@@ -14,7 +14,7 @@ to be the client's half-close, whose EOF macOS can lose),
 :func:`momwire.serve.run_session` answers once, the connection closes. One
 length line and no other framing of our own, and the printout that comes back
 is byte-for-byte the file to write: the transcoding the one-shot shell does
-at :func:`~momwire.eznec._shell.write_printout` (latin-1, CRLF) happens HERE,
+at :func:`~momwire.dropin.nec5._shell.write_printout` (latin-1, CRLF) happens HERE,
 in the connection's own text wrapper, so a
 client stays a dumb pipe and cannot get it wrong.
 
@@ -31,9 +31,9 @@ import sys
 
 import momwire_serve_client as _mech
 
-from ..serve import run_session
-from ..serve._pool import WorkerPool, configured_max_workers
-from ..serve._server import ConnLog, serve_forever, take_value
+from ...serve import run_session
+from ...serve._pool import WorkerPool, configured_max_workers
+from ...serve._server import ConnLog, serve_forever, take_value
 from . import _serve
 from ._shell import _PRINTOUT_ERRORS, seam, seam_failure
 
@@ -170,7 +170,7 @@ def accelerator_status() -> str:
     from the modules that own them (and a test can move them), and this must
     not reorder the daemon's own import graph.
     """
-    from .. import _accel, _near_interface
+    from ... import _accel, _near_interface
 
     # The near-interface extension is live only when BOTH its entries are:
     # a .so built between #680 and #899 exports the point twin and not the
@@ -245,9 +245,9 @@ def _pool(log, idle_timeout: float, basis: str, dialect: str) -> WorkerPool | No
     log.write(f"worker pool: at most {cap} worker(s) ({why})\n")
     return WorkerPool(
         {
-            "factory": "momwire.eznec._shell:seam",
+            "factory": "momwire.dropin.nec5._shell:seam",
             "kwargs": {"basis": basis, "dialect": dialect},
-            "status": "momwire.eznec._resident:accelerator_status",
+            "status": "momwire.dropin.nec5._resident:accelerator_status",
         },
         log,
         max_workers=cap,

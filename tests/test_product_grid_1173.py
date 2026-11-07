@@ -628,7 +628,7 @@ def _wa7ark(nec5):
     razor-2p on the nec5 lane, the bare RazorSolver on the default one."""
     import test_eznec_phantom_geometry_1139 as ph
 
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_serve, "BASIS", "razor-2p")

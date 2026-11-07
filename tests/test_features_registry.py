@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from momwire import _features as F
-from momwire.eznec import _printout
+from momwire.dropin.nec5 import _printout
 
 ROOT = Path(__file__).resolve().parents[1]
 HIERARCHY = ROOT / "support" / "hierarchy.toml"
@@ -260,7 +260,7 @@ def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
 
 
 def test_the_portal_entry_runs_as_the_portal(no_features):
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
     deck = (ROOT / "tests" / "fixtures" / _GOLDEN_CASES[0][0]).read_text("latin-1")
@@ -300,7 +300,7 @@ def test_the_flag_off_printout_is_unchanged(no_features, deck, basis):
     from golden_compare import undefined_blanked
     from threadpoolctl import threadpool_limits
 
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     G = _golden_module()
     assert (deck, basis) in G.CASES

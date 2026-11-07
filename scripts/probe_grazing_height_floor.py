@@ -186,7 +186,7 @@ def deck(
 def momwire_z(text: str, basis: str) -> complex | None:
     """What one trunk answers for this deck, or ``None`` if it refuses."""
     from momwire.deck._nec5 import parse_nec5
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     try:
         data = _serve.serve(parse_nec5(text), basis=basis)

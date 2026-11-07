@@ -66,7 +66,7 @@ sys.path.insert(0, str(SPLIT))
 import printout_compare as pc  # noqa: E402
 import printout_tolerance as pt  # noqa: E402
 
-from momwire.eznec._shell import close_deck  # noqa: E402
+from momwire.dropin.nec5._shell import close_deck  # noqa: E402
 
 ARRAYS = pc.ARRAYS
 

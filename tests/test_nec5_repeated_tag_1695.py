@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 _QUAD = (
     "CM repeated tag\nCE\n"

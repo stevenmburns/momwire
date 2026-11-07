@@ -31,7 +31,7 @@ import pytest
 
 import momwire_eznec_client as eznec_client
 import momwire_serve_client as mech
-from momwire.eznec import _resident, _shell
+from momwire.dropin.nec5 import _resident, _shell
 from momwire.serve._server import Server
 
 DECKS = Path(__file__).resolve().parent / "fixtures" / "eznec" / "decks"

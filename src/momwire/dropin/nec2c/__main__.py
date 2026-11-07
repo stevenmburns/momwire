@@ -1,4 +1,4 @@
-"""``python -m momwire.portal`` — the console script's long spelling.
+"""``python -m momwire.dropin.nec2c`` — the console script's long spelling.
 
 The ``momwire-nec2c`` entry point is what SimNEC is pointed at (its dialog
 accepts an engine on the FILENAME alone, so the name is contract).  This is

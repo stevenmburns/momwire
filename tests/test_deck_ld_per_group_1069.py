@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from momwire.deck import DeckError, LoadSpec, build_solver, parse
-from momwire.portal._portal import DeckSolver, parse_deck, run_deck
+from momwire.dropin.nec2c._portal import DeckSolver, parse_deck, run_deck
 
 DIPOLE = "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\nGE 0\n"
 DRIVE = "EX 0 1 5 0 1.\nFR 0 1 0 0 30. 0\n"

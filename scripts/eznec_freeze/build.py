@@ -514,7 +514,7 @@ def main() -> int:
         # `.dist-info` — a directory `--collect-submodules` does NOT bring
         # along.  Without this the frozen engine stamps every printout
         # `unknown` and the one field a bug report needs most is the one it
-        # cannot carry (`momwire.eznec._printout.engine_stamp`).
+        # cannot carry (`momwire.dropin.nec5._printout.engine_stamp`).
         "--copy-metadata",
         "momwire",
         # numpy's version, read from its `.dist-info` by

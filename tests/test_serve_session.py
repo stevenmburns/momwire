@@ -16,8 +16,8 @@ import io
 
 import pytest
 
-from momwire.eznec import _shell
-from momwire.portal import _portal
+from momwire.dropin.nec5 import _shell
+from momwire.dropin.nec2c import _portal
 from momwire.serve import Seam, run_session
 
 DIPOLE_NEC5 = (

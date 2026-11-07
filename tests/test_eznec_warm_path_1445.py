@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from momwire.deck._nec5 import Nec5Wire
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 
 def _reference_points(wire: Nec5Wire) -> list[tuple[float, float, float]]:

@@ -98,7 +98,7 @@ import pytest
 
 from momwire.bspline import BSplineSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 # --------------------------------------------------------------------------
 # the two decks: the reactive headline and its resonant control

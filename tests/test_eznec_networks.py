@@ -64,9 +64,9 @@ import pytest
 
 from momwire.deck._nec5 import parse_nec5
 from momwire.deck._networks import card_branches
-from momwire.eznec import _printout, _serve, serve
-from momwire.eznec._printout import LineRow, NetworkRow
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _printout, _serve, serve
+from momwire.dropin.nec5._printout import LineRow, NetworkRow
+from momwire.dropin.nec5._shell import render
 from momwire.networks import TL
 from momwire.razor import RazorSolver
 from test_eznec_printout import deck_text, extract, printout_text
@@ -446,7 +446,7 @@ EFFICIENCY_BAR = 0.83
 def _impedance(cid: str) -> complex:
     """A capture's served feedpoint impedance at SOLVER precision.
 
-    Off the :class:`~momwire.eznec.RunData` rather than off the rendered
+    Off the :class:`~momwire.dropin.nec5.RunData` rather than off the rendered
     printout, because the alias gate below asks whether two decks give the
     same number and an ``E12.4`` cell would answer that question with five
     digits of its own.
@@ -856,7 +856,7 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     +2.1316E-14 cold on GitHub runners, non-positive on the same runners out
     of a resident process).  The sign of a zero is not a number, so since #677
     the seam floors its own print decision on
-    :data:`momwire.eznec._serve._NETWORK_LOSS_DUST` and deterministically
+    :data:`momwire.dropin.nec5._serve._NETWORK_LOSS_DUST` and deterministically
     omits the dust line the engine's crumb happened to earn — asserted below.
     What is still gated on those two is everything else in the budget — the
     sum, the arithmetic and the efficiency — and the presence claim itself
@@ -1422,7 +1422,7 @@ def test_the_composition_solves_the_drive_rather_than_asserting_it():
     past the printed cell.
 
     Every ``ANTENNA INPUT PARAMETERS`` row prints the current its card set
-    because :func:`~momwire.eznec._serve._source_row` restores it — that is the
+    because :func:`~momwire.dropin.nec5._serve._source_row` restores it — that is the
     U1 rule and it would print the same cell over a composition that had solved
     nothing at all.  So this test goes back to the reduced system with the
     applied voltages the seam actually printed and reads the TERMINATION-branch
@@ -1497,7 +1497,7 @@ def test_the_card_semantics_are_the_engine_s_and_not_a_second_copy():
     # Since momwire#1336 the seam reads the COMPOSITION from there too — the
     # card branches and the rule that pins every non-endpoint port — so
     # neither the branch semantics nor the pinning loop is spelled here.
-    assert "from ..deck._networks import flat_network" in source
+    assert "from ...deck._networks import flat_network" in source
     assert "transposed" not in source
     assert "def card_branches" not in source
     assert "Driven(" not in source

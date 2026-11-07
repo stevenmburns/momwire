@@ -19,8 +19,8 @@ import numpy as np
 import pytest
 
 from momwire._vec3 import norm3
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from momwire.razor import RazorSolver
 
 FIXTURES = Path(__file__).parent / "fixtures"

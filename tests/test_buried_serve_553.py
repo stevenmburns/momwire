@@ -1225,7 +1225,7 @@ def test_gu5_12_the_refusals_no_longer_cite_the_anchor_prints():
     The constants themselves are still asserted, because the golden must not
     drift: what changed is where they may appear.
     """
-    from momwire.eznec import _serve
+    from momwire.dropin.nec5 import _serve
 
     assert ANCHOR_LONE_RADIAL == 92.1300 - 70.1410j
     assert ANCHOR_FOUR_RADIAL == 90.0510 - 70.7310j

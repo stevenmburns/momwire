@@ -38,8 +38,8 @@ from pathlib import Path
 import pytest
 
 from momwire.deck import parse
-from momwire.eznec._nec4 import render
-from momwire.portal._portal import run_deck
+from momwire.dropin.nec5._nec4 import render
+from momwire.dropin.nec2c._portal import run_deck
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "eznec_load_probes_1110"
 _NUM = re.compile(r"-?\d\.\d+E[+-]\d\d")

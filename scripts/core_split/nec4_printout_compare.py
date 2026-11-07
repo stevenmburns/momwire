@@ -31,7 +31,7 @@ import pathlib
 import sys
 import warnings
 
-from momwire.eznec import _nec4, _printout
+from momwire.dropin.nec5 import _nec4, _printout
 
 SUFFIXES = {".nec", ".deck"}
 BASES = ("sinusoidal", "bspline")

@@ -31,7 +31,7 @@ def _decks(args):
 
 def record(out_dir, decks, per=4):
     from momwire import _near_interface, razor
-    from momwire.eznec import _shell
+    from momwire.dropin.nec5 import _shell
 
     nia = _near_interface._nia
     out_dir.mkdir(parents=True, exist_ok=True)

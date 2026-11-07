@@ -2,7 +2,7 @@
 
 Two kinds of gate here, and they check different halves of the same claim.
 
-**Byte gates** compare :func:`momwire.eznec.render_header` against the top of
+**Byte gates** compare :func:`momwire.dropin.nec5.render_header` against the top of
 the captured Windows printouts under ``tests/fixtures/eznec/`` — the user's
 own licensed engine's output, kept verbatim.  The expected prefix is always
 SLICED OUT of the fixture at the ``- - - STRUCTURE SPECIFICATION - - -``
@@ -13,7 +13,7 @@ position on both sides (``test_eznec_printout.mask_engine_stamp``) — the one
 header line this engine writes differently on purpose, gated for content in
 ``tests/test_eznec_engine_stamp.py``.
 
-**Protocol gates** run ``python -m momwire.eznec`` as a real process, because
+**Protocol gates** run ``python -m momwire.dropin.nec5`` as a real process, because
 every obligation in the fault-injection table is about what a PROCESS leaves
 behind: the file exists, the stamp echo is in it, the refusal is after the
 echo, the exit code says nothing, stdin is untouched.  None of that can be
@@ -35,9 +35,9 @@ from pathlib import Path
 
 import pytest
 
-import momwire.eznec as eznec
+import momwire.dropin.nec5 as eznec
 from eznec_reproducibility import blank_undefined
-from momwire.eznec._shell import ARGUMENT_ERROR_INPUT, ARGUMENT_ERROR_OUTPUT
+from momwire.dropin.nec5._shell import ARGUMENT_ERROR_INPUT, ARGUMENT_ERROR_OUTPUT
 from test_eznec_printout import mask_engine_stamp
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "eznec"
@@ -85,7 +85,7 @@ def header_prefix(cid: str) -> str:
 
 
 def run_engine(args, *, cwd=None, stdin=subprocess.DEVNULL, input=None):
-    """``python -m momwire.eznec`` in a child process.
+    """``python -m momwire.dropin.nec5`` in a child process.
 
     The child is pointed at the SAME momwire the parent imported (an editable
     checkout, a worktree on ``PYTHONPATH``, or an installed wheel) by deriving
@@ -97,7 +97,7 @@ def run_engine(args, *, cwd=None, stdin=subprocess.DEVNULL, input=None):
         [src_root, *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
     )
     return subprocess.run(
-        [sys.executable, "-m", "momwire.eznec", *args],
+        [sys.executable, "-m", "momwire.dropin.nec5", *args],
         cwd=None if cwd is None else str(cwd),
         env=env,
         capture_output=True,
@@ -501,7 +501,7 @@ def test_the_package_is_shipped():
     """``setup.py`` lists packages explicitly, so a new one that nobody adds
     imports fine from a checkout and is simply absent from every wheel."""
     setup_py = Path(__file__).resolve().parents[1] / "setup.py"
-    assert '"momwire.eznec"' in setup_py.read_text()
+    assert '"momwire.dropin.nec5"' in setup_py.read_text()
 
 
 @pytest.mark.integration
@@ -531,7 +531,7 @@ def test_an_internal_crash_still_carries_the_comment_echo(tmp_path, monkeypatch)
     """A refusal without the stamp echo is one EZNEC discards as stale, so
     even the last-ditch internal-error printout must echo the deck's CM
     block (re-read from disk) ahead of its NEC ERROR line."""
-    from momwire.eznec import _printout, _shell
+    from momwire.dropin.nec5 import _printout, _shell
 
     deck = FIXTURE_DIR / "decks" / "0043_vertical-over-real-ground.nec"
     deck_text = deck.read_text(encoding="latin-1")
@@ -644,7 +644,7 @@ def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     Marked slow: the cold side is 62 interpreter starts, which IS the cost the
     issue exists to delete.
     """
-    from momwire.eznec._shell import main
+    from momwire.dropin.nec5._shell import main
 
     decks = sorted((FIXTURE_DIR / "decks").glob("*.nec"))
     assert len(decks) > 50, "the corpus shrank; this gate is sized for all of it"

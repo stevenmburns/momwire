@@ -76,18 +76,18 @@ def _claims() -> list[tuple[str, str]]:
         ("tests/test_eznec_drive_spelling.py", f"the {PRINTOUTS}\nprintout-carrying"),
         ("tests/test_eznec_drive_spelling.py", f"{CORPUS} committed captures"),
         ("tests/test_eznec_drive_spelling.py", f"and {served} without it"),
-        ("src/momwire/eznec/_serve.py", f"It serves {served} today"),
+        ("src/momwire/dropin/nec5/_serve.py", f"It serves {served} today"),
         # the thread-count sweeps
         ("tests/test_eznec_printout.py", f"over all {CORPUS} capture decks"),
         ("tests/test_eznec_shell.py", f"across all {CORPUS} decks"),
-        ("src/momwire/eznec/_serve.py", f"over all {CORPUS} capture decks"),
+        ("src/momwire/dropin/nec5/_serve.py", f"over all {CORPUS} capture decks"),
         # the deck front end
         ("tests/test_deck_nec5.py", f"Parsing all {CORPUS} decks"),
         # No user-visible refusal text quotes the corpus count any more:
         # momwire#1105 served the one sentence that did (several EX 0 through
         # a network), removing it rather than restating it.
         # the printout's request-card shape
-        ("src/momwire/eznec/_printout.py", f"across the {CORPUS} captures"),
+        ("src/momwire/dropin/nec5/_printout.py", f"across the {CORPUS} captures"),
         # the design note
         ("docs/design/seam-rule.md", f"Three of the {CORPUS} corpus decks"),
     ]
@@ -133,7 +133,7 @@ def test_no_capture_writes_two_request_cards():
     # it — the same rule as every claim in the table above.
     one = sum(1 for n in counts if n == 1)
     none = sum(1 for n in counts if n == 0)
-    said = (ROOT / "src/momwire/eznec/_printout.py").read_text()
+    said = (ROOT / "src/momwire/dropin/nec5/_printout.py").read_text()
     assert (
         f"{one} write exactly one\n    request card and the other {none} write NONE"
         in said

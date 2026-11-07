@@ -1,6 +1,6 @@
 """The shared engine's server half (#379) — today's daemon behind ``accept()``.
 
-``python -m momwire.portal --serve --socket PATH [engine flags]``. One process
+``python -m momwire.dropin.nec2c --serve --socket PATH [engine flags]``. One process
 per engine configuration, started on demand by the first
 ``momwire-nec2c-shared`` client that finds nobody listening (see
 :mod:`momwire_nec2c_client`, which owns the socket naming, the spawn lock and
@@ -12,7 +12,7 @@ died with every one-second engine process:
 * **the cross-deck cache survives**. ``--cache`` keys solvers by operator
   identity, and the case it exists for — a value dragged back to something
   already probed, minutes later — needs a process that is still there minutes
-  later. :func:`~momwire.portal._portal.configure_engine` is therefore called
+  later. :func:`~momwire.dropin.nec2c._portal.configure_engine` is therefore called
   ONCE at start-up, never per connection: it resets the cache exactly as a
   fresh process would, which is right at start-up and would be a lobotomy in
   a connection handler.
@@ -32,7 +32,7 @@ died with every one-second engine process:
   lock because its ``--cache`` of whole solvers is the point of it, and N
   processes would be N caches.
 
-Everything protocol-shaped is :func:`~momwire.portal._portal.resident_loop`,
+Everything protocol-shaped is :func:`~momwire.dropin.nec2c._portal.resident_loop`,
 called once per connection with the socket's own file objects. That is not a
 convenience: the printout a client reads must be byte-identical to the stock
 engine's, and the only way to guarantee that is for it to be the same loop
@@ -62,7 +62,7 @@ import os
 import signal
 import sys
 
-from ..serve._server import ConnLog, serve_forever, take_value
+from ...serve._server import ConnLog, serve_forever, take_value
 from ._portal import _SELFTEST_DECKS, configure_engine, resident_loop
 
 
@@ -100,7 +100,7 @@ def serve_main(argv: list[str]) -> int:
         # sentence, imported at CALL time because `_resident` pulls the whole
         # eznec serve module in at import and this daemon's start-up cost is
         # the thing it exists to amortise.
-        from ..eznec._resident import accelerator_status
+        from ..nec5._resident import accelerator_status
 
         log.write(f"{accelerator_status()}\n")
         # ONCE per process. The engine flags are the server's identity — the
@@ -215,7 +215,7 @@ def _terminate(path: str) -> None:
 
 
 def shared_main(argv: list[str]) -> int:
-    """The ``python -m momwire.portal`` modes that are not the stock daemon."""
+    """The ``python -m momwire.dropin.nec2c`` modes that are not the stock daemon."""
     if "--shared-selftest" in argv:
         return shared_selftest(argv)
     return serve_main(argv)

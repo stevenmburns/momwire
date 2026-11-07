@@ -31,7 +31,7 @@ import pytest
 import somm_far_oracle_1258 as oracle
 
 from momwire import _sommerfeld as sm
-from momwire.eznec._shell import render
+from momwire.dropin.nec5._shell import render
 
 C = sm._C_LIGHT
 EPS0 = 8.8541878128e-12

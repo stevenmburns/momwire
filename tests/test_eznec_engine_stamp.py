@@ -43,8 +43,8 @@ import pytest
 
 import momwire
 from momwire import _accel
-from momwire.eznec import _printout, _resident, _serve, _shell
-from momwire.eznec._printout import engine_stamp, render_header
+from momwire.dropin.nec5 import _printout, _resident, _serve, _shell
+from momwire.dropin.nec5._printout import engine_stamp, render_header
 from test_eznec_printout import (
     _ENGINE_STAMP_INDEX,
     FIXTURE_DIR,
@@ -282,7 +282,7 @@ def test_the_one_shot_route_stamps_the_basis_it_was_launched_as(tmp_path, basis)
 def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, basis):
     """``--serve --basis <name>``, from the flag down to the bytes on the wire.
 
-    Driven through :func:`momwire.eznec._resident.serve_main` rather than
+    Driven through :func:`momwire.dropin.nec5._resident.serve_main` rather than
     around it, because the flag's own parse is half the claim: the socket name
     hashes the engine identity client-side, so ``--basis`` is the ONLY thing
     that tells a warm server which formulation it is (``_resident``'s module

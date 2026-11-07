@@ -174,9 +174,9 @@ from types import MappingProxyType
 import momwire_serve_client as _mech
 import numpy as np
 
-from .. import _features
-from .._constants import C_LIGHT as _C_LIGHT
-from ..deck import (
+from ... import _features
+from ..._constants import C_LIGHT as _C_LIGHT
+from ...deck import (
     BASES,
     Card,
     DeckError,
@@ -185,14 +185,14 @@ from ..deck import (
     parse_card,
     prepare_mesh,
 )
-from ..deck import parse as parse_dialect
+from ...deck import parse as parse_dialect
 
 # The card semantics of ``TL``/``NT`` — the six reals as circuit branches, and
 # the flat ``Network`` its reducer takes. It lives in ``momwire.deck`` because
 # semantics live ONCE and the dialect is where a card's meaning is decided
 # (design doc ``networks-move-into-the-engine.md``); the portal supplies the
 # only thing that module cannot know, which is the antenna's admittance.
-from ..deck._networks import build_reducer, card_branches, live_cards, reduced_ports
+from ...deck._networks import build_reducer, card_branches, live_cards, reduced_ports
 
 # Which solver families take a deck's ``LD`` lumped load as their OWN
 # construction kwarg instead of as the port-algebra stamp every other family
@@ -202,7 +202,7 @@ from ..deck._networks import build_reducer, card_branches, live_cards, reduced_p
 # because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
-from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
+from ...deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -216,7 +216,7 @@ from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 # asks whether ``Nec2Structure`` should be promoted to ``momwire.deck``'s
 # public surface anyway, which only becomes load-bearing if the portal is
 # ever a third-party consumer again.
-from ..deck._nec2 import _LD_RUN_TRANSPARENT, REFUSE_NEAR_FIELD_REFL_COEF
+from ...deck._nec2 import _LD_RUN_TRANSPARENT, REFUSE_NEAR_FIELD_REFL_COEF
 
 # `LD 0`'s series R + jwL + 1/(jwC): the network core's own evaluator, the
 # one the design library and `momwire.networks` already read. The portal kept
@@ -224,20 +224,20 @@ from ..deck._nec2 import _LD_RUN_TRANSPARENT, REFUSE_NEAR_FIELD_REFL_COEF
 # momwire alone) — but the evaluator is momwire's, and an `LD` card gives R, L
 # and C and nothing else, so it is called with no finite-Q terms and its
 # arithmetic is the copy's to the bit (momwire#1336).
-from ..networks._reduce import _series_rlc_impedance
-from ..deck._nec2_geometry import _SMIN, build_geometry
+from ...networks._reduce import _series_rlc_impedance
+from ...deck._nec2_geometry import _SMIN, build_geometry
 
-from ..serve import Seam, run_session
+from ...serve import Seam, run_session
 
 # The far-zone readout used to live in this module. momwire#719 U1 moved it
 # to ``momwire._far_readout`` — a neutral home neither dialect front end
 # owns — which closed the only eznec -> portal import (the ranked extraction
 # backlog, momwire#429, is what marked that import as debt). Imported back
 # here for this module's own internal use, under the ``as name`` idiom so the
-# names stay module attributes: `from momwire.portal._portal import
+# names stay module attributes: `from momwire.dropin.nec2c._portal import
 # _far_moments`-style call sites already in the corpus (tests, scripts) keep
 # working unchanged.
-from .._far_readout import (
+from ..._far_readout import (
     EPS0 as EPS0,
     ETA0 as ETA0,
     Ground as Ground,
@@ -253,16 +253,16 @@ from .._far_readout import (
     average_gain,
     pattern_fields,
 )
-from .._ground_spec import ground_touch_tol as _ground_touch_tol
-from .. import _lapack
-from .._near_readout import (
+from ..._ground_spec import ground_touch_tol as _ground_touch_tol
+from ... import _lapack
+from ..._near_readout import (
     NEAR_FIELD_SUBDIV,
     near_field_at,
     near_ground,
     near_point_refusal,
     rectangular_grid,
 )
-from .._vec3 import norm3, dot3
+from ..._vec3 import norm3, dot3
 
 # --basis choices (mirrors the CLI's MOMWIRE_BASES/VARIANTS subset that makes
 # sense behind SimNEC): name -> (solver class, solver kwargs, banner suffix).
@@ -1287,7 +1287,7 @@ def _geometry_builders(dialect: str):
     """The geometry builders the dialect's own reader runs: the nec4 one's
     add GA and GH (momwire#1592), the nec2 one's are `build_geometry`'s."""
     if dialect == "nec4":
-        from ..deck._nec4 import _NEC4_GEOMETRY_BUILDERS
+        from ...deck._nec4 import _NEC4_GEOMETRY_BUILDERS
 
         return _NEC4_GEOMETRY_BUILDERS
     return None
@@ -1801,7 +1801,7 @@ class GroupResult:
     port currents, segment currents, and the power budget, all read off the
     cached factorisation :meth:`DeckSolver.solve_group` filled.
 
-    The analog on the eznec seam is :class:`~momwire.eznec._printout.RunData`
+    The analog on the eznec seam is :class:`~momwire.dropin.nec5._printout.RunData`
     — where issue #719's design converges the two seams' solve products.
     ``solver`` is a deliberate temporary reach-through some consumers still
     need for a walk (:meth:`DeckSolver.current_elements`,
@@ -1865,7 +1865,7 @@ class SegRow:
 @dataclass(frozen=True)
 class RunRecords:
     """The compute half of one execute-group block — the portal's step toward
-    the eznec seam's :class:`~momwire.eznec._printout.RunData`. Rows are built
+    the eznec seam's :class:`~momwire.dropin.nec5._printout.RunData`. Rows are built
     here so the render half touches no solver state for its own tables."""
 
     result: GroupResult
@@ -2203,7 +2203,7 @@ class DeckSolver:
         group whose several sources include a current source (momwire#1295).
 
         The algebra is the NEC-5 slot's phased drive
-        (``momwire.eznec._serve._multi_drive_state``) on this solver's port
+        (``momwire.dropin.nec5._serve._multi_drive_state``) on this solver's port
         space.  The driven ports PARTITION: an ``EX 6`` sets its port's source
         current (the I-set), an ``EX 0`` its applied voltage (the V-set).  The
         map ``M`` from the driven ports' applied voltages to their source
@@ -4142,7 +4142,7 @@ def _selftest(stdout) -> int:
     import subprocess
 
     proc = subprocess.run(
-        [sys.executable, "-m", "momwire.portal"],
+        [sys.executable, "-m", "momwire.dropin.nec2c"],
         input="".join(_SELFTEST_DECKS),
         capture_output=True,
         text=True,
@@ -4175,7 +4175,7 @@ def _selftest(stdout) -> int:
     # which is exactly the one a smoke test wants to prove never raises.
     def _alt(basis: str, deck: str):
         return subprocess.run(
-            [sys.executable, "-m", "momwire.portal", "--basis", basis],
+            [sys.executable, "-m", "momwire.dropin.nec2c", "--basis", basis],
             input=deck,
             capture_output=True,
             text=True,
@@ -4234,7 +4234,7 @@ def _filename_basis(prog: str) -> str | None:
     ``momwire-nec2c-<basis>`` — everything after ``nec2c-`` in the program's
     basename, case-insensitively, with a Windows ``.exe`` stripped first.
     ``momwire-nec2c`` bare (no trailing ``-``) selects nothing, and so does
-    any name without the ``nec2c-`` marker (``python -m momwire.portal``, a
+    any name without the ``nec2c-`` marker (``python -m momwire.dropin.nec2c``, a
     pytest runner, …). A name ending AT the marker returns ``""``, which is
     an unknown basis rather than no basis. Validation is the caller's: an
     unknown suffix must fail fast at the probe, exactly like an unknown
@@ -4555,7 +4555,7 @@ def file_refusal(text: str | None, reason: str) -> str:
 
 def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> int:
     """``in out``, ``- -`` and 4nec2's names, answered by the launcher shell
-    every momwire engine shares (:func:`momwire.eznec._shell.main`) with
+    every momwire engine shares (:func:`momwire.dropin.nec5._shell.main`) with
     ``dialect="nec2"`` and this module's printout as its front end.
 
     Imported here and not at the top: SimNEC's resident call, the one every
@@ -4564,7 +4564,7 @@ def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> i
     stdin and stdout, so a stream answers byte for byte what the bare
     command answers.
     """
-    from ..eznec import _shell
+    from ..nec5 import _shell
 
     _shell.register_front_end(
         "nec2",

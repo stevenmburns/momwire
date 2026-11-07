@@ -175,7 +175,7 @@ def segment_touch_tols(start, end):
     is exactly ``ground_touch_tol([start[i], end[i]])`` — the same ufuncs on
     the same operands in the same order, so bit-identical rather than close
     (tests/test_ground_touch_tol_1420.py). The per-deck geometry rules in
-    `momwire.eznec._serve` ask the tolerance of every card on every run, and
+    `momwire.dropin.nec5._serve` ask the tolerance of every card on every run, and
     one array call replaces a Python loop of tiny-array calls (momwire#1420).
     """
     d = _subtract(

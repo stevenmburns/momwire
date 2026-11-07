@@ -3,7 +3,7 @@
 Not a test module: ``tests/test_serve_pool.py`` puts this directory on the
 worker's ``PYTHONPATH`` and names these factories in the pool's spec, so a
 worker process imports this file exactly as a real worker imports
-``momwire.eznec._shell``.
+``momwire.dropin.nec5._shell``.
 
 ``stub`` answers by command, one per body:
 
@@ -64,7 +64,7 @@ def stub() -> Seam:
 
 
 def crashing_eznec(**kwargs) -> Seam:
-    from momwire.eznec._shell import seam
+    from momwire.dropin.nec5._shell import seam
 
     real = seam(**kwargs)
 

@@ -22,7 +22,12 @@ import pytest
 
 from momwire import razor as _razor
 from momwire.bspline import BSplineSolver
-from momwire.eznec._serve import _Mesh, _Piece, ServeRefusal, _check_basis_can_host
+from momwire.dropin.nec5._serve import (
+    _Mesh,
+    _Piece,
+    ServeRefusal,
+    _check_basis_can_host,
+)
 from momwire.razor import RazorSolver
 
 SOMMERFELD = {

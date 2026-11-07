@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 import momwire_eznec_client
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 BASIS = "sinusoidal"

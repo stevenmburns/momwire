@@ -15,7 +15,7 @@ import os
 import numpy as np
 
 from momwire import _lapack
-from momwire.eznec import _serve
+from momwire.dropin.nec5 import _serve
 
 _DIR = os.environ["MW_EXE_PYARRAYS"]
 _orig_state, _orig_finish = _serve._port_state, _serve._finish

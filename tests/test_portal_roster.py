@@ -78,8 +78,8 @@ import io
 import pytest
 
 from momwire.deck._solver import NEC2_BASES
-from momwire.portal import _portal as nec_portal
-from momwire.portal._portal import BANNER_VERSION
+from momwire.dropin.nec2c import _portal as nec_portal
+from momwire.dropin.nec2c._portal import BANNER_VERSION
 
 # A bare centre-fed dipole in free space: 10 m of wire at 14 MHz, 11 segments
 # so that segment 6 is the middle one, read out broadside at 1 km.

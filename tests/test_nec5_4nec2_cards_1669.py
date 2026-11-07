@@ -25,8 +25,8 @@ import pytest
 
 from momwire.deck import DeckError
 from momwire.deck._nec5 import _joined, parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "nec5_4nec2_cards_1669"
 PROBES = sorted(p.stem for p in FIXTURES.glob("*.nec"))

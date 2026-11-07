@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec import _shell
+from momwire.dropin.nec5 import _shell
 
 DECK = (
     Path(__file__).parent / "fixtures" / "buried_grazing_1672" / "shallow_s40.nec"
@@ -27,9 +27,7 @@ DECK = (
 # ExtendedKernelDefault (~1.9 KB of advisories per structure).
 STREAM = DECK.replace("\nEN\n", "\nNX\n") + DECK
 
-SHELL = (
-    "import sys; from momwire.eznec._shell import main; sys.exit(main(sys.argv[1:]))"
-)
+SHELL = "import sys; from momwire.dropin.nec5._shell import main; sys.exit(main(sys.argv[1:]))"
 
 
 def _run(args, stdin, env_extra):

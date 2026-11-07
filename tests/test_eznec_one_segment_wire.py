@@ -23,8 +23,8 @@ import numpy as np
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
-from momwire.eznec import _serve
-from momwire.eznec._shell import render
+from momwire.dropin.nec5 import _serve
+from momwire.dropin.nec5._shell import render
 from momwire.razor import RazorSolver
 from test_eznec_printout import MANIFEST, deck_text
 

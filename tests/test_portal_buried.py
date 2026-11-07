@@ -1,6 +1,6 @@
 """The NEC-2 portal's buried serve matrix — what answers, and what refuses.
 
-``momwire.eznec`` has had this gate since momwire#553
+``momwire.dropin.nec5`` has had this gate since momwire#553
 (``test_eznec_buried_refusal.py``); this dialect had none, and the two seams
 had drifted apart on one row.
 
@@ -49,7 +49,7 @@ import io
 
 import pytest
 
-from momwire.portal import _portal as nec_portal
+from momwire.dropin.nec2c import _portal as nec_portal
 
 _GN2 = "GN 2 0 0 0 13. .005"  # Sommerfeld: the only ground with a lower medium
 _GN0 = "GN 0 0 0 0 13. .005"  # reflection-coefficient: no lower medium at all
