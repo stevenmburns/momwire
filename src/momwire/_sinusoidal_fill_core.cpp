@@ -1873,38 +1873,57 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
             for (int c = 0; c < 3; c++) cval[c][at] = E.v[c][e];
         }
         // Z bands of each class's runs (`_mixed_band_rows`): the band's Φ
-        // rows, its class's columns written, then the tiled reduction
+        // rows, its class's columns written, then the tiled reduction.
+        //
+        // The bands NEST as `_assemble_Z_mixed`'s do (momwire#1849): a CLASS
+        // band of `_class_bands`' height first -- `_schedule.mb_rows(
+        // swept_mem_mb, _fill_row_bytes(n))` over the class's n sources, with
+        // `_fill_row_bytes`' three blocks (free space, image, Sommerfeld
+        // remainder: a mixed or crossing deck's ground is Sommerfeld's) -- and
+        // Z bands cut from it. Every class value is its own observer's and the
+        // reduction runs row by row, so neither height reaches a bit; what the
+        // class height sets is how many rows of P, Pi and the remainder are
+        // alive at once. Filled at the Z band's height (1277 rows at
+        // N = 2626 against `_class_bands`' 717) they held the exe at 646 MB
+        // where Python peaks at 494.
         const ll zband = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / ((3 + 2) * 16 * N));
         for (int side = 0; side < 2; side++) {
             const ClassSources &cs = side ? below : above;
             const std::size_t nc = cs.idx.size();
+            const ll ncl = static_cast<ll>(nc);
+            const ll cband = ncl < kDenseAssemblyThreshold
+                                 ? ncl
+                                 : std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / (std::max<ll>(3 * 3, 3 + 2) * ncl * 16));
             for (const auto &run : runs_of(cs.idx))
-                for (ll z0 = run.first; z0 < run.second; z0 += zband) {
-                    const ll z1 = std::min(z0 + zband, run.second), m = z1 - z0;
-                    const std::vector<std::vector<cd>> D = class_band(side == 1, z0, z1);
-                    std::vector<std::vector<cd>> Phi(3, std::vector<cd>(static_cast<std::size_t>(m) * Nz, cd(0.0, 0.0)));
-                    for (int c = 0; c < 3; c++)
-                        for (ll r = 0; r < m; r++)
-                            for (std::size_t j = 0; j < nc; j++)
-                                Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
-                                    D[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * nc + j];
-                    for (ll r = 0; r < m; r++) {
-                        cd *const rows[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
-                        add_cross(side, z0 + r, rows);
-                    }
-                    for (ll r = 0; r < m; r++) {
-                        cd *grow = G.data() + (z0 + r) * N;
-                        const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
-                        for (ll j = 0; j < N; j++) {
-                            double sr[3], si[3];
-                            for (int c = 0; c < 3; c++) {
-                                double yr = 0.0, yi = 0.0;
-                                for (ll e = cptr[static_cast<std::size_t>(j)]; e < cptr[static_cast<std::size_t>(j) + 1]; e++)
-                                    axpy1(cval[c][static_cast<std::size_t>(e)], phi[c][crow[static_cast<std::size_t>(e)]], yr, yi);
-                                sr[c] = yr;
-                                si[c] = yi;
+                for (ll c0 = run.first; c0 < run.second; c0 += cband) {
+                    const ll c1 = std::min(c0 + cband, run.second);
+                    const std::vector<std::vector<cd>> D = class_band(side == 1, c0, c1);
+                    for (ll z0 = c0; z0 < c1; z0 += zband) {
+                        const ll z1 = std::min(z0 + zband, c1), m = z1 - z0;
+                        std::vector<std::vector<cd>> Phi(3, std::vector<cd>(static_cast<std::size_t>(m) * Nz, cd(0.0, 0.0)));
+                        for (int c = 0; c < 3; c++)
+                            for (ll r = 0; r < m; r++)
+                                for (std::size_t j = 0; j < nc; j++)
+                                    Phi[static_cast<std::size_t>(c)][static_cast<std::size_t>(r) * Nz + static_cast<std::size_t>(cs.idx[j])] =
+                                        D[static_cast<std::size_t>(c)][static_cast<std::size_t>(z0 - c0 + r) * nc + j];
+                        for (ll r = 0; r < m; r++) {
+                            cd *const rows[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+                            add_cross(side, z0 + r, rows);
+                        }
+                        for (ll r = 0; r < m; r++) {
+                            cd *grow = G.data() + (z0 + r) * N;
+                            const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+                            for (ll j = 0; j < N; j++) {
+                                double sr[3], si[3];
+                                for (int c = 0; c < 3; c++) {
+                                    double yr = 0.0, yi = 0.0;
+                                    for (ll e = cptr[static_cast<std::size_t>(j)]; e < cptr[static_cast<std::size_t>(j) + 1]; e++)
+                                        axpy1(cval[c][static_cast<std::size_t>(e)], phi[c][crow[static_cast<std::size_t>(e)]], yr, yi);
+                                    sr[c] = yr;
+                                    si[c] = yi;
+                                }
+                                grow[j] = cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
                             }
-                            grow[j] = cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
                         }
                     }
                 }
