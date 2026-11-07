@@ -85,6 +85,13 @@ def _z(flag):
     return 1.0 / complex(s.compute_port_solution().y.ravel()[0])
 
 
+# The solver asks `_features.enabled`, which refuses a native feature outside
+# its reach (macOS, sse2), so only this test needs the platform's level; the
+# kernel tests above call the binding directly.
+@pytest.mark.skipif(
+    not _features.certified("point_cplx_staged"),
+    reason="point_cplx_staged is not certified on this platform",
+)
 def test_on_a_buried_deck_takes_the_staged_kernel_and_z_agrees(monkeypatch):
     calls = []
     real = acc.point_field_tensor_cplx_staged
