@@ -1878,6 +1878,7 @@ class BSplineSolver(
         rotational_symmetry=False,
         pair_reuse=None,
         offset_reuse=None,
+        transmitted_anchors=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1936,6 +1937,12 @@ class BSplineSolver(
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
         # defers to MOMWIRE_X_OFFSET_REUSE (`_features`, reach 1).
         self._offset_reuse = _features.enabled("offset_reuse", offset_reuse)
+        # momwire#1847: the below->above grid from frequency anchors, so a
+        # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
+        # (`_features`, reach 1); off is the exact grid, bit for bit.
+        self._transmitted_anchors = _features.enabled(
+            "transmitted_anchors", transmitted_anchors
+        )
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8821,6 +8828,7 @@ class BSplineSolver(
                 compact_ok=_HAVE_WINDOWED_ROW_OF and _HAVE_FIELD_GALERKIN_ROW_OF,
                 below_remainder_pairs=self._below_remainder_pairs,
                 remainder_nodes=self._buried_remainder_nodes,
+                transmitted_anchors=self._transmitted_anchors,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,
