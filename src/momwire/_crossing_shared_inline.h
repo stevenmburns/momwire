@@ -343,12 +343,14 @@ inline std::vector<cd> real_matvec(const CSRT<cd> &M, const std::vector<cd> &v) 
     return out;
 }
 
-template <class P, class CX, class WT>
-std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, const std::vector<EndT<WT>> &ends,
-                                     const AxisT<WT> &line, bool end_above) {
-    std::vector<EndVecT<WT>> out;
+// `fn(batch)` takes each batch of END_BATCH_PAIRS pairs in end order, so a
+// caller that folds the ends in order holds one batch's vectors, not every
+// end's (two basis-length complex rows each).
+template <class P, class CX, class WT, class Fn>
+void end_vectors_each(const CX &c, BlockEval &be, double a_wire, const std::vector<EndT<WT>> &ends,
+                      const AxisT<WT> &line, bool end_above, const Fn &fn) {
     const size_t n = line.n_nodes();
-    if (ends.empty()) return out;
+    if (ends.empty()) return;
     // `_LineZ`: the line's plane-side z, formed once (refusing at the first end).
     std::vector<double> line_z(n);
     for (size_t k = 0; k < n; k++)
@@ -359,13 +361,15 @@ std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, 
         w_tz[k] = line.w[k] * line.t[3 * k + 2];
     }
     const size_t per = std::max<size_t>(1, static_cast<size_t>(END_BATCH_PAIRS) / std::max<size_t>(1, n));
-    out.resize(ends.size());
+    std::vector<EndVecT<WT>> out;
     std::vector<double> re, z, zp;
     std::vector<int64_t> lab;
     std::vector<uint32_t> te;
     for (size_t g0 = 0; g0 < ends.size(); g0 += per) {
         const size_t g1 = std::min(ends.size(), g0 + per);
         const size_t ne = g1 - g0;
+        out.clear();
+        out.resize(ne);
         // The ends' own z, refused in order before any point is formed.
         std::vector<double> endz(ne);
         for (size_t e = g0; e < g1; e++) endz[e - g0] = on_plane_side<P>(ends[e].pt[2] - c.gz, end_above, "end point");
@@ -411,15 +415,27 @@ std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, 
                 V[k] = np_cmul(cd(w[k], 0.0), s[K_V]);
                 W[k] = np_cmul(cd(w_tz[k], 0.0), s[K_W]);
             }
-            EndVecT<WT> &ev = out[g0 + e];
+            EndVecT<WT> &ev = out[e];
             ev.sign = ends[g0 + e].sign;
             ev.fv = &ends[g0 + e].fv;
             ev.vV = real_matvec(line.Fd, V);
             ev.vW = real_matvec(line.F, W);
         }
         }
+        fn(static_cast<const std::vector<EndVecT<WT>> &>(out));
     }
-    return out;
+}
+
+// Every end's vectors at once.
+template <class P, class CX, class WT>
+std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, const std::vector<EndT<WT>> &ends,
+                                     const AxisT<WT> &line, bool end_above) {
+    std::vector<EndVecT<WT>> all;
+    all.reserve(ends.size());
+    end_vectors_each<P>(c, be, a_wire, ends, line, end_above, [&](const std::vector<EndVecT<WT>> &batch) {
+        for (const EndVecT<WT> &ev : batch) all.push_back(ev);
+    });
+    return all;
 }
 
 // No corner (razor's path-tested rows).
@@ -455,10 +471,8 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
     std::vector<cd> E_r(LA.size() * static_cast<size_t>(nC), cd(0.0, 0.0));
     std::vector<cd> E_c(static_cast<size_t>(nR) * LB.size(), cd(0.0, 0.0));
     const cd neg_c1(-c.c1.real(), -c.c1.imag());
-    // Row loop: R's ends against C's line.
-    {
-        const std::vector<EndVec> evs =
-            row_ends ? end_vectors<P>(c, be, a_wire, R.ends, C, r_above) : std::vector<EndVec>();
+    // Row loop: R's ends against C's line, folded a batch of ends at a time.
+    auto row_fold = [&](const std::vector<EndVec> &evs) {
         // Columns split over the team; each entry takes the ends' rank-1
         // terms in end order, as the serial loop adds them.
         const int nt = team(be, evs.size() * static_cast<size_t>(nC));
@@ -485,11 +499,10 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
                 }
             }
         }
-    }
-    // Column loop: C's ends against R's line (W, then V).
-    {
-        const std::vector<EndVec> evs =
-            col_ends ? end_vectors<P>(c, be, a_wire, C.ends, R, !r_above) : std::vector<EndVec>();
+    };
+    if (row_ends) end_vectors_each<P>(c, be, a_wire, R.ends, C, r_above, row_fold);
+    // Column loop: C's ends against R's line (W, then V), batched the same way.
+    auto col_fold = [&](const std::vector<EndVec> &evs) {
         // Rows split over the team (E_r's rows LA and E_c's rows apart);
         // each entry takes the ends' terms in end order, as serially.
         const int64_t nLA = static_cast<int64_t>(LA.size());
@@ -524,7 +537,8 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
                 }
             }
         }
-    }
+    };
+    if (col_ends) end_vectors_each<P>(c, be, a_wire, C.ends, R, !r_above, col_fold);
     corner(E_r, posLA, nC);
     // `answer`: E_c[LA, :] = 0; dest[LA, :] += E_r; dest[:, LB] += E_c.
     for (int64_t a : LA)
