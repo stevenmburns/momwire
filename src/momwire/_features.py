@@ -196,6 +196,20 @@ FEATURES: dict[str, Feature] = {
             kwarg="point_cplx_staged",
             paths=("tests/test_point_cplx_staged_1849.py",),
         ),
+        # The near-interface column twin's factored route (momwire#1860 L1):
+        # on a grid-shaped column each exponential factor once per distinct
+        # z and z', the product per member. A new C++ path, a few ulp from
+        # the member route and not bit-identical to it.
+        Feature(
+            name="factored_columns",
+            reach=1,
+            env="MOMWIRE_X_FACTORED_COLUMNS",
+            kind="native",
+            issue=1860,
+            since="2026-11-08",
+            kwarg="factored_columns",
+            paths=("tests/test_factored_columns_1860.py",),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(

@@ -1952,6 +1952,7 @@ class RazorSolver(
         n_qp_source=12,
         n_qp_sommerfeld=3,
         nec5_quadrature=False,
+        factored_columns=None,
         cancel=None,
         **unsupported,
     ):
@@ -2028,6 +2029,10 @@ class RazorSolver(
             raise TypeError(f"RazorSolver got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
+        # momwire#1860 L1: the near-interface columns' factored route. None
+        # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
+        # off is the member route, bit for bit.
+        self._factored_columns = _features.enabled("factored_columns", factored_columns)
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -4665,6 +4670,18 @@ class RazorSolver(
         return prepared
 
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
+        """`_assemble_Z_from_prepared_scoped` under this solver's
+        `factored_columns` choice (momwire#1860)."""
+        with _near_interface.factored_columns_scope(
+            getattr(self, "_factored_columns", False)
+        ):
+            return self._assemble_Z_from_prepared_scoped(
+                geom, prepared, k, omega, restrict=restrict
+            )
+
+    def _assemble_Z_from_prepared_scoped(
+        self, geom, prepared, k, omega, *, restrict=None
+    ):
         """Fill the razor-blade impedance matrix at one wavenumber.
 
         Free space is one source block. Over a ground it is that block

@@ -41,13 +41,16 @@ class ColumnCache {
 // four nodes at a time where the build has them (momwire#1441 step 3); false
 // is the scalar walk, bit for bit the same. sdp: a far column takes the
 // steepest-descent rule (momwire#1595 D1b), as `six_columns` does under
-// `_SDP`; false is the head / mid / tail rule everywhere.
+// `_SDP`; false is the head / mid / tail rule everywhere. grid: a grid-shaped
+// column takes the factored route (momwire#1860 L1, the opt-in feature
+// `factored_columns`; `mw899::Grid` in _near_interface_core.cpp); false, the
+// default and every executable's, is the member route bit for bit.
 void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                  const std::ptrdiff_t *offsets, std::ptrdiff_t nc, const double *z,
                  const double *zp, std::ptrdiff_t n, double lam_mult, int p, double detour,
                  int n_threads, const double *gx, const double *gw, int ng,
                  uintptr_t cancel_flag, ColumnCache *cache, std::complex<double> *out,
-                 bool lanes = true, bool sdp = true);
+                 bool lanes = true, bool sdp = true, bool grid = false);
 
 // `PlaneSheet.interpolate`: out[idx[r]] (out (m, nk) row-major) = the table's
 // kernels at rows sub[idx[r]] (sub (m, 3)).

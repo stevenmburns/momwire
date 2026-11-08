@@ -91,6 +91,7 @@ from . import _exact_kernel_seam
 from . import _feed_snap
 from . import _ground_mirror
 from . import _ground_refl
+from . import _near_interface
 from . import _ground_spec
 from . import _lapack
 from . import _medium_spec
@@ -1879,6 +1880,7 @@ class BSplineSolver(
         pair_reuse=None,
         offset_reuse=None,
         transmitted_anchors=None,
+        factored_columns=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1943,6 +1945,10 @@ class BSplineSolver(
         self._transmitted_anchors = _features.enabled(
             "transmitted_anchors", transmitted_anchors
         )
+        # momwire#1860 L1: the near-interface columns' factored route. None
+        # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
+        # off is the member route, bit for bit.
+        self._factored_columns = _features.enabled("factored_columns", factored_columns)
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8787,6 +8793,18 @@ class BSplineSolver(
         return None
 
     def _compute_Z_operator_buried(
+        self, geom, supp_seg, polys, rows=None, compact=False
+    ):
+        """`_compute_Z_operator_buried_scoped` under this solver's
+        `factored_columns` choice (momwire#1860)."""
+        with _near_interface.factored_columns_scope(
+            getattr(self, "_factored_columns", False)
+        ):
+            return self._compute_Z_operator_buried_scoped(
+                geom, supp_seg, polys, rows=rows, compact=compact
+            )
+
+    def _compute_Z_operator_buried_scoped(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """The mixed-medium dense Z. The ROUTING moved to `_below_interface`
