@@ -64,6 +64,8 @@ Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 from __future__ import annotations
 
 import collections
+import contextlib
+import contextvars
 import functools
 import os
 import threading
@@ -287,14 +289,39 @@ def _point_sdp_kw():
     return {}
 
 
+# momwire#1860 L1, the opt-in feature `factored_columns` (`_features`, reach
+# 1, native): a grid-shaped column -- few distinct z and z' over many members,
+# the coaxial rod x vertical column of a buried rod under a vertical -- takes
+# each exponential factor once per distinct value (`mw899::Grid` in
+# `_near_interface_core.cpp`). A solver asked for it sets this around its
+# fill (`factored_columns_scope`); off, the default, the twin is called as
+# before and answers bit for bit as before.
+_FACTORED_COLUMNS: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "momwire_factored_columns", default=False
+)
+
+
+@contextlib.contextmanager
+def factored_columns_scope(on):
+    """Run the body with the factored column route on (`on` truthy) or off."""
+    token = _FACTORED_COLUMNS.set(bool(on))
+    try:
+        yield
+    finally:
+        _FACTORED_COLUMNS.reset(token)
+
+
 def _columns_lanes_kw():
     """`near_interface_six_columns`' lanes and steepest-descent switches, for
-    a binding that has them."""
+    a binding that has them, and its factored route (`grid`) when the
+    caller's scope asks for it."""
     kw = {}
     if not _SIX_COLUMNS_LANES and hasattr(_nia, "six_columns_lanes_1441"):
         kw["lanes"] = False
     if not _SDP and hasattr(_nia, "six_columns_sdp_1595"):
         kw["sdp"] = False
+    if _FACTORED_COLUMNS.get() and hasattr(_nia, "six_columns_grid_1860"):
+        kw["grid"] = True
     return kw
 
 

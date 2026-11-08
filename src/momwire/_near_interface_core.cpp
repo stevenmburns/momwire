@@ -21,6 +21,9 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#if defined(__SSE2__) || defined(_M_X64)
+#include <xmmintrin.h>  // _mm_getcsr / _mm_setcsr (`mw899::GridFlushGuard`)
+#endif
 
 // The sheet's fixed-width cell sums (MW_SHEET_FIXED below) mirror an
 // mw_fma::fma chain, so the x86-64 baseline build may run them on the lane
@@ -250,6 +253,309 @@ static size_t column_build(double rho, double k_p, const cd &kpc,
     column_tail(rho, s_min, lam_top, p, gx, gw, ng, s);
     return column_factors_joined(kpc, km, *hm, s);
 }
+
+// ---------------------------------------------------------------------------
+// The GRID route (momwire#1860 L1), OPT-IN: `six_columns(..., grid=true)`,
+// which Python asks for under the experimental feature `factored_columns`
+// (`_features`, reach 1, native) and no executable asks for. With grid off
+// nothing below runs and every column is the member route, bit for bit.
+//
+// A column whose members take few distinct heights z and depths z' -- the
+// coaxial rod x vertical column of a buried rod under a vertical is every z
+// x every z', 57k members over ~600 distinct values at efhw_hi -- pays
+// `column_member`'s complex exponential per node per member, though
+// e^{gamma_m z' - gamma_p z} is e^{-gamma_p z} e^{gamma_m z'}. Here each
+// factor is taken ONCE per distinct value and node, into a (value x K)
+// table, and a member forms the node's exponential as the product of its two
+// rows, in a fixed order (one complex product, spelled through mw_fma). The
+// six sums after that are `column_member`'s, line for line, for several
+// members at a time (`grid_members`). No BLAS.
+//
+// NOT bit-identical to the member route: e^a e^b and e^{a+b} differ in the
+// last bits, and a node under the smallest normal double is flushed to zero
+// (`GridFlushGuard`). Both factors' exponents have the sign of the combined
+// one (z >= 0 >= z', and the route is taken only when every Re gamma >= 0),
+// so nothing cancels and the product is a few ulp from the fused
+// exponential at every node; the #1860 PR has the measured Z and input
+// impedance moves. Which columns take it depends on the members alone, so a
+// column's answer does not depend on the call that carries it, the thread
+// count or the parallel unit.
+//
+// Taken when the column has at least MW_GRID_MIN_MEMBERS members and at
+// least MW_GRID_GAIN members per distinct value: the table costs (nz + nz')
+// exponentials per node and the members one product each, against one
+// exponential per member per node. The table is capped at
+// MW_GRID_MAX_DOUBLES per column (64 MB); a column over it keeps the member
+// route.
+static const std::ptrdiff_t MW_GRID_MIN_MEMBERS = 64;
+static const std::ptrdiff_t MW_GRID_GAIN = 4;
+static const size_t MW_GRID_MAX_DOUBLES = size_t(1) << 23;
+// ln of the smallest normal double, rounded up (e^{-708} = 3.3e-308 >
+// DBL_MIN = 2.2e-308): see `grid_members`.
+static const double MW_EXP_NORMAL = -708.0;
+
+struct Grid {
+    std::vector<double> uz, uzp;        // distinct z and z', ascending
+    std::vector<std::int32_t> iz, izp;  // each member's row in them
+    // Row r of (pr, pi) is e^{-gamma_p uz[r]} at every node; row r of
+    // (mr, mi) is e^{gamma_m uzp[r]}. Stride K.
+    std::vector<double> pr, pi, mr, mi;
+};
+
+// The distinct values of v[lo, hi), ascending, -0.0 folded into +0.0 so the
+// row a member reads does not depend on which zero a library's sort kept.
+static void grid_distinct(const double *v, std::ptrdiff_t lo, std::ptrdiff_t hi,
+                          std::vector<double> &u) {
+    u.clear();
+    for (std::ptrdiff_t i = lo; i < hi; ++i) u.push_back(v[i] + 0.0);
+    std::sort(u.begin(), u.end());
+    u.erase(std::unique(u.begin(), u.end()), u.end());
+}
+
+static std::int32_t grid_row_of(const std::vector<double> &u, double x) {
+    return static_cast<std::int32_t>(
+        std::lower_bound(u.begin(), u.end(), x + 0.0) - u.begin());
+}
+
+// Whether column [lo, hi) is grid-shaped, and if so each member's rows.
+static bool grid_index(const double *z, const double *zp, std::ptrdiff_t lo,
+                       std::ptrdiff_t hi, Grid &g) {
+    const std::ptrdiff_t n = hi - lo;
+    if (n < MW_GRID_MIN_MEMBERS) return false;
+    grid_distinct(z, lo, hi, g.uz);
+    grid_distinct(zp, lo, hi, g.uzp);
+    const std::ptrdiff_t nv =
+        static_cast<std::ptrdiff_t>(g.uz.size() + g.uzp.size());
+    if (MW_GRID_GAIN * nv > n) return false;
+    g.iz.resize(static_cast<size_t>(n));
+    g.izp.resize(static_cast<size_t>(n));
+    for (std::ptrdiff_t i = lo; i < hi; ++i) {
+        g.iz[i - lo] = grid_row_of(g.uz, z[i]);
+        g.izp[i - lo] = grid_row_of(g.uzp, zp[i]);
+    }
+    return true;
+}
+
+// Whether the built rule (s, K) can take the grid's tables: within the cap,
+// and every Re gamma >= 0, so each factor is at most 1 in modulus and the
+// split exponential can neither overflow nor cancel. Sizes the tables.
+static bool grid_ready(const Scratch &s, size_t K, Grid &g) {
+    const size_t nv = g.uz.size() + g.uzp.size();
+    if (K == 0 || nv * K * 2 > MW_GRID_MAX_DOUBLES) return false;
+    for (size_t k = 0; k < K; ++k)
+        if (!(s.gpr[k] >= 0.0 && s.gmr[k] >= 0.0)) return false;
+    g.pr.resize(g.uz.size() * K);
+    g.pi.resize(g.uz.size() * K);
+    g.mr.resize(g.uzp.size() * K);
+    g.mi.resize(g.uzp.size() * K);
+    return true;
+}
+
+// Table row r: r < nz is e^{-gamma_p uz[r]}, else e^{gamma_m uzp[r - nz]}.
+// The exponential is the member route's own step (libmvec, mw_vmath or libm
+// by build, MW_BLOCK nodes at a time). Rows are independent, so filling them
+// on any number of threads gives the same table.
+static void grid_fill_row(const Scratch &s, size_t K, Grid &g, size_t r) {
+    const size_t nz = g.uz.size();
+    const bool above = r < nz;
+    const double x = above ? g.uz[r] : g.uzp[r - nz];
+    const double *gr = above ? s.gpr.data() : s.gmr.data();
+    const double *gi = above ? s.gpi.data() : s.gmi.data();
+    double *orow = above ? g.pr.data() + r * K : g.mr.data() + (r - nz) * K;
+    double *oirow = above ? g.pi.data() + r * K : g.mi.data() + (r - nz) * K;
+    // -gamma_p z above, +gamma_m z' below: a sign on the value, exact.
+    const double xs = above ? -x : x;
+    double ar[MW_BLOCK], ai[MW_BLOCK];
+    for (size_t k0 = 0; k0 < K; k0 += MW_BLOCK) {
+        const int nb = static_cast<int>(std::min<size_t>(MW_BLOCK, K - k0));
+        for (int j = 0; j < nb; ++j) {
+            ar[j] = gr[k0 + j] * xs;
+            ai[j] = gi[k0 + j] * xs;
+        }
+        double *er = orow + k0, *ei = oirow + k0;
+#if MW_NI_VMATH
+        mw_vmath::exp_cis_lanes<vmath_backend>(ar, ai, er, ei, nb);
+#else
+        MW_NI_SIMD()
+        for (int j = 0; j < nb; ++j) {
+            const double ex = exp(ar[j]);
+            er[j] = ex * cos(ai[j]);
+            ei[j] = ex * sin(ai[j]);
+        }
+#endif
+        // Below the smallest normal double, zero (`grid_members` says why):
+        // the member reads this row as an operand of every product.
+        MW_NI_SIMD()
+        for (int j = 0; j < nb; ++j) {
+            const bool keep = ar[j] >= MW_EXP_NORMAL;
+            er[j] = keep ? er[j] : 0.0;
+            ei[j] = keep ? ei[j] : 0.0;
+        }
+    }
+}
+
+// `column_member` on the grid, for M members of one column at once (i0 ..
+// i0 + M): the same blocks, the same underflow skip (each member's combined
+// exponent, spelled as there, so a block is dead for a member here exactly
+// when it is dead there), and each member's six sums formed in the same
+// order as `column_member` forms them -- node j into lane j % MW_LANES of
+// its column, in order within the lane, the lanes combined pairwise per
+// block. Only the node's exponential differs: the product of the member's
+// two table rows.
+//
+// The M members share each load of the factor planes, which is what the
+// member route cannot do (its exponential is per member, so it is one
+// member's reduction at a time): there a member streams all twelve planes
+// from L2 for six dot products, and that, not the arithmetic, was its cost
+// once the exponential left the loop. A member's operations do not depend
+// on which members share its group, so the answer is the same in any group
+// (G-1860-2 permutes a column's members and asks for the same bits).
+// Subnormals flushed to zero for the length of a group's sums (x86's FTZ and
+// DAZ, restored on the way out). A tail node of a live block can sit far
+// below the smallest normal double: the member route's exp returns a
+// subnormal or 0 there, and the product here would too, but on x86 every
+// operation that reads or writes a subnormal takes a microcode assist --
+// 13 % of the live nodes of the efhw_hi coaxial column, enough that the
+// route first ran at a third of its arithmetic speed. Flushing them drops
+// what is under 2.3e-308 of a node and nothing else. The control word is
+// per thread, so the guard is too. Elsewhere (arm64 handles subnormals at
+// speed) it is nothing.
+#if defined(__SSE2__) || defined(_M_X64)
+struct GridFlushGuard {
+    unsigned int saved;
+    GridFlushGuard() : saved(_mm_getcsr()) { _mm_setcsr(saved | 0x8040u); }
+    ~GridFlushGuard() { _mm_setcsr(saved); }
+    GridFlushGuard(const GridFlushGuard &) = delete;
+    GridFlushGuard &operator=(const GridFlushGuard &) = delete;
+};
+#else
+struct GridFlushGuard {};
+#endif
+
+template <int M>
+static void grid_members(const Scratch &s, size_t K, const Grid &g,
+                         std::ptrdiff_t lo, std::ptrdiff_t i0, const double *z,
+                         const double *zp, std::complex<double> *out) {
+    double accr[M][6], acci[M][6];
+    const double *Pr[M], *Pi[M], *Mr[M], *Mi[M];
+    double zz[M], zzp[M];
+    for (int m = 0; m < M; ++m) {
+        for (int c = 0; c < 6; ++c) accr[m][c] = acci[m][c] = 0.0;
+        const std::ptrdiff_t i = i0 + m;
+        const size_t a = static_cast<size_t>(g.iz[i - lo]) * K;
+        const size_t b = static_cast<size_t>(g.izp[i - lo]) * K;
+        Pr[m] = g.pr.data() + a;
+        Pi[m] = g.pi.data() + a;
+        Mr[m] = g.mr.data() + b;
+        Mi[m] = g.mi.data() + b;
+        zz[m] = z[i];
+        zzp[m] = zp[i];
+    }
+    double er[M][MW_BLOCK], ei[M][MW_BLOCK];
+    const double *gpr = s.gpr.data(), *gmr = s.gmr.data();
+    const GridFlushGuard flush;
+    for (size_t k0 = 0; k0 < K; k0 += MW_BLOCK) {
+        const int nb =
+            static_cast<int>(std::min<size_t>(MW_BLOCK, K - k0));
+        bool live[M];
+        bool any = false;
+        double ar[MW_BLOCK];
+        for (int m = 0; m < M; ++m) {
+            int lv = 0;
+            const double zm = zz[m], zpm = zzp[m];
+            // An OR is exact in any order (the #1193 rule allows it).
+            MW_NI_SIMD(reduction(|: lv))
+            for (int j = 0; j < nb; ++j) {
+                ar[j] = mw_fma::fma(gmr[k0 + j], zpm, -(gpr[k0 + j] * zm));
+                lv |= ar[j] >= MW_EXP_ZERO;
+            }
+            live[m] = lv != 0;
+            any = any || live[m];
+            if (!live[m]) continue;  // exactly zero on the member route too
+            const double *pr = Pr[m] + k0, *pi = Pi[m] + k0;
+            const double *mr = Mr[m] + k0, *mi = Mi[m] + k0;
+            double *rr = er[m], *ri = ei[m];
+            MW_NI_SIMD()
+            for (int j = 0; j < nb; ++j) {
+                rr[j] = mw_fma::fma(pr[j], mr[j], -(pi[j] * mi[j]));
+                ri[j] = mw_fma::fma(pr[j], mi[j], pi[j] * mr[j]);
+            }
+        }
+        if (!any) continue;
+        static_assert(MW_LANES == 4, "the lane combine is written for four");
+        for (int c = 0; c < 6; ++c) {
+            const double *fr = s.fr.data() + c * K + k0;
+            const double *fi = s.fi.data() + c * K + k0;
+            mw_lanes sr[M], si[M];
+            for (int m = 0; m < M; ++m) {
+#if defined(__GNUC__)
+                sr[m] = mw_lanes{0.0, 0.0, 0.0, 0.0};
+                si[m] = mw_lanes{0.0, 0.0, 0.0, 0.0};
+#else
+                for (int l = 0; l < MW_LANES; ++l) sr[m][l] = si[m][l] = 0.0;
+#endif
+            }
+            int j = 0;
+            for (; j + MW_LANES <= nb; j += MW_LANES) {
+#if defined(__GNUC__)
+                mw_lanes x, y;  // memcpy: unaligned loads, no aliasing
+                std::memcpy(&x, fr + j, sizeof x);
+                std::memcpy(&y, fi + j, sizeof y);
+                for (int m = 0; m < M; ++m) {
+                    if (!live[m]) continue;
+                    mw_lanes a, b;
+                    std::memcpy(&a, er[m] + j, sizeof a);
+                    std::memcpy(&b, ei[m] + j, sizeof b);
+                    const mw_lanes by = b * y, bx = b * x;
+                    mw_lanes p, q;
+                    for (int l = 0; l < MW_LANES; ++l) {
+                        p[l] = mw_fma::fma(a[l], x[l], -by[l]);
+                        q[l] = mw_fma::fma(a[l], y[l], bx[l]);
+                    }
+                    sr[m] += p;
+                    si[m] += q;
+                }
+#else
+                for (int m = 0; m < M; ++m) {
+                    if (!live[m]) continue;
+                    for (int l = 0; l < MW_LANES; ++l) {
+                        sr[m][l] += mw_fma::fma(er[m][j + l], fr[j + l],
+                                                -(ei[m][j + l] * fi[j + l]));
+                        si[m][l] += mw_fma::fma(er[m][j + l], fi[j + l],
+                                                ei[m][j + l] * fr[j + l]);
+                    }
+                }
+#endif
+            }
+            for (int m = 0; m < M; ++m) {
+                if (!live[m]) continue;
+                for (int jj = j, l = 0; jj < nb; ++jj, ++l) {
+                    sr[m][l] += mw_fma::fma(er[m][jj], fr[jj], -(ei[m][jj] * fi[jj]));
+                    si[m][l] += mw_fma::fma(er[m][jj], fi[jj], ei[m][jj] * fr[jj]);
+                }
+                accr[m][c] += (sr[m][0] + sr[m][1]) + (sr[m][2] + sr[m][3]);
+                acci[m][c] += (si[m][0] + si[m][1]) + (si[m][2] + si[m][3]);
+            }
+        }
+    }
+    for (int m = 0; m < M; ++m)
+        for (int c = 0; c < 6; ++c)
+            out[6 * (i0 + m) + c] = std::complex<double>(accr[m][c], acci[m][c]);
+}
+
+// The members of grid column [lo, hi) from a to b (a - lo a multiple of
+// MW_GRID_GROUP), MW_GRID_GROUP at a time and the remainder alone.
+static const std::ptrdiff_t MW_GRID_GROUP = 4;
+
+static void grid_span(const Scratch &s, size_t K, const Grid &g,
+                      std::ptrdiff_t lo, std::ptrdiff_t a, std::ptrdiff_t b,
+                      const double *z, const double *zp,
+                      std::complex<double> *out) {
+    std::ptrdiff_t i = a;
+    for (; i + MW_GRID_GROUP <= b; i += MW_GRID_GROUP)
+        grid_members<MW_GRID_GROUP>(s, K, g, lo, i, z, zp, out);
+    for (; i < b; ++i) grid_members<1>(s, K, g, lo, i, z, zp, out);
+}
 }  // namespace mw899
 
 // The steepest-descent route for FAR columns (momwire#1595 D1b):
@@ -455,7 +761,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                  const double *zp, std::ptrdiff_t n, double lam_mult, int p, double detour,
                  int n_threads, const double *gx, const double *gw, int ng,
                  uintptr_t cancel_flag, ColumnCache *cache, std::complex<double> *out,
-                 bool lanes, bool sdp) {
+                 bool lanes, bool sdp, bool grid) {
     if (offsets[0] != 0 || offsets[nc] != n)
         throw std::invalid_argument("offsets must span 0 .. len(z)");
     for (std::ptrdiff_t c = 0; c < nc; ++c)
@@ -585,6 +891,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
         #pragma omp parallel num_threads(nt)
         {
         mw899::Scratch s;
+        mw899::Grid g;
         #pragma omp for schedule(dynamic)
         for (std::ptrdiff_t j = 0; j < n_col; ++j) {
             NI_CANCEL_POLL();
@@ -599,6 +906,15 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                                cached ? c_ah[c] : 0.0, cached ? c_lt[c] : 0.0,
                                cached ? c_hit[c].get() : nullptr,
                                cached ? &c_new[c] : nullptr, s);
+            // The grid route (momwire#1860 L1, `mw899::Grid`): never on a
+            // far column, whose steepest-descent rule is cheap already.
+            if (grid && !c_far[c] && mw899::grid_index(z, zp, lo, hi, g) &&
+                mw899::grid_ready(s, K, g)) {
+                const size_t rows = g.uz.size() + g.uzp.size();
+                for (size_t r = 0; r < rows; ++r) mw899::grid_fill_row(s, K, g, r);
+                mw899::grid_span(s, K, g, lo, lo, hi, z, zp, out);
+                continue;
+            }
             for (std::ptrdiff_t i = lo; i < hi; ++i) {
                 mw_contour::cd o6[6];
                 mw899::column_member(s, K, z[i], zp[i], o6);
@@ -625,6 +941,30 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
             // with a larger s underflows part of its own tail and skips it
             // (see MW_EXP_ZERO) — the exact saving the numpy route cannot
             // take, and it makes the cheap members the deep ones.
+            mw899::Grid g;
+            if (grid && !c_far[c] && mw899::grid_index(z, zp, lo, hi, g) &&
+                mw899::grid_ready(s, K, g)) {
+                // The table's rows are independent: filled on every thread,
+                // the same table as on one.
+                const std::ptrdiff_t rows =
+                    static_cast<std::ptrdiff_t>(g.uz.size() + g.uzp.size());
+                #pragma omp parallel for schedule(static) num_threads(nt)
+                for (std::ptrdiff_t r = 0; r < rows; ++r)
+                    mw899::grid_fill_row(s, K, g, static_cast<size_t>(r));
+                // Units of 32 members, as the member route schedules them;
+                // the groups inside a unit start at multiples of the group
+                // size from lo, so a member's group does not depend on the
+                // thread count (and its bits would not either way).
+                const std::ptrdiff_t unit = 8 * mw899::MW_GRID_GROUP;
+                const std::ptrdiff_t n_units = (hi - lo + unit - 1) / unit;
+                #pragma omp parallel for schedule(dynamic) num_threads(nt)
+                for (std::ptrdiff_t u = 0; u < n_units; ++u) {
+                    NI_CANCEL_POLL();
+                    const std::ptrdiff_t a = lo + u * unit;
+                    mw899::grid_span(s, K, g, lo, a, std::min(hi, a + unit), z, zp, out);
+                }
+                continue;
+            }
             #pragma omp parallel for schedule(dynamic, 32) num_threads(nt)
             for (std::ptrdiff_t i = lo; i < hi; ++i) {
                 NI_CANCEL_POLL();
