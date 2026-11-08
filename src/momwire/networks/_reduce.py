@@ -153,7 +153,33 @@ def _tl_zc(z0, gl):
     return z0 * (1.0 - 1j * (gl.real / gl.imag))
 
 
-def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=None):
+def _tl_line(z0, length, wavelength, vf, k1, k2, c_light_mhz_m=None, skin=False):
+    """``(γ·length, Zc)`` of a `TL` — the one place both stamps read a line.
+
+    Without ``skin`` it is `_tl_gamma_l` and `_tl_zc`, unchanged. With it, the
+    exact telegrapher line (see `network.TL`): in units of the lossless line,
+    Z′/(jωL) = 1 + r(1 − j) with r = R₁/(ωL) = 2α₁/β, the k1 resistance and its
+    equal internal reactance, and Y′/(jωC) = 1 − jg with g = G/(ωC) = 2α₂/β,
+    the k2 conductance. Then γ = jβ·√(pq) and Zc = z0·√(p/q). β and the α's
+    are `_tl_gamma_l`'s own, so the phase still reads the wavelength as given
+    and the loss the frequency, as every line here does.
+    """
+    if not skin:
+        gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
+        return gl, _tl_zc(z0, gl)
+    beta = 2.0 * np.pi / (vf * wavelength)
+    f_mhz = frequency_mhz(wavelength, c_light_mhz_m)
+    per_m = NEPER_PER_DB * FEET_PER_M / 100.0
+    r = 2.0 * k1 * np.sqrt(f_mhz) * per_m / beta
+    g = 2.0 * k2 * f_mhz * per_m / beta
+    p = 1.0 + r * (1.0 - 1j)
+    q = 1.0 - 1j * g
+    return 1j * beta * np.sqrt(p * q) * length, z0 * np.sqrt(p / q)
+
+
+def tl_abcd(
+    z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=None, skin=False
+):
     """Ideal-TL chain (ABCD) matrix ``(A, B, C, D)`` — the reducer's stamp
     (issue #746).
 
@@ -171,8 +197,7 @@ def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=Non
     A crossed ("half-twist") line is NOT a flag here: it is port B's weights
     negated where the pair is stamped, which is what a polarity inversion is.
     """
-    gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
-    zc = _tl_zc(z0, gl)
+    gl, zc = _tl_line(z0, length, wavelength, vf, k1, k2, c_light_mhz_m, skin)
     sh, ch = np.sinh(gl), np.cosh(gl)
     return ch, zc * sh, sh / zc, ch
 
@@ -187,6 +212,7 @@ def tl_admittance_2x2(
     k2=0.0,
     *,
     c_light_mhz_m=None,
+    skin=False,
 ):
     """Ideal-TL nodal admittance between its two terminals — lossless or
     lossy (issue #297).
@@ -216,7 +242,7 @@ def tl_admittance_2x2(
     ZL-Special). Note it is NOT the same as a negative z0, which would
     (wrongly) negate the diagonal self terms too.
     """
-    gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
+    gl, zc = _tl_line(z0, length, wavelength, vf, k1, k2, c_light_mhz_m, skin)
     sh, ch = np.sinh(gl), np.cosh(gl)
     if abs(sh) < 1e-12:
         f_mhz = frequency_mhz(wavelength, c_light_mhz_m)
@@ -227,7 +253,7 @@ def tl_admittance_2x2(
             "its chain matrix (`tl_abcd`) instead, which is what the reducer "
             "stamps and which stays finite"
         )
-    scale = 1.0 / (_tl_zc(z0, gl) * sh)
+    scale = 1.0 / (zc * sh)
     off = 1.0 if transposed else -1.0
     return scale * np.array([[ch, off], [off, ch]], dtype=np.complex128)
 
