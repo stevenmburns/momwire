@@ -6879,10 +6879,12 @@ class RazorSolver(
         return self.compute_port_solution().y
 
     def _port_count(self):
-        """Ports `compute_port_solution` returns — the configured `feeds`
-        and nothing else. Junction ports and node gaps are both refused at
-        construction (`_OUT_OF_SCOPE`), so there is nothing after them."""
-        return len(self.feeds)
+        """Ports `compute_port_solution` returns: [gap feeds…, node gaps…],
+        from the configuration alone. Junction ports are refused at
+        construction (`_OUT_OF_SCOPE`); node gaps are served (#603), and
+        leaving them out sized the swept Y block too small: empty for one
+        gap, a broadcast error for two (#1861)."""
+        return len(self.feeds) + len(self.node_gaps)
 
     def compute_port_solution(self, prepared=None) -> PortSolution:
         """Solve every port from ONE fill and ONE factorisation (#429 rank-9).
