@@ -2935,23 +2935,23 @@ def _on_window(z, plan, k):
 def _snap_heights(z):
     """`z` with every run of values within `_SHEET_HEIGHT_SNAP_ULPS` ulp of
     its neighbour mapped to one value -- the run's most frequent, the least
-    on a tie -- and {value: (lo, hi)} spanning each run (momwire#1860 L2). A
-    function of the multiset of values alone."""
+    on a tie -- and the runs as (rep, lo, hi) arrays, ascending (momwire#1860
+    L2). A function of the multiset of values alone."""
     z = np.asarray(z, dtype=float) + 0.0
-    vals, cnt = np.unique(z, return_counts=True)
+    vals, inv, cnt = np.unique(z, return_inverse=True, return_counts=True)
     if vals.size == 0:
-        return z, {}
-    gap = np.diff(vals)
+        return z, vals, vals, vals
     tol = _SHEET_HEIGHT_SNAP_ULPS * np.spacing(np.abs(vals[1:]))
-    starts = np.flatnonzero(np.concatenate([[True], gap > tol]))
-    ends = np.append(starts[1:], vals.size)
-    rep = np.empty(vals.size)
-    windows = {}
-    for a, b in zip(starts.tolist(), ends.tolist()):
-        r = float(vals[a + int(np.argmax(cnt[a:b]))])
-        rep[a:b] = r
-        windows[r] = (float(vals[a]), float(vals[b - 1]))
-    return rep[np.searchsorted(vals, z)], windows
+    new = np.concatenate([[True], np.diff(vals) > tol])
+    run = np.cumsum(new) - 1
+    starts = np.flatnonzero(new)
+    ends = np.append(starts[1:], vals.size) - 1
+    # Per run its most frequent value, the least on a tie: the first of
+    # each run in (run, -count, value) order.
+    order = np.lexsort((np.arange(vals.size), -cnt, run))
+    first = np.concatenate([[True], run[order][1:] != run[order][:-1]])
+    rep = vals[order[first]]
+    return rep[run][np.asarray(inv).ravel()], rep, vals[starts], vals[ends]
 
 
 def _sheet_take(sub, plan, cones=True):
@@ -3037,9 +3037,20 @@ def _plane_pays(k_p, k_m, d, parts, depth=None, lone_worth=None):
     need = nodes * (_SHEET_BUILD_WEIGHT if depth is None else _SHEET_HEIGHT_WEIGHT)
     w = _SHEET_ROW_WORTH
     if lone_worth is not None:
-        lone = [(r[:, c], zg, s, c[c]) for r, zg, s, c in parts if c.any()]
-        n_lone = _distinct_pairs(lone) if lone else 0
+        # The upper bound first, as below: every row distinct.
+        ub = 0.0
+        for r, zg, _s, c in parts:
+            n_z = sum(z.size for z in zg)
+            n_c = int(np.count_nonzero(c))
+            ub += n_z * (n_c * lone_worth + (r.shape[1] - n_c) * w)
+        if ub < need:
+            return False
         n_all = _distinct_pairs(parts)
+        if all(c.all() for _r, _zg, _s, c in parts):
+            n_lone = n_all
+        else:
+            lone = [(r[:, c], zg, s, c[c]) for r, zg, s, c in parts if c.any()]
+            n_lone = _distinct_pairs(lone) if lone else 0
         return n_lone * lone_worth + (n_all - n_lone) * w >= need
     n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg, _s, _c in parts)
     credited = [r if c.all() else r[:, c] for r, _zg, _s, c in parts]
@@ -3207,7 +3218,7 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
     if _HEIGHT_SHEET_RECAL.get():
         # momwire#1860 L2: the height census on snapped heights, at the
         # horizontal wires' measured row worth.
-        snapped, windows = _snap_heights(
+        snapped, rep, lo, hi = _snap_heights(
             np.concatenate([np.empty(0)] + [pa[:, 2] for pa, _pb in sides])
         )
         h_sides, off = [], 0
@@ -3217,6 +3228,11 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
             off += pa.shape[0]
             h_sides.append((pa, pb))
         heights = _census(h_sides, True, k_p, k_m, a, skip=planes, recal=True)
+        at = np.searchsorted(rep, [h for h, _dep in heights])
+        windows = {
+            h: (float(lo[i]), float(hi[i]))
+            for (h, _dep), i in zip(heights, at.tolist())
+        }
     else:
         heights = _census(sides, True, k_p, k_m, a, skip=planes)
     _SHEET_STATS["fills_planned"] += 1
@@ -3283,14 +3299,28 @@ def _census(sides, height, k_p, k_m, a, skip=(), recal=False):
         inv = np.asarray(inv).ravel()
         # A fixed-side node earns its columns' setups only on a plane, and
         # only when its (x, y) holds no other depth (`_plane_pays`).
-        if height and not recal:
+        big = cnt * vary.shape[0] >= _SHEET_MIN_ROWS
+        if recal and not big.any():
+            continue
+        if height and recal:
+            # momwire#1860 L2: lone as below, its (group, height) pairs
+            # counted as one int key each (no row-wise unique).
+            # Exact (x, y) as one complex key: numpy orders complex values
+            # by real then imaginary part, so equal keys are equal pairs.
+            xy, finv = np.unique(
+                (fx[:, 0] + 0.0) + 1j * (fx[:, 1] + 0.0), return_inverse=True
+            )
+            finv = np.asarray(finv).ravel().astype(np.int64)
+            key = np.unique(finv * vals.size + inv)
+            per_group = np.bincount(key // vals.size, minlength=xy.size)
+            lone = (per_group == 1)[finv]
+        elif height:
             lone = np.zeros(fx.shape[0], dtype=bool)
         else:
             _fxy, finv = _xy_groups(fx[:, 0], fx[:, 1])
             pairs = np.unique(np.stack([finv, inv], axis=1), axis=0)
             lone = (np.bincount(pairs[:, 0], minlength=_fxy.shape[0]) == 1)[finv]
         n_lone = np.bincount(inv, weights=lone, minlength=vals.size)
-        big = cnt * vary.shape[0] >= _SHEET_MIN_ROWS
         if not big.any():
             continue
         gxy, zg, glo, ghi = _grouped(vary, 2)
