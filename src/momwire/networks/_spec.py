@@ -305,6 +305,20 @@ class TL:
     `TL.from_cable()` for real cables. A lossy line's characteristic
     impedance is complex, z0·(1 − jα/β), as EZNEC's is (momwire#1706); z0
     names the lossless one.
+
+    skin: the k1 term is skin-effect loss, and a conductor's skin effect has
+    an internal reactance equal to its resistance (ωLᵢ = R). With ``skin``
+    the line is solved as the telegrapher line it describes: series
+    R₁(1 + j) + jωL from k1, shunt G + jωC from k2, γ = √(Z′Y′) and
+    Zc = √(Z′/Y′) exactly. The internal inductance slows the line by about
+    α₁/β, so its electrical length grows as 1/√f, which no constant `vf`
+    can say: 12 m of RG-58 at 3.55 MHz is 2.75 % longer than vf alone puts
+    it. R₁ is the table's (2·z0·α₁), so the matched loss sits below the
+    table by the same factor, (1 − α₁/β); calibrating R to the table instead
+    fits a SimNEC station's own trace worse. This is the line that makes
+    SimNEC's K0K1K2 cables match (antennaknobs#2200).
+    Off by default, and off is the line exactly as before, which is EZNEC's
+    lossy line (momwire#1706).
     """
 
     a: str  # port name
@@ -316,6 +330,7 @@ class TL:
     vf: float = 1.0
     k1: float = 0.0
     k2: float = 0.0
+    skin: bool = False
 
     def __post_init__(self):
         # A number here is always a slot slip (momwire#1792): a non-zero float
@@ -326,6 +341,11 @@ class TL:
                 f"got {self.transposed!r} ({type(self.transposed).__name__}); "
                 "a number here is usually a cable value in the wrong slot — "
                 "pass z0=, length=, vf=, k1=, k2= by keyword"
+            )
+        if not isinstance(self.skin, (bool, np.bool_)):
+            raise TypeError(
+                f"TL {self.a!r}->{self.b!r}: skin must be True or False, "
+                f"got {self.skin!r} ({type(self.skin).__name__})"
             )
 
     @classmethod

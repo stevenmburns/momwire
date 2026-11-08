@@ -460,6 +460,7 @@ class NetworkReducer:
                         vf=br.vf,
                         k1=br.k1,
                         k2=br.k2,
+                        skin=br.skin,
                         **line,
                     ),
                 )
