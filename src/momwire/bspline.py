@@ -1881,6 +1881,7 @@ class BSplineSolver(
         offset_reuse=None,
         transmitted_anchors=None,
         factored_columns=None,
+        height_sheet_recal=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1949,6 +1950,12 @@ class BSplineSolver(
         # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
         # off is the member route, bit for bit.
         self._factored_columns = _features.enabled("factored_columns", factored_columns)
+        # momwire#1860 L2: the near-interface height census recalibrated.
+        # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
+        # python); off is the shipped census, bit for bit.
+        self._height_sheet_recal = _features.enabled(
+            "height_sheet_recal", height_sheet_recal
+        )
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8796,9 +8803,14 @@ class BSplineSolver(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """`_compute_Z_operator_buried_scoped` under this solver's
-        `factored_columns` choice (momwire#1860)."""
-        with _near_interface.factored_columns_scope(
-            getattr(self, "_factored_columns", False)
+        `factored_columns` and `height_sheet_recal` choices (momwire#1860)."""
+        with (
+            _near_interface.factored_columns_scope(
+                getattr(self, "_factored_columns", False)
+            ),
+            _near_interface.height_sheet_recal_scope(
+                getattr(self, "_height_sheet_recal", False)
+            ),
         ):
             return self._compute_Z_operator_buried_scoped(
                 geom, supp_seg, polys, rows=rows, compact=compact

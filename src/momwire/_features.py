@@ -210,6 +210,20 @@ FEATURES: dict[str, Feature] = {
             kwarg="factored_columns",
             paths=("tests/test_factored_columns_1860.py",),
         ),
+        # The near-interface height-sheet census recalibrated (momwire#1860
+        # L2): a horizontal wire's rows on a height sheet at their measured
+        # worth, and heights a few ulp apart taken as one sheet. The shipped
+        # sheets and twin, a different split between them.
+        Feature(
+            name="height_sheet_recal",
+            reach=1,
+            env="MOMWIRE_X_HEIGHT_SHEET_RECAL",
+            kind="python",
+            issue=1860,
+            since="2026-11-08",
+            kwarg="height_sheet_recal",
+            paths=("tests/test_height_sheet_recal_1860.py",),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(
