@@ -223,6 +223,8 @@ def _served(transmitted_anchors, f_hz=F0):
     )
 
 
+# Slow lane at the 0.88.0 pre-tag check: 11.6 s median on the Linux test job.
+@pytest.mark.slow
 def test_z_with_anchors_agrees_with_the_exact_grid():
     anchors.reset()
     som._GRID_CACHE.clear()
