@@ -82,13 +82,14 @@ def test_a_few_ulp_run_is_one_height_and_its_window_spans_it():
     h = 0.01
     lo, hi = np.nextafter(h, 0.0), np.nextafter(h, 1.0)
     far = h * (1.0 + 1e-12)
-    z = np.array([h, lo, h, hi, h, far, 10.0, np.nextafter(10.0, 0.0)])
-    snapped, windows = ni._snap_heights(z)
-    n10 = np.nextafter(10.0, 0.0)  # a tie: the least names the run
+    n10 = np.nextafter(10.0, 0.0)
+    z = np.array([h, lo, h, hi, h, far, 10.0, n10])
+    snapped, rep, run_lo, run_hi = ni._snap_heights(z)
+    # The most frequent value names its run; a tie takes the least.
     assert snapped.tolist() == [h, h, h, h, h, far, n10, n10]
-    assert windows[h] == (lo, hi)
-    assert windows[far] == (far, far)
-    assert windows[n10] == (n10, 10.0)
+    assert rep.tolist() == [h, far, n10]
+    assert run_lo.tolist() == [lo, far, n10]
+    assert run_hi.tolist() == [hi, far, 10.0]
 
 
 def test_on_takes_the_counterpoise_height_and_off_declines_it():
