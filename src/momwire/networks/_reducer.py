@@ -275,7 +275,7 @@ class NetworkReducer:
                 ends = (br.a1, br.b1)
             else:
                 continue
-            if k1 or k2:
+            if k1 or k2 or getattr(br, "k0", 0.0):
                 continue  # a lossy line has no pole to sit on
             hanging = any(
                 self.port_to_idx.get(e) in open_nodes
@@ -461,6 +461,7 @@ class NetworkReducer:
                         k1=br.k1,
                         k2=br.k2,
                         skin=br.skin,
+                        k0=br.k0,
                         **line,
                     ),
                 )

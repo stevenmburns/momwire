@@ -306,17 +306,22 @@ class TL:
     impedance is complex, z0·(1 − jα/β), as EZNEC's is (momwire#1706); z0
     names the lossless one.
 
-    skin: the k1 term is skin-effect loss, and a conductor's skin effect has
-    an internal reactance equal to its resistance (ωLᵢ = R). With ``skin``
-    the line is solved as the telegrapher line it describes: series
-    R₁(1 + j) + jωL from k1, shunt G + jωC from k2, γ = √(Z′Y′) and
-    Zc = √(Z′/Y′) exactly. The internal inductance slows the line by about
-    α₁/β, so its electrical length grows as 1/√f, which no constant `vf`
-    can say: 12 m of RG-58 at 3.55 MHz is 2.75 % longer than vf alone puts
-    it. R₁ is the table's (2·z0·α₁), so the matched loss sits below the
-    table by the same factor, (1 − α₁/β); calibrating R to the table instead
-    fits a SimNEC station's own trace worse. This is the line that makes
-    SimNEC's K0K1K2 cables match (antennaknobs#2200).
+    k0: a constant term, matched loss [dB per 100 ft] = k0 + k1·√f + k2·f,
+        the conductors' DC resistance. Default 0.0, which leaves every line
+        as it was.
+
+    skin: solve the line as AC6LA's "Johnson" transmission-line model, the
+    one TLDetails, Zplots, AutoEZ and SimNEC use for their K0K1K2 cables.
+    Each coefficient gives a per-length element: R_dc = 2·z0·α₀ from k0,
+    R_hf = 2·z0·α₁ from k1, G = 2·α₂/z0 from k2, with L and C from z0 and
+    vf. The conductor's internal impedance Z_int = √(R_dc² + [R_hf·(1 + j)]²)
+    carries the skin effect's reactance (ωLᵢ = R at high frequency, none at
+    DC), and γ = √((Z_int + jωL)(G + jωC)), Zc = √((Z_int + jωL)/(G + jωC))
+    exactly. The internal inductance lengthens the line as 1/√f, which no
+    constant `vf` can say: 12 m of RG-58 at 3.55 MHz is 2.73 % longer than vf
+    alone puts it. The α's are the table's, so the matched loss sits slightly
+    below the table, as it does in those programs. With it, antennaknobs
+    reproduces a SimNEC station's own trace to 3e-15 (antennaknobs#2200).
     Off by default, and off is the line exactly as before, which is EZNEC's
     lossy line (momwire#1706).
     """
@@ -328,6 +333,7 @@ class TL:
     length: float
     transposed: bool = False
     vf: float = 1.0
+    k0: float = 0.0
     k1: float = 0.0
     k2: float = 0.0
     skin: bool = False
