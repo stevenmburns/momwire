@@ -67,16 +67,41 @@ def test_the_skin_line_is_the_johnson_line(f_mhz, length):
         assert abs(x - y) <= 1e-12 * max(1.0, abs(y))
 
 
-def test_twelve_metres_of_rg58_at_3_55_mhz_is_the_phase_simnec_prints():
-    """SimNEC's own readout for this line is 79.62693048724897 degrees, 2.73 %
-    more than vf alone gives; the Johnson line lands on it."""
+def test_ac6las_published_worked_example():
+    """AC6LA's "T-Line Model.xls" (ac6la.com/tlmath.html), the model Zplots and
+    TLDetails use, works Belden 8240 RG-58 (51.5 Ω, vf 0.66, k0 0.118904,
+    k1 0.321239, k2 0.004695) over 100 ft at 14 MHz into 25 + j10 Ω. Its
+    printed Zo, γ·length, input impedance and S-parameters (50 Ω reference)
+    are the numbers below."""
+    kw = dict(vf=0.66, k0=0.118904, k1=0.321239, k2=0.004695)
+    a, b, c, d = tl_abcd(51.5, 100 * 0.3048, _wl(14.0), skin=True, **kw)
+    _o, gamma, zc = _oracle(51.5, 100 * 0.3048, 14.0, **kw)
+    assert zc == pytest.approx(52.0248832435808 - 0.492846813222545j, rel=1e-13)
+    assert gamma * 100 * 0.3048 == pytest.approx(
+        0.144966144371374 + 13.6885522543927j, rel=1e-13
+    )
+    z_load = 25 + 10j
+    assert (a * z_load + b) / (c * z_load + d) == pytest.approx(
+        85.2118304205344 + 19.4658680905111j, rel=1e-12
+    )
+    den = a + b / 50 + c * 50 + d
+    assert (a + b / 50 - c * 50 - d) / den == pytest.approx(
+        3.19054814135953e-2 + 4.6713369379071e-3j, rel=1e-12
+    )
+    assert 2 / den == pytest.approx(0.374987441974728 - 0.77892045789011j, rel=1e-12)
+
+
+def test_twelve_metres_of_rg58_at_3_55_mhz_is_2_73_percent_longer():
+    """The line that carried a SimNEC station (antennaknobs#2200): its phase is
+    2.73 % more than vf alone gives. SimNEC's saved readout for that line,
+    79.62693048724897 degrees, is this phase; its readout is not always
+    current, so the number is pinned to this one line only."""
     wl = _wl(3.55)
-    _o, gamma, _zc = _oracle(50.0, 12.0, 3.55, **RG58)
+    _o, gamma, zc = _oracle(50.0, 12.0, 3.55, **RG58)
     assert math.degrees(gamma.imag * 12.0) == pytest.approx(
         79.62693048724897, rel=1e-12
     )
     _a, b, _c, _d = tl_abcd(50.0, 12.0, wl, skin=True, **RG58)
-    _o2, _g2, zc = _oracle(50.0, 12.0, 3.55, **RG58)
     assert b == pytest.approx(zc * cmath.sinh(gamma * 12.0), rel=1e-12)
     beta0 = 2 * math.pi / (RG58["vf"] * wl)
     assert gamma.imag / beta0 == pytest.approx(1.02734, abs=1e-5)
