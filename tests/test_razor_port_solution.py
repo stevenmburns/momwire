@@ -21,8 +21,8 @@ for the B-spline / sinusoidal families, read against razor's own idiom:
 3. `coeffs @ V` reproduces what `compute_impedance` solves for the
    configured voltages — the superposition property, and the tightest
    available statement of port ORDER: razor's ports are `feeds`, in order,
-   with nothing after them (`junction_ports` and `node_gaps` are both
-   refused at construction).
+   then its `node_gaps` (served since #603; `junction_ports` are refused at
+   construction). The swept count of both is #1861's gate.
 4. One fill, one factorisation, regardless of port count.
 5. `compute_port_solution_swept` == a per-k `compute_port_solution` loop,
    bit for bit, over a ground whose ε̃ moves with ω — the house swept gate
