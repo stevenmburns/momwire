@@ -16,6 +16,7 @@ artifact inside it. It encodes the cases the release step relies on:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -89,3 +90,85 @@ def test_main_reads_a_local_directory(td, capsys, tmp_path):
     assert td.main(["--dir", str(FIXTURE)]) == 0
     assert "slow-lane candidate" in capsys.readouterr().out
     assert td.main(["--dir", str(tmp_path)]) == 1
+
+
+def _write(path: Path, recs) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "durations.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    return path
+
+
+def _rec(run, nodeid, duration, setup, teardown, outcome="passed", markers=()):
+    return {
+        "job": "test",
+        "runner_os": "Linux",
+        "run_id": run,
+        "nodeid": nodeid,
+        "duration": duration,
+        "outcome": outcome,
+        "markers": list(markers),
+        "setup": setup,
+        "teardown": teardown,
+    }
+
+
+@pytest.fixture
+def fixture_records(tmp_path):
+    """Three runs of one module whose module fixture costs ~100 s, paid by a
+    DIFFERENT test each run (xdist's scheduling), beside a cheap module, an
+    old-style record with no setup/teardown fields, and a test that skips
+    in its (expensive) setup."""
+    big = "tests/test_build.py"
+    for run, payer, cost in (("1", "a", 100.0), ("2", "b", 90.0), ("3", "a", 130.0)):
+        other = "b" if payer == "a" else "a"
+        _write(
+            tmp_path / run,
+            [
+                _rec(run, f"{big}::test_{payer}", 0.5, cost, 0.01),
+                _rec(run, f"{big}::test_{other}", 0.5, 0.01, 2.0),
+                _rec(run, "tests/test_cheap.py::test_c", 1.0, 0.2, 0.1),
+                _rec(run, "tests/test_cheap.py::test_skip", None, 7.0, 0.0, "skipped"),
+                _rec(run, "tests/test_old.py::test_o", 3.0, None, None),
+            ],
+        )
+    return tmp_path
+
+
+def test_a_record_without_a_call_is_not_call_timed(td, fixture_records):
+    groups = td.aggregate(td.iter_records([fixture_records]))
+    linux = groups[("test", "Linux")]
+    assert "tests/test_cheap.py::test_skip" not in linux
+    assert len(linux["tests/test_build.py::test_a"].samples) == 3
+
+
+def test_fixture_cost_is_summed_per_module_per_run(td, fixture_records):
+    fixtures = td.aggregate_fixtures(td.iter_records([fixture_records]))
+    tests, modules = fixtures[("test", "Linux")]
+    build = modules["tests/test_build.py"]
+    # per run: payer's setup + teardowns + the other's setup, whichever test paid
+    assert sorted(build.samples) == pytest.approx([92.02, 102.02, 132.02])
+    assert len(build.runs) == 3
+    # a setup that skipped still cost its seconds
+    assert td.percentile(modules["tests/test_cheap.py"].samples, 50) == 7.3
+    # records from before the recorder wrote setup/teardown are not fixture data
+    assert "tests/test_old.py" not in modules
+    assert "tests/test_old.py::test_o" not in tests
+
+
+def test_the_fixture_report_ranks_modules_by_median(td, fixture_records):
+    out = td.fixture_report(td.aggregate_fixtures(td.iter_records([fixture_records])))
+    lines = out.splitlines()
+    head = lines.index(
+        "== setup+teardown by module, summed per run: test / Linux (top 10)"
+    )
+    assert lines[head + 2].split() == ["102.02", "126.02", "3", "tests/test_build.py"]
+    assert lines[head + 3].split()[-1] == "tests/test_cheap.py"
+    assert "== setup+teardown by test: test / Linux (top 10)" in out
+
+
+def test_main_prints_the_fixture_report(td, capsys, fixture_records):
+    assert td.main(["--dir", str(fixture_records)]) == 0
+    assert "setup+teardown by module" in capsys.readouterr().out
+    # the committed fixture predates the fields: said, not crashed on
+    assert td.main(["--dir", str(FIXTURE)]) == 0
+    assert "no records carry them" in capsys.readouterr().out

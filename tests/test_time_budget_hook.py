@@ -37,8 +37,36 @@ def test_fast():
 """
 
 
-def _run(tmp_path: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    (tmp_path / "test_sample.py").write_text(_SLOW_TESTS)
+_FIXTURE_TESTS = """
+import time
+import pytest
+
+@pytest.fixture
+def unavailable():
+    time.sleep(0.3)
+    pytest.skip("not here")
+
+def test_skips_in_setup(unavailable):
+    pass
+
+@pytest.fixture(scope="module")
+def built():
+    time.sleep(0.4)
+    yield
+    time.sleep(0.2)
+
+def test_pays_the_module_fixture(built):
+    pass
+
+def test_rides_on_it(built):
+    pass
+"""
+
+
+def _run(
+    tmp_path: Path, *args: str, source: str = _SLOW_TESTS, **env: str
+) -> subprocess.CompletedProcess:
+    (tmp_path / "test_sample.py").write_text(source)
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\nmarkers =\n    slow: s\n    memgate: m\n"
         "    crossgate: c\n    integration: i\n"
@@ -112,3 +140,34 @@ def test_durations_are_logged_once_per_test(tmp_path, xdist):
     # Appends: a second session (one per interpreter in a wheel build) adds.
     _run(tmp_path, MOMWIRE_DURATIONS_OUT=str(out))
     assert len(out.read_text().splitlines()) == 6
+
+
+@pytest.mark.parametrize("xdist", [False, True], ids=["serial", "xdist"])
+def test_setup_and_teardown_are_logged_beside_the_call(tmp_path, xdist):
+    """A module fixture's cost lands in the SETUP of the first test that
+    asks for it and the TEARDOWN of the last, never in a call; a call-only
+    log hid ten minutes of per-worker C++ builds that way (2026-10-28).
+    `duration` stays the call phase, so the median script reads it as before."""
+    if xdist:
+        pytest.importorskip("xdist")
+    out = tmp_path / "out" / "d.jsonl"
+    # one worker under xdist: which test pays a module fixture is otherwise
+    # the scheduler's choice
+    args = ("-n", "1") if xdist else ()
+    r = _run(tmp_path, *args, source=_FIXTURE_TESTS, MOMWIRE_DURATIONS_OUT=str(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    recs = [json.loads(line) for line in out.read_text().splitlines()]
+    by = {rec["nodeid"].split("::")[-1]: rec for rec in recs}
+    assert len(recs) == 3
+    first, second = by["test_pays_the_module_fixture"], by["test_rides_on_it"]
+    for rec in (first, second):
+        assert rec["outcome"] == "passed"
+        assert rec["duration"] < 0.2  # the call is empty
+        assert isinstance(rec["setup"], float) and isinstance(rec["teardown"], float)
+    assert first["setup"] >= 0.35 and second["setup"] < 0.2
+    assert second["teardown"] >= 0.15 and first["teardown"] < 0.15
+    # Skipped in setup: no call phase, so no call duration, and the setup
+    # it spent is still on the record.
+    skipped = by["test_skips_in_setup"]
+    assert skipped["outcome"] == "skipped" and skipped["duration"] is None
+    assert skipped["setup"] >= 0.25
