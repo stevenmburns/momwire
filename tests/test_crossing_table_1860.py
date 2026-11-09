@@ -92,6 +92,7 @@ DECKS = {
     "efhw_lo": _efhw(30, 9, 90, 12, "efhw_lo 141 segs"),
     "efhw_hi": _efhw(120, 38, 380, 52, "efhw_hi 590 segs"),
     "d3_hub": None,  # tests/fixtures/near_buried_1653/d3_hub.nec5.nec
+    "d4_slant": None,  # tests/fixtures/near_buried_1653/d4_slant.nec5.nec
     "beverage": BEVERAGE,
 }
 
@@ -99,6 +100,15 @@ DECKS = {
 def _deck_text(name):
     if name == "d3_hub":
         return (FIX / "near_buried_1653" / "d3_hub.nec5.nec").read_text()
+    if name.startswith("d4_slant"):
+        # The fixture's NE/NH cards are dropped (the accuracy study ran it
+        # without them) and an XQ is added; "d4_slant@0.97" scales its 7 MHz.
+        text = (FIX / "near_buried_1653" / "d4_slant.nec5.nec").read_text()
+        lines = [x for x in text.splitlines() if not x.startswith(("NE", "NH"))]
+        scale = float(name.partition("@")[2] or 1.0)
+        fr = f"FR 0 1 0 0 {7.0 * scale:.6f} 0"
+        out = [fr if x.startswith("FR") else x for x in lines if x != "EN"]
+        return "\n".join([*out, "XQ", "EN"]) + "\n"
     return DECKS[name]
 
 
@@ -282,6 +292,9 @@ def _zin(text):
 # Measured on Skylake (momwire#1860 L5, both engines; Z from this module's
 # route), then x3 for margin and a printed last digit:
 #   efhw_lo 1.7e-5, efhw_hi 1.9e-5, d3_hub 9.4e-4, Beverage 8.4e-5
+# d4_slant (momwire#1860 accuracy study, v0.89.0, razor-2p only) 4.8-7.3e-4
+# at f0 x 0.97 / 1.00 / 1.03 (re-measured here: 4.9, 6.3, 7.2e-4; ~0.035 ohm),
+# then x4: 3e-3. Its 6,037 table rows are what the census takes.
 # (diag(Z^-1) at most 1.05e-3).
 CASES = [
     ("efhw_lo", 1e-4),
@@ -312,6 +325,22 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
     not _features.certified("crossing_table"),
     reason="crossing_table is not certified on this platform",
 )
+@pytest.mark.parametrize("scale", ["0.97", "1.00", "1.03"])
+def test_d4_slant_takes_the_table_and_stays_in_its_class(monkeypatch, scale):
+    # The census takes the table here (6,037 rows at the deck's own
+    # frequency) under nec5-razor-2p; no other test covers this deck.
+    deck = f"d4_slant@{scale}"
+    off, _, _ = _printout(deck, "razor-2p", False, monkeypatch)
+    on, _, served = _printout(deck, "razor-2p", True, monkeypatch)
+    assert served > 0
+    a, b = _zin(off), _zin(on)
+    assert abs(b - a) <= 3e-3 * abs(a), (a, b)
+
+
+@pytest.mark.skipif(
+    not _features.certified("crossing_table"),
+    reason="crossing_table is not certified on this platform",
+)
 @pytest.mark.parametrize(
     ("deck", "taken"),
     [
@@ -324,6 +353,7 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
         ("efhw_lo", False),
         ("d3_hub", False),
         ("beverage", False),
+        ("d4_slant", True),
     ],
 )
 def test_the_census_takes_the_table_where_it_pays(monkeypatch, deck, taken):
