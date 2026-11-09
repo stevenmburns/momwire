@@ -263,6 +263,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_somm_below_fill_core.cpp
   ${MW_SRC}/_near_interface_core.cpp
   ${MW_SRC}/_near_interface_eval.cpp
+  ${MW_SRC}/_crossing_table_core.cpp  # momwire#1860 L5's table (`crossing_table`)
   ${MW_SRC}/_near_interface_point_core.cpp
   ${MW_SRC}/_near_buried_core.cpp
   ${MW_SRC}/_razor_crossing_core.cpp
@@ -363,7 +364,8 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   somm_trans=mws_somm_trans  # the transmitted table's (momwire#1718 S12)
   ni_point=mws_ni_point near_buried=mws_near_buried  # the buried near-field readout (momwire#1653)
   offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym  # bs2's (momwire#1517)
-  mw_fg=mws_fg)  # the field-form assembler's inline text: one copy per runtime
+  mw_fg=mws_fg  # the field-form assembler's inline text: one copy per runtime
+  mw1860=mws_mw1860)  # the crossing table's inline text (momwire#1860 L5): likewise
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")
