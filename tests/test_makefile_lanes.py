@@ -73,6 +73,11 @@ LANE_TO_JOB = {
     "nightly": "test-nightly",
 }
 
+# ci.yml jobs whose pytest runs ANOTHER repo's tests against this PR's momwire.
+# There is no Makefile lane to mirror: the command's files live in an
+# antennaknobs checkout, so a local lane would be a different command.
+EXTERNAL_JOBS = {"consumer-contract"}
+
 _PYTEST_LINE = re.compile(r"(?:^|\s)(pytest\s+.*?)\s*$")
 
 # pytest-split's flags partition a job's test set across a matrix; the shards'
@@ -106,6 +111,8 @@ def _ci_pytest_commands() -> dict[str, list[str]]:
                 line = re.sub(r"^\S*python[0-9.]*\s+-m\s+", "", line)
                 m = _PYTEST_LINE.search(line)
                 if m:
+                    if job_name in EXTERNAL_JOBS:
+                        continue
                     out.setdefault(job_name, []).append(
                         _SHARD_FLAGS.sub("", m.group(1))
                     )

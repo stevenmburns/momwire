@@ -102,6 +102,7 @@ jobs = [
 [unassigned]
 "ci.yml:changes" = "path filter"
 "ci.yml:lint" = "ruff; not a platform"
+"ci.yml:consumer-contract" = "antennaknobs main's boundary tests against this PR's momwire (momwire#1882); see [advisory]"
 "required.yml:required" = "the one check branch protection names; waits on the jobs scripts/support_matrix.py selects"
 "eznec-dropin.yml:changes" = "path filter"
 "eznec-dropin.yml:release" = "attaches the drop-in to a release"
@@ -121,3 +122,9 @@ jobs = [
 "simnec-driver.yml:checkout" = "the SimNEC driver from this checkout on macOS; a host integration"
 "site.yml:build" = "the documentation site"
 "deploy-docs.yml:deploy" = "deploys the documentation site"
+
+# Jobs that run on a pull request but are never made REQUIRED by it, whatever
+# the diff (`scripts/support_matrix.py` drops them from the selection). Each
+# must also be placed above (a level or [unassigned]). The value says why.
+[advisory]
+"ci.yml:consumer-contract" = "antennaknobs main's tests of its momwire boundary: red means momwire and antennaknobs must change together (the antennaknobs side lands after this PR merges), so it informs the review and does not gate the merge"

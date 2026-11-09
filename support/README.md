@@ -31,6 +31,9 @@ The rules, in order:
    memgate and integration lanes, wheels, the drop-in, releases). The nightly
    and main's push runs certify those. `not_required_level_jobs` in the
    output lists the level jobs a touched feature could not be held to.
+5. **Never** a job listed under `[advisory]` in `hierarchy.toml`: it runs on
+   the PR and shows its result, but is not waited on. Today that is
+   `ci.yml:consumer-contract`.
 
 To see what a branch would need: `python scripts/support_matrix.py select
 --base origin/main` (the working tree) or `--head <sha>`.
