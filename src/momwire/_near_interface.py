@@ -333,6 +333,268 @@ def height_sheet_recal_scope(on):
         _HEIGHT_SHEET_RECAL.reset(token)
 
 
+# momwire#1860 L5, the opt-in feature `crossing_table` (`_features`, reach 1,
+# native): the crossing rows a fill would send to the column twin are read
+# instead from ONE table per frequency, the approach of the NEC-4 theory
+# manual sec. 5.1.3 at a finer grid and a higher order. The grid is uniform
+# and fixed in free-space wavelengths -- rho in [0, 0.5], z in [0, 0.25],
+# |z'| in [0, 0.06], spacing 1/100 (1/200 in z') -- so its node count (51 x
+# 26 x 13) does not depend on the deck, and it has no refinement: the part
+# singular at the corner rho = z = z' = 0 is taken out in closed form before
+# storing and put back on reading (`_crossing_table_inline.h` has the forms
+# and their derivation; they are this module's own expansion, not the
+# manual's), and the remainder is stored times R, which then goes to zero at
+# the corner. Read tricubically. Rows outside the extents stay with the twin.
+#
+# Measured (momwire#1860, Skylake, against the exact route): printed Zin moves
+# <= 0.12 ohm on the EFHW decks (~6 kohm), 0.05 ohm on d3_hub, 0.04 ohm on the
+# Beverage; diag(Z^-1) <= 1e-3 relative. Coarse by design: the accuracy class
+# Steve accepted ("lambda/100"), not the twin's.
+#
+# Whether a fill takes it is decided per fill on what the fill asks, never on
+# what is cached (`_CrossingFill`): the twin rows inside the extents are
+# counted at their cost (a column setup is `_CROSSING_TABLE_SETUP` members),
+# and once they pass the build's own cost (a column per rho node, every node
+# a member) the table serves that call's rows and every later call's. A fill
+# with few crossing rows keeps the twin throughout. Off, the default, the
+# twin is called exactly as before.
+_CROSSING_TABLE_D = 0.01
+_CROSSING_TABLE_ZFAC = 0.5
+_CROSSING_TABLE_EXTENT = (0.5, 0.25, 0.06)
+_CROSSING_TABLE_SETUP = 18.0
+_CROSSING_TABLE_CACHE_MAX = 8
+_CROSSING_TABLE_CACHE = collections.OrderedDict()
+_CROSSING_TABLE_LOCK = threading.Lock()
+# Route proof: rows the table served and rows inside it the twin kept, tables
+# built, fills that took it.
+_CROSSING_TABLE_STATS = dict.fromkeys(
+    ("table_rows", "kept_rows", "tables_built", "fills_taken"), 0
+)
+
+
+class _CrossingFill:
+    """One fill's running count of twin work inside the table's extents."""
+
+    __slots__ = ("pending", "taken")
+
+    def __init__(self):
+        self.pending = 0.0
+        self.taken = False
+
+
+_CROSSING_TABLE: contextvars.ContextVar[_CrossingFill | None] = contextvars.ContextVar(
+    "momwire_crossing_table", default=None
+)
+
+
+def _have_crossing_table():
+    return _nia is not None and hasattr(_nia, "crossing_table_1860")
+
+
+@contextlib.contextmanager
+def crossing_table_scope(on):
+    """Run the body (one fill) with the crossing table on (`on` truthy) or
+    off."""
+    token = _CROSSING_TABLE.set(
+        _CrossingFill() if on and _have_crossing_table() else None
+    )
+    try:
+        yield
+    finally:
+        _CROSSING_TABLE.reset(token)
+
+
+def crossing_table_grid(k_p):
+    """The table's spacing h (3,) in metres and node counts n (3,) at k_p."""
+    lam0 = 2.0 * np.pi / float(k_p)
+    step = np.array(
+        [_CROSSING_TABLE_D, _CROSSING_TABLE_D, _CROSSING_TABLE_D * _CROSSING_TABLE_ZFAC]
+    )
+    n = np.array(
+        [int(round(e / s)) + 1 for e, s in zip(_CROSSING_TABLE_EXTENT, step)],
+        dtype=np.intp,
+    )
+    return step * lam0, n
+
+
+def _crossing_table_vals(k_p, k_m, lam_mult):
+    """The cached table at (k_p, k_m): (h, n, vals). A node's value depends
+    on its key alone, so sharing it across fills cannot move a bit."""
+    h, n = crossing_table_grid(k_p)
+    key = (
+        float(k_p),
+        complex(k_m),
+        float(lam_mult),
+        int(_COLUMN_P),
+        float(_DETOUR),
+        _CROSSING_TABLE_D,
+        _CROSSING_TABLE_ZFAC,
+        _CROSSING_TABLE_EXTENT,
+    )
+    with _CROSSING_TABLE_LOCK:
+        vals = _CROSSING_TABLE_CACHE.pop(key, None)
+        if vals is None:
+            vals = np.asarray(
+                _nia.crossing_table_build(
+                    float(k_p),
+                    complex(k_m),
+                    h,
+                    n,
+                    float(lam_mult),
+                    int(_COLUMN_P),
+                    float(_DETOUR),
+                    _physical_cpu_count(),
+                    _GX,
+                    _GW,
+                    cancel_flag=_cancel.ptr(),
+                )
+            )
+            _CROSSING_TABLE_STATS["tables_built"] += 1
+        _CROSSING_TABLE_CACHE[key] = vals
+        while len(_CROSSING_TABLE_CACHE) > _CROSSING_TABLE_CACHE_MAX:
+            _CROSSING_TABLE_CACHE.popitem(last=False)
+    return h, n, vals
+
+
+def crossing_singular(rho, z, zp, k_p, k_m):
+    """The closed-form part the table takes out, (m, 6): the numpy walk of
+    `mw1860::crossing_singular` (`_crossing_table_inline.h`)."""
+    rho, z, zp = (np.asarray(a, dtype=float) for a in (rho, z, zp))
+    s = z - zp
+    R = np.hypot(rho, s)
+    al = float(k_p) ** 2
+    be = complex(k_m) ** 2
+    tot = al + be
+    A = 2.0 / tot
+    C = (be - al) / tot
+    tau = 0.5 * (al * z - be * zp)
+    L = -np.log(s + R)
+    c3 = 0.5 * tau * tau + al * be / tot - 0.5 * tot
+    tL = tau * L
+    return np.stack(
+        [
+            1.0 / R + tL,
+            A / R + A * tL,
+            C * L,
+            -C / R - C * tL,
+            -A * (2.0 * s * s - rho * rho) / R**5 - A * (tau * s / R**3 + c3 / R),
+            C / R + C * tL,
+        ],
+        axis=1,
+    )
+
+
+def crossing_table_lookup_numpy(k_p, k_m, h, n, vals, rho, z, zp):
+    """The numpy walk of `crossing_table_lookup`: tricubic in R (f - S) on
+    the uniform grid, divided by R, plus S."""
+    rho, z, zp = (np.asarray(a, dtype=float) for a in (rho, z, zp))
+
+    def stencil(t, hh, nn):
+        u = t / hh
+        i = np.clip(np.floor(u).astype(np.intp) - 1, 0, nn - 4)
+        x = u - i
+        w = np.stack(
+            [
+                -(x - 1.0) * (x - 2.0) * (x - 3.0) / 6.0,
+                x * (x - 2.0) * (x - 3.0) / 2.0,
+                -x * (x - 1.0) * (x - 3.0) / 2.0,
+                x * (x - 1.0) * (x - 2.0) / 6.0,
+            ],
+            axis=1,
+        )
+        return i, w
+
+    i, wr = stencil(rho, h[0], n[0])
+    j, wz = stencil(z, h[1], n[1])
+    k, wp = stencil(-zp, h[2], n[2])
+    g = np.zeros((rho.size, 6), dtype=complex)
+    for a in range(4):
+        for b in range(4):
+            for c in range(4):
+                w = wr[:, a] * wz[:, b] * wp[:, c]
+                g += w[:, None] * vals[i + a, j + b, k + c]
+    R = np.hypot(rho, z - zp)
+    return g / R[:, None] + crossing_singular(rho, z, zp, k_p, k_m)
+
+
+def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
+    """`near_interface_six_columns` over a fill's columns, the crossing table
+    serving the members inside it when the fill's scope has taken it
+    (momwire#1860 L5). Off, exactly the twin's call as it always was."""
+    extra = {} if cache is None else {"cache": cache}
+
+    def twin(rc, off, z_, zp_):
+        return _nia.near_interface_six_columns(
+            k_p,
+            k_m,
+            rc,
+            off,
+            z_,
+            zp_,
+            float(lam_mult),
+            int(_COLUMN_P),
+            float(_DETOUR),
+            _physical_cpu_count(),
+            _GX,
+            _GW,
+            cancel_flag=_cancel.ptr(),
+            **extra,
+            **_columns_lanes_kw(),
+        )
+
+    fill = _CROSSING_TABLE.get()
+    if fill is None:
+        return twin(rho_c, offsets, zs, zps)
+    h, n = crossing_table_grid(k_p)
+    lim = h * (n - 1)
+    sizes = np.diff(offsets)
+    col = np.repeat(np.arange(sizes.size), sizes)
+    rho = np.asarray(rho_c, dtype=float)[col]
+    inside = (rho <= lim[0]) & (zs <= lim[1]) & (-zps <= lim[2])
+    n_in = int(np.count_nonzero(inside))
+    if not fill.taken:
+        if n_in:
+            cols_in = int(
+                np.count_nonzero(np.bincount(col[inside], minlength=sizes.size))
+            )
+            fill.pending += cols_in * _CROSSING_TABLE_SETUP + n_in
+        if fill.pending >= n[0] * _CROSSING_TABLE_SETUP + float(np.prod(n)):
+            fill.taken = True
+            _CROSSING_TABLE_STATS["fills_taken"] += 1
+        else:
+            _CROSSING_TABLE_STATS["kept_rows"] += n_in
+            return twin(rho_c, offsets, zs, zps)
+    if not n_in:
+        return twin(rho_c, offsets, zs, zps)
+    h, n, vals_t = _crossing_table_vals(k_p, k_m, lam_mult)
+    out = np.empty((zs.size, N_KEYS), dtype=np.complex128)
+    out[inside] = _nia.crossing_table_lookup(
+        float(k_p),
+        complex(k_m),
+        h,
+        n,
+        vals_t,
+        np.ascontiguousarray(rho[inside]),
+        np.ascontiguousarray(zs[inside]),
+        np.ascontiguousarray(zps[inside]),
+        _physical_cpu_count(),
+    )
+    _CROSSING_TABLE_STATS["table_rows"] += n_in
+    rest = ~inside
+    if rest.any():
+        cnt = np.bincount(col[rest], minlength=sizes.size)
+        keep = cnt > 0
+        off2 = np.zeros(int(keep.sum()) + 1, dtype=np.intp)
+        off2[1:] = np.cumsum(cnt[keep])
+        out[rest] = twin(
+            np.ascontiguousarray(np.asarray(rho_c, dtype=float)[keep]),
+            off2,
+            np.ascontiguousarray(zs[rest]),
+            np.ascontiguousarray(zps[rest]),
+        )
+    return out
+
+
 def _columns_lanes_kw():
     """`near_interface_six_columns`' lanes and steepest-descent switches, for
     a binding that has them, and its factored route (`grid`) when the
@@ -2622,22 +2884,8 @@ def _column_twin(
     # numbers: the twin refuses the same set (before it builds a single
     # column), but from C++ it cannot spell the values.
     _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-    vals = _nia.near_interface_six_columns(
-        k_p,
-        k_m,
-        rho_c,
-        offsets,
-        zs,
-        zps,
-        float(lam_mult),
-        int(_COLUMN_P),
-        float(_DETOUR),
-        _physical_cpu_count(),
-        _GX,
-        _GW,
-        cancel_flag=_cancel.ptr(),
-        cache=column_cache,
-        **_columns_lanes_kw(),
+    vals = _twin_columns(
+        k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=column_cache
     )
     if permuted:
         pos = np.empty(member_order.size, dtype=np.intp)
@@ -4570,22 +4818,7 @@ def _designed_tables_reference(
                 # numbers: the twin refuses the same set (before it builds a
                 # single column), but from C++ it cannot spell the values.
                 _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-                vals = _nia.near_interface_six_columns(
-                    k_p,
-                    k_m,
-                    rho_c,
-                    offsets,
-                    zs,
-                    zps,
-                    float(lam_mult),
-                    int(_COLUMN_P),
-                    float(_DETOUR),
-                    _physical_cpu_count(),
-                    _GX,
-                    _GW,
-                    cancel_flag=_cancel.ptr(),
-                    **_columns_lanes_kw(),
-                )
+                vals = _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult)
                 placed = fresh_pos[member_order]
             block[placed] = vals
             n_filled += placed.size

@@ -1882,6 +1882,7 @@ class BSplineSolver(
         transmitted_anchors=None,
         factored_columns=None,
         height_sheet_recal=None,
+        crossing_table=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1956,6 +1957,10 @@ class BSplineSolver(
         self._height_sheet_recal = _features.enabled(
             "height_sheet_recal", height_sheet_recal
         )
+        # momwire#1860 L5: the crossing table. None defers to
+        # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
+        # column twin, bit for bit.
+        self._crossing_table = _features.enabled("crossing_table", crossing_table)
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8803,13 +8808,17 @@ class BSplineSolver(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """`_compute_Z_operator_buried_scoped` under this solver's
-        `factored_columns` and `height_sheet_recal` choices (momwire#1860)."""
+        `factored_columns`, `height_sheet_recal` and `crossing_table` choices
+        (momwire#1860)."""
         with (
             _near_interface.factored_columns_scope(
                 getattr(self, "_factored_columns", False)
             ),
             _near_interface.height_sheet_recal_scope(
                 getattr(self, "_height_sheet_recal", False)
+            ),
+            _near_interface.crossing_table_scope(
+                getattr(self, "_crossing_table", False)
             ),
         ):
             return self._compute_Z_operator_buried_scoped(

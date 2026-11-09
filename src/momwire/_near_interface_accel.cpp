@@ -91,6 +91,7 @@
 namespace py = pybind11;
 
 #include "_near_interface_core.h"
+#include "_crossing_table_core.h"
 
 // Cooperative cancellation (momwire#1348 scope), the `_accel_common.h`
 // convention spelled locally: this companion does not include that header,
@@ -220,6 +221,72 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
                              vals.mutable_data(), lanes, sdp, grid);
     }
     return vals;
+}
+
+// momwire#1860 L5 (the opt-in feature `crossing_table`): the crossing table's
+// build, (n0, n1, n2, 6), and its read at (m,) rows, (m, 6). See
+// `_crossing_table_core.h`.
+using f64arr = py::array_t<double, py::array::c_style | py::array::forcecast>;
+using c128arr = py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>;
+
+static void ct_shape(const f64arr &h, const py::array_t<py::ssize_t, py::array::c_style | py::array::forcecast> &n,
+                     std::ptrdiff_t nn[3]) {
+    if (h.ndim() != 1 || h.shape(0) != 3 || n.ndim() != 1 || n.shape(0) != 3)
+        throw std::invalid_argument("h and n must have 3 entries");
+    for (int a = 0; a < 3; ++a) {
+        nn[a] = n.data()[a];
+        if (nn[a] < 4) throw std::invalid_argument("crossing table needs 4 nodes an axis");
+        if (!(h.data()[a] > 0.0)) throw std::invalid_argument("crossing table spacing must be > 0");
+    }
+}
+
+static py::array_t<std::complex<double>> crossing_table_build(
+    double k_p, std::complex<double> k_m, f64arr h,
+    py::array_t<py::ssize_t, py::array::c_style | py::array::forcecast> n, double lam_mult,
+    int p, double detour, int n_threads, f64arr gx, f64arr gw, uintptr_t cancel_flag = 0) {
+    std::ptrdiff_t nn[3];
+    ct_shape(h, n, nn);
+    if (gx.ndim() != 1 || gw.ndim() != 1 || gx.shape(0) != gw.shape(0) || gx.shape(0) < 1)
+        throw std::invalid_argument("bad Gauss rule");
+    if (p < 0 || p > 20) throw std::invalid_argument("column p out of range");
+    py::array_t<std::complex<double>> vals({py::ssize_t(nn[0]), py::ssize_t(nn[1]),
+                                            py::ssize_t(nn[2]), py::ssize_t(6)});
+    {
+        py::gil_scoped_release release;
+        ni_core::crossing_table_build(k_p, k_m, h.data(), nn, lam_mult, p, detour, n_threads,
+                                      gx.data(), gw.data(), static_cast<int>(gx.shape(0)),
+                                      cancel_flag, vals.mutable_data());
+    }
+    return vals;
+}
+
+static py::array_t<std::complex<double>> crossing_table_lookup(
+    double k_p, std::complex<double> k_m, f64arr h,
+    py::array_t<py::ssize_t, py::array::c_style | py::array::forcecast> n, c128arr vals,
+    f64arr rho, f64arr z, f64arr zp, int n_threads) {
+    std::ptrdiff_t nn[3];
+    ct_shape(h, n, nn);
+    if (vals.ndim() != 4 || vals.shape(0) != nn[0] || vals.shape(1) != nn[1] ||
+        vals.shape(2) != nn[2] || vals.shape(3) != 6)
+        throw std::invalid_argument("vals must be (n0, n1, n2, 6)");
+    if (rho.ndim() != 1 || z.ndim() != 1 || zp.ndim() != 1 || z.shape(0) != rho.shape(0) ||
+        zp.shape(0) != rho.shape(0))
+        throw std::invalid_argument("rho, z and zp must be 1-D of one length");
+    const py::ssize_t m = rho.shape(0);
+    const double *hh = h.data();
+    for (py::ssize_t r = 0; r < m; ++r) {
+        const double a = rho.data()[r], b = z.data()[r], c = -zp.data()[r];
+        if (!(a >= 0.0 && b >= 0.0 && c >= 0.0 && a <= hh[0] * (nn[0] - 1) &&
+              b <= hh[1] * (nn[1] - 1) && c <= hh[2] * (nn[2] - 1) && std::hypot(a, b + c) > 0.0))
+            throw std::invalid_argument("a crossing-table row is outside the table or at R = 0");
+    }
+    py::array_t<std::complex<double>> out({m, py::ssize_t(6)});
+    {
+        py::gil_scoped_release release;
+        ni_core::crossing_table_lookup(k_p, k_m, hh, nn, vals.data(), rho.data(), z.data(),
+                                       zp.data(), m, n_threads, out.mutable_data());
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +516,17 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // takes the factored route on grid-shaped columns; off, the default, is
     // the member route bit for bit.
     m.attr("six_columns_grid_1860") = true;
+    // momwire#1860 L5 (the opt-in feature `crossing_table`): the crossing
+    // table's build and read, new entries that nothing else calls.
+    m.attr("crossing_table_1860") = true;
+    m.def("crossing_table_build", &crossing_table_build, py::arg("k_p"), py::arg("k_m"),
+          py::arg("h"), py::arg("n"), py::arg("lam_mult"), py::arg("p"), py::arg("detour"),
+          py::arg("n_threads"), py::arg("gx"), py::arg("gw"), py::arg("cancel_flag") = 0,
+          "The crossing table R (f - S) on its uniform grid -> (n0, n1, n2, 6) complex.");
+    m.def("crossing_table_lookup", &crossing_table_lookup, py::arg("k_p"), py::arg("k_m"),
+          py::arg("h"), py::arg("n"), py::arg("vals"), py::arg("rho"), py::arg("z"),
+          py::arg("zp"), py::arg("n_threads"),
+          "The crossing table's six kernels at rows inside it -> (m, 6) complex.");
     // The plane sheet's flag (momwire#1173 Design E), its own name for the
     // same reason as the two above.
     // Design E's sheets, on the strip grid (phase 2): their own flag, for the

@@ -224,6 +224,20 @@ FEATURES: dict[str, Feature] = {
             kwarg="height_sheet_recal",
             paths=("tests/test_height_sheet_recal_1860.py",),
         ),
+        # The crossing table (momwire#1860 L5): the crossing rows inside a
+        # fixed wavelength-scaled grid read from one table per frequency, the
+        # singular part taken out in closed form. A new C++ path and a coarse
+        # accuracy class (printed Zin within ~0.1 ohm on the EFHW decks).
+        Feature(
+            name="crossing_table",
+            reach=1,
+            env="MOMWIRE_X_CROSSING_TABLE",
+            kind="native",
+            issue=1860,
+            since="2026-11-09",
+            kwarg="crossing_table",
+            paths=("tests/test_crossing_table_1860.py",),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(
