@@ -651,3 +651,81 @@ def test_the_near_field_sheets_are_stored_and_move_no_byte(tmp_path):
     sheets[0].write_bytes(stamps[0][:-9] + b"\0" * 9)
     exe_run("damaged")
     assert [p.read_bytes() for p in sheets] == stamps
+
+
+# --- the huge-page allocator's bookkeeping (Linux) --------------------------------
+
+# A preloaded shim: after every large anonymous mmap (a block of 4 MiB and up
+# is one), the next four 48-byte mallocs -- a std::map node's size -- come
+# back on a 2 MiB boundary, as glibc's malloc now and then places one. The
+# executable's bookkeeping node for that block is then such a node.
+_ALIGN_SHIM = r"""
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stddef.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+extern void *__libc_malloc(size_t);
+extern void *__libc_memalign(size_t, size_t);
+static int pending;
+void *mmap(void *a, size_t len, int prot, int flags, int fd, off_t off) {
+    static void *(*real)(void *, size_t, int, int, int, off_t);
+    if (!real) real = (void *(*)(void *, size_t, int, int, int, off_t))dlsym(RTLD_NEXT, "mmap");
+    if (len >= ((size_t)6 << 20) && (flags & MAP_ANONYMOUS)) pending = 4;
+    return real(a, len, prot, flags, fd, off);
+}
+void *malloc(size_t n) {
+    if (n == 48 && pending > 0) {
+        pending--;
+        return __libc_memalign((size_t)2 << 20, n);
+    }
+    return __libc_malloc(n);
+}
+"""
+
+# A free-space dipole big enough that its matrix is a block of 4 MiB and up.
+_BIG_DIPOLE = (
+    "CM free-space dipole, 601 segments\nCE\nGW 1 601 0 0 -5 0 0 5 0.001\nGE 0\n"
+    "FR 0 1 0 0 14.0 0\nEX 0 1 301 0 1 0\nXQ\nEN\n"
+)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="the allocator is Linux's"
+)
+def test_a_bookkeeping_node_on_a_huge_page_boundary_does_not_deadlock(tmp_path):
+    """The executable maps each block of 4 MiB and up on its own and keeps a
+    map of them under a mutex. Freeing a block erased its node under that
+    mutex, the node's free went back through the executable's operator
+    delete, and a node on a 2 MiB boundary passed the block test and locked
+    the mutex again: the run hung for good, every thread in a futex wait.
+    With the shim forcing that boundary the run must still answer, and
+    answer as it does without it."""
+    cc = shutil.which("cc") or shutil.which("gcc")
+    if cc is None:
+        pytest.skip("no C compiler for the shim")
+    shim = tmp_path / "align_shim.so"
+    src = tmp_path / "align_shim.c"
+    src.write_text(_ALIGN_SHIM)
+    subprocess.run(
+        [cc, "-shared", "-fPIC", "-O2", "-o", str(shim), str(src), "-ldl"], check=True
+    )
+    (tmp_path / "big.nec").write_text(_BIG_DIPOLE, newline="")
+    env = dict(os.environ, MOMWIRE_THREADS="1")
+    plain = subprocess.run(
+        [EXE, "big.nec", "plain.out"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+    assert plain.returncode == 0, plain.stderr
+    shimmed = subprocess.run(
+        [EXE, "big.nec", "shim.out"],
+        cwd=tmp_path,
+        env=dict(env, LD_PRELOAD=str(shim)),
+        capture_output=True,
+        timeout=120,
+    )
+    assert shimmed.returncode == 0, shimmed.stderr
+    assert (tmp_path / "shim.out").read_bytes() == (tmp_path / "plain.out").read_bytes()

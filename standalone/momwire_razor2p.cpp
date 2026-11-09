@@ -1483,9 +1483,41 @@ namespace {
 constexpr std::size_t BIG_MIN = std::size_t(4) << 20;
 constexpr std::size_t HUGE_PAGE = std::size_t(2) << 20;
 
+// The bookkeeping's own nodes come from malloc and go back to free, never
+// through this file's operator new / delete. A node freed while `mu` is held
+// (`live.erase` in big_delete) used to re-enter big_delete, and a node that
+// malloc happened to place on a 2 MiB boundary passed its alignment test and
+// locked `mu` again: the thread deadlocked on itself, every other thread
+// idle (seen at about one 30-point efhw_hi sweep in a hundred at four
+// threads, any basis; a core showed the mutex's owner the waiting thread).
+// tests/test_standalone_nopython.py forces such a node with a malloc shim.
+template <class T>
+struct MallocAllocator {
+    using value_type = T;
+    MallocAllocator() = default;
+    template <class U>
+    MallocAllocator(const MallocAllocator<U> &) noexcept {}
+    T *allocate(std::size_t n) {
+        if (void *p = std::malloc(n * sizeof(T))) return static_cast<T *>(p);
+        throw std::bad_alloc();
+    }
+    void deallocate(T *p, std::size_t) noexcept { std::free(p); }
+};
+template <class T, class U>
+bool operator==(const MallocAllocator<T> &, const MallocAllocator<U> &) {
+    return true;
+}
+template <class T, class U>
+bool operator!=(const MallocAllocator<T> &, const MallocAllocator<U> &) {
+    return false;
+}
+
 struct BigBlocks {
     std::mutex mu;
-    std::map<void *, std::size_t> live;  // block -> mapped length
+    // block -> mapped length
+    std::map<void *, std::size_t, std::less<void *>,
+             MallocAllocator<std::pair<void *const, std::size_t>>>
+        live;
 };
 BigBlocks &big_blocks() {
     static BigBlocks *b = new BigBlocks();  // never destroyed: a delete may follow exit's destructors
