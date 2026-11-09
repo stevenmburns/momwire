@@ -37,7 +37,7 @@ from test_crossing_serve_524 import crossing_deck
 
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(8),
     pytest.mark.skipif(
         ni._nia is None or not hasattr(ni._nia, "six_columns_grid_1860"),
         reason="the near-interface accelerator is not built",

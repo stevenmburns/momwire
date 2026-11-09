@@ -16,6 +16,8 @@
 // (`_bspline_nec4_run_core.h`, `_nec4.render(text, basis="bspline")`), on the
 // same adapters.
 #include "route.h"
+
+#include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
 #if MW_ROUTE_NEC4
 #include "_bspline_nec4_run_core.h"
 #endif
@@ -123,6 +125,12 @@ void dump_arrays(const std::string &dir, const std::vector<nec5::RunArrays> &arr
 
 }  // namespace
 
+bool configure_features(const std::vector<std::string> &names) {
+    bool ok = true;
+    for (const std::string &n : names) ok = ni_eval::request_feature(n) && ok;
+    return ok;
+}
+
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);
     // the below/below table (the buried fill's): filled here, kept in the
@@ -168,6 +176,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     nec5::EngineStamp stamp;
     stamp.version = version;
     stamp.variant = variant;
+    stamp.marker = ni_eval::requested_stamp();  // `_features.stamp()`'s tail
 #if MW_ROUTE_NEC4
     // the NEC-4.2 slot's printout (route_sin.cpp's handling, over bs2)
     (void)arrays_dir;
