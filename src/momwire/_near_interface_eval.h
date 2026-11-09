@@ -180,6 +180,7 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 struct Features {
     bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
     bool height_sheet_recal = false;  // L2: the recalibrated height census
+    bool crossing_table = false;      // L5: the crossing rows from one table
 };
 Features &requested_features();
 const Features &active_features();
@@ -198,6 +199,26 @@ class FeatureFill {
 
   private:
     Features saved_;
+    bool saved_taken_;
+};
+
+// Whether the running fill has taken L5's crossing table (`_CrossingFill.taken`).
+bool crossing_table_taken();
+
+// The end terms of a crossing block that Python asks for BEFORE the block's
+// main tiles, though this route evaluates them after (see the one use, in
+// `_razor_crossing_core.cpp`): around them, the table counts as taken only if
+// it was before the main tiles (`taken_before`, read then); afterwards it is
+// taken if either the main tiles or the end terms took it.
+class CrossingEndsFirst {
+  public:
+    explicit CrossingEndsFirst(bool taken_before);
+    ~CrossingEndsFirst();
+    CrossingEndsFirst(const CrossingEndsFirst &) = delete;
+    CrossingEndsFirst &operator=(const CrossingEndsFirst &) = delete;
+
+  private:
+    bool after_main_;
 };
 
 // Python's repr of a float (the refusals' numbers).

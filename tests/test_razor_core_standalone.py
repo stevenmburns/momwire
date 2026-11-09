@@ -136,6 +136,9 @@ CORE_SOURCES = (
     "_somm_transmitted_core.cpp",
     "_near_interface_core.cpp",
     "_near_interface_eval.cpp",
+    # momwire#1860 L5's crossing table, which the evaluator reads with the
+    # feature on.
+    "_crossing_table_core.cpp",
     # The point-observer twin and the buried near-field readout over it
     # (momwire#1653).
     "_near_interface_point_core.cpp",
