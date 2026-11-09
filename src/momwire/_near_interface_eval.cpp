@@ -1015,6 +1015,8 @@ bool request_feature(const std::string &name) {
         f.height_sheet_recal = true;
     else if (name == "crossing_table")
         f.crossing_table = true;
+    else if (name == "crossing_above_rule")
+        f.crossing_above_rule = true;
     else
         return false;
     return true;
