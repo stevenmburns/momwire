@@ -1952,19 +1952,26 @@ def census_pays(n_pairs, unfilled):
     )
 
 
-def proj_census(grid, obs, src, ground_z):
+def proj_census(grid, obs, src, ground_z, *, exact=False):
     """The nodes `remainder_field_proj` reads over obs x src take, as a bool
     mask per region (momwire#1512), from the accelerator's census
     (`remainder_field_proj_nodes`: the kernel's own pair geometry and stencil
     address). Observers repeated to the bit are taken once (a read does not
-    depend on the observer's tangent). None without the accelerator."""
+    depend on the observer's tangent). None without the accelerator.
+
+    `exact` (momwire#1860 B1) always takes the census, so the mask is the
+    reads' own whatever the view already holds: without it a census that
+    would cost more than it saves answers every node, which depends on what
+    the cache had filled."""
     if _acc is None or not hasattr(_acc, "remainder_field_proj_nodes"):
         return None
     obs = np.ascontiguousarray(obs, dtype=np.float64)
     if obs.shape[0] > 1:
         obs = np.unique(obs.view(np.dtype((np.void, 24))), axis=0).view(np.float64)
         obs = np.ascontiguousarray(obs.reshape(-1, 3))
-    if not census_pays(obs.shape[0] * np.shape(src)[0], unfilled_nodes(grid)):
+    if not exact and not census_pays(
+        obs.shape[0] * np.shape(src)[0], unfilled_nodes(grid)
+    ):
         return _all_nodes(grid)  # the census would cost more than it saves
     masks = _acc.remainder_field_proj_nodes(
         obs,

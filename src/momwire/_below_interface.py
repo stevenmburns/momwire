@@ -800,7 +800,7 @@ def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False):
 def _crossing_above_remainder(
     Z,
     f,
-    rule,
+    rule_out,
     pair_entries,
     pair_correction,
     geom,
@@ -828,20 +828,21 @@ def _crossing_above_remainder(
     above-ground field, and a deck without the rod fills the very same pairs
     at the base order plus #1189's raised pairs (`_remainder_prep`): that is
     the rule this takes, through the same field-form block and the same
-    pair correction, on the whole grid as that fill reads it. On efhw_hi
+    pair correction, on the grid `crossing_above_grid` chose. On efhw_hi
     (nec5-bspline, T1) it is ~0.5 s of a ~2.1 s fill.
 
     The base-order block is subtracted as the shipped block is
     (`sub_field_galerkin`, observer-restricted by `narrow`); the raised
     pairs' corrections are formed into a side store over their entries
     (`pair_entries`, as `_Z_sommerfeld_remainder_into` does) and subtracted
-    after it. `rule`, `pair_entries` and `pair_correction` are the bundle's
-    `crossing_above_rule`, `remainder_pair_entries` and
+    after it. `rule_out` is the bundle's `crossing_above_rule` answer, and
+    `pair_entries` and `pair_correction` its `remainder_pair_entries` and
     `remainder_pair_correction`, handed in by the routing (its seam,
-    `test_g980c_5`); `f` serves only `sub_field_galerkin`. Every pair is corrected whatever the restriction,
-    and only the entries on `basis_rows` (None: all) are written, so a
-    restricted fill's rows are the full fill's."""
-    pts, tang, W, pairs = rule(geom, a_idx)
+    `test_g980c_5`); `f` serves only `sub_field_galerkin`. Every pair is
+    corrected whatever the restriction, and only the entries on
+    `basis_rows` (None: all) are written, so a restricted fill's rows are
+    the full fill's."""
+    pts, tang, W, pairs, _reads = rule_out
 
     def proj(o, to, s, ts):
         return _sommerfeld.remainder_field_proj(
@@ -865,6 +866,59 @@ def _crossing_above_remainder(
     if row_of is not None:
         er = row_of[er]
     Z[er, ec] -= side
+
+
+# B1 may fill this fraction more grid nodes than the shipped census asks
+# (momwire#1860): the Beverage's rule reads one node of 1937 the shipped
+# census does not (384 against 383), a few ms of a cold point.
+_B1_EXTRA_NODES = 0.01
+
+
+def crossing_above_grid(somm_grid_fn, eps_t, r1_max, obs, reads, ground_z, cancel_flag):
+    """The grid B1 (`crossing_above_rule`, momwire#1860) reads on this fill,
+    or None when B1 declines it and the shipped route runs as with the
+    feature off.
+
+    B1 may not fill materially more of the grid than the shipped route does
+    on an empty cache. The decision reads the deck's geometry alone -- the
+    censuses' masks (`proj_census(exact=True)`) and the shipped census's
+    own cost test taken at an empty cache -- never what the cache holds, so
+    a deck takes one route on every point of a sweep:
+
+    * no lazy view, or no census kernel: the shipped route reads the whole
+      grid, and so does B1;
+    * the shipped census does not pay at an empty cache (`census_pays`), so
+      the shipped route fills every node: B1 reads the whole view (efhw_hi);
+    * otherwise B1 needs `reads` (its base nodes and its raised pairs' Gauss
+      nodes; None when a pair goes on #1201's graded panels, whose read
+      points are drawn as they go) and a census of them asking at most
+      `_B1_EXTRA_NODES` more nodes than the shipped one: it reads the view
+      filled at that census;
+    * else B1 declines (efhw_lo, whose counterpoise pairs are graded).
+    """
+    grid = somm_grid_fn(eps_t, r1_max, lazy=True)
+    if getattr(grid, "_lazy_src", None) is None:
+        return grid
+    every = [np.ones(r["vals"].shape[1:], dtype=bool) for r in grid._regions]
+    n_every = sum(int(m.size) for m in every)
+    obs = np.ascontiguousarray(obs, dtype=np.float64)
+    n_obs = np.unique(obs.view(np.dtype((np.void, 24))), axis=0).shape[0]
+    if not _sommerfeld.census_pays(n_obs * obs.shape[0], n_every):
+        _sommerfeld.ensure_nodes(grid, every, cancel_flag)
+        return grid
+    need = _sommerfeld.proj_census(grid, obs, obs, ground_z, exact=True)
+    if need is None:
+        return somm_grid_fn(eps_t, r1_max)
+    if reads is None:
+        return None
+    need_b1 = _sommerfeld.proj_census(grid, reads, reads, ground_z, exact=True)
+    n_ship = sum(int(np.asarray(m).sum()) for m in need)
+    if need_b1 is None or sum(int(np.asarray(m).sum()) for m in need_b1) > n_ship * (
+        1.0 + _B1_EXTRA_NODES
+    ):
+        return None
+    _sommerfeld.ensure_nodes(grid, need_b1, cancel_flag)
+    return grid
 
 
 def lazy_above_grid(somm_grid_fn, eps_t, r1_max, obs, ground_z, cancel_flag):
@@ -1088,12 +1142,14 @@ class BuriedFills(NamedTuple):
     # opt-in feature `transmitted_anchors`); False is the exact grid.
     transmitted_anchors: bool = False
     # momwire#1860 B1 (the opt-in feature `crossing_above_rule`): `(geom,
-    # a_idx) -> (points, tangents, W, pairs)`, the solver's own above-ground
-    # remainder rule over the above segments -- its base-order nodes and
-    # moment weights, and the segment pairs it raises (global indices, as
-    # `remainder_pair_correction` takes them, or None). Given, a CROSSING
-    # deck's above/above remainder is filled at that rule on the whole grid
-    # instead of at the cross block's `n_qp_buried_field`; None is the
+    # a_idx) -> (points, tangents, W, pairs, reads)`, the solver's own
+    # above-ground remainder rule over the above segments -- its base-order
+    # nodes and moment weights, the segment pairs it raises (global indices,
+    # as `remainder_pair_correction` takes them, or None), and every point
+    # its grid reads take (None when they cannot be listed). Given, a
+    # CROSSING deck's above/above remainder is filled at that rule instead of
+    # at the cross block's `n_qp_buried_field`, unless that would fill more
+    # grid than the shipped route (`crossing_above_grid`); None is the
     # shipped fill.
     crossing_above_rule: Callable | None = None
     # With `crossing_above_rule`: `(supp_seg, polys, n_seg, I, J) -> E` and
@@ -1847,11 +1903,19 @@ def compute_Z_operator_buried(
         )
 
     # --- the three field-form blocks -----------------------------------
+    # momwire#1860 B1: a crossing deck may take the above-ground rule, on a
+    # grid that costs no more than the shipped route's (`crossing_above_grid`).
+    b1_rule = grid_b1 = None
     if a_idx.size and crossing_j and f.crossing_above_rule is not None:
+        b1_rule = f.crossing_above_rule(geom, a_idx)
+        grid_b1 = crossing_above_grid(
+            somm_grid_fn, eps_t, plan["r1_above"], obs_a, b1_rule[4], gz, cancel_flag
+        )
+    if grid_b1 is not None:
         _crossing_above_remainder(
             Z,
             f,
-            f.crossing_above_rule,
+            b1_rule,
             f.remainder_pair_entries,
             f.remainder_pair_correction,
             geom,
@@ -1861,7 +1925,7 @@ def compute_Z_operator_buried(
             obs_a_idx,
             _narrow,
             _sub_field_galerkin,
-            grid=somm_grid_fn(eps_t, plan["r1_above"]),
+            grid=grid_b1,
             ground_z=gz,
             k_p=k_p,
             cancel_flag=cancel_flag,

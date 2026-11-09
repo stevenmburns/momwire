@@ -6,9 +6,11 @@ Sommerfeld remainder as a field-form block at `n_qp_buried_field` (q = 6), the
 order the cross block's 1/R^3 integrand needs, where the same deck without its
 buried rod fills those pairs at `n_qp_sommerfeld` plus #1189's raised pairs.
 On, the crossing route takes that rule (`_below_interface.
-_crossing_above_remainder`), on the whole grid, with the pairs of a segment
-touching the plane kept at the cross block's order
-(`BSplineSolver._crossing_above_remainder_rule`).
+_crossing_above_remainder`), with the pairs of a segment touching the plane
+kept at the cross block's order (`BSplineSolver.
+_crossing_above_remainder_rule`), on a grid that costs no more than the
+shipped route's (`_below_interface.crossing_above_grid`): where it would
+cost more, B1 declines that fill.
 
 What is held:
 
@@ -16,6 +18,9 @@ What is held:
   q = 6 block, and the B1 route never entered;
 - on, the B1 route serves the crossing deck's above block and the shipped
   route does not, and a deck with no crossing is untouched;
+- on, efhw_lo (graded pairs, a census that does not take the whole grid)
+  declines and prints the off printout;
+- on a lazy view, B1 reads exactly what it reads on the whole grid;
 - on, a row-restricted fill's rows are the full fill's rows, bit for bit;
 - on, the printed input impedance is within `ZIN_RTOL` of off for
   nec5-bspline and nec42-bspline on the EFHW-like inverted L (141 and 590
@@ -179,7 +184,7 @@ def test_off_by_default(monkeypatch):
 
 def test_off_is_the_shipped_route_and_on_is_b1(monkeypatch, tmp_path, routes):
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
-    deck = DECKS["efhw_lo"]
+    deck = DECKS["hub"]
     monkeypatch.delenv(ENV, raising=False)
     off = _render(deck, "nec5")
     assert routes == {"b1": 0, "lazy": 1}
@@ -195,6 +200,47 @@ def test_off_is_the_shipped_route_and_on_is_b1(monkeypatch, tmp_path, routes):
     s_def._crossing_above_rule = False
     (z_a, i_a), (z_b, i_b) = s_off.compute_impedance(), s_def.compute_impedance()
     assert z_a == z_b and np.array_equal(i_a, i_b)
+
+
+def test_on_declines_where_it_would_fill_more_grid(monkeypatch, tmp_path, routes):
+    """efhw_lo: its counterpoise pairs go on #1201's graded panels, so B1's
+    reads cannot be censused, and the shipped census does not take the whole
+    grid. B1 declines, and the printout is the off one but for line 2."""
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    deck = DECKS["efhw_lo"]
+    monkeypatch.delenv(ENV, raising=False)
+    off = _render(deck, "nec5")
+    monkeypatch.setenv(ENV, "1")
+    on = _render(deck, "nec5")
+    assert routes["b1"] == 0
+    assert on.splitlines()[2:] == off.splitlines()[2:]
+
+
+def test_the_lazy_view_holds_every_node_b1_reads(monkeypatch, tmp_path, routes):
+    """B1 on the view filled at its own census reads what it reads on the
+    whole grid, bit for bit: an unfilled node reads NaN, so a census that
+    missed one would show."""
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv(ENV, "1")
+    deck = DECKS["hub"]
+    seen = []
+    real = _below_interface.crossing_above_grid
+
+    def spy(somm_grid_fn, *a, **kw):
+        out = real(somm_grid_fn, *a, **kw)
+        seen.append(getattr(out, "_lazy_src", None) is not None)
+        return out
+
+    monkeypatch.setattr(_below_interface, "crossing_above_grid", spy)
+    lazy = _render(deck, "nec5")
+    assert seen == [True]
+
+    def whole(somm_grid_fn, eps_t, r1_max, *a, **kw):
+        return somm_grid_fn(eps_t, r1_max)
+
+    monkeypatch.setattr(_below_interface, "crossing_above_grid", whole)
+    assert _render(deck, "nec5") == lazy
+    assert routes["b1"] == 2
 
 
 def test_a_deck_with_no_crossing_is_untouched(monkeypatch, tmp_path, routes):

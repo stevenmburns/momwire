@@ -8897,8 +8897,9 @@ class BSplineSolver(
         segments' remainder rule as `_remainder_prep` takes it for the whole
         of an all-above deck -- the base order `n_qp_sommerfeld` and
         #1189's raised pairs (or the deck-wide `_remainder_qp` without
-        per-pair orders) -- as `(points, tangents, W, pairs)`, the pairs in
-        global segment indices and sorted by observer then source.
+        per-pair orders) -- as `(points, tangents, W, pairs, reads)`, the
+        pairs in global segment indices and sorted by observer then source,
+        `reads` the points its grid reads take (None: not listable).
 
         One addition to that rule: every pair with a segment TOUCHING the
         plane (an end within `_crossing_fill._PLANE_TOL`, the crossing
@@ -8935,11 +8936,28 @@ class BSplineSolver(
             first[1:] = (I[1:] != I[:-1]) | (J[1:] != J[:-1])
             I, J, Qp = I[first], J[first], Qp[first]
         pairs = (a_idx[I], a_idx[J], Qp) if I.size else None
-        pts, tang, u, w = _below_interface.field_nodes(
-            seg_l, seg_r, geom["tangents"][a_idx], geom["h_per_seg"][a_idx], q
-        )
+        tang_a, h_a = geom["tangents"][a_idx], geom["h_per_seg"][a_idx]
+        pts, tang, u, w = _below_interface.field_nodes(seg_l, seg_r, tang_a, h_a, q)
         W = w[None] * np.float_power(u[None], np.arange(self.degree + 1)[:, None, None])
-        return pts, tang, W, pairs
+        # Every point the grid reads take, for the lazy census
+        # (`_below_interface.crossing_above_grid`): the base nodes, and each
+        # raised pair's two segments at its Gauss order. None when a pair
+        # goes on #1201's graded panels, whose points are drawn as they go.
+        reads = pts
+        if I.size:
+            if _REMAINDER_GRADED and bool((Qp >= _REMAINDER_GRADED_MIN_Q).any()):
+                reads = None
+            else:
+                parts = [pts]
+                for qq in np.unique(Qp):
+                    segs = np.unique(np.concatenate([I[Qp == qq], J[Qp == qq]]))
+                    parts.append(
+                        _below_interface.field_nodes(
+                            seg_l[segs], seg_r[segs], tang_a[segs], h_a[segs], int(qq)
+                        )[0]
+                    )
+                reads = np.concatenate(parts)
+        return pts, tang, W, pairs, reads
 
     def _dense_tensor_fits_budget(self, n_segs):
         """Whether one dense polynomial-moment tensor fits the memory budget."""
