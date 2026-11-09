@@ -7,6 +7,7 @@
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
 #include "_somm_grid_core.h"   // the executable's store (disk_read / disk_write)
 #include "_mw_times.h"         // MOMWIRE_TIMES' ground counts
+#include "_crossing_table_core.h"  // momwire#1860 L5's table (`crossing_table`)
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <list>
 #include <map>
 #include <mutex>
 #include <set>
@@ -759,6 +761,134 @@ void twin_call(const Evaluator &ev, const std::vector<double> &rho_c, const std:
                          active_features().factored_columns);
 }
 
+// momwire#1860 L5 (`crossing_table`): `_twin_columns`' table, its constants
+// and its cache. The grid is fixed in free-space wavelengths, so its node
+// count does not depend on the deck; a fill takes it when one twin call's own
+// rows inside it would cost the twin more than building it.
+constexpr double CROSSING_TABLE_D = 0.01, CROSSING_TABLE_ZFAC = 0.5;
+constexpr double CROSSING_TABLE_EXTENT[3] = {0.5, 0.25, 0.06};
+constexpr double CROSSING_TABLE_SETUP = 68.0, CROSSING_TABLE_NODE = 1.1;
+constexpr size_t CROSSING_TABLE_CACHE_MAX = 8;
+
+// `crossing_table_grid(k_p)`: the spacing h (metres) and node counts n.
+void crossing_table_grid(double k_p, double h[3], std::ptrdiff_t n[3]) {
+    const double lam0 = 2.0 * M_PI / k_p;
+    const double step[3] = {CROSSING_TABLE_D, CROSSING_TABLE_D, CROSSING_TABLE_D * CROSSING_TABLE_ZFAC};
+    for (int a = 0; a < 3; a++) {
+        n[a] = static_cast<std::ptrdiff_t>(std::nearbyint(CROSSING_TABLE_EXTENT[a] / step[a])) + 1;
+        h[a] = step[a] * lam0;
+    }
+}
+
+// `_crossing_table_vals`: the process's tables, the last
+// CROSSING_TABLE_CACHE_MAX used kept. A node's value depends on its key
+// alone (the other parts of Python's key are this file's constants), so
+// sharing a table across fills cannot move a bit.
+using Table = std::shared_ptr<const std::vector<cd>>;
+std::mutex g_crossing_mutex;
+std::list<std::pair<std::array<uint64_t, 3>, Table>> g_crossing_tables;  // most recent first
+
+Table crossing_table(const Evaluator &ev, const double h[3], const std::ptrdiff_t n[3]) {
+    const std::array<uint64_t, 3> key{bits(ev.k_p), bits(ev.k_m.real()), bits(ev.k_m.imag())};
+    std::lock_guard<std::mutex> lock(g_crossing_mutex);
+    for (auto it = g_crossing_tables.begin(); it != g_crossing_tables.end(); ++it)
+        if (it->first == key) {
+            g_crossing_tables.splice(g_crossing_tables.begin(), g_crossing_tables, it);
+            return it->second;
+        }
+    auto vals = std::make_shared<std::vector<cd>>(static_cast<size_t>(n[0] * n[1] * n[2]) * N_KEYS);
+    ni_core::crossing_table_build(ev.k_p, ev.k_m, h, n, LAM_MULT, COLUMN_P, DETOUR, ev.n_threads, gx24().data(),
+                                  gw24().data(), 24, ev.cancel_flag, vals->data());
+    g_crossing_tables.emplace_front(key, std::move(vals));
+    while (g_crossing_tables.size() > CROSSING_TABLE_CACHE_MAX) g_crossing_tables.pop_back();
+    return g_crossing_tables.front().second;
+}
+
+bool g_crossing_taken = false;  // `_CrossingFill.taken`, this fill's
+
+// `_twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache)`: the
+// twin, or with momwire#1860 L5 on and taken in this fill, the table for the
+// members inside its extents and the twin for the rest.
+void twin_columns(const Evaluator &ev, const std::vector<double> &rho_c, const std::vector<std::ptrdiff_t> &offsets,
+                  const std::vector<double> &zs, const std::vector<double> &zps, ni_core::ColumnCache *cache,
+                  cd *vals) {
+    if (!active_features().crossing_table) return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+    double h[3];
+    std::ptrdiff_t n[3];
+    crossing_table_grid(ev.k_p, h, n);
+    double lim[3];
+    for (int a = 0; a < 3; a++) lim[a] = h[a] * static_cast<double>(n[a] - 1);
+    const size_t nc = rho_c.size(), m = zs.size();
+    std::vector<char> inside(m, 0);
+    std::vector<int64_t> cnt_in(nc, 0);
+    int64_t n_in = 0;
+    for (size_t c = 0; c < nc; c++)
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++) {
+            const size_t q = static_cast<size_t>(j);
+            const bool in = rho_c[c] <= lim[0] && zs[q] <= lim[1] && -zps[q] <= lim[2];
+            inside[q] = in;
+            cnt_in[c] += in;
+            n_in += in;
+        }
+    if (!g_crossing_taken) {
+        // A call takes the table on its OWN rows inside the extents (what an
+        // earlier call spent on the twin is spent); once one has, the fill
+        // keeps it.
+        double cost = 0.0;
+        if (n_in) {
+            int64_t cols_in = 0;
+            for (size_t c = 0; c < nc; c++) cols_in += cnt_in[c] > 0;
+            cost = static_cast<double>(cols_in) * CROSSING_TABLE_SETUP + static_cast<double>(n_in);
+        }
+        if (n_in && cost >= static_cast<double>(n[0]) * CROSSING_TABLE_SETUP +
+                                CROSSING_TABLE_NODE * static_cast<double>(n[0] * n[1] * n[2]))
+            g_crossing_taken = true;
+        else
+            return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+    }
+    if (!n_in) return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+    const Table tab = crossing_table(ev, h, n);
+    std::vector<double> ir, iz, izp;
+    std::vector<size_t> ipos;
+    ir.reserve(static_cast<size_t>(n_in));
+    for (size_t c = 0; c < nc; c++)
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++) {
+            const size_t q = static_cast<size_t>(j);
+            if (!inside[q]) continue;
+            ir.push_back(rho_c[c]);
+            iz.push_back(zs[q]);
+            izp.push_back(zps[q]);
+            ipos.push_back(q);
+        }
+    std::vector<cd> got(ir.size() * N_KEYS);
+    ni_core::crossing_table_lookup(ev.k_p, ev.k_m, h, n, tab->data(), ir.data(), iz.data(), izp.data(),
+                                   static_cast<std::ptrdiff_t>(ir.size()), ev.n_threads, got.data());
+    for (size_t r = 0; r < ipos.size(); r++)
+        for (int k = 0; k < N_KEYS; k++) vals[ipos[r] * N_KEYS + k] = got[r * N_KEYS + k];
+    if (static_cast<size_t>(n_in) == m) return;
+    // The rest: the columns with a member left, in order, each its members
+    // left in order.
+    std::vector<double> r2, z2, zp2;
+    std::vector<std::ptrdiff_t> off2(1, 0);
+    std::vector<size_t> rpos;
+    for (size_t c = 0; c < nc; c++) {
+        if ((offsets[c + 1] - offsets[c]) - cnt_in[c] <= 0) continue;
+        r2.push_back(rho_c[c]);
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++) {
+            const size_t q = static_cast<size_t>(j);
+            if (inside[q]) continue;
+            z2.push_back(zs[q]);
+            zp2.push_back(zps[q]);
+            rpos.push_back(q);
+        }
+        off2.push_back(static_cast<std::ptrdiff_t>(z2.size()));
+    }
+    std::vector<cd> rest(z2.size() * N_KEYS);
+    twin_call(ev, r2, off2, z2, zp2, cache, rest.data());
+    for (size_t r = 0; r < rpos.size(); r++)
+        for (int k = 0; k < N_KEYS; k++) vals[rpos[r] * N_KEYS + k] = rest[r * N_KEYS + k];
+}
+
 void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t *labels,
                  ni_core::ColumnCache *cache, Six *out) {
     if (m == 0) return;
@@ -810,7 +940,7 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
             }
     }
     std::vector<cd> vals(m * N_KEYS);
-    twin_call(ev, rho_c, offsets, zs, zps, cache, vals.data());
+    twin_columns(ev, rho_c, offsets, zs, zps, cache, vals.data());
     for (size_t j = 0; j < m; j++)
         for (int k = 0; k < N_KEYS; k++) out[member_order[j]][k] = vals[j * N_KEYS + k];
 }
@@ -883,14 +1013,30 @@ bool request_feature(const std::string &name) {
         f.factored_columns = true;
     else if (name == "height_sheet_recal")
         f.height_sheet_recal = true;
+    else if (name == "crossing_table")
+        f.crossing_table = true;
     else
         return false;
     return true;
 }
 
-FeatureFill::FeatureFill() : saved_(g_active) { g_active = g_requested; }
+FeatureFill::FeatureFill() : saved_(g_active), saved_taken_(g_crossing_taken) {
+    g_active = g_requested;
+    g_crossing_taken = false;  // one fill, one `_CrossingFill`
+}
 
-FeatureFill::~FeatureFill() { g_active = saved_; }
+FeatureFill::~FeatureFill() {
+    g_active = saved_;
+    g_crossing_taken = saved_taken_;
+}
+
+bool crossing_table_taken() { return g_crossing_taken; }
+
+CrossingEndsFirst::CrossingEndsFirst(bool taken_before) : after_main_(g_crossing_taken) {
+    g_crossing_taken = taken_before;
+}
+
+CrossingEndsFirst::~CrossingEndsFirst() { g_crossing_taken = g_crossing_taken || after_main_; }
 
 Memo::Memo() : cache(new ni_core::ColumnCache(16u << 20)) {}
 
