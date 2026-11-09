@@ -13,7 +13,10 @@ whole grids. What this pins:
     too -- and the check mode (MOMWIRE_SOMM_LAZY_CHECK: every lazy read must
     be finite, and a node not filled reads NaN) ran over every reader;
   * the store: what one run filled, the next reads; two runs' nodes are
-    merged on write; an eager master file (no masks) still reads.
+    merged on write; an eager master file (no masks) still reads;
+  * the census test is set against every node of the masters (momwire#1860's
+    ground reuse), so a rung pair's later point in a fresh process takes its
+    census and fills what it reads, not every node the first point left.
 """
 
 from __future__ import annotations
@@ -246,3 +249,99 @@ def test_an_eager_master_file_still_reads(monkeypatch, cold, tmp_path):
     assert m.missing(_sommerfeld._all_nodes(m)) is None
     for a, b in zip(m._regions, whole._regions, strict=True):
         assert np.array_equal(_bits(a["vals"]), _bits(b["vals"]))
+
+
+def test_the_census_test_is_set_against_every_node_of_the_masters(cold):
+    """`census_pays_view` (momwire#1860's ground reuse) decides as a fresh
+    pair would, whatever the masters hold, and takes no census once they hold
+    every node."""
+    view = _sommerfeld.get_grid(
+        13.0 - 9.7j,
+        2.0 * np.pi / WL7,
+        3.0,
+        2.0 * np.pi / WL7 * _sommerfeld._C_LIGHT,
+        lazy=True,
+    )
+    every = _sommerfeld.master_nodes(view)
+    assert every == _sommerfeld.unfilled_nodes(view) > 0
+    # A census the fresh pair would pay for, but not the last fifth of it.
+    n_pays = (
+        0.3 * every * _sommerfeld._FILL_S_PER_NODE_MIN / _sommerfeld._CENSUS_S_PER_PAIR
+    )
+    assert _sommerfeld.census_pays_view(view, n_pays)
+    keys, masters, _, _ = view._lazy_src
+    four_fifths = []
+    for reg in masters[0]._regions:
+        m = np.zeros(reg["have"].shape, bool)
+        m.flat[: (4 * m.size) // 5] = True
+        four_fifths.append(m)
+    _sommerfeld.ensure_nodes(view, four_fifths)
+    unfilled = _sommerfeld.unfilled_nodes(view)
+    assert 0 < unfilled < every // 3
+    assert not _sommerfeld.census_pays(n_pays, unfilled)  # the old test flipped here
+    assert _sommerfeld.census_pays_view(view, n_pays)
+    _sommerfeld.ensure_nodes(
+        view, [np.ones(r["have"].shape, bool) for r in masters[0]._regions]
+    )
+    assert _sommerfeld.unfilled_nodes(view) == 0
+    assert not _sommerfeld.census_pays_view(view, 1.0)
+
+
+def test_a_later_point_of_a_rung_pair_fills_only_what_it_reads(
+    monkeypatch, cold, tmp_path
+):
+    """The sweep shape the test above is for: the second point of a rung pair,
+    in a fresh process that starts from the store, takes its census and fills
+    only the nodes it reads (the old test filled every node left), and its
+    impedance is the eager fill's bit for bit. The census's per-pair cost is
+    set so that it pays on the fresh pair and not on what the first point
+    leaves unfilled, as it falls on efhw_hi's razor-2p sweep."""
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "1")
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path / "probe"))
+    seen = []
+    real = _sommerfeld.census_pays_view
+
+    def spy(grid, n_pairs):
+        seen.append(
+            (n_pairs, _sommerfeld.unfilled_nodes(grid), _sommerfeld.master_nodes(grid))
+        )
+        return real(grid, n_pairs)
+
+    monkeypatch.setattr(_sommerfeld, "census_pays_view", spy)
+    first = _dipole_over_ground()
+    second = dict(first, wavelength=WL7 * 1.005)  # the same rung pair and r1 bucket
+    RazorSolver(**first, nec5_quadrature=True).compute_impedance()
+    n_pairs, fresh, every = seen[-1]
+    assert fresh == every
+    _sommerfeld._GRID_CACHE.clear()
+    _sommerfeld._NORM_CACHE.clear()
+    RazorSolver(**second, nec5_quadrature=True).compute_impedance()
+    n2, left, every2 = seen[-1]
+    assert (n2, every2) == (n_pairs, every) and 0 < left < every
+    # Pays on `every` nodes and not on the `left` ones: the old test's flip.
+    monkeypatch.setattr(
+        _sommerfeld,
+        "_CENSUS_S_PER_PAIR",
+        _sommerfeld._CENSUS_SHARE
+        * _sommerfeld._FILL_S_PER_NODE_MIN
+        * (every + left)
+        / (2.0 * n_pairs),
+    )
+    assert _sommerfeld.census_pays(n_pairs, every)
+    assert not _sommerfeld.census_pays(n_pairs, left)
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path / "sweep"))
+    for build in (first, second):
+        _sommerfeld._GRID_CACHE.clear()
+        _sommerfeld._NORM_CACHE.clear()  # a fresh process: the store only
+        z_lazy = RazorSolver(**build, nec5_quadrature=True).compute_impedance()
+    masters = [m for k, m in _sommerfeld._NORM_CACHE.items() if k[0] == "above"]
+    assert masters
+    assert all(any(not reg["have"].all() for reg in m._regions) for m in masters)
+    _sommerfeld._GRID_CACHE.clear()
+    _sommerfeld._NORM_CACHE.clear()
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "0")
+    monkeypatch.setenv("MOMWIRE_SOMM_LAZY", "0")
+    z_eager = RazorSolver(**second, nec5_quadrature=True).compute_impedance()
+    assert np.array_equal(
+        _bits(np.atleast_1d(z_lazy[0])), _bits(np.atleast_1d(z_eager[0]))
+    )

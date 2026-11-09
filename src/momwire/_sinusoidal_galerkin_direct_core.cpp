@@ -937,7 +937,7 @@ void somm_prepare(const Front &fr, const Deck &d, const Ctx &x, Somm &sm) {
         marks.nTh[r] = static_cast<std::ptrdiff_t>(grid.regions[r].n_th);
     }
     const ll M = static_cast<ll>(x.obs_c.size() / 3);
-    if (somm_core::census_pays(static_cast<double>(M) * static_cast<double>(sm.n_src), somm_core::unfilled_nodes(grid)))
+    if (somm_core::census_pays_view(grid, static_cast<double>(M) * static_cast<double>(sm.n_src)))
         somm_core::field_proj_nodes(*sm.view, static_cast<std::ptrdiff_t>(M), static_cast<std::ptrdiff_t>(sm.n_src),
                                     x.obs_c.data(), sm.srcf.data(), 0.0, marks);
     else

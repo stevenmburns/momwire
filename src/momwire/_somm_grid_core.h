@@ -89,6 +89,21 @@ void ensure_nodes(const Grid &view, const std::vector<std::vector<uint8_t>> &nee
 // values. `_sommerfeld.census_pays` is the same rule, the same constants.
 std::size_t unfilled_nodes(const Grid &view);
 bool census_pays(double n_pairs, std::size_t unfilled);
+// The readers' test (momwire#1860's ground reuse): `census_pays` set against
+// EVERY node of the view's masters, not the ones still unfilled, and no
+// census when none is unfilled. The census's saving is what a sweep never
+// reads, and that does not shrink as the masters fill: on efhw_hi a
+// razor-2p census reads ~77 % of each master on a pair's first point and
+// only 1-9 nodes more on each later one. Set against the unfilled nodes, the
+// test flipped on the pair's second point (192 unfilled, the census's ~30 ms
+// over half their cheapest fill) and filled every remaining node -- the
+// 0.4-1.1 s the second point of every rung pair paid. A pair whose census
+// does not pay fresh still fills every node at once, as before, and the
+// first point of a pair takes the same route as before; the values are the
+// fill's whichever nodes are filled. `_sommerfeld.census_pays_view` is the
+// same rule.
+std::size_t master_nodes(const Grid &view);
+bool census_pays_view(const Grid &view, double n_pairs);
 std::vector<std::vector<uint8_t>> all_nodes_of(const Grid &view);
 
 // MOMWIRE_SOMM_LAZY_CHECK set (not 0): every lazy reader's output is checked

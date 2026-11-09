@@ -723,7 +723,7 @@ void somm_census(const Geometry &g, const Somm &sm, const somm_core::Grid &grid)
     }
     const ll M = static_cast<ll>(g.seg_centers.size());
     const double n_pairs = static_cast<double>(M) * static_cast<double>(sm.n_src);
-    if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(grid))) {
+    if (somm_core::census_pays_view(grid, n_pairs)) {
         std::vector<double> obs(static_cast<std::size_t>(3 * M));
         for (ll i = 0; i < M; i++)
             for (int c = 0; c < 3; c++)

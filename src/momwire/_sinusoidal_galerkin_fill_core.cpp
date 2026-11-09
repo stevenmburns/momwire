@@ -1193,7 +1193,7 @@ void mp_remainder(std::vector<cd> &G, std::size_t n_basis, const Csr &csr, const
             marks.nTh[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_th);
         }
         const double n_pairs = static_cast<double>(N * qn) * static_cast<double>(N * qn);
-        if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(G0))) {
+        if (somm_core::census_pays_view(G0, n_pairs)) {
             somm_core::field_proj_nodes(gh.view, static_cast<std::ptrdiff_t>(N * qn), static_cast<std::ptrdiff_t>(N * qn),
                                         nodes.data(), nodes.data(), gz, marks);
             if (!I.empty()) bspline::debug_pair_census(bg, gz, k, G0, REMAINDER_D1, I, J, marks);
