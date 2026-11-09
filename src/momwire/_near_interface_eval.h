@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -50,6 +51,9 @@ struct SheetPlan {
     std::vector<double> heights, depths;  // sorted z > 0, each one's reach
     std::vector<Cone> cones;              // in the census's order
     double fold = 0.0;                    // the cones' rows' fold radius
+    // momwire#1860 L2 (`height_sheet_recal`): each height's snapped window
+    // [lo, hi]; empty, the shipped plan, is `z == h`.
+    std::vector<double> lo, hi;
     bool any() const { return !planes.empty() || !heights.empty() || !cones.empty(); }
 };
 
@@ -160,6 +164,66 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
 void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
                 const std::vector<double> &zs, int p, double u_max, int n_threads,
                 std::vector<double> &u_edges, std::vector<cd> &vals);
+
+// momwire#1860's opt-in features on this C++ route (`momwire._features`).
+// Two sets: what the run asked for (`requested_features`, written once by the
+// executable from its environment before any deck is read) and what is on
+// right now (`active_features`). The Python solvers turn these on only around
+// their buried fill -- razor's `_assemble_Z_from_prepared`, bspline's
+// `_compute_Z_operator_buried`, under `_near_interface`'s `*_scope`s -- so the
+// C++ fills do the same with a `FeatureFill` over theirs, and whatever else
+// this route evaluates (a buried near field, say) sees every one off. All
+// false, the default, is the shipped route bit for bit.
+//
+// Written by the thread that runs the fill, before any parallel region of
+// it starts; the fill's worker threads only read it.
+struct Features {
+    bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
+    bool height_sheet_recal = false;  // L2: the recalibrated height census
+    bool crossing_table = false;      // L5: the crossing rows from one table
+    bool crossing_above_rule = false;  // B1: bspline's above x above rule
+};
+Features &requested_features();
+const Features &active_features();
+// Asks for the feature `name` (its `momwire._features` name) in every later
+// fill; false, and nothing asked, for a name this route does not carry.
+bool request_feature(const std::string &name);
+// Line 2's feature tail for what was requested, as `_features.stamp()` spells
+// it within every feature's reach: "+name" each, in registry order, or "".
+std::string requested_stamp();
+
+// One buried fill with the requested features on, as the Python solvers'
+// scopes put them around theirs; restores what was on before.
+class FeatureFill {
+  public:
+    FeatureFill();
+    ~FeatureFill();
+    FeatureFill(const FeatureFill &) = delete;
+    FeatureFill &operator=(const FeatureFill &) = delete;
+
+  private:
+    Features saved_;
+    bool saved_taken_;
+};
+
+// Whether the running fill has taken L5's crossing table (`_CrossingFill.taken`).
+bool crossing_table_taken();
+
+// The end terms of a crossing block that Python asks for BEFORE the block's
+// main tiles, though this route evaluates them after (see the one use, in
+// `_razor_crossing_core.cpp`): around them, the table counts as taken only if
+// it was before the main tiles (`taken_before`, read then); afterwards it is
+// taken if either the main tiles or the end terms took it.
+class CrossingEndsFirst {
+  public:
+    explicit CrossingEndsFirst(bool taken_before);
+    ~CrossingEndsFirst();
+    CrossingEndsFirst(const CrossingEndsFirst &) = delete;
+    CrossingEndsFirst &operator=(const CrossingEndsFirst &) = delete;
+
+  private:
+    bool after_main_;
+};
 
 // Python's repr of a float (the refusals' numbers).
 std::string py_repr(double x);

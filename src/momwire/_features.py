@@ -14,9 +14,12 @@ On outside its reach, a feature is handled by its KIND:
 * ``"native"``: new C++ or a new numerical path. It refuses, in one sentence
   naming the feature and the platform (:class:`FeatureNotCertified`).
 
-The standalone executables certify no feature (every reach is below their
-levels): one started with any ``MOMWIRE_X_`` variable on refuses before it
-reads a deck (``standalone/momwire_razor2p.cpp``, :data:`EXE_REFUSAL`).
+The standalone executables run only the features their C++ route carries
+and whose reach covers their level (``EXE_FEATURES`` in
+``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
+8, so every executable but nec42-sinusoidal's). One started with any other
+``MOMWIRE_X_`` variable on refuses before it reads a deck
+(:data:`EXE_REFUSAL`).
 
 With every feature off nothing here changes a byte of any printout.
 """
@@ -241,10 +244,12 @@ FEATURES: dict[str, Feature] = {
         # The near-interface column twin's factored route (momwire#1860 L1):
         # on a grid-shaped column each exponential factor once per distinct
         # z and z', the product per member. A new C++ path, a few ulp from
-        # the member route and not bit-identical to it.
+        # the member route and not bit-identical to it. Reach 8: the
+        # nec5-razor-2p, nec5-bspline and nec42-bspline executables carry it
+        # (the ports of #1860's measurement build).
         Feature(
             name="factored_columns",
-            reach=1,
+            reach=8,
             env="MOMWIRE_X_FACTORED_COLUMNS",
             kind="native",
             issue=1860,
@@ -263,10 +268,11 @@ FEATURES: dict[str, Feature] = {
         # The near-interface height-sheet census recalibrated (momwire#1860
         # L2): a horizontal wire's rows on a height sheet at their measured
         # worth, and heights a few ulp apart taken as one sheet. The shipped
-        # sheets and twin, a different split between them.
+        # sheets and twin, a different split between them. Reach 8, as
+        # factored_columns.
         Feature(
             name="height_sheet_recal",
-            reach=1,
+            reach=8,
             env="MOMWIRE_X_HEIGHT_SHEET_RECAL",
             kind="python",
             issue=1860,
@@ -286,9 +292,10 @@ FEATURES: dict[str, Feature] = {
         # fixed wavelength-scaled grid read from one table per frequency, the
         # singular part taken out in closed form. A new C++ path and a coarse
         # accuracy class (printed Zin within ~0.1 ohm on the EFHW decks).
+        # Reach 8, as factored_columns.
         Feature(
             name="crossing_table",
-            reach=1,
+            reach=8,
             env="MOMWIRE_X_CROSSING_TABLE",
             kind="native",
             issue=1860,
@@ -310,10 +317,12 @@ FEATURES: dict[str, Feature] = {
         # B1): the base order plus #1189's raised pairs, where the shipped
         # route takes the cross block's q = 6, on a grid no dearer than the
         # shipped one (else that fill declines). The shipped kernels, a
-        # different quadrature.
+        # different quadrature. Reach 8: the two bspline executables carry it;
+        # nec5-razor-2p's accepts the variable and, as Python's razor-2p,
+        # ignores it.
         Feature(
             name="crossing_above_rule",
-            reach=1,
+            reach=8,
             env="MOMWIRE_X_CROSSING_ABOVE_RULE",
             kind="python",
             issue=1860,
