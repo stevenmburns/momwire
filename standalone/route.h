@@ -8,6 +8,7 @@
 // No include guard on purpose: momwire_razor2p.cpp includes it once per
 // namespace (the second time with `mw` defined as `mws`).
 #include <string>
+#include <vector>
 
 namespace mw {
 namespace exe {
@@ -32,6 +33,13 @@ void configure_grid_cache(const std::string &tag);
 // `open_end`: the text is a stream's piece (momwire#1512, `razor_printout`);
 // `served`: every structure solved and printed (no refusal, nothing raised),
 // so a stream goes on after it.
+// The experimental features (`momwire._features` names) the executable
+// accepted from its environment, for this copy's answers from now on: each
+// asked of the buried fills (`ni_eval::request_feature`) and named on line 2
+// of every printout. False when this copy carries a name not (nothing of
+// that name is asked).
+bool configure_features(const std::vector<std::string> &names);
+
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,
             bool *failed = nullptr, std::string *failure_kind = nullptr,

@@ -42,7 +42,7 @@ from test_crossing_serve_524 import crossing_deck
 from test_crossing_sparse_1109 import _whole_wire_segments
 
 # An experimental feature (`momwire._features`, reach 1).
-pytestmark = pytest.mark.reach(1)
+pytestmark = pytest.mark.reach(8)
 
 ENV = "MOMWIRE_X_CROSSING_ABOVE_RULE"
 
@@ -172,7 +172,7 @@ def routes(monkeypatch):
 def test_registry_entry():
     f = _features.FEATURES["crossing_above_rule"]
     assert (f.reach, f.kind, f.env, f.kwarg, f.issue) == (
-        1,
+        8,
         "python",
         ENV,
         "crossing_above_rule",

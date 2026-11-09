@@ -35,7 +35,7 @@ from test_crossing_serve_524 import crossing_deck
 
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(8),
     pytest.mark.skipif(
         not (ni._use_sheet() and ni._use_column_route() and ni._use_column_accel()),
         reason="the near-interface sheets are not built",

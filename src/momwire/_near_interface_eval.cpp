@@ -1022,6 +1022,16 @@ bool request_feature(const std::string &name) {
     return true;
 }
 
+std::string requested_stamp() {
+    const Features &f = g_requested;
+    std::string s;
+    if (f.factored_columns) s += "+factored_columns";
+    if (f.height_sheet_recal) s += "+height_sheet_recal";
+    if (f.crossing_table) s += "+crossing_table";
+    if (f.crossing_above_rule) s += "+crossing_above_rule";
+    return s;
+}
+
 FeatureFill::FeatureFill() : saved_(g_active), saved_taken_(g_crossing_taken) {
     g_active = g_requested;
     g_crossing_taken = false;  // one fill, one `_CrossingFill`

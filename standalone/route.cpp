@@ -1,6 +1,8 @@
 // The C++ route (route.h): compiled once per namespace, see there.
 #include "route.h"
 
+#include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
+
 #include "_somm_below_fill_core.h"
 
 #include "_nec5_razor_printout_core.h"
@@ -17,6 +19,12 @@
 
 namespace mw {
 namespace exe {
+
+bool configure_features(const std::vector<std::string> &names) {
+    bool ok = true;
+    for (const std::string &n : names) ok = ni_eval::request_feature(n) && ok;
+    return ok;
+}
 
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);
@@ -72,6 +80,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     nec5::EngineStamp stamp;
     stamp.version = version;
     stamp.variant = variant;
+    stamp.marker = ni_eval::requested_stamp();  // `_features.stamp()`'s tail
     razor::SolveContext ctx;
     std::vector<nec5::RunArrays> arrays;
     const nec5::PrintoutResult r =
