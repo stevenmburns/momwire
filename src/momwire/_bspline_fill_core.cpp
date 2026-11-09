@@ -3359,7 +3359,7 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
             marks.nTh[r] = static_cast<std::ptrdiff_t>(G0.regions[r].n_th);
         }
         const double n_pairs = static_cast<double>(N * q) * static_cast<double>(N * q);
-        if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(G0))) {
+        if (somm_core::census_pays_view(G0, n_pairs)) {
             somm_core::field_proj_nodes(view, static_cast<std::ptrdiff_t>(N * q), static_cast<std::ptrdiff_t>(N * q),
                                         nodes.data(), nodes.data(), ground_z, marks);
             if (!pI.empty())
@@ -4306,8 +4306,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
             const somm_proj::GridView cv = somm_proj::build_grid_view(
                 G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
             const std::ptrdiff_t na = static_cast<std::ptrdiff_t>(obs_a.size() / 3);
-            if (somm_core::census_pays(static_cast<double>(na) * static_cast<double>(na),
-                                       somm_core::unfilled_nodes(G0)))
+            if (somm_core::census_pays_view(G0, static_cast<double>(na) * static_cast<double>(na)))
                 somm_core::field_proj_nodes(cv, na, na, obs_a.data(), obs_a.data(), gz, marks);
             else
                 need = somm_core::all_nodes_of(G0);  // the census would cost more than it saves

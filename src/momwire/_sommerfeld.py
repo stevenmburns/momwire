@@ -1952,6 +1952,34 @@ def census_pays(n_pairs, unfilled):
     )
 
 
+def master_nodes(grid):
+    """Every node of a lazy view's masters, held or not, counted per master
+    (0 for a grid that is not a lazy view)."""
+    src = getattr(grid, "_lazy_src", None)
+    if src is None:
+        return 0
+    return sum(
+        int(reg["have"].size)
+        for m in src[1]
+        for reg in m._regions
+        if reg.get("have") is not None
+    )
+
+
+def census_pays_view(grid, n_pairs):
+    """The readers' test (momwire#1860's ground reuse): `census_pays` set
+    against EVERY node of the view's masters, not the ones still unfilled,
+    and no census when none is unfilled. What a census saves is the nodes no
+    point of a sweep reads, and that does not shrink as the masters fill (on
+    efhw_hi a razor-2p census reads ~77 % of each master on a rung pair's
+    first point and 1-9 nodes more on each later one); set against the
+    unfilled nodes, the test flipped on the pair's second point and filled
+    every node left. A pair whose census does not pay fresh fills every node
+    at once, as before; the values are the fill's whichever nodes are
+    filled. `somm_core::census_pays_view` is the same rule."""
+    return unfilled_nodes(grid) > 0 and census_pays(n_pairs, master_nodes(grid))
+
+
 def proj_census(grid, obs, src, ground_z):
     """The nodes `remainder_field_proj` reads over obs x src take, as a bool
     mask per region (momwire#1512), from the accelerator's census
@@ -1964,7 +1992,7 @@ def proj_census(grid, obs, src, ground_z):
     if obs.shape[0] > 1:
         obs = np.unique(obs.view(np.dtype((np.void, 24))), axis=0).view(np.float64)
         obs = np.ascontiguousarray(obs.reshape(-1, 3))
-    if not census_pays(obs.shape[0] * np.shape(src)[0], unfilled_nodes(grid)):
+    if not census_pays_view(grid, obs.shape[0] * np.shape(src)[0]):
         return _all_nodes(grid)  # the census would cost more than it saves
     masks = _acc.remainder_field_proj_nodes(
         obs,
@@ -1982,7 +2010,7 @@ def reflected_census(grid, points, src_mid, ground_z, magnetic, step):
     if _acc is None or not hasattr(_acc, "reflected_field_nodes"):
         return None
     n_pairs = np.shape(points)[0] * np.shape(src_mid)[0] * (6 if magnetic else 1)
-    if not census_pays(n_pairs, unfilled_nodes(grid)):
+    if not census_pays_view(grid, n_pairs):
         return _all_nodes(grid)  # the census would cost more than it saves
     masks = _acc.reflected_field_nodes(
         np.ascontiguousarray(points, dtype=np.float64),

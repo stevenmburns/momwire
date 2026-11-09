@@ -1060,6 +1060,20 @@ std::size_t unfilled_nodes(const Grid &view) {
     return n;
 }
 
+std::size_t master_nodes(const Grid &view) {
+    std::lock_guard<std::mutex> lock(g_memo_mu);
+    const View *v = view_of(view);
+    if (v == nullptr) return 0;  // not a lazy view: no census to take
+    std::size_t n = 0;
+    for (size_t r = 0; r < v->g.regions.size(); r++)
+        n += v->lo->g.regions[r].have.size() * (v->hi != nullptr ? 2 : 1);
+    return n;
+}
+
+bool census_pays_view(const Grid &view, double n_pairs) {
+    return unfilled_nodes(view) > 0 && census_pays(n_pairs, master_nodes(view));
+}
+
 bool census_pays(double n_pairs, std::size_t unfilled) {
     const double CENSUS_S_PER_PAIR = 2.5e-8, FILL_S_PER_NODE_MIN = 1.5e-4, SHARE = 0.5;
     return n_pairs * CENSUS_S_PER_PAIR < SHARE * static_cast<double>(unfilled) * FILL_S_PER_NODE_MIN;

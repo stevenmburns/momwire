@@ -1751,7 +1751,7 @@ std::string Front::prepare_compose(int64_t n_qp_sommerfeld) {
         marks.nTh[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_th);
     }
     const double n_pairs = static_cast<double>(pts.size() / 3) * static_cast<double>(ns * q);
-    if (somm_core::census_pays(n_pairs, somm_core::unfilled_nodes(g)))
+    if (somm_core::census_pays_view(g, n_pairs))
         somm_core::field_proj_nodes(*grid_view, static_cast<std::ptrdiff_t>(pts.size() / 3),
                                     static_cast<std::ptrdiff_t>(ns * q), pts.data(), rem_src.data(),
                                     ground_z, marks);
