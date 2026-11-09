@@ -354,14 +354,21 @@ def height_sheet_recal_scope(on):
 # Whether a fill takes it is decided per fill on what the fill asks, never on
 # what is cached (`_CrossingFill`): the twin rows inside the extents are
 # counted at their cost (a column setup is `_CROSSING_TABLE_SETUP` members),
-# and once they pass the build's own cost (a column per rho node, every node
-# a member) the table serves that call's rows and every later call's. A fill
-# with few crossing rows keeps the twin throughout. Off, the default, the
-# twin is called exactly as before.
+# and once they pass the build's own cost (a column per rho node, each node
+# `_CROSSING_TABLE_NODE` members) the table serves that call's rows and every
+# later call's. A fill with few crossing rows keeps the twin throughout. Off,
+# the default, the twin is called exactly as before.
+#
+# The weights are fitted (Skylake, T1, the dumped column calls of eight
+# fills): twin wall = 0.13 ms a column + 1.9 us a member, so a setup is ~68
+# members; the build (51 columns, 17,238 nodes, factored) is 43 ms, ~1.1
+# members a node past its setups. The Beverage's crossing rows inside the
+# extents come to less than the build, and it keeps the twin.
 _CROSSING_TABLE_D = 0.01
 _CROSSING_TABLE_ZFAC = 0.5
 _CROSSING_TABLE_EXTENT = (0.5, 0.25, 0.06)
-_CROSSING_TABLE_SETUP = 18.0
+_CROSSING_TABLE_SETUP = 68.0
+_CROSSING_TABLE_NODE = 1.1
 _CROSSING_TABLE_CACHE_MAX = 8
 _CROSSING_TABLE_CACHE = collections.OrderedDict()
 _CROSSING_TABLE_LOCK = threading.Lock()
@@ -558,7 +565,9 @@ def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
                 np.count_nonzero(np.bincount(col[inside], minlength=sizes.size))
             )
             fill.pending += cols_in * _CROSSING_TABLE_SETUP + n_in
-        if fill.pending >= n[0] * _CROSSING_TABLE_SETUP + float(np.prod(n)):
+        if fill.pending >= n[0] * _CROSSING_TABLE_SETUP + _CROSSING_TABLE_NODE * float(
+            np.prod(n)
+        ):
             fill.taken = True
             _CROSSING_TABLE_STATS["fills_taken"] += 1
         else:
