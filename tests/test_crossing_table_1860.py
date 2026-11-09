@@ -149,18 +149,20 @@ def test_the_read_is_its_numpy_walk():
 
 
 def test_the_closed_form_takes_out_the_corner():
-    # R (f - S), on each kernel's own scale R^pw |f|, shrinks with R at the
-    # corner: the leading and next orders are both out.
-    pw = np.array(ni.KEY_RPOW, float)
-    rels = []
+    # R (f - S) goes to zero linearly at the corner for all six kernels: the
+    # leading and next orders are both out (without the next order, dzpV's
+    # stays O(1) on its own scale).
+    rems = []
     for R in (1e-2, 1e-3):
         rho, z, zp = np.array([R / 2]), np.array([R / 2]), np.array([-R / 3])
         Rr = np.hypot(rho, z - zp)
         f = _twin(rho, z, zp)
-        rem = np.abs(f - ni.crossing_singular(rho, z, zp, K_P, K_M)) * Rr[:, None]
-        rels.append((rem / (np.abs(f) * Rr[:, None] ** pw)).ravel())
-    assert np.all(rels[0] < 0.1)
-    assert np.all(rels[1] < rels[0])
+        rems.append(
+            (
+                np.abs(f - ni.crossing_singular(rho, z, zp, K_P, K_M)) * Rr[:, None]
+            ).ravel()
+        )
+    assert np.all(rems[1] < 0.2 * rems[0])
 
 
 def test_a_small_fill_declines_the_table(monkeypatch):
@@ -198,10 +200,15 @@ def _printout(deck, basis, on, monkeypatch):
 
     monkeypatch.setattr(_lapack, "lu_factor", keep)
     ni._CROSSING_TABLE_STATS["table_rows"] = 0
+    # Every fill takes the table here (no build weight), so that its accuracy
+    # is what is measured; whether a fill SHOULD is the next test's.
+    monkeypatch.setattr(ni, "_CROSSING_TABLE_SETUP", 0.0)
+    monkeypatch.setattr(ni, "_CROSSING_TABLE_NODE", 0.0)
     # Level 1, as antennaknobs runs it: the drop-in context is level 4, where
     # a reach-1 native feature refuses.
     text = _shell.render.__wrapped__(deck.read_text(), basis=basis, dialect="nec5")
     monkeypatch.setattr(_lapack, "lu_factor", real)
+    monkeypatch.undo()
     return text, Z[0], ni._CROSSING_TABLE_STATS["table_rows"]
 
 
@@ -217,7 +224,8 @@ def _zin(text):
 # Printed Zin (5 significant figures) against the exact route, |dZin| / |Zin|.
 # Measured on Skylake (momwire#1860 L5, both engines; Z from this module's
 # route), then x3 for margin and a printed last digit:
-#   efhw_lo 2.1e-5, efhw_hi 1.9e-5, d3_hub 9.5e-4, Beverage 8.4e-5.
+#   efhw_lo 1.7e-5, efhw_hi 1.9e-5, d3_hub 9.4e-4, Beverage 8.4e-5
+# (diag(Z^-1) at most 1.05e-3).
 CASES = [
     ("crossing_table_1860/efhw_lo.nec", 1e-4),
     pytest.param("crossing_table_1860/efhw_hi.nec", 1e-4, marks=pytest.mark.slow),
@@ -242,3 +250,26 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
     ya = np.diag(np.linalg.inv(z_off))
     yb = np.diag(np.linalg.inv(z_on))
     assert np.max(np.abs(yb - ya) / np.abs(ya)) <= 2e-3
+
+
+@pytest.mark.skipif(
+    not _features.certified("crossing_table"),
+    reason="crossing_table is not certified on this platform",
+)
+@pytest.mark.parametrize(
+    ("deck", "taken"),
+    [
+        ("crossing_table_1860/efhw_lo.nec", True),
+        ("near_buried_1653/d3_hub.nec5.nec", True),
+        ("crossing_table_1860/beverage.nec", False),
+    ],
+)
+def test_the_census_takes_the_table_where_it_pays(monkeypatch, deck, taken):
+    from momwire.dropin.nec5 import _shell
+
+    monkeypatch.setenv("MOMWIRE_X_CROSSING_TABLE", "1")
+    ni._CROSSING_TABLE_STATS["table_rows"] = 0
+    _shell.render.__wrapped__(
+        (FIX / deck).read_text(), basis="razor-2p", dialect="nec5"
+    )
+    assert (ni._CROSSING_TABLE_STATS["table_rows"] > 0) is taken
