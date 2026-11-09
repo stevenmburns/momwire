@@ -238,6 +238,22 @@ FEATURES: dict[str, Feature] = {
             kwarg="crossing_table",
             paths=("tests/test_crossing_table_1860.py",),
         ),
+        # nec5-bspline's and nec42-bspline's crossing route fills the above x
+        # above Sommerfeld remainder at the no-rod deck's rule (momwire#1860
+        # B1): the base order plus #1189's raised pairs, where the shipped
+        # route takes the cross block's q = 6, on a grid no dearer than the
+        # shipped one (else that fill declines). The shipped kernels, a
+        # different quadrature.
+        Feature(
+            name="crossing_above_rule",
+            reach=1,
+            env="MOMWIRE_X_CROSSING_ABOVE_RULE",
+            kind="python",
+            issue=1860,
+            since="2026-11-09",
+            kwarg="crossing_above_rule",
+            paths=("tests/test_crossing_above_rule_1860.py",),
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(

@@ -754,6 +754,12 @@ _REMAINDER_GRADED_C = 4.0
 # the keyed rule's Q^2 overtakes a graded pair's cost. 0 is the #1201 route
 # (every listed pair graded), kept as the reference.
 _REMAINDER_GRADED_MIN_Q = 16
+# momwire#1860 B1 (`crossing_above_rule`): the crossing node's band of
+# segments keeps the cross block's order against every above segment within
+# this many band lengths of the node. Measured: 2 gives the shipped route's
+# printed Zin on efhw_hi, the hub, the Beverage and the ACA screen (8 to 272
+# pairs), as raising the band against every segment did (812 to 3552).
+_B1_NODE_REACH = 2.0
 
 # ...with the broadside guard widened by this much of a segment, so a foot
 # landing exactly on a segment end (radials and a mast meeting at a hub) is
@@ -1883,6 +1889,7 @@ class BSplineSolver(
         factored_columns=None,
         height_sheet_recal=None,
         crossing_table=None,
+        crossing_above_rule=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1961,6 +1968,13 @@ class BSplineSolver(
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
         self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        # momwire#1860 B1: a crossing deck's above/above remainder at the
+        # above-ground rule. None defers to MOMWIRE_X_CROSSING_ABOVE_RULE
+        # (`_features`, reach 1, python); off is the cross block's order,
+        # bit for bit.
+        self._crossing_above_rule = _features.enabled(
+            "crossing_above_rule", crossing_above_rule
+        )
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8868,6 +8882,13 @@ class BSplineSolver(
                 below_remainder_pairs=self._below_remainder_pairs,
                 remainder_nodes=self._buried_remainder_nodes,
                 transmitted_anchors=self._transmitted_anchors,
+                crossing_above_rule=(
+                    self._crossing_above_remainder_rule
+                    if getattr(self, "_crossing_above_rule", False)
+                    else None
+                ),
+                remainder_pair_entries=self._remainder_pair_entries,
+                remainder_pair_correction=self._remainder_pair_correction,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,
@@ -8885,6 +8906,95 @@ class BSplineSolver(
             rows=rows,
             compact=compact,
         )
+
+    def _crossing_above_remainder_rule(self, geom, a_idx):
+        """`BuriedFills.crossing_above_rule` (momwire#1860 B1): the above
+        segments' remainder rule as `_remainder_prep` takes it for the whole
+        of an all-above deck -- the base order `n_qp_sommerfeld` and
+        #1189's raised pairs (or the deck-wide `_remainder_qp` without
+        per-pair orders) -- as `(points, tangents, W, pairs, reads)`, the
+        pairs in global segment indices and sorted by observer then source,
+        `reads` the points its grid reads take (None: not listable).
+
+        One addition to that rule: every pair with a segment AT THE CROSSING
+        NODE -- an end within one of its own lengths of a point where an
+        above wire meets the plane, i.e. the node's own segment and the next
+        one along each wire through it -- keeps the cross block's order
+        `_n_qp_buried_field` when the listed one is lower. #1189 keys its
+        pairs on grazing height through the base-order nodes and lists none
+        there, and the basis does not vanish at a crossing node. Without
+        them, against a q = 48 flat reference: the buried-hub vertical's Zin
+        moves 0.12 ohm away (2.4e-3) with the bare rule, and the ACA screen's
+        0.009 ohm (1.3e-4) with the node's own segment alone; with both
+        segments each is the shipped route's Zin again. The band is raised
+        against the segments within `_B1_NODE_REACH` band lengths of the
+        node only; against every segment it cost the Beverage its saving."""
+        gz = self.ground_z
+        seg_l, seg_r = geom["seg_l"][a_idx], geom["seg_r"][a_idx]
+        I = J = Qp = np.zeros(0, dtype=np.int64)
+        if _REMAINDER_PER_PAIR:
+            q = int(self.n_qp_sommerfeld)
+            I, J, Qp = self._remainder_qp_pairs(seg_l, seg_r, gz)
+        else:
+            q = self._remainder_qp(seg_l, seg_r, gz)
+        q_node = int(self._n_qp_buried_field())
+        # The segments at the crossing node: an end within one of their own
+        # lengths of a point where an above wire meets the plane (the node's
+        # own segment, and the next one along each wire through it). Each is
+        # raised against the segments within twice the band's longest
+        # length of the node -- the pairs that see the node's singular
+        # current -- and no further: the far pairs' remainder is smooth.
+        h_a = geom["h_per_seg"][a_idx]
+        ends = np.concatenate([seg_l, seg_r])
+        node = ends[np.abs(ends[:, 2] - gz) <= _crossing_fill._PLANE_TOL]
+        band = near = np.zeros(0, dtype=np.int64)
+        if node.shape[0]:
+            node = np.unique(node, axis=0)
+            dist = np.minimum(
+                np.linalg.norm(seg_l[:, None, :] - node[None], axis=2).min(axis=1),
+                np.linalg.norm(seg_r[:, None, :] - node[None], axis=2).min(axis=1),
+            )
+            band = np.flatnonzero(dist <= h_a + _crossing_fill._PLANE_TOL)
+            if band.size:
+                reach = _B1_NODE_REACH * float(h_a[band].max())
+                near = np.flatnonzero(dist <= reach + _crossing_fill._PLANE_TOL)
+        # The pair correction swaps BASE-order moments, so only on the
+        # per-pair route (the deck-wide order lists no pairs at all).
+        if _REMAINDER_PER_PAIR and band.size and q_node > q:
+            bI = np.repeat(band, near.size)
+            bJ = np.tile(near, band.size)
+            I = np.concatenate([I, bI, bJ])
+            J = np.concatenate([J, bJ, bI])
+            Qp = np.concatenate([Qp, np.full(2 * bI.size, q_node, np.int64)])
+            # One entry per pair, at the larger order, sorted by (I, J).
+            order = np.lexsort((-Qp, J, I))
+            I, J, Qp = I[order], J[order], Qp[order]
+            first = np.ones(I.size, dtype=bool)
+            first[1:] = (I[1:] != I[:-1]) | (J[1:] != J[:-1])
+            I, J, Qp = I[first], J[first], Qp[first]
+        pairs = (a_idx[I], a_idx[J], Qp) if I.size else None
+        tang_a = geom["tangents"][a_idx]
+        pts, tang, u, w = _below_interface.field_nodes(seg_l, seg_r, tang_a, h_a, q)
+        W = w[None] * np.float_power(u[None], np.arange(self.degree + 1)[:, None, None])
+        # Every point the grid reads take, for the lazy census
+        # (`_below_interface.crossing_above_grid`): the base nodes, and each
+        # raised pair's two segments at its Gauss order. None when a pair
+        # goes on #1201's graded panels, whose points are drawn as they go.
+        reads = pts
+        if I.size:
+            if _REMAINDER_GRADED and bool((Qp >= _REMAINDER_GRADED_MIN_Q).any()):
+                reads = None
+            else:
+                parts = [pts]
+                for qq in np.unique(Qp):
+                    segs = np.unique(np.concatenate([I[Qp == qq], J[Qp == qq]]))
+                    parts.append(
+                        _below_interface.field_nodes(
+                            seg_l[segs], seg_r[segs], tang_a[segs], h_a[segs], int(qq)
+                        )[0]
+                    )
+                reads = np.concatenate(parts)
+        return pts, tang, W, pairs, reads
 
     def _dense_tensor_fits_budget(self, n_segs):
         """Whether one dense polynomial-moment tensor fits the memory budget."""
