@@ -2,6 +2,7 @@
 #include "_razor_buried_core.h"
 
 #include "_razor_crossing_core.h"
+#include "_near_interface_eval.h"  // FeatureFill (momwire#1860)
 
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -743,6 +744,9 @@ static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, Burie
 // the ValueError Python raises from the fill.
 std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stages,
                         uintptr_t cancel_flag) {
+    // The requested momwire#1860 features on for this fill only, as
+    // `_assemble_Z_from_prepared`'s scopes put them around Python's.
+    const ni_eval::FeatureFill features_on;
     try {
         return fill_buried_inner(f, out, stages, cancel_flag);
     } catch (const somm_below::TailCapped &e) {

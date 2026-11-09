@@ -639,9 +639,12 @@ class ConeSheet {
                 i++;
             }
         std::vector<cd> vals(m * N_KEYS);
+        // `**_columns_lanes_kw()`: the factored route when the fill has
+        // momwire#1860 L1 on
         ni_core::six_columns(k_p_, k_m_, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc), z.data(),
                              zq.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P, DETOUR, n_threads,
-                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data());
+                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data(), true, true,
+                             active_features().factored_columns);
         // `vals[:, cols] *= f`, f = R ** pw with R = hypot(u, z + d) (numpy's
         // complex by real-as-complex product: each part one rounding).
         for (size_t c = 0, i = 0; c < nc; c++)
@@ -734,6 +737,16 @@ ConeSheet &cone_sheet(double k_p, cd k_m, const Cone &c, double beta, double a, 
 // The column twin over a row set (`_column_twin`, `_column_blocks`,
 // `_refuse_bad_members`).
 
+// `near_interface_six_columns(..., **_columns_lanes_kw())`: the twin itself,
+// on the factored route when the fill has momwire#1860 L1 on.
+void twin_call(const Evaluator &ev, const std::vector<double> &rho_c, const std::vector<std::ptrdiff_t> &offsets,
+               const std::vector<double> &zs, const std::vector<double> &zps, ni_core::ColumnCache *cache, cd *vals) {
+    ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(rho_c.size()),
+                         zs.data(), zps.data(), static_cast<std::ptrdiff_t>(zs.size()), LAM_MULT, COLUMN_P, DETOUR,
+                         ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache, vals, true, true,
+                         active_features().factored_columns);
+}
+
 void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t *labels,
                  ni_core::ColumnCache *cache, Six *out) {
     if (m == 0) return;
@@ -785,10 +798,7 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
             }
     }
     std::vector<cd> vals(m * N_KEYS);
-    ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc),
-                         zs.data(), zps.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P,
-                         DETOUR, ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache,
-                         vals.data());
+    twin_call(ev, rho_c, offsets, zs, zps, cache, vals.data());
     for (size_t j = 0; j < m; j++)
         for (int k = 0; k < N_KEYS; k++) out[member_order[j]][k] = vals[j * N_KEYS + k];
 }
@@ -847,6 +857,26 @@ std::string py_repr(double x) {
     }
     return neg ? "-" + out : out;
 }
+
+namespace {
+Features g_requested, g_active;
+}  // namespace
+
+Features &requested_features() { return g_requested; }
+const Features &active_features() { return g_active; }
+
+bool request_feature(const std::string &name) {
+    Features &f = g_requested;
+    if (name == "factored_columns")
+        f.factored_columns = true;
+    else
+        return false;
+    return true;
+}
+
+FeatureFill::FeatureFill() : saved_(g_active) { g_active = g_requested; }
+
+FeatureFill::~FeatureFill() { g_active = saved_; }
 
 Memo::Memo() : cache(new ni_core::ColumnCache(16u << 20)) {}
 

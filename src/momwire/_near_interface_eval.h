@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -160,6 +161,40 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
 void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
                 const std::vector<double> &zs, int p, double u_max, int n_threads,
                 std::vector<double> &u_edges, std::vector<cd> &vals);
+
+// momwire#1860's opt-in features on this C++ route (`momwire._features`).
+// Two sets: what the run asked for (`requested_features`, written once by the
+// executable from its environment before any deck is read) and what is on
+// right now (`active_features`). The Python solvers turn these on only around
+// their buried fill -- razor's `_assemble_Z_from_prepared`, bspline's
+// `_compute_Z_operator_buried`, under `_near_interface`'s `*_scope`s -- so the
+// C++ fills do the same with a `FeatureFill` over theirs, and whatever else
+// this route evaluates (a buried near field, say) sees every one off. All
+// false, the default, is the shipped route bit for bit.
+//
+// Written by the thread that runs the fill, before any parallel region of
+// it starts; the fill's worker threads only read it.
+struct Features {
+    bool factored_columns = false;  // L1: the twin's grid route (`mw899::Grid`)
+};
+Features &requested_features();
+const Features &active_features();
+// Asks for the feature `name` (its `momwire._features` name) in every later
+// fill; false, and nothing asked, for a name this route does not carry.
+bool request_feature(const std::string &name);
+
+// One buried fill with the requested features on, as the Python solvers'
+// scopes put them around theirs; restores what was on before.
+class FeatureFill {
+  public:
+    FeatureFill();
+    ~FeatureFill();
+    FeatureFill(const FeatureFill &) = delete;
+    FeatureFill &operator=(const FeatureFill &) = delete;
+
+  private:
+    Features saved_;
+};
 
 // Python's repr of a float (the refusals' numbers).
 std::string py_repr(double x);

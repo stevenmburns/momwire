@@ -17,6 +17,7 @@
 #include "_somm_pairs_core.h"
 #include "_somm_remainder_core.h"
 #include "_mw_times.h"
+#include "_near_interface_eval.h"  // FeatureFill (momwire#1860)
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
 #if defined(_MSC_VER)
@@ -4083,6 +4084,9 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
                                  const nec5::NumpyLinalg &np, bool stop_before_cross, CrossingStages *stages) {
+    // The requested momwire#1860 features on for this fill only, as
+    // `_compute_Z_operator_buried`'s scopes put them around Python's.
+    const ni_eval::FeatureFill features_on;
     const int d = fp.degree, nd = d + 1;
     const int64_t N = g.n_segs_total, n_basis = b.n_basis;
     const BuriedMedium bm = buried_medium(eps_r, sigma, omega, eps, fp.k);
