@@ -82,10 +82,12 @@ def test_reach_kind_and_dates_are_valid():
 
 def test_every_offered_feature_carries_its_front_end_fields():
     # momwire#1869: a front end derives its switch from these, so an offered
-    # feature must say what to show and what it does to the answer.
+    # feature must say what to show and how far it moves the answer.
+    import math
+
     for f in F.FEATURES.values():
-        assert f.effect in F.EFFECTS, f
         assert isinstance(f.offer, bool), f
+        assert math.isfinite(f.drift) and f.drift >= 0.0, f
         if f.offer:
             assert f.label and f.summary and f.kwarg, f
             assert "(faster)" not in f.label, f
