@@ -225,6 +225,85 @@ jobs:
           path: 464-dumps/
           if-no-files-found: ignore
 
+  # Consumer contract (momwire#1882 item 3, AK#2219). antennaknobs reaches
+  # momwire's internals through ONE module, antennaknobs.mw, and two of its
+  # tests pin that boundary: this job installs momwire FROM THIS PR, checks
+  # out antennaknobs main, and runs just those two files. Nothing else stops a
+  # momwire change from silently breaking one of antennaknobs' imports.
+  #
+  # NOT in the `required` selection (unassigned in support/hierarchy.toml):
+  # a PR can legitimately break the contract on purpose, and the fix then
+  # lands on the antennaknobs side after the momwire change merges, so a
+  # required check would deadlock. It is visible on every code PR instead.
+  #
+  # antennaknobs main, NOT its momwire submodule (never initialised here):
+  # momwire is the PR's tree, built the way `test` builds it. antennaknobs is
+  # installed `--no-deps`: importing antennaknobs.mw runs
+  # antennaknobs/__init__.py, which pulls momwire_serve_client, and that ships
+  # in THIS repo's src/. Beyond momwire only numpy, matplotlib
+  # (antennaknobs' tests/conftest.py imports it) and pytest are needed.
+  #
+  # The two files also pass on a pure-Python momwire, but the build is cached
+  # (restore-only ccache) and the contract should hold for what users get.
+  #
+  # A deselection or an empty collection is silent, and that is how AK's
+  # tests/*_1299.py ran nowhere after a cross-repo move. So the count is
+  # taken first, printed, and a count of zero fails the job.
+  consumer-contract:
+    needs: changes
+    if: github.event_name != 'workflow_dispatch' || inputs.lanes == 'all'
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        if: needs.changes.outputs.code == 'true'
+      - uses: actions/checkout@v7
+        if: needs.changes.outputs.code == 'true'
+        with:
+          repository: stevenmburns/antennaknobs
+          ref: main
+          path: antennaknobs
+          submodules: false
+      - uses: actions/setup-python@v7
+        id: py
+        if: needs.changes.outputs.code == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          restore-keys: |
+            test-Linux
+          save: false
+      - run: pip install --upgrade pip "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
+      # momwire from the PR (not editable: the tests run from the
+      # antennaknobs checkout, and the import must resolve to site-packages).
+      - run: pip install --no-build-isolation .
+        if: needs.changes.outputs.code == 'true'
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      - run: pip install matplotlib pytest
+        if: needs.changes.outputs.code == 'true'
+      - run: pip install --no-deps -e antennaknobs
+        if: needs.changes.outputs.code == 'true'
+      - name: Run antennaknobs' consumer-contract tests
+        if: needs.changes.outputs.code == 'true'
+        working-directory: antennaknobs
+        run: |
+          FILES="tests/test_mw_layer_2219.py tests/test_momwire_private_imports.py"
+          python -c "import momwire; print('momwire from', momwire.__file__)"
+          N=$(python -m pytest -p no:cacheprovider -q --collect-only $FILES | grep -c '::' || true)
+          echo "collected $N consumer-contract tests"
+          if [ "$N" -eq 0 ]; then
+            echo "::error::no consumer-contract tests collected; the job must fail, not skip"
+            exit 1
+          fi
+          python -m pytest -p no:cacheprovider -q -rs $FILES
+
   test-macos:
     needs: changes
     # The platform Ward runs SimNEC on (momwire#527/#528): the suite must

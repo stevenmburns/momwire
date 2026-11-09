@@ -521,6 +521,8 @@ def running_jobs(workflows: dict[str, Workflow], files: list[str]) -> set[str]:
             if ok:
                 out.add(f"{wf.file}:{jid}")
     out.discard(SELF)
+    # Visible on the PR, never required (hierarchy.toml [advisory]).
+    out -= set(load_hierarchy().get("advisory", {}))
     return out
 
 

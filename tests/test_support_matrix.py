@@ -356,3 +356,12 @@ def test_judge_needs_every_matrix_cell():
     assert _judge(req, two).state == "wait"
     three = two + [C("ci.yml", "test-slow (3/3)")]
     assert _judge(req, three).state == "pass"
+
+
+def test_an_advisory_job_runs_on_a_pr_but_is_never_required():
+    # ci.yml:consumer-contract (momwire#1882) runs on a code PR, so the stable
+    # path would select it; [advisory] in hierarchy.toml is what keeps it out.
+    job = "ci.yml:consumer-contract"
+    assert job in HIERARCHY["advisory"]
+    assert job not in SM.running_jobs(WORKFLOWS, ["src/momwire/x.py"])
+    assert job not in _select(["src/momwire/x.py", "setup.py"]).required
