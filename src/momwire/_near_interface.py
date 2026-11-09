@@ -2495,7 +2495,16 @@ class ProductMemo(TripleMemo):
 
 
 def designed_tables(
-    eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, group_labels=None
+    eps_t,
+    k2,
+    rho,
+    z,
+    zp,
+    rtol=1e-10,
+    lam_mult=_LAM_MULT,
+    memo=None,
+    group_labels=None,
+    keep=None,
 ):
     """Broadcast wrapper over the designed evaluation. Accepts z′ = 0 and
     z = 0 exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
@@ -2574,6 +2583,12 @@ def designed_tables(
     max|Z|) that way. The point routes evaluate each row on its own and
     ignore the labels. Without `memo` the sequence dedups nothing across its
     calls, which one call cannot reproduce, so labels need a memo.
+
+    `keep` (a `TripleMemo.key_set`, momwire#1860 B2) is `designed_rows`':
+    of the fresh rows only those it holds are inserted into `memo`. The
+    lookup comes first, so the answer is the same bits; only what a LATER
+    call through `memo` can hit changes, and the caller vouches that every
+    row such a call asks is in `keep`.
     """
     _check_memo(memo)
     rho_b, z_b, zp_b = np.broadcast_arrays(
@@ -2592,7 +2607,7 @@ def designed_tables(
         # steps up (as in `_crossing_fill._chunked_tables`).
         prev = np.maximum.accumulate(np.concatenate(([-1], inverse[:-1])))
         labels = lab[np.flatnonzero(inverse > prev)]
-    block = _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels)
+    block = _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels, keep)
     if rows.shape[0]:
         # The scatter a kernel at a time: the same copies as
         # `ascontiguousarray(block[inverse].T)`, without its (n, 6) gather
@@ -2647,7 +2662,8 @@ def _designed_block(
             ins = np.asarray(keep_mask, dtype=bool)[fresh_pos]
             sub, vals = sub[ins], vals[ins]
         elif keep is not None:
-            ins = keep.contains(sub)
+            # An empty key set holds nothing: no lookup to ask it.
+            ins = keep.contains(sub) if len(keep) else np.zeros(sub.shape[0], bool)
             sub, vals = sub[ins], vals[ins]
         memo.insert(sub, vals)
         del sub, vals  # copied into `block` (and the memo); not needed below
@@ -5064,17 +5080,34 @@ def _column_blocks(sub, labels=None):
 
 
 def radius_tables(
-    eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None, group_labels=None
+    eps_t,
+    k2,
+    rho,
+    z,
+    zp,
+    wire_radius,
+    rtol=1e-10,
+    memo=None,
+    group_labels=None,
+    keep=None,
 ):
     """`designed_tables` with the thin-wire offset folded in:
     ρ_eff = hypot(ρ, a) — the same-edge moments' R = √(Δz² + a²)
     convention extended to the cross family (the derivation's radius
     rule: every cross-family evaluation whose pair distance can reach
     the a-scale carries the offset; at R ≫ a it is invisible). `memo`
-    keys on the FOLDED ρ_eff (see `designed_tables`)."""
+    keys on the FOLDED ρ_eff (see `designed_tables`), and so does `keep`."""
     rho_eff = radius_fold(rho, wire_radius)
     return designed_tables(
-        eps_t, k2, rho_eff, z, zp, rtol=rtol, memo=memo, group_labels=group_labels
+        eps_t,
+        k2,
+        rho_eff,
+        z,
+        zp,
+        rtol=rtol,
+        memo=memo,
+        group_labels=group_labels,
+        keep=keep,
     )
 
 

@@ -244,7 +244,11 @@ class _Routes:
             lam_mult=ni._LAM_MULT,
             memo=None,
             group_labels=None,
+            keep=None,
         ):
+            # `keep` (momwire#1860 B2) only limits what the array memo
+            # retains; the dict keeps every row, so the comparison also
+            # holds the retained subset to the whole memo's bits.
             assert group_labels is None, "a labelled call on the reference route"
             d = None
             if memo is not None:
