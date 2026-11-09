@@ -181,6 +181,7 @@ struct Features {
     bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
     bool height_sheet_recal = false;  // L2: the recalibrated height census
     bool crossing_table = false;      // L5: the crossing rows from one table
+    bool crossing_above_rule = false;  // B1: bspline's above x above rule
 };
 Features &requested_features();
 const Features &active_features();
