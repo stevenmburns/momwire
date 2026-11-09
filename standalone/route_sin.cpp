@@ -14,6 +14,8 @@
 // says their bits agree.
 #include "route.h"
 
+#include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
+
 #include "_sinusoidal_run_core.h"
 #define MW_ROUTE_ENGINE sinusoidal
 #define MW_ROUTE_BASIS "sinusoidal"
@@ -105,6 +107,12 @@ sinusoidal::FillLinalg linalg() {
 // kept on disk between runs. A stored value is the fill's, bit for bit, so
 // a warm run prints what a cold one does; without it every run refilled
 // both (exe warm == exe cold, the perf-1028 study's finding 3).
+bool configure_features(const std::vector<std::string> &names) {
+    bool ok = true;
+    for (const std::string &n : names) ok = ni_eval::request_feature(n) && ok;
+    return ok;
+}
+
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);
     somm_below::configure_below_store(true);
@@ -127,6 +135,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     nec5::EngineStamp stamp;
     stamp.version = version;
     stamp.variant = variant;
+    stamp.marker = ni_eval::requested_stamp();  // `_features.stamp()`'s tail
     std::string out, why;
     bool ok, go_on = false;
     try {
