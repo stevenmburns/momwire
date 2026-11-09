@@ -165,6 +165,8 @@ def _zin(text):
     raise AssertionError("no input impedance in the printout")
 
 
+# Slow lane at the 0.89.0 pre-tag check: 8.5 s median on the Linux test job.
+@pytest.mark.slow
 def test_on_the_efhw_deck_takes_the_counterpoise_sheet_and_zin_agrees(
     monkeypatch, tmp_path
 ):
