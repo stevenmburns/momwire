@@ -42,6 +42,10 @@ constexpr int COLUMN_P = 0;
 constexpr double DETOUR = 2.0;
 constexpr double LAM_MULT = 8.0;
 constexpr int64_t KEY_RPOW[N_KEYS] = {1, 1, 1, 2, 2, 2};
+// momwire#1860 L2 (`height_sheet_recal`): `_SHEET_HEIGHT_LONE_WORTH`,
+// `_SHEET_HEIGHT_SNAP_ULPS`
+constexpr double SHEET_HEIGHT_LONE_WORTH = 1.0 / 10.0;
+constexpr int SHEET_HEIGHT_SNAP_ULPS = 4;
 
 uint64_t bits(double x) {
     uint64_t u;
@@ -64,6 +68,14 @@ const std::vector<double> &gw24() {
         return b;
     }();
     return w;
+}
+
+// A row at z is on height k of the plan: `z == h`, or within the height's
+// snapped window `lo <= z <= hi` when momwire#1860 L2 made the plan
+// (`_on_window`).
+bool on_height(const SheetPlan &plan, size_t k, double z) {
+    if (plan.lo.empty()) return z == plan.heights[k];
+    return z >= plan.lo[k] && z <= plan.hi[k];
 }
 
 // CPython's abs(complex): hypot.
@@ -869,6 +881,8 @@ bool request_feature(const std::string &name) {
     Features &f = g_requested;
     if (name == "factored_columns")
         f.factored_columns = true;
+    else if (name == "height_sheet_recal")
+        f.height_sheet_recal = true;
     else
         return false;
     return true;
@@ -1006,7 +1020,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             for (size_t i = 0; i < m; i++) {
                 const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
                 const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
-                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i] &&
+                if (on_height(*plan, h, z) && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i] &&
                     cone[i] < 0)
                     take[i] = 1;
             }
@@ -1044,7 +1058,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             double ext = height ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
             for (size_t i = 0; i < m; i++) {
                 const double col = rows[3 * i + (height ? 1 : 2)];
-                bool sel = col == v;
+                bool sel = height ? on_height(*plan, k, col) : col == v;
                 if (height)
                     sel = sel && take[i] && !on_plane[i] && cone[i] < 0;
                 else
@@ -1064,7 +1078,16 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             sh.cover(rho_max, s_max, ev.n_threads);
             store_sheet(sh);
             static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
-            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
+            if (height && !plan->lo.empty() && plan->lo[k] != plan->hi[k]) {
+                // momwire#1860 L2: a snapped window's rows are read AT its
+                // height
+                std::vector<double> at(rows, rows + 3 * m);
+                for (std::ptrdiff_t i : idx) at[3 * static_cast<size_t>(i) + 1] = v;
+                sh.interpolate(at.data(), static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out),
+                               ev.n_threads);
+            } else {
+                sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
+            }
         }
     }
     // `_serve_from_cones`: the full surface at beta_lo, plus the row's linear
@@ -1176,7 +1199,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             for (size_t i = 0; i < m; i++) {
                 const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
                 const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
-                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
+                if (on_height(*plan, h, z) && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
                     take[i] = 1;
             }
         for (size_t i = 0; i < m; i++) any |= take[i] != 0;
@@ -1199,7 +1222,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             double ext = height ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
             for (size_t i = 0; i < m; i++) {
                 const double col = rows[3 * i + (height ? 1 : 2)];
-                bool sel = col == v;
+                bool sel = height ? on_height(*plan, k, col) : col == v;
                 sel = height ? (sel && take[i] && !on_plane[i]) : (sel && on_plane[i]);
                 if (!sel) continue;
                 idx.push_back(static_cast<std::ptrdiff_t>(i));
@@ -1215,7 +1238,15 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth, true);
             sh.cover(rho_max, s_max, ev.n_threads);
             store_sheet(sh);
-            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            if (height && !plan->lo.empty() && plan->lo[k] != plan->hi[k]) {
+                // momwire#1860 L2: a snapped window's rows are read AT its
+                // height
+                std::vector<double> at(rows, rows + 3 * m);
+                for (std::ptrdiff_t i : idx) at[3 * static_cast<size_t>(i) + 1] = v;
+                sh.interpolate(at.data(), static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            } else {
+                sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            }
         }
     }
 }
@@ -1462,8 +1493,10 @@ size_t distinct_pairs(const std::vector<Part> &parts) {
     return n;
 }
 
-// `_plane_pays(k_p, k_m, d, parts, depth)`.
-bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, double depth) {
+// `_plane_pays(k_p, k_m, d, parts, depth, lone_worth)` (lone_worth < 0:
+// None).
+bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, double depth,
+                double lone_worth = -1.0) {
     double rho_max = -std::numeric_limits<double>::infinity(), s_max = rho_max;
     for (const Part &p : parts) {
         for (double v : p.r) rho_max = std::max(rho_max, v);
@@ -1472,6 +1505,46 @@ bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, do
     const double nodes = sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth);
     const double need = nodes * (depth < 0 ? SHEET_BUILD_WEIGHT : SHEET_HEIGHT_WEIGHT);
     const double w = SHEET_ROW_WORTH;
+    if (lone_worth >= 0.0) {
+        // momwire#1860 L2: the upper bound first (every row distinct)
+        double ub = 0.0;
+        bool all_lone = true;
+        for (const Part &p : parts) {
+            size_t n_z = 0;
+            for (const auto &z : p.zg) n_z += z.size();
+            size_t n_c = 0;
+            for (char c : p.credit) n_c += c ? 1 : 0;
+            all_lone = all_lone && n_c == p.H;
+            ub += static_cast<double>(n_z) *
+                  (static_cast<double>(n_c) * lone_worth + static_cast<double>(p.H - n_c) * w);
+        }
+        if (ub < need) return false;
+        const size_t n_all = distinct_pairs(parts);
+        size_t n_lone = 0;
+        if (all_lone) {
+            n_lone = n_all;
+        } else {
+            std::vector<Part> lone;
+            for (const Part &p : parts) {
+                std::vector<size_t> cols;
+                for (size_t h = 0; h < p.H; h++)
+                    if (p.credit[h]) cols.push_back(h);
+                if (cols.empty()) continue;
+                Part q;
+                q.G = p.G;
+                q.H = cols.size();
+                q.r.resize(q.G * q.H);
+                for (size_t g = 0; g < p.G; g++)
+                    for (size_t c = 0; c < cols.size(); c++) q.r[g * q.H + c] = p.r[g * p.H + cols[c]];
+                q.zg = p.zg;
+                q.sep = p.sep;
+                q.credit.assign(q.H, 1);
+                lone.push_back(std::move(q));
+            }
+            n_lone = lone.empty() ? 0 : distinct_pairs(lone);
+        }
+        return static_cast<double>(n_lone) * lone_worth + static_cast<double>(n_all - n_lone) * w >= need;
+    }
     double n_rows_ub = 0, n_rho_ub = 0;
     std::vector<std::vector<double>> credited;
     for (const Part &p : parts) {
@@ -1536,6 +1609,49 @@ bool prefix_pays(double k_p, cd k_m, double d, const std::vector<Fixed> &fixed, 
     return static_cast<double>(n_unique(pre)) * (1.0 + SHEET_ROW_WORTH) >= need;
 }
 
+// `_snap_heights(z)` (momwire#1860 L2): z with each run of values within
+// SHEET_HEIGHT_SNAP_ULPS ulp of its neighbour mapped to the run's most
+// frequent value (the least on a tie), and the runs as (rep, lo, hi),
+// ascending.
+void snap_heights(const std::vector<double> &z_in, std::vector<double> &snapped, std::vector<double> &rep,
+                  std::vector<double> &lo, std::vector<double> &hi) {
+    std::vector<double> z(z_in);
+    for (double &v : z) v += 0.0;
+    std::vector<double> vals(z);
+    std::sort(vals.begin(), vals.end());
+    vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+    snapped.assign(z.size(), 0.0);
+    rep.clear();
+    lo.clear();
+    hi.clear();
+    if (vals.empty()) return;
+    std::vector<int64_t> cnt(vals.size(), 0);
+    for (double v : z) cnt[static_cast<size_t>(std::lower_bound(vals.begin(), vals.end(), v) - vals.begin())]++;
+    std::vector<size_t> run(vals.size(), 0);
+    for (size_t i = 1; i < vals.size(); i++) {
+        const double a = std::fabs(vals[i]);
+        const double sp = std::nextafter(a, std::numeric_limits<double>::infinity()) - a;  // np.spacing
+        const double tol = SHEET_HEIGHT_SNAP_ULPS * sp;
+        run[i] = run[i - 1] + ((vals[i] - vals[i - 1]) > tol ? 1 : 0);
+    }
+    const size_t n_run = run.back() + 1;
+    rep.assign(n_run, 0.0);
+    lo.assign(n_run, 0.0);
+    hi.assign(n_run, 0.0);
+    std::vector<int64_t> best(n_run, -1);
+    for (size_t i = 0; i < vals.size(); i++) {
+        const size_t r = run[i];
+        if (i == 0 || run[i - 1] != r) lo[r] = vals[i];
+        hi[r] = vals[i];
+        if (cnt[i] > best[r]) {  // ascending values: the least wins a tie
+            best[r] = cnt[i];
+            rep[r] = vals[i];
+        }
+    }
+    for (size_t j = 0; j < z.size(); j++)
+        snapped[j] = rep[run[static_cast<size_t>(std::lower_bound(vals.begin(), vals.end(), z[j]) - vals.begin())]];
+}
+
 // `_height_reach(deep)`.
 double height_reach(double deep) {
     return std::pow(2.0, std::ceil(std::log2(std::max(deep, std::pow(2.0, -6.0)))));
@@ -1546,9 +1662,9 @@ struct Census {
     std::vector<std::pair<double, double>> heights;
 };
 
-// `_census(sides, height, k_p, k_m, a, skip)`.
+// `_census(sides, height, k_p, k_m, a, skip, recal)`.
 void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, double a,
-            const std::vector<double> &skip, Census &out) {
+            const std::vector<double> &skip, Census &out, bool recal = false) {
     struct Per {
         Grouped g;
         std::vector<double> fx;  // (n, 3)
@@ -1590,7 +1706,9 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             cnt[static_cast<size_t>(inv[i])]++;
         }
         std::vector<char> lone(nfx, 0);
-        if (!height) {
+        // momwire#1860 L2 (`recal`): a height's lone rows counted as a
+        // plane's are
+        if (!height || recal) {
             std::vector<double> x(nfx), y(nfx), fgx, fgy;
             for (size_t i = 0; i < nfx; i++) {
                 x[i] = fx[3 * i];
@@ -1632,7 +1750,7 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             auto it = cand.find(v);
             if (it == cand.end()) it = cand.emplace(v, std::array<double, 4>{0, 0, 0, 0}).first;
             it->second[0] += static_cast<double>(cnt[i] * static_cast<int64_t>(n_vary));
-            it->second[1] += n_lone[i] * static_cast<double>(P.g.gx.size());
+            it->second[1] += n_lone[i] * static_cast<double>(recal ? n_vary : P.g.gx.size());
             it->second[2] = std::max(it->second[2], far[i]);
             it->second[3] = std::max(it->second[3], sep);
         }
@@ -1653,7 +1771,9 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
         const double d = std::fabs(v);
         const double n_r = 2 + std::max(0.0, std::ceil(std::log2(std::max(rho_lb, d) / d)));
         const double n_s = std::max(1.0, std::ceil(std::log2(std::max(s_lb, d) / d)));
-        const double best = n_rows * w + (height ? 0.0 : n_rho);
+        // momwire#1860 L2 (`recal`): n_rho is the lone fixed nodes' rows
+        const double best = recal ? (n_rows - n_rho) * w + n_rho * SHEET_HEIGHT_LONE_WORTH
+                                  : n_rows * w + (height ? 0.0 : n_rho);
         if (best < n_r * (height ? 1.0 : n_s) * per_cell * weight ||
             (!height && best < sheet_nodes_to(k_p, k_m, d, rho_lb, s_lb, -1) * weight))
             continue;
@@ -1700,7 +1820,7 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             parts.push_back(std::move(pt));
         }
         const double depth = height ? height_reach(deep) : -1.0;
-        if (!plane_pays(k_p, k_m, d, parts, depth)) continue;
+        if (!plane_pays(k_p, k_m, d, parts, depth, recal ? SHEET_HEIGHT_LONE_WORTH : -1.0)) continue;
         if (height)
             out.heights.emplace_back(v, depth);
         else
@@ -1946,7 +2066,23 @@ SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, dou
     std::vector<double> skip = planes.planes;
     std::sort(skip.begin(), skip.end());
     std::vector<Cone> cones = cone_census(sides, k_p, k_m, wire_radius, skip);
-    census(sides, true, k_p, k_m, wire_radius, skip, heights);
+    std::vector<double> rep_v, rep_lo, rep_hi;
+    const bool recal = active_features().height_sheet_recal;
+    if (recal) {
+        // momwire#1860 L2: the height census on snapped heights
+        std::vector<double> zall;
+        for (const Side &sd : sides)
+            for (size_t i = 0; i < sd.above.size() / 3; i++) zall.push_back(sd.above[3 * i + 2]);
+        std::vector<double> snapped;
+        snap_heights(zall, snapped, rep_v, rep_lo, rep_hi);
+        std::vector<Side> h_sides = sides;
+        size_t off = 0;
+        for (Side &sd : h_sides)
+            for (size_t i = 0; i < sd.above.size() / 3; i++) sd.above[3 * i + 2] = snapped[off++];
+        census(h_sides, true, k_p, k_m, wire_radius, skip, heights, true);
+    } else {
+        census(sides, true, k_p, k_m, wire_radius, skip, heights);
+    }
     SheetPlan plan;
     plan.planes = planes.planes;
     std::sort(plan.planes.begin(), plan.planes.end());
@@ -1957,6 +2093,12 @@ SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, dou
     for (auto &p : hd) {
         plan.heights.push_back(p.first);
         plan.depths.push_back(p.second);
+        if (recal) {
+            // `np.searchsorted(rep, h)`: h is a run's representative
+            const size_t i = static_cast<size_t>(std::lower_bound(rep_v.begin(), rep_v.end(), p.first) - rep_v.begin());
+            plan.lo.push_back(rep_lo[i]);
+            plan.hi.push_back(rep_hi[i]);
+        }
     }
     return plan;
 }
