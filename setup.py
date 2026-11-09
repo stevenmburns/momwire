@@ -397,6 +397,8 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_remainder_inline.h",
     "src/momwire/_near_interface_core.h",
     "src/momwire/_near_interface_eval.h",
+    "src/momwire/_crossing_table_core.h",
+    "src/momwire/_crossing_table_inline.h",
     "src/momwire/_near_interface_point_core.h",
     "src/momwire/_near_buried_core.h",
     # The column machinery the near-interface core's twin reads (momwire#1512
@@ -601,6 +603,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_razor_crossing_core.cpp",
     "src/momwire/_near_interface_eval.cpp",
     "src/momwire/_near_interface_core.cpp",
+    # momwire#1860 L5's table, which the evaluator above reads when a fill
+    # has `crossing_table` on (its own TU, as in `_near_interface_accel`).
+    "src/momwire/_crossing_table_core.cpp",
     # The point-observer column twin, Python-free (momwire#1653), for the
     # buried near-field readout; its own TU (its own renamed xsf copy).
     "src/momwire/_near_interface_point_core.cpp",

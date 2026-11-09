@@ -605,8 +605,24 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
             if (src_below) {
                 // `cross_complete_block(ctx_r, A, ax)`: above test rows x below
                 // source columns.
+                //
+                // Ordering (momwire#1860 L5, `crossing_table`): Python's fused
+                // streamed route asks for this block's slow end terms in a
+                // prepass BEFORE its main tiles (`_FusedEnds._slow_prepass`),
+                // while this route forms them after `main_sandwich`. Whether a
+                // twin call reads the crossing table depends on whether an
+                // earlier call in the fill already took it, so the end terms
+                // must decide on the state the main tiles started from, not
+                // the one they left: `CrossingEndsFirst` restores it around
+                // them. In the fill's first such block that state is "not
+                // taken", so the end terms weigh their own rows, as Python's
+                // prepass does. With the feature off nothing reads it.
+                const bool taken_before = ni_eval::crossing_table_taken();
                 t = main_sandwich(c, be, r, A, ax);
-                add_end_terms<RazorPolicy>(c, be, r, A, ax, true, t);
+                {
+                    const ni_eval::CrossingEndsFirst ends_first(taken_before);
+                    add_end_terms<RazorPolicy>(c, be, r, A, ax, true, t);
+                }
             } else {
                 // `cross_complete_block_reversed(ctx_r, P, ax)`: the main
                 // sandwich over (above source Q = ax, below test P),
