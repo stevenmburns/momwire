@@ -2319,6 +2319,10 @@ namespace {
 
 constexpr int64_t REMAINDER_QP_CAP = 192;          // `_REMAINDER_QP_CAP`
 constexpr double REMAINDER_GRADED_EDGE_TOL = 1e-9;  // `_REMAINDER_GRADED_EDGE_TOL`
+// momwire#1860 B1 (`crossing_above_rule`): `_below_interface._B1_MIN_ABOVE_SEGS`
+// and `bspline._B1_NODE_REACH`
+constexpr size_t B1_MIN_ABOVE_SEGS = 64;
+constexpr double B1_NODE_REACH = 2.0;
 constexpr double GRADED_SIGMA = 0.25;               // `_remainder_graded.SIGMA`
 constexpr int64_t GRADED_N_PANEL = 8;               // `N_PANEL`
 constexpr double GRADED_SCALE_FLOOR = 1e-6;         // `SCALE_FLOOR`
@@ -4278,7 +4282,263 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     const size_t Q = static_cast<size_t>(q);
     // the above/above remainder, field form (`_field_galerkin_block` over
     // `remainder_field_proj` on the above grid)
-    if (!a_idx.empty()) {
+    // momwire#1860 B1 (`crossing_above_rule`, off unless asked): a crossing
+    // deck with at least `_B1_MIN_ABOVE_SEGS` above segments fills its
+    // above/above remainder at the solver's above-ground rule -- the base
+    // order and #1189's raised pairs, plus the crossing node's band against
+    // the segments within `_B1_NODE_REACH` band lengths at the cross block's
+    // order (`_crossing_above_remainder_rule`) -- on a grid that costs no
+    // more than the shipped route's (`crossing_above_grid`), then the pair
+    // correction into a side store subtracted last
+    // (`_crossing_above_remainder`). A deck the grid rule declines takes the
+    // shipped route below.
+    bool b1 = false;
+    if (ni_eval::active_features().crossing_above_rule && crossing && a_idx.size() >= B1_MIN_ABOVE_SEGS) {
+        const int64_t q1 = n_qp_sommerfeld, q_node = q;
+        const int64_t n_a = static_cast<int64_t>(a_idx.size());
+        std::vector<double> sl, sr;
+        for (int64_t s2 : a_idx)
+            for (int c = 0; c < 3; c++) {
+                sl.push_back(g.seg_l[3 * static_cast<size_t>(s2) + c]);
+                sr.push_back(g.seg_r[3 * static_cast<size_t>(s2) + c]);
+            }
+        std::vector<int64_t> I, J, Qp;
+        raised_pairs_on(sl, sr, n_a, gz, q1, REMAINDER_GRADED_C, REMAINDER_GRADED_EDGE_TOL, np, I, J, Qp);
+        // the segments at the crossing node, and those within the reach
+        const double PLANE_TOL = 1e-12;  // `_crossing_fill._PLANE_TOL`
+        std::vector<std::array<double, 3>> node;
+        for (int pass = 0; pass < 2; pass++)
+            for (int64_t i = 0; i < n_a; i++) {
+                const double *e = pass == 0 ? &sl[3 * i] : &sr[3 * i];
+                if (std::fabs(e[2] - gz) <= PLANE_TOL) node.push_back({e[0], e[1], e[2]});
+            }
+        std::sort(node.begin(), node.end());
+        node.erase(std::unique(node.begin(), node.end()), node.end());
+        std::vector<int64_t> band, near;
+        if (!node.empty()) {
+            std::vector<double> dist(static_cast<size_t>(n_a));
+            const auto dmin = [&](const double *p) {
+                double m = std::numeric_limits<double>::infinity();
+                for (const auto &nd3 : node) {
+                    const double d0 = p[0] - nd3[0], d1 = p[1] - nd3[1], d2 = p[2] - nd3[2];
+                    m = std::min(m, std::sqrt((d0 * d0 + d1 * d1) + d2 * d2));
+                }
+                return m;
+            };
+            for (int64_t i = 0; i < n_a; i++) dist[static_cast<size_t>(i)] = std::min(dmin(&sl[3 * i]), dmin(&sr[3 * i]));
+            double hmax = -std::numeric_limits<double>::infinity();
+            for (int64_t i = 0; i < n_a; i++) {
+                const double h = g.h_per_seg[static_cast<size_t>(a_idx[static_cast<size_t>(i)])];
+                if (dist[static_cast<size_t>(i)] <= h + PLANE_TOL) {
+                    band.push_back(i);
+                    hmax = std::max(hmax, h);
+                }
+            }
+            if (!band.empty()) {
+                const double reach = B1_NODE_REACH * hmax;
+                for (int64_t i = 0; i < n_a; i++)
+                    if (dist[static_cast<size_t>(i)] <= reach + PLANE_TOL) near.push_back(i);
+            }
+        }
+        if (!band.empty() && q_node > q1) {
+            // one entry per pair, at the larger order, sorted by (I, J)
+            std::map<std::pair<int64_t, int64_t>, int64_t> pq;
+            const auto put = [&](int64_t i, int64_t j, int64_t qq) {
+                auto it = pq.find({i, j});
+                if (it == pq.end())
+                    pq.emplace(std::make_pair(i, j), qq);
+                else
+                    it->second = std::max(it->second, qq);
+            };
+            for (size_t t = 0; t < I.size(); t++) put(I[t], J[t], Qp[t]);
+            for (int64_t bi : band)
+                for (int64_t nj : near) {
+                    put(bi, nj, q_node);
+                    put(nj, bi, q_node);
+                }
+            I.clear();
+            J.clear();
+            Qp.clear();
+            for (const auto &kv : pq) {
+                I.push_back(kv.first.first);
+                J.push_back(kv.first.second);
+                Qp.push_back(kv.second);
+            }
+        }
+        std::vector<double> obs_1, t_1, W_1;
+        buried_nodes(g, a_idx, q1, nd, obs_1, t_1, W_1);
+        // every point the grid reads take (None: a pair on graded panels)
+        bool reads_ok = true;
+        std::vector<double> reads(obs_1);
+        for (int64_t qq : Qp) reads_ok = reads_ok && qq < REMAINDER_GRADED_MIN_Q;
+        if (reads_ok && !I.empty()) {
+            std::set<int64_t> orders(Qp.begin(), Qp.end());
+            for (int64_t qq : orders) {
+                std::set<int64_t> segs;
+                for (size_t t = 0; t < I.size(); t++)
+                    if (Qp[t] == qq) {
+                        segs.insert(I[t]);
+                        segs.insert(J[t]);
+                    }
+                std::vector<int64_t> gseg;
+                for (int64_t s2 : segs) gseg.push_back(a_idx[static_cast<size_t>(s2)]);
+                std::vector<double> rn, rt, rw;
+                buried_nodes(g, gseg, qq, nd, rn, rt, rw);
+                reads.insert(reads.end(), rn.begin(), rn.end());
+            }
+        }
+        // `crossing_above_grid`: decided on the deck, never the cache
+        const somm_core::Grid &G0 = somm_core::get_grid_lazy(bm.eps_t, bm.k_p, r1_above, omega, mu);
+        const size_t n_reg = G0.regions.size();
+        if (n_reg > somm_proj::MAX_REGIONS) throw FrontNotPorted("a grid layout past the view's regions");
+        size_t n_every = 0;
+        for (const auto &reg : G0.regions) n_every += static_cast<size_t>(reg.n_r * reg.n_th);
+        const auto n_unique_rows = [](const std::vector<double> &pts) {
+            std::set<std::array<uint64_t, 3>> u;
+            for (size_t i = 0; i < pts.size() / 3; i++) {
+                std::array<uint64_t, 3> k;
+                std::memcpy(k.data(), &pts[3 * i], sizeof k);
+                u.insert(k);
+            }
+            return u.size();
+        };
+        const double n_obs_a = static_cast<double>(obs_a.size() / 3);
+        if (!somm_core::census_pays(static_cast<double>(n_unique_rows(obs_a)) * n_obs_a, n_every)) {
+            std::vector<std::vector<uint8_t>> need = somm_core::all_nodes_of(G0);
+            somm_core::ensure_nodes(G0, need);
+            b1 = true;
+        } else if (reads_ok) {
+            // `proj_census(grid, reads, reads, gz)`
+            std::vector<std::vector<uint8_t>> need(n_reg);
+            double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+                dth[somm_proj::MAX_REGIONS];
+            const cdouble *vals[somm_proj::MAX_REGIONS];
+            std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+            somm_proj::NodeMarks marks;
+            marks.n_reg = n_reg;
+            for (size_t r = 0; r < n_reg; r++) {
+                const somm_core::GridRegion &reg = G0.regions[r];
+                r0[r] = reg.r0;
+                dr[r] = reg.dr;
+                th0[r] = reg.th0;
+                dth[r] = reg.dth;
+                vals[r] = reg.vals.data();
+                shape0[r] = 4;
+                nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+                nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+                need[r].assign(static_cast<size_t>(reg.n_r * reg.n_th), 0);
+                marks.m[r] = need[r].data();
+                marks.nR[r] = nr[r];
+                marks.nTh[r] = nth[r];
+            }
+            const somm_proj::GridView cv = somm_proj::build_grid_view(
+                G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near, r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+            const std::ptrdiff_t nrd = static_cast<std::ptrdiff_t>(reads.size() / 3);
+            if (somm_core::census_pays(static_cast<double>(n_unique_rows(reads)) * static_cast<double>(nrd),
+                                       somm_core::unfilled_nodes(G0)))
+                somm_core::field_proj_nodes(cv, nrd, nrd, reads.data(), reads.data(), gz, marks);
+            else
+                need = somm_core::all_nodes_of(G0);
+            somm_core::ensure_nodes(G0, need);
+            b1 = true;
+        }
+        if (b1) {
+            const size_t Q1 = static_cast<size_t>(q1);
+            double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+                dth[somm_proj::MAX_REGIONS];
+            const cdouble *vals[somm_proj::MAX_REGIONS];
+            std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+            for (size_t r = 0; r < n_reg; r++) {
+                const somm_core::GridRegion &reg = G0.regions[r];
+                r0[r] = reg.r0;
+                dr[r] = reg.dr;
+                th0[r] = reg.th0;
+                dth[r] = reg.dth;
+                vals[r] = reg.vals.data();
+                shape0[r] = 4;
+                nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+                nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+            }
+            somm_proj::GridView view = somm_proj::build_grid_view(G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near,
+                                                                  r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+            const std::vector<cdouble> far = somm_core::far_pack(G0);
+            somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+            const int64_t n_a = static_cast<int64_t>(a_idx.size());
+            const int64_t chunk = std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_a * q1 * q1, 1));
+            const size_t S = static_cast<size_t>(n_a) * Q1;
+            for (int64_t i0 = 0; i0 < n_a; i0 += chunk) {
+                const int64_t i1 = std::min(i0 + chunk, n_a);
+                const size_t m = static_cast<size_t>(i1 - i0) * Q1;
+                std::vector<cdouble> proj(m * S);
+                somm_core::field_proj_batch(view, n_reg, static_cast<std::ptrdiff_t>(m), static_cast<std::ptrdiff_t>(S),
+                                            &obs_1[3 * static_cast<size_t>(i0) * Q1], &t_1[3 * static_cast<size_t>(i0) * Q1],
+                                            obs_1.data(), t_1.data(), gz, bm.k_p, proj.data(), 0, true);
+                std::vector<double> W_rows(static_cast<size_t>(nd) * m);
+                for (int p = 0; p < nd; p++)
+                    std::copy(W_1.begin() + (static_cast<std::ptrdiff_t>(p) * n_a + i0) * q1,
+                              W_1.begin() + (static_cast<std::ptrdiff_t>(p) * n_a + i1) * q1,
+                              W_rows.begin() + static_cast<std::ptrdiff_t>(p) * (i1 - i0) * q1);
+                mw_fg::Args args;
+                args.pj = proj.data();
+                args.wo = W_rows.data();
+                args.ws = W_1.data();
+                args.pl = b.polys.data();
+                args.ss = b.supp_seg.data();
+                args.po = pos_a.data();
+                args.ps = pos_a.data();
+                args.P = nd;
+                args.nc = i1 - i0;
+                args.q = q1;
+                args.ns = n_a;
+                args.nb = n_basis;
+                args.A = nd;
+                args.i0 = i0;
+                args.q_rows = n_basis;
+                args.Qp = Z.data();
+                args.sr = n_basis;
+                args.sc = 1;
+                args.fused = true;
+                args.scale = -1.0;
+                args.lanes = true;
+                mw_fg::assemble(args);
+            }
+            // the raised pairs' corrections, into a side store over their
+            // entries (`_remainder_pair_entries`), subtracted after the block
+            std::vector<int64_t> gI, gJ;
+            for (size_t t = 0; t < I.size(); t++) {
+                gI.push_back(a_idx[static_cast<size_t>(I[t])]);
+                gJ.push_back(a_idx[static_cast<size_t>(J[t])]);
+            }
+            if (!gI.empty()) {
+                std::vector<std::vector<int64_t>> wings(static_cast<size_t>(N));
+                for (int64_t m = 0; m < n_basis; m++)
+                    for (int a = 0; a < nd; a++) {
+                        bool real = false;
+                        for (int p = 0; p < nd; p++)
+                            real = real || b.polys[static_cast<size_t>((m * nd + a) * nd + p)] != 0.0;
+                        if (real)
+                            wings[static_cast<size_t>(b.supp_seg[static_cast<size_t>(m * nd + a)])].push_back(m * nd + a);
+                    }
+                std::vector<int64_t> ex;
+                for (size_t t = 0; t < gI.size(); t++)
+                    for (const int64_t u : wings[static_cast<size_t>(gI[t])])
+                        for (const int64_t v : wings[static_cast<size_t>(gJ[t])]) ex.push_back((u / nd) * n_basis + v / nd);
+                std::sort(ex.begin(), ex.end());
+                ex.erase(std::unique(ex.begin(), ex.end()), ex.end());
+                std::vector<cdouble> side(ex.size(), cdouble(0.0, 0.0));
+                const auto at = [&](int64_t m, int64_t n2) -> cdouble & {
+                    const int64_t f = m * n_basis + n2;
+                    return side[static_cast<size_t>(std::lower_bound(ex.begin(), ex.end(), f) - ex.begin())];
+                };
+                remainder_pair_correction(at, g, b, gz, bm.k_p, view, G0, gI, gJ, Qp, n_qp_sommerfeld, np);
+                for (size_t t = 0; t < ex.size(); t++) {
+                    cdouble &zz = Z[static_cast<size_t>(ex[t])];
+                    zz = cdouble(zz.real() - side[t].real(), zz.imag() - side[t].imag());
+                }
+            }
+        }
+    }
+    if (!a_idx.empty() && !b1) {
         // the lazy view (momwire#1512): only the nodes the remainder reads
         // over every above node pair, as `lazy_above_grid` fills them
         const somm_core::Grid &G0 = somm_core::get_grid_lazy(bm.eps_t, bm.k_p, r1_above, omega, mu);
