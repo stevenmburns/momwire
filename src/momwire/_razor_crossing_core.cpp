@@ -606,7 +606,14 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
                 // `cross_complete_block(ctx_r, A, ax)`: above test rows x below
                 // source columns.
                 t = main_sandwich(c, be, r, A, ax);
-                add_end_terms<RazorPolicy>(c, be, r, A, ax, true, t);
+                {
+                    // momwire#1860 L5 (MOMWIRE_EFHW_TEST): Python's fused
+                    // streamed route asks this block's slow ends' tables
+                    // BEFORE the main tiles (`_FusedEnds._slow_prepass`), so
+                    // they decide as calls made before the table was taken
+                    const ni_eval::Feat1860Pre pre;
+                    add_end_terms<RazorPolicy>(c, be, r, A, ax, true, t);
+                }
             } else {
                 // `cross_complete_block_reversed(ctx_r, P, ax)`: the main
                 // sandwich over (above source Q = ax, below test P),

@@ -311,6 +311,15 @@ if(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # bs2's answers to the NEC-4.2 slot's run half (momwire#1607 Phase C1)
   list(APPEND MW_CORE_SOURCES ${MW_SRC}/_bspline_nec4_run_core.cpp)
 endif()
+# momwire#1860 MEASUREMENT build, never shipped: -DMW_EFHW_TEST=ON compiles
+# the opt-in features L1 factored_columns, L2 height_sheet_recal, L5
+# crossing_table and B1 crossing_above_rule into the C++ route, on in every
+# buried fill. Off (the default) the sources compile as they always have.
+option(MW_EFHW_TEST "momwire#1860 measurement build (L1, L2, L5, B1 always on)" OFF)
+if(MW_EFHW_TEST)
+  list(APPEND MW_CORE_SOURCES ${MW_SRC}/_crossing_table_core.cpp)
+  add_compile_definitions(MOMWIRE_EFHW_TEST=1)
+endif()
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
 # `mw_core_serial`, the same sources with `mw` renamed `mws` and no OpenMP
 # runtime at all (`omp simd` stays: -fopenmp-simd / MSVC's simd no-ops), so a
@@ -363,7 +372,8 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   somm_trans=mws_somm_trans  # the transmitted table's (momwire#1718 S12)
   ni_point=mws_ni_point near_buried=mws_near_buried  # the buried near-field readout (momwire#1653)
   offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym  # bs2's (momwire#1517)
-  mw_fg=mws_fg)  # the field-form assembler's inline text: one copy per runtime
+  mw_fg=mws_fg  # the field-form assembler's inline text: one copy per runtime
+  mw1860=mws_mw1860)  # the crossing table's inline text (momwire#1860, MW_EFHW_TEST)
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")

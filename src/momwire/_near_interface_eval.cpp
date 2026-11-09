@@ -7,6 +7,9 @@
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
 #include "_somm_grid_core.h"   // the executable's store (disk_read / disk_write)
 #include "_mw_times.h"         // MOMWIRE_TIMES' ground counts
+#ifdef MOMWIRE_EFHW_TEST
+#include "_crossing_table_core.h"  // momwire#1860 L5 (measurement build)
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +45,9 @@ constexpr int COLUMN_P = 0;
 constexpr double DETOUR = 2.0;
 constexpr double LAM_MULT = 8.0;
 constexpr int64_t KEY_RPOW[N_KEYS] = {1, 1, 1, 2, 2, 2};
+// momwire#1860 L2 (`_SHEET_HEIGHT_LONE_WORTH`, `_SHEET_HEIGHT_SNAP_ULPS`)
+constexpr double SHEET_HEIGHT_LONE_WORTH = 1.0 / 10.0;
+constexpr int SHEET_HEIGHT_SNAP_ULPS = 4;
 
 uint64_t bits(double x) {
     uint64_t u;
@@ -64,6 +70,13 @@ const std::vector<double> &gw24() {
         return b;
     }();
     return w;
+}
+
+// A row's z on height k of the plan: `z == h`, or with momwire#1860 L2's
+// windows `lo <= z <= hi` (`_on_window`).
+bool on_height(const SheetPlan &plan, size_t k, double z) {
+    if (plan.lo.empty()) return z == plan.heights[k];
+    return z >= plan.lo[k] && z <= plan.hi[k];
 }
 
 // CPython's abs(complex): hypot.
@@ -639,9 +652,11 @@ class ConeSheet {
                 i++;
             }
         std::vector<cd> vals(m * N_KEYS);
+        // `_columns_lanes_kw()`: the factored route under momwire#1860 L1
         ni_core::six_columns(k_p_, k_m_, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc), z.data(),
                              zq.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P, DETOUR, n_threads,
-                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data());
+                             gx24().data(), gw24().data(), 24, 0, nullptr, vals.data(), true, true,
+                             feat1860().l1);
         // `vals[:, cols] *= f`, f = R ** pw with R = hypot(u, z + d) (numpy's
         // complex by real-as-complex product: each part one rounding).
         for (size_t c = 0, i = 0; c < nc; c++)
@@ -734,6 +749,148 @@ ConeSheet &cone_sheet(double k_p, cd k_m, const Cone &c, double beta, double a, 
 // The column twin over a row set (`_column_twin`, `_column_blocks`,
 // `_refuse_bad_members`).
 
+// The twin itself (`near_interface_six_columns` with `_columns_lanes_kw()`):
+// the factored route under momwire#1860 L1.
+void twin_call(const Evaluator &ev, const std::vector<double> &rho_c, const std::vector<std::ptrdiff_t> &offsets,
+               const std::vector<double> &zs, const std::vector<double> &zps, ni_core::ColumnCache *cache, cd *vals) {
+    ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(rho_c.size()),
+                         zs.data(), zps.data(), static_cast<std::ptrdiff_t>(zs.size()), LAM_MULT, COLUMN_P, DETOUR,
+                         ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache, vals, true, true,
+                         feat1860().l1);
+}
+
+#ifdef MOMWIRE_EFHW_TEST
+// momwire#1860 L5 (`crossing_table`): `_twin_columns`' table, its constants
+// and its cache, step for step.
+constexpr double CT_D = 0.01, CT_ZFAC = 0.5;
+constexpr double CT_EXT[3] = {0.5, 0.25, 0.06};
+constexpr double CT_SETUP = 68.0, CT_NODE = 1.1;
+struct CtStats {
+    long long table_rows = 0, kept_rows = 0, tables_built = 0, fills_taken = 0, calls = 0;
+};
+CtStats g_ct_stats;
+std::map<std::tuple<double, double, double>, std::vector<cd>> g_ct_tables;
+
+// `crossing_table_grid(k_p)`.
+void ct_grid(double k_p, double h[3], std::ptrdiff_t n[3]) {
+    const double lam0 = 2.0 * M_PI / k_p;
+    const double step[3] = {CT_D, CT_D, CT_D * CT_ZFAC};
+    for (int a = 0; a < 3; a++) {
+        n[a] = static_cast<std::ptrdiff_t>(std::nearbyint(CT_EXT[a] / step[a])) + 1;
+        h[a] = step[a] * lam0;
+    }
+}
+
+const std::vector<cd> &ct_table(const Evaluator &ev, const double h[3], const std::ptrdiff_t n[3]) {
+    const auto key = std::make_tuple(ev.k_p, ev.k_m.real(), ev.k_m.imag());
+    auto it = g_ct_tables.find(key);
+    if (it == g_ct_tables.end()) {
+        std::vector<cd> vals(static_cast<size_t>(n[0] * n[1] * n[2]) * 6);
+        ni_core::crossing_table_build(ev.k_p, ev.k_m, h, n, LAM_MULT, COLUMN_P, DETOUR, ev.n_threads,
+                                      gx24().data(), gw24().data(), 24, ev.cancel_flag, vals.data());
+        g_ct_stats.tables_built++;
+        it = g_ct_tables.emplace(key, std::move(vals)).first;
+    }
+    return it->second;
+}
+#endif
+
+// `_twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache)`: the
+// twin, or with momwire#1860 L5 taken in this fill the table for the members
+// inside it and the twin for the rest.
+void twin_columns(const Evaluator &ev, const std::vector<double> &rho_c, const std::vector<std::ptrdiff_t> &offsets,
+                  const std::vector<double> &zs, const std::vector<double> &zps, ni_core::ColumnCache *cache,
+                  cd *vals) {
+#ifdef MOMWIRE_EFHW_TEST
+    Feat1860 &ft = feat1860();
+    if (!ft.l5) return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+    g_ct_stats.calls++;
+    double h[3];
+    std::ptrdiff_t n[3];
+    ct_grid(ev.k_p, h, n);
+    double lim[3];
+    for (int a = 0; a < 3; a++) lim[a] = h[a] * static_cast<double>(n[a] - 1);
+    const size_t nc = rho_c.size(), m = zs.size();
+    std::vector<char> inside(m, 0);
+    std::vector<int64_t> cnt_in(nc, 0);
+    long long n_in = 0;
+    for (size_t c = 0; c < nc; c++)
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++) {
+            const bool in = rho_c[c] <= lim[0] && zs[static_cast<size_t>(j)] <= lim[1] &&
+                            -zps[static_cast<size_t>(j)] <= lim[2];
+            inside[static_cast<size_t>(j)] = in;
+            if (in) {
+                cnt_in[c]++;
+                n_in++;
+            }
+        }
+    if (std::getenv("MW1860_TRACE")) {
+        long long cols_in = 0;
+        for (size_t c = 0; c < nc; c++) cols_in += cnt_in[c] > 0;
+        std::fprintf(stderr, "mw1860 call m=%zu nc=%zu n_in=%lld cols_in=%lld taken=%d pre=%d\n", m, nc, n_in, cols_in,
+                     int(ft.ct_taken), int(ft.ct_pre));
+    }
+    if (!ft.ct_taken || ft.ct_pre) {
+        double cost = 0.0;
+        if (n_in) {
+            long long cols_in = 0;
+            for (size_t c = 0; c < nc; c++) cols_in += cnt_in[c] > 0;
+            cost = static_cast<double>(cols_in) * CT_SETUP + static_cast<double>(n_in);
+        }
+        if (n_in && cost >= static_cast<double>(n[0]) * CT_SETUP +
+                                CT_NODE * static_cast<double>(n[0] * n[1] * n[2])) {
+            if (!ft.ct_taken) g_ct_stats.fills_taken++;
+            ft.ct_taken = true;
+        } else {
+            g_ct_stats.kept_rows += n_in;
+            return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+        }
+    }
+    if (!n_in) return twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+    const std::vector<cd> &tab = ct_table(ev, h, n);
+    std::vector<double> ir, iz, izp;
+    std::vector<size_t> ipos;
+    ir.reserve(static_cast<size_t>(n_in));
+    for (size_t c = 0; c < nc; c++)
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++)
+            if (inside[static_cast<size_t>(j)]) {
+                ir.push_back(rho_c[c]);
+                iz.push_back(zs[static_cast<size_t>(j)]);
+                izp.push_back(zps[static_cast<size_t>(j)]);
+                ipos.push_back(static_cast<size_t>(j));
+            }
+    std::vector<cd> got(ir.size() * N_KEYS);
+    ni_core::crossing_table_lookup(ev.k_p, ev.k_m, h, n, tab.data(), ir.data(), iz.data(), izp.data(),
+                                   static_cast<std::ptrdiff_t>(ir.size()), ev.n_threads, got.data());
+    for (size_t r = 0; r < ipos.size(); r++)
+        for (int k = 0; k < N_KEYS; k++) vals[ipos[r] * N_KEYS + k] = got[r * N_KEYS + k];
+    g_ct_stats.table_rows += n_in;
+    if (static_cast<size_t>(n_in) == m) return;
+    // the rest: their columns (those with a member left), in order
+    std::vector<double> r2, z2, zp2;
+    std::vector<std::ptrdiff_t> off2(1, 0);
+    std::vector<size_t> rpos;
+    for (size_t c = 0; c < nc; c++) {
+        const std::ptrdiff_t left = (offsets[c + 1] - offsets[c]) - cnt_in[c];
+        if (left <= 0) continue;
+        r2.push_back(rho_c[c]);
+        for (std::ptrdiff_t j = offsets[c]; j < offsets[c + 1]; j++)
+            if (!inside[static_cast<size_t>(j)]) {
+                z2.push_back(zs[static_cast<size_t>(j)]);
+                zp2.push_back(zps[static_cast<size_t>(j)]);
+                rpos.push_back(static_cast<size_t>(j));
+            }
+        off2.push_back(static_cast<std::ptrdiff_t>(z2.size()));
+    }
+    std::vector<cd> rest(z2.size() * N_KEYS);
+    twin_call(ev, r2, off2, z2, zp2, cache, rest.data());
+    for (size_t r = 0; r < rpos.size(); r++)
+        for (int k = 0; k < N_KEYS; k++) vals[rpos[r] * N_KEYS + k] = rest[r * N_KEYS + k];
+#else
+    twin_call(ev, rho_c, offsets, zs, zps, cache, vals);
+#endif
+}
+
 void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t *labels,
                  ni_core::ColumnCache *cache, Six *out) {
     if (m == 0) return;
@@ -785,10 +942,7 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
             }
     }
     std::vector<cd> vals(m * N_KEYS);
-    ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(nc),
-                         zs.data(), zps.data(), static_cast<std::ptrdiff_t>(m), LAM_MULT, COLUMN_P,
-                         DETOUR, ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache,
-                         vals.data());
+    twin_columns(ev, rho_c, offsets, zs, zps, cache, vals.data());
     for (size_t j = 0; j < m; j++)
         for (int k = 0; k < N_KEYS; k++) out[member_order[j]][k] = vals[j * N_KEYS + k];
 }
@@ -847,6 +1001,36 @@ std::string py_repr(double x) {
     }
     return neg ? "-" + out : out;
 }
+
+Feat1860 &feat1860() {
+    static Feat1860 f;
+    return f;
+}
+
+#ifdef MOMWIRE_EFHW_TEST
+namespace {
+// MW1860_STATS=1: the route proof (`_CROSSING_TABLE_STATS`) on stderr at exit.
+struct StatsAtExit {
+    ~StatsAtExit() {
+        const char *v = std::getenv("MW1860_STATS");
+        if (v == nullptr || *v == '\0' || std::string(v) == "0") return;
+        std::fprintf(stderr, "mw1860: table_rows=%lld kept_rows=%lld tables_built=%lld fills_taken=%lld calls=%lld\n",
+                     g_ct_stats.table_rows, g_ct_stats.kept_rows, g_ct_stats.tables_built, g_ct_stats.fills_taken,
+                     g_ct_stats.calls);
+    }
+} g_stats_at_exit;
+}  // namespace
+#endif
+
+Feat1860Scope::Feat1860Scope() : saved_(feat1860()) {
+#ifdef MOMWIRE_EFHW_TEST
+    Feat1860 &f = feat1860();
+    f.l1 = f.l2 = f.l5 = true;
+    f.ct_taken = false;  // one fill, one `_CrossingFill`
+#endif
+}
+
+Feat1860Scope::~Feat1860Scope() { feat1860() = saved_; }
 
 Memo::Memo() : cache(new ni_core::ColumnCache(16u << 20)) {}
 
@@ -976,7 +1160,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             for (size_t i = 0; i < m; i++) {
                 const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
                 const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
-                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i] &&
+                if (on_height(*plan, h, z) && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i] &&
                     cone[i] < 0)
                     take[i] = 1;
             }
@@ -1014,7 +1198,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             double ext = height ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
             for (size_t i = 0; i < m; i++) {
                 const double col = rows[3 * i + (height ? 1 : 2)];
-                bool sel = col == v;
+                bool sel = height ? on_height(*plan, k, col) : col == v;
                 if (height)
                     sel = sel && take[i] && !on_plane[i] && cone[i] < 0;
                 else
@@ -1034,7 +1218,15 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             sh.cover(rho_max, s_max, ev.n_threads);
             store_sheet(sh);
             static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
-            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
+            if (height && !plan->lo.empty() && plan->lo[k] != plan->hi[k]) {
+                // momwire#1860 L2: a snapped window's rows read AT its height
+                std::vector<double> at(rows, rows + 3 * m);
+                for (std::ptrdiff_t i : idx) at[3 * static_cast<size_t>(i) + 1] = v;
+                sh.interpolate(at.data(), static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out),
+                               ev.n_threads);
+            } else {
+                sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, reinterpret_cast<cd *>(out), ev.n_threads);
+            }
         }
     }
     // `_serve_from_cones`: the full surface at beta_lo, plus the row's linear
@@ -1146,7 +1338,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             for (size_t i = 0; i < m; i++) {
                 const double rho = rows[3 * i], z = rows[3 * i + 1], zp = rows[3 * i + 2];
                 const bool ok = rho >= 0.0 && std::isfinite(rho) && std::isfinite(z) && std::isfinite(zp);
-                if (z == plan->heights[h] && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
+                if (on_height(*plan, h, z) && ok && zp <= 0.0 && zp >= -plan->depths[h] && !on_plane[i])
                     take[i] = 1;
             }
         for (size_t i = 0; i < m; i++) any |= take[i] != 0;
@@ -1169,7 +1361,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             double ext = height ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
             for (size_t i = 0; i < m; i++) {
                 const double col = rows[3 * i + (height ? 1 : 2)];
-                bool sel = col == v;
+                bool sel = height ? on_height(*plan, k, col) : col == v;
                 sel = height ? (sel && take[i] && !on_plane[i]) : (sel && on_plane[i]);
                 if (!sel) continue;
                 idx.push_back(static_cast<std::ptrdiff_t>(i));
@@ -1185,7 +1377,14 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
             PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth, true);
             sh.cover(rho_max, s_max, ev.n_threads);
             store_sheet(sh);
-            sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            if (height && !plan->lo.empty() && plan->lo[k] != plan->hi[k]) {
+                // momwire#1860 L2: a snapped window's rows read AT its height
+                std::vector<double> at(rows, rows + 3 * m);
+                for (std::ptrdiff_t i : idx) at[3 * static_cast<size_t>(i) + 1] = v;
+                sh.interpolate(at.data(), static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            } else {
+                sh.interpolate(rows, static_cast<std::ptrdiff_t>(m), idx, out, ev.n_threads);
+            }
         }
     }
 }
@@ -1432,8 +1631,10 @@ size_t distinct_pairs(const std::vector<Part> &parts) {
     return n;
 }
 
-// `_plane_pays(k_p, k_m, d, parts, depth)`.
-bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, double depth) {
+// `_plane_pays(k_p, k_m, d, parts, depth, lone_worth)` (lone_worth < 0:
+// None).
+bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, double depth,
+                double lone_worth = -1.0) {
     double rho_max = -std::numeric_limits<double>::infinity(), s_max = rho_max;
     for (const Part &p : parts) {
         for (double v : p.r) rho_max = std::max(rho_max, v);
@@ -1442,6 +1643,46 @@ bool plane_pays(double k_p, cd k_m, double d, const std::vector<Part> &parts, do
     const double nodes = sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth);
     const double need = nodes * (depth < 0 ? SHEET_BUILD_WEIGHT : SHEET_HEIGHT_WEIGHT);
     const double w = SHEET_ROW_WORTH;
+    if (lone_worth >= 0.0) {
+        // momwire#1860 L2: the upper bound first (every row distinct)
+        double ub = 0.0;
+        bool all_lone = true;
+        for (const Part &p : parts) {
+            size_t n_z = 0;
+            for (const auto &z : p.zg) n_z += z.size();
+            size_t n_c = 0;
+            for (char c : p.credit) n_c += c ? 1 : 0;
+            all_lone = all_lone && n_c == p.H;
+            ub += static_cast<double>(n_z) *
+                  (static_cast<double>(n_c) * lone_worth + static_cast<double>(p.H - n_c) * w);
+        }
+        if (ub < need) return false;
+        const size_t n_all = distinct_pairs(parts);
+        size_t n_lone = 0;
+        if (all_lone) {
+            n_lone = n_all;
+        } else {
+            std::vector<Part> lone;
+            for (const Part &p : parts) {
+                std::vector<size_t> cols;
+                for (size_t h = 0; h < p.H; h++)
+                    if (p.credit[h]) cols.push_back(h);
+                if (cols.empty()) continue;
+                Part q;
+                q.G = p.G;
+                q.H = cols.size();
+                q.r.resize(q.G * q.H);
+                for (size_t g = 0; g < p.G; g++)
+                    for (size_t c = 0; c < cols.size(); c++) q.r[g * q.H + c] = p.r[g * p.H + cols[c]];
+                q.zg = p.zg;
+                q.sep = p.sep;
+                q.credit.assign(q.H, 1);
+                lone.push_back(std::move(q));
+            }
+            n_lone = lone.empty() ? 0 : distinct_pairs(lone);
+        }
+        return static_cast<double>(n_lone) * lone_worth + static_cast<double>(n_all - n_lone) * w >= need;
+    }
     double n_rows_ub = 0, n_rho_ub = 0;
     std::vector<std::vector<double>> credited;
     for (const Part &p : parts) {
@@ -1506,6 +1747,49 @@ bool prefix_pays(double k_p, cd k_m, double d, const std::vector<Fixed> &fixed, 
     return static_cast<double>(n_unique(pre)) * (1.0 + SHEET_ROW_WORTH) >= need;
 }
 
+// `_snap_heights(z)` (momwire#1860 L2): z with each run of values within
+// SHEET_HEIGHT_SNAP_ULPS ulp of its neighbour mapped to the run's most
+// frequent value (the least on a tie), and the runs as (rep, lo, hi),
+// ascending.
+void snap_heights(const std::vector<double> &z_in, std::vector<double> &snapped, std::vector<double> &rep,
+                  std::vector<double> &lo, std::vector<double> &hi) {
+    std::vector<double> z(z_in);
+    for (double &v : z) v += 0.0;
+    std::vector<double> vals(z);
+    std::sort(vals.begin(), vals.end());
+    vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+    snapped.assign(z.size(), 0.0);
+    rep.clear();
+    lo.clear();
+    hi.clear();
+    if (vals.empty()) return;
+    std::vector<int64_t> cnt(vals.size(), 0);
+    for (double v : z) cnt[static_cast<size_t>(std::lower_bound(vals.begin(), vals.end(), v) - vals.begin())]++;
+    std::vector<size_t> run(vals.size(), 0);
+    for (size_t i = 1; i < vals.size(); i++) {
+        const double a = std::fabs(vals[i]);
+        const double sp = std::nextafter(a, std::numeric_limits<double>::infinity()) - a;  // np.spacing
+        const double tol = SHEET_HEIGHT_SNAP_ULPS * sp;
+        run[i] = run[i - 1] + ((vals[i] - vals[i - 1]) > tol ? 1 : 0);
+    }
+    const size_t n_run = run.back() + 1;
+    rep.assign(n_run, 0.0);
+    lo.assign(n_run, 0.0);
+    hi.assign(n_run, 0.0);
+    std::vector<int64_t> best(n_run, -1);
+    for (size_t i = 0; i < vals.size(); i++) {
+        const size_t r = run[i];
+        if (i == 0 || run[i - 1] != r) lo[r] = vals[i];
+        hi[r] = vals[i];
+        if (cnt[i] > best[r]) {  // ascending values: the least wins a tie
+            best[r] = cnt[i];
+            rep[r] = vals[i];
+        }
+    }
+    for (size_t j = 0; j < z.size(); j++)
+        snapped[j] = rep[run[static_cast<size_t>(std::lower_bound(vals.begin(), vals.end(), z[j]) - vals.begin())]];
+}
+
 // `_height_reach(deep)`.
 double height_reach(double deep) {
     return std::pow(2.0, std::ceil(std::log2(std::max(deep, std::pow(2.0, -6.0)))));
@@ -1516,9 +1800,9 @@ struct Census {
     std::vector<std::pair<double, double>> heights;
 };
 
-// `_census(sides, height, k_p, k_m, a, skip)`.
+// `_census(sides, height, k_p, k_m, a, skip, recal)`.
 void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, double a,
-            const std::vector<double> &skip, Census &out) {
+            const std::vector<double> &skip, Census &out, bool recal = false) {
     struct Per {
         Grouped g;
         std::vector<double> fx;  // (n, 3)
@@ -1560,7 +1844,8 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             cnt[static_cast<size_t>(inv[i])]++;
         }
         std::vector<char> lone(nfx, 0);
-        if (!height) {
+        // momwire#1860 L2 (`recal`, heights): lone as a plane's is
+        if (!height || recal) {
             std::vector<double> x(nfx), y(nfx), fgx, fgy;
             for (size_t i = 0; i < nfx; i++) {
                 x[i] = fx[3 * i];
@@ -1602,7 +1887,7 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             auto it = cand.find(v);
             if (it == cand.end()) it = cand.emplace(v, std::array<double, 4>{0, 0, 0, 0}).first;
             it->second[0] += static_cast<double>(cnt[i] * static_cast<int64_t>(n_vary));
-            it->second[1] += n_lone[i] * static_cast<double>(P.g.gx.size());
+            it->second[1] += n_lone[i] * static_cast<double>(recal ? n_vary : P.g.gx.size());
             it->second[2] = std::max(it->second[2], far[i]);
             it->second[3] = std::max(it->second[3], sep);
         }
@@ -1623,7 +1908,9 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
         const double d = std::fabs(v);
         const double n_r = 2 + std::max(0.0, std::ceil(std::log2(std::max(rho_lb, d) / d)));
         const double n_s = std::max(1.0, std::ceil(std::log2(std::max(s_lb, d) / d)));
-        const double best = n_rows * w + (height ? 0.0 : n_rho);
+        // momwire#1860 L2 (`recal`): n_rho is the lone fixed nodes' rows
+        const double best = recal ? (n_rows - n_rho) * w + n_rho * SHEET_HEIGHT_LONE_WORTH
+                                  : n_rows * w + (height ? 0.0 : n_rho);
         if (best < n_r * (height ? 1.0 : n_s) * per_cell * weight ||
             (!height && best < sheet_nodes_to(k_p, k_m, d, rho_lb, s_lb, -1) * weight))
             continue;
@@ -1670,7 +1957,7 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
             parts.push_back(std::move(pt));
         }
         const double depth = height ? height_reach(deep) : -1.0;
-        if (!plane_pays(k_p, k_m, d, parts, depth)) continue;
+        if (!plane_pays(k_p, k_m, d, parts, depth, recal ? SHEET_HEIGHT_LONE_WORTH : -1.0)) continue;
         if (height)
             out.heights.emplace_back(v, depth);
         else
@@ -1916,7 +2203,23 @@ SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, dou
     std::vector<double> skip = planes.planes;
     std::sort(skip.begin(), skip.end());
     std::vector<Cone> cones = cone_census(sides, k_p, k_m, wire_radius, skip);
-    census(sides, true, k_p, k_m, wire_radius, skip, heights);
+    std::vector<double> rep_v, rep_lo, rep_hi;
+    const bool recal = feat1860().l2;
+    if (recal) {
+        // momwire#1860 L2: the height census on snapped heights
+        std::vector<double> zall;
+        for (const Side &sd : sides)
+            for (size_t i = 0; i < sd.above.size() / 3; i++) zall.push_back(sd.above[3 * i + 2]);
+        std::vector<double> snapped;
+        snap_heights(zall, snapped, rep_v, rep_lo, rep_hi);
+        std::vector<Side> h_sides = sides;
+        size_t off = 0;
+        for (Side &sd : h_sides)
+            for (size_t i = 0; i < sd.above.size() / 3; i++) sd.above[3 * i + 2] = snapped[off++];
+        census(h_sides, true, k_p, k_m, wire_radius, skip, heights, true);
+    } else {
+        census(sides, true, k_p, k_m, wire_radius, skip, heights);
+    }
     SheetPlan plan;
     plan.planes = planes.planes;
     std::sort(plan.planes.begin(), plan.planes.end());
@@ -1927,6 +2230,12 @@ SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, dou
     for (auto &p : hd) {
         plan.heights.push_back(p.first);
         plan.depths.push_back(p.second);
+        if (recal) {
+            // `np.searchsorted(rep, h)`: h is a run's representative
+            const size_t i = static_cast<size_t>(std::lower_bound(rep_v.begin(), rep_v.end(), p.first) - rep_v.begin());
+            plan.lo.push_back(rep_lo[i]);
+            plan.hi.push_back(rep_hi[i]);
+        }
     }
     return plan;
 }

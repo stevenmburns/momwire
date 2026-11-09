@@ -50,6 +50,9 @@ struct SheetPlan {
     std::vector<double> heights, depths;  // sorted z > 0, each one's reach
     std::vector<Cone> cones;              // in the census's order
     double fold = 0.0;                    // the cones' rows' fold radius
+    // momwire#1860 L2 (`height_sheet_recal`, MOMWIRE_EFHW_TEST only): per
+    // height its snapped window [lo, hi]; empty is `z == h`.
+    std::vector<double> lo, hi;
     bool any() const { return !planes.empty() || !heights.empty() || !cones.empty(); }
 };
 
@@ -160,6 +163,36 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
 void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
                 const std::vector<double> &zs, int p, double u_max, int n_threads,
                 std::vector<double> &u_edges, std::vector<cd> &vals);
+
+// momwire#1860 MEASUREMENT build (MOMWIRE_EFHW_TEST; never shipped): the
+// opt-in features L1 `factored_columns`, L2 `height_sheet_recal` and L5
+// `crossing_table`, on for one fill as the Python solvers' `*_scope`s turn
+// them on around theirs (razor's `_assemble_Z_from_prepared`, bspline's
+// `_compute_Z_operator_buried`). Without the define every flag stays false
+// and the scope is a no-op: the shipped route, bit for bit.
+struct Feat1860 {
+    bool l1 = false, l2 = false, l5 = false;
+    bool ct_taken = false;  // `_CrossingFill.taken`
+    bool ct_pre = false;    // calls Python makes before the table's taking call
+};
+Feat1860 &feat1860();
+// A block whose table calls Python makes before the main tiles' (the fused
+// route's slow-end prepass): each decides as if the table were not yet taken.
+struct Feat1860Pre {
+    bool saved;
+    Feat1860Pre() : saved(feat1860().ct_pre) { feat1860().ct_pre = true; }
+    ~Feat1860Pre() { feat1860().ct_pre = saved; }
+};
+class Feat1860Scope {
+  public:
+    Feat1860Scope();
+    ~Feat1860Scope();
+    Feat1860Scope(const Feat1860Scope &) = delete;
+    Feat1860Scope &operator=(const Feat1860Scope &) = delete;
+
+  private:
+    Feat1860 saved_;
+};
 
 // Python's repr of a float (the refusals' numbers).
 std::string py_repr(double x);
