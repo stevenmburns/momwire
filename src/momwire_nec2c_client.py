@@ -360,6 +360,7 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             _mech.WIRE,
             *(f"{flag}={value}" for flag, value in pairs),
             *_mech.junction_rule_identity(),
+            *_mech.feature_identity(),
         ]
     )
 

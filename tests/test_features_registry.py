@@ -391,3 +391,29 @@ def test_the_exe_refuses_a_feature(tmp_path, var, name):
     )
     assert r.returncode == 0, r.stderr
     assert out.read_bytes()
+
+
+# --- the launchers' warm servers ------------------------------------------------
+
+
+def test_the_warm_server_keys_carry_the_features_on(no_features):
+    # A server inherits its spawning client's environment, so a warm one
+    # started with no feature must not answer a call that asks for one.
+    import momwire_eznec_client as ez
+    import momwire_nec2c_client as n2
+    import momwire_serve_client as mech
+
+    k_ez, k_n2 = ez.config_key(None, 900.0), n2.config_key([], 900.0)
+    no_features.setenv("MOMWIRE_X_CROSSING_TABLE", "0")
+    assert (ez.config_key(None, 900.0), n2.config_key([], 900.0)) == (k_ez, k_n2)
+    no_features.setenv("MOMWIRE_X_CROSSING_TABLE", " On ")
+    on_ez = ez.config_key(None, 900.0)
+    assert on_ez != k_ez and n2.config_key([], 900.0) != k_n2
+    no_features.setenv("MOMWIRE_RAZOR_CXX", "1")
+    assert ez.config_key(None, 900.0) not in (k_ez, on_ez)
+    assert mech.feature_identity() == ["feature=crossing_table", "feature=razor_cxx"]
+    # The clients' alias list is the registry's.
+    assert mech.FEATURE_ALIASES == {
+        a: f.name for f in F.FEATURES.values() for a in f.aliases
+    }
+    assert mech.FEATURE_ENV_PREFIX == F.ENV_PREFIX
