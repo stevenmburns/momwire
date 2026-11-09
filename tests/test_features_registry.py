@@ -12,7 +12,8 @@ What is held here:
 - a native feature outside its reach refuses, a Python one runs;
 - line 2 of a printout names the features that are on, and ONLY then: with
   every flag off the printout is the one the golden corpus froze;
-- a standalone executable refuses any feature, in the registry's sentence.
+- a standalone executable runs exactly the features it carries whose reach
+  covers its level, and refuses every other one in the registry's sentence.
 """
 
 from __future__ import annotations
@@ -93,11 +94,38 @@ def test_every_offered_feature_carries_its_front_end_fields():
             assert "(faster)" not in f.label, f
 
 
-def test_every_feature_is_below_the_executables():
-    # The executables' refusal is a generic scan, which is right only while
-    # no feature reaches an executable's level.
+def _exe_features():
+    """`EXE_FEATURES` in the executables' main: {name: reach}."""
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    table = re.search(r"const ExeFeature EXE_FEATURES\[\] = \{(.*?)\n\};", src, re.S)
+    assert table is not None
+    return {n: int(r) for n, r in re.findall(r'\{"([a-z0-9_]+)", (\d+)\}', table[1])}
+
+
+def test_the_executables_carry_exactly_the_features_that_reach_them():
+    # The executables refuse by a generic scan except for the features their
+    # C++ route carries (EXE_FEATURES), so a feature that reaches an
+    # executable's level must be in that table, at the registry's reach, and
+    # one in the table must reach one.
     first_exe = F._level("exe-nec5-bspline-razor-2p-windows")
-    assert all(f.reach < first_exe for f in F.FEATURES.values())
+    reaching = {n: f.reach for n, f in F.FEATURES.items() if f.reach >= first_exe}
+    assert _exe_features() == reaching
+
+
+def test_the_executables_levels_are_the_registrys():
+    # `exe_level()` in the executables' main, per build: each return's level
+    # numbers, in order, are the levels its comment names.
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    body = re.search(r"int exe_level\(\) \{(.*?)\n\}", src, re.S)
+    assert body is not None
+    ids = re.findall(r"exe-[a-z0-9-]+", body[1])
+    numbers = [
+        int(x)
+        for stmt in re.findall(r"return ([^;]*);", body[1])
+        for x in re.findall(r"\d+", stmt)
+    ]
+    assert [F._level(i) for i in ids] == numbers
+    assert set(ids) == {L.id for L in F.LEVELS if L.id.startswith("exe-")}
 
 
 def test_the_kwarg_overrides_the_env(no_features):
@@ -341,7 +369,9 @@ def test_the_exe_refusal_sentence_and_aliases_match_the_registry():
     # The word is spelled P%cthon there: the no-Python build carries no
     # "python" bytes (tests/test_standalone_nopython.py).
     sentence = F.EXE_REFUSAL.format(name="%s").replace("Python", "P%cthon")
-    assert f"\"{sentence}\\n\",\n                 name.c_str(), 'y');" in src
+    assert re.search(
+        re.escape(f'"{sentence}\\n",') + r"\s+name\.c_str\(\), 'y'\);", src
+    )
     assert 'prefix = "MOMWIRE_X_"' in src
     table = re.search(r"FEATURE_ALIASES\[\]\[2\] = \{(.*?)\n\};", src, re.S)
     assert table is not None
@@ -391,6 +421,40 @@ def test_the_exe_refuses_a_feature(tmp_path, var, name):
     )
     assert r.returncode == 0, r.stderr
     assert out.read_bytes()
+
+
+@pytest.mark.skipif(
+    not EXE, reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a built executable"
+)
+def test_the_exe_runs_the_features_it_carries(tmp_path):
+    # nec5-razor-2p's executable carries momwire#1860's levers: each runs,
+    # and line 2 names the ones on in registry order, as Python's stamp does
+    # (reach 8 covers the drop-in, so no "uncertified" either side).
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(F.ENV_PREFIX)
+        and k not in {a for f in F.FEATURES.values() for a in f.aliases}
+    }
+    out = tmp_path / "out.txt"
+    r = subprocess.run(
+        [EXE, str(DECK), str(out)], env=env, capture_output=True, text=True, timeout=120
+    )
+    assert r.returncode == 0, r.stderr
+    bare = out.read_bytes().decode("latin-1").splitlines()[1]
+    assert "+" not in bare
+    for name in ("crossing_table", "factored_columns"):
+        env[F.FEATURES[name].env] = "1"
+    out.unlink()
+    r = subprocess.run(
+        [EXE, str(DECK), str(out)], env=env, capture_output=True, text=True, timeout=120
+    )
+    assert r.returncode == 0, r.stderr
+    line2 = out.read_bytes().decode("latin-1").splitlines()[1]
+    # The basis field gives way to the tail as Python's does (79 columns).
+    tail = " +factored_columns+crossing_table"
+    assert line2.endswith(tail)
+    assert bare.split()[:2] == line2.split()[:2]
 
 
 # --- the launchers' warm servers ------------------------------------------------

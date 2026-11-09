@@ -45,9 +45,11 @@
 //   MW_EXE_PYSTARTUP=FILE    the fallback execs FILE before answering
 //   MW_EXE_TIMES=1           a timing line on stderr
 //
-// MOMWIRE_X_<NAME> (an experimental feature, `momwire._features`): none is
-// certified for an executable, so one turned on is refused, one sentence on
-// stderr and exit 2, before anything else runs (`feature_refusal`).
+// MOMWIRE_X_<NAME> (an experimental feature, `momwire._features`): one this
+// executable carries (EXE_FEATURES) and whose reach covers its support level
+// runs, and line 2 of the printout names it; any other one turned on is
+// refused, one sentence on stderr and exit 2, before anything else runs
+// (`feature_refusal`).
 //
 // MOMWIRE_TIMES=1 (for users, MOMWIRE_TIMES): the printout's MATRIX TIMING
 // (FILL, FACTOR) and RUN TIME carry measured seconds instead of zeros, and
@@ -272,18 +274,44 @@ std::string env(const char *name) {
     return v == nullptr ? std::string() : std::string(v);
 }
 
-// Experimental features (`momwire._features`): every one is certified below
-// the executables' levels of the support hierarchy, so a feature turned on in
-// the environment is refused here, before any deck is read, rather than
-// silently ignored (or honoured by the embedded fallback). The scan is
-// generic -- any MOMWIRE_X_<NAME> -- plus the older spellings some features
-// kept as aliases; on is "1", "true", "yes" or "on" in any case, as there.
-// tests/test_features_registry.py holds the alias list and the sentence to
-// the registry's.
+// Experimental features (`momwire._features`). This executable's C++ route
+// carries a few (EXE_FEATURES, each with the reach the registry gives it;
+// tests/test_features_registry.py holds the two equal): one turned on in the
+// environment runs when this executable's support level is within its reach,
+// as `_features.certified` would say. Every other feature -- one it does not
+// carry, one whose reach stops short of it, or a name the registry does not
+// know -- is refused here, before any deck is read, rather than silently
+// ignored (or honoured by the embedded fallback). The scan is generic (any
+// MOMWIRE_X_<NAME>) plus the older spellings some features kept as aliases;
+// on is "1", "true", "yes" or "on" in any case, as there.
 const char *const FEATURE_ALIASES[][2] = {
     {"MOMWIRE_EXACT_KERNEL_SERIES", "exact_kernel_series"},
     {"MOMWIRE_RAZOR_CXX", "razor_cxx"},
 };
+
+struct ExeFeature {
+    const char *name;
+    int reach;
+};
+// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`).
+const ExeFeature EXE_FEATURES[] = {
+    {"factored_columns", 8},
+    {"height_sheet_recal", 8},
+    {"crossing_table", 8},
+    {"crossing_above_rule", 8},
+};
+
+// This executable's level in support/hierarchy.toml, as
+// `_features.current_level("exe", basis=...)` places it.
+int exe_level() {
+#if MW_EXE_DIALECT_NEC4
+    return std::string(BASIS) == "sinusoidal" ? 9 : 8;  // exe-nec42-sinusoidal / exe-nec42-bspline
+#elif defined(_WIN32)
+    return 6;  // exe-nec5-bspline-razor-2p-windows
+#else
+    return 7;  // exe-nec5-bspline-razor-2p-linux-macos
+#endif
+}
 
 bool feature_value_on(std::string v) {
     const std::size_t b = v.find_first_not_of(" \t\r\n");
@@ -293,14 +321,16 @@ bool feature_value_on(std::string v) {
     return v == "1" || v == "true" || v == "yes" || v == "on";
 }
 
-// The first feature the environment turns on, by its registry name, or "".
-std::string feature_requested() {
+// The features the environment turns on, by registry name, in the
+// environment's order, then the aliases'.
+std::vector<std::string> features_requested() {
 #if defined(_WIN32)
     char **envp = _environ;
 #else
     char **envp = environ;
 #endif
     static const std::string prefix = "MOMWIRE_X_";
+    std::vector<std::string> names;
     for (char **p = envp; p != nullptr && *p != nullptr; ++p) {
         const std::string kv(*p);
         const std::size_t eq = kv.find('=');
@@ -308,22 +338,47 @@ std::string feature_requested() {
         if (!feature_value_on(kv.substr(eq + 1))) continue;
         std::string name = kv.substr(prefix.size(), eq - prefix.size());
         for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return name;
+        names.push_back(name);
     }
     for (const auto &alias : FEATURE_ALIASES)
-        if (feature_value_on(env(alias[0]))) return alias[1];
-    return std::string();
+        if (feature_value_on(env(alias[0]))) names.push_back(alias[1]);
+    return names;
 }
 
-// One sentence on stderr and exit 2 when a feature is on; 0 (go on) otherwise.
+bool feature_runs_here(const std::string &name) {
+    for (const ExeFeature &f : EXE_FEATURES)
+        if (name == f.name) return exe_level() <= f.reach;
+    return false;
+}
+
+// Line 2's feature tail for this run (the routes' `ni_eval::requested_stamp`,
+// for the printouts this file writes itself).
+std::string g_feature_stamp;
+
+// One sentence on stderr and exit 2 when a feature this executable does not
+// run is on; 0 (go on) otherwise, with the ones it runs asked of both copies
+// of the C++ route.
 int feature_refusal() {
-    const std::string name = feature_requested();
-    if (name.empty()) return 0;
-    // "P%cthon", not the word: the no-Python build is held to carry no
-    // "python" bytes at all (tests/test_standalone_nopython.py).
-    std::fprintf(stderr, "%s is not certified for this executable; it runs only in the P%cthon route\n",
-                 name.c_str(), 'y');
-    return 2;
+    const std::vector<std::string> names = features_requested();
+    for (const std::string &name : names) {
+        if (feature_runs_here(name)) continue;
+        // "P%cthon", not the word: the no-Python build is held to carry no
+        // "python" bytes at all (tests/test_standalone_nopython.py).
+        std::fprintf(stderr, "%s is not certified for this executable; it runs only in the P%cthon route\n",
+                     name.c_str(), 'y');
+        return 2;
+    }
+    if (!names.empty()) {
+        mws::exe::configure_features(names);
+        mw::exe::configure_features(names);
+        for (const ExeFeature &f : EXE_FEATURES)
+            for (const std::string &name : names)
+                if (name == f.name) {
+                    g_feature_stamp += std::string("+") + f.name;
+                    break;
+                }
+    }
+    return 0;
 }
 
 void set_env(const char *name, const std::string &value) {
@@ -873,7 +928,7 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
     if (out.empty()) return;
     std::string text;
     const bool readable = read_file(deck, text);
-    mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, ""};
+    mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, g_feature_stamp};
 #if MW_EXE_DIALECT_NEC4
     const std::string printout = mw::nec5::printout_bytes(
         mw::nec4::render_nec4_refusal(readable ? &text : nullptr, why, BASIS, stamp));
@@ -1034,7 +1089,9 @@ const char *const STREAMING_REFUSAL =
     "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only; "
     "give it '- -', or two file paths (momwire#1395, momwire#1512)";
 
-const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
+// Line 2's fields for the printouts this file writes (read after
+// `feature_refusal`, which sets the tail).
+mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EXE_VARIANT, g_feature_stamp}; }
 
 // `probe_version`: `momwire_serve_client.version_line`'s line (momwire#1606),
 // the dialect, this executable's name (MW_EXE_VERSION_NAME), its interface
@@ -1088,9 +1145,9 @@ int write_file(const std::string &path, const std::string &bytes) {
 std::string refusal(const std::string *latin1, const std::string &utf8_reason) {
 #if MW_EXE_DIALECT_NEC4
     // `_printout.render_refusal(..., dialect="nec4")`: the NEC-4.2 banner
-    return mw::nec5::printout_bytes(mw::nec4::render_nec4_refusal(latin1, utf8_reason, BASIS, STAMP));
+    return mw::nec5::printout_bytes(mw::nec4::render_nec4_refusal(latin1, utf8_reason, BASIS, refusal_stamp()));
 #else
-    return mw::nec5::printout_bytes(mw::nec5::render_refusal(latin1, utf8_reason, BASIS, STAMP));
+    return mw::nec5::printout_bytes(mw::nec5::render_refusal(latin1, utf8_reason, BASIS, refusal_stamp()));
 #endif
 }
 

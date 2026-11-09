@@ -38,7 +38,7 @@ from momwire.razor import RazorSolver
 from test_crossing_serve_524 import crossing_deck
 
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(8),
     pytest.mark.skipif(
         ni._nia is None or not hasattr(ni._nia, "crossing_table_1860"),
         reason="the near-interface accelerator is not built",

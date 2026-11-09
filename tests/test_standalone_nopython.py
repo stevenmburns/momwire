@@ -729,3 +729,35 @@ def test_a_bookkeeping_node_on_a_huge_page_boundary_does_not_deadlock(tmp_path):
     )
     assert shimmed.returncode == 0, shimmed.stderr
     assert (tmp_path / "shim.out").read_bytes() == (tmp_path / "plain.out").read_bytes()
+
+
+# --- momwire#1860's levers, on (reach 8: the executables run them) ----------------
+
+_LEVERS_1860 = (
+    "MOMWIRE_X_FACTORED_COLUMNS",
+    "MOMWIRE_X_HEIGHT_SHEET_RECAL",
+    "MOMWIRE_X_CROSSING_TABLE",
+    "MOMWIRE_X_CROSSING_ABOVE_RULE",
+)
+
+
+@pytest.mark.parametrize("on", [(), _LEVERS_1860], ids=["off", "all four on"])
+def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
+    """The synthetic EFHW of momwire#1860 (a buried rod under a vertical, a
+    counterpoise at 1 cm: every lever fires on it) with the levers off and
+    on: the executable's printout is the launcher's, line 2 naming the
+    levers on both sides."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_crossing_table_1860 import DECKS as DECKS_1860
+
+    def prepare(d):
+        (d / "efhw_lo.nec").write_text(DECKS_1860["efhw_lo"], newline="")
+
+    env = {var: ("1" if var in on else "0") for var in _LEVERS_1860}
+    exe, ref, de, dl = _both(
+        ["efhw_lo.nec", "efhw_lo.out"], tmp_path, prepare=prepare, env=env
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    line2 = (de / "efhw_lo.out").read_bytes().split(b"\n")[1]
+    assert (b"+factored_columns" in line2) == bool(on), line2
