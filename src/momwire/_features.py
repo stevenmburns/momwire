@@ -208,11 +208,11 @@ FEATURES: dict[str, Feature] = {
                 "src/momwire/_transmitted_anchors.py",
                 "tests/test_transmitted_anchors_1847.py",
             ),
-            label="transmitted anchors",
+            label="share buried tables across a sweep",
             summary=(
-                "Builds the buried-to-above ground tables at a few anchor "
-                "frequencies and interpolates between them, so a frequency sweep "
-                "over buried wires shares its tables."
+                "Over buried wires, build the table that carries fields up through "
+                "the ground once for a band and blend it at each frequency, instead"
+                " of rebuilding it at every point."
             ),
             drift=1e-8,
             offer=True,
@@ -229,10 +229,11 @@ FEATURES: dict[str, Feature] = {
             since="2026-11-07",
             kwarg="point_cplx_staged",
             paths=("tests/test_point_cplx_staged_1849.py",),
-            label="staged point fill",
+            label="vectorised buried fill",
             summary=(
-                "Runs nec42-sinusoidal's buried field fill on the staged C++ rows "
-                "of the Galerkin fill. Helps decks with many buried segments."
+                "Fill the entries between buried wires with the vectorised kernel "
+                "the Galerkin solver uses, several times faster on a large radial "
+                "screen."
             ),
             drift=1e-11,
             offer=True,
@@ -252,9 +253,9 @@ FEATURES: dict[str, Feature] = {
             paths=("tests/test_factored_columns_1860.py",),
             label="factored rod columns",
             summary=(
-                "Computes the near-ground column terms once per height and reuses "
-                "them across members. Helps a buried rod or vertical crossing the "
-                "ground, such as an end-fed half wave over a ground rod."
+                "Where a buried rod crosses the ground under a vertical (an EFHW "
+                "with a ground rod), fill the rod's column of entries by shared "
+                "factors instead of one by one."
             ),
             drift=1e-11,
             offer=True,
@@ -272,11 +273,11 @@ FEATURES: dict[str, Feature] = {
             since="2026-11-08",
             kwarg="height_sheet_recal",
             paths=("tests/test_height_sheet_recal_1860.py",),
-            label="height sheet census",
+            label="shared near-ground tables",
             summary=(
-                "Sends a horizontal wire's near-ground rows to a shared height "
-                "sheet when that is cheaper. Helps a counterpoise or radials just "
-                "above the ground."
+                "Build one table for a wire just above the ground (a low "
+                "counterpoise over a ground rod) and read it from both parts of the"
+                " fill, instead of computing those entries twice."
             ),
             drift=1e-9,
             offer=True,
@@ -294,12 +295,12 @@ FEATURES: dict[str, Feature] = {
             since="2026-11-09",
             kwarg="crossing_table",
             paths=("tests/test_crossing_table_1860.py",),
-            label="crossing table",
+            label="table for wires crossing the ground",
             summary=(
-                "Reads the terms near where a wire crosses the ground from one "
-                "table per frequency, at a coarser accuracy (about 0.1 ohm in Zin "
-                "on end-fed half waves; 9.4e-4 relative at worst, on a buried "
-                "hub). Helps decks with many wires near the crossing."
+                "Where a wire crosses the ground (an EFHW over a ground rod), read "
+                "the entries near the crossing from one table per frequency instead"
+                " of computing each. Coarser: input impedance moves by about 0.1 "
+                "ohm on an EFHW."
             ),
             drift=1e-3,
             offer=True,
@@ -319,13 +320,12 @@ FEATURES: dict[str, Feature] = {
             since="2026-11-09",
             kwarg="crossing_above_rule",
             paths=("tests/test_crossing_above_rule_1860.py",),
-            label="crossing above rule",
+            label="lighter above-ground rule at a crossing",
             summary=(
-                "With a wire crossing the ground, fills the above-ground pairs at "
-                "the rule used when nothing crosses, keeping the finer rule next to"
-                " the crossing. Helps nec5-bspline and nec42-bspline on decks with "
-                "a large above-ground part. Printed Zin unchanged on its five "
-                "decks; the bound is conservative."
+                "On a deck where a wire crosses the ground, fill the above-ground "
+                "pairs with the rule used when nothing crosses, keeping the finer "
+                "rule next to the crossing. Helps nec5-bspline and nec42-bspline "
+                "when most of the antenna is above ground."
             ),
             drift=1e-6,
             offer=True,
