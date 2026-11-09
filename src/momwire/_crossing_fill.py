@@ -1169,14 +1169,24 @@ def _on_plane_side(zrel, side, what):
 
 
 @_cancelable  # razor's crossing-node charges call it outside any fill entry
-def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None, group_labels=None):
+def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None, group_labels=None, keep=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
     (one fill = one memo; ε̃, k₂, rtol fixed for its lifetime);
-    `group_labels` lets one call stand in for several (`_end_tables`)."""
+    `group_labels` lets one call stand in for several (`_end_tables`);
+    `keep` limits what `memo` retains (`designed_tables`, `_main_split`)."""
     a_wire = float(ctx.a_wire)
     return _near_interface.radius_tables(
-        eps_t, k_p, rho, z, zp, a_wire, rtol=rtol, memo=memo, group_labels=group_labels
+        eps_t,
+        k_p,
+        rho,
+        z,
+        zp,
+        a_wire,
+        rtol=rtol,
+        memo=memo,
+        group_labels=group_labels,
+        keep=keep,
     )
 
 
@@ -5374,6 +5384,45 @@ def _below_end_args(line, gz):
     return _EndArgs(line, gz, "below")
 
 
+def _end_loop_keys(ctx, A, B, gz, *, row_ends=True, col_ends=True):
+    """The key set (`TripleMemo.key_set`) of every row `_ends_and_corner(ctx,
+    A, B, ..., test_ends=row_ends, source_ends=col_ends)` asks its memo
+    (momwire#1860 B2): each loop's ends against the other axis's line, by the
+    loop's own `args` (`_above_end_args` / `_below_end_args`), folded by
+    `ctx.a_wire` as `_tables` folds them. The corner asks no memo.
+
+    None when an end refuses (`_on_plane_side`): the loop itself raises that
+    refusal at its first end, in its own words and never earlier, so this
+    only declines to promise and `_main_split` retains every row."""
+    a_wire = float(ctx.a_wire)
+    parts = []
+    loops = (
+        (A["ends"] if row_ends else [], _above_end_args(B, gz)),
+        (B["ends"] if col_ends else [], _below_end_args(A, gz)),
+    )
+    try:
+        for ends, args in loops:
+            for e in ends:
+                rho, z, zp = np.broadcast_arrays(*args(e[0]))
+                parts.append(
+                    np.stack(
+                        [
+                            _near_interface.radius_fold(rho, a_wire).ravel(),
+                            z.ravel(),
+                            zp.ravel(),
+                        ],
+                        axis=1,
+                    )
+                )
+    except ValueError:
+        return None
+    if not parts:
+        return _near_interface.TripleMemo()
+    rows = np.concatenate(parts)
+    rows, _inv = _near_interface._unique_rows(rows[:, 0], rows[:, 1], rows[:, 2])
+    return _near_interface.TripleMemo.key_set(rows)
+
+
 def _ends_and_corner(
     ctx,
     A,
@@ -7837,7 +7886,20 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
 
     # One fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here).
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
-    main = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows)
+    main = _main_split(
+        ctx,
+        a_idx,
+        b_idx,
+        A,
+        B,
+        eps_t,
+        k_p,
+        c1,
+        gz,
+        memo,
+        rows=rows,
+        later=lambda: _end_loop_keys(ctx, A, B, gz),
+    )
     if rows is None:
         _ends_and_corner(
             ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=main
@@ -7911,7 +7973,19 @@ def cross_complete_blocks_two_radius(
     else:
         _refuse_path_tested(A, B)
         t_above = _main_split(
-            ctx_above, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows
+            ctx_above,
+            a_idx,
+            b_idx,
+            A,
+            B,
+            eps_t,
+            k_p,
+            c1,
+            gz,
+            memo,
+            rows=rows,
+            # `memo`'s one later reader: the source ends below, at a_above.
+            later=lambda: _end_loop_keys(ctx_above, A, B, gz, row_ends=False),
         )
         if rows is not None:
             t_above = t_above[0]
@@ -8003,7 +8077,9 @@ def _pair_groups(sizes, *, budget_pairs=600_000):
     return out
 
 
-def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows):
+def _direct_group(
+    ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows, keep=None
+):
     """One GROUP of direct blocks: fill the coordinate buffers, evaluate the
     tables once for the group, and sandwich each block out of the result.
 
@@ -8030,6 +8106,9 @@ def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows)
     deterministic rounding difference rather than a drift -- and it sits three
     orders below `_ends_to_nodes`' own 1.85e-13, inside the same contract the
     file already declares ("read to scale, never to the bit").
+
+    `keep` (momwire#1860 B2, `_main_split`) is what the memo retains of the
+    group's fresh rows; None retains them all.
     """
     # One buffer per column, filled block by block in place (momwire#914):
     # ρ by `_direct_coords`, z and z′ broadcast from its per-spec columns.
@@ -8051,6 +8130,7 @@ def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows)
         zp_all,
         _CROSS_RTOL,
         memo=memo,
+        keep=keep,
     )
     off = 0
     for (AX, BX, iA, iB), shp in zip(direct, shapes):
@@ -8100,12 +8180,29 @@ def _dense_beats_aca(Ac, Bc, iA, iB, a_wire):
     return dense <= aca
 
 
-def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
+def _main_split(
+    ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None, later=None
+):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
 
     Split out for the same reason as `_main_sandwich` (momwire#813): the
     reversed block's main part is this product transposed.
+
+    `later` (momwire#1860 B2) is the caller's promise about what it asks
+    `memo` after this returns: a no-argument callable giving the key set of
+    every row its later calls through `memo` ask (`_end_loop_keys`), or None
+    for no promise. With one, the LAST direct group retains only those of
+    its fresh rows (`designed_rows`' `keep`, as `_chunked_point_tables`
+    retains only its ends' keys, momwire#1267), provided no far block is
+    factorised after it: an ACA sample's rows are not known before it is
+    drawn, so with a far block every row is retained, as before. Nothing
+    else reads the memo
+    after the last group, so every later lookup sees the same hits and
+    every later fresh row the same column: the same bits, without inserting
+    the ~360 k rows of efhw_hi's group that no one asks again (~60 ms a
+    block in Python). Earlier groups retain everything: a later group may
+    hit them.
 
     `rows` (momwire#1029 phase 2) answers with `(t[rows, :], t[:, rows])`
     instead of the full block. The BLOCK PARTITION and every kernel evaluation
@@ -8162,7 +8259,9 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
         # Grouped by a budget on PAIRS, not one global batch (momwire#1126).
         # `_tables` costs ~212 bytes of peak per pair at 150 radials, so the
         # budget is what bounds this phase, not the deck size.
-        for g0, g1 in _pair_groups([iA.size * iB.size for _A, _B, iA, iB in direct]):
+        groups = _pair_groups([iA.size * iB.size for _A, _B, iA, iB in direct])
+        last_keep = None if later is None or far_aca else later()
+        for gi, (g0, g1) in enumerate(groups):
             _cancel.poll()
             _direct_group(
                 ctx,
@@ -8175,6 +8274,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
                 t_main,
                 t_cols,
                 rows,
+                keep=last_keep if gi == len(groups) - 1 else None,
             )
 
     # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
