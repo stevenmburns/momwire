@@ -144,6 +144,8 @@ def _z(cls, flag):
     not _features.certified("factored_columns"),
     reason="factored_columns is not certified on this platform",
 )
+# Slow lane at the 0.89.0 pre-tag check: 5.4 s median on the Linux test job.
+@pytest.mark.slow
 @pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver])
 def test_on_a_crossing_deck_takes_the_route_and_z_agrees(monkeypatch, cls):
     calls = []
