@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <chrono>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -749,14 +750,31 @@ ConeSheet &cone_sheet(double k_p, cd k_m, const Cone &c, double beta, double a, 
 // The column twin over a row set (`_column_twin`, `_column_blocks`,
 // `_refuse_bad_members`).
 
+#ifdef MOMWIRE_EFHW_TEST
+struct CtStats {
+    long long table_rows = 0, kept_rows = 0, tables_built = 0, fills_taken = 0, calls = 0;
+    double build_ms = 0, lookup_ms = 0, twin_ms = 0;  // MW1860_STATS' split
+};
+CtStats g_ct_stats;
+double ct_now_ms() {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+#endif
+
 // The twin itself (`near_interface_six_columns` with `_columns_lanes_kw()`):
 // the factored route under momwire#1860 L1.
 void twin_call(const Evaluator &ev, const std::vector<double> &rho_c, const std::vector<std::ptrdiff_t> &offsets,
                const std::vector<double> &zs, const std::vector<double> &zps, ni_core::ColumnCache *cache, cd *vals) {
+#ifdef MOMWIRE_EFHW_TEST
+    const double t0 = ct_now_ms();
+#endif
     ni_core::six_columns(ev.k_p, ev.k_m, rho_c.data(), offsets.data(), static_cast<std::ptrdiff_t>(rho_c.size()),
                          zs.data(), zps.data(), static_cast<std::ptrdiff_t>(zs.size()), LAM_MULT, COLUMN_P, DETOUR,
                          ev.n_threads, gx24().data(), gw24().data(), 24, ev.cancel_flag, cache, vals, true, true,
                          feat1860().l1);
+#ifdef MOMWIRE_EFHW_TEST
+    g_ct_stats.twin_ms += ct_now_ms() - t0;
+#endif
 }
 
 #ifdef MOMWIRE_EFHW_TEST
@@ -765,10 +783,6 @@ void twin_call(const Evaluator &ev, const std::vector<double> &rho_c, const std:
 constexpr double CT_D = 0.01, CT_ZFAC = 0.5;
 constexpr double CT_EXT[3] = {0.5, 0.25, 0.06};
 constexpr double CT_SETUP = 68.0, CT_NODE = 1.1;
-struct CtStats {
-    long long table_rows = 0, kept_rows = 0, tables_built = 0, fills_taken = 0, calls = 0;
-};
-CtStats g_ct_stats;
 std::map<std::tuple<double, double, double>, std::vector<cd>> g_ct_tables;
 
 // `crossing_table_grid(k_p)`.
@@ -786,9 +800,11 @@ const std::vector<cd> &ct_table(const Evaluator &ev, const double h[3], const st
     auto it = g_ct_tables.find(key);
     if (it == g_ct_tables.end()) {
         std::vector<cd> vals(static_cast<size_t>(n[0] * n[1] * n[2]) * 6);
+        const double t0 = ct_now_ms();
         ni_core::crossing_table_build(ev.k_p, ev.k_m, h, n, LAM_MULT, COLUMN_P, DETOUR, ev.n_threads,
                                       gx24().data(), gw24().data(), 24, ev.cancel_flag, vals.data());
         g_ct_stats.tables_built++;
+        g_ct_stats.build_ms += ct_now_ms() - t0;
         it = g_ct_tables.emplace(key, std::move(vals)).first;
     }
     return it->second;
@@ -860,8 +876,10 @@ void twin_columns(const Evaluator &ev, const std::vector<double> &rho_c, const s
                 ipos.push_back(static_cast<size_t>(j));
             }
     std::vector<cd> got(ir.size() * N_KEYS);
+    const double tl0 = ct_now_ms();
     ni_core::crossing_table_lookup(ev.k_p, ev.k_m, h, n, tab.data(), ir.data(), iz.data(), izp.data(),
                                    static_cast<std::ptrdiff_t>(ir.size()), ev.n_threads, got.data());
+    g_ct_stats.lookup_ms += ct_now_ms() - tl0;
     for (size_t r = 0; r < ipos.size(); r++)
         for (int k = 0; k < N_KEYS; k++) vals[ipos[r] * N_KEYS + k] = got[r * N_KEYS + k];
     g_ct_stats.table_rows += n_in;
@@ -1014,9 +1032,12 @@ struct StatsAtExit {
     ~StatsAtExit() {
         const char *v = std::getenv("MW1860_STATS");
         if (v == nullptr || *v == '\0' || std::string(v) == "0") return;
-        std::fprintf(stderr, "mw1860: table_rows=%lld kept_rows=%lld tables_built=%lld fills_taken=%lld calls=%lld\n",
+        if (g_ct_stats.calls == 0 && g_ct_stats.twin_ms == 0) return;
+        std::fprintf(stderr,
+                     "mw1860: table_rows=%lld kept_rows=%lld tables_built=%lld fills_taken=%lld calls=%lld "
+                     "build_ms=%.1f lookup_ms=%.1f twin_ms=%.1f\n",
                      g_ct_stats.table_rows, g_ct_stats.kept_rows, g_ct_stats.tables_built, g_ct_stats.fills_taken,
-                     g_ct_stats.calls);
+                     g_ct_stats.calls, g_ct_stats.build_ms, g_ct_stats.lookup_ms, g_ct_stats.twin_ms);
     }
 } g_stats_at_exit;
 }  // namespace

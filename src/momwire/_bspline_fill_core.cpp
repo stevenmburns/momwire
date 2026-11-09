@@ -26,6 +26,9 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <utility>
 #include <exception>
@@ -4288,6 +4291,7 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
     // more than the shipped route's (`crossing_above_grid`), then the pair
     // correction into a side store subtracted last (`_crossing_above_remainder`).
     bool b1 = false;
+    const auto b1_t0 = std::chrono::steady_clock::now();
     if (crossing && a_idx.size() >= 64) {
         const int64_t q1 = n_qp_sommerfeld, q_node = q;
         const int64_t n_a = static_cast<int64_t>(a_idx.size());
@@ -4533,6 +4537,9 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
             }
         }
     }
+    if (std::getenv("MW1860_STATS"))
+        std::fprintf(stderr, "mw1860 b1=%d above_remainder_ms=%.1f\n", int(b1),
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - b1_t0).count());
     if (!a_idx.empty() && !b1) {
 #else
     if (!a_idx.empty()) {
