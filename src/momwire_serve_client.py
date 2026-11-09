@@ -399,6 +399,40 @@ def junction_rule_identity() -> list[str]:
     return [f"junction_rule={value}"] if value else []
 
 
+# The experimental features (`momwire._features`) are read from the
+# environment by the engine behind every launcher, and a server inherits that
+# environment from the client that spawned it, so the features on are
+# identity too: a warm server started with none must not answer a call that
+# asks for one (or the other way round). Read here without importing momwire
+# (these clients stay thin): any ``MOMWIRE_X_<NAME>`` and the registry's older
+# spellings (`Feature.aliases`; tests/test_features_registry.py holds the
+# list equal), on as `_features` reads "on".
+FEATURE_ENV_PREFIX = "MOMWIRE_X_"
+FEATURE_ALIASES = {
+    "MOMWIRE_EXACT_KERNEL_SERIES": "exact_kernel_series",
+    "MOMWIRE_RAZOR_CXX": "razor_cxx",
+}
+_FEATURE_ON = frozenset({"1", "true", "yes", "on"})
+
+
+def feature_identity(environ=None) -> list[str]:
+    """``["feature=<name>", ...]`` (sorted) for the features the environment
+    turns on, else nothing -- so every key with them all off is the key it
+    was."""
+    env = os.environ if environ is None else environ
+    names = set()
+    for var, value in env.items():
+        if var.startswith(FEATURE_ENV_PREFIX):
+            name = var[len(FEATURE_ENV_PREFIX) :].lower()
+        elif var in FEATURE_ALIASES:
+            name = FEATURE_ALIASES[var]
+        else:
+            continue
+        if value.strip().lower() in _FEATURE_ON:
+            names.add(name)
+    return [f"feature={n}" for n in sorted(names)]
+
+
 def digest(parts: list[str]) -> str:
     """A short hex identity for a server configuration.
 
