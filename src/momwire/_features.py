@@ -112,12 +112,6 @@ EXE_REFUSAL = (
 
 KINDS = ("python", "native")
 
-# What turning a feature on does to the answer, declared by its author:
-# "speed" is the same answer up to evaluation-order drift (the house
-# tolerance, about 1e-12 relative), so a front end may treat it as removing
-# work only; "accuracy" moves results beyond that.
-EFFECTS = ("speed", "accuracy")
-
 
 @dataclass(frozen=True)
 class Feature:
@@ -138,13 +132,15 @@ class Feature:
     # belong here: a change to it is a stable-path change.
     paths: tuple[str, ...] = ()
     # What a front end shows for it (momwire#1869): `label` is short checkbox
-    # text, `summary` a sentence or two for the hover, `effect` one of
-    # EFFECTS, and `offer` whether the switch alone is worth exposing per
-    # request (False where it needs the front end's data, or is folded into
-    # another feature).
+    # text, `summary` a sentence or two for the hover, and `offer` whether the
+    # switch alone is worth exposing per request (False where it needs the
+    # front end's data, or is folded into another feature). `drift` is the
+    # author's measured upper bound on the relative change in input
+    # impedance, |dZ|/|Z|, with the feature on against off on its own decks:
+    # declared, never inferred at run time, so a front end draws its own line.
     label: str = ""
     summary: str = ""
-    effect: str = "accuracy"
+    drift: float = 1.0
     offer: bool = False
 
     @property
@@ -175,7 +171,7 @@ FEATURES: dict[str, Feature] = {
                 "rest. It needs the front end's hint of which pairs share a pose, "
                 "so the switch alone reuses nothing."
             ),
-            effect="speed",
+            drift=1e-13,
             offer=False,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
@@ -194,7 +190,7 @@ FEATURES: dict[str, Feature] = {
                 "Fills a uniform edge's same-edge moments once per segment offset. "
                 "Folded into pair reuse."
             ),
-            effect="speed",
+            drift=1e-12,
             offer=False,
         ),
         # The transmitted (below->above) grid blended from frequency anchors
@@ -218,7 +214,7 @@ FEATURES: dict[str, Feature] = {
                 "frequencies and interpolates between them, so a frequency sweep "
                 "over buried wires shares its tables."
             ),
-            effect="accuracy",
+            drift=1e-8,
             offer=True,
         ),
         # The point-matched sinusoidal fill's complex-k field tensor on the
@@ -238,7 +234,7 @@ FEATURES: dict[str, Feature] = {
                 "Runs nec42-sinusoidal's buried field fill on the staged C++ rows "
                 "of the Galerkin fill. Helps decks with many buried segments."
             ),
-            effect="accuracy",
+            drift=1e-11,
             offer=True,
         ),
         # The near-interface column twin's factored route (momwire#1860 L1):
@@ -260,7 +256,7 @@ FEATURES: dict[str, Feature] = {
                 "them across members. Helps a buried rod or vertical crossing the "
                 "ground, such as an end-fed half wave over a ground rod."
             ),
-            effect="accuracy",
+            drift=1e-11,
             offer=True,
         ),
         # The near-interface height-sheet census recalibrated (momwire#1860
@@ -282,7 +278,7 @@ FEATURES: dict[str, Feature] = {
                 "sheet when that is cheaper. Helps a counterpoise or radials just "
                 "above the ground."
             ),
-            effect="accuracy",
+            drift=1e-9,
             offer=True,
         ),
         # The crossing table (momwire#1860 L5): the crossing rows inside a
@@ -302,10 +298,10 @@ FEATURES: dict[str, Feature] = {
             summary=(
                 "Reads the terms near where a wire crosses the ground from one "
                 "table per frequency, at a coarser accuracy (about 0.1 ohm in Zin "
-                "on end-fed half waves). Helps decks with many wires near the "
-                "crossing."
+                "on end-fed half waves; 9.4e-4 relative at worst, on a buried "
+                "hub). Helps decks with many wires near the crossing."
             ),
-            effect="accuracy",
+            drift=1e-3,
             offer=True,
         ),
         # nec5-bspline's and nec42-bspline's crossing route fills the above x
@@ -328,9 +324,10 @@ FEATURES: dict[str, Feature] = {
                 "With a wire crossing the ground, fills the above-ground pairs at "
                 "the rule used when nothing crosses, keeping the finer rule next to"
                 " the crossing. Helps nec5-bspline and nec42-bspline on decks with "
-                "a large above-ground part."
+                "a large above-ground part. Printed Zin unchanged on its five "
+                "decks; the bound is conservative."
             ),
-            effect="accuracy",
+            drift=1e-6,
             offer=True,
         ),
         # The exact-kernel point moments as a k-series (Python and its C++
@@ -352,9 +349,10 @@ FEATURES: dict[str, Feature] = {
             label="exact kernel series",
             summary=(
                 "Computes the exact-kernel point moments as a series in k. Flips "
-                "last printed digits."
+                "last printed digits. Not measured at Zin; the bound is "
+                "conservative."
             ),
-            effect="accuracy",
+            drift=1e-9,
             offer=False,
         ),
         # razor-2p's solve in one C++ call from Python (the prototype, PR
@@ -377,9 +375,9 @@ FEATURES: dict[str, Feature] = {
             label="razor C++ solve",
             summary=(
                 "Runs nec5-razor-2p's whole solve in one C++ call from Python. A "
-                "prototype."
+                "prototype. Not measured at Zin; the bound is conservative."
             ),
-            effect="accuracy",
+            drift=1e-6,
             offer=False,
         ),
     )
