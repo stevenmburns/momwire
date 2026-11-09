@@ -19,7 +19,7 @@ What is held:
 - on, the B1 route serves the crossing deck's above block and the shipped
   route does not, and a deck with no crossing is untouched;
 - on, efhw_lo (graded pairs, a census that does not take the whole grid)
-  declines and prints the off printout;
+  and the hub (16 above segments) decline and print the off printout;
 - on a lazy view, B1 reads exactly what it reads on the whole grid;
 - on, a row-restricted fill's rows are the full fill's rows, bit for bit;
 - on, the printed input impedance is within `ZIN_RTOL` of off for
@@ -184,6 +184,8 @@ def test_off_by_default(monkeypatch):
 
 def test_off_is_the_shipped_route_and_on_is_b1(monkeypatch, tmp_path, routes):
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    # The hub has 16 above segments: let B1 serve it (`_B1_MIN_ABOVE_SEGS`).
+    monkeypatch.setattr(_below_interface, "_B1_MIN_ABOVE_SEGS", 0)
     deck = DECKS["hub"]
     monkeypatch.delenv(ENV, raising=False)
     off = _render(deck, "nec5")
@@ -216,12 +218,26 @@ def test_on_declines_where_it_would_fill_more_grid(monkeypatch, tmp_path, routes
     assert on.splitlines()[2:] == off.splitlines()[2:]
 
 
+def test_on_declines_a_small_above_set(monkeypatch, tmp_path, routes):
+    """The hub's 16 above segments are under `_B1_MIN_ABOVE_SEGS`: B1 declines
+    and the printout is the off one but for line 2."""
+    monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    deck = DECKS["hub"]
+    monkeypatch.delenv(ENV, raising=False)
+    off = _render(deck, "nec5")
+    monkeypatch.setenv(ENV, "1")
+    on = _render(deck, "nec5")
+    assert routes["b1"] == 0
+    assert on.splitlines()[2:] == off.splitlines()[2:]
+
+
 def test_the_lazy_view_holds_every_node_b1_reads(monkeypatch, tmp_path, routes):
     """B1 on the view filled at its own census reads what it reads on the
     whole grid, bit for bit: an unfilled node reads NaN, so a census that
     missed one would show."""
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv(ENV, "1")
+    monkeypatch.setattr(_below_interface, "_B1_MIN_ABOVE_SEGS", 0)
     deck = DECKS["hub"]
     seen = []
     real = _below_interface.crossing_above_grid
@@ -271,6 +287,7 @@ def test_restricted_rows_are_the_full_fills_rows(monkeypatch, tmp_path, routes):
     """The shipped contract (`test_crossing_sparse_1109`'s p2b_4), on: the
     requested rows to the fill's 1e-12, every other row exactly zero."""
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(_below_interface, "_B1_MIN_ABOVE_SEGS", 0)
     s = BSplineSolver(**crossing_deck(1), crossing_above_rule=True)
     geom = s._build_geometry()
     supp_seg, polys, *_ = s._build_basis_polynomials(geom)

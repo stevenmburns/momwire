@@ -868,10 +868,13 @@ def _crossing_above_remainder(
     Z[er, ec] -= side
 
 
-# B1 may fill this fraction more grid nodes than the shipped census asks
-# (momwire#1860): the Beverage's rule reads one node of 1937 the shipped
-# census does not (384 against 383), a few ms of a cold point.
-_B1_EXTRA_NODES = 0.01
+# B1 serves a crossing deck with at least this many above-ground segments
+# (momwire#1860). Below it the q = 6 block is small enough that B1's fixed
+# costs (the pair correction's calls, its side store) outweigh the order it
+# saves: on d3_hub (16 above segments) B1 was 1.1 ms slower at T1 (median of
+# 11, 162.5 against 161.3 ms); the Beverage (130) saves ~20 ms and efhw_hi
+# (552) ~470 ms.
+_B1_MIN_ABOVE_SEGS = 64
 
 
 def crossing_above_grid(somm_grid_fn, eps_t, r1_max, obs, reads, ground_z, cancel_flag):
@@ -879,22 +882,23 @@ def crossing_above_grid(somm_grid_fn, eps_t, r1_max, obs, reads, ground_z, cance
     or None when B1 declines it and the shipped route runs as with the
     feature off.
 
-    B1 may not fill materially more of the grid than the shipped route does
-    on an empty cache. The decision reads the deck's geometry alone -- the
-    censuses' masks (`proj_census(exact=True)`) and the shipped census's
-    own cost test taken at an empty cache -- never what the cache holds, so
-    a deck takes one route on every point of a sweep:
+    B1 must not make the grid dearer than the shipped route makes it. The
+    decision reads the deck alone -- never what the cache holds -- so a deck
+    takes one route on every point of a sweep:
 
-    * no lazy view, or no census kernel: the shipped route reads the whole
-      grid, and so does B1;
-    * the shipped census does not pay at an empty cache (`census_pays`), so
-      the shipped route fills every node: B1 reads the whole view (efhw_hi);
-    * otherwise B1 needs `reads` (its base nodes and its raised pairs' Gauss
-      nodes; None when a pair goes on #1201's graded panels, whose read
-      points are drawn as they go) and a census of them asking at most
-      `_B1_EXTRA_NODES` more nodes than the shipped one: it reads the view
-      filled at that census;
-    * else B1 declines (efhw_lo, whose counterpoise pairs are graded).
+    * no lazy view: the shipped route reads the whole grid, and so does B1;
+    * the shipped census (`obs` x `obs`, the cross block's order) does not
+      pay on an empty cache (`census_pays` at every node unfilled), so the
+      shipped route fills every node on a sweep's first point: B1 reads the
+      whole view (efhw_hi);
+    * otherwise B1 needs `reads`, every point its grid reads take (its base
+      nodes and its raised pairs' Gauss nodes), and reads the view filled at
+      their census, which `proj_census` takes or skips by the same cost test
+      the shipped census uses. On the decks measured it asks no node the
+      shipped census does not, or one (the Beverage: 384 against 383 of
+      1937). The rule hands None when a pair goes on #1201's graded panels,
+      whose read points are drawn as they go, and B1 declines (efhw_lo,
+      whose counterpoise pairs are graded).
     """
     grid = somm_grid_fn(eps_t, r1_max, lazy=True)
     if getattr(grid, "_lazy_src", None) is None:
@@ -906,18 +910,12 @@ def crossing_above_grid(somm_grid_fn, eps_t, r1_max, obs, reads, ground_z, cance
     if not _sommerfeld.census_pays(n_obs * obs.shape[0], n_every):
         _sommerfeld.ensure_nodes(grid, every, cancel_flag)
         return grid
-    need = _sommerfeld.proj_census(grid, obs, obs, ground_z, exact=True)
-    if need is None:
-        return somm_grid_fn(eps_t, r1_max)
     if reads is None:
         return None
-    need_b1 = _sommerfeld.proj_census(grid, reads, reads, ground_z, exact=True)
-    n_ship = sum(int(np.asarray(m).sum()) for m in need)
-    if need_b1 is None or sum(int(np.asarray(m).sum()) for m in need_b1) > n_ship * (
-        1.0 + _B1_EXTRA_NODES
-    ):
-        return None
-    _sommerfeld.ensure_nodes(grid, need_b1, cancel_flag)
+    need = _sommerfeld.proj_census(grid, reads, reads, ground_z)
+    if need is None:
+        return somm_grid_fn(eps_t, r1_max)
+    _sommerfeld.ensure_nodes(grid, need, cancel_flag)
     return grid
 
 
@@ -1906,7 +1904,11 @@ def compute_Z_operator_buried(
     # momwire#1860 B1: a crossing deck may take the above-ground rule, on a
     # grid that costs no more than the shipped route's (`crossing_above_grid`).
     b1_rule = grid_b1 = None
-    if a_idx.size and crossing_j and f.crossing_above_rule is not None:
+    if (
+        a_idx.size >= _B1_MIN_ABOVE_SEGS
+        and crossing_j
+        and f.crossing_above_rule is not None
+    ):
         b1_rule = f.crossing_above_rule(geom, a_idx)
         grid_b1 = crossing_above_grid(
             somm_grid_fn, eps_t, plan["r1_above"], obs_a, b1_rule[4], gz, cancel_flag
