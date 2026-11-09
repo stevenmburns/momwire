@@ -80,6 +80,17 @@ def test_reach_kind_and_dates_are_valid():
         assert f.stable == (f.reach == len(F.LEVELS))
 
 
+def test_every_offered_feature_carries_its_front_end_fields():
+    # momwire#1869: a front end derives its switch from these, so an offered
+    # feature must say what to show and what it does to the answer.
+    for f in F.FEATURES.values():
+        assert f.effect in F.EFFECTS, f
+        assert isinstance(f.offer, bool), f
+        if f.offer:
+            assert f.label and f.summary and f.kwarg, f
+            assert "(faster)" not in f.label, f
+
+
 def test_every_feature_is_below_the_executables():
     # The executables' refusal is a generic scan, which is right only while
     # no feature reaches an executable's level.
