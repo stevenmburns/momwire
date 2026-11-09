@@ -41,9 +41,11 @@ Where it lives:
   printout line 2 gains ` +a+b uncertified on this platform`.
 - `kind="native"` (new C++ or a new numerical path) refuses with
   `FeatureNotCertified`.
-- The exes certify no feature. Any `MOMWIRE_X_*` variable, or a legacy alias
-  such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before it reads
-  a deck.
+- An exe runs only the features its C++ route carries (`EXE_FEATURES` in
+  `standalone/momwire_razor2p.cpp`) whose reach covers its level, and names
+  them on line 2 as Python does. Any other `MOMWIRE_X_*` variable, or a legacy
+  alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before
+  it reads a deck. Today the table is #1860's four levers at reach 8.
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 
