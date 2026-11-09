@@ -30,6 +30,7 @@ What is held:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -106,11 +107,21 @@ XQ
 EN
 """
 
+# The ACA screen's vertical runs through the plane: the case that set the
+# crossing node's band at two segments (`_crossing_above_remainder_rule`).
+ACA = (
+    Path(__file__).parent
+    / "fixtures"
+    / "bspline_printout_crossing"
+    / "aca_vertical_screen.nec"
+).read_text()
+
 DECKS = {
     "efhw_lo": _efhw(30, 9, 90, 12),
     "efhw_hi": _efhw(120, 38, 380, 52),
     "hub": _hub(),
     "beverage": BEVERAGE,
+    "aca": ACA,
 }
 
 
@@ -310,10 +321,13 @@ def test_restricted_rows_are_the_full_fills_rows(monkeypatch, tmp_path, routes):
         "hub",
         pytest.param("beverage", marks=pytest.mark.slow),
         pytest.param("efhw_hi", marks=pytest.mark.slow),
+        pytest.param("aca", marks=pytest.mark.slow),
     ],
 )
 def test_on_zin_agrees_with_off(monkeypatch, tmp_path, name, dialect):
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
+    if name == "aca" and dialect == "nec4":
+        pytest.skip("a NEC-5 deck: the NEC-4.2 slot does not solve it")
     deck = DECKS[name]
     monkeypatch.delenv(ENV, raising=False)
     z_off = _zin(_render(deck, dialect))

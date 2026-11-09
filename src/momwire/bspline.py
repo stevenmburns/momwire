@@ -8910,15 +8910,17 @@ class BSplineSolver(
         pairs in global segment indices and sorted by observer then source,
         `reads` the points its grid reads take (None: not listable).
 
-        One addition to that rule: every pair with a segment TOUCHING the
-        plane (an end within `_crossing_fill._PLANE_TOL`, the crossing
-        node's own segment) keeps the cross block's order
+        One addition to that rule: every pair with a segment AT THE CROSSING
+        NODE -- an end within one of its own lengths of a point where an
+        above wire meets the plane, i.e. the node's own segment and the next
+        one along each wire through it -- keeps the cross block's order
         `_n_qp_buried_field` when the listed one is lower. #1189 keys its
         pairs on grazing height through the base-order nodes and lists none
-        there, and the basis does not vanish at a crossing node: on the
-        buried-hub vertical the bare rule moves Zin 0.12 ohm away from a q =
-        48 reference (2.4e-3), and with these pairs it is the shipped
-        route's Zin again."""
+        there, and the basis does not vanish at a crossing node. Without
+        them, against a q = 48 flat reference: the buried-hub vertical's Zin
+        moves 0.12 ohm away (2.4e-3) with the bare rule, and the ACA screen's
+        0.009 ohm (1.3e-4) with the node's own segment alone; with both
+        segments each is the shipped route's Zin again."""
         gz = self.ground_z
         seg_l, seg_r = geom["seg_l"][a_idx], geom["seg_r"][a_idx]
         I = J = Qp = np.zeros(0, dtype=np.int64)
@@ -8928,8 +8930,21 @@ class BSplineSolver(
         else:
             q = self._remainder_qp(seg_l, seg_r, gz)
         q_node = int(self._n_qp_buried_field())
-        zmin = np.minimum(seg_l[:, 2], seg_r[:, 2]) - gz
-        touch = np.flatnonzero(zmin <= _crossing_fill._PLANE_TOL)
+        # The segments at the crossing node: an end within one of their own
+        # lengths of a point where an above wire meets the plane (the node's
+        # own segment, and the next one along each wire through it).
+        ends = np.concatenate([seg_l, seg_r])
+        node = ends[np.abs(ends[:, 2] - gz) <= _crossing_fill._PLANE_TOL]
+        touch = np.zeros(0, dtype=np.int64)
+        if node.shape[0]:
+            node = np.unique(node, axis=0)
+            dist = np.minimum(
+                np.linalg.norm(seg_l[:, None, :] - node[None], axis=2).min(axis=1),
+                np.linalg.norm(seg_r[:, None, :] - node[None], axis=2).min(axis=1),
+            )
+            touch = np.flatnonzero(
+                dist <= geom["h_per_seg"][a_idx] + _crossing_fill._PLANE_TOL
+            )
         # The pair correction swaps BASE-order moments, so only on the
         # per-pair route (the deck-wide order lists no pairs at all).
         if _REMAINDER_PER_PAIR and touch.size and q_node > q:
