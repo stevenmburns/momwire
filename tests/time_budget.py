@@ -61,11 +61,21 @@ Environment:
                                       ("1"): fail over the SOFT ceiling.
                                       For local use on a quiet box — CI must
                                       never set it.
-  MOMWIRE_DURATIONS_OUT               path; when set, every test's CALL-phase
-                                      duration is APPENDED to it as JSONL
-                                      (one session may share a file with
-                                      another, e.g. one per interpreter in a
-                                      cibuildwheel run).
+  MOMWIRE_DURATIONS_OUT               path; when set, one JSONL record per
+                                      test is APPENDED to it (one session may
+                                      share a file with another, e.g. one per
+                                      interpreter in a cibuildwheel run).
+                                      `duration` is the CALL phase, as it
+                                      always was; `setup` and `teardown` are
+                                      the fixture phases (null when a phase
+                                      did not run).
+
+Why setup and teardown are recorded too: a module- or session-scoped fixture
+is charged to the setup of the first test that asks for it, never to a call.
+From 2026-10-28 the PR lane's `test` job ran ~19 min where it
+had run ~9, while the summed CALL durations did not grow at all -- the extra
+ten minutes were a module fixture compiling C++ drivers, once per xdist
+worker, and a call-only log could not see them.
 
 The four exempt markers are the four lanes that are not the edit loop.
 `integration` is exempt for a reason worth stating: it is the one marker here
@@ -91,6 +101,10 @@ EXEMPT_MARKERS = ("slow", "memgate", "crossgate", "integration")
 
 _offenders: list[tuple[str, float]] = []
 _durations: list[dict] = []
+# nodeid -> the record being filled; moved to `_durations` on its teardown
+# report, which is always a test's last (under xdist the controller sees
+# several workers' tests interleaved, but each test's phases in order).
+_open: dict[str, dict] = {}
 _state = {"worker": False}
 
 
@@ -109,19 +123,40 @@ def pytest_configure(config):
     _state["worker"] = hasattr(config, "workerinput")
 
 
+def _record(report, lanes) -> None:
+    rec = _open.setdefault(
+        report.nodeid,
+        {
+            "nodeid": report.nodeid,
+            # CALL phase, as before; null when the test never reached its
+            # call (skipped or errored in setup).
+            "duration": None,
+            "outcome": None,
+            "markers": lanes,
+            "setup": None,
+            "teardown": None,
+        },
+    )
+    d = round(report.duration, 4)
+    if report.when == "call":
+        rec["duration"] = d
+        rec["outcome"] = report.outcome
+    else:
+        rec[report.when] = d
+        if report.when == "setup" and report.outcome != "passed":
+            rec["outcome"] = "error" if report.outcome == "failed" else "skipped"
+    if report.when == "teardown":
+        _durations.append(_open.pop(report.nodeid))
+
+
 def pytest_runtest_logreport(report):
-    if report.when != "call" or _state["worker"]:
+    if _state["worker"]:
         return
     lanes = [m for m in EXEMPT_MARKERS if m in report.keywords]
     if os.environ.get("MOMWIRE_DURATIONS_OUT"):
-        _durations.append(
-            {
-                "nodeid": report.nodeid,
-                "duration": round(report.duration, 4),
-                "outcome": report.outcome,
-                "markers": lanes,
-            }
-        )
+        _record(report, lanes)
+    if report.when != "call":
+        return
     # Collect above the LOWER of the two ceilings: keyed to the soft one
     # alone, a tuned HARD < SOFT would never see its offenders.
     if lanes or report.duration <= min(
@@ -165,6 +200,10 @@ def pytest_terminal_summary(terminalreporter):
 
 def _write_durations() -> None:
     path = os.environ.get("MOMWIRE_DURATIONS_OUT")
+    # A test whose teardown never reported (an interrupted session) is
+    # still written, with what it has.
+    _durations.extend(_open.values())
+    _open.clear()
     if not path or not _durations:
         return
     run = {

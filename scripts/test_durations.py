@@ -14,6 +14,15 @@ markers) whose median exceeds the budget is flagged as a slow-lane candidate.
 At release prep, move flagged tests to the slow lane in their own PR before
 tagging (.claude/skills/release/SKILL.md).
 
+The same records carry each test's SETUP and TEARDOWN time, and those are
+reported too: a module- or session-scoped fixture is charged to the setup of
+the first test that asks for it on each xdist worker, never to a call, so a
+call-only report cannot see it. From 2026-10-28 the PR lane ran ~19 min where
+it had run ~9 with the summed call time flat: a module fixture compiling C++
+drivers once per worker. Fixture cost is summed per MODULE per run (which test
+pays a module fixture varies with xdist's scheduling; the module's total does
+not), and the median over runs is reported per (job, OS) group.
+
     python scripts/test_durations.py                 # fetch via gh, last 25 runs
     python scripts/test_durations.py --runs 40 --budget 4
     python scripts/test_durations.py --dir some/dir  # offline: read *.jsonl under it
@@ -40,6 +49,9 @@ REPO = "stevenmburns/momwire"
 WORKFLOWS = ("ci.yml", "wheels.yml")
 EXEMPT_MARKERS = ("slow", "memgate", "crossgate", "integration")
 DEFAULT_CACHE = Path.home() / ".cache" / "momwire" / "test-durations"
+
+
+FIXTURE_TOP = 10
 
 
 @dataclass
@@ -75,13 +87,90 @@ def aggregate(records) -> dict[tuple[str, str], dict[str, Stats]]:
         lambda: defaultdict(Stats)
     )
     for rec in records:
-        if rec.get("outcome", "passed") != "passed":
+        if rec.get("outcome", "passed") != "passed" or rec.get("duration") is None:
             continue
         st = out[group_key(rec)][rec["nodeid"]]
         st.samples.append(float(rec["duration"]))
         st.runs.add(str(rec.get("run_id", "")))
         st.markers.update(rec.get("markers") or ())
     return out
+
+
+def module_of(nodeid: str) -> str:
+    return nodeid.split("::", 1)[0]
+
+
+def fixture_cost(rec: dict) -> float | None:
+    """setup + teardown seconds, or None for a record from before the
+    recorder wrote them."""
+    parts = [rec.get("setup"), rec.get("teardown")]
+    if all(p is None for p in parts):
+        return None
+    return sum(float(p) for p in parts if p is not None)
+
+
+def aggregate_fixtures(records):
+    """(job, os) -> (nodeid -> Stats, module -> Stats) of setup+teardown time.
+
+    Every outcome counts: a fixture that compiles for minutes and then skips
+    still cost the minutes. A module's sample is its SUM over one run, all
+    xdist workers included (four workers each building the same thing is
+    four times the cost, and that is what the sum shows)."""
+    tests: dict[tuple[str, str], dict[str, Stats]] = defaultdict(
+        lambda: defaultdict(Stats)
+    )
+    per_run: dict[tuple[tuple[str, str], str, str], float] = defaultdict(float)
+    markers: dict[tuple[tuple[str, str], str], set[str]] = defaultdict(set)
+    for rec in records:
+        cost = fixture_cost(rec)
+        if cost is None:
+            continue
+        g, run = group_key(rec), str(rec.get("run_id", ""))
+        st = tests[g][rec["nodeid"]]
+        st.samples.append(cost)
+        st.runs.add(run)
+        st.markers.update(rec.get("markers") or ())
+        mod = module_of(rec["nodeid"])
+        per_run[(g, mod, run)] += cost
+        markers[(g, mod)].update(rec.get("markers") or ())
+    modules: dict[tuple[str, str], dict[str, Stats]] = defaultdict(
+        lambda: defaultdict(Stats)
+    )
+    for (g, mod, run), total in per_run.items():
+        st = modules[g][mod]
+        st.samples.append(total)
+        st.runs.add(run)
+        st.markers.update(markers[(g, mod)])
+    return {g: (tests[g], modules[g]) for g in tests}
+
+
+def fixture_report(fixtures, top: int = FIXTURE_TOP) -> str:
+    """The top setup+teardown costs per (job, OS): by module, then by test."""
+    if not fixtures:
+        return "Setup+teardown: no records carry them (older artifacts)."
+    lines = []
+    for job, os_name in sorted(fixtures):
+        tests, modules = fixtures[(job, os_name)]
+        for title, table in (("module, summed per run", modules), ("test", tests)):
+            rows = sorted(
+                table.items(),
+                key=lambda kv: (-percentile(kv[1].samples, 50), kv[0]),
+            )
+            lines.append(f"== setup+teardown by {title}: {job} / {os_name} (top {top})")
+            lines.append(f"  {'median':>7} {'p90':>7} {'runs':>4}  where")
+            for name, st in rows[:top]:
+                tag = (
+                    f"  [{','.join(sorted(st.markers))}]"
+                    if st.markers & set(EXEMPT_MARKERS)
+                    else ""
+                )
+                lines.append(
+                    f"  {percentile(st.samples, 50):7.2f} "
+                    f"{percentile(st.samples, 90):7.2f} {len(st.runs):4d}  "
+                    f"{name}{tag}"
+                )
+            lines.append("")
+    return "\n".join(lines).rstrip("\n")
 
 
 def iter_records(roots):
@@ -254,6 +343,12 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--top", type=int, default=25, help="rows shown per group (default 25)"
     )
+    ap.add_argument(
+        "--fixture-top",
+        type=int,
+        default=FIXTURE_TOP,
+        help=f"setup+teardown rows shown per group and table (default {FIXTURE_TOP})",
+    )
     ap.add_argument("--repo", default=REPO)
     ap.add_argument(
         "--workflow",
@@ -279,11 +374,14 @@ def main(argv=None) -> int:
     roots = (
         [a.dir] if a.dir else fetch(a.repo, a.runs, a.cache, a.workflow or WORKFLOWS)
     )
-    groups = aggregate(iter_records(roots))
+    records = list(iter_records(roots))
+    groups = aggregate(records)
     if not groups:
         print(f"no duration records under {[str(r) for r in roots]}", file=sys.stderr)
         return 1
     print(report(groups, a.budget, a.top, a.min_runs))
+    print()
+    print(fixture_report(aggregate_fixtures(records), a.fixture_top))
     if a.write_split:
         write_split(groups, a.split_job, a.write_split)
     return 0

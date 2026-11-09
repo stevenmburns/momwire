@@ -28,7 +28,11 @@ Publishing). Every step below was learned the hard way; do them in order.
    `wheels.yml`). Every default-lane test it lists as a slow-lane candidate
    — median over the 5 s budget for some job/OS — moves to the `slow` lane
    (or is made faster) in **its own PR**, merged before the bump PR. A
-   single run's long time is not a candidate; a median is. This step is
+   single run's long time is not a candidate; a median is. Setup and
+   teardown are now checked too: the same run prints the top setup+teardown
+   costs per module and per test (median per job/OS), which is where a
+   module or session fixture's cost lands and the call times cannot see it
+   (the 2026-10-28 ~9 → ~19 min `test` job). This step is
    hygiene only: speed regressions are the sweep above's job (and, for
    Windows, paired runs on the Windows box), never these numbers.
 5. **Record the workflow-efficiency numbers.** Run
