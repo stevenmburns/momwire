@@ -51,6 +51,9 @@ struct SheetPlan {
     std::vector<double> heights, depths;  // sorted z > 0, each one's reach
     std::vector<Cone> cones;              // in the census's order
     double fold = 0.0;                    // the cones' rows' fold radius
+    // momwire#1860 L2 (`height_sheet_recal`): each height's snapped window
+    // [lo, hi]; empty, the shipped plan, is `z == h`.
+    std::vector<double> lo, hi;
     bool any() const { return !planes.empty() || !heights.empty() || !cones.empty(); }
 };
 
@@ -175,7 +178,8 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 // Written by the thread that runs the fill, before any parallel region of
 // it starts; the fill's worker threads only read it.
 struct Features {
-    bool factored_columns = false;  // L1: the twin's grid route (`mw899::Grid`)
+    bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
+    bool height_sheet_recal = false;  // L2: the recalibrated height census
 };
 Features &requested_features();
 const Features &active_features();
