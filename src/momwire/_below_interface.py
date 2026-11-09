@@ -797,6 +797,76 @@ def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False):
     )
 
 
+def _crossing_above_remainder(
+    Z,
+    f,
+    rule,
+    pair_entries,
+    pair_correction,
+    geom,
+    supp_seg,
+    polys,
+    a_idx,
+    obs_a_idx,
+    narrow,
+    sub_field_galerkin,
+    *,
+    grid,
+    ground_z,
+    k_p,
+    cancel_flag,
+    basis_rows,
+    row_of,
+):
+    """`Z -= Q_aa`, the above/above Sommerfeld remainder of a crossing deck
+    at the solver's own above-ground rule (momwire#1860 B1, the opt-in
+    feature `crossing_above_rule`).
+
+    The shipped crossing route fills these pairs as a field-form block at
+    `n_qp_buried_field` (q = 6 for bspline), the order set for the cross
+    block's 1/R^3 integrand. The remainder is the smooth part of the
+    above-ground field, and a deck without the rod fills the very same pairs
+    at the base order plus #1189's raised pairs (`_remainder_prep`): that is
+    the rule this takes, through the same field-form block and the same
+    pair correction, on the whole grid as that fill reads it. On efhw_hi
+    (nec5-bspline, T1) it is ~0.5 s of a ~2.1 s fill.
+
+    The base-order block is subtracted as the shipped block is
+    (`sub_field_galerkin`, observer-restricted by `narrow`); the raised
+    pairs' corrections are formed into a side store over their entries
+    (`pair_entries`, as `_Z_sommerfeld_remainder_into` does) and subtracted
+    after it. `rule`, `pair_entries` and `pair_correction` are the bundle's
+    `crossing_above_rule`, `remainder_pair_entries` and
+    `remainder_pair_correction`, handed in by the routing (its seam,
+    `test_g980c_5`); `f` serves only `sub_field_galerkin`. Every pair is corrected whatever the restriction,
+    and only the entries on `basis_rows` (None: all) are written, so a
+    restricted fill's rows are the full fill's."""
+    pts, tang, W, pairs = rule(geom, a_idx)
+
+    def proj(o, to, s, ts):
+        return _sommerfeld.remainder_field_proj(
+            o, to, s, ts, ground_z, k_p, grid, cancel_flag=cancel_flag
+        )
+
+    o, ot, oW = narrow(a_idx, obs_a_idx, pts, tang, W)
+    sub_field_galerkin(
+        Z, f, supp_seg, polys, proj, obs_a_idx, a_idx, o, ot, oW, pts, tang, W
+    )
+    if pairs is None or not pairs[0].size:
+        return
+    n_basis = supp_seg.shape[0]
+    E = pair_entries(supp_seg, polys, int(geom["n_segs_total"]), pairs[0], pairs[1])
+    side = np.zeros(E.size, dtype=np.complex128)
+    pair_correction(side, geom, supp_seg, polys, grid, pairs, entries=E)
+    er, ec = np.divmod(E, n_basis)
+    if basis_rows is not None:
+        on = np.isin(er, basis_rows)
+        er, ec, side = er[on], ec[on], side[on]
+    if row_of is not None:
+        er = row_of[er]
+    Z[er, ec] -= side
+
+
 def lazy_above_grid(somm_grid_fn, eps_t, r1_max, obs, ground_z, cancel_flag):
     """The above/above remainder grid with only the nodes its reads over
     `obs` x `obs` take (momwire#1512, razor's `field_windows` pattern; bs2's
@@ -1017,6 +1087,21 @@ class BuriedFills(NamedTuple):
     # Serve the below->above grid from frequency anchors (momwire#1847, the
     # opt-in feature `transmitted_anchors`); False is the exact grid.
     transmitted_anchors: bool = False
+    # momwire#1860 B1 (the opt-in feature `crossing_above_rule`): `(geom,
+    # a_idx) -> (points, tangents, W, pairs)`, the solver's own above-ground
+    # remainder rule over the above segments -- its base-order nodes and
+    # moment weights, and the segment pairs it raises (global indices, as
+    # `remainder_pair_correction` takes them, or None). Given, a CROSSING
+    # deck's above/above remainder is filled at that rule on the whole grid
+    # instead of at the cross block's `n_qp_buried_field`; None is the
+    # shipped fill.
+    crossing_above_rule: Callable | None = None
+    # With `crossing_above_rule`: `(supp_seg, polys, n_seg, I, J) -> E` and
+    # `(side, geom, supp_seg, polys, grid, pairs, entries=E)`, the raised
+    # pairs' entries and their correction into a side store (bspline's
+    # `_remainder_pair_entries` / `_remainder_pair_correction`).
+    remainder_pair_entries: Callable | None = None
+    remainder_pair_correction: Callable | None = None
 
 
 class BuriedPlan(NamedTuple):
@@ -1762,7 +1847,30 @@ def compute_Z_operator_buried(
         )
 
     # --- the three field-form blocks -----------------------------------
-    if a_idx.size:
+    if a_idx.size and crossing_j and f.crossing_above_rule is not None:
+        _crossing_above_remainder(
+            Z,
+            f,
+            f.crossing_above_rule,
+            f.remainder_pair_entries,
+            f.remainder_pair_correction,
+            geom,
+            supp_seg,
+            polys,
+            a_idx,
+            obs_a_idx,
+            _narrow,
+            _sub_field_galerkin,
+            grid=somm_grid_fn(eps_t, plan["r1_above"]),
+            ground_z=gz,
+            k_p=k_p,
+            cancel_flag=cancel_flag,
+            basis_rows=None
+            if rows is None
+            else _crossing_basis_rows(supp_seg, polys, rows),
+            row_of=row_of,
+        )
+    elif a_idx.size:
         # The lazy view (momwire#1517): the nodes the above remainder reads
         # over every above node pair, a superset of any `rows=` restriction's.
         grid_above = lazy_above_grid(

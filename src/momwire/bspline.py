@@ -1882,6 +1882,7 @@ class BSplineSolver(
         transmitted_anchors=None,
         factored_columns=None,
         height_sheet_recal=None,
+        crossing_above_rule=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1955,6 +1956,13 @@ class BSplineSolver(
         # python); off is the shipped census, bit for bit.
         self._height_sheet_recal = _features.enabled(
             "height_sheet_recal", height_sheet_recal
+        )
+        # momwire#1860 B1: a crossing deck's above/above remainder at the
+        # above-ground rule. None defers to MOMWIRE_X_CROSSING_ABOVE_RULE
+        # (`_features`, reach 1, python); off is the cross block's order,
+        # bit for bit.
+        self._crossing_above_rule = _features.enabled(
+            "crossing_above_rule", crossing_above_rule
         )
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -8859,6 +8867,13 @@ class BSplineSolver(
                 below_remainder_pairs=self._below_remainder_pairs,
                 remainder_nodes=self._buried_remainder_nodes,
                 transmitted_anchors=self._transmitted_anchors,
+                crossing_above_rule=(
+                    self._crossing_above_remainder_rule
+                    if getattr(self, "_crossing_above_rule", False)
+                    else None
+                ),
+                remainder_pair_entries=self._remainder_pair_entries,
+                remainder_pair_correction=self._remainder_pair_correction,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,
@@ -8876,6 +8891,55 @@ class BSplineSolver(
             rows=rows,
             compact=compact,
         )
+
+    def _crossing_above_remainder_rule(self, geom, a_idx):
+        """`BuriedFills.crossing_above_rule` (momwire#1860 B1): the above
+        segments' remainder rule as `_remainder_prep` takes it for the whole
+        of an all-above deck -- the base order `n_qp_sommerfeld` and
+        #1189's raised pairs (or the deck-wide `_remainder_qp` without
+        per-pair orders) -- as `(points, tangents, W, pairs)`, the pairs in
+        global segment indices and sorted by observer then source.
+
+        One addition to that rule: every pair with a segment TOUCHING the
+        plane (an end within `_crossing_fill._PLANE_TOL`, the crossing
+        node's own segment) keeps the cross block's order
+        `_n_qp_buried_field` when the listed one is lower. #1189 keys its
+        pairs on grazing height through the base-order nodes and lists none
+        there, and the basis does not vanish at a crossing node: on the
+        buried-hub vertical the bare rule moves Zin 0.12 ohm away from a q =
+        48 reference (2.4e-3), and with these pairs it is the shipped
+        route's Zin again."""
+        gz = self.ground_z
+        seg_l, seg_r = geom["seg_l"][a_idx], geom["seg_r"][a_idx]
+        I = J = Qp = np.zeros(0, dtype=np.int64)
+        if _REMAINDER_PER_PAIR:
+            q = int(self.n_qp_sommerfeld)
+            I, J, Qp = self._remainder_qp_pairs(seg_l, seg_r, gz)
+        else:
+            q = self._remainder_qp(seg_l, seg_r, gz)
+        q_node = int(self._n_qp_buried_field())
+        zmin = np.minimum(seg_l[:, 2], seg_r[:, 2]) - gz
+        touch = np.flatnonzero(zmin <= _crossing_fill._PLANE_TOL)
+        # The pair correction swaps BASE-order moments, so only on the
+        # per-pair route (the deck-wide order lists no pairs at all).
+        if _REMAINDER_PER_PAIR and touch.size and q_node > q:
+            n = a_idx.size
+            every = np.arange(n, dtype=np.int64)
+            I = np.concatenate([I, np.repeat(touch, n), np.tile(every, touch.size)])
+            J = np.concatenate([J, np.tile(every, touch.size), np.repeat(touch, n)])
+            Qp = np.concatenate([Qp, np.full(2 * n * touch.size, q_node, np.int64)])
+            # One entry per pair, at the larger order, sorted by (I, J).
+            order = np.lexsort((-Qp, J, I))
+            I, J, Qp = I[order], J[order], Qp[order]
+            first = np.ones(I.size, dtype=bool)
+            first[1:] = (I[1:] != I[:-1]) | (J[1:] != J[:-1])
+            I, J, Qp = I[first], J[first], Qp[first]
+        pairs = (a_idx[I], a_idx[J], Qp) if I.size else None
+        pts, tang, u, w = _below_interface.field_nodes(
+            seg_l, seg_r, geom["tangents"][a_idx], geom["h_per_seg"][a_idx], q
+        )
+        W = w[None] * np.float_power(u[None], np.arange(self.degree + 1)[:, None, None])
+        return pts, tang, W, pairs
 
     def _dense_tensor_fits_budget(self, n_segs):
         """Whether one dense polynomial-moment tensor fits the memory budget."""
