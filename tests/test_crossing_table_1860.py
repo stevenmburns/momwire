@@ -45,6 +45,62 @@ pytestmark = [
 ]
 
 FIX = Path(__file__).parent / "fixtures"
+
+
+def _efhw(n_vert, n_rod, n_top, n_cp, label):
+    """The synthetic EFHW-like inverted L of momwire#1860 (not a user's
+    model): a 3 m rod under a 10 m vertical, a 30 m top, and a 4 m
+    counterpoise at 1 cm, over average ground at 3.6 MHz. Kept as text here,
+    not under tests/fixtures, which the C++ driver tests sweep whole."""
+    return f"""CM EFHW-like inverted L, buried 3 m rod, 4 m counterpoise at 1 cm, GN 2 average ground
+CM {label}
+CE
+GW 1 {n_vert} 0 0 0 0 0 10 0.001
+GW 2 {n_rod} 0 0 0 0 0 -3 0.008
+GW 3 {n_top} 0 0 10 30 0 10 0.001
+GW 4 {n_cp} -0.02 0 0.01 -4 0 0.01 0.001
+GE -1
+GN 2 0 0 0 13 0.005
+FR 0 1 0 0 3.6 0
+EX 0 1 1 0 1 0
+XQ
+EN
+"""
+
+
+# The rod Beverage of momwire#1187 (tests/beverage_deck_1187.py's geometry)
+# with a 500 ohm termination, as the momwire#1860 bench runs it.
+BEVERAGE = """CM Rod Beverage (momwire#1187 geometry): 245.73 m at 2.5 m, 1.8 m rods, average ground
+CE
+GW 1 7 0 0 -1.8 0 0 0 0.000814
+GW 2 1 0 0 0 0 0 0.25 0.000814
+GW 3 1 0 0 0.25 0 0 2.5 0.000814
+GW 4 126 0 0 2.5 245.73 0 2.5 0.000814
+GW 5 1 245.73 0 2.5 245.73 0 0.25 0.000814
+GW 6 1 245.73 0 0.25 245.73 0 0 0.000814
+GW 7 7 245.73 0 0 245.73 0 -1.8 0.000814
+GE -1
+LD 4 6 1 1 500 0
+GN 2 0 0 0 13 0.005
+FR 0 1 0 0 1.83 0
+EX 0 2 1 0 1 0
+XQ
+EN
+"""
+DECKS = {
+    "efhw_lo": _efhw(30, 9, 90, 12, "efhw_lo 141 segs"),
+    "efhw_hi": _efhw(120, 38, 380, 52, "efhw_hi 590 segs"),
+    "d3_hub": None,  # tests/fixtures/near_buried_1653/d3_hub.nec5.nec
+    "beverage": BEVERAGE,
+}
+
+
+def _deck_text(name):
+    if name == "d3_hub":
+        return (FIX / "near_buried_1653" / "d3_hub.nec5.nec").read_text()
+    return DECKS[name]
+
+
 C0 = 299792458.0
 F = 3.6e6
 K_P = 2.0 * np.pi * F / C0
@@ -206,7 +262,7 @@ def _printout(deck, basis, on, monkeypatch):
     monkeypatch.setattr(ni, "_CROSSING_TABLE_NODE", 0.0)
     # Level 1, as antennaknobs runs it: the drop-in context is level 4, where
     # a reach-1 native feature refuses.
-    text = _shell.render.__wrapped__(deck.read_text(), basis=basis, dialect="nec5")
+    text = _shell.render.__wrapped__(_deck_text(deck), basis=basis, dialect="nec5")
     monkeypatch.setattr(_lapack, "lu_factor", real)
     monkeypatch.undo()
     return text, Z[0], ni._CROSSING_TABLE_STATS["table_rows"]
@@ -227,10 +283,10 @@ def _zin(text):
 #   efhw_lo 1.7e-5, efhw_hi 1.9e-5, d3_hub 9.4e-4, Beverage 8.4e-5
 # (diag(Z^-1) at most 1.05e-3).
 CASES = [
-    ("crossing_table_1860/efhw_lo.nec", 1e-4),
-    pytest.param("crossing_table_1860/efhw_hi.nec", 1e-4, marks=pytest.mark.slow),
-    ("near_buried_1653/d3_hub.nec5.nec", 3e-3),
-    ("crossing_table_1860/beverage.nec", 3e-4),
+    ("efhw_lo", 1e-4),
+    pytest.param("efhw_hi", 1e-4, marks=pytest.mark.slow),
+    pytest.param("d3_hub", 3e-3, marks=pytest.mark.slow),
+    pytest.param("beverage", 3e-4, marks=pytest.mark.slow),
 ]
 
 
@@ -241,9 +297,8 @@ CASES = [
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
 @pytest.mark.parametrize(("deck", "tol"), CASES)
 def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
-    path = FIX / deck
-    off, z_off, _ = _printout(path, basis, False, monkeypatch)
-    on, z_on, served = _printout(path, basis, True, monkeypatch)
+    off, z_off, _ = _printout(deck, basis, False, monkeypatch)
+    on, z_on, served = _printout(deck, basis, True, monkeypatch)
     assert served > 0  # the table ran
     a, b = _zin(off), _zin(on)
     assert abs(b - a) <= tol * abs(a), (a, b)
@@ -259,9 +314,9 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
 @pytest.mark.parametrize(
     ("deck", "taken"),
     [
-        ("crossing_table_1860/efhw_lo.nec", True),
-        ("near_buried_1653/d3_hub.nec5.nec", True),
-        ("crossing_table_1860/beverage.nec", False),
+        ("efhw_lo", True),
+        ("d3_hub", True),
+        ("beverage", False),
     ],
 )
 def test_the_census_takes_the_table_where_it_pays(monkeypatch, deck, taken):
@@ -269,7 +324,5 @@ def test_the_census_takes_the_table_where_it_pays(monkeypatch, deck, taken):
 
     monkeypatch.setenv("MOMWIRE_X_CROSSING_TABLE", "1")
     ni._CROSSING_TABLE_STATS["table_rows"] = 0
-    _shell.render.__wrapped__(
-        (FIX / deck).read_text(), basis="razor-2p", dialect="nec5"
-    )
+    _shell.render.__wrapped__(_deck_text(deck), basis="razor-2p", dialect="nec5")
     assert (ni._CROSSING_TABLE_STATS["table_rows"] > 0) is taken
