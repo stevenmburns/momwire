@@ -294,7 +294,7 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         working-directory: antennaknobs
         run: |
-          FILES="tests/test_mw_layer_2219.py tests/test_momwire_private_imports.py"
+          FILES="tests/test_mw_layer_2219.py tests/test_momwire_private_imports.py tests/test_mw_networks_ab_2219.py"
           python -c "import momwire; print('momwire from', momwire.__file__)"
           N=$(python -m pytest -p no:cacheprovider -q --collect-only $FILES | grep -c '::' || true)
           echo "collected $N consumer-contract tests"
