@@ -351,12 +351,12 @@ def height_sheet_recal_scope(on):
 # Beverage; diag(Z^-1) <= 1e-3 relative. Coarse by design: the accuracy class
 # Steve accepted ("lambda/100"), not the twin's.
 #
-# Whether a fill takes it is decided per fill on what the fill asks, never on
-# what is cached (`_CrossingFill`): the twin rows inside the extents are
-# counted at their cost (a column setup is `_CROSSING_TABLE_SETUP` members),
-# and once they pass the build's own cost (a column per rho node, each node
+# Whether a fill takes it is decided on what the fill asks, never on what is
+# cached (`_CrossingFill`): a call's twin rows inside the extents are counted
+# at their cost (a column setup is `_CROSSING_TABLE_SETUP` members), and when
+# one call's pass the build's own cost (a column per rho node, each node
 # `_CROSSING_TABLE_NODE` members) the table serves that call's rows and every
-# later call's. A fill with few crossing rows keeps the twin throughout. Off,
+# later call's in the fill. A fill with few crossing rows keeps the twin throughout. Off,
 # the default, the twin is called exactly as before.
 #
 # The weights are fitted (Skylake, T1, the dumped column calls of eight
@@ -380,12 +380,11 @@ _CROSSING_TABLE_STATS = dict.fromkeys(
 
 
 class _CrossingFill:
-    """One fill's running count of twin work inside the table's extents."""
+    """Whether one fill has taken the table."""
 
-    __slots__ = ("pending", "taken")
+    __slots__ = ("taken",)
 
     def __init__(self):
-        self.pending = 0.0
         self.taken = False
 
 
@@ -560,12 +559,18 @@ def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
     inside = (rho <= lim[0]) & (zs <= lim[1]) & (-zps <= lim[2])
     n_in = int(np.count_nonzero(inside))
     if not fill.taken:
+        # A call takes the table on its OWN work inside the extents: what an
+        # earlier call already spent on the twin is spent, and counting it
+        # took the table for a late call that a build did not pay for
+        # (aca_vertical_screen under nec5-bspline: 816 rows for a 40 ms
+        # build). Once a call has taken it, the fill keeps it.
+        cost = 0.0
         if n_in:
             cols_in = int(
                 np.count_nonzero(np.bincount(col[inside], minlength=sizes.size))
             )
-            fill.pending += cols_in * _CROSSING_TABLE_SETUP + n_in
-        if fill.pending >= n[0] * _CROSSING_TABLE_SETUP + _CROSSING_TABLE_NODE * float(
+            cost = cols_in * _CROSSING_TABLE_SETUP + n_in
+        if n_in and cost >= n[0] * _CROSSING_TABLE_SETUP + _CROSSING_TABLE_NODE * float(
             np.prod(n)
         ):
             fill.taken = True

@@ -15,8 +15,9 @@ What is held:
   the C++ read is its numpy walk, each to rounding;
 - the closed form takes out what is singular at the corner: R (f - S)
   shrinks with R there for all six kernels;
-- a fill with few crossing rows declines the table (the census counts the
-  twin's work against the build's);
+- a call takes the table only on its own work inside the extents against
+  the build's (the census), and the decks where taking it did not pay keep
+  the twin;
 - on, the printed input impedance of four buried decks stays within the
   accuracy class measured for it (the tolerances below), and the
   input admittance seen at every basis function moves <= 2e-3.
@@ -314,8 +315,14 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
 @pytest.mark.parametrize(
     ("deck", "taken"),
     [
-        ("efhw_lo", True),
-        ("d3_hub", True),
+        # Measured (Skylake, T1, factored_columns + height_sheet_recal on):
+        # efhw_hi's main crossing call alone outweighs the build, and its
+        # fill drops 1179 -> ~935 ms; no single call of the other three does,
+        # and taking the table there measured slower (efhw_lo +9 ms,
+        # aca_vertical_screen under nec5-bspline +42 ms) or no faster.
+        pytest.param("efhw_hi", True, marks=pytest.mark.slow),
+        ("efhw_lo", False),
+        ("d3_hub", False),
         ("beverage", False),
     ],
 )
