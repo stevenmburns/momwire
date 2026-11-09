@@ -42,7 +42,16 @@ dependencies = [
 # those tests skip cleanly without it, so it stays out of this list (it's a
 # platform-specific --find-links wheel, not a PyPI package a name could pin).
 test = [
-    "pytest",
+    # <9.2 until a pytest-xdist release after 3.8.0: pytest 9.2.0
+    # (2026-10-27) keeps a node's id in `_id`, so xdist 3.8.0's
+    # `item._nodeid = "<id>@<group>"` writes a dead attribute and
+    # `--dist loadgroup` silently becomes `load`. Every xdist_group here
+    # stopped grouping -- portal, memgate, the module-fixture files -- and the
+    # PR lane's `test` job went from ~9 to ~19 min, most of it four workers
+    # each compiling test_razor_core_standalone's drivers at once.
+    # pytest-dev/pytest-xdist#1386 is fixed on xdist main, not yet released.
+    # tests/test_loadgroup_groups.py fails the lane if grouping lapses again.
+    "pytest<9.2",
     # xdist is the DEFAULT lane since #403 closed (see the addopts note).
     # History, because both halves were hard-won: #400's first evaluation
     # measured `-n auto` at 486 s against the serial 280 s — each worker
