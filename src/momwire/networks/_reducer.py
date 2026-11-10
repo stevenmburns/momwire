@@ -76,6 +76,23 @@ from ._spec import (
 )
 
 
+def _stamp_block(G, idxs, yb) -> None:
+    """``G[idxs, idxs] += yb`` with every entry landing, a repeated port too.
+
+    A branch may name one port twice: an ``NT`` card with both ends on one
+    segment is ``Admittance(ports=(p, p))``. Its two terminals are then one
+    node, which takes ``y11 + y12 + y21 + y22`` -- what licensed NEC-5 and
+    NEC-4.2 both print for such a card, measured as black boxes against the
+    same deck with that sum as a series ``LD 4`` (momwire#1887). Fancy-index
+    ``+=`` is buffered (each target is read once and written once), so it
+    kept ONE of the four entries and dropped the rest without a word.
+    ``np.add.at`` accumulates instead, in C order (y11, y12, y21, y22), and
+    for distinct ports still gives each element exactly the one addition the
+    buffered form did, so those stamps keep their bits.
+    """
+    np.add.at(G, np.ix_(idxs, idxs), yb)
+
+
 class _BudgetEntry(tuple):
     """One `excited_state` budget row (issue #956).
 
@@ -522,7 +539,7 @@ class NetworkReducer:
                 # like TL's 2×2 and the parallel Shunt's 1×1.
                 idxs = [self.port_to_idx[p] for p in br.ports]
                 yb = np.array(br.y, dtype=np.complex128)
-                G[np.ix_(idxs, idxs)] += yb
+                _stamp_block(G, idxs, yb)
                 probes.append(
                     probe(
                         lab(f"Admittance {'→'.join(map(_short, br.ports))}"),
@@ -550,7 +567,7 @@ class NetworkReducer:
                 # like TL's 2×2 — a characterized balun / coax / filter black box.
                 a, b = self.port_to_idx[br.a], self.port_to_idx[br.b]
                 yb = br.data.y_at(f_hz)
-                G[np.ix_([a, b], [a, b])] += yb
+                _stamp_block(G, [a, b], yb)
                 probes.append(
                     probe(
                         lab(f"Touchstone {_short(br.a)}→{_short(br.b)}"),
