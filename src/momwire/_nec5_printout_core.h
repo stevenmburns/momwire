@@ -233,6 +233,9 @@ struct Solved {
     bool x_c_order = false;
     std::vector<cd> x;
     CMat y;
+    // Wall seconds in the port solve (the LU, or bs2's KCL Schur solve): the
+    // NEC-4 printout's FACTOR=, so its FILL= is the fill alone.
+    double factor_seconds = 0;
 };
 
 // `element_currents(coeffs, subdiv)`'s (mid, moment, nodes, delta): the

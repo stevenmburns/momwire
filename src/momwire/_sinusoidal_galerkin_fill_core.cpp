@@ -24,6 +24,7 @@
 #pragma fp_contract(off)
 #endif
 
+#include <chrono>
 #include "_sinusoidal_galerkin_fill_core.h"
 
 #include "_sinusoidal_galerkin_crossing_core.h"
@@ -2638,6 +2639,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
             slot = cadd(slot, col);
         }
     }
+    const auto t_factor = std::chrono::steady_clock::now();
     if (!cont.empty()) {
         ps.coeffs = solve_constrained(fr, la, ps.G, N, U, P, cont);
         ps.c_order = true;  // `np.empty` then the two slices
@@ -2669,6 +2671,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         if (info != 0) decline("getrs failed");
     }
     }
+    ps.factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_factor).count();
     // Y[:, j] = _port_currents(alphas[:, j], ...): a gap feed's segment
     // current at `feed_xi`; a node port's `-(U[:, port] @ alpha)`, numpy's
     // vector-vector matmul (`cblas_zdotu_sub` over U's strided column)

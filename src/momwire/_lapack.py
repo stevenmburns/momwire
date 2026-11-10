@@ -129,6 +129,8 @@ from __future__ import annotations
 import ctypes
 import functools
 import sys
+import threading
+import time
 import warnings
 
 import numpy as np
@@ -302,15 +304,40 @@ def _square(a):
     return a.ndim == 2 and a.shape[0] == a.shape[1] and a.shape[0] > 0
 
 
+# Wall seconds this thread has spent in the factor stage, always counted
+# (two clock reads per LU call): a printout's MATRIX TIMING reads the
+# difference around a solve so FACTOR= is the O(N^3) LU and FILL= the
+# O(N^2) fill, apart. Per thread, so a resident server's concurrent requests
+# keep their own counts.
+_factor_clock = threading.local()
+
+
+def factor_seconds() -> float:
+    """This thread's running total of seconds in the LU routines."""
+    return getattr(_factor_clock, "total", 0.0)
+
+
 def _factor_stage(fn):
     """``fn`` in MOMWIRE_TIMES's ``factor`` stage (:mod:`momwire._times`; a
-    no-op when nothing is timed). Its warnings name the caller's line as
-    before: they carry one more level for this frame."""
+    no-op when nothing is timed), and in this thread's `factor_seconds`. Its
+    warnings name the caller's line as before: they carry one more level for
+    this frame."""
 
     @functools.wraps(fn)
     def timed(*args, **kwargs):
-        with _times.stage("factor"):
-            return fn(*args, **kwargs)
+        # The outermost call counts; a factor wrapper reached from inside
+        # another (solve's fallback) is already on the clock.
+        if getattr(_factor_clock, "depth", 0):
+            with _times.stage("factor"):
+                return fn(*args, **kwargs)
+        _factor_clock.depth = 1
+        t0 = time.perf_counter()
+        try:
+            with _times.stage("factor"):
+                return fn(*args, **kwargs)
+        finally:
+            _factor_clock.total = factor_seconds() + (time.perf_counter() - t0)
+            _factor_clock.depth = 0
 
     return timed
 

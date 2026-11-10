@@ -220,7 +220,11 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
             throw nec4::Refusal(e.message);  // a ValueError the fill raises (the below remainder's)
         }
         std::unique_ptr<nec4::EngineSolve> es(new nec4::EngineSolve);
-        es->fill_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        // FILL= is the O(N^2) fill and FACTOR= the O(N^3) LU, apart: one
+        // clock over both hid which of them a large deck spends its time in.
+        es->factor_seconds = ps.factor_seconds;
+        es->fill_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - ps.factor_seconds;
         es->n_basis = ps.n;
         es->n_ports = ps.n_ports;
         es->y = ps.y;

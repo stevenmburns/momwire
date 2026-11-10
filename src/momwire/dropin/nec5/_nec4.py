@@ -588,7 +588,7 @@ def _run(
                 # the deck's last: an `LD -1` after it does not unload it.
                 loads=tuple(_load_row(card) for card in group.loads),
                 fill_seconds=result.fill_ms / 1000.0,
-                factor_seconds=0.0,
+                factor_seconds=result.factor_ms / 1000.0,
                 loaded_twice=solver.loaded_twice(index),
             )
             if preamble

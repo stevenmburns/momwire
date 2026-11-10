@@ -8,6 +8,7 @@
 #pragma fp_contract(off)
 #endif
 
+#include <chrono>
 #include "_libm_complex_inline.h"
 #include "_sinusoidal_fill_core.h"
 #include "_sinusoidal_crossing_core.h"
@@ -2181,6 +2182,7 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
                 }
             if (lower <= 1 || upper <= 1) decline("a banded or triangular Z (scipy's structure detection)");
             if (sym || her) decline("a symmetric or Hermitian Z (scipy's structure detection)");
+            const auto t_factor = std::chrono::steady_clock::now();
             std::vector<cd> lu(Nz * Nz);
             for (std::size_t i = 0; i < Nz; i++)
                 for (std::size_t j = 0; j < Nz; j++) lu[i + j * Nz] = ps.G[i * Nz + j];
@@ -2191,6 +2193,8 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
             char trans = 'N';
             la.lu.getrs(&trans, &n, &nrhs, lu.data(), &n, ipiv.data(), x.data(), &n, &info);
             if (info != 0) decline("getrs failed");
+            ps.factor_seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t_factor).count();
         }
     }
     ps.coeffs.assign(Nz * Pz, cd(0.0, 0.0));
