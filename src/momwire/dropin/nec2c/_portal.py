@@ -2554,7 +2554,26 @@ class DeckSolver:
         (`_segment_currents` and `_segment_charges`) share one walk and one
         set of tie-breaks rather than two copies that can drift apart on a
         crossed deck.
+
+        Held per mesh, keyed by the mesh itself (every polyline's points and
+        every edge's element count) rather than by the solver object: a deck
+        solves one mesh at every frequency, and the dense segment-by-element
+        search is O(N^2) in memory and time. The ELT whip (4,392 segments)
+        ran it twice per frequency, 13.4 s of a 41 s, 13-frequency deck.
         """
+        key = (
+            tuple(np.asarray(p, dtype=float).tobytes() for p in solver.wires_polylines),
+            tuple(tuple(int(n) for n in ns) for ns in solver.n_per_edge_per_wire),
+        )
+        held = getattr(self, "_element_match_held", None)
+        if held is not None and held[0] == key:
+            return held[1]
+        result = self._element_match_uncached(solver)
+        self._element_match_held = (key, result)
+        return result
+
+    def _element_match_uncached(self, solver):
+        """`_element_match`'s search, every call (see there)."""
         mids, dirs = [], []
         for w_idx, polyline in enumerate(solver.wires_polylines):
             parts = []
