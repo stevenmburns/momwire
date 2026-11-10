@@ -128,6 +128,10 @@ ILL_POSED = {
     # NT with every admittance zero: the port's impedance is a division by
     # zero, printed as +-1e17 of noise either side
     "dipole_nt_all_zero.deck": "a port impedance that divides by zero",
+    # NT on one segment whose four entries sum to zero (momwire#1887): the
+    # gap is open, so that segment's current is ~1e-18 of noise and its
+    # impedance column +-1e17 (MSVC's /fp:fast prints its own noise)
+    "net_nt_one_segment_zero_sum.nec": "an open gap's current and impedance",
     # an exactly circular pattern (axial ratio 1.00000): the tilt angle of a
     # circle is undefined, and each side prints its own
     "dipole_rp_crossed_quadrature.deck": "the tilt of a circular polarization",
