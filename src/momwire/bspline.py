@@ -1878,15 +1878,16 @@ class BSplineSolver(
     rotational_symmetry : the sector (block-circulant) route, opt-in
         (momwire#1029). False (default) changes nothing — no attribute the
         dense path reads moves, and no line of route code runs. True asks for
-        a deck that is N copies of one sector about a vertical axis with the
-        drive on that axis: `compute_impedance` then fills ONE sector's rows
-        against every source and solves the (m + p) harmonic-0 block whatever
-        N is. A deck that is not that shape is REFUSED AT CONSTRUCTION,
-        naming the first condition of the rule it breaks
-        (`_rotational_symmetry`), because no fill could rescue it. Buried
-        decks (`ground_z` with a wire below it) on this basis only, and every
-        entry point but `compute_impedance` refuses rather than quietly
-        answering densely.
+        a deck that is N copies of one sector about a vertical axis — the
+        sector wires may include vertical ones off the axis (momwire#1897) —
+        whose port set the rotation maps onto itself: `compute_impedance`
+        then fills ONE sector's rows against every source and solves the
+        (m + p) harmonic-0 block whatever N is. `compute_port_solution` and
+        `compute_y_matrix` (and their swept forms) are served from the same
+        fill; a port off the axis, one of N rotated copies, takes each
+        harmonic's m x m block as well. A deck that is not that shape is
+        REFUSED AT CONSTRUCTION, naming the first condition of the rule it
+        breaks (`_rotational_symmetry`), because no fill could rescue it.
     """
 
     # momwire#927. Class-level so they exist before any solve and on a deck
@@ -10146,6 +10147,23 @@ class BSplineSolver(
     def _compute_impedance_swept_rotational(self, k_array, z_out):
         return _rotational_symmetry.compute_impedance_swept(self, k_array, z_out)
 
+    def _compute_port_solution_rotational(self):
+        Y, X, pieces = _rotational_symmetry.compute_port_solution(self)
+        geom, supp_seg, polys, wire_knots, wire_basis_global, n_basis_total = pieces
+        return PortSolution(
+            y=Y,
+            coeffs=X,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_SplineBasis(
+                geom=geom,
+                supp_seg=supp_seg,
+                polys=polys,
+                wire_knots=wire_knots,
+                wire_basis_global=wire_basis_global,
+                n_poly=n_basis_total,
+            ),
+        )
+
     def _per_feed_z(self, coeffs_full, port_vectors, all_voltages):
         """Drive-point impedance per port (gap feeds, then junction ports,
         then node gaps). `coeffs_full` may include the enrichment block; every
@@ -10263,30 +10281,6 @@ class BSplineSolver(
         coeffs = self._solve_with_kcl(Z, v, kcl_con, overwrite=True)
         return _per_feed_z(coeffs), coeffs
 
-    def _rotational_route_serves_one_drive(self, *entries):
-        """Every entry point but the two impedance ones stays dense under
-        `rotational_symmetry=True`, and says so rather than answering (the
-        sector route decomposes ONE axis-symmetric drive, momwire#1029).
-        Silently handing back the dense answer would make the flag look
-        served where it is not, which is the failure mode
-        `require_lattice_fft` exists to prevent on the array solver.
-
-        Several `entries` for a guard that stands in front of more than one
-        public name — `_port_solutions_swept` is the generator behind both
-        swept port entries, and naming only one of them told a user about a
-        method they had not called.
-        """
-        if self._rotational_map is not None:
-            named = " and ".join(entries)
-            verb = "is" if len(entries) == 1 else "are"
-            raise _rotational_symmetry.RotationalSymmetryRefused(
-                f"rotational symmetry: {named} {verb} not on the sector "
-                f"route — it decomposes the single axis-symmetric drive of "
-                f"compute_impedance and compute_impedance_swept only. Use "
-                f"one of those, or drop rotational_symmetry=True to solve "
-                f"this deck densely."
-            )
-
     def compute_y_matrix(self) -> np.ndarray:
         """Short-circuit admittance matrix [Y_sc] at the configured feeds.
 
@@ -10319,7 +10313,6 @@ class BSplineSolver(
         This is the `y` field of `compute_port_solution()` and nothing else —
         see there for the per-port solution columns this throws away (#232).
         """
-        self._rotational_route_serves_one_drive("compute_y_matrix")
         return self.compute_port_solution().y
 
     def compute_port_solution(self, same_edge_prep=None) -> PortSolution:
@@ -10352,7 +10345,8 @@ class BSplineSolver(
         it just spares the per-k rebuild when `_port_solutions_swept` drives
         this method frequency by frequency.
         """
-        self._rotational_route_serves_one_drive("compute_port_solution")
+        if self._rotational_map is not None:
+            return self._compute_port_solution_rotational()
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
@@ -10475,12 +10469,12 @@ class BSplineSolver(
           `swept_mem_mb` dispatch instead of always materialising the full
           (d+1, d+1, N, N) moment tensor (issue #238).
         """
-        self._rotational_route_serves_one_drive(
-            "compute_y_matrix_swept", "compute_port_solution_swept"
-        )
         _refuse_complex_k(k_array, "BSplineSolver._port_solutions_swept")
         k_array = np.asarray(k_array, dtype=float)
-        if self.use_singular_enrichment:
+        if self.use_singular_enrichment or self._rotational_map is not None:
+            # The sector route (momwire#1897) loops for the reason
+            # `compute_impedance_swept` does there: its fill is the
+            # row-compact one, which has no k axis to batch over.
             with self._k_restored():
                 for kk in k_array:
                     self._checkpoint()  # top of each frequency iteration

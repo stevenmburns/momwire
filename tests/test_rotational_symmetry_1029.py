@@ -15,9 +15,11 @@ What is gated:
 * **G1 at 4 radials** — Z_in and the currents against the dense solve
   (`|dZ|/|Z| <= 1e-9`, `max|dc|/max|c| <= 1e-8`). The 48- and 150-radial
   rungs are scratch records, not tests: they cost minutes;
-* **G4's half that is about code** — the flag off runs no route code, and
-  every entry point but `compute_impedance` refuses rather than quietly
-  handing back the dense answer.
+* **G4's half that is about code** — the flag off runs no route code.
+  Every entry point but `compute_impedance` used to refuse rather than
+  quietly hand back the dense answer; since momwire#1897 the port entries
+  are ON the route (each harmonic's block from the same one-sector fill),
+  and the gate is that they match the dense solve.
 
 Phase 2b adds two more:
 
@@ -326,19 +328,32 @@ def test_singular_enrichment_is_out_of_scope():
         "compute_port_solution_swept",
     ],
 )
-def test_every_other_entry_point_refuses_rather_than_answering_densely(entry):
-    """`compute_impedance_swept` LEFT this list at phase 2b because it is
-    served now, and nothing else did. The two swept PORT entries joined it:
-    they were reached before through `compute_port_solution`'s own refusal,
-    which named the wrong entry point — a user who called
-    `compute_y_matrix_swept` was told about a method they had not called.
+def test_the_port_entry_points_are_on_the_route_and_match_dense(entry):
+    """These four refused until momwire#1897, naming themselves, because the
+    route decomposed ONE axis-symmetric drive. They are served now: a port
+    solution drives each port alone, which the route takes through every
+    harmonic it needs from the same one-sector fill (here the one port is on
+    the mast, so harmonic 0 only). Served means served by the route, not
+    handed back densely: the fill they make is the compact one-sector one.
     """
     s = solver(4)
-    args = ([np.array([s.k])],) if entry.endswith("_swept") else ()
-    with pytest.raises(RotationalSymmetryRefused) as exc:
-        getattr(s, entry)(*(a for a in args))
-    assert entry in str(exc.value)
-    assert "compute_impedance and compute_impedance_swept only" in str(exc.value)
+    d = solver(4, rotational_symmetry=False)
+    fills = _count_fills(s)
+    args = (np.array([s.k]),) if entry.endswith("_swept") else ()
+    got, want = getattr(s, entry)(*args), getattr(d, entry)(*args)
+    if entry.endswith("_swept"):
+        got, want = list(got), list(want)
+        assert len(got) == len(want) == 1
+        got, want = got[0], want[0]
+    if entry.startswith("compute_port_solution"):
+        assert got.y.shape == want.y.shape == (1, 1)
+        assert np.max(np.abs(got.coeffs - want.coeffs)) <= 1e-8 * np.max(
+            np.abs(want.coeffs)
+        )
+        got, want = got.y, want.y
+    assert got.shape == want.shape == (1, 1)
+    assert abs(got[0, 0] - want[0, 0]) / abs(want[0, 0]) <= 1e-9
+    assert fills == [1]
 
 
 # ----------------------------------------------------------------------
@@ -514,27 +529,6 @@ def test_a_bad_drive_costs_one_sweep_nothing_rather_than_n_k_fills():
     fills = _count_fills(s)
     with pytest.raises(RotationalSymmetryRefused):
         s.compute_impedance_swept(s.k * np.array(SPAN))
-    assert fills == []
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        "compute_y_matrix",
-        "compute_port_solution",
-        "compute_y_matrix_swept",
-        "compute_port_solution_swept",
-    ],
-)
-def test_the_entry_point_refusals_cost_no_fill(entry):
-    """`compute_y_matrix_swept` is the one worth naming: its refusal comes
-    out of a GENERATOR, so it fires on the first `next()` rather than on the
-    call — early enough, but only because nothing fills before that."""
-    s = solver(4)
-    fills = _count_fills(s)
-    args = ([s.k * np.array(SPAN)],) if entry.endswith("_swept") else ()
-    with pytest.raises(RotationalSymmetryRefused):
-        getattr(s, entry)(*args)
     assert fills == []
 
 
