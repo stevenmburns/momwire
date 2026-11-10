@@ -154,7 +154,7 @@ def test_the_dropped_reading_is_not_what_the_reducer_prints():
     # not vacuous: one entry alone, the old answer, is a different antenna
     one_entry = Admittance(ports=("n",), y=((Y22,),))
     summed = Admittance(ports=("n", "n"), y=tuple(map(tuple, YB)))
-    assert abs(_feed_z(summed) - _feed_z(one_entry)) > 1.0
+    assert _feed_z(summed) != pytest.approx(_feed_z(one_entry), rel=1e-3)
 
 
 # --- the decks, Python route --------------------------------------------------
@@ -185,10 +185,14 @@ def _render(dialect: str, basis: str, text: str) -> str:
         return _nec4.render(text, basis=basis)
 
 
-def _as_ld4(deck: Path, z: complex) -> str:
+def _as_ld4(dialect: str, deck: Path, z: complex) -> str:
+    """The deck with its NT replaced by a series LD 4 of `z` on segment 6, in
+    the dialect's spelling (the NEC-5 card's fourth field is LDTAGT, an end
+    code, where NEC-4.2's is the last segment of a range)."""
     text = deck.read_text()
     (nt,) = [ln for ln in text.splitlines() if ln.startswith("NT ")]
-    return text.replace(nt, f"LD 4 1 6 6 {z.real:.10E} {z.imag:.10E}")
+    last = "0" if dialect == "nec5" else "6"
+    return text.replace(nt, f"LD 4 1 6 {last} {z.real:.10E} {z.imag:.10E}")
 
 
 ROUTES = [
@@ -202,20 +206,47 @@ ROUTES = [
 @pytest.mark.parametrize("dialect, basis", ROUTES, ids=[f"{d}-{b}" for d, b in ROUTES])
 def test_the_summed_card_prints_as_the_load_of_its_sum(dialect, basis):
     nt = _render(dialect, basis, SUMMED.read_text())
-    ld = _render(dialect, basis, _as_ld4(SUMMED, 1 / (Y11 + 2 * Y12 + Y22)))
-    assert "NEC ERROR" not in nt
+    ld = _render(dialect, basis, _as_ld4(dialect, SUMMED, 1 / (Y11 + 2 * Y12 + Y22)))
+    assert "NEC ERROR" not in nt and "NEC ERROR" not in ld
     assert _zin(nt) == _zin(ld)
     # and not the reading that drops y12 (the black box's falsifier)
-    assert _zin(nt) != _zin(_render(dialect, basis, _as_ld4(SUMMED, 1 / (Y11 + Y22))))
+    assert _zin(nt) != _zin(
+        _render(dialect, basis, _as_ld4(dialect, SUMMED, 1 / (Y11 + Y22)))
+    )
 
 
 @pytest.mark.parametrize("dialect, basis", ROUTES, ids=[f"{d}-{b}" for d, b in ROUTES])
 def test_a_zero_sum_card_leaves_the_gap_open(dialect, basis):
     nt = _render(dialect, basis, ZERO_SUM.read_text())
-    ld = _render(dialect, basis, _as_ld4(ZERO_SUM, 1e9 + 0j))
-    assert "NEC ERROR" not in nt
+    ld = _render(dialect, basis, _as_ld4(dialect, ZERO_SUM, 1e9 + 0j))
+    assert "NEC ERROR" not in nt and "NEC ERROR" not in ld
     r, x = map(float, _zin(nt))
     r0, x0 = map(float, _zin(ld))
     # 1e9 ohm is open to the printed digits of X and to 1e-4 of R (NEC-5's
     # own printouts of the pair differ there too)
     assert (r, x) == pytest.approx((r0, x0), rel=1e-4)
+
+
+# The black boxes' printed Z for the two decks (the module docstring's table).
+# nec5-razor-2p prints the no-card dipole within 3e-5 of NEC-5 and
+# nec42-sinusoidal within 2e-4 of NEC-4.2, so the tolerances are the basis
+# gap, an order below what dropping y12 moves (about 10 %).
+REFERENCE = [
+    ("nec5", "razor-2p", SUMMED, 89.348 - 86.459j, 1e-4),
+    ("nec5", "razor-2p", ZERO_SUM, 28.059 - 563.12j, 1e-4),
+    ("nec42", "sinusoidal", SUMMED, 88.2427 - 77.2813j, 2e-3),
+    ("nec42", "sinusoidal", ZERO_SUM, 31.7281 - 566.125j, 2e-3),
+]
+
+
+@pytest.mark.parametrize(
+    "dialect, basis, deck, z_ref, rel",
+    REFERENCE,
+    ids=[f"{d}-{b}-{p.stem}" for d, b, p, _z, _r in REFERENCE],
+)
+def test_the_decks_print_what_the_licensed_engines_print(
+    dialect, basis, deck, z_ref, rel
+):
+    r, x = map(float, _zin(_render(dialect, basis, deck.read_text())))
+    assert r == pytest.approx(z_ref.real, rel=rel)
+    assert x == pytest.approx(z_ref.imag, rel=rel)
