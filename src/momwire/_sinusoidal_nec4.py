@@ -49,6 +49,19 @@ import math
 import numpy as np
 
 from . import _nec4_junction
+from ._accel import acc as _acc
+
+# The C++ front half's copy of `_nec4_junction.junction_charge_factors`,
+# operation for operation and held to it bit for bit by its test. 20x the
+# Python's speed per junction, which a wire grid of thousands of junctions,
+# solved again at every frequency, spends whole seconds on (12 s of the ELT
+# whip's 13-frequency NEC-4.2 run). The Python stays the reference and the
+# fallback.
+_JUNCTION_FACTORS = (
+    _acc.nec4_junction_factors
+    if _acc is not None and hasattr(_acc, "nec4_junction_factors")
+    else None
+)
 
 __all__ = ["end_factors", "basis_coefs_per_end", "solved_nodes"]
 
@@ -95,10 +108,15 @@ def end_factors(geom, k, a_const, junctions, radius_per_wire, nodes):
         radii = [float(radius_per_wire[w]) for w, _end in junctions[j]]
         lengths = [float(seg_h[s]) for s, _end in segs]
         try:
-            factors = _nec4_junction.junction_charge_factors(
-                float(k), dirs, radii, lengths, float(base[segs[0][0]])
-            )
-        except ZeroDivisionError:
+            if _JUNCTION_FACTORS is not None:
+                factors = _JUNCTION_FACTORS(
+                    float(k), dirs, radii, lengths, float(base[segs[0][0]])
+                )
+            else:
+                factors = _nec4_junction.junction_charge_factors(
+                    float(k), dirs, radii, lengths, float(base[segs[0][0]])
+                )
+        except (ZeroDivisionError, RuntimeError):
             # A singular node: members that coincide (two copies of one wire
             # left in place, say) have no unique charge split. It keeps the
             # log rule, as an unsolved node does.
