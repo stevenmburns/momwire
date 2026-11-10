@@ -284,3 +284,193 @@ def test_sommerfeld_fold_copies_as_the_dense_route_does():
         assert got.tobytes() == ref.tobytes()
     else:
         assert np.abs(got - ref).max() <= 1e-13 * np.abs(ref).max()
+
+
+# ---- momwire#1854: the checks as arrays, the remainder map cut to fit ------
+
+
+def _scalar_to_solved(hint, kept):
+    """`_pair_reuse_to_solved` as it was before momwire#1854, member by member:
+    the reference the array form must reproduce."""
+    out = []
+    for cls in hint:
+        members = []
+        for (wa, ea), (wb, eb) in cls:
+            sa = int(wa) if kept is None else (kept.index(wa) if wa in kept else None)
+            sb = int(wb) if kept is None else (kept.index(wb) if wb in kept else None)
+            if sa is not None and sb is not None:
+                members.append(((sa, int(ea)), (sb, int(eb))))
+        if len(members) > 1:
+            out.append(members)
+    return out
+
+
+def _scalar_plan(s, geom, hint):
+    """`_pair_reuse_plan` as it was before momwire#1854, one member at a time:
+    ``(plan, dropped)``."""
+    import itertools
+
+    from momwire.bspline import _PAIR_REUSE_RTOL
+
+    slices = s._same_edge_slices(geom)
+    index, base = {}, 0
+    for w, pw in enumerate(geom["per_wire"]):
+        for e in range(len(pw["edge_offsets"]) - 1):
+            index[(w, e)] = base
+            base += 1
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    scale = float(max(np.max(np.abs(seg_l)), np.max(np.abs(seg_r)), 1e-30))
+    tol = _PAIR_REUSE_RTOL * scale
+    radius = np.asarray(s._seg_radius(geom), dtype=np.float64)
+    ek = s._ek_spec(geom) if s.extended_kernel else None
+    groups = None if ek is None else (np.asarray(ek.group_i), np.asarray(ek.group_j))
+
+    def dists(a, b):
+        pts = (
+            seg_l[slices[a].start],
+            seg_r[slices[a].stop - 1],
+            seg_l[slices[b].start],
+            seg_r[slices[b].stop - 1],
+        )
+        return np.array(
+            [np.linalg.norm(u - v) for u, v in itertools.combinations(pts, 2)]
+        )
+
+    def same_block(a, b, a2, b2):
+        sa, sb, sa2, sb2 = slices[a], slices[b], slices[a2], slices[b2]
+        if (sa.stop - sa.start, sb.stop - sb.start) != (
+            sa2.stop - sa2.start,
+            sb2.stop - sb2.start,
+        ):
+            return False
+        if not (
+            np.array_equal(radius[sa], radius[sa2])
+            and np.array_equal(radius[sb], radius[sb2])
+        ):
+            return False
+        if groups is not None:
+            gi, gj = groups
+            for x, y, u, v in ((sa, sb, sa2, sb2), (sb, sa, sb2, sa2)):
+                if not np.array_equal(
+                    gi[x][:, None] == gj[y][None, :], gi[u][:, None] == gj[v][None, :]
+                ):
+                    return False
+        return bool(np.max(np.abs(dists(a, b) - dists(a2, b2))) <= tol)
+
+    plan, dropped = {}, []
+    for cls in hint:
+        (ra, rb), *members = [(index.get(x), index.get(y)) for x, y in cls]
+        if ra is None or rb is None:
+            dropped += cls[1:]
+            continue
+        for (ma, mb), named in zip(members, cls[1:], strict=True):
+            if ma is None or mb is None or (ma, mb) in plan or (ma, mb) == (ra, rb):
+                dropped.append(named)
+                continue
+            if (ma == mb) != (ra == rb) or not same_block(ra, rb, ma, mb):
+                dropped.append(named)
+                continue
+            plan[(ma, mb)] = (ra, rb)
+            if ma != mb:
+                plan[(mb, ma)] = (rb, ra)
+    return {t: v for t, v in plan.items() if v not in plan}, tuple(dropped)
+
+
+def _messy_hint(D):
+    """The director classes, plus every kind of member the check must refuse
+    or resolve by order: a false claim (the reflector), an edge that does not
+    exist, a member equal to its representative, a repeat of a planned pair in
+    the other order and in a later class, a reversed representative, and a
+    class whose representative does not exist."""
+    hint = _director_hint(D)
+    hint[0] = hint[0] + [((0, 0), (0, 0)), ((99, 0), (99, 0)), ((2, 0), (2, 0))]
+    hint[1] = hint[1] + [((4, 0), (3, 0)), ((3, 0), (2, 0))]
+    hint.append([((2, 0), (3, 0)), ((3, 0), (4, 0)), ((5, 0), (4, 0))])
+    hint.append([((2, 0), (9, 7)), ((3, 0), (4, 0))])
+    return hint
+
+
+@pytest.mark.parametrize("ek", [False, True])
+def test_the_array_checks_plan_what_the_member_checks_did(ek):
+    """The plan and the dropped list, entry for entry, are what the member-
+    by-member check of #1810 gave: the same accepted copies, the same first
+    claim winning, the same members named, in the same order."""
+    wires, n = _yagi(6)
+    # A two-edge director: its blocks no longer repeat the one-edge ones.
+    a, b = wires[3]
+    wires[3] = np.array([a, (a + b) / 2, b])
+    n[3] = [10, 10]
+    hint = _messy_hint(6)
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(1, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.006,
+        extended_kernel=ek,
+        pair_reuse=hint,
+    )
+    geom = s._build_geometry()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PairReuseDropped)
+        plan = s._pair_reuse_plan(geom)
+    ref_plan, ref_dropped = _scalar_plan(s, geom, _scalar_to_solved(hint, None))
+    assert ref_plan  # the case copies something
+    assert plan == ref_plan
+    assert s.pair_reuse_dropped == ref_dropped
+
+
+def test_the_hint_is_renumbered_past_dropped_duplicate_wires():
+    """With duplicate wires removed, members naming one are left out and a
+    class left with one member goes; the rest are renumbered to the kept
+    wires' positions (a wire kept twice takes its first)."""
+    from types import SimpleNamespace
+
+    from momwire.bspline import _pair_reuse_to_solved
+
+    kept = [0, 2, 3, 5, 2]
+    hint = [
+        [((0, 0), (2, 1)), ((1, 0), (3, 0)), ((3, 0), (5, 0))],
+        [((1, 0), (1, 0)), ((2, 0), (2, 0))],
+        [((5, 2), (0, 0)), ((3, 1), (2, 0)), ((4, 0), (0, 0)), ((2, 3), (5, 0))],
+    ]
+    got = _pair_reuse_to_solved(hint, SimpleNamespace(kept=kept))
+    ref = _scalar_to_solved(hint, kept)
+    flat = [m for cls in ref for m in cls]
+    assert got.named(range(len(flat))) == tuple(flat)
+    assert got.starts.tolist() == np.cumsum([0] + [len(c) for c in ref]).tolist()
+    plain = _pair_reuse_to_solved(hint, None)
+    flat = [m for cls in _scalar_to_solved(hint, None) for m in cls]
+    assert plain.named(range(len(flat))) == tuple(flat)
+
+
+def test_sommerfeld_cuts_the_map_to_fit_rather_than_dropping_it(monkeypatch):
+    """The remainder kernel fills everything when its cache of source blocks
+    would pass its budget. The map is cut to fit instead, keeping the source
+    pairs with the most copies per byte: with room for one director's own
+    block (57,600 bytes) but not also the director pair (115,200), the own
+    blocks are still copied and the pair's two copies are cut."""
+    import momwire.bspline as bs
+
+    acc = _acc_or_skip()
+    wires, n = _yagi(3, h=15.0)
+    z0 = _z_somm(wires, n, None)
+    monkeypatch.setattr(bs, "_REMAINDER_REUSE_CACHE_BYTES", 60_000)
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(1, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.006,
+        pair_reuse=_director_hint(3),
+        **SOMM,
+    )
+    c0 = acc.remainder_q_reused_pairs()
+    z1 = np.atleast_1d(np.asarray(s.compute_impedance()[0], dtype=complex))
+    copied = acc.remainder_q_reused_pairs() - c0
+    assert s.pair_reuse_remainder_cut == 2
+    args = s._remainder_reuse_args(s._build_geometry(), 0.0)
+    src = args["reuse_src"]
+    assert sorted(zip(*np.nonzero(src >= 0), strict=True)) == [(3, 3), (4, 4)]
+    assert 2 * 400 <= copied < 4 * 400
+    assert np.max(np.abs(z1 - z0) / np.abs(z0)) <= 1e-13
