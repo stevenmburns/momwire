@@ -29,7 +29,8 @@ from momwire.dropin.nec5 import _shell
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 BASIS = "sinusoidal"
 _RUN_TIME = re.compile(r"^ RUN TIME =.*$", re.MULTILINE)
-_FILL = re.compile(r"FILL= +[\d.]+ SEC\.")
+# FILL= and, since momwire#1896, FACTOR= are both measured
+_FILL = re.compile(r"(?:FILL|FACTOR)= +[\d.]+ SEC\.")
 
 
 def _deck(capture: str) -> str:
