@@ -489,6 +489,7 @@ class Remainder:
             mu=solver.mu,
             cancel_flag=cancel_flag,
             lazy=True,
+            coarse_keys=getattr(solver, "_coarse_lattice_keys", None),
         )
 
         n_src = seg_l.shape[0]
@@ -518,6 +519,7 @@ class Remainder:
                 omega=self._omega,
                 mu=solver.mu,
                 cancel_flag=cancel_flag,
+                coarse_keys=getattr(solver, "_coarse_lattice_keys", None),
             )
         else:
             _sommerfeld.ensure_nodes(grid, need, cancel_flag)

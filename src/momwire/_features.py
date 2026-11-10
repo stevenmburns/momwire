@@ -331,6 +331,34 @@ FEATURES: dict[str, Feature] = {
             drift=1e-7,
             offer=True,
         ),
+        # The above-ground Sommerfeld masters keyed to a coarser lattice
+        # ladder (momwire#1860): a pair's lattice is its demanding rung
+        # rounded up to a multiple of four rungs, so a frequency sweep's rung
+        # crossings reuse the shared rung's master instead of rebuilding
+        # both. The shipped fill and the shipped two-rung blend, on a lattice
+        # at least as fine as the pair's own. Python only: the executables'
+        # grid core (`_somm_grid_core.cpp`) keeps the shipped keying and
+        # never sees the flag.
+        Feature(
+            name="coarse_lattice_keys",
+            reach=1,
+            env="MOMWIRE_X_COARSE_LATTICE_KEYS",
+            kind="python",
+            issue=1860,
+            since="2026-11-09",
+            kwarg="coarse_lattice_keys",
+            paths=("tests/test_coarse_lattice_keys_1860.py",),
+            label="share ground tables across a sweep",
+            summary=(
+                "Over a lossy ground, let neighbouring frequencies of a sweep "
+                "share the ground tables instead of rebuilding them each time "
+                "the ground's loss crosses a table step. Faster sweeps over "
+                "Sommerfeld ground; input impedance moves in the fifth "
+                "significant figure at most."
+            ),
+            drift=1e-4,
+            offer=True,
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(

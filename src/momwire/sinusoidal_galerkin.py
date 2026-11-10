@@ -4913,7 +4913,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             gz = float(self.ground_z)
             r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
             grid = _below_interface.somm_grid(
-                fg.eps_tilde, float(k), r1_max, self.omega, self.mu, self._cancel_flag
+                fg.eps_tilde,
+                float(k),
+                r1_max,
+                self.omega,
+                self.mu,
+                self._cancel_flag,
+                coarse_keys=getattr(self, "_coarse_lattice_keys", None),
             )
             starts, jbasis, coef, _dcoef = _sinusoidal_mp.basis_csr(seg_view, k)
             _sinusoidal_mp.remainder_Q_above(
@@ -5090,6 +5096,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     self.omega,
                     self.mu,
                     self._cancel_flag,
+                    coarse_keys=getattr(self, "_coarse_lattice_keys", None),
                 )
                 _sinusoidal_mp.remainder_Q_above(
                     G,

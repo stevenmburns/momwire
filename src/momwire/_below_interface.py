@@ -783,9 +783,10 @@ def refuse_out_of_scope(
         )
 
 
-def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False):
+def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False, coarse_keys=None):
     """The above/above Sommerfeld remainder grid, sized to `r1_max`; `lazy`
-    the view whose nodes its reader names (`_sommerfeld.get_grid`)."""
+    the view whose nodes its reader names, `coarse_keys` the solver's
+    `coarse_lattice_keys` choice (`_sommerfeld.get_grid`)."""
     return _sommerfeld.get_grid(
         eps_t,
         k,
@@ -794,6 +795,7 @@ def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag, lazy=False):
         mu=mu,
         cancel_flag=cancel_flag,
         lazy=lazy,
+        coarse_keys=coarse_keys,
     )
 
 

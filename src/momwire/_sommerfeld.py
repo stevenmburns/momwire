@@ -44,7 +44,7 @@ import os
 import numpy as np
 from scipy.special import hankel2, jv, wofz
 
-from . import _somm_disk_cache, _times
+from . import _features, _somm_disk_cache, _times
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
 from ._constants import C_LIGHT
@@ -166,6 +166,18 @@ _SOMM_TH_SPLIT_DEG = 30.0
 # the neighbour's master, which would put a second interpolation under the
 # blend.
 _SOMM_EPS_IM_BUCKET = float(os.environ.get("MOMWIRE_SOMM_EPS_IM_BUCKET") or "0.10")
+
+# momwire#1860, the opt-in feature `coarse_lattice_keys` (`_features`, reach 1,
+# python): a pair's lattice is keyed at its demanding rung ROUNDED UP to a
+# multiple of this many rungs, a ladder this much coarser. Im(eps_t) goes as
+# 1/f, so a 0.75..1.25 f0 sweep crosses about five rungs of the 1.1 ladder, and
+# under the default keying every crossing rebuilds BOTH masters (the shared
+# rung is stored under a new lattice each time). Keyed coarser, the pairs
+# between two multiples share one lattice and a crossing reuses the shared
+# rung's master. Rounding UP keeps the lattice at least as fine as the pair's
+# own (the argument above), and the two-rung blend is unchanged. Off, the
+# default, the keying is today's bit for bit.
+_SOMM_LATTICE_COARSE_RUNGS = 4
 
 # The r1 bucket is taken with this much SLACK above the geometry's own r1/lambda
 # (momwire#902): a sweep moves r1/lambda upward with frequency, and a geometry
@@ -1704,6 +1716,26 @@ def _somm_eps_rungs(eps_t: complex):
     return complex(re, -lo_im), complex(re, -hi_im), float(t)
 
 
+def _coarse_lattice(hi):
+    """`coarse_lattice_keys`'s lattice for a pair whose demanding rung is `hi`:
+    the rung rounded UP (in |Im|) to a multiple of `_SOMM_LATTICE_COARSE_RUNGS`
+    on the ladder. A value off the ladder (`_somm_eps_rungs`'s pass-throughs)
+    is its own lattice, as in the default keying."""
+    step = 1.0 + _SOMM_EPS_IM_BUCKET
+    every = _SOMM_LATTICE_COARSE_RUNGS
+    if step <= 1.0 or every <= 1 or not (hi.real > 0.0) or hi.imag >= 0.0:
+        return hi
+    n = round(math.log(-hi.imag, step))
+    m = -((-n) // every) * every
+    return complex(hi.real, -(step**m))
+
+
+# The tag a coarse-keyed master and view carry in their keys, in-process and
+# on disk (`_somm_disk_cache` names a file by the key), so a flag-off call is
+# never served a coarse-keyed table, nor the other way round.
+_COARSE_TAG = "coarse_lattice"
+
+
 def lazy_grids() -> bool:
     """`MOMWIRE_SOMM_LAZY` (momwire#1512): on unless 0 / off / false / no.
     Off, a lazy request is served the whole grid (the eager fill's work; the
@@ -1754,15 +1786,18 @@ def check_read(values, who):
         )
 
 
-def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
+def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0, coarse=False):
     """The normalized master for one ladder rung on one lattice, cached in
-    `_NORM_CACHE` under (rung, r1 bucket, lattice rung).
+    `_NORM_CACHE` under (rung, r1 bucket, lattice rung), plus `_COARSE_TAG`
+    when the lattice is `coarse_lattice_keys`'s.
 
     Lazy (momwire#1512): the master is its lattice, and its nodes are filled
     as views ask for them (`_ensure_master`). The disk level (momwire#1224)
     sits under this one: a fresh process starts from every node another
     process stored, bit for bit."""
     nkey = ("above", rung, r1b_wl, lattice_eps)
+    if coarse:
+        nkey = nkey + (_COARSE_TAG,)
     master = _NORM_CACHE.get(nkey)
     if master is None:
         _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
@@ -1845,7 +1880,9 @@ def ensure_nodes(grid, need, cancel_flag=0):
 
 
 @_times.staged("ground")
-def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
+def get_grid(
+    eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False, coarse_keys=None
+):
     """Cached `SommerfeldGrid` for (eps_t, k2, r1_max, omega, mu).
 
     Two-level FIFO-bounded module cache: frequency-independent normalized
@@ -1861,6 +1898,12 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
     A lazy view is its own cache entry; every other caller gets the whole
     grid, as before. The masters are shared: filled node by node, so what a
     lazy reader filled is not filled again for the whole grid.
+
+    `coarse_keys` (momwire#1860, the opt-in feature ``coarse_lattice_keys``):
+    the pair's lattice keyed at its demanding rung rounded up the coarser
+    ladder (`_coarse_lattice`), so a sweep's rung crossings reuse masters.
+    None reads ``MOMWIRE_X_COARSE_LATTICE_KEYS``; off, the default, the keys
+    and the values are today's.
     """
     # Cap (in wavelengths, #157) before bucketing so every geometry beyond
     # the cap keys to the same capped grid instead of minting a distinct
@@ -1872,6 +1915,7 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
     eps_t = complex(eps_t)
     lo, hi, t = _somm_eps_rungs(eps_t)
     lazy = bool(lazy) and lazy_grids()
+    coarse = _features.enabled("coarse_lattice_keys", coarse_keys)
     # The leading regime discriminator (momwire#553 U2): the below/below
     # family tabulates a DIFFERENT surface family, over a different
     # divide-out, on a lattice keyed to a different wavelength — and it
@@ -1884,14 +1928,19 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0, lazy=False):
     key = ("above", lo if lo == hi else eps_t, k2, r1b_wl, float(omega), float(mu))
     if lazy:
         key = key + ("lazy",)
+    if coarse:
+        key = key + (_COARSE_TAG,)
     grid = _GRID_CACHE.get(key)
     if grid is None:
-        # The pair's lattice is its demanding rung's (the larger |Im|).
-        keys = [("above", lo, r1b_wl, hi)]
-        masters = [_norm_master(lo, r1b_wl, hi, cancel_flag)]
+        # The pair's lattice is its demanding rung's (the larger |Im|), or
+        # under `coarse_keys` that rung rounded up the coarser ladder.
+        lat = _coarse_lattice(hi) if coarse else hi
+        tag = (_COARSE_TAG,) if coarse else ()
+        keys = [("above", lo, r1b_wl, lat) + tag]
+        masters = [_norm_master(lo, r1b_wl, lat, cancel_flag, coarse)]
         if lo != hi:
-            keys.append(("above", hi, r1b_wl, hi))
-            masters.append(_norm_master(hi, r1b_wl, hi, cancel_flag))
+            keys.append(("above", hi, r1b_wl, lat) + tag)
+            masters.append(_norm_master(hi, r1b_wl, lat, cancel_flag, coarse))
             _times.count("blended")  # two ladder rungs, blended to eps_t
         if not lazy:
             for nkey, m in zip(keys, masters, strict=True):
