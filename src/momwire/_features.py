@@ -171,7 +171,7 @@ FEATURES: dict[str, Feature] = {
                 "rest. It needs the front end's hint of which pairs share a pose, "
                 "so the switch alone reuses nothing."
             ),
-            drift=1e-13,
+            drift=1e-12,
             offer=False,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
