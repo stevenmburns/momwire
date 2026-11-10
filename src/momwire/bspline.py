@@ -7597,10 +7597,14 @@ class BSplineSolver(
         sol = _lapack.solve_stacked(Z, rhs)  # (n_k, n_b, 1 + n_c)
         w = sol[:, :, 0]
         X = sol[:, :, 1:]
-        S = np.einsum("cm,kmn->kcn", kcl_A, X)
-        Aw = np.einsum("cm,km->kc", kcl_A, w)
+        # The contractions are matmuls broadcast over k, as the single-k
+        # forms write them: plain `einsum` runs them as a one-thread C loop
+        # with no BLAS, O(n_c^2 n_b) per k, which was 51 of 60 s of a dense
+        # one-frequency sweep at n_b ~ 8,000, n_c ~ 2,000 (momwire#1900).
+        S = kcl_A @ X
+        Aw = (kcl_A @ w[:, :, None])[:, :, 0]
         lam = _lapack.solve_stacked(S, Aw[:, :, None])[:, :, 0]
-        return w - np.einsum("kmc,kc->km", X, lam)
+        return w - (X @ lam[:, :, None])[:, :, 0]
 
     def _solve_with_kcl_swept_ports(self, Z, V, kcl_A):
         """k- and port-batched KCL-constrained Schur solve.
@@ -7620,10 +7624,11 @@ class BSplineSolver(
         sol = _lapack.solve_stacked(Z, rhs)
         W = sol[:, :, :n_p]
         X = sol[:, :, n_p:]
-        S = np.einsum("cm,kmn->kcn", kcl_A, X)
-        AW = np.einsum("cm,kmp->kcp", kcl_A, W)
+        # matmuls broadcast over k, not `einsum` (see `_solve_with_kcl_batch`)
+        S = kcl_A @ X
+        AW = kcl_A @ W
         Lam = _lapack.solve_stacked(S, AW)
-        return W - np.einsum("kmc,kcp->kmp", X, Lam)
+        return W - X @ Lam
 
     # ------------------------------------------------------------------
     # Driver impedance
