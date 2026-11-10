@@ -1576,13 +1576,14 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
     Each committed deck prints with its network -- a crossed TL with shunts
     at NEC's zero length, a TL table then an NT table, EZNEC's current source
     (a gyrator on a parked wire), two loaded current sources through lines
-    from a parked node, two voltage sources across an NT -- and is compared
-    byte for byte by the corpus test above."""
+    from a parked node, two voltage sources across an NT, an NT with both
+    ends on one segment (its four entries summed, and summing to zero:
+    momwire#1887) -- and is compared byte for byte by the corpus test above."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     decks = sorted(NET_DECKS.glob("*.nec"))
-    assert len(decks) == 5
+    assert len(decks) == 7
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     for path, ans in zip(decks, answers, strict=True):
         assert (ans["route"], ans["seam"], ans["raised"]) == (
@@ -1594,6 +1595,15 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path
+
+
+def test_an_nt_on_one_segment_prints_as_python_on_the_nec42_sinusoidal(driver):
+    """momwire#1887: the NEC-4.2 slot's run half stamps an NT card with both
+    ends on one segment as the Python reducer does (all four entries on the
+    one node, in `np.add.at`'s order) instead of declining it."""
+    decks = sorted(NET_DECKS.glob("net_nt_one_segment*.nec"))
+    assert len(decks) == 2
+    assert _nec42_sinusoidal_printouts(driver, decks) == 2
 
 
 BURIED_DECKS = [
