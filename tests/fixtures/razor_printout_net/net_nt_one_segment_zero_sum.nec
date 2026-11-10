@@ -1,0 +1,10 @@
+CM an NT on one segment whose four Y entries sum to zero leaves the gap open
+CM licensed NEC-5: Z = 28.059-j563.12, as LD 4 1 6 6 1E9 0 (momwire#1887)
+CE
+GW 1 21 0 0 -5 0 0 5 0.001
+GE 0
+NT 1 6 1 6 1.000000E-02 2.000000E-02 -1.000000E-02 -2.000000E-02 1.000000E-02 2.000000E-02
+EX 0 1 11 0 1.0 0.0
+FR 0 1 0 0 14.0 0.0
+XQ 0
+EN

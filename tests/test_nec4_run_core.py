@@ -28,7 +28,8 @@ masked, by exact pattern and with the same count on both sides, over:
   perfect ground, and a Sommerfeld ground above the plane and beside a
   monopole's contact;
 - networks: a TL (straight, and crossed with shunts and its length taken
-  between the segment centres), an NT beside a port load, a TL under a
+  between the segment centres), an NT beside a port load, an NT with both
+  ends on one segment (summed, and summing to zero), a TL under a
   current source and under a phased drive, and a TL read after a run;
 - GD's far-field cliff over GN 1, GN 2 and GN 3: an edge and a step
   splitting the reflection points, with a range, an average, further tables,
@@ -694,6 +695,18 @@ CASES = [
         "printed",
     ),
     ("tl", deck(TWO, FR + "TL 1 6 2 6 50 .1\nEX 0 1 6 0 1\nXQ\n"), "printed"),
+    # an NT with both ends on one segment: its four entries sum on the one
+    # node, and a zero sum leaves the gap open (momwire#1887)
+    (
+        "nt_one_segment",
+        deck(DIPOLE, FR + "NT 1 3 1 3 .01 .005 0 .002 .003 0\nEX 0 1 6 0 1\nXQ\n"),
+        "printed",
+    ),
+    (
+        "nt_one_segment_zero_sum",
+        deck(DIPOLE, FR + "NT 1 3 1 3 .01 .02 -.01 -.02 .01 .02\nEX 0 1 6 0 1\nXQ\n"),
+        "printed",
+    ),
     (
         "tl_crossed_shunts_zero_length",
         deck(TWO, FR + "TL 1 6 2 6 -75 0 0 .01 .002 -.003\nEX 0 1 6 0 1\nPQ 0\nXQ\n"),
