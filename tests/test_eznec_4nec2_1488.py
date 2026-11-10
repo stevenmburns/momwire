@@ -587,6 +587,8 @@ def _unclocked(printout: str) -> str:
     import re
 
     printout = re.sub(r"FILL= *\d+\.\d+ SEC\.", "FILL= - SEC.", printout)
+    # FACTOR= is measured too since momwire#1896 (the LU apart from the fill)
+    printout = re.sub(r"FACTOR= *\d+\.\d+ SEC\.", "FACTOR= - SEC.", printout)
     return re.sub(r"RUN TIME = *\d+\.\d+", "RUN TIME = -", printout)
 
 
