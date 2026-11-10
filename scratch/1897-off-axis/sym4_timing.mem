@@ -1,0 +1,5 @@
+T=1 mode=sector wall=16.19 maxrss_kb=1869824
+T=1 mode=dense wall=130.95 maxrss_kb=3270660
+T=4 mode=sector wall=7.88 maxrss_kb=1876792
+T=4 mode=dense wall=40.98 maxrss_kb=3281276
+DONE
