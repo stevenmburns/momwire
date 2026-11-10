@@ -69,7 +69,8 @@ struct EngineSolve {
     std::vector<std::complex<double>> y;
     std::vector<std::complex<double>> x;
     long long x_s0 = 0, x_s1 = 0;
-    double fill_seconds = 0;  // measured, for the printout's MATRIX TIMING
+    double fill_seconds = 0;    // measured, for the printout's MATRIX TIMING:
+    double factor_seconds = 0;  // FILL= the fill alone, FACTOR= the LU
 };
 
 class RunEngine {

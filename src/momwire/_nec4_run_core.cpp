@@ -633,7 +633,7 @@ struct RunResult {
     std::vector<cd> v_gap, v_applied, i_port, i_source, coeffs;
     std::vector<cd> segment_currents, segment_charges;
     double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0, p_network = 0;
-    double fill_seconds = 0, wavelength = 0;
+    double fill_seconds = 0, factor_seconds = 0, wavelength = 0;
     bool networked = false;  // a network reached the group (`reducer is not None`)
     std::vector<std::pair<ll, std::pair<ll, ll>>> network_points;  // (tag, (segment, port))
     std::size_t point = 0;
@@ -909,6 +909,7 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     const OperatingPoint &op = c.sb->points[r.point];
     const EngineSolve &es = c.engine->solve(r.point);
     r.fill_seconds = es.fill_seconds;
+    r.factor_seconds = es.factor_seconds;
     r.wavelength = op.wavelength;
     const ll P = es.n_ports, N = es.n_basis;
     if (static_cast<ll>(op.signs.size()) != P) decline("a port-space mismatch (the reference raises)");
@@ -1509,7 +1510,8 @@ PrintRun run(Ctx &c, const PortalGroup &group, ll index, double freq, const RunR
         for (const nec5::Card &ld : group.loads) p.loads.push_back(load_row(ld));
         p.loaded_twice = loaded_twice(c.sb->tables, index);
         p.fill_seconds = static_cast<double>(static_cast<ll>(std::nearbyint(r.fill_seconds * 1000.0))) / 1000.0;
-        p.factor_seconds = 0.0;
+        p.factor_seconds =
+            static_cast<double>(static_cast<ll>(std::nearbyint(r.factor_seconds * 1000.0))) / 1000.0;
     }
     // `_run_records`' source rows
     for (const auto &d : r.driven) {

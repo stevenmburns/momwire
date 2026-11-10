@@ -1,5 +1,6 @@
 // momwire#1517 step 1: bs2's answers to the run half -- see
 // `_nec5_bspline_printout_core.h`.
+#include <chrono>
 #include "_nec5_bspline_printout_core.h"
 
 #if defined(_MSC_VER)
@@ -115,10 +116,13 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
                                       &fr.basis.below_wire);
     if (Z_out) *Z_out = Z;
     if (B_out) *B_out = fr.B;
+    const auto t_factor = std::chrono::steady_clock::now();
     const bspline::PortSolve ps =
         // Z moves in: the solve's LU runs in its buffer (Z_out took its copy)
         bspline::solve_ports(std::move(Z), fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl,
                              lapack, np, &sym);
+    const double factor_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_factor).count();
     // A singular system: SciPy warns or raises in its own words, per solver
     if (ps.info != 0) throw PrintoutDecline{"bspline: a singular system"};
     Solved s;
@@ -128,6 +132,7 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     s.x = ps.X;
     s.y = CMat(s.n_ports, s.n_ports);
     s.y.v = ps.Y;
+    s.factor_seconds = factor_seconds;
     return s;
 }
 

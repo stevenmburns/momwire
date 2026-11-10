@@ -74,6 +74,9 @@ struct PortSolution {
     std::vector<std::complex<double>> G;       // (n, n), C order: `_assemble_Z`'s
     std::vector<std::complex<double>> coeffs;  // (n, n_ports), C order
     std::vector<std::complex<double>> y;       // (n_ports, n_ports), C order
+    // Wall seconds in the LU (the copy into F order, getrf, getrs): the
+    // printout's FACTOR=, so its FILL= is the O(N^2) fill alone.
+    double factor_seconds = 0;
 };
 
 // `_assemble_Z(geom, k)` in free space: Z in C order.

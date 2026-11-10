@@ -31,7 +31,10 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
             throw nec4::Refusal(e.message);  // `_nec4.solve`'s Nec4Refusal(str(exc))
         }
         std::unique_ptr<nec4::EngineSolve> es(new nec4::EngineSolve);
-        es->fill_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        // FILL= the fill alone, FACTOR= the solve (see _nec4_run_core.h)
+        es->factor_seconds = ps.factor_seconds;
+        es->fill_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - ps.factor_seconds;
         es->n_basis = ps.n;
         es->n_ports = ps.n_ports;
         es->y = ps.y;

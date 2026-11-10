@@ -96,6 +96,9 @@ struct PortSolution {
     // and a reader whose BLAS calls follow the strides takes this
     bool c_order = false;
     std::vector<std::complex<double>> y;       // (n_ports, n_ports), C order
+    // Wall seconds in the solve (the constrained solve, or getrf + getrs):
+    // the printout's FACTOR=, so its FILL= is the O(N^2) fill alone.
+    double factor_seconds = 0;
 };
 
 // The constructor's own refusals beyond the front's (`SolverRefusal`).
