@@ -852,7 +852,9 @@ NetSolve reduced_state(const std::vector<SeamCard> &cards, int64_t n, const std:
     for (const SeamCard &c : cards) {
         const int64_t a = c.site_a, b = c.site_b;
         if (c.kind == SeamCard::nt) {
-            if (a == b) throw Decline{"an NT card with both ends on one site"};
+            // both ends on one site (a == b) lands all four entries on the one
+            // node, in `np.add.at`'s order: y11, y12, y21 (= y12), y22
+            // (`networks._reducer._stamp_block`, momwire#1887)
             const cd y11(c.payload[0], c.payload[1]), y12(c.payload[2], c.payload[3]),
                 y22(c.payload[4], c.payload[5]);
             G(a, a) = c_add(G(a, a), y11);
