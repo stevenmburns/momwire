@@ -853,6 +853,18 @@ class PairReuseDropped(UserWarning):
 #: compares at 0.1 mm) is refused here rather than copied approximately.
 _PAIR_REUSE_RTOL = 1e-12
 
+#: The fewest copied segment pairs per hint member, per fill thread, for which
+#: `pair_reuse` is worth planning (momwire#1854). Checking a member costs about
+#: 1.2 us of Python whatever its size; copying saves about 0.3-0.5 us per
+#: segment pair at one thread (free-space moments, Sommerfeld remainder;
+#: Skylake), divided among the fill's threads. So break-even is near 3 pairs per
+#: member per thread, and a mesh of one-segment edges (about 2.6) cannot pay.
+#: Below this the hint is declined unread and the fill is the no-hint one.
+_PAIR_REUSE_MIN_PAIRS_PER_MEMBER = 8.0
+
+#: How many hint members the decline estimate looks at, evenly spaced.
+_PAIR_REUSE_SAMPLE = 2048
+
 #: The fused Sommerfeld remainder kernel's cache budget for `pair_reuse`
 #: source blocks: its Jf slab budget (`MAX_JF_SLAB_BYTES` in
 #: `_somm_remainder_core.cpp`, which the Python callers never override). Past
@@ -1012,6 +1024,36 @@ class _PairReusePlan:
             self._keys = set((self.ta * self.n_edges + self.tb).tolist())
         a, b = key
         return a * self.n_edges + b in self._keys
+
+    def copy_blocks(self, J, slices, *, off_edge=True):
+        """``J[..., target rows, target cols] = J[..., source rows, source
+        cols]`` for every planned block (only those between two edges with
+        ``off_edge``), by one gather and scatter per block shape. No source
+        is a target, so every value read is a filled one: the copies are the
+        sources' bits."""
+        start = np.fromiter((sl.start for sl in slices), dtype=np.int64)
+        n = np.fromiter((sl.stop - sl.start for sl in slices), dtype=np.int64)
+        sel = self.ta != self.tb if off_edge else np.ones(self.ta.size, dtype=bool)
+        ta, tb, sa, sb = self.ta[sel], self.tb[sel], self.sa[sel], self.sb[sel]
+        shape = n[ta] * (int(n.max(initial=0)) + 1) + n[tb]
+        for key in np.unique(shape):
+            na, nb = divmod(int(key), int(n.max(initial=0)) + 1)
+            group = np.flatnonzero(shape == key)
+            step = max(1, (1 << 20) // (na * nb))
+            r, c = np.arange(na)[:, None], np.arange(nb)[None, :]
+            for lo in range(0, group.size, step):
+                g = group[lo : lo + step]
+                J[
+                    :,
+                    :,
+                    start[ta[g]][:, None, None] + r,
+                    start[tb[g]][:, None, None] + c,
+                ] = J[
+                    :,
+                    :,
+                    start[sa[g]][:, None, None] + r,
+                    start[sb[g]][:, None, None] + c,
+                ]
 
     def copied_from_row(self, a):
         """The target column edges of row edge ``a``, as an array."""
@@ -2065,6 +2107,7 @@ class BSplineSolver(
         self._remainder_reuse_cache = None
         self.pair_reuse_dropped = ()
         self.pair_reuse_remainder_cut = 0
+        self.pair_reuse_declined = False
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
@@ -5306,6 +5349,63 @@ class BSplineSolver(
                 out.append(slice(base + ed_off[i_e], base + ed_off[i_e + 1]))
         return out
 
+    def _pair_reuse_worth(self, geom):
+        """Whether the `pair_reuse` hint can save more than checking it costs:
+        the copied segment pairs per member, estimated from an evenly spaced
+        sample of the hint as given (nothing converted), per fill thread,
+        against `_PAIR_REUSE_MIN_PAIRS_PER_MEMBER`. A member counts its
+        block's segment pairs, twice for two edges (both orders are copied)."""
+        from . import _times
+
+        hint = self._pair_reuse_given
+        if hint is None:
+            return True  # already converted: an earlier call said yes
+        cum = np.cumsum(np.fromiter(map(len, hint), dtype=np.int64, count=len(hint)))
+        total = int(cum[-1]) if cum.size else 0
+        if total == 0:
+            return False
+        pos = np.unique(
+            np.linspace(0, total - 1, min(total, _PAIR_REUSE_SAMPLE)).astype(np.int64)
+        )
+        cls = np.searchsorted(cum, pos, side="right")
+        within = pos - np.r_[0, cum[:-1]][cls]
+        sample = [
+            hint[c][j]
+            for c, j in zip(cls.tolist(), within.tolist(), strict=True)
+            if j > 0  # a representative is filled, not copied
+        ]
+        if not sample:
+            return False
+        refs = np.array(
+            [(*np.asarray(a).tolist(), *np.asarray(b).tolist()) for a, b in sample],
+            dtype=np.int64,
+        ).reshape(-1, 4)
+        if self._wire_dedup is not None:
+            kept = list(self._wire_dedup.kept)
+            for col in (0, 2):
+                refs[:, col] = [
+                    kept.index(w) if w in kept else -1 for w in refs[:, col]
+                ]
+        slices = self._same_edge_slices(geom)
+        nseg = np.fromiter((sl.stop - sl.start for sl in slices), dtype=np.int64)
+        n_edges_w = np.array(
+            [len(pw["edge_offsets"]) - 1 for pw in geom["per_wire"]], dtype=np.int64
+        )
+        wire_base = np.r_[0, np.cumsum(n_edges_w)].astype(np.int64)
+
+        def segs(w, e):
+            ok = (w >= 0) & (w < n_edges_w.size)
+            wc = np.where(ok, w, 0)
+            ok &= (e >= 0) & (e < n_edges_w[wc])
+            return np.where(ok, nseg[np.where(ok, wire_base[wc] + e, 0)], 0)
+
+        na = segs(refs[:, 0], refs[:, 1])
+        nb = segs(refs[:, 2], refs[:, 3])
+        two = (refs[:, 0] != refs[:, 2]) | (refs[:, 1] != refs[:, 3])
+        pairs = na * nb * np.where(two, 2, 1)
+        per_thread = float(pairs.mean()) / max(1, _times.fill_threads())
+        return per_thread >= _PAIR_REUSE_MIN_PAIRS_PER_MEMBER
+
     def _solved_pair_reuse(self):
         """The `pair_reuse` hint as a `_PairReuseHint` in solved wire numbers,
         converted on first use, or None for none."""
@@ -5331,14 +5431,23 @@ class BSplineSolver(
 
         Every check is a whole-hint array operation (momwire#1854): a
         wire-grid mesh offers millions of members, and checking them one at a
-        time cost more than the fill they saved."""
-        if self._solved_pair_reuse() is None:
+        time cost more than the fill they saved. Even so a member's check
+        costs more than a one-segment block's fill, so a hint whose members
+        are too small to pay (`_pair_reuse_worth`) is declined unread:
+        ``pair_reuse_declined``, an empty plan, and the no-hint fill."""
+        if self._pair_reuse_given is None and self._pair_reuse is None:
             return {}
         if (
             self._pair_reuse_plan_cache is not None
             and self._pair_reuse_plan_cache[0] is geom
         ):
             return self._pair_reuse_plan_cache[1]
+        if not self._pair_reuse_worth(geom):
+            self.pair_reuse_declined = True
+            self._pair_reuse_plan_cache = (geom, {})
+            return {}
+        if self._solved_pair_reuse() is None:
+            return {}
         slices = self._same_edge_slices(geom)
         E = len(slices)
         start = np.fromiter((sl.start for sl in slices), dtype=np.int64, count=E)
@@ -5993,11 +6102,8 @@ class BSplineSolver(
             )  # (d+1, d+1, N, N) complex
 
         # The off-edge copies (momwire#1809).
-        for (ta, tb), (sa, sb) in plan.items():
-            if ta != tb:
-                J[:, :, same_slices[ta], same_slices[tb]] = J[
-                    :, :, same_slices[sa], same_slices[sb]
-                ]
+        if plan:
+            plan.copy_blocks(J, same_slices, off_edge=True)
 
         # Overwrite each same-edge block with analytic static + reg
         if same_edge_prep is None:

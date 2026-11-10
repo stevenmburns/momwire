@@ -474,3 +474,39 @@ def test_sommerfeld_cuts_the_map_to_fit_rather_than_dropping_it(monkeypatch):
     assert sorted(zip(*np.nonzero(src >= 0), strict=True)) == [(3, 3), (4, 4)]
     assert 2 * 400 <= copied < 4 * 400
     assert np.max(np.abs(z1 - z0) / np.abs(z0)) <= 1e-13
+
+
+def test_a_hint_too_small_to_pay_is_declined_unread():
+    """Checking a member costs more than filling a one-segment block, so a
+    hint of one-segment directors is declined before it is read: no plan, the
+    hint never converted, and Z the no-hint fill bit for bit."""
+    wires, n = _yagi(6)
+    n = n[:2] + [[1]] * 6
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(1, None, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=0.006,
+    )
+    z0 = BSplineSolver(**kw).compute_impedance()[0]
+    s = BSplineSolver(**kw, pair_reuse=_director_hint(6))
+    z1 = s.compute_impedance()[0]
+    assert s.pair_reuse_declined
+    assert s._pair_reuse is None
+    assert np.array_equal(
+        np.atleast_1d(np.asarray(z0, dtype=complex)).view(np.uint64),
+        np.atleast_1d(np.asarray(z1, dtype=complex)).view(np.uint64),
+    )
+
+
+def test_the_decline_divides_the_saving_among_the_fill_threads(monkeypatch):
+    """The copies' saving is shared by the fill's threads and the check's cost
+    is not: the 20-segment directors pay at one thread and not at a thousand."""
+    _, z0 = _z(4, None)
+    s1, _ = _z(4, _director_hint(4))
+    assert not s1.pair_reuse_declined
+    monkeypatch.setenv("OMP_NUM_THREADS", "1000")
+    s2, z2 = _z(4, _director_hint(4))
+    assert s2.pair_reuse_declined
+    assert np.array_equal(z0.view(np.uint64), z2.view(np.uint64))
