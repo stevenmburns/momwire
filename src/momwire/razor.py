@@ -1955,6 +1955,7 @@ class RazorSolver(
         factored_columns=None,
         height_sheet_recal=None,
         crossing_table=None,
+        coarse_lattice_keys=None,
         cancel=None,
         **unsupported,
     ):
@@ -2045,6 +2046,13 @@ class RazorSolver(
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
         self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        # momwire#1860: the above-ground Sommerfeld masters on the coarser
+        # lattice keys, so a sweep's rung crossings reuse them. None defers to
+        # MOMWIRE_X_COARSE_LATTICE_KEYS (`_features`, reach 1, python); off is
+        # the shipped keying, bit for bit.
+        self._coarse_lattice_keys = _features.enabled(
+            "coarse_lattice_keys", coarse_lattice_keys
+        )
         self._checkpoint()
 
         self.wavelength = float(wavelength)

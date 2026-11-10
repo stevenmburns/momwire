@@ -1186,6 +1186,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_rule="nec2",
         transmitted_anchors=None,
         point_cplx_staged=None,
+        coarse_lattice_keys=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1289,6 +1290,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (`_features`, reach 1); off is the exact grid, bit for bit.
         self._transmitted_anchors = _features.enabled(
             "transmitted_anchors", transmitted_anchors
+        )
+        # momwire#1860: the above-ground Sommerfeld masters on the coarser
+        # lattice keys, so a sweep's rung crossings reuse them. None defers to
+        # MOMWIRE_X_COARSE_LATTICE_KEYS (`_features`, reach 1, python); off is
+        # the shipped keying, bit for bit.
+        self._coarse_lattice_keys = _features.enabled(
+            "coarse_lattice_keys", coarse_lattice_keys
         )
         # momwire#1849: a buried class's own block (complex k, folded shape)
         # on the staged complex rows. None defers to
@@ -5138,6 +5146,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             omega=self.omega,
             mu=self.mu,
             cancel_flag=self._cancel_flag,
+            coarse_keys=getattr(self, "_coarse_lattice_keys", None),
         )
 
         n_src = N * q

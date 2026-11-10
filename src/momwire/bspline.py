@@ -1890,6 +1890,7 @@ class BSplineSolver(
         height_sheet_recal=None,
         crossing_table=None,
         crossing_above_rule=None,
+        coarse_lattice_keys=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -1974,6 +1975,13 @@ class BSplineSolver(
         # bit for bit.
         self._crossing_above_rule = _features.enabled(
             "crossing_above_rule", crossing_above_rule
+        )
+        # momwire#1860: the above-ground Sommerfeld masters on the coarser
+        # lattice keys, so a sweep's rung crossings reuse them. None defers to
+        # MOMWIRE_X_COARSE_LATTICE_KEYS (`_features`, reach 1, python); off is
+        # the shipped keying, bit for bit.
+        self._coarse_lattice_keys = _features.enabled(
+            "coarse_lattice_keys", coarse_lattice_keys
         )
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -4389,7 +4397,14 @@ class BSplineSolver(
 
     def _somm_grid(self, eps_t, r1_max, lazy=False):
         return _below_interface.somm_grid(
-            eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag, lazy=lazy
+            eps_t,
+            self.k,
+            r1_max,
+            self.omega,
+            self.mu,
+            self._cancel_flag,
+            lazy=lazy,
+            coarse_keys=getattr(self, "_coarse_lattice_keys", None),
         )
 
     def _remainder_prep(self, geom, eps_t):
