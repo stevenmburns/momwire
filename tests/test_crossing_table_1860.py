@@ -351,8 +351,10 @@ def test_d4_slant_takes_the_table_and_stays_in_its_class(monkeypatch, scale):
         # aca_vertical_screen under nec5-bspline +42 ms) or no faster.
         pytest.param("efhw_hi", True, marks=pytest.mark.slow),
         ("efhw_lo", False),
-        ("d3_hub", False),
-        ("beverage", False),
+        # median over the 5 s default-lane budget at 0.90.0
+        pytest.param("d3_hub", False, marks=pytest.mark.slow),
+        # median over the 5 s default-lane budget at 0.90.0
+        pytest.param("beverage", False, marks=pytest.mark.slow),
         ("d4_slant", True),
     ],
 )

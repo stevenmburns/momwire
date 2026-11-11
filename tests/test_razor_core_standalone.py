@@ -373,6 +373,7 @@ def test_the_nec4_seam_in_cxx_alone_is_pythons(driver, basis):
     assert counts["declined"] <= 3, counts
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.90.0
 @pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
 def test_the_nec4_build_in_cxx_alone_is_pythons(driver, basis):
     """momwire#1607 A2b: the NEC-4.2 build (DeckSolver's construction and
@@ -624,6 +625,7 @@ def test_the_nec42_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(driver):
     assert _nec42_sinusoidal_printouts(driver, decks, "sinusoidal-galerkin") >= 80
 
 
+@pytest.mark.slow  # median over the 5 s default-lane budget at 0.90.0
 def test_a_wholly_buried_sinusoidal_galerkin_printout_in_cxx_alone_is_pythons(
     driver, monkeypatch
 ):
