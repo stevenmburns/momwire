@@ -90,6 +90,7 @@ from . import _exact_kernel
 from . import _exact_kernel_base
 from . import _exact_kernel_seam
 from . import _feed_snap
+from . import _kcl_nullspace
 from . import _ground_mirror
 from . import _ground_refl
 from . import _near_interface
@@ -2050,6 +2051,7 @@ class BSplineSolver(
         height_sheet_recal=None,
         crossing_table=None,
         crossing_above_rule=None,
+        kcl_nullspace=None,
         cancel=None,
     ):
         # momwire#1042: a wire listed twice is solved once. Dropped here,
@@ -2141,6 +2143,14 @@ class BSplineSolver(
         self._crossing_above_rule = _features.enabled(
             "crossing_above_rule", crossing_above_rule
         )
+        # momwire#1898: the junction constraints eliminated before the factor
+        # (`_kcl_nullspace`) where the Schur solve back-substitutes them. None
+        # defers to MOMWIRE_X_KCL_NULLSPACE (`_features`, reach 1, python);
+        # off is the Schur route, bit for bit. `kcl_nullspace_route` records
+        # what the last constrained solve took: None (off, or no rows),
+        # "reduced", or "schur: <why the rows were not reducible>".
+        self._kcl_nullspace = _features.enabled("kcl_nullspace", kcl_nullspace)
+        self.kcl_nullspace_route = None
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -7527,10 +7537,43 @@ class BSplineSolver(
     # KCL solve (Schur complement)
     # ------------------------------------------------------------------
 
+    def _kcl_plan(self, kcl_A):
+        """The `_kcl_nullspace.Plan` for `kcl_A` when the feature is on and
+        the rows are reducible, else None (the Schur route). Records the
+        route taken on `kcl_nullspace_route` and in `_kcl_nullspace.COUNTS`."""
+        if not getattr(self, "_kcl_nullspace", False) or kcl_A.shape[0] == 0:
+            return None
+        plan = _kcl_nullspace.plan(kcl_A)
+        if isinstance(plan, str):
+            route = f"schur: {plan}"
+            plan = None
+        else:
+            route = "reduced"
+        self.kcl_nullspace_route = route
+        _kcl_nullspace.COUNTS[route] += 1
+        return plan
+
+    def _solve_reduced(self, Z, V, plan, overwrite):
+        """(Qᵀ Z Q) y = Qᵀ V, returned as x = Q y (momwire#1898). `V` is
+        (n,) or (n, r); `overwrite` lets Z's own buffer hold the reduction."""
+        Zr = _kcl_nullspace.reduce_matrix(Z, plan, overwrite=overwrite)
+        Vr = np.asfortranarray(_kcl_nullspace.reduce_rhs(V, plan))
+        y = _lu_solve(Zr, Vr, overwrite_a=True, overwrite_b=True)
+        return _kcl_nullspace.expand(y, plan)
+
+    def _solve_reduced_stacked(self, Z, V, plan):
+        """`_solve_reduced` per k over a (n_k, n, n) stack; `V` (n,) or
+        (n, r) is shared across k. Each Z[k] is reduced in a copy."""
+        return np.stack(
+            [self._solve_reduced(Z[i], V, plan, False) for i in range(Z.shape[0])]
+        )
+
     def _solve_with_kcl(self, Z, v, kcl_A, overwrite=False):
         """Constrained solve [Z A^T; A 0] [I; λ] = [v; 0] via Schur.
 
-        If kcl_A is empty (no junctions), do a plain solve.
+        If kcl_A is empty (no junctions), do a plain solve. With
+        `kcl_nullspace` on and reducible rows, the constraints are
+        eliminated before the factor instead (`_solve_reduced`).
 
         `overwrite=True` lets LAPACK factor Z in place instead of copying
         it — a full n_basis²-complex saving (2.5 GB at whip-benchmark
@@ -7543,6 +7586,9 @@ class BSplineSolver(
             Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
             return _lu_solve(Z, v, overwrite_a=overwrite)
+        plan = self._kcl_plan(kcl_A)
+        if plan is not None:
+            return self._solve_reduced(Z, v, plan, overwrite)
         n_b = Z.shape[0]
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128, order="F")
@@ -7565,6 +7611,9 @@ class BSplineSolver(
             Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
             return _lu_solve(Z, V, overwrite_a=overwrite)
+        plan = self._kcl_plan(kcl_A)
+        if plan is not None:
+            return self._solve_reduced(Z, V, plan, overwrite)
         n_b, n_p = V.shape
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, n_p + n_c), dtype=np.complex128, order="F")
@@ -7590,6 +7639,9 @@ class BSplineSolver(
         if kcl_A.shape[0] == 0:
             rhs = np.broadcast_to(v[None, :, None], (n_k, n_b, 1))
             return _lapack.solve_stacked(Z, rhs)[:, :, 0]
+        plan = self._kcl_plan(kcl_A)
+        if plan is not None:
+            return self._solve_reduced_stacked(Z, v, plan)
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_k, n_b, 1 + n_c), dtype=np.complex128)
         rhs[:, :, 0] = v[None, :]
@@ -7617,6 +7669,9 @@ class BSplineSolver(
         if kcl_A.shape[0] == 0:
             rhs = np.broadcast_to(V[None, :, :], (n_k, n_b, n_p))
             return _lapack.solve_stacked(Z, rhs)
+        plan = self._kcl_plan(kcl_A)
+        if plan is not None:
+            return self._solve_reduced_stacked(Z, V, plan)
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_k, n_b, n_p + n_c), dtype=np.complex128)
         rhs[:, :, :n_p] = V[None, :, :]
