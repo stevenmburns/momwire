@@ -144,6 +144,7 @@ jobs:
       # so objects from one patch can never hit for the other -- a PR on
       # 3.12.15 restoring main's 3.12.14 cache hit 4 of 32 compiles.
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -190,8 +191,8 @@ jobs:
       - run: pip install -e .[test] --no-build-isolation
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # Explicit -m: PR lanes must not depend on pyproject's addopts default
       # to keep memgate out. (Also now redundant with addopts — kept explicit
       # on purpose, see #400.)
@@ -275,6 +276,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -292,8 +294,8 @@ jobs:
       - run: pip install --no-build-isolation .
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       - run: pip install matplotlib pytest
         if: needs.changes.outputs.code == 'true'
       - run: pip install --no-deps -e antennaknobs
@@ -376,6 +378,7 @@ jobs:
         # wheels workflow uses.
         run: brew install libomp
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -445,6 +448,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -461,8 +465,8 @@ jobs:
       # an empty cache under the bare `ccache` key.
       - run: pip install -e .[test] --no-build-isolation
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       - run: pytest tests/ -m "integration and not slow and not memgate"
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
@@ -518,6 +522,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -539,8 +544,8 @@ jobs:
       - run: pip install -e .[test] --no-build-isolation
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # `not crossgate`: the crossing-serve eps1 certification solves are
       # ALSO marked slow (so fast lanes and wheel smoke exclude them for
       # free) and run in their own merge-to-main lane below — the PR slow
@@ -630,6 +635,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -651,8 +657,8 @@ jobs:
       - run: pip install -e .[test] --no-build-isolation
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # Inherits addopts' xdist (-n auto): unlike memgate these gates
       # measure impedances, not memory peaks, and parallelize fine.
       - run: pytest tests/ -m crossgate
@@ -691,6 +697,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -712,8 +719,8 @@ jobs:
       - run: pip install -e .[test] --no-build-isolation
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # -n0: memory-certification gates measure peak RSS and cannot share a
       # box with concurrent workers; this lane opts out of addopts' xdist.
       - run: pytest tests/ -m memgate -n0
@@ -749,6 +756,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -773,8 +781,8 @@ jobs:
       - run: pip install -e .[test] --no-build-isolation
         if: needs.changes.outputs.code == 'true'
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
 
       - name: Install pynec-accel from the python-necpp release wheel
         if: needs.changes.outputs.code == 'true'
