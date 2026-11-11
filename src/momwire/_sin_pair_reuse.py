@@ -467,23 +467,31 @@ def verify_band(phis, rows, n_src, direct, samples=VERIFY_SAMPLES, tol=VERIFY_TO
 
     `direct(m, ns)` returns the kernel's tuple for observer row `m` against
     source segments `ns`, in the original frame. Returns the largest
-    relative difference seen; raises `PairReuseMismatch` above `tol`."""
+    relative difference seen; raises `PairReuseMismatch` above `tol`.
+
+    Relative to the pair's largest |Φ| over the three shapes, floored at
+    1e-6 of the sample's largest: a far pair whose Φ is itself a
+    cancellation (perpendicular, say) carries the input rounding of any
+    frame at a relative size no reuse could hold."""
     i0, i1 = rows
     n_pairs = (i1 - i0) * n_src
     flat = np.unique(
         np.linspace(0, n_pairs - 1, min(samples, n_pairs)).astype(np.int64)
     )
     r, n = np.divmod(flat, n_src)
-    worst = 0.0
+    diff, scale = [], []
     for m in np.unique(r):
         ns = n[r == m]
         d = direct(int(m) + i0, ns)
-        got = [phis[s][m, ns] for s in range(3)]
         want = [np.asarray(d[s])[0] for s in range(3)]
-        scale = np.maximum.reduce([np.abs(w) for w in want])
-        for g, w in zip(got, want):
-            rel = np.abs(g - w) / np.where(scale > 0, scale, 1.0)
-            worst = max(worst, float(rel.max()))
+        diff.append(
+            np.maximum.reduce([np.abs(phis[s][m, ns] - want[s]) for s in range(3)])
+        )
+        scale.append(np.maximum.reduce([np.abs(w) for w in want]))
+    diff, scale = np.concatenate(diff), np.concatenate(scale)
+    floor = 1e-6 * float(scale.max()) if scale.size else 0.0
+    den = np.maximum(scale, floor)
+    worst = float(np.max(diff / np.where(den > 0, den, 1.0))) if diff.size else 0.0
     if worst > tol:
         raise PairReuseMismatch(
             f"pair_reuse: a reused field tensor differs from the direct kernel "
