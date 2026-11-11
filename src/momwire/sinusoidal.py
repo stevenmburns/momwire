@@ -6652,9 +6652,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         origin = np.zeros((1, 3))
         axis = np.array([[0.0, 0.0, 1.0]])
 
-        def canonical(obs_c, obs_t, g_src, g_obs):
-            ns = np.array([g_src])
-            return kernel(obs_c, obs_t, origin, axis, seg_h[ns], a_seg[g_obs], ns)
+        def canonical(src_c, src_t, ns, g_obs):
+            # One observer row at the origin along +z (`_sin_pair_reuse.
+            # canonical_sources`), each source its class representative's.
+            return kernel(origin, axis, src_c, src_t, seg_h[ns], a_seg[g_obs], ns)
 
         # The census transient: ~20 float64/int64 per pair in a band.
         census_rows = _schedule.mb_rows(self.swept_mem_mb, 20 * 8 * N)
@@ -6706,7 +6707,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     census_rows,
                 )
                 self._sin_reuse_plans[block] = (key, plan)
-            self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes)
+            self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes, plan.n_near)
             blocks[block] = (plan, src_c, src_t)
             return blocks[block]
 
@@ -6714,7 +6715,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             plan, src_c, src_t = plan_for(block)
             rep = rep_cache.get(block)
             if rep is None:
-                rep = rep_cache[block] = _pr.evaluate(plan, canonical)
+                rep = rep_cache[block] = _pr.evaluate(plan, canonical, obs_type)
             phis = _pr.scatter(rep, plan, rows)
             if self._pair_reuse_verify:
 

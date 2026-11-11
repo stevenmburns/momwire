@@ -5,7 +5,7 @@ tensors once with the shipped kernel and gathers them into the band; the
 reduction is unchanged. So:
 
 - off (the default, or False over the variable) is the fill, bit for bit;
-- on moves Z by no more than the key's 2^-40 relative step can, far below
+- on moves Z by no more than the key's relative step can, far below
   the declared drift, in free space and over the PEC image, thin-wire and
   extended kernel, across the band cut and across a frequency sweep;
 - `pair_reuse="verify"` checks a sample of every band against the direct
@@ -93,7 +93,7 @@ def test_on_matches_off(ek, h):
     assert set(s.pair_reuse_census) == blocks
     # Only the eight directors repeat (the other wires differ in length):
     # measured about 2.3 pairs per class.
-    for n_pairs, n_cls in s.pair_reuse_census.values():
+    for n_pairs, n_cls, _near in s.pair_reuse_census.values():
         assert n_cls < n_pairs / 2
     # Measured: ~1e-15 on this deck, every case.
     assert _rel(on, base) <= DRIFT
