@@ -114,6 +114,8 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
     elements += _mech.junction_rule_identity()
     # The features on (`_mech.feature_identity`): nothing when none is.
     elements += _mech.feature_identity()
+    # The thread environment (momwire#1893): nothing when none is set.
+    elements += _mech.thread_identity()
     return _mech.digest(elements)
 
 
