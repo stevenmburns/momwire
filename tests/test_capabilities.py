@@ -1096,8 +1096,14 @@ def test_the_pairs_the_axes_exist_to_explain_differ_where_they_should():
     for a, b, expected in (
         (BSplineSolver, HMatrixSolver, {"solve_strategy"}),
         (PulseSolver, HarringtonSolver, {"charge_support"}),
-        # Coupled, see the docstring — NOT {"testing"}.
-        (SinusoidalSolver, SinusoidalGalerkinSolver, {"testing", "feed_model"}),
+        # Coupled, see the docstring — NOT {"testing"}. And `solve_strategy`
+        # since momwire#1912: the sector route serves the point-matched row
+        # first, the Galerkin sibling not yet — a scope, not a coupling.
+        (
+            SinusoidalSolver,
+            SinusoidalGalerkinSolver,
+            {"testing", "feed_model", "solve_strategy"},
+        ),
     ):
         differ = {
             k

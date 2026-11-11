@@ -1449,6 +1449,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         axes={
             **SinusoidalSolver.capabilities.axes,
             "testing": ("galerkin",),
+            # Not the point-matched base's sector route (momwire#1912): this
+            # fill and testing are its own, and `rotational_symmetry=True`
+            # is refused here by name.
+            "solve_strategy": ("dense",),
             # Default first (see BSplineSolver's row): this class defaults
             # to feed_model="point", so the point gap leads.
             "feed_model": ("point-gap", "segment-gap"),
