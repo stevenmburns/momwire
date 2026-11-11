@@ -412,6 +412,39 @@ _ETA_REQUIRED = (
 _REDUCE_TILE = 32
 
 
+# The sparse-regime reduction in C++ (`reduce_phi_band`, momwire#1905) when
+# the accelerator carries it: scipy's `csr_matvecs` order, element by element,
+# threaded over observer rows. False routes every call through the scipy
+# tiles below, the reference the kernel is gated against bit for bit
+# (tests/test_sin_phi_reduce_1905.py).
+_PHI_REDUCE_ACCEL = True
+_HAVE_PHI_REDUCE_ACCEL = _acc is not None and bool(
+    getattr(_acc, "phi_reduce_1905", False)
+)
+
+
+def _phi_reduce_takes(Phi, Ms, out):
+    """Whether `_acc.reduce_phi_band` can take this band: complex128 rows
+    that are contiguous, CSC Ms with complex128 data whose shape matches."""
+    if not (_PHI_REDUCE_ACCEL and _HAVE_PHI_REDUCE_ACCEL):
+        return False
+    if out.ndim != 2 or out.dtype != np.complex128:
+        return False
+    n, cols = out.shape
+    if cols > 1 and out.strides[1] != 16:
+        return False
+    for P, M in zip(Phi, Ms):
+        if P.ndim != 2 or P.dtype != np.complex128 or P.shape[0] != n:
+            return False
+        if P.shape[1] > 1 and P.strides[1] != 16:
+            return False
+        if not isinstance(M, scipy.sparse.csc_matrix) or M.dtype != np.complex128:
+            return False
+        if M.shape != (P.shape[1], cols):
+            return False
+    return True
+
+
 def _reduce_phi_rows_in_place(Phi, Ms, band):
     """`Φ₀@M₀ + Φ₁@M₁ + Φ₂@M₂`, `(x = A; x += B; x += C)`, written into
     `Phi[0]`'s storage band by band of `band` observer rows; returns that
@@ -485,6 +518,18 @@ def _reduce_phi_band(Phi, Ms, out):
     plus two strided `+=` into `out`: 0.67 s of a 1.40 s profiled solve at
     N = 2816 on Haswell, against 0.22 s for the tiles.
 
+    When the accelerator carries it (momwire#1905), the sparse regime runs
+    as `_acc.reduce_phi_band` instead: the same arithmetic, written out —
+    each output element a zero plus its column's stored entries in stored
+    order, one unfused `complex_wrapper` multiply-add each, then
+    `(A + B) + C` — over all observer rows at once, threaded over them. A
+    row reads only its own Φ rows, and its sums are buffered before they are
+    written, so `out` may still be `Phi[0]`. The tiles above are only where
+    scipy's operands live, so the kernel needs none; they remain the route
+    for anything it cannot take (`_phi_reduce_takes`) and when the
+    accelerator is absent. scipy's tiles ran on one thread: 0.44 s of a
+    0.79 s fill at 8 threads on the 4,392-segment ELT whip.
+
     A DENSE `Ms[i]` (N < `_DENSE_ASSEMBLY_THRESHOLD`) goes to BLAS zgemm,
     whose k-blocking follows the operand shape, so it is reduced whole
     band, exactly as written above.
@@ -493,6 +538,12 @@ def _reduce_phi_band(Phi, Ms, out):
         out[...] = Phi[0] @ Ms[0]
         out += Phi[1] @ Ms[1]
         out += Phi[2] @ Ms[2]
+        return out
+    if _phi_reduce_takes(Phi, Ms, out):
+        args = []
+        for M in Ms:
+            args += [M.indptr, M.indices, M.data]
+        _acc.reduce_phi_band(out, Phi[0], Phi[1], Phi[2], *args)
         return out
     MT = [M.T for M in Ms]  # CSR views over the CSC arrays, no copy
     for a, b in _reduce_tiles(out.shape[0]):
