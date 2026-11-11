@@ -121,10 +121,14 @@ def test_a_reach_9_feature_selects_every_pr_running_job():
     sel = _select(files, stable)
     assert set(sel.required) == SM.running_jobs(WORKFLOWS, files) | ALWAYS
     # A wide diff claimed by the feature: everything that runs on a PR.
-    wide = stable.replace(
-        'paths=("tests/test_pair_reuse_1809.py",)',
-        'paths=("**",)',
+    wide, n = re.subn(
+        r'(name="pair_reuse",.*?)paths=\(.*?\),',
+        r'\g<1>paths=("**",),',
+        stable,
+        count=1,
+        flags=re.DOTALL,
     )
+    assert n == 1
     files = ["src/momwire/_razor_core.cpp", "setup.py", "site/x.md"]
     sel = _select(files, wide)
     assert sel.stable_files == []

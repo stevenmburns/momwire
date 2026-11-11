@@ -1242,6 +1242,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_rule="nec2",
         transmitted_anchors=None,
         point_cplx_staged=None,
+        pair_reuse=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1353,6 +1354,24 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._point_cplx_staged = _features.enabled(
             "point_cplx_staged", point_cplx_staged
         )
+        # momwire#1911: `pair_reuse` (bspline's feature, #1809) on the
+        # point-matched fill: each congruent pair's field tensors once
+        # (`_sin_pair_reuse`). This fill finds its own classes, so any truthy
+        # value is on, a front end's bspline hint included; "verify" also
+        # checks a sample of each band against the direct kernel. None defers
+        # to MOMWIRE_X_PAIR_REUSE; off is the fill, bit for bit.
+        self._pair_reuse_verify = isinstance(pair_reuse, str) and (
+            pair_reuse == "verify"
+        )
+        self._pair_reuse_on = _features.enabled(
+            "pair_reuse", None if pair_reuse is None else bool(pair_reuse)
+        )
+        self._sin_reuse_plans: dict = {}
+        # Why the last fill did not reuse (None when it did, or was not asked),
+        # the last fill's census per block, and verify's worst agreement.
+        self.pair_reuse_declined = None
+        self.pair_reuse_census: dict = {}
+        self.pair_reuse_verify_max = 0.0
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -6512,6 +6531,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             else _schedule.mb_rows(self.swept_mem_mb, self._fill_row_bytes(N))
         )
 
+        # momwire#1911: `pair_reuse`, or None for the fill below as it was.
+        reuse = self._sin_pair_reuse_route(geom, k, cos_shape, fg, eta)
+
         G = np.zeros((N, N), dtype=np.complex128)
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
@@ -6519,9 +6541,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # at the top of each chunk (momwire#1337 phase 2).
         for i0, i1 in _schedule.chunks([(0, N)], chunk, self._checkpoint):
             rows = (i0, i1)
-            Phi_c, Phi_s, Phi_co = self._field_tensor(
-                geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
-            )
+            if reuse is None:
+                Phi_c, Phi_s, Phi_co = self._field_tensor(
+                    geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
+                )
+            else:
+                Phi_c, Phi_s, Phi_co = reuse("direct", rows)
             if fg is not None:
                 # Image ground: subtract the sub-assembly built from the
                 # image field tensor. The image source's mirrored geometry +
@@ -6577,8 +6602,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         np.multiply(c2, Pi, out=Pi)
                         Pi -= Si
                     del S
-                else:
+                elif reuse is None:
                     Phi_i = fg.image_field(obs_rows=rows, cos_shape=cos_shape)
+                else:
+                    Phi_i = reuse("image", rows)
                 Phi_c -= Phi_i[0]
                 Phi_s -= Phi_i[1]
                 Phi_co -= Phi_i[2]
@@ -6592,6 +6619,177 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._contact_charge_correction(G, geom, k, seg_view, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
+
+    def _sin_pair_reuse_route(self, geom, k, cos_shape, fg, eta):
+        """`pair_reuse` for one `_assemble_Z` fill (momwire#1911): a callable
+        `(block, rows) -> (Φ_c, Φ_s, Φ_co)` serving the band from each
+        congruent pair's one evaluation (`_sin_pair_reuse`), `block` being
+        "direct" or "image"; or None, the shipped fill.
+
+        Served where the fill would take the real-k C++ kernel at the literal
+        shapes: free space and the PEC image, thin-wire or extended kernel.
+        Anything else declines with its reason in `pair_reuse_declined` and
+        fills as before: the NEC-4 junction kernel, the folded `cos-1` shapes
+        (kΔ below `_WELL_SCALED_KD`, which take numpy), a complex k (buried),
+        a finite ground (refl-coef or Sommerfeld: their image blocks are
+        weighted per pair or composed with a remainder), and no accelerator.
+        """
+        if not self._pair_reuse_on:
+            return None
+        ek = self.extended_kernel
+        if self._nec4_live(geom):
+            reason = "the NEC-4 junction kernel"
+        elif cos_shape != "cos":
+            reason = "the folded cos-1 shapes (k*delta below the well-scaled bound)"
+        elif _complex_k(k) or self._active_medium is not None:
+            reason = "a fill inside a ground medium"
+        elif not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR):
+            reason = "no C++ field-tensor kernel"
+        elif fg is not None and (fg.mode != "fold" or self.ground_eps is not None):
+            reason = "a finite ground"
+        else:
+            reason = None
+        self.pair_reuse_declined = reason
+        if reason is not None:
+            return None
+
+        from . import _sin_pair_reuse as _pr
+
+        eta = self._fill_eta(k, eta)
+        N = geom["n_segs"]
+        seg_c = np.ascontiguousarray(geom["seg_centers"], dtype=np.float64)
+        seg_t = np.ascontiguousarray(geom["seg_tangents"], dtype=np.float64)
+        seg_h = np.ascontiguousarray(geom["seg_h"], dtype=np.float64)
+        # The source radius (EK's per-source table) and the observer radius
+        # (each kernel call's scalar), as `_field_tensor` passes them.
+        src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
+        a_seg = (
+            np.full(N, float(self._uniform_radius))
+            if self._uniform_radius is not None
+            else src_a
+        )
+        gx, gw = self._leggauss_cached(self.n_qp_const)
+        if ek:
+            ind1, ind2 = self._ek_gating(geom)
+            ind1 = np.ascontiguousarray(ind1, dtype=np.int8)
+            ind2 = np.ascontiguousarray(ind2, dtype=np.int8)
+            src_type, obs_type = _pr.segment_types(seg_h, a_seg, src_a, ind1, ind2)
+        else:
+            ind1 = ind2 = None
+            src_type, obs_type = _pr.segment_types(seg_h, a_seg)
+
+        def kernel(obs_c, obs_t, src_c, src_t, h, a, ns=None):
+            """The shipped kernel this fill would call, on given arrays;
+            `ns` the source segments they stand for (EK's per-source
+            tables)."""
+            ns = slice(None) if ns is None else ns
+            args = (
+                np.ascontiguousarray(obs_c, dtype=np.float64),
+                np.ascontiguousarray(obs_t, dtype=np.float64),
+                np.ascontiguousarray(src_c, dtype=np.float64),
+                np.ascontiguousarray(src_t, dtype=np.float64),
+                np.ascontiguousarray(h, dtype=np.float64),
+                float(a),
+                float(k),
+                float(eta),
+                gx,
+                gw,
+            )
+            if ek:
+                return _acc.sinusoidal_field_tensor_ek(
+                    *args,
+                    np.ascontiguousarray(src_a[ns]),
+                    np.ascontiguousarray(ind1[ns]),
+                    np.ascontiguousarray(ind2[ns]),
+                    self._cancel_flag,
+                )
+            return _acc.sinusoidal_field_tensor(*args, self._cancel_flag)
+
+        origin = np.zeros((1, 3))
+        axis = np.array([[0.0, 0.0, 1.0]])
+
+        def canonical(obs_c, obs_t, g_src, g_obs):
+            ns = np.array([g_src])
+            return kernel(obs_c, obs_t, origin, axis, seg_h[ns], a_seg[g_obs], ns)
+
+        # The census transient: ~20 float64/int64 per pair in a band.
+        census_rows = _schedule.mb_rows(self.swept_mem_mb, 20 * 8 * N)
+        blocks = {}
+        rep_cache = {}
+        self.pair_reuse_census = {}
+
+        def sources(block):
+            if block == "direct":
+                return seg_c, seg_t
+            c, t = self._image_source_centers_tangents(geom)
+            return (
+                np.ascontiguousarray(c, dtype=np.float64),
+                np.ascontiguousarray(t, dtype=np.float64),
+            )
+
+        def plan_for(block):
+            if block in blocks:
+                return blocks[block]
+            src_c, src_t = sources(block)
+            # Keyed on content, not identity: a solve rebuilds `geom` per
+            # call, and the classes hold no k, so a sweep pays the census once.
+            key = (
+                block,
+                ek,
+                seg_c.tobytes(),
+                seg_t.tobytes(),
+                src_c.tobytes(),
+                src_t.tobytes(),
+                seg_h.tobytes(),
+                a_seg.tobytes(),
+                src_a.tobytes(),
+                None if ind1 is None else (ind1.tobytes(), ind2.tobytes()),
+            )
+            held = self._sin_reuse_plans.get(block)
+            if held is not None and held[0] == key:
+                plan = held[1]
+            else:
+                self._sin_reuse_plans.pop(block, None)
+                plan = _pr.build_plan(
+                    seg_c,
+                    seg_t,
+                    src_c,
+                    src_t,
+                    seg_h,
+                    a_seg,
+                    src_type,
+                    obs_type,
+                    census_rows,
+                )
+                self._sin_reuse_plans[block] = (key, plan)
+            self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes)
+            blocks[block] = (plan, src_c, src_t)
+            return blocks[block]
+
+        def serve(block, rows):
+            plan, src_c, src_t = plan_for(block)
+            rep = rep_cache.get(block)
+            if rep is None:
+                rep = rep_cache[block] = _pr.evaluate(plan, canonical)
+            phis = _pr.scatter(rep, plan, rows)
+            if self._pair_reuse_verify:
+
+                def direct(m, ns):
+                    return kernel(
+                        seg_c[m : m + 1],
+                        seg_t[m : m + 1],
+                        src_c[ns],
+                        src_t[ns],
+                        seg_h[ns],
+                        a_seg[m],
+                        ns,
+                    )
+
+                worst = _pr.verify_band(phis, rows, N, direct)
+                self.pair_reuse_verify_max = max(self.pair_reuse_verify_max, worst)
+            return phis
+
+        return serve
 
     def _nec4_cap_columns(self, G, geom, k, seg_view, fg, eta):
         """Add each free end's cap-charge field to its basis column, in

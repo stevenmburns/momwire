@@ -151,11 +151,14 @@ class Feature:
 FEATURES: dict[str, Feature] = {
     f.name: f
     for f in (
-        # A front end's hint that edge pairs share a pose: one block filled
-        # per pose, the rest copied (PRs #1810, #1811). Python's plan over
-        # the copy the Sommerfeld remainder kernel shipped in 0.87.0. The
-        # hint is DATA, so the variable alone reuses nothing: no front end
-        # that reads the variable supplies a hint.
+        # Each congruent pair's fill once, the rest copied. BSplineSolver: a
+        # front end's hint that edge pairs share a pose, one block filled per
+        # pose (PRs #1810, #1811), Python's plan over the copy the Sommerfeld
+        # remainder kernel shipped in 0.87.0; the hint is DATA, so there the
+        # variable alone reuses nothing. SinusoidalSolver (momwire#1911): the
+        # point-matched fill finds its own classes of (observer, source)
+        # pairs and evaluates each one's field tensors once with the shipped
+        # kernel, free space and PEC image; there the variable alone is on.
         Feature(
             name="pair_reuse",
             reach=1,
@@ -164,12 +167,17 @@ FEATURES: dict[str, Feature] = {
             issue=1809,
             since="2026-11-04",
             kwarg="pair_reuse",
-            paths=("tests/test_pair_reuse_1809.py",),
+            paths=(
+                "src/momwire/_sin_pair_reuse.py",
+                "tests/test_pair_reuse_1809.py",
+                "tests/test_sin_pair_reuse_1911.py",
+            ),
             label="pair reuse",
             summary=(
-                "Fills one block per repeated pose of edge pairs and copies the "
-                "rest. It needs the front end's hint of which pairs share a pose, "
-                "so the switch alone reuses nothing."
+                "Fills each repeated pose of a pair of wires or segments once and "
+                "copies the rest. nec5-bspline and nec42-bspline need the front "
+                "end's hint of which edge pairs share a pose; the sinusoidal "
+                "solver finds its own, in free space and over a perfect ground."
             ),
             drift=1e-12,
             offer=False,
