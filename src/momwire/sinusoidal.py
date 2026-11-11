@@ -1672,12 +1672,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         THIS family's route (momwire#1912), each refused by name before any
         fill.
 
-        Served: the point-matched fill of one medium — free space, a PEC or
-        reflection-coefficient image, a Sommerfeld half-space, with the deck
-        above it, touching it, or wholly inside it. Not yet: the Galerkin
-        subclass (its own fill and testing), the NEC-4 dialect's junction
-        (its cap columns are a whole-matrix pass), and a deck with wires on
-        both sides of the interface (the mixed fill's class bands)."""
+        Served: every point-matched fill this family has — free space, a PEC
+        or reflection-coefficient image, a Sommerfeld half-space with the
+        deck above it, touching it, wholly inside it, or on both sides of it
+        (the mixed fill, crossing node included: #1029's buried screen). Not
+        yet: the Galerkin subclass (its own fill and testing) and the NEC-4
+        dialect's junction (its cap columns are a whole-matrix pass)."""
         RS = _rotational_symmetry
         if hasattr(self, "_node_drive_declared"):
             raise RS.RotationalSymmetryRefused(
@@ -1694,16 +1694,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "matrix. Drop rotational_symmetry=True to solve this deck "
                 "densely."
             )
-        if self.ground_z is not None:
-            media = set(self._wire_media())
-            if _medium_spec.BELOW in media and len(media) > 1:
-                raise RS.RotationalSymmetryRefused(
-                    "rotational symmetry: the deck has wires both above and "
-                    "below the ground interface, and this family's sector "
-                    "route serves one medium only (its mixed fill is not row-"
-                    "restricted yet). Drop rotational_symmetry=True to solve "
-                    "this deck densely."
-                )
         return RS.sector_map(self)
 
     def _rotational_segments(self, geom):
@@ -6588,11 +6578,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # The operating point is (k, eta), both arguments (momwire#995).
         eta = self._fill_eta(k, eta)
         if self._is_mixed(geom):
-            if obs_rows is not None:  # pragma: no cover - refused at construction
-                raise AssertionError("the sector route has no mixed fill")
             # Two media, three pair classes (momwire#1222) — the SG D2 shape
             # at one observer per segment.
-            return self._assemble_Z_mixed(geom, eta)
+            return self._assemble_Z_mixed(geom, eta, obs_rows=obs_rows)
         seg_view = self._basis_coefs(geom, k)
         N = geom["n_segs"]
         # Build (N, N) coefficient matrices M_{A,B,C}[n, j] = effective
@@ -7029,7 +7017,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 col = col - img
             G[:, i] += col
 
-    def _assemble_Z_mixed(self, geom, eta):
+    def _assemble_Z_mixed(self, geom, eta, obs_rows=None):
         """Point-matched Z of a MIXED deck (momwire#1222): wires wholly above
         and wholly below the interface, none crossing it.
 
@@ -7056,6 +7044,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         — as in `_assemble_Z` and razor's buried fill. The three whole Φ
         tables this replaces were 3 Z resident beside it (1.65 GB at invl
         x32). Why it is the same bits is argued at the band loop below.
+
+        `obs_rows` (momwire#1912, the sector route): the ROW-COMPACT fill of
+        those observer segments against every source, as `_assemble_Z`'s.
+        Each class walks only its observers among them, the transmitted
+        blocks are built for them only, and the crossing rows are added for
+        them only — every element still has its one writer, so a compact row
+        is the square fill's row. None is the square fill, unchanged.
         """
         below = self._below_segments(geom)
         medium = self._fill_medium(geom)
@@ -7108,9 +7103,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # nothing either one reads is state the other writes (the transmitted
         # grid and the class remainders sit in caches keyed exactly, so a hit
         # and a miss are the same floats), and the gates below measure it.
+        if obs_rows is None:
+            on_row = None
+        else:
+            obs_rows = np.asarray(obs_rows, dtype=np.int64)
+            on_row = np.zeros(N, dtype=bool)
+            on_row[obs_rows] = True
+            row_of = np.full(N, -1, dtype=np.int64)
+            row_of[obs_rows] = np.arange(obs_rows.size, dtype=np.int64)
         cross = {}
         for src_keep, obs_below in () if crossing else ((below, False), (~below, True)):
             obs_keep = below if obs_below else ~below
+            if on_row is not None:
+                obs_keep = obs_keep & on_row
             block, _rows, cols = self._transmitted_block(
                 geom,
                 medium,
@@ -7158,20 +7163,25 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (`_fill_row_bytes`' reduction phase, slack since the tiled
         # reduction of momwire#1290), N sources each. Beside it sits one
         # class band's `P − Pi` (budgeted by that class's own sizing).
-        whole = N < _DENSE_ASSEMBLY_THRESHOLD
+        # A compact fill always reduces band by band: the whole-table form
+        # is the square one's (and below the dense threshold either is tiny).
+        whole = N < _DENSE_ASSEMBLY_THRESHOLD and obs_rows is None
         zband = self._mixed_band_rows(N)
         if whole:
             Phi = [np.zeros((N, N), dtype=np.complex128) for _ in range(3)]
-        else:
+        elif obs_rows is None:
             G = np.zeros((N, N), dtype=np.complex128)
+        else:
+            G = np.zeros((obs_rows.size, N), dtype=np.complex128)
         for (keep, k_cls, med, eta_cls), obs_below in (
             ((~below, medium.k_p, None, eta_p), False),
             ((below, medium.k_m, medium, self._medium_eta(medium)), True),
         ):
             idx = np.nonzero(keep)[0]
+            obs_idx = None if on_row is None else idx[on_row[idx]]
             tx = cross.get(obs_below)
             for s, e, row, D in self._class_bands(
-                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan
+                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan, obs_idx=obs_idx
             ):
                 # No checkpoint per Z band: the class band above took one.
                 for z0, z1 in _schedule.chunks([(s, e)], zband):
@@ -7192,7 +7202,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         a = row + z0 - s
                         for P, t in zip(dst, t_block):
                             P[:, cols] += t[a : a + z1 - z0]
-                    if not whole:
+                    if on_row is not None:
+                        # a run of observer rows is a run of compact rows
+                        r0 = int(row_of[z0])
+                        _reduce_phi_band(dst, Ms, G[r0 : r0 + (z1 - z0)])
+                    elif not whole:
                         _reduce_phi_band(dst, Ms, G[z0:z1])
                     # Every name on a buffer row or a D array is dropped, the
                     # loop variables included, before the generator computes
@@ -7204,8 +7218,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             G = _reduce_phi_rows_in_place(Phi, Ms, N)
             del Phi
         if crossing:
-            self._crossing_point_rows(geom, seg_view, medium, below, into=G)
-        self._apply_loading(G, geom, seg_view, None, medium=medium)
+            self._crossing_point_rows(
+                geom, seg_view, medium, below, into=G, obs_rows=obs_rows
+            )
+        self._apply_loading(G, geom, seg_view, None, medium=medium, obs_rows=obs_rows)
         return G, seg_view
 
     def _mixed_band_rows(self, N):
@@ -7220,7 +7236,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return N
         return max(1, int(self.swept_mem_mb * 1024 * 1024 // ((3 + 2) * 16 * N)))
 
-    def _crossing_point_rows(self, geom, seg_view, medium, below, into=None):
+    def _crossing_point_rows(
+        self, geom, seg_view, medium, below, into=None, obs_rows=None
+    ):
         """The crossing deck's cross rows (momwire#1223): each medium's
         midpoints observing the other medium's part of every basis, through
         `_crossing_fill.point_observer_block`. Returned as a full (N, N) to
@@ -7244,7 +7262,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n = int(geom["n_segs"])
         if into is None:
             out = np.zeros((n, n), dtype=np.complex128)
+        if obs_rows is not None:
+            # A row-compact `into` (momwire#1912): only its observers, each
+            # added at its compact row. The sources stay every segment.
+            obs_rows = np.asarray(obs_rows, dtype=np.int64)
+            row_of = np.full(n, -1, dtype=np.int64)
+            row_of[obs_rows] = np.arange(obs_rows.size, dtype=np.int64)
         for obs, src, above in ((a_idx, ax_b, True), (b_idx, ax_a, False)):
+            dst_rows = obs
+            if obs_rows is not None:
+                obs = obs[row_of[obs] >= 0]
+                dst_rows = row_of[obs]
+                if obs.size == 0:
+                    continue
             if into is None:
                 out[obs] = _crossing_fill.point_observer_block(
                     ctx, centres[obs], tangents[obs], src, observers_above=above
@@ -7259,7 +7289,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     src,
                     observers_above=above,
                     into=into,
-                    into_rows=obs,
+                    into_rows=dst_rows,
                 )
         return out if into is None else into
 
@@ -7277,7 +7307,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 dst[row : row + d.shape[0]] = d
         return out
 
-    def _class_bands(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
+    def _class_bands(
+        self, geom, keep, idx, k, medium, eta, cos_shape, plan, obs_idx=None
+    ):
         """One medium's block of a mixed deck, band by observer band: its own
         sources seen at its own midpoints, at its own (k, eta), with its own
         ground — `Φ − (coef·Φ_img − S)`, the single-medium band loop's
@@ -7294,6 +7326,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         centres/tangents; the observers stay the whole geometry's rows, walked
         in the class's contiguous runs, so the radius and every observer-side
         table is the one the whole-deck fill would use.
+
+        `obs_idx` (momwire#1912): walk only these of the class's observers
+        (sorted, a subset of `idx`); `row` then counts along them. The
+        sources are the class's whole `idx` either way.
         """
         gz = self.ground_z
         seg_c = geom["seg_centers"]
@@ -7338,7 +7374,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # checkpoint per band, called by the walk at the top of each band
         # (momwire#1337 phase 2). The walk is lazy, so that checkpoint fires
         # after the consumer has dropped the previous band, as before.
-        for s, e in _schedule.chunks(_schedule.runs(idx), chunk, self._checkpoint):
+        walk = idx if obs_idx is None else obs_idx
+        for s, e in _schedule.chunks(_schedule.runs(walk), chunk, self._checkpoint):
             band = (s, e)
             Phi = self._field_tensor(
                 geom_src,

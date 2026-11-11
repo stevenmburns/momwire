@@ -33,11 +33,9 @@ def build(wires, npe, feeds, ground="free", **kw):
         return SinusoidalSolver(
             wires=wires,
             n_per_edge_per_wire=npe,
-            wavelength=t.WL,
-            wire_radius=0.002,
             feeds=feeds,
             **t.GROUNDS[ground],
-            **kw,
+            **{"wavelength": t.WL, "wire_radius": 0.002, **kw},
         )
 
 
@@ -60,6 +58,12 @@ cases = {
     "tophat-contact-somm": (*t.top_hat(8), "sommerfeld", {}),
     "buried-somm": (*t.buried(), "sommerfeld", {}),
     "parasitic-free": (*t.parasitic(), "free", {}),
+    "screen1029-16-crossing-somm": (
+        *t.screen_1029(16),
+        "sommerfeld",
+        dict(wavelength=t.WL_1029),
+    ),
+    "detached-mixed-somm": (*t.detached(), "sommerfeld", {}),
 }
 print("momwire", momwire.__file__)
 for name, (w, npe, feeds, ground, kw) in cases.items():
