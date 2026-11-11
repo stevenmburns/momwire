@@ -170,6 +170,11 @@ Solvers — see [Solvers](#solvers) above for what distinguishes them:
 Results and control:
 
 - `PortSolution` — a solved port network's currents, voltages and Z.
+- `PortSites` — the configured ports plus point ports that move along one
+  wire against one factorisation, with ∂Y/∂x (`BSplineSolver.port_sites`,
+  momwire#1915).
+- `terminate_ports` — a Y matrix with some ports terminated in series loads,
+  e.g. a load at a `PortSites` position seen from the feed.
 - `DistributedRLC` — a wire's per-metre series or parallel RLC (NEC's `LD 2`
   / `LD 3`), the `distributed_rlc` kwarg every loading family takes beside
   `wire_conductivity` and the insulation pair.
