@@ -77,6 +77,9 @@ def test_outside_a_venv_the_key_is_the_one_it_was(interpreter):
             mech.WIRE,
             "default",
             *mech.junction_rule_identity(),
+            # momwire#1893: nothing when no thread variable is set, but the
+            # test run itself pins OMP_NUM_THREADS on every worker.
+            *mech.thread_identity(),
         ]
     )
 
