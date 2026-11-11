@@ -526,7 +526,9 @@ def _port_sites(solver, polylines):
                 break
             acc += seg[e]
         sites.append((f"feed {i}", np.asarray(point, dtype=float)))
-    for i, (j, _v) in enumerate(solver.junction_ports):
+    # A family without junction ports or node gaps (the point-matched
+    # sinusoidal one, momwire#1912) has nothing there to add.
+    for i, (j, _v) in enumerate(getattr(solver, "junction_ports", None) or ()):
         sites.append(
             (
                 f"junction port {i}",
@@ -535,7 +537,7 @@ def _port_sites(solver, polylines):
                 ),
             )
         )
-    for i, (w, end, _v) in enumerate(solver.node_gaps):
+    for i, (w, end, _v) in enumerate(getattr(solver, "node_gaps", None) or ()):
         pl = polylines[int(w)]
         sites.append(
             (f"node gap {i}", np.asarray(pl[0] if end == "start" else pl[-1], float))
@@ -1207,6 +1209,71 @@ def dof_signs(solver, wire_basis_global, n_basis_total):
             if back:
                 kept, l2g = wire_basis_global[smap.sectors[s][c]]
                 D[[int(l2g[i]) for i in range(len(kept))]] = -1.0
+    return D
+
+
+def segment_groups(solver, seg_first, n_segs):
+    """`(sectors, axial)` for a family whose unknowns are its SEGMENTS
+    (momwire#1912: the point-matched sinusoidal solver, one three-term basis
+    and one match point per segment) — `dof_groups` with the segment as the
+    dof.
+
+    `seg_first[w]` is wire w's first segment; a wire's segments are the
+    contiguous run up to the next wire's first (`n_segs` closing the last).
+    `sectors[s][i]` and `sectors[t][i]` are the same segment of the same
+    wire of the same orbit under the rotation, so the basis CENTRED on it
+    and the match point AT its centre are both images of sector 0's — the
+    one fact the block-circulant reading of a point-matched Z needs, since
+    rows and columns are indexed by the same segments.
+
+    A member drawn the other way (`SectorMap.reversed`) lists its segments
+    backwards: condition 3 has already held its per-edge counts to the
+    mirror of sector 0's, so its segment i from the far end is the image of
+    sector 0's segment i. Its basis and its match-point tangent both run the
+    other way too, which is `segment_signs`.
+    """
+    smap = solver._rotational_map
+    rev = smap.reversed
+    first = np.asarray(seg_first, dtype=np.int64)
+    stop = np.append(first[1:], np.int64(n_segs))
+    sectors = []
+    for s in range(smap.n_sectors):
+        idx = []
+        for c, w in enumerate(smap.sectors[s]):
+            run = np.arange(first[w], stop[w], dtype=np.int64)
+            idx.append(run[::-1] if rev and rev[s][c] else run)
+        sectors.append(np.concatenate(idx) if idx else np.zeros(0, np.int64))
+    sizes = {int(x.size) for x in sectors}
+    if len(sizes) != 1:
+        raise AssertionError(f"sector segment counts differ: {sorted(sizes)}")
+    on_sector = np.zeros(int(n_segs), dtype=bool)
+    for idx in sectors:
+        on_sector[idx] = True
+    return sectors, np.nonzero(~on_sector)[0].astype(np.int64)
+
+
+def segment_signs(solver, seg_first, n_segs):
+    """`dof_signs` for a segment-dof family (momwire#1912): -1 on every
+    segment of a member drawn the other way, None when there is none.
+
+    The three-term basis on a segment is written along that segment's own
+    tangent, and so is the point-matched row (the tangential field at its
+    centre): reversing a wire flips both, so rotating sector 0's basis onto
+    it gives MINUS its own, and the same for the row. The operator in the
+    signed bases is D Z D; sector 0 and the axial group are never flipped,
+    so the rows the route fills keep their sign and only the columns need
+    it, exactly as on the Galerkin family."""
+    smap = solver._rotational_map
+    if not smap.reversed:
+        return None
+    first = np.asarray(seg_first, dtype=np.int64)
+    stop = np.append(first[1:], np.int64(n_segs))
+    D = np.ones(int(n_segs), dtype=np.float64)
+    for s, row in enumerate(smap.reversed):
+        for c, back in enumerate(row):
+            if back:
+                w = smap.sectors[s][c]
+                D[first[w] : stop[w]] = -1.0
     return D
 
 
