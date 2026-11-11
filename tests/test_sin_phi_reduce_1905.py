@@ -38,7 +38,10 @@ from momwire.sinusoidal import SinusoidalSolver
 
 pytestmark = pytest.mark.skipif(
     not sn._HAVE_PHI_REDUCE_ACCEL,
-    reason="the accelerator does not carry reduce_phi_band",
+    reason=(
+        "reduce_phi_band is the route only on x86-64 with an accelerator that "
+        "carries it (elsewhere the scipy tiles are, unchanged)"
+    ),
 )
 
 
