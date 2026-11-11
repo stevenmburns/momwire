@@ -51,7 +51,9 @@ FIRST condition that fails.
 
 from __future__ import annotations
 
+import hashlib
 import math
+from collections import OrderedDict
 from typing import NamedTuple
 
 import numpy as np
@@ -984,24 +986,88 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     s0 = sectors[0]
     r_s0 = s0 if row_of is None else row_of[s0]
     m = int(s0.size)
-    for h in harmonics:
-        if h == 0:
-            continue
-        lam = np.zeros((m, m), dtype=np.complex128, order="F")
-        for t in range(n):
-            lam += np.exp(2j * math.pi * h * t / n) * Z[np.ix_(r_s0, sectors[t])]
-        out[h] = _lapack.lu_factor(lam, overwrite_a=True)
+    hs = [h for h in harmonics if h != 0]
+    if not hs:
+        return out
+    # Sector t's block C_t is gathered ONCE and folded into every harmonic
+    # (momwire#1902): the h-outer form gathered it once per harmonic, N - 1
+    # fancy-index copies of an m x m block where one does, and that was 46 %
+    # of a 13-frequency C6 sweep. Each Lambda_h still receives its terms in
+    # ascending t as `w * C_t` then an add, so the sums are bit-identical to
+    # the h-outer form. The N - 1 accumulators are the blocks the factors
+    # replace in place, so the peak is one gathered block above it.
+    lams = {h: np.zeros((m, m), dtype=np.complex128, order="F") for h in hs}
+    term = np.empty((m, m), dtype=np.complex128, order="F")
+    for t in range(n):
+        C_t = Z[np.ix_(r_s0, sectors[t])]
+        for h in hs:
+            np.multiply(np.exp(2j * math.pi * h * t / n), C_t, out=term)
+            lams[h] += term
+        del C_t
+    for h in hs:
+        out[h] = _lapack.lu_factor(lams.pop(h), overwrite_a=True)
     return out
 
 
+# `_harmonic_constraints` by the digest of its inputs (momwire#1902): the
+# rows are geometry only (the KCL rows and the sector map), yet a frequency
+# sweep on the route rebuilt them, orbit search and all, at every k.
+_CONSTRAINTS_CACHE: OrderedDict = OrderedDict()
+_CONSTRAINTS_CACHE_SIZE = 4
+
+
+def _constraints_key(kcl_A, sectors, axial):
+    """A digest of exactly what `_harmonic_constraints` reads: the shape,
+    dtype, nonzero positions and values of `kcl_A` (a +-1 pattern, so its
+    sparse form is small), and the sector map. One `flatnonzero` pass,
+    against the orbit search it stands in for."""
+    a = np.ascontiguousarray(kcl_A)
+    nz = np.flatnonzero(a)
+    h = hashlib.blake2b(digest_size=20)
+    h.update(repr((a.shape, a.dtype.str, len(sectors))).encode())
+    h.update(nz.astype(np.int64).tobytes())
+    h.update(a.ravel()[nz].tobytes())
+    for sec in sectors:
+        h.update(np.asarray(sec, dtype=np.int64).tobytes())
+        h.update(b"|")
+    h.update(np.asarray(axial, dtype=np.int64).tobytes())
+    return h.digest()
+
+
 def _harmonic_constraints(kcl_A, sectors, axial):
-    """The constraint rows harmonic by harmonic, `(rows0, rows_h)`.
+    """The constraint rows harmonic by harmonic, `(rows0, rows_h)`: the
+    rows `_harmonic_constraints_parts` derives, memoised on
+    `_constraints_key`. The arrays handed back are read-only, since the
+    cache shares them between calls."""
+    key = _constraints_key(kcl_A, sectors, axial)
+    hit = _CONSTRAINTS_CACHE.get(key)
+    if hit is None:
+        rows0, a_hat, m = _harmonic_constraints_parts(kcl_A, sectors, axial)
+        rows0.setflags(write=False)
+        if a_hat is not None:
+            a_hat.setflags(write=False)
+        hit = (rows0, a_hat, m)
+        _CONSTRAINTS_CACHE[key] = hit
+        while len(_CONSTRAINTS_CACHE) > _CONSTRAINTS_CACHE_SIZE:
+            _CONSTRAINTS_CACHE.popitem(last=False)
+    else:
+        _CONSTRAINTS_CACHE.move_to_end(key)
+    rows0, a_hat, m = hit
+
+    def rows_h(h):
+        return a_hat[h] if a_hat is not None else np.zeros((0, m), np.complex128)
+
+    return rows0, rows_h
+
+
+def _harmonic_constraints_parts(kcl_A, sectors, axial):
+    """`(rows0, a_hat, m)`: the parts `_harmonic_constraints` serves.
 
     `rows0` is harmonic 0's, on its (m + p) unknowns [x_hat_0, x_axial]: an
     invariant row r reads sqrt(N) r_sector . x_hat_0 + r_axial . x_axial,
     and each orbit of the others reads its orbit sum (`orbit_constraints`).
 
-    `rows_h(h)` is harmonic h's, on its m unknowns: an orbit whose
+    `a_hat[h]` is harmonic h's rows, on its m unknowns: an orbit whose
     representative row has sector blocks a_u enforces, for its N rotated
     copies together, a_hat_h . x_hat_h = 0 with a_hat_h = sum_u exp(+2 pi j
     h u / N) a_u — the N rows of an orbit ARE its N harmonic rows, under the
@@ -1031,11 +1097,7 @@ def _harmonic_constraints(kcl_A, sectors, axial):
     rows0[inv.size :, :m] = blocks.sum(axis=0)
     # a_hat[h] = sum_u exp(+2 pi j h u / N) a_u: numpy's inverse DFT, times N.
     a_hat = np.fft.ifft(blocks, axis=0) * n if reps else None
-
-    def rows_h(h):
-        return a_hat[h] if a_hat is not None else np.zeros((0, m), np.complex128)
-
-    return rows0, rows_h
+    return rows0, a_hat, m
 
 
 def _constrained(lu, rhs, rows, cols):
