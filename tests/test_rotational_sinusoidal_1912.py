@@ -175,6 +175,43 @@ def buried(n=N):
     return wires, npe, [(0, 0.03, 1 + 0j)]
 
 
+def screen_1029(n=N, nrad=6):
+    """#1029's own deck: n radials to a hub 0.15 m down, the rise to the
+    crossing node at z = 0, the mast above it, fed on the mast. Two media
+    and a crossing junction ON the axis (`_assemble_Z_mixed`'s crossing
+    rows), at the design's 40 m wavelength (`WL_1029`)."""
+    depth, arm, mast = 0.15, 6.334, 10.556
+    wires = []
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        wires.append(
+            np.array(
+                [(0.0, 0.0, -depth), (arm * math.cos(th), arm * math.sin(th), -depth)]
+            )
+        )
+    wires.append(np.array([(0.0, 0.0, -depth), (0.0, 0.0, 0.0)]))
+    wires.append(np.array([(0.0, 0.0, 0.0), (0.0, 0.0, mast)]))
+    return wires, [[nrad]] * n + [[3], [8]], [(n + 1, 0.5 * mast / 8, 1 + 0j)]
+
+
+WL_1029 = 42.2
+
+
+def detached(n=8):
+    """Two media and NO crossing: a mast above the interface over n buried
+    radials it does not touch (the transmitted blocks of the mixed fill)."""
+    wires = [np.array([(0.0, 0.0, 0.05), (0.0, 0.0, 0.5)])]
+    npe = [[11]]
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        c, s_ = math.cos(th), math.sin(th)
+        wires.append(
+            np.array([(0.05 * c, 0.05 * s_, -0.08), (0.4 * c, 0.4 * s_, -0.08)])
+        )
+        npe.append([8])
+    return wires, npe, [(0, 0.02, 1 + 0j)]
+
+
 def build(wires, npe, feeds, *, rot=True, ground="free", cls=None, **kw):
     cls = SinusoidalSolver if cls is None else cls
     with warnings.catch_warnings():
@@ -182,12 +219,10 @@ def build(wires, npe, feeds, *, rot=True, ground="free", cls=None, **kw):
         return cls(
             wires=wires,
             n_per_edge_per_wire=npe,
-            wavelength=WL,
-            wire_radius=0.002,
             feeds=feeds,
             rotational_symmetry=rot,
             **GROUNDS[ground],
-            **kw,
+            **{"wavelength": WL, "wire_radius": 0.002, **kw},
         )
 
 
@@ -354,6 +389,23 @@ def test_a_wholly_buried_screen_matches():
     assert_impedance(s, d)
 
 
+@pytest.mark.parametrize("n", [4, 8, 16])
+def test_the_1029_buried_screen_with_its_crossing_node_matches(n):
+    w, npe, feeds = screen_1029(n)
+    s, d = pair(w, npe, feeds, ground="sommerfeld", wavelength=WL_1029)
+    assert s._is_crossing(s._build_geometry())
+    assert s._rotational_map.axial == (n, n + 1)
+    assert_impedance(s, d)
+
+
+def test_a_detached_two_media_deck_matches():
+    s, d = pair(*detached(), ground="sommerfeld")
+    geom = s._build_geometry()
+    assert s._is_mixed(geom) and not s._is_crossing(geom)
+    assert int(geom["n_segs"]) >= 60
+    assert_impedance(s, d)
+
+
 def test_the_pattern_reads_the_route_coefficients_as_the_dense_ones():
     """`element_currents` and the far-field moments are read off the
     coefficients, which the route hands back in the dense ordering."""
@@ -474,7 +526,6 @@ def test_the_bspline_refusals_read_the_same_here():
     [
         ("galerkin", "SinusoidalGalerkinSolver does not serve the sector route"),
         ("nec42", "the NEC-4 junction rule"),
-        ("mixed", "wires both above and below the ground interface"),
     ],
 )
 def test_the_family_scope_refuses_by_name_before_any_fill(case, needle, monkeypatch):
@@ -486,28 +537,10 @@ def test_the_family_scope_refuses_by_name_before_any_fill(case, needle, monkeypa
         w, npe = cage()
         kw = dict(cls=SinusoidalGalerkinSolver)
         feeds = [FEED]
-    elif case == "nec42":
+    else:
         w, npe = cage()
         kw = dict(junction_rule="nec42")
         feeds = [FEED]
-    else:
-        # a mast above the interface on buried radials, joined by no wire:
-        # two media, no crossing
-        w = [np.array([(0.0, 0.0, 0.05), (0.0, 0.0, 0.5)])]
-        npe = [[9]]
-        for i in range(N):
-            th = 2 * math.pi * i / N
-            w.append(
-                np.array(
-                    [
-                        (0.05 * math.cos(th), 0.05 * math.sin(th), -0.2),
-                        (0.4 * math.cos(th), 0.4 * math.sin(th), -0.2),
-                    ]
-                )
-            )
-            npe.append([5])
-        feeds = [(0, 0.02, 1 + 0j)]
-        kw = dict(ground="sommerfeld")
     with pytest.raises(RotationalSymmetryRefused) as exc:
         build(w, npe, feeds, **kw)
     assert needle in str(exc.value)
@@ -527,6 +560,27 @@ def test_the_flag_off_runs_no_route_code(monkeypatch):
     d.compute_impedance()
     d.compute_y_matrix()
     d.compute_impedance_swept(d.k * np.array([0.9, 1.1]))
+
+
+@pytest.mark.parametrize("deck", ["crossing", "detached"])
+def test_the_compact_mixed_fill_rows_are_the_dense_rows(deck):
+    """`_assemble_Z_mixed(obs_rows=)` against the square mixed fill's rows:
+    the class bands, the transmitted blocks and the crossing rows each
+    restricted to the compact observers, the same numbers row for row."""
+    if deck == "crossing":
+        w, npe, feeds = screen_1029(16)
+        d = build(w, npe, feeds, rot=False, ground="sommerfeld", wavelength=WL_1029)
+    else:
+        d = build(*detached(), rot=False, ground="sommerfeld")
+    geom = d._build_geometry()
+    n = int(geom["n_segs"])
+    assert n >= 60
+    G, _v = d._assemble_Z(geom, d.k)
+    first = np.asarray(geom["wire_first"])
+    rows = np.union1d(np.arange(first[1], first[2]), np.arange(first[-2], n))
+    Gc, _v = d._assemble_Z(geom, d.k, obs_rows=rows)
+    assert Gc.shape == (rows.size, n)
+    assert np.array_equal(Gc, G[rows])
 
 
 def test_the_compact_fill_rows_are_the_dense_rows():
