@@ -417,3 +417,33 @@ def test_the_warm_server_keys_carry_the_features_on(no_features):
         a: f.name for f in F.FEATURES.values() for a in f.aliases
     }
     assert mech.FEATURE_ENV_PREFIX == F.ENV_PREFIX
+
+
+def test_the_warm_server_keys_carry_the_thread_environment(monkeypatch):
+    # momwire#1893: a server inherits its spawner's thread variables, so a
+    # different thread count must never reach a server started under another.
+    import momwire_eznec_client as ez
+    import momwire_nec2c_client as n2
+    import momwire_serve_client as mech
+
+    for var in mech.THREAD_ENVS:
+        monkeypatch.delenv(var, raising=False)
+    assert mech.thread_identity() == []
+    base = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    # Empty counts as unset: the key is the key it was.
+    monkeypatch.setenv("OMP_NUM_THREADS", "")
+    assert (ez.config_key(None, 900.0), n2.config_key([], 900.0)) == base
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    one = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    eight = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    assert len({base[0], one[0], eight[0]}) == 3
+    assert len({base[1], one[1], eight[1]}) == 3
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "2")
+    both = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    assert both[0] not in (base[0], one[0], eight[0])
+    assert both[1] not in (base[1], one[1], eight[1])
+    assert mech.thread_identity() == [
+        "threads.OMP_NUM_THREADS=8",
+        "threads.OPENBLAS_NUM_THREADS=2",
+    ]

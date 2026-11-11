@@ -433,6 +433,24 @@ def feature_identity(environ=None) -> list[str]:
     return [f"feature={n}" for n in sorted(names)]
 
 
+# The thread counts are identity too (momwire#1893): a server inherits its
+# spawning client's environment, so a warm server started under
+# OMP_NUM_THREADS=8 would otherwise answer a later call asking for 1 at 8.
+# These are the variables the engine reads for its thread count
+# (`_times.fill_threads` / `factor_threads` / `default_threads`).
+THREAD_ENVS = ("MOMWIRE_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+def thread_identity(environ=None) -> list[str]:
+    """``["threads.<VAR>=<value>", ...]`` for each thread variable that is
+    set and non-empty, else nothing -- so every key with them all unset is
+    the key it was."""
+    env = os.environ if environ is None else environ
+    return [
+        f"threads.{v}={env[v].strip()}" for v in THREAD_ENVS if env.get(v, "").strip()
+    ]
+
+
 def digest(parts: list[str]) -> str:
     """A short hex identity for a server configuration.
 
