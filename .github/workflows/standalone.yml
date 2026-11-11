@@ -248,6 +248,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
           save: false
@@ -438,6 +442,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
           save: false
@@ -558,6 +566,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
           save: false
