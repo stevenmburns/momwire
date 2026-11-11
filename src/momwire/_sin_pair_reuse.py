@@ -47,6 +47,15 @@ import numpy as np
 #: Relative resolution of the key, in bits.
 KEY_BITS = 40
 
+#: Pairs whose observer lies within this many source lengths of the source's
+#: centre are not shared: each is evaluated at its own scalars. Their field
+#: is near-singular, and the basis sums over neighbouring sources cancel
+#: most of it, so a representative's coordinate rounding (a few ulp of the
+#: structure's size, independent of the member's) is amplified there.
+NEAR_LENGTHS = 4.0
+
+_NEAR_SENTINEL = -(1 << 40)
+
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
 VERIFY_TOL = 1e-10
@@ -139,12 +148,18 @@ def pair_scalars(obs_c, obs_t, src_c, src_t):
     return z, rho, td, rdt
 
 
-def _band_keys(z, rho, td, rdt, H, a_obs, type_id):
-    """The quantised key columns of one band (int64, (R*N,) each)."""
+def _band_keys(z, rho, td, rdt, H, a_obs, type_id, first_pair=None):
+    """The quantised key columns of one band (int64, (R*N,) each).
+
+    With `first_pair` (the band's first flat pair index), a NEAR pair gets a
+    key of its own (`NEAR_LENGTHS`) and so is evaluated at its own scalars."""
     # Nearest singular distance: to the source's centre or to its nearer
     # end, never below the observer radius.
     d_c = np.hypot(z, rho)
     d_end = np.hypot(np.abs(z) - H[None, :], rho)
+    near = None
+    if first_pair is not None and NEAR_LENGTHS > 0:
+        near = (d_c < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
     scale = np.minimum(d_c, d_end)
     del d_c, d_end
     np.maximum(scale, a_obs[:, None], out=scale)
@@ -157,7 +172,14 @@ def _band_keys(z, rho, td, rdt, H, a_obs, type_id):
     dq = np.rint(rdt * step_inv).astype(np.int64)
     del step_inv
     tq = np.rint(np.ldexp(td, KEY_BITS)).astype(np.int64)
-    return [c.reshape(-1) for c in (e, zq, rq, dq, tq, type_id)]
+    cols = [
+        np.array(c, dtype=np.int64).reshape(-1) for c in (e, zq, rq, dq, tq, type_id)
+    ]
+    if near is not None and near.any():
+        idx = np.flatnonzero(near)
+        cols[0][idx] = _NEAR_SENTINEL
+        cols[1][idx] = idx + first_pair
+    return cols
 
 
 def _hash(cols):
@@ -189,7 +211,7 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
         i1 = min(M, i0 + rows)
         z, rho, td, rdt = pair_scalars(obs_c[i0:i1], obs_t[i0:i1], src_c, src_t)
         type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
-        cols = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id)
+        cols = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id, i0 * N)
         h = _hash(cols)
         u, first, inv = np.unique(h, return_index=True, return_inverse=True)
         inv = inv.reshape(-1)
