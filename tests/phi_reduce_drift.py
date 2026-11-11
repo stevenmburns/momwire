@@ -6,7 +6,7 @@ complex multiply-add to FMA while the kernel, compiled with
 -ffp-contract=off, does not, so the two differ at round-off: there the
 gates hold a tolerance and REPORT the measured drift as a `PhiReduceDrift`
 warning, which the CI log's warnings summary carries (Steve, 2026-11-11:
-measure on the change, then decide whether the drift is usable).
+measured on the change, judged usable).
 """
 
 from __future__ import annotations
@@ -18,10 +18,15 @@ import numpy as np
 
 EXACT = platform.machine().lower() in ("x86_64", "amd64")
 
-#: Provisional bound on the fill's element drift, max|got - ref| / max|ref|,
-#: off x86-64. The measured value is what the warning reports.
+# Measured on the macOS arm64 lane (PR #1909, 2026-11-11): free space 0
+# (bit-identical); the buried inverted-L's mixed fill 1.5e-13 of max|Z|
+# (worst single element 7.8e-12 relative, the cancellation-heavy ground
+# terms) and its Zin 1.0e-11 relative; synthetic CSC operands <= 2.3e-16.
+# Accepted by Steve 2026-11-11 as usable; the bounds below keep ~7x and ~10x
+# headroom over those, so a regression that moves them shows.
+#: Bound on the fill's drift, max|got - ref| / max|ref|, off x86-64.
 TOL_FILL = 1e-12
-#: The same for an impedance, relative.
+#: Bound on an impedance's relative drift, off x86-64.
 TOL_Z = 1e-10
 
 
