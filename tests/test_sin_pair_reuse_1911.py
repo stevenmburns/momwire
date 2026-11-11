@@ -152,7 +152,7 @@ def test_the_key_separates_what_differs():
                 int(c[0])
                 for c in pr._band_keys(
                     z, rho, td, rdt, H, np.array([1e-3]), np.zeros((1, 1), np.int64)
-                )
+                )[0]
             ]
         )
     # A rigid motion moves each quantised scalar by at most its rounding.

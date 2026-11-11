@@ -32,8 +32,11 @@ columns), so no two different keys can share a class.
 
 EXCLUDED: a pair whose observer lies within `NEAR_LENGTHS` source lengths of
 the source's centre (in the max norm of |z| and rho: the self term and its
-neighbours) shares with nobody.
-It is still evaluated by the route below, at its own scalars.
+neighbours) is not shared, and is evaluated by the shipped kernel in the
+ORIGINAL frame, exactly as the fill would (`near_blocks`). Those pairs carry
+the near-singular field that the basis sums over neighbouring sources
+cancel, so any rounding of their geometry other than the structure's own,
+including the canonical frame's, is amplified into the answer.
 
 EVALUATION is the shipped kernel in the OBSERVER's frame: one observer row
 at the origin along +z, and each class's source placed so the four scalars
@@ -62,11 +65,17 @@ from ._accel import acc as _acc
 KEY_BITS = 48
 
 #: Pairs whose observer lies within this many source lengths of the source's
-#: centre are not shared: each is evaluated at its own scalars. Their field
-#: is near-singular, and the basis sums over neighbouring sources cancel
-#: most of it, so a representative's coordinate rounding (a few ulp of the
-#: structure's size, independent of the member's) is amplified there.
+#: centre are not shared: each is evaluated directly, in the original frame.
+#: Their field is near-singular, and the basis sums over neighbouring
+#: sources cancel most of it, so a geometry rounding other than the
+#: structure's own is amplified there (measured: canonical-frame near pairs
+#: moved a 16-bowtie array's input impedance 7.7e-11, original-frame ones
+#: 6e-14).
 NEAR_LENGTHS = 4.0
+
+#: Observer rows per direct near-pair kernel call (their near sources'
+#: union is the call's source list).
+NEAR_ROWS = 16
 
 _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 
@@ -100,7 +109,12 @@ class Plan:
     canon: np.ndarray  # (n_cls, 4) float64 rho, z, rdt, td of the representative
     rep_src: np.ndarray  # (n_cls,) int64 the representative's source segment
     rep_obs: np.ndarray  # (n_cls,) int64 the representative's observer segment
-    n_near: int  # pairs excluded from sharing
+    near_flat: np.ndarray  # (n_near,) int64 sorted flat index m * N_src + n
+    near_blocks: list  # (m0, m1, sources, row, col) per direct kernel call
+
+    @property
+    def n_near(self) -> int:
+        return int(self.near_flat.size)
 
     @property
     def n_pairs(self) -> int:
@@ -162,18 +176,21 @@ def pair_scalars(obs_c, obs_t, src_c, src_t):
     return z, rho, td, rdt
 
 
-def _band_keys(z, rho, td, rdt, H, a_obs, type_id, first_pair=None):
+def _band_keys(z, rho, td, rdt, H, a_obs, type_id, near=False):
     """The quantised key columns of one band (int64, (R*N,) each).
 
-    With `first_pair` (the band's first flat pair index), a NEAR pair gets a
-    key of its own (`NEAR_LENGTHS`) and so is evaluated at its own scalars."""
+    With `near=True`, a NEAR pair (`NEAR_LENGTHS`) takes the one sentinel
+    key: its value is the direct kernel's, written over the gather. Returns
+    the columns and the near mask (or None)."""
     # The pair's singular distance, from the observer centre to the source
     # SEGMENT (its axis beside the span, its nearer end beyond it), within
     # a factor sqrt(2) as max(rho, |z| - H), floored at the observer radius.
     az = np.abs(z)
-    near = None
-    if first_pair is not None and NEAR_LENGTHS > 0:
-        near = (np.maximum(az, rho) < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
+    near = (
+        (np.maximum(az, rho) < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
+        if near and NEAR_LENGTHS > 0
+        else None
+    )
     az -= H[None, :]
     scale = np.maximum(az, rho, out=az)
     np.maximum(scale, a_obs[:, None], out=scale)
@@ -196,8 +213,9 @@ def _band_keys(z, rho, td, rdt, H, a_obs, type_id, first_pair=None):
     if near is not None and near.any():
         idx = np.flatnonzero(near)
         cols[0][idx] = _NEAR_SENTINEL
-        cols[1][idx] = idx + first_pair
-    return cols
+        for c in cols[1:]:
+            c[idx] = 0
+    return cols, near
 
 
 def _group(cols):
@@ -276,9 +294,13 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
         i1 = min(M, i0 + rows)
         z, rho, td, rdt = pair_scalars(obs_c[i0:i1], obs_t[i0:i1], src_c, src_t)
         type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
-        cols = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id, i0 * N)
+        cols, near = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id, True)
         del type_id
-        n_near = int(np.count_nonzero(cols[0] == _NEAR_SENTINEL))
+        near = (
+            np.zeros(0, np.int64)
+            if near is None
+            else np.flatnonzero(near).astype(np.int64) + i0 * N
+        )
         first, inv = _group(cols)
         cls[i0:i1] = inv.reshape(i1 - i0, N)
         keys = [c[first] for c in cols]
@@ -292,7 +314,7 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
             axis=1,
         )
         r_first, n_first = np.divmod(first, N)
-        return keys, canon, r_first + i0, n_first, n_near
+        return keys, canon, r_first + i0, n_first, near
 
     results = _run(band, starts)
     # The bands' classes merged: a key seen in two bands is one class.
@@ -308,13 +330,56 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
     canon = np.concatenate([r[1] for r in results])[gfirst]
     rep_obs = np.concatenate([r[2] for r in results])[gfirst]
     rep_src = np.concatenate([r[3] for r in results])[gfirst]
+    near_flat = np.concatenate([r[4] for r in results])  # sorted: bands in order
     return Plan(
         cls=cls,
         canon=canon,
         rep_src=rep_src.astype(np.int64),
         rep_obs=rep_obs.astype(np.int64),
-        n_near=sum(r[4] for r in results),
+        near_flat=near_flat,
+        near_blocks=near_blocks(near_flat, N, a_obs),
     )
+
+
+def near_blocks(near_flat, n_src, a_obs, rows=None):
+    """The direct kernel calls that evaluate the near pairs: per run of up to
+    NEAR_ROWS observer rows of one radius, the union of their near sources,
+    and where each near pair sits in that call's (rows, sources) block."""
+    rows = NEAR_ROWS if rows is None else rows
+    m_all, n_all = np.divmod(near_flat, n_src)
+    out = []
+    if near_flat.size == 0:
+        return out
+    # Cut at every NEAR_ROWS boundary and at every change of observer radius.
+    cut = np.flatnonzero(np.diff(a_obs)) + 1
+    edges = np.union1d(np.arange(0, a_obs.shape[0] + 1, rows), cut)
+    edges = np.union1d(edges, [a_obs.shape[0]])
+    lo = np.searchsorted(m_all, edges[:-1], side="left")
+    hi = np.searchsorted(m_all, edges[1:], side="left")
+    for m0, m1, p0, p1 in zip(edges[:-1], edges[1:], lo, hi):
+        if p1 == p0:
+            continue
+        ns, col = np.unique(n_all[p0:p1], return_inverse=True)
+        out.append(
+            (int(m0), int(m1), ns, m_all[p0:p1] - m0, col.reshape(-1), int(p0), int(p1))
+        )
+    return out
+
+
+def evaluate_near(plan, direct):
+    """The near pairs' Φ, (3, n_near): `direct(m0, m1, ns)` is the shipped
+    kernel on observer rows m0:m1 against source segments `ns`, in the
+    original frame."""
+    out = np.empty((3, plan.n_near), dtype=np.complex128)
+
+    def one(block):
+        m0, m1, ns, r, c, p0, p1 = block
+        phis = direct(m0, m1, ns)
+        for sh in range(3):
+            out[sh, p0:p1] = np.asarray(phis[sh])[r, c]
+
+    _run(one, plan.near_blocks)
+    return out
 
 
 def canonical_sources(canon):
@@ -373,9 +438,9 @@ def evaluate(plan, call, obs_type):
     return out
 
 
-def scatter(rep, plan, rows):
+def scatter(rep, plan, rows, near=None):
     """The band's three Φ, gathered from the class values (on the pool, by
-    row pieces)."""
+    row pieces), the near pairs then written from `near` (`evaluate_near`)."""
     i0, i1 = rows
     c = plan.cls[i0:i1]
     out = tuple(np.empty(c.shape, dtype=np.complex128) for _ in range(3))
@@ -388,6 +453,12 @@ def scatter(rep, plan, rows):
         np.take(rep[s], c[r : r + step], out=out[s][r : r + step], mode="clip")
 
     _run(take, pieces)
+    if near is not None and plan.n_near:
+        n_src = c.shape[1]
+        p0, p1 = np.searchsorted(plan.near_flat, [i0 * n_src, i1 * n_src])
+        local = plan.near_flat[p0:p1] - i0 * n_src
+        for sh in range(3):
+            out[sh].reshape(-1)[local] = near[sh, p0:p1]
     return out
 
 
