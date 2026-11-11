@@ -55,7 +55,6 @@ using Tensors = std::tuple<nd::array_t<cd>, nd::array_t<cd>, nd::array_t<cd>>;
 static_assert(sizeof(Point3) == 3 * sizeof(double), "Point3 is three packed doubles");
 
 const ll kDenseAssemblyThreshold = 60;  // _DENSE_ASSEMBLY_THRESHOLD
-const ll kReduceTile = 32;              // _REDUCE_TILE
 const double kWellScaledKd = 1.5e-3;    // _WELL_SCALED_KD
 const double kPi = 3.141592653589793;     // math.pi
 const ll kSweptMemMb = 256;             // SinusoidalSolver(swept_mem_mb=256)
@@ -1508,17 +1507,6 @@ struct Entries {
     std::vector<cd> v[3];
 };
 
-// `_reduce_tiles(n)`
-std::vector<std::pair<ll, ll>> reduce_tiles(ll n) {
-    std::vector<ll> starts;
-    for (ll s = 0; s < n; s += std::max<ll>(2, kReduceTile)) starts.push_back(s);
-    if (n > 1 && n - starts.back() == 1) starts.pop_back();
-    std::vector<std::pair<ll, ll>> t;
-    for (std::size_t k = 0; k < starts.size(); k++)
-        t.push_back({starts[k], k + 1 < starts.size() ? starts[k + 1] : n});
-    return t;
-}
-
 // `configure_loading`'s wire loading from the solver arguments (LD 5's
 // conductivity, LD 2 / LD 3's distributed RLC); a conductivity <= 0 is the
 // constructor's ValueError, which this copy declines.
@@ -2110,23 +2098,29 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     for (ll i0 = 0; i0 < N; i0 += chunk) {
         const ll i1 = std::min(i0 + chunk, N);
         const std::vector<std::vector<cd>> Phi = bandf(i0, i1);
-        // `_reduce_phi_band` over this band: per tile, P_c = Mcᵀ @ Φc[a:b]ᵀ
-        // (csr_matvecs into zeros), then (P0 + P1) + P2, written back transposed
-        for (const auto &tile : reduce_tiles(i1 - i0)) {
-            for (ll r = tile.first; r < tile.second; r++) {
-                cd *grow = G.data() + (i0 + r) * N;
-                const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
-                for (ll j = 0; j < N; j++) {
-                    double sr[3], si[3];
-                    for (int c = 0; c < 3; c++) {
-                        double yr = 0.0, yi = 0.0;
-                        for (ll e = cptr[static_cast<std::size_t>(j)]; e < cptr[static_cast<std::size_t>(j) + 1]; e++)
-                            axpy1(cval[c][static_cast<std::size_t>(e)], phi[c][crow[static_cast<std::size_t>(e)]], yr, yi);
-                        sr[c] = yr;
-                        si[c] = yi;
-                    }
-                    grow[j] = cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
+        // `_reduce_phi_band` over this band: per element, P_c = Mcᵀ @ Φcᵀ
+        // (csr_matvecs into zeros), then (P0 + P1) + P2 -- the accelerator's
+        // `reduce_phi_band` (momwire#1905). Each Z row reads only its own Φ
+        // rows and is one thread's, its elements each their own chain, so
+        // threading over rows moves no bit (the Python route's tiles are
+        // only where scipy's operands lived, and never changed one either).
+        const ll nr = i1 - i0;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+        for (ll r = 0; r < nr; r++) {
+            cd *grow = G.data() + (i0 + r) * N;
+            const cd *phi[3] = {Phi[0].data() + r * N, Phi[1].data() + r * N, Phi[2].data() + r * N};
+            for (ll j = 0; j < N; j++) {
+                double sr[3], si[3];
+                for (int c = 0; c < 3; c++) {
+                    double yr = 0.0, yi = 0.0;
+                    for (ll e = cptr[static_cast<std::size_t>(j)]; e < cptr[static_cast<std::size_t>(j) + 1]; e++)
+                        axpy1(cval[c][static_cast<std::size_t>(e)], phi[c][crow[static_cast<std::size_t>(e)]], yr, yi);
+                    sr[c] = yr;
+                    si[c] = yi;
                 }
+                grow[j] = cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
             }
         }
     }
