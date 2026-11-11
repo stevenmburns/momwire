@@ -160,7 +160,7 @@ def cxx_parts():
             float(_MU0),
             float(radius),
             bool(magnetic),
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
         )
 
     return run

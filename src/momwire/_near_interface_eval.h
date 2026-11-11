@@ -127,7 +127,7 @@ class Memo {
 struct Evaluator {
     double k_p = 0;
     cd k_m;
-    int n_threads = 0;  // `_physical_cpu_count()`; values do not depend on it
+    int n_threads = 0;  // `_table_threads()`; values do not depend on it
     uintptr_t cancel_flag = 0;
 };
 

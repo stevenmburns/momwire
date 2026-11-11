@@ -449,7 +449,7 @@ def _crossing_table_vals(k_p, k_m, lam_mult):
                     float(lam_mult),
                     int(_COLUMN_P),
                     float(_DETOUR),
-                    _physical_cpu_count(),
+                    _table_threads(),
                     _GX,
                     _GW,
                     cancel_flag=_cancel.ptr(),
@@ -540,7 +540,7 @@ def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
             float(lam_mult),
             int(_COLUMN_P),
             float(_DETOUR),
-            _physical_cpu_count(),
+            _table_threads(),
             _GX,
             _GW,
             cancel_flag=_cancel.ptr(),
@@ -591,7 +591,7 @@ def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
         np.ascontiguousarray(rho[inside]),
         np.ascontiguousarray(zs[inside]),
         np.ascontiguousarray(zps[inside]),
-        _physical_cpu_count(),
+        _table_threads(),
     )
     _CROSSING_TABLE_STATS["table_rows"] += n_in
     rest = ~inside
@@ -705,6 +705,26 @@ def _physical_cpu_count():
     except ImportError:
         return max(1, os.cpu_count() or 1)
     return psutil.cpu_count(logical=False) or max(1, os.cpu_count() or 1)
+
+
+def _requested_threads(n):
+    """`n` held to OMP_NUM_THREADS where the caller pinned one: the rule
+    `_bspline_kernels._reg_cplx_pool` applies to its pool. Read per call, so
+    a caller (the hosted app, an optimiser worker) that sets it between
+    solves is heard; an unset, empty, non-numeric or non-positive value
+    leaves `n` alone."""
+    try:
+        want = int(os.environ.get("OMP_NUM_THREADS", "") or 0)
+    except ValueError:
+        return n
+    return min(n, want) if want > 0 else n
+
+
+def _table_threads():
+    """The thread count every crossing / near-interface / near-buried table
+    build is handed: the physical cores, held to the requested thread count
+    (momwire#1894). Scheduling only: the tables do not depend on it."""
+    return _requested_threads(_physical_cpu_count())
 
 
 def _blas_physical_cores():
@@ -1727,7 +1747,7 @@ def _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p=None):
             float(_LAM_MULT),
             int(_COLUMN_P if p is None else p),
             float(_DETOUR),
-            _physical_cpu_count(),
+            _table_threads(),
             _GX,
             _GW,
             **_point_sdp_kw(),
@@ -3965,7 +3985,7 @@ class PlaneSheet:
                 self.lam_mult,
                 int(_COLUMN_P),
                 float(_DETOUR),
-                _physical_cpu_count(),
+                _table_threads(),
                 _GX,
                 _GW,
             )
@@ -4039,7 +4059,7 @@ class PlaneSheet:
             self.bw,
             vals,
             out,
-            _physical_cpu_count(),
+            _table_threads(),
             self._rpow_arr,
         )
 
@@ -4297,7 +4317,7 @@ class ConeSheet:
                 _LAM_MULT,
                 int(_COLUMN_P),
                 float(_DETOUR),
-                _physical_cpu_count(),
+                _table_threads(),
                 _GX,
                 _GW,
                 cancel_flag=_cancel.ptr(),
@@ -4351,7 +4371,7 @@ class ConeSheet:
             self.bw,
             vals,
             out,
-            _physical_cpu_count(),
+            _table_threads(),
             np.asarray(KEY_RPOW, dtype=np.int64),
         )
 

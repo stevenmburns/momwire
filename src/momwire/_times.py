@@ -122,7 +122,10 @@ class Times:
         return (self.start_ms + self.load_ms) / 1e3 + time.perf_counter() - self.origin
 
     def line(self, *, threads: int | None = None) -> str:
-        """The ``times:`` line (:func:`momwire_serve_client.times_line`)."""
+        """The ``times:`` line (:func:`momwire_serve_client.times_line`).
+        ``threads`` is the fill's (:func:`fill_threads`, momwire#1894), the
+        count the printout's own THREADS line gives, not every hardware
+        thread."""
         self.settle()
         if self._acc is not None:
             self._acc.stage_times_end()
@@ -134,7 +137,7 @@ class Times:
             self.route,
             cells,
             total_ms=total,
-            threads=default_threads() if threads is None else threads,
+            threads=fill_threads() if threads is None else threads,
             runs=self.runs,
             counts=self.counts,
         )

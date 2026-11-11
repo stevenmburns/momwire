@@ -2335,7 +2335,7 @@ _HAVE_LINE_KEYS_ACCEL = _accel.acc is not None and bool(
 )
 # ...across the physical cores, the keys partitioned by hash
 # (momwire#1377); 1 is the serial walk, the reference (the same integers).
-_LINE_KEYS_THREADS = None  # None: `_physical_cpu_count()`
+_LINE_KEYS_THREADS = None  # None: `_table_threads()`
 # The keys' line z by `take_mod` (momwire#1377); False is `lzv[kf % nL]`,
 # the reference (the same floats, copied).
 _KEY_ZL_ACCEL = True
@@ -2353,7 +2353,7 @@ def _line_keys_threads():
         return {}
     n = _LINE_KEYS_THREADS
     if n is None:
-        n = _near_interface._physical_cpu_count()
+        n = _near_interface._table_threads()
     return {"n_threads": int(max(1, n))}
 
 
@@ -2378,7 +2378,7 @@ _HAVE_FLOAT_CLASSES_ACCEL = _accel.acc is not None and bool(
 )
 # ...across the physical cores, the values partitioned by hash (the line
 # keys' argument); 1 is the serial walk, the reference.
-_KEY_CLASSES_THREADS = None  # None: `_physical_cpu_count()`
+_KEY_CLASSES_THREADS = None  # None: `_table_threads()`
 _HAVE_FLOAT_CLASSES_PAR = _accel.acc is not None and bool(
     getattr(_accel.acc, "factorize_float_classes_par_1377", False)
 )
@@ -2390,7 +2390,7 @@ def _key_classes_threads():
         return {}
     n = _KEY_CLASSES_THREADS
     if n is None:
-        n = _near_interface._physical_cpu_count()
+        n = _near_interface._table_threads()
     return {"n_threads": int(max(1, n))}
 
 
@@ -3508,7 +3508,7 @@ class _ProductTiles:
                 loc,
                 _EMPTY_I32_1D if hpos is None else hpos,
                 self.store is not None,
-                _near_interface._physical_cpu_count(),
+                _near_interface._table_threads(),
             )
             return _TileTables(
                 sidx if self.store is not None else None,
@@ -3751,7 +3751,7 @@ class _TileTables:
             kdz,
             sidx,
             store,
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
         )
 
 
@@ -4894,7 +4894,7 @@ def _desc_matvecs(fast, descs, ax, w, w_tz, loc, tb, held, hpos):
                     tb,
                     held,
                     k,
-                    _near_interface._physical_cpu_count(),
+                    _near_interface._table_threads(),
                 )
             )
         return out[0], out[1]
@@ -4935,7 +4935,7 @@ def _tile_matvecs(M, w, R, k, loc, tb, held, hpos):
                 tb,
                 held,
                 k,
-                _near_interface._physical_cpu_count(),
+                _near_interface._table_threads(),
             )
         except RuntimeError as exc:
             if "not in hand" in str(exc):
@@ -4969,7 +4969,7 @@ def _tile_matvecs(M, w, R, k, loc, tb, held, hpos):
             _EMPTY_I64,
             _EMPTY_C,
             -1,
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
         )
     out = np.empty((R.shape[0], M.shape[0]), dtype=np.complex128)
     for e in range(R.shape[0]):
@@ -5000,7 +5000,7 @@ def _store_matvecs(M, w, R, store, col):
             R,
             store,
             col,
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
         )
     out = np.empty((R.shape[0], M.shape[0]), dtype=np.complex128)
     for e in range(R.shape[0]):
@@ -6643,7 +6643,7 @@ class _FusedEnds:
                             tb,
                             held,
                             kk,
-                            _near_interface._physical_cpu_count(),
+                            _near_interface._table_threads(),
                         )
                     _ROUTES["fused_row_ends"] += len(self.vg)
                     parts = []
@@ -7362,7 +7362,7 @@ def _left_products(Ps, K, k2sq):
             3,
             np.zeros((0, 0), dtype=np.int64),
             np.zeros((0, 0), dtype=np.complex128),
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
             [K["U"], K["V"], K["W"], K["dzpW"]],
         )
     P1, P2, P3, P4 = Ps
@@ -7442,7 +7442,7 @@ def _combine(Ls, Qz):
             np.arange(Qz[0].shape[1], dtype=np.int64),
             np.arange(n_rows, dtype=np.int64),
             *_csr_args(Qz),
-            _near_interface._physical_cpu_count(),
+            _near_interface._table_threads(),
         )
     return (
         Ls[0] @ Qz[0].T
@@ -7476,7 +7476,7 @@ def _combine_held(Lc, held, colmap, J, q_args):
         colmap,
         J,
         *q_args,
-        _near_interface._physical_cpu_count(),
+        _near_interface._table_threads(),
     )
 
 
