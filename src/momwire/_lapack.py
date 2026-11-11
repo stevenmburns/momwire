@@ -428,6 +428,30 @@ def lu_solve(lu_and_piv, b, trans=0, overwrite_b=False, check_finite=True):
 # ---------------------------------------------------------------------------
 
 
+def _scipy_takes_gesv(a, dtype):
+    """True only when `scipy.linalg.solve(a, b)` provably runs the general
+    getrf + getrs path. SciPy >= 1.18 first detects structure (diagonal,
+    tridiagonal, banded, triangular, symmetric, Hermitian) and solves those
+    with other routines -- an exactly symmetric complex system takes zsytrf,
+    which moved bits on the bspline kcl_sym decks when this fallback once
+    ran getrf unconditionally. Each case is ruled out in O(n), never by an
+    O(n^2) scan: a nonzero a[n-1, 0] makes the lower bandwidth n - 1 and a
+    nonzero a[0, n-1] the upper, which excludes every banded, triangular
+    and diagonal form; one first-row/first-column pair with
+    a[0, j] != a[j, 0] proves the matrix not symmetric, and one with
+    a[0, j] != conj(a[j, 0]) not Hermitian. Anything not proven general
+    goes to SciPy unchanged, so a False here costs nothing but the speed."""
+    if dtype not in (np.float32, np.float64, np.complex64, np.complex128):
+        return False
+    n = a.shape[0]
+    if a[n - 1, 0] == 0 or a[0, n - 1] == 0:
+        return False
+    row, col = a[0, 1:], a[1:, 0]
+    if not np.any(row != col):
+        return False
+    return bool(np.any(row != np.conj(col)))
+
+
 @_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
@@ -437,12 +461,12 @@ def solve(a, b):
     dtype = np.result_type(a1.dtype, b0.dtype)
     fns = _host_for(dtype)
     if (
-        fns is None
-        or not _square(a1)
+        not _square(a1)
         or a1.shape[0] == 1
         or b0.ndim not in (1, 2)
         or b0.size == 0
         or b0.shape[0] != a1.shape[0]
+        or (fns is None and not _scipy_takes_gesv(a1, dtype))
     ):
         return scipy.linalg.solve(a, b)
     if not (np.isfinite(a1).all() and np.isfinite(b0).all()):
@@ -450,16 +474,33 @@ def solve(a, b):
     lu = _fortran_copy(a1, dtype)
     lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
     anorm = lange("1", lu)  # for the warning only, as scipy's solve takes it
-    ipiv, info = _getrf(fns, lu)
-    if info != 0:
-        if info > 0:
-            raise np.linalg.LinAlgError("singular matrix")
-        raise ValueError(f"illegal value in argument {-info} of the host's getrf")
     n = a1.shape[0]
     x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
-    info = _getrs(fns, lu, ipiv, x)
-    if info != 0:
-        raise ValueError(f"illegal value in argument {-info} of the host's getrs")
+    if fns is not None:
+        ipiv, info = _getrf(fns, lu)
+        if info != 0:
+            if info > 0:
+                raise np.linalg.LinAlgError("singular matrix")
+            raise ValueError(f"illegal value in argument {-info} of the host's getrf")
+        info = _getrs(fns, lu, ipiv, x)
+        if info != 0:
+            raise ValueError(f"illegal value in argument {-info} of the host's getrs")
+    else:
+        # No host LAPACK, and a matrix SciPy is proven to solve as general
+        # (`_scipy_takes_gesv`): SciPy's own getrf + getrs, the pair its
+        # gesv path runs, without its batched wrapper -- 0.56 s against
+        # 0.96 s at n = 4392, complex, 8 threads (Rocketlake), about 5 s of
+        # the ELT whip's 13-frequency sinusoidal run. Bit-identical to
+        # scipy.linalg.solve on such a matrix.
+        getrf, getrs = scipy.linalg.get_lapack_funcs(("getrf", "getrs"), (lu,))
+        lu, ipiv, info = getrf(lu, overwrite_a=True)
+        if info != 0:
+            if info > 0:
+                raise np.linalg.LinAlgError("singular matrix")
+            raise ValueError(f"illegal value in argument {-info} of getrf")
+        x, info = getrs(lu, ipiv, x, overwrite_b=True)
+        if info != 0:
+            raise ValueError(f"illegal value in argument {-info} of getrs")
     rcond, _info = gecon(lu, anorm, norm="1")
     if rcond < np.finfo(dtype).eps:
         warnings.warn(
