@@ -38,7 +38,6 @@ Scope (deliberately narrow):
 import cmath
 import contextlib
 import math
-import platform
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass
@@ -419,17 +418,13 @@ _REDUCE_TILE = 32
 # tiles below, the reference the kernel is gated against bit for bit
 # (tests/test_sin_phi_reduce_1905.py).
 _PHI_REDUCE_ACCEL = True
-# x86-64 only. The kernel matches scipy where scipy's own complex
-# multiply-add is unfused, which holds on x86-64 (Linux and Windows CI).
-# On arm64 scipy's build contracts it to FMA and the kernel, compiled with
-# -ffp-contract=off, differs in the last bits: the macOS lane's bit-equality
-# gates failed on exactly that (PR #1909). Elsewhere the scipy tiles stay
-# the route, unchanged.
-_PHI_REDUCE_MACHINE = platform.machine().lower() in ("x86_64", "amd64")
-_HAVE_PHI_REDUCE_ACCEL = (
-    _PHI_REDUCE_MACHINE
-    and _acc is not None
-    and bool(getattr(_acc, "phi_reduce_1905", False))
+# Every platform. On x86-64 the kernel is scipy's arithmetic to the bit
+# (scipy's complex multiply-add is unfused there). On arm64 scipy's build
+# contracts it to FMA and the kernel, compiled with -ffp-contract=off, does
+# not, so the two differ at round-off; the gates there hold a tolerance and
+# report the measured drift (tests/phi_reduce_drift.py, PR #1909).
+_HAVE_PHI_REDUCE_ACCEL = _acc is not None and bool(
+    getattr(_acc, "phi_reduce_1905", False)
 )
 
 

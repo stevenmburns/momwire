@@ -38,6 +38,7 @@ import tracemalloc
 
 import numpy as np
 import pytest
+from phi_reduce_drift import matches
 from test_crossing_serve_524 import hub_deck, invl_deck
 
 from momwire import _schedule
@@ -218,7 +219,9 @@ def test_fused_fill_is_the_whole_phi_fill(name, mb, band, reference, monkeypatch
     if mb == 1:
         assert len(heights) > 2  # the class bands themselves are split
     assert G.flags.c_contiguous
-    assert _bytes_equal(G, reference[name, mb])
+    assert matches(
+        G, reference[name, mb], f"fused mixed fill {name} mb={mb} band={band}"
+    )
 
 
 def _small_crossing_deck():
