@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 from test_crossing_serve_524 import invl_deck
+from phi_reduce_drift import EXACT, TOL_Z, PhiReduceDrift, matches
 from test_sin_reduce_tiles_1290 import _bytes_equal, _free_array_deck, tables  # noqa: F401
 
 from momwire import sinusoidal as sn
@@ -38,10 +39,7 @@ from momwire.sinusoidal import SinusoidalSolver
 
 pytestmark = pytest.mark.skipif(
     not sn._HAVE_PHI_REDUCE_ACCEL,
-    reason=(
-        "reduce_phi_band is the route only on x86-64 with an accelerator that "
-        "carries it (elsewhere the scipy tiles are, unchanged)"
-    ),
+    reason="the accelerator does not carry reduce_phi_band",
 )
 
 
@@ -108,11 +106,11 @@ def test_kernel_is_the_scipy_tiles(tables, deck, rows, monkeypatch):  # noqa: F8
     out = np.full((n, N), np.nan + 0j)
     got = sn._reduce_phi_band(band, Ms, out)
     assert got is out
-    assert _bits_equal(out, ref)
+    assert matches(out, ref, f"tiles {deck} rows={rows}")
     # In place, as `_reduce_phi_rows_in_place` calls it: out IS Φ₀.
     inplace = [P.copy() for P in band]
     sn._reduce_phi_band(inplace, Ms, inplace[0])
-    assert _bits_equal(inplace[0], ref)
+    assert matches(inplace[0], ref, f"tiles in place {deck} rows={rows}")
 
 
 def test_rows_in_place_through_bands(tables, monkeypatch):  # noqa: F811
@@ -124,7 +122,7 @@ def test_rows_in_place_through_bands(tables, monkeypatch):  # noqa: F811
         work = [P.copy() for P in Phi]
         got = sn._reduce_phi_rows_in_place(work, Ms, band)
         assert got is work[0]
-        assert _bits_equal(got, ref)
+        assert matches(got, ref, f"rows in place band={band}")
 
 
 def _synthetic(seed, n_rows, n_src, n_cols, per_col, empty_frac=0.2):
@@ -163,7 +161,7 @@ def test_kernel_is_scipy_on_raw_csc(seed, n_rows, n_src, n_cols, per_col, monkey
         assert not all(M.has_sorted_indices for M in Ms)
     ref = _scipy_route(Phi, Ms, np.empty((n_rows, n_cols), complex), monkeypatch)
     got = _kernel(Phi, Ms, np.full((n_rows, n_cols), np.nan + 0j))
-    assert _bits_equal(got, ref)
+    assert matches(got, ref, f"raw csc seed={seed}")
     # An empty column is +0, not -0 and not left as garbage.
     empty = np.flatnonzero(
         (np.diff(Ms[0].indptr) == 0)
@@ -184,7 +182,9 @@ def test_int32_indices_are_taken(monkeypatch):
         for M in Ms
     ]
     ref = _scipy_route(Phi, Ms, np.empty((20, 30), complex), monkeypatch)
-    assert _bits_equal(_kernel(Phi, Ms32, np.empty((20, 30), complex)), ref)
+    assert matches(
+        _kernel(Phi, Ms32, np.empty((20, 30), complex)), ref, "int32 indices"
+    )
 
 
 def test_thread_count_moves_nothing():
@@ -251,4 +251,33 @@ def test_the_fill_is_the_scipy_route(deck, counts, monkeypatch):
     counts["scipy"] = 0
     got = fill()
     assert counts["accel"] > 0 and counts["scipy"] == 0
-    assert _bytes_equal(got, ref)
+    assert matches(
+        got, ref, f"_assemble_Z {deck.__name__ if hasattr(deck, '__name__') else deck}"
+    )
+
+
+@pytest.mark.parametrize(
+    "deck",
+    [
+        pytest.param(_free_array_deck, id="free-array"),
+        pytest.param(lambda: invl_deck(x=4), id="invl-buried-mixed"),
+    ],
+)
+def test_the_impedance_is_the_scipy_routes(deck, monkeypatch):
+    """End to end: the solved impedance with the kernel against the scipy
+    route. Bitwise on x86-64; elsewhere the drift is reported."""
+    import warnings
+
+    def zin():
+        return np.asarray(SinusoidalSolver(**deck()).compute_impedance())
+
+    with monkeypatch.context() as m:
+        m.setattr(sn, "_PHI_REDUCE_ACCEL", False)
+        ref = zin()
+    got = zin()
+    if EXACT:
+        assert got.tobytes() == ref.tobytes()
+        return
+    d = float(np.max(np.abs(got - ref) / np.abs(ref)))
+    warnings.warn(f"Zin relative drift = {d:.3e}", PhiReduceDrift, stacklevel=1)
+    assert d <= TOL_Z

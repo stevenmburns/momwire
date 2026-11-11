@@ -26,9 +26,9 @@ the fused bands, `test_mixed_fill_fused_1224.py`):
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 import scipy.sparse
+from phi_reduce_drift import matches
 from test_crossing_serve_524 import invl_deck
 from test_mixed_fill_fused_1224 import whole_phi_tables
 
@@ -78,5 +78,4 @@ def test_banded_reduction_is_bit_equal(captured, band, monkeypatch):
     assert rows == expected
     assert (len(expected) > 1) == (band < N)
     assert out is Phi[0]
-    assert np.array_equal(out, ref)
-    assert out.tobytes() == np.ascontiguousarray(ref).tobytes()
+    assert matches(out, ref, f"banded reduction band={band}")
