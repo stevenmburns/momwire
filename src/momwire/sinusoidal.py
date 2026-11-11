@@ -6771,8 +6771,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             plan, src_c, src_t = plan_for(block)
             rep = rep_cache.get(block)
             if rep is None:
-                rep = rep_cache[block] = _pr.evaluate(plan, canonical, obs_type)
-            phis = _pr.scatter(rep, plan, rows)
+
+                def direct_rows(m0, m1, ns):
+                    return kernel(
+                        seg_c[m0:m1],
+                        seg_t[m0:m1],
+                        src_c[ns],
+                        src_t[ns],
+                        seg_h[ns],
+                        a_seg[m0],
+                        ns,
+                    )
+
+                rep = rep_cache[block] = (
+                    _pr.evaluate(plan, canonical, obs_type),
+                    _pr.evaluate_near(plan, direct_rows),
+                )
+            phis = _pr.scatter(rep[0], plan, rows, rep[1])
             if self._pair_reuse_verify:
 
                 def direct(m, ns):
