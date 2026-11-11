@@ -103,10 +103,11 @@ static void reduce_phi_band(py::array out, py::array phi0, py::array phi1, py::a
     const py::ssize_t os = out.strides(0);
     {
         py::gil_scoped_release nogil;
+        // n_threads > 0 is taken as asked, past OMP_NUM_THREADS, so the
+        // thread-count gate means something on an xdist worker (pinned to 1)
         int nt = 1;
 #ifdef _OPENMP
-        nt = omp_get_max_threads();
-        if (n_threads > 0) nt = std::min(nt, n_threads);
+        nt = n_threads > 0 ? n_threads : omp_get_max_threads();
 #else
         (void)n_threads;
 #endif
@@ -156,7 +157,8 @@ void register_phi_reduce(py::module_ &m) {
           "each element its own zero plus its column's stored entries in order, "
           "one unfused complex multiply-add each, then (A + B) + C. out and the "
           "three phi are complex128 (rows, ·) with contiguous rows; out may be "
-          "phi0 itself. OpenMP over out's rows. momwire#1905.",
+          "phi0 itself. OpenMP over out's rows; n_threads > 0 sets the team "
+          "size, 0 takes OpenMP's default. momwire#1905.",
           py::arg("out"), py::arg("phi0"), py::arg("phi1"), py::arg("phi2"),
           py::arg("indptr0"), py::arg("indices0"), py::arg("data0"),
           py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
