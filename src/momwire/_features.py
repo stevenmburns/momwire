@@ -179,7 +179,12 @@ FEATURES: dict[str, Feature] = {
                 "end's hint of which edge pairs share a pose; the sinusoidal "
                 "solver finds its own, in free space and over a perfect ground."
             ),
-            drift=1e-12,
+            # bspline: 1e-12. sinusoidal (momwire#1911), measured on Skylake
+            # against the flag-off fill over the ELT whip and 19 corpus and
+            # catalogue decks, free space and PEC, thin wire and EK: at most
+            # 2.7e-12 (a 4x4 bowtie array; the whip 2.7e-13), below what
+            # translating each deck moves its own answer (up to 6e-11).
+            drift=3e-12,
             offer=False,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
