@@ -69,6 +69,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -80,8 +81,8 @@ jobs:
       - run: pip install "setuptools>=61.0" wheel pybind11
       - run: pip install -e .[test] --no-build-isolation
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # Inherits addopts' xdist (-n auto). The sweeps are parametrized per
       # deck and conftest leaves `nightly` items out of their modules' file
       # groups, so the decks spread across workers.

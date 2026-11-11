@@ -248,6 +248,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -261,8 +262,8 @@ jobs:
           pip install "setuptools>=61.0" wheel pybind11
           pip install -e .[test] --no-build-isolation
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # The release artifact's two builds, at the paths the gates below name:
       # every gate is of the bytes a tag ships.
       - uses: actions/download-artifact@v8
@@ -442,6 +443,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -455,8 +457,8 @@ jobs:
           pip install "setuptools>=61.0" wheel pybind11 cmake ninja
           pip install -e .[test] --no-build-isolation
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       - name: static OpenBLAS (linux-artifact's cache)
         uses: actions/cache/restore@v6
         with:
@@ -566,6 +568,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
         # Optional speed-up, not a gate: the action installs ccache with apt,
         # which died for hours on 2026-11-11 when the runners could not
         # resolve the Ubuntu mirror. Uncached builds are the same build.
@@ -579,8 +582,8 @@ jobs:
           pip install "setuptools>=61.0" wheel pybind11 cmake ninja
           pip install -e .[test] --no-build-isolation
         env:
-          CC: ccache gcc
-          CXX: ccache g++
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
       # The release artifact's two no-Python builds, at the paths the gates
       # below name: every no-Python gate here is of the bytes a tag ships.
       - uses: actions/download-artifact@v8
