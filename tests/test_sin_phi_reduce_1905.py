@@ -269,7 +269,8 @@ def test_the_impedance_is_the_scipy_routes(deck, monkeypatch):
     import warnings
 
     def zin():
-        return np.asarray(SinusoidalSolver(**deck()).compute_impedance())
+        z = SinusoidalSolver(**deck()).compute_impedance()
+        return np.atleast_1d(np.asarray(z[0] if isinstance(z, tuple) else z))
 
     with monkeypatch.context() as m:
         m.setattr(sn, "_PHI_REDUCE_ACCEL", False)
