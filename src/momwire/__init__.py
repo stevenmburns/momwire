@@ -36,6 +36,7 @@ from ._capabilities import Capabilities
 # `compute_port_solution()` returns one of these — Y plus the per-port
 # solution columns that one fill + one factorisation already produced.
 from ._port_solution import PortSolution
+from ._port_sites import PortSites, terminate_ports
 from ._feed_snap import FeedPlacement
 from .bspline import BSplineSolver
 from .harrington import HarringtonSolver
@@ -116,6 +117,8 @@ __all__ = [
     "HarringtonSolver",
     "LatticeFFTUnavailable",
     "PortSolution",
+    "PortSites",
+    "terminate_ports",
     "FeedPlacement",
     "Capabilities",
     "CancelToken",
