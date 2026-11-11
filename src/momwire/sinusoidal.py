@@ -56,6 +56,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _rotational_symmetry,
     _schedule,
     _sinusoidal_nec4,
     _sommerfeld,
@@ -1161,7 +1162,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "charge_support": ("basis-implied",),
             "kernel": ("reduced", "extended"),
             "quadrature": ("converged",),
-            "solve_strategy": ("dense",),
+            # Default first. "sector" is the opt-in `rotational_symmetry=True`
+            # route (momwire#1912), BSplineSolver's (momwire#1029) on this
+            # basis. The Galerkin subclass replaces the cell: it does not
+            # serve the route.
+            "solve_strategy": ("dense", "sector"),
             "feed_model": ("segment-gap",),
         },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
@@ -1243,6 +1248,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         transmitted_anchors=None,
         point_cplx_staged=None,
         pair_reuse=None,
+        rotational_symmetry=False,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1627,6 +1633,155 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self._radius_per_wire,
                 served=self._nec4_served_junctions(),
             )
+        # momwire#1912: the opt-in sector (block-circulant) route, as on
+        # `BSplineSolver` (momwire#1029). LAST, because the check reads the
+        # normalized junctions, feeds and loading above, and it refuses AT
+        # CONSTRUCTION. `None` is the whole of the default path: no attribute
+        # the dense fill or solve reads changes, and no route code runs.
+        self._rotational_map = None
+        self._rotational_copy_spread = None
+        self.rotational_symmetry = bool(rotational_symmetry)
+        if self.rotational_symmetry:
+            self._rotational_map = self._rotational_check()
+
+    def _rotational_ground_kind(self):
+        """The ground's name for the rotational-symmetry rule — the same
+        seam, and the same answers, as `BSplineSolver`'s: every ground this
+        family names is invariant under rotation about a vertical axis."""
+        if self.ground_z is None:
+            return "free"
+        if self.ground_eps is None:
+            return "pec"
+        return self.ground_model
+
+    def _rotational_check(self):
+        """The §3 rule (`_rotational_symmetry.sector_map`) plus the scope of
+        THIS family's route (momwire#1912), each refused by name before any
+        fill.
+
+        Served: the point-matched fill of one medium — free space, a PEC or
+        reflection-coefficient image, a Sommerfeld half-space, with the deck
+        above it, touching it, or wholly inside it. Not yet: the Galerkin
+        subclass (its own fill and testing), the NEC-4 dialect's junction
+        (its cap columns are a whole-matrix pass), and a deck with wires on
+        both sides of the interface (the mixed fill's class bands)."""
+        RS = _rotational_symmetry
+        if hasattr(self, "_node_drive_declared"):
+            raise RS.RotationalSymmetryRefused(
+                f"rotational symmetry: {type(self).__name__} does not serve "
+                "the sector route yet (momwire#1912 serves the point-matched "
+                "SinusoidalSolver). Drop rotational_symmetry=True to solve "
+                "this deck densely."
+            )
+        if self.junction_rule != "nec2":
+            raise RS.RotationalSymmetryRefused(
+                "rotational symmetry: the NEC-4 junction rule "
+                f"(junction_rule={self.junction_rule!r}) is not served on the "
+                "sector route yet; its cap columns are filled over the whole "
+                "matrix. Drop rotational_symmetry=True to solve this deck "
+                "densely."
+            )
+        if self.ground_z is not None:
+            media = set(self._wire_media())
+            if _medium_spec.BELOW in media and len(media) > 1:
+                raise RS.RotationalSymmetryRefused(
+                    "rotational symmetry: the deck has wires both above and "
+                    "below the ground interface, and this family's sector "
+                    "route serves one medium only (its mixed fill is not row-"
+                    "restricted yet). Drop rotational_symmetry=True to solve "
+                    "this deck densely."
+                )
+        return RS.sector_map(self)
+
+    def _rotational_segments(self, geom):
+        """`(sectors, axial, rows, row_of, D)`: the route's segment groups,
+        the observer rows its fill holds (sector 0's and the axial group's,
+        sorted), where each lives in the row-compact fill, and the reversed-
+        member signs (None when no member runs backwards)."""
+        RS = _rotational_symmetry
+        n = int(geom["n_segs"])
+        first = geom["wire_first"]
+        sectors, axial = RS.segment_groups(self, first, n)
+        rows = np.union1d(sectors[0], axial).astype(np.int64)
+        row_of = np.full(n, -1, dtype=np.int64)
+        row_of[rows] = np.arange(rows.size, dtype=np.int64)
+        return sectors, axial, rows, row_of, RS.segment_signs(self, first, n)
+
+    def _rotational_fill(self, geom, rows):
+        """`(G, seg_view, k_solve)`: the row-compact point-matched fill of
+        `rows` against every source, inside the solve's medium, the view it
+        was filled through, and the wavenumber that view is read at (a
+        wholly-buried solve's k_m, as on the dense path)."""
+        with self._operating_medium(geom) as medium:
+            G, seg_view = self._assemble_Z(
+                geom, self.k, self._medium_eta(medium), obs_rows=rows
+            )
+            return G, seg_view, self.k
+
+    def _compute_impedance_rotational(self):
+        """`compute_impedance` on the sector route (momwire#1912): one fill
+        of sector 0's rows and the axial rows against every source, one
+        (m + p) harmonic-0 solve, the coefficients in the dense ordering."""
+        RS = _rotational_symmetry
+        geom = self._build_geometry()
+        sectors, axial, rows, row_of, D = self._rotational_segments(geom)
+        v, voltages = self._feed_drive_vector(geom)
+        if D is not None:
+            v = D * v
+        no_kcl = np.zeros((0, int(geom["n_segs"])), dtype=np.float64)
+        # The drive guard BEFORE the fill, as bspline's (momwire#1029 2b).
+        RS.check_drive(v, no_kcl, sectors)
+        self._checkpoint()  # after geometry and drive, before the one-sector fill
+        G, seg_view, _k = self._rotational_fill(geom, rows)
+        if D is not None:
+            G *= D[None, :]
+        self._checkpoint()  # before the harmonic-0 solve
+        alpha = RS.solve(self, G, v, no_kcl, sectors, axial, row_of=row_of)
+        del G
+        if D is not None:
+            alpha = D * alpha
+        # No LU of the whole G exists on the route, so nothing is stashed for
+        # the wire-loading adjoint oracle; a stale one would be a wrong answer.
+        self.Z_factors = None
+        return self._feed_impedances(alpha, geom, seg_view, voltages), alpha
+
+    def _compute_port_solution_rotational(self):
+        """`compute_port_solution` on the sector route (momwire#1912): every
+        port from the one row-compact fill, through the harmonics its columns
+        need (`harmonic_blocks` / `solve_ports`, with no constraint rows —
+        this basis carries its junction conditions in its coefficients)."""
+        RS = _rotational_symmetry
+        geom = self._build_geometry()
+        sectors, axial, rows, row_of, D = self._rotational_segments(geom)
+        n_segs = int(geom["n_segs"])
+        feed_segs = geom["feed_segs"]
+        n_ports = len(feed_segs)
+        B = np.zeros((n_segs, n_ports), dtype=np.complex128)
+        for j, fi in enumerate(feed_segs):
+            B[fi, j] = -1.0 / geom["seg_h"][fi]
+        Bt = B if D is None else D[:, None] * B
+        no_kcl = np.zeros((0, n_segs), dtype=np.float64)
+        harmonics = RS.harmonics_needed(Bt, no_kcl, sectors)
+        self._checkpoint()  # after geometry and ports, before the one-sector fill
+        G, seg_view, k_solve = self._rotational_fill(geom, rows)
+        if D is not None:
+            G *= D[None, :]
+        blocks = RS.harmonic_blocks(self, G, sectors, axial, harmonics, row_of=row_of)
+        del G
+        self._checkpoint()  # before the harmonic solves
+        alphas = RS.solve_ports(blocks, Bt, no_kcl, sectors, axial)
+        if D is not None:
+            alphas = D[:, None] * alphas
+        Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
+        for j in range(n_ports):
+            for i, fi in enumerate(feed_segs):
+                Y[i, j] = self._feed_segment_current(alphas[:, j], seg_view, fi)
+        return PortSolution(
+            y=Y,
+            coeffs=alphas,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=k_solve),
+        )
 
     def _nec4_served_junctions(self):
         """The junctions the NEC-4 junction solve will take, decided at
@@ -6301,7 +6456,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return None
         return True, True
 
-    def _contact_charge_correction(self, G, geom, k, seg_view, eta=None):
+    def _contact_charge_correction(self, G, geom, k, seg_view, eta=None, obs_rows=None):
         """Subtract the #282 residual contact charge from a collocated fill,
         in place. No-op without a finite ground or without a contact, so
         PEC and elevated geometries keep their base arithmetic exactly.
@@ -6324,6 +6479,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         obs_c, obs_t = geom["seg_centers"], geom["seg_tangents"]
         a_obs = self._seg_radius(geom)
         obs_seg = np.arange(geom["n_segs"], dtype=np.int64)
+        if obs_rows is not None:
+            # The row-compact fill (momwire#1912): its rows' observers only.
+            # Each row's correction is its own observer's, so this is the
+            # dense correction's arithmetic on those rows.
+            obs_seg = np.asarray(obs_rows, dtype=np.int64)
+            obs_c = np.asarray(obs_c)[obs_seg]
+            obs_t = np.asarray(obs_t)[obs_seg]
+            a_obs = np.asarray(a_obs)[obs_seg]
         for i, sgn, node in nodes:
             R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs, eta=eta)
             masks = self._contact_ek_masks(geom, i, sgn, obs_seg)
@@ -6382,8 +6545,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blocks = 1 + (self.ground_z is not None) + self._sommerfeld_ground()
         return max(3 * blocks, 3 + 2) * N * 16
 
-    def _assemble_Z(self, geom, k, eta=None):
+    def _assemble_Z(self, geom, k, eta=None, obs_rows=None):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
+
+        `obs_rows` (momwire#1912, the sector route): a sorted index array of
+        observer segments. The fill is then ROW-COMPACT — `(len(obs_rows),
+        N)`, row r holding observer `obs_rows[r]` against every source — and
+        walks only those rows' runs, cut by the same budget. Each output row
+        depends on its own observer row of Φ only (below), so a compact row
+        is the dense row's arithmetic. None is the square fill, unchanged.
 
         The row band is the natural chunk: every Φ block below is
         rectangular in the observer count already (the mixed-radius
@@ -6405,6 +6575,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # The operating point is (k, eta), both arguments (momwire#995).
         eta = self._fill_eta(k, eta)
         if self._is_mixed(geom):
+            if obs_rows is not None:  # pragma: no cover - refused at construction
+                raise AssertionError("the sector route has no mixed fill")
             # Two media, three pair classes (momwire#1222) — the SG D2 shape
             # at one observer per segment.
             return self._assemble_Z_mixed(geom, eta)
@@ -6534,12 +6706,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # momwire#1911: `pair_reuse`, or None for the fill below as it was.
         reuse = self._sin_pair_reuse_route(geom, k, cos_shape, fg, eta)
 
-        G = np.zeros((N, N), dtype=np.complex128)
+        if obs_rows is None:
+            spans = [(0, N)]
+            G = np.zeros((N, N), dtype=np.complex128)
+        else:
+            obs_rows = np.asarray(obs_rows, dtype=np.int64)
+            spans = _schedule.runs(obs_rows)
+            G = np.zeros((obs_rows.size, N), dtype=np.complex128)
+        at = 0  # where the next chunk's rows land in a row-compact G
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
         # One checkpoint per observer chunk of the fill, called by the walk
         # at the top of each chunk (momwire#1337 phase 2).
-        for i0, i1 in _schedule.chunks([(0, N)], chunk, self._checkpoint):
+        for i0, i1 in _schedule.chunks(spans, chunk, self._checkpoint):
             rows = (i0, i1)
             if reuse is None:
                 Phi_c, Phi_s, Phi_co = self._field_tensor(
@@ -6612,12 +6791,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 del Phi_i
             # `(A + B) + C` into the band's rows of Z, by observer tiles
             # beside the three Φ (`_reduce_phi_band`, momwire#1290).
-            _reduce_phi_band((Phi_c, Phi_s, Phi_co), (M_A, M_B, M_C), G[i0:i1])
-            del Phi_c, Phi_s, Phi_co
+            if obs_rows is None:
+                dst = G[i0:i1]
+            else:
+                dst = G[at : at + (i1 - i0)]
+                at += i1 - i0
+            _reduce_phi_band((Phi_c, Phi_s, Phi_co), (M_A, M_B, M_C), dst)
+            del Phi_c, Phi_s, Phi_co, dst
         if self._nec4_live(geom):
+            if obs_rows is not None:  # pragma: no cover - refused at construction
+                raise AssertionError("the sector route has no NEC-4 cap columns")
             self._nec4_cap_columns(G, geom, k, seg_view, fg, eta)
-        self._contact_charge_correction(G, geom, k, seg_view, eta=eta)
-        self._apply_loading(G, geom, seg_view, k)
+        self._contact_charge_correction(
+            G, geom, k, seg_view, eta=eta, obs_rows=obs_rows
+        )
+        self._apply_loading(G, geom, seg_view, k, obs_rows=obs_rows)
         return G, seg_view
 
     def _sin_pair_reuse_route(self, geom, k, cos_shape, fg, eta):
@@ -7229,7 +7417,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         i0, i1 = obs_rows
         return [(max(s, i0), min(e, i1), a) for s, e, a in runs if s < i1 and e > i0]
 
-    def _apply_loading(self, G, geom, seg_view, k, medium=None):
+    def _apply_loading(self, G, geom, seg_view, k, medium=None, obs_rows=None):
         """NEC's impedance boundary condition, in place; no-op when loading
         is off. The system point-matches E_scat(n) = −E_app(n) at segment
         centres; a distributed series impedance changes the wire surface
@@ -7266,6 +7454,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
         cols = seg_view["jbasis"]
         i_center = seg_view["sigma"] * seg_view["AC"]  # not A + C (#606)
+        if obs_rows is not None:
+            # The row-compact fill (momwire#1912): the entries on its rows,
+            # written where each row lives. The same products, so the same
+            # numbers the dense fill subtracts there.
+            return self._apply_loading_compact(
+                G, seg_view, k, spec, rows, cols, i_center, obs_rows, n_segs
+            )
         # Each (seg, basis) pair is unique in seg_view (see _basis_coefs),
         # so plain fancy-index subtraction is exact.
         G[rows, cols] -= z_seg[rows] * i_center
@@ -7273,6 +7468,30 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k_e = np.asarray(seg_view["k_entry"]) if "k_entry" in seg_view else k
             G[rows, cols] -= (
                 spec.zq_seg[rows] * (k_e * k_e) * seg_view["sigma"] * seg_view["C"]
+            )
+        return G
+
+    @staticmethod
+    def _apply_loading_compact(
+        G, seg_view, k, spec, rows, cols, i_center, obs_rows, n_segs
+    ):
+        """`_apply_loading` on a row-compact G (momwire#1912)."""
+        row_of = np.full(int(n_segs), -1, dtype=np.int64)
+        row_of[np.asarray(obs_rows, dtype=np.int64)] = np.arange(
+            len(obs_rows), dtype=np.int64
+        )
+        keep = row_of[rows] >= 0
+        r, c = rows[keep], cols[keep]
+        G[row_of[r], c] -= spec.z_seg[r] * i_center[keep]
+        if spec.zq_seg is not None:
+            k_e = np.asarray(seg_view["k_entry"]) if "k_entry" in seg_view else k
+            if np.ndim(k_e):
+                k_e = k_e[keep]
+            G[row_of[r], c] -= (
+                spec.zq_seg[r]
+                * (k_e * k_e)
+                * seg_view["sigma"][keep]
+                * seg_view["C"][keep]
             )
         return G
 
@@ -7518,6 +7737,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Eq 187 delta-gap sources).
         """
         refuse_undriven([v for _, _, v in self.feeds])  # momwire#1164
+        if self._rotational_map is not None:
+            return self._compute_impedance_rotational()
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field-tensor fill
         # The whole solve inside the medium (momwire#1222): a wholly-buried
@@ -7582,7 +7803,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         `basis` is stable across the ports of this one solution and NOT
         across solves — re-solve and the previous handle is stale.
+
+        Under `rotational_symmetry=True` (momwire#1912) every port is solved
+        from one row-compact sector fill instead, through each harmonic its
+        columns excite; the returned object is the same shape and contract.
         """
+        if self._rotational_map is not None:
+            return self._compute_port_solution_rotational()
         geom = self._build_geometry()
         with self._operating_medium(geom) as medium:
             G, seg_view = self._assemble_Z(geom, self.k, self._medium_eta(medium))
@@ -7650,6 +7877,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
             z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
+        if self._rotational_map is not None:
+            # The sector route (momwire#1912) loops its own per-k entry, as
+            # bspline's does: there is no k axis on its row-compact fill.
+            with self._k_restored():
+                for i, kk in enumerate(k_array):
+                    self._checkpoint()  # top of each frequency iteration
+                    self._set_k(kk)
+                    z_out[i], _alpha = self._compute_impedance_rotational()
+            return z_out
         geom = self._build_geometry()
         v, voltages = self._feed_drive_vector(geom)
         with self._k_restored():
