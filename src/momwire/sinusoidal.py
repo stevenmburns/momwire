@@ -1113,6 +1113,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         has no collocation RHS at all, and under point matching the segment
         gap already IS the zero-width gap at the mesh's own resolution
         (momwire#212, report §17).
+
+    `rotational_symmetry`
+        The sector (block-circulant) route, opt-in (momwire#1912):
+        `BSplineSolver`'s (momwire#1029, #1897) on this basis. False (the
+        default) changes nothing. True asks for a deck that is N copies of
+        one sector about a vertical axis, whose port set the rotation maps
+        onto itself: the fill is then ONE sector's match points (and the
+        axial wires') against every source, and the solve the (m + p)
+        harmonic-0 block, plus each other harmonic's m x m block when a
+        port off the axis needs it. Served on `compute_impedance`,
+        `compute_port_solution` / `compute_y_matrix` and their swept forms,
+        in free space or one ground medium. A deck that is not that shape is
+        refused at construction, naming the condition (`_rotational_check`).
     """
 
     # momwire#1333: coincident wires joined to DIFFERENT wires are kept as
