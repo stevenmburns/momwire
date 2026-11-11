@@ -391,9 +391,13 @@ def _count(monkeypatch, obj, name):
     return calls
 
 
+# (namespace, entry point) each segment family factors through. The
+# point-matched family solves through `_lapack.solve`, which on a general G
+# runs SciPy's getrf + getrs directly rather than `scipy.linalg.solve`, so it
+# is counted there; the Galerkin family factors G with `scipy.linalg.lu_factor`.
 SEGMENT_FACTOR = {
-    SinusoidalSolver: "solve",
-    SinusoidalGalerkinSolver: "lu_factor",
+    SinusoidalSolver: ("_lapack", "solve"),
+    SinusoidalGalerkinSolver: ("scipy.linalg", "lu_factor"),
 }
 
 FILL_AND_SOLVE = {
@@ -417,20 +421,19 @@ def test_one_fill_and_one_factorisation_per_call(monkeypatch, cls, fixture, requ
     fill_name, solve_name = FILL_AND_SOLVE[cls]
     solver = cls(**_tight(cls, fixture()))
     fills = _count(monkeypatch, solver, fill_name)
-    # The segment families factor through scipy directly, so the solve counter
-    # goes on the module-level entry point they call: `solve` for the
+    # The segment families' solve counter goes on the module-level entry
+    # point they call (`SEGMENT_FACTOR`): `_lapack.solve` for the
     # point-matched family, `lu_factor` for the Galerkin one, which factors G
     # in place (`_solve_in_place`, momwire#1224).
     module = type(solver).__module__
-    solves = (
-        _count(
-            monkeypatch,
-            __import__(module, fromlist=["x"]).scipy.linalg,
-            SEGMENT_FACTOR[cls],
-        )
-        if cls in SEGMENT
-        else _count(monkeypatch, solver, solve_name)
-    )
+    if cls in SEGMENT:
+        where, entry = SEGMENT_FACTOR[cls]
+        ns = __import__(module, fromlist=["x"])
+        for part in where.split("."):
+            ns = getattr(ns, part)
+        solves = _count(monkeypatch, ns, entry)
+    else:
+        solves = _count(monkeypatch, solver, solve_name)
     solver.compute_port_solution()
     assert len(fills) == 1, f"{fill_name} ran {len(fills)}×"
     assert len(solves) == 1, f"solve ran {len(solves)}×"
