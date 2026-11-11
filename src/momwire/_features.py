@@ -331,6 +331,36 @@ FEATURES: dict[str, Feature] = {
             drift=1e-7,
             offer=True,
         ),
+        # BSplineSolver's junction constraints eliminated before the factor
+        # (momwire#1898): Z reduced to the constraint null space in place,
+        # where the Schur route back-substitutes n_c extra right-hand sides.
+        # The shipped fill and LAPACK, on a smaller system; the same
+        # Galerkin solution up to rounding.
+        Feature(
+            name="kcl_nullspace",
+            reach=1,
+            env="MOMWIRE_X_KCL_NULLSPACE",
+            kind="python",
+            issue=1898,
+            since="2026-11-11",
+            kwarg="kcl_nullspace",
+            paths=(
+                "src/momwire/_kcl_nullspace.py",
+                "tests/test_kcl_nullspace_1898.py",
+            ),
+            label="eliminate junction constraints",
+            summary=(
+                "Solve nec5-bspline's and nec42-bspline's junction conservation "
+                "by eliminating one wire end per junction before the factor, "
+                "instead of carrying the constraints through the solve. Fewer "
+                "unknowns and no extra solves on junction-dense designs (coils, "
+                "cages, grids)."
+            ),
+            # Measured on the ELT whip (2,029 rows), nec5-bspline degrees 1
+            # and 2, free space and Sommerfeld: at most 6.7e-13.
+            drift=1e-12,
+            offer=True,
+        ),
         # The exact-kernel point moments as a k-series (Python and its C++
         # port): a new numerical path that flips last printed digits.
         Feature(
