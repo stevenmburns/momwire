@@ -156,7 +156,8 @@ def _synthetic(seed, n_rows, n_src, n_cols, per_col, empty_frac=0.2):
 )
 def test_kernel_is_scipy_on_raw_csc(seed, n_rows, n_src, n_cols, per_col, monkeypatch):
     Phi, Ms = _synthetic(seed, n_rows, n_src, n_cols, per_col)
-    assert not all(M.has_sorted_indices for M in Ms)
+    if per_col > 1:  # one entry per column is sorted by construction
+        assert not all(M.has_sorted_indices for M in Ms)
     ref = _scipy_route(Phi, Ms, np.empty((n_rows, n_cols), complex), monkeypatch)
     got = _kernel(Phi, Ms, np.full((n_rows, n_cols), np.nan + 0j))
     assert _bits_equal(got, ref)
