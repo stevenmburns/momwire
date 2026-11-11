@@ -23,6 +23,10 @@ Gates:
     a one-column operand to a different routine (`csr_matvec`);
   * `_assemble_Z` on the free array equals the pre-#1290 fill (whole Φ,
     whole products) byte for byte.
+
+These gates are about the scipy tiles, so the `widths` spy takes the
+accelerator's `reduce_phi_band` (momwire#1905) out of the way; that kernel
+is gated against this route in `test_sin_phi_reduce_1905.py`.
 """
 
 from __future__ import annotations
@@ -104,7 +108,9 @@ def _scipy_band(Phi, Ms):
 
 @pytest.fixture
 def widths(monkeypatch):
-    """Operand width of every sparse product scipy runs, by routine."""
+    """Operand width of every sparse product scipy runs, by routine, with
+    the reduction routed through scipy's tiles (`_PHI_REDUCE_ACCEL` off)."""
+    monkeypatch.setattr(sn, "_PHI_REDUCE_ACCEL", False)
     seen = []
     cls = scipy.sparse.csr_matrix
     vec, multi = cls._matmul_vector, cls._matmul_multivector

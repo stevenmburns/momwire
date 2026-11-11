@@ -44,6 +44,7 @@ void register_factorize(py::module_ &m);
 void register_left_gather(py::module_ &m);
 void register_razor_t2(py::module_ &m);
 void register_row_scatter(py::module_ &m);
+void register_phi_reduce(py::module_ &m);
 void register_qp_pairs(py::module_ &m);
 void register_exact_kernel(py::module_ &m);
 void register_exact_kernel_point(py::module_ &m);
