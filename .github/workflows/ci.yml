@@ -144,6 +144,10 @@ jobs:
       # so objects from one patch can never hit for the other -- a PR on
       # 3.12.15 restoring main's 3.12.14 cache hit 4 of 32 compiles.
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -271,6 +275,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -368,6 +376,10 @@ jobs:
         # wheels workflow uses.
         run: brew install libomp
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
@@ -433,6 +445,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
@@ -502,6 +518,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -610,6 +630,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -667,6 +691,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -721,6 +749,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        # Optional speed-up, not a gate: the action installs ccache with apt,
+        # which died for hours on 2026-11-11 when the runners could not
+        # resolve the Ubuntu mirror. Uncached builds are the same build.
+        continue-on-error: true
         if: needs.changes.outputs.code == 'true'
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
