@@ -452,6 +452,36 @@ def _scipy_takes_gesv(a, dtype):
     return bool(np.any(row != np.conj(col)))
 
 
+#: `solve` prepares A with the accelerator's `fortran_copy_1norm` when it
+#: carries it (momwire#1916); False keeps numpy's isfinite, numpy's copy and
+#: scipy's lange, the reference that kernel is gated against.
+_SOLVE_PREP_ACCEL = True
+
+#: Below this order the three numpy / scipy passes cost less than a call.
+_SOLVE_PREP_MIN_N = 64
+
+
+def _solve_prep(a1, dtype):
+    """`(Fortran copy, all finite, lange("1") norm)` of `a1` in one threaded
+    pass (`_accel_solve_prep.cpp`), or None where that kernel does not apply:
+    switched off, no accelerator, a small or non-C-contiguous matrix, or a
+    dtype it does not take (or that the solve casts to)."""
+    if not _SOLVE_PREP_ACCEL or a1.shape[0] < _SOLVE_PREP_MIN_N:
+        return None
+    if a1.dtype != dtype or dtype not in (np.complex128, np.float64):
+        return None
+    if not a1.flags.c_contiguous:
+        return None
+    try:
+        from ._accel import acc
+    except ImportError:  # pragma: no cover - the accelerator module is optional
+        return None
+    if acc is None or not getattr(acc, "solve_prep_1916", False):
+        return None
+    lu, finite, anorm = acc.fortran_copy_1norm(a1)
+    return lu, bool(finite), float(anorm)
+
+
 @_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
@@ -469,11 +499,20 @@ def solve(a, b):
         or (fns is None and not _scipy_takes_gesv(a1, dtype))
     ):
         return scipy.linalg.solve(a, b)
-    if not (np.isfinite(a1).all() and np.isfinite(b0).all()):
-        raise ValueError("array must not contain infs or NaNs")
-    lu = _fortran_copy(a1, dtype)
-    lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
-    anorm = lange("1", lu)  # for the warning only, as scipy's solve takes it
+    prep = _solve_prep(a1, dtype)
+    if prep is not None:
+        # The copy, the finiteness check and lange's 1-norm in one threaded
+        # pass (momwire#1916): the same matrix, error and norm.
+        lu, a_finite, anorm = prep
+        if not (a_finite and np.isfinite(b0).all()):
+            raise ValueError("array must not contain infs or NaNs")
+        lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
+    else:
+        if not (np.isfinite(a1).all() and np.isfinite(b0).all()):
+            raise ValueError("array must not contain infs or NaNs")
+        lu = _fortran_copy(a1, dtype)
+        lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
+        anorm = lange("1", lu)  # for the warning only, as scipy's solve takes it
     n = a1.shape[0]
     x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
     if fns is not None:

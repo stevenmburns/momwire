@@ -40,6 +40,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_razor_t2(m);
     register_row_scatter(m);
     register_phi_reduce(m);
+    register_solve_prep(m);
     register_qp_pairs(m);
     register_exact_kernel(m);
     register_exact_kernel_point(m);
