@@ -56,4 +56,11 @@ rs.harmonic_blocks = hb
 s, doc = solver(a.deck, True)
 ks = 2 * np.pi * (400e6 + 1e6 * np.arange(a.nk)) / s.c
 list(s.compute_y_matrix_swept(ks))
-print(a.deck, "nk", a.nk, {k: round(v, 2) for k, v in T.items()}, "total", round(sum(T.values()), 2))
+print(
+    a.deck,
+    "nk",
+    a.nk,
+    {k: round(v, 2) for k, v in T.items()},
+    "total",
+    round(sum(T.values()), 2),
+)
