@@ -80,8 +80,14 @@ NEAR_ROWS = 16
 _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 
 #: Sources per kernel call in `evaluate` (its per-row scratch is ~360 bytes
-#: per source).
-EVAL_CHUNK = 8192
+#: per source). At 8192 each worker's scratch spilled out of its core's
+#: cache: on the ELT whip at 8 workers (Rocketlake) the kernel's summed
+#: seconds were 3.7x one worker's. Measured per frequency there, wall:
+#: 8192 0.086 s, 4096 0.059, 2048 0.048, 1024 0.080 (the Python per call
+#: holds the GIL), 512 0.135 (momwire#1916). A speed knob, but not a
+#: bit-free one: the kernel's batched sincos is a vector loop with a scalar
+#: tail, and which a source falls in can move its Φ by an ulp.
+EVAL_CHUNK = 2048
 
 #: Classes per `canonical_sources` call in `build_plan` (its transients are
 #: about 16 float64 per class).
