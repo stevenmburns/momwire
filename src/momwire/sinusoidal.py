@@ -8095,36 +8095,27 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # left-edge and the last seg's right-edge hit wire endpoints
             # (weight 1.0); every other edge hits an interior knot shared
             # with another segment's edge, so each contributes weight 0.5.
-            eval_seg_parts = []
-            eval_s_parts = []
-            eval_target_parts = []
-            eval_weight_parts = []
-            wire_knot_offsets = [0]
-            for w_idx in range(n_wires):
-                first = geom["wire_first"][w_idx]
-                last = geom["wire_last"][w_idx]
-                n_w_segs = last - first + 1
-                h_w = seg_h[first : last + 1]
-                base = wire_knot_offsets[-1]
-                seg_arr = np.arange(first, last + 1, dtype=np.int64)
-                # Left edges (s = -h/2) feed knot 0..M-1
-                left_target = base + np.arange(n_w_segs, dtype=np.int64)
-                left_weight = np.full(n_w_segs, 0.5)
-                left_weight[0] = 1.0
-                # Right edges (s = +h/2) feed knot 1..M
-                right_target = base + np.arange(1, n_w_segs + 1, dtype=np.int64)
-                right_weight = np.full(n_w_segs, 0.5)
-                right_weight[-1] = 1.0
-                eval_seg_parts.append(np.concatenate([seg_arr, seg_arr]))
-                eval_s_parts.append(np.concatenate([-0.5 * h_w, +0.5 * h_w]))
-                eval_target_parts.append(np.concatenate([left_target, right_target]))
-                eval_weight_parts.append(np.concatenate([left_weight, right_weight]))
-                wire_knot_offsets.append(base + n_w_segs + 1)
-
-            eval_seg = np.concatenate(eval_seg_parts)
-            eval_s = np.concatenate(eval_s_parts)
-            eval_target = np.concatenate(eval_target_parts)
-            eval_weight = np.concatenate(eval_weight_parts)
+            # Every wire's block at once (momwire#1916 part D), in the
+            # per-wire order: its M left edges, then its M right edges.
+            first = np.asarray(geom["wire_first"], dtype=np.int64)
+            m_w = np.asarray(geom["wire_last"], dtype=np.int64) - first + 1
+            knot_base = np.zeros(n_wires, dtype=np.int64)
+            np.cumsum(m_w[:-1] + 1, out=knot_base[1:])
+            wire_knot_offsets = [0, *np.cumsum(m_w + 1).tolist()]
+            blk = np.zeros(n_wires + 1, dtype=np.int64)
+            np.cumsum(2 * m_w, out=blk[1:])
+            w_of = np.repeat(np.arange(n_wires, dtype=np.int64), 2 * m_w)
+            p = np.arange(int(blk[-1]), dtype=np.int64) - blk[:-1][w_of]
+            m_of = m_w[w_of]
+            right = p >= m_of
+            j = np.where(right, p - m_of, p)  # segment within the wire
+            eval_seg = first[w_of] + j
+            h_e = seg_h[eval_seg]
+            eval_s = np.where(right, +0.5 * h_e, -0.5 * h_e)
+            eval_target = knot_base[w_of] + j + right
+            # 1.0 at a wire's two end knots, 0.5 at every shared one.
+            ends = np.where(right, j == m_of - 1, j == 0)
+            eval_weight = np.where(ends, 1.0, 0.5)
 
             I_evals = self._evaluate_basis_at_points(seg_view, eval_seg, eval_s, alpha)
             I_flat = np.zeros(wire_knot_offsets[-1], dtype=np.complex128)
@@ -8217,6 +8208,41 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         xi = (sv - arc_at_knot[seg_in_wire]) - 0.5 * wire_h[seg_in_wire]
         return first + seg_in_wire, xi
 
+    def _slope_eval_points_all(self, geom, s_array, arc_at_knot, knot_off, m_w):
+        """`_slope_eval_points` for every wire at once: `(segment, ξ,
+        offsets)`, wire w's samples at ``offsets[w]:offsets[w+1]``.
+
+        Each wire's `searchsorted` is one search over every wire's knots,
+        keyed ``w + 1j·arc``: numpy orders complex values by real part, then
+        imaginary, so a sample's rank among them is exactly its rank in its
+        own wire's knots plus the knots of the wires before it. The clip, the
+        span and ξ are then `_slope_eval_points`' expressions, element for
+        element."""
+        n_wires = len(s_array)
+        sv = [np.asarray(v, dtype=np.float64).reshape(-1) for v in s_array]
+        counts = np.fromiter((v.size for v in sv), dtype=np.int64, count=n_wires)
+        offsets = [0, *np.cumsum(counts).tolist()]
+        if offsets[-1] == 0:
+            return np.zeros(0, dtype=np.int64), np.zeros(0), offsets
+        flat = np.concatenate(sv)
+        w_of = np.repeat(np.arange(n_wires, dtype=np.int64), counts)
+        wire_end = arc_at_knot[knot_off[1:] - 1]
+        flat = np.clip(flat, 0.0, wire_end[w_of])
+        knot_w = np.repeat(np.arange(n_wires, dtype=np.float64), m_w + 1)
+        keys = np.empty(arc_at_knot.size, dtype=np.complex128)
+        keys.real[:] = knot_w
+        keys.imag[:] = arc_at_knot
+        query = np.empty(flat.size, dtype=np.complex128)
+        query.real[:] = w_of
+        query.imag[:] = flat
+        rank = np.searchsorted(keys, query, side="right") - knot_off[:-1][w_of]
+        seg_in_wire = np.clip(rank - 1, 0, m_w[w_of] - 1)
+        knot = knot_off[:-1][w_of] + seg_in_wire
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        seg = first[w_of] + seg_in_wire
+        xi = (flat - arc_at_knot[knot]) - 0.5 * geom["seg_h"][seg]
+        return seg, xi, offsets
+
     @_wire_spec.reads_input_wires("per_wire")
     def current_slopes(self, coeffs, s_array=None):
         """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
@@ -8274,34 +8300,38 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_h = geom["seg_h"]
         n_wires = len(self.wires_polylines)
 
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        m_w = np.asarray(geom["wire_last"], dtype=np.int64) - first + 1
+        # Each wire's `arc_at_knot`, concatenate([[0.0], cumsum(wire_h)]),
+        # for every wire at once (`_mesh_walk.segmented_cumsum` is each
+        # slice's cumsum, bit for bit).
+        knot_off = np.zeros(n_wires + 1, dtype=np.int64)
+        np.cumsum(m_w + 1, out=knot_off[1:])
+        seg_off = np.zeros(n_wires + 1, dtype=np.int64)
+        np.cumsum(m_w, out=seg_off[1:])
+        w_of_seg = np.repeat(np.arange(n_wires, dtype=np.int64), m_w)
+        wire_segs = first[w_of_seg] + (
+            np.arange(int(seg_off[-1]), dtype=np.int64) - seg_off[:-1][w_of_seg]
+        )
+        arc_at_knot = np.zeros(int(knot_off[-1]), dtype=np.float64)
+        not_head = np.ones(arc_at_knot.size, dtype=bool)
+        not_head[knot_off[:-1]] = False
+        arc_at_knot[not_head] = _mesh_walk.segmented_cumsum(seg_h[wire_segs], seg_off)
+
         if s_array is None:
             # Every knot of every wire, in the same per-wire layout
             # `currents_at_knots` returns.
-            s_array = []
-            for w_idx in range(n_wires):
-                first = geom["wire_first"][w_idx]
-                last = geom["wire_last"][w_idx]
-                s_array.append(
-                    np.concatenate([[0.0], np.cumsum(seg_h[first : last + 1])])
-                )
+            s_array = [arc_at_knot[a:b] for a, b in zip(knot_off[:-1], knot_off[1:])]
 
         # One batched evaluation for the whole structure: the per-wire walk
         # only decides WHERE, which keeps the trig and the scatter-add single
         # calls however many wires there are.
-        segs, xis, offsets = [], [], [0]
-        for w_idx in range(n_wires):
-            seg, xi = self._slope_eval_points(geom, w_idx, s_array[w_idx])
-            segs.append(seg)
-            xis.append(xi)
-            offsets.append(offsets[-1] + seg.shape[0])
+        segs, xis, offsets = self._slope_eval_points_all(
+            geom, s_array, arc_at_knot, knot_off, m_w
+        )
         if offsets[-1] == 0:
             return [np.zeros(0, dtype=np.complex128) for _ in range(n_wires)]
-        flat = self._evaluate_basis_slope_at_points(
-            seg_view,
-            np.concatenate(segs).astype(np.int64),
-            np.concatenate(xis),
-            alpha,
-        )
+        flat = self._evaluate_basis_slope_at_points(seg_view, segs, xis, alpha)
         return [
             np.asarray(flat[offsets[i] : offsets[i + 1]], dtype=np.complex128)
             for i in range(n_wires)

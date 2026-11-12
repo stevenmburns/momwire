@@ -68,3 +68,95 @@ def test_segmented_cumsum_is_each_slices_cumsum():
     got = MW.segmented_cumsum(x, offs)
     ref = np.concatenate([np.cumsum(x[a:b]) for a, b in zip(offs[:-1], offs[1:])])
     assert _bits(got) == _bits(ref)
+
+
+def _structure():
+    """A solved multi-wire structure: a bent two-edge wire, a junction, and
+    wires of 1 to 9 segments (momwire#1916 part D's all-wire readouts)."""
+    from momwire.sinusoidal import SinusoidalSolver
+
+    wires = [
+        [(0.0, 0.0, 0.0), (0.0, 0.0, 0.31), (0.07, 0.02, 0.5)],
+        [(0.0, 0.0, 0.0), (0.12, 0.0, -0.05)],
+        [(0.3, 0.1, 0.2), (0.3, 0.1, 0.27)],
+        [(0.0, 0.0, 0.0), (-0.2, 0.05, 0.0)],
+    ]
+    solver = SinusoidalSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[7, 4], [3], [1], [9]],
+        wavelength=1.1,
+        wire_radius=1e-3,
+        feeds=[(0, None, 1.0)],
+    )
+    sol = solver.compute_port_solution()
+    return solver, sol.coeffs[:, 0]
+
+
+def test_all_wire_readouts_are_the_per_wire_spellings_bits():
+    """`currents_at_knots`, `current_slopes` and `element_currents` walk
+    every wire at once; each answer is the per-wire spelling's, bit for bit,
+    here rebuilt from `_slope_eval_points` and the knot walk loop."""
+    solver, alpha = _structure()
+    geom = solver._build_geometry()
+    seg_h = geom["seg_h"]
+    view = solver._readout_view(geom)
+    rng = np.random.default_rng(3)
+    # Samples on knots, inside spans, at and past both ends.
+    s_array = []
+    for w in range(len(solver.wires_polylines)):
+        f, last = geom["wire_first"][w], geom["wire_last"][w]
+        arc = np.concatenate([[0.0], np.cumsum(seg_h[f : last + 1])])
+        s_array.append(
+            np.concatenate([arc, rng.uniform(-0.1, 1.1, 9) * arc[-1], arc[1:-1] * 0.5])
+        )
+    got = solver.current_slopes(alpha, s_array)
+    for w, sv in enumerate(s_array):
+        seg, xi = solver._slope_eval_points(geom, w, sv)
+        want = solver._evaluate_basis_slope_at_points(view, seg, xi, alpha)
+        assert _bits(got[w]) == _bits(np.asarray(want, dtype=np.complex128))
+    default = solver.current_slopes(alpha)
+    for w in range(len(solver.wires_polylines)):
+        f, last = geom["wire_first"][w], geom["wire_last"][w]
+        arc = np.concatenate([[0.0], np.cumsum(seg_h[f : last + 1])])
+        seg, xi = solver._slope_eval_points(geom, w, arc)
+        want = solver._evaluate_basis_slope_at_points(view, seg, xi, alpha)
+        assert _bits(default[w]) == _bits(np.asarray(want, dtype=np.complex128))
+
+    # currents_at_knots' knot path: per wire, left edges then right edges.
+    knots_i = solver.currents_at_knots(alpha)
+    for w in range(len(solver.wires_polylines)):
+        f, last = geom["wire_first"][w], geom["wire_last"][w]
+        m = last - f + 1
+        segs = np.arange(f, last + 1)
+        lw = np.full(m, 0.5)
+        lw[0] = 1.0
+        rw = np.full(m, 0.5)
+        rw[-1] = 1.0
+        ev = solver._evaluate_basis_at_points(
+            view,
+            np.concatenate([segs, segs]),
+            np.concatenate([-0.5 * seg_h[segs], +0.5 * seg_h[segs]]),
+            alpha,
+        )
+        want = np.zeros(m + 1, dtype=np.complex128)
+        np.add.at(
+            want,
+            np.concatenate([np.arange(m), np.arange(1, m + 1)]),
+            np.concatenate([lw, rw]) * ev,
+        )
+        assert _bits(knots_i[w]) == _bits(want)
+
+    # element_currents: the per-wire walk it replaced.
+    mid, moment, nodes, delta = solver.element_currents(alpha)
+    ref = _ref_knots(solver.wires_polylines, solver.n_per_edge_per_wire, 1)
+    r_mid, r_mom, r_delta = [], [], []
+    zero = np.zeros(1, dtype=np.complex128)
+    for knots, cur in zip(ref, knots_i):
+        el = 0.5 * (cur[1:] + cur[:-1])
+        r_mid.append(0.5 * (knots[1:] + knots[:-1]))
+        r_mom.append(el[:, None] * (knots[1:] - knots[:-1]))
+        r_delta.append(np.concatenate([zero, el]) - np.concatenate([el, zero]))
+    assert _bits(mid) == _bits(np.concatenate(r_mid))
+    assert _bits(moment) == _bits(np.concatenate(r_mom))
+    assert _bits(nodes) == _bits(np.concatenate(ref))
+    assert _bits(delta) == _bits(np.concatenate(r_delta))
