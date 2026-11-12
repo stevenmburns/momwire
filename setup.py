@@ -570,6 +570,10 @@ _ACCEL_SOURCES = [
     # `csr_matvecs` order, threaded over observer rows. Its own TU for the
     # row scatter's reason: its bits are that order's.
     "src/momwire/_accel_phi_reduce.cpp",
+    # momwire#1916: `_lapack.solve`'s copy, finiteness check and 1-norm in
+    # one threaded pass. Its own TU: a copy and lange's sum order, nothing
+    # else may move its codegen.
+    "src/momwire/_accel_solve_prep.cpp",
     # The remainder order's per-source scan (`_quadrature.remainder_qp_pairs`).
     # Its own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_qp_pairs.cpp",
