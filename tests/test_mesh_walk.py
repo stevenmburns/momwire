@@ -160,3 +160,36 @@ def test_all_wire_readouts_are_the_per_wire_spellings_bits():
     assert _bits(moment) == _bits(np.concatenate(r_mom))
     assert _bits(nodes) == _bits(np.concatenate(ref))
     assert _bits(delta) == _bits(np.concatenate(r_delta))
+
+
+def test_constructor_checks_at_once_are_the_loops():
+    """`short_segment_wires`, `check_junction_coincidence` and the duplicate
+    search's vertex keys decide over every wire at once (momwire#1916 part
+    D); each agrees with its per-wire loop, which still answers a spec given
+    as lists."""
+    from momwire import _wire_spec as WS
+
+    rng = np.random.default_rng(11)
+    polylines, per_edge = _mesh(rng, n_wires=80)
+    radius = rng.uniform(1e-4, 5e-2, size=len(polylines))
+    radius[::7] = 0.0
+    as_lists = [pl.tolist() for pl in polylines]
+    got = WS.short_segment_wires(polylines, per_edge, radius)
+    assert got, "the mesh should carry short segments"
+    assert got == WS.short_segment_wires(as_lists, per_edge, radius)
+
+    keys = WS._vertex_keys(polylines)
+    assert keys == [WS._vertex_key(pl) for pl in polylines]
+
+    # Junctions: every wire's start welded to the first wire's start, then
+    # one member nudged past its tolerance.
+    welded = [pl.copy() for pl in polylines[:6]]
+    for pl in welded[1:]:
+        pl[0] = welded[0][0]
+    groups = [[(w, "start") for w in range(6)], [(2, "end")]]
+    WS.check_junction_coincidence(welded, per_edge[:6], groups)
+    assert WS._junctions_coincide(welded, per_edge[:6], groups)
+    welded[4][0] = welded[0][0] + 1e-3
+    with pytest.raises(ValueError, match="junction 0: members do not coincide"):
+        WS.check_junction_coincidence(welded, per_edge[:6], groups)
+    assert not WS._junctions_coincide(welded, per_edge[:6], groups)

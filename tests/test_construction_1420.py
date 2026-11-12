@@ -127,7 +127,7 @@ def test_duplicate_and_short_segment_checks_match_their_walks():
         fast_short = _wire_spec.short_segment_wires(pls, npe, radius)
         with pytest.MonkeyPatch.context() as m:
             m.setattr(_wire_spec, "_vertex_keys", lambda pls: None)
-            m.setattr(_wire_spec, "_straight_segment_lengths", lambda *a: None)
+            m.setattr(_wire_spec, "_short_segment_wires_at_once", lambda *a: None)
             assert fast_dup == _wire_spec.find_duplicated_wires(pls)
             walk_short = _wire_spec.short_segment_wires(pls, npe, radius)
         assert fast_short == walk_short
@@ -140,7 +140,7 @@ def test_the_seam_takes_the_vector_paths(monkeypatch):
     calls = {"keys": 0, "lengths": 0, "full": 0}
     keys, lengths, full = (
         _wire_spec._vertex_keys,
-        _wire_spec._straight_segment_lengths,
+        _wire_spec._short_segment_wires_at_once,
         _serve._phantom_tags_full,
     )
 
@@ -159,7 +159,7 @@ def test_the_seam_takes_the_vector_paths(monkeypatch):
         return full(*a)
 
     monkeypatch.setattr(_wire_spec, "_vertex_keys", spy_keys)
-    monkeypatch.setattr(_wire_spec, "_straight_segment_lengths", spy_lengths)
+    monkeypatch.setattr(_wire_spec, "_short_segment_wires_at_once", spy_lengths)
     monkeypatch.setattr(_serve, "_phantom_tags_full", spy_full)
     out = render(
         "CM monopole\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\nGW 2 4 0 0 5 1 0 5 1e-3\n"
