@@ -54,11 +54,13 @@ from __future__ import annotations
 import hashlib
 import math
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 import numpy as np
 from ._vec3 import norm3
 from . import _lapack
+from ._near_interface import _table_threads
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
 # structure probe measures rotated radials landing 3.9e-16 m (4 radials) to
@@ -991,24 +993,51 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     hs = [h for h in harmonics if h != 0]
     if not hs:
         return out
-    # Sector t's block C_t is gathered ONCE and folded into every harmonic
-    # (momwire#1902): the h-outer form gathered it once per harmonic, N - 1
-    # fancy-index copies of an m x m block where one does, and that was 46 %
-    # of a 13-frequency C6 sweep. Each Lambda_h still receives its terms in
-    # ascending t as `w * C_t` then an add, so the sums are bit-identical to
-    # the h-outer form. The N - 1 accumulators are the blocks the factors
-    # replace in place, so the peak is one gathered block above it.
+    # Lambda_h = sum_t w_ht C_t for every h at once, as ONE product per column
+    # strip: the (N-1) x N weights against the N gathered strips of C_t
+    # (momwire#1919). The per-sector `multiply` + `add` passes were single-
+    # threaded numpy over m x m blocks, and the gathers shared that wall; the
+    # product runs on the host BLAS, so it scales with threads, and the
+    # strip's N gathers are spread over a small pool. A strip is m/N columns
+    # wide, so the gathered stack is one m x m block (the #1902 peak: one
+    # gathered block above the accumulators, which are the blocks the
+    # factors replace in place).
+    w = np.exp(2j * math.pi * np.outer(hs, np.arange(n)) / n)
     lams = {h: np.zeros((m, m), dtype=np.complex128, order="F") for h in hs}
-    term = np.empty((m, m), dtype=np.complex128, order="F")
-    for t in range(n):
-        C_t = Z[np.ix_(r_s0, sectors[t])]
-        for h in hs:
-            np.multiply(np.exp(2j * math.pi * h * t / n), C_t, out=term)
-            lams[h] += term
-        del C_t
+    cb = max(1, m // n)
+    stack = np.empty((n, m * cb), dtype=np.complex128)
+
+    def _gather(t, j0, j1):
+        stack[t, : m * (j1 - j0)] = Z[np.ix_(r_s0, sectors[t][j0:j1])].ravel()
+
+    pool = _gather_pool(n)
+    try:
+        for j0 in range(0, m, cb):
+            j1 = min(j0 + cb, m)
+            if pool is None:
+                for t in range(n):
+                    _gather(t, j0, j1)
+            else:
+                list(pool.map(_gather, range(n), [j0] * n, [j1] * n))
+            prod = _lapack.matmul(w, stack[:, : m * (j1 - j0)])
+            for i, h in enumerate(hs):
+                lams[h][:, j0:j1] = prod[i].reshape(m, j1 - j0)
+            del prod
+    finally:
+        if pool is not None:
+            pool.shutdown()
     for h in hs:
         out[h] = _lapack.lu_factor(lams.pop(h), overwrite_a=True)
     return out
+
+
+def _gather_pool(n):
+    """A thread pool for the strip gathers, or None when one thread is all
+    there is to use. numpy's fancy-index copy drops the GIL."""
+    workers = min(n, _table_threads())
+    if workers < 2:
+        return None
+    return ThreadPoolExecutor(max_workers=workers)
 
 
 # `_harmonic_constraints` by the digest of its inputs (momwire#1902): the
