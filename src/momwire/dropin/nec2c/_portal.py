@@ -167,6 +167,7 @@ import math
 import os
 import sys
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -2569,15 +2570,25 @@ class DeckSolver:
         search is O(N^2) in memory and time. The ELT whip (4,392 segments)
         ran it twice per frequency, 13.4 s of a 41 s, 13-frequency deck.
         """
+        # Three readouts per frequency ask with the same solver: the key (a
+        # few ms of bytes on the whip) is built once per solver, not per ask.
+        last = getattr(self, "_element_match_last", None)
+        if last is not None and last[0]() is solver:
+            return last[1]
         key = (
             tuple(np.asarray(p, dtype=float).tobytes() for p in solver.wires_polylines),
             tuple(tuple(int(n) for n in ns) for ns in solver.n_per_edge_per_wire),
         )
         held = getattr(self, "_element_match_held", None)
         if held is not None and held[0] == key:
-            return held[1]
-        result = self._element_match_uncached(solver)
-        self._element_match_held = (key, result)
+            result = held[1]
+        else:
+            result = self._element_match_uncached(solver)
+            self._element_match_held = (key, result)
+        try:
+            self._element_match_last = (weakref.ref(solver), result)
+        except TypeError:  # a solver that takes no weak reference
+            self._element_match_last = None
         return result
 
     def _element_match_uncached(self, solver):
