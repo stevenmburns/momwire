@@ -120,6 +120,8 @@ def test_the_portal_pays_one_census_for_a_sweep(builds, monkeypatch):
 
     def results(text):
         # The printout's own clocks are the one thing two runs differ in.
-        return [ln for ln in text.splitlines() if "SEC." not in ln and "RUN TIME" not in ln]
+        return [
+            ln for ln in text.splitlines() if "SEC." not in ln and "RUN TIME" not in ln
+        ]
 
     assert results(shared) == results(own)

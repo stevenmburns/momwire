@@ -121,10 +121,7 @@ def plan_nbytes(plan) -> int:
     return sum(
         v.nbytes for v in vars(plan).values() if isinstance(v, np.ndarray)
     ) + sum(
-        x.nbytes
-        for blk in plan.near_blocks
-        for x in blk
-        if isinstance(x, np.ndarray)
+        x.nbytes for blk in plan.near_blocks for x in blk if isinstance(x, np.ndarray)
     )
 
 
