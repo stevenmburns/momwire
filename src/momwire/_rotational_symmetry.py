@@ -1011,7 +1011,7 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
         K0 = np.zeros((m + p, m + p), dtype=np.complex128, order="F")
         lams[0] = K0[:m, :m]
     workers = max(1, min(_table_threads(), m))
-    cb = max(1, m // (4 * n * workers))
+    cb = max(1, m // (2 * n * workers))
 
     def _strip(j0):
         j1 = min(j0 + cb, m)
