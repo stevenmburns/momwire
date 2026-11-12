@@ -65,6 +65,7 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from . import _mesh_walk
 from . import bspline as _bspline
 from . import _lapack
 from .bspline import SINGULAR_ENRICHMENT_NEVER
@@ -2248,52 +2249,60 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if self._cached_geometry is not None:
             return self._cached_geometry
-        # Build per-edge chunks (n_e segments per edge) in vectorized form,
-        # then concatenate. Inner k_seg Python loop (171 iters × 5 list
-        # appends + 4 numpy temporaries) was ~12% of py-spy samples at N=21.
-        seg_l_chunks: list[np.ndarray] = []
-        seg_r_chunks: list[np.ndarray] = []
-        seg_c_chunks: list[np.ndarray] = []
-        seg_t_chunks: list[np.ndarray] = []
-        seg_h_chunks: list[np.ndarray] = []
-        wire_first_seg: list[int] = []
-        wire_last_seg: list[int] = []
-        running_count = 0
-
-        for w_idx, (pl, npe_list) in enumerate(
-            zip(self.wires_polylines, self.n_per_edge_per_wire)
-        ):
-            wire_first = running_count
-            for e_idx in range(pl.shape[0] - 1):
-                p0 = pl[e_idx]
-                p1 = pl[e_idx + 1]
-                vec = p1 - p0
-                edge_len = float(norm3(vec))
-                if edge_len < 1e-15:
-                    raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
-                tan = vec / edge_len
-                n_e = npe_list[e_idx]
-                h_e = edge_len / n_e
-                # frac in [0, 1] sampled at n_e+1 points; consecutive points
-                # bound each segment.
-                frac = np.linspace(0.0, 1.0, n_e + 1)
-                pts = p0 + frac[:, None] * vec  # (n_e+1, 3)
-                pl_l_arr = pts[:-1]  # (n_e, 3)
-                pl_r_arr = pts[1:]  # (n_e, 3)
-                seg_l_chunks.append(pl_l_arr)
-                seg_r_chunks.append(pl_r_arr)
-                seg_c_chunks.append(0.5 * (pl_l_arr + pl_r_arr))
-                seg_t_chunks.append(np.broadcast_to(tan, (n_e, 3)).copy())
-                seg_h_chunks.append(np.full(n_e, h_e, dtype=np.float64))
-                running_count += n_e
-            wire_last_seg.append(running_count - 1)
-            wire_first_seg.append(wire_first)
-
-        seg_l = np.concatenate(seg_l_chunks, axis=0)
-        seg_r = np.concatenate(seg_r_chunks, axis=0)
-        seg_c = np.concatenate(seg_c_chunks, axis=0)
-        seg_t = np.concatenate(seg_t_chunks, axis=0)
-        seg_h = np.concatenate(seg_h_chunks)
+        # Every edge of every wire at once (momwire#1916 part D): the per-edge
+        # loop this replaces ran ~6 numpy calls per edge, 0.03 s a solver on
+        # the ELT whip's 4,067 edges. Same operations, element for element:
+        # `norm3`'s length, `vec / len` for the tangent, `len / n_e` for the
+        # step, numpy's `linspace(0, 1, n_e + 1)` (`i * (1 / n_e)`, its last
+        # point 1.0) for the fractions, then `p0 + frac * vec`.
+        # The edge count is the polyline's; its segment counts are read up
+        # to it, as the loop's `npe_list[e_idx]` did.
+        counts, edges_per_wire = _mesh_walk.edge_counts(
+            [
+                [npe[e] for e in range(pl.shape[0] - 1)]
+                for pl, npe in zip(self.wires_polylines, self.n_per_edge_per_wire)
+            ]
+        )
+        p0, p1 = _mesh_walk.edge_endpoints(self.wires_polylines, edges_per_wire)
+        vec = p1 - p0
+        edge_len = norm3(vec) if vec.shape[0] else np.zeros(0)
+        short = np.flatnonzero(edge_len < 1e-15)
+        if short.size:
+            e = int(short[0])
+            w_of = np.repeat(np.arange(edges_per_wire.size), edges_per_wire)
+            w_idx = int(w_of[e])
+            e_idx = e - int(np.sum(edges_per_wire[:w_idx]))
+            raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
+        tan = vec / edge_len[:, None]
+        h_e = edge_len / counts.astype(np.float64)
+        n_segs = int(counts.sum())
+        edge_of_seg = np.repeat(np.arange(counts.size, dtype=np.int64), counts)
+        seg_start = np.zeros(counts.size + 1, dtype=np.int64)
+        np.cumsum(counts, out=seg_start[1:])
+        i_in_edge = np.arange(n_segs, dtype=np.int64) - seg_start[:-1][edge_of_seg]
+        step = 1.0 / counts.astype(np.float64)
+        frac_l = i_in_edge.astype(np.float64) * step[edge_of_seg]
+        i_r = i_in_edge + 1
+        frac_r = np.where(
+            i_r == counts[edge_of_seg],
+            1.0,
+            i_r.astype(np.float64) * step[edge_of_seg],
+        )
+        seg_l = p0[edge_of_seg] + frac_l[:, None] * vec[edge_of_seg]
+        seg_r = p0[edge_of_seg] + frac_r[:, None] * vec[edge_of_seg]
+        seg_c = 0.5 * (seg_l + seg_r)
+        seg_t = tan[edge_of_seg]
+        seg_h = h_e[edge_of_seg]
+        segs_per_wire = np.zeros(edges_per_wire.size, dtype=np.int64)
+        if counts.size:
+            np.add.at(
+                segs_per_wire,
+                np.repeat(np.arange(edges_per_wire.size), edges_per_wire),
+                counts,
+            )
+        ends = np.cumsum(segs_per_wire)
+        wire_first_seg: list[int] = (ends - segs_per_wire).tolist()
+        wire_last_seg: list[int] = (ends - 1).tolist()
         n_segs = seg_l.shape[0]
 
         # Per-segment N^- / N^+ neighbours — built directly as flat arrays
@@ -2313,19 +2322,22 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         np_sigma_chunks: list[np.ndarray] = []
 
         # In-wire neighbours: per wire, segs [first+1..last] each get nm
-        # = (i-1, +1) and segs [first..last-1] each get np = (i+1, +1).
-        # Two np.arange pairs per wire instead of an n_segs Python loop.
-        for w_idx in range(len(self.wires_polylines)):
-            first = wire_first_seg[w_idx]
-            last = wire_last_seg[w_idx]
-            if last > first:
-                m = last - first
-                nm_basis_chunks.append(np.arange(first + 1, last + 1, dtype=np.int64))
-                nm_seg_chunks.append(np.arange(first, last, dtype=np.int64))
-                nm_sigma_chunks.append(np.ones(m, dtype=np.int8))
-                np_basis_chunks.append(np.arange(first, last, dtype=np.int64))
-                np_seg_chunks.append(np.arange(first + 1, last + 1, dtype=np.int64))
-                np_sigma_chunks.append(np.ones(m, dtype=np.int8))
+        # = (i-1, +1) and segs [first..last-1] each get np = (i+1, +1): every
+        # segment but a wire's first (last), in order, as one array each.
+        not_first = np.ones(n_segs, dtype=bool)
+        not_last = np.ones(n_segs, dtype=bool)
+        if n_segs:
+            not_first[np.asarray(wire_first_seg, dtype=np.int64)] = False
+            not_last[np.asarray(wire_last_seg, dtype=np.int64)] = False
+        nm_b = np.flatnonzero(not_first).astype(np.int64)
+        np_b = np.flatnonzero(not_last).astype(np.int64)
+        if nm_b.size:
+            nm_basis_chunks.append(nm_b)
+            nm_seg_chunks.append(nm_b - 1)
+            nm_sigma_chunks.append(np.ones(nm_b.size, dtype=np.int8))
+            np_basis_chunks.append(np_b)
+            np_seg_chunks.append(np_b + 1)
+            np_sigma_chunks.append(np.ones(np_b.size, dtype=np.int8))
 
         # Junctions AT the ground plane (#151): NEC's conect() connects a
         # ground-touching end to ground ONLY — it never searches for real
