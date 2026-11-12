@@ -254,7 +254,7 @@ from ..._far_readout import (
     pattern_fields,
 )
 from ..._ground_spec import ground_touch_tol as _ground_touch_tol
-from ... import _lapack
+from ... import _lapack, _mesh_walk
 from ..._near_readout import (
     NEAR_FIELD_SUBDIV,
     near_field_at,
@@ -2582,17 +2582,14 @@ class DeckSolver:
 
     def _element_match_uncached(self, solver):
         """`_element_match`'s search, every call (see there)."""
-        mids, dirs = [], []
-        for w_idx, polyline in enumerate(solver.wires_polylines):
-            parts = []
-            for i, n_e in enumerate(solver.n_per_edge_per_wire[w_idx]):
-                seg = np.linspace(polyline[i], polyline[i + 1], n_e + 1)
-                parts.append(seg if i == 0 else seg[1:])
-            knots = np.vstack(parts)
-            mids.append(0.5 * (knots[1:] + knots[:-1]))
-            dirs.append(knots[1:] - knots[:-1])
-        mids = np.concatenate(mids, axis=0)
-        dirs = np.concatenate(dirs, axis=0)
+        # The knot walk over every wire at once (`_mesh_walk`, bit for bit
+        # the per-edge linspace walk), each element its knots' mean and chord.
+        knots, offs = _mesh_walk.wire_knots(
+            solver.wires_polylines, solver.n_per_edge_per_wire
+        )
+        lo, hi = _mesh_walk.interior_pairs(offs)
+        mids = 0.5 * (knots[hi] + knots[lo])
+        dirs = knots[hi] - knots[lo]
 
         wanted = np.array([s.centre for s in self.segments])
         wanted_dir = np.array([s.direction for s in self.segments])
@@ -2617,11 +2614,12 @@ class DeckSolver:
         """Flatten a per-wire, per-KNOT array into one value per element, as
         the mean of the element's two end knots — momwire's own element
         convention, and the one `_segment_currents` has always used."""
-        vals = []
-        for w_idx in range(len(solver.wires_polylines)):
-            v = np.asarray(per_wire[w_idx])
-            vals.append(0.5 * (v[1:] + v[:-1]))
-        return np.concatenate(vals, axis=0)
+        per_wire = [np.asarray(per_wire[w]) for w in range(len(solver.wires_polylines))]
+        offs = np.zeros(len(per_wire) + 1, dtype=np.int64)
+        np.cumsum([v.shape[0] for v in per_wire], out=offs[1:])
+        v = np.concatenate(per_wire, axis=0)
+        lo, hi = _mesh_walk.interior_pairs(offs)
+        return 0.5 * (v[hi] + v[lo])
 
     def _segment_currents(self, solver, coeffs) -> np.ndarray:
         """Per NEC segment (global order), the midpoint current signed along
@@ -2638,12 +2636,20 @@ class DeckSolver:
         vals = self._element_values(
             solver, solver.currents_at_knots(coeffs, _solved=True)
         )
-        out = np.empty(len(self.segments), dtype=np.complex128)
-        for i, seg in enumerate(self.segments):
-            j = nearest[i]
-            sign = 1.0 if float(dot3(dirs[j], seg.direction)) >= 0 else -1.0
-            out[i] = sign * vals[j]
-        return out
+        return self._segment_signs(solver) * vals[nearest]
+
+    def _segment_signs(self, solver) -> np.ndarray:
+        """Per NEC segment, +1.0 where its matched element runs along the
+        deck's p1→p2 direction and -1.0 where it runs against it: geometry
+        alone, so held with `_element_match`'s map (the same key)."""
+        nearest, dirs = self._element_match(solver)
+        held = getattr(self, "_segment_signs_held", None)
+        if held is not None and held[0] is nearest:
+            return held[1]
+        authored = np.array([seg.direction for seg in self.segments], dtype=np.float64)
+        signs = np.where(dot3(dirs[nearest], authored) >= 0, 1.0, -1.0)
+        self._segment_signs_held = (nearest, signs)
+        return signs
 
     def _segment_charges(self, solver, coeffs, omega: float) -> np.ndarray:
         """Per NEC segment, the linear charge density at its centre, C/m
@@ -2671,16 +2677,23 @@ class DeckSolver:
         pins the pair rather than asserting an invariance that is not there.
         """
         nearest, _dirs = self._element_match(solver)
-        centres = []
-        for w_idx in range(len(solver.wires_polylines)):
-            arc = _wire_arc_at_knot(solver, w_idx)
-            centres.append(0.5 * (arc[:-1] + arc[1:]))
+        # Every wire's `_wire_arc_at_knot` at once (`_mesh_walk`, bit for
+        # bit), each element's centre the mean of its two knots' arcs.
+        knots, offs = _mesh_walk.wire_knots(
+            solver.wires_polylines, solver.n_per_edge_per_wire
+        )
+        arc = _mesh_walk.wire_arcs(knots, offs)
+        lo, hi = _mesh_walk.interior_pairs(offs)
+        mid_arc = 0.5 * (arc[lo] + arc[hi])
+        e_off = offs - np.arange(offs.size, dtype=np.int64)
+        e_off[0] = 0
+        centres = [mid_arc[a:b] for a, b in zip(e_off[:-1], e_off[1:])]
         slopes = solver.current_slopes(
             coeffs, centres, _solved=True
         )  # solved wires, as walked (momwire#1042)
         flat = np.concatenate([np.asarray(s) for s in slopes], axis=0)
         charges = -flat / (1j * omega)
-        table = np.asarray([charges[nearest[i]] for i in range(len(self.segments))])
+        table = charges[np.asarray(nearest[: len(self.segments)])]
         # Snap the symmetry residual at the source (see `_CHARGE_RESIDUAL_FLOOR`):
         # a charge under the floor is exactly 0+0j, which prints as
         # `0.0000E+00` with phase `0.000` in every process.
