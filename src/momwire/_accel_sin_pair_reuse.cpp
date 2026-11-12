@@ -24,7 +24,8 @@
 // `-=`. The reduction is `reduce_phi_band`'s (`_accel_phi_reduce.cpp`)
 // written out again: per output element a zero plus its column's stored
 // entries of M in stored order, one unfused multiply-add each, then
-// `(A + B) + C`. Rows are independent, so the thread count moves nothing.
+// `(A + B) + C`. Rows are independent, so the thread count moves nothing;
+// LANES rows share each step of the walk over M, each its own chain.
 // `-ffp-contract=off` (setup.py) and the MSVC pragmas below keep every
 // product and sum its own rounding. Gated bit for bit against scatter +
 // reduce_phi_band (tests/test_sin_pair_reuse_1916.py).
@@ -86,21 +87,30 @@ static Block block_of(const I32 &cls, const C128 &rep, const I64 &near_idx,
     return b;
 }
 
-// Row r's three Φ rows, de-interleaved into x[0..2] (each n_src complex):
-// the take, then the near pairs over it.
-static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, double *x[3]) {
+// Observer rows reduced together: the reduction's every step is done for
+// LANES rows at once on the same M entry, each row's chain exactly as
+// `reduce_phi_band` runs it, so a lane is that kernel's arithmetic and the
+// compiler may put the lanes in one vector register. That is the whole
+// reason for the layout below; it moves no operation within a chain.
+static constexpr int LANES = 4;
+
+// Row r's three Φ rows into lane `l` of x[0..2], each laid out
+// [source n][re, im][lane]: the take, then the near pairs over it.
+static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, int l,
+                       double *x[3]) {
     const int32_t *c = b.cls + r * n_src;
     const int64_t hi = b.n_cls - 1;
     for (py::ssize_t n = 0; n < n_src; ++n) {
         int64_t k = c[n];
         k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
         const double *v = b.rep + 6 * k;
-        x[0][2 * n] = v[0];
-        x[0][2 * n + 1] = v[1];
-        x[1][2 * n] = v[2];
-        x[1][2 * n + 1] = v[3];
-        x[2][2 * n] = v[4];
-        x[2][2 * n + 1] = v[5];
+        const py::ssize_t at = 2 * LANES * n + l;
+        x[0][at] = v[0];
+        x[0][at + LANES] = v[1];
+        x[1][at] = v[2];
+        x[1][at + LANES] = v[3];
+        x[2][at] = v[4];
+        x[2][at + LANES] = v[5];
     }
     if (b.n_near == 0) return;
     const int64_t lo = static_cast<int64_t>(r) * n_src, up = lo + n_src;
@@ -109,12 +119,13 @@ static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, double 
     for (const int64_t *e = e0; e < e1; ++e) {
         const py::ssize_t n = static_cast<py::ssize_t>(*e - lo);
         const double *v = b.near_val + 6 * (e - b.near_idx);
-        x[0][2 * n] = v[0];
-        x[0][2 * n + 1] = v[1];
-        x[1][2 * n] = v[2];
-        x[1][2 * n + 1] = v[3];
-        x[2][2 * n] = v[4];
-        x[2][2 * n + 1] = v[5];
+        const py::ssize_t at = 2 * LANES * n + l;
+        x[0][at] = v[0];
+        x[0][at + LANES] = v[1];
+        x[1][at] = v[2];
+        x[1][at + LANES] = v[3];
+        x[2][at] = v[4];
+        x[2][at + LANES] = v[5];
     }
 }
 
@@ -182,45 +193,58 @@ static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 nea
         (void)n_threads;
 #endif
         if (nt < 1) nt = 1;
-        const size_t per = static_cast<size_t>(2 * n_src);
+        const size_t per = static_cast<size_t>(2 * LANES * n_src);
         const size_t blocks = has_image ? 6 : 3;
         std::vector<double> bufs(static_cast<size_t>(nt) * blocks * per);
+        const py::ssize_t tiles = (rows + LANES - 1) / LANES;
 #pragma omp parallel for schedule(static) num_threads(nt)
-        for (py::ssize_t r = 0; r < rows; ++r) {
+        for (py::ssize_t tile = 0; tile < tiles; ++tile) {
             int t = 0;
 #ifdef _OPENMP
             t = omp_get_thread_num();
 #endif
+            const py::ssize_t r0 = tile * LANES;
+            const int nl = static_cast<int>(std::min<py::ssize_t>(LANES, rows - r0));
             double *base = bufs.data() + static_cast<size_t>(t) * blocks * per;
             double *x[3] = {base, base + per, base + 2 * per};
-            gather_row(d, r, n_src, x);
+            // A short last tile's idle lanes compute on zeros, never stored.
+            if (nl < LANES) std::fill(base, base + blocks * per, 0.0);
+            for (int l = 0; l < nl; ++l) gather_row(d, r0 + l, n_src, l, x);
             if (has_image) {
                 double *y[3] = {base + 3 * per, base + 4 * per, base + 5 * per};
-                gather_row(im, r, n_src, y);
+                for (int l = 0; l < nl; ++l) gather_row(im, r0 + l, n_src, l, y);
                 // `Phi_c -= Phi_i[0]` (and the other two): per part.
                 for (int c = 0; c < 3; c++)
                     for (size_t q = 0; q < per; ++q) x[c][q] = x[c][q] - y[c][q];
             }
-            double *o = reinterpret_cast<double *>(O + r * os);
+            double *o[LANES];
+            for (int l = 0; l < LANES; ++l)
+                o[l] = reinterpret_cast<double *>(O + (r0 + std::min(l, nl - 1)) * os);
             for (py::ssize_t j = 0; j < cols; ++j) {
-                double sr[3], si[3];
+                double sr[3][LANES], si[3][LANES];
                 for (int c = 0; c < 3; c++) {
-                    double yr = 0.0, yi = 0.0;
+                    // reduce_phi_band's chain per lane: a zeroed y, then
+                    // `y += a * x` per stored entry, unfused.
+                    double yr[LANES], yi[LANES];
+                    for (int l = 0; l < LANES; ++l) yr[l] = 0.0, yi[l] = 0.0;
                     const Csc &m = M[c];
                     for (int64_t e = m.ptr[j]; e < m.ptr[j + 1]; ++e) {
                         const double ar = m.val[2 * e], ai = m.val[2 * e + 1];
-                        const double *xe = x[c] + 2 * m.ind[e];
-                        const double xr = xe[0], xi = xe[1];
-                        const double pr = ar * xr - ai * xi;
-                        const double pi = ar * xi + ai * xr;
-                        yr = yr + pr;
-                        yi = yi + pi;
+                        const double *xr = x[c] + 2 * LANES * m.ind[e];
+                        const double *xi = xr + LANES;
+                        for (int l = 0; l < LANES; ++l) {
+                            const double pr = ar * xr[l] - ai * xi[l];
+                            const double pi = ar * xi[l] + ai * xr[l];
+                            yr[l] = yr[l] + pr;
+                            yi[l] = yi[l] + pi;
+                        }
                     }
-                    sr[c] = yr;
-                    si[c] = yi;
+                    for (int l = 0; l < LANES; ++l) sr[c][l] = yr[l], si[c][l] = yi[l];
                 }
-                o[2 * j] = (sr[0] + sr[1]) + sr[2];
-                o[2 * j + 1] = (si[0] + si[1]) + si[2];
+                for (int l = 0; l < nl; ++l) {
+                    o[l][2 * j] = (sr[0][l] + sr[1][l]) + sr[2][l];
+                    o[l][2 * j + 1] = (si[0][l] + si[1][l]) + si[2][l];
+                }
             }
         }
     }
