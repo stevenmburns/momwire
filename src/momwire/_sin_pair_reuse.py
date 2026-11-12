@@ -111,6 +111,14 @@ class Plan:
     rep_obs: np.ndarray  # (n_cls,) int64 the representative's observer segment
     near_flat: np.ndarray  # (n_near,) int64 sorted flat index m * N_src + n
     near_blocks: list  # (m0, m1, sources, row, col) per direct kernel call
+    # The canonical evaluation's inputs, k-independent, so built with the
+    # classes (momwire#1916): each class's source in the observer frame
+    # (`canonical_sources`), and the runs of classes sharing an observer
+    # radius, as (c0, c1, observer segment). Classes are numbered so that
+    # each run is contiguous.
+    eval_src_c: np.ndarray = None  # (n_cls, 3)
+    eval_src_t: np.ndarray = None  # (n_cls, 3)
+    eval_runs: list = None
 
     @property
     def n_near(self) -> int:
@@ -321,6 +329,16 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
     keys = [np.concatenate([r[0][j] for r in results]) for j in range(5)]
     gfirst, ginv = _group(keys)
     del keys
+    # Classes renumbered so those sharing an observer radius are contiguous
+    # (stable within a radius): `evaluate` then runs on slices. A class's
+    # members and value are unchanged; only its number moves.
+    rep_obs_g = np.concatenate([r[2] for r in results])[gfirst]
+    perm = np.argsort(obs_type[rep_obs_g], kind="stable")
+    renumber = np.empty(perm.size, dtype=np.int64)
+    renumber[perm] = np.arange(perm.size, dtype=np.int64)
+    ginv = renumber[ginv]
+    gfirst = gfirst[perm]
+    del renumber, rep_obs_g
     off = 0
     for (k, *_), i0 in zip(results, starts):
         i1 = min(M, i0 + rows)
@@ -331,13 +349,24 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
     rep_obs = np.concatenate([r[2] for r in results])[gfirst]
     rep_src = np.concatenate([r[3] for r in results])[gfirst]
     near_flat = np.concatenate([r[4] for r in results])  # sorted: bands in order
+    rep_obs = rep_obs.astype(np.int64)
+    eval_src_c, eval_src_t = canonical_sources(canon)
+    otype = obs_type[rep_obs]
+    cuts = np.flatnonzero(np.diff(otype)) + 1
+    edges = [0, *cuts.tolist(), int(otype.size)]
+    eval_runs = [
+        (c0, c1, int(rep_obs[c0])) for c0, c1 in zip(edges[:-1], edges[1:]) if c1 > c0
+    ]
     return Plan(
         cls=cls,
         canon=canon,
         rep_src=rep_src.astype(np.int64),
-        rep_obs=rep_obs.astype(np.int64),
+        rep_obs=rep_obs,
         near_flat=near_flat,
         near_blocks=near_blocks(near_flat, N, a_obs),
+        eval_src_c=np.ascontiguousarray(eval_src_c),
+        eval_src_t=np.ascontiguousarray(eval_src_t),
+        eval_runs=eval_runs,
     )
 
 
@@ -367,16 +396,16 @@ def near_blocks(near_flat, n_src, a_obs, rows=None):
 
 
 def evaluate_near(plan, direct):
-    """The near pairs' Φ, (3, n_near): `direct(m0, m1, ns)` is the shipped
+    """The near pairs' Φ, (n_near, 3): `direct(m0, m1, ns)` is the shipped
     kernel on observer rows m0:m1 against source segments `ns`, in the
     original frame."""
-    out = np.empty((3, plan.n_near), dtype=np.complex128)
+    out = np.empty((plan.n_near, 3), dtype=np.complex128)
 
     def one(block):
         m0, m1, ns, r, c, p0, p1 = block
         phis = direct(m0, m1, ns)
         for sh in range(3):
-            out[sh, p0:p1] = np.asarray(phis[sh])[r, c]
+            out[p0:p1, sh] = np.asarray(phis[sh])[r, c]
 
     _run(one, plan.near_blocks)
     return out
@@ -408,31 +437,32 @@ def canonical_sources(canon):
     return -rv, t
 
 
-def evaluate(plan, call, obs_type):
-    """Φ per class: (3, n_cls) complex. `call(src_c, src_t, ns, g_obs)` runs
+def evaluate(plan, call, obs_type=None):
+    """Φ per class: (n_cls, 3) complex. `call(src_c, src_t, ns, g_obs)` runs
     the kernel for the canonical observer at observer segment `g_obs`'s
     radius against canonical sources standing for source segments `ns`,
-    returning its (3, 1, len(ns)) tuple."""
-    out = np.empty((3, plan.n_classes), dtype=np.complex128)
-    src_c, src_t = canonical_sources(plan.canon)
-    otype = obs_type[plan.rep_obs]
-    pieces = []
-    for t in np.unique(otype):
-        idx = np.flatnonzero(otype == t)
-        g_obs = int(plan.rep_obs[idx[0]])
-        for c0 in range(0, idx.size, EVAL_CHUNK):
-            pieces.append((idx[c0 : c0 + EVAL_CHUNK], g_obs))
+    returning its (3, 1, len(ns)) tuple.
+
+    The plan carries the canonical sources and the radius runs
+    (`build_plan`), so each call is on slices of them and writes a slice:
+    the Python around the kernel, which holds the GIL and so ran one worker
+    at a time, is a few views per call (momwire#1916). `obs_type` is
+    unused, the runs being the plan's. Calls are `EVAL_CHUNK` sources, small
+    enough that a worker's kernel scratch stays in its core's cache."""
+    del obs_type
+    out = np.empty((plan.n_classes, 3), dtype=np.complex128)
+    src_c, src_t, rep_src = plan.eval_src_c, plan.eval_src_t, plan.rep_src
+    pieces = [
+        (c0, min(c1, c0 + EVAL_CHUNK), g_obs)
+        for r0, c1, g_obs in plan.eval_runs
+        for c0 in range(r0, c1, EVAL_CHUNK)
+    ]
 
     def one(piece):
-        idx, g_obs = piece
-        phis = call(
-            np.ascontiguousarray(src_c[idx]),
-            np.ascontiguousarray(src_t[idx]),
-            plan.rep_src[idx],
-            g_obs,
-        )
+        c0, c1, g_obs = piece
+        phis = call(src_c[c0:c1], src_t[c0:c1], rep_src[c0:c1], g_obs)
         for sh in range(3):
-            out[sh, idx] = phis[sh][0]
+            out[c0:c1, sh] = phis[sh][0]
 
     _run(one, pieces)
     return out
@@ -450,15 +480,68 @@ def scatter(rep, plan, rows, near=None):
 
     def take(piece):
         s, r = piece
-        np.take(rep[s], c[r : r + step], out=out[s][r : r + step], mode="clip")
+        np.take(rep[:, s], c[r : r + step], out=out[s][r : r + step], mode="clip")
 
     _run(take, pieces)
     if near is not None and plan.n_near:
-        n_src = c.shape[1]
-        p0, p1 = np.searchsorted(plan.near_flat, [i0 * n_src, i1 * n_src])
-        local = plan.near_flat[p0:p1] - i0 * n_src
+        local, vals = _band_near(plan, rows, near)
         for sh in range(3):
-            out[sh].reshape(-1)[local] = near[sh, p0:p1]
+            out[sh].reshape(-1)[local] = vals[:, sh]
+    return out
+
+
+def _band_near(plan, rows, near):
+    """The band's near pairs: band-local flat indices and their (k, 3) Φ."""
+    i0, i1 = rows
+    n_src = plan.cls.shape[1]
+    p0, p1 = np.searchsorted(plan.near_flat, [i0 * n_src, i1 * n_src])
+    return plan.near_flat[p0:p1] - i0 * n_src, near[p0:p1]
+
+
+_HAVE_REDUCE = _acc is not None and bool(getattr(_acc, "pair_reuse_reduce_1916", False))
+
+
+def reduce_takes(Ms, out):
+    """Whether `reduce_band` can take this band: the fused kernel is built,
+    and the reduction is `reduce_phi_band`'s sparse regime (CSC complex128
+    Ms) into complex128 rows."""
+    import scipy.sparse
+
+    if not _HAVE_REDUCE or out.ndim != 2 or out.dtype != np.complex128:
+        return False
+    if out.shape[1] > 1 and out.strides[1] != 16:
+        return False
+    return all(
+        isinstance(M, scipy.sparse.csc_matrix)
+        and M.dtype == np.complex128
+        and M.shape[1] == out.shape[1]
+        for M in Ms
+    )
+
+
+def reduce_band(blocks, rows, Ms, out):
+    """`out = Φ₀@M₀ + Φ₁@M₁ + Φ₂@M₂` for the band, Φ gathered by class
+    inside the reduction and never materialised (`_accel_sin_pair_reuse.cpp`),
+    the bits of `scatter` then `reduce_phi_band`. `blocks` is
+    `[(plan, rep, near)]`: the direct block, then the PEC image's, which is
+    subtracted. Call only where `reduce_takes`."""
+    i0, i1 = rows
+    args = []
+    for plan, rep, near in blocks:
+        local, vals = _band_near(plan, rows, near)
+        args.append(
+            (
+                plan.cls[i0:i1],
+                rep,
+                np.ascontiguousarray(local, dtype=np.int64),
+                np.ascontiguousarray(vals),
+            )
+        )
+    m_args = []
+    for M in Ms:
+        m_args += [M.indptr, M.indices, M.data]
+    image = args[1] if len(args) > 1 else None
+    _acc.pair_reuse_reduce_band(out, *args[0], image, *m_args)
     return out
 
 

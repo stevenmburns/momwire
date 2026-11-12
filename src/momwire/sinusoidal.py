@@ -6721,6 +6721,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # at the top of each chunk (momwire#1337 phase 2).
         for i0, i1 in _schedule.chunks(spans, chunk, self._checkpoint):
             rows = (i0, i1)
+            if reuse is not None and reuse.reduce_into(
+                rows,
+                (M_A, M_B, M_C),
+                G[i0:i1] if obs_rows is None else G[at : at + (i1 - i0)],
+                fg is not None,
+            ):
+                # momwire#1916: the classes gathered inside the reduction,
+                # the bits of the band below, no per-pair Φ materialised.
+                if obs_rows is not None:
+                    at += i1 - i0
+                continue
             if reuse is None:
                 Phi_c, Phi_s, Phi_co = self._field_tensor(
                     geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
@@ -6956,7 +6967,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             blocks[block] = (plan, src_c, src_t)
             return blocks[block]
 
-        def serve(block, rows):
+        def values(block):
             plan, src_c, src_t = plan_for(block)
             rep = rep_cache.get(block)
             if rep is None:
@@ -6973,9 +6984,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     )
 
                 rep = rep_cache[block] = (
-                    _pr.evaluate(plan, canonical, obs_type),
+                    _pr.evaluate(plan, canonical),
                     _pr.evaluate_near(plan, direct_rows),
                 )
+            return plan, rep
+
+        def reduce_into(rows, Ms, dst, image):
+            # The fused gather + reduction where it applies; verify checks
+            # materialised Φ, so it takes the band path below.
+            if self._pair_reuse_verify or not _pr.reduce_takes(Ms, dst):
+                return False
+            parts = [values("direct")] + ([values("image")] if image else [])
+            _pr.reduce_band([(p, r[0], r[1]) for p, r in parts], rows, Ms, dst)
+            return True
+
+        def serve(block, rows):
+            plan, rep = values(block)
+            src_c, src_t = blocks[block][1:]
             phis = _pr.scatter(rep[0], plan, rows, rep[1])
             if self._pair_reuse_verify:
 
@@ -6994,6 +7019,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self.pair_reuse_verify_max = max(self.pair_reuse_verify_max, worst)
             return phis
 
+        serve.reduce_into = reduce_into
         return serve
 
     def _nec4_cap_columns(self, G, geom, k, seg_view, fg, eta):
