@@ -112,6 +112,8 @@ def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
     ``ValueError`` naming the group, both ends, the distance and the
     tolerance; returns None on success.
     """
+    if _junctions_coincide(wires_polylines, n_per_edge_per_wire, junctions):
+        return
     for j, group in enumerate(junctions):
         anchors = []
         seg_lens = []
@@ -136,6 +138,57 @@ def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
                     f"shortest terminal segment; a junction group must name "
                     f"ONE point - momwire#522)"
                 )
+
+
+def _junctions_coincide(wires_polylines, n_per_edge_per_wire, junctions):
+    """True when every group passes `check_junction_coincidence`, decided
+    over every member at once (momwire#1916 part D: the ELT whip's ~7,000
+    members cost ~0.03 s a solver as a loop); False means "ask the loop",
+    which then names the failing group or fails as it always did.
+
+    The same arithmetic per member: `norm3`'s length of the terminal edge
+    over its count (at least 1), the group's tolerance from the smallest,
+    and `norm3` of each member's offset from the group's first."""
+    if any(len(group) == 0 for group in junctions):
+        return False
+    members = [m for group in junctions for m in group]
+    if not members:
+        return True
+    try:
+        pls = [wires_polylines[w] for w, _end in members]
+        if any(
+            not isinstance(pl, np.ndarray)
+            or pl.dtype != np.float64
+            or pl.ndim != 2
+            or pl.shape[0] < 2
+            or pl.shape[1] != 3
+            for pl in pls
+        ):
+            return False
+        start = [end == "start" for _w, end in members]
+        anchor = np.array([pl[0] if s else pl[-1] for pl, s in zip(pls, start)])
+        edge = np.array(
+            [pl[1] - pl[0] if s else pl[-1] - pl[-2] for pl, s in zip(pls, start)]
+        )
+        count = np.array(
+            [
+                max(int(n_per_edge_per_wire[w][0 if s else -1]), 1)
+                for (w, _end), s in zip(members, start)
+            ],
+            dtype=np.float64,
+        )
+    except (IndexError, TypeError, ValueError):
+        return False
+    seg_len = norm3(edge) / count
+    sizes = np.array([len(group) for group in junctions], dtype=np.int64)
+    first = np.zeros(sizes.size, dtype=np.int64)
+    np.cumsum(sizes[:-1], out=first[1:])
+    tol = np.maximum(
+        _JUNCTION_COINCIDENCE_FLOOR, 1e-3 * np.minimum.reduceat(seg_len, first)
+    )
+    group_of = np.repeat(np.arange(sizes.size), sizes)
+    dist = norm3(anchor - anchor[first][group_of])
+    return bool(np.all(dist <= tol[group_of]))
 
 
 def normalize_junctions(junctions, wires_polylines, n_per_edge_per_wire):
@@ -349,10 +402,18 @@ def _vertex_keys(pls):
     coordinate exactly as the per-wire call does; the keys hold Python
     floats where `_vertex_key`'s hold numpy scalars of the same values, which
     hash and compare identically, so the buckets are the same buckets."""
-    if not pls or any(pl.ndim != 2 or pl.shape != pls[0].shape for pl in pls):
+    if not pls or any(pl.ndim != 2 for pl in pls):
         return None
-    rounded = np.round(np.array(pls), 9).tolist()
-    return [tuple(tuple(v) for v in verts) for verts in rounded]
+    # One stack per shape (a deck mixes straight wires and polylines).
+    keys = [None] * len(pls)
+    by_shape: dict = {}
+    for i, pl in enumerate(pls):
+        by_shape.setdefault(pl.shape, []).append(i)
+    for idx in by_shape.values():
+        rounded = np.round(np.array([pls[i] for i in idx]), 9).tolist()
+        for i, verts in zip(idx, rounded):
+            keys[i] = tuple(tuple(v) for v in verts)
+    return keys
 
 
 def find_duplicated_wires(wires_polylines):
@@ -379,7 +440,10 @@ def find_duplicated_wires(wires_polylines):
     good = [pl for pl in pls if pl.ndim == 2 and pl.size]
     if not good:
         return []
-    tol = 1e-12 * max(1.0, max(float(np.max(np.abs(pl))) for pl in good))
+    # The largest |coordinate| of any wire: one max over all of them.
+    tol = 1e-12 * max(
+        1.0, float(np.max(np.abs(np.concatenate([pl.ravel() for pl in good]))))
+    )
     seen, out = {}, []
     keys = _vertex_keys(pls)
     for i, pl in enumerate(pls):
@@ -793,29 +857,6 @@ def _segment_lengths(polyline, npe):
     return np.repeat(lengths / np.asarray(npe, dtype=float), np.asarray(npe))
 
 
-def _straight_segment_lengths(wires_polylines, n_per_edge_per_wire):
-    """`_segment_lengths` of every wire, from one array expression, when every
-    wire is a single straight edge (every EZNEC card); else ``None``
-    (momwire#1420). The edge length is `norm3`'s, as in the per-wire call,
-    and each segment that length over the edge's count, so every entry is the
-    per-wire call's, bit for bit."""
-    pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
-    counts = [np.asarray(npe) for npe in n_per_edge_per_wire]
-    if (
-        not pls
-        or len(counts) != len(pls)
-        or any(pl.shape != (2, 3) for pl in pls)
-        or any(c.shape != (1,) for c in counts)
-    ):
-        return None
-    stacked = np.array(pls)
-    d = stacked[:, 1] - stacked[:, 0]
-    lengths = norm3(d)
-    n = np.array([c[0] for c in counts])
-    per = lengths / n.astype(float)
-    return [np.repeat(per[w : w + 1], counts[w]) for w in range(len(pls))]
-
-
 def gap_past_floor(polyline, npe, a, where, floor, depth):
     """``(fires, delta/a, span/a)`` for a gap at `where` on one wire: an
     arclength from the first vertex (None: the midpoint), or "start"/"end"
@@ -1025,17 +1066,71 @@ _SHORT_SEGMENT_SLACK = 1e-9
 _SHORT_SEGMENT_NAMED = 4
 
 
+def _short_segment_wires_at_once(wires_polylines, n_per_edge_per_wire, radius_per_wire):
+    """`short_segment_wires` over every edge at once, or None (the loop then
+    answers) for a spec that is not one (E+1, 3) float polyline and E counts
+    per wire (momwire#1420 for single-edge wires, momwire#1916 part D for
+    polylines: the ELT whip mixes the two).
+
+    A wire's segments are its edges' `norm3` lengths over their counts, each
+    repeated count times, so its short count is the sum of the counts of its
+    short edges and its shortest segment its shortest edge with a count: the
+    loop's numbers from the same divisions, without materialising them."""
+    n = min(len(wires_polylines), len(n_per_edge_per_wire))
+    pls = [wires_polylines[w] for w in range(n)]
+    try:
+        counts = [np.asarray(n_per_edge_per_wire[w]) for w in range(n)]
+        if any(
+            not isinstance(pl, np.ndarray)
+            or pl.dtype != np.float64
+            or pl.ndim != 2
+            or pl.shape[1] != 3
+            or pl.shape[0] < 2
+            or c.shape != (pl.shape[0] - 1,)
+            or c.dtype.kind not in "iu"
+            for pl, c in zip(pls, counts)
+        ):
+            return None
+        a = np.array([float(radius_per_wire[w]) for w in range(n)], dtype=np.float64)
+    except (IndexError, TypeError, ValueError):
+        return None
+    if n == 0:
+        return []
+    edges = np.array([pl.shape[0] - 1 for pl in pls], dtype=np.int64)
+    p0 = np.concatenate([pl[:-1] for pl in pls], axis=0)
+    p1 = np.concatenate([pl[1:] for pl in pls], axis=0)
+    npe = np.concatenate(counts).astype(np.int64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        h = norm3(p1 - p0) / npe.astype(float)
+    wire_of = np.repeat(np.arange(n), edges)
+    limit = SHORT_SEGMENT_FLOOR * a * (1.0 - _SHORT_SEGMENT_SLACK)
+    n_short = np.zeros(n, dtype=np.int64)
+    np.add.at(n_short, wire_of, np.where(h < limit[wire_of], npe, 0))
+    shortest = np.full(n, np.inf)
+    np.minimum.at(shortest, wire_of[npe > 0], h[npe > 0])
+    found = [
+        (w, float(shortest[w] / a[w]), int(n_short[w]))
+        for w in np.flatnonzero((a > 0.0) & (n_short > 0)).tolist()
+    ]
+    found.sort(key=lambda t: (t[1], t[0]))
+    return found
+
+
 def short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire):
     """``[(wire, shortest delta/a, n_short_segments)]`` for every wire with a
     segment under `SHORT_SEGMENT_FLOOR` radii, worst first. Reads the mesh the
     solver will solve: each edge split into its own segment count."""
+    found = _short_segment_wires_at_once(
+        wires_polylines, n_per_edge_per_wire, radius_per_wire
+    )
+    if found is not None:
+        return found
     found = []
-    straight = _straight_segment_lengths(wires_polylines, n_per_edge_per_wire)
     for w, (pl, npe) in enumerate(zip(wires_polylines, n_per_edge_per_wire)):
         a = float(radius_per_wire[w])
         if a <= 0.0:
             continue
-        h = straight[w] if straight is not None else _segment_lengths(pl, npe)
+        h = _segment_lengths(pl, npe)
         limit = SHORT_SEGMENT_FLOOR * a * (1.0 - _SHORT_SEGMENT_SLACK)
         n_short = int(np.count_nonzero(h < limit))
         if n_short:
