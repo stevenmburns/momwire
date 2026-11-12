@@ -537,17 +537,59 @@ def solve(a, b):
             if info > 0:
                 raise np.linalg.LinAlgError("singular matrix")
             raise ValueError(f"illegal value in argument {-info} of getrf")
-        x, info = getrs(lu, ipiv, x, overwrite_b=True)
+        cond = _gecon_beside(gecon, lu, anorm) if n >= _GECON_BESIDE_MIN_N else None
+        try:
+            x, info = getrs(lu, ipiv, x, overwrite_b=True)
+        finally:
+            rcond = None if cond is None else cond()
         if info != 0:
             raise ValueError(f"illegal value in argument {-info} of getrs")
+        if rcond is not None:
+            return _warn_ill(rcond, dtype, x.reshape(b0.shape))
     rcond, _info = gecon(lu, anorm, norm="1")
+    return _warn_ill(rcond, dtype, x.reshape(b0.shape))
+
+
+#: At and above this order the no-host `solve` runs gecon on a second
+#: thread beside getrs (momwire#1916). Both only read the factors, so neither
+#: moves the other's bits; gecon is single-threaded, so it costs a core for
+#: as long as getrs takes, which then costs nothing: 0.09 s of gecon and
+#: 0.01-0.025 s of getrs per whip frequency (n = 4392, Rocketlake 8T).
+_GECON_BESIDE_MIN_N = 1024
+
+
+def _gecon_beside(gecon, lu, anorm):
+    """Start `gecon(lu, anorm, norm="1")` on a thread; returns the join,
+    which gives rcond, or None where the thread raised (the caller then runs
+    gecon itself, so its error is the caller's)."""
+    box = {}
+
+    def run():
+        try:
+            box["rcond"] = gecon(lu, anorm, norm="1")[0]
+        except Exception:  # noqa: BLE001 - the caller reruns gecon and sees it
+            pass
+
+    t = threading.Thread(target=run, name="momwire-gecon", daemon=True)
+    t.start()
+
+    def join():
+        t.join()
+        return box.get("rcond")
+
+    return join
+
+
+def _warn_ill(rcond, dtype, x):
+    """`solve`'s ill-conditioning warning, as scipy.linalg.solve raises it
+    (named at `solve`'s caller); returns `x`."""
     if rcond < np.finfo(dtype).eps:
         warnings.warn(
             f"An ill-conditioned matrix detected: rcond = {rcond:.6g}.",
             LinAlgWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
-    return x.reshape(b0.shape)
+    return x
 
 
 # ---------------------------------------------------------------------------

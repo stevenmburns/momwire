@@ -170,3 +170,33 @@ def test_what_the_pass_cannot_take_goes_the_old_way(monkeypatch):
     ]:
         assert _lapack._solve_prep(arg, np.dtype(dtype)) is None
     assert _lapack._solve_prep(a, np.dtype(np.complex128)) is not None
+
+
+@pytest.mark.parametrize("case", ["fine", "ill", "fine, many rhs"])
+def test_gecon_beside_getrs_is_the_serial_solve(case, monkeypatch):
+    """At n >= `_GECON_BESIDE_MIN_N` the no-host solve runs gecon on a second
+    thread beside getrs: the same answer, the same warning."""
+    monkeypatch.setattr(_lapack, "_host_for", lambda dtype: None)
+    rng = np.random.default_rng(5)
+    n = _lapack._GECON_BESIDE_MIN_N + 37
+    if case == "ill":
+        a = _ill(rng, n, np.complex128)
+    else:
+        a = _rand(rng, (n, n), np.complex128) + n * np.eye(n)
+    b = _rand(rng, (n, 3) if "many" in case else (n,), np.complex128)
+    started = []
+    real = _lapack._gecon_beside
+
+    def spy(*a):
+        started.append(1)
+        return real(*a)
+
+    monkeypatch.setattr(_lapack, "_gecon_beside", spy)
+    beside = _outcome(_lapack.solve, a, b)
+    assert started == [1]
+    monkeypatch.setattr(_lapack, "_GECON_BESIDE_MIN_N", 10**9)
+    serial = _outcome(_lapack.solve, a, b)
+    assert started == [1]
+    assert beside[1:] == serial[1:]
+    assert beside[0].tobytes() == serial[0].tobytes()
+    assert beside[2] == (["LinAlgWarning"] if case == "ill" else [])
