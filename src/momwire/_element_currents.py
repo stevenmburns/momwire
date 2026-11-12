@@ -20,7 +20,7 @@ this mixin unchanged along with it.
 from __future__ import annotations
 
 import numpy as np
-from ._vec3 import norm3
+from . import _mesh_walk
 
 
 class _ElementCurrents:
@@ -99,38 +99,44 @@ class _ElementCurrents:
                 list(per_edge), lambda r, v, rev: list(v)[::-1] if rev else v
             )
 
-        fine: list[np.ndarray] = []
-        arcs: list[np.ndarray] = []
-        for polyline, npe in zip(polylines, per_edge):
-            parts = []
-            for i, n_e in enumerate(npe):
-                seg = np.linspace(polyline[i], polyline[i + 1], n_e * subdiv + 1)
-                parts.append(seg if i == 0 else seg[1:])
-            knots = np.vstack(parts)
-            fine.append(knots)
+        # The knot walk over every edge of every wire at once
+        # (`_mesh_walk.wire_knots`, bit for bit the per-edge linspace walk).
+        knots, offs = _mesh_walk.wire_knots(polylines, per_edge, subdiv)
+        if subdiv == 1:
+            # The mesh knots by name, so the sample positions are the
+            # solver's own, bit for bit.
+            currents = self.currents_at_knots(coeffs, None)
+        else:
             # Arc measured along the CHORDS, matching how both families
-            # accumulate `arc_at_knot` from the per-segment lengths. Only the
-            # subdiv > 1 path uses it; subdiv == 1 asks for the mesh knots by
-            # name so the sample positions are the solver's own, bit for bit.
-            step = norm3(knots[1:] - knots[:-1])
-            arcs.append(np.concatenate([[0.0], np.cumsum(step)]))
-
-        currents = self.currents_at_knots(coeffs, None if subdiv == 1 else arcs)
-
-        mids, moments, nodes, deltas = [], [], [], []
-        for knots, cur in zip(fine, currents, strict=True):
-            cur = np.asarray(cur)
-            element = 0.5 * (cur[1:] + cur[:-1])
-            mids.append(0.5 * (knots[1:] + knots[:-1]))
-            moments.append(element[:, None] * (knots[1:] - knots[:-1]))
-            nodes.append(knots)
-            zero = np.zeros(1, dtype=np.complex128)
-            deltas.append(
-                np.concatenate([zero, element]) - np.concatenate([element, zero])
+            # accumulate `arc_at_knot` from the per-segment lengths.
+            arc = _mesh_walk.wire_arcs(knots, offs)
+            currents = self.currents_at_knots(
+                coeffs, [arc[a:b] for a, b in zip(offs[:-1], offs[1:])]
             )
-        return (
-            np.concatenate(mids, axis=0),
-            np.concatenate(moments, axis=0),
-            np.concatenate(nodes, axis=0),
-            np.concatenate(deltas, axis=0),
+        if len(currents) != offs.size - 1:
+            raise ValueError(
+                f"currents_at_knots answered {len(currents)} wires for "
+                f"{offs.size - 1} walked"
+            )
+        cur = (
+            np.concatenate([np.asarray(c) for c in currents])
+            if currents
+            else np.zeros(0, dtype=np.complex128)
         )
+        if cur.shape[0] != knots.shape[0]:
+            raise ValueError(
+                f"currents_at_knots answered {cur.shape[0]} knots for "
+                f"{knots.shape[0]} walked"
+            )
+        # Per wire: element = mean of its two end knots, mid the same of the
+        # knots, moment = element * chord, and the step at each knot (the
+        # current arriving minus the current leaving, 0 past either end).
+        lo, hi = _mesh_walk.interior_pairs(offs)
+        element = 0.5 * (cur[hi] + cur[lo])
+        mids = 0.5 * (knots[hi] + knots[lo])
+        moments = element[:, None] * (knots[hi] - knots[lo])
+        arriving = np.zeros(knots.shape[0], dtype=np.result_type(element, 0j))
+        leaving = np.zeros(knots.shape[0], dtype=arriving.dtype)
+        arriving[hi] = element
+        leaving[lo] = element
+        return mids, moments, knots, arriving - leaving
