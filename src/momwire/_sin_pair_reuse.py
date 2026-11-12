@@ -54,6 +54,8 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -103,6 +105,62 @@ VERIFY_SAMPLES = 512
 _HAVE_FACTORIZE = _acc is not None and bool(
     getattr(_acc, "exact_factorize_1224", False)
 )
+
+
+#: Bytes of plans the process keeps between solvers (`shared_plan`). A plan
+#: is mostly its int32 class map, 4 bytes per pair: the ELT whip's direct
+#: block is ~35 MB, so the budget holds a few decks' direct and image blocks.
+SHARED_PLAN_BYTES = 1 << 30
+
+_shared_plans: OrderedDict = OrderedDict()
+_shared_lock = threading.Lock()
+
+
+def plan_nbytes(plan) -> int:
+    """The arrays a plan holds, in bytes (its lists of slices are small)."""
+    return sum(
+        v.nbytes for v in vars(plan).values() if isinstance(v, np.ndarray)
+    ) + sum(
+        x.nbytes
+        for blk in plan.near_blocks
+        for x in blk
+        if isinstance(x, np.ndarray)
+    )
+
+
+def shared_plan(key, build):
+    """The plan for `key` from the process's cache, else `build()`'s, kept.
+
+    A plan holds no k, and its key is the geometry's bytes, so it outlives
+    the solver that found it: the portal builds one solver per frequency and
+    a design server one per knob turn back to a value, and each would pay the
+    census again with a per-instance cache (momwire#1916 part C). Plans are
+    never written after `build_plan` returns, so solvers share one object.
+    Least recently used first out past `SHARED_PLAN_BYTES`, the newest kept
+    whatever its size. Two threads missing the same key both build; the
+    second's plan replaces the first's, and either is the same classes.
+    """
+    with _shared_lock:
+        held = _shared_plans.get(key)
+        if held is not None:
+            _shared_plans.move_to_end(key)
+            return held[0]
+    plan = build()
+    size = plan_nbytes(plan)
+    with _shared_lock:
+        _shared_plans[key] = (plan, size)
+        _shared_plans.move_to_end(key)
+        total = sum(v[1] for v in _shared_plans.values())
+        while total > SHARED_PLAN_BYTES and len(_shared_plans) > 1:
+            _, (_, dropped) = _shared_plans.popitem(last=False)
+            total -= dropped
+    return plan
+
+
+def clear_shared_plans() -> None:
+    """Drop every kept plan (tests, and a caller done with its decks)."""
+    with _shared_lock:
+        _shared_plans.clear()
 
 
 class PairReuseMismatch(AssertionError):

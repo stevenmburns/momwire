@@ -6950,17 +6950,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if held is not None and held[0] == key:
                 plan = held[1]
             else:
-                self._sin_reuse_plans.pop(block, None)
-                plan = _pr.build_plan(
-                    seg_c,
-                    seg_t,
-                    src_c,
-                    src_t,
-                    seg_h,
-                    a_seg,
-                    src_type,
-                    obs_type,
-                    census_rows,
+                # The process's cache, not only this solver's: a solver per
+                # frequency (the portal) finds the first one's classes. The
+                # band height is in the key because the class numbering
+                # follows the bands, and a renumbered plan can move Z an ulp.
+                plan = _pr.shared_plan(
+                    (*key, census_rows),
+                    lambda: _pr.build_plan(
+                        seg_c,
+                        seg_t,
+                        src_c,
+                        src_t,
+                        seg_h,
+                        a_seg,
+                        src_type,
+                        obs_type,
+                        census_rows,
+                    ),
                 )
                 self._sin_reuse_plans[block] = (key, plan)
             self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes, plan.n_near)

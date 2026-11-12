@@ -133,6 +133,12 @@ def _fresh_below_sweep_state():
     mod = sys.modules.get("momwire._sommerfeld_below")
     if mod is not None:
         mod.reset_sweep_state()
+    # momwire#1916 part C: the sinusoidal pair_reuse plans outlive their
+    # solver, and a test that patches the census (its key bits, its bands)
+    # must find its own, not one an earlier test kept.
+    mod = sys.modules.get("momwire._sin_pair_reuse")
+    if mod is not None:
+        mod.clear_shared_plans()
     yield
 
 
