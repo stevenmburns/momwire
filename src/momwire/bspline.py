@@ -10549,36 +10549,79 @@ class BSplineSolver(
         "auto"` (its pass-1 picks the enriched junctions from the port
         drives, so the operator would depend on x), and a deck whose
         duplicated wire was dropped (the caller's wire numbering would not
-        be the solve's). Single frequency only.
+        be the solve's). `port_sites_swept` is the multi-frequency twin.
         """
-        from ._port_sites import PortSites
+        plan = self._port_sites_plan(wire, span, "port_sites")
+        sol = self._port_solution_dense(extra_columns=plan["extra_columns"])
+        return self._port_sites_from(plan, sol)
 
+    def port_sites_swept(self, wire, k_array, span=None):
+        """`port_sites` at every wavenumber of `k_array`, from the swept fill
+        (momwire#1923); returns one :class:`~momwire.PortSites` per k, in
+        `k_array` order.
+
+        `[i]` is what `port_sites(wire, span)` gives at `k_array[i]`. The site
+        columns E ride beside the port columns B through
+        `_port_solutions_swept`, so the sweep shares what it shares for
+        `compute_y_matrix_swept`: the geometry, the basis polynomials and the
+        k-independent columns are built once, and the fill takes whichever of
+        the three swept routes the solver takes there. On the batched fast
+        path one stacked solve per k-chunk serves [B, E] together, and the
+        chunk sizing counts E's columns against `swept_mem_mb`.
+
+        Agreement with the per-k `port_sites`: bit for bit on the per-k loop
+        routes (singular enrichment, and the finite-ground / exact-kernel
+        fallback, whose hoisted same-edge moments are the per-k fill's); to
+        rounding on the batched route, whose assembly and stacked LU
+        reassociate against the per-k fill and `lu_factor`
+        (`tests/test_port_sites_swept_1923.py` holds both).
+
+        The refusals are `port_sites`'s, by the same names. A wire or span
+        that would be refused is refused before any fill, even for an empty
+        sweep.
+        """
+        _refuse_complex_k(k_array, "BSplineSolver.port_sites_swept")
+        k_array = np.asarray(k_array, dtype=float)
+        plan = self._port_sites_plan(wire, span, "port_sites_swept")
+        return [
+            self._port_sites_from(plan, sol)
+            for sol in self._port_solutions_swept(
+                k_array, extra_columns=plan["extra_columns"]
+            )
+        ]
+
+    def _port_sites_plan(self, wire, span, who):
+        """The k-independent half of `port_sites`: the refusals (each naming
+        `who`), the wire's knots, the window, and which kept bases on the
+        wire become sites. Returns a dict `_port_sites_from` reads, carrying
+        the `extra_columns` hook that builds E for `_port_solution_dense` /
+        `_port_solutions_swept`."""
         if self.feed_model != "point" or self.feed_smoothing_factor is not None:
             raise ValueError(
-                "port_sites: supported only with feed_model='point' and no "
+                f"{who}: supported only with feed_model='point' and no "
                 f"feed_smoothing_factor (got feed_model={self.feed_model!r}, "
                 f"feed_smoothing_factor={self.feed_smoothing_factor!r})"
             )
         if self._rotational_map is not None:
             raise ValueError(
-                "port_sites: not supported on the rotational_symmetry sector "
+                f"{who}: not supported on the rotational_symmetry sector "
                 "route; build the solver with rotational_symmetry=False"
             )
         if self.use_singular_enrichment and self.enrichment_variant == "auto":
             raise ValueError(
-                "port_sites: enrichment_variant='auto' chooses its enriched "
+                f"{who}: enrichment_variant='auto' chooses its enriched "
                 "junctions from the port drives, so the operator would move "
                 "with the port position; use 'raw' or 'tikhonov'"
             )
         if self._wire_dedup is not None:
             raise ValueError(
-                "port_sites: this deck lists a wire twice and the copy was "
+                f"{who}: this deck lists a wire twice and the copy was "
                 "dropped before the solve (momwire#1042); remove the duplicate"
             )
         wire = int(wire)
         n_w = len(self.wires_polylines)
         if not 0 <= wire < n_w:
-            raise ValueError(f"port_sites: wire {wire} out of range [0, {n_w})")
+            raise ValueError(f"{who}: wire {wire} out of range [0, {n_w})")
         d = self.degree
         geom = self._build_geometry()
         _supp, _polys, _kcl, wire_knots, wire_basis_global = (
@@ -10603,7 +10646,7 @@ class BSplineSolver(
             lo, hi = clip(float(span[0])), clip(float(span[1]))
             if not (s_lo <= lo <= hi <= s_hi):
                 raise ValueError(
-                    f"port_sites: span {tuple(span)!r} is not an ordered window "
+                    f"{who}: span {tuple(span)!r} is not an ordered window "
                     f"inside wire {wire}'s arclength [{s_lo!r}, {s_hi!r}]"
                 )
         kept, local_to_global = wire_basis_global[wire]
@@ -10622,25 +10665,42 @@ class BSplineSolver(
             E[site_global, np.arange(len(site_global))] = 1.0
             return E
 
-        sol = self._port_solution_dense(extra_columns=extra_columns)
-        n_ports = sol.y.shape[0] - len(site_global)
-        return PortSites(
+        return dict(
             wire=wire,
             span=(lo, hi),
-            degree=d,
             knots=knots,
             site_of_local=site_of_local,
-            n_ports=n_ports,
+            n_sites=len(site_global),
+            clip=clip,
+            extra_columns=extra_columns,
+        )
+
+    def _port_sites_from(self, plan, sol):
+        """Wrap one solve of [B, E] (a `PortSolution`) as `PortSites`."""
+        from ._port_sites import PortSites
+
+        return PortSites(
+            wire=plan["wire"],
+            span=plan["span"],
+            degree=self.degree,
+            knots=plan["knots"],
+            site_of_local=plan["site_of_local"],
+            n_ports=sol.y.shape[0] - plan["n_sites"],
             m=sol.y,
             columns=sol.coeffs,
             n_poly=sol.basis.n_poly,
-            clip=clip,
+            clip=plan["clip"],
             basis_rows=_bspline_basis_rows,
         )
 
-    def _port_solutions_swept(self, k_array):
-        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
-        `compute_port_solution_swept` (#252).
+    def _port_solutions_swept(self, k_array, extra_columns=None):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept`,
+        `compute_port_solution_swept` (#252) and `port_sites_swept` (#1923).
+
+        `extra_columns` is `_port_solution_dense`'s hook: its block is
+        appended to the port columns once for the whole sweep, and every
+        route solves it beside them. None appends nothing, and each route
+        then runs exactly the calls it ran before the hook existed.
 
         Three routes, all producing the same per-k answer:
 
@@ -10670,7 +10730,12 @@ class BSplineSolver(
                 for kk in k_array:
                     self._checkpoint()  # top of each frequency iteration
                     self._set_k(kk)
-                    yield self.compute_port_solution()
+                    if extra_columns is None:
+                        yield self.compute_port_solution()
+                    else:
+                        # `port_sites` refuses the sector route, so this is
+                        # the dense route `compute_port_solution` would take.
+                        yield self._port_solution_dense(extra_columns=extra_columns)
             return
 
         geom = self._build_geometry()
@@ -10684,6 +10749,12 @@ class BSplineSolver(
         B, kcl_con = self._port_columns(
             geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
         )
+        n_extra = 0
+        if extra_columns is not None:
+            E = extra_columns(geom, wire_knots, wire_basis_global, n_basis_total)
+            n_extra = E.shape[1]
+            B = np.hstack([B, E])
+            del E
 
         def _solution(Y, X):
             return PortSolution(
@@ -10702,7 +10773,7 @@ class BSplineSolver(
 
         if self._swept_batched_available():
             for _c0, ks, Z in self._swept_batched_z_chunks(
-                k_array, geom, supp_seg, polys
+                k_array, geom, supp_seg, polys, n_extra_columns=n_extra
             ):
                 X = self._solve_with_kcl_swept_ports(Z, B, kcl_con)
                 del Z  # the chunk's Z stack is dead; let it go before the yields
@@ -10724,7 +10795,12 @@ class BSplineSolver(
             ):
                 self._checkpoint()  # top of each frequency iteration
                 self._set_k(kk)
-                yield self.compute_port_solution(same_edge_prep=same_edge_k)
+                if extra_columns is None:
+                    yield self.compute_port_solution(same_edge_prep=same_edge_k)
+                else:
+                    yield self._port_solution_dense(
+                        same_edge_prep=same_edge_k, extra_columns=extra_columns
+                    )
 
     def _swept_batched_available(self):
         """True when the fully batched swept fast path can serve this
@@ -10747,7 +10823,9 @@ class BSplineSolver(
         )
 
     @_offset_reuse_fill
-    def _swept_batched_z_chunks(self, k_array, geom, supp_seg, polys):
+    def _swept_batched_z_chunks(
+        self, k_array, geom, supp_seg, polys, n_extra_columns=0
+    ):
         """Yield (c0, ks, Z) stacks of the batched swept assembly, where
         Z is (len(ks), n_basis, n_basis) for k_array[c0 : c0 + len(ks)].
 
@@ -10825,6 +10903,12 @@ class BSplineSolver(
             ((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep), default=0
         )
         bytes_per_k = nm * nm * (N * N + sum_ne2) * 16
+        # `port_sites_swept`'s site columns (momwire#1923): one per basis on
+        # the wire, so up to n_basis of them, each held per k three times
+        # across the consumer's stacked solve -- the broadcast right-hand
+        # side's copy, the solved block, and the kept solution columns.
+        # Zero for every other caller, so their chunking is unchanged.
+        bytes_per_k += 3 * supp_seg.shape[0] * int(n_extra_columns) * 16
         # Budget honesty (issue #330): rebuilding a chunk's same-edge reg
         # moments transiently holds ONE edge's rebuilt R table at a time
         # (float64, (N_e·n_qp)² entries, 8 bytes each) — the largest edge
