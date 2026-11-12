@@ -103,8 +103,8 @@ def test_evaluate_at_any_chunk(monkeypatch):
     base, s = _fill()
     plan = s._sin_reuse_plans["direct"][1]
     # The renumbering made each observer radius one run of classes.
-    assert plan.eval_runs[0][0] == 0 and plan.eval_runs[-1][1] == plan.n_classes
-    assert all(a[1] == b[0] for a, b in zip(plan.eval_runs, plan.eval_runs[1:]))
+    assert plan.runs[0][0] == 0 and plan.runs[-1][1] == plan.n_classes
+    assert all(a[1] == b[0] for a, b in zip(plan.runs, plan.runs[1:]))
     monkeypatch.setattr(pr, "EVAL_CHUNK", 7)
     small, _ = _fill()
     assert np.max(np.abs(small - base)) <= 1e-14 * np.max(np.abs(base))

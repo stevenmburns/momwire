@@ -83,6 +83,10 @@ _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 #: per source).
 EVAL_CHUNK = 8192
 
+#: Classes per `canonical_sources` call in `build_plan` (its transients are
+#: about 16 float64 per class).
+_CANON_CHUNK = 1 << 18
+
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
 VERIFY_TOL = 1e-10
@@ -106,19 +110,17 @@ class Plan:
     evaluate each class once."""
 
     cls: np.ndarray  # (N_obs, N_src) int32 class of each pair
-    canon: np.ndarray  # (n_cls, 4) float64 rho, z, rdt, td of the representative
     rep_src: np.ndarray  # (n_cls,) int64 the representative's source segment
-    rep_obs: np.ndarray  # (n_cls,) int64 the representative's observer segment
     near_flat: np.ndarray  # (n_near,) int64 sorted flat index m * N_src + n
     near_blocks: list  # (m0, m1, sources, row, col) per direct kernel call
     # The canonical evaluation's inputs, k-independent, so built with the
     # classes (momwire#1916): each class's source in the observer frame
-    # (`canonical_sources`), and the runs of classes sharing an observer
-    # radius, as (c0, c1, observer segment). Classes are numbered so that
-    # each run is contiguous.
-    eval_src_c: np.ndarray = None  # (n_cls, 3)
-    eval_src_t: np.ndarray = None  # (n_cls, 3)
-    eval_runs: list = None
+    # (`canonical_sources` of the representative's rho, z, rdt, td), and the
+    # runs of classes sharing an observer radius, as (c0, c1, observer
+    # segment). Classes are numbered so that each run is contiguous.
+    src_c: np.ndarray  # (n_cls, 3) float64
+    src_t: np.ndarray  # (n_cls, 3) float64
+    runs: list
 
     @property
     def n_near(self) -> int:
@@ -130,7 +132,7 @@ class Plan:
 
     @property
     def n_classes(self) -> int:
-        return int(self.canon.shape[0])
+        return int(self.rep_src.shape[0])
 
 
 def _types(cols):
@@ -345,28 +347,32 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
         n_b = k[0].shape[0]
         cls[i0:i1] = ginv[off : off + n_b].astype(np.int32)[cls[i0:i1]]
         off += n_b
-    canon = np.concatenate([r[1] for r in results])[gfirst]
-    rep_obs = np.concatenate([r[2] for r in results])[gfirst]
-    rep_src = np.concatenate([r[3] for r in results])[gfirst]
+    rep_obs = np.concatenate([r[2] for r in results])[gfirst].astype(np.int64)
+    rep_src = np.concatenate([r[3] for r in results])[gfirst].astype(np.int64)
     near_flat = np.concatenate([r[4] for r in results])  # sorted: bands in order
-    rep_obs = rep_obs.astype(np.int64)
-    eval_src_c, eval_src_t = canonical_sources(canon)
+    canon = np.concatenate([r[1] for r in results])[gfirst]
+    del results, gfirst, ginv
+    n_cls = canon.shape[0]
+    src_c = np.empty((n_cls, 3))
+    src_t = np.empty((n_cls, 3))
+    for c0 in range(0, n_cls, _CANON_CHUNK):  # bounded transients
+        c1 = min(n_cls, c0 + _CANON_CHUNK)
+        src_c[c0:c1], src_t[c0:c1] = canonical_sources(canon[c0:c1])
+    del canon
     otype = obs_type[rep_obs]
     cuts = np.flatnonzero(np.diff(otype)) + 1
     edges = [0, *cuts.tolist(), int(otype.size)]
-    eval_runs = [
+    runs = [
         (c0, c1, int(rep_obs[c0])) for c0, c1 in zip(edges[:-1], edges[1:]) if c1 > c0
     ]
     return Plan(
         cls=cls,
-        canon=canon,
-        rep_src=rep_src.astype(np.int64),
-        rep_obs=rep_obs,
+        rep_src=rep_src,
         near_flat=near_flat,
         near_blocks=near_blocks(near_flat, N, a_obs),
-        eval_src_c=np.ascontiguousarray(eval_src_c),
-        eval_src_t=np.ascontiguousarray(eval_src_t),
-        eval_runs=eval_runs,
+        src_c=src_c,
+        src_t=src_t,
+        runs=runs,
     )
 
 
@@ -451,10 +457,10 @@ def evaluate(plan, call, obs_type=None):
     enough that a worker's kernel scratch stays in its core's cache."""
     del obs_type
     out = np.empty((plan.n_classes, 3), dtype=np.complex128)
-    src_c, src_t, rep_src = plan.eval_src_c, plan.eval_src_t, plan.rep_src
+    src_c, src_t, rep_src = plan.src_c, plan.src_t, plan.rep_src
     pieces = [
         (c0, min(c1, c0 + EVAL_CHUNK), g_obs)
-        for r0, c1, g_obs in plan.eval_runs
+        for r0, c1, g_obs in plan.runs
         for c0 in range(r0, c1, EVAL_CHUNK)
     ]
 
