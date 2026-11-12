@@ -33,7 +33,8 @@
 
 namespace solve_prep {
 
-// Columns per thread task.
+// Columns per thread task and rows per tile: a 64 x 64 complex tile is 64 KB
+// read and 64 KB written, so the transpose stays in L2.
 static constexpr py::ssize_t TILE = 64;
 
 template <typename T>
@@ -62,34 +63,6 @@ bool finite<std::complex<double>>(const std::complex<double> &v) {
     return std::isfinite(v.real()) && std::isfinite(v.imag());
 }
 
-#if defined(__SSE2__) || defined(_M_X64)
-#define MW_SOLVE_PREP_STREAM 1
-#include <emmintrin.h>
-#else
-#define MW_SOLVE_PREP_STREAM 0
-#endif
-
-// `nr` consecutive entries to `p`: plain stores, or streaming ones when the
-// destination is 16-byte aligned (every complex entry of a numpy allocation;
-// half the float64 runs).
-template <typename T>
-static inline void put(T *p, const T *v, int nr, bool stream) {
-#if MW_SOLVE_PREP_STREAM
-    double *q = reinterpret_cast<double *>(p);
-    if (stream && reinterpret_cast<uintptr_t>(q) % 16 == 0) {
-        const double *d = reinterpret_cast<const double *>(v);
-        const int doubles = nr * static_cast<int>(sizeof(T) / sizeof(double));
-        int k = 0;
-        for (; k + 2 <= doubles; k += 2) _mm_stream_pd(q + k, _mm_loadu_pd(d + k));
-        for (; k < doubles; ++k) q[k] = d[k];
-        return;
-    }
-#else
-    (void)stream;
-#endif
-    for (int r = 0; r < nr; ++r) p[r] = v[r];
-}
-
 template <typename T>
 static py::tuple fortran_copy_1norm(py::array a, int n_threads) {
     if (a.ndim() != 2) throw std::runtime_error("fortran_copy_1norm: a must be 2-D");
@@ -99,7 +72,6 @@ static py::tuple fortran_copy_1norm(py::array a, int n_threads) {
     py::array_t<T, py::array::f_style> out({m, n});
     const T *src = static_cast<const T *>(a.data());
     T *dst = out.mutable_data();
-    const bool stream = reinterpret_cast<uintptr_t>(dst) % 16 == 0;
     std::vector<double> colsum(static_cast<size_t>(n), 0.0);
     int bad = 0;
     {
@@ -117,29 +89,19 @@ static py::tuple fortran_copy_1norm(py::array a, int n_threads) {
             const py::ssize_t j0 = s * TILE, j1 = std::min(n, j0 + TILE);
             double sums[TILE];
             for (py::ssize_t j = j0; j < j1; ++j) sums[j - j0] = 0.0;
-            // Four rows at a time, so each column's four entries leave as one
-            // 64-byte line (a streaming store where there is one: a matrix
-            // this size is past every cache, so getrf reads it from memory
-            // either way, and the store need not read the line first). Each column's sum still runs down its
-            // rows in order: blocks ascending, rows within a block ascending.
-            for (py::ssize_t i = 0; i < m; i += 4) {
-                const int nr = static_cast<int>(std::min<py::ssize_t>(4, m - i));
-                for (py::ssize_t j = j0; j < j1; ++j) {
-                    T v[4];
-                    double acc = sums[j - j0];
-                    for (int r = 0; r < nr; ++r) {
-                        v[r] = src[(i + r) * n + j];
-                        if (!finite(v[r])) bad |= 1;
-                        acc = acc + mag(v[r]);
+            for (py::ssize_t i0 = 0; i0 < m; i0 += TILE) {
+                const py::ssize_t i1 = std::min(m, i0 + TILE);
+                for (py::ssize_t i = i0; i < i1; ++i) {
+                    const T *row = src + i * n;
+                    for (py::ssize_t j = j0; j < j1; ++j) {
+                        const T v = row[j];
+                        dst[j * m + i] = v;
+                        if (!finite(v)) bad |= 1;
+                        sums[j - j0] = sums[j - j0] + mag(v);
                     }
-                    sums[j - j0] = acc;
-                    put(dst + j * m + i, v, nr, stream);
                 }
             }
             for (py::ssize_t j = j0; j < j1; ++j) colsum[j] = sums[j - j0];
-#if MW_SOLVE_PREP_STREAM
-            _mm_sfence();  // this thread's streaming stores, before the barrier
-#endif
         }
     }
     double anorm = 0.0;
