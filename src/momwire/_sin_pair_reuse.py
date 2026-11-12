@@ -336,11 +336,33 @@ def _workers():
     return _pool()._max_workers
 
 
+#: Tasks per worker `_run` cuts a long item list into. One future per item
+#: cost ~1,300 submits per frequency on the ELT whip (1,032 near blocks and
+#: ~280 evaluation pieces), each a submit, a lock and a wake-up; a few
+#: contiguous runs per worker keep the load balanced at a fraction of that
+#: (momwire#1916 part D). Each item is still its own `fn` call on its own
+#: slice, so no value moves.
+RUN_TASKS_PER_WORKER = 4
+
+
 def _run(fn, items):
-    """`fn` over `items`, on the pool when it has more than one worker."""
-    if _workers() == 1 or len(items) == 1:
+    """`fn` over `items`, on the pool when it has more than one worker:
+    contiguous runs of items per task once there are more items than
+    `RUN_TASKS_PER_WORKER` tasks per worker. Results in `items`' order."""
+    workers = _workers()
+    if workers == 1 or len(items) == 1:
         return [fn(x) for x in items]
-    return list(_pool().map(fn, items))
+    items = list(items)
+    n_tasks = workers * RUN_TASKS_PER_WORKER
+    if len(items) <= n_tasks:
+        return list(_pool().map(fn, items))
+    cuts = [len(items) * t // n_tasks for t in range(n_tasks + 1)]
+    runs = [items[a:b] for a, b in zip(cuts[:-1], cuts[1:])]
+
+    def run(chunk):
+        return [fn(x) for x in chunk]
+
+    return [r for chunk in _pool().map(run, runs) for r in chunk]
 
 
 def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows):
