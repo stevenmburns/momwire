@@ -199,3 +199,22 @@ def test_wire_span_and_complex_k_are_refused():
         s.port_sites_swept(0, [s.k], span=(3.0, 1.0))
     with pytest.raises((ValueError, TypeError)):
         s.port_sites_swept(0, [s.k * (1 + 0.01j)])
+
+
+def test_the_site_solve_runs_on_one_blas_thread_on_a_small_deck():
+    """`_site_solve_scope`: one BLAS thread for the site solve at or under
+    the threshold, the caller's pool above it and for every caller with no
+    site columns (so `compute_y_matrix` and the sweeps are untouched)."""
+    import contextlib
+
+    from threadpoolctl import threadpool_info
+
+    from momwire.bspline import _SITE_SOLVE_ONE_THREAD_N as cap
+
+    deck = _dipole()
+    s = BSplineSolver(degree=2, feeds=_feed(deck), **deck)
+    assert isinstance(s._site_solve_scope(cap, 0), contextlib.nullcontext)
+    assert isinstance(s._site_solve_scope(cap + 1, 7), contextlib.nullcontext)
+    with s._site_solve_scope(cap, 7):
+        blas = [i for i in threadpool_info() if i["user_api"] == "blas"]
+        assert blas and all(i["num_threads"] == 1 for i in blas)

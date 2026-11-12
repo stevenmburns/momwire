@@ -50,6 +50,7 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+import contextlib
 import functools
 import inspect
 import math
@@ -303,6 +304,11 @@ def _fg_lanes_kw():
         return {}
     return {"lanes": False}
 
+
+#: The site columns' solve and readout run on one BLAS thread at or under
+#: this many unknowns (momwire#1923; `BSplineSolver._site_solve_scope` has
+#: the measurement). Above it the caller's pool is left alone.
+_SITE_SOLVE_ONE_THREAD_N = 512
 
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
@@ -10409,6 +10415,34 @@ class BSplineSolver(
             return self._compute_port_solution_rotational()
         return self._port_solution_dense(same_edge_prep)
 
+    def _site_solve_scope(self, n_basis, n_extra):
+        """The BLAS scope the site columns' solve and readout run in
+        (momwire#1923): one thread at or under `_SITE_SOLVE_ONE_THREAD_N`
+        unknowns, else the caller's pool unchanged. No extra columns, no
+        scope, so every other caller is untouched.
+
+        Why: with the sites the solve carries n_basis-ish right-hand sides
+        and the readout is a real zgemm, both big enough for OpenBLAS to
+        thread. Its threads then spin past the call, over the OpenMP fill of
+        the next k. Measured on Haswell (4c/8t, quiet), a 5-k Sommerfeld
+        sweep at 347 unknowns with 116 sites: 655 ms threaded against 446 ms
+        with these two stages on one thread, and the Y sweep 410 ms either
+        way. Capping either stage alone bought nothing; capping the fill
+        bought nothing. At 1037 unknowns the cap cost time (3.99 s against
+        4.45 s), so it stops at the threshold. The limit never raises a
+        count a caller already pinned lower.
+
+        Bits: the thread count moves getrf's bits (and getrs/gemm's at this
+        many columns), which is why the scope is the SAME for `port_sites`
+        and every route of `port_sites_swept`: the per-k loop routes stay
+        bit for bit with the single-frequency call.
+        """
+        if n_extra == 0 or n_basis > _SITE_SOLVE_ONE_THREAD_N:
+            return contextlib.nullcontext()
+        from ._near_interface import _blas_controller
+
+        return _blas_controller().limit(limits=1, user_api="blas")
+
     def _port_solution_dense(self, same_edge_prep=None, extra_columns=None):
         """`compute_port_solution`'s dense route, with optional extra columns.
 
@@ -10437,11 +10471,14 @@ class BSplineSolver(
         B, kcl_con = self._port_columns(
             geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
         )
+        n_extra = 0
         if extra_columns is not None:
-            B = np.hstack(
-                [B, extra_columns(geom, wire_knots, wire_basis_global, n_basis_total)]
-            )
+            E = extra_columns(geom, wire_knots, wire_basis_global, n_basis_total)
+            n_extra = E.shape[1]
+            B = np.hstack([B, E])
+            del E
         n_ports = B.shape[1]
+        site_scope = self._site_solve_scope(n_basis_total, n_extra)
 
         def _solution(Y, X):
             """Wrap a (Y, columns) pair without touching either — the Y
@@ -10513,16 +10550,22 @@ class BSplineSolver(
                 # zero outflow columns, same padding as compute_impedance.
                 kcl_aug = np.zeros((kcl_con.shape[0], n_total), dtype=np.float64)
                 kcl_aug[:, :n_p] = kcl_con
-                X = self._solve_with_kcl_ports(Z_aug, B_aug, kcl_aug, overwrite=True)
-                # Readout restricted to the polynomial block (source
-                # vectors are zero on the enrichment dofs); the returned
-                # columns keep the enrichment block, which is part of the
-                # solved current — `basis.n_poly` marks the split.
-                return _solution(_lapack.matmul(B.T, X[:n_p, :]), X)
+                with site_scope:
+                    X = self._solve_with_kcl_ports(
+                        Z_aug, B_aug, kcl_aug, overwrite=True
+                    )
+                    # Readout restricted to the polynomial block (source
+                    # vectors are zero on the enrichment dofs); the returned
+                    # columns keep the enrichment block, which is part of the
+                    # solved current — `basis.n_poly` marks the split.
+                    Y = _lapack.matmul(B.T, X[:n_p, :])
+                return _solution(Y, X)
 
-        X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
-        # Y[i, j] = v_i^T · solve(Z, v_j)
-        return _solution(_lapack.matmul(B.T, X), X)
+        with site_scope:
+            X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
+            # Y[i, j] = v_i^T · solve(Z, v_j)
+            Y = _lapack.matmul(B.T, X)
+        return _solution(Y, X)
 
     def port_sites(self, wire, span=None):
         """Movable point ports on one wire, from ONE fill and factorisation
@@ -10775,13 +10818,16 @@ class BSplineSolver(
             for _c0, ks, Z in self._swept_batched_z_chunks(
                 k_array, geom, supp_seg, polys, n_extra_columns=n_extra
             ):
-                X = self._solve_with_kcl_swept_ports(Z, B, kcl_con)
-                del Z  # the chunk's Z stack is dead; let it go before the yields
-                for i in range(ks.shape[0]):
+                with self._site_solve_scope(n_basis_total, n_extra):
+                    X = self._solve_with_kcl_swept_ports(Z, B, kcl_con)
+                    del Z  # the chunk's Z stack is dead; drop it before the yields
                     # Spelled exactly as compute_port_solution's readout, so
                     # the batched path differs from a per-k solve only by the
                     # batched LAPACK/assembly reassociation, never by algebra.
-                    yield _solution(B.T @ X[i], X[i])
+                    # Read out inside the scope; the yields stay outside it.
+                    Ys = [B.T @ X[i] for i in range(ks.shape[0])]
+                for i in range(ks.shape[0]):
+                    yield _solution(Ys[i], X[i])
             return
 
         # k-independent static + reg-geometry, shared across the sweep; the
