@@ -58,6 +58,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 import numpy as np
+from threadpoolctl import threadpool_limits
 from ._vec3 import norm3
 from . import _lapack
 from ._near_interface import _table_threads
@@ -989,15 +990,16 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     hs = [h for h in harmonics if h != 0]
     if not hs and 0 not in harmonics:
         return out
-    # Lambda_h = sum_t w_ht C_t for every h at once, as ONE product per column
-    # strip: the (N-1) x N weights against the N gathered strips of C_t
-    # (momwire#1919). The per-sector `multiply` + `add` passes were single-
-    # threaded numpy over m x m blocks, and the gathers shared that wall; the
-    # product runs on the host BLAS, so it scales with threads, and the
-    # strip's N gathers are spread over a small pool. A strip is m/N columns
-    # wide, so the gathered stack is one m x m block (the #1902 peak: one
-    # gathered block above the accumulators, which are the blocks the
-    # factors replace in place).
+    # Lambda_h = sum_t w_ht C_t for every h at once (momwire#1919): per column
+    # strip, the (N-1) x N weights against the N gathered strips of C_t, as one
+    # product on the seam's matmul. The per-sector `multiply` + `add` passes it
+    # replaces were single-threaded numpy over m x m blocks. The strips are
+    # independent, so they run on a small pool, one single-threaded product
+    # each: a threaded numpy product leaves its BLAS workers spinning, and the
+    # factorisations that follow ran 40 % slower for it (measured, Haswell).
+    # Strips are m / (N * workers) columns wide, so the gathered stacks are
+    # together about one m x m block (the #1902 peak: one gathered block above
+    # the accumulators, which are the blocks the factors replace in place).
     # Harmonic 0 rides the same product (a row of ones), straight into the
     # corner of its own F-ordered (m + p) block.
     p = int(axial.size)
@@ -1008,28 +1010,29 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     if 0 in harmonics:
         K0 = np.zeros((m + p, m + p), dtype=np.complex128, order="F")
         lams[0] = K0[:m, :m]
-    cb = max(1, m // n)
-    stack = np.empty((n, m * cb), dtype=np.complex128)
+    workers = max(1, min(_table_threads(), m))
+    cb = max(1, m // (n * workers))
 
-    def _gather(t, j0, j1):
-        stack[t, : m * (j1 - j0)] = Z[np.ix_(r_s0, sectors[t][j0:j1])].ravel()
+    def _strip(j0):
+        j1 = min(j0 + cb, m)
+        stack = np.empty((n, m * (j1 - j0)), dtype=np.complex128)
+        for t in range(n):
+            stack[t] = Z[np.ix_(r_s0, sectors[t][j0:j1])].ravel()
+        prod = _lapack.matmul(w, stack)
+        del stack
+        for i, h in enumerate(cols):
+            lams[h][:, j0:j1] = prod[i].reshape(m, j1 - j0)
 
-    pool = _gather_pool(n)
-    try:
-        for j0 in range(0, m, cb):
-            j1 = min(j0 + cb, m)
-            if pool is None:
-                for t in range(n):
-                    _gather(t, j0, j1)
-            else:
-                list(pool.map(_gather, range(n), [j0] * n, [j1] * n))
-            prod = _lapack.matmul(w, stack[:, : m * (j1 - j0)])
-            for i, h in enumerate(cols):
-                lams[h][:, j0:j1] = prod[i].reshape(m, j1 - j0)
-            del prod
-    finally:
-        if pool is not None:
-            pool.shutdown()
+    starts = range(0, m, cb)
+    if workers < 2:
+        for j0 in starts:
+            _strip(j0)
+    else:
+        with (
+            threadpool_limits(limits=1, user_api="blas"),
+            ThreadPoolExecutor(max_workers=workers) as pool,
+        ):
+            list(pool.map(_strip, starts))
     if K0 is not None:
         del lams[0]
         harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of, K0=K0)
@@ -1038,15 +1041,6 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     for h in hs:
         out[h] = _lapack.lu_factor(lams.pop(h), overwrite_a=True)
     return out
-
-
-def _gather_pool(n):
-    """A thread pool for the strip gathers, or None when one thread is all
-    there is to use. numpy's fancy-index copy drops the GIL."""
-    workers = min(n, _table_threads())
-    if workers < 2:
-        return None
-    return ThreadPoolExecutor(max_workers=workers)
 
 
 # `_harmonic_constraints` by the digest of its inputs (momwire#1902): the
