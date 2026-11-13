@@ -26,6 +26,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _condition_check_on(monkeypatch):
+    """These tests hold `solve` to scipy's contract, warning included, so the
+    opt-in condition estimate is on (`_lapack.condition_check`)."""
+    monkeypatch.setenv(_lapack.CONDITION_CHECK_ENV, "1")
+
+
 def _rand(rng, shape, dtype):
     a = rng.standard_normal(shape)
     if np.issubdtype(dtype, np.complexfloating):

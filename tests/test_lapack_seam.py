@@ -96,6 +96,13 @@ def fake_host(monkeypatch):
     yield _lapack.HOST_CALLS
 
 
+@pytest.fixture(autouse=True)
+def _condition_check_on(monkeypatch):
+    """These tests hold `solve` to scipy's contract, warning included, so the
+    opt-in condition estimate is on (`_lapack.condition_check`)."""
+    monkeypatch.setenv(_lapack.CONDITION_CHECK_ENV, "1")
+
+
 @pytest.fixture
 def no_host(monkeypatch):
     monkeypatch.delattr(sys, "_mw_host_lapack", raising=False)

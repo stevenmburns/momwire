@@ -99,11 +99,16 @@ contract:
   ``scipy.linalg.lu_solve`` accepts (factors from either route interoperate),
   ``overwrite_a`` factoring an F-contiguous complex128 matrix in place,
   ``trans`` 0/1/2, one or many right-hand sides.
-- ``solve``: ``check_finite``, ``LinAlgError`` on an exactly singular
-  matrix, and the ill-conditioning ``LinAlgWarning`` when the reciprocal
-  condition estimate falls below machine epsilon. The estimate (a 1-norm and
-  gecon) comes from scipy's LAPACK reading the host's factors; it only
-  decides the warning, never a value.
+- ``solve``: ``check_finite`` and ``LinAlgError`` on an exactly singular
+  matrix. The ill-conditioning ``LinAlgWarning`` (the reciprocal condition
+  estimate below machine epsilon) is OPT-IN: ``MOMWIRE_CONDITION_CHECK=1``
+  turns it on (:func:`condition_check`). The estimate (a 1-norm and gecon)
+  comes from scipy's LAPACK reading the factors; it only decides the
+  warning, never a value, and costs as much as a solve (0.09 s of the whip's
+  0.6 s factor per frequency, n = 4392), so a solve that nobody asked to
+  check skips it. A call this route hands to ``scipy.linalg.solve`` itself
+  (a 1 x 1, a rectangular matrix, a structure scipy would not solve as
+  general) still warns as scipy does.
 - ``solve_stacked``/``inv_stacked``: numpy's broadcasting of stacked
   matrices, a 1-D right-hand side read as a vector, the common result dtype,
   ``LinAlgError`` on an exactly singular slice, and no finiteness check.
@@ -128,6 +133,7 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import os
 import sys
 import threading
 import time
@@ -482,10 +488,22 @@ def _solve_prep(a1, dtype):
     return lu, bool(finite), float(anorm)
 
 
+#: The environment variable that turns `solve`'s condition estimate on.
+CONDITION_CHECK_ENV = "MOMWIRE_CONDITION_CHECK"
+
+
+def condition_check() -> bool:
+    """Whether `solve` estimates the reciprocal condition (gecon) and warns
+    on an ill-conditioned matrix: ``MOMWIRE_CONDITION_CHECK`` set to anything
+    but empty or ``0``. Read per call, so a process can turn it on mid-run."""
+    return os.environ.get(CONDITION_CHECK_ENV, "") not in ("", "0")
+
+
 @_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
-    published."""
+    published. The ill-conditioning warning only under
+    :func:`condition_check`."""
     a1 = np.asarray(a)
     b0 = np.asarray(b)
     dtype = np.result_type(a1.dtype, b0.dtype)
@@ -499,6 +517,7 @@ def solve(a, b):
         or (fns is None and not _scipy_takes_gesv(a1, dtype))
     ):
         return scipy.linalg.solve(a, b)
+    check = condition_check()
     prep = _solve_prep(a1, dtype)
     if prep is not None:
         # The copy, the finiteness check and lange's 1-norm in one threaded
@@ -512,7 +531,8 @@ def solve(a, b):
             raise ValueError("array must not contain infs or NaNs")
         lu = _fortran_copy(a1, dtype)
         lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
-        anorm = lange("1", lu)  # for the warning only, as scipy's solve takes it
+        # For the warning only, as scipy's solve takes it.
+        anorm = lange("1", lu) if check else None
     n = a1.shape[0]
     x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
     if fns is not None:
@@ -524,6 +544,8 @@ def solve(a, b):
         info = _getrs(fns, lu, ipiv, x)
         if info != 0:
             raise ValueError(f"illegal value in argument {-info} of the host's getrs")
+        if not check:
+            return x.reshape(b0.shape)
     else:
         # No host LAPACK, and a matrix SciPy is proven to solve as general
         # (`_scipy_takes_gesv`): SciPy's own getrf + getrs, the pair its
@@ -537,13 +559,16 @@ def solve(a, b):
             if info > 0:
                 raise np.linalg.LinAlgError("singular matrix")
             raise ValueError(f"illegal value in argument {-info} of getrf")
-        cond = _gecon_beside(gecon, lu, anorm) if n >= _GECON_BESIDE_MIN_N else None
+        beside = check and n >= _GECON_BESIDE_MIN_N
+        cond = _gecon_beside(gecon, lu, anorm) if beside else None
         try:
             x, info = getrs(lu, ipiv, x, overwrite_b=True)
         finally:
             rcond = None if cond is None else cond()
         if info != 0:
             raise ValueError(f"illegal value in argument {-info} of getrs")
+        if not check:
+            return x.reshape(b0.shape)
         if rcond is not None:
             return _warn_ill(rcond, dtype, x.reshape(b0.shape))
     rcond, _info = gecon(lu, anorm, norm="1")
