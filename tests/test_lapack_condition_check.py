@@ -1,10 +1,10 @@
 """`_lapack.solve`'s condition estimate is opt-in (`MOMWIRE_CONDITION_CHECK`).
 
-Off (the default): no gecon runs and no ill-conditioning warning, on the
-host route and on the no-host getrf + getrs route, at both sides of the
-size where gecon would run beside getrs. On: the warning fires on an
-ill-conditioned matrix, as scipy's does. Either way the answer is the same
-bits: the estimate never decides a value.
+Off (the default): a well-conditioned solve runs no gecon; the free pivot
+screen still flags an ill-conditioned one, which then gets gecon and the
+warning. On: gecon runs on every solve. Both routes (host, no-host), both
+sides of the size where gecon runs beside getrs. Either way the answer is
+the same bits: the estimate never decides a value.
 """
 
 from __future__ import annotations
@@ -87,12 +87,19 @@ def _run(a, b):
     return x, sorted({w.category.__name__ for w in seen})
 
 
-@pytest.mark.parametrize("n", [200, _lapack._GECON_BESIDE_MIN_N + 37])
-def test_off_by_default_runs_no_gecon_and_keeps_the_bits(
+def _fine(rng, n):
+    return _rand(rng, (n, n)) + n * np.eye(n)
+
+
+SIZES = [200, _lapack._GECON_BESIDE_MIN_N + 37]
+
+
+@pytest.mark.parametrize("n", SIZES)
+def test_a_well_conditioned_solve_runs_no_gecon_unless_asked(
     route, gecon_calls, n, monkeypatch
 ):
     rng = np.random.default_rng(1924)
-    a, b = _ill(rng, n), _rand(rng, (n, 2))
+    a, b = _fine(rng, n), _rand(rng, (n, 2))
     monkeypatch.delenv(_lapack.CONDITION_CHECK_ENV, raising=False)
     assert not _lapack.condition_check()
     x_off, warned_off = _run(a, b)
@@ -100,11 +107,44 @@ def test_off_by_default_runs_no_gecon_and_keeps_the_bits(
     assert warned_off == []
 
     monkeypatch.setenv(_lapack.CONDITION_CHECK_ENV, "1")
-    assert _lapack.condition_check()
     x_on, warned_on = _run(a, b)
     assert gecon_calls == [1]
+    assert warned_on == []
+    assert x_on.tobytes() == x_off.tobytes()
+
+
+@pytest.mark.parametrize("n", SIZES)
+def test_the_pivot_screen_catches_an_ill_conditioned_matrix_by_default(
+    route, gecon_calls, n, monkeypatch
+):
+    """Off: the screen flags the factors, gecon runs once and the warning
+    fires, as with the check on; the same bits either way."""
+    rng = np.random.default_rng(1925)
+    a, b = _ill(rng, n), _rand(rng, (n, 2))
+    monkeypatch.delenv(_lapack.CONDITION_CHECK_ENV, raising=False)
+    x_off, warned_off = _run(a, b)
+    assert gecon_calls == [1]
+    assert warned_off == ["LinAlgWarning"]
+
+    monkeypatch.setenv(_lapack.CONDITION_CHECK_ENV, "1")
+    x_on, warned_on = _run(a, b)
+    assert gecon_calls == [1, 1]
     assert warned_on == ["LinAlgWarning"]
     assert x_on.tobytes() == x_off.tobytes()
+
+
+def test_the_screen_reads_the_diagonal_ratio():
+    lu = np.diag([1.0, 0.5, 2.0 * _lapack.PIVOT_SCREEN]).astype(np.complex128)
+    assert not _lapack._pivots_suspect(lu)
+    lu[2, 2] = 0.5 * _lapack.PIVOT_SCREEN
+    assert _lapack._pivots_suspect(lu)
+    lu[2, 2] = 0.0
+    assert _lapack._pivots_suspect(lu)
+    lu[2, 2] = np.nan
+    assert _lapack._pivots_suspect(lu)
+    lu[2, 2] = 1.0
+    lu[0, 1] = 1e30  # off-diagonal entries are not read
+    assert not _lapack._pivots_suspect(lu)
 
 
 @pytest.mark.parametrize(

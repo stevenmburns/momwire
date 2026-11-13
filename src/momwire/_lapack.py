@@ -99,16 +99,18 @@ contract:
   ``scipy.linalg.lu_solve`` accepts (factors from either route interoperate),
   ``overwrite_a`` factoring an F-contiguous complex128 matrix in place,
   ``trans`` 0/1/2, one or many right-hand sides.
-- ``solve``: ``check_finite`` and ``LinAlgError`` on an exactly singular
-  matrix. The ill-conditioning ``LinAlgWarning`` (the reciprocal condition
-  estimate below machine epsilon) is OPT-IN: ``MOMWIRE_CONDITION_CHECK=1``
-  turns it on (:func:`condition_check`). The estimate (a 1-norm and gecon)
-  comes from scipy's LAPACK reading the factors; it only decides the
-  warning, never a value, and costs as much as a solve (0.09 s of the whip's
-  0.6 s factor per frequency, n = 4392), so a solve that nobody asked to
-  check skips it. A call this route hands to ``scipy.linalg.solve`` itself
+- ``solve``: ``check_finite``, ``LinAlgError`` on an exactly singular
+  matrix, and the ill-conditioning ``LinAlgWarning`` when the reciprocal
+  condition estimate (a 1-norm and gecon, scipy's LAPACK reading the
+  factors) falls below machine epsilon. The estimate only decides the
+  warning, never a value, and it costs about five single-threaded passes
+  over the factors (0.09 s a frequency on the whip at n = 4392, against
+  0.01-0.025 s for getrs), so it runs only when asked
+  (``MOMWIRE_CONDITION_CHECK=1``, :func:`condition_check`) or when the
+  free pivot screen (:func:`_pivots_suspect`) says the factors look
+  near-singular. A call this route hands to ``scipy.linalg.solve`` itself
   (a 1 x 1, a rectangular matrix, a structure scipy would not solve as
-  general) still warns as scipy does.
+  general) warns as scipy does.
 - ``solve_stacked``/``inv_stacked``: numpy's broadcasting of stacked
   matrices, a 1-D right-hand side read as a vector, the common result dtype,
   ``LinAlgError`` on an exactly singular slice, and no finiteness check.
@@ -493,17 +495,36 @@ CONDITION_CHECK_ENV = "MOMWIRE_CONDITION_CHECK"
 
 
 def condition_check() -> bool:
-    """Whether `solve` estimates the reciprocal condition (gecon) and warns
-    on an ill-conditioned matrix: ``MOMWIRE_CONDITION_CHECK`` set to anything
-    but empty or ``0``. Read per call, so a process can turn it on mid-run."""
+    """Whether `solve` estimates the reciprocal condition (gecon) on every
+    matrix, not only on the ones the pivot screen flags:
+    ``MOMWIRE_CONDITION_CHECK`` set to anything but empty or ``0``. Read per
+    call, so a process can turn it on mid-run."""
     return os.environ.get(CONDITION_CHECK_ENV, "") not in ("", "0")
+
+
+#: The pivot screen's bar: `solve` runs gecon when the smallest pivot of the
+#: factors is below this fraction of the largest. The warning itself still
+#: takes gecon's rcond below machine epsilon, so the bar only decides when
+#: the estimate is paid for. min|u_ii| / max|u_ii| is not a bound on rcond
+#: (row growth in L can hide ill-conditioning from U's diagonal), so the bar
+#: sits six orders above epsilon: the ELT whip, well conditioned, reads
+#: 7.4e-4 to 7.7e-4 across its 13 frequencies (n = 4392).
+PIVOT_SCREEN = 1e-10
+
+
+def _pivots_suspect(lu) -> bool:
+    """The free screen: True when U's diagonal spans more than
+    1 / `PIVOT_SCREEN` (or holds a zero or a NaN). n reads of the factors."""
+    d = np.abs(np.diagonal(lu))
+    hi = d.max()
+    return not (hi > 0 and d.min() >= PIVOT_SCREEN * hi)
 
 
 @_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
-    published. The ill-conditioning warning only under
-    :func:`condition_check`."""
+    published. The condition estimate runs under :func:`condition_check`
+    or when :func:`_pivots_suspect` flags the factors."""
     a1 = np.asarray(a)
     b0 = np.asarray(b)
     dtype = np.result_type(a1.dtype, b0.dtype)
@@ -517,7 +538,7 @@ def solve(a, b):
         or (fns is None and not _scipy_takes_gesv(a1, dtype))
     ):
         return scipy.linalg.solve(a, b)
-    check = condition_check()
+    always = condition_check()
     prep = _solve_prep(a1, dtype)
     if prep is not None:
         # The copy, the finiteness check and lange's 1-norm in one threaded
@@ -531,8 +552,10 @@ def solve(a, b):
             raise ValueError("array must not contain infs or NaNs")
         lu = _fortran_copy(a1, dtype)
         lange, gecon = scipy.linalg.get_lapack_funcs(("lange", "gecon"), (lu,))
-        # For the warning only, as scipy's solve takes it.
-        anorm = lange("1", lu) if check else None
+        # For the estimate only, as scipy's solve takes it. Taken whether or
+        # not the estimate runs: the screen decides after getrf has
+        # overwritten A. The prepared pass above has it for free.
+        anorm = lange("1", lu)
     n = a1.shape[0]
     x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
     if fns is not None:
@@ -544,7 +567,7 @@ def solve(a, b):
         info = _getrs(fns, lu, ipiv, x)
         if info != 0:
             raise ValueError(f"illegal value in argument {-info} of the host's getrs")
-        if not check:
+        if not (always or _pivots_suspect(lu)):
             return x.reshape(b0.shape)
     else:
         # No host LAPACK, and a matrix SciPy is proven to solve as general
@@ -559,7 +582,8 @@ def solve(a, b):
             if info > 0:
                 raise np.linalg.LinAlgError("singular matrix")
             raise ValueError(f"illegal value in argument {-info} of getrf")
-        beside = check and n >= _GECON_BESIDE_MIN_N
+        estimate = always or _pivots_suspect(lu)
+        beside = estimate and n >= _GECON_BESIDE_MIN_N
         cond = _gecon_beside(gecon, lu, anorm) if beside else None
         try:
             x, info = getrs(lu, ipiv, x, overwrite_b=True)
@@ -567,7 +591,7 @@ def solve(a, b):
             rcond = None if cond is None else cond()
         if info != 0:
             raise ValueError(f"illegal value in argument {-info} of getrs")
-        if not check:
+        if not estimate:
             return x.reshape(b0.shape)
         if rcond is not None:
             return _warn_ill(rcond, dtype, x.reshape(b0.shape))
