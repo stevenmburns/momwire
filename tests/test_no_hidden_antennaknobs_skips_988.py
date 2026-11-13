@@ -51,8 +51,15 @@ def _guards_on_antennaknobs(path: pathlib.Path) -> bool:
     constantly and never calls it, so parsing exempts it for the right reason
     instead of by name.
     """
+    text = path.read_text(errors="replace")
+    # A call the walk below accepts names `importorskip` literally, so a file
+    # without the word cannot match: parse only the files that have it. The
+    # same answer at a fraction of the cost (parsing every test file was a
+    # 5 s median in the default lane at 0.91.0).
+    if "importorskip" not in text:
+        return False
     try:
-        tree = ast.parse(path.read_text(errors="replace"))
+        tree = ast.parse(text)
     except SyntaxError:  # pragma: no cover - a test file that will not parse
         return False
     for node in ast.walk(tree):

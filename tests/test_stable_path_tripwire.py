@@ -218,10 +218,19 @@ def test_the_stable_manifest_is_the_corpus():
         assert G._sha(golden) == e["printout_sha256"], e["golden"]
 
 
+# Medians over the 5 s default-lane budget at 0.91.0 (scripts/test_durations.py).
+_SLOW_CASES = {"nec5-corpus:eznec/decks/0113_back-yard-dipole.nec[nec5-bspline]"}
+
+
+def _case_param(c, d, dl, b):
+    case_id = f"{c}:{d}[{dl}-{b}]"
+    marks = pytest.mark.slow if case_id in _SLOW_CASES else ()
+    return pytest.param(c, d, dl, b, id=case_id, marks=marks)
+
+
 @pytest.mark.parametrize(
     ("corpus", "deck", "dialect", "basis"),
-    CASES,
-    ids=[f"{c}:{d}[{dl}-{b}]" for c, d, dl, b in CASES],
+    [_case_param(*c) for c in CASES],
 )
 def test_flags_off_printout_is_byte_identical(
     corpus, deck, dialect, basis, current_stack
