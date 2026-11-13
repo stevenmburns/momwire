@@ -387,6 +387,17 @@ so the engine inherits it: `MOMWIRE_TIMES=1 <the command that starts
 SimNEC>`. The keys are described in the docs site's
 [momwire.dev/reference/standalone/](https://momwire.dev/reference/standalone/#where-the-time-goes).
 
+### The ill-conditioning check (`MOMWIRE_CONDITION_CHECK=1`)
+
+A solve does not estimate how close its matrix is to singular unless asked.
+Set `MOMWIRE_CONDITION_CHECK=1` and the sinusoidal and pulse solves run
+LAPACK's condition estimate (gecon) after each factorization. They then warn,
+with scipy's `LinAlgWarning`, when it falls below machine precision, which
+flags a model whose currents are numerical noise. The check changes no result.
+It costs about as much as one more solve: 1.1 s of the ELT whip's 13
+frequencies at 4,392 segments. The B-spline and Sinusoidal-Galerkin solves
+never run it.
+
 ### The same answer with or without AVX-512
 
 numpy and OpenBLAS switch to AVX-512 code on a processor that has it, and
