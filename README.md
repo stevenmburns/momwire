@@ -389,14 +389,15 @@ SimNEC>`. The keys are described in the docs site's
 
 ### The ill-conditioning check (`MOMWIRE_CONDITION_CHECK=1`)
 
-A solve does not estimate how close its matrix is to singular unless asked.
-Set `MOMWIRE_CONDITION_CHECK=1` and the sinusoidal and pulse solves run
-LAPACK's condition estimate (gecon) after each factorization. They then warn,
-with scipy's `LinAlgWarning`, when it falls below machine precision, which
-flags a model whose currents are numerical noise. The check changes no result.
-It costs about as much as one more solve: 1.1 s of the ELT whip's 13
-frequencies at 4,392 segments. The B-spline and Sinusoidal-Galerkin solves
-never run it.
+The sinusoidal and pulse solves warn, with scipy's `LinAlgWarning`, when a
+matrix is so close to singular that the currents are numerical noise. That
+needs LAPACK's condition estimate (gecon). It costs about five single-threaded
+passes over the factors, about 1 s of the ELT whip's 13 frequencies at 4,392
+segments, so it does not run on every solve. A free screen on the
+factorization's pivots runs instead, and the estimate is taken only when the
+pivots look near-singular. Set `MOMWIRE_CONDITION_CHECK=1` to take the
+estimate on every solve. Neither changes a result. The B-spline and
+Sinusoidal-Galerkin solves never run it.
 
 ### The same answer with or without AVX-512
 
