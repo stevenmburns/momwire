@@ -3322,6 +3322,13 @@ class BSplineSolver(
             a_above=None if two is None else two[0],
             a_below=None if two is None else two[1],
             cancel=self._cancel,
+            # momwire#1487: a junction port's member ends take no by-parts
+            # end term — the port's voltage IS that boundary term.
+            port_ends=frozenset(
+                (int(w), str(e))
+                for j_idx, _v in self.junction_ports
+                for w, e in self.junctions[j_idx]
+            ),
         )
 
     def _grounded_junctions(self):

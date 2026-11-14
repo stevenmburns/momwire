@@ -319,6 +319,16 @@ class CrossingContext(NamedTuple):
     # every public entry below (`_cancelable`) so the fill's seams and the
     # near-interface tables can poll it without a token argument.
     cancel: object | None = None
+    # The wire ends `(w, "start" | "end")` that are members of a JUNCTION
+    # PORT (momwire#1487). `axis_data` leaves them out of the by-parts end
+    # table. At such an end the boundary term [f Φ] is the port's impressed
+    # voltage, which the solver already puts on the right-hand side, and
+    # the end current flows into the source, not into a point charge — the
+    # spelling every non-crossing fill has. Kept, the end term charged the
+    # port's face, so a gap between two ported faces read as its own
+    # end-to-end capacitance (~j5 µS) and the drive never reached the
+    # antenna. Empty everywhere else, which keeps every other axis's bytes.
+    port_ends: frozenset = frozenset()
 
 
 # WHAT IS GATED, and why it is not the node-adjacent segment.
@@ -877,11 +887,16 @@ def axis_data(
     else:
         ends = []
         on_axis = set(int(g) for g in seg_idx)
+        port_ends = ctx.port_ends
         for w in range(len(seg_off) - 1):
             first, last = seg_off[w], seg_off[w + 1] - 1
             if first not in on_axis:
                 continue
             for gseg, sign, u_end in ((first, -1.0, 0.0), (last, +1.0, None)):
+                # A junction port's member end carries no by-parts term
+                # (`CrossingContext.port_ends`, momwire#1487).
+                if (w, "start" if u_end is not None else "end") in port_ends:
+                    continue
                 hh = geom.h[gseg]
                 u = hh if u_end is None else 0.0
                 pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
