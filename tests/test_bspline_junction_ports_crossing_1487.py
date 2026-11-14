@@ -154,7 +154,14 @@ _UNCHANGED = {
 }
 
 
-@pytest.mark.parametrize("config, feed", list(_UNCHANGED))
+@pytest.mark.parametrize(
+    "config, feed",
+    [
+        # The buried wire's cold below/below grid is ~26 s on Haswell.
+        pytest.param(c, f, marks=pytest.mark.slow) if c.endswith("buried") else (c, f)
+        for c, f in _UNCHANGED
+    ],
+)
 def test_decks_without_a_crossing_wire_are_unchanged(config, feed):
     z = _z(config, feed, "end")
     want = _UNCHANGED[(config, feed)]
