@@ -5089,7 +5089,9 @@ class RazorSolver(
             cancel=self._cancel,
         )
 
-    def _path_test_rows(self, geom, rows, *, halves="both", paths=None, knot=None):
+    def _path_test_rows(
+        self, geom, rows, *, halves="both", paths=None, knot=None, cent=None
+    ):
         """`_crossing_fill.path_test_axis` records for razor's testing paths.
 
         One record per row in `rows` — the path's quadrature points, tangents
@@ -5107,7 +5109,16 @@ class RazorSolver(
         once, instead of this method recomputing them per row — the whole
         geometry's worth of work, thrown away and redone for a single
         row's slice out of it. Left `None` (every direct test caller today),
-        it computes them itself, exactly as before.
+        it computes them itself, exactly as before. `cent` is the segment
+        centroids, handed in the same way (the same expression, so the same
+        floats).
+
+        Each record's `before`/`after` is a COPY of its 3-vector, never a
+        row view (momwire#1940 U1): a view keeps its whole base array alive,
+        and `cent` was rebuilt per call, so every record of the crossing axis
+        pinned an (n_seg, 3) array of its own -- about 24·N² bytes at hub x32
+        (N = 5602, +632 MB), above the dense Z itself. Same floats, so the
+        same Z bit for bit.
         """
         if paths is None:
             paths = self._testing_paths(geom)
@@ -5115,7 +5126,8 @@ class RazorSolver(
         q = pts.shape[1] // 2
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
         wing_seg = geom["wing_seg"]
-        cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
+        if cent is None:
+            cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
         if knot is None:
             knot = self._knot_points(geom)
         out = []
@@ -5142,7 +5154,17 @@ class RazorSolver(
                 )
             else:
                 raise ValueError(f"halves must be 'both', 'A' or 'B', got {halves!r}")
-            out.append((m, pts[m, sl], tans[m, sl], wts[m, sl], seg, before, after))
+            out.append(
+                (
+                    m,
+                    pts[m, sl],
+                    tans[m, sl],
+                    wts[m, sl],
+                    seg,
+                    before.copy(),
+                    after.copy(),
+                )
+            )
         return out
 
     def _below_plane_grazing_refusal(self, geom, plan_skip=None, *, k_m=None):
@@ -5621,6 +5643,7 @@ class RazorSolver(
         # `_path_test_rows` call below instead.
         paths = self._testing_paths(geom)
         knot = self._knot_points(geom)
+        cent = geom["seg_p0"] + 0.5 * geom["seg_h"][:, None] * geom["seg_t"]
         recs = []
         for m in range(geom["n_basis_total"]):
             if held is not None and not held[m]:
@@ -5635,9 +5658,12 @@ class RazorSolver(
                     halves="A" if alive == 0 else "B",
                     paths=paths,
                     knot=knot,
+                    cent=cent,
                 )
             elif int(geom["wing_seg"][m, 0]) in mine_seg:
-                recs += self._path_test_rows(geom, [m], paths=paths, knot=knot)
+                recs += self._path_test_rows(
+                    geom, [m], paths=paths, knot=knot, cent=cent
+                )
         return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
 
     def _assemble_Z_crossing(
