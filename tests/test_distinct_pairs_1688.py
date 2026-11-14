@@ -53,6 +53,18 @@ def test_the_sort_counts_what_the_walk_counts():
         assert ni._distinct_pairs(parts) == ni._distinct_pairs_loop(parts)
 
 
+def test_the_count_does_not_depend_on_the_window(monkeypatch):
+    """momwire#1940 U1: the pairs are expanded a z window at a time. Windows
+    from one pair up count what the walk counts, a z held by more pairs than
+    a window included (it is never split)."""
+    rng = np.random.default_rng(1940)
+    for window in (1, 2, 3, 7, 64, 1 << 19):
+        monkeypatch.setattr(ni, "_DISTINCT_PAIRS_WINDOW", window)
+        for _ in range(200):
+            parts = _random_parts(rng)
+            assert ni._distinct_pairs(parts) == ni._distinct_pairs_loop(parts)
+
+
 def test_a_large_census_takes_the_walk(monkeypatch):
     rng = np.random.default_rng(7)
     parts = _random_parts(rng)

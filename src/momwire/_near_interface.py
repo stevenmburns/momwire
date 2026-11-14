@@ -3375,9 +3375,19 @@ def _plane_pays(k_p, k_m, d, parts, depth=None, lone_worth=None):
 
 
 # `_distinct_pairs` expands every group into its (z, rho) pairs and counts the
-# distinct ones in one sort; past this many pairs it walks the groups instead
+# distinct ones by sorting; past this many pairs it walks the groups instead
 # (`_distinct_pairs_loop`), whose memory is the rows rather than their product.
 _DISTINCT_PAIRS_FLAT_MAX = 20_000_000
+
+# ... and it expands them a z WINDOW at a time, about this many pairs per
+# window (momwire#1940 U1). Two pairs whose z differ are distinct, so the
+# count is the sum of the windows' counts, and no window needs another's
+# pairs. The whole expansion held at once was the buried razor-2p fill's
+# high-water mark at hub x16 (one census +143 MB) and +518 MB at the
+# 48-radial screen x11. A window ends only where z changes, so one z held by
+# more pairs than this is a window of its own: the bound is the larger of
+# this and the most pairs any one z holds.
+_DISTINCT_PAIRS_WINDOW = 1 << 19
 
 
 def _distinct_pairs(parts):
@@ -3388,7 +3398,11 @@ def _distinct_pairs(parts):
     buried screen at 500 segs/wl, 106 censuses of 5 920 groups each took 1.9 s
     of a 5.3 s solve. Same count, since a pair is distinct exactly when
     `_distinct_pairs_loop` counts it: equality is float `!=` on both
-    columns (so -0.0 is 0.0, as there)."""
+    columns (so -0.0 is 0.0, as there).
+
+    momwire#1940 U1: the pairs are expanded and sorted one z window at a time
+    (`_DISTINCT_PAIRS_WINDOW`), never all at once. An integer count, so the
+    same count whatever the windows."""
     total = 0
     for r, zg, _s, _c in parts:
         total += sum(len(z) for z in zg) * (r.shape[1] if r.ndim == 2 else 1)
@@ -3396,25 +3410,64 @@ def _distinct_pairs(parts):
         return _distinct_pairs_loop(parts)
     if total == 0:
         return 0
-    zcol, rcol = [], []
-    for r, zg, _s, _c in parts:
+    # One entry per (part, group, z): the pairs it holds are that z against
+    # its group's row of rho. Entries are few (the census's distinct
+    # (group, z)); it is their product with the rows that is large.
+    rows_of, ez, ep, eg = [], [], [], []
+    for p, (r, zg, _s, _c) in enumerate(parts):
         _cancel.poll()
         lens = np.fromiter((len(z) for z in zg), dtype=np.int64, count=len(zg))
         if not lens.any():
+            rows_of.append(None)
             continue
-        z = np.concatenate([np.asarray(v, dtype=float) for v in zg]) + 0.0
-        rows = np.asarray(r, dtype=float).reshape(len(zg), -1)
-        g = np.repeat(np.arange(len(zg)), lens)
-        k = rows.shape[1]
-        zcol.append(np.repeat(z, k))
-        rcol.append(rows[g].reshape(-1) + 0.0)
-    if not zcol:
+        rows_of.append(np.asarray(r, dtype=float).reshape(len(zg), -1))
+        ez.append(np.concatenate([np.asarray(v, dtype=float) for v in zg]) + 0.0)
+        eg.append(np.repeat(np.arange(len(zg)), lens))
+        ep.append(np.full(ez[-1].size, p))
+    if not ez:
         return 0
+    z = np.concatenate(ez)
+    order = np.argsort(z, kind="stable")
+    z = z[order]
+    ep = np.concatenate(ep)[order]
+    eg = np.concatenate(eg)[order]
+    k_of = np.array(
+        [0 if rows is None else rows.shape[1] for rows in rows_of], dtype=np.int64
+    )
+    cum = np.cumsum(k_of[ep])
+    n, lo = 0, 0
+    while lo < z.size:
+        _cancel.poll()
+        # Entries [lo, hi): about a window's pairs, then on to the end of
+        # the last z's run, so no z is split between two windows.
+        done = int(cum[lo - 1]) if lo else 0
+        hi = max(
+            lo + 1, int(np.searchsorted(cum, done + _DISTINCT_PAIRS_WINDOW, "right"))
+        )
+        hi = int(np.searchsorted(z, z[hi - 1], "right"))
+        n += _distinct_pairs_window(z[lo:hi], ep[lo:hi], eg[lo:hi], rows_of)
+        lo = hi
+    return n
+
+
+def _distinct_pairs_window(z, ep, eg, rows_of):
+    """The distinct (z, rho) pairs of the entries (z, part ep, group eg): every
+    entry's z against its group's row, expanded and counted in one sort."""
+    zcol, rcol = [], []
+    for p in np.unique(ep).tolist():
+        on = ep == p
+        rows = rows_of[p]
+        zcol.append(np.repeat(z[on], rows.shape[1]))
+        rcol.append(rows[eg[on]].reshape(-1) + 0.0)
     zc = np.concatenate(zcol)
     rc = np.concatenate(rcol)
+    del zcol, rcol
+    if not zc.size:
+        return 0  # every entry's row is empty (no columns)
     order = np.lexsort((rc, zc))
-    zs, rs = zc[order], rc[order]
-    return int(1 + np.count_nonzero((zs[1:] != zs[:-1]) | (rs[1:] != rs[:-1])))
+    zc, rc = zc[order], rc[order]
+    del order
+    return int(1 + np.count_nonzero((zc[1:] != zc[:-1]) | (rc[1:] != rc[:-1])))
 
 
 def _distinct_pairs_loop(parts):
