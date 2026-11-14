@@ -1891,7 +1891,9 @@ int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
         std::vector<cd> z;
         const std::string why = fill_buried(front, z, nullptr, cancel_flag);
         if (!why.empty()) throw std::runtime_error("the buried fill stopped at " + why);
-        ctx.set_z(z.data(), n);
+        // Moved, not copied (momwire#1541): a copy held the filled matrix
+        // twice through the factorisation.
+        ctx.take_z(std::move(z), n);
         return ctx.lu_solve(lp, x, static_cast<int>(m));
     }
     fill_front(front, ctx, cancel_flag);
