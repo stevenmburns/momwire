@@ -215,6 +215,11 @@ def test_the_site_solve_runs_on_one_blas_thread_on_a_small_deck():
     s = BSplineSolver(degree=2, feeds=_feed(deck), **deck)
     assert isinstance(s._site_solve_scope(cap, 0), contextlib.nullcontext)
     assert isinstance(s._site_solve_scope(cap + 1, 7), contextlib.nullcontext)
+    if not [i for i in threadpool_info() if i["user_api"] == "blas"]:
+        # macOS arm64: numpy and momwire use Accelerate, which threadpoolctl
+        # does not list as a controllable BLAS, so the scope is a no-op there
+        # and there is no thread count to read.
+        pytest.skip("no BLAS that threadpoolctl can limit (Accelerate)")
     with s._site_solve_scope(cap, 7):
         blas = [i for i in threadpool_info() if i["user_api"] == "blas"]
         assert blas and all(i["num_threads"] == 1 for i in blas)
