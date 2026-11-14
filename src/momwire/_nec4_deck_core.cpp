@@ -953,6 +953,7 @@ bool finite3(const double *p) { return std::isfinite(p[0]) && std::isfinite(p[1]
 Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
     Structure s;
     std::vector<FlatWire> &wires = s.wires;
+    ll n_segments = 0;  // the segments in `wires`, kept with it card by card
     for (const Card &card : cards) {
         if (card.mnemonic == "GE") {
             s.ground_plane_flag = !card.i(0).is_zero();
@@ -961,7 +962,7 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
         }
         Symmetry before;
         before.cell_wires = static_cast<ll>(wires.size());
-        for (const FlatWire &w : wires) before.cell_segments += w.n_seg;
+        before.cell_segments = n_segments;
         const std::string &m = card.mnemonic;
         if (m == "GW") {
             gw(card, wires);
@@ -983,14 +984,22 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
         } else {
             gr(card, wires);
         }
-        // `wire_geometry_refusal`: every wire after every geometry card
-        for (const FlatWire &w : wires) {
+        // `wire_geometry_refusal`: every wire the card built or moved
+        // (`_nec2_geometry._appends_only`, momwire#1929). A card that only
+        // appends left the earlier wires as the card before it passed them.
+        const bool appends = m == "GW" || m == "GA" || m == "GH" || m == "CW" || m == "GX" ||
+                             m == "GR" || (m == "GM" && !card.i(1).is_zero());
+        const std::size_t fresh = appends ? static_cast<std::size_t>(before.cell_wires) : 0;
+        for (std::size_t k = fresh; k < wires.size(); k++) {
+            const FlatWire &w = wires[k];
             bool finite = std::isfinite(w.radius), far = false;
             nec5::wire_geometry_scan(w.p1, 3, finite, far);
             nec5::wire_geometry_scan(w.p2, 3, finite, far);
             const std::string why = nec5::wire_geometry_refusal(m, w.tag, finite, far);
             if (!why.empty()) deck_error(why);
         }
+        if (fresh == 0) n_segments = 0;
+        for (std::size_t k = fresh; k < wires.size(); k++) n_segments += wires[k].n_seg;
         symmetry_after(card, wires, before, s.has_symmetry, s.symmetry);
     }
     ll total = 0;

@@ -953,6 +953,26 @@ class Nec2Structure:
         return tuple(sorted(applied)), tuple(p for p in pairs if p not in seen)
 
 
+# The geometry cards that only ever APPEND wires, in every dialect that runs
+# `build_geometry` (nec2's builders, and nec4's GA / GH / CW): GW, GA, GH and
+# CW add their own; GX's reflections and GR's rotations add copies and leave
+# the originals alone. A replicating GM (NRPT > 0) appends too, see
+# `_appends_only`. GS and an in-place GM rewrite wires already in the list, and
+# a builder not named here is treated the same way, so a new card is checked
+# whole until it is shown to append.
+_APPENDING_CARDS = frozenset({"GW", "GA", "GH", "CW", "GX", "GR"})
+
+
+def _appends_only(card: Card) -> bool:
+    """Whether ``card``, which has just run, left every wire before it
+    untouched (`_APPENDING_CARDS`). ``GM`` with ``NRPT > 0`` builds each copy
+    from the previous one and appends it, and only ``NRPT = 0`` moves the
+    block in place (`_gm`)."""
+    if card.mnemonic in _APPENDING_CARDS:
+        return True
+    return card.mnemonic == "GM" and card.i(1) != 0
+
+
 def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
     """Run a deck's geometry section and close it.
 
@@ -968,6 +988,7 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
     ground_plane_flag = False
     ground_plane_interpolates = False
     symmetry: Symmetry | None = None
+    n_segments = 0  # the segments in `wires`, kept with it card by card
     for card in cards:
         if card.mnemonic == "GE":
             # I2 and every real field are ignored, and the flag specifies no
@@ -977,14 +998,25 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
             ground_plane_flag = card.i(0) != 0
             ground_plane_interpolates = card.i(0) > 0
             continue
-        before = (len(wires), sum(w.n_seg for w in wires))
+        before = (len(wires), n_segments)
         builders[card.mnemonic](card, wires)
-        for w in wires:
-            # every wire after every geometry card, so the card named is the
-            # one that made it so (a NaN field, a GS / GM past the doubles)
+        # Every wire the card built or moved, so the card named is the one
+        # that made it so (a NaN field, a GS / GM past the doubles). A card
+        # that only appends leaves the wires before it as they were, and they
+        # passed after the card that last touched them, so only its own are
+        # asked: O(wires) per deck where asking every wire after every card
+        # was O(cards x wires) (momwire#1929: 7.4 M calls on a 3,856-GW deck).
+        # The first refusing wire is the same one either way, because every
+        # wire ahead of the card's own already passed.
+        fresh = before[0] if _appends_only(card) else 0
+        for w in wires[fresh:]:
             why = wire_geometry_refusal(card.mnemonic, w.tag, (w.p1, w.p2), w.radius)
             if why is not None:
                 raise DeckError(why)
+        if fresh:
+            n_segments += sum(w.n_seg for w in wires[fresh:])
+        else:
+            n_segments = sum(w.n_seg for w in wires)
         symmetry = _symmetry_after(card, wires, before, symmetry)
 
     snap_connections(wires)

@@ -137,9 +137,11 @@ def wire_geometry_refusal(mnemonic: str, tag: int, points, radius: float) -> str
     (a NaN or infinite field on the card, or a GS / GM that scaled or moved
     the wire past the doubles), or a coordinate past :data:`MAX_COORDINATE`.
 
-    Every reader asks it after each geometry card, of every wire, so the
-    card named is the one that made the wire so; ``points`` are the wire's
-    ends and any path vertices. The C++ readers
+    Every reader asks it after each geometry card, of every wire that card
+    built or moved (all of them after a GS or an in-place GM, the card's own
+    after one that only appends, momwire#1929), so the card named is the one
+    that made the wire so; ``points`` are the wire's ends and any path
+    vertices. The C++ readers
     (`_nec5_deck_core.cpp`'s ``wire_geometry_refusal``) say the same words."""
     finite = math.isfinite(radius)
     far = False

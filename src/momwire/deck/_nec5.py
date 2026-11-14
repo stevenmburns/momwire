@@ -51,7 +51,7 @@ from ._cards import (
     parse_card,
     wire_geometry_refusal,
 )
-from ._nec2_geometry import arc_vertices, gm_transform
+from ._nec2_geometry import _appends_only, arc_vertices, gm_transform
 from ._nec4 import catenary_vertices, helix_vertices
 from .model import DistributedRLC, LoadSpec
 
@@ -2076,9 +2076,14 @@ class _Nec5Parser:
             "PT": self._pt,
         }.get(card.mnemonic)
         if handler is not None:
+            n_before = len(self.wires)
             handler(card)
             if card.mnemonic in _ECHOED_INTEGERS:
-                for wire in self.wires:
+                # The wires the card built or moved (`_nec2_geometry.
+                # _appends_only`, momwire#1929): a card that only appends left
+                # the earlier wires as the card before it passed them.
+                fresh = n_before if _appends_only(card) else 0
+                for wire in self.wires[fresh:]:
                     why = wire_geometry_refusal(
                         card.mnemonic,
                         wire.tag,
