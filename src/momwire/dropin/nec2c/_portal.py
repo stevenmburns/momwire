@@ -186,7 +186,7 @@ from ...deck import (
     parse_card,
     prepare_mesh,
 )
-from ...deck import parse as parse_dialect
+from ...deck import parse_with_structure
 
 # The card semantics of ``TL``/``NT`` — the six reals as circuit branches, and
 # the flat ``Network`` its reducer takes. It lives in ``momwire.deck`` because
@@ -226,7 +226,7 @@ from ...deck._nec2 import _LD_RUN_TRANSPARENT, REFUSE_NEAR_FIELD_REFL_COEF
 # and C and nothing else, so it is called with no finite-Q terms and its
 # arithmetic is the copy's to the bit (momwire#1336).
 from ...networks._reduce import _series_rlc_impedance
-from ...deck._nec2_geometry import _SMIN, build_geometry
+from ...deck._nec2_geometry import _SMIN
 
 from ...serve import Seam, run_session
 
@@ -1284,16 +1284,6 @@ class PortalDeck:
     structure: object | None = None
 
 
-def _geometry_builders(dialect: str):
-    """The geometry builders the dialect's own reader runs: the nec4 one's
-    add GA and GH (momwire#1592), the nec2 one's are `build_geometry`'s."""
-    if dialect == "nec4":
-        from ...deck._nec4 import _NEC4_GEOMETRY_BUILDERS
-
-        return _NEC4_GEOMETRY_BUILDERS
-    return None
-
-
 def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
     """A deck body's cards, grouped the way the engine executes them.
 
@@ -1319,7 +1309,12 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
     the same for both — an ``EX 6`` records its set current where an ``EX 0``
     records its volts, and the model's ``current_feeds`` says which is which.
     """
-    model = parse_dialect(body, dialect=dialect)
+    # The model and the geometry from the one read (momwire#1929): the
+    # dialect's reader builds the flat NEC geometry on its way to the model,
+    # with its own builders (the nec4 one's GA, GH and CW), from the same
+    # geometry cards the walk below collects, so a second `build_geometry`
+    # here was the same structure built twice.
+    model, structure = parse_with_structure(body, dialect=dialect)
     # NEC-4.2's catenary is a wire card of the nec4 dialect only (momwire#1697).
     geometry_cards = _GEOMETRY_CARDS | {"CW"} if dialect == "nec4" else _GEOMETRY_CARDS
 
@@ -1418,7 +1413,7 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
         quiet=model.quiet,
         reduced_field=model.reduced_field,
         model=model,
-        structure=build_geometry(geometry, _geometry_builders(dialect)),
+        structure=structure,
     )
 
 

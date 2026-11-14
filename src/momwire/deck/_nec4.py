@@ -131,7 +131,12 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from ._cards import Card, DeckError, infinite_angle_refusal
-from ._nec2 import _GEOMETRY_CARDS, _LD_RUN_TRANSPARENT, _Nec2Parser
+from ._nec2 import (
+    _GEOMETRY_CARDS,
+    _LD_RUN_TRANSPARENT,
+    _Nec2Parser,
+    parsed_with_structure,
+)
 from ._nec2_geometry import _GEOMETRY_BUILDERS, FlatWire
 from ._nec2_geometry import arc_vertices as _arc_vertices
 from .model import DeckModel
@@ -644,6 +649,4 @@ class _Nec4Parser(_Nec2Parser):
 
 def parse_nec4(text: str) -> DeckModel:
     """Parse one ``nec4`` deck body into a :class:`DeckModel`."""
-    parser = _Nec4Parser()
-    parser.feed(text)
-    return parser.model()
+    return parsed_with_structure(_Nec4Parser(), text)[0]
