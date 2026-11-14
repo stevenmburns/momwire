@@ -179,6 +179,16 @@ class SolveContext {
         z_ = std::move(z);
     }
 
+    // Z's buffer moved OUT (the context then holds none): the filled
+    // matrix, column-major with leading dimension n_basis(), in its first
+    // n_basis()^2 entries of a buffer at least that long (momwire#1541).
+    // Inline here for take_z's reason.
+    std::vector<cd> give_z() {
+        std::vector<cd> z;
+        z.swap(z_);
+        return z;
+    }
+
     // Free Z and the window pool (a big solve's buffers are not held until
     // the next one); the counters are kept.
     void release();

@@ -651,6 +651,116 @@ MediumPart medium_part(const Front &f, bool below) {
     return mp;
 }
 
+namespace {
+
+// The crossing tents: (basis, its below wing), the bases with a wing in
+// each medium.
+std::vector<std::pair<int64_t, int>> crossing_tents(const Front &f) {
+    std::vector<std::pair<int64_t, int>> tents;
+    for (int64_t m = 0; m < f.n_basis; m++) {
+        const bool b0 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m)]))] != 0;
+        const bool b1 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m + 1)]))] != 0;
+        if (b0 != b1) tents.emplace_back(m, b0 ? 0 : 1);
+    }
+    return tents;
+}
+
+// Steps 4-6 of the fill: the cross blocks, the node charges, the loading.
+void cross_and_load(const Front &f, std::vector<cd> &out, uintptr_t cancel_flag) {
+    crossing_blocks(f, out, crossing_tents(f), cancel_flag);
+    if (!f.load_rows.empty()) add_loading(f, out);
+}
+
+// The below medium's front, prepared, its grazing refusal raised.
+MediumPart below_part(const Front &f, const BelowMedium &bm, BelowRemainder &rem) {
+    MediumPart b = medium_part(f, true);
+    prepare_paths(*b.front);
+    // The crossing nodes the plan skips: the crossing tents' knots on
+    // the FULL geometry (`_knot_points(geom)[tents]`).
+    std::vector<double> skip;
+    for (int64_t m = 0; m < f.n_basis; m++) {
+        const bool a = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m)]))] != 0;
+        const bool b2 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m + 1)]))] != 0;
+        if (a == b2) continue;
+        double kp[3];
+        knot_point(f, m, kp);
+        skip.insert(skip.end(), kp, kp + 3);
+    }
+    const std::string why = grazing_refusal(*b.front, skip, bm.k_m);
+    if (!why.empty()) raise_value(why);
+    prepare_below(*b.front, bm, rem);
+    return b;
+}
+
+bool ascending(const std::vector<int64_t> &rows) {
+    for (size_t i = 1; i < rows.size(); i++)
+        if (!(rows[i - 1] < rows[i])) return false;
+    return true;
+}
+
+// Steps 1-3 (momwire#1541): `Z = 0; Z[a, a] += Z_a; Z[b, b] += Z_b` without
+// holding the zero target beside the larger medium's block. The larger
+// block is filled straight into the n x n buffer (its own leading
+// dimension, in the buffer's first entries); the other is filled in its own
+// context; then one pass from the LAST entry down writes every entry as the
+// two scatters left it: 0.0, then `+ a` where the above block has it, then
+// `+ b` where the below block has it, the same IEEE adds in the same order.
+// A destination's source in the buffer is never past it (the medium's rows
+// ascend, so its local (j, i) is at most the global (cj, ri) and its offset
+// j np + i at most cj n + ri), so descending, no source is overwritten
+// before it is read.
+std::string fold_media(const Front &f, const BelowMedium &bm, std::vector<cd> &out, uintptr_t cancel_flag) {
+    const int64_t n = f.n_basis;
+    MediumPart a = medium_part(f, false);
+    if (somm_below::source() == nullptr) return BELOW_TABLE_MISSING;
+    BelowRemainder rem;
+    MediumPart b = below_part(f, bm, rem);
+    if (!ascending(a.rows) || !ascending(b.rows))
+        throw std::logic_error("buried fill: a medium's rows do not ascend (momwire#1541)");
+    const bool below_big = b.front->n_basis >= a.front->n_basis;
+    MediumPart &big = below_big ? b : a;
+    MediumPart &small = below_big ? a : b;
+    std::vector<cd> buf(static_cast<size_t>(n * n));
+    {
+        SolveContext ctx;
+        ctx.take_z(std::move(buf), n);
+        fill_part(*big.front, ctx, cancel_flag, below_big ? &bm : nullptr, below_big ? &rem : nullptr);
+        buf = ctx.give_z();
+    }
+    SolveContext sctx;
+    const cd *zs = fill_part(*small.front, sctx, cancel_flag, below_big ? nullptr : &bm, below_big ? nullptr : &rem);
+    const int64_t nbig = big.front->n_basis, nsmall = small.front->n_basis;
+    std::vector<int64_t> pos_big(static_cast<size_t>(n), -1), pos_small(static_cast<size_t>(n), -1);
+    for (int64_t i = 0; i < nbig; i++) pos_big[static_cast<size_t>(big.rows[static_cast<size_t>(i)])] = i;
+    for (int64_t i = 0; i < nsmall; i++) pos_small[static_cast<size_t>(small.rows[static_cast<size_t>(i)])] = i;
+    const std::vector<int64_t> &pos_a = below_big ? pos_small : pos_big;
+    const std::vector<int64_t> &pos_b = below_big ? pos_big : pos_small;
+    const cd *za = below_big ? zs : buf.data();
+    const cd *zb = below_big ? buf.data() : zs;
+    const int64_t na = below_big ? nsmall : nbig, nb = below_big ? nbig : nsmall;
+    cd *z = buf.data();
+    for (int64_t cj = n - 1; cj >= 0; cj--) {
+        const int64_t ja = pos_a[static_cast<size_t>(cj)], jb = pos_b[static_cast<size_t>(cj)];
+        for (int64_t ri = n - 1; ri >= 0; ri--) {
+            const int64_t ia = pos_a[static_cast<size_t>(ri)], ib = pos_b[static_cast<size_t>(ri)];
+            cd e(0.0, 0.0);
+            if (ja >= 0 && ia >= 0) {
+                const cd v = za[static_cast<size_t>(ja * na + ia)];
+                e = cd(e.real() + v.real(), e.imag() + v.imag());
+            }
+            if (jb >= 0 && ib >= 0) {
+                const cd v = zb[static_cast<size_t>(jb * nb + ib)];
+                e = cd(e.real() + v.real(), e.imag() + v.imag());
+            }
+            z[static_cast<size_t>(cj * n + ri)] = e;
+        }
+    }
+    out.swap(buf);
+    return "";
+}
+
+}  // namespace
+
 static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, BuriedStages *stages,
                                      uintptr_t cancel_flag) {
     if (f.buried == Buried::none) throw std::invalid_argument("fill_buried: not a buried deck");
@@ -687,9 +797,24 @@ static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, Burie
         prepare_below(*b.front, bm, rem);
         SolveContext ctx;
         const cd *zb = fill_part(*b.front, ctx, cancel_flag, &bm, &rem);
-        out.assign(zb, zb + static_cast<size_t>(n * n));
+        if (b.front->n_basis == n && ctx.n_basis() == n) {
+            // Every basis is the below medium's, in order: its block IS the
+            // matrix, so it is moved, not copied (momwire#1541).
+            out = ctx.give_z();
+            out.resize(static_cast<size_t>(n * n));
+        } else {
+            out.assign(zb, zb + static_cast<size_t>(n * n));
+        }
         if (!f.load_rows.empty()) add_loading(f, out);
         record("final");
+        return "";
+    }
+    if (stages == nullptr) {
+        // momwire#1541: the media's blocks folded without a second whole
+        // matrix (`fold_media`); the stages' gates keep the spelling below.
+        const std::string why = fold_media(f, bm, out, cancel_flag);
+        if (!why.empty()) return why;
+        cross_and_load(f, out, cancel_flag);
         return "";
     }
 
@@ -726,13 +851,7 @@ static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, Burie
     }
     record("below");
     // 4-5. The cross blocks and the node charges.
-    std::vector<std::pair<int64_t, int>> tents;
-    for (int64_t m = 0; m < n; m++) {
-        const bool b0 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m)]))] != 0;
-        const bool b1 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m + 1)]))] != 0;
-        if (b0 != b1) tents.emplace_back(m, b0 ? 0 : 1);
-    }
-    crossing_blocks(f, out, tents, cancel_flag);
+    crossing_blocks(f, out, crossing_tents(f), cancel_flag);
     record("cross");
     // 6. The loading, once, on the full geometry.
     if (!f.load_rows.empty()) add_loading(f, out);
