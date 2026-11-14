@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import pickle
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
@@ -548,14 +549,109 @@ def _port_sites(solver, polylines):
     return sites
 
 
+class _SectorInputs:
+    """Exactly what `sector_map` reads off a solver, and nothing else: the
+    polylines, the mesh, the per-wire material, the junctions, the port and
+    load sites, and the ground kind. A read of anything not copied here is an
+    AttributeError rather than a silent hole in `_sector_map_key`, which is
+    what makes the digest the whole of the map's dependence (momwire#1929).
+    """
+
+    __slots__ = (
+        "wires_polylines",
+        "junctions",
+        "n_per_edge_per_wire",
+        "_conductor_radius_per_wire",
+        "wire_conductivity",
+        "insulation_radius",
+        "insulation_eps_r",
+        "insulation_loss_tangent",
+        "distributed_rlc",
+        "feeds",
+        "junction_ports",
+        "node_gaps",
+        "lumped_loads",
+        "ground_kind",
+    )
+
+    def __init__(self, solver):
+        for name in self.__slots__[:9]:
+            setattr(self, name, getattr(solver, name))
+        # The sites only: a port's (wire, arclength), a junction port's
+        # junction, a node gap's (wire, end), each in its own tuple shape with
+        # the voltage blanked. The VOLTAGES are the drive, which no condition
+        # reads (the drive guard is per solve, `check_drive`).
+        self.feeds = [(w, arc, None) for w, arc, _v in solver.feeds]
+        self.junction_ports = [
+            (j, None) for j, _v in getattr(solver, "junction_ports", None) or ()
+        ]
+        self.node_gaps = [
+            (w, end, None) for w, end, _v in getattr(solver, "node_gaps", None) or ()
+        ]
+        # A lumped load's impedance IS read (sectors must carry equal ones),
+        # and it is frequency-dependent where a family has them, so it stays
+        # in the key whole.
+        self.lumped_loads = list(getattr(solver, "lumped_loads", ()) or ())
+        self.ground_kind = solver._rotational_ground_kind()
+
+    def _rotational_ground_kind(self):
+        return self.ground_kind
+
+
+# `sector_map` by the digest of its inputs (momwire#1929): the map is
+# geometry only, yet the nec2 launchers construct a solver per FR step and
+# every construction re-ran the orbit search (2.2 s of the sym4 whip's 13
+# steps under cProfile). Keyed on `_SectorInputs` whole plus the tolerance,
+# never on the wavenumber, which no condition reads. A refusal is not cached:
+# it raises on the first construction, so there is no second to save.
+_SECTOR_MAP_CACHE: OrderedDict = OrderedDict()
+_SECTOR_MAP_CACHE_SIZE = 4
+
+
+def _sector_map_key(inputs, tol_rel):
+    """A digest of every field of `inputs` (pickled, so the floats and the
+    arrays enter bit for bit) and of `tol_rel`."""
+    h = hashlib.blake2b(digest_size=20)
+    h.update(
+        pickle.dumps(
+            (
+                type(inputs).__slots__,
+                tuple(getattr(inputs, name) for name in type(inputs).__slots__),
+                float(tol_rel),
+            ),
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+    )
+    return h.digest()
+
+
 def sector_map(solver, tol_rel=TOL_REL) -> SectorMap:
     """The deck's sector grouping, or a refusal naming the first condition of
     `PLAN-phase1.md` §3 that fails.
 
     Reads only what is frozen at construction — the polylines, the mesh, the
-    per-wire material, the junctions, the ports and the ground kind — so the
-    refusal lands before any fill.
+    per-wire material, the junctions, the ports and the ground kind
+    (`_SectorInputs`) — so the refusal lands before any fill, and memoised on
+    them (`_SECTOR_MAP_CACHE`), so a solver per frequency of one structure
+    reads it once. The map is immutable (tuples of ints and floats), which is
+    what lets the solvers share one.
     """
+    inputs = _SectorInputs(solver)
+    key = _sector_map_key(inputs, tol_rel)
+    hit = _SECTOR_MAP_CACHE.get(key)
+    if hit is not None:
+        _SECTOR_MAP_CACHE.move_to_end(key)
+        return hit
+    smap = _sector_map(inputs, tol_rel)
+    _SECTOR_MAP_CACHE[key] = smap
+    while len(_SECTOR_MAP_CACHE) > _SECTOR_MAP_CACHE_SIZE:
+        _SECTOR_MAP_CACHE.popitem(last=False)
+    return smap
+
+
+def _sector_map(solver, tol_rel) -> SectorMap:
+    """`sector_map`'s reading itself, of a `_SectorInputs` (named `solver`
+    because the condition helpers read the same fields off it)."""
     polylines = [np.asarray(p, dtype=float) for p in solver.wires_polylines]
     extent = max(float(np.max(np.abs(p))) for p in polylines)
     tol = tol_rel * extent
