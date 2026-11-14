@@ -117,6 +117,16 @@ class Memo {
     // future position) before the values are appended in that order.
     TripleIndex &keys() { return idx_; }
     void append_values(const Six *v, size_t m) { vals_.insert(vals_.end(), v, v + m); }
+    // Storage for the next m values, appended zeroed for the caller to write
+    // in place: `append_values` without the caller's own copy of them
+    // (momwire#1541). `room` more values are reserved beyond them, so that
+    // many later appends do not reallocate (and copy) the whole memo.
+    Six *grow_values(size_t m, size_t room = 0) {
+        const size_t old = vals_.size();
+        if (vals_.capacity() < old + m + room) vals_.reserve(old + m + room);
+        vals_.resize(old + m);
+        return vals_.data() + old;
+    }
     SheetPlan plan;
     bool have_plan = false;
     std::unique_ptr<ni_core::ColumnCache> cache;

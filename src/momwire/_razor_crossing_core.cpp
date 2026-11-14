@@ -440,16 +440,101 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
         if (idx[i] == TripleIndex::NONE) claim(i);
 }
 
-// The claimed rows evaluated in one call and appended to the memo, as
-// `designed_index` ends.
-void claim_finish(BlockEval &be, std::vector<double> &rows) {
+// The rows one evaluation batch takes (whole exact-rho columns, so a batch
+// can run over by its last column).
+constexpr size_t EVAL_BATCH_ROWS = size_t(1) << 18;
+
+// The claimed rows evaluated and appended to the memo, as `designed_index`
+// ends: their values written straight into the memo's own storage, and
+// evaluated a batch of whole exact-rho COLUMNS at a time (momwire#1541), not
+// in one call over every row, whose internals held several copies of the
+// values beside the memo's.
+//
+// Why a batch of whole columns is the one call's bits: every row is either
+// served from a sheet or by the column twin. A sheet row is interpolated at
+// its own point from a sheet grown by whole strips, each new cell evaluated
+// as its own columns, so how far a call grows it moves no cell. A twin row
+// is its exact-rho column's: the column's rule (its cache key, from the
+// column's own members' smallest z - z') and its members' own sums, so the
+// column moves no bit wherever its members sit, as long as they arrive
+// together and in their order. Batches take the columns in the one call's
+// first-seen order, each column's members in claim order. With
+// momwire#1860 L5 (`crossing_table`) on, a call decides from its own row
+// count whether it takes the table, so the rows stay ONE call.
+void claim_finish(BlockEval &be, std::vector<double> &rows, size_t room) {
     const size_t m = rows.size() / 3;
     if (m == 0) return;
-    std::vector<Six> vals(m);
-    ni_eval::evaluate_fresh(be.ev, rows.data(), m, nullptr, be.memo.have_plan ? &be.memo.plan : nullptr,
-                            be.memo.cache.get(), vals.data());
+    Six *vals = be.memo.grow_values(m, room);
+    const ni_eval::SheetPlan *plan = be.memo.have_plan ? &be.memo.plan : nullptr;
+    if (m <= EVAL_BATCH_ROWS || ni_eval::active_features().crossing_table) {
+        ni_eval::evaluate_fresh(be.ev, rows.data(), m, nullptr, plan, be.memo.cache.get(), vals);
+        std::vector<double>().swap(rows);
+        return;
+    }
+    // The columns (exact rho, -0.0 == 0.0) in first-seen order, and each
+    // row's: members chained in claim order.
+    std::vector<uint32_t> head, tail, next(m, ni_eval::TripleIndex::NONE);
+    {
+        ni_eval::TripleIndex col_of;  // keyed (rho, 0, 0): `x + 0.0` bits
+        for (size_t i = 0; i < m; i++) {
+            const double key[3] = {rows[3 * i], 0.0, 0.0};
+            bool ins = false;
+            const uint32_t c = col_of.find_or_insert(key, static_cast<uint32_t>(head.size()), ins);
+            if (ins) {
+                head.push_back(static_cast<uint32_t>(i));
+                tail.push_back(static_cast<uint32_t>(i));
+            } else {
+                next[tail[c]] = static_cast<uint32_t>(i);
+                tail[c] = static_cast<uint32_t>(i);
+            }
+        }
+    }
+    std::vector<uint32_t>().swap(tail);
+    std::vector<double> sub;
+    std::vector<uint32_t> at;
+    std::vector<Six> got;
+    size_t c = 0;
+    while (c < head.size()) {
+        sub.clear();
+        at.clear();
+        for (; c < head.size() && at.size() < EVAL_BATCH_ROWS; c++)
+            for (uint32_t i = head[c]; i != ni_eval::TripleIndex::NONE; i = next[i]) {
+                sub.insert(sub.end(), &rows[3 * static_cast<size_t>(i)], &rows[3 * static_cast<size_t>(i)] + 3);
+                at.push_back(i);
+            }
+        got.resize(at.size());
+        ni_eval::evaluate_fresh(be.ev, sub.data(), at.size(), nullptr, plan, be.memo.cache.get(), got.data());
+        for (size_t k = 0; k < at.size(); k++) vals[at[k]] = got[k];
+    }
     std::vector<double>().swap(rows);
-    be.memo.append_values(vals.data(), m);
+}
+
+// y[c] += a * key(tab[ix[c]]): `axpy_gather` over one key of the memo's
+// values read in place (momwire#1541: no plane copies of them), the same
+// product and sum per part.
+void axpy_gather_key(cd *__restrict y, const Six *__restrict tab, int key, const uint32_t *__restrict ix,
+                     double a, size_t n) {
+    double *__restrict yd = reinterpret_cast<double *>(y);
+    const double *__restrict td = reinterpret_cast<const double *>(tab) + 2 * key;
+    for (size_t cc = 0; cc < n; cc++) {
+        const size_t k = 2 * static_cast<size_t>(ni_eval::N_KEYS) * static_cast<size_t>(ix[cc]);
+        yd[2 * cc] = yd[2 * cc] + a * td[k];
+        yd[2 * cc + 1] = yd[2 * cc + 1] + a * td[k + 1];
+    }
+}
+
+// The same over `k2 V + dzpW`, each part formed as the plane held it.
+void axpy_gather_x(cd *__restrict y, const Six *__restrict tab, double k2sq, const uint32_t *__restrict ix,
+                   double a, size_t n) {
+    double *__restrict yd = reinterpret_cast<double *>(y);
+    const double *__restrict tv = reinterpret_cast<const double *>(tab) + 2 * K_V;
+    const double *__restrict tx = reinterpret_cast<const double *>(tab) + 2 * K_DZPW;
+    for (size_t cc = 0; cc < n; cc++) {
+        const size_t k = 2 * static_cast<size_t>(ni_eval::N_KEYS) * static_cast<size_t>(ix[cc]);
+        const double xr = k2sq * tv[k] + tx[k], xi = k2sq * tv[k + 1] + tx[k + 1];
+        yd[2 * cc] = yd[2 * cc] + a * xr;
+        yd[2 * cc + 1] = yd[2 * cc + 1] + a * xi;
+    }
 }
 
 // `_main_sandwich(ctx, A, B, ...)` with the plan: the (nA basis x nB basis)
@@ -467,7 +552,7 @@ void claim_finish(BlockEval &be, std::vector<double> &rows) {
 // contracts each row as before. The memo, its key planes and every
 // contracted entry are therefore the whole-grid route's bits.
 void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, const Axis &B, Block &T,
-                   bool transposed) {
+                   bool transposed, size_t room) {
     const size_t nA = A.n_nodes(), nB = B.n_nodes();
     // The sheet plan, once per fill, from the node pairs.
     {
@@ -510,21 +595,22 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
             }
             claim_window(be, base, re.data(), z.data(), zp.data(), m, nan_rows, fresh, idx);
         }
-        claim_finish(be, fresh);
+        std::vector<double>().swap(re);
+        std::vector<double>().swap(z);
+        std::vector<double>().swap(zp);
+        std::vector<uint32_t>().swap(idx);
+        // The end terms append their own fresh values after these: room for
+        // as many as they have pairs, at most this evaluation's count again
+        // (the capacity a doubling would have taken, without its copy).
+        claim_finish(be, fresh, std::min(room, fresh.size() / 3));
     }
     const double k2sq = c.k_p * c.k_p;
     const std::vector<int64_t> rA = support_rows(A), rB = support_rows(B);
     const std::array<CSR, 4> P = row_weights(A, rA), Q = row_weights(B, rB);
-    // The four keys the contraction reads, one plane each over the memo's
-    // values; `k2 V + dzpW` is a function of the value alone.
-    const std::vector<cd> KU = key_plane(be.memo, K_U), KV = key_plane(be.memo, K_V),
-                          KW = key_plane(be.memo, K_W);
-    std::vector<cd> KX(KV.size());
-    {
-        const std::vector<cd> KD = key_plane(be.memo, K_DZPW);
-        for (size_t j = 0; j < KX.size(); j++)
-            KX[j] = cd(k2sq * KV[j].real() + KD[j].real(), k2sq * KV[j].imag() + KD[j].imag());
-    }
+    // The four keys the contraction reads, gathered from the memo's values
+    // in place (they were copied into one plane each); `k2 V + dzpW` is a
+    // function of the value alone, formed as its plane was.
+    const Six *MV = be.memo.size() ? &be.memo.at(0) : nullptr;
     // Pass 2, a window of rA's rows at a time: the A nodes those rows read
     // (their four weight rows' columns), each one's table row of memo
     // indices, then each row's left products (`left_products_gathered`'s
@@ -612,10 +698,10 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
                     const uint32_t *kx =
                         &K[static_cast<size_t>(slot[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])]) * nB];
                     if (pm < 2) {
-                        axpy_gather(L[pm], KU.data(), kx, a, nB);
+                        axpy_gather_key(L[pm], MV, K_U, kx, a, nB);
                     } else {
-                        axpy_gather(L[2], KX.data(), kx, a, nB);
-                        axpy_gather(L[3], KW.data(), kx, a, nB);
+                        axpy_gather_x(L[2], MV, k2sq, kx, a, nB);
+                        axpy_gather_key(L[3], MV, K_W, kx, a, nB);
                     }
                 }
             }
@@ -624,8 +710,8 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
                 const double a = M.data[static_cast<size_t>(jj)];
                 const uint32_t *kx =
                     &K[static_cast<size_t>(slot[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])]) * nB];
-                axpy_gather(L[4], KW.data(), kx, a, nB);
-                axpy_gather(L[5], KV.data(), kx, a, nB);
+                axpy_gather_key(L[4], MV, K_W, kx, a, nB);
+                axpy_gather_key(L[5], MV, K_V, kx, a, nB);
             }
             for (size_t j = 0; j < rB.size(); j++) {
                 cd *dst = transposed ? T.at(rB[j], rA[i]) : T.at(rA[i], rB[j]);
@@ -659,6 +745,12 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
 int n_physical_threads() {
     const unsigned n = std::thread::hardware_concurrency();
     return n > 1 ? static_cast<int>(n / 2) : 1;
+}
+
+// The (end, line node) pairs `add_end_terms_kept(R, C)` asks tables of: a
+// bound on the fresh values it adds to the block's memo.
+size_t end_pairs(const RAxis &R, const RAxis &C) {
+    return R.ends.size() * C.n_nodes() + C.ends.size() * R.n_nodes();
 }
 
 // `add_end_terms<RazorPolicy>(c, be, a_wire, R, C, r_above, t)` (razor's: no
@@ -980,7 +1072,7 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
                 // taken", so the end terms weigh their own rows, as Python's
                 // prepass does. With the feature off nothing reads it.
                 const bool taken_before = ni_eval::crossing_table_taken();
-                main_sandwich(c, be, r, A, ax, t, false);
+                main_sandwich(c, be, r, A, ax, t, false, end_pairs(A, ax));
                 {
                     const ni_eval::CrossingEndsFirst ends_first(taken_before);
                     add_end_terms_kept<RazorPolicy>(c, be, r, A, ax, true, t);
@@ -989,7 +1081,7 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
                 // `cross_complete_block_reversed(ctx_r, P, ax)`: the main
                 // sandwich over (above source Q = ax, below test P),
                 // transposed as it is written; the ends with the rows below.
-                main_sandwich(c, be, r, ax, P, t, true);
+                main_sandwich(c, be, r, ax, P, t, true, end_pairs(P, ax));
                 add_end_terms_kept<RazorPolicy>(c, be, r, P, ax, false, t);
             }
             // The fold: `Z[rows, cols] -= t`, columns apart.
