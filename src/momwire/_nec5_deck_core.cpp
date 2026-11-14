@@ -1742,6 +1742,7 @@ struct Parser {
             for (std::size_t k = 0; k < 4; k++) c.i(k);
         }
         if (geometry) {
+            const std::size_t n_before = wires.size();
             if (mn == "GW") gw(c);
             if (mn == "GA") ga(c);
             if (mn == "GH") gh(c);
@@ -1749,8 +1750,13 @@ struct Parser {
             if (mn == "GM") gm(c);
             if (mn == "GX") gx(c);
             if (mn == "GS") gs(c);
-            // every wire after every geometry card (`wire_geometry_refusal`)
-            for (const Wire &w : wires) {
+            // every wire the card built or moved (`wire_geometry_refusal`,
+            // `_nec2_geometry._appends_only`, momwire#1929): a card that only
+            // appends left the earlier wires as the card before it passed them
+            const bool appends = mn == "GW" || mn == "GA" || mn == "GH" || mn == "CW" ||
+                                 mn == "GX" || (mn == "GM" && !c.i(1).is_zero());
+            for (std::size_t k = appends ? n_before : 0; k < wires.size(); k++) {
+                const Wire &w = wires[k];
                 bool finite = true, far = false;
                 wire_geometry_scan(w.end1, 3, finite, far);
                 wire_geometry_scan(w.end2, 3, finite, far);
