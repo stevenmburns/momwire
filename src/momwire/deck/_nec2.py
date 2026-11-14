@@ -1464,6 +1464,17 @@ class _Nec2Parser:
 
 def parse_nec2(text: str) -> DeckModel:
     """Parse one ``nec2`` deck body into a :class:`DeckModel`."""
-    parser = _Nec2Parser()
+    return parsed_with_structure(_Nec2Parser(), text)[0]
+
+
+def parsed_with_structure(
+    parser: _Nec2Parser, text: str
+) -> tuple[DeckModel, Nec2Structure]:
+    """``text`` read by ``parser``: the model, and the geometry the parser
+    built on the way to it (`build_geometry` over the deck's geometry cards,
+    run once). The nec2c portal's printout reads that geometry too, and
+    building it a second time was half of a large deck's parse
+    (momwire#1929). Nothing reads or writes the structure after `model`, so
+    handing it on shares nothing a caller could disturb."""
     parser.feed(text)
-    return parser.model()
+    return parser.model(), parser.structure

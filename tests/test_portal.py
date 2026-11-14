@@ -5011,14 +5011,45 @@ def test_the_deck_solver_translates_the_geometry_once():
         assert left is right
 
 
+def test_the_deck_is_parsed_and_its_geometry_built_once(monkeypatch):
+    """momwire#1929: `parse_deck` reads the geometry the dialect's parse
+    built, rather than building it a second time from the same cards (on the
+    ELT whip each build was ~2.5 s). One `build_geometry` per deck, and the
+    structure is the one a fresh build of those cards gives."""
+    from momwire.deck import _nec2 as dialect
+    from momwire.deck import _nec2_geometry
+
+    real = dialect.build_geometry
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(dialect, "build_geometry", counting)
+    for text, name in ((GN_REARM_DECK, "nec2"), (GN_REARM_DECK, "nec4")):
+        calls.clear()
+        deck = nec_portal.parse_deck(text, dialect=name)
+        assert len(calls) == 1, name
+        builders = None
+        if name == "nec4":
+            from momwire.deck._nec4 import _NEC4_GEOMETRY_BUILDERS as builders
+        assert deck.structure == _nec2_geometry.build_geometry(
+            list(deck.geometry), builders
+        )
+
+
 def test_the_prefix_reparse_workaround_is_gone():
     """The grep the rewire is measured by: nothing in the portal stamps a
     ground onto the model any more, and no second parse recovers one."""
     source = Path(nec_portal.__file__).read_text()
     assert "replace(model" not in source
     assert "_environments_per_group" not in source
-    assert "parse_dialect" in source  # the ONE parse, still there
-    assert source.count("parse_dialect(") == 1
+    assert "parse_with_structure" in source  # the ONE parse, still there
+    assert source.count("parse_with_structure(") == 1
+    # ...and its geometry is the parse's own, not built a second time
+    # (momwire#1929).
+    assert "build_geometry(" not in source
 
 
 @pytest.mark.integration

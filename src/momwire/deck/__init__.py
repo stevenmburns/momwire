@@ -22,8 +22,8 @@ move — the geometry — so a sweep translates the structure once.
 from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
-from ._nec2 import parse_nec2
-from ._nec4 import parse_nec4
+from ._nec2 import _Nec2Parser, parse_nec2, parsed_with_structure
+from ._nec4 import _Nec4Parser, parse_nec4
 from ._nec5 import (
     Nec5Deck,
     Nec5ExecuteRequest,
@@ -149,3 +149,19 @@ def parse(text: str, dialect: str = "nec2") -> DeckModel:
         known = ", ".join(repr(name) for name in sorted(_DIALECTS))
         raise DeckError(f"unknown deck dialect {dialect!r}; known dialects: {known}")
     return front_end(text)
+
+
+# The parser behind each of `_DIALECTS`' front ends.
+_PARSERS = {"nec2": _Nec2Parser, "nec4": _Nec4Parser}
+
+
+def parse_with_structure(text: str, dialect: str = "nec2"):
+    """`parse`, plus the flat NEC geometry the dialect built while reading
+    the deck (a `~momwire.deck._nec2_geometry.Nec2Structure`: the wires after
+    every transform, the tags, the ``(tag, segment)`` resolver). The nec2c
+    portal's printout reads both, and used to build the geometry a second time
+    (momwire#1929). The same refusals as `parse`, in the same order."""
+    parser = _PARSERS.get(dialect)
+    if parser is None:
+        parse(text, dialect)  # the unknown-dialect refusal, in its words
+    return parsed_with_structure(parser(), text)
