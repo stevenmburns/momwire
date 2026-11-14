@@ -17,6 +17,12 @@
 //                   rank-1 updates into E_r / E_c (`_EndTerms`), their tables
 //                   from `_end_tables`' spans through the same memo, labelled;
 //   fold            `Z[rows, cols] -= t`, one subtraction per entry.
+//
+// Memory (momwire#1541): the same bits without the reference's whole-size
+// scratch. The grid's tables are formed a window of nodes at a time (its
+// triples claimed in the whole grid's order, evaluated as one call would),
+// each block is held only over the (rows x cols) entries the fold reads, and
+// the axes' end values are kept sparse.
 #pragma once
 
 #include "_razor_front_core.h"
