@@ -95,6 +95,7 @@ from . import _kcl_nullspace
 from . import _ground_mirror
 from . import _ground_refl
 from . import _near_interface
+from . import _near_surface
 from . import _ground_spec
 from . import _lapack
 from . import _medium_spec
@@ -3066,6 +3067,8 @@ class BSplineSolver(
                 crossing_ends=self._grounded_junction_ends(),
             )
             self._cached_wire_media = cached
+            # momwire#1946: advisory only, read once per solver from the labels.
+            _near_surface.warn_for_solver(self, cached)
         return cached
 
     def _grounded_junction_ends(self):

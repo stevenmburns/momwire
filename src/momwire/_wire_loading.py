@@ -124,7 +124,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.special import ive
 
-from . import _ground_refl, _medium_spec, _wire_spec
+from . import _ground_refl, _medium_spec, _near_surface, _wire_spec
 
 MU0 = 1.25663706127e-6
 
@@ -626,6 +626,9 @@ def configure_loading(
             solver._uniform_radius = (
                 first if bool(np.all(kernel_radius == first)) else None
             )
+    # momwire#1946: a near-surface advisory read before the radii above were
+    # set is emitted now that they are (`_near_surface.warn_for_solver`).
+    _near_surface.flush(solver)
 
 
 def normalize_lumped_loads(value, n_wires):

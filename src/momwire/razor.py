@@ -375,6 +375,7 @@ from . import (
     _exact_kernel_series,
     _features,
     _near_interface,
+    _near_surface,
     _potential_ground,
     _razor_class,
     _razor_exact_plan,
@@ -2563,6 +2564,8 @@ class RazorSolver(
                 pec=self.ground_eps is None,
                 crossing_ends=self._grounded_junction_ends(),
             )
+            # momwire#1946: advisory only, read once per solver from the labels.
+            _near_surface.warn_for_solver(self, self._cached_wire_media)
         return self._cached_wire_media
 
     def _crossing_junctions(self):

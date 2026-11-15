@@ -56,6 +56,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _near_surface,
     _rotational_symmetry,
     _schedule,
     _sinusoidal_nec4,
@@ -5663,6 +5664,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         f"junction: {_CROSSING_JUNCTION_REFUSAL}"
                     )
             self._cached_wire_media = cached
+            # momwire#1946: advisory only, read once per solver from the labels.
+            _near_surface.warn_for_solver(self, cached)
         return cached
 
     def _below_segments(self, geom):
