@@ -183,7 +183,9 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 // `_compute_Z_operator_buried`, under `_near_interface`'s `*_scope`s -- so the
 // C++ fills do the same with a `FeatureFill` over theirs, and whatever else
 // this route evaluates (a buried near field, say) sees every one off. All
-// false, the default, is the shipped route bit for bit.
+// false is the route before momwire#1860 bit for bit. Requested from the
+// start: the default-on ones (`Feature.default`: factored_columns,
+// height_sheet_recal, crossing_above_rule), as in Python.
 //
 // Written by the thread that runs the fill, before any parallel region of
 // it starts; the fill's worker threads only read it.
@@ -199,6 +201,9 @@ const Features &active_features();
 // fill, named on line 2 when `stamped` (false for a default-on feature);
 // false, and nothing asked, for a name this route does not carry.
 bool request_feature(const std::string &name, bool stamped = true);
+// Withdraws `name` (a default-on feature the environment turns off, or one
+// outside the executable's reach); false for a name this route does not carry.
+bool withdraw_feature(const std::string &name);
 // Line 2's feature tail for what was requested stamped, as
 // `_features.stamp()` spells it within every feature's reach: "+name" each,
 // in registry order, or "".

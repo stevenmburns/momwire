@@ -1001,7 +1001,20 @@ std::string py_repr(double x) {
 }
 
 namespace {
-Features g_requested, g_active, g_stamped;
+// The default-on features (`Feature.default` in `momwire._features`):
+// requested from the start, as Python's solvers have them on unless told
+// otherwise, so every C++ route (an executable, a test's Python-free
+// driver, an in-process seam) fills as Python does by default. An
+// executable withdraws one its environment turns off (`withdraw_feature`).
+Features default_requested() {
+    Features f;
+    f.factored_columns = true;
+    f.height_sheet_recal = true;
+    f.crossing_above_rule = true;
+    return f;
+}
+
+Features g_requested = default_requested(), g_active, g_stamped;
 
 bool *feature_slot(Features &f, const std::string &name) {
     if (name == "factored_columns") return &f.factored_columns;
@@ -1020,6 +1033,14 @@ bool request_feature(const std::string &name, bool stamped) {
     if (slot == nullptr) return false;
     *slot = true;
     if (stamped) *feature_slot(g_stamped, name) = true;
+    return true;
+}
+
+bool withdraw_feature(const std::string &name) {
+    bool *slot = feature_slot(g_requested, name);
+    if (slot == nullptr) return false;
+    *slot = false;
+    *feature_slot(g_stamped, name) = false;
     return true;
 }
 

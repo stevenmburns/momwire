@@ -394,17 +394,26 @@ int feature_refusal() {
                      name.c_str(), 'y');
         return 2;
     }
-    std::vector<std::string> stamped, unstamped;
-    for (const std::string &name : names) (feature_default_here(name) ? unstamped : stamped).push_back(name);
-    for (const ExeFeature &f : EXE_FEATURES)
-        if (feature_default_here(f.name) && !feature_env_set(f.name)) unstamped.emplace_back(f.name);
+    // The C++ route requests the default-on features from the start
+    // (`ni_eval`); one set off here, or outside this level's reach, is
+    // withdrawn. Asked on, a default-here one is already requested and
+    // unstamped; any other is requested and stamped.
+    std::vector<std::string> stamped, withdrawn;
+    for (const std::string &name : names)
+        if (!feature_default_here(name)) stamped.push_back(name);
+    for (const ExeFeature &f : EXE_FEATURES) {
+        if (!f.default_on) continue;
+        const bool asked_on = std::find(names.begin(), names.end(), f.name) != names.end();
+        const bool set_off = feature_env_set(f.name) && !asked_on;
+        if (!feature_default_here(f.name) || set_off) withdrawn.emplace_back(f.name);
+    }
     if (!stamped.empty()) {
         mws::exe::configure_features(stamped, true);
         mw::exe::configure_features(stamped, true);
     }
-    if (!unstamped.empty()) {
-        mws::exe::configure_features(unstamped, false);
-        mw::exe::configure_features(unstamped, false);
+    if (!withdrawn.empty()) {
+        mws::exe::withdraw_features(withdrawn);
+        mw::exe::withdraw_features(withdrawn);
     }
     for (const ExeFeature &f : EXE_FEATURES)
         for (const std::string &name : stamped)
