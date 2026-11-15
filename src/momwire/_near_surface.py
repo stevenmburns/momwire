@@ -253,10 +253,9 @@ def _xyz(p):
 def near_surface_message(fired):
     """The advisory text for the stretches that fire (longest first).
 
-    THE OPENING WORDS ARE LOAD-BEARING: `pyproject.toml`'s pytest
-    `filterwarnings` silences this advisory by them ("buried wire runs within
-    2 radii of the ground surface"), not by category, for the reason given
-    there. Reword after that phrase freely; change the filter with the opening.
+    The opening words ("buried wire runs within 2 radii of the ground
+    surface") are what the tests match on; reword after them freely, and
+    change `tests/test_near_surface_advisory_1946.py` with the opening.
     """
     s = fired[0]
     where = (
