@@ -63,9 +63,10 @@ byte-identical.**
   explicit on.
 - Promoting moves goldens wherever the feature changes digits: regenerate
   with `--corpus stable` and give each moved one's lever and measured |dZ|/|Z|.
-- Today: #1860's `factored_columns`, `height_sheet_recal` and
-  `crossing_above_rule` (2026-11-15). `crossing_table` (drift 1e-3) stays
-  opt-in.
+- Today: #1860's `factored_columns` and `height_sheet_recal` (2026-11-15).
+  `crossing_table` (drift 1e-3) stays opt-in. `crossing_above_rule` was
+  approved but held back: the pre-tag sweep measured 1.28e-6 on the WA7ARK
+  ground-rod EFHW, over its declared 1e-7.
 
 **Outside its reach, a feature acts by its kind.**
 - `kind="python"` (a route over kernels that already shipped) runs, and
@@ -77,7 +78,7 @@ byte-identical.**
   them on line 2 as Python does. Any other `MOMWIRE_X_*` variable set on, or a
   legacy alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence
   before it reads a deck; set to "0" it is accepted. Today the table is #1860's
-  four levers at reach 8, three of them on by default.
+  four levers at reach 8, two of them on by default.
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 

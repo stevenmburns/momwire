@@ -63,11 +63,11 @@ def test_every_default_is_off_but_the_promoted_ones(no_features):
     for name, f in F.FEATURES.items():
         assert F.enabled(name) is (f.default and F.certified(name)), name
         assert F.default_on(name) is (f.default and F.certified(name)), name
-    # 2026-11-15 (Steve): momwire#1860's L1, L2 and B1; L5 stays opt-in.
+    # 2026-11-15 (Steve): momwire#1860's L1 and L2. L5 stays opt-in, and B1
+    # is held back (its measured drift is over its declared bound).
     assert {n for n, f in F.FEATURES.items() if f.default} == {
         "factored_columns",
         "height_sheet_recal",
-        "crossing_above_rule",
     }
 
 
@@ -82,7 +82,7 @@ def test_a_promoted_feature_meets_the_default_bar():
             assert f.offer and f.kwarg, f
 
 
-@pytest.mark.parametrize("name", ["factored_columns", "crossing_above_rule"])
+@pytest.mark.parametrize("name", ["factored_columns", "height_sheet_recal"])
 def test_a_promoted_feature_is_turned_off_by_the_keyword_or_the_variable(
     no_features, name
 ):

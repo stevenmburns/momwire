@@ -1010,7 +1010,6 @@ Features default_requested() {
     Features f;
     f.factored_columns = true;
     f.height_sheet_recal = true;
-    f.crossing_above_rule = true;
     return f;
 }
 

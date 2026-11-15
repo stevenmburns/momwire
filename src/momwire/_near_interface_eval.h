@@ -185,7 +185,7 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 // this route evaluates (a buried near field, say) sees every one off. All
 // false is the route before momwire#1860 bit for bit. Requested from the
 // start: the default-on ones (`Feature.default`: factored_columns,
-// height_sheet_recal, crossing_above_rule), as in Python.
+// height_sheet_recal), as in Python.
 //
 // Written by the thread that runs the fill, before any parallel region of
 // it starts; the fill's worker threads only read it.

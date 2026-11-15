@@ -281,9 +281,9 @@ FEATURES: dict[str, Feature] = {
         # the member route and not bit-identical to it. Reach 8: the
         # nec5-razor-2p, nec5-bspline and nec42-bspline executables carry it
         # (the ports of #1860's measurement build). On by default since
-        # 2026-11-15 (Steve), as are height_sheet_recal and
-        # crossing_above_rule: certified through level 8, and level 9's
-        # nec42-sinusoidal route has no column twin to factor.
+        # 2026-11-15 (Steve), as is height_sheet_recal: certified through
+        # level 8, and level 9's nec42-sinusoidal route has no column twin to
+        # factor.
         Feature(
             name="factored_columns",
             reach=8,
@@ -377,9 +377,12 @@ FEATURES: dict[str, Feature] = {
                 "when most of the antenna is above ground. Measured to move the "
                 "input impedance by at most 3e-8 relative."
             ),
+            # Not default-on: approved for promotion 2026-11-15, held back
+            # because the pre-tag sweep measured |dZin|/|Zin| = 1.28e-6 on
+            # default|sommerfeld|ground_rod_efhw_wa7ark (nec5-bspline, Skylake),
+            # over this declared 1e-7 and over DEFAULT_DRIFT_MAX.
             drift=1e-7,
             offer=True,
-            default=True,
         ),
         # BSplineSolver's junction constraints eliminated before the factor
         # (momwire#1898): Z reduced to the constraint null space in place,
