@@ -40,6 +40,9 @@ void configure_grid_cache(const std::string &tag);
 // line 2 does not name). False when this copy carries a name not (nothing of
 // that name is asked).
 bool configure_features(const std::vector<std::string> &names, bool stamped = true);
+// The default-on features (requested from the start, `ni_eval`) that this
+// executable runs off: set off in its environment, or outside its reach.
+bool withdraw_features(const std::vector<std::string> &names);
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,

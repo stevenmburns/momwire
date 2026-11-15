@@ -113,6 +113,12 @@ bool configure_features(const std::vector<std::string> &names, bool stamped) {
     return ok;
 }
 
+bool withdraw_features(const std::vector<std::string> &names) {
+    bool ok = true;
+    for (const std::string &n : names) ok = ni_eval::withdraw_feature(n) && ok;
+    return ok;
+}
+
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);
     somm_below::configure_below_store(true);
