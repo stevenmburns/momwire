@@ -321,9 +321,9 @@ Each launcher's choice is only its default. Set `MOMWIRE_JUNCTION_RULE` to
 `nec2` or `nec42` in the environment the engine runs in to choose the other
 on any launcher. Sin-Galerkin and the other bases take no junction rule.
 
-### The NEC-5 engines on Windows, without Python (preview)
+### The NEC-5 engines on Windows, without Python
 
-**Preview:** each release from 0.79.0 also carries
+Each release from 0.79.0 also carries
 **`momwire-nec5-windows-x64.zip`**, the same two engines as native Windows
 programs, signed with momwire's certificate. The zip holds
 `momwire-nec5-razor2p-avx2.exe` and `momwire-nec5-bs2-avx2.exe` for a
@@ -331,10 +331,14 @@ processor with AVX2, the `-sse2` pair for any other 64-bit x86 processor, and
 a `win7` folder with the sse2 pair built to run on Windows 7 SP1. The zip's
 README.txt says which to use. The DLLs they load ship beside them, so nothing
 needs installing; keep each folder together. A deck an engine does not serve
-yet is refused in the printout by name, as on Linux. The drop-in,
+yet is refused in the printout by name, as on Linux. These programs and the
+drop-in,
 [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip)
-(named `momwire-eznec-windows.zip` before 0.80.0), is still the supported
-way to run momwire under EZNEC, SimNEC or 4nec2 on Windows.
+(named `momwire-eznec-windows.zip` before 0.80.0), are the two supported ways
+to run momwire under EZNEC, SimNEC or 4nec2 on Windows. CI runs every test
+deck through both Windows builds (avx2 and sse2) on every change and checks
+their printouts against the Python engine's: they match to the printed digit,
+apart from round-off in values that are zero in exact arithmetic.
 
 ### The NEC-5 engines on macOS, without Python (preview)
 
