@@ -60,6 +60,7 @@ from typing import NamedTuple
 
 import numpy as np
 from threadpoolctl import threadpool_limits
+from ._identity_memo import frozen_tuple
 from ._vec3 import norm3
 from . import _lapack
 from ._near_interface import _table_threads
@@ -608,17 +609,23 @@ _SECTOR_MAP_CACHE: OrderedDict = OrderedDict()
 _SECTOR_MAP_CACHE_SIZE = 4
 
 
-def _sector_map_key(inputs, tol_rel):
+def _sector_map_key(inputs, tol_rel, held=None):
     """A digest of every field of `inputs` (pickled, so the floats and the
-    arrays enter bit for bit) and of `tol_rel`."""
+    arrays enter bit for bit) and of `tol_rel`.
+
+    `held` is the polylines as a frozen tuple (`_identity_memo`), or None.
+    When given they enter by IDENTITY (their ids) instead of by their bytes
+    (momwire#1943: pickling the whip's coordinates was most of the 8 ms a
+    construction paid to recognise its own structure); the cache entry
+    keeps them alive, so no other array can take those ids while it lives."""
+    fields = tuple(getattr(inputs, name) for name in type(inputs).__slots__)
+    if held is not None:
+        # `wires_polylines` is the first slot.
+        fields = (("frozen", tuple(map(id, held))),) + fields[1:]
     h = hashlib.blake2b(digest_size=20)
     h.update(
         pickle.dumps(
-            (
-                type(inputs).__slots__,
-                tuple(getattr(inputs, name) for name in type(inputs).__slots__),
-                float(tol_rel),
-            ),
+            (type(inputs).__slots__, fields, float(tol_rel)),
             protocol=pickle.HIGHEST_PROTOCOL,
         )
     )
@@ -637,13 +644,21 @@ def sector_map(solver, tol_rel=TOL_REL) -> SectorMap:
     what lets the solvers share one.
     """
     inputs = _SectorInputs(solver)
-    key = _sector_map_key(inputs, tol_rel)
+    held = frozen_tuple(inputs.wires_polylines)
+    key = _sector_map_key(inputs, tol_rel, held)
     hit = _SECTOR_MAP_CACHE.get(key)
-    if hit is not None:
+    if hit is not None and (
+        held is None
+        or (
+            hit[1] is not None
+            and len(hit[1]) == len(held)
+            and all(x is y for x, y in zip(hit[1], held))
+        )
+    ):
         _SECTOR_MAP_CACHE.move_to_end(key)
-        return hit
+        return hit[0]
     smap = _sector_map(inputs, tol_rel)
-    _SECTOR_MAP_CACHE[key] = smap
+    _SECTOR_MAP_CACHE[key] = (smap, held)
     while len(_SECTOR_MAP_CACHE) > _SECTOR_MAP_CACHE_SIZE:
         _SECTOR_MAP_CACHE.popitem(last=False)
     return smap
