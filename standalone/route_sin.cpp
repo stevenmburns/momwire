@@ -107,9 +107,9 @@ sinusoidal::FillLinalg linalg() {
 // kept on disk between runs. A stored value is the fill's, bit for bit, so
 // a warm run prints what a cold one does; without it every run refilled
 // both (exe warm == exe cold, the perf-1028 study's finding 3).
-bool configure_features(const std::vector<std::string> &names) {
+bool configure_features(const std::vector<std::string> &names, bool stamped) {
     bool ok = true;
-    for (const std::string &n : names) ok = ni_eval::request_feature(n) && ok;
+    for (const std::string &n : names) ok = ni_eval::request_feature(n, stamped) && ok;
     return ok;
 }
 

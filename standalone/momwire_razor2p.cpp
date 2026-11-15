@@ -292,13 +292,14 @@ const char *const FEATURE_ALIASES[][2] = {
 struct ExeFeature {
     const char *name;
     int reach;
+    bool default_on;  // the registry's `default`: on within reach unless set off
 };
 // momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`).
 const ExeFeature EXE_FEATURES[] = {
-    {"factored_columns", 8},
-    {"height_sheet_recal", 8},
-    {"crossing_table", 8},
-    {"crossing_above_rule", 8},
+    {"factored_columns", 8, true},
+    {"height_sheet_recal", 8, true},
+    {"crossing_table", 8, false},
+    {"crossing_above_rule", 8, true},
 };
 
 // This executable's level in support/hierarchy.toml, as
@@ -351,13 +352,38 @@ bool feature_runs_here(const std::string &name) {
     return false;
 }
 
+// Whether the environment sets feature `name` at all (a non-blank value, on
+// or not), by its canonical variable or an alias: a default-on feature so
+// set takes the value, as `_features._env_value` reads it; unset, its
+// default.
+bool feature_env_set(const std::string &name) {
+    std::string var = "MOMWIRE_X_" + name;
+    for (char &c : var) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    std::vector<std::string> vars{var};
+    for (const auto &alias : FEATURE_ALIASES)
+        if (name == alias[1]) vars.emplace_back(alias[0]);
+    for (const std::string &v : vars)
+        if (env(v.c_str()).find_first_not_of(" \t\r\n") != std::string::npos) return true;
+    return false;
+}
+
+// Whether `name` is on by default in this executable (`_features.default_on`):
+// promoted, and its reach covers this executable's level.
+bool feature_default_here(const std::string &name) {
+    for (const ExeFeature &f : EXE_FEATURES)
+        if (name == f.name) return f.default_on && exe_level() <= f.reach;
+    return false;
+}
+
 // Line 2's feature tail for this run (the routes' `ni_eval::requested_stamp`,
 // for the printouts this file writes itself).
 std::string g_feature_stamp;
 
 // One sentence on stderr and exit 2 when a feature this executable does not
 // run is on; 0 (go on) otherwise, with the ones it runs asked of both copies
-// of the C++ route.
+// of the C++ route. A default-on feature (`feature_default_here`) is asked
+// too unless its variable is set, and, as in `_features.stamp`, line 2 names
+// only the features on whose default here is off.
 int feature_refusal() {
     const std::vector<std::string> names = features_requested();
     for (const std::string &name : names) {
@@ -368,16 +394,24 @@ int feature_refusal() {
                      name.c_str(), 'y');
         return 2;
     }
-    if (!names.empty()) {
-        mws::exe::configure_features(names);
-        mw::exe::configure_features(names);
-        for (const ExeFeature &f : EXE_FEATURES)
-            for (const std::string &name : names)
-                if (name == f.name) {
-                    g_feature_stamp += std::string("+") + f.name;
-                    break;
-                }
+    std::vector<std::string> stamped, unstamped;
+    for (const std::string &name : names) (feature_default_here(name) ? unstamped : stamped).push_back(name);
+    for (const ExeFeature &f : EXE_FEATURES)
+        if (feature_default_here(f.name) && !feature_env_set(f.name)) unstamped.emplace_back(f.name);
+    if (!stamped.empty()) {
+        mws::exe::configure_features(stamped, true);
+        mw::exe::configure_features(stamped, true);
     }
+    if (!unstamped.empty()) {
+        mws::exe::configure_features(unstamped, false);
+        mw::exe::configure_features(unstamped, false);
+    }
+    for (const ExeFeature &f : EXE_FEATURES)
+        for (const std::string &name : stamped)
+            if (name == f.name) {
+                g_feature_stamp += std::string("+") + f.name;
+                break;
+            }
     return 0;
 }
 

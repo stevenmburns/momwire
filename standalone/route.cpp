@@ -20,9 +20,9 @@
 namespace mw {
 namespace exe {
 
-bool configure_features(const std::vector<std::string> &names) {
+bool configure_features(const std::vector<std::string> &names, bool stamped) {
     bool ok = true;
-    for (const std::string &n : names) ok = ni_eval::request_feature(n) && ok;
+    for (const std::string &n : names) ok = ni_eval::request_feature(n, stamped) && ok;
     return ok;
 }
 

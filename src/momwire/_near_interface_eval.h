@@ -196,10 +196,12 @@ struct Features {
 Features &requested_features();
 const Features &active_features();
 // Asks for the feature `name` (its `momwire._features` name) in every later
-// fill; false, and nothing asked, for a name this route does not carry.
-bool request_feature(const std::string &name);
-// Line 2's feature tail for what was requested, as `_features.stamp()` spells
-// it within every feature's reach: "+name" each, in registry order, or "".
+// fill, named on line 2 when `stamped` (false for a default-on feature);
+// false, and nothing asked, for a name this route does not carry.
+bool request_feature(const std::string &name, bool stamped = true);
+// Line 2's feature tail for what was requested stamped, as
+// `_features.stamp()` spells it within every feature's reach: "+name" each,
+// in registry order, or "".
 std::string requested_stamp();
 
 // One buried fill with the requested features on, as the Python solvers'
