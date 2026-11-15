@@ -203,6 +203,13 @@ def _fire(wires, media, a, lam):
     return st, _near_surface.stretches_that_fire(st, lam)
 
 
+def test_a_shallow_depth_reads_as_itself_not_minus_zero():
+    wires = [np.array([[0.0, 0.0, -0.0002], [5.0, 0.0, -0.0002]])]
+    (text,) = _advisories(RazorSolver, wires)
+    assert "from (0, 0, -0.0002) to (5, 0, -0.0002) m" in text
+    assert "-0)" not in text and "-0," not in text
+
+
 def test_the_study_decks_split_at_lambda_over_500():
     """The module docstring's table, re-derived: x5 slope fires (0.08 m,
     -0.09 ohm in the study), 0.2 mm radials do not (0.04 m, -0.04 ohm)."""
