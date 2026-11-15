@@ -202,6 +202,26 @@ The same applies to a phase's memory attribution. `p2_memory_probe.py` reports
 allocation there is not the same thing as a contribution to the process peak,
 and momwire#1126 exists because the two were read as one.
 
+### A narrowed refusal: test everything the old one caught
+
+When a refusal is narrowed to serve a case, the cases it used to catch by
+accident start being solved too, and its old gates say nothing about them.
+momwire#1138 (09-19, first in v0.65.0) narrowed the crossing-junction refusal
+so that an above-side junction next to a crossing would be served. Its argument
+(a junction's by-parts end terms cancel through its own KCL row) holds for a
+plain junction, and its gate measured exactly that. The old refusal had also
+been catching junction PORTS, where the boundary term is the impressed voltage
+and nothing cancels. No gate of #1138 had a port, so end drive beside any
+interface-crossing wire went from refused to silently wrong (−j357,000 Ω for
+about −j20 Ω) for two months, until #1487 / #1934.
+
+So, before narrowing a refusal, list every kind of input the old predicate
+caught: port kinds (gap, segment, junction port, node gap), ground kinds,
+which side of the interface, wire shapes. Give each kind that becomes served a
+gate against an independent answer, such as a gap feed on the same structure,
+another basis, or NEC-5. The kinds that are not meant to become served should
+still refuse by name.
+
 ## Linting: the contract
 
 CI runs **two** gates: `ruff check` **and** `ruff format --check`. A green
