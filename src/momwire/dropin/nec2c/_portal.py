@@ -160,6 +160,7 @@ stderr; the protocol is byte-identical in all three modes.
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import itertools
 import json
@@ -171,6 +172,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Callable
 
 import momwire_serve_client as _mech
 import numpy as np
@@ -1854,7 +1856,11 @@ class GroupResult:
     i_source: np.ndarray
     network_points: list[tuple[int, int, int]]
     segment_currents: np.ndarray
-    segment_charges: np.ndarray
+    # The charge table is read only when a `PQ` card prints it (or the NEC-4
+    # dialect's charge rows ask), so it is computed on first read, not with
+    # every solve (momwire#1943): ``charges_of`` is that computation, and
+    # :attr:`segment_charges` caches its answer.
+    charges_of: Callable[[], np.ndarray] = field(repr=False, compare=False)
     coeffs: np.ndarray
     solver: object
     p_in: float
@@ -1870,6 +1876,11 @@ class GroupResult:
     ground: Ground
     ground_z: float | None
     second_medium: SecondMedium | None
+
+    @functools.cached_property
+    def segment_charges(self) -> np.ndarray:
+        """Per NEC segment (global order), the charge density."""
+        return self.charges_of()
 
 
 @dataclass(frozen=True)
@@ -2564,7 +2575,9 @@ class DeckSolver:
         # omega from the operator's own wavelength, not from the deck's MHz
         # field: the two agree, and this is the one the solve ran at.
         omega = 2.0 * math.pi * C_LIGHT / float(entry["wavelength"])
-        seg_charges = self._segment_charges(entry["solver"], coeffs, omega)
+
+        def charges_of(solver=entry["solver"], coeffs=coeffs, omega=omega):
+            return self._segment_charges(solver, coeffs, omega)
 
         p_in = 0.5 * float(
             sum((volts * np.conj(i_source[p])).real for p, _s, volts in driven)
@@ -2614,7 +2627,7 @@ class DeckSolver:
             if reducer is not None
             else [],
             segment_currents=seg_currents,
-            segment_charges=seg_charges,
+            charges_of=charges_of,
             coeffs=coeffs,
             solver=entry["solver"],
             p_in=p_in,
