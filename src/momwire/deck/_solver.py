@@ -61,6 +61,7 @@ import numpy as np
 from .._below_interface import ExtendedKernelAboveGround
 from .._constants import C_LIGHT
 from .._ground_spec import ground_touch_tol
+from .._identity_memo import freeze
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
 from ..harrington import HarringtonSolver
@@ -987,6 +988,11 @@ def prepare_mesh(model: DeckModel) -> PreparedMesh:
     """
     sites, feed_ports, load_ports = _sites(model)
     mesh = to_polylines(model, tuple((site.wire, site.arclength) for site in sites))
+    # Read-only from here on (momwire#1943): the handle's whole contract is
+    # that every solver sees these very arrays and none writes to them, and a
+    # frozen array is what the constructors' per-structure memos
+    # (`momwire._identity_memo`) may recognise by identity.
+    freeze(mesh.polylines)
 
     # The mesh decided the solver's port order; renumber the plan onto it so
     # a plan index and a Y row are the same integer.

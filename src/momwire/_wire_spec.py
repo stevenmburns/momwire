@@ -17,8 +17,22 @@ from typing import NamedTuple
 
 import numpy as np
 
+from ._identity_memo import IdentityMemo, frozen_tuple
 from ._junction_rule import coincident_end_groups
 from ._vec3 import norm3
+
+# momwire#1943: the geometry-only checks below, held per structure by the
+# IDENTITY of a prepared mesh's frozen polylines (`_identity_memo`), so a
+# solver per FR step of one deck runs each once. Arrays that are not frozen
+# never hit, and a check that raises stores nothing.
+_DUPLICATES_MEMO = IdentityMemo()
+_COINCIDENCE_MEMO = IdentityMemo()
+_SHORT_SEGMENTS_MEMO = IdentityMemo()
+
+
+def _counts_key(n_per_edge_per_wire):
+    """The segment counts BY VALUE, as a memo's ``extra``."""
+    return tuple(tuple(int(c) for c in counts) for counts in n_per_edge_per_wire)
 
 
 def format_numbers(values) -> str:
@@ -112,7 +126,20 @@ def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
     ``ValueError`` naming the group, both ends, the distance and the
     tolerance; returns None on success.
     """
-    if _junctions_coincide(wires_polylines, n_per_edge_per_wire, junctions):
+    pls = frozen_tuple(wires_polylines)
+    if pls is not None:
+        try:
+            extra = (
+                _counts_key(n_per_edge_per_wire),
+                tuple(tuple((int(w), end) for w, end in g) for g in junctions),
+            )
+        except (TypeError, ValueError):
+            pls = None
+    if _COINCIDENCE_MEMO.get(
+        pls,
+        extra if pls is not None else None,
+        lambda: _junctions_coincide(wires_polylines, n_per_edge_per_wire, junctions),
+    ):
         return
     for j, group in enumerate(junctions):
         anchors = []
@@ -436,6 +463,16 @@ def find_duplicated_wires(wires_polylines):
     `drop_duplicated_wires` merges a copy only when it is also joined like
     its twin (momwire#1333).
     """
+    held = frozen_tuple(wires_polylines)
+    return list(
+        _DUPLICATES_MEMO.get(
+            held, None, lambda: tuple(_find_duplicated_wires(wires_polylines))
+        )
+    )
+
+
+def _find_duplicated_wires(wires_polylines):
+    """`find_duplicated_wires`' search, every call (see there)."""
     pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
     good = [pl for pl in pls if pl.ndim == 2 and pl.size]
     if not good:
@@ -1120,6 +1157,33 @@ def short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire):
     """``[(wire, shortest delta/a, n_short_segments)]`` for every wire with a
     segment under `SHORT_SEGMENT_FLOOR` radii, worst first. Reads the mesh the
     solver will solve: each edge split into its own segment count."""
+    pls = frozen_tuple(wires_polylines)
+    if pls is not None:
+        try:
+            extra = (
+                _counts_key(n_per_edge_per_wire),
+                np.asarray(
+                    [float(radius_per_wire[w]) for w in range(len(pls))],
+                    dtype=np.float64,
+                ).tobytes(),
+            )
+        except (IndexError, TypeError, ValueError):
+            pls = None
+    return list(
+        _SHORT_SEGMENTS_MEMO.get(
+            pls,
+            extra if pls is not None else None,
+            lambda: tuple(
+                _short_segment_wires(
+                    wires_polylines, n_per_edge_per_wire, radius_per_wire
+                )
+            ),
+        )
+    )
+
+
+def _short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire):
+    """`short_segment_wires`' census, every call (see there)."""
     found = _short_segment_wires_at_once(
         wires_polylines, n_per_edge_per_wire, radius_per_wire
     )
