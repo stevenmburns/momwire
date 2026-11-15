@@ -3,9 +3,14 @@
 Each opt-in feature has one entry in :data:`FEATURES`. Its REACH is the
 deepest level of the support hierarchy (``support/hierarchy.toml``, mirrored
 in :data:`LEVELS`) at which it is certified; it is certified on levels
-1..reach, and stable when its reach is the deepest level. Every feature is OFF
+1..reach, and stable when its reach is the deepest level. A feature is OFF
 unless asked for, by its keyword argument (which wins) or by its environment
-variable, ``MOMWIRE_X_<NAME>``.
+variable, ``MOMWIRE_X_<NAME>`` -- except one PROMOTED to on by default
+(``default=True``): that one is on wherever it is certified (levels
+1..reach) unless the keyword is False or the variable is set to a value that
+is not an on value ("0", say), and off by default outside its reach.
+Default-on is a separate decision from reach (the maintainer's, recorded in
+the entry), and its bar is :data:`DEFAULT_DRIFT_MAX`.
 
 On outside its reach, a feature is handled by its KIND:
 
@@ -21,7 +26,10 @@ and whose reach covers their level (``EXE_FEATURES`` in
 ``MOMWIRE_X_`` variable on refuses before it reads a deck
 (:data:`EXE_REFUSAL`).
 
-With every feature off nothing here changes a byte of any printout.
+With every feature at its default nothing here changes a byte of line 2:
+the stamp names only a feature that is on where its default is off. With every
+feature off -- the default-on ones turned off explicitly -- the printout is
+the one before they were promoted.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ import sys
 from dataclasses import dataclass
 
 __all__ = [
+    "DEFAULT_DRIFT_MAX",
     "ENV_PREFIX",
     "EXE_REFUSAL",
     "FEATURES",
@@ -47,6 +56,7 @@ __all__ = [
     "context_scope",
     "in_context",
     "current_level",
+    "default_on",
     "enabled",
     "stamp",
 ]
@@ -115,6 +125,12 @@ EXE_REFUSAL = (
 
 KINDS = ("python", "native")
 
+# The most a default-on feature may move an answer: its declared `drift`
+# (|dZ|/|Z|) at or under this, below which a five-figure printout reads the
+# same (antennaknobs draws its "(faster)" line here too, LAST_DIGITS_DRIFT).
+# A feature that moves the answer more stays opt-in, whatever its reach.
+DEFAULT_DRIFT_MAX = 1e-6
+
 
 @dataclass(frozen=True)
 class Feature:
@@ -145,6 +161,11 @@ class Feature:
     summary: str = ""
     drift: float = 1.0
     offer: bool = False
+    # On by default wherever it is certified (levels 1..reach): promoted by
+    # the maintainer, in its own PR, with drift <= DEFAULT_DRIFT_MAX. The
+    # keyword False, or the variable at a value that is not on ("0"),
+    # still turns it off. Outside its reach the default is off.
+    default: bool = False
 
     @property
     def stable(self) -> bool:
@@ -259,7 +280,10 @@ FEATURES: dict[str, Feature] = {
         # z and z', the product per member. A new C++ path, a few ulp from
         # the member route and not bit-identical to it. Reach 8: the
         # nec5-razor-2p, nec5-bspline and nec42-bspline executables carry it
-        # (the ports of #1860's measurement build).
+        # (the ports of #1860's measurement build). On by default since
+        # 2026-11-15 (Steve), as are height_sheet_recal and
+        # crossing_above_rule: certified through level 8, and level 9's
+        # nec42-sinusoidal route has no column twin to factor.
         Feature(
             name="factored_columns",
             reach=8,
@@ -277,6 +301,7 @@ FEATURES: dict[str, Feature] = {
             ),
             drift=1e-11,
             offer=True,
+            default=True,
         ),
         # The near-interface height-sheet census recalibrated (momwire#1860
         # L2): a horizontal wire's rows on a height sheet at their measured
@@ -300,12 +325,14 @@ FEATURES: dict[str, Feature] = {
             ),
             drift=1e-9,
             offer=True,
+            default=True,
         ),
         # The crossing table (momwire#1860 L5): the crossing rows inside a
         # fixed wavelength-scaled grid read from one table per frequency, the
         # singular part taken out in closed form. A new C++ path and a coarse
         # accuracy class (printed Zin within ~0.1 ohm on the EFHW decks).
-        # Reach 8, as factored_columns.
+        # Reach 8, as factored_columns. Opt-in: its drift class is over
+        # DEFAULT_DRIFT_MAX.
         Feature(
             name="crossing_table",
             reach=8,
@@ -352,6 +379,7 @@ FEATURES: dict[str, Feature] = {
             ),
             drift=1e-7,
             offer=True,
+            default=True,
         ),
         # BSplineSolver's junction constraints eliminated before the factor
         # (momwire#1898): Z reduced to the constraint null space in place,
@@ -474,29 +502,52 @@ class FeatureNotCertified(RuntimeError):
     """A native feature was asked for outside its reach."""
 
 
-def _env_on(feature: Feature) -> bool:
+def _env_value(feature: Feature) -> bool | None:
+    """What the environment says of `feature`: True (on), False (set to
+    anything else, "0" say) or None (unset or empty: the default)."""
     for var in (feature.env, *feature.aliases):
         value = os.environ.get(var)
         if value is not None and value.strip():
             return value.strip().lower() in _ON
-    return False
+    return None
+
+
+def _env_on(feature: Feature) -> bool:
+    return _env_value(feature) is True
+
+
+def default_on(name: str, context: str | None = None) -> bool:
+    """Whether `name` is on when nothing asks either way: a default-on
+    feature where it is certified (`context` defaulting to the running
+    one), else no."""
+    feature = FEATURES[name]
+    if not feature.default:
+        return False
+    return certified(name, _CONTEXT.get() if context is None else context)
 
 
 def enabled(
     name: str, kwarg_value: object = None, *, context: str | None = None
 ) -> bool:
     """Whether `name` is on: the keyword's value when one was passed (not
-    None), else its environment variable. Off by default. A native feature
-    that is on outside its reach raises :class:`FeatureNotCertified`."""
+    None), else its environment variable when set, else its default
+    (:func:`default_on`: off, unless the feature is promoted and certified
+    here). A native feature that is on outside its reach raises
+    :class:`FeatureNotCertified`."""
     feature = FEATURES[name]
-    on = bool(kwarg_value) if kwarg_value is not None else _env_on(feature)
+    if kwarg_value is not None:
+        on = bool(kwarg_value)
+    else:
+        env = _env_value(feature)
+        on = default_on(name, context) if env is None else env
     if on:
         check(name, context)
     return on
 
 
 def active() -> list[str]:
-    """The features the environment turns on, in registry order."""
+    """The features the environment turns on, in registry order (a
+    default-on one only when its variable says on, not by its default)."""
     return [name for name, f in FEATURES.items() if _env_on(f)]
 
 
@@ -613,13 +664,15 @@ def check(name: str, context: str | None = None) -> None:
 
 
 def stamp(context: str | None = None) -> str:
-    """What a printout's line 2 adds for the features that are on: ``""``
-    when none is (the line is then byte-identical to one without features),
-    else ``"+a+b"``, followed by ``" uncertified on this platform"`` when
-    any of them is outside its reach here (`context` defaulting to the
-    running one)."""
+    """What a printout's line 2 adds for the features the environment turns
+    on where their default is off: ``""`` when there are none (the line is
+    then byte-identical to one without features), else ``"+a+b"``, followed
+    by ``" uncertified on this platform"`` when any of them is outside its
+    reach here (`context` defaulting to the running one). A default-on
+    feature is never named: on, it is the stable path; turned off, the
+    printout is the one before it was promoted."""
     context = _CONTEXT.get() if context is None else context
-    names = active()
+    names = [n for n in active() if not default_on(n, context)]
     if not names:
         return ""
     text = "".join(f"+{n}" for n in names)

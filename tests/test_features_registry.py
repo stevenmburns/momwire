@@ -3,15 +3,18 @@ hierarchy (`support/hierarchy.toml`).
 
 What is held here:
 
-- every feature is off by default, named ``MOMWIRE_X_<NAME>``, with a reach
-  inside the hierarchy and a kind the split rule knows;
+- every feature is off by default except the promoted ones (``default``),
+  which are on where certified and turned off by the keyword False or the
+  variable "0"; each is named ``MOMWIRE_X_<NAME>``, with a reach inside the
+  hierarchy and a kind the split rule knows;
 - the TOML and the module carry the same levels in the same order, and every
   CI job is either under a level or listed as unassigned;
 - the keyword wins over the environment, and an alias is honoured;
 - `current_level` / `certified` place each context where the hierarchy says;
 - a native feature outside its reach refuses, a Python one runs;
-- line 2 of a printout names the features that are on, and ONLY then: with
-  every flag off the printout is the one the golden corpus froze;
+- line 2 of a printout names the features that are on where their default
+  is off, and ONLY then: with every flag at its default the printout is the
+  one the golden corpus froze;
 - a standalone executable runs exactly the features it carries whose reach
   covers its level, and refuses every other one in the registry's sentence.
 """
@@ -55,10 +58,58 @@ def _load_toml():
 # --- the registry -------------------------------------------------------------
 
 
-def test_every_default_is_off(no_features):
+def test_every_default_is_off_but_the_promoted_ones(no_features):
     assert F.active() == []
-    for name in F.FEATURES:
-        assert F.enabled(name) is False
+    for name, f in F.FEATURES.items():
+        assert F.enabled(name) is (f.default and F.certified(name)), name
+        assert F.default_on(name) is (f.default and F.certified(name)), name
+    # 2026-11-15 (Steve): momwire#1860's L1, L2 and B1; L5 stays opt-in.
+    assert {n for n, f in F.FEATURES.items() if f.default} == {
+        "factored_columns",
+        "height_sheet_recal",
+        "crossing_above_rule",
+    }
+
+
+def test_a_promoted_feature_meets_the_default_bar():
+    # On by default only where it reaches every Python and drop-in route
+    # (levels 1..macos), and only when it moves an answer no further than a
+    # printout shows.
+    for f in F.FEATURES.values():
+        if f.default:
+            assert f.reach >= F._level("macos"), f
+            assert f.drift <= F.DEFAULT_DRIFT_MAX, f
+            assert f.offer and f.kwarg, f
+
+
+@pytest.mark.parametrize("name", ["factored_columns", "crossing_above_rule"])
+def test_a_promoted_feature_is_turned_off_by_the_keyword_or_the_variable(
+    no_features, name
+):
+    f = F.FEATURES[name]
+    assert F.enabled(name) is True
+    assert F.enabled(name, False) is False
+    assert F.enabled(name, True) is True
+    for off in ("0", "false", "no", "off"):
+        no_features.setenv(f.env, off)
+        assert F.enabled(name) is False, off
+        assert F.enabled(name, True) is True
+        assert F.active() == [] and F.stamp() == ""
+    no_features.setenv(f.env, " ")  # blank is unset: the default
+    assert F.enabled(name) is True
+    no_features.setenv(f.env, "1")
+    assert F.enabled(name) is True
+    # On is its default, so line 2 does not name it.
+    assert F.active() == [name] and F.stamp() == "" and F.stamp("dropin") == ""
+
+
+def test_a_promoted_feature_is_off_by_default_outside_its_reach(no_features):
+    # The nec42-sinusoidal executable's level is past reach 8: no default
+    # there, and asking still refuses (a native feature).
+    assert F.current_level("exe", basis="nec42-sinusoidal") == len(F.LEVELS)
+    f = F.FEATURES["factored_columns"]
+    assert f.default and f.reach < len(F.LEVELS) and f.kind == "native"
+    assert F.certified("factored_columns", "exe", basis="nec42-sinusoidal") is False
 
 
 def test_the_env_names_follow_the_pattern():
@@ -94,12 +145,25 @@ def test_every_offered_feature_carries_its_front_end_fields():
             assert "(faster)" not in f.label, f
 
 
-def _exe_features():
-    """`EXE_FEATURES` in the executables' main: {name: reach}."""
+def _exe_table():
+    """`EXE_FEATURES` in the executables' main: {name: (reach, default)}."""
     src = EXE_SOURCE.read_text(encoding="utf-8")
     table = re.search(r"const ExeFeature EXE_FEATURES\[\] = \{(.*?)\n\};", src, re.S)
     assert table is not None
-    return {n: int(r) for n, r in re.findall(r'\{"([a-z0-9_]+)", (\d+)\}', table[1])}
+    rows = re.findall(r'\{"([a-z0-9_]+)", (\d+), (true|false)\}', table[1])
+    assert len(rows) == table[1].count("{"), table[1]
+    return {n: (int(r), d == "true") for n, r, d in rows}
+
+
+def _exe_features():
+    """`EXE_FEATURES` in the executables' main: {name: reach}."""
+    return {n: r for n, (r, _d) in _exe_table().items()}
+
+
+def test_the_executables_defaults_are_the_registrys():
+    assert {n: d for n, (_r, d) in _exe_table().items()} == {
+        n: F.FEATURES[n].default for n in _exe_table()
+    }
 
 
 def test_the_executables_carry_exactly_the_features_that_reach_them():
@@ -452,9 +516,19 @@ def test_the_exe_runs_the_features_it_carries(tmp_path):
     assert r.returncode == 0, r.stderr
     line2 = out.read_bytes().decode("latin-1").splitlines()[1]
     # The basis field gives way to the tail as Python's does (79 columns).
-    tail = " +factored_columns+crossing_table"
-    assert line2.endswith(tail)
+    # factored_columns is on by default, so it is not named (`stamp`).
+    tail = " +crossing_table"
+    assert line2.endswith(tail) and "+factored_columns" not in line2
     assert bare.split()[:2] == line2.split()[:2]
+    # A default-on feature turned off is accepted, and not named either.
+    for name in ("crossing_table", "factored_columns"):
+        env[F.FEATURES[name].env] = "0"
+    out.unlink()
+    r = subprocess.run(
+        [EXE, str(DECK), str(out)], env=env, capture_output=True, text=True, timeout=120
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.read_bytes().decode("latin-1").splitlines()[1] == bare
 
 
 # --- the launchers' warm servers ------------------------------------------------
@@ -480,6 +554,25 @@ def test_the_warm_server_keys_carry_the_features_on(no_features):
     assert mech.FEATURE_ALIASES == {
         a: f.name for f in F.FEATURES.values() for a in f.aliases
     }
+
+
+def test_the_warm_server_keys_carry_a_default_on_feature_turned_off(no_features):
+    # A default-on feature is on in a server started with nothing set, so
+    # its "0" (not its "1") is what must key a server of its own.
+    import momwire_eznec_client as ez
+    import momwire_nec2c_client as n2
+    import momwire_serve_client as mech
+
+    assert mech.FEATURE_DEFAULT_ON == {n for n, f in F.FEATURES.items() if f.default}
+    base = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    no_features.setenv("MOMWIRE_X_FACTORED_COLUMNS", "1")
+    assert (ez.config_key(None, 900.0), n2.config_key([], 900.0)) == base
+    no_features.setenv("MOMWIRE_X_FACTORED_COLUMNS", "")
+    assert (ez.config_key(None, 900.0), n2.config_key([], 900.0)) == base
+    no_features.setenv("MOMWIRE_X_FACTORED_COLUMNS", "0")
+    off = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    assert off[0] != base[0] and off[1] != base[1]
+    assert mech.feature_identity() == ["feature=factored_columns=off"]
     assert mech.FEATURE_ENV_PREFIX == F.ENV_PREFIX
 
 
