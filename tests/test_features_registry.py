@@ -166,6 +166,21 @@ def test_the_executables_defaults_are_the_registrys():
     }
 
 
+def test_the_cxx_routes_request_the_registrys_defaults():
+    # `default_requested()` in the near-interface evaluator seeds every C++
+    # route (an executable, a Python-free test driver, an in-process seam)
+    # with the default-on levers, so those routes fill as Python does by
+    # default. A promotion that edits the registry alone would leave the C++
+    # routes filling the old way; this holds the two lists equal.
+    src = (ROOT / "src" / "momwire" / "_near_interface_eval.cpp").read_text(
+        encoding="utf-8"
+    )
+    body = re.search(r"Features default_requested\(\) \{(.*?)\n\}", src, re.S)
+    assert body, "default_requested() not found in _near_interface_eval.cpp"
+    seeded = set(re.findall(r"f\.(\w+) = true;", body.group(1)))
+    assert seeded == {n for n, f in F.FEATURES.items() if f.default}
+
+
 def test_the_executables_carry_exactly_the_features_that_reach_them():
     # The executables refuse by a generic scan except for the features their
     # C++ route carries (EXE_FEATURES), so a feature that reaches an
