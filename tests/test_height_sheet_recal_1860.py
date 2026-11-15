@@ -68,11 +68,19 @@ def _plan(specs, on):
         return ni.sheet_plan(EPS_T, K_P, specs, A_ROD)
 
 
-def test_off_by_default(monkeypatch):
+def test_on_by_default_and_off_when_asked(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", raising=False)
+    assert _features.enabled("height_sheet_recal")
+    assert BSplineSolver(**crossing_deck())._height_sheet_recal
+    assert RazorSolver(**crossing_deck())._height_sheet_recal
+    assert not RazorSolver(
+        **crossing_deck(), height_sheet_recal=False
+    )._height_sheet_recal
+    monkeypatch.setenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", "0")
     assert not _features.enabled("height_sheet_recal")
     assert not BSplineSolver(**crossing_deck())._height_sheet_recal
     assert not RazorSolver(**crossing_deck())._height_sheet_recal
+    # Outside a solver's fill scope the census is the shipped one.
     assert not ni._HEIGHT_SHEET_RECAL.get()
     plan = ni.sheet_plan(EPS_T, K_P, [(_counterpoise(), _rod())], A_ROD)
     assert plan.lo is None and plan.hi is None
@@ -181,7 +189,7 @@ def test_on_the_efhw_deck_takes_the_counterpoise_sheet_and_zin_agrees(
         return plans[-1]
 
     monkeypatch.setattr(ni, "sheet_plan", spy)
-    monkeypatch.delenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", raising=False)
+    monkeypatch.setenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", "0")
     off = _shell.render(EFHW_HI, basis="razor-2p", dialect="nec5")
     assert plans and all(0.01 not in p.heights.tolist() for p in plans)
     plans.clear()

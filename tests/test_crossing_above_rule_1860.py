@@ -14,7 +14,8 @@ cost more, B1 declines that fill.
 
 What is held:
 
-- off by default, and off is the shipped fill: the lazy above grid and the
+- on by default (promoted 2026-11-15), off by the keyword False or the
+  variable at "0", and off is the shipped fill: the lazy above grid and the
   q = 6 block, and the B1 route never entered;
 - on, the B1 route serves the crossing deck's above block and the shipped
   route does not, and a deck with no crossing is untouched;
@@ -181,8 +182,11 @@ def test_registry_entry():
     assert "tests/test_crossing_above_rule_1860.py" in f.paths
 
 
-def test_off_by_default(monkeypatch):
+def test_on_by_default_and_off_when_asked(monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
+    assert _features.enabled("crossing_above_rule")
+    assert BSplineSolver(**crossing_deck())._crossing_above_rule
+    monkeypatch.setenv(ENV, "0")
     assert not _features.enabled("crossing_above_rule")
     assert not BSplineSolver(**crossing_deck())._crossing_above_rule
     monkeypatch.setenv(ENV, "1")
@@ -198,14 +202,15 @@ def test_off_is_the_shipped_route_and_on_is_b1(monkeypatch, tmp_path, routes):
     # The hub has 16 above segments: let B1 serve it (`_B1_MIN_ABOVE_SEGS`).
     monkeypatch.setattr(_below_interface, "_B1_MIN_ABOVE_SEGS", 0)
     deck = DECKS["hub"]
-    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setenv(ENV, "0")
     off = _render(deck, "nec5")
     assert routes == {"b1": 0, "lazy": 1}
     monkeypatch.setenv(ENV, "1")
     on = _render(deck, "nec5")
     assert routes == {"b1": 1, "lazy": 1}
-    assert "+crossing_above_rule" in on.splitlines()[1]
-    assert "+crossing_above_rule" not in off.splitlines()[1]
+    # On is the default, so line 2 names it on neither side.
+    assert "+crossing_above_rule" not in on.splitlines()[1]
+    assert on.splitlines()[1] == off.splitlines()[1]
     # Explicitly off through the keyword is the default fill, bit for bit.
     s_off = BSplineSolver(**crossing_deck(), crossing_above_rule=False)
     s_def = BSplineSolver(**crossing_deck())
@@ -221,7 +226,7 @@ def test_on_declines_where_it_would_fill_more_grid(monkeypatch, tmp_path, routes
     grid. B1 declines, and the printout is the off one but for line 2."""
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
     deck = DECKS["efhw_lo"]
-    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setenv(ENV, "0")
     off = _render(deck, "nec5")
     monkeypatch.setenv(ENV, "1")
     on = _render(deck, "nec5")
@@ -234,7 +239,7 @@ def test_on_declines_a_small_above_set(monkeypatch, tmp_path, routes):
     and the printout is the off one but for line 2."""
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path))
     deck = DECKS["hub"]
-    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setenv(ENV, "0")
     off = _render(deck, "nec5")
     monkeypatch.setenv(ENV, "1")
     on = _render(deck, "nec5")
@@ -285,7 +290,7 @@ FR 0 1 0 0 30 0
 XQ
 EN
 """
-    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setenv(ENV, "0")
     off = _render(deck, "nec5")
     monkeypatch.setenv(ENV, "1")
     on = _render(deck, "nec5")
@@ -329,7 +334,7 @@ def test_on_zin_agrees_with_off(monkeypatch, tmp_path, name, dialect):
     if name == "aca" and dialect == "nec4":
         pytest.skip("a NEC-5 deck: the NEC-4.2 slot does not solve it")
     deck = DECKS[name]
-    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setenv(ENV, "0")
     z_off = _zin(_render(deck, dialect))
     monkeypatch.setenv(ENV, "1")
     z_on = _zin(_render(deck, dialect))

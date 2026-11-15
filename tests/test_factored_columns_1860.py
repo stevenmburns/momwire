@@ -10,8 +10,9 @@ one complex exponential per node per member.
 
 What is held:
 
-- off, nothing changes: the feature is off by default, and the binding's
-  default is the member route;
+- the feature is on by default (promoted 2026-11-15) and off by the keyword
+  False or ``MOMWIRE_X_FACTORED_COLUMNS=0``; off, nothing changes: the
+  binding's default is the member route;
 - on, a grid-shaped column is a few ulp of its vector scale from the member
   route, and is NOT bit-identical to it (the route ran);
 - a column that is not grid-shaped answers bit for bit as the member route,
@@ -91,11 +92,19 @@ def _scale_rel(got, ref):
     return float(np.max(num / den))
 
 
-def test_off_by_default(monkeypatch):
+def test_on_by_default_and_off_when_asked(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_FACTORED_COLUMNS", raising=False)
+    assert _features.enabled("factored_columns")
+    assert BSplineSolver(**crossing_deck())._factored_columns
+    assert RazorSolver(**crossing_deck())._factored_columns
+    assert not BSplineSolver(
+        **crossing_deck(), factored_columns=False
+    )._factored_columns
+    monkeypatch.setenv("MOMWIRE_X_FACTORED_COLUMNS", "0")
     assert not _features.enabled("factored_columns")
     assert not BSplineSolver(**crossing_deck())._factored_columns
     assert not RazorSolver(**crossing_deck())._factored_columns
+    # Outside a solver's fill scope the twin takes the member route.
     assert "grid" not in ni._columns_lanes_kw()
 
 
