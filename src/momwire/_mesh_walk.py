@@ -24,6 +24,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._identity_memo import IdentityMemo, frozen_tuple
+
+# momwire#1943: `wire_knots` per structure, by the IDENTITY of a prepared
+# mesh's frozen polylines (`_identity_memo`). The nec2 portal walks the same
+# mesh at every frequency (the element currents behind every pattern, the
+# segment match); a hit returns the very arrays the first walk built, made
+# read-only, so a reader that writes into them fails instead of corrupting
+# the next frequency's walk.
+_KNOTS_MEMO = IdentityMemo()
+
 
 def edge_counts(per_edge):
     """`(counts, edges_per_wire)`: every edge's count, flat, and each wire's
@@ -97,6 +107,25 @@ def wire_knots(polylines, per_edge, subdiv=1):
         knots = np.vstack(parts)
 
     A wire with no edges contributes nothing (that loop would fail on it)."""
+    pls = frozen_tuple(polylines)
+    if pls is None:
+        return _wire_knots(polylines, per_edge, subdiv)
+    try:
+        extra = (tuple(tuple(int(c) for c in npe) for npe in per_edge), int(subdiv))
+    except (TypeError, ValueError):
+        return _wire_knots(polylines, per_edge, subdiv)
+
+    def walk():
+        knots, offsets = _wire_knots(polylines, per_edge, subdiv)
+        knots.setflags(write=False)
+        offsets.setflags(write=False)
+        return knots, offsets
+
+    return _KNOTS_MEMO.get(pls, extra, walk)
+
+
+def _wire_knots(polylines, per_edge, subdiv=1):
+    """`wire_knots`' walk, every call (see there)."""
     counts, edges_per_wire = edge_counts(per_edge)
     p0, p1 = edge_endpoints(polylines, edges_per_wire)
     pts, offs = edge_linspace(p0, p1, counts * int(subdiv) + 1)
