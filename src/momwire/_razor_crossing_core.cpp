@@ -377,44 +377,36 @@ inline void pair_row(const Ctx &c, double a_wire, const Axis &A, const Axis &B, 
 // continued across windows: `rows` gathers the fresh distinct triples in
 // first-appearance order over every window so far (the order one call over
 // the whole grid claims them), each at index `base` + its place there, and
-// `nan_rows` is the call's NaN dedup. `idx` is scratch. Nothing is evaluated
-// here: `claim_finish` evaluates the whole list in ONE call, because a
+// `nan_rows` is the call's NaN dedup. Nothing is evaluated here:
+// `claim_finish` evaluates the whole list as the one call would, because a
 // triple's value can depend on which others share its exact-rho column
 // (`_chunked_tables`' argument), so the evaluation must see the same set.
 void claim_window(BlockEval &be, uint32_t base, const double *re, const double *z, const double *zp,
-                  size_t n, ni_eval::TripleIndex &nan_rows, std::vector<double> &rows,
-                  std::vector<uint32_t> &idx) {
+                  size_t n, ni_eval::TripleIndex &nan_rows, std::vector<double> &rows) {
     using ni_eval::TripleIndex;
-    ni_eval::Memo &memo = be.memo;
-    idx.resize(n);
-    const std::ptrdiff_t nn = static_cast<std::ptrdiff_t>(n);
-    int nt = 1;
-#if defined(_OPENMP)
-    nt = team(be, n);
-    nt = std::min(nt, omp_get_max_threads());
-    if (n < 16384) nt = 1;
-    #pragma omp parallel for schedule(static) num_threads(nt) if (nt > 1)
-#endif
-    for (std::ptrdiff_t i = 0; i < nn; i++) {
-        const double row[3] = {re[i], z[i], zp[i]};
-        idx[i] = memo.find(row);
-    }
-    TripleIndex &keys = memo.keys();
+    TripleIndex &keys = be.memo.keys();
     auto claim = [&](size_t i) {
         const double row[3] = {re[i], z[i], zp[i]};
         const uint32_t next = base + static_cast<uint32_t>(rows.size() / 3);
         bool ins = false;
         const bool nan = std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2]);
-        const uint32_t v = nan ? nan_rows.find_or_insert(row, next, ins) : keys.find_or_insert(row, next, ins);
+        if (nan)
+            nan_rows.find_or_insert(row, next, ins);
+        else
+            keys.find_or_insert(row, next, ins);
         if (ins) rows.insert(rows.end(), row, row + 3);
-        return v;
     };
+    int nt = 1;
 #if defined(_OPENMP)
+    nt = team(be, n);
+    nt = std::min(nt, omp_get_max_threads());
+    if (n < 16384) nt = 1;
     if (nt > 1) {
-        // As `designed_index`: each chunk's misses deduplicated on their own,
-        // then claimed in chunk order at their first appearance, which is
-        // the serial walk's order.
-        std::vector<uint32_t> loc(n, TripleIndex::NONE);
+        // As `designed_index`: each chunk's points deduplicated on their own,
+        // then claimed in chunk order at their first appearance, which is the
+        // serial walk's order. No memo lookup first (momwire#1541): a triple
+        // an earlier window claimed is found by the claim itself, once per
+        // chunk-distinct triple rather than once per point.
         std::vector<std::vector<size_t>> first(static_cast<size_t>(nt));
         #pragma omp parallel for schedule(static, 1) num_threads(nt)
         for (int ch = 0; ch < nt; ch++) {
@@ -424,10 +416,9 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
             li.reserve((i1 - i0) / 8);
             std::vector<size_t> &fc = first[static_cast<size_t>(ch)];
             for (size_t i = i0; i < i1; i++) {
-                if (idx[i] != TripleIndex::NONE) continue;
                 const double row[3] = {re[i], z[i], zp[i]};
                 bool ins = false;
-                loc[i] = li.find_or_insert(row, static_cast<uint32_t>(fc.size()), ins);
+                li.find_or_insert(row, static_cast<uint32_t>(fc.size()), ins);
                 if (ins) fc.push_back(i);
             }
         }
@@ -435,9 +426,10 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
             for (size_t i : first[static_cast<size_t>(ch)]) claim(i);
         return;
     }
+#else
+    (void)nt;
 #endif
-    for (size_t i = 0; i < n; i++)
-        if (idx[i] == TripleIndex::NONE) claim(i);
+    for (size_t i = 0; i < n; i++) claim(i);
 }
 
 // The rows one evaluation batch takes (whole exact-rho columns, so a batch
@@ -569,7 +561,6 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
     {
         const uint32_t base = static_cast<uint32_t>(be.memo.size());
         std::vector<double> fresh, re, z, zp;
-        std::vector<uint32_t> idx;
         for (size_t a0 = 0; a0 < nA; a0 += per) {
             const size_t a1 = std::min(nA, a0 + per), m = (a1 - a0) * nB;
             re.resize(m);
@@ -593,12 +584,11 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
                     zp[q] = row[2];
                 }
             }
-            claim_window(be, base, re.data(), z.data(), zp.data(), m, nan_rows, fresh, idx);
+            claim_window(be, base, re.data(), z.data(), zp.data(), m, nan_rows, fresh);
         }
         std::vector<double>().swap(re);
         std::vector<double>().swap(z);
         std::vector<double>().swap(zp);
-        std::vector<uint32_t>().swap(idx);
         // The end terms append their own fresh values after these: room for
         // as many as they have pairs, at most this evaluation's count again
         // (the capacity a doubling would have taken, without its copy).
