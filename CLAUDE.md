@@ -21,9 +21,12 @@ Where it lives:
 - `required`: chooses each PR's checks.
 - `scripts/nightly/`: the Skylake nightly.
 
-**The one global rule: with every flag off, the stable path is byte-identical.**
+**The one global rule: with every flag at its default, the stable path is
+byte-identical.**
 - The tripwire holds 198 printouts across all engines and dialects, including
   NEC-4.2, ground and buried. It runs in the Linux default lane, avx2 only.
+  Every `MOMWIRE_X_*` variable is unset there, so a default-on feature (below)
+  is ON in it.
 - A PR that moves a golden on purpose is a STABLE change, not an experimental
   one. It regenerates with `python scripts/golden_printouts.py --corpus stable`
   and says why in its body.
@@ -36,6 +39,34 @@ Where it lives:
 - Promotion means raising `reach` in `_features.py` in its own PR. That PR then
   selects the new level's jobs.
 
+**Default-on is a second, separate promotion: `default=True`.**
+- Reach says where a feature is certified; `default` says whether it runs
+  unasked. They are different decisions. Default-on is Steve's call, recorded
+  in the entry's comment, in its own PR.
+- A default-on feature is ON wherever it is certified (levels 1..reach) unless
+  its keyword is False or its variable is set to a value that is not on
+  (`MOMWIRE_X_<NAME>=0`). Outside its reach its default is off, so a native one
+  never refuses unasked. The nec42-sinusoidal exe is level 9, past reach 8.
+- The bar (`tests/test_features_registry.py`): reach covers every Python and
+  drop-in level (>= `macos`, 5), declared `drift` <= `DEFAULT_DRIFT_MAX` (1e-6,
+  under a five-figure printout), and `offer` with a kwarg, so a front end can
+  say no. Reach == DEEPEST is NOT required. `stable` (reach == DEEPEST) stays
+  a certification fact and is not the switch, because a feature whose route
+  does not exist at the deepest level (the #1860 levers on the
+  nec42-sinusoidal exe) could never reach it honestly.
+- Line 2 names only the features that are on where their default is off. So a
+  default-on feature is never stamped, whether on or explicitly off. With the
+  default-on ones explicitly off, the printout is the one from before their
+  promotion.
+- The exes do the same (`EXE_FEATURES`' third field). A warm launcher server
+  keys an explicit off (`feature=<name>=off`, `momwire_serve_client`), not an
+  explicit on.
+- Promoting moves goldens wherever the feature changes digits: regenerate
+  with `--corpus stable` and give each moved one's lever and measured |dZ|/|Z|.
+- Today: #1860's `factored_columns`, `height_sheet_recal` and
+  `crossing_above_rule` (2026-11-15). `crossing_table` (drift 1e-3) stays
+  opt-in.
+
 **Outside its reach, a feature acts by its kind.**
 - `kind="python"` (a route over kernels that already shipped) runs, and
   printout line 2 gains ` +a+b uncertified on this platform`.
@@ -43,9 +74,10 @@ Where it lives:
   `FeatureNotCertified`.
 - An exe runs only the features its C++ route carries (`EXE_FEATURES` in
   `standalone/momwire_razor2p.cpp`) whose reach covers its level, and names
-  them on line 2 as Python does. Any other `MOMWIRE_X_*` variable, or a legacy
-  alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before
-  it reads a deck. Today the table is #1860's four levers at reach 8.
+  them on line 2 as Python does. Any other `MOMWIRE_X_*` variable set on, or a
+  legacy alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence
+  before it reads a deck; set to "0" it is accepted. Today the table is #1860's
+  four levers at reach 8, three of them on by default.
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 

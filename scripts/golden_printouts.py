@@ -19,7 +19,8 @@ seam's two bases: the NEC-4.2 slot on the point-matched sinusoidal (sin42)
 and B-spline (bs42) bases, Sinusoidal-Galerkin (a Python engine) on both
 slots, more finite grounds for bspline and razor-2p, and a buried-radial
 deck. With the NEC-5 corpus it is what `tests/test_stable_path_tripwire.py`
-holds byte-identical with every experimental flag off (`momwire._features`):
+holds byte-identical with every experimental flag at its default
+(`momwire._features`: off, but for the default-on features, which are on):
 
     python scripts/golden_printouts.py --corpus stable           # rewrite it
     python scripts/golden_printouts.py --corpus stable --check   # compare
@@ -444,10 +445,16 @@ def generate_stable() -> dict:
         )
     from momwire import _features
 
-    if _features.active():
+    set_ = [
+        f.env
+        for f in _features.FEATURES.values()
+        if _features._env_value(f) is not None
+    ]
+    if set_:
         raise SystemExit(
-            f"experimental features are on ({', '.join(_features.active())}); "
-            "the stable-path corpus is the flags-off printout"
+            f"experimental feature variables are set ({', '.join(set_)}); "
+            "the stable-path corpus is the printout with every feature at its "
+            "default (every MOMWIRE_X_ variable unset)"
         )
     for stale in STABLE.glob("*/*.out"):
         stale.unlink()

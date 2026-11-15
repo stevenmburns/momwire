@@ -406,19 +406,27 @@ def junction_rule_identity() -> list[str]:
 # asks for one (or the other way round). Read here without importing momwire
 # (these clients stay thin): any ``MOMWIRE_X_<NAME>`` and the registry's older
 # spellings (`Feature.aliases`; tests/test_features_registry.py holds the
-# list equal), on as `_features` reads "on".
+# list equal), on as `_features` reads "on". The default-on ones
+# (`Feature.default`, held equal the same way) are identity the other way
+# round: on is their default, so only a variable that turns one OFF ("0")
+# keys a server of its own. Every launcher's engine runs where their reach
+# covers it, so their default there is on.
 FEATURE_ENV_PREFIX = "MOMWIRE_X_"
 FEATURE_ALIASES = {
     "MOMWIRE_EXACT_KERNEL_SERIES": "exact_kernel_series",
     "MOMWIRE_RAZOR_CXX": "razor_cxx",
 }
+FEATURE_DEFAULT_ON = frozenset(
+    {"factored_columns", "height_sheet_recal", "crossing_above_rule"}
+)
 _FEATURE_ON = frozenset({"1", "true", "yes", "on"})
 
 
 def feature_identity(environ=None) -> list[str]:
     """``["feature=<name>", ...]`` (sorted) for the features the environment
-    turns on, else nothing -- so every key with them all off is the key it
-    was."""
+    turns on whose default is off, and ``"feature=<name>=off"`` for a
+    default-on one it turns off; else nothing -- so every key with each
+    feature at its default is the key it was."""
     env = os.environ if environ is None else environ
     names = set()
     for var, value in env.items():
@@ -428,7 +436,11 @@ def feature_identity(environ=None) -> list[str]:
             name = FEATURE_ALIASES[var]
         else:
             continue
-        if value.strip().lower() in _FEATURE_ON:
+        on = value.strip().lower() in _FEATURE_ON
+        if name in FEATURE_DEFAULT_ON:
+            if value.strip() and not on:
+                names.add(f"{name}=off")
+        elif on:
             names.add(name)
     return [f"feature={n}" for n in sorted(names)]
 

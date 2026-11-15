@@ -1,10 +1,11 @@
 """The stable-path tripwire: flags off, every printout byte-identical to main's.
 
 The feature-tier contract has one global rule: with every experimental flag
-OFF (`momwire._features`), the stable path prints what main printed. The
-flags live inside existing files, so nothing structural enforces that; this
-test does. It clears every ``MOMWIRE_X_*`` variable and every alias the
-registry knows, then renders the two golden corpora `scripts/golden_printouts.py`
+at its DEFAULT (`momwire._features`: off, but for the default-on features,
+which are on), the stable path prints what main printed. The flags live
+inside existing files, so nothing structural enforces that; this test does.
+It clears every ``MOMWIRE_X_*`` variable and every alias the registry knows,
+then renders the two golden corpora `scripts/golden_printouts.py`
 writes, through the entry EZNEC launches (`momwire.dropin.nec5._shell.render`):
 
 * the NEC-5 corpus (tests/fixtures/golden_printouts: bspline and razor-2p
