@@ -416,9 +416,7 @@ FEATURE_ALIASES = {
     "MOMWIRE_EXACT_KERNEL_SERIES": "exact_kernel_series",
     "MOMWIRE_RAZOR_CXX": "razor_cxx",
 }
-FEATURE_DEFAULT_ON = frozenset(
-    {"factored_columns", "height_sheet_recal", "crossing_above_rule"}
-)
+FEATURE_DEFAULT_ON = frozenset({"factored_columns", "height_sheet_recal"})
 _FEATURE_ON = frozenset({"1", "true", "yes", "on"})
 
 

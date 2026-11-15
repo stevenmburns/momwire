@@ -299,7 +299,7 @@ const ExeFeature EXE_FEATURES[] = {
     {"factored_columns", 8, true},
     {"height_sheet_recal", 8, true},
     {"crossing_table", 8, false},
-    {"crossing_above_rule", 8, true},
+    {"crossing_above_rule", 8, false},
 };
 
 // This executable's level in support/hierarchy.toml, as
