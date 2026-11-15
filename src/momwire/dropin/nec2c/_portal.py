@@ -2586,8 +2586,20 @@ class DeckSolver:
             self._element_match_last = None
         return result
 
-    def _element_match_uncached(self, solver):
-        """`_element_match`'s search, every call (see there)."""
+    def _element_match_uncached(self, solver, rows: int | None = None):
+        """`_element_match`'s search, every call (see there).
+
+        Row-blocked (momwire#1943): the NEC segments are taken ``rows`` at a
+        time against every element, so the temporaries are ``rows`` x M rather
+        than the N x M x 3 difference tensor the whole-structure broadcast
+        built (about 420 MB on the ELT whip's 4,182 segments, once per
+        launch). Each row's arithmetic is the broadcast's own, element for
+        element -- the same differences, squares and left-to-right sum, the
+        same dot products and the same first-minimum ``argmin`` -- so the
+        blocking moves no bit of ``nearest``. ``rows`` is the tests' knob;
+        the default holds each rows x M plane near 8 MB (the difference
+        tensor is three of them).
+        """
         # The knot walk over every wire at once (`_mesh_walk`, bit for bit
         # the per-edge linspace walk), each element its knots' mean and chord.
         knots, offs = _mesh_walk.wire_knots(
@@ -2599,7 +2611,6 @@ class DeckSolver:
 
         wanted = np.array([s.centre for s in self.segments])
         wanted_dir = np.array([s.direction for s in self.segments])
-        d2 = ((wanted[:, None, :] - mids[None, :, :]) ** 2).sum(axis=2)
         # Position alone is not enough to name an element: two wires that CROSS
         # share a segment midpoint exactly, and a plain nearest-midpoint search
         # then reads both NEC segments off whichever polyline came first —
@@ -2609,11 +2620,19 @@ class DeckSolver:
         # fall back to pure distance if nothing does.
         unit_e = dirs / np.maximum(norm3(dirs)[:, None], 1e-30)
         unit_s = wanted_dir / np.maximum(norm3(wanted_dir)[:, None], 1e-30)
-        aligned = np.abs(unit_s @ unit_e.T) >= 0.5
-        cost = np.where(aligned, d2, np.inf)
-        fallback = ~np.isfinite(cost).any(axis=1)
-        cost[fallback] = d2[fallback]
-        nearest = np.argmin(cost, axis=1)
+        unit_e_t = unit_e.T
+        n_seg, n_el = wanted.shape[0], mids.shape[0]
+        if rows is None:
+            rows = max(1, (1 << 20) // max(n_el, 1))
+        nearest = np.empty(n_seg, dtype=np.intp)
+        for start in range(0, n_seg, rows):
+            stop = min(start + rows, n_seg)
+            d2 = ((wanted[start:stop, None, :] - mids[None, :, :]) ** 2).sum(axis=2)
+            aligned = np.abs(unit_s[start:stop] @ unit_e_t) >= 0.5
+            cost = np.where(aligned, d2, np.inf)
+            fallback = ~np.isfinite(cost).any(axis=1)
+            cost[fallback] = d2[fallback]
+            nearest[start:stop] = np.argmin(cost, axis=1)
         return nearest, dirs
 
     def _element_values(self, solver, per_wire):
