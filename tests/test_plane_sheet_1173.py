@@ -309,9 +309,13 @@ def test_the_counters_account_for_every_row(invl_fills):
     assert on["sheet_rows"] + on["exact_rows"] == off["exact_rows"]
     assert on["nodes_built"] >= on["sheets_built"] * ni._SHEET_P**2
     # Two fills (razor's forward and reversed blocks), each planning once;
-    # a plane both take is one sheet, built once and serving both.
+    # a plane both take is one sheet, built once and serving both. A height
+    # sheet counts in `sheets_built` too: with momwire#1860 L2 on (its
+    # default), the lone radial's height is one (heights_planned 1; Skylake,
+    # 2026-11-15: 3 plane sheets of 4 planned, plus that one).
     assert on["fills_planned"] == 2 and on["planes_planned"] >= 2
-    assert 1 <= on["sheets_built"] < on["planes_planned"]
+    planned = on["planes_planned"] + on["heights_planned"]
+    assert 1 <= on["sheets_built"] < planned
     assert off["sheet_rows"] == off["sheet_planes"] == off["nodes_built"] == 0
     assert off["fills_planned"] == 0
 
