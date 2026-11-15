@@ -238,8 +238,16 @@ def stretches_that_fire(stretches, wavelength):
     ]
 
 
+def _num(v):
+    """A coordinate in metres to 4 significant figures, never "-0": a wire
+    0.2 mm deep must read as -0.0002, not as a fixed-point -0.000."""
+    if abs(v) < 1e-12:
+        return "0"
+    return f"{v:.4g}"
+
+
 def _xyz(p):
-    return "(" + ", ".join(f"{v:.3f}".rstrip("0").rstrip(".") or "0" for v in p) + ")"
+    return "(" + ", ".join(_num(float(v)) for v in p) + ")"
 
 
 def near_surface_message(fired):
