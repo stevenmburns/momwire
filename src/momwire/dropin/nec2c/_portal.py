@@ -249,7 +249,9 @@ from ..._far_readout import (
     _far_moments as _far_moments,
     _gain_db as _gain_db,
     _image_moments as _image_moments,
+    _libm as _libm,
     _phase_deg as _phase_deg,
+    _phase_deg_grid as _phase_deg_grid,
     _polarisation as _polarisation,
     average_gain,
     pattern_fields,
@@ -1512,6 +1514,44 @@ def fmt_current_row(seg, tag, centre, length, current) -> str:
     )
 
 
+# `fmt_current_row`'s layout as one %-format (momwire#1943): the same
+# conversions, widths and precisions, so `%` and the f-string format each
+# value through the same float and int formatting and print the same bytes
+# (`tests/test_current_rows_1943.py` holds the two equal).
+_CURRENT_ROW = " %5d %4d %9.4f %9.4f %9.4f %9.5f %11.4E %11.4E %11.4E %8.3f"
+
+
+def fmt_current_rows(numbers, tags, centres, lengths, values) -> list[str]:
+    """:func:`fmt_current_row` over a whole table at once, line for line.
+
+    The magnitude and phase are the scalar row's: ``abs`` of each complex
+    (libm's ``hypot``) and ``degrees(atan2)``, mapped through the scalar
+    functions themselves (`_libm`, `_phase_deg_grid`, momwire#1448's
+    byte-identity rule), and a zero magnitude prints a 0 phase. Everything
+    else is the value itself, as Python ints and floats."""
+    values = np.asarray(values, dtype=np.complex128).reshape(-1)
+    centres = np.asarray(centres, dtype=np.float64).reshape(-1, 3)
+    mag = _libm(abs, values)
+    # The scalar row's `if mag else 0.0`: a NaN magnitude is truthy there and
+    # is `!= 0` here.
+    phase = np.where(mag != 0.0, _phase_deg_grid(values), 0.0)
+    return [
+        _CURRENT_ROW % row
+        for row in zip(
+            np.asarray(numbers).tolist(),
+            np.asarray(tags).tolist(),
+            centres[:, 0].tolist(),
+            centres[:, 1].tolist(),
+            centres[:, 2].tolist(),
+            np.asarray(lengths, dtype=np.float64).tolist(),
+            values.real.tolist(),
+            values.imag.tolist(),
+            mag.tolist(),
+            phase.tolist(),
+        )
+    ]
+
+
 def fmt_pattern_row(
     theta, phi, vertc_db, horiz_db, total_db, axial, tilt, sense, e_theta, e_phi
 ) -> str:
@@ -1860,6 +1900,37 @@ class SegRow:
 
 
 @dataclass(frozen=True)
+class SegTable:
+    """A CURRENTS AND LOCATION (or CHARGE DENSITIES) table as columns, one
+    entry per printed row (momwire#1943): the whip prints 4,182 rows at
+    each of 13 frequencies, and a typed record and an f-string per row cost
+    more than the solve's readout. :meth:`rows` gives the same table as
+    :class:`SegRow` records, and :meth:`lines` the printed rows."""
+
+    numbers: np.ndarray
+    tags: np.ndarray
+    centre_wl: np.ndarray  # (n, 3)
+    length_wl: np.ndarray
+    values: np.ndarray  # complex
+
+    def __len__(self) -> int:
+        return int(self.numbers.shape[0])
+
+    def rows(self) -> tuple[SegRow, ...]:
+        return tuple(
+            SegRow(int(n), int(t), c, float(length), complex(v))
+            for n, t, c, length, v in zip(
+                self.numbers, self.tags, self.centre_wl, self.length_wl, self.values
+            )
+        )
+
+    def lines(self) -> list[str]:
+        return fmt_current_rows(
+            self.numbers, self.tags, self.centre_wl, self.length_wl, self.values
+        )
+
+
+@dataclass(frozen=True)
 class RunRecords:
     """The compute half of one execute-group block — the portal's step toward
     the eznec seam's :class:`~momwire.dropin.nec5._printout.RunData`. Rows are built
@@ -1867,8 +1938,8 @@ class RunRecords:
 
     result: GroupResult
     aip_rows: tuple[AipRow, ...]
-    current_rows: tuple[SegRow, ...]
-    charge_rows: tuple[SegRow, ...] | None
+    current_rows: SegTable
+    charge_rows: SegTable | None
 
 
 class DeckSolver:
@@ -2067,6 +2138,27 @@ class DeckSolver:
             "fill_ms": fill_ms,
             "factor_ms": factor_ms,
         }
+
+    def segment_columns(self):
+        """``(numbers, tags, centres, lengths)`` of every NEC segment, as
+        arrays in global order: the geometry the CURRENTS and CHARGE tables
+        print, gathered once per structure (momwire#1943). A length is
+        `norm3` of the segment's direction, the per-row spelling's own."""
+        held = getattr(self, "_segment_columns", None)
+        if held is None:
+            segs = self.segments
+            held = (
+                np.array([s.number for s in segs], dtype=np.int64),
+                np.array([s.tag for s in segs], dtype=np.int64),
+                np.array([s.centre for s in segs], dtype=np.float64).reshape(-1, 3),
+                norm3(
+                    np.array([s.direction for s in segs], dtype=np.float64).reshape(
+                        -1, 3
+                    )
+                ),
+            )
+            self._segment_columns = held
+        return held
 
     def global_segment(self, wire: int, local: int) -> int:
         """NEC's absolute segment number for 1-based local segment ``local``
@@ -3809,35 +3901,47 @@ def _run_records(
     # Built ALWAYS, even when `group.pt.suppressed` — the render half owns
     # the presence decision, and building rows nobody prints is the price of
     # a clean split.
-    currents = result.segment_currents
-    current_rows = [
-        SegRow(
-            seg.number,
-            seg.tag,
-            seg.centre / wavelength,
-            float(norm3(seg.direction)) / wavelength,
-            complex(currents[seg.number - 1]),
-        )
-        for seg in _printed_segments(group.pt, solver)
-    ]
-    charge_rows: list[SegRow] | None = None
+    current_rows = _seg_table(
+        solver,
+        _printed_segments(group.pt, solver),
+        result.segment_currents,
+        wavelength,
+    )
+    charge_rows: SegTable | None = None
     if group.pq is not None and group.pq.prints:
-        charges = result.segment_charges
-        charge_rows = [
-            SegRow(
-                seg.number,
-                seg.tag,
-                seg.centre / wavelength,
-                float(norm3(seg.direction)) / wavelength,
-                complex(charges[seg.number - 1]),
-            )
-            for seg in _charge_segments(group.pq, solver)
-        ]
+        charge_rows = _seg_table(
+            solver,
+            _charge_segments(group.pq, solver),
+            result.segment_charges,
+            wavelength,
+        )
     return RunRecords(
         result=result,
         aip_rows=tuple(aip_rows),
-        current_rows=tuple(current_rows),
-        charge_rows=None if charge_rows is None else tuple(charge_rows),
+        current_rows=current_rows,
+        charge_rows=charge_rows,
+    )
+
+
+def _seg_table(solver, segments, values, wavelength: float) -> SegTable:
+    """The rows `segments` of a per-segment readout ``values`` (global
+    order), in wavelengths: each row's centre and length over ``wavelength``,
+    the same divisions a row at a time made (momwire#1943)."""
+    numbers, tags, centres, lengths = solver.segment_columns()
+    if segments is not solver.segments:
+        at = np.array([seg.number - 1 for seg in segments], dtype=np.int64)
+        numbers, tags, centres, lengths = (
+            numbers[at],
+            tags[at],
+            centres[at],
+            lengths[at],
+        )
+    return SegTable(
+        numbers=numbers,
+        tags=tags,
+        centre_wl=centres / wavelength,
+        length_wl=lengths / wavelength,
+        values=np.asarray(values)[numbers - 1].astype(np.complex128),
     )
 
 
@@ -3912,12 +4016,7 @@ def _render_run_block(
     suppressed = group.pt is not None and group.pt.suppressed
     if not suppressed:
         out += ["", "", _CURRENTS_HEADER, _CURRENTS_NOTE, "", *_CURRENTS_TABLE_HEADER]
-        for row in records.current_rows:
-            out.append(
-                fmt_current_row(
-                    row.number, row.tag, row.centre_wl, row.length_wl, row.value
-                )
-            )
+        out += records.current_rows.lines()
     # CHARGE DENSITIES sits between the currents table and the power budget,
     # with two blanks on each side — the oracle's order (momwire#652). It is
     # OFF unless a `PQ` card asked for it, which is the opposite default from
@@ -3925,12 +4024,7 @@ def _render_run_block(
     # said suppress".
     if group.pq is not None and group.pq.prints:
         out += ["", "", _CHARGE_HEADER, _CHARGE_NOTE, "", *_CHARGE_TABLE_HEADER]
-        for row in records.charge_rows:
-            out.append(
-                fmt_current_row(
-                    row.number, row.tag, row.centre_wl, row.length_wl, row.value
-                )
-            )
+        out += records.charge_rows.lines()
     pad = " " * 31
     out += [
         "",
