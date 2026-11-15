@@ -36,9 +36,10 @@ void configure_grid_cache(const std::string &tag);
 // The experimental features (`momwire._features` names) the executable
 // accepted from its environment, for this copy's answers from now on: each
 // asked of the buried fills (`ni_eval::request_feature`) and named on line 2
-// of every printout. False when this copy carries a name not (nothing of
+// of every printout unless `stamped` is false (a default-on feature, which
+// line 2 does not name). False when this copy carries a name not (nothing of
 // that name is asked).
-bool configure_features(const std::vector<std::string> &names);
+bool configure_features(const std::vector<std::string> &names, bool stamped = true);
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,

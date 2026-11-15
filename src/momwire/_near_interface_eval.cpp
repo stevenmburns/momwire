@@ -1001,29 +1001,30 @@ std::string py_repr(double x) {
 }
 
 namespace {
-Features g_requested, g_active;
+Features g_requested, g_active, g_stamped;
+
+bool *feature_slot(Features &f, const std::string &name) {
+    if (name == "factored_columns") return &f.factored_columns;
+    if (name == "height_sheet_recal") return &f.height_sheet_recal;
+    if (name == "crossing_table") return &f.crossing_table;
+    if (name == "crossing_above_rule") return &f.crossing_above_rule;
+    return nullptr;
+}
 }  // namespace
 
 Features &requested_features() { return g_requested; }
 const Features &active_features() { return g_active; }
 
-bool request_feature(const std::string &name) {
-    Features &f = g_requested;
-    if (name == "factored_columns")
-        f.factored_columns = true;
-    else if (name == "height_sheet_recal")
-        f.height_sheet_recal = true;
-    else if (name == "crossing_table")
-        f.crossing_table = true;
-    else if (name == "crossing_above_rule")
-        f.crossing_above_rule = true;
-    else
-        return false;
+bool request_feature(const std::string &name, bool stamped) {
+    bool *slot = feature_slot(g_requested, name);
+    if (slot == nullptr) return false;
+    *slot = true;
+    if (stamped) *feature_slot(g_stamped, name) = true;
     return true;
 }
 
 std::string requested_stamp() {
-    const Features &f = g_requested;
+    const Features &f = g_stamped;
     std::string s;
     if (f.factored_columns) s += "+factored_columns";
     if (f.height_sheet_recal) s += "+height_sheet_recal";

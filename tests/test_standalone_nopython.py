@@ -741,23 +741,30 @@ _LEVERS_1860 = (
 )
 
 
-@pytest.mark.parametrize("on", [(), _LEVERS_1860], ids=["off", "all four on"])
+@pytest.mark.parametrize(
+    "on", [(), _LEVERS_1860, None], ids=["off", "all four on", "defaults"]
+)
 def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     """The synthetic EFHW of momwire#1860 (a buried rod under a vertical, a
-    counterpoise at 1 cm: every lever fires on it) with the levers off and
-    on: the executable's printout is the launcher's, line 2 naming the
-    levers on both sides."""
+    counterpoise at 1 cm: every lever fires on it) with the levers off ("0"),
+    on, and unset (L1, L2 and B1 on by default, L5 off): the executable's
+    printout is the launcher's, line 2 naming on both sides only the lever
+    on whose default is off (crossing_table)."""
     sys.path.insert(0, str(ROOT / "tests"))
     from test_crossing_table_1860 import DECKS as DECKS_1860
 
     def prepare(d):
         (d / "efhw_lo.nec").write_text(DECKS_1860["efhw_lo"], newline="")
 
-    env = {var: ("1" if var in on else "0") for var in _LEVERS_1860}
+    if on is None:
+        env = {}
+    else:
+        env = {var: ("1" if var in on else "0") for var in _LEVERS_1860}
     exe, ref, de, dl = _both(
         ["efhw_lo.nec", "efhw_lo.out"], tmp_path, prepare=prepare, env=env
     )
     assert exe.returncode == 0, exe.stderr
     _same(exe, ref, de, dl)
     line2 = (de / "efhw_lo.out").read_bytes().split(b"\n")[1]
-    assert (b"+factored_columns" in line2) == bool(on), line2
+    assert b"+factored_columns" not in line2, line2
+    assert (b"+crossing_table" in line2) == bool(on), line2
