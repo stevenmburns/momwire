@@ -8453,23 +8453,24 @@ def _main_split(
         _cancel.poll()
         pa, pb = Ac["nodes"][iA], Bc["nodes"][iB]
         zA, zB = pa[:, 2] - gz, pb[:, 2] - gz
-        rho = np.hypot(
-            pa[:, 0][:, None] - pb[:, 0][None, :],
-            pa[:, 1][:, None] - pb[:, 1][None, :],
-        )
         m, n = iA.size, iB.size
         # `row_s` / `col_s`, not `rows` / `cols`: `rows` is this function's
         # basis-row restriction since momwire#1029 phase 2, and a sample cache
         # that shadowed it would silently restrict nothing.
         row_s, col_s = {}, {}
+        # ρ a sampled row or column at a time, never the (m, n) block
+        # (momwire#1941): ACA reads O(rank) of its rows and columns, and the
+        # whole block was `_main_split`'s high-water mark at bs2 hub_deck(16)
+        # x32 (the mast's nodes by a radial cluster's, beside Z). Each entry
+        # is the same `hypot` of the same two differences, so the same bits.
 
-        def _row6(i, rho=rho, zA=zA, zB=zB, row_s=row_s, n=n):
+        def _row6(i, pa=pa, pb=pb, zA=zA, zB=zB, row_s=row_s, n=n):
             if i not in row_s:
                 te = _tables(
                     ctx,
                     eps_t,
                     k_p,
-                    rho[i],
+                    np.hypot(pa[i, 0] - pb[:, 0], pa[i, 1] - pb[:, 1]),
                     np.full(n, zA[i]),
                     zB,
                     _CROSS_RTOL,
@@ -8478,13 +8479,13 @@ def _main_split(
                 row_s[i] = np.stack([te[kk] for kk in _CROSS_KEYS])
             return row_s[i]
 
-        def _col6(j, rho=rho, zA=zA, zB=zB, col_s=col_s, m=m):
+        def _col6(j, pa=pa, pb=pb, zA=zA, zB=zB, col_s=col_s, m=m):
             if j not in col_s:
                 te = _tables(
                     ctx,
                     eps_t,
                     k_p,
-                    rho[:, j],
+                    np.hypot(pa[:, 0] - pb[j, 0], pa[:, 1] - pb[j, 1]),
                     zA,
                     np.full(m, zB[j]),
                     _CROSS_RTOL,
