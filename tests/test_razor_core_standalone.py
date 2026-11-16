@@ -652,8 +652,8 @@ def test_the_mixed_decks_print_as_python_on_the_nec42_sinusoidal(driver, monkeyp
     crossing junction through the point-matched lane in C++ alone -- the
     stitched basis, the two transmitted pair classes over the table
     `_somm_transmitted_core` fills, the class blocks -- byte for byte as
-    `_nec4.render(text, basis="sinusoidal")` prints them. One declines by
-    name: two radii (the class kernels read one). A near field over a buried
+    `_nec4.render(text, basis="sinusoidal")` prints them, two radii included
+    (each observer's own, census 11-15: below). A near field over a buried
     wire is refused in Python's words, and that refusal prints as Python's."""
     monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
     decks = sorted(
@@ -666,7 +666,36 @@ def test_the_mixed_decks_print_as_python_on_the_nec42_sinusoidal(driver, monkeyp
         / "probes"
         / "p9_above_and_buried_gn2.nec"
     ]
-    assert _nec42_sinusoidal_printouts(driver, decks) == len(decks) - 1
+    assert _nec42_sinusoidal_printouts(driver, decks) == len(decks)
+
+
+MIXED_RADII_DECKS = [
+    ROOT / "tests" / "fixtures" / rel
+    for rel in (
+        "transmitted_mixed/m3_two_radii.nec",
+        "transmitted_store/m3_plus_short_vertical.nec",
+        "sinusoidal_mixed_radii/four_radii_two_sides.nec",
+    )
+]
+
+
+# ~20 s on Haswell (three mixed decks' transmitted tables, filled by both
+# copies), as its sibling above
+@pytest.mark.slow
+def test_a_mixed_deck_with_several_radii_prints_as_python_on_the_nec42_sinusoidal(
+    driver, monkeypatch
+):
+    """Census 11-15: the nec42-sinusoidal exe declined "a mixed deck with
+    several radii" on the two fixtures Python serves. Python's class blocks
+    (`_class_bands`) read each OBSERVER's radius: the complex twin below the
+    interface takes it per row, and the reduced kernel above, one scalar per
+    call, is called once per constant-radius run of the band
+    (`_radius_runs`). The C++ class kernels do the same, byte for byte as
+    `_nec4.render(text, basis="sinusoidal")` prints them -- the two census
+    fixtures (one radius per side) and a synthetic deck with two radii on
+    each side, so that both classes walk several runs."""
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    assert _nec42_sinusoidal_printouts(driver, MIXED_RADII_DECKS) == 3
 
 
 def _nec42_sinusoidal_printouts(driver, decks, basis="sinusoidal") -> int:

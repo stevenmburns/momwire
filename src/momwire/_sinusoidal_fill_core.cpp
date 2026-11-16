@@ -1324,34 +1324,63 @@ ClassSources class_sources(const Front &fr, bool below_side) {
 }
 
 // `_field_tensor(geom_src, k, src_centers, src_tangents, obs_rows=(i0, i1))`
-// over a class's sources: the reduced kernel at a real k (one radius), or
-// the complex twin at k_m
+// over a class's sources: the reduced kernel at a real k, or the complex twin
+// at k_m. The radius is the OBSERVER segment's (`_seg_radius(geom)`, the whole
+// deck's): per observer row on the complex twin, and on the reduced kernel,
+// which takes one scalar, one call per constant-radius run of the band
+// (`_radius_runs(geom, obs_rows)`, concatenated on the observer axis).
 std::vector<std::vector<cd>> class_tensor(const Front &fr, const Kernel &K, ll i0, ll i1, const std::vector<Point3> &sc_,
                                           const std::vector<Point3> &st_, const std::vector<double> &sh, bool complex_k,
                                           cd k, cd eta, bool folded) {
     const Geometry &g = fr.geometry;
     const ll n = static_cast<ll>(sc_.size()), m = i1 - i0;
-    CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
     CF sc = pts(sc_, 0, n), st = pts(st_, 0, n);
     CF h = f64(sh.data(), {n});
     const ll q = static_cast<ll>(K.gx.size());
     CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
-    Tensors t;
+    std::vector<std::vector<cd>> out(3, std::vector<cd>(static_cast<std::size_t>(m * n)));
+    auto put = [&](const Tensors &t, ll r0, ll r1) {
+        const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
+        for (int c = 0; c < 3; c++) {
+            if (parts[c]->size() != (r1 - r0) * n) throw std::logic_error("field tensor: unexpected shape");
+            std::copy(parts[c]->data(), parts[c]->data() + (r1 - r0) * n,
+                      out[static_cast<std::size_t>(c)].begin() + (r0 - i0) * n);
+        }
+    };
     if (complex_k) {
         std::vector<double> a_obs(static_cast<std::size_t>(m), fr.radius_per_wire[0]);
+        if (!fr.uniform_radius) {
+            const std::vector<double> rad = seg_radius(fr);
+            for (ll i = 0; i < m; i++) a_obs[static_cast<std::size_t>(i)] = rad[static_cast<std::size_t>(i0 + i)];
+        }
+        CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
         CF ao = f64(a_obs.data(), {m});
-        t = sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+        put(sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0), i0, i1);
     } else if (folded) {
-        // the accelerated kernel serves the literal cos only: numpy's route
+        // the accelerated kernel serves the literal cos only: numpy's route,
+        // copied at one radius (a mixed deck declines the folded shape first)
+        if (!fr.uniform_radius) decline("the folded cos-1 shape with several radii");
         return field_tensor_reduced_cos1(fr, K, i0, i1, sc_, st_, sh, k.real(), eta.real());
+    } else if (fr.uniform_radius) {
+        CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
+        put(sinusoidal_field_tensor(oc, ot, sc, st, h, fr.radius_per_wire[0], k.real(), eta.real(), gx, gw, 0), i0,
+            i1);
     } else {
-        t = sinusoidal_field_tensor(oc, ot, sc, st, h, fr.radius_per_wire[0], k.real(), eta.real(), gx, gw, 0);
-    }
-    std::vector<std::vector<cd>> out(3);
-    const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
-    for (int c = 0; c < 3; c++) {
-        if (parts[c]->size() != m * n) throw std::logic_error("field tensor: unexpected shape");
-        out[static_cast<std::size_t>(c)].assign(parts[c]->data(), parts[c]->data() + m * n);
+        const std::vector<double> rad = seg_radius(fr);
+        const ll N = g.n_segs;
+        ll s = 0;
+        for (ll i = 1; i <= N; i++) {
+            if (i < N && rad[static_cast<std::size_t>(i)] - rad[static_cast<std::size_t>(i) - 1] == 0.0) continue;
+            // the run [s, i) clipped to the band
+            const ll r0 = std::max(s, i0), r1 = std::min(i, i1);
+            if (s < i1 && i > i0) {
+                CF oc = pts(g.seg_centers, r0, r1), ot = pts(g.seg_tangents, r0, r1);
+                put(sinusoidal_field_tensor(oc, ot, sc, st, h, rad[static_cast<std::size_t>(s)], k.real(), eta.real(),
+                                            gx, gw, 0),
+                    r0, r1);
+            }
+            s = i;
+        }
     }
     return out;
 }
@@ -1734,9 +1763,9 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     Kernel K;
     K.fr = &fr;
     if (!razor::leggauss(kNQpConst, K.gx, K.gw)) throw std::logic_error("leggauss(8) is tabled");
-    if (!fr.uniform_radius)
-        decline(mixed ? "a mixed deck with several radii (the class kernels read one)"
-                      : "a crossing deck with several radii (the reference refuses)");
+    // a mixed deck's class kernels read each observer's own radius
+    // (`class_tensor`); a crossing deck's point rows read one
+    if (!fr.uniform_radius && !mixed) decline("a crossing deck with several radii (the reference refuses)");
     const cd eta_p(fr.eta, 0.0);
     const cd eta_m = np_csqrt(py_quot(cd(kMu, 0.0), md.eps_m));
     // the two classes' remainders, over each class's own geometry
