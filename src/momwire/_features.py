@@ -195,19 +195,24 @@ FEATURES: dict[str, Feature] = {
                 "src/momwire/_sin_pair_reuse.py",
                 "tests/test_pair_reuse_1809.py",
                 "tests/test_sin_pair_reuse_1911.py",
+                "tests/test_sin_pair_reuse_ground_1970.py",
             ),
             label="pair reuse",
             summary=(
                 "Fills each repeated pose of a pair of wires or segments once and "
                 "copies the rest. nec5-bspline and nec42-bspline need the front "
                 "end's hint of which edge pairs share a pose; the sinusoidal "
-                "solver finds its own, in free space and over a perfect ground."
+                "solver finds its own, in free space and over a perfect or "
+                "finite ground."
             ),
             # bspline: 1e-12. sinusoidal (momwire#1911), measured on Skylake
             # against the flag-off fill over the ELT whip and 19 corpus and
             # catalogue decks, free space and PEC, thin wire and EK: at most
             # 2.7e-12 (a 4x4 bowtie array; the whip 2.7e-13), below what
-            # translating each deck moves its own answer (up to 6e-11).
+            # translating each deck moves its own answer (up to 6e-11). Over
+            # a finite ground (momwire#1970), Sommerfeld and reflection
+            # coefficient, the 11 decks of the 11-16 ground ladder: at most
+            # 4.3e-13 (the skyloop at 2097 segments).
             drift=3e-12,
             offer=False,
         ),
