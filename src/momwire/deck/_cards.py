@@ -208,6 +208,11 @@ def parse_card(line: str) -> Card | None:
         # Comment bodies are free text; tokenizing them would refuse a
         # perfectly ordinary English comment for containing an apostrophe.
         return Card(mnemonic, (), line.rstrip("\n"))
+    if mnemonic == "SY":
+        # 4nec2's symbolic variables (`SY segs=10`): fields no dialect reads
+        # as numbers, and every dialect refuses the card by name. Converting
+        # them would put NON-NUMERICAL CHARACTER ahead of that sentence.
+        return Card(mnemonic, (), line.rstrip("\n"))
     fields = tokens[1:]
     trailer = None
     if mnemonic == "GN" and fields and _to_float(fields[-1]) is None:

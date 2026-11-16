@@ -455,7 +455,9 @@ bool parse_card(const std::string &line, Card &card) {
     card = Card();
     card.mnemonic = mnemonic;
     card.raw = raw;
-    if (mnemonic == "CM" || mnemonic == "CE") return true;
+    // SY (4nec2's symbolic variables): refused by name, so its fields are
+    // never converted (`parse_card`'s SY rule)
+    if (mnemonic == "CM" || mnemonic == "CE" || mnemonic == "SY") return true;
     std::vector<std::string> fields(tokens.begin() + 1, tokens.end());
     double scratch;
     if (mnemonic == "GN" && !fields.empty() && !py_float(replace_char(replace_char(fields.back(), 'D', 'E'), 'd', 'e'), scratch)) {

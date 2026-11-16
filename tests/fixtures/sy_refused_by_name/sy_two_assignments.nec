@@ -1,0 +1,9 @@
+CM two 4nec2 symbols on one SY card, comma separated
+CE
+SY len=3.25, rad=0.0015
+GW 1 9 0 0 -1.6 0 0 1.6 0.002
+GE 0
+FR 0 1 0 0 44.5 0
+EX 0 1 5 0 1 0
+XQ
+EN

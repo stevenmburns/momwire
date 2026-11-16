@@ -1666,6 +1666,27 @@ def test_the_stand_off_floor_refuses_as_python_does(driver, tmp_path):
     assert ans["printout"] == ref, pc.first_difference(ref, ans["printout"])
 
 
+SY_DECKS = sorted((ROOT / "tests" / "fixtures" / "sy_refused_by_name").glob("*.nec"))
+
+
+def test_sy_decks_refuse_by_name_as_python_does(driver, tmp_path):
+    """An SY card (4nec2's symbolic variables) is refused by name before its
+    fields are converted, by the C++ reader as by `parse_card`: the printout
+    names SY rather than NON-NUMERICAL CHARACTER IN FIELD, byte for byte as
+    `momwire-nec5-razor-2p` writes it."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    assert len(SY_DECKS) == 2
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], SY_DECKS, tmp_path)
+    for path, ans in zip(SY_DECKS, answers, strict=True):
+        ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+        assert b"NEC ERROR - SY (4nec2 symbolic variables)" in ref, path
+        assert ans["printout"] == ref, (
+            f"{path}: {pc.first_difference(ref, ans['printout'])}"
+        )
+
+
 def test_an_nt_on_one_segment_prints_as_python_on_the_nec42_sinusoidal(driver):
     """momwire#1887: the NEC-4.2 slot's run half stamps an NT card with both
     ends on one segment as the Python reducer does (all four entries on the
