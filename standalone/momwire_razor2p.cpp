@@ -1214,12 +1214,72 @@ std::string not_served(std::string why) {
         {"crossing-tolerance", "a wire crossing the ground plane too close to call"},
         {"source-text-encoding", "deck text this build does not read"},
         {"network-card-order", "network cards in an order this build does not read"},
+        {"drive-magnitude-overflow", "a source whose magnitude overflows a double"},
+        {"degree-key", "a node missing from the table of wires meeting at each node"},
+        {"near-field-count", "a near-field request past what this build sizes"},
+        {"near-field-coordinates", "a near-field coordinate form other than rectangular or spherical"},
+        {"sequence", "a deck with no run to answer"},
+        // razor's front (`scope` / `build`)
+        {"malformed-args", "a wire description this build cannot read"},
+        {"exact-kernel", "the exact thin-wire kernel forced on"},
+        {"refl-coef-ground", "a reflection-coefficient ground on this basis"},
+        {"somm-environment", "a Sommerfeld grid tuned through the MOMWIRE_SOMM_* environment"},
+        {"quadrature-order", "a quadrature order past the frozen rules"},
+        {"remainder-order", "a Sommerfeld remainder order past the frozen rules"},
+        {"loading-shape", "wire loading that does not give one value per wire"},
+        {"loading-values", "a wire conductivity this build does not take"},
+        {"grid-layout", "a Sommerfeld grid with more regions than this build lays out"},
+        {"buried-fill", "a buried wire without the below-ground field table"},
+        // bs2's front and fill (`bspline-` / `bspline: ` stripped below)
+        {"degree", "a B-spline degree other than 1, 2 or 3"},
+        {"junction-coincidence", "a junction whose wire ends do not meet at one point"},
+        {"low-stand-off",
+         "a wire graded along a junction arm below the h/a = 2 stand-off floor (momwire#865 / #926)"},
+        {"below-table", "a buried wire without the below-ground field table"},
+        {"buried-capped-plan", "a buried deck whose grazing pairs lie past the Sommerfeld range cap"},
+        {"buried-grazing-refusal", "a buried deck with grazing pairs and none to back off"},
+        {"buried-cross-grazing-refusal", "a deck whose cross-interface pairs graze, with none to back off"},
+        {"buried-refusal-contact", "a buried wire touching the interface where no junction earns it"},
+        {"buried-refusal-crossing", "a wire crossing the interface away from a crossing junction"},
+        {"buried-refusal-medium", "a buried wire with no lower medium given"},
+        {"buried-refusal-unearned", "a ground contact no junction of a buried wire earns"},
+        {"buried-two-radius-spread", "a crossing deck whose radii differ within one side of the interface"},
+        {"buried-two-radius-nodes", "a two-radius crossing deck with more than one crossing node"},
+        // `somm_trans::Refused`, as bs2's buried fill wraps it
+        {"buried-transmitted-r-min-floor", "transmitted-field pairs closer than the grid's radial floor"},
+        {"buried-transmitted-ladder-range", "transmitted-field pairs with no depth range to tabulate"},
+        {"buried-transmitted-deeper-than-ladder", "a buried wire deeper than the transmitted-field depth ladder"},
+        {"buried-transmitted-grid-too-small", "a transmitted-field grid too small to interpolate"},
+        {"buried-transmitted-empty-class", "transmitted-field pairs with no wire on one side"},
+        {"buried-transmitted-plan-nan", "transmitted-field pairs whose separations are not numbers"},
+        {"buried-transmitted-separation-nan", "transmitted-field segments whose lengths are not numbers"},
+        {"buried-transmitted-eval-nan", "transmitted-field reads at coordinates that are not numbers"},
+        {"buried-transmitted-eval-r-min", "transmitted-field reads closer than the grid's radial floor"},
+        {"buried-transmitted-eval-r-max", "transmitted-field reads past the grid's radial reach"},
+        {"buried-transmitted-eval-theta-range", "transmitted-field reads at an angle outside the grid"},
+        {"buried-transmitted-eval-theta-floor", "transmitted-field reads more grazing than the grid's floor"},
+        {"buried-transmitted-eval-ladder", "transmitted-field reads outside the grid's depth ladder"},
+        {"buried-buried-cross-range", "cross-interface pairs past the Sommerfeld range cap"},
+        {"buried-buried-depth", "a buried wire deeper than the transmitted-field depth ladder"},
+        {"buried-buried-cross-grazing", "cross-interface pairs more grazing than the grid's floor"},
+        {"buried-refusal: transmitted-empty-class", "cross-interface pairs with no wire on one side"},
+        {"buried-refusal: transmitted-plan-nan", "cross-interface pairs whose separations are not numbers"},
+        {"buried-refusal: buried-cross-range", "cross-interface pairs past the Sommerfeld range cap"},
+        {"buried-refusal: buried-depth", "a buried wire deeper than the transmitted-field depth ladder"},
     };
     std::string head = why, tail;
     const std::size_t colon = why.find(':');
     if (colon != std::string::npos && why.compare(0, colon, "front") == 0) {
         head = why.substr(colon + 1);
         tail = " (front half)";
+    }
+    // bs2's route label: `bspline-` from its front, `bspline: ` from its fill
+    for (const char *label : {"bspline-", "bspline: "}) {
+        const std::size_t n = std::strlen(label);
+        if (head.compare(0, n, label) == 0) {
+            head = head.substr(n);
+            break;
+        }
     }
     for (const auto &w : words)
         if (head == w.first) return std::string("not served by this build: ") + w.second + tail;
