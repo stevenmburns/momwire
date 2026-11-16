@@ -70,6 +70,10 @@ def hub(n_rad: int, segs: int) -> str:
 def main(argv: list[str]) -> int:
     out = Path(argv[0])
     exes = [a.split("=", 1) for a in argv[1:]]
+    for label, exe in exes:
+        if not Path(exe).exists():
+            print(f"skipped {label}: no {exe}")
+    exes = [(label, exe) for label, exe in exes if Path(exe).exists()]
     work = Path(tempfile.mkdtemp())
     decks = {
         "fs_yagi_6x41": yagi(6, 41),

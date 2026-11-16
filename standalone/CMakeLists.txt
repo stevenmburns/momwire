@@ -117,8 +117,19 @@ if(APPLE)
   if(NOT MW_EXE_VARIANT STREQUAL "legacy")
     message(FATAL_ERROR "MW_EXE_VARIANT on macOS is legacy (setup.py's darwin branch)")
   endif()
+elseif(MW_EXE_VARIANT STREQUAL "fat")
+  # Both x86-64 variants in one executable, picked at run time by CPU
+  # (momwire_razor2p.cpp `pick_variant`): the cores compiled four times --
+  # sse2 threaded / serial as `mw` / `mws` (the baseline every CPU runs, and
+  # FIRST on the link line, so a template or inline function both builds
+  # instantiate resolves to its sse2 copy) and avx2 threaded / serial as
+  # `mwa` / `mwas`. GCC only (the MinGW single-file build) for now.
+  if(MSVC OR NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_VARIANT=fat is the GCC no-Python build only")
+  endif()
+  set(MW_EXE_FAT ON)
 elseif(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
-  message(FATAL_ERROR "MW_EXE_VARIANT must be avx2 or sse2")
+  message(FATAL_ERROR "MW_EXE_VARIANT must be avx2, sse2 or fat")
 endif()
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
 # The release build (standalone/build_release_linux.sh): libgomp linked in
@@ -378,6 +389,29 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   mw_fg=mws_fg  # the field-form assembler's inline text: one copy per runtime
   mw1860=mws_mw1860)  # the crossing table's inline text (momwire#1860 L5): likewise
 
+# The fat build's avx2 copies (MW_EXE_VARIANT=fat, above): the same sources
+# and flags plus -mavx2 -mfma, every namespace the serial copy renames renamed
+# again, `mwa` / `mwas`.
+if(MW_EXE_FAT)
+  foreach(_mw_copy IN ITEMS mwa mwas)
+    set(_mw_renames mw=${_mw_copy} xsf=${_mw_copy}_xsf Faddeeva=${_mw_copy}_Faddeeva
+        razor_cplx_brackets=${_mw_copy}_razor_cplx_brackets somm_core=${_mw_copy}_somm_core
+        somm_below=${_mw_copy}_somm_below ni_core=${_mw_copy}_ni_core ni_eval=${_mw_copy}_ni_eval
+        somm_trans=${_mw_copy}_somm_trans ni_point=${_mw_copy}_ni_point
+        near_buried=${_mw_copy}_near_buried offedge_lanes=${_mw_copy}_offedge_lanes
+        somm_sym=${_mw_copy}_somm_sym mw_fg=${_mw_copy}_fg mw1860=${_mw_copy}_mw1860)
+    add_library(mw_core_${_mw_copy} OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
+    target_include_directories(mw_core_${_mw_copy} PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
+    if(_mw_copy STREQUAL "mwa")
+      target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_CORE_FLAGS} -mavx2 -mfma ${MW_OMP_FLAG})
+    else()
+      target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_CORE_FLAGS} -mavx2 -mfma)
+    endif()
+    target_compile_definitions(mw_core_${_mw_copy} PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+                               ${MW_ROUTE_DEFS} ${_mw_renames})
+  endforeach()
+endif()
+
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec5")
   set(MW_EXE momwire-nec5-bspline-standalone)
@@ -464,6 +498,11 @@ else()
   if(MW_DEFAULT_PYTHON_HOME)
     target_compile_definitions(${MW_EXE} PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
   endif()
+endif()
+if(MW_EXE_FAT)
+  # after the sse2 copies on the link line (see MW_EXE_VARIANT=fat)
+  target_sources(${MW_EXE} PRIVATE $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>)
+  target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_FAT=1)
 endif()
 if(MSVC)
   target_compile_options(${MW_EXE} PRIVATE /O2 /std:c++17 /openmp:llvm /D_USE_MATH_DEFINES=)
