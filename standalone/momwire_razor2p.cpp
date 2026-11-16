@@ -1343,10 +1343,12 @@ std::string not_served(std::string why) {
     for (const auto &w : words)
         if (head == w.first) return std::string("not served by this build: ") + w.second + tail;
     // a sentence with Python's or numpy's name for its exception: the
-    // sentence alone (this build has neither)
-    const std::size_t paren = why.find(" (");
-    if (paren != std::string::npos) why = why.substr(0, paren);
-    return "not served by this build: " + why;
+    // sentence alone (this build has neither), its seam and route labels
+    // stripped as a token's are (census 11-15: bs2 printed
+    // `front:bspline-crossing serve with per-wire radii ...`)
+    const std::size_t paren = head.find(" (");
+    if (paren != std::string::npos) head = head.substr(0, paren);
+    return "not served by this build: " + head + tail;
 }
 
 // MOMWIRE_TIMES: the last render's thread count and printout write.
