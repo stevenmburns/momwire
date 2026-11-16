@@ -1,0 +1,14 @@
+CM three bare radials lying 0.9 mm above a finite ground, radius 0.6 mm (h/a = 1.5,
+CM under the h/a = 2 floor): the NEC-4.2 slot refuses it by name (momwire#865)
+CE
+GW 1 7 0 0 0.0009 3.8 0 0.0009 0.0006
+GW 2 7 0 0 0.0009 -1.9 3.29 0.0009 0.0006
+GW 3 7 0 0 0.0009 -1.9 -3.29 0.0009 0.0006
+GW 4 1 0 0 0.0009 0 0 0.04 0.0004
+GW 5 11 0 0 0.04 0 0 5.1 0.0004
+GE 0
+GN 2 0 0 0 15 0.008 NOFILE
+EX 0 4 1 0 1 0
+FR 0 1 0 0 14.2 0
+RP 0 1 1 1000 0 0 10 10
+EN

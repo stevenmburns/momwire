@@ -1,0 +1,14 @@
+CM three bare radials lying 0.9 mm above a finite ground, radius 0.6 mm (h/a = 1.5,
+CM under the h/a = 2 floor): a refusal by name, not an INTERNAL ERROR (momwire#865)
+CE
+GW 1 7 0 0 9.E-4 3.8 0 9.E-4 6.E-4
+GW 2 7 0 0 9.E-4 -1.9 3.29 9.E-4 6.E-4
+GW 3 7 0 0 9.E-4 -1.9 -3.29 9.E-4 6.E-4
+GW 4 2 0 0 9.E-4 0 0 0.04 4.E-4
+GW 5 11 0 0 0.04 0 0 5.1 4.E-4
+GE 1 0
+GN 0 0 0 0 15. 0.008 1. 0. NOFILE
+EX 0 4 1 2 1. 0.
+FR 0 1 0 0 14.2 0.
+XQ 0
+EN

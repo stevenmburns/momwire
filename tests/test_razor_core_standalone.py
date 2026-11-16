@@ -1643,6 +1643,29 @@ def test_one_port_nts_on_an_unpinned_parked_wire_print_as_python(
     assert ans["printout"] == ref, pc.first_difference(ref, ans["printout"])
 
 
+STAND_OFF_FLOOR = ROOT / "tests" / "fixtures" / "stand_off_floor_865"
+
+
+def test_the_stand_off_floor_refuses_as_python_does(driver, tmp_path):
+    """momwire#865's floor (a bare wire alongside the interface below h = 2a)
+    in Python's sentence from bs2's front: the NEC-5 seam refuses it by name
+    (`_prepare`'s StandOffFloorError) where it declined it as `low-stand-off`.
+    The NEC-4.2 slot's twin deck (`bare_radials_below_floor_nec4.nec`) is
+    held to `momwire-nec42`'s bytes by test_standalone_nec42's fixture walk."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    nec5 = STAND_OFF_FLOOR / "bare_radials_below_floor_nec5.nec"
+    with _one_thread():
+        (ans,) = pc.run_driver(
+            driver[0]["nec5_bspline_printout_driver"], [nec5], tmp_path, basis="bspline"
+        )
+        ref = pc.python_printout(nec5.read_bytes().decode("latin-1"), basis="bspline")
+    assert (ans["route"], ans["seam"], ans["raised"]) == ("printed", "refused", ""), ans
+    assert b"NEC ERROR - wire 0 runs at h = 0.900 mm" in ref
+    assert ans["printout"] == ref, pc.first_difference(ref, ans["printout"])
+
+
 def test_an_nt_on_one_segment_prints_as_python_on_the_nec42_sinusoidal(driver):
     """momwire#1887: the NEC-4.2 slot's run half stamps an NT card with both
     ends on one segment as the Python reducer does (all four entries on the
