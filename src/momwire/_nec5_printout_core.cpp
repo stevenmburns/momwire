@@ -26,6 +26,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cctype>
 #include <charconv>
@@ -632,6 +633,11 @@ struct PatternBlockC {  // `PatternBlock`
     double lower_range_mag = 0, lower_range_phase_deg = 0;
     // XNDA's D digit 1 (momwire#1503): the rows are DIRECTIVE gains.
     bool directive = false;
+    // XNDA's N digit 1 to 5: the NORMALIZED GAIN table, (theta, phi, dB)
+    // a direction in the rows' order (`PatternBlock.normalized`).
+    int normalized_kind = 0;
+    double normalization_db = 0;
+    std::vector<std::array<double, 3>> normalized;
 };
 
 struct NetworkRowC {  // `NetworkRow` / `LineRow`
@@ -1690,6 +1696,47 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
             }
             block.rows.push_back(row);
         }
+    // `_serve._normalized_gains`: XNDA's N digit, the NORMALIZED GAIN table,
+    // formed from the rows before A = 2 drops them. N = 1 / 2 split the total
+    // power gain between the ellipse's axes as 1 : AR^2 (numpy's elementwise
+    // order: `total / (1 + ar*ar)`, `(total * ar*ar) / (1 + ar*ar)`).
+    const int64_t kind = rq.xnda.i64() / 100 % 10;
+    if (kind >= 1 && kind <= 5) {
+        std::vector<double> db;
+        db.reserve(block.rows.size());
+        for (const PatternRowC &r : block.rows) {
+            double v = r.total;
+            if (kind == 3) v = r.vert;
+            if (kind == 4) v = r.hor;
+            db.push_back(v);
+        }
+        if (kind == 1 || kind == 2) {
+            // the rows' walk, phi-major (`total.T.ravel()`)
+            std::size_t k = 0;
+            for (int64_t ip = 0; ip < nph; ip++)
+                for (int64_t it = 0; it < nt; it++, k++) {
+                    const std::size_t q = static_cast<std::size_t>(it * nph + ip);
+                    const double ar = block.rows[k].axial;
+                    const double ar2 = ar * ar;
+                    const double share = 1.0 + ar2;
+                    const double tot = g_v_rows[q] + g_h_rows[q];
+                    db[k] = gain_db(kind == 1 ? tot / share : (tot * ar2) / share);
+                }
+        }
+        double factor = rq.gnor_db;
+        if (factor == 0.0) {
+            // Python's `max` over a list: the first of equals, NaN never wins
+            // past the first element (`a > b` is false for NaN either side)
+            factor = db.empty() ? 0.0 : db[0];
+            for (std::size_t k = 1; k < db.size(); k++)
+                if (db[k] > factor) factor = db[k];
+        }
+        block.normalized_kind = static_cast<int>(kind);
+        block.normalization_db = factor;
+        block.normalized.reserve(db.size());
+        for (std::size_t k = 0; k < db.size(); k++)
+            block.normalized.push_back({block.rows[k].theta, block.rows[k].phi, db[k] - factor});
+    }
     // XNDA's A digit asks for the average gain (Python's non-negative `% 10`)
     int64_t digit = rq.xnda.i64() % 10;
     if (digit < 0) digit += 10;
@@ -3013,8 +3060,46 @@ Lines pattern_lines(const PatternBlockC &block) {
                     "   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS =" +
                         e(block.power_radiated_4pi, 12, 5) + " WATTS"});
     }
+    if (block.normalized_kind != 0) {
+        // `_printout._normalized`: four blanks, the heading, the gain's name
+        // right-aligned to column 53, the factor, three column groups; the
+        // cells fill the groups column by column, the first n % 3 one longer.
+        static const char *const kinds[] = {"", "MAJOR AXIS GAIN", "MINOR AXIS GAIN",
+                                            "VERTICAL GAIN", "HORIZONTAL GAIN", "TOTAL GAIN"};
+        blanks(lines, 4);
+        add(lines, {sp(37) + "- - - - NORMALIZED GAIN - - - -", "",
+                    rjust(kinds[block.normalized_kind], 53),
+                    sp(38) + "NORMALIZATION FACTOR =" + f(block.normalization_db, 9, 2) + " DB", "",
+                    "    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN"
+                    "           - - ANGLES - -      GAIN",
+                    "    THETA     PHI        DB            THETA     PHI        DB"
+                    "            THETA     PHI        DB",
+                    "   DEGREES  DEGREES                   DEGREES  DEGREES"
+                    "                   DEGREES  DEGREES"});
+        const std::size_t n = block.normalized.size(), base = n / 3, extra = n % 3;
+        std::size_t starts[3], lengths[3], start = 0;
+        for (std::size_t g = 0; g < 3; g++) {
+            lengths[g] = base + (g < extra ? 1 : 0);
+            starts[g] = start;
+            start += lengths[g];
+        }
+        for (std::size_t line = 0; line < lengths[0]; line++) {
+            std::string text;
+            for (std::size_t g = 0; g < 3; g++) {
+                if (line >= lengths[g]) continue;
+                const std::array<double, 3> &c = block.normalized[starts[g] + line];
+                if (g) text += sp(6);
+                text += f(c[0], 10, 2) + f(c[1], 9, 2) + f(c[2], 10, 2);
+            }
+            lines.push_back(text);
+        }
+    }
     return lines;
 }
+
+// `_printout._pattern_gap`: five blanks after a pattern, three after its
+// NORMALIZED GAIN table.
+int pattern_gap(const PatternBlockC &block) { return block.normalized_kind != 0 ? 3 : 5; }
 
 // `_printout._near_field`: heading, three header lines, a row a point.
 Lines near_lines(const NearBlockC &block) {
@@ -3089,7 +3174,7 @@ Lines run_sections(const RunDataC &data, bool requests_only = false) {
         }
         for (const PatternBlockC &block : data.patterns) {
             add(body, pattern_lines(block));
-            blanks(body, 5);
+            blanks(body, pattern_gap(block));
         }
         return body;
     }
@@ -3142,7 +3227,7 @@ Lines run_sections(const RunDataC &data, bool requests_only = false) {
     }
     for (const PatternBlockC &block : data.patterns) {
         add(body, pattern_lines(block));
-        blanks(body, 5);
+        blanks(body, pattern_gap(block));
     }
     return body;
 }

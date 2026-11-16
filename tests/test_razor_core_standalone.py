@@ -2166,6 +2166,53 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     assert counts.get("runs", 0) >= 29, counts
 
 
+NORMALIZED_GAIN_DECKS = ROOT / "tests" / "fixtures" / "rp_normalized_gain"
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
+    """RP with XNDA N = 1 to 5: the NORMALIZED GAIN table through the C++
+    printout core (`pattern_block`'s cells and factor, `pattern_lines`' three
+    column groups, the shorter gap after the table), byte for byte as
+    `_shell.render` prints it, over free space, the Sommerfeld ground, several
+    frequencies and several RP cards. None declines."""
+    decks = sorted(NORMALIZED_GAIN_DECKS.glob("*.nec"))
+    assert len(decks) == 54
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    else:
+        pc = _printout_compare_module()
+        if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+            pytest.skip(
+                "no bundled OpenBLAS beside SciPy / numpy (not a wheel install)"
+            )
+        saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+        os.environ.update(_ONE_THREAD)
+        try:
+            answers = pc.run_driver(
+                driver[0]["nec5_razor_printout_driver"], decks, tmp_path
+            )
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        counts, reasons = {}, {}
+        with _one_thread():
+            for path, ans in zip(decks, answers, strict=True):
+                if ans["route"] == "declined":
+                    reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
+                    continue
+                counts[ans["seam"]] = counts.get(ans["seam"], 0) + 1
+                ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+                assert ans["printout"] == ref, (
+                    f"{path}: {pc.first_difference(ref, ans['printout'])}"
+                )
+    assert not reasons, reasons
+    assert counts.get("served", 0) == 54, counts
+
+
 CW_1697_DECKS = ROOT / "tests" / "fixtures" / "nec_cw_catenary_1697"
 
 
