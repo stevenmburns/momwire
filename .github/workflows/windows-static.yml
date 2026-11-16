@@ -1,14 +1,20 @@
 # The no-Python executables on Windows as SINGLE FILES (an experiment beside
 # standalone.yml's MSVC `windows-nopython`, which it does not touch): MinGW-w64
 # gcc in MSYS2's MINGW64 environment -- the msvcrt.dll runtime, the import
-# shape of Ward's single-file NEC5CL (KERNEL32 + msvcrt) -- razor-2p and bs2,
-# avx2 and sse2, every runtime linked in:
+# shape of Ward's single-file NEC5CL build (KERNEL32 + msvcrt; m85 measured,
+# in place of m90) -- razor-2p and bs2, avx2 and sse2, every runtime linked in:
 #
 #   * OpenBLAS: standalone/build_openblas.sh's two archives, unchanged -- the
 #     SAME pinned commits as Linux (SciPy's `mwx_`, numpy's `mwn_`), built
 #     here with MINGW64's gcc;
 #   * libgomp from its archive (MW_EXE_STATIC_GOMP), and -static for
 #     libstdc++, libgcc and winpthreads (CMakeLists.txt's MINGW block).
+#
+# Phase 2: the FAT executables, one per basis under the launchers' names
+# (momwire-nec5-razor-2p.exe, momwire-nec5-bspline.exe), avx2 and sse2 inside
+# and picked at run time by CPU (MW_EXE_VARIANT=fat), gated byte for byte
+# against the one-variant builds, and run under Intel SDE as CPUs without
+# AVX2 (Sandy Bridge) and without AVX (Westmere).
 #
 # Gated, as windows-nopython is: an import table of system DLLs only (hard),
 # the freeze's Windows 7 import gate, a rehearsal signature, a run from a
@@ -49,6 +55,7 @@ jobs:
           install: >-
             git make perl
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
       - name: toolchain
@@ -57,11 +64,12 @@ jobs:
           gcc --version | head -1
           ld --version | head -1
           echo "libgomp: $(gcc -print-file-name=libgomp.a)"
+          [ -f "$(gcc -print-file-name=libgomp.a)" ] || { echo "::error::no libgomp.a"; exit 1; }
           echo "libwinpthread: $(gcc -print-file-name=libwinpthread.a)"
           echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt' | sort -u | tr '\n' ' ')"
       # build_openblas.sh's two archives, keyed on the script (it holds the
       # commits) and the environment
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: obcache
         with:
           path: |
@@ -77,6 +85,15 @@ jobs:
             tail -60 obw/build-*.log
             exit 1
           fi
+      # saved at once, so a later step's failure does not cost the next run
+      # the build
+      - uses: actions/cache/save@v4
+        if: steps.obcache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: ${{ steps.obcache.outputs.cache-primary-key }}
       - name: the archives
         shell: msys2 {0}
         run: |
@@ -211,6 +228,134 @@ jobs:
             }
           }
           exit $fail
+      # Phase 2, the FAT executables: one per basis, avx2 and sse2 inside,
+      # picked at run time by CPU (MW_EXE_VARIANT=fat; momwire_razor2p.cpp
+      # `pick_variant`), under the launchers' own names.
+      - name: configure + build (fat, two executables)
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p dist-fat
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            cmake -S standalone -B "build-$b-fat" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=fat \
+              -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
+              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON
+            cmake --build "build-$b-fat"
+            cp "build-$b-fat/$target.exe" "dist-fat/$name.exe"
+            strip "dist-fat/$name.exe"
+          done
+          ls -l dist-fat
+      - name: fat import tables (system DLLs only)
+        shell: msys2 {0}
+        run: |
+          fail=0
+          for e in dist-fat/*.exe; do
+            echo "== $(basename "$e") $(stat -c %s "$e") bytes" | tee -a dist/imports.txt
+            objdump -p "$e" | grep "DLL Name" | tee -a dist/imports.txt
+            for d in $(objdump -p "$e" | awk '/DLL Name/ {print $3}'); do
+              case "$(echo "$d" | tr A-Z a-z)" in
+                kernel32.dll|msvcrt.dll|advapi32.dll|ntdll.dll) ;;
+                *) echo "::error::$(basename "$e") imports $d"; fail=1 ;;
+              esac
+            done
+          done
+          exit $fail
+      - name: fat Windows 7 gate and rehearsal signature
+        shell: pwsh
+        run: |
+          python scripts/eznec_freeze/scan_win7_imports.py dist-fat
+          if ($LASTEXITCODE) { exit 1 }
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire standalone rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          $env:MOMWIRE_SIGN_SHA1 = $cert.Thumbprint
+          $env:MOMWIRE_SIGN_ALLOW_UNTRUSTED = "1"
+          $env:MOMWIRE_SIGN_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
+          python standalone/sign_windows.py (Get-ChildItem dist-fat\*.exe).FullName
+          if ($LASTEXITCODE) { exit 1 }
+          foreach ($e in Get-ChildItem dist-fat\*.exe) {
+            $s = Get-AuthenticodeSignature $e.FullName
+            "$($e.Name): $($s.Status) $($e.Length) bytes"
+            if (-not $s.SignerCertificate) { throw "$($e.Name) is not signed" }
+          }
+      # The fat executables' sse2 path on CPUs that lack AVX2 (Sandy Bridge:
+      # AVX but no AVX2/FMA) or AVX at all (Westmere), and the avx2 path on
+      # Haswell, under Intel SDE, which emulates each CPU's CPUID and faults
+      # on any instruction it lacks: static initialisers included, so an
+      # avx2-compiled constructor would fail here. Each printout must be the
+      # one-variant executable's bytes (run natively).
+      - uses: petarpetrovt/setup-sde@v6.0
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+      - name: fat executables under SDE (wsm, snb -> sse2; hsw -> avx2)
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          $decks = @("tests\fixtures\razor_printout_3a\node_gap_two_sources.nec",
+                     "tests\fixtures\bspline_printout_buried\ab_hub16.nec",
+                     "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
+          $fail = 0
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            $fat = (Resolve-Path "dist-fat\$($b[1]).exe").Path
+            foreach ($cpu in 'wsm', 'snb', 'hsw') {
+              $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
+              # OpenBLAS picks its kernels by CPUID too: pinned alike for the
+              # emulated and the native run, to kernels the emulated CPU has
+              $env:OPENBLAS_CORETYPE = if ($cpu -eq 'hsw') { 'Haswell' } else { 'Nehalem' }
+              $one = (Resolve-Path "dist\momwire-nec5-$($b[0])-$want.exe").Path
+              $v = (& $sde "-$cpu" -- $fat -version) -join ' '
+              "$($b[1]) under -$cpu : $v"
+              if ($LASTEXITCODE -or $v -notmatch "-standalone-$want ") { "::error::$($b[1]) -$cpu picked wrong or failed"; $fail = 1; continue }
+              foreach ($d in $decks) {
+                foreach ($copy in 'serial', 'threads') {
+                  $o1 = "$env:RUNNER_TEMP\sde.out"
+                  if ($copy -eq 'threads') { $env:MW_EXE_COPY = 'threads'; $env:MOMWIRE_THREADS = '2' } else { Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS -ErrorAction Ignore }
+                  & $sde "-$cpu" -- $fat $d $o1
+                  $rc = $LASTEXITCODE
+                  $a = if (Test-Path $o1) { [IO.File]::ReadAllBytes($o1) } else { @() }
+                  Remove-Item $o1 -ErrorAction Ignore
+                  & $one $d $o1
+                  $bb = [IO.File]::ReadAllBytes($o1)
+                  Remove-Item $o1
+                  $same = ($rc -eq 0) -and [System.Linq.Enumerable]::SequenceEqual([byte[]]$a, [byte[]]$bb)
+                  "  $(Split-Path -Leaf $d) $copy : rc=$rc identical=$same"
+                  if (-not $same) { $fail = 1 }
+                }
+              }
+              Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS, Env:OPENBLAS_CORETYPE -ErrorAction Ignore
+            }
+          }
+          exit $fail
+      # The fat executables against the one-variant ones, byte for byte, on
+      # every fixture deck and NX chain: each path (MOMWIRE_FORCE_VARIANT),
+      # each copy (the size policy's, and the threaded one).
+      - name: fat == one-variant, every fixture deck (razor-2p and bs2, avx2 and sse2)
+        shell: pwsh
+        run: |
+          $fail = 0
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            foreach ($v in 'avx2', 'sse2') {
+              "=== $($b[1]) $v"
+              python scripts/windows_static/fat_compare.py "dist-fat\$($b[1]).exe" $v "dist\momwire-nec5-$($b[0])-$v.exe" `
+                tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      - name: contract tests on the fat executables
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = (Resolve-Path dist-fat\momwire-nec5-razor-2p.exe).Path
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = (Resolve-Path dist-fat\momwire-nec5-bspline.exe).Path
+          $env:MOMWIRE_STANDALONE_BASIS = "bspline"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
       # The MSVC zip of the latest green standalone.yml push run on main, for
       # the paired timing below (main's MSVC bytes; this branch changes no
       # line MSVC compiles).
@@ -227,7 +372,7 @@ jobs:
           Expand-Archive (Get-ChildItem msvc\*.zip).FullName -DestinationPath msvc
           Get-ChildItem -Recurse msvc -Filter *.exe | Select-Object FullName, Length
       - name: indicative timing, MinGW vs MSVC (same runner, interleaved)
-        if: always()
+        if: always() && hashFiles('dist/momwire-nec5-bs2-avx2.exe') != ''
         shell: pwsh
         run: |
           Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
@@ -235,7 +380,8 @@ jobs:
           $D = (Resolve-Path dist).Path
           python scripts/windows_static/time_exes.py dist/timing.jsonl `
             "mingw/razor2p=$D\momwire-nec5-razor2p-avx2.exe" "msvc/razor2p=$M\momwire-nec5-razor2p-avx2.exe" `
-            "mingw/bs2=$D\momwire-nec5-bs2-avx2.exe" "msvc/bs2=$M\momwire-nec5-bs2-avx2.exe"
+            "mingw/bs2=$D\momwire-nec5-bs2-avx2.exe" "msvc/bs2=$M\momwire-nec5-bs2-avx2.exe" `
+            "fat/razor2p=$PWD\dist-fat\momwire-nec5-razor-2p.exe" "fat/bs2=$PWD\dist-fat\momwire-nec5-bspline.exe"
           if ($LASTEXITCODE) { exit 1 }
       - uses: actions/upload-artifact@v7
         if: always()
@@ -243,6 +389,7 @@ jobs:
           name: momwire-nec5-windows-x64-static-SELFSIGNED-rehearsal
           path: |
             dist/*.exe
+            dist-fat/*.exe
             dist/imports.txt
             dist/*.jsonl
           if-no-files-found: warn
