@@ -3014,7 +3014,7 @@ class BSplineSolver(
                                 f"advisory names on a level arm. The two rules "
                                 f"are connected: momwire#926."
                             )
-                    raise ValueError(
+                    raise _surface_height.StandOffFloorError(
                         f"wire {w_idx} runs at h = {h_min * 1e3:.3f} mm above "
                         f"the interface, h/a = {h_min / a_w:.2f}, {why}.{graded}"
                         f" See {_surface_height.SURFACE_HEIGHT_CLASS.issue}"

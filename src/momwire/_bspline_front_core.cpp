@@ -543,8 +543,38 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
                 const double h = pl[3 * i + 2] - gz;
                 low[i] = h > tol && h < h_floor;
             }
-            for (size_t i = 0; i + 1 < m; i++)
-                if (low[i] && low[i + 1]) throw FrontNotPorted("low-stand-off");
+            bool floor_refused = false;
+            for (size_t i = 0; i + 1 < m; i++) floor_refused = floor_refused || (low[i] && low[i + 1]);
+            if (floor_refused) {
+                // `_wire_endpoint_status`' StandOffFloorError, bare form (an
+                // insulated wire declines before it reaches this front).
+                // h_min is over every low vertex, paired or not, as Python's.
+                double h_min = std::numeric_limits<double>::infinity();
+                bool interior = false;
+                for (size_t i = 0; i < m; i++)
+                    if (low[i]) {
+                        h_min = std::min(h_min, pl[3 * i + 2] - gz);
+                        interior = interior || (i > 0 && i + 1 < m);
+                    }
+                // Python appends a node-grading sentence when the wire is a
+                // junction arm ending on the plane with a low interior vertex
+                // (momwire#926); it needs `node_panel_floor`, not ported.
+                const bool node_end =
+                    (z_at[0] && b.start_status[w] != FREE) || (z_at[m - 1] && b.end_status[w] != FREE);
+                if (node_end && m > 2 && interior) throw FrontNotPorted("low-stand-off");
+                char h_mm[64], h_over_a[64];
+                std::snprintf(h_mm, sizeof h_mm, "%.3f", h_min * 1e3);  // `:.3f`
+                std::snprintf(h_over_a, sizeof h_over_a, "%.2f", h_min / radii[w]);
+                // `SURFACE_HEIGHT_CLASS`: floor_h_over_a 2, mesh_move_pct_at_floor 4, issue #865
+                throw FrontStandOffFloor(
+                    "wire " + std::to_string(w) + " runs at h = " + h_mm + " mm above the interface, h/a = " +
+                    h_over_a +
+                    ", below the h/a = 2 validity floor for a BARE conductor, which is mesh stability rather than "
+                    "physics: the check moves 4 % at the floor itself. Raise the wire, or give it the jacket it "
+                    "really has \xe2\x80\x94 an insulated conductor lying on soil is served down to h = b, and for "
+                    "No. 18 with a 0.4 mm wall that is h/a = 1.76, below this bare bound. See "
+                    "stevenmburns/momwire#865");
+            }
             if (b.start_status[w] == FREE && z_at[0]) b.start_status[w] = GROUND;
             if (b.end_status[w] == FREE && z_at[m - 1]) b.end_status[w] = GROUND;
         }

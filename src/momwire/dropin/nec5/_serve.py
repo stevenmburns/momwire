@@ -487,6 +487,7 @@ import numpy as np
 from ...bspline import BSplineSolver
 from ...deck._cards import tokenize
 from ... import _ground_spec, _medium_spec
+from ..._surface_height import StandOffFloorError
 from ... import _cmul, _lapack, _times
 from ...deck._nec5 import (
     Nec5Conductivity,
@@ -5065,14 +5066,20 @@ def _prepare(
         raise ServeRefusal(str(exc)) from None
     times = _times.current()
     fill_seconds = factor_seconds = 0.0
-    if times is None:
-        solution = _port_solution(solver, shared)
-    else:
-        fill0, factor0 = times.elapsed_ms("fill"), times.elapsed_ms("factor")
-        with _times.stage("fill"):
+    try:
+        if times is None:
             solution = _port_solution(solver, shared)
-        fill_seconds = (times.elapsed_ms("fill") - fill0) / 1e3
-        factor_seconds = (times.elapsed_ms("factor") - factor0) / 1e3
+        else:
+            fill0, factor0 = times.elapsed_ms("fill"), times.elapsed_ms("factor")
+            with _times.stage("fill"):
+                solution = _port_solution(solver, shared)
+            fill_seconds = (times.elapsed_ms("fill") - fill0) / 1e3
+            factor_seconds = (times.elapsed_ms("factor") - factor0) / 1e3
+    except StandOffFloorError as exc:
+        # The basis is built in the solve, so the stand-off floor (momwire#865)
+        # is met here: a statement about the deck's geometry, refused by name
+        # as the NEC-4.2 slot refuses it, not an INTERNAL ERROR frame.
+        raise ServeRefusal(str(exc)) from None
     return _Prepared(
         structure=structure,
         mesh=mesh,

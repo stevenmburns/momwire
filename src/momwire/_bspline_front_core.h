@@ -83,6 +83,11 @@ struct WireDedup {
 struct FrontValueError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
+// `_surface_height.StandOffFloorError`, a ValueError subclass: what a deck
+// seam prints as a refusal (BSplineSeamEngine::build), the rest as ValueError.
+struct FrontStandOffFloor : FrontValueError {
+    using FrontValueError::FrontValueError;
+};
 struct FrontNotPorted : std::runtime_error {
     using std::runtime_error::runtime_error;
     // `python`: the message is Python's own NotImplementedError sentence (the

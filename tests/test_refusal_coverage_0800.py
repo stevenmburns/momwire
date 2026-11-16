@@ -115,7 +115,15 @@ RELAYS = {
     # name (`front:buried-fill`, `front:bspline-buried-refusal-*`), so the
     # launcher prints Python's
     "_prepare: str(exc) #2": "solver scope",
+    # `StandOffFloorError` (momwire#865): its sentence is the solver's, raised
+    # in the solve; enumerated from `SOLVER_SENTENCES` below, and printed by
+    # the bspline C++ seam from bs2's front in the same words
+    "_prepare: str(exc) #3": "stand-off floor",
 }
+
+# The solver sentences a relay above prints as the deck's refusal, by the
+# exception class each is raised as: (source, class).
+SOLVER_SENTENCES = ((SRC / "bspline.py", "StandOffFloorError"),)
 
 
 def _regex(parts):
@@ -184,6 +192,16 @@ def python_refusals():
                     text = ast.unparse(arg)
                     seen[text] = seen.get(text, 0) + 1
                     relays.append(f"{func.name}: {text} #{seen[text]}")
+    for path, name in SOLVER_SENTENCES:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Raise)
+                and isinstance(node.exc, ast.Call)
+                and isinstance(node.exc.func, ast.Attribute)
+                and node.exc.func.attr == name
+            ):
+                parts = _joined_parts(node.exc.args[0])
+                sentences[f"{name}: {_key(parts)}"] = _regex(parts)
     return sentences, relays
 
 
@@ -231,6 +249,8 @@ def test_the_enumeration_finds_the_refusals():
     sentences, relays = python_refusals()
     assert sum(1 for k in sentences if NAMED.fullmatch(k)) >= 20, sorted(sentences)
     assert sum(1 for k in sentences if ": " in k) >= 10, sorted(sentences)
+    for _path, name in SOLVER_SENTENCES:
+        assert any(k.startswith(f"{name}: ") for k in sentences), name
     assert sorted(relays) == sorted(RELAYS), (
         "a raise site relays a sentence made elsewhere; read where it comes "
         f"from and add it to RELAYS: {sorted(set(relays) ^ set(RELAYS))}"

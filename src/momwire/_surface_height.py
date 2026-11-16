@@ -45,6 +45,13 @@ import warnings
 from typing import NamedTuple
 
 
+class StandOffFloorError(ValueError):
+    """A conductor runs alongside the interface below the validity floor:
+    h < 2a bare, h < b jacketed (momwire#865). Still a ValueError for every
+    caller that catches one; named so that a deck seam can print it as a
+    refusal of the deck rather than as an internal error."""
+
+
 class SurfaceRadialHeight(UserWarning):
     """A conductor is within a few radii of the interface, where the answer is
     a strong function of the stand-off. Advisory only — nothing is moved and

@@ -225,6 +225,12 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         Built d = decline(std::string("bspline-") + e.what());
         if (e.python) d.error_kind = "NotImplementedError";
         return d;
+    } catch (const bspline::FrontStandOffFloor &e) {
+        // `_prepare` refuses StandOffFloorError by name
+        b.kind = Built::refused;
+        b.error_kind = "ValueError";
+        b.message = e.what();
+        return b;
     } catch (const bspline::FrontValueError &e) {
         // Python's ValueError, which escapes to the INTERNAL ERROR frame
         b.kind = Built::raised;
