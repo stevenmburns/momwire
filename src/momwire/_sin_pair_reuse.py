@@ -142,6 +142,25 @@ VERIFY_TOL = 1e-10
 #: `pair_reuse="verify"`: pairs checked per observer band.
 VERIFY_SAMPLES = 512
 
+#: Whether the sector route (`rotational_symmetry=True`, momwire#1912) takes
+#: `pair_reuse`; off, it declines and fills as without it. Its fill holds
+#: sector 0's rows and the axial rows only, and the plan then covers just
+#: those (momwire#1969, first finding: a plan over every row made the route
+#: up to 1.8x slower). What is left to reuse is small, because the rotation
+#: was most of it. Measured on Rocketlake, 8 threads, 13 frequencies, free
+#: space, sector-row plan against the route alone:
+#:
+#:   deck     pairs   reuse  census  fill/freq (reuse vs direct)  run
+#:   sky_c48  5.86 M  1.49x  0.71 s  0.081 vs 0.129 s             4.22 vs 4.12 s
+#:   pc_m40   3.58 M  1.25x  0.47 s  0.057 vs 0.096 s             3.08 vs 2.86 s
+#:
+#: Per frequency the reuse fill is ~40 % faster, but the census, paid once
+#: per geometry at ~120 ns of wall a pair (8 threads; the kernel is ~19 ns),
+#: takes 12 to 15 frequencies to repay, so a one-deck run comes out even or
+#: a few percent slower. A cheaper census, or a sweep long enough to repay
+#: it, is what turning this on needs.
+SECTOR_ROUTE = False
+
 _HAVE_FACTORIZE = _acc is not None and bool(
     getattr(_acc, "exact_factorize_1224", False)
 )

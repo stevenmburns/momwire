@@ -11,7 +11,10 @@ reduction is unchanged. So:
 - `pair_reuse="verify"` checks a sample of every band against the direct
   kernel in the original frame;
 - a finite ground takes the reflected block (momwire#1970, whose gates are
-  `test_sin_pair_reuse_ground_1970.py`).
+  `test_sin_pair_reuse_ground_1970.py`);
+- under the sector route every block's plan covers the filled rows only
+  (momwire#1969, its first finding: they covered every row, and made the
+  route slower), and by default the route declines the reuse.
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import pytest
 from momwire import _features
 from momwire import _sin_pair_reuse as pr
 from momwire.sinusoidal import SinusoidalSolver
+
+from test_rotational_sinusoidal_1912 import FEED, LIFT, build, cage
 
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = pytest.mark.reach(1)
@@ -160,3 +165,87 @@ def test_the_key_separates_what_differs():
     # A rigid motion moves each quantised scalar by at most its rounding.
     assert all(abs(a - b) <= 1 for a, b in zip(keys[0], keys[1]))
     assert keys[0] != keys[2]
+
+
+#: The sector-route fill's bound, max |dZ| / max |Z| of the row-compact
+#: matrix (`DRIFT` is the feed impedance's): as `test_sin_pair_reuse_ground_
+#: 1970.MATRIX`.
+MATRIX = 3e-12
+SECTOR_GROUNDS = ["free", "pec", "refl-coef", "sommerfeld"]
+SECTOR_BLOCKS = {
+    "free": {"direct"},
+    "pec": {"direct", "image"},
+    "refl-coef": {"direct", "reflected"},
+    "sommerfeld": {"direct", "reflected"},
+}
+
+
+def _sector_fill(ground, pair_reuse):
+    """The sector route's one fill (momwire#1912) of the #1897 cage, lifted
+    off the ground: sector 0's rows and the axial rows, row-compact, against
+    every source."""
+    wires, npe = cage(lift=LIFT)
+    s = build(wires, npe, [FEED], ground=ground, pair_reuse=pair_reuse)
+    geom = s._build_geometry()
+    rows = s._rotational_segments(geom)[2]
+    with s._operating_medium(geom) as medium:
+        G, _ = s._assemble_Z(geom, s.k, s._medium_eta(medium), obs_rows=rows)
+    return G, s, rows, geom["n_segs"]
+
+
+@pytest.mark.parametrize("ground", SECTOR_GROUNDS)
+@pytest.mark.parametrize("mode", [True, "verify"])
+def test_the_sector_route_declines(ground, mode):
+    base, _, _, _ = _sector_fill(ground, None)
+    on, s, _, _ = _sector_fill(ground, mode)
+    # Last in the order: a ground the reuse serves still says "sector route".
+    assert s.pair_reuse_declined.startswith("the sector route")
+    assert s.pair_reuse_census == {}
+    assert on.tobytes() == base.tobytes()
+
+
+@pytest.mark.parametrize("ground", SECTOR_GROUNDS)
+@pytest.mark.parametrize("mode", [True, "verify"])
+def test_the_sector_route_plans_its_own_rows(ground, mode, monkeypatch):
+    monkeypatch.setattr(pr, "SECTOR_ROUTE", True)
+    base, _, rows, n = _sector_fill(ground, None)
+    off, s, _, _ = _sector_fill(ground, False)
+    assert off.tobytes() == base.tobytes() and s.pair_reuse_census == {}
+    on, s, _, _ = _sector_fill(ground, mode)
+    assert s.pair_reuse_declined is None
+    # Every block ran, each planned over the filled rows only. Four spans of
+    # rows (the axial wires, then sector 0's vertical, chord and spoke), so
+    # a band's plan row is not its segment number.
+    assert set(s.pair_reuse_census) == SECTOR_BLOCKS[ground]
+    assert rows.size < n and np.any(np.diff(rows) > 1)
+    for n_pairs, n_cls, _near in s.pair_reuse_census.values():
+        assert n_pairs == rows.size * n
+        assert n_cls < n_pairs
+    # Measured: 3.0e-16 to 3.3e-16 over the four grounds, both modes (1,863
+    # pairs; 557 direct classes, 908 image or reflected).
+    assert _rel(on, base) <= MATRIX
+    if mode == "verify":
+        assert 0.0 < s.pair_reuse_verify_max <= pr.VERIFY_TOL
+
+
+@pytest.mark.parametrize("ground", SECTOR_GROUNDS)
+def test_the_sector_route_with_reuse_solves_as_without(ground, monkeypatch):
+    monkeypatch.setattr(pr, "SECTOR_ROUTE", True)
+    wires, npe = cage(lift=LIFT)
+    z = {}
+    for name, rot, mode in (
+        ("dense", False, None),
+        ("sector", True, None),
+        ("sector+reuse", True, True),
+    ):
+        s = build(wires, npe, [FEED], rot=rot, ground=ground, pair_reuse=mode)
+        z[name] = complex(np.asarray(s.compute_impedance()[0]).reshape(-1)[0])
+        if mode:
+            n = s._build_geometry()["n_segs"]
+            census = s.pair_reuse_census
+            assert set(census) == SECTOR_BLOCKS[ground]
+            assert all(p < n * n for p, _c, _n in census.values())
+    # Measured: |dZin|/|Zin| 2.8e-17 to 3.9e-16 against the route alone, and
+    # 1.3e-14 to 9.2e-14 against dense, which is the route's own agreement.
+    assert abs(z["sector+reuse"] - z["sector"]) <= DRIFT * abs(z["sector"])
+    assert abs(z["sector+reuse"] - z["dense"]) <= 1e-9 * abs(z["dense"])

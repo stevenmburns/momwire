@@ -32,6 +32,7 @@ import pytest
 
 from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
 from momwire import _rotational_symmetry as rs
+from momwire import _sin_pair_reuse
 from momwire._rotational_symmetry import RotationalSymmetryRefused
 
 WL = 2.0
@@ -636,10 +637,12 @@ def test_sym4_on_the_point_matched_route_matches_its_dense_solve():
 
 
 @pytest.mark.parametrize("ground", ["free", "pec", "refl-coef", "sommerfeld"])
-def test_pair_reuse_rides_the_compact_fill(ground):
+def test_pair_reuse_rides_the_compact_fill(ground, monkeypatch):
     """`pair_reuse` (momwire#1911) serves the route's bands as it serves the
     square fill's: the route with it on against the dense solve with it
-    off, on a deck it does not decline."""
+    off, on a deck it does not decline. The route declines it by default
+    (`_sin_pair_reuse.SECTOR_ROUTE`, momwire#1969), so this turns it on."""
+    monkeypatch.setattr(_sin_pair_reuse, "SECTOR_ROUTE", True)
     w, npe, feeds = screen(6)
     s = build(w, npe, feeds, ground=ground, pair_reuse=True)
     d = build(w, npe, feeds, rot=False, ground=ground)
