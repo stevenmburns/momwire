@@ -2283,6 +2283,45 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
 
 
 NORMALIZED_GAIN_DECKS = ROOT / "tests" / "fixtures" / "rp_normalized_gain"
+SINGLE_CUT_DECKS = sorted(NORMALIZED_GAIN_DECKS.glob("small*.nec")) + sorted(
+    (ROOT / "tests" / "fixtures" / "rp_average_single_cut_1962").glob("*.nec")
+)
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_a_single_cut_prints_no_average_as_python(driver, tmp_path, basis):
+    """momwire#1962: an RP card with one theta or one phi averages nothing on
+    the NEC-5 engine (no trailer at A = 1 or 3, the rows at A = 2;
+    test_rp_average_single_cut_1962 holds `_shell.render` to x13's captures).
+    `pattern_block` drops the A digit on the same condition, byte for byte as
+    `_shell.render` prints the decks; the two-phi control still averages."""
+    decks = SINGLE_CUT_DECKS
+    assert len(decks) == 10
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+        assert not reasons and counts.get("served", 0) == 10, (counts, reasons)
+    else:
+        with _one_thread():
+            answers = pc.run_driver(
+                driver[0]["nec5_razor_printout_driver"], decks, tmp_path
+            )
+            for path, ans in zip(decks, answers, strict=True):
+                assert ans["route"] == "printed", (path, ans.get("reason"))
+                ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+                assert ans["printout"] == ref, (
+                    f"{path}: {pc.first_difference(ref, ans['printout'])}"
+                )
+    with _one_thread():
+        averaged = [
+            p.stem
+            for p in decks
+            if b"AVERAGE POWER GAIN"
+            in pc.python_printout(p.read_bytes().decode("latin-1"), basis=basis)
+        ]
+    assert averaged == ["cut_two_phi"]
 
 
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])

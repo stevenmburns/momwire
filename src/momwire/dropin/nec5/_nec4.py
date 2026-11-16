@@ -1205,6 +1205,8 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
         ground_z=result.ground_z or 0.0,
         cliff=cliff,
         p_radiated=result.p_radiated,
+        # NEC-5's single-cut rule (momwire#1962) is not measured on NEC-4.2
+        average_single_cut=True,
     )
     range_m = card.f(8)
     if range_m == 0.0:

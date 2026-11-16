@@ -4423,8 +4423,16 @@ def _pattern(
     ground_z: float = 0.0,
     cliff=None,
     p_radiated: float | None = None,
+    average_single_cut: bool = False,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
+
+    ``average_single_cut``: whether a card with one theta or one phi
+    (``NTH = 1`` or ``NPH = 1``) still reads XNDA's A digit. The NEC-5
+    engine's does not (momwire#1962, measured black-box on x13: no
+    average-gain trailer at A = 1 or 3, and A = 2 prints its rows, exactly as
+    at A = 0, whatever the step on either axis). The NEC-4.2 slot passes
+    True, keeping what it has always printed, which no capture yet measures.
 
     ``ground_z`` and ``cliff`` are the NEC-4.2 slot's (momwire#1295), which
     shares this row builder: its decks may put the interface anywhere, and a
@@ -4548,13 +4556,18 @@ def _pattern(
         ranged["lower_range_phase_deg"] = math.degrees(
             math.atan2(-math.sin(kr), math.cos(kr))
         )
-    if request.xnda % 10 == 0:
+    average_digit = request.xnda % 10
+    if not average_single_cut and (request.n_theta == 1 or request.n_phi == 1):
+        # A single cut on either axis averages nothing on the NEC-5 engine:
+        # the card prints as at A = 0 (momwire#1962, the docstring above).
+        average_digit = 0
+    if average_digit == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
         # not and 1001 (0013, 0035) does.  So do 1003 (4nec2's default, the
         # same printout as 1001) and 1002, which prints the trailer with no
         # rows (momwire#1503, measured black-box on the NEC-5 engine).
         return PatternBlock(rows=rows, **ranged)
-    if request.xnda % 10 == 2:
+    if average_digit == 2:
         rows = ()
     average, solid = average_gain(
         g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
