@@ -452,7 +452,23 @@ void log_route(const std::string &route, const std::string &deck) {
 // the launcher's own default, which its thread-sensitive printouts need).
 int fallback_threads = 1;
 
+// Logical CPUs this process may run on (momwire#1952): the affinity mask's
+// count where the OS has one, else every hardware thread. Unpinned, the mask
+// is every CPU and this is hardware_concurrency(), as before.
 int hardware_threads() {
+#if defined(_WIN32)
+    // The process mask covers one processor group; it reads 0 for a process
+    // spread over several (>64 CPUs), which falls through to the full count.
+    DWORD_PTR proc = 0, sys = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) && proc != 0) {
+        int n = 0;
+        for (DWORD_PTR m = proc; m != 0; m &= m - 1) n++;
+        return n;
+    }
+#elif defined(__linux__)
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0 && CPU_COUNT(&set) > 0) return CPU_COUNT(&set);
+#endif
     const int n = static_cast<int>(std::thread::hardware_concurrency());
     return n > 0 ? n : 1;
 }
@@ -470,10 +486,20 @@ int physical_cores() {
     auto *info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(buf.data());
     if (len == 0 || !GetLogicalProcessorInformationEx(RelationProcessorCore, info, &len))
         return hardware_threads();
+    // Count only the cores the process affinity mask reaches (momwire#1952):
+    // a pinned run (start /affinity 55: one thread on each of four cores)
+    // otherwise sized both pools for every core on the machine, 12 spinning
+    // threads on 4 CPUs, and ran ~100x slow. A mask of 0 (several processor
+    // groups) or a failed query counts every core, as before.
+    DWORD_PTR proc = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) proc = 0;
     int cores = 0;
     for (DWORD off = 0; off < len;) {
         auto *p = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(buf.data() + off);
-        cores += p->Relationship == RelationProcessorCore;
+        if (p->Relationship == RelationProcessorCore) {
+            const GROUP_AFFINITY &g = p->Processor.GroupMask[0];
+            if (proc == 0 || (g.Group == 0 && (g.Mask & proc) != 0)) cores++;
+        }
         off += p->Size;
     }
     return cores > 0 ? cores : hardware_threads();
