@@ -105,7 +105,7 @@ def test_the_engine_and_momwire_lay_the_a2_block_out_alike():
     ("xnda", "words"),
     [
         (3, "major / minor axis gains (X = 0)"),
-        (1103, "a normalized-gain table (N = 1)"),
+        (1603, "normalization N = 6, which NEC does not define"),
         (1023, "gain type D = 2"),
         (1004, "averaging A = 4"),
         (2003, "output format X = 2"),
@@ -119,7 +119,7 @@ def test_the_other_forms_refuse_by_digit_and_4nec2_setting(xnda, words):
         parse_nec5(text)
     message = str(excinfo.value)
     assert words in message
-    assert "XNDA 1000 to 1003 and 1010 to 1013" in message
+    assert "(N = 0 to 5), power or directive gain (D = 0 or 1)" in message
     if xnda <= 9999:
         assert "In 4nec2, set Generate > Far Field's Expert settings" in message
     assert "EZNEC" not in message

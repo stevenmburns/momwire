@@ -424,10 +424,11 @@ REFUSALS = [
     pytest.param(("EX 5,1,6,0,1.,0.",), "EX", id="ex-5"),
     pytest.param(("RP 1,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-1"),
     pytest.param(("RP 4,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-4"),
-    # momwire#1503: 1000 to 1003 parse (A, the averaging digit, is served
-    # whole); the X, N and D digits other than 1, 0, 0 refuse.
+    # momwire#1503: X = 1, N = 0 to 5 (the NORMALIZED GAIN table since the
+    # rp_normalized_gain captures), D = 0 or 1 and A = 0 to 3 parse; the
+    # other digits refuse.
     pytest.param(("RP 0,1,361,0003,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-x0"),
-    pytest.param(("RP 0,1,361,1103,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-n1"),
+    pytest.param(("RP 0,1,361,1603,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-n6"),
     pytest.param(("RP 0,1,361,1023,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-d2"),
     pytest.param(("RP 0,1,361,1004,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-a4"),
     pytest.param(("RP 0,1,361,20003,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-range"),
