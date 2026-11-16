@@ -18,9 +18,11 @@ namespace exe {
 // `open_end`: the text is a stream's piece (momwire#1512). `crossing_pairs`,
 // when given: the largest buried crossing block a run fills, its above
 // segments times its below segments (0 for a deck with none), the size
-// policy's second measure (`threads_for`).
+// policy's second measure (`threads_for`). `below_pairs`, when given: the
+// largest wholly-buried (below-plane) run's segment pairs, its segments
+// squared (0 for a deck with none), the third.
 long long largest_solve(const std::string &latin1_text, bool open_end = false,
-                        long long *crossing_pairs = nullptr);
+                        long long *crossing_pairs = nullptr, long long *below_pairs = nullptr);
 
 // The Sommerfeld grid's persistent store for this copy (serial or threaded):
 // `tag` is the executable's identity, its version and build
