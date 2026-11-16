@@ -533,9 +533,11 @@ jobs:
           test "$($E -version)" = "$(momwire-nec42-sinusoidal -version | sed 's/ /-standalone-avx2 /2')"
           F=tests/fixtures/eznec_nec42
           MW_EXE_ROUTE_LOG=route-cxx $E $F/0224_dipole-ex0.nec cxx.out
-          # a deck the C++ route declines and Python serves (momwire#1718
-          # S12: a mixed deck at two radii)
-          MW_EXE_ROUTE_LOG=route-py $E tests/fixtures/transmitted_mixed/m3_two_radii.nec fallback.out
+          # the embedded Python fallback, forced (MW_EXE_FORCE_FALLBACK): the
+          # mixed two-radius deck this step used to rely on is now served in
+          # C++ (momwire#1839), and the seam must not depend on some deck
+          # happening to be declined
+          MW_EXE_FORCE_FALLBACK=1 MW_EXE_ROUTE_LOG=route-py $E tests/fixtures/transmitted_mixed/m3_two_radii.nec fallback.out
           grep -q '^cxx:' route-cxx
           grep -q '^fallback:' route-py
           for f in cxx.out fallback.out; do
