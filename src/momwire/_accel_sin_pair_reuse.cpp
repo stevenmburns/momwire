@@ -29,6 +29,14 @@
 // `-ffp-contract=off` (setup.py) and the MSVC pragmas below keep every
 // product and sum its own rounding. Gated bit for bit against scatter +
 // reduce_phi_band (tests/test_sin_pair_reuse_1916.py).
+//
+// momwire#1969: a CODED class map (`signs` given, for the direct block as a
+// keyword, for the image as the tuple's fifth element) holds class << 2 |
+// code per pair, the code the pair's tangent reversals against its class's
+// canonical orientation. The gather takes class `entry >> 2` (clamped as
+// before) and negates each shape whose `signs[code][shape]` is negative,
+// an exact negation as `scatter`'s np.negative, so the bits stay that
+// route's. Without `signs`, the map is read as before.
 #if defined(_MSC_VER)
 #pragma float_control(precise, on)
 #pragma fp_contract(off)
@@ -55,7 +63,24 @@ struct Block {
     const int64_t *near_idx = nullptr;  // (k,) sorted flat r * n_src + n, band-local
     const double *near_val = nullptr;   // (k, 3) complex
     int64_t n_near = 0;
+    bool coded = false;      // entries are class << 2 | code (momwire#1969)
+    bool neg[4][3] = {};     // shape negated under each code
 };
+
+using F64 = py::array_t<double, py::array::c_style | py::array::forcecast>;
+
+// A coded block's sign table, (4, 3) float64, read as negations.
+static void set_signs(Block &b, const py::object &signs, const char *what) {
+    if (signs.is_none()) return;
+    F64 t = signs.cast<F64>();
+    if (t.ndim() != 2 || t.shape(0) != 4 || t.shape(1) != 3)
+        throw std::runtime_error(std::string("reduce_band: ") + what +
+                                 " signs must be (4, 3) float64");
+    const double *v = t.data();
+    for (int c = 0; c < 4; ++c)
+        for (int s = 0; s < 3; ++s) b.neg[c][s] = v[3 * c + s] < 0.0;
+    b.coded = true;
+}
 
 static Block block_of(const I32 &cls, const C128 &rep, const I64 &near_idx,
                       const C128 &near_val, py::ssize_t rows, py::ssize_t n_src,
@@ -100,17 +125,34 @@ static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, int l,
                        double *x[3]) {
     const int32_t *c = b.cls + r * n_src;
     const int64_t hi = b.n_cls - 1;
-    for (py::ssize_t n = 0; n < n_src; ++n) {
-        int64_t k = c[n];
-        k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
-        const double *v = b.rep + 6 * k;
-        const py::ssize_t at = 2 * LANES * n + l;
-        x[0][at] = v[0];
-        x[0][at + LANES] = v[1];
-        x[1][at] = v[2];
-        x[1][at + LANES] = v[3];
-        x[2][at] = v[4];
-        x[2][at + LANES] = v[5];
+    if (b.coded) {
+        for (py::ssize_t n = 0; n < n_src; ++n) {
+            const int32_t e = c[n];
+            int64_t k = e >> 2;  // arithmetic, as numpy's >> on int32
+            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
+            const bool *ng = b.neg[e & 3];
+            const double *v = b.rep + 6 * k;
+            const py::ssize_t at = 2 * LANES * n + l;
+            x[0][at] = ng[0] ? -v[0] : v[0];
+            x[0][at + LANES] = ng[0] ? -v[1] : v[1];
+            x[1][at] = ng[1] ? -v[2] : v[2];
+            x[1][at + LANES] = ng[1] ? -v[3] : v[3];
+            x[2][at] = ng[2] ? -v[4] : v[4];
+            x[2][at + LANES] = ng[2] ? -v[5] : v[5];
+        }
+    } else {
+        for (py::ssize_t n = 0; n < n_src; ++n) {
+            int64_t k = c[n];
+            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
+            const double *v = b.rep + 6 * k;
+            const py::ssize_t at = 2 * LANES * n + l;
+            x[0][at] = v[0];
+            x[0][at + LANES] = v[1];
+            x[1][at] = v[2];
+            x[1][at + LANES] = v[3];
+            x[2][at] = v[4];
+            x[2][at + LANES] = v[5];
+        }
     }
     if (b.n_near == 0) return;
     const int64_t lo = static_cast<int64_t>(r) * n_src, up = lo + n_src;
@@ -132,7 +174,7 @@ static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, int l,
 static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 near_val,
                         py::object image, I64 ptr0, I64 ind0, py::array val0, I64 ptr1,
                         I64 ind1, py::array val1, I64 ptr2, I64 ind2, py::array val2,
-                        int n_threads) {
+                        int n_threads, py::object signs) {
     const auto cplx = py::dtype::of<cd>();
     if (out.ndim() != 2 || !out.dtype().is(cplx))
         throw std::runtime_error("reduce_band: out must be a 2-D complex128 array");
@@ -143,6 +185,7 @@ static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 nea
         throw std::runtime_error("reduce_band: out rows must be contiguous");
     const py::ssize_t n_src = cls.ndim() == 2 ? cls.shape(1) : -1;
     Block d = block_of(cls, rep, near_idx, near_val, rows, n_src, "the direct");
+    set_signs(d, signs, "the direct");
     Block im;
     bool has_image = !image.is_none();
     // Keep the image arrays alive (and their conversions owned) to the end.
@@ -151,14 +194,16 @@ static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 nea
     I64 inidx;
     if (has_image) {
         auto t = image.cast<py::tuple>();
-        if (t.size() != 4)
+        if (t.size() != 4 && t.size() != 5)
             throw std::runtime_error(
-                "reduce_band: image must be (classes, values, near index, near values)");
+                "reduce_band: image must be (classes, values, near index, near values"
+                "[, signs])");
         icls = t[0].cast<I32>();
         irep = t[1].cast<C128>();
         inidx = t[2].cast<I64>();
         inval = t[3].cast<C128>();
         im = block_of(icls, irep, inidx, inval, rows, n_src, "the image");
+        if (t.size() == 5) set_signs(im, t[4], "the image");
     }
     I64 ptr[3] = {ptr0, ptr1, ptr2}, ind[3] = {ind0, ind1, ind2};
     py::array val[3] = {val0, val1, val2};
@@ -260,12 +305,16 @@ void register_sin_pair_reuse(py::module_ &m) {
           "(clamped, as np.take mode='clip'), the band's near pairs (sorted "
           "band-local flat index, (k, 3) values) written over it, the image "
           "block's likewise subtracted when `image` is (classes, values, near "
-          "index, near values), then reduced against the three CSC Ms. OpenMP "
-          "over out's rows; n_threads > 0 sets the team. momwire#1916.",
+          "index, near values[, signs]), then reduced against the three CSC Ms. "
+          "OpenMP over out's rows; n_threads > 0 sets the team. momwire#1916. "
+          "`signs` (4, 3) float64 marks the direct block's map coded, class << 2 "
+          "| code, each shape negated where its code's sign is negative "
+          "(momwire#1969).",
           py::arg("out"), py::arg("cls"), py::arg("rep"), py::arg("near_idx"),
           py::arg("near_val"), py::arg("image"), py::arg("indptr0"), py::arg("indices0"),
           py::arg("data0"), py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
           py::arg("indptr2"), py::arg("indices2"), py::arg("data2"),
-          py::arg("n_threads") = 0);
+          py::arg("n_threads") = 0, py::arg("signs") = py::none());
     m.attr("pair_reuse_reduce_1916") = true;
+    m.attr("pair_reuse_reduce_1969") = true;
 }
