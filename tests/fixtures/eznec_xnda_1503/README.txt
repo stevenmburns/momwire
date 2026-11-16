@@ -15,3 +15,5 @@ and on momwire's own printouts):
 The other digits (X = 0 major/minor axis gains, N >= 1 a NORMALIZED GAIN
 table, D = 1 directive gains) each change the printout and are refused by
 name.
+(Since then D = 1 is served from the lossy* captures here, and N >= 1 from
+tests/fixtures/rp_normalized_gain/; X = 0 still refuses.)

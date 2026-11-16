@@ -187,6 +187,8 @@ struct Request {
     Int n_theta, n_phi, xnda;
     double theta0_deg = 0, phi0_deg = 0, d_theta_deg = 0, d_phi_deg = 0, range_m = 0;
     Int mode;
+    // RP's tenth field, GNOR: the NORMALIZED GAIN table's factor in dB
+    double gnor_db = 0;
     // near_field
     Int coordinates;
     Int counts[3];

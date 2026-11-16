@@ -516,10 +516,16 @@ CASES = {
     "rp 3-d": (deck("RP 0,37,73,1001,0.,0.,5.,5.,1000."), "parsed"),
     "rp counts floor at one": (deck("RP 0,0,-4,1000,0.,0.,5.,5."), "parsed"),
     "rp mode 1": (deck("RP 1,1,361,1000,90.,0.,0.,1."), "RP mode 1 is not part"),
-    # momwire#1503: 1000-1003 and 1010-1013 served, the rest refused by digit
+    # momwire#1503: X = 1, N = 0 to 5, D = 0 / 1, A = 0 to 3 served (N >= 1,
+    # the NORMALIZED GAIN table, since the rp_normalized_gain captures), the
+    # rest refused by digit
     "rp xnda 1003": (deck("RP 0,1,361,1003,90.,0.,0.,1."), "parsed"),
     "rp xnda 1012": (deck("RP 0,1,361,1012,90.,0.,0.,1."), "parsed"),
-    "rp xnda": (deck("RP 0,1,361,1100,90.,0.,0.,1."), "RP 0 with XNDA 1100 asks for"),
+    "rp xnda 1100": (deck("RP 0,1,361,1100,90.,0.,0.,1."), "parsed"),
+    "rp xnda 1513": (deck("RP 0,1,361,1513,90.,0.,0.,1."), "parsed"),
+    "rp xnda gnor": (deck("RP 0,1,361,1500,90.,0.,0.,1.,0.,-3.5"), "parsed"),
+    "rp xnda": (deck("RP 0,1,361,1600,90.,0.,0.,1."), "RP 0 with XNDA 1600 asks for"),
+    "rp xnda n9": (deck("RP 0,1,361,1903,90.,0.,0.,1."), "normalization N = 9"),
     "rp xnda x0": (
         deck("RP 0,1,361,1,90.,0.,0.,1."),
         "RP 0 with XNDA 1 asks for major",

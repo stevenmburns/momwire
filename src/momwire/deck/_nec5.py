@@ -373,6 +373,10 @@ class Nec5FarFieldRequest:
     3-D form; 1003 is 4nec2's default (momwire#1503), printed as 1001 is,
     and 1002 prints the average-gain trailer with no rows.  The printout
     formats are the renderer's business, not this module's.
+
+    The N digit (1 to 5) asks for a NORMALIZED GAIN table after the rows,
+    and :attr:`gnor_db` is the card's tenth field, the normalization factor
+    in dB that the table subtracts (0 normalises to the table's maximum).
     """
 
     n_theta: int
@@ -384,6 +388,7 @@ class Nec5FarFieldRequest:
     d_phi_deg: float
     range_m: float = 0.0
     mode: int = 0
+    gnor_db: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -689,9 +694,9 @@ _ECHOED_INTEGERS = MappingProxyType(
 # waves, EX 5's current-slope discontinuity — is off-vocabulary here.
 _EX_KINDS = frozenset({0, 4})
 
-# The XNDA forms served: X = 1 (vertical / horizontal gains), N = 0 (no
-# normalized-gain table), D = 0 or 1 (power or directive gain), and every
-# averaging digit A.
+# The XNDA forms served: X = 1 (vertical / horizontal gains), N = 0 to 5
+# (no normalized-gain table, or one of the five), D = 0 or 1 (power or
+# directive gain), and averaging A = 0 to 3.
 # EZNEC writes 1000 (2-D slice) and 1001 (3-D); 4nec2's Generate > Far Field
 # writes 1003 by default (momwire#1503).  Measured black-box on the NEC-5
 # engine (momwire#1503's captures): A = 3 prints exactly what A = 1 prints
@@ -700,8 +705,14 @@ _EX_KINDS = frozenset({0, 4})
 # normalises them to the radiated power (the trailer unmoved).  X = 0 is
 # refused: the clean-room NEC-5 build heads its gains MAJOR / MINOR while
 # the licensed x13 prints X = 0 as X = 1, so the two black boxes disagree.
-# N >= 1 (a NORMALIZED GAIN table) is refused too, not yet reproduced.
-_RP_XNDA = frozenset({1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013})
+# N = 1 to 5 adds a NORMALIZED GAIN table after the pattern (major axis,
+# minor axis, vertical, horizontal or total gain), read off licensed x13
+# printouts of synthetic decks (tests/fixtures/rp_normalized_gain/); the
+# public NEC-2 user's manual names the five.  N = 6 to 9 is no table NEC
+# defines.
+_RP_XNDA = frozenset(
+    1000 + 100 * n + 10 * d + a for n in range(6) for d in (0, 1) for a in range(4)
+)
 
 
 def _stepped_frequencies(
@@ -723,9 +734,10 @@ def _rp_xnda_refusal(xnda: int) -> str:
     which digit asks for what, and what to set instead (4nec2 writes these
     from its Generate > Far Field window's Expert settings)."""
     served = (
-        "this engine prints XNDA 1000 to 1003 and 1010 to 1013: vertical and "
-        "horizontal gains (X = 1), no normalized-gain table (N = 0), power or "
-        "directive gain (D = 0 or 1), with any averaging digit A"
+        "this engine prints XNDA 1NDA: vertical and horizontal gains (X = 1), "
+        "no normalized-gain table or NEC's major axis, minor axis, vertical, "
+        "horizontal or total one (N = 0 to 5), power or directive gain "
+        "(D = 0 or 1), and averaging A = 0 to 3"
     )
     if not 0 <= xnda <= 9999:
         return f"RP 0 with XNDA {xnda} is not an XNDA this engine reads; {served}"
@@ -735,8 +747,8 @@ def _rp_xnda_refusal(xnda: int) -> str:
         asks.append("major / minor axis gains (X = 0)")
     elif x != 1:
         asks.append(f"output format X = {x}")
-    if n != 0:
-        asks.append(f"a normalized-gain table (N = {n})")
+    if n > 5:
+        asks.append(f"normalization N = {n}, which NEC does not define")
     if d not in (0, 1):
         asks.append(f"gain type D = {d}")
     if not asks:
@@ -744,8 +756,7 @@ def _rp_xnda_refusal(xnda: int) -> str:
     return (
         f"RP 0 with XNDA {xnda} asks for {' and '.join(asks)}, which this engine "
         f"does not print; {served}.  In 4nec2, set Generate > Far Field's Expert "
-        f"settings to X = 1 (vertical / horizontal) and N = 0 (no "
-        f"normalization)"
+        f"settings to X = 1 (vertical / horizontal)"
     )
 
 
@@ -1874,6 +1885,7 @@ class _Nec5Parser:
                 d_theta_deg=card.f(6),
                 d_phi_deg=card.f(7),
                 range_m=card.f(8),
+                gnor_db=card.f(9),
             )
         )
 
