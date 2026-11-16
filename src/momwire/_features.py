@@ -196,6 +196,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_1809.py",
                 "tests/test_sin_pair_reuse_1911.py",
                 "tests/test_sin_pair_reuse_ground_1970.py",
+                "tests/test_sin_pair_reuse_canonical_1969.py",
             ),
             label="pair reuse",
             summary=(

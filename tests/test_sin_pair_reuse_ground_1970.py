@@ -240,7 +240,8 @@ def _free_space_key(monkeypatch):
     vertical tangent."""
     monkeypatch.setattr(pr, "ground_segment_types", lambda s, o, t: (s, o))
 
-    def as_ground(obs_c, obs_t, src_c, src_t, gz, seg_h, a_obs, st, ot, rows):
+    def as_ground(obs_c, obs_t, src_c, src_t, gz, seg_h, a_obs, st, ot, rows, **_):
+        # Uncoded (no reversed types): the classes as stored (momwire#1969).
         plan = pr.build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, st, ot, rows)
         N = src_c.shape[0]
         _, first, inv = np.unique(
