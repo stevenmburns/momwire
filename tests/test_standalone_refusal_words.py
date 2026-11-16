@@ -29,8 +29,14 @@ the same here. A new token without a sentence fails this test by name.
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "momwire"
@@ -160,3 +166,74 @@ def test_the_census_spellings_find_their_sentences():
     table = _table()
     for reason in ("front:bspline-low-stand-off", "bspline: buried-capped-plan"):
         assert _lookup_key(reason) in table, reason
+
+
+# --- a sentence-shaped decline (census 11-15, the #1960 leftover) ------------
+#
+# A reason with a space is a sentence and is printed as it stands, less a
+# trailing parenthetical. It still carries the seam's `front:` and bs2's route
+# label, which the census found printed raw (`front:bspline-crossing serve
+# with per-wire radii ...`). `not_served()` is compiled here on its own, from
+# the executable's source, and asked.
+
+_SENTENCE_CASES = (
+    # bs2's front, through the NEC-5 seam: both labels, and the parenthetical
+    (
+        "front:bspline-crossing serve with per-wire radii that differ within "
+        "the below wires: the two-radius rule serves one radius per side of "
+        "the interface (the node's point tests read one radius)",
+        "not served by this build: crossing serve with per-wire radii that "
+        "differ within the below wires: the two-radius rule serves one radius "
+        "per side of the interface (front half)",
+    ),
+    # bs2's fill
+    (
+        "bspline: a deck the fill does not take (an aside)",
+        "not served by this build: a deck the fill does not take",
+    ),
+    # an unlabelled sentence, as the sinusoidal fill's
+    (
+        "a mixed deck with several radii (the class kernels read one)",
+        "not served by this build: a mixed deck with several radii",
+    ),
+    # a token still finds its words, labels and all
+    (
+        "front:bspline-low-stand-off",
+        "not served by this build: a wire graded along a junction arm below "
+        "the h/a = 2 stand-off floor (momwire#865 / #926) (front half)",
+    ),
+)
+
+
+def _not_served_source() -> str:
+    text = EXE_MAIN.read_text()
+    signature = "std::string not_served(std::string why)"
+    return signature + " " + _body(text, signature)
+
+
+def test_a_sentence_decline_prints_without_its_labels(tmp_path):
+    cxx = shlex.split(os.environ.get("CXX", "g++"))
+    if shutil.which(cxx[0]) is None:
+        pytest.skip(f"no C++ compiler ({cxx[0]})")
+    source = tmp_path / "not_served.cpp"
+    source.write_text(
+        "#include <cstdio>\n#include <cstring>\n#include <iostream>\n"
+        "#include <string>\n#include <utility>\n"
+        + _not_served_source()
+        + "\nint main() {\n    std::string line;\n"
+        "    while (std::getline(std::cin, line))\n"
+        '        std::printf("%s\\n", not_served(line).c_str());\n'
+        "    return 0;\n}\n"
+    )
+    exe = tmp_path / "not_served"
+    subprocess.run([*cxx, "-std=c++17", "-o", str(exe), str(source)], check=True)
+    out = subprocess.run(
+        [str(exe)],
+        input="".join(why + "\n" for why, _ in _SENTENCE_CASES),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert out == [want for _, want in _SENTENCE_CASES]
+    for line in out:
+        assert "front:" not in line and "bspline-" not in line, line
