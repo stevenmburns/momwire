@@ -967,6 +967,40 @@ NetSolve reduced_state(const std::vector<SeamCard> &cards, int64_t n, const std:
     return out;
 }
 
+// `_reduced_state`'s `held`: `driven`, then every network endpoint nothing
+// reaches (`_unreached_sites`, ascending). An NT end reaches its site through
+// Y11 / Y22 or Y12 (a TL end always does), else the antenna reaches it through
+// its y_eff row or column. EZNEC's one-port NT parks port 2 on a virtual site
+// with neither, so that site's KCL row is identically zero; holding it at 0 V
+// is exact (nothing else reads its voltage) and keeps the MNA system regular.
+// Truthiness is Python's: NaN counts as nonzero.
+std::vector<int64_t> seam_held(const std::vector<SeamCard> &cards, int64_t n, const std::vector<int64_t> &driven,
+                               const std::function<cd(int64_t, int64_t)> &y_eff_at) {
+    std::set<int64_t> reached, endpoints;
+    for (const SeamCard &c : cards) {
+        endpoints.insert(c.site_a);
+        endpoints.insert(c.site_b);
+        if (c.kind != SeamCard::nt) {
+            reached.insert(c.site_a);
+            reached.insert(c.site_b);
+            continue;
+        }
+        const bool y11 = py_ctruth(cd(c.payload[0], c.payload[1]));
+        const bool y12 = py_ctruth(cd(c.payload[2], c.payload[3]));
+        const bool y22 = py_ctruth(cd(c.payload[4], c.payload[5]));
+        if (y11 || y12) reached.insert(c.site_a);
+        if (y22 || y12) reached.insert(c.site_b);
+    }
+    std::vector<int64_t> held = driven;
+    for (int64_t k : endpoints) {
+        if (reached.count(k) || std::find(driven.begin(), driven.end(), k) != driven.end()) continue;
+        bool any = false;
+        for (int64_t j = 0; j < n && !any; j++) any = py_ctruth(y_eff_at(k, j)) || py_ctruth(y_eff_at(j, k));
+        if (!any) held.push_back(k);
+    }
+    return held;
+}
+
 PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np) {
     const int64_t nc = p.mesh.n_columns(), n = static_cast<int64_t>(p.mesh.sites.size());
     const std::vector<cd> tc = transform_c(p);
@@ -1048,8 +1082,8 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
                 for (int64_t column = 0; column < nd; column++) {
                     std::vector<cd> probe(static_cast<std::size_t>(n), cd(0.0, 0.0));
                     probe[static_cast<std::size_t>(driven[column])] = cd(1.0, 0.0);
-                    const NetSolve r = reduced_state(p.cards, n, probe, driven, driven, yeff_op, y_eff_at,
-                                                     p.wavelength, np);
+                    const NetSolve r = reduced_state(p.cards, n, probe, seam_held(p.cards, n, driven, y_eff_at),
+                                                     driven, yeff_op, y_eff_at, p.wavelength, np);
                     for (int64_t i = 0; i < nd; i++)
                         m.at(i, column) = r.i_source[static_cast<std::size_t>(driven[i])];
                 }
@@ -1078,7 +1112,8 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             st.i_port = mv(np, yeff_op, st.v_applied);
             st.i_source = st.i_port;
         } else {
-            const NetSolve r = reduced_state(p.cards, n, volts, driven, driven, yeff_op, y_eff_at, p.wavelength, np);
+            const NetSolve r = reduced_state(p.cards, n, volts, seam_held(p.cards, n, driven, y_eff_at), driven,
+                                             yeff_op, y_eff_at, p.wavelength, np);
             st.v_applied = r.v_applied;
             st.i_port = r.i_port;
             st.i_source = r.i_source;
@@ -1131,7 +1166,8 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
         const std::function<cd(int64_t, int64_t)> y_eff_at = [&](int64_t i, int64_t j) {
             return any_series ? xt.at(j, i) : y.at(i, j);
         };
-        const NetSolve r = reduced_state(p.cards, n, probe, {driven}, {driven}, yeff_op, y_eff_at, p.wavelength, np);
+        const NetSolve r = reduced_state(p.cards, n, probe, seam_held(p.cards, n, {driven}, y_eff_at), {driven},
+                                         yeff_op, y_eff_at, p.wavelength, np);
         v_applied = r.v_applied;
         i_port = r.i_port;
         i_source = r.i_source;

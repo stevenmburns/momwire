@@ -1583,12 +1583,15 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
     (a gyrator on a parked wire), two loaded current sources through lines
     from a parked node, two voltage sources across an NT, an NT with both
     ends on one segment (its four entries summed, and summing to zero:
-    momwire#1887) -- and is compared byte for byte by the corpus test above."""
+    momwire#1887), two one-port NTs whose port 2 sits on a parked wire no LD
+    pins (those sites held at 0 V, as `_unreached_sites` holds them, rather
+    than an MNA row of zeros refused as a singular network) -- and is
+    compared byte for byte by the corpus test above."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     decks = sorted(NET_DECKS.glob("*.nec"))
-    assert len(decks) == 7
+    assert len(decks) == 8
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     for path, ans in zip(decks, answers, strict=True):
         assert (ans["route"], ans["seam"], ans["raised"]) == (
@@ -1600,6 +1603,44 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path
+
+
+PARKED_ONE_PORT_NTS = NET_DECKS / "net_one_port_nts_on_parked_wire.nec"
+
+
+@pytest.mark.parametrize(
+    ("basis", "exe"),
+    [
+        ("razor-2p", "nec5_razor_printout_driver"),
+        ("bspline", "nec5_bspline_printout_driver"),
+    ],
+)
+def test_one_port_nts_on_an_unpinned_parked_wire_print_as_python(
+    driver, tmp_path, basis, exe
+):
+    """EZNEC's parallel load is a one-port NT (Y11 only) whose port 2 sits on
+    its parked circuit wire. With no LD pinning those sites, nothing reaches
+    them -- no card admittance, no antenna admittance -- so their KCL rows are
+    zero. Python holds them at 0 V (`_serve._unreached_sites`) and serves the
+    deck; the C++ core stamped them as floating nodes and refused the MNA
+    system as singular. Both bases print Python's bytes."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    with _one_thread():
+        (ans,) = pc.run_driver(
+            driver[0][exe], [PARKED_ONE_PORT_NTS], tmp_path, basis=basis
+        )
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), ans.get("reason")
+        ref = pc.python_printout(
+            PARKED_ONE_PORT_NTS.read_bytes().decode("latin-1"), basis=basis
+        )
+    assert b"- - - ANTENNA INPUT PARAMETERS - - -" in ref
+    assert ans["printout"] == ref, pc.first_difference(ref, ans["printout"])
 
 
 def test_an_nt_on_one_segment_prints_as_python_on_the_nec42_sinusoidal(driver):
