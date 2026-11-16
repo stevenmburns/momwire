@@ -56,6 +56,7 @@ jobs:
             git make perl
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-libgomp
+            mingw-w64-x86_64-gdb
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
       - name: toolchain
@@ -359,6 +360,7 @@ jobs:
           }
           exit $fail
       - name: contract tests on the fat executables
+        if: always() && hashFiles('dist-fat/momwire-nec5-bspline.exe') != ''
         shell: pwsh
         run: |
           $env:PATH = "$PWD\venv\Scripts;$env:PATH"
@@ -370,6 +372,22 @@ jobs:
           $env:MOMWIRE_STANDALONE_BASIS = "bspline"
           venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
           if ($LASTEXITCODE) { exit 1 }
+      # Diagnostic (run 43944198706: the fat razor-2p hung twice in ~2800 runs,
+      # on tiny decks, at the size policy's threads): how often each build
+      # hangs on those decks, and every thread's stack when one does.
+      - name: hang probe (diagnostic, not a gate)
+        if: always() && hashFiles('build-razor2p-fat/momwire-nec5-razor-2p-standalone.exe') != ''
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
+          foreach ($d in "tests\fixtures\nec_cw_catenary_1697\c1_icat1_sag.nec", "tests\fixtures\nec42_radius_step_1644\decks\L_step1-5_away_n20.nec") {
+            python scripts/windows_static/hang_probe.py 300 $gdb $d `
+              "fat=build-razor2p-fat\momwire-nec5-razor-2p-standalone.exe" `
+              "one-avx2=build-razor2p-avx2\momwire-nec5-razor-2p-standalone.exe" `
+              "one-sse2=build-razor2p-sse2\momwire-nec5-razor-2p-standalone.exe" `
+              "bs2-fat=build-bs2-fat\momwire-nec5-bspline-standalone.exe"
+          }
       # The MSVC zip of the latest green standalone.yml push run on main, for
       # the paired timing below (main's MSVC bytes; this branch changes no
       # line MSVC compiles).
@@ -397,6 +415,33 @@ jobs:
             "mingw/bs2=$D\momwire-nec5-bs2-avx2.exe" "msvc/bs2=$M\momwire-nec5-bs2-avx2.exe" `
             "fat/razor2p=$PWD\dist-fat\momwire-nec5-razor-2p.exe" "fat/bs2=$PWD\dist-fat\momwire-nec5-bspline.exe"
           if ($LASTEXITCODE) { exit 1 }
+      # Where the MinGW build's time goes (indicative, this runner): each
+      # build's own stage times (MOMWIRE_TIMES), and which libm the MinGW
+      # executables call (msvcrt.dll's imports).
+      - name: stage times and libm imports, MinGW vs MSVC
+        if: always() && hashFiles('dist/momwire-nec5-bs2-avx2.exe') != ''
+        shell: pwsh
+        run: |
+          $M = (Resolve-Path msvc\momwire-nec5-windows-x64).Path
+          $D = (Resolve-Path dist).Path
+          $env:MOMWIRE_TIMES = "1"; $env:MW_EXE_TIMES = "1"; $env:MOMWIRE_THREADS = "1"
+          $decks = @("tests\fixtures\bspline_printout_buried\ab_hub16.nec", "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
+          foreach ($d in $decks) {
+            foreach ($e in "$D\momwire-nec5-razor2p-avx2.exe", "$M\momwire-nec5-razor2p-avx2.exe", "$D\momwire-nec5-bs2-avx2.exe", "$M\momwire-nec5-bs2-avx2.exe") {
+              "== $(Split-Path -Leaf $d) $e"
+              $sw = [Diagnostics.Stopwatch]::StartNew()
+              & $e $d "$env:RUNNER_TEMP\t.out" 2>&1 | ForEach-Object { "  $_" }
+              "  wall $($sw.ElapsedMilliseconds) ms"
+            }
+          }
+      - name: msvcrt functions the MinGW executables import
+        if: always() && hashFiles('dist/momwire-nec5-bs2-avx2.exe') != ''
+        shell: msys2 {0}
+        run: |
+          objdump -p dist/momwire-nec5-bs2-avx2.exe | awk '/DLL Name: msvcrt.dll/ {f=1; next} /DLL Name/ {f=0} f && NF >= 3 {print $NF}' | sort > msvcrt-imports.txt
+          echo "$(wc -l < msvcrt-imports.txt) msvcrt.dll imports; the math ones:"
+          grep -xE "_?(sin|cos|tan|exp|log|log10|pow|sqrt|hypot|atan2|atan|asin|acos|sinh|cosh|tanh|fmod|floor|ceil|_hypot|_cabs|frexp|ldexp|modf)" msvcrt-imports.txt | tr '\n' ' '; echo
+          nm build-bs2-avx2/momwire-nec5-bspline-standalone.exe 2>/dev/null | grep -E " T (_?_?(sin|cos|exp|log|pow|hypot|atan2|sincos|cexp|__muldc3|__divdc3))$" | head -20
       - uses: actions/upload-artifact@v7
         if: always()
         with:

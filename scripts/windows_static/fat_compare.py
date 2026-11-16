@@ -24,9 +24,14 @@ from pathlib import Path
 def run(
     exe: str, deck: Path, out: Path, env: dict[str, str]
 ) -> tuple[int, bytes, bytes]:
-    r = subprocess.run(
-        [exe, str(deck), str(out)], env=env, capture_output=True, timeout=900
-    )
+    try:
+        r = subprocess.run(
+            [exe, str(deck), str(out)], env=env, capture_output=True, timeout=300
+        )
+    except subprocess.TimeoutExpired:
+        # a hang, reported as a mismatch of its own (hang_probe.py looks closer)
+        out.unlink(missing_ok=True)
+        return -999, b"HANG", b""
     body = out.read_bytes() if out.exists() else b""
     out.unlink(missing_ok=True)  # the next run writes the same path
     return r.returncode, r.stdout, body
@@ -67,7 +72,15 @@ def main(argv: list[str]) -> int:
             else:
                 differ += 1
                 what = (
-                    "rc" if a[0] != b[0] else "stdout" if a[1] != b[1] else "printout"
+                    "HANG(fat)"
+                    if a[0] == -999
+                    else "HANG(one)"
+                    if b[0] == -999
+                    else "rc"
+                    if a[0] != b[0]
+                    else "stdout"
+                    if a[1] != b[1]
+                    else "printout"
                 )
                 print(f"DIFFER {what} {copy} {deck}")
     print(
