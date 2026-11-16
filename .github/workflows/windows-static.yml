@@ -1,0 +1,249 @@
+# The no-Python executables on Windows as SINGLE FILES (an experiment beside
+# standalone.yml's MSVC `windows-nopython`, which it does not touch): MinGW-w64
+# gcc in MSYS2's MINGW64 environment -- the msvcrt.dll runtime, the import
+# shape of Ward's single-file NEC5CL (KERNEL32 + msvcrt) -- razor-2p and bs2,
+# avx2 and sse2, every runtime linked in:
+#
+#   * OpenBLAS: standalone/build_openblas.sh's two archives, unchanged -- the
+#     SAME pinned commits as Linux (SciPy's `mwx_`, numpy's `mwn_`), built
+#     here with MINGW64's gcc;
+#   * libgomp from its archive (MW_EXE_STATIC_GOMP), and -static for
+#     libstdc++, libgcc and winpthreads (CMakeLists.txt's MINGW block).
+#
+# Gated, as windows-nopython is: an import table of system DLLs only (hard),
+# the freeze's Windows 7 import gate, a rehearsal signature, a run from a
+# System32-only PATH, the launcher contract tests, and every fixture deck and
+# NX chain against this environment's launcher within PRINTOUT_RTOL_WIN32
+# (Windows needs no bit-compatibility). Then an INDICATIVE timing table
+# against the MSVC zip of the latest green standalone.yml run on main, on this
+# same runner (a shared VM: the pairing is the point, not the numbers).
+name: windows-static
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-static-exe]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MOMWIRE_BELOW_ANCHORS: "off"  # as standalone.yml: exact tables for the gates
+
+jobs:
+  windows-static:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read  # the MSVC zip from standalone.yml's run on main
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            git make perl
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+      - name: toolchain
+        shell: msys2 {0}
+        run: |
+          gcc --version | head -1
+          ld --version | head -1
+          echo "libgomp: $(gcc -print-file-name=libgomp.a)"
+          echo "libwinpthread: $(gcc -print-file-name=libwinpthread.a)"
+          echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt' | sort -u | tr '\n' ' ')"
+      # build_openblas.sh's two archives, keyed on the script (it holds the
+      # commits) and the environment
+      - uses: actions/cache@v4
+        id: obcache
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: openblas-mingw64-${{ hashFiles('standalone/build_openblas.sh') }}-v1
+      - name: OpenBLAS (build_openblas.sh, MINGW64)
+        if: steps.obcache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          if ! standalone/build_openblas.sh "$PWD/obw"; then
+            tail -60 obw/build-*.log
+            exit 1
+          fi
+      - name: the archives
+        shell: msys2 {0}
+        run: |
+          ls -l obw/libmwxp.a obw/libmwnp.a
+          for a in mwx_:obw/libmwxp.a mwn_:obw/libmwnp.a; do
+            p=${a%%:*} f=${a#*:}
+            n=$(nm -g --defined-only "$f" 2>/dev/null | awk 'NF == 3' | wc -l)
+            bare=$(nm -g --defined-only "$f" 2>/dev/null | awk -v p="$p" 'NF == 3 && index($3, p) != 1' | wc -l)
+            echo "$f: $n defined globals, $bare without the $p prefix"
+            [ "$bare" -eq 0 ] || { nm -g --defined-only "$f" | awk -v p="$p" 'NF == 3 && index($3, p) != 1' | head; exit 1; }
+          done
+      - name: configure + build (MinGW-w64, four executables)
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p dist
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone
+            for v in avx2 sse2; do
+              cmake -S standalone -B "build-$b-$v" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+                -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
+                -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
+                -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON
+              cmake --build "build-$b-$v"
+              cp "build-$b-$v/$target.exe" "dist/momwire-nec5-$b-$v.exe"
+              strip "dist/momwire-nec5-$b-$v.exe"
+            done
+          done
+          ls -l dist
+      # HARD: the import table names system DLLs only. Anything else -- an
+      # OpenBLAS, libgomp, winpthread, libstdc++ or libgcc DLL, a UCRT
+      # api-ms-win-crt-* forwarder -- fails the job.
+      - name: import tables (system DLLs only)
+        shell: msys2 {0}
+        run: |
+          fail=0
+          : > dist/imports.txt
+          for e in dist/*.exe; do
+            echo "== $(basename "$e") $(stat -c %s "$e") bytes" | tee -a dist/imports.txt
+            objdump -p "$e" | grep "DLL Name" | tee -a dist/imports.txt
+            for d in $(objdump -p "$e" | awk '/DLL Name/ {print $3}'); do
+              case "$(echo "$d" | tr A-Z a-z)" in
+                kernel32.dll|msvcrt.dll|advapi32.dll|ntdll.dll) ;;
+                *) echo "::error::$(basename "$e") imports $d"; fail=1 ;;
+              esac
+            done
+          done
+          exit $fail
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Windows 7 import gate
+        shell: pwsh
+        run: |
+          python -m pip install -q pefile
+          python scripts/eznec_freeze/scan_win7_imports.py dist
+          if ($LASTEXITCODE) { exit 1 }
+      # Signing works on any PE: the rehearsal certificate, as standalone.yml's
+      # non-tag runs sign, and the gates below run the signed bytes.
+      - name: rehearsal signature (self-signed)
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire standalone rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          $env:MOMWIRE_SIGN_SHA1 = $cert.Thumbprint
+          $env:MOMWIRE_SIGN_ALLOW_UNTRUSTED = "1"
+          $env:MOMWIRE_SIGN_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
+          python standalone/sign_windows.py (Get-ChildItem dist\*.exe).FullName
+          if ($LASTEXITCODE) { exit 1 }
+          foreach ($e in Get-ChildItem dist\*.exe) {
+            $s = Get-AuthenticodeSignature $e.FullName
+            "$($e.Name): $($s.Status) $($s.SignerCertificate.Subject) $($e.Length) bytes"
+            if (-not $s.SignerCertificate) { throw "$($e.Name) is not signed" }
+          }
+      - name: run from a System32-only PATH
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist).Path
+          $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
+          $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
+          $env:PATH = "$env:SystemRoot\System32"
+          foreach ($e in Get-ChildItem $D -Filter *.exe) {
+            & $e.FullName -version
+            $out = "$env:RUNNER_TEMP\$($e.BaseName).out"
+            & $e.FullName $deck $out
+            if ($LASTEXITCODE) { exit 1 }
+            "$($e.Name): $((Get-Content $out)[1])"
+            if (Select-String -Quiet "NEC ERROR" $out) { exit 1 }
+            cmd /c "`"$($e.FullName)`" - - < `"$stream`" > `"$out.stream`""
+            if ($LASTEXITCODE) { exit 1 }
+            $n = (Select-String -Pattern 'INPUT LINE .* NX ' "$out.stream").Count
+            "  stream: $n structures"
+            if ($n -lt 1) { exit 1 }
+          }
+      - name: momwire environment
+        shell: pwsh
+        run: |
+          python -m venv venv
+          venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
+          venv\Scripts\python -m pip install -q -e ".[test]"
+      - name: contract tests (razor-2p and bs2)
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-razor2p-avx2.exe"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-bs2-avx2.exe"
+          $env:MOMWIRE_STANDALONE_BASIS = "bspline"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
+          if ($LASTEXITCODE) { exit 1 }
+      # windows-nopython's corpus gate, verbatim but for the executables
+      - name: every fixture deck and the NX chains (razor-2p and bs2, avx2 and sse2)
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              if ($v -eq 'sse2') { $env:MOMWIRE_FORCE_VARIANT = 'sse2' } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
+              $extra = @()
+              $L = "$PWD\venv\Scripts\momwire-nec5-razor-2p.exe"
+              if ($b -eq 'bs2') { $extra = @('--basis', 'bspline', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bspline.exe" }
+              "=== $b $v"
+              venv\Scripts\python scripts/core_split/exe_compare.py "dist/exe-mingw-$b-$v.jsonl" --standalone --rtol win32 `
+                --exe "$D\momwire-nec5-$b-$v.exe" --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      # The MSVC zip of the latest green standalone.yml push run on main, for
+      # the paired timing below (main's MSVC bytes; this branch changes no
+      # line MSVC compiles).
+      - name: the MSVC executables (standalone.yml on main)
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $run = gh run list -R $env:GITHUB_REPOSITORY --workflow standalone.yml --branch main --event push --status success --limit 1 --json databaseId,headSha | ConvertFrom-Json
+          "standalone.yml run $($run[0].databaseId) at $($run[0].headSha)"
+          gh run download $run[0].databaseId -R $env:GITHUB_REPOSITORY -n momwire-nec5-windows-x64-SELFSIGNED-rehearsal -D msvc
+          if ($LASTEXITCODE) { exit 1 }
+          Expand-Archive (Get-ChildItem msvc\*.zip).FullName -DestinationPath msvc
+          Get-ChildItem -Recurse msvc -Filter *.exe | Select-Object FullName, Length
+      - name: indicative timing, MinGW vs MSVC (same runner, interleaved)
+        if: always()
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          $M = (Resolve-Path msvc\momwire-nec5-windows-x64).Path
+          $D = (Resolve-Path dist).Path
+          python scripts/windows_static/time_exes.py dist/timing.jsonl `
+            "mingw/razor2p=$D\momwire-nec5-razor2p-avx2.exe" "msvc/razor2p=$M\momwire-nec5-razor2p-avx2.exe" `
+            "mingw/bs2=$D\momwire-nec5-bs2-avx2.exe" "msvc/bs2=$M\momwire-nec5-bs2-avx2.exe"
+          if ($LASTEXITCODE) { exit 1 }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: momwire-nec5-windows-x64-static-SELFSIGNED-rehearsal
+          path: |
+            dist/*.exe
+            dist/imports.txt
+            dist/*.jsonl
+          if-no-files-found: warn
+          retention-days: 7

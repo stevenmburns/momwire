@@ -83,7 +83,7 @@
 
 #include "_fma_inline.h"
 
-#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && !defined(_WIN32)
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 

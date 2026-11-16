@@ -40,6 +40,17 @@
 #         -DMW_BLAS_PREFIX=scipy_
 #   cmake --build build --config Release
 #
+# Windows, no-Python, ONE FILE (windows-static.yml): MinGW-w64 gcc in MSYS2's
+# MINGW64 environment (the msvcrt.dll runtime), against build_openblas.sh's two
+# prefixed archives as on Linux, every runtime linked in (-static: libgomp,
+# libstdc++, libgcc, winpthreads), so the executable imports only system DLLs:
+#
+#   cmake -S standalone -B build -G Ninja -DMW_EXE_NO_PYTHON=ON \
+#         -DMW_EXE_BASIS=razor2p|bspline_nec5 -DMW_EXE_VARIANT=avx2|sse2 \
+#         -DMW_OPENBLAS_LIB=.../libmwxp.a -DMW_OPENBLAS_NUMPY_LIB=.../libmwnp.a \
+#         -DMW_EXE_STATIC_GOMP=ON
+#   cmake --build build
+#
 # macOS, no-Python (momwire#1559): Apple clang on arm64, against Accelerate
 # (the library numpy's and SciPy's macOS wheels link; no MW_OPENBLAS_LIB) and
 # Homebrew's libomp (`brew install libomp`; LIBOMP_PREFIX or
@@ -127,7 +138,7 @@ if(APPLE AND MW_EXE_NO_PYTHON)
 endif()
 # The static OpenBLAS's symbol prefix (blas.h): build_openblas.sh's `mwx_` on
 # Linux; a Windows static library needs none (no interposition there).
-if(WIN32)
+if(WIN32 AND NOT MINGW)
   set(_mw_prefix_default "")
 elseif(MW_ACCELERATE)
   set(_mw_prefix_default "mwa_")
@@ -505,6 +516,13 @@ if(UNIX AND NOT APPLE)
   # libm, libmvec and (unless MW_EXE_STATIC_GOMP) libgomp stay shared, as
   # the extension has them.
   target_link_libraries(${MW_EXE} PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
+endif()
+if(MINGW)
+  # One file (windows-static.yml): every runtime from its archive -- libgomp
+  # (MW_EXE_STATIC_GOMP), libstdc++, libgcc and winpthreads, which libgomp and
+  # the OpenBLAS archives need -- so nothing ships beside the executable.
+  target_link_options(${MW_EXE} PRIVATE -static -static-libgcc -static-libstdc++)
+  target_link_libraries(${MW_EXE} PRIVATE pthread)
 endif()
 
 if(MW_ACCELERATE)

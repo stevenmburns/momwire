@@ -629,6 +629,19 @@ __attribute__((constructor(101))) void one_blas_thread_at_load() {
 #endif
 }
 #endif
+#if defined(__MINGW32__)
+// The static MinGW-w64 build (no OpenBLAS DLL to delay-load): OpenBLAS and
+// libgomp are linked in, so their load-time constructors run before main()
+// and `blas_env_before_load` is too late for them. The Linux constructor's
+// settings, ahead of them; libgomp is GCC's here too, so the same spin
+// count. _putenv_s cannot keep an existing value, hence the checks.
+__attribute__((constructor(101))) void one_blas_thread_at_load() {
+    _putenv_s("OPENBLAS_NUM_THREADS", "1");
+    if (std::getenv("OPENBLAS_THREAD_TIMEOUT") == nullptr) _putenv_s("OPENBLAS_THREAD_TIMEOUT", "16");
+    if (std::getenv("OMP_WAIT_POLICY") == nullptr && std::getenv("GOMP_SPINCOUNT") == nullptr)
+        _putenv_s("GOMP_SPINCOUNT", "30000");
+}
+#endif
 
 #if !MW_EXE_NO_PYTHON
 // --- where momwire's Python lives -------------------------------------------
@@ -720,6 +733,11 @@ std::string installed_version(const std::string &home) {
 // Windows 10, and answers FALSE for an id it does not know, so on Windows 7
 // an AVX2 CPU would read as baseline. `xcr0_bits` are the register states the
 // OS saves (XCR0), which the instructions need as much as the CPU bits.
+#if defined(__GNUC__)
+// MinGW-w64 gcc: _xgetbv is an xsave intrinsic, callable only from code
+// compiled for it (it runs only once OSXSAVE, checked first, is set).
+__attribute__((target("xsave")))
+#endif
 bool cpuid_has(int leaf7_ebx_bit, unsigned long long xcr0_bits, bool needs_fma) {
     int r[4];
     __cpuid(r, 0);
