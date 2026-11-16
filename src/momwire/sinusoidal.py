@@ -7148,12 +7148,34 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         def serve(block, rows):
             plan, rep = values(block)
             phis = _pr.scatter(rep[0], plan, rows, rep[1])
-            if self._pair_reuse_verify:
+            if self._pair_reuse_verify and block == "reflected":
+                # Checked against the band path's own spelling, not against
+                # `reflected_rows`: the sample then also catches a divergence
+                # between the two evaluators (one whole row per sampled row).
+                def direct(m, ns):
+                    rows_m = (m, m + 1)
+                    if fg.mode == "compose":
+                        phis = list(
+                            fg.image_field(obs_rows=rows_m, cos_shape=cos_shape)
+                        )
+                        S = fg.remainder(cos_shape).replay(
+                            obs_centers=seg_c[m : m + 1], obs_tangents=seg_t[m : m + 1]
+                        )
+                        c2 = fg.image_coefficient
+                        for Pi, Si in zip(phis, S):
+                            np.multiply(c2, Pi, out=Pi)
+                            Pi -= Si
+                    else:
+                        phis = fg.image_field(obs_rows=rows_m, cos_shape=cos_shape)
+                    return tuple(np.asarray(p)[:, ns] for p in phis)
+
+            elif self._pair_reuse_verify:
                 direct_rows = direct_for(block)
 
                 def direct(m, ns):
                     return direct_rows(m, m + 1, ns)
 
+            if self._pair_reuse_verify:
                 worst = _pr.verify_band(phis, rows, N, direct)
                 self.pair_reuse_verify_max = max(self.pair_reuse_verify_max, worst)
             return phis
