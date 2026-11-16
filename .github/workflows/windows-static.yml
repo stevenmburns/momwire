@@ -349,6 +349,7 @@ jobs:
       - name: fat == one-variant, every fixture deck (razor-2p and bs2, avx2 and sse2)
         shell: pwsh
         run: |
+          $env:MW_GDB = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
           $fail = 0
           foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
             foreach ($v in 'avx2', 'sse2') {
@@ -372,22 +373,20 @@ jobs:
           $env:MOMWIRE_STANDALONE_BASIS = "bspline"
           venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
           if ($LASTEXITCODE) { exit 1 }
-      # Diagnostic (run 43944198706: the fat razor-2p hung twice in ~2800 runs,
-      # on tiny decks, at the size policy's threads): how often each build
-      # hangs on those decks, and every thread's stack when one does.
-      - name: hang probe (diagnostic, not a gate)
-        if: always() && hashFiles('build-razor2p-fat/momwire-nec5-razor-2p-standalone.exe') != ''
+      # Blocker 1 (runs 43944198706, 43965973397): rare hangs and odd exit
+      # codes from razor-2p at the size policy's threads. The A/B of the fix
+      # (both OpenBLAS pools shut down before exit, momwire_razor2p.cpp
+      # `shutdown_blas_pools`): the same executables with it on and off
+      # (MW_EXE_EXIT_SHUTDOWN=0), interleaved, over the whole fixture corpus.
+      - name: stress, razor-2p, exit shutdown on vs off (diagnostic, not a gate)
+        if: always() && hashFiles('dist/momwire-nec5-razor2p-sse2.exe') != ''
         continue-on-error: true
         shell: pwsh
         run: |
           $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
-          foreach ($d in "tests\fixtures\nec_cw_catenary_1697\c1_icat1_sag.nec", "tests\fixtures\nec42_radius_step_1644\decks\L_step1-5_away_n20.nec") {
-            python scripts/windows_static/hang_probe.py 300 $gdb $d `
-              "fat=build-razor2p-fat\momwire-nec5-razor-2p-standalone.exe" `
-              "one-avx2=build-razor2p-avx2\momwire-nec5-razor-2p-standalone.exe" `
-              "one-sse2=build-razor2p-sse2\momwire-nec5-razor-2p-standalone.exe" `
-              "bs2-fat=build-bs2-fat\momwire-nec5-bspline-standalone.exe"
-          }
+          python scripts/windows_static/stress.py 8 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
+            "fix-sse2=dist\momwire-nec5-razor2p-sse2.exe" "off-sse2=dist\momwire-nec5-razor2p-sse2.exe|MW_EXE_EXIT_SHUTDOWN=0" `
+            "fix-avx2=dist\momwire-nec5-razor2p-avx2.exe" "off-avx2=dist\momwire-nec5-razor2p-avx2.exe|MW_EXE_EXIT_SHUTDOWN=0"
       # The MSVC zip of the latest green standalone.yml push run on main, for
       # the paired timing below (main's MSVC bytes; this branch changes no
       # line MSVC compiles).
@@ -416,24 +415,17 @@ jobs:
             "fat/razor2p=$PWD\dist-fat\momwire-nec5-razor-2p.exe" "fat/bs2=$PWD\dist-fat\momwire-nec5-bspline.exe"
           if ($LASTEXITCODE) { exit 1 }
       # Where the MinGW build's time goes (indicative, this runner): each
-      # build's own stage times (MOMWIRE_TIMES), and which libm the MinGW
-      # executables call (msvcrt.dll's imports).
-      - name: stage times and libm imports, MinGW vs MSVC
+      # build's own stage times (MOMWIRE_TIMES) on time_exes.py's yagi 6x201
+      # and 32-radial hub, at one thread and at the size policy's count.
+      - name: stage times, MinGW vs MSVC
         if: always() && hashFiles('dist/momwire-nec5-bs2-avx2.exe') != ''
         shell: pwsh
         run: |
-          $M = (Resolve-Path msvc\momwire-nec5-windows-x64).Path
-          $D = (Resolve-Path dist).Path
-          $env:MOMWIRE_TIMES = "1"; $env:MW_EXE_TIMES = "1"; $env:MOMWIRE_THREADS = "1"
-          $decks = @("tests\fixtures\bspline_printout_buried\ab_hub16.nec", "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
-          foreach ($d in $decks) {
-            foreach ($e in "$D\momwire-nec5-razor2p-avx2.exe", "$M\momwire-nec5-razor2p-avx2.exe", "$D\momwire-nec5-bs2-avx2.exe", "$M\momwire-nec5-bs2-avx2.exe") {
-              "== $(Split-Path -Leaf $d) $e"
-              $sw = [Diagnostics.Stopwatch]::StartNew()
-              & $e $d "$env:RUNNER_TEMP\t.out" 2>&1 | ForEach-Object { "  $_" }
-              "  wall $($sw.ElapsedMilliseconds) ms"
-            }
-          }
+          $msvcDir = (Resolve-Path msvc\momwire-nec5-windows-x64).Path
+          $mingwDir = (Resolve-Path dist).Path
+          python scripts/windows_static/stage_times.py `
+            "mingw/razor2p=$mingwDir\momwire-nec5-razor2p-avx2.exe" "msvc/razor2p=$msvcDir\momwire-nec5-razor2p-avx2.exe" `
+            "mingw/bs2=$mingwDir\momwire-nec5-bs2-avx2.exe" "msvc/bs2=$msvcDir\momwire-nec5-bs2-avx2.exe"
       - name: msvcrt functions the MinGW executables import
         if: always() && hashFiles('dist/momwire-nec5-bs2-avx2.exe') != ''
         shell: msys2 {0}

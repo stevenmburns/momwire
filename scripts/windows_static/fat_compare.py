@@ -24,17 +24,53 @@ from pathlib import Path
 def run(
     exe: str, deck: Path, out: Path, env: dict[str, str]
 ) -> tuple[int, bytes, bytes]:
+    p = subprocess.Popen(
+        [exe, str(deck), str(out)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     try:
-        r = subprocess.run(
-            [exe, str(deck), str(out)], env=env, capture_output=True, timeout=300
-        )
+        stdout, stderr = p.communicate(timeout=300)
     except subprocess.TimeoutExpired:
-        # a hang, reported as a mismatch of its own (hang_probe.py looks closer)
+        # a hang, reported as a mismatch of its own: whether the printout was
+        # already whole, and every thread's backtrace (MW_GDB names gdb)
+        text = out.read_text(errors="replace") if out.exists() else ""
+        bt = ""
+        if os.environ.get("MW_GDB"):
+            try:
+                bt = subprocess.run(
+                    [
+                        os.environ["MW_GDB"],
+                        "-batch",
+                        "-p",
+                        str(p.pid),
+                        "-ex",
+                        "thread apply all bt 30",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                ).stdout
+            except Exception as e:  # noqa: BLE001 -- a diagnostic: report and go on
+                bt = f"(gdb failed: {e})"
+        p.kill()
+        p.communicate()
         out.unlink(missing_ok=True)
+        print(
+            f"HANG {exe} {deck}: printout {'complete' if 'RUN TIME' in text else 'incomplete'}"
+            f" ({len(text)} chars)\n{bt[-15000:]}",
+            flush=True,
+        )
         return -999, b"HANG", b""
     body = out.read_bytes() if out.exists() else b""
     out.unlink(missing_ok=True)  # the next run writes the same path
-    return r.returncode, r.stdout, body
+    if p.returncode != 0:
+        print(
+            f"exit {p.returncode & 0xFFFFFFFF:#010x} {exe} {deck}: {stderr[-400:]!r}",
+            flush=True,
+        )
+    return p.returncode, stdout, body
 
 
 def main(argv: list[str]) -> int:
@@ -82,7 +118,10 @@ def main(argv: list[str]) -> int:
                     if a[1] != b[1]
                     else "printout"
                 )
-                print(f"DIFFER {what} {copy} {deck}")
+                print(
+                    f"DIFFER {what} {copy} {deck} (exit fat {a[0] & 0xFFFFFFFF:#x},"
+                    f" one {b[0] & 0xFFFFFFFF:#x})"
+                )
     print(
         f"{variant}: {same} identical ({refused} of them the same refusal), {differ} different, "
         f"{len(decks)} decks x 2 copies"
