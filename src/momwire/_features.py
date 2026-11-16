@@ -205,15 +205,21 @@ FEATURES: dict[str, Feature] = {
                 "solver finds its own, in free space and over a perfect or "
                 "finite ground."
             ),
-            # bspline: 1e-12. sinusoidal (momwire#1911), measured on Skylake
-            # against the flag-off fill over the ELT whip and 19 corpus and
-            # catalogue decks, free space and PEC, thin wire and EK: at most
-            # 2.7e-12 (a 4x4 bowtie array; the whip 2.7e-13), below what
-            # translating each deck moves its own answer (up to 6e-11). Over
-            # a finite ground (momwire#1970), Sommerfeld and reflection
-            # coefficient, the 11 decks of the 11-16 ground ladder: at most
-            # 4.3e-13 (the skyloop at 2097 segments).
-            drift=3e-12,
+            # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
+            # bspline: 1e-12. sinusoidal: the class map moves Z itself by
+            # ~1e-12 relative to its largest entry, and the solve amplifies
+            # that at the feed. Measured over every frequency of the 11-16
+            # reuse ladders (13 each; gsfd_* 101), dense:
+            #   free space (Rocketlake, main 816ccd5b): p_m24 2.15e-10, sky_c24 7.6e-11,
+            #     sky_m24 6.6e-11, fd_h51 9.6e-12;
+            #   finite ground (Skylake, the momwire#1970 change): gsky_m24 9.9e-11
+            #     (Sommerfeld), 8.2e-11 (reflection coefficient); gfd_h51
+            #     1.0e-11 / 4.1e-12; gsky_m12 7.9e-12; every other gfd_*,
+            #     gsfd_*, gsky_m6 6.1e-12 or less.
+            # 5e-10 is the worst (p_m24) with about 2x margin. The 3e-12 this
+            # replaces was the matrix ratio, not |dZin|/|Zin|. Still far under
+            # DEFAULT_DRIFT_MAX (antennaknobs' LAST_DIGITS_DRIFT, 1e-6).
+            drift=5e-10,
             offer=False,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
