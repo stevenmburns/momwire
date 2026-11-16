@@ -2058,14 +2058,18 @@ def compute_Z_operator_buried(
             # radius, below rows at the buried one, and the node's point tests
             # share one radius — and continuity is closed by the crossing
             # junction's KCL row rather than left to emerge.
-            t_above, t_below = _crossing_fill.cross_complete_blocks_two_radius(
-                ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
-            )
             if cross_rows is None:
-                Z -= t_above
-                Z -= t_below.T
+                # `Z -= t_above; Z -= t_below.T`, folded on the blocks' live
+                # support (momwire#1941): neither (n, n) block is held.
+                _crossing_fill.cross_complete_blocks_two_radius(
+                    ctx, a_idx, b_idx, ax_a, ax_b, into=Z
+                )
+                f.checkpoint()
                 _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a, out=Z)
             else:
+                t_above, t_below = _crossing_fill.cross_complete_blocks_two_radius(
+                    ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
+                )
                 # `t_above` is already its row slice and `t_below` its column
                 # slice: the two blocks are not transposes at two radii, so
                 # each is asked for the one half the composition below reads.
@@ -2075,19 +2079,19 @@ def compute_Z_operator_buried(
                     ctx, ax_b, ax_a, rows=cross_rows
                 )
         else:
-            t_ab = _crossing_fill.cross_complete_block_split(
-                ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
-            )
-            # Dense whole-Z passes, a tenth of a second each at x32: polled
-            # between (momwire#1348 scope).
             if cross_rows is None:
-                Z -= t_ab
-                f.checkpoint()
-                Z -= t_ab.T
+                # `Z -= t_ab; Z -= t_ab.T`, folded on the block's live support
+                # (momwire#1941): the (n, n) block and its `c1 *` copy were the
+                # fill's high-water mark at bs2 hub_deck(16) x32.
+                _crossing_fill.cross_complete_block_split(
+                    ctx, a_idx, b_idx, ax_a, ax_b, into=Z
+                )
                 f.checkpoint()
                 _crossing_fill.self_completions(ctx, ax_b, ax_a, out=Z)
             else:
-                t_r, t_c = t_ab
+                t_r, t_c = _crossing_fill.cross_complete_block_split(
+                    ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
+                )
                 Z[z_rows, :] -= t_r
                 f.checkpoint()
                 Z[z_rows, :] -= t_c.T

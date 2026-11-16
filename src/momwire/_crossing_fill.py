@@ -7867,8 +7867,54 @@ def _refuse_path_tested(*axes):
             )
 
 
+def _axis_live_rows(ax):
+    """Every basis row an axis's cross-block writes can reach: the rows live
+    on any of its nodes (`_support_rows` over the whole axis — the union of
+    every block's `rA` / `rB`) and the rows its end table touches
+    (`_end_live_rows`, the `E_r` / `E_c` / corner rows). An exact superset by
+    the same argument as `_support_rows`', never a guess."""
+    every = np.arange(ax["nodes"].shape[0])
+    return np.union1d(_support_rows(ax, every), _end_live_rows(ax))
+
+
+def _live_support(A, B):
+    """The (above live rows, below live rows) sub-block of a cross block —
+    every entry `_main_split` and `_ends_and_corner` can write, so the block
+    off it is exact zeros. As a `_Support`."""
+    return _Support.of(
+        (_axis_live_rows(A), _axis_live_rows(B)), A["n_basis"], B["n_basis"]
+    )
+
+
+def _within(pos, idx):
+    """Whether every index of `idx` has a place in the support `pos` maps."""
+    return bool((pos[idx] >= 0).all())
+
+
+def _fold_sub(Z, zr, zc, block):
+    """`Z[np.ix_(zr, zc)] −= block`, a slab of columns at a time
+    (`_FusedEnds._fold`'s slabs). One IEEE subtraction per entry on the same
+    two operands as `Z −= <the full block>`, whose other entries were exact
+    zeros; `zr` / `zc` carry no repeats, so the slabs change which temporary
+    holds an entry, never its value."""
+    w = max(1, _Z_SLAB_BYTES // (16 * max(1, zr.size)))
+    for c0 in range(0, zc.size, w):
+        Z[np.ix_(zr, zc[c0 : c0 + w])] -= block[:, c0 : c0 + w]
+
+
+def _fold_pair(Z, sup, t_ab, t_ba_t):
+    """`Z −= t_ab; Z −= t_ba_t.T` for two blocks held on `sup` alone: every
+    entry of the first fold, then every entry of the second, the order the
+    two whole-matrix subtractions had."""
+    _fold_sub(Z, sup.rows, sup.cols, t_ab)
+    _cancel.poll()
+    _fold_sub(Z, sup.cols, sup.rows, t_ba_t.T)
+
+
 @_cancelable
-def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=None):
+def cross_complete_block_split(
+    ctx, a_idx, b_idx, A, B, *, corner=True, rows=None, into=None, support=None
+):
     """`cross_complete_block` through the #688 admissibility split.
 
     The (above segments × below segments) product is partitioned by the
@@ -7890,17 +7936,38 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
     the answer is then the PAIR `(t[rows, :], t[:, rows])` — what the buried
     routing needs to write `Z[rows] -= t; Z[rows] -= t.T` without the other
     rows. One evaluation of the kernel tables and one ACA factorisation per
-    block serve both halves; `rows=None` is the full block and today's path."""
+    block serve both halves; `rows=None` is the full block and today's path.
+
+    `into` (momwire#1941, `rows=None` only) is the square Z the block folds
+    into as `Z -= t; Z -= t.T`, and the answer is then None. The block is
+    held only on its live support (`_live_support`): at bs2 hub_deck(16) x32
+    the whole block and its `c1 *` copy were two (n, n) arrays beside Z, the
+    fill's high-water mark, for a block whose live rows are the mast's.
+    Bit-identical to the two whole-matrix folds: `_Support` for the block,
+    `_fold_pair` for the folds.
+
+    `support` (a `_Support`) answers that sub-block alone, as
+    `cross_complete_block`'s does: the two-radius pair's below block, which
+    its caller folds beside a block of its own."""
+    if sum(x is not None for x in (rows, into, support)) > 1:
+        raise ValueError("rows=, into= and support= are three answers; ask for one")
     if _WHOLE_AXIS_NO_ACA:
         t = cross_complete_block(ctx, A, B, corner=corner)
         # The whole-axis switch answers in the restricted shape too, by slicing:
         # it exists to compare the split against the dense fill, so it must
         # stay drivable from every caller the split has.
+        if into is not None:
+            into -= t
+            into -= t.T
+            return None
+        if support is not None:
+            return t[np.ix_(support.rows, support.cols)]
         return t if rows is None else (t[rows], t[:, rows])
     _refuse_path_tested(A, B)
 
     # One fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here).
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
+    sup = _live_support(A, B) if into is not None else support
     main = _main_split(
         ctx,
         a_idx,
@@ -7914,12 +7981,26 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
         memo,
         rows=rows,
         later=lambda: _end_loop_keys(ctx, A, B, gz),
+        support=sup,
     )
     if rows is None:
         _ends_and_corner(
-            ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=main
+            ctx,
+            A,
+            B,
+            eps_t,
+            k_p,
+            c1,
+            gz,
+            memo=memo,
+            corner=corner,
+            out=main,
+            support=sup,
         )
-        return main
+        if into is None:
+            return main
+        _fold_pair(into, sup, main, main)
+        return None
     ends = _ends_and_corner(
         ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, rows=rows
     )
@@ -7930,7 +8011,7 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
 
 @_cancelable
 def cross_complete_blocks_two_radius(
-    ctx, a_idx, b_idx, A, B, *, rows=None, below_half="cols"
+    ctx, a_idx, b_idx, A, B, *, rows=None, below_half="cols", into=None
 ):
     """The cross pair at a TWO-RADIUS crossing node: `(t_above, t_below)`,
     composed by the caller as `Z -= t_above; Z -= t_below.T`.
@@ -7970,19 +8051,32 @@ def cross_complete_blocks_two_radius(
     the sinusoidal Galerkin trunk asks for the above-support rows and writes
     the below block's transpose into those COLUMNS (`G[:, rows] +=
     t_below[rows].T`), where bspline's restricted fill wants the column half.
+
+    `into` (momwire#1941, `rows=None` only) is the square Z the pair folds
+    into as `Z -= t_above; Z -= t_below.T`, answering None: both blocks are
+    held on the one live support of the two axes (`_live_support` — the same
+    axes at either radius), as `cross_complete_block_split(into=)` holds its
+    one.
     """
     if below_half not in ("cols", "rows"):
         raise ValueError(f"below_half must be 'cols' or 'rows', not {below_half!r}")
+    if into is not None and rows is not None:
+        raise ValueError("into= folds the whole pair; rows= answers a slice")
+    sup = None if into is None else _live_support(A, B)
     ctx_above = ctx._replace(a_wire=float(ctx.a_above))
     ctx_below = ctx._replace(a_wire=float(ctx.a_below))
-    t_below = cross_complete_block_split(ctx_below, a_idx, b_idx, A, B, rows=rows)
+    t_below = cross_complete_block_split(
+        ctx_below, a_idx, b_idx, A, B, rows=rows, support=sup
+    )
     if rows is not None:
         t_below = t_below[1 if below_half == "cols" else 0]
 
     # Keyed on the folded rho_eff, so one memo per radius stays exact.
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     if _WHOLE_AXIS_NO_ACA:
-        t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
+        t_above = _main_sandwich(
+            ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo, support=sup
+        )
         if rows is not None:
             t_above = t_above[rows]
     else:
@@ -8001,6 +8095,7 @@ def cross_complete_blocks_two_radius(
             rows=rows,
             # `memo`'s one later reader: the source ends below, at a_above.
             later=lambda: _end_loop_keys(ctx_above, A, B, gz, row_ends=False),
+            support=sup,
         )
         if rows is not None:
             t_above = t_above[0]
@@ -8020,6 +8115,7 @@ def cross_complete_blocks_two_radius(
                 memo=memo_e,
                 corner=corner_e,
                 out=t_above,
+                support=sup,
                 **kw,
             )
             continue
@@ -8037,7 +8133,10 @@ def cross_complete_blocks_two_radius(
             **kw,
         )
         t_above += ends[0]
-    return t_above, t_below
+    if into is None:
+        return t_above, t_below
+    _fold_pair(into, sup, t_above, t_below)
+    return None
 
 
 def _pair_groups(sizes, *, budget_pairs=600_000):
@@ -8093,7 +8192,18 @@ def _pair_groups(sizes, *, budget_pairs=600_000):
 
 
 def _direct_group(
-    ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows, keep=None
+    ctx,
+    eps_t,
+    k_p,
+    gz,
+    k2sq,
+    memo,
+    direct,
+    t_main,
+    t_cols,
+    rows,
+    keep=None,
+    support=None,
 ):
     """One GROUP of direct blocks: fill the coordinate buffers, evaluate the
     tables once for the group, and sandwich each block out of the result.
@@ -8123,7 +8233,7 @@ def _direct_group(
     file already declares ("read to scale, never to the bit").
 
     `keep` (momwire#1860 B2, `_main_split`) is what the memo retains of the
-    group's fresh rows; None retains them all.
+    group's fresh rows; None retains them all. `support` is `_main_split`'s.
     """
     # One buffer per column, filled block by block in place (momwire#914):
     # ρ by `_direct_coords`, z and z′ broadcast from its per-spec columns.
@@ -8152,7 +8262,18 @@ def _direct_group(
         nel = shp[0] * shp[1]
         K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
         off += nel
-        _sandwich_dense(AX, BX, iA, iB, K, k2sq, out=t_main, rows=rows, out_cols=t_cols)
+        _sandwich_dense(
+            AX,
+            BX,
+            iA,
+            iB,
+            K,
+            k2sq,
+            out=t_main,
+            rows=rows,
+            out_cols=t_cols,
+            support=support,
+        )
 
 
 def _dense_beats_aca(Ac, Bc, iA, iB, a_wire):
@@ -8196,7 +8317,19 @@ def _dense_beats_aca(Ac, Bc, iA, iB, a_wire):
 
 
 def _main_split(
-    ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None, later=None
+    ctx,
+    a_idx,
+    b_idx,
+    A,
+    B,
+    eps_t,
+    k_p,
+    c1,
+    gz,
+    memo,
+    rows=None,
+    later=None,
+    support=None,
 ):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
@@ -8223,7 +8356,14 @@ def _main_split(
     instead of the full block. The BLOCK PARTITION and every kernel evaluation
     are untouched by it — the same cluster trees, the same one batched
     `_tables` call, the same one ACA factorisation per kernel per far block —
-    because the restriction lives entirely on the weight side."""
+    because the restriction lives entirely on the weight side.
+
+    `support` (a `_Support`, whole-block answers only — `_live_support`,
+    momwire#1941) holds the block on its (rows, cols) alone: every write
+    below goes through `_put`, so each entry sees the writes it saw in the
+    full block (`_Support`)."""
+    if support is not None and rows is not None:
+        raise ValueError("support= and rows= are two answers; ask for one")
     k2sq = k_p * k_p
 
     tree_a, seg_a = _axis_segment_tree(ctx.geom, a_idx, _CLUSTER_LEAF_SEGS)
@@ -8232,7 +8372,11 @@ def _main_split(
 
     nA, nB = A["n_basis"], B["n_basis"]
     if rows is None:
-        t_main = np.zeros((nA, nB), dtype=np.complex128)
+        t_main = (
+            np.zeros((nA, nB), dtype=np.complex128)
+            if support is None
+            else support.zeros()
+        )
         t_cols = None
     else:
         t_main = np.zeros((rows.size, nB), dtype=np.complex128)
@@ -8242,6 +8386,15 @@ def _main_split(
         # Share the dense axes' sampled F/Fd (momwire#919) — see `axis_data`.
         Ac = axis_data(ctx, a_idx, coarse=True, share_from=A)
         Bc = axis_data(ctx, b_idx, coarse=True, share_from=B)
+        if support is not None and not (
+            _within(support.pos_r, _axis_live_rows(Ac))
+            and _within(support.pos_c, _axis_live_rows(Bc))
+        ):
+            # The support is the dense axes'; a coarse axis is the same
+            # segments, so the same live rows — unless its sampling ever
+            # stops being shared (`axis_data`), which `_put` would otherwise
+            # answer by dropping entries.
+            raise RuntimeError("a coarse axis reaches rows its dense axis does not")
 
     # ---- direct blocks: near pairs on the dense axes + small far blocks
     # on the coarse axes (sampling a small block costs more than its full
@@ -8290,6 +8443,7 @@ def _main_split(
                 t_cols,
                 rows,
                 keep=last_keep if gi == len(groups) - 1 else None,
+                support=support,
             )
 
     # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
@@ -8391,7 +8545,7 @@ def _main_split(
             )
 
         if rows is None:
-            t_main[np.ix_(rA, rB)] += _terms()
+            _put(t_main, rA, rB, _terms(), support, assign=False)
         else:
             sel, pos = _in_rows(rows, rA)
             if sel.size:
