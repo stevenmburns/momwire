@@ -19,8 +19,10 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #if defined(_OPENMP)
@@ -438,6 +440,58 @@ std::vector<EndVecT<WT>> end_vectors(const CX &c, BlockEval &be, double a_wire, 
     return all;
 }
 
+// An (nR x nC) cross block held on its live support alone, `rows` x `cols`
+// ((|rows|, |cols|) row-major; `_crossing_fill._Support`, momwire#1941):
+// every entry off it is an exact +0, so it is never stored. `pos_r` /
+// `pos_c` map a row / column to its place, -1 off the support. A nonzero
+// write off the support is a support that misses a live row, so it throws
+// rather than drop the entry.
+struct Held {
+    int64_t nR = 0, nC = 0;
+    std::vector<int64_t> rows, cols, pos_r, pos_c;
+    std::vector<cd> v;
+
+    Held(std::vector<int64_t> rows_, std::vector<int64_t> cols_, int64_t nR_, int64_t nC_)
+        : nR(nR_), nC(nC_), rows(std::move(rows_)), cols(std::move(cols_)),
+          pos_r(static_cast<size_t>(nR_), -1), pos_c(static_cast<size_t>(nC_), -1),
+          v(rows.size() * cols.size(), cd(0.0, 0.0)) {
+        for (size_t i = 0; i < rows.size(); i++) pos_r[static_cast<size_t>(rows[i])] = static_cast<int64_t>(i);
+        for (size_t j = 0; j < cols.size(); j++) pos_c[static_cast<size_t>(cols[j])] = static_cast<int64_t>(j);
+    }
+    int64_t row_of(int64_t r) const {
+        const int64_t p = pos_r[static_cast<size_t>(r)];
+        if (p < 0) throw std::logic_error("crossing block: a write reaches a row its live support lacks");
+        return p;
+    }
+    int64_t col_of(int64_t c) const {
+        const int64_t q = pos_c[static_cast<size_t>(c)];
+        if (q < 0) throw std::logic_error("crossing block: a write reaches a column its live support lacks");
+        return q;
+    }
+    cd &at(int64_t pr, int64_t pc) { return v[static_cast<size_t>(pr) * cols.size() + static_cast<size_t>(pc)]; }
+    // `d += x` at (r, c) for a scatter that visits the whole block: off the
+    // support `x` must be an exact zero, which the full block's +0 entry
+    // would have absorbed unchanged.
+    void add(int64_t r, int64_t c, cd x) {
+        const int64_t p = pos_r[static_cast<size_t>(r)], q = pos_c[static_cast<size_t>(c)];
+        if (p < 0 || q < 0) {
+            if (x.real() != 0.0 || x.imag() != 0.0)
+                throw std::logic_error("crossing block: a nonzero entry off its live support");
+            return;
+        }
+        cd &d = at(p, q);
+        d = cd(d.real() + x.real(), d.imag() + x.imag());
+    }
+    // The whole (nR, nC) block, for the test hook's stages only.
+    std::vector<cd> dense() const {
+        std::vector<cd> out(static_cast<size_t>(nR * nC), cd(0.0, 0.0));
+        for (size_t i = 0; i < rows.size(); i++)
+            for (size_t j = 0; j < cols.size(); j++)
+                out[static_cast<size_t>(rows[i] * nC + cols[j])] = v[i * cols.size() + j];
+        return out;
+    }
+};
+
 // No corner (razor's path-tested rows).
 struct NoCorner {
     void operator()(std::vector<cd> &, const std::vector<int64_t> &, int64_t) const {}
@@ -446,7 +500,7 @@ struct NoCorner {
 // `_ends_and_corner_rc(..., corner=False)` + `_EndTerms.answer(out=t)`: the
 // row loop (R's ends against C's line; V then W) and the column loop (C's
 // ends against R's line; W then V), each a rank-1 update into E_r / E_c, then
-// scattered into t (nR x nC, row-major).
+// scattered into t (nR x nC, held on its live support).
 // `corner(E_r, posLA, nC)` adds the designed corner into E_r ((|LA|, nC)
 // row-major, R's live rows) after both loops, before the scatter.
 // `row_ends` / `col_ends` (`_ends_and_corner`'s `test_ends` / `source_ends`):
@@ -454,7 +508,7 @@ struct NoCorner {
 // the two loops at two radii, `cross_complete_blocks_two_radius`).
 template <class P, class CX, class CornerFn = NoCorner>
 void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, const Axis &C,
-                   bool r_above, std::vector<cd> &t, const CornerFn &corner = CornerFn(),
+                   bool r_above, Held &t, const CornerFn &corner = CornerFn(),
                    bool row_ends = true, bool col_ends = true) {
     const int64_t nR = R.n_basis, nC = C.n_basis;
     auto live = [](const Axis &ax) {
@@ -544,17 +598,9 @@ void add_end_terms(const CX &c, BlockEval &be, double a_wire, const Axis &R, con
     for (int64_t a : LA)
         for (size_t j = 0; j < LB.size(); j++) E_c[static_cast<size_t>(a) * LB.size() + j] = cd(0.0, 0.0);
     for (size_t i = 0; i < LA.size(); i++)
-        for (int64_t j = 0; j < nC; j++) {
-            cd &d = t[static_cast<size_t>(LA[i] * nC + j)];
-            const cd v = E_r[i * static_cast<size_t>(nC) + static_cast<size_t>(j)];
-            d = cd(d.real() + v.real(), d.imag() + v.imag());
-        }
+        for (int64_t j = 0; j < nC; j++) t.add(LA[i], j, E_r[i * static_cast<size_t>(nC) + static_cast<size_t>(j)]);
     for (int64_t i = 0; i < nR; i++)
-        for (size_t j = 0; j < LB.size(); j++) {
-            cd &d = t[static_cast<size_t>(i * nC + LB[j])];
-            const cd v = E_c[static_cast<size_t>(i) * LB.size() + j];
-            d = cd(d.real() + v.real(), d.imag() + v.imag());
-        }
+        for (size_t j = 0; j < LB.size(); j++) t.add(i, LB[j], E_c[static_cast<size_t>(i) * LB.size() + j]);
 }
 
 }  // namespace
