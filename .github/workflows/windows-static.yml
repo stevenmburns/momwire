@@ -99,6 +99,11 @@ jobs:
       - name: the archives
         shell: msys2 {0}
         run: |
+          # PE COMDAT section names follow the prefix (pe_comdat_prefix.sh says
+          # why); idempotent, so a cached archive takes it too
+          standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
+          standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
+          objdump -h obw/libmwnp.a | grep -m3 refptr || true
           ls -l obw/libmwxp.a obw/libmwnp.a
           for a in mwx_:obw/libmwxp.a mwn_:obw/libmwnp.a; do
             p=${a%%:*} f=${a#*:}
