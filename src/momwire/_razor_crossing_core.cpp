@@ -363,6 +363,12 @@ struct Block {
 // The main sandwich's node pairs per window (momwire#1541): the grid tables
 // are formed a window of A's nodes at a time, never over the whole grid.
 constexpr size_t SANDWICH_WINDOW_PAIRS = size_t(1) << 21;
+// Up to this many node pairs, pass 1 keeps every pair's memo index (4 bytes
+// a pair, 16 MB at the cap) and pass 2 reads them instead of forming each
+// pair's triple again and finding it (momwire#1956: the second `pair_row`
+// and lookup were about half the block's bookkeeping). Over it, pass 2
+// re-finds them a window at a time, as before.
+constexpr size_t SANDWICH_KEEP_PAIRS = size_t(1) << 22;
 
 // One (A node, B node) pair's table row, as the whole-grid fill formed it.
 inline void pair_row(const Ctx &c, double a_wire, const Axis &A, const Axis &B, size_t a, size_t b,
@@ -381,8 +387,14 @@ inline void pair_row(const Ctx &c, double a_wire, const Axis &A, const Axis &B, 
 // `claim_finish` evaluates the whole list as the one call would, because a
 // triple's value can depend on which others share its exact-rho column
 // (`_chunked_tables`' argument), so the evaluation must see the same set.
+//
+// `idx` (when given, n entries): each point's index, the one the claim
+// stored or found for its triple, which is what `Memo::find` (then the NaN
+// dedup's `find`) answers for it afterwards: the evaluation only fills
+// values, so no key moves (momwire#1956).
 void claim_window(BlockEval &be, uint32_t base, const double *re, const double *z, const double *zp,
-                  size_t n, ni_eval::TripleIndex &nan_rows, std::vector<double> &rows) {
+                  size_t n, ni_eval::TripleIndex &nan_rows, std::vector<double> &rows,
+                  uint32_t *idx = nullptr) {
     using ni_eval::TripleIndex;
     TripleIndex &keys = be.memo.keys();
     auto claim = [&](size_t i) {
@@ -390,11 +402,9 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
         const uint32_t next = base + static_cast<uint32_t>(rows.size() / 3);
         bool ins = false;
         const bool nan = std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2]);
-        if (nan)
-            nan_rows.find_or_insert(row, next, ins);
-        else
-            keys.find_or_insert(row, next, ins);
+        const uint32_t v = nan ? nan_rows.find_or_insert(row, next, ins) : keys.find_or_insert(row, next, ins);
         if (ins) rows.insert(rows.end(), row, row + 3);
+        return v;
     };
     int nt = 1;
 #if defined(_OPENMP)
@@ -407,6 +417,8 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
         // serial walk's order. No memo lookup first (momwire#1541): a triple
         // an earlier window claimed is found by the claim itself, once per
         // chunk-distinct triple rather than once per point.
+        // With `idx`, each point first holds its chunk-local index, then
+        // the index its chunk's first appearance claimed.
         std::vector<std::vector<size_t>> first(static_cast<size_t>(nt));
         #pragma omp parallel for schedule(static, 1) num_threads(nt)
         for (int ch = 0; ch < nt; ch++) {
@@ -418,18 +430,35 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
             for (size_t i = i0; i < i1; i++) {
                 const double row[3] = {re[i], z[i], zp[i]};
                 bool ins = false;
-                li.find_or_insert(row, static_cast<uint32_t>(fc.size()), ins);
+                const uint32_t local = li.find_or_insert(row, static_cast<uint32_t>(fc.size()), ins);
                 if (ins) fc.push_back(i);
+                if (idx) idx[i] = local;
             }
         }
-        for (int ch = 0; ch < nt; ch++)
-            for (size_t i : first[static_cast<size_t>(ch)]) claim(i);
+        std::vector<std::vector<uint32_t>> claimed(static_cast<size_t>(nt));
+        for (int ch = 0; ch < nt; ch++) {
+            std::vector<uint32_t> &cl = claimed[static_cast<size_t>(ch)];
+            cl.reserve(first[static_cast<size_t>(ch)].size());
+            for (size_t i : first[static_cast<size_t>(ch)]) cl.push_back(claim(i));
+        }
+        if (idx) {
+            #pragma omp parallel for schedule(static, 1) num_threads(nt)
+            for (int ch = 0; ch < nt; ch++) {
+                const size_t i0 = n * static_cast<size_t>(ch) / static_cast<size_t>(nt);
+                const size_t i1 = n * static_cast<size_t>(ch + 1) / static_cast<size_t>(nt);
+                const std::vector<uint32_t> &cl = claimed[static_cast<size_t>(ch)];
+                for (size_t i = i0; i < i1; i++) idx[i] = cl[idx[i]];
+            }
+        }
         return;
     }
 #else
     (void)nt;
 #endif
-    for (size_t i = 0; i < n; i++) claim(i);
+    for (size_t i = 0; i < n; i++) {
+        const uint32_t v = claim(i);
+        if (idx) idx[i] = v;
+    }
 }
 
 // The rows one evaluation batch takes (whole exact-rho columns, so a batch
@@ -556,6 +585,9 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
     }
     const size_t per = std::max<size_t>(1, SANDWICH_WINDOW_PAIRS / std::max<size_t>(1, nB));
     ni_eval::TripleIndex nan_rows;
+    // Every pair's memo index from pass 1 (row-major, a * nB + b), or empty.
+    const bool keep = nA * nB <= SANDWICH_KEEP_PAIRS;
+    std::vector<uint32_t> kept(keep ? nA * nB : 0);
     // Pass 1: every pair's triple claimed, window by window, in row-major
     // grid order (a * nB + b), then the one evaluation.
     {
@@ -584,7 +616,8 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
                     zp[q] = row[2];
                 }
             }
-            claim_window(be, base, re.data(), z.data(), zp.data(), m, nan_rows, fresh);
+            claim_window(be, base, re.data(), z.data(), zp.data(), m, nan_rows, fresh,
+                         keep ? kept.data() + a0 * nB : nullptr);
         }
         std::vector<double>().swap(re);
         std::vector<double>().swap(z);
@@ -613,9 +646,11 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
     std::vector<uint32_t> K;
     size_t i0 = 0;
     while (i0 < nr) {
-        // The window: rows while their nodes fit (at least one row).
+        // The window: rows while their nodes fit (at least one row); with
+        // `kept`, every row at once, reading A node a's indices at a * nB.
         need.clear();
         size_t i1 = i0;
+        if (keep) i1 = nr;
         while (i1 < nr) {
             size_t added = 0;
             for (int pm = 0; pm < 4; pm++) {
@@ -641,8 +676,8 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
         }
         // The window's table rows: each pair's memo index (a NaN row's from
         // the claim's own NaN dedup, as `designed_index` answered it).
-        K.resize(need.size() * nB);
-        {
+        if (!keep) K.resize(need.size() * nB);
+        if (!keep) {
             const std::ptrdiff_t nnp = static_cast<std::ptrdiff_t>(need.size());
             const int nt = team(be, need.size() * nB);
 #if defined(_OPENMP)
@@ -664,6 +699,12 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
         }
         if (std::find(K.begin(), K.end(), ni_eval::TripleIndex::NONE) != K.end())
             throw std::runtime_error("razor crossing: a table pair missing from the memo (momwire#1541)");
+        // A's node `node`'s table row: its kept indices, or the window's.
+        const uint32_t *Kb = keep ? kept.data() : K.data();
+        const auto row_of = [&](int64_t node) -> const uint32_t * {
+            const size_t at = keep ? static_cast<size_t>(node) : static_cast<size_t>(slot[static_cast<size_t>(node)]);
+            return &Kb[at * nB];
+        };
         const std::ptrdiff_t w0 = static_cast<std::ptrdiff_t>(i0), w1 = static_cast<std::ptrdiff_t>(i1);
         const int nt = team(be, (i1 - i0) * nB);
 #if defined(_OPENMP)
@@ -685,8 +726,7 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
                 const CSR &M = P[static_cast<size_t>(pm)];
                 for (int64_t jj = M.indptr[i]; jj < M.indptr[i + 1]; jj++) {
                     const double a = M.data[static_cast<size_t>(jj)];
-                    const uint32_t *kx =
-                        &K[static_cast<size_t>(slot[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])]) * nB];
+                    const uint32_t *kx = row_of(M.indices[static_cast<size_t>(jj)]);
                     if (pm < 2) {
                         axpy_gather_key(L[pm], MV, K_U, kx, a, nB);
                     } else {
@@ -698,8 +738,7 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
             const CSR &M = P[3];
             for (int64_t jj = M.indptr[i]; jj < M.indptr[i + 1]; jj++) {
                 const double a = M.data[static_cast<size_t>(jj)];
-                const uint32_t *kx =
-                    &K[static_cast<size_t>(slot[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])]) * nB];
+                const uint32_t *kx = row_of(M.indices[static_cast<size_t>(jj)]);
                 axpy_gather_key(L[4], MV, K_W, kx, a, nB);
                 axpy_gather_key(L[5], MV, K_V, kx, a, nB);
             }
