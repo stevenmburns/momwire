@@ -33,7 +33,8 @@
 //
 // THREADS. The executable sets its own count on its OpenBLAS and on OpenMP:
 // MOMWIRE_THREADS, else by the deck's size for the C++ route (`threads_for`:
-// 1, 4, or one per physical core) and every hardware thread for the fallback
+// 1, 4, or one per physical core; every core for a buried crossing deck) and
+// every hardware thread for the fallback
 // (the launcher's default), exported as OPENBLAS_NUM_THREADS /
 // OMP_NUM_THREADS before CPython starts so the embedded numpy and scipy read
 // it.
@@ -533,8 +534,23 @@ int physical_cores() {
 // 128 the deck runs on the serial copy and never starts OpenMP; from ~150
 // to ~300 four threads win (dip301 8.2 ms against 14.6 on one and 8.4 on
 // eight); from ~400 every core (dip801 36 ms on 8, 42 on 4, 99 on 1).
-int threads_for(long long n_basis) {
+//
+// A buried deck with a crossing block (`crossing_blocks`: every above
+// segment against every below one, Sommerfeld integrals per node pair) does
+// far more work per basis function than the dipoles above were timed on
+// (momwire#1956), so from CROSSING_PAIRS such segment pairs it gets every
+// core whatever its basis count. Rocketlake, 8 cores, median of 5, ms at the
+// old choice -> every core: slant_base_source (128 pairs, 23 basis) 37.6 ->
+// 14.5; deep_s40 (324, 44) 50.1 -> 15.3; d3_hub (1312, 97, near field) 841
+// -> 178; fat_hub (3000, 144) 48.7 -> 35.1; ground_rod_efhw (2895, 207)
+// 104.9 -> 72.4; aca_vertical_screen (24684, 324) 92.7 -> 73.2. No crossing
+// deck measured was faster on fewer, and the smallest has 128 pairs. Decks
+// without one (free space, above ground, wholly below the plane) keep the
+// basis-count rule.
+constexpr long long CROSSING_PAIRS = 64;
+int threads_for(long long n_basis, long long crossing_pairs = 0) {
     const int cores = physical_cores();
+    if (crossing_pairs >= CROSSING_PAIRS) return cores;
     if (n_basis < 128) return 1;
     if (n_basis < 384) return std::min(4, cores);
     return cores;
@@ -1066,8 +1082,11 @@ int main(int argc, char **argv) {
         // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
             const mw_times::Scope timed(mw_times::seam);
-            const long long n = mws::exe::largest_solve(text);
-            threads = n >= 0 ? threads_for(n) : 1;
+            long long pairs = 0;
+            const long long n = mws::exe::largest_solve(text, false, &pairs);
+            threads = n >= 0 ? threads_for(n, pairs) : 1;
+            if (env("MW_EXE_TIMES") == "1")
+                std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld\n", n, pairs);
         }
         const std::string arrays_dir = env("MW_EXE_ARRAYS");
         std::string printout;
@@ -1367,8 +1386,11 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     int threads = forced_threads;
     if (forced_threads <= 0) {
         const mw_times::Scope timed(mw_times::seam);
-        const long long n = mws::exe::largest_solve(text, open_end);
-        threads = n >= 0 ? threads_for(n) : 1;
+        long long pairs = 0;
+        const long long n = mws::exe::largest_solve(text, open_end, &pairs);
+        threads = n >= 0 ? threads_for(n, pairs) : 1;
+        if (env("MW_EXE_TIMES") == "1")
+            std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld\n", n, pairs);
     }
     g_render_threads = threads;
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
