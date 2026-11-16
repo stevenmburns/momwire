@@ -6,8 +6,10 @@ so it takes its own classes, keyed on the height sum and the horizontal
 configuration (`_sin_pair_reuse.build_ground_plan`). So:
 
 - off is the fill, bit for bit, over both grounds;
-- on moves Z by no more than the declared drift, and `pair_reuse="verify"`
-  checks a sample of every band against the direct evaluators;
+- on moves Z by no more than the declared drift, at an interface off z = 0
+  and at horizontally coincident centres too, and `pair_reuse="verify"`
+  checks a sample of every band, the reflected block against the band
+  path's own spelling;
 - the fused gather is the band path, bit for bit, with the reflected block;
 - the key carries what the reflected term reads: a height-blind key, or the
   free-space (3-D) key, merges pairs whose reflected terms differ, and the
@@ -29,6 +31,10 @@ pytestmark = pytest.mark.reach(1)
 
 LAM = 21.1
 DRIFT = _features.FEATURES["pair_reuse"].drift
+# The fill's own bound, max |dZ| / max |Z| (the registry's `drift` is the
+# feed impedance's, which the solve amplifies): measured 4.3e-13 at worst
+# over the 11-16 ground ladder, ~1e-14 on these decks.
+MATRIX = 3e-12
 SOMM = dict(ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
 REFL = dict(ground_z=0.0, ground_eps=(13.0, 0.005))
 GROUNDS = {"sommerfeld": SOMM, "refl-coef": REFL}
@@ -131,7 +137,7 @@ def test_on_matches_off(ground, ek):
     # The six directors repeat; the reflected classes are about as coarse
     # as the direct ones on a deck that is mostly at one height.
     assert n_cls < n_pairs / 2
-    assert _rel(on, base) <= DRIFT
+    assert _rel(on, base) <= MATRIX
     assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
 
 
@@ -269,7 +275,7 @@ def test_a_key_blind_to_the_ground_is_caught(ground, deck, wrong, monkeypatch):
     base, _ = _z(deck(), **GROUNDS[ground])
     on, s = _z(deck(), pair_reuse="verify", **GROUNDS[ground])
     n_pairs, good_cls, _ = s.pair_reuse_census["reflected"]
-    assert _rel(on, base) <= DRIFT
+    assert _rel(on, base) <= MATRIX
     pr.clear_shared_plans()
     wrong(monkeypatch)
     bad, s = _z(deck(), pair_reuse=True, **GROUNDS[ground])
@@ -296,3 +302,103 @@ def test_the_two_height_classes_are_the_heights(ground):
     assert refl.cls[2, 5] != refl.cls[n + 2, n + 5]
     # Along one dipole the reflected term repeats by offset.
     assert refl.cls[2, 5] == refl.cls[7, 10]
+
+
+def _invvee(gz):
+    """Two inverted vees whose ends come down to 3 m above an interface at
+    `gz`: the key's heights are measured from the plane, not from z = 0."""
+    apex = np.array([0.0, 0.0, 9.0 + gz])
+    far = apex + [6.0, 4.0, 0.0]
+    wires = [
+        np.array([apex, [4.5, 0.0, 3.0 + gz]]),
+        np.array([apex, [-4.5, 0.0, 3.0 + gz]]),
+        np.array([far, [10.5, 4.0, 3.0 + gz]]),
+        np.array([far, [1.5, 4.0, 3.0 + gz]]),
+    ]
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[15]] * 4,
+        feed_wire_index=0,
+        wavelength=LAM,
+        wire_radius=1e-3,
+    )
+
+
+@pytest.mark.parametrize("ek", [False, True])
+@pytest.mark.parametrize("gz", [-2.5, 1.5])
+@pytest.mark.parametrize("ground", sorted(GROUNDS))
+def test_an_interface_off_zero_over_a_sweep(ground, gz, ek):
+    kw = dict(GROUNDS[ground], ground_z=gz, extended_kernel=ek)
+    ks = 2 * np.pi / LAM * np.array([0.9, 1.0, 1.1])
+    z_off = SinusoidalSolver(**_invvee(gz), **kw, pair_reuse=False)
+    z_off = np.asarray(z_off.compute_impedance_swept(ks))
+    s = SinusoidalSolver(**_invvee(gz), **kw, pair_reuse="verify")
+    z_on = np.asarray(s.compute_impedance_swept(ks))
+    assert s.pair_reuse_declined is None
+    assert set(s.pair_reuse_census) == {"direct", "reflected"}
+    # Measured (Skylake, gz +1.5): at most 6e-14.
+    assert np.max(np.abs(z_on - z_off) / np.abs(z_off)) <= DRIFT
+    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+
+
+def _crossed_stacks(segs=21):
+    """Two stacks of two crossed dipoles (5 m and 8 m, centres on one
+    vertical), the second stack the first rotated 1.1 rad about the vertical:
+    the centre pairs have d = 0, where the specular plane falls back to x."""
+    L = 0.47 * LAM
+
+    def dip(cx, theta, z):
+        u = np.array([np.cos(theta), np.sin(theta), 0.0]) * L / 2
+        c = np.array([cx, 0.0, z])
+        return np.array([c - u, c + u])
+
+    wires = [dip(0.0, 0.0, 5.0), dip(0.0, 0.5, 8.0), dip(40.0, 1.1, 5.0)]
+    wires.append(dip(40.0, 1.6, 8.0))
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[segs]] * 4,
+        feed_wire_index=0,
+        wavelength=LAM,
+        wire_radius=1e-3,
+    )
+
+
+@pytest.mark.parametrize("ground", sorted(GROUNDS))
+def test_coincident_centres_share_a_class(ground):
+    n = 21
+    base, _ = _z(_crossed_stacks(n), **GROUNDS[ground])
+    on, s = _z(_crossed_stacks(n), pair_reuse="verify", **GROUNDS[ground])
+    assert _rel(on, base) <= MATRIX
+    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    cls = s._sin_reuse_plans["reflected"][1].cls
+    c = n // 2
+    # The centres' pair (d = 0) and its twin in the rotated stack.
+    assert cls[c, n + c] == cls[2 * n + c, 3 * n + c]
+    assert cls[n + c, c] == cls[3 * n + c, 2 * n + c]
+    # And the stacks' cross blocks pair by pair, but for pairs a rotation's
+    # rounding moves across a quantum.
+    twin = cls[:n, n : 2 * n] == cls[2 * n : 3 * n, 3 * n :]
+    assert twin.mean() >= 0.9
+
+
+def test_verify_checks_the_reflected_block_against_the_band_path(monkeypatch):
+    """The verify sample's oracle for "reflected" is the band's own spelling
+    (`FieldGround.image_field` and the remainder's replay), not the route's
+    evaluator, so a divergence between the two would fail it. The fill never
+    calls `image_field` with the block served, so every call is the oracle's."""
+    from momwire import _field_ground
+
+    calls = []
+    real = _field_ground.FieldGround.image_field
+
+    def counting(self, *a, **k):
+        calls.append(1)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(_field_ground.FieldGround, "image_field", counting)
+    for ground in sorted(GROUNDS):
+        calls.clear()
+        _z(_yagi(), pair_reuse=True, **GROUNDS[ground])
+        assert calls == []
+        _, s = _z(_yagi(), pair_reuse="verify", **GROUNDS[ground])
+        assert calls and s.pair_reuse_verify_max <= pr.VERIFY_TOL
