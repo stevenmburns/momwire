@@ -1,0 +1,12 @@
+CM RP normalized-gain probe xdip1201
+CM crossed dipoles in quadrature
+CE
+GW 1 21 -2.4 0 0 2.4 0 0 0.001
+GW 2 21 0 -2.4 0.3 0 2.4 0.3 0.001
+GE 0
+EX 0 1 11 0 1 0
+EX 0 2 11 0 0 1
+FR 0 1 0 0 28.5 0
+RP 0 7 4 1201 0 0 30 45 0 0
+XQ
+EN

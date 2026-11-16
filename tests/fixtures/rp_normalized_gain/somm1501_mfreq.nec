@@ -1,0 +1,11 @@
+CM RP normalized-gain probe somm1501_mfreq
+CM two frequencies over ground
+CE
+GW 1 21 0.1 0 1.0 -0.1 0 6.0 0.002
+GE 1
+GN 0 0 0 0 13 0.005
+EX 0 1 11 0 1 0
+FR 0 2 0 0 27 2
+RP 0 4 2 1501 0 0 30 90 0 0
+XQ
+EN

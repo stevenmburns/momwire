@@ -1,0 +1,10 @@
+CM RP normalized-gain probe free1500_sweep
+CM theta -180..178 step 2
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 180 1 1500 -180 0 2 1 0 0
+XQ
+EN
