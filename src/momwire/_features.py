@@ -332,7 +332,13 @@ FEATURES: dict[str, Feature] = {
         # singular part taken out in closed form. A new C++ path and a coarse
         # accuracy class (printed Zin within ~0.1 ohm on the EFHW decks).
         # Reach 8, as factored_columns. Opt-in: its drift class is over
-        # DEFAULT_DRIFT_MAX.
+        # DEFAULT_DRIFT_MAX, and it stays off by default (Steve, 11-15).
+        # drift 5e-3 (momwire#1955, was 1e-3): measured 3.6e-3 on fat_slant
+        # and 2.5e-3 on fat_hub (a 19 mm vertical, Delta/a 2.2, over four short
+        # buried radials), 4e-4 on aca, under 1e-3 on the EFHW decks. Set
+        # against the ground itself: +/-10 % in eps_r or sigma moves those
+        # same decks' Zin by 0.7-4.5 %, so 5e-3 stays well inside what a user
+        # can know about their soil.
         Feature(
             name="crossing_table",
             reach=8,
@@ -347,9 +353,11 @@ FEATURES: dict[str, Feature] = {
                 "Where a wire crosses the ground (an EFHW over a ground rod), read "
                 "the entries near the crossing from one table per frequency instead"
                 " of computing each. Coarser: input impedance moves by about 0.1 "
-                "ohm on an EFHW."
+                "ohm on an EFHW and up to about 0.4 % on a fat vertical over a "
+                "small buried screen, well under what a 10 % error in the ground's"
+                " constants does."
             ),
-            drift=1e-3,
+            drift=5e-3,
             offer=True,
         ),
         # nec5-bspline's and nec42-bspline's crossing route fills the above x
