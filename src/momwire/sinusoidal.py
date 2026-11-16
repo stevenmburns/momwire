@@ -6719,14 +6719,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             else _schedule.mb_rows(self.swept_mem_mb, self._fill_row_bytes(N))
         )
 
+        if obs_rows is not None:
+            obs_rows = np.asarray(obs_rows, dtype=np.int64)
         # momwire#1911: `pair_reuse`, or None for the fill below as it was.
-        reuse = self._sin_pair_reuse_route(geom, k, cos_shape, fg, eta)
+        # Its plans cover the rows this fill fills and no others (the sector
+        # route's are a 1/N subset), numbered as the row-compact G is.
+        reuse = self._sin_pair_reuse_route(geom, k, cos_shape, fg, eta, obs_rows)
 
         if obs_rows is None:
             spans = [(0, N)]
             G = np.zeros((N, N), dtype=np.complex128)
         else:
-            obs_rows = np.asarray(obs_rows, dtype=np.int64)
             spans = _schedule.runs(obs_rows)
             G = np.zeros((obs_rows.size, N), dtype=np.complex128)
         at = 0  # where the next chunk's rows land in a row-compact G
@@ -6736,10 +6739,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # at the top of each chunk (momwire#1337 phase 2).
         for i0, i1 in _schedule.chunks(spans, chunk, self._checkpoint):
             rows = (i0, i1)
+            # The band in the reuse plans' (and a row-compact G's) numbering.
+            local = rows if obs_rows is None else (at, at + (i1 - i0))
             if reuse is not None and reuse.reduce_into(
-                rows,
+                local,
                 (M_A, M_B, M_C),
-                G[i0:i1] if obs_rows is None else G[at : at + (i1 - i0)],
+                G[local[0] : local[1]],
                 fg is not None,
             ):
                 # momwire#1916: the classes gathered inside the reduction,
@@ -6752,7 +6757,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
                 )
             else:
-                Phi_c, Phi_s, Phi_co = reuse("direct", rows)
+                Phi_c, Phi_s, Phi_co = reuse("direct", local)
             if fg is not None:
                 # Image ground: subtract the sub-assembly built from the
                 # image field tensor. The image source's mirrored geometry +
@@ -6769,7 +6774,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if reuse is not None:
                     # The PEC image, or a finite ground's whole reflected
                     # term, composed per class as below (momwire#1970).
-                    Phi_i = reuse(reuse.ground_block, rows)
+                    Phi_i = reuse(reuse.ground_block, local)
                 elif fg.mode == "compose":
                     # `coef·img − remainder` has to be associated BEFORE the
                     # single minus below, because `free − (c2·img − S)` is
@@ -6837,7 +6842,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._apply_loading(G, geom, seg_view, k, obs_rows=obs_rows)
         return G, seg_view
 
-    def _sin_pair_reuse_route(self, geom, k, cos_shape, fg, eta):
+    def _sin_pair_reuse_route(self, geom, k, cos_shape, fg, eta, obs_rows=None):
         """`pair_reuse` for one `_assemble_Z` fill (momwire#1911): a callable
         `(block, rows) -> (Φ_c, Φ_s, Φ_co)` serving the band from each
         congruent pair's one evaluation (`_sin_pair_reuse`), `block` being
@@ -6856,9 +6861,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `_WELL_SCALED_KD`, which take numpy), a complex k (buried), a
         reflection coefficient other than Fresnel's or without its fused
         kernel, and no accelerator.
+
+        `obs_rows` (sorted observer segments, the sector route's) restricts
+        every block's plan to those rows, and `rows` then counts within
+        them: the census, the classes and the near pairs are the filled
+        rows' only (momwire#1969, its first finding). None plans every row,
+        as before. The sector route declines unless
+        `_sin_pair_reuse.SECTOR_ROUTE` is set: its rotation has already
+        taken most of the reuse, and the census costs about what the rest
+        saves (the constant has the measurement). It is the last reason
+        checked, so a deck the reuse could not serve anyway says why.
         """
         if not self._pair_reuse_on:
             return None
+        from . import _sin_pair_reuse as _pr
+
         ek = self.extended_kernel
         finite = fg is not None and (fg.mode != "fold" or self.ground_eps is not None)
         if self._nec4_live(geom):
@@ -6879,13 +6896,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             reason = "no C++ Fresnel field-tensor kernel"
         elif finite and fg.mode != "fold" and fg.remainder(cos_shape) is None:
             reason = "a ground with no remainder"
+        elif obs_rows is not None and not _pr.SECTOR_ROUTE:
+            reason = "the sector route (its rotation already takes the reuse)"
         else:
             reason = None
         self.pair_reuse_declined = reason
         if reason is not None:
             return None
-
-        from . import _sin_pair_reuse as _pr
 
         eta = self._fill_eta(k, eta)
         N = geom["n_segs"]
@@ -6909,6 +6926,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         else:
             ind1 = ind2 = None
             src_type, obs_type = _pr.segment_types(seg_h, a_seg)
+        # The observer side of every block: every segment, or the rows this
+        # fill fills, in the plans' own (row-compact) numbering. `glob(m)` is
+        # a plan row's segment, for what reads the band path by its rows.
+        if obs_rows is None:
+            ob_c, ob_t, ob_a, ob_type = seg_c, seg_t, a_seg, obs_type
+
+            def glob(m):
+                return int(m)
+
+        else:
+            ob_c = np.ascontiguousarray(seg_c[obs_rows])
+            ob_t = np.ascontiguousarray(seg_t[obs_rows])
+            ob_a = np.ascontiguousarray(a_seg[obs_rows])
+            ob_type = obs_type[obs_rows]
+
+            def glob(m):
+                return int(obs_rows[m])
 
         def kernel(obs_c, obs_t, src_c, src_t, h, a, ns=None):
             """The shipped kernel this fill would call, on given arrays;
@@ -6943,7 +6977,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         def canonical(src_c, src_t, ns, g_obs):
             # One observer row at the origin along +z (`_sin_pair_reuse.
             # canonical_sources`), each source its class representative's.
-            return kernel(origin, axis, src_c, src_t, seg_h[ns], a_seg[g_obs], ns)
+            return kernel(origin, axis, src_c, src_t, seg_h[ns], ob_a[g_obs], ns)
 
         # The census transient: ~20 float64/int64 per pair in a band.
         census_rows = _schedule.mb_rows(self.swept_mem_mb, 20 * 8 * N)
@@ -6958,6 +6992,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 for x in self._image_source_centers_tangents(geom)
             )
             g_src_type, g_obs_type = _pr.ground_segment_types(src_type, obs_type, seg_t)
+            if obs_rows is not None:
+                g_obs_type = g_obs_type[obs_rows]
 
         def sources(block):
             if block in ("direct", "reflected"):
@@ -6986,6 +7022,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 src_a.tobytes(),
                 None if ind1 is None else (ind1.tobytes(), ind2.tobytes()),
                 gz if block == "reflected" else None,
+                None if obs_rows is None else obs_rows.tobytes(),
             )
             held = self._sin_reuse_plans.get(block)
             if held is not None and held[0] == key:
@@ -6999,13 +7036,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
                     def build():
                         return _pr.build_ground_plan(
-                            seg_c,
-                            seg_t,
+                            ob_c,
+                            ob_t,
                             src_c,
                             src_t,
                             gz,
                             seg_h,
-                            a_seg,
+                            ob_a,
                             g_src_type,
                             g_obs_type,
                             census_rows,
@@ -7015,14 +7052,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
                     def build():
                         return _pr.build_plan(
-                            seg_c,
-                            seg_t,
+                            ob_c,
+                            ob_t,
                             src_c,
                             src_t,
                             seg_h,
-                            a_seg,
+                            ob_a,
                             src_type,
-                            obs_type,
+                            ob_type,
                             census_rows,
                         )
 
@@ -7039,12 +7076,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
             def rows_fn(m0, m1, ns):
                 return kernel(
-                    seg_c[m0:m1],
-                    seg_t[m0:m1],
+                    ob_c[m0:m1],
+                    ob_t[m0:m1],
                     src_c[ns],
                     src_t[ns],
                     seg_h[ns],
-                    a_seg[m0],
+                    ob_a[m0],
                     ns,
                 )
 
@@ -7055,7 +7092,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             source segments ns, every value the band's own: the same
             evaluators on the same pair, each output element seeing no other
             (the kernels and the remainder walk pairs independently)."""
-            obs_c, obs_t = seg_c[m0:m1], seg_t[m0:m1]
+            obs_c, obs_t = ob_c[m0:m1], ob_t[m0:m1]
             if fg.mode == "fold":
                 cos_th, px, py = _ground_refl.specular_ray_tables(
                     obs_c, gz, src_centers=seg_c[ns]
@@ -7073,7 +7110,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     img_c[ns],
                     img_t[ns],
                     seg_h[ns],
-                    float(a_seg[m0]),
+                    float(ob_a[m0]),
                     float(k),
                     float(eta),
                     gx,
@@ -7095,7 +7132,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
             # Sommerfeld: `c2 Φ_img - S`, in the band's order of operations.
             phis = list(
-                kernel(obs_c, obs_t, img_c[ns], img_t[ns], seg_h[ns], a_seg[m0], ns)
+                kernel(obs_c, obs_t, img_c[ns], img_t[ns], seg_h[ns], ob_a[m0], ns)
             )
             prepared = fg.remainder(cos_shape)._prepared
             q = prepared["q"]
@@ -7153,13 +7190,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # `reflected_rows`: the sample then also catches a divergence
                 # between the two evaluators (one whole row per sampled row).
                 def direct(m, ns):
-                    rows_m = (m, m + 1)
+                    g = glob(m)  # the band path reads segment rows
+                    rows_m = (g, g + 1)
                     if fg.mode == "compose":
                         phis = list(
                             fg.image_field(obs_rows=rows_m, cos_shape=cos_shape)
                         )
                         S = fg.remainder(cos_shape).replay(
-                            obs_centers=seg_c[m : m + 1], obs_tangents=seg_t[m : m + 1]
+                            obs_centers=seg_c[g : g + 1], obs_tangents=seg_t[g : g + 1]
                         )
                         c2 = fg.image_coefficient
                         for Pi, Si in zip(phis, S):
