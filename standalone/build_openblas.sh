@@ -18,10 +18,12 @@
 # commit, and blas.h sends each call to the library the launcher's call goes
 # to: MWX() SciPy's, MWN() numpy's.
 #
-#   numpy 2.5.4: scipy-openblas64 0.3.34.106.0 (numpy's
-#     requirements/ci_requirements.txt), reports "OpenBLAS 0.3.34.106.0
+#   numpy 2.5.5: scipy-openblas64 0.3.34.237.2 (numpy's
+#     requirements/ci_requirements.txt), reports "OpenBLAS 0.3.34.237.2
 #     USE64BITINT DYNAMIC_ARCH NO_AFFINITY"; built by MacPython/openblas-libs
-#     at tag v0.3.34.106.0 from OpenBLAS v0.3.34-106-g446c436e.
+#     from OpenBLAS v0.3.34-237-g1ad90fb1 (the commit its v0.3.34.237.0 and
+#     .1 tags record; .2 is a wheel re-release with no tag of its own).
+#     numpy 2.5.4 was 0.3.34.106.0, from v0.3.34-106-g446c436e.
 #   SciPy 1.18.1: scipy-openblas32 0.3.31.22.0 (SciPy's
 #     requirements/openblas.txt), reports "OpenBLAS 0.3.31.dev DYNAMIC_ARCH
 #     NO_AFFINITY"; built at tag v0.3.31.22.0 from v0.3.31-22-g5ffbf38b4.
@@ -37,7 +39,7 @@
 # NUM_THREADS=64, DYNAMIC_ARCH. Both LP64 (blas.h's interface): numpy's
 # library is ILP64 (INTERFACE64=1), which widens the integers of the entry
 # points and changes no kernel; the LP64 build of numpy's tag is
-# scipy-openblas32 0.3.34.106.0, which numpy pins beside the 64-bit one.
+# scipy-openblas32 0.3.34.237.2, which numpy pins beside the 64-bit one.
 #
 # NOFORTRAN=1 (OpenBLAS's C translation of the reference LAPACK, where the
 # wheels compile the Fortran) and NO_SHARED=1 are build-environment choices
@@ -65,9 +67,9 @@ set -euo pipefail
 W=$(realpath -m "${1:?usage: build_openblas.sh WORKDIR}")
 
 # numpy's: the products (MWN)
-NUMPY_OPENBLAS_VERSION=0.3.34.106.0
-NUMPY_OPENBLAS_REPORTS=0.3.34.106.0
-NUMPY_OPENBLAS_COMMIT=446c436e10450c348169808f1a6b3fae0925c9f7
+NUMPY_OPENBLAS_VERSION=0.3.34.237.2
+NUMPY_OPENBLAS_REPORTS=0.3.34.237.2
+NUMPY_OPENBLAS_COMMIT=1ad90fb122f1e5d06646c40d807c7d48f38f7d9b
 # SciPy's: the LAPACK (MWX). Its wheel stamps no version: it reports 0.3.31.dev.
 SCIPY_OPENBLAS_VERSION=0.3.31.22.0
 SCIPY_OPENBLAS_REPORTS=0.3.31.dev
