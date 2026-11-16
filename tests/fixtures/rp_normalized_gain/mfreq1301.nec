@@ -1,0 +1,10 @@
+CM RP normalized-gain probe mfreq1301
+CM three frequencies
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 3 0 0 27 1.5
+RP 0 4 3 1301 0 0 30 45 0 0
+XQ
+EN

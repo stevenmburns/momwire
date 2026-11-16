@@ -1,0 +1,11 @@
+CM RP normalized-gain probe somm1201
+CM near-vertical dipole over 13/0.005 Sommerfeld ground
+CE
+GW 1 21 0.1 0 1.0 -0.1 0 6.0 0.002
+GE 1
+GN 0 0 0 0 13 0.005
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 10 3 1201 0 0 10 45 0 0
+XQ
+EN

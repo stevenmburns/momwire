@@ -1,0 +1,170 @@
+1
+ x13
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          RP normalized-gain probe free1512                                            
+                          tilted dipole, free space, 40 ohm load                                       
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+ Model definition commands:
+
+ GW    1    21 -8.00000E-01  3.00000E-01 -2.35000E+00  8.00000E-01 -3.00000E-01  2.35000E+00  1.00000E-03
+ GE    0    0
+
+ Number of nodes :    22
+ Number of wire elements :    21
+ Number of patch elements:     0
+ Number unknowns:    20
+
+
+
+
+ ***** INPUT LINE  1  LD   0    1    6    0  4.00000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  EX   0    1   11    0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  FR   0    1    0    0  2.85000E+01  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  4  RP   0    7    4 1512  0.00000E+00  0.00000E+00  3.00000E+01  4.50000E+01  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 2.8500E+01 MHZ
+                                    WAVELENGTH= 1.0519E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+                                            FREE SPACE
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+
+       LOCATION          RESISTANCE   INDUCTANCE  CAPACITANCE       IMPEDANCE (OHMS)     CONDUCTIVITY    TYPE
+    ITAG FROM THRU          OHMS        HENRYS       FARADS        REAL      IMAGINARY    MHOS/METER
+
+       1    6    6      4.0000E+01                                                                     SERIES 
+ALLOCATE CM:            400
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.000 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+   1    11 1  1.0000E+00  0.0000E+00  9.6292E-03  3.5565E-03  9.1384E+01 -3.3752E+01  9.6292E-03  3.5565E-03  4.8146E-03
+
+
+
+                                       - - - Wire Currents - - -
+
+                             Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  Elem.  Tag            Coord. of seg. center          Seg.            - - - Current (Amps) - - -
+   No.   No.     X            Y            Z           Length       Real         Imag.        Mag.         Phase
+      1    1 -7.24292E-02  2.71610E-02 -2.12761E-01  2.26387E-02  8.28218E-04  1.89255E-04  8.49566E-04   12.8716
+      2    1 -6.51863E-02  2.44449E-02 -1.91485E-01  2.26387E-02  2.38998E-03  5.54023E-04  2.45335E-03   13.0513
+      3    1 -5.79434E-02  2.17288E-02 -1.70209E-01  2.26387E-02  3.79897E-03  8.98979E-04  3.90389E-03   13.3134
+      4    1 -5.07005E-02  1.90127E-02 -1.48933E-01  2.26387E-02  5.08972E-03  1.23077E-03  5.23642E-03   13.5941
+      5    1 -4.34575E-02  1.62966E-02 -1.27657E-01  2.26387E-02  6.25323E-03  1.54577E-03  6.44145E-03   13.8849
+      6    1 -3.62146E-02  1.35805E-02 -1.06380E-01  2.26387E-02  7.27560E-03  1.83529E-03  7.50351E-03   14.1577
+      7    1 -2.89717E-02  1.08644E-02 -8.51044E-02  2.26387E-02  8.12324E-03  2.16607E-03  8.40707E-03   14.9306
+      8    1 -2.17288E-02  8.14829E-03 -6.38283E-02  2.26387E-02  8.78225E-03  2.53355E-03  9.14040E-03   16.0921
+      9    1 -1.44858E-02  5.43219E-03 -4.25522E-02  2.26387E-02  9.25941E-03  2.86253E-03  9.69179E-03   17.1789
+     10    1 -7.24292E-03  2.71610E-03 -2.12761E-02  2.26387E-02  9.54520E-03  3.15587E-03  1.00534E-02   18.2951
+     11    1 -1.31927E-17 -4.61744E-18  4.08973E-17  2.26387E-02  9.63430E-03  3.42516E-03  1.02250E-02   19.5712
+     12    1  7.24292E-03 -2.71610E-03  2.12761E-02  2.26387E-02  9.52501E-03  3.43840E-03  1.01266E-02   19.8489
+     13    1  1.44858E-02 -5.43219E-03  4.25522E-02  2.26387E-02  9.21919E-03  3.19556E-03  9.75730E-03   19.1174
+     14    1  2.17288E-02 -8.14829E-03  6.38283E-02  2.26387E-02  8.72217E-03  2.92871E-03  9.20073E-03   18.5609
+     15    1  2.89717E-02 -1.08644E-02  8.51044E-02  2.26387E-02  8.04257E-03  2.62685E-03  8.46069E-03   18.0880
+     16    1  3.62146E-02 -1.35805E-02  1.06380E-01  2.26387E-02  7.19194E-03  2.29131E-03  7.54812E-03   17.6716
+     17    1  4.34575E-02 -1.62966E-02  1.27657E-01  2.26387E-02  6.18424E-03  1.92583E-03  6.47716E-03   17.2970
+     18    1  5.07005E-02 -1.90127E-02  1.48933E-01  2.26387E-02  5.03485E-03  1.53501E-03  5.26365E-03   16.9553
+     19    1  5.79434E-02 -2.17288E-02  1.70209E-01  2.26387E-02  3.75872E-03  1.12345E-03  3.92302E-03   16.6409
+     20    1  6.51863E-02 -2.44449E-02  1.91485E-01  2.26387E-02  2.36499E-03  6.94037E-04  2.46473E-03   16.3550
+     21    1  7.24292E-02 -2.71610E-02  2.12761E-01  2.26387E-02  8.19633E-04  2.37528E-04  8.53357E-04   16.1615
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 4.8146E-03 WATTS
+                                           RADIATED POWER= 3.5357E-03 WATTS
+                                           WIRE LOSS     = 1.2790E-03 WATTS
+                                           EFFICIENCY    =  73.44 PERCENT
+
+
+
+                                                - - - RADIATION PATTERNS - - -
+
+  - - ANGLES - -       - DIRECTIVE GAINS -       - - - POLARIZATION - - -    - - - E(THETA) - - -    - - - E(PHI) - - -
+  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE 
+ DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.               VOLTS     DEGREES       VOLTS     DEGREES
+
+
+   AVERAGE POWER GAIN= 7.38065E-01       SOLID ANGLE USED IN AVERAGING=( 1.5000)*PI STERADIANS.
+
+   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS = 3.55350E-03 WATTS
+
+
+
+
+                                     - - - - NORMALIZED GAIN - - - -
+
+                                           TOTAL GAIN
+                                      NORMALIZATION FACTOR =     2.05 DB
+
+    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN           - - ANGLES - -      GAIN
+    THETA     PHI        DB            THETA     PHI        DB            THETA     PHI        DB
+   DEGREES  DEGREES                   DEGREES  DEGREES                   DEGREES  DEGREES
+      0.00     0.00    -11.09           90.00    45.00     -0.07          150.00    90.00     -7.54
+     30.00     0.00    -14.77          120.00    45.00     -0.67          180.00    90.00    -10.83
+     60.00     0.00     -4.64          150.00    45.00     -4.37            0.00   135.00    -11.09
+     90.00     0.00     -0.63          180.00    45.00    -10.83           30.00   135.00     -3.30
+    120.00     0.00     -0.14            0.00    90.00    -11.09           60.00   135.00     -0.20
+    150.00     0.00     -3.07           30.00    90.00     -4.76           90.00   135.00     -0.51
+    180.00     0.00    -10.83           60.00    90.00     -0.85          120.00   135.00     -4.30
+      0.00    45.00    -11.09           90.00    90.00      0.00          150.00   135.00    -13.81
+     30.00    45.00     -8.18          120.00    90.00     -2.21          180.00   135.00    -10.83
+     60.00    45.00     -2.55
+
+
+
+
+ ***** INPUT LINE  5  XQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  6  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.001

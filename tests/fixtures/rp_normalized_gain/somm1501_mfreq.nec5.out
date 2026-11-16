@@ -1,0 +1,301 @@
+1
+ x13
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          RP normalized-gain probe somm1501_mfreq                                      
+                          two frequencies over ground                                                  
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+ Model definition commands:
+
+ GW    1    21  1.00000E-01  0.00000E+00  1.00000E+00 -1.00000E-01  0.00000E+00  6.00000E+00  2.00000E-03
+ GE    1    0
+
+   GROUND PLANE SPECIFIED.
+
+   WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE INTERPOLATED TO IMAGE IN GROUND PLANE.
+
+
+ Number of nodes :    22
+ Number of wire elements :    21
+ Number of patch elements:     0
+ Number unknowns:    20
+
+
+
+
+ ***** INPUT LINE  1  GN   0    0    0    0  1.30000E+01  5.00000E-03  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  EX   0    1   11    0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  FR   0    2    0    0  2.70000E+01  2.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  4  RP   0    4    2 1501  0.00000E+00  0.00000E+00  3.00000E+01  9.00000E+01  0.00000E+00  0.00000E+00
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 2.7000E+01 MHZ
+                                    WAVELENGTH= 1.1104E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+
+ GMPINO: Unable to open file SOMMPD.NEX                              
+ Will compute Sommerfeld-ground tables
+                                        FINITE GROUND.  SOMMERFELD SOLUTION
+                                        RELATIVE DIELECTRIC CONST.= 13.000
+                                        CONDUCTIVITY= 5.000E-03 MHOS/METER
+                                        COMPLEX DIELECTRIC CONSTANT= 1.30000E+01-3.32889E+00
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+                                   THIS STRUCTURE IS NOT LOADED
+ALLOCATE CM:            400
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.125 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+   1    11 1  1.0000E+00  0.0000E+00  5.1113E-03  7.4998E-03  6.2051E+01 -9.1048E+01  5.1113E-03  7.4998E-03  2.5556E-03
+
+
+
+                                       - - - Wire Currents - - -
+
+                             Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  Elem.  Tag            Coord. of seg. center          Seg.            - - - Current (Amps) - - -
+   No.   No.     X            Y            Z           Length       Real         Imag.        Mag.         Phase
+      1    1  8.57715E-03  0.00000E+00  1.00781E-01  2.14600E-02  4.61469E-04  5.54162E-04  7.21144E-04   50.2148
+      2    1  7.71943E-03  0.00000E+00  1.22224E-01  2.14600E-02  1.31951E-03  1.60013E-03  2.07401E-03   50.4899
+      3    1  6.86172E-03  0.00000E+00  1.43667E-01  2.14600E-02  2.07506E-03  2.55215E-03  3.28928E-03   50.8867
+      4    1  6.00400E-03  0.00000E+00  1.65110E-01  2.14600E-02  2.75643E-03  3.44124E-03  4.40909E-03   51.3053
+      5    1  5.14629E-03  0.00000E+00  1.86553E-01  2.14600E-02  3.36238E-03  4.26392E-03  5.43016E-03   51.7419
+      6    1  4.28857E-03  0.00000E+00  2.07996E-01  2.14600E-02  3.88758E-03  5.01194E-03  6.34294E-03   52.2005
+      7    1  3.43086E-03  0.00000E+00  2.29439E-01  2.14600E-02  4.32597E-03  5.67616E-03  7.13672E-03   52.6879
+      8    1  2.57314E-03  0.00000E+00  2.50882E-01  2.14600E-02  4.67188E-03  6.24817E-03  7.80168E-03   53.2138
+      9    1  1.71543E-03  0.00000E+00  2.72324E-01  2.14600E-02  4.92062E-03  6.72138E-03  8.33003E-03   53.7927
+     10    1  8.57715E-04  0.00000E+00  2.93767E-01  2.14600E-02  5.06876E-03  7.09293E-03  8.71791E-03   54.4496
+     11    1  1.56229E-18  0.00000E+00  3.15210E-01  2.14600E-02  5.11430E-03  7.37652E-03  8.97603E-03   55.2656
+     12    1 -8.57715E-04  0.00000E+00  3.36653E-01  2.14600E-02  5.05675E-03  7.31806E-03  8.89521E-03   55.3557
+     13    1 -1.71543E-03  0.00000E+00  3.58096E-01  2.14600E-02  4.89721E-03  6.91821E-03  8.47610E-03   54.7064
+     14    1 -2.57314E-03  0.00000E+00  3.79539E-01  2.14600E-02  4.63828E-03  6.43236E-03  7.93025E-03   54.2052
+     15    1 -3.43086E-03  0.00000E+00  4.00982E-01  2.14600E-02  4.28403E-03  5.84801E-03  7.24928E-03   53.7749
+     16    1 -4.28857E-03  0.00000E+00  4.22424E-01  2.14600E-02  3.83978E-03  5.16904E-03  6.43917E-03   53.3935
+     17    1 -5.14629E-03  0.00000E+00  4.43867E-01  2.14600E-02  3.31186E-03  4.40278E-03  5.50934E-03   53.0488
+     18    1 -6.00400E-03  0.00000E+00  4.65310E-01  2.14600E-02  2.70705E-03  3.55778E-03  4.47056E-03   52.7331
+     19    1 -6.86172E-03  0.00000E+00  4.86753E-01  2.14600E-02  2.03152E-03  2.64199E-03  3.33274E-03   52.4421
+     20    1 -7.71943E-03  0.00000E+00  5.08196E-01  2.14600E-02  1.28758E-03  1.65853E-03  2.09966E-03   52.1766
+     21    1 -8.57715E-03  0.00000E+00  5.29639E-01  2.14600E-02  4.49201E-04  5.74893E-04  7.29578E-04   51.9972
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 2.5556E-03 WATTS
+                                           RADIATED POWER= 2.5556E-03 WATTS
+                                           WIRE LOSS     = 0.0000E+00 WATTS
+                                           EFFICIENCY    = 100.00 PERCENT
+
+
+
+                                                - - - RADIATION PATTERNS - - -
+
+  - - ANGLES - -          - POWER GAINS -        - - - POLARIZATION - - -    - - - E(THETA) - - -    - - - E(PHI) - - -
+  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE 
+ DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.               VOLTS     DEGREES       VOLTS     DEGREES
+    0.00     0.00     -24.85 -999.99  -24.85    0.00000    -0.00  LINEAR    2.23899E-02  -121.10    0.00000E+00     0.00
+   30.00     0.00      -9.40 -999.99   -9.40    0.00000    -0.00  LINEAR    1.32599E-01  -101.45    0.00000E+00     0.00
+   60.00     0.00      -0.89 -999.99   -0.89    0.00000    -0.00  LINEAR    3.53246E-01  -176.06    0.00000E+00     0.00
+   90.00     0.00    -999.99 -999.99 -999.99    0.00000     0.00            1.04592E-13   165.42    0.00000E+00     0.00
+    0.00    90.00    -999.99  -24.85  -24.85    0.00000   -90.00  LINEAR    5.92986E-16  -121.10    2.23899E-02    58.90
+   30.00    90.00     -10.91  -23.47  -10.68    0.11065   -11.76  LEFT      1.11426E-01   -96.48    2.62638E-02    54.21
+   60.00    90.00      -1.20  -23.16   -1.17    0.05597    -3.25  RIGHT     3.40891E-01  -177.19    2.71955E-02    47.55
+   90.00    90.00    -999.99 -999.99 -999.99    0.00000     0.00            1.03124E-13   165.73    2.06806E-15    45.65
+
+
+   AVERAGE POWER GAIN= 3.79615E-01       SOLID ANGLE USED IN AVERAGING=( 0.5000)*PI STERADIANS.
+
+   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS = 9.70155E-04 WATTS
+
+
+
+
+                                     - - - - NORMALIZED GAIN - - - -
+
+                                           TOTAL GAIN
+                                      NORMALIZATION FACTOR =    -0.89 DB
+
+    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN           - - ANGLES - -      GAIN
+    THETA     PHI        DB            THETA     PHI        DB            THETA     PHI        DB
+   DEGREES  DEGREES                   DEGREES  DEGREES                   DEGREES  DEGREES
+      0.00     0.00    -23.96           90.00     0.00   -999.10           60.00    90.00     -0.28
+     30.00     0.00     -8.51            0.00    90.00    -23.96           90.00    90.00   -999.10
+     60.00     0.00      0.00           30.00    90.00     -9.79
+
+
+
+
+                                 - - - - - - FREQUENCY - - - - - -
+
+                                    FREQUENCY= 2.9000E+01 MHZ
+                                    WAVELENGTH= 1.0338E+01 METERS
+
+
+
+                                  - - - ANTENNA ENVIRONMENT - - -
+
+
+Sommerfeld integral tables written in previous run:
+Potentials: 11 12 13 14 15
+E and H:
+
+ GMPINO: Unable to open file SOMMPD1.NEX                             
+ Will compute Sommerfeld-ground tables
+                                        FINITE GROUND.  SOMMERFELD SOLUTION
+                                        RELATIVE DIELECTRIC CONST.= 13.000
+                                        CONDUCTIVITY= 5.000E-03 MHOS/METER
+                                        COMPLEX DIELECTRIC CONSTANT= 1.30000E+01-3.09931E+00
+
+
+
+                               - - - STRUCTURE IMPEDANCE LOADING - - -
+
+                                   THIS STRUCTURE IS NOT LOADED
+
+
+
+                                - - - MATRIX TIMING - - -
+
+                        FILL=    0.126 SEC.,  FACTOR=    0.000 SEC.
+
+
+
+                                          - - - ANTENNA INPUT PARAMETERS - - -
+
+   TAG   SEG.    VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)      POWER
+   NO.   NO.    REAL        IMAG.       REAL        IMAG.       REAL        IMAG.       REAL        IMAG.     (WATTS)
+   1    11 1  1.0000E+00  0.0000E+00  1.3178E-02  1.4828E-03  7.4935E+01 -8.4319E+00  1.3178E-02  1.4828E-03  6.5890E-03
+
+
+
+                                       - - - Wire Currents - - -
+
+                             Lengths normalized by wavelength (or 2.*pi/CABS(k))
+
+  Elem.  Tag            Coord. of seg. center          Seg.            - - - Current (Amps) - - -
+   No.   No.     X            Y            Z           Length       Real         Imag.        Mag.         Phase
+      1    1  9.21249E-03  0.00000E+00  1.08247E-01  2.30496E-02  1.14037E-03 -1.84398E-06  1.14037E-03   -0.0926
+      2    1  8.29124E-03  0.00000E+00  1.31278E-01  2.30496E-02  3.27696E-03  1.22219E-05  3.27699E-03    0.2137
+      3    1  7.36999E-03  0.00000E+00  1.54309E-01  2.30496E-02  5.18744E-03  5.94701E-05  5.18778E-03    0.6568
+      4    1  6.44874E-03  0.00000E+00  1.77340E-01  2.30496E-02  6.93269E-03  1.36377E-04  6.93403E-03    1.1270
+      5    1  5.52749E-03  0.00000E+00  2.00372E-01  2.30496E-02  8.50241E-03  2.40617E-04  8.50581E-03    1.6210
+      6    1  4.60625E-03  0.00000E+00  2.23403E-01  2.30496E-02  9.87690E-03  3.69903E-04  9.88382E-03    2.1448
+      7    1  3.68500E-03  0.00000E+00  2.46434E-01  2.30496E-02  1.10353E-02  5.21921E-04  1.10476E-02    2.7078
+      8    1  2.76375E-03  0.00000E+00  2.69465E-01  2.30496E-02  1.19584E-02  6.94499E-04  1.19785E-02    3.3238
+      9    1  1.84250E-03  0.00000E+00  2.92497E-01  2.30496E-02  1.26303E-02  8.86131E-04  1.26614E-02    4.0132
+     10    1  9.21249E-04  0.00000E+00  3.15528E-01  2.30496E-02  1.30391E-02  1.09765E-03  1.30852E-02    4.8119
+     11    1  1.67802E-18  0.00000E+00  3.38559E-01  2.30496E-02  1.31772E-02  1.34577E-03  1.32458E-02    5.8313
+     12    1 -9.21249E-04  0.00000E+00  3.61590E-01  2.30496E-02  1.30422E-02  1.35772E-03  1.31127E-02    5.9432
+     13    1 -1.84250E-03  0.00000E+00  3.84621E-01  2.30496E-02  1.26363E-02  1.13277E-03  1.26869E-02    5.1225
+     14    1 -2.76375E-03  0.00000E+00  4.07653E-01  2.30496E-02  1.19665E-02  9.42273E-04  1.20036E-02    4.5023
+     15    1 -3.68500E-03  0.00000E+00  4.30684E-01  2.30496E-02  1.10447E-02  7.68117E-04  1.10714E-02    3.9783
+     16    1 -4.60625E-03  0.00000E+00  4.53715E-01  2.30496E-02  9.88660E-03  6.08089E-04  9.90529E-03    3.5196
+     17    1 -5.52749E-03  0.00000E+00  4.76746E-01  2.30496E-02  8.51129E-03  4.62350E-04  8.52384E-03    3.1094
+     18    1 -6.44874E-03  0.00000E+00  4.99778E-01  2.30496E-02  6.93978E-03  3.31741E-04  6.94770E-03    2.7368
+     19    1 -7.36999E-03  0.00000E+00  5.22809E-01  2.30496E-02  5.19207E-03  2.17207E-04  5.19661E-03    2.3955
+     20    1 -8.29124E-03  0.00000E+00  5.45840E-01  2.30496E-02  3.27903E-03  1.19426E-04  3.28121E-03    2.0858
+     21    1 -9.21249E-03  0.00000E+00  5.68871E-01  2.30496E-02  1.14080E-03  3.73894E-05  1.14141E-03    1.8772
+
+
+
+                                        - - - POWER BUDGET - - -
+
+                                           INPUT POWER   = 6.5890E-03 WATTS
+                                           RADIATED POWER= 6.5890E-03 WATTS
+                                           WIRE LOSS     = 0.0000E+00 WATTS
+                                           EFFICIENCY    = 100.00 PERCENT
+
+
+
+                                                - - - RADIATION PATTERNS - - -
+
+  - - ANGLES - -          - POWER GAINS -        - - - POLARIZATION - - -    - - - E(THETA) - - -    - - - E(PHI) - - -
+  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE 
+ DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.               VOLTS     DEGREES       VOLTS     DEGREES
+    0.00     0.00     -25.63 -999.99  -25.63    0.00000    -0.00  LINEAR    3.28813E-02  -167.96    0.00000E+00     0.00
+   30.00     0.00      -8.32 -999.99   -8.32    0.00000    -0.00  LINEAR    2.41307E-01  -137.62    0.00000E+00     0.00
+   60.00     0.00      -1.14 -999.99   -1.14    0.00000    -0.00  LINEAR    5.51356E-01   139.29    0.00000E+00     0.00
+   90.00     0.00    -999.99 -999.99 -999.99    0.00000     0.00            1.73908E-13   117.85    0.00000E+00     0.00
+    0.00    90.00    -999.99  -25.63  -25.63    0.00000   -90.00  LINEAR    8.70847E-16  -167.96    3.28813E-02    12.04
+   30.00    90.00      -9.44  -23.76   -9.29    0.12596    -8.27  LEFT      2.11910E-01  -131.79    4.07504E-02     6.25
+   60.00    90.00      -1.49  -22.71   -1.46    0.05607    -3.80  RIGHT     5.29459E-01   138.13    4.60102E-02    -1.48
+   90.00    90.00    -999.99 -999.99 -999.99    0.00000     0.00            1.71826E-13   118.17    3.62597E-15    -3.69
+
+
+   AVERAGE POWER GAIN= 3.67129E-01       SOLID ANGLE USED IN AVERAGING=( 0.5000)*PI STERADIANS.
+
+   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS = 2.41902E-03 WATTS
+
+
+
+
+                                     - - - - NORMALIZED GAIN - - - -
+
+                                           TOTAL GAIN
+                                      NORMALIZATION FACTOR =    -1.14 DB
+
+    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN           - - ANGLES - -      GAIN
+    THETA     PHI        DB            THETA     PHI        DB            THETA     PHI        DB
+   DEGREES  DEGREES                   DEGREES  DEGREES                   DEGREES  DEGREES
+      0.00     0.00    -24.49           90.00     0.00   -998.85           60.00    90.00     -0.32
+     30.00     0.00     -7.18            0.00    90.00    -24.49           90.00    90.00   -998.85
+     60.00     0.00      0.00           30.00    90.00     -8.15
+
+
+
+
+ ***** INPUT LINE  5  XQ   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  6  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+Sommerfeld integral tables written in previous run:
+Potentials: 11 12 13 14 15
+E and H:
+
+ RUN TIME =     0.253
