@@ -458,7 +458,10 @@ changes nothing you can see.
   name.
 - **Requests**: impedance runs (`PQ` / `XQ`; `PT -1`, which 4nec2's ItsHF
   decks write, leaves out the Wire Currents table and nothing else),
-  far-field patterns (`RP`, including the range form SimNEC writes),
+  far-field patterns (`RP`, including the range form SimNEC writes,
+  and the NORMALIZED GAIN table an XNDA digit N of 1 to 5 asks for, as in
+  `RP … 1500`: major axis, minor axis, vertical, horizontal or total
+  gain, normalized to the table's peak or to the card's own factor),
   and near fields (`NE` / `NH`) over **all four ground cards** — free space,
   perfect ground, the Sommerfeld finite ground, and the MININEC-type `GD`
   (whose near field the engine solves in the medium, and so does momwire).
