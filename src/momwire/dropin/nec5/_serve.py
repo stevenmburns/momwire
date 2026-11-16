@@ -4533,6 +4533,11 @@ def _pattern(
     ranged = {"range_m": range_m, "range_phase_deg": range_phase_deg} if range_m else {}
     if directive:
         ranged["directive"] = True
+    kind = request.xnda // 100 % 10
+    if kind:
+        ranged.update(
+            _normalized_gains(kind, rows, g_v_rows + g_h_rows, request.gnor_db)
+        )
     if range_m and lower_k is not None:
         # Over a finite ground the range form adds the LOWER medium's
         # exp(-j k_m R)/R (momwire#1237, captured over GN 0, GN 2 and GD; a
@@ -4560,6 +4565,55 @@ def _pattern(
         solid_angle_pi=abs(solid) / math.pi,
         power_radiated_4pi=average * p_in,
     )
+
+
+def _normalized_gains(
+    kind: int, rows: tuple[PatternRow, ...], total: np.ndarray, gnor_db: float
+) -> dict:
+    """XNDA's N digit: the NORMALIZED GAIN table's cells, for
+    :class:`PatternBlock`.
+
+    Read off licensed x13 printouts of synthetic decks
+    (``tests/fixtures/rp_normalized_gain/``; the five N are the public NEC-2
+    user's manual's): each cell is the row's gain in dB, at the rows' own
+    ``-999.99`` floor, less the NORMALIZATION FACTOR, which is the RP card's
+    GNOR in dB when it is nonzero and otherwise the table's largest gain, so
+    the peak cell prints ``0.00`` and a cell a hair under it ``-0.00``. The
+    gains are the rows' (directive under D = 1, the factor then directive
+    too; zero below the horizon over ground), computed BEFORE A = 2 drops
+    the rows, which still prints the table.
+
+      1  major axis gain   the total over 1 + AR², AR the row's axial ratio
+      2  minor axis gain   the total times AR² over 1 + AR²
+      3  vertical gain     the VERT. column
+      4  horizontal gain   the HOR. column
+      5  total gain        the TOTAL column
+
+    The polarisation ellipse splits the total power gain between its axes
+    as AR² : 1. A LINEAR row (axial ratio printed 0) has no minor axis here,
+    so its minor-axis gain is the floor; x13 prints its own round-off there
+    instead (-164.43 dB on a tilted dipole), which no other solver's dust
+    reproduces, and on a linear antenna the whole N = 2 table is that dust.
+    """
+    if kind in (1, 2):
+        ar = np.array([row.axial_ratio for row in rows])
+        ar2 = ar * ar
+        share = 1.0 + ar2
+        gains = total.T.ravel()
+        gains = gains / share if kind == 1 else (gains * ar2) / share
+        db = _gain_db_grid(gains).tolist()
+    else:
+        field = {3: "vert_db", 4: "hor_db", 5: "total_db"}[kind]
+        db = [getattr(row, field) for row in rows]
+    factor = gnor_db if gnor_db != 0.0 else max(db)
+    return {
+        "normalized_kind": kind,
+        "normalization_db": factor,
+        "normalized": tuple(
+            (row.theta_deg, row.phi_deg, gain - factor)
+            for row, gain in zip(rows, db, strict=True)
+        ),
+    }
 
 
 def _near_field(

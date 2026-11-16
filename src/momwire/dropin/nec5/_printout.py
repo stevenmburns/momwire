@@ -723,6 +723,12 @@ class PatternBlock:
     # XNDA's D digit 1 (momwire#1503): the rows are DIRECTIVE gains, and the
     # first column line says so.
     directive: bool = False
+    # XNDA's N digit 1 to 5: the NORMALIZED GAIN table after the pattern,
+    # one (theta, phi, dB) cell a direction in the rows' order, each the
+    # chosen gain less :attr:`normalization_db`. 0 prints no table.
+    normalized_kind: int = 0
+    normalization_db: float = 0.0
+    normalized: tuple[tuple[float, float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1053,6 +1059,33 @@ _PATTERN_RANGE_UNITS = (
 )
 _PATTERN_RANGE_INDENT = " " * 54
 _SENSE_WIDTH = 6
+
+# The NORMALIZED GAIN table (XNDA's N digit), read off licensed x13
+# printouts (tests/fixtures/rp_normalized_gain/): four blank lines after the
+# pattern, this heading, the gain's name right-aligned to column 53, the
+# factor in dB, and three column groups whatever the cell count. The cells
+# fill the groups column by column, the first ``n % 3`` groups one cell
+# longer (28 cells print 10 / 9 / 9, 2701 print 901 / 900 / 900).
+_NORMALIZED_HEADING = " " * 37 + "- - - - NORMALIZED GAIN - - - -"
+_NORMALIZED_KINDS = {
+    1: "MAJOR AXIS GAIN",
+    2: "MINOR AXIS GAIN",
+    3: "VERTICAL GAIN",
+    4: "HORIZONTAL GAIN",
+    5: "TOTAL GAIN",
+}
+_NORMALIZED_COLUMNS: tuple[str, ...] = (
+    "    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN"
+    "           - - ANGLES - -      GAIN",
+    "    THETA     PHI        DB            THETA     PHI        DB"
+    "            THETA     PHI        DB",
+    "   DEGREES  DEGREES                   DEGREES  DEGREES"
+    "                   DEGREES  DEGREES",
+)
+_NORMALIZED_GROUPS = 3
+_NORMALIZED_LEAD = 4
+_NORMALIZED_CELL = "%10.2f%9.2f%10.2f"
+_NORMALIZED_SEPARATOR = " " * 6
 
 _RUN_TIME_LABEL = " RUN TIME ="
 
@@ -1788,7 +1821,47 @@ def _pattern(block: PatternBlock) -> list[str]:
             + _e(block.power_radiated_4pi, 12, 5)
             + " WATTS",
         ]
+    if block.normalized_kind:
+        lines += _blank(_NORMALIZED_LEAD) + _normalized(block)
     return lines
+
+
+def _normalized(block: PatternBlock) -> list[str]:
+    """The NORMALIZED GAIN table: heading, the gain's name, the factor,
+    the three column groups and the cells, column by column."""
+    cells = block.normalized
+    base, extra = divmod(len(cells), _NORMALIZED_GROUPS)
+    starts, lengths = [], []
+    start = 0
+    for group in range(_NORMALIZED_GROUPS):
+        length = base + (group < extra)
+        starts.append(start)
+        lengths.append(length)
+        start += length
+    lines = [
+        _NORMALIZED_HEADING,
+        "",
+        _NORMALIZED_KINDS[block.normalized_kind].rjust(53),
+        " " * 38 + f"NORMALIZATION FACTOR ={block.normalization_db:9.2f} DB",
+        "",
+        *_NORMALIZED_COLUMNS,
+    ]
+    for line in range(lengths[0]):
+        lines.append(
+            _NORMALIZED_SEPARATOR.join(
+                _NORMALIZED_CELL % cells[starts[group] + line]
+                for group in range(_NORMALIZED_GROUPS)
+                if line < lengths[group]
+            )
+        )
+    return lines
+
+
+def _pattern_gap(block: PatternBlock) -> int:
+    """The blank run after one ``RP`` answer: five after the pattern, three
+    after a NORMALIZED GAIN table (captured: four blank lines then the next
+    card's echo, against six without the table)."""
+    return _SECTION_GAP if block.normalized_kind else _PATTERN_GAP
 
 
 def _run_sections(data: RunData, *, requests_only: bool = False) -> list[str]:
@@ -1805,7 +1878,7 @@ def _run_sections(data: RunData, *, requests_only: bool = False) -> list[str]:
             body += _blank(_SECTION_GAP)
         for block in data.patterns:
             body += _pattern(block)
-            body += _blank(_PATTERN_GAP)
+            body += _blank(_pattern_gap(block))
         return body
     if data.network_excitation:
         body += [_NETWORK_EXCITATION_HEADING, "", *_PORT_COLUMNS]
@@ -1829,7 +1902,7 @@ def _run_sections(data: RunData, *, requests_only: bool = False) -> list[str]:
         body += _blank(_SECTION_GAP)
     for block in data.patterns:
         body += _pattern(block)
-        body += _blank(_PATTERN_GAP)
+        body += _blank(_pattern_gap(block))
     return body
 
 
