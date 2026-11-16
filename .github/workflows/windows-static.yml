@@ -65,6 +65,8 @@ jobs:
           ld --version | head -1
           echo "libgomp: $(gcc -print-file-name=libgomp.a)"
           [ -f "$(gcc -print-file-name=libgomp.a)" ] || { echo "::error::no libgomp.a"; exit 1; }
+          # C99 printf (two-digit exponents), not msvcrt.dll's, for the printouts
+          echo "C++ stdio: $(echo | g++ -dM -E -x c++ -include cstdio - | grep __USE_MINGW_ANSI_STDIO || echo none)"
           echo "libwinpthread: $(gcc -print-file-name=libwinpthread.a)"
           echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt' | sort -u | tr '\n' ' ')"
       # build_openblas.sh's two archives, keyed on the script (it holds the
@@ -118,7 +120,7 @@ jobs:
                 -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
                 -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
                 -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON
-              cmake --build "build-$b-$v"
+              cmake --build "build-$b-$v" -- -k 0  # every failing TU at once
               cp "build-$b-$v/$target.exe" "dist/momwire-nec5-$b-$v.exe"
               strip "dist/momwire-nec5-$b-$v.exe"
             done
@@ -243,7 +245,7 @@ jobs:
               -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=fat \
               -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
               -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON
-            cmake --build "build-$b-fat"
+            cmake --build "build-$b-fat" -- -k 0
             cp "build-$b-fat/$target.exe" "dist-fat/$name.exe"
             strip "dist-fat/$name.exe"
           done
