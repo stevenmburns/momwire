@@ -1,6 +1,7 @@
 // razor-2p's crossing blocks in C++: see `_razor_crossing_core.h`. Every
 // step names the `_crossing_fill.py` / razor.py function it replays.
 #include "_razor_crossing_core.h"
+#include "_cpu_count.h"
 #include "_crossing_shared_inline.h"
 #include "_fma_inline.h"
 
@@ -771,10 +772,10 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
     }
 }
 
-int n_physical_threads() {
-    const unsigned n = std::thread::hardware_concurrency();
-    return n > 1 ? static_cast<int>(n / 2) : 1;
-}
+// The team cap: MOMWIRE_THREADS clamped to the CPUs the affinity mask
+// allows, else one per physical core in the mask (`_cpu_count.h`). The block's
+// values do not depend on it (`team`: disjoint outputs, serial order each).
+int n_physical_threads() { return mw::cpu::pool_threads(); }
 
 // The (end, line node) pairs `add_end_terms_kept(R, C)` asks tables of: a
 // bound on the fresh values it adds to the block's memo.

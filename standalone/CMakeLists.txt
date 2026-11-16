@@ -257,6 +257,7 @@ set(MW_CORE_SOURCES
   # kernel, the grid, and the remainder's projection and moments.
   ${MW_SRC}/_somm_kernel_core.cpp
   ${MW_SRC}/_somm_grid_core.cpp
+  ${MW_SRC}/_cpu_count_core.cpp  # the teams' CPU counts (the affinity mask)
   ${MW_SRC}/_somm_proj_core.cpp
   ${MW_SRC}/_somm_below_proj_core.cpp
   ${MW_SRC}/_somm_below_grid_core.cpp

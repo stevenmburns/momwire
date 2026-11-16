@@ -3,6 +3,7 @@
 // function it replays.
 #include "_bspline_crossing_core.h"
 
+#include "_cpu_count.h"
 #include "_crossing_shared_inline.h"
 #include "_crossing_split_inline.h"
 #include "_fma_inline.h"
@@ -83,10 +84,10 @@ struct XCtx {
     cd c1;
 };
 
-int physical_threads() {
-    const unsigned n = std::thread::hardware_concurrency();
-    return n > 1 ? static_cast<int>(n / 2) : 1;
-}
+// The team cap: MOMWIRE_THREADS clamped to the CPUs the affinity mask
+// allows, else one per physical core in the mask (`_cpu_count.h`). The block's
+// values do not depend on it (`team`: disjoint outputs, serial order each).
+int physical_threads() { return mw::cpu::pool_threads(); }
 
 // ---------------------------------------------------------------------------
 // The axes (`axis_data` with the B-spline basis's samples)

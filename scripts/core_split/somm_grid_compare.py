@@ -34,7 +34,7 @@ import numpy as np  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
-SOURCES = ("_somm_kernel_core.cpp", "_somm_grid_core.cpp")
+SOURCES = ("_somm_kernel_core.cpp", "_somm_grid_core.cpp", "_cpu_count_core.cpp")
 
 
 def bits_match(got: bytes, want: bytes) -> bool:
