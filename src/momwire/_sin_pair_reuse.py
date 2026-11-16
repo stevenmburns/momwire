@@ -48,6 +48,38 @@ geometry (the key holds no k), Φ per class once per frequency, then gathered
 into each observer band, so the reduction (`_reduce_phi_band`) is
 unchanged. Memory: an (N_obs, N_src) int32 class map, a quarter of Z, plus
 the class table; no Φ-sized copy.
+
+OVER A FINITE GROUND (momwire#1970) the image block is not a free-space
+field: the Sommerfeld fill subtracts C2 Φ_img - S, S the interpolated
+remainder, and the reflection-coefficient fill a Fresnel-weighted Φ_img.
+Both are invariant only under the isometries that keep the ground plane:
+horizontal translations, rotations about a vertical axis and reflections in
+vertical planes. A 3-D key would merge a tilted pair with a horizontal one
+and two congruent horizontal pairs at different heights, so the REFLECTED
+term takes its own classes (`build_ground_plan`) and the direct block keeps
+the 3-D ones, which are coarser for any structure not at one height.
+
+What the reflected term reads of a pair, observer m over source segment n
+with heights z above the plane: the image source is n mirrored, so the
+observer-to-image vector is (d, z_m + z_n), d the horizontal separation;
+every quadrature node of n is at z_n + t_nz s; the remainder grid, the
+specular ray and the image kernel see nothing else. So the heights enter
+ONLY as their sum, and the rest is the horizontal configuration of d and
+the two tangents' horizontal parts a = t_n,xy and b = t_m,xy, plus their
+vertical parts. The key holds the sum, |d|, d.a, d.b, a.b (the Gram matrix
+of d, a, b, with |a| and |b| fixed by t_nz, t_mz), and t_nz, t_mz in the
+segment types: complete invariants of the ground group, reflections
+included. The reflected term is smooth and even under each reflection, so
+it is a smooth function of those dot products (Schwarz) and a quantum in
+d.a or d.b moves it by a quantum's worth, also where d, a or b vanish. The
+quantum is the existing one, against the pair's distance to the IMAGE
+segment, the scale at which the reflected term varies.
+
+Each class's value is the shipped evaluator on its representative pair, in
+the ORIGINAL frame (`evaluate_pairs`): the reflected term needs no
+canonical placement, and the representatives come in runs of observer rows
+with many sources each, the evaluators' efficient shape. Over ground the
+fill holds two class maps, the direct and the reflected, as over PEC.
 """
 
 from __future__ import annotations
@@ -78,6 +110,14 @@ NEAR_LENGTHS = 4.0
 #: Observer rows per direct near-pair kernel call (their near sources'
 #: union is the call's source list).
 NEAR_ROWS = 16
+
+#: Observer rows per representative-pair call in the ground plan
+#: (`build_ground_plan`): a call evaluates its rows against the union of
+#: their representatives' sources. Measured on the ground skyloop at 2097
+#: segments (Skylake, 8 threads, momwire#1970), the calls' summed wall per
+#: frequency: 16 rows 0.20 s (1.9 pairs evaluated per class), 4 rows 0.18 s,
+#: 1 row 0.56 s (the Python around each call).
+REP_ROWS = 16
 
 _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 
@@ -121,7 +161,10 @@ def plan_nbytes(plan) -> int:
     return sum(
         v.nbytes for v in vars(plan).values() if isinstance(v, np.ndarray)
     ) + sum(
-        x.nbytes for blk in plan.near_blocks for x in blk if isinstance(x, np.ndarray)
+        x.nbytes
+        for blk in (*plan.near_blocks, *getattr(plan, "rep_blocks", ()))
+        for x in blk
+        if isinstance(x, np.ndarray)
     )
 
 
@@ -196,6 +239,30 @@ class Plan:
         return int(self.rep_src.shape[0])
 
 
+@dataclass
+class GroundPlan:
+    """The reflected term's classes (`build_ground_plan`): each class's
+    value is its representative pair's, evaluated where it stands."""
+
+    cls: np.ndarray  # (N_obs, N_src) int32 class of each pair
+    rep_flat: np.ndarray  # (n_cls,) int64 sorted flat index of each representative
+    rep_blocks: list  # `near_blocks` over rep_flat
+    near_flat: np.ndarray  # (n_near,) int64 sorted flat index m * N_src + n
+    near_blocks: list
+
+    @property
+    def n_near(self) -> int:
+        return int(self.near_flat.size)
+
+    @property
+    def n_pairs(self) -> int:
+        return int(self.cls.size)
+
+    @property
+    def n_classes(self) -> int:
+        return int(self.rep_flat.size)
+
+
 def _types(cols):
     """Dense ids for the distinct rows of a few per-segment columns."""
     stacked = np.stack([np.asarray(c) for c in cols], axis=1)
@@ -227,6 +294,21 @@ def segment_types(seg_h, a_obs, src_a=None, ind1=None, ind2=None):
     src_type = _types(cols)
     obs_type = _types([np.asarray(a_obs, dtype=np.float64).view(np.int64)])
     return src_type, obs_type
+
+
+def _quantise_unit(x):
+    """A direction cosine at KEY_BITS absolute bits."""
+    return np.rint(np.asarray(x, dtype=np.float64) * float(1 << KEY_BITS)).astype(
+        np.int64
+    )
+
+
+def ground_segment_types(src_type, obs_type, seg_t):
+    """`segment_types`' ids refined by each segment's vertical tangent
+    component, which the reflected term reads and a horizontal isometry
+    keeps (`build_ground_plan`)."""
+    tz = _quantise_unit(np.asarray(seg_t, dtype=np.float64)[:, 2])
+    return _types([src_type, tz]), _types([obs_type, tz])
 
 
 def pair_scalars(obs_c, obs_t, src_c, src_t):
@@ -488,7 +570,13 @@ def evaluate_near(plan, direct):
     """The near pairs' Φ, (n_near, 3): `direct(m0, m1, ns)` is the shipped
     kernel on observer rows m0:m1 against source segments `ns`, in the
     original frame."""
-    out = np.empty((plan.n_near, 3), dtype=np.complex128)
+    return evaluate_pairs(plan.n_near, plan.near_blocks, direct)
+
+
+def evaluate_pairs(n, blocks, direct):
+    """(n, 3) values of the pairs `blocks` (`near_blocks`) lay out, each
+    block one `direct(m0, m1, ns)` call on its rows and sources."""
+    out = np.empty((n, 3), dtype=np.complex128)
 
     def one(block):
         m0, m1, ns, r, c, p0, p1 = block
@@ -496,8 +584,139 @@ def evaluate_near(plan, direct):
         for sh in range(3):
             out[p0:p1, sh] = np.asarray(phis[sh])[r, c]
 
-    _run(one, plan.near_blocks)
+    _run(one, blocks)
     return out
+
+
+def ground_pair_scalars(obs_c, obs_t, src_c, src_t, ground_z):
+    """What the reflected term reads of every (observer, source) pair, (R, N)
+    each: the height sum hs, the horizontal separation |d|, d.a, d.b and
+    a.b (module docstring); then the observer's axial and radial
+    coordinates in the IMAGE segment's frame, the scale and the near test."""
+    dx = obs_c[:, None, 0] - src_c[None, :, 0]
+    dy = obs_c[:, None, 1] - src_c[None, :, 1]
+    hs = (obs_c[:, None, 2] - ground_z) + (src_c[None, :, 2] - ground_z)
+    ax, ay, az = src_t[None, :, 0], src_t[None, :, 1], src_t[None, :, 2]
+    bx, by = obs_t[:, None, 0], obs_t[:, None, 1]
+    dn = np.hypot(dx, dy)
+    da = dx * ax + dy * ay
+    db = dx * bx + dy * by
+    del dx, dy
+    ab = bx * ax + by * ay
+    # The image segment's tangent is (a, -t_nz) and the observer sits at
+    # (d, hs) from its centre. rho by difference is inaccurate only near the
+    # image axis within its span, a near pair.
+    zi = da - hs * az
+    rho = dn * dn
+    rho += hs * hs
+    rho -= zi * zi
+    np.maximum(rho, 0.0, out=rho)
+    np.sqrt(rho, out=rho)
+    return hs, dn, da, db, ab, zi, rho
+
+
+def _ground_band_keys(scalars, H, a_obs, type_id):
+    """`_band_keys` for the reflected term: the quantised columns of one
+    band (int64, (R*N,) each) and the near mask, from `ground_pair_scalars`.
+
+    The step is 2^-KEY_BITS of the pair's distance to the image SEGMENT,
+    rounded down to a power of two; a near pair (`NEAR_LENGTHS` against the
+    image segment, the test the PEC image's plan applies) takes the
+    sentinel key and its value from the direct evaluator."""
+    hs, dn, da, db, ab, zi, rho = scalars
+    az = np.abs(zi)
+    near = (
+        (np.maximum(az, rho) < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
+        if NEAR_LENGTHS > 0
+        else None
+    )
+    az -= H[None, :]
+    scale = np.maximum(az, rho, out=az)
+    np.maximum(scale, a_obs[:, None], out=scale)
+    e = (scale.view(np.int64) >> 52) - 1022
+    del scale, az
+    step_inv = ((1023 + KEY_BITS - e) << 52).view(np.float64)
+    lengths = [np.rint(x * step_inv).astype(np.int64) for x in (hs, dn, da, db)]
+    del step_inv
+    e += 1 << 11
+    e <<= 40
+    e += type_id
+    cols = [c.reshape(-1) for c in (e, *lengths, _quantise_unit(ab))]
+    if near is not None and near.any():
+        idx = np.flatnonzero(near)
+        cols[0][idx] = _NEAR_SENTINEL
+        for c in cols[1:]:
+            c[idx] = 0
+    return cols, near
+
+
+def build_ground_plan(
+    obs_c, obs_t, src_c, src_t, ground_z, seg_h, a_obs, src_type, obs_type, rows
+):
+    """The reflected term's class map (`GroundPlan`) over every (observer,
+    source) pair, the REAL sources' (the image is the evaluator's), found in
+    bands of `rows` rows like `build_plan`'s. `src_type` / `obs_type` are
+    `ground_segment_types`'. Classes are numbered by their representative's
+    flat index, the first pair of the class in the bands' order, so the
+    representatives are row runs for `near_blocks`."""
+    obs_c = np.asarray(obs_c, dtype=np.float64)
+    obs_t = np.asarray(obs_t, dtype=np.float64)
+    src_c = np.asarray(src_c, dtype=np.float64)
+    src_t = np.asarray(src_t, dtype=np.float64)
+    a_obs = np.asarray(a_obs, dtype=np.float64)
+    H = 0.5 * np.asarray(seg_h, dtype=np.float64)
+    M, N = obs_c.shape[0], src_c.shape[0]
+    n_obs_types = int(obs_type.max()) + 1
+    cls = np.empty((M, N), dtype=np.int32)
+    workers = _workers()
+    rows = max(1, int(rows) // workers)
+    rows = min(rows, max(16, -(-M // (4 * workers))))
+    starts = list(range(0, M, rows))
+
+    def band(i0):
+        i1 = min(M, i0 + rows)
+        scalars = ground_pair_scalars(
+            obs_c[i0:i1], obs_t[i0:i1], src_c, src_t, ground_z
+        )
+        type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
+        cols, near = _ground_band_keys(scalars, H, a_obs[i0:i1], type_id)
+        del scalars, type_id
+        near = (
+            np.zeros(0, np.int64)
+            if near is None
+            else np.flatnonzero(near).astype(np.int64) + i0 * N
+        )
+        first, inv = _group(cols)
+        cls[i0:i1] = inv.reshape(i1 - i0, N)
+        return [c[first] for c in cols], first + i0 * N, near
+
+    results = _run(band, starts)
+    n_cols = len(results[0][0])
+    keys = [np.concatenate([r[0][j] for r in results]) for j in range(n_cols)]
+    gfirst, ginv = _group(keys)
+    del keys
+    rep_flat = np.concatenate([r[1] for r in results])[gfirst]
+    perm = np.argsort(rep_flat, kind="stable")
+    renumber = np.empty(perm.size, dtype=np.int64)
+    renumber[perm] = np.arange(perm.size, dtype=np.int64)
+    ginv = renumber[ginv]
+    rep_flat = np.ascontiguousarray(rep_flat[perm], dtype=np.int64)
+    del renumber, perm, gfirst
+    off = 0
+    for (k, *_), i0 in zip(results, starts):
+        i1 = min(M, i0 + rows)
+        n_b = k[0].shape[0]
+        cls[i0:i1] = ginv[off : off + n_b].astype(np.int32)[cls[i0:i1]]
+        off += n_b
+    near_flat = np.concatenate([r[2] for r in results])
+    del results, ginv
+    return GroundPlan(
+        cls=cls,
+        rep_flat=rep_flat,
+        rep_blocks=near_blocks(rep_flat, N, a_obs, rows=REP_ROWS),
+        near_flat=near_flat,
+        near_blocks=near_blocks(near_flat, N, a_obs),
+    )
 
 
 def canonical_sources(canon):
