@@ -1581,7 +1581,7 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
                             const std::vector<cd> &moment, FarGround ground, double eps_r,
                             double sigma, double frequency_mhz, double wavelength, double p_in,
                             bool lower, cd eps_c_medium, double p_radiated,
-                            const replay::FarCliff *cliff = nullptr) {
+                            const replay::FarCliff *cliff = nullptr, bool average_single_cut = false) {
     if (!rq.n_theta.fits_i64() || !rq.n_phi.fits_i64() || !rq.xnda.fits_i64())
         throw Decline{"a pattern count past 64 bits"};
     const int64_t nt = rq.n_theta.i64(), nph = rq.n_phi.i64();
@@ -1776,6 +1776,9 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     // XNDA's A digit asks for the average gain (Python's non-negative `% 10`)
     int64_t digit = rq.xnda.i64() % 10;
     if (digit < 0) digit += 10;
+    // a single cut on either axis averages nothing on the NEC-5 engine
+    // (momwire#1962, `_pattern`'s `average_single_cut`)
+    if (!average_single_cut && (nt == 1 || nph == 1)) digit = 0;
     if (digit != 0) {
         // A = 2 prints the trailer with no rows (momwire#1503).
         if (digit == 2) block.rows.clear();
@@ -3823,7 +3826,8 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
     const FarGround fg = ground == 1 ? FarGround::pec : ground == 2 ? FarGround::refl : FarGround::free;
     const PatternBlockC c = nec5::pattern_block(rq, mid, moment, fg, eps_r, sigma,
                                                 frequency_mhz, wavelength, p_in, false,
-                                                cd(0.0, 0.0), p_radiated, cliff);
+                                                cd(0.0, 0.0), p_radiated, cliff,
+                                                /*average_single_cut=*/true);
     PatternBlock out;
     for (const PatternRowC &r : c.rows) {
         PatternRow row;
