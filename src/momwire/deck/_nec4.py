@@ -134,6 +134,7 @@ from ._cards import Card, DeckError, infinite_angle_refusal
 from ._nec2 import (
     _GEOMETRY_CARDS,
     _LD_RUN_TRANSPARENT,
+    _REFUSED_BY_NAME,
     _Nec2Parser,
     parsed_with_structure,
 )
@@ -486,6 +487,17 @@ class _Nec4Parser(_Nec2Parser):
 
     _geometry_mnemonics = _GEOMETRY_CARDS | {"CW"}
     _geometry_builders = _NEC4_GEOMETRY_BUILDERS
+    # The nec2 dialect's by-name refusals, SY's naming this dialect (as the
+    # nec5 dialect's names its own); the C++ reader's `refused_by_name`.
+    _refused_by_name = MappingProxyType(
+        {
+            **_REFUSED_BY_NAME,
+            "SY": (
+                "SY (4nec2 symbolic variables) is not part of this engine's "
+                "nec4 dialect"
+            ),
+        }
+    )
     # NEC-4.2 reads past EK (`_ek`), and an EK between two LD cards keeps
     # their run there (momwire#1812), where nec2c's EK ends it.
     _ld_run_transparent = _LD_RUN_TRANSPARENT | {"EK"}

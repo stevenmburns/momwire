@@ -18,6 +18,7 @@ import pytest
 
 from momwire.deck import _nec2, _nec4, _nec5
 from momwire.deck._cards import DeckError, parse_card
+from momwire.dropin.nec5 import _nec4 as _nec4_slot
 from momwire.dropin.nec5 import _shell
 
 DECKS = sorted(
@@ -25,6 +26,7 @@ DECKS = sorted(
 )
 NEC5 = "SY (4nec2 symbolic variables) is not part of this engine's nec5 dialect"
 NEC2 = "SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect"
+NEC4 = "SY (4nec2 symbolic variables) is not part of this engine's nec4 dialect"
 
 
 def test_the_fixtures_are_there():
@@ -43,7 +45,7 @@ def test_an_sy_card_keeps_its_fields_unconverted(line):
 @pytest.mark.parametrize("deck", DECKS, ids=lambda p: p.stem)
 @pytest.mark.parametrize(
     ("parse", "sentence"),
-    [(_nec5.parse_nec5, NEC5), (_nec2.parse_nec2, NEC2), (_nec4.parse_nec4, NEC2)],
+    [(_nec5.parse_nec5, NEC5), (_nec2.parse_nec2, NEC2), (_nec4.parse_nec4, NEC4)],
     ids=["nec5", "nec2", "nec4"],
 )
 def test_every_dialect_refuses_sy_by_name(deck, parse, sentence):
@@ -57,3 +59,15 @@ def test_the_nec5_printout_names_sy(deck):
     out = _shell.render(deck.read_text(), basis="razor-2p")
     assert f" ***** NEC ERROR - {NEC5}" in out.splitlines()
     assert "NON-NUMERICAL" not in out
+
+
+@pytest.mark.parametrize("deck", DECKS, ids=lambda p: p.stem)
+def test_the_nec42_printout_names_its_own_dialect(deck):
+    """The NEC-4.2 slot (`momwire-nec42-sinusoidal`, `momwire-nec42-bspline`)
+    reads the nec4 dialect, and its SY sentence says so rather than naming
+    the nec2 dialect it inherits its other refusals from (census 11-15). The
+    C++ reader's copy is held to it by test_nec4_deck_core's
+    `refused_by_name_sy` case."""
+    out = _nec4_slot.render(deck.read_text(), basis="sinusoidal")
+    assert f" ***** NEC ERROR - {NEC4}" in out.splitlines()
+    assert "nec2 dialect" not in out

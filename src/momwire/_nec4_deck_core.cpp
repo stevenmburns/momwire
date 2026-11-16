@@ -1035,8 +1035,10 @@ bool in(const std::string &m, const char *const (&set)[N]) {
     return false;
 }
 
-const std::map<std::string, std::string> &refused_by_name() {
-    static const std::map<std::string, std::string> table = {
+// `_REFUSED_BY_NAME`, the nec2 dialect's; the nec4 dialect's (`_Nec4Parser`)
+// differs only in naming itself on SY
+const std::map<std::string, std::string> &refused_by_name(Dialect d) {
+    static const std::map<std::string, std::string> nec2 = {
         {"GC", "GC (tapered wire continuation) is not part of this engine's nec2 dialect"},
         {"GF", "GF (numerical Green's function) is not part of this engine's nec2 dialect"},
         {"SY", "SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect"},
@@ -1049,7 +1051,12 @@ const std::map<std::string, std::string> &refused_by_name() {
         {"WG", "WG (NGF write request) is not supported by this engine"},
         {"ZO", "ZO (impedance normalisation) is not supported by this engine"},
     };
-    return table;
+    static const std::map<std::string, std::string> nec4 = [] {
+        std::map<std::string, std::string> t = nec2;
+        t["SY"] = "SY (4nec2 symbolic variables) is not part of this engine's nec4 dialect";
+        return t;
+    }();
+    return d == Dialect::nec4 ? nec4 : nec2;
 }
 
 const char *const kRefuseNearFieldReflCoef =
@@ -1134,8 +1141,8 @@ class Parser {
             std::replace(stripped.begin(), stripped.end(), ',', ' ');
             std::vector<std::string> head = nec5::latin1_split(stripped);
             if (!head.empty()) {
-                auto hit = refused_by_name().find(nec5::latin1_upper(head[0]));
-                if (hit != refused_by_name().end()) deck_error(hit->second);
+                auto hit = refused_by_name(dialect_).find(nec5::latin1_upper(head[0]));
+                if (hit != refused_by_name(dialect_).end()) deck_error(hit->second);
             }
             Card card;
             if (!nec5::read_card(line, card)) continue;
@@ -1829,8 +1836,8 @@ class Parser {
             }
             return;
         }
-        auto hit = refused_by_name().find(m);
-        if (hit != refused_by_name().end()) deck_error(hit->second);
+        auto hit = refused_by_name(dialect_).find(m);
+        if (hit != refused_by_name(dialect_).end()) deck_error(hit->second);
         if (in(m, kArmingCards)) {
             armed_ = true;
             if (in(m, kOperatorCards) && executed_) operator_dirty_ = true;
