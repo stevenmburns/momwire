@@ -3,6 +3,7 @@
 // IEEE operation at a time (this TU is built -ffp-contract=off; MSVC asks for
 // precise semantics below), the fused complex product spelled with std::fma.
 #include "_somm_grid_core.h"
+#include "_cpu_count.h"
 #include "_fma_inline.h"
 
 #include "_somm_kernel_core.h"
@@ -36,6 +37,10 @@
 #include <system_error>
 #include <tuple>
 #include <vector>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace somm_core {
 
@@ -147,20 +152,20 @@ std::vector<Surf> iv_surfaces(cd eps_t, double k2, const std::vector<double> &r1
         for (int k = 0; k < 6; k++) six[static_cast<std::size_t>(q) * 6 + k] = res[k];
     };
     const std::ptrdiff_t n_nz = static_cast<std::ptrdiff_t>(nz.size());
+    // Each node is its own arithmetic, so which thread takes it moves no bit
+    // and the pool's size is free: MOMWIRE_THREADS clamped to the CPUs the
+    // affinity mask allows, else one per physical core in the mask
+    // (`_cpu_count.h`).
+    const int pool = mw::cpu::pool_threads();
 #if defined(_OPENMP)
-#pragma omp parallel for schedule(dynamic)
+    // Never wider than the team the caller set (the exe's size policy).
+    const int n_omp = std::max(1, std::min(pool, omp_get_max_threads()));
+#pragma omp parallel for schedule(dynamic) num_threads(n_omp)
     for (std::ptrdiff_t q = 0; q < n_nz; q++) node(q);
 #else
     // The executable's serial copy has no OpenMP, and a cold fill is seconds
-    // of independent nodes: plain threads, each node its own arithmetic, so
-    // which thread takes it moves no bit. MOMWIRE_THREADS (the executable's
-    // own override) bounds them.
-    unsigned n_thr = std::thread::hardware_concurrency();
-    if (const char *mt = std::getenv("MOMWIRE_THREADS")) {
-        const long v = std::strtol(mt, nullptr, 10);
-        if (v > 0) n_thr = static_cast<unsigned>(v);
-    }
-    n_thr = std::max(1u, std::min<unsigned>(n_thr, 64u));
+    // of independent nodes: plain threads.
+    const unsigned n_thr = static_cast<unsigned>(std::max(1, std::min(pool, 64)));
     if (n_thr == 1 || n_nz < 64) {
         for (std::ptrdiff_t q = 0; q < n_nz; q++) node(q);
     } else {

@@ -5,6 +5,7 @@
 
 #include "_libm_complex_inline.h"
 
+#include "_cpu_count.h"
 #include "_crossing_shared_inline.h"
 #include "_razor_front_core.h"
 #include "_somm_below_grid_core.h"
@@ -55,10 +56,10 @@ cd py_quot(cd a, cd b) {
     return cd((a.real() * ratio + a.imag()) / denom, (a.imag() * ratio - a.real()) / denom);
 }
 
-int physical_threads() {
-    const unsigned n = std::thread::hardware_concurrency();
-    return n > 1 ? static_cast<int>(n / 2) : 1;
-}
+// The team cap: MOMWIRE_THREADS clamped to the CPUs the affinity mask
+// allows, else one per physical core in the mask (`_cpu_count.h`). The block's
+// values do not depend on it (`team`: disjoint outputs, serial order each).
+int physical_threads() { return mw::cpu::pool_threads(); }
 
 // A complex CSR (`csr_array`, canonical: columns ascending in a row, the
 // exact zeros eliminated).

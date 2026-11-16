@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_cpu_count.h"
 #include "_mw_times.h"
 
 // Thin module TU (momwire#687): the sections register themselves; their
@@ -51,6 +52,17 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_nec5_deck(m);
     register_nec4_printout(m);
     register_near_buried(m);
+
+    // What the in-library pools resolve to in this process (`_cpu_count.h`):
+    // the crossing cores' team cap and the Sommerfeld grid's node pool both
+    // read pool_threads(). Test-facing (tests/test_pool_threads.py).
+    m.def("_pool_threads", [] {
+        py::dict d;
+        d["pool"] = mw::cpu::pool_threads();
+        d["allowed_threads"] = mw::cpu::allowed_threads();
+        d["allowed_cores"] = mw::cpu::allowed_cores();
+        return d;
+    });
 
     // MOMWIRE_TIMES: the C++ half of a Python answer's stage
     // tally -- the ground tables and the LU this module fills and runs --

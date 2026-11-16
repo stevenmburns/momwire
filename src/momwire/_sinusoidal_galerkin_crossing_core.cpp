@@ -8,6 +8,7 @@
 
 #include "_sinusoidal_galerkin_crossing_core.h"
 
+#include "_cpu_count.h"
 #include "_crossing_shared_inline.h"
 #include "_crossing_split_inline.h"
 #include "_fma_inline.h"
@@ -72,10 +73,10 @@ inline cd xadd(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag())
 inline cd xsub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
 inline bool nonzero(cd z) { return z.real() != 0.0 || z.imag() != 0.0; }
 
-int physical_threads() {
-    const unsigned n = std::thread::hardware_concurrency();
-    return n > 1 ? static_cast<int>(n / 2) : 1;
-}
+// The team cap: MOMWIRE_THREADS clamped to the CPUs the affinity mask
+// allows, else one per physical core in the mask (`_cpu_count.h`). The block's
+// values do not depend on it (`team`: disjoint outputs, serial order each).
+int physical_threads() { return mw::cpu::pool_threads(); }
 
 // What the shared end terms read off the context.
 struct XCtx {

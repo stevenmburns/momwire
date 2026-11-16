@@ -465,6 +465,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_pairs_core.h",
     "src/momwire/_somm_pairs_owned_core.h",
     "src/momwire/_somm_grid_core.h",
+    "src/momwire/_cpu_count.h",
     "src/momwire/_accel_somm_proj_py.h",
 ]
 
@@ -532,6 +533,9 @@ _ACCEL_SOURCES = [
     # S3: the grid itself, which the C++ front half builds for the composing
     # ground (`_razor_front_core.cpp`, linked here as well).
     "src/momwire/_somm_grid_core.cpp",
+    # The thread teams' CPU counts (the affinity mask; momwire#1952): the
+    # one TU that includes <windows.h>, so its macros reach no kernel.
+    "src/momwire/_cpu_count_core.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
     # The razor kernels with no Python in their signatures or includes;

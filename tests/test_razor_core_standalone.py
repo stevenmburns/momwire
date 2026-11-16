@@ -128,6 +128,8 @@ CORE_SOURCES = (
     # kernel, the grid, and the remainder's projection and moments.
     "_somm_kernel_core.cpp",
     "_somm_grid_core.cpp",
+    # The teams' CPU counts (the affinity mask; momwire#1952).
+    "_cpu_count_core.cpp",
     "_somm_proj_core.cpp",
     "_somm_below_proj_core.cpp",
     "_somm_below_grid_core.cpp",
