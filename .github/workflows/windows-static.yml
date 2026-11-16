@@ -67,6 +67,8 @@ jobs:
           [ -f "$(gcc -print-file-name=libgomp.a)" ] || { echo "::error::no libgomp.a"; exit 1; }
           # C99 printf (two-digit exponents), not msvcrt.dll's, for the printouts
           echo "C++ stdio: $(echo | g++ -dM -E -x c++ -include cstdio - | grep __USE_MINGW_ANSI_STDIO || echo none)"
+          # the fat build defers its avx2 constructors through .data$ grouped-section sorting
+          ld --verbose | grep -n "data\\\$\|ctors" | head -8
           echo "libwinpthread: $(gcc -print-file-name=libwinpthread.a)"
           echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt' | sort -u | tr '\n' ' ')"
       # build_openblas.sh's two archives, keyed on the script (it holds the
@@ -252,6 +254,11 @@ jobs:
               -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON
             cmake --build "build-$b-fat" -- -k 0
             cp "build-$b-fat/$target.exe" "dist-fat/$name.exe"
+            # the deferred avx2 constructors ran (this runner has AVX2), and not on sse2
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=avx2 "dist-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            grep -q "avx2 constructors [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "dist-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            ! grep -q "avx2 constructors" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
             strip "dist-fat/$name.exe"
           done
           ls -l dist-fat

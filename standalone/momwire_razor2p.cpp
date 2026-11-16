@@ -854,12 +854,40 @@ bool cxx_variant_ok() {
 // MOMWIRE_FORCE_VARIANT, the extension's override, names one: sse2 forces the
 // baseline; avx2 on a CPU without it is the avx2 build's own refusal
 // (`cxx_variant_ok`), and no avx2 code runs.
+void run_avx2_constructors();
 void pick_variant() {
     const std::string forced = env("MOMWIRE_FORCE_VARIANT");
     const bool has = cpu_has_avx2();
     const bool avx2 = forced == "avx2" || (forced != "sse2" && has);
     EXE_VARIANT = avx2 ? "avx2" : "sse2";
     mw_fat::avx2 = avx2 && has;
+    if (mw_fat::avx2) run_avx2_constructors();
+}
+
+// The avx2 copies' static constructors, which the C runtime does NOT run:
+// defer_ctors.cmake moves each avx2 object's `.ctors` entries into
+// `.data$mwactors_m*`, which the PE linker sorts between these two markers.
+// They are compiled -mavx2 like the rest of their TU, so on a CPU without
+// AVX they must never run (Intel SDE as Westmere faulted in one, at start-up).
+// Run once, after the pick, before any avx2 code; in reverse order, as
+// libgcc's __do_global_ctors runs `.ctors`.
+using mw_ctor = void (*)();
+__attribute__((section(".data$mwactors_a"), used)) mw_ctor mw_avx2_ctors_begin = nullptr;
+__attribute__((section(".data$mwactors_z"), used)) mw_ctor mw_avx2_ctors_end = nullptr;
+void run_avx2_constructors() {
+    const auto first = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_begin) + sizeof(mw_ctor);
+    const auto last = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_end);
+    int n = 0;
+    for (std::uintptr_t a = last; a > first;) {
+        a -= sizeof(mw_ctor);
+        const mw_ctor f = *reinterpret_cast<volatile mw_ctor *>(a);
+        // `.ctors` lists may carry -1 / 0 sentinels; neither is a function
+        if (f != nullptr && reinterpret_cast<std::intptr_t>(f) != -1) {
+            f();
+            n++;
+        }
+    }
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 constructors %d\n", n);
 }
 #endif
 

@@ -123,9 +123,11 @@ elseif(MW_EXE_VARIANT STREQUAL "fat")
   # sse2 threaded / serial as `mw` / `mws` (the baseline every CPU runs, and
   # FIRST on the link line, so a template or inline function both builds
   # instantiate resolves to its sse2 copy) and avx2 threaded / serial as
-  # `mwa` / `mwas`. GCC only (the MinGW single-file build) for now.
-  if(MSVC OR NOT MW_EXE_NO_PYTHON)
-    message(FATAL_ERROR "MW_EXE_VARIANT=fat is the GCC no-Python build only")
+  # `mwa` / `mwas`, their static constructors deferred until main() has
+  # picked avx2 (defer_ctors.cmake). MinGW-w64 only (the single-file Windows
+  # build): the deferral is PE's grouped-section sort.
+  if(NOT MINGW OR NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_VARIANT=fat is the MinGW-w64 no-Python build only")
   endif()
   set(MW_EXE_FAT ON)
 elseif(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
@@ -500,8 +502,22 @@ else()
   endif()
 endif()
 if(MW_EXE_FAT)
-  # after the sse2 copies on the link line (see MW_EXE_VARIANT=fat)
-  target_sources(${MW_EXE} PRIVATE $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>)
+  # The avx2 copies as one archive whose constructors are moved out of the
+  # start-up list (defer_ctors.cmake), linked whole, after the sse2 copies
+  # (see MW_EXE_VARIANT=fat) and before OpenBLAS, which they call.
+  set(_mw_avx2_lib "${CMAKE_CURRENT_BINARY_DIR}/libmw_avx2_deferred.a")
+  add_custom_command(OUTPUT "${_mw_avx2_lib}"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${_mw_avx2_lib}"
+    COMMAND ${CMAKE_AR} qc "${_mw_avx2_lib}" $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>
+    COMMAND ${CMAKE_COMMAND} "-DARCHIVE=${_mw_avx2_lib}" "-DOBJCOPY=${CMAKE_OBJCOPY}" "-DOBJDUMP=${CMAKE_OBJDUMP}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/defer_ctors.cmake"
+    COMMAND ${CMAKE_RANLIB} "${_mw_avx2_lib}"
+    DEPENDS mw_core_mwa mw_core_mwas $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>
+            "${CMAKE_CURRENT_SOURCE_DIR}/defer_ctors.cmake"
+    COMMAND_EXPAND_LISTS VERBATIM)
+  add_custom_target(mw_avx2_deferred DEPENDS "${_mw_avx2_lib}")
+  add_dependencies(${MW_EXE} mw_avx2_deferred)
+  target_link_libraries(${MW_EXE} PRIVATE -Wl,--whole-archive "${_mw_avx2_lib}" -Wl,--no-whole-archive)
   target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_FAT=1)
 endif()
 if(MSVC)
