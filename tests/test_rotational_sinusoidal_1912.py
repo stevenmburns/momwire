@@ -635,7 +635,7 @@ def test_sym4_on_the_point_matched_route_matches_its_dense_solve():
     assert rel(ys, yd) <= TOL
 
 
-@pytest.mark.parametrize("ground", ["free", "pec"])
+@pytest.mark.parametrize("ground", ["free", "pec", "refl-coef", "sommerfeld"])
 def test_pair_reuse_rides_the_compact_fill(ground):
     """`pair_reuse` (momwire#1911) serves the route's bands as it serves the
     square fill's: the route with it on against the dense solve with it
