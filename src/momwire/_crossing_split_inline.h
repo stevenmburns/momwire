@@ -444,15 +444,17 @@ void aca_factors(const nec5::NumpyLinalg &np, const AX &A, const AX &B, const Sp
                  double a_wire, std::array<std::vector<cd>, 4> &Uf, std::array<std::vector<cd>, 4> &Vf,
                  std::array<int64_t, 4> &rk) {
     const int64_t m = static_cast<int64_t>(sp.iA.size()), n = static_cast<int64_t>(sp.iB.size());
-    std::vector<double> zA(static_cast<size_t>(m)), zB(static_cast<size_t>(n)), rho(static_cast<size_t>(m * n));
+    std::vector<double> zA(static_cast<size_t>(m)), zB(static_cast<size_t>(n));
     for (int64_t i = 0; i < m; i++) zA[static_cast<size_t>(i)] = A.nodes[3 * static_cast<size_t>(sp.iA[static_cast<size_t>(i)]) + 2] - gz;
     for (int64_t j = 0; j < n; j++) zB[static_cast<size_t>(j)] = B.nodes[3 * static_cast<size_t>(sp.iB[static_cast<size_t>(j)]) + 2] - gz;
-    for (int64_t i = 0; i < m; i++)
-        for (int64_t j = 0; j < n; j++) {
-            const double *pa = &A.nodes[3 * static_cast<size_t>(sp.iA[static_cast<size_t>(i)])];
-            const double *pb = &B.nodes[3 * static_cast<size_t>(sp.iB[static_cast<size_t>(j)])];
-            rho[static_cast<size_t>(i * n + j)] = std::hypot(pa[0] - pb[0], pa[1] - pb[1]);
-        }
+    // rho a sampled row or column at a time, never the (m, n) block
+    // (momwire#1941): ACA reads O(rank) of its rows and columns. Each entry is
+    // the same hypot of the same two differences, so the same bits.
+    auto rho = [&](int64_t i, int64_t j) {
+        const double *pa = &A.nodes[3 * static_cast<size_t>(sp.iA[static_cast<size_t>(i)])];
+        const double *pb = &B.nodes[3 * static_cast<size_t>(sp.iB[static_cast<size_t>(j)])];
+        return std::hypot(pa[0] - pb[0], pa[1] - pb[1]);
+    };
     static const int KEYS[4] = {K_U, K_V, K_W, K_DZPW};
     std::map<int64_t, std::array<std::vector<cd>, 4>> row_s, col_s;
     auto sample = [&](const std::vector<double> &r, const std::vector<double> &z, const std::vector<double> &zp) {
@@ -468,14 +470,15 @@ void aca_factors(const nec5::NumpyLinalg &np, const AX &A, const AX &B, const Sp
     auto row6 = [&](int64_t i) -> const std::array<std::vector<cd>, 4> & {
         auto it = row_s.find(i);
         if (it != row_s.end()) return it->second;
-        std::vector<double> r(rho.begin() + i * n, rho.begin() + (i + 1) * n), z(static_cast<size_t>(n), zA[static_cast<size_t>(i)]);
+        std::vector<double> r(static_cast<size_t>(n)), z(static_cast<size_t>(n), zA[static_cast<size_t>(i)]);
+        for (int64_t j = 0; j < n; j++) r[static_cast<size_t>(j)] = rho(i, j);
         return row_s[i] = sample(r, z, zB);
     };
     auto col6 = [&](int64_t j) -> const std::array<std::vector<cd>, 4> & {
         auto it = col_s.find(j);
         if (it != col_s.end()) return it->second;
         std::vector<double> r(static_cast<size_t>(m)), zp(static_cast<size_t>(m), zB[static_cast<size_t>(j)]);
-        for (int64_t i = 0; i < m; i++) r[static_cast<size_t>(i)] = rho[static_cast<size_t>(i * n + j)];
+        for (int64_t i = 0; i < m; i++) r[static_cast<size_t>(i)] = rho(i, j);
         return col_s[j] = sample(r, zA, zp);
     };
     for (int q = 0; q < 4; q++) {
