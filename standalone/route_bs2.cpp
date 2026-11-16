@@ -145,7 +145,8 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
-long long largest_solve(const std::string &latin1_text, bool open_end) {
+long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs) {
+    if (crossing_pairs) *crossing_pairs = 0;  // the size policy reads n_basis alone here
 #if MW_ROUTE_NEC4
     return nec4::largest_solve(latin1_text, "bspline", open_end);
 #endif

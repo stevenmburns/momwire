@@ -40,12 +40,27 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
-long long largest_solve(const std::string &latin1_text, bool open_end) {
+long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs) {
+    if (crossing_pairs) *crossing_pairs = 0;
     const nec5::SeamResult r = nec5::razor_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
-    for (const nec5::Prepared &p : r.prepared)
-        if (nec5::razor_part(p).front) n = std::max<long long>(n, nec5::razor_part(p).front->n_basis);
+    for (const nec5::Prepared &p : r.prepared) {
+        const razor::Front *f = nec5::razor_part(p).front.get();
+        if (!f) continue;
+        n = std::max<long long>(n, f->n_basis);
+        // The crossing block's size (`crossing_blocks`, which a detached or
+        // a crossing buried deck runs): above segments x below segments.
+        if (crossing_pairs && (f->buried == razor::Buried::detached || f->buried == razor::Buried::crossing)) {
+            long long above = 0, below = 0;
+            for (int64_t w = 0; w < f->n_wires; w++) {
+                const size_t k = static_cast<size_t>(w);
+                const long long segs = f->seg_offsets[k + 1] - f->seg_offsets[k];
+                (f->media_below[k] != 0 ? below : above) += segs;
+            }
+            *crossing_pairs = std::max(*crossing_pairs, above * below);
+        }
+    }
     return n;
 }
 
