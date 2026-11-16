@@ -40,8 +40,10 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
-long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs) {
+long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs,
+                        long long *below_pairs) {
     if (crossing_pairs) *crossing_pairs = 0;
+    if (below_pairs) *below_pairs = 0;
     const nec5::SeamResult r = nec5::razor_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
@@ -59,6 +61,13 @@ long long largest_solve(const std::string &latin1_text, bool open_end, long long
                 (f->media_below[k] != 0 ? below : above) += segs;
             }
             *crossing_pairs = std::max(*crossing_pairs, above * below);
+        }
+        // A wholly-buried run (`_assemble_Z_below_plane`): every segment pair
+        // is a below/below Sommerfeld pair, so its fill work goes as the
+        // segments squared, not as the basis count the dipole rule reads.
+        if (below_pairs && f->buried == razor::Buried::below_plane) {
+            const long long segs = f->seg_offsets[static_cast<size_t>(f->n_wires)];
+            *below_pairs = std::max(*below_pairs, segs * segs);
         }
     }
     return n;

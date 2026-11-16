@@ -545,12 +545,25 @@ int physical_cores() {
 // -> 178; fat_hub (3000, 144) 48.7 -> 35.1; ground_rod_efhw (2895, 207)
 // 104.9 -> 72.4; aca_vertical_screen (24684, 324) 92.7 -> 73.2. No crossing
 // deck measured was faster on fewer, and the smallest has 128 pairs. Decks
-// without one (free space, above ground, wholly below the plane) keep the
-// basis-count rule.
+// without one (free space, above ground) keep the basis-count rule; a deck
+// wholly below the plane has its own measure, below.
 constexpr long long CROSSING_PAIRS = 64;
-int threads_for(long long n_basis, long long crossing_pairs = 0) {
+// A wholly-buried deck (`below_pairs`: its segments squared, every pair a
+// below/below Sommerfeld pair) does more fill work per basis function than
+// the free-space dipoles too, but less than a crossing block, and it has no
+// crossing pairs to count. Forced-thread sweep, Rocketlake, median of 15, ms
+// at 4 -> 8 threads: under ~30,000 pairs it is flat (bd_s161, 25,921 pairs,
+// 13.7 -> 12.6; bh_r16_s10, 25,600, 13.6 -> 13.8); from 40,000 pairs 8 wins
+// on 8 of the 10 decks measured: bd_s201 (40,401) 16.4 -> 12.4, ab_long_wire
+// (57,600) 21.8 -> 18.5, bd_s281 (78,961) 24.0 -> 17.1, bh_r12_s25 (90,000)
+// 25.8 -> 21.1, ab_hub16 (102,400) 27.9 -> 22.0; the other two, hubs of
+// 57,600 pairs, were within 0.8 ms either way. Bits do not depend on the
+// count on this route (byte-identical at 1, 4 and 8), so only time moves.
+constexpr long long BELOW_PAIRS = 40000;
+int threads_for(long long n_basis, long long crossing_pairs = 0, long long below_pairs = 0) {
     const int cores = physical_cores();
     if (crossing_pairs >= CROSSING_PAIRS) return cores;
+    if (below_pairs >= BELOW_PAIRS) return cores;
     if (n_basis < 128) return 1;
     if (n_basis < 384) return std::min(4, cores);
     return cores;
@@ -1082,11 +1095,12 @@ int main(int argc, char **argv) {
         // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
             const mw_times::Scope timed(mw_times::seam);
-            long long pairs = 0;
-            const long long n = mws::exe::largest_solve(text, false, &pairs);
-            threads = n >= 0 ? threads_for(n, pairs) : 1;
+            long long pairs = 0, below = 0;
+            const long long n = mws::exe::largest_solve(text, false, &pairs, &below);
+            threads = n >= 0 ? threads_for(n, pairs, below) : 1;
             if (env("MW_EXE_TIMES") == "1")
-                std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld\n", n, pairs);
+                std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
+                             pairs, below);
         }
         const std::string arrays_dir = env("MW_EXE_ARRAYS");
         std::string printout;
@@ -1386,11 +1400,12 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     int threads = forced_threads;
     if (forced_threads <= 0) {
         const mw_times::Scope timed(mw_times::seam);
-        long long pairs = 0;
-        const long long n = mws::exe::largest_solve(text, open_end, &pairs);
-        threads = n >= 0 ? threads_for(n, pairs) : 1;
+        long long pairs = 0, below = 0;
+        const long long n = mws::exe::largest_solve(text, open_end, &pairs, &below);
+        threads = n >= 0 ? threads_for(n, pairs, below) : 1;
         if (env("MW_EXE_TIMES") == "1")
-            std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld\n", n, pairs);
+            std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
+                         pairs, below);
     }
     g_render_threads = threads;
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
