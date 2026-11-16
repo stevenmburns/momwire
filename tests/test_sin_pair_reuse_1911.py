@@ -10,7 +10,8 @@ reduction is unchanged. So:
   extended kernel, across the band cut and across a frequency sweep;
 - `pair_reuse="verify"` checks a sample of every band against the direct
   kernel in the original frame;
-- a finite ground declines with its reason and fills as before.
+- a finite ground takes the reflected block (momwire#1970, whose gates are
+  `test_sin_pair_reuse_ground_1970.py`).
 """
 
 from __future__ import annotations
@@ -123,12 +124,13 @@ def test_a_sweep_keeps_one_census():
     assert np.max(np.abs(z_on - z_off) / np.abs(z_off)) <= DRIFT
 
 
-def test_a_finite_ground_declines():
+def test_a_finite_ground_takes_the_reflected_block():
     kw = dict(h=6.0, ground_z=0.0, ground_eps=complex(13.0, -5.0))
     base, _ = _z(**kw)
     on, s = _z(pair_reuse=True, **kw)
-    assert s.pair_reuse_declined == "a finite ground"
-    assert on.tobytes() == base.tobytes()
+    assert s.pair_reuse_declined is None
+    assert set(s.pair_reuse_census) == {"direct", "reflected"}
+    assert _rel(on, base) <= DRIFT
 
 
 def test_the_key_separates_what_differs():
