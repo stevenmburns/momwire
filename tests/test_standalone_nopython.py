@@ -1280,3 +1280,27 @@ def test_a_table_open_in_another_process_is_skipped_not_an_error(tmp_path):
         if sys.platform == "win32":
             assert seeded[0].exists()
     assert not seeded[1].exists(), "the next-oldest table was not evicted"
+# --- momwire#1847: the transmitted anchors (reach 1: the executables refuse it) ---
+
+
+def test_transmitted_anchors_is_refused_by_name(tmp_path, monkeypatch):
+    """The C++ route carries the anchored grid (bs2's buried fill and the
+    sinusoidal lane read it when requested), but its reach is the hosted app
+    (level 1), so no executable carries it in EXE_FEATURES: asked on, every
+    executable refuses it in the registry's sentence before reading the deck,
+    and writes nothing."""
+    from momwire import _features
+
+    monkeypatch.delenv("MOMWIRE_X_TRANSMITTED_ANCHORS", raising=False)
+    shutil.copy(MIXED, tmp_path / MIXED.name)
+    r = subprocess.run(
+        [EXE, MIXED.name, "anchors.out"],
+        cwd=tmp_path,
+        env=dict(os.environ, MOMWIRE_X_TRANSMITTED_ANCHORS="1"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert r.stderr == _features.EXE_REFUSAL.format(name="transmitted_anchors") + "\n"
+    assert not (tmp_path / "anchors.out").exists()

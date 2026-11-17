@@ -309,7 +309,10 @@ FEATURES: dict[str, Feature] = {
         ),
         # The transmitted (below->above) grid blended from frequency anchors
         # on a lattice fixed in metres (momwire#1847), so a sweep shares its
-        # tables: the shipped evaluator, interpolated in ln f.
+        # tables: the shipped evaluator, interpolated in ln f. Ported to the
+        # C++ buried route (`somm_trans::anchored_grid`, in process only, no
+        # disk store) so the executables can carry it once reach is raised;
+        # it has no EXE_FEATURES row, so today they refuse it.
         #
         # `drift` is the survey's worst with 2.3x margin (momwire#2022): flag
         # on against off, |dZin|/|Zin|, 326 served sweep points on bs2,
@@ -338,6 +341,7 @@ FEATURES: dict[str, Feature] = {
             paths=(
                 "src/momwire/_transmitted_anchors.py",
                 "tests/test_transmitted_anchors_1847.py",
+                "tests/test_transmitted_anchors_cxx_1847.py",
             ),
             label="share buried tables across a sweep",
             summary=(
