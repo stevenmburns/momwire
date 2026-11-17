@@ -76,6 +76,7 @@ def _clean(monkeypatch):
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
+    acc.razor_reuse_plan_budget(0)
     acc.razor_reuse_cache_clear()
     # The decks here are cheap on purpose, below the small-deck thresholds,
     # and test the reuse itself: lift them (test_small_decks_step_aside
@@ -86,6 +87,7 @@ def _clean(monkeypatch):
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
     acc.razor_reuse_set_small_deck_segs(-1, -1)
+    acc.razor_reuse_plan_budget(0)
     acc.razor_reuse_cache_clear()
 
 
@@ -513,6 +515,71 @@ def test_a_deck_that_compresses_poorly_declines_on_the_cxx_route(monkeypatch):
     assert after["reuse_declined"] == before["reuse_declined"] + 1
     assert after["reuse_fills"] == before["reuse_fills"]
     assert ctx.reuse_declined_reason == POOR
+    np.testing.assert_array_equal(y, off)
+
+
+def test_the_plan_budget_is_256_mb():
+    # 512 MB hosted bound = this budget + one dense Z (144 MB at the
+    # 3000-segment cap) + headroom (`_razor_pair_reuse_core.h`, Steve 11-17).
+    assert acc.razor_reuse_plan_budget_bytes == 256 << 20
+
+
+@_needs_cert
+@pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
+def test_a_plan_past_its_byte_budget_declines(ground):
+    """The plan's bytes (maps, groups and flags, one wavenumber's class
+    values) are held to PLAN_BUDGET_BYTES. Lowered by the test hook to one
+    byte under what this deck's plan takes, the census stops and the plan
+    declines with the budget named, fills as off bit for bit, and is cached;
+    lowered under the maps alone, it declines before any census; at the
+    plan's own size it is served."""
+    wires = _triangle() + _dipoles(heights=(9.0, 9.0), xs=(0.0, 1.5))
+    g = GROUNDS[ground]
+    off = _solver(wires, False, g).compute_port_solution().y
+    _solver(wires, True, g).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None, st
+    need = st["budget_bytes"]
+    assert need == st["nbytes"] + 32 * (st["classes"] + st["q_classes"]), st
+    n_maps = 2 if ground != "free" else 1
+    if ground == "sommerfeld":
+        n_maps += 1
+    maps = 4 * n_maps * (st["pairs"] // (2 if ground != "free" else 1))
+    for budget in (need - 1, maps - 1):
+        acc.razor_reuse_plan_budget(budget)
+        why = f"the plan would exceed its {budget / 2**20:.6g} MB budget"
+        razor._PAIR_REUSE_ROUTE.clear()
+        s = _solver(wires, True, g)
+        y = s.compute_port_solution().y
+        assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
+        assert s.pair_reuse_declined == why
+        assert razor._PAIR_REUSE_STATS[0]["classes"] == 0
+        np.testing.assert_array_equal(y, off)
+        b0, f0 = _cache()
+        _solver(wires, True, g).compute_port_solution()
+        assert _cache() == (b0, f0 + 1)
+    acc.razor_reuse_plan_budget(need)
+    s = _solver(wires, True, g)
+    s.compute_port_solution()
+    assert s.pair_reuse_declined is None
+
+
+@_needs_cert
+def test_a_plan_past_its_byte_budget_declines_on_the_cxx_route(monkeypatch):
+    wires = _triangle()
+    monkeypatch.setattr(razor, "_RAZOR_CXX", True)
+    off = _solve(wires, False, ground=SOMM)
+    acc.razor_reuse_plan_budget(1024)
+    ctx = razor._cxx_context()
+    before = dict(ctx.counters)
+    y = _solve(wires, True, ground=SOMM)
+    after = ctx.counters
+    assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
+    assert after["reuse_declined"] == before["reuse_declined"] + 1
+    assert after["reuse_fills"] == before["reuse_fills"]
+    assert ctx.reuse_declined_reason == (
+        f"the plan would exceed its {1024 / 2**20:.6g} MB budget"
+    )
     np.testing.assert_array_equal(y, off)
 
 
