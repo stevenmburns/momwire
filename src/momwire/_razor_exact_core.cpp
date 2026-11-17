@@ -6,6 +6,7 @@
 #include "_fma_inline.h"
 
 #include "_exact_kernel_point_core.h"
+#include "_exact_kernel_series_core.h"
 #include "_razor_core.h"
 #include "_razor_front_core.h"
 
@@ -318,6 +319,11 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
         for (double v : g.h) hmax = std::max(hmax, v);
         std::unique_ptr<mw::ek::PointRows> source;
         std::unique_ptr<mw::ek::PointCrossRows> cross;
+        // `exact_kernel_series` (momwire#1454, opt-in): a one-radius group
+        // short enough at this k (`_exact_kernel_series.serves`) takes its
+        // exact moments from the k-series, as `_add_exact_kernel_correction`'s
+        // `by_series`. The choice reads the geometry and k alone.
+        std::unique_ptr<mw::ek::PointSeries> series;
         if (g.cross) {
             double amax = g.cross_a[0];
             for (double v : g.cross_a) amax = std::max(amax, v);
@@ -325,6 +331,9 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
                                                    g.cross_a.data(), g.cross_lab.data(), n, f.k,
                                                    2, 4 * n + 1024, 1e-11 * hmax, 1e-11 * amax,
                                                    rules, 0));
+        } else if (f.exact_kernel_series && mw::ek::series_serves(f.k, g.h.data(), n, g.a)) {
+            series.reset(new mw::ek::PointSeries(g.x0.data(), g.sgn.data(), g.h.data(), n, g.a, 2,
+                                                 4 * n + 1024, 1e-11 * hmax, rules, 0));
         } else {
             source.reset(new mw::ek::PointRows(g.x0.data(), g.sgn.data(), g.h.data(), n, g.a,
                                                f.k, 2, 4 * n + 1024, 1e-11 * hmax, rules, 0));
@@ -349,6 +358,8 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
             if (cross)
                 cross->rows(&g.obs_x[w.o0], &g.cross_a[w.o0], &g.cross_lab[w.o0], rows,
                             mom.data());
+            else if (series)
+                series->rows(&g.obs_x[w.o0], rows, f.k, mom.data());
             else
                 source->rows(&g.obs_x[w.o0], rows, mom.data());
             std::vector<cd> m0b(static_cast<size_t>(rows * n)), m1b(static_cast<size_t>(rows * n));
