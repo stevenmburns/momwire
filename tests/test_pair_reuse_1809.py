@@ -10,6 +10,11 @@ is filled normally and named. So:
 - a true hint moves Z by no more than copying a block across an exact
   isometry can, a few ulp of the block's entries;
 - a false claim never reaches the matrix.
+
+`pair_reuse` also turns on its part `offset_reuse` (momwire#1982), which
+sums each edge's own moments in another order. These gates are of the hint
+alone, so each passes `offset_reuse=False`, the part's own keyword, which
+wins (tests/test_offset_reuse_1809.py holds the part).
 """
 
 from __future__ import annotations
@@ -68,6 +73,7 @@ def _z(D, hint, extended_kernel=False, ground=None):
         wire_radius=0.006,
         extended_kernel=extended_kernel,
         pair_reuse=hint,
+        offset_reuse=False,
         **kw,
     )
     return s, np.atleast_1d(np.asarray(s.compute_impedance()[0], dtype=complex))
@@ -139,6 +145,7 @@ def test_a_near_miss_is_refused():
         wavelength=LAM,
         wire_radius=0.006,
         pair_reuse=[[((2, 0), (3, 0)), ((3, 0), (4, 0))]],
+        offset_reuse=False,
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", PairReuseDropped)
@@ -177,6 +184,7 @@ def _z_somm(wires, n, hint):
         wavelength=LAM,
         wire_radius=0.006,
         pair_reuse=hint,
+        offset_reuse=False,
         **SOMM,
     )
     return np.atleast_1d(np.asarray(s.compute_impedance()[0], dtype=complex))
@@ -263,6 +271,7 @@ def test_sommerfeld_fold_copies_as_the_dense_route_does():
         wavelength=LAM,
         wire_radius=0.006,
         pair_reuse=_director_hint(3),
+        offset_reuse=False,
         **SOMM,
     )
     geom = s._build_geometry()
@@ -409,6 +418,7 @@ def test_the_array_checks_plan_what_the_member_checks_did(ek):
         wire_radius=0.006,
         extended_kernel=ek,
         pair_reuse=hint,
+        offset_reuse=False,
     )
     geom = s._build_geometry()
     with warnings.catch_warnings():
@@ -463,6 +473,7 @@ def test_sommerfeld_cuts_the_map_to_fit_rather_than_dropping_it(monkeypatch):
         wavelength=LAM,
         wire_radius=0.006,
         pair_reuse=_director_hint(3),
+        offset_reuse=False,
         **SOMM,
     )
     c0 = acc.remainder_q_reused_pairs()
@@ -490,7 +501,7 @@ def test_a_hint_too_small_to_pay_is_declined_unread():
         wire_radius=0.006,
     )
     z0 = BSplineSolver(**kw).compute_impedance()[0]
-    s = BSplineSolver(**kw, pair_reuse=_director_hint(6))
+    s = BSplineSolver(**kw, pair_reuse=_director_hint(6), offset_reuse=False)
     z1 = s.compute_impedance()[0]
     assert s.pair_reuse_declined
     assert s._pair_reuse is None
