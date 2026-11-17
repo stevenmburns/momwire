@@ -2006,6 +2006,7 @@ class RazorSolver(
         crossing_table=None,
         crossing_sheet_retune=None,
         razor_pair_reuse=None,
+        pair_reuse=None,
         cancel=None,
         **unsupported,
     ):
@@ -2106,25 +2107,37 @@ class RazorSolver(
         # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
         # checks every window against the shipped fill. Off (0) is the fill
         # as it always was, bit for bit; 1 on, 2 verify.
+        #
+        # momwire#1982: `pair_reuse`, the one pair-reuse switch every solver
+        # takes, asks for it too (any truthy value is on, a front end's
+        # bspline hint included, as on the sinusoidal solver; "verify" as
+        # above). `razor_pair_reuse` and its variable are kept as aliases
+        # and win. Asked for only through `pair_reuse` outside its reach, it
+        # is off, and `pair_reuse_declined` says so.
         if razor_pair_reuse not in (None, False, True, "verify"):
             raise ValueError(
                 "razor_pair_reuse must be None, False, True or 'verify', got "
                 f"{razor_pair_reuse!r}"
             )
+        own = None if razor_pair_reuse is None else bool(razor_pair_reuse)
+        whole = None if pair_reuse is None else bool(pair_reuse)
+        mode = razor_pair_reuse if razor_pair_reuse is not None else pair_reuse
+        verify = isinstance(mode, str) and mode == "verify"
         self._pair_reuse = (
             0
-            if not _features.enabled(
-                "razor_pair_reuse",
-                None if razor_pair_reuse is None else bool(razor_pair_reuse),
-            )
-            else (2 if razor_pair_reuse == "verify" else 1)
+            if not _features.enabled("razor_pair_reuse", own, whole_kwarg=whole)
+            else (2 if verify else 1)
         )
         self._reuse_now = None
         # Why the last fill with reuse on did not take it (the Python route's
         # reason: `_pair_reuse_refusal`, or the plan's own `declined`), or
         # None when it did. The C++ routes keep theirs on the solve context
         # (`reuse_declined_reason`).
-        self.pair_reuse_declined = None
+        self.pair_reuse_declined = (
+            "not certified on this platform"
+            if _features.withheld("razor_pair_reuse", own, whole_kwarg=whole)
+            else None
+        )
         # The C++ front route reads it with the constructor's own arguments.
         self._cxx_kwargs["pair_reuse"] = self._pair_reuse
         self._checkpoint()

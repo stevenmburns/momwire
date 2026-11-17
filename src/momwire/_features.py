@@ -26,6 +26,16 @@ and whose reach covers their level (``EXE_FEATURES`` in
 ``MOMWIRE_X_`` variable on refuses before it reads a deck
 (:data:`EXE_REFUSAL`).
 
+A feature may be a PART of another (``part_of``): one user-facing switch
+that turns on what each solver supports of it. Today that is ``pair_reuse``,
+whose parts are bspline's ``offset_reuse`` and razor-2p's
+``razor_pair_reuse`` (momwire#1982). Asking for the whole turns each part
+on; a part's own keyword or variable, its older spelling, still wins (see
+:func:`enabled` for the order). A native part asked for only through the
+whole stays off outside its own reach instead of refusing: the whole asks
+for "what this solver supports here", and :func:`withheld` says when that
+was nothing.
+
 With every feature at its default nothing here changes a byte of line 2:
 the stamp names only a feature that is on where its default is off. With every
 feature off -- the default-on ones turned off explicitly -- the printout is
@@ -59,6 +69,7 @@ __all__ = [
     "default_on",
     "enabled",
     "stamp",
+    "withheld",
 ]
 
 
@@ -166,6 +177,10 @@ class Feature:
     # keyword False, or the variable at a value that is not on ("0"),
     # still turns it off. Outside its reach the default is off.
     default: bool = False
+    # The user-facing feature this one is a part of (momwire#1982), or None:
+    # asking for that one (its keyword or its variable) turns this one on,
+    # unless this one's own keyword or variable says otherwise.
+    part_of: str | None = None
 
     @property
     def stable(self) -> bool:
@@ -183,6 +198,12 @@ FEATURES: dict[str, Feature] = {
         # point-matched fill finds its own classes of (observer, source)
         # pairs and evaluates each one's field tensors once with the shipped
         # kernel, free space and PEC image; there the variable alone is on.
+        #
+        # The one user-facing pair-reuse switch (momwire#1982): its parts,
+        # `offset_reuse` (bspline, within one edge) and `razor_pair_reuse`
+        # (razor-2p), follow this keyword and this variable, so every solver
+        # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
+        # supports. Their own keywords and variables are kept as aliases.
         Feature(
             name="pair_reuse",
             reach=1,
@@ -198,15 +219,17 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_sin_pair_reuse_ground_1970.py",
                 "tests/test_sin_pair_reuse_canonical_1969.py",
                 "tests/test_sin_pair_reuse_small_deck_1969.py",
+                "tests/test_pair_reuse_contract_1982.py",
             ),
             label="pair reuse",
             summary=(
                 "Fills each repeated pose of a pair of wires or segments once and "
                 "copies the rest. nec5-bspline and nec42-bspline need the front "
-                "end's hint of which edge pairs share a pose; the sinusoidal "
-                "solver finds its own, in free space and over a perfect or "
-                "finite ground, on decks of 400 segments or more (200 over a "
-                "finite ground), below which it costs more than it saves."
+                "end's hint of which edge pairs share a pose, and also fill a "
+                "uniform wire's own entries once per segment offset; the "
+                "sinusoidal solver and nec5-razor-2p find their own classes, in "
+                "free space and over a perfect or finite ground, on decks large "
+                "enough to pay for the search."
             ),
             # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
             # bspline: 1e-12. sinusoidal: the class map moves Z itself by
@@ -226,7 +249,11 @@ FEATURES: dict[str, Feature] = {
             offer=False,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
-        # (PR #1815): the shipped kernels, summed in another order.
+        # (PR #1815): the shipped kernels, summed in another order. A part of
+        # `pair_reuse` (momwire#1982): on with it, and its own keyword and
+        # variable still turn it on or off alone. Not retired: within one
+        # edge the moment depends only on the segment offset, which a whole-
+        # block copy between edge pairs does not use, so the two compose.
         Feature(
             name="offset_reuse",
             reach=1,
@@ -238,11 +265,12 @@ FEATURES: dict[str, Feature] = {
             paths=("tests/test_offset_reuse_1809.py",),
             label="offset reuse",
             summary=(
-                "Fills a uniform edge's same-edge moments once per segment offset. "
-                "Folded into pair reuse."
+                "Fills a uniform edge's same-edge moments once per segment offset;"
+                " turned on with pair reuse, alongside its copies between edges."
             ),
             drift=1e-12,
             offer=False,
+            part_of="pair_reuse",
         ),
         # The transmitted (below->above) grid blended from frequency anchors
         # on a lattice fixed in metres (momwire#1847), so a sweep shares its
@@ -582,6 +610,9 @@ FEATURES: dict[str, Feature] = {
             # `verify` passes. 2e-9 is about 5x the worst.
             drift=2e-9,
             offer=False,
+            # momwire#1982: on with `pair_reuse`; its own keyword and variable
+            # are aliases. Outside its reach, asked for only that way, off.
+            part_of="pair_reuse",
         ),
     )
 }
@@ -648,23 +679,72 @@ def default_on(name: str, context: str | None = None) -> bool:
     return certified(name, _CONTEXT.get() if context is None else context)
 
 
+def _resolve(
+    name: str, kwarg_value: object, whole_kwarg: object, context: str | None
+) -> tuple[bool, bool]:
+    """(on, through the whole): what :func:`enabled` decides before the
+    reach check, and whether it was the whole feature (``part_of``) that
+    asked."""
+    feature = FEATURES[name]
+    if kwarg_value is not None:
+        return bool(kwarg_value), False
+    if feature.part_of is not None and whole_kwarg is not None:
+        return bool(whole_kwarg), True
+    env = _env_value(feature)
+    if env is not None:
+        return env, False
+    if feature.part_of is not None:
+        env = _env_value(FEATURES[feature.part_of])
+        if env is not None:
+            return env, True
+    return default_on(name, context), False
+
+
 def enabled(
-    name: str, kwarg_value: object = None, *, context: str | None = None
+    name: str,
+    kwarg_value: object = None,
+    *,
+    context: str | None = None,
+    whole_kwarg: object = None,
 ) -> bool:
     """Whether `name` is on: the keyword's value when one was passed (not
     None), else its environment variable when set, else its default
     (:func:`default_on`: off, unless the feature is promoted and certified
     here). A native feature that is on outside its reach raises
-    :class:`FeatureNotCertified`."""
-    feature = FEATURES[name]
-    if kwarg_value is not None:
-        on = bool(kwarg_value)
-    else:
-        env = _env_value(feature)
-        on = default_on(name, context) if env is None else env
+    :class:`FeatureNotCertified`.
+
+    A part (``part_of``) also reads the whole feature, after its own
+    keyword and before its own variable: its own keyword, then the whole's
+    keyword (`whole_kwarg`, the value the caller was given for the whole),
+    then its own variable, then the whole's, then its default. Turned on
+    by the whole alone, a native part outside its reach is off rather than
+    refused (:func:`withheld`)."""
+    on, through_whole = _resolve(name, kwarg_value, whole_kwarg, context)
+    if on and through_whole and _withheld_here(name, context):
+        return False
     if on:
         check(name, context)
     return on
+
+
+def _withheld_here(name: str, context: str | None) -> bool:
+    feature = FEATURES[name]
+    context = _CONTEXT.get() if context is None else context
+    return feature.kind == "native" and not certified(name, context)
+
+
+def withheld(
+    name: str,
+    kwarg_value: object = None,
+    *,
+    context: str | None = None,
+    whole_kwarg: object = None,
+) -> bool:
+    """Whether the whole feature asked for part `name` and it stayed off
+    because it is native and outside its reach here (:func:`enabled`'s
+    soft refusal), so a solver can say why it did not reuse."""
+    on, through_whole = _resolve(name, kwarg_value, whole_kwarg, context)
+    return on and through_whole and _withheld_here(name, context)
 
 
 def active() -> list[str]:

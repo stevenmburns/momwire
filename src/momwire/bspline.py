@@ -2108,22 +2108,33 @@ class BSplineSolver(
         # geometry before any block is copied (`_pair_reuse_plan`).
         # Registered in `_features` (reach 1, a Python route): a hint passed
         # is the keyword, so it is on; with none there is nothing to reuse.
-        if not _features.enabled("pair_reuse", None if pair_reuse is None else True):
-            pair_reuse = None
+        # momwire#1982: `pair_reuse` is the one pair-reuse switch, so True or
+        # "verify" (on, no hint: no block is copied; the other solvers take
+        # both) and False (off) are taken too, and its part `offset_reuse`
+        # follows it.
+        whole = None if pair_reuse is None else pair_reuse is not False
+        hint = None if isinstance(pair_reuse, (bool, str)) else pair_reuse
+        if not _features.enabled("pair_reuse", whole):
+            hint = None
         # Renumbered to the solved wires on first use (`_solved_pair_reuse`):
         # a fill route that reads no plan pays nothing for a large hint.
-        self._pair_reuse_given = pair_reuse or None
+        self._pair_reuse_given = hint or None
         self._pair_reuse = None
         self._pair_reuse_plan_cache = None
         self._remainder_reuse_cache = None
         self.pair_reuse_dropped = ()
         self.pair_reuse_remainder_cut = 0
-        self.pair_reuse_declined = False
+        # Why the hint was not used (None when it was, or none was given):
+        # the sinusoidal and razor-2p solvers' readout, of the same type.
+        self.pair_reuse_declined = None
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
-        # defers to MOMWIRE_X_OFFSET_REUSE (`_features`, reach 1).
-        self._offset_reuse = _features.enabled("offset_reuse", offset_reuse)
+        # defers to `pair_reuse` (it is that feature's part, momwire#1982),
+        # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
+        self._offset_reuse = _features.enabled(
+            "offset_reuse", offset_reuse, whole_kwarg=whole
+        )
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -5477,7 +5488,7 @@ class BSplineSolver(
         ):
             return self._pair_reuse_plan_cache[1]
         if not self._pair_reuse_worth(geom):
-            self.pair_reuse_declined = True
+            self.pair_reuse_declined = "too few pairs per member to repay the check"
             self._pair_reuse_plan_cache = (geom, {})
             return {}
         if self._solved_pair_reuse() is None:
