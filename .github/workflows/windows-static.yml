@@ -362,7 +362,7 @@ jobs:
           New-Item -ItemType Directory -Force dist-msvc | Out-Null
           foreach ($b in 'razor2p', 'bs2') {
             # NAME, VARIANT, extra core flags
-            foreach ($arm in @(@('avx2', 'avx2', '/FAs /Faasm\'), @('sse2', 'sse2', ''), @('avx2-precise', 'avx2', '/fp:precise'))) {
+            foreach ($arm in @(@('avx2', 'avx2', '/FAs /Faasm/'), @('sse2', 'sse2', ''), @('avx2-precise', 'avx2', '/fp:precise'))) {
               $n, $v, $x = $arm
               if ($x) { New-Item -ItemType Directory -Force "build-$b-$n\asm" | Out-Null }
               $t0 = Get-Date
