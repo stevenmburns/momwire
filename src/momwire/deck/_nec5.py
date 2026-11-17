@@ -47,6 +47,7 @@ from ._cards import (
     _FUSED_FIELD_START,
     Card,
     DeckError,
+    _to_float,
     gw_field_refusal,
     parse_card,
     wire_geometry_refusal,
@@ -2446,3 +2447,71 @@ def parse_nec5_shared(texts) -> list[Nec5Deck | Exception]:
         except Exception as exc:  # noqa: BLE001 — held, the caller raises it
             out.append(exc)
     return out
+
+
+# momwire#1964: the licensed NEC-5 engine reads a number WITH AN EXPONENT
+# correctly only up to 20 characters for the whole token. Past that it misreads
+# it, sometimes silently: measured black-box on an NT card's Y12, read back
+# from its NETWORK DATA echo, `-5.79364253832523e-06` (21 characters) read as
+# -5.7936 and `-1.234567890123456e-1` (21) stopped on INVALID NUMBER, where
+# every 20-character spelling read as written. A token with no exponent read
+# fine at 26 characters. momwire reads all of them as written, which is the
+# reading the deck means, so it does not refuse: it says so (`_shell.render`
+# raises :class:`LongExponentToken`). The C++ reader's copy is
+# `_nec5_deck_core.cpp`'s `long_exponent_note`, held to these two functions by
+# test_nec5_long_exponent_1964.
+LONG_EXPONENT_LIMIT = 20
+_LONG_EXPONENT_SHOWN = 3
+
+
+class LongExponentToken(UserWarning):
+    """A NEC-5 deck writes a number with an exponent in more than
+    :data:`LONG_EXPONENT_LIMIT` characters, which the licensed NEC-5 engine
+    misreads and momwire reads as written (momwire#1964)."""
+
+
+def long_exponent_tokens(text: str) -> tuple[str, ...]:
+    """Every numeric field token in ``text`` that has an exponent (``E`` or
+    Fortran's ``D``) and is longer than :data:`LONG_EXPONENT_LIMIT`
+    characters, in deck order.
+
+    Tokenised as :func:`~momwire.deck._cards.parse_card` does (commas are
+    separators, a fused first field is split off its mnemonic); comment and
+    ``SY`` cards carry no numbers, and a token that is not a number (a
+    ``GN`` table filename, a refused field) is not one either."""
+    found: list[str] = []
+    for line in text.splitlines():
+        tokens = line.strip().replace(",", " ").split()
+        if not tokens:
+            continue
+        head = tokens[0]
+        if len(head) > 2 and head[:2].isalpha() and head[2] in _FUSED_FIELD_START:
+            tokens = [head[:2], head[2:], *tokens[1:]]
+        if tokens[0].upper() in ("CM", "CE", "SY"):
+            continue
+        for token in tokens[1:]:
+            if (
+                len(token) > LONG_EXPONENT_LIMIT
+                and any(c in "eEdD" for c in token)
+                and _to_float(token) is not None
+            ):
+                found.append(token)
+    return tuple(found)
+
+
+def long_exponent_note(tokens: tuple[str, ...]) -> str | None:
+    """The sentence :class:`LongExponentToken` carries for ``tokens``
+    (:func:`long_exponent_tokens`), or None when there are none."""
+    if not tokens:
+        return None
+    shown = ", ".join(tokens[:_LONG_EXPONENT_SHOWN])
+    if len(tokens) > _LONG_EXPONENT_SHOWN:
+        shown += f" and {len(tokens) - _LONG_EXPONENT_SHOWN} more"
+    one = len(tokens) == 1
+    return (
+        f"the deck writes {'a number' if one else f'{len(tokens)} numbers'} "
+        f"with an exponent in more than {LONG_EXPONENT_LIMIT} characters "
+        f"({shown}); momwire reads {'it' if one else 'each'} as written, but the "
+        f"licensed NEC-5 engine misreads such a number, sometimes silently "
+        f"(momwire#1964)"
+    )

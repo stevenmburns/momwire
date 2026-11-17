@@ -78,6 +78,7 @@ import io
 import os
 import sys
 import unicodedata
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -87,9 +88,12 @@ import momwire_serve_client as _mech
 from ... import _features, _times
 from ...deck import DeckError
 from ...deck._nec5 import (
+    LongExponentToken,
     Nec5Deck,
     Nec5Structure,
     ends_on_nx,
+    long_exponent_note,
+    long_exponent_tokens,
     next_structure,
     parse_nec5,
     parse_nec5_shared,
@@ -429,6 +433,11 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
         return _printout.render_refusal(
             text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
         )
+    note = long_exponent_note(long_exponent_tokens(text))
+    if note is not None:
+        # momwire#1964: not a refusal (momwire's reading is the deck's), an
+        # advisory; the launchers show it only under MOMWIRE_ADVISORIES=stderr.
+        warnings.warn(LongExponentToken(note), stacklevel=2)
     structures = split_structures(text)
     if structures is not None:
         return _render_chain(structures, basis=basis)
