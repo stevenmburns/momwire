@@ -65,7 +65,7 @@ namespace py = mw::nd;
 // within 4 ulp where glibc's is within 1, so the decay moves at round-off;
 // identity stays exe == Python per variant (both build this TU), and MSVC and
 // macOS keep libm as for cos/sin.
-#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && !defined(_WIN32)
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 #endif

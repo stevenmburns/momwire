@@ -183,7 +183,7 @@ extern "C" void omp_set_num_threads(int);
 #if defined(__GLIBC__)
 #include <malloc.h>  // mallopt
 #endif
-#if defined(__linux__)
+#if defined(__linux__) || defined(__MINGW32__)
 // The static OpenBLAS's pool teardown (a missing one fails the link); the
 // numpy library's too where it is a second archive (blas.h, momwire#1751).
 extern "C" int MWX(blas_thread_shutdown_)(void);
@@ -709,6 +709,37 @@ __attribute__((constructor(101))) void one_blas_thread_at_load() {
 #endif
 }
 #endif
+#if defined(__MINGW32__)
+// The static MinGW-w64 build (windows-static.yml; no OpenBLAS DLL to
+// delay-load): OpenBLAS and libgomp are linked in, so their load-time
+// constructors run before main() and `blas_env_before_load` is too late for
+// them. The Linux constructor's settings, ahead of them; libgomp is GCC's
+// here too, so the same spin count. _putenv_s cannot keep an existing value,
+// hence the checks.
+__attribute__((constructor(101))) void one_blas_thread_at_load() {
+    _putenv_s("OPENBLAS_NUM_THREADS", "1");
+    if (std::getenv("OPENBLAS_THREAD_TIMEOUT") == nullptr) _putenv_s("OPENBLAS_THREAD_TIMEOUT", "16");
+    if (std::getenv("OMP_WAIT_POLICY") == nullptr && std::getenv("GOMP_SPINCOUNT") == nullptr)
+        _putenv_s("GOMP_SPINCOUNT", "30000");
+}
+// Both OpenBLAS pools shut down before the C runtime's exit sequence
+// (registered from main(), so it runs before the handlers registered at
+// start-up, OpenBLAS's own `gotoblas_quit` among them). Linked in, OpenBLAS
+// has no DLL detach to stop its Win32 server threads; run 43965973397 saw
+// rare hangs and bad exit codes from tiny decks when the pool had two
+// threads. MW_EXE_EXIT_SHUTDOWN=0 leaves the pools alone (the A/B in
+// windows-static.yml's stress step).
+void shutdown_blas_pools() {
+    MWX(blas_thread_shutdown_)();
+#if MW_BLAS_TWO_LIBS
+    MWN(blas_thread_shutdown_)();
+#endif
+}
+void shutdown_blas_pools_at_exit() {
+    const char *v = std::getenv("MW_EXE_EXIT_SHUTDOWN");
+    if (v == nullptr || std::string(v) != "0") std::atexit(shutdown_blas_pools);
+}
+#endif
 
 #if !MW_EXE_NO_PYTHON
 // --- where momwire's Python lives -------------------------------------------
@@ -800,6 +831,11 @@ std::string installed_version(const std::string &home) {
 // Windows 10, and answers FALSE for an id it does not know, so on Windows 7
 // an AVX2 CPU would read as baseline. `xcr0_bits` are the register states the
 // OS saves (XCR0), which the instructions need as much as the CPU bits.
+#if defined(__GNUC__)
+// MinGW-w64 gcc: _xgetbv is an xsave intrinsic, callable only from code
+// compiled for it (it runs only once OSXSAVE, checked first, is set).
+__attribute__((target("xsave")))
+#endif
 bool cpuid_has(int leaf7_ebx_bit, unsigned long long xcr0_bits, bool needs_fma) {
     int r[4];
     __cpuid(r, 0);
@@ -862,6 +898,7 @@ void pick_variant() {
     if (mw_fat::avx2) run_avx2_initializers();
 }
 
+#if defined(_MSC_VER)
 // The avx2 copies' dynamic initializers, which the C runtime does NOT run:
 // fat_avx2_init.h (forced on every avx2 TU) puts their pointers in
 // `.mwav$m`, which the linker sorts between these two markers, in link order
@@ -887,6 +924,33 @@ void run_avx2_initializers() {
     }
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 initializers %d\n", n);
 }
+#else
+// MinGW-w64: the avx2 copies' static constructors, which the C runtime does
+// NOT run: defer_ctors.cmake moves each avx2 object's `.ctors` entries into
+// `.data$mwactors_m*`, which the PE linker sorts between these two markers.
+// They are compiled -mavx2 like the rest of their TU, so on a CPU without
+// AVX they must never run (Intel SDE as Westmere faulted in one, at start-up).
+// Run once, after the pick, before any avx2 code; in reverse order, as
+// libgcc's __do_global_ctors runs `.ctors`.
+using mw_ctor = void (*)();
+__attribute__((section(".data$mwactors_a"), used)) mw_ctor mw_avx2_ctors_begin = nullptr;
+__attribute__((section(".data$mwactors_z"), used)) mw_ctor mw_avx2_ctors_end = nullptr;
+void run_avx2_initializers() {
+    const auto first = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_begin) + sizeof(mw_ctor);
+    const auto last = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_end);
+    int n = 0;
+    for (std::uintptr_t a = last; a > first;) {
+        a -= sizeof(mw_ctor);
+        const mw_ctor f = *reinterpret_cast<volatile mw_ctor *>(a);
+        // `.ctors` lists may carry -1 / 0 sentinels; neither is a function
+        if (f != nullptr && reinterpret_cast<std::intptr_t>(f) != -1) {
+            f();
+            n++;
+        }
+    }
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 initializers %d\n", n);
+}
+#endif
 #endif
 
 #if !MW_EXE_NO_PYTHON
@@ -1158,6 +1222,9 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
 
 #if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
+#if defined(__MINGW32__)
+    shutdown_blas_pools_at_exit();
+#endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
@@ -1774,6 +1841,9 @@ void blas_env_before_load() {
 }  // namespace
 
 int main(int argc, char **argv) {
+#if defined(__MINGW32__)
+    shutdown_blas_pools_at_exit();
+#endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
