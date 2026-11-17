@@ -10,11 +10,18 @@ momwire#1606) with one difference, in NAME: the launcher's name, then
 The variant is the one compiled in (``MW_EXE_VARIANT``): ``avx2`` or ``sse2``,
 ``legacy`` on macOS. Where ``MOMWIRE_FORCE_VARIANT`` names one, the lanes run
 that build, and the line must say so.
+
+A MinGW-w64 build (windows-static.yml, the single-file experiment) names its
+toolchain after the variant, ``...-standalone-avx2-ucrt64``, so a printout's
+``CM version`` card says which of two Windows builds answered; the MSVC build
+names none. ``MW_EXE_EXPECT_TOOLCHAIN`` (the workflow's gates) names the one
+the executable under test must carry, ``none`` for none.
 """
 
 import os
 
 VARIANTS = ("avx2", "sse2", "legacy")
+TOOLCHAINS = ("ucrt64", "mingw64", "clang64")
 
 
 def assert_standalone_line(exe_stdout: bytes, launcher_stdout: bytes) -> str:
@@ -33,8 +40,12 @@ def assert_standalone_line(exe_stdout: bytes, launcher_stdout: bytes) -> str:
     ), (exe, ref)
     prefix = f"{ref_fields[1]}-standalone-"
     assert name.startswith(prefix), (exe, ref)
-    variant = name[len(prefix) :]
+    variant, _, toolchain = name[len(prefix) :].partition("-")
     assert variant in VARIANTS, (exe, ref)
+    assert toolchain in ("", *TOOLCHAINS), (exe, ref)
+    expect = os.environ.get("MW_EXE_EXPECT_TOOLCHAIN")
+    if expect:
+        assert toolchain == ("" if expect == "none" else expect), (exe, expect)
     forced = os.environ.get("MOMWIRE_FORCE_VARIANT")
     if forced in ("avx2", "sse2"):
         assert variant == forced, (exe, forced)

@@ -240,7 +240,20 @@ const char *const EXE_VARIANT = MW_EXE_VARIANT;
 // SimNEC user (or the `CM version` card SimNEC echoes on every deck) can tell
 // this executable from the Python launcher of the same name, and the avx2
 // build from the sse2 one. Everything else in the line is the launcher's.
-#define MW_EXE_VERSION_NAME MW_EXE_LAUNCHER "-standalone-" MW_EXE_VARIANT
+// A MinGW-w64 build (windows-static.yml, the single-file experiment) adds
+// its toolchain after the variant, `...-standalone-avx2-ucrt64`, so a deck's
+// `CM version` card or a bug report says which of two Windows builds of one
+// release answered; the MSVC build (the shipped zip) adds nothing.
+#if defined(__MINGW32__) && defined(__clang__)
+#define MW_EXE_TOOLCHAIN_TAG "-clang64"
+#elif defined(__MINGW32__) && defined(_UCRT)
+#define MW_EXE_TOOLCHAIN_TAG "-ucrt64"
+#elif defined(__MINGW32__)
+#define MW_EXE_TOOLCHAIN_TAG "-mingw64"
+#else
+#define MW_EXE_TOOLCHAIN_TAG ""
+#endif
+#define MW_EXE_VERSION_NAME MW_EXE_LAUNCHER "-standalone-" MW_EXE_VARIANT MW_EXE_TOOLCHAIN_TAG
 
 using Clock = std::chrono::steady_clock;
 const Clock::time_point T0 = Clock::now();
@@ -1394,8 +1407,8 @@ mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EX
 std::string probe_version() {
 #if MW_EXE_FAT
     // the variant this run picked, as a one-variant build names its own
-    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_LAUNCHER "-standalone-" + EXE_VARIANT + " [sb] " +
-           VERSION;
+    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_LAUNCHER "-standalone-" + EXE_VARIANT +
+           MW_EXE_TOOLCHAIN_TAG " [sb] " + VERSION;
 #else
     return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_VERSION_NAME + " [sb] " + VERSION;
 #endif
@@ -1851,14 +1864,14 @@ void blas_env_before_load() {
 // `_cexit` runs the atexit table (static destructors, the diagnostics that
 // report at exit, MOMWIRE_SOMM_LAZY_CHECK's among them) and returns;
 // TerminateProcess then ends the process with main's status, skipping the
-// rest of the C runtime's exit and the loader's teardown. That rest is where
-// the rare hang lives (windows-static.yml, runs 44057069874 and
-// 44081988222: 3 in 22,392 runs, printout complete): the UCRT's `exit`
-// calls LoadLibraryExW (its check for a managed host) and waits on the
-// loader lock, held by an OpenBLAS or OpenMP worker thread that is itself
-// exiting. MW_EXE_EXIT=normal returns from main as before (and shuts the
-// OpenBLAS pools down first, `shutdown_blas_pools`); MW_EXE_EXIT=terminate
-// skips `_cexit` too. Both are for the A/B in the stress job.
+// rest of the C runtime's exit and the loader's teardown, which is where
+// the rare exit hang was seen (standalone/WINDOWS-SINGLE-FILE.md has the
+// counts, the soak and the backtraces: two in the UCRT's `exit` inside
+// LoadLibraryExW on the loader lock, one inside the atexit table freeing
+// memory under the heap lock). MW_EXE_EXIT=normal returns from main as
+// before; with it, the OpenBLAS pools are shut down at exit
+// (`shutdown_blas_pools`) unless MW_EXE_EXIT_SHUTDOWN=0. MW_EXE_EXIT=terminate
+// skips `_cexit` too. All three are for the A/B in the stress job.
 #include <process.h>  // _cexit
 int mw_main(int argc, char **argv);
 int main(int argc, char **argv) {
