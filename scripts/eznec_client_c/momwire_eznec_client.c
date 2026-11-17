@@ -84,6 +84,7 @@
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
 #define WIN32_LEAN_AND_MEAN 1
+#include <fcntl.h>
 #include <io.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -237,6 +238,45 @@ static const char GMO_FRAME_END[] = "\0\r\n";
 #define TRANSPORT_ENV "MOMWIRE_SERVE_TRANSPORT"
 #define UNIX_SUFFIX ".sock"
 #define TCP_SUFFIX ".port"
+
+/* momwire#1979: the environment the engine reads and a spawned server
+ * inherits, so identity -- `momwire_serve_client`'s junction_rule_identity,
+ * feature_identity and thread_identity, spelt again here because this
+ * program cannot import it.  These tables are COPIES of that module's
+ * JUNCTION_RULE_ENV, FEATURE_ENV_PREFIX, FEATURE_ALIASES, FEATURE_DEFAULT_ON,
+ * _FEATURE_ON and THREAD_ENVS (which tests/test_features_registry.py holds
+ * equal to the registry); tests/test_eznec_client_c.py holds each copy equal
+ * to its original, and the elements built from them equal Python's over a
+ * table of environments.  Keep the brace-per-line shapes: the test reads
+ * them. */
+#define JUNCTION_RULE_ENV "MOMWIRE_JUNCTION_RULE"
+#define FEATURE_ENV_PREFIX "MOMWIRE_X_"
+static const char *const FEATURE_ALIASES[][2] = {
+    {"MOMWIRE_EXACT_KERNEL_SERIES", "exact_kernel_series"},
+    {"MOMWIRE_RAZOR_CXX", "razor_cxx"},
+};
+static const char *const FEATURE_DEFAULT_ON[] = {
+    "factored_columns",
+    "height_sheet_recal",
+};
+static const char *const FEATURE_ON[] = {
+    "1",
+    "on",
+    "true",
+    "yes",
+};
+static const char *const THREAD_ENVS[] = {
+    "MOMWIRE_THREADS",
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+};
+#define COUNT_OF(a) (sizeof(a) / sizeof((a)[0]))
+
+/* The test-only probe: `<launcher> -key-elements` writes the elements the
+ * server key hashes, each followed by NUL, to stdout and exits 0 with no
+ * daemon involved.  It is how the tests hold this key's elements equal to
+ * Python's; nothing a host sends spells it. */
+#define KEY_ELEMENTS_FLAG "-key-elements"
 
 /* --------------------------------------------------------------------------
  * the reason
@@ -863,42 +903,289 @@ static int runtime_dir(char *out, size_t cap)
  *
  * momwire#1295: a NEC-4.2-slot name hashes NEC4_KEY_ELEMENT ahead of the
  * basis element, so its server is never a NEC-5 one; a NEC-5 name's key is
- * the key it always was. */
-static void config_key(const char *engine_resolved, int nec4, int named_basis,
-                       const char *basis, char out[17])
+ * the key it always was.
+ *
+ * momwire#1979: then the environment a spawned server inherits, appended
+ * exactly as the Python client appends it -- `env_elements` below -- and
+ * nothing at all when none of it is set, so every such key is the key it
+ * was.  The elements are built NUL-joined in `key_material` and hashed whole
+ * in `config_key`, so what `-key-elements` prints IS what is hashed. */
+
+#ifndef _WIN32
+extern char **environ;
+#endif
+
+/* str.strip()'s ASCII whitespace -- \x1c..\x1f included, which isspace()
+ * does not count. */
+static int py_space(char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r') || (c >= '\x1c' && c <= '\x1f');
+}
+
+static char ascii_lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+/* An environment NAME comparison: case-blind on Windows, where the names are
+ * (and Python's os.environ uppercases them), exact elsewhere. */
+static int env_name_eq(const char *a, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+#ifdef _WIN32
+        if (ascii_lower(a[i]) != ascii_lower(b[i])) {
+            return 0;
+        }
+#else
+        if (a[i] != b[i]) {
+            return 0;
+        }
+#endif
+        if (a[i] == '\0') {
+            return 1;
+        }
+    }
+    return 1;
+}
+
+/* `value.strip()` as [*start, *start + *len). */
+static void strip_span(const char *value, const char **start, size_t *len)
+{
+    size_t n = strlen(value);
+    while (n > 0 && py_space(*value)) {
+        value++;
+        n--;
+    }
+    while (n > 0 && py_space(value[n - 1])) {
+        n--;
+    }
+    *start = value;
+    *len = n;
+}
+
+static int is_feature_on(const char *value)
+{
+    const char *s;
+    size_t n;
+    size_t i;
+    size_t k;
+    strip_span(value, &s, &n);
+    for (i = 0; i < COUNT_OF(FEATURE_ON); i++) {
+        if (strlen(FEATURE_ON[i]) != n) {
+            continue;
+        }
+        for (k = 0; k < n && ascii_lower(s[k]) == FEATURE_ON[i][k]; k++) {
+        }
+        if (k == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* Python's `junction_rule_identity() + feature_identity() +
+ * thread_identity()`, each element followed by NUL into `out`. */
+static int env_elements(buf_t *out)
 {
     static const char nul = '\0';
-    static const char default_tag[] = "default";
-    static const char basis_prefix[] = "basis=";
+    const char *value;
+    char **names = NULL;
+    size_t count = 0;
+    size_t cap = 0;
+    size_t i;
+    int failed = 0;
+#ifdef _WIN32
+    char **env = _environ;
+#else
+    char **env = environ;
+#endif
+
+    value = getenv(JUNCTION_RULE_ENV);
+    if (value != NULL && value[0] != '\0') {
+        if (buf_add(out, "junction_rule=", 14) != 0 ||
+            buf_add(out, value, strlen(value) + 1) != 0) {
+            return -1;
+        }
+    }
+
+    /* feature_identity: a set of "<name>" / "<name>=off", sorted. */
+    for (i = 0; env != NULL && env[i] != NULL && !failed; i++) {
+        const char *entry = env[i];
+        const char *eq = strchr(entry, '=');
+        const char *name = NULL;
+        size_t name_len = 0;
+        size_t prefix_len = strlen(FEATURE_ENV_PREFIX);
+        size_t var_len;
+        size_t a;
+        int default_on = 0;
+        int on;
+        const char *s;
+        size_t n;
+        char *item;
+        size_t k;
+
+        if (eq == NULL || eq == entry) {
+            continue; /* Windows' "=C:=C:\\..." drive entries among them */
+        }
+        var_len = (size_t)(eq - entry);
+        value = eq + 1;
+        if (var_len >= prefix_len && env_name_eq(entry, FEATURE_ENV_PREFIX, prefix_len)) {
+            name = entry + prefix_len;
+            name_len = var_len - prefix_len;
+        } else {
+            for (a = 0; a < COUNT_OF(FEATURE_ALIASES); a++) {
+                if (strlen(FEATURE_ALIASES[a][0]) == var_len &&
+                    env_name_eq(entry, FEATURE_ALIASES[a][0], var_len)) {
+                    name = FEATURE_ALIASES[a][1];
+                    name_len = strlen(name);
+                    break;
+                }
+            }
+            if (name == NULL) {
+                continue;
+            }
+        }
+        item = (char *)malloc(name_len + sizeof "=off");
+        if (item == NULL) {
+            failed = 1;
+            break;
+        }
+        for (k = 0; k < name_len; k++) {
+            item[k] = ascii_lower(name[k]);
+        }
+        item[name_len] = '\0';
+        for (a = 0; a < COUNT_OF(FEATURE_DEFAULT_ON); a++) {
+            if (strcmp(item, FEATURE_DEFAULT_ON[a]) == 0) {
+                default_on = 1;
+            }
+        }
+        on = is_feature_on(value);
+        strip_span(value, &s, &n);
+        if (default_on && n > 0 && !on) {
+            memcpy(item + name_len, "=off", sizeof "=off");
+        } else if (default_on || !on) {
+            free(item);
+            continue;
+        }
+        for (k = 0; k < count && strcmp(names[k], item) != 0; k++) {
+        }
+        if (k < count) {
+            free(item);
+            continue;
+        }
+        if (count == cap) {
+            size_t grown = cap ? cap * 2 : 8;
+            char **more = (char **)realloc(names, grown * sizeof *names);
+            if (more == NULL) {
+                free(item);
+                failed = 1;
+                break;
+            }
+            names = more;
+            cap = grown;
+        }
+        names[count++] = item;
+    }
+    if (!failed && count > 0) {
+        qsort(names, count, sizeof *names, cmp_str);
+        for (i = 0; i < count && !failed; i++) {
+            if (buf_add(out, "feature=", 8) != 0 ||
+                buf_add(out, names[i], strlen(names[i]) + 1) != 0) {
+                failed = 1;
+            }
+        }
+    }
+    for (i = 0; i < count; i++) {
+        free(names[i]);
+    }
+    free(names);
+    if (failed) {
+        return -1;
+    }
+
+    for (i = 0; i < COUNT_OF(THREAD_ENVS); i++) {
+        const char *s;
+        size_t n;
+        value = getenv(THREAD_ENVS[i]);
+        if (value == NULL) {
+            continue;
+        }
+        strip_span(value, &s, &n);
+        if (n == 0) {
+            continue;
+        }
+        if (buf_add(out, "threads.", 8) != 0 ||
+            buf_add(out, THREAD_ENVS[i], strlen(THREAD_ENVS[i])) != 0 ||
+            buf_add(out, "=", 1) != 0 || buf_add(out, s, n) != 0 ||
+            buf_add(out, &nul, 1) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Every element the key hashes, each followed by NUL. */
+static int key_material(const char *engine_resolved, int nec4, int named_basis,
+                        const char *basis, buf_t *out)
+{
+    static const char nul = '\0';
+    const char *fixed[4];
+    size_t i;
+
+    fixed[0] = ENGINE_TAG;
+    fixed[1] = engine_resolved;
+    fixed[2] = IDLE_TIMEOUT_REPR;
+    fixed[3] = WIRE_KEY_ELEMENT;
+    for (i = 0; i < COUNT_OF(fixed); i++) {
+        if (buf_add(out, fixed[i], strlen(fixed[i]) + 1) != 0) {
+            return -1;
+        }
+    }
+    if (nec4 && buf_add(out, NEC4_KEY_ELEMENT, sizeof NEC4_KEY_ELEMENT) != 0) {
+        return -1;
+    }
+    if (named_basis) {
+        if (buf_add(out, "basis=", 6) != 0 || buf_add(out, basis, strlen(basis)) != 0 ||
+            buf_add(out, &nul, 1) != 0) {
+            return -1;
+        }
+    } else if (buf_add(out, "default", sizeof "default") != 0) {
+        return -1;
+    }
+    return env_elements(out);
+}
+
+/* `digest`: sha256 over the elements NUL-JOINED (no trailing NUL), the first
+ * sixteen hex digits. */
+static int config_key(const char *engine_resolved, int nec4, int named_basis,
+                      const char *basis, char out[17])
+{
+    buf_t material = {NULL, 0, 0};
     sha256_t hash;
     unsigned char digest[32];
     int i;
 
+    if (key_material(engine_resolved, nec4, named_basis, basis, &material) != 0) {
+        buf_free(&material);
+        note("out of memory composing the server key");
+        return -1;
+    }
     sha256_init(&hash);
-    sha256_update(&hash, ENGINE_TAG, strlen(ENGINE_TAG));
-    sha256_update(&hash, &nul, 1);
-    sha256_update(&hash, engine_resolved, strlen(engine_resolved));
-    sha256_update(&hash, &nul, 1);
-    sha256_update(&hash, IDLE_TIMEOUT_REPR, strlen(IDLE_TIMEOUT_REPR));
-    sha256_update(&hash, &nul, 1);
-    sha256_update(&hash, WIRE_KEY_ELEMENT, strlen(WIRE_KEY_ELEMENT));
-    sha256_update(&hash, &nul, 1);
-    if (nec4) {
-        sha256_update(&hash, NEC4_KEY_ELEMENT, strlen(NEC4_KEY_ELEMENT));
-        sha256_update(&hash, &nul, 1);
-    }
-    if (named_basis) {
-        sha256_update(&hash, basis_prefix, strlen(basis_prefix));
-        sha256_update(&hash, basis, strlen(basis));
-    } else {
-        sha256_update(&hash, default_tag, strlen(default_tag));
-    }
+    sha256_update(&hash, material.data, material.len - 1);
     sha256_final(&hash, digest);
+    buf_free(&material);
 
     for (i = 0; i < 8; i++) {
         snprintf(out + i * 2, 3, "%02x", digest[i]);
     }
     out[16] = '\0';
+    return 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -1685,11 +1972,11 @@ static void choose_pin(setup_t *setup)
     }
 }
 
-static int plan(setup_t *setup, const char *argv0)
+/* The engine this name spawns and the basis it asks for: the half of `plan`
+ * that touches nothing on disk, which `-key-elements` shares. */
+static int identify(setup_t *setup, const char *argv0)
 {
     char directory[PATH_CAP];
-    char runtime[PATH_CAP];
-    char key[17];
 
     own_directory(argv0, directory, sizeof directory);
     if (join_path(setup->engine, sizeof setup->engine, directory, ENGINE_NAME) != 0) {
@@ -1699,12 +1986,24 @@ static int plan(setup_t *setup, const char *argv0)
     resolve_path(setup->engine, setup->engine_key, sizeof setup->engine_key);
     setup->named_basis =
         basis_of(argv0, setup->basis, sizeof setup->basis, &setup->nec4);
+    return 0;
+}
 
+static int plan(setup_t *setup, const char *argv0)
+{
+    char runtime[PATH_CAP];
+    char key[17];
+
+    if (identify(setup, argv0) != 0) {
+        return -1;
+    }
     if (runtime_dir(runtime, sizeof runtime) != 0) {
         return -1;
     }
-    config_key(setup->engine_key, setup->nec4, setup->named_basis, setup->basis,
-               key);
+    if (config_key(setup->engine_key, setup->nec4, setup->named_basis, setup->basis,
+                   key) != 0) {
+        return -1;
+    }
 
     if (snprintf(setup->unix_path, sizeof setup->unix_path, "%s%c%s%s", runtime,
                  DIR_SEP, key, UNIX_SUFFIX) >= (int)sizeof setup->unix_path ||
@@ -2111,6 +2410,29 @@ static void print_version_line(const char *argv0)
     }
 }
 
+/* KEY_ELEMENTS_FLAG: the key's elements, NUL-terminated each, on stdout. */
+static int print_key_elements(const char *argv0)
+{
+    static setup_t probe;
+    buf_t material = {NULL, 0, 0};
+
+    memset(&probe, 0, sizeof probe);
+    if (identify(&probe, argv0) != 0 ||
+        key_material(probe.engine_key, probe.nec4, probe.named_basis, probe.basis,
+                     &material) != 0) {
+        buf_free(&material);
+        fprintf(stderr, "%s\n", g_reason);
+        return 1;
+    }
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    fwrite(material.data, 1, material.len, stdout);
+    fflush(stdout);
+    buf_free(&material);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     static setup_t setup;
@@ -2127,6 +2449,9 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "-version") == 0) {
         print_version_line(argv[0]);
         return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], KEY_ELEMENTS_FLAG) == 0) {
+        return print_key_elements(argv[0]);
     }
     if (argc < 2) {
         /* 4nec2's form (momwire#1488): the two paths on stdin, for either
