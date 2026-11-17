@@ -1205,8 +1205,8 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
         ground_z=result.ground_z or 0.0,
         cliff=cliff,
         p_radiated=result.p_radiated,
-        # NEC-5's average-gain rules (momwire#1962, its phi trapezoid) are
-        # not measured on NEC-4.2
+        # NEC-5's phi trapezoid for the average (momwire#1962) is not
+        # measured on NEC-4.2; its single-cut rule is, and holds here
         nec4_average=True,
     )
     range_m = card.f(8)

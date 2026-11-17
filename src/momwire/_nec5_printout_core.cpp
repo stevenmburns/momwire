@@ -1781,9 +1781,9 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     // XNDA's A digit asks for the average gain (Python's non-negative `% 10`)
     int64_t digit = rq.xnda.i64() % 10;
     if (digit < 0) digit += 10;
-    // a single cut on either axis averages nothing on the NEC-5 engine
-    // (momwire#1962, `_pattern`'s `nec4_average`)
-    if (!nec4_average && (nt == 1 || nph == 1)) digit = 0;
+    // a single cut on either axis averages nothing, on the NEC-5 engine and
+    // on NEC-4.2 alike (momwire#1962, `_pattern`'s docstring)
+    if (nt == 1 || nph == 1) digit = 0;
     if (digit != 0) {
         // A = 2 prints the trailer with no rows (momwire#1503).
         if (digit == 2) block.rows.clear();
