@@ -2057,6 +2057,7 @@ class BSplineSolver(
         factored_columns=None,
         height_sheet_recal=None,
         crossing_table=None,
+        crossing_sheet_retune=None,
         crossing_above_rule=None,
         kcl_nullspace=None,
         cancel=None,
@@ -2143,6 +2144,12 @@ class BSplineSolver(
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
         self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        # momwire#1956: the near-interface sheets' build weights retuned. None
+        # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
+        # python); off is the shipped census, bit for bit.
+        self._crossing_sheet_retune = _features.enabled(
+            "crossing_sheet_retune", crossing_sheet_retune
+        )
         # momwire#1860 B1: a crossing deck's above/above remainder at the
         # above-ground rule. None defers to MOMWIRE_X_CROSSING_ABOVE_RULE
         # (`_features`, reach 1, python); off is the cross block's order,
@@ -9215,8 +9222,8 @@ class BSplineSolver(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """`_compute_Z_operator_buried_scoped` under this solver's
-        `factored_columns`, `height_sheet_recal` and `crossing_table` choices
-        (momwire#1860)."""
+        `factored_columns`, `height_sheet_recal`, `crossing_table` and
+        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
         with (
             _near_interface.factored_columns_scope(
                 getattr(self, "_factored_columns", False)
@@ -9226,6 +9233,9 @@ class BSplineSolver(
             ),
             _near_interface.crossing_table_scope(
                 getattr(self, "_crossing_table", False)
+            ),
+            _near_interface.crossing_sheet_retune_scope(
+                getattr(self, "_crossing_sheet_retune", False)
             ),
         ):
             return self._compute_Z_operator_buried_scoped(

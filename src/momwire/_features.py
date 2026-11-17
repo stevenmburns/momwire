@@ -406,6 +406,41 @@ FEATURES: dict[str, Feature] = {
             drift=1e-7,
             offer=True,
         ),
+        # The near-interface sheets' build weights retuned (momwire#1956):
+        # the plane and height census at a lower node weight than the 0.15
+        # measured with every sheet built from scratch, so a crossing deck's
+        # radial plane (and a low wire's height) is read from a sheet where
+        # the shipped census computes each row. The shipped sheets and
+        # twin, a different split between them; the weights are constants,
+        # so the plan is still never decided on what is cached. Opt-in:
+        # its cost is a cold process's first sheet build, which a small
+        # deck pays without the warm gain.
+        Feature(
+            name="crossing_sheet_retune",
+            reach=1,
+            env="MOMWIRE_X_CROSSING_SHEET_RETUNE",
+            kind="python",
+            issue=1956,
+            since="2026-11-16",
+            kwarg="crossing_sheet_retune",
+            paths=("tests/test_crossing_sheet_retune_1956.py",),
+            label="more near-ground tables",
+            summary=(
+                "Read more of the entries between wires above and below the "
+                "ground from cached tables (a buried radial screen's, a low "
+                "wire's), instead of computing each. Faster once the tables "
+                "are cached; the first solve in a fresh process builds them."
+            ),
+            # |dZin|/|Zin| against off, every run (frequency) of every deck
+            # in tests/fixtures with a ground card (168) and the momwire#1956
+            # scoping decks, both executables' C++ twin
+            # (Skylake, T4): at most 6.2e-13 (fat_hub, nec5-razor-2p;
+            # nec5-bspline 3.2e-13), the plane sheets' own interpolation error
+            # where a row moves from the column twin to a sheet. 2e-12 with
+            # about 3x margin.
+            drift=2e-12,
+            offer=False,
+        ),
         # BSplineSolver's junction constraints eliminated before the factor
         # (momwire#1898): Z reduced to the constraint null space in place,
         # where the Schur route back-substitutes n_c extra right-hand sides.
