@@ -18,7 +18,8 @@ What is held:
 - the C++ fills' plan and values are the Python route's to the bit, on and
   off (the TEST-ONLY `near_interface_eval_designed`);
 - on, a hub deck's input impedance agrees with off within the declared drift
-  on both formulations, and the plan did change.
+  on both formulations, and the plan did change; so does the deep, high-
+  frequency hub where the drift was measured largest (razor-2p).
 """
 
 from __future__ import annotations
@@ -185,3 +186,45 @@ def test_on_agrees_with_off_within_the_declared_drift(cls):
     assert planes[True] > planes[False]
     drift = abs(zin[True] - zin[False]) / abs(zin[False])
     assert drift <= _features.FEATURES[NAME].drift, drift
+
+
+def _deep_hub(f, depth, q, n=16):
+    """A hub deck scaled to `q`: `n` radials of length q at `depth`, a
+    2-segment rise, a 15-segment vertical of length q fed at 0.4333 q. At
+    28 MHz, 1.5 m deep, q = 2.5 m the plan takes the most planes and the
+    drift is the largest measured (9.77e-12 on razor-2p, momwire#1956)."""
+    wires = [
+        np.array([(q * dx, q * dy, -depth), (0.0, 0.0, -depth)])
+        for dx, dy in _radial_dirs(n)
+    ]
+    wires.append(np.array([(0.0, 0.0, -depth), (0.0, 0.0, 0.0)]))
+    wires.append(np.array([(0.0, 0.0, q), (0.0, 0.0, 0.0)]))
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[10]] * n + [[2], [15]],
+        junctions=[
+            [(i, "end") for i in range(n)] + [(n, "start")],
+            [(n, "end"), (n + 1, "end")],
+        ],
+        feeds=[(n + 1, 0.43333333333 * q, 1 + 0j)],
+        wavelength=299792458.0 / f,
+        wire_radius=A,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    )
+
+
+def test_deep_high_frequency_hub_within_the_declared_drift():
+    deck = _deep_hub(28e6, 1.5, 2.5)
+    zin = {}
+    planes = {}
+    for on in (False, True):
+        before = ni._SHEET_STATS["planes_planned"]
+        s = RazorSolver(**deck, crossing_sheet_retune=on)
+        zin[on] = complex(np.atleast_1d(s.compute_impedance()[0])[0])
+        planes[on] = ni._SHEET_STATS["planes_planned"] - before
+    assert planes[True] > planes[False]
+    drift = abs(zin[True] - zin[False]) / abs(zin[False])
+    # Over the old 2e-12, so this deck is the one the declared bound is for.
+    assert 2e-12 < drift <= _features.FEATURES[NAME].drift, drift
