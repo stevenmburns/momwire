@@ -560,6 +560,9 @@ MediumPart medium_part(const Front &f, bool below) {
     // momwire#1619 stage 1: the exact ring kernel on the above medium's own
     // fill, its plan built below once the chopped rows are known.
     s.exact = !below && f.exact;
+    // momwire#1454: and the k-series where it serves, as Python's correction
+    // over the sub-geometry reads the same switch.
+    s.exact_kernel_series = f.exact_kernel_series;
     s.compose = f.compose;
     s.ground_eps_r_ = f.ground_eps_r_;
     s.ground_sigma_ = f.ground_sigma_;

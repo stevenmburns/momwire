@@ -153,6 +153,9 @@ struct FrontInputs {
     int64_t chunk_elems = 2000000;
     // Fill-pair reuse (momwire#1971): `SolveInputs::pair_reuse`'s 0 / 1 / 2.
     int pair_reuse = 0;
+    // The exact kernel's k-series (momwire#1454, `exact_kernel_series`):
+    // the correction's groups that it serves take it (`add_exact_correction`).
+    bool exact_kernel_series = false;
 };
 
 struct Junction {
@@ -296,6 +299,8 @@ class Front {
     int64_t chunk_elems = 0;
     // Fill-pair reuse (momwire#1971), as the inputs asked.
     int pair_reuse = 0;
+    // The exact kernel's k-series (momwire#1454), as the inputs asked.
+    bool exact_kernel_series = false;
 
     // The fill's arguments, as views into this object (valid while it is).
     SolveInputs solve_inputs(uintptr_t cancel_flag) const;
