@@ -86,6 +86,27 @@ GRADED_N_PER_PANEL = 8
 NEAR_N_QP = 32
 
 
+def _measure_sg_near():
+    """MEASUREMENT PATCH (measure-sg-buried-orders-1117, never for merge):
+    `MOMWIRE_MEASURE_SG_NEAR = <graded>|<near_n_qp>|<n_t>|<n_xi>` replaces
+    the near-pair rules (graded nodes per panel, near product order, the
+    parallel reduction's two orders); an empty field keeps the shipped one.
+    Read once at import, before `parallel_pair_moments` binds its defaults,
+    so the accelerated parallel path sees it too."""
+    import os
+
+    spec = os.environ.get("MOMWIRE_MEASURE_SG_NEAR")
+    vals = [GRADED_N_PER_PANEL, NEAR_N_QP, PARALLEL_N_T, PARALLEL_N_XI]
+    if spec:
+        for n, f in enumerate(spec.split("|")[:4]):
+            if f.strip():
+                vals[n] = int(f)
+    return tuple(vals)
+
+
+GRADED_N_PER_PANEL, NEAR_N_QP, PARALLEL_N_T, PARALLEL_N_XI = _measure_sg_near()
+
+
 def shape_values(k, xi):
     """The folded shape set at arcs `xi` from the segment centre: an array
     (3, *xi.shape) of `1`, `sin k xi`, `-2 sin^2(k xi / 2)`."""

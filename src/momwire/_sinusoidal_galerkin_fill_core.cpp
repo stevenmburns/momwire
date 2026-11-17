@@ -145,10 +145,29 @@ inline double e_acc(double acc, double a, double b) {
 // --- constants (`_sinusoidal_mp`, `bspline`) ---------------------------------
 
 constexpr double NEAR_RATIO = 2.0;
-constexpr int64_t PARALLEL_N_T = 24;
-constexpr int64_t PARALLEL_N_XI = 8;
-constexpr int64_t GRADED_N_PER_PANEL = 8;
-constexpr int64_t NEAR_N_QP = 32;
+// MEASUREMENT PATCH (measure-sg-buried-orders-1117, never for merge): the
+// env `MOMWIRE_MEASURE_SG_NEAR = <graded>|<near_n_qp>|<n_t>|<n_xi>` replaces
+// the near-pair rules, as `_sinusoidal_mp._measure_sg_near` does; an empty
+// field (or unset) keeps the shipped one. Read once, at load.
+int64_t measure_near_field(int idx, int64_t shipped) {
+    const char *spec = std::getenv("MOMWIRE_MEASURE_SG_NEAR");
+    if (spec == nullptr || *spec == 0) return shipped;
+    const std::string s(spec);
+    std::size_t p = 0;
+    for (int n = 0; n < idx; n++) {
+        p = s.find('|', p);
+        if (p == std::string::npos) return shipped;
+        p++;
+    }
+    std::size_t q = s.find('|', p);
+    if (q == std::string::npos) q = s.size();
+    const std::string f = s.substr(p, q - p);
+    return f.empty() ? shipped : std::stoll(f);
+}
+const int64_t GRADED_N_PER_PANEL = measure_near_field(0, 8);
+const int64_t NEAR_N_QP = measure_near_field(1, 32);
+const int64_t PARALLEL_N_T = measure_near_field(2, 24);
+const int64_t PARALLEL_N_XI = measure_near_field(3, 8);
 constexpr double PAIR_TOL = 1e-9;  // `classify_pairs`' tol
 constexpr int64_t WINDOW_BYTES = int64_t(128) << 20;
 constexpr int64_t N_SHAPES = 3;
