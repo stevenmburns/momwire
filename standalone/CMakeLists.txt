@@ -364,6 +364,16 @@ else()
     set(MW_OMP_FLAG -fopenmp)
   endif()
 endif()
+# Extra flags for the C++ cores, appended last so they win over the defaults
+# above (gcc takes the last -ffp-contract=; cl the last /fp:). Empty in every
+# shipped build: the experiments in windows-static.yml set it (an MSVC build
+# at /fp:precise, a gcc one at -ffp-contract=fast) to measure which part of
+# the code generation a fill-time gap comes from.
+set(MW_EXE_EXTRA_CORE_FLAGS "" CACHE STRING "experiment only: flags appended to the C++ cores")
+if(MW_EXE_EXTRA_CORE_FLAGS)
+  separate_arguments(_mw_extra NATIVE_COMMAND "${MW_EXE_EXTRA_CORE_FLAGS}")
+  list(APPEND MW_CORE_FLAGS ${_mw_extra})
+endif()
 add_library(mw_core OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core PRIVATE ${MW_CORE_FLAGS} ${MW_OMP_FLAG})
