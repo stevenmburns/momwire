@@ -29,6 +29,11 @@ from momwire.sinusoidal import SinusoidalSolver
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = pytest.mark.reach(1)
 
+#: The verify sample's level on these decks, which hold no pair the kernel
+#: rounds coarsely (`_sin_pair_reuse.VERIFY_TOL` has the margin for those):
+#: the old bound, kept as this file's gate.
+CLEAN = 1e-10
+
 LAM = 21.1
 DRIFT = _features.FEATURES["pair_reuse"].drift
 # The fill's own bound, max |dZ| / max |Z| (the registry's `drift` is the
@@ -138,7 +143,7 @@ def test_on_matches_off(ground, ek):
     # as the direct ones on a deck that is mostly at one height.
     assert n_cls < n_pairs / 2
     assert _rel(on, base) <= MATRIX
-    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    assert 0.0 <= s.pair_reuse_verify_max <= CLEAN
 
 
 @pytest.mark.skipif(
@@ -240,7 +245,8 @@ def _free_space_key(monkeypatch):
     vertical tangent."""
     monkeypatch.setattr(pr, "ground_segment_types", lambda s, o, t: (s, o))
 
-    def as_ground(obs_c, obs_t, src_c, src_t, gz, seg_h, a_obs, st, ot, rows):
+    def as_ground(obs_c, obs_t, src_c, src_t, gz, seg_h, a_obs, st, ot, rows, **_):
+        # Uncoded (no reversed types): the classes as stored (momwire#1969).
         plan = pr.build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, st, ot, rows)
         N = src_c.shape[0]
         _, first, inv = np.unique(
@@ -338,7 +344,7 @@ def test_an_interface_off_zero_over_a_sweep(ground, gz, ek):
     assert set(s.pair_reuse_census) == {"direct", "reflected"}
     # Measured (Skylake, gz +1.5): at most 6e-14.
     assert np.max(np.abs(z_on - z_off) / np.abs(z_off)) <= DRIFT
-    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    assert 0.0 <= s.pair_reuse_verify_max <= CLEAN
 
 
 def _crossed_stacks(segs=21):
@@ -369,7 +375,7 @@ def test_coincident_centres_share_a_class(ground):
     base, _ = _z(_crossed_stacks(n), **GROUNDS[ground])
     on, s = _z(_crossed_stacks(n), pair_reuse="verify", **GROUNDS[ground])
     assert _rel(on, base) <= MATRIX
-    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    assert 0.0 <= s.pair_reuse_verify_max <= CLEAN
     cls = s._sin_reuse_plans["reflected"][1].cls
     c = n // 2
     # The centres' pair (d = 0) and its twin in the rotated stack.
@@ -401,4 +407,14 @@ def test_verify_checks_the_reflected_block_against_the_band_path(monkeypatch):
         _z(_yagi(), pair_reuse=True, **GROUNDS[ground])
         assert calls == []
         _, s = _z(_yagi(), pair_reuse="verify", **GROUNDS[ground])
-        assert calls and s.pair_reuse_verify_max <= pr.VERIFY_TOL
+        assert calls and s.pair_reuse_verify_max <= CLEAN
+
+
+@pytest.fixture(autouse=True)
+def _reuse_on_small_decks(monkeypatch):
+    """These decks sit below the small-deck threshold on purpose (cheap) and
+    test the reuse itself, `pair_reuse=True`'s fused gather included, which
+    `"verify"` would bypass: the threshold is lowered here, and
+    `test_sin_pair_reuse_small_deck_1969` holds it."""
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_FREE", 0)
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_GROUND", 0)

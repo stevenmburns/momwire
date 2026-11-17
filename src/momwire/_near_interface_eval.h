@@ -194,6 +194,7 @@ struct Features {
     bool height_sheet_recal = false;  // L2: the recalibrated height census
     bool crossing_table = false;      // L5: the crossing rows from one table
     bool crossing_above_rule = false;  // B1: bspline's above x above rule
+    bool crossing_sheet_retune = false;  // momwire#1956: the sheets' build weights retuned
 };
 Features &requested_features();
 const Features &active_features();

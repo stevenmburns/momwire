@@ -147,17 +147,40 @@ void configure_grid_cache(const std::string &tag) {
 
 long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs,
                         long long *below_pairs) {
-    // the size policy reads n_basis alone here
     if (crossing_pairs) *crossing_pairs = 0;
     if (below_pairs) *below_pairs = 0;
 #if MW_ROUTE_NEC4
+    // the size policy reads n_basis alone here
     return nec4::largest_solve(latin1_text, "bspline", open_end);
 #endif
     const nec5::SeamResult r = nec5::bspline_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
-    for (const nec5::Prepared &p : r.prepared)
-        if (nec5::bspline_part(p).front) n = std::max<long long>(n, nec5::bspline_part(p).front->basis.n_basis);
+    for (const nec5::Prepared &p : r.prepared) {
+        const nec5::BSplineFront *f = nec5::bspline_part(p).front.get();
+        if (!f) continue;
+        n = std::max<long long>(n, f->basis.n_basis);
+        // The size policy's other two measures, as the razor route reports
+        // them (route.cpp): a buried fill's (`fill_buried`) above segments x
+        // below segments when it has both sides (the crossing serve, or the
+        // transmitted blocks of wires on both sides with no crossing node),
+        // and a wholly-buried one's segments squared. Reported as 0 before
+        // momwire#1956, so a crossing deck under 128 basis ran on the serial
+        // copy: d3_hub without its near field (109 basis, 1,312 crossing
+        // pairs) took 103 ms at the policy's one thread and takes 46 at
+        // every core (Skylake, 4 cores, Sommerfeld store off, median of 3),
+        // the printout byte for byte the same. 30 of the 168 decks with a
+        // ground card in tests/fixtures move from 1 thread to every core this
+        // way, each printing what it printed before.
+        if (!f->buried) continue;
+        const std::vector<uint8_t> &below_wire = f->basis.below_wire;
+        const std::vector<int64_t> &offsets = f->geom.seg_offsets;
+        long long above = 0, below = 0;
+        for (size_t w = 0; w < below_wire.size() && w + 1 < offsets.size(); w++)
+            (below_wire[w] != 0 ? below : above) += offsets[w + 1] - offsets[w];
+        if (crossing_pairs && above > 0) *crossing_pairs = std::max(*crossing_pairs, above * below);
+        if (below_pairs && above == 0) *below_pairs = std::max(*below_pairs, below * below);
+    }
     return n;
 }
 

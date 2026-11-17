@@ -21,6 +21,7 @@ layer is text, and these decks print the same digits on both sides.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -769,3 +770,38 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     assert b"+factored_columns" not in line2, line2
     assert (b"+crossing_table" in line2) == bool(on), line2
     assert (b"+crossing_above_rule" in line2) == bool(on), line2
+
+
+CROSSING = FIXTURES / "razor_printout_crossing" / "slant_base_source.nec"
+
+
+def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
+    # momwire#1956: the size policy (`threads_for`) gives every core to a
+    # buried deck with CROSSING_PAIRS above x below segment pairs or more,
+    # whatever its basis count. nec5-bspline reported none, so a crossing
+    # deck under 128 basis ran on one thread. Both formulations report them
+    # now, and the policy's printout is the one thread's, byte for byte.
+    shutil.copy(CROSSING, tmp_path / CROSSING.name)
+    env = {k: v for k, v in os.environ.items() if k != "MOMWIRE_THREADS"}
+    r = subprocess.run(
+        [EXE, CROSSING.name, "policy.out"],
+        cwd=tmp_path,
+        env=dict(env, MW_EXE_TIMES="1"),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    m = re.search(
+        r"cxx: size n_basis (\d+), crossing pairs (\d+), below pairs", r.stderr
+    )
+    assert m, r.stderr
+    assert int(m[1]) < 128 and int(m[2]) >= 64, m[0]
+    subprocess.run(
+        [EXE, CROSSING.name, "one.out"],
+        cwd=tmp_path,
+        env=dict(env, MOMWIRE_THREADS="1"),
+        capture_output=True,
+        check=True,
+    )
+    policy = (tmp_path / "policy.out").read_bytes()
+    assert policy == (tmp_path / "one.out").read_bytes()

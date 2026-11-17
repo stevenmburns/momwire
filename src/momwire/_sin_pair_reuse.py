@@ -80,6 +80,32 @@ the ORIGINAL frame (`evaluate_pairs`): the reflected term needs no
 canonical placement, and the representatives come in runs of observer rows
 with many sources each, the evaluators' efficient shape. Over ground the
 fill holds two class maps, the direct and the reflected, as over PEC.
+
+ORIENTATION (momwire#1969). Both keys are measured along the segments'
+stored tangents, and a tangent is a convention: reversing one (s -> -s
+along it) is the same physical pair. So a mirror image of a closed loop,
+which reverses the loop's direction and so both tangents of a pair, or the
+offsets +k and -k along one straight run, would key apart. Reversing a
+tangent moves the key and the value by known signs:
+
+* the SOURCE's: z, td (direct) and d.a, a.b (reflected) change sign, and
+  its two end codes swap (the source type, under the extended kernel; the
+  reflected term's t_nz too). Its basis shapes, as vectors along the new
+  tangent, are -const, +sin, -cos of the old: the odd shape's own sign
+  cancels the current's;
+* the OBSERVER's: rdt, td (direct) and d.b, a.b (reflected) change sign,
+  with t_mz in the reflected term's observer type, and the tested component
+  E.t_obs changes sign in every shape.
+
+Each pair is keyed in the orientation whose key is the largest of its four
+(lexicographically: the source-odd column, the observer-odd column, the
+both-odd one, then the types), and its flips ride in the class map's two
+low bits (`CODE_BITS`): `CODE_SIGNS` is the sign each flip combination puts
+on the three shapes, applied at the gather. A class's stored value is the
+canonical orientation's, its representative's own value times its code's
+signs (`evaluate`, `evaluate_classes`). A pair whose key is unchanged by a
+flip has the shapes that flip negates equal to zero up to rounding, so
+which of its orientations is taken is immaterial. Near pairs keep code 0.
 """
 
 from __future__ import annotations
@@ -137,7 +163,31 @@ _CANON_CHUNK = 1 << 18
 
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
-VERIFY_TOL = 1e-10
+#:
+#: It sits above the direct kernel's own reproducibility, not at the
+#: typical pair's agreement (~1e-12). A far pair whose observer lies close
+#: to the source's AXIS (a vertical arm's image under a horizontal one, say)
+#: has a shape formed as a difference of much larger end terms, which the
+#: kernel rounds at a few 1e-10 of the pair's largest |Φ|: the same
+#: pair spelled from a mirror image, or with its observer moved 4 ulps,
+#: reads 4e-10 apart (the jack of momwire#1969's second finding, sin shape,
+#: PEC image, extended kernel). The canonical key merges mirror images, so
+#: more sampled pairs meet a congruent representative spelled differently.
+#: Measured (Skylake), verify's largest per-pair difference, with every
+#: matrix and feed impedance correct (max |dZ| / max |Z| <= 5.4e-14):
+#:
+#:   probe                                         fills   largest
+#:   adversarial decks, 4 grounds x EK x 3 freqs     354   8.1e-11
+#:   six-arm jack, the stored key (97262e36)         432   4.6e-9
+#:   six-arm jack, the canonical key                 864   1.0e-8
+#:
+#: and on deliberate defects, the smallest any test or probe injects: a
+#: source keyed without its end-code swap 5.4e-5 (feed impedance 540x the
+#: drift), a reflected code map with its flips swapped 2.3e-4, a wrong sign
+#: entry 8.2e-3. The bound has 10x over the noise and 500x under the
+#: smallest defect. That defect read 5.4e-5 here and 2.7e-7 in the feed
+#: impedance: at that ratio, 1e-7 here is the drift bound (5e-10) there.
+VERIFY_TOL = 1e-7
 
 #: `pair_reuse="verify"`: pairs checked per observer band.
 VERIFY_SAMPLES = 512
@@ -160,6 +210,56 @@ VERIFY_SAMPLES = 512
 #: a few percent slower. A cheaper census, or a sweep long enough to repay
 #: it, is what turning this on needs.
 SECTOR_ROUTE = False
+
+#: Segments below which `pair_reuse` steps aside (`pair_reuse_declined`),
+#: the census costing more than a small deck's fill saves: in free space and
+#: over the PEC image, and over a finite ground (Sommerfeld or reflection
+#: coefficient), whose image term is dearer per pair and so repays sooner.
+#: `pair_reuse="verify"` ignores them, so a test can still check the reuse
+#: on a small deck. Measured, wall seconds per deck, warm, one resident
+#: process. Free space, Skylake, 4 threads, 101 frequencies (reuse off /
+#: the stored-tangent key / the canonical key):
+#:
+#:   deck     segs   off    stored  canonical
+#:   sfd_h5    203   0.91   1.09    1.10       (20 % slower)
+#:   sfd_h9    365   1.71   1.67    1.68
+#:   sfd_h13   529   2.62   2.18    2.24
+#:
+#: Over Sommerfeld, Skylake (momwire#1970's ladder), off -> on, 8 and 4
+#: threads:
+#:
+#:   deck     segs   8 threads      4 threads
+#:   gsfd_h1    41   1.12 -> 1.28   1.04 -> 1.29
+#:   gsfd_h3   123   1.73 -> 1.89   1.70 -> 1.71
+#:   gsfd_h5   203   2.50 -> 2.54   2.67 -> 2.30
+#:   gsfd_h9   365   5.22 -> 4.39   5.24 -> 4.01
+SMALL_DECK_SEGS_FREE = 400
+SMALL_DECK_SEGS_GROUND = 200
+
+#: Whether the plans key pairs in the orientation-canonical form
+#: (momwire#1969, module docstring). Off, every pair keys along its stored
+#: tangents and every code is 0, the classes as before.
+CANONICAL = True
+
+#: Bits of a coded class map entry that hold the flips: entry = class << 2 |
+#: code, code bit 0 the source tangent reversed, bit 1 the observer's.
+CODE_BITS = 2
+
+#: Pairs above which a plan is not coded (its class numbers would not fit
+#: an int32 beside the code) and keys along the stored tangents.
+CODED_PAIRS = 1 << (31 - CODE_BITS)
+
+#: The sign each flip combination puts on the (const, sin, cos) shapes,
+#: indexed by code. Source reversed: -const, +sin, -cos (the current's sign
+#: times each shape's parity); observer reversed: every shape negated.
+CODE_SIGNS = np.array(
+    [
+        [1.0, 1.0, 1.0],  # 0: as stored
+        [-1.0, 1.0, -1.0],  # 1: source reversed
+        [-1.0, -1.0, -1.0],  # 2: observer reversed
+        [1.0, -1.0, 1.0],  # 3: both
+    ]
+)
 
 _HAVE_FACTORIZE = _acc is not None and bool(
     getattr(_acc, "exact_factorize_1224", False)
@@ -244,6 +344,11 @@ class Plan:
     src_c: np.ndarray  # (n_cls, 3) float64
     src_t: np.ndarray  # (n_cls, 3) float64
     runs: list
+    # momwire#1969: with code_bits, cls holds class << code_bits | code, and
+    # rep_code is each representative's own code (its value, evaluated as
+    # it stands, times CODE_SIGNS[rep_code] is the canonical one).
+    rep_code: np.ndarray | None = None  # (n_cls,) int8
+    code_bits: int = 0
 
     @property
     def n_near(self) -> int:
@@ -268,6 +373,8 @@ class GroundPlan:
     rep_blocks: list  # `near_blocks` over rep_flat
     near_flat: np.ndarray  # (n_near,) int64 sorted flat index m * N_src + n
     near_blocks: list
+    rep_code: np.ndarray | None = None  # as `Plan`'s (momwire#1969)
+    code_bits: int = 0
 
     @property
     def n_near(self) -> int:
@@ -330,6 +437,44 @@ def ground_segment_types(src_type, obs_type, seg_t):
     return _types([src_type, tz]), _types([obs_type, tz])
 
 
+def reversible_segment_types(seg_h, a_obs, src_a=None, ind1=None, ind2=None):
+    """`segment_types`, and each source's type with its tangent reversed, in
+    one id space: (src_type, obs_type, src_rev). Reversal swaps the two end
+    codes (the extended kernel's); nothing else the type holds has a
+    direction, so without them src_rev is src_type."""
+    if src_a is None:
+        src_type, obs_type = segment_types(seg_h, a_obs)
+        return src_type, obs_type, src_type
+    n = len(seg_h)
+
+    def twice(x):
+        x = np.asarray(x)
+        return np.concatenate([x, x])
+
+    src_type, obs_type = segment_types(
+        twice(seg_h),
+        twice(a_obs),
+        twice(src_a),
+        np.concatenate([np.asarray(ind1), np.asarray(ind2)]),
+        np.concatenate([np.asarray(ind2), np.asarray(ind1)]),
+    )
+    return src_type[:n], obs_type[:n], src_type[n:]
+
+
+def reversible_ground_types(src_type, obs_type, src_rev, seg_t):
+    """`ground_segment_types` for both orientations of every segment, in one
+    id space: (g_src, g_obs, g_src_rev, g_obs_rev). Reversing a tangent
+    negates its vertical component, and a source's end codes swap."""
+    n = len(src_type)
+    seg_t = np.asarray(seg_t, dtype=np.float64)
+    g_src, g_obs = ground_segment_types(
+        np.concatenate([src_type, src_rev]),
+        np.concatenate([obs_type, obs_type]),
+        np.concatenate([seg_t, -seg_t]),
+    )
+    return g_src[:n], g_obs[:n], g_src[n:], g_obs[n:]
+
+
 def pair_scalars(obs_c, obs_t, src_c, src_t):
     """z, rho, td, rdt for every (observer, source) pair, (R, N) each, in
     the kernels' own order of operations."""
@@ -388,6 +533,112 @@ def _band_keys(z, rho, td, rdt, H, a_obs, type_id, near=False):
         for c in cols[1:]:
             c[idx] = 0
     return cols, near
+
+
+def _canonical_codes(cols, ia, ib, it, near, n_src, ds=None, do=None):
+    """Key one band's pairs in their canonical orientation, in place, and
+    return each pair's flips (int8 codes, `CODE_BITS`).
+
+    `cols` are a band's key columns, (R*N,) each: `cols[ia]` is odd under a
+    source reversal only, `cols[ib]` under an observer reversal only,
+    `cols[it]` under either, and `cols[0]` packs the types, which a source
+    reversal moves by `ds` (per source, (N,)) and an observer reversal by
+    `do` (per row, (R,)); None where a reversal leaves them. Of the four
+    orientations the largest key is taken, in the order (ia, ib, it, the
+    types): the sign of ia decides the source flip and that of ib the
+    observer's, and only where one is zero do the rest decide. Near pairs
+    (their key the sentinel) keep code 0."""
+    a, b, t, e = cols[ia], cols[ib], cols[it], cols[0]
+    fs = a < 0
+    fo = b < 0
+    za = a == 0
+    zb = b == 0
+    if near is not None:
+        za &= ~near
+        zb &= ~near
+
+    def ds_of(idx):
+        return None if ds is None else ds[idx % n_src]
+
+    def do_of(idx):
+        return None if do is None else do[idx // n_src]
+
+    # Only the observer free: the both-odd column, then the observer types.
+    idx = np.flatnonzero(zb & ~za)
+    if idx.size:
+        tp = np.where(fs[idx], -t[idx], t[idx])
+        flip = tp < 0
+        d = do_of(idx)
+        if d is not None:
+            flip |= (tp == 0) & (d > 0)
+        fo[idx] = flip
+    # Only the source free: likewise, then the source types.
+    idx = np.flatnonzero(za & ~zb)
+    if idx.size:
+        tp = np.where(fo[idx], -t[idx], t[idx])
+        flip = tp < 0
+        d = ds_of(idx)
+        if d is not None:
+            flip |= (tp == 0) & (d > 0)
+        fs[idx] = flip
+    # Both free: the largest of the four (t, types).
+    idx = np.flatnonzero(za & zb)
+    if idx.size:
+        t_i = t[idx]
+        d_s = ds_of(idx)
+        d_o = do_of(idx)
+        valid = np.zeros(idx.size, dtype=bool)
+        best_t = np.zeros(idx.size, dtype=np.int64)
+        best_e = np.zeros(idx.size, dtype=np.int64)
+        best_s = np.zeros(idx.size, dtype=bool)
+        best_o = np.zeros(idx.size, dtype=bool)
+        for cs in (False, True):
+            for co in (False, True):
+                tc = -t_i if cs != co else t_i
+                ec = np.zeros(idx.size, dtype=np.int64)
+                if cs and d_s is not None:
+                    ec += d_s
+                if co and d_o is not None:
+                    ec += d_o
+                better = ~valid | (tc > best_t) | ((tc == best_t) & (ec > best_e))
+                best_t = np.where(better, tc, best_t)
+                best_e = np.where(better, ec, best_e)
+                best_s[better] = cs
+                best_o[better] = co
+                valid[:] = True
+        fs[idx] = best_s
+        fo[idx] = best_o
+    np.negative(a, out=a, where=fs)
+    np.negative(b, out=b, where=fo)
+    np.negative(t, out=t, where=fs ^ fo)
+    R = a.size // n_src
+    if ds is not None:
+        e.reshape(R, n_src)[...] += ds[None, :] * fs.reshape(R, n_src)
+    if do is not None:
+        e.reshape(R, n_src)[...] += do[:, None] * fo.reshape(R, n_src)
+    code = fs.view(np.int8).copy()
+    code |= fo.view(np.int8) << 1
+    return code
+
+
+def _coded_band(inv, code):
+    """A band's class map entries: class << CODE_BITS | code."""
+    out = inv.astype(np.int32)
+    out <<= CODE_BITS
+    out |= code
+    return out
+
+
+def _renumber(cls_rows, ginv, coded):
+    """A band's class map, its band-local classes replaced by the merged
+    ones, the codes (if any) kept."""
+    g = ginv.astype(np.int32)
+    if not coded:
+        return g[cls_rows]
+    out = g[cls_rows >> CODE_BITS]
+    out <<= CODE_BITS
+    out |= cls_rows & ((1 << CODE_BITS) - 1)
+    return out
 
 
 def _group(cols):
@@ -466,9 +717,15 @@ def _run(fn, items):
     return [r for chunk in _pool().map(run, runs) for r in chunk]
 
 
-def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows):
+def build_plan(
+    obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows, src_rev=None
+):
     """The class map over every (observer, source) pair, found in observer
-    bands whose transients together hold `rows` rows (O(rows * N_src))."""
+    bands whose transients together hold `rows` rows (O(rows * N_src)).
+
+    With `src_rev` (each source's type reversed, `reversible_segment_types`)
+    and `CANONICAL`, the pairs are keyed in their canonical orientation and
+    the map is coded (momwire#1969, module docstring)."""
     obs_c = np.asarray(obs_c, dtype=np.float64)
     obs_t = np.asarray(obs_t, dtype=np.float64)
     src_c = np.asarray(src_c, dtype=np.float64)
@@ -477,6 +734,12 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
     H = 0.5 * np.asarray(seg_h, dtype=np.float64)
     M, N = obs_c.shape[0], src_c.shape[0]
     n_obs_types = int(obs_type.max()) + 1
+    coded = src_rev is not None and CANONICAL and M * N <= CODED_PAIRS
+    ds = None
+    if coded:
+        ds = (np.asarray(src_rev, np.int64) - src_type) * n_obs_types
+        if not ds.any():
+            ds = None
     cls = np.empty((M, N), dtype=np.int32)
     workers = _workers()
     rows = max(1, int(rows) // workers)
@@ -490,13 +753,21 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
         type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
         cols, near = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id, True)
         del type_id
+        # (e, z, rho, rdt, td): z odd under the source's reversal, rdt under
+        # the observer's, td under either.
+        code = _canonical_codes(cols, 1, 3, 4, near, N, ds=ds) if coded else None
         near = (
             np.zeros(0, np.int64)
             if near is None
             else np.flatnonzero(near).astype(np.int64) + i0 * N
         )
         first, inv = _group(cols)
-        cls[i0:i1] = inv.reshape(i1 - i0, N)
+        if coded:
+            cls[i0:i1] = _coded_band(inv, code).reshape(i1 - i0, N)
+            rep_code = code[first]
+        else:
+            cls[i0:i1] = inv.reshape(i1 - i0, N)
+            rep_code = np.zeros(first.size, np.int8)
         keys = [c[first] for c in cols]
         canon = np.stack(
             [
@@ -508,7 +779,7 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
             axis=1,
         )
         r_first, n_first = np.divmod(first, N)
-        return keys, canon, r_first + i0, n_first, near
+        return keys, canon, r_first + i0, n_first, near, rep_code
 
     results = _run(band, starts)
     # The bands' classes merged: a key seen in two bands is one class.
@@ -529,11 +800,12 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
     for (k, *_), i0 in zip(results, starts):
         i1 = min(M, i0 + rows)
         n_b = k[0].shape[0]
-        cls[i0:i1] = ginv[off : off + n_b].astype(np.int32)[cls[i0:i1]]
+        cls[i0:i1] = _renumber(cls[i0:i1], ginv[off : off + n_b], coded)
         off += n_b
     rep_obs = np.concatenate([r[2] for r in results])[gfirst].astype(np.int64)
     rep_src = np.concatenate([r[3] for r in results])[gfirst].astype(np.int64)
     near_flat = np.concatenate([r[4] for r in results])  # sorted: bands in order
+    rep_code = np.concatenate([r[5] for r in results])[gfirst]
     canon = np.concatenate([r[1] for r in results])[gfirst]
     del results, gfirst, ginv
     n_cls = canon.shape[0]
@@ -557,6 +829,8 @@ def build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, row
         src_c=src_c,
         src_t=src_t,
         runs=runs,
+        rep_code=rep_code if coded else None,
+        code_bits=CODE_BITS if coded else 0,
     )
 
 
@@ -670,14 +944,30 @@ def _ground_band_keys(scalars, H, a_obs, type_id):
 
 
 def build_ground_plan(
-    obs_c, obs_t, src_c, src_t, ground_z, seg_h, a_obs, src_type, obs_type, rows
+    obs_c,
+    obs_t,
+    src_c,
+    src_t,
+    ground_z,
+    seg_h,
+    a_obs,
+    src_type,
+    obs_type,
+    rows,
+    src_rev=None,
+    obs_rev=None,
 ):
     """The reflected term's class map (`GroundPlan`) over every (observer,
     source) pair, the REAL sources' (the image is the evaluator's), found in
     bands of `rows` rows like `build_plan`'s. `src_type` / `obs_type` are
     `ground_segment_types`'. Classes are numbered by their representative's
     flat index, the first pair of the class in the bands' order, so the
-    representatives are row runs for `near_blocks`."""
+    representatives are row runs for `near_blocks`.
+
+    With `src_rev` / `obs_rev` (`reversible_ground_types`) and `CANONICAL`,
+    the pairs are keyed in their canonical orientation, as `build_plan`'s:
+    d.a is odd under the source's reversal, d.b under the observer's, a.b
+    under either, and the types carry t_nz, t_mz and the end codes."""
     obs_c = np.asarray(obs_c, dtype=np.float64)
     obs_t = np.asarray(obs_t, dtype=np.float64)
     src_c = np.asarray(src_c, dtype=np.float64)
@@ -685,7 +975,20 @@ def build_ground_plan(
     a_obs = np.asarray(a_obs, dtype=np.float64)
     H = 0.5 * np.asarray(seg_h, dtype=np.float64)
     M, N = obs_c.shape[0], src_c.shape[0]
+    coded = (
+        src_rev is not None
+        and obs_rev is not None
+        and CANONICAL
+        and M * N <= CODED_PAIRS
+    )
     n_obs_types = int(obs_type.max()) + 1
+    ds = do = None
+    if coded:
+        n_obs_types = max(n_obs_types, int(np.max(obs_rev)) + 1)
+        ds = (np.asarray(src_rev, np.int64) - src_type) * n_obs_types
+        do = np.asarray(obs_rev, np.int64) - obs_type
+        ds = ds if ds.any() else None
+        do = do if do.any() else None
     cls = np.empty((M, N), dtype=np.int32)
     workers = _workers()
     rows = max(1, int(rows) // workers)
@@ -700,14 +1003,25 @@ def build_ground_plan(
         type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
         cols, near = _ground_band_keys(scalars, H, a_obs[i0:i1], type_id)
         del scalars, type_id
+        # (e, hs, |d|, d.a, d.b, a.b).
+        code = None
+        if coded:
+            code = _canonical_codes(
+                cols, 3, 4, 5, near, N, ds=ds, do=None if do is None else do[i0:i1]
+            )
         near = (
             np.zeros(0, np.int64)
             if near is None
             else np.flatnonzero(near).astype(np.int64) + i0 * N
         )
         first, inv = _group(cols)
-        cls[i0:i1] = inv.reshape(i1 - i0, N)
-        return [c[first] for c in cols], first + i0 * N, near
+        if coded:
+            cls[i0:i1] = _coded_band(inv, code).reshape(i1 - i0, N)
+            rep_code = code[first]
+        else:
+            cls[i0:i1] = inv.reshape(i1 - i0, N)
+            rep_code = np.zeros(first.size, np.int8)
+        return [c[first] for c in cols], first + i0 * N, near, rep_code
 
     results = _run(band, starts)
     n_cols = len(results[0][0])
@@ -715,17 +1029,19 @@ def build_ground_plan(
     gfirst, ginv = _group(keys)
     del keys
     rep_flat = np.concatenate([r[1] for r in results])[gfirst]
+    rep_code = np.concatenate([r[3] for r in results])[gfirst]
     perm = np.argsort(rep_flat, kind="stable")
     renumber = np.empty(perm.size, dtype=np.int64)
     renumber[perm] = np.arange(perm.size, dtype=np.int64)
     ginv = renumber[ginv]
     rep_flat = np.ascontiguousarray(rep_flat[perm], dtype=np.int64)
+    rep_code = rep_code[perm]
     del renumber, perm, gfirst
     off = 0
     for (k, *_), i0 in zip(results, starts):
         i1 = min(M, i0 + rows)
         n_b = k[0].shape[0]
-        cls[i0:i1] = ginv[off : off + n_b].astype(np.int32)[cls[i0:i1]]
+        cls[i0:i1] = _renumber(cls[i0:i1], ginv[off : off + n_b], coded)
         off += n_b
     near_flat = np.concatenate([r[2] for r in results])
     del results, ginv
@@ -735,7 +1051,29 @@ def build_ground_plan(
         rep_blocks=near_blocks(rep_flat, N, a_obs, rows=REP_ROWS),
         near_flat=near_flat,
         near_blocks=near_blocks(near_flat, N, a_obs),
+        rep_code=rep_code if coded else None,
+        code_bits=CODE_BITS if coded else 0,
     )
+
+
+def to_canonical(values, rep_code):
+    """Class values, each its representative's as it stands, made the
+    canonical orientation's in place: times CODE_SIGNS[rep_code] per shape,
+    as exact negations. `rep_code` None (an uncoded plan) leaves them."""
+    if rep_code is None:
+        return values
+    for sh in range(3):
+        neg = CODE_SIGNS[:, sh][rep_code] < 0
+        np.negative(values[:, sh], out=values[:, sh], where=neg)
+    return values
+
+
+def evaluate_classes(plan, direct):
+    """The reflected classes' canonical values, (n_cls, 3): each
+    representative pair evaluated where it stands (`evaluate_pairs`), then
+    `to_canonical`."""
+    vals = evaluate_pairs(plan.n_classes, plan.rep_blocks, direct)
+    return to_canonical(vals, plan.rep_code)
 
 
 def canonical_sources(canon):
@@ -792,22 +1130,33 @@ def evaluate(plan, call, obs_type=None):
             out[c0:c1, sh] = phis[sh][0]
 
     _run(one, pieces)
-    return out
+    # Each representative was evaluated as it stands: the class's value is
+    # the canonical orientation's (momwire#1969).
+    return to_canonical(out, plan.rep_code)
 
 
 def scatter(rep, plan, rows, near=None):
     """The band's three Φ, gathered from the class values (on the pool, by
-    row pieces), the near pairs then written from `near` (`evaluate_near`)."""
+    row pieces), each pair's code's signs applied (a coded plan), the near
+    pairs then written from `near` (`evaluate_near`)."""
     i0, i1 = rows
     c = plan.cls[i0:i1]
     out = tuple(np.empty(c.shape, dtype=np.complex128) for _ in range(3))
     workers = _workers()
     step = max(1, -(-c.shape[0] // workers))
     pieces = [(s, r) for s in range(3) for r in range(0, c.shape[0], step)]
+    bits = getattr(plan, "code_bits", 0)
 
     def take(piece):
         s, r = piece
-        np.take(rep[:, s], c[r : r + step], out=out[s][r : r + step], mode="clip")
+        cr = c[r : r + step]
+        dst = out[s][r : r + step]
+        if not bits:
+            np.take(rep[:, s], cr, out=dst, mode="clip")
+            return
+        np.take(rep[:, s], cr >> bits, out=dst, mode="clip")
+        neg = (CODE_SIGNS[:, s] < 0)[cr & ((1 << bits) - 1)]
+        np.negative(dst, out=dst, where=neg)
 
     _run(take, pieces)
     if near is not None and plan.n_near:
@@ -826,15 +1175,22 @@ def _band_near(plan, rows, near):
 
 
 _HAVE_REDUCE = _acc is not None and bool(getattr(_acc, "pair_reuse_reduce_1916", False))
+#: The fused kernel decodes a coded class map (momwire#1969).
+_HAVE_REDUCE_CODED = _acc is not None and bool(
+    getattr(_acc, "pair_reuse_reduce_1969", False)
+)
 
 
-def reduce_takes(Ms, out):
-    """Whether `reduce_band` can take this band: the fused kernel is built,
-    and the reduction is `reduce_phi_band`'s sparse regime (CSC complex128
-    Ms) into complex128 rows."""
+def reduce_takes(Ms, out, coded=False):
+    """Whether `reduce_band` can take this band: the fused kernel is built
+    (one that decodes, for a coded plan), and the reduction is
+    `reduce_phi_band`'s sparse regime (CSC complex128 Ms) into complex128
+    rows."""
     import scipy.sparse
 
     if not _HAVE_REDUCE or out.ndim != 2 or out.dtype != np.complex128:
+        return False
+    if coded and not _HAVE_REDUCE_CODED:
         return False
     if out.shape[1] > 1 and out.strides[1] != 16:
         return False
@@ -854,6 +1210,7 @@ def reduce_band(blocks, rows, Ms, out):
     subtracted. Call only where `reduce_takes`."""
     i0, i1 = rows
     args = []
+    signs = []
     for plan, rep, near in blocks:
         local, vals = _band_near(plan, rows, near)
         args.append(
@@ -864,11 +1221,22 @@ def reduce_band(blocks, rows, Ms, out):
                 np.ascontiguousarray(vals),
             )
         )
+        # A coded plan's sign table (`CODE_SIGNS`), which the kernel decodes
+        # by; None, its classes as stored.
+        signs.append(
+            np.ascontiguousarray(CODE_SIGNS, dtype=np.float64)
+            if getattr(plan, "code_bits", 0)
+            else None
+        )
     m_args = []
     for M in Ms:
         m_args += [M.indptr, M.indices, M.data]
-    image = args[1] if len(args) > 1 else None
-    _acc.pair_reuse_reduce_band(out, *args[0], image, *m_args)
+    # An older kernel takes neither (`reduce_takes` keeps coded plans off it).
+    kw = {"signs": signs[0]} if _HAVE_REDUCE_CODED else {}
+    image = None
+    if len(args) > 1:
+        image = (*args[1], signs[1]) if _HAVE_REDUCE_CODED else args[1]
+    _acc.pair_reuse_reduce_band(out, *args[0], image, *m_args, **kw)
     return out
 
 
@@ -882,7 +1250,10 @@ def verify_band(phis, rows, n_src, direct, samples=VERIFY_SAMPLES, tol=VERIFY_TO
     Relative to the pair's largest |Φ| over the three shapes, floored at
     1e-6 of the sample's largest: a far pair whose Φ is itself a
     cancellation (perpendicular, say) carries the input rounding of any
-    frame at a relative size no reuse could hold."""
+    frame at a relative size no reuse could hold. Both sides are the same
+    physical pair with the code's signs applied; what differs is how the
+    kernel rounds two congruent spellings of it, which is why `tol` is set
+    above the kernel's own reproducibility (`VERIFY_TOL`)."""
     i0, i1 = rows
     n_pairs = (i1 - i0) * n_src
     flat = np.unique(

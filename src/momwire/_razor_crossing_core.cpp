@@ -462,6 +462,106 @@ void claim_window(BlockEval &be, uint32_t base, const double *re, const double *
     }
 }
 
+// Pass 1's claim over the WHOLE grid by its structure (momwire#1956), when
+// that is cheap: `claim_window` over every window, the same calls in the same
+// order, without forming or hashing every pair's triple.
+//
+// A pair's triple is (hypot(rho, a), z, z'), rho from the two nodes' (x, y):
+// so A nodes sharing (x, y) (a vertical wire's) share every pair's rho, and
+// the triple is a function of (A's z class, the key (re, z') of A's (x, y)
+// group against B's node). The keys are found once per (group, B node), the
+// z classes once per A node, and the walk over the grid in row-major order
+// reads a dense table of (z class, key) instead of a hash. A table entry is
+// claimed at its first appearance, from that pair's own row, so the memo
+// sees `claim_window`'s find_or_insert of each distinct triple's first pair,
+// in first-appearance order, and nothing else: the same keys, indices,
+// fresh rows and NaN dedup, bit for bit. The z classes and the keys compare
+// as the memo does (each component's `x + 0.0` bits), and a group's members
+// differ at most in the sign of a zero coordinate, which `hypot` does not
+// see, so a (z class, key) entry is exactly one of the memo's triples.
+//
+// False (nothing claimed) when the structure does not pay: fewer than two A
+// nodes a group, or a table over SANDWICH_KEEP_PAIRS entries; the caller then
+// claims window by window. `idx` as `claim_window`'s, over the whole grid.
+bool claim_grouped(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, const Axis &B, uint32_t base,
+                   ni_eval::TripleIndex &nan_rows, std::vector<double> &rows, uint32_t *idx) {
+    using ni_eval::TripleIndex;
+    const size_t nA = A.n_nodes(), nB = B.n_nodes();
+    if (nA == 0 || nB == 0) return false;
+    // A's (x, y) groups (first node of each) and z classes, keyed as the
+    // memo keys its components.
+    std::vector<uint32_t> ga(nA), za(nA);
+    std::vector<size_t> grep;
+    size_t n_z = 0;
+    {
+        TripleIndex gi, zi;
+        for (size_t a = 0; a < nA; a++) {
+            bool ins = false;
+            const double kxy[3] = {A.nodes[3 * a], A.nodes[3 * a + 1], 0.0};
+            ga[a] = gi.find_or_insert(kxy, static_cast<uint32_t>(grep.size()), ins);
+            if (ins) grep.push_back(a);
+            const double kz[3] = {A.nodes[3 * a + 2] - c.gz, 0.0, 0.0};
+            za[a] = zi.find_or_insert(kz, static_cast<uint32_t>(n_z), ins);
+            if (ins) n_z++;
+        }
+    }
+    const size_t G = grep.size();
+    if (2 * G > nA || G * nB > SANDWICH_KEEP_PAIRS) return false;
+    // Each (group, B node)'s key (re, z'), as `pair_row` forms them.
+    std::vector<uint32_t> kid(G * nB);
+    size_t n_k = 0;
+    {
+        std::vector<double> re(G * nB);
+        const std::ptrdiff_t ng = static_cast<std::ptrdiff_t>(G);
+        const int nt = team(be, G * nB);
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static) num_threads(nt) if (nt > 1)
+#else
+        (void)nt;
+#endif
+        for (std::ptrdiff_t g = 0; g < ng; g++) {
+            const size_t a = grep[static_cast<size_t>(g)];
+            for (size_t b = 0; b < nB; b++) {
+                double row[3];
+                pair_row(c, a_wire, A, B, a, b, row);
+                re[static_cast<size_t>(g) * nB + b] = row[0];
+            }
+        }
+        TripleIndex ki;
+        ki.reserve(G * nB / 4);
+        for (size_t g = 0; g < G; g++)
+            for (size_t b = 0; b < nB; b++) {
+                bool ins = false;
+                const double k3[3] = {re[g * nB + b], B.nodes[3 * b + 2] - c.gz, 0.0};
+                kid[g * nB + b] = ki.find_or_insert(k3, static_cast<uint32_t>(n_k), ins);
+                if (ins) n_k++;
+            }
+        if (n_z * n_k > SANDWICH_KEEP_PAIRS) return false;
+    }
+    // The walk, in `claim_window`'s order (a * nB + b).
+    TripleIndex &keys = be.memo.keys();
+    std::vector<uint32_t> tab(n_z * n_k, TripleIndex::NONE);
+    for (size_t a = 0; a < nA; a++) {
+        const uint32_t *kr = &kid[static_cast<size_t>(ga[a]) * nB];
+        uint32_t *tr = &tab[static_cast<size_t>(za[a]) * n_k];
+        uint32_t *ir = idx ? idx + a * nB : nullptr;
+        for (size_t b = 0; b < nB; b++) {
+            uint32_t &t = tr[kr[b]];
+            if (t == TripleIndex::NONE) {
+                double row[3];
+                pair_row(c, a_wire, A, B, a, b, row);
+                const uint32_t next = base + static_cast<uint32_t>(rows.size() / 3);
+                bool ins = false;
+                const bool nan = std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2]);
+                t = nan ? nan_rows.find_or_insert(row, next, ins) : keys.find_or_insert(row, next, ins);
+                if (ins) rows.insert(rows.end(), row, row + 3);
+            }
+            if (ir) ir[b] = t;
+        }
+    }
+    return true;
+}
+
 // The rows one evaluation batch takes (whole exact-rho columns, so a batch
 // can run over by its last column).
 constexpr size_t EVAL_BATCH_ROWS = size_t(1) << 18;
@@ -594,7 +694,8 @@ void main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, co
     {
         const uint32_t base = static_cast<uint32_t>(be.memo.size());
         std::vector<double> fresh, re, z, zp;
-        for (size_t a0 = 0; a0 < nA; a0 += per) {
+        const bool grouped = claim_grouped(c, be, a_wire, A, B, base, nan_rows, fresh, keep ? kept.data() : nullptr);
+        for (size_t a0 = 0; a0 < nA && !grouped; a0 += per) {
             const size_t a1 = std::min(nA, a0 + per), m = (a1 - a0) * nB;
             re.resize(m);
             z.resize(m);

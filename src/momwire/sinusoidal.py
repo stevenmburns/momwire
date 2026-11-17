@@ -6869,8 +6869,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         as before. The sector route declines unless
         `_sin_pair_reuse.SECTOR_ROUTE` is set: its rotation has already
         taken most of the reuse, and the census costs about what the rest
-        saves (the constant has the measurement). It is the last reason
-        checked, so a deck the reuse could not serve anyway says why.
+        saves (the constant has the measurement). Last, a deck below
+        `_sin_pair_reuse.SMALL_DECK_SEGS_FREE` segments (free space, PEC) or
+        `SMALL_DECK_SEGS_GROUND` (a finite ground) declines, the census
+        costing more than its fill saves; `pair_reuse="verify"` ignores it.
+        Those two are checked after the rest, so a deck the reuse could not
+        serve anyway says why.
         """
         if not self._pair_reuse_on:
             return None
@@ -6898,6 +6902,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             reason = "a ground with no remainder"
         elif obs_rows is not None and not _pr.SECTOR_ROUTE:
             reason = "the sector route (its rotation already takes the reuse)"
+        elif not self._pair_reuse_verify and geom["n_segs"] < (
+            small := (
+                _pr.SMALL_DECK_SEGS_GROUND if finite else _pr.SMALL_DECK_SEGS_FREE
+            )
+        ):
+            reason = f"too few segments to repay the plan (N < {small})"
         else:
             reason = None
         self.pair_reuse_declined = reason
@@ -6922,10 +6932,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ind1, ind2 = self._ek_gating(geom)
             ind1 = np.ascontiguousarray(ind1, dtype=np.int8)
             ind2 = np.ascontiguousarray(ind2, dtype=np.int8)
-            src_type, obs_type = _pr.segment_types(seg_h, a_seg, src_a, ind1, ind2)
+            src_type, obs_type, src_rev = _pr.reversible_segment_types(
+                seg_h, a_seg, src_a, ind1, ind2
+            )
         else:
             ind1 = ind2 = None
-            src_type, obs_type = _pr.segment_types(seg_h, a_seg)
+            src_type, obs_type, src_rev = _pr.reversible_segment_types(seg_h, a_seg)
         # The observer side of every block: every segment, or the rows this
         # fill fills, in the plans' own (row-compact) numbering. `glob(m)` is
         # a plan row's segment, for what reads the band path by its rows.
@@ -6991,9 +7003,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(x, dtype=np.float64)
                 for x in self._image_source_centers_tangents(geom)
             )
-            g_src_type, g_obs_type = _pr.ground_segment_types(src_type, obs_type, seg_t)
+            # Both orientations' types (momwire#1969), one id space.
+            g_src_type, g_obs_type, g_src_rev, g_obs_rev = _pr.reversible_ground_types(
+                src_type, obs_type, src_rev, seg_t
+            )
             if obs_rows is not None:
                 g_obs_type = g_obs_type[obs_rows]
+                g_obs_rev = g_obs_rev[obs_rows]
 
         def sources(block):
             if block in ("direct", "reflected"):
@@ -7023,6 +7039,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 None if ind1 is None else (ind1.tobytes(), ind2.tobytes()),
                 gz if block == "reflected" else None,
                 None if obs_rows is None else obs_rows.tobytes(),
+                _pr.CANONICAL,
             )
             held = self._sin_reuse_plans.get(block)
             if held is not None and held[0] == key:
@@ -7046,6 +7063,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             g_src_type,
                             g_obs_type,
                             census_rows,
+                            src_rev=g_src_rev,
+                            obs_rev=g_obs_rev,
                         )
 
                 else:
@@ -7061,6 +7080,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             src_type,
                             ob_type,
                             census_rows,
+                            src_rev=src_rev,
                         )
 
                 plan = _pr.shared_plan((*key, census_rows), build)
@@ -7162,9 +7182,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if rep is None:
                 direct_rows = direct_for(block)
                 if block == "reflected":
-                    classes = _pr.evaluate_pairs(
-                        plan.n_classes, plan.rep_blocks, direct_rows
-                    )
+                    classes = _pr.evaluate_classes(plan, direct_rows)
                 else:
                     classes = _pr.evaluate(plan, canonical)
                 rep = rep_cache[block] = (
@@ -7176,9 +7194,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         def reduce_into(rows, Ms, dst, image):
             # The fused gather + reduction where it applies; verify checks
             # materialised Φ, so it takes the band path below.
-            if self._pair_reuse_verify or not _pr.reduce_takes(Ms, dst):
+            if self._pair_reuse_verify:
                 return False
             parts = [values("direct")] + ([values(ground_block)] if image else [])
+            coded = any(p.code_bits for p, _ in parts)
+            if not _pr.reduce_takes(Ms, dst, coded):
+                return False
             _pr.reduce_band([(p, r[0], r[1]) for p, r in parts], rows, Ms, dst)
             return True
 

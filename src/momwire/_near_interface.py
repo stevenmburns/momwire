@@ -333,6 +333,35 @@ def height_sheet_recal_scope(on):
         _HEIGHT_SHEET_RECAL.reset(token)
 
 
+# momwire#1956, the opt-in feature `crossing_sheet_retune` (`_features`,
+# reach 1, python): the census's build weights retuned
+# (`_SHEET_RETUNE_BUILD_WEIGHT`, `_SHEET_RETUNE_HEIGHT_WEIGHT`). A solver asked
+# for it sets this around its fill; off, the default, the shipped weights.
+_CROSSING_SHEET_RETUNE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "momwire_crossing_sheet_retune", default=False
+)
+
+
+@contextlib.contextmanager
+def crossing_sheet_retune_scope(on):
+    """Run the body with the retuned sheet build weights (`on` truthy) or
+    the shipped ones."""
+    token = _CROSSING_SHEET_RETUNE.set(bool(on))
+    try:
+        yield
+    finally:
+        _CROSSING_SHEET_RETUNE.reset(token)
+
+
+def _sheet_weights():
+    """The census's (plane, height) build weights: the retuned pair inside a
+    `crossing_sheet_retune_scope`, else the shipped `_SHEET_BUILD_WEIGHT`,
+    `_SHEET_HEIGHT_WEIGHT` (read at call time, the tests' handle)."""
+    if _CROSSING_SHEET_RETUNE.get():
+        return _SHEET_RETUNE_BUILD_WEIGHT, _SHEET_RETUNE_HEIGHT_WEIGHT
+    return _SHEET_BUILD_WEIGHT, _SHEET_HEIGHT_WEIGHT
+
+
 # momwire#1860 L5, the opt-in feature `crossing_table` (`_features`, reach 1,
 # native): the crossing rows a fill would send to the column twin are read
 # instead from ONE table per frequency, the approach of the NEC-4 theory
@@ -3054,6 +3083,23 @@ _SHEET_BUILD_WEIGHT = 0.15
 # so the tests' handle on the planes does not turn every mast node into a
 # sheet.
 _SHEET_HEIGHT_WEIGHT = 0.15
+# momwire#1956, the opt-in feature `crossing_sheet_retune` (`_features`, reach
+# 1, python): the two build weights retuned for the crossing decks, where a
+# sheet's nodes cost far less than 0.15 of a column setup once its strips
+# are cached. The shipped sheets and twin, a different split between them.
+# Inside a fill that asked for it (`crossing_sheet_retune_scope`) the census
+# reads these in place of the two above; outside, the shipped weights, bit
+# for bit. Both are constants: the plan is still never decided on what is
+# cached.
+# 0.01 for both is where it measured (momwire#1956: Skylake, the two
+# executables' C++ twin, the scoping decks, T1 and T4, median of 3, the
+# Sommerfeld store off ("cold") and primed ("warm")): 0.03 still declines
+# fat_hub's radial plane (warm 64 -> 40 ms at 0.01, nec5-razor-2p T4) and
+# nec5-bspline's d3_hub plane; 0.005 takes the EFHW rod's depths as planes
+# and its cold solve goes 211 -> 338 ms; a height weight lowered alone takes
+# heights the radials' plane would have served (hub32 cold 223 -> 269 ms).
+_SHEET_RETUNE_BUILD_WEIGHT = 0.01
+_SHEET_RETUNE_HEIGHT_WEIGHT = 0.01
 # momwire#1860 L2 (the opt-in `height_sheet_recal`): a height row's worth when
 # its fixed-side (x, y) group holds no other height -- a horizontal wire's
 # node, as the EFHW's 1 cm counterpoise is -- in place of `_SHEET_ROW_WORTH`.
@@ -3332,7 +3378,8 @@ def _plane_pays(k_p, k_m, d, parts, depth=None, lone_worth=None):
     rho_max = max(float(r.max()) for r, _zg, _sg, _c in parts)
     s_max = max(float(sg.max()) for _r, _zg, sg, _c in parts)
     nodes = _sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth)
-    need = nodes * (_SHEET_BUILD_WEIGHT if depth is None else _SHEET_HEIGHT_WEIGHT)
+    w_plane, w_height = _sheet_weights()
+    need = nodes * (w_plane if depth is None else w_height)
     w = _SHEET_ROW_WORTH
     if lone_worth is not None:
         # The upper bound first, as below: every row distinct.
@@ -3697,7 +3744,8 @@ def _census(sides, height, k_p, k_m, a, skip=(), recal=False):
             got[3] = max(got[3], sep)
         per.append((gxy, zg, glo, ghi, fx, vals, inv, big, lone))
     w = _SHEET_ROW_WORTH
-    weight = _SHEET_HEIGHT_WEIGHT if height else _SHEET_BUILD_WEIGHT
+    w_plane, w_height = _sheet_weights()
+    weight = w_height if height else w_plane
     per_cell = _SHEET_P * _SHEET_P
     taken = []
     for v in sorted(cand):
@@ -3759,7 +3807,7 @@ def _prefix_pays(k_p, k_m, d, fixed, rho_far, s_max, a):
     bound both of the rule's counts below, as in `_plane_pays`. True only when
     that already pays; otherwise the full census decides."""
     nodes = _sheet_nodes_to(k_p, k_m, d, float(np.hypot(rho_far, a)), s_max)
-    need = nodes * _SHEET_BUILD_WEIGHT
+    need = nodes * _sheet_weights()[0]
     cap = int(max(4096, 4 * need))
     pre, got = [np.empty(0)], 0
     for gxy, _zg, _glo, _ghi, hxy, credit in fixed:

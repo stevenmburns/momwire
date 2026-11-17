@@ -196,6 +196,8 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_1809.py",
                 "tests/test_sin_pair_reuse_1911.py",
                 "tests/test_sin_pair_reuse_ground_1970.py",
+                "tests/test_sin_pair_reuse_canonical_1969.py",
+                "tests/test_sin_pair_reuse_small_deck_1969.py",
             ),
             label="pair reuse",
             summary=(
@@ -203,7 +205,8 @@ FEATURES: dict[str, Feature] = {
                 "copies the rest. nec5-bspline and nec42-bspline need the front "
                 "end's hint of which edge pairs share a pose; the sinusoidal "
                 "solver finds its own, in free space and over a perfect or "
-                "finite ground."
+                "finite ground, on decks of 400 segments or more (200 over a "
+                "finite ground), below which it costs more than it saves."
             ),
             # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
             # bspline: 1e-12. sinusoidal: the class map moves Z itself by
@@ -402,6 +405,47 @@ FEATURES: dict[str, Feature] = {
             # over this declared 1e-7 and over DEFAULT_DRIFT_MAX.
             drift=1e-7,
             offer=True,
+        ),
+        # The near-interface sheets' build weights retuned (momwire#1956):
+        # the plane and height census at a lower node weight than the 0.15
+        # measured with every sheet built from scratch, so a crossing deck's
+        # radial plane (and a low wire's height) is read from a sheet where
+        # the shipped census computes each row. The shipped sheets and
+        # twin, a different split between them; the weights are constants,
+        # so the plan is still never decided on what is cached. Opt-in:
+        # its cost is a cold process's first sheet build, which a small
+        # deck pays without the warm gain.
+        Feature(
+            name="crossing_sheet_retune",
+            reach=1,
+            env="MOMWIRE_X_CROSSING_SHEET_RETUNE",
+            kind="python",
+            issue=1956,
+            since="2026-11-16",
+            kwarg="crossing_sheet_retune",
+            paths=("tests/test_crossing_sheet_retune_1956.py",),
+            label="more near-ground tables",
+            summary=(
+                "Read more of the entries between wires above and below the "
+                "ground from cached tables (a buried radial screen's, a low "
+                "wire's), instead of computing each. Faster once the tables "
+                "are cached; the first solve in a fresh process builds them."
+            ),
+            # |dZin|/|Zin| against off, every run (frequency) of every deck
+            # in tests/fixtures with a ground card (168) and the momwire#1956
+            # scoping decks, both executables' C++ twin
+            # (Skylake, T4): at most 6.2e-13 (fat_hub, nec5-razor-2p;
+            # nec5-bspline 3.2e-13), the plane sheets' own interpolation error
+            # where a row moves from the column twin to a sheet. Deeper and
+            # higher in frequency the plan takes more planes (2 -> 51-75) and
+            # the error grows with them: a 16-radial hub at 1.5 m, 28 MHz,
+            # 2.5 m radials and vertical measures 9.77e-12 on razor-2p
+            # (1.2e-13 nec5-bspline), 3.0 m at 14 MHz 6.15e-12, 5.0 m at
+            # 14 MHz 3.65e-12; the same to the bit on Haswell and Skylake.
+            # 3e-11 with about 3x margin over that worst case; still far
+            # under DEFAULT_DRIFT_MAX, so no printout reads differently.
+            drift=3e-11,
+            offer=False,
         ),
         # BSplineSolver's junction constraints eliminated before the factor
         # (momwire#1898): Z reduced to the constraint null space in place,
