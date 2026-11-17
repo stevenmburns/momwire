@@ -36,6 +36,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -822,6 +823,144 @@ std::vector<cdouble> assemble_Z(const CArray &J, const Basis &b, const Geometry 
     return std::vector<cdouble>(Z.data(), Z.data() + Z.size());
 }
 
+std::string kcl_plan(const std::vector<double> &kcl, int64_t n_c, int64_t n, KclPlan &out) {
+    if (n_c == 0) return "no constraint rows";
+    const size_t nc = static_cast<size_t>(n_c), nn = static_cast<size_t>(n);
+    // `np.nonzero(A)`: row-major, so each row's columns come out ascending
+    std::vector<size_t> rows, cols;
+    std::vector<double> vals;
+    for (size_t r = 0; r < nc; r++)
+        for (size_t c = 0; c < nn; c++) {
+            const double v = kcl[r * nn + c];
+            if (v != 0.0) {
+                rows.push_back(r);
+                cols.push_back(c);
+                vals.push_back(v);
+            }
+        }
+    for (const double v : vals)
+        if (!(std::fabs(v) == 1.0)) return "an entry other than +-1";
+    std::vector<uint8_t> seen(nn, 0);
+    for (const size_t c : cols) {
+        if (seen[c]) return "a column in two constraint rows";
+        seen[c] = 1;
+    }
+    std::vector<int64_t> first_of(nc, -1);  // each row's first nonzero
+    for (size_t q = 0; q < rows.size(); q++)
+        if (first_of[rows[q]] < 0) first_of[rows[q]] = static_cast<int64_t>(q);
+    for (const int64_t f : first_of)
+        if (f < 0) return "an empty constraint row";
+    out = KclPlan{};
+    out.n = n;
+    out.elim.resize(nc);
+    for (size_t r = 0; r < nc; r++) out.elim[r] = static_cast<int64_t>(cols[static_cast<size_t>(first_of[r])]);
+    std::vector<uint8_t> gone(nn, 0);
+    for (const int64_t e : out.elim) gone[static_cast<size_t>(e)] = 1;
+    for (size_t q = 0; q < rows.size(); q++) {
+        const size_t f = static_cast<size_t>(first_of[rows[q]]);
+        if (q == f) continue;
+        out.k.push_back(static_cast<int64_t>(cols[q]));
+        out.e.push_back(out.elim[rows[q]]);
+        out.a.push_back((-vals[q]) * vals[f]);  // `-vals[~first] * s_e`
+    }
+    for (size_t c = 0; c < nn; c++)
+        if (!gone[c]) out.keep.push_back(static_cast<int64_t>(c));
+    return "";
+}
+
+namespace {
+std::mutex g_kcl_counts_mu;
+std::map<std::string, uint64_t> g_kcl_counts;
+
+void count_kcl_route(const std::string &route) {
+    const std::lock_guard<std::mutex> lock(g_kcl_counts_mu);
+    g_kcl_counts[route]++;
+}
+
+// numpy's complex add (`+=`, `np.add.at`): each part on its own
+inline cdouble c_add(cdouble x, cdouble y) { return cdouble(x.real() + y.real(), x.imag() + y.imag()); }
+
+// `BSplineSolver._solve_reduced(Z, V, plan, overwrite)` on the F-order Z
+// (ld n_b) this call owns, then `Y = B.T @ X` as `compute_port_solution`.
+// Every product is numpy's (a float operand promoted to (a, 0) and the full
+// complex multiply, `np_cmul`), in the operand order Python writes it.
+void solve_reduced(std::vector<cdouble> &&Z, size_t nb, const std::vector<double> &B, size_t np_,
+                   const KclPlan &p, const razor::Lapack &lp, const nec5::NumpyLinalg &npl, PortSolve &out) {
+    using nec5::Op;
+    using nec5::replay::np_cmul;
+    const size_t nk = p.k.size(), m = p.keep.size();
+    // `_reduce_fortran`. Z Q: column k gains a * column e (`Z[:, kk] +=
+    // Z[:, ee] * aa`). No k is an e, so the chunks' order moves nothing.
+    for (size_t i = 0; i < nk; i++) {
+        cdouble *zk = Z.data() + static_cast<size_t>(p.k[i]) * nb;
+        const cdouble *ze = Z.data() + static_cast<size_t>(p.e[i]) * nb;
+        const cdouble ai(p.a[i], 0.0);
+        for (size_t r = 0; r < nb; r++) zk[r] = c_add(zk[r], np_cmul(ze[r], ai));
+    }
+    // Q^T (Z Q), squeezed column by column into the buffer's head: a
+    // destination never overtakes an unread source (keep[j] >= j, m <= n)
+    std::vector<size_t> k_at(nk);
+    for (size_t i = 0; i < nk; i++)
+        k_at[i] = static_cast<size_t>(std::lower_bound(p.keep.begin(), p.keep.end(), p.k[i]) - p.keep.begin());
+    std::vector<cdouble> col_out(m);
+    for (size_t j = 0; j < m; j++) {
+        const cdouble *col = Z.data() + static_cast<size_t>(p.keep[j]) * nb;
+        for (size_t i = 0; i < m; i++) col_out[i] = col[static_cast<size_t>(p.keep[i])];
+        // `out[k_at] += a * col[e]`
+        for (size_t i = 0; i < nk; i++)
+            col_out[k_at[i]] = c_add(col_out[k_at[i]], np_cmul(cdouble(p.a[i], 0.0), col[static_cast<size_t>(p.e[i])]));
+        std::copy(col_out.begin(), col_out.end(), Z.begin() + static_cast<ptrdiff_t>(j * m));
+    }
+    Z.resize(m * m);
+    razor::SolveContext ctx;
+    ctx.take_z(std::move(Z), static_cast<ptrdiff_t>(m));
+    // `reduce_rhs`: W = V as complex128 (C order), W[k] += a[:, None] * W[e],
+    // then W[keep] in Fortran order (`np.asfortranarray`)
+    std::vector<cdouble> Bc(nb * np_);
+    for (size_t q = 0; q < Bc.size(); q++) Bc[q] = cdouble(B[q], 0.0);
+    std::vector<cdouble> W = Bc;
+    for (size_t i = 0; i < nk; i++) {
+        cdouble *wk = W.data() + static_cast<size_t>(p.k[i]) * np_;
+        const cdouble *we = W.data() + static_cast<size_t>(p.e[i]) * np_;
+        const cdouble ai(p.a[i], 0.0);
+        for (size_t j = 0; j < np_; j++) wk[j] = c_add(wk[j], np_cmul(ai, we[j]));
+    }
+    std::vector<cdouble> y(m * np_);
+    for (size_t i = 0; i < m; i++)
+        for (size_t j = 0; j < np_; j++) y[j * m + i] = W[static_cast<size_t>(p.keep[i]) * np_ + j];
+    // `_lu_solve(Zr, Vr, overwrite_a=True, overwrite_b=True)`
+    out.info = ctx.lu_solve(lp, y.data(), static_cast<int>(np_));
+    if (out.info != 0) return;
+    // `expand`: x = zeros((n, r)) C order, x[keep] = y, then
+    // np.add.at(x, e, x[k] * a[:, None]), in array order
+    std::vector<cdouble> x(nb * np_, cdouble(0.0, 0.0));
+    for (size_t i = 0; i < m; i++)
+        for (size_t j = 0; j < np_; j++) x[static_cast<size_t>(p.keep[i]) * np_ + j] = y[j * m + i];
+    std::vector<cdouble> contrib(nk * np_);
+    for (size_t i = 0; i < nk; i++) {
+        const cdouble ai(p.a[i], 0.0);
+        for (size_t j = 0; j < np_; j++) contrib[i * np_ + j] = np_cmul(x[static_cast<size_t>(p.k[i]) * np_ + j], ai);
+    }
+    for (size_t i = 0; i < nk; i++)
+        for (size_t j = 0; j < np_; j++) {
+            cdouble &xe = x[static_cast<size_t>(p.e[i]) * np_ + j];
+            xe = c_add(xe, contrib[i * np_ + j]);
+        }
+    // `Y = B.T @ X`, X C order as the Schur route leaves it
+    const int64_t n_b = static_cast<int64_t>(nb), n_p = static_cast<int64_t>(np_);
+    out.Y.assign(np_ * np_, cdouble(0.0, 0.0));
+    nec5::replay::np_matmul(npl, Op{Bc.data(), n_p, n_b, 1, n_p}, Op{x.data(), n_b, n_p, n_p, 1}, out.Y.data(),
+                            n_p, 1);
+    out.x_c_order = true;
+    out.X = std::move(x);
+}
+}  // namespace
+
+std::vector<std::pair<std::string, uint64_t>> kcl_nullspace_counts() {
+    const std::lock_guard<std::mutex> lock(g_kcl_counts_mu);
+    return std::vector<std::pair<std::string, uint64_t>>(g_kcl_counts.begin(), g_kcl_counts.end());
+}
+
 PortSolve solve_ports(std::vector<cdouble> Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np, const SymLapack *sym) {
@@ -835,6 +974,18 @@ PortSolve solve_ports(std::vector<cdouble> Z, int64_t n_b, const std::vector<dou
     // it used to hold three (the caller's Z, this copy and the context's).
     for (size_t i = 0; i < nb; i++)
         for (size_t j = i + 1; j < nb; j++) std::swap(Z[i * nb + j], Z[j * nb + i]);
+    // momwire#1898: `_kcl_plan`, the null-space reduction when the feature
+    // is requested and the rows are of its shape, else the Schur route below
+    if (n_c > 0 && ni_eval::requested_features().kcl_nullspace) {
+        KclPlan plan;
+        const std::string why = kcl_plan(kcl, n_c, n_b, plan);
+        out.kcl_route = why.empty() ? std::string("reduced") : "schur: " + why;
+        count_kcl_route(out.kcl_route);
+        if (why.empty()) {
+            solve_reduced(std::move(Z), nb, B, np_, plan, lp, np, out);
+            return out;
+        }
+    }
     razor::SolveContext ctx;
     ctx.take_z(std::move(Z), static_cast<ptrdiff_t>(n_b));
     // B as numpy holds it: complex128, C order (`np.hstack`)
