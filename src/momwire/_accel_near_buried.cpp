@@ -13,6 +13,7 @@
 #include <complex>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -157,6 +158,83 @@ py::tuple transmitted_proj_core(cd eps_t, double k2, double r_max, double zp_min
     return py::make_tuple(out, why);
 }
 
+// momwire#1847: the C++ route's `_transmitted_anchors.get_grid`, every node
+// filled, for the unit gates against Python's blend. None where Python
+// declines (with `why`, its name, under the key "declined"); with `parts`,
+// also the eight anchors' tables it summed, in stencil order.
+py::object transmitted_anchors_grid_core(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
+                                         double omega, double mu, py::object r_min, bool parts) {
+    const bool has = !r_min.is_none();
+    const double rm = has ? r_min.cast<double>() : 0.0;
+    std::vector<const somm_trans::Grid *> anchors;
+    std::string why;
+    const somm_trans::Grid *g = nullptr;
+    {
+        py::gil_scoped_release release;
+        g = somm_trans::anchored_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has, rm, 0,
+                                      parts ? &anchors : nullptr, &why);
+    }
+    py::dict d;
+    if (g == nullptr) {
+        d["declined"] = why;
+        return d;
+    }
+    auto table = [](const somm_trans::Grid &x) {
+        py::array_t<cd> v({static_cast<py::ssize_t>(x.n_zp), py::ssize_t(5), static_cast<py::ssize_t>(x.n_r),
+                           static_cast<py::ssize_t>(x.n_th)});
+        std::copy(x.vals.begin(), x.vals.end(), v.mutable_data());
+        return v;
+    };
+    d["vals"] = table(*g);
+    py::array_t<double> zp_nodes(static_cast<py::ssize_t>(g->zp_nodes.size()));
+    std::copy(g->zp_nodes.begin(), g->zp_nodes.end(), zp_nodes.mutable_data());
+    d["zp_nodes"] = zp_nodes;
+    d["eps_t"] = g->eps_t;
+    d["k2"] = g->k2;
+    d["omega"] = g->omega;
+    d["k_m"] = g->k_m;
+    d["lam_p"] = g->lam_p;
+    d["lam_m"] = g->lam_m;
+    d["r_min"] = g->r_min;
+    d["r_cap"] = g->r_cap;
+    d["r_max"] = g->r_max;
+    d["zp_min"] = g->zp_min;
+    d["zp_max"] = g->zp_max;
+    d["lnr0"] = g->lnr0;
+    d["dlnr"] = g->dlnr;
+    d["n_r"] = g->n_r;
+    d["th_min"] = g->th_min;
+    d["th0"] = g->th0;
+    d["dth"] = g->dth;
+    d["n_th"] = g->n_th;
+    d["lnz0"] = g->lnz0;
+    d["dlnz"] = g->dlnz;
+    if (parts) {
+        py::list a;
+        for (const somm_trans::Grid *x : anchors) {
+            py::dict e;
+            e["vals"] = table(*x);
+            e["eps_t"] = x->eps_t;
+            e["k2"] = x->k2;
+            e["omega"] = x->omega;
+            a.append(e);
+        }
+        d["anchors"] = a;
+    }
+    return d;
+}
+
+py::dict transmitted_anchors_stats(bool reset) {
+    if (reset) somm_trans::anchor_reset();
+    const somm_trans::AnchorStats s = somm_trans::anchor_stats();
+    py::dict d;
+    d["anchor_fills"] = s.anchor_fills;
+    d["blends"] = s.blends;
+    d["declined"] = s.declined;
+    d["nodes_filled"] = s.nodes_filled;
+    return d;
+}
+
 }  // namespace
 
 void register_near_buried(py::module_ &m) {
@@ -184,4 +262,12 @@ void register_near_buried(py::module_ &m) {
           py::arg("above"), py::arg("t_above"), py::arg("below"), py::arg("t_below"), py::arg("ground_z"),
           py::arg("k_p"), py::arg("k_m"), py::arg("transposed"),
           "momwire#1718 S12: the executables' get_grid + projection (role-order table, eval refusal name).");
+    m.def("transmitted_anchors_grid_core", &transmitted_anchors_grid_core, py::arg("eps_t"), py::arg("k2"),
+          py::arg("r_max"), py::arg("zp_min"), py::arg("zp_max"), py::arg("omega"), py::arg("mu"),
+          py::arg("r_min") = py::none(), py::arg("parts") = false,
+          "momwire#1847: `_transmitted_anchors.get_grid` as the C++ route blends it (a dict of its "
+          "state; {'declined': name} where Python returns None; with parts, the anchors summed).");
+    m.def("transmitted_anchors_stats", &transmitted_anchors_stats, py::arg("reset") = false,
+          "momwire#1847: the C++ anchored route's counts (`_transmitted_anchors.STATS`); reset forgets "
+          "every anchor and blend first.");
 }
