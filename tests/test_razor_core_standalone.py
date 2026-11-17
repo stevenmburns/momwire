@@ -2293,6 +2293,48 @@ def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
     assert counts.get("served", 0) == 54, counts
 
 
+REFUSAL_1117_DECKS = ROOT / "tests" / "fixtures" / "nec5_refusal_sentences_1117"
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_the_census_refusals_print_as_python(driver, tmp_path, basis):
+    """The 11-17 census's two bs2 refusals (`test_nec5_refusal_sentences_1117`):
+    a radius spread below a crossing node and a grazing pair inside the
+    Sommerfeld range cap, through the C++ seam and run half on razor-2p and
+    bs2, byte for byte as `_shell.render` prints them: the refusal sentence,
+    never a decline or an INTERNAL ERROR frame."""
+    decks = sorted(REFUSAL_1117_DECKS.glob("*.nec"))
+    assert len(decks) == 2
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+        assert not reasons, reasons
+        assert sum(counts.values()) == 2, counts
+        return
+    saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+    os.environ.update(_ONE_THREAD)
+    try:
+        answers = pc.run_driver(
+            driver[0]["nec5_razor_printout_driver"], decks, tmp_path
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    with _one_thread():
+        for path, ans in zip(decks, answers, strict=True):
+            assert ans["route"] != "declined", (path, ans.get("reason"))
+            ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+            assert b"NEC ERROR" in ref and b"INTERNAL ERROR" not in ref, path
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
+
+
 CW_1697_DECKS = ROOT / "tests" / "fixtures" / "nec_cw_catenary_1697"
 
 

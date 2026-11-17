@@ -97,15 +97,10 @@ const nec5::BSplineFront &Engine::front_at(std::size_t index) {
         p->engine = part;
         const nec5::BSplineSeamEngine engine;
         const nec5::SeamEngine::Built b = engine.build(*p);
-        if (b.kind == nec5::SeamEngine::Built::declined) {
-            // bs2's NotImplementedError in Python's own sentence (the crossing
-            // serve's scope): `_nec4.solve`'s Nec4Refusal(str(exc))
-            const std::string prefix = "front:bspline-";
-            if (b.error_kind == "NotImplementedError" && b.message.compare(0, prefix.size(), prefix) == 0)
-                throw nec4::Refusal(b.message.substr(prefix.size()));
-            throw nec4::Declined(b.message);
-        }
-        // the constructor's ValueError: `_nec4.solve`'s Nec4Refusal(str(exc))
+        if (b.kind == nec5::SeamEngine::Built::declined) throw nec4::Declined(b.message);
+        // the constructor's ValueError, and bs2's NotImplementedError in
+        // Python's own sentence (the crossing serve's scope), which the seam
+        // engine refuses: `_nec4.solve`'s Nec4Refusal(str(exc))
         if (b.kind != nec5::SeamEngine::Built::built) throw nec4::Refusal(b.message);
         preps_[index] = std::move(p);
     }
@@ -130,6 +125,10 @@ const nec4::EngineSolve &Engine::solve(std::size_t index) {
             throw nec4::Declined(std::string("bspline: ") + e.what());
         } catch (const bspline::FrontValueError &e) {
             throw nec4::Refusal(e.what());  // a ValueError the fill raises
+        } catch (const nec5::PrintoutRaise &e) {
+            // the same, as the NEC-5 run half hands it on (the buried plan's
+            // grazing refusal): `_nec4.solve`'s Nec4Refusal(str(exc))
+            throw nec4::Refusal(e.message);
         }
         std::unique_ptr<nec4::EngineSolve> es(new nec4::EngineSolve);
         // FILL= the fill alone, FACTOR= the port solve (see _nec4_run_core.h)
