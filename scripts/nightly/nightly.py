@@ -180,7 +180,16 @@ def build_python(logf: Path, state: dict) -> None:
     env = env_base()
     env.update(CC="ccache gcc", CXX="ccache g++")
     ph = file_hash(MW / "pyproject.toml")
-    if state.get("pyproject") != ph or not PY.exists():
+    # The stamp lives in the venv, beside what it describes. `state` alone was
+    # not enough: a bisect probe reinstalls at an older commit through a copy
+    # of the state that is never saved, so the next night saw its own
+    # pyproject's hash, skipped the reinstall, and kept the probe's
+    # dist-info -- Python's printouts then said the older version on line 2
+    # (the 2026-11-16 night: venv 0.87.1, executables 0.93.0, every deck a
+    # `mismatch` at line 2).
+    stamp = VENV / ".mw-pyproject"
+    have = stamp.read_text().strip() if stamp.is_file() else None
+    if have != ph or not PY.exists():
         if not PY.exists():
             sh([sys.executable, "-m", "venv", VENV], logf=logf)
             sh([PY, "-m", "pip", "install", "-q", "--upgrade", "pip"], logf=logf)
@@ -207,6 +216,7 @@ def build_python(logf: Path, state: dict) -> None:
             [PY, "-m", "pip", "install", "-q", "matplotlib"], logf=logf
         )  # the sweep's antennaknobs
         state["pyproject"] = ph
+        stamp.write_text(ph + "\n")
     # make build: MOMWIRE_REQUIRE_ACCEL=1, so a failed compile fails here
     # rather than leaving a stale .so behind (never bare build_ext, never -j).
     sh(["make", "build", f"PYTHON={PY}"], cwd=MW, logf=logf)
@@ -222,7 +232,11 @@ def build_python(logf: Path, state: dict) -> None:
             raise RuntimeError(f"forced {v}, momwire._accel.VARIANT is {got}")
 
 
-def openblas(logf: Path) -> Path:
+def openblas(logf: Path, prune: bool = True) -> Path:
+    """The two static archives for the checked-out build_openblas.sh. A
+    bisect probe passes prune=False: an older commit's script names other
+    archives, and pruning to them deleted the night's own (the next night
+    then rebuilt them, ~17 min)."""
     h = file_hash(MW / "standalone" / "build_openblas.sh")
     d = OPENBLAS / h
     if (d / "libmwxp.a").is_file() and (d / "libmwnp.a").is_file():
@@ -232,7 +246,7 @@ def openblas(logf: Path) -> Path:
         sh(["git", "clone", "-q", "--shared", OB_SEED, d / "src"], logf=logf)
     sh(["bash", MW / "standalone" / "build_openblas.sh", d], logf=logf)
     shutil.rmtree(d / "src", ignore_errors=True)
-    for old in OPENBLAS.iterdir():
+    for old in OPENBLAS.iterdir() if prune else ():
         if old.is_dir() and old.name != h:
             shutil.rmtree(old)  # the nightly's own earlier archives only
     return d
@@ -573,7 +587,7 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
         audit_t = [f for f in targets if "exe" in f]
         pairs = sorted({(f["exe"], f["cell"].split("-")[0]) for f in audit_t})
         if pairs:
-            build_exes(pairs, openblas(logf), logf)
+            build_exes(pairs, openblas(logf, prune=False), logf)
     except Exception:  # noqa: BLE001 - an unbuildable commit is skipped
         return "skip"
     if any(f["kind"] == "fake" for f in targets):
