@@ -67,7 +67,8 @@ what holds the MinGW build to it.
 
 ### The libm, per call (`scripts/windows_static/libm_bench.c`)
 
-ns per call, best of 5. Run 1's runner; run 2's MINGW64 column read 49-84 ns.
+ns per call, best of 5, run 1. Each environment's columns come from its own
+job (its own runner); run 2's MINGW64 link column read 49-84 ns.
 
 | function | MINGW64 link (libmingwex) | msvcrt.dll | ucrtbase.dll | UCRT64 link | CLANG64 link |
 |---|---|---|---|---|---|
@@ -204,9 +205,9 @@ vector math. The cheapest route is **SLEEF's GNU-ABI library**
    (the same six guards this branch had to add);
 2. build SLEEF (Boost Software License 1.0) statically in each MSYS2
    environment, cached like OpenBLAS, and link it;
-3. re-run the corpus gate (SLEEF's u10 functions are 1.0 ulp, like
-   libmvec's 4 ulp at worst, so PRINTOUT_RTOL_WIN32 should hold) and the
-   paired timing.
+3. re-run the corpus gate and the paired timing. SLEEF's u10 functions
+   are within 1.0 ulp. libmvec's are within 4, and the Linux gates already
+   pass with those, so PRINTOUT_RTOL_WIN32 should hold.
 
 Estimate: 1-2 days, mostly CI turns. The risks: SLEEF's MinGW build is
 less trodden than its Linux one, and gcc's Win64 vector ABI passes `__m256d`
@@ -228,10 +229,10 @@ is listed only.
 
 ### 2. The exit hang
 
-- **Symptom.** About 1 run in 7,500 sits at exit after writing a complete
-  printout. Run 1 had 2 in 5,616 `fat_compare` runs, with the
+- **Symptom.** About 1 run in 6,700 (stdout piped) sits at exit after
+  writing a complete printout. Run 1 had 2 in 5,616 `fat_compare` runs, with the
   d35e80c1 pool shutdown on. Run 2's normal-exit arm had 1 in 16,776.
-- **Mechanism** (gdb, run 2). The main thread is in ucrtbase's `exit`,
+- **Mechanism** (gdb, the same in all three backtraces, runs 2 and 3). The main thread is in ucrtbase's `exit`,
   inside `LoadLibraryExW`, waiting on the loader lock. A second thread is
   in `ZwTerminateThread`, exiting. d35e80c1's shutdown of the OpenBLAS pools
   at exit does not prevent it, and can cause it: it makes pool threads exit
