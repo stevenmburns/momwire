@@ -120,6 +120,49 @@ def pytest_configure(config):
     # lanes keep the threading they were certified with.
     if hasattr(config, "workerinput"):
         _pin_worker_threads()
+    else:
+        _serialize_warning_imports()
+
+
+def _serialize_warning_imports():
+    """The xdist CONTROLLER decodes a worker's warning in that worker's
+    execnet receiver thread (`xdist.workermanage.process_from_remote`), and
+    decoding imports the warning's module (`unserialize_warning_message`'s
+    `importlib.import_module`). Two workers' first warnings from two
+    different momwire modules therefore import momwire in two threads at
+    once, and CPython's import locks invert: one thread holds the child's
+    lock while it waits for the package's, the other holds the package's
+    (running `momwire/__init__`) while it waits for the child's. The deadlock
+    detector breaks the cycle by handing one of them a partially initialised
+    module, which surfaced as an INTERNALERROR: "cannot import name
+    'DistributedRLC' from partially initialized module momwire._wire_loading",
+    then `KeyError: 'momwire'` as the other thread finds the package gone.
+    tests/test_xdist_warning_import_race.py reproduces it every time without
+    this (eight warnings from eight modules), and never with it.
+
+    One lock around the decode makes those imports one at a time. Nothing
+    else in the controller imports in those threads, so this is the whole
+    race; and it costs nothing, unlike importing momwire in the controller
+    up front (which would still leave subpackages a warning can name, and
+    other libraries' warnings, to race). A serial run never decodes a
+    warning, so the wrapper is idle there."""
+    import threading
+
+    try:
+        from xdist import workermanage
+    except ImportError:
+        return
+    decode = getattr(workermanage, "unserialize_warning_message", None)
+    if decode is None or getattr(decode, "_momwire_serialized", False):
+        return
+    lock = threading.Lock()
+
+    def serialized(data):
+        with lock:
+            return decode(data)
+
+    serialized._momwire_serialized = True
+    workermanage.unserialize_warning_message = serialized
 
 
 @_pytest.fixture(autouse=True)
