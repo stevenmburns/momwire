@@ -48,9 +48,10 @@ moments come from a power series in k whose coefficients are geometry-only,
 and the plan keeps that group's series source (`PointSeriesAccel`) for its
 own lifetime, under a key that holds no wavenumber. A frequency sweep then
 integrates each pair once. That route is not bit-identical to the direct
-rule (it agrees to ~1e-15 of a moment), so it is behind
-`_exact_kernel_series.ENABLED`; with the switch off this module is
-momwire#1455's, bit for bit.
+rule (it agrees to ~1e-15 of a moment), so it is behind the opt-in feature
+`exact_kernel_series` (`RazorSolver(exact_kernel_series=...)`, else
+`_exact_kernel_series.ENABLED`); with it off this module is momwire#1455's,
+bit for bit.
 
 Cross-radius jobs (momwire#1438). A coaxial line with a radius step adds one
 job after the one-radius groups (`_exact_kernel_seam.coaxial_lines`): the
@@ -247,7 +248,9 @@ def rows_cacheable(k):
     return _exact_kernel.point_accel_serves(k, 2)
 
 
-def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop=None):
+def build_plan(
+    geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop=None, series=None
+):
     """The geometry-only tables of every coaxial group that carries a wing,
     in `coaxial_groups`' order, then of every stepped line's cross job
     (momwire#1438). The expressions are the ones
@@ -256,7 +259,13 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop=
 
     `chop` (momwire#1619): the sorted chopped rows of a medium's
     sub-geometry, or None. A chopped row's ghost wing (sigma 0) names the
-    endpoint its T2 moved to the knot, whose observer stays uncorrected."""
+    endpoint its T2 moved to the knot, whose observer stays uncorrected.
+
+    `series`: whether the k-series is on for the solve the plan is for
+    (momwire#1454), which only the byte count reads; None is
+    `_exact_kernel_series.ENABLED`."""
+    if series is None:
+        series = _exact_kernel_series.ENABLED
     # Every 3-vector product below is `dot3`'s fixed order, not `@`/einsum
     # (numpy's BLAS FMA chain / einsum's lane split), so the plan is one
     # that a C++ replay (momwire#1479) forms bit for bit.
@@ -395,13 +404,13 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop=
             "seg_a": seg_a[S],
         }
         g.windows = windows
-        g.nbytes = _group_nbytes(g)
+        g.nbytes = _group_nbytes(g, series)
         total += g.nbytes
         out.append(g)
     return out, total
 
 
-def _group_nbytes(g):
+def _group_nbytes(g, series):
     arrs = [g.x0, g.sgn, g.h, g.col_ptr, g.B, g.B64, g.by_o, g.r_o, g.r_m]
     arrs += [g.obs_pt, g.obs_x, *g.ent, *g.sub.values()]
     if g.lab is not None:
@@ -423,7 +432,7 @@ def _group_nbytes(g):
     # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each),
     # one per kept wavenumber.
     nbytes += 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
-    if _exact_kernel_series.ENABLED:
+    if series:
         # Its series source holds the same pairs once, each with at most
         # N_CAP real coefficients per moment -- and never more pairs than
         # observers times segments, which is what bounds a two-segment
@@ -464,7 +473,17 @@ def _freeze(groups):
 
 
 def plan_for(
-    geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context=(), chop=None
+    geom,
+    seg_a,
+    pts,
+    tans,
+    wts,
+    src_lab,
+    on_cent,
+    chunk_elems,
+    context=(),
+    chop=None,
+    series=None,
 ):
     """The plan for these inputs: from the cache when the very same inputs
     were planned before, else built (and stored, within the bounds).
@@ -472,12 +491,17 @@ def plan_for(
     `context` is the solver's own description of its route (class, basis
     flags), compared as part of the key. The plan reads none of it
     beyond what the arrays already carry; it is there so that a solver
-    configured differently never shares an entry, whatever the arrays say."""
+    configured differently never shares an entry, whatever the arrays say.
+
+    `series` is `build_plan`'s (None: `_exact_kernel_series.ENABLED`)."""
     if chop is not None and not len(chop):
         chop = None
+    if series is None:
+        series = _exact_kernel_series.ENABLED
+    series = bool(series)
     if not ENABLED:
         groups, nbytes = build_plan(
-            geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop
+            geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop, series
         )
         return Plan(groups, nbytes), False
     key = (
@@ -497,7 +521,7 @@ def plan_for(
         int(chunk_elems),
         tuple(context),
         # the byte bound a plan was admitted under counts the series sources
-        bool(_exact_kernel_series.ENABLED),
+        series,
         None if chop is None else _arr_key(np.asarray(chop, dtype=np.int64)),
     )
     with _LOCK:
@@ -508,7 +532,7 @@ def plan_for(
             return plan, True
         STATS["plan_miss"] += 1
     groups, nbytes = build_plan(
-        geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop
+        geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, chop, series
     )
     plan = Plan(groups, nbytes)
     if nbytes <= _PLAN_MAX_BYTES:
