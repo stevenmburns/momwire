@@ -225,6 +225,56 @@ def test_reversed_wires_share_their_classes():
     assert _drift(_solve(_dipoles(), True, ground=SOMM), unfolded_y) <= DRIFT
 
 
+def _hairpin(x0=3.3):
+    """Two 10 m wires 2 mm apart joined by a 2 mm bridge; with 21 segments
+    per wire the bridge's h = 95 um is under the 1 mm radius (h/a = 0.095)
+    and cond(Z) is ~7e9. Translated off the origin, its coordinates carry
+    rounding that a key against the pair's distance cannot see."""
+    ws = [
+        [[0, -5, 8], [0, 5, 8]],
+        [[0, 5, 8], [0.002, 5, 8]],
+        [[0.002, 5, 8], [0.002, -5, 8]],
+    ]
+    return [np.array(w, dtype=float) + [x0, 0.0, 0.0] for w in ws]
+
+
+def _hairpin_zin(mode, wires):
+    s = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[21], [21], [21]],
+        feeds=[(0, 5.238095238095238, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        extended_kernel=False,
+        exact_kernel=False,
+        razor_pair_reuse=mode,
+    )
+    return complex(1.0 / s.compute_port_solution().y[0, 0])
+
+
+def test_segments_shorter_than_their_radius_keep_their_near_pairs():
+    """The near rule is in units of max(h, a), not h: the hairpin's
+    bridge-on-bridge pairs a few h apart are within a radius, where the
+    reduced kernel varies over a. Under the rule in h alone (the probe)
+    they are shared, every pair still passes `verify` (2e-13), and Zin
+    moves 1.5e-5. With the right rule it moves ~4e-11."""
+    wires = _hairpin()
+    off = _hairpin_zin(False, wires)
+    on = _hairpin_zin(True, wires)
+    assert _ran() == 1
+    right = razor._PAIR_REUSE_STATS[0]
+    assert right["classes"] < 0.6 * right["pairs"], right
+    good = abs(on - off) / abs(off)
+    assert good < 1e-9, good
+    acc.razor_reuse_probe(6)
+    wrong = _hairpin_zin(True, wires)
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["near_pairs"] < right["near_pairs"], (st, right)
+    bad = abs(wrong - off) / abs(off)
+    assert bad > 1e-7, bad
+
+
 # ------------------------------------------------------------ C++ route
 
 
