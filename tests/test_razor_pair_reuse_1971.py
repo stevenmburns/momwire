@@ -125,11 +125,18 @@ def _ran():
 # ------------------------------------------------------------ off / on
 
 
+def _cache():
+    # process totals: the plans built and found, as deltas across a test
+    c = acc.razor_reuse_cache()
+    return c["built"], c["found"]
+
+
 def test_off_never_enters_the_reuse_branch():
+    before = _cache()
     _solve(_dipoles(), None)
     _solve(_dipoles(), False)
     assert razor._PAIR_REUSE_ROUTE == {}
-    assert acc.razor_reuse_cache() == {"built": 0, "found": 0}
+    assert _cache() == before
 
 
 def test_the_environment_alone_turns_it_on(monkeypatch):
@@ -190,9 +197,10 @@ def test_mixed_radii_and_a_junction_deck_reuses():
 
 
 def test_the_plan_is_found_again_for_the_same_geometry():
+    b0, f0 = _cache()
     _solve(_dipoles(), True)
     _solve(_dipoles(), True)
-    assert acc.razor_reuse_cache() == {"built": 1, "found": 1}
+    assert _cache() == (b0 + 1, f0 + 1)
 
 
 def test_reversed_wires_share_their_classes():
