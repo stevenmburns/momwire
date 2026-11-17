@@ -164,7 +164,7 @@ pair, not across.)
    `__vdecl_cos4` and 11 x `__vdecl_exp4` in `_bspline_core`, plus the
    razor and Sommerfeld ones. (An exe's strings could not show this: the
    functions are linked statically and the exe is stripped.)
-3. **gcc's equivalent is libmvec, and it is worth the same factor.** The
+3. **gcc's equivalent is libmvec, and it is worth a similar factor.** The
    `#pragma omp declare simd` declarations in six files bind gcc's
    vectorised `sin`/`cos`/`exp` loops to glibc's `_ZGVdN4v_*` on Linux. A
    Linux build with them compiled out (the `_WIN32` guard's effect, tried
@@ -439,7 +439,7 @@ The cheapest route is now **in-repo**, not SLEEF:
   System32 step and the contract tests; the SDE step accepts it.
 - **Left:** README-windows.txt's sentence about the line, and SimNEC's
   engine list if it matches on the name (it matches `nec5` in the file name,
-  momwire#1239, not this line). Estimate: 0.5 h, part of task 5.
+  momwire#1239, not this line). Estimate: 0.5 h, part of task 6.
 
 ### 7. Docs and tests that name files
 
