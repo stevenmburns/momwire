@@ -337,7 +337,19 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         deck("GW 1 0 0 0 -.25 0 0 .25 .001\n"),
         "segment count must be >= 1, got 0",
     ),
-    ("gw_zero_radius", ("nec2",), deck("GW 1 3 0 0 -.25 0 0 .25 0\n"), "tapered wire"),
+    (
+        "gw_zero_radius",
+        ("nec2",),
+        deck("GW 1 3 0 0 -.25 0 0 .25 0\n"),
+        "(GW + GC continuation), which is not part of this engine's nec2 dialect",
+    ),
+    # The NEC-4.2 slot names its own dialect (as #1967 made SY do)
+    (
+        "gw_zero_radius_nec4",
+        ("nec4",),
+        deck("GW 1 3 0 0 -.25 0 0 .25 0\n"),
+        "(GW + GC continuation), which is not part of this engine's nec4 dialect",
+    ),
     # A coordinate past 1e299 m, a NaN or infinity a geometry card leaves in
     # a wire, an infinite angle and a NaN integer field refuse in both readers
     # (`deck._cards.wire_geometry_refusal`, `infinite_angle_refusal`,
@@ -1019,18 +1031,21 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "SY L=1.5\n" + deck(),
         "SY (4nec2 symbolic variables)",
     ),
-    # GC and GF stay refused by name in both dialects (momwire#1651).
-    (
-        "refused_by_name_gc",
-        ("nec2", "nec4"),
-        deck(DIPOLE + "GC 0 0 1 .001 .002\n"),
-        "GC (tapered wire continuation)",
-    ),
-    (
-        "refused_by_name_gf",
-        ("nec2", "nec4"),
-        "GF 0\n" + deck(),
-        "GF (numerical Green's function)",
+    # GC and GF stay refused by name in both dialects (momwire#1651), each
+    # dialect naming itself.
+    *(
+        (
+            f"refused_by_name_{name.lower()}_{dialect}",
+            (dialect,),
+            text,
+            f"{name} ({what}) is not part of this engine's {dialect} dialect",
+        )
+        for dialect in ("nec2", "nec4")
+        for name, what, text in (
+            ("SY", "4nec2 symbolic variables", "SY L=1.5\n" + deck()),
+            ("GC", "tapered wire continuation", deck(DIPOLE + "GC 0 0 1 .001 .002\n")),
+            ("GF", "numerical Green's function", "GF 0\n" + deck()),
+        )
     ),
     # The nec2 dialect's GA (NEC-2's arc, as the nec4 one) and GH (NEC-2's
     # helix, nec2c's `helix`: spacing, length, four radii, wire radius),
