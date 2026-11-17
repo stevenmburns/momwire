@@ -6869,8 +6869,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         as before. The sector route declines unless
         `_sin_pair_reuse.SECTOR_ROUTE` is set: its rotation has already
         taken most of the reuse, and the census costs about what the rest
-        saves (the constant has the measurement). It is the last reason
-        checked, so a deck the reuse could not serve anyway says why.
+        saves (the constant has the measurement). Last, a deck below
+        `_sin_pair_reuse.SMALL_DECK_SEGS_FREE` segments (free space, PEC) or
+        `SMALL_DECK_SEGS_GROUND` (a finite ground) declines, the census
+        costing more than its fill saves; `pair_reuse="verify"` ignores it.
+        Those two are checked after the rest, so a deck the reuse could not
+        serve anyway says why.
         """
         if not self._pair_reuse_on:
             return None
@@ -6898,6 +6902,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             reason = "a ground with no remainder"
         elif obs_rows is not None and not _pr.SECTOR_ROUTE:
             reason = "the sector route (its rotation already takes the reuse)"
+        elif not self._pair_reuse_verify and geom["n_segs"] < (
+            small := (
+                _pr.SMALL_DECK_SEGS_GROUND if finite else _pr.SMALL_DECK_SEGS_FREE
+            )
+        ):
+            reason = f"too few segments to repay the plan (N < {small})"
         else:
             reason = None
         self.pair_reuse_declined = reason

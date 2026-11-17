@@ -641,8 +641,11 @@ def test_pair_reuse_rides_the_compact_fill(ground, monkeypatch):
     """`pair_reuse` (momwire#1911) serves the route's bands as it serves the
     square fill's: the route with it on against the dense solve with it
     off, on a deck it does not decline. The route declines it by default
-    (`_sin_pair_reuse.SECTOR_ROUTE`, momwire#1969), so this turns it on."""
+    (`_sin_pair_reuse.SECTOR_ROUTE`, momwire#1969), so this turns it on, and
+    lowers the small-deck threshold the screen sits below."""
     monkeypatch.setattr(_sin_pair_reuse, "SECTOR_ROUTE", True)
+    monkeypatch.setattr(_sin_pair_reuse, "SMALL_DECK_SEGS_FREE", 0)
+    monkeypatch.setattr(_sin_pair_reuse, "SMALL_DECK_SEGS_GROUND", 0)
     w, npe, feeds = screen(6)
     s = build(w, npe, feeds, ground=ground, pair_reuse=True)
     d = build(w, npe, feeds, rot=False, ground=ground)

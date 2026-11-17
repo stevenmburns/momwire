@@ -541,3 +541,13 @@ def test_the_kernel_decodes_against_numpy_on_a_synthetic_band():
                 got, *d, img, *m_args, n_threads=nt, signs=signs_d
             )
             assert got.tobytes() == want.tobytes(), (image is None, nt)
+
+
+@pytest.fixture(autouse=True)
+def _reuse_on_small_decks(monkeypatch):
+    """These decks sit below the small-deck threshold on purpose (cheap) and
+    test the reuse itself, `pair_reuse=True`'s fused gather included, which
+    `"verify"` would bypass: the threshold is lowered here, and
+    `test_sin_pair_reuse_small_deck_1969` holds it."""
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_FREE", 0)
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_GROUND", 0)
