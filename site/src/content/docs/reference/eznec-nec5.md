@@ -150,7 +150,11 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
   1000`): the pattern's fields are printed in volts per metre at that range,
   as NEC-4.2 prints them. The gains are the same with or without a range.
 - **`RP` gain forms** XNDA 1000 to 1003 and 1010 to 1013 (4nec2 writes 1003
-  by default).
+  by default), and the NORMALIZED GAIN table an XNDA digit N of 1 to 5 asks
+  for, as in `RP … 1500`: major axis, minor axis, vertical, horizontal or
+  total gain, normalized to the table's peak or to the card's own factor,
+  laid out as NEC-4.2 prints it. A pattern of one theta or one phi prints no
+  average gain, as in NEC-4.2.
 - **`PT -1`**, which 4nec2's ItsHF decks write beside `PQ -1`: the printout
   leaves out the CURRENTS AND LOCATION table from that card on, as NEC-4.2
   does, and prints everything else. Every other `PT` form is refused.
