@@ -58,6 +58,11 @@ def run(
         return -999, b"HANG", b""
     body = out.read_bytes() if out.exists() else b""
     out.unlink(missing_ok=True)  # the next run writes the same path
+    if b"SDE-ERROR" in stderr:
+        # an instruction the emulated CPU lacks: a failure even when both
+        # executables fault alike (run 44010094276 counted those as equal)
+        print(f"SDE FAULT {cmd[-1]} {deck}: {stderr[-400:]!r}", flush=True)
+        return -998, b"SDE-ERROR", b""
     if p.returncode != 0:
         print(
             f"exit {p.returncode & 0xFFFFFFFF:#010x} {cmd[-1]} {deck}: {stderr[-400:]!r}",
@@ -113,9 +118,14 @@ def main(argv: list[str]) -> int:
         y = run(one_cmd, deck, out, env)
         return deck, copy, x, y
 
-    same = differ = refused = 0
+    same = differ = refused = faulted = nonzero = 0
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
         for deck, copy, x, y in pool.map(one, jobs):
+            if -998 in (x[0], y[0]):
+                faulted += 1
+                continue
+            if x[0] != 0 or y[0] != 0:
+                nonzero += 1
             if x == y:
                 same += 1
                 if b"not served by this build" in x[2]:
@@ -142,9 +152,10 @@ def main(argv: list[str]) -> int:
     pick = "picked by CPU" if a.auto else "forced"
     print(
         f"{a.variant} ({pick}, {how}): {same} identical ({refused} of them the same refusal),"
-        f" {differ} different, {len(decks)} decks x {len(copies)} copies"
+        f" {differ} different, {faulted} SDE faults, {nonzero} with a nonzero exit,"
+        f" {len(decks)} decks x {len(copies)} copies"
     )
-    return 1 if differ or not same else 0
+    return 1 if differ or faulted or not same else 0
 
 
 if __name__ == "__main__":
