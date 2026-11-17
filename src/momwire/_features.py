@@ -415,9 +415,13 @@ FEATURES: dict[str, Feature] = {
         # so the plan is still never decided on what is cached. Opt-in:
         # its cost is a cold process's first sheet build, which a small
         # deck pays without the warm gain.
+        # Reach 7 (momwire#1956 promotion, 2026-11-17): the two nec5
+        # executables carry it (their C++ census reads the same two
+        # constants, `ni_eval::sheet_build_weight`); the nec42-bspline
+        # executable (level 8) does not, and refuses it.
         Feature(
             name="crossing_sheet_retune",
-            reach=1,
+            reach=7,
             env="MOMWIRE_X_CROSSING_SHEET_RETUNE",
             kind="python",
             issue=1956,

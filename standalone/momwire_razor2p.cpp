@@ -362,12 +362,14 @@ struct ExeFeature {
     int reach;
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
-// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`).
+// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
+// and momwire#1956's retuned sheet weights (reach 7: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
     {"factored_columns", 8, true},
     {"height_sheet_recal", 8, true},
     {"crossing_table", 8, false},
     {"crossing_above_rule", 8, false},
+    {"crossing_sheet_retune", 7, false},
 };
 
 // This executable's level in support/hierarchy.toml, as

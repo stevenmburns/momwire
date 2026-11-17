@@ -20,9 +20,16 @@ What is held:
 - on, a hub deck's input impedance agrees with off within the declared drift
   on both formulations, and the plan did change; so does the deep, high-
   frequency hub where the drift was measured largest (razor-2p).
+
+Reach 7 (the two nec5 executables): `DECKS` below are the same two hubs as
+NEC-5 decks, which tests/test_standalone_nopython.py gives each executable
+off and on, against the launcher byte for byte, and the executable's own
+Zin, on against off, against the declared drift.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -34,9 +41,9 @@ from momwire.razor import RazorSolver
 
 from test_crossing_serve_524 import _radial_dirs, crossing_deck, hub_deck
 
-# An experimental feature (`momwire._features`, reach 1).
+# An experimental feature (`momwire._features`, reach 7).
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(7),
     # The decks are the fill tests' shapes, not converged designs: their
     # advisories (a coarse crossing node, an ambiguous feed site) are not
     # what is held here.
@@ -56,6 +63,40 @@ K_P = 2.0 * np.pi * F / 299792458.0
 EPS_T = complex(13.0, -0.005 / (2.0 * np.pi * F * 8.8541878128e-12))
 K_M = ni.k_medium(EPS_T, K_P)
 A = 0.001
+
+
+def hub_nec(f_mhz, depth, q, h, label, n=16):
+    """A synthetic NEC-5 deck (not a user's model) of the hub shape above:
+    `n` radials of length `q`, 10 segments each, at `depth` under a 13 /
+    0.005 S/m Sommerfeld ground; a 2-segment rise; a 15-segment vertical of
+    height `h`, fed on its 7th segment. Kept as text here, not under
+    tests/fixtures, which the C++ driver tests sweep whole."""
+    lines = [f"CM {label}", "CE"]
+    for i in range(n):
+        a = 2.0 * math.pi * i / n
+        x, y = q * math.cos(a), q * math.sin(a)
+        lines.append(f"GW {i + 1} 10 0 0 {-depth} {x:.9f} {y:.9f} {-depth} 0.001")
+    lines.append(f"GW {n + 1} 2 0 0 {-depth} 0 0 0 0.001")
+    lines.append(f"GW {n + 2} 15 0 0 0 0 0 {h} 0.001")
+    lines += ["GE -1", "GN 2 0 0 0 13 0.005", f"FR 0 1 0 0 {f_mhz} 0"]
+    lines += [f"EX 0 {n + 2} 7 0 1 0", "XQ", "EN", ""]
+    return "\n".join(lines)
+
+
+# The executables' decks. hub16 is `hub_deck(n_radials=16)`'s shape at 7 MHz:
+# off, neither executable plans its radials' plane; on, both do. deep_hub is
+# the largest drift the executables measured over a scan of these hubs
+# (7-30 MHz, depth 0.15-3 m, radials and vertical 2.5-7.5 m; Rocketlake, T1,
+# 2026-11-17): 1.93e-11 on nec5-bspline (two planes on, none off), 1.40e-11
+# on nec5-razor-2p there, whose own worst was 1.56e-11 (28 MHz, 0.5 m, 5 m).
+DECKS = {
+    "hub16": hub_nec(
+        7.0, 0.15, 5.0, 10.0, "16 radials at 0.15 m, 7 MHz (momwire#1956)"
+    ),
+    "deep_hub": hub_nec(
+        30.0, 1.5, 5.0, 5.0, "16 radials at 1.5 m, 30 MHz (momwire#1956)"
+    ),
+}
 
 
 @pytest.fixture(autouse=True)
