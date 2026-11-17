@@ -56,6 +56,13 @@ AK_REPO = "https://github.com/stevenmburns/antennaknobs"
 AK_SHA = "d451584f329c928030014a975cb0fe79524f9805"
 
 EVERY_NIGHT = "avx2-T1"
+# The OpenMP copy of every executable's route at one thread (MW_EXE_COPY=threads,
+# audit.py), every night beside EVERY_NIGHT: triage holds its printouts to
+# EVERY_NIGHT's, the serial copy's, byte for byte (`copy-differs`), and to
+# Python's like any cell. The T2/T4 rotation cells run the threaded copy too,
+# at more threads, but one night in five each; this is the every-night check
+# that the two copies a one-thread user and a many-thread user run agree.
+EVERY_NIGHT_THREADS = "avx2-T1-threads"
 # {avx2, sse2} x {T1, T2, T4} minus avx2-T1: one a night, by date, so five
 # consecutive nights cover the whole space.
 ROTATION = ("avx2-T2", "avx2-T4", "sse2-T1", "sse2-T2", "sse2-T4")
@@ -413,14 +420,18 @@ def do_night(a) -> int:
         if a.date
         else dt.datetime.now().astimezone().date()
     )
-    cells = a.cells.split(",") if a.cells else [EVERY_NIGHT, rotation_cell(day)]
+    cells = (
+        a.cells.split(",")
+        if a.cells
+        else [EVERY_NIGHT, EVERY_NIGHT_THREADS, rotation_cell(day)]
+    )
     night = night_dir(day)
     meta = dict(
         date=day.isoformat(),
         sha=sha,
         subject=None,
         cells=cells,
-        rotation=f"{ROTATION.index(cells[1]) + 1} of {len(ROTATION)}" if len(cells) > 1 and cells[1] in ROTATION else None,
+        rotation=f"{ROTATION.index(cells[-1]) + 1} of {len(ROTATION)}" if len(cells) > 1 and cells[-1] in ROTATION else None,
         ak_sha=AK_SHA,
         harness=file_hash(HERE / "nightly.py"),
         local_corpus=sum(1 for ln in LOCAL_CORPUS.read_text().splitlines() if ln.strip() and not ln.startswith("#")) if LOCAL_CORPUS.is_file() else 0,
@@ -599,6 +610,9 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
     by_cell = {}
     for f in audit_t:
         by_cell.setdefault(f["cell"], set()).add((f["exe"], f["deck"]))
+        if f["kind"] == "copy-differs":  # it reads the plain cell too
+            plain = f["cell"][: -len("-threads")]
+            by_cell.setdefault(plain, set()).add((f["exe"], f["deck"]))
     for cell, pairs2 in by_cell.items():
         only = d / f"only-{cell}.txt"
         only.write_text("".join(f"{e}\t{k}\n" for e, k in sorted(pairs2)))

@@ -43,6 +43,18 @@ It is not `.github/workflows/nightly.yml`. That one is the GitHub-hosted
    A deck the executable **declines** (route `refused:<why>`) is recorded,
    not failed. Python still answers it, though, because an executable that
    declines what Python serves is a finding.
+   **The threaded copy, `avx2-T1-threads`, every night too** (PA3(a)). Each
+   executable carries its route twice, a serial copy (`mws`, no OpenMP) and
+   an OpenMP one (`mw`); at one thread it takes the serial copy, so a T1
+   cell never reaches the threaded one. This cell sets `MW_EXE_COPY=threads`
+   on the executable's side (`momwire_razor2p.cpp`, the switch every
+   no-Python build has, both NEC-5 and both NEC-4.2 ones), and triage holds
+   it three ways: to Python, like any cell; to the plain `avx2-T1` cell's
+   executable printout, byte for byte (`copy-differs`); and to its route log,
+   which must say `cxx:threads` for every deck it serves (`copy-route`), so a
+   cell that silently ran the serial copy is red rather than green. The
+   T2/T4 rotation cells run the threaded copy at more threads, one night in
+   five each.
 3. **One rotating cell.** One more cell of {avx2, sse2} × {T1, T2, T4}
    (avx2-T1 excluded) runs the same audit. The cell is picked from the date:
    `ROTATION[date.toordinal() % 5]` in `nightly.py`, with `ROTATION` =
@@ -100,7 +112,7 @@ pull requests or file issues.
 
 | severity | means | proposed action |
 |---|---|---|
-| severe | exe ≠ Python on a deck the C++ route served; a Python printout or sweep Z that moved more than `Z_REL` = 5e-12 relative, or changed its text; a new outcome regression (sweep ok → not ok, or an executable that served a deck last green night now declines it); a harness phase failed | revert within the day |
+| severe | exe ≠ Python on a deck the C++ route served; the threaded copy ≠ the serial copy, or a `-threads` cell that served through the serial copy; a Python printout or sweep Z that moved more than `Z_REL` = 5e-12 relative, or changed its text; a new outcome regression (sweep ok → not ok, or an executable that served a deck last green night now declines it); a harness phase failed | revert within the day |
 | moderate | smaller numeric drift; a sweep MEM or TIME flag (analyze.py's thresholds: +10 % and +30 MB, +10 % and +0.5 s on a timed case); a long-standing decline of a deck Python serves; a Python error or executable non-answer that is not new | open an issue, fix before the next release |
 | minor | a printout whose numbers differ only by a last-digit flip (a rounding boundary) | add to the known list |
 | known | matched `known.json` | none |
