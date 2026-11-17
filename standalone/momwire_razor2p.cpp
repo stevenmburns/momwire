@@ -736,6 +736,11 @@ void shutdown_blas_pools() {
 #endif
 }
 void shutdown_blas_pools_at_exit() {
+    // only on the normal exit (main's MinGW wrapper, below): a pool's threads
+    // exiting during `_cexit` would contend for the loader lock again, and
+    // TerminateProcess ends them anyway
+    const char *how = std::getenv("MW_EXE_EXIT");
+    if (how == nullptr || std::string(how) != "normal") return;
     const char *v = std::getenv("MW_EXE_EXIT_SHUTDOWN");
     if (v == nullptr || std::string(v) != "0") std::atexit(shutdown_blas_pools);
 }
@@ -1841,21 +1846,28 @@ void blas_env_before_load() {
 }  // namespace
 
 #if defined(__MINGW32__)
-// The static MinGW-w64 build ends the process outright once main's work is
-// done: every printout is already closed (fclose) and stdio flushed here, so
-// nothing is left for the exit sequence to do but tear down -- and that
-// teardown is where the rare hang lives. Run 44057069874 (fat_compare.py):
-// two runs in 5,616 still sat 300 s at exit with the printout complete,
-// OpenBLAS's pools already shut down (`shutdown_blas_pools`): the C
-// runtime's exit runs the atexit table and the TLS callbacks (winpthreads',
-// libgomp's) while the OpenMP team's threads are still alive. TerminateProcess
-// skips all of it and keeps the exit status. MW_EXE_EXIT=normal returns from
-// main instead (the A/B in windows-static.yml's stress job).
+// The static MinGW-w64 build ends the process itself once main's work is
+// done: every printout is already closed (fclose) and stdio is flushed here.
+// `_cexit` runs the atexit table (static destructors, the diagnostics that
+// report at exit, MOMWIRE_SOMM_LAZY_CHECK's among them) and returns;
+// TerminateProcess then ends the process with main's status, skipping the
+// rest of the C runtime's exit and the loader's teardown. That rest is where
+// the rare hang lives (windows-static.yml, runs 44057069874 and
+// 44081988222: 3 in 22,392 runs, printout complete): the UCRT's `exit`
+// calls LoadLibraryExW (its check for a managed host) and waits on the
+// loader lock, held by an OpenBLAS or OpenMP worker thread that is itself
+// exiting. MW_EXE_EXIT=normal returns from main as before (and shuts the
+// OpenBLAS pools down first, `shutdown_blas_pools`); MW_EXE_EXIT=terminate
+// skips `_cexit` too. Both are for the A/B in the stress job.
+#include <process.h>  // _cexit
 int mw_main(int argc, char **argv);
 int main(int argc, char **argv) {
     const int rc = mw_main(argc, argv);
     std::fflush(nullptr);
-    if (env("MW_EXE_EXIT") != "normal") TerminateProcess(GetCurrentProcess(), static_cast<UINT>(rc));
+    const std::string how = env("MW_EXE_EXIT");
+    if (how == "normal") return rc;
+    if (how != "terminate") _cexit();
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(rc));
     return rc;
 }
 int mw_main(int argc, char **argv) {

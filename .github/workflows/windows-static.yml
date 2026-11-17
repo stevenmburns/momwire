@@ -415,6 +415,7 @@ jobs:
       # windows-nopython's corpus gate, verbatim but for the executables:
       # the msvcrt builds both variants, the libm shims and UCRT64 avx2
       - name: every fixture deck and the NX chains, within PRINTOUT_RTOL_WIN32
+        if: always()
         shell: pwsh
         run: |
           $env:PATH = "$PWD\venv\Scripts;$env:PATH"
@@ -523,11 +524,12 @@ jobs:
           }
           exit $fail
 
-  # Blocker 1 (runs 43944198706, 43965973397, 44057069874): rare hangs at
-  # exit, the printout already complete. The A/B of the fix (main's work done,
-  # the process ends by TerminateProcess, momwire_razor2p.cpp `main`): the
-  # same executables with it on and off (MW_EXE_EXIT=normal), interleaved,
-  # over the whole fixture corpus.
+  # Blocker 1 (runs 43944198706, 43965973397, 44057069874, 44081988222):
+  # rare hangs at exit, the printout already complete. The A/B of the fix
+  # (main's work done, `_cexit` then TerminateProcess, momwire_razor2p.cpp
+  # `main`): the same executables with it (cexit), with TerminateProcess
+  # alone (MW_EXE_EXIT=terminate) and with the C runtime's own exit
+  # (MW_EXE_EXIT=normal), interleaved, over the whole fixture corpus.
   stress:
     needs: [build, ucrt64]
     if: always() && needs.ucrt64.result == 'success'
@@ -546,14 +548,15 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: stress, UCRT64 razor-2p and bs2, exit shutdown on vs off (diagnostic)
+      - name: stress, UCRT64 razor-2p, the three exits (diagnostic)
         shell: pwsh
         run: |
           $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
           python scripts/windows_static/stress.py 8 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
-            "fix-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe" "off-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe|MW_EXE_EXIT=normal" `
-            "fix-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe" "off-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe|MW_EXE_EXIT=normal" `
-            "fix-fat=dist-ucrt-fat\momwire-nec5-razor-2p.exe" "off-fat=dist-ucrt-fat\momwire-nec5-razor-2p.exe|MW_EXE_EXIT=normal"
+            "cexit-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe" "normal-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe|MW_EXE_EXIT=normal" `
+            "terminate-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe|MW_EXE_EXIT=terminate" `
+            "cexit-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe" "normal-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe|MW_EXE_EXIT=normal" `
+            "cexit-fat=dist-ucrt-fat\momwire-nec5-razor-2p.exe"
           if ($LASTEXITCODE) { exit 1 }
 
   perf:
