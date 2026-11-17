@@ -1335,7 +1335,7 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bo
 // `designed_tables` as `_razor_crossing_core` / `_bspline_crossing_core` call
 // them, so a test can hold them to the Python route's bits.
 static py::dict near_interface_eval_designed(double k_p, cd k_m, py::list specs, double wire_radius, darr rho,
-                                      darr z, darr zp) {
+                                      darr z, darr zp, std::vector<std::string> features) {
     std::vector<darr> keep;
     std::vector<ni_eval::NodePair> pairs;
     for (py::handle h : specs) {
@@ -1354,7 +1354,18 @@ static py::dict near_interface_eval_designed(double k_p, cd k_m, py::list specs,
     ev.k_p = k_p;
     ev.k_m = k_m;
     ni_eval::Memo memo;
-    memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
+    {
+        // `features` (registry names) requested around this plan only, as an
+        // executable's fill would have them on (momwire#1956's twin test).
+        const ni_eval::Features saved = ni_eval::requested_features();
+        for (const std::string &f : features)
+            if (!ni_eval::request_feature(f, false)) throw std::invalid_argument("not a C++ feature: " + f);
+        {
+            const ni_eval::FeatureFill on;
+            memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
+        }
+        ni_eval::requested_features() = saved;
+    }
     memo.have_plan = true;
     py::array_t<cd> out({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(ni_eval::N_KEYS)});
     ni_eval::designed_tables(ev, &memo, rho.data(), z.data(), zp.data(), n, nullptr,
@@ -1426,7 +1437,7 @@ void register_razor_solve(py::module_ &m) {
     m.def("near_interface_eval_designed", &near_interface_eval_designed, py::arg("k_p"), py::arg("k_m"),
           py::arg("specs"), py::arg("wire_radius"), py::arg("rho"), py::arg("z"), py::arg("zp"),
           "TEST-ONLY (momwire#1595): the C++ fills' sheet plan over node pairs and the designed "
-          "tables of rows through a memo carrying it.");
+          "tables of rows through a memo carrying it.", py::arg("features") = std::vector<std::string>());
     m.def("razor_buried_stages", &razor_buried_stages, py::arg("kwargs"),
           py::arg("chunk_elems") = 2000000, py::arg("below_tables") = std::string(),
           "momwire#1512 step 3's gate: a buried solve's matrix at each stage the "

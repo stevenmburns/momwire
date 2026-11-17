@@ -1956,6 +1956,7 @@ class RazorSolver(
         factored_columns=None,
         height_sheet_recal=None,
         crossing_table=None,
+        crossing_sheet_retune=None,
         cancel=None,
         **unsupported,
     ):
@@ -2046,6 +2047,12 @@ class RazorSolver(
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
         self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        # momwire#1956: the near-interface sheets' build weights retuned. None
+        # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
+        # python); off is the shipped census, bit for bit.
+        self._crossing_sheet_retune = _features.enabled(
+            "crossing_sheet_retune", crossing_sheet_retune
+        )
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -4686,8 +4693,8 @@ class RazorSolver(
 
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
         """`_assemble_Z_from_prepared_scoped` under this solver's
-        `factored_columns`, `height_sheet_recal` and `crossing_table` choices
-        (momwire#1860)."""
+        `factored_columns`, `height_sheet_recal`, `crossing_table` and
+        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
         with (
             _near_interface.factored_columns_scope(
                 getattr(self, "_factored_columns", False)
@@ -4697,6 +4704,9 @@ class RazorSolver(
             ),
             _near_interface.crossing_table_scope(
                 getattr(self, "_crossing_table", False)
+            ),
+            _near_interface.crossing_sheet_retune_scope(
+                getattr(self, "_crossing_sheet_retune", False)
             ),
         ):
             return self._assemble_Z_from_prepared_scoped(
