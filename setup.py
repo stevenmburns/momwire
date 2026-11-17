@@ -418,6 +418,10 @@ _ACCEL_HEADERS = [
     # and razor's exact-kernel plan and correction for the C++ route.
     "src/momwire/_exact_kernel_point_inline.h",
     "src/momwire/_exact_kernel_point_core.h",
+    # The k-series' shared text and its Python-free twin (momwire#1454):
+    # `_accel_exact_kernel_series.cpp` compiles the same text.
+    "src/momwire/_exact_kernel_series_inline.h",
+    "src/momwire/_exact_kernel_series_core.h",
     # The coaxial pair moments' shared text and its Python-free twin
     # (momwire#1517 step 0): `_accel_exact_kernel.cpp` compiles the same text.
     "src/momwire/_exact_kernel_coaxial_inline.h",
@@ -636,6 +640,10 @@ _ACCEL_SOURCES = [
     # bits). Their own TUs for 1410's reason.
     "src/momwire/_razor_exact_core.cpp",
     "src/momwire/_exact_kernel_point_core.cpp",
+    # The k-series' Python-free twin of `_accel_exact_kernel_series.cpp`
+    # (momwire#1454, the opt-in `exact_kernel_series`): the same inline text,
+    # so the same bits. Its own TU for 1410's reason.
+    "src/momwire/_exact_kernel_series_core.cpp",
     # The coaxial pair moments' Python-free twin of `_accel_exact_kernel.cpp`
     # (the same inline text, so the same bits): the B-spline basis' exact
     # kernel for the standalone path (momwire#1517 step 0). Its own TU for
