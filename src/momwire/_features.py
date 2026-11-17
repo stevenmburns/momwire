@@ -514,6 +514,7 @@ FEATURES: dict[str, Feature] = {
             paths=(
                 "src/momwire/_kcl_nullspace.py",
                 "tests/test_kcl_nullspace_1898.py",
+                "tests/test_kcl_nullspace_cxx_1898.py",
             ),
             label="eliminate junction constraints",
             summary=(
