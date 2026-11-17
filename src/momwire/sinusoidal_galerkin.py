@@ -438,6 +438,24 @@ _DIRECT_FILL_COINCIDENT_REFUSAL = (
 )
 
 
+def _measure_sg_orders(env, n_qp, ladder):
+    """MEASUREMENT PATCH (measure-sg-buried-orders-1117, never for merge):
+    `<base>|<ratio>:<order>,...` in the named env var replaces the pair order
+    and ladder; unset keeps the shipped ones."""
+    import os
+
+    spec = os.environ.get(env)
+    if not spec:
+        return n_qp, ladder
+    base, _, rungs = spec.partition("|")
+    out = tuple(
+        (float(r.split(":")[0]), int(r.split(":")[1]))
+        for r in rungs.split(",")
+        if r.strip()
+    )
+    return int(base), out
+
+
 def _coincident_segments(seg_l, seg_r):
     """The first two segments that share BOTH endpoints, in either order, or
     None. EQUAL, not close, on `_wire_spec.find_duplicated_wires`' terms:
@@ -4848,6 +4866,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
         from .bspline import DEFAULT_N_QP_PAIR, DEFAULT_PAIR_ORDER_LADDER
 
+        # MEASUREMENT PATCH (measure-sg-buried-orders-1117): a wholly-buried
+        # deck (k_m) may take its own order and ladder from the env
+        n_qp_m, ladder_m = DEFAULT_N_QP_PAIR, DEFAULT_PAIR_ORDER_LADDER
+        if self._active_medium is not None:
+            n_qp_m, ladder_m = _measure_sg_orders(
+                "MOMWIRE_MEASURE_SG_WHOLLY_BURIED", n_qp_m, ladder_m
+            )
         fill = _sinusoidal_mp.WindowFill(
             G,
             starts,
@@ -4856,8 +4881,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             dcoef,
             k,
             eta,
-            n_qp=DEFAULT_N_QP_PAIR,
-            ladder=DEFAULT_PAIR_ORDER_LADDER,
+            n_qp=n_qp_m,
+            ladder=ladder_m,
             checkpoint=self._checkpoint,
         )
         # The extended kernel's labels (momwire#1362): the real block scores
@@ -4985,6 +5010,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `BURIED_N_QP_PAIR` and ladder)
         BURIED_N_QP_PAIR = 32
         BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
+        # MEASUREMENT PATCH (measure-sg-buried-orders-1117)
+        BURIED_N_QP_PAIR, BURIED_PAIR_ORDER_LADDER = _measure_sg_orders(
+            "MOMWIRE_MEASURE_SG_CROSSING_BELOW",
+            BURIED_N_QP_PAIR,
+            BURIED_PAIR_ORDER_LADDER,
+        )
 
         N = int(geom["n_segs"])
         n_basis = N + self._n_extra_cols()

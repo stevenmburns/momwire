@@ -158,6 +158,39 @@ const std::vector<std::pair<double, int64_t>> &default_ladder() {  // `DEFAULT_P
     static const std::vector<std::pair<double, int64_t>> l{{16.0, 4}};
     return l;
 }
+// MEASUREMENT PATCH (measure-sg-buried-orders-1117, never for merge): the
+// env `<base>|<ratio>:<order>,...` replaces an order and ladder, as
+// `_measure_sg_orders` does in Python; unset keeps the shipped ones.
+struct MeasureOrders {
+    int64_t n_qp;
+    std::vector<std::pair<double, int64_t>> ladder;
+};
+MeasureOrders measure_orders(const char *env, int64_t n_qp, std::vector<std::pair<double, int64_t>> ladder) {
+    const char *spec = std::getenv(env);
+    if (spec == nullptr || *spec == 0) return {n_qp, ladder};
+    const std::string s(spec);
+    const std::size_t bar = s.find('|');
+    MeasureOrders m{std::stoll(s.substr(0, bar)), {}};
+    if (bar == std::string::npos) return m;
+    std::size_t p = bar + 1;
+    while (p < s.size()) {
+        std::size_t q = s.find(',', p);
+        if (q == std::string::npos) q = s.size();
+        const std::string r = s.substr(p, q - p);
+        const std::size_t col = r.find(':');
+        if (col != std::string::npos) m.ladder.push_back({std::stod(r.substr(0, col)), std::stoll(r.substr(col + 1))});
+        p = q + 1;
+    }
+    return m;
+}
+const MeasureOrders &crossing_below_orders() {
+    static const MeasureOrders m = measure_orders("MOMWIRE_MEASURE_SG_CROSSING_BELOW", 32, {{2.0, 8}, {16.0, 4}});
+    return m;
+}
+const MeasureOrders &wholly_buried_orders() {
+    static const MeasureOrders m = measure_orders("MOMWIRE_MEASURE_SG_WHOLLY_BURIED", 8, {{16.0, 4}});
+    return m;
+}
 // numpy's iterator buffer, in elements (NPY_BUFSIZE)
 constexpr std::size_t EINSUM_BUFSIZE = 8192;
 
@@ -1809,8 +1842,11 @@ std::vector<cd> assemble_Z_buried(const Front &fr, const nec4::SolverArgs &args,
     const cd jk = py_mul(cd(0.0, 1.0), k);
     const cd c_a = smul(jk, eta), c_phi = xdiv(eta, jk);
     const std::vector<double> none_b;
+    WinOpts wob;  // MEASUREMENT PATCH: the wholly-buried order and ladder
+    wob.n_qp = wholly_buried_orders().n_qp;
+    wob.ladder = &wholly_buried_orders().ladder;
     window_fill_at(G, n_basis, csr, d.segs, d.segs, k, true, smul(c_a, cd(DIRECT_SIGN, 0.0)),
-                   smul(c_phi, cd(DIRECT_SIGN, 0.0)), false, false, none_b);
+                   smul(c_phi, cd(DIRECT_SIGN, 0.0)), false, false, none_b, wob);
     // the image, `fg.image_sources()` (mirrored in z = 0), scale
     // `-DIRECT_SIGN * fg.image_coefficient` = 1.0 * A_m (CPython's product)
     Segs img;
@@ -1827,7 +1863,7 @@ std::vector<cd> assemble_Z_buried(const Front &fr, const nec4::SolverArgs &args,
     }
     segment_ends(img);
     const cd scale = py_mul(cd(-DIRECT_SIGN, 0.0), md.a_m);
-    window_fill_at(G, n_basis, csr, d.segs, img, k, true, smul(c_a, scale), smul(c_phi, scale), false, false, none_b);
+    window_fill_at(G, n_basis, csr, d.segs, img, k, true, smul(c_a, scale), smul(c_phi, scale), false, false, none_b, wob);
     std::vector<int64_t> every(N);
     for (std::size_t i = 0; i < N; i++) every[i] = static_cast<int64_t>(i);
     mp_remainder_below(G, n_basis, csr, d.segs, every, md, r1_below, fr.omega, *np);
@@ -1940,10 +1976,8 @@ cd feed_segment_current(const SegView &v, const std::vector<cd> &alpha, std::siz
 // --- a crossing deck (momwire#1718 S11b, `_assemble_Z_mp_mixed`) -----------
 
 const std::vector<std::pair<double, int64_t>> &buried_ladder() {  // `BURIED_PAIR_ORDER_LADDER`
-    static const std::vector<std::pair<double, int64_t>> l{{2.0, 8}, {16.0, 4}};
-    return l;
+    return crossing_below_orders().ladder;
 }
-constexpr int64_t BURIED_N_QP_PAIR = 32;
 
 // `basis_csr(seg_view, k_p)` on a view carrying `k_entry`: `dshape_coefs`
 // at each entry's own k (`-k` the array's negation)
@@ -2207,7 +2241,7 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
         const cd jk = py_mul(cd(0.0, 1.0), k);
         const cd c_a = smul(jk, eta), c_phi = xdiv(eta, jk);
         WinOpts wo;
-        wo.n_qp = BURIED_N_QP_PAIR;
+        wo.n_qp = crossing_below_orders().n_qp;  // MEASUREMENT PATCH
         wo.ladder = &buried_ladder();
         wo.obs_idx = wo.src_idx = &b_idx;
         const std::vector<double> none_b;
