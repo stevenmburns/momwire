@@ -54,6 +54,13 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
+# A native feature at reach 1 refuses below its reach (macOS is level 5), so
+# the tests that turn it on run only where it is certified, as
+# test_point_cplx_staged_1849 does; the off and refusal tests run everywhere.
+_needs_cert = pytest.mark.skipif(
+    not _features.certified("razor_pair_reuse"),
+    reason="razor_pair_reuse is not certified on this platform",
+)
 DRIFT = _features.FEATURES["razor_pair_reuse"].drift
 # The decks here are well conditioned: on against off moves them ~1e-13, so
 # they hold the reuse to this, tighter than the registry's drift (which the
@@ -150,6 +157,7 @@ def test_off_never_enters_the_reuse_branch():
     assert _cache() == before
 
 
+@_needs_cert
 def test_the_environment_alone_turns_it_on(monkeypatch):
     monkeypatch.setenv("MOMWIRE_X_RAZOR_PAIR_REUSE", "1")
     _solve(_dipoles(), None)
@@ -164,6 +172,7 @@ def test_a_bad_value_is_refused():
         _solve(_dipoles(), "yes")
 
 
+@_needs_cert
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
 @pytest.mark.parametrize("ek", [True, False], ids=["ek", "reduced"])
 def test_on_matches_off_within_the_drift(ground, ek):
@@ -180,6 +189,7 @@ def test_on_matches_off_within_the_drift(ground, ek):
     assert _drift(on, off) <= CLEAN
 
 
+@_needs_cert
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
 def test_verify_checks_every_window(ground):
     wires = _triangle()
@@ -190,6 +200,7 @@ def test_verify_checks_every_window(ground):
     np.testing.assert_array_equal(verified, on)
 
 
+@_needs_cert
 def test_mixed_radii_and_a_junction_deck_reuses():
     """Two radii (Eq 89's two-radius tube on the EK) and a junction (rising
     and falling wings, a through knot): the moments do not read a knot, so
@@ -207,6 +218,7 @@ def test_mixed_radii_and_a_junction_deck_reuses():
     _solve(wires, "verify", radius=radius, ground=SOMM)
 
 
+@_needs_cert
 def test_the_plan_is_found_again_for_the_same_geometry():
     b0, f0 = _cache()
     _solve(_dipoles(), True)
@@ -214,6 +226,7 @@ def test_the_plan_is_found_again_for_the_same_geometry():
     assert _cache() == (b0 + 1, f0 + 1)
 
 
+@_needs_cert
 def test_reversed_wires_share_their_classes():
     """A straight run's +k and -k offsets, and a wire listed reversed, are
     the same couplings with the source tangent reversed: the same classes
@@ -264,6 +277,7 @@ def _hairpin_zin(mode, wires):
     return complex(1.0 / s.compute_port_solution().y[0, 0])
 
 
+@_needs_cert
 def test_segments_shorter_than_their_radius_keep_their_near_pairs():
     """The near rule is in units of max(h, a), not h: the hairpin's
     bridge-on-bridge pairs a few h apart are within a radius, where the
@@ -289,6 +303,7 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs():
 # ------------------------------------------------------------ C++ route
 
 
+@_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 def test_the_cxx_front_route_is_the_python_route_to_the_bit(ground, monkeypatch):
     """The C++ front route (the executables' fill, from Python) gathers from
@@ -327,6 +342,7 @@ PROBES = {
 }
 
 
+@_needs_cert
 @pytest.mark.parametrize("name", sorted(PROBES))
 def test_a_wrong_key_is_caught(name):
     probe, wires, ground = PROBES[name]
@@ -350,6 +366,7 @@ def test_a_wrong_key_is_caught(name):
     assert _drift(_solve(wires, True, radius=radius, ground=ground), off) <= CLEAN
 
 
+@_needs_cert
 def test_a_wrong_key_is_caught_on_the_cxx_route(monkeypatch):
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
     acc.razor_reuse_probe(1)
@@ -376,6 +393,7 @@ def _solver(wires, mode, ground=None):
     )
 
 
+@_needs_cert
 @pytest.mark.parametrize("family", ["direct", "remainder"])
 def test_a_census_it_cannot_code_declines_and_fills_as_off(family):
     """A deck with more classes than the census's int32 entries code (2^30
@@ -415,6 +433,7 @@ def test_a_census_it_cannot_code_declines_and_fills_as_off(family):
     assert razor._PAIR_REUSE_ROUTE.get("reuse", 0) == 1
 
 
+@_needs_cert
 def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
     wires = _triangle()
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
@@ -463,6 +482,7 @@ def _line_zin(mode, spacing, ground, exact):
     return complex(1.0 / sol.compute_port_solution().y[0, 0])
 
 
+@_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 @pytest.mark.parametrize("exact", [False, True])
 def test_a_close_spaced_line_is_within_the_declared_drift(ground, exact):
@@ -480,6 +500,7 @@ def test_a_close_spaced_line_is_within_the_declared_drift(ground, exact):
 # ------------------------------------------------------------ small decks
 
 
+@_needs_cert
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
 def test_small_decks_step_aside(ground):
     """Below SMALL_DECK_SEGS_FREE (free space, PEC) or SMALL_DECK_SEGS_GROUND
@@ -508,6 +529,7 @@ def test_small_decks_step_aside(ground):
         assert (s.pair_reuse_declined is None) == served, s.pair_reuse_declined
 
 
+@_needs_cert
 def test_small_decks_step_aside_on_the_cxx_route(monkeypatch):
     acc.razor_reuse_set_small_deck_segs(-1, -1)
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
@@ -550,6 +572,7 @@ def _small_loop_zin(mode, d, side=0.3):
     return complex(1.0 / sol.compute_port_solution().y[0, 0])
 
 
+@_needs_cert
 def test_segments_of_different_lengths_never_share_a_class():
     """The key carries the source length h exactly, by type, as it does the
     radii (momwire#1971 review). M0 is proportional to h, so h's error counts
@@ -567,6 +590,7 @@ def test_segments_of_different_lengths_never_share_a_class():
     assert abs(on.real - off.real) / off.real < 1e-7
 
 
+@_needs_cert
 def test_the_keys_carry_the_source_length():
     """Both keys, the direct one and the composing ground's remainder one,
     keep sources of different lengths apart. Two parallel horizontal dipoles
