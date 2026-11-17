@@ -68,10 +68,15 @@ def _clean(monkeypatch):
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
     acc.razor_reuse_cache_clear()
+    # The decks here are cheap on purpose, below the small-deck thresholds,
+    # and test the reuse itself: lift them (test_small_decks_step_aside
+    # holds them).
+    acc.razor_reuse_set_small_deck_segs(0, 0)
     razor._PAIR_REUSE_ROUTE.clear()
     yield
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
+    acc.razor_reuse_set_small_deck_segs(-1, -1)
     acc.razor_reuse_cache_clear()
 
 
@@ -470,3 +475,53 @@ def test_a_close_spaced_line_is_within_the_declared_drift(ground, exact):
     on = _line_zin(True, 0.0025, ground, exact)
     assert _ran() == 1
     assert abs(on - off) / abs(off) <= DRIFT
+
+
+# ------------------------------------------------------------ small decks
+
+
+@pytest.mark.parametrize("ground", sorted(GROUNDS))
+def test_small_decks_step_aside(ground):
+    """Below SMALL_DECK_SEGS_FREE (free space, PEC) or SMALL_DECK_SEGS_GROUND
+    (Sommerfeld, a reflection coefficient) segments the reuse declines with
+    its reason and fills as off, bit for bit; "verify" still runs it; N - 1
+    declines and N serves."""
+    acc.razor_reuse_set_small_deck_segs(-1, -1)
+    finite = ground in ("sommerfeld", "refl-coef")
+    want = 100 if finite else 400
+    assert acc.razor_reuse_small_deck_segs(finite) == want
+    wires = _triangle()  # 93 segments: below both
+    off = _solver(wires, False, GROUNDS[ground]).compute_port_solution().y
+    s = _solver(wires, True, GROUNDS[ground])
+    y = s.compute_port_solution().y
+    why = f"too few segments to repay the plan (N < {want})"
+    assert s.pair_reuse_declined == why
+    assert razor._PAIR_REUSE_ROUTE == {why: 1}
+    np.testing.assert_array_equal(y, off)
+    _solver(wires, "verify", GROUNDS[ground]).compute_port_solution()
+    assert razor._PAIR_REUSE_ROUTE.get("reuse", 0) == 1
+    # the threshold is the comparison it says: 93 serves at 93, not at 94
+    for n, served in ((93, True), (94, False)):
+        acc.razor_reuse_set_small_deck_segs(n, n)
+        s = _solver(wires, True, GROUNDS[ground])
+        s.compute_port_solution()
+        assert (s.pair_reuse_declined is None) == served, s.pair_reuse_declined
+
+
+def test_small_decks_step_aside_on_the_cxx_route(monkeypatch):
+    acc.razor_reuse_set_small_deck_segs(-1, -1)
+    monkeypatch.setattr(razor, "_RAZOR_CXX", True)
+    wires = _triangle()
+    off = _solve(wires, False, ground=SOMM)
+    ctx = razor._cxx_context()
+    before = dict(ctx.counters)
+    y = _solve(wires, True, ground=SOMM)
+    after = ctx.counters
+    assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
+    assert after["reuse_declined"] == before["reuse_declined"] + 1
+    assert after["reuse_fills"] == before["reuse_fills"]
+    assert ctx.reuse_declined_reason == "too few segments to repay the plan (N < 100)"
+    np.testing.assert_array_equal(y, off)
+    # verify ignores it
+    _solve(wires, "verify", ground=SOMM)
+    assert ctx.counters["reuse_fills"] == after["reuse_fills"] + 1

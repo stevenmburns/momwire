@@ -1617,6 +1617,12 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK: later plans decline past `direct` direct classes or `remainder` "
           "remainder classes (0: the int32 coding's own limit only).");
     m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
+    m.def("razor_reuse_small_deck_segs", &mw::razor::reuse::small_deck_segs, py::arg("finite"),
+          "Segments below which pair reuse steps aside: over a finite ground when "
+          "`finite`, else in free space and over PEC.");
+    m.def("razor_reuse_set_small_deck_segs", &mw::razor::reuse::set_small_deck_segs,
+          py::arg("free_space"), py::arg("finite_ground"),
+          "TEST HOOK: move the small-deck thresholds (negative restores the constant).");
     m.attr("razor_reuse_verify_tol") = mw::razor::reuse::VERIFY_TOL;
     m.attr("razor_reuse_key_bits") = mw::razor::reuse::KEY_BITS;
 

@@ -4785,6 +4785,14 @@ class RazorSolver(
                 for f in ("obs", "seg_h", "a", "xg", "wg", "group_i", "b_obs")
             ):
                 return "image-token"
+        # Last, so a deck the reuse could not serve anyway keeps its reason:
+        # a small deck, whose census costs about what its fill saves
+        # (`_razor_pair_reuse_core.h`, SMALL_DECK_SEGS_FREE / _GROUND, the
+        # finite ground's for Sommerfeld or a reflection coefficient).
+        # `verify` ignores it.
+        small = _acc.razor_reuse_small_deck_segs(self.ground_eps is not None)
+        if self._pair_reuse != 2 and t2.seg_h.shape[0] < small:
+            return f"too few segments to repay the plan (N < {small})"
         return None
 
     def _pair_reuse_begin(self, geom, prepared, k, restrict):
