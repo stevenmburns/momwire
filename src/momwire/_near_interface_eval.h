@@ -212,6 +212,10 @@ struct Features {
     // No executable requests it (outside EXE_FEATURES); in-process test
     // hooks do.
     bool kcl_nullspace = false;
+    // momwire#1454: the exact kernel's point moments as a k-series. Not a
+    // near-interface lever either: the razor seam reads it into
+    // `FrontInputs::exact_kernel_series`.
+    bool exact_kernel_series = false;
     // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.

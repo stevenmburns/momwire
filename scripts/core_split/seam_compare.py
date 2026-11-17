@@ -243,10 +243,15 @@ def _same_solution(a, b) -> bool:
     return _rel_diff(a, b) <= _OFF_LINUX_RTOL
 
 
-def compare(text, acc, fc):
-    """One deck: ``(row, mismatches)``."""
+def compare(text, acc, fc, features=()):
+    """One deck: ``(row, mismatches)``. `features` (registry names) are asked
+    of the C++ seam for the call (its test hook); the Python seam runs with
+    whatever the process has on, so a caller turning one on there too holds
+    the two routes equal with it on."""
     py = python_seam(text)
-    cx = acc.nec5_razor_seam(text.encode("latin-1"), solve=True)
+    cx = acc.nec5_razor_seam(
+        text.encode("latin-1"), solve=True, features=list(features)
+    )
     row = {"route": cx["route"]}
     bad = []
     if cx["route"] == "declined":
