@@ -436,9 +436,15 @@ FEATURES: dict[str, Feature] = {
             # scoping decks, both executables' C++ twin
             # (Skylake, T4): at most 6.2e-13 (fat_hub, nec5-razor-2p;
             # nec5-bspline 3.2e-13), the plane sheets' own interpolation error
-            # where a row moves from the column twin to a sheet. 2e-12 with
-            # about 3x margin.
-            drift=2e-12,
+            # where a row moves from the column twin to a sheet. Deeper and
+            # higher in frequency the plan takes more planes (2 -> 51-75) and
+            # the error grows with them: a 16-radial hub at 1.5 m, 28 MHz,
+            # 2.5 m radials and vertical measures 9.77e-12 on razor-2p
+            # (1.2e-13 nec5-bspline), 3.0 m at 14 MHz 6.15e-12, 5.0 m at
+            # 14 MHz 3.65e-12; the same to the bit on Haswell and Skylake.
+            # 3e-11 with about 3x margin over that worst case; still far
+            # under DEFAULT_DRIFT_MAX, so no printout reads differently.
+            drift=3e-11,
             offer=False,
         ),
         # BSplineSolver's junction constraints eliminated before the factor
