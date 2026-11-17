@@ -4427,13 +4427,16 @@ def _pattern(
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
 
-    ``nec4_average``: whether the average-gain trailer keeps what the NEC-4.2
-    slot has always printed, which no NEC-4.2 capture yet measures. The NEC-5
-    engine's trailer (False) follows two rules measured black-box on x13. A
-    card with one theta or one phi (``NTH = 1`` or ``NPH = 1``) does not read
-    XNDA's A digit (momwire#1962: no average-gain trailer at A = 1 or 3, and
-    A = 2 prints its rows, exactly as at A = 0, whatever the step on either
-    axis). And the average is the trapezoid rule in phi
+    A card with one theta or one phi (``NTH = 1`` or ``NPH = 1``) does not
+    read XNDA's A digit (momwire#1962: no average-gain trailer at A = 1 or 3,
+    and A = 2 prints its rows, exactly as at A = 0, whatever the step on
+    either axis). Measured black-box on x13, and on licensed NEC-4.2 too
+    (``tests/fixtures/nec42_rp_normalized_gain/``' cut and phicut decks, at
+    N = 0 and N = 5), so it holds on both slots.
+
+    ``nec4_average``: whether the average itself keeps what the NEC-4.2 slot
+    has always printed, which no NEC-4.2 capture yet measures. The NEC-5
+    engine's average (False) is the trapezoid rule in phi
     (:func:`~momwire._far_readout.average_gain`'s ``trapezoid_phi``,
     ``tests/fixtures/rp_average_quadrature/``), NaN over a zero step.
 
@@ -4560,9 +4563,10 @@ def _pattern(
             math.atan2(-math.sin(kr), math.cos(kr))
         )
     average_digit = request.xnda % 10
-    if not nec4_average and (request.n_theta == 1 or request.n_phi == 1):
-        # A single cut on either axis averages nothing on the NEC-5 engine:
-        # the card prints as at A = 0 (momwire#1962, the docstring above).
+    if request.n_theta == 1 or request.n_phi == 1:
+        # A single cut on either axis averages nothing, on the NEC-5 engine
+        # and on NEC-4.2 alike: the card prints as at A = 0 (momwire#1962,
+        # the docstring above).
         average_digit = 0
     if average_digit == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
