@@ -540,6 +540,27 @@ class Remainder:
             mom = _arc_moments(proj, W)
             return (mom, None) if distinct else mom
 
+        def pair_moments(pts, tans, src_idx):
+            # razor's fill-pair reuse (momwire#1971): observers of the
+            # caller's own (points among the census's, so their grid nodes
+            # are filled) against the sources `src_idx` only, on this
+            # producer's grid, nodes and moment weights.
+            s_idx = np.asarray(src_idx, dtype=np.int64)
+            proj = _sommerfeld.remainder_field_proj(
+                pts,
+                tans,
+                np.ascontiguousarray(nodes[s_idx].reshape(-1, 3)),
+                np.repeat(src_t[s_idx], n_qp, axis=0),
+                gz,
+                k,
+                grid,
+                cancel_flag=cancel_flag,
+            )
+            if check:
+                _sommerfeld.check_read(proj, "the above remainder pairs")
+            return _arc_moments(proj, np.ascontiguousarray(W[:, s_idx, :]))
+
+        field_moments.pair_moments = pair_moments
         return field_moments
 
     # --- the B-spline-shaped convenience --------------------------------
