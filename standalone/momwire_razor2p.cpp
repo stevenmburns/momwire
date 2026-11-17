@@ -736,12 +736,12 @@ __attribute__((constructor(101))) void one_blas_thread_at_load() {
         _putenv_s("GOMP_SPINCOUNT", "30000");
 }
 // Both OpenBLAS pools shut down before the C runtime's exit sequence
-// (registered from main(), so it runs before the handlers registered at
-// start-up, OpenBLAS's own `gotoblas_quit` among them). Linked in, OpenBLAS
-// has no DLL detach to stop its Win32 server threads; run 43965973397 saw
-// rare hangs and bad exit codes from tiny decks when the pool had two
-// threads. MW_EXE_EXIT_SHUTDOWN=0 leaves the pools alone (the A/B in
-// windows-static.yml's stress step).
+// (d35e80c1; registered from main(), so it runs before the handlers
+// registered at start-up, OpenBLAS's own `gotoblas_quit` among them). Kept
+// for the A/B only: the shutdown is itself what TerminateThread()s the pool
+// threads (main's MinGW wrapper, below, says why that hangs), and the soak
+// measured it hanging more often, not less (9 against 4 in 44,736 each).
+// MW_EXE_EXIT_SHUTDOWN=0 leaves the pools alone.
 void shutdown_blas_pools() {
     MWX(blas_thread_shutdown_)();
 #if MW_BLAS_TWO_LIBS
@@ -749,9 +749,8 @@ void shutdown_blas_pools() {
 #endif
 }
 void shutdown_blas_pools_at_exit() {
-    // only on the normal exit (main's MinGW wrapper, below): a pool's threads
-    // exiting during `_cexit` would contend for the loader lock again, and
-    // TerminateProcess ends them anyway
+    // only on the normal exit (main's MinGW wrapper, below); the default
+    // ends the process before any pool shutdown runs
     const char *how = std::getenv("MW_EXE_EXIT");
     if (how == nullptr || std::string(how) != "normal") return;
     const char *v = std::getenv("MW_EXE_EXIT_SHUTDOWN");
@@ -1860,25 +1859,49 @@ void blas_env_before_load() {
 
 #if defined(__MINGW32__)
 // The static MinGW-w64 build ends the process itself once main's work is
-// done: every printout is already closed (fclose) and stdio is flushed here.
-// `_cexit` runs the atexit table (static destructors, the diagnostics that
-// report at exit, MOMWIRE_SOMM_LAZY_CHECK's among them) and returns;
-// TerminateProcess then ends the process with main's status, skipping the
-// rest of the C runtime's exit and the loader's teardown, which is where
-// the rare exit hang was seen (standalone/WINDOWS-SINGLE-FILE.md has the
-// counts, the soak and the backtraces: two in the UCRT's `exit` inside
-// LoadLibraryExW on the loader lock, one inside the atexit table freeing
-// memory under the heap lock). MW_EXE_EXIT=normal returns from main as
-// before; with it, the OpenBLAS pools are shut down at exit
-// (`shutdown_blas_pools`) unless MW_EXE_EXIT_SHUTDOWN=0. MW_EXE_EXIT=terminate
-// skips `_cexit` too. All three are for the A/B in the stress job.
+// done, before the static teardown, because of how OpenBLAS's Win32 thread
+// server stops: `blas_thread_shutdown_` (blas_server_win32.c) waits 50 ms
+// for each pool thread and then TerminateThread()s it. A thread killed that
+// way while it holds the process heap lock or the loader lock (a thread on
+// its way out takes the loader lock) leaves the lock held for ever, and the
+// next free() or LoadLibraryExW in the exit sequence waits on it: the two
+// shapes of the rare exit hang (standalone/WINDOWS-SINGLE-FILE.md has the
+// backtraces and the soak). OpenBLAS calls it from its own destructor,
+// `gotoblas_quit`, on every C-runtime exit, and d35e80c1's explicit shutdown
+// called it once more.
+//
+// So `end_before_static_teardown` is registered with atexit at the top of
+// main: the table runs last-in first-out, so it runs AFTER every handler the
+// work registered (the diagnostics that report at exit,
+// MOMWIRE_SOMM_LAZY_CHECK's among them) and BEFORE those registered before
+// main (static destructors, `.dtors`, OpenBLAS's `gotoblas_quit`), and it
+// ends the process there with main's status. Every printout is already
+// closed (fclose) and stdio is flushed.
+//
+// MW_EXE_EXIT (the stress job's A/B): `cexit` runs the whole table and then
+// TerminateProcess (b554dae3, which still hung in 1 of 44,736); `normal`
+// returns from main into the C runtime's exit, with the OpenBLAS pools shut
+// down at exit (`shutdown_blas_pools`) unless MW_EXE_EXIT_SHUTDOWN=0;
+// `terminate` skips the table, and with it the exit-time diagnostics.
 #include <process.h>  // _cexit
 int mw_main(int argc, char **argv);
+namespace {
+// main's status; -1 until main's work is done, so an exit() from inside the
+// work (none in this build) keeps the C runtime's own path
+int g_exit_rc = -1;
+void end_before_static_teardown() {
+    if (g_exit_rc < 0) return;
+    std::fflush(nullptr);
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(g_exit_rc));
+}
+}  // namespace
 int main(int argc, char **argv) {
+    const std::string how = env("MW_EXE_EXIT");
+    if (how.empty()) std::atexit(end_before_static_teardown);
     const int rc = mw_main(argc, argv);
     std::fflush(nullptr);
-    const std::string how = env("MW_EXE_EXIT");
     if (how == "normal") return rc;
+    g_exit_rc = rc;
     if (how != "terminate") _cexit();
     TerminateProcess(GetCurrentProcess(), static_cast<UINT>(rc));
     return rc;
