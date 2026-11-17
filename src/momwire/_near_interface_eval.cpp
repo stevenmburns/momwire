@@ -1043,6 +1043,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "exact_kernel_series") return &f.exact_kernel_series;
     if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
     if (name == "crossing_anchors") return &f.crossing_anchors;
+    if (name == "transmitted_anchors") return &f.transmitted_anchors;
     return nullptr;
 }
 }  // namespace
@@ -1069,6 +1070,7 @@ bool withdraw_feature(const std::string &name) {
 std::string requested_stamp() {
     const Features &f = g_stamped;
     std::string s;
+    if (f.transmitted_anchors) s += "+transmitted_anchors";
     if (f.point_cplx_staged) s += "+point_cplx_staged";
     if (f.factored_columns) s += "+factored_columns";
     if (f.height_sheet_recal) s += "+height_sheet_recal";
