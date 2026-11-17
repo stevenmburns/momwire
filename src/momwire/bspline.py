@@ -85,6 +85,7 @@ from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._quadrature import leggauss
 
 from . import _below_interface
+from . import _buried_quadrature
 from . import _bspline_kernels
 from . import _crossing_fill
 from . import _exact_kernel
@@ -134,7 +135,10 @@ DEFAULT_N_QP_PAIR = 8
 # fx_slant_base_source read 86.905-17.784j at 32, 86.653-18.783j at 64,
 # 86.622-18.923j at 128 and 86.6215-18.9278j at 256/512, a 1.18 ohm
 # quadrature error against a 0.52 ohm mesh error. 128 lands within 0.004 ohm.
-BURIED_N_QP_PAIR = 128
+# The values and their reason are declared in `_buried_quadrature.BSPLINE`,
+# beside SG's deliberately different entry; these names are bspline's reading
+# of that record.
+BURIED_N_QP_PAIR = _buried_quadrature.BSPLINE.base_order
 
 # The distance-adaptive pair-order LADDER (momwire#906), resolved per deck by
 # `BSplineSolver.pair_order_ladder` alongside `n_qp_pair`: a pair whose centre
@@ -188,7 +192,7 @@ DEFAULT_PAIR_ORDER_LADDER = ((16.0, 4),)
 # Z_in moves at most 2e-10 of max|Z| and no deck's error against q = 256
 # moves at the second digit, while the hubs' mid-range cross-radial pairs
 # (the bulk of their fill) drop from 64 to 16 kernel reads.
-BURIED_PAIR_ORDER_LADDER = ((0.1, 32), (1.5, 16), (2.0, 8), (4.0, 4))
+BURIED_PAIR_ORDER_LADDER = _buried_quadrature.BSPLINE.ladder
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -1652,8 +1656,8 @@ class BSplineSolver(
         whose centre distance over the longer segment meets a tier's ratio
         takes that tier's order; the rest pay `n_qp_pair`. Resolved from the
         deck like `n_qp_pair` when None: buried decks get
-        `BURIED_PAIR_ORDER_LADDER` = ((0.1, 32), (1.5, 16), (2, 8), (16, 4))
-        under the base 128 (momwire#1752 S2), free-space decks
+        `BURIED_PAIR_ORDER_LADDER` = ((0.1, 32), (1.5, 16), (2, 8), (4, 4))
+        under the base 128 (momwire#1752 S2 and H2), free-space decks
         `DEFAULT_PAIR_ORDER_LADDER` = ((16, 4),) since momwire#907 — one tier
         there, because the base order 8 already IS the order-8 rung. Tiers at
         or above the base order are dropped, so an explicit `n_qp_pair=8`

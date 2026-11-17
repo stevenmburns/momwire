@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _accel, _schedule
+from . import _accel, _buried_quadrature, _schedule
 from ._quadrature import leggauss
 from ._vec3 import norm3
 
@@ -69,21 +69,28 @@ N_SHAPES = 3
 
 # Parallel pairs closer than this many (longer) segment lengths take the exact
 # one-dimensional reduction; non-parallel pairs closer than it take the graded
-# or high-order product rule. Beyond it every pair is a ladder pair. 2.0 is the
-# buried ladder's first threshold (`bspline.BURIED_PAIR_ORDER_LADDER`): a pair
-# two segment lengths apart has R >= h over its whole domain and the base
-# product rule already converges there.
-NEAR_RATIO = 2.0
+# or high-order product rule. Beyond it every pair is a ladder pair. 2.0 was
+# bspline's buried ladder's first threshold before momwire#1752 and is still
+# SG's (`_buried_quadrature.SINUSOIDAL_GALERKIN.ladder`): a pair two segment
+# lengths apart has R >= h over its whole domain and the base product rule
+# already converges there.
+#
+# These near rules are declared, with the measured error they carry, in
+# `_buried_quadrature.SINUSOIDAL_GALERKIN.near`: on a buried deck they, not
+# the base order, set SG's near-contact quadrature error (the touching pair
+# at a crossing node takes the graded rule below).
+_NEAR = _buried_quadrature.SINUSOIDAL_GALERKIN.near
+NEAR_RATIO = _NEAR.near_ratio
 # Nodes per piece of the sinh-substituted delta integral, and nodes of the
 # inner (kernel-free) shape correlation. See `parallel_pair_moments`.
-PARALLEL_N_T = 24
-PARALLEL_N_XI = 8
+PARALLEL_N_T = _NEAR.parallel_n_t
+PARALLEL_N_XI = _NEAR.parallel_n_xi
 # Pairs per batch of the parallel-pair reduction (transient ~ 16 KB a pair).
 PARALLEL_CHUNK = 2048
 # Nodes per panel of the graded rule on a touching non-parallel pair, and the
 # product order on a near non-parallel pair that does not touch.
-GRADED_N_PER_PANEL = 8
-NEAR_N_QP = 32
+GRADED_N_PER_PANEL = _NEAR.graded_n_per_panel
+NEAR_N_QP = _NEAR.near_n_qp
 
 
 def shape_values(k, xi):
