@@ -20,6 +20,8 @@ layer is text, and these decks print the same digits on both sides.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import os
 import re
 import shutil
@@ -32,6 +34,7 @@ from _standalone_version import assert_standalone_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
+SPLIT = ROOT / "scripts" / "core_split"
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
 # Which formulation the executable is (momwire#1517 Phase A): razor-2p (the
 # default), or bspline for `momwire-nec5-bspline-standalone`, compared with
@@ -114,6 +117,60 @@ def _same(exe, ref, de, dl):
         ref.stdout,
     )
     assert _files(de) == _files(dl)
+
+
+# The platform rule the fixture-deck gates apply (standalone.yml's
+# `exe_compare.py --standalone [--rtol win32|macos]`, momwire#1558 and #1559):
+# byte for byte on Linux; on Windows (MSVC /fp:fast) and macOS a printout
+# that is not the launcher's bytes may still pass within PRINTOUT_RTOL_WIN32
+# or PRINTOUT_RTOL_MACOS by `printout_tolerance.ratio`. Both bars are read out
+# of exe_compare.py's source, not imported (importing it pins this process's
+# CPU environment and loads numpy), so this gate and that one cannot part.
+_PLATFORM_RTOL = {"win32": "PRINTOUT_RTOL_WIN32", "darwin": "PRINTOUT_RTOL_MACOS"}
+
+
+def _printout_rtol() -> float | None:
+    """This platform's bar, or None where the rule is byte for byte."""
+    name = _PLATFORM_RTOL.get(sys.platform)
+    if name is None:
+        return None
+    for node in ast.parse((SPLIT / "exe_compare.py").read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return float(ast.literal_eval(node.value))
+    raise AssertionError(f"exe_compare.py no longer defines {name}")
+
+
+def _printout_tolerance():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_printout_tolerance", SPLIT / "printout_tolerance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _same_by_platform(exe, ref, de, dl):
+    """`_same` under the fixture gates' platform rule: the exit status, the
+    standard output and the file names exactly; each file the launcher's
+    bytes on Linux, and elsewhere its bytes or within this platform's bar."""
+    rtol = _printout_rtol()
+    if rtol is None:
+        _same(exe, ref, de, dl)
+        return
+    assert (exe.returncode, exe.stdout) == (ref.returncode, ref.stdout), (
+        exe.stdout,
+        ref.stdout,
+    )
+    got, want = _files(de), _files(dl)
+    assert sorted(got) == sorted(want), (sorted(got), sorted(want))
+    pt = _printout_tolerance()
+    for name, ref_bytes in want.items():
+        if got[name] == ref_bytes:
+            continue
+        q = pt.ratio(ref_bytes, got[name])
+        assert q is not None and q <= rtol, (name, q, rtol)
 
 
 def _pe_imports(path: str) -> list[str]:
@@ -789,8 +846,12 @@ def _retune_decks():
 @pytest.mark.parametrize("on", [False, True], ids=["off", "on"])
 def test_the_sheet_retune_answers_as_the_launcher(on, deck, tmp_path):
     """The retuned sheet weights off ("0") and on: the executable's printout
-    is the launcher's, byte for byte, and line 2 names the feature on both
-    sides only when it is on (it is off by default)."""
+    is the launcher's under the fixture gates' platform rule (byte for byte
+    on Linux, PRINTOUT_RTOL_WIN32 / _MACOS elsewhere: `_same_by_platform`),
+    and line 2 names the feature on both sides only when it is on (it is off
+    by default). On and off print the same digits, so this cannot see the
+    retune; the route tests below and the retune module's
+    `test_the_launchers_route_moves_its_plan_within_its_drift` do."""
     text = _retune_decks()[deck]
 
     def prepare(d):
@@ -803,9 +864,11 @@ def test_the_sheet_retune_answers_as_the_launcher(on, deck, tmp_path):
         env={_RETUNE: "1" if on else "0"},
     )
     assert exe.returncode == 0, exe.stderr
-    _same(exe, ref, de, dl)
+    _same_by_platform(exe, ref, de, dl)
     line2 = (de / f"{deck}.out").read_bytes().split(b"\n")[1]
     assert (b"+crossing_sheet_retune" in line2) == on, line2
+    ref_line2 = (dl / f"{deck}.out").read_bytes().split(b"\n")[1]
+    assert (b"+crossing_sheet_retune" in ref_line2) == on, ref_line2
     assert b"uncertified" not in line2, line2
 
 
@@ -848,7 +911,9 @@ def test_the_sheet_retune_moves_the_executables_plan_within_its_drift(deck, tmp_
     so the retuned weights reached its census; and its input impedance, read
     at full precision from its arrays (MW_EXE_ARRAYS), moves by no more than
     the declared drift. deep_hub is where the executables measured the
-    largest drift."""
+    largest drift. The launcher's half of this proof (its planner's plane
+    count, on the same two decks) is the retune module's
+    `test_the_launchers_route_moves_its_plan_within_its_drift`."""
     from momwire import _features
 
     off_sheets, z_off = _retune_run(deck, False, tmp_path)
