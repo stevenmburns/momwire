@@ -442,8 +442,10 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
 void SolveContext::reuse_begin(const SolveInputs &in) {
     reuse_ = reuse_q_ = false;
     plan_.reset();
+    reuse_declined_reason_.clear();
     if (in.pair_reuse == 0) return;
     if (in.k_complex || in.unfused || in.chop_rows.shape(0) > 0) {
+        reuse_declined_reason_ = in.k_complex ? "complex-k" : in.unfused ? "unfused" : "chop";
         counters.reuse_declined++;
         return;
     }
@@ -487,6 +489,13 @@ void SolveContext::reuse_begin(const SolveInputs &in) {
     g.remainder = q;
     g.ground_z = q ? in.comp.ground_z : 0.0;
     plan_ = reuse::plan_for(g);
+    if (!plan_->declined.empty()) {
+        // A deck the census cannot code fills as without reuse.
+        reuse_declined_reason_ = plan_->declined;
+        plan_.reset();
+        counters.reuse_declined++;
+        return;
+    }
     reuse::eval_direct(*plan_, g, in.xg, in.wg, in.k, in.cancel_flag, vals_);
     if (q) {
         const Compose &c = in.comp;

@@ -30,9 +30,16 @@ std::atomic<int> g_probe{PROBE_NONE};
 // Rows of the census computed per pass (its key buffer is rows * n_seg keys).
 constexpr ptrdiff_t CENSUS_ROWS = 64;
 constexpr int MAX_PARTS = 32;
-// A partition-local class number, in the census's temporary entries: part in
-// the top 5 bits, then the local class, then the code.
-constexpr int PART_SHIFT = 27;
+// A partition-local class number, in the census's temporary entries: the
+// part in the top `part_bits(P)` bits of 32, then the local class, then the
+// code. With one part (one thread) the local class has every bit the final
+// entry has; with P parts each part's classes have 2^-part_bits of them.
+inline int part_bits(int P) {
+    int b = 0;
+    while ((1 << b) < P) b++;
+    return b;
+}
+std::atomic<int64_t> g_class_limit[2] = {{0}, {0}};
 
 inline uint64_t mix64(uint64_t x) {
     x ^= x >> 30;
@@ -224,8 +231,11 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // W = 9): `key(block, o, s, words, code)` writes a pair's key and code and
 // returns false for a pair that is its own class. Entries go to `maps[b]` as
 // class << code_bits | code; reps are each class's first pair, row-major.
+// Returns the number of classes, or -1 when they cannot be coded (past the
+// int32 entry, a part's share of it, or the test hook's `class_limit`): the
+// plan then declines.
 template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, KeyFn key,
+int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn key,
                std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
@@ -237,7 +247,12 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, KeyFn key,
     std::vector<uint64_t> kbuf(chunk * W);
     std::vector<uint64_t> hbuf(chunk);
     std::vector<uint8_t> cbuf(chunk), sbuf(chunk);
-    const uint32_t local_max = uint32_t(1) << (PART_SHIFT - code_bits);
+    // The final entry is class << code_bits | code in a non-negative int32;
+    // the temporary one puts the part above the local class.
+    const int pb = part_bits(P);
+    const int part_shift = 31 - pb;
+    const int64_t cls_max = int64_t(1) << (31 - code_bits);
+    const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
     std::atomic<bool> overflow{false};
     std::vector<int64_t> n_single(static_cast<size_t>(P), 0);
     for (int b = 0; b < n_blocks; b++) {
@@ -277,24 +292,23 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, KeyFn key,
                             rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
                                              static_cast<int32_t>(s), code});
                     }
-                    if (static_cast<uint32_t>(local) >= local_max) {
+                    if (static_cast<uint32_t>(local) >= local_max ||
+                        (limit > 0 && static_cast<int64_t>(local) >= limit)) {
                         overflow.store(true);
-                        continue;
+                        break;
                     }
                     maps[b][static_cast<size_t>(o) * static_cast<size_t>(n_seg) + static_cast<size_t>(s)] =
-                        static_cast<int32_t>((static_cast<uint32_t>(t) << PART_SHIFT) |
+                        static_cast<int32_t>((static_cast<uint32_t>(t) << part_shift) |
                                              (static_cast<uint32_t>(local) << code_bits) | code);
                 }
             }
-            if (overflow.load())
-                throw std::runtime_error("razor pair_reuse: too many classes to code in int32");
+            if (overflow.load()) return -1;
         }
     }
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
     for (int t = 0; t < P; t++) off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
     const int64_t n_cls = off[static_cast<size_t>(P)];
-    if (n_cls >= (int64_t(1) << (31 - code_bits)))
-        throw std::runtime_error("razor pair_reuse: too many classes to code in int32");
+    if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {
@@ -302,7 +316,7 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, KeyFn key,
 #pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < static_cast<int64_t>(nn); i++) {
             const uint32_t e = static_cast<uint32_t>(mp[i]);
-            const uint32_t t = e >> PART_SHIFT, local = (e >> code_bits) & local_mask;
+            const uint32_t t = pb == 0 ? 0 : e >> part_shift, local = (e >> code_bits) & local_mask;
             mp[i] = static_cast<int32_t>(((static_cast<uint32_t>(off[t]) + local) << code_bits) | (e & code_mask));
         }
     }
@@ -315,6 +329,20 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, KeyFn key,
     return n_cls;
 }
 
+// A plan that does not serve: no classes, its reason, its census time.
+std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const char *why) {
+    plan->declined = why;
+    for (auto &m : plan->dmap) std::vector<int32_t>().swap(m);
+    std::vector<int32_t>().swap(plan->qmap);
+    std::vector<uint8_t>().swap(plan->drep_flip);
+    std::vector<uint8_t>().swap(plan->qrep_code);
+    std::vector<Group>().swap(plan->dgroups);
+    std::vector<Group>().swap(plan->qgroups);
+    plan->n_dcls = plan->n_qcls = 0;
+    plan->pairs = plan->near_pairs = plan->q_pairs = plan->rep_evals = plan->q_rep_evals = 0;
+    return plan;
+}
+
 std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     const auto t0 = std::chrono::steady_clock::now();
     auto plan = std::make_shared<Plan>();
@@ -323,6 +351,7 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     plan->has_image = g.has_image;
     plan->remainder = g.remainder;
     plan->fingerprint = std::move(fingerprint);
+    if (n_seg > MAX_SEGS) return decline(plan, "too many segments to plan");
     const int n_blocks = g.has_image ? 2 : 1;
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
@@ -345,7 +374,7 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         for (int64_t o = 0; o < n_seg; o++) b_id[static_cast<size_t>(o)] = b_ids.id(bits(g.b_obs(o)));
     if (a_ids.m.size() >= (size_t(1) << 25) || ae_ids.m.size() >= (size_t(1) << 25) ||
         b_ids.m.size() >= (size_t(1) << 25))
-        throw std::runtime_error("razor pair_reuse: too many segment types to key");
+        return decline(plan, "too many segment types to key");
 
     auto direct_key = [&](int b, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> bool {
         // The axis frame, in `seg_moments`' own spelling (momwire#799).
@@ -384,7 +413,8 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     };
     std::vector<Rep> reps;
     int64_t singles = 0;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, direct_key, plan->dmap, reps, singles);
+    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), direct_key, plan->dmap, reps, singles);
+    if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
     plan->near_pairs = singles;
     plan->pairs = n_blocks * n_seg * n_seg;
     plan->drep_flip.resize(reps.size());
@@ -439,7 +469,8 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         };
         std::vector<Rep> qreps;
         int64_t qsingles = 0;
-        plan->n_qcls = census<9>(n_seg, 1, 2, q_key, &plan->qmap, qreps, qsingles);
+        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), q_key, &plan->qmap, qreps, qsingles);
+        if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
         plan->q_pairs = n_seg * n_seg;
         plan->qrep_code.resize(qreps.size());
         for (size_t c = 0; c < qreps.size(); c++) plan->qrep_code[c] = qreps[c].code;
@@ -461,6 +492,8 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, n);
     put(s, static_cast<int32_t>(KEY_BITS));
     put(s, static_cast<int32_t>(probe()));
+    put(s, class_limit(0));
+    put(s, class_limit(1));
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);
@@ -506,7 +539,6 @@ void check_geometry(const Geometry &g) {
         if (g.group_j[b].size() > 0 && (g.group_j[b].shape(0) != n || g.a_ek[b].shape(0) != n))
             bad("group_j / a_ek");
     }
-    if (n > 46340) throw std::runtime_error("razor pair_reuse: too many segments to plan");
 }
 
 }  // namespace
@@ -549,6 +581,11 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g) {
 }
 
 void set_probe(int p) { g_probe.store(p); }
+void set_class_limit(int64_t direct, int64_t remainder) {
+    g_class_limit[0].store(direct < 0 ? 0 : direct);
+    g_class_limit[1].store(remainder < 0 ? 0 : remainder);
+}
+int64_t class_limit(int family) { return g_class_limit[family == 0 ? 0 : 1].load(); }
 int probe() { return g_probe.load(); }
 
 CacheCounters cache_counters() {

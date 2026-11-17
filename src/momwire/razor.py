@@ -2113,6 +2113,11 @@ class RazorSolver(
             else (2 if razor_pair_reuse == "verify" else 1)
         )
         self._reuse_now = None
+        # Why the last fill with reuse on did not take it (the Python route's
+        # reason: `_pair_reuse_refusal`, or the plan's own `declined`), or
+        # None when it did. The C++ routes keep theirs on the solve context
+        # (`reuse_declined_reason`).
+        self.pair_reuse_declined = None
         # The C++ front route reads it with the constructor's own arguments.
         self._cxx_kwargs["pair_reuse"] = self._pair_reuse
         self._checkpoint()
@@ -4788,9 +4793,9 @@ class RazorSolver(
         if not self._pair_reuse:
             return None
         reason = self._pair_reuse_refusal(prepared, k, restrict)
-        key = "reuse" if reason is None else reason
-        _PAIR_REUSE_ROUTE[key] = _PAIR_REUSE_ROUTE.get(key, 0) + 1
+        self.pair_reuse_declined = reason
         if reason is not None:
+            _PAIR_REUSE_ROUTE[reason] = _PAIR_REUSE_ROUTE.get(reason, 0) + 1
             return None
         t2 = prepared["t2_chunks"]
         image = prepared["image"]
@@ -4827,8 +4832,15 @@ class RazorSolver(
             q,
             float(self.ground_z) if q else 0.0,
         )
-        values = plan.values(float(k), t2.xg, t2.wg, self._cancel_flag)
         _PAIR_REUSE_STATS[0] = plan.stats()
+        if plan.declined is not None:
+            # A deck the census cannot code (`Plan::declined`): the fill runs
+            # as without reuse, and says why.
+            self.pair_reuse_declined = plan.declined
+            _PAIR_REUSE_ROUTE["declined"] = _PAIR_REUSE_ROUTE.get("declined", 0) + 1
+            return None
+        _PAIR_REUSE_ROUTE["reuse"] = _PAIR_REUSE_ROUTE.get("reuse", 0) + 1
+        values = plan.values(float(k), t2.xg, t2.wg, self._cancel_flag)
         return _ReuseNow(
             plan, values, self._pair_reuse, q, t2.obs, geom["seg_t"], t2.seg_h
         )
