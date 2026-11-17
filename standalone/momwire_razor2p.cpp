@@ -379,14 +379,16 @@ struct ExeFeature {
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
 // momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
-// and razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
-// which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`).
+// razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
+// which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
+// and momwire#1956's retuned sheet weights (reach 7: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
     {"factored_columns", 8, true},
     {"height_sheet_recal", 8, true},
     {"crossing_table", 8, false},
     {"crossing_above_rule", 8, false},
     {"razor_pair_reuse", 7, false},
+    {"crossing_sheet_retune", 7, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.

@@ -772,6 +772,92 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     assert (b"+crossing_above_rule" in line2) == bool(on), line2
 
 
+# --- momwire#1956's crossing_sheet_retune (reach 7: the nec5 executables) -------
+
+_RETUNE = "MOMWIRE_X_CROSSING_SHEET_RETUNE"
+
+
+def _retune_decks():
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_crossing_sheet_retune_1956 import DECKS as DECKS_1956
+
+    return DECKS_1956
+
+
+@pytest.mark.reach(7)
+@pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
+@pytest.mark.parametrize("on", [False, True], ids=["off", "on"])
+def test_the_sheet_retune_answers_as_the_launcher(on, deck, tmp_path):
+    """The retuned sheet weights off ("0") and on: the executable's printout
+    is the launcher's, byte for byte, and line 2 names the feature on both
+    sides only when it is on (it is off by default)."""
+    text = _retune_decks()[deck]
+
+    def prepare(d):
+        (d / f"{deck}.nec").write_text(text, newline="")
+
+    exe, ref, de, dl = _both(
+        [f"{deck}.nec", f"{deck}.out"],
+        tmp_path,
+        prepare=prepare,
+        env={_RETUNE: "1" if on else "0"},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    line2 = (de / f"{deck}.out").read_bytes().split(b"\n")[1]
+    assert (b"+crossing_sheet_retune" in line2) == on, line2
+    assert b"uncertified" not in line2, line2
+
+
+def _retune_run(deck, on, tmp_path):
+    """One executable run of `deck` with the retune off or on, its
+    Sommerfeld store and its arrays its own: (sheets stored, Zin)."""
+    import numpy as np
+
+    d = tmp_path / f"{deck}-{on}"
+    d.mkdir()
+    (d / f"{deck}.nec").write_text(_retune_decks()[deck], newline="")
+    (d / "arrays").mkdir()
+    env = {k: v for k, v in os.environ.items() if k != _RETUNE}
+    env.update(
+        {
+            _RETUNE: "1" if on else "0",
+            "MOMWIRE_SOMM_CACHE": "1",
+            "MOMWIRE_SOMM_CACHE_DIR": str(d / "store"),
+            "MW_EXE_ARRAYS": str(d / "arrays"),
+        }
+    )
+    r = subprocess.run(
+        [EXE, f"{deck}.nec", f"{deck}.out"],
+        cwd=d,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    sheets = len(list((d / "store").rglob("nisheet-*.grid")))
+    (i_source,) = np.fromfile(d / "arrays" / "0_i_source.bin", dtype=np.complex128)
+    return sheets, 1.0 / complex(i_source)
+
+
+@pytest.mark.reach(7)
+@pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
+def test_the_sheet_retune_moves_the_executables_plan_within_its_drift(deck, tmp_path):
+    """The route proof the byte gate cannot give (on and off print the same
+    digits): on, the executable stores more near-interface sheets than off,
+    so the retuned weights reached its census; and its input impedance, read
+    at full precision from its arrays (MW_EXE_ARRAYS), moves by no more than
+    the declared drift. deep_hub is where the executables measured the
+    largest drift."""
+    from momwire import _features
+
+    off_sheets, z_off = _retune_run(deck, False, tmp_path)
+    on_sheets, z_on = _retune_run(deck, True, tmp_path)
+    assert on_sheets > off_sheets, (off_sheets, on_sheets)
+    drift = abs(z_on - z_off) / abs(z_off)
+    assert drift <= _features.FEATURES["crossing_sheet_retune"].drift, drift
+
+
 CROSSING = FIXTURES / "razor_printout_crossing" / "slant_base_source.nec"
 
 
