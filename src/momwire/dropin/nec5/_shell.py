@@ -392,7 +392,6 @@ def render_files(
     return printout, gmo
 
 
-@_features.in_context("dropin")
 def _advise_long_exponents(text: str) -> None:
     """momwire#1964: an exponent token past 20 characters, as a warning.
     Not a refusal (momwire's reading is the deck's), an advisory; the
@@ -403,6 +402,7 @@ def _advise_long_exponents(text: str) -> None:
         warnings.warn(LongExponentToken(note), stacklevel=3)
 
 
+@_features.in_context("dropin")
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
