@@ -110,6 +110,7 @@ jobs = [
 "standalone.yml:release-linux" = "attaches the Linux executables to a release"
 "standalone.yml:release-windows" = "attaches the Windows executables to a release"
 "standalone.yml:release-macos" = "attaches the macOS executables to a release"
+"windows-fat.yml:windows-fat" = "the experimental fat MSVC executables (avx2 + sse2 in one), on dispatch only; not the shipped zip"
 "wheels.yml:changes" = "path filter"
 "wheels.yml:build_wheels" = "builds the wheels on all three platforms; wheel_smoke tests them"
 "wheels.yml:smoke_pythons" = "picks the Python versions wheel_smoke runs"
