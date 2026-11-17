@@ -104,6 +104,36 @@ const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, d
                              double mu, double r_min, const double *above, size_t A, const double *below,
                              size_t B, double ground_z, uintptr_t cancel_flag = 0);
 
+// momwire#1847, the opt-in feature `transmitted_anchors` (reach 1, Python
+// the reference): `_transmitted_anchors.get_grid(eps_t, k2, r_max, zp_min,
+// zp_max, omega, mu, r_min=)` -- the grid blended in ln f from exact anchors
+// on a lattice fixed in metres, carrying the REQUEST's eps_t, k2 and omega.
+// nullptr where Python returns None (the caller then takes the exact grid);
+// a geometry the exact grid refuses throws `Refused` as it does there. The
+// anchors are this process's only: their disk store is not ported.
+//   anchored_grid          every node filled, as Python's; `parts` (a test's)
+//                          receives the eight anchors it summed, in stencil
+//                          order, and `why` the decline's name;
+//   anchored_grid_reading  only the nodes the given pairs read, as
+//                          `get_grid_reading` (every value read is the whole
+//                          blend's bit for bit).
+const Grid *anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                          bool has_r_min, double r_min, uintptr_t cancel_flag = 0,
+                          std::vector<const Grid *> *parts = nullptr, std::string *why = nullptr);
+const Grid *anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                                  double mu, double r_min, const double *above, size_t A, const double *below,
+                                  size_t B, double ground_z, uintptr_t cancel_flag = 0);
+
+// What the anchored route built, for tests (never for control), as
+// `_transmitted_anchors.STATS`: anchors and blends made, requests declined,
+// and anchor nodes filled.
+struct AnchorStats {
+    int64_t anchor_fills = 0, blends = 0, declined = 0, nodes_filled = 0;
+};
+AnchorStats anchor_stats();
+// Forget every anchor and blend (`_transmitted_anchors.reset()`).
+void anchor_reset();
+
 // `tgrid_eval`'s nodes over every (above, below) pair: the (n_zp, n_r, n_th)
 // mask `get_grid_reading` fills.
 std::vector<uint8_t> read_nodes(const Grid &g, const double *above, size_t A, const double *below, size_t B,
