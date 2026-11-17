@@ -12,9 +12,10 @@
 #            msvcrt.dll's or ucrtbase.dll's (MW_EXE_LIBM_SHIM).
 #   ucrt64   the same builds from MSYS2 UCRT64 (gcc, ucrtbase.dll through
 #            the api-ms-win-crt-* sets), the candidate product build; and
-#            avx2 experiment builds for the timing only (MW_EXE_EXTRA_CORE_FLAGS:
-#            -ffp-contract=fast, and MW_NI_VMATH_LIBM, the column kernel's
-#            libm calls as they were before this branch gave MinGW mw_vmath).
+#            an avx2 experiment build for the timing only, FMA contraction
+#            (MW_EXE_EXTRA_CORE_FLAGS=-ffp-contract=fast). Run 44112554494
+#            also timed -ffast-math (it broke the buried route: no factor
+#            stage) and the column kernel on mw_vmath (no gain, reverted).
 #   clang64  CLANG64 (clang + compiler-rt + UCRT): the libm question only.
 #   msvc     the MSVC reference, built here from THIS commit (windows-nopython's
 #            toolset and DLLs): avx2 and sse2 as shipped, and avx2 at
@@ -29,7 +30,7 @@
 #            piped, with the shipped exit (`_cexit` + TerminateProcess), the
 #            C runtime's exit with the OpenBLAS pools shut down at exit, and
 #            the C runtime's exit without (the control), interleaved; four
-#            shards. A diagnostic, not a gate.
+#            shards, on dispatch only. A diagnostic, not a gate.
 #   perf     INDICATIVE timing, every build here against the msvc job's, on
 #            ONE runner, interleaved (a shared VM: the pairing is the point,
 #            not the numbers), and each build's own stage times.
@@ -268,12 +269,9 @@ jobs:
             grep -q "avx2 initializers [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
             MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "dist-ucrt-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
             ! grep -q "avx2 initializers" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
-            # timing-only experiments (perf job; never gated, never shipped):
-            # FMA contraction as /fp:fast allows it; the column kernel's libm
-            # calls (the code before this branch's mw_vmath change); and
-            # -ffast-math short of finite-math, MSVC /fp:fast's nearest gcc form
-            for x in "fma|-DMW_EXE_EXTRA_CORE_FLAGS=-ffp-contract=fast" "nilibm|-DMW_EXE_EXTRA_CORE_FLAGS=-DMW_NI_VMATH_LIBM" \
-                     "fastmath|-DMW_EXE_EXTRA_CORE_FLAGS=-ffast-math -fno-finite-math-only"; do
+            # timing-only experiment (perf job; never gated, never shipped):
+            # FMA contraction, as MSVC's /fp:fast allows it
+            for x in "fma|-DMW_EXE_EXTRA_CORE_FLAGS=-ffp-contract=fast"; do
               cfg "build-$b-avx2-${x%%|*}" $basis avx2 "${x#*|}"
               cp "build-$b-avx2-${x%%|*}/$target.exe" "dist-ucrt-exp/momwire-nec5-$b-avx2-${x%%|*}.exe"
             done
@@ -635,10 +633,11 @@ jobs:
   #   cexit             the shipped exit: `_cexit` then TerminateProcess
   #   normal-shutdown   the C runtime's exit, the pools shut down at exit
   #   normal-noshutdown the C runtime's exit, the pools left alone (control)
-  # Four shards of 16 rounds over the fixture corpus.
+  # Four shards of 16 rounds over the fixture corpus, about 70 min each:
+  # on dispatch only (run 44112554494 is the soak the report cites).
   stress:
     needs: [build, ucrt64]
-    if: always() && needs.ucrt64.result == 'success'
+    if: always() && needs.ucrt64.result == 'success' && github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 170
     strategy:
@@ -716,9 +715,7 @@ jobs:
               "msvc-precise/$($b[0])=$M\momwire-nec5-$($b[0])-avx2-precise.exe" `
               "mingw64/$($b[0])=$D\momwire-nec5-$($b[0])-avx2.exe" `
               "ucrt64/$($b[0])=$U\momwire-nec5-$($b[0])-avx2-ucrt64.exe" `
-              "ucrt64-nilibm/$($b[0])=$X\momwire-nec5-$($b[0])-avx2-nilibm.exe" `
               "ucrt64-fma/$($b[0])=$X\momwire-nec5-$($b[0])-avx2-fma.exe" `
-              "ucrt64-fastmath/$($b[0])=$X\momwire-nec5-$($b[0])-avx2-fastmath.exe" `
               "ucrt64-fat/$($b[0])=$PWD\dist-ucrt-fat\$($b[1]).exe" `
               "msvc-sse2/$($b[0])=$M\momwire-nec5-$($b[0])-sse2.exe" `
               "ucrt64-sse2/$($b[0])=$U\momwire-nec5-$($b[0])-sse2-ucrt64.exe"
@@ -732,8 +729,7 @@ jobs:
           $args_ = @()
           foreach ($b in 'razor2p', 'bs2') {
             $cand = @("msvc/$b=$M\momwire-nec5-$b-avx2.exe", "msvc-precise/$b=$M\momwire-nec5-$b-avx2-precise.exe",
-                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe", "ucrt64-nilibm/$b=$X\momwire-nec5-$b-avx2-nilibm.exe",
-                      "ucrt64-fma/$b=$X\momwire-nec5-$b-avx2-fma.exe", "ucrt64-fastmath/$b=$X\momwire-nec5-$b-avx2-fastmath.exe",
+                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe", "ucrt64-fma/$b=$X\momwire-nec5-$b-avx2-fma.exe",
                       "msvc-sse2/$b=$M\momwire-nec5-$b-sse2.exe", "ucrt64-sse2/$b=$U\momwire-nec5-$b-sse2-ucrt64.exe")
             $args_ += $cand | Where-Object { Test-Path ($_ -split '=', 2)[1] }
           }
