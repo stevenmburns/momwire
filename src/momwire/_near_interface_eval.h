@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -195,6 +196,12 @@ struct Features {
     bool crossing_table = false;      // L5: the crossing rows from one table
     bool crossing_above_rule = false;  // B1: bspline's above x above rule
     bool crossing_sheet_retune = false;  // momwire#1956: the sheets' build weights retuned
+    // momwire#1898: bspline's junction rows eliminated before the factor.
+    // Not a fill lever: `bspline::solve_ports` reads it from the REQUESTED
+    // set at solve time, as `BSplineSolver` reads its flag at construction.
+    // No executable requests it (outside EXE_FEATURES); in-process test
+    // hooks do.
+    bool kcl_nullspace = false;
 };
 Features &requested_features();
 const Features &active_features();
@@ -209,6 +216,27 @@ bool withdraw_feature(const std::string &name);
 // `_features.stamp()` spells it within every feature's reach: "+name" each,
 // in registry order, or "".
 std::string requested_stamp();
+
+// `names` (registry names) requested, unstamped, for this object's
+// lifetime, then the requested set restored as it was: a test hook's
+// `features=` argument. Throws std::invalid_argument for a name this route
+// does not carry (nothing is then left requested).
+class FeatureRequest {
+  public:
+    explicit FeatureRequest(const std::vector<std::string> &names) : saved_(requested_features()) {
+        for (const std::string &f : names)
+            if (!request_feature(f, false)) {
+                requested_features() = saved_;
+                throw std::invalid_argument("not a C++ feature: " + f);
+            }
+    }
+    ~FeatureRequest() { requested_features() = saved_; }
+    FeatureRequest(const FeatureRequest &) = delete;
+    FeatureRequest &operator=(const FeatureRequest &) = delete;
+
+  private:
+    Features saved_;
+};
 
 // One buried fill with the requested features on, as the Python solvers'
 // scopes put them around theirs; restores what was on before.
