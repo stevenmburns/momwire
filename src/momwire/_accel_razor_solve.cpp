@@ -1150,7 +1150,11 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
 // deck's preparations (`_bspline_front_core.h`), test-facing.
 py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                 std::vector<uintptr_t> blas,
-                                std::vector<std::vector<double>> samples, double chunk_mb) {
+                                std::vector<std::vector<double>> samples, double chunk_mb,
+                                std::vector<std::string> features) {
+    // `features` (registry names) requested for this call only: the solve
+    // reads `kcl_nullspace` from the requested set (momwire#1898)
+    const ni_eval::FeatureRequest requested(features);
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1315,6 +1319,7 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                         const mw::bspline::PortSolve ps = mw::bspline::solve_ports(
                             Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl, &scipy_sym_lapack());
                         entry["solve_info"] = ps.info;
+                        entry["kcl_route"] = ps.kcl_route;
                         if (ps.info == 0) {
                             py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
                             for (int64_t i = 0; i < bs.n_basis; i++)
@@ -1354,6 +1359,52 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
         out.append(entry);
     }
     return out;
+}
+
+
+// TEST HOOK (momwire#1898): `bspline::solve_ports` on a caller's Z (C order,
+// n x n), real port columns B (n x n_p) and constraint rows (n_c x n), with
+// `features` requested around it: (info, X C order, Y, the kcl route).
+// `blas`: numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub and zgesv.
+py::tuple bspline_solve_ports(cdarr Z, darr B, darr kcl, std::vector<uintptr_t> blas,
+                              std::vector<std::string> features) {
+    if (Z.ndim() != 2 || Z.shape(0) != Z.shape(1)) throw std::invalid_argument("Z: (n, n)");
+    const int64_t n = Z.shape(0);
+    if (B.ndim() != 2 || B.shape(0) != n) throw std::invalid_argument("B: (n, n_p)");
+    if (kcl.ndim() != 2 || kcl.shape(1) != n) throw std::invalid_argument("kcl: (n_c, n)");
+    if (blas.size() != 4) throw std::invalid_argument("blas: four addresses");
+    const int64_t n_p = B.shape(1), n_c = kcl.shape(0);
+    mw::nec5::NumpyLinalg npl;
+    npl.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+    npl.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+    npl.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+    npl.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+    std::vector<cd> z(Z.data(), Z.data() + Z.size());
+    const std::vector<double> b(B.data(), B.data() + B.size()), a(kcl.data(), kcl.data() + kcl.size());
+    const mw::razor::Lapack &lp = scipy_lapack();
+    const mw::bspline::SymLapack &sym = scipy_sym_lapack();
+    mw::bspline::PortSolve ps;
+    {
+        const ni_eval::FeatureRequest requested(features);
+        ps = mw::bspline::solve_ports(std::move(z), n, b, n_p, a, n_c, lp, npl, &sym);
+    }
+    py::array_t<cd> Xa({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(n_p)});
+    py::array_t<cd> Ya({static_cast<py::ssize_t>(n_p), static_cast<py::ssize_t>(n_p)});
+    if (ps.info == 0) {
+        for (int64_t i = 0; i < n; i++)
+            for (int64_t j = 0; j < n_p; j++)
+                Xa.mutable_data()[i * n_p + j] = ps.X[static_cast<size_t>(ps.x_c_order ? i * n_p + j : j * n + i)];
+        std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
+    }
+    return py::make_tuple(ps.info, Xa, Ya, ps.kcl_route);
+}
+
+// TEST HOOK (momwire#1898): `_kcl_nullspace.COUNTS`' twin, the routes the
+// C++ solve took with `kcl_nullspace` requested, per process.
+py::dict bspline_kcl_nullspace_counts() {
+    py::dict d;
+    for (const auto &kv : mw::bspline::kcl_nullspace_counts()) d[py::str(kv.first)] = kv.second;
+    return d;
 }
 
 
@@ -1673,8 +1724,15 @@ void register_razor_solve(py::module_ &m) {
     m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
           py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
           py::arg("samples") = std::vector<std::vector<double>>(), py::arg("chunk_mb") = 0.0,
+          py::arg("features") = std::vector<std::string>(),
           "TEST HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
+    m.def("bspline_solve_ports", &bspline_solve_ports, py::arg("Z"), py::arg("B"), py::arg("kcl"),
+          py::arg("blas"), py::arg("features") = std::vector<std::string>(),
+          "TEST HOOK (momwire#1898): bspline::solve_ports on a caller's (Z, B, kcl), "
+          "`features` requested: (info, X, Y, kcl route).");
+    m.def("bspline_kcl_nullspace_counts", &bspline_kcl_nullspace_counts,
+          "TEST HOOK (momwire#1898): the C++ solve's kcl_nullspace routes, per process.");
     m.def("bspline_buried_stages", &bspline_buried_stages, py::arg("latin1"),
           py::arg("blas") = std::vector<uintptr_t>(), py::arg("cross") = false,
           "TEST HOOK (momwire#1517 step 4): the buried fill's Z before the crossing serve and the loading.");
