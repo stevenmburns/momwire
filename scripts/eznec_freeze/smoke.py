@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Twelve gates, derived from the seam's own contract (momwire#497 U1):
+Thirteen gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.dropin.nec5``'s byte for byte (the printout carries no
@@ -121,6 +121,11 @@ Twelve gates, derived from the seam's own contract (momwire#497 U1):
    stdin: stdout must be the module's own ``main(["-", "-"])`` answer to the
    same bytes, the exit 0, and no file named ``-`` left behind (0.79.1's
    launcher wrote one and exited 0 with stdout empty, momwire 0.79.2).
+13. **The key carries the inherited environment** (momwire#1979) -- a
+   spawned server inherits the launcher's ``MOMWIRE_X_*``, thread and
+   junction-rule variables, so the launcher's ``-key-elements`` must append
+   exactly what the Python client appends for the same environment,
+   lower-case variable names included (Windows folds their case).
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -984,6 +989,90 @@ def _gate_stream(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+# Gate 13's environments.  The lower-case spellings are the Windows point:
+# its variable names are case-blind (Python's os.environ uppercases them), so
+# the C launcher's walk of the environment block must fold case there too.
+_IDENTITY_CASES: tuple[dict[str, str], ...] = (
+    {"MOMWIRE_X_CROSSING_TABLE": " On "},
+    {"momwire_x_crossing_table": "1"},
+    {"momwire_razor_cxx": "yes"},
+    {"MOMWIRE_X_FACTORED_COLUMNS": "0"},
+    {"MOMWIRE_X_FACTORED_COLUMNS": "1"},
+    {"omp_num_threads": " 2 "},
+    {"MOMWIRE_JUNCTION_RULE": "kcl"},
+    {
+        "MOMWIRE_JUNCTION_RULE": "kcl",
+        "MOMWIRE_X_ZZ_LAST": "1",
+        "MOMWIRE_X_CROSSING_TABLE": "true",
+        "MOMWIRE_X_HEIGHT_SHEET_RECAL": "off",
+        "MOMWIRE_THREADS": "4",
+        "OPENBLAS_NUM_THREADS": "1",
+    },
+)
+
+_PY_IDENTITY = (
+    "import sys, momwire_serve_client as m;"
+    "sys.stdout.write('\\0'.join(m.junction_rule_identity() + m.feature_identity()"
+    " + m.thread_identity()))"
+)
+
+
+def _gate_identity(exe: Path, env: dict[str, str]) -> int:
+    """Gate 13 -- the server key carries the environment a server inherits
+    (momwire#1979): for each case, the launcher's ``-key-elements`` are its
+    elements with nothing set plus exactly what the Python client appends
+    for the same environment (junction rule, features, threads)."""
+    import momwire_serve_client as m
+
+    def identity_var(name: str) -> bool:
+        upper = name.upper() if os.name == "nt" else name
+        return (
+            upper == m.JUNCTION_RULE_ENV
+            or upper.startswith(m.FEATURE_ENV_PREFIX)
+            or upper in m.FEATURE_ALIASES
+            or upper in m.THREAD_ENVS
+        )
+
+    clean = {k: v for k, v in env.items() if not identity_var(k)}
+
+    def probe(case: dict[str, str]) -> list[str] | None:
+        result = subprocess.run(
+            [str(exe), "-key-elements"],
+            capture_output=True,
+            timeout=60,
+            env={**clean, **case},
+            stdin=subprocess.DEVNULL,
+        )
+        raw = result.stdout.decode("utf-8")
+        if result.returncode != 0 or not raw.endswith("\0"):
+            return None
+        return raw[:-1].split("\0")
+
+    base = probe({})
+    if base is None:
+        print(f"FAIL {exe.name} -key-elements: no elements")
+        return 1
+    failures = 0
+    for case in _IDENTITY_CASES:
+        python = subprocess.run(
+            [sys.executable, "-c", _PY_IDENTITY],
+            capture_output=True,
+            timeout=60,
+            env={**clean, **case},
+        ).stdout.decode("utf-8")
+        want = base + (python.split("\0") if python else [])
+        got = probe(case)
+        if got != want:
+            print(f"FAIL {exe.name} key under {case!r}: {got!r} != {want!r}")
+            failures += 1
+    if not failures:
+        print(
+            f"ok   {exe.name}: the key carries the inherited environment as the "
+            f"Python client's does ({len(_IDENTITY_CASES)} environments)"
+        )
+    return failures
+
+
 def _licensed_nec4_impedance() -> complex:
     """The licensed NEC-4.2's feed-point Z for gate 10's deck, read out of its
     committed printout (``tests/fixtures/eznec_nec42/printouts/``)."""
@@ -1137,6 +1226,7 @@ def main() -> int:
         failures += _gate_nec4(exe, work, env)
         failures += _gate_4nec2(exe, work, env)
         failures += _gate_stream(exe, work, env)
+        failures += _gate_identity(exe, env)
     finally:
         stop(room)
 
