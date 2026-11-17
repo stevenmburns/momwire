@@ -557,11 +557,30 @@ FEATURES: dict[str, Feature] = {
                 "Sommerfeld ground (the buried fill excepted)."
             ),
             # |dZin|/|Zin| against the flag-off fill, the worst over every
-            # frequency (13 each) of the six benchmark decks, Python route
-            # (Rocketlake, momwire#1971): gsky_m24 2.6e-13 (Sommerfeld),
-            # fd_h51 2.4e-13, sky_m24 2.0e-13, gfd_h51 1.5e-13 (Sommerfeld),
-            # p_m24 1.0e-13, fd_h27 3.9e-14. 1e-12 is about 4x the worst.
-            drift=1e-12,
+            # frequency, the extended kernel on (the NEC-5 shell's), each
+            # deck with exact_kernel auto / True / False (Python route,
+            # Rocketlake, momwire#1971):
+            #
+            #   the six benchmark decks (1097-2535 segs, 13 frequencies):
+            #     gsky_m24 2.6e-13 (Sommerfeld), fd_h51 2.6e-13, sky_m24
+            #     2.0e-13, p_m24 1.9e-13, gfd_h51 1.5e-13 (Sommerfeld),
+            #     fd_h27 3.9e-14;
+            #   tiny bridges, h < a (a 2 mm hairpin, 21-segment bridge): 3.1e-12
+            #     free, 3.7e-12 Sommerfeld, 3.4e-12 translated 3.3 m (each
+            #     with exact_kernel False; 1.4e-12 auto / True); a folded
+            #     dipole, a shorted stub, a thick monopole: <= 1.3e-13;
+            #   close-spaced two-wire lines (10 m, 1 mm wire, 2.1 to 12 mm
+            #     apart, 41 to 161 segments a side, free / PEC / Sommerfeld,
+            #     at the origin and translated 3.3 m): 4.3e-10 at the worst
+            #     (2.1 mm, 41 segments, free, exact_kernel False), 4.2e-10 at
+            #     2.5 mm, 1e-10 at 6 mm, 4e-11 at 12 mm.
+            #
+            # The lines' drift is the fill's own rounding, not a wrong class:
+            # the flag-off fill moves as much when the same deck is translated
+            # 3.3 m (up to 9.4e-10 at 2.1 mm), the pairs differ from their
+            # representatives only by coordinate rounding (KEY_BITS), and
+            # `verify` passes. 2e-9 is about 5x the worst.
+            drift=2e-9,
             offer=False,
         ),
     )
