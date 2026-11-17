@@ -99,6 +99,11 @@ contract:
   ``scipy.linalg.lu_solve`` accepts (factors from either route interoperate),
   ``overwrite_a`` factoring an F-contiguous complex128 matrix in place,
   ``trans`` 0/1/2, one or many right-hand sides.
+- ``lu_factor_strict``/``factor_and_solve``: ``lu_factor`` under the one
+  singular-matrix policy every dense route shares (momwire#1981): an
+  exactly singular matrix raises ``LinAlgError("singular matrix")``, as
+  ``solve`` does, and the condition estimate runs only under
+  :func:`condition_check`.
 - ``solve``: ``check_finite``, ``LinAlgError`` on an exactly singular
   matrix, and the ill-conditioning ``LinAlgWarning`` when the reciprocal
   condition estimate (a 1-norm and gecon, scipy's LAPACK reading the
@@ -429,6 +434,62 @@ def lu_solve(lu_and_piv, b, trans=0, overwrite_b=False, check_finite=True):
             f"illegal value in argument {-info} of the host's getrs (lu_solve)"
         )
     return x.reshape(b0.shape)
+
+
+# ---------------------------------------------------------------------------
+# the dense routes' LU: one singular-matrix policy (momwire#1981)
+# ---------------------------------------------------------------------------
+
+#: What every dense route raises on an EXACTLY singular matrix: the message
+#: `solve` and `scipy.linalg.solve` give, so a launcher prints one sentence
+#: whichever route the deck took.
+SINGULAR = "singular matrix"
+
+
+def lu_factor_strict(a, overwrite_a=False, check_finite=True):
+    """`lu_factor`, under the one singular-matrix policy every dense route
+    shares (momwire#1981): an exactly zero pivot raises
+    ``LinAlgError(SINGULAR)`` instead of returning factors whose solve is
+    inf/NaN. Returns ``(lu, piv)`` as `lu_factor` does.
+
+    The factor is `lu_factor`'s getrf on the same matrix, so the factors are
+    its bits; `lu_factor`'s ``LinAlgWarning`` on the zero pivot still comes
+    first. The 1-norm and gecon `solve` takes are NOT taken unless
+    :func:`condition_check` is on (momwire#1290 dropped them from the
+    factor-and-solve routes: memory-bound O(N^2) passes that drove only a
+    warning). On, the norm is taken before getrf can overwrite ``a`` and an
+    rcond below machine epsilon warns as `solve` does.
+    """
+    anorm = None
+    if condition_check():
+        a1 = np.asarray(a)
+        if _square(a1) and a1.dtype.kind in "fc":
+            lange = scipy.linalg.get_lapack_funcs("lange", (a1,))
+            anorm = lange("1", a1)
+    lu, piv = lu_factor(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    if not np.all(np.diagonal(lu)):
+        raise np.linalg.LinAlgError(SINGULAR)
+    if anorm is not None:
+        gecon = scipy.linalg.get_lapack_funcs("gecon", (lu,))
+        rcond, _info = gecon(lu, anorm, norm="1")
+        if rcond < np.finfo(lu.dtype).eps:
+            warnings.warn(
+                f"An ill-conditioned matrix detected: rcond = {rcond:.6g}.",
+                LinAlgWarning,
+                stacklevel=2,
+            )
+    return lu, piv
+
+
+def factor_and_solve(a, b, overwrite_a=False, overwrite_b=False):
+    """Solve ``a x = b`` by `lu_factor_strict` then `lu_solve`: the same
+    getrf and getrs `scipy.linalg.solve` runs on a general matrix, so its
+    answer to the bit, without its condition estimate (see
+    `lu_factor_strict`). ``overwrite_a`` factors an F-contiguous ``a`` in its
+    own storage (``a`` then holds the factors); ``overwrite_b`` lets an
+    F-ordered ``b`` take the solution."""
+    lu_piv = lu_factor_strict(a, overwrite_a=overwrite_a)
+    return lu_solve(lu_piv, b, overwrite_b=overwrite_b)
 
 
 # ---------------------------------------------------------------------------

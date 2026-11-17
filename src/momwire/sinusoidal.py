@@ -8051,8 +8051,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # factors then solves G·α = v. The factors — not the raw matrix —
         # are what gets stashed: the collocation G is not symmetric, so the
         # wire-loading adjoint oracle needs Gᵀw = r, which is the same
-        # factorization at trans=0. One getrf serves both.
-        lu_piv = _lapack.lu_factor(G.T, overwrite_a=True)
+        # factorization at trans=0. One getrf serves both. An exactly
+        # singular G raises, as every dense route does (momwire#1981).
+        lu_piv = _lapack.lu_factor_strict(G.T, overwrite_a=True)
         alpha = _lapack.lu_solve(lu_piv, v, trans=1)
 
         Z_drive = self._feed_impedances(alpha, geom, seg_view, voltages)

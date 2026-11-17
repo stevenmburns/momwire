@@ -1147,10 +1147,10 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     if K0 is not None:
         del lams[0]
         harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of, K0=K0)
-        out[0] = _lapack.lu_factor(K0, overwrite_a=True)
+        out[0] = _lapack.lu_factor_strict(K0, overwrite_a=True)
         del K0
     for h in hs:
-        out[h] = _lapack.lu_factor(lams.pop(h), overwrite_a=True)
+        out[h] = _lapack.lu_factor_strict(lams.pop(h), overwrite_a=True)
     return out
 
 
@@ -1509,7 +1509,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     n = len(sectors)
     sq = math.sqrt(n)
     K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of)
-    lu = _lapack.lu_factor(K0, overwrite_a=True)
+    lu = _lapack.lu_factor_strict(K0, overwrite_a=True)
 
     def z_inv(rhs):
         rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
