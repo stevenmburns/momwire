@@ -166,9 +166,9 @@ py::object transmitted_anchors_grid_core(cd eps_t, double k2, double r_max, doub
                                          double omega, double mu, py::object r_min, bool parts) {
     const bool has = !r_min.is_none();
     const double rm = has ? r_min.cast<double>() : 0.0;
-    std::vector<const somm_trans::Grid *> anchors;
+    std::vector<std::shared_ptr<const somm_trans::Grid>> anchors;
     std::string why;
-    const somm_trans::Grid *g = nullptr;
+    std::shared_ptr<const somm_trans::Grid> g;
     {
         py::gil_scoped_release release;
         g = somm_trans::anchored_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has, rm, 0,
@@ -211,7 +211,7 @@ py::object transmitted_anchors_grid_core(cd eps_t, double k2, double r_max, doub
     d["dlnz"] = g->dlnz;
     if (parts) {
         py::list a;
-        for (const somm_trans::Grid *x : anchors) {
+        for (const auto &x : anchors) {
             py::dict e;
             e["vals"] = table(*x);
             e["eps_t"] = x->eps_t;
@@ -224,8 +224,9 @@ py::object transmitted_anchors_grid_core(cd eps_t, double k2, double r_max, doub
     return d;
 }
 
-py::dict transmitted_anchors_stats(bool reset) {
+py::dict transmitted_anchors_stats(bool reset, int64_t anchors_max) {
     if (reset) somm_trans::anchor_reset();
+    if (anchors_max > 0) somm_trans::anchor_capacity(static_cast<size_t>(anchors_max));
     const somm_trans::AnchorStats s = somm_trans::anchor_stats();
     py::dict d;
     d["anchor_fills"] = s.anchor_fills;
@@ -268,6 +269,8 @@ void register_near_buried(py::module_ &m) {
           "momwire#1847: `_transmitted_anchors.get_grid` as the C++ route blends it (a dict of its "
           "state; {'declined': name} where Python returns None; with parts, the anchors summed).");
     m.def("transmitted_anchors_stats", &transmitted_anchors_stats, py::arg("reset") = false,
+          py::arg("anchors_max") = 0,
           "momwire#1847: the C++ anchored route's counts (`_transmitted_anchors.STATS`); reset forgets "
-          "every anchor and blend first.");
+          "every anchor and blend first (and restores the anchor store's capacity, 96); anchors_max > 0 "
+          "then sets that capacity (a test's, to saturate the FIFO).");
 }

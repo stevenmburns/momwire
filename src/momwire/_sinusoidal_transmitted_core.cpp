@@ -104,13 +104,17 @@ std::vector<std::vector<cd>> transmitted_block(const Front &fr, const somm_trans
     // frequency anchors where they serve it, else the exact one. This route
     // runs under no `FeatureFill`, so it reads the request itself, as the
     // razor seam reads `razor_pair_reuse`.
+    // `held` keeps an anchored grid alive past its store's eviction.
     const somm_trans::Grid *grid = nullptr;
+    std::shared_ptr<const somm_trans::Grid> held;
     try {
-        if (ni_eval::requested_features().transmitted_anchors)
-            grid = somm_trans::anchored_grid_reading(
+        if (ni_eval::requested_features().transmitted_anchors) {
+            held = somm_trans::anchored_grid_reading(
                 md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max, fr.omega, mu, plan.r_cross_min,
                 obs_below ? nodes.data() : oc.data(), obs_below ? S : no, obs_below ? oc.data() : nodes.data(),
                 obs_below ? no : S, gz);
+            grid = held.get();
+        }
         if (grid == nullptr)
             grid = &somm_trans::get_grid_reading(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max,
                                                  fr.omega, mu, plan.r_cross_min,
