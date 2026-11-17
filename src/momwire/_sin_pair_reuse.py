@@ -163,7 +163,31 @@ _CANON_CHUNK = 1 << 18
 
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
-VERIFY_TOL = 1e-10
+#:
+#: It sits above the direct kernel's own reproducibility, not at the
+#: typical pair's agreement (~1e-12). A far pair whose observer lies close
+#: to the source's AXIS (a vertical arm's image under a horizontal one, say)
+#: has a shape formed as a difference of much larger end terms, which the
+#: kernel rounds at a few 1e-10 of the pair's largest |Φ|: the same
+#: pair spelled from a mirror image, or with its observer moved 4 ulps,
+#: reads 4e-10 apart (the jack of momwire#1969's second finding, sin shape,
+#: PEC image, extended kernel). The canonical key merges mirror images, so
+#: more sampled pairs meet a congruent representative spelled differently.
+#: Measured (Skylake), verify's largest per-pair difference, with every
+#: matrix and feed impedance correct (max |dZ| / max |Z| <= 5.4e-14):
+#:
+#:   probe                                         fills   largest
+#:   adversarial decks, 4 grounds x EK x 3 freqs     354   8.1e-11
+#:   six-arm jack, the stored key (97262e36)         432   4.6e-9
+#:   six-arm jack, the canonical key                 864   1.0e-8
+#:
+#: and on deliberate defects, the smallest any test or probe injects: a
+#: source keyed without its end-code swap 5.4e-5 (feed impedance 540x the
+#: drift), a reflected code map with its flips swapped 2.3e-4, a wrong sign
+#: entry 8.2e-3. The bound has 10x over the noise and 500x under the
+#: smallest defect. That defect read 5.4e-5 here and 2.7e-7 in the feed
+#: impedance: at that ratio, 1e-7 here is the drift bound (5e-10) there.
+VERIFY_TOL = 1e-7
 
 #: `pair_reuse="verify"`: pairs checked per observer band.
 VERIFY_SAMPLES = 512
@@ -1201,7 +1225,10 @@ def verify_band(phis, rows, n_src, direct, samples=VERIFY_SAMPLES, tol=VERIFY_TO
     Relative to the pair's largest |Φ| over the three shapes, floored at
     1e-6 of the sample's largest: a far pair whose Φ is itself a
     cancellation (perpendicular, say) carries the input rounding of any
-    frame at a relative size no reuse could hold."""
+    frame at a relative size no reuse could hold. Both sides are the same
+    physical pair with the code's signs applied; what differs is how the
+    kernel rounds two congruent spellings of it, which is why `tol` is set
+    above the kernel's own reproducibility (`VERIFY_TOL`)."""
     i0, i1 = rows
     n_pairs = (i1 - i0) * n_src
     flat = np.unique(
