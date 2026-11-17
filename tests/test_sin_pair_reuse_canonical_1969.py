@@ -261,6 +261,68 @@ def test_a_straight_run_folds_plus_and_minus_offsets(monkeypatch):
     assert canon * 1.8 < stored
 
 
+def _ek_tables(s):
+    """`_sin_pair_reuse_route`'s observer radius and extended-kernel source
+    tables for solver `s`: (a_obs, src_a, ind1, ind2)."""
+    geom = s._build_geometry()
+    src_a = np.asarray(s._seg_radius(geom), dtype=np.float64)
+    ind1, ind2 = s._ek_gating(geom)
+    return src_a, src_a, np.asarray(ind1, np.int8), np.asarray(ind2, np.int8)
+
+
+def _radius_step():
+    """Three collinear wires on one line, 0.1 m segments throughout: 60 at
+    2 mm, 4 at 4 mm (the radius step, a junction end code on each side of
+    it), a two-segment gap, then 20 at 2 mm (two free ends). Under the
+    extended kernel a source's two end codes differ, so a reversed source
+    is congruent with an unreversed one only with its codes swapped: the
+    deck holds pairs whose code-2 end sits at opposite ends of otherwise
+    congruent geometry."""
+    dz = 0.1
+    y1 = 60 * dz
+    y2 = y1 + 4 * dz
+    y3 = y2 + 2 * dz
+    y4 = y3 + 20 * dz
+    return dict(
+        wires=[
+            np.array([[0.0, 0.0, 8.0], [0.0, y1, 8.0]]),
+            np.array([[0.0, y1, 8.0], [0.0, y2, 8.0]]),
+            np.array([[0.0, y3, 8.0], [0.0, y4, 8.0]]),
+        ],
+        n_per_edge_per_wire=[[60], [4], [20]],
+        feeds=[(0, 1.85, 1.0 + 0j)],
+        wavelength=LAM,
+        wire_radius=[2e-3, 4e-3, 2e-3],
+    )
+
+
+def test_a_reversed_source_swaps_its_end_codes():
+    """`reversible_segment_types` keys a reversed source with its two end
+    codes swapped. Measured (Skylake), the radius-step deck: max |dZ| /
+    max |Z| 4.8e-16 and the verify sample passes; keyed without the swap
+    (src_rev = src_type), 7.9e-7, the feed impedance moved 2.7e-7 (540x the
+    drift), and the verify sample fails at 5.4e-5. The pentagons never see
+    it: their swap-blind key only merges less."""
+    deck = _radius_step()
+    base, _ = _fill(deck, extended_kernel=True)
+    on, s = _fill(deck, pair_reuse=True, extended_kernel=True)
+    assert s.pair_reuse_declined is None
+    n_pairs, n_cls, _ = s.pair_reuse_census["direct"]
+    assert n_cls < n_pairs // 10
+    assert _rel(on, base) <= MATRIX
+    z_off, _ = _zin(deck, extended_kernel=True)
+    z_on, _ = _zin(deck, pair_reuse=True, extended_kernel=True)
+    assert np.max(np.abs(z_on - z_off) / np.abs(z_off)) <= DRIFT
+    pr.clear_shared_plans()
+    _fill(deck, pair_reuse="verify", extended_kernel=True)
+    # The deck holds sources whose reversed type is another type: the swap
+    # has something to do.
+    src_type, _, src_rev = pr.reversible_segment_types(
+        s._build_geometry()["seg_h"], *_ek_tables(s)
+    )
+    assert np.any(src_rev != src_type)
+
+
 # ------------------------------------------------------------ adversarial
 
 #: Each of the nine entries the flips set, negated alone.
