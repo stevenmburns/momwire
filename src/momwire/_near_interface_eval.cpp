@@ -1035,6 +1035,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "crossing_table") return &f.crossing_table;
     if (name == "crossing_above_rule") return &f.crossing_above_rule;
     if (name == "crossing_sheet_retune") return &f.crossing_sheet_retune;
+    if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
     return nullptr;
 }
 }  // namespace
@@ -1066,6 +1067,7 @@ std::string requested_stamp() {
     if (f.crossing_table) s += "+crossing_table";
     if (f.crossing_above_rule) s += "+crossing_above_rule";
     if (f.crossing_sheet_retune) s += "+crossing_sheet_retune";
+    if (f.razor_pair_reuse) s += "+razor_pair_reuse";
     return s;
 }
 

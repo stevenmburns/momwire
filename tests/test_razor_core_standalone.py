@@ -52,6 +52,8 @@ CORE_SOURCES = (
     "_razor_t2_core.cpp",
     "_accel_razor_cplx.cpp",
     "_razor_solve_core.cpp",
+    # momwire#1971: the fill-pair reuse the solve core calls.
+    "_razor_pair_reuse_core.cpp",
     "_razor_front_core.cpp",
     "_razor_buried_core.cpp",
     # The exact ring kernel (momwire#1479): razor's plan and correction, and
