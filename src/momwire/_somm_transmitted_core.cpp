@@ -730,13 +730,15 @@ const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, d
 // degree-7 Lagrange blend, in ln f, of exact grids (ANCHORS) tabulated at
 // F_REF * 1.1**j on a lattice fixed in metres, each at the soil's own eps_t
 // there. Each line spells the Python line it copies. CPython's `math.*` are
-// libm's; the two numpy calls on the lattice (`np.exp` of the z' ladder's
-// `np.linspace`, and the anchor fill's `np.exp` of the R nodes, which
-// `fill_nodes` shares with the exact grid) are libm's wherever numpy hands
-// them to libm, which on x86-64 is every dispatch below AVX-512 (the hosted
-// app's level, avx2). numpy's AVX-512 exp and log differ from libm's in the
-// last bit on a few per cent of arguments, so on such a box the two blends
-// agree to the anchors' frequency interpolation rather than bit for bit.
+// libm's. The numpy calls on the lattice (`np.exp` of the z' ladder's
+// `np.linspace`, and the anchor fill's `np.exp` of the R nodes and `np.sin` /
+// `np.cos` of the theta nodes, which `fill_nodes` shares with the exact grid)
+// agree with the C++ only where the box's libm makes them: numpy's AVX-512
+// exp and log differ from libm's in the last bit on a few per cent of
+// arguments, and gcc fuses `fill_nodes`' sine and cosine into `sincos`,
+// whose sine glibc 2.35 does not keep equal to `sin` (2.39 does). Where
+// either differs, the two blends agree to ~1e-16 of scale (the declared
+// drift is 1e-8) rather than bit for bit; the tests probe both.
 //
 // The anchors fill node by node as the reads ask (`fill_nodes`, as
 // `get_grid_reading` fills the exact grid), and the blend sums only the nodes
@@ -968,21 +970,23 @@ using BlendKey = std::array<double, 10>;
 
 template <class K>
 struct Fifo {  // `_evict_fifo`: the oldest entry out first
-    std::map<K, std::unique_ptr<Grid>> map;
+    // Shared, not owned: an eviction drops the store's hold only, so an
+    // entry a caller (or the stencil being summed) still holds stays alive.
+    std::map<K, std::shared_ptr<Grid>> map;
     std::deque<K> order;
     size_t max;
     explicit Fifo(size_t m) : max(m) {}
-    Grid *find(const K &k) {
+    std::shared_ptr<Grid> find(const K &k) {
         auto it = map.find(k);
-        return it == map.end() ? nullptr : it->second.get();
+        return it == map.end() ? nullptr : it->second;
     }
-    Grid &add(const K &k, Grid &&g) {
+    std::shared_ptr<Grid> add(const K &k, Grid &&g) {
         while (map.size() >= max && !order.empty()) {
             map.erase(order.front());
             order.pop_front();
         }
         order.push_back(k);
-        return *(map[k] = std::unique_ptr<Grid>(new Grid(std::move(g))));
+        return map[k] = std::make_shared<Grid>(std::move(g));
     }
     void clear() {
         map.clear();
@@ -995,9 +999,10 @@ Fifo<BlendKey> g_blends(BLENDS_MAX);
 AnchorStats g_anchor_stats;
 std::mutex g_anchor_mutex;
 
-const Grid *anchored(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
-                     bool has_r_min, double r_min, uintptr_t cancel_flag, const Reads *reads,
-                     std::vector<const Grid *> *parts, std::string *why_out) {
+std::shared_ptr<const Grid> anchored(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                                     double mu, bool has_r_min, double r_min, uintptr_t cancel_flag,
+                                     const Reads *reads, std::vector<std::shared_ptr<const Grid>> *parts,
+                                     std::string *why_out) {
     Plan p;
     std::string why;
     const bool served = plan(eps_t, k2, r_max, zp_min, zp_max, omega, has_r_min, r_min, p, why);
@@ -1011,9 +1016,9 @@ const Grid *anchored(cd eps_t, double k2, double r_max, double zp_min, double zp
     const double lk[5] = {L.r_min, L.r_max, L.zp_nodes.front(), L.zp_nodes.back(),
                           static_cast<double>(L.zp_nodes.size())};
     const BlendKey bkey{eps_t.real(), eps_t.imag(), k2, omega, mu, lk[0], lk[1], lk[2], lk[3], lk[4]};
-    Grid *bg = g_blends.find(bkey);
+    std::shared_ptr<Grid> bg = g_blends.find(bkey);
     if (bg == nullptr) {
-        bg = &g_blends.add(bkey, lattice_grid(L, eps_t, k2, omega, mu));
+        bg = g_blends.add(bkey, lattice_grid(L, eps_t, k2, omega, mu));
         g_anchor_stats.blends++;
     }
     Grid &B = *bg;
@@ -1025,21 +1030,24 @@ const Grid *anchored(cd eps_t, double k2, double r_max, double zp_min, double zp
     bool any = false;
     for (size_t q = 0; q < need.size(); q++)
         if (need[q] && !B.have[q]) todo[q] = 1, any = true;
-    if (!any && parts == nullptr) return &B;
-    Grid *a[ANCHOR_POINTS];
+    if (!any && parts == nullptr) return bg;
+    // Held, not borrowed: adding anchor k can evict an earlier one of this
+    // same stencil (a full store whose oldest entry is a[0]), which a raw
+    // pointer would then read freed.
+    std::shared_ptr<Grid> a[ANCHOR_POINTS];
     for (int64_t k = 0; k < ANCHOR_POINTS; k++) {
         const AnchorKey akey{p.eps_r, p.q, static_cast<double>(p.js[k]), lk[0], lk[1], lk[2], lk[3], lk[4], mu};
-        Grid *g = g_anchors.find(akey);
+        std::shared_ptr<Grid> g = g_anchors.find(akey);
         if (g == nullptr) {
             const double omega_j = 2.0 * PI * f_anchor(p.js[k]);
-            g = &g_anchors.add(akey, lattice_grid(L, eps_at(p.eps_r, p.q, omega_j), omega_j / C_LIGHT, omega_j, mu));
+            g = g_anchors.add(akey, lattice_grid(L, eps_at(p.eps_r, p.q, omega_j), omega_j / C_LIGHT, omega_j, mu));
             g_anchor_stats.anchor_fills++;
         }
         if (missing(*g, todo)) {
             mw_times::count_built();
             g_anchor_stats.nodes_filled += static_cast<int64_t>(fill_nodes(*g, todo, cancel_flag));
         }
-        a[k] = g;
+        a[k] = std::move(g);
     }
     // `vals = a._vals * w if vals is None else vals + a._vals * w`, node by
     // node: numpy's complex product by the weight as (w, 0), then the sum
@@ -1059,20 +1067,21 @@ const Grid *anchored(cd eps_t, double k2, double r_max, double zp_min, double zp
         parts->clear();
         for (int64_t k = 0; k < ANCHOR_POINTS; k++) parts->push_back(a[k]);
     }
-    return &B;
+    return bg;
 }
 
 }  // namespace
 
-const Grid *anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
-                          bool has_r_min, double r_min, uintptr_t cancel_flag, std::vector<const Grid *> *parts,
-                          std::string *why) {
+std::shared_ptr<const Grid> anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
+                                          double omega, double mu, bool has_r_min, double r_min,
+                                          uintptr_t cancel_flag, std::vector<std::shared_ptr<const Grid>> *parts,
+                                          std::string *why) {
     return anchored(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has_r_min, r_min, cancel_flag, nullptr, parts,
                     why);
 }
 
-const Grid *anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
-                                  double mu, double r_min, const double *above, size_t A, const double *below,
+std::shared_ptr<const Grid> anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
+                                                  double omega, double mu, double r_min, const double *above, size_t A, const double *below,
                                   size_t B, double ground_z, uintptr_t cancel_flag) {
     const Reads r{above, A, below, B, ground_z};
     return anchored(eps_t, k2, r_max, zp_min, zp_max, omega, mu, true, r_min, cancel_flag, &r, nullptr, nullptr);
@@ -1086,8 +1095,14 @@ AnchorStats anchor_stats() {
 void anchor_reset() {
     std::lock_guard<std::mutex> lock(g_anchor_mutex);
     g_anchors.clear();
+    g_anchors.max = ANCHORS_MAX;
     g_blends.clear();
     g_anchor_stats = AnchorStats();
+}
+
+void anchor_capacity(size_t max) {
+    std::lock_guard<std::mutex> lock(g_anchor_mutex);
+    g_anchors.max = max;
 }
 
 // ---- the projection ---------------------------------------------------------

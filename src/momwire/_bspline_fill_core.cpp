@@ -4729,13 +4729,17 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         // `transmitted_anchors` (momwire#1847) on: the grid blended from
         // frequency anchors where they serve it, else the exact one, as
         // `get_grid_below_above(anchors=True)` falls back.
+        // `held` keeps an anchored grid alive past its store's eviction.
         const somm_trans::Grid *gt = nullptr;
+        std::shared_ptr<const somm_trans::Grid> held;
         try {
-            if (ni_eval::active_features().transmitted_anchors)
-                gt = somm_trans::anchored_grid_reading(
+            if (ni_eval::active_features().transmitted_anchors) {
+                held = somm_trans::anchored_grid_reading(
                     bm.eps_t, bm.k_p, cross_plan.r_cross_max, cross_plan.zp_min, cross_plan.zp_max, omega, mu,
                     cross_plan.r_cross_min, up.nodes->data(), static_cast<size_t>(up.n * q_x), down.nodes->data(),
                     static_cast<size_t>(down.n * q_x), gz);
+                gt = held.get();
+            }
             if (gt == nullptr)
                 gt = &somm_trans::get_grid_reading(
                     bm.eps_t, bm.k_p, cross_plan.r_cross_max, cross_plan.zp_min, cross_plan.zp_max, omega, mu,
