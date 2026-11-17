@@ -1030,6 +1030,7 @@ Features default_requested() {
 Features g_requested = default_requested(), g_active, g_stamped;
 
 bool *feature_slot(Features &f, const std::string &name) {
+    if (name == "point_cplx_staged") return &f.point_cplx_staged;
     if (name == "factored_columns") return &f.factored_columns;
     if (name == "height_sheet_recal") return &f.height_sheet_recal;
     if (name == "crossing_table") return &f.crossing_table;
@@ -1062,6 +1063,7 @@ bool withdraw_feature(const std::string &name) {
 std::string requested_stamp() {
     const Features &f = g_stamped;
     std::string s;
+    if (f.point_cplx_staged) s += "+point_cplx_staged";
     if (f.factored_columns) s += "+factored_columns";
     if (f.height_sheet_recal) s += "+height_sheet_recal";
     if (f.crossing_table) s += "+crossing_table";
@@ -1080,6 +1082,16 @@ FeatureFill::~FeatureFill() {
     g_active = saved_;
     g_crossing_taken = saved_taken_;
 }
+
+FeatureRequest::FeatureRequest(const std::vector<std::string> &names) : saved_(g_requested) {
+    for (const std::string &n : names)
+        if (!request_feature(n, false)) {
+            g_requested = saved_;
+            throw std::invalid_argument("not a C++ feature: " + n);
+        }
+}
+
+FeatureRequest::~FeatureRequest() { g_requested = saved_; }
 
 bool crossing_table_taken() { return g_crossing_taken; }
 
