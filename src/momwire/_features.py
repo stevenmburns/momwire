@@ -566,7 +566,10 @@ FEATURES: dict[str, Feature] = {
             offer=True,
         ),
         # The exact-kernel point moments as a k-series (Python and its C++
-        # port): a new numerical path that flips last printed digits.
+        # port): a new numerical path that flips last printed digits. The
+        # executables' C++ route carries it too (`_exact_kernel_series_core`,
+        # read from `ni_eval::Features`), but at reach 1 they have no
+        # `EXE_FEATURES` row and refuse the variable by name.
         Feature(
             name="exact_kernel_series",
             reach=1,
@@ -576,18 +579,27 @@ FEATURES: dict[str, Feature] = {
             issue=1454,
             since="2026-10-13",
             aliases=("MOMWIRE_EXACT_KERNEL_SERIES",),
+            # RazorSolver(exact_kernel_series=...); None defers to the
+            # variable as read at import (`_exact_kernel_series.ENABLED`).
+            kwarg="exact_kernel_series",
             # Not _exact_kernel_series.py: razor's flags-off plan reads its
             # constants and group_reach, so that module is stable code.
             paths=(
                 "src/momwire/_accel_exact_kernel_series.cpp",
+                "src/momwire/_exact_kernel_series_inline.h",
+                "src/momwire/_exact_kernel_series_core.cpp",
+                "src/momwire/_exact_kernel_series_core.h",
                 "tests/test_exact_kernel_series_1454.py",
             ),
             label="exact kernel series",
             summary=(
                 "Computes the exact-kernel point moments as a series in k. Flips "
-                "last printed digits. Not measured at Zin; the bound is "
-                "conservative."
+                "last printed digits: at most 2.3e-14 of Zin as measured; the "
+                "bound is conservative."
             ),
+            # Measured on 105 synthetic razor-2p dipoles (h/a 1.1 to 230; free
+            # space, PEC and Sommerfeld ground; 54 of them at wavelengths just
+            # inside the series' own bounds): |dZin|/|Zin| at most 2.3e-14.
             drift=1e-9,
             offer=False,
         ),
@@ -885,7 +897,13 @@ def honours(name: str, solver: str) -> bool:
     return solver in FEATURES[name].solvers
 
 
-def bind(solver: object, kind: str, **kwargs: object) -> dict[str, bool]:
+def bind(
+    solver: object,
+    kind: str,
+    *,
+    deferred: tuple[str, ...] = (),
+    **kwargs: object,
+) -> dict[str, bool]:
     """Resolve the features a solver's constructor reads, for family `kind`.
 
     Each keyword is a feature's name and the constructor's value for its
@@ -905,16 +923,34 @@ def bind(solver: object, kind: str, **kwargs: object) -> dict[str, bool]:
     Every feature with a kwarg that `kind` honours must be passed, so the
     registry cannot name a family whose constructor never reads the feature.
     The answers, ``{name: on}`` in the keywords' order, are returned and kept
-    on ``solver.features_bound``."""
+    on ``solver.features_bound``.
+
+    `deferred` names the features the constructor takes but resolves later,
+    where the feature first acts, so that a solve it never acts on does not
+    refuse it outside its reach (razor's `exact_kernel_series`). Each must be
+    a feature with a kwarg that `kind` honours, and is not passed as a value
+    too. It is not resolved here, is absent from ``solver.features_bound``,
+    and is kept on ``solver.features_deferred``."""
     if kind not in SOLVERS:
         raise ValueError(f"no solver family {kind!r} in the feature registry")
-    unknown = sorted(set(kwargs) - set(FEATURES))
+    unknown = sorted((set(kwargs) | set(deferred)) - set(FEATURES))
     if unknown:
         raise TypeError(f"bind: no feature named {', '.join(unknown)}")
+    for name in deferred:
+        if FEATURES[name].kwarg is None or kind not in FEATURES[name].solvers:
+            raise TypeError(
+                f"bind: {kind} cannot defer {name}: it is not a constructor "
+                "keyword of this family"
+            )
+        if name in kwargs:
+            raise TypeError(f"bind: {name} is both deferred and passed a value")
     missing = [
         name
         for name, f in FEATURES.items()
-        if f.kwarg is not None and kind in f.solvers and name not in kwargs
+        if f.kwarg is not None
+        and kind in f.solvers
+        and name not in kwargs
+        and name not in deferred
     ]
     if missing:
         raise TypeError(
@@ -934,6 +970,7 @@ def bind(solver: object, kind: str, **kwargs: object) -> dict[str, bool]:
             held.append(name)
     solver.features_bound = bound
     solver.features_withheld = tuple(held)
+    solver.features_deferred = tuple(deferred)
     return bound
 
 

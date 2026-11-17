@@ -9,7 +9,8 @@ What is held here:
 - each constructor reads, through `_features.bind`, exactly the features its
   family honours: the kwargs it passes resolve, a feature it does not honour
   is neither resolved nor read from the environment, and a part follows its
-  whole (momwire#1982);
+  whole (momwire#1982). The one exception is declared, not implied: a feature
+  in `DEFERRED` is taken by the constructor and resolved where it first acts;
 - line 2 of a printout never names a feature the running solver ignores
   (`_features.stamp`'s `solver`): MOMWIRE_X_KCL_NULLSPACE=1 on a razor-2p
   deck leaves line 2 bare, as the executable refuses it outright, while
@@ -95,6 +96,16 @@ def _constructor_features(kind):
     }
 
 
+# What each family's constructor takes but resolves later, written out here so
+# that a new deferral is a deliberate edit of this table.
+DEFERRED = {"razor": {"exact_kernel_series"}}
+
+
+def _bound_features(kind):
+    """The features family `kind`'s constructor resolves in `bind`."""
+    return _constructor_features(kind) - DEFERRED.get(kind, set())
+
+
 # --- the registry ---------------------------------------------------------------
 
 
@@ -135,10 +146,14 @@ def test_each_constructor_reads_exactly_its_families_features(
 
     monkeypatch.setattr(F, "enabled", spy)
     solver = _construct(kind)
-    expected = _constructor_features(kind)
+    expected = _bound_features(kind)
     assert set(read) & {n for n, f in F.FEATURES.items() if f.kwarg} == expected
     assert {n for n, on in solver.features_bound.items() if on} <= expected
     assert expected <= set(solver.features_bound)
+    # A deferred feature is declared, and is not answered at construction.
+    deferred = DEFERRED.get(kind, set())
+    assert set(solver.features_deferred) == deferred
+    assert not deferred & set(solver.features_bound)
 
 
 @pytest.mark.parametrize("kind", sorted(CLASSES))
@@ -230,17 +245,67 @@ def test_bind_refuses_a_constructor_that_skips_an_honoured_feature():
         F.bind(_S(), "pulse")
 
 
+def test_bind_is_strict_about_what_it_defers(no_features):
+    class _S:
+        pass
+
+    kw = dict.fromkeys(_bound_features("razor"))
+    name = "exact_kernel_series"
+    # Deferring is the only way to leave it out, and it must be said.
+    with pytest.raises(TypeError, match=f"razor honours {name}"):
+        F.bind(_S(), "razor", **kw)
+    # Deferring one feature excuses no other.
+    short = {k: v for k, v in kw.items() if k != "crossing_anchors"}
+    with pytest.raises(TypeError, match="razor honours crossing_anchors"):
+        F.bind(_S(), "razor", deferred=(name,), **short)
+    with pytest.raises(TypeError, match="no feature named not_a_feature"):
+        F.bind(_S(), "razor", deferred=(name, "not_a_feature"), **kw)
+    # Another family's feature, and one with no constructor keyword.
+    with pytest.raises(TypeError, match="razor cannot defer kcl_nullspace"):
+        F.bind(_S(), "razor", deferred=(name, "kcl_nullspace"), **kw)
+    no_kwarg = next(n for n, f in F.FEATURES.items() if f.kwarg is None)
+    with pytest.raises(TypeError, match=f"razor cannot defer {no_kwarg}"):
+        F.bind(_S(), "razor", deferred=(name, no_kwarg), **kw)
+    with pytest.raises(TypeError, match="both deferred and passed"):
+        F.bind(_S(), "razor", deferred=(name,), **{**kw, name: True})
+    solver = _S()
+    bound = F.bind(solver, "razor", deferred=(name,), **kw)
+    assert name not in bound
+    assert solver.features_deferred == (name,)
+
+
+def test_a_deferred_feature_refuses_only_where_it_acts(no_features, monkeypatch):
+    """Outside its reach: the constructor and a solve the exact kernel never
+    engages run, and the first solve it engages on refuses."""
+    monkeypatch.setattr(F, "certified", lambda *a, **k: False)
+    wire = [[[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]]]
+    kw = {
+        "wires": wire,
+        "nsegs": 21,
+        "wire_radius": 1e-3,
+        "wavelength": 20.0,
+        "nec5_quadrature": True,
+        "exact_kernel_series": True,
+    }
+    RazorSolver(**kw, exact_kernel=False).compute_port_solution()
+    engaged = RazorSolver(**kw, exact_kernel=True, extended_kernel=True)
+    with pytest.raises(F.FeatureNotCertified, match="exact_kernel_series"):
+        engaged.compute_port_solution()
+
+
 def test_bind_hands_a_part_its_wholes_value(no_features):
     class _S:
         pass
 
-    names = _constructor_features("razor")
-    kw = dict.fromkeys(names)
-    assert F.bind(_S(), "razor", **{**kw, "pair_reuse": True})["razor_pair_reuse"]
-    assert not F.bind(_S(), "razor", **{**kw, "pair_reuse": False})["razor_pair_reuse"]
+    kw = dict.fromkeys(_bound_features("razor"))
+    later = tuple(DEFERRED["razor"])
+    on = {**kw, "pair_reuse": True}
+    assert F.bind(_S(), "razor", deferred=later, **on)["razor_pair_reuse"]
+    off = {**kw, "pair_reuse": False}
+    assert not F.bind(_S(), "razor", deferred=later, **off)["razor_pair_reuse"]
     # The part's own keyword wins over the whole's.
     own_off = {**kw, "pair_reuse": True, "razor_pair_reuse": False}
-    assert not F.bind(_S(), "razor", **own_off)["razor_pair_reuse"]
+    assert not F.bind(_S(), "razor", deferred=later, **own_off)["razor_pair_reuse"]
     # bspline's part takes the same road.
     kw = dict.fromkeys(_constructor_features("bspline"))
     assert F.bind(_S(), "bspline", **{**kw, "pair_reuse": True})["offset_reuse"]
@@ -358,6 +423,17 @@ def test_each_feature_is_named_on_its_family_alone(
     with F.context_scope("python"):
         assert f"+{name}" in F.stamp(solver=F.basis_solver(honoured))
         assert F.stamp(solver=F.basis_solver(ignored)) == ""
+
+
+@pytest.mark.parametrize("value", [None, "0", "1"])
+def test_exact_kernel_series_is_named_on_razor_2p_only_when_on(no_features, value):
+    if value is not None:
+        no_features.setenv("MOMWIRE_X_EXACT_KERNEL_SERIES", value)
+    tail = " +exact_kernel_series" if value == "1" else ""
+    with F.context_scope("python"):
+        assert _printout.engine_stamp("razor-2p") == _bare_stamp("razor-2p") + tail
+        for basis in ("bspline", "sinusoidal"):
+            assert _printout.engine_stamp(basis) == _bare_stamp(basis)
 
 
 def test_an_unknown_basis_names_every_feature_on(no_features):
