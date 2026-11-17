@@ -807,7 +807,7 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     assert policy == (tmp_path / "one.out").read_bytes()
 
 
-# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: the executables run it) ---
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 1: the executables refuse it) ---
 
 _REUSE_DECKS = (
     FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec",  # Sommerfeld
@@ -817,24 +817,41 @@ _REUSE_DECKS = (
 
 
 @pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
-@pytest.mark.parametrize("on", ["0", "1"], ids=["off", "on"])
 @pytest.mark.parametrize("deck", _REUSE_DECKS, ids=lambda p: p.stem)
-def test_razor_pair_reuse_answers_as_the_launcher(deck, on, tmp_path):
-    """The executable with MOMWIRE_X_RAZOR_PAIR_REUSE off and on: its
-    printout is the launcher's, byte for byte, line 2 naming the feature on
-    both sides when it is on (the plan, the class values and the gathers are
-    one C++ core, `_razor_pair_reuse_core.cpp`)."""
+def test_razor_pair_reuse_is_refused_by_name(deck, tmp_path, monkeypatch):
+    """The C++ core carries the reuse, but its reach is the hosted app
+    (level 1) and the executables are levels 6 and 7: asked on, the
+    executable refuses it in the registry's sentence before reading the
+    deck, and writes nothing. Unset or off, its printout is the launcher's,
+    byte for byte, with no feature on line 2."""
+    from momwire import _features
+
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    d = tmp_path / "refused"
+    d.mkdir()
+    shutil.copy(deck, d / deck.name)
+    r = subprocess.run(
+        [EXE, deck.name, "reuse.out"],
+        cwd=d,
+        env=dict(os.environ, MOMWIRE_X_RAZOR_PAIR_REUSE="1"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
+    assert not (d / "reuse.out").exists()
 
     def prepare(d):
         shutil.copy(deck, d / deck.name)
 
-    exe, ref, de, dl = _both(
-        [deck.name, "reuse.out"],
-        tmp_path,
-        prepare=prepare,
-        env={"MOMWIRE_X_RAZOR_PAIR_REUSE": on},
-    )
-    assert exe.returncode == 0, exe.stderr
-    _same(exe, ref, de, dl)
-    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
-    assert (b"+razor_pair_reuse" in line2) == (on == "1"), line2
+    for i, env in enumerate((None, {"MOMWIRE_X_RAZOR_PAIR_REUSE": "0"})):
+        run = tmp_path / str(i)
+        run.mkdir()
+        exe, ref, de, dl = _both(
+            [deck.name, "reuse.out"], run, prepare=prepare, env=env
+        )
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
+        assert b"+razor_pair_reuse" not in line2, line2

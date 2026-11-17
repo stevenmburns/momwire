@@ -46,7 +46,7 @@ from momwire._accel import acc
 from momwire.razor import RazorSolver
 
 pytestmark = [
-    pytest.mark.reach(7),
+    pytest.mark.reach(1),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "razor_pair_reuse_1971", False),
         reason="needs the razor pair-reuse kernels",

@@ -535,12 +535,11 @@ FEATURES: dict[str, Feature] = {
         # rest, in Python and in the executables (one C++ core).
         Feature(
             name="razor_pair_reuse",
-            # The executables are levels 6 (Windows) and 7 (Linux, macOS), and
-            # they carry only a feature whose reach covers them. Measured on
-            # Linux avx2 (levels 1 and 7) only: the levels between are the
-            # maintainer's to certify or to take back to 1, which drops the
-            # executables' row (`EXE_FEATURES`).
-            reach=7,
+            # Reach 1, the hosted app only (Steve, 11-16). The C++ core is
+            # the executables' too, but they do not carry the feature (no
+            # `EXE_FEATURES` row), so they refuse MOMWIRE_X_RAZOR_PAIR_REUSE
+            # by name; widening the reach puts the row back.
+            reach=1,
             env="MOMWIRE_X_RAZOR_PAIR_REUSE",
             kind="native",
             issue=1971,
