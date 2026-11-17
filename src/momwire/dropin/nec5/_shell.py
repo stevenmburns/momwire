@@ -1120,7 +1120,15 @@ def _report_internal_error(
 def _internal_error_reason(exc: BaseException) -> str:
     """The one spelling of the last-ditch refusal line — :func:`main`'s
     process-level catch and :func:`seam`'s answer-level catch must frame an
-    unforeseen failure identically, whichever transport carried the deck."""
+    unforeseen failure identically, whichever transport carried the deck.
+
+    One failure is foreseen, wherever in the solve it is raised: a native
+    experimental feature turned on (``MOMWIRE_X_<NAME>``) outside its reach
+    (:class:`momwire._features.FeatureNotCertified`). That is a refusal, in
+    the registry's own sentence naming the feature and the platform, not an
+    engine fault."""
+    if isinstance(exc, _features.FeatureNotCertified):
+        return str(exc)
     return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
 
 
