@@ -527,27 +527,29 @@ def test_the_plan_budget_is_256_mb():
 @_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 def test_a_plan_past_its_byte_budget_declines(ground):
-    """The plan's bytes (maps, groups and flags, one wavenumber's class
-    values) are held to PLAN_BUDGET_BYTES. Lowered by the test hook to one
-    byte under what this deck's plan takes, the census stops and the plan
-    declines with the budget named, fills as off bit for bit, and is cached;
-    lowered under the maps alone, it declines before any census; at the
-    plan's own size it is served."""
+    """The plan and its census (maps, groups and flags, one wavenumber's
+    class values, the census's hash tables) are held to PLAN_BUDGET_BYTES at
+    their peak. Lowered by the test hook to one byte under this deck's peak,
+    the census stops and the plan declines with the budget named, fills as
+    off bit for bit, and is cached; lowered under the maps alone, it declines
+    before any census; at the deck's own peak it is served."""
     wires = _triangle() + _dipoles(heights=(9.0, 9.0), xs=(0.0, 1.5))
     g = GROUNDS[ground]
     off = _solver(wires, False, g).compute_port_solution().y
     _solver(wires, True, g).compute_port_solution()
     st = razor._PAIR_REUSE_STATS[0]
     assert st["declined"] is None, st
-    need = st["budget_bytes"]
-    assert need == st["nbytes"] + 32 * (st["classes"] + st["q_classes"]), st
+    assert st["budget_bytes"] == st["nbytes"] + 32 * (st["classes"] + st["q_classes"])
+    # the census's tables are counted: the peak is above the plan's own bytes
+    assert st["census_peak_bytes"] > st["budget_bytes"], st
+    need = st["census_peak_bytes"]
     n_maps = 2 if ground != "free" else 1
     if ground == "sommerfeld":
         n_maps += 1
     maps = 4 * n_maps * (st["pairs"] // (2 if ground != "free" else 1))
     for budget in (need - 1, maps - 1):
         acc.razor_reuse_plan_budget(budget)
-        why = f"the plan would exceed its {budget / 2**20:.6g} MB budget"
+        why = f"the plan and its census would exceed the {budget / 2**20:.6g} MB budget"
         razor._PAIR_REUSE_ROUTE.clear()
         s = _solver(wires, True, g)
         y = s.compute_port_solution().y
@@ -578,7 +580,7 @@ def test_a_plan_past_its_byte_budget_declines_on_the_cxx_route(monkeypatch):
     assert after["reuse_declined"] == before["reuse_declined"] + 1
     assert after["reuse_fills"] == before["reuse_fills"]
     assert ctx.reuse_declined_reason == (
-        f"the plan would exceed its {1024 / 2**20:.6g} MB budget"
+        f"the plan and its census would exceed the {1024 / 2**20:.6g} MB budget"
     )
     np.testing.assert_array_equal(y, off)
 

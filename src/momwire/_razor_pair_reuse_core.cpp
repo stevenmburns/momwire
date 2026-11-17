@@ -129,6 +129,11 @@ struct Rep {
     uint8_t code = 0;
 };
 
+// What a class costs the plan, past the maps: its per-k values (M0, M1 or
+// Q0, Q1, two complex), its group entry (cls, at) and its representative's
+// flip or code byte.
+constexpr int64_t CLASS_BYTES = 2 * 16 + 2 * 4 + 1;
+
 int n_parts() {
 #ifdef _OPENMP
     const int p = omp_get_max_threads();
@@ -235,13 +240,19 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // Returns the number of classes, or -1 when they cannot be coded (past the
 // int32 entry, a part's share of it, or the test hook's `class_limit`), or
 // -2 when they pass `poor` (`MAX_CLASS_FRACTION` of the family's pairs), or
-// -3 when they pass `afford` (the classes the plan's byte budget has room
-// for, `PLAN_BUDGET_BYTES`), each checked after every chunk of rows, so a
-// doomed plan stops within one chunk of its bound instead of building its
-// whole table: the plan then declines.
+// -3 when the census and the plan it is building pass `room` bytes
+// (`PLAN_BUDGET_BYTES` less what is already held): its hash tables (at 1.5x
+// their capacity, the peak of their last growth, old and new arrays both
+// live), its representatives, its chunk buffers, and CLASS_BYTES per class
+// for the plan. Each is checked after every chunk of rows, so a doomed plan
+// stops within one chunk of its bound instead of building its whole table:
+// the plan then declines. Before each chunk the same sum is projected as if
+// every pair in it were a new class (each part's table grown to fit), and a
+// chunk whose projection passes `room` is not run, so the tables never grow
+// past the budget. `peak` is the largest estimate or projection seen.
 template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, int64_t afford,
-               KeyFn key,
+int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, int64_t room,
+               int64_t &peak, KeyFn key,
                std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
@@ -265,6 +276,31 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
         for (int64_t o0 = 0; o0 < n_seg; o0 += R) {
             const int64_t o1 = std::min<int64_t>(n_seg, o0 + R);
             const int64_t m = (o1 - o0) * n_seg;
+            // Before the chunk: what the census would hold if this chunk's
+            // pairs were all new classes, each part taking up to twice its
+            // share (the hash spreads them), its table grown to fit and its
+            // representatives' vector doubled. Past the room, the chunk is
+            // not run: the tables never grow past the budget.
+            {
+                const int64_t share = 2 * ((m + P - 1) / P) + 1;
+                int64_t would = static_cast<int64_t>(chunk * (W * 8 + 8 + 2)), so_far = 0;
+                for (int t = 0; t < P; t++) {
+                    const auto &rp = reps[static_cast<size_t>(t)];
+                    const auto &tab = tables[static_cast<size_t>(t)];
+                    const int64_t n_t = static_cast<int64_t>(rp.size());
+                    so_far += n_t;
+                    // at 1.5x its capacity, as after the chunk below
+                    size_t cap = tab.cap == 0 ? 1024 : tab.cap;
+                    while (2 * static_cast<size_t>(tab.n + share) > cap) cap *= 2;
+                    would += static_cast<int64_t>(3 * cap / 2 * (W * 8 + 4));
+                    const size_t rcap = std::max(rp.capacity(), static_cast<size_t>(n_t + share));
+                    would += static_cast<int64_t>(
+                        (rcap > rp.capacity() ? 2 * rcap : rcap) * sizeof(Rep));
+                }
+                would += (so_far + m) * CLASS_BYTES;
+                peak = std::max(peak, would);
+                if (would > room) return -3;
+            }
 #pragma omp parallel for schedule(static)
             for (int64_t i = 0; i < m; i++) {
                 const int64_t o = o0 + i / n_seg, s = i % n_seg;
@@ -309,10 +345,18 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
                 }
             }
             if (overflow.load()) return -1;
-            int64_t so_far = 0;
-            for (const auto &rp : reps) so_far += static_cast<int64_t>(rp.size());
+            int64_t so_far = 0, bytes = static_cast<int64_t>(chunk * (W * 8 + 8 + 2));
+            for (int t = 0; t < P; t++) {
+                const auto &rp = reps[static_cast<size_t>(t)];
+                const auto &tab = tables[static_cast<size_t>(t)];
+                so_far += static_cast<int64_t>(rp.size());
+                bytes += static_cast<int64_t>(rp.capacity() * sizeof(Rep));
+                bytes += static_cast<int64_t>(3 * tab.cap * (W * 8 + 4) / 2);
+            }
+            bytes += so_far * CLASS_BYTES;
+            peak = std::max(peak, bytes);
             if (so_far > poor) return -2;
-            if (so_far > afford) return -3;
+            if (bytes > room) return -3;
         }
     }
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
@@ -320,7 +364,6 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
     const int64_t n_cls = off[static_cast<size_t>(P)];
     if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
     if (n_cls > poor) return -2;
-    if (n_cls > afford) return -3;
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {
@@ -350,17 +393,10 @@ const char *const POOR_REASON = "too few shared pairs to repay the plan";
 
 std::atomic<int64_t> g_plan_budget{0};  // 0: PLAN_BUDGET_BYTES
 
-// What a class costs the plan, past the maps: its per-k values (M0, M1 or
-// Q0, Q1, two complex), its group entry (cls, at) and its representative's
-// flip or code byte.
-constexpr int64_t CLASS_BYTES = 2 * 16 + 2 * 4 + 1;
-
-// The classes `room` bytes pay for (never negative).
-int64_t affordable(int64_t room) { return room <= 0 ? 0 : room / CLASS_BYTES; }
 
 std::string budget_reason() {
     char buf[96];
-    std::snprintf(buf, sizeof buf, "the plan would exceed its %.6g MB budget",
+    std::snprintf(buf, sizeof buf, "the plan and its census would exceed the %.6g MB budget",
                   static_cast<double>(plan_budget()) / double(1 << 20));
     return buf;
 }
@@ -462,8 +498,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     std::vector<Rep> reps;
     int64_t singles = 0;
     const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs),
-                             affordable(budget - maps_bytes), direct_key, plan->dmap, reps, singles);
+    int64_t peak = 0;
+    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs), budget - maps_bytes,
+                             peak, direct_key, plan->dmap, reps, singles);
+    plan->census_peak_bytes = maps_bytes + peak;
     if (plan->n_dcls == -2) return decline(plan, POOR_REASON);
     if (plan->n_dcls == -3) return decline(plan, budget_reason());
     if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
@@ -525,8 +563,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         // its values), plus the remainder's maps, comes out of the budget.
         const int64_t held =
             static_cast<int64_t>(plan->nbytes()) + 32 * plan->n_dcls + 4 * nn;
-        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(nn), affordable(budget - held),
-                                 q_key, &plan->qmap, qreps, qsingles);
+        int64_t qpeak = 0;
+        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(nn), budget - held, qpeak, q_key,
+                                 &plan->qmap, qreps, qsingles);
+        plan->census_peak_bytes = std::max(plan->census_peak_bytes, held + qpeak);
         if (plan->n_qcls == -2) return decline(plan, POOR_REASON);
         if (plan->n_qcls == -3) return decline(plan, budget_reason());
         if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");

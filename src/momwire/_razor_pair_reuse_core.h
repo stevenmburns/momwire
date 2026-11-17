@@ -185,22 +185,27 @@ void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 // (0.34) can: 0.34 of 9e6 pairs at ~120 B is 0.37 GB in free space and
 // twice that over a ground: PLAN_BUDGET_BYTES, below, is that bound.
 constexpr double MAX_CLASS_FRACTION = 0.75;
-// The plan's byte budget: its maps (4 B per pair per block, the composing
-// ground's remainder included), its groups and flags (`Plan::nbytes`) and
-// one wavenumber's class values (32 B a class). The 512 MB hosted bound is
-// this 256 MB, plus one dense Z (144 MB at the 3000-segment cap), plus
-// headroom (Steve, 11-17). The maps are counted before any census, so a deck
-// whose maps alone pass it declines before allocating them; the room left
-// bounds each census's classes (41 B each: values, group entry, flag),
-// checked per chunk of rows as MAX_CLASS_FRACTION is, and the finished plan
-// is held to it exactly. A plan past it declines, "the plan would exceed its
-// 256 MB budget". The census's own hash tables are transient and are NOT
-// counted (freed before the fill). Measured, Rocketlake, Python route, 8
-// threads, peak RSS on / off: the 3000-segment random-wire deck declines at
-// 1087 / 296 MB free and 1122 / 328 over PEC (that transient, to the abort);
-// gsky_m24 (2097 segments, Sommerfeld) is served with a 226 MB plan at
-// 802 / 245. The #1971 benchmark decks' plans: fd_h27 5 MB, fd_h51 18,
-// gfd_h51 51, sky_m24 76, p_m24 87, gsky_m24 226: every one served.
+// The byte budget of the plan AND its census, at their peak: the plan's
+// maps (4 B per pair per block, the composing ground's remainder included),
+// groups and flags (`Plan::nbytes`) and one wavenumber's class values (32 B
+// a class), and the census's transient hash tables, representatives and
+// chunk buffers (about 80 B a class more, freed before the fill). The 512 MB
+// hosted bound is this 256 MB, plus one dense Z (144 MB at the 3000-segment
+// cap), plus headroom (Steve, 11-17). The maps are counted before any
+// census, so a deck whose maps alone pass it declines before allocating
+// them; each census then counts its tables (at 1.5x their capacity, the
+// peak of their last growth) and its classes (CLASS_BYTES, 41 B, each)
+// after every chunk of rows, as MAX_CLASS_FRACTION is checked, so a doomed
+// plan stops within a chunk of the budget; the finished plan is held to it
+// exactly. Past it the plan declines, "the plan and its census would exceed
+// the 256 MB budget". Measured, Rocketlake, Python route, 8 threads, the
+// estimate with the budget lifted (census + plan, MB) / peak RSS on vs off:
+//   fd_h27 42, fd_h51 90, gfd_h51 189: served under 256;
+//   sky_m24 334, p_m24 347, gsky_m24 729 (plan alone 226): declined under
+//     256 (accepted for gsky_m24, Steve 11-17); with the budget, gsky_m24
+//     peaks at 273 MB on / 243 off (802 served without it);
+//   3000-segment random wires: 321 / 297 MB free, 352 / 328 PEC (2045 and
+//     3865 before any bound).
 constexpr size_t PLAN_BUDGET_BYTES = size_t(256) << 20;
 // TEST HOOK: the budget in force (a value <= 0 restores PLAN_BUDGET_BYTES),
 // so a test can reach the decline on a small deck. A plan is keyed on the
@@ -262,6 +267,9 @@ struct Plan {
     double census_seconds = 0.0;
     // What the budget counted: nbytes() plus one wavenumber's class values.
     int64_t budget_bytes = 0;
+    // The largest census-plus-plan estimate the budget saw (kept when the
+    // plan declines, so a declined deck says how far it got).
+    int64_t census_peak_bytes = 0;
     size_t nbytes() const;
 };
 
