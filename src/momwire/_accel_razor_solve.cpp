@@ -518,6 +518,9 @@ mw::razor::FrontInputs front_inputs(const py::dict &kw) {
         in.exact_kernel = (!ek.is_none() && py::bool_(ek)) ? ExactKernel::on : ExactKernel::off;
     }
     if (kw.contains("pair_reuse")) in.pair_reuse = kw["pair_reuse"].cast<int>();
+    // momwire#1454: the exact kernel's k-series, as the solver resolved it
+    // (`RazorSolver._exact_kernel_series_on`).
+    if (kw.contains("exact_kernel_series")) in.exact_kernel_series = kw["exact_kernel_series"].cast<bool>();
     py::object skip = get("exact_kernel_auto_skip");
     if (!skip.is_none())
         for (py::handle w : skip) in.exact_auto_skip.push_back(as_count(py::reinterpret_borrow<py::object>(w)));
@@ -959,8 +962,30 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
     return d;
 }
 
-py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
+// The executable's requested features (`ni_eval::requested_features`) with
+// `names` (registry names) asked too, for one call; restored after, however
+// it ends. TEST-ONLY: how a test runs a reach-1 feature the executables refuse
+// through their own C++ route (momwire#1454's `exact_kernel_series`).
+class RequestedFor {
+  public:
+    explicit RequestedFor(const std::vector<std::string> &names) : saved_(ni_eval::requested_features()) {
+        for (const std::string &f : names)
+            if (!ni_eval::request_feature(f, false)) {
+                ni_eval::requested_features() = saved_;
+                throw std::invalid_argument("not a C++ feature: " + f);
+            }
+    }
+    ~RequestedFor() { ni_eval::requested_features() = saved_; }
+    RequestedFor(const RequestedFor &) = delete;
+    RequestedFor &operator=(const RequestedFor &) = delete;
+
+  private:
+    ni_eval::Features saved_;
+};
+
+py::dict nec5_razor_seam(py::bytes latin1, bool solve, std::vector<std::string> features) {
     const std::string text = latin1;
+    const RequestedFor asked(features);
     mw::nec5::SeamResult r;
     {
         py::gil_scoped_release release;
@@ -1680,11 +1705,14 @@ void register_razor_solve(py::module_ &m) {
           "preparation BSplineSolver's keyword arguments and the mesh.");
     m.attr("nec5_razor_seam_proto") = true;
     m.def("nec5_razor_seam", &nec5_razor_seam, py::arg("latin1"), py::arg("solve") = false,
+          py::arg("features") = std::vector<std::string>(),
           "TEST HOOK: the NEC-5 seam's structure half for razor-2p in C++ "
           "(`_nec5_razor_seam_core.h`): a deck's latin-1 bytes in; the route, "
           "each structure's and run's outcome, and per preparation the "
           "RazorSolver keyword arguments, the mesh, the port columns and, "
-          "with solve, the solved coefficients X (n_basis, n_ports).");
+          "with solve, the solved coefficients X (n_basis, n_ports). "
+          "`features` (registry names) are asked of the C++ route for this "
+          "call only, unstamped, whatever their reach.");
     m.def("nec5_seam_constants", []() {
         py::dict d;
         d["speed_of_light_mhz_m"] = mw::nec5::SPEED_OF_LIGHT_MHZ_M;

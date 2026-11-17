@@ -199,6 +199,10 @@ struct Features {
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    // momwire#1454: the exact kernel's point moments as a k-series. Not a
+    // near-interface lever either: the razor seam reads it into
+    // `FrontInputs::exact_kernel_series`.
+    bool exact_kernel_series = false;
 };
 Features &requested_features();
 const Features &active_features();

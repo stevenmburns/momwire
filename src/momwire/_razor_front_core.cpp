@@ -1398,6 +1398,7 @@ std::string Front::build(const FrontInputs &in_raw) {
     const FrontInputs &in = dedup(in_raw, reduced) ? reduced : in_raw;
     construct(in);
     pair_reuse = in.pair_reuse;
+    exact_kernel_series = in.exact_kernel_series;
 
     std::vector<std::pair<int64_t, End>> touching;
     ground_ends(touching);
