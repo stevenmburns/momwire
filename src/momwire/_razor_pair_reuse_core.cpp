@@ -359,8 +359,11 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
 
     // Types: the source's kernel radius, and under the EK its EK radius; the
     // observer's tube.
-    Ids a_ids, ae_ids, b_ids;
+    Ids a_ids, ae_ids, b_ids, h_ids;
     std::vector<int64_t> a_id[2], ae_id[2], b_id(static_cast<size_t>(n_seg), 0);
+    std::vector<uint64_t> h_id(static_cast<size_t>(n_seg), 0);
+    for (int64_t s = 0; s < n_seg; s++)
+        h_id[static_cast<size_t>(s)] = static_cast<uint64_t>(h_ids.id(bits(g.seg_h(s))));
     for (int b = 0; b < n_blocks; b++) {
         a_id[b].resize(static_cast<size_t>(n_seg));
         ae_id[b].resize(static_cast<size_t>(n_seg));
@@ -373,7 +376,7 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     if (has_b)
         for (int64_t o = 0; o < n_seg; o++) b_id[static_cast<size_t>(o)] = b_ids.id(bits(g.b_obs(o)));
     if (a_ids.m.size() >= (size_t(1) << 25) || ae_ids.m.size() >= (size_t(1) << 25) ||
-        b_ids.m.size() >= (size_t(1) << 25))
+        b_ids.m.size() >= (size_t(1) << 25) || h_ids.m.size() >= (size_t(1) << 25))
         return decline(plan, "too many segment types to key");
 
     auto direct_key = [&](int b, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> bool {
@@ -399,9 +402,9 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         int e;
         double inv;
         quantum(D, e, inv);
-        if (!qword(pr == PROBE_NO_FOLD ? v : av, inv, w[0]) || !qword(rho, inv, w[1]) ||
-            !qword(h, inv, w[2]))
+        if (!qword(pr == PROBE_NO_FOLD ? v : av, inv, w[0]) || !qword(rho, inv, w[1]))
             return false;
+        w[2] = h_id[static_cast<size_t>(s)];
         if (v < 0.0 && w[0] != 0 && pr != PROBE_NO_FLIP && pr != PROBE_NO_FOLD) code = 1;
         const bool elig = ek && g.group_i(o) >= 0 && g.group_i(o) == g.group_j[b](s);
         const uint64_t typ = static_cast<uint64_t>(elig ? ae_id[b][static_cast<size_t>(s)]
@@ -437,8 +440,8 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
             int e;
             double inv;
             quantum(D, e, inv);
-            uint64_t qhs, qdd, qh, qda, qdb, qab, qtsz, qtoz;
-            if (!qword(hs, inv, qhs) || !qword(std::sqrt(dd2), inv, qdd) || !qword(h, inv, qh) ||
+            uint64_t qhs, qdd, qda, qdb, qab, qtsz, qtoz;
+            if (!qword(hs, inv, qhs) || !qword(std::sqrt(dd2), inv, qdd) ||
                 !qword(dx * ax + dy * ay, inv, qda) || !qword(dx * bx + dy * by, inv, qdb) ||
                 !qword(ax * bx + ay * by, one, qab) || !qword(tsz, one, qtsz) ||
                 !qword(toz, one, qtoz))
@@ -463,7 +466,7 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
             w[0] = static_cast<uint64_t>(e + 1100);
             w[1] = pr == PROBE_NO_HEIGHT ? 0 : qhs;
             w[2] = qdd;
-            w[3] = qh;
+            w[3] = h_id[static_cast<size_t>(s)];
             for (int j = 0; j < 5; j++) w[4 + j] = static_cast<uint64_t>(best[j]);
             return true;
         };
