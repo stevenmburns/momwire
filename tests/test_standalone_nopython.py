@@ -807,40 +807,86 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     assert policy == (tmp_path / "one.out").read_bytes()
 
 
-# --- momwire#1971: razor-2p's fill-pair reuse (reach 1: the executables refuse it) ---
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: nec5-razor-2p runs it) ---
 
-_REUSE_DECKS = (
-    FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec",  # Sommerfeld
-    FIXTURES / "razor_printout_somm" / "gd_ne_dipole.nec",  # PEC, a near field
-    DIPOLE,  # free space, two sources
-)
+# Synthetic decks past the reuse's small-deck thresholds
+# (`_razor_pair_reuse_core.h`: SMALL_DECK_SEGS_FREE 400 in free space and
+# over the PEC image, SMALL_DECK_SEGS_GROUND 100 over a finite ground), below
+# which the reuse steps aside and on would equal off by construction: two
+# parallel 201-segment dipoles (402 segments) in free space and over a
+# perfect ground, two 61-segment ones (122) over the composing Sommerfeld
+# ground.
+_REUSE_DECKS_1971 = {
+    "free": (
+        "CM momwire#1971: two parallel dipoles, free space, 402 segments\nCE\n"
+        "GW 1 201 0 -5 10 0 5 10 0.001\nGW 2 201 3 -5 10 3 5 10 0.001\nGE 0\n"
+        "EX 0 1 101 0 1 0\nFR 0 1 0 0 14.0 0\nXQ\nEN\n"
+    ),
+    "pec": (
+        "CM momwire#1971: two parallel dipoles over a perfect ground, 402 segments\n"
+        "CE\nGW 1 201 0 -5 8 0 5 8 0.001\nGW 2 201 3 -5 8 3 5 8 0.001\nGE 1\n"
+        "GN 1\nEX 0 1 101 0 1 0\nFR 0 1 0 0 14.0 0\nXQ\nEN\n"
+    ),
+    "sommerfeld": (
+        "CM momwire#1971: two parallel dipoles over Sommerfeld ground, 122 segments\n"
+        "CE\nGW 1 61 0 -2.5 6 0 2.5 6 0.001\nGW 2 61 2 -2.5 6 2 2.5 6 0.001\n"
+        "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 31 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+    ),
+}
+
+_REUSE_LINE = re.compile(r"^cxx: reuse plans built (\d+), found (\d+)$", re.M)
 
 
 @pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
-@pytest.mark.parametrize("deck", _REUSE_DECKS, ids=lambda p: p.stem)
-def test_razor_pair_reuse_is_refused_by_name(deck, tmp_path, monkeypatch):
-    """The C++ core carries the reuse, but its reach is the hosted app
-    (level 1) and the executables are levels 6 and 7: asked on, the
-    executable refuses it in the registry's sentence before reading the
-    deck, and writes nothing. Unset or off, its printout is the launcher's,
-    byte for byte, with no feature on line 2."""
-    from momwire import _features
-
+@pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
+def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
+    """Reach 7 covers the nec5 executables (levels 6 and 7). On ("1") and
+    off ("0"), the executable's printout is the launcher's byte for byte,
+    line 2 naming +razor_pair_reuse on both sides only when it is on. The
+    executable and the launcher share the C++ core, so that alone cannot
+    catch a fault in the core: the reuse is also shown to RUN (MW_EXE_TIMES's
+    reuse line: a plan built when on, none when off) and on is held to off
+    byte for byte except line 2 (the reuse moves Zin ~1e-13 here, far under
+    a printed digit)."""
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
-    d = tmp_path / "refused"
-    d.mkdir()
-    shutil.copy(deck, d / deck.name)
-    r = subprocess.run(
-        [EXE, deck.name, "reuse.out"],
-        cwd=d,
-        env=dict(os.environ, MOMWIRE_X_RAZOR_PAIR_REUSE="1"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 2, (r.stdout, r.stderr)
-    assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
-    assert not (d / "reuse.out").exists()
+    name = f"reuse_{ground}.nec"
+
+    def prepare(d):
+        (d / name).write_text(_REUSE_DECKS_1971[ground], newline="")
+
+    lines = {}
+    for state in ("1", "0"):
+        run = tmp_path / state
+        run.mkdir()
+        exe, ref, de, dl = _both(
+            [name, "reuse.out"],
+            run,
+            prepare=prepare,
+            env={"MOMWIRE_X_RAZOR_PAIR_REUSE": state, "MW_EXE_TIMES": "1"},
+        )
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        m = _REUSE_LINE.search(exe.stderr.decode("latin-1"))
+        assert m, exe.stderr
+        built = int(m[1])
+        if state == "1":
+            assert built >= 1, m[0]
+        else:
+            assert built == 0 and int(m[2]) == 0, m[0]
+        lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
+        assert (b"+razor_pair_reuse" in lines[state][1]) == (state == "1"), lines[
+            state
+        ][1]
+    on, off = lines["1"], lines["0"]
+    assert on[1].rstrip() == off[1].rstrip() + b" +razor_pair_reuse", (on[1], off[1])
+    assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+@pytest.mark.parametrize("deck", [DIPOLE], ids=lambda p: p.stem)
+def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch):
+    """Unset or off, either executable's printout is the launcher's, byte for
+    byte, with no feature on line 2."""
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
 
     def prepare(d):
         shutil.copy(deck, d / deck.name)
@@ -855,3 +901,27 @@ def test_razor_pair_reuse_is_refused_by_name(deck, tmp_path, monkeypatch):
         _same(exe, ref, de, dl)
         line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
         assert b"+razor_pair_reuse" not in line2, line2
+
+
+@pytest.mark.skipif(BASIS != "bspline", reason="nec5-bspline's refusal")
+def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
+    """nec5-bspline shares nec5-razor-2p's support levels (6 and 7) and its
+    feature table, so the reach alone would let it accept
+    MOMWIRE_X_RAZOR_PAIR_REUSE, name it on line 2 and fill as with it off.
+    The feature is razor-2p's fill, so this executable refuses it, in the
+    registry's sentence, before reading the deck, and writes nothing."""
+    from momwire import _features
+
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    shutil.copy(DIPOLE, tmp_path / DIPOLE.name)
+    r = subprocess.run(
+        [EXE, DIPOLE.name, "reuse.out"],
+        cwd=tmp_path,
+        env=dict(os.environ, MOMWIRE_X_RAZOR_PAIR_REUSE="1"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
+    assert not (tmp_path / "reuse.out").exists()

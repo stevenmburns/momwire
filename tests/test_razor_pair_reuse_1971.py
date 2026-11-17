@@ -46,7 +46,7 @@ from momwire._accel import acc
 from momwire.razor import RazorSolver
 
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(7),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "razor_pair_reuse_1971", False),
         reason="needs the razor pair-reuse kernels",
@@ -54,9 +54,11 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
-# A native feature at reach 1 refuses below its reach (macOS is level 5), so
-# the tests that turn it on run only where it is certified, as
-# test_point_cplx_staged_1849 does; the off and refusal tests run everywhere.
+# A native feature refuses below its reach. At reach 7 every Python route is
+# within it (macOS is level 5, the drop-in 4), so this guard skips nothing
+# today; it stays so a narrowed reach skips the on-tests rather than failing
+# them, as test_point_cplx_staged_1849 does. The off and refusal tests run
+# everywhere.
 _needs_cert = pytest.mark.skipif(
     not _features.certified("razor_pair_reuse"),
     reason="razor_pair_reuse is not certified on this platform",
