@@ -29,6 +29,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -110,18 +111,23 @@ const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, d
 // on a lattice fixed in metres, carrying the REQUEST's eps_t, k2 and omega.
 // nullptr where Python returns None (the caller then takes the exact grid);
 // a geometry the exact grid refuses throws `Refused` as it does there. The
-// anchors are this process's only: their disk store is not ported.
+// anchors are this process's only: their disk store is not ported. The grid
+// comes back SHARED: the blend and anchor stores are FIFOs, so a later
+// request (another thread's, or this one's own stencil) may evict an entry,
+// and the caller's (and `parts`') hold is what keeps it alive.
 //   anchored_grid          every node filled, as Python's; `parts` (a test's)
 //                          receives the eight anchors it summed, in stencil
 //                          order, and `why` the decline's name;
 //   anchored_grid_reading  only the nodes the given pairs read, as
 //                          `get_grid_reading` (every value read is the whole
 //                          blend's bit for bit).
-const Grid *anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
-                          bool has_r_min, double r_min, uintptr_t cancel_flag = 0,
-                          std::vector<const Grid *> *parts = nullptr, std::string *why = nullptr);
-const Grid *anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
-                                  double mu, double r_min, const double *above, size_t A, const double *below,
+std::shared_ptr<const Grid> anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
+                                          double omega, double mu, bool has_r_min, double r_min,
+                                          uintptr_t cancel_flag = 0,
+                                          std::vector<std::shared_ptr<const Grid>> *parts = nullptr,
+                                          std::string *why = nullptr);
+std::shared_ptr<const Grid> anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
+                                                  double omega, double mu, double r_min, const double *above, size_t A, const double *below,
                                   size_t B, double ground_z, uintptr_t cancel_flag = 0);
 
 // What the anchored route built, for tests (never for control), as
@@ -131,8 +137,12 @@ struct AnchorStats {
     int64_t anchor_fills = 0, blends = 0, declined = 0, nodes_filled = 0;
 };
 AnchorStats anchor_stats();
-// Forget every anchor and blend (`_transmitted_anchors.reset()`).
+// Forget every anchor and blend (`_transmitted_anchors.reset()`), and put
+// the anchor store's capacity back to Python's `_ANCHORS_MAX` (96).
 void anchor_reset();
+// TEST HOOK: the anchor store's capacity, so a gate can saturate the FIFO
+// with a few anchors rather than 96 (never for control).
+void anchor_capacity(size_t max);
 
 // `tgrid_eval`'s nodes over every (above, below) pair: the (n_zp, n_r, n_th)
 // mask `get_grid_reading` fills.
