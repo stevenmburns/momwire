@@ -785,7 +785,8 @@ def check(name: str, context: str | None = None) -> None:
     raise FeatureNotCertified(
         f"{name} is not certified for the {context} route on {_os(None)} "
         f"(support level {level}, {LEVELS[level - 1].id}; it reaches level "
-        f"{feature.reach}, {LEVELS[feature.reach - 1].id})"
+        f"{feature.reach}, {LEVELS[feature.reach - 1].id}); unset "
+        f"{feature.env} to run without it"
     )
 
 
