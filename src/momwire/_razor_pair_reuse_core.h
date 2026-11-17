@@ -138,6 +138,12 @@ struct Group {
 };
 
 struct Plan {
+    // Why this plan does not serve the deck, or empty: a deck the census
+    // cannot code (more classes than an int32 entry holds, more segment
+    // types than the key's type field, more segments than `MAX_SEGS`). A
+    // declined plan has no classes; the caller fills as without reuse. It is
+    // cached like any other, so the census is not re-run per frequency.
+    std::string declined;
     int64_t n_seg = 0;
     bool has_image = false, remainder = false;
     std::string fingerprint;
@@ -166,10 +172,21 @@ struct Values {
     bool has_d = false, has_q = false;
 };
 
-// The plan for `g`, from the process's cache or built and kept. Never null;
-// throws std::runtime_error when a deck is too large to code (class ids past
-// int32).
+// The plan for `g`, from the process's cache or built and kept. Never null.
+// A deck the census cannot code comes back DECLINED (`Plan::declined` says
+// why) rather than throwing: the reuse is an optimisation, and a fill it
+// cannot serve runs as without it.
 std::shared_ptr<const Plan> plan_for(const Geometry &g);
+// Segments past which a plan declines: an observer-by-source offset of the
+// largest deck must fit the int32 the groups store.
+constexpr int64_t MAX_SEGS = 46340;
+// TEST HOOK: decline the direct census past `direct` classes and the
+// remainder's past `remainder` (0 is no limit beyond the int32 coding's), so
+// a test can reach the decline without a deck of 2^26 classes. A plan is
+// keyed on the limits it was built under. Bound for Python's tests only;
+// nothing in the executables sets it.
+void set_class_limit(int64_t direct, int64_t remainder);
+int64_t class_limit(int family);  // 0 direct, 1 remainder
 // Plans built and found (process totals, for tests).
 struct CacheCounters {
     uint64_t built = 0, found = 0;

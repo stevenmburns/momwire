@@ -233,7 +233,14 @@ class SolveContext {
     std::vector<cd> vm0_, vm1_;        // verify: the shipped moments
     std::vector<int64_t> q_seg_;       // the remainder rows' segments and signs
     std::vector<double> q_sign_;
+    std::string reuse_declined_reason_;  // the last fill's, or empty
     void reuse_begin(const SolveInputs &in);
+
+  public:
+    // Why the last fill asked for reuse and did not take it, or empty.
+    const std::string &reuse_declined_reason() const { return reuse_declined_reason_; }
+
+  private:
     void knot_moments(const SolveInputs &in, const SourceSet &src, bool image,
                       std::vector<cd> &out);
 

@@ -260,6 +260,7 @@ py::dict reuse_stats(const ReusePlanHandle &h) {
     d["q_groups"] = p.qgroups.size();
     d["census_seconds"] = p.census_seconds;
     d["nbytes"] = p.nbytes();
+    d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
     return d;
 }
 
@@ -1564,6 +1565,9 @@ void register_razor_solve(py::module_ &m) {
         .def("release", &mw::razor::SolveContext::release,
              "Free Z and the window pool; the counters are kept.")
         .def_property_readonly("counters", &counters)
+        .def_property_readonly("reuse_declined_reason",
+                               &mw::razor::SolveContext::reuse_declined_reason,
+                               "Why the last fill asked for pair reuse and did not take it, or ''.")
         .def_property_readonly("n_basis", &mw::razor::SolveContext::n_basis)
         .def("front_port_solution", &front_port_solution, py::arg("kwargs"),
              py::arg("chunk_elems") = 2000000, py::arg("cancel_flag") = 0,
@@ -1587,6 +1591,10 @@ void register_razor_solve(py::module_ &m) {
         "blocks, and of the composing ground's remainder, from the process's "
         "cache.")
         .def("stats", &reuse_stats)
+        .def_property_readonly("declined", [](const ReusePlanHandle &h) -> py::object {
+            if (h.plan->declined.empty()) return py::none();
+            return py::str(h.plan->declined);
+        }, "Why this plan does not serve the deck (it then has no classes), or None.")
         .def("values", &reuse_values, py::arg("k"), py::arg("xg"), py::arg("wg"),
              py::arg("cancel_flag") = 0,
              "The direct classes' M0, M1 at real k (the shipped seg_moments).")
@@ -1615,6 +1623,11 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK (momwire#1971's adversarial gates): build later plans with a "
           "deliberately wrong key (0 none, 1 no height, 2 no flip, 3 no type, "
           "4 no remainder code, 5 no orientation fold: right, uncompressed).");
+    m.def("razor_reuse_class_limit", &mw::razor::reuse::set_class_limit, py::arg("direct"),
+          py::arg("remainder") = 0,
+          "TEST HOOK: later plans decline past `direct` direct classes or `remainder` "
+          "remainder classes (0: the int32 coding's own limit only).");
+    m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
     m.attr("razor_reuse_verify_tol") = mw::razor::reuse::VERIFY_TOL;
     m.attr("razor_reuse_key_bits") = mw::razor::reuse::KEY_BITS;
 

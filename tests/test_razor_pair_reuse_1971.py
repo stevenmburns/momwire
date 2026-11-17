@@ -62,10 +62,12 @@ def _clean(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     acc.razor_reuse_probe(0)
+    acc.razor_reuse_class_limit(0)
     acc.razor_reuse_cache_clear()
     razor._PAIR_REUSE_ROUTE.clear()
     yield
     acc.razor_reuse_probe(0)
+    acc.razor_reuse_class_limit(0)
     acc.razor_reuse_cache_clear()
 
 
@@ -347,3 +349,75 @@ def test_a_wrong_key_is_caught_on_the_cxx_route(monkeypatch):
         warnings.simplefilter("ignore")
         with pytest.raises(RuntimeError, match="pair_reuse verify"):
             _solve(wires, "verify", ground=SOMM)
+
+
+# ------------------------------------------------------------ declines
+
+
+def _solver(wires, mode, ground=None):
+    return RazorSolver(
+        wires=wires,
+        nsegs=31,
+        wire_radius=0.001,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+        razor_pair_reuse=mode,
+        **(ground or {}),
+    )
+
+
+@pytest.mark.parametrize("family", ["direct", "remainder"])
+def test_a_census_it_cannot_code_declines_and_fills_as_off(family):
+    """A deck with more classes than the census's int32 entries code (2^30
+    direct, 2^29 remainder; each of P thread parts a 2^-ceil(log2 P) share)
+    used to THROW out of the fill. It declines now, with its reason, and fills as
+    off bit for bit. The test hook lowers the limit so a small deck reaches
+    it: one short of the direct classes the direct census declines, and one
+    short of the remainder's (over Sommerfeld) the remainder's does."""
+    wires = _triangle() + _dipoles(heights=(9.0, 9.0), xs=(0.0, 1.5))
+    off = _solver(wires, False, SOMM).compute_port_solution().y
+    _solver(wires, True, SOMM).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None and st["q_classes"] > 0, st
+    c, q = st["classes"], st["q_classes"]
+    if family == "direct":
+        limits, why = (c - 1, 0), "too many classes to code"
+    else:
+        limits, why = (c, q - 1), "too many remainder classes to code"
+    acc.razor_reuse_class_limit(*limits)
+    razor._PAIR_REUSE_ROUTE.clear()
+    s = _solver(wires, True, SOMM)
+    y = s.compute_port_solution().y
+    assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
+    assert s.pair_reuse_declined == why
+    assert razor._PAIR_REUSE_STATS[0]["declined"] == why
+    assert razor._PAIR_REUSE_STATS[0]["classes"] == 0
+    np.testing.assert_array_equal(y, off)
+    # the declined plan is cached: a second fill does not re-run the census
+    b0, f0 = _cache()
+    _solver(wires, True, SOMM).compute_port_solution()
+    assert _cache() == (b0, f0 + 1)
+    # and the limit is part of the plan's key: lifted, the reuse serves again
+    acc.razor_reuse_class_limit(0)
+    s = _solver(wires, True, SOMM)
+    s.compute_port_solution()
+    assert s.pair_reuse_declined is None
+    assert razor._PAIR_REUSE_ROUTE.get("reuse", 0) == 1
+
+
+def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
+    wires = _triangle()
+    monkeypatch.setattr(razor, "_RAZOR_CXX", True)
+    off = _solve(wires, False, ground=SOMM)
+    ctx = razor._cxx_context()
+    acc.razor_reuse_class_limit(4)
+    before = dict(ctx.counters)
+    y = _solve(wires, True, ground=SOMM)
+    after = ctx.counters
+    assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
+    assert after["reuse_declined"] == before["reuse_declined"] + 1
+    assert after["reuse_fills"] == before["reuse_fills"]
+    assert after["reuse_windows"] == before["reuse_windows"]
+    assert ctx.reuse_declined_reason == "too many classes to code"
+    np.testing.assert_array_equal(y, off)
