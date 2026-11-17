@@ -1,0 +1,10 @@
+CM RP normalized-gain probe free_tworp_mixed
+CM two RP cards, XNDA 1501 then 1001
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 4 2 1501 0 0 30 90 0 0
+RP 0 3 3 1001 10 0 20 45 0 0
+EN
