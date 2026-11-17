@@ -1641,6 +1641,14 @@ void register_razor_solve(py::module_ &m) {
     m.def("near_interface_eval_cone_table", &near_interface_eval_cone_table, py::arg("k_p"), py::arg("k_m"),
           py::arg("d"), py::arg("zf"), py::arg("beta"), py::arg("a"), py::arg("zs"), py::arg("p"),
           py::arg("u_max"), "TEST-ONLY (momwire#1595): one C++ cone surface's (u edges, values).");
+    m.def(
+        "cxx_request_feature",
+        [](const std::string &name, bool on) {
+            const bool known = on ? ni_eval::request_feature(name, false) : ni_eval::withdraw_feature(name);
+            if (!known) throw std::invalid_argument("not a C++ feature: " + name);
+        },
+        py::arg("name"), py::arg("on"),
+        "TEST HOOK (momwire#1847): ask for (or withdraw) a C++ route's feature in every later fill, unstamped.");
     m.def("near_interface_eval_designed", &near_interface_eval_designed, py::arg("k_p"), py::arg("k_m"),
           py::arg("specs"), py::arg("wire_radius"), py::arg("rho"), py::arg("z"), py::arg("zp"),
           "TEST-ONLY (momwire#1595): the C++ fills' sheet plan over node pairs and the designed "
