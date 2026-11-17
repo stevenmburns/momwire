@@ -15,6 +15,7 @@
 #include "route.h"
 
 #include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
+#include "_razor_pair_reuse_core.h"  // the reuse plans' counters (momwire#1971)
 
 #include "_sinusoidal_run_core.h"
 #define MW_ROUTE_ENGINE sinusoidal
@@ -117,6 +118,12 @@ bool withdraw_features(const std::vector<std::string> &names) {
     bool ok = true;
     for (const std::string &n : names) ok = ni_eval::withdraw_feature(n) && ok;
     return ok;
+}
+
+void reuse_plans(long long &built, long long &found) {
+    const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
+    built = static_cast<long long>(c.built);
+    found = static_cast<long long>(c.found);
 }
 
 void configure_grid_cache(const std::string &tag) {

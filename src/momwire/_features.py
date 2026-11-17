@@ -22,9 +22,10 @@ On outside its reach, a feature is handled by its KIND:
 The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
-8, so every executable but nec42-sinusoidal's). One started with any other
-``MOMWIRE_X_`` variable on refuses before it reads a deck
-(:data:`EXE_REFUSAL`).
+8, so every executable but nec42-sinusoidal's, and razor_pair_reuse, reach 7,
+which only nec5-razor-2p's route carries, so nec5-bspline refuses it by
+basis, ``EXE_FEATURE_BASES``). One started with any other ``MOMWIRE_X_``
+variable on refuses before it reads a deck (:data:`EXE_REFUSAL`).
 
 With every feature at its default nothing here changes a byte of line 2:
 the stamp names only a feature that is on where its default is off. With every
@@ -535,11 +536,14 @@ FEATURES: dict[str, Feature] = {
         # rest, in Python and in the executables (one C++ core).
         Feature(
             name="razor_pair_reuse",
-            # Reach 1, the hosted app only (Steve, 11-16). The C++ core is
-            # the executables' too, but they do not carry the feature (no
-            # `EXE_FEATURES` row), so they refuse MOMWIRE_X_RAZOR_PAIR_REUSE
-            # by name; widening the reach puts the row back.
-            reach=1,
+            # Reach 7: every Python route (the hosted app, Linux sse2,
+            # Windows, the drop-in, macOS) and the nec5 executables (levels 6
+            # and 7, nec5-razor-2p's `EXE_FEATURES` row; nec5-bspline, which
+            # shares those levels, refuses it by basis). Not 8 or 9: those
+            # are the nec42 executables, and neither has a razor-2p route to
+            # run it in. Still off by default and not offered (Steve, 11-17;
+            # it was reach 1, the hosted app only, from 11-16).
+            reach=7,
             env="MOMWIRE_X_RAZOR_PAIR_REUSE",
             kind="native",
             issue=1971,
