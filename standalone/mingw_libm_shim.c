@@ -3,8 +3,8 @@
  * standalone/WINDOWS-SINGLE-FILE.md, not a release build).
  *
  * WHY. mingw-w64's libmingwex defines its own exp, log, pow, sin, cos,
- * sincos, atan2 and hypot (x87 code: run 43965973397 measured exp at 42 ns
- * and sin/cos at 46-63 ns, where MSVC's, ucrtbase.dll's, take 3-12), and it
+ * sincos, atan2 and hypot (libm_bench.c, run 44057069874: 24-79 ns a call,
+ * where ucrtbase.dll's, MSVC's, take 4-12), and it
  * is ahead of the CRT's import library on gcc's link line, so a MinGW build
  * never reaches the DLL's even when the DLL exports them. Defining the names
  * here, in an object, keeps libmingwex's members out of the link (an archive
