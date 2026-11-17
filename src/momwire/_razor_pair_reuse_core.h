@@ -31,15 +31,28 @@
 // flip differs from its representative's. A pair whose |v| quantises to 0 is
 // symmetric and keeps flip 0.
 //
-// THE KEY quantises |v|, sqrt(perp) and h with a step of 2^-KEY_BITS times
+// THE KEY quantises |v| and sqrt(perp) with a step of 2^-KEY_BITS times
 // the pair's singular distance D = max(|v| - h/2, sqrt(perp), a), rounded down
-// to a power of two (so the step is a function of the pair alone); a, the EK
-// radius and b enter exactly, by type. A member differs from its
-// representative by at most half a step in each, about 2^-(KEY_BITS+1)
-// relative to the scale at which the kernel varies. Pairs straddling a
-// quantum land in neighbouring classes, which costs compression, never
-// accuracy, and two different keys never share a class (exact equality of the
-// quantised integers, no hashing of the key into fewer bits).
+// to a power of two (so the step is a function of the pair alone); h, a, the
+// EK radius and b enter exactly, by type. A member differs from its
+// representative by at most half a step in each position, about
+// 2^-(KEY_BITS+1) relative to the scale at which the kernel varies. Pairs
+// straddling a quantum land in neighbouring classes, which costs compression,
+// never accuracy, and two different keys never share a class (exact equality
+// of the quantised integers, no hashing of the key into fewer bits).
+//
+// h is exact, not quantised against D (momwire#1971 review): M0 is
+// proportional to h, so its error counts relative to h, and a step of D is
+// coarser than h's own by D/h. Far pairs then merged segments whose lengths
+// differ by ~1e-11 relative. On a 0.3 m square loop at 137 kHz (440
+// segments, one side 4e-11 longer) R moved 8.1e-5, the same under
+// translation, while `verify` passed every pair at ~4e-11; with h exact it
+// moves 1.7e-9, inside the flag-off fill's own translation noise. A step of
+// h itself (2^-40 h) still moved R 3e-6 on the same loop at L/lambda 3e-5,
+// where the off fill's noise is 1.4e-9. The cost is sharing across lengths
+// that differ by rounding only: 24 radials at random angles from an off-axis
+// hub, 40 segments each, keep 728,508 classes of 1e6 pairs against 674,968
+// with h on a step of itself.
 //
 // EXCLUDED: a pair whose observer lies within NEAR_LENGTHS kernel scales of
 // the source's centre (max(|v|, sqrt(perp)) < NEAR_LENGTHS max(h, a): the
@@ -68,10 +81,11 @@
 // vertical axis and reflections in vertical planes. Its key is the
 // configuration's complete invariants under that group: the height sum, |d|
 // (d the horizontal separation of the centroids), d.a, d.b, a.b (a, b the
-// horizontal parts of t_s, t_o), t_s,z, t_o,z, and h, quantised against the
-// distance to the image, D = sqrt(|d|^2 + hsum^2) (floored at h). Reversing
-// the source tangent negates d.a, a.b, t_s,z and takes (Q0, Q1) -> (-Q0,
-// h Q0 - Q1)... with the sign of the reversed current, -(h Q0 - Q1); reversing
+// horizontal parts of t_s, t_o), t_s,z, t_o,z, quantised against the
+// distance to the image, D = sqrt(|d|^2 + hsum^2) (floored at h), and h,
+// exact by type as in the direct key. Reversing the source tangent negates
+// d.a, a.b, t_s,z and takes (Q0, Q1) -> (-Q0, h Q0 - Q1)... with the sign of
+// the reversed current, -(h Q0 - Q1); reversing
 // the observer's negates d.b, a.b, t_o,z and both values. Each pair is keyed
 // in the orientation whose key is the largest of the four, its two flips in
 // a code the gather undoes. A path row on the segment is that segment's row

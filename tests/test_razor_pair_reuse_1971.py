@@ -525,3 +525,69 @@ def test_small_decks_step_aside_on_the_cxx_route(monkeypatch):
     # verify ignores it
     _solve(wires, "verify", ground=SOMM)
     assert ctx.counters["reuse_fills"] == after["reuse_fills"] + 1
+
+
+# ------------------------------------------------------------ source length
+
+
+def _small_loop_zin(mode, d, side=0.3):
+    """A square loop 0.3 m a side at 137 kHz (radiation resistance ~1e-11
+    ohm against ~1.16 ohm of reactance, so R is the answer's cancelling
+    part), 110 segments a side, one side lengthened by `d`."""
+    p = [[0, 0, 2], [side, 0, 2], [side, side + d, 2], [0, side, 2]]
+    wires = [np.array([p[i], p[(i + 1) % 4]], dtype=float) for i in range(4)]
+    sol = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[110]] * 4,
+        feeds=[(0, 0.37 * side, 1 + 0j)],
+        wire_radius=0.0005,
+        wavelength=2190.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+        exact_kernel=False,
+        razor_pair_reuse=mode,
+    )
+    return complex(1.0 / sol.compute_port_solution().y[0, 0])
+
+
+def test_segments_of_different_lengths_never_share_a_class():
+    """The key carries the source length h exactly, by type, as it does the
+    radii (momwire#1971 review). M0 is proportional to h, so h's error counts
+    relative to h; a step of 2^-40 times the pair distance D was coarser than
+    h's own by D/h, and merged segments whose lengths differ by ~1e-11.
+
+    On this loop the lengthened side's segments shared classes with the
+    others', and R moved 8.1e-5 (identically under translation, so not
+    noise), while every pair passed `verify` at ~4e-11. With h exact it
+    moves ~2e-9, the flag-off fill's own translation noise (1e-9 - 2e-9)."""
+    d = 4e-11 * 0.3
+    off = _small_loop_zin(False, d)
+    on = _small_loop_zin(True, d)
+    assert _ran() == 1
+    assert abs(on.real - off.real) / off.real < 1e-7
+
+
+def test_the_keys_carry_the_source_length():
+    """Both keys, the direct one and the composing ground's remainder one,
+    keep sources of different lengths apart. Two parallel horizontal dipoles
+    3 m apart over Sommerfeld ground, the second 1e-12 m longer (1e-13
+    relative): its pairs then match the first's to well under the position
+    step, and under a key quantising h against the pair distance they merged
+    with the first's (the shared classes grew 1.3x, the remainder's 1.2x).
+    With h exact each length has classes of its own, at least twice the
+    twin deck's."""
+
+    def stats(dy):
+        w = [
+            np.array([[0.0, -5.0, 4.0], [0.0, 5.0, 4.0]]),
+            np.array([[3.0, -5.0, 4.0], [3.0, 5.0 + dy, 4.0]]),
+        ]
+        _solve(w, True, nsegs=41, ground=SOMM)
+        return dict(razor._PAIR_REUSE_STATS[0])
+
+    twin, apart = stats(0.0), stats(1e-12)
+    assert _ran() == 2
+    assert twin["q_classes"] > 0, twin
+    assert apart["q_classes"] >= 2 * twin["q_classes"], (twin, apart)
+    shared = [st["classes"] - st["near_pairs"] for st in (twin, apart)]
+    assert shared[1] >= 2 * shared[0], (twin, apart)
