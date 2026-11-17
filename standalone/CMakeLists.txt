@@ -326,6 +326,15 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
 endif()
+if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
+  # the point-matched fill's opt-in staged complex rows (momwire#1849,
+  # `point_cplx_staged`), which `_sinusoidal_fill_core.cpp` above calls: the
+  # complex Galerkin far fill's tile, and its libmvec sweep in its own TU
+  # (its `omp declare simd` is TU-wide)
+  list(APPEND MW_CORE_SOURCES
+    ${MW_SRC}/_sinusoidal_galerkin_core.cpp
+    ${MW_SRC}/_accel_sinusoidal_cplx.cpp)
+endif()
 if(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # bs2's answers to the NEC-4.2 slot's run half (momwire#1607 Phase C1)
   list(APPEND MW_CORE_SOURCES ${MW_SRC}/_bspline_nec4_run_core.cpp)
@@ -377,6 +386,7 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
   Faddeeva=mws_Faddeeva  # xsf/faddeeva.h keeps its own namespace, outside xsf (momwire#1595 D1b)
   razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
+  sg_cplx_phase_sweep=mws_sg_cplx_phase_sweep  # and the staged rows' sweep's (momwire#1849)
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
   somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
   somm_trans=mws_somm_trans  # the transmitted table's (momwire#1718 S12)
@@ -398,7 +408,8 @@ if(MW_EXE_FAT)
   find_program(MW_LLVM_NM llvm-nm HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
   foreach(_mw_copy IN ITEMS mwa mwas)
     set(_mw_renames mw=${_mw_copy} xsf=${_mw_copy}_xsf Faddeeva=${_mw_copy}_Faddeeva
-        razor_cplx_brackets=${_mw_copy}_razor_cplx_brackets somm_core=${_mw_copy}_somm_core
+        razor_cplx_brackets=${_mw_copy}_razor_cplx_brackets sg_cplx_phase_sweep=${_mw_copy}_sg_cplx_phase_sweep
+        somm_core=${_mw_copy}_somm_core
         somm_below=${_mw_copy}_somm_below ni_core=${_mw_copy}_ni_core ni_eval=${_mw_copy}_ni_eval
         somm_trans=${_mw_copy}_somm_trans ni_point=${_mw_copy}_ni_point
         near_buried=${_mw_copy}_near_buried offedge_lanes=${_mw_copy}_offedge_lanes

@@ -190,6 +190,15 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 // Written by the thread that runs the fill, before any parallel region of
 // it starts; the fill's worker threads only read it.
 struct Features {
+    // momwire#1849: the point-matched sinusoidal fill's complex-k field
+    // tensor on the complex Galerkin fill's staged rows
+    // (`sinusoidal_galerkin::point_field_tensor_cplx_staged`). Read from
+    // `requested_features()` at the sinusoidal fill's two in-medium kernel
+    // calls, as `SinusoidalSolver._field_tensor` reads its flag, not under a
+    // `FeatureFill` (which would turn on the default-on levers that solver
+    // never takes). Not in any executable's reach (`EXE_FEATURES`): reached
+    // through the in-process hook (`sinusoidal_nec4_printout(features=)`).
+    bool point_cplx_staged = false;
     bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
     bool height_sheet_recal = false;  // L2: the recalibrated height census
     bool crossing_table = false;      // L5: the crossing rows from one table
@@ -222,6 +231,22 @@ class FeatureFill {
   private:
     Features saved_;
     bool saved_taken_;
+};
+
+// The requested features with `names` (registry names) added for one run,
+// unstamped, and what was requested before put back when it ends -- a test's
+// in-process run of what an executable's environment would ask for
+// (momwire#1849's point_cplx_staged, which no executable carries). A name
+// this route does not carry throws std::invalid_argument, nothing asked.
+class FeatureRequest {
+  public:
+    explicit FeatureRequest(const std::vector<std::string> &names);
+    ~FeatureRequest();
+    FeatureRequest(const FeatureRequest &) = delete;
+    FeatureRequest &operator=(const FeatureRequest &) = delete;
+
+  private:
+    Features saved_;
 };
 
 // Whether the running fill has taken L5's crossing table (`_CrossingFill.taken`).
