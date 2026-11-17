@@ -361,7 +361,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         const double av = std::fabs(v);
         const double rho = std::sqrt(perp);
         code = 0;
-        if (!(std::max(av, rho) >= NEAR_LENGTHS * h)) return false;
+        // Near in units of the kernel's own scale, the longer of h and the
+        // radius: where h < a the values vary over a, not h (`NEAR_LENGTHS`).
+        const double near = pr == PROBE_NEAR_H ? h : std::max(h, g.a(s));
+        if (!(std::max(av, rho) >= NEAR_LENGTHS * near)) return false;
         const double D = std::max(std::max(av - 0.5 * h, rho), g.a(s));
         if (!(D > 0.0) || !std::isfinite(D)) return false;
         int e;
