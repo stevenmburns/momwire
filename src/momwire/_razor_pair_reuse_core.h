@@ -157,6 +157,34 @@ int64_t small_deck_segs(bool finite);
 // TEST HOOK: move the thresholds (a negative value restores its constant), so
 // the gates can run the reuse on cheap decks below them.
 void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
+// A census that keeps more classes than this fraction of its family's pairs
+// (the direct family's: n_blocks * n_seg^2; the remainder's: n_seg^2)
+// declines, "too few shared pairs to repay the plan", checked after every
+// chunk of rows so a poor deck stops within a chunk of the bound rather than
+// building its whole table. Without it the memory grows with the deck's
+// classes, up to one per pair: the maps are 4 B per pair per block whatever
+// the deck, but the census tables, the representatives and the per-k values
+// (32 B a class) grow with the classes. Measured, Rocketlake, the Python
+// route at 8 threads (momwire#1971 follow-up), peak RSS, reuse on / off:
+//
+//   deck (segs)                 classes/pairs   no bound     3/4 (declines)
+//   75 random wires x 40 (3000) free    0.99    2045 / 296   1087 / 296
+//   the same over PEC                   0.99    3865 / 328   1955 / 328
+//   25 random wires x 40 (1000) Sommerfeld  0.98          331 / 131
+//   24 random radials x 40 (960) free   0.57     188 / 141   (served)
+//   the #1971 benchmark decks: fd_h27 0.0095, fd_h51 0.005, gfd_h51 0.003
+//     (remainder 0.001), p_m24 0.25, sky_m24 0.34, gsky_m24 0.34 (0.34)
+//
+// 3/4 serves every benchmark deck, the radial screens at random angles
+// (0.57 here, 0.73 for #1971's 24 x 40 off-axis hub, `KEY_BITS`' note) and
+// the gates' hairpin and lengthened loop (between 1/2 and 3/4: 1/2 declines
+// both), and turns away a deck whose pairs are nearly all distinct, at about
+// 120 B per class it kept: half the unbounded cost on the random decks
+// above. It does NOT hold the hosted bound (512 MB beyond one dense matrix)
+// at the hosted cap of 3000 segments, and no fraction that serves sky_m24
+// (0.34) can: 0.34 of 9e6 pairs at ~120 B is 0.37 GB in free space and
+// twice that over a ground. That needs a byte budget beside the ratio.
+constexpr double MAX_CLASS_FRACTION = 0.75;
 // Bytes of plans the process keeps between fills.
 constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
 

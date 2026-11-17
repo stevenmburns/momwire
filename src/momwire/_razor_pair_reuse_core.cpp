@@ -232,10 +232,13 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // returns false for a pair that is its own class. Entries go to `maps[b]` as
 // class << code_bits | code; reps are each class's first pair, row-major.
 // Returns the number of classes, or -1 when they cannot be coded (past the
-// int32 entry, a part's share of it, or the test hook's `class_limit`): the
+// int32 entry, a part's share of it, or the test hook's `class_limit`), or
+// -2 when they pass `poor` (`MAX_CLASS_FRACTION` of the family's pairs,
+// checked after every chunk of rows, so a deck that compresses poorly stops
+// within one chunk of the bound instead of building its whole table): the
 // plan then declines.
 template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn key,
+int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, KeyFn key,
                std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
@@ -303,6 +306,9 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn 
                 }
             }
             if (overflow.load()) return -1;
+            int64_t so_far = 0;
+            for (const auto &rp : reps) so_far += static_cast<int64_t>(rp.size());
+            if (so_far > poor) return -2;
         }
     }
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
@@ -328,6 +334,13 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn 
     for (int64_t v : n_single) singles += v;
     return n_cls;
 }
+
+// The most classes a family's census keeps before it declines as poorly
+// compressed (`MAX_CLASS_FRACTION`), of its `pairs`.
+int64_t poor_bound(int64_t pairs) {
+    return static_cast<int64_t>(MAX_CLASS_FRACTION * static_cast<double>(pairs));
+}
+const char *const POOR_REASON = "too few shared pairs to repay the plan";
 
 // A plan that does not serve: no classes, its reason, its census time.
 std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const char *why) {
@@ -416,7 +429,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     };
     std::vector<Rep> reps;
     int64_t singles = 0;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), direct_key, plan->dmap, reps, singles);
+    const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
+    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs), direct_key,
+                             plan->dmap, reps, singles);
+    if (plan->n_dcls == -2) return decline(plan, POOR_REASON);
     if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
     plan->near_pairs = singles;
     plan->pairs = n_blocks * n_seg * n_seg;
@@ -472,7 +488,9 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         };
         std::vector<Rep> qreps;
         int64_t qsingles = 0;
-        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), q_key, &plan->qmap, qreps, qsingles);
+        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(n_seg * n_seg), q_key,
+                                 &plan->qmap, qreps, qsingles);
+        if (plan->n_qcls == -2) return decline(plan, POOR_REASON);
         if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
         plan->q_pairs = n_seg * n_seg;
         plan->qrep_code.resize(qreps.size());

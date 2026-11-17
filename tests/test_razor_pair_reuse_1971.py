@@ -453,6 +453,69 @@ def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
     np.testing.assert_array_equal(y, off)
 
 
+def _random_wires(n=8, seed=3):
+    """Wires of random place, direction and length: hardly two pairs alike,
+    so nearly every pair is its own class."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        p = rng.uniform([-4.0, -4.0, 6.0], [4.0, 4.0, 10.0])
+        d = rng.normal(size=3)
+        out.append(np.array([p, p + rng.uniform(2.0, 4.0) * d / np.linalg.norm(d)]))
+    return out
+
+
+POOR = "too few shared pairs to repay the plan"
+
+
+@_needs_cert
+@pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
+def test_a_deck_that_compresses_poorly_declines(ground):
+    """The census stops once its classes pass MAX_CLASS_FRACTION (3/4) of
+    its pairs (`_razor_pair_reuse_core.h`): the plan's memory grows with its
+    classes (~200 B each at the census's peak), so a deck whose pairs are
+    nearly all distinct would cost that for little gain. It declines with
+    its reason, reported in `pair_reuse_declined`, and fills as off bit for
+    bit; a deck that compresses well (the triangle and dipoles, well under 3/4)
+    still reuses."""
+    wires = _random_wires()
+    off = _solver(wires, False, GROUNDS[ground]).compute_port_solution().y
+    razor._PAIR_REUSE_ROUTE.clear()
+    s = _solver(wires, True, GROUNDS[ground])
+    y = s.compute_port_solution().y
+    assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
+    assert s.pair_reuse_declined == POOR
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] == POOR and st["classes"] == 0, st
+    np.testing.assert_array_equal(y, off)
+    # the declined plan is cached: a second fill does not re-run the census
+    b0, f0 = _cache()
+    _solver(wires, True, GROUNDS[ground]).compute_port_solution()
+    assert _cache() == (b0, f0 + 1)
+    # not every deck: one that compresses is served
+    razor._PAIR_REUSE_ROUTE.clear()
+    good = _solver(_triangle(), True, GROUNDS[ground])
+    good.compute_port_solution()
+    assert good.pair_reuse_declined is None
+    assert razor._PAIR_REUSE_ROUTE.get("reuse", 0) == 1
+
+
+@_needs_cert
+def test_a_deck_that_compresses_poorly_declines_on_the_cxx_route(monkeypatch):
+    wires = _random_wires()
+    monkeypatch.setattr(razor, "_RAZOR_CXX", True)
+    off = _solve(wires, False, ground=SOMM)
+    ctx = razor._cxx_context()
+    before = dict(ctx.counters)
+    y = _solve(wires, True, ground=SOMM)
+    after = ctx.counters
+    assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
+    assert after["reuse_declined"] == before["reuse_declined"] + 1
+    assert after["reuse_fills"] == before["reuse_fills"]
+    assert ctx.reuse_declined_reason == POOR
+    np.testing.assert_array_equal(y, off)
+
+
 # ------------------------------------------------------------ the declared drift
 
 
