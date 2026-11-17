@@ -17,9 +17,12 @@
 #include "_mw_times.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -719,6 +722,372 @@ const Grid &get_grid_reading(cd eps_t, double k2, double r_max, double zp_min, d
                              size_t B, double ground_z, uintptr_t cancel_flag) {
     const Reads r{above, A, below, B, ground_z};
     return ensure_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, r_min, cancel_flag, &r);
+}
+
+// ---- the anchored grid (momwire#1847, `transmitted_anchors`) ----------------
+//
+// `_transmitted_anchors.get_grid`: a sweep point's below->above grid as the
+// degree-7 Lagrange blend, in ln f, of exact grids (ANCHORS) tabulated at
+// F_REF * 1.1**j on a lattice fixed in metres, each at the soil's own eps_t
+// there. Each line spells the Python line it copies. CPython's `math.*` are
+// libm's; the two numpy calls on the lattice (`np.exp` of the z' ladder's
+// `np.linspace`, and the anchor fill's `np.exp` of the R nodes, which
+// `fill_nodes` shares with the exact grid) are libm's wherever numpy hands
+// them to libm, which on x86-64 is every dispatch below AVX-512 (the hosted
+// app's level, avx2). numpy's AVX-512 exp and log differ from libm's in the
+// last bit on a few per cent of arguments, so on such a box the two blends
+// agree to the anchors' frequency interpolation rather than bit for bit.
+//
+// The anchors fill node by node as the reads ask (`fill_nodes`, as
+// `get_grid_reading` fills the exact grid), and the blend sums only the nodes
+// read: a node is its own arithmetic, so each one held is the whole blend's
+// bit for bit. The lattice is fixed in metres, so a deck's pairs read the same
+// nodes at every frequency of a sweep, and a later point in the same process
+// fills no anchor node its stencil already holds.
+//
+// NOT ported: `_somm_disk_cache`'s copy of each anchor. The anchors live in
+// this process only, so an executable run once per frequency fills its eight
+// anchors on every run.
+
+namespace {
+
+constexpr double ANCHOR_F_REF_HZ = 1.0e6;
+constexpr int64_t ANCHOR_POINTS = 8;
+constexpr int Q_DIGITS = 12;
+constexpr int64_t LADDER_BUCKETS[] = {9, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512};
+constexpr size_t ANCHORS_MAX = 96, BLENDS_MAX = 64;
+constexpr double C_LIGHT = 299792458.0;  // `_sommerfeld._C_LIGHT`
+
+// `math.log(1.1)`: libm's, at run time (a constant the compiler folds is its
+// own correctly rounded one, which libm need not be).
+double anchor_step() {
+    static const double s = [] {
+        volatile double x = 1.1;
+        return std::log(x);
+    }();
+    return s;
+}
+
+// `_f_anchor(j)`
+double f_anchor(int64_t j) { return ANCHOR_F_REF_HZ * std::exp(anchor_step() * static_cast<double>(j)); }
+
+// `_eps_at(eps_r, q, omega)`
+cd eps_at(double eps_r, double q, double omega) { return cd(eps_r, -q / omega); }
+
+// `k_medium(_eps_at(eps_r, q, 2 pi f), 2 pi f / C)` at anchor j's frequency.
+cd anchor_k_m(double eps_r, double q, double fj) {
+    const double om = 2.0 * PI * fj;
+    return somm_below::k_medium(eps_at(eps_r, q, om), om / C_LIGHT);
+}
+
+int64_t ladder_bucket(int64_t n) {
+    for (int64_t b : LADDER_BUCKETS)
+        if (n <= b) return b;
+    return -1;
+}
+
+// `_Lattice`: the metres-fixed lattice every anchor and blend of a family
+// tabulates on.
+struct Lattice {
+    double r_min = 0, r_max = 0, lnr0 = 0, th_min = 0, dth = 0;
+    int64_t n_r = 0, n_th = 0;
+    std::vector<double> zp_nodes;
+};
+
+Lattice make_lattice(double r_min, double r_max, std::vector<double> zp_nodes) {
+    Lattice L;
+    L.r_min = r_min;
+    L.r_max = r_max;
+    L.zp_nodes = std::move(zp_nodes);
+    L.lnr0 = std::log(L.r_min) - static_cast<double>(PAD_ROWS) * R_STEP_LOG;
+    L.n_r = static_cast<int64_t>(std::ceil(std::log(L.r_max / L.r_min) / R_STEP_LOG)) + 1 + 2 * PAD_ROWS;
+    L.th_min = grazing_floor(L.r_max, L.zp_nodes[0]);
+    // `math.degrees` (180 / pi times x) and Python's half-even `round`
+    const double deg = (180.0 / PI) * L.th_min;
+    const int64_t n_int = std::max<int64_t>(static_cast<int64_t>(std::nearbyint((90.0 - deg) / DTH_DEG)), 4);
+    L.n_th = n_int + 1;
+    L.dth = (0.5 * PI - L.th_min) / static_cast<double>(n_int);
+    return L;
+}
+
+// What one request blends: its soil curve, stencil, weights and lattice.
+struct Plan {
+    double eps_r = 0, q = 0, u = 0;
+    int64_t js[ANCHOR_POINTS] = {};
+    double w[ANCHOR_POINTS] = {};
+    Lattice lat;
+};
+
+// `_lattice(...)`: false (and `why`) where Python returns None.
+bool lattice(double f_hz, const Plan &p, double r_max, double zp_min, double zp_max, bool has_r_min,
+             double r_min, Lattice &out, std::string &why) {
+    const double lam_p = C_LIGHT / f_hz;
+    const double octave_top =
+        ANCHOR_F_REF_HZ * std::pow(2.0, std::ceil(std::log2(f_hz / ANCHOR_F_REF_HZ) - 1e-12));
+    const double lo_default = R_MIN_LAMBDA_P * C_LIGHT / octave_top;
+    const double want = has_r_min ? r_min : lo_default;
+    // on the log lattice exp(m * R_STEP_LOG) metres, snapped down
+    const double r_lo = std::exp(R_STEP_LOG * std::floor(std::log(want) / R_STEP_LOG + 1e-12));
+    const double r4 = 4.0 * r_lo;
+    const double r_hi = somm_core::r1_bucket_wl(r4 > r_max ? r4 : r_max);  // max(r_max, 4 r_lo)
+    if (r_hi > R_CAP_LAMBDA_P * lam_p) {
+        why = "r-cap";
+        return false;
+    }
+    const double lo = std::fabs(zp_min), hi = std::fabs(zp_max);
+    std::vector<double> zp_nodes;
+    if (hi <= lo * (1.0 + 1e-9)) {
+        zp_nodes.push_back(lo);
+    } else {
+        int64_t need = LADDER_MIN;
+        for (int64_t j : p.js) {
+            const cd k_m = anchor_k_m(p.eps_r, p.q, f_anchor(j));
+            need = std::max(need, static_cast<int64_t>(ladder_nodes(lo, hi, 2.0 * PI / py_abs(k_m)).size()));
+        }
+        const int64_t n = ladder_bucket(need);
+        if (n < 0) {
+            why = "ladder-bucket";
+            return false;
+        }
+        // np.exp(np.linspace(log(lo), log(hi), n)), spelled as `ladder_nodes`
+        const double start = std::log(lo), stop = std::log(hi);
+        const double step = (stop - start) / static_cast<double>(n - 1);
+        zp_nodes.resize(static_cast<size_t>(n));
+        for (int64_t i = 0; i < n; i++) {
+            const double y = (i == n - 1) ? stop : static_cast<double>(i) * step + start;
+            zp_nodes[static_cast<size_t>(i)] = std::exp(y);
+        }
+    }
+    for (int64_t j : p.js) {
+        const double fj = f_anchor(j);
+        const double lam_pj = C_LIGHT / fj;
+        const double lam_mj = 2.0 * PI / py_abs(anchor_k_m(p.eps_r, p.q, fj));
+        if (r_hi > R_CAP_LAMBDA_P * lam_pj * (1.0 + 1e-9)) {
+            why = "anchor-r-cap";
+            return false;
+        }
+        if (r_lo < R_MIN_FLOOR_LAMBDA_P * lam_pj) {
+            why = "anchor-r-min-floor";
+            return false;
+        }
+        if (hi > ZPRIME_MAX_LAMBDA_M * lam_mj * (1.0 + 1e-9)) {
+            why = "anchor-deeper-than-ladder";
+            return false;
+        }
+    }
+    out = make_lattice(r_lo, r_hi, std::move(zp_nodes));
+    return true;
+}
+
+// `get_grid`'s plan up to the blend: false (and `why`) where it returns None.
+bool plan(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, bool has_r_min,
+          double r_min, Plan &p, std::string &why) {
+    const double f_hz = omega / (2.0 * PI);
+    if (!(f_hz > 0.0) || eps_t.imag() > 0.0) {
+        why = "not-a-soil";
+        return false;
+    }
+    // `_soil`: q = sigma / eps0 to `_Q_DIGITS` significant digits, through
+    // the decimal string Python's `f"{q:.11e}"` spells (both correctly rounded)
+    p.eps_r = eps_t.real();
+    p.q = -eps_t.imag() * omega;
+    if (p.q != 0.0) {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%.*e", Q_DIGITS - 1, p.q);
+        p.q = std::strtod(buf, nullptr);
+    }
+    // `_stencil` and `_weights`: anchor j sits at u = j; exactly 1 and 0s on
+    // a node
+    p.u = std::log(f_hz / ANCHOR_F_REF_HZ) / anchor_step();
+    const int64_t j0 = static_cast<int64_t>(std::floor(p.u)) - ANCHOR_POINTS / 2 + 1;
+    for (int64_t i = 0; i < ANCHOR_POINTS; i++) p.js[i] = j0 + i;
+    for (int64_t a = 0; a < ANCHOR_POINTS; a++) {
+        double w = 1.0;
+        for (int64_t b = 0; b < ANCHOR_POINTS; b++)
+            if (b != a) w *= (p.u - static_cast<double>(p.js[b])) / static_cast<double>(p.js[a] - p.js[b]);
+        p.w[a] = w;
+    }
+    if (!lattice(f_hz, p, r_max, zp_min, zp_max, has_r_min, r_min, p.lat, why)) return false;
+    if (p.lat.r_max > R_CAP_LAMBDA_P * (2.0 * PI / k2)) {
+        why = "r-cap";
+        return false;
+    }
+    // the serve plan checked its grazing angle against the EXACT grid's
+    // theta floor; a lattice whose floor is higher must not serve
+    double rmin_x, rmax_x, th_exact;
+    try {
+        grid_extent(k2, r_max, zp_min, has_r_min, r_min, rmin_x, rmax_x, th_exact);
+    } catch (const Refused &) {
+        why = "extent";
+        return false;
+    }
+    if (p.lat.th_min > th_exact * (1.0 + 1e-9) + 1e-15) {
+        why = "grazing-floor";
+        return false;
+    }
+    return true;
+}
+
+// `_set_lattice(g, lat, eps_t, k2, omega, mu)`, no node filled.
+Grid lattice_grid(const Lattice &L, cd eps_t, double k2, double omega, double mu) {
+    Grid g;
+    g.eps_t = eps_t;
+    g.k2 = k2;
+    g.omega = omega;
+    g.mu = mu;
+    g.k_m = somm_below::k_medium(eps_t, k2);
+    g.lam_p = 2.0 * PI / k2;
+    g.lam_m = 2.0 * PI / py_abs(g.k_m);
+    g.r_min = L.r_min;
+    g.r_cap = R_CAP_LAMBDA_P * g.lam_p;
+    g.r_max = L.r_max;
+    g.zp_nodes = L.zp_nodes;
+    g.n_zp = static_cast<int64_t>(L.zp_nodes.size());
+    g.zp_min = L.zp_nodes.front();
+    g.zp_max = L.zp_nodes.back();
+    g.lnr0 = L.lnr0;
+    g.dlnr = R_STEP_LOG;
+    g.n_r = L.n_r;
+    g.th_min = L.th_min;
+    g.th0 = L.th_min;
+    g.n_th = L.n_th;
+    g.dth = L.dth;
+    g.lnz0 = std::log(g.zp_min);
+    g.dlnz = g.n_zp > 1 ? (std::log(g.zp_max) - g.lnz0) / static_cast<double>(g.n_zp - 1) : 0.0;
+    const size_t npl = static_cast<size_t>(g.n_r) * static_cast<size_t>(g.n_th);
+    g.vals.assign(static_cast<size_t>(g.n_zp) * 5 * npl, cd(std::nan(""), std::nan("")));
+    g.have.assign(static_cast<size_t>(g.n_zp) * npl, 0);
+    return g;
+}
+
+// The anchor key, as Python's ("below-above-anchor", eps_r, q, j, lat.key(),
+// mu), and the blend's, as (eps_t, k2, omega, mu, lat.key()) -- rtol is
+// 1e-9 on every C++ route.
+using AnchorKey = Key;
+using BlendKey = std::array<double, 10>;
+
+template <class K>
+struct Fifo {  // `_evict_fifo`: the oldest entry out first
+    std::map<K, std::unique_ptr<Grid>> map;
+    std::deque<K> order;
+    size_t max;
+    explicit Fifo(size_t m) : max(m) {}
+    Grid *find(const K &k) {
+        auto it = map.find(k);
+        return it == map.end() ? nullptr : it->second.get();
+    }
+    Grid &add(const K &k, Grid &&g) {
+        while (map.size() >= max && !order.empty()) {
+            map.erase(order.front());
+            order.pop_front();
+        }
+        order.push_back(k);
+        return *(map[k] = std::unique_ptr<Grid>(new Grid(std::move(g))));
+    }
+    void clear() {
+        map.clear();
+        order.clear();
+    }
+};
+
+Fifo<AnchorKey> g_anchors(ANCHORS_MAX);
+Fifo<BlendKey> g_blends(BLENDS_MAX);
+AnchorStats g_anchor_stats;
+std::mutex g_anchor_mutex;
+
+const Grid *anchored(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                     bool has_r_min, double r_min, uintptr_t cancel_flag, const Reads *reads,
+                     std::vector<const Grid *> *parts, std::string *why_out) {
+    Plan p;
+    std::string why;
+    const bool served = plan(eps_t, k2, r_max, zp_min, zp_max, omega, has_r_min, r_min, p, why);
+    std::lock_guard<std::mutex> lock(g_anchor_mutex);
+    if (!served) {
+        g_anchor_stats.declined++;
+        if (why_out) *why_out = why;
+        return nullptr;
+    }
+    const Lattice &L = p.lat;
+    const double lk[5] = {L.r_min, L.r_max, L.zp_nodes.front(), L.zp_nodes.back(),
+                          static_cast<double>(L.zp_nodes.size())};
+    const BlendKey bkey{eps_t.real(), eps_t.imag(), k2, omega, mu, lk[0], lk[1], lk[2], lk[3], lk[4]};
+    Grid *bg = g_blends.find(bkey);
+    if (bg == nullptr) {
+        bg = &g_blends.add(bkey, lattice_grid(L, eps_t, k2, omega, mu));
+        g_anchor_stats.blends++;
+    }
+    Grid &B = *bg;
+    const mw_times::Scope timed(mw_times::ground);
+    const std::vector<uint8_t> need = reads ? read_nodes(B, reads->above, reads->A, reads->below, reads->B,
+                                                         reads->ground_z)
+                                            : std::vector<uint8_t>(B.have.size(), 1);
+    std::vector<uint8_t> todo(need.size(), 0);
+    bool any = false;
+    for (size_t q = 0; q < need.size(); q++)
+        if (need[q] && !B.have[q]) todo[q] = 1, any = true;
+    if (!any && parts == nullptr) return &B;
+    Grid *a[ANCHOR_POINTS];
+    for (int64_t k = 0; k < ANCHOR_POINTS; k++) {
+        const AnchorKey akey{p.eps_r, p.q, static_cast<double>(p.js[k]), lk[0], lk[1], lk[2], lk[3], lk[4], mu};
+        Grid *g = g_anchors.find(akey);
+        if (g == nullptr) {
+            const double omega_j = 2.0 * PI * f_anchor(p.js[k]);
+            g = &g_anchors.add(akey, lattice_grid(L, eps_at(p.eps_r, p.q, omega_j), omega_j / C_LIGHT, omega_j, mu));
+            g_anchor_stats.anchor_fills++;
+        }
+        if (missing(*g, todo)) {
+            mw_times::count_built();
+            g_anchor_stats.nodes_filled += static_cast<int64_t>(fill_nodes(*g, todo, cancel_flag));
+        }
+        a[k] = g;
+    }
+    // `vals = a._vals * w if vals is None else vals + a._vals * w`, node by
+    // node: numpy's complex product by the weight as (w, 0), then the sum
+    const size_t npl = static_cast<size_t>(B.n_r) * static_cast<size_t>(B.n_th);
+    for (size_t q = 0; q < todo.size(); q++) {
+        if (!todo[q]) continue;
+        const size_t k0 = q / npl, at = q % npl;
+        for (size_t c = 0; c < 5; c++) {
+            const size_t i = (k0 * 5 + c) * npl + at;
+            cd v = xmul(a[0]->vals[i], cd(p.w[0], 0.0));
+            for (int64_t k = 1; k < ANCHOR_POINTS; k++) v = c_add(v, xmul(a[k]->vals[i], cd(p.w[k], 0.0)));
+            B.vals[i] = v;
+        }
+        B.have[q] = 1;
+    }
+    if (parts) {
+        parts->clear();
+        for (int64_t k = 0; k < ANCHOR_POINTS; k++) parts->push_back(a[k]);
+    }
+    return &B;
+}
+
+}  // namespace
+
+const Grid *anchored_grid(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega, double mu,
+                          bool has_r_min, double r_min, uintptr_t cancel_flag, std::vector<const Grid *> *parts,
+                          std::string *why) {
+    return anchored(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has_r_min, r_min, cancel_flag, nullptr, parts,
+                    why);
+}
+
+const Grid *anchored_grid_reading(cd eps_t, double k2, double r_max, double zp_min, double zp_max, double omega,
+                                  double mu, double r_min, const double *above, size_t A, const double *below,
+                                  size_t B, double ground_z, uintptr_t cancel_flag) {
+    const Reads r{above, A, below, B, ground_z};
+    return anchored(eps_t, k2, r_max, zp_min, zp_max, omega, mu, true, r_min, cancel_flag, &r, nullptr, nullptr);
+}
+
+AnchorStats anchor_stats() {
+    std::lock_guard<std::mutex> lock(g_anchor_mutex);
+    return g_anchor_stats;
+}
+
+void anchor_reset() {
+    std::lock_guard<std::mutex> lock(g_anchor_mutex);
+    g_anchors.clear();
+    g_blends.clear();
+    g_anchor_stats = AnchorStats();
 }
 
 // ---- the projection ---------------------------------------------------------
