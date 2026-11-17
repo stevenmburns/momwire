@@ -225,12 +225,7 @@ static const int MW_BLOCK = 64;
 // build (no libmvec; MW_NI_SIMD compiles out). There each node was a libm
 // call and the step was ~44 % of an sse2 buried fill. The GCC avx2 build
 // keeps libmvec's `_ZGVdN4v_*`, so its tables do not move; macOS keeps libm.
-// MinGW-w64 GCC (_WIN32, the single-file Windows executables) is GCC with
-// no libmvec, so its avx2 build had neither form and each node was a libm
-// call there too. It takes mw_vmath as MSVC does; MW_NI_VMATH_LIBM
-// (experiment only, windows-static.yml) keeps the libm calls, to measure it.
-#if MW_VMATH_X86 && (defined(_MSC_VER) || (defined(_WIN32) && !defined(MW_NI_VMATH_LIBM)) || \
-                     (!defined(__AVX2__) && !defined(__APPLE__)))
+#if MW_VMATH_X86 && (defined(_MSC_VER) || (!defined(__AVX2__) && !defined(__APPLE__)))
 #define MW_NI_VMATH 1
 #if defined(__AVX2__)
 typedef mw_vmath::avx2 vmath_backend;
