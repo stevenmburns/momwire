@@ -261,6 +261,7 @@ py::dict reuse_stats(const ReusePlanHandle &h) {
     d["census_seconds"] = p.census_seconds;
     d["nbytes"] = p.nbytes();
     d["budget_bytes"] = p.budget_bytes;
+    d["census_peak_bytes"] = p.census_peak_bytes;
     d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
     return d;
 }
@@ -1629,7 +1630,7 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK: later plans decline past `direct` direct classes or `remainder` "
           "remainder classes (0: the int32 coding's own limit only).");
     m.def("razor_reuse_plan_budget", &mw::razor::reuse::set_plan_budget, py::arg("bytes"),
-          "TEST HOOK: later plans decline past `bytes` of plan (<= 0: PLAN_BUDGET_BYTES).");
+          "TEST HOOK: later plans decline past `bytes` of plan and census (<= 0: PLAN_BUDGET_BYTES).");
     m.attr("razor_reuse_plan_budget_bytes") = static_cast<int64_t>(mw::razor::reuse::PLAN_BUDGET_BYTES);
     m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
     m.def("razor_reuse_small_deck_segs", &mw::razor::reuse::small_deck_segs, py::arg("finite"),
