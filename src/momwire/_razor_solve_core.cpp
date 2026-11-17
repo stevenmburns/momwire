@@ -449,6 +449,16 @@ void SolveContext::reuse_begin(const SolveInputs &in) {
         counters.reuse_declined++;
         return;
     }
+    // A small deck: the census costs about what its fill saves
+    // (`reuse::SMALL_DECK_SEGS_FREE`). The composing ground is this route's
+    // only finite one (the reflection coefficient's fold stays in Python).
+    const int64_t small = reuse::small_deck_segs(in.compose);
+    if (in.pair_reuse != 2 && in.seg_h.shape(0) < small) {
+        reuse_declined_reason_ =
+            "too few segments to repay the plan (N < " + std::to_string(small) + ")";
+        counters.reuse_declined++;
+        return;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     const ptrdiff_t n = in.s_a.shape(0);
     reuse::Geometry g;
