@@ -11,6 +11,7 @@
 #include "_nec4_seam_core.h"
 #include "_nec5_deck_core.h"
 #include "_somm_below_fill_core.h"
+#include "_near_interface_eval.h"  // FeatureRequest (momwire#1849)
 
 #include <memory>
 #include <string>
@@ -103,7 +104,8 @@ void register_nec5_deck(py::module_ &m) {
     // cblas_ddot (the contact correction's real products), as addresses.
     m.def(
         "sinusoidal_fill_dump",
-        [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole) -> std::string {
+        [](py::bytes latin1, std::vector<uintptr_t> blas, std::size_t whole,
+           const std::vector<std::string> &features) -> std::string {
             if (blas.size() != 7) throw py::value_error("blas: seven addresses");
             mw::sinusoidal::FillLinalg la;
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
@@ -114,14 +116,18 @@ void register_nec5_deck(py::module_ &m) {
             la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[5]);
             la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
             const std::string text = latin1;
+            const ni_eval::FeatureRequest asked(features);  // for this fill only (momwire#1849)
             py::gil_scoped_release nogil;
             SinBelowSource below;
             return mw::sinusoidal::dump_fill(text, la, whole);
         },
         py::arg("latin1"), py::arg("blas"), py::arg("whole") = 64,
+        py::arg("features") = std::vector<std::string>{},
         "The C++ sinusoidal free-space fill and port solve (Z, coefficients, Y) "
         "at every operating point the NEC-4.2 build makes of a deck "
-        "(scripts/core_split/sinusoidal_fill_compare.py writes the Python side).");
+        "(scripts/core_split/sinusoidal_fill_compare.py writes the Python side). "
+        "`features`: opt-in features (their `momwire._features` names) "
+        "requested for this fill only.");
     // `sinusoidal_galerkin_fill_dump` (the C++ SG fill, test-facing only) was
     // removed with the SG C++ run half; last present at 4ec7912d.
     m.def(
