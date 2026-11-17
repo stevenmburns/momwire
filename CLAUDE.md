@@ -84,8 +84,16 @@ byte-identical.**
 
 **Adding a feature.**
 - Add one `Feature(...)` entry with `reach=1`, its issue, `since`, `kind`, a
-  kwarg and `paths`.
-- Read it with `enabled(name, kwarg_value)` at the call site.
+  kwarg, `paths` and `solvers`: the solver families that honour it (each
+  class's `FEATURE_SOLVER`, momwire#1980).
+- A feature with a kwarg is resolved in its families' constructors by
+  `_features.bind(self, self.FEATURE_SOLVER, name=value, ...)`, which refuses a
+  constructor that skips one its family honours
+  (`tests/test_feature_solvers_1980.py`). One with no kwarg is read with
+  `enabled(name)` where it runs.
+- Line 2 names a feature only where the running solver honours it
+  (`stamp(solver=...)`, from the basis by `basis_solver`); an exe carrying a
+  feature its formulation ignores lists it in `EXE_IGNORED`.
 - Mark its tests `@pytest.mark.reach(1)`.
 - `paths` lists only the feature's own test files. A PR that also edits a
   shared file such as `bspline.py` is therefore selected as stable path, with

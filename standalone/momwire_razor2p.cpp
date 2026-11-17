@@ -372,6 +372,23 @@ const ExeFeature EXE_FEATURES[] = {
     {"crossing_above_rule", 8, false},
 };
 
+// The carried features this executable's formulation ignores, by BASIS (the
+// registry's `Feature.solvers`, read through `_features.basis_solver`;
+// tests/test_feature_solvers_1980.py holds the two equal): razor-2p's route
+// accepts crossing_above_rule and, as Python's razor-2p, does not read it.
+// Such a feature runs as before (it changes nothing) and is never named on
+// line 2, as `_features.stamp` names only what the running solver honours
+// (momwire#1980).
+const char *const EXE_IGNORED[][2] = {
+    {"razor-2p", "crossing_above_rule"},
+};
+
+bool feature_honoured_here(const std::string &name) {
+    for (const auto &row : EXE_IGNORED)
+        if (std::string(BASIS) == row[0] && name == row[1]) return false;
+    return true;
+}
+
 // This executable's level in support/hierarchy.toml, as
 // `_features.current_level("exe", basis=...)` places it.
 int exe_level() {
@@ -467,10 +484,12 @@ int feature_refusal() {
     // The C++ route requests the default-on features from the start
     // (`ni_eval`); one set off here, or outside this level's reach, is
     // withdrawn. Asked on, a default-here one is already requested and
-    // unstamped; any other is requested and stamped.
-    std::vector<std::string> stamped, withdrawn;
+    // unstamped; any other is requested, and stamped where this formulation
+    // honours it (`feature_honoured_here`).
+    std::vector<std::string> stamped, unstamped, withdrawn;
     for (const std::string &name : names)
-        if (!feature_default_here(name)) stamped.push_back(name);
+        if (!feature_default_here(name))
+            (feature_honoured_here(name) ? stamped : unstamped).push_back(name);
     for (const ExeFeature &f : EXE_FEATURES) {
         if (!f.default_on) continue;
         const bool asked_on = std::find(names.begin(), names.end(), f.name) != names.end();
@@ -480,6 +499,10 @@ int feature_refusal() {
     if (!stamped.empty()) {
         rt_serial::configure_features(stamped, true);
         rt_threads::configure_features(stamped, true);
+    }
+    if (!unstamped.empty()) {
+        rt_serial::configure_features(unstamped, false);
+        rt_threads::configure_features(unstamped, false);
     }
     if (!withdrawn.empty()) {
         rt_serial::withdraw_features(withdrawn);
