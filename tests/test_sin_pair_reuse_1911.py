@@ -254,3 +254,13 @@ def test_the_sector_route_with_reuse_solves_as_without(ground, monkeypatch):
     # 1.3e-14 to 9.2e-14 against dense, which is the route's own agreement.
     assert abs(z["sector+reuse"] - z["sector"]) <= DRIFT * abs(z["sector"])
     assert abs(z["sector+reuse"] - z["dense"]) <= 1e-9 * abs(z["dense"])
+
+
+@pytest.fixture(autouse=True)
+def _reuse_on_small_decks(monkeypatch):
+    """These decks sit below the small-deck threshold on purpose (cheap) and
+    test the reuse itself, `pair_reuse=True`'s fused gather included, which
+    `"verify"` would bypass: the threshold is lowered here, and
+    `test_sin_pair_reuse_small_deck_1969` holds it."""
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_FREE", 0)
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_GROUND", 0)

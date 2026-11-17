@@ -177,3 +177,13 @@ def test_the_kernel_refuses_what_it_cannot_take():
             None,
             *m_args,
         )
+
+
+@pytest.fixture(autouse=True)
+def _reuse_on_small_decks(monkeypatch):
+    """These decks sit below the small-deck threshold on purpose (cheap) and
+    test the reuse itself, `pair_reuse=True`'s fused gather included, which
+    `"verify"` would bypass: the threshold is lowered here, and
+    `test_sin_pair_reuse_small_deck_1969` holds it."""
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_FREE", 0)
+    monkeypatch.setattr(pr, "SMALL_DECK_SEGS_GROUND", 0)

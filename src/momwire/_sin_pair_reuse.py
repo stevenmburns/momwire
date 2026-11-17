@@ -211,6 +211,31 @@ VERIFY_SAMPLES = 512
 #: it, is what turning this on needs.
 SECTOR_ROUTE = False
 
+#: Segments below which `pair_reuse` steps aside (`pair_reuse_declined`),
+#: the census costing more than a small deck's fill saves: in free space and
+#: over the PEC image, and over a finite ground (Sommerfeld or reflection
+#: coefficient), whose image term is dearer per pair and so repays sooner.
+#: `pair_reuse="verify"` ignores them, so a test can still check the reuse
+#: on a small deck. Measured, wall seconds per deck, warm, one resident
+#: process. Free space, Skylake, 4 threads, 101 frequencies (reuse off /
+#: the stored-tangent key / the canonical key):
+#:
+#:   deck     segs   off    stored  canonical
+#:   sfd_h5    203   0.91   1.09    1.10       (20 % slower)
+#:   sfd_h9    365   1.71   1.67    1.68
+#:   sfd_h13   529   2.62   2.18    2.24
+#:
+#: Over Sommerfeld, Skylake (momwire#1970's ladder), off -> on, 8 and 4
+#: threads:
+#:
+#:   deck     segs   8 threads      4 threads
+#:   gsfd_h1    41   1.12 -> 1.28   1.04 -> 1.29
+#:   gsfd_h3   123   1.73 -> 1.89   1.70 -> 1.71
+#:   gsfd_h5   203   2.50 -> 2.54   2.67 -> 2.30
+#:   gsfd_h9   365   5.22 -> 4.39   5.24 -> 4.01
+SMALL_DECK_SEGS_FREE = 400
+SMALL_DECK_SEGS_GROUND = 200
+
 #: Whether the plans key pairs in the orientation-canonical form
 #: (momwire#1969, module docstring). Off, every pair keys along its stored
 #: tangents and every code is 0, the classes as before.

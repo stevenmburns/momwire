@@ -197,6 +197,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_sin_pair_reuse_1911.py",
                 "tests/test_sin_pair_reuse_ground_1970.py",
                 "tests/test_sin_pair_reuse_canonical_1969.py",
+                "tests/test_sin_pair_reuse_small_deck_1969.py",
             ),
             label="pair reuse",
             summary=(
@@ -204,7 +205,8 @@ FEATURES: dict[str, Feature] = {
                 "copies the rest. nec5-bspline and nec42-bspline need the front "
                 "end's hint of which edge pairs share a pose; the sinusoidal "
                 "solver finds its own, in free space and over a perfect or "
-                "finite ground."
+                "finite ground, on decks of 400 segments or more (200 over a "
+                "finite ground), below which it costs more than it saves."
             ),
             # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
             # bspline: 1e-12. sinusoidal: the class map moves Z itself by
