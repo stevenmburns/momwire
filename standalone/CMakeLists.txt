@@ -265,6 +265,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_buried_core.cpp
   ${MW_SRC}/_razor_exact_core.cpp
   ${MW_SRC}/_exact_kernel_point_core.cpp
+  ${MW_SRC}/_exact_kernel_series_core.cpp  # momwire#1454: `exact_kernel_series`
   ${MW_SRC}/_nec5_deck_core.cpp
   ${MW_SRC}/_nec5_seam_core.cpp
   ${MW_SRC}/_nec5_razor_seam_core.cpp
