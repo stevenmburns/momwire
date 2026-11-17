@@ -393,6 +393,16 @@ def render_files(
 
 
 @_features.in_context("dropin")
+def _advise_long_exponents(text: str) -> None:
+    """momwire#1964: an exponent token past 20 characters, as a warning.
+    Not a refusal (momwire's reading is the deck's), an advisory; the
+    launchers show it only under MOMWIRE_ADVISORIES=stderr. A file's whole
+    text and each streamed structure (:func:`_stream_piece`) both pass here."""
+    note = long_exponent_note(long_exponent_tokens(text))
+    if note is not None:
+        warnings.warn(LongExponentToken(note), stacklevel=3)
+
+
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
@@ -433,11 +443,7 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
         return _printout.render_refusal(
             text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
         )
-    note = long_exponent_note(long_exponent_tokens(text))
-    if note is not None:
-        # momwire#1964: not a refusal (momwire's reading is the deck's), an
-        # advisory; the launchers show it only under MOMWIRE_ADVISORIES=stderr.
-        warnings.warn(LongExponentToken(note), stacklevel=2)
+    _advise_long_exponents(text)
     structures = split_structures(text)
     if structures is not None:
         return _render_chain(structures, basis=basis)
@@ -809,6 +815,8 @@ def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str,
                 closing=False,
             )
             return printout, took is not None
+        # A structure cut at NX never reaches `render`, which advises a file.
+        _advise_long_exponents(structure.deck_text)
         answered = _answer(
             structure.deck_text, basis=basis, echo_text=structure.echo_text
         )

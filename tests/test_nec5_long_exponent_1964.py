@@ -180,3 +180,18 @@ def test_the_cxx_reader_says_the_same_on_every_fixture_deck(acc):
         if got != _py(text):
             bad.append(path.name)
     assert not bad, bad[:5]
+
+
+def test_a_streamed_structure_cut_at_nx_warns_too():
+    """SimNEC drives the NEC-5 slot as a stream (``- -``), each structure cut
+    at NX answered alone; the advisory reaches those pieces as it reaches a
+    file's whole text."""
+    first = _deck("1.000000000000000e+00").replace("EN\n", "NX\n")
+    with pytest.warns(LongExponentToken, match=r"momwire#1964"):
+        out, go_on = _shell._stream_piece(first, basis="razor-2p")
+    assert go_on and "NEC ERROR" not in out
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", LongExponentToken)
+        _shell._stream_piece(
+            _deck("1.00000000000000e+00").replace("EN\n", "NX\n"), basis="razor-2p"
+        )
