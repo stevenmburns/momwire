@@ -1,0 +1,10 @@
+CM RP average-gain probe z_both0 (momwire, phi quadrature)
+CM both steps zero
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 3 3 1001 30 0 0 0 0 0
+XQ
+EN

@@ -1103,6 +1103,14 @@ def _e(value: float, width: int, digits: int) -> str:
     return f"{value:{width}.{digits}E}"
 
 
+def _e_nan(value: float, width: int, digits: int) -> str:
+    """:func:`_e`, with a NaN as x13 prints one (``NaN``, right-aligned):
+    the average gain over a zero step (``tests/fixtures/rp_average_quadrature``)."""
+    if math.isnan(value):
+        return "NaN".rjust(width)
+    return _e(value, width, digits)
+
+
 def _e_fortran(value: float, width: int, digits: int) -> str:
     """A ``1PEw.d`` cell as Fortran writes it for a THREE-digit exponent:
     the ``E`` is dropped to keep the width (``1.75281-107``, captured on the
@@ -1812,13 +1820,13 @@ def _pattern(block: PatternBlock) -> list[str]:
             "",
             "",
             "   AVERAGE POWER GAIN="
-            + _e(block.average_power_gain, 12, 5)
+            + _e_nan(block.average_power_gain, 12, 5)
             + "       SOLID ANGLE USED IN AVERAGING=("
             + f"{block.solid_angle_pi:7.4f}"
             + ")*PI STERADIANS.",
             "",
             "   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS ="
-            + _e(block.power_radiated_4pi, 12, 5)
+            + _e_nan(block.power_radiated_4pi, 12, 5)
             + " WATTS",
         ]
     if block.normalized_kind:

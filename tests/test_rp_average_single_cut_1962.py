@@ -50,8 +50,8 @@ DECKS = {
 }
 IDS = [stem for _d, stem in DECKS]
 # Numbers are not compared: momwire's fields differ from x13's in their last
-# digits (another solver), and its average gain over a partial phi range is
-# not x13's yet (a separate gap; the control's trailer is compared by shape).
+# digits (another solver); the average's quadrature is test_rp_average_
+# quadrature's, and the control's trailer is compared here by shape.
 _NUMBER = re.compile(r"-?\d+\.\d+(?:E[-+]\d+)?|NaN")
 
 
