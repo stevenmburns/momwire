@@ -1256,6 +1256,8 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     rq.d_theta_deg = card.f(6);
     rq.d_phi_deg = card.f(7);
     rq.mode = nec5::Int(0);
+    // RP's tenth field, GNOR (`_pattern`'s `gnor_db=card.f(9)`)
+    rq.gnor_db = card.f(9);
     rp::PatternBlock b;
     try {
         b = rp::far_pattern(rq, mid, moment, r.pec ? 1 : r.finite ? 2 : 0, r.eps_r, r.sigma, freq, r.wavelength,
@@ -1285,6 +1287,10 @@ PrintPatternBlock pattern(Ctx &c, const nec5::Card &card, const RunResult &r, do
     out.solid_angle_pi = b.solid_angle_pi;
     out.power_radiated_4pi = b.power_radiated_4pi;
     out.directive = b.directive;
+    // XNDA's N digit: the NORMALIZED GAIN table, which a range leaves as it is
+    out.normalized_kind = b.normalized_kind;
+    out.normalization_db = b.normalization_db;
+    out.normalized = b.normalized;
     const double range_m = card.f(8);
     if (range_m == 0.0) return out;
     // `_at_range(block, range_m, freq, medium, grounded)`

@@ -774,7 +774,9 @@ def _tables(run: Nec4Run | Nec4Report) -> list[str]:
         body += gap(_SECTION_GAP)
     for block in run.patterns:
         body += _printout._pattern(block)
-        body += gap(_PATTERN_GAP)
+        # three blanks after a NORMALIZED GAIN table, five after a pattern
+        # alone: NEC-5's gaps, and NEC-4.2's (nec42_rp_normalized_gain)
+        body += gap(_printout._pattern_gap(block))
     return body
 
 
