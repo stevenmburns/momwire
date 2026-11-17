@@ -192,8 +192,11 @@ void served_table(const Card &card) {
     if (card.mnemonic != "RP") return;
     if (!card.i(0).is_zero()) unmeasured("RP mode " + S(card.i(0)));
     Int xnda = card.i(3);
+    // `_SERVED_XNDA`: X = 1, N = 0 to 5, D = 0 or 1, A = 0 to 3
     bool served = false;
-    for (int x : {1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013}) served = served || xnda == Int(x);
+    for (int n = 0; n < 6; n++)
+        for (int d = 0; d < 2; d++)
+            for (int a = 0; a < 4; a++) served = served || xnda == Int(1000 + 100 * n + 10 * d + a);
     if (!served) unmeasured("RP with XNDA " + S(xnda));
     if (card.f(8) < 0.0) unmeasured("RP at a negative range");
 }
