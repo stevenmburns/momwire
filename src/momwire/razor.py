@@ -1901,6 +1901,10 @@ class RazorSolver(
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "razor"
+
     # momwire#396: free space and all three grounds — the PEC image
     # (momwire#398 unit 2), the reflection-coefficient ground (unit 4) and
     # the Sommerfeld ground (unit 5) — for wires standing clear of the
@@ -4931,27 +4935,14 @@ class RazorSolver(
             plan, values, self._pair_reuse, q, t2.obs, geom["seg_t"], t2.seg_h
         )
 
+    @_near_interface.under_levers
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
         """`_assemble_Z_from_prepared_scoped` under this solver's
-        `factored_columns`, `height_sheet_recal`, `crossing_table` and
-        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
-        with (
-            _near_interface.factored_columns_scope(
-                getattr(self, "_factored_columns", False)
-            ),
-            _near_interface.height_sheet_recal_scope(
-                getattr(self, "_height_sheet_recal", False)
-            ),
-            _near_interface.crossing_table_scope(
-                getattr(self, "_crossing_table", False)
-            ),
-            _near_interface.crossing_sheet_retune_scope(
-                getattr(self, "_crossing_sheet_retune", False)
-            ),
-        ):
-            return self._assemble_Z_from_prepared_scoped(
-                geom, prepared, k, omega, restrict=restrict
-            )
+        near-interface levers (`_near_interface.under_levers`: momwire#1860,
+        #1956, set in one place since #1980)."""
+        return self._assemble_Z_from_prepared_scoped(
+            geom, prepared, k, omega, restrict=restrict
+        )
 
     def _assemble_Z_from_prepared_scoped(
         self, geom, prepared, k, omega, *, restrict=None

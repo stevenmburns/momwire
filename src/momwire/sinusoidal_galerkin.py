@@ -361,6 +361,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
+from . import _near_interface
 from . import _medium_spec, _schedule, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
 from . import _wire_loading, _wire_spec
 from . import _buried_quadrature
@@ -1384,6 +1385,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         "BSplineSolver, or join both copies to the same wires at each end so "
         "they merge as one"
     )
+
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "sinusoidal_galerkin"
 
     # momwire#396: differs from `SinusoidalSolver.capabilities` in exactly
     # the two axes this class's docstring describes — junction_ports and
@@ -4529,6 +4534,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         return True
 
+    # The near-interface levers (momwire#1980): every one explicitly off
+    # here, since this family honours none (`_features.Feature.solvers`).
+    @_near_interface.under_levers
     def _assemble_Z(self, geom, k, eta=None):
         """Galerkin system matrix G (basis i tested against source basis j).
 
