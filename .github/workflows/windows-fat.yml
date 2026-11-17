@@ -198,11 +198,37 @@ jobs:
       # executable picks by CPU here (no MOMWIRE_FORCE_VARIANT); the
       # one-variant build of the variant that CPU should get answers under the
       # same emulated CPU (the DLLs pick their kernels by CPUID too).
+      # -chip_check_exe_only: the check covers the executable's own
+      # instructions -- where both copies live -- and not the DLLs', which
+      # are the one-variant builds' own and fault under -wsm on their own
+      # (the diagnostic step above).
       - uses: petarpetrovt/setup-sde@v6.0
         if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
         with:
           environmentVariableName: SDE_PATH
           sdeVersion: 10.13.1
+      # What the DLL set does under SDE on its own: a program with no momwire
+      # code (isa_probe.c), against the same VC++ runtime. Run 44010094276:
+      # under -wsm the one-variant sse2 executables (the shipped ones) and
+      # the fat ones alike faulted inside VCRUNTIME140.dll (`vmovdqu ymm0`,
+      # its memcpy). Diagnostic, not a gate.
+      - name: SDE and the VC++ runtime alone (diagnostic)
+        if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          New-Item -ItemType Directory -Force dist\probe | Out-Null
+          Copy-Item dist\one\*.dll dist\probe
+          cl /nologo /O2 /MD scripts\windows_fat\isa_probe.c /Fo:dist\probe\ /Fe:dist\probe\isa_probe.exe
+          (Get-Item dist\probe\vcruntime140.dll).VersionInfo | Select-Object FileVersion, ProductVersion | Format-List
+          "--- native"; & dist\probe\isa_probe.exe; "rc=$LASTEXITCODE"
+          foreach ($o in @(@(), @('-chip_check_exe_only'))) {
+            "--- sde -wsm $o"; & $sde -wsm @o -- dist\probe\isa_probe.exe 2>&1; "rc=$LASTEXITCODE"
+          }
+          "--- sde's chip-check options"; & $sde -long-help 2>&1 | Select-String -Pattern 'chip_check'
+          "--- sde -wsm, the shipped sse2 executable, -version"
+          & $sde -wsm -- dist\one\momwire-nec5-razor2p-sse2.exe -version 2>&1; "rc=$LASTEXITCODE"
       - name: SDE (wsm, snb -> sse2; hsw -> avx2), the picked path and three decks
         if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
         shell: pwsh
@@ -215,7 +241,7 @@ jobs:
               $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
               Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore
               $env:MW_EXE_TIMES = '1'
-              $v = (& $sde "-$cpu" -- $fat -version 2>&1) -join ' | '
+              $v = (& $sde "-$cpu" -chip_check_exe_only -- $fat -version 2>&1) -join ' | '
               $rc = $LASTEXITCODE
               Remove-Item Env:MW_EXE_TIMES
               "$($b[1]) under -$cpu : rc=$rc $v"
@@ -224,7 +250,7 @@ jobs:
               if ($want -eq 'avx2' -and $v -notmatch 'avx2 initializers') { "::error::$($b[1]) -$cpu ran no avx2 initializers"; $fail = 1 }
               venv\Scripts\python scripts/windows_fat/fat_compare.py $fat $want "dist\one\momwire-nec5-$($b[0])-$want.exe" `
                 tests/fixtures/razor_printout_3a/node_gap_two_sources.nec tests/fixtures/bspline_printout_buried/ab_hub16.nec `
-                tests/fixtures/eznec/decks/0068_nbs-yagi-ant-book-p-18-7.nec --auto --sde $sde --cpu $cpu
+                tests/fixtures/eznec/decks/0068_nbs-yagi-ant-book-p-18-7.nec --auto --sde $sde --cpu $cpu --sde-extra=-chip_check_exe_only
               if ($LASTEXITCODE) { $fail = 1 }
             }
           }
@@ -239,7 +265,7 @@ jobs:
             "=== $($b[1]) -wsm"
             $t0 = Get-Date
             venv\Scripts\python scripts/windows_fat/fat_compare.py "dist\fat\$($b[1]).exe" sse2 "dist\one\momwire-nec5-$($b[0])-sse2.exe" `
-              tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks --auto --sde $sde --cpu wsm
+              tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks --auto --sde $sde --cpu wsm --sde-extra=-chip_check_exe_only
             if ($LASTEXITCODE) { $fail = 1 }
             "  $([int]((Get-Date) - $t0).TotalSeconds) s"
           }
