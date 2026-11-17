@@ -135,9 +135,10 @@ class Symmetry:
 # ---------------------------------------------------------------------------
 
 
-def _gw(card: Card, wires: list[FlatWire]) -> None:
+def _gw(card: Card, wires: list[FlatWire], dialect: str = "nec2") -> None:
     """``GW`` — one straight wire divided into equal segments (spec
-    ``#gw--straight-wire``).  Nothing on the card is ignored."""
+    ``#gw--straight-wire``).  Nothing on the card is ignored; ``dialect``
+    only names the reader in the tapered-wire refusal."""
     tag, n_seg = card.i(0), card.i(1)
     if n_seg < 1:
         raise DeckError(f"segment count must be >= 1, got {n_seg}")
@@ -149,7 +150,7 @@ def _gw(card: Card, wires: list[FlatWire]) -> None:
         raise DeckError(
             "GW with a non-positive radius announces a tapered wire "
             "(GW + GC continuation), which is not part of this engine's "
-            "nec2 dialect"
+            f"{dialect} dialect"
         )
     wires.append(
         FlatWire(

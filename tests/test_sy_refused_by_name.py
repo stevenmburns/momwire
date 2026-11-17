@@ -71,3 +71,37 @@ def test_the_nec42_printout_names_its_own_dialect(deck):
     out = _nec4_slot.render(deck.read_text(), basis="sinusoidal")
     assert f" ***** NEC ERROR - {NEC4}" in out.splitlines()
     assert "nec2 dialect" not in out
+
+
+# The other sentences that name a dialect (GC, GF, and GW's tapered-wire one)
+# name the NEC-4.2 slot's own, as SY's does (#1967's follow-up).
+TAPERED = "GW 1 3 0 0 -.25 0 0 .25 0\nGE 0\nFR 0 1 0 0 299.7925\nEX 0 1 2 0 1\nXQ\nEN\n"
+DIPOLE = "GW 1 11 0 0 -.25 0 0 .25 .001\n"
+TAIL = "GE 0\nFR 0 1 0 0 299.7925\nEX 0 1 6 0 1\nXQ\nEN\n"
+OTHERS = {
+    "GC": (DIPOLE + "GC 0 0 1 .001 .002\n" + TAIL, "GC (tapered wire continuation)"),
+    "GF": ("GF 0\n" + DIPOLE + TAIL, "GF (numerical Green's function)"),
+    "GW": (TAPERED, "GW with a non-positive radius announces a tapered wire"),
+}
+
+
+@pytest.mark.parametrize("card", sorted(OTHERS))
+@pytest.mark.parametrize(
+    ("parse", "dialect"),
+    [(_nec2.parse_nec2, "nec2"), (_nec4.parse_nec4, "nec4")],
+    ids=["nec2", "nec4"],
+)
+def test_each_dialect_names_itself(card, parse, dialect):
+    text, opening = OTHERS[card]
+    with pytest.raises(DeckError) as raised:
+        parse(text)
+    message = str(raised.value)
+    assert message.startswith(opening), message
+    assert message.endswith(f"is not part of this engine's {dialect} dialect")
+
+
+@pytest.mark.parametrize("card", sorted(OTHERS))
+def test_the_nec42_printout_names_its_own_dialect_on_every_card(card):
+    out = _nec4_slot.render(OTHERS[card][0], basis="sinusoidal")
+    assert "is not part of this engine's nec4 dialect" in out, out[-2000:]
+    assert "nec2 dialect" not in out
