@@ -55,11 +55,13 @@ __all__ = [
     "COUNTS",
     "Plan",
     "expand",
+    "factor_reduced",
     "plan",
     "plan_weighted",
-    "reduce_matrix",
     "record",
+    "reduce_matrix",
     "reduce_rhs",
+    "solve_factored",
     "solve_reduced",
 ]
 
@@ -236,14 +238,14 @@ def reduce_matrix(Z, p, *, overwrite=False):
     if Z.flags.f_contiguous:
         return _reduce_fortran(Z, p)
     # C order: Zᵀ is F-contiguous and Qᵀ Zᵀ Q = (Qᵀ Z Q)ᵀ. Under
-    # `conj_test`, (Qᴴ Z Q)ᵀ = Qᵀ Zᵀ conj(Q): the two sides' weights swap.
+    # `conj_test`, (Q^H Z Q)ᵀ = Qᵀ Zᵀ conj(Q): the two sides' weights swap.
     if p.conj_test:
         p = replace(p, a=np.conj(p.a))
     return _reduce_fortran(Z.T, p).T
 
 
 def reduce_rhs(V, p):
-    """Qᵀ V (Qᴴ V under `conj_test`) for V of shape (n,) or (n, r): a new
+    """Qᵀ V (Q^H V under `conj_test`) for V of shape (n,) or (n, r): a new
     array of n_free rows."""
     W = np.array(V, dtype=np.complex128, copy=True)
     ra = p.row_a
@@ -278,7 +280,7 @@ def record(owner, planned):
 
 
 def solve_reduced(Z, V, p, *, overwrite=False):
-    """The reduced solve, x = Q y with (Qᵀ Z Q) y = Qᵀ V (Qᴴ under
+    """The reduced solve, x = Q y with (Qᵀ Z Q) y = Qᵀ V (Q^H under
     `conj_test`): the one step the dense routes (`BSplineSolver.
     _solve_reduced`) and the sector route's harmonics share. `V` is (n,) or
     (n, r); `overwrite` lets Z's own buffer hold the reduction and its LU.

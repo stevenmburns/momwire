@@ -11,7 +11,7 @@ the plan is `plan_weighted`, and harmonic h tests with the conjugate rows.
 What is held:
 
 - the algebra: `plan_weighted`'s Q spans the null space of weighted and
-  complex rows, its reduction is the dense Qᵀ Z Q (Qᴴ Z Q when testing with
+  complex rows, its reduction is the dense Qᵀ Z Q (Q^H Z Q when testing with
   the conjugate), and the reduced solve is the Schur answer;
 - a near-cancelled entry is refused by name, never divided by;
 - on the route, on: the reduction runs (the route word and `COUNTS`), no
