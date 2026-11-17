@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <set>
@@ -667,6 +668,18 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
 
 std::string internal_error_reason(const std::string &error_kind, const std::string &message) {
     return "INTERNAL ERROR IN MOMWIRE ENGINE - " + error_kind + ": " + message;
+}
+
+bool names_a_grazing_floor(const std::string &message) {
+    // `_below_interface._is_grazing_refusal`: each template up to its first
+    // field (BURIED_GRAZING_REFUSAL, BURIED_CROSS_GRAZING_REFUSAL)
+    static const char *const prefixes[] = {
+        "this deck's buried wires reach a below/below pair elevation of theta = ",
+        "this deck's cross-medium pairs reach an observer elevation of theta = ",
+    };
+    for (const char *p : prefixes)
+        if (message.compare(0, std::strlen(p), p) == 0) return true;
+    return false;
 }
 
 double np_pairwise_sum(const double *a, long long n) {
@@ -1515,11 +1528,14 @@ RunOutcome run_one(const Deck &d, const SeamEngine &engine, SeamResult &r,
     try {
         Prepared p = prepare(d, engine);
         // The solver's constructor and `compute_port_solution`'s front half:
-        // a NotImplementedError from the CONSTRUCTOR is `_prepare`'s
-        // refusal; anything else escapes the seam.
+        // a NotImplementedError is `_prepare`'s refusal, and so is a buried
+        // plan's grazing-floor ValueError (`_refuse_if_grazing`); anything
+        // else escapes the seam.
         const SeamEngine::Built built = engine.build(p);
         if (built.kind == SeamEngine::Built::refused || built.kind == SeamEngine::Built::raised) {
-            o.kind = built.kind == SeamEngine::Built::refused ? RunOutcome::refused : RunOutcome::raised;
+            const bool refused = built.kind == SeamEngine::Built::refused ||
+                                 (built.error_kind == "ValueError" && names_a_grazing_floor(built.message));
+            o.kind = refused ? RunOutcome::refused : RunOutcome::raised;
             o.error_kind = built.error_kind;
             o.message = built.message;
             return o;

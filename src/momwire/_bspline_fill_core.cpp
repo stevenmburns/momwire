@@ -32,6 +32,7 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -4084,6 +4085,59 @@ static void plan_extents(const std::vector<double> &plan_b, const std::vector<do
     q_min = q_all;
 }
 
+// `_pair_extents_below_numpy(x, y, d_b, rows, r1_cap)[1]`: the shallowest
+// angle over the node pairs INSIDE the cap (r1^2 <= cap^2) whose rho > 0
+// (momwire#1187), numpy's walk operation for operation: rho = sqrt(dx^2 +
+// dy^2), the ratio (d_i + d_j) / rho, its minimum, then one atan. Python
+// asks it only of a deck the all-pairs minimum puts under the floor with a
+// pair past the cap, and so does the fill: a rod's node count, run once.
+// Kept out of line so the served path's code is the one it was.
+[[gnu::noinline, gnu::cold]] static double capped_th_min(const std::vector<double> &plan_b,
+                                                        const std::vector<double> &d_b, double r1_cap) {
+    const size_t n = plan_b.size() / 3;
+    const double cap2 = r1_cap * r1_cap;
+    double ratio_min = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < n; i++)
+        for (size_t j = 0; j < n; j++) {
+            const double dx = plan_b[3 * i] - plan_b[3 * j], dy = plan_b[3 * i + 1] - plan_b[3 * j + 1];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = d_b[i] + d_b[j];
+            const double r1sq = rho2 + hh * hh;
+            const double rho = std::sqrt(rho2);
+            if (!(rho > 0.0) || !(r1sq <= cap2)) continue;
+            const double ratio = hh / rho;
+            // `np.min` over the kept ratios: a NaN wins
+            if (ratio != ratio || ratio < ratio_min) ratio_min = ratio;
+            if (ratio_min != ratio_min) return ratio_min;
+        }
+    return std::atan(ratio_min);
+}
+
+// `_below_interface.BURIED_GRAZING_REFUSAL.format(th=math.degrees(th_min),
+// floor=_SOMM_BELOW_TH_MIN_DEG, depth=float(np.min(d_b)) * 2)`: the below/below
+// plan's grazing-floor refusal, Python's ValueError, which `_serve._prepare`
+// and the NEC-4.2 slot refuse by name.
+[[gnu::noinline, gnu::cold, noreturn]] static void refuse_below_grazing(double th_min, const std::vector<double> &d_b) {
+    double dmin = d_b.empty() ? 0.0 : d_b[0];
+    for (double v : d_b) dmin = (v != v || dmin != dmin) ? std::numeric_limits<double>::quiet_NaN() : std::min(dmin, v);
+    char th_s[64], depth_s[64];
+    std::snprintf(th_s, sizeof th_s, "%.4g", th_min * (180.0 / PI_));
+    std::snprintf(depth_s, sizeof depth_s, "%.4g", dmin + dmin);
+    throw FrontValueError(
+        std::string("this deck's buried wires reach a below/below pair elevation of theta = ") + th_s +
+        " deg among the pairs inside the cap, below the 0.0166667 deg grazing floor the "
+        "below/below surfaces are tabulated from (the pair's two depths add to " + depth_s +
+        " m, and theta = atan2(depth sum, horizontal separation)). The floor is asked only of "
+        "pairs inside the cap \xe2\x80\x94 image distance R1 within 4 in-medium wavelengths, the "
+        "pairs whose remainder is evaluated; past it the remainder is served as zero "
+        "(momwire#1053, #1187). Below the floor the surfaces carry the lateral wave's "
+        "LOGARITHMIC structure \xe2\x80\x94 measured drift 1.1 to 3.3 of scale between 2 and "
+        "0.05 deg \xe2\x80\x94 which no uniform lattice resolves, and theta = 0 has no node at "
+        "all because h = 0 leaves the tail without its exponential decay. Bury the wires "
+        "deeper, shorten them, or wait for the log-spaced grazing band (momwire#553 U2's "
+        "recorded follow-up)");
+}
+
 std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
@@ -4199,9 +4253,15 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         plan_extents(plan_b, d_b, r1sq_max, q_min);
         r1_max = std::sqrt(r1sq_max);
         th_min = std::atan(std::sqrt(q_min));
-        // past the cap Python asks the floor of the pairs inside it only,
-        // which this walk does not: decline rather than choose differently
-        if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
+        // past the cap Python asks the floor of the pairs inside it only
+        // (`_pair_extents_below`'s capped walk); a deck that walk clears is
+        // served with the remainder past the cap as zero, which this fill
+        // does not do: it declines rather than choose differently
+        const bool capped = r1_max > r1_cap && th_min < floor;
+        if (capped) {
+            th_min = capped_th_min(plan_b, d_b, r1_cap);
+            if (!(th_min < floor)) throw FrontNotPorted("buried-capped-plan");
+        }
         bool graze = th_min < floor;
         if (!graze && mixed) {
             // `serve_plan`'s cross-medium section over the union of both
@@ -4220,7 +4280,9 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
             }
         }
         if (!graze) break;
-        if (bbI.empty()) throw FrontNotPorted("buried-grazing-refusal");
+        // `plan_buried` with no raised pairs left to halve: the plan's own
+        // grazing refusal, in Python's words (census 11-17)
+        if (bbI.empty()) refuse_below_grazing(th_min, d_b);
         std::vector<int64_t> hI, hJ, hQ;
         for (size_t t = 0; t < bbI.size(); t++)
             if (bbQ[t] / 2 > q_bb) {

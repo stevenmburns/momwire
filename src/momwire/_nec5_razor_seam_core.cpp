@@ -198,8 +198,10 @@ SeamEngine::Built RazorSeamEngine::build(Prepared &p) const {
     try {
         why = part.front->build(part.inputs);
     } catch (const razor::FrontError &e) {
+        // `_prepare` refuses a NotImplementedError from the constructor and
+        // from `compute_port_solution` alike (census 11-17)
         const bool ni = e.kind == razor::FrontErrorKind::not_implemented;
-        b.kind = ni && !e.solve_phase ? Built::refused : Built::raised;
+        b.kind = ni ? Built::refused : Built::raised;
         b.error_kind = ni ? "NotImplementedError" : "ValueError";
         b.message = e.what();
         return b;
