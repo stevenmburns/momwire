@@ -224,6 +224,12 @@ struct Features {
     // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
     // either: the crossing fill reads it from the active features.
     bool crossing_anchors = false;
+    // momwire#1847: the transmitted grid blended from frequency anchors
+    // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
+    // either: the mixed blocks' grid requests read it, bs2's and the
+    // point-matched sinusoidal lane's. Its reach is level 1, so no
+    // executable carries it (no EXE_FEATURES row) and none requests it.
+    bool transmitted_anchors = false;
 };
 Features &requested_features();
 const Features &active_features();

@@ -12,6 +12,7 @@
 
 #include "_fma_inline.h"
 #include "_libm_complex_inline.h"
+#include "_near_interface_eval.h"  // the requested features (momwire#1847)
 #include "_razor_front_core.h"  // `leggauss`
 
 #include <cstddef>
@@ -99,12 +100,22 @@ std::vector<std::vector<cd>> transmitted_block(const Front &fr, const somm_trans
     const std::size_t S = ns * Q;
     // The grid with the nodes this block's pairs read (role order: the above
     // points, then the below ones), which are the whole grid's bit for bit.
+    // `transmitted_anchors` (momwire#1847) requested: the grid blended from
+    // frequency anchors where they serve it, else the exact one. This route
+    // runs under no `FeatureFill`, so it reads the request itself, as the
+    // razor seam reads `razor_pair_reuse`.
     const somm_trans::Grid *grid = nullptr;
     try {
-        grid = &somm_trans::get_grid_reading(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max,
-                                             fr.omega, mu, plan.r_cross_min, obs_below ? nodes.data() : oc.data(),
-                                             obs_below ? S : no, obs_below ? oc.data() : nodes.data(),
-                                             obs_below ? no : S, gz);
+        if (ni_eval::requested_features().transmitted_anchors)
+            grid = somm_trans::anchored_grid_reading(
+                md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max, fr.omega, mu, plan.r_cross_min,
+                obs_below ? nodes.data() : oc.data(), obs_below ? S : no, obs_below ? oc.data() : nodes.data(),
+                obs_below ? no : S, gz);
+        if (grid == nullptr)
+            grid = &somm_trans::get_grid_reading(md.eps_t, md.k_p, plan.r_cross_max, plan.zp_min, plan.zp_max,
+                                                 fr.omega, mu, plan.r_cross_min,
+                                                 obs_below ? nodes.data() : oc.data(), obs_below ? S : no,
+                                                 obs_below ? oc.data() : nodes.data(), obs_below ? no : S, gz);
     } catch (const somm_trans::Refused &e) {
         throw nec4::Declined(std::string("a transmitted grid the reference refuses (") + e.what() + ")");
     }
