@@ -16,6 +16,8 @@ counts; exits 1 on any mismatch, or when nothing was compared.
 which faults on any instruction that CPU lacks. Both, not FAT alone: the
 DLLs beside them (OpenBLAS, the UCRT's math, the VC++ runtime) pick their
 own kernels by CPUID too, so only the same emulated CPU makes the same bytes.
+--sde-extra: more SDE options, comma-separated (`-chip_check_exe_only`: fault
+only on the executable's own instructions, not the DLLs').
 --coretype: OPENBLAS_CORETYPE for both.
 """
 
@@ -73,11 +75,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--auto", action="store_true")
     ap.add_argument("--sde")
     ap.add_argument("--cpu")
+    ap.add_argument("--sde-extra", default="", help="comma-separated SDE options")
     ap.add_argument("--coretype")
     ap.add_argument("--copies", default="policy,threads")
     ap.add_argument("--workers", type=int, default=4)
     a = ap.parse_args(argv)
-    wrap = [a.sde, f"-{a.cpu}", "--"] if a.sde else []
+    extra = [x for x in a.sde_extra.split(",") if x]
+    wrap = [a.sde, f"-{a.cpu}", *extra, "--"] if a.sde else []
     fat_cmd = [*wrap, a.fat]
     one_cmd = [*wrap, a.single]
     decks = sorted(
