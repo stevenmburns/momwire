@@ -27,10 +27,10 @@
 #            deck and NX chain within PRINTOUT_RTOL_WIN32; the fat pair under
 #            Intel SDE and byte for byte against the one-variant builds.
 #   stress   the exit-hang soak: the UCRT64 fat razor-2p executable, stdout
-#            piped, with the shipped exit (`_cexit` + TerminateProcess), the
-#            C runtime's exit with the OpenBLAS pools shut down at exit, and
-#            the C runtime's exit without (the control), interleaved; four
-#            shards, on dispatch only. A diagnostic, not a gate.
+#            piped, the shipped exit (ending the process before the static
+#            teardown) as two labels against the C runtime's exit with the
+#            OpenBLAS pools shut down at exit (the positive control),
+#            interleaved; four shards, on dispatch only. A diagnostic.
 #   perf     INDICATIVE timing, every build here against the msvc job's, on
 #            ONE runner, interleaved (a shared VM: the pairing is the point,
 #            not the numbers), and each build's own stage times.
@@ -624,17 +624,20 @@ jobs:
           }
           exit $fail
 
-  # The rare exit hang (runs 43944198706 .. 44092464961; the counts and the
-  # backtraces are in WINDOWS-SINGLE-FILE.md). Run 44092464961's design could
-  # not separate two explanations, because its normal-exit arm also shut the
-  # OpenBLAS pools down at exit (d35e80c1). So three arms, all stdout piped
-  # (the hang never showed with stdout to DEVNULL), on ONE executable (the
-  # UCRT64 fat razor-2p, the candidate product), interleaved:
-  #   cexit             the shipped exit: `_cexit` then TerminateProcess
-  #   normal-shutdown   the C runtime's exit, the pools shut down at exit
-  #   normal-noshutdown the C runtime's exit, the pools left alone (control)
+  # The rare exit hang (runs 43944198706 .. 44112554494; the counts and the
+  # backtraces are in WINDOWS-SINGLE-FILE.md). Run 44112554494's soak (with
+  # its control, the C runtime's exit without the pool shutdown) hung in
+  # every arm, `_cexit` + TerminateProcess included (1 in 44,736): OpenBLAS's
+  # own `gotoblas_quit` TerminateThread()s the pool threads in every one.
+  # The exit now ends the process before the static teardown reaches it
+  # (momwire_razor2p.cpp, main's MinGW wrapper). All stdout piped (the hang
+  # never showed with stdout to DEVNULL), on ONE executable (the UCRT64 fat
+  # razor-2p, the candidate product), interleaved:
+  #   default-a, -b     the shipped exit, twice, for twice the runs
+  #   normal-shutdown   the C runtime's exit, the pools shut down at exit:
+  #                     the positive control (9 in 44,736 in run 44112554494)
   # Four shards of 16 rounds over the fixture corpus, about 70 min each:
-  # on dispatch only (run 44112554494 is the soak the report cites).
+  # on dispatch only.
   stress:
     needs: [build, ucrt64]
     if: always() && needs.ucrt64.result == 'success' && github.event_name == 'workflow_dispatch'
@@ -657,13 +660,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: soak, UCRT64 fat razor-2p, three exits, stdout piped (shard ${{ matrix.shard }}; diagnostic)
+      - name: soak, UCRT64 fat razor-2p, the shipped exit against the control, stdout piped (shard ${{ matrix.shard }}; diagnostic)
         shell: pwsh
         run: |
           $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
           $e = "dist-ucrt-fat\momwire-nec5-razor-2p.exe"
           python scripts/windows_static/stress.py 16 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
-            "cexit=$e" "normal-shutdown=$e|MW_EXE_EXIT=normal" "normal-noshutdown=$e|MW_EXE_EXIT=normal|MW_EXE_EXIT_SHUTDOWN=0" > stress.txt
+            "default-a=$e" "default-b=$e" "normal-shutdown=$e|MW_EXE_EXIT=normal" > stress.txt
           $rc = $LASTEXITCODE
           Get-Content stress.txt
           if ($rc) { exit 1 }
