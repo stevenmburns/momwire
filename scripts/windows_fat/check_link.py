@@ -17,12 +17,12 @@ the linked bytes:
    member, and `MW_EXE_TIMES=1` reports that many run on avx2 and none on
    sse2.
 
-2. COMDATS. A symbol an avx2 member supplies whose name is in none of the
-   avx2 copies' own namespaces (`mwa`, `mwas`, `mwa_xsf`, ...) -- a template
-   or inline function outside the renamed namespaces -- must be defined by
-   no sse2 object: had an sse2 object defined it too, the sse2 path could
-   call it, and the linker must have kept the sse2 copy. Objects are read
-   with `dumpbin /symbols`.
+2. COMDATS. A symbol an avx2 member supplies whose name is not the avx2
+   copies' own -- in none of their namespaces (`mwa`, `mwas`, `mwa_xsf`,
+   ...) and not renamed `mwa$` by fat_private_comdats.py: data, say -- must
+   be defined by no sse2 object: had an sse2 object defined it too, the sse2
+   path could reach it, and the linker must have kept the sse2 copy. Objects
+   are read with `dumpbin /symbols`.
 
 3. The counts: how much of the image each copy supplies.
 
@@ -42,8 +42,9 @@ from pathlib import Path
 import pefile
 
 AVX2_LIBS = ("mw_core_mwa:", "mw_core_mwas:")
-# a renamed namespace of an avx2 copy, as MSVC mangles it (`@mwa@`, `@mwas_xsf@`)
-AVX2_NS = re.compile(r"@mwas?(?:_[A-Za-z0-9_]+)?@")
+# an avx2 copy's own name: in a renamed namespace, as MSVC mangles it
+# (`@mwa@`, `@mwas_xsf@`), or a function fat_private_comdats.py renamed
+AVX2_NS = re.compile(r"^mwa\$|@mwas?(?:_[A-Za-z0-9_]+)?@")
 # constants named by their own bytes: two copies with one name are one value
 CONTENT_NAMED = ("__real@", "__xmm@", "__ymm@", "__zmm@", "??_C@", "__mask@")
 STARTUP_GROUPS = re.compile(r"^\.CRT\$X")
@@ -193,6 +194,7 @@ def main(argv: list[str]) -> int:
     # 2. COMDATs
     avx2_pub = [s for s in syms if s[3] and is_avx2(s[2])]
     own = [s for s in avx2_pub if AVX2_NS.search(s[1])]
+    renamed = [s for s in avx2_pub if s[1].startswith("mwa$")]
     shared = {
         s[1]
         for s in avx2_pub
@@ -202,6 +204,7 @@ def main(argv: list[str]) -> int:
         p
         for p in build.rglob("*.obj")
         if not any(part in ("mw_core_mwa.dir", "mw_core_mwas.dir") for part in p.parts)
+        and p.relative_to(build).parts[0] != "fat"  # the renamed avx2 objects
     ]
     defined: set[str] = set()
     for p in objs:
@@ -213,7 +216,7 @@ def main(argv: list[str]) -> int:
         bad = 1
     print(
         f"comdats: {len(avx2_pub)} public symbols from the avx2 copies, {len(own)} in their"
-        f" own namespaces, {len(shared)} outside them (std templates and the like);"
+        f" own names ({len(renamed)} of them renamed mwa$), {len(shared)} outside them (data and the like);"
         f" {len(objs)} sse2/main objects define {len(defined)} externals;"
         f" {len(clash)} resolved to the avx2 copy"
     )

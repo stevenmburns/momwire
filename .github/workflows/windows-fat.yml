@@ -199,10 +199,12 @@ jobs:
       # one-variant build of the variant that CPU should get answers under the
       # same emulated CPU (the DLLs pick their kernels by CPUID too).
       - uses: petarpetrovt/setup-sde@v6.0
+        if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
         with:
           environmentVariableName: SDE_PATH
           sdeVersion: 10.13.1
       - name: SDE (wsm, snb -> sse2; hsw -> avx2), the picked path and three decks
+        if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
         shell: pwsh
         run: |
           $sde = Join-Path $env:SDE_PATH 'sde.exe'
@@ -228,6 +230,7 @@ jobs:
           }
           exit $fail
       - name: SDE Westmere, every fixture deck (the sse2 path picked by CPU)
+        if: always() && hashFiles('dist/fat/momwire-nec5-bspline.exe') != ''
         shell: pwsh
         run: |
           $sde = Join-Path $env:SDE_PATH 'sde.exe'

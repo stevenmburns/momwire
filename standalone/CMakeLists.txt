@@ -111,11 +111,13 @@ elseif(MW_EXE_VARIANT STREQUAL "fat")
   # (momwire_razor2p.cpp `pick_variant`): the cores compiled four times --
   # sse2 threaded / serial as `mw` / `mws`, the objects every CPU runs, and
   # avx2 threaded / serial as `mwa` / `mwas`, two static libraries linked
-  # AFTER every object, so a COMDAT (a template or inline function both
-  # builds instantiate) resolves to the sse2 object's copy; a library member
-  # is pulled in only for a symbol no object defines. Each avx2 TU's dynamic
-  # initializers are moved out of the C runtime's start-up list
-  # (fat_avx2_init.h) and run by main() only once it has picked avx2.
+  # AFTER every object. Their functions outside the renamed namespaces (a
+  # template or inline function every copy instantiates) are renamed
+  # `mwa$<name>` (fat_private_comdats.py), so the avx2 code calls avx2 bodies
+  # and the sse2 code can never reach one; a library member is pulled in only
+  # for a symbol no object defines. Each avx2 TU's dynamic initializers are
+  # moved out of the C runtime's start-up list (fat_avx2_init.h) and run by
+  # main() only once it has picked avx2.
   # MSVC no-Python builds only (the Windows release).
   if(NOT MSVC OR NOT MW_EXE_NO_PYTHON)
     message(FATAL_ERROR "MW_EXE_VARIANT=fat is the MSVC no-Python build only")
@@ -385,10 +387,15 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
 
 # The fat build's avx2 copies (MW_EXE_VARIANT=fat, above): the same sources
 # and flags plus /arch:AVX2 (setup.py's avx2 variant), every namespace the
-# serial copy renames renamed again, `mwa` / `mwas`; static libraries, linked
-# after the sse2 objects. /FI fat_avx2_init.h moves each TU's dynamic
-# initializers into `.mwav$m`, which the C runtime never runs.
+# serial copy renames renamed again, `mwa` / `mwas`; archived, after
+# fat_private_comdats.py renames their functions outside those namespaces,
+# as two static libraries linked after the sse2 objects. /FI fat_avx2_init.h
+# moves each TU's dynamic initializers into `.mwav$m`, which the C runtime
+# never runs (/wd4075: the warning that says so).
 if(MW_EXE_FAT)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  find_program(MW_LLVM_OBJCOPY llvm-objcopy HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
+  find_program(MW_LLVM_NM llvm-nm HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
   foreach(_mw_copy IN ITEMS mwa mwas)
     set(_mw_renames mw=${_mw_copy} xsf=${_mw_copy}_xsf Faddeeva=${_mw_copy}_Faddeeva
         razor_cplx_brackets=${_mw_copy}_razor_cplx_brackets somm_core=${_mw_copy}_somm_core
@@ -396,16 +403,29 @@ if(MW_EXE_FAT)
         somm_trans=${_mw_copy}_somm_trans ni_point=${_mw_copy}_ni_point
         near_buried=${_mw_copy}_near_buried offedge_lanes=${_mw_copy}_offedge_lanes
         somm_sym=${_mw_copy}_somm_sym mw_fg=${_mw_copy}_fg mw1860=${_mw_copy}_mw1860)
-    add_library(mw_core_${_mw_copy} STATIC ${MW_CORE_SOURCES} ${MW_ROUTE})
+    add_library(mw_core_${_mw_copy} OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
     target_include_directories(mw_core_${_mw_copy} PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
     target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_CORE_FLAGS} /arch:AVX2
-                           "/FI${CMAKE_CURRENT_SOURCE_DIR}/fat_avx2_init.h")
+                           "/FI${CMAKE_CURRENT_SOURCE_DIR}/fat_avx2_init.h" /wd4075)
     if(_mw_copy STREQUAL "mwa")
       target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_OMP_FLAG})
     endif()
     target_compile_definitions(mw_core_${_mw_copy} PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
                                ${MW_ROUTE_DEFS} ${_mw_renames})
   endforeach()
+  set(MW_FAT_LIBS "${CMAKE_CURRENT_BINARY_DIR}/fat/mw_core_mwa.lib" "${CMAKE_CURRENT_BINARY_DIR}/fat/mw_core_mwas.lib")
+  add_custom_command(
+    OUTPUT ${MW_FAT_LIBS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fat_private_comdats.py"
+            --objcopy "${MW_LLVM_OBJCOPY}" --nm "${MW_LLVM_NM}" --lib "${CMAKE_AR}"
+            --out "${CMAKE_CURRENT_BINARY_DIR}/fat"
+            "mw_core_mwa=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/mw_core_mwa.dir"
+            "mw_core_mwas=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/mw_core_mwas.dir"
+    DEPENDS mw_core_mwa mw_core_mwas $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>
+            "${CMAKE_CURRENT_SOURCE_DIR}/fat_private_comdats.py"
+    COMMENT "fat: the avx2 copies' shared-name functions made their own"
+    VERBATIM)
+  add_custom_target(mw_core_fat_libs DEPENDS ${MW_FAT_LIBS})
 endif()
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
@@ -498,7 +518,8 @@ endif()
 if(MW_EXE_FAT)
   # after the sse2 objects (see MW_EXE_VARIANT=fat); the map file is what
   # scripts/windows_fat/check_link.py reads to show which copy each symbol is
-  target_link_libraries(${MW_EXE} PRIVATE mw_core_mwa mw_core_mwas)
+  add_dependencies(${MW_EXE} mw_core_fat_libs)
+  target_link_libraries(${MW_EXE} PRIVATE ${MW_FAT_LIBS})
   target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_FAT=1)
   target_link_options(${MW_EXE} PRIVATE "/MAP:${CMAKE_CURRENT_BINARY_DIR}/${MW_EXE}.map")
 endif()
