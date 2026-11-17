@@ -31,6 +31,11 @@ from test_rotational_sinusoidal_1912 import FEED, LIFT, build, cage
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = pytest.mark.reach(1)
 
+#: The verify sample's level on these decks, which hold no pair the kernel
+#: rounds coarsely (`_sin_pair_reuse.VERIFY_TOL` has the margin for those):
+#: the old bound, kept as this file's gate.
+CLEAN = 1e-10
+
 LAM = 21.1
 # The feature's declared bound; each gate below also states what it measured.
 DRIFT = _features.FEATURES["pair_reuse"].drift
@@ -103,7 +108,7 @@ def test_on_matches_off(ek, h):
         assert n_cls < n_pairs / 2
     # Measured: ~1e-15 on this deck, every case.
     assert _rel(on, base) <= DRIFT
-    assert 0.0 <= s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    assert 0.0 <= s.pair_reuse_verify_max <= CLEAN
 
 
 def test_band_cut_and_a_hint_and_the_variable(monkeypatch):
@@ -225,7 +230,7 @@ def test_the_sector_route_plans_its_own_rows(ground, mode, monkeypatch):
     # pairs; 557 direct classes, 908 image or reflected).
     assert _rel(on, base) <= MATRIX
     if mode == "verify":
-        assert 0.0 < s.pair_reuse_verify_max <= pr.VERIFY_TOL
+        assert 0.0 < s.pair_reuse_verify_max <= CLEAN
 
 
 @pytest.mark.parametrize("ground", SECTOR_GROUNDS)

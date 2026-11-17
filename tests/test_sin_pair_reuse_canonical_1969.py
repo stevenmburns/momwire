@@ -37,6 +37,11 @@ from momwire.sinusoidal import SinusoidalSolver
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = pytest.mark.reach(1)
 
+#: The verify sample's level on these decks, which hold no pair the kernel
+#: rounds coarsely (`_sin_pair_reuse.VERIFY_TOL` has the margin for those):
+#: the old bound, kept as this file's gate.
+CLEAN = 1e-10
+
 #: 28 MHz.
 LAM = 10.7
 DRIFT = _features.FEATURES["pair_reuse"].drift
@@ -203,7 +208,7 @@ def test_on_matches_off(ground, reverse, ek):
     plans = [p for _, p in s._sin_reuse_plans.values()]
     assert all(p.code_bits == pr.CODE_BITS for p in plans)
     assert _rel(on, base) <= MATRIX
-    assert 0.0 < s.pair_reuse_verify_max <= pr.VERIFY_TOL
+    assert 0.0 < s.pair_reuse_verify_max <= CLEAN
     z_off, _ = _zin(deck, **kw)
     z_on, _ = _zin(deck, pair_reuse=True, **kw)
     assert np.max(np.abs(z_on - z_off) / np.abs(z_off)) <= DRIFT
@@ -321,6 +326,60 @@ def test_a_reversed_source_swaps_its_end_codes():
         s._build_geometry()["seg_h"], *_ek_tables(s)
     )
     assert np.any(src_rev != src_type)
+
+
+def _jack(segs=21, arm=2.4, h=8.0, reverse=(0, 2, 5)):
+    """Six arms of `segs` segments from one junction at height h, along
+    +-x, +-y, +-z, the arms in `reverse` listed end to start; at 14.746 MHz
+    and fed off every symmetry. Each vertical arm's image lies on the axis
+    through the junction, so the horizontal arms' first segments see it from
+    a few centimetres off its axis: pairs the kernel rounds coarsely, and
+    mirror images of one another (momwire#1969, its second finding)."""
+    c = np.array([0.0, 0.0, h])
+    wires = []
+    for ax in range(3):
+        for sgn in (1.0, -1.0):
+            e = c.copy()
+            e[ax] += sgn * arm
+            w = np.array([c, e])
+            wires.append(w[::-1].copy() if len(wires) in reverse else w)
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[segs]] * 6,
+        feeds=[(1, 0.45 * arm, 1.0 + 0j), (4, 0.2 * arm, 0.6j)],
+        wavelength=299.792458 / 14.746,
+        wire_radius=1e-3,
+    )
+
+
+@pytest.mark.parametrize("ground", ["pec", "sommerfeld"])
+def test_verify_holds_where_the_kernel_rounds_coarsely(ground):
+    """`pair_reuse="verify"` on the jack, extended kernel: the fill is right
+    (Z within the fill's bound) and the sample passes, though it sits above
+    the 1e-10 the cleaner decks hold. Measured (Skylake): 4.3e-10 (PEC) and
+    5.8e-10 (Sommerfeld), max |dZ| / max |Z| 1.3e-14 both; under the old
+    1e-10 bound both raised."""
+    deck = _jack()
+    kw = dict(GROUNDS[ground], extended_kernel=True)
+    base, _ = _fill(deck, **kw)
+    on, s = _fill(deck, pair_reuse="verify", **kw)
+    assert s.pair_reuse_declined is None
+    assert _rel(on, base) <= MATRIX
+    # The regime the test is for: without it, this gate measures nothing.
+    assert CLEAN < s.pair_reuse_verify_max <= pr.VERIFY_TOL
+
+
+@pytest.mark.parametrize("entry", [(1, 0), (2, 1), (3, 2)], ids=str)
+def test_a_wrong_sign_is_still_caught_on_the_jack(entry, monkeypatch):
+    """The bound that lets the jack's rounding through still stops a sign
+    table wrong in one entry on the same deck."""
+    deck = _jack()
+    kw = dict(GROUNDS["pec"], extended_kernel=True)
+    bad = pr.CODE_SIGNS.copy()
+    bad[entry] *= -1.0
+    monkeypatch.setattr(pr, "CODE_SIGNS", bad)
+    with pytest.raises(pr.PairReuseMismatch):
+        _fill(deck, pair_reuse="verify", **kw)
 
 
 # ------------------------------------------------------------ adversarial
