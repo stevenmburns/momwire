@@ -8,15 +8,28 @@ and the point-matched sinusoidal lane read it when the feature is requested,
 so the executables can carry it once its reach is raised; today no
 executable requests it (no `EXE_FEATURES` row).
 
-Bit for bit, or within the declared drift, and why: both copies call libm's
-exp / log / sin / cos for every transcendental on the lattice, EXCEPT where
-Python goes through numpy (`np.exp` of the z' ladder and of the fill's R
-nodes). numpy hands float64 exp and log to libm on every x86-64 dispatch
-below AVX-512, the hosted app's (avx2) included, and there the two blends are
-the same bits. On an AVX-512 box numpy's own exp and log differ from libm's
-in the last bit on a few per cent of arguments, and the blends (like the
-exact grid's two copies) then agree to ~1e-20 of scale: well within the
-feature's declared drift, 1e-8, which is what the gates hold there.
+Bit for bit, or within the declared drift, and why. Every transcendental on
+the lattice is libm's in C++, and Python's goes through numpy in two places
+that matter: `np.exp` (the z' ladder, the fill's R nodes) and `np.sin` /
+`np.cos` of the fill's theta nodes. The copies are the same bits exactly
+when both of these hold on the box, and the gates probe both:
+- numpy's float64 exp and log are libm's (every x86-64 dispatch below
+  AVX-512; numpy's AVX-512 exp and log differ in the last bit on a few per
+  cent of arguments);
+- the sine and cosine the C++ fill takes are numpy's. gcc -O3 fuses the
+  fill's `sin(th)` and `cos(th)` of one argument into one `sincos` call on
+  Linux, and glibc's `sincos` is not always `sin` and `cos`: on glibc 2.35
+  (Haswell) its sine differs from `sin` in the last bit on ~0.1 % of
+  arguments in [0, 1.6), on glibc 2.39 (Rocketlake) on none of them. The
+  shared exact-grid fill (`fill_nodes`) has the same property, so this is not
+  the anchors' own; un-fusing it would move the exact grid's default-path
+  bits on such a box, which is not this change's call.
+Where either fails the two blends agree to 2e-13 of scale (1.8e-13 measured
+with numpy's AVX-512 on Rocketlake, 2.6e-16 on Haswell), and the gates hold
+the feature's declared drift, 1e-8. The test
+session turns numpy's AVX-512 off (tests/conftest.py), so on x86-64 the first
+holds under pytest and the `sincos` probe is the one that decides: the gates
+run bit for bit on Rocketlake (glibc 2.39) and within the drift on Haswell.
 
 What is held:
 - the blend, its lattice and each of its anchors, single- and multi-depth;
@@ -24,6 +37,7 @@ What is held:
   everywhere (no transcendental in it);
 - the declines, where Python returns None;
 - a sweep sharing its anchors;
+- a full anchor store that evicts an anchor of the stencil being summed;
 - bs2's buried Z and the sinusoidal printout with the feature on, against
   Python's with it on, and different from the C++ route with it off (so the
   anchored route is what ran).
@@ -31,6 +45,8 @@ What is held:
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import importlib.util
 import math
 import sys
@@ -75,7 +91,39 @@ def _numpy_is_libm() -> bool:
     return np.array_equal(np.log(y), np.array([math.log(v) for v in y]))
 
 
+def _fill_trig_is_numpys() -> bool:
+    """Whether the sine and cosine the C++ fill takes of its theta nodes are
+    numpy's here. On Linux gcc fuses the fill's two calls into libm's
+    `sincos`, which glibc 2.35 does not keep equal to `sin` (glibc 2.39
+    does); elsewhere the C++ makes two libm calls (`_libm_complex_inline.h`
+    keeps them apart on Apple), held against numpy's here too. Measured over
+    the theta range [0, pi/2], densely: a box that fails anywhere there is
+    gated by the drift."""
+    x = np.linspace(0.0, 0.5 * math.pi, 100001)
+    ns, nc = np.sin(x), np.cos(x)
+    if not sys.platform.startswith("linux"):
+        return np.array_equal(ns, [math.sin(v) for v in x]) and np.array_equal(
+            nc, [math.cos(v) for v in x]
+        )
+    try:
+        libm = ctypes.CDLL(ctypes.util.find_library("m") or "libm.so.6")
+        sincos = libm.sincos
+    except (OSError, AttributeError):
+        return False
+    dp = ctypes.POINTER(ctypes.c_double)
+    sincos.argtypes = [ctypes.c_double, dp, dp]
+    sincos.restype = None
+    s, c = ctypes.c_double(), ctypes.c_double()
+    for i, v in enumerate(x.tolist()):
+        sincos(v, ctypes.byref(s), ctypes.byref(c))
+        if s.value != ns[i] or c.value != nc[i]:
+            return False
+    return True
+
+
 NUMPY_IS_LIBM = _numpy_is_libm()
+# The anchors' (and so the blends') values are the same bits on both sides.
+SAME_BITS = NUMPY_IS_LIBM and _fill_trig_is_numpys()
 
 
 def _bits(a):
@@ -83,12 +131,12 @@ def _bits(a):
 
 
 def _agree(a, b, what):
-    """Bit for bit where numpy is libm's, else within the declared drift of
-    each surface's scale."""
+    """Bit for bit where the box's transcendentals agree (`SAME_BITS`),
+    else within the declared drift of each surface's scale."""
     a = np.asarray(a, dtype=np.complex128)
     b = np.asarray(b, dtype=np.complex128)
     assert a.shape == b.shape, what
-    if NUMPY_IS_LIBM:
+    if SAME_BITS:
         assert np.array_equal(_bits(a), _bits(b)), what
         return
     scale = np.abs(b).reshape(b.shape[:2] + (-1,)).max(-1)
@@ -96,10 +144,10 @@ def _agree(a, b, what):
     assert float(np.max(err / scale)) < DRIFT, what
 
 
-def _req(f_hz, r_max=R_MAX, zp=(DEPTH, DEPTH), r_min=R_MIN):
+def _req(f_hz, r_max=R_MAX, zp=(DEPTH, DEPTH), r_min=R_MIN, soil=SOIL):
     om = 2.0 * math.pi * f_hz
     return dict(
-        eps_t=eps_tilde(SOIL, om, EPS0),
+        eps_t=eps_tilde(soil, om, EPS0),
         k2=om / C_LIGHT,
         r_max=r_max,
         zp_min=zp[0],
@@ -156,7 +204,7 @@ def _check_blend(f_hz, r):
         "k_m",
     ):
         assert getattr(g, k) == c[k], k
-    if NUMPY_IS_LIBM:
+    if NUMPY_IS_LIBM:  # the ladder is exp's alone
         assert np.array_equal(g.zp_nodes, c["zp_nodes"])
         assert (g.zp_min, g.zp_max, g.lnz0, g.dlnz) == (
             c["zp_min"],
@@ -231,6 +279,33 @@ def test_a_sweep_shares_its_cxx_anchors(fresh):
     assert st["blends"] == 3 and st["nodes_filled"] == nodes, st
 
 
+def test_a_full_anchor_store_never_frees_a_stencil_anchor(fresh):
+    """The anchor store is a FIFO (Python's `_ANCHORS_MAX`, 96 here capped
+    to 16 so two soils fill it): a request whose stencil finds anchors J..J+6
+    and must add J+7 into a full store evicts the oldest entry, which is J,
+    the first anchor it already took. The blend must still sum J's values
+    (Python sums each anchor as it fetches it), not the freed table's."""
+    other = (5.0, 0.001)
+    acc.transmitted_anchors_stats(True, anchors_max=16)
+    for r in (
+        _req(F0 / 1.1),  # SOIL's J-1 .. J+6
+        _req(F0, soil=other),  # the other soil's J .. J+7: the store is full
+        _req(F0 * 1.1, soil=other),  # its J+8 evicts SOIL's J-1
+    ):
+        assert "declined" not in _cxx(r)
+    # SOIL at F0 finds J .. J+6; adding J+7 evicts J, the stencil's first
+    c = _cxx(_req(F0), parts=True)
+    st = acc.transmitted_anchors_stats()
+    assert st["anchor_fills"] == 8 + 8 + 1 + 1 and st["blends"] == 4, st
+    g = anchors.get_grid(mu=som._MU0, **_req(F0))
+    js, u = anchors._stencil(F0)
+    v = None
+    for a, w in zip(c["anchors"], anchors._weights(u, js), strict=True):
+        v = a["vals"] * w if v is None else v + a["vals"] * w
+    assert np.array_equal(_bits(v), _bits(c["vals"]))
+    _agree(c["vals"], g._vals, "blend over an evicted anchor")
+
+
 # ---- the fills that read it ---------------------------------------------------
 
 
@@ -275,7 +350,7 @@ def test_the_bs2_buried_fill_with_anchors_is_pythons(fresh, deck):
     assert anchors.STATS["blends"] == 1
     Zc = np.asarray(on["Z"], dtype=np.complex128).reshape(Zp.shape)
     Zx = np.asarray(off["Z"], dtype=np.complex128).reshape(Zp.shape)
-    if NUMPY_IS_LIBM:
+    if SAME_BITS:
         assert np.array_equal(_bits(Zc), _bits(Zp))
     else:
         assert float(np.max(np.abs(Zc - Zp))) < DRIFT * float(np.max(np.abs(Zp)))
