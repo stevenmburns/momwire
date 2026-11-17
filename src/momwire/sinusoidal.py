@@ -1367,19 +1367,26 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_ek_gating: tuple | None = None
         self._cached_nec4_live: tuple | None = None
         self._cancel = cancel
+        # Every feature the running family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below. The
+        # family is the instance's (`FEATURE_SOLVER`): the Galerkin subclass
+        # runs this constructor and honours fewer, which `bind` leaves off.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            transmitted_anchors=transmitted_anchors,
+            point_cplx_staged=point_cplx_staged,
+            pair_reuse=None if pair_reuse is None else bool(pair_reuse),
+        )
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
-        self._transmitted_anchors = _features.enabled(
-            "transmitted_anchors", transmitted_anchors
-        )
+        self._transmitted_anchors = bound["transmitted_anchors"]
         # momwire#1849: a buried class's own block (complex k, folded shape)
         # on the staged complex rows. None defers to
         # MOMWIRE_X_POINT_CPLX_STAGED (`_features`, reach 1, native); off is
         # `sinusoidal_field_tensor_cplx`, bit for bit.
-        self._point_cplx_staged = _features.enabled(
-            "point_cplx_staged", point_cplx_staged
-        )
+        self._point_cplx_staged = bound["point_cplx_staged"]
         # momwire#1911: `pair_reuse` (bspline's feature, #1809) on the
         # point-matched fill: each congruent pair's field tensors once
         # (`_sin_pair_reuse`). This fill finds its own classes, so any truthy
@@ -1389,9 +1396,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._pair_reuse_verify = isinstance(pair_reuse, str) and (
             pair_reuse == "verify"
         )
-        self._pair_reuse_on = _features.enabled(
-            "pair_reuse", None if pair_reuse is None else bool(pair_reuse)
-        )
+        self._pair_reuse_on = bound["pair_reuse"]
         self._sin_reuse_plans: dict = {}
         # Why the last fill did not reuse (None when it did, or was not asked),
         # the last fill's census per block, and verify's worst agreement.

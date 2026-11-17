@@ -2086,41 +2086,47 @@ class RazorSolver(
             raise TypeError(f"RazorSolver got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
-        # momwire#1860 L1: the near-interface columns' factored route. None
-        # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
-        # off is the member route, bit for bit.
-        self._factored_columns = _features.enabled("factored_columns", factored_columns)
-        # momwire#1860 L2: the near-interface height census recalibrated.
-        # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
-        # python); off is the shipped census, bit for bit.
-        self._height_sheet_recal = _features.enabled(
-            "height_sheet_recal", height_sheet_recal
-        )
-        # momwire#1860 L5: the crossing table. None defers to
-        # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
-        # column twin, bit for bit.
-        self._crossing_table = _features.enabled("crossing_table", crossing_table)
-        # momwire#1956: the near-interface sheets' build weights retuned. None
-        # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
-        # python); off is the shipped census, bit for bit.
-        self._crossing_sheet_retune = _features.enabled(
-            "crossing_sheet_retune", crossing_sheet_retune
-        )
-        # momwire#1971: fill-pair reuse. None defers to
-        # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
-        # checks every window against the shipped fill. Off (0) is the fill
-        # as it always was, bit for bit; 1 on, 2 verify.
         if razor_pair_reuse not in (None, False, True, "verify"):
             raise ValueError(
                 "razor_pair_reuse must be None, False, True or 'verify', got "
                 f"{razor_pair_reuse!r}"
             )
+        # Every feature this family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            factored_columns=factored_columns,
+            height_sheet_recal=height_sheet_recal,
+            crossing_table=crossing_table,
+            crossing_sheet_retune=crossing_sheet_retune,
+            razor_pair_reuse=(
+                None if razor_pair_reuse is None else bool(razor_pair_reuse)
+            ),
+        )
+        # momwire#1860 L1: the near-interface columns' factored route. None
+        # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
+        # off is the member route, bit for bit.
+        self._factored_columns = bound["factored_columns"]
+        # momwire#1860 L2: the near-interface height census recalibrated.
+        # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
+        # python); off is the shipped census, bit for bit.
+        self._height_sheet_recal = bound["height_sheet_recal"]
+        # momwire#1860 L5: the crossing table. None defers to
+        # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
+        # column twin, bit for bit.
+        self._crossing_table = bound["crossing_table"]
+        # momwire#1956: the near-interface sheets' build weights retuned. None
+        # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
+        # python); off is the shipped census, bit for bit.
+        self._crossing_sheet_retune = bound["crossing_sheet_retune"]
+        # momwire#1971: fill-pair reuse. None defers to
+        # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
+        # checks every window against the shipped fill. Off (0) is the fill
+        # as it always was, bit for bit; 1 on, 2 verify.
         self._pair_reuse = (
             0
-            if not _features.enabled(
-                "razor_pair_reuse",
-                None if razor_pair_reuse is None else bool(razor_pair_reuse),
-            )
+            if not bound["razor_pair_reuse"]
             else (2 if razor_pair_reuse == "verify" else 1)
         )
         self._reuse_now = None

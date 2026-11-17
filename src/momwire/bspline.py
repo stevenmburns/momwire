@@ -2112,7 +2112,22 @@ class BSplineSolver(
         # geometry before any block is copied (`_pair_reuse_plan`).
         # Registered in `_features` (reach 1, a Python route): a hint passed
         # is the keyword, so it is on; with none there is nothing to reuse.
-        if not _features.enabled("pair_reuse", None if pair_reuse is None else True):
+        # Every feature this family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            pair_reuse=None if pair_reuse is None else True,
+            offset_reuse=offset_reuse,
+            transmitted_anchors=transmitted_anchors,
+            factored_columns=factored_columns,
+            height_sheet_recal=height_sheet_recal,
+            crossing_table=crossing_table,
+            crossing_sheet_retune=crossing_sheet_retune,
+            crossing_above_rule=crossing_above_rule,
+            kcl_nullspace=kcl_nullspace,
+        )
+        if not bound["pair_reuse"]:
             pair_reuse = None
         # Renumbered to the solved wires on first use (`_solved_pair_reuse`):
         # a fill route that reads no plan pays nothing for a large hint.
@@ -2127,47 +2142,39 @@ class BSplineSolver(
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
         # defers to MOMWIRE_X_OFFSET_REUSE (`_features`, reach 1).
-        self._offset_reuse = _features.enabled("offset_reuse", offset_reuse)
+        self._offset_reuse = bound["offset_reuse"]
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
-        self._transmitted_anchors = _features.enabled(
-            "transmitted_anchors", transmitted_anchors
-        )
+        self._transmitted_anchors = bound["transmitted_anchors"]
         # momwire#1860 L1: the near-interface columns' factored route. None
         # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
         # off is the member route, bit for bit.
-        self._factored_columns = _features.enabled("factored_columns", factored_columns)
+        self._factored_columns = bound["factored_columns"]
         # momwire#1860 L2: the near-interface height census recalibrated.
         # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._height_sheet_recal = _features.enabled(
-            "height_sheet_recal", height_sheet_recal
-        )
+        self._height_sheet_recal = bound["height_sheet_recal"]
         # momwire#1860 L5: the crossing table. None defers to
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
-        self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        self._crossing_table = bound["crossing_table"]
         # momwire#1956: the near-interface sheets' build weights retuned. None
         # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._crossing_sheet_retune = _features.enabled(
-            "crossing_sheet_retune", crossing_sheet_retune
-        )
+        self._crossing_sheet_retune = bound["crossing_sheet_retune"]
         # momwire#1860 B1: a crossing deck's above/above remainder at the
         # above-ground rule. None defers to MOMWIRE_X_CROSSING_ABOVE_RULE
         # (`_features`, reach 1, python); off is the cross block's order,
         # bit for bit.
-        self._crossing_above_rule = _features.enabled(
-            "crossing_above_rule", crossing_above_rule
-        )
+        self._crossing_above_rule = bound["crossing_above_rule"]
         # momwire#1898: the junction constraints eliminated before the factor
         # (`_kcl_nullspace`) where the Schur solve back-substitutes them. None
         # defers to MOMWIRE_X_KCL_NULLSPACE (`_features`, reach 1, python);
         # off is the Schur route, bit for bit. `kcl_nullspace_route` records
         # what the last constrained solve took: None (off, or no rows),
         # "reduced", or "schur: <why the rows were not reducible>".
-        self._kcl_nullspace = _features.enabled("kcl_nullspace", kcl_nullspace)
+        self._kcl_nullspace = bound["kcl_nullspace"]
         self.kcl_nullspace_route = None
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
