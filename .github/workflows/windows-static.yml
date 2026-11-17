@@ -65,10 +65,11 @@ jobs:
           echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt[a-z]*' | sort -u | tr '\n' ' ')"
           echo "libs after the objects: $(gcc -dumpspecs | grep -A1 '^\*lib:' | tail -1)"
       - name: libm microbench (MINGW64)
+        continue-on-error: true
         shell: msys2 {0}
         run: |
           gcc -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
-          ./libm_bench.exe | tee libm-mingw64.txt
+          ./libm_bench.exe > libm-mingw64.txt; rc=$?; cat libm-mingw64.txt; [ $rc -eq 0 ] || exit $rc
           echo "math symbols the link took from libmingwex (defined in the exe):"
           nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
           echo "math imports:"; objdump -p libm_bench.exe | grep -E "DLL Name|\b(exp|log|sin|cos|pow|atan2|_hypot|hypot)$" | tr -s ' ' | tr '\n' ' '; echo
@@ -149,6 +150,11 @@ jobs:
           for e in dist/momwire-nec5-bs2-avx2.exe dist-shim/momwire-nec5-bs2-avx2-ucrtbase.exe; do
             echo "  $e: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
           done
+          # licensing: nothing LGPL/GPL-without-exception linked in (libquadmath, libgfortran)
+          for e in dist/*.exe dist-fat/*.exe; do
+            n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
+            echo "  $e: $n libquadmath/libgfortran symbols"
+          done
           strip dist/*.exe dist-shim/*.exe dist-fat/*.exe
           ls -l dist dist-shim dist-fat
       - uses: actions/upload-artifact@v7
@@ -179,12 +185,13 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
       - name: toolchain + libm microbench (UCRT64)
+        continue-on-error: true
         shell: msys2 {0}
         run: |
           gcc --version | head -1
           echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt[a-z]*' | sort -u | tr '\n' ' ')"
           gcc -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
-          ./libm_bench.exe | tee libm-ucrt64.txt
+          ./libm_bench.exe > libm-ucrt64.txt; rc=$?; cat libm-ucrt64.txt; [ $rc -eq 0 ] || exit $rc
           echo "math symbols defined in the exe (libmingwex's):"
           nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
           echo "imports:"; objdump -p libm_bench.exe | grep "DLL Name"
@@ -258,11 +265,12 @@ jobs:
           install: >-
             mingw-w64-clang-x86_64-toolchain
       - name: libm microbench (CLANG64)
+        continue-on-error: true
         shell: msys2 {0}
         run: |
           clang --version | head -1
           clang -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
-          ./libm_bench.exe | tee libm-clang64.txt
+          ./libm_bench.exe > libm-clang64.txt; rc=$?; cat libm-clang64.txt; [ $rc -eq 0 ] || exit $rc
           echo "math symbols defined in the exe (libmingwex's):"
           llvm-nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
           echo "imports:"; llvm-objdump -p libm_bench.exe | grep "DLL Name"

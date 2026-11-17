@@ -105,7 +105,7 @@ static double sincos_sum(double x) {
 }
 
 static double cexp_re(double x) {
-    double complex z = cexp(CMPLX(-0.01 * x, x));
+    double complex z = cexp(-0.01 * x + x * I);
     return creal(z) + cimag(z);
 }
 
