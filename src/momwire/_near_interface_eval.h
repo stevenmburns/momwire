@@ -199,6 +199,12 @@ struct Features {
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    // momwire#1847: the transmitted grid blended from frequency anchors
+    // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
+    // either: the mixed blocks' grid requests read it, bs2's and the
+    // point-matched sinusoidal lane's. Its reach is level 1, so no
+    // executable carries it (no EXE_FEATURES row) and none requests it.
+    bool transmitted_anchors = false;
 };
 Features &requested_features();
 const Features &active_features();
