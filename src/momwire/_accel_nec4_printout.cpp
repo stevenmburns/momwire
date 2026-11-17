@@ -7,7 +7,6 @@
 #include "_accel_common.h"
 #include "_bspline_nec4_run_core.h"
 #include "_nec4_printout_core.h"
-#include "_sinusoidal_galerkin_run_core.h"
 #include "_sinusoidal_run_core.h"
 #include "_somm_below_fill_core.h"
 
@@ -419,43 +418,8 @@ void register_nec4_printout(py::module_ &m) {
         py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
         "(True, the slot's printout) for basis 'sinusoidal' from the C++ run half, "
         "or (False, why it declines).");
-    // The Sinusoidal-Galerkin basis on the same run half (momwire#1718 S3).
-    m.def(
-        "sinusoidal_galerkin_nec4_printout",
-        [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
-           const std::string &variant, const std::string &marker) -> py::tuple {
-            if (blas.size() != 10 && blas.size() != 12) throw py::value_error("blas: ten or twelve addresses");
-            mw::sinusoidal::FillLinalg la;
-            if (blas.size() == 12) {
-                // numpy's cblas_zdotc_sub and SciPy's LP64 zgeqp3 (a crossing
-                // deck's ACA and its node's constrained solve, momwire#1718 S11b)
-                la.np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[10]);
-                la.lu.geqp3 = reinterpret_cast<mw::razor::zgeqp3_fn>(blas[11]);
-            }
-            la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
-            la.np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
-            la.np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
-            la.np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
-            la.lu.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(blas[4]);
-            la.lu.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(blas[5]);
-            la.np.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[6]);
-            la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[7]);
-            la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[8]);
-            la.np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(blas[9]);
-            const std::string text = latin1_text;
-            const mw::nec5::EngineStamp st = stamp_of(version, variant, marker);
-            std::string out, why;
-            bool ok;
-            {
-                py::gil_scoped_release nogil;
-                SinBelowSource below;  // a wholly-buried deck's table (momwire#1718 S11a)
-                ok = mw::sinusoidal_galerkin::printout(text, st, la, out, why);
-            }
-            return py::make_tuple(ok, py::str(ok ? out : why));
-        },
-        py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
-        "(True, the slot's printout) for basis 'sinusoidal-galerkin' from the C++ run half, "
-        "or (False, why it declines).");
+    // `sinusoidal_galerkin_nec4_printout` (test-facing only) was removed with
+    // the SG C++ run half; last present at 4ec7912d.
     // The B-spline basis on the same run half (momwire#1607 Phase C1).
     // `blas`: the ten above, then numpy's ILP64 cblas_dsyrk and
     // cblas_zdotc_sub, and SciPy's LP64 zsytrf and zsytrs. `arrays`: also
