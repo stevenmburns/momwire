@@ -18,6 +18,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -211,6 +212,11 @@ struct PortSolve {
     bool x_c_order = true;
     std::vector<cdouble> X;
     std::vector<cdouble> Y;  // (n_p, n_p) C order
+    // momwire#1898 (`kcl_nullspace`): the route `BSplineSolver._kcl_plan`
+    // records on `kcl_nullspace_route`, "reduced" or "schur: <reason>";
+    // empty when the feature is off or there are no constraint rows (Python
+    // records nothing then either).
+    std::string kcl_route;
 };
 // SciPy's symmetric pair (`zsytrf` / `zsytrs`, LP64, the `cython_lapack`
 // signatures): what `scipy.linalg.solve` takes for an exactly symmetric
@@ -231,6 +237,25 @@ PortSolve solve_ports(std::vector<cdouble> Z, int64_t n_b, const std::vector<dou
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np,
                       const SymLapack *sym = nullptr);
+
+// momwire#1898, the opt-in feature `kcl_nullspace` (reach 1: no executable
+// requests it; EXE_FEATURES refuses its variable). When it is REQUESTED
+// (`ni_eval::requested_features().kcl_nullspace`) and the constraint rows
+// are reducible, `solve_ports` replays `BSplineSolver._solve_reduced`
+// (`momwire._kcl_nullspace`: plan, Q^T Z Q in Z's buffer, Q^T V, the LU,
+// x = Q y) in place of the Schur route; otherwise the Schur route, as
+// Python's `_kcl_plan` falls back.
+struct KclPlan {
+    int64_t n = 0;
+    std::vector<int64_t> keep, elim, k, e;  // Q's off-identity entries: x[e] += a x[k]
+    std::vector<double> a;
+};
+// `_kcl_nullspace.plan(kcl_A)` on the (n_c, n) row-major rows: "" and `out`
+// filled, or the reason string Python returns.
+std::string kcl_plan(const std::vector<double> &kcl, int64_t n_c, int64_t n, KclPlan &out);
+// `_kcl_nullspace.COUNTS`: per process, each route `solve_ports` took with
+// the feature on ("reduced", "schur: <reason>"), for tests to read.
+std::vector<std::pair<std::string, uint64_t>> kcl_nullspace_counts();
 
 // One SOLVED wire's current (or slope) at arcs `s` (clipped to its knots):
 // `_wire_span_polynomials` + `_eval_span_polynomials`.
