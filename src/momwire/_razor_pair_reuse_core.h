@@ -41,13 +41,23 @@
 // accuracy, and two different keys never share a class (exact equality of the
 // quantised integers, no hashing of the key into fewer bits).
 //
-// EXCLUDED: a pair whose observer lies within NEAR_LENGTHS source lengths of
-// the source's centre (max(|v|, sqrt(perp)) < NEAR_LENGTHS h: the self term
-// and its neighbours) is a class of its own, evaluated in its own frame, as
-// the fill would. Their values carry the near-singular part the basis sums
-// cancel, so any rounding of their geometry other than the structure's own
-// is amplified into the answer (the sinusoidal plan's measured reason,
-// `_sin_pair_reuse.NEAR_LENGTHS`).
+// EXCLUDED: a pair whose observer lies within NEAR_LENGTHS kernel scales of
+// the source's centre (max(|v|, sqrt(perp)) < NEAR_LENGTHS max(h, a): the
+// self term and its neighbours) is a class of its own, evaluated in its own
+// frame, as the fill would. Their values carry the near-singular part the
+// basis sums cancel, so any rounding of their geometry other than the
+// structure's own is amplified into the answer (the sinusoidal plan's
+// measured reason, `_sin_pair_reuse.NEAR_LENGTHS`). The scale is the longer
+// of the source's length and its radius, because where h < a the kernel
+// varies over a, not h: on a hairpin whose 2 mm bridge has 21 segments of
+// 95 um on a 1 mm radius (cond(Z) ~ 7e9), a near rule in h alone shared
+// bridge-on-bridge pairs a few h apart whose v differed by coordinate
+// rounding, and Zin moved 1.5e-5 with the reduced kernel and exact_kernel
+// off, 2.5e-7 with the extended kernel, while every pair passed `verify`
+// at 2e-13 (momwire#1971 review). With max(h, a) the same deck moves 7e-11
+// and 1e-12 (the reduced kernel's off fill itself moves 2e-8 between the
+// deck at the origin and translated 3.3 m). Where h >= a, the usual mesh,
+// the rule is the one in h.
 //
 // THE COMPOSING GROUND'S REMAINDER (momwire#1970's height-aware key). Its
 // value for observer segment o (centroid, tangent t_o) and source segment s,
@@ -173,7 +183,9 @@ void clear_cache();
 // gather then never applies M1 -> h M0 - M1), PROBE_NO_TYPE the direct key's
 // radius / EK type, PROBE_Q_NO_FLIP the remainder's orientation code.
 // PROBE_NO_FOLD is not wrong, only uncompressed: the direct key keeps the
-// sign of v, so a test can count what the orientation fold merges. A plan is
+// sign of v, so a test can count what the orientation fold merges.
+// PROBE_NEAR_H is the near rule in source lengths alone, which shares the
+// near pairs of a segment shorter than its radius. A plan is
 // keyed on the probe it was built under. Bound for Python's tests only;
 // nothing in the executables sets it.
 enum Probe : int {
@@ -183,6 +195,7 @@ enum Probe : int {
     PROBE_NO_TYPE = 3,
     PROBE_Q_NO_FLIP = 4,
     PROBE_NO_FOLD = 5,
+    PROBE_NEAR_H = 6,
 };
 void set_probe(int probe);
 int probe();
