@@ -21,8 +21,10 @@ of them have the same Φ: every rigid motion, mirrored pairs included.
 THE KEY quantises the four scalars with a step of 2^-KEY_BITS times the
 pair's singular distance (the observer centre to the source segment, within
 sqrt(2), floored at the observer radius), rounded down to a power of two so
-the step is a function of the value alone; the source's half-length
-is quantised the same way, and the radii and end codes are exact. A member
+the step is a function of the value alone; the source's half-length is
+quantised against ITSELF at KEY_BITS relative bits (`_quantise_length`, a
+few ulp, so lengths that differ by more than rounding never share a
+class), and the radii and end codes are exact. A member
 differs from its representative by at most 2^-(KEY_BITS+1) relative to the
 scale at which Φ varies (k r times that in phase), and takes its Φ. Pairs
 that straddle a quantum land in neighbouring classes, which costs
@@ -30,13 +32,24 @@ compression, never accuracy. The classes are exact-equality groups of the
 quantised integers (the `factorize_ints` hash kernel, staged over its three
 columns), so no two different keys can share a class.
 
-EXCLUDED: a pair whose observer lies within `NEAR_LENGTHS` source lengths of
+EXCLUDED: a pair whose observer lies within `NEAR_LENGTHS` kernel scales of
 the source's centre (in the max norm of |z| and rho: the self term and its
 neighbours) is not shared, and is evaluated by the shipped kernel in the
 ORIGINAL frame, exactly as the fill would (`near_blocks`). Those pairs carry
 the near-singular field that the basis sums over neighbouring sources
 cancel, so any rounding of their geometry other than the structure's own,
 including the canonical frame's, is amplified into the answer.
+
+The kernel scale is the longer of the source's length and the observer's
+radius, max(2H, a), razor-2p's rule (momwire#1971, ported by #1982). Where
+a segment is shorter than its radius the kernel varies over a, not h, and
+a rule in source lengths alone shared pairs a few h apart but inside a
+radius. Measured on a hairpin (two 10 m wires 2a apart joined by a 2a
+bridge of 21 segments, a = 6 cm at lambda 20 m, so h/a = 0.095 and k h is
+inside the served range; free space, reduced kernel), at the origin: Zin
+moved 1.4e-3 against the flag-off fill with the rule in h alone, 1.6e-9
+with max(2H, a); 11 bridge segments (h/a 0.18), 2.0e-9 -> 7e-12. Where
+2H >= a, the usual mesh, the rule and the plan are unchanged.
 
 EVALUATION is the shipped kernel in the OBSERVER's frame: one observer row
 at the origin along +z, and each class's source placed so the four scalars
@@ -124,9 +137,10 @@ from ._accel import acc as _acc
 #: Relative resolution of the key, in bits.
 KEY_BITS = 48
 
-#: Pairs whose observer lies within this many source lengths of the source's
-#: centre are not shared: each is evaluated directly, in the original frame.
-#: Their field is near-singular, and the basis sums over neighbouring
+#: Pairs whose observer lies within this many kernel scales (`_near_scale`:
+#: the source's length, or the observer's radius where that is longer) of
+#: the source's centre are not shared: each is evaluated directly, in the
+#: original frame. Their field is near-singular, and the basis sums over neighbouring
 #: sources cancel most of it, so a geometry rounding other than the
 #: structure's own is amplified there (measured: canonical-frame near pairs
 #: moved a 16-bowtie array's input impedance 7.7e-11, original-frame ones
@@ -493,6 +507,13 @@ def pair_scalars(obs_c, obs_t, src_c, src_t):
     return z, rho, td, rdt
 
 
+def _near_scale(H, a_obs):
+    """The near rule's kernel scale per (observer, source) pair, (R, N):
+    max(2H, a), the source's length or the observer's radius, whichever is
+    longer (see the module docstring)."""
+    return np.maximum(2.0 * H[None, :], np.asarray(a_obs)[:, None])
+
+
 def _band_keys(z, rho, td, rdt, H, a_obs, type_id, near=False):
     """The quantised key columns of one band (int64, (R*N,) each).
 
@@ -504,7 +525,7 @@ def _band_keys(z, rho, td, rdt, H, a_obs, type_id, near=False):
     # a factor sqrt(2) as max(rho, |z| - H), floored at the observer radius.
     az = np.abs(z)
     near = (
-        (np.maximum(az, rho) < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
+        (np.maximum(az, rho) < NEAR_LENGTHS * _near_scale(H, a_obs)).reshape(-1)
         if near and NEAR_LENGTHS > 0
         else None
     )
@@ -919,7 +940,7 @@ def _ground_band_keys(scalars, H, a_obs, type_id):
     hs, dn, da, db, ab, zi, rho = scalars
     az = np.abs(zi)
     near = (
-        (np.maximum(az, rho) < (2.0 * NEAR_LENGTHS) * H[None, :]).reshape(-1)
+        (np.maximum(az, rho) < NEAR_LENGTHS * _near_scale(H, a_obs)).reshape(-1)
         if NEAR_LENGTHS > 0
         else None
     )
