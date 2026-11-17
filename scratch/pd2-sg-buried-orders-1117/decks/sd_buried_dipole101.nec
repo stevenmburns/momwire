@@ -1,0 +1,9 @@
+CM S-D timing deck buried_dipole101
+CE
+GW 1 101 0 -2.1187 -1 0 2.1187 -1 .002
+GE -1
+GN 2 0 0 0 13 .005
+FR 0 1 0 0 14.15
+EX 0 1 51 0 1
+XQ
+EN
