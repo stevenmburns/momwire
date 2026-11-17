@@ -1914,6 +1914,10 @@ class BSplineSolver(
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "bspline"
+
     # momwire#396: everything is served on its own — three of the four
     # refusals are `use_singular_enrichment` combinations (`__init__`'s
     # three raises, reused here). `HMatrixSolver` / `ArrayBlockSolver` fall
@@ -9223,29 +9227,16 @@ class BSplineSolver(
             return str(exc)
         return None
 
+    @_near_interface.under_levers
     def _compute_Z_operator_buried(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """`_compute_Z_operator_buried_scoped` under this solver's
-        `factored_columns`, `height_sheet_recal`, `crossing_table` and
-        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
-        with (
-            _near_interface.factored_columns_scope(
-                getattr(self, "_factored_columns", False)
-            ),
-            _near_interface.height_sheet_recal_scope(
-                getattr(self, "_height_sheet_recal", False)
-            ),
-            _near_interface.crossing_table_scope(
-                getattr(self, "_crossing_table", False)
-            ),
-            _near_interface.crossing_sheet_retune_scope(
-                getattr(self, "_crossing_sheet_retune", False)
-            ),
-        ):
-            return self._compute_Z_operator_buried_scoped(
-                geom, supp_seg, polys, rows=rows, compact=compact
-            )
+        near-interface levers (`_near_interface.under_levers`: momwire#1860,
+        #1956, set in one place since #1980)."""
+        return self._compute_Z_operator_buried_scoped(
+            geom, supp_seg, polys, rows=rows, compact=compact
+        )
 
     def _compute_Z_operator_buried_scoped(
         self, geom, supp_seg, polys, rows=None, compact=False

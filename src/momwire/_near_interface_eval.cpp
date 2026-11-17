@@ -1016,10 +1016,13 @@ std::string py_repr(double x) {
 
 namespace {
 // The default-on features (`Feature.default` in `momwire._features`):
-// requested from the start, as Python's solvers have them on unless told
-// otherwise, so every C++ route (an executable, a test's Python-free
-// driver, an in-process seam) fills as Python does by default. An
-// executable withdraws one its environment turns off (`withdraw_feature`).
+// requested from the start, as Python's bspline and razor solvers have them
+// on unless told otherwise, so every C++ route (an executable, a test's
+// Python-free driver, an in-process seam) fills as those do by default.
+// Python's sinusoidal and sinusoidal-Galerkin fills run every lever off
+// (`_near_interface.under_levers`, momwire#1980); the nec42-sinusoidal
+// executable, past the levers' reach, withdraws them. An executable
+// withdraws one its environment turns off (`withdraw_feature`).
 Features default_requested() {
     Features f;
     f.factored_columns = true;

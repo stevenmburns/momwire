@@ -74,7 +74,7 @@ import numpy as np
 from scipy.special import hankel1, hankel2, wofz
 from threadpoolctl import ThreadpoolController
 
-from . import _accel, _cancel
+from . import _accel, _cancel, _features
 from ._quadrature import leggauss
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
@@ -351,6 +351,68 @@ def crossing_sheet_retune_scope(on):
         yield
     finally:
         _CROSSING_SHEET_RETUNE.reset(token)
+
+
+# momwire#1980: the four scopes above, set in ONE place for every buried
+# route. A solver's fill entry is decorated with `under_levers`, which opens
+# all four around it at the solver's own choices (`solver_levers`): a lever
+# is on only where the solver's family honours it in the feature registry
+# (`_features.Feature.solvers`) AND the solver resolved it on
+# (`self._<name>`, `_features.bind`). The sinusoidal and sinusoidal-Galerkin
+# families honour none of them today, so their fills run with every lever
+# explicitly off -- the state the contextvars' defaults gave them before,
+# bit for bit. Turning one on for a family is a registry edit plus the
+# constructor's kwarg (the maintainer's call, after a same-machine base vs
+# change measurement against the lever's declared drift).
+LEVERS = (
+    "factored_columns",
+    "height_sheet_recal",
+    "crossing_table",
+    "crossing_sheet_retune",
+)
+
+
+def solver_levers(solver):
+    """``{lever: on}`` for every name in `LEVERS`, as `solver` fills: on
+    only where its family (`FEATURE_SOLVER`) honours the lever and the
+    instance has it on. A solver of no registered family has every lever
+    off."""
+    kind = getattr(solver, "FEATURE_SOLVER", None)
+    return {
+        name: bool(
+            kind is not None
+            and _features.honours(name, kind)
+            and getattr(solver, f"_{name}", False)
+        )
+        for name in LEVERS
+    }
+
+
+@contextlib.contextmanager
+def levers_scope(levers):
+    """Run the body (one fill) under `levers`, ``{lever: on}`` naming every
+    lever in `LEVERS` (`solver_levers`)."""
+    if set(levers) != set(LEVERS):
+        raise ValueError(f"levers_scope needs exactly {LEVERS}, got {sorted(levers)}")
+    with (
+        factored_columns_scope(levers["factored_columns"]),
+        height_sheet_recal_scope(levers["height_sheet_recal"]),
+        crossing_table_scope(levers["crossing_table"]),
+        crossing_sheet_retune_scope(levers["crossing_sheet_retune"]),
+    ):
+        yield
+
+
+def under_levers(method):
+    """Decorate a solver's fill entry so its body runs under the solver's
+    near-interface levers (`levers_scope` of `solver_levers`)."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with levers_scope(solver_levers(self)):
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _sheet_weights():
