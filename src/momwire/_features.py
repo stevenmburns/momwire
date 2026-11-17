@@ -527,6 +527,44 @@ FEATURES: dict[str, Feature] = {
             drift=1e-6,
             offer=False,
         ),
+        # razor-2p's fill-pair reuse (momwire#1971): the fill finds its own
+        # classes of (centroid observer, source segment) pairs, the direct
+        # and image moments keyed on what the kernel reads and the composing
+        # ground's remainder on the height-aware key, evaluates one
+        # representative per class with the shipped kernels and gathers the
+        # rest, in Python and in the executables (one C++ core).
+        Feature(
+            name="razor_pair_reuse",
+            # The executables are levels 6 (Windows) and 7 (Linux, macOS), and
+            # they carry only a feature whose reach covers them. Measured on
+            # Linux avx2 (levels 1 and 7) only: the levels between are the
+            # maintainer's to certify or to take back to 1, which drops the
+            # executables' row (`EXE_FEATURES`).
+            reach=7,
+            env="MOMWIRE_X_RAZOR_PAIR_REUSE",
+            kind="native",
+            issue=1971,
+            since="2026-11-16",
+            kwarg="razor_pair_reuse",
+            paths=(
+                "src/momwire/_razor_pair_reuse_core.cpp",
+                "src/momwire/_razor_pair_reuse_core.h",
+                "tests/test_razor_pair_reuse_1971.py",
+            ),
+            label="razor pair reuse",
+            summary=(
+                "nec5-razor-2p fills each class of congruent segment pairs once "
+                "and copies the rest, in free space and over a perfect or "
+                "Sommerfeld ground (the buried fill excepted)."
+            ),
+            # |dZin|/|Zin| against the flag-off fill, the worst over every
+            # frequency (13 each) of the six benchmark decks, Python route
+            # (Rocketlake, momwire#1971): gsky_m24 2.6e-13 (Sommerfeld),
+            # fd_h51 2.4e-13, sky_m24 2.0e-13, gfd_h51 1.5e-13 (Sommerfeld),
+            # p_m24 1.0e-13, fd_h27 3.9e-14. 1e-12 is about 4x the worst.
+            drift=1e-12,
+            offer=False,
+        ),
     )
 }
 

@@ -1291,6 +1291,54 @@ _HAVE_RAZOR_FRONT_CXX = _acc is not None and bool(
     getattr(_acc, "razor_front_proto", False)
 )
 _CXX_FRONT_ROUTE = {}
+
+# Fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`): the binding of
+# the C++ core the solve core runs too, and which fill each solve with
+# `razor_pair_reuse` on took: "reuse", or the first thing it does not serve
+# (the fill then runs as without it). Tests read it, so a gate can prove the
+# reuse branch RAN.
+_HAVE_PAIR_REUSE = _acc is not None and bool(
+    getattr(_acc, "razor_pair_reuse_1971", False)
+)
+_PAIR_REUSE_ROUTE = {}
+# The last plan's census (`RazorReusePlan.stats()`): pairs, classes, the
+# representatives' evaluations, the census's seconds. For tests and studies.
+_PAIR_REUSE_STATS = [None]
+
+
+class _ReuseNow:
+    """One fill's reuse: the plan (shared by the process), this k's class
+    values, the mode (1 on, 2 `verify`), and whether the composing ground's
+    remainder is planned and evaluated."""
+
+    __slots__ = ("plan", "values", "mode", "q", "q_ready", "cent", "seg_t", "seg_h")
+
+    def __init__(self, plan, values, mode, q, cent, seg_t, seg_h):
+        self.plan = plan
+        self.values = values
+        self.mode = mode
+        self.q = q
+        self.q_ready = False
+        self.cent = cent
+        self.seg_t = seg_t
+        self.seg_h = seg_h
+
+
+def _reuse_check(ref0, ref1, got0, got1, seg_h, what):
+    """`verify`: every pair's reused values against the shipped ones, over
+    the pair's largest of |M0|, |M1| / h (`_razor_pair_reuse_core.h`)."""
+    scale = np.maximum(np.abs(ref0), np.abs(ref1) / seg_h)
+    err = np.maximum(np.abs(got0 - ref0), np.abs(got1 - ref1) / seg_h)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rel = np.where(err == 0.0, 0.0, err / scale)
+    worst = float(rel.max()) if rel.size else 0.0
+    if not worst <= _acc.razor_reuse_verify_tol:
+        raise RuntimeError(
+            f"razor pair_reuse verify: a reused {what} is {worst:.3g} off the shipped fill"
+        )
+    return worst
+
+
 # False keeps the opted-in solve on the fill-only route below (the
 # prototype's own tests exercise that route this way).
 _CXX_FRONT = True
@@ -1957,6 +2005,7 @@ class RazorSolver(
         height_sheet_recal=None,
         crossing_table=None,
         crossing_sheet_retune=None,
+        razor_pair_reuse=None,
         cancel=None,
         **unsupported,
     ):
@@ -2053,6 +2102,26 @@ class RazorSolver(
         self._crossing_sheet_retune = _features.enabled(
             "crossing_sheet_retune", crossing_sheet_retune
         )
+        # momwire#1971: fill-pair reuse. None defers to
+        # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
+        # checks every window against the shipped fill. Off (0) is the fill
+        # as it always was, bit for bit; 1 on, 2 verify.
+        if razor_pair_reuse not in (None, False, True, "verify"):
+            raise ValueError(
+                "razor_pair_reuse must be None, False, True or 'verify', got "
+                f"{razor_pair_reuse!r}"
+            )
+        self._pair_reuse = (
+            0
+            if not _features.enabled(
+                "razor_pair_reuse",
+                None if razor_pair_reuse is None else bool(razor_pair_reuse),
+            )
+            else (2 if razor_pair_reuse == "verify" else 1)
+        )
+        self._reuse_now = None
+        # The C++ front route reads it with the constructor's own arguments.
+        self._cxx_kwargs["pair_reuse"] = self._pair_reuse
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -4691,6 +4760,86 @@ class RazorSolver(
                 prepared["image"]["src_r"] = geom["seg_p0"] + seg_h[:, None] * seg_t
         return prepared
 
+    def _pair_reuse_refusal(self, prepared, k, restrict):
+        """Why fill-pair reuse does not serve this fill, or None
+        (momwire#1971). It serves the fill `_source_block_rows` runs on its
+        centroid-sharing branch: the NEC-5 path rule with the fused kernels'
+        tokens, a real k, unrestricted and unchopped; free space or any
+        plane (the remainder of a composing one too)."""
+        if not _HAVE_PAIR_REUSE:
+            return "no-kernel"
+        if restrict is not None or prepared.get("restrict_key") is not None:
+            return "restricted"
+        if not prepared["t1_on_centroids"] or prepared["n_path"] != 2:
+            return "path-rule"
+        if prepared["t2_chop"] is not None:
+            return "chop"
+        if _complex_k(k):
+            return "complex-k"
+        t2 = prepared["t2_chunks"]
+        if not isinstance(t2, _FusedMoments):
+            return "numpy-route"
+        image = prepared["image"]
+        if image is not None:
+            ti = image["t2_chunks"]
+            if not isinstance(ti, _FusedMoments) or not all(
+                np.array_equal(getattr(t2, f), getattr(ti, f))
+                for f in ("obs", "seg_h", "a", "xg", "wg", "group_i", "b_obs")
+            ):
+                return "image-token"
+        return None
+
+    def _pair_reuse_begin(self, geom, prepared, k, restrict):
+        """The plan (from the process's cache, `razor_reuse_plan`) and this
+        k's class values, or None when reuse is off or does not serve."""
+        if not self._pair_reuse:
+            return None
+        reason = self._pair_reuse_refusal(prepared, k, restrict)
+        key = "reuse" if reason is None else reason
+        _PAIR_REUSE_ROUTE[key] = _PAIR_REUSE_ROUTE.get(key, 0) + 1
+        if reason is not None:
+            return None
+        t2 = prepared["t2_chunks"]
+        image = prepared["image"]
+
+        def source_set(tok):
+            return (tok.seg_p0, tok.seg_t, tok.group_j, tok.a_ek)
+
+        # The composing ground's remainder is planned when every path row is
+        # its wing centroid along its wing's signed tangent: the rows the plan
+        # gathers are then the rows `field_windows` would project.
+        q = image is not None and "src_l" in image and "obs_pts" in image
+        if q:
+            s_ab = np.stack([prepared["s_a"], prepared["s_b"]], axis=1).ravel()
+            sig = geom["wing_sigma"].ravel()
+            q = bool(
+                np.array_equal(image["obs_pts"], t2.obs[s_ab])
+                and np.array_equal(
+                    image["obs_tans"], sig[:, None] * geom["seg_t"][s_ab]
+                )
+                and np.all(np.abs(sig) == 1.0)
+            )
+            if not q:
+                _PAIR_REUSE_ROUTE["q-observers"] = (
+                    _PAIR_REUSE_ROUTE.get("q-observers", 0) + 1
+                )
+        plan = _acc.razor_reuse_plan(
+            t2.obs,
+            t2.group_i,
+            t2.b_obs,
+            t2.seg_h,
+            t2.a,
+            source_set(t2),
+            None if image is None else source_set(image["t2_chunks"]),
+            q,
+            float(self.ground_z) if q else 0.0,
+        )
+        values = plan.values(float(k), t2.xg, t2.wg, self._cancel_flag)
+        _PAIR_REUSE_STATS[0] = plan.stats()
+        return _ReuseNow(
+            plan, values, self._pair_reuse, q, t2.obs, geom["seg_t"], t2.seg_h
+        )
+
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
         """`_assemble_Z_from_prepared_scoped` under this solver's
         `factored_columns`, `height_sheet_recal`, `crossing_table` and
@@ -4798,6 +4947,18 @@ class RazorSolver(
             rkw = {} if restrict is None else {"restrict": restrict}
             self._advise_ek_above()
             return self._assemble_Z_below_plane(geom, prepared, k, omega, **rkw)
+        # momwire#1971: this fill's reuse, when it is on and serves it; the
+        # two source blocks read it (`_source_block_rows`), and nothing else.
+        self._reuse_now = self._pair_reuse_begin(geom, prepared, k, restrict)
+        try:
+            return self._assemble_Z_plain(geom, prepared, k, omega, restrict, use_exact)
+        finally:
+            self._reuse_now = None
+
+    def _assemble_Z_plain(self, geom, prepared, k, omega, restrict, use_exact):
+        """`_assemble_Z_from_prepared_scoped`'s free-space / plane route: the
+        real block, the exact kernel's correction, the image fold, the
+        loading."""
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k, omega, restrict=restrict
         )
@@ -6357,6 +6518,27 @@ class RazorSolver(
         # One slot: the current window's (lo, hi, centroids, their M0 rows)
         # when its T1 and T2 share the centroid evaluation.
         shared = [None] if sources.get("t1_on_centroids") else None
+        # momwire#1971: this block's reuse, when the fill has one -- block 0
+        # the real sources, 1 the image -- and the composing ground's
+        # remainder classes evaluated through this block's own producer.
+        reuse = self._reuse_now if shared is not None else None
+        block = None
+        if reuse is not None:
+            if sources is prepared:
+                block = 0
+            elif sources is prepared.get("image"):
+                block = 1
+            else:
+                reuse = None
+        q_reuse = reuse is not None and block == 1 and reuse.q and rem_fn is not None
+        if q_reuse and not reuse.q_ready:
+            for g, (o_idx, s_idx) in enumerate(reuse.plan.q_groups()):
+                reuse.plan.store_q(
+                    reuse.values,
+                    g,
+                    rem_fn.pair_moments(reuse.cent[o_idx], reuse.seg_t[o_idx], s_idx),
+                )
+            reuse.q_ready = True
 
         def _m0c_rows(c0, c1, M0c=None):
             # Rows [c0, c1) of the (weighted) centroid moments M0c
@@ -6596,11 +6778,23 @@ class RazorSolver(
                 # alone (`_FusedMoments.rows`), and these are the same floats
                 # `cent` gives both prepares.
                 need = np.unique(np.concatenate([s_a[lo:hi], s_b[lo:hi]]))
-                M0, M1 = (
-                    sources["t2_chunks"]
-                    .take(need)
-                    .evaluate(self, k, need_m1=True, n_obs=need.size)
-                )
+                if reuse is not None:
+                    # momwire#1971: the window's rows from the class values.
+                    M0, M1 = reuse.plan.gather(reuse.values, block, need)
+                    if reuse.mode == 2:
+                        R0, R1 = (
+                            sources["t2_chunks"]
+                            .take(need)
+                            .evaluate(self, k, need_m1=True, n_obs=need.size)
+                        )
+                        _reuse_check(R0, R1, M0, M1, reuse.seg_h, "moment")
+                        del R0, R1
+                else:
+                    M0, M1 = (
+                        sources["t2_chunks"]
+                        .take(need)
+                        .evaluate(self, k, need_m1=True, n_obs=need.size)
+                    )
                 obs_row = np.searchsorted(
                     need, np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel()
                 )
@@ -6713,7 +6907,42 @@ class RazorSolver(
                 # The remainder rides the same window, and the same wing
                 # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
                 # the projected field where `mom_a` / `mom_b` carry M0 and M1.
-                if _use_razor_q_accel():
+                if q_reuse:
+                    # momwire#1971: each path row is its wing segment's row of
+                    # the remainder classes, times the wing's sign.
+                    f_q = reuse.plan.gather_q(
+                        reuse.values,
+                        np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel(),
+                        np.stack([sig_a[lo:hi], sig_b[lo:hi]], axis=1).ravel(),
+                    )
+                    if reuse.mode == 2:
+                        ref = rem_fn(lo * n_path, hi * n_path)
+                        _reuse_check(
+                            ref[..., 0],
+                            ref[..., 1],
+                            f_q[..., 0],
+                            f_q[..., 1],
+                            reuse.seg_h,
+                            "remainder row",
+                        )
+                        del ref
+                if q_reuse and _use_razor_q_accel():
+                    Q_rows = _acc.razor_q_rows(
+                        f_q,
+                        np.arange(f_q.shape[0]),
+                        s_a,
+                        s_b,
+                        h_a,
+                        h_b,
+                        fall_mask_a,
+                        fall_mask_b,
+                        sig_a,
+                        sig_b,
+                        wts[lo:hi].reshape(-1),
+                        n_path,
+                    )
+                    del f_q
+                elif _use_razor_q_accel():
                     # momwire#1290: the wing algebra below in one pass over
                     # the window's distinct observers' moments (`razor_q_rows`,
                     # whose header derives it is numpy's arithmetic), with no
@@ -6736,7 +6965,7 @@ class RazorSolver(
                     del f_u, inv
                 else:
                     Q_rows = _q_rows_numpy(
-                        rem_fn(lo * n_path, hi * n_path),
+                        f_q if q_reuse else rem_fn(lo * n_path, hi * n_path),
                         s_a,
                         s_b,
                         h_a,
@@ -7205,6 +7434,10 @@ class RazorSolver(
             return "buried-route"
         if prepared.get("restrict_key") is not None:
             return "restricted"
+        if self._pair_reuse:
+            # momwire#1971: the prototype takes no reuse plan; the Python
+            # route (and the front route before it) does.
+            return "pair-reuse"
         if not prepared["t1_on_centroids"] or prepared["n_path"] != 2:
             return "path-rule"
         if prepared["t2_chop"] is not None:
