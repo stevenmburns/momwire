@@ -581,6 +581,15 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g) {
 }
 
 void set_probe(int p) { g_probe.store(p); }
+
+namespace {
+std::atomic<int64_t> g_small_free{SMALL_DECK_SEGS_FREE}, g_small_ground{SMALL_DECK_SEGS_GROUND};
+}  // namespace
+int64_t small_deck_segs(bool finite) { return finite ? g_small_ground.load() : g_small_free.load(); }
+void set_small_deck_segs(int64_t free_space, int64_t finite_ground) {
+    g_small_free.store(free_space < 0 ? SMALL_DECK_SEGS_FREE : free_space);
+    g_small_ground.store(finite_ground < 0 ? SMALL_DECK_SEGS_GROUND : finite_ground);
+}
 void set_class_limit(int64_t direct, int64_t remainder) {
     g_class_limit[0].store(direct < 0 ? 0 : direct);
     g_class_limit[1].store(remainder < 0 ? 0 : remainder);

@@ -109,6 +109,40 @@ constexpr int REP_ROWS = 16;
 // The `verify` mode's per-pair bound: |reused - direct| over the pair's
 // largest of |M0|, |M1| / h (the remainder: |Q0|, |Q1| / h).
 constexpr double VERIFY_TOL = 1e-9;
+// Segments below which the reuse steps aside (both routes: the Python
+// route's `_pair_reuse_refusal`, the solve core's `reuse_begin`), the census
+// costing about what a small deck's fill saves: in free space and over the
+// PEC image, and over a finite ground (the composing Sommerfeld ground, the
+// reflection coefficient), whose image term is dearer per pair and repays
+// sooner. `verify` (mode 2) ignores them. Measured, Rocketlake, nec5-razor-2p
+// through the NEC-5 shell (the Python route), wall seconds per deck, on / off,
+// cold (one deck, fresh process, the plan built) and warm (the deck streamed
+// 6x through one process, the plan found), median of 3 (momwire#1971):
+//
+//   deck     segs  freqs   8 threads cold / warm   4 threads cold / warm
+//   sfd_h1     41   101    1.01 / 0.98             1.02 / 1.03
+//   sfd_h3    123   101    1.02 / 1.02             0.94 / 1.16
+//   sfd_h5    203   101    1.09 / 1.02             1.03 / 1.03
+//   sfd_h9    365   101    1.00 / 0.98             0.98 / 0.98
+//   p_m4      425    13    1.19 / 0.96             1.05 / 0.98   (0.25 s)
+//   sky_m6    525    13    1.00 / 0.95             1.16 / 1.01   (0.33 s)
+//   sfd_h13   529   101    0.86 / 1.01             0.94 / 0.95
+//   gsfd_h1    41   101    1.04 / 1.07             1.04 / 1.05   Sommerfeld
+//   gsfd_h3   123   101    0.91 / 1.02             0.91 / 0.98   Sommerfeld
+//   gsfd_h5   203   101    0.91 / 0.90             0.95 / 0.93   Sommerfeld
+//   gsfd_h9   365   101    0.82 / 0.81             0.74 / 0.83   Sommerfeld
+//   gsky_m6   525    13    0.70 / 0.76             0.78 / 0.72   Sommerfeld
+//
+// Free space loses up to 9 % below a few hundred segments and is even to
+// about 400; over Sommerfeld only the 41-segment deck loses, 123 is even.
+constexpr int64_t SMALL_DECK_SEGS_FREE = 400;
+constexpr int64_t SMALL_DECK_SEGS_GROUND = 100;
+// The thresholds in force (the constants, unless the TEST HOOK moved them):
+// the finite ground's when `finite`.
+int64_t small_deck_segs(bool finite);
+// TEST HOOK: move the thresholds (a negative value restores its constant), so
+// the gates can run the reuse on cheap decks below them.
+void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 // Bytes of plans the process keeps between fills.
 constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
 
