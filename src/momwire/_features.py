@@ -447,13 +447,25 @@ FEATURES: dict[str, Feature] = {
             # 2.5 m radials and vertical measures 9.77e-12 on razor-2p
             # (1.2e-13 nec5-bspline), 3.0 m at 14 MHz 6.15e-12, 5.0 m at
             # 14 MHz 3.65e-12; the same to the bit on Haswell and Skylake.
-            # Re-measured through the nec5 executables at their promotion to
-            # reach 7 (Rocketlake, T1, MW_EXE_ARRAYS, the same 16-radial hub
-            # as a NEC-5 deck over 7-30 MHz, depth 0.15-3 m, radials and
-            # vertical 2.5-7.5 m): at most 1.93e-11 on nec5-bspline (30 MHz,
-            # 1.5 m, 5 m) and 1.56e-11 on nec5-razor-2p (28 MHz, 0.5 m, 5 m),
-            # the sse2 builds the same on those two. 6e-11 keeps about 3x
-            # margin over that worst case (3e-11 before it); still far under
+            # (Those figures are the Python route's, on the dict-built decks
+            # of tests/test_crossing_sheet_retune_1956.py: the 1.5 m / 28 MHz
+            # one is `_deep_hub(28e6, 1.5, 2.5)`.)
+            # Re-measured at the promotion to reach 7 (Rocketlake, T1,
+            # MW_EXE_ARRAYS) through the nec5 executables, on a scan of the
+            # same 16-radial hub written as a NEC-5 deck (`hub_nec` there:
+            # 7-30 MHz, depth 0.15-3 m, radials and vertical 2.5-7.5 m), a
+            # different geometry from `_deep_hub` (radials laid from the hub
+            # out, the vertical and its 7th-of-15 feed counted from the base;
+            # the worst case 30 MHz and 5 m, not 28 MHz and 2.5 m). The worst
+            # measured: 1.93e-11 on
+            # nec5-bspline at 30 MHz, 1.5 m, 5 m (that module's
+            # DECKS["deep_hub"], 1.40e-11 on nec5-razor-2p there), and
+            # 1.56e-11 on nec5-razor-2p at 28 MHz, 0.5 m, 5 m; the sse2
+            # builds the same on those two, and the launcher's own route on
+            # DECKS["deep_hub"] the same digits (1.93e-11 / 1.40e-11).
+            # The declared 6e-11 is NOT a measurement: it is margin, about 3x
+            # over that measured worst case of 1.93e-11 (Steve, 2026-11-17;
+            # 3e-11 before it, which left 1.6x). Still far under
             # DEFAULT_DRIFT_MAX, so no printout reads differently.
             drift=6e-11,
             offer=False,
