@@ -13,7 +13,13 @@ What is held here:
   say so move;
 * razor's correction through the series equals the direct route's to the
   drift budget, takes the series only where its bounds hold, and with the
-  switch off is the direct route.
+  switch off is the direct route;
+* the keyword (`RazorSolver(exact_kernel_series=...)`) is the switch, the
+  import-time flag its default;
+* the executables' C++ route carries the series (`_exact_kernel_series_core`)
+  and, with it on, answers as the Python route with it on: through the front
+  route and through the deck seam's test hook, since the executables
+  themselves refuse it (reach 1).
 """
 
 import warnings
@@ -26,7 +32,9 @@ from momwire import (
     RazorSolver,
     _exact_kernel as EK,
     _exact_kernel_series as ES,
+    _features,
     _razor_exact_plan as P,
+    razor,
 )
 
 needs_accel = pytest.mark.skipif(not ES._HAVE_ACCEL, reason="accelerator not built")
@@ -241,7 +249,7 @@ BENT = [np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 0.25), (0.15, 0.0, 0.40)])]
 DIPOLE = [np.array([(0.0, 0.0, -0.235), (0.0, 0.0, 0.235)])]
 
 
-def _solver(wires, npe, wavelength=1.0, a=0.0125):
+def _solver(wires, npe, wavelength=1.0, a=0.0125, **kw):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return RazorSolver(
@@ -252,6 +260,7 @@ def _solver(wires, npe, wavelength=1.0, a=0.0125):
             exact_kernel=True,
             nec5_quadrature=True,
             extended_kernel=True,
+            **kw,
         )
 
 
@@ -353,3 +362,253 @@ def test_the_series_is_opt_in():
         if env is not None:
             os.environ["MOMWIRE_EXACT_KERNEL_SERIES"] = env
         importlib.reload(ES)
+
+
+# --------------------------------------------------------------------------
+# the keyword, and the executables' C++ route
+# --------------------------------------------------------------------------
+# A native feature at reach 1: the tests that turn it on by keyword run only
+# where it is certified.
+_needs_cert = pytest.mark.skipif(
+    not _features.certified("exact_kernel_series"),
+    reason="exact_kernel_series is not certified on this platform",
+)
+DRIFT = _features.FEATURES["exact_kernel_series"].drift
+
+
+def _same(a, b):
+    """Bit for bit on Linux, where the house gates are; elsewhere within the
+    feature's declared drift."""
+    import sys
+
+    a, b = np.ascontiguousarray(a), np.ascontiguousarray(b)
+    if sys.platform.startswith("linux"):
+        return a.tobytes() == b.tobytes()
+    return np.max(np.abs(a - b)) <= DRIFT * np.max(np.abs(b))
+
+
+@needs_accel
+@_needs_cert
+def test_the_keyword_is_the_switch_and_the_flag_its_default(series_switch):
+    ES.ENABLED = False
+    off = _z(BENT, [[9, 7]])
+    assert P.SERIES_STATS["built"] == 0
+    P.clear()
+    on = _z(BENT, [[9, 7]], exact_kernel_series=True)
+    assert P.SERIES_STATS["built"] > 0  # the keyword alone turned it on
+    ES.ENABLED = True
+    P.clear()
+    assert np.array_equal(_z(BENT, [[9, 7]]), on)  # the flag, as before
+    P.clear()
+    assert np.array_equal(_z(BENT, [[9, 7]], exact_kernel_series=False), off)
+    assert P.SERIES_STATS["built"] == 0  # an explicit off wins over the flag
+
+
+def test_a_bad_keyword_is_refused():
+    with pytest.raises(ValueError, match="exact_kernel_series must be"):
+        _solver(DIPOLE, [[37]], exact_kernel_series="yes")
+
+
+def test_a_solve_the_exact_kernel_skips_never_reads_the_switch(monkeypatch):
+    """Resolved where the correction runs: asked for outside its reach, a
+    solver whose exact kernel never engages does not refuse."""
+    calls = []
+    check = _features.check
+
+    def spy(name, context=None):
+        calls.append(name)
+        return check(name, context) if name != "exact_kernel_series" else None
+
+    monkeypatch.setattr(_features, "check", spy)
+    s = RazorSolver(
+        wires=DIPOLE,
+        n_per_edge_per_wire=[[37]],
+        wavelength=1.0,
+        wire_radius=0.0125,
+        exact_kernel=False,
+        exact_kernel_series=True,
+    )
+    s.compute_port_solution()
+    assert "exact_kernel_series" not in calls
+
+
+# A thick dipole the exact kernel's "auto" engages on (h/a = 2.3, under
+# `EXACT_KERNEL_AUTO_H_OVER_A`), its groups inside the series' bounds at
+# 30 MHz: what the C++ front route takes (it declines exact_kernel=True).
+THICK = [np.array([(0.0, -2.5, 5.0), (0.0, 2.5, 5.0)])]
+_GROUNDS = {
+    "free": {},
+    "pec": {"ground_z": 0.0},
+    "sommerfeld": {
+        "ground_z": 0.0,
+        "ground_eps": (13.0, 0.005),
+        "ground_model": "sommerfeld",
+    },
+}
+
+
+def _thick(series, ground):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = RazorSolver(
+            wires=THICK,
+            nsegs=11,
+            wire_radius=0.2,
+            wavelength=10.0,
+            nec5_quadrature=True,
+            extended_kernel=True,
+            exact_kernel="auto",
+            exact_kernel_series=series,
+            **_GROUNDS[ground],
+        )
+        return np.array(s.compute_port_solution().coeffs, copy=True)
+
+
+@needs_accel
+@_needs_cert
+@pytest.mark.parametrize("ground", sorted(_GROUNDS))
+def test_the_cxx_front_route_carries_the_series(series_switch, monkeypatch, ground):
+    """The executables' fill, from Python (`_cxx_front_port_solution`): with
+    the series on it answers as the Python route with it on, and the two
+    routes' off answers agree too. On and off differ in their last bits,
+    so the comparison could not pass with the series unrun on one side."""
+    ES.ENABLED = False
+    monkeypatch.setattr(razor, "_RAZOR_CXX", False)
+    py_off = _thick(False, ground)
+    P.clear()
+    py_on = _thick(True, ground)
+    assert P.SERIES_STATS["built"] > 0
+    assert py_on.tobytes() != py_off.tobytes()
+    monkeypatch.setattr(razor, "_RAZOR_CXX", True)
+    before = razor._CXX_FRONT_ROUTE.get("front", 0)
+    P.clear()
+    cx_on = _thick(True, ground)
+    cx_off = _thick(False, ground)
+    assert razor._CXX_FRONT_ROUTE.get("front", 0) == before + 2
+    assert P.SERIES_STATS["built"] == 0  # the Python series never ran
+    assert _same(cx_off, py_off)
+    assert _same(cx_on, py_on)
+    assert cx_on.tobytes() != cx_off.tobytes()
+
+
+# Decks for the seam's test hook (`nec5_razor_seam(features=...)`): the
+# executable's deck-to-solve route, in process. Synthetic, thick enough for
+# "auto" to engage the exact kernel.
+_HEAD = "CM momwire#1454 exe route\nCE\n"
+_FREE = "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\nXQ\nEN\n"
+_SEAM_DECKS = {
+    "free_dipole": _HEAD + "GW 1,11,0.,-2.5,5.,0.,2.5,5.,.2\n" + _FREE,
+    "radius_step": _HEAD
+    + "GW 1,6,0.,-2.5,5.,0.,0.,5.,.2\nGW 2,5,0.,0.,5.,0.,2.5,5.,.25\n"
+    + _FREE,
+    "pec_monopole": _HEAD
+    + "GW 1,10,0.,0.,0.,0.,0.,2.5,.15\n"
+    + "GE 1,-1\nGN 1\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\nXQ\nEN\n",
+    "gd_dipole": _HEAD
+    + "GW 1,11,0.,-2.5,5.,0.,2.5,5.,.2\n"
+    + "GE 1,-1\nGD 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\n"
+    + "XQ\nEN\n",
+}
+
+
+@pytest.fixture(scope="module")
+def seam_tools():
+    import importlib.util
+    import pathlib
+    import sys
+
+    from momwire import _accel
+
+    acc = _accel.acc
+    if acc is None or not hasattr(acc, "nec5_razor_seam"):
+        pytest.skip("no accelerator with the C++ seam loaded")
+    split = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "core_split"
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(
+            f"core_split_{name}", split / f"{name}.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    sys.path.insert(0, str(split))
+    try:
+        fc = load("front_compare")
+    finally:
+        sys.path.remove(str(split))
+    return acc, fc, load("seam_compare")
+
+
+def _seam_x(acc, text, features=()):
+    out = acc.nec5_razor_seam(text.encode("latin-1"), solve=True, features=features)
+    assert out["route"] == "served", out
+    return [np.asarray(p["X"]) for p in out["prepared"]]
+
+
+@needs_accel
+@_needs_cert
+@pytest.mark.parametrize("deck", sorted(_SEAM_DECKS))
+def test_the_executables_route_carries_the_series(series_switch, seam_tools, deck):
+    """The executables refuse the feature (reach 1), so their route runs it
+    through the seam's hook: deck in, the seam's preparations and solves in
+    C++ with `exact_kernel_series` asked, against the Python seam with the
+    series on (`seam_compare`: every keyword, the mesh, X and Y, bit for bit
+    on Linux). The hook's answer moves with the feature, so it ran."""
+    acc, fc, sc = seam_tools
+    text = _SEAM_DECKS[deck]
+    off = _seam_x(acc, text)
+    ES.ENABLED = True
+    P.clear()
+    row, bad = sc.compare(text, acc, fc, features=["exact_kernel_series"])
+    assert bad == [], bad
+    assert row["route"] == "served" and row.get("solves", 0) >= 1, row
+    assert P.SERIES_STATS["built"] > 0  # the Python seam took the series
+    on = _seam_x(acc, text, ["exact_kernel_series"])
+    assert any(a.tobytes() != b.tobytes() for a, b in zip(on, off))
+    # asked for one call only: the next call without it is the off answer
+    again = _seam_x(acc, text)
+    assert all(a.tobytes() == b.tobytes() for a, b in zip(again, off))
+
+
+@needs_accel
+def test_the_seam_hooks_request_is_its_own_threads(seam_tools):
+    """The hook solves with the GIL released, so two threads can be inside it
+    at once. Each must get the answer to what it asked for (`FeatureRequest`'s
+    lock), and nothing stays requested afterwards."""
+    import threading
+
+    acc, _fc, _sc = seam_tools
+    text = _SEAM_DECKS["free_dipole"]
+    off = _seam_x(acc, text)
+    on = _seam_x(acc, text, ["exact_kernel_series"])
+    assert any(a.tobytes() != b.tobytes() for a, b in zip(on, off))
+    start = threading.Barrier(2)
+    wrong = []
+
+    def worker(features, want):
+        start.wait()
+        for _ in range(60):
+            got = _seam_x(acc, text, features)
+            if any(a.tobytes() != b.tobytes() for a, b in zip(got, want)):
+                wrong.append(list(features))
+
+    threads = [
+        threading.Thread(target=worker, args=(["exact_kernel_series"], on)),
+        threading.Thread(target=worker, args=([], off)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert wrong == []
+    again = _seam_x(acc, text)
+    assert all(a.tobytes() == b.tobytes() for a, b in zip(again, off))
+
+
+def test_the_seam_hook_refuses_a_name_it_does_not_carry(seam_tools):
+    acc, _fc, _sc = seam_tools
+    with pytest.raises(ValueError, match="not a C\\+\\+ feature: no_such_feature"):
+        acc.nec5_razor_seam(
+            _SEAM_DECKS["free_dipole"].encode("latin-1"), features=["no_such_feature"]
+        )

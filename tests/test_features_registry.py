@@ -501,6 +501,9 @@ DECK = ROOT / "tests" / "fixtures" / "eznec" / "decks" / "0036_dipole-in-free-sp
         ("MOMWIRE_X_PAIR_REUSE", "pair_reuse"),
         ("MOMWIRE_X_NOT_YET_REGISTERED", "not_yet_registered"),
         ("MOMWIRE_RAZOR_CXX", "razor_cxx"),
+        # momwire#1454: the C++ route carries it, but its reach is level 1.
+        ("MOMWIRE_X_EXACT_KERNEL_SERIES", "exact_kernel_series"),
+        ("MOMWIRE_EXACT_KERNEL_SERIES", "exact_kernel_series"),
     ],
 )
 def test_the_exe_refuses_a_feature(tmp_path, var, name):
