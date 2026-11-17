@@ -805,3 +805,36 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     )
     policy = (tmp_path / "policy.out").read_bytes()
     assert policy == (tmp_path / "one.out").read_bytes()
+
+
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: the executables run it) ---
+
+_REUSE_DECKS = (
+    FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec",  # Sommerfeld
+    FIXTURES / "razor_printout_somm" / "gd_ne_dipole.nec",  # PEC, a near field
+    DIPOLE,  # free space, two sources
+)
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+@pytest.mark.parametrize("on", ["0", "1"], ids=["off", "on"])
+@pytest.mark.parametrize("deck", _REUSE_DECKS, ids=lambda p: p.stem)
+def test_razor_pair_reuse_answers_as_the_launcher(deck, on, tmp_path):
+    """The executable with MOMWIRE_X_RAZOR_PAIR_REUSE off and on: its
+    printout is the launcher's, byte for byte, line 2 naming the feature on
+    both sides when it is on (the plan, the class values and the gathers are
+    one C++ core, `_razor_pair_reuse_core.cpp`)."""
+
+    def prepare(d):
+        shutil.copy(deck, d / deck.name)
+
+    exe, ref, de, dl = _both(
+        [deck.name, "reuse.out"],
+        tmp_path,
+        prepare=prepare,
+        env={"MOMWIRE_X_RAZOR_PAIR_REUSE": on},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
+    assert (b"+razor_pair_reuse" in line2) == (on == "1"), line2
