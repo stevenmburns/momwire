@@ -55,6 +55,17 @@ It is not `.github/workflows/nightly.yml`. That one is the GitHub-hosted
    cell that silently ran the serial copy is red rather than green. The
    T2/T4 rotation cells run the threaded copy at more threads, one night in
    five each.
+   **Anchors at their default, `anchors-auto`, every night** (PA3(b)). Every
+   cell pins `MOMWIRE_BELOW_ANCHORS=off`, because with the shipped `auto` a
+   buried sweep's digits depend on the seen list two processes share through
+   the disk cache. `tests/test_standalone_anchors_auto.py` runs `auto`
+   instead, each side a fresh process with its own empty
+   `MOMWIRE_SOMM_CACHE_DIR`, on a buried FR sweep long enough to trigger the
+   blend; it asserts that blending ran on both sides (Python's
+   `SWEEP_STATS["blended_grids"]`, the executable's ANCHOR-BLENDED /
+   `ground_blended`) and then exe == Python byte for byte, for all four
+   executables. A failure is a `harness` finding naming the phase; its log is
+   `anchors-auto.log`.
 3. **One rotating cell.** One more cell of {avx2, sse2} × {T1, T2, T4}
    (avx2-T1 excluded) runs the same audit. The cell is picked from the date:
    `ROTATION[date.toordinal() % 5]` in `nightly.py`, with `ROTATION` =

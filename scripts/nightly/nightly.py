@@ -336,6 +336,26 @@ def run_cell(
     sh(cmd, logf=night / f"audit-{cell}.log", cwd=ROOT)
 
 
+def run_anchors_auto(night: Path) -> None:
+    """PA3(b): the below table's anchors at their shipped default (`auto`),
+    exe == Python, each a fresh process with its own empty cache
+    (tests/test_standalone_anchors_auto.py; every audit cell pins them off).
+    A failure is a `harness` finding naming this phase; the log has which
+    executable and why."""
+    env = env_base()
+    env.update(MOMWIRE_STANDALONE_EXES=str(EXES), MOMWIRE_FORCE_VARIANT="avx2")
+    env.pop("MOMWIRE_BELOW_ANCHORS", None)
+    sh(
+        [
+            PY, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "-n", "0",
+            "-m", "slow", "tests/test_standalone_anchors_auto.py",
+        ],
+        cwd=MW,
+        env=env,
+        logf=night / "anchors-auto.log",
+    )  # fmt: skip
+
+
 def run_sweep(night: Path, harness: Path, order_by: Path | None, case_ids=None) -> None:
     """driver.py fast at the pinned antennaknobs. With `case_ids`, a copy of
     the harness restricted to those cases (each keeps its tier: parallel or
@@ -479,6 +499,8 @@ def do_night(a) -> int:
     if ok and "build-exes" not in meta["errors"]:
         for cell in cells:
             phase(f"audit-{cell}", lambda cell=cell: run_cell(cell, night))
+        if "avx2" in variants:
+            phase("anchors-auto", lambda: run_anchors_auto(night))
     if ok and not a.no_sweep:
         prev = Path(green["dir"]) / "sweep.jsonl" if green.get("dir") else None
         phase("sweep", lambda: run_sweep(night, ensure_ak(night / "build.log"), prev))

@@ -58,6 +58,15 @@ def test_the_threaded_copy_runs_every_night():
         audit.parse_cell("avx2-T1-serial")
 
 
+def test_the_anchors_phase_names_a_test_that_exists():
+    """PA3(b): the nightly's `anchors-auto` phase runs a module that exists."""
+    import inspect
+
+    src = inspect.getsource(nightly.run_anchors_auto)
+    assert "tests/test_standalone_anchors_auto.py" in src
+    assert (ROOT / "tests" / "test_standalone_anchors_auto.py").is_file()
+
+
 def test_known_list_entries_are_well_formed():
     kinds = {
         "mismatch", "exe-declines", "exe-no-answer", "py-error", "variant",
