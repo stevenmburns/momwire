@@ -562,6 +562,11 @@ void register_sinusoidal(py::module_ &m) {
           "calls each body has served in this process (momwire#1224). The "
           "bodies' outputs are bit-identical, so this is the only way to "
           "see which one production took.");
+    m.def("point_cplx_staged_calls", &sgc::point_cplx_staged_calls,
+          "How many point_field_tensor_cplx_staged calls this process has "
+          "served, from the Python solver and the C++ sinusoidal fill alike "
+          "(momwire#1849): the staged tensor is close to the scalar one, so "
+          "this is how a test sees which kernel a route took.");
     m.def("sg_cplx_phase_sweep",
           [](py::array_t<double, py::array::c_style | py::array::forcecast> d,
              std::complex<double> k, bool pad) {
