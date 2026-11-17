@@ -362,15 +362,14 @@ struct ExeFeature {
     int reach;
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
-// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
-// and razor-2p's fill-pair reuse (momwire#1971).
+// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`).
+// razor-2p's fill-pair reuse (momwire#1971) is in the C++ core, but its reach
+// is level 1 (the hosted app), so it has no row and this executable refuses it.
 const ExeFeature EXE_FEATURES[] = {
     {"factored_columns", 8, true},
     {"height_sheet_recal", 8, true},
     {"crossing_table", 8, false},
     {"crossing_above_rule", 8, false},
-    // momwire#1971: razor-2p's fill-pair reuse (the razor seam reads it).
-    {"razor_pair_reuse", 7, false},
 };
 
 // This executable's level in support/hierarchy.toml, as
