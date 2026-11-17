@@ -57,6 +57,7 @@
 // each answer writes one `times:` line on stderr, its stages in milliseconds
 // (`_mw_times.h`). Off, nothing is timed and the printout is unchanged.
 //   MW_EXE_COPY=threads      one thread through the OpenMP copy, not the serial one
+//   MOMWIRE_FORCE_VARIANT=avx2|sse2  (fat build) the path, instead of the CPU's pick
 //   MW_EXE_FAIL=alloc|runtime  (no-Python build) throw from the solve, to test
 //                            the INTERNAL ERROR printout
 #include "_mw_times.h"
@@ -69,6 +70,67 @@
 #define mw mws
 #include "route.h"
 #undef mw
+#if MW_EXE_FAT
+// The fat build (MW_EXE_VARIANT=fat): the cores twice more, compiled for avx2,
+// as `mwa` (threaded) and `mwas` (serial). `mw` / `mws` are then sse2's, the
+// copies every CPU runs, and the ones this file's direct calls (the deck
+// reader, the refusal printouts) reach.
+#define mw mwa
+#include "route.h"
+#undef mw
+#define mw mwas
+#include "route.h"
+#undef mw
+namespace mw_fat {
+bool avx2 = false;  // main() picks (`pick_variant`) before any route call
+}
+#define MW_PICK(sse, avx, call) (mw_fat::avx2 ? avx::exe::call : sse::exe::call)
+#else
+#define MW_PICK(sse, avx, call) (sse::exe::call)
+#endif
+
+// The route's two copies as this file calls them: the serial one and the
+// threaded one, each the sse2 or (fat build, avx2 picked) the avx2 build's.
+namespace rt_serial {
+inline long long largest_solve(const std::string &t, bool open_end = false, long long *pairs = nullptr,
+                               long long *below = nullptr) {
+    return MW_PICK(mws, mwas, largest_solve(t, open_end, pairs, below));
+}
+inline void configure_grid_cache(const std::string &tag) { MW_PICK(mws, mwas, configure_grid_cache(tag)); }
+inline bool configure_features(const std::vector<std::string> &names, bool stamped = true) {
+    return MW_PICK(mws, mwas, configure_features(names, stamped));
+}
+inline bool withdraw_features(const std::vector<std::string> &names) {
+    return MW_PICK(mws, mwas, withdraw_features(names));
+}
+inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
+                   const std::string &arrays_dir, std::string &printout, std::string &reason,
+                   bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
+                   std::string *raised_kind = nullptr, bool open_end = false, bool *served = nullptr) {
+    return MW_PICK(mws, mwas, answer(t, version, variant, arrays_dir, printout, reason, failed, kind,
+                                     message, raised_kind, open_end, served));
+}
+}  // namespace rt_serial
+namespace rt_threads {
+inline long long largest_solve(const std::string &t, bool open_end = false, long long *pairs = nullptr,
+                               long long *below = nullptr) {
+    return MW_PICK(mw, mwa, largest_solve(t, open_end, pairs, below));
+}
+inline void configure_grid_cache(const std::string &tag) { MW_PICK(mw, mwa, configure_grid_cache(tag)); }
+inline bool configure_features(const std::vector<std::string> &names, bool stamped = true) {
+    return MW_PICK(mw, mwa, configure_features(names, stamped));
+}
+inline bool withdraw_features(const std::vector<std::string> &names) {
+    return MW_PICK(mw, mwa, withdraw_features(names));
+}
+inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
+                   const std::string &arrays_dir, std::string &printout, std::string &reason,
+                   bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
+                   std::string *raised_kind = nullptr, bool open_end = false, bool *served = nullptr) {
+    return MW_PICK(mw, mwa, answer(t, version, variant, arrays_dir, printout, reason, failed, kind,
+                                   message, raised_kind, open_end, served));
+}
+}  // namespace rt_threads
 
 #if !MW_EXE_NO_PYTHON
 #define PY_SSIZE_T_CLEAN
@@ -166,7 +228,12 @@ const char *const VERSION = MW_VERSION;
 #ifndef MW_EXE_VARIANT
 #define MW_EXE_VARIANT "avx2"
 #endif
+#if MW_EXE_FAT
+// The fat build carries both; main() names the one it picked (`pick_variant`).
+const char *EXE_VARIANT = "sse2";
+#else
 const char *const EXE_VARIANT = MW_EXE_VARIANT;
+#endif
 // The NAME field of the `-version` line (momwire#1606), the one place every
 // build gets it: the launcher's name, then `-standalone` and the C++ core's
 // variant, e.g. `momwire-nec5-razor-2p-standalone-avx2` (momwire#1831), so a
@@ -409,12 +476,12 @@ int feature_refusal() {
         if (!feature_default_here(f.name) || set_off) withdrawn.emplace_back(f.name);
     }
     if (!stamped.empty()) {
-        mws::exe::configure_features(stamped, true);
-        mw::exe::configure_features(stamped, true);
+        rt_serial::configure_features(stamped, true);
+        rt_threads::configure_features(stamped, true);
     }
     if (!withdrawn.empty()) {
-        mws::exe::withdraw_features(withdrawn);
-        mw::exe::withdraw_features(withdrawn);
+        rt_serial::withdraw_features(withdrawn);
+        rt_threads::withdraw_features(withdrawn);
     }
     for (const ExeFeature &f : EXE_FEATURES)
         for (const std::string &name : stamped)
@@ -777,6 +844,51 @@ bool cxx_variant_ok() {
 #endif
 }
 
+#if MW_EXE_FAT
+// The fat build's choice, made once, first thing in main(): avx2's kernels
+// where `cpu_has_avx2` (CPUID's AVX2 and FMA, and XGETBV's OS-saved AVX
+// state) says the CPU runs them, else sse2's -- the extension's rule
+// (`momwire._accel`: avx2 on a CPU with AVX2 + FMA, sse2 on any other).
+// MOMWIRE_FORCE_VARIANT, the extension's override, names one: sse2 forces the
+// baseline; avx2 on a CPU without it is the avx2 build's own refusal
+// (`cxx_variant_ok`), and no avx2 code runs.
+void run_avx2_initializers();
+void pick_variant() {
+    const std::string forced = env("MOMWIRE_FORCE_VARIANT");
+    const bool has = cpu_has_avx2();
+    const bool avx2 = forced == "avx2" || (forced != "sse2" && has);
+    EXE_VARIANT = avx2 ? "avx2" : "sse2";
+    mw_fat::avx2 = avx2 && has;
+    if (mw_fat::avx2) run_avx2_initializers();
+}
+
+// The avx2 copies' dynamic initializers, which the C runtime does NOT run:
+// fat_avx2_init.h (forced on every avx2 TU) puts their pointers in
+// `.mwav$m`, which the linker sorts between these two markers, in link order
+// as it sorts `.CRT$XCU`. They are compiled /arch:AVX2 like the rest of their
+// TU, so on a CPU without AVX2 they must never run. Run once, after the
+// pick and before any avx2 code, first to last as the C runtime's
+// `_initterm` runs its own table; the linker may pad the section with zeros.
+using mw_init_fn = void(__cdecl *)();
+#pragma section(".mwav$a", read)
+#pragma section(".mwav$z", read)
+__declspec(allocate(".mwav$a")) const mw_init_fn mw_avx2_init_begin = nullptr;
+__declspec(allocate(".mwav$z")) const mw_init_fn mw_avx2_init_end = nullptr;
+void run_avx2_initializers() {
+    const auto first = reinterpret_cast<std::uintptr_t>(&mw_avx2_init_begin) + sizeof(mw_init_fn);
+    const auto last = reinterpret_cast<std::uintptr_t>(&mw_avx2_init_end);
+    int n = 0;
+    for (std::uintptr_t a = first; a < last; a += sizeof(mw_init_fn)) {
+        const mw_init_fn f = *reinterpret_cast<const volatile mw_init_fn *>(a);
+        if (f != nullptr) {
+            f();
+            n++;
+        }
+    }
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 initializers %d\n", n);
+}
+#endif
+
 #if !MW_EXE_NO_PYTHON
 // `_gmo.requests_gmo`, conservatively: any `GE` line that does not read
 // cleanly with a zero third field sends the deck to Python, which writes the
@@ -1046,6 +1158,10 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
 
 #if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
+#if MW_EXE_FAT
+    pick_variant();  // before anything reaches a route copy (feature_refusal does)
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+#endif
     if (const int refused = feature_refusal()) return refused;
     times_begin();
     const std::vector<std::string> args(argv + 1, argv + argc);
@@ -1087,16 +1203,20 @@ int main(int argc, char **argv) {
         // build, before anything can fill a grid (the size policy's
         // seam builds the front): a rebuild at the same version starts a fresh directory.
         {
-            const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__;
-            mws::exe::configure_grid_cache(tag);
-            mw::exe::configure_grid_cache(tag);
+            const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__
+#if MW_EXE_FAT
+                                    + "-" + EXE_VARIANT  // one store per variant
+#endif
+            ;
+            rt_serial::configure_grid_cache(tag);
+            rt_threads::configure_grid_cache(tag);
         }
         // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
         // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
             const mw_times::Scope timed(mw_times::seam);
             long long pairs = 0, below = 0;
-            const long long n = mws::exe::largest_solve(text, false, &pairs, &below);
+            const long long n = rt_serial::largest_solve(text, false, &pairs, &below);
             threads = n >= 0 ? threads_for(n, pairs, below) : 1;
             if (env("MW_EXE_TIMES") == "1")
                 std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
@@ -1115,11 +1235,11 @@ int main(int argc, char **argv) {
             const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
             set_threads(blas, false);
             times_threads(1, blas);
-            printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
+            printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         } else {
             set_threads(threads, true);
             times_threads(threads, threads);
-            printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
+            printed = rt_threads::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         }
         if (printed) {
             const Clock::time_point tw = Clock::now();
@@ -1200,7 +1320,13 @@ mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EX
 // modes and this build's full release, e.g.
 // `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.82.0`.
 std::string probe_version() {
+#if MW_EXE_FAT
+    // the variant this run picked, as a one-variant build names its own
+    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_LAUNCHER "-standalone-" + EXE_VARIANT + " [sb] " +
+           VERSION;
+#else
     return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_VERSION_NAME + " [sb] " + VERSION;
+#endif
 }
 
 // `_shell.read_deck`: the file's bytes, false for anything open/read refuses
@@ -1395,15 +1521,19 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
                        "build's kernels need");
     const Clock::time_point t = Clock::now();
     {
-        const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__;
-        mws::exe::configure_grid_cache(tag);
-        mw::exe::configure_grid_cache(tag);
+        const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__
+#if MW_EXE_FAT
+                                    + "-" + EXE_VARIANT  // one store per variant
+#endif
+            ;
+        rt_serial::configure_grid_cache(tag);
+        rt_threads::configure_grid_cache(tag);
     }
     int threads = forced_threads;
     if (forced_threads <= 0) {
         const mw_times::Scope timed(mw_times::seam);
         long long pairs = 0, below = 0;
-        const long long n = mws::exe::largest_solve(text, open_end, &pairs, &below);
+        const long long n = rt_serial::largest_solve(text, open_end, &pairs, &below);
         threads = n >= 0 ? threads_for(n, pairs, below) : 1;
         if (env("MW_EXE_TIMES") == "1")
             std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
@@ -1419,17 +1549,17 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
         set_threads(blas, false);
         times_threads(1, blas);
         if (serial) {
-            printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+            printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                        &message, &raised_kind, open_end, served);
         } else {
             omp_set_num_threads(1);
-            printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+            printed = rt_threads::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                       &message, &raised_kind, open_end, served);
         }
     } else {
         set_threads(threads, true);
         times_threads(threads, threads);
-        printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+        printed = rt_threads::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                   &message, &raised_kind, open_end, served);
     }
     if (printed) {
@@ -1644,6 +1774,10 @@ void blas_env_before_load() {
 }  // namespace
 
 int main(int argc, char **argv) {
+#if MW_EXE_FAT
+    pick_variant();  // before anything reaches a route copy (feature_refusal does)
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+#endif
     if (const int refused = feature_refusal()) return refused;
     times_begin();
 #if defined(_WIN32)
