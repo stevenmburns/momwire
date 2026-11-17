@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -208,6 +209,12 @@ struct Features {
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    // momwire#1898: bspline's junction rows eliminated before the factor.
+    // Not a fill lever: `bspline::solve_ports` reads it from the REQUESTED
+    // set at solve time, as `BSplineSolver` reads its flag at construction.
+    // No executable requests it (outside EXE_FEATURES); in-process test
+    // hooks do.
+    bool kcl_nullspace = false;
 };
 Features &requested_features();
 const Features &active_features();
@@ -238,10 +245,12 @@ class FeatureFill {
 };
 
 // The requested features with `names` (registry names) added for one run,
-// unstamped, and what was requested before put back when it ends -- a test's
-// in-process run of what an executable's environment would ask for
-// (momwire#1849's point_cplx_staged, which no executable carries). A name
-// this route does not carry throws std::invalid_argument, nothing asked.
+// unstamped, and what was requested before put back when it ends -- a test
+// hook's `features=` argument: an in-process run of what an executable's
+// environment would ask for, for the features no executable carries
+// (momwire#1849's point_cplx_staged, momwire#1898's kcl_nullspace). A name
+// this route does not carry throws std::invalid_argument, and nothing is
+// then left requested.
 class FeatureRequest {
   public:
     explicit FeatureRequest(const std::vector<std::string> &names);
