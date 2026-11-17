@@ -36,6 +36,11 @@ concurrency:
 
 env:
   MOMWIRE_BELOW_ANCHORS: "off"  # as standalone.yml: exact tables for the gates
+  # The MINGW64 (msvcrt) builds' full gates and its libm shims: measured in
+  # run 44057069874 (WINDOWS-SINGLE-FILE.md); "1" runs them again. UCRT64,
+  # the candidate product build, is gated on every run.
+  MINGW64_GATES: "0"
+  LIBM_SHIMS: "0"
 
 jobs:
   build:
@@ -133,6 +138,7 @@ jobs:
               cp "build-$b-$v/$target.exe" "dist/momwire-nec5-$b-$v.exe"
             done
             for dll in msvcrt ucrtbase; do
+              [ "$LIBM_SHIMS" = 1 ] || continue
               cfg "build-$b-avx2-$dll" $basis avx2 -DMW_EXE_LIBM_SHIM=$dll
               cp "build-$b-avx2-$dll/$target.exe" "dist-shim/momwire-nec5-$b-avx2-$dll.exe"
               MW_EXE_TIMES=1 "dist-shim/momwire-nec5-$b-avx2-$dll.exe" -version 2> shim.txt
@@ -148,6 +154,7 @@ jobs:
           done
           echo "math symbols each build defines itself (libmingwex's, or the shim's forwarders):"
           for e in dist/momwire-nec5-bs2-avx2.exe dist-shim/momwire-nec5-bs2-avx2-ucrtbase.exe; do
+            [ -f "$e" ] || continue
             echo "  $e: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
           done
           # licensing: nothing LGPL/GPL-without-exception linked in (libquadmath, libgfortran)
@@ -155,7 +162,8 @@ jobs:
             n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
             echo "  $e: $n libquadmath/libgfortran symbols"
           done
-          strip dist/*.exe dist-shim/*.exe dist-fat/*.exe
+          strip dist/*.exe dist-fat/*.exe
+          [ "$LIBM_SHIMS" != 1 ] || strip dist-shim/*.exe
           ls -l dist dist-shim dist-fat
       - uses: actions/upload-artifact@v7
         with:
@@ -220,28 +228,46 @@ jobs:
             obw/libmwxp.a
             obw/libmwnp.a
           key: ${{ steps.obcache.outputs.cache-primary-key }}
-      - name: configure + build (UCRT64, avx2)
+      - name: configure + build (UCRT64; avx2, sse2, fat)
         shell: msys2 {0}
         run: |
           set -e
           standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
           standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
-          mkdir -p dist-ucrt
-          for b in razor2p bs2; do
-            basis=$b target=momwire-nec5-razor-2p-standalone
-            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone
-            cmake -S standalone -B "build-$b" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
-              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=avx2 \
+          mkdir -p dist-ucrt dist-ucrt-fat
+          cfg() {  # DIR BASIS VARIANT
+            local d=$1 basis=$2 v=$3
+            cmake -S standalone -B "$d" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
               -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
-              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON > "build-$b.cmake.log"
-            cmake --build "build-$b" -- -k 0
-            cp "build-$b/$target.exe" "dist-ucrt/momwire-nec5-$b-avx2-ucrt64.exe"
+              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON > "$d.cmake.log"
+            local s=$(date +%s)
+            cmake --build "$d" -- -k 0
+            echo "BUILD $d: $(( $(date +%s) - s )) s"
+          }
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            for v in avx2 sse2; do
+              cfg "build-$b-$v" $basis $v
+              cp "build-$b-$v/$target.exe" "dist-ucrt/momwire-nec5-$b-$v-ucrt64.exe"
+            done
+            cfg "build-$b-fat" $basis fat
+            cp "build-$b-fat/$target.exe" "dist-ucrt-fat/$name.exe"
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=avx2 "dist-ucrt-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            grep -q "avx2 initializers [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "dist-ucrt-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            ! grep -q "avx2 initializers" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
           done
           e=dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe
           echo "math symbols the exe defines itself: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
-          strip dist-ucrt/*.exe
-          for e in dist-ucrt/*.exe; do
-            echo "== $e $(stat -c %s "$e") bytes"; objdump -p "$e" | grep "DLL Name"
+          for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
+            n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
+            echo "  $e: $n libquadmath/libgfortran symbols"
+          done
+          strip dist-ucrt/*.exe dist-ucrt-fat/*.exe
+          for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
+            echo "== $e $(stat -c %s "$e") bytes"; objdump -p "$e" | grep "DLL Name" | tr -s ' \t' ' ' | tr '\n' ' '; echo
           done
           echo "api-ms-win-crt-math imports:"
           objdump -p dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe | awk '/DLL Name: api-ms-win-crt-math/ {f=1; next} /DLL Name/ {f=0} f && NF >= 3 {print $NF}' | tr '\n' ' '; echo
@@ -250,6 +276,7 @@ jobs:
           name: ucrt64-exes
           path: |
             dist-ucrt/*.exe
+            dist-ucrt-fat/*.exe
             libm-ucrt64.txt
           retention-days: 7
 
@@ -296,6 +323,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # gdb, for fat_compare.py's backtrace of a hang (MW_GDB)
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gdb
       # HARD for the msvcrt builds: the import table names system DLLs only
       # (anything else -- an OpenBLAS, libgomp, winpthread, libstdc++ or
       # libgcc DLL -- fails). The UCRT64 builds are listed, and pass with the
@@ -305,14 +338,14 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install -q pefile
-          $dirs = @('dist', 'dist-shim', 'dist-fat', 'dist-ucrt') | Where-Object { Test-Path $_ }
+          $dirs = @('dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat') | Where-Object { Test-Path $_ }
           python scripts/windows_static/pe_imports.py @dirs
           if ($LASTEXITCODE) { exit 1 }
       - name: Windows 7 import gate
         shell: pwsh
         run: |
           $fail = 0
-          foreach ($d in 'dist', 'dist-shim', 'dist-fat', 'dist-ucrt') {
+          foreach ($d in 'dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat') {
             if (-not (Test-Path $d)) { continue }
             "== $d"
             python scripts/eznec_freeze/scan_win7_imports.py $d
@@ -326,7 +359,7 @@ jobs:
           $env:MOMWIRE_SIGN_SHA1 = $cert.Thumbprint
           $env:MOMWIRE_SIGN_ALLOW_UNTRUSTED = "1"
           $env:MOMWIRE_SIGN_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
-          $exes = (Get-ChildItem dist\*.exe, dist-fat\*.exe).FullName
+          $exes = (Get-ChildItem dist\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe -ErrorAction Ignore).FullName
           python standalone/sign_windows.py $exes
           if ($LASTEXITCODE) { exit 1 }
           foreach ($e in $exes) {
@@ -339,7 +372,7 @@ jobs:
         run: |
           $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
           $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
-          $all = Get-ChildItem dist\*.exe, dist-shim\*.exe, dist-fat\*.exe, dist-ucrt\*.exe -ErrorAction Ignore
+          $all = Get-ChildItem dist\*.exe, dist-shim\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe -ErrorAction Ignore
           $env:PATH = "$env:SystemRoot\System32"
           foreach ($e in $all) {
             $v = (& $e.FullName -version) -join ' '
@@ -365,8 +398,13 @@ jobs:
           $env:PATH = "$PWD\venv\Scripts;$env:PATH"
           $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
           $fail = 0
-          foreach ($p in @(@('dist\momwire-nec5-razor2p-avx2.exe', ''), @('dist\momwire-nec5-bs2-avx2.exe', 'bspline'),
-                           @('dist-fat\momwire-nec5-razor-2p.exe', ''), @('dist-fat\momwire-nec5-bspline.exe', 'bspline'))) {
+          $sets = @(@('dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe', ''), @('dist-ucrt\momwire-nec5-bs2-avx2-ucrt64.exe', 'bspline'),
+                    @('dist-ucrt-fat\momwire-nec5-razor-2p.exe', ''), @('dist-ucrt-fat\momwire-nec5-bspline.exe', 'bspline'))
+          if ($env:MINGW64_GATES -eq '1') {
+            $sets += @(@('dist\momwire-nec5-razor2p-avx2.exe', ''), @('dist\momwire-nec5-bs2-avx2.exe', 'bspline'),
+                       @('dist-fat\momwire-nec5-razor-2p.exe', ''), @('dist-fat\momwire-nec5-bspline.exe', 'bspline'))
+          }
+          foreach ($p in $sets) {
             "=== $($p[0])"
             $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = (Resolve-Path $p[0]).Path
             if ($p[1]) { $env:MOMWIRE_STANDALONE_BASIS = $p[1] } else { Remove-Item Env:MOMWIRE_STANDALONE_BASIS -ErrorAction Ignore }
@@ -384,9 +422,13 @@ jobs:
           $fail = 0
           $runs = @()
           foreach ($b in 'razor2p', 'bs2') {
-            foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist\momwire-nec5-$b-$v.exe") }
-            foreach ($s in 'msvcrt', 'ucrtbase') { $runs += ,@($b, 'avx2', "dist-shim\momwire-nec5-$b-avx2-$s.exe") }
-            $runs += ,@($b, 'avx2', "dist-ucrt\momwire-nec5-$b-avx2-ucrt64.exe")
+            foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist-ucrt\momwire-nec5-$b-$v-ucrt64.exe") }
+            if ($env:MINGW64_GATES -eq '1') {
+              foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist\momwire-nec5-$b-$v.exe") }
+            }
+            if ($env:LIBM_SHIMS -eq '1') {
+              foreach ($s in 'msvcrt', 'ucrtbase') { $runs += ,@($b, 'avx2', "dist-shim\momwire-nec5-$b-avx2-$s.exe") }
+            }
           }
           foreach ($r in $runs) {
             $b, $v, $exe = $r
@@ -419,33 +461,45 @@ jobs:
           $decks = @("tests\fixtures\razor_printout_3a\node_gap_two_sources.nec",
                      "tests\fixtures\bspline_printout_buried\ab_hub16.nec",
                      "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
+          # SET: fat dir, one-variant dir, one-variant suffix
+          $sets = @(,@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'))
+          if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
-          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
-            $fat = (Resolve-Path "dist-fat\$($b[1]).exe").Path
-            foreach ($cpu in 'wsm', 'snb', 'hsw') {
-              $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
-              $env:OPENBLAS_CORETYPE = if ($cpu -eq 'hsw') { 'Haswell' } else { 'Nehalem' }
-              $one = (Resolve-Path "dist\momwire-nec5-$($b[0])-$want.exe").Path
-              $v = (& $sde "-$cpu" -- $fat -version) -join ' '
-              "$($b[1]) under -$cpu : $v"
-              if ($LASTEXITCODE -or $v -notmatch "-standalone-$want ") { "::error::$($b[1]) -$cpu picked wrong or failed"; $fail = 1; continue }
-              foreach ($d in $decks) {
-                foreach ($copy in 'serial', 'threads') {
-                  $o1 = "$env:RUNNER_TEMP\sde.out"
-                  if ($copy -eq 'threads') { $env:MW_EXE_COPY = 'threads'; $env:MOMWIRE_THREADS = '2' } else { Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS -ErrorAction Ignore }
-                  & $sde "-$cpu" -- $fat $d $o1
-                  $rc = $LASTEXITCODE
-                  $a = if (Test-Path $o1) { [IO.File]::ReadAllBytes($o1) } else { @() }
-                  Remove-Item $o1 -ErrorAction Ignore
-                  & $one $d $o1
-                  $bb = [IO.File]::ReadAllBytes($o1)
-                  Remove-Item $o1
-                  $same = ($rc -eq 0) -and [System.Linq.Enumerable]::SequenceEqual([byte[]]$a, [byte[]]$bb)
-                  "  $(Split-Path -Leaf $d) $copy : rc=$rc identical=$same"
-                  if (-not $same) { $fail = 1 }
+          foreach ($set in $sets) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+              $fat = (Resolve-Path "$($set[0])\$($b[1]).exe").Path
+              foreach ($cpu in 'wsm', 'snb', 'hsw') {
+                $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
+                $env:OPENBLAS_CORETYPE = if ($cpu -eq 'hsw') { 'Haswell' } else { 'Nehalem' }
+                $one = (Resolve-Path "$($set[1])\momwire-nec5-$($b[0])-$want$($set[2]).exe").Path
+                # whole process first (the system DLLs too: ucrtbase's own
+                # dispatch); on a fault, again checking the exe's image only
+                foreach ($mode in '', '-chip_check_exe_only') {
+                  $m = if ($mode) { @($mode) } else { @() }
+                  $v = (& $sde "-$cpu" @m -- $fat -version) -join ' '
+                  $ok = ($LASTEXITCODE -eq 0) -and ($v -match "-standalone-$want ")
+                  "$($set[0])\$($b[1]) under -$cpu $mode : $v"
+                  if ($ok) { break }
                 }
+                if (-not $ok) { "::error::$($b[1]) -$cpu picked wrong or failed"; $fail = 1; continue }
+                foreach ($d in $decks) {
+                  foreach ($copy in 'serial', 'threads') {
+                    $o1 = "$env:RUNNER_TEMP\sde.out"
+                    if ($copy -eq 'threads') { $env:MW_EXE_COPY = 'threads'; $env:MOMWIRE_THREADS = '2' } else { Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS -ErrorAction Ignore }
+                    & $sde "-$cpu" @m -- $fat $d $o1
+                    $rc = $LASTEXITCODE
+                    $a = if (Test-Path $o1) { [IO.File]::ReadAllBytes($o1) } else { @() }
+                    Remove-Item $o1 -ErrorAction Ignore
+                    & $one $d $o1
+                    $bb = [IO.File]::ReadAllBytes($o1)
+                    Remove-Item $o1
+                    $same = ($rc -eq 0) -and [System.Linq.Enumerable]::SequenceEqual([byte[]]$a, [byte[]]$bb)
+                    "  $(Split-Path -Leaf $d) $copy : rc=$rc identical=$same"
+                    if (-not $same) { $fail = 1 }
+                  }
+                }
+                Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS, Env:OPENBLAS_CORETYPE -ErrorAction Ignore
               }
-              Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS, Env:OPENBLAS_CORETYPE -ErrorAction Ignore
             }
           }
           exit $fail
@@ -453,31 +507,37 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $env:MW_GDB = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
+          $sets = @(,@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'))
+          if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
-          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
-            foreach ($v in 'avx2', 'sse2') {
-              "=== $($b[1]) $v"
-              python scripts/windows_static/fat_compare.py "dist-fat\$($b[1]).exe" $v "dist\momwire-nec5-$($b[0])-$v.exe" `
-                tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
-              if ($LASTEXITCODE) { $fail = 1 }
+          foreach ($set in $sets) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+              foreach ($v in 'avx2', 'sse2') {
+                "=== $($set[0]) $($b[1]) $v"
+                python scripts/windows_static/fat_compare.py "$($set[0])\$($b[1]).exe" $v "$($set[1])\momwire-nec5-$($b[0])-$v$($set[2]).exe" `
+                  tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
+                if ($LASTEXITCODE) { $fail = 1 }
+              }
             }
           }
           exit $fail
 
-  # Blocker 1 (runs 43944198706, 43965973397): rare hangs and odd exit codes
-  # at the size policy's threads. The A/B of the fix (both OpenBLAS pools shut
-  # down before exit, momwire_razor2p.cpp `shutdown_blas_pools`): the same
-  # executables with it on and off (MW_EXE_EXIT_SHUTDOWN=0), interleaved, over
-  # the whole fixture corpus.
+  # Blocker 1 (runs 43944198706, 43965973397, 44057069874): rare hangs at
+  # exit, the printout already complete. The A/B of the fix (main's work done,
+  # the process ends by TerminateProcess, momwire_razor2p.cpp `main`): the
+  # same executables with it on and off (MW_EXE_EXIT=normal), interleaved,
+  # over the whole fixture corpus.
   stress:
-    needs: build
+    needs: [build, ucrt64]
+    if: always() && needs.ucrt64.result == 'success'
     runs-on: windows-latest
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: mingw64-exes
+          name: ucrt64-exes
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -486,14 +546,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: stress, razor-2p and bs2, exit shutdown on vs off (diagnostic)
+      - name: stress, UCRT64 razor-2p and bs2, exit shutdown on vs off (diagnostic)
         shell: pwsh
         run: |
           $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
           python scripts/windows_static/stress.py 8 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
-            "fix-sse2=dist\momwire-nec5-razor2p-sse2.exe" "off-sse2=dist\momwire-nec5-razor2p-sse2.exe|MW_EXE_EXIT_SHUTDOWN=0" `
-            "fix-avx2=dist\momwire-nec5-razor2p-avx2.exe" "off-avx2=dist\momwire-nec5-razor2p-avx2.exe|MW_EXE_EXIT_SHUTDOWN=0" `
-            "fix-fat=dist-fat\momwire-nec5-razor-2p.exe" "fix-bs2=dist\momwire-nec5-bs2-avx2.exe"
+            "fix-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe" "off-sse2=dist-ucrt\momwire-nec5-razor2p-sse2-ucrt64.exe|MW_EXE_EXIT=normal" `
+            "fix-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe" "off-avx2=dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe|MW_EXE_EXIT=normal" `
+            "fix-fat=dist-ucrt-fat\momwire-nec5-razor-2p.exe" "off-fat=dist-ucrt-fat\momwire-nec5-razor-2p.exe|MW_EXE_EXIT=normal"
           if ($LASTEXITCODE) { exit 1 }
 
   perf:
@@ -543,7 +603,10 @@ jobs:
               "shim-msvcrt/$($b[0])=$S\momwire-nec5-$($b[0])-avx2-msvcrt.exe" `
               "shim-ucrtbase/$($b[0])=$S\momwire-nec5-$($b[0])-avx2-ucrtbase.exe" `
               "ucrt64/$($b[0])=$U\momwire-nec5-$($b[0])-avx2-ucrt64.exe" `
-              "fat/$($b[0])=$F\$($b[1]).exe"
+              "ucrt64-fat/$($b[0])=$PWD\dist-ucrt-fat\$($b[1]).exe" `
+              "msvc-sse2/$($b[0])=$M\momwire-nec5-$($b[0])-sse2.exe" `
+              "ucrt64-sse2/$($b[0])=$U\momwire-nec5-$($b[0])-sse2-ucrt64.exe" `
+              "mingw64-fat/$($b[0])=$F\$($b[1]).exe"
             if ($LASTEXITCODE) { exit 1 }
           }
       - name: stage times, every build vs MSVC
@@ -554,9 +617,11 @@ jobs:
           $D = "$PWD\dist"; $S = "$PWD\dist-shim"; $U = "$PWD\dist-ucrt"
           $args_ = @()
           foreach ($b in 'razor2p', 'bs2') {
-            $args_ += "msvc/$b=$M\momwire-nec5-$b-avx2.exe", "mingw64/$b=$D\momwire-nec5-$b-avx2.exe",
-                      "shim-msvcrt/$b=$S\momwire-nec5-$b-avx2-msvcrt.exe", "shim-ucrtbase/$b=$S\momwire-nec5-$b-avx2-ucrtbase.exe"
-            if (Test-Path "$U\momwire-nec5-$b-avx2-ucrt64.exe") { $args_ += "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe" }
+            $cand = @("msvc/$b=$M\momwire-nec5-$b-avx2.exe", "mingw64/$b=$D\momwire-nec5-$b-avx2.exe",
+                      "shim-msvcrt/$b=$S\momwire-nec5-$b-avx2-msvcrt.exe", "shim-ucrtbase/$b=$S\momwire-nec5-$b-avx2-ucrtbase.exe",
+                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe",
+                      "msvc-sse2/$b=$M\momwire-nec5-$b-sse2.exe", "ucrt64-sse2/$b=$U\momwire-nec5-$b-sse2-ucrt64.exe")
+            $args_ += $cand | Where-Object { Test-Path ($_ -split '=', 2)[1] }
           }
           python scripts/windows_static/stage_times.py @args_
           if ($LASTEXITCODE) { exit 1 }

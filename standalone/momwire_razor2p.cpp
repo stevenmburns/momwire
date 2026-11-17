@@ -1840,7 +1840,28 @@ void blas_env_before_load() {
 
 }  // namespace
 
+#if defined(__MINGW32__)
+// The static MinGW-w64 build ends the process outright once main's work is
+// done: every printout is already closed (fclose) and stdio flushed here, so
+// nothing is left for the exit sequence to do but tear down -- and that
+// teardown is where the rare hang lives. Run 44057069874 (fat_compare.py):
+// two runs in 5,616 still sat 300 s at exit with the printout complete,
+// OpenBLAS's pools already shut down (`shutdown_blas_pools`): the C
+// runtime's exit runs the atexit table and the TLS callbacks (winpthreads',
+// libgomp's) while the OpenMP team's threads are still alive. TerminateProcess
+// skips all of it and keeps the exit status. MW_EXE_EXIT=normal returns from
+// main instead (the A/B in windows-static.yml's stress job).
+int mw_main(int argc, char **argv);
 int main(int argc, char **argv) {
+    const int rc = mw_main(argc, argv);
+    std::fflush(nullptr);
+    if (env("MW_EXE_EXIT") != "normal") TerminateProcess(GetCurrentProcess(), static_cast<UINT>(rc));
+    return rc;
+}
+int mw_main(int argc, char **argv) {
+#else
+int main(int argc, char **argv) {
+#endif
 #if defined(__MINGW32__)
     shutdown_blas_pools_at_exit();
 #endif

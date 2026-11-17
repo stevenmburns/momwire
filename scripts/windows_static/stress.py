@@ -59,7 +59,10 @@ def main(argv: list[str]) -> int:
         p = subprocess.Popen(
             [exe, str(decks[i]), str(out)],
             env=env,
-            stdout=subprocess.DEVNULL,
+            # stdout piped, as fat_compare.py has it: run 44057069874's two
+            # exit hangs came from there while this script, then writing
+            # stdout to DEVNULL, saw none in 33,552 runs
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         try:

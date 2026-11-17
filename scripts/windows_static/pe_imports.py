@@ -4,7 +4,7 @@
 
 Lists every `*.exe` under each DIR with the DLLs it imports and fails on any
 outside the allow-list: KERNEL32, msvcrt, ADVAPI32 and ntdll -- plus, for a
-directory named `dist-ucrt` (the MSYS2 UCRT64 builds), the UCRT's
+directory named `dist-ucrt*` (the MSYS2 UCRT64 builds), the UCRT's
 `api-ms-win-crt-*` API sets, system DLLs on Windows 10 and later and on
 Windows 7 with KB2999226. Anything else (an OpenBLAS, libgomp, winpthread,
 libstdc++ or libgcc DLL) means something did not link in.
@@ -33,7 +33,7 @@ def imports(exe: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     bad = 0
     for d in map(Path, argv):
-        ucrt = d.name == "dist-ucrt"
+        ucrt = d.name.startswith("dist-ucrt")
         for exe in sorted(d.glob("*.exe")):
             dlls = imports(exe)
             print(f"{exe} {exe.stat().st_size} bytes: {' '.join(dlls)}")
