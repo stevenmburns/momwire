@@ -60,6 +60,9 @@ CORE_SOURCES = (
     # the point moments' Python-free twin of the extension's TU.
     "_razor_exact_core.cpp",
     "_exact_kernel_point_core.cpp",
+    # momwire#1454: the k-series' twin, which the correction calls when
+    # `exact_kernel_series` is on.
+    "_exact_kernel_series_core.cpp",
     # The B-spline basis' exact kernel: the coaxial pair moments and their
     # row windows (momwire#1517 step 0), the extension's 1410 text.
     "_exact_kernel_coaxial_core.cpp",
