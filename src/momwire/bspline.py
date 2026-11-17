@@ -7570,23 +7570,13 @@ class BSplineSolver(
         route taken on `kcl_nullspace_route` and in `_kcl_nullspace.COUNTS`."""
         if not getattr(self, "_kcl_nullspace", False) or kcl_A.shape[0] == 0:
             return None
-        plan = _kcl_nullspace.plan(kcl_A)
-        if isinstance(plan, str):
-            route = f"schur: {plan}"
-            plan = None
-        else:
-            route = "reduced"
-        self.kcl_nullspace_route = route
-        _kcl_nullspace.COUNTS[route] += 1
-        return plan
+        return _kcl_nullspace.record(self, _kcl_nullspace.plan(kcl_A))
 
     def _solve_reduced(self, Z, V, plan, overwrite):
         """(Qᵀ Z Q) y = Qᵀ V, returned as x = Q y (momwire#1898). `V` is
-        (n,) or (n, r); `overwrite` lets Z's own buffer hold the reduction."""
-        Zr = _kcl_nullspace.reduce_matrix(Z, plan, overwrite=overwrite)
-        Vr = np.asfortranarray(_kcl_nullspace.reduce_rhs(V, plan))
-        y = _lu_solve(Zr, Vr, overwrite_a=True, overwrite_b=True)
-        return _kcl_nullspace.expand(y, plan)
+        (n,) or (n, r); `overwrite` lets Z's own buffer hold the reduction.
+        The step the sector route's harmonics share (momwire#1983)."""
+        return _kcl_nullspace.solve_reduced(Z, V, plan, overwrite=overwrite)
 
     def _solve_reduced_stacked(self, Z, V, plan):
         """`_solve_reduced` per k over a (n_k, n, n) stack; `V` (n,) or

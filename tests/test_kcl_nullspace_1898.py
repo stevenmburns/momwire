@@ -19,8 +19,9 @@ What is held:
   gap feeds, junction ports, node gaps, singular enrichment, a PEC image and
   a buried Sommerfeld screen;
 - the unknown count drops by exactly one per constraint row;
-- the sector route (`rotational_symmetry=True`) keeps its own constraint
-  path, untouched by the flag, and `pair_reuse` composes.
+- the sector route (`rotational_symmetry=True`) reduces its own harmonic
+  rows (momwire#1983, `test_kcl_nullspace_sector_1983.py`), and
+  `pair_reuse` composes.
 """
 
 from __future__ import annotations
@@ -309,17 +310,20 @@ def test_the_columns_satisfy_kcl_and_the_count_drops_by_one_per_row():
 # ---- composition -------------------------------------------------------------
 
 
-def test_the_sector_route_keeps_its_own_constraint_path():
+def test_the_sector_route_reduces_its_own_rows():
     """`rotational_symmetry=True` solves each harmonic under its own rows
-    (`_rotational_symmetry._harmonic_constraints`, complex DFT combinations,
-    not of the reducible shape) and never reaches `_solve_with_kcl`: the flag
-    changes no bit there. The dense solve of the same buried screen, on,
-    matches off."""
-    z_sym_off = screen_solver(kcl_nullspace=False).compute_impedance()[0]
+    (`_rotational_symmetry._harmonic_constraints`, weighted and phased) and
+    never reaches `_solve_with_kcl`. Since momwire#1983 the flag reaches it
+    there too: the rows are reduced harmonic by harmonic
+    (`test_kcl_nullspace_sector_1983.py`), on matching off. The dense solve
+    of the same buried screen, on, matches off."""
+    sym_off = screen_solver(kcl_nullspace=False)
+    z_sym_off = sym_off.compute_impedance()[0]
     sym_on = screen_solver(kcl_nullspace=True)
     z_sym_on = sym_on.compute_impedance()[0]
-    assert z_sym_on == z_sym_off
-    assert sym_on.kcl_nullspace_route is None
+    assert _rel(z_sym_on, z_sym_off) < RTOL
+    assert sym_on.kcl_nullspace_route == "reduced"
+    assert sym_off.kcl_nullspace_route is None
     dense_off = screen_solver(rotational_symmetry=False, kcl_nullspace=False)
     dense_on = screen_solver(rotational_symmetry=False, kcl_nullspace=True)
     z_off = dense_off.compute_impedance()[0]
