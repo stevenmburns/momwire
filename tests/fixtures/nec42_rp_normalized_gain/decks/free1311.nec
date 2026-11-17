@@ -1,0 +1,10 @@
+CM RP normalized-gain probe free1311
+CM tilted dipole, free space, 40 ohm load
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+LD 0 1 6 0 40 0 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 7 4 1311 0 0 30 45 0 0
+EN
