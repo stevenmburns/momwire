@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <list>
 #include <map>
@@ -233,12 +234,14 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // class << code_bits | code; reps are each class's first pair, row-major.
 // Returns the number of classes, or -1 when they cannot be coded (past the
 // int32 entry, a part's share of it, or the test hook's `class_limit`), or
-// -2 when they pass `poor` (`MAX_CLASS_FRACTION` of the family's pairs,
-// checked after every chunk of rows, so a deck that compresses poorly stops
-// within one chunk of the bound instead of building its whole table): the
-// plan then declines.
+// -2 when they pass `poor` (`MAX_CLASS_FRACTION` of the family's pairs), or
+// -3 when they pass `afford` (the classes the plan's byte budget has room
+// for, `PLAN_BUDGET_BYTES`), each checked after every chunk of rows, so a
+// doomed plan stops within one chunk of its bound instead of building its
+// whole table: the plan then declines.
 template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, KeyFn key,
+int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, int64_t afford,
+               KeyFn key,
                std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
@@ -309,12 +312,15 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
             int64_t so_far = 0;
             for (const auto &rp : reps) so_far += static_cast<int64_t>(rp.size());
             if (so_far > poor) return -2;
+            if (so_far > afford) return -3;
         }
     }
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
     for (int t = 0; t < P; t++) off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
     const int64_t n_cls = off[static_cast<size_t>(P)];
     if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
+    if (n_cls > poor) return -2;
+    if (n_cls > afford) return -3;
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {
@@ -342,8 +348,25 @@ int64_t poor_bound(int64_t pairs) {
 }
 const char *const POOR_REASON = "too few shared pairs to repay the plan";
 
+std::atomic<int64_t> g_plan_budget{0};  // 0: PLAN_BUDGET_BYTES
+
+// What a class costs the plan, past the maps: its per-k values (M0, M1 or
+// Q0, Q1, two complex), its group entry (cls, at) and its representative's
+// flip or code byte.
+constexpr int64_t CLASS_BYTES = 2 * 16 + 2 * 4 + 1;
+
+// The classes `room` bytes pay for (never negative).
+int64_t affordable(int64_t room) { return room <= 0 ? 0 : room / CLASS_BYTES; }
+
+std::string budget_reason() {
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "the plan would exceed its %.6g MB budget",
+                  static_cast<double>(plan_budget()) / double(1 << 20));
+    return buf;
+}
+
 // A plan that does not serve: no classes, its reason, its census time.
-std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const char *why) {
+std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const std::string &why) {
     plan->declined = why;
     for (auto &m : plan->dmap) std::vector<int32_t>().swap(m);
     std::vector<int32_t>().swap(plan->qmap);
@@ -353,6 +376,7 @@ std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const char *why
     std::vector<Group>().swap(plan->qgroups);
     plan->n_dcls = plan->n_qcls = 0;
     plan->pairs = plan->near_pairs = plan->q_pairs = plan->rep_evals = plan->q_rep_evals = 0;
+    plan->budget_bytes = 0;
     return plan;
 }
 
@@ -366,6 +390,14 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     plan->fingerprint = std::move(fingerprint);
     if (n_seg > MAX_SEGS) return decline(plan, "too many segments to plan");
     const int n_blocks = g.has_image ? 2 : 1;
+    // The byte budget (`PLAN_BUDGET_BYTES`): the maps are known before any
+    // census (4 B per pair per block, the remainder's included), so a deck
+    // whose maps alone pass it declines before allocating them; what is left
+    // bounds each census's classes, at CLASS_BYTES each.
+    const int64_t budget = plan_budget();
+    const int64_t nn = n_seg * n_seg;
+    const int64_t maps_bytes = 4 * nn * (n_blocks + (g.remainder ? 1 : 0));
+    if (maps_bytes > budget) return decline(plan, budget_reason());
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
     const int pr = probe();
@@ -430,9 +462,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     std::vector<Rep> reps;
     int64_t singles = 0;
     const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs), direct_key,
-                             plan->dmap, reps, singles);
+    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs),
+                             affordable(budget - maps_bytes), direct_key, plan->dmap, reps, singles);
     if (plan->n_dcls == -2) return decline(plan, POOR_REASON);
+    if (plan->n_dcls == -3) return decline(plan, budget_reason());
     if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
     plan->near_pairs = singles;
     plan->pairs = n_blocks * n_seg * n_seg;
@@ -488,15 +521,23 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         };
         std::vector<Rep> qreps;
         int64_t qsingles = 0;
-        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(n_seg * n_seg), q_key,
-                                 &plan->qmap, qreps, qsingles);
+        // What the direct family holds now (its maps, groups and flags, and
+        // its values), plus the remainder's maps, comes out of the budget.
+        const int64_t held =
+            static_cast<int64_t>(plan->nbytes()) + 32 * plan->n_dcls + 4 * nn;
+        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(nn), affordable(budget - held),
+                                 q_key, &plan->qmap, qreps, qsingles);
         if (plan->n_qcls == -2) return decline(plan, POOR_REASON);
+        if (plan->n_qcls == -3) return decline(plan, budget_reason());
         if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
         plan->q_pairs = n_seg * n_seg;
         plan->qrep_code.resize(qreps.size());
         for (size_t c = 0; c < qreps.size(); c++) plan->qrep_code[c] = qreps[c].code;
         build_groups(qreps, n_seg, 1, plan->qgroups, plan->q_rep_evals);
     }
+    // The exact count, the groups' observer and source lists included.
+    plan->budget_bytes = static_cast<int64_t>(plan->nbytes()) + 32 * (plan->n_dcls + plan->n_qcls);
+    if (plan->budget_bytes > budget) return decline(plan, budget_reason());
     plan->census_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return plan;
@@ -515,6 +556,7 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, static_cast<int32_t>(probe()));
     put(s, class_limit(0));
     put(s, class_limit(1));
+    put(s, plan_budget());
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);
@@ -616,6 +658,11 @@ void set_class_limit(int64_t direct, int64_t remainder) {
     g_class_limit[1].store(remainder < 0 ? 0 : remainder);
 }
 int64_t class_limit(int family) { return g_class_limit[family == 0 ? 0 : 1].load(); }
+void set_plan_budget(int64_t bytes) { g_plan_budget.store(bytes <= 0 ? 0 : bytes); }
+int64_t plan_budget() {
+    const int64_t b = g_plan_budget.load();
+    return b > 0 ? b : static_cast<int64_t>(PLAN_BUDGET_BYTES);
+}
 int probe() { return g_probe.load(); }
 
 CacheCounters cache_counters() {

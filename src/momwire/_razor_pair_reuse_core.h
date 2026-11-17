@@ -183,8 +183,31 @@ void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 // above. It does NOT hold the hosted bound (512 MB beyond one dense matrix)
 // at the hosted cap of 3000 segments, and no fraction that serves sky_m24
 // (0.34) can: 0.34 of 9e6 pairs at ~120 B is 0.37 GB in free space and
-// twice that over a ground. That needs a byte budget beside the ratio.
+// twice that over a ground: PLAN_BUDGET_BYTES, below, is that bound.
 constexpr double MAX_CLASS_FRACTION = 0.75;
+// The plan's byte budget: its maps (4 B per pair per block, the composing
+// ground's remainder included), its groups and flags (`Plan::nbytes`) and
+// one wavenumber's class values (32 B a class). The 512 MB hosted bound is
+// this 256 MB, plus one dense Z (144 MB at the 3000-segment cap), plus
+// headroom (Steve, 11-17). The maps are counted before any census, so a deck
+// whose maps alone pass it declines before allocating them; the room left
+// bounds each census's classes (41 B each: values, group entry, flag),
+// checked per chunk of rows as MAX_CLASS_FRACTION is, and the finished plan
+// is held to it exactly. A plan past it declines, "the plan would exceed its
+// 256 MB budget". The census's own hash tables are transient and are NOT
+// counted (freed before the fill). Measured, Rocketlake, Python route, 8
+// threads, peak RSS on / off: the 3000-segment random-wire deck declines at
+// 1087 / 296 MB free and 1122 / 328 over PEC (that transient, to the abort);
+// gsky_m24 (2097 segments, Sommerfeld) is served with a 226 MB plan at
+// 802 / 245. The #1971 benchmark decks' plans: fd_h27 5 MB, fd_h51 18,
+// gfd_h51 51, sky_m24 76, p_m24 87, gsky_m24 226: every one served.
+constexpr size_t PLAN_BUDGET_BYTES = size_t(256) << 20;
+// TEST HOOK: the budget in force (a value <= 0 restores PLAN_BUDGET_BYTES),
+// so a test can reach the decline on a small deck. A plan is keyed on the
+// budget it was built under. Bound for Python's tests only; nothing in the
+// executables sets it.
+void set_plan_budget(int64_t bytes);
+int64_t plan_budget();
 // Bytes of plans the process keeps between fills.
 constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
 
@@ -237,6 +260,8 @@ struct Plan {
     int64_t pairs = 0, near_pairs = 0, q_pairs = 0;
     int64_t rep_evals = 0, q_rep_evals = 0;  // pairs the representatives' calls evaluate
     double census_seconds = 0.0;
+    // What the budget counted: nbytes() plus one wavenumber's class values.
+    int64_t budget_bytes = 0;
     size_t nbytes() const;
 };
 
