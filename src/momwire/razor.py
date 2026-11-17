@@ -2055,6 +2055,7 @@ class RazorSolver(
         height_sheet_recal=None,
         crossing_table=None,
         crossing_sheet_retune=None,
+        exact_kernel_series=None,
         razor_pair_reuse=None,
         pair_reuse=None,
         crossing_anchors=None,
@@ -2198,6 +2199,18 @@ class RazorSolver(
         )
         # The C++ front route reads it with the constructor's own arguments.
         self._cxx_kwargs["pair_reuse"] = self._pair_reuse
+        # momwire#1454: the exact kernel's point moments as a k-series
+        # (`_features`' exact_kernel_series, native, reach 1). None defers to
+        # `_exact_kernel_series.ENABLED` (MOMWIRE_X_EXACT_KERNEL_SERIES at
+        # import, which a test may set); resolved where the correction runs
+        # (`_exact_kernel_series_on`), so a solve the exact kernel never
+        # engages never refuses it.
+        if exact_kernel_series not in (None, False, True):
+            raise ValueError(
+                "exact_kernel_series must be None, False or True, got "
+                f"{exact_kernel_series!r}"
+            )
+        self._exact_kernel_series_kw = exact_kernel_series
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -5084,6 +5097,22 @@ class RazorSolver(
     # the exact ring kernel on coaxial pairs (momwire#1433)
     # ------------------------------------------------------------------
 
+    def _exact_kernel_series_on(self):
+        """Whether the exact kernel's k-series is on for this solver
+        (momwire#1454): the keyword when one was passed, else
+        `_exact_kernel_series.ENABLED`. A native feature: on outside its
+        reach it raises `FeatureNotCertified`, whichever asked."""
+        kw = getattr(self, "_exact_kernel_series_kw", None)
+        if kw is None:
+            on = bool(_exact_kernel_series.ENABLED)
+            # The import-time switch is checked only when the environment
+            # asked for it, as before the keyword: a test that sets the
+            # module flag runs the route wherever it is.
+            if on and "exact_kernel_series" in _features.active():
+                _features.check("exact_kernel_series")
+            return on
+        return _features.enabled("exact_kernel_series", kw)
+
     def _add_exact_kernel_correction(self, Z, geom, k, omega, chop=None):
         """Z += (Z_exact - Z_base) over every coaxial equal-radius group,
         and over the cross-radius pairs of every line with a radius step
@@ -5144,12 +5173,13 @@ class RazorSolver(
         only on exactly the inputs they were computed from, so a hit adds the
         same bits a fresh call does.
 
-        Under `_exact_kernel_series.ENABLED` (step 3 of momwire#1454, off by
-        default) a group whose segments are short enough at this k takes its
-        exact moments from the k-series on geometry-only coefficients
-        instead: the plan keeps that source for its lifetime, whatever the
-        frequency, so a sweep integrates each pair once. Derivation and
-        measurements: `docs/design/exact-kernel-static-dynamic-split.md`.
+        With the k-series on (`_exact_kernel_series_on`, step 3 of
+        momwire#1454, off by default) a group whose segments are short
+        enough at this k takes its exact moments from the k-series on
+        geometry-only coefficients instead: the plan keeps that source for
+        its lifetime, whatever the frequency, so a sweep integrates each
+        pair once. Derivation and measurements:
+        `docs/design/exact-kernel-static-dynamic-split.md`.
         """
         seg_a = np.asarray(self._medium_seg_radius(geom), dtype=float)
         pts, tans, wts = self._testing_paths(geom)
@@ -5184,14 +5214,13 @@ class RazorSolver(
             _CHUNK_ELEMS,
             context,
             chop=chop_rows,
+            series=self._exact_kernel_series_on(),
         )
         # Which rule serves each group's exact moments: the k-series on
         # geometry-only coefficients where the group is short enough at this
         # k (`_exact_kernel_series.serves`), the direct rule otherwise. The
         # choice reads the geometry and k alone, never what is cached.
-        if _exact_kernel_series.ENABLED and "exact_kernel_series" in _features.active():
-            _features.check("exact_kernel_series")
-        ser_on = _exact_kernel_series.ENABLED and _exact_kernel_series.accel_serves(
+        ser_on = self._exact_kernel_series_on() and _exact_kernel_series.accel_serves(
             k, 2
         )
         # A cross-radius job (momwire#1438, `g.lab` set) is never the
@@ -7540,11 +7569,13 @@ class RazorSolver(
             return "complex-k"
         # The exact ring kernel: the core replays the C++ point route (the
         # direct rule, `PointRowsAccel`, `PointCrossRowsAccel` and
-        # `exact_kernel_point_assemble`); the k-series and the numpy point
-        # route stay Python's.
+        # `exact_kernel_point_assemble`) and the k-series' C++ route
+        # (`PointSeriesAccel`, momwire#1454); the numpy routes stay Python's.
         if self.exact_kernel:
-            if _exact_kernel_series.ENABLED:
-                return "exact-kernel-series"
+            if self._exact_kernel_series_on() and not (
+                _exact_kernel_series.accel_serves(self.k, 2)
+            ):
+                return "exact-kernel-series-numpy"
             if not (
                 _HAVE_EXACT_POINT_ASSEMBLE_ACCEL
                 and _exact_kernel._HAVE_POINT_CROSS_ACCEL
@@ -7572,6 +7603,11 @@ class RazorSolver(
         reason = self._cxx_front_refusal()
         if reason is None:
             self._checkpoint()
+            # The k-series as this solver resolved it (`_exact_kernel_series_on`),
+            # read only where the exact kernel engages, as the correction does.
+            self._cxx_kwargs["exact_kernel_series"] = (
+                bool(self.exact_kernel) and self._exact_kernel_series_on()
+            )
             ctx = _cxx_context()
             out = ctx.front_port_solution(
                 self._cxx_kwargs,
