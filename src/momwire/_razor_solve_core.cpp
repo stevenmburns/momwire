@@ -189,8 +189,29 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     reserve(m1_, plane);
     auto vm0 = c_view<cd, 2>(m0_.data(), {n_need, n_seg});
     auto vm1 = c_view<cd, 2>(m1_.data(), {n_need, n_seg});
-    moments(in, c_view<const double, 2>(obs_.data(), {n_need, 3}), src, true, gi, bo, vm0, vm1);
-    counters.seg_moments_calls++;
+    if (reuse_) {
+        // momwire#1971: the window's rows gathered from the class values.
+        reuse::gather_direct(*plan_, image ? 1 : 0, need_.data(), n_need, in.seg_h, vals_,
+                             m0_.data(), m1_.data());
+        counters.reuse_windows++;
+        if (in.pair_reuse == 2) {
+            reserve(vm0_, plane);
+            reserve(vm1_, plane);
+            moments(in, c_view<const double, 2>(obs_.data(), {n_need, 3}), src, true, gi, bo,
+                    c_view<cd, 2>(vm0_.data(), {n_need, n_seg}),
+                    c_view<cd, 2>(vm1_.data(), {n_need, n_seg}));
+            counters.seg_moments_calls++;
+            const double err = reuse::verify_error(vm0_.data(), vm1_.data(), m0_.data(), m1_.data(),
+                                                   n_need, n_seg, 1, in.seg_h);
+            counters.reuse_verify_worst = std::max(counters.reuse_verify_worst, err);
+            if (!(err <= reuse::VERIFY_TOL))
+                throw std::runtime_error("razor pair_reuse verify: a reused moment is " +
+                                         std::to_string(err) + " off the shipped fill");
+        }
+    } else {
+        moments(in, c_view<const double, 2>(obs_.data(), {n_need, 3}), src, true, gi, bo, vm0, vm1);
+        counters.seg_moments_calls++;
+    }
 
     // T1, with each path point reading its centroid's moment row.
     const ptrdiff_t np = static_cast<ptrdiff_t>(in.n_path);
@@ -326,21 +347,50 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         }
         if (!gathered)
             for (ptrdiff_t o = 0; o < m_obs; o++) q_row_[o] = o;
-        reserve(proj_, static_cast<size_t>(m_u * s_src));
-        if (c.proj)
-            c.proj(w_pts, w_tans, m_u, proj_.data());
-        else
-            somm_core::field_proj_batch(*c.grid, c.n_reg, m_u, s_src, w_pts, w_tans,
-                                        c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
-                                        proj_.data(), in.cancel_flag, true);
-        if (somm_core::lazy_check())
-            somm_core::check_read(proj_.data(), static_cast<size_t>(m_u * s_src),
-                                  c.proj ? "the below compose window" : "the above compose window");
-        reserve(mom_, static_cast<size_t>(m_u * n_seg * 2));
-        if (c.rem_off)
-            somm_core::moment_reduce_ragged(proj_.data(), c.W, 2, n_seg, c.rem_off, m_u, mom_.data());
-        else
-            somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
+        if (reuse_q_) {
+            // momwire#1971: each path row is its wing segment's row of the
+            // remainder classes, times the wing's sign.
+            reserve(q_seg_, static_cast<size_t>(m_obs));
+            reserve(q_sign_, static_cast<size_t>(m_obs));
+            for (ptrdiff_t r = 0; r < nb; r++) {
+                q_seg_[2 * r] = sa[lo + r];
+                q_seg_[2 * r + 1] = sb[lo + r];
+                q_sign_[2 * r] = c.sig_a(lo + r);
+                q_sign_[2 * r + 1] = c.sig_b(lo + r);
+            }
+            reserve(mom_, static_cast<size_t>(m_obs * n_seg * 2));
+            reuse::gather_remainder(*plan_, q_seg_.data(), q_sign_.data(), m_obs, in.seg_h, vals_,
+                                    mom_.data());
+            for (ptrdiff_t o = 0; o < m_obs; o++) q_row_[o] = o;
+            m_u = m_obs;
+            counters.reuse_q_windows++;
+        }
+        if (!reuse_q_ || in.pair_reuse == 2) {
+            reserve(proj_, static_cast<size_t>(m_u * s_src));
+            if (c.proj)
+                c.proj(w_pts, w_tans, m_u, proj_.data());
+            else
+                somm_core::field_proj_batch(*c.grid, c.n_reg, m_u, s_src, w_pts, w_tans,
+                                            c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
+                                            proj_.data(), in.cancel_flag, true);
+            if (somm_core::lazy_check())
+                somm_core::check_read(proj_.data(), static_cast<size_t>(m_u * s_src),
+                                      c.proj ? "the below compose window" : "the above compose window");
+            std::vector<cd> &dst_mom = reuse_q_ ? vm0_ : mom_;
+            reserve(dst_mom, static_cast<size_t>(m_u * n_seg * 2));
+            if (c.rem_off)
+                somm_core::moment_reduce_ragged(proj_.data(), c.W, 2, n_seg, c.rem_off, m_u, dst_mom.data());
+            else
+                somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, dst_mom.data());
+            if (reuse_q_) {
+                const double err = reuse::verify_error(vm0_.data(), vm0_.data() + 1, mom_.data(),
+                                                       mom_.data() + 1, m_u, n_seg, 2, in.seg_h);
+                counters.reuse_verify_worst = std::max(counters.reuse_verify_worst, err);
+                if (!(err <= reuse::VERIFY_TOL))
+                    throw std::runtime_error("razor pair_reuse verify: a reused remainder row is " +
+                                             std::to_string(err) + " off the shipped fill");
+            }
+        }
         reserve(q_, static_cast<size_t>(nb * n));
         q_rows(c_view<const cd, 3>(mom_.data(), {m_u, n_seg, 2}),
                c_view<const int64_t, 1>(q_row_.data(), {m_obs}), in.s_a, in.s_b, in.h_a,
@@ -384,6 +434,70 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
             v = cd(mw_fma::exact(ar, c2.real(), -(ai * c2.imag())), mw_fma::exact(ar, c2.imag(), ai * c2.real()));
         }
     }
+}
+
+// momwire#1971: the plan for this fill's geometry (the process's, or built)
+// and its class values at this k, when `pair_reuse` asks and the fill is one
+// the plan serves; `reuse_` / `reuse_q_` say what the windows gather.
+void SolveContext::reuse_begin(const SolveInputs &in) {
+    reuse_ = reuse_q_ = false;
+    plan_.reset();
+    if (in.pair_reuse == 0) return;
+    if (in.k_complex || in.unfused || in.chop_rows.shape(0) > 0) {
+        counters.reuse_declined++;
+        return;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const ptrdiff_t n = in.s_a.shape(0);
+    reuse::Geometry g;
+    g.cent = in.cent;
+    g.group_i = in.group_i;
+    g.b_obs = in.b_obs;
+    g.seg_h = in.seg_h;
+    g.a = in.a;
+    g.p0[0] = in.real.seg_p0;
+    g.t[0] = in.real.seg_t;
+    g.group_j[0] = in.real.group_j;
+    g.a_ek[0] = in.real.a_ek;
+    g.has_image = in.has_image;
+    if (in.has_image) {
+        g.p0[1] = in.image.seg_p0;
+        g.t[1] = in.image.seg_t;
+        g.group_j[1] = in.image.group_j;
+        g.a_ek[1] = in.image.a_ek;
+    }
+    // The remainder above the plane on its grid, at one order for every
+    // segment, with each path row its wing centroid along its wing's signed
+    // tangent (bit for bit): otherwise its rows are filled as before.
+    bool q = in.compose && in.comp.grid != nullptr && !in.comp.proj && in.comp.rem_off == nullptr;
+    if (q) {
+        const Compose &c = in.comp;
+        for (ptrdiff_t m = 0; m < n && q; m++)
+            for (int w = 0; w < 2 && q; w++) {
+                const int64_t s = w == 0 ? in.s_a(m) : in.s_b(m);
+                const double sg = w == 0 ? c.sig_a(m) : c.sig_b(m);
+                if (!(sg == 1.0 || sg == -1.0)) q = false;
+                for (int k3 = 0; k3 < 3 && q; k3++)
+                    if (c.obs_pts(2 * m + w, k3) != in.cent(s, k3) ||
+                        c.obs_tans(2 * m + w, k3) != sg * in.real.seg_t(s, k3))
+                        q = false;
+            }
+        if (!q) counters.reuse_q_declined++;
+    }
+    g.remainder = q;
+    g.ground_z = q ? in.comp.ground_z : 0.0;
+    plan_ = reuse::plan_for(g);
+    reuse::eval_direct(*plan_, g, in.xg, in.wg, in.k, in.cancel_flag, vals_);
+    if (q) {
+        const Compose &c = in.comp;
+        reuse::eval_remainder(*plan_, g, *c.grid, c.n_reg, c.rem_src.data(), c.rem_t_src.data(),
+                              c.W, c.n_qp, in.k, in.cancel_flag, vals_);
+    }
+    reuse_ = true;
+    reuse_q_ = q;
+    counters.reuse_fills++;
+    counters.reuse_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
 void SolveContext::fill(const SolveInputs &in) { fill(in, nullptr); }
@@ -439,6 +553,7 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         m0k_.clear();
         m0k_img_.clear();
     }
+    reuse_begin(in);
     n_ = n;
     const size_t nn = static_cast<size_t>(n * n);
     if (z_.size() < nn) {
@@ -496,6 +611,13 @@ void SolveContext::release() {
     std::vector<int64_t>().swap(minus_);
     std::vector<int64_t>().swap(mark_);
     std::vector<int>().swap(ipiv_);
+    plan_.reset();
+    vals_ = reuse::Values();
+    std::vector<cd>().swap(vm0_);
+    std::vector<cd>().swap(vm1_);
+    std::vector<int64_t>().swap(q_seg_);
+    std::vector<double>().swap(q_sign_);
+    reuse_ = reuse_q_ = false;
 }
 
 void SolveContext::set_z(const cd *z, ptrdiff_t n) {

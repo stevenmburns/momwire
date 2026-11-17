@@ -1020,6 +1020,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "height_sheet_recal") return &f.height_sheet_recal;
     if (name == "crossing_table") return &f.crossing_table;
     if (name == "crossing_above_rule") return &f.crossing_above_rule;
+    if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
     return nullptr;
 }
 }  // namespace
@@ -1050,6 +1051,7 @@ std::string requested_stamp() {
     if (f.height_sheet_recal) s += "+height_sheet_recal";
     if (f.crossing_table) s += "+crossing_table";
     if (f.crossing_above_rule) s += "+crossing_above_rule";
+    if (f.razor_pair_reuse) s += "+razor_pair_reuse";
     return s;
 }
 

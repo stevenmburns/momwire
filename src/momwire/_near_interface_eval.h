@@ -194,6 +194,10 @@ struct Features {
     bool height_sheet_recal = false;  // L2: the recalibrated height census
     bool crossing_table = false;      // L5: the crossing rows from one table
     bool crossing_above_rule = false;  // B1: bspline's above x above rule
+    // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
+    // carried here because this is where an executable's requested features
+    // live; the razor seam reads it into `FrontInputs::pair_reuse`.
+    bool razor_pair_reuse = false;
 };
 Features &requested_features();
 const Features &active_features();

@@ -24,6 +24,7 @@
 #pragma once
 
 #include "_mw_core.h"
+#include "_razor_pair_reuse_core.h"
 
 #include <chrono>
 #include <functional>
@@ -132,6 +133,13 @@ struct SolveInputs {
     view<const int64_t, 1> chop_rows;
     view<const bool, 1> chop_keep_a;
     view<const double, 2> chop_pts;
+    // Fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`): 0 is the
+    // fill as it always was; 1 takes every window's moments (and, over the
+    // composing ground above the plane, its remainder rows) from the plan's
+    // class values; 2 does that and checks each window against the shipped
+    // fill (`verify`), throwing past `reuse::VERIFY_TOL`. A fill it does not
+    // serve (complex k, an unfused medium, chopped rows) runs as 0, counted.
+    int pair_reuse = 0;
 };
 
 // What ran, for tests to read (the "green gate that measures nothing" rule:
@@ -141,6 +149,11 @@ struct Counters {
     uint64_t seg_moments_calls = 0, assemble_t1_calls = 0, t2_rows_calls = 0;
     uint64_t lu_calls = 0, pool_grows = 0;
     uint64_t compose_windows = 0;
+    // momwire#1971: fills that took the reuse plan, ones it declined, and the
+    // windows whose moments / remainder rows came from it.
+    uint64_t reuse_fills = 0, reuse_declined = 0, reuse_windows = 0, reuse_q_windows = 0;
+    uint64_t reuse_q_declined = 0;
+    double reuse_verify_worst = 0.0, reuse_seconds = 0.0;
     double fill_seconds = 0.0, lu_seconds = 0.0;
 };
 
@@ -213,6 +226,14 @@ class SolveContext {
     std::vector<int> ipiv_;
     std::vector<cd> m0k_;      // the chopped rows' knot moments, per source set
     std::vector<cd> m0k_img_;
+    // momwire#1971: this fill's plan and class values, when it reuses.
+    std::shared_ptr<const reuse::Plan> plan_;
+    reuse::Values vals_;
+    bool reuse_ = false, reuse_q_ = false;
+    std::vector<cd> vm0_, vm1_;        // verify: the shipped moments
+    std::vector<int64_t> q_seg_;       // the remainder rows' segments and signs
+    std::vector<double> q_sign_;
+    void reuse_begin(const SolveInputs &in);
     void knot_moments(const SolveInputs &in, const SourceSet &src, bool image,
                       std::vector<cd> &out);
 

@@ -1397,6 +1397,7 @@ std::string Front::build(const FrontInputs &in_raw) {
     FrontInputs reduced;
     const FrontInputs &in = dedup(in_raw, reduced) ? reduced : in_raw;
     construct(in);
+    pair_reuse = in.pair_reuse;
 
     std::vector<std::pair<int64_t, End>> touching;
     ground_ends(touching);
@@ -1828,6 +1829,7 @@ SolveInputs Front::solve_inputs(uintptr_t cancel_flag) const {
     }
     s.window_rows = static_cast<ptrdiff_t>(window_rows);
     s.cancel_flag = cancel_flag;
+    s.pair_reuse = pair_reuse;
     return s;
 }
 
