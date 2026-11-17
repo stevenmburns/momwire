@@ -204,5 +204,12 @@ point_field_tensor_cplx_staged(
 std::pair<unsigned long long, unsigned long long> sg_real_far_fill_calls();
 std::pair<unsigned long long, unsigned long long> sg_cplx_far_fill_calls();
 
+// How many `point_field_tensor_cplx_staged` calls this process has served,
+// from any caller -- the Python solver's `_field_tensor` and the C++
+// sinusoidal fill alike (momwire#1849), for the tests that say which kernel a
+// route took: the staged tensor is close to the scalar one, so a printout
+// whose numbers round alike cannot tell them apart.
+unsigned long long point_cplx_staged_calls();
+
 }  // namespace sinusoidal_galerkin
 }  // namespace mw

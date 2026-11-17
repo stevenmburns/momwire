@@ -2023,6 +2023,9 @@ static void sg_real_rows_staged(const SgRealRows &P, size_t m, size_t e0,
 // bytes equal the reference's, so the output cannot tell them apart.
 static std::atomic<unsigned long long> g_sg_cplx_staged_calls{0};
 static std::atomic<unsigned long long> g_sg_cplx_reference_calls{0};
+// `point_field_tensor_cplx_staged`'s calls (momwire#1849), for the tests that
+// say which kernel a route took (`point_cplx_staged_calls`).
+static std::atomic<unsigned long long> g_point_cplx_staged_calls{0};
 
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
@@ -2926,6 +2929,7 @@ point_field_tensor_cplx_staged(
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
     bool folded,
     uintptr_t cancel_flag) {
+    g_point_cplx_staged_calls++;
     return ::point_field_tensor_cplx_staged_impl(obs_centers, obs_tangents, obs_radius, src_centers, src_tangents, seg_h, k, eta, gl_t, gl_w, folded, cancel_flag);
 }
 
@@ -2936,6 +2940,8 @@ std::pair<unsigned long long, unsigned long long> sg_real_far_fill_calls() {
 std::pair<unsigned long long, unsigned long long> sg_cplx_far_fill_calls() {
     return std::make_pair(g_sg_cplx_staged_calls.load(), g_sg_cplx_reference_calls.load());
 }
+
+unsigned long long point_cplx_staged_calls() { return g_point_cplx_staged_calls.load(); }
 
 }  // namespace sinusoidal_galerkin
 }  // namespace mw
