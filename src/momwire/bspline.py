@@ -626,15 +626,15 @@ def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
     not read it; a C-ordered Z is copied, as `solve` did. `overwrite_b` lets
     a locally built F-ordered rhs take the solution. An EXACTLY singular Z
     still raises `LinAlgError`, as `solve` did, where `lu_factor` alone only
-    warns and the solve would return inf/NaN.
+    warns and the solve would return inf/NaN: that policy is
+    `_lapack.lu_factor_strict`'s, shared by every dense route (momwire#1981).
 
     Both calls go through `momwire._lapack`, which is scipy's own unless a
     host process has published its LAPACK there.
     """
-    lu_piv = _lapack.lu_factor(Z, overwrite_a=overwrite_a)
-    if not np.all(np.diagonal(lu_piv[0])):
-        raise np.linalg.LinAlgError("singular matrix")
-    return _lapack.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
+    return _lapack.factor_and_solve(
+        Z, rhs, overwrite_a=overwrite_a, overwrite_b=overwrite_b
+    )
 
 
 # Block edge of `_fortran_in_place`'s swap: two (b, b) complex tiles of

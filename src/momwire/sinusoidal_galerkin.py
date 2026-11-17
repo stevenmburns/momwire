@@ -927,16 +927,14 @@ def _solve_in_place(G, rhs):
     ill-conditioning `LinAlgWarning` it drives are dropped, as the
     point-matched solver's in-place solve already does. An EXACTLY singular
     G still raises `LinAlgError` rather than returning inf/NaN, which
-    `lu_factor` alone would (it only warns).
+    `lu_factor` alone would (it only warns): `_lapack.lu_factor_strict`'s
+    policy, shared by every dense route (momwire#1981).
 
     Callers must not read G afterwards; neither SG solve does, and this
     family stashes no matrix or factors on the solver. The factor and solve
     go through `momwire._lapack` (scipy's unless a host published its own).
     """
-    lu_piv = _lapack.lu_factor(G, overwrite_a=True)
-    if not np.all(np.diagonal(lu_piv[0])):
-        raise np.linalg.LinAlgError("singular matrix")
-    return _lapack.lu_solve(lu_piv, rhs)
+    return _lapack.factor_and_solve(G, rhs, overwrite_a=True)
 
 
 def _solve_constrained(G, rhs, C):
