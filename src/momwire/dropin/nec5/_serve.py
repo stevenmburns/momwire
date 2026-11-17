@@ -486,7 +486,7 @@ import numpy as np
 
 from ...bspline import BSplineSolver
 from ...deck._cards import tokenize
-from ... import _ground_spec, _medium_spec
+from ... import _below_interface, _ground_spec, _medium_spec
 from ..._surface_height import StandOffFloorError
 from ... import _cmul, _lapack, _times
 from ...deck._nec5 import (
@@ -5143,6 +5143,9 @@ def _prepare(
         # NotImplementedError; on this seam that is a refusal by name, not
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
+    except ValueError as exc:
+        _refuse_if_grazing(exc)
+        raise
     times = _times.current()
     fill_seconds = factor_seconds = 0.0
     try:
@@ -5159,6 +5162,15 @@ def _prepare(
         # is met here: a statement about the deck's geometry, refused by name
         # as the NEC-4.2 slot refuses it, not an INTERNAL ERROR frame.
         raise ServeRefusal(str(exc)) from None
+    except NotImplementedError as exc:
+        # The same crossing-serve scope as the constructor's, met where a
+        # basis builds its junctions in the solve (bs2: a spread of radii
+        # within the below wires, census 11-17), refused by name in the same
+        # sentence the executables print, not an INTERNAL ERROR frame.
+        raise ServeRefusal(str(exc)) from None
+    except ValueError as exc:
+        _refuse_if_grazing(exc)
+        raise
     return _Prepared(
         structure=structure,
         mesh=mesh,
@@ -5174,6 +5186,21 @@ def _prepare(
         fill_seconds=fill_seconds,
         factor_seconds=factor_seconds,
     )
+
+
+def _refuse_if_grazing(exc: ValueError) -> None:
+    """:class:`ServeRefusal` for a buried plan's grazing-floor refusal.
+
+    The below/below plan (and the cross block's) refuses a deck whose pairs
+    graze the interface below the grid's floor, in a sentence about the
+    deck's geometry (``_below_interface.BURIED_GRAZING_REFUSAL``). It is
+    raised as ValueError inside the fill, which this seam printed as an
+    INTERNAL ERROR frame until the 11-17 census (bs2, a deck whose grazing
+    pairs lie inside the Sommerfeld range cap); the NEC-4.2 slot and the
+    executables print it as the refusal it is. Any other ValueError passes.
+    """
+    if _below_interface._is_grazing_refusal(exc):
+        raise ServeRefusal(str(exc)) from None
 
 
 def _port_solution(solver, shared: dict | None):

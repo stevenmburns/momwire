@@ -69,6 +69,10 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
                                      fr.ground_eps_r, fr.ground_sigma, 3, 256, np);
         } catch (const bspline::FrontNotPorted &e) {
             throw PrintoutDecline{std::string("bspline: ") + e.what()};
+        } catch (const bspline::FrontValueError &e) {
+            // the buried plan's grazing refusal, Python's ValueError (the
+            // run half refuses it by name, `_refuse_if_grazing`)
+            throw PrintoutRaise{"ValueError", e.what()};
         }
     } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
         const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);

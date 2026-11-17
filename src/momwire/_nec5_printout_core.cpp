@@ -3760,7 +3760,21 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
                     throw PyRaise{o.error_kind, o.message};
                 } else {
                     Prepared &p = r.prepared[static_cast<std::size_t>(o.prepared_index)];
-                    const Solved &sol = solution(o.prepared_index);
+                    const Solved *solved_at = nullptr;
+                    try {
+                        solved_at = &solution(o.prepared_index);
+                    } catch (const PyRaise &raise) {
+                        // `_prepare` refuses what the solve raises as the
+                        // crossing serve's scope (NotImplementedError) or as
+                        // a buried plan's grazing floor (`_refuse_if_grazing`)
+                        if (raise.kind != "NotImplementedError" &&
+                            !(raise.kind == "ValueError" && names_a_grazing_floor(raise.message)))
+                            throw;
+                        printed += render_refusal(&echo, raise.message, basis, stamp);
+                        stopped = true;
+                        break;
+                    }
+                    const Solved &sol = *solved_at;
                     if (a.kind == Answer::sequence) {
                         // `replace(deck_g, frequency_mhz=f)`, finished in
                         // turn; its front released as the stepped route's

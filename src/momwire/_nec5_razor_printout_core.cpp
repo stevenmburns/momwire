@@ -191,7 +191,16 @@ Solved RazorPrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     s.n_basis = front.n_basis;
     s.n_ports = front.n_ports;
     s.x.assign(static_cast<std::size_t>(s.n_basis * s.n_ports), cd(0.0, 0.0));
-    const int info = razor::solve_ports(front, ctx, lapack, s.x.data(), 0);
+    int info = 0;
+    try {
+        info = razor::solve_ports(front, ctx, lapack, s.x.data(), 0);
+    } catch (const razor::FrontError &e) {
+        // what the buried fill raises where Python's fill raises it (the
+        // below plan's grazing refusal, a capped tail): Python's exception,
+        // which the run half refuses by name or prints as INTERNAL ERROR
+        const bool ni = e.kind == razor::FrontErrorKind::not_implemented;
+        throw PrintoutRaise{ni ? "NotImplementedError" : "ValueError", e.what()};
+    }
     if (info != 0) throw PrintoutRaise{"LinAlgError", "singular matrix"};
     // `cols.T @ X`: cols.T is the cast copy in its own (Fortran) order
     std::vector<cd> cols(front.cols.size());

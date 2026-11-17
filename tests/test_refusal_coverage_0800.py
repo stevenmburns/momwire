@@ -111,15 +111,27 @@ RELAYS = {
     # argument and never a deck's
     "_prepare: str(exc) #1": "basis name",
     # the solver's NotImplementedError (the crossing serve's scope): its
-    # sentence is the solver's, and the C++ front declines those decks by
-    # name (`front:buried-fill`, `front:bspline-buried-refusal-*`), so the
-    # launcher prints Python's
+    # sentence is the solver's (`RELAYED_SENTENCES`), from the constructor
+    # (#2) or from the solve (#4, bs2, census 11-17); the C++ fronts refuse
+    # in the same words, or decline by name (`front:buried-fill`,
+    # `front:bspline-buried-refusal-*`) and the launcher prints Python's
     "_prepare: str(exc) #2": "solver scope",
     # `StandOffFloorError` (momwire#865): its sentence is the solver's, raised
     # in the solve; enumerated from `SOLVER_SENTENCES` below, and printed by
     # the bspline C++ seam from bs2's front in the same words
     "_prepare: str(exc) #3": "stand-off floor",
+    "_prepare: str(exc) #4": "solver scope",
+    # a buried plan's grazing-floor ValueError (`_below_interface`'s two
+    # templates, `RELAYED_SENTENCES`), from the constructor or the solve
+    "_refuse_if_grazing: str(exc) #1": "grazing floor",
 }
+
+# The solver sentences the `solver scope` and `grazing floor` relays print:
+# every NotImplementedError `_below_interface` raises in its own words, and
+# its two grazing-floor templates. The relays carry them through unchanged,
+# so the reverse gate below accepts a C++ refusal that is one of them.
+RELAYED_SOURCE = SRC / "_below_interface.py"
+RELAYED_TEMPLATES = ("BURIED_GRAZING_REFUSAL", "BURIED_CROSS_GRAZING_REFUSAL")
 
 # The solver sentences a relay above prints as the deck's refusal, by the
 # exception class each is raised as: (source, class).
@@ -205,6 +217,49 @@ def python_refusals():
     return sentences, relays
 
 
+def relayed_sentences() -> dict[str, str]:
+    """``{key: regex}`` for :data:`RELAYED_SOURCE`'s sentences the relays
+    print: each ``raise NotImplementedError(<literal or f-string>)``, and the
+    :data:`RELAYED_TEMPLATES` (read off the module: one of their literals is
+    an f-string filled at import)."""
+    from momwire import _below_interface
+
+    tree = ast.parse(RELAYED_SOURCE.read_text(encoding="utf-8"))
+    out = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Raise)
+            and isinstance(node.exc, ast.Call)
+            and getattr(node.exc.func, "id", None) == "NotImplementedError"
+            and node.exc.args
+            and isinstance(node.exc.args[0], (ast.Constant, ast.JoinedStr))
+        ):
+            parts = _joined_parts(node.exc.args[0])
+            out[f"NotImplementedError: {_key(parts)}"] = _regex(parts)
+    for name in RELAYED_TEMPLATES:
+        out[name] = _regex(_format_parts(getattr(_below_interface, name)))
+    return out
+
+
+def test_the_relayed_sentences_are_found():
+    """Not vacuous: the crossing scope's sentences and both templates."""
+    relayed = relayed_sentences()
+    assert set(RELAYED_TEMPLATES) <= set(relayed)
+    assert sum(k.startswith("NotImplementedError: ") for k in relayed) >= 3, relayed
+    assert any(
+        re.fullmatch(
+            rx,
+            "crossing serve with per-wire radii that differ within "
+            "the below wires: the two-radius rule serves one radius per "
+            "side of the interface (the node's point tests at the buried "
+            "radius, antennaknobs plan U5); a spread within one side has "
+            "no measured node radius",
+            re.S,
+        )
+        for rx in relayed.values()
+    )
+
+
 def _outcomes(acc, seam, path):
     """Every refusal the C++ seam prints for one deck (any run), and its
     route."""
@@ -281,10 +336,13 @@ def test_every_cxx_printed_refusal_is_a_python_sentence(printed):
     C++ seam prints on a fixture matches a Python sentence -- or the deck
     reader's, which its own gate holds."""
     sentences, _ = python_refusals()
+    relayed = relayed_sentences()
     reader = _cxx_literals(READER_SOURCES, python=True)
     stray = []
     for message in printed:
         if any(re.fullmatch(rx, message, re.S) for rx in sentences.values()):
+            continue
+        if any(re.fullmatch(rx, message, re.S) for rx in relayed.values()):
             continue
         if any(len(f) >= 20 and f in message for f in reader):
             continue

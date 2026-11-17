@@ -322,5 +322,9 @@ std::string scope_refusal(const Deck &deck, std::string &declined);
 // `_shell._internal_error_reason`: the last line of defence's sentence.
 std::string internal_error_reason(const std::string &error_kind, const std::string &message);
 
+// `_below_interface._is_grazing_refusal`: whether a ValueError's message is a
+// buried plan's grazing-floor refusal, which `_serve._prepare` refuses by name.
+bool names_a_grazing_floor(const std::string &message);
+
 }  // namespace nec5
 }  // namespace mw
