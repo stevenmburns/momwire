@@ -24,6 +24,7 @@
 #include "_nec4_build_core.h"
 #include "_nec5_printout_core.h"
 
+#include <array>
 #include <complex>
 #include <string>
 #include <vector>
@@ -122,6 +123,11 @@ struct PrintPatternBlock {
     bool has_lower = false;
     double lower_range_mag = 0, lower_range_phase_deg = 0;
     bool directive = false;
+    // XNDA's N digit 1 to 5 (`PatternBlock.normalized_kind`, `.normalization_db`,
+    // `.normalized`): the NORMALIZED GAIN table after the pattern
+    int normalized_kind = 0;
+    double normalization_db = 0;
+    std::vector<std::array<double, 3>> normalized;
 };
 
 struct PrintFarFieldGround {

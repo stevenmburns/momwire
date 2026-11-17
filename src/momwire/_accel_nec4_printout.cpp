@@ -151,6 +151,14 @@ PrintPatternBlock pattern_block(const py::handle &h) {
         b.lower_range_phase_deg = fl(at(h, "lower_range_phase_deg"));
     }
     b.directive = at(h, "directive").cast<bool>();
+    b.normalized_kind = at(h, "normalized_kind").cast<int>();
+    if (b.normalized_kind != 0) {
+        b.normalization_db = fl(at(h, "normalization_db"));
+        for (const py::handle &cell : at(h, "normalized")) {
+            py::tuple t = py::reinterpret_borrow<py::object>(cell).cast<py::tuple>();
+            b.normalized.push_back({t[0].cast<double>(), t[1].cast<double>(), t[2].cast<double>()});
+        }
+    }
     return b;
 }
 

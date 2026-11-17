@@ -60,6 +60,7 @@
 #include "_nec5_seam_core.h"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -363,6 +364,11 @@ struct PatternBlock {
     bool has_average = false;
     double average_power_gain = 0, solid_angle_pi = 0, power_radiated_4pi = 0;
     bool directive = false;
+    // XNDA's N digit 1 to 5 and GNOR (`rq.gnor_db`): the NORMALIZED GAIN
+    // table, (theta, phi, dB) a direction in the rows' order
+    int normalized_kind = 0;
+    double normalization_db = 0;
+    std::vector<std::array<double, 3>> normalized;
 };
 // A `GD` card's far-field ground on the NEC-4.2 slot (`_far_moments`'
 // `cliff`, momwire#1607 B5d): the cliff mode (3, circular, is the one the slot

@@ -258,6 +258,11 @@ CASES: list[tuple[str, str, str]] = [
     ("rp_xnda_1012", deck(body=FR + EX + "RP 0 1 1 1012\n"), SERVED),
     ("rp_xnda_1013", deck(body=FR + EX + "RP 0 1 1 1013\n"), SERVED),
     ("rp_xnda_1014", deck(body=FR + EX + "RP 0 1 1 1014\n"), "RP with XNDA 1014"),
+    # XNDA's N digit (census 11-17, tests/fixtures/nec42_rp_normalized_gain)
+    ("rp_xnda_1101", deck(body=FR + EX + "RP 0 1 1 1101\n"), SERVED),
+    ("rp_xnda_1513", deck(body=FR + EX + "RP 0 1 1 1513\n"), SERVED),
+    ("rp_xnda_1601", deck(body=FR + EX + "RP 0 1 1 1601\n"), "RP with XNDA 1601"),
+    ("rp_xnda_1504", deck(body=FR + EX + "RP 0 1 1 1504\n"), "RP with XNDA 1504"),
     (
         "rp_negative_range",
         deck(body=FR + EX + "RP 0 1 1 1000 0 0 0 0 -5\n"),

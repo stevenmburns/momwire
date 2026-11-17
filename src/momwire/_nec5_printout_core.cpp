@@ -3885,6 +3885,9 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
     out.solid_angle_pi = c.solid_angle_pi;
     out.power_radiated_4pi = c.power_radiated_4pi;
     out.directive = c.directive;
+    out.normalized_kind = c.normalized_kind;
+    out.normalization_db = c.normalization_db;
+    out.normalized = c.normalized;
     return out;
 }
 NetState composed(const std::vector<SeamCard> &cards, const CMat &y, const std::vector<cd> &z_load,
