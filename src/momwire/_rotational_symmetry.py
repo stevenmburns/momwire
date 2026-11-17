@@ -1564,7 +1564,9 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     if plans is not None:
         # `kcl_nullspace` (momwire#1983): K_0 reduced to the null space of
         # harmonic 0's rows, which for an invariant drive are all the rows.
+        # The same two guards as `z_inv` below, for the same callers.
         refuse_if_not_invariant(v[:, None].astype(np.complex128), sectors)
+        refuse_if_not_invariant(kcl_A.T.astype(np.complex128), sectors)
         top = np.concatenate([sq * v[sectors[0]], v[axial]])
         sol = _kcl_nullspace.solve_reduced(K0, top, plans[0], overwrite=True)
         out = np.empty(v.shape[0], dtype=np.complex128)
