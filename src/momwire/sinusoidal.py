@@ -56,6 +56,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _near_interface,
     _near_surface,
     _rotational_symmetry,
     _schedule,
@@ -1150,6 +1151,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # on the nec2 dialect, NEC-4's on the nec4 one. `build_solver` reads the
     # flag; `SinusoidalGalerkinSolver` clears it (its junction is its own).
     takes_junction_rule = True
+
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "sinusoidal"
 
     # momwire#396: every ground, wire loading and the extended kernel are
     # served (this is NEC2's own basis); junction_ports and node_gaps are
@@ -6563,6 +6568,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blocks = 1 + (self.ground_z is not None) + self._sommerfeld_ground()
         return max(3 * blocks, 3 + 2) * N * 16
 
+    # The near-interface levers (momwire#1980): every one explicitly off
+    # here, since this family honours none (`_features.Feature.solvers`).
+    @_near_interface.under_levers
     def _assemble_Z(self, geom, k, eta=None, obs_rows=None):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
 
