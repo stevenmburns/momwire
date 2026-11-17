@@ -131,6 +131,11 @@ std::string py_format_f(double x, int width, int digits) {
 namespace {
 
 std::string e(double x, int width, int digits) { return py_format_e(x, width, digits); }
+// `_printout._e_nan`: a NaN as x13 prints one, right-aligned
+std::string e_nan(double x, int width, int digits) {
+    if (std::isnan(x)) return std::string(static_cast<std::size_t>(width > 3 ? width - 3 : 0), ' ') + "NaN";
+    return e(x, width, digits);
+}
 std::string f(double x, int width, int digits) { return py_format_f(x, width, digits); }
 
 // `_e_fortran`: a three-digit exponent drops its `E` to keep the width. A
@@ -1581,7 +1586,7 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
                             const std::vector<cd> &moment, FarGround ground, double eps_r,
                             double sigma, double frequency_mhz, double wavelength, double p_in,
                             bool lower, cd eps_c_medium, double p_radiated,
-                            const replay::FarCliff *cliff = nullptr, bool average_single_cut = false) {
+                            const replay::FarCliff *cliff = nullptr, bool nec4_average = false) {
     if (!rq.n_theta.fits_i64() || !rq.n_phi.fits_i64() || !rq.xnda.fits_i64())
         throw Decline{"a pattern count past 64 bits"};
     const int64_t nt = rq.n_theta.i64(), nph = rq.n_phi.i64();
@@ -1777,12 +1782,13 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     int64_t digit = rq.xnda.i64() % 10;
     if (digit < 0) digit += 10;
     // a single cut on either axis averages nothing on the NEC-5 engine
-    // (momwire#1962, `_pattern`'s `average_single_cut`)
-    if (!average_single_cut && (nt == 1 || nph == 1)) digit = 0;
+    // (momwire#1962, `_pattern`'s `nec4_average`)
+    if (!nec4_average && (nt == 1 || nph == 1)) digit = 0;
     if (digit != 0) {
         // A = 2 prints the trailer with no rows (momwire#1503).
         if (digit == 2) block.rows.clear();
-        // `average_gain(g_v + g_h, thetas, d_theta, d_phi, n_phi)`
+        // `average_gain(g_v + g_h, thetas, d_theta, d_phi, n_phi,
+        // trapezoid_phi=not nec4_average)`
         const double d_theta = rq.d_theta_deg, d_phi = rq.d_phi_deg;
         const auto np_max = [](double x, double y) {
             return std::isnan(x) ? x : std::isnan(y) ? y : (x >= y ? x : y);
@@ -1791,6 +1797,35 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
             return std::isnan(x) ? x : std::isnan(y) ? y : (x <= y ? x : y);
         };
         std::vector<double> band(static_cast<std::size_t>(nt));
+        if (!nec4_average) {
+            // the NEC-5 engine's: phi by the trapezoid rule, the theta bands
+            // clipped to the span the samples cover, NaN over a zero step
+            const double first = thetas[0], last = thetas[nt - 1];
+            const double floor_deg = np_min(first, last), ceil_deg = np_max(first, last);
+            for (int64_t it = 0; it < nt; it++) {
+                const double lo = np_max(thetas[it] - 0.5 * std::fabs(d_theta), floor_deg) * DEG_TO_RAD;
+                const double hi = np_min(thetas[it] + 0.5 * std::fabs(d_theta), ceil_deg) * DEG_TO_RAD;
+                band[it] = std::cos(lo) - std::cos(hi);
+            }
+            const double step = d_phi * DEG_TO_RAD;
+            std::vector<double> weighted;
+            weighted.reserve(static_cast<std::size_t>(nt * nph));
+            for (int64_t it = 0; it < nt; it++)
+                for (int64_t ip = 0; ip < nph; ip++) {
+                    const std::size_t q = static_cast<std::size_t>(it * nph + ip);
+                    const double w = (ip == 0 || ip == nph - 1) ? 0.5 : 1.0;
+                    weighted.push_back(((g_v[q] + g_h[q]) * band[static_cast<std::size_t>(it)]) * w);
+                }
+            const double total =
+                (0.0 + np_pairwise(weighted.data(), static_cast<int64_t>(weighted.size()))) * step;
+            const double solid = ((0.0 + np_pairwise(band.data(), nt)) * static_cast<double>(nph - 1)) * step;
+            const double average = solid != 0.0 ? total / solid : std::numeric_limits<double>::quiet_NaN();
+            block.has_average = true;
+            block.average_power_gain = average;
+            block.solid_angle_pi = std::fabs(solid) / 3.141592653589793;
+            block.power_radiated_4pi = average * p_in;
+            return block;
+        }
         for (int64_t it = 0; it < nt; it++) {
             const double lo = np_max(thetas[it] - 0.5 * d_theta, thetas[0]) * DEG_TO_RAD;
             const double hi = np_min(thetas[it] + 0.5 * d_theta, thetas[nt - 1]) * DEG_TO_RAD;
@@ -3092,12 +3127,12 @@ Lines pattern_lines(const PatternBlockC &block) {
                         e(r.ep_mag, 15, 5) + f(r.ep_deg, 9, 2));
     if (block.has_average) {
         add(lines, {"", "",
-                    "   AVERAGE POWER GAIN=" + e(block.average_power_gain, 12, 5) +
+                    "   AVERAGE POWER GAIN=" + e_nan(block.average_power_gain, 12, 5) +
                         "       SOLID ANGLE USED IN AVERAGING=(" + f(block.solid_angle_pi, 7, 4) +
                         ")*PI STERADIANS.",
                     "",
                     "   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS =" +
-                        e(block.power_radiated_4pi, 12, 5) + " WATTS"});
+                        e_nan(block.power_radiated_4pi, 12, 5) + " WATTS"});
     }
     if (block.normalized_kind != 0) {
         // `_printout._normalized`: four blanks, the heading, the gain's name
@@ -3827,7 +3862,7 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
     const PatternBlockC c = nec5::pattern_block(rq, mid, moment, fg, eps_r, sigma,
                                                 frequency_mhz, wavelength, p_in, false,
                                                 cd(0.0, 0.0), p_radiated, cliff,
-                                                /*average_single_cut=*/true);
+                                                /*nec4_average=*/true);
     PatternBlock out;
     for (const PatternRowC &r : c.rows) {
         PatternRow row;

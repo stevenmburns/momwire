@@ -24,12 +24,8 @@ A = 1; 1, 2, 4 and 5 thetas):
     DTH = 30), nor does it on the other.
   - Two phis (cut_two_phi) average as every other capture does.
 
-Not here, because momwire does not print them yet (follow-ups):
-  - with both counts above one and a zero step on one axis (RP 0 3 2 1501
-    30 0 30 0, or DTH = 0 with three phis), x13 prints the trailer with NaN
-    for the average gain and the power and 0.0000 for the solid angle;
-    momwire prints numbers.
-  - cut_two_phi's trailer VALUE: x13's average over a phi range short of a
-    full turn is not momwire's (9.92383E-01 here against momwire's
-    7.18063E-01, the same solid angle), as on ../rp_normalized_gain's
-    free_tworp* and mfreq* captures. The tests compare this trailer by shape.
+Measured since, in ../rp_average_quadrature/ (its README): x13's average
+is the trapezoid rule in phi, which is why cut_two_phi's trailer read
+9.92383E-01 where momwire printed 7.18063E-01 over the same solid angle; and
+a zero step on an axis with more than one angle prints NaN over 0.0000 pi.
+momwire prints both now. The tests here still compare this trailer by shape.

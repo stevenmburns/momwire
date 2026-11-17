@@ -4423,16 +4423,19 @@ def _pattern(
     ground_z: float = 0.0,
     cliff=None,
     p_radiated: float | None = None,
-    average_single_cut: bool = False,
+    nec4_average: bool = False,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
 
-    ``average_single_cut``: whether a card with one theta or one phi
-    (``NTH = 1`` or ``NPH = 1``) still reads XNDA's A digit. The NEC-5
-    engine's does not (momwire#1962, measured black-box on x13: no
-    average-gain trailer at A = 1 or 3, and A = 2 prints its rows, exactly as
-    at A = 0, whatever the step on either axis). The NEC-4.2 slot passes
-    True, keeping what it has always printed, which no capture yet measures.
+    ``nec4_average``: whether the average-gain trailer keeps what the NEC-4.2
+    slot has always printed, which no NEC-4.2 capture yet measures. The NEC-5
+    engine's trailer (False) follows two rules measured black-box on x13. A
+    card with one theta or one phi (``NTH = 1`` or ``NPH = 1``) does not read
+    XNDA's A digit (momwire#1962: no average-gain trailer at A = 1 or 3, and
+    A = 2 prints its rows, exactly as at A = 0, whatever the step on either
+    axis). And the average is the trapezoid rule in phi
+    (:func:`~momwire._far_readout.average_gain`'s ``trapezoid_phi``,
+    ``tests/fixtures/rp_average_quadrature/``), NaN over a zero step.
 
     ``ground_z`` and ``cliff`` are the NEC-4.2 slot's (momwire#1295), which
     shares this row builder: its decks may put the interface anywhere, and a
@@ -4557,7 +4560,7 @@ def _pattern(
             math.atan2(-math.sin(kr), math.cos(kr))
         )
     average_digit = request.xnda % 10
-    if not average_single_cut and (request.n_theta == 1 or request.n_phi == 1):
+    if not nec4_average and (request.n_theta == 1 or request.n_phi == 1):
         # A single cut on either axis averages nothing on the NEC-5 engine:
         # the card prints as at A = 0 (momwire#1962, the docstring above).
         average_digit = 0
@@ -4570,7 +4573,12 @@ def _pattern(
     if average_digit == 2:
         rows = ()
     average, solid = average_gain(
-        g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
+        g_v + g_h,
+        thetas,
+        request.d_theta_deg,
+        request.d_phi_deg,
+        request.n_phi,
+        trapezoid_phi=not nec4_average,
     )
     return PatternBlock(
         rows=rows,

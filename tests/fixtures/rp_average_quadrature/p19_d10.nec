@@ -1,0 +1,10 @@
+CM RP average-gain probe p19_d10 (momwire, phi quadrature)
+CM half turn 0..180, full theta
+CE
+GW 1 21 -0.8 0.3 -2.35 0.8 -0.3 2.35 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 7 19 1001 0 0 30 10 0 0
+XQ
+EN

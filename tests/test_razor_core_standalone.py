@@ -2324,6 +2324,47 @@ def test_a_single_cut_prints_no_average_as_python(driver, tmp_path, basis):
     assert averaged == ["cut_two_phi"]
 
 
+AVERAGE_QUADRATURE_DECKS = sorted(
+    (ROOT / "tests" / "fixtures" / "rp_average_quadrature").glob("*.nec")
+)
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_the_average_quadrature_decks_print_as_python(driver, tmp_path, basis):
+    """RP 0's average gain on the NEC-5 engine: phi by the trapezoid rule,
+    the theta bands clipped to the span, NaN over a zero step
+    (test_rp_average_quadrature holds `_shell.render` to x13's captures).
+    `pattern_block` prints the same trailer, byte for byte as
+    `_shell.render` prints the decks, NaN lines included."""
+    decks = AVERAGE_QUADRATURE_DECKS
+    assert len(decks) == 25
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    if basis == "bspline":
+        counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+        assert not reasons and counts.get("served", 0) == 25, (counts, reasons)
+    else:
+        with _one_thread():
+            answers = pc.run_driver(
+                driver[0]["nec5_razor_printout_driver"], decks, tmp_path
+            )
+            for path, ans in zip(decks, answers, strict=True):
+                assert ans["route"] == "printed", (path, ans.get("reason"))
+                ref = pc.python_printout(path.read_bytes().decode("latin-1"))
+                assert ans["printout"] == ref, (
+                    f"{path}: {pc.first_difference(ref, ans['printout'])}"
+                )
+    with _one_thread():
+        nan = [
+            p.stem
+            for p in decks
+            if b"AVERAGE POWER GAIN=         NaN"
+            in pc.python_printout(p.read_bytes().decode("latin-1"), basis=basis)
+        ]
+    assert nan == [p.stem for p in decks if p.stem.startswith("z_")]
+
+
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
 def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
     """RP with XNDA N = 1 to 5: the NORMALIZED GAIN table through the C++

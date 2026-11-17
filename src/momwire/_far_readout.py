@@ -899,7 +899,9 @@ def pattern_fields(
     return e_theta, e_phi, g_v, g_h
 
 
-def average_gain(gain, thetas, d_theta, d_phi, n_phi) -> tuple[float, float]:
+def average_gain(
+    gain, thetas, d_theta, d_phi, n_phi, *, trapezoid_phi: bool = False
+) -> tuple[float, float]:
     """``(average power gain, solid angle)`` over the sampled directions.
 
     The quadrature is nec2c's, recovered from two fixtures: each theta sample
@@ -910,7 +912,34 @@ def average_gain(gain, thetas, d_theta, d_phi, n_phi) -> tuple[float, float]:
     ``n_phi - 1`` columns — the last sample of a 0..360 sweep is the first one
     again and must not be counted twice.  The solid angle is returned SIGNED;
     a printout that wants its magnitude takes it.
+
+    ``trapezoid_phi`` is the NEC-5 engine's rule (momwire#1967's follow-up,
+    measured black-box on licensed x13 over the synthetic decks in
+    ``tests/fixtures/rp_average_quadrature/``): phi is the TRAPEZOID rule over
+    the ``n_phi - 1`` steps, so the first and last columns count half and
+    every one between counts whole.  Over a closed turn (0..360) the two end
+    columns are one direction, and that is the rule above; short of one
+    (two phis 90 apart: x13 0.9924 where the rule above reads 0.7181) only
+    the trapezoid matches.  The solid angle is the same either way.  The
+    theta bands are clipped to the range the samples SPAN, so a descending
+    theta (``d_theta < 0``) reads as its ascending mirror.  The step is
+    ``d_phi`` itself: a zero step with two phis or more spans nothing, and
+    neither does a zero theta step with two thetas or more, and x13 then
+    prints ``NaN`` for the average over a solid angle of ``0.0000`` -- the
+    NaN returned here.  A single cut never reaches this rule (the NEC-5 seam
+    prints no average for it, momwire#1962).
     """
+    if trapezoid_phi:
+        first, last = thetas[0], thetas[-1]
+        lo = np.radians(np.maximum(thetas - 0.5 * abs(d_theta), min(first, last)))
+        hi = np.radians(np.minimum(thetas + 0.5 * abs(d_theta), max(first, last)))
+        band = np.cos(lo) - np.cos(hi)
+        weight = np.ones(n_phi)
+        weight[0] = weight[-1] = 0.5
+        step = math.radians(d_phi)
+        total = float(np.sum(gain * band[:, None] * weight[None, :])) * step
+        solid = float(np.sum(band)) * (n_phi - 1) * step
+        return (total / solid if solid else math.nan), solid
     lo = np.radians(np.maximum(thetas - 0.5 * d_theta, thetas[0]))
     hi = np.radians(np.minimum(thetas + 0.5 * d_theta, thetas[-1]))
     band = np.cos(lo) - np.cos(hi)
