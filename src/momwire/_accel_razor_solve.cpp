@@ -1469,8 +1469,16 @@ py::list bspline_somm_pairs(py::bytes latin1, std::vector<uintptr_t> blas) {
 }
 // TEST HOOK (momwire#1517 step 4): per preparation, the buried fill's Z
 // before the crossing serve and the loading -- (n_basis, n_basis), or the
-// reason it stopped.
-py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bool cross) {
+// reason it stopped. `features` (registry names) are requested for this call
+// only (momwire#1847's `transmitted_anchors`), the scope taken with the GIL
+// released and then held for the whole hook, as `bspline_front_geometry`'s.
+py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bool cross,
+                               std::vector<std::string> features) {
+    std::optional<ni_eval::FeatureRequest> requested;
+    {
+        py::gil_scoped_release nogil;
+        requested.emplace(features);
+    }
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text, false, true);
     // the below/below table filled in C++, as the executable fills it
@@ -1832,7 +1840,9 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK (momwire#1898): the C++ solve's kcl_nullspace routes, per process.");
     m.def("bspline_buried_stages", &bspline_buried_stages, py::arg("latin1"),
           py::arg("blas") = std::vector<uintptr_t>(), py::arg("cross") = false,
-          "TEST HOOK (momwire#1517 step 4): the buried fill's Z before the crossing serve and the loading.");
+          py::arg("features") = std::vector<std::string>(),
+          "TEST HOOK (momwire#1517 step 4): the buried fill's Z before the crossing serve and the loading; "
+          "`features` requested for this call only.");
     m.def("bspline_somm_pairs", &bspline_somm_pairs, py::arg("latin1"), py::arg("blas") = std::vector<uintptr_t>(),
           "TEST HOOK (momwire#1517 step 3c): the raised remainder pairs and their moments.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
