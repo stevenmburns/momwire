@@ -11,17 +11,15 @@ exact pattern and counted per deck (`mask`):
     "                        FILL=<%9.3f> SEC.,  FACTOR=<%9.3f> SEC."
     " RUN TIME =<%10.3f>"
 
-A deck the C++ declines is counted apart, with its reason. `--basis
-sinusoidal-galerkin` holds `sinusoidal_galerkin_nec4_printout` (momwire#1718
-S3) to `_nec4.render(text, basis="sinusoidal-galerkin")` the same way, and
-`--basis bspline` holds `bspline_nec4_printout` (momwire#1607 Phase C1) to
+A deck the C++ declines is counted apart, with its reason. `--basis bspline`
+holds `bspline_nec4_printout` (momwire#1607 Phase C1) to
 `_nec4.render(text, basis="bspline")`. With `--arrays` (bspline), each
 solve's operator Z, port columns B, coefficients X and port admittances Y
 are held to the bit too, against the ones `BSplineSolver` hands its port
 solve (`_solve_with_kcl_ports`) and returns (`compute_port_solution`).
 
     python scripts/core_split/nec4_run_compare.py DIR [DIR ...] [--show 3] [--out FILE]
-        [--basis sinusoidal|sinusoidal-galerkin|bspline] [--arrays]
+        [--basis sinusoidal|bspline] [--arrays]
 """
 
 from __future__ import annotations
@@ -44,7 +42,6 @@ BASIS = "sinusoidal"
 # The basis -> its C++ printout binding
 BINDINGS = {
     "sinusoidal": "sinusoidal_nec4_printout",
-    "sinusoidal-galerkin": "sinusoidal_galerkin_nec4_printout",
     "bspline": "bspline_nec4_printout",
 }
 
@@ -107,12 +104,6 @@ def blas_addresses(basis: str = BASIS) -> list[int]:
         (npl, "scipy_cblas_ddot64_"),
         (spl, "scipy_zgesvx_"),
     )
-    if basis == "sinusoidal-galerkin":
-        # a crossing deck's ACA and its node's constrained solve (momwire#1718 S11b)
-        names += (
-            (npl, "scipy_cblas_zdotc_sub64_"),
-            (spl, "scipy_zgeqp3_"),
-        )
     if basis == "bspline":
         names += (
             (npl, "scipy_cblas_dsyrk64_"),
