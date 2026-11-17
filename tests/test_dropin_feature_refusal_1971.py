@@ -49,10 +49,15 @@ FRONT_ENDS = {
 
 
 def _launcher(name: str) -> str:
-    found = shutil.which(name) or str(Path(sys.executable).parent / name)
-    if not Path(found).exists():
-        pytest.skip(f"{name} is not installed in this environment")
-    return found
+    here = Path(sys.executable).parent
+    for found in (
+        shutil.which(name, path=str(here)),
+        shutil.which(name),
+        str(here / name),
+    ):
+        if found and Path(found).exists():
+            return found
+    pytest.skip(f"{name} is not installed in this environment")
 
 
 def _sentence(feature: str) -> str:
