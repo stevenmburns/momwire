@@ -55,6 +55,10 @@ pytestmark = [
 ]
 
 DRIFT = _features.FEATURES["razor_pair_reuse"].drift
+# The decks here are well conditioned: on against off moves them ~1e-13, so
+# they hold the reuse to this, tighter than the registry's drift (which the
+# close-spaced decks set, `_features`). A wrong key moves them by orders more.
+CLEAN = 1e-11
 
 
 @pytest.fixture(autouse=True)
@@ -168,7 +172,7 @@ def test_on_matches_off_within_the_drift(ground, ek):
         assert 0 < st["q_classes"] < st["q_pairs"] / 2, st
     else:
         assert st["q_pairs"] == 0, st
-    assert _drift(on, off) <= DRIFT
+    assert _drift(on, off) <= CLEAN
 
 
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
@@ -194,7 +198,7 @@ def test_mixed_radii_and_a_junction_deck_reuses():
     off = _solve(wires, False, radius=radius, ground=SOMM)
     on = _solve(wires, True, radius=radius, ground=SOMM)
     assert _ran() == 1
-    assert _drift(on, off) <= DRIFT
+    assert _drift(on, off) <= CLEAN
     _solve(wires, "verify", radius=radius, ground=SOMM)
 
 
@@ -224,7 +228,7 @@ def test_reversed_wires_share_their_classes():
     )
     assert shared_unfolded > 1.6 * shared, (fwd, unfolded)
     acc.razor_reuse_probe(0)
-    assert _drift(_solve(_dipoles(), True, ground=SOMM), unfolded_y) <= DRIFT
+    assert _drift(_solve(_dipoles(), True, ground=SOMM), unfolded_y) <= CLEAN
 
 
 def _hairpin(x0=3.3):
@@ -334,11 +338,11 @@ def test_a_wrong_key_is_caught(name):
         # orientation probes keep the classes and lose the signs)
         assert st[key] < right[key], (st, right)
     moved = _drift(wrong, off)
-    assert moved > 1e4 * DRIFT, moved
+    assert moved > 1e3 * CLEAN, moved
     with pytest.raises(RuntimeError, match="pair_reuse verify"):
         _solve(wires, "verify", radius=radius, ground=ground)
     acc.razor_reuse_probe(0)
-    assert _drift(_solve(wires, True, radius=radius, ground=ground), off) <= DRIFT
+    assert _drift(_solve(wires, True, radius=radius, ground=ground), off) <= CLEAN
 
 
 def test_a_wrong_key_is_caught_on_the_cxx_route(monkeypatch):
@@ -421,3 +425,48 @@ def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
     assert after["reuse_windows"] == before["reuse_windows"]
     assert ctx.reuse_declined_reason == "too many classes to code"
     np.testing.assert_array_equal(y, off)
+
+
+# ------------------------------------------------------------ the declared drift
+
+
+def _line_zin(mode, spacing, ground, exact):
+    """A 10 m two-wire line `spacing` apart (1 mm wire, 41 segments a side,
+    one-segment bridges), fed at the middle of one bridge."""
+    s = spacing
+    wires = [
+        np.array(w, dtype=float)
+        for w in (
+            [[0, -5, 4], [0, 5, 4]],
+            [[0, 5, 4], [s, 5, 4]],
+            [[s, 5, 4], [s, -5, 4]],
+            [[s, -5, 4], [0, -5, 4]],
+        )
+    ]
+    sol = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[41], [1], [41], [1]],
+        feeds=[(3, spacing / 2, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=299.792458 / 14.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+        exact_kernel=exact,
+        razor_pair_reuse=mode,
+        **GROUNDS[ground],
+    )
+    return complex(1.0 / sol.compute_port_solution().y[0, 0])
+
+
+@pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
+@pytest.mark.parametrize("exact", [False, True])
+def test_a_close_spaced_line_is_within_the_declared_drift(ground, exact):
+    """The shape that sets the registry's drift: a line 2.5 radii apart, a
+    near-short at its feed (|Zin| ~ 27 ohm), whose flag-off fill itself moves
+    ~1e-10 when the deck is translated. On against off stays within the
+    declared drift (here ~3e-12; the deck forms of these lines measured up to
+    4.3e-10, `_features`)."""
+    off = _line_zin(False, 0.0025, ground, exact)
+    on = _line_zin(True, 0.0025, ground, exact)
+    assert _ran() == 1
+    assert abs(on - off) / abs(off) <= DRIFT
