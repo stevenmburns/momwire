@@ -1,0 +1,32 @@
+| deck | side | base (4ec7912d, env unset) | branch cur | |
+|---|---|---|---|---|
+| ak_buried_dipole.nec5 | py | 146.78448+45.81784j | 146.78448+45.81784j | identical |
+| ak_buried_dipole.nec5 | cxx | n/a | n/a | identical |
+| ak_buried_radial_vertical_r4.nec5 | py | 78.13459+46.31445j | 78.13459+46.31445j | identical |
+| ak_buried_radial_vertical_r4.nec5 | cxx | n/a | n/a | identical |
+| ak_elevated_buried_cpoise.nec5 | py | 38.17434+0.80745j | 38.17434+0.80745j | identical |
+| ak_elevated_buried_cpoise.nec5 | cxx | n/a | n/a | identical |
+| buried_dipole401 | py | 168.57297+31.29027j | 168.57297+31.29027j | identical |
+| buried_dipole401 | cxx | 167.80404+29.53703j | 167.80404+29.53703j | identical |
+| buried_hub32_crossing | py | 84.83228+49.95486j | 84.83228+49.95486j | identical |
+| buried_hub32_crossing | cxx | 82.10084+31.23342j | 82.10084+31.23342j | identical |
+| buried_hub8_crossing | py | 116.20445+65.04978j | 116.20445+65.04978j | identical |
+| buried_hub8_crossing | cxx | 112.07303+42.33226j | 112.07303+42.33226j | identical |
+| fx_ab_bent_pair | py | 336.94981-531.52709j | 336.94981-531.52709j | identical |
+| fx_ab_bent_pair | cxx | 442.32757-918.07559j | 442.32757-918.07559j | identical |
+| fx_ab_hub16 | py | 99.17909+57.73246j | 99.17909+57.73246j | identical |
+| fx_ab_hub16 | cxx | 95.86041+36.57159j | 95.86041+36.57159j | identical |
+| fx_ab_hub8 | py | 117.57400+125.82115j | 117.57400+125.82115j | identical |
+| fx_ab_hub8 | cxx | 121.24332+101.78675j | 121.24332+101.78675j | identical |
+| fx_ab_long_wire | py | 466.56010-70.18681j | 466.56010-70.18681j | identical |
+| fx_ab_long_wire | cxx | 780.33815-160.45586j | 780.33815-160.45586j | identical |
+| fx_buried_hub_base_source | py | 83.46764-9.86907j | 83.46764-9.86907j | identical |
+| fx_buried_hub_base_source | cxx | 85.39145-8.75577j | 85.39145-8.75577j | identical |
+| fx_sg2r_hub1.nec5 | py | 186.19016-64.75382j | 186.19016-64.75382j | identical |
+| fx_sg2r_hub1.nec5 | cxx | n/a | n/a | identical |
+| fx_slant_base_source | py | 86.69213-31.78166j | 86.69213-31.78166j | identical |
+| fx_slant_base_source | cxx | 88.54113-31.04385j | 88.54113-31.04385j | identical |
+| mixed_vert_over_buried8 | py | 45.67505-7592.41482j | 45.67505-7592.41482j | identical |
+| mixed_vert_over_buried8 | cxx | n/a | n/a | identical |
+| sd_buried_dipole101 | py | 166.73001+82.68332j | 166.73001+82.68332j | identical |
+| sd_buried_dipole101 | cxx | 168.09334+79.92252j | 168.09334+79.92252j | identical |

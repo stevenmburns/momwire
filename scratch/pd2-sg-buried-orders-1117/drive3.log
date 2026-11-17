@@ -1,0 +1,15 @@
+ak_buried_dipole.nec5 1 cxx qref_cxx None 
+ak_buried_radial_vertical_r4.nec5 1 cxx qref_cxx None 
+ak_elevated_buried_cpoise.nec5 1 cxx qref_cxx None 
+buried_dipole401 1 cxx qref_cxx [167.80403929343137, 29.537029680696374] 
+buried_hub32_crossing 1 cxx qref_cxx [82.10084718169837, 31.23352479215173] 
+buried_hub8_crossing 1 cxx qref_cxx [112.0730280918513, 42.33225720482281] 
+fx_ab_bent_pair 1 cxx qref_cxx [442.32757340332716, -918.0755870359103] 
+fx_ab_hub16 1 cxx qref_cxx [95.86040944224938, 36.5715897523291] 
+fx_ab_hub8 1 cxx qref_cxx [121.24332451041627, 101.7867535360384] 
+fx_ab_long_wire 1 cxx qref_cxx [780.3381463242155, -160.45585867445712] 
+fx_buried_hub_base_source 1 cxx qref_cxx [85.391450742194, -8.755772349136974] 
+fx_sg2r_hub1.nec5 1 cxx qref_cxx None 
+fx_slant_base_source 1 cxx qref_cxx [88.3521168659441, -31.417755867868816] 
+mixed_vert_over_buried8 1 cxx qref_cxx None fill.structures[0].points[0] ? declined 7769726573206f6e20626f7468207369646573206f662074686520696e746572666163652077697468206e6f2063726f7373696e67206a756e6374696f6e20286d6f6d7769726523313731383a20746865207472616e736d697474656420626c6f636b732c2053313229
+sd_buried_dipole101 1 cxx qref_cxx [168.09333739129195, 79.92251713610217] 
