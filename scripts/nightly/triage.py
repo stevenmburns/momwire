@@ -12,7 +12,7 @@ never acted on: nothing here reverts, files or merges anything.
 
 A night is red when any finding is severe or moderate.
 
-Findings, by kind (cell = <variant>-T<threads>):
+Findings, by kind (cell = <variant>-T<threads>[-threads]):
 
     mismatch            the executable SERVED (route cxx:*) and its printout is not
                         Python's                                         severe
@@ -23,6 +23,12 @@ Findings, by kind (cell = <variant>-T<threads>):
     py-error            Python raised past the seam, or timed out        moderate,
                         severe when new
     variant             Python ran a variant other than the cell's       severe
+    copy-route          (a -threads cell) the executable served a deck
+                        through a copy other than the OpenMP one, so the
+                        cell did not measure what it names               severe
+    copy-differs        (a -threads cell) the threaded copy's printout is
+                        not the plain cell's (the serial copy at one
+                        thread) for the same executable and deck         severe
     py-drift            (avx2-T1) Python's printout moved from the green night:
                         text or a number beyond Z_REL                    severe
                         a number within Z_REL                            moderate
@@ -181,6 +187,31 @@ def triage_audit(night: Path, base: Path | None) -> list[dict]:
                 det = f"first differing line {r.get('diff_line')}"
                 det += f"; exe {r.get('exe_outcome')}, Python {r.get('py_outcome')}"
                 out.append(finding("mismatch", "severe", det, **w))
+            if cell.endswith("-threads") and route.startswith("cxx:"):
+                if route != "cxx:threads":
+                    out.append(
+                        finding(
+                            "copy-route",
+                            "severe",
+                            f"route {route}: MW_EXE_COPY=threads did not reach the copy",
+                            **w,
+                        )
+                    )
+                plain = rows.get(cell[: -len("-threads")], {}).get((exe, deck))
+                if (
+                    plain is not None
+                    and plain.get("route", "").startswith("cxx:")
+                    and plain.get("exe_sha") != r.get("exe_sha")
+                ):
+                    out.append(
+                        finding(
+                            "copy-differs",
+                            "severe",
+                            f"threaded copy {str(r.get('exe_sha'))[:12]}, plain cell"
+                            f" ({plain.get('route')}) {str(plain.get('exe_sha'))[:12]}",
+                            **w,
+                        )
+                    )
     # Python drift night over night: the every-night cell only.
     cell = "avx2-T1"
     if base and cell in rows and cell in brows:

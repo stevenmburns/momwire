@@ -20,6 +20,14 @@ built for that variant, Python's accelerator forced to it
 (MOMWIRE_FORCE_VARIANT), and MOMWIRE_THREADS = OMP_NUM_THREADS =
 OPENBLAS_NUM_THREADS = n on both sides.
 
+`<avx2|sse2>-T<n>-threads` is the same cell with MW_EXE_COPY=threads on the
+executable's side: a one-thread cell then runs the OpenMP copy of the route
+(`rt_threads`) instead of the serial one (`rt_serial`), which a one-thread
+cell otherwise always takes (`momwire_razor2p.cpp`). The route log names the
+copy that ran (`cxx:serial` / `cxx:threads`), so triage can tell a threaded
+cell that measured nothing; against the plain cell of the same night it is
+the threaded copy == serial copy gate (PA3(a)).
+
 The two printouts must be byte-identical once the NEC-4.2 slot's two measured
 time lines are masked. A deck the executable DECLINES (its route log says
 `refused:<why>`) is recorded, not failed, but Python is still asked: an
@@ -85,11 +93,13 @@ FILL = re.compile(rb"^( {24}FILL=)[ 0-9.]{9}( SEC\.,  FACTOR=)[ 0-9.]{9}( SEC\.)
 RUN_TIME = re.compile(rb"^( RUN TIME =)[ 0-9.]{10}$")
 
 
-def parse_cell(cell: str) -> tuple[str, int]:
-    m = re.fullmatch(r"(avx2|sse2)-T(\d+)", cell)
+def parse_cell(cell: str) -> tuple[str, int, str]:
+    """(variant, threads, copy): copy is "threads" for a `-threads` cell
+    (MW_EXE_COPY=threads), else "policy" (the executable's own choice)."""
+    m = re.fullmatch(r"(avx2|sse2)-T(\d+)(-threads)?", cell)
     if not m:
-        raise SystemExit(f"cell {cell!r} is not <avx2|sse2>-T<n>")
-    return m.group(1), int(m.group(2))
+        raise SystemExit(f"cell {cell!r} is not <avx2|sse2>-T<n>[-threads]")
+    return m.group(1), int(m.group(2)), "threads" if m.group(3) else "policy"
 
 
 def mask(printout: bytes) -> tuple[bytes, int]:
@@ -275,7 +285,7 @@ def main() -> int:
     ap.add_argument("--save-printouts", type=Path)
     ap.add_argument("--workers", type=int, default=0)
     a = ap.parse_args()
-    variant, threads = parse_cell(a.cell)
+    variant, threads, copy = parse_cell(a.cell)
 
     # The environment every child reads (numpy is never imported here).
     sys.path.insert(0, str(a.tree / "src"))
@@ -291,6 +301,10 @@ def main() -> int:
         MOMWIRE_FORCE_VARIANT=variant,
         PYTHONWARNINGS="ignore",
     )
+    if copy == "threads":
+        os.environ["MW_EXE_COPY"] = "threads"  # read by the executable only
+    else:
+        os.environ.pop("MW_EXE_COPY", None)
 
     only = None
     if a.only:
