@@ -458,6 +458,7 @@ void gm(const Card &card, std::vector<FlatWire> &wires) {
         for (std::size_t k = i1; k < wires.size(); k++) {
             xf(wires[k].p1, wires[k].p1);
             xf(wires[k].p2, wires[k].p2);
+            wires[k].tag = next_tag(wires[k].tag, itgi);
         }
         return;
     }
@@ -739,8 +740,8 @@ void gr(const Card &card, std::vector<FlatWire> &wires) {
 }
 
 // `_symmetry_after`
-void symmetry_after(const Card &card, const std::vector<FlatWire> &wires, Symmetry before,
-                    bool &has, Symmetry &symmetry) {
+void symmetry_after(const Card &card, const Int &first_tag, Symmetry before, bool &has,
+                    Symmetry &symmetry) {
     const std::string &m = card.mnemonic;
     if (m == "GX") {
         bool any = false;
@@ -764,7 +765,10 @@ void symmetry_after(const Card &card, const std::vector<FlatWire> &wires, Symmet
         has = false;
         return;
     }
-    if (first_wire_with_tag(wires, py_int_trunc(card.f(8) + 0.5)) != 0) has = false;
+    // the tag the first wire carried before the card: an in-place GM has
+    // renumbered the block since (momwire#2001)
+    const Int its = py_int_trunc(card.f(8) + 0.5);
+    if (its > Int(0) && !(first_tag == its)) has = false;
 }
 
 // --- connections -------------------------------------------------------------
@@ -963,6 +967,7 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
         Symmetry before;
         before.cell_wires = static_cast<ll>(wires.size());
         before.cell_segments = n_segments;
+        const Int first_tag = wires.empty() ? Int(0) : wires[0].tag;
         const std::string &m = card.mnemonic;
         if (m == "GW") {
             gw(card, wires, dialect);
@@ -1000,7 +1005,7 @@ Structure build_geometry(const std::vector<Card> &cards, Dialect dialect) {
         }
         if (fresh == 0) n_segments = 0;
         for (std::size_t k = fresh; k < wires.size(); k++) n_segments += wires[k].n_seg;
-        symmetry_after(card, wires, before, s.has_symmetry, s.symmetry);
+        symmetry_after(card, first_tag, before, s.has_symmetry, s.symmetry);
     }
     ll total = 0;
     for (const FlatWire &w : wires) {
