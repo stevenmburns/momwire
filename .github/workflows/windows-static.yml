@@ -408,13 +408,13 @@ jobs:
         with:
           toolset: '14.44'
       # The shim's guards must not change what MSVC compiles: the six files'
-      # preprocessed text, against the commit this branch started from.
+      # preprocessed text, against the main commit this branch last merged.
       - name: MSVC's preprocessed sources are the base commit's
         shell: pwsh
         run: |
-          git fetch -q --depth=1 origin 77040171fcfe7bf8e8ad4982e5641a5e9cfcd5dd
+          git fetch -q --depth=1 origin 60062a4e1a68939dde8969e72216df002cad4c7f
           if ($LASTEXITCODE) { exit 1 }
-          git worktree add -q --detach "$env:RUNNER_TEMP\base" 77040171fcfe7bf8e8ad4982e5641a5e9cfcd5dd
+          git worktree add -q --detach "$env:RUNNER_TEMP\base" 60062a4e1a68939dde8969e72216df002cad4c7f
           if ($LASTEXITCODE) { exit 1 }
           $here = "$PWD"; $fail = 0
           foreach ($f in '_accel_sinusoidal_cplx.cpp', '_near_interface_point_core.cpp', '_accel_razor_cplx.cpp', '_near_interface_core.cpp', '_bspline_core.cpp') {
@@ -735,6 +735,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        exe: [momwire-nec5-razor-2p, momwire-nec5-bspline]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -748,11 +749,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: soak, UCRT64 fat razor-2p, the shipped exit against the control, stdout piped (shard ${{ matrix.shard }}; diagnostic)
+      # The shim-enabled fat pair: what windows-single ships while its switch is ON
+      - name: soak, UCRT64 fat ${{ matrix.exe }} with the vector-math shim, the shipped exit against the control, stdout piped (shard ${{ matrix.shard }}; diagnostic)
         shell: pwsh
         run: |
           $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
-          $e = "dist-ucrt-fat\momwire-nec5-razor-2p.exe"
+          $e = "dist-ucrt-shim-fat\${{ matrix.exe }}.exe"
           python scripts/windows_static/stress.py 16 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
             "default-a=$e" "default-b=$e" "normal-shutdown=$e|MW_EXE_EXIT=normal" > stress.txt
           $rc = $LASTEXITCODE
@@ -761,7 +763,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: stress-${{ matrix.shard }}
+          name: stress-${{ matrix.exe }}-${{ matrix.shard }}
           path: stress.txt
           retention-days: 7
 
