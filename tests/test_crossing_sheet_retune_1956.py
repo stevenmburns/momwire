@@ -230,7 +230,11 @@ def test_the_cxx_plan_and_values_are_pythons(on):
     assert_lanes_match(cv, py, f"sheet values, retune {'on' if on else 'off'}")
 
 
-@pytest.mark.parametrize("cls", [RazorSolver, BSplineSolver])
+# Razor's case moved to the slow lane at 0.94.0 (median 6.6 s over 12 runs);
+# bspline's stays in the default lane, so every PR still runs one basis.
+@pytest.mark.parametrize(
+    "cls", [pytest.param(RazorSolver, marks=pytest.mark.slow), BSplineSolver]
+)
 def test_on_agrees_with_off_within_the_declared_drift(cls):
     deck = hub_deck(n_radials=16)
     zin = {}
@@ -276,6 +280,8 @@ def _deep_hub(f, depth, q, n=16):
     )
 
 
+# Slow lane at 0.94.0: median 7.7 s over 12 runs.
+@pytest.mark.slow
 def test_deep_high_frequency_hub_within_the_declared_drift():
     deck = _deep_hub(28e6, 1.5, 2.5)
     zin = {}
