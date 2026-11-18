@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_cpu_count.h"
+#include "_thread_policy.h"
 #include "_mw_times.h"
 
 // Thin module TU (momwire#687): the sections register themselves; their
@@ -62,6 +63,12 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
         d["allowed_threads"] = mw::cpu::allowed_threads();
         d["allowed_cores"] = mw::cpu::allowed_cores();
         return d;
+    });
+
+    // The executable's size policy on this process's physical cores
+    // (`_thread_policy.h`), for the Python drop-in (`momwire._thread_policy`).
+    m.def("_threads_for", [](long long n_basis, long long crossing_pairs, long long below_pairs) {
+        return mw_threads::for_deck(mw::cpu::allowed_cores(), n_basis, crossing_pairs, below_pairs);
     });
 
     // MOMWIRE_TIMES: the C++ half of a Python answer's stage

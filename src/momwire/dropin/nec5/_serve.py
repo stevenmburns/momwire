@@ -488,7 +488,7 @@ from ...bspline import BSplineSolver
 from ...deck._cards import tokenize
 from ... import _below_interface, _ground_spec, _medium_spec
 from ..._surface_height import StandOffFloorError
-from ... import _cmul, _lapack, _times
+from ... import _cmul, _lapack, _thread_policy, _times
 from ...deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
@@ -5146,6 +5146,7 @@ def _prepare(
     except ValueError as exc:
         _refuse_if_grazing(exc)
         raise
+    _thread_policy.measured(*_solve_size(mesh, medium))
     times = _times.current()
     fill_seconds = factor_seconds = 0.0
     try:
@@ -5186,6 +5187,25 @@ def _prepare(
         fill_seconds=fill_seconds,
         factor_seconds=factor_seconds,
     )
+
+
+def _solve_size(mesh: _Mesh, medium: GroundMedium | None) -> tuple[int, int, int]:
+    """The executable's three measures of a solve (`threads_for`): its size,
+    its crossing block's above x below segments, and a wholly-buried run's
+    segments squared. Segments stand in for basis functions, which every
+    family here has within a few of (the rule's steps are at 128 and 384)."""
+    above = below = 0
+    for piece in mesh.pieces:
+        segments = piece.n_elements
+        if medium is not None and float(np.mean(piece.points[:, 2])) < 0.0:
+            below += segments
+        else:
+            above += segments
+    if not below:
+        return above, 0, 0
+    if above:
+        return above + below, above * below, 0
+    return below, 0, below * below
 
 
 def _refuse_if_grazing(exc: ValueError) -> None:

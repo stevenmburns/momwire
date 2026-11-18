@@ -74,7 +74,7 @@ import numpy as np
 from scipy.special import hankel1, hankel2, wofz
 from threadpoolctl import ThreadpoolController
 
-from . import _accel, _cancel, _features
+from . import _accel, _cancel, _features, _thread_policy
 from ._quadrature import leggauss
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
@@ -804,6 +804,8 @@ def _requested_threads(n):
     a caller (the hosted app, an optimiser worker) that sets it between
     solves is heard; an unset, empty, non-numeric or non-positive value
     leaves `n` alone."""
+    # A drop-in answer's own count, which the deck may have set (momwire#2023).
+    n = min(n, _thread_policy.used("openmp") or n)
     try:
         want = int(os.environ.get("OMP_NUM_THREADS", "") or 0)
     except ValueError:

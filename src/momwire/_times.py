@@ -32,7 +32,7 @@ import time
 
 import momwire_serve_client as _mech
 
-from . import _accel
+from . import _accel, _thread_policy
 
 # The stages, in the `times:` line's order (`_mw_times.h`'s, with the write).
 STAGES = ("seam", "ground", "fill", "factor", "rp", "near", "run", "printout", "write")
@@ -74,6 +74,9 @@ class Times:
         self.ms = dict.fromkeys((*STAGES, "none"), 0.0)
         self.counts = {"built": 0, "disk": 0, "blended": 0}
         self.runs = 0
+        # (OpenMP, BLAS) as the answer left them (`_thread_policy`): its
+        # `times:` line is written after the answer's pools are restored.
+        self.used_threads: tuple[int | None, int | None] = (None, None)
         self._cur = "none"
         self._last = now
         self._acc = _cxx()
@@ -137,15 +140,19 @@ class Times:
             self.route,
             cells,
             total_ms=total,
-            threads=fill_threads() if threads is None else threads,
+            threads=(self.used_threads[0] or fill_threads())
+            if threads is None
+            else threads,
             runs=self.runs,
             counts=self.counts,
         )
 
 
 def default_threads() -> int:
-    """The thread count the Python path runs with: MOMWIRE_THREADS, else
-    every hardware thread (the launcher's default)."""
+    """The thread count a pool starts with outside a drop-in answer:
+    MOMWIRE_THREADS, else every hardware thread. Inside one the deck decides
+    (`_thread_policy`), and :func:`fill_threads` / :func:`factor_threads`
+    read the pools themselves."""
     try:
         forced = int(os.environ.get("MOMWIRE_THREADS", "") or 0)
     except ValueError:
@@ -162,14 +169,15 @@ def _env_threads(name: str) -> int:
 
 
 def fill_threads() -> int:
-    """The OpenMP threads the fill runs on (OMP_NUM_THREADS, else the default)."""
-    return _env_threads("OMP_NUM_THREADS")
+    """The OpenMP threads the fill runs on: the pool's own count inside a
+    drop-in answer, else OMP_NUM_THREADS, else the default."""
+    return _thread_policy.used("openmp") or _env_threads("OMP_NUM_THREADS")
 
 
 def factor_threads() -> int:
-    """The OpenBLAS threads the LU runs on (OPENBLAS_NUM_THREADS, else the
-    default)."""
-    return _env_threads("OPENBLAS_NUM_THREADS")
+    """The OpenBLAS threads the LU runs on: the pool's own count inside a
+    drop-in answer, else OPENBLAS_NUM_THREADS, else the default."""
+    return _thread_policy.used("blas") or _env_threads("OPENBLAS_NUM_THREADS")
 
 
 def current() -> Times | None:
