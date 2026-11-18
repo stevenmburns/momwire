@@ -250,7 +250,15 @@ def test_the_mixed_fill_peak_falls(monkeypatch):
     triple T. Measured 3.32 T whole-plane (the whole-plane class block and
     its image beside the triple) and 2.50 T class-restricted; x4 goes 3.12 ->
     1.92. The N-independent Sommerfeld grids dominate at x1, so x2 is the
-    smallest rung where the bound means something."""
+    smallest rung where the bound means something.
+
+    The remainder's fold overlap is off here. It holds one more chunk's block
+    whenever the projection outruns the fold on its worker thread, so with it
+    on the peak follows the OpenMP width and the scheduler: 2.79 T at one
+    thread, and 2.89 to 3.17 T from run to run at four and eight, over this
+    bound. The xdist lanes pin one thread, which is why only a serial run
+    failed. Off, it measures 2.54 T at one and at eight threads, and the
+    whole-plane fill 3.35 T."""
     d = hub_deck(n_radials=16)
     npe = d["n_per_edge_per_wire"]
     d["n_per_edge_per_wire"] = [[n * 2 for n in e] for e in npe[:16]] + [
@@ -278,6 +286,7 @@ def test_the_mixed_fill_peak_falls(monkeypatch):
     monkeypatch.setattr(
         SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False
     )
+    monkeypatch.setattr(sg, "_REMAINDER_OVERLAP", False)
     s = _direct_sg(**d)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
