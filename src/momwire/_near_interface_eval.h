@@ -199,6 +199,10 @@ struct Features {
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    // razor-2p's cross blocks from anchors across a sweep
+    // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
+    // either: the crossing fill reads it from the active features.
+    bool crossing_anchors = false;
 };
 Features &requested_features();
 const Features &active_features();

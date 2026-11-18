@@ -6,6 +6,7 @@
 #include "_bspline_fill_core.h"
 #include "_bspline_crossing_core.h"
 #include "_razor_buried_core.h"
+#include "_razor_crossing_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
 #include "_razor_front_core.h"
@@ -1544,6 +1545,46 @@ static py::tuple near_interface_eval_cone_table(double k_p, cd k_m, double d, do
     return py::make_tuple(py::array_t<double>(static_cast<py::ssize_t>(edges.size()), edges.data()), v);
 }
 
+// The opt-in `crossing_anchors` for the Python route (`razor.py`'s
+// `_crossing_anchors_now`): the C++ fill's own plan, entries and
+// interpolation (`_razor_crossing_core.h`'s `anchors`), so both routes write
+// the same bits.
+static py::dict crossing_anchor_plan(std::vector<double> wavelengths) {
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths);
+    py::dict d;
+    d["ok"] = p.ok;
+    d["why"] = p.why;
+    d["n_a"] = p.n_a;
+    d["k"] = p.k;
+    d["anchor_k"] = p.anchor_k;
+    return d;
+}
+
+static py::array_t<int64_t> crossing_anchor_entries(int64_t n, std::vector<int64_t> rows_a, std::vector<int64_t> rows_b,
+                                                    std::vector<int64_t> tent_cols) {
+    const std::vector<int64_t> idx = mw::razor::anchors::entries(n, rows_a, rows_b, tent_cols);
+    py::array_t<int64_t> out(static_cast<py::ssize_t>(idx.size()));
+    std::copy(idx.begin(), idx.end(), out.mutable_data());
+    return out;
+}
+
+// Z (n x n, Fortran order) += the anchors' values at k; 0 on an anchor, 1
+// interpolated.
+static int crossing_anchor_apply(py::array z, iarr idx, cdarr raw, std::vector<double> wavelengths, double k) {
+    if (!(z.flags() & py::array::f_style) || z.dtype().kind() != 'c' || z.itemsize() != 16 || z.ndim() != 2 ||
+        z.shape(0) != z.shape(1) || !z.writeable())
+        throw std::invalid_argument("Z must be a writeable square complex128 Fortran-order array");
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths);
+    if (!mw::razor::anchors::in_plan(p, k)) throw std::invalid_argument("k is not in the plan");
+    const size_t m = static_cast<size_t>(idx.size());
+    if (raw.ndim() != 2 || static_cast<size_t>(raw.shape(0)) != p.anchor_k.size() || static_cast<size_t>(raw.shape(1)) != m)
+        throw std::invalid_argument("raw must be (n_a, entries)");
+    const int64_t n2 = static_cast<int64_t>(z.shape(0)) * static_cast<int64_t>(z.shape(0));
+    for (size_t e = 0; e < m; e++)
+        if (idx.data()[e] < 0 || idx.data()[e] >= n2) throw std::invalid_argument("entry out of range");
+    return mw::razor::anchors::apply(static_cast<cd *>(z.mutable_data()), idx.data(), m, raw.data(), p, k);
+}
+
 void register_razor_solve(py::module_ &m) {
     m.attr("razor_solve_proto") = true;
     py::class_<mw::razor::SolveContext>(m, "RazorSolveContext",
@@ -1581,6 +1622,17 @@ void register_razor_solve(py::module_ &m) {
              "nothing else is set), else X (n_basis, n_ports) column-major, "
              "info (> 0: U(info, info) exactly zero), cols, geom "
              "(`_build_geometry`'s dict), ties, and Z / front on request.");
+
+    // crossing_anchors for the Python route (`_razor_crossing_core.h`).
+    m.attr("crossing_anchors_1117") = true;
+    m.def("crossing_anchor_plan", &crossing_anchor_plan, py::arg("wavelengths"),
+          "crossing_anchors' plan over a sweep's wavelengths: ok, why, n_a, k, anchor_k.");
+    m.def("crossing_anchor_entries", &crossing_anchor_entries, py::arg("n"), py::arg("rows_a"),
+          py::arg("rows_b"), py::arg("tent_cols"),
+          "The column-major Z entries the cross blocks and node charges write.");
+    m.def("crossing_anchor_apply", &crossing_anchor_apply, py::arg("z"), py::arg("idx"), py::arg("raw"),
+          py::arg("wavelengths"), py::arg("k"),
+          "Z[idx] += the anchors' values at k (Z Fortran order); 0 on an anchor, 1 interpolated.");
 
     // momwire#1971: fill-pair reuse for the Python route.
     m.attr("razor_pair_reuse_1971") = true;

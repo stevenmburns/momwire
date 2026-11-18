@@ -308,6 +308,11 @@ class SeamEngine {
         bool unsolved = false;
     };
     virtual Built build(Prepared &p) const = 0;
+    // The whole seam's answer, once at its start (`r` empty) and once when
+    // every structure has been prepared: what a basis keeps across the
+    // run's fills (razor-2p's `crossing_anchors` band plan). Nothing by
+    // default.
+    virtual void seam_done(const SeamResult &r) const { (void)r; }
 };
 
 // The whole seam, deck text to the solver's arguments: `_shell.render`'s
