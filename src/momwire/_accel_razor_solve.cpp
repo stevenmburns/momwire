@@ -1627,6 +1627,20 @@ void register_razor_solve(py::module_ &m) {
           py::arg("remainder") = 0,
           "TEST HOOK: later plans decline past `direct` direct classes or `remainder` "
           "remainder classes (0: the int32 coding's own limit only).");
+    m.def("razor_reuse_sparse_class_limit", &mw::razor::reuse::sparse_class_limit, py::arg("pairs"),
+          py::arg("family"),
+          "The most classes a family (0 direct, 1 remainder) of `pairs` pairs keeps before "
+          "its plan declines (0: no limit).");
+    m.def("razor_reuse_set_sparse_classes", &mw::razor::reuse::set_sparse_classes, py::arg("den"),
+          py::arg("floor"), py::arg("budget"),
+          "TEST HOOK: later plans decline past max(floor, min(pairs / den, budget / class "
+          "bytes)) classes in a family (den 0: never; budget 0: no budget; negative "
+          "restores the constant).");
+    m.attr("razor_reuse_sparse_class_den") = mw::razor::reuse::SPARSE_CLASS_DEN;
+    m.attr("razor_reuse_sparse_class_floor") = mw::razor::reuse::SPARSE_CLASS_FLOOR;
+    m.attr("razor_reuse_class_budget_bytes") = mw::razor::reuse::CLASS_BUDGET_BYTES;
+    m.attr("razor_reuse_class_bytes") = py::make_tuple(mw::razor::reuse::DIRECT_CLASS_BYTES,
+                                                       mw::razor::reuse::REMAINDER_CLASS_BYTES);
     m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
     m.def("razor_reuse_small_deck_segs", &mw::razor::reuse::small_deck_segs, py::arg("finite"),
           "Segments below which pair reuse steps aside: over a finite ground when "

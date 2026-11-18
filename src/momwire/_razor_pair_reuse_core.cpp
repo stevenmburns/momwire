@@ -40,6 +40,8 @@ inline int part_bits(int P) {
     return b;
 }
 std::atomic<int64_t> g_class_limit[2] = {{0}, {0}};
+std::atomic<int64_t> g_sparse_den{SPARSE_CLASS_DEN}, g_sparse_floor{SPARSE_CLASS_FLOOR},
+    g_class_budget{CLASS_BUDGET_BYTES};
 
 inline uint64_t mix64(uint64_t x) {
     x ^= x >> 30;
@@ -232,10 +234,12 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // returns false for a pair that is its own class. Entries go to `maps[b]` as
 // class << code_bits | code; reps are each class's first pair, row-major.
 // Returns the number of classes, or -1 when they cannot be coded (past the
-// int32 entry, a part's share of it, or the test hook's `class_limit`): the
-// plan then declines.
+// int32 entry, a part's share of it, or the test hook's `class_limit`), or -2
+// when they pass `sparse` (0: no limit; `sparse_class_limit`), counted across
+// the parts as they are found so the census stops there: the plan then
+// declines.
 template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn key,
+int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t sparse, KeyFn key,
                std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
@@ -253,7 +257,8 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn 
     const int part_shift = 31 - pb;
     const int64_t cls_max = int64_t(1) << (31 - code_bits);
     const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
-    std::atomic<bool> overflow{false};
+    std::atomic<bool> overflow{false}, too_sparse{false};
+    std::atomic<int64_t> n_found{0};
     std::vector<int64_t> n_single(static_cast<size_t>(P), 0);
     for (int b = 0; b < n_blocks; b++) {
         for (int64_t o0 = 0; o0 < n_seg; o0 += R) {
@@ -279,18 +284,23 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn 
                     const int64_t o = o0 + i / n_seg, s = i % n_seg;
                     const uint8_t code = cbuf[static_cast<size_t>(i)];
                     int32_t local;
+                    bool fresh = true;
                     if (sbuf[static_cast<size_t>(i)]) {
                         local = static_cast<int32_t>(rp.size());
                         rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
                                          static_cast<int32_t>(s), 0});
                         n_single[static_cast<size_t>(t)]++;
                     } else {
-                        bool added = false;
                         local = tab.find_or_add(&kbuf[static_cast<size_t>(i) * W], h,
-                                                static_cast<int32_t>(rp.size()), added);
-                        if (added)
+                                                static_cast<int32_t>(rp.size()), fresh);
+                        if (fresh)
                             rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
                                              static_cast<int32_t>(s), code});
+                    }
+                    if (fresh && sparse > 0 &&
+                        n_found.fetch_add(1, std::memory_order_relaxed) + 1 > sparse) {
+                        too_sparse.store(true);
+                        break;
                     }
                     if (static_cast<uint32_t>(local) >= local_max ||
                         (limit > 0 && static_cast<int64_t>(local) >= limit)) {
@@ -303,12 +313,14 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, KeyFn 
                 }
             }
             if (overflow.load()) return -1;
+            if (too_sparse.load()) return -2;
         }
     }
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
     for (int t = 0; t < P; t++) off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
     const int64_t n_cls = off[static_cast<size_t>(P)];
     if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
+    if (sparse > 0 && n_cls > sparse) return -2;
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {
@@ -416,7 +428,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     };
     std::vector<Rep> reps;
     int64_t singles = 0;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), direct_key, plan->dmap, reps, singles);
+    const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
+    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), sparse_class_limit(d_pairs, 0), direct_key,
+                             plan->dmap, reps, singles);
+    if (plan->n_dcls == -2) return decline(plan, "too many classes to repay the plan's memory");
     if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
     plan->near_pairs = singles;
     plan->pairs = n_blocks * n_seg * n_seg;
@@ -472,7 +487,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         };
         std::vector<Rep> qreps;
         int64_t qsingles = 0;
-        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), q_key, &plan->qmap, qreps, qsingles);
+        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), sparse_class_limit(n_seg * n_seg, 1), q_key,
+                                 &plan->qmap, qreps, qsingles);
+        if (plan->n_qcls == -2)
+            return decline(plan, "too many remainder classes to repay the plan's memory");
         if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
         plan->q_pairs = n_seg * n_seg;
         plan->qrep_code.resize(qreps.size());
@@ -497,6 +515,9 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, static_cast<int32_t>(probe()));
     put(s, class_limit(0));
     put(s, class_limit(1));
+    put(s, g_sparse_den.load());
+    put(s, g_sparse_floor.load());
+    put(s, g_class_budget.load());
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);
@@ -598,6 +619,20 @@ void set_class_limit(int64_t direct, int64_t remainder) {
     g_class_limit[1].store(remainder < 0 ? 0 : remainder);
 }
 int64_t class_limit(int family) { return g_class_limit[family == 0 ? 0 : 1].load(); }
+int64_t sparse_class_limit(int64_t pairs, int family) {
+    const int64_t den = g_sparse_den.load();
+    if (den <= 0) return 0;
+    int64_t limit = pairs / den;
+    const int64_t budget = g_class_budget.load();
+    if (budget > 0)
+        limit = std::min(limit, budget / (family == 0 ? DIRECT_CLASS_BYTES : REMAINDER_CLASS_BYTES));
+    return std::max(limit, g_sparse_floor.load());
+}
+void set_sparse_classes(int64_t den, int64_t floor, int64_t budget) {
+    g_sparse_den.store(den < 0 ? SPARSE_CLASS_DEN : den);
+    g_sparse_floor.store(floor < 0 ? SPARSE_CLASS_FLOOR : floor);
+    g_class_budget.store(budget < 0 ? CLASS_BUDGET_BYTES : budget);
+}
 int probe() { return g_probe.load(); }
 
 CacheCounters cache_counters() {

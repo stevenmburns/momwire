@@ -95,6 +95,7 @@ def _clean(monkeypatch):
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
+    acc.razor_reuse_set_sparse_classes(-1, -1, -1)
     acc.razor_reuse_cache_clear()
     # The decks here are cheap on purpose, below the small-deck thresholds,
     # and test the reuse itself: lift them (test_small_decks_step_aside
@@ -105,6 +106,7 @@ def _clean(monkeypatch):
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
     acc.razor_reuse_set_small_deck_segs(-1, -1)
+    acc.razor_reuse_set_sparse_classes(-1, -1, -1)
     acc.razor_reuse_cache_clear()
 
 
@@ -476,6 +478,130 @@ def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
     assert after["reuse_windows"] == before["reuse_windows"]
     assert ctx.reuse_declined_reason == "too many classes to code"
     np.testing.assert_array_equal(y, off)
+
+
+def test_the_sparse_rule_is_a_share_and_a_budget_above_a_floor():
+    """A family keeps at most max(2^18, min(pairs / 2, 256 MiB / its bytes
+    per class)) classes (`_razor_pair_reuse_core.h`, where the share, the
+    budget and the floor are justified); the hook moves and restores them."""
+    den, floor = acc.razor_reuse_sparse_class_den, acc.razor_reuse_sparse_class_floor
+    budget, per = acc.razor_reuse_class_budget_bytes, acc.razor_reuse_class_bytes
+    assert (den, floor, budget, per) == (2, 1 << 18, 256 << 20, (168, 328))
+    for family in (0, 1):
+        for pairs in (1000, 2 * floor, 2 * floor + 1, 3000**2, 2 * 3000**2):
+            want = max(floor, min(pairs // 2, budget // per[family]))
+            assert acc.razor_reuse_sparse_class_limit(pairs, family) == want
+    # the hosted cap's worst case (`_razor_pair_reuse_core.h`): 3000
+    # segments, both direct blocks and the remainder, under 512 MB
+    n = 3000
+    peak = 12 * n * n
+    peak += 41 * acc.razor_reuse_sparse_class_limit(2 * n * n, 0)
+    peak += per[1] * acc.razor_reuse_sparse_class_limit(n * n, 1)
+    assert peak < 512e6, peak
+    acc.razor_reuse_set_sparse_classes(0, 0, 0)
+    assert acc.razor_reuse_sparse_class_limit(10**9, 0) == 0
+    acc.razor_reuse_set_sparse_classes(4, 0, 0)
+    assert acc.razor_reuse_sparse_class_limit(10**9, 1) == 10**9 // 4
+    acc.razor_reuse_set_sparse_classes(-1, -1, -1)
+    assert acc.razor_reuse_sparse_class_limit(10**9, 0) == budget // per[0]
+
+
+@_needs_cert
+@pytest.mark.parametrize(
+    ("family", "rule"),
+    [("direct", "share"), ("direct", "budget"), ("remainder", "budget")],
+)
+def test_a_plan_that_shares_too_little_declines_and_fills_as_off(family, rule):
+    """momwire#1971 review: the plan's classes cost memory (~41 B each kept,
+    up to 168 / 328 B while the census runs) on top of its int32 per pair, so
+    a deck that compresses poorly grew it without bound. Past a share of a
+    family's pairs, or past the byte budget, the plan declines with its
+    reason and the fill runs as off, bit for bit. The hook moves the rule
+    and drops the floor so a cheap deck reaches it, one class short of the
+    family's. The remainder's case is a sloping wire over Sommerfeld, whose
+    remainder pairs are all distinct (the height sum moves along it) while
+    its direct ones are not, so the remainder is what declines; the share,
+    one rule for both families, is held on the direct one."""
+    if family == "direct":
+        wires = _triangle() + _dipoles(heights=(9.0, 9.0), xs=(0.0, 1.5))
+    else:
+        wires = [np.array([[0.0, -5.0, 2.0], [0.0, 5.0, 8.0]])]
+    off = _solver(wires, False, SOMM).compute_port_solution().y
+    _solver(wires, True, SOMM).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None and st["q_classes"] > 0, st
+    c, q = st["classes"], st["q_classes"]
+    p, qp = st["pairs"], st["q_pairs"]
+    per_d, per_q = acc.razor_reuse_class_bytes
+    if family == "direct":
+        why = "too many classes to repay the plan's memory"
+        hook = (-(-p // (c - 1)), 0, 0) if rule == "share" else (1, 0, per_d * (c - 1))
+        acc.razor_reuse_set_sparse_classes(*hook)
+        assert acc.razor_reuse_sparse_class_limit(p, 0) < c, (st, hook)
+    else:
+        why = "too many remainder classes to repay the plan's memory"
+        hook = (1, 0, per_q * q - 1)
+        acc.razor_reuse_set_sparse_classes(*hook)
+        assert acc.razor_reuse_sparse_class_limit(qp, 1) < q, (st, hook)
+        # the direct family fits, so the remainder is what declines
+        assert acc.razor_reuse_sparse_class_limit(p, 0) >= c, (st, hook)
+    razor._PAIR_REUSE_ROUTE.clear()
+    s = _solver(wires, True, SOMM)
+    y = s.compute_port_solution().y
+    assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
+    assert s.pair_reuse_declined == why
+    assert razor._PAIR_REUSE_STATS[0]["declined"] == why
+    assert razor._PAIR_REUSE_STATS[0]["classes"] == 0
+    np.testing.assert_array_equal(y, off)
+    # the floor lifts it: a plan whose classes fit under it never declines
+    acc.razor_reuse_set_sparse_classes(hook[0], max(c, q), hook[2])
+    s = _solver(wires, True, SOMM)
+    s.compute_port_solution()
+    assert s.pair_reuse_declined is None
+    assert razor._PAIR_REUSE_ROUTE.get("reuse", 0) == 1
+
+
+def _random_radials(n, segs, seed=1971):
+    """`n` radials 10 m long at random angles in a horizontal plane from a
+    hub off the origin, 2 m up: few of their pairs are congruent."""
+    rng = np.random.default_rng(seed)
+    hub = np.array([0.37, -0.21, 2.0])
+    out = []
+    for ang in rng.uniform(0.0, 2.0 * np.pi, n):
+        tip = hub + 10.0 * np.array([np.cos(ang), np.sin(ang), 0.0])
+        out.append(np.array([hub, tip]))
+    return out, [[segs]] * n
+
+
+@_needs_cert
+def test_a_deck_that_compresses_poorly_declines_at_the_defaults():
+    """The rule at its constants, on a deck past the floor: 24 radials at
+    random angles in free space, 40 segments each (960 segments), keep more
+    than half their pairs as classes (0.57), so the plan declines and the
+    fill runs as off, bit for bit."""
+    wires, n = _random_radials(24, 40)
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(0, 0.5, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+    )
+    off = RazorSolver(**kw, razor_pair_reuse=False).compute_port_solution().y
+    s = RazorSolver(**kw, razor_pair_reuse=True)
+    y = s.compute_port_solution().y
+    assert s.pair_reuse_declined == "too many classes to repay the plan's memory"
+    assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
+    np.testing.assert_array_equal(y, off)
+    # lifted, the same deck plans, and its classes are past the limit
+    acc.razor_reuse_set_sparse_classes(0, 0, 0)
+    RazorSolver(**kw, razor_pair_reuse=True).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None, st
+    acc.razor_reuse_set_sparse_classes(-1, -1, -1)
+    assert st["classes"] > acc.razor_reuse_sparse_class_limit(st["pairs"], 0), st
 
 
 # ------------------------------------------------------------ the declared drift
