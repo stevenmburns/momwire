@@ -22,7 +22,8 @@ On outside its reach, a feature is handled by its KIND:
 The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
-8, so every executable but nec42-sinusoidal's). One started with any other
+8, so every executable but nec42-sinusoidal's, and razor-2p's fill-pair reuse,
+momwire#1971, reach 7, the nec5 executables). One started with any other
 ``MOMWIRE_X_`` variable on refuses before it reads a deck
 (:data:`EXE_REFUSAL`).
 
