@@ -142,7 +142,7 @@ SINUSOIDAL_GALERKIN = BuriedQuadrature(
         near_n_qp=32,
         parallel_n_t=24,
         parallel_n_xi=8,
-        graded_acute_wedge_deg=0.0,
+        graded_acute_wedge_deg=15.0,
         graded_acute_n_per_panel=24,
     ),
     reason=(
@@ -158,10 +158,24 @@ SINUSOIDAL_GALERKIN = BuriedQuadrature(
         "DOES carry a near-contact quadrature error on fx_slant_base_source "
         "at m = 1: 0.425 ohm, from the radial's node segment against its "
         "own image (touching at the crossing node, ratio 0.02) on the graded "
-        "rule at 8 nodes per panel. Graded 16 leaves 0.031 ohm, against a "
-        "reference with every near rule raised. Whether to raise SG's graded "
-        "rule is pending Steve's decision; until then these are the shipped "
-        "values, recorded as they are."
+        "rule at 8 nodes per panel, against a reference with every near rule "
+        "raised: 3.0e-2 ohm at 16, 3.5e-3 ohm at 24, 8.7e-4 at 48. That pair's "
+        "WEDGE (the angle between the two segments at their shared node) is "
+        "2.3 degrees, and the graded rule's error is the wedge's: over 372 "
+        "decks with touching pairs (11-17: the repo's fixtures, the "
+        "antennaknobs catalog at free / PEC / Sommerfeld, synthetic bends, "
+        "the buried set) every 8-to-24 move above 1e-8 ohm sits on a deck "
+        "whose smallest wedge is under 21 degrees, falling from 4.9e-2 ohm "
+        "on a wire folded back at 5 degrees to 4.6e-4 at 10, 8.6e-5 on a "
+        "32-radial hub (11.25), 4.1e-7 on the catalog discone (15.3) and "
+        "1.1e-7 at 20; shallow bends and right angles move <= 1e-8. So a "
+        "touching pair whose wedge is under 15 degrees takes 24 nodes a "
+        "panel and the rest keep 8 (Steve, 11-17): on every deck it matches "
+        "24-everywhere within 4.1e-7 ohm (the discone, left at 8), and the "
+        "cost of 24 lands only where the wedge is acute: on the 21 decks over "
+        "0.5 s with touching pairs, solve time 1.02x median and 1.12x max "
+        "(the 32-radial hub) against 8, where 24 everywhere cost 1.74x and "
+        "4.2x (Skylake, paired medians)."
     ),
 )
 
