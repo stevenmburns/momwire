@@ -153,10 +153,17 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
+// The frequency-parallel sweep is razor-2p's (`_nec5_razor_printout_core.h`):
+// this route reports no buried runs to its policy, so it is never taken here.
+void set_frequency_workers(int) {}
+long long frequencies_presolved() { return 0; }
+bool frequency_sweep_allowed() { return false; }
+
 long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs,
-                        long long *below_pairs) {
+                        long long *below_pairs, long long *buried_runs) {
     if (crossing_pairs) *crossing_pairs = 0;
     if (below_pairs) *below_pairs = 0;
+    if (buried_runs) *buried_runs = 0;
 #if MW_ROUTE_NEC4
     // the size policy reads n_basis alone here
     return nec4::largest_solve(latin1_text, "bspline", open_end);
