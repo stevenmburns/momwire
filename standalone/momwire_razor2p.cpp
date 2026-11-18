@@ -98,6 +98,7 @@ inline long long largest_solve(const std::string &t, bool open_end = false, long
 }
 inline void set_frequency_workers(int n) { MW_PICK(mws, mwas, set_frequency_workers(n)); }
 inline long long frequencies_presolved() { return MW_PICK(mws, mwas, frequencies_presolved()); }
+inline bool frequency_sweep_allowed() { return MW_PICK(mws, mwas, frequency_sweep_allowed()); }
 inline void configure_grid_cache(const std::string &tag) { MW_PICK(mws, mwas, configure_grid_cache(tag)); }
 inline bool configure_features(const std::vector<std::string> &names, bool stamped = true) {
     return MW_PICK(mws, mwas, configure_features(names, stamped));
@@ -685,11 +686,14 @@ int threads_for(long long n_basis, long long crossing_pairs = 0, long long below
 // frequency at a time over an OpenMP team. Taken when the sweep has at least
 // half as many frequencies as threads; a shorter sweep keeps the fill's own
 // threading. The bytes are the one-thread run's either way (the serial copy,
-// BLAS at one thread), so only time moves. MW_EXE_FREQS=0 turns it off and
-// =1 takes it whatever the count (gate hooks).
+// BLAS at one thread), so only time moves. Not taken when the sweep would
+// decline the features asked for (`frequency_sweep_allowed`: crossing_table),
+// which would otherwise solve the sweep in turn on one thread.
+// MW_EXE_FREQS=0 turns it off and =1 takes it whatever the count (gate hooks).
 int freq_workers_for(int threads, long long buried_runs) {
     const std::string force = env("MW_EXE_FREQS");
     if (force == "0" || threads < 2 || buried_runs < 2) return 1;
+    if (!rt_serial::frequency_sweep_allowed()) return 1;
     if (force != "1" && 2 * buried_runs < threads) return 1;
     return static_cast<int>(std::min<long long>(threads, buried_runs));
 }

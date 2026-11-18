@@ -71,6 +71,11 @@ class RazorPrintoutEngine final : public PrintoutEngine {
 // concurrent fills would share.
 void set_frequency_workers(int n);
 int frequency_workers();
+// Whether `presolve` takes a sweep with the features this process asked for
+// (false with `crossing_table`, above): the executable's policy asks before
+// it gives the sweep the serial copy, so a declined sweep keeps the fill's
+// own threads.
+bool frequency_sweep_allowed();
 // The frequencies `presolve` has solved concurrently, a process total (the
 // executable's MW_EXE_TIMES gate line: proof the sweep ran).
 long long frequencies_presolved();

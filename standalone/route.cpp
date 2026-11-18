@@ -49,6 +49,7 @@ void configure_grid_cache(const std::string &tag) {
 
 void set_frequency_workers(int n) { nec5::set_frequency_workers(n); }
 long long frequencies_presolved() { return nec5::frequencies_presolved(); }
+bool frequency_sweep_allowed() { return nec5::frequency_sweep_allowed(); }
 
 long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs,
                         long long *below_pairs, long long *buried_runs) {
