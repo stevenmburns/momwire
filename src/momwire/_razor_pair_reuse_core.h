@@ -163,20 +163,26 @@ void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
 // A plan declines when a family's classes (the direct and image blocks
 // together; the remainder) pass sparse_class_limit: more than 1/SPARSE_CLASS_DEN
-// of the pairs they code, or more than CLASS_BUDGET_BYTES of census at the
-// family's bytes per class, once past SPARSE_CLASS_FLOOR. The census stops
-// counting there rather than finishing (momwire#1971 review: memory was not
-// bounded on a deck that compresses poorly).
+// of the pairs they code, or more than the family's byte budget of census at
+// its bytes per class, once past SPARSE_CLASS_FLOOR. The census counts a class
+// as it finds it and stops there rather than finishing (momwire#1971 review:
+// memory was not bounded on a deck that compresses poorly), so what it holds
+// never passes the limit's bytes.
 //
-// What a class costs, on top of the int32 per pair per block every plan
-// keeps: while the census runs, its hash table slot (2 to 4 slots of a W-word
-// key and an int32 value: 36 B for the direct key, W = 4; 76 B for the
-// remainder's, W = 9) and its representative (12 B, in a vector that
-// doubles), so at most DIRECT_CLASS_BYTES / REMAINDER_CLASS_BYTES; kept, its
-// two complex values (32 B) and its place in a group (8 B), ~41 B. Measured
-// (Haswell, 4 threads): 24 random radials over Sommerfeld, 960 segments, 1.04e6
-// direct and 5.1e5 remainder classes, peak RSS 144 MB over the flag-off solve's,
-// ~93 B a class against these bounds' 168 / 328.
+// What a class costs while the census runs, at most (the int32 per pair per
+// block every plan keeps aside): its hash table's slots, one W-word key and
+// an int32 value each (36 B direct, W = 4; 76 B remainder, W = 9), at most 4
+// a class at the table's half load, and 6 while a grow holds the old table
+// and the doubled one together; and its representative (REP_BYTES, 12) in a
+// vector that doubles, at most 3 copies during a reallocation. So 6 x 36 +
+// 3 x 12 = 252 B direct, 6 x 76 + 3 x 12 = 492 B remainder. The census
+// counts those bytes as it allocates them (`Plan::census`), and
+// test_the_census_holds_its_bytes_per_class holds them under these bounds.
+// Kept past it: the class's flip or code byte and its place in a group (8
+// B), ~9 B; at each wavenumber, its two complex values (32 B). Measured
+// (Haswell, 4 threads): 24 random radials over Sommerfeld, 960 segments,
+// 1.04e6 direct and 5.1e5 remainder classes, peak RSS 144 MB over the
+// flag-off solve's, ~93 B a class.
 //
 // THE SHARE (1/2). Compression on real decks is far from a straight run's
 // O(N) classes: pairs between wires that are not parallel are congruent only
@@ -190,34 +196,38 @@ constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
 // itself (1/16 at 3000 segments) would decline the inverted V, and with it
 // most decks the reuse is for.
 //
-// THE BUDGET (256 MiB a family). The hosted app's bound is 512 MB beyond one
-// dense matrix (16 N^2 B, which the fill holds anyway). The census of each
-// family is held to 256 MiB at its bound bytes per class: at most 1.6e6
-// direct and 8.2e5 remainder classes. The worst peak is then the maps (12 B
-// a segment pair with the remainder: 108 MB at antennaknobs' hosted cap of
-// 3000 segments) + the direct classes kept (66 MB) + the remainder's census
-// (268 MB): 442 MB at the cap, under 512. What it declines is the large
-// deck that compresses only a few-fold: the inverted V (0.26) past ~1750
-// segments over Sommerfeld, ~2500 in free space.
+// THE BUDGETS (384 MiB direct, 352 MiB remainder). The hosted app's bound is
+// 512 MB beyond one dense matrix (16 N^2 B, which the fill holds anyway).
+// At antennaknobs' hosted cap of 3000 segments the worst peaks, at the
+// bounds above, are the direct census's: its two maps (72 MB) + its key
+// chunk (64 rows, 8 MB) + 1.598e6 classes x 252 B (403 MB) = 483 MB; and
+// the remainder's: the three maps (108 MB) + the direct classes kept (9 B
+// each, 14 MB) + its key chunk (16 MB) + 7.50e5 classes x 492 B (369 MB) =
+// 507 MB. Both under 512. What they decline is the large deck that
+// compresses only a few-fold: the inverted V (0.26) past ~1750 segments over
+// Sommerfeld, ~2500 in free space, and a skyloop of ~2100 segments over
+// Sommerfeld (3e6 direct classes).
 //
-// THE FLOOR (2^18 classes, at most ~86 MB while a remainder census runs) keeps
+// THE FLOOR (2^18 classes, at most ~129 MB while a remainder census runs) keeps
 // the rule off decks whose classes cost little however poorly they compress:
 // below 362 segments (two blocks, every pair its own class) a plan never
 // declines for this. `verify` (mode 2) does not ignore it: a plan is a plan.
 constexpr int64_t SPARSE_CLASS_DEN = 2;
 constexpr int64_t SPARSE_CLASS_FLOOR = int64_t(1) << 18;
-constexpr int64_t CLASS_BUDGET_BYTES = int64_t(256) << 20;
-constexpr int64_t DIRECT_CLASS_BYTES = 168;
-constexpr int64_t REMAINDER_CLASS_BYTES = 328;
+constexpr int64_t DIRECT_BUDGET_BYTES = int64_t(384) << 20;
+constexpr int64_t REMAINDER_BUDGET_BYTES = int64_t(352) << 20;
+constexpr int64_t REP_BYTES = 12;
+constexpr int64_t DIRECT_CLASS_BYTES = 6 * (4 * 8 + 4) + 3 * REP_BYTES;     // 252
+constexpr int64_t REMAINDER_CLASS_BYTES = 6 * (9 * 8 + 4) + 3 * REP_BYTES;  // 492
 // The most classes a family of `pairs` pairs may keep (`family` 0 direct, 1
 // remainder; the constants above unless the TEST HOOK moved them; 0: no
 // limit).
 int64_t sparse_class_limit(int64_t pairs, int family);
-// TEST HOOK: move the rule (`den` 0 turns it off, `budget` 0 drops the byte
-// budget; a negative value restores its constant), so a gate can reach the
+// TEST HOOK: move the rule (`den` 0 turns it off; a budget of 0 drops that
+// family's byte budget; a negative value restores the constant), so a gate can reach the
 // decline on a cheap deck. A plan is keyed on the rule it was built under.
 // Bound for Python's tests only; nothing in the executables sets it.
-void set_sparse_classes(int64_t den, int64_t floor, int64_t budget);
+void set_sparse_classes(int64_t den, int64_t floor, int64_t budget, int64_t remainder_budget);
 
 // What the plan reads. Views into the caller's arrays; the plan copies what
 // it keeps.
@@ -268,6 +278,12 @@ struct Plan {
     int64_t pairs = 0, near_pairs = 0, q_pairs = 0;
     int64_t rep_evals = 0, q_rep_evals = 0;  // pairs the representatives' calls evaluate
     double census_seconds = 0.0;
+    // What each family's census (0 direct, 1 remainder) counted: its classes
+    // (all of them, or where it stopped), the most class-proportional bytes
+    // it held (`DIRECT_CLASS_BYTES`) and its count then. Kept when it declines.
+    struct Seen {
+        int64_t classes = 0, peak_bytes = 0, classes_at_peak = 0;
+    } census[2];
     size_t nbytes() const;
 };
 
@@ -294,9 +310,11 @@ constexpr int64_t MAX_SEGS = 46340;
 // nothing in the executables sets it.
 void set_class_limit(int64_t direct, int64_t remainder);
 int64_t class_limit(int family);  // 0 direct, 1 remainder
-// Plans built and found (process totals, for tests).
+// Plans built and found (process totals, for tests), and of those built the
+// ones that declined: a declined plan serves nothing, so built - declined is
+// what proves a fill reused.
 struct CacheCounters {
-    uint64_t built = 0, found = 0;
+    uint64_t built = 0, found = 0, declined = 0;
 };
 CacheCounters cache_counters();
 void clear_cache();

@@ -261,6 +261,12 @@ py::dict reuse_stats(const ReusePlanHandle &h) {
     d["census_seconds"] = p.census_seconds;
     d["nbytes"] = p.nbytes();
     d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
+    // what each census counted (where it stopped, when it did) and the most
+    // class-proportional bytes it held: ((classes, peak bytes, classes then)
+    // direct, remainder)
+    py::list seen;
+    for (const auto &c : p.census) seen.append(py::make_tuple(c.classes, c.peak_bytes, c.classes_at_peak));
+    d["census"] = py::tuple(seen);
     return d;
 }
 
@@ -1615,8 +1621,9 @@ void register_razor_solve(py::module_ &m) {
         py::dict d;
         d["built"] = c.built;
         d["found"] = c.found;
+        d["declined"] = c.declined;
         return d;
-    }, "The process's reuse plans built and found.");
+    }, "The process's reuse plans built and found, and how many of those built declined.");
     m.def("razor_reuse_cache_clear", &mw::razor::reuse::clear_cache,
           "Drop every cached reuse plan (TEST HOOK).");
     m.def("razor_reuse_probe", &mw::razor::reuse::set_probe, py::arg("probe"),
@@ -1631,14 +1638,22 @@ void register_razor_solve(py::module_ &m) {
           py::arg("family"),
           "The most classes a family (0 direct, 1 remainder) of `pairs` pairs keeps before "
           "its plan declines (0: no limit).");
-    m.def("razor_reuse_set_sparse_classes", &mw::razor::reuse::set_sparse_classes, py::arg("den"),
-          py::arg("floor"), py::arg("budget"),
-          "TEST HOOK: later plans decline past max(floor, min(pairs / den, budget / class "
-          "bytes)) classes in a family (den 0: never; budget 0: no budget; negative "
-          "restores the constant).");
+    m.def(
+        "razor_reuse_set_sparse_classes",
+        [](int64_t den, int64_t floor, int64_t budget, py::object remainder_budget) {
+            mw::razor::reuse::set_sparse_classes(
+                den, floor, budget,
+                remainder_budget.is_none() ? budget : remainder_budget.cast<int64_t>());
+        },
+        py::arg("den"), py::arg("floor"), py::arg("budget"), py::arg("remainder_budget") = py::none(),
+        "TEST HOOK: later plans decline past max(floor, min(pairs / den, budget / class "
+        "bytes)) classes in a family, `budget` the direct family's and `remainder_budget` "
+        "the remainder's (None: `budget`) (den 0: never; budget 0: no budget; negative "
+        "restores the constant).");
     m.attr("razor_reuse_sparse_class_den") = mw::razor::reuse::SPARSE_CLASS_DEN;
     m.attr("razor_reuse_sparse_class_floor") = mw::razor::reuse::SPARSE_CLASS_FLOOR;
-    m.attr("razor_reuse_class_budget_bytes") = mw::razor::reuse::CLASS_BUDGET_BYTES;
+    m.attr("razor_reuse_class_budget_bytes") = py::make_tuple(mw::razor::reuse::DIRECT_BUDGET_BYTES,
+                                                              mw::razor::reuse::REMAINDER_BUDGET_BYTES);
     m.attr("razor_reuse_class_bytes") = py::make_tuple(mw::razor::reuse::DIRECT_CLASS_BYTES,
                                                        mw::razor::reuse::REMAINDER_CLASS_BYTES);
     m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;

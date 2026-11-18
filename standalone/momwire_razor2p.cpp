@@ -103,7 +103,9 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
-inline void reuse_plans(long long &built, long long &found) { MW_PICK(mws, mwas, reuse_plans(built, found)); }
+inline void reuse_plans(long long &built, long long &found, long long &declined) {
+    MW_PICK(mws, mwas, reuse_plans(built, found, declined));
+}
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -124,7 +126,9 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
-inline void reuse_plans(long long &built, long long &found) { MW_PICK(mw, mwa, reuse_plans(built, found)); }
+inline void reuse_plans(long long &built, long long &found, long long &declined) {
+    MW_PICK(mw, mwa, reuse_plans(built, found, declined));
+}
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -455,13 +459,15 @@ std::string g_feature_stamp;
 
 // MW_EXE_TIMES=1's account of razor-2p's fill-pair reuse (momwire#1971): the
 // plans the two copies of the route have built and found in their process
-// caches so far, so a gate can prove the reuse RAN rather than stepped aside
-// (a small deck, a declined census) and agreed by not running.
+// caches so far, and how many of those built declined, so a gate can prove
+// the reuse RAN (a plan built that did not decline) rather than stepped
+// aside (a small deck, a declined census) and agreed by not running.
 void times_reuse_plans() {
-    long long built = 0, found = 0, built_t = 0, found_t = 0;
-    rt_serial::reuse_plans(built, found);
-    rt_threads::reuse_plans(built_t, found_t);
-    std::fprintf(stderr, "cxx: reuse plans built %lld, found %lld\n", built + built_t, found + found_t);
+    long long built = 0, found = 0, declined = 0, built_t = 0, found_t = 0, declined_t = 0;
+    rt_serial::reuse_plans(built, found, declined);
+    rt_threads::reuse_plans(built_t, found_t, declined_t);
+    std::fprintf(stderr, "cxx: reuse plans built %lld, found %lld, declined %lld\n", built + built_t,
+                 found + found_t, declined + declined_t);
 }
 
 // One sentence on stderr and exit 2 when a feature this executable does not

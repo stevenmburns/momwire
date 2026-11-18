@@ -50,10 +50,11 @@ bool configure_features(const std::vector<std::string> &names, bool stamped = tr
 // executable runs off: set off in its environment, or outside its reach.
 bool withdraw_features(const std::vector<std::string> &names);
 // razor-2p's fill-pair reuse plans (momwire#1971) this copy has built and
-// found in its process cache so far (`razor::reuse::cache_counters`): what
-// MW_EXE_TIMES=1 reports, so a gate can prove the reuse ran. The bs2 and
-// sinusoidal routes never plan, and report what the core says (zero).
-void reuse_plans(long long &built, long long &found);
+// found in its process cache so far, and how many of those built declined
+// (`razor::reuse::cache_counters`): what MW_EXE_TIMES=1 reports, so a gate
+// can prove the reuse ran (built - declined >= 1). The bs2 and sinusoidal
+// routes never plan, and report what the core says (zero).
+void reuse_plans(long long &built, long long &found, long long &declined);
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,

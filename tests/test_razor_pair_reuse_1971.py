@@ -441,8 +441,14 @@ def test_a_census_it_cannot_code_declines_and_fills_as_off(family):
         limits, why = (c, q - 1), "too many remainder classes to code"
     acc.razor_reuse_class_limit(*limits)
     razor._PAIR_REUSE_ROUTE.clear()
+    before = acc.razor_reuse_cache()
     s = _solver(wires, True, SOMM)
     y = s.compute_port_solution().y
+    after = acc.razor_reuse_cache()
+    # the process counters say the plan built declined (the executables'
+    # MW_EXE_TIMES=1 line reads them, so built - declined proves a reuse)
+    assert after["built"] - before["built"] == 1, (before, after)
+    assert after["declined"] - before["declined"] == 1, (before, after)
     assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
     assert s.pair_reuse_declined == why
     assert razor._PAIR_REUSE_STATS[0]["declined"] == why
@@ -481,29 +487,139 @@ def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
 
 
 def test_the_sparse_rule_is_a_share_and_a_budget_above_a_floor():
-    """A family keeps at most max(2^18, min(pairs / 2, 256 MiB / its bytes
-    per class)) classes (`_razor_pair_reuse_core.h`, where the share, the
-    budget and the floor are justified); the hook moves and restores them."""
+    """A family keeps at most max(2^18, min(pairs / 2, its budget / its
+    bytes per class)) classes (`_razor_pair_reuse_core.h`, where the share,
+    the budgets and the floor are justified); the hook moves and restores
+    them. The bytes per class are bounds this test takes as given;
+    test_the_census_holds_its_bytes_per_class measures them."""
     den, floor = acc.razor_reuse_sparse_class_den, acc.razor_reuse_sparse_class_floor
     budget, per = acc.razor_reuse_class_budget_bytes, acc.razor_reuse_class_bytes
-    assert (den, floor, budget, per) == (2, 1 << 18, 256 << 20, (168, 328))
+    assert (den, floor, budget, per) == (2, 1 << 18, (384 << 20, 352 << 20), (252, 492))
     for family in (0, 1):
         for pairs in (1000, 2 * floor, 2 * floor + 1, 3000**2, 2 * 3000**2):
-            want = max(floor, min(pairs // 2, budget // per[family]))
+            want = max(floor, min(pairs // 2, budget[family] // per[family]))
             assert acc.razor_reuse_sparse_class_limit(pairs, family) == want
-    # the hosted cap's worst case (`_razor_pair_reuse_core.h`): 3000
-    # segments, both direct blocks and the remainder, under 512 MB
-    n = 3000
-    peak = 12 * n * n
-    peak += 41 * acc.razor_reuse_sparse_class_limit(2 * n * n, 0)
-    peak += per[1] * acc.razor_reuse_sparse_class_limit(n * n, 1)
-    assert peak < 512e6, peak
+    # the hosted cap's worst peaks (`_razor_pair_reuse_core.h`), 3000
+    # segments over a finite ground, under 512 MB: the direct census (its
+    # two int32 maps, its key chunk of 64 rows of W words + hash + 2 flags,
+    # its classes) and the remainder's (three maps, the direct classes kept
+    # at a flip byte and a group's two int32, its own chunk and classes)
+    n, rows = 3000, 64
+    lim_d = acc.razor_reuse_sparse_class_limit(2 * n * n, 0)
+    lim_q = acc.razor_reuse_sparse_class_limit(n * n, 1)
+    direct = 8 * n * n + rows * n * (4 * 8 + 10) + per[0] * lim_d
+    remainder = 12 * n * n + 9 * lim_d + rows * n * (9 * 8 + 10) + per[1] * lim_q
+    assert direct < 512e6 and remainder < 512e6, (direct, remainder)
     acc.razor_reuse_set_sparse_classes(0, 0, 0)
     assert acc.razor_reuse_sparse_class_limit(10**9, 0) == 0
     acc.razor_reuse_set_sparse_classes(4, 0, 0)
     assert acc.razor_reuse_sparse_class_limit(10**9, 1) == 10**9 // 4
     acc.razor_reuse_set_sparse_classes(-1, -1, -1)
-    assert acc.razor_reuse_sparse_class_limit(10**9, 0) == budget // per[0]
+    assert acc.razor_reuse_sparse_class_limit(10**9, 0) == budget[0] // per[0]
+    assert acc.razor_reuse_sparse_class_limit(10**9, 1) == budget[1] // per[1]
+
+
+# The census's parts, one a thread, each start a 1024-slot table and may
+# each pass the limit by one class before they see it stopped: slack for
+# that many parts (more than any box here runs) in the bounds below.
+_PARTS = 64
+
+
+def _sloping_wire(segs):
+    """One wire from 2 m to 8 m up, `segs` segments: its remainder pairs over
+    a ground are all distinct (the height sum moves along it)."""
+    return [np.array([[0.0, -5.0, 2.0], [0.0, 5.0, 8.0]])], [[segs]]
+
+
+@_needs_cert
+@pytest.mark.parametrize("family", ["direct", "remainder"])
+def test_the_census_holds_its_bytes_per_class(family):
+    """The bytes per class the budgets divide by (252 direct, 492 remainder)
+    are bounds on what the census holds, its hash tables' slots and its
+    representatives' vectors by capacity, a table's grow (old and doubled
+    together) and a vector's reallocation included. The census counts them
+    as it allocates them; past the parts' first tables, the most it held is
+    within the bound times its classes then. A Rep of 16 B or a bound that
+    left out the grow (168 / 328 B) fails here. The rule is lifted so the
+    deck plans whole: the random radials' 5e5 direct classes, a sloping
+    wire's 9e4 remainder ones over Sommerfeld."""
+    acc.razor_reuse_set_sparse_classes(0, 0, 0)
+    fam = 0 if family == "direct" else 1
+    if family == "direct":
+        wires, n = _random_radials(24, 40)
+        ground = {}
+    else:
+        wires, n = _sloping_wire(300)
+        ground = SOMM
+    RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(0, 0.5, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+        razor_pair_reuse=True,
+        **ground,
+    ).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None, st
+    classes, peak, at_peak = st["census"][fam]
+    assert classes == (st["classes"] if fam == 0 else st["q_classes"]), st
+    assert classes > 5e4, st
+    per = acc.razor_reuse_class_bytes[fam]
+    slot = (4 if fam == 0 else 9) * 8 + 4
+    assert 0 < at_peak <= classes, st
+    assert peak <= per * at_peak + _PARTS * 1024 * slot, (peak / at_peak, per, st)
+    # and the count is real: a table holds at least one slot a class
+    assert peak >= slot * at_peak, (peak / at_peak, per, st)
+
+
+@_needs_cert
+@pytest.mark.parametrize("family", ["direct", "remainder"])
+def test_the_census_stops_at_the_limit(family):
+    """The census counts a class as it finds it and stops at the limit
+    rather than finishing and then declining: what bounds its memory to the
+    limit's bytes on a deck that compresses poorly. Held at a quarter of the
+    family's classes: it stops within a class a part of it, its bytes
+    within the bound."""
+    fam = 0 if family == "direct" else 1
+    if family == "direct":
+        wires, n = _random_radials(24, 12)
+        ground = {}
+    else:
+        wires, n = _sloping_wire(300)
+        ground = SOMM
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=n,
+        feeds=[(0, 0.5, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        extended_kernel=True,
+        razor_pair_reuse=True,
+        **ground,
+    )
+    RazorSolver(**kw).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    assert st["declined"] is None, st
+    full = st["census"][fam][0]
+    per = acc.razor_reuse_class_bytes[fam]
+    limit = full // 4
+    assert limit + _PARTS < full // 2, st
+    # the other family unbounded, so this one is what declines
+    budgets = (per * limit, 0) if fam == 0 else (0, per * limit)
+    acc.razor_reuse_set_sparse_classes(1, 0, *budgets)
+    assert acc.razor_reuse_sparse_class_limit(10**12, fam) == limit
+    RazorSolver(**kw).compute_port_solution()
+    st = razor._PAIR_REUSE_STATS[0]
+    why = ("too many classes", "too many remainder classes")[fam]
+    assert st["declined"] == f"{why} to repay the plan's memory", st
+    counted, peak, _ = st["census"][fam]
+    assert limit < counted <= limit + _PARTS, (counted, limit, full)
+    slot = (4 if fam == 0 else 9) * 8 + 4
+    assert peak <= per * counted + _PARTS * 1024 * slot, (peak, counted)
 
 
 @_needs_cert
@@ -546,8 +662,14 @@ def test_a_plan_that_shares_too_little_declines_and_fills_as_off(family, rule):
         # the direct family fits, so the remainder is what declines
         assert acc.razor_reuse_sparse_class_limit(p, 0) >= c, (st, hook)
     razor._PAIR_REUSE_ROUTE.clear()
+    before = acc.razor_reuse_cache()
     s = _solver(wires, True, SOMM)
     y = s.compute_port_solution().y
+    after = acc.razor_reuse_cache()
+    # the process counters say the plan built declined (the executables'
+    # MW_EXE_TIMES=1 line reads them, so built - declined proves a reuse)
+    assert after["built"] - before["built"] == 1, (before, after)
+    assert after["declined"] - before["declined"] == 1, (before, after)
     assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
     assert s.pair_reuse_declined == why
     assert razor._PAIR_REUSE_STATS[0]["declined"] == why

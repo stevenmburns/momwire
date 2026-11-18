@@ -40,8 +40,31 @@ inline int part_bits(int P) {
     return b;
 }
 std::atomic<int64_t> g_class_limit[2] = {{0}, {0}};
-std::atomic<int64_t> g_sparse_den{SPARSE_CLASS_DEN}, g_sparse_floor{SPARSE_CLASS_FLOOR},
-    g_class_budget{CLASS_BUDGET_BYTES};
+std::atomic<int64_t> g_sparse_den{SPARSE_CLASS_DEN}, g_sparse_floor{SPARSE_CLASS_FLOOR};
+// The byte budget of each family; the TEST HOOK sets both at once.
+std::atomic<int64_t> g_class_budget[2] = {{DIRECT_BUDGET_BYTES}, {REMAINDER_BUDGET_BYTES}};
+
+// The census's class-proportional bytes (its hash tables' slots and its
+// representatives' vectors, by capacity), counted as they are allocated and
+// before what they replace is freed, so `peak` holds a grow's transient: what
+// `DIRECT_CLASS_BYTES` / `REMAINDER_CLASS_BYTES` bound, measured
+// (test_the_census_holds_its_bytes_per_class). `classes` is the census's
+// count when the peak was taken.
+struct CensusBytes {
+    std::atomic<int64_t> cur{0}, peak{0}, at_peak{0};
+    const std::atomic<int64_t> *classes = nullptr;
+    void add(int64_t d) {
+        const int64_t c = cur.fetch_add(d, std::memory_order_relaxed) + d;
+        int64_t p = peak.load(std::memory_order_relaxed);
+        bool up = false;
+        while (c > p)
+            if (peak.compare_exchange_weak(p, c, std::memory_order_relaxed)) {
+                up = true;
+                break;
+            }
+        if (up && classes) at_peak.store(classes->load(std::memory_order_relaxed));
+    }
+};
 
 inline uint64_t mix64(uint64_t x) {
     x ^= x >> 30;
@@ -65,8 +88,13 @@ struct Table {
     std::vector<uint64_t> keys;
     std::vector<int32_t> vals;
     size_t cap = 0, n = 0;
+    CensusBytes *bytes = nullptr;
+    static constexpr int64_t SLOT = W * sizeof(uint64_t) + sizeof(int32_t);
+    // The old table and the doubled one are held together while it rehashes:
+    // 3 slots for every 2 the old one had, at most 6 a class.
     void grow() {
         const size_t nc = cap == 0 ? 1024 : cap * 2;
+        if (bytes) bytes->add(static_cast<int64_t>(nc) * SLOT);
         std::vector<uint64_t> ok;
         std::vector<int32_t> ov;
         ok.swap(keys);
@@ -77,6 +105,13 @@ struct Table {
         cap = nc;
         for (size_t i = 0; i < oc; i++)
             if (ov[i] >= 0) place(&ok[i * W], hash_key<W>(&ok[i * W]), ov[i]);
+        if (bytes) bytes->add(-static_cast<int64_t>(oc) * SLOT);
+    }
+    void release() {
+        if (bytes) bytes->add(-static_cast<int64_t>(cap) * SLOT);
+        std::vector<uint64_t>().swap(keys);
+        std::vector<int32_t>().swap(vals);
+        cap = n = 0;
     }
     void place(const uint64_t *k, uint64_t h, int32_t v) {
         size_t i = static_cast<size_t>(h) & (cap - 1);
@@ -124,11 +159,24 @@ inline bool qword(double x, double inv, uint64_t &w) {
     return true;
 }
 
+// 12 bytes: the two int32 first, so the bytes pack (`DIRECT_CLASS_BYTES`).
 struct Rep {
-    uint8_t block = 0;
     int32_t obs = 0, src = 0;
+    uint8_t block = 0;
     uint8_t code = 0;
 };
+static_assert(sizeof(Rep) == REP_BYTES, "a representative's bytes are in the class bound");
+
+// push_back, counting a reallocation's new block before the old one goes.
+inline void push_rep(std::vector<Rep> &rp, const Rep &r, CensusBytes &bytes) {
+    const size_t c0 = rp.capacity();
+    rp.push_back(r);
+    const size_t c1 = rp.capacity();
+    if (c1 != c0) {
+        bytes.add(static_cast<int64_t>(c1 * sizeof(Rep)));
+        bytes.add(-static_cast<int64_t>(c0 * sizeof(Rep)));
+    }
+}
 
 int n_parts() {
 #ifdef _OPENMP
@@ -237,10 +285,16 @@ void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
 // int32 entry, a part's share of it, or the test hook's `class_limit`), or -2
 // when they pass `sparse` (0: no limit; `sparse_class_limit`), counted across
 // the parts as they are found so the census stops there: the plan then
-// declines.
+// declines. `seen` gets the classes it counted (all of them, or where it
+// stopped), and the class-proportional bytes it held at most and the count
+// when it did (`CensusBytes`).
+struct CensusSeen {
+    int64_t classes = 0, peak_bytes = 0, classes_at_peak = 0;
+};
 template <int W, class KeyFn>
 int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t sparse, KeyFn key,
-               std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
+               std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles,
+               CensusSeen &seen) {
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
     for (int b = 0; b < n_blocks; b++) maps[b].assign(nn, 0);
@@ -259,6 +313,15 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
     const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
     std::atomic<bool> overflow{false}, too_sparse{false};
     std::atomic<int64_t> n_found{0};
+    CensusBytes bytes;
+    bytes.classes = &n_found;
+    for (auto &tab : tables) tab.bytes = &bytes;
+    auto report = [&](int64_t r) {
+        seen.classes = n_found.load();
+        seen.peak_bytes = bytes.peak.load();
+        seen.classes_at_peak = bytes.at_peak.load();
+        return r;
+    };
     std::vector<int64_t> n_single(static_cast<size_t>(P), 0);
     for (int b = 0; b < n_blocks; b++) {
         for (int64_t o0 = 0; o0 < n_seg; o0 += R) {
@@ -287,18 +350,22 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
                     bool fresh = true;
                     if (sbuf[static_cast<size_t>(i)]) {
                         local = static_cast<int32_t>(rp.size());
-                        rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                         static_cast<int32_t>(s), 0});
+                        push_rep(rp, Rep{static_cast<int32_t>(o), static_cast<int32_t>(s),
+                                         static_cast<uint8_t>(b), 0},
+                                 bytes);
                         n_single[static_cast<size_t>(t)]++;
                     } else {
                         local = tab.find_or_add(&kbuf[static_cast<size_t>(i) * W], h,
                                                 static_cast<int32_t>(rp.size()), fresh);
                         if (fresh)
-                            rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                             static_cast<int32_t>(s), code});
+                            push_rep(rp, Rep{static_cast<int32_t>(o), static_cast<int32_t>(s),
+                                             static_cast<uint8_t>(b), code},
+                                     bytes);
                     }
-                    if (fresh && sparse > 0 &&
-                        n_found.fetch_add(1, std::memory_order_relaxed) + 1 > sparse) {
+                    // Counted as found, so the census stops at the limit
+                    // rather than finishing: what bounds its memory.
+                    if (fresh && n_found.fetch_add(1, std::memory_order_relaxed) + 1 > sparse &&
+                        sparse > 0) {
                         too_sparse.store(true);
                         break;
                     }
@@ -312,15 +379,17 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
                                              (static_cast<uint32_t>(local) << code_bits) | code);
                 }
             }
-            if (overflow.load()) return -1;
-            if (too_sparse.load()) return -2;
+            if (overflow.load()) return report(-1);
+            if (too_sparse.load()) return report(-2);
         }
     }
+    // The tables are done with: free them before the representatives gather.
+    for (auto &tab : tables) tab.release();
     std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
     for (int t = 0; t < P; t++) off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
     const int64_t n_cls = off[static_cast<size_t>(P)];
-    if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
-    if (sparse > 0 && n_cls > sparse) return -2;
+    if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return report(-1);
+    if (sparse > 0 && n_cls > sparse) return report(-2);
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {
@@ -334,11 +403,16 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
     }
     reps_out.clear();
     reps_out.reserve(static_cast<size_t>(n_cls));
-    for (int t = 0; t < P; t++)
-        reps_out.insert(reps_out.end(), reps[static_cast<size_t>(t)].begin(), reps[static_cast<size_t>(t)].end());
+    bytes.add(static_cast<int64_t>(reps_out.capacity() * sizeof(Rep)));
+    for (int t = 0; t < P; t++) {
+        std::vector<Rep> &rp = reps[static_cast<size_t>(t)];
+        reps_out.insert(reps_out.end(), rp.begin(), rp.end());
+        bytes.add(-static_cast<int64_t>(rp.capacity() * sizeof(Rep)));
+        std::vector<Rep>().swap(rp);
+    }
     singles = 0;
     for (int64_t v : n_single) singles += v;
-    return n_cls;
+    return report(n_cls);
 }
 
 // A plan that does not serve: no classes, its reason, its census time.
@@ -429,8 +503,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     std::vector<Rep> reps;
     int64_t singles = 0;
     const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
+    CensusSeen dseen;
     plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), sparse_class_limit(d_pairs, 0), direct_key,
-                             plan->dmap, reps, singles);
+                             plan->dmap, reps, singles, dseen);
+    plan->census[0] = {dseen.classes, dseen.peak_bytes, dseen.classes_at_peak};
     if (plan->n_dcls == -2) return decline(plan, "too many classes to repay the plan's memory");
     if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
     plan->near_pairs = singles;
@@ -438,6 +514,8 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     plan->drep_flip.resize(reps.size());
     for (size_t c = 0; c < reps.size(); c++) plan->drep_flip[c] = reps[c].code;
     build_groups(reps, n_seg, n_blocks, plan->dgroups, plan->rep_evals);
+    // Not needed past the groups: freed before the remainder's census runs.
+    std::vector<Rep>().swap(reps);
 
     if (g.remainder) {
         const double gz = g.ground_z;
@@ -487,8 +565,10 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         };
         std::vector<Rep> qreps;
         int64_t qsingles = 0;
+        CensusSeen qseen;
         plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), sparse_class_limit(n_seg * n_seg, 1), q_key,
-                                 &plan->qmap, qreps, qsingles);
+                                 &plan->qmap, qreps, qsingles, qseen);
+        plan->census[1] = {qseen.classes, qseen.peak_bytes, qseen.classes_at_peak};
         if (plan->n_qcls == -2)
             return decline(plan, "too many remainder classes to repay the plan's memory");
         if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
@@ -517,7 +597,8 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, class_limit(1));
     put(s, g_sparse_den.load());
     put(s, g_sparse_floor.load());
-    put(s, g_class_budget.load());
+    put(s, g_class_budget[0].load());
+    put(s, g_class_budget[1].load());
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);
@@ -592,6 +673,7 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g) {
     std::shared_ptr<const Plan> p = build(g, std::move(fp));
     std::lock_guard<std::mutex> lock(g_cache_mtx);
     g_counters.built++;
+    if (!p->declined.empty()) g_counters.declined++;
     g_cache.push_front(p);
     size_t total = 0;
     for (auto it = g_cache.begin(); it != g_cache.end();) {
@@ -623,15 +705,16 @@ int64_t sparse_class_limit(int64_t pairs, int family) {
     const int64_t den = g_sparse_den.load();
     if (den <= 0) return 0;
     int64_t limit = pairs / den;
-    const int64_t budget = g_class_budget.load();
+    const int64_t budget = g_class_budget[family == 0 ? 0 : 1].load();
     if (budget > 0)
         limit = std::min(limit, budget / (family == 0 ? DIRECT_CLASS_BYTES : REMAINDER_CLASS_BYTES));
     return std::max(limit, g_sparse_floor.load());
 }
-void set_sparse_classes(int64_t den, int64_t floor, int64_t budget) {
+void set_sparse_classes(int64_t den, int64_t floor, int64_t budget, int64_t remainder_budget) {
     g_sparse_den.store(den < 0 ? SPARSE_CLASS_DEN : den);
     g_sparse_floor.store(floor < 0 ? SPARSE_CLASS_FLOOR : floor);
-    g_class_budget.store(budget < 0 ? CLASS_BUDGET_BYTES : budget);
+    g_class_budget[0].store(budget < 0 ? DIRECT_BUDGET_BYTES : budget);
+    g_class_budget[1].store(remainder_budget < 0 ? REMAINDER_BUDGET_BYTES : remainder_budget);
 }
 int probe() { return g_probe.load(); }
 

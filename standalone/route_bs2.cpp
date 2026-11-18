@@ -138,10 +138,11 @@ bool withdraw_features(const std::vector<std::string> &names) {
     return ok;
 }
 
-void reuse_plans(long long &built, long long &found) {
+void reuse_plans(long long &built, long long &found, long long &declined) {
     const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
     built = static_cast<long long>(c.built);
     found = static_cast<long long>(c.found);
+    declined = static_cast<long long>(c.declined);
 }
 
 void configure_grid_cache(const std::string &tag) {

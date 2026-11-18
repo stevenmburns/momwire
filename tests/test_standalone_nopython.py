@@ -838,10 +838,10 @@ def _reuse_deck(ground: str) -> str:
     return _REUSE_DECK.format(n=n, ground=ground, ge=ge, gn=gn, mid=(n + 1) // 2)
 
 
-def _reuse_plans(stderr: bytes) -> tuple[int, int]:
-    m = re.search(rb"cxx: reuse plans built (\d+), found (\d+)", stderr)
+def _reuse_plans(stderr: bytes) -> tuple[int, int, int]:
+    m = re.search(rb"cxx: reuse plans built (\d+), found (\d+), declined (\d+)", stderr)
     assert m, stderr
-    return int(m[1]), int(m[2])
+    return int(m[1]), int(m[2]), int(m[3])
 
 
 @pytest.mark.parametrize("ground", sorted(_REUSE_GROUNDS))
@@ -849,8 +849,9 @@ def test_razor_pair_reuse_answers_as_the_launcher(ground, tmp_path, monkeypatch)
     """MOMWIRE_X_RAZOR_PAIR_REUSE on, off and unset: the executable's
     printout is the launcher's byte for byte, line 2 naming the feature on
     both sides exactly when it is on, and MW_EXE_TIMES=1 proves the reuse RAN
-    (a plan built) when on and never when off, so agreement is not the
-    flag-off fill on both sides. Unstamped, on and off print the same bytes:
+    (a plan built that did not decline) when on and never when off, so
+    agreement is not the flag-off fill on both sides: a declined plan (the
+    sparse rule, the coding's limits) fills as off, and counts as no reuse. Unstamped, on and off print the same bytes:
     these decks move ~1e-13 with the reuse, far under five figures.
 
     nec5-bspline carries the row too (one EXE_FEATURES table), stamps line 2
@@ -872,9 +873,9 @@ def test_razor_pair_reuse_answers_as_the_launcher(ground, tmp_path, monkeypatch)
         exe, ref, de, dl = _both([name, "reuse.out"], run, prepare=prepare, env=env)
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
-        built, _found = _reuse_plans(exe.stderr)
+        built, _found, declined = _reuse_plans(exe.stderr)
         if BASIS == "razor-2p" and on == "1":
-            assert built >= 1, exe.stderr
+            assert built - declined >= 1, exe.stderr
         else:
             assert built == 0, exe.stderr
         lines = (de / "reuse.out").read_bytes().split(b"\n")
