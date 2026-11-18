@@ -459,3 +459,74 @@ def test_the_nec42_printout_off_is_unchanged(name):
     assert _counts() == before
     _printouts_equal(py, cxx)
     assert rc.arrays_difference(py_solves, cxx_solves) is None
+
+
+# ---- FeatureRequest and the GIL ----------------------------------------------
+
+
+def test_feature_scopes_on_two_threads_neither_leak_nor_cross():
+    """`ni_eval::FeatureRequest` saves the process-global requested set,
+    adds the hook's features, and restores it, while the hook's run holds
+    the GIL released. Two Python threads in two hooks at once would then
+    interleave their save / restore pairs (A saves S and asks kcl_nullspace,
+    B saves S+kcl, A restores S, B restores S+kcl: the feature left on for
+    the process) unless the scopes serialize, which they do on one
+    process-wide lock taken with the GIL released (`_near_interface_eval.h`).
+
+    One thread prints with the feature on, one with it off, at once: every
+    printout's solves are its own serial run's to the bit, and afterwards a
+    flag-off solve takes no reduced route."""
+    import threading
+
+    try:
+        rc.blas_addresses("bspline")
+    except (IndexError, AttributeError, OSError):
+        pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
+    text = DECKS["t_junction"]
+    want = {}
+    for key, features in (("on", FEATURES), ("off", [])):
+        ok, _out, solves = _cxx_printout(text, features, "")
+        assert ok, _out
+        want[key] = solves
+    # the two are told apart: the reduced route moves the solve's bits
+    assert rc.arrays_difference(want["on"], want["off"]) is not None
+
+    rounds = 12
+    start = threading.Barrier(2)
+    got = {"on": [], "off": []}
+    errors = []
+
+    def run(key, features):
+        try:
+            start.wait()
+            for _ in range(rounds):
+                ok, out, solves = _cxx_printout(text, features, "")
+                assert ok, out
+                got[key].append(solves)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the main thread below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(key, features))
+        for key, features in (("on", FEATURES), ("off", []))
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise errors[0]
+    for key in ("on", "off"):
+        assert len(got[key]) == rounds
+        for i, solves in enumerate(got[key]):
+            diff = rc.arrays_difference(want[key], solves)
+            assert diff is None, (key, i, diff)
+    # nothing left requested: a flag-off solve outside any printout
+    rng = np.random.default_rng(5)
+    Z, B = _random_system(rng, N, 1)
+    A, _want = CRAFTED["reducible"]
+    _syrk, four = _numpy_blas()
+    before = _counts()
+    *_r, route = acc.bspline_solve_ports(Z, B, A, four, [])
+    assert route == ""
+    assert _counts() == before
