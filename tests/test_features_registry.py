@@ -207,6 +207,28 @@ def test_the_executables_levels_are_the_registrys():
     assert set(ids) == {L.id for L in F.LEVELS if L.id.startswith("exe-")}
 
 
+def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
+    # `EXE_FEATURE_BASES`: a carried feature only one formulation's route
+    # runs (razor_pair_reuse, razor-2p's fill; nec5-bspline shares its
+    # levels and refuses it). Each row names a carried feature and a basis
+    # an executable is built as (CMakeLists.txt's MW_EXE_BASIS_NAME, or the
+    # main's default).
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    table = re.search(
+        r"const char \*const EXE_FEATURE_BASES\[\]\[2\] = \{(.*?)\n\};", src, re.S
+    )
+    assert table is not None
+    rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)"\}', table[1])
+    assert len(rows) == table[1].count("{"), table[1]
+    assert dict(rows) == {"razor_pair_reuse": "razor-2p"}
+    cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text(encoding="utf-8")
+    bases = set(re.findall(r'MW_EXE_BASIS_NAME="([a-z0-9-]+)"', cmake))
+    bases |= set(re.findall(r'#define MW_EXE_BASIS_NAME "([a-z0-9-]+)"', src))
+    for name, basis in rows:
+        assert name in _exe_features() and name in F.FEATURES, name
+        assert basis in bases, (basis, bases)
+
+
 def test_the_kwarg_overrides_the_env(no_features):
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
     assert F.enabled("offset_reuse") is True

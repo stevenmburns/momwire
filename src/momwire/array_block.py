@@ -871,7 +871,7 @@ class _BlockJacobiAugPrecond:
                     M[Ns:, :Ns] = A_e
                 else:
                     M = np.ascontiguousarray(S)
-                grp = {"fac": _lapack.lu_factor(M), "Ns": Ns, "members": []}
+                grp = {"fac": _lapack.lu_factor_strict(M), "Ns": Ns, "members": []}
                 by_key[key] = grp
             grp["members"].append((g, rows))
         self._shapes = list(by_key.values())

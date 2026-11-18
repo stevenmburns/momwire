@@ -486,7 +486,7 @@ import numpy as np
 
 from ...bspline import BSplineSolver
 from ...deck._cards import tokenize
-from ... import _ground_spec, _medium_spec
+from ... import _below_interface, _ground_spec, _medium_spec
 from ..._surface_height import StandOffFloorError
 from ... import _cmul, _lapack, _times
 from ...deck._nec5 import (
@@ -4423,16 +4423,22 @@ def _pattern(
     ground_z: float = 0.0,
     cliff=None,
     p_radiated: float | None = None,
-    average_single_cut: bool = False,
+    nec4_average: bool = False,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
 
-    ``average_single_cut``: whether a card with one theta or one phi
-    (``NTH = 1`` or ``NPH = 1``) still reads XNDA's A digit. The NEC-5
-    engine's does not (momwire#1962, measured black-box on x13: no
-    average-gain trailer at A = 1 or 3, and A = 2 prints its rows, exactly as
-    at A = 0, whatever the step on either axis). The NEC-4.2 slot passes
-    True, keeping what it has always printed, which no capture yet measures.
+    A card with one theta or one phi (``NTH = 1`` or ``NPH = 1``) does not
+    read XNDA's A digit (momwire#1962: no average-gain trailer at A = 1 or 3,
+    and A = 2 prints its rows, exactly as at A = 0, whatever the step on
+    either axis). Measured black-box on x13, and on licensed NEC-4.2 too
+    (``tests/fixtures/nec42_rp_normalized_gain/``' cut and phicut decks, at
+    N = 0 and N = 5), so it holds on both slots.
+
+    ``nec4_average``: whether the average itself keeps what the NEC-4.2 slot
+    has always printed, which no NEC-4.2 capture yet measures. The NEC-5
+    engine's average (False) is the trapezoid rule in phi
+    (:func:`~momwire._far_readout.average_gain`'s ``trapezoid_phi``,
+    ``tests/fixtures/rp_average_quadrature/``), NaN over a zero step.
 
     ``ground_z`` and ``cliff`` are the NEC-4.2 slot's (momwire#1295), which
     shares this row builder: its decks may put the interface anywhere, and a
@@ -4557,9 +4563,10 @@ def _pattern(
             math.atan2(-math.sin(kr), math.cos(kr))
         )
     average_digit = request.xnda % 10
-    if not average_single_cut and (request.n_theta == 1 or request.n_phi == 1):
-        # A single cut on either axis averages nothing on the NEC-5 engine:
-        # the card prints as at A = 0 (momwire#1962, the docstring above).
+    if request.n_theta == 1 or request.n_phi == 1:
+        # A single cut on either axis averages nothing, on the NEC-5 engine
+        # and on NEC-4.2 alike: the card prints as at A = 0 (momwire#1962,
+        # the docstring above).
         average_digit = 0
     if average_digit == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
@@ -4570,7 +4577,12 @@ def _pattern(
     if average_digit == 2:
         rows = ()
     average, solid = average_gain(
-        g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
+        g_v + g_h,
+        thetas,
+        request.d_theta_deg,
+        request.d_phi_deg,
+        request.n_phi,
+        trapezoid_phi=not nec4_average,
     )
     return PatternBlock(
         rows=rows,
@@ -5131,6 +5143,9 @@ def _prepare(
         # NotImplementedError; on this seam that is a refusal by name, not
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
+    except ValueError as exc:
+        _refuse_if_grazing(exc)
+        raise
     times = _times.current()
     fill_seconds = factor_seconds = 0.0
     try:
@@ -5147,6 +5162,15 @@ def _prepare(
         # is met here: a statement about the deck's geometry, refused by name
         # as the NEC-4.2 slot refuses it, not an INTERNAL ERROR frame.
         raise ServeRefusal(str(exc)) from None
+    except NotImplementedError as exc:
+        # The same crossing-serve scope as the constructor's, met where a
+        # basis builds its junctions in the solve (bs2: a spread of radii
+        # within the below wires, census 11-17), refused by name in the same
+        # sentence the executables print, not an INTERNAL ERROR frame.
+        raise ServeRefusal(str(exc)) from None
+    except ValueError as exc:
+        _refuse_if_grazing(exc)
+        raise
     return _Prepared(
         structure=structure,
         mesh=mesh,
@@ -5162,6 +5186,21 @@ def _prepare(
         fill_seconds=fill_seconds,
         factor_seconds=factor_seconds,
     )
+
+
+def _refuse_if_grazing(exc: ValueError) -> None:
+    """:class:`ServeRefusal` for a buried plan's grazing-floor refusal.
+
+    The below/below plan (and the cross block's) refuses a deck whose pairs
+    graze the interface below the grid's floor, in a sentence about the
+    deck's geometry (``_below_interface.BURIED_GRAZING_REFUSAL``). It is
+    raised as ValueError inside the fill, which this seam printed as an
+    INTERNAL ERROR frame until the 11-17 census (bs2, a deck whose grazing
+    pairs lie inside the Sommerfeld range cap); the NEC-4.2 slot and the
+    executables print it as the refusal it is. Any other ValueError passes.
+    """
+    if _below_interface._is_grazing_refusal(exc):
+        raise ServeRefusal(str(exc)) from None
 
 
 def _port_solution(solver, shared: dict | None):

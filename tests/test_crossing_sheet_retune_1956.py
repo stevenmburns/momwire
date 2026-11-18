@@ -20,9 +20,22 @@ What is held:
 - on, a hub deck's input impedance agrees with off within the declared drift
   on both formulations, and the plan did change; so does the deep, high-
   frequency hub where the drift was measured largest (razor-2p).
+
+Reach 7 (the two nec5 executables): `DECKS` below are two hubs as NEC-5
+decks, which tests/test_standalone_nopython.py gives each executable off and
+on, against the launcher (byte for byte on Linux, the fixture gates'
+tolerance on Windows and macOS), and the executable's own Zin, on against
+off, against the declared drift. The launcher's route on the same decks is
+held here (`test_the_launchers_route_moves_its_plan_within_its_drift`): its
+census plans more planes on than off, so the byte gate compared the retune
+and not the shipped weights twice. `DECKS["deep_hub"]` is the executables'
+worst case and is NOT `_deep_hub` below (the Python route's worst case on
+the dict-built decks); each drift figure below names its deck.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -33,10 +46,11 @@ from momwire.bspline import BSplineSolver
 from momwire.razor import RazorSolver
 
 from test_crossing_serve_524 import _radial_dirs, crossing_deck, hub_deck
+from _lane_gate import assert_lanes_match
 
-# An experimental feature (`momwire._features`, reach 1).
+# An experimental feature (`momwire._features`, reach 7).
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(7),
     # The decks are the fill tests' shapes, not converged designs: their
     # advisories (a coarse crossing node, an ambiguous feed site) are not
     # what is held here.
@@ -56,6 +70,47 @@ K_P = 2.0 * np.pi * F / 299792458.0
 EPS_T = complex(13.0, -0.005 / (2.0 * np.pi * F * 8.8541878128e-12))
 K_M = ni.k_medium(EPS_T, K_P)
 A = 0.001
+
+
+def hub_nec(f_mhz, depth, q, h, label, n=16):
+    """A synthetic NEC-5 deck (not a user's model) of the hub shape above:
+    `n` radials of length `q`, 10 segments each, at `depth` under a 13 /
+    0.005 S/m Sommerfeld ground; a 2-segment rise; a 15-segment vertical of
+    height `h`, fed on its 7th segment. Kept as text here, not under
+    tests/fixtures, which the C++ driver tests sweep whole."""
+    lines = [f"CM {label}", "CE"]
+    for i in range(n):
+        a = 2.0 * math.pi * i / n
+        x, y = q * math.cos(a), q * math.sin(a)
+        lines.append(f"GW {i + 1} 10 0 0 {-depth} {x:.9f} {y:.9f} {-depth} 0.001")
+    lines.append(f"GW {n + 1} 2 0 0 {-depth} 0 0 0 0.001")
+    lines.append(f"GW {n + 2} 15 0 0 0 0 0 {h} 0.001")
+    lines += ["GE -1", "GN 2 0 0 0 13 0.005", f"FR 0 1 0 0 {f_mhz} 0"]
+    lines += [f"EX 0 {n + 2} 7 0 1 0", "XQ", "EN", ""]
+    return "\n".join(lines)
+
+
+# The executables' decks, and the launcher route's in
+# `test_the_launchers_route_moves_its_plan_within_its_drift`. hub16 is
+# `hub_deck(n_radials=16)`'s shape at 7 MHz: off, no route plans its
+# radials' plane; on, every one does (drift 2.3e-13 / 2.4e-13 razor-2p /
+# bspline). deep_hub is the largest drift the executables measured over a
+# scan of these `hub_nec` hubs (7-30 MHz, depth 0.15-3 m, radials and
+# vertical 2.5-7.5 m; Rocketlake, T1, 2026-11-17): 1.93e-11 on nec5-bspline
+# (two planes on, none off), 1.40e-11 on nec5-razor-2p there, whose own worst
+# was 1.56e-11 (28 MHz, 0.5 m, 5 m); the launcher's route on it prints the
+# same 1.93e-11 / 1.40e-11. It is a different geometry from `_deep_hub`
+# below (30 MHz and 5 m, not 28 MHz and 2.5 m; radials laid from the hub
+# out; the vertical and its feed counted from the base), whose 9.77e-12 is
+# the Python route's figure on the dict-built decks.
+DECKS = {
+    "hub16": hub_nec(
+        7.0, 0.15, 5.0, 10.0, "16 radials at 0.15 m, 7 MHz (momwire#1956)"
+    ),
+    "deep_hub": hub_nec(
+        30.0, 1.5, 5.0, 5.0, "16 radials at 1.5 m, 30 MHz (momwire#1956)"
+    ),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -169,10 +224,17 @@ def test_the_cxx_plan_and_values_are_pythons(on):
     assert np.array_equal(np.asarray(cx["planes"]), np.asarray(plan.planes))
     assert np.array_equal(np.asarray(cx["heights"]), np.asarray(plan.heights))
     cv = np.asarray(cx["values"])
-    assert np.array_equal(py.view(np.uint64), cv.view(np.uint64))
+    # Bit-equal off Windows. On win32, MSVC's /fp:fast reassociates the C++
+    # sums, so the house's derived tolerance applies (tests/_lane_gate.py);
+    # measured on the i5-1240P at 8.6e-16 off and 2.5e-15 on.
+    assert_lanes_match(cv, py, f"sheet values, retune {'on' if on else 'off'}")
 
 
-@pytest.mark.parametrize("cls", [RazorSolver, BSplineSolver])
+# Razor's case moved to the slow lane at 0.94.0 (median 6.6 s over 12 runs);
+# bspline's stays in the default lane, so every PR still runs one basis.
+@pytest.mark.parametrize(
+    "cls", [pytest.param(RazorSolver, marks=pytest.mark.slow), BSplineSolver]
+)
 def test_on_agrees_with_off_within_the_declared_drift(cls):
     deck = hub_deck(n_radials=16)
     zin = {}
@@ -192,7 +254,10 @@ def _deep_hub(f, depth, q, n=16):
     """A hub deck scaled to `q`: `n` radials of length q at `depth`, a
     2-segment rise, a 15-segment vertical of length q fed at 0.4333 q. At
     28 MHz, 1.5 m deep, q = 2.5 m the plan takes the most planes and the
-    drift is the largest measured (9.77e-12 on razor-2p, momwire#1956)."""
+    drift is the largest the Python route measured on these dict-built decks
+    (9.77e-12 on razor-2p, momwire#1956). Not `DECKS["deep_hub"]`, the
+    executables' worst case (1.93e-11, nec5-bspline), which
+    `test_the_launchers_route_moves_its_plan_within_its_drift` runs."""
     wires = [
         np.array([(q * dx, q * dy, -depth), (0.0, 0.0, -depth)])
         for dx, dy in _radial_dirs(n)
@@ -215,6 +280,8 @@ def _deep_hub(f, depth, q, n=16):
     )
 
 
+# Slow lane at 0.94.0: median 7.7 s over 12 runs.
+@pytest.mark.slow
 def test_deep_high_frequency_hub_within_the_declared_drift():
     deck = _deep_hub(28e6, 1.5, 2.5)
     zin = {}
@@ -228,3 +295,52 @@ def test_deep_high_frequency_hub_within_the_declared_drift():
     drift = abs(zin[True] - zin[False]) / abs(zin[False])
     # Over the old 2e-12, so this deck is the one the declared bound is for.
     assert 2e-12 < drift <= _features.FEATURES[NAME].drift, drift
+
+
+def _launcher_route(text, basis, on, monkeypatch):
+    """`momwire-nec5-<basis>`'s own route for one deck text, in process
+    (`_shell.render`, what the launcher's server answers it with), the
+    feature off or on by its variable as the launcher reads it: (planes the
+    census planned, Zin at full precision, the printout)."""
+    from momwire.dropin.nec5 import _serve, _shell
+
+    monkeypatch.setenv(_features.FEATURES[NAME].env, "1" if on else "0")
+    states = []
+    orig = _serve._port_state
+
+    def port_state(*args, **kwargs):
+        states.append(state := orig(*args, **kwargs))
+        return state
+
+    monkeypatch.setattr(_serve, "_port_state", port_state)
+    monkeypatch.setattr(ni, "_SHEET_CACHE", type(ni._SHEET_CACHE)())
+    before = ni._SHEET_STATS["planes_planned"]
+    printout = _shell.render(text, basis=basis)
+    (state,) = states
+    (i_source,) = np.atleast_1d(state.i_source)
+    return (
+        ni._SHEET_STATS["planes_planned"] - before,
+        1.0 / complex(i_source),
+        printout,
+    )
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("deck", sorted(DECKS))
+def test_the_launchers_route_moves_its_plan_within_its_drift(deck, basis, monkeypatch):
+    """The launcher's half of the executables' route proof
+    (tests/test_standalone_nopython.py's
+    `test_the_sheet_retune_moves_the_executables_plan_within_its_drift`), on
+    the same deck text: on, the census plans more planes than off, so the
+    byte gate against the launcher held the retune and not two runs of the
+    shipped weights (on and off print the same digits); and Zin moves by no
+    more than the declared drift. On deep_hub this is the measured worst
+    case of the executables, 1.93e-11 on bspline."""
+    text = DECKS[deck]
+    off_planes, z_off, off_text = _launcher_route(text, basis, False, monkeypatch)
+    on_planes, z_on, on_text = _launcher_route(text, basis, True, monkeypatch)
+    assert on_planes > off_planes, (off_planes, on_planes)
+    assert "+crossing_sheet_retune" in on_text.split("\n")[1]
+    assert "+crossing_sheet_retune" not in off_text.split("\n")[1]
+    drift = abs(z_on - z_off) / abs(z_off)
+    assert drift <= _features.FEATURES[NAME].drift, drift

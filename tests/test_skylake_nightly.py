@@ -47,10 +47,31 @@ def test_the_rotation_covers_the_space_every_five_nights():
         assert five == set(nightly.ROTATION)
 
 
+def test_the_threaded_copy_runs_every_night():
+    """PA3(a): the OpenMP copy at one thread beside the serial copy, every
+    night, and a cell spelling audit.py reads as MW_EXE_COPY=threads."""
+    assert nightly.EVERY_NIGHT_THREADS == nightly.EVERY_NIGHT + "-threads"
+    assert audit.parse_cell("avx2-T1") == ("avx2", 1, "policy")
+    assert audit.parse_cell("avx2-T1-threads") == ("avx2", 1, "threads")
+    assert audit.parse_cell("sse2-T4-threads") == ("sse2", 4, "threads")
+    with pytest.raises(SystemExit):
+        audit.parse_cell("avx2-T1-serial")
+
+
+def test_the_anchors_phase_names_a_test_that_exists():
+    """PA3(b): the nightly's `anchors-auto` phase runs a module that exists."""
+    import inspect
+
+    src = inspect.getsource(nightly.run_anchors_auto)
+    assert "tests/test_standalone_anchors_auto.py" in src
+    assert (ROOT / "tests" / "test_standalone_anchors_auto.py").is_file()
+
+
 def test_known_list_entries_are_well_formed():
     kinds = {
         "mismatch", "exe-declines", "exe-no-answer", "py-error", "variant",
         "py-drift", "sweep-outcome", "sweep-z", "sweep-mem", "sweep-time",
+        "copy-route", "copy-differs",
     }  # fmt: skip
     for k in triage.load_known(NIGHTLY / "known.json"):
         assert k["kind"] in kinds and k.get("note"), k
@@ -121,6 +142,38 @@ def test_triage_severity(tmp_path, known):
         "variant|avx2-T1|e|sse": "severe",
     }
     assert r["status"] == "red"
+
+
+def test_the_threaded_cell_is_held_to_the_serial_copy_and_its_route(tmp_path):
+    """`copy-differs`: the threaded copy's printout is not the plain cell's;
+    `copy-route`: the -threads cell served through the serial copy, so it
+    measured nothing. Both severe; a refusal in either cell is neither."""
+    night = _night(
+        tmp_path / "n",
+        [
+            _row("e", "same"),
+            _row("e", "differs", exe_sha="s"),
+            _row("e", "serial-ran"),
+            _row("e", "refused", route="refused:x", py_outcome="refused"),
+        ],
+    )
+    (night / "audit-avx2-T1-threads.jsonl").write_text(
+        "".join(
+            json.dumps(r) + "\n"
+            for r in (
+                _row("e", "same", route="cxx:threads"),
+                _row("e", "differs", route="cxx:threads", exe_sha="t"),
+                _row("e", "serial-ran", route="cxx:serial"),
+                _row("e", "refused", route="refused:x", py_outcome="refused"),
+            )
+        )
+    )
+    r = triage.triage(night, None, tmp_path / "none.json")
+    sev = {f["id"]: f["severity"] for f in r["findings"]}
+    assert sev == {
+        "copy-differs|avx2-T1-threads|e|differs": "severe",
+        "copy-route|avx2-T1-threads|e|serial-ran": "severe",
+    }
 
 
 def test_a_night_of_known_findings_is_green(tmp_path, known):

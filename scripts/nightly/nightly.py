@@ -56,6 +56,13 @@ AK_REPO = "https://github.com/stevenmburns/antennaknobs"
 AK_SHA = "d451584f329c928030014a975cb0fe79524f9805"
 
 EVERY_NIGHT = "avx2-T1"
+# The OpenMP copy of every executable's route at one thread (MW_EXE_COPY=threads,
+# audit.py), every night beside EVERY_NIGHT: triage holds its printouts to
+# EVERY_NIGHT's, the serial copy's, byte for byte (`copy-differs`), and to
+# Python's like any cell. The T2/T4 rotation cells run the threaded copy too,
+# at more threads, but one night in five each; this is the every-night check
+# that the two copies a one-thread user and a many-thread user run agree.
+EVERY_NIGHT_THREADS = "avx2-T1-threads"
 # {avx2, sse2} x {T1, T2, T4} minus avx2-T1: one a night, by date, so five
 # consecutive nights cover the whole space.
 ROTATION = ("avx2-T2", "avx2-T4", "sse2-T1", "sse2-T2", "sse2-T4")
@@ -180,7 +187,16 @@ def build_python(logf: Path, state: dict) -> None:
     env = env_base()
     env.update(CC="ccache gcc", CXX="ccache g++")
     ph = file_hash(MW / "pyproject.toml")
-    if state.get("pyproject") != ph or not PY.exists():
+    # The stamp lives in the venv, beside what it describes. `state` alone was
+    # not enough: a bisect probe reinstalls at an older commit through a copy
+    # of the state that is never saved, so the next night saw its own
+    # pyproject's hash, skipped the reinstall, and kept the probe's
+    # dist-info -- Python's printouts then said the older version on line 2
+    # (the 2026-11-16 night: venv 0.87.1, executables 0.93.0, every deck a
+    # `mismatch` at line 2).
+    stamp = VENV / ".mw-pyproject"
+    have = stamp.read_text().strip() if stamp.is_file() else None
+    if have != ph or not PY.exists():
         if not PY.exists():
             sh([sys.executable, "-m", "venv", VENV], logf=logf)
             sh([PY, "-m", "pip", "install", "-q", "--upgrade", "pip"], logf=logf)
@@ -207,6 +223,7 @@ def build_python(logf: Path, state: dict) -> None:
             [PY, "-m", "pip", "install", "-q", "matplotlib"], logf=logf
         )  # the sweep's antennaknobs
         state["pyproject"] = ph
+        stamp.write_text(ph + "\n")
     # make build: MOMWIRE_REQUIRE_ACCEL=1, so a failed compile fails here
     # rather than leaving a stale .so behind (never bare build_ext, never -j).
     sh(["make", "build", f"PYTHON={PY}"], cwd=MW, logf=logf)
@@ -222,7 +239,11 @@ def build_python(logf: Path, state: dict) -> None:
             raise RuntimeError(f"forced {v}, momwire._accel.VARIANT is {got}")
 
 
-def openblas(logf: Path) -> Path:
+def openblas(logf: Path, prune: bool = True) -> Path:
+    """The two static archives for the checked-out build_openblas.sh. A
+    bisect probe passes prune=False: an older commit's script names other
+    archives, and pruning to them deleted the night's own (the next night
+    then rebuilt them, ~17 min)."""
     h = file_hash(MW / "standalone" / "build_openblas.sh")
     d = OPENBLAS / h
     if (d / "libmwxp.a").is_file() and (d / "libmwnp.a").is_file():
@@ -232,7 +253,7 @@ def openblas(logf: Path) -> Path:
         sh(["git", "clone", "-q", "--shared", OB_SEED, d / "src"], logf=logf)
     sh(["bash", MW / "standalone" / "build_openblas.sh", d], logf=logf)
     shutil.rmtree(d / "src", ignore_errors=True)
-    for old in OPENBLAS.iterdir():
+    for old in OPENBLAS.iterdir() if prune else ():
         if old.is_dir() and old.name != h:
             shutil.rmtree(old)  # the nightly's own earlier archives only
     return d
@@ -313,6 +334,26 @@ def run_cell(
     if exe_names:
         cmd += ["--exe-names", ",".join(exe_names)]
     sh(cmd, logf=night / f"audit-{cell}.log", cwd=ROOT)
+
+
+def run_anchors_auto(night: Path) -> None:
+    """PA3(b): the below table's anchors at their shipped default (`auto`),
+    exe == Python, each a fresh process with its own empty cache
+    (tests/test_standalone_anchors_auto.py; every audit cell pins them off).
+    A failure is a `harness` finding naming this phase; the log has which
+    executable and why."""
+    env = env_base()
+    env.update(MOMWIRE_STANDALONE_EXES=str(EXES), MOMWIRE_FORCE_VARIANT="avx2")
+    env.pop("MOMWIRE_BELOW_ANCHORS", None)
+    sh(
+        [
+            PY, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "-n", "0",
+            "-m", "slow", "tests/test_standalone_anchors_auto.py",
+        ],
+        cwd=MW,
+        env=env,
+        logf=night / "anchors-auto.log",
+    )  # fmt: skip
 
 
 def run_sweep(night: Path, harness: Path, order_by: Path | None, case_ids=None) -> None:
@@ -399,14 +440,18 @@ def do_night(a) -> int:
         if a.date
         else dt.datetime.now().astimezone().date()
     )
-    cells = a.cells.split(",") if a.cells else [EVERY_NIGHT, rotation_cell(day)]
+    cells = (
+        a.cells.split(",")
+        if a.cells
+        else [EVERY_NIGHT, EVERY_NIGHT_THREADS, rotation_cell(day)]
+    )
     night = night_dir(day)
     meta = dict(
         date=day.isoformat(),
         sha=sha,
         subject=None,
         cells=cells,
-        rotation=f"{ROTATION.index(cells[1]) + 1} of {len(ROTATION)}" if len(cells) > 1 and cells[1] in ROTATION else None,
+        rotation=f"{ROTATION.index(cells[-1]) + 1} of {len(ROTATION)}" if len(cells) > 1 and cells[-1] in ROTATION else None,
         ak_sha=AK_SHA,
         harness=file_hash(HERE / "nightly.py"),
         local_corpus=sum(1 for ln in LOCAL_CORPUS.read_text().splitlines() if ln.strip() and not ln.startswith("#")) if LOCAL_CORPUS.is_file() else 0,
@@ -454,6 +499,8 @@ def do_night(a) -> int:
     if ok and "build-exes" not in meta["errors"]:
         for cell in cells:
             phase(f"audit-{cell}", lambda cell=cell: run_cell(cell, night))
+        if "avx2" in variants:
+            phase("anchors-auto", lambda: run_anchors_auto(night))
     if ok and not a.no_sweep:
         prev = Path(green["dir"]) / "sweep.jsonl" if green.get("dir") else None
         phase("sweep", lambda: run_sweep(night, ensure_ak(night / "build.log"), prev))
@@ -573,7 +620,7 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
         audit_t = [f for f in targets if "exe" in f]
         pairs = sorted({(f["exe"], f["cell"].split("-")[0]) for f in audit_t})
         if pairs:
-            build_exes(pairs, openblas(logf), logf)
+            build_exes(pairs, openblas(logf, prune=False), logf)
     except Exception:  # noqa: BLE001 - an unbuildable commit is skipped
         return "skip"
     if any(f["kind"] == "fake" for f in targets):
@@ -585,6 +632,9 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
     by_cell = {}
     for f in audit_t:
         by_cell.setdefault(f["cell"], set()).add((f["exe"], f["deck"]))
+        if f["kind"] == "copy-differs":  # it reads the plain cell too
+            plain = f["cell"][: -len("-threads")]
+            by_cell.setdefault(plain, set()).add((f["exe"], f["deck"]))
     for cell, pairs2 in by_cell.items():
         only = d / f"only-{cell}.txt"
         only.write_text("".join(f"{e}\t{k}\n" for e, k in sorted(pairs2)))

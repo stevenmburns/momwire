@@ -172,7 +172,155 @@ py::dict counters(const mw::razor::SolveContext &ctx) {
     d["pool_grows"] = c.pool_grows;
     d["fill_seconds"] = c.fill_seconds;
     d["lu_seconds"] = c.lu_seconds;
+    d["reuse_fills"] = c.reuse_fills;
+    d["reuse_declined"] = c.reuse_declined;
+    d["reuse_windows"] = c.reuse_windows;
+    d["reuse_q_windows"] = c.reuse_q_windows;
+    d["reuse_q_declined"] = c.reuse_q_declined;
+    d["reuse_verify_worst"] = c.reuse_verify_worst;
+    d["reuse_seconds"] = c.reuse_seconds;
     return d;
+}
+
+// ---------------------------------------------------------------------------
+// Fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`) for the Python
+// route: the plan over the arrays `_FusedMoments` tokens hold, the class
+// values per k, and the windows' gathers -- the same core the solve core
+// runs.
+
+struct ReusePlanHandle {
+    std::shared_ptr<const mw::razor::reuse::Plan> plan;
+    darr cent, b_obs, seg_h, a, p0[2], t[2], a_ek[2];
+    iarr group_i, group_j[2];
+    bool has_image = false, remainder = false;
+    double ground_z = 0.0;
+
+    mw::razor::reuse::Geometry geometry() const {
+        mw::razor::reuse::Geometry g;
+        g.cent = in<double, 2>(cent);
+        g.group_i = in<int64_t, 1>(group_i);
+        g.b_obs = in<double, 1>(b_obs);
+        g.seg_h = in<double, 1>(seg_h);
+        g.a = in<double, 1>(a);
+        for (int b = 0; b < (has_image ? 2 : 1); b++) {
+            g.p0[b] = in<double, 2>(p0[b]);
+            g.t[b] = in<double, 2>(t[b]);
+            g.group_j[b] = in<int64_t, 1>(group_j[b]);
+            g.a_ek[b] = in<double, 1>(a_ek[b]);
+        }
+        g.has_image = has_image;
+        g.remainder = remainder;
+        g.ground_z = ground_z;
+        return g;
+    }
+};
+
+using ReuseValues = mw::razor::reuse::Values;
+
+ReusePlanHandle reuse_plan(darr cent, iarr group_i, darr b_obs, darr seg_h, darr a, py::tuple real,
+                           py::object image, bool remainder, double ground_z) {
+    ReusePlanHandle h;
+    h.cent = cent;
+    h.group_i = group_i;
+    h.b_obs = b_obs;
+    h.seg_h = seg_h;
+    h.a = a;
+    auto take = [&](int b, py::tuple src) {
+        if (src.size() != 4) throw std::invalid_argument("a source set is (seg_p0, seg_t, group_j, a_ek)");
+        h.p0[b] = src[0].cast<darr>();
+        h.t[b] = src[1].cast<darr>();
+        h.group_j[b] = src[2].cast<iarr>();
+        h.a_ek[b] = src[3].cast<darr>();
+    };
+    take(0, real);
+    h.has_image = !image.is_none();
+    if (h.has_image) take(1, image.cast<py::tuple>());
+    h.remainder = remainder;
+    h.ground_z = ground_z;
+    const mw::razor::reuse::Geometry g = h.geometry();
+    {
+        py::gil_scoped_release release;
+        h.plan = mw::razor::reuse::plan_for(g);
+    }
+    return h;
+}
+
+py::dict reuse_stats(const ReusePlanHandle &h) {
+    const auto &p = *h.plan;
+    py::dict d;
+    d["n_seg"] = p.n_seg;
+    d["pairs"] = p.pairs;
+    d["near_pairs"] = p.near_pairs;
+    d["classes"] = p.n_dcls;
+    d["rep_evals"] = p.rep_evals;
+    d["groups"] = p.dgroups.size();
+    d["q_pairs"] = p.q_pairs;
+    d["q_classes"] = p.n_qcls;
+    d["q_rep_evals"] = p.q_rep_evals;
+    d["q_groups"] = p.qgroups.size();
+    d["census_seconds"] = p.census_seconds;
+    d["nbytes"] = p.nbytes();
+    d["budget_bytes"] = p.budget_bytes;
+    d["census_peak_bytes"] = p.census_peak_bytes;
+    d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
+    return d;
+}
+
+std::shared_ptr<ReuseValues> reuse_values(const ReusePlanHandle &h, double k, darr xg, darr wg,
+                                          uintptr_t cancel_flag) {
+    auto v = std::make_shared<ReuseValues>();
+    const mw::razor::reuse::Geometry g = h.geometry();
+    {
+        py::gil_scoped_release release;
+        mw::razor::reuse::eval_direct(*h.plan, g, in<double, 1>(xg), in<double, 1>(wg), k, cancel_flag,
+                                      *v);
+    }
+    return v;
+}
+
+py::list reuse_q_groups(const ReusePlanHandle &h) {
+    py::list out;
+    for (const auto &G : h.plan->qgroups) {
+        std::vector<int64_t> o(G.obs.begin(), G.obs.end()), s(G.src.begin(), G.src.end());
+        out.append(py::make_tuple(py::array_t<int64_t>(static_cast<py::ssize_t>(o.size()), o.data()),
+                                  py::array_t<int64_t>(static_cast<py::ssize_t>(s.size()), s.data())));
+    }
+    return out;
+}
+
+void reuse_store_q(const ReusePlanHandle &h, ReuseValues &v, size_t group, cdarr mom) {
+    if (group >= h.plan->qgroups.size()) throw std::invalid_argument("razor pair_reuse: no such group");
+    const auto &G = h.plan->qgroups[group];
+    if (mom.ndim() != 3 || static_cast<size_t>(mom.shape(0)) != G.obs.size() ||
+        static_cast<size_t>(mom.shape(1)) != G.src.size() || mom.shape(2) != 2)
+        throw std::invalid_argument("razor pair_reuse: a group's moments are (n_obs, n_src, 2)");
+    mw::razor::reuse::store_remainder(*h.plan, group, mom.data(), v);
+}
+
+py::tuple reuse_gather(const ReusePlanHandle &h, const ReuseValues &v, int block, iarr need) {
+    const ptrdiff_t n = need.size(), ns = static_cast<ptrdiff_t>(h.plan->n_seg);
+    cdarr m0({n, ns}), m1({n, ns});
+    cd *p0 = m0.mutable_data(), *p1 = m1.mutable_data();
+    const int64_t *nd = need.data();
+    {
+        py::gil_scoped_release release;
+        mw::razor::reuse::gather_direct(*h.plan, block, nd, n, in<double, 1>(h.seg_h), v, p0, p1);
+    }
+    return py::make_tuple(m0, m1);
+}
+
+cdarr reuse_gather_q(const ReusePlanHandle &h, const ReuseValues &v, iarr seg, darr sign) {
+    const ptrdiff_t m = seg.size(), ns = static_cast<ptrdiff_t>(h.plan->n_seg);
+    if (sign.size() != m) throw std::invalid_argument("razor pair_reuse: one sign per row");
+    cdarr out({m, ns, static_cast<ptrdiff_t>(2)});
+    cd *o = out.mutable_data();
+    const int64_t *sg = seg.data();
+    const double *sn = sign.data();
+    {
+        py::gil_scoped_release release;
+        mw::razor::reuse::gather_remainder(*h.plan, sg, sn, m, in<double, 1>(h.seg_h), v, o);
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +519,7 @@ mw::razor::FrontInputs front_inputs(const py::dict &kw) {
     } else {
         in.exact_kernel = (!ek.is_none() && py::bool_(ek)) ? ExactKernel::on : ExactKernel::off;
     }
+    if (kw.contains("pair_reuse")) in.pair_reuse = kw["pair_reuse"].cast<int>();
     py::object skip = get("exact_kernel_auto_skip");
     if (!skip.is_none())
         for (py::handle w : skip) in.exact_auto_skip.push_back(as_count(py::reinterpret_borrow<py::object>(w)));
@@ -1418,6 +1567,9 @@ void register_razor_solve(py::module_ &m) {
         .def("release", &mw::razor::SolveContext::release,
              "Free Z and the window pool; the counters are kept.")
         .def_property_readonly("counters", &counters)
+        .def_property_readonly("reuse_declined_reason",
+                               &mw::razor::SolveContext::reuse_declined_reason,
+                               "Why the last fill asked for pair reuse and did not take it, or ''.")
         .def_property_readonly("n_basis", &mw::razor::SolveContext::n_basis)
         .def("front_port_solution", &front_port_solution, py::arg("kwargs"),
              py::arg("chunk_elems") = 2000000, py::arg("cancel_flag") = 0,
@@ -1429,6 +1581,67 @@ void register_razor_solve(py::module_ &m) {
              "nothing else is set), else X (n_basis, n_ports) column-major, "
              "info (> 0: U(info, info) exactly zero), cols, geom "
              "(`_build_geometry`'s dict), ties, and Z / front on request.");
+
+    // momwire#1971: fill-pair reuse for the Python route.
+    m.attr("razor_pair_reuse_1971") = true;
+    py::class_<ReuseValues, std::shared_ptr<ReuseValues>>(m, "RazorReuseValues",
+        "One wavenumber's class values of a razor reuse plan.")
+        .def_readonly("k", &ReuseValues::k);
+    py::class_<ReusePlanHandle>(m, "RazorReusePlan",
+        "razor-2p's fill-pair reuse plan (momwire#1971): the classes of the "
+        "(centroid observer, source segment) pairs of the direct and image "
+        "blocks, and of the composing ground's remainder, from the process's "
+        "cache.")
+        .def("stats", &reuse_stats)
+        .def_property_readonly("declined", [](const ReusePlanHandle &h) -> py::object {
+            if (h.plan->declined.empty()) return py::none();
+            return py::str(h.plan->declined);
+        }, "Why this plan does not serve the deck (it then has no classes), or None.")
+        .def("values", &reuse_values, py::arg("k"), py::arg("xg"), py::arg("wg"),
+             py::arg("cancel_flag") = 0,
+             "The direct classes' M0, M1 at real k (the shipped seg_moments).")
+        .def("q_groups", &reuse_q_groups,
+             "The remainder representatives' groups: (observer segments, sources).")
+        .def("store_q", &reuse_store_q, py::arg("values"), py::arg("group"), py::arg("mom"),
+             "A group's remainder moments (n_obs, n_src, 2) into the values.")
+        .def("gather", &reuse_gather, py::arg("values"), py::arg("block"), py::arg("need"),
+             "A window's (M0, M1) rows for observers `need` of block 0 (real) or 1 (image).")
+        .def("gather_q", &reuse_gather_q, py::arg("values"), py::arg("seg"), py::arg("sign"),
+             "The remainder rows (m, n_seg, 2): row r is segment seg[r]'s times sign[r].");
+    m.def("razor_reuse_plan", &reuse_plan, py::arg("cent"), py::arg("group_i"), py::arg("b_obs"),
+          py::arg("seg_h"), py::arg("a"), py::arg("real"), py::arg("image"), py::arg("remainder"),
+          py::arg("ground_z"),
+          "The reuse plan for this geometry, from the process's cache or built.");
+    m.def("razor_reuse_cache", []() {
+        const auto c = mw::razor::reuse::cache_counters();
+        py::dict d;
+        d["built"] = c.built;
+        d["found"] = c.found;
+        d["declined"] = c.declined;
+        return d;
+    }, "The process's reuse plans built and found, and how many of those built declined.");
+    m.def("razor_reuse_cache_clear", &mw::razor::reuse::clear_cache,
+          "Drop every cached reuse plan (TEST HOOK).");
+    m.def("razor_reuse_probe", &mw::razor::reuse::set_probe, py::arg("probe"),
+          "TEST HOOK (momwire#1971's adversarial gates): build later plans with a "
+          "deliberately wrong key (0 none, 1 no height, 2 no flip, 3 no type, "
+          "4 no remainder code, 5 no orientation fold: right, uncompressed).");
+    m.def("razor_reuse_class_limit", &mw::razor::reuse::set_class_limit, py::arg("direct"),
+          py::arg("remainder") = 0,
+          "TEST HOOK: later plans decline past `direct` direct classes or `remainder` "
+          "remainder classes (0: the int32 coding's own limit only).");
+    m.def("razor_reuse_plan_budget", &mw::razor::reuse::set_plan_budget, py::arg("bytes"),
+          "TEST HOOK: later plans decline past `bytes` of plan and census (<= 0: PLAN_BUDGET_BYTES).");
+    m.attr("razor_reuse_plan_budget_bytes") = static_cast<int64_t>(mw::razor::reuse::PLAN_BUDGET_BYTES);
+    m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
+    m.def("razor_reuse_small_deck_segs", &mw::razor::reuse::small_deck_segs, py::arg("finite"),
+          "Segments below which pair reuse steps aside: over a finite ground when "
+          "`finite`, else in free space and over PEC.");
+    m.def("razor_reuse_set_small_deck_segs", &mw::razor::reuse::set_small_deck_segs,
+          py::arg("free_space"), py::arg("finite_ground"),
+          "TEST HOOK: move the small-deck thresholds (negative restores the constant).");
+    m.attr("razor_reuse_verify_tol") = mw::razor::reuse::VERIFY_TOL;
+    m.attr("razor_reuse_key_bits") = mw::razor::reuse::KEY_BITS;
 
     m.attr("razor_front_proto") = true;
     m.def("near_interface_eval_cone_table", &near_interface_eval_cone_table, py::arg("k_p"), py::arg("k_m"),

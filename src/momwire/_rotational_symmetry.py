@@ -62,7 +62,7 @@ import numpy as np
 from threadpoolctl import threadpool_limits
 from ._identity_memo import frozen_tuple
 from ._vec3 import norm3
-from . import _lapack
+from . import _kcl_nullspace, _lapack
 from ._near_interface import _table_threads
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
@@ -1076,9 +1076,11 @@ def harmonics_needed(B, kcl_A, sectors):
     return tuple(range(len(sectors)))
 
 
-def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
+def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None, plans=None):
     """`{h: LU}`: the factorised block of each harmonic in `harmonics`, from
-    the sector-0 rows of the (row-compact) fill (momwire#1897).
+    the sector-0 rows of the (row-compact) fill (momwire#1897). A harmonic
+    in `plans` (`kcl_plans`, the `kcl_nullspace` feature) is factorised
+    REDUCED to its constraint rows' null space instead (momwire#1983).
 
     In the DFT over sectors the radial-radial part of Z is block-diagonal,
     Lambda_h = sum_d C_d exp(+2 pi j h d / N), C_d being sector 0's rows
@@ -1147,11 +1149,49 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None):
     if K0 is not None:
         del lams[0]
         harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of, K0=K0)
-        out[0] = _lapack.lu_factor(K0, overwrite_a=True)
+        out[0] = _factor(K0, plans, 0)
         del K0
     for h in hs:
-        out[h] = _lapack.lu_factor(lams.pop(h), overwrite_a=True)
+        out[h] = _factor(lams.pop(h), plans, h)
     return out
+
+
+def _factor(block, plans, h):
+    """Harmonic h's block factorised in place: reduced when `plans` holds
+    h, else as it stands."""
+    if plans and h in plans:
+        return _kcl_nullspace.factor_reduced(block, plans[h], overwrite=True)
+    return _lapack.lu_factor_strict(block, overwrite_a=True)
+
+
+def kcl_plans(solver, kcl_A, sectors, axial, harmonics):
+    """`kcl_nullspace` on the sector route (momwire#1983): `{h: Plan}` for
+    every harmonic in `harmonics` that carries constraint rows, or None for
+    the Schur route (the feature off, no rows, or a harmonic whose rows are
+    not of the reducible shape, which is then named on
+    `solver.kcl_nullspace_route` as the dense route names its own).
+
+    Harmonic h's rows are `_harmonic_constraints`', whose weights are not
+    +-1 (sqrt(N) and DFT phases), hence `plan_weighted`; h != 0 tests with
+    the conjugate rows, as `solve_ports`' Schur step does. All or none: one
+    unreducible harmonic sends every harmonic through Schur, so the route
+    a deck takes is one word."""
+    if not getattr(solver, "_kcl_nullspace", False) or kcl_A.shape[0] == 0:
+        return None
+    rows0, rows_h = _harmonic_constraints(kcl_A, sectors, axial)
+    plans = {}
+    for h in harmonics:
+        rows = rows0 if h == 0 else rows_h(h)
+        if rows.shape[0] == 0:
+            continue
+        p = _kcl_nullspace.plan_weighted(rows, conj_test=h != 0)
+        if isinstance(p, str):
+            return _kcl_nullspace.record(solver, f"harmonic {h}: {p}")
+        plans[h] = p
+    if not plans:
+        return None
+    _kcl_nullspace.record(solver, next(iter(plans.values())))
+    return plans
 
 
 # `_harmonic_constraints` by the digest of its inputs (momwire#1902): the
@@ -1255,10 +1295,12 @@ def _constrained(lu, rhs, rows, cols):
     return W - X @ lam
 
 
-def solve_ports(blocks, B, kcl_A, sectors, axial):
+def solve_ports(blocks, B, kcl_A, sectors, axial, plans=None):
     """`_solve_with_kcl_ports` on the sector route (momwire#1897): every port
     column of `B` under the constraints `kcl_A`, through the harmonics
-    `blocks` holds (`harmonic_blocks`, chosen by `harmonics_needed`).
+    `blocks` holds (`harmonic_blocks`, chosen by `harmonics_needed`). A
+    harmonic in `plans` was factorised reduced (`kcl_plans`), and is solved
+    reduced rather than by the Schur step.
 
     The columns are DFT'd over the sectors, each harmonic is solved under
     its own constraint rows (`_harmonic_constraints`) — the orbits of the
@@ -1278,12 +1320,17 @@ def solve_ports(blocks, B, kcl_A, sectors, axial):
     # b_hat[h] = (1/sqrt N) sum_t exp(-2 pi j h t / N) b_t
     bh = np.fft.fft(b, axis=0) / sq
     xh = np.zeros_like(bh)
-    sol0 = _constrained(
-        blocks[0], np.vstack([bh[0], B[axial]]), rows0, rows0.T.astype(np.complex128)
-    )
+    top = np.vstack([bh[0], B[axial]])
+    if plans and 0 in plans:
+        sol0 = _kcl_nullspace.solve_factored(blocks[0], top, plans[0])
+    else:
+        sol0 = _constrained(blocks[0], top, rows0, rows0.T.astype(np.complex128))
     xh[0] = sol0[:m]
     for h in blocks:
         if h == 0:
+            continue
+        if plans and h in plans:
+            xh[h] = _kcl_nullspace.solve_factored(blocks[h], bh[h], plans[h])
             continue
         rows = rows_h(h)
         xh[h] = _constrained(blocks[h], bh[h], rows, np.conj(rows).T)
@@ -1505,11 +1552,30 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     does not build.
 
     `row_of` is `harmonic_zero_block`'s: set when `Z` is row-compact.
+
+    With `kcl_nullspace` on (momwire#1983) the constraints are eliminated
+    from K_0 before its factor instead, on harmonic 0's rows (`kcl_plans`):
+    the dense route's reduction, in the harmonic basis.
     """
     n = len(sectors)
     sq = math.sqrt(n)
     K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of)
-    lu = _lapack.lu_factor(K0, overwrite_a=True)
+    plans = kcl_plans(solver, kcl_A, sectors, axial, (0,))
+    if plans is not None:
+        # `kcl_nullspace` (momwire#1983): K_0 reduced to the null space of
+        # harmonic 0's rows, which for an invariant drive are all the rows.
+        # The same two guards as `z_inv` below, for the same callers.
+        refuse_if_not_invariant(v[:, None].astype(np.complex128), sectors)
+        refuse_if_not_invariant(kcl_A.T.astype(np.complex128), sectors)
+        top = np.concatenate([sq * v[sectors[0]], v[axial]])
+        sol = _kcl_nullspace.solve_reduced(K0, top, plans[0], overwrite=True)
+        out = np.empty(v.shape[0], dtype=np.complex128)
+        per_sector = sol[:m] / sq
+        for t in range(n):
+            out[sectors[t]] = per_sector
+        out[axial] = sol[m:]
+        return out
+    lu = _lapack.lu_factor_strict(K0, overwrite_a=True)
 
     def z_inv(rhs):
         rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
@@ -1682,10 +1748,13 @@ def compute_port_solution(solver):
     )
     if D is not None:
         Z *= D[None, :]
-    blocks = harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=row_of)
+    plans = kcl_plans(solver, kcl_t, sectors, axial, harmonics)
+    blocks = harmonic_blocks(
+        solver, Z, sectors, axial, harmonics, row_of=row_of, plans=plans
+    )
     del Z
     solver._checkpoint()  # before the harmonic solves
-    X = solve_ports(blocks, Bt, kcl_t, sectors, axial)
+    X = solve_ports(blocks, Bt, kcl_t, sectors, axial, plans=plans)
     if D is not None:
         X = D[:, None] * X
     Y = _lapack.matmul(B.T, X)

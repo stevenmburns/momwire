@@ -20,6 +20,8 @@ layer is text, and these decks print the same digits on both sides.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import os
 import re
 import shutil
@@ -32,6 +34,7 @@ from _standalone_version import assert_standalone_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
+SPLIT = ROOT / "scripts" / "core_split"
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
 # Which formulation the executable is (momwire#1517 Phase A): razor-2p (the
 # default), or bspline for `momwire-nec5-bspline-standalone`, compared with
@@ -114,6 +117,60 @@ def _same(exe, ref, de, dl):
         ref.stdout,
     )
     assert _files(de) == _files(dl)
+
+
+# The platform rule the fixture-deck gates apply (standalone.yml's
+# `exe_compare.py --standalone [--rtol win32|macos]`, momwire#1558 and #1559):
+# byte for byte on Linux; on Windows (MSVC /fp:fast) and macOS a printout
+# that is not the launcher's bytes may still pass within PRINTOUT_RTOL_WIN32
+# or PRINTOUT_RTOL_MACOS by `printout_tolerance.ratio`. Both bars are read out
+# of exe_compare.py's source, not imported (importing it pins this process's
+# CPU environment and loads numpy), so this gate and that one cannot part.
+_PLATFORM_RTOL = {"win32": "PRINTOUT_RTOL_WIN32", "darwin": "PRINTOUT_RTOL_MACOS"}
+
+
+def _printout_rtol() -> float | None:
+    """This platform's bar, or None where the rule is byte for byte."""
+    name = _PLATFORM_RTOL.get(sys.platform)
+    if name is None:
+        return None
+    for node in ast.parse((SPLIT / "exe_compare.py").read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return float(ast.literal_eval(node.value))
+    raise AssertionError(f"exe_compare.py no longer defines {name}")
+
+
+def _printout_tolerance():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_printout_tolerance", SPLIT / "printout_tolerance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _same_by_platform(exe, ref, de, dl):
+    """`_same` under the fixture gates' platform rule: the exit status, the
+    standard output and the file names exactly; each file the launcher's
+    bytes on Linux, and elsewhere its bytes or within this platform's bar."""
+    rtol = _printout_rtol()
+    if rtol is None:
+        _same(exe, ref, de, dl)
+        return
+    assert (exe.returncode, exe.stdout) == (ref.returncode, ref.stdout), (
+        exe.stdout,
+        ref.stdout,
+    )
+    got, want = _files(de), _files(dl)
+    assert sorted(got) == sorted(want), (sorted(got), sorted(want))
+    pt = _printout_tolerance()
+    for name, ref_bytes in want.items():
+        if got[name] == ref_bytes:
+            continue
+        q = pt.ratio(ref_bytes, got[name])
+        assert q is not None and q <= rtol, (name, q, rtol)
 
 
 def _pe_imports(path: str) -> list[str]:
@@ -772,6 +829,100 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     assert (b"+crossing_above_rule" in line2) == bool(on), line2
 
 
+# --- momwire#1956's crossing_sheet_retune (reach 7: the nec5 executables) -------
+
+_RETUNE = "MOMWIRE_X_CROSSING_SHEET_RETUNE"
+
+
+def _retune_decks():
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_crossing_sheet_retune_1956 import DECKS as DECKS_1956
+
+    return DECKS_1956
+
+
+@pytest.mark.reach(7)
+@pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
+@pytest.mark.parametrize("on", [False, True], ids=["off", "on"])
+def test_the_sheet_retune_answers_as_the_launcher(on, deck, tmp_path):
+    """The retuned sheet weights off ("0") and on: the executable's printout
+    is the launcher's under the fixture gates' platform rule (byte for byte
+    on Linux, PRINTOUT_RTOL_WIN32 / _MACOS elsewhere: `_same_by_platform`),
+    and line 2 names the feature on both sides only when it is on (it is off
+    by default). On and off print the same digits, so this cannot see the
+    retune; the route tests below and the retune module's
+    `test_the_launchers_route_moves_its_plan_within_its_drift` do."""
+    text = _retune_decks()[deck]
+
+    def prepare(d):
+        (d / f"{deck}.nec").write_text(text, newline="")
+
+    exe, ref, de, dl = _both(
+        [f"{deck}.nec", f"{deck}.out"],
+        tmp_path,
+        prepare=prepare,
+        env={_RETUNE: "1" if on else "0"},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same_by_platform(exe, ref, de, dl)
+    line2 = (de / f"{deck}.out").read_bytes().split(b"\n")[1]
+    assert (b"+crossing_sheet_retune" in line2) == on, line2
+    ref_line2 = (dl / f"{deck}.out").read_bytes().split(b"\n")[1]
+    assert (b"+crossing_sheet_retune" in ref_line2) == on, ref_line2
+    assert b"uncertified" not in line2, line2
+
+
+def _retune_run(deck, on, tmp_path):
+    """One executable run of `deck` with the retune off or on, its
+    Sommerfeld store and its arrays its own: (sheets stored, Zin)."""
+    import numpy as np
+
+    d = tmp_path / f"{deck}-{on}"
+    d.mkdir()
+    (d / f"{deck}.nec").write_text(_retune_decks()[deck], newline="")
+    (d / "arrays").mkdir()
+    env = {k: v for k, v in os.environ.items() if k != _RETUNE}
+    env.update(
+        {
+            _RETUNE: "1" if on else "0",
+            "MOMWIRE_SOMM_CACHE": "1",
+            "MOMWIRE_SOMM_CACHE_DIR": str(d / "store"),
+            "MW_EXE_ARRAYS": str(d / "arrays"),
+        }
+    )
+    r = subprocess.run(
+        [EXE, f"{deck}.nec", f"{deck}.out"],
+        cwd=d,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    sheets = len(list((d / "store").rglob("nisheet-*.grid")))
+    (i_source,) = np.fromfile(d / "arrays" / "0_i_source.bin", dtype=np.complex128)
+    return sheets, 1.0 / complex(i_source)
+
+
+@pytest.mark.reach(7)
+@pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
+def test_the_sheet_retune_moves_the_executables_plan_within_its_drift(deck, tmp_path):
+    """The route proof the byte gate cannot give (on and off print the same
+    digits): on, the executable stores more near-interface sheets than off,
+    so the retuned weights reached its census; and its input impedance, read
+    at full precision from its arrays (MW_EXE_ARRAYS), moves by no more than
+    the declared drift. deep_hub is where the executables measured the
+    largest drift. The launcher's half of this proof (its planner's plane
+    count, on the same two decks) is the retune module's
+    `test_the_launchers_route_moves_its_plan_within_its_drift`."""
+    from momwire import _features
+
+    off_sheets, z_off = _retune_run(deck, False, tmp_path)
+    on_sheets, z_on = _retune_run(deck, True, tmp_path)
+    assert on_sheets > off_sheets, (off_sheets, on_sheets)
+    drift = abs(z_on - z_off) / abs(z_off)
+    assert drift <= _features.FEATURES["crossing_sheet_retune"].drift, drift
+
+
 CROSSING = FIXTURES / "razor_printout_crossing" / "slant_base_source.nec"
 
 
@@ -805,3 +956,186 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     )
     policy = (tmp_path / "policy.out").read_bytes()
     assert policy == (tmp_path / "one.out").read_bytes()
+
+
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: nec5-razor-2p runs it) ---
+
+# Synthetic decks past the reuse's small-deck thresholds
+# (`_razor_pair_reuse_core.h`: SMALL_DECK_SEGS_FREE 400 in free space and
+# over the PEC image, SMALL_DECK_SEGS_GROUND 100 over a finite ground), below
+# which the reuse steps aside and on would equal off by construction: two
+# parallel 201-segment dipoles (402 segments) in free space and over a
+# perfect ground, two 61-segment ones (122) over the composing Sommerfeld
+# ground.
+_REUSE_DECKS_1971 = {
+    "free": (
+        "CM momwire#1971: two parallel dipoles, free space, 402 segments\nCE\n"
+        "GW 1 201 0 -5 10 0 5 10 0.001\nGW 2 201 3 -5 10 3 5 10 0.001\nGE 0\n"
+        "EX 0 1 101 0 1 0\nFR 0 1 0 0 14.0 0\nXQ\nEN\n"
+    ),
+    "pec": (
+        "CM momwire#1971: two parallel dipoles over a perfect ground, 402 segments\n"
+        "CE\nGW 1 201 0 -5 8 0 5 8 0.001\nGW 2 201 3 -5 8 3 5 8 0.001\nGE 1\n"
+        "GN 1\nEX 0 1 101 0 1 0\nFR 0 1 0 0 14.0 0\nXQ\nEN\n"
+    ),
+    "sommerfeld": (
+        "CM momwire#1971: two parallel dipoles over Sommerfeld ground, 122 segments\n"
+        "CE\nGW 1 61 0 -2.5 6 0 2.5 6 0.001\nGW 2 61 2 -2.5 6 2 2.5 6 0.001\n"
+        "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 31 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+    ),
+}
+
+_REUSE_LINE = re.compile(
+    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)$", re.M
+)
+
+
+def _reuse_counts(stderr: bytes) -> tuple[int, int, int]:
+    """MW_EXE_TIMES's reuse line: (built, declined, found), process totals."""
+    m = _REUSE_LINE.search(stderr.decode("latin-1"))
+    assert m, stderr
+    return int(m[1]), int(m[2]), int(m[3])
+
+
+def _reuse_ran(built: int, declined: int) -> bool:
+    """The gate's proof that the reuse RAN: a plan built that did not come
+    back declined. A declined plan fills as off, so counting it would let an
+    executable whose every plan declines agree with the launcher by not
+    running (`test_razor_pair_reuse_gate_does_not_count_a_declined_plan`)."""
+    return built - declined >= 1
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+@pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
+def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
+    """Reach 7 covers the nec5 executables (levels 6 and 7). On ("1") and
+    off ("0"), the executable's printout is the launcher's byte for byte,
+    line 2 naming +razor_pair_reuse on both sides only when it is on. The
+    executable and the launcher share the C++ core, so that alone cannot
+    catch a fault in the core: the reuse is also shown to RUN (MW_EXE_TIMES's
+    reuse line: a plan built that did not decline when on, none built when
+    off) and on is held to off
+    byte for byte except line 2 (the reuse moves Zin ~1e-13 here, far under
+    a printed digit)."""
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    name = f"reuse_{ground}.nec"
+
+    def prepare(d):
+        (d / name).write_text(_REUSE_DECKS_1971[ground], newline="")
+
+    lines = {}
+    for state in ("1", "0"):
+        run = tmp_path / state
+        run.mkdir()
+        exe, ref, de, dl = _both(
+            [name, "reuse.out"],
+            run,
+            prepare=prepare,
+            env={"MOMWIRE_X_RAZOR_PAIR_REUSE": state, "MW_EXE_TIMES": "1"},
+        )
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        built, declined, found = _reuse_counts(exe.stderr)
+        if state == "1":
+            assert _reuse_ran(built, declined), (built, declined, found)
+        else:
+            assert built == 0 and found == 0, (built, declined, found)
+        lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
+        assert (b"+razor_pair_reuse" in lines[state][1]) == (state == "1"), lines[
+            state
+        ][1]
+    on, off = lines["1"], lines["0"]
+    assert on[1].rstrip() == off[1].rstrip() + b" +razor_pair_reuse", (on[1], off[1])
+    assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+# Eight wires of random place and direction over Sommerfeld ground (the
+# Python gates' `_random_wires`, 15 segments each): past the finite ground's
+# small-deck threshold (100 segments), so the executable BUILDS a plan, but
+# its pairs are nearly all distinct, so the plan comes back declined ("too
+# few shared pairs to repay the plan") and the fill runs as off.
+_DECLINING_DECK_1971 = (
+    "CM momwire#1971: random wires over Sommerfeld ground, 120 segments: the\n"
+    "CM reuse plan is built and declines\nCE\n"
+    "GW 1 15 -3.3148 -2.1055 9.2051 -5.5321 -3.8733 8.3631 0.001\n"
+    "GW 2 15 -2.7221 1.8766 6.4547 -1.3016 -0.3419 4.6850 0.001\n"
+    "GW 3 15 1.9027 3.6501 7.1368 1.4282 5.5551 6.7394 0.001\n"
+    "GW 4 15 3.7877 -1.6128 7.2559 3.4663 -0.6626 10.6577 0.001\n"
+    "GW 5 15 -3.7572 1.6557 7.4970 -5.4830 1.1258 9.1001 0.001\n"
+    "GW 6 15 1.0407 -1.6147 8.9670 2.5946 -3.0747 6.4283 0.001\n"
+    "GW 7 15 1.4624 2.5606 7.7143 1.5311 2.4219 11.4106 0.001\n"
+    "GW 8 15 -0.8486 -0.1625 6.5853 -2.7531 1.0388 7.7836 0.001\n"
+    "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 8 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+)
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+def test_razor_pair_reuse_gate_does_not_count_a_declined_plan(tmp_path, monkeypatch):
+    """The adversarial case for `test_razor_pair_reuse_runs_as_the_launcher`:
+    with the reuse on, a deck whose plan is built and declines prints the
+    launcher's bytes (it fills as off on both sides) and builds a plan, so a
+    gate that counted plans built would pass it without the reuse having
+    run. The reuse line counts that plan as declined, and the gate's proof
+    (`_reuse_ran`) is false on it."""
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    name = "reuse_declines.nec"
+
+    def prepare(d):
+        (d / name).write_text(_DECLINING_DECK_1971, newline="")
+
+    exe, ref, de, dl = _both(
+        [name, "reuse.out"],
+        tmp_path,
+        prepare=prepare,
+        env={"MOMWIRE_X_RAZOR_PAIR_REUSE": "1", "MW_EXE_TIMES": "1"},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    built, declined, found = _reuse_counts(exe.stderr)
+    assert built >= 1 and declined == built, (built, declined, found)
+    assert not _reuse_ran(built, declined)
+
+
+@pytest.mark.parametrize("deck", [DIPOLE], ids=lambda p: p.stem)
+def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch):
+    """Unset or off, either executable's printout is the launcher's, byte for
+    byte, with no feature on line 2."""
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+
+    def prepare(d):
+        shutil.copy(deck, d / deck.name)
+
+    for i, env in enumerate((None, {"MOMWIRE_X_RAZOR_PAIR_REUSE": "0"})):
+        run = tmp_path / str(i)
+        run.mkdir()
+        exe, ref, de, dl = _both(
+            [deck.name, "reuse.out"], run, prepare=prepare, env=env
+        )
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
+        assert b"+razor_pair_reuse" not in line2, line2
+
+
+@pytest.mark.skipif(BASIS != "bspline", reason="nec5-bspline's refusal")
+def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
+    """nec5-bspline shares nec5-razor-2p's support levels (6 and 7) and its
+    feature table, so the reach alone would let it accept
+    MOMWIRE_X_RAZOR_PAIR_REUSE, name it on line 2 and fill as with it off.
+    The feature is razor-2p's fill, so this executable refuses it, in the
+    registry's sentence, before reading the deck, and writes nothing."""
+    from momwire import _features
+
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    shutil.copy(DIPOLE, tmp_path / DIPOLE.name)
+    r = subprocess.run(
+        [EXE, DIPOLE.name, "reuse.out"],
+        cwd=tmp_path,
+        env=dict(os.environ, MOMWIRE_X_RAZOR_PAIR_REUSE="1"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
+    assert not (tmp_path / "reuse.out").exists()

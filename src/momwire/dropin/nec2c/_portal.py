@@ -4119,7 +4119,14 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
     except PortalError as exc:
         _append_error(out, exc)
         return out, err
-    except (ValueError, NotImplementedError, np.linalg.LinAlgError) as exc:
+    except (
+        ValueError,
+        NotImplementedError,
+        np.linalg.LinAlgError,
+        # A native experimental feature on outside its reach: refused in the
+        # registry's sentence, as the NEC-5 shell refuses it (momwire#1971).
+        _features.FeatureNotCertified,
+    ) as exc:
         _append_error(out, exc)
         return out, err
 
@@ -4172,6 +4179,9 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
             # sentinel.
             NotImplementedError,
             np.linalg.LinAlgError,
+            # and a native experimental feature outside its reach, wherever
+            # the solve asks for it (the deck's solver is built per run)
+            _features.FeatureNotCertified,
         ) as exc:
             _append_error(out, exc)
         out += ["", "", ""]

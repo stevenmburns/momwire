@@ -50,8 +50,8 @@ DECKS = {
 }
 IDS = [stem for _d, stem in DECKS]
 # Numbers are not compared: momwire's fields differ from x13's in their last
-# digits (another solver), and its average gain over a partial phi range is
-# not x13's yet (a separate gap; the control's trailer is compared by shape).
+# digits (another solver); the average's quadrature is test_rp_average_
+# quadrature's, and the control's trailer is compared here by shape.
 _NUMBER = re.compile(r"-?\d+\.\d+(?:E[-+]\d+)?|NaN")
 
 
@@ -114,10 +114,13 @@ def test_momwire_prints_the_engines_pattern_block(directory, stem, basis):
     assert any(TRAILER in line for line in mine) is DECKS[(directory, stem)][0]
 
 
-def test_the_nec42_slot_keeps_its_trailer():
-    """Not measured on NEC-4.2, so the NEC-4.2 slot prints what it printed."""
-    # N = 0: the NEC-4.2 printout has no NORMALIZED GAIN table
+def test_the_nec42_slot_drops_the_trailer_too():
+    """Measured on licensed NEC-4.2 since (census 11-17,
+    tests/fixtures/nec42_rp_normalized_gain/'s cut and phicut decks, N = 0
+    and N = 5): a single cut prints no trailer there either."""
+    # N = 0, which the slot printed a trailer for before
     text = _deck(SINGLE_CUT, "cut_phi_dphi10").replace(" 1501 ", " 1001 ", 1)
     assert " 1001 " in text
     out = _nec4_slot.render(text, basis="sinusoidal")
-    assert TRAILER in out, out[-2000:]
+    assert "RADIATION PATTERNS" in out and "NEC ERROR" not in out, out[-2000:]
+    assert TRAILER not in out, out[-2000:]

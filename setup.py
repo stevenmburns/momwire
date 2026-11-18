@@ -386,6 +386,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
+    "src/momwire/_razor_pair_reuse_core.h",
     "src/momwire/_razor_front_core.h",
     "src/momwire/_razor_buried_core.h",
     "src/momwire/_somm_below_proj_core.h",
@@ -440,10 +441,6 @@ _ACCEL_HEADERS = [
     "src/momwire/_sinusoidal_transmitted_core.h",
     # numpy's complex sin / cos / log as the C library's (momwire#1607 B6a).
     "src/momwire/_libm_complex_inline.h",
-    "src/momwire/_sinusoidal_galerkin_fill_core.h",
-    "src/momwire/_sinusoidal_galerkin_crossing_core.h",
-    "src/momwire/_sinusoidal_galerkin_direct_core.h",
-    "src/momwire/_sinusoidal_galerkin_run_core.h",
     "src/momwire/_bspline_nec4_run_core.h",
     "src/momwire/_sinusoidal_crossing_core.h",
     "src/momwire/_nec4_run_core.h",
@@ -456,7 +453,6 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_transmitted_core.h",
     "src/momwire/_bspline_crossing_core.h",
     "src/momwire/_nec5_bspline_printout_core.h",
-    "src/momwire/_nec5_sinusoidal_galerkin_core.h",
     "src/momwire/_nec5_printout_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
@@ -606,6 +602,11 @@ _ACCEL_SOURCES = [
     # TUs: they only CALL the razor kernels, across a TU boundary, so no
     # kernel's codegen can move with them (momwire#1187).
     "src/momwire/_razor_solve_core.cpp",
+    # momwire#1971: fill-pair reuse (the plan, the class values, the
+    # windows' gathers), Python-free; the solve core calls it and
+    # `_accel_razor_solve.cpp` binds it for the Python route. Its own TU: it
+    # only CALLS the kernels, across a TU boundary.
+    "src/momwire/_razor_pair_reuse_core.cpp",
     # The razor-2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.
@@ -667,20 +668,14 @@ _ACCEL_SOURCES = [
     # momwire#1718 S12: its transmitted pair classes on a mixed deck, its own
     # TU so the fill core's kernels keep their codegen.
     "src/momwire/_sinusoidal_transmitted_core.cpp",
-    # The Sinusoidal-Galerkin mixed-potential fill and port solve over the
-    # same front (momwire#1718 S2), on the B-spline core's sinusoidal kernels.
-    "src/momwire/_sinusoidal_galerkin_fill_core.cpp",
-    "src/momwire/_sinusoidal_galerkin_crossing_core.cpp",
-    # Its direct-field fill (momwire#1718 S7): a wire end on the ground
-    # plane, over the S1 far fill core.
-    "src/momwire/_sinusoidal_galerkin_direct_core.cpp",
+    # The Sinusoidal-Galerkin C++ fill, run half and NEC-5 seam (momwire#1718
+    # S2-S11) had no Python or exe caller and were removed; last present at
+    # 4ec7912d (git show 4ec7912d:<path> to recover).
     "src/momwire/_sinusoidal_crossing_core.cpp",
     # The NEC-4.2 run half and the sinusoidal basis' answers to it
     # (momwire#1607 B4a).
     "src/momwire/_nec4_run_core.cpp",
     "src/momwire/_sinusoidal_run_core.cpp",
-    # The Sinusoidal-Galerkin basis' answers to it (momwire#1718 S3).
-    "src/momwire/_sinusoidal_galerkin_run_core.cpp",
     # The B-spline basis' answers to it (momwire#1607 Phase C1): bs2's own
     # front, fill and readouts on the slot's build.
     "src/momwire/_bspline_nec4_run_core.cpp",
@@ -703,9 +698,6 @@ _ACCEL_SOURCES = [
     "src/momwire/_bspline_transmitted_core.cpp",
     "src/momwire/_bspline_crossing_core.cpp",
     "src/momwire/_nec5_bspline_printout_core.cpp",
-    # The Sinusoidal-Galerkin basis on the NEC-5 seam and run half
-    # (momwire#1718 S8). Nothing binds it; built so every toolchain compiles it.
-    "src/momwire/_nec5_sinusoidal_galerkin_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, Python-free, for any basis (`_nec5_printout_core.cpp`),
     # and razor-2p's answers to what the solver is asked

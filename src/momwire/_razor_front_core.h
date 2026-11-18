@@ -151,6 +151,8 @@ struct FrontInputs {
     int64_t n_qp_sommerfeld = 3;
     // The fill's working-array budget, in complex elements (`_CHUNK_ELEMS`).
     int64_t chunk_elems = 2000000;
+    // Fill-pair reuse (momwire#1971): `SolveInputs::pair_reuse`'s 0 / 1 / 2.
+    int pair_reuse = 0;
 };
 
 struct Junction {
@@ -292,6 +294,8 @@ class Front {
     bool exact = false;
     ExactPlan exact_plan;
     int64_t chunk_elems = 0;
+    // Fill-pair reuse (momwire#1971), as the inputs asked.
+    int pair_reuse = 0;
 
     // The fill's arguments, as views into this object (valid while it is).
     SolveInputs solve_inputs(uintptr_t cancel_flag) const;

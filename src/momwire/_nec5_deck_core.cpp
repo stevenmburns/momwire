@@ -486,6 +486,54 @@ bool parse_card(const std::string &line, Card &card) {
     return true;
 }
 
+// `deck._nec5.long_exponent_tokens` / `long_exponent_note` (momwire#1964):
+// the numeric field tokens with an exponent longer than 20 characters, which
+// the licensed NEC-5 engine misreads, and the advisory that names them.
+const std::size_t kLongExponentLimit = 20;
+const std::size_t kLongExponentShown = 3;
+
+std::vector<std::string> long_exponent_tokens(const std::string &text) {
+    std::vector<std::string> found;
+    for (const std::string &line : py_splitlines(text)) {
+        std::vector<std::string> tokens = py_split(replace_char(py_strip(line), ',', ' '));
+        if (tokens.empty()) continue;
+        const std::string h = tokens[0];
+        if (h.size() > 2 && py_isalpha(static_cast<uc>(h[0])) && py_isalpha(static_cast<uc>(h[1])) &&
+            fused_start(h[2])) {
+            tokens[0] = h.substr(0, 2);
+            tokens.insert(tokens.begin() + 1, h.substr(2));
+        }
+        const std::string m = py_upper(tokens[0]);
+        if (m == "CM" || m == "CE" || m == "SY") continue;
+        for (std::size_t k = 1; k < tokens.size(); ++k) {
+            const std::string &t = tokens[k];
+            if (t.size() <= kLongExponentLimit || t.find_first_of("eEdD") == std::string::npos) continue;
+            double v;
+            if (!py_float(replace_char(replace_char(t, 'D', 'E'), 'd', 'e'), v)) continue;
+            found.push_back(t);
+        }
+    }
+    return found;
+}
+
+// UTF-8; empty when there is nothing to say (Python's None)
+std::string long_exponent_note(const std::vector<std::string> &tokens) {
+    if (tokens.empty()) return std::string();
+    std::string shown;
+    for (std::size_t k = 0; k < tokens.size() && k < kLongExponentShown; ++k) {
+        if (k) shown += ", ";
+        shown += utf8(tokens[k]);
+    }
+    if (tokens.size() > kLongExponentShown)
+        shown += " and " + std::to_string(tokens.size() - kLongExponentShown) + " more";
+    const bool one = tokens.size() == 1;
+    return std::string("the deck writes ") + (one ? "a number" : std::to_string(tokens.size()) + " numbers") +
+           " with an exponent in more than " + std::to_string(kLongExponentLimit) + " characters (" + shown +
+           "); momwire reads " + (one ? "it" : "each") +
+           " as written, but the licensed NEC-5 engine misreads such a number, sometimes silently "
+           "(momwire#1964)";
+}
+
 // ============================================================================
 // The parser (`deck/_nec5.py`'s `_Nec5Parser`)
 // ============================================================================
@@ -2910,6 +2958,10 @@ std::string text_probe(const std::string &op, const std::string &arg) {
         } else {
             o.str("probe", py_g(v, op == "+g"));
         }
+    } else if (op == "long_exponent_note") {
+        const std::string note = long_exponent_note(long_exponent_tokens(arg));
+        if (note.empty()) o.none("probe");
+        else o.str("probe", note);
     } else if (op == "card") {
         Card c;
         try {

@@ -81,8 +81,8 @@ int main(int argc, char **argv) {
         std::ifstream f(argv[i], std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         const mw::nec5::SeamResult r = mw::nec5::razor_seam(text);
-        std::printf("== %s\nroute %s\nkind %s\nmessage %s\n", argv[i], route[r.route],
-                    r.error_kind.c_str(), hex(r.message).c_str());
+        std::string route_name = route[r.route], kind = r.error_kind, message = r.message;
+        std::ostringstream solved;
         for (size_t k = 0; k < r.prepared.size(); k++) {
             // A buried deck the fill cannot finish here (no below table)
             // is kept unsolved, its route "declined": never solved.
@@ -90,15 +90,33 @@ int main(int argc, char **argv) {
             const mw::razor::Front &front = *mw::nec5::razor_part(r.prepared[k]).front;
             const int64_t n = front.n_basis, m = front.n_ports;
             std::vector<mw::cd> X(static_cast<size_t>(n * m));
-            const int info = mw::razor::solve_ports(front, ctx, lp, X.data(), 0);
-            std::printf("prepared %zu %lld %lld %d\n", k, static_cast<long long>(n),
-                        static_cast<long long>(m), info);
+            int info = 0;
+            try {
+                info = mw::razor::solve_ports(front, ctx, lp, X.data(), 0);
+            } catch (const mw::razor::FrontError &e) {
+                // what the fill raises where Python's raises it: `_prepare`
+                // refuses a NotImplementedError or a grazing-floor ValueError
+                // (that preparation never recorded), anything else escapes
+                const bool ni = e.kind == mw::razor::FrontErrorKind::not_implemented;
+                if (ni || mw::nec5::names_a_grazing_floor(e.what())) {
+                    route_name = "refused";
+                    kind.clear();
+                } else {
+                    route_name = "raised";
+                    kind = ni ? "NotImplementedError" : "ValueError";
+                }
+                message = e.what();
+                break;
+            }
+            solved << "prepared " << k << " " << n << " " << m << " " << info << "\n";
             std::ostringstream name;
             name << out << "/" << (i - 3) << "_" << k << "_X.bin";
             std::FILE *w = std::fopen(name.str().c_str(), "wb");
             std::fwrite(X.data(), sizeof(mw::cd), X.size(), w);
             std::fclose(w);
         }
+        std::printf("== %s\nroute %s\nkind %s\nmessage %s\n%s", argv[i], route_name.c_str(), kind.c_str(),
+                    hex(message).c_str(), solved.str().c_str());
     }
     return 0;
 }

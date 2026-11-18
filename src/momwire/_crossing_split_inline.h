@@ -1,8 +1,7 @@
 // The crossing fill's split and self-completion pieces (`_crossing_fill.py`),
 // shared by bs2's crossing serve (`_bspline_crossing_core.cpp`, momwire#1517
-// step 4b-2, whence they moved) and the Sinusoidal-Galerkin one
-// (`_sinusoidal_galerkin_crossing_core.cpp`, momwire#1718 S11b): the
-// admissibility partition, the ACA, the row weights, and the self
+// step 4b-2, whence they moved) and, until its removal after 4ec7912d, the
+// Sinusoidal-Galerkin one (momwire#1718 S11b): the admissibility partition, the ACA, the row weights, and the self
 // completions. `W` is the sampled basis' value type: a B-spline's real
 // samples (`double`), or the sinusoidal sampler's complex ones, whose
 // products are numpy's and sparsetools' complex ones.

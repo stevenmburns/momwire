@@ -363,6 +363,7 @@ import scipy.spatial.distance
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
 from . import _medium_spec, _schedule, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
 from . import _wire_loading, _wire_spec
+from . import _buried_quadrature
 from . import _lapack
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups_coaxial
@@ -926,16 +927,14 @@ def _solve_in_place(G, rhs):
     ill-conditioning `LinAlgWarning` it drives are dropped, as the
     point-matched solver's in-place solve already does. An EXACTLY singular
     G still raises `LinAlgError` rather than returning inf/NaN, which
-    `lu_factor` alone would (it only warns).
+    `lu_factor` alone would (it only warns): `_lapack.lu_factor_strict`'s
+    policy, shared by every dense route (momwire#1981).
 
     Callers must not read G afterwards; neither SG solve does, and this
     family stashes no matrix or factors on the solver. The factor and solve
     go through `momwire._lapack` (scipy's unless a host published its own).
     """
-    lu_piv = _lapack.lu_factor(G, overwrite_a=True)
-    if not np.all(np.diagonal(lu_piv[0])):
-        raise np.linalg.LinAlgError("singular matrix")
-    return _lapack.lu_solve(lu_piv, rhs)
+    return _lapack.factor_and_solve(G, rhs, overwrite_a=True)
 
 
 def _solve_constrained(G, rhs, C):
@@ -4848,6 +4847,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
         from .bspline import DEFAULT_N_QP_PAIR, DEFAULT_PAIR_ORDER_LADDER
 
+        # Free space and above ground take bspline's free-space order and
+        # ladder. A wholly-buried deck (k = k_m) takes SG's declared
+        # wholly-buried entry, the same values, not bspline's buried 128;
+        # the near pairs are `near_pair_moments`'s either way
+        # (`_buried_quadrature.SINUSOIDAL_GALERKIN` says what that means).
+        if self._active_medium is None:
+            n_qp, ladder = DEFAULT_N_QP_PAIR, DEFAULT_PAIR_ORDER_LADDER
+        else:
+            bq = _buried_quadrature.sinusoidal_galerkin()
+            n_qp, ladder = bq.wholly_buried_order, bq.wholly_buried_ladder
         fill = _sinusoidal_mp.WindowFill(
             G,
             starts,
@@ -4856,8 +4865,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             dcoef,
             k,
             eta,
-            n_qp=DEFAULT_N_QP_PAIR,
-            ladder=DEFAULT_PAIR_ORDER_LADDER,
+            n_qp=n_qp,
+            ladder=ladder,
             checkpoint=self._checkpoint,
         )
         # The extended kernel's labels (momwire#1362): the real block scores
@@ -4980,11 +4989,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             DEFAULT_PAIR_ORDER_LADDER,
         )
 
-        # bspline's buried base order and ladder until momwire#1752 S2 gave
-        # bs2 its near-contact rung; this fill keeps them (its C++ twin's
-        # `BURIED_N_QP_PAIR` and ladder)
-        BURIED_N_QP_PAIR = 32
-        BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
+        # The below class's order and ladder: SG's declared entry, bspline's
+        # buried values from before momwire#1752 S2 gave bs2 its near-contact
+        # rung. The base order serves no pair here: every pair under the
+        # ladder's first rung is overwritten by `near_pair_moments`
+        # (`_buried_quadrature.SINUSOIDAL_GALERKIN`).
+        bq = _buried_quadrature.sinusoidal_galerkin()
 
         N = int(geom["n_segs"])
         n_basis = N + self._n_extra_cols()
@@ -5029,10 +5039,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 dcoef,
                 k_cls,
                 eta_cls,
-                n_qp=DEFAULT_N_QP_PAIR if med is None else BURIED_N_QP_PAIR,
-                ladder=DEFAULT_PAIR_ORDER_LADDER
-                if med is None
-                else BURIED_PAIR_ORDER_LADDER,
+                n_qp=DEFAULT_N_QP_PAIR if med is None else bq.base_order,
+                ladder=DEFAULT_PAIR_ORDER_LADDER if med is None else bq.ladder,
                 checkpoint=self._checkpoint,
             )
             # momwire#1626: the extended kernel, when asked, on the above

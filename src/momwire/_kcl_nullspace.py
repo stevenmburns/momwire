@@ -31,16 +31,39 @@ scatter-add and a gather.
 Any A not of that shape (an entry other than +-1, a column in two rows, an
 empty row) is not reduced: `plan` returns the reason, the caller takes the
 Schur route, and `COUNTS` records it.
+
+The sector route (`rotational_symmetry=True`, momwire#1983) solves each DFT
+harmonic under its own rows, which are the same disjoint pattern with
+weights: sqrt(N) on harmonic 0's sector unknowns, and exp(2 pi j h u / N)
+phases on harmonic h's. `plan_weighted` reduces those: each row eliminates
+its largest entry, x_e = sum_k (-c_k / c_e) x_k, so |a| <= 1. Harmonic h's
+multiplier columns are the CONJUGATE rows, so its test space is conj(Q) and
+the reduced system is Q^H Z Q (`Plan.conj_test`); on real rows the two are
+the same. `solve_reduced` is the one reduced solve both routes call.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
-__all__ = ["COUNTS", "Plan", "expand", "plan", "reduce_matrix", "reduce_rhs"]
+from . import _lapack
+
+__all__ = [
+    "COUNTS",
+    "Plan",
+    "expand",
+    "factor_reduced",
+    "plan",
+    "plan_weighted",
+    "record",
+    "reduce_matrix",
+    "reduce_rhs",
+    "solve_factored",
+    "solve_reduced",
+]
 
 #: Per process: how often each route was taken. ``"reduced"`` counts reduced
 #: solves; ``"schur: <reason>"`` the solves that fell back, by reason.
@@ -57,7 +80,8 @@ class Plan:
 
     `keep` are the unknowns that survive (sorted), `elim` the eliminated end
     of each row (one per row). `k`, `e`, `a` list Q's off-identity entries:
-    x[e[i]] gains a[i] * x[k[i]].
+    x[e[i]] gains a[i] * x[k[i]]. `conj_test` tests with conj(Q), for rows
+    whose multiplier columns are their conjugates (`plan_weighted`).
     """
 
     n: int
@@ -66,10 +90,16 @@ class Plan:
     k: np.ndarray
     e: np.ndarray
     a: np.ndarray
+    conj_test: bool = False
 
     @property
     def n_free(self) -> int:
         return int(self.keep.size)
+
+    @property
+    def row_a(self) -> np.ndarray:
+        """The test side's weights: `a`, or conj(a) under `conj_test`."""
+        return np.conj(self.a) if self.conj_test else self.a
 
 
 def plan(kcl_A):
@@ -114,6 +144,63 @@ def plan(kcl_A):
     )
 
 
+#: `plan_weighted`'s floor: an entry below this fraction of its row's
+#: largest is refused, not taken. A harmonic row whose two contributions to
+#: one unknown cancel comes out at roundoff rather than an exact zero, and
+#: dividing by it would be a ruinous pivot; a genuine weight is O(1).
+WEIGHT_FLOOR = 1e-8
+
+
+def plan_weighted(rows, *, conj_test=False):
+    """`Plan` for constraint rows of `plan`'s disjoint pattern with any
+    nonzero weights, real or complex (the sector route's harmonic rows,
+    momwire#1983), or a short reason string. Each row eliminates its largest
+    entry (the lowest index among equals), so every |a| <= 1."""
+    A = np.asarray(rows)
+    if A.ndim != 2 or A.shape[0] == 0:
+        return "no constraint rows"
+    rr, cols = np.nonzero(A)
+    vals = A[rr, cols]
+    if np.iscomplexobj(vals) and not np.any(vals.imag):
+        vals = vals.real
+    if np.unique(cols).size != cols.size:
+        return "a column in two constraint rows"
+    n_c, n = A.shape
+    counts = np.bincount(rr, minlength=n_c)
+    if np.any(counts == 0):
+        return "an empty constraint row"
+    mag = np.abs(vals)
+    big = np.zeros(n_c)
+    np.maximum.at(big, rr, mag)
+    if np.any(mag < WEIGHT_FLOOR * big[rr]):
+        return "a near-zero constraint entry"
+    # Row-major, so a stable sort on -|c| keeps each row's columns ascending
+    # among equals: the first of each row is its largest, lowest index.
+    order = np.lexsort((-mag, rr))
+    rr, cols, vals = rr[order], cols[order], vals[order]
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    first = np.zeros(cols.size, dtype=bool)
+    first[starts] = True
+    elim = cols[first]
+    c_e = vals[first][rr[~first]]
+    k = cols[~first]
+    e = elim[rr[~first]]
+    a = -vals[~first] / c_e
+    if not np.iscomplexobj(a):
+        a = a.astype(np.float64)
+    mask = np.ones(n, dtype=bool)
+    mask[elim] = False
+    return Plan(
+        n=n,
+        keep=np.flatnonzero(mask),
+        elim=elim,
+        k=k.astype(np.intp),
+        e=e.astype(np.intp),
+        a=a,
+        conj_test=bool(conj_test) and np.iscomplexobj(a),
+    )
+
+
 def _reduce_fortran(Z, p):
     """Qᵀ Z Q of an F-contiguous square `Z`, computed in Z's buffer; returns
     the (n_free, n_free) F-contiguous view of the buffer that holds it."""
@@ -131,12 +218,13 @@ def _reduce_fortran(Z, p):
     keep = p.keep
     m = keep.size
     k_at = np.searchsorted(keep, k)
+    ra = p.row_a
     buf = Z.reshape(-1, order="F")
     for j in range(m):
         c = int(keep[j])
         col = buf[c * n : (c + 1) * n]
         out = col[keep]
-        out[k_at] += a * col[e]
+        out[k_at] += ra * col[e]
         buf[j * m : (j + 1) * m] = out
     return buf[: m * m].reshape((m, m), order="F")
 
@@ -149,17 +237,22 @@ def reduce_matrix(Z, p, *, overwrite=False):
         Z = np.array(Z, dtype=np.complex128, order="F", copy=True)
     if Z.flags.f_contiguous:
         return _reduce_fortran(Z, p)
-    # C order: Zᵀ is F-contiguous and Qᵀ Zᵀ Q = (Qᵀ Z Q)ᵀ.
+    # C order: Zᵀ is F-contiguous and Qᵀ Zᵀ Q = (Qᵀ Z Q)ᵀ. Under
+    # `conj_test`, (Q^H Z Q)ᵀ = Qᵀ Zᵀ conj(Q): the two sides' weights swap.
+    if p.conj_test:
+        p = replace(p, a=np.conj(p.a))
     return _reduce_fortran(Z.T, p).T
 
 
 def reduce_rhs(V, p):
-    """Qᵀ V for V of shape (n,) or (n, r): a new array of n_free rows."""
+    """Qᵀ V (Q^H V under `conj_test`) for V of shape (n,) or (n, r): a new
+    array of n_free rows."""
     W = np.array(V, dtype=np.complex128, copy=True)
+    ra = p.row_a
     if W.ndim == 1:
-        W[p.k] += p.a * W[p.e]
+        W[p.k] += ra * W[p.e]
     else:
-        W[p.k] += p.a[:, None] * W[p.e]
+        W[p.k] += ra[:, None] * W[p.e]
     return np.ascontiguousarray(W[p.keep])
 
 
@@ -170,3 +263,45 @@ def expand(y, p):
     contrib = x[p.k] * (p.a if y.ndim == 1 else p.a[:, None])
     np.add.at(x, p.e, contrib)
     return x
+
+
+def record(owner, planned):
+    """The route `planned` (a `Plan`, or a reason string) takes, recorded on
+    `owner.kcl_nullspace_route` and in `COUNTS`: ``"reduced"``, or
+    ``"schur: <reason>"``. Returns the `Plan`, or None for the Schur route."""
+    if isinstance(planned, str):
+        route = f"schur: {planned}"
+        planned = None
+    else:
+        route = "reduced"
+    owner.kcl_nullspace_route = route
+    COUNTS[route] += 1
+    return planned
+
+
+def solve_reduced(Z, V, p, *, overwrite=False):
+    """The reduced solve, x = Q y with (Qᵀ Z Q) y = Qᵀ V (Q^H under
+    `conj_test`): the one step the dense routes (`BSplineSolver.
+    _solve_reduced`) and the sector route's harmonics share. `V` is (n,) or
+    (n, r); `overwrite` lets Z's own buffer hold the reduction and its LU.
+    An exactly singular reduced matrix raises as every dense route does
+    (`_lapack.lu_factor_strict`)."""
+    Zr = reduce_matrix(Z, p, overwrite=overwrite)
+    Vr = np.asfortranarray(reduce_rhs(V, p))
+    y = _lapack.factor_and_solve(Zr, Vr, overwrite_a=True, overwrite_b=True)
+    return expand(y, p)
+
+
+def factor_reduced(Z, p, *, overwrite=False):
+    """`solve_reduced`'s factor half: the LU of the reduced matrix, for a
+    caller that solves it against several right-hand sides later
+    (`solve_factored`)."""
+    return _lapack.lu_factor_strict(
+        reduce_matrix(Z, p, overwrite=overwrite), overwrite_a=True
+    )
+
+
+def solve_factored(lu_piv, V, p):
+    """`solve_reduced`'s solve half, on `factor_reduced`'s factors."""
+    Vr = np.asfortranarray(reduce_rhs(V, p))
+    return expand(_lapack.lu_solve(lu_piv, Vr, overwrite_b=True), p)

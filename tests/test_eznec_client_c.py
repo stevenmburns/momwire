@@ -28,6 +28,7 @@ branch from rotting into a stub between canary runs.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -167,6 +168,24 @@ def _room() -> Path:
     return Path(tempfile.mkdtemp(prefix="mw-cc-room-"))
 
 
+def _is_identity_var(name: str) -> bool:
+    """A variable the server key reads from the environment (momwire#1979):
+    a junction rule, a feature (or an alias of one), a thread count."""
+    return (
+        name == mech.JUNCTION_RULE_ENV
+        or name.startswith(mech.FEATURE_ENV_PREFIX)
+        or name in mech.FEATURE_ALIASES
+        or name in mech.THREAD_ENVS
+    )
+
+
+def _python_env_elements() -> list[str]:
+    """What the Python client appends to its key for `os.environ`."""
+    return (
+        mech.junction_rule_identity() + mech.feature_identity() + mech.thread_identity()
+    )
+
+
 def _run(
     bundle: Path,
     name: str,
@@ -176,11 +195,17 @@ def _run(
     *,
     stdin: bytes | None = None,
     cwd: Path | None = None,
+    identity: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The launcher as a host runs it. ``stdin`` is what arrives there --
     nothing (``/dev/null``) unless a test is speaking 4nec2's form, so a
-    test runner's own stdin never reaches the launcher (momwire#1488)."""
+    test runner's own stdin never reaches the launcher (momwire#1488).
+    ``identity``, when given, replaces every server-identity variable of
+    this environment (`_is_identity_var`) with exactly these."""
     env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
+    if identity is not None:
+        env = {k: v for k, v in env.items() if not _is_identity_var(k)}
+        env.update(identity)
     if transport is None:
         env.pop(mech.TRANSPORT_ENV, None)
     else:
@@ -534,6 +559,9 @@ def test_the_key_is_the_d2_digest_and_not_a_private_hash(
             repr(900.0),
             mech.WIRE,
             basis_element,
+            # momwire#1979: the environment this run inherits (an xdist
+            # worker pins the thread counts), appended as Python appends it.
+            *_python_env_elements(),
         ]
     )
     # The suffix the client's spawn pin chooses on this platform (unix on
@@ -649,6 +677,7 @@ def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
             mech.WIRE,
             "dialect=nec4",
             "basis=sinusoidal",
+            *_python_env_elements(),
         ]
     )
     suffix = mech.address_suffix(mech.TCP if os.name == "nt" else mech.UNIX)
@@ -1051,6 +1080,222 @@ def test_the_streaming_call_without_an_engine_says_so_and_fails(client_exe, tmp_
         assert proc.returncode != 0
         assert "MOMWIRE ENGINE UNAVAILABLE" in proc.stdout
         assert not (tmp_path / "-").exists()
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# the environment a server inherits (momwire#1979)
+# --------------------------------------------------------------------------
+
+
+def _c_string(name: str) -> str:
+    match = re.search(rf'#define {name} "([^"]*)"', SOURCE.read_text())
+    assert match is not None, name
+    return match[1]
+
+
+def _c_list(name: str) -> list[str]:
+    match = re.search(
+        rf"static const char \*const {name}\[\] = \{{(.*?)\n\}};",
+        SOURCE.read_text(),
+        re.S,
+    )
+    assert match is not None, name
+    return re.findall(r'"([^"]*)"', match[1])
+
+
+def test_the_c_identity_tables_are_the_python_ones():
+    """The C client cannot import `momwire_serve_client`, so it carries
+    copies of the tables the identity is built from; this holds each copy
+    equal to its original, which tests/test_features_registry.py in turn
+    holds equal to the registry. A feature promoted to default-on, a new
+    alias or a new thread variable then fails HERE, naming the table, rather
+    than silently letting the Windows drop-in share a server across it."""
+    assert _c_string("JUNCTION_RULE_ENV") == mech.JUNCTION_RULE_ENV
+    assert _c_string("FEATURE_ENV_PREFIX") == mech.FEATURE_ENV_PREFIX
+    table = re.search(
+        r"FEATURE_ALIASES\[\]\[2\] = \{(.*?)\n\};", SOURCE.read_text(), re.S
+    )
+    assert table is not None
+    pairs = re.findall(r'\{"([^"]*)", "([^"]*)"\}', table[1])
+    assert dict(pairs) == mech.FEATURE_ALIASES
+    assert len(pairs) == len(mech.FEATURE_ALIASES)
+    default_on = _c_list("FEATURE_DEFAULT_ON")
+    assert set(default_on) == mech.FEATURE_DEFAULT_ON
+    assert len(default_on) == len(mech.FEATURE_DEFAULT_ON)
+    on = _c_list("FEATURE_ON")
+    assert set(on) == mech._FEATURE_ON and len(on) == len(mech._FEATURE_ON)
+    # The C compare lowercases the value only, so the table must be lower.
+    assert all(v == v.lower() for v in on)
+    # Order is part of the key: threads are appended in THREAD_ENVS order.
+    assert tuple(_c_list("THREAD_ENVS")) == mech.THREAD_ENVS
+
+
+def _identity_cases() -> list:
+    feature = "MOMWIRE_X_CROSSING_TABLE"
+    cases = [
+        ("nothing", {}),
+        ("junction", {mech.JUNCTION_RULE_ENV: "kcl"}),
+        # Python hashes the junction value unstripped; so must C.
+        ("junction-spaced", {mech.JUNCTION_RULE_ENV: " kcl "}),
+        ("junction-empty", {mech.JUNCTION_RULE_ENV: ""}),
+        ("feature-1", {feature: "1"}),
+        ("feature-odd-case", {feature: " On "}),
+        ("feature-TRUE", {feature: "TRUE"}),
+        ("feature-yes-tab", {feature: "yes\t"}),
+        ("feature-unit-sep", {feature: "\x1f1\x1c"}),
+        ("feature-0", {feature: "0"}),
+        ("feature-empty", {feature: ""}),
+        ("feature-maybe", {feature: "maybe"}),
+        ("feature-name-case", {"MOMWIRE_X_Crossing_Table": "1"}),
+        ("feature-unregistered", {"MOMWIRE_X_NOT_YET_REGISTERED": "on"}),
+        ("feature-bare-prefix", {mech.FEATURE_ENV_PREFIX: "1"}),
+        (
+            "features-sorted",
+            {"MOMWIRE_X_ZZ_LAST": "1", feature: "1", "MOMWIRE_X_AA_FIRST": "1"},
+        ),
+        ("threads-empty", {"OMP_NUM_THREADS": ""}),
+        ("threads-blank", {"OMP_NUM_THREADS": "  "}),
+        ("threads-spaced", {"OMP_NUM_THREADS": " 8 "}),
+        ("threads-all", {v: str(i + 1) for i, v in enumerate(mech.THREAD_ENVS)}),
+        (
+            "everything",
+            {
+                mech.JUNCTION_RULE_ENV: "kcl",
+                feature: "on",
+                "MOMWIRE_X_FACTORED_COLUMNS": "0",
+                "MOMWIRE_RAZOR_CXX": "1",
+                "MOMWIRE_X_RAZOR_CXX": "yes",
+                "OPENBLAS_NUM_THREADS": "2",
+                "MOMWIRE_THREADS": "4",
+            },
+        ),
+    ]
+    # Every alias and every default-on feature, so a new one is exercised by
+    # construction rather than by remembering to add a row.
+    for alias, name in sorted(mech.FEATURE_ALIASES.items()):
+        cases.append((f"alias-{name}", {alias: "1"}))
+        cases.append((f"alias-and-own-{name}", {alias: "1", f"MOMWIRE_X_{name}": "1"}))
+    for name in sorted(mech.FEATURE_DEFAULT_ON):
+        var = f"MOMWIRE_X_{name.upper()}"
+        for value in ("0", "off", "false", "1", " ON ", "", " "):
+            cases.append((f"default-on-{name}-{value!r}", {var: value}))
+    for var in mech.THREAD_ENVS:
+        cases.append((f"threads-{var}", {var: "3"}))
+    return [pytest.param(env, id=case) for case, env in cases]
+
+
+def _key_elements(bundle: Path, name: str, identity: dict[str, str]) -> list[str]:
+    """The C client's key elements, from its test-only probe."""
+    room = _room()
+    try:
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not _is_identity_var(k) and k != "MOMWIRE_PORTAL_RUNTIME_DIR"
+        }
+        env.update(identity)
+        env["MOMWIRE_PORTAL_RUNTIME_DIR"] = str(room)
+        proc = subprocess.run(
+            [str(bundle / name), "-key-elements"],
+            capture_output=True,
+            timeout=60,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        assert proc.returncode == 0, proc.stderr
+        # The probe spawns nothing and makes no address file.
+        assert list(room.iterdir()) == []
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+    raw = proc.stdout.decode("utf-8")
+    assert raw.endswith("\0"), raw
+    return raw[:-1].split("\0")
+
+
+@pytest.fixture(scope="module")
+def key_bundle(client_exe):
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(CLIENT_NAME, NEC4_TWIN_NAME))
+    yield bundle
+    shutil.rmtree(bundle, ignore_errors=True)
+
+
+def _fixed_elements(bundle: Path, name: str) -> list[str]:
+    major, minor = mech.dist_version()
+    head = [
+        f"eznec.{major}.{minor}",
+        os.path.realpath(str(bundle / ENGINE_NAME)),
+        repr(900.0),
+        mech.WIRE,
+    ]
+    if name == NEC4_TWIN_NAME:
+        return [*head, "dialect=nec4", "basis=sinusoidal"]
+    return [*head, "default"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", [CLIENT_NAME, NEC4_TWIN_NAME])
+@pytest.mark.parametrize("identity", _identity_cases())
+def test_the_c_key_appends_the_pythons_environment_elements(
+    key_bundle, monkeypatch, name, identity
+):
+    """momwire#1979: the C client appends to its key exactly the elements
+    the Python client appends -- junction rule, features, threads, in that
+    order and spelling -- for the same environment. The digests differ by
+    design (different engines); the elements must not."""
+    for var in [v for v in os.environ if _is_identity_var(v)]:
+        monkeypatch.delenv(var)
+    for var, value in identity.items():
+        monkeypatch.setenv(var, value)
+    fixed = _fixed_elements(key_bundle, name)
+    elements = _key_elements(key_bundle, name, identity)
+    assert elements[: len(fixed)] == fixed
+    assert elements[len(fixed) :] == _python_env_elements()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", [CLIENT_NAME, NEC4_TWIN_NAME])
+def test_with_nothing_set_the_c_key_is_the_key_it_was(key_bundle, name):
+    """No identity variable set: exactly the pre-#1979 elements, so every
+    warm server a bundle already has keeps its name across the upgrade."""
+    assert _key_elements(key_bundle, name, {}) == _fixed_elements(key_bundle, name)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_a_warm_server_never_answers_a_call_under_another_feature(client_exe, tmp_path):
+    """The fault momwire#1979 names, end to end: a server spawned with no
+    feature set must not answer a call that sets one -- that call spawns its
+    own, at its own address -- and each server IS reused by a call identical
+    to the one that spawned it."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM)
+    room = _room()
+    deck = _deck(BASIS_DECK)
+    plain: dict[str, str] = {}
+    featured = {"MOMWIRE_X_CROSSING_TABLE": "1"}
+    threaded = {"OMP_NUM_THREADS": "1"}
+    suffix = mech.address_suffix(mech.TCP if os.name == "nt" else mech.UNIX)
+
+    def call(index: int, identity: dict[str, str]) -> None:
+        out = tmp_path / f"identity-{index}.out"
+        proc = _run(bundle, CLIENT_NAME, [str(deck), str(out)], room, identity=identity)
+        assert proc.returncode == 0, proc.stderr
+        assert b"ANTENNA INPUT PARAMETERS" in out.read_bytes()
+
+    try:
+        call(0, plain)
+        assert len(_listening(room)) == 1, _listening(room)
+        call(1, plain)
+        assert len(_listening(room)) == 1, _listening(room)
+        call(2, featured)
+        assert len(_listening(room)) == 2, _listening(room)
+        call(3, featured)
+        assert len(_listening(room)) == 2, _listening(room)
+        call(4, threaded)
+        assert len(_listening(room)) == 3, _listening(room)
+        assert len(sorted(room.glob(f"*{suffix}"))) == 3
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)

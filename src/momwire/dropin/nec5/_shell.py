@@ -78,6 +78,7 @@ import io
 import os
 import sys
 import unicodedata
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -87,9 +88,12 @@ import momwire_serve_client as _mech
 from ... import _features, _times
 from ...deck import DeckError
 from ...deck._nec5 import (
+    LongExponentToken,
     Nec5Deck,
     Nec5Structure,
     ends_on_nx,
+    long_exponent_note,
+    long_exponent_tokens,
     next_structure,
     parse_nec5,
     parse_nec5_shared,
@@ -388,6 +392,16 @@ def render_files(
     return printout, gmo
 
 
+def _advise_long_exponents(text: str) -> None:
+    """momwire#1964: an exponent token past 20 characters, as a warning.
+    Not a refusal (momwire's reading is the deck's), an advisory; the
+    launchers show it only under MOMWIRE_ADVISORIES=stderr. A file's whole
+    text and each streamed structure (:func:`_stream_piece`) both pass here."""
+    note = long_exponent_note(long_exponent_tokens(text))
+    if note is not None:
+        warnings.warn(LongExponentToken(note), stacklevel=3)
+
+
 @_features.in_context("dropin")
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
@@ -429,6 +443,7 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
         return _printout.render_refusal(
             text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
         )
+    _advise_long_exponents(text)
     structures = split_structures(text)
     if structures is not None:
         return _render_chain(structures, basis=basis)
@@ -800,6 +815,8 @@ def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str,
                 closing=False,
             )
             return printout, took is not None
+        # A structure cut at NX never reaches `render`, which advises a file.
+        _advise_long_exponents(structure.deck_text)
         answered = _answer(
             structure.deck_text, basis=basis, echo_text=structure.echo_text
         )
@@ -1103,7 +1120,15 @@ def _report_internal_error(
 def _internal_error_reason(exc: BaseException) -> str:
     """The one spelling of the last-ditch refusal line — :func:`main`'s
     process-level catch and :func:`seam`'s answer-level catch must frame an
-    unforeseen failure identically, whichever transport carried the deck."""
+    unforeseen failure identically, whichever transport carried the deck.
+
+    One failure is foreseen, wherever in the solve it is raised: a native
+    experimental feature turned on (``MOMWIRE_X_<NAME>``) outside its reach
+    (:class:`momwire._features.FeatureNotCertified`). That is a refusal, in
+    the registry's own sentence naming the feature and the platform, not an
+    engine fault."""
+    if isinstance(exc, _features.FeatureNotCertified):
+        return str(exc)
     return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
 
 

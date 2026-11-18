@@ -85,6 +85,7 @@ from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._quadrature import leggauss
 
 from . import _below_interface
+from . import _buried_quadrature
 from . import _bspline_kernels
 from . import _crossing_fill
 from . import _exact_kernel
@@ -134,7 +135,10 @@ DEFAULT_N_QP_PAIR = 8
 # fx_slant_base_source read 86.905-17.784j at 32, 86.653-18.783j at 64,
 # 86.622-18.923j at 128 and 86.6215-18.9278j at 256/512, a 1.18 ohm
 # quadrature error against a 0.52 ohm mesh error. 128 lands within 0.004 ohm.
-BURIED_N_QP_PAIR = 128
+# The values and their reason are declared in `_buried_quadrature.BSPLINE`,
+# beside SG's deliberately different entry; these names are bspline's reading
+# of that record.
+BURIED_N_QP_PAIR = _buried_quadrature.BSPLINE.base_order
 
 # The distance-adaptive pair-order LADDER (momwire#906), resolved per deck by
 # `BSplineSolver.pair_order_ladder` alongside `n_qp_pair`: a pair whose centre
@@ -188,7 +192,7 @@ DEFAULT_PAIR_ORDER_LADDER = ((16.0, 4),)
 # Z_in moves at most 2e-10 of max|Z| and no deck's error against q = 256
 # moves at the second digit, while the hubs' mid-range cross-radial pairs
 # (the bulk of their fill) drop from 64 to 16 kernel reads.
-BURIED_PAIR_ORDER_LADDER = ((0.1, 32), (1.5, 16), (2.0, 8), (4.0, 4))
+BURIED_PAIR_ORDER_LADDER = _buried_quadrature.BSPLINE.ladder
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -622,15 +626,15 @@ def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
     not read it; a C-ordered Z is copied, as `solve` did. `overwrite_b` lets
     a locally built F-ordered rhs take the solution. An EXACTLY singular Z
     still raises `LinAlgError`, as `solve` did, where `lu_factor` alone only
-    warns and the solve would return inf/NaN.
+    warns and the solve would return inf/NaN: that policy is
+    `_lapack.lu_factor_strict`'s, shared by every dense route (momwire#1981).
 
     Both calls go through `momwire._lapack`, which is scipy's own unless a
     host process has published its LAPACK there.
     """
-    lu_piv = _lapack.lu_factor(Z, overwrite_a=overwrite_a)
-    if not np.all(np.diagonal(lu_piv[0])):
-        raise np.linalg.LinAlgError("singular matrix")
-    return _lapack.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
+    return _lapack.factor_and_solve(
+        Z, rhs, overwrite_a=overwrite_a, overwrite_b=overwrite_b
+    )
 
 
 # Block edge of `_fortran_in_place`'s swap: two (b, b) complex tiles of
@@ -1652,8 +1656,8 @@ class BSplineSolver(
         whose centre distance over the longer segment meets a tier's ratio
         takes that tier's order; the rest pay `n_qp_pair`. Resolved from the
         deck like `n_qp_pair` when None: buried decks get
-        `BURIED_PAIR_ORDER_LADDER` = ((0.1, 32), (1.5, 16), (2, 8), (16, 4))
-        under the base 128 (momwire#1752 S2), free-space decks
+        `BURIED_PAIR_ORDER_LADDER` = ((0.1, 32), (1.5, 16), (2, 8), (4, 4))
+        under the base 128 (momwire#1752 S2 and H2), free-space decks
         `DEFAULT_PAIR_ORDER_LADDER` = ((16, 4),) since momwire#907 — one tier
         there, because the base order 8 already IS the order-8 rung. Tiers at
         or above the base order are dropped, so an explicit `n_qp_pair=8`
@@ -2108,22 +2112,33 @@ class BSplineSolver(
         # geometry before any block is copied (`_pair_reuse_plan`).
         # Registered in `_features` (reach 1, a Python route): a hint passed
         # is the keyword, so it is on; with none there is nothing to reuse.
-        if not _features.enabled("pair_reuse", None if pair_reuse is None else True):
-            pair_reuse = None
+        # momwire#1982: `pair_reuse` is the one pair-reuse switch, so True or
+        # "verify" (on, no hint: no block is copied; the other solvers take
+        # both) and False (off) are taken too, and its part `offset_reuse`
+        # follows it.
+        whole = None if pair_reuse is None else pair_reuse is not False
+        hint = None if isinstance(pair_reuse, (bool, str)) else pair_reuse
+        if not _features.enabled("pair_reuse", whole):
+            hint = None
         # Renumbered to the solved wires on first use (`_solved_pair_reuse`):
         # a fill route that reads no plan pays nothing for a large hint.
-        self._pair_reuse_given = pair_reuse or None
+        self._pair_reuse_given = hint or None
         self._pair_reuse = None
         self._pair_reuse_plan_cache = None
         self._remainder_reuse_cache = None
         self.pair_reuse_dropped = ()
         self.pair_reuse_remainder_cut = 0
-        self.pair_reuse_declined = False
+        # Why the hint was not used (None when it was, or none was given):
+        # the sinusoidal and razor-2p solvers' readout, of the same type.
+        self.pair_reuse_declined = None
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
-        # defers to MOMWIRE_X_OFFSET_REUSE (`_features`, reach 1).
-        self._offset_reuse = _features.enabled("offset_reuse", offset_reuse)
+        # defers to `pair_reuse` (it is that feature's part, momwire#1982),
+        # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
+        self._offset_reuse = _features.enabled(
+            "offset_reuse", offset_reuse, whole_kwarg=whole
+        )
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -5477,7 +5492,7 @@ class BSplineSolver(
         ):
             return self._pair_reuse_plan_cache[1]
         if not self._pair_reuse_worth(geom):
-            self.pair_reuse_declined = True
+            self.pair_reuse_declined = "too few pairs per member to repay the check"
             self._pair_reuse_plan_cache = (geom, {})
             return {}
         if self._solved_pair_reuse() is None:
@@ -7566,23 +7581,13 @@ class BSplineSolver(
         route taken on `kcl_nullspace_route` and in `_kcl_nullspace.COUNTS`."""
         if not getattr(self, "_kcl_nullspace", False) or kcl_A.shape[0] == 0:
             return None
-        plan = _kcl_nullspace.plan(kcl_A)
-        if isinstance(plan, str):
-            route = f"schur: {plan}"
-            plan = None
-        else:
-            route = "reduced"
-        self.kcl_nullspace_route = route
-        _kcl_nullspace.COUNTS[route] += 1
-        return plan
+        return _kcl_nullspace.record(self, _kcl_nullspace.plan(kcl_A))
 
     def _solve_reduced(self, Z, V, plan, overwrite):
         """(Qᵀ Z Q) y = Qᵀ V, returned as x = Q y (momwire#1898). `V` is
-        (n,) or (n, r); `overwrite` lets Z's own buffer hold the reduction."""
-        Zr = _kcl_nullspace.reduce_matrix(Z, plan, overwrite=overwrite)
-        Vr = np.asfortranarray(_kcl_nullspace.reduce_rhs(V, plan))
-        y = _lu_solve(Zr, Vr, overwrite_a=True, overwrite_b=True)
-        return _kcl_nullspace.expand(y, plan)
+        (n,) or (n, r); `overwrite` lets Z's own buffer hold the reduction.
+        The step the sector route's harmonics share (momwire#1983)."""
+        return _kcl_nullspace.solve_reduced(Z, V, plan, overwrite=overwrite)
 
     def _solve_reduced_stacked(self, Z, V, plan):
         """`_solve_reduced` per k over a (n_k, n, n) stack; `V` (n,) or

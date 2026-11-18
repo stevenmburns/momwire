@@ -1,0 +1,7 @@
+# Test fixtures are byte oracles (golden printouts, captured EZNEC/NEC
+# output, decks read byte for byte): check them out exactly as committed,
+# never with line-ending conversion. Without this, Git for Windows'
+# default core.autocrlf=true turns LF goldens into CRLF and the printout
+# comparisons fail on a Windows checkout (11-17, Windows Python level-3
+# certification of razor_pair_reuse: test_the_flag_off_printout_is_unchanged).
+tests/fixtures/** -text

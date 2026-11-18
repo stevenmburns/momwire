@@ -108,7 +108,14 @@ _WIRE_CARDS = frozenset({"GW", "GA", "GH", "CW"})
 # the trailer still a power gain) print as NEC-5's do for the same XNDA, in
 # the same row builder (probes p33-p36, momwire#1592), and so do 1012 (1002
 # under the DIRECTIVE heading) and 1013 (1010's rows and trailer, p44-p45).
-_SERVED_XNDA = frozenset({1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013})
+# N = 1 to 5 adds the NORMALIZED GAIN table after the pattern, in the NEC-5
+# printout's layout to the byte, read off licensed NEC-4.2 printouts of
+# synthetic decks (tests/fixtures/nec42_rp_normalized_gain/, README there):
+# every N at A = 1, N = 5 at every D and A, GNOR, a range, two RP cards, a
+# sweep and the grounds this slot serves.
+_SERVED_XNDA = frozenset(
+    1000 + 100 * n + 10 * d + a for n in range(6) for d in (0, 1) for a in range(4)
+)
 
 # A GD card's leading integer, as the one captured value prints it.
 _GD_KIND = {2: "CIRCLE CLIFF"}
@@ -1189,6 +1196,9 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
         phi0_deg=card.f(5),
         d_theta_deg=card.f(6),
         d_phi_deg=card.f(7),
+        # RP's tenth field: the NORMALIZED GAIN table's factor in dB, the
+        # table's own largest gain when zero (NEC-4.2 reads it as NEC-5 does)
+        gnor_db=card.f(9),
     )
     second = result.second_medium
     cliff = None
@@ -1205,8 +1215,9 @@ def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
         ground_z=result.ground_z or 0.0,
         cliff=cliff,
         p_radiated=result.p_radiated,
-        # NEC-5's single-cut rule (momwire#1962) is not measured on NEC-4.2
-        average_single_cut=True,
+        # NEC-5's phi trapezoid for the average (momwire#1962) is not
+        # measured on NEC-4.2; its single-cut rule is, and holds here
+        nec4_average=True,
     )
     range_m = card.f(8)
     if range_m == 0.0:

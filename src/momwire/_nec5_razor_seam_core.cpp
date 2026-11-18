@@ -4,6 +4,7 @@
 // here names the Python it is a copy of (`eznec/_serve.py` unless said
 // otherwise), and its sentences are that Python's, byte for byte.
 #include "_nec5_razor_seam_core.h"
+#include "_near_interface_eval.h"  // the features this run asked for (momwire#1971)
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and
 // Python's elementwise arithmetic one IEEE operation at a time (the
@@ -177,6 +178,9 @@ void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_grou
         in.ground_sommerfeld = true;
     }
     in.wavelength = p.wavelength;
+    // momwire#1971: fill-pair reuse, when this run asked for it (an
+    // executable's MOMWIRE_X_RAZOR_PAIR_REUSE, `feature_refusal`).
+    in.pair_reuse = ni_eval::requested_features().razor_pair_reuse ? 1 : 0;
     in.extended_kernel = !all_below;
     in.exact_kernel = razor::ExactKernel::automatic;
     // momwire#1649 (`_solver_for`): the pieces cut at z = 0 are not asked
@@ -194,8 +198,10 @@ SeamEngine::Built RazorSeamEngine::build(Prepared &p) const {
     try {
         why = part.front->build(part.inputs);
     } catch (const razor::FrontError &e) {
+        // `_prepare` refuses a NotImplementedError from the constructor and
+        // from `compute_port_solution` alike (census 11-17)
         const bool ni = e.kind == razor::FrontErrorKind::not_implemented;
-        b.kind = ni && !e.solve_phase ? Built::refused : Built::raised;
+        b.kind = ni ? Built::refused : Built::raised;
         b.error_kind = ni ? "NotImplementedError" : "ValueError";
         b.message = e.what();
         return b;

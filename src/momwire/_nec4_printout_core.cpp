@@ -581,6 +581,41 @@ Lines pattern(const PrintPatternBlock &b) {
                         f(b.solid_angle_pi, 7, 4) + ")*PI STERADIANS.",
                     "", "   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS =" + e(b.power_radiated_4pi, 12, 5) +
                             " WATTS"});
+    if (b.normalized_kind != 0) {
+        // `_printout._normalized`: four blanks, the heading, the gain's name
+        // right-aligned to column 53, the factor, three column groups; the
+        // cells fill the groups column by column, the first n % 3 one longer
+        // (NEC-4.2's layout is NEC-5's, nec42_rp_normalized_gain)
+        static const char *const kinds[] = {"", "MAJOR AXIS GAIN", "MINOR AXIS GAIN",
+                                            "VERTICAL GAIN", "HORIZONTAL GAIN", "TOTAL GAIN"};
+        blanks(lines, 4);
+        add(lines, {sp(37) + "- - - - NORMALIZED GAIN - - - -", "",
+                    rjust(kinds[b.normalized_kind], 53),
+                    sp(38) + "NORMALIZATION FACTOR =" + f(b.normalization_db, 9, 2) + " DB", "",
+                    "    - - ANGLES - -      GAIN           - - ANGLES - -      GAIN"
+                    "           - - ANGLES - -      GAIN",
+                    "    THETA     PHI        DB            THETA     PHI        DB"
+                    "            THETA     PHI        DB",
+                    "   DEGREES  DEGREES                   DEGREES  DEGREES"
+                    "                   DEGREES  DEGREES"});
+        const std::size_t n = b.normalized.size(), base = n / 3, extra = n % 3;
+        std::size_t starts[3], lengths[3], start = 0;
+        for (std::size_t g = 0; g < 3; g++) {
+            lengths[g] = base + (g < extra ? 1 : 0);
+            starts[g] = start;
+            start += lengths[g];
+        }
+        for (std::size_t line = 0; line < lengths[0]; line++) {
+            std::string text;
+            for (std::size_t g = 0; g < 3; g++) {
+                if (line >= lengths[g]) continue;
+                const std::array<double, 3> &c = b.normalized[starts[g] + line];
+                if (g) text += sp(6);
+                text += f(c[0], 10, 2) + f(c[1], 9, 2) + f(c[2], 10, 2);
+            }
+            lines.push_back(text);
+        }
+    }
     return lines;
 }
 
@@ -611,7 +646,9 @@ Lines tables(const PrintRun &run) {
     }
     for (const PrintPatternBlock &p : run.patterns) {
         add(body, pattern(p));
-        blanks(body, kPatternGap);
+        // `_printout._pattern_gap`: three blanks after a NORMALIZED GAIN
+        // table, five after a pattern alone
+        blanks(body, p.normalized_kind != 0 ? kSectionGap : kPatternGap);
     }
     return body;
 }

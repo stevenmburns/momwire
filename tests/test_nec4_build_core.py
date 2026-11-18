@@ -275,6 +275,24 @@ def test_the_kernel_advisories_are_reached(name, basis, fragment, acc):
     )
 
 
+def test_a_radius_step_junction_builds_the_galerkin_basis_on_the_reduced_kernel(acc):
+    """The dialect's default extended kernel, which the Sinusoidal-Galerkin
+    basis declares it cannot serve at a radius-step junction: its build
+    solves with the reduced kernel and says why, where the point-matched
+    basis keeps the extended kernel. (Moved here from the SG run half's
+    printout gate when that C++ copy was archived, momwire archive branch
+    `archive/sg-cxx-1117`: this half of it checks the build, which stays.)"""
+    text = next(c[1] for c in CASES if c[0] == "radius_step")
+    dump = nc.cxx_build(text, "sinusoidal-galerkin", acc)
+    assert (
+        nc.dc.first_difference(nc.py_build(text, "sinusoidal-galerkin"), dump) is None
+    )
+    assert "points[0].extended_kernel = bool False" in dump
+    assert "radius step at a junction".encode().hex() in dump
+    sin = nc.cxx_build(text, "sinusoidal", acc)
+    assert "points[0].extended_kernel = bool True" in sin
+
+
 def test_a_sweep_reaches_several_operating_points(acc):
     text = next(c[1] for c in CASES if c[0] == "sweep")
     assert "build.structures[0].points : list 4" in nc.cxx_build(

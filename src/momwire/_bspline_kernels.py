@@ -1373,7 +1373,8 @@ def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp, *, ek=None):
 #
 # Every off-edge pair used to pay the same Gauss-Legendre grid, n_qp x n_qp,
 # whether the two segments touch or sit a hundred lengths apart. The buried
-# fill's order is 32 (`BURIED_N_QP_PAIR`, momwire#760), so a 654-segment
+# fill's order was then 32 (`BURIED_N_QP_PAIR`, momwire#760; 128 under the
+# first rung since #1752, see `_buried_quadrature`), so a 654-segment
 # radial screen spent 6.3 of its 11.3 s in two calls of this kernel.
 #
 # The study behind the ladder (issue #906) measured, per pair, the error of a

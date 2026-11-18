@@ -92,6 +92,12 @@ def _fine(rng, n):
 
 
 SIZES = [200, _lapack._GECON_BESIDE_MIN_N + 37]
+# The pivot screen's larger size moved to the slow lane at 0.94.0 (median
+# 5.4 s over 25 runs in the default lane); 200 keeps its default-lane check.
+SCREEN_SIZES = [
+    SIZES[0],
+    pytest.param(SIZES[1], marks=pytest.mark.slow),
+]
 
 
 @pytest.mark.parametrize("n", SIZES)
@@ -113,7 +119,7 @@ def test_a_well_conditioned_solve_runs_no_gecon_unless_asked(
     assert x_on.tobytes() == x_off.tobytes()
 
 
-@pytest.mark.parametrize("n", SIZES)
+@pytest.mark.parametrize("n", SCREEN_SIZES)
 def test_the_pivot_screen_catches_an_ill_conditioned_matrix_by_default(
     route, gecon_calls, n, monkeypatch
 ):

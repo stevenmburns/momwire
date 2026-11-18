@@ -103,6 +103,9 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
+inline void reuse_plans(long long &built, long long &declined, long long &found) {
+    MW_PICK(mws, mwas, reuse_plans(built, declined, found));
+}
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -123,6 +126,9 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
+inline void reuse_plans(long long &built, long long &declined, long long &found) {
+    MW_PICK(mw, mwa, reuse_plans(built, declined, found));
+}
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -131,6 +137,19 @@ inline bool answer(const std::string &t, const std::string &version, const std::
                                    message, raised_kind, open_end, served));
 }
 }  // namespace rt_threads
+
+// MW_EXE_TIMES's reuse line (momwire#1971): the fill-pair reuse plans both
+// copies built, how many of those built declined, and how many they found,
+// process totals, so a gate can prove the reuse ran (built - declined >= 1
+// with MOMWIRE_X_RAZOR_PAIR_REUSE on, 0 built with it off). A declined plan
+// fills as off, so a plan built is not by itself a reuse that ran.
+static void reuse_line() {
+    long long built_s = 0, declined_s = 0, found_s = 0, built_t = 0, declined_t = 0, found_t = 0;
+    rt_serial::reuse_plans(built_s, declined_s, found_s);
+    rt_threads::reuse_plans(built_t, declined_t, found_t);
+    std::fprintf(stderr, "cxx: reuse plans built %lld, declined %lld, found %lld\n", built_s + built_t,
+                 declined_s + declined_t, found_s + found_t);
+}
 
 #if !MW_EXE_NO_PYTHON
 #define PY_SSIZE_T_CLEAN
@@ -375,13 +394,33 @@ struct ExeFeature {
     int reach;
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
-// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`).
+// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
+// razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
+// which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
+// and momwire#1956's retuned sheet weights (reach 7: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
     {"factored_columns", 8, true},
     {"height_sheet_recal", 8, true},
     {"crossing_table", 8, false},
     {"crossing_above_rule", 8, false},
+    {"razor_pair_reuse", 7, false},
+    {"crossing_sheet_retune", 7, false},
 };
+
+// A carried feature that only one formulation's route runs: {name, basis}.
+// razor_pair_reuse is razor-2p's fill, but nec5-bspline shares its levels
+// (6 and 7) and its EXE_FEATURES, so without this it would accept the
+// variable, name it on line 2 and fill as with it off. It refuses instead,
+// in the registry's sentence (nec42-bspline is past the reach anyway).
+const char *const EXE_FEATURE_BASES[][2] = {
+    {"razor_pair_reuse", "razor-2p"},
+};
+
+bool feature_basis_here(const std::string &name) {
+    for (const auto &fb : EXE_FEATURE_BASES)
+        if (name == fb[0]) return std::string(BASIS) == fb[1];
+    return true;
+}
 
 // This executable's level in support/hierarchy.toml, as
 // `_features.current_level("exe", basis=...)` places it.
@@ -429,7 +468,7 @@ std::vector<std::string> features_requested() {
 
 bool feature_runs_here(const std::string &name) {
     for (const ExeFeature &f : EXE_FEATURES)
-        if (name == f.name) return exe_level() <= f.reach;
+        if (name == f.name) return exe_level() <= f.reach && feature_basis_here(name);
     return false;
 }
 
@@ -452,7 +491,7 @@ bool feature_env_set(const std::string &name) {
 // promoted, and its reach covers this executable's level.
 bool feature_default_here(const std::string &name) {
     for (const ExeFeature &f : EXE_FEATURES)
-        if (name == f.name) return f.default_on && exe_level() <= f.reach;
+        if (name == f.name) return f.default_on && exe_level() <= f.reach && feature_basis_here(name);
     return false;
 }
 
@@ -1335,9 +1374,11 @@ int main(int argc, char **argv) {
                     log_route(threads == 1 && env("MW_EXE_COPY") != "threads" ? "cxx:serial"
                                                                     : "cxx:threads",
                               deck);
-                    if (env("MW_EXE_TIMES") == "1")
+                    if (env("MW_EXE_TIMES") == "1") {
                         std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n",
                                      threads, ms_since(t), ms_since(T0));
+                        reuse_line();
+                    }
                     return 0;
                 }
             }
@@ -1651,9 +1692,11 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
         // the route wrote): `run` then writes no .GMO.
         raised = !raised_kind.empty();
         log_route(serial ? "cxx:serial" : "cxx:threads", deck_path);
-        if (env("MW_EXE_TIMES") == "1")
+        if (env("MW_EXE_TIMES") == "1") {
             std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n", threads,
                          ms_since(t), ms_since(T0));
+            reuse_line();
+        }
         return printout;
     }
     if (failed) throw ml::PyError{kind, message};

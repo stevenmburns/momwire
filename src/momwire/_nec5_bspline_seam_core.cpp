@@ -220,11 +220,16 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
-        // a NotImplementedError in Python's words stays a decline on this
-        // route; the NEC-4.2 slot's engine prints it as the slot's refusal
-        Built d = decline(std::string("bspline-") + e.what());
-        if (e.python) d.error_kind = "NotImplementedError";
-        return d;
+        // a NotImplementedError in Python's words (the crossing serve's
+        // scope) is `_prepare`'s refusal, raised in Python where the basis
+        // builds its junctions in the solve (census 11-17); the rest decline
+        if (e.python) {
+            b.kind = Built::refused;
+            b.error_kind = "NotImplementedError";
+            b.message = e.what();
+            return b;
+        }
+        return decline(std::string("bspline-") + e.what());
     } catch (const bspline::FrontStandOffFloor &e) {
         // `_prepare` refuses StandOffFloorError by name
         b.kind = Built::refused;
