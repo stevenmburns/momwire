@@ -14,9 +14,12 @@ deck. This file holds what keeps that record honest:
   crossing node) moves it. So a near-contact error on SG lives in the near
   rules, and the record says so.
 
-Not held here: SG's answer against a raised-order reference. Its graded rule
-carries a 0.425 ohm near-contact error on slant_base_source (11-17 trace),
-and whether to raise it is pending.
+And SG's graded rule per pair: a touching pair whose wedge is acute takes
+the raised order, the rest the base order. On slant_base_source (the deck
+that found the error: 0.425 ohm at 8 nodes a panel against a raised
+reference) the acute pairs are the node segments against their own images,
+and the gate here holds the shipped answer within 1e-2 ohm of the reference
+(3.5e-3 measured, 11-17); a shallow bend stays on the base order bit for bit.
 """
 
 import dataclasses
@@ -84,10 +87,16 @@ def test_sg_reads_its_entry_and_the_divergence_is_declared():
         )
         == (2.0, 8, 32, 24, 8)
     )
+    assert (SMP.GRADED_ACUTE_WEDGE_DEG, SMP.GRADED_ACUTE_N_PER_PANEL) == (
+        near.graded_acute_wedge_deg,
+        near.graded_acute_n_per_panel,
+    )
+    assert (near.graded_acute_wedge_deg, near.graded_acute_n_per_panel) == (15.0, 24)
     assert (sg.base_order, sg.ladder) != (BQ.BSPLINE.base_order, BQ.BSPLINE.ladder)
     assert "momwire#1752" in BQ.BSPLINE.reason
     assert "fx_slant_base_source" in BQ.BSPLINE.reason
     assert "0.425 ohm" in sg.reason and "fx_slant_base_source" in sg.reason
+    assert "15 degrees" in sg.reason
 
 
 def test_the_crossing_base_order_is_under_the_near_ratio():
@@ -170,17 +179,21 @@ def test_sgs_cxx_copy_if_any_is_its_entry():
 # --- SG's near pairs, on the production route -------------------------------
 
 
-def _sg_render(monkeypatch, deck, policy=None, *, graded=None, watch_near=False):
-    """Y of `deck` through the NEC-5 render SG serves
+def _sg_render(
+    monkeypatch, deck, policy=None, *, graded=None, watch_near=False, text=None
+):
+    """Y of `deck` (or of the deck `text`) through the NEC-5 render SG serves
     (`momwire-nec5-sinusoidal-galerkin`), the fill routes that ran, the
     WindowFill (n_qp, ladder) pairs built, and with `watch_near` every
-    near_pair_moments call checked against the near ratio."""
+    near_pair_moments call checked against the near ratio. `graded` sets ONE
+    graded order for every touching pair, acute or not."""
     from momwire.dropin.nec5 import _shell
 
     if policy is not None:
         monkeypatch.setitem(BQ.POLICIES, "sinusoidal-galerkin", policy)
     if graded is not None:
         monkeypatch.setattr(SMP, "GRADED_N_PER_PANEL", graded)
+        monkeypatch.setattr(SMP, "GRADED_ACUTE_N_PER_PANEL", graded)
     seen = {"y": [], "routes": set(), "fills": [], "near": 0, "touch": 0, "min": 9.0}
     cls = SinusoidalGalerkinSolver
     orig_cps = cls.compute_port_solution
@@ -234,9 +247,9 @@ def _sg_render(monkeypatch, deck, policy=None, *, graded=None, watch_near=False)
         monkeypatch.setattr(SMP, "near_pair_moments", near)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        out = _shell.render(
-            deck.read_text(encoding="latin-1"), basis="sinusoidal-galerkin"
-        )
+        if text is None:
+            text = deck.read_text(encoding="latin-1")
+        out = _shell.render(text, basis="sinusoidal-galerkin")
     monkeypatch.undo()
     assert seen["y"], out[-2000:]
     return seen
@@ -264,10 +277,76 @@ def test_the_crossing_routes_base_order_moves_nothing(monkeypatch):
     assert np.array_equal(base["y"][0].view(np.uint64), up["y"][0].view(np.uint64))
     # while the graded rule on the touching pairs is live, and is where a
     # near-contact error on SG sits (0.425 ohm at 8 nodes a panel, 11-17)
-    graded = _sg_render(monkeypatch, SLANT, graded=16)
+    graded = _sg_render(monkeypatch, SLANT, graded=8)
     z = complex(np.linalg.inv(base["y"][0])[0, 0])
-    z16 = complex(np.linalg.inv(graded["y"][0])[0, 0])
-    assert abs(z - z16) > 1e-2, (z, z16)
+    z8 = complex(np.linalg.inv(graded["y"][0])[0, 0])
+    assert abs(z - z8) > 1e-1, (z, z8)
+
+
+def _z_in(seen):
+    return complex(np.linalg.inv(seen["y"][0])[0, 0])
+
+
+def test_slants_near_contact_error_is_inside_1e_2_ohm(monkeypatch):
+    # The reference raises every near rule the module reads at call time:
+    # graded 48 a panel on every touching pair and the near product rule at
+    # 96 (the far ladder and the parallel reduction moved this deck by under
+    # 1e-12 ohm, 11-17). Measured 11-17: |Z - ref| = 0.425 ohm at graded 8,
+    # 3.5e-3 at 24 on every pair, and the same 3.5e-3 with 24 on the acute
+    # pairs only (the shipped rule), so the 1e-2 gate fails at the old value.
+    # (`_sg_render` undoes every patch when it returns, this one included)
+    monkeypatch.setattr(SMP, "NEAR_N_QP", 96)
+    ref = _z_in(_sg_render(monkeypatch, SLANT, graded=48))
+    shipped = _z_in(_sg_render(monkeypatch, SLANT))
+    assert abs(shipped - ref) < 1e-2, (shipped, ref)
+    # the gate can fail: the old graded order is well outside it
+    old = _z_in(_sg_render(monkeypatch, SLANT, graded=8))
+    assert abs(old - ref) > 1e-1, (old, ref)
+
+
+def test_the_touching_wedge():
+    o = np.zeros((1, 3))
+    x, y = np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]])
+    fold = np.array([[np.cos(np.radians(5)), np.sin(np.radians(5)), 0]])
+    end0, end1 = np.array([0]), np.array([1])
+    # i = o->x shares its start with j = o->y, o->fold, and with x->2x
+    assert SMP.touching_wedge_deg(o, x, o, y, end0, end0)[0] == pytest.approx(90)
+    assert SMP.touching_wedge_deg(o, x, o, fold, end0, end0)[0] == pytest.approx(5)
+    # straight on: j = -x->o ends where i starts
+    assert SMP.touching_wedge_deg(o, x, -x, o, end0, end1)[0] == pytest.approx(180)
+
+
+def _bent_deck(wedge_deg):
+    """A centre-fed wire with a second wire leaving its far end at
+    `wedge_deg` to it (180 = straight on, small = folded back). Synthetic."""
+    a = np.radians(180.0 - wedge_deg)
+    L = 5.28
+    p = (L * (1 + 0.7 * np.cos(a)), 0.7 * L * np.sin(a), 0.0)
+    return (
+        "CM synthetic bend\nCE\n"
+        f"GW 1 21 0 0 0 {L:.6f} 0 0 0.001\n"
+        f"GW 2 15 {L:.6f} 0 0 {p[0]:.6f} {p[1]:.6f} 0 0.001\n"
+        "GE 0 0\nEX 0 1 11 0 1 0\nFR 0 1 0 0 14.2 0\nXQ 0\nEN\n"
+    )
+
+
+@pytest.mark.parametrize("wedge", [5.0, 165.0])
+def test_the_graded_order_follows_the_wedge(monkeypatch, wedge):
+    # an acute wedge takes the raised order, a shallow bend the base order,
+    # each bit for bit what that order everywhere gives
+    text = _bent_deck(wedge)
+    near = BQ.SINUSOIDAL_GALERKIN.near
+    want = (
+        near.graded_acute_n_per_panel
+        if wedge < near.graded_acute_wedge_deg
+        else near.graded_n_per_panel
+    )
+    other = near.graded_n_per_panel + near.graded_acute_n_per_panel - want
+    shipped = _sg_render(monkeypatch, None, text=text)["y"][0]
+    same = _sg_render(monkeypatch, None, graded=want, text=text)["y"][0]
+    diff = _sg_render(monkeypatch, None, graded=other, text=text)["y"][0]
+    assert np.array_equal(shipped.view(np.uint64), same.view(np.uint64))
+    assert not np.array_equal(shipped, diff)
 
 
 def test_the_wholly_buried_route_reads_its_entry(monkeypatch):
