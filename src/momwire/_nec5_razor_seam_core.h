@@ -57,6 +57,8 @@ class RazorSeamEngine final : public SeamEngine {
     void check_can_host(const Deck &d, const Prepared &p, bool has_ground) const override;
     void solver_arguments(const Deck &d, Prepared &p, bool has_ground) const override;
     Built build(Prepared &p) const override;
+    // `crossing_anchors`' band plan (`razor::set_band_plan`).
+    void seam_done(const SeamResult &r) const override;
 };
 
 // The whole seam for razor-2p: `seam(latin1_text, RazorSeamEngine(), open_end)`.

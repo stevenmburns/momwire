@@ -392,6 +392,7 @@ const ExeFeature EXE_FEATURES[] = {
     {"crossing_above_rule", 8, false},
     {"razor_pair_reuse", 7, false},
     {"crossing_sheet_retune", 7, false},
+    {"crossing_anchors", 7, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.
@@ -401,6 +402,7 @@ const ExeFeature EXE_FEATURES[] = {
 // in the registry's sentence (nec42-bspline is past the reach anyway).
 const char *const EXE_FEATURE_BASES[][2] = {
     {"razor_pair_reuse", "razor-2p"},
+    {"crossing_anchors", "razor-2p"},
 };
 
 bool feature_basis_here(const std::string &name) {

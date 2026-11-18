@@ -220,7 +220,10 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     assert table is not None
     rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)"\}', table[1])
     assert len(rows) == table[1].count("{"), table[1]
-    assert dict(rows) == {"razor_pair_reuse": "razor-2p"}
+    assert dict(rows) == {
+        "razor_pair_reuse": "razor-2p",
+        "crossing_anchors": "razor-2p",
+    }
     cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text(encoding="utf-8")
     bases = set(re.findall(r'MW_EXE_BASIS_NAME="([a-z0-9-]+)"', cmake))
     bases |= set(re.findall(r'#define MW_EXE_BASIS_NAME "([a-z0-9-]+)"', src))

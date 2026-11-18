@@ -566,6 +566,16 @@ def _answer(
         # wavenumber-independent half is built once (`_serve._port_solution`).
         # The whole frequency list is known here, before the first solve.
         shared: dict = {}
+        if echo_text is None:
+            # The opt-in crossing_anchors' sweep plan (`razor.py`'s
+            # `_crossing_anchors_now`): every wavelength this sweep solves
+            # at, as `_serve._prepare` computes it, for one structure (an NX
+            # chain's sweeps fill exactly, as the C++ seam's do).
+            shared["crossing_anchor_plan"] = {
+                "wavelengths": [
+                    _serve.SPEED_OF_LIGHT_MHZ_M / float(f) for f in deck.frequencies_mhz
+                ]
+            }
         try:
             answers = [
                 _serve.serve(replace(deck, frequency_mhz=f), basis=basis, shared=shared)
