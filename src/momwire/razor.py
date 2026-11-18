@@ -1389,7 +1389,9 @@ def _crossing_anchor_trace(what, sweep):
         f"crossing_anchors: {what} plan={why} n_a={plan.get('n_a', 0)} "
         f"built={(sweep or {}).get('built', 0)} "
         f"interpolated={(sweep or {}).get('interpolated', 0)} "
-        f"copied={(sweep or {}).get('copied', 0)}\n"
+        f"copied={(sweep or {}).get('copied', 0)} "
+        f"x={plan.get('x', 0.0):.6g} rho={plan.get('rho', 0.0):.6g} "
+        f"est={plan.get('est', 0.0):.3g}\n"
     )
     # File descriptor 2 itself: the drop-in shell holds sys.stderr.
     os.write(2, line.encode())
@@ -6237,7 +6239,19 @@ class RazorSolver(
             return False
         plan = sweep.get("plan")
         if plan is None:
-            plan = sweep["plan"] = _acc.crossing_anchor_plan(list(sweep["wavelengths"]))
+            # The error rule's view of the deck (`anchors::Size`), as the
+            # C++ seam forms it (`RazorSeamEngine::seam_done`): the span from
+            # this geometry, the lower medium, and c.
+            eps_r, sigma = self._crossing_anchor_ground()
+            span = _acc.crossing_anchor_span(
+                geom["seg_p0"],
+                geom["seg_t"],
+                geom["seg_h"],
+                0.0 if self.ground_z is None else float(self.ground_z),
+            )
+            plan = sweep["plan"] = _acc.crossing_anchor_plan(
+                list(sweep["wavelengths"]), span, eps_r, sigma, float(self.c)
+            )
         if not plan["ok"]:
             _crossing_anchor_trace("declined", sweep)
             return False
@@ -6268,6 +6282,12 @@ class RazorSolver(
                 [int(r) for r in rows_b],
                 cols,
             )
+            if not _acc.crossing_anchor_fits(len(plan["anchor_k"]), idx.size, int(n)):
+                # Too large to hold (the C++ fill's budget): the plan
+                # declines for the rest of the sweep.
+                sweep["plan"] = dict(plan, ok=False, why="memory")
+                _crossing_anchor_trace("declined", sweep)
+                return False
             raw = np.empty((len(plan["anchor_k"]), idx.size), dtype=complex)
             # Each anchor on the crossing table's state this fill reached the
             # cross terms with, as the exact route at that k would.
@@ -6291,12 +6311,21 @@ class RazorSolver(
             built = cache[key] = (idx, raw)
         idx, raw = built
         how = _acc.crossing_anchor_apply(
-            Z, idx, raw, list(sweep["wavelengths"]), float(k)
+            Z, idx, raw, list(sweep["wavelengths"]), float(k), *plan["size"]
         )
         name = "copied" if how == 0 else "interpolated"
         sweep[name] = sweep.get(name, 0) + 1
         _crossing_anchor_trace(name, sweep)
         return True
+
+    def _crossing_anchor_ground(self):
+        """The lower medium's (eps_r, sigma) as the C++ front holds them
+        (`ground_eps_r_`, `ground_sigma_`), for `crossing_anchors`' error
+        rule; (0, 0) when the solver has none."""
+        eps = self.ground_eps
+        if isinstance(eps, (tuple, list)) and len(eps) == 2:
+            return float(eps[0]), float(eps[1])
+        return 0.0, 0.0
 
     def _crossing_node_charges(self, geom, tents, ctx, A, P, omega):
         """The node charge the same-medium REMAINDERS carry, taken back out
