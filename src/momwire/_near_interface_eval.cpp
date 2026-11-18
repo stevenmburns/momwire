@@ -496,14 +496,33 @@ class PlaneSheet {
 
 // `_plane_sheet`: the process's sheets, keyed by what a node depends on (a
 // node's value never depends on how far its sheet was grown).
+//
+// Locking: `g_sheet_mutex` guards the maps (`g_sheets`, `g_cones`,
+// `g_sheet_locks`) and is held only to find or add an entry. A sheet is
+// grown and read under its FREQUENCY's lock (`sheet_lock`, keyed by k_p and
+// k_m, which every sheet key carries): one fill's calls -- an OpenMP team's
+// included -- share it, as they shared the one process lock before, while a
+// frequency-parallel sweep's fills, each its own frequency, grow their own
+// sheets at once. A node's value depends on its key alone, so no order of
+// growth moves a bit.
 std::mutex g_sheet_mutex;
 std::map<std::tuple<bool, bool, double, double, double, double, double>, std::unique_ptr<PlaneSheet>>
     g_sheets;
+std::map<std::tuple<double, double, double>, std::unique_ptr<std::mutex>> g_sheet_locks;
+
+std::mutex &sheet_lock(double k_p, cd k_m) {
+    std::lock_guard<std::mutex> lock(g_sheet_mutex);
+    std::unique_ptr<std::mutex> &m = g_sheet_locks[std::make_tuple(k_p, k_m.real(), k_m.imag())];
+    if (m == nullptr) m.reset(new std::mutex());
+    return *m;
+}
 
 // A sheet new to this process starts from the executable's store when it
-// holds one (`PlaneSheet::restore`).
+// holds one (`PlaneSheet::restore`). Called under the frequency's
+// `sheet_lock`; the map itself under `g_sheet_mutex`.
 PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth, bool point = false) {
     const auto key = std::make_tuple(point, height, height ? depth : -1.0, k_p, k_m.real(), k_m.imag(), zp);
+    std::lock_guard<std::mutex> map_lock(g_sheet_mutex);
     auto it = g_sheets.find(key);
     if (it == g_sheets.end()) {
         std::unique_ptr<PlaneSheet> sh(new PlaneSheet(k_p, k_m, zp, height, depth, point));
@@ -754,6 +773,7 @@ std::map<ConeKey, std::unique_ptr<ConeSheet>> g_cones;
 
 ConeSheet &cone_sheet(double k_p, cd k_m, const Cone &c, double beta, double a, int p) {
     const ConeKey key{std::make_tuple(p, k_p, k_m.real(), k_m.imag(), c.d, c.zf, beta, a), c.zs};
+    std::lock_guard<std::mutex> map_lock(g_sheet_mutex);  // under the frequency's `sheet_lock`
     auto it = g_cones.find(key);
     if (it == g_cones.end())
         it = g_cones.emplace(key, std::unique_ptr<ConeSheet>(new ConeSheet(k_p, k_m, c.d, c.zf, beta, a, c.zs, p)))
@@ -799,26 +819,53 @@ void crossing_table_grid(double k_p, double h[3], std::ptrdiff_t n[3]) {
 // alone (the other parts of Python's key are this file's constants), so
 // sharing a table across fills cannot move a bit.
 using Table = std::shared_ptr<const std::vector<cd>>;
+// A fill's state that is per thread in the copy built without OpenMP and
+// process-wide with it (`g_active`, below, has the reason).
+#if defined(_OPENMP)
+#define MW_FILL_STATE
+#else
+#define MW_FILL_STATE thread_local
+#endif
 std::mutex g_crossing_mutex;
 std::list<std::pair<std::array<uint64_t, 3>, Table>> g_crossing_tables;  // most recent first
 
 Table crossing_table(const Evaluator &ev, const double h[3], const std::ptrdiff_t n[3]) {
     const std::array<uint64_t, 3> key{bits(ev.k_p), bits(ev.k_m.real()), bits(ev.k_m.imag())};
+    auto find = [&]() -> Table {
+        for (auto it = g_crossing_tables.begin(); it != g_crossing_tables.end(); ++it)
+            if (it->first == key) {
+                g_crossing_tables.splice(g_crossing_tables.begin(), g_crossing_tables, it);
+                return it->second;
+            }
+        return nullptr;
+    };
+#if defined(_OPENMP)
+    // Built under the lock: a fill's team asks at once and builds one.
     std::lock_guard<std::mutex> lock(g_crossing_mutex);
-    for (auto it = g_crossing_tables.begin(); it != g_crossing_tables.end(); ++it)
-        if (it->first == key) {
-            g_crossing_tables.splice(g_crossing_tables.begin(), g_crossing_tables, it);
-            return it->second;
-        }
+    if (Table t = find()) return t;
+#else
+    {
+        std::lock_guard<std::mutex> lock(g_crossing_mutex);
+        if (Table t = find()) return t;
+    }
+    // Built outside the lock, so concurrent fills (a frequency-parallel
+    // sweep's, one per thread) build their own frequencies' tables at once;
+    // a table another fill built for the same key meanwhile is taken instead
+    // of this one, which holds the same values.
+#endif
     auto vals = std::make_shared<std::vector<cd>>(static_cast<size_t>(n[0] * n[1] * n[2]) * N_KEYS);
     ni_core::crossing_table_build(ev.k_p, ev.k_m, h, n, LAM_MULT, COLUMN_P, DETOUR, ev.n_threads, gx24().data(),
                                   gw24().data(), 24, ev.cancel_flag, vals->data());
+#if !defined(_OPENMP)
+    std::lock_guard<std::mutex> lock(g_crossing_mutex);
+    if (Table t = find()) return t;
+#endif
     g_crossing_tables.emplace_front(key, std::move(vals));
     while (g_crossing_tables.size() > CROSSING_TABLE_CACHE_MAX) g_crossing_tables.pop_back();
     return g_crossing_tables.front().second;
 }
 
-bool g_crossing_taken = false;  // `_CrossingFill.taken`, this fill's
+MW_FILL_STATE bool g_crossing_taken = false;  // `_CrossingFill.taken`, this fill's (per thread: `g_active`)
 
 // `_twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache)`: the
 // twin, or with momwire#1860 L5 on and taken in this fill, the table for the
@@ -1027,7 +1074,14 @@ Features default_requested() {
     return f;
 }
 
-Features g_requested = default_requested(), g_active, g_stamped;
+Features g_requested = default_requested(), g_stamped;
+// The features on in the current fill (`FeatureFill`). In the copy built
+// without OpenMP (the executable's serial one) every fill runs wholly on the
+// thread that started it, so this is per thread: a frequency-parallel sweep
+// (`_nec5_razor_printout_core.h`, `presolve`) runs one fill per worker, and
+// each worker's `FeatureFill` saves, sets and restores its own. With OpenMP
+// a fill's team reads what its master set, so it stays process-wide there.
+MW_FILL_STATE Features g_active;
 
 bool *feature_slot(Features &f, const std::string &name) {
     if (name == "factored_columns") return &f.factored_columns;
@@ -1244,7 +1298,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
     }
     // `_serve_from_sheets`: planes, then heights, each grown to this call's
     // farthest row on it.
-    std::lock_guard<std::mutex> lock(g_sheet_mutex);
+    std::lock_guard<std::mutex> lock(sheet_lock(ev.k_p, ev.k_m));
     for (int pass = 0; pass < 2; pass++) {
         const bool height = pass == 1;
         const std::vector<double> &values = height ? plan->heights : plan->planes;
@@ -1408,7 +1462,7 @@ void point_tables(const Evaluator &ev, const SheetPlan *plan, const double *rows
     if (!any) return;
     // `_serve_from_sheets(..., "point")`: planes, then heights, each grown to
     // this call's farthest row on it.
-    std::lock_guard<std::mutex> lock(g_sheet_mutex);
+    std::lock_guard<std::mutex> lock(sheet_lock(ev.k_p, ev.k_m));
     for (int pass = 0; pass < 2; pass++) {
         const bool height = pass == 1;
         const std::vector<double> &values = height ? plan->heights : plan->planes;
