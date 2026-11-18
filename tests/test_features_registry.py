@@ -377,6 +377,35 @@ def test_the_mingw_executable_keeps_what_the_msvc_one_runs():
         assert F.certified(name, "exe", **kw, toolchain="mingw"), name
 
 
+def _exe_level_returns():
+    """`exe_level()`'s {level id: the number its return states}."""
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    body = re.search(r"int exe_level\(\) \{(.*?)\n\}", src, re.S)
+    assert body is not None
+    pairs = re.findall(r"return (\d+);\s*// (exe-[a-z0-9-]+)", body[1])
+    return {level: int(number) for number, level in pairs}
+
+
+def test_every_carried_feature_reaches_the_linux_and_macos_executables():
+    # Every row of `EXE_FEATURES` is carried by the nec5 executables on Linux
+    # and macOS, whose level is deeper than both Windows builds'. A reach
+    # below it refuses the feature there. The two tables are held equal
+    # elsewhere, so a row left behind by a re-rank passes that test when it is
+    # wrong in both: this one holds each table to the level itself.
+    level_id = "exe-nec5-bspline-razor-2p-linux-macos"
+    level = F._level(level_id)
+    assert _exe_level_returns()[level_id] == level
+    assert level > F._level("exe-nec5-bspline-razor-2p-windows-mingw")
+    carried = _exe_features()
+    assert carried
+    for name, reach in carried.items():
+        assert reach >= level, f"EXE_FEATURES: {name} stops short of {level_id}"
+        assert F.FEATURES[name].reach >= level, f"registry: {name}"
+        for platform in ("linux", "darwin"):
+            kw = dict(basis="razor2p", platform=platform)
+            assert F.certified(name, "exe", **kw), (name, platform)
+
+
 def test_the_level_numbers_follow_the_ids():
     assert [F._level(lv.id) for lv in F.LEVELS] == list(range(1, len(F.LEVELS) + 1))
 
