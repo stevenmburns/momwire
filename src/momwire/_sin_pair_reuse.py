@@ -60,7 +60,9 @@ workers each run the kernel on one OpenMP thread. Classes are found once per
 geometry (the key holds no k), Φ per class once per frequency, then gathered
 into each observer band, so the reduction (`_reduce_phi_band`) is
 unchanged. Memory: an (N_obs, N_src) int32 class map, a quarter of Z, plus
-the class table; no Φ-sized copy.
+the class table; no Φ-sized copy. The census holds far more than the plan it
+leaves, each band keeping its own classes until they are merged, and both are
+held to `PLAN_BUDGET_BYTES` (momwire#2019).
 
 OVER A FINITE GROUND (momwire#1970) the image block is not a free-space
 field: the Sommerfeld fill subtracts C2 Φ_img - S, S the interpolated
@@ -285,12 +287,69 @@ _HAVE_FACTORIZE = _acc is not None and bool(
 #: block is ~35 MB, so the budget holds a few decks' direct and image blocks.
 SHARED_PLAN_BYTES = 1 << 30
 
+#: The byte budget of one fill's plans AND their census, razor-2p's
+#: (`_razor_pair_reuse_core.h`, PLAN_BUDGET_BYTES) and for its reason: the
+#: 512 MB hosted bound is this, one dense Z (144 MB at the 3000-segment cap)
+#: and the interpreter. Past it the fill declines (`over_budget_reason`) and
+#: runs as with reuse off (momwire#2019). Measured, Skylake, 4 threads, free
+#: space unless named, peak RSS of the solving process in MB, reuse off / on
+#: before the budget / on with it:
+#:
+#:   deck                            segs   off   before  with
+#:   20 elements, each its own h     3220   421   1663    451  declines
+#:   20 elements of 5 lengths        3020   382   1277    397  declines
+#:   20 equal elements               3020   382    521    447  reuses
+#:   the same, unequal spacing       3020   382    503    433  reuses
+#:   the same, equal, Sommerfeld     3020   588    523    487  reuses
+#:   uniform dipole                  4001   597    765    670  reuses
+#:   11 elements, each its own h     1111   164    296    292  reuses
+PLAN_BUDGET_BYTES = 256 << 20
+
+#: Peak resident bytes of the census per class a band kept, beside the class
+#: map: each band's keys, representatives and codes (89 B), then at the merge
+#: the joined keys and the hash kernel's table and inverses. Counted per BAND
+#: class because a class seen in many bands is held once per band until the
+#: merge. Measured (Skylake, 4 threads, free space), the census's peak over
+#: its entry per band class: 208 to 235 B over nine decks of 0.55 M to
+#: 7.9 M band classes.
+CENSUS_BYTES_PER_BAND_CLASS = 240
+
+#: Bytes per class and per near pair of one wavenumber's values, the three
+#: complex shapes (`evaluate`, `evaluate_near`).
+VALUE_BYTES = 48
+
+#: Evenly spaced bands censused first, to project the census's size so that
+#: a deck bound to decline does not pay for the rest of it, `PILOT_WIDTH` at
+#: a time: a band's transient is about 240 B per pair, so a pool's worth at
+#: once would itself pass the reuse-off fill's peak on a deck about to decline
+#: (488 MB in the census against 421 MB off, the 3,220-segment tapered Yagi).
+PILOT_BANDS = 4
+PILOT_WIDTH = 2
+
 _shared_plans: OrderedDict = OrderedDict()
 _shared_lock = threading.Lock()
 
 
+class _OverBudget:
+    """A census that stopped at `PLAN_BUDGET_BYTES`: kept in the plan cache
+    like a plan, so that a sweep does not repeat it per frequency."""
+
+
+OVER_BUDGET = _OverBudget()
+
+
+def over_budget_reason() -> str:
+    """`pair_reuse_declined` for a deck past the budget, razor-2p's words."""
+    return (
+        "the plan and its census would exceed the "
+        f"{PLAN_BUDGET_BYTES / 2**20:.6g} MB budget"
+    )
+
+
 def plan_nbytes(plan) -> int:
     """The arrays a plan holds, in bytes (its lists of slices are small)."""
+    if plan is OVER_BUDGET:
+        return 0
     return sum(
         v.nbytes for v in vars(plan).values() if isinstance(v, np.ndarray)
     ) + sum(
@@ -299,6 +358,16 @@ def plan_nbytes(plan) -> int:
         for x in blk
         if isinstance(x, np.ndarray)
     )
+
+
+def fill_nbytes(plan) -> int:
+    """What a plan costs a fill: its arrays and one wavenumber's values."""
+    return plan_nbytes(plan) + VALUE_BYTES * (plan.n_classes + plan.n_near)
+
+
+def _within_budget(plan, budget):
+    """`plan`, or `OVER_BUDGET` where its fill would pass `budget`."""
+    return plan if budget is None or fill_nbytes(plan) <= budget else OVER_BUDGET
 
 
 def shared_plan(key, build):
@@ -319,7 +388,13 @@ def shared_plan(key, build):
             _shared_plans.move_to_end(key)
             return held[0]
     plan = build()
-    size = plan_nbytes(plan)
+    # The census's pages go back before the fill: they sit free in the pool's
+    # arenas, where Z and the fill's arrays would not reuse them.
+    from .razor import _trim_heap
+
+    _trim_heap()
+    # A declined census holds no arrays, but its key is the deck's geometry.
+    size = plan_nbytes(plan) or sum(len(x) for x in key if isinstance(x, bytes))
     with _shared_lock:
         _shared_plans[key] = (plan, size)
         _shared_plans.move_to_end(key)
@@ -738,15 +813,70 @@ def _run(fn, items):
     return [r for chunk in _pool().map(run, runs) for r in chunk]
 
 
+def _census_bands(band, starts, map_bytes, budget):
+    """`band` over `starts`, its results in their order, or None once the
+    census would pass `budget` bytes. `budget` None runs every band.
+
+    `PILOT_BANDS` evenly spaced bands go first and project the whole census,
+    so a deck far past the budget stops after those. The running count then
+    stops the rest as soon as the classes kept pass it. A band's result does
+    not depend on when it ran, so the order moves no class."""
+    if budget is None:
+        return _run(band, starts)
+
+    def cost(band_classes):
+        return map_bytes + CENSUS_BYTES_PER_BAND_CLASS * band_classes
+
+    n = len(starts)
+    at = np.unique(np.linspace(0, n - 1, min(PILOT_BANDS, n)).astype(np.int64))
+    at = at.tolist()
+    out = [None] * n
+    for p in range(0, len(at), PILOT_WIDTH):
+        some = at[p : p + PILOT_WIDTH]
+        for i, r in zip(some, _run(band, [starts[i] for i in some])):
+            out[i] = r
+    seen = sum(out[i][0][0].shape[0] for i in at)
+    if cost(seen * n / len(at)) > budget:
+        return None
+    lock = threading.Lock()
+    over = False
+
+    def guarded(i):
+        nonlocal seen, over
+        if over:
+            return
+        out[i] = band(starts[i])
+        with lock:
+            seen += out[i][0][0].shape[0]
+            over = over or cost(seen) > budget
+
+    _run(guarded, sorted(set(range(n)) - set(at)))
+    return None if over else out
+
+
 def build_plan(
-    obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows, src_rev=None
+    obs_c,
+    obs_t,
+    src_c,
+    src_t,
+    seg_h,
+    a_obs,
+    src_type,
+    obs_type,
+    rows,
+    src_rev=None,
+    budget=None,
 ):
     """The class map over every (observer, source) pair, found in observer
     bands whose transients together hold `rows` rows (O(rows * N_src)).
 
     With `src_rev` (each source's type reversed, `reversible_segment_types`)
     and `CANONICAL`, the pairs are keyed in their canonical orientation and
-    the map is coded (momwire#1969, module docstring)."""
+    the map is coded (momwire#1969, module docstring).
+
+    With `budget` (bytes), returns `OVER_BUDGET` where the census or the
+    plan's fill would pass it (momwire#2019); the map is counted before it is
+    allocated."""
     obs_c = np.asarray(obs_c, dtype=np.float64)
     obs_t = np.asarray(obs_t, dtype=np.float64)
     src_c = np.asarray(src_c, dtype=np.float64)
@@ -761,6 +891,8 @@ def build_plan(
         ds = (np.asarray(src_rev, np.int64) - src_type) * n_obs_types
         if not ds.any():
             ds = None
+    if budget is not None and 4 * M * N > budget:
+        return OVER_BUDGET
     cls = np.empty((M, N), dtype=np.int32)
     workers = _workers()
     rows = max(1, int(rows) // workers)
@@ -802,7 +934,9 @@ def build_plan(
         r_first, n_first = np.divmod(first, N)
         return keys, canon, r_first + i0, n_first, near, rep_code
 
-    results = _run(band, starts)
+    results = _census_bands(band, starts, cls.nbytes, budget)
+    if results is None:
+        return OVER_BUDGET
     # The bands' classes merged: a key seen in two bands is one class.
     keys = [np.concatenate([r[0][j] for r in results]) for j in range(5)]
     gfirst, ginv = _group(keys)
@@ -842,7 +976,7 @@ def build_plan(
     runs = [
         (c0, c1, int(rep_obs[c0])) for c0, c1 in zip(edges[:-1], edges[1:]) if c1 > c0
     ]
-    return Plan(
+    plan = Plan(
         cls=cls,
         rep_src=rep_src,
         near_flat=near_flat,
@@ -853,6 +987,7 @@ def build_plan(
         rep_code=rep_code if coded else None,
         code_bits=CODE_BITS if coded else 0,
     )
+    return _within_budget(plan, budget)
 
 
 def near_blocks(near_flat, n_src, a_obs, rows=None):
@@ -977,6 +1112,7 @@ def build_ground_plan(
     rows,
     src_rev=None,
     obs_rev=None,
+    budget=None,
 ):
     """The reflected term's class map (`GroundPlan`) over every (observer,
     source) pair, the REAL sources' (the image is the evaluator's), found in
@@ -988,7 +1124,8 @@ def build_ground_plan(
     With `src_rev` / `obs_rev` (`reversible_ground_types`) and `CANONICAL`,
     the pairs are keyed in their canonical orientation, as `build_plan`'s:
     d.a is odd under the source's reversal, d.b under the observer's, a.b
-    under either, and the types carry t_nz, t_mz and the end codes."""
+    under either, and the types carry t_nz, t_mz and the end codes. `budget`
+    is `build_plan`'s."""
     obs_c = np.asarray(obs_c, dtype=np.float64)
     obs_t = np.asarray(obs_t, dtype=np.float64)
     src_c = np.asarray(src_c, dtype=np.float64)
@@ -1010,6 +1147,8 @@ def build_ground_plan(
         do = np.asarray(obs_rev, np.int64) - obs_type
         ds = ds if ds.any() else None
         do = do if do.any() else None
+    if budget is not None and 4 * M * N > budget:
+        return OVER_BUDGET
     cls = np.empty((M, N), dtype=np.int32)
     workers = _workers()
     rows = max(1, int(rows) // workers)
@@ -1044,7 +1183,9 @@ def build_ground_plan(
             rep_code = np.zeros(first.size, np.int8)
         return [c[first] for c in cols], first + i0 * N, near, rep_code
 
-    results = _run(band, starts)
+    results = _census_bands(band, starts, cls.nbytes, budget)
+    if results is None:
+        return OVER_BUDGET
     n_cols = len(results[0][0])
     keys = [np.concatenate([r[0][j] for r in results]) for j in range(n_cols)]
     gfirst, ginv = _group(keys)
@@ -1066,7 +1207,7 @@ def build_ground_plan(
         off += n_b
     near_flat = np.concatenate([r[2] for r in results])
     del results, ginv
-    return GroundPlan(
+    plan = GroundPlan(
         cls=cls,
         rep_flat=rep_flat,
         rep_blocks=near_blocks(rep_flat, N, a_obs, rows=REP_ROWS),
@@ -1075,6 +1216,7 @@ def build_ground_plan(
         rep_code=rep_code if coded else None,
         code_bits=CODE_BITS if coded else 0,
     )
+    return _within_budget(plan, budget)
 
 
 def to_canonical(values, rep_code):
