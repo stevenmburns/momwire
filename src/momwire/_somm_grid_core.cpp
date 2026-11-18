@@ -486,7 +486,10 @@ void eps_rungs(cd eps_t, cd &lo, cd &hi, double &t) {
 // failure is a miss or a skipped write, never an error; writes go to a
 // unique temporary file renamed into place, so concurrent processes and a
 // killed one leave only whole files. Least-recently-used eviction (mtime;
-// a hit refreshes it) keeps the directory under MOMWIRE_SOMM_CACHE_MAX_MB.
+// a hit refreshes it) keeps every build's files TOGETHER under
+// MOMWIRE_SOMM_CACHE_MAX_MB (momwire#2014, docs/design/exe-somm-store-bound.md):
+// each build has its own directory, exe/<tag>, and a replaced build's is never
+// read again, so a bound per directory let the total grow by one per upgrade.
 namespace {
 
 namespace fs = std::filesystem;
@@ -666,34 +669,118 @@ long long disk_merge(const double key[5], Grid &g) {
     return got;
 }
 
-void evict(const fs::path &keep) {
+// Every entry of `dir`, on the iterator's non-throwing path: another process
+// can delete an entry, or the directory, under the walk, and the range-for's
+// increment would throw out of a run that only wanted to tidy up.
+template <class F>
+void each_entry(const fs::path &dir, F &&visit) {
     std::error_code ec;
-    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+    const fs::directory_iterator end;
+    while (!ec && it != end) {
+        visit(*it);
+        it.increment(ec);
+    }
+}
+
+// How long a build with no table left keeps its seen lists. They are small and
+// never evicted (the below table's sweep anchors read them), so without this a
+// replaced build's directory would outlive its tables for good.
+constexpr std::chrono::hours RETIRE_AFTER{24 * 30};
+
+// One pass over exe/*: the finished files of every build, oldest use first,
+// until the total is under the bound. Everything here may lose a race with
+// another process, of this build or another: a file that cannot be read or
+// deleted (Windows refuses while it is open elsewhere) is skipped, and the
+// owner of a deleted file sees a miss. The file just written stays, so one
+// table bigger than the bound is kept until something newer replaces it.
+void evict_all_builds(const fs::path &keep) {
+    struct Build {
+        fs::path dir;
+        size_t tables = 0;
+        bool in_use = false;  // a recent seen list, a live temporary, a stranger
+        std::vector<fs::path> seen;
+    };
+    struct Table {
+        fs::file_time_type used;
+        fs::path path;
+        uint64_t size;
+        size_t build;
+    };
+    std::vector<Build> builds;
+    std::vector<Table> tables;
     uint64_t total = 0;
     const auto now = fs::file_time_type::clock::now();
-    for (const auto &e : fs::directory_iterator(g_disk.dir, ec)) {
-        std::error_code e2;
-        if (!e.is_regular_file(e2)) continue;
-        const fs::path p = e.path();
-        const auto t = fs::last_write_time(p, e2);
-        if (e2) continue;
-        if (p.extension() == ".tmp") {
-            if (now - t > std::chrono::hours(1)) fs::remove(p, e2);
-            continue;
-        }
-        if (p.extension() != ".grid") continue;
-        const uint64_t size = fs::file_size(p, e2);
-        if (e2) continue;
-        total += size;
-        files.emplace_back(t, p);
-    }
-    std::sort(files.begin(), files.end());
-    for (const auto &f : files) {
+    each_entry(g_disk.dir.parent_path(), [&](const fs::directory_entry &sub) {
+        std::error_code e1;
+        if (!fs::is_directory(sub.symlink_status(e1)) || e1) return;  // never through a link
+        Build b;
+        b.dir = sub.path();
+        const size_t id = builds.size();
+        each_entry(b.dir, [&](const fs::directory_entry &e) {
+            std::error_code e2;
+            const fs::path p = e.path();
+            if (!fs::is_regular_file(e.symlink_status(e2)) || e2) {
+                b.in_use = true;
+                return;
+            }
+            const auto t = fs::last_write_time(p, e2);
+            if (e2) return;
+            const fs::path ext = p.extension();
+            if (ext == ".tmp") {
+                if (now - t > std::chrono::hours(1))
+                    fs::remove(p, e2);
+                else
+                    b.in_use = true;
+                return;
+            }
+            const bool table = ext == ".grid";
+            const bool seen = ext == ".bin" && p.filename().string().rfind("seen-", 0) == 0;
+            if (!table && !seen) {
+                b.in_use = true;
+                return;
+            }
+            const uint64_t size = fs::file_size(p, e2);
+            if (e2) return;
+            total += size;
+            if (table) {
+                tables.push_back(Table{t, p, size, id});
+                b.tables++;
+            } else {
+                b.seen.push_back(p);
+                if (now - t < RETIRE_AFTER) b.in_use = true;
+            }
+        });
+        builds.push_back(std::move(b));
+    });
+    std::sort(tables.begin(), tables.end(), [](const Table &a, const Table &b) {
+        return a.used != b.used ? a.used < b.used : a.path < b.path;
+    });
+    for (const Table &f : tables) {
         if (total <= g_disk.max_bytes) break;
-        if (f.second == keep) continue;
+        if (f.path == keep) continue;
         std::error_code e2;
-        const uint64_t size = fs::file_size(f.second, e2);
-        if (!e2 && fs::remove(f.second, e2)) total -= size;
+        if (fs::remove(f.path, e2) && !e2) {
+            total -= f.size;
+            builds[f.build].tables--;
+            g_stats.evicted++;
+        }
+    }
+    // A replaced build with nothing left goes altogether. Its directory may
+    // be another running build's that has not written yet: that build's next
+    // write makes it again, and a write that loses this race is skipped.
+    for (const Build &b : builds) {
+        if (b.tables != 0 || b.in_use || b.dir == g_disk.dir) continue;
+        std::error_code e2;
+        for (const fs::path &p : b.seen) fs::remove(p, e2);
+        if (fs::remove(b.dir, e2) && !e2) g_stats.retired++;
+    }
+}
+
+void evict(const fs::path &keep) {
+    try {
+        evict_all_builds(keep);
+    } catch (...) {  // tidying up is never worth a run (a path that will not convert, memory)
     }
 }
 

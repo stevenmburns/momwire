@@ -124,15 +124,22 @@ std::vector<cd> far_pack(const Grid &g);
 // `tag` is the executable's identity (its version and build); the
 // directory is MOMWIRE_SOMM_CACHE_DIR, else the platform cache dir's
 // momwire/sommerfeld, then exe/<tag>. MOMWIRE_SOMM_CACHE=0 (off / false /
-// no) leaves it off; MOMWIRE_SOMM_CACHE_MAX_MB (default 512) bounds it.
+// no) leaves it off. MOMWIRE_SOMM_CACHE_MAX_MB (default 512) bounds the
+// finished files of ALL the builds under exe/ together, least recently used
+// first across them (momwire#2014, docs/design/exe-somm-store-bound.md), so a
+// replaced executable's directory ages out instead of staying for good. A
+// file another process evicts is a miss here, never an error. The Python
+// store (`_somm_disk_cache`, the .npz files one level up) has its own bound.
 void configure_disk_cache(const std::string &tag);
 struct DiskStats {
     uint64_t hits = 0, misses = 0, writes = 0, rejected = 0;
+    uint64_t evicted = 0, retired = 0;  // tables deleted, builds' directories removed
 };
 DiskStats disk_stats();
 // The configured store's directory and tag (false while it is off), and its
-// LRU eviction after a write -- for the below/below table's files, which
-// share the directory and the size bound (`_somm_below_fill_core`).
+// LRU eviction after a write (over every build's files) -- for the below/below
+// table's files, which share the directory and the size bound
+// (`_somm_below_fill_core`).
 bool disk_location(std::filesystem::path &dir, std::string &tag);
 void disk_evict(const std::filesystem::path &keep);
 // The same store's file I/O for a kind kept beside the masters (the

@@ -669,7 +669,7 @@ holds. Nothing on the disk path raises into a solve.
 |---|---|
 | `MOMWIRE_SOMM_CACHE_DIR` | the directory; default `%LOCALAPPDATA%\momwire\Cache\sommerfeld` (Windows), `~/Library/Caches/momwire/sommerfeld` (macOS), `$XDG_CACHE_HOME/momwire/sommerfeld` or `~/.cache/momwire/sommerfeld` (elsewhere) |
 | `MOMWIRE_SOMM_CACHE` | `0` / `off` / `false` / `no` disables the disk level |
-| `MOMWIRE_SOMM_CACHE_MAX_MB` | size bound, default 512 |
+| `MOMWIRE_SOMM_CACHE_MAX_MB` | size bound, default 512: the Python store's `.npz` files, and separately all the standalone executables' builds under `exe/` together (momwire#2014) |
 
 Eviction is least-recently-used by mtime (a hit refreshes it), run after
 every write until the `.npz` total is under the bound; the file just written
