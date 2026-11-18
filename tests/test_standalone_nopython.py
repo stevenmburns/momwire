@@ -1139,3 +1139,155 @@ def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
     assert not (tmp_path / "reuse.out").exists()
+
+
+# --- the frequency-parallel sweep (razor-2p's buried stepping FR) ---
+
+# Synthetic buried decks with a stepping FR, small enough for every lane:
+# a crossing deck whose network cells are thread-sensitive (a parked wire
+# pinned by a 1e10-ohm load, fed through TLs: its admittance reactance
+# prints OpenBLAS's threaded digits at two or more BLAS threads and other
+# ones at one, so a sweep that factored at one BLAS thread fails it), a
+# wholly-buried dipole with near fields, and a vertical on a buried hub.
+_SWEEP_DECKS = {
+    "crossing_net_pin": (
+        "CM two loaded verticals on buried stubs, each fed by an EX 4 through its\n"
+        "CM own TL from a parked node pinned by a 1e10-ohm load\nCM NEC-5\nCE\n"
+        "GW 1 3 0 0 -0.3 0 0 0 0.0015\nGW 4 12 0 0 0 0 0 2.5 0.0015\n"
+        "GW 2 3 2 0 -0.3 2 0 0 0.0015\nGW 5 12 2 0 0 2 0 2.5 0.0015\n"
+        "GW 3 3 0 2000 5 0 2000.05 5 0.001\nGE -1 0\n"
+        "GN 0 0 0 0 13.0 0.005 1.0 0.0 NOFILE\n"
+        "LD 0,4,1,0,18.,0.,0.\nLD 0,5,1,0,18.,0.,0.\nLD 4,3,2,0,1.E+10,0.\n"
+        "TL 3,2,4,1,50.,2.6,0.,0.,0.,0.\nTL 3,2,5,1,50.,2.9,0.,0.,0.,0.\n"
+        "EX 4 4 1 0 1.414214 0\nEX 4 5 1 0 0 1.414214\n"
+        "FR 0 4 0 0 28.0 0.5\nXQ\nEN\n"
+    ),
+    "below_plane_near": (
+        "CM a buried horizontal dipole 5 m at -0.3 m, near fields per frequency\n"
+        "CM NEC-5\nCE\nGW 1 11 -2.5 0.0 -0.3 2.5 0.0 -0.3 0.001\nGE -1 0\n"
+        "GN 0 0 0 0 13 0.005 1.0 0.0 NOFILE\nEX 0 1 6 0 1.0 0.0\n"
+        "FR 0 4 0 0 7.0 0.25\nNE 0 5 1 1 0.5 0.0 -0.05 1.0 0.0 0.0\n"
+        "NE 0 5 1 1 0.5 0.0 1.0 1.0 0.0 0.0\nXQ\nEN\n"
+    ),
+    "buried_hub": (
+        "CM GN 2: a vertical over a buried hub, fed at its base\nCE\n"
+        "GW 1 8 0 0 0 0 0 5.0 0.003\nGW 2 2 0 0 0 0 0 -0.1 0.003\n"
+        "GW 3 8 0 0 -0.1 5.0 0 -0.1 0.003\nGW 4 8 0 0 -0.1 -5.0 0 -0.1 0.003\n"
+        "GE -1\nGN 2 0 0 0 13.0 0.005\nFR 0 4 0 0 14.0 0.25\nEX 0 1 -1 0 1 0\nXQ\nEN\n"
+    ),
+}
+
+_SWEEP_LINE = re.compile(r"^cxx: frequencies presolved (\d+)$", re.M)
+_WORKERS_LINE = re.compile(r"^cxx: buried runs (\d+), frequency workers (\d+)$", re.M)
+
+
+def _sweep_run(tmp_path, name, deck, tag, env):
+    """One run of the executable on `deck` in its own directory, with its own
+    fresh Sommerfeld store: (printout bytes, store files, presolved count,
+    MW_EXE_TIMES's (buried runs, frequency workers) or None)."""
+    d = tmp_path / tag
+    d.mkdir()
+    (d / name).write_text(deck, newline="")
+    store = d / "store"
+    store.mkdir()
+    base = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("MOMWIRE_THREADS", "MW_EXE_FREQS", "MOMWIRE_SOMM_CACHE")
+    }
+    r = subprocess.run(
+        [EXE, name, "sweep.out"],
+        cwd=d,
+        env=dict(
+            base,
+            MW_EXE_TIMES="1",
+            MOMWIRE_SOMM_CACHE="1",
+            MOMWIRE_SOMM_CACHE_DIR=str(store),
+            **env,
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    m = _SWEEP_LINE.search(r.stderr)
+    assert m, r.stderr
+    w = _WORKERS_LINE.search(r.stderr)
+    stored = {
+        str(p.relative_to(store)): p.read_bytes()
+        for p in sorted(store.rglob("*"))
+        if p.is_file()
+    }
+    return (
+        (d / "sweep.out").read_bytes(),
+        stored,
+        int(m[1]),
+        (int(w[1]), int(w[2])) if w else None,
+    )
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's sweep")
+@pytest.mark.parametrize("deck", sorted(_SWEEP_DECKS))
+@pytest.mark.parametrize(
+    "crossing_table", [False, True], ids=["plain", "crossing_table"]
+)
+def test_a_buried_sweep_prints_the_serial_bytes(deck, crossing_table, tmp_path):
+    """The frequency-parallel sweep (`freq_workers_for`, `presolve`) taken
+    (MW_EXE_FREQS=1) and turned off (=0) at the same four-thread budget, and
+    the one-thread run: the sweep prints the flag-off run's bytes and writes
+    the same store, file for file, and is shown to RUN (its presolved count),
+    while the flag-off control presolves nothing. The flag-off run at four
+    threads is the threaded copy with BLAS at four, so a sweep that factored
+    at one BLAS thread would print the one-thread run's digits in the pinned
+    network cells instead. With crossing_table on, the sweep runs too: each
+    fill's feature state is its own thread's in the serial copy."""
+    name = f"{deck}.nec"
+    text = _SWEEP_DECKS[deck]
+    env = {"MOMWIRE_X_CROSSING_TABLE": "1"} if crossing_table else {}
+    off, off_store, off_n, _ = _sweep_run(
+        tmp_path, name, text, "off", dict(env, MOMWIRE_THREADS="4", MW_EXE_FREQS="0")
+    )
+    on, on_store, on_n, on_w = _sweep_run(
+        tmp_path, name, text, "on", dict(env, MOMWIRE_THREADS="4", MW_EXE_FREQS="1")
+    )
+    assert off_n == 0
+    assert on_n == 4, on_n
+    assert on_w == (4, 4), on_w
+    assert on == off
+    assert on_store == off_store
+    assert on_store, "the store was never written: the store half went unexercised"
+    if deck != "crossing_net_pin":
+        # The pinned network cells are the one deck whose one-thread digits
+        # are OpenBLAS's single-thread path's (7eb2830c); the others print
+        # the same at any count.
+        one, _, one_n, _ = _sweep_run(
+            tmp_path, name, text, "one", dict(env, MOMWIRE_THREADS="1")
+        )
+        assert one_n == 0
+        assert on == one
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's sweep")
+def test_the_sweep_policy_takes_full_rounds_and_declines_a_large_mesh(tmp_path):
+    """Without the gate hook: a small buried deck whose four frequencies fill
+    two-thread rounds exactly is swept, and a mesh past SWEEP_MAX_BASIS
+    (1250 basis functions: here a vertical on four 320-segment radials) is
+    not, at the same budget: past the largest mesh measured faster, the
+    OpenMP team's fill is taken (`freq_workers_for`'s size term)."""
+    small = _SWEEP_DECKS["buried_hub"]
+    _, _, n, w = _sweep_run(
+        tmp_path, "small.nec", small, "small", {"MOMWIRE_THREADS": "2"}
+    )
+    assert (n, w) == (4, (4, 2)), (n, w)
+    large = (
+        "CM a vertical on four 320-segment buried radials\nCM NEC-5\nCE\n"
+        "GW 1 320 0 0 -0.15 6.3 0 -0.15 0.0005\nGW 2 320 0 0 -0.15 0 6.3 -0.15 0.0005\n"
+        "GW 3 320 0 0 -0.15 -6.3 0 -0.15 0.0005\nGW 4 320 0 0 -0.15 0 -6.3 -0.15 0.0005\n"
+        "GW 5 2 0 0 -0.15 0 0 0 0.0005\nGW 6 10 0 0 0 0 0 10.5 0.0005\nGE -1 0\n"
+        "GN 0 0 0 0 13.0 0.005 1.0 0.0 NOFILE\nEX 0 6 1 0 1.0 0.0\n"
+        "FR 0 2 0 0 7.0 0.1\nXQ\nEN\n"
+    )
+    _, _, n, w = _sweep_run(
+        tmp_path, "large.nec", large, "large", {"MOMWIRE_THREADS": "2"}
+    )
+    assert (n, w) == (0, (2, 1)), (n, w)
