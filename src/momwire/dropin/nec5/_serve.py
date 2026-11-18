@@ -488,7 +488,7 @@ from ...bspline import BSplineSolver
 from ...deck._cards import tokenize
 from ... import _ground_spec, _medium_spec
 from ..._surface_height import StandOffFloorError
-from ... import _cmul, _lapack, _times
+from ... import _cmul, _features, _lapack, _times
 from ...deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
@@ -5133,11 +5133,12 @@ def _prepare(
             extended_kernel_default=True,
             basis_name=basis,
         )
-    except NotImplementedError as exc:
+    except (NotImplementedError, _features.FeatureNotCertified) as exc:
         # The crossing serve's scope (momwire#524 phase 2: one above member,
         # no other junction on the above side) is stated by the solver as
         # NotImplementedError; on this seam that is a refusal by name, not
-        # an INTERNAL ERROR frame (momwire#667).
+        # an INTERNAL ERROR frame (momwire#667). So is a native experimental
+        # feature asked for outside its reach: the registry's own sentence.
         raise ServeRefusal(str(exc)) from None
     times = _times.current()
     fill_seconds = factor_seconds = 0.0
@@ -5150,10 +5151,11 @@ def _prepare(
                 solution = _port_solution(solver, shared)
             fill_seconds = (times.elapsed_ms("fill") - fill0) / 1e3
             factor_seconds = (times.elapsed_ms("factor") - factor0) / 1e3
-    except StandOffFloorError as exc:
+    except (StandOffFloorError, _features.FeatureNotCertified) as exc:
         # The basis is built in the solve, so the stand-off floor (momwire#865)
         # is met here: a statement about the deck's geometry, refused by name
-        # as the NEC-4.2 slot refuses it, not an INTERNAL ERROR frame.
+        # as the NEC-4.2 slot refuses it, not an INTERNAL ERROR frame. A
+        # feature a solver reads only when it fills is refused the same way.
         raise ServeRefusal(str(exc)) from None
     return _Prepared(
         structure=structure,

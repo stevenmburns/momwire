@@ -35,6 +35,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from ... import _features
 from ...deck import BASES, NEC2_BASES
 from ...deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
@@ -498,6 +499,7 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
         ValueError,
         NotImplementedError,
         np.linalg.LinAlgError,
+        _features.FeatureNotCertified,  # a native feature outside its reach
     ) as exc:
         raise Nec4Refusal(str(exc)) from exc
 

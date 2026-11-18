@@ -4119,7 +4119,12 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
     except PortalError as exc:
         _append_error(out, exc)
         return out, err
-    except (ValueError, NotImplementedError, np.linalg.LinAlgError) as exc:
+    except (
+        ValueError,
+        NotImplementedError,
+        np.linalg.LinAlgError,
+        _features.FeatureNotCertified,  # a native feature outside its reach
+    ) as exc:
         _append_error(out, exc)
         return out, err
 
