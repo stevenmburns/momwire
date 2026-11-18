@@ -668,13 +668,7 @@ FEATURES: dict[str, Feature] = {
             reach=7,
             env="MOMWIRE_X_CROSSING_ANCHORS",
             kind="native",
-            # PLACEHOLDER, to replace before a PR: no issue is filed for
-            # crossing_anchors. 1860 is the crossing-fill perf arc that
-            # factored_columns, height_sheet_recal, crossing_table and
-            # crossing_above_rule cite (its L1-L5); this lever attacks the
-            # same cross-block cost, but across a sweep, and is not one of
-            # its filed levers.
-            issue=1860,
+            issue=2010,
             since="2026-11-17",
             kwarg="crossing_anchors",
             paths=("tests/test_crossing_anchors_1117.py",),
