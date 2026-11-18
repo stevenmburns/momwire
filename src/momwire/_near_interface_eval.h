@@ -206,16 +206,20 @@ struct Features {
     bool crossing_table = false;      // L5: the crossing rows from one table
     bool crossing_above_rule = false;  // B1: bspline's above x above rule
     bool crossing_sheet_retune = false;  // momwire#1956: the sheets' build weights retuned
-    // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
-    // carried here because this is where an executable's requested features
-    // live; the razor seam reads it into `FrontInputs::pair_reuse`.
-    bool razor_pair_reuse = false;
     // momwire#1898: bspline's junction rows eliminated before the factor.
     // Not a fill lever: `bspline::solve_ports` reads it from the REQUESTED
     // set at solve time, as `BSplineSolver` reads its flag at construction.
     // No executable requests it (outside EXE_FEATURES); in-process test
     // hooks do.
     bool kcl_nullspace = false;
+    // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
+    // carried here because this is where an executable's requested features
+    // live; the razor seam reads it into `FrontInputs::pair_reuse`.
+    bool razor_pair_reuse = false;
+    // razor-2p's cross blocks from anchors across a sweep
+    // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
+    // either: the crossing fill reads it from the active features.
+    bool crossing_anchors = false;
 };
 Features &requested_features();
 const Features &active_features();

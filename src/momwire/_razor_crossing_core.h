@@ -28,6 +28,7 @@
 #include "_razor_front_core.h"
 
 #include <complex>
+#include <string>
 #include <vector>
 
 namespace mw {
@@ -39,6 +40,64 @@ namespace razor {
 // below wing). Throws FrontError (solve phase) where Python raises.
 void crossing_blocks(const Front &f, std::vector<cd> &z,
                      const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag);
+
+// The opt-in feature `crossing_anchors` (`ni_eval::Features::crossing_anchors`):
+// a frequency sweep's cross blocks and node charges computed exactly at a few
+// anchor wavenumbers spanning the sweep, and every other sweep point's
+// written by barycentric interpolation between them (Chebyshev-Lobatto
+// nodes in k, the plan's two ends among them). The pair geometry is the
+// same at every frequency; only the kernel's values move, and over a narrow
+// band they move smoothly. The above and below blocks stay exact per
+// frequency.
+//
+// The run's frequency plan: the wavelengths every preparation of the deck
+// solves at (`Prepared::wavelength`), handed over by the seam
+// (`RazorSeamEngine::seam_done`) before any fill; empty clears it. A fill at
+// a wavenumber outside the plan, on another geometry than the anchors', or
+// under a plan that declines (too few frequencies, too wide a band) takes
+// the exact cross blocks: the same bits as with the feature off. The anchors
+// are built once, in a fixed order, under a lock, so concurrent fills of one
+// sweep read the same bytes whichever arrives first.
+void set_band_plan(const std::vector<double> &wavelengths);
+
+// What the anchors did since the plan was last set.
+struct AnchorCounters {
+    long long anchors_built = 0;  // exact anchor fills
+    long long interpolated = 0;   // fills written from the anchors
+    long long copied = 0;         // fills that sat on an anchor
+    long long declined = 0;       // fills that took the exact blocks while on
+    std::string plan;             // "" (no plan), "ok", or why it declines
+};
+AnchorCounters anchor_counters();
+
+// True when `a` and `b` give the same cross blocks at one wavenumber: the
+// geometry, media and ground constants `crossing_blocks` reads.
+bool same_crossing_geometry(const Front &a, const Front &b);
+
+// The anchors' arithmetic, one copy for this fill and for the Python
+// route's (`razor.py`'s `_crossing_anchors_now`, through the extension), so
+// the two write the same bits.
+namespace anchors {
+struct Plan {
+    std::vector<double> k;  // the plan's distinct wavenumbers, ascending
+    bool ok = false;
+    std::string why;        // "" (no plan), "ok", or why it declines
+    int n_a = 5;
+    std::vector<double> anchor_k, bary_w;  // ok: the anchors, k_max first
+};
+// The plan over `wavelengths` (k = 2 pi / wavelength, as `Front::build`),
+// with MOMWIRE_CROSSING_ANCHOR_NODES / _BAND read now.
+Plan plan_of(const std::vector<double> &wavelengths);
+bool in_plan(const Plan &p, double k);
+// The Z entries the cross blocks and node charges write, as column-major
+// indices (col * n + row), ascending and distinct: each medium's rows x the
+// other's, and the crossing tents' columns.
+std::vector<int64_t> entries(int64_t n, const std::vector<int64_t> &rows_a, const std::vector<int64_t> &rows_b,
+                             const std::vector<int64_t> &tent_cols);
+// z[idx[e]] += the anchors' values (`raw`, n_a x m) at k: the anchor's own
+// where k is one (returns 0), else their barycentric interpolant (returns 1).
+int apply(cd *z, const int64_t *idx, size_t m, const cd *raw, const Plan &p, double k);
+}  // namespace anchors
 
 }  // namespace razor
 }  // namespace mw

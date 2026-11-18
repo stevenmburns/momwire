@@ -641,6 +641,42 @@ FEATURES: dict[str, Feature] = {
             # are aliases. Outside its reach, asked for only that way, off.
             part_of="pair_reuse",
         ),
+        # razor-2p's cross blocks across a frequency sweep from anchors
+        # (`_razor_crossing_core.cpp`, `set_band_plan`): the above x below
+        # blocks and the crossing node charges computed exactly at a few
+        # wavenumbers spanning the sweep (Chebyshev-Lobatto, the plan's two
+        # ends among them) and interpolated between them, each entry's
+        # propagation phase taken out first. The above and below blocks stay
+        # exact per frequency. Declines (the exact blocks, flag-off bits)
+        # under too few frequencies, too wide a band, a fill outside the
+        # plan or on another geometry. One C++ core for the plan, the
+        # entries and the interpolation (`_razor_crossing_core.h`'s
+        # `anchors`): the nec5-razor-2p executable's fill and RazorSolver's
+        # (`_crossing_anchors_now`, which fills its anchors with its own
+        # cross terms), so the two print the same bytes. It acts where a
+        # seam hands the fill its sweep: the NEC-5 seam's stepping FR, in
+        # C++ and in the drop-in. Reach 7: the Python routes and the nec5
+        # executables (nec5-razor-2p's alone, `EXE_FEATURE_BASES`).
+        Feature(
+            name="crossing_anchors",
+            reach=7,
+            env="MOMWIRE_X_CROSSING_ANCHORS",
+            kind="native",
+            issue=1860,
+            since="2026-11-17",
+            kwarg="crossing_anchors",
+            paths=("tests/test_crossing_anchors_1117.py",),
+            label="shared ground-crossing entries across a sweep",
+            summary=(
+                "On a frequency sweep of a wire crossing the ground (a vertical "
+                "over buried radials), compute the entries between the wires "
+                "above and below the ground at a few frequencies and "
+                "interpolate them at the rest, instead of computing them at "
+                "every frequency."
+            ),
+            drift=1e-4,  # PROVISIONAL
+            offer=False,
+        ),
     )
 }
 

@@ -1347,6 +1347,54 @@ _CXX_FRONT = True
 _CXX_WANT_FRONT = False
 
 
+def _geometry_key(geom):
+    """A content hash of a geometry dict (every array's dtype, shape and
+    bytes, every scalar's repr, in key order): the crossing anchors' cache
+    key."""
+    import hashlib
+
+    h = hashlib.sha256()
+
+    def walk(v):
+        if isinstance(v, np.ndarray):
+            h.update(f"a{v.dtype.str}{v.shape}".encode())
+            h.update(np.ascontiguousarray(v).tobytes())
+        elif isinstance(v, dict):
+            h.update(b"{")
+            for key in sorted(v, key=repr):
+                h.update(repr(key).encode())
+                walk(v[key])
+            h.update(b"}")
+        elif isinstance(v, (list, tuple)):
+            h.update(b"[")
+            for item in v:
+                walk(item)
+            h.update(b"]")
+        else:
+            h.update(repr(v).encode())
+
+    walk(geom)
+    return h.hexdigest()
+
+
+def _crossing_anchor_trace(what, sweep):
+    """MOMWIRE_CROSSING_ANCHOR_TRACE=1: the C++ fill's trace line for one
+    fill the feature is on for (`_razor_crossing_core.cpp`'s `anchor_trace`),
+    on the process's stderr."""
+    if os.environ.get("MOMWIRE_CROSSING_ANCHOR_TRACE") != "1":
+        return
+    plan = (sweep or {}).get("plan") or {}
+    why = plan.get("why") or "none"
+    line = (
+        f"crossing_anchors: {what} plan={why} n_a={plan.get('n_a', 0)} "
+        f"built={(sweep or {}).get('built', 0)} "
+        f"interpolated={(sweep or {}).get('interpolated', 0)} "
+        f"copied={(sweep or {}).get('copied', 0)}\n"
+    )
+    # File descriptor 2 itself: the drop-in shell holds sys.stderr.
+    os.write(2, line.encode())
+
+
 def _razor_cxx_wanted():
     if _RAZOR_CXX is not None:
         return bool(_RAZOR_CXX)
@@ -2007,6 +2055,7 @@ class RazorSolver(
         crossing_sheet_retune=None,
         razor_pair_reuse=None,
         pair_reuse=None,
+        crossing_anchors=None,
         cancel=None,
         **unsupported,
     ):
@@ -2103,6 +2152,13 @@ class RazorSolver(
         self._crossing_sheet_retune = _features.enabled(
             "crossing_sheet_retune", crossing_sheet_retune
         )
+        # The cross blocks across a sweep from anchors (`crossing_anchors`,
+        # native). None defers to MOMWIRE_X_CROSSING_ANCHORS; off is the
+        # exact cross terms, bit for bit. It acts only where the seam hands
+        # the solver its sweep (`_crossing_anchor_plan`, the NEC-5 drop-in's
+        # stepping FR); a lone solve has no sweep and fills exactly.
+        self._crossing_anchors = _features.enabled("crossing_anchors", crossing_anchors)
+        self._crossing_anchor_plan = None
         # momwire#1971: fill-pair reuse. None defers to
         # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
         # checks every window against the shipped fill. Off (0) is the fill
@@ -6045,6 +6101,20 @@ class RazorSolver(
             _ix_accumulate(Z, z_b, rows_b, Z_b)
             del Z_b
 
+        # The cross blocks and the node charges, or (the opt-in
+        # crossing_anchors) their interpolant across the sweep's anchors.
+        if not self._crossing_anchors_now(geom, tents, k, Z, restrict, rows_a, rows_b):
+            self._crossing_cross_terms(
+                geom, tents, k, omega, Z, restrict, z_of, rows_a, rows_b
+            )
+        return Z
+
+    def _crossing_cross_terms(
+        self, geom, tents, k, omega, Z, restrict, z_of, rows_a, rows_b
+    ):
+        """`_assemble_Z_crossing`'s cross blocks and crossing node charges
+        at (k, omega), folded into Z: `Z[R_a, C_b] -= cross`, `Z[R_b, C_a]
+        -= reversed cross`, then the tents' columns `+= charges`."""
         ctx = self._crossing_context(geom, k=k, omega=omega)
         axis_kw = dict(
             growth=_CROSSING_GROWTH,
@@ -6144,7 +6214,89 @@ class RazorSolver(
                 _ix_accumulate(Z, z_of[R], cols, charges[R])
             del charges
 
-        return Z
+    def _crossing_anchors_now(self, geom, tents, k, Z, restrict, rows_a, rows_b):
+        """The opt-in `crossing_anchors` (`_razor_crossing_core.h`): when it
+        is on and this fill is a point of the sweep plan the seam handed the
+        solver (`_crossing_anchor_plan`, a stepping FR's wavelengths and its
+        anchor cache), add the cross blocks' and node charges' interpolant
+        at k to Z and return True. The anchors are this route's own cross
+        terms at the plan's anchor wavenumbers, filled once per geometry;
+        the interpolation is the C++ fill's (`crossing_anchor_apply`), so
+        both routes write the same bits. False, and Z untouched, for the
+        exact cross terms: off, a restricted fill, no plan, a plan that
+        declines, or a k outside it."""
+        if not getattr(self, "_crossing_anchors", False):
+            return False
+        sweep = getattr(self, "_crossing_anchor_plan", None)
+        if (
+            restrict is not None
+            or sweep is None
+            or not hasattr(_acc, "crossing_anchors_1117")
+        ):
+            _crossing_anchor_trace("declined", sweep)
+            return False
+        plan = sweep.get("plan")
+        if plan is None:
+            plan = sweep["plan"] = _acc.crossing_anchor_plan(list(sweep["wavelengths"]))
+        if not plan["ok"]:
+            _crossing_anchor_trace("declined", sweep)
+            return False
+        if float(k) not in plan["k"]:
+            _crossing_anchor_trace("outside-plan", sweep)
+            return False
+        n = geom["n_basis_total"]
+        cols = [int(m) for m, _ in tents]
+        key = (
+            _geometry_key(geom),
+            tuple(int(r) for r in rows_a),
+            tuple(int(r) for r in rows_b),
+            tuple(cols),
+            repr(self.ground_eps),
+            float(self.ground_z),
+            float(self.c),
+        )
+        cache = sweep.setdefault("anchors", {})
+        built = cache.get(key)
+        if built is None:
+            if cache:
+                # One sweep, one geometry: another one takes the exact terms.
+                _crossing_anchor_trace("other-geometry", sweep)
+                return False
+            idx = _acc.crossing_anchor_entries(
+                int(n),
+                [int(r) for r in rows_a],
+                [int(r) for r in rows_b],
+                cols,
+            )
+            raw = np.empty((len(plan["anchor_k"]), idx.size), dtype=complex)
+            # Each anchor on the crossing table's state this fill reached the
+            # cross terms with, as the exact route at that k would.
+            fill = _near_interface._CROSSING_TABLE.get()
+            taken = fill.taken if fill is not None else False
+            any_taken = taken
+            for j, kj in enumerate(plan["anchor_k"]):
+                if fill is not None:
+                    fill.taken = taken
+                scratch = np.zeros((n, n), dtype=complex, order="F")
+                self._crossing_cross_terms(
+                    geom, tents, kj, self.c * kj, scratch, None, None, rows_a, rows_b
+                )
+                if fill is not None:
+                    any_taken = any_taken or fill.taken
+                raw[j] = scratch.ravel(order="F")[idx]
+                del scratch
+                sweep["built"] = sweep.get("built", 0) + 1
+            if fill is not None:
+                fill.taken = any_taken
+            built = cache[key] = (idx, raw)
+        idx, raw = built
+        how = _acc.crossing_anchor_apply(
+            Z, idx, raw, list(sweep["wavelengths"]), float(k)
+        )
+        name = "copied" if how == 0 else "interpolated"
+        sweep[name] = sweep.get(name, 0) + 1
+        _crossing_anchor_trace(name, sweep)
+        return True
 
     def _crossing_node_charges(self, geom, tents, ctx, A, P, omega):
         """The node charge the same-medium REMAINDERS carry, taken back out
