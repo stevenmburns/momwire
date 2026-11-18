@@ -342,6 +342,59 @@ def test_an_unknown_feature_is_refused_and_nothing_stays_requested():
     assert _counts() == before
 
 
+# ---- expand's scatter-add order -------------------------------------------------
+
+
+def test_expand_adds_in_np_add_at_order():
+    """`expand`'s np.add.at(x, e, x[k] * a) is one pass in index order, and
+    a row of many entries makes that order show in the bits: its eliminated
+    end gains one contribution per other entry, and a floating-point sum of
+    eight terms depends on the order it is taken in. The C++ expand must
+    take Python's order, not merely one that agrees on short rows (a
+    two-wire bend adds one term, a three-wire node two, and two terms
+    commute exactly)."""
+    n = 24
+    big_row = [2, 3, 5, 7, 8, 11, 13, 16, 19]
+    signs = [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0]
+    A = _rows(
+        n,
+        [(0, c, v) for c, v in zip(big_row, signs, strict=True)]
+        + [(1, 4, 1.0), (1, 9, 1.0), (1, 21, -1.0)],
+    )
+    rng = np.random.default_rng(18982)
+    Z, B = _random_system(rng, n, 3)
+    p = _kcl_nullspace.plan(A)
+    assert not isinstance(p, str), p
+    # the long row's end: one e, repeated once per other entry
+    assert np.count_nonzero(p.e == big_row[0]) == len(big_row) - 1
+
+    s = _host_solver()
+    Xp = s._solve_with_kcl_ports(Z.copy(), B, A)
+    assert s.kcl_nullspace_route == "reduced"
+    y = Xp[p.keep]  # x[keep] = y, untouched by the scatter onto e
+
+    def scatter(order):
+        x = np.zeros((n, y.shape[1]), dtype=np.complex128)
+        x[p.keep] = y
+        contrib = x[p.k] * p.a[:, None]
+        for i in order:
+            x[p.e[i]] += contrib[i]
+        return x
+
+    forward = scatter(range(p.e.size))
+    backward = scatter(reversed(range(p.e.size)))
+    # np.add.at is the forward pass, to the bit
+    assert _same_bits(forward, Xp)
+    # and the order is visible: the backward pass moves the long row's end
+    assert not _same_bits(backward, Xp)
+    assert _same_bits(backward[p.keep], Xp[p.keep])
+
+    _syrk, four = _numpy_blas()
+    info, Xc, _Yc, route = acc.bspline_solve_ports(Z, B, A, four, FEATURES)
+    assert (info, route) == (0, "reduced")
+    assert _same_bits(Xc, Xp), np.max(np.abs(Xc - Xp))
+
+
 # ---- the NEC-4.2 slot printout ------------------------------------------------
 
 
