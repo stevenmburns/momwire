@@ -27,6 +27,7 @@ import signal
 import sys
 import time
 
+from .._thread_policy import BLAS_FLOOR, frame_share
 from ._pool import read_message, write_message
 
 
@@ -51,7 +52,7 @@ def _claim_stdout():
 
 
 # The smallest BLAS share a worker is limited to (see ``_Threads``).
-_BLAS_FLOOR = 2
+_BLAS_FLOOR = BLAS_FLOOR
 
 
 class _Threads:
@@ -130,7 +131,8 @@ def worker_main(argv: list[str] | None = None) -> int:
             return 0
         t0 = time.time()
         try:
-            with threads.limit(frame.get("threads")):
+            share = frame.get("threads")
+            with threads.limit(share), frame_share(share):
                 chunk_out, chunk_err = seam.answer(frame["body"], frame["terminator"])
             reply = {"out": chunk_out, "err": chunk_err}
         except Exception as exc:  # noqa: BLE001 - carried to the front end, which re-raises
