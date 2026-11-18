@@ -103,8 +103,8 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
-inline void reuse_plans(long long &built, long long &found) {
-    MW_PICK(mws, mwas, reuse_plans(built, found));
+inline void reuse_plans(long long &built, long long &declined, long long &found) {
+    MW_PICK(mws, mwas, reuse_plans(built, declined, found));
 }
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
@@ -126,8 +126,8 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
-inline void reuse_plans(long long &built, long long &found) {
-    MW_PICK(mw, mwa, reuse_plans(built, found));
+inline void reuse_plans(long long &built, long long &declined, long long &found) {
+    MW_PICK(mw, mwa, reuse_plans(built, declined, found));
 }
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
@@ -139,13 +139,16 @@ inline bool answer(const std::string &t, const std::string &version, const std::
 }  // namespace rt_threads
 
 // MW_EXE_TIMES's reuse line (momwire#1971): the fill-pair reuse plans both
-// copies built and found, process totals, so a gate can prove the reuse ran
-// (>= 1 built with MOMWIRE_X_RAZOR_PAIR_REUSE on, 0 with it off).
+// copies built, how many of those built declined, and how many they found,
+// process totals, so a gate can prove the reuse ran (built - declined >= 1
+// with MOMWIRE_X_RAZOR_PAIR_REUSE on, 0 built with it off). A declined plan
+// fills as off, so a plan built is not by itself a reuse that ran.
 static void reuse_line() {
-    long long built_s = 0, found_s = 0, built_t = 0, found_t = 0;
-    rt_serial::reuse_plans(built_s, found_s);
-    rt_threads::reuse_plans(built_t, found_t);
-    std::fprintf(stderr, "cxx: reuse plans built %lld, found %lld\n", built_s + built_t, found_s + found_t);
+    long long built_s = 0, declined_s = 0, found_s = 0, built_t = 0, declined_t = 0, found_t = 0;
+    rt_serial::reuse_plans(built_s, declined_s, found_s);
+    rt_threads::reuse_plans(built_t, declined_t, found_t);
+    std::fprintf(stderr, "cxx: reuse plans built %lld, declined %lld, found %lld\n", built_s + built_t,
+                 declined_s + declined_t, found_s + found_t);
 }
 
 #if !MW_EXE_NO_PYTHON

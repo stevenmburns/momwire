@@ -985,7 +985,24 @@ _REUSE_DECKS_1971 = {
     ),
 }
 
-_REUSE_LINE = re.compile(r"^cxx: reuse plans built (\d+), found (\d+)$", re.M)
+_REUSE_LINE = re.compile(
+    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)$", re.M
+)
+
+
+def _reuse_counts(stderr: bytes) -> tuple[int, int, int]:
+    """MW_EXE_TIMES's reuse line: (built, declined, found), process totals."""
+    m = _REUSE_LINE.search(stderr.decode("latin-1"))
+    assert m, stderr
+    return int(m[1]), int(m[2]), int(m[3])
+
+
+def _reuse_ran(built: int, declined: int) -> bool:
+    """The gate's proof that the reuse RAN: a plan built that did not come
+    back declined. A declined plan fills as off, so counting it would let an
+    executable whose every plan declines agree with the launcher by not
+    running (`test_razor_pair_reuse_gate_does_not_count_a_declined_plan`)."""
+    return built - declined >= 1
 
 
 @pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
@@ -996,7 +1013,8 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
     line 2 naming +razor_pair_reuse on both sides only when it is on. The
     executable and the launcher share the C++ core, so that alone cannot
     catch a fault in the core: the reuse is also shown to RUN (MW_EXE_TIMES's
-    reuse line: a plan built when on, none when off) and on is held to off
+    reuse line: a plan built that did not decline when on, none built when
+    off) and on is held to off
     byte for byte except line 2 (the reuse moves Zin ~1e-13 here, far under
     a printed digit)."""
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
@@ -1017,13 +1035,11 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
         )
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
-        m = _REUSE_LINE.search(exe.stderr.decode("latin-1"))
-        assert m, exe.stderr
-        built = int(m[1])
+        built, declined, found = _reuse_counts(exe.stderr)
         if state == "1":
-            assert built >= 1, m[0]
+            assert _reuse_ran(built, declined), (built, declined, found)
         else:
-            assert built == 0 and int(m[2]) == 0, m[0]
+            assert built == 0 and found == 0, (built, declined, found)
         lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
         assert (b"+razor_pair_reuse" in lines[state][1]) == (state == "1"), lines[
             state
@@ -1031,6 +1047,53 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
     on, off = lines["1"], lines["0"]
     assert on[1].rstrip() == off[1].rstrip() + b" +razor_pair_reuse", (on[1], off[1])
     assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+# Eight wires of random place and direction over Sommerfeld ground (the
+# Python gates' `_random_wires`, 15 segments each): past the finite ground's
+# small-deck threshold (100 segments), so the executable BUILDS a plan, but
+# its pairs are nearly all distinct, so the plan comes back declined ("too
+# few shared pairs to repay the plan") and the fill runs as off.
+_DECLINING_DECK_1971 = (
+    "CM momwire#1971: random wires over Sommerfeld ground, 120 segments: the\n"
+    "CM reuse plan is built and declines\nCE\n"
+    "GW 1 15 -3.3148 -2.1055 9.2051 -5.5321 -3.8733 8.3631 0.001\n"
+    "GW 2 15 -2.7221 1.8766 6.4547 -1.3016 -0.3419 4.6850 0.001\n"
+    "GW 3 15 1.9027 3.6501 7.1368 1.4282 5.5551 6.7394 0.001\n"
+    "GW 4 15 3.7877 -1.6128 7.2559 3.4663 -0.6626 10.6577 0.001\n"
+    "GW 5 15 -3.7572 1.6557 7.4970 -5.4830 1.1258 9.1001 0.001\n"
+    "GW 6 15 1.0407 -1.6147 8.9670 2.5946 -3.0747 6.4283 0.001\n"
+    "GW 7 15 1.4624 2.5606 7.7143 1.5311 2.4219 11.4106 0.001\n"
+    "GW 8 15 -0.8486 -0.1625 6.5853 -2.7531 1.0388 7.7836 0.001\n"
+    "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 8 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+)
+
+
+@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+def test_razor_pair_reuse_gate_does_not_count_a_declined_plan(tmp_path, monkeypatch):
+    """The adversarial case for `test_razor_pair_reuse_runs_as_the_launcher`:
+    with the reuse on, a deck whose plan is built and declines prints the
+    launcher's bytes (it fills as off on both sides) and builds a plan, so a
+    gate that counted plans built would pass it without the reuse having
+    run. The reuse line counts that plan as declined, and the gate's proof
+    (`_reuse_ran`) is false on it."""
+    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    name = "reuse_declines.nec"
+
+    def prepare(d):
+        (d / name).write_text(_DECLINING_DECK_1971, newline="")
+
+    exe, ref, de, dl = _both(
+        [name, "reuse.out"],
+        tmp_path,
+        prepare=prepare,
+        env={"MOMWIRE_X_RAZOR_PAIR_REUSE": "1", "MW_EXE_TIMES": "1"},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    built, declined, found = _reuse_counts(exe.stderr)
+    assert built >= 1 and declined == built, (built, declined, found)
+    assert not _reuse_ran(built, declined)
 
 
 @pytest.mark.parametrize("deck", [DIPOLE], ids=lambda p: p.stem)
