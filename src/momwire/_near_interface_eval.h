@@ -199,7 +199,18 @@ struct Features {
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    bool crossing_sheet_band = false;    // a sweep's plane / height sheets blended from anchors
 };
+
+// TEST-ONLY (`crossing_sheet_band`): one six-key sheet's node values
+// blended at (k_p, k_m) from anchors seeded at (k_p0, k_m0), against the
+// exact build at (k_p, k_m) on the same grid; the worst |blend - exact| over
+// each key's largest |exact|, at n_a anchors over a relative width w. The
+// blended and exact node values (the first anchor's layout) into `blend`
+// and `exact`.
+double sheet_band_check(double k_p0, cd k_m0, double k_p, cd k_m, double zp, bool height, double depth,
+                        double rho_max, double s_max, int n_a, double w, int n_threads,
+                        std::vector<cd> &blend, std::vector<cd> &exact);
 Features &requested_features();
 const Features &active_features();
 // Asks for the feature `name` (its `momwire._features` name) in every later

@@ -392,6 +392,7 @@ const ExeFeature EXE_FEATURES[] = {
     {"crossing_above_rule", 8, false},
     {"razor_pair_reuse", 7, false},
     {"crossing_sheet_retune", 7, false},
+    {"crossing_sheet_band", 7, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.

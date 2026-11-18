@@ -498,6 +498,50 @@ FEATURES: dict[str, Feature] = {
             drift=6e-11,
             offer=False,
         ),
+        # A frequency sweep's near-interface sheets blended across the band
+        # from a few exact builds (`_band_sheet` / `ni_eval::band_sheet`):
+        # each plane's and height's sheet is built exact at the sweep's first
+        # frequency (the shipped sheet, so a one-frequency run is unchanged)
+        # and at n_a - 1 more points of a band 5 % wide in frequency
+        # (MOMWIRE_SHEET_BAND_NODES, default 4; MOMWIRE_SHEET_BAND_WIDTH,
+        # default 0.05); every other frequency in the band reads the
+        # polynomial blend of their node values. Acts only on the sheets a
+        # fill builds, so a deck whose census takes none (no plane or height
+        # sheet: most decks without crossing_sheet_retune) is unchanged.
+        # Reach 7: the two nec5 executables carry it in C++, operation for
+        # operation with the Python route. No issue filed for the prototype;
+        # 1956 is the retune it builds on.
+        Feature(
+            name="crossing_sheet_band",
+            reach=7,
+            env="MOMWIRE_X_CROSSING_SHEET_BAND",
+            kind="native",
+            issue=1956,
+            since="2026-11-17",
+            kwarg="crossing_sheet_band",
+            paths=("tests/test_crossing_sheet_band_1117.py",),
+            label="shared near-ground tables across a sweep",
+            summary=(
+                "On a frequency sweep over ground, build the tables between "
+                "wires above and below the ground at a few frequencies and "
+                "blend them for the rest, instead of building them at every "
+                "frequency. Faster on buried radial screens swept over a few "
+                "percent; changes the input impedance by a tiny amount."
+            ),
+            # |dZin|/|Zin| against retune alone, full precision
+            # (MW_EXE_ARRAYS, nec5-razor-2p, Skylake, 2026-11-17), at the
+            # default n_a = 4 and W = 5 %: at most 1.92e-8 over every deck
+            # of tests/fixtures' buried sets swept 3 % over 11 points (the
+            # worst eznec_exact_buried_1619/fat_hub at 14 MHz; most of them
+            # take no sheet, so nothing blends), 6.0e-9 over the 21
+            # frequencies of the synthetic 4-radial buried vertical, 8.2e-9
+            # on its 8-radial variant, and 5.1e-9 swept over 20 %. A sweep
+            # whose step is wider than the band never blends (0 there). 6e-8
+            # keeps 3x over the worst. Other knob settings move it: see
+            # tests/test_crossing_sheet_band_1117.py.
+            drift=6e-8,
+            offer=False,
+        ),
         # BSplineSolver's junction constraints eliminated before the factor
         # (momwire#1898): Z reduced to the constraint null space in place,
         # where the Schur route back-substitutes n_c extra right-hand sides.

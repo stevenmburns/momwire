@@ -2007,6 +2007,7 @@ class RazorSolver(
         crossing_sheet_retune=None,
         razor_pair_reuse=None,
         pair_reuse=None,
+        crossing_sheet_band=None,
         cancel=None,
         **unsupported,
     ):
@@ -2140,6 +2141,12 @@ class RazorSolver(
         )
         # The C++ front route reads it with the constructor's own arguments.
         self._cxx_kwargs["pair_reuse"] = self._pair_reuse
+        # `crossing_sheet_band`: a sweep's near-interface sheets blended from
+        # a few exact builds. None defers to MOMWIRE_X_CROSSING_SHEET_BAND
+        # (`_features`); off builds each, bit for bit.
+        self._crossing_sheet_band = _features.enabled(
+            "crossing_sheet_band", crossing_sheet_band
+        )
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -4876,7 +4883,8 @@ class RazorSolver(
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
         """`_assemble_Z_from_prepared_scoped` under this solver's
         `factored_columns`, `height_sheet_recal`, `crossing_table` and
-        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
+        `crossing_sheet_retune` choices (momwire#1860, #1956), and
+        `crossing_sheet_band`'s."""
         with (
             _near_interface.factored_columns_scope(
                 getattr(self, "_factored_columns", False)
@@ -4889,6 +4897,9 @@ class RazorSolver(
             ),
             _near_interface.crossing_sheet_retune_scope(
                 getattr(self, "_crossing_sheet_retune", False)
+            ),
+            _near_interface.crossing_sheet_band_scope(
+                getattr(self, "_crossing_sheet_band", False)
             ),
         ):
             return self._assemble_Z_from_prepared_scoped(

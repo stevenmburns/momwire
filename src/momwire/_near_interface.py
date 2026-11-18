@@ -67,6 +67,7 @@ import collections
 import contextlib
 import contextvars
 import functools
+import math
 import os
 import threading
 
@@ -351,6 +352,25 @@ def crossing_sheet_retune_scope(on):
         yield
     finally:
         _CROSSING_SHEET_RETUNE.reset(token)
+
+
+# The opt-in feature `crossing_sheet_band` (`_features`): across a frequency
+# sweep a fill's plane and height sheets are blended from a few exact builds
+# (`_band_sheet`). A solver asked for it sets this around its fill.
+_CROSSING_SHEET_BAND: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "momwire_crossing_sheet_band", default=False
+)
+
+
+@contextlib.contextmanager
+def crossing_sheet_band_scope(on):
+    """Run the body with a sweep's sheets blended (`on` truthy) or each
+    built exact."""
+    token = _CROSSING_SHEET_BAND.set(bool(on))
+    try:
+        yield
+    finally:
+        _CROSSING_SHEET_BAND.reset(token)
 
 
 def _sheet_weights():
@@ -3968,7 +3988,9 @@ class PlaneSheet:
     A row's value therefore does not depend on how far the sheet had been
     grown, or by whom."""
 
-    def __init__(self, k_p, k_m, zp, lam_mult, height=False, depth=None, family="six"):
+    def __init__(
+        self, k_p, k_m, zp, lam_mult, height=False, depth=None, family="six", grid=None
+    ):
         if family not in _SHEET_FAMILIES:
             raise ValueError(f"no sheet family {family!r}")
         self.family = family
@@ -3991,6 +4013,10 @@ class PlaneSheet:
             abs(float(zp)),
         )
         self.lam_mult = float(lam_mult)
+        # The medium whose wavelengths lay out the strips: the sheet's own,
+        # or (`crossing_sheet_band`) its band's seed, so that a band's sheets
+        # share one grid.
+        self.grid = (self.k_p, self.k_m) if grid is None else grid
         self.x, self.bw = _cheb(_SHEET_P)
         # Per axis: its dyadic strips, and its cells as (lo, hi, strip).
         self.strips = {"rho": [], "s": []}
@@ -4004,7 +4030,7 @@ class PlaneSheet:
         """Append `axis`'s strips up to `reach`; returns the new strips'
         indices."""
         have = self.strips[axis]
-        want = _sheet_axis(self.k_p, self.k_m, self.d, axis, reach, self.depth)
+        want = _sheet_axis(self.grid[0], self.grid[1], self.d, axis, reach, self.depth)
         new = list(range(len(have), len(want)))
         for i in new:
             lo, hi, n = want[i]
@@ -4124,6 +4150,29 @@ class PlaneSheet:
         self.n_nodes = off
         self._flat = None
 
+    def blend(self, anchors, w):
+        """`crossing_sheet_band`: this sheet's nodes as sum_a w[a] times
+        anchors[a]'s, every anchor on this sheet's grid and grown as far. The
+        layout is anchors[0]'s; a block is found in each anchor by its cell
+        (anchors grown in different steps order their blocks differently).
+        Real and imaginary parts each a left-to-right sum of real products,
+        as `PlaneSheet::blend` in C++."""
+        a0 = anchors[0]
+        self.strips = {ax: list(v) for ax, v in a0.strips.items()}
+        self.cells = {ax: list(v) for ax, v in a0.cells.items()}
+        self._off = dict(a0._off)
+        pp = _SHEET_P * _SHEET_P
+        order = sorted(a0._off, key=a0._off.get)
+        acc = None
+        for a, wa in zip(anchors, w):
+            flat = np.concatenate(a._vals).view(np.float64)
+            idx = np.concatenate([np.arange(a._off[k], a._off[k] + pp) for k in order])
+            x = flat[idx]
+            acc = wa * x if acc is None else acc + wa * x
+        self._vals = [np.ascontiguousarray(acc).view(np.complex128)]
+        self.n_nodes = a0.n_nodes
+        self._flat = None
+
     def arrays(self):
         if self._flat is None:
             n_r, n_s = len(self.cells["rho"]), len(self.cells["s"])
@@ -4168,6 +4217,18 @@ class PlaneSheet:
 def _plane_sheet(
     k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=None, family="six"
 ):
+    """`_plane_sheet_exact`, or inside a `crossing_sheet_band_scope` (the
+    six keys only) `_band_sheet`."""
+    if family == "six" and _CROSSING_SHEET_BAND.get():
+        return _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth)
+    return _plane_sheet_exact(
+        k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth, family
+    )
+
+
+def _plane_sheet_exact(
+    k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=None, family="six"
+):
     """The cached sheet of plane `zp` (or of height `zp` reaching `depth`,
     `height`), of kernel `family`, grown to cover rho <= `rho_max` and
     s <= `s_max`.
@@ -4203,6 +4264,208 @@ def _plane_sheet(
             _SHEET_CACHE.popitem(last=False)
         sheet.cover(rho_max, s_max)
         return sheet
+
+
+# --- `crossing_sheet_band`: a sweep's sheets blended from anchors -----------
+#
+# Across a frequency sweep a plane's or a height's sheet changes smoothly with
+# the medium, so its nodes are blended from a few exact builds instead of
+# being built at every frequency. The C++ route (`band_sheet` in
+# `_near_interface_eval.cpp`) is this, operation for operation.
+#
+# A FAMILY is one sheet geometry (height, depth, z', lam_mult) over one ground
+# (eps_c = (k_m / k_p)^2 read as Re eps_c and Im eps_c * k_p, both constant
+# when the ground's eps_r and sigma are). Its first medium's sheet is the
+# exact one (the SEED, the flag-off sheet itself, so a one-frequency run and a
+# sweep's first frequency read the shipped bits). The first other medium
+# within the band width W of it in t = ln k_p fixes the band, [t0,
+# t0 + ln(1 + W)] or the one below, and the anchors: the band's n_a
+# Chebyshev-Lobatto points, the first the seed, each an exact build on the
+# seed's grid at the ground's medium for its t. A medium in the band reads the
+# Lagrange blend of the anchors' node values at its t; one outside every band
+# seeds a family of its own, exact. Every anchor is grown to the widest reach
+# any in-band request asked for.
+#
+# So what a node reads depends on the order media reached this process (which
+# medium seeded a band): one run of a deck always blends the same way, and a
+# resident process that solved another frequency of the same ground first may
+# blend where a fresh one would read the seed, within the feature's drift.
+
+_BAND_MATCH = 1e-9
+_BAND_FAMILIES = []
+_BAND_LOCK = threading.RLock()
+# Route proof: blends made (a test's handle; reset by assignment).
+_BAND_STATS = {"blends": 0, "families": 0}
+
+
+def _band_nodes():
+    """n_a, the anchors a band holds: MOMWIRE_SHEET_BAND_NODES, default 4,
+    clamped to [2, 12] (the C++ route reads it once a process)."""
+    v = os.environ.get("MOMWIRE_SHEET_BAND_NODES", "")
+    try:
+        k = int(v) if v else 4
+    except ValueError:
+        k = 0
+    return max(2, min(12, k))
+
+
+def _band_width():
+    """W, a band's relative width in frequency: MOMWIRE_SHEET_BAND_WIDTH,
+    default 0.05."""
+    v = os.environ.get("MOMWIRE_SHEET_BAND_WIDTH", "")
+    try:
+        x = float(v) if v else 0.05
+    except ValueError:
+        x = 0.05
+    return x if x > 0.0 else 0.05
+
+
+def _band_eps(k_p, k_m):
+    """eps_c = (k_m / k_p)^2 as (real, imaginary), in real arithmetic."""
+    a = k_m.real / k_p
+    b = k_m.imag / k_p
+    return a * a - b * b, 2.0 * a * b
+
+
+def _band_k_m(er, s, k_p, k_m0):
+    """The ground's k_m at k_p, k_p * sqrt(er + j * s / k_p), the root on
+    k_m0's side, in real arithmetic."""
+    ei = s / k_p
+    m = math.sqrt(er * er + ei * ei)
+    sr = math.sqrt(0.5 * (m + er))
+    si = math.sqrt(0.5 * (m - er))
+    if ei < 0.0:
+        si = -si
+    if (si < 0.0) != (k_m0.imag < 0.0) and k_m0.imag != 0.0:
+        sr = -sr
+        si = -si
+    return complex(k_p * sr, k_p * si)
+
+
+def _band_weights(ts, t):
+    """The Lagrange weights of the points `ts` at `t`, each a left-to-right
+    product."""
+    w = []
+    for a in range(len(ts)):
+        p = 1.0
+        for b in range(len(ts)):
+            if b != a:
+                p = p * ((t - ts[b]) / (ts[a] - ts[b]))
+        w.append(p)
+    return w
+
+
+def _band_points(t0, direction, n, width):
+    """The band's n Chebyshev-Lobatto points from t0 toward `direction`, the
+    first t0 itself."""
+    wt = math.log1p(width)
+    ts = [t0]
+    for j in range(1, n):
+        x = 0.5 - 0.5 * math.cos(math.pi * j / (n - 1))
+        ts.append(t0 + wt * x if direction > 0 else t0 - wt * x)
+    return ts
+
+
+class _BandFamily:
+    def __init__(self, height, depth, zp, lam_mult, k_p, k_m, seed, rho_max, s_max):
+        self.height, self.depth, self.zp, self.lam_mult = height, depth, zp, lam_mult
+        self.k_p0, self.k_m0 = k_p, k_m
+        self.t0 = math.log(k_p)
+        self.er, ei = _band_eps(k_p, k_m)
+        self.s = ei * k_p
+        self.seed = seed
+        self.dir = 0
+        self.lo = self.hi = 0.0
+        self.ts = []
+        self.anchors = [seed]
+        self.rho_reach, self.s_reach = rho_max, s_max
+        self.blends = {}
+
+
+def _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth):
+    """The six-key sheet a fill with `crossing_sheet_band` on reads at
+    (k_p, k_m), covering rho <= `rho_max` and s <= `s_max`."""
+    k_p, k_m, zp, lam_mult = float(k_p), complex(k_m), float(zp), float(lam_mult)
+    height = bool(height)
+    dkey = float(depth) if height else None
+
+    def exact():
+        return _plane_sheet_exact(
+            k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth, "six"
+        )
+
+    def same_geometry(f):
+        return (f.height, f.depth, f.zp, f.lam_mult) == (height, dkey, zp, lam_mult)
+
+    with _BAND_LOCK:
+        # a family's seed medium: its sheet, as flag-off
+        for f in _BAND_FAMILIES:
+            if same_geometry(f) and (f.k_p0, f.k_m0) == (k_p, k_m):
+                sh = exact()
+                f.rho_reach = max(f.rho_reach, rho_max)
+                f.s_reach = max(f.s_reach, s_max)
+                return sh
+        er, ei = _band_eps(k_p, k_m)
+        s = ei * k_p
+        t = math.log(k_p)
+        width = _band_width()
+        wt = math.log1p(width)
+        fam = None
+        for f in _BAND_FAMILIES:
+            if not same_geometry(f):
+                continue
+            tol = _BAND_MATCH * math.sqrt(f.er * f.er + (f.s / f.k_p0) * (f.s / f.k_p0))
+            if not (abs(er - f.er) <= tol and abs(s - f.s) <= tol * f.k_p0):
+                continue
+            inside = abs(t - f.t0) <= wt if f.dir == 0 else f.lo <= t <= f.hi
+            if inside:
+                fam = f
+                break
+        if fam is None:
+            # outside every band: a family of its own, exact
+            sh = exact()
+            _BAND_FAMILIES.append(
+                _BandFamily(height, dkey, zp, lam_mult, k_p, k_m, sh, rho_max, s_max)
+            )
+            _BAND_STATS["families"] += 1
+            return sh
+        f = fam
+        if f.dir == 0:
+            f.dir = 1 if t > f.t0 else -1
+            f.ts = _band_points(f.t0, f.dir, _band_nodes(), width)
+            f.lo, f.hi = (f.t0, f.t0 + wt) if f.dir > 0 else (f.t0 - wt, f.t0)
+            for tj in f.ts[1:]:
+                kp = math.exp(tj)
+                f.anchors.append(
+                    PlaneSheet(
+                        kp,
+                        _band_k_m(f.er, f.s, kp, f.k_m0),
+                        zp,
+                        lam_mult,
+                        height=height,
+                        depth=depth,
+                        grid=(f.k_p0, f.k_m0),
+                    )
+                )
+        f.rho_reach = max(f.rho_reach, rho_max)
+        f.s_reach = max(f.s_reach, s_max)
+        for a in f.anchors:
+            a.cover(f.rho_reach, f.s_reach)
+        bl = f.blends.get((k_p, k_m))
+        if bl is None:
+            bl = f.blends[(k_p, k_m)] = PlaneSheet(
+                k_p,
+                k_m,
+                zp,
+                lam_mult,
+                height=height,
+                depth=depth,
+                grid=(f.k_p0, f.k_m0),
+            )
+        if bl.n_nodes != f.seed.n_nodes:
+            bl.blend(f.anchors, _band_weights(f.ts, t))
+            _BAND_STATS["blends"] += 1
+        return bl
 
 
 # --- Cone sheets: the sheets along a SLOPED wire (momwire#1595 option A) ---

@@ -1544,6 +1544,18 @@ static py::tuple near_interface_eval_cone_table(double k_p, cd k_m, double d, do
     return py::make_tuple(py::array_t<double>(static_cast<py::ssize_t>(edges.size()), edges.data()), v);
 }
 
+// TEST-ONLY (`crossing_sheet_band`): a blended six-key sheet against the
+// exact one at the same medium, on one grid (`ni_eval::sheet_band_check`).
+static py::tuple near_interface_eval_sheet_band_check(double k_p0, cd k_m0, double k_p, cd k_m, double zp,
+                                                      bool height, double depth, double rho_max, double s_max,
+                                                      int n_a, double w) {
+    std::vector<cd> blend, exact;
+    const double worst =
+        ni_eval::sheet_band_check(k_p0, k_m0, k_p, k_m, zp, height, depth, rho_max, s_max, n_a, w, 0, blend, exact);
+    return py::make_tuple(worst, py::array_t<cd>(static_cast<py::ssize_t>(blend.size()), blend.data()),
+                          py::array_t<cd>(static_cast<py::ssize_t>(exact.size()), exact.data()));
+}
+
 void register_razor_solve(py::module_ &m) {
     m.attr("razor_solve_proto") = true;
     py::class_<mw::razor::SolveContext>(m, "RazorSolveContext",
@@ -1647,6 +1659,11 @@ void register_razor_solve(py::module_ &m) {
     m.def("near_interface_eval_cone_table", &near_interface_eval_cone_table, py::arg("k_p"), py::arg("k_m"),
           py::arg("d"), py::arg("zf"), py::arg("beta"), py::arg("a"), py::arg("zs"), py::arg("p"),
           py::arg("u_max"), "TEST-ONLY (momwire#1595): one C++ cone surface's (u edges, values).");
+    m.def("near_interface_eval_sheet_band_check", &near_interface_eval_sheet_band_check, py::arg("k_p0"),
+          py::arg("k_m0"), py::arg("k_p"), py::arg("k_m"), py::arg("zp"), py::arg("height"), py::arg("depth"),
+          py::arg("rho_max"), py::arg("s_max"), py::arg("n_a"), py::arg("w"),
+          "TEST-ONLY (crossing_sheet_band): (worst |blend - exact| / key max, blended values, exact "
+          "values) of one sheet.");
     m.def("near_interface_eval_designed", &near_interface_eval_designed, py::arg("k_p"), py::arg("k_m"),
           py::arg("specs"), py::arg("wire_radius"), py::arg("rho"), py::arg("z"), py::arg("zp"),
           "TEST-ONLY (momwire#1595): the C++ fills' sheet plan over node pairs and the designed "

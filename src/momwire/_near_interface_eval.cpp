@@ -188,7 +188,15 @@ class PlaneSheet {
   public:
     PlaneSheet(double k_p, cd k_m, double zp, bool height, double depth, bool point = false)
         : k_p_(k_p), k_m_(k_m), zp_(zp), d_(std::fabs(zp)), height_(height), depth_(height ? depth : -1),
-          point_(point), nk_(point ? ni_point::N_POINT_KEYS : N_KEYS) {}
+          point_(point), nk_(point ? ni_point::N_POINT_KEYS : N_KEYS), gk_p_(k_p), gk_m_(k_m) {}
+    // `crossing_sheet_band`: the nodes evaluated at (k_p, k_m) on the strips
+    // the medium (gk_p, gk_m) lays out, so that every sheet of a band shares
+    // one grid.
+    PlaneSheet(double k_p, cd k_m, double zp, bool height, double depth, bool point, double gk_p, cd gk_m)
+        : PlaneSheet(k_p, k_m, zp, height, depth, point) {
+        gk_p_ = gk_p;
+        gk_m_ = gk_m;
+    }
 
     // `cover(rho_max, s_max)`: grow by whole strips, evaluate the new cells.
     void cover(double rho_max, double s_max, int n_threads) {
@@ -291,7 +299,7 @@ class PlaneSheet {
     // the offsets, the values, an FNV-1a over all of it. Any mismatch is a
     // miss.
     bool grown() const { return grown_; }
-    PlaneSheet blank() const { return PlaneSheet(k_p_, k_m_, zp_, height_, depth_, point_); }
+    PlaneSheet blank() const { return PlaneSheet(k_p_, k_m_, zp_, height_, depth_, point_, gk_p_, gk_m_); }
     std::string serialize() const {
         std::string b(SHEET_MAGIC);
         put_key(b);
@@ -338,7 +346,7 @@ class PlaneSheet {
             for (uint64_t i = 0; i < ns; i++) {
                 Strip f, st;
                 if (!get(b, at, f.lo) || !get(b, at, f.hi) || !get(b, at, f.n)) return false;
-                if (!sheet_strip(k_p_, k_m_, d_, static_cast<int>(i), rho_axis, rho_axis ? -1 : depth_, st))
+                if (!sheet_strip(gk_p_, gk_m_, d_, static_cast<int>(i), rho_axis, rho_axis ? -1 : depth_, st))
                     return false;
                 if (bits(f.lo) != bits(st.lo) || bits(f.hi) != bits(st.hi) || f.n != st.n) return false;
                 strips[ax].push_back(st);
@@ -388,6 +396,47 @@ class PlaneSheet {
     }
     void stored() { grown_ = false; }
 
+    // `crossing_sheet_band`: this sheet's nodes as sum_a w[a] * an[a]'s, every
+    // anchor on this sheet's grid and grown as far (the layout is an[0]'s; a
+    // block is found in each anchor by its cell, since anchors grown in
+    // different steps order their blocks differently). Real and imaginary
+    // parts each a left-to-right sum of real products.
+    void blend(const std::vector<PlaneSheet *> &an, const std::vector<double> &w) {
+        const PlaneSheet &a0 = *an[0];
+        for (int ax = 0; ax < 2; ax++) {
+            strips_[ax] = a0.strips_[ax];
+            cells_[ax] = a0.cells_[ax];
+        }
+        off_ = a0.off_;
+        vals_.assign(a0.vals_.size(), cd(0.0, 0.0));
+        const size_t nk = static_cast<size_t>(nk_), blk = static_cast<size_t>(SHEET_P * SHEET_P) * nk;
+        for (const auto &kv : off_) {
+            cd *dst = vals_.data() + static_cast<size_t>(kv.second) * nk;
+            for (size_t a = 0; a < an.size(); a++) {
+                const cd *src = an[a]->vals_.data() + static_cast<size_t>(an[a]->off_.at(kv.first)) * nk;
+                const double wa = w[a];
+                if (a == 0)
+                    for (size_t q = 0; q < blk; q++) dst[q] = cd(wa * src[q].real(), wa * src[q].imag());
+                else
+                    for (size_t q = 0; q < blk; q++)
+                        dst[q] = cd(dst[q].real() + wa * src[q].real(), dst[q].imag() + wa * src[q].imag());
+            }
+        }
+        flat_ok_ = false;
+        grown_ = false;
+    }
+    size_t n_values() const { return vals_.size(); }
+    const std::vector<cd> &values() const { return vals_; }
+    // The node values in an[0]'s block order (`sheet_band_check`).
+    std::vector<cd> values_as(const PlaneSheet &ref) const {
+        std::vector<cd> out(ref.vals_.size());
+        const size_t nk = static_cast<size_t>(nk_), blk = static_cast<size_t>(SHEET_P * SHEET_P) * nk;
+        for (const auto &kv : ref.off_)
+            std::copy_n(vals_.data() + static_cast<size_t>(off_.at(kv.first)) * nk, blk,
+                        out.data() + static_cast<size_t>(kv.second) * nk);
+        return out;
+    }
+
     // `out` is (m, nk) row-major (for the six keys, a Six is N_KEYS
     // contiguous complexes), and grid_sheet writes only rows idx: in place.
     void interpolate(const double *sub, std::ptrdiff_t m, const std::vector<std::ptrdiff_t> &idx,
@@ -420,6 +469,8 @@ class PlaneSheet {
     std::vector<double> rho_edges_, s_edges_;
     std::vector<int64_t> cell_off_;
     bool grown_ = false;  // cells evaluated since the sheet was read or stored
+    double gk_p_;  // the medium whose wavelengths lay out the strips (`crossing_sheet_band`)
+    cd gk_m_;
 
     static constexpr char SHEET_MAGIC[] = "MWNISHEET1\n";
     template <class T>
@@ -442,6 +493,16 @@ class PlaneSheet {
         put(b, k_m_.real());
         put(b, k_m_.imag());
         put(b, zp_);
+        // `crossing_sheet_band`'s anchors: the grid's medium too, so an
+        // anchor never shares a file with its medium's own sheet (whose key
+        // is unchanged)
+        if (bits(gk_p_) != bits(k_p_) || bits(gk_m_.real()) != bits(k_m_.real()) ||
+            bits(gk_m_.imag()) != bits(k_m_.imag())) {
+            put(b, static_cast<uint8_t>('G'));
+            put(b, gk_p_);
+            put(b, gk_m_.real());
+            put(b, gk_m_.imag());
+        }
     }
 
     // a strip's cells, in `grow`'s order and arithmetic
@@ -457,7 +518,7 @@ class PlaneSheet {
 
     std::vector<int> grow(bool rho_axis, double reach) {
         std::vector<Strip> &have = strips_[rho_axis ? 0 : 1];
-        const std::vector<Strip> want = sheet_axis(k_p_, k_m_, d_, rho_axis, reach, rho_axis ? -1 : depth_);
+        const std::vector<Strip> want = sheet_axis(gk_p_, gk_m_, d_, rho_axis, reach, rho_axis ? -1 : depth_);
         std::vector<int> fresh;
         for (size_t i = have.size(); i < want.size(); i++) {
             fresh.push_back(static_cast<int>(i));
@@ -534,6 +595,243 @@ void store_sheet(PlaneSheet &sh) {
     }
     somm_core::disk_write(name, sh.serialize());
     sh.stored();
+}
+
+// --------------------------------------------------------------------------
+// `crossing_sheet_band` (opt-in): across a frequency sweep a plane's or a
+// height's sheet changes smoothly with the medium, so its nodes are blended
+// from a few exact builds instead of being built at every frequency.
+//
+// A FAMILY is one sheet geometry (height, depth, z') over one ground (the
+// medium's relative permittivity eps_c = (k_m / k_p)^2, read as Re eps_c and
+// Im eps_c * k_p, both constant when the ground's eps_r and sigma are). Its
+// first medium's sheet is the exact one (the SEED, the flag-off sheet itself,
+// so a one-frequency run and a sweep's first frequency read the shipped bits).
+// The first other medium within `band_width()` of it in t = ln k_p fixes the
+// band, [t0, t0 + ln(1 + W)] or below, and the anchors: the band's n_a
+// Chebyshev-Lobatto points, the first the seed, every one an exact build on
+// the seed's grid at the ground's medium for its t. A medium in the band
+// reads the Lagrange blend of the anchors' node values at its t; one outside
+// every band starts a family of its own, exact. Every anchor is grown to the
+// widest reach any in-band request asked for.
+//
+// What a node reads therefore depends on the order the media reached this
+// process (which medium seeded the band), never on the store: one run of a
+// deck always blends the same way.
+
+constexpr double BAND_MATCH = 1e-9;  // the ground's two constants, relative
+
+// MOMWIRE_SHEET_BAND_TRACE=1: one stderr line per blend (the route proof).
+bool band_trace() {
+    static const bool on = [] {
+        const char *v = std::getenv("MOMWIRE_SHEET_BAND_TRACE");
+        return v != nullptr && std::string(v) == "1";
+    }();
+    return on;
+}
+
+int band_nodes() {
+    static const int n = [] {
+        const char *v = std::getenv("MOMWIRE_SHEET_BAND_NODES");
+        const int k = v != nullptr && *v ? std::atoi(v) : 4;
+        return std::max(2, std::min(12, k));
+    }();
+    return n;
+}
+
+double band_width() {
+    static const double w = [] {
+        const char *v = std::getenv("MOMWIRE_SHEET_BAND_WIDTH");
+        const double x = v != nullptr && *v ? std::atof(v) : 0.05;
+        return x > 0.0 ? x : 0.05;
+    }();
+    return w;
+}
+
+// eps_c = (k_m / k_p)^2, spelled in real arithmetic (the Python route's own).
+void band_eps(double k_p, cd k_m, double &er, double &ei) {
+    const double a = k_m.real() / k_p, b = k_m.imag() / k_p;
+    er = a * a - b * b;
+    ei = 2.0 * a * b;
+}
+
+// The ground's k_m at k_p: k_p * sqrt(er + j * s / k_p), the root on k_m0's
+// side, in real arithmetic.
+cd band_k_m(double er, double s, double k_p, cd k_m0) {
+    const double ei = s / k_p;
+    const double m = std::sqrt(er * er + ei * ei);
+    double sr = std::sqrt(0.5 * (m + er)), si = std::sqrt(0.5 * (m - er));
+    if (ei < 0.0) si = -si;
+    if ((si < 0.0) != (k_m0.imag() < 0.0) && k_m0.imag() != 0.0) {
+        sr = -sr;
+        si = -si;
+    }
+    return cd(k_p * sr, k_p * si);
+}
+
+// The Lagrange weights of the points ts at t, each a left-to-right product.
+std::vector<double> band_weights(const std::vector<double> &ts, double t) {
+    std::vector<double> w(ts.size());
+    for (size_t a = 0; a < ts.size(); a++) {
+        double p = 1.0;
+        for (size_t b = 0; b < ts.size(); b++)
+            if (b != a) p = p * ((t - ts[b]) / (ts[a] - ts[b]));
+        w[a] = p;
+    }
+    return w;
+}
+
+// libm's SCALAR log, log1p, exp and cos, as the Python route's `math` calls
+// them: through volatile pointers, so that no loop here is vectorised onto a
+// vector libm (whose last bits differ, and which the baseline build cannot
+// link), as `cheb_p` does.
+double band_log(double x) {
+    double (*volatile f)(double) = static_cast<double (*)(double)>(std::log);
+    return f(x);
+}
+double band_log1p(double x) {
+    double (*volatile f)(double) = static_cast<double (*)(double)>(std::log1p);
+    return f(x);
+}
+double band_exp(double x) {
+    double (*volatile f)(double) = static_cast<double (*)(double)>(std::exp);
+    return f(x);
+}
+double band_cos(double x) {
+    double (*volatile f)(double) = static_cast<double (*)(double)>(std::cos);
+    return f(x);
+}
+
+// The band's points from t0 toward dir, n of them, the first t0.
+std::vector<double> band_points(double t0, int dir, int n, double w) {
+    const double wt = band_log1p(w);
+    std::vector<double> ts(static_cast<size_t>(n));
+    ts[0] = t0;
+    for (int j = 1; j < n; j++) {
+        const double x = 0.5 - 0.5 * band_cos(M_PI * static_cast<double>(j) / static_cast<double>(n - 1));
+        ts[static_cast<size_t>(j)] = dir > 0 ? t0 + wt * x : t0 - wt * x;
+    }
+    return ts;
+}
+
+struct BandFamily {
+    bool height;
+    double depth, zp;
+    double k_p0;
+    cd k_m0;
+    double t0, er, s;  // s = Im eps_c * k_p
+    PlaneSheet *seed;  // g_sheets' own
+    int dir = 0;       // 0 until a second medium fixes the band
+    double lo = 0, hi = 0;
+    std::vector<double> ts;
+    std::vector<std::unique_ptr<PlaneSheet>> own;  // anchors 1..
+    std::vector<PlaneSheet *> anchors;             // the seed first
+    double rho_reach = -std::numeric_limits<double>::infinity();
+    double s_reach = -std::numeric_limits<double>::infinity();
+    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::unique_ptr<PlaneSheet>> blends;
+};
+std::vector<std::unique_ptr<BandFamily>> g_bands;
+
+// A sheet's anchor new to this process starts from the store, as
+// `plane_sheet` does.
+std::unique_ptr<PlaneSheet> band_anchor(double k_p, cd k_m, const BandFamily &f) {
+    std::unique_ptr<PlaneSheet> sh(new PlaneSheet(k_p, k_m, f.zp, f.height, f.depth, false, f.k_p0, f.k_m0));
+    std::string b;
+    if (somm_core::disk_read(sh->file_name(), b)) {
+        if (sh->restore(b))
+            mw_times::count_disk();
+        else
+            sh.reset(new PlaneSheet(k_p, k_m, f.zp, f.height, f.depth, false, f.k_p0, f.k_m0));
+    }
+    return sh;
+}
+
+// The six-key sheet a fill with `crossing_sheet_band` on reads at (k_p, k_m),
+// covering rho <= rho_max and s <= s_max (the caller holds g_sheet_mutex).
+PlaneSheet &band_sheet(double k_p, cd k_m, double zp, bool height, double depth, double rho_max, double s_max,
+                       int n_threads) {
+    const double dkey = height ? depth : -1.0;
+    auto exact = [&]() -> PlaneSheet & {
+        PlaneSheet &sh = plane_sheet(k_p, k_m, zp, height, depth);
+        sh.cover(rho_max, s_max, n_threads);
+        store_sheet(sh);
+        return sh;
+    };
+    // a family's seed medium: its sheet, as flag-off
+    for (auto &fp : g_bands) {
+        BandFamily &f = *fp;
+        if (f.height != height || bits(f.depth) != bits(dkey) || bits(f.zp) != bits(zp) ||
+            bits(f.k_p0) != bits(k_p) || bits(f.k_m0.real()) != bits(k_m.real()) ||
+            bits(f.k_m0.imag()) != bits(k_m.imag()))
+            continue;
+        PlaneSheet &sh = exact();
+        f.rho_reach = std::max(f.rho_reach, rho_max);
+        f.s_reach = std::max(f.s_reach, s_max);
+        return sh;
+    }
+    double er, ei;
+    band_eps(k_p, k_m, er, ei);
+    const double s = ei * k_p, t = band_log(k_p);
+    const double wt = band_log1p(band_width());
+    BandFamily *fam = nullptr;
+    for (auto &fp : g_bands) {
+        BandFamily &f = *fp;
+        if (f.height != height || bits(f.depth) != bits(dkey) || bits(f.zp) != bits(zp)) continue;
+        const double tol = BAND_MATCH * std::sqrt(f.er * f.er + (f.s / f.k_p0) * (f.s / f.k_p0));
+        if (!(std::fabs(er - f.er) <= tol && std::fabs(s - f.s) <= tol * f.k_p0)) continue;
+        const bool in = f.dir == 0 ? std::fabs(t - f.t0) <= wt : (t >= f.lo && t <= f.hi);
+        if (in) {
+            fam = &f;
+            break;
+        }
+    }
+    if (fam == nullptr) {
+        // outside every band: its own family, exact
+        PlaneSheet &sh = exact();
+        std::unique_ptr<BandFamily> f(new BandFamily());
+        f->height = height;
+        f->depth = dkey;
+        f->zp = zp;
+        f->k_p0 = k_p;
+        f->k_m0 = k_m;
+        f->t0 = t;
+        f->er = er;
+        f->s = s;
+        f->seed = &sh;
+        f->anchors.push_back(&sh);
+        f->rho_reach = rho_max;
+        f->s_reach = s_max;
+        g_bands.push_back(std::move(f));
+        return sh;
+    }
+    BandFamily &f = *fam;
+    if (f.dir == 0) {
+        f.dir = t > f.t0 ? 1 : -1;
+        f.ts = band_points(f.t0, f.dir, band_nodes(), band_width());
+        f.lo = f.dir > 0 ? f.t0 : f.t0 - wt;
+        f.hi = f.dir > 0 ? f.t0 + wt : f.t0;
+        for (size_t j = 1; j < f.ts.size(); j++) {
+            const double kp = band_exp(f.ts[j]);
+            f.own.push_back(band_anchor(kp, band_k_m(f.er, f.s, kp, f.k_m0), f));
+            f.anchors.push_back(f.own.back().get());
+        }
+    }
+    f.rho_reach = std::max(f.rho_reach, rho_max);
+    f.s_reach = std::max(f.s_reach, s_max);
+    for (PlaneSheet *a : f.anchors) {
+        a->cover(f.rho_reach, f.s_reach, n_threads);
+        store_sheet(*a);
+    }
+    const auto bkey = std::make_tuple(bits(k_p), bits(k_m.real()), bits(k_m.imag()));
+    std::unique_ptr<PlaneSheet> &bl = f.blends[bkey];
+    if (!bl) bl.reset(new PlaneSheet(k_p, k_m, zp, height, depth, false, f.k_p0, f.k_m0));
+    if (bl->n_values() != f.seed->n_values()) {
+        bl->blend(f.anchors, band_weights(f.ts, t));
+        if (band_trace())
+            std::fprintf(stderr, "sheet_band: blend h=%d zp=%.17g t=%.17g anchors=%zu values=%zu\n", height ? 1 : 0,
+                         zp, t, f.anchors.size(), bl->n_values());
+    }
+    return *bl;
 }
 
 // --------------------------------------------------------------------------
@@ -963,6 +1261,35 @@ void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t
 
 // --------------------------------------------------------------------------
 
+double sheet_band_check(double k_p0, cd k_m0, double k_p, cd k_m, double zp, bool height, double depth,
+                        double rho_max, double s_max, int n_a, double w, int n_threads,
+                        std::vector<cd> &blend, std::vector<cd> &exact) {
+    double er, ei;
+    band_eps(k_p0, k_m0, er, ei);
+    const double s = ei * k_p0, t0 = band_log(k_p0), t = band_log(k_p);
+    const std::vector<double> ts = band_points(t0, t >= t0 ? 1 : -1, n_a, w);
+    std::vector<std::unique_ptr<PlaneSheet>> own;
+    std::vector<PlaneSheet *> an;
+    for (size_t j = 0; j < ts.size(); j++) {
+        const double kp = j == 0 ? k_p0 : band_exp(ts[j]);
+        const cd km = j == 0 ? k_m0 : band_k_m(er, s, kp, k_m0);
+        own.emplace_back(new PlaneSheet(kp, km, zp, height, depth, false, k_p0, k_m0));
+        own.back()->cover(rho_max, s_max, n_threads);
+        an.push_back(own.back().get());
+    }
+    PlaneSheet ex(k_p, k_m, zp, height, depth, false, k_p0, k_m0);
+    ex.cover(rho_max, s_max, n_threads);
+    PlaneSheet bl(k_p, k_m, zp, height, depth, false, k_p0, k_m0);
+    bl.blend(an, band_weights(ts, t));
+    exact = ex.values_as(*an[0]);
+    blend = bl.values();
+    const std::vector<cd> &e = exact, &b = blend;
+    double scale[N_KEYS] = {0, 0, 0, 0, 0, 0}, worst = 0.0;
+    for (size_t i = 0; i < e.size(); i++) scale[i % N_KEYS] = std::max(scale[i % N_KEYS], std::abs(e[i]));
+    for (size_t i = 0; i < e.size(); i++) worst = std::max(worst, std::abs(b[i] - e[i]) / scale[i % N_KEYS]);
+    return worst;
+}
+
 void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
                 const std::vector<double> &zs, int p, double u_max, int n_threads,
                 std::vector<double> &u_edges, std::vector<cd> &vals) {
@@ -1036,6 +1363,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "crossing_above_rule") return &f.crossing_above_rule;
     if (name == "crossing_sheet_retune") return &f.crossing_sheet_retune;
     if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
+    if (name == "crossing_sheet_band") return &f.crossing_sheet_band;
     return nullptr;
 }
 }  // namespace
@@ -1068,6 +1396,7 @@ std::string requested_stamp() {
     if (f.crossing_above_rule) s += "+crossing_above_rule";
     if (f.crossing_sheet_retune) s += "+crossing_sheet_retune";
     if (f.razor_pair_reuse) s += "+razor_pair_reuse";
+    if (f.crossing_sheet_band) s += "+crossing_sheet_band";
     return s;
 }
 
@@ -1271,9 +1600,16 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
             if (idx.empty()) continue;
             const double depth = height ? plan->depths[k] : -1.0;
             const double s_max = height ? v - ext : ext - v;
-            PlaneSheet &sh = plane_sheet(ev.k_p, ev.k_m, v, height, depth);
-            sh.cover(rho_max, s_max, ev.n_threads);
-            store_sheet(sh);
+            PlaneSheet *shp;
+            if (active_features().crossing_sheet_band) {
+                shp = &band_sheet(ev.k_p, ev.k_m, v, height, depth, rho_max, s_max, ev.n_threads);
+            } else {
+                PlaneSheet &sh0 = plane_sheet(ev.k_p, ev.k_m, v, height, depth);
+                sh0.cover(rho_max, s_max, ev.n_threads);
+                store_sheet(sh0);
+                shp = &sh0;
+            }
+            PlaneSheet &sh = *shp;
             static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
             if (height && !plan->lo.empty() && plan->lo[k] != plan->hi[k]) {
                 // momwire#1860 L2: a snapped window's rows are read AT its
