@@ -462,6 +462,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_pairs_owned_core.h",
     "src/momwire/_somm_grid_core.h",
     "src/momwire/_cpu_count.h",
+    "src/momwire/_thread_policy.h",
     "src/momwire/_accel_somm_proj_py.h",
 ]
 

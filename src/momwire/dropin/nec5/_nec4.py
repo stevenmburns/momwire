@@ -35,6 +35,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from ... import _thread_policy
 from ...deck import BASES, NEC2_BASES
 from ...deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
@@ -476,6 +477,8 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
     runs: list[Nec4Run | Nec4Report] = []
     try:
         solver = DeckSolver(deck, basis=basis)
+        # The NEC-4.2 executables read the segment count alone.
+        _thread_policy.measured(solver.n_segments)
         connections = _connections(solver, deck)
         for count, (index, group) in enumerate(plan):
             for step, freq in enumerate(group.freqs_mhz):

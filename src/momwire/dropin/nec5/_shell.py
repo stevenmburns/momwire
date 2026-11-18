@@ -85,7 +85,7 @@ from pathlib import Path
 
 import momwire_serve_client as _mech
 
-from ... import _features, _times
+from ... import _features, _thread_policy, _times
 from ...deck import DeckError
 from ...deck._nec5 import (
     LongExponentToken,
@@ -403,6 +403,7 @@ def _advise_long_exponents(text: str) -> None:
 
 
 @_features.in_context("dropin")
+@_thread_policy.answering()
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
@@ -794,6 +795,7 @@ STREAMING_REFUSAL = (
 _STREAM_CHUNK = 65536
 
 
+@_thread_policy.answering()
 def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str, bool]:
     """One piece of a stream as its printout: ``(printout, go_on)``.
 

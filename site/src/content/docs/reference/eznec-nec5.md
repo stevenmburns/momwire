@@ -95,6 +95,32 @@ EZNEC displays nothing during an external-engine run); if anything about the
 resident path ever fails, the launcher runs the engine directly instead —
 the same answer, at one-shot speed, never a broken engine.
 
+### Threads
+
+With no thread variable set, the engine sizes its threads by the deck, by the
+rule the [standalone executables](/reference/standalone/#threads) use: one
+thread for a deck under 128 segments, four up to 384, and one per physical
+core above that. A buried deck whose fill is heavy for its size gets every
+core whatever its segment count. The count never exceeds the physical cores
+the process's affinity mask allows. OpenBLAS runs on the same count, except
+that a one-thread deck keeps two OpenBLAS threads, because OpenBLAS's serial
+path rounds differently in the last digits.
+
+Each pool takes the first of these that is set:
+
+| Pool | 1st | 2nd | 3rd | Otherwise |
+| --- | --- | --- | --- | --- |
+| OpenMP (the fill) | `OMP_NUM_THREADS` | `MOMWIRE_THREADS` | | by the deck |
+| OpenBLAS (the factor) | `OPENBLAS_NUM_THREADS` | `MOMWIRE_THREADS` | `GOTO_NUM_THREADS`, then `OMP_NUM_THREADS` | by the deck |
+
+The standalone executables differ in one way: there `MOMWIRE_THREADS` wins
+over `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS`.
+
+When several calculations reach a resident engine at once, its workers divide
+the physical cores between them, and that share caps every count above. Under
+`MOMWIRE_TIMES=1` the printout and the `times:` line report the counts the
+answer ran on.
+
 ### The 4nec2 geometry file (`.GMO`)
 
 Under 4nec2's NEC-5 package (the install steps are in the zip's
