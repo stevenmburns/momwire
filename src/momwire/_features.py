@@ -535,11 +535,13 @@ FEATURES: dict[str, Feature] = {
         # rest, in Python and in the executables (one C++ core).
         Feature(
             name="razor_pair_reuse",
-            # Reach 1, the hosted app only (Steve, 11-16). The C++ core is
-            # the executables' too, but they do not carry the feature (no
-            # `EXE_FEATURES` row), so they refuse MOMWIRE_X_RAZOR_PAIR_REUSE
-            # by name; widening the reach puts the row back.
-            reach=1,
+            # Reach 7 (momwire#1971 promotion, 11-17), from reach 1 (Steve,
+            # 11-16): every Python level, the drop-in, macOS, and the nec5
+            # executables (levels 6 and 7), which carry it through the same
+            # C++ core (their `EXE_FEATURES` row). The nec42 executables
+            # (levels 8, 9) refuse it by name. Still off by default and not
+            # offered.
+            reach=7,
             env="MOMWIRE_X_RAZOR_PAIR_REUSE",
             kind="native",
             issue=1971,

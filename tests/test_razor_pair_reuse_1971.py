@@ -36,6 +36,8 @@ share their moments exactly. `test_a_junction_deck_reuses` holds that.
 
 from __future__ import annotations
 
+import platform
+import sys
 import warnings
 
 import numpy as np
@@ -46,7 +48,7 @@ from momwire._accel import acc
 from momwire.razor import RazorSolver
 
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(7),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "razor_pair_reuse_1971", False),
         reason="needs the razor pair-reuse kernels",
@@ -54,18 +56,37 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
-# A native feature at reach 1 refuses below its reach (macOS is level 5), so
-# the tests that turn it on run only where it is certified, as
-# test_point_cplx_staged_1849 does; the off and refusal tests run everywhere.
+# A native feature refuses outside its reach, so the tests that turn it on run
+# only where it is certified, as test_point_cplx_staged_1849 does; the off and
+# refusal tests run everywhere. At reach 7 that is every Python platform
+# (Linux, Windows, macOS: levels 1-5), so the guard skips nothing today; it
+# stays for a lane that pins a deeper MOMWIRE_CI_LEVEL's Python.
 _needs_cert = pytest.mark.skipif(
     not _features.certified("razor_pair_reuse"),
     reason="razor_pair_reuse is not certified on this platform",
 )
+# The C++ front route from Python (`razor._RAZOR_CXX`) is `razor_cxx`'s, a
+# feature of its own: the tests that compare the reuse through it run where
+# that one is certified (the hosted app), as its own tests do.
+_cxx_reach = pytest.mark.reach(_features.FEATURES["razor_cxx"].reach)
+_needs_cxx = pytest.mark.skipif(
+    not _features.certified("razor_cxx"),
+    reason="razor_cxx (the C++ front route) is not certified on this platform",
+)
 DRIFT = _features.FEATURES["razor_pair_reuse"].drift
-# The decks here are well conditioned: on against off moves them ~1e-13, so
-# they hold the reuse to this, tighter than the registry's drift (which the
-# close-spaced decks set, `_features`). A wrong key moves them by orders more.
-CLEAN = 1e-11
+# The decks here are well conditioned: on against off moves them ~1e-13 on
+# Linux and Intel macOS (GCC / clang, -ffp-contract=off), so there they hold
+# the reuse to this, tighter than the registry's drift (which the close-spaced
+# decks set, `_features`). Where no lane has measured them -- macOS arm64 and
+# Windows' /fp:fast MSVC build, both inside reach 7 -- the bound is the
+# declared drift, the registry's contract, until a run there proves tighter.
+_UNMEASURED = sys.platform == "win32" or (
+    sys.platform == "darwin" and platform.machine() == "arm64"
+)
+CLEAN = DRIFT if _UNMEASURED else 1e-11
+# A wrong key moves an answer by orders more than either (the adversarial
+# gates): at least this, on every platform.
+WRONG = 1e-8
 
 
 @pytest.fixture(autouse=True)
@@ -291,7 +312,7 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs():
     right = razor._PAIR_REUSE_STATS[0]
     assert right["classes"] < 0.6 * right["pairs"], right
     good = abs(on - off) / abs(off)
-    assert good < 1e-9, good
+    assert good < max(1e-9, CLEAN), good
     acc.razor_reuse_probe(6)
     wrong = _hairpin_zin(True, wires)
     st = razor._PAIR_REUSE_STATS[0]
@@ -304,6 +325,8 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs():
 
 
 @_needs_cert
+@_cxx_reach
+@_needs_cxx
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 def test_the_cxx_front_route_is_the_python_route_to_the_bit(ground, monkeypatch):
     """The C++ front route (the executables' fill, from Python) gathers from
@@ -359,7 +382,7 @@ def test_a_wrong_key_is_caught(name):
         # orientation probes keep the classes and lose the signs)
         assert st[key] < right[key], (st, right)
     moved = _drift(wrong, off)
-    assert moved > 1e3 * CLEAN, moved
+    assert moved > WRONG, moved
     with pytest.raises(RuntimeError, match="pair_reuse verify"):
         _solve(wires, "verify", radius=radius, ground=ground)
     acc.razor_reuse_probe(0)
@@ -367,6 +390,8 @@ def test_a_wrong_key_is_caught(name):
 
 
 @_needs_cert
+@_cxx_reach
+@_needs_cxx
 def test_a_wrong_key_is_caught_on_the_cxx_route(monkeypatch):
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
     acc.razor_reuse_probe(1)
@@ -434,6 +459,8 @@ def test_a_census_it_cannot_code_declines_and_fills_as_off(family):
 
 
 @_needs_cert
+@_cxx_reach
+@_needs_cxx
 def test_a_census_it_cannot_code_declines_on_the_cxx_route(monkeypatch):
     wires = _triangle()
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
@@ -530,6 +557,8 @@ def test_small_decks_step_aside(ground):
 
 
 @_needs_cert
+@_cxx_reach
+@_needs_cxx
 def test_small_decks_step_aside_on_the_cxx_route(monkeypatch):
     acc.razor_reuse_set_small_deck_segs(-1, -1)
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)

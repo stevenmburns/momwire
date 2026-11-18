@@ -78,7 +78,8 @@ byte-identical.**
   them on line 2 as Python does. Any other `MOMWIRE_X_*` variable set on, or a
   legacy alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence
   before it reads a deck; set to "0" it is accepted. Today the table is #1860's
-  four levers at reach 8, two of them on by default.
+  four levers at reach 8, two of them on by default, and #1971's
+  `razor_pair_reuse` at reach 7 (the nec5 executables), off by default.
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 

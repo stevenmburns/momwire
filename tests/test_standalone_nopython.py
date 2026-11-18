@@ -807,51 +807,78 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     assert policy == (tmp_path / "one.out").read_bytes()
 
 
-# --- momwire#1971: razor-2p's fill-pair reuse (reach 1: the executables refuse it) ---
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: the nec5 executables run it) ---
 
-_REUSE_DECKS = (
-    FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec",  # Sommerfeld
-    FIXTURES / "razor_printout_somm" / "gd_ne_dipole.nec",  # PEC, a near field
-    DIPOLE,  # free space, two sources
-)
+# Synthetic decks just past the sizes at which the reuse stops stepping aside
+# (`_razor_pair_reuse_core.h`: 400 segments in free space and over PEC, 100
+# over a finite ground). The fixture decks are 21-30 segments, below both, so
+# with them an on gate agrees with the launcher by never planning at all.
+_REUSE_DECK = """CM synthetic (momwire#1971): two parallel 10 m dipoles 3 m apart,
+CM {n} segments each, {ground}
+CE
+GW 1 {n} 0 -5 8 0 5 8 0.001
+GW 2 {n} 3 -5 8 3 5 8 0.001
+GE {ge}
+{gn}
+EX 0 1 {mid} 0 1 0
+FR 0 1 0 0 14.2 0
+XQ
+EN
+"""
+_REUSE_GROUNDS = {
+    # name: (segments per wire, GE flag, ground card)
+    "free": (201, 0, "GN -1"),
+    "pec": (201, 1, "GN 1"),
+    "sommerfeld": (61, 0, "GN 0 0 0 0 13.0 -50.0"),
+}
 
 
-@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
-@pytest.mark.parametrize("deck", _REUSE_DECKS, ids=lambda p: p.stem)
-def test_razor_pair_reuse_is_refused_by_name(deck, tmp_path, monkeypatch):
-    """The C++ core carries the reuse, but its reach is the hosted app
-    (level 1) and the executables are levels 6 and 7: asked on, the
-    executable refuses it in the registry's sentence before reading the
-    deck, and writes nothing. Unset or off, its printout is the launcher's,
-    byte for byte, with no feature on line 2."""
-    from momwire import _features
+def _reuse_deck(ground: str) -> str:
+    n, ge, gn = _REUSE_GROUNDS[ground]
+    return _REUSE_DECK.format(n=n, ground=ground, ge=ge, gn=gn, mid=(n + 1) // 2)
 
+
+def _reuse_plans(stderr: bytes) -> tuple[int, int]:
+    m = re.search(rb"cxx: reuse plans built (\d+), found (\d+)", stderr)
+    assert m, stderr
+    return int(m[1]), int(m[2])
+
+
+@pytest.mark.parametrize("ground", sorted(_REUSE_GROUNDS))
+def test_razor_pair_reuse_answers_as_the_launcher(ground, tmp_path, monkeypatch):
+    """MOMWIRE_X_RAZOR_PAIR_REUSE on, off and unset: the executable's
+    printout is the launcher's byte for byte, line 2 naming the feature on
+    both sides exactly when it is on, and MW_EXE_TIMES=1 proves the reuse RAN
+    (a plan built) when on and never when off, so agreement is not the
+    flag-off fill on both sides. Unstamped, on and off print the same bytes:
+    these decks move ~1e-13 with the reuse, far under five figures.
+
+    nec5-bspline carries the row too (one EXE_FEATURES table), stamps line 2
+    as its launcher does, and builds no razor plan."""
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
-    d = tmp_path / "refused"
-    d.mkdir()
-    shutil.copy(deck, d / deck.name)
-    r = subprocess.run(
-        [EXE, deck.name, "reuse.out"],
-        cwd=d,
-        env=dict(os.environ, MOMWIRE_X_RAZOR_PAIR_REUSE="1"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 2, (r.stdout, r.stderr)
-    assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
-    assert not (d / "reuse.out").exists()
+    name = f"reuse_{ground}.nec"
+    deck = _reuse_deck(ground)
 
     def prepare(d):
-        shutil.copy(deck, d / deck.name)
+        (d / name).write_text(deck, encoding="ascii")
 
-    for i, env in enumerate((None, {"MOMWIRE_X_RAZOR_PAIR_REUSE": "0"})):
-        run = tmp_path / str(i)
+    printouts = {}
+    for on in (None, "0", "1"):
+        run = tmp_path / str(on)
         run.mkdir()
-        exe, ref, de, dl = _both(
-            [deck.name, "reuse.out"], run, prepare=prepare, env=env
-        )
+        env = {"MW_EXE_TIMES": "1"}
+        if on is not None:
+            env["MOMWIRE_X_RAZOR_PAIR_REUSE"] = on
+        exe, ref, de, dl = _both([name, "reuse.out"], run, prepare=prepare, env=env)
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
-        line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
-        assert b"+razor_pair_reuse" not in line2, line2
+        built, _found = _reuse_plans(exe.stderr)
+        if BASIS == "razor-2p" and on == "1":
+            assert built >= 1, exe.stderr
+        else:
+            assert built == 0, exe.stderr
+        lines = (de / "reuse.out").read_bytes().split(b"\n")
+        assert b"NEC ERROR" not in b"\n".join(lines), lines[:40]
+        assert (b"+razor_pair_reuse" in lines[1]) == (on == "1"), lines[1]
+        printouts[on] = lines[:1] + lines[2:]
+    assert printouts["1"] == printouts["0"] == printouts[None]
