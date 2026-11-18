@@ -16,6 +16,18 @@ frequencies F_REF * 1.1**j, each at the soil's own eps_t there. A sweep
 point's grid is then the degree-7 Lagrange blend, in ln f, of the eight
 anchors nearest it: a node-by-node sum over tables that already exist.
 
+The blend is then RESAMPLED onto the nodes the exact grid would have had at
+this request (`_on_exact_nodes`), and that grid is what the solver reads. The
+step is what holds the declared drift (momwire#2022). The exact grid's own
+cubic interpolation is a 1e-5-class error on a close pair, and it depends on
+where the nodes fall; a metres-fixed lattice puts them somewhere else, so
+flag-on and flag-off carried two different errors of that size. On
+`transmitted_mixed/m6_close` the whole 2.12e-6 |dZ|/|Z| was this: the exact
+fill on the metres lattice moved Zin 2.12e-6, the frequency blend 8e-10.
+Sharing the nodes makes the two cubic errors the same error, and it cancels.
+A finer metres lattice would not have helped, since the flag-off answer keeps
+its own error. Ten points per axis leave the resampling itself under that.
+
 Measured on `mixed_vert_over_buried24`'s geometry (R 0.4-22 m, theta 0-90
 deg, z' = -0.15 m, soil 13 / 0.005 S/m, 10 points over 7.1 MHz +- 25 %),
 worst per-surface error of scale against direct evaluation:
@@ -78,6 +90,28 @@ from ._sommerfeld_transmitted import (
 ANCHOR_F_REF_HZ = 1.0e6
 ANCHOR_STEP = math.log(1.1)
 ANCHOR_POINTS = 8
+
+# Lagrange points per axis taking the blend onto the exact grid's nodes. On the
+# worst decks of the momwire#2022 survey eight left 4.3e-8 of |Zin| and ten
+# 1.3e-8; twelve and fourteen did not lower that worst.
+_RESAMPLE_POINTS = 10
+
+# Rows tabulated inside the lattice's inner radius: the exact grid's own two
+# padding rows, then half a resampling stencil under the lowest of them, so
+# the rows nearest the source (a close pair's whole coupling) get a centred
+# stencil.
+_INNER_ROWS = _PAD_ROWS + _RESAMPLE_POINTS // 2
+
+# How far past the request's outer radius the lattice's outer radius sits, in
+# rows. The exact rows a request reads end two rows out, so this keeps every
+# one of them inside the tabulated range. The lattice has NO rows past its
+# outer radius: the grazing floor is solved at that radius, and a row beyond
+# it on the bottom theta row runs out of tail budget and returns garbage
+# (1e294 past 7 m on a source 2 cm deep), which a ten-point stencil would read.
+# The wider radius raises the floor, so a long deck over a very shallow source
+# can land above the exact grid's floor, and `get_grid` then declines it and
+# the exact grid serves.
+_OUTER_ROWS = 3
 
 # Significant digits of q = sigma/eps0 in the family key (see the module note).
 _Q_DIGITS = 12
@@ -171,11 +205,11 @@ class _Lattice:
         self.r_min = float(r_min)
         self.r_max = float(r_max)
         self.zp_nodes = np.asarray(zp_nodes, dtype=float)
-        self.lnr0 = math.log(self.r_min) - _PAD_ROWS * _R_STEP_LOG
+        self.lnr0 = math.log(self.r_min) - _INNER_ROWS * _R_STEP_LOG
         self.n_r = (
-            int(math.ceil(math.log(self.r_max / self.r_min) / _R_STEP_LOG))
+            int(math.floor(math.log(self.r_max / self.r_min) / _R_STEP_LOG + 1e-9))
             + 1
-            + 2 * _PAD_ROWS
+            + _INNER_ROWS
         )
         self.th_min = grazing_floor(self.r_max, float(self.zp_nodes[0]))
         n_int = max(int(round((90.0 - math.degrees(self.th_min)) / _DTH_DEG)), 4)
@@ -198,7 +232,9 @@ def _lattice(f_hz, js, r_max, zp_min, zp_max, r_min, eps_r, q):
     want = lo_default if r_min is None else float(r_min)
     # On the log lattice exp(m * _R_STEP_LOG) metres, snapped down.
     r_lo = math.exp(_R_STEP_LOG * math.floor(math.log(want) / _R_STEP_LOG + 1e-12))
-    r_hi = _somm_r1_bucket_wl(max(float(r_max), 4.0 * r_lo))
+    r_hi = _somm_r1_bucket_wl(
+        max(float(r_max) * math.exp(_OUTER_ROWS * _R_STEP_LOG), 4.0 * r_lo)
+    )
     if r_hi > _R_CAP_LAMBDA_P * lam_p:
         return None
     lo = abs(float(zp_min))
@@ -224,7 +260,9 @@ def _lattice(f_hz, js, r_max, zp_min, zp_max, r_min, eps_r, q):
         lam_mj = 2.0 * np.pi / abs(k_m)
         if r_hi > _R_CAP_LAMBDA_P * lam_pj * (1.0 + 1e-9):
             return None
-        if r_lo < _R_MIN_FLOOR_LAMBDA_P * lam_pj:
+        if r_lo * math.exp(-_INNER_ROWS * _R_STEP_LOG) < (
+            _R_MIN_FLOOR_LAMBDA_P * lam_pj
+        ):
             return None
         if hi > _ZPRIME_MAX_LAMBDA_M * lam_mj * (1.0 + 1e-9):
             return None
@@ -278,6 +316,88 @@ def _set_lattice(g, lat, eps_t, k2, omega, mu):
     g.dlnz = (math.log(g.zp_max) - g.lnz0) / (g.n_zp - 1) if g.n_zp > 1 else 0.0
 
 
+class _Nodes:
+    """The exact grid's own nodes at one request, in `_Lattice`'s shape: the
+    rows the request can read of the lattice `TransmittedGrid` would build."""
+
+    __slots__ = ("r_min", "r_max", "zp_nodes", "n_r", "lnr0", "th_min", "n_th", "dth")
+
+    def __init__(self, blend, k2, r_max, zp_min, zp_max, r_min):
+        rmin_e, rmax_e, th_e = grid_extent(k2, r_max, zp_min, r_min=r_min)
+        lnr0 = math.log(rmin_e) - _PAD_ROWS * _R_STEP_LOG
+        n_exact = (
+            int(math.ceil(math.log(rmax_e / rmin_e) / _R_STEP_LOG)) + 1 + 2 * _PAD_ROWS
+        )
+        self.r_min = max(rmin_e, blend.r_min)
+        self.r_max = min(rmax_e, float(r_max))
+        # `eval` opens its stencil one row under the query and closes it two
+        # above; the 1e-9 keeps a query landing on a row inside these bounds
+        # whichever way its logarithm rounds.
+        lo = (math.log(self.r_min) - lnr0) / _R_STEP_LOG
+        hi = (math.log(self.r_max) - lnr0) / _R_STEP_LOG
+        i_lo = max(math.floor(lo - 1e-9) - 1, 0)
+        i_hi = min(math.floor(hi + 1e-9) + 2, n_exact - 1)
+        self.lnr0 = lnr0 + i_lo * _R_STEP_LOG
+        self.n_r = i_hi - i_lo + 1
+        self.th_min = th_e
+        n_int = max(int(round((90.0 - math.degrees(th_e)) / _DTH_DEG)), 4)
+        self.n_th = n_int + 1
+        self.dth = (0.5 * np.pi - th_e) / n_int
+        self.zp_nodes = ladder_nodes(zp_min, zp_max, blend.lam_m)[0]
+
+
+def _resample_matrix(x0, dx, n, targets):
+    """Lagrange weights from the uniform axis x0 + i * dx (n nodes) to
+    `targets`, each stencil shifted to stay on the axis."""
+    p = min(_RESAMPLE_POINTS, n)
+    w = np.zeros((len(targets), n))
+    for t, x in enumerate(targets):
+        f = (float(x) - x0) / dx
+        i0 = min(max(math.floor(f) - p // 2 + 1, 0), n - p)
+        js = list(range(i0, i0 + p))
+        w[t, i0 : i0 + p] = _weights(f, js)
+    return w
+
+
+def _on_exact_nodes(blend, k2, r_max, zp_min, zp_max, r_min):
+    """The blend, carried onto the nodes the exact grid has at this request."""
+    nodes = _Nodes(blend, k2, r_max, zp_min, zp_max, r_min)
+    w_r = _resample_matrix(
+        blend.lnr0,
+        blend.dlnr,
+        blend.n_r,
+        nodes.lnr0 + _R_STEP_LOG * np.arange(nodes.n_r),
+    )
+    w_t = _resample_matrix(
+        blend.th0,
+        blend.dth,
+        blend.n_th,
+        nodes.th_min + nodes.dth * np.arange(nodes.n_th),
+    )
+    vals = np.einsum("zsrt,ar,bt->zsab", blend._vals, w_r, w_t, optimize=True)
+    if nodes.zp_nodes.size > 1:
+        w_z = _resample_matrix(
+            blend.lnz0, blend.dlnz, blend.n_zp, np.log(nodes.zp_nodes)
+        )
+        vals = np.einsum("zsab,cz->csab", vals, w_z, optimize=True)
+    g = object.__new__(TransmittedGrid)
+    _set_lattice(g, nodes, blend.eps_t, blend.k2, blend.omega, blend.mu)
+    g._vals = vals
+    return g
+
+
+def _blend(lat, js, u, eps_t, k2, omega, mu, eps_r, q, rtol, cancel_flag):
+    """The request's grid on the family's metres-fixed lattice."""
+    vals = None
+    for j, w in zip(js, _weights(u, js), strict=True):
+        a = _anchor(j, lat, eps_r, q, mu, rtol, cancel_flag)
+        vals = a._vals * w if vals is None else vals + a._vals * w
+    g = object.__new__(TransmittedGrid)
+    _set_lattice(g, lat, eps_t, k2, omega, mu)
+    g._vals = vals
+    return g
+
+
 def _source_digest():
     """sha256 of this file: the anchor fill and lattice live here, outside the
     modules `_somm_disk_cache`'s code fingerprint hashes."""
@@ -325,9 +445,8 @@ def get_grid(
     anchors cannot serve it (the caller then fills the exact grid).
 
     A `TransmittedGrid` in every attribute `eval` and the C++ projection
-    read, carrying the REQUEST's eps_t, k2 and omega, on the family's
-    metres-fixed lattice -- which covers the request's (r_min, r_max) and
-    z' range, as the exact grid's bucketed lattice does."""
+    read, carrying the REQUEST's eps_t, k2 and omega, on the exact grid's own
+    nodes over the request's (r_min, r_max) and z' range."""
     omega = float(omega)
     f_hz = omega / (2.0 * np.pi)
     if not (f_hz > 0.0) or complex(eps_t).imag > 0.0:
@@ -351,17 +470,24 @@ def get_grid(
     if lat.th_min > th_exact * (1.0 + 1e-9) + 1e-15:
         STATS["declined"] += 1
         return None
-    bkey = (complex(eps_t), float(k2), omega, float(mu), lat.key(), float(rtol))
+    # The served nodes follow the request's own range, not just the family's.
+    bkey = (
+        complex(eps_t),
+        float(k2),
+        omega,
+        float(mu),
+        lat.key(),
+        float(rtol),
+        None if r_min is None else float(r_min),
+        float(r_max),
+        float(zp_min),
+        float(zp_max),
+    )
     g = _BLENDS.get(bkey)
     if g is not None:
         return g
-    vals = None
-    for j, w in zip(js, _weights(u, js), strict=True):
-        a = _anchor(j, lat, eps_r, q, mu, rtol, cancel_flag)
-        vals = a._vals * w if vals is None else vals + a._vals * w
-    g = object.__new__(TransmittedGrid)
-    _set_lattice(g, lat, eps_t, k2, omega, mu)
-    g._vals = vals
+    blend = _blend(lat, js, u, eps_t, k2, omega, mu, eps_r, q, rtol, cancel_flag)
+    g = _on_exact_nodes(blend, k2, r_max, zp_min, zp_max, r_min)
     STATS["blends"] += 1
     _evict_fifo(_BLENDS, _BLENDS_MAX)
     _BLENDS[bkey] = g
