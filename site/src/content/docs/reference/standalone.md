@@ -160,6 +160,9 @@ the count for every deck.
 
 ## Where the time goes
 
+For measured run times against the licensed NEC-5 console engine, see
+[Speed against NEC-5](/reference/speed-vs-nec5/).
+
 Set the environment variable `MOMWIRE_TIMES=1` to see how long each part of
 a run takes. It is off unless you set it, and it changes no result. With it
 set, two things change:
