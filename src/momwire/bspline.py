@@ -6975,6 +6975,14 @@ class BSplineSolver(
             self.pair_reuse_served = served
         return Z
 
+    def _decline_unread_hint(self, reason):
+        """Name in `pair_reuse_declined` why this fill route reads no
+        `pair_reuse` plan (momwire#2020). Nothing is said when no hint was
+        given, and the hint is not converted or checked: the route's numbers
+        are the no-hint fill's."""
+        if self._pair_reuse_given is not None or self._pair_reuse is not None:
+            self.pair_reuse_declined = reason
+
     def _chunked_reuse(self, geom, same_edge_prep, restrict):
         """The `_ChunkedReuse` of this fill, or None to fill every block
         (momwire#2020). Every way a hint goes unread here is recorded in
@@ -6982,7 +6990,7 @@ class BSplineSolver(
         if self._pair_reuse_given is None and self._pair_reuse is None:
             return None
         if restrict is not None:
-            self.pair_reuse_declined = "a fill of chosen rows does not read the hint"
+            self._decline_unread_hint("a fill of chosen rows does not read the hint")
             return None
         plan = self._pair_reuse_plan(geom)
         if not plan:
@@ -9544,6 +9552,7 @@ class BSplineSolver(
         """`_compute_Z_operator_buried_scoped` under this solver's
         `factored_columns`, `height_sheet_recal`, `crossing_table` and
         `crossing_sheet_retune` choices (momwire#1860, #1956)."""
+        self._decline_unread_hint("the buried fill does not read the hint")
         with (
             _near_interface.factored_columns_scope(
                 getattr(self, "_factored_columns", False)
@@ -11233,7 +11242,11 @@ class BSplineSolver(
         `prep`'s reg geometry is rebuilt per (chunk, edge) rather than held
         for the whole sweep (issue #330) — see `_same_edge_prep_swept_chunks`
         for the full rationale; the chunk arithmetic here mirrors it.
+
+        No `pair_reuse` plan is read here: the sweep's moments are batched over
+        k, and `pair_reuse_declined` says so (momwire#2020).
         """
+        self._decline_unread_hint("the batched sweep does not read the hint")
         d = self.degree
         n_k = k_array.shape[0]
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
