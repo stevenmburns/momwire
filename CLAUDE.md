@@ -64,9 +64,47 @@ byte-identical.**
 - Promoting moves goldens wherever the feature changes digits: regenerate
   with `--corpus stable` and give each moved one's lever and measured |dZ|/|Z|.
 - Today: #1860's `factored_columns` and `height_sheet_recal` (2026-11-15).
-  `crossing_table` (drift 1e-3) stays opt-in. `crossing_above_rule` was
-  approved but held back: the pre-tag sweep measured 1.28e-6 on the WA7ARK
-  ground-rod EFHW, over its declared 1e-7.
+  `crossing_table` (drift 5e-3 since #1957) stays opt-in.
+  `crossing_above_rule` was approved but held back: the pre-tag sweep
+  measured 1.28e-6 on the WA7ARK ground-rod EFHW, over its declared 1e-7.
+
+**Retirement is a third, separate step: the flag itself goes.**
+A default-on feature still carries its off path, its `MOMWIRE_X_<NAME>`
+variable, its kwarg and its registry entry. Retiring deletes them. Not yet
+exercised: the first retirement also writes the `RETIRED` registry shape
+described below.
+- What it costs, and why it has its own bar:
+  - The off path is a built-in check: with it explicitly off, the printout
+    is the pre-promotion one. That is how a drift claim is re-measured and
+    a feature ruled out while debugging. Retired, that check is gone for
+    good.
+  - Callers pass the kwarg, the variable or the warm server's
+    `feature=<name>=off`. None of them may start failing.
+  - antennaknobs derives its checkboxes from this registry, so the box
+    disappears and its optionSpec fixtures move.
+- The bar: the feature has been default-on for at least two releases, with
+  the nightly and every pre-tag sweep clean and no bug traced to it. Its
+  reach covers every level where its route exists. Retiring is Steve's call,
+  recorded in the entry's comment, like default-on.
+- Deprecate for one release first. The entry says it is retiring, so a front
+  end can show it locked on. The kwarg and the variable still work; turning
+  it off prints a one-line notice naming the release that removes it.
+- Then retire it in its own PR:
+  - Delete the off path and the entry.
+  - Move the name to `RETIRED`, which accepts the kwarg, `MOMWIRE_X_<NAME>`
+    and `feature=<name>=off` silently and ignores them, so an old caller or
+    deck never fails.
+  - Remove it from `EXE_FEATURES`.
+  - The goldens must not move, because the default already took the on
+    path. A golden that moves means the off path was not dead: stop and
+    find out why.
+  - The PR records the final measured |dZ|/|Z| between the last build with
+    the off path and the last without it.
+- The antennaknobs pin PR that adopts the release regenerates the derived
+  fixtures and drops the name from the hand-kept fallback tables
+  (`_FALLBACK_SWITCHES`, `_FALLBACK_FEATURE_SPECS`).
+- First candidates: `factored_columns` and `height_sheet_recal`, default-on
+  since 0.94.0. Eligible after 0.95.0; deprecate in 0.96, retire in 0.97.
 
 **Outside its reach, a feature acts by its kind.**
 - `kind="python"` (a route over kernels that already shipped) runs, and
