@@ -1566,15 +1566,18 @@ static py::dict near_interface_eval_designed(double k_p, cd k_m, py::list specs,
     ni_eval::Memo memo;
     {
         // `features` (registry names) requested around this plan only, as an
-        // executable's fill would have them on (momwire#1956's twin test).
-        const ni_eval::Features saved = ni_eval::requested_features();
-        for (const std::string &f : features)
-            if (!ni_eval::request_feature(f, false)) throw std::invalid_argument("not a C++ feature: " + f);
+        // executable's fill would have them on (momwire#1956's twin test). The
+        // scope is taken with the GIL released (FeatureRequest's lock may wait
+        // on another thread's scope), then held, GIL and all, for the plan:
+        // nothing outside a scope can then run beside the `FeatureFill`
+        // (momwire#2007).
+        std::optional<ni_eval::FeatureRequest> requested;
         {
-            const ni_eval::FeatureFill on;
-            memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
+            py::gil_scoped_release nogil;
+            requested.emplace(features);
         }
-        ni_eval::requested_features() = saved;
+        const ni_eval::FeatureFill on;
+        memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
     }
     memo.have_plan = true;
     py::array_t<cd> out({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(ni_eval::N_KEYS)});
