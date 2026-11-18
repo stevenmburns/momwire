@@ -9,6 +9,7 @@
 #include "_mw_times.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -205,6 +207,14 @@ std::string py_repr(double x) {
         "separation, or refuse the geometry [at (" + py_repr(w_r1) + ", " + py_repr(w_th) + ")]");
 }
 
+#if !defined(_OPENMP)
+// The copy built without OpenMP (the executable's serial one): its node loop
+// on `g_node_threads` std::threads when that is above 1 (`set_node_threads`,
+// a frequency-parallel sweep's first pass), else in turn. A node's value is
+// its own contour, so the split moves no bit.
+std::atomic<int> g_node_threads{1};
+#endif
+
 // `_six_integrals_below_many(eps_t, k2, rho, h, rtol=1e-9)` on the
 // accelerator path: one contour per node (`six_below_one`), OpenMP across
 // nodes as `below_six_integrals_batch` runs them; `out` is (n, 6).
@@ -225,6 +235,42 @@ void six_many(cd eps_t, double k_p, const std::vector<double> &rho, const std::v
     wa.agree = WA_AGREE;
     std::vector<int> tail(static_cast<size_t>(n));
     std::vector<char> conv(static_cast<size_t>(n));
+#if !defined(_OPENMP)
+    const int node_threads = static_cast<int>(std::min<int64_t>(g_node_threads.load(), n));
+    if (node_threads > 1) {
+        // The OpenMP loop's body below, one node at a time off a shared
+        // counter (its `schedule(dynamic)`); the cancel flag polled as there.
+        const volatile int32_t *cancel = reinterpret_cast<const volatile int32_t *>(cancel_flag);
+        std::atomic<bool> aborted{false};
+        std::atomic<int64_t> next{0};
+        auto work = [&]() {
+            for (;;) {
+                const int64_t i = next.fetch_add(1);
+                if (i >= n) break;
+                if (aborted.load(std::memory_order_relaxed)) continue;
+                if (cancel && *cancel) {
+                    aborted.store(true, std::memory_order_relaxed);
+                    continue;
+                }
+                mw568_below::SixResult r;
+                mw568_below::six_below_one(rho[i], h[i], k_p, k_m, rtol_fine, ADAPT_DEPTH, DETOUR,
+                                           mc.gx.data(), mc.gw.data(), GAUSS_N, false,
+                                           rtol_fine * 100.0, ADAPT_DEPTH_COARSE, DETOUR_COARSE,
+                                           mc.gxc.data(), mc.gwc.data(), GAUSS_N_COARSE,
+                                           MAX_TAIL_PANELS, &wa, r);
+                for (int c = 0; c < 6; ++c) out[6 * i + c] = r.val[c];
+                tail[static_cast<size_t>(i)] = r.tail_panels;
+                conv[static_cast<size_t>(i)] = r.converged;
+            }
+        };
+        std::vector<std::thread> team;
+        team.reserve(static_cast<size_t>(node_threads - 1));
+        for (int t = 1; t < node_threads; t++) team.emplace_back(work);
+        work();
+        for (std::thread &t : team) t.join();
+        if (aborted.load(std::memory_order_relaxed)) throw AbortedError{};
+    } else
+#endif
     {
         MW_CANCEL_SETUP(cancel_flag);
 #pragma omp parallel for schedule(dynamic)
@@ -1298,6 +1344,15 @@ class FillSource : public Source {
 }  // namespace
 
 std::string anchor_mode_from_env() { return anchor_mode_env(); }
+
+int set_node_threads(int n) {
+#if !defined(_OPENMP)
+    return g_node_threads.exchange(n < 1 ? 1 : n);
+#else
+    (void)n;
+    return 1;
+#endif
+}
 
 std::shared_ptr<Source> fill_source(const std::string &anchors) {
     return std::make_shared<FillSource>(anchors);
