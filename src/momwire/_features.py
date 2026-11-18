@@ -502,15 +502,28 @@ FEATURES: dict[str, Feature] = {
         # from a few exact builds (`_band_sheet` / `ni_eval::band_sheet`):
         # each plane's and height's sheet is built exact at the sweep's first
         # frequency (the shipped sheet, so a one-frequency run is unchanged)
-        # and at n_a - 1 more points of a band 5 % wide in frequency
-        # (MOMWIRE_SHEET_BAND_NODES, default 4; MOMWIRE_SHEET_BAND_WIDTH,
-        # default 0.05); every other frequency in the band reads the
-        # polynomial blend of their node values. Acts only on the sheets a
-        # fill builds, so a deck whose census takes none (no plane or height
-        # sheet: most decks without crossing_sheet_retune) is unchanged.
-        # Reach 7: the two nec5 executables carry it in C++, operation for
-        # operation with the Python route. No issue filed for the prototype;
-        # 1956 is the retune it builds on.
+        # and at n - 1 more points of a band 5 % wide in frequency
+        # (MOMWIRE_SHEET_BAND_NODES, the n a band starts with, default 4;
+        # MOMWIRE_SHEET_BAND_WIDTH, default 0.05); every other frequency in
+        # the band reads the polynomial blend of their node values. Each band
+        # is PLANNED: one more exact sheet where the node polynomial peaks
+        # measures the blend's worst node, and the band takes anchors (up to
+        # 8) until that estimate is under MOMWIRE_SHEET_BAND_TOL (default
+        # 1e-6 of each key's largest node), or declines and is built exact.
+        # Acts only on the sheets a fill builds, so a deck whose census takes
+        # none (no plane or height sheet: most decks without
+        # crossing_sheet_retune) is unchanged.
+        #
+        # Reach 7 because the two nec5 executables carry it in C++,
+        # operation for operation with the Python route: the executables'
+        # level is 7 and test_features_registry wants their EXE_FEATURES to
+        # be exactly the features of reach 6 and up. It is NOT a measurement
+        # on Windows or macOS: speed and drift were measured on Linux
+        # (Skylake) only. The gates there are the house's platform rules
+        # (the C++-vs-Python nodes by tests/_lane_gate.py, the printouts by
+        # exe_compare's PRINTOUT_RTOL_WIN32 / _MACOS), as
+        # crossing_sheet_retune's. No issue filed for the prototype; 1956 is
+        # the retune it builds on.
         Feature(
             name="crossing_sheet_band",
             reach=7,
@@ -528,18 +541,22 @@ FEATURES: dict[str, Feature] = {
                 "frequency. Faster on buried radial screens swept over a few "
                 "percent; changes the input impedance by a tiny amount."
             ),
-            # |dZin|/|Zin| against retune alone, full precision
-            # (MW_EXE_ARRAYS, nec5-razor-2p, Skylake, 2026-11-17), at the
-            # default n_a = 4 and W = 5 %: at most 1.92e-8 over every deck
-            # of tests/fixtures' buried sets swept 3 % over 11 points (the
-            # worst eznec_exact_buried_1619/fat_hub at 14 MHz; most of them
-            # take no sheet, so nothing blends), 6.0e-9 over the 21
-            # frequencies of the synthetic 4-radial buried vertical, 8.2e-9
-            # on its 8-radial variant, and 5.1e-9 swept over 20 %. A sweep
-            # whose step is wider than the band never blends (0 there). 6e-8
-            # keeps 3x over the worst. Other knob settings move it: see
-            # tests/test_crossing_sheet_band_1117.py.
-            drift=6e-8,
+            # A BOUND, by the plan: no band blends unless its estimated worst
+            # node is within 1e-6 of its key's scale, so the drift is that
+            # tolerance times how much a node error moves Zin. That factor,
+            # |dZin|/|Zin| over the band's planned node error, measured
+            # against retune alone (nec5-razor-2p, MW_EXE_ARRAYS, Skylake,
+            # 2026-11-18) over 48 sweeps of 11 points over 3 %: 1.8, 3.5, 7,
+            # 14, 21 and 28 MHz x radials 6.3 and 12.7 m x ground 13 / 5 mS
+            # and 5 / 1 mS, at the default tolerance and at 1e-4 (where the
+            # plan keeps n = 4 nearly everywhere), is at most 0.016 (worst
+            # drift 8.6e-9 at the default; 1.2e-7 at 1e-4, 28 MHz). So
+            # 1e-6 x 0.016 = 1.6e-8, and 5e-8 is that with 3x margin on the
+            # factor. The 28 MHz copy of the 21-frequency buried vertical,
+            # 6.4e-8 with a fixed n = 4, plans 6 anchors and measures
+            # 1.7e-11; the 7 MHz original, 6.0e-9 at n = 4. A tolerance set
+            # by MOMWIRE_SHEET_BAND_TOL moves the bound with it.
+            drift=5e-8,
             offer=False,
         ),
         # BSplineSolver's junction constraints eliminated before the factor

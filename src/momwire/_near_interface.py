@@ -4150,6 +4150,13 @@ class PlaneSheet:
         self.n_nodes = off
         self._flat = None
 
+    def reach(self, axis):
+        """`crossing_sheet_band`: how far `axis` reaches (its last strip's
+        end), so that a band's other sheets grow to exactly this one's
+        strips."""
+        have = self.strips[axis]
+        return have[-1][1] if have else -np.inf
+
     def blend(self, anchors, w):
         """`crossing_sheet_band`: this sheet's nodes as sum_a w[a] times
         anchors[a]'s, every anchor on this sheet's grid and grown as far. The
@@ -4279,34 +4286,57 @@ def _plane_sheet_exact(
 # exact one (the SEED, the flag-off sheet itself, so a one-frequency run and a
 # sweep's first frequency read the shipped bits). The first other medium
 # within the band width W of it in t = ln k_p fixes the band, [t0,
-# t0 + ln(1 + W)] or the one below, and the anchors: the band's n_a
+# t0 + ln(1 + W)] or the one below, and the anchors: the band's n
 # Chebyshev-Lobatto points, the first the seed, each an exact build on the
 # seed's grid at the ground's medium for its t. A medium in the band reads the
 # Lagrange blend of the anchors' node values at its t; one outside every band
-# seeds a family of its own, exact. Every anchor is grown to the widest reach
-# any in-band request asked for.
+# seeds a family of its own, exact.
 #
-# So what a node reads depends on the order media reached this process (which
-# medium seeded a band): one run of a deck always blends the same way, and a
-# resident process that solved another frequency of the same ground first may
-# blend where a fresh one would read the seed, within the feature's drift.
+# The PLAN (`_band_plan`) makes the declared drift a bound rather than a
+# corpus figure. Next to its n anchors a band builds one CHECK sheet, exact,
+# at the point of the band's first gap where the node polynomial
+# w(t) = prod_j (t - t_j) peaks; the blend there against it, over every node
+# in each key's own scale, times max |w| over the band / |w(t_c)|, is the
+# band's estimated interpolation error anywhere in it. Above `_band_tol()`
+# the band takes one more anchor (all but the seed and the far end rebuilt),
+# up to `_BAND_MAX_NODES`; past that the family declines and its band is
+# built exact.
+#
+# Every anchor and the check grow to the SEED's own extent: a seed from the
+# cache may hold more strips than this deck asks for (an earlier request with
+# a longer reach), and the blend walks all of them. A seed that grows re-runs
+# the plan over the new cells.
+#
+# So what a node reads depends on the order media reached this process
+# (which medium seeded a band): one run of a deck always blends the same way,
+# and a resident process that solved another frequency of the same ground
+# first may blend where a fresh one would read the seed, within the feature's
+# drift. A process holds at most `_BAND_MAX_FAMILIES` families and
+# `_BAND_MAX_VALUES` of their own node values, the oldest dropped first.
 
 _BAND_MATCH = 1e-9
+_BAND_MAX_NODES = 8
+_BAND_MAX_FAMILIES = 256
+_BAND_MAX_VALUES = 1 << 24
+_BAND_GAP_SAMPLES = 64
+_BAND_PEAK_SAMPLES = 1024
 _BAND_FAMILIES = []
 _BAND_LOCK = threading.RLock()
-# Route proof: blends made (a test's handle; reset by assignment).
-_BAND_STATS = {"blends": 0, "families": 0}
+# Route proof: blends made, families seeded, plans measured and families
+# declined (a test's handle; reset by assignment).
+_BAND_STATS = {"blends": 0, "families": 0, "plans": 0, "declined": 0}
 
 
 def _band_nodes():
-    """n_a, the anchors a band holds: MOMWIRE_SHEET_BAND_NODES, default 4,
-    clamped to [2, 12] (the C++ route reads it once a process)."""
+    """n, the anchors a band starts with: MOMWIRE_SHEET_BAND_NODES, default
+    4, clamped to [2, `_BAND_MAX_NODES`] (the C++ route reads it once a
+    process)."""
     v = os.environ.get("MOMWIRE_SHEET_BAND_NODES", "")
     try:
         k = int(v) if v else 4
     except ValueError:
         k = 0
-    return max(2, min(12, k))
+    return max(2, min(_BAND_MAX_NODES, k))
 
 
 def _band_width():
@@ -4318,6 +4348,17 @@ def _band_width():
     except ValueError:
         x = 0.05
     return x if x > 0.0 else 0.05
+
+
+def _band_tol():
+    """The plan's bound on a node's estimated error in its key's scale:
+    MOMWIRE_SHEET_BAND_TOL, default 1e-6."""
+    v = os.environ.get("MOMWIRE_SHEET_BAND_TOL", "")
+    try:
+        x = float(v) if v else 1e-6
+    except ValueError:
+        x = 1e-6
+    return x if x > 0.0 else 1e-6
 
 
 def _band_eps(k_p, k_m):
@@ -4366,6 +4407,57 @@ def _band_points(t0, direction, n, width):
     return ts
 
 
+def _band_omega(ts, t):
+    """|w(t)| = prod_j |t - t_j|, a left-to-right product."""
+    p = 1.0
+    for tj in ts:
+        p = p * abs(t - tj)
+    return p
+
+
+def _band_check_point(ts, lo, hi):
+    """(t_c, ratio): of `_BAND_GAP_SAMPLES` interior points of the first gap
+    (t_0, t_1), the first where |w| is largest; and |w|'s peak over the band
+    (its two ends and `_BAND_PEAK_SAMPLES` - 1 points between) over
+    |w(t_c)|, at least 1."""
+    a, b = ts[0], ts[1]
+    best, t_c = -1.0, a
+    for i in range(1, _BAND_GAP_SAMPLES + 1):
+        t = a + (b - a) * (i / (_BAND_GAP_SAMPLES + 1))
+        o = _band_omega(ts, t)
+        if o > best:
+            best, t_c = o, t
+    peak = 0.0
+    for i in range(_BAND_PEAK_SAMPLES + 1):
+        t = lo + (hi - lo) * (i / _BAND_PEAK_SAMPLES)
+        peak = max(peak, _band_omega(ts, t))
+    return t_c, max(1.0, peak / best)
+
+
+def _band_error(got, want):
+    """The worst node of `got` against `want` ((nodes, keys) complex, one
+    layout): max over nodes of max(|d re|, |d im|) over its key's largest
+    max(|re|, |im|) in `want`; a key that is zero everywhere is not read.
+    The C++ route's `band_error`, in the same real arithmetic."""
+    g = np.ascontiguousarray(got).view(np.float64).reshape(got.shape[0], -1, 2)
+    w = np.ascontiguousarray(want).view(np.float64).reshape(want.shape[0], -1, 2)
+    scale = np.max(np.maximum(np.abs(w[..., 0]), np.abs(w[..., 1])), axis=0)
+    d = np.maximum(np.abs(g[..., 0] - w[..., 0]), np.abs(g[..., 1] - w[..., 1]))
+    worst = 0.0
+    for k in range(scale.size):
+        if scale[k] > 0.0:
+            worst = max(worst, float(np.max(d[:, k] / scale[k])))
+    return worst
+
+
+def _band_values_as(sheet, ref):
+    """`sheet`'s node values in `ref`'s block order, (nodes, keys)."""
+    pp = _SHEET_P * _SHEET_P
+    flat = np.concatenate(sheet._vals)
+    order = sorted(ref._off, key=ref._off.get)
+    return np.concatenate([flat[sheet._off[k] : sheet._off[k] + pp] for k in order])
+
+
 class _BandFamily:
     def __init__(self, height, depth, zp, lam_mult, k_p, k_m, seed, rho_max, s_max):
         self.height, self.depth, self.zp, self.lam_mult = height, depth, zp, lam_mult
@@ -4376,15 +4468,103 @@ class _BandFamily:
         self.seed = seed
         self.dir = 0
         self.lo = self.hi = 0.0
+        self.declined = False
         self.ts = []
+        self.own = []
         self.anchors = [seed]
+        self.check = None
+        self.t_c, self.ratio, self.err = 0.0, 1.0, 0.0
+        self.planned_nodes = 0
+        # the last blend served: (t, the seed's nodes then, the sheet)
+        self.blend = None
         self.rho_reach, self.s_reach = rho_max, s_max
-        self.blends = {}
+
+    def held(self):
+        n = sum(a.n_nodes * a.width for a in self.own)
+        if self.check is not None:
+            n += self.check.n_nodes * self.check.width
+        if self.blend is not None:
+            n += self.blend[2].n_nodes * self.blend[2].width
+        return n
+
+    def sheet(self, k_p):
+        return PlaneSheet(
+            k_p,
+            _band_k_m(self.er, self.s, k_p, self.k_m0),
+            self.zp,
+            self.lam_mult,
+            height=self.height,
+            depth=self.depth,
+            grid=(self.k_p0, self.k_m0),
+        )
+
+
+def _band_layout(f, n):
+    """The band's n points, anchors and check, kept where an anchor's t is one
+    it already holds (the seed, and the far end)."""
+    f.ts = _band_points(f.t0, f.dir, n, _band_width())
+    own = []
+    for tj in f.ts[1:]:
+        kp = math.exp(tj)
+        a = next((o for o in f.own if o.k_p == kp), None)
+        own.append(a if a is not None else f.sheet(kp))
+    f.own = own
+    f.anchors = [f.seed, *own]
+    f.t_c, f.ratio = _band_check_point(f.ts, f.lo, f.hi)
+    f.check = f.sheet(math.exp(f.t_c))
+    f.blend = None
+
+
+def _band_plan(f):
+    """Grow the anchors and the check to the seed's extent, and measure; above
+    `_band_tol()`, one anchor more, up to `_BAND_MAX_NODES`; past it,
+    decline."""
+    while True:
+        rr, sr = f.seed.reach("rho"), f.seed.reach("s")
+        for a in f.anchors[1:]:
+            a.cover(rr, sr)
+        f.check.cover(rr, sr)
+        at_c = PlaneSheet(
+            f.check.k_p,
+            f.check.k_m,
+            f.zp,
+            f.lam_mult,
+            height=f.height,
+            depth=f.depth,
+            grid=(f.k_p0, f.k_m0),
+        )
+        at_c.blend(f.anchors, _band_weights(f.ts, f.t_c))
+        got = np.concatenate(at_c._vals)
+        f.err = _band_error(got, _band_values_as(f.check, f.seed)) * f.ratio
+        f.planned_nodes = f.seed.n_nodes
+        _BAND_STATS["plans"] += 1
+        if f.err <= _band_tol():
+            return
+        if len(f.ts) >= _BAND_MAX_NODES:
+            f.declined = True
+            f.own, f.anchors, f.check, f.blend = [], [f.seed], None, None
+            _BAND_STATS["declined"] += 1
+            return
+        _band_layout(f, len(f.ts) + 1)
+
+
+def _band_evict(keep):
+    """Drop the oldest families (never `keep`) past `_BAND_MAX_FAMILIES`, or
+    while their own values exceed `_BAND_MAX_VALUES`."""
+    while (
+        len(_BAND_FAMILIES) > _BAND_MAX_FAMILIES
+        or sum(f.held() for f in _BAND_FAMILIES) > _BAND_MAX_VALUES
+    ):
+        old = next((f for f in _BAND_FAMILIES if f is not keep), None)
+        if old is None:
+            return
+        _BAND_FAMILIES.remove(old)
 
 
 def _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth):
     """The six-key sheet a fill with `crossing_sheet_band` on reads at
-    (k_p, k_m), covering rho <= `rho_max` and s <= `s_max`."""
+    (k_p, k_m), covering rho <= `rho_max` and s <= `s_max`. A blended sheet
+    is never changed once returned (a newer request makes a new one)."""
     k_p, k_m, zp, lam_mult = float(k_p), complex(k_m), float(zp), float(lam_mult)
     height = bool(height)
     dkey = float(depth) if height else None
@@ -4408,8 +4588,7 @@ def _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth):
         er, ei = _band_eps(k_p, k_m)
         s = ei * k_p
         t = math.log(k_p)
-        width = _band_width()
-        wt = math.log1p(width)
+        wt = math.log1p(_band_width())
         fam = None
         for f in _BAND_FAMILIES:
             if not same_geometry(f):
@@ -4424,36 +4603,31 @@ def _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth):
         if fam is None:
             # outside every band: a family of its own, exact
             sh = exact()
-            _BAND_FAMILIES.append(
-                _BandFamily(height, dkey, zp, lam_mult, k_p, k_m, sh, rho_max, s_max)
-            )
+            f = _BandFamily(height, dkey, zp, lam_mult, k_p, k_m, sh, rho_max, s_max)
+            _BAND_FAMILIES.append(f)
             _BAND_STATS["families"] += 1
+            _band_evict(f)
             return sh
         f = fam
-        if f.dir == 0:
-            f.dir = 1 if t > f.t0 else -1
-            f.ts = _band_points(f.t0, f.dir, _band_nodes(), width)
-            f.lo, f.hi = (f.t0, f.t0 + wt) if f.dir > 0 else (f.t0 - wt, f.t0)
-            for tj in f.ts[1:]:
-                kp = math.exp(tj)
-                f.anchors.append(
-                    PlaneSheet(
-                        kp,
-                        _band_k_m(f.er, f.s, kp, f.k_m0),
-                        zp,
-                        lam_mult,
-                        height=height,
-                        depth=depth,
-                        grid=(f.k_p0, f.k_m0),
-                    )
-                )
+        if f.declined:
+            return exact()
         f.rho_reach = max(f.rho_reach, rho_max)
         f.s_reach = max(f.s_reach, s_max)
-        for a in f.anchors:
-            a.cover(f.rho_reach, f.s_reach)
-        bl = f.blends.get((k_p, k_m))
-        if bl is None:
-            bl = f.blends[(k_p, k_m)] = PlaneSheet(
+        with _SHEET_LOCK:
+            f.seed.cover(f.rho_reach, f.s_reach)
+        if f.dir == 0:
+            f.dir = 1 if t > f.t0 else -1
+            f.lo, f.hi = (f.t0, f.t0 + wt) if f.dir > 0 else (f.t0 - wt, f.t0)
+            _band_layout(f, _band_nodes())
+            _band_plan(f)
+        elif f.planned_nodes != f.seed.n_nodes:
+            _band_plan(f)
+        if f.declined:
+            _band_evict(f)
+            return exact()
+        bl = f.blend
+        if bl is None or bl[0] != t or bl[1] != f.seed.n_nodes:
+            sheet = PlaneSheet(
                 k_p,
                 k_m,
                 zp,
@@ -4462,10 +4636,11 @@ def _band_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height, depth):
                 depth=depth,
                 grid=(f.k_p0, f.k_m0),
             )
-        if bl.n_nodes != f.seed.n_nodes:
-            bl.blend(f.anchors, _band_weights(f.ts, t))
+            sheet.blend(f.anchors, _band_weights(f.ts, t))
+            bl = f.blend = (t, f.seed.n_nodes, sheet)
             _BAND_STATS["blends"] += 1
-        return bl
+        _band_evict(f)
+        return bl[2]
 
 
 # --- Cone sheets: the sheets along a SLOPED wire (momwire#1595 option A) ---

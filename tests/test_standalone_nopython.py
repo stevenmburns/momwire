@@ -923,6 +923,182 @@ def test_the_sheet_retune_moves_the_executables_plan_within_its_drift(deck, tmp_
     assert drift <= _features.FEATURES["crossing_sheet_retune"].drift, drift
 
 
+# --- crossing_sheet_band (reach 7: the nec5 executables) ---------------------
+
+_BAND = {
+    "MOMWIRE_X_CROSSING_SHEET_RETUNE": "1",
+    "MOMWIRE_X_CROSSING_SHEET_BAND": "1",
+}
+_BAND_OFF = {
+    "MOMWIRE_X_CROSSING_SHEET_RETUNE": "1",
+    "MOMWIRE_X_CROSSING_SHEET_BAND": "0",
+}
+
+
+def _band_deck(**kw):
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_crossing_sheet_band_1117 import radial_vertical_nec
+
+    return radial_vertical_nec(**kw)
+
+
+def _band_run(d, text, env_on, store=None):
+    """One executable run of `text` in `d`: (Zin per frequency at full
+    precision, the printout, stderr). `store` names a Sommerfeld store to
+    share between runs, else the store is off."""
+    import numpy as np
+
+    d.mkdir()
+    (d / "deck.nec").write_text(text, newline="")
+    (d / "arrays").mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MOMWIRE_X_")}
+    env.update(env_on)
+    env.update({"MW_EXE_ARRAYS": str(d / "arrays"), "MOMWIRE_SHEET_BAND_TRACE": "1"})
+    if store is None:
+        env["MOMWIRE_SOMM_CACHE"] = "0"
+    else:
+        env.update({"MOMWIRE_SOMM_CACHE": "1", "MOMWIRE_SOMM_CACHE_DIR": str(store)})
+    r = subprocess.run(
+        [EXE, "deck.nec", "deck.out"], cwd=d, env=env, capture_output=True, check=False
+    )
+    assert r.returncode == 0, r.stderr
+    z = []
+    for i in range(10_000):
+        p = d / "arrays" / f"{i}_i_source.bin"
+        if not p.exists():
+            break
+        (i_src,) = np.fromfile(p, dtype=np.complex128)
+        z.append(1.0 / complex(i_src))
+    return np.asarray(z), (d / "deck.out").read_bytes(), r.stderr.decode()
+
+
+@pytest.mark.reach(7)
+@pytest.mark.slow
+@pytest.mark.parametrize("on", [False, True], ids=["off", "on"])
+def test_the_sheet_band_answers_as_the_launcher(on, tmp_path):
+    """The band off ("0", the retune on) and on: the executable's printout is
+    the launcher's under the fixture gates' platform rule
+    (`_same_by_platform`), and line 2 names the feature on both sides only
+    when it is on."""
+    text = _band_deck(nfr=5, step=0.05)
+
+    def prepare(d):
+        (d / "band.nec").write_text(text, newline="")
+
+    exe, ref, de, dl = _both(
+        ["band.nec", "band.out"],
+        tmp_path,
+        prepare=prepare,
+        env={**(_BAND if on else _BAND_OFF), "MOMWIRE_SOMM_CACHE": "0"},
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same_by_platform(exe, ref, de, dl)
+    for d in (de, dl):
+        line2 = (d / "band.out").read_bytes().split(b"\n")[1]
+        assert (b"+crossing_sheet_band" in line2) == on, line2
+        assert b"uncertified" not in line2, line2
+
+
+@pytest.mark.reach(7)
+@pytest.mark.slow
+def test_the_sheet_band_moves_the_executable_within_its_drift(tmp_path):
+    """The route proof (the trace names each blend and each plan) and the
+    executable's own Zin, on against off at full precision (MW_EXE_ARRAYS),
+    within the declared drift: the first frequency is off's to the bit (its
+    sheets are the seeds)."""
+    from momwire import _features
+
+    text = _band_deck(nfr=8, step=0.0304)
+    z_off, _, _ = _band_run(tmp_path / "off", text, _BAND_OFF)
+    z_on, out_on, err_on = _band_run(tmp_path / "on", text, _BAND)
+    assert len(z_on) == len(z_off) == 8
+    assert z_on[0] == z_off[0]
+    assert "sheet_band: blend" in err_on and "sheet_band: plan" in err_on, err_on
+    drift = max(abs(z_on - z_off) / abs(z_off))
+    assert 0.0 < drift <= _features.FEATURES["crossing_sheet_band"].drift, drift
+    assert b"+crossing_sheet_band" in out_on.split(b"\n")[1]
+
+
+@pytest.mark.reach(7)
+@pytest.mark.slow
+def test_a_stored_seed_wider_than_the_band_blends(tmp_path):
+    """A store holding a wider sheet of the same plane over the same ground
+    (an earlier run with radials twice as long, the shape an optimizer
+    varying radial length leaves) seeds the band with more strips than this
+    deck asks for. The anchors grow to it, so the sweep blends: it printed an
+    INTERNAL ERROR (map::at) before. Zin stays within the drift of off."""
+    from momwire import _features
+
+    store = tmp_path / "store"
+    long1 = _band_deck(nfr=1, radial=12.667286, n_radial=108)
+    _band_run(tmp_path / "long", long1, _BAND, store=store)
+    text = _band_deck(nfr=5, step=0.05)
+    z_on, out_on, err_on = _band_run(tmp_path / "on", text, _BAND, store=store)
+    assert b"INTERNAL ERROR" not in out_on
+    assert "sheet_band: blend" in err_on, err_on
+    z_off, _, _ = _band_run(tmp_path / "off", text, _BAND_OFF)
+    assert z_on[0] == z_off[0]
+    drift = max(abs(z_on - z_off) / abs(z_off))
+    assert drift <= _features.FEATURES["crossing_sheet_band"].drift, drift
+
+
+# The near-interface sheets' store names with the band off, as the
+# executables before `crossing_sheet_band` wrote them (origin/main 22281bb8,
+# Skylake, 2026-11-18; the files and printouts were byte-identical too): the
+# sheet's grid medium is its own, so its store key carries nothing new. Per
+# basis, Linux only: a name hashes the key's bits, which Windows' /fp:fast may
+# move.
+_FLAG_OFF_SHEETS = {
+    "near_buried": {
+        "razor-2p": ["nisheet-ca349f7a338dfe52.grid", "nisheet-cccd68ec3819f523.grid"],
+        "bspline": ["nisheet-ca349f7a338dfe52.grid", "nisheet-cccd68ec3819f523.grid"],
+    },
+    "band_off": {
+        "razor-2p": ["nisheet-8a7ce55fdea403d8.grid", "nisheet-ab935e443bc1ae26.grid"],
+        "bspline": ["nisheet-91c4c3b483499059.grid", "nisheet-ab935e443bc1ae26.grid"],
+    },
+}
+
+
+@pytest.mark.reach(7)
+@pytest.mark.parametrize("case", sorted(_FLAG_OFF_SHEETS))
+def test_flag_off_sheets_keep_their_store_names(case, tmp_path):
+    """The band off, a sheet's store key, and so its file, is the one it was
+    before the feature (pinned on Linux), and a second run reads every one
+    back and builds none."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import times_check as tc
+
+    store = tmp_path / "store"
+    if case == "near_buried":
+        argv, env_on = [str(NEAR_BURIED), "out.out"], {}
+    else:
+        (tmp_path / "band.nec").write_text(_band_deck(nfr=2, step=0.05), newline="")
+        argv, env_on = ["band.nec", "out.out"], _BAND_OFF
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MOMWIRE_X_")}
+    env.update(env_on)
+    env.update(
+        {
+            "MOMWIRE_SOMM_CACHE": "1",
+            "MOMWIRE_SOMM_CACHE_DIR": str(store),
+            "MOMWIRE_TIMES": "1",
+        }
+    )
+    lines = []
+    for _ in range(2):
+        r = subprocess.run(
+            [EXE, *argv], cwd=tmp_path, env=env, capture_output=True, check=False
+        )
+        assert r.returncode == 0, r.stderr
+        lines.append(sum(c["ground_built"] for c in tc.times_lines(r.stderr)))
+    names = sorted(p.name for p in store.rglob("nisheet-*.grid"))
+    assert names
+    assert lines[0] > 0 and lines[1] == 0, lines
+    want = _FLAG_OFF_SHEETS[case].get(BASIS)
+    if sys.platform.startswith("linux") and want is not None:
+        assert names == want, names
+
+
 CROSSING = FIXTURES / "razor_printout_crossing" / "slant_base_source.nec"
 
 

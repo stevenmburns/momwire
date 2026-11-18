@@ -387,6 +387,12 @@ class PlaneSheet {
     // The strips held on each axis (a stored sheet that holds at least as
     // many on both is not overwritten by this one).
     size_t n_strips(int ax) const { return strips_[ax].size(); }
+    // `crossing_sheet_band`: how far an axis reaches (its last strip's end),
+    // so that a band's other sheets grow to exactly this one's strips.
+    double reach(int ax) const {
+        return strips_[ax].empty() ? -std::numeric_limits<double>::infinity() : strips_[ax].back().hi;
+    }
+    double k_p() const { return k_p_; }
     std::string file_name() const {
         std::string kb;
         put_key(kb);
@@ -608,20 +614,46 @@ void store_sheet(PlaneSheet &sh) {
 // first medium's sheet is the exact one (the SEED, the flag-off sheet itself,
 // so a one-frequency run and a sweep's first frequency read the shipped bits).
 // The first other medium within `band_width()` of it in t = ln k_p fixes the
-// band, [t0, t0 + ln(1 + W)] or below, and the anchors: the band's n_a
+// band, [t0, t0 + ln(1 + W)] or below, and the anchors: the band's n
 // Chebyshev-Lobatto points, the first the seed, every one an exact build on
 // the seed's grid at the ground's medium for its t. A medium in the band
 // reads the Lagrange blend of the anchors' node values at its t; one outside
-// every band starts a family of its own, exact. Every anchor is grown to the
-// widest reach any in-band request asked for.
+// every band starts a family of its own, exact.
+//
+// The PLAN (`band_plan`) is what makes the declared drift a bound rather than
+// a corpus figure. Next to its n anchors a band builds one CHECK sheet, exact,
+// at the point of the band's first gap where the node polynomial
+// w(t) = prod_j (t - t_j) peaks; the blend there against it, over every node
+// and in each key's own scale, is the band's interpolation error at that
+// point, and times max |w| over the band / |w(t_c)| (`band_check_point`) its
+// estimate anywhere in the band. Above `band_tol()` the band takes one more
+// anchor (Chebyshev-Lobatto points do not nest, so all but the seed and the
+// far end are rebuilt), up to BAND_MAX_NODES; past that the family DECLINES,
+// and every frequency in its band is built exact. So a deck asks the band
+// only for what it can deliver: n grows with |k_m| times the reach, which is
+// where a fixed n stopped holding (28 MHz).
+//
+// Every anchor and the check are grown to the seed's own extent (at least
+// the widest reach any in-band request asked for): a seed restored from the
+// store, or grown by an earlier request of a resident process, may hold
+// more strips than this deck asks for, and the blend walks all of them. A
+// seed that grows re-runs the plan over the new cells.
 //
 // What a node reads therefore depends on the order the media reached this
 // process (which medium seeded the band), never on the store: one run of a
-// deck always blends the same way.
+// deck always blends the same way. A resident process holds at most
+// BAND_MAX_FAMILIES families and BAND_MAX_VALUES of their own node values
+// (anchors, checks, the one blend each keeps), the oldest dropped first.
 
 constexpr double BAND_MATCH = 1e-9;  // the ground's two constants, relative
+constexpr int BAND_MAX_NODES = 8;
+constexpr size_t BAND_MAX_FAMILIES = 256;
+constexpr size_t BAND_MAX_VALUES = size_t(1) << 24;  // 256 MiB of complex node values
+// samples of |w(t)|: the check point among the first gap's, the peak over the band's
+constexpr int BAND_GAP_SAMPLES = 64, BAND_PEAK_SAMPLES = 1024;
 
-// MOMWIRE_SHEET_BAND_TRACE=1: one stderr line per blend (the route proof).
+// MOMWIRE_SHEET_BAND_TRACE=1: one stderr line per plan and per blend (the
+// route proof).
 bool band_trace() {
     static const bool on = [] {
         const char *v = std::getenv("MOMWIRE_SHEET_BAND_TRACE");
@@ -630,11 +662,13 @@ bool band_trace() {
     return on;
 }
 
+// n, the anchors a band starts with: MOMWIRE_SHEET_BAND_NODES, default 4,
+// clamped to [2, BAND_MAX_NODES].
 int band_nodes() {
     static const int n = [] {
         const char *v = std::getenv("MOMWIRE_SHEET_BAND_NODES");
         const int k = v != nullptr && *v ? std::atoi(v) : 4;
-        return std::max(2, std::min(12, k));
+        return std::max(2, std::min(BAND_MAX_NODES, k));
     }();
     return n;
 }
@@ -644,6 +678,17 @@ double band_width() {
         const char *v = std::getenv("MOMWIRE_SHEET_BAND_WIDTH");
         const double x = v != nullptr && *v ? std::atof(v) : 0.05;
         return x > 0.0 ? x : 0.05;
+    }();
+    return w;
+}
+
+// The plan's bound on a node's estimated error in its key's scale:
+// MOMWIRE_SHEET_BAND_TOL, default 1e-6.
+double band_tol() {
+    static const double w = [] {
+        const char *v = std::getenv("MOMWIRE_SHEET_BAND_TOL");
+        const double x = v != nullptr && *v ? std::atof(v) : 1e-6;
+        return x > 0.0 ? x : 1e-6;
     }();
     return w;
 }
@@ -714,26 +759,89 @@ std::vector<double> band_points(double t0, int dir, int n, double w) {
     return ts;
 }
 
+// |w(t)| = prod_j |t - t_j|, a left-to-right product.
+double band_omega(const std::vector<double> &ts, double t) {
+    double p = 1.0;
+    for (double tj : ts) p = p * std::fabs(t - tj);
+    return p;
+}
+
+// The check point: of BAND_GAP_SAMPLES interior points of the first gap
+// (t_0, t_1), the first where |w| is largest; and the ratio of |w|'s peak
+// over the band (its two ends and BAND_PEAK_SAMPLES - 1 points between) to
+// |w(t_c)|, at least 1.
+void band_check_point(const std::vector<double> &ts, double lo, double hi, double &t_c, double &ratio) {
+    const double a = ts[0], b = ts[1];
+    double best = -1.0;
+    t_c = a;
+    for (int i = 1; i <= BAND_GAP_SAMPLES; i++) {
+        const double t = a + (b - a) * (static_cast<double>(i) / static_cast<double>(BAND_GAP_SAMPLES + 1));
+        const double o = band_omega(ts, t);
+        if (o > best) {
+            best = o;
+            t_c = t;
+        }
+    }
+    double peak = 0.0;
+    for (int i = 0; i <= BAND_PEAK_SAMPLES; i++) {
+        const double t = lo + (hi - lo) * (static_cast<double>(i) / static_cast<double>(BAND_PEAK_SAMPLES));
+        peak = std::max(peak, band_omega(ts, t));
+    }
+    ratio = std::max(1.0, peak / best);
+}
+
+// The worst node of `got` against `want` (both in one layout, N_KEYS
+// complexes a node): max over nodes of max(|d re|, |d im|) over its key's
+// largest max(|re|, |im|) in `want`; a key that is zero everywhere is not
+// read. Real arithmetic only, the Python route's own.
+double band_error(const std::vector<cd> &got, const std::vector<cd> &want) {
+    double scale[N_KEYS] = {0, 0, 0, 0, 0, 0}, worst = 0.0;
+    for (size_t i = 0; i < want.size(); i++) {
+        double &sc = scale[i % N_KEYS];
+        sc = std::max(sc, std::max(std::fabs(want[i].real()), std::fabs(want[i].imag())));
+    }
+    for (size_t i = 0; i < want.size(); i++) {
+        const double sc = scale[i % N_KEYS];
+        if (!(sc > 0.0)) continue;
+        const double d = std::max(std::fabs(got[i].real() - want[i].real()), std::fabs(got[i].imag() - want[i].imag()));
+        worst = std::max(worst, d / sc);
+    }
+    return worst;
+}
+
 struct BandFamily {
     bool height;
     double depth, zp;
     double k_p0;
     cd k_m0;
     double t0, er, s;  // s = Im eps_c * k_p
-    PlaneSheet *seed;  // g_sheets' own
+    PlaneSheet *seed;  // g_sheets' own (never evicted)
     int dir = 0;       // 0 until a second medium fixes the band
     double lo = 0, hi = 0;
+    bool declined = false;  // the plan could not meet band_tol(): exact
     std::vector<double> ts;
     std::vector<std::unique_ptr<PlaneSheet>> own;  // anchors 1..
     std::vector<PlaneSheet *> anchors;             // the seed first
+    std::unique_ptr<PlaneSheet> check;
+    double t_c = 0, ratio = 1, err = 0;
+    size_t planned_values = 0;  // the seed's node values the plan last measured
+    std::unique_ptr<PlaneSheet> blend;  // the last blend served, and its t
+    uint64_t blend_t = 0;
+    size_t blend_values = 0;
     double rho_reach = -std::numeric_limits<double>::infinity();
     double s_reach = -std::numeric_limits<double>::infinity();
-    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::unique_ptr<PlaneSheet>> blends;
+    size_t held() const {
+        size_t n = 0;
+        for (const auto &a : own) n += a->n_values();
+        if (check) n += check->n_values();
+        if (blend) n += blend->n_values();
+        return n;
+    }
 };
 std::vector<std::unique_ptr<BandFamily>> g_bands;
 
-// A sheet's anchor new to this process starts from the store, as
-// `plane_sheet` does.
+// A band's sheet new to this process (an anchor, or the check) starts from
+// the store, as `plane_sheet` does.
 std::unique_ptr<PlaneSheet> band_anchor(double k_p, cd k_m, const BandFamily &f) {
     std::unique_ptr<PlaneSheet> sh(new PlaneSheet(k_p, k_m, f.zp, f.height, f.depth, false, f.k_p0, f.k_m0));
     std::string b;
@@ -746,8 +854,80 @@ std::unique_ptr<PlaneSheet> band_anchor(double k_p, cd k_m, const BandFamily &f)
     return sh;
 }
 
+// The band's n points, anchors and check, kept where an anchor's t is one
+// it already holds (the seed, and the far end).
+void band_layout(BandFamily &f, int n) {
+    f.ts = band_points(f.t0, f.dir, n, band_width());
+    std::vector<std::unique_ptr<PlaneSheet>> own;
+    std::vector<PlaneSheet *> anchors{f.seed};
+    for (size_t j = 1; j < f.ts.size(); j++) {
+        const double kp = band_exp(f.ts[j]);
+        std::unique_ptr<PlaneSheet> a;
+        for (auto &old : f.own)
+            if (old && bits(old->k_p()) == bits(kp)) a = std::move(old);
+        if (!a) a = band_anchor(kp, band_k_m(f.er, f.s, kp, f.k_m0), f);
+        anchors.push_back(a.get());
+        own.push_back(std::move(a));
+    }
+    f.own = std::move(own);
+    f.anchors = std::move(anchors);
+    band_check_point(f.ts, f.lo, f.hi, f.t_c, f.ratio);
+    const double kc = band_exp(f.t_c);
+    f.check = band_anchor(kc, band_k_m(f.er, f.s, kc, f.k_m0), f);
+    f.blend.reset();
+}
+
+// Grow the anchors and the check to the seed's extent, and measure; above
+// band_tol(), one anchor more, up to BAND_MAX_NODES; past it, decline.
+void band_plan(BandFamily &f, int n_threads) {
+    for (;;) {
+        const double rr = f.seed->reach(0), sr = f.seed->reach(1);
+        for (size_t j = 1; j < f.anchors.size(); j++) {
+            f.anchors[j]->cover(rr, sr, n_threads);
+            store_sheet(*f.anchors[j]);
+        }
+        f.check->cover(rr, sr, n_threads);
+        store_sheet(*f.check);
+        PlaneSheet at_c = f.check->blank();
+        at_c.blend(f.anchors, band_weights(f.ts, f.t_c));
+        f.err = band_error(at_c.values(), f.check->values_as(*f.seed)) * f.ratio;
+        f.planned_values = f.seed->n_values();
+        const int n = static_cast<int>(f.ts.size());
+        const bool ok = f.err <= band_tol();
+        if (band_trace())
+            std::fprintf(stderr, "sheet_band: plan h=%d zp=%.17g n=%d err=%.17g ratio=%.17g values=%zu %s\n",
+                         f.height ? 1 : 0, f.zp, n, f.err, f.ratio, f.planned_values,
+                         ok ? "ok" : (n >= BAND_MAX_NODES ? "declined" : "more"));
+        if (ok) return;
+        if (n >= BAND_MAX_NODES) {
+            f.declined = true;
+            f.own.clear();
+            f.anchors.assign(1, f.seed);
+            f.check.reset();
+            f.blend.reset();
+            return;
+        }
+        band_layout(f, n + 1);
+    }
+}
+
+// Drop the oldest families (never `keep`) past BAND_MAX_FAMILIES, or while
+// their own values exceed BAND_MAX_VALUES.
+void band_evict(const BandFamily *keep) {
+    for (;;) {
+        size_t held = 0;
+        for (const auto &f : g_bands) held += f->held();
+        if (g_bands.size() <= BAND_MAX_FAMILIES && held <= BAND_MAX_VALUES) return;
+        auto it = g_bands.begin();
+        while (it != g_bands.end() && it->get() == keep) ++it;
+        if (it == g_bands.end()) return;
+        g_bands.erase(it);
+    }
+}
+
 // The six-key sheet a fill with `crossing_sheet_band` on reads at (k_p, k_m),
-// covering rho <= rho_max and s <= s_max (the caller holds g_sheet_mutex).
+// covering rho <= rho_max and s <= s_max (the caller holds g_sheet_mutex, and
+// reads the sheet before it lets go).
 PlaneSheet &band_sheet(double k_p, cd k_m, double zp, bool height, double depth, double rho_max, double s_max,
                        int n_threads) {
     const double dkey = height ? depth : -1.0;
@@ -801,37 +981,42 @@ PlaneSheet &band_sheet(double k_p, cd k_m, double zp, bool height, double depth,
         f->anchors.push_back(&sh);
         f->rho_reach = rho_max;
         f->s_reach = s_max;
+        const BandFamily *keep = f.get();
         g_bands.push_back(std::move(f));
+        band_evict(keep);
         return sh;
     }
     BandFamily &f = *fam;
-    if (f.dir == 0) {
-        f.dir = t > f.t0 ? 1 : -1;
-        f.ts = band_points(f.t0, f.dir, band_nodes(), band_width());
-        f.lo = f.dir > 0 ? f.t0 : f.t0 - wt;
-        f.hi = f.dir > 0 ? f.t0 + wt : f.t0;
-        for (size_t j = 1; j < f.ts.size(); j++) {
-            const double kp = band_exp(f.ts[j]);
-            f.own.push_back(band_anchor(kp, band_k_m(f.er, f.s, kp, f.k_m0), f));
-            f.anchors.push_back(f.own.back().get());
-        }
-    }
+    if (f.declined) return exact();
     f.rho_reach = std::max(f.rho_reach, rho_max);
     f.s_reach = std::max(f.s_reach, s_max);
-    for (PlaneSheet *a : f.anchors) {
-        a->cover(f.rho_reach, f.s_reach, n_threads);
-        store_sheet(*a);
+    f.seed->cover(f.rho_reach, f.s_reach, n_threads);
+    store_sheet(*f.seed);
+    if (f.dir == 0) {
+        f.dir = t > f.t0 ? 1 : -1;
+        f.lo = f.dir > 0 ? f.t0 : f.t0 - wt;
+        f.hi = f.dir > 0 ? f.t0 + wt : f.t0;
+        band_layout(f, band_nodes());
+        band_plan(f, n_threads);
+    } else if (f.planned_values != f.seed->n_values()) {
+        band_plan(f, n_threads);
     }
-    const auto bkey = std::make_tuple(bits(k_p), bits(k_m.real()), bits(k_m.imag()));
-    std::unique_ptr<PlaneSheet> &bl = f.blends[bkey];
-    if (!bl) bl.reset(new PlaneSheet(k_p, k_m, zp, height, depth, false, f.k_p0, f.k_m0));
-    if (bl->n_values() != f.seed->n_values()) {
-        bl->blend(f.anchors, band_weights(f.ts, t));
+    if (f.declined) {
+        band_evict(&f);
+        return exact();
+    }
+    if (!f.blend || f.blend_t != bits(t) || f.blend_values != f.seed->n_values()) {
+        f.blend.reset(new PlaneSheet(k_p, k_m, zp, height, depth, false, f.k_p0, f.k_m0));
+        f.blend->blend(f.anchors, band_weights(f.ts, t));
+        f.blend_t = bits(t);
+        f.blend_values = f.seed->n_values();
         if (band_trace())
             std::fprintf(stderr, "sheet_band: blend h=%d zp=%.17g t=%.17g anchors=%zu values=%zu\n", height ? 1 : 0,
-                         zp, t, f.anchors.size(), bl->n_values());
+                         zp, t, f.anchors.size(), f.blend->n_values());
     }
-    return *bl;
+    PlaneSheet &out = *f.blend;
+    band_evict(&f);
+    return out;
 }
 
 // --------------------------------------------------------------------------
