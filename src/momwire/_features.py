@@ -278,7 +278,7 @@ FEATURES: dict[str, Feature] = {
         # tables: the shipped evaluator, interpolated in ln f.
         #
         # `drift` is the survey's worst with 2.3x margin (momwire#2022): flag
-        # on against off, |dZin|/|Zin|, 323 served sweep points on bs2,
+        # on against off, |dZin|/|Zin|, 326 served sweep points on bs2,
         # sinusoidal and sinusoidal Galerkin, each counted as served.
         #
         #   wires 1-50 cm either side of the interface   1.3e-8  (sinusoidal)
