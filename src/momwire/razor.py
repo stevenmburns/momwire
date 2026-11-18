@@ -2138,32 +2138,51 @@ class RazorSolver(
             raise TypeError(f"RazorSolver got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
+        # A bad value is refused before any feature is read.
+        if razor_pair_reuse not in (None, False, True, "verify"):
+            raise ValueError(
+                "razor_pair_reuse must be None, False, True or 'verify', got "
+                f"{razor_pair_reuse!r}"
+            )
+        # Every feature this family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below.
+        # `pair_reuse` is the whole `razor_pair_reuse` is a part of
+        # (momwire#1982): any truthy value is on.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            factored_columns=factored_columns,
+            height_sheet_recal=height_sheet_recal,
+            crossing_table=crossing_table,
+            crossing_sheet_retune=crossing_sheet_retune,
+            crossing_anchors=crossing_anchors,
+            pair_reuse=None if pair_reuse is None else bool(pair_reuse),
+            razor_pair_reuse=(
+                None if razor_pair_reuse is None else bool(razor_pair_reuse)
+            ),
+        )
         # momwire#1860 L1: the near-interface columns' factored route. None
         # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
         # off is the member route, bit for bit.
-        self._factored_columns = _features.enabled("factored_columns", factored_columns)
+        self._factored_columns = bound["factored_columns"]
         # momwire#1860 L2: the near-interface height census recalibrated.
         # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._height_sheet_recal = _features.enabled(
-            "height_sheet_recal", height_sheet_recal
-        )
+        self._height_sheet_recal = bound["height_sheet_recal"]
         # momwire#1860 L5: the crossing table. None defers to
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
-        self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        self._crossing_table = bound["crossing_table"]
         # momwire#1956: the near-interface sheets' build weights retuned. None
         # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._crossing_sheet_retune = _features.enabled(
-            "crossing_sheet_retune", crossing_sheet_retune
-        )
+        self._crossing_sheet_retune = bound["crossing_sheet_retune"]
         # The cross blocks across a sweep from anchors (`crossing_anchors`,
         # native). None defers to MOMWIRE_X_CROSSING_ANCHORS; off is the
         # exact cross terms, bit for bit. It acts only where the seam hands
         # the solver its sweep (`_crossing_anchor_plan`, the NEC-5 drop-in's
         # stepping FR); a lone solve has no sweep and fills exactly.
-        self._crossing_anchors = _features.enabled("crossing_anchors", crossing_anchors)
+        self._crossing_anchors = bound["crossing_anchors"]
         self._crossing_anchor_plan = None
         # momwire#1971: fill-pair reuse. None defers to
         # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
@@ -2176,20 +2195,9 @@ class RazorSolver(
         # above). `razor_pair_reuse` and its variable are kept as aliases
         # and win. Asked for only through `pair_reuse` outside its reach, it
         # is off, and `pair_reuse_declined` says so.
-        if razor_pair_reuse not in (None, False, True, "verify"):
-            raise ValueError(
-                "razor_pair_reuse must be None, False, True or 'verify', got "
-                f"{razor_pair_reuse!r}"
-            )
-        own = None if razor_pair_reuse is None else bool(razor_pair_reuse)
-        whole = None if pair_reuse is None else bool(pair_reuse)
         mode = razor_pair_reuse if razor_pair_reuse is not None else pair_reuse
         verify = isinstance(mode, str) and mode == "verify"
-        self._pair_reuse = (
-            0
-            if not _features.enabled("razor_pair_reuse", own, whole_kwarg=whole)
-            else (2 if verify else 1)
-        )
+        self._pair_reuse = 0 if not bound["razor_pair_reuse"] else (2 if verify else 1)
         self._reuse_now = None
         # Why the last fill with reuse on did not take it (the Python route's
         # reason: `_pair_reuse_refusal`, or the plan's own `declined`), or
@@ -2197,7 +2205,7 @@ class RazorSolver(
         # (`reuse_declined_reason`).
         self.pair_reuse_declined = (
             "not certified on this platform"
-            if _features.withheld("razor_pair_reuse", own, whole_kwarg=whole)
+            if "razor_pair_reuse" in self.features_withheld
             else None
         )
         # The C++ front route reads it with the constructor's own arguments.
