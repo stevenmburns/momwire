@@ -1077,6 +1077,136 @@ class _PairReusePlan:
         return tb[bounds[a] : bounds[a + 1]]
 
 
+#: The share of `swept_mem_mb` the chunked fill may hold as `pair_reuse` source
+#: blocks (momwire#2020). Its observer-row windows take the rest, so the two
+#: together stay inside the budget the chunked route exists to keep. The held
+#: blocks get the larger share: a window is one row edge's at most, and a held
+#: block saves a fill per copy. A window exists twice while it is written (the
+#: kernel's computed columns beside the assembler's whole-width array), so its
+#: rows are priced at twice their bytes.
+_CHUNKED_REUSE_BUDGET_SHARE = 0.75
+
+
+def _expand_runs(starts, lengths):
+    """The runs ``starts[i], ..., starts[i] + lengths[i] - 1`` end to end."""
+    offset = np.r_[0, np.cumsum(lengths)[:-1]]
+    return np.repeat(starts - offset, lengths) + np.arange(int(lengths.sum()))
+
+
+def _merged_runs(to, at, lengths):
+    """Blocks ``to[i]:to[i] + lengths[i]`` read from ``at[i]:...``, the ones
+    that continue each other joined, as ``[(to, at, length)]``. Whole columns
+    are then copied by slice: a gather costs several times a slice here, on
+    the fill's largest array."""
+    if to.size == 0:
+        return []
+    ends = to + lengths
+    brk = np.flatnonzero((to[1:] != ends[:-1]) | (at[1:] != at[:-1] + lengths[:-1])) + 1
+    first = np.r_[0, brk]
+    last = np.r_[brk, to.size] - 1
+    return list(
+        zip(
+            to[first].tolist(),
+            at[first].tolist(),
+            (ends[last] - to[first]).tolist(),
+            strict=True,
+        )
+    )
+
+
+class _ChunkedReuse:
+    """A `_PairReusePlan`'s blocks between two edges, as the chunked fill
+    serves them (momwire#2020).
+
+    That fill holds no moment tensor to copy within, and a target's rows can
+    come before its source's. So every source block is computed first and held,
+    each source row edge's blocks side by side in one array, and each row
+    window takes both its targets and its sources from there. Sources that do
+    not fit `budget` bytes are cut, those with the fewest copies first, by
+    unordered pair so that a pair's two orders stay together; their targets are
+    filled normally and counted in `cut_blocks`."""
+
+    def __init__(self, plan, slices, budget, d1):
+        self.start = np.fromiter((sl.start for sl in slices), dtype=np.int64)
+        self.nseg = np.fromiter((sl.stop - sl.start for sl in slices), dtype=np.int64)
+        E = self.n_edges = len(slices)
+        self.edge_of = np.repeat(np.arange(E, dtype=np.int64), self.nseg)
+        off = plan.ta != plan.tb
+        ta, tb, sa, sb = plan.ta[off], plan.tb[off], plan.sa[off], plan.sb[off]
+        n = self.nseg
+
+        lo, hi = np.minimum(sa, sb), np.maximum(sa, sb)
+        keys, cls_of, copies = np.unique(
+            lo * E + hi, return_inverse=True, return_counts=True
+        )
+        k_lo, k_hi = np.divmod(keys, E)
+        nbytes = 2 * d1 * d1 * 16 * n[k_lo] * n[k_hi]
+        self.cut_blocks = 0
+        if int(nbytes.sum()) > budget:
+            alone = np.flatnonzero(nbytes <= budget)
+            rank = alone[np.lexsort((keys[alone], -copies[alone]))]
+            take = np.zeros(keys.size, dtype=bool)
+            take[rank[np.cumsum(nbytes[rank]) <= budget]] = True
+            sel = take[cls_of]
+            self.cut_blocks = int(np.count_nonzero(~sel))
+            ta, tb, sa, sb = ta[sel], tb[sel], sa[sel], sb[sel]
+        self.copied_blocks = int(ta.size)
+
+        # The held blocks, ordered by row edge and then column edge; `pos` is
+        # each one's first column in its row edge's array.
+        held = np.unique(sa * E + sb)
+        held_a, held_b = np.divmod(held, E)
+        ends = np.cumsum(n[held_b])
+        begins = ends - n[held_b]
+        pos = begins - begins[np.searchsorted(held_a, held_a)]
+        self.source_rows = np.unique(held_a)
+        self._held = (held_a, held_b)
+        src_pos = pos[np.searchsorted(held, sa * E + sb)]
+
+        # What each row edge's window takes from the held arrays: its targets,
+        # then the sources it owns.
+        row = np.r_[ta, held_a]
+        src = np.r_[sa, held_a]
+        dst = np.r_[tb, held_b]
+        at = np.r_[src_pos, pos]
+        copy = np.r_[np.ones(ta.size, dtype=bool), np.zeros(held.size, dtype=bool)]
+        order = np.lexsort((dst, src, row))
+        self._row, self._src, self._dst = row[order], src[order], dst[order]
+        self._at, self._copy = at[order], copy[order]
+        self._bounds = np.searchsorted(self._row, np.arange(E + 1))
+        self.held = {}
+
+    def __bool__(self):
+        return self.copied_blocks > 0
+
+    def fill(self, moments, checkpoint):
+        """Compute the held blocks: `moments(sl_row_edge, columns)`."""
+        held_a, held_b = self._held
+        computed = 0
+        for a in self.source_rows.tolist():
+            checkpoint()
+            b = held_b[np.searchsorted(held_a, a) : np.searchsorted(held_a, a + 1)]
+            cols = _expand_runs(self.start[b], self.nseg[b])
+            self.held[a] = moments(a, cols)
+            computed += int(self.nseg[a]) * cols.size
+        return computed
+
+    def row(self, a):
+        """Row edge ``a``'s served column edges, how many of their columns are
+        copies, and ``[(source row edge, [(column, held column, length)])]``."""
+        lo, hi = self._bounds[a], self._bounds[a + 1]
+        dst, src, at = self._dst[lo:hi], self._src[lo:hi], self._at[lo:hi]
+        lengths = self.nseg[dst]
+        n_copied = int(lengths[self._copy[lo:hi]].sum())
+        groups = []
+        cuts = np.flatnonzero(np.diff(src)) + 1
+        for g0, g1 in itertools.pairwise([0, *cuts.tolist(), src.size]):
+            if g1 > g0:
+                runs = _merged_runs(self.start[dst[g0:g1]], at[g0:g1], lengths[g0:g1])
+                groups.append((int(src[g0]), runs))
+        return dst, n_copied, groups
+
+
 def _ek_slice(ek, rows=None, cols=None):
     """Restrict an `_EK` spec's per-segment labels to a block's rows/cols.
 
@@ -2131,6 +2261,9 @@ class BSplineSolver(
         # Why the hint was not used (None when it was, or none was given):
         # the sinusoidal and razor-2p solvers' readout, of the same type.
         self.pair_reuse_declined = None
+        # What the last fill did with the hint (momwire#2020), counted where
+        # the blocks were served, or None when no fill read a plan.
+        self.pair_reuse_served = None
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
@@ -6153,6 +6286,19 @@ class BSplineSolver(
         # The off-edge copies (momwire#1809).
         if plan:
             plan.copy_blocks(J, same_slices, off_edge=True)
+            n_e = np.fromiter((c.stop - c.start for c in same_slices), dtype=np.int64)
+            copied = int(np.sum(n_e[plan.ta] * n_e[plan.tb]))
+            self.pair_reuse_served = {
+                "route": "tensor",
+                "copied_blocks": len(plan),
+                "cut_blocks": 0,
+                "tables_shared": 0,
+                "pairs": n_total**2,
+                "copied_pairs": copied,
+                "computed_pairs": n_total**2 - copied,
+                "offset_pairs": 0,
+                "offset_distinct": 0,
+            }
 
         # Overwrite each same-edge block with analytic static + reg
         if same_edge_prep is None:
@@ -6381,6 +6527,13 @@ class BSplineSolver(
         rows zero, or row-compact). None is the shipped fill, call for call.
         The chunk boundaries are the dense fill's in both cases -- see
         `_ObserverRows.windows` for why that is what makes the rows bitwise.
+
+        A `pair_reuse` plan is served here too (momwire#2020, `_ChunkedReuse`):
+        its blocks between two edges come from held source blocks, and a
+        congruent offset edge shares its source's table of distinct moments.
+        The own block of an edge the offset route does not serve is filled, not
+        copied. A restricted fill reads no plan, and says so in
+        `pair_reuse_declined`.
         """
         d = self.degree
         a_row = self._seg_radius(geom)
@@ -6456,7 +6609,13 @@ class BSplineSolver(
         row_bytes = (d + 1) ** 2 * n_segs * 16 + self._offedge_fallback_row_bytes(
             n_segs
         )
-        chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
+        reuse = self._chunked_reuse(geom, same_edge_prep, restrict)
+        chunk = _schedule.mb_rows(
+            self.swept_mem_mb * (1 - _CHUNKED_REUSE_BUDGET_SHARE) / 2
+            if reuse
+            else self.swept_mem_mb,
+            row_bytes,
+        )
         # momwire#907: ONE ladder for the whole fill. The same-edge correction
         # below subtracts what this sweep added, so the two must agree on
         # every pair's order; see `_fill_ladder` for why per-window resolution
@@ -6487,6 +6646,87 @@ class BSplineSolver(
                 ek=_ek_slice(ek, rows=slice(r0, r1), cols=slice(c0, c1)),
                 ladder=ladder,
             )
+
+        served = {
+            "route": "chunked",
+            "copied_blocks": 0,
+            "cut_blocks": 0,
+            "tables_shared": 0,
+            "pairs": int(n_segs) ** 2,
+            "copied_pairs": 0,
+            "computed_pairs": 0,
+            "offset_pairs": 0,
+            "offset_distinct": 0,
+        }
+        if reuse:
+
+            def _held_moments(a, cols):
+                sl = slice(int(reuse.start[a]), int(reuse.start[a] + reuse.nseg[a]))
+                return _seg_seg_full_moments_offedge(
+                    seg_l[sl],
+                    seg_r[sl],
+                    seg_l[cols],
+                    seg_r[cols],
+                    a_row[sl],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ek=_ek_slice(ek, rows=sl, cols=cols),
+                    ladder=ladder,
+                )
+
+            served["computed_pairs"] += reuse.fill(_held_moments, self._checkpoint)
+            served["copied_blocks"] = reuse.copied_blocks
+            served["cut_blocks"] = reuse.cut_blocks
+            own_offset = np.isin(reuse.start, list(offset))
+            edge_cuts = np.r_[reuse.start, n_segs]
+
+        def _reuse_block(w0, w1, _j0, _j1):
+            """One observer window of a fill with held blocks: each row edge's
+            computed columns, then its served ones, assembled together."""
+            inner = edge_cuts[(edge_cuts > w0) & (edge_cuts < w1)].tolist()
+            for r0, r1 in itertools.pairwise([w0, *inner, w1]):
+                a = int(reuse.edge_of[r0])
+                dst, n_copied, groups = reuse.row(a)
+                skip = np.zeros(reuse.n_edges, dtype=bool)
+                skip[dst] = True
+                skip[a] |= bool(own_offset[a])
+                cols = np.flatnonzero(~skip[reuse.edge_of])
+                n_rows = r1 - r0
+                J_win = np.zeros((d + 1, d + 1, n_rows, n_segs), dtype=np.complex128)
+                if cols.size:
+                    sl = slice(r0, r1)
+                    J_cols = _seg_seg_full_moments_offedge(
+                        seg_l[sl],
+                        seg_r[sl],
+                        seg_l[cols],
+                        seg_r[cols],
+                        a_row[sl],
+                        k,
+                        d,
+                        self.n_qp_pair,
+                        ek=_ek_slice(ek, rows=sl, cols=cols),
+                        ladder=ladder,
+                    )
+                    runs = np.flatnonzero(np.diff(cols) != 1) + 1
+                    first = np.r_[0, runs]
+                    size = np.diff(np.r_[first, cols.size])
+                    for at, to, m in zip(
+                        first.tolist(), cols[first].tolist(), size.tolist(), strict=True
+                    ):
+                        J_win[:, :, :, to : to + m] = J_cols[:, :, :, at : at + m]
+                    del J_cols
+                lo = r0 - int(reuse.start[a])
+                for src, runs in groups:
+                    held = reuse.held[src]
+                    for to, at, m in runs:
+                        J_win[:, :, :, to : to + m] = held[
+                            :, :, lo : lo + n_rows, at : at + m
+                        ]
+                served["computed_pairs"] += n_rows * int(cols.size)
+                served["copied_pairs"] += n_rows * n_copied
+                _accumulate(J_win, r0, r1, 0, n_segs, _bases_touching(r0, r1), all_n)
+                del J_win
 
         def _sweep_block(w0, w1, j0, j1):
             if offset:
@@ -6532,11 +6772,13 @@ class BSplineSolver(
         _schedule.sweep(
             [(0, n_segs)],
             chunk,
-            _sweep_block,
+            _reuse_block if reuse else _sweep_block,
             sources=[(0, n_segs)],
             checkpoint=self._checkpoint,
             restrict=restrict,
         )
+        if reuse:
+            reuse.held.clear()
 
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
@@ -6705,13 +6947,82 @@ class BSplineSolver(
                 sl.start: (arc, a_w)
                 for _w, sl, arc, a_w in self._edge_ingredients(geom)
             }
+            # A congruent offset edge's table is its source's (momwire#2020).
+            table_of = self._offset_table_sources(geom, offset)
+            wanted = set(table_of.values())
+            tables = {}
+
+            def _table(start):
+                tab = tables.get(start)
+                if tab is None:
+                    sl = offset[start]
+                    tab = self._free_offset_table(sl, *arcs[start], k, ek_se)
+                    served["offset_distinct"] += 2 * (sl.stop - sl.start) - 1
+                    if start in wanted:
+                        tables[start] = tab
+                return tab
+
             for sl in offset.values():
                 self._checkpoint()
-                self._free_offset_block(
-                    Z, sl, *arcs[sl.start], k, ek_se, supp_c, polys_c, tan_c
-                )
+                src = table_of.get(sl.start, sl.start)
+                served["tables_shared"] += int(src != sl.start)
+                self._free_offset_block(Z, sl, _table(src), supp_c, polys_c, tan_c)
+                served["offset_pairs"] += (sl.stop - sl.start) ** 2
             FREE_OFFSET_EDGES += len(offset)
+        if restrict is None and (reuse or served["tables_shared"]):
+            if not reuse:
+                served["computed_pairs"] = served["pairs"] - served["offset_pairs"]
+            self.pair_reuse_served = served
         return Z
+
+    def _chunked_reuse(self, geom, same_edge_prep, restrict):
+        """The `_ChunkedReuse` of this fill, or None to fill every block
+        (momwire#2020). Every way a hint goes unread here is recorded in
+        `pair_reuse_declined`."""
+        if self._pair_reuse_given is None and self._pair_reuse is None:
+            return None
+        if restrict is not None:
+            self.pair_reuse_declined = "a fill of chosen rows does not read the hint"
+            return None
+        plan = self._pair_reuse_plan(geom)
+        if not plan:
+            return None
+        slices = self._same_edge_slices(geom)
+        if same_edge_prep is not None and slices != [p[0] for p in same_edge_prep]:
+            self.pair_reuse_declined = "the swept fill's edges are not the plan's"
+            return None
+        stops = np.fromiter((sl.stop for sl in slices), dtype=np.int64)
+        starts = np.fromiter((sl.start for sl in slices), dtype=np.int64)
+        if (
+            starts[0] != 0
+            or stops[-1] != geom["n_segs_total"]
+            or np.any(stops[:-1] != starts[1:])
+        ):
+            self.pair_reuse_declined = "the edges do not tile the mesh in order"
+            return None
+        budget = int(self.swept_mem_mb * _CHUNKED_REUSE_BUDGET_SHARE * (1 << 20))
+        reuse = _ChunkedReuse(plan, slices, budget, self.degree + 1)
+        if not reuse and reuse.cut_blocks:
+            self.pair_reuse_declined = (
+                "the source blocks do not fit the fill's memory budget"
+            )
+        return reuse if reuse else None
+
+    def _offset_table_sources(self, geom, offset):
+        """``{offset edge's start: its source edge's start}`` for each offset
+        edge a `pair_reuse` plan copies from another offset edge: the two
+        share one table of distinct moments (momwire#2020)."""
+        plan = self._pair_reuse_plan(geom)
+        if not plan or not offset:
+            return {}
+        slices = self._same_edge_slices(geom)
+        own = plan.ta == plan.tb
+        out = {}
+        for t, s in zip(plan.ta[own].tolist(), plan.sa[own].tolist(), strict=True):
+            t0, s0 = slices[t].start, slices[s].start
+            if t0 in offset and s0 in offset:
+                out[t0] = s0
+        return out
 
     def _offset_basis_block(self, Z, sl, kind, tab, supp, polys, assemble):
         """Add an offset edge's own block to Z from its distinct pair moments
@@ -6800,11 +7111,10 @@ class BSplineSolver(
             out.append(sl)
         return out
 
-    def _free_offset_block(self, Z, sl, arc, a_w, k, ek_se, supp, polys, tangents):
-        """Add a uniform straight edge's own free-space block to Z from its
-        distinct same-edge moments (the analytic static part plus the
-        regularised smooth part, one observer row, the rest by reciprocity:
-        they depend on j - i alone), assembled at the basis level."""
+    def _free_offset_table(self, sl, arc, a_w, k, ek_se):
+        """A uniform straight edge's distinct same-edge moments (the analytic
+        static part plus the regularised smooth part, one observer row, the
+        rest by reciprocity: they depend on j - i alone)."""
         n = sl.stop - sl.start
         d = self.degree
 
@@ -6825,7 +7135,12 @@ class BSplineSolver(
             )
             return (A_st + A_reg)[:, :, 0, :]
 
-        tab = self._offset_table(row, n, "toeplitz", reciprocal=False)
+        return self._offset_table(row, n, "toeplitz", reciprocal=False)
+
+    def _free_offset_block(self, Z, sl, tab, supp, polys, tangents):
+        """Add a uniform straight edge's own free-space block to Z from its
+        table of distinct moments (`_free_offset_table`), assembled at the
+        basis level."""
 
         def assemble(J, sub_supp, sub_polys, r0, r1, m_idx, out):
             _acc.assemble_Z_bspline_windowed(
