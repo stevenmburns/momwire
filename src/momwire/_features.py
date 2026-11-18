@@ -674,7 +674,23 @@ FEATURES: dict[str, Feature] = {
                 "interpolate them at the rest, instead of computing them at "
                 "every frequency."
             ),
-            drift=1e-4,  # PROVISIONAL
+            # |dZin|/|Zin| against off, full precision (the nec5-razor-2p
+            # executable's MW_EXE_ARRAYS, Rocketlake, 4 threads both sides),
+            # every point of a 21-point sweep, n_a = 5 (the default):
+            #   3 % bands: the four-radial buried vertical (251 segments)
+            #     9.2e-12 and its 2- / 8-radial and 27- / 108-segment
+            #     variants 7.8e-12 to 1.1e-11; tests/fixtures'
+            #     buried_grazing_1672 (3), eznec_exact_buried_1619 (2),
+            #     momwire_times/buried_radials and razor_printout_crossing
+            #     (2), each given the sweep: 3.0e-11 to 5.1e-11;
+            #   9.5-10 % bands (the widest the plan takes): the vertical
+            #     and its variants 3.4e-9 to 4.9e-9, the fixtures 1.0e-8 to
+            #     1.67e-8 (fat_slant, shallow_s40 at 14 MHz).
+            # Wider bands or fewer anchors move it fast (the vertical at
+            # 20 %: 1.4e-7; n_a = 3 at 10 %: 1.2e-5), which is why the plan
+            # declines past 10 % and the knob is internal. 5e-8 is 3x the
+            # worst measured.
+            drift=5e-8,
             offer=False,
         ),
     )
