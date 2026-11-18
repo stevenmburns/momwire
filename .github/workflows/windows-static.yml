@@ -39,7 +39,7 @@ name: windows-static
 on:
   workflow_dispatch:
   push:
-    branches: [windows-static-exe-v2]
+    branches: [windows-static-exe-v2, mingw-vmath-shim-1118]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -245,7 +245,7 @@ jobs:
           set -e
           standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
           standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
-          mkdir -p dist-ucrt dist-ucrt-fat dist-ucrt-exp
+          mkdir -p dist-ucrt dist-ucrt-fat dist-ucrt-exp dist-ucrt-shim dist-ucrt-shim-fat dist-ucrt-shim-count
           cfg() {  # DIR BASIS VARIANT [extra cmake args]
             local d=$1 basis=$2 v=$3; shift 3
             cmake -S standalone -B "$d" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
@@ -275,19 +275,74 @@ jobs:
               cfg "build-$b-avx2-${x%%|*}" $basis avx2 "${x#*|}"
               cp "build-$b-avx2-${x%%|*}/$target.exe" "dist-ucrt-exp/momwire-nec5-$b-avx2-${x%%|*}.exe"
             done
+            # the vector-math shim (standalone/mingw_vmath_shim.cpp): avx2, fat,
+            # and avx2 with call counters. The sse2 build has no shim, so the
+            # fat gates' sse2 reference is the plain one under the shim's name.
+            cfg "build-$b-avx2-shim" $basis avx2 -DMW_EXE_VMATH_SHIM=ON
+            cp "build-$b-avx2-shim/$target.exe" "dist-ucrt-shim/momwire-nec5-$b-avx2-shim.exe"
+            cp "build-$b-sse2/$target.exe" "dist-ucrt-shim/momwire-nec5-$b-sse2-shim.exe"
+            cfg "build-$b-fat-shim" $basis fat -DMW_EXE_VMATH_SHIM=ON
+            cp "build-$b-fat-shim/$target.exe" "dist-ucrt-shim-fat/$name.exe"
+            cfg "build-$b-avx2-shimcount" $basis avx2 -DMW_EXE_VMATH_SHIM=ON -DMW_EXE_VMATH_SHIM_COUNT=ON
+            cp "build-$b-avx2-shimcount/$target.exe" "dist-ucrt-shim-count/momwire-nec5-$b-avx2-shimcount.exe"
           done
+          # Which objects call the shim, and that the plain build's do not. A
+          # build that never calls it would time exactly as the baseline.
+          for b in razor2p bs2; do
+            for d in shim plain; do
+              t="build-$b-avx2-shim"; [ $d = plain ] && t="build-$b-avx2"
+              n=0
+              for o in $(find "$t/CMakeFiles/mw_core.dir" "$t/CMakeFiles/mw_core_serial.dir" -name '*.obj'); do
+                c=$(objdump -dr "$o" | grep -c 'R_X86_64_PC32.*_ZGVdN4v_\|IMAGE_REL_AMD64_REL32.*_ZGVdN4v_' || true)
+                n=$((n + c))
+                [ "$d" = plain ] || [ "$c" -eq 0 ] || echo "  $b $(basename "$o"): $c vector calls"
+              done
+              echo "$b $d: $n vector call sites"
+              if [ $d = shim ] && [ "$n" -eq 0 ]; then echo "::error::$b: no core calls the shim"; exit 1; fi
+              if [ $d = plain ] && [ "$n" -ne 0 ]; then echo "::error::$b: the plain build calls the shim"; exit 1; fi
+            done
+            e="dist-ucrt-shim/momwire-nec5-$b-avx2-shim.exe"
+            echo "$e defines: $(nm "$e" | grep '_ZGVdN4v_' | tr '\n' ';')"
+            [ "$(nm "$e" | grep -c ' T _ZGVdN4v_')" -eq 3 ] || { echo "::error::$e does not define the three names"; exit 1; }
+          done
+          # gcc's own call site, as compiled here (the ABI the shim must match)
+          o=$(find build-bs2-avx2-shim/CMakeFiles/mw_core.dir -name '_bspline_core.cpp.obj')
+          objdump -dr "$o" | grep -m1 -B10 '_ZGVdN4v_sin' || true
+          # The shim's object: three names, no constructor, no aligned ymm access
+          # through a pointer (the Microsoft ABI's vectors are not 32-byte aligned)
+          o=build-bs2-avx2-shim/CMakeFiles/mw_vmath_shim.dir/mingw_vmath_shim.cpp.obj
+          names=$(nm -g --defined-only "$o" | awk '{print $3}' | grep -v '^\.refptr' | sort | tr '\n' ' ')
+          echo "shim defines: $names"
+          [ "$names" = "_ZGVdN4v_cos _ZGVdN4v_exp _ZGVdN4v_sin " ] || { echo "::error::the shim defines more than its three names"; exit 1; }
+          if objdump -h "$o" | grep -E '\.(c|d)tors|\.CRT'; then echo "::error::the shim has a constructor"; exit 1; fi
+          if objdump -d "$o" | grep -E 'vmov(apd|aps|dqa)[[:space:]].*ymm' | grep -E '\(%r' | grep -v '(%rip)'; then
+            echo "::error::the shim has an aligned ymm access"; exit 1
+          fi
           e=dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe
           echo "math symbols the exe defines itself: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
           for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
             n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
             echo "  $e: $n libquadmath/libgfortran symbols"
           done
-          strip dist-ucrt/*.exe dist-ucrt-fat/*.exe dist-ucrt-exp/*.exe
+          strip dist-ucrt/*.exe dist-ucrt-fat/*.exe dist-ucrt-exp/*.exe dist-ucrt-shim/*.exe dist-ucrt-shim-fat/*.exe dist-ucrt-shim-count/*.exe
           for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
             echo "== $e $(stat -c %s "$e") bytes"; objdump -p "$e" | grep "DLL Name" | tr -s ' \t' ' ' | tr '\n' ' '; echo
           done
           echo "api-ms-win-crt-math imports:"
           objdump -p dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe | awk '/DLL Name: api-ms-win-crt-math/ {f=1; next} /DLL Name/ {f=0} f && NF >= 3 {print $NF}' | tr '\n' ' '; echo
+      # HARD: the shim's ABI under the Microsoft x64 convention and its
+      # fallback edges, on this gcc and this ucrtbase
+      - name: the vector-math shim's ABI and edges
+        shell: msys2 {0}
+        run: |
+          g++ -O2 -fno-tree-vectorize -fopenmp-simd -fno-math-errno -ffp-contract=off -mavx2 -mfma \
+            -DMW_VMATH_SHIM_COUNT -Isrc/momwire -static \
+            scripts/windows_static/vmath_shim_check.cpp standalone/mingw_vmath_shim.cpp -o vmath_shim_check.exe
+          rc=0
+          ./vmath_shim_check.exe > vmath-shim-check.txt 2>&1 || rc=$?
+          cat vmath-shim-check.txt
+          echo "vmath_shim_check exit status: $rc"
+          exit $rc
       - uses: actions/upload-artifact@v7
         with:
           name: ucrt64-exes
@@ -295,7 +350,11 @@ jobs:
             dist-ucrt/*.exe
             dist-ucrt-fat/*.exe
             dist-ucrt-exp/*.exe
+            dist-ucrt-shim/*.exe
+            dist-ucrt-shim-fat/*.exe
+            dist-ucrt-shim-count/*.exe
             libm-ucrt64.txt
+            vmath-shim-check.txt
           retention-days: 7
 
   clang64:
@@ -348,6 +407,32 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           toolset: '14.44'
+      # The shim's guards must not change what MSVC compiles: the six files'
+      # preprocessed text, against the commit this branch started from.
+      - name: MSVC's preprocessed sources are the base commit's
+        shell: pwsh
+        run: |
+          git fetch -q --depth=1 origin 77040171fcfe7bf8e8ad4982e5641a5e9cfcd5dd
+          if ($LASTEXITCODE) { exit 1 }
+          git worktree add -q --detach "$env:RUNNER_TEMP\base" 77040171fcfe7bf8e8ad4982e5641a5e9cfcd5dd
+          if ($LASTEXITCODE) { exit 1 }
+          $here = "$PWD"; $fail = 0
+          foreach ($f in '_accel_sinusoidal_cplx.cpp', '_near_interface_point_core.cpp', '_accel_razor_cplx.cpp', '_near_interface_core.cpp', '_bspline_core.cpp') {
+            foreach ($arch in '/arch:AVX2', '/arch:SSE2') {
+              $h = @()
+              foreach ($root in $here, "$env:RUNNER_TEMP\base") {
+                Push-Location "$root\src\momwire"
+                $o = "$env:RUNNER_TEMP\ep.txt"
+                cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG $arch /I. /I..\..\extern\xsf\include $f > `"$o`" 2>nul"
+                if ($LASTEXITCODE) { "::error::cl /EP $f failed"; exit 1 }
+                $h += (Get-FileHash $o).Hash
+                Pop-Location
+              }
+              "$f $arch : $($h[0].Substring(0, 16)) $($h[1].Substring(0, 16))"
+              if ($h[0] -ne $h[1]) { "::error::$f preprocesses differently under MSVC"; $fail = 1 }
+            }
+          }
+          exit $fail
       - name: configure + build (avx2, sse2, avx2 /fp:precise; razor-2p and bs2)
         shell: pwsh
         run: |
@@ -433,14 +518,14 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install -q pefile
-          $dirs = @('dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat') | Where-Object { Test-Path $_ }
+          $dirs = @('dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat', 'dist-ucrt-shim', 'dist-ucrt-shim-fat') | Where-Object { Test-Path $_ }
           python scripts/windows_static/pe_imports.py @dirs
           if ($LASTEXITCODE) { exit 1 }
       - name: Windows 7 import gate
         shell: pwsh
         run: |
           $fail = 0
-          foreach ($d in 'dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat') {
+          foreach ($d in 'dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat', 'dist-ucrt-shim', 'dist-ucrt-shim-fat') {
             if (-not (Test-Path $d)) { continue }
             "== $d"
             python scripts/eznec_freeze/scan_win7_imports.py $d
@@ -467,7 +552,7 @@ jobs:
         run: |
           $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
           $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
-          $all = Get-ChildItem dist\*.exe, dist-shim\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe -ErrorAction Ignore
+          $all = Get-ChildItem dist\*.exe, dist-shim\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe, dist-ucrt-shim\*.exe, dist-ucrt-shim-fat\*.exe -ErrorAction Ignore
           $env:PATH = "$env:SystemRoot\System32"
           foreach ($e in $all) {
             $v = (& $e.FullName -version) -join ' '
@@ -498,7 +583,9 @@ jobs:
           $fail = 0
           # EXE, basis, the toolchain its -version line must name
           $sets = @(@('dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe', '', 'ucrt64'), @('dist-ucrt\momwire-nec5-bs2-avx2-ucrt64.exe', 'bspline', 'ucrt64'),
-                    @('dist-ucrt-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'))
+                    @('dist-ucrt-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'),
+                    @('dist-ucrt-shim\momwire-nec5-razor2p-avx2-shim.exe', '', 'ucrt64'), @('dist-ucrt-shim\momwire-nec5-bs2-avx2-shim.exe', 'bspline', 'ucrt64'),
+                    @('dist-ucrt-shim-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-shim-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'))
           if ($env:MINGW64_GATES -eq '1') {
             $sets += @(@('dist\momwire-nec5-razor2p-avx2.exe', '', 'mingw64'), @('dist\momwire-nec5-bs2-avx2.exe', 'bspline', 'mingw64'),
                        @('dist-fat\momwire-nec5-razor-2p.exe', '', 'mingw64'), @('dist-fat\momwire-nec5-bspline.exe', 'bspline', 'mingw64'))
@@ -524,6 +611,7 @@ jobs:
           $runs = @()
           foreach ($b in 'razor2p', 'bs2') {
             foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist-ucrt\momwire-nec5-$b-$v-ucrt64.exe") }
+            $runs += ,@($b, 'avx2', "dist-ucrt-shim\momwire-nec5-$b-avx2-shim.exe")
             if ($env:MINGW64_GATES -eq '1') {
               foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist\momwire-nec5-$b-$v.exe") }
             }
@@ -563,7 +651,7 @@ jobs:
                      "tests\fixtures\bspline_printout_buried\ab_hub16.nec",
                      "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
           # SET: fat dir, one-variant dir, one-variant suffix
-          $sets = @(,@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'))
+          $sets = @(@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'), @('dist-ucrt-shim-fat', 'dist-ucrt-shim', '-shim'))
           if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
           foreach ($set in $sets) {
@@ -609,7 +697,7 @@ jobs:
         shell: pwsh
         run: |
           $env:MW_GDB = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
-          $sets = @(,@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'))
+          $sets = @(@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'), @('dist-ucrt-shim-fat', 'dist-ucrt-shim', '-shim'))
           if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
           foreach ($set in $sets) {
@@ -720,6 +808,8 @@ jobs:
               "ucrt64/$($b[0])=$U\momwire-nec5-$($b[0])-avx2-ucrt64.exe" `
               "ucrt64-fma/$($b[0])=$X\momwire-nec5-$($b[0])-avx2-fma.exe" `
               "ucrt64-fat/$($b[0])=$PWD\dist-ucrt-fat\$($b[1]).exe" `
+              "ucrt64-shim/$($b[0])=$PWD\dist-ucrt-shim\momwire-nec5-$($b[0])-avx2-shim.exe" `
+              "ucrt64-shim-fat/$($b[0])=$PWD\dist-ucrt-shim-fat\$($b[1]).exe" `
               "msvc-sse2/$($b[0])=$M\momwire-nec5-$($b[0])-sse2.exe" `
               "ucrt64-sse2/$($b[0])=$U\momwire-nec5-$($b[0])-sse2-ucrt64.exe"
             if ($LASTEXITCODE) { exit 1 }
@@ -732,13 +822,26 @@ jobs:
           $args_ = @()
           foreach ($b in 'razor2p', 'bs2') {
             $cand = @("msvc/$b=$M\momwire-nec5-$b-avx2.exe", "msvc-precise/$b=$M\momwire-nec5-$b-avx2-precise.exe",
-                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe", "ucrt64-fma/$b=$X\momwire-nec5-$b-avx2-fma.exe",
+                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe", "ucrt64-shim/$b=$PWD\dist-ucrt-shim\momwire-nec5-$b-avx2-shim.exe",
+                      "ucrt64-fma/$b=$X\momwire-nec5-$b-avx2-fma.exe",
                       "msvc-sse2/$b=$M\momwire-nec5-$b-sse2.exe", "ucrt64-sse2/$b=$U\momwire-nec5-$b-sse2-ucrt64.exe")
             $args_ += $cand | Where-Object { Test-Path ($_ -split '=', 2)[1] }
           }
           python scripts/windows_static/stage_times.py @args_ > stages.txt
           $rc = $LASTEXITCODE
           Get-Content stages.txt
+          if ($rc) { exit 1 }
+      # The proof that the timed shim builds' code path ran: the counting build
+      # of the same sources, on the same decks (never timed)
+      - name: the shim's call counts
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/windows_static/shim_counts.py `
+            "razor2p=$PWD\dist-ucrt-shim-count\momwire-nec5-razor2p-avx2-shimcount.exe" `
+            "bs2=$PWD\dist-ucrt-shim-count\momwire-nec5-bs2-avx2-shimcount.exe" > shim-counts.txt
+          $rc = $LASTEXITCODE
+          Get-Content shim-counts.txt
           if ($rc) { exit 1 }
       - uses: actions/upload-artifact@v7
         if: always()
@@ -747,4 +850,5 @@ jobs:
           path: |
             timing-*.jsonl
             stages.txt
+            shim-counts.txt
           retention-days: 7
