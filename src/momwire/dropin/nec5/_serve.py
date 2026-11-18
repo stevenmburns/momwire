@@ -5254,6 +5254,9 @@ def _port_solution(solver, shared: dict | None):
         return solver.compute_port_solution(same_edge_prep=same_edge_k)
     if type(solver).compute_port_solution is not RazorSolver.compute_port_solution:
         return solver.compute_port_solution()
+    # The opt-in crossing_anchors: the sweep's plan and anchor cache
+    # (`_shell._answer`'s), read only when the feature is on.
+    solver._crossing_anchor_plan = shared.get("crossing_anchor_plan")
     geom = solver._build_geometry()
     key = (type(solver), solver.extended_kernel, _geometry_digest(geom))
     prepared = shared.get(key)
