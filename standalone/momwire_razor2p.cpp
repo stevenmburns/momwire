@@ -684,29 +684,89 @@ int threads_for(long long n_basis, long long crossing_pairs = 0, long long below
 
 // The frequency-parallel policy: a buried deck's stepping FR (`buried_runs`
 // of its runs buried, each an independent solve on one geometry) at a
-// budget of `threads` runs `threads` frequencies at once, each fill and
-// factor on one thread (`set_frequency_workers`), rather than one frequency
-// at a time over an OpenMP team. A frequency is the sweep's unit, so it
-// pays only when the last round is not mostly idle: taken when the sweep
-// fills its rounds exactly or has at least two of them. Rocketlake (8
-// cores), the target deck's mesh cut to F frequencies, ms, intra-fill ->
-// frequency-parallel, median of 5 (F = 8: of 3): at 4 threads F = 3 310 ->
-// 339, 5 498 -> 646, 10 1040 -> 1051 (a tie, taken), 21 1983 -> 1907; at 8
-// threads F = 3 216 -> 348, 5 335 -> 360, 8 572 -> 437, 10 677 -> 710, 21
-// 1272 -> 1051. The bytes are
-// the one-thread run's either way (the serial copy, BLAS at one thread), so
-// only time moves. Not taken when the sweep would decline the features asked
-// for (`frequency_sweep_allowed`: crossing_table), which would otherwise
-// solve the sweep in turn on one thread. MW_EXE_FREQS=0 turns it off and =1
-// takes it whatever the count (gate hooks).
-int freq_workers_for(int threads, long long buried_runs) {
+// budget of `threads` runs one fill per frequency on each of up to
+// `threads` worker threads (`set_frequency_workers`), rather than one
+// frequency at a time over an OpenMP team; the calling thread factors them
+// in order at the serial copy's BLAS count (`SWEEP_BLAS`). The bytes are the
+// same either way, so only time and memory move; each term below declines
+// the sweep where it measured slower, or where it would hold too much.
+//
+// Measured on Rocketlake (8 cores / 16 threads), cold store, median of 5,
+// ms, intra-fill -> sweep, on the target deck (a vertical on four buried
+// radials, 21 frequencies) with its radials cut to R segments (n_basis in
+// brackets) and its sweep to F frequencies:
+//
+// - Rounds. A frequency is the sweep's unit, so its last round may be part
+//   idle. With `fill` the share of the rounds' slots used, F / (threads *
+//   rounds): at 8 threads (R = 54 [250]) F = 6 401 -> 371, 7 463 -> 381,
+//   8 571 -> 432, 12 798 -> 731, 13 843 -> 752, 21 1276 -> 1074 (fill 0.75
+//   to 1, all faster), while F = 5 (fill 0.62) 335 -> 360 and F = 10 (0.62)
+//   677 -> 710 were slower; so from 8 threads the sweep needs fill >= 0.75.
+//   Below 8 threads the OpenMP team scales better and only full rounds
+//   win: at 4 threads F = 8 874 -> 789 but F = 21 (0.88) 1987 -> 1928 at R
+//   = 54 and 1114 -> 1132 at R = 30, F = 10 (0.83) 1040 -> 1051, F = 5
+//   (0.62) 498 -> 646; at 2 threads F = 8 1490 -> 1455 but F = 9 (0.9) 1626
+//   -> 1712. Five to seven threads were not measured and take the lower
+//   counts' rule.
+// - Size (SWEEP_MAX_BASIS). Faster at every mesh measured up to R = 300: at
+//   8 threads, F = 8 / 21, R = 30 [154] 349 -> 288 / 744 -> 630, 80 [354]
+//   622 -> 483 / 1355 -> 1139, 110 [474] 773 -> 628 / 1777 -> 1531, 150
+//   [634] 737 -> 609 / 1667 -> 1410, 200 [834] 1085 -> 918 / 2453 -> 2115,
+//   300 [1234] F = 8 1859 -> 1773 and F = 16 3387 -> 3076; at 4 threads, F
+//   = 8, R = 200 1490 -> 1353 and R = 300 2634 -> 2485. Slower at R = 450
+//   [1834]: F = 8 3639 -> 5107, F = 16 6675 -> 9287 (the factors, which run
+//   one after another on the calling thread, grow as n^3 against the fill's
+//   n^2). Taken up to the largest mesh measured faster.
+// - Memory (SWEEP_WORKER_BYTES, SWEEP_FREQ_BYTES, SWEEP_EXTRA_BYTES). Each
+//   worker holds one fill's working set (its dense matrix, n_basis squared
+//   complex doubles, and the fill's tables) where the serial loop held one,
+//   and the first pass builds every frequency's below grid before any fill.
+//   Peak RSS, MB, serial -> 8 workers, F = 8 / 21: R = 30 46 -> 208 / 48 ->
+//   221, 54 71 -> 354 / 75 -> 381, 80 58 -> 220 / 71 -> 240, 110 75 -> 285
+//   / 90 -> 305, 150 77 -> 276 / 97 -> 336, 200 97 -> 344 / 115 -> 389;
+//   R = 300 F = 8 / 16 136 -> 477 / 149 -> 527; at 4 workers R = 300 F = 8
+//   130 -> 298, R = 450 F = 16 235 -> 503. That is 20 to 39 MB a worker
+//   besides its matrix, and about 2 MB a frequency. The bound, above every
+//   one of those: SWEEP_WORKER_BYTES + 16 n_basis^2 a worker plus
+//   SWEEP_FREQ_BYTES a frequency, at most SWEEP_EXTRA_BYTES in all, so the
+//   sweep stays near the buried route's 512 MB plus one dense matrix (it
+//   declines R = 300 at 8 workers, the one measured sweep past 512 MB). A
+//   sweep that would not fit at full width (every frequency, or every
+//   thread) is not taken at all: a narrower one leaves idle threads the
+//   OpenMP team would have used.
+//
+// Not taken when the sweep would decline the features asked for
+// (`frequency_sweep_allowed`), which would otherwise solve the sweep in
+// turn on one thread. MW_EXE_FREQS=0 turns it off and =1 takes it whatever
+// the rounds and the size (gate hooks); the memory bound holds either way.
+constexpr long long SWEEP_MAX_BASIS = 1250;
+constexpr long long SWEEP_WORKER_BYTES = 40LL << 20;
+constexpr long long SWEEP_FREQ_BYTES = 2LL << 20;
+constexpr long long SWEEP_EXTRA_BYTES = 512LL << 20;
+int freq_workers_for(int threads, long long buried_runs, long long n_basis) {
     const std::string force = env("MW_EXE_FREQS");
-    if (force == "0" || threads < 2 || buried_runs < 2) return 1;
+    if (force == "0" || threads < 2 || buried_runs < 2 || n_basis <= 0) return 1;
     if (!rt_serial::frequency_sweep_allowed()) return 1;
-    const bool rounds = buried_runs % threads == 0 || buried_runs >= 2LL * threads;
-    if (force != "1" && !rounds) return 1;
-    return static_cast<int>(std::min<long long>(threads, buried_runs));
+    const long long workers = std::min<long long>(threads, buried_runs);
+    const long long per_worker = SWEEP_WORKER_BYTES + 16LL * n_basis * n_basis;
+    if (workers * per_worker + buried_runs * SWEEP_FREQ_BYTES > SWEEP_EXTRA_BYTES) return 1;
+    if (force == "1") return static_cast<int>(workers);
+    if (n_basis > SWEEP_MAX_BASIS) return 1;
+    const long long rounds = (buried_runs + threads - 1) / threads;
+    const bool full = buried_runs % threads == 0;
+    const bool filled = 4 * buried_runs >= 3 * threads * rounds;  // fill >= 0.75
+    if (!(full || (threads >= 8 && filled))) return 1;
+    return static_cast<int>(workers);
 }
+
+// The sweep's BLAS count (the calling thread's factors and the printout
+// that follows): two, the serial copy's count under the size policy.
+// OpenBLAS's one-thread path rounds differently from its threaded one,
+// alike at 2, 4, 8 and 16 (measured: 7eb2830c), and BLAS is never limited
+// below two (`serve`'s rule, tests/test_serve_pool.py) unless pinned to one
+// -- a sweep never runs at one. Two never raises a pin: a sweep's budget is
+// at least two threads.
+constexpr int SWEEP_BLAS = 2;
 
 // The executable's OpenBLAS, OpenMP (only when `omp`: the serial route never
 // enters the OpenMP runtime) and, for an embedded Python, the environment
@@ -1285,27 +1345,30 @@ int main(int argc, char **argv) {
         }
         // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
         // the serial copy, more the threaded one.
-        long long buried_runs = 0;
+        long long buried_runs = 0, n_basis = 0;
         if (forced_threads <= 0) {
             const mw_times::Scope timed(mw_times::seam);
             long long pairs = 0, below = 0;
             const long long n = rt_serial::largest_solve(text, false, &pairs, &below, &buried_runs);
+            n_basis = n;
             threads = n >= 0 ? threads_for(n, pairs, below) : 1;
             if (env("MW_EXE_TIMES") == "1")
                 std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
                              pairs, below);
         } else if (threads > 1) {
             const mw_times::Scope timed(mw_times::seam);
-            rt_serial::largest_solve(text, false, nullptr, nullptr, &buried_runs);
+            n_basis = rt_serial::largest_solve(text, false, nullptr, nullptr, &buried_runs);
         }
         const std::string arrays_dir = env("MW_EXE_ARRAYS");
         std::string printout;
         bool printed;
-        const int freq_workers = env("MW_EXE_COPY") != "threads" ? freq_workers_for(threads, buried_runs) : 1;
+        const int freq_workers =
+            env("MW_EXE_COPY") != "threads" ? freq_workers_for(threads, buried_runs, n_basis) : 1;
         if (freq_workers > 1) {
-            // The frequency-parallel sweep (`freq_workers_for`).
-            set_threads(1, false);
-            times_threads(1, 1);
+            // The frequency-parallel sweep (`freq_workers_for`), BLAS at
+            // `SWEEP_BLAS`.
+            set_threads(SWEEP_BLAS, false);
+            times_threads(1, SWEEP_BLAS);
             rt_serial::set_frequency_workers(freq_workers);
             printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
             rt_serial::set_frequency_workers(1);
@@ -1617,32 +1680,33 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
         rt_threads::configure_grid_cache(tag);
     }
     int threads = forced_threads;
-    long long buried_runs = 0;
+    long long buried_runs = 0, n_basis = 0;
     if (forced_threads <= 0) {
         const mw_times::Scope timed(mw_times::seam);
         long long pairs = 0, below = 0;
         const long long n = rt_serial::largest_solve(text, open_end, &pairs, &below, &buried_runs);
+        n_basis = n;
         threads = n >= 0 ? threads_for(n, pairs, below) : 1;
         if (env("MW_EXE_TIMES") == "1")
             std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
                          pairs, below);
     } else if (forced_threads > 1) {
         const mw_times::Scope timed(mw_times::seam);
-        rt_serial::largest_solve(text, open_end, nullptr, nullptr, &buried_runs);
+        n_basis = rt_serial::largest_solve(text, open_end, nullptr, nullptr, &buried_runs);
     }
     g_render_threads = threads;
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
     std::string printout, why, kind, message, raised_kind;
     bool failed = false, printed;
-    const int freq_workers = freq_workers_for(threads, buried_runs);
+    const int freq_workers = freq_workers_for(threads, buried_runs, n_basis);
     if (env("MW_EXE_TIMES") == "1")
         std::fprintf(stderr, "cxx: buried runs %lld, frequency workers %d\n", buried_runs, freq_workers);
     const bool serial = (threads == 1 || freq_workers > 1) && env("MW_EXE_COPY") != "threads";
     if (freq_workers > 1 && serial) {
         // The frequency-parallel sweep: the serial copy (no OpenMP), BLAS at
-        // one thread, `freq_workers` frequencies at once.
-        set_threads(1, false);
-        times_threads(1, 1);
+        // `SWEEP_BLAS`, `freq_workers` fills at once.
+        set_threads(SWEEP_BLAS, false);
+        times_threads(1, SWEEP_BLAS);
         rt_serial::set_frequency_workers(freq_workers);
         printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                    &message, &raised_kind, open_end, served);

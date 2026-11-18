@@ -149,6 +149,12 @@ per physical core for a large one. It never uses more threads than the
 machine has physical cores. The environment variable `MOMWIRE_THREADS` fixes
 the count for every deck.
 
+A buried deck with a frequency sweep (an `FR` card with several frequencies)
+may spend those threads differently: nec5-razor-2p solves several of its
+frequencies at once, one thread each, when the sweep is long enough to keep
+every thread busy and the deck small enough for that to be faster and to fit
+in memory. The printout is the same, byte for byte, either way.
+
 - **Many independent runs** (a sweep split into separate decks, a batch of
   designs): set `MOMWIRE_THREADS=1` and run as many at once as the machine
   has physical cores. Never run more threads in total than physical cores.
