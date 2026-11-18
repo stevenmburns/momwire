@@ -985,8 +985,9 @@ _REUSE_DECKS_1971 = {
     ),
 }
 
+# `\r?`: the MinGW-w64 builds' stderr is in text mode, so the line ends CRLF.
 _REUSE_LINE = re.compile(
-    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)$", re.M
+    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)\r?$", re.M
 )
 
 
