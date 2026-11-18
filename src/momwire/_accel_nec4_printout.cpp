@@ -411,9 +411,10 @@ void register_nec4_printout(py::module_ &m) {
             std::string out, why;
             bool ok;
             {
-                // `features` requested for this run only (momwire#1849)
-                const ni_eval::FeatureRequest asked(features);
                 py::gil_scoped_release nogil;
+                // `features` requested for this run only (momwire#1849),
+                // with the GIL released, as FeatureRequest requires
+                const ni_eval::FeatureRequest asked(features);
                 SinBelowSource below;
                 ok = mw::sinusoidal::printout(text, st, la, out, why);
             }

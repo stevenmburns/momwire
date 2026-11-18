@@ -116,8 +116,9 @@ void register_nec5_deck(py::module_ &m) {
             la.np.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[5]);
             la.np.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[6]);
             const std::string text = latin1;
-            const ni_eval::FeatureRequest asked(features);  // for this fill only (momwire#1849)
             py::gil_scoped_release nogil;
+            // for this fill only (momwire#1849), the GIL released first
+            const ni_eval::FeatureRequest asked(features);
             SinBelowSource below;
             return mw::sinusoidal::dump_fill(text, la, whole);
         },

@@ -12,6 +12,8 @@
 #include "_razor_solve_core.h"
 #include "_near_interface_eval.h"
 
+#include <optional>
+
 // The binding half of `_razor_solve_core.cpp`: `RazorSolveContext`, a Python
 // handle on one `mw::razor::SolveContext` (its buffer pool and counters).
 //
@@ -1153,8 +1155,14 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                 std::vector<std::vector<double>> samples, double chunk_mb,
                                 std::vector<std::string> features) {
     // `features` (registry names) requested for this call only: the solve
-    // reads `kcl_nullspace` from the requested set (momwire#1898)
-    const ni_eval::FeatureRequest requested(features);
+    // reads `kcl_nullspace` from the requested set (momwire#1898). The scope
+    // is taken with the GIL released (FeatureRequest's lock may wait on
+    // another thread's scope), then held, GIL and all, for the whole hook.
+    std::optional<ni_eval::FeatureRequest> requested;
+    {
+        py::gil_scoped_release nogil;
+        requested.emplace(features);
+    }
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1385,6 +1393,7 @@ py::tuple bspline_solve_ports(cdarr Z, darr B, darr kcl, std::vector<uintptr_t> 
     const mw::bspline::SymLapack &sym = scipy_sym_lapack();
     mw::bspline::PortSolve ps;
     {
+        py::gil_scoped_release nogil;  // FeatureRequest's rule; the solve needs no Python
         const ni_eval::FeatureRequest requested(features);
         ps = mw::bspline::solve_ports(std::move(z), n, b, n_p, a, n_c, lp, npl, &sym);
     }

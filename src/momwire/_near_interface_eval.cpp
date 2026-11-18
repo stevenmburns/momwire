@@ -1085,7 +1085,12 @@ FeatureFill::~FeatureFill() {
     g_crossing_taken = saved_taken_;
 }
 
-FeatureRequest::FeatureRequest(const std::vector<std::string> &names) : saved_(g_requested) {
+namespace {
+std::mutex g_request_scope_mu;  // FeatureRequest's: one scope at a time
+}  // namespace
+
+FeatureRequest::FeatureRequest(const std::vector<std::string> &names)
+    : lock_(g_request_scope_mu), saved_(g_requested) {
     for (const std::string &n : names)
         if (!request_feature(n, false)) {
             g_requested = saved_;
