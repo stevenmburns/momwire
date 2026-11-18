@@ -407,31 +407,59 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           toolset: '14.44'
-      # The shim's guards must not change what MSVC compiles: the six files'
-      # preprocessed text, against the main commit this branch last merged.
-      - name: MSVC's preprocessed sources are the base commit's
+      # The shim's guards must not change what MSVC compiles: the five files'
+      # preprocessed tokens (ep_digest.py: blank lines and spacing do not
+      # count, since a guard continued over two lines moves them), against
+      # MW_MSVC_BASE, the main commit this branch last merged. UPDATE THE PIN
+      # AT EVERY MERGE OF MAIN. The control then switches one guard on under
+      # MSVC and requires the digest to move, so this check cannot pass by
+      # measuring nothing.
+      - name: MSVC's preprocessed tokens are main's, and the check can fail
         shell: pwsh
+        env:
+          MW_MSVC_BASE: 60062a4e1a68939dde8969e72216df002cad4c7f
         run: |
-          git fetch -q --depth=1 origin 60062a4e1a68939dde8969e72216df002cad4c7f
+          git fetch -q --depth=1 origin $env:MW_MSVC_BASE
           if ($LASTEXITCODE) { exit 1 }
-          git worktree add -q --detach "$env:RUNNER_TEMP\base" 60062a4e1a68939dde8969e72216df002cad4c7f
+          git worktree add -q --detach "$env:RUNNER_TEMP\base" $env:MW_MSVC_BASE
           if ($LASTEXITCODE) { exit 1 }
           $here = "$PWD"; $fail = 0
-          foreach ($f in '_accel_sinusoidal_cplx.cpp', '_near_interface_point_core.cpp', '_accel_razor_cplx.cpp', '_near_interface_core.cpp', '_bspline_core.cpp') {
+          $digest = "$here\scripts\windows_static\ep_digest.py"
+          $o = "$env:RUNNER_TEMP\ep.txt"
+          $files = '_accel_sinusoidal_cplx.cpp', '_near_interface_point_core.cpp', '_accel_razor_cplx.cpp', '_near_interface_core.cpp', '_bspline_core.cpp'
+          foreach ($f in $files) {
             foreach ($arch in '/arch:AVX2', '/arch:SSE2') {
-              $h = @()
+              $raw = @(); $h = @()
               foreach ($root in $here, "$env:RUNNER_TEMP\base") {
                 Push-Location "$root\src\momwire"
-                $o = "$env:RUNNER_TEMP\ep.txt"
                 cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG $arch /I. /I..\..\extern\xsf\include $f > `"$o`" 2>nul"
                 if ($LASTEXITCODE) { "::error::cl /EP $f failed"; exit 1 }
-                $h += (Get-FileHash $o).Hash
+                $raw += (Get-FileHash $o).Hash
+                $h += (python $digest $o)
                 Pop-Location
               }
-              "$f $arch : $($h[0].Substring(0, 16)) $($h[1].Substring(0, 16))"
+              "$f $arch : tokens $($h[0].Substring(0, 16)) $($h[1].Substring(0, 16)); raw bytes $(if ($raw[0] -eq $raw[1]) { 'equal' } else { 'differ (layout only)' })"
               if ($h[0] -ne $h[1]) { "::error::$f preprocesses differently under MSVC"; $fail = 1 }
             }
           }
+          # The negative control: the shim's guard in _bspline_core.cpp, on
+          Push-Location "$here\src\momwire"
+          $src = [IO.File]::ReadAllText("$PWD\_bspline_core.cpp")
+          $guard = '(?m)^#if defined\(__GNUC__\) && !defined\(_MSC_VER\) && !defined\(__APPLE__\) && \\\r?\n\s+\(!defined\(_WIN32\).*$'
+          $on = [regex]::Replace($src, $guard, '#if 1')
+          if ($on -eq $src) { "::error::the control found no shim guard to switch on"; exit 1 }
+          cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG /arch:AVX2 /I. /I..\..\extern\xsf\include _bspline_core.cpp > `"$o`" 2>nul"
+          if ($LASTEXITCODE) { "::error::cl /EP failed on the control's reference"; exit 1 }
+          $ref = (python $digest $o)
+          [IO.File]::WriteAllText("$PWD\_ep_control.cpp", $on)
+          cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG /arch:AVX2 /I. /I..\..\extern\xsf\include _ep_control.cpp > `"$o`" 2>nul"
+          $rc = $LASTEXITCODE
+          Remove-Item _ep_control.cpp
+          if ($rc) { "::error::cl /EP failed on the control"; exit 1 }
+          $ctl = (python $digest $o)
+          Pop-Location
+          "control, one guard on: tokens $($ctl.Substring(0, 16)) against $($ref.Substring(0, 16))"
+          if ($ctl -eq $ref) { "::error::the control did not move the digest: this check measures nothing"; $fail = 1 }
           exit $fail
       - name: configure + build (avx2, sse2, avx2 /fp:precise; razor-2p and bs2)
         shell: pwsh
