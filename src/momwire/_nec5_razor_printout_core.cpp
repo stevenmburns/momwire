@@ -231,6 +231,11 @@ void set_frequency_workers(int n) { g_frequency_workers.store(n < 1 ? 1 : n); }
 int frequency_workers() { return g_frequency_workers.load(); }
 long long frequencies_presolved() { return g_presolved.load(); }
 
+// L5's take decision is one flag per fill for the whole process
+// (`ni_eval`, `g_crossing_taken`, set and restored by each fill's
+// `FeatureFill`): two fills at once would read each other's.
+bool frequency_sweep_allowed() { return !ni_eval::requested_features().crossing_table; }
+
 bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const std::vector<long long> &indices,
                                    const NumpyLinalg &np, std::vector<Solved> &out, std::vector<char> &ok) {
     const int asked = frequency_workers();
@@ -240,10 +245,7 @@ bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const 
         const razor::Front *f = razor_part(prepared[static_cast<std::size_t>(i)]).front.get();
         if (f == nullptr || f->buried == razor::Buried::none) return false;
     }
-    // L5's take decision is one flag per fill for the whole process
-    // (`ni_eval`, `g_crossing_taken`, set and restored by each fill's
-    // `FeatureFill`): two fills at once would read each other's.
-    if (ni_eval::requested_features().crossing_table) return false;
+    if (!frequency_sweep_allowed()) return false;
     // Every fill's `FeatureFill` saves the process's active features, sets
     // the requested ones and restores what it saved; with this one held on
     // the calling thread throughout, each of them saves, sets and restores

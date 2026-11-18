@@ -33,6 +33,9 @@ long long largest_solve(const std::string &latin1_text, bool open_end = false,
 void set_frequency_workers(int n);
 // The frequencies this copy has solved concurrently (`nec5::frequencies_presolved`).
 long long frequencies_presolved();
+// Whether this copy takes a sweep with the features it was asked for
+// (`nec5::frequency_sweep_allowed`).
+bool frequency_sweep_allowed();
 
 // The Sommerfeld grid's persistent store for this copy (serial or threaded):
 // `tag` is the executable's identity, its version and build
