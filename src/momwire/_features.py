@@ -550,6 +550,7 @@ FEATURES: dict[str, Feature] = {
                 "src/momwire/_kcl_nullspace.py",
                 "tests/test_kcl_nullspace_1898.py",
                 "tests/test_kcl_nullspace_cxx_1898.py",
+                "tests/test_kcl_nullspace_sector_1983.py",
             ),
             label="eliminate junction constraints",
             summary=(
