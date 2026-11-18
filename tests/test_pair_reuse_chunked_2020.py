@@ -9,7 +9,9 @@ plan: the hint's copies never ran and nothing said so. Now the two compose:
 - a congruent offset edge shares its source's table of distinct moments;
 - the answer stays inside the two features' declared drift;
 - the held blocks stay inside the fill's memory budget, and every way a hint
-  goes unread is named in `pair_reuse_declined`.
+  goes unread is named in `pair_reuse_declined`, on the routes that read no
+  plan (the buried fill, the batched sweep) as well: those keep the no-hint
+  fill's bits.
 """
 
 from __future__ import annotations
@@ -257,3 +259,95 @@ def test_no_hint_reads_no_plan_and_reports_nothing(monkeypatch):
     _fill(s)
     assert s.pair_reuse_served is None
     assert s.pair_reuse_declined is None
+
+
+SOMMERFELD = {
+    "ground_z": 0.0,
+    "ground_eps": (13.0, 0.005),
+    "ground_model": "sommerfeld",
+}
+THREE = [
+    [((i, 0), (i, 0)) for i in range(3)],
+    [((0, 0), (1, 0)), ((1, 0), (2, 0))],
+]
+
+
+def _three(reuse, z=10.0, n=13, **kw):
+    """Three identical parallel wires at height `z`."""
+    wires = [np.array([[3.0 * i, -4.0, z], [3.0 * i, 4.0, z]]) for i in range(3)]
+    return BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[n] for _ in wires],
+        feed_wire_index=0,
+        wavelength=LAM,
+        wire_radius=0.002,
+        pair_reuse=reuse,
+        **kw,
+    )
+
+
+@pytest.fixture
+def plan_reads(monkeypatch):
+    """How many times a fill asked for the hint's plan."""
+    reads = []
+    real = BSplineSolver._pair_reuse_plan
+
+    def spy(self, geom):
+        reads.append(1)
+        return real(self, geom)
+
+    monkeypatch.setattr(BSplineSolver, "_pair_reuse_plan", spy)
+    return reads
+
+
+def _sweep_k():
+    return 2 * np.pi / LAM * np.array([1.0, 1.02, 1.04])
+
+
+def test_the_buried_fill_names_the_hint_it_does_not_read(plan_reads):
+    s = _three(THREE, z=-0.5, **SOMMERFELD)
+    Z = _fill(s)
+    assert s.pair_reuse_declined == "the buried fill does not read the hint"
+    assert s.pair_reuse_served is None
+    assert not plan_reads
+    # `True` is the same switches with no hint: the fill's own bits.
+    assert np.array_equal(Z, _fill(_three(True, z=-0.5, **SOMMERFELD)))
+
+
+def test_the_buried_fill_says_nothing_without_a_hint():
+    s = _three(True, z=-0.5, **SOMMERFELD)
+    _fill(s)
+    assert s.pair_reuse_declined is None
+
+
+def test_the_batched_sweep_names_the_hint_it_does_not_read(plan_reads):
+    s = _three(THREE)
+    assert s._swept_batched_available()
+    z = s.compute_impedance_swept(_sweep_k())
+    assert s.pair_reuse_declined == "the batched sweep does not read the hint"
+    assert s.pair_reuse_served is None
+    assert not plan_reads
+    assert np.array_equal(z, _three(True).compute_impedance_swept(_sweep_k()))
+
+
+def test_the_batched_port_sweep_names_it_too():
+    s = _three(THREE)
+    y = [np.asarray(p.y) for p in s.compute_port_solution_swept(_sweep_k())]
+    assert s.pair_reuse_declined == "the batched sweep does not read the hint"
+    ref = _three(True).compute_port_solution_swept(_sweep_k())
+    assert all(np.array_equal(a, np.asarray(b.y)) for a, b in zip(y, ref, strict=True))
+
+
+def test_the_batched_sweep_says_nothing_without_a_hint():
+    s = _three(True)
+    s.compute_impedance_swept(_sweep_k())
+    assert s.pair_reuse_declined is None
+
+
+def test_a_sweep_frequency_by_frequency_still_reads_the_hint():
+    """Over a finite ground the sweep is per-k fills, which do serve it."""
+    s = _three(THREE, **SOMMERFELD)
+    assert not s._swept_batched_available()
+    s.compute_impedance_swept(_sweep_k())
+    assert s.pair_reuse_declined is None
+    assert s.pair_reuse_served["copied_blocks"] == 2
