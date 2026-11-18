@@ -6973,6 +6973,16 @@ class BSplineSolver(
             if not reuse:
                 served["computed_pairs"] = served["pairs"] - served["offset_pairs"]
             self.pair_reuse_served = served
+        elif (
+            restrict is None
+            and self.pair_reuse_declined is None
+            and self._pair_reuse_plan(geom)
+        ):
+            # A plan of own blocks alone, on edges the offset route does not
+            # serve: this fill copies neither blocks nor tables from it.
+            self.pair_reuse_declined = (
+                "the chunked fill copies nothing this hint offers"
+            )
         return Z
 
     def _decline_unread_hint(self, reason):
