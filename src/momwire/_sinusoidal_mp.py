@@ -88,8 +88,15 @@ PARALLEL_N_XI = _NEAR.parallel_n_xi
 # Pairs per batch of the parallel-pair reduction (transient ~ 16 KB a pair).
 PARALLEL_CHUNK = 2048
 # Nodes per panel of the graded rule on a touching non-parallel pair, and the
-# product order on a near non-parallel pair that does not touch.
+# product order on a near non-parallel pair that does not touch. A touching
+# pair whose WEDGE (the angle between the two segments at their shared node)
+# is under GRADED_ACUTE_WEDGE_DEG takes GRADED_ACUTE_N_PER_PANEL instead: the
+# kernel is nearly singular along the whole diagonal of an acute wedge, not
+# only at the node the panels grade toward. A segment touching its own image
+# at an interface crossing is such a pair (wedge = twice its elevation).
 GRADED_N_PER_PANEL = _NEAR.graded_n_per_panel
+GRADED_ACUTE_N_PER_PANEL = _NEAR.graded_acute_n_per_panel
+GRADED_ACUTE_WEDGE_DEG = _NEAR.graded_acute_wedge_deg
 NEAR_N_QP = _NEAR.near_n_qp
 
 
@@ -489,6 +496,19 @@ def graded_endpoint_rule01(eps, n_per_panel, end):
     return x, w
 
 
+def touching_wedge_deg(sl_i, sr_i, sl_j, sr_j, end_i, end_j):
+    """The wedge of each touching pair, in degrees: the angle at the shared
+    node between the two segments, each pointing away from it (0 folds one
+    back onto the other, 180 continues it straight). `end_*` is
+    `classify_pairs`' shared end, 0 for the start (`sl`) and 1 for the end."""
+    e_i = np.asarray(end_i)[:, None] == 1
+    e_j = np.asarray(end_j)[:, None] == 1
+    d_i = np.where(e_i, sl_i - sr_i, sr_i - sl_i)
+    d_j = np.where(e_j, sl_j - sr_j, sr_j - sl_j)
+    cos = np.einsum("ij,ij->i", d_i, d_j) / (norm3(d_i) * norm3(d_j))
+    return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+
+
 def near_pair_moments(
     c_i,
     t_i,
@@ -560,6 +580,19 @@ def near_pair_moments(
     rest_idx = np.nonzero(rest)[0]
     eps_i = np.sqrt(a2_row[ii[rest_idx]]) / h_i[ii[rest_idx]]
     eps_j = np.sqrt(a2_row[ii[rest_idx]]) / h_j[jj[rest_idx]]
+    # The graded order per touching pair, by its wedge (read at call time).
+    n_graded = np.full(rest_idx.shape[0], GRADED_N_PER_PANEL, dtype=np.int64)
+    tr = touching[rest_idx]
+    if tr.any():
+        r = rest_idx[tr]
+        wedge = touching_wedge_deg(
+            sl_i[ii[r]], sr_i[ii[r]], sl_j[jj[r]], sr_j[jj[r]], end_i[r], end_j[r]
+        )
+        n_graded[tr] = np.where(
+            wedge < GRADED_ACUTE_WEDGE_DEG,
+            GRADED_ACUTE_N_PER_PANEL,
+            GRADED_N_PER_PANEL,
+        )
     keys = {}
     for n, idx in enumerate(rest_idx):
         key = (
@@ -568,6 +601,7 @@ def near_pair_moments(
                 int(end_j[idx]),
                 round(float(eps_i[n]), 12),
                 round(float(eps_j[n]), 12),
+                int(n_graded[n]),
             )
             if touching[idx]
             else None
@@ -578,8 +612,8 @@ def near_pair_moments(
         if key is None:
             ti, wi = tj, wj = t01, w01
         else:
-            ti, wi = graded_endpoint_rule01(key[2], GRADED_N_PER_PANEL, key[0])
-            tj, wj = graded_endpoint_rule01(key[3], GRADED_N_PER_PANEL, key[1])
+            ti, wi = graded_endpoint_rule01(key[2], key[4], key[0])
+            tj, wj = graded_endpoint_rule01(key[3], key[4], key[1])
         gi, gj = ii[group], jj[group]
         ek_g = None
         if ek is not None:

@@ -56,6 +56,10 @@ class NearPairRules:
         node) on a TOUCHING non-parallel pair, on both segments.
     near_n_qp : the product order on a near non-parallel pair that does not
         touch.
+    graded_acute_wedge_deg, graded_acute_n_per_panel : a touching pair whose
+        wedge (the angle between its two segments at the shared node, 180 for
+        a straight continuation) is under the first takes the second in place
+        of `graded_n_per_panel` (`_sinusoidal_mp.touching_wedge_deg`).
     parallel_n_t, parallel_n_xi : the parallel pair's one-dimensional
         reduction, nodes per piece of the sinh-substituted delta integral
         and of the inner shape correlation.
@@ -66,6 +70,8 @@ class NearPairRules:
     near_n_qp: int
     parallel_n_t: int
     parallel_n_xi: int
+    graded_acute_wedge_deg: float
+    graded_acute_n_per_panel: int
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,8 @@ SINUSOIDAL_GALERKIN = BuriedQuadrature(
         near_n_qp=32,
         parallel_n_t=24,
         parallel_n_xi=8,
+        graded_acute_wedge_deg=0.0,
+        graded_acute_n_per_panel=24,
     ),
     reason=(
         "Not bspline's #1752 values, and not because SG converged at them. "
