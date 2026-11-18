@@ -6874,7 +6874,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `SMALL_DECK_SEGS_GROUND` (a finite ground) declines, the census
         costing more than its fill saves; `pair_reuse="verify"` ignores it.
         Those two are checked after the rest, so a deck the reuse could not
-        serve anyway says why.
+        serve anyway says why. A deck whose plans and census would pass
+        `_sin_pair_reuse.PLAN_BUDGET_BYTES` declines too (momwire#2019), under
+        "verify" as well: that bound is the process's memory, not a saving.
         """
         if not self._pair_reuse_on:
             return None
@@ -7020,7 +7022,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(t, dtype=np.float64),
             )
 
-        def plan_for(block):
+        def plan_for(block, budget=None):
             if block in blocks:
                 return blocks[block]
             src_c, src_t = sources(block)
@@ -7040,6 +7042,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 gz if block == "reflected" else None,
                 None if obs_rows is None else obs_rows.tobytes(),
                 _pr.CANONICAL,
+                budget,
             )
             held = self._sin_reuse_plans.get(block)
             if held is not None and held[0] == key:
@@ -7065,6 +7068,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             census_rows,
                             src_rev=g_src_rev,
                             obs_rev=g_obs_rev,
+                            budget=budget,
                         )
 
                 else:
@@ -7081,13 +7085,30 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             ob_type,
                             census_rows,
                             src_rev=src_rev,
+                            budget=budget,
                         )
 
                 plan = _pr.shared_plan((*key, census_rows), build)
                 self._sin_reuse_plans[block] = (key, plan)
+            if plan is _pr.OVER_BUDGET:
+                return plan, src_c, src_t
             self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes, plan.n_near)
             blocks[block] = (plan, src_c, src_t)
             return blocks[block]
+
+        # momwire#2019: every block's plan before the fill, each within what
+        # the blocks before it left of the budget, so that a deck past it
+        # fills as with reuse off from the first band.
+        budget_left = _pr.PLAN_BUDGET_BYTES
+        for block in ("direct", ground_block):
+            if block is None:
+                continue
+            plan = plan_for(block, budget_left)[0]
+            if plan is _pr.OVER_BUDGET:
+                self.pair_reuse_declined = _pr.over_budget_reason()
+                self.pair_reuse_census = {}
+                return None
+            budget_left -= _pr.fill_nbytes(plan)
 
         def free_rows(block):
             """The shipped kernel on observer rows m0:m1 against source
