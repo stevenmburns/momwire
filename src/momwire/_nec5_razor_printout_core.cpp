@@ -15,6 +15,7 @@
 
 #include "_near_interface_eval.h"  // FeatureFill, requested_features (momwire#1860)
 #include "_razor_buried_core.h"     // prime_below_table
+#include "_somm_below_fill_core.h"  // set_node_threads
 
 #include <algorithm>
 #include <atomic>
@@ -242,13 +243,22 @@ bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const 
     // The below table's choices, in the serial run's order, before any fill.
     // A frequency whose fill would stop before its first entry stops the
     // sweep there: it and the later ones are solved in turn by the caller.
+    // This pass is serial in its choices but not in its contours: the grids
+    // it builds (the anchors, eagerly) fill their nodes on every worker.
     std::size_t ready = indices.size();
-    for (std::size_t q = 0; q < indices.size(); q++) {
-        try {
-            razor::prime_below_table(*razor_part(prepared[static_cast<std::size_t>(indices[q])]).front);
-        } catch (...) {
-            ready = q;
-            break;
+    {
+        struct NodeThreads {
+            int prev;
+            explicit NodeThreads(int n) : prev(somm_below::set_node_threads(n)) {}
+            ~NodeThreads() { somm_below::set_node_threads(prev); }
+        } node_threads(std::min<int>(asked, static_cast<int>(std::thread::hardware_concurrency())));
+        for (std::size_t q = 0; q < indices.size(); q++) {
+            try {
+                razor::prime_below_table(*razor_part(prepared[static_cast<std::size_t>(indices[q])]).front);
+            } catch (...) {
+                ready = q;
+                break;
+            }
         }
     }
     if (ready == 0) return false;

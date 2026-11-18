@@ -65,6 +65,12 @@ std::shared_ptr<Source> fill_source(const std::string &anchors = "");
 // MOMWIRE_BELOW_ANCHORS read as `anchor_mode()` reads it ("auto", "off", "on").
 std::string anchor_mode_from_env();
 
+// The node loop's threads in the copy built without OpenMP (the executable's
+// serial one): `n` std::threads per contour batch from now on, 1 (the
+// default) in turn; returns the previous count. A node's value does not
+// depend on the split. A no-op returning 1 where OpenMP runs the loop.
+int set_node_threads(int n);
+
 // The executable's store (off until configured; the extension and the
 // drivers never configure it): exact grids and anchors in the masters'
 // directory (`somm_core::configure_disk_cache`), and the seen list.
