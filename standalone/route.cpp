@@ -47,10 +47,14 @@ void configure_grid_cache(const std::string &tag) {
     somm_below::set_source(somm_below::fill_source());
 }
 
+void set_frequency_workers(int n) { nec5::set_frequency_workers(n); }
+long long frequencies_presolved() { return nec5::frequencies_presolved(); }
+
 long long largest_solve(const std::string &latin1_text, bool open_end, long long *crossing_pairs,
-                        long long *below_pairs) {
+                        long long *below_pairs, long long *buried_runs) {
     if (crossing_pairs) *crossing_pairs = 0;
     if (below_pairs) *below_pairs = 0;
+    if (buried_runs) *buried_runs = 0;
     const nec5::SeamResult r = nec5::razor_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
     long long n = 0;
@@ -58,6 +62,7 @@ long long largest_solve(const std::string &latin1_text, bool open_end, long long
         const razor::Front *f = nec5::razor_part(p).front.get();
         if (!f) continue;
         n = std::max<long long>(n, f->n_basis);
+        if (buried_runs && f->buried != razor::Buried::none) ++*buried_runs;
         // The crossing block's size (`crossing_blocks`, which a detached or
         // a crossing buried deck runs): above segments x below segments.
         if (crossing_pairs && (f->buried == razor::Buried::detached || f->buried == razor::Buried::crossing)) {

@@ -3740,6 +3740,48 @@ PrintoutResult printout(const std::string &text, const std::string &basis,
             fill_s[i] = factor_s[i] = 0.0;
             return data;
         };
+        // A frequency-parallel sweep (`PrintoutEngine::presolve`): every
+        // stepping run's solve the loop below reaches, in its order, up to
+        // the first run that stops it, handed to the engine at once. What
+        // it solved the loop then reads (`have`); what it did not, the loop
+        // solves in turn, as before.
+        {
+            std::vector<long long> sweep;
+            std::vector<bool> listed(r.prepared.size(), false);
+            bool stop = false;
+            for (std::size_t k = 0; k < r.structures.size() && !stop; k++) {
+                const StructureOutcome &so = r.structures[k];
+                const Answer &a = s.answers[k];
+                const bool stepping = a.kind == Answer::stepped || a.kind == Answer::sequence;
+                for (std::size_t j = 0; j < so.runs.size() && !stop; j++) {
+                    const RunOutcome &o = so.runs[j];
+                    if (o.kind != RunOutcome::prepared && o.kind != RunOutcome::shared) {
+                        stop = true;
+                        break;
+                    }
+                    const std::size_t i = static_cast<std::size_t>(o.prepared_index);
+                    if (!stepping) continue;
+                    if (!listed[i]) sweep.push_back(o.prepared_index);
+                    listed[i] = true;
+                }
+            }
+            if (sweep.size() >= 2) {
+                std::vector<Solved> got(sweep.size());
+                std::vector<char> ok(sweep.size(), 0);
+                bool ran;
+                {
+                    const mw_times::Scope timed(mw_times::fill);
+                    ran = engine.presolve(r.prepared, sweep, np, got, ok);
+                }
+                if (ran)
+                    for (std::size_t q = 0; q < sweep.size(); q++) {
+                        if (!ok[q]) continue;
+                        const std::size_t i = static_cast<std::size_t>(sweep[q]);
+                        solved[i] = std::move(got[q]);
+                        have[i] = true;
+                    }
+            }
+        }
         const std::size_t n_structures = s.chained ? s.structures.size() : 1;
         std::string printed;
         bool stopped = false;

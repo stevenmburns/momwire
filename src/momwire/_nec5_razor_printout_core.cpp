@@ -13,13 +13,22 @@
 #pragma fp_contract(off)
 #endif
 
+#include "_near_interface_eval.h"  // FeatureFill, requested_features (momwire#1860)
+#include "_razor_buried_core.h"     // prime_below_table
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <stdexcept>
+#include <thread>
 #include <utility>
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace mw {
 namespace nec5 {
@@ -202,6 +211,75 @@ Solved RazorPrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     return s;
 }
 
+
+namespace {
+std::atomic<int> g_frequency_workers{1};
+std::atomic<long long> g_presolved{0};
+}  // namespace
+
+void set_frequency_workers(int n) { g_frequency_workers.store(n < 1 ? 1 : n); }
+int frequency_workers() { return g_frequency_workers.load(); }
+long long frequencies_presolved() { return g_presolved.load(); }
+
+bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const std::vector<long long> &indices,
+                                   const NumpyLinalg &np, std::vector<Solved> &out, std::vector<char> &ok) {
+    const int asked = frequency_workers();
+    if (asked < 2 || indices.size() < 2) return false;
+    // A buried sweep only: the fills this has been gated on.
+    for (long long i : indices) {
+        const razor::Front *f = razor_part(prepared[static_cast<std::size_t>(i)]).front.get();
+        if (f == nullptr || f->buried == razor::Buried::none) return false;
+    }
+    // L5's take decision is one flag per fill for the whole process
+    // (`ni_eval`, `g_crossing_taken`, set and restored by each fill's
+    // `FeatureFill`): two fills at once would read each other's.
+    if (ni_eval::requested_features().crossing_table) return false;
+    // Every fill's `FeatureFill` saves the process's active features, sets
+    // the requested ones and restores what it saved; with this one held on
+    // the calling thread throughout, each of them saves, sets and restores
+    // the same value, so no fill sees another's restore.
+    const ni_eval::FeatureFill features_on;
+    // The below table's choices, in the serial run's order, before any fill.
+    // A frequency whose fill would stop before its first entry stops the
+    // sweep there: it and the later ones are solved in turn by the caller.
+    std::size_t ready = indices.size();
+    for (std::size_t q = 0; q < indices.size(); q++) {
+        try {
+            razor::prime_below_table(*razor_part(prepared[static_cast<std::size_t>(indices[q])]).front);
+        } catch (...) {
+            ready = q;
+            break;
+        }
+    }
+    if (ready == 0) return false;
+    const std::size_t workers = std::min<std::size_t>(static_cast<std::size_t>(asked), ready);
+    std::atomic<std::size_t> next{0};
+    const razor::Lapack &lapack = lapack_;
+    auto work = [&]() {
+#if defined(_OPENMP)
+        omp_set_num_threads(1);  // this thread's fills: no team inside a frequency
+#endif
+        razor::SolveContext ctx;
+        RazorPrintoutEngine engine(ctx, lapack);
+        for (;;) {
+            const std::size_t q = next.fetch_add(1);
+            if (q >= ready) break;
+            try {
+                out[q] = engine.solve(prepared[static_cast<std::size_t>(indices[q])], np);
+                ok[q] = 1;
+                g_presolved.fetch_add(1);
+            } catch (...) {
+                ok[q] = 0;  // solved again in turn, where it raises as the serial run does
+            }
+        }
+    };
+    std::vector<std::thread> team;
+    team.reserve(workers - 1);
+    for (std::size_t w = 1; w < workers; w++) team.emplace_back(work);
+    work();
+    for (std::thread &t : team) t.join();
+    return true;
+}
 
 // The run is finished: its front (and the fill's tables) released.
 void RazorPrintoutEngine::release(Prepared &p) { razor_part(p).front.reset(); }
