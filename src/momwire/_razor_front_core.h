@@ -340,6 +340,14 @@ void fill_front(const Front &front, SolveContext &ctx, uintptr_t cancel_flag);
 int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
                 uintptr_t cancel_flag);
 
+// `solve_ports`' second half for a buried Front whose matrix `z` (n_basis
+// squared, column-major, as `fill_buried` writes it) was filled elsewhere:
+// X set to the port columns, `z` moved into ctx and factored there, X
+// solved in place; returns what `solve_ports` returns. A frequency-parallel
+// sweep fills on its workers and solves here, on the calling thread at the
+// calling thread's BLAS count.
+int solve_filled(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x, std::vector<cd> &&z);
+
 // `_wire_spec.format_numbers` / `format_shape`: the refusals' portable
 // spellings of numbers (`%.12g`, comma-separated, in brackets) and shapes.
 std::string format_numbers(const std::vector<double> &values);

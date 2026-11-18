@@ -21,9 +21,11 @@
 #include <atomic>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -193,6 +195,17 @@ double wire_loss_power(const razor::Front &fr, const std::vector<cd> &coeffs, do
 
 }  // namespace
 
+namespace {
+// `cols.T @ X` into `s.y`: cols.T is the cast copy in its own (Fortran) order
+void port_admittance(const razor::Front &front, const NumpyLinalg &np, Solved &s) {
+    std::vector<cd> cols(front.cols.size());
+    for (std::size_t k = 0; k < cols.size(); k++) cols[k] = cd(front.cols[k], 0.0);
+    s.y = CMat(s.n_ports, s.n_ports);
+    np_matmul(np, Op{cols.data(), s.n_ports, s.n_basis, 1, s.n_ports},
+              Op{s.x.data(), s.n_basis, s.n_ports, 1, s.n_basis}, s.y.v.data(), s.n_ports, 1);
+}
+}  // namespace
+
 Solved RazorPrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     razor::SolveContext &ctx = ctx_;
     const razor::Lapack &lapack = lapack_;
@@ -212,12 +225,7 @@ Solved RazorPrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
         throw PrintoutRaise{ni ? "NotImplementedError" : "ValueError", e.what()};
     }
     if (info != 0) throw PrintoutRaise{"LinAlgError", "singular matrix"};
-    // `cols.T @ X`: cols.T is the cast copy in its own (Fortran) order
-    std::vector<cd> cols(front.cols.size());
-    for (std::size_t k = 0; k < cols.size(); k++) cols[k] = cd(front.cols[k], 0.0);
-    s.y = CMat(s.n_ports, s.n_ports);
-    np_matmul(np, Op{cols.data(), s.n_ports, s.n_basis, 1, s.n_ports},
-              Op{s.x.data(), s.n_basis, s.n_ports, 1, s.n_basis}, s.y.v.data(), s.n_ports, 1);
+    port_admittance(front, np, s);
     return s;
 }
 
@@ -231,10 +239,19 @@ void set_frequency_workers(int n) { g_frequency_workers.store(n < 1 ? 1 : n); }
 int frequency_workers() { return g_frequency_workers.load(); }
 long long frequencies_presolved() { return g_presolved.load(); }
 
-// L5's take decision is one flag per fill for the whole process
-// (`ni_eval`, `g_crossing_taken`, set and restored by each fill's
-// `FeatureFill`): two fills at once would read each other's.
-bool frequency_sweep_allowed() { return !ni_eval::requested_features().crossing_table; }
+// The copy built without OpenMP (the only one the executable sweeps on)
+// keeps each fill's active features and L5's take flag per thread
+// (`_near_interface_eval.cpp`), so every feature sweeps there. The OpenMP
+// copy shares them across the process -- a fill's team reads the flag its
+// master set -- so two fills at once would read each other's L5 decisions:
+// it declines a sweep with crossing_table asked for.
+bool frequency_sweep_allowed() {
+#if defined(_OPENMP)
+    return !ni_eval::requested_features().crossing_table;
+#else
+    return true;
+#endif
+}
 
 bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const std::vector<long long> &indices,
                                    const NumpyLinalg &np, std::vector<Solved> &out, std::vector<char> &ok) {
@@ -246,10 +263,10 @@ bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const 
         if (f == nullptr || f->buried == razor::Buried::none) return false;
     }
     if (!frequency_sweep_allowed()) return false;
-    // Every fill's `FeatureFill` saves the process's active features, sets
-    // the requested ones and restores what it saved; with this one held on
-    // the calling thread throughout, each of them saves, sets and restores
-    // the same value, so no fill sees another's restore.
+    // The calling thread's features on for the first pass below (each
+    // worker's fill holds its own `FeatureFill`; in this copy the active
+    // features and the crossing take flag are per thread, see
+    // `_near_interface_eval.cpp`).
     const ni_eval::FeatureFill features_on;
     // The below table's choices, in the serial run's order, before any fill.
     // A frequency whose fill would stop before its first entry stops the
@@ -274,30 +291,82 @@ bool RazorPrintoutEngine::presolve(const std::vector<Prepared> &prepared, const 
     }
     if (ready == 0) return false;
     const std::size_t workers = std::min<std::size_t>(static_cast<std::size_t>(asked), ready);
-    std::atomic<std::size_t> next{0};
-    const razor::Lapack &lapack = lapack_;
+    // The workers fill (no BLAS call in a buried fill); this thread factors
+    // and solves each frequency in order as its matrix arrives, at this
+    // thread's BLAS count -- the executable's, the same as the serial run's,
+    // so the LU rounds as it does there. A worker takes frequency q only
+    // while q < factored + workers: at most `workers` filled or filling
+    // matrices exist, plus the one being factored, whatever the factor's
+    // pace (the executable's policy sizes `workers` by that bound).
+    std::mutex mu;
+    std::condition_variable cv;
+    std::size_t next = 0, factored = 0;
+    std::vector<std::vector<cd>> z(ready);
+    std::vector<char> state(ready, 0);  // 0 pending, 1 filled, 2 failed
     auto work = [&]() {
 #if defined(_OPENMP)
         omp_set_num_threads(1);  // this thread's fills: no team inside a frequency
 #endif
-        razor::SolveContext ctx;
-        RazorPrintoutEngine engine(ctx, lapack);
         for (;;) {
-            const std::size_t q = next.fetch_add(1);
-            if (q >= ready) break;
-            try {
-                out[q] = engine.solve(prepared[static_cast<std::size_t>(indices[q])], np);
-                ok[q] = 1;
-                g_presolved.fetch_add(1);
-            } catch (...) {
-                ok[q] = 0;  // solved again in turn, where it raises as the serial run does
+            std::size_t q;
+            {
+                std::unique_lock<std::mutex> lock(mu);
+                cv.wait(lock, [&] { return next >= ready || next < factored + workers; });
+                if (next >= ready) return;
+                q = next++;
             }
+            char st = 2;
+            try {
+                const razor::Front &front = *razor_part(prepared[static_cast<std::size_t>(indices[q])]).front;
+                if (razor::fill_buried(front, z[q], nullptr, 0).empty()) st = 1;
+            } catch (...) {
+                // solved again in turn, where it raises as the serial run does
+            }
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                state[q] = st;
+                if (st != 1) std::vector<cd>().swap(z[q]);
+            }
+            cv.notify_all();
         }
     };
     std::vector<std::thread> team;
-    team.reserve(workers - 1);
-    for (std::size_t w = 1; w < workers; w++) team.emplace_back(work);
-    work();
+    team.reserve(workers);
+    for (std::size_t w = 0; w < workers; w++) team.emplace_back(work);
+    for (std::size_t q = 0; q < ready; q++) {
+        std::vector<cd> zq;
+        char st;
+        {
+            std::unique_lock<std::mutex> lock(mu);
+            cv.wait(lock, [&] { return state[q] != 0; });
+            st = state[q];
+            zq.swap(z[q]);
+        }
+        if (st == 1) {
+            try {
+                const razor::Front &front = *razor_part(prepared[static_cast<std::size_t>(indices[q])]).front;
+                Solved s;
+                s.n_basis = front.n_basis;
+                s.n_ports = front.n_ports;
+                s.x.assign(static_cast<std::size_t>(s.n_basis * s.n_ports), cd(0.0, 0.0));
+                // A singular matrix is left to the caller's solve in turn,
+                // which raises it as the serial run does.
+                if (razor::solve_filled(front, ctx_, lapack_, s.x.data(), std::move(zq)) == 0) {
+                    port_admittance(front, np, s);
+                    out[q] = std::move(s);
+                    ok[q] = 1;
+                    g_presolved.fetch_add(1);
+                }
+            } catch (...) {
+                ok[q] = 0;
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            factored = q + 1;
+        }
+        cv.notify_all();
+    }
     for (std::thread &t : team) t.join();
     return true;
 }

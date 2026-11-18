@@ -60,21 +60,24 @@ class RazorPrintoutEngine final : public PrintoutEngine {
 };
 
 // A buried stepping FR's frequencies solved concurrently (`presolve`): up to
-// `n` at once, each fill and factor on its own thread (no OpenMP team inside
-// it, the caller's BLAS at one thread). 1 (the default) solves them in turn.
-// The bytes do not depend on it: the below table's choices are made first,
-// in the serial run's order (`razor::prime_below_table`), every cache a
-// fill reads holds values that do not depend on who filled them, and the
-// printout is written in frequency order afterwards. Not taken (in turn, as
-// at 1) with `crossing_table` asked for: its take decision is one
-// process-wide flag per fill (`ni_eval`'s `g_crossing_taken`), which two
-// concurrent fills would share.
+// `n` fills at once, each on its own thread (no OpenMP team inside it, and
+// no BLAS call), while the calling thread factors and solves them in
+// frequency order at its own BLAS count. At most `n` filled or filling
+// matrices exist at once, plus the one being factored. 1 (the default)
+// solves them in turn. The bytes do not depend on it: the below table's
+// choices are made first, in the serial run's order
+// (`razor::prime_below_table`), every cache a fill reads holds values that
+// do not depend on who filled them, each fill's feature state is its own
+// thread's (`ni_eval`, in the copy built without OpenMP), the LU runs where
+// and as the serial run's does, and the printout is written in frequency
+// order afterwards.
 void set_frequency_workers(int n);
 int frequency_workers();
-// Whether `presolve` takes a sweep with the features this process asked for
-// (false with `crossing_table`, above): the executable's policy asks before
-// it gives the sweep the serial copy, so a declined sweep keeps the fill's
-// own threads.
+// Whether `presolve` takes a sweep with the features this process asked
+// for: always in the copy built without OpenMP; in the OpenMP copy, whose
+// fills share one process-wide feature state, not with `crossing_table`.
+// The executable's policy asks before it gives the sweep the serial copy,
+// so a declined sweep keeps the fill's own threads.
 bool frequency_sweep_allowed();
 // The frequencies `presolve` has solved concurrently, a process total (the
 // executable's MW_EXE_TIMES gate line: proof the sweep ran).

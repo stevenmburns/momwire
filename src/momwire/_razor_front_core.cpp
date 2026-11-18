@@ -1882,6 +1882,16 @@ void fill_front(const Front &front, SolveContext &ctx, uintptr_t cancel_flag) {
         ctx.fill(front.solve_inputs(cancel_flag));
 }
 
+int solve_filled(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x, std::vector<cd> &&z) {
+    const int64_t n = front.n_basis, m = front.n_ports;
+    for (int64_t j = 0; j < m; j++)
+        for (int64_t i = 0; i < n; i++) x[j * n + i] = cd(front.cols[i * m + j], 0.0);
+    // Moved, not copied (momwire#1541): a copy held the filled matrix
+    // twice through the factorisation.
+    ctx.take_z(std::move(z), n);
+    return ctx.lu_solve(lp, x, static_cast<int>(m));
+}
+
 int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
                 uintptr_t cancel_flag) {
     const int64_t n = front.n_basis, m = front.n_ports;
@@ -1893,10 +1903,7 @@ int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
         std::vector<cd> z;
         const std::string why = fill_buried(front, z, nullptr, cancel_flag);
         if (!why.empty()) throw std::runtime_error("the buried fill stopped at " + why);
-        // Moved, not copied (momwire#1541): a copy held the filled matrix
-        // twice through the factorisation.
-        ctx.take_z(std::move(z), n);
-        return ctx.lu_solve(lp, x, static_cast<int>(m));
+        return solve_filled(front, ctx, lp, x, std::move(z));
     }
     fill_front(front, ctx, cancel_flag);
     if (!front.load_vals.empty())
