@@ -276,6 +276,22 @@ FEATURES: dict[str, Feature] = {
         # The transmitted (below->above) grid blended from frequency anchors
         # on a lattice fixed in metres (momwire#1847), so a sweep shares its
         # tables: the shipped evaluator, interpolated in ln f.
+        #
+        # `drift` is the survey's worst with 2.3x margin (momwire#2022): flag
+        # on against off, |dZin|/|Zin|, 323 served sweep points on bs2,
+        # sinusoidal and sinusoidal Galerkin, each counted as served.
+        #
+        #   wires 1-50 cm either side of the interface   1.3e-8  (sinusoidal)
+        #     the same, bs2                              4.7e-9
+        #   10 % lattice-phase sweep, m6_close's shape   1.2e-9
+        #   band sweeps to +- 25 %                       4.1e-9
+        #   repo fixtures (transmitted_mixed)            8.7e-10
+        #   dipole over a buried wire                    8.6e-10
+        #   long reach, soils 2/0.0001 to 15/0.1         1.2e-10
+        #   vertical over a screen, two depths           2.8e-11
+        #
+        # Crossing decks never reach this grid. A long deck over a very
+        # shallow source declines, and the exact grid serves it.
         Feature(
             name="transmitted_anchors",
             reach=1,
@@ -294,7 +310,7 @@ FEATURES: dict[str, Feature] = {
                 "the ground once for a band and blend it at each frequency, instead"
                 " of rebuilding it at every point."
             ),
-            drift=1e-8,
+            drift=3e-8,
             offer=True,
         ),
         # The point-matched sinusoidal fill's complex-k field tensor on the
