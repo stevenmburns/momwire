@@ -152,7 +152,8 @@ using cd = std::complex<double>;
 // macOS (and arm64 has no AVX2 simdlen(4) form either), so the sincos calls
 // stay scalar/NEON-autovectorized there too. MinGW-w64 gcc (_WIN32, the
 // static Windows executables) likewise: Windows has no libmvec.
-#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && !defined(_WIN32)
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && \
+    (!defined(_WIN32) || (defined(MW_MINGW_VMATH_SHIM) && defined(__AVX2__)))
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double cos(double);
 

@@ -642,6 +642,31 @@ if(MINGW)
     target_sources(${MW_EXE} PRIVATE mingw_libm_shim.c)
     target_compile_definitions(${MW_EXE} PRIVATE MW_LIBM_SHIM_DLL="${MW_EXE_LIBM_SHIM}.dll")
   endif()
+  # MW_EXE_VMATH_SHIM (optimisation 4, WINDOWS-SINGLE-FILE.md): the avx2 cores'
+  # `omp declare simd` blocks switched on, their vector sin / cos / exp calls
+  # answered by mingw_vmath_shim.cpp. Off by default: an unset build compiles
+  # what it compiled before. MW_EXE_VMATH_SHIM_COUNT adds the call counters
+  # (the proof that it ran; never timed).
+  option(MW_EXE_VMATH_SHIM "MinGW avx2: vector sin/cos/exp over mw_vmath" OFF)
+  option(MW_EXE_VMATH_SHIM_COUNT "MinGW: count the shim's calls, report at exit" OFF)
+  if(MW_EXE_VMATH_SHIM)
+    if(MW_EXE_VARIANT STREQUAL "sse2")
+      message(FATAL_ERROR "MW_EXE_VMATH_SHIM needs the avx2 cores (MW_EXE_VARIANT=avx2 or fat)")
+    endif()
+    add_library(mw_vmath_shim OBJECT mingw_vmath_shim.cpp)
+    target_include_directories(mw_vmath_shim PRIVATE ${MW_SRC})
+    target_compile_options(mw_vmath_shim PRIVATE ${MW_CORE_FLAGS} -mavx2 -mfma)
+    if(MW_EXE_VMATH_SHIM_COUNT)
+      target_compile_definitions(mw_vmath_shim PRIVATE MW_VMATH_SHIM_COUNT=1)
+    endif()
+    target_sources(${MW_EXE} PRIVATE $<TARGET_OBJECTS:mw_vmath_shim>)
+    # The guards also ask for __AVX2__, so a fat build's sse2 copies are unchanged.
+    foreach(_mw_t IN ITEMS mw_core mw_core_serial mw_core_mwa mw_core_mwas)
+      if(TARGET ${_mw_t})
+        target_compile_definitions(${_mw_t} PRIVATE MW_MINGW_VMATH_SHIM=1)
+      endif()
+    endforeach()
+  endif()
 endif()
 
 if(MW_ACCELERATE)
