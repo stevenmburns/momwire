@@ -681,20 +681,27 @@ int threads_for(long long n_basis, long long crossing_pairs = 0, long long below
 
 // The frequency-parallel policy: a buried deck's stepping FR (`buried_runs`
 // of its runs buried, each an independent solve on one geometry) at a
-// budget of `threads` runs up to that many frequencies at once, each fill
-// and factor on one thread (`set_frequency_workers`), rather than one
-// frequency at a time over an OpenMP team. Taken when the sweep has at least
-// half as many frequencies as threads; a shorter sweep keeps the fill's own
-// threading. The bytes are the one-thread run's either way (the serial copy,
-// BLAS at one thread), so only time moves. Not taken when the sweep would
-// decline the features asked for (`frequency_sweep_allowed`: crossing_table),
-// which would otherwise solve the sweep in turn on one thread.
-// MW_EXE_FREQS=0 turns it off and =1 takes it whatever the count (gate hooks).
+// budget of `threads` runs `threads` frequencies at once, each fill and
+// factor on one thread (`set_frequency_workers`), rather than one frequency
+// at a time over an OpenMP team. A frequency is the sweep's unit, so it
+// pays only when the last round is not mostly idle: taken when the sweep
+// fills its rounds exactly or has at least two of them. Rocketlake (8
+// cores), the target deck's mesh cut to F frequencies, ms, intra-fill ->
+// frequency-parallel, median of 5 (F = 8: of 3): at 4 threads F = 3 310 ->
+// 339, 5 498 -> 646, 10 1040 -> 1051 (a tie, taken), 21 1983 -> 1907; at 8
+// threads F = 3 216 -> 348, 5 335 -> 360, 8 572 -> 437, 10 677 -> 710, 21
+// 1272 -> 1051. The bytes are
+// the one-thread run's either way (the serial copy, BLAS at one thread), so
+// only time moves. Not taken when the sweep would decline the features asked
+// for (`frequency_sweep_allowed`: crossing_table), which would otherwise
+// solve the sweep in turn on one thread. MW_EXE_FREQS=0 turns it off and =1
+// takes it whatever the count (gate hooks).
 int freq_workers_for(int threads, long long buried_runs) {
     const std::string force = env("MW_EXE_FREQS");
     if (force == "0" || threads < 2 || buried_runs < 2) return 1;
     if (!rt_serial::frequency_sweep_allowed()) return 1;
-    if (force != "1" && 2 * buried_runs < threads) return 1;
+    const bool rounds = buried_runs % threads == 0 || buried_runs >= 2LL * threads;
+    if (force != "1" && !rounds) return 1;
     return static_cast<int>(std::min<long long>(threads, buried_runs));
 }
 
