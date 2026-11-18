@@ -518,6 +518,22 @@ def test_a_deck_that_compresses_poorly_declines_on_the_cxx_route(monkeypatch):
     np.testing.assert_array_equal(y, off)
 
 
+@_needs_cert
+def test_the_cache_counts_a_declined_plan_apart():
+    """`razor_reuse_cache()["declined"]` counts the plans built that came
+    back declined (what the exe gate's reuse line subtracts): a deck that
+    compresses poorly builds one plan and declines it; the triangle builds
+    one that serves, and the count does not move."""
+    acc.razor_reuse_cache_clear()
+    c0 = acc.razor_reuse_cache()
+    _solver(_random_wires(), True, SOMM).compute_port_solution()
+    c1 = acc.razor_reuse_cache()
+    assert (c1["built"] - c0["built"], c1["declined"] - c0["declined"]) == (1, 1)
+    _solver(_triangle(), True, SOMM).compute_port_solution()
+    c2 = acc.razor_reuse_cache()
+    assert (c2["built"] - c1["built"], c2["declined"] - c1["declined"]) == (1, 0)
+
+
 def test_the_plan_budget_is_256_mb():
     # 512 MB hosted bound = this budget + one dense Z (144 MB at the
     # 3000-segment cap) + headroom (`_razor_pair_reuse_core.h`, Steve 11-17).

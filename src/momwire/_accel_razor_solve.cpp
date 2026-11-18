@@ -1617,8 +1617,9 @@ void register_razor_solve(py::module_ &m) {
         py::dict d;
         d["built"] = c.built;
         d["found"] = c.found;
+        d["declined"] = c.declined;
         return d;
-    }, "The process's reuse plans built and found.");
+    }, "The process's reuse plans built and found, and how many of those built declined.");
     m.def("razor_reuse_cache_clear", &mw::razor::reuse::clear_cache,
           "Drop every cached reuse plan (TEST HOOK).");
     m.def("razor_reuse_probe", &mw::razor::reuse::set_probe, py::arg("probe"),

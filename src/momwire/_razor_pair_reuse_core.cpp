@@ -671,6 +671,7 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g) {
     std::shared_ptr<const Plan> p = build(g, std::move(fp));
     std::lock_guard<std::mutex> lock(g_cache_mtx);
     g_counters.built++;
+    if (!p->declined.empty()) g_counters.declined++;
     g_cache.push_front(p);
     size_t total = 0;
     for (auto it = g_cache.begin(); it != g_cache.end();) {

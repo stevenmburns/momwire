@@ -296,9 +296,11 @@ constexpr int64_t MAX_SEGS = 46340;
 // nothing in the executables sets it.
 void set_class_limit(int64_t direct, int64_t remainder);
 int64_t class_limit(int family);  // 0 direct, 1 remainder
-// Plans built and found (process totals, for tests).
+// Plans built and found (process totals, for tests), and of those built the
+// ones that came back declined: a declined plan serves nothing (its fill runs
+// as off), so built - declined is what proves a fill reused.
 struct CacheCounters {
-    uint64_t built = 0, found = 0;
+    uint64_t built = 0, found = 0, declined = 0;
 };
 CacheCounters cache_counters();
 void clear_cache();
