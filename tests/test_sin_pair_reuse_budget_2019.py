@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 import time
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -259,3 +260,25 @@ def test_a_census_hands_its_pages_back_once(monkeypatch):
     assert pr.shared_plan(("k",), lambda: pr.OVER_BUDGET) is pr.OVER_BUDGET
     assert pr.shared_plan(("k",), lambda: pr.OVER_BUDGET) is pr.OVER_BUDGET
     assert len(trims) == 1
+
+
+def test_the_plans_kept_between_solvers_are_one_fills_budget():
+    """A long-lived process holds no more plans than one fill may use, on the
+    sinusoidal solver and on razor-2p (momwire#2026)."""
+    assert pr.SHARED_PLAN_BYTES == pr.PLAN_BUDGET_BYTES == 256 << 20
+    header = Path(pr.__file__).with_name("_razor_pair_reuse_core.h").read_text()
+    assert "SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;" in header
+    assert "PLAN_BUDGET_BYTES = size_t(256) << 20;" in header
+
+
+def test_the_cache_drops_the_oldest_plan_past_its_budget(monkeypatch):
+    class Sized:
+        def __init__(self, n):
+            self.values = np.zeros(n, np.uint8)
+
+    monkeypatch.setattr(pr, "_shared_plans", type(pr._shared_plans)())
+    monkeypatch.setattr(pr, "SHARED_PLAN_BYTES", 100)
+    monkeypatch.setattr(razor, "_trim_heap", lambda: None)
+    pr.shared_plan(("a",), lambda: Sized(60))
+    pr.shared_plan(("b",), lambda: Sized(60))
+    assert list(pr._shared_plans) == [("b",)]

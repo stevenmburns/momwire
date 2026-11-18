@@ -213,8 +213,9 @@ constexpr size_t PLAN_BUDGET_BYTES = size_t(256) << 20;
 // executables sets it.
 void set_plan_budget(int64_t bytes);
 int64_t plan_budget();
-// Bytes of plans the process keeps between fills.
-constexpr size_t SHARED_PLAN_BYTES = size_t(1) << 30;
+// Bytes of plans the process keeps between fills, one fill's budget
+// (momwire#2026): a long-lived server holds no more than a single fill may use.
+constexpr size_t SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;
 
 // What the plan reads. Views into the caller's arrays; the plan copies what
 // it keeps.

@@ -282,11 +282,6 @@ _HAVE_FACTORIZE = _acc is not None and bool(
 )
 
 
-#: Bytes of plans the process keeps between solvers (`shared_plan`). A plan
-#: is mostly its int32 class map, 4 bytes per pair: the ELT whip's direct
-#: block is ~35 MB, so the budget holds a few decks' direct and image blocks.
-SHARED_PLAN_BYTES = 1 << 30
-
 #: The byte budget of one fill's plans AND their census, razor-2p's
 #: (`_razor_pair_reuse_core.h`, PLAN_BUDGET_BYTES) and for its reason: the
 #: 512 MB hosted bound is this, one dense Z (144 MB at the 3000-segment cap)
@@ -304,6 +299,12 @@ SHARED_PLAN_BYTES = 1 << 30
 #:   uniform dipole                  4001   597    765    670  reuses
 #:   11 elements, each its own h     1111   164    296    292  reuses
 PLAN_BUDGET_BYTES = 256 << 20
+
+#: Bytes of plans the process keeps between solvers (`shared_plan`), one
+#: fill's budget (momwire#2026): a long-lived server holds no more than a
+#: single fill may use. A plan is mostly its int32 class map, 4 bytes per
+#: pair: the ELT whip's direct block is ~35 MB.
+SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES
 
 #: Peak resident bytes of the census per class a band kept, beside the class
 #: map: each band's keys, representatives and codes (89 B), then at the merge
