@@ -93,9 +93,11 @@ bool avx2 = false;  // main() picks (`pick_variant`) before any route call
 // threaded one, each the sse2 or (fat build, avx2 picked) the avx2 build's.
 namespace rt_serial {
 inline long long largest_solve(const std::string &t, bool open_end = false, long long *pairs = nullptr,
-                               long long *below = nullptr) {
-    return MW_PICK(mws, mwas, largest_solve(t, open_end, pairs, below));
+                               long long *below = nullptr, long long *buried_runs = nullptr) {
+    return MW_PICK(mws, mwas, largest_solve(t, open_end, pairs, below, buried_runs));
 }
+inline void set_frequency_workers(int n) { MW_PICK(mws, mwas, set_frequency_workers(n)); }
+inline long long frequencies_presolved() { return MW_PICK(mws, mwas, frequencies_presolved()); }
 inline void configure_grid_cache(const std::string &tag) { MW_PICK(mws, mwas, configure_grid_cache(tag)); }
 inline bool configure_features(const std::vector<std::string> &names, bool stamped = true) {
     return MW_PICK(mws, mwas, configure_features(names, stamped));
@@ -116,9 +118,11 @@ inline bool answer(const std::string &t, const std::string &version, const std::
 }  // namespace rt_serial
 namespace rt_threads {
 inline long long largest_solve(const std::string &t, bool open_end = false, long long *pairs = nullptr,
-                               long long *below = nullptr) {
-    return MW_PICK(mw, mwa, largest_solve(t, open_end, pairs, below));
+                               long long *below = nullptr, long long *buried_runs = nullptr) {
+    return MW_PICK(mw, mwa, largest_solve(t, open_end, pairs, below, buried_runs));
 }
+inline void set_frequency_workers(int n) { MW_PICK(mw, mwa, set_frequency_workers(n)); }
+inline long long frequencies_presolved() { return MW_PICK(mw, mwa, frequencies_presolved()); }
 inline void configure_grid_cache(const std::string &tag) { MW_PICK(mw, mwa, configure_grid_cache(tag)); }
 inline bool configure_features(const std::vector<std::string> &names, bool stamped = true) {
     return MW_PICK(mw, mwa, configure_features(names, stamped));
@@ -149,6 +153,8 @@ static void reuse_line() {
     rt_threads::reuse_plans(built_t, declined_t, found_t);
     std::fprintf(stderr, "cxx: reuse plans built %lld, declined %lld, found %lld\n", built_s + built_t,
                  declined_s + declined_t, found_s + found_t);
+    std::fprintf(stderr, "cxx: frequencies presolved %lld\n",
+                 rt_serial::frequencies_presolved() + rt_threads::frequencies_presolved());
 }
 
 #if !MW_EXE_NO_PYTHON
@@ -673,6 +679,22 @@ int threads_for(long long n_basis, long long crossing_pairs = 0, long long below
     if (n_basis < 128) return 1;
     if (n_basis < 384) return std::min(4, cores);
     return cores;
+}
+
+// The frequency-parallel policy: a buried deck's stepping FR (`buried_runs`
+// of its runs buried, each an independent solve on one geometry) at a
+// budget of `threads` runs up to that many frequencies at once, each fill
+// and factor on one thread (`set_frequency_workers`), rather than one
+// frequency at a time over an OpenMP team. Taken when the sweep has at least
+// half as many frequencies as threads; a shorter sweep keeps the fill's own
+// threading. The bytes are the one-thread run's either way (the serial copy,
+// BLAS at one thread), so only time moves. MW_EXE_FREQS=0 turns it off and
+// =1 takes it whatever the count (gate hooks).
+int freq_workers_for(int threads, long long buried_runs) {
+    const std::string force = env("MW_EXE_FREQS");
+    if (force == "0" || threads < 2 || buried_runs < 2) return 1;
+    if (force != "1" && 2 * buried_runs < threads) return 1;
+    return static_cast<int>(std::min<long long>(threads, buried_runs));
 }
 
 // The executable's OpenBLAS, OpenMP (only when `omp`: the serial route never
@@ -1252,19 +1274,31 @@ int main(int argc, char **argv) {
         }
         // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
         // the serial copy, more the threaded one.
+        long long buried_runs = 0;
         if (forced_threads <= 0) {
             const mw_times::Scope timed(mw_times::seam);
             long long pairs = 0, below = 0;
-            const long long n = rt_serial::largest_solve(text, false, &pairs, &below);
+            const long long n = rt_serial::largest_solve(text, false, &pairs, &below, &buried_runs);
             threads = n >= 0 ? threads_for(n, pairs, below) : 1;
             if (env("MW_EXE_TIMES") == "1")
                 std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
                              pairs, below);
+        } else if (threads > 1) {
+            const mw_times::Scope timed(mw_times::seam);
+            rt_serial::largest_solve(text, false, nullptr, nullptr, &buried_runs);
         }
         const std::string arrays_dir = env("MW_EXE_ARRAYS");
         std::string printout;
         bool printed;
-        if (threads == 1 && env("MW_EXE_COPY") != "threads") {
+        const int freq_workers = env("MW_EXE_COPY") != "threads" ? freq_workers_for(threads, buried_runs) : 1;
+        if (freq_workers > 1) {
+            // The frequency-parallel sweep (`freq_workers_for`).
+            set_threads(1, false);
+            times_threads(1, 1);
+            rt_serial::set_frequency_workers(freq_workers);
+            printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
+            rt_serial::set_frequency_workers(1);
+        } else if (threads == 1 && env("MW_EXE_COPY") != "threads") {
             // The fill on one thread with no OpenMP; OpenBLAS on two when the
             // size policy chose (not MOMWIRE_THREADS): its one-thread path
             // rounds differently from its threaded one, alike at 2, 4, 8 and
@@ -1287,8 +1321,9 @@ int main(int argc, char **argv) {
                 std::fwrite(printout.data(), 1, printout.size(), w);
                 if (std::fclose(w) == 0) {
                     times_line("cxx", threads, 0.0, ms_since(tw));
-                    log_route(threads == 1 && env("MW_EXE_COPY") != "threads" ? "cxx:serial"
-                                                                    : "cxx:threads",
+                    log_route((threads == 1 || freq_workers > 1) && env("MW_EXE_COPY") != "threads"
+                                  ? "cxx:serial"
+                                  : "cxx:threads",
                               deck);
                     if (env("MW_EXE_TIMES") == "1") {
                         std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n",
@@ -1571,21 +1606,37 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
         rt_threads::configure_grid_cache(tag);
     }
     int threads = forced_threads;
+    long long buried_runs = 0;
     if (forced_threads <= 0) {
         const mw_times::Scope timed(mw_times::seam);
         long long pairs = 0, below = 0;
-        const long long n = rt_serial::largest_solve(text, open_end, &pairs, &below);
+        const long long n = rt_serial::largest_solve(text, open_end, &pairs, &below, &buried_runs);
         threads = n >= 0 ? threads_for(n, pairs, below) : 1;
         if (env("MW_EXE_TIMES") == "1")
             std::fprintf(stderr, "cxx: size n_basis %lld, crossing pairs %lld, below pairs %lld\n", n,
                          pairs, below);
+    } else if (forced_threads > 1) {
+        const mw_times::Scope timed(mw_times::seam);
+        rt_serial::largest_solve(text, open_end, nullptr, nullptr, &buried_runs);
     }
     g_render_threads = threads;
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
     std::string printout, why, kind, message, raised_kind;
     bool failed = false, printed;
-    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
-    if (threads == 1 && env("MW_EXE_COPY") != "threads") {
+    const int freq_workers = freq_workers_for(threads, buried_runs);
+    if (env("MW_EXE_TIMES") == "1")
+        std::fprintf(stderr, "cxx: buried runs %lld, frequency workers %d\n", buried_runs, freq_workers);
+    const bool serial = (threads == 1 || freq_workers > 1) && env("MW_EXE_COPY") != "threads";
+    if (freq_workers > 1 && serial) {
+        // The frequency-parallel sweep: the serial copy (no OpenMP), BLAS at
+        // one thread, `freq_workers` frequencies at once.
+        set_threads(1, false);
+        times_threads(1, 1);
+        rt_serial::set_frequency_workers(freq_workers);
+        printed = rt_serial::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
+                                   &message, &raised_kind, open_end, served);
+        rt_serial::set_frequency_workers(1);
+    } else if (threads == 1 && env("MW_EXE_COPY") != "threads") {
         const int blas = forced_threads > 0 ? 1 : std::min(2, hardware_threads());
         set_threads(blas, false);
         times_threads(1, blas);

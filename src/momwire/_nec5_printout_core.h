@@ -307,6 +307,21 @@ class PrintoutEngine {
     // near field's composing ground.
     virtual double solver_omega(const Prepared &p) const = 0;
     virtual double eps0() const = 0;
+    // A frequency-parallel sweep: the solves of `indices` (into `prepared`,
+    // a stepping FR's runs in the order the serial run solves them), each
+    // into its slot of `out` with `ok` set, run concurrently. A slot left
+    // with `ok` 0 (its solve threw, or it was not started) is solved again
+    // in turn by the caller, which then raises what the serial run raises.
+    // False: nothing was solved (the default; an engine without workers).
+    virtual bool presolve(const std::vector<Prepared> &prepared, const std::vector<long long> &indices,
+                          const NumpyLinalg &np, std::vector<Solved> &out, std::vector<char> &ok) {
+        (void)prepared;
+        (void)indices;
+        (void)np;
+        (void)out;
+        (void)ok;
+        return false;
+    }
 };
 
 // The whole of a `momwire-nec5` launcher for one deck file's bytes, for

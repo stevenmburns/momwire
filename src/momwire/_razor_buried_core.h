@@ -62,5 +62,10 @@ struct BuriedStages {
 std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stages,
                         uintptr_t cancel_flag);
 
+// The below table's grid for `f`'s fill, asked for as the fill asks it, and
+// nothing filled (see the .cpp): a frequency-parallel sweep's serial first
+// pass, so the table's choices are the serial run's.
+void prime_below_table(const Front &f);
+
 }  // namespace razor
 }  // namespace mw

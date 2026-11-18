@@ -50,12 +50,30 @@ class RazorPrintoutEngine final : public PrintoutEngine {
                            double omega) const override;
     double solver_omega(const Prepared &p) const override;
     double eps0() const override;
+    bool presolve(const std::vector<Prepared> &prepared, const std::vector<long long> &indices,
+                  const NumpyLinalg &np, std::vector<Solved> &out, std::vector<char> &ok) override;
 
   private:
     RazorSeamEngine seam_;
     razor::SolveContext &ctx_;
     const razor::Lapack &lapack_;
 };
+
+// A buried stepping FR's frequencies solved concurrently (`presolve`): up to
+// `n` at once, each fill and factor on its own thread (no OpenMP team inside
+// it, the caller's BLAS at one thread). 1 (the default) solves them in turn.
+// The bytes do not depend on it: the below table's choices are made first,
+// in the serial run's order (`razor::prime_below_table`), every cache a
+// fill reads holds values that do not depend on who filled them, and the
+// printout is written in frequency order afterwards. Not taken (in turn, as
+// at 1) with `crossing_table` asked for: its take decision is one
+// process-wide flag per fill (`ni_eval`'s `g_crossing_taken`), which two
+// concurrent fills would share.
+void set_frequency_workers(int n);
+int frequency_workers();
+// The frequencies `presolve` has solved concurrently, a process total (the
+// executable's MW_EXE_TIMES gate line: proof the sweep ran).
+long long frequencies_presolved();
 
 // The whole of `momwire-nec5-razor-2p` for one deck file's bytes:
 // `printout(latin1_text, basis, stamp, RazorPrintoutEngine(ctx, lapack), np,

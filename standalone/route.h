@@ -21,8 +21,18 @@ namespace exe {
 // policy's second measure (`threads_for`). `below_pairs`, when given: the
 // largest wholly-buried (below-plane) run's segment pairs, its segments
 // squared (0 for a deck with none), the third.
+// `buried_runs`, when given: how many of the served runs are buried ones
+// (a buried stepping FR's frequencies), the frequency-parallel policy's
+// measure (`freq_workers_for`).
 long long largest_solve(const std::string &latin1_text, bool open_end = false,
-                        long long *crossing_pairs = nullptr, long long *below_pairs = nullptr);
+                        long long *crossing_pairs = nullptr, long long *below_pairs = nullptr,
+                        long long *buried_runs = nullptr);
+
+// A buried stepping FR's frequencies solved up to `n` at once, each on one
+// thread (`nec5::set_frequency_workers`); 1 solves them in turn.
+void set_frequency_workers(int n);
+// The frequencies this copy has solved concurrently (`nec5::frequencies_presolved`).
+long long frequencies_presolved();
 
 // The Sommerfeld grid's persistent store for this copy (serial or threaded):
 // `tag` is the executable's identity, its version and build

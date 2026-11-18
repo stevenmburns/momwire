@@ -873,5 +873,31 @@ std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stag
     }
 }
 
+// The below table's grid for `f`'s fill, asked of the installed source as the
+// fill itself asks it (`fold_media` / the below-plane branch: the same medium
+// front, the same refusal first, the same `prepare_below`), and nothing
+// filled. A frequency-parallel sweep (`_nec5_printout_core.h`, `presolve`)
+// calls this for every frequency in the serial run's order before any fill
+// starts, so the source's choices -- an exact grid or one blended across the
+// anchors, the anchors built, the store's seen list -- are the serial run's,
+// whatever order the fills then run in: each fill's own `get` then finds its
+// grid by key. Throws what the fill would throw before its first matrix
+// entry (a grazing refusal, a capped tail), and does nothing for a deck that
+// is not buried or a build with no below table.
+void prime_below_table(const Front &f) {
+    if (f.buried == Buried::none || somm_below::source() == nullptr) return;
+    const BelowMedium bm = below_medium(f);
+    BelowRemainder rem;
+    if (f.buried == Buried::below_plane) {
+        MediumPart b = medium_part(f, true);
+        prepare_paths(*b.front);
+        const std::string why = grazing_refusal(*b.front, {}, bm.k_m);
+        if (!why.empty()) raise_value(why);
+        prepare_below(*b.front, bm, rem);
+        return;
+    }
+    (void)below_part(f, bm, rem);
+}
+
 }  // namespace razor
 }  // namespace mw
