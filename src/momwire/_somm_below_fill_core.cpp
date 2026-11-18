@@ -1090,29 +1090,24 @@ class FillSource : public Source {
 
     void ensure_for(Grid &g, double mx_r1, double mn_th, double mx_th) override {
         const mw_times::Scope timed(mw_times::ground);
+        if (!g.blended) return ensure_exact(g, mx_r1, mn_th, mx_th);
+        // A blended grid's regions come from the anchors, which every
+        // blended grid shares: the source's lock throughout.
         std::lock_guard<std::recursive_mutex> lock(mu_);
-        bool changed = false;
-        for (int r : regions_for(g, mx_r1, mn_th, mx_th)) {
-            if (g.regions[r].filled) continue;
-            if (g.blended)
-                blended_fill(g, r);
-            else if (g.lazy)
-                activate(g, r);  // its nodes come from fill_nodes
-            else
-                fill_region(g, r, 0);
-            changed = true;
-        }
-        if (changed && g.lazy && !lazy_) fill_lazy(g, whole(g), 0);
-        // `note_mutated`: a stored exact grid re-written as it fills.
-        auto it = stored_.find(&g);
-        if (changed && it != stored_.end()) store_put_merged("below", it->second, g);
+        for (int r : regions_for(g, mx_r1, mn_th, mx_th))
+            if (!g.regions[r].filled) blended_fill(g, r);
     }
 
     void fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need) override {
         const mw_times::Scope timed(mw_times::ground);
-        std::lock_guard<std::recursive_mutex> lock(mu_);
         if (!g.lazy) return;
-        auto it = stored_.find(&g);
+        // An exact grid is its own frequency's and no other grid's source,
+        // so its nodes fill under its own lock (`own`), not the source's: a
+        // frequency-parallel sweep's fills each fill their own grid at once.
+        // A node's value is its own contour, so the order moves no bit.
+        bool is_stored = false;
+        SKey sk;
+        std::lock_guard<std::mutex> grid_lock(own(g, is_stored, sk));
         auto missing = [&]() {
             for (int r = 0; r < N_REGIONS; r++) {
                 const Region &reg = g.regions[r];
@@ -1124,19 +1119,51 @@ class FillSource : public Source {
         };
         if (!missing()) return;
         // Another process may have filled them since this one read the file.
-        if (it != stored_.end() && store_merge("below", it->second, g, false) > 0 && !missing()) {
+        if (is_stored && store_merge("below", sk, g, false) > 0 && !missing()) {
             mw_times::count_disk();
             return;
         }
         const size_t filled = fill_lazy(g, need, 0);
         if (filled > 0) mw_times::count_built();
-        if (filled > 0 && it != stored_.end()) store_put_merged("below", it->second, g);
+        if (filled > 0 && is_stored) store_put_merged("below", sk, g);
     }
 
   private:
     std::string mode_;
     bool lazy_ = true;
     std::recursive_mutex mu_;
+    // Each exact grid's own lock (`own`), made under the source's.
+    std::map<const Grid *, std::unique_ptr<std::mutex>> own_;
+
+    // The exact grid `g`'s own lock, and its store key when it is stored.
+    std::mutex &own(const Grid &g, bool &is_stored, SKey &sk) {
+        std::lock_guard<std::recursive_mutex> lock(mu_);
+        std::unique_ptr<std::mutex> &m = own_[&g];
+        if (m == nullptr) m.reset(new std::mutex());
+        auto it = stored_.find(&g);
+        is_stored = it != stored_.end();
+        if (is_stored) sk = it->second;
+        return *m;
+    }
+
+    // `ensure_for` on an exact grid, under its own lock.
+    void ensure_exact(Grid &g, double mx_r1, double mn_th, double mx_th) {
+        bool is_stored = false;
+        SKey sk;
+        std::lock_guard<std::mutex> grid_lock(own(g, is_stored, sk));
+        bool changed = false;
+        for (int r : regions_for(g, mx_r1, mn_th, mx_th)) {
+            if (g.regions[r].filled) continue;
+            if (g.lazy)
+                activate(g, r);  // its nodes come from fill_nodes
+            else
+                fill_region(g, r, 0);
+            changed = true;
+        }
+        if (changed && g.lazy && !lazy_) fill_lazy(g, whole(g), 0);
+        // `note_mutated`: a stored exact grid re-written as it fills.
+        if (changed && is_stored) store_put_merged("below", sk, g);
+    }
 
     // Every node of every region: the eager mode's ask on a lazy grid.
     static std::vector<std::vector<uint8_t>> whole(const Grid &g) {
