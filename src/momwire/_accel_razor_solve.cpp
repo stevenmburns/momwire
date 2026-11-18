@@ -1549,15 +1549,40 @@ static py::tuple near_interface_eval_cone_table(double k_p, cd k_m, double d, do
 // `_crossing_anchors_now`): the C++ fill's own plan, entries and
 // interpolation (`_razor_crossing_core.h`'s `anchors`), so both routes write
 // the same bits.
-static py::dict crossing_anchor_plan(std::vector<double> wavelengths) {
-    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths);
+static mw::razor::anchors::Size anchor_size(double span, double eps_r, double sigma, double c) {
+    mw::razor::anchors::Size s;
+    s.span = span;
+    s.eps_r = eps_r;
+    s.sigma = sigma;
+    s.c = c;
+    return s;
+}
+
+static py::dict crossing_anchor_plan(std::vector<double> wavelengths, double span, double eps_r, double sigma,
+                                     double c) {
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths, anchor_size(span, eps_r, sigma, c));
     py::dict d;
     d["ok"] = p.ok;
     d["why"] = p.why;
     d["n_a"] = p.n_a;
     d["k"] = p.k;
     d["anchor_k"] = p.anchor_k;
+    d["x"] = p.x;
+    d["rho"] = p.rho;
+    d["est"] = p.est;
+    // The plan's inputs, so `crossing_anchor_apply` re-forms the same plan.
+    d["size"] = py::make_tuple(span, eps_r, sigma, c);
     return d;
+}
+
+// `anchors::span_of` over a geometry's segments (seg_p0 / seg_t (n_seg, 3),
+// seg_h (n_seg), C order).
+static double crossing_anchor_span(darr seg_p0, darr seg_t, darr seg_h, double ground_z) {
+    const py::ssize_t n = seg_h.size();
+    if (seg_p0.ndim() != 2 || seg_p0.shape(0) != n || seg_p0.shape(1) != 3 || seg_t.ndim() != 2 ||
+        seg_t.shape(0) != n || seg_t.shape(1) != 3)
+        throw std::invalid_argument("seg_p0 / seg_t must be (n_seg, 3), seg_h (n_seg)");
+    return mw::razor::anchors::span_of(static_cast<int64_t>(n), seg_p0.data(), seg_t.data(), seg_h.data(), ground_z);
 }
 
 static py::array_t<int64_t> crossing_anchor_entries(int64_t n, std::vector<int64_t> rows_a, std::vector<int64_t> rows_b,
@@ -1570,11 +1595,12 @@ static py::array_t<int64_t> crossing_anchor_entries(int64_t n, std::vector<int64
 
 // Z (n x n, Fortran order) += the anchors' values at k; 0 on an anchor, 1
 // interpolated.
-static int crossing_anchor_apply(py::array z, iarr idx, cdarr raw, std::vector<double> wavelengths, double k) {
+static int crossing_anchor_apply(py::array z, iarr idx, cdarr raw, std::vector<double> wavelengths, double k,
+                                 double span, double eps_r, double sigma, double c) {
     if (!(z.flags() & py::array::f_style) || z.dtype().kind() != 'c' || z.itemsize() != 16 || z.ndim() != 2 ||
         z.shape(0) != z.shape(1) || !z.writeable())
         throw std::invalid_argument("Z must be a writeable square complex128 Fortran-order array");
-    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths);
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths, anchor_size(span, eps_r, sigma, c));
     if (!mw::razor::anchors::in_plan(p, k)) throw std::invalid_argument("k is not in the plan");
     const size_t m = static_cast<size_t>(idx.size());
     if (raw.ndim() != 2 || static_cast<size_t>(raw.shape(0)) != p.anchor_k.size() || static_cast<size_t>(raw.shape(1)) != m)
@@ -1625,13 +1651,23 @@ void register_razor_solve(py::module_ &m) {
 
     // crossing_anchors for the Python route (`_razor_crossing_core.h`).
     m.attr("crossing_anchors_1117") = true;
-    m.def("crossing_anchor_plan", &crossing_anchor_plan, py::arg("wavelengths"),
-          "crossing_anchors' plan over a sweep's wavelengths: ok, why, n_a, k, anchor_k.");
+    m.def("crossing_anchor_plan", &crossing_anchor_plan, py::arg("wavelengths"), py::arg("span"),
+          py::arg("eps_r"), py::arg("sigma"), py::arg("c"),
+          "crossing_anchors' plan over a sweep's wavelengths for a deck of that span and lower "
+          "medium: ok, why, n_a, k, anchor_k, x, rho, est, size.");
+    m.def("crossing_anchor_span", &crossing_anchor_span, py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
+          py::arg("ground_z"), "The largest distance from an above segment's end to a below segment's.");
+    m.attr("crossing_anchor_bound_target") = mw::razor::anchors::BOUND_TARGET;
+    m.attr("crossing_anchor_nodes_max") = mw::razor::anchors::NODES_MAX;
+    m.def("crossing_anchor_fits", &mw::razor::anchors::fits, py::arg("n_a"), py::arg("entries"), py::arg("n"),
+          "Whether the anchors' values and their scratch fit crossing_anchors' memory budget.");
+    m.def("crossing_anchor_bound", &mw::razor::anchors::bound, py::arg("n"), py::arg("x"), py::arg("rho"),
+          "crossing_anchors' a-priori bound on |dZ|/|Z| at n anchors.");
     m.def("crossing_anchor_entries", &crossing_anchor_entries, py::arg("n"), py::arg("rows_a"),
           py::arg("rows_b"), py::arg("tent_cols"),
           "The column-major Z entries the cross blocks and node charges write.");
     m.def("crossing_anchor_apply", &crossing_anchor_apply, py::arg("z"), py::arg("idx"), py::arg("raw"),
-          py::arg("wavelengths"), py::arg("k"),
+          py::arg("wavelengths"), py::arg("k"), py::arg("span"), py::arg("eps_r"), py::arg("sigma"), py::arg("c"),
           "Z[idx] += the anchors' values at k (Z Fortran order); 0 on an anchor, 1 interpolated.");
 
     // momwire#1971: fill-pair reuse for the Python route.

@@ -222,6 +222,7 @@ SeamEngine::Built RazorSeamEngine::build(Prepared &p) const {
 // Cleared at the seam's start, so no plan outlives its deck.
 void RazorSeamEngine::seam_done(const SeamResult &r) const {
     std::vector<double> plan;
+    razor::anchors::Size size;
     if (ni_eval::requested_features().crossing_anchors && r.route == SeamResult::served &&
         !r.chained && r.structures.size() == 1 && r.stream.answers.size() == 1 &&
         r.stream.answers[0].kind == Answer::stepped) {
@@ -238,8 +239,17 @@ void RazorSeamEngine::seam_done(const SeamResult &r) const {
             }
             plan.push_back(p.wavelength);
         }
+        if (first != nullptr && !plan.empty()) {
+            // The error rule's view of the deck (`anchors::Size`), as the
+            // Python route forms it (`razor.py`'s `_crossing_anchors_now`).
+            size.span = razor::anchors::span_of(first->n_seg, first->seg_p0.data(), first->seg_t.data(),
+                                                first->seg_h.data(), first->ground_z);
+            size.eps_r = first->ground_eps_r_;
+            size.sigma = first->ground_sigma_;
+            size.c = first->c;
+        }
     }
-    razor::set_band_plan(plan);
+    razor::set_band_plan(plan, size);
 }
 
 SeamResult razor_seam(const std::string &latin1_text, bool open_end) {

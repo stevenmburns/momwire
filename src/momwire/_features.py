@@ -644,11 +644,17 @@ FEATURES: dict[str, Feature] = {
         # (`_razor_crossing_core.cpp`, `set_band_plan`): the above x below
         # blocks and the crossing node charges computed exactly at a few
         # wavenumbers spanning the sweep (Chebyshev-Lobatto, the plan's two
-        # ends among them) and interpolated between them, each entry's
-        # propagation phase taken out first. The above and below blocks stay
-        # exact per frequency. Declines (the exact blocks, flag-off bits)
-        # under too few frequencies, too wide a band, a fill outside the
-        # plan or on another geometry. One C++ core for the plan, the
+        # ends among them) and every other point's values interpolated
+        # between them as they are (barycentric, no phase taken out: dividing
+        # out exp(-j k R) measured worse). The above and below blocks stay
+        # exact per frequency. The anchor count is chosen per deck from an
+        # a-priori error bound (`anchors::bound`: the half band's phase turn
+        # over the deck's above-to-below span, scaled by how fast k_m turns
+        # with k), the fewest from 5 to 12 that meet a target a factor of
+        # three under the drift below. Declines (the exact blocks, flag-off
+        # bits) under too few frequencies, too wide a band, a deck too large
+        # electrically for 12, a fill outside the plan or on another
+        # geometry. One C++ core for the plan, the
         # entries and the interpolation (`_razor_crossing_core.h`'s
         # `anchors`): the nec5-razor-2p executable's fill and RazorSolver's
         # (`_crossing_anchors_now`, which fills its anchors with its own
@@ -661,6 +667,12 @@ FEATURES: dict[str, Feature] = {
             reach=7,
             env="MOMWIRE_X_CROSSING_ANCHORS",
             kind="native",
+            # PLACEHOLDER, to replace before a PR: no issue is filed for
+            # crossing_anchors. 1860 is the crossing-fill perf arc that
+            # factored_columns, height_sheet_recal, crossing_table and
+            # crossing_above_rule cite (its L1-L5); this lever attacks the
+            # same cross-block cost, but across a sweep, and is not one of
+            # its filed levers.
             issue=1860,
             since="2026-11-17",
             kwarg="crossing_anchors",
@@ -674,21 +686,28 @@ FEATURES: dict[str, Feature] = {
                 "every frequency."
             ),
             # |dZin|/|Zin| against off, full precision (the nec5-razor-2p
-            # executable's MW_EXE_ARRAYS, Rocketlake, 4 threads both sides),
-            # every point of a 21-point sweep, n_a = 5 (the default):
-            #   3 % bands: the four-radial buried vertical (251 segments)
-            #     9.2e-12 and its 2- / 8-radial and 27- / 108-segment
-            #     variants 7.8e-12 to 1.1e-11; tests/fixtures'
-            #     buried_grazing_1672 (3), eznec_exact_buried_1619 (2),
-            #     momwire_times/buried_radials and razor_printout_crossing
-            #     (2), each given the sweep: 3.0e-11 to 5.1e-11;
-            #   9.5-10 % bands (the widest the plan takes): the vertical
-            #     and its variants 3.4e-9 to 4.9e-9, the fixtures 1.0e-8 to
-            #     1.67e-8 (fat_slant, shallow_s40 at 14 MHz).
-            # Wider bands or fewer anchors move it fast (the vertical at
-            # 20 %: 1.4e-7; n_a = 3 at 10 %: 1.2e-5), which is why the plan
-            # declines past 10 % and the knob is internal. 5e-8 is 3x the
-            # worst measured.
+            # executable's MW_EXE_ARRAYS, Rocketlake, the same threads both
+            # sides), every point of a 21-point sweep, the anchor count the
+            # error rule chose:
+            #   the four-radial buried vertical (251 segments, 7 MHz, 3 %):
+            #     5 anchors, 9.1e-12 at 1 thread, 9.9e-12 at 8;
+            #   79 synthetic crossing decks (`_razor_crossing_core.cpp`'s
+            #     calibration set, a held-out set and seven extremes: radials
+            #     to 40 m at 28 MHz on sigma 1e-3, 1.5 m deep, sloped):
+            #     5 to 12 anchors, worst 2.1e-9 (28 MHz, 6.3 m radials,
+            #     sigma 1e-3, 9.5 %, 7 anchors).
+            # A fixed five, the plan before the rule, reached 1.3e-5 on
+            # those decks (12.7 m radials at 28 MHz, 9.5 %): the band alone
+            # does not bound it. The rule's target is a third of this drift
+            # and its estimate carries at least twice the calibration fit, so
+            # the drift is the rule's bound with margin rather than a corpus
+            # maximum. It is an a-priori estimate fitted on measurements, not
+            # a proof: every stress point came in at most 0.46 of it, and the
+            # worst measured anywhere is 24x under 5e-8. Composed with
+            # crossing_table the anchors interpolate the table's values,
+            # which are not smooth in k: 2.0e-8 against crossing_table alone
+            # on the vertical, inside this drift but outside the rule, and
+            # under the table's own 8.9e-4.
             drift=5e-8,
             offer=False,
         ),
