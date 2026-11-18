@@ -104,7 +104,7 @@ def test_a_promoted_feature_is_turned_off_by_the_keyword_or_the_variable(
 
 
 def test_a_promoted_feature_is_off_by_default_outside_its_reach(no_features):
-    # The nec42-sinusoidal executable's level is past reach 8: no default
+    # The nec42-sinusoidal executable's level is past reach 9: no default
     # there, and asking still refuses (a native feature).
     assert F.current_level("exe", basis="nec42-sinusoidal") == len(F.LEVELS)
     f = F.FEATURES["factored_columns"]
@@ -328,21 +328,50 @@ def test_every_ci_job_is_placed_once_or_unassigned():
         ("dropin", "darwin", None, None, 5),
         ("exe", "win32", "razor2p", None, 6),
         ("exe", "win32", "bspline_nec5", None, 6),
-        ("exe", "linux", "razor2p", None, 7),
-        ("exe", "darwin", "bspline_nec5", None, 7),
-        ("exe", "linux", "bspline_nec42", None, 8),
-        ("exe", "win32", "sin42", None, 9),
+        ("exe", "linux", "razor2p", None, 8),
+        ("exe", "darwin", "bspline_nec5", None, 8),
+        ("exe", "linux", "bspline_nec42", None, 9),
+        ("exe", "win32", "sin42", None, 10),
         # the long forms (momwire#1831)
         ("exe", "win32", "nec5-razor-2p", None, 6),
-        ("exe", "linux", "nec5-bspline", None, 7),
-        ("exe", "darwin", "nec42-bspline", None, 8),
-        ("exe", "linux", "nec42-sinusoidal", None, 9),
+        ("exe", "linux", "nec5-bspline", None, 8),
+        ("exe", "darwin", "nec42-bspline", None, 9),
+        ("exe", "linux", "nec42-sinusoidal", None, 10),
     ],
 )
 def test_current_level(context, platform, basis, variant, level):
     kw = dict(basis=basis, platform=platform, variant=variant)
     assert F.current_level(context, **kw) == level
     assert F.certified("offset_reuse", context, **kw) == (level <= 1)
+
+
+def test_the_mingw_executable_has_its_own_level():
+    # The single-file MinGW-w64 build (Steve, 2026-11-17): its own level,
+    # directly after the MSVC executables', whichever basis it is built as.
+    msvc = F._level("exe-nec5-bspline-razor-2p-windows")
+    mingw = F._level("exe-nec5-bspline-razor-2p-windows-mingw")
+    assert mingw == msvc + 1
+    for basis in ("razor2p", "bspline_nec5", "nec5-razor-2p", "nec5-bspline"):
+        kw = dict(basis=basis, platform="win32")
+        assert F.current_level("exe", **kw) == msvc
+        assert F.current_level("exe", **kw, toolchain="mingw") == mingw
+    # Only the Windows nec5 executables split: the toolchain moves no other.
+    assert F.current_level(
+        "exe", basis="razor2p", platform="linux", toolchain="mingw"
+    ) == F._level("exe-nec5-bspline-razor-2p-linux-macos")
+    assert F.current_level(
+        "exe", basis="sin42", platform="win32", toolchain="mingw"
+    ) == F._level("exe-nec42-sinusoidal")
+
+
+def test_the_mingw_executable_keeps_what_the_msvc_one_runs():
+    # A level of its own must not change what the preview answers: every
+    # feature certified on the MSVC executables is certified on it, so the
+    # default-on levers stay on and its printouts stay the launcher's.
+    kw = dict(basis="razor2p", platform="win32")
+    for name in _exe_features():
+        assert F.certified(name, "exe", **kw), name
+        assert F.certified(name, "exe", **kw, toolchain="mingw"), name
 
 
 def test_the_level_numbers_follow_the_ids():
@@ -530,7 +559,7 @@ def test_the_exe_refuses_a_feature(tmp_path, var, name):
 def test_the_exe_runs_the_features_it_carries(tmp_path):
     # nec5-razor-2p's executable carries momwire#1860's levers: each runs,
     # and line 2 names the ones on in registry order, as Python's stamp does
-    # (reach 8 covers the drop-in, so no "uncertified" either side).
+    # (reach 9 covers the drop-in, so no "uncertified" either side).
     env = {
         k: v
         for k, v in os.environ.items()

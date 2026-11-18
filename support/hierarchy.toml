@@ -74,6 +74,17 @@ jobs = [
     "standalone.yml:windows-nopython",  # nec5-razor-2p and nec5-bspline, avx2 and sse2
 ]
 
+# The single-file MinGW-w64 (UCRT64) build, a preview beside the MSVC zip. Its
+# own level (Steve, 2026-11-17): its libm and vector math are not MSVC's, so a
+# feature's reach can stop at the MSVC build. Directly after it, so a reach
+# that covers the Linux and macOS executables covers this build too.
+[[level]]
+id = "exe-nec5-bspline-razor-2p-windows-mingw"
+description = "the nec5-bspline and nec5-razor-2p single-file MinGW-w64 (UCRT64) executables on Windows, avx2 and sse2 in one file (preview)"
+jobs = [
+    "standalone.yml:windows-single",  # tags, main pushes and dispatch; never on a pull request
+]
+
 [[level]]
 id = "exe-nec5-bspline-razor-2p-linux-macos"
 description = "the nec5-bspline and nec5-razor-2p executables on Linux and macOS"
@@ -109,6 +120,7 @@ jobs = [
 "standalone.yml:linux-artifact" = "builds every Linux executable (all four bases); the exe levels' jobs test what it builds"
 "standalone.yml:release-linux" = "attaches the Linux executables to a release"
 "standalone.yml:release-windows" = "attaches the Windows executables to a release"
+"standalone.yml:release-windows-single" = "attaches the single-file MinGW-w64 Windows preview to a release"
 "standalone.yml:release-macos" = "attaches the macOS executables to a release"
 "windows-fat.yml:windows-fat" = "the experimental fat MSVC executables (avx2 + sse2 in one), on dispatch only; not the shipped zip"
 "windows-static.yml:build" = "the single-file MinGW-w64 experiment (MINGW64 builds), on dispatch and its own branch only; not the shipped zip"

@@ -22,7 +22,7 @@ On outside its reach, a feature is handled by its KIND:
 The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
-8, so every executable but nec42-sinusoidal's, and razor_pair_reuse, reach 7,
+9, so every executable but nec42-sinusoidal's, and razor_pair_reuse, reach 8,
 which only nec5-razor-2p's route carries, so nec5-bspline refuses it by
 basis, ``EXE_FEATURE_BASES``). One started with any other ``MOMWIRE_X_``
 variable on refuses before it reads a deck (:data:`EXE_REFUSAL`).
@@ -104,6 +104,11 @@ LEVELS: tuple[Level, ...] = (
     Level(
         "exe-nec5-bspline-razor-2p-windows",
         "the nec5-bspline and nec5-razor-2p executables on Windows, avx2 and sse2",
+    ),
+    Level(
+        "exe-nec5-bspline-razor-2p-windows-mingw",
+        "the nec5-bspline and nec5-razor-2p single-file MinGW-w64 (UCRT64)"
+        " executables on Windows, avx2 and sse2 in one file (preview)",
     ),
     Level(
         "exe-nec5-bspline-razor-2p-linux-macos",
@@ -321,15 +326,15 @@ FEATURES: dict[str, Feature] = {
         # The near-interface column twin's factored route (momwire#1860 L1):
         # on a grid-shaped column each exponential factor once per distinct
         # z and z', the product per member. A new C++ path, a few ulp from
-        # the member route and not bit-identical to it. Reach 8: the
+        # the member route and not bit-identical to it. Reach 9: the
         # nec5-razor-2p, nec5-bspline and nec42-bspline executables carry it
         # (the ports of #1860's measurement build). On by default since
         # 2026-11-15 (Steve), as is height_sheet_recal: certified through
-        # level 8, and level 9's nec42-sinusoidal route has no column twin to
-        # factor.
+        # level 9, and level 10's nec42-sinusoidal route has no column twin
+        # to factor.
         Feature(
             name="factored_columns",
-            reach=8,
+            reach=9,
             env="MOMWIRE_X_FACTORED_COLUMNS",
             kind="native",
             issue=1860,
@@ -349,11 +354,11 @@ FEATURES: dict[str, Feature] = {
         # The near-interface height-sheet census recalibrated (momwire#1860
         # L2): a horizontal wire's rows on a height sheet at their measured
         # worth, and heights a few ulp apart taken as one sheet. The shipped
-        # sheets and twin, a different split between them. Reach 8, as
+        # sheets and twin, a different split between them. Reach 9, as
         # factored_columns.
         Feature(
             name="height_sheet_recal",
-            reach=8,
+            reach=9,
             env="MOMWIRE_X_HEIGHT_SHEET_RECAL",
             kind="python",
             issue=1860,
@@ -374,7 +379,7 @@ FEATURES: dict[str, Feature] = {
         # fixed wavelength-scaled grid read from one table per frequency, the
         # singular part taken out in closed form. A new C++ path and a coarse
         # accuracy class (printed Zin within ~0.1 ohm on the EFHW decks).
-        # Reach 8, as factored_columns. Opt-in: its drift class is over
+        # Reach 9, as factored_columns. Opt-in: its drift class is over
         # DEFAULT_DRIFT_MAX, and it stays off by default (Steve, 11-15).
         # drift 5e-3 (momwire#1955, was 1e-3): measured 3.6e-3 on fat_slant
         # and 2.5e-3 on fat_hub (a 19 mm vertical, Delta/a 2.2, over four short
@@ -384,7 +389,7 @@ FEATURES: dict[str, Feature] = {
         # can know about their soil.
         Feature(
             name="crossing_table",
-            reach=8,
+            reach=9,
             env="MOMWIRE_X_CROSSING_TABLE",
             kind="native",
             issue=1860,
@@ -408,12 +413,12 @@ FEATURES: dict[str, Feature] = {
         # B1): the base order plus #1189's raised pairs, where the shipped
         # route takes the cross block's q = 6, on a grid no dearer than the
         # shipped one (else that fill declines). The shipped kernels, a
-        # different quadrature. Reach 8: the two bspline executables carry it;
+        # different quadrature. Reach 9: the two bspline executables carry it;
         # nec5-razor-2p's accepts the variable and, as Python's razor-2p,
         # ignores it.
         Feature(
             name="crossing_above_rule",
-            reach=8,
+            reach=9,
             env="MOMWIRE_X_CROSSING_ABOVE_RULE",
             kind="python",
             issue=1860,
@@ -444,13 +449,13 @@ FEATURES: dict[str, Feature] = {
         # so the plan is still never decided on what is cached. Opt-in:
         # its cost is a cold process's first sheet build, which a small
         # deck pays without the warm gain.
-        # Reach 7 (momwire#1956 promotion, 2026-11-17): the two nec5
+        # Reach 8 (momwire#1956 promotion, 2026-11-17): the two nec5
         # executables carry it (their C++ census reads the same two
         # constants, `ni_eval::sheet_build_weight`); the nec42-bspline
-        # executable (level 8) does not, and refuses it.
+        # executable (level 9) does not, and refuses it.
         Feature(
             name="crossing_sheet_retune",
-            reach=7,
+            reach=8,
             env="MOMWIRE_X_CROSSING_SHEET_RETUNE",
             kind="python",
             issue=1956,
@@ -586,14 +591,14 @@ FEATURES: dict[str, Feature] = {
         # rest, in Python and in the executables (one C++ core).
         Feature(
             name="razor_pair_reuse",
-            # Reach 7: every Python route (the hosted app, Linux sse2,
+            # Reach 8: every Python route (the hosted app, Linux sse2,
             # Windows, the drop-in, macOS) and the nec5 executables (levels 6
-            # and 7, nec5-razor-2p's `EXE_FEATURES` row; nec5-bspline, which
-            # shares those levels, refuses it by basis). Not 8 or 9: those
+            # to 8, nec5-razor-2p's `EXE_FEATURES` row; nec5-bspline, which
+            # shares those levels, refuses it by basis). Not 9 or 10: those
             # are the nec42 executables, and neither has a razor-2p route to
             # run it in. Still off by default and not offered (Steve, 11-17;
             # it was reach 1, the hosted app only, from 11-16).
-            reach=7,
+            reach=8,
             env="MOMWIRE_X_RAZOR_PAIR_REUSE",
             kind="native",
             issue=1971,
@@ -825,6 +830,7 @@ def current_level(
     basis: str | None = None,
     platform: str | None = None,
     variant: str | None = _UNSET,  # type: ignore[assignment]
+    toolchain: str | None = None,
 ) -> int:
     """The support level (1-based) of the running configuration.
 
@@ -839,7 +845,14 @@ def current_level(
     loaded, pure Python), which runs on the CPUs the sse2 variant is for or
     on a failed load, and is no more certified than they are. `variant`
     defaults to the loaded one (:func:`_loaded_variant`); it is read only
-    for Linux Python."""
+    for Linux Python.
+
+    `toolchain` splits the Windows nec5 executables: ``"mingw"`` is the
+    single-file MinGW-w64 build, a level of its own because its libm and
+    vector math are not MSVC's; anything else is the MSVC build. Python never
+    runs as the MinGW build, so only a caller asking about that executable
+    passes it (`exe_level()` in standalone/momwire_razor2p.cpp answers for
+    the executable itself)."""
     os_name = _os(platform)
     if context == "python":
         if os_name == "linux":
@@ -854,11 +867,11 @@ def current_level(
         if family is None:
             raise ValueError(f"no standalone executable for basis {basis!r}")
         if family == "nec5-bspline-razor-2p":
-            return _level(
-                "exe-nec5-bspline-razor-2p-windows"
-                if os_name == "windows"
-                else "exe-nec5-bspline-razor-2p-linux-macos"
-            )
+            if os_name != "windows":
+                return _level("exe-nec5-bspline-razor-2p-linux-macos")
+            if toolchain == "mingw":
+                return _level("exe-nec5-bspline-razor-2p-windows-mingw")
+            return _level("exe-nec5-bspline-razor-2p-windows")
         return _level(f"exe-{family}")
     raise ValueError(f"context must be python, dropin or exe, not {context!r}")
 
@@ -870,9 +883,12 @@ def certified(
     basis: str | None = None,
     platform: str | None = None,
     variant: str | None = _UNSET,  # type: ignore[assignment]
+    toolchain: str | None = None,
 ) -> bool:
     """Whether `name` is certified where it is running."""
-    level = current_level(context, basis=basis, platform=platform, variant=variant)
+    level = current_level(
+        context, basis=basis, platform=platform, variant=variant, toolchain=toolchain
+    )
     return level <= FEATURES[name].reach
 
 

@@ -48,9 +48,9 @@ from momwire.razor import RazorSolver
 from test_crossing_serve_524 import _radial_dirs, crossing_deck, hub_deck
 from _lane_gate import assert_lanes_match
 
-# An experimental feature (`momwire._features`, reach 7).
+# An experimental feature (`momwire._features`, reach 8).
 pytestmark = [
-    pytest.mark.reach(7),
+    pytest.mark.reach(8),
     # The decks are the fill tests' shapes, not converged designs: their
     # advisories (a coarse crossing node, an ambiguous feed site) are not
     # what is held here.

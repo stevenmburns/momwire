@@ -12,7 +12,7 @@ feature is PROMOTED, not on the PR that adds it. Do not hold a reach-1 PR to
 the old per-PR bars.
 
 Where it lives:
-- `support/hierarchy.toml`: nine levels, in order of who runs them, from
+- `support/hierarchy.toml`: ten levels, in order of who runs them, from
   `ak-linux-avx2` (the hosted app) down to the NEC-4.2 sinusoidal exes. It
   holds the order only.
 - `src/momwire/_features.py`: each feature's reach, its env variable
@@ -46,7 +46,7 @@ byte-identical.**
 - A default-on feature is ON wherever it is certified (levels 1..reach) unless
   its keyword is False or its variable is set to a value that is not on
   (`MOMWIRE_X_<NAME>=0`). Outside its reach its default is off, so a native one
-  never refuses unasked. The nec42-sinusoidal exe is level 9, past reach 8.
+  never refuses unasked. The nec42-sinusoidal exe is level 10, past reach 9.
 - The bar (`tests/test_features_registry.py`): reach covers every Python and
   drop-in level (>= `macos`, 5), declared `drift` <= `DEFAULT_DRIFT_MAX` (1e-6,
   under a five-figure printout), and `offer` with a kwarg, so a front end can
@@ -78,8 +78,8 @@ byte-identical.**
   them on line 2 as Python does. Any other `MOMWIRE_X_*` variable set on, or a
   legacy alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence
   before it reads a deck; set to "0" it is accepted. Today the table is #1860's
-  four levers at reach 8, two of them on by default, and #1956's
-  `crossing_sheet_retune` at reach 7 (the two nec5 executables).
+  four levers at reach 9, two of them on by default, and #1956's
+  `crossing_sheet_retune` at reach 8 (the two nec5 executables).
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 

@@ -397,19 +397,19 @@ struct ExeFeature {
 // momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
 // razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
 // which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
-// and momwire#1956's retuned sheet weights (reach 7: the nec5 executables).
+// and momwire#1956's retuned sheet weights (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
-    {"factored_columns", 8, true},
-    {"height_sheet_recal", 8, true},
-    {"crossing_table", 8, false},
-    {"crossing_above_rule", 8, false},
-    {"razor_pair_reuse", 7, false},
-    {"crossing_sheet_retune", 7, false},
+    {"factored_columns", 9, true},
+    {"height_sheet_recal", 9, true},
+    {"crossing_table", 9, false},
+    {"crossing_above_rule", 9, false},
+    {"razor_pair_reuse", 8, false},
+    {"crossing_sheet_retune", 8, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.
 // razor_pair_reuse is razor-2p's fill, but nec5-bspline shares its levels
-// (6 and 7) and its EXE_FEATURES, so without this it would accept the
+// (6 to 8) and its EXE_FEATURES, so without this it would accept the
 // variable, name it on line 2 and fill as with it off. It refuses instead,
 // in the registry's sentence (nec42-bspline is past the reach anyway).
 const char *const EXE_FEATURE_BASES[][2] = {
@@ -426,11 +426,13 @@ bool feature_basis_here(const std::string &name) {
 // `_features.current_level("exe", basis=...)` places it.
 int exe_level() {
 #if MW_EXE_DIALECT_NEC4
-    return std::string(BASIS) == "sinusoidal" ? 9 : 8;  // exe-nec42-sinusoidal / exe-nec42-bspline
+    return std::string(BASIS) == "sinusoidal" ? 10 : 9;  // exe-nec42-sinusoidal / exe-nec42-bspline
+#elif defined(__MINGW32__)
+    return 7;  // exe-nec5-bspline-razor-2p-windows-mingw
 #elif defined(_WIN32)
     return 6;  // exe-nec5-bspline-razor-2p-windows
 #else
-    return 7;  // exe-nec5-bspline-razor-2p-linux-macos
+    return 8;  // exe-nec5-bspline-razor-2p-linux-macos
 #endif
 }
 

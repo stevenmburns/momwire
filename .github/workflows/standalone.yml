@@ -61,6 +61,15 @@
 # within PRINTOUT_RTOL_MACOS (exe_compare.py --rtol macos). The tarball,
 # momwire-nec5-macos-arm64.tar.gz, is attached to the release on a pushed
 # tag (`release-macos`), as a PREVIEW.
+#
+# `windows-single` (standalone/WINDOWS-SINGLE-FILE.md): the same two engines
+# as single files, from MSYS2 UCRT64 (gcc, ucrtbase through the api-ms-win-crt
+# sets), avx2 and sse2 in one executable, every runtime linked in. Tags, main
+# pushes and dispatch only, never a pull request. Signed as windows-nopython
+# signs, zipped as momwire-nec5-windows-x64-single.zip and attached on a
+# pushed tag (`release-windows-single`) as a PREVIEW beside the MSVC zip,
+# which stays the default. MW_EXE_VMATH_SHIM, one line in the job, switches
+# the vector-math shim.
 name: standalone
 
 on:
@@ -997,6 +1006,434 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: momwire-nec5-windows-x64.zip
+          fail_on_unmatched_files: true
+
+  # The single-file Windows preview (WINDOWS-SINGLE-FILE.md; see the header):
+  # never on a pull request, so a PR that breaks MinGW is caught on main.
+  windows-single:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: windows-latest
+    # ~2.5 h with a cold OpenBLAS cache (55 min of it), ~1.5 h warm
+    timeout-minutes: 300
+    env:
+      # >>> THE VECTOR-MATH SHIM SWITCH: "ON" or "OFF". This one line decides.
+      # Its Windows results are still pending; if the shim fails, set "OFF"
+      # and the preview ships without it. <<<
+      MW_EXE_VMATH_SHIM: "ON"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # gdb: fat_compare.py's backtrace of a hang (MW_GDB)
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            git make perl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-libgomp
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gdb
+      - name: toolchain
+        shell: msys2 {0}
+        run: |
+          gcc --version | head -1
+          ld --version | head -1
+          [ -f "$(gcc -print-file-name=libgomp.a)" ] || { echo "::error::no libgomp.a"; exit 1; }
+          echo "vector-math shim: $MW_EXE_VMATH_SHIM"
+          case "$MW_EXE_VMATH_SHIM" in ON|OFF) ;; *) echo "::error::MW_EXE_VMATH_SHIM must be ON or OFF"; exit 1 ;; esac
+      # A branch restores only its own caches and main's: main's push runs
+      # keep this warm for every branch and tag.
+      - uses: actions/cache/restore@v6
+        id: obcache
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: openblas-ucrt64-${{ hashFiles('standalone/build_openblas.sh') }}-v1
+      - name: OpenBLAS (build_openblas.sh, UCRT64)
+        if: steps.obcache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          s=$(date +%s)
+          if ! standalone/build_openblas.sh "$PWD/obw"; then
+            tail -60 obw/build-*.log
+            exit 1
+          fi
+          echo "OpenBLAS: $(( $(date +%s) - s )) s"
+      - uses: actions/cache/save@v6
+        if: steps.obcache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: ${{ steps.obcache.outputs.cache-primary-key }}
+      # The fat pair ships. The one-variant builds exist only as the fat ==
+      # one-variant gate's reference. The sse2 build never takes the shim: it
+      # has no avx2 cores to call it.
+      - name: configure + build (fat pair, and the one-variant references)
+        shell: msys2 {0}
+        run: |
+          set -e
+          standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
+          standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
+          mkdir -p single-fat single-one
+          shim=()
+          if [ "$MW_EXE_VMATH_SHIM" = ON ]; then shim=(-DMW_EXE_VMATH_SHIM=ON); fi
+          cfg() {  # DIR BASIS VARIANT [extra cmake args]
+            local d=$1 basis=$2 v=$3; shift 3
+            cmake -S standalone -B "$d" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
+              -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
+              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON "$@" > "$d.cmake.log"
+            cmake --build "$d" -- -k 0
+          }
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            cfg "build-$b-avx2" $basis avx2 "${shim[@]}"
+            cp "build-$b-avx2/$target.exe" "single-one/momwire-nec5-$b-avx2.exe"
+            cfg "build-$b-sse2" $basis sse2
+            cp "build-$b-sse2/$target.exe" "single-one/momwire-nec5-$b-sse2.exe"
+            cfg "build-$b-fat" $basis fat "${shim[@]}"
+            cp "build-$b-fat/$target.exe" "single-fat/$name.exe"
+            # the deferred avx2 constructors run on the avx2 path, and only there
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=avx2 "single-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            grep -q "avx2 initializers [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "single-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            ! grep -q "avx2 initializers" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
+            # The switch did what it says, in the bytes that ship: the shim's
+            # three names are linked in when ON, and absent when OFF.
+            one=$(nm "single-one/momwire-nec5-$b-avx2.exe" | grep -c ' T _ZGVdN4v_' || true)
+            fat=$(nm "single-fat/$name.exe" | grep -c ' T _ZGVdN4v_' || true)
+            echo "$b: shim names defined: avx2 $one, fat $fat (switch $MW_EXE_VMATH_SHIM)"
+            if [ "$MW_EXE_VMATH_SHIM" = ON ]; then
+              [ "$one" -eq 3 ] && [ "$fat" -ge 1 ] || { echo "::error::$b: the shim is not linked in"; exit 1; }
+              calls=0
+              for o in $(find "build-$b-avx2/CMakeFiles/mw_core.dir" "build-$b-avx2/CMakeFiles/mw_core_serial.dir" -name '*.obj'); do
+                c=$(objdump -dr "$o" | grep -c 'IMAGE_REL_AMD64_REL32.*_ZGVdN4v_\|R_X86_64_PC32.*_ZGVdN4v_' || true)
+                calls=$((calls + c))
+              done
+              echo "$b: $calls vector call sites in the avx2 cores"
+              [ "$calls" -gt 0 ] || { echo "::error::$b: no core calls the shim"; exit 1; }
+            else
+              [ "$one" -eq 0 ] && [ "$fat" -eq 0 ] || { echo "::error::$b: the shim is linked in with the switch OFF"; exit 1; }
+            fi
+          done
+          # licensing (THIRD-PARTY-NOTICES): no libquadmath or libgfortran linked in
+          for e in single-fat/*.exe single-one/*.exe; do
+            n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
+            echo "$e: $n libquadmath/libgfortran symbols"
+            [ "$n" -eq 0 ] || { echo "::error::$e links libquadmath or libgfortran"; exit 1; }
+          done
+          strip single-fat/*.exe single-one/*.exe
+          ls -l single-fat single-one
+      # HARD when the shim ships: its ABI under the Microsoft x64 convention
+      # and its fallback edges, on this gcc and this ucrtbase, and its object:
+      # three names, no constructor, no aligned ymm access through a pointer.
+      - name: the vector-math shim's ABI, edges and object
+        if: env.MW_EXE_VMATH_SHIM == 'ON'
+        shell: msys2 {0}
+        run: |
+          o=build-bs2-avx2/CMakeFiles/mw_vmath_shim.dir/mingw_vmath_shim.cpp.obj
+          names=$(nm -g --defined-only "$o" | awk '{print $3}' | grep -v '^\.refptr' | sort | tr '\n' ' ')
+          echo "shim defines: $names"
+          [ "$names" = "_ZGVdN4v_cos _ZGVdN4v_exp _ZGVdN4v_sin " ] || { echo "::error::the shim defines more than its three names"; exit 1; }
+          if objdump -h "$o" | grep -E '\.(c|d)tors|\.CRT'; then echo "::error::the shim has a constructor"; exit 1; fi
+          if objdump -d "$o" | grep -E 'vmov(apd|aps|dqa)[[:space:]].*ymm' | grep -E '\(%r' | grep -v '(%rip)'; then
+            echo "::error::the shim has an aligned ymm access"; exit 1
+          fi
+          g++ -O2 -fno-tree-vectorize -fopenmp-simd -fno-math-errno -ffp-contract=off -mavx2 -mfma \
+            -DMW_VMATH_SHIM_COUNT -Isrc/momwire -static \
+            scripts/windows_static/vmath_shim_check.cpp standalone/mingw_vmath_shim.cpp -o vmath_shim_check.exe
+          rc=0
+          ./vmath_shim_check.exe > vmath-shim-check.txt 2>&1 || rc=$?
+          cat vmath-shim-check.txt
+          echo "vmath_shim_check exit status: $rc"
+          exit $rc
+      # THE SIGNING MODE, windows-nopython's: the real certificate on a pushed
+      # tag or an azure_sign dispatch, a self-signed rehearsal on every other
+      # run. No unsigned mode on any CI path.
+      - name: Decide the signing mode
+        shell: pwsh
+        env:
+          AZURE_SIGN: ${{ inputs.azure_sign }}
+        run: |
+          $mode = if ($env:GITHUB_REF_TYPE -eq 'tag' -or $env:AZURE_SIGN -eq 'true') { 'azure' } else { 'rehearsal' }
+          "MOMWIRE_SIGN_MODE=$mode" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Rehearsal signing certificate (self-signed, never on tags)
+        if: env.MOMWIRE_SIGN_MODE == 'rehearsal'
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire standalone rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # windows-nopython's three azure steps, for the same reasons (see there)
+      - name: .NET 8 runtime (the runner's, else Microsoft's current host)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $have = @(& dotnet --list-runtimes 2>$null) -match '^Microsoft\.NETCore\.App 8\.'
+          if ($have) { $have; exit 0 }
+          $dir = Join-Path $env:RUNNER_TEMP 'dotnet'
+          $script = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+          Invoke-WebRequest -Uri https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1 -OutFile $script
+          & $script -Channel 8.0 -Runtime dotnet -InstallDir $dir -AzureFeed https://builds.dotnet.microsoft.com/dotnet
+          if (-not (Test-Path (Join-Path $dir 'dotnet.exe'))) { throw ".NET 8 runtime did not install to $dir" }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install the Artifact Signing dlib (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -OutFile nuget.exe
+          & ./nuget.exe install Microsoft.ArtifactSigning.Client -Version 1.0.128 -x -OutputDirectory packages
+          $dlib = Get-ChildItem packages -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+                  Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found in Microsoft.ArtifactSigning.Client" }
+          "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Write the Artifact Signing metadata (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
+        shell: pwsh
+        run: |
+          $meta = [ordered]@{
+            Endpoint               = "https://wus2.codesigning.azure.net"
+            CodeSigningAccountName = "momwire"
+            CertificateProfileName = "momwire-public-trust"
+            ExcludeCredentials     = @(
+              "ManagedIdentityCredential", "WorkloadIdentityCredential",
+              "SharedTokenCacheCredential", "VisualStudioCredential",
+              "VisualStudioCodeCredential", "AzureCliCredential",
+              "AzurePowerShellCredential", "AzureDeveloperCliCredential",
+              "InteractiveBrowserCredential")
+          }
+          $meta | ConvertTo-Json | Out-File metadata.json -Encoding utf8
+          "MOMWIRE_SIGN_METADATA=$((Resolve-Path metadata.json).Path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # After the strip (which would break a signature) and before staging, so
+      # every gate below runs the signed bytes that ship.
+      - name: sign the two executables
+        env:
+          AZURE_TENANT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_SECRET || '' }}
+        run: python standalone/sign_windows.py single-fat/momwire-nec5-razor-2p.exe single-fat/momwire-nec5-bspline.exe
+      - name: stage
+        id: stage
+        shell: pwsh
+        run: |
+          $D = "dist\momwire-nec5-windows-x64-single"
+          New-Item -ItemType Directory -Force $D | Out-Null
+          Copy-Item single-fat\momwire-nec5-razor-2p.exe, single-fat\momwire-nec5-bspline.exe $D
+          Copy-Item standalone\release\README-windows-single.txt "$D\README.txt"
+          Copy-Item standalone\release\THIRD-PARTY-NOTICES-windows-single.txt "$D\THIRD-PARTY-NOTICES.txt"
+          Get-ChildItem -Recurse $D | Select-Object FullName, Length
+      # Exactly the four files, and import tables naming only system DLLs and
+      # the UCRT's API sets (the README's stated requirement); then the freeze's
+      # Windows 7 import gate, as the MSVC zip takes it.
+      - name: the staged tree (contents, import tables, Windows 7 imports)
+        shell: pwsh
+        run: |
+          python -m pip install -q pefile
+          python scripts/windows_static/check_single_zip.py dist\momwire-nec5-windows-x64-single
+          if ($LASTEXITCODE) { exit 1 }
+          python scripts/eznec_freeze/scan_win7_imports.py dist\momwire-nec5-windows-x64-single
+          if ($LASTEXITCODE) { exit 1 }
+      - name: signatures in the staged tree
+        shell: pwsh
+        run: |
+          foreach ($e in Get-ChildItem -Recurse dist\momwire-nec5-windows-x64-single -Filter *.exe) {
+            $s = Get-AuthenticodeSignature $e.FullName
+            "$($e.FullName): $($s.Status) $($s.SignerCertificate.Subject)"
+            if (-not $s.SignerCertificate) { throw "$($e.Name) is not signed" }
+            if ($env:MOMWIRE_SIGN_MODE -eq 'azure' -and $s.Status -ne 'Valid') { throw "$($e.Name): $($s.Status)" }
+          }
+      # The file alone: a PATH of System32 only; a deck and a SimNEC stream
+      # each, and the -version line naming the toolchain.
+      - name: run from a System32-only PATH
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64-single).Path
+          $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
+          $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
+          $env:PATH = "$env:SystemRoot\System32"
+          foreach ($e in Get-ChildItem $D -Filter *.exe) {
+            $v = (& $e.FullName -version) -join ' '
+            if ($v -notmatch '^NEC5 momwire-nec5-\S+-standalone-(avx2|sse2)-ucrt64 \[sb\] ') { "::error::$($e.Name): $v names no ucrt64"; exit 1 }
+            $out = "$env:RUNNER_TEMP\$($e.BaseName).out"
+            & $e.FullName $deck $out
+            if ($LASTEXITCODE) { "::error::$($e.Name) rc=$LASTEXITCODE"; exit 1 }
+            if (Select-String -Quiet "NEC ERROR" $out) { exit 1 }
+            cmd /c "`"$($e.FullName)`" - - < `"$stream`" > `"$out.stream`""
+            if ($LASTEXITCODE) { exit 1 }
+            $n = (Select-String -Pattern 'INPUT LINE .* NX ' "$out.stream").Count
+            "$($e.Name): $v; stream $n structures"
+            if ($n -lt 1) { exit 1 }
+          }
+      # The Python reference the gates compare with, as in windows-nopython
+      - name: momwire environment
+        shell: pwsh
+        run: |
+          python -m venv venv
+          venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
+          venv\Scripts\python -m pip install -q -e ".[test]"
+      - name: contract tests (the fat pair)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64-single).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $env:MW_EXE_EXPECT_TOOLCHAIN = "ucrt64"
+          $fail = 0
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-razor-2p.exe"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs -p no:cacheprovider
+          if ($LASTEXITCODE) { $fail = 1 }
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-bspline.exe"
+          $env:MOMWIRE_STANDALONE_BASIS = "bspline"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs -p no:cacheprovider
+          if ($LASTEXITCODE) { $fail = 1 }
+          exit $fail
+      # The shipped files themselves, each path forced in turn, within
+      # PRINTOUT_RTOL_WIN32 of the launcher; a deck not served refused by name.
+      - name: every fixture deck and the NX chains (the fat pair, avx2 and sse2)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64-single).Path
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $fail = 0
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            foreach ($v in 'avx2', 'sse2') {
+              # avx2 is what this runner's CPU picks; sse2 is forced, the launcher's too
+              if ($v -eq 'sse2') { $env:MOMWIRE_FORCE_VARIANT = 'sse2' } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
+              $extra = @()
+              $L = "$PWD\venv\Scripts\momwire-nec5-razor-2p.exe"
+              if ($b[0] -eq 'bs2') { $extra = @('--basis', 'bspline', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bspline.exe" }
+              "=== $($b[1]) $v"
+              venv\Scripts\python scripts/core_split/exe_compare.py "exe-single-$($b[0])-$v.jsonl" --standalone --rtol win32 `
+                --exe "$D\$($b[1]).exe" --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      - uses: petarpetrovt/setup-sde@v6.0
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+      # The sse2 path on CPUs that lack AVX2 (Sandy Bridge) or AVX (Westmere),
+      # the avx2 path on Haswell, under Intel SDE, which faults on any
+      # instruction the emulated CPU lacks, static initialisers included. Each
+      # printout must be the one-variant executable's bytes.
+      - name: the fat pair under SDE (wsm, snb -> sse2; hsw -> avx2)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          $decks = @("tests\fixtures\razor_printout_3a\node_gap_two_sources.nec",
+                     "tests\fixtures\bspline_printout_buried\ab_hub16.nec",
+                     "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
+          $fail = 0
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            $fat = (Resolve-Path "dist\momwire-nec5-windows-x64-single\$($b[1]).exe").Path
+            foreach ($cpu in 'wsm', 'snb', 'hsw') {
+              $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
+              $env:OPENBLAS_CORETYPE = if ($cpu -eq 'hsw') { 'Haswell' } else { 'Nehalem' }
+              $one = (Resolve-Path "single-one\momwire-nec5-$($b[0])-$want.exe").Path
+              $v = (& $sde "-$cpu" -- $fat -version) -join ' '
+              "$($b[1]) under -$cpu : $v"
+              if (($LASTEXITCODE -ne 0) -or ($v -notmatch "-standalone-$want-ucrt64 ")) { "::error::$($b[1]) -$cpu picked wrong or failed"; $fail = 1; continue }
+              foreach ($d in $decks) {
+                foreach ($copy in 'serial', 'threads') {
+                  $o1 = "$env:RUNNER_TEMP\sde.out"
+                  if ($copy -eq 'threads') { $env:MW_EXE_COPY = 'threads'; $env:MOMWIRE_THREADS = '2' } else { Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS -ErrorAction Ignore }
+                  & $sde "-$cpu" -- $fat $d $o1
+                  $rc = $LASTEXITCODE
+                  $a = if (Test-Path $o1) { [IO.File]::ReadAllBytes($o1) } else { @() }
+                  Remove-Item $o1 -ErrorAction Ignore
+                  & $one $d $o1
+                  $bb = [IO.File]::ReadAllBytes($o1)
+                  Remove-Item $o1
+                  $same = ($rc -eq 0) -and [System.Linq.Enumerable]::SequenceEqual([byte[]]$a, [byte[]]$bb)
+                  "  $(Split-Path -Leaf $d) $copy : rc=$rc identical=$same"
+                  if (-not $same) { $fail = 1 }
+                }
+              }
+              Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS, Env:OPENBLAS_CORETYPE -ErrorAction Ignore
+            }
+          }
+          exit $fail
+      - name: fat == one-variant, every fixture deck (razor-2p and bs2, avx2 and sse2)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $env:MW_GDB = "$env:RUNNER_TEMP\msys64\ucrt64\bin\gdb.exe"
+          $fail = 0
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            foreach ($v in 'avx2', 'sse2') {
+              "=== $($b[1]) $v"
+              python scripts/windows_static/fat_compare.py "dist\momwire-nec5-windows-x64-single\$($b[1]).exe" $v "single-one\momwire-nec5-$($b[0])-$v.exe" `
+                tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      - name: upload the comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-windows-single-${{ github.run_id }}-${{ github.run_attempt }}
+          path: exe-single-*.jsonl
+          if-no-files-found: ignore
+      # The name rides on the ZIP FILE, as windows-nopython's does: canonical
+      # only on a pushed tag. The zip is checked as a user receives it.
+      - name: name, zip and check the zip
+        shell: pwsh
+        run: |
+          $stem = 'momwire-nec5-windows-x64-single'
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { $stem }
+                  elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { "$stem-SIGNTEST" }
+                  else { "$stem-SELFSIGNED-rehearsal" }
+          "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Compress-Archive -Path dist\momwire-nec5-windows-x64-single -DestinationPath "dist\$base.zip"
+          python scripts/windows_static/check_single_zip.py "dist\$base.zip"
+          if ($LASTEXITCODE) { exit 1 }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BUNDLE }}
+          path: dist/${{ env.BUNDLE }}.zip
+          if-no-files-found: error
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
+
+  # The single-file zip, on a pushed tag only (release-windows's guard), and
+  # only from a green windows-single. Its own job: a failed preview never
+  # holds back the MSVC zip.
+  release-windows-single:
+    name: attach the single-file Windows executables to the release (preview)
+    needs: windows-single
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 on 2026-10-28
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-windows-x64-single
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: momwire-nec5-windows-x64-single.zip
           fail_on_unmatched_files: true
 
   macos-nopython:
