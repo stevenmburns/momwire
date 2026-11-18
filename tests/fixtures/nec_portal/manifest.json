@@ -129,6 +129,13 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "dipole_gm_moved_renumbered",
+      "returncode": 253,
+      "deck_sha256": "2ff6a082e053432db6dacb944fa2c8fd281b00b13423f8d87aa93fd0fad66ed9",
+      "out_sha256": "1e75e480a230205b2641534ed7c294eb36cdba304c4109f33392aa0a156821fd",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "dipole_gm_translated_pair",
       "returncode": 253,
       "deck_sha256": "2ef6e978f4f18e467826c62e53a9454932ad39ccc367ba854608377411879033",

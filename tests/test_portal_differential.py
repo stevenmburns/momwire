@@ -47,6 +47,7 @@ dipole_fr_sweep                       1.29%   1.29%       -   0.96%      -
 dipole_free_space                     0.76%   0.76%       -   0.96%      -
 dipole_gd_cliff_sommerfeld            2.24%   2.23%       -   4.35%      -   (f)
 dipole_gd_second_medium               2.23%   2.23%       -   4.35%      -   (f)
+dipole_gm_moved_renumbered            0.76%   0.76%       -   0.96%      -
 dipole_gm_translated_pair             1.10%   1.10%       -   1.13%      -
 dipole_gr_rotated_ring                1.96%   1.96%       -   1.10%      -   (j)
 dipole_gs_scaled                      0.76%   0.76%       -   0.96%      -
@@ -573,9 +574,10 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # cliff-at-zero deck U2 added to them, plus the five momwire#652 captured
     # for the `PQ` charge report, plus the two momwire#1069 captured for load
     # scoping per execute group, plus the three momwire#1079 captured for
-    # RP's XNDA digits. The count is written out so a deck that
-    # quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 70
+    # RP's XNDA digits, plus the one momwire#2001 captured for GM's renumbering
+    # in place. The count is written out so a deck that quietly stops being
+    # measured shows up here.
+    assert len(SUPPORTED) == 71
 
 
 @pytest.mark.integration

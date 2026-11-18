@@ -220,6 +220,55 @@ def test_gm_with_nrpt_zero_transforms_the_block_in_place():
     assert shifted.wires[0].p1 == pytest.approx([5.0, 0.0, 1.0], abs=1e-15)
 
 
+def test_gm_with_nrpt_zero_adds_the_increment_to_the_moved_tags():
+    """momwire#2001, each shape read off nec2c's printout: NRPT 0 renumbers
+    the block it moves, a tag 0 stays 0, and a wire before ITS keeps its tag."""
+    moved = geometry(
+        "GW 1 2 0. 0. 0. 1. 0. 0. 1.E-3\nGM 5 0 0. 0. 0. 0. 0. 1. 0\nGE 0\n"
+    )
+    assert [w.tag for w in moved.wires] == [6]
+    zero = geometry(
+        "GW 0 2 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 2 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GM 5 0 0. 0. 0. 0. 0. 1. 0\nGE 0\n"
+    )
+    assert [w.tag for w in zero.wires] == [0, 7]
+    block = geometry(
+        "GW 1 2 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 2 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GW 3 2 0. 2. 0. 1. 2. 0. 1.E-3\n"
+        "GM 10 0 0. 0. 0. 0. 0. 1. 2\nGE 0\n"
+    )
+    assert [w.tag for w in block.wires] == [1, 12, 13]
+    plain = geometry(
+        "GW 1 2 0. 0. 0. 1. 0. 0. 1.E-3\nGM 0 0 0. 0. 0. 0. 0. 1. 0\nGE 0\n"
+    )
+    assert [w.tag for w in plain.wires] == [1]
+
+
+@pytest.mark.parametrize(
+    ("wires", "its", "cell_segments"),
+    [
+        ("GW 1 5 1. 0. 1. 1. 0. 3. 1.E-3\n", 1, 5),
+        ("GW 1 5 1. 0. 1. 1. 0. 3. 1.E-3\n", 0, 5),
+        ("GW 1 5 1. 0. 1. 1. 0. 3. 1.E-3\n", 11, None),
+        # ITS + ITGI is the first wire's own tag, and that wire did not move.
+        ("GW 6 5 1. 0. 1. 1. 0. 3. 1.E-3\nGW 1 5 2. 0. 1. 2. 0. 3. 1.E-3\n", 1, None),
+    ],
+)
+def test_gm_in_place_keeps_the_cell_only_when_it_moves_every_wire(
+    wires, its, cell_segments
+):
+    """momwire#2001: the renumbering must not change which block the cell's
+    rule reads. nec2c prints SYMMETRY FLAG 2 with a cell of 5 for the first two
+    rows and SYMMETRY FLAG 0 for the last two."""
+    built = geometry(f"{wires}GX 10 001\nGM 5 0 0. 0. 0. 0. 0. 0. {its}\nGE 0\n")
+    if cell_segments is None:
+        assert built.symmetry is None
+    else:
+        assert built.symmetry.cell_segments == cell_segments
+
+
 def test_gm_repetitions_compound_and_increment_the_tag():
     """§#gm--move-and-replicate: each repetition transforms the PREVIOUS
     copy, so one loop side replicates into a polygon."""
