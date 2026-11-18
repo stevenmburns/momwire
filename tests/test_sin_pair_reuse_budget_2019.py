@@ -273,6 +273,8 @@ def test_the_plans_kept_between_solvers_are_one_fills_budget():
 
 def test_the_cache_drops_the_oldest_plan_past_its_budget(monkeypatch):
     class Sized:
+        near_blocks = ()
+
         def __init__(self, n):
             self.values = np.zeros(n, np.uint8)
 
