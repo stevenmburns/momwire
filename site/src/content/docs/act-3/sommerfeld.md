@@ -66,8 +66,11 @@ bit for bit and skips the fill. It lives in your platform's cache
 directory: `~/.cache/momwire/sommerfeld` on Linux,
 `%LOCALAPPDATA%\momwire\Cache\sommerfeld` on Windows. Set
 `MOMWIRE_SOMM_CACHE_DIR` to move it, `MOMWIRE_SOMM_CACHE=0` to turn it off, or
-`MOMWIRE_SOMM_CACHE_MAX_MB` to change its 512 MB bound. Deleting the
-directory is always safe.
+`MOMWIRE_SOMM_CACHE_MAX_MB` to change its 512 MB bound. The standalone
+executables keep their tables in an `exe` folder inside it, one subfolder per
+build, and that bound covers all of those builds together: when you upgrade,
+the old build's tables are the first to go. The Python tables beside that
+folder have a 512 MB bound of their own. Deleting the directory is always safe.
 
 ## Run it yourself
 
