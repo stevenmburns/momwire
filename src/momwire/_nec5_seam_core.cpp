@@ -1604,6 +1604,7 @@ std::vector<std::string> split_notes(const Deck &d) {
 
 SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end) {
     SeamResult r;
+    engine.seam_done(r);
     StreamRead s = read_stream(text, open_end);
     r.chained = s.chained;
     r.route = SeamResult::served;
@@ -1739,6 +1740,7 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
         if (stopped) break;
     }
     r.stream = std::move(s);
+    engine.seam_done(r);
     return r;
 }
 

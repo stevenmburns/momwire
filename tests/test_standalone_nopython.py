@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -807,7 +808,11 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     counterpoise at 1 cm: every lever fires on it) with the levers off ("0"),
     on, and unset (L1 and L2 on by default, L5 and B1 off): the executable's
     printout is the launcher's, line 2 naming on both sides only the levers
-    on whose default is off (crossing_table, crossing_above_rule)."""
+    on whose default is off (crossing_table, crossing_above_rule) and that
+    the formulation honours: razor-2p accepts crossing_above_rule and never
+    read it, so neither side names it there (momwire#1980)."""
+    from momwire import _features
+
     sys.path.insert(0, str(ROOT / "tests"))
     from test_crossing_table_1860 import DECKS as DECKS_1860
 
@@ -826,7 +831,9 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     line2 = (de / "efhw_lo.out").read_bytes().split(b"\n")[1]
     assert b"+factored_columns" not in line2, line2
     assert (b"+crossing_table" in line2) == bool(on), line2
-    assert (b"+crossing_above_rule" in line2) == bool(on), line2
+    basis = line2.split()[2].decode("latin-1")
+    honoured = _features.honours("crossing_above_rule", _features.basis_solver(basis))
+    assert (b"+crossing_above_rule" in line2) == (bool(on) and honoured), line2
 
 
 # --- momwire#1956's crossing_sheet_retune (reach 8: the nec5 executables) -------
@@ -1140,3 +1147,136 @@ def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert r.stderr == _features.EXE_REFUSAL.format(name="razor_pair_reuse") + "\n"
     assert not (tmp_path / "reuse.out").exists()
+
+
+# --- one bound across every build's store (momwire#2014) ----------------------
+
+_MB = 1 << 20
+# Served by every build here, and it keeps its Sommerfeld masters in the store.
+STORE_DECK = FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec"
+
+
+def _store_files(root):
+    return {p.name: p.stat().st_size for p in (root / "exe").glob("*/*.grid")}
+
+
+def _store_total(root):
+    return sum(
+        p.stat().st_size for p in (root / "exe").glob("*/*") if p.suffix != ".tmp"
+    )
+
+
+def _seed_old_builds(root, builds=6, tables=2):
+    """Replaced builds' tables, 1 MB each, the oldest first in LRU order."""
+    now = time.time()
+    seeded = []
+    for b in range(builds):
+        d = root / "exe" / f"0.1.0-replaced-{b}"
+        d.mkdir(parents=True)
+        for t in range(tables):
+            p = d / f"master-{t:016x}.grid"
+            p.write_bytes(b"\0" * _MB)
+            then = now - 86400.0 * (10 + builds - b)
+            os.utime(p, (then, then))
+            seeded.append(p)
+    return seeded
+
+
+def _store_run(tmp_path, name, env):
+    out = tmp_path / f"{name}.out"
+    r = subprocess.run(
+        [EXE, str(STORE_DECK), str(out)],
+        cwd=tmp_path,
+        env=dict(env, MOMWIRE_BELOW_ANCHORS="off"),
+        capture_output=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    return out.read_bytes()
+
+
+def _store_reference(tmp_path):
+    """The deck's printout with no store, and the size of the tables it keeps."""
+    solo = tmp_path / "solo"
+    env = dict(os.environ, MOMWIRE_SOMM_CACHE_DIR=str(solo), MOMWIRE_SOMM_CACHE="1")
+    env.pop("MOMWIRE_SOMM_CACHE_MAX_MB", None)
+    want = _store_run(tmp_path, "nostore", dict(env, MOMWIRE_SOMM_CACHE="0"))
+    assert _store_run(tmp_path, "solo", env) == want
+    files = _store_files(solo)
+    assert files, "the deck kept no table: nothing here would run the eviction"
+    return want, files, sum(files.values())
+
+
+def test_the_store_bound_spans_every_build(tmp_path):
+    """Replaced builds' directories count against MOMWIRE_SOMM_CACHE_MAX_MB: a
+    run evicts their tables, oldest first, keeps every table of its own, and
+    answers the same bytes cold and warm."""
+    want, own, own_size = _store_reference(tmp_path)
+    limit = own_size // _MB + 3
+    store = tmp_path / "store"
+    seeded = _seed_old_builds(store)
+    assert _store_total(store) > limit * _MB
+    env = dict(
+        os.environ,
+        MOMWIRE_SOMM_CACHE_DIR=str(store),
+        MOMWIRE_SOMM_CACHE="1",
+        MOMWIRE_SOMM_CACHE_MAX_MB=str(limit),
+    )
+    assert _store_run(tmp_path, "cold", env) == want
+    assert _store_total(store) <= limit * _MB
+    left = [p.exists() for p in seeded]
+    assert not all(left), "nothing was evicted"
+    assert left == sorted(left), "evicted out of LRU order"
+    assert set(own) <= set(_store_files(store))
+    kept = sorted((store / "exe").glob("*/*.grid"))
+    assert _store_run(tmp_path, "warm", env) == want
+    assert _store_total(store) <= limit * _MB
+    assert all(p.exists() for p in kept), "a warm run evicted a table"
+
+
+def test_the_store_bound_holds_at_the_platform_default_directory(tmp_path):
+    """No MOMWIRE_SOMM_CACHE_DIR: the bound walks the platform's own cache
+    directory, under a private home so no real store is touched."""
+    want, _own, own_size = _store_reference(tmp_path)
+    home = tmp_path / "home"
+    if sys.platform == "win32":
+        root = home / "AppData" / "Local" / "momwire" / "Cache" / "sommerfeld"
+    elif sys.platform == "darwin":
+        root = home / "Library" / "Caches" / "momwire" / "sommerfeld"
+    else:
+        root = home / ".cache" / "momwire" / "sommerfeld"
+    seeded = _seed_old_builds(root)
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        USERPROFILE=str(home),
+        LOCALAPPDATA=str(home / "AppData" / "Local"),
+        XDG_CACHE_HOME=str(home / ".cache"),
+        MOMWIRE_SOMM_CACHE="1",
+        MOMWIRE_SOMM_CACHE_MAX_MB=str(own_size // _MB + 3),
+    )
+    env.pop("MOMWIRE_SOMM_CACHE_DIR", None)
+    assert _store_run(tmp_path, "default-dir", env) == want
+    assert not all(p.exists() for p in seeded), "nothing was evicted"
+    assert _store_total(root) <= (own_size // _MB + 3) * _MB
+
+
+def test_a_table_open_in_another_process_is_skipped_not_an_error(tmp_path):
+    """Another build holds its oldest table open while this run evicts: Windows
+    refuses the delete and POSIX lets the holder keep reading. Either way the
+    run succeeds with the same bytes and the holder's read comes back whole."""
+    want, _own, own_size = _store_reference(tmp_path)
+    store = tmp_path / "store"
+    seeded = _seed_old_builds(store)
+    env = dict(
+        os.environ,
+        MOMWIRE_SOMM_CACHE_DIR=str(store),
+        MOMWIRE_SOMM_CACHE="1",
+        MOMWIRE_SOMM_CACHE_MAX_MB=str(own_size // _MB + 3),
+    )
+    with open(seeded[0], "rb") as held:
+        assert _store_run(tmp_path, "held", env) == want
+        assert len(held.read()) == _MB
+        if sys.platform == "win32":
+            assert seeded[0].exists()
+    assert not seeded[1].exists(), "the next-oldest table was not evicted"

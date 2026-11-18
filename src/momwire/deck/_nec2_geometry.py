@@ -344,7 +344,9 @@ def _gm(card: Card, wires: list[FlatWire]) -> None:
 
     ``ITS`` is read as a real and rounded, which is NEC's own reading of the
     field; the block is every wire from the first one carrying that tag to the
-    end of the list.
+    end of the list.  ``NRPT`` 0 moves the block in place and still adds
+    ``ITGI`` to its nonzero tags, so a later card addresses a moved wire by its
+    new tag and the old one no longer answers (momwire#2001, as nec2c does).
     """
     itgi, nrpt = card.i(0), card.i(1)
     card.i(8)  # a NaN or infinite ITS refuses by card and field, as an integer
@@ -355,6 +357,8 @@ def _gm(card: Card, wires: list[FlatWire]) -> None:
     if nrpt == 0:
         for w in wires[i1:]:
             w.p1, w.p2 = xf(w.p1), xf(w.p2)
+            if w.tag != 0:
+                w.tag += itgi
         return
     block = wires[i1:]
     for _ in range(nrpt):
@@ -501,12 +505,13 @@ _GEOMETRY_BUILDERS = {
 
 def _symmetry_after(
     card: Card,
-    wires: list[FlatWire],
+    first_tag: int | None,
     before: tuple[int, int],
     symmetry: Symmetry | None,
 ) -> Symmetry | None:
     """The symmetry state after ``card`` ran; ``before`` is the ``(wires,
-    segments)`` extent the structure had before it (spec
+    segments)`` extent the structure had before it and ``first_tag`` the tag
+    its first wire carried then, if it had one (spec
     ``#gx--structure-reflection``, "The symmetric cell", and
     ``#gr--cylindrical-structure-rotation``).
 
@@ -564,12 +569,14 @@ def _symmetry_after(
         return None
     # GM.  `move` preserves only when it neither replicates nor restricts:
     # `if (nrpt == 0 && ix == 1) return;`, where `ix` is the first segment of
-    # the affected block.  The block start is re-resolved here rather than
-    # threaded out of `_gm` because it does not move: a replicating GM
-    # APPENDS its copies, so the first wire carrying ITS keeps its index.
+    # the affected block.  The block starts at the first wire exactly when
+    # that wire carried ITS before the card ran: `_gm` has already refused an
+    # ITS no wire carries, and an in-place GM has renumbered the block since,
+    # so ITS cannot be looked up again here (momwire#2001).
     if card.i(1) != 0:
         return None
-    if _first_wire_with_tag(wires, int(card.f(8) + 0.5)) != 0:
+    its = int(card.f(8) + 0.5)
+    if its > 0 and first_tag != its:
         return None
     return symmetry
 
@@ -1000,6 +1007,7 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
             ground_plane_interpolates = card.i(0) > 0
             continue
         before = (len(wires), n_segments)
+        first_tag = wires[0].tag if wires else None
         builders[card.mnemonic](card, wires)
         # Every wire the card built or moved, so the card named is the one
         # that made it so (a NaN field, a GS / GM past the doubles). A card
@@ -1018,7 +1026,7 @@ def build_geometry(cards: list[Card], builders=None) -> Nec2Structure:
             n_segments += sum(w.n_seg for w in wires[fresh:])
         else:
             n_segments = sum(w.n_seg for w in wires)
-        symmetry = _symmetry_after(card, wires, before, symmetry)
+        symmetry = _symmetry_after(card, first_tag, before, symmetry)
 
     snap_connections(wires)
     cuts = junction_cuts(wires)

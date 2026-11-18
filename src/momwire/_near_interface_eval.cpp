@@ -1016,10 +1016,13 @@ std::string py_repr(double x) {
 
 namespace {
 // The default-on features (`Feature.default` in `momwire._features`):
-// requested from the start, as Python's solvers have them on unless told
-// otherwise, so every C++ route (an executable, a test's Python-free
-// driver, an in-process seam) fills as Python does by default. An
-// executable withdraws one its environment turns off (`withdraw_feature`).
+// requested from the start, as Python's bspline and razor solvers have them
+// on unless told otherwise, so every C++ route (an executable, a test's
+// Python-free driver, an in-process seam) fills as those do by default.
+// Python's sinusoidal and sinusoidal-Galerkin fills run every lever off
+// (`_near_interface.under_levers`, momwire#1980); the nec42-sinusoidal
+// executable, past the levers' reach, withdraws them. An executable
+// withdraws one its environment turns off (`withdraw_feature`).
 Features default_requested() {
     Features f;
     f.factored_columns = true;
@@ -1030,12 +1033,15 @@ Features default_requested() {
 Features g_requested = default_requested(), g_active, g_stamped;
 
 bool *feature_slot(Features &f, const std::string &name) {
+    if (name == "point_cplx_staged") return &f.point_cplx_staged;
     if (name == "factored_columns") return &f.factored_columns;
     if (name == "height_sheet_recal") return &f.height_sheet_recal;
     if (name == "crossing_table") return &f.crossing_table;
     if (name == "crossing_above_rule") return &f.crossing_above_rule;
     if (name == "crossing_sheet_retune") return &f.crossing_sheet_retune;
+    if (name == "kcl_nullspace") return &f.kcl_nullspace;
     if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
+    if (name == "crossing_anchors") return &f.crossing_anchors;
     return nullptr;
 }
 }  // namespace
@@ -1062,12 +1068,15 @@ bool withdraw_feature(const std::string &name) {
 std::string requested_stamp() {
     const Features &f = g_stamped;
     std::string s;
+    if (f.point_cplx_staged) s += "+point_cplx_staged";
     if (f.factored_columns) s += "+factored_columns";
     if (f.height_sheet_recal) s += "+height_sheet_recal";
     if (f.crossing_table) s += "+crossing_table";
     if (f.crossing_above_rule) s += "+crossing_above_rule";
     if (f.crossing_sheet_retune) s += "+crossing_sheet_retune";
+    if (f.kcl_nullspace) s += "+kcl_nullspace";
     if (f.razor_pair_reuse) s += "+razor_pair_reuse";
+    if (f.crossing_anchors) s += "+crossing_anchors";
     return s;
 }
 
@@ -1080,6 +1089,21 @@ FeatureFill::~FeatureFill() {
     g_active = saved_;
     g_crossing_taken = saved_taken_;
 }
+
+namespace {
+std::mutex g_request_scope_mu;  // FeatureRequest's: one scope at a time
+}  // namespace
+
+FeatureRequest::FeatureRequest(const std::vector<std::string> &names)
+    : lock_(g_request_scope_mu), saved_(g_requested) {
+    for (const std::string &n : names)
+        if (!request_feature(n, false)) {
+            g_requested = saved_;
+            throw std::invalid_argument("not a C++ feature: " + n);
+        }
+}
+
+FeatureRequest::~FeatureRequest() { g_requested = saved_; }
 
 bool crossing_table_taken() { return g_crossing_taken; }
 

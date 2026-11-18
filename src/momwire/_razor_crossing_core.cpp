@@ -17,6 +17,7 @@
 #include <utility>
 #include <set>
 #include <stdexcept>
+#include <mutex>
 #include <thread>
 
 #if defined(_OPENMP)
@@ -1136,10 +1137,11 @@ std::vector<cd> node_charges(const Ctx &c, const RAxis &A, const RAxis &P,
     return out;
 }
 
-}  // namespace
-
-void crossing_blocks(const Front &f, std::vector<cd> &z,
-                     const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag) {
+// The cross blocks and node charges at the front's own wavenumber: the
+// shipped route, and what `crossing_blocks` runs whenever the anchors do not
+// serve the fill.
+void crossing_blocks_exact(const Front &f, std::vector<cd> &z,
+                           const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag) {
     const Ctx c = make_ctx(f);
     const int64_t n = f.n_basis;
     const RAxis A = crossing_path_axis(f, tents, false);
@@ -1248,6 +1250,418 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The opt-in feature `crossing_anchors` (see the header).
+//
+// Over a sweep the cross blocks' pairs are fixed and only the kernel moves:
+// k_p, and k_m through k and eps~(omega). Over a narrow band each entry is a
+// smooth function of k, so the entries are computed exactly at n_a
+// Chebyshev-Lobatto wavenumbers spanning the plan (its two ends among them)
+// and every other sweep point's are the barycentric interpolant of those. A
+// fill whose k IS an anchor's (the plan's two ends) adds that anchor's
+// entries as computed. (Taking each entry's propagation phase exp(-j kappa R)
+// out first, kappa = k_m or k, R the bases' centre distance, was measured and
+// made the interpolant WORSE on the target deck -- 3.7e-11 / 2.1e-11 against
+// 9.1e-12 at n_a = 5 over 3 % -- so the values are interpolated as they are.)
+
+// The fields `crossing_blocks_exact` reads, at wavenumber `k` (c, k, omega as
+// `Front::build` spells them, so an anchor at a plan wavenumber is that
+// frequency's front bit for bit). Front itself is move-only.
+void crossing_front_at(const Front &f, double k, Front &o) {
+    o.n_basis = f.n_basis;
+    o.n_seg = f.n_seg;
+    o.n_wires = f.n_wires;
+    o.basis_offsets = f.basis_offsets;
+    o.seg_offsets = f.seg_offsets;
+    o.media_below = f.media_below;
+    o.radius_per_wire = f.radius_per_wire;
+    o.seg_p0 = f.seg_p0;
+    o.seg_t = f.seg_t;
+    o.seg_h = f.seg_h;
+    o.wing_seg = f.wing_seg;
+    o.wing_sigma = f.wing_sigma;
+    o.wing_rise.assign(f.wing_rise.n, false);
+    for (size_t i = 0; i < f.wing_rise.n; i++) o.wing_rise.p[i] = f.wing_rise.p[i];
+    o.ground_z = f.ground_z;
+    o.ground_eps_r_ = f.ground_eps_r_;
+    o.ground_sigma_ = f.ground_sigma_;
+    o.buried = f.buried;
+    o.c = f.c;
+    o.k = k;
+    o.omega = o.c * k;
+}
+
+// The error rule's calibration (`anchors::bound`). Fitted on 43 synthetic
+// crossing decks (a vertical over 2-8 buried radials; 1.8-28 MHz; 1-9.5 %
+// bands; radials 0.1-1 wavelength, to 40 m; depth 0.02-1.5 m; sigma 1e-3 to
+// 3e-2, eps_r 5-30; some sloped), each at a forced n_a = 5, 7, 9 against
+// off, the nec5-razor-2p executable's full-precision Zin: every point above
+// the 3e-11 rounding floor satisfies |dZ|/|Z| <= 1.39e-2 X + 1.25 P (X, P
+// the two terms in `bound`). C_phase is twice that; C_origin four times,
+// because the origin term rests on two small-deck points (a held-out set of
+// 36 more put one at 0.54 of twice the fit). With these, every point of the
+// 79 decks sits at most 0.46 of the bound. The target sits a factor of three
+// under the registry's declared drift.
+constexpr double ANCHOR_BOUND_C_PHASE = 3e-2;
+constexpr double ANCHOR_BOUND_C_ORIGIN = 5.0;
+constexpr double ANCHOR_BOUND_TARGET = 5e-8 / 3.0;
+// The anchors' working memory: their values (n_a x the cross entries) and
+// the one n x n scratch an exact fill writes into, at 16 bytes an entry. A
+// plan whose anchors would pass this declines ("memory"), so the feature
+// never adds more than this to a fill's peak (the buried memory bound,
+// 512 MB, is the reason it is not larger).
+constexpr double ANCHOR_MEMORY_BYTES = 256.0 * 1024 * 1024;
+
+// The internal knobs, read when a plan is made: MOMWIRE_CROSSING_ANCHOR_NODES
+// (a study knob: n_a forced, the error rule below bypassed) and
+// MOMWIRE_CROSSING_ANCHOR_BAND ((k_max - k_min) / k_mid above which a plan
+// declines, default 0.10).
+//
+// The anchor count is otherwise CHOSEN, from an a-priori bound on the
+// interpolation error (`anchors::bound`): the smallest n_a in
+// [ANCHOR_NODES_MIN, ANCHOR_NODES_MAX] whose bound is at most
+// ANCHOR_BOUND_TARGET, or a decline ("electrically-large") when none is. The
+// band alone does not bound the error: the cross entries' phase runs over
+// the structure's span, so the error grows as (dk_m * D)^n_a with D the
+// largest above-to-below distance, and a long, low-loss deck at a band the
+// cap allows moved Zin 1.2e-6 at a fixed n_a = 5 (the 11-17 review).
+constexpr int ANCHOR_NODES_MIN = 5;
+constexpr int ANCHOR_NODES_MAX = 12;
+constexpr double ANCHOR_MAX_BAND_DEFAULT = 0.10;
+
+int anchor_nodes_knob() {
+    const char *v = std::getenv("MOMWIRE_CROSSING_ANCHOR_NODES");
+    if (v == nullptr || *v == '\0') return 0;
+    const long n = std::strtol(v, nullptr, 10);
+    return n >= 2 && n <= 32 ? static_cast<int>(n) : 0;
+}
+
+double anchor_band_knob() {
+    const char *v = std::getenv("MOMWIRE_CROSSING_ANCHOR_BAND");
+    if (v == nullptr || *v == '\0') return ANCHOR_MAX_BAND_DEFAULT;
+    const double b = std::strtod(v, nullptr);
+    return b > 0.0 && b < 2.0 ? b : ANCHOR_MAX_BAND_DEFAULT;
+}
+
+// |d k_m / d k| at k: k_m = k sqrt(eps~), eps~ = eps_r - j sigma Z0 / k (Z0 =
+// mu0 c), so d k_m / d k = (2 eps_r - j sigma Z0 / k) / (2 sqrt(eps~)). How
+// much faster than k_p the below medium's phase turns with frequency. 1 with
+// no lower medium given.
+double km_slope(double k, const anchors::Size &s) {
+    if (!(s.eps_r > 0.0) || !(s.c > 0.0)) return 1.0;
+    const double z0 = 4e-7 * M_PI * s.c;
+    const std::complex<double> eps_t(s.eps_r, -s.sigma * z0 / k);
+    const std::complex<double> num(2.0 * s.eps_r, -s.sigma * z0 / k);
+    return std::abs(num / (2.0 * std::sqrt(eps_t)));
+}
+
+}  // namespace
+
+namespace anchors {
+
+const double BOUND_TARGET = ANCHOR_BOUND_TARGET;
+const int NODES_MAX = ANCHOR_NODES_MAX;
+
+double span_of(int64_t n_seg, const double *seg_p0, const double *seg_t, const double *seg_h, double ground_z) {
+    // Each segment's two ends, sorted by side on its midpoint (a crossing
+    // deck's segments each lie wholly in one medium).
+    std::vector<double> up, down;
+    for (int64_t g = 0; g < n_seg; g++) {
+        const double *p = seg_p0 + 3 * g, *t = seg_t + 3 * g;
+        const double h = seg_h[g];
+        const double mid = p[2] + 0.5 * h * t[2];
+        std::vector<double> &side = mid < ground_z ? down : up;
+        for (int e = 0; e < 2; e++)
+            for (int i = 0; i < 3; i++) side.push_back(p[i] + (e ? h * t[i] : 0.0));
+    }
+    double d2 = 0.0;
+    for (size_t a = 0; a < up.size(); a += 3)
+        for (size_t b = 0; b < down.size(); b += 3) {
+            const double dx = up[a] - down[b], dy = up[a + 1] - down[b + 1], dz = up[a + 2] - down[b + 2];
+            d2 = std::max(d2, dx * dx + dy * dy + dz * dz);
+        }
+    return std::sqrt(d2);
+}
+
+bool fits(int n_a, int64_t entries, int64_t n) {
+    const double bytes = 16.0 * (static_cast<double>(n_a) * static_cast<double>(entries) +
+                                 static_cast<double>(n) * static_cast<double>(n));
+    return bytes <= ANCHOR_MEMORY_BYTES;
+}
+
+double bound(int n, double x, double rho) {
+    // C_phase X + C_origin P, the two error terms of Chebyshev interpolation
+    // of degree n - 1 on the band: X = 2 (x/2)^n / n! for an entry that
+    // turns its phase by x over the half band (e^{j x t}, entire), and
+    // P = 2 rho^-n for the nearest singularity of the kernel's k-dependence,
+    // the origin (the 1/(j omega eps) scale, the branch point of k_m), at
+    // Bernstein radius rho. The constants are the calibration above.
+    double phase = 2.0;
+    for (int i = 1; i <= n; i++) phase *= 0.5 * x / i;
+    return ANCHOR_BOUND_C_PHASE * phase + ANCHOR_BOUND_C_ORIGIN * 2.0 * std::pow(rho, -n);
+}
+
+Plan plan_of(const std::vector<double> &wavelengths, const Size &size) {
+    Plan p;
+    for (double wl : wavelengths) p.k.push_back(2.0 * M_PI / wl);  // `Front::build`'s k
+    std::sort(p.k.begin(), p.k.end());
+    p.k.erase(std::unique(p.k.begin(), p.k.end()), p.k.end());
+    const int forced = anchor_nodes_knob();
+    p.n_a = forced > 0 ? forced : ANCHOR_NODES_MIN;
+    bool finite = std::isfinite(size.span) && size.span >= 0.0;
+    for (double k : p.k) finite = finite && std::isfinite(k) && k > 0.0;
+    if (p.k.empty()) {
+        p.why = "";
+        return p;
+    }
+    if (!finite) {
+        p.why = "non-finite";
+        return p;
+    }
+    if (static_cast<long long>(p.k.size()) <= p.n_a + 1) {
+        p.why = "few-frequencies";
+        return p;
+    }
+    const double k_lo = p.k.front(), k_hi = p.k.back();
+    const double mid = 0.5 * (k_lo + k_hi), half = 0.5 * (k_hi - k_lo);
+    if ((k_hi - k_lo) / mid > anchor_band_knob()) {
+        p.why = "wide-band";
+        return p;
+    }
+    p.x = half * size.span * std::max({1.0, km_slope(k_lo, size), km_slope(k_hi, size)});
+    p.rho = (mid + std::sqrt(mid * mid - half * half)) / half;
+    if (forced == 0) {
+        int n = ANCHOR_NODES_MIN;
+        while (n <= ANCHOR_NODES_MAX && bound(n, p.x, p.rho) > ANCHOR_BOUND_TARGET) n++;
+        if (n > ANCHOR_NODES_MAX) {
+            p.why = "electrically-large";
+            return p;
+        }
+        p.n_a = n;
+        if (static_cast<long long>(p.k.size()) <= p.n_a + 1) {
+            p.why = "few-frequencies";
+            return p;
+        }
+    }
+    p.est = bound(p.n_a, p.x, p.rho);
+    p.why = "ok";
+    p.ok = true;
+    const int na = p.n_a;
+    for (int j = 0; j < na; j++) {
+        // Lobatto nodes, descending: j = 0 is k_hi, j = na - 1 k_lo, both
+        // the plan's own bits.
+        p.anchor_k.push_back(j == 0 ? k_hi : j == na - 1 ? k_lo : mid + half * std::cos(M_PI * j / (na - 1)));
+        p.bary_w.push_back(((j % 2) ? -1.0 : 1.0) * ((j == 0 || j == na - 1) ? 0.5 : 1.0));
+    }
+    return p;
+}
+
+bool in_plan(const Plan &p, double k) { return p.ok && std::binary_search(p.k.begin(), p.k.end(), k); }
+
+std::vector<int64_t> entries(int64_t n, const std::vector<int64_t> &rows_a, const std::vector<int64_t> &rows_b,
+                             const std::vector<int64_t> &tent_cols) {
+    std::vector<int64_t> idx;
+    idx.reserve(2 * rows_a.size() * rows_b.size() + tent_cols.size() * static_cast<size_t>(n));
+    for (int64_t r : rows_a)
+        for (int64_t c : rows_b) {
+            idx.push_back(c * n + r);
+            idx.push_back(r * n + c);
+        }
+    for (int64_t t : tent_cols)
+        for (int64_t i = 0; i < n; i++) idx.push_back(t * n + i);
+    std::sort(idx.begin(), idx.end());
+    idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
+    return idx;
+}
+
+int apply(cd *z, const int64_t *idx, size_t m, const cd *raw, const Plan &p, double k) {
+    const size_t na = p.anchor_k.size();
+    for (size_t j = 0; j < na; j++)
+        if (k == p.anchor_k[j]) {
+            // On an anchor: its own entries, as computed.
+            const cd *r = raw + j * m;
+            for (size_t e = 0; e < m; e++) z[idx[e]] += r[e];
+            return 0;
+        }
+    std::vector<double> lam(na);
+    double sum = 0.0;
+    for (size_t j = 0; j < na; j++) {
+        lam[j] = p.bary_w[j] / (k - p.anchor_k[j]);
+        sum += lam[j];
+    }
+    for (size_t j = 0; j < na; j++) lam[j] /= sum;
+    for (size_t e = 0; e < m; e++) {
+        cd v(0.0, 0.0);
+        for (size_t j = 0; j < na; j++) v += lam[j] * raw[j * m + e];
+        z[idx[e]] += v;
+    }
+    return 1;
+}
+
+}  // namespace anchors
+
+namespace {
+
+struct AnchorState {
+    std::mutex mu;
+    anchors::Plan plan;
+    // The anchors, once built: the geometry they are of, the entries they
+    // cover (column-major indices into Z, ascending) and each anchor's
+    // values there (n_a x entries).
+    bool built = false;
+    Front key;
+    std::vector<int64_t> idx;
+    std::vector<cd> raw;
+    AnchorCounters counters;
+};
+
+AnchorState &anchor_state() {
+    static AnchorState s;
+    return s;
+}
+
+// Each medium's rows, as `crossing_blocks_exact` forms them.
+std::vector<int64_t> medium_rows(const Front &f, bool below) {
+    const int64_t n = f.n_basis;
+    std::vector<int64_t> rows;
+    std::vector<char> mine(static_cast<size_t>(f.n_seg), 0);
+    for (int64_t w = 0; w < f.n_wires; w++)
+        if ((f.media_below[static_cast<size_t>(w)] != 0) == below) {
+            for (int64_t g = f.seg_offsets[w]; g < f.seg_offsets[w + 1]; g++) mine[static_cast<size_t>(g)] = 1;
+            for (int64_t m = f.basis_offsets[w]; m < f.basis_offsets[w + 1]; m++) rows.push_back(m);
+        }
+    for (int64_t m = f.basis_offsets.back(); m < n; m++)
+        if (mine[static_cast<size_t>(f.wing_seg[2 * m])] || mine[static_cast<size_t>(f.wing_seg[2 * m + 1])])
+            rows.push_back(m);
+    return rows;
+}
+
+// Builds the anchors on `f`'s geometry (the caller holds the lock), in the
+// plan's anchor order.
+bool build_anchors(AnchorState &s, const Front &f, const std::vector<std::pair<int64_t, int>> &tents,
+                   uintptr_t cancel_flag) {
+    const int64_t n = f.n_basis;
+    std::vector<int64_t> tent_cols;
+    for (const auto &t : tents) tent_cols.push_back(t.first);
+    std::vector<int64_t> idx = anchors::entries(n, medium_rows(f, false), medium_rows(f, true), tent_cols);
+    const size_t na = s.plan.anchor_k.size();
+    if (!anchors::fits(static_cast<int>(na), static_cast<int64_t>(idx.size()), n)) {
+        // Too large to hold: the plan declines for the rest of the sweep.
+        s.plan.ok = false;
+        s.plan.why = "memory";
+        return false;
+    }
+    std::vector<cd> raw(na * idx.size());
+    // Each anchor decides on the crossing table's state this fill reached
+    // the cross blocks with, as the exact route at that k would.
+    const bool taken_entry = ni_eval::crossing_table_taken();
+    std::vector<cd> scratch;
+    for (size_t j = 0; j < na; j++) {
+        Front fa;
+        crossing_front_at(f, s.plan.anchor_k[j], fa);
+        scratch.assign(static_cast<size_t>(n * n), cd(0.0, 0.0));
+        {
+            const ni_eval::CrossingEndsFirst state(taken_entry);
+            crossing_blocks_exact(fa, scratch, tents, cancel_flag);
+        }
+        cd *out = raw.data() + j * idx.size();
+        for (size_t e = 0; e < idx.size(); e++) out[e] = scratch[static_cast<size_t>(idx[e])];
+        s.counters.anchors_built++;
+    }
+    s.key = Front();
+    crossing_front_at(f, f.k, s.key);
+    s.idx = std::move(idx);
+    s.raw = std::move(raw);
+    s.built = true;
+    return true;
+}
+
+// MOMWIRE_CROSSING_ANCHOR_TRACE=1: one stderr line per fill the feature is
+// on for, naming what it did (a gate's proof that the branch ran, on any
+// route, the executables' included).
+bool anchor_trace_on() {
+    static const bool on = [] {
+        const char *v = std::getenv("MOMWIRE_CROSSING_ANCHOR_TRACE");
+        return v != nullptr && std::string(v) == "1";
+    }();
+    return on;
+}
+
+void anchor_trace(const char *what, const AnchorState &s) {
+    if (!anchor_trace_on()) return;
+    std::fprintf(stderr,
+                 "crossing_anchors: %s plan=%s n_a=%d built=%lld interpolated=%lld copied=%lld declined=%lld "
+                 "x=%.6g rho=%.6g est=%.3g\n",
+                 what, s.plan.why.empty() ? "none" : s.plan.why.c_str(), s.plan.n_a, s.counters.anchors_built,
+                 s.counters.interpolated, s.counters.copied, s.counters.declined, s.plan.x, s.plan.rho, s.plan.est);
+}
+
+bool same_vectors(const Front &a, const Front &b) {
+    if (a.n_basis != b.n_basis || a.n_seg != b.n_seg || a.n_wires != b.n_wires) return false;
+    if (a.basis_offsets != b.basis_offsets || a.seg_offsets != b.seg_offsets || a.media_below != b.media_below ||
+        a.radius_per_wire != b.radius_per_wire || a.seg_p0 != b.seg_p0 || a.seg_t != b.seg_t ||
+        a.seg_h != b.seg_h || a.wing_seg != b.wing_seg || a.wing_sigma != b.wing_sigma)
+        return false;
+    if (a.wing_rise.n != b.wing_rise.n) return false;
+    for (size_t i = 0; i < a.wing_rise.n; i++)
+        if (a.wing_rise.p[i] != b.wing_rise.p[i]) return false;
+    // Bitwise on the scalars (NaN never reaches here: the front refuses it).
+    return a.ground_z == b.ground_z && a.ground_eps_r_ == b.ground_eps_r_ && a.ground_sigma_ == b.ground_sigma_ &&
+           a.c == b.c && a.buried == b.buried;
+}
+
+}  // namespace
+
+bool same_crossing_geometry(const Front &a, const Front &b) { return same_vectors(a, b); }
+
+void set_band_plan(const std::vector<double> &wavelengths, const anchors::Size &size) {
+    AnchorState &s = anchor_state();
+    std::lock_guard<std::mutex> lock(s.mu);
+    anchors::Plan p = anchors::plan_of(wavelengths, size);
+    if (p.k == s.plan.k && p.n_a == s.plan.n_a && p.ok == s.plan.ok) return;  // the same plan
+    s.plan = std::move(p);
+    s.built = false;
+    s.key = Front();
+    s.idx.clear();
+    s.raw.clear();
+    s.counters = AnchorCounters();
+    s.counters.plan = s.plan.why;
+}
+
+AnchorCounters anchor_counters() {
+    AnchorState &s = anchor_state();
+    std::lock_guard<std::mutex> lock(s.mu);
+    return s.counters;
+}
+
+void crossing_blocks(const Front &f, std::vector<cd> &z,
+                     const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag) {
+    if (!ni_eval::active_features().crossing_anchors) {
+        crossing_blocks_exact(f, z, tents, cancel_flag);
+        return;
+    }
+    AnchorState &s = anchor_state();
+    std::unique_lock<std::mutex> lock(s.mu);
+    const bool in = anchors::in_plan(s.plan, f.k);
+    if (!in || (s.built && !same_vectors(s.key, f))) {
+        s.counters.declined++;
+        anchor_trace(!s.plan.ok ? "declined" : !in ? "outside-plan" : "other-geometry", s);
+        lock.unlock();
+        crossing_blocks_exact(f, z, tents, cancel_flag);
+        return;
+    }
+    if (!s.built && !build_anchors(s, f, tents, cancel_flag)) {
+        s.counters.declined++;
+        anchor_trace("declined", s);
+        lock.unlock();
+        crossing_blocks_exact(f, z, tents, cancel_flag);
+        return;
+    }
+    const int how = anchors::apply(z.data(), s.idx.data(), s.idx.size(), s.raw.data(), s.plan, f.k);
+    (how == 0 ? s.counters.copied : s.counters.interpolated)++;
+    anchor_trace(how == 0 ? "copied" : "interpolated", s);
 }
 
 }  // namespace razor

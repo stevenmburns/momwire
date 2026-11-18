@@ -56,6 +56,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _near_interface,
     _near_surface,
     _rotational_symmetry,
     _schedule,
@@ -1151,6 +1152,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # flag; `SinusoidalGalerkinSolver` clears it (its junction is its own).
     takes_junction_rule = True
 
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "sinusoidal"
+
     # momwire#396: every ground, wire loading and the extended kernel are
     # served (this is NEC2's own basis); junction_ports and node_gaps are
     # not (`_reject_junction_ports`; node_gaps has no kwarg here at all).
@@ -1362,19 +1367,26 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_ek_gating: tuple | None = None
         self._cached_nec4_live: tuple | None = None
         self._cancel = cancel
+        # Every feature the running family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below. The
+        # family is the instance's (`FEATURE_SOLVER`): the Galerkin subclass
+        # runs this constructor and honours fewer, which `bind` leaves off.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            transmitted_anchors=transmitted_anchors,
+            point_cplx_staged=point_cplx_staged,
+            pair_reuse=None if pair_reuse is None else bool(pair_reuse),
+        )
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
-        self._transmitted_anchors = _features.enabled(
-            "transmitted_anchors", transmitted_anchors
-        )
+        self._transmitted_anchors = bound["transmitted_anchors"]
         # momwire#1849: a buried class's own block (complex k, folded shape)
         # on the staged complex rows. None defers to
         # MOMWIRE_X_POINT_CPLX_STAGED (`_features`, reach 1, native); off is
         # `sinusoidal_field_tensor_cplx`, bit for bit.
-        self._point_cplx_staged = _features.enabled(
-            "point_cplx_staged", point_cplx_staged
-        )
+        self._point_cplx_staged = bound["point_cplx_staged"]
         # momwire#1911: `pair_reuse` (bspline's feature, #1809) on the
         # point-matched fill: each congruent pair's field tensors once
         # (`_sin_pair_reuse`). This fill finds its own classes, so any truthy
@@ -1384,9 +1396,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._pair_reuse_verify = isinstance(pair_reuse, str) and (
             pair_reuse == "verify"
         )
-        self._pair_reuse_on = _features.enabled(
-            "pair_reuse", None if pair_reuse is None else bool(pair_reuse)
-        )
+        self._pair_reuse_on = bound["pair_reuse"]
         self._sin_reuse_plans: dict = {}
         # Why the last fill did not reuse (None when it did, or was not asked),
         # the last fill's census per block, and verify's worst agreement.
@@ -6563,6 +6573,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blocks = 1 + (self.ground_z is not None) + self._sommerfeld_ground()
         return max(3 * blocks, 3 + 2) * N * 16
 
+    # The near-interface levers (momwire#1980): every one explicitly off
+    # here, since this family honours none (`_features.Feature.solvers`).
+    @_near_interface.under_levers
     def _assemble_Z(self, geom, k, eta=None, obs_rows=None):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
 
@@ -6874,7 +6887,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `SMALL_DECK_SEGS_GROUND` (a finite ground) declines, the census
         costing more than its fill saves; `pair_reuse="verify"` ignores it.
         Those two are checked after the rest, so a deck the reuse could not
-        serve anyway says why.
+        serve anyway says why. A deck whose plans and census would pass
+        `_sin_pair_reuse.PLAN_BUDGET_BYTES` declines too (momwire#2019), under
+        "verify" as well: that bound is the process's memory, not a saving.
         """
         if not self._pair_reuse_on:
             return None
@@ -7020,7 +7035,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(t, dtype=np.float64),
             )
 
-        def plan_for(block):
+        def plan_for(block, budget=None):
             if block in blocks:
                 return blocks[block]
             src_c, src_t = sources(block)
@@ -7040,6 +7055,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 gz if block == "reflected" else None,
                 None if obs_rows is None else obs_rows.tobytes(),
                 _pr.CANONICAL,
+                budget,
             )
             held = self._sin_reuse_plans.get(block)
             if held is not None and held[0] == key:
@@ -7065,6 +7081,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             census_rows,
                             src_rev=g_src_rev,
                             obs_rev=g_obs_rev,
+                            budget=budget,
                         )
 
                 else:
@@ -7081,13 +7098,30 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             ob_type,
                             census_rows,
                             src_rev=src_rev,
+                            budget=budget,
                         )
 
                 plan = _pr.shared_plan((*key, census_rows), build)
                 self._sin_reuse_plans[block] = (key, plan)
+            if plan is _pr.OVER_BUDGET:
+                return plan, src_c, src_t
             self.pair_reuse_census[block] = (plan.n_pairs, plan.n_classes, plan.n_near)
             blocks[block] = (plan, src_c, src_t)
             return blocks[block]
+
+        # momwire#2019: every block's plan before the fill, each within what
+        # the blocks before it left of the budget, so that a deck past it
+        # fills as with reuse off from the first band.
+        budget_left = _pr.PLAN_BUDGET_BYTES
+        for block in ("direct", ground_block):
+            if block is None:
+                continue
+            plan = plan_for(block, budget_left)[0]
+            if plan is _pr.OVER_BUDGET:
+                self.pair_reuse_declined = _pr.over_budget_reason()
+                self.pair_reuse_census = {}
+                return None
+            budget_left -= _pr.fill_nbytes(plan)
 
         def free_rows(block):
             """The shipped kernel on observer rows m0:m1 against source

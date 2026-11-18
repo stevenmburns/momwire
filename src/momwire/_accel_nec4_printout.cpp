@@ -9,6 +9,7 @@
 #include "_nec4_printout_core.h"
 #include "_sinusoidal_run_core.h"
 #include "_somm_below_fill_core.h"
+#include "_near_interface_eval.h"  // FeatureRequest (momwire#1849, momwire#1898)
 
 #include <complex>
 #include <memory>
@@ -393,7 +394,8 @@ void register_nec4_printout(py::module_ &m) {
     m.def(
         "sinusoidal_nec4_printout",
         [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
-           const std::string &variant, const std::string &marker) -> py::tuple {
+           const std::string &variant, const std::string &marker,
+           const std::vector<std::string> &features) -> py::tuple {
             if (blas.size() != 10 && blas.size() != 12) throw py::value_error("blas: ten or twelve addresses");
             mw::sinusoidal::FillLinalg la;
             if (blas.size() == 12) {
@@ -418,14 +420,19 @@ void register_nec4_printout(py::module_ &m) {
             bool ok;
             {
                 py::gil_scoped_release nogil;
+                // `features` requested for this run only (momwire#1849),
+                // with the GIL released, as FeatureRequest requires
+                const ni_eval::FeatureRequest asked(features);
                 SinBelowSource below;
                 ok = mw::sinusoidal::printout(text, st, la, out, why);
             }
             return py::make_tuple(ok, py::str(ok ? out : why));
         },
         py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
+        py::arg("features") = std::vector<std::string>{},
         "(True, the slot's printout) for basis 'sinusoidal' from the C++ run half, "
-        "or (False, why it declines).");
+        "or (False, why it declines). `features`: opt-in features (their "
+        "`momwire._features` names) requested for this run only.");
     // `sinusoidal_galerkin_nec4_printout` (test-facing only) was removed with
     // the SG C++ run half; last present at 4ec7912d.
     // The B-spline basis on the same run half (momwire#1607 Phase C1).
@@ -435,7 +442,8 @@ void register_nec4_printout(py::module_ &m) {
     m.def(
         "bspline_nec4_printout",
         [](py::bytes latin1_text, std::vector<uintptr_t> blas, const std::string &version,
-           const std::string &variant, const std::string &marker, bool arrays) -> py::tuple {
+           const std::string &variant, const std::string &marker, bool arrays,
+           std::vector<std::string> features) -> py::tuple {
             if (blas.size() != 14) throw py::value_error("blas: fourteen addresses");
             mw::bspline_nec4::Linalg la;
             la.np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
@@ -460,6 +468,9 @@ void register_nec4_printout(py::module_ &m) {
             {
                 py::gil_scoped_release nogil;
                 SinBelowSource below;  // a buried deck's below/below table
+                // `features` requested for this printout only (momwire#1898's
+                // `kcl_nullspace`, read by the port solve)
+                const ni_eval::FeatureRequest requested(features);
                 ok = mw::bspline_nec4::printout(text, st, la, out, why, arrays ? &got : nullptr);
             }
             py::list solves;
@@ -476,7 +487,8 @@ void register_nec4_printout(py::module_ &m) {
             return py::make_tuple(ok, py::str(ok ? out : why), solves);
         },
         py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
-        py::arg("arrays") = false,
+        py::arg("arrays") = false, py::arg("features") = std::vector<std::string>(),
         "(True, the slot's printout, solves) for basis 'bspline' from the C++ run half, or "
-        "(False, why it declines, solves); `solves` is each solve's (Z, B, X, Y) when `arrays`.");
+        "(False, why it declines, solves); `solves` is each solve's (Z, B, X, Y) when `arrays`. "
+        "`features`: registry names requested around the run (a test's switch).");
 }

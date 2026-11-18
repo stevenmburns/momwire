@@ -314,6 +314,18 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # GM with NRPT 0 moves the wire in place and still adds ITGI to its tag,
+    # so the EX addresses tag 6 and tag 1 is gone (momwire#2001).
+    decks["dipole_gm_moved_renumbered"] = (
+        "CE dipole moved by GM with a tag increment, fed on its new tag\n"
+        + _DIPOLE_GW
+        + "GM 5 0 0. 0. 0. 2.0 0. 0. 1.\n"
+        "GE 0\n"
+        "EX 0 6 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
     # GX — reflect the structure so far in X=0, then add a driven element
     # (momwire#415).  The trailing GW is deliberate and load-bearing: a GW
     # after a GX retires the symmetric cell, so the deck reaches GE with

@@ -26,6 +26,8 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -190,15 +192,34 @@ void cone_table(double k_p, cd k_m, double d, double zf, double beta, double a,
 // Written by the thread that runs the fill, before any parallel region of
 // it starts; the fill's worker threads only read it.
 struct Features {
+    // momwire#1849: the point-matched sinusoidal fill's complex-k field
+    // tensor on the complex Galerkin fill's staged rows
+    // (`sinusoidal_galerkin::point_field_tensor_cplx_staged`). Read from
+    // `requested_features()` at the sinusoidal fill's two in-medium kernel
+    // calls, as `SinusoidalSolver._field_tensor` reads its flag, not under a
+    // `FeatureFill` (which would turn on the default-on levers that solver
+    // never takes). Not in any executable's reach (`EXE_FEATURES`): reached
+    // through the in-process hook (`sinusoidal_nec4_printout(features=)`).
+    bool point_cplx_staged = false;
     bool factored_columns = false;    // L1: the twin's grid route (`mw899::Grid`)
     bool height_sheet_recal = false;  // L2: the recalibrated height census
     bool crossing_table = false;      // L5: the crossing rows from one table
     bool crossing_above_rule = false;  // B1: bspline's above x above rule
     bool crossing_sheet_retune = false;  // momwire#1956: the sheets' build weights retuned
+    // momwire#1898: bspline's junction rows eliminated before the factor.
+    // Not a fill lever: `bspline::solve_ports` reads it from the REQUESTED
+    // set at solve time, as `BSplineSolver` reads its flag at construction.
+    // No executable requests it (outside EXE_FEATURES); in-process test
+    // hooks do.
+    bool kcl_nullspace = false;
     // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
+    // razor-2p's cross blocks from anchors across a sweep
+    // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
+    // either: the crossing fill reads it from the active features.
+    bool crossing_anchors = false;
 };
 Features &requested_features();
 const Features &active_features();
@@ -226,6 +247,44 @@ class FeatureFill {
   private:
     Features saved_;
     bool saved_taken_;
+};
+
+// The requested features with `names` (registry names) added for one run,
+// unstamped, and what was requested before put back when it ends -- a test
+// hook's `features=` argument: an in-process run of what an executable's
+// environment would ask for, for the features no executable carries
+// (momwire#1849's point_cplx_staged, momwire#1898's kcl_nullspace). A name
+// this route does not carry throws std::invalid_argument, and nothing is
+// then left requested.
+//
+// Threads. The requested set is process-global (it is what an executable's
+// environment sets once), and a hook runs its route with the GIL released,
+// so two Python threads can be inside two hooks at once. Unguarded, their
+// save / restore pairs need not nest: A saves S and asks a, B saves S+a,
+// A restores S under B's run, B restores S+a -- `a` left on for the rest of
+// the process, which breaks every later flag-off run in it. So every scope,
+// an empty `names` included, holds one process-wide lock for its lifetime:
+// two scopes never overlap, and a hook's run sees exactly what it asked for.
+//
+// Construct it with the GIL RELEASED (inside the hook's
+// `py::gil_scoped_release`, or around a short one). A scope waiting on the
+// lock while holding the GIL would deadlock against a run inside another
+// scope that takes the GIL back, as the numpy host's allocations do.
+//
+// Not covered: a run OUTSIDE any scope (a fill on another thread that
+// constructs no FeatureRequest) still reads whatever a live scope asked
+// for. The scopes are test hooks' (no production route constructs one);
+// tests/test_kcl_nullspace_cxx_1898.py holds the two-thread case.
+class FeatureRequest {
+  public:
+    explicit FeatureRequest(const std::vector<std::string> &names);
+    ~FeatureRequest();
+    FeatureRequest(const FeatureRequest &) = delete;
+    FeatureRequest &operator=(const FeatureRequest &) = delete;
+
+  private:
+    std::unique_lock<std::mutex> lock_;  // first: held before saved_ is read
+    Features saved_;
 };
 
 // Whether the running fill has taken L5's crossing table (`_CrossingFill.taken`).

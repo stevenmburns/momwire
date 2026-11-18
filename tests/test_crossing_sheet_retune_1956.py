@@ -21,7 +21,7 @@ What is held:
   on both formulations, and the plan did change; so does the deep, high-
   frequency hub where the drift was measured largest (razor-2p).
 
-Reach 7 (the two nec5 executables): `DECKS` below are two hubs as NEC-5
+Reach 8 (the two nec5 executables): `DECKS` below are two hubs as NEC-5
 decks, which tests/test_standalone_nopython.py gives each executable off and
 on, against the launcher (byte for byte on Linux, the fixture gates'
 tolerance on Windows and macOS), and the executable's own Zin, on against
@@ -228,6 +228,92 @@ def test_the_cxx_plan_and_values_are_pythons(on):
     # sums, so the house's derived tolerance applies (tests/_lane_gate.py);
     # measured on the i5-1240P at 8.6e-16 off and 2.5e-15 on.
     assert_lanes_match(cv, py, f"sheet values, retune {'on' if on else 'off'}")
+
+
+def _cxx_plan(args, features):
+    """The C++ census's plan through the TEST-ONLY hook."""
+    got = ACC.near_interface_eval_designed(*args, features=features)
+    return np.asarray(got["planes"]).tolist(), np.asarray(got["heights"]).tolist()
+
+
+def _hook_args():
+    """The vertical over radials, on few rows: the plan is what is held."""
+    specs, rows = _vertical_over_radials()
+    return (K_P, K_M, [specs], A, rows[:32, 0], rows[:32, 1], rows[:32, 2])
+
+
+@pytest.mark.skipif(not HAVE_CXX, reason="needs the extension's TEST-ONLY hooks")
+def test_a_refused_feature_name_leaves_nothing_requested():
+    """momwire#2007: the hook asks for its features one name at a time, and a
+    name the C++ route does not carry throws part way through. The names
+    already asked must not stay on for the rest of the process."""
+    args = _hook_args()
+    off, on = _cxx_plan(args, []), _cxx_plan(args, [NAME])
+    assert off != on, "the feature must move this plan for the test to see it"
+    with pytest.raises(ValueError, match="not a C\\+\\+ feature"):
+        ACC.near_interface_eval_designed(*args, features=[NAME, "no_such_feature"])
+    assert _cxx_plan(args, []) == off
+
+
+@pytest.mark.skipif(not HAVE_CXX, reason="needs the extension's TEST-ONLY hooks")
+def test_the_hook_scope_on_two_threads_neither_leaks_nor_crosses():
+    """momwire#2007, in the shape of the kcl port's
+    `test_feature_scopes_on_two_threads_neither_leak_nor_cross`. The requested
+    set is process-global. One thread holds a scope with the GIL released
+    (`bspline_solve_ports`, asking for this feature) while another plans
+    through this hook asking for nothing. The plan must be the flag-off plan
+    every time, and nothing may stay requested afterwards. A save / restore
+    outside the scopes' lock fails both ways: the plan reads the other thread's
+    request, and the restore puts back a request that thread has since
+    dropped."""
+    import threading
+
+    from test_kcl_nullspace_cxx_1898 import CRAFTED, N, _numpy_blas, _random_system
+    from threadpoolctl import threadpool_limits
+
+    _syrk, four = _numpy_blas()
+    args = _hook_args()
+    off, on = _cxx_plan(args, []), _cxx_plan(args, [NAME])
+    assert off != on, "the feature must move this plan for the test to see it"
+    Z, B = _random_system(np.random.default_rng(5), N, 1)
+    kcl, _route = CRAFTED["reducible"]
+
+    rounds = 60
+    start = threading.Barrier(2)
+    planned = threading.Event()
+    plans = []
+    errors = []
+
+    def plan():
+        try:
+            start.wait()
+            for _ in range(rounds):
+                plans.append(_cxx_plan(args, []))
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the main thread below
+            errors.append(exc)
+        finally:
+            planned.set()
+
+    def solve():
+        try:
+            start.wait()
+            while not planned.is_set():
+                ACC.bspline_solve_ports(Z, B, kcl, four, [NAME])
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the main thread below
+            errors.append(exc)
+
+    with threadpool_limits(limits=1):
+        threads = [threading.Thread(target=f) for f in (plan, solve)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    if errors:
+        raise errors[0]
+    assert len(plans) == rounds
+    crossed = sum(p != off for p in plans)
+    assert crossed == 0, f"{crossed} of {rounds} plans read the other thread's request"
+    assert _cxx_plan(args, []) == off, "the feature stayed requested"
 
 
 # Razor's case moved to the slow lane at 0.94.0 (median 6.6 s over 12 runs);

@@ -5,6 +5,7 @@
 // otherwise), and its sentences are that Python's, byte for byte.
 #include "_nec5_razor_seam_core.h"
 #include "_near_interface_eval.h"  // the features this run asked for (momwire#1971)
+#include "_razor_crossing_core.h"  // the anchors' band plan (crossing_anchors)
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and
 // Python's elementwise arithmetic one IEEE operation at a time (the
@@ -212,6 +213,43 @@ SeamEngine::Built RazorSeamEngine::build(Prepared &p) const {
         b.unsolved = why == "buried-fill";
     }
     return b;
+}
+
+// The opt-in `crossing_anchors` (`_razor_crossing_core.h`): the run's
+// frequency plan, every wavelength its crossing fronts solve at, when the
+// deck is one structure (no NX chain) stepping one FR card and the fronts share one
+// geometry; otherwise none, and every fill takes the exact cross blocks.
+// Cleared at the seam's start, so no plan outlives its deck.
+void RazorSeamEngine::seam_done(const SeamResult &r) const {
+    std::vector<double> plan;
+    razor::anchors::Size size;
+    if (ni_eval::requested_features().crossing_anchors && r.route == SeamResult::served &&
+        !r.chained && r.structures.size() == 1 && r.stream.answers.size() == 1 &&
+        r.stream.answers[0].kind == Answer::stepped) {
+        const razor::Front *first = nullptr;
+        for (const Prepared &p : r.prepared) {
+            const RazorPrepared *part = dynamic_cast<const RazorPrepared *>(p.engine.get());
+            const razor::Front *f = part != nullptr ? part->front.get() : nullptr;
+            if (f == nullptr || (f->buried != razor::Buried::crossing && f->buried != razor::Buried::detached))
+                continue;
+            if (first == nullptr) first = f;
+            if (!razor::same_crossing_geometry(*first, *f)) {
+                plan.clear();
+                break;
+            }
+            plan.push_back(p.wavelength);
+        }
+        if (first != nullptr && !plan.empty()) {
+            // The error rule's view of the deck (`anchors::Size`), as the
+            // Python route forms it (`razor.py`'s `_crossing_anchors_now`).
+            size.span = razor::anchors::span_of(first->n_seg, first->seg_p0.data(), first->seg_t.data(),
+                                                first->seg_h.data(), first->ground_z);
+            size.eps_r = first->ground_eps_r_;
+            size.sigma = first->ground_sigma_;
+            size.c = first->c;
+        }
+    }
+    razor::set_band_plan(plan, size);
 }
 
 SeamResult razor_seam(const std::string &latin1_text, bool open_end) {

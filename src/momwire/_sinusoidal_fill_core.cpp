@@ -18,6 +18,8 @@
 #include "_razor_front_core.h"
 #include "_razor_wire_loading_core.h"
 #include "_sinusoidal_core.h"
+#include "_sinusoidal_galerkin_core.h"  // point_field_tensor_cplx_staged (momwire#1849)
+#include "_near_interface_eval.h"  // requested_features (momwire#1849)
 #include "_sinusoidal_nec4_core.h"
 #include "_somm_grid_core.h"
 #include "_somm_proj_core.h"
@@ -940,6 +942,25 @@ struct BelowRefusal {
     [[noreturn]] static void value(const std::string &m) { throw FrontError(m); }
 };
 
+// `_field_tensor`'s in-medium kernel (both shape sets, a radius per
+// observer): `sinusoidal_field_tensor_cplx`, or with the opt-in feature
+// `point_cplx_staged` on (momwire#1849, `SinusoidalSolver._point_cplx_staged`)
+// the same tensor on the complex Galerkin fill's staged rows, with the same
+// arguments -- `seg_h` the full lengths on both.
+//
+// Read from what the run REQUESTED, not under a `ni_eval::FeatureFill`: the
+// Python solver reads its flag at every `_field_tensor` call rather than
+// under a scope, and a `FeatureFill` here would also turn on the default-on
+// levers (height_sheet_recal reaches this fill through the crossing core's
+// `sheet_plan`) that `SinusoidalSolver` never takes. Only these two call
+// sites, both inside `assemble_Z`, read it.
+Tensors cplx_tensor(const CF &oc, const CF &ot, const CF &ao, const CF &sc, const CF &st, const CF &h, cd k, cd eta,
+                    const CF &gx, const CF &gw, bool folded) {
+    if (ni_eval::requested_features().point_cplx_staged)
+        return sinusoidal_galerkin::point_field_tensor_cplx_staged(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+    return sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+}
+
 // `_field_tensor(geom, k, src_c, src_t, obs_rows=(i0, i1), cos_shape)` at a
 // complex k: the complex twin over the band
 std::vector<std::vector<cd>> field_tensor_cplx(const Front &fr, const Kernel &K, ll i0, ll i1,
@@ -956,7 +977,7 @@ std::vector<std::vector<cd>> field_tensor_cplx(const Front &fr, const Kernel &K,
     CF h = f64(g.seg_h.data(), {n});
     const ll q = static_cast<ll>(K.gx.size());
     CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
-    const Tensors t = sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0);
+    const Tensors t = cplx_tensor(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded);
     std::vector<std::vector<cd>> out(3);
     const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
     for (int c = 0; c < 3; c++) {
@@ -1355,7 +1376,7 @@ std::vector<std::vector<cd>> class_tensor(const Front &fr, const Kernel &K, ll i
         }
         CF oc = pts(g.seg_centers, i0, i1), ot = pts(g.seg_tangents, i0, i1);
         CF ao = f64(a_obs.data(), {m});
-        put(sinusoidal_field_tensor_cplx(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded, 0), i0, i1);
+        put(cplx_tensor(oc, ot, ao, sc, st, h, k, eta, gx, gw, folded), i0, i1);
     } else if (folded) {
         // the accelerated kernel serves the literal cos only: numpy's route,
         // copied at one radius (a mixed deck declines the folded shape first)

@@ -37,6 +37,15 @@ whole stays off outside its own reach instead of refusing: the whole asks
 for "what this solver supports here", and :func:`withheld` says when that
 was nothing.
 
+Each feature also names the solver FAMILIES that honour it (``solvers``,
+keyed on each solver class's ``FEATURE_SOLVER``: :data:`SOLVERS`). A
+constructor resolves the ones its family honours through :func:`bind`, and
+line 2 names only the features the running solver honours (:func:`stamp`'s
+`solver`, from the printout's basis by :func:`basis_solver`): a variable a
+solver ignores is neither read by it nor stamped. A whole feature acts on a
+family with parts only through them, so there it is named only while one of
+those parts runs.
+
 With every feature at its default nothing here changes a byte of line 2:
 the stamp names only a feature that is on where its default is off. With every
 feature off -- the default-on ones turned off explicitly -- the printout is
@@ -58,10 +67,13 @@ __all__ = [
     "EXE_REFUSAL",
     "FEATURES",
     "LEVELS",
+    "SOLVERS",
     "Feature",
     "FeatureNotCertified",
     "Level",
     "active",
+    "basis_solver",
+    "bind",
     "certified",
     "check",
     "context_scope",
@@ -69,6 +81,7 @@ __all__ = [
     "current_level",
     "default_on",
     "enabled",
+    "honours",
     "stamp",
     "withheld",
 ]
@@ -142,6 +155,12 @@ EXE_REFUSAL = (
 
 KINDS = ("python", "native")
 
+# The solver families a feature can name in `Feature.solvers`: each solver
+# class's `FEATURE_SOLVER` (BSplineSolver and its H-matrix / array-block
+# subclasses "bspline", RazorSolver "razor", SinusoidalSolver "sinusoidal",
+# SinusoidalGalerkinSolver "sinusoidal_galerkin").
+SOLVERS = ("bspline", "razor", "sinusoidal", "sinusoidal_galerkin")
+
 # The most a default-on feature may move an answer: its declared `drift`
 # (|dZ|/|Z|) at or under this, below which a five-figure printout reads the
 # same (antennaknobs draws its "(faster)" line here too, LAST_DIGITS_DRIFT).
@@ -187,6 +206,12 @@ class Feature:
     # asking for that one (its keyword or its variable) turns this one on,
     # unless this one's own keyword or variable says otherwise.
     part_of: str | None = None
+    # The solver families that honour it (`SOLVERS`; momwire#1980): the ones
+    # whose constructor resolves it (`bind`, for a feature with a kwarg) or
+    # whose fill reads it where it runs (one without). A solver outside this
+    # set ignores the variable and the kwarg, and line 2 does not name it
+    # (`stamp`). tests/test_feature_solvers_1980.py holds it to the code.
+    solvers: tuple[str, ...] = ()
 
     @property
     def stable(self) -> bool:
@@ -214,6 +239,7 @@ FEATURES: dict[str, Feature] = {
             name="pair_reuse",
             reach=1,
             env="MOMWIRE_X_PAIR_REUSE",
+            solvers=("bspline", "razor", "sinusoidal"),
             kind="python",
             issue=1809,
             since="2026-11-04",
@@ -264,6 +290,7 @@ FEATURES: dict[str, Feature] = {
             name="offset_reuse",
             reach=1,
             env="MOMWIRE_X_OFFSET_REUSE",
+            solvers=("bspline",),
             kind="python",
             issue=1809,
             since="2026-11-05",
@@ -281,10 +308,27 @@ FEATURES: dict[str, Feature] = {
         # The transmitted (below->above) grid blended from frequency anchors
         # on a lattice fixed in metres (momwire#1847), so a sweep shares its
         # tables: the shipped evaluator, interpolated in ln f.
+        #
+        # `drift` is the survey's worst with 2.3x margin (momwire#2022): flag
+        # on against off, |dZin|/|Zin|, 326 served sweep points on bs2,
+        # sinusoidal and sinusoidal Galerkin, each counted as served.
+        #
+        #   wires 1-50 cm either side of the interface   1.3e-8  (sinusoidal)
+        #     the same, bs2                              4.7e-9
+        #   10 % lattice-phase sweep, m6_close's shape   1.2e-9
+        #   band sweeps to +- 25 %                       4.1e-9
+        #   repo fixtures (transmitted_mixed)            8.7e-10
+        #   dipole over a buried wire                    8.6e-10
+        #   long reach, soils 2/0.0001 to 15/0.1         1.2e-10
+        #   vertical over a screen, two depths           2.8e-11
+        #
+        # Crossing decks never reach this grid. A long deck over a very
+        # shallow source declines, and the exact grid serves it.
         Feature(
             name="transmitted_anchors",
             reach=1,
             env="MOMWIRE_X_TRANSMITTED_ANCHORS",
+            solvers=("bspline", "sinusoidal", "sinusoidal_galerkin"),
             kind="python",
             issue=1847,
             since="2026-11-07",
@@ -299,7 +343,7 @@ FEATURES: dict[str, Feature] = {
                 "the ground once for a band and blend it at each frequency, instead"
                 " of rebuilding it at every point."
             ),
-            drift=1e-8,
+            drift=3e-8,
             offer=True,
         ),
         # The point-matched sinusoidal fill's complex-k field tensor on the
@@ -309,6 +353,7 @@ FEATURES: dict[str, Feature] = {
             name="point_cplx_staged",
             reach=1,
             env="MOMWIRE_X_POINT_CPLX_STAGED",
+            solvers=("sinusoidal",),
             kind="native",
             issue=1849,
             since="2026-11-07",
@@ -336,6 +381,7 @@ FEATURES: dict[str, Feature] = {
             name="factored_columns",
             reach=9,
             env="MOMWIRE_X_FACTORED_COLUMNS",
+            solvers=("bspline", "razor"),
             kind="native",
             issue=1860,
             since="2026-11-08",
@@ -360,6 +406,7 @@ FEATURES: dict[str, Feature] = {
             name="height_sheet_recal",
             reach=9,
             env="MOMWIRE_X_HEIGHT_SHEET_RECAL",
+            solvers=("bspline", "razor"),
             kind="python",
             issue=1860,
             since="2026-11-08",
@@ -391,6 +438,7 @@ FEATURES: dict[str, Feature] = {
             name="crossing_table",
             reach=9,
             env="MOMWIRE_X_CROSSING_TABLE",
+            solvers=("bspline", "razor"),
             kind="native",
             issue=1860,
             since="2026-11-09",
@@ -420,6 +468,7 @@ FEATURES: dict[str, Feature] = {
             name="crossing_above_rule",
             reach=9,
             env="MOMWIRE_X_CROSSING_ABOVE_RULE",
+            solvers=("bspline",),
             kind="python",
             issue=1860,
             since="2026-11-09",
@@ -457,6 +506,7 @@ FEATURES: dict[str, Feature] = {
             name="crossing_sheet_retune",
             reach=8,
             env="MOMWIRE_X_CROSSING_SHEET_RETUNE",
+            solvers=("bspline", "razor"),
             kind="python",
             issue=1956,
             since="2026-11-16",
@@ -483,7 +533,7 @@ FEATURES: dict[str, Feature] = {
             # (Those figures are the Python route's, on the dict-built decks
             # of tests/test_crossing_sheet_retune_1956.py: the 1.5 m / 28 MHz
             # one is `_deep_hub(28e6, 1.5, 2.5)`.)
-            # Re-measured at the promotion to reach 7 (Rocketlake, T1,
+            # Re-measured at the promotion to the nec5 executables (Rocketlake, T1,
             # MW_EXE_ARRAYS) through the nec5 executables, on a scan of the
             # same 16-radial hub written as a NEC-5 deck (`hub_nec` there:
             # 7-30 MHz, depth 0.15-3 m, radials and vertical 2.5-7.5 m), a
@@ -512,6 +562,7 @@ FEATURES: dict[str, Feature] = {
             name="kcl_nullspace",
             reach=1,
             env="MOMWIRE_X_KCL_NULLSPACE",
+            solvers=("bspline",),
             kind="python",
             issue=1898,
             since="2026-11-11",
@@ -519,6 +570,8 @@ FEATURES: dict[str, Feature] = {
             paths=(
                 "src/momwire/_kcl_nullspace.py",
                 "tests/test_kcl_nullspace_1898.py",
+                "tests/test_kcl_nullspace_cxx_1898.py",
+                "tests/test_kcl_nullspace_sector_1983.py",
             ),
             label="eliminate junction constraints",
             summary=(
@@ -539,6 +592,7 @@ FEATURES: dict[str, Feature] = {
             name="exact_kernel_series",
             reach=1,
             env="MOMWIRE_X_EXACT_KERNEL_SERIES",
+            solvers=("razor",),
             kind="native",
             issue=1454,
             since="2026-10-13",
@@ -564,6 +618,7 @@ FEATURES: dict[str, Feature] = {
             name="razor_cxx",
             reach=1,
             env="MOMWIRE_X_RAZOR_CXX",
+            solvers=("razor",),
             kind="native",
             issue=1479,
             since="2026-10-14",
@@ -600,6 +655,7 @@ FEATURES: dict[str, Feature] = {
             # it was reach 1, the hosted app only, from 11-16).
             reach=8,
             env="MOMWIRE_X_RAZOR_PAIR_REUSE",
+            solvers=("razor",),
             kind="native",
             issue=1971,
             since="2026-11-16",
@@ -644,6 +700,72 @@ FEATURES: dict[str, Feature] = {
             # momwire#1982: on with `pair_reuse`; its own keyword and variable
             # are aliases. Outside its reach, asked for only that way, off.
             part_of="pair_reuse",
+        ),
+        # razor-2p's cross blocks across a frequency sweep from anchors
+        # (`_razor_crossing_core.cpp`, `set_band_plan`): the above x below
+        # blocks and the crossing node charges computed exactly at a few
+        # wavenumbers spanning the sweep (Chebyshev-Lobatto, the plan's two
+        # ends among them) and every other point's values interpolated
+        # between them as they are (barycentric, no phase taken out: dividing
+        # out exp(-j k R) measured worse). The above and below blocks stay
+        # exact per frequency. The anchor count is chosen per deck from an
+        # a-priori error bound (`anchors::bound`: the half band's phase turn
+        # over the deck's above-to-below span, scaled by how fast k_m turns
+        # with k), the fewest from 5 to 12 that meet a target a factor of
+        # three under the drift below. Declines (the exact blocks, flag-off
+        # bits) under too few frequencies, too wide a band, a deck too large
+        # electrically for 12, a fill outside the plan or on another
+        # geometry. One C++ core for the plan, the
+        # entries and the interpolation (`_razor_crossing_core.h`'s
+        # `anchors`): the nec5-razor-2p executable's fill and RazorSolver's
+        # (`_crossing_anchors_now`, which fills its anchors with its own
+        # cross terms), so the two print the same bytes. It acts where a
+        # seam hands the fill its sweep: the NEC-5 seam's stepping FR, in
+        # C++ and in the drop-in. Reach 8: the Python routes and the nec5
+        # executables (nec5-razor-2p's alone, `EXE_FEATURE_BASES`).
+        Feature(
+            name="crossing_anchors",
+            reach=8,
+            env="MOMWIRE_X_CROSSING_ANCHORS",
+            solvers=("razor",),
+            kind="native",
+            issue=2010,
+            since="2026-11-17",
+            kwarg="crossing_anchors",
+            paths=("tests/test_crossing_anchors_1117.py",),
+            label="shared ground-crossing entries across a sweep",
+            summary=(
+                "On a frequency sweep of a wire crossing the ground (a vertical "
+                "over buried radials), compute the entries between the wires "
+                "above and below the ground at a few frequencies and "
+                "interpolate them at the rest, instead of computing them at "
+                "every frequency."
+            ),
+            # |dZin|/|Zin| against off, full precision (the nec5-razor-2p
+            # executable's MW_EXE_ARRAYS, Rocketlake, the same threads both
+            # sides), every point of a 21-point sweep, the anchor count the
+            # error rule chose:
+            #   the four-radial buried vertical (251 segments, 7 MHz, 3 %):
+            #     5 anchors, 9.1e-12 at 1 thread, 9.9e-12 at 8;
+            #   79 synthetic crossing decks (`_razor_crossing_core.cpp`'s
+            #     calibration set, a held-out set and seven extremes: radials
+            #     to 40 m at 28 MHz on sigma 1e-3, 1.5 m deep, sloped):
+            #     5 to 12 anchors, worst 2.1e-9 (28 MHz, 6.3 m radials,
+            #     sigma 1e-3, 9.5 %, 7 anchors).
+            # A fixed five, the plan before the rule, reached 1.3e-5 on
+            # those decks (12.7 m radials at 28 MHz, 9.5 %): the band alone
+            # does not bound it. The rule's target is a third of this drift
+            # and its estimate carries at least twice the calibration fit, so
+            # the drift is the rule's bound with margin rather than a corpus
+            # maximum. It is an a-priori estimate fitted on measurements, not
+            # a proof: every stress point came in at most 0.46 of it, and the
+            # worst measured anywhere is 24x under 5e-8. Composed with
+            # crossing_table the anchors interpolate the table's values,
+            # which are not smooth in k: 2.0e-8 against crossing_table alone
+            # on the vertical, inside this drift but outside the rule, and
+            # under the table's own 8.9e-4.
+            drift=5e-8,
+            offer=False,
         ),
     )
 }
@@ -778,6 +900,64 @@ def withheld(
     return on and through_whole and _withheld_here(name, context)
 
 
+def honours(name: str, solver: str) -> bool:
+    """Whether the solver family `solver` (a :data:`SOLVERS` name, a solver
+    class's ``FEATURE_SOLVER``) honours feature `name`."""
+    return solver in FEATURES[name].solvers
+
+
+def bind(solver: object, kind: str, **kwargs: object) -> dict[str, bool]:
+    """Resolve the features a solver's constructor reads, for family `kind`.
+
+    Each keyword is a feature's name and the constructor's value for its
+    kwarg (None defers to the variable, then the default, as
+    :func:`enabled`). A feature `kind` honours is resolved by
+    :func:`enabled`, so a native one outside its reach refuses here; one the
+    constructor reads that `kind` does not honour (a subclass's narrower
+    set: SinusoidalGalerkinSolver runs SinusoidalSolver's constructor) is
+    off, and its variable is not read.
+
+    A part (``part_of``) is resolved with its whole's value from the same
+    call as `whole_kwarg`, so the whole's keyword reaches it in the order
+    :func:`enabled` documents; a native part the whole alone asked for
+    outside its reach stays off, and its name is kept on
+    ``solver.features_withheld`` (:func:`withheld`).
+
+    Every feature with a kwarg that `kind` honours must be passed, so the
+    registry cannot name a family whose constructor never reads the feature.
+    The answers, ``{name: on}`` in the keywords' order, are returned and kept
+    on ``solver.features_bound``."""
+    if kind not in SOLVERS:
+        raise ValueError(f"no solver family {kind!r} in the feature registry")
+    unknown = sorted(set(kwargs) - set(FEATURES))
+    if unknown:
+        raise TypeError(f"bind: no feature named {', '.join(unknown)}")
+    missing = [
+        name
+        for name, f in FEATURES.items()
+        if f.kwarg is not None and kind in f.solvers and name not in kwargs
+    ]
+    if missing:
+        raise TypeError(
+            f"bind: {kind} honours {', '.join(missing)} but its constructor "
+            "does not read it"
+        )
+    bound: dict[str, bool] = {}
+    held: list[str] = []
+    for name, value in kwargs.items():
+        if not honours(name, kind):
+            bound[name] = False
+            continue
+        whole = FEATURES[name].part_of
+        whole_value = kwargs.get(whole) if whole and honours(whole, kind) else None
+        bound[name] = enabled(name, value, whole_kwarg=whole_value)
+        if withheld(name, value, whole_kwarg=whole_value):
+            held.append(name)
+    solver.features_bound = bound
+    solver.features_withheld = tuple(held)
+    return bound
+
+
 def active() -> list[str]:
     """The features the environment turns on, in registry order (a
     default-on one only when its variable says on, not by its default)."""
@@ -810,6 +990,42 @@ def _os(platform: str | None) -> str:
     if p == "darwin" or p == "macos":
         return "macos"
     raise ValueError(f"no support level for platform {p!r}")
+
+
+# The solver family each basis spelling runs, for line 2 (`stamp`): a front
+# end's basis names (`momwire.deck.BASES`), the executables' build tokens and
+# names, and the long engine names. "" is a family that honours no feature
+# (the pulse family's HarringtonSolver); a spelling not listed is unknown
+# (`basis_solver` returns None). tests/test_feature_solvers_1980.py holds the
+# roster's names to their classes' `FEATURE_SOLVER`. "hmatrix" and "arrayblock"
+# run BSplineSolver's constructor, so they are that family; their accelerated
+# solve reads none of its features and only their dense fallback does, which
+# a table keyed on the basis cannot tell apart deck by deck.
+_BASIS_SOLVERS = {
+    "bspline": "bspline",
+    "bspline-d1": "bspline",
+    "hmatrix": "bspline",
+    "arrayblock": "bspline",
+    "nec5-bspline": "bspline",
+    "nec42-bspline": "bspline",
+    "bspline_nec5": "bspline",
+    "bspline_nec42": "bspline",
+    "razor-2p": "razor",
+    "razor-nec5": "razor",
+    "razor2p": "razor",
+    "nec5-razor-2p": "razor",
+    "sinusoidal": "sinusoidal",
+    "nec42-sinusoidal": "sinusoidal",
+    "sin42": "sinusoidal",
+    "sinusoidal-galerkin": "sinusoidal_galerkin",
+    "pulse": "",
+}
+
+
+def basis_solver(basis: str | None) -> str | None:
+    """The solver family (:data:`SOLVERS`) basis name `basis` runs, ``""``
+    for one that honours no feature, or None when the name is not known."""
+    return _BASIS_SOLVERS.get(basis or "")
 
 
 _UNSET: object = object()
@@ -908,16 +1124,47 @@ def check(name: str, context: str | None = None) -> None:
     )
 
 
-def stamp(context: str | None = None) -> str:
+def _runs_on(name: str, solver: str, context: str) -> bool:
+    """Whether feature `name`, on in the environment, runs on family `solver`:
+    the family honours it and, where the family takes a whole feature through
+    parts (``part_of``), one of those parts resolves on. A part's own variable
+    can turn it off under the whole, and outside its reach a native part the
+    whole alone asked for is withheld: either way the whole did nothing."""
+    if not honours(name, solver):
+        return False
+    parts = [
+        p.name for p in FEATURES.values() if p.part_of == name and solver in p.solvers
+    ]
+    if not parts:
+        return True
+    for part in parts:
+        on, through_whole = _resolve(part, None, None, context)
+        if on and not (through_whole and _withheld_here(part, context)):
+            return True
+    return False
+
+
+def stamp(context: str | None = None, solver: str | None = None) -> str:
     """What a printout's line 2 adds for the features the environment turns
     on where their default is off: ``""`` when there are none (the line is
     then byte-identical to one without features), else ``"+a+b"``, followed
     by ``" uncertified on this platform"`` when any of them is outside its
     reach here (`context` defaulting to the running one). A default-on
     feature is never named: on, it is the stable path; turned off, the
-    printout is the one before it was promoted."""
+    printout is the one before it was promoted.
+
+    `solver` is the running solver's family (:data:`SOLVERS`, or ``""`` for
+    one that honours none; :func:`basis_solver`): only the features that run
+    on it are named (:func:`_runs_on`), so a variable that solver ignores
+    never reaches line 2 (momwire#1980). None, a caller that does not know
+    the solver, names every feature on."""
     context = _CONTEXT.get() if context is None else context
-    names = [n for n in active() if not default_on(n, context)]
+    names = [
+        n
+        for n in active()
+        if not default_on(n, context)
+        and (solver is None or _runs_on(n, solver, context))
+    ]
     if not names:
         return ""
     text = "".join(f"+{n}" for n in names)

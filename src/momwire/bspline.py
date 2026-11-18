@@ -1914,6 +1914,10 @@ class BSplineSolver(
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # This family's name in the feature registry (`_features.SOLVERS`,
+    # `Feature.solvers`): which features it honours (momwire#1980).
+    FEATURE_SOLVER = "bspline"
+
     # momwire#396: everything is served on its own — three of the four
     # refusals are `use_singular_enrichment` combinations (`__init__`'s
     # three raises, reused here). `HMatrixSolver` / `ArrayBlockSolver` fall
@@ -2118,7 +2122,22 @@ class BSplineSolver(
         # follows it.
         whole = None if pair_reuse is None else pair_reuse is not False
         hint = None if isinstance(pair_reuse, (bool, str)) else pair_reuse
-        if not _features.enabled("pair_reuse", whole):
+        # Every feature this family honours is resolved here, once
+        # (`_features.bind`, momwire#1980), and read off `bound` below.
+        bound = _features.bind(
+            self,
+            self.FEATURE_SOLVER,
+            pair_reuse=whole,
+            offset_reuse=offset_reuse,
+            transmitted_anchors=transmitted_anchors,
+            factored_columns=factored_columns,
+            height_sheet_recal=height_sheet_recal,
+            crossing_table=crossing_table,
+            crossing_sheet_retune=crossing_sheet_retune,
+            crossing_above_rule=crossing_above_rule,
+            kcl_nullspace=kcl_nullspace,
+        )
+        if not bound["pair_reuse"]:
             hint = None
         # Renumbered to the solved wires on first use (`_solved_pair_reuse`):
         # a fill route that reads no plan pays nothing for a large hint.
@@ -2136,49 +2155,39 @@ class BSplineSolver(
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
         # defers to `pair_reuse` (it is that feature's part, momwire#1982),
         # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
-        self._offset_reuse = _features.enabled(
-            "offset_reuse", offset_reuse, whole_kwarg=whole
-        )
+        self._offset_reuse = bound["offset_reuse"]
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
-        self._transmitted_anchors = _features.enabled(
-            "transmitted_anchors", transmitted_anchors
-        )
+        self._transmitted_anchors = bound["transmitted_anchors"]
         # momwire#1860 L1: the near-interface columns' factored route. None
         # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
         # off is the member route, bit for bit.
-        self._factored_columns = _features.enabled("factored_columns", factored_columns)
+        self._factored_columns = bound["factored_columns"]
         # momwire#1860 L2: the near-interface height census recalibrated.
         # None defers to MOMWIRE_X_HEIGHT_SHEET_RECAL (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._height_sheet_recal = _features.enabled(
-            "height_sheet_recal", height_sheet_recal
-        )
+        self._height_sheet_recal = bound["height_sheet_recal"]
         # momwire#1860 L5: the crossing table. None defers to
         # MOMWIRE_X_CROSSING_TABLE (`_features`, reach 1, native); off is the
         # column twin, bit for bit.
-        self._crossing_table = _features.enabled("crossing_table", crossing_table)
+        self._crossing_table = bound["crossing_table"]
         # momwire#1956: the near-interface sheets' build weights retuned. None
         # defers to MOMWIRE_X_CROSSING_SHEET_RETUNE (`_features`, reach 1,
         # python); off is the shipped census, bit for bit.
-        self._crossing_sheet_retune = _features.enabled(
-            "crossing_sheet_retune", crossing_sheet_retune
-        )
+        self._crossing_sheet_retune = bound["crossing_sheet_retune"]
         # momwire#1860 B1: a crossing deck's above/above remainder at the
         # above-ground rule. None defers to MOMWIRE_X_CROSSING_ABOVE_RULE
         # (`_features`, reach 1, python); off is the cross block's order,
         # bit for bit.
-        self._crossing_above_rule = _features.enabled(
-            "crossing_above_rule", crossing_above_rule
-        )
+        self._crossing_above_rule = bound["crossing_above_rule"]
         # momwire#1898: the junction constraints eliminated before the factor
         # (`_kcl_nullspace`) where the Schur solve back-substitutes them. None
         # defers to MOMWIRE_X_KCL_NULLSPACE (`_features`, reach 1, python);
         # off is the Schur route, bit for bit. `kcl_nullspace_route` records
         # what the last constrained solve took: None (off, or no rows),
         # "reduced", or "schur: <why the rows were not reducible>".
-        self._kcl_nullspace = _features.enabled("kcl_nullspace", kcl_nullspace)
+        self._kcl_nullspace = bound["kcl_nullspace"]
         self.kcl_nullspace_route = None
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -9223,29 +9232,16 @@ class BSplineSolver(
             return str(exc)
         return None
 
+    @_near_interface.under_levers
     def _compute_Z_operator_buried(
         self, geom, supp_seg, polys, rows=None, compact=False
     ):
         """`_compute_Z_operator_buried_scoped` under this solver's
-        `factored_columns`, `height_sheet_recal`, `crossing_table` and
-        `crossing_sheet_retune` choices (momwire#1860, #1956)."""
-        with (
-            _near_interface.factored_columns_scope(
-                getattr(self, "_factored_columns", False)
-            ),
-            _near_interface.height_sheet_recal_scope(
-                getattr(self, "_height_sheet_recal", False)
-            ),
-            _near_interface.crossing_table_scope(
-                getattr(self, "_crossing_table", False)
-            ),
-            _near_interface.crossing_sheet_retune_scope(
-                getattr(self, "_crossing_sheet_retune", False)
-            ),
-        ):
-            return self._compute_Z_operator_buried_scoped(
-                geom, supp_seg, polys, rows=rows, compact=compact
-            )
+        near-interface levers (`_near_interface.under_levers`: momwire#1860,
+        #1956, set in one place since #1980)."""
+        return self._compute_Z_operator_buried_scoped(
+            geom, supp_seg, polys, rows=rows, compact=compact
+        )
 
     def _compute_Z_operator_buried_scoped(
         self, geom, supp_seg, polys, rows=None, compact=False

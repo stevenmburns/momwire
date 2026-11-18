@@ -170,6 +170,52 @@ CASES: list[tuple[str, tuple[str, ...], str, str]] = [
         "parsed",
     ),
     (
+        "gm_in_place_renumbers",
+        ("nec2", "nec4"),
+        deck(
+            DIPOLE + "GM 5 0 0 0 0 .5 0 0 1\n",
+            tail="FR 0 1 0 0 299.7925\nEX 0 6 6 0 1 0\nXQ\nEN\n",
+        ),
+        "parsed",
+    ),
+    (
+        "gm_in_place_keeps_tag_zero",
+        ("nec2", "nec4"),
+        deck(
+            "GW 0 5 .3 0 -.1 .3 0 .1 .001\n" + DIPOLE + "GM 5 0 0 0 0 .5 0 0 0\n",
+            tail="FR 0 1 0 0 299.7925\nEX 0 6 6 0 1 0\nXQ\nEN\n",
+        ),
+        "parsed",
+    ),
+    (
+        "gm_in_place_whole_keeps_the_cell",
+        ("nec2", "nec4"),
+        deck(
+            HALF + "GX 10 010\nGM 5 0 0 0 0 0 0 .5 1\n",
+            tail="FR 0 1 0 0 299.7925\nEX 0 6 3 0 1 0\nXQ\nEN\n",
+        ),
+        "parsed",
+    ),
+    (
+        "gm_in_place_part_retires_the_cell",
+        ("nec2", "nec4"),
+        deck(
+            HALF + "GX 10 010\nGM 5 0 0 0 0 0 0 .5 11\n",
+            tail="FR 0 1 0 0 299.7925\nEX 0 1 3 0 1 0\nXQ\nEN\n",
+        ),
+        "parsed",
+    ),
+    (
+        "gm_in_place_new_tag_of_a_later_block_is_the_first_wires",
+        ("nec2", "nec4"),
+        deck(
+            "GW 6 5 0 .1 -.25 0 .1 .25 .001\nGW 1 3 0 .3 -.25 0 .3 .25 .001\n"
+            "GX 10 010\nGM 5 0 0 0 0 0 0 .5 1\n",
+            tail="FR 0 1 0 0 299.7925\nEX 0 6 3 0 1 0\nXQ\nEN\n",
+        ),
+        "parsed",
+    ),
+    (
         "gm_missing_tag",
         ("nec2",),
         deck(DIPOLE + "GM 0 0 0 0 0 0 0 .5 7\n"),

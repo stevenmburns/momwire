@@ -6,11 +6,14 @@
 #include "_bspline_fill_core.h"
 #include "_bspline_crossing_core.h"
 #include "_razor_buried_core.h"
+#include "_razor_crossing_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
 #include "_near_interface_eval.h"
+
+#include <optional>
 
 // The binding half of `_razor_solve_core.cpp`: `RazorSolveContext`, a Python
 // handle on one `mw::razor::SolveContext` (its buffer pool and counters).
@@ -1150,7 +1153,17 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
 // deck's preparations (`_bspline_front_core.h`), test-facing.
 py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                 std::vector<uintptr_t> blas,
-                                std::vector<std::vector<double>> samples, double chunk_mb) {
+                                std::vector<std::vector<double>> samples, double chunk_mb,
+                                std::vector<std::string> features) {
+    // `features` (registry names) requested for this call only: the solve
+    // reads `kcl_nullspace` from the requested set (momwire#1898). The scope
+    // is taken with the GIL released (FeatureRequest's lock may wait on
+    // another thread's scope), then held, GIL and all, for the whole hook.
+    std::optional<ni_eval::FeatureRequest> requested;
+    {
+        py::gil_scoped_release nogil;
+        requested.emplace(features);
+    }
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1315,6 +1328,7 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                         const mw::bspline::PortSolve ps = mw::bspline::solve_ports(
                             Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl, &scipy_sym_lapack());
                         entry["solve_info"] = ps.info;
+                        entry["kcl_route"] = ps.kcl_route;
                         if (ps.info == 0) {
                             py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
                             for (int64_t i = 0; i < bs.n_basis; i++)
@@ -1354,6 +1368,53 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
         out.append(entry);
     }
     return out;
+}
+
+
+// TEST HOOK (momwire#1898): `bspline::solve_ports` on a caller's Z (C order,
+// n x n), real port columns B (n x n_p) and constraint rows (n_c x n), with
+// `features` requested around it: (info, X C order, Y, the kcl route).
+// `blas`: numpy's ILP64 cblas_zgemm / zgemv / zdotu_sub and zgesv.
+py::tuple bspline_solve_ports(cdarr Z, darr B, darr kcl, std::vector<uintptr_t> blas,
+                              std::vector<std::string> features) {
+    if (Z.ndim() != 2 || Z.shape(0) != Z.shape(1)) throw std::invalid_argument("Z: (n, n)");
+    const int64_t n = Z.shape(0);
+    if (B.ndim() != 2 || B.shape(0) != n) throw std::invalid_argument("B: (n, n_p)");
+    if (kcl.ndim() != 2 || kcl.shape(1) != n) throw std::invalid_argument("kcl: (n_c, n)");
+    if (blas.size() != 4) throw std::invalid_argument("blas: four addresses");
+    const int64_t n_p = B.shape(1), n_c = kcl.shape(0);
+    mw::nec5::NumpyLinalg npl;
+    npl.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[0]);
+    npl.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[1]);
+    npl.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[2]);
+    npl.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
+    std::vector<cd> z(Z.data(), Z.data() + Z.size());
+    const std::vector<double> b(B.data(), B.data() + B.size()), a(kcl.data(), kcl.data() + kcl.size());
+    const mw::razor::Lapack &lp = scipy_lapack();
+    const mw::bspline::SymLapack &sym = scipy_sym_lapack();
+    mw::bspline::PortSolve ps;
+    {
+        py::gil_scoped_release nogil;  // FeatureRequest's rule; the solve needs no Python
+        const ni_eval::FeatureRequest requested(features);
+        ps = mw::bspline::solve_ports(std::move(z), n, b, n_p, a, n_c, lp, npl, &sym);
+    }
+    py::array_t<cd> Xa({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(n_p)});
+    py::array_t<cd> Ya({static_cast<py::ssize_t>(n_p), static_cast<py::ssize_t>(n_p)});
+    if (ps.info == 0) {
+        for (int64_t i = 0; i < n; i++)
+            for (int64_t j = 0; j < n_p; j++)
+                Xa.mutable_data()[i * n_p + j] = ps.X[static_cast<size_t>(ps.x_c_order ? i * n_p + j : j * n + i)];
+        std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
+    }
+    return py::make_tuple(ps.info, Xa, Ya, ps.kcl_route);
+}
+
+// TEST HOOK (momwire#1898): `_kcl_nullspace.COUNTS`' twin, the routes the
+// C++ solve took with `kcl_nullspace` requested, per process.
+py::dict bspline_kcl_nullspace_counts() {
+    py::dict d;
+    for (const auto &kv : mw::bspline::kcl_nullspace_counts()) d[py::str(kv.first)] = kv.second;
+    return d;
 }
 
 
@@ -1505,15 +1566,18 @@ static py::dict near_interface_eval_designed(double k_p, cd k_m, py::list specs,
     ni_eval::Memo memo;
     {
         // `features` (registry names) requested around this plan only, as an
-        // executable's fill would have them on (momwire#1956's twin test).
-        const ni_eval::Features saved = ni_eval::requested_features();
-        for (const std::string &f : features)
-            if (!ni_eval::request_feature(f, false)) throw std::invalid_argument("not a C++ feature: " + f);
+        // executable's fill would have them on (momwire#1956's twin test). The
+        // scope is taken with the GIL released (FeatureRequest's lock may wait
+        // on another thread's scope), then held, GIL and all, for the plan:
+        // nothing outside a scope can then run beside the `FeatureFill`
+        // (momwire#2007).
+        std::optional<ni_eval::FeatureRequest> requested;
         {
-            const ni_eval::FeatureFill on;
-            memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
+            py::gil_scoped_release nogil;
+            requested.emplace(features);
         }
-        ni_eval::requested_features() = saved;
+        const ni_eval::FeatureFill on;
+        memo.plan = ni_eval::sheet_plan(k_p, k_m, pairs, wire_radius);
     }
     memo.have_plan = true;
     py::array_t<cd> out({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(ni_eval::N_KEYS)});
@@ -1542,6 +1606,72 @@ static py::tuple near_interface_eval_cone_table(double k_p, cd k_m, double d, do
     ni_eval::cone_table(k_p, k_m, d, zf, beta, a, zs, p, u_max, 0, edges, vals);
     py::array_t<cd> v(static_cast<py::ssize_t>(vals.size()), vals.data());
     return py::make_tuple(py::array_t<double>(static_cast<py::ssize_t>(edges.size()), edges.data()), v);
+}
+
+// The opt-in `crossing_anchors` for the Python route (`razor.py`'s
+// `_crossing_anchors_now`): the C++ fill's own plan, entries and
+// interpolation (`_razor_crossing_core.h`'s `anchors`), so both routes write
+// the same bits.
+static mw::razor::anchors::Size anchor_size(double span, double eps_r, double sigma, double c) {
+    mw::razor::anchors::Size s;
+    s.span = span;
+    s.eps_r = eps_r;
+    s.sigma = sigma;
+    s.c = c;
+    return s;
+}
+
+static py::dict crossing_anchor_plan(std::vector<double> wavelengths, double span, double eps_r, double sigma,
+                                     double c) {
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths, anchor_size(span, eps_r, sigma, c));
+    py::dict d;
+    d["ok"] = p.ok;
+    d["why"] = p.why;
+    d["n_a"] = p.n_a;
+    d["k"] = p.k;
+    d["anchor_k"] = p.anchor_k;
+    d["x"] = p.x;
+    d["rho"] = p.rho;
+    d["est"] = p.est;
+    // The plan's inputs, so `crossing_anchor_apply` re-forms the same plan.
+    d["size"] = py::make_tuple(span, eps_r, sigma, c);
+    return d;
+}
+
+// `anchors::span_of` over a geometry's segments (seg_p0 / seg_t (n_seg, 3),
+// seg_h (n_seg), C order).
+static double crossing_anchor_span(darr seg_p0, darr seg_t, darr seg_h, double ground_z) {
+    const py::ssize_t n = seg_h.size();
+    if (seg_p0.ndim() != 2 || seg_p0.shape(0) != n || seg_p0.shape(1) != 3 || seg_t.ndim() != 2 ||
+        seg_t.shape(0) != n || seg_t.shape(1) != 3)
+        throw std::invalid_argument("seg_p0 / seg_t must be (n_seg, 3), seg_h (n_seg)");
+    return mw::razor::anchors::span_of(static_cast<int64_t>(n), seg_p0.data(), seg_t.data(), seg_h.data(), ground_z);
+}
+
+static py::array_t<int64_t> crossing_anchor_entries(int64_t n, std::vector<int64_t> rows_a, std::vector<int64_t> rows_b,
+                                                    std::vector<int64_t> tent_cols) {
+    const std::vector<int64_t> idx = mw::razor::anchors::entries(n, rows_a, rows_b, tent_cols);
+    py::array_t<int64_t> out(static_cast<py::ssize_t>(idx.size()));
+    std::copy(idx.begin(), idx.end(), out.mutable_data());
+    return out;
+}
+
+// Z (n x n, Fortran order) += the anchors' values at k; 0 on an anchor, 1
+// interpolated.
+static int crossing_anchor_apply(py::array z, iarr idx, cdarr raw, std::vector<double> wavelengths, double k,
+                                 double span, double eps_r, double sigma, double c) {
+    if (!(z.flags() & py::array::f_style) || z.dtype().kind() != 'c' || z.itemsize() != 16 || z.ndim() != 2 ||
+        z.shape(0) != z.shape(1) || !z.writeable())
+        throw std::invalid_argument("Z must be a writeable square complex128 Fortran-order array");
+    const mw::razor::anchors::Plan p = mw::razor::anchors::plan_of(wavelengths, anchor_size(span, eps_r, sigma, c));
+    if (!mw::razor::anchors::in_plan(p, k)) throw std::invalid_argument("k is not in the plan");
+    const size_t m = static_cast<size_t>(idx.size());
+    if (raw.ndim() != 2 || static_cast<size_t>(raw.shape(0)) != p.anchor_k.size() || static_cast<size_t>(raw.shape(1)) != m)
+        throw std::invalid_argument("raw must be (n_a, entries)");
+    const int64_t n2 = static_cast<int64_t>(z.shape(0)) * static_cast<int64_t>(z.shape(0));
+    for (size_t e = 0; e < m; e++)
+        if (idx.data()[e] < 0 || idx.data()[e] >= n2) throw std::invalid_argument("entry out of range");
+    return mw::razor::anchors::apply(static_cast<cd *>(z.mutable_data()), idx.data(), m, raw.data(), p, k);
 }
 
 void register_razor_solve(py::module_ &m) {
@@ -1581,6 +1711,27 @@ void register_razor_solve(py::module_ &m) {
              "nothing else is set), else X (n_basis, n_ports) column-major, "
              "info (> 0: U(info, info) exactly zero), cols, geom "
              "(`_build_geometry`'s dict), ties, and Z / front on request.");
+
+    // crossing_anchors for the Python route (`_razor_crossing_core.h`).
+    m.attr("crossing_anchors_1117") = true;
+    m.def("crossing_anchor_plan", &crossing_anchor_plan, py::arg("wavelengths"), py::arg("span"),
+          py::arg("eps_r"), py::arg("sigma"), py::arg("c"),
+          "crossing_anchors' plan over a sweep's wavelengths for a deck of that span and lower "
+          "medium: ok, why, n_a, k, anchor_k, x, rho, est, size.");
+    m.def("crossing_anchor_span", &crossing_anchor_span, py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
+          py::arg("ground_z"), "The largest distance from an above segment's end to a below segment's.");
+    m.attr("crossing_anchor_bound_target") = mw::razor::anchors::BOUND_TARGET;
+    m.attr("crossing_anchor_nodes_max") = mw::razor::anchors::NODES_MAX;
+    m.def("crossing_anchor_fits", &mw::razor::anchors::fits, py::arg("n_a"), py::arg("entries"), py::arg("n"),
+          "Whether the anchors' values and their scratch fit crossing_anchors' memory budget.");
+    m.def("crossing_anchor_bound", &mw::razor::anchors::bound, py::arg("n"), py::arg("x"), py::arg("rho"),
+          "crossing_anchors' a-priori bound on |dZ|/|Z| at n anchors.");
+    m.def("crossing_anchor_entries", &crossing_anchor_entries, py::arg("n"), py::arg("rows_a"),
+          py::arg("rows_b"), py::arg("tent_cols"),
+          "The column-major Z entries the cross blocks and node charges write.");
+    m.def("crossing_anchor_apply", &crossing_anchor_apply, py::arg("z"), py::arg("idx"), py::arg("raw"),
+          py::arg("wavelengths"), py::arg("k"), py::arg("span"), py::arg("eps_r"), py::arg("sigma"), py::arg("c"),
+          "Z[idx] += the anchors' values at k (Z Fortran order); 0 on an anchor, 1 interpolated.");
 
     // momwire#1971: fill-pair reuse for the Python route.
     m.attr("razor_pair_reuse_1971") = true;
@@ -1673,8 +1824,15 @@ void register_razor_solve(py::module_ &m) {
     m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
           py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
           py::arg("samples") = std::vector<std::vector<double>>(), py::arg("chunk_mb") = 0.0,
+          py::arg("features") = std::vector<std::string>(),
           "TEST HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
+    m.def("bspline_solve_ports", &bspline_solve_ports, py::arg("Z"), py::arg("B"), py::arg("kcl"),
+          py::arg("blas"), py::arg("features") = std::vector<std::string>(),
+          "TEST HOOK (momwire#1898): bspline::solve_ports on a caller's (Z, B, kcl), "
+          "`features` requested: (info, X, Y, kcl route).");
+    m.def("bspline_kcl_nullspace_counts", &bspline_kcl_nullspace_counts,
+          "TEST HOOK (momwire#1898): the C++ solve's kcl_nullspace routes, per process.");
     m.def("bspline_buried_stages", &bspline_buried_stages, py::arg("latin1"),
           py::arg("blas") = std::vector<uintptr_t>(), py::arg("cross") = false,
           "TEST HOOK (momwire#1517 step 4): the buried fill's Z before the crossing serve and the loading.");
