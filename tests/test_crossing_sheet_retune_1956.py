@@ -46,6 +46,7 @@ from momwire.bspline import BSplineSolver
 from momwire.razor import RazorSolver
 
 from test_crossing_serve_524 import _radial_dirs, crossing_deck, hub_deck
+from _lane_gate import assert_lanes_match
 
 # An experimental feature (`momwire._features`, reach 7).
 pytestmark = [
@@ -223,7 +224,10 @@ def test_the_cxx_plan_and_values_are_pythons(on):
     assert np.array_equal(np.asarray(cx["planes"]), np.asarray(plan.planes))
     assert np.array_equal(np.asarray(cx["heights"]), np.asarray(plan.heights))
     cv = np.asarray(cx["values"])
-    assert np.array_equal(py.view(np.uint64), cv.view(np.uint64))
+    # Bit-equal off Windows. On win32, MSVC's /fp:fast reassociates the C++
+    # sums, so the house's derived tolerance applies (tests/_lane_gate.py);
+    # measured on the i5-1240P at 8.6e-16 off and 2.5e-15 on.
+    assert_lanes_match(cv, py, f"sheet values, retune {'on' if on else 'off'}")
 
 
 @pytest.mark.parametrize("cls", [RazorSolver, BSplineSolver])
