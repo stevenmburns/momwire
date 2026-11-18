@@ -148,6 +148,8 @@ of the deck: one thread for a small deck, a few for a middling one, and one
 per physical core for a large one. It never uses more threads than the
 machine has physical cores. The environment variable `MOMWIRE_THREADS` fixes
 the count for every deck.
+The Python engines follow the same rule; their order of precedence among the
+thread variables is [on the EZNEC page](/reference/eznec-nec5/#threads).
 
 - **Many independent runs** (a sweep split into separate decks, a batch of
   designs): set `MOMWIRE_THREADS=1` and run as many at once as the machine
