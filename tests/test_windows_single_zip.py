@@ -80,6 +80,28 @@ def test_only_system_dlls_and_the_ucrt_are_allowed():
         assert CZ.disallowed([*ok, dll]) == [dll]
 
 
+def test_reading_the_imports_releases_the_file(monkeypatch, tmp_path):
+    # pefile maps the file, and Windows refuses to delete a mapped file: the
+    # zip gate's temporary folder could not be removed (run 44365997347).
+    closed = []
+
+    class FakePE:
+        DIRECTORY_ENTRY_IMPORT = [type("E", (), {"dll": b"KERNEL32.dll"})]
+
+        def __init__(self, path, fast_load):
+            pass
+
+        def parse_data_directories(self, directories):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(CZ.pefile, "PE", FakePE)
+    assert CZ.imported_dlls(tmp_path / "a.exe") == ["kernel32.dll"]
+    assert closed == [True]
+
+
 def test_the_job_never_runs_on_a_pull_request():
     job = _jobs()["windows-single"]
     assert job["if"] == "${{ github.event_name != 'pull_request' }}"

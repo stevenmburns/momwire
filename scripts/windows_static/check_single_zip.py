@@ -30,15 +30,19 @@ UCRT_PREFIX = "api-ms-win-crt-"
 def imported_dlls(exe: Path) -> list[str]:
     """Every DLL `exe` names in its import and delay-import tables, lower case."""
     pe = pefile.PE(str(exe), fast_load=True)
-    pe.parse_data_directories(
-        directories=[
-            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
-            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT"],
-        ]
-    )
-    entries = list(getattr(pe, "DIRECTORY_ENTRY_IMPORT", []))
-    entries += list(getattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT", []))
-    return sorted({e.dll.decode().lower() for e in entries})
+    try:
+        pe.parse_data_directories(
+            directories=[
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT"],
+            ]
+        )
+        entries = list(getattr(pe, "DIRECTORY_ENTRY_IMPORT", []))
+        entries += list(getattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT", []))
+        return sorted({e.dll.decode().lower() for e in entries})
+    finally:
+        # pefile keeps the file mapped, and Windows cannot delete a mapped file
+        pe.close()
 
 
 def disallowed(dlls: list[str]) -> list[str]:
