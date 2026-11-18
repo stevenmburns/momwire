@@ -200,7 +200,7 @@ def _last_trace(stderr: str):
 def test_the_registry_entry():
     f = _features.FEATURES["crossing_anchors"]
     assert (f.reach, f.kind, f.env, f.kwarg, f.default, f.offer) == (
-        7,
+        8,
         "native",
         ENV,
         "crossing_anchors",
