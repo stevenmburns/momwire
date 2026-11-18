@@ -22,7 +22,7 @@ Each takes the forms the real engine takes:
 The -version line is the Python command's with "-standalone", the build that
 answered and "-ucrt64" added to the name, e.g.
 
-    NEC5 momwire-nec5-razor-2p-standalone-avx2-ucrt64 [sb] 0.95.0
+    NEC5 momwire-nec5-razor-2p-standalone-avx2-ucrt64 [sb] 0.94.0
 
 so SimNEC (and the "CM version" card it puts on each deck) shows that this
 preview answered, and not the programs in momwire-nec5-windows-x64.zip.
