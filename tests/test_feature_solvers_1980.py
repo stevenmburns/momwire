@@ -429,9 +429,17 @@ def test_each_feature_is_named_on_its_family_alone(
 def test_exact_kernel_series_is_named_on_razor_2p_only_when_on(no_features, value):
     if value is not None:
         no_features.setenv("MOMWIRE_X_EXACT_KERNEL_SERIES", value)
-    tail = " +exact_kernel_series" if value == "1" else ""
     with F.context_scope("python"):
-        assert _printout.engine_stamp("razor-2p") == _bare_stamp("razor-2p") + tail
+        stamp = _printout.engine_stamp("razor-2p")
+        if value == "1":
+            # Reach 1: past it the stamp says so, and line 2's width limit may
+            # shorten the basis field to make room, so only the tail is exact.
+            tail = " +exact_kernel_series"
+            if not F.certified("exact_kernel_series", "python"):
+                tail += " uncertified on this platform"
+            assert stamp.endswith(tail), stamp
+        else:
+            assert stamp == _bare_stamp("razor-2p")
         for basis in ("bspline", "sinusoidal"):
             assert _printout.engine_stamp(basis) == _bare_stamp(basis)
 
