@@ -10,8 +10,8 @@ plan: the hint's copies never ran and nothing said so. Now the two compose:
 - the answer stays inside the two features' declared drift;
 - the held blocks stay inside the fill's memory budget, and every way a hint
   goes unread is named in `pair_reuse_declined`, on the routes that read no
-  plan (the buried fill, the batched sweep) as well: those keep the no-hint
-  fill's bits.
+  plan (the buried fill, the batched sweep, the H-matrix and array-block
+  operators) as well: those keep the no-hint fill's bits.
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ import pytest
 
 import momwire.bspline as bs
 from momwire import _features
+from momwire.array_block import ArrayBlockSolver
 from momwire.bspline import BSplineSolver
+from momwire.hmatrix import HMatrixSolver
 
 # An experimental feature (`momwire._features`, reach 1).
 pytestmark = pytest.mark.reach(1)
@@ -351,3 +353,104 @@ def test_a_sweep_frequency_by_frequency_still_reads_the_hint():
     s.compute_impedance_swept(_sweep_k())
     assert s.pair_reuse_declined is None
     assert s.pair_reuse_served["copied_blocks"] == 2
+
+
+def test_a_chunked_fill_that_copies_nothing_says_so():
+    """Own blocks of edges too short for the offset route, on a deck whose
+    tensor does not fit: the plan is read, and none of it can be served."""
+    s = _solver(count=8, n=11, pair_reuse=_hint(8)[:1], swept_mem_mb=1)
+    Z = _fill(s)
+    assert s.pair_reuse_declined == "the chunked fill copies nothing this hint offers"
+    assert s.pair_reuse_served is None
+    assert np.array_equal(
+        Z, _fill(_solver(count=8, n=11, hint=False, pair_reuse=True, swept_mem_mb=1))
+    )
+
+
+H_REASON = "the H-matrix operator does not read the hint"
+ARRAY_REASON = "the array-block operator does not read the hint"
+
+#: Every way a caller reaches an accelerated operator, each returning arrays.
+ACCELERATED = {
+    "impedance": lambda s: s.compute_impedance()[0],
+    "port": lambda s: s.compute_port_solution().y,
+    "y": lambda s: s.compute_y_matrix(),
+    "impedance_sweep": lambda s: s.compute_impedance_swept(_sweep_k()),
+    "port_sweep": lambda s: np.stack(
+        [np.asarray(p.y) for p in s.compute_port_solution_swept(_sweep_k())]
+    ),
+    "y_sweep": lambda s: s.compute_y_matrix_swept(_sweep_k()),
+}
+
+
+def _accelerated(cls, reuse):
+    """A deck each class serves on its own operator. The size rule that hands
+    a small H-matrix sweep to the dense route is switched off."""
+    count, n, kw = (
+        (4, 41, {"swept_dense_max_bases": 0}) if cls is HMatrixSolver else (6, 21, {})
+    )
+    wires, segs = _deck(count, n)
+    hint = _hint(count) if reuse == "hint" else reuse
+    return cls(
+        wires=wires,
+        n_per_edge_per_wire=segs,
+        feed_wire_index=0,
+        wavelength=LAM,
+        wire_radius=0.002,
+        pair_reuse=hint,
+        **kw,
+    )
+
+
+@pytest.mark.parametrize("entry", sorted(ACCELERATED))
+@pytest.mark.parametrize(
+    ("cls", "reason"),
+    [(HMatrixSolver, H_REASON), (ArrayBlockSolver, ARRAY_REASON)],
+    ids=["hmatrix", "array_block"],
+)
+def test_an_accelerated_operator_names_the_hint_it_does_not_read(
+    cls, reason, entry, plan_reads
+):
+    s = _accelerated(cls, "hint")
+    out = ACCELERATED[entry](s)
+    assert s._hmatrix is not None, "the accelerated operator did not run"
+    assert s.pair_reuse_declined == reason
+    assert s.pair_reuse_served is None
+    assert not plan_reads
+    assert np.array_equal(out, ACCELERATED[entry](_accelerated(cls, True)))
+
+
+@pytest.mark.parametrize("entry", sorted(ACCELERATED))
+@pytest.mark.parametrize("cls", [HMatrixSolver, ArrayBlockSolver])
+def test_an_accelerated_operator_says_nothing_without_a_hint(cls, entry):
+    s = _accelerated(cls, True)
+    ACCELERATED[entry](s)
+    assert s._hmatrix is not None
+    assert s.pair_reuse_declined is None
+
+
+def test_a_cached_array_operator_still_names_the_hint():
+    """The second solver finds the operator built: the build's own decline
+    would never run."""
+    _accelerated(ArrayBlockSolver, True).compute_port_solution()
+    s = _accelerated(ArrayBlockSolver, "hint")
+    s.compute_port_solution()
+    assert s.pair_reuse_declined == ARRAY_REASON
+
+
+def test_an_array_with_no_structure_names_the_operator_it_fell_back_to():
+    """No two elements alike: the array-block solver runs the H-matrix."""
+    wires = [
+        np.array([[3.0 * i, -(3 + 0.4 * i), 10.0], [3.0 * i, 3 + 0.4 * i, 10.0]])
+        for i in range(4)
+    ]
+    s = ArrayBlockSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[21] for _ in wires],
+        feed_wire_index=0,
+        wavelength=LAM,
+        wire_radius=0.002,
+        pair_reuse=[[((0, 0), (1, 0)), ((1, 0), (2, 0))]],
+    )
+    s.compute_port_solution()
+    assert s.pair_reuse_declined == H_REASON

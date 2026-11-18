@@ -1694,6 +1694,7 @@ class HMatrixSolver(BSplineSolver):
         if k is None:
             k = self.k
         self._refuse_buried_fast_operator("HMatrixSolver.build_hmatrix")
+        self._decline_unread_hint("the H-matrix operator does not read the hint")
         part = self.build_partition(eta=eta, leaf_size=leaf_size)
         ctx = self._context()
         n = ctx["n_basis"]
