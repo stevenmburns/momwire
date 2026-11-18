@@ -465,7 +465,18 @@ def _spy_callers(monkeypatch):
 
         return wrapped
 
-    for name in ("lu_factor", "lu_solve", "solve", "solve_stacked", "inv_stacked"):
+    # #1981's wrappers are entry points too: a route that factors through
+    # factor_and_solve or lu_factor_strict is that route's call, not
+    # _lapack's own.
+    for name in (
+        "lu_factor",
+        "lu_factor_strict",
+        "factor_and_solve",
+        "lu_solve",
+        "solve",
+        "solve_stacked",
+        "inv_stacked",
+    ):
         monkeypatch.setattr(_lapack, name, spying(getattr(_lapack, name)))
     return callers
 
