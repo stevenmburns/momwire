@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_int_groups_core.h"
 
 #include <cstring>
 #include <memory>
@@ -36,16 +37,7 @@
 // hazards of the numeric TUs (momwire#1194) do not apply; its own TU anyway,
 // so nothing here can move another kernel's codegen.
 
-// A read prefetch: a hint only. It never faults and changes no value, so a
-// stale one (a slot since filled, a key vector since moved) costs nothing.
-#if defined(__GNUC__) || defined(__clang__)
-#define MW_PREFETCH(p) __builtin_prefetch(static_cast<const void *>(p))
-#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-#include <xmmintrin.h>
-#define MW_PREFETCH(p) _mm_prefetch(reinterpret_cast<const char *>(p), _MM_HINT_T0)
-#else
-#define MW_PREFETCH(p) ((void)(p))
-#endif
+// MW_PREFETCH, a read prefetch, comes from `_int_groups_core.h`.
 
 namespace factorize {
 
@@ -1278,37 +1270,27 @@ class RowGroups {
     std::vector<uint64_t> table_;
 };
 
-// `factorize_ints` over a sequence of calls, on 1 to 8 int64 columns: `add`
-// numbers each row's group in first-appearance order ACROSS every add so far,
-// as one `factorize_ints` over the concatenation would (and so as `_group`'s
-// two-stage spelling of five or six columns does: its second stage numbers a
-// row where its whole key first occurs). The sinusoidal pair-reuse census
-// folds its bands into one of these in band order, so what it holds grows
-// with the deck's classes rather than with each band's.
-//
-// Memory: the keys, `width` int64 per group in blocks of `kBlock` groups (so
-// growth never copies them, nor holds twice their size while it does), and
-// the table, at least twice as many slots as groups (8 bytes each, grown at
-// half load); `nbytes` is both, what the census counts against its budget.
+// `factorize_ints` over a sequence of calls, on 1 to 8 int64 columns: the
+// running grouping `_int_groups_core.h` holds (its comment has the contract),
+// which the C++ fill's sinusoidal pair-reuse census folds into as well
+// (`_sin_pair_reuse_core.cpp`), so the two routes number and count alike.
 class IntGroups {
   public:
-    explicit IntGroups(py::ssize_t width) : width_(static_cast<size_t>(width)) {
+    explicit IntGroups(py::ssize_t width) : core_(static_cast<size_t>(width < 1 ? 1 : width)) {
         if (width < 1 || width > 8)
             throw std::runtime_error("IntGroups: 1 to 8 columns");
-        table_.assign(16, 0);
-        mask_ = 15;
     }
 
     py::array_t<int64_t> add(std::vector<py::array_t<int64_t, py::array::forcecast>> arrs,
                              uintptr_t cancel_flag = 0) {
-        if (arrs.size() != width_)
+        if (arrs.size() != core_.width())
             throw std::runtime_error("IntGroups.add: one array per column");
-        std::vector<Col> cols;
+        std::vector<mw::int_groups::Col> cols;
         py::ssize_t n = arrs[0].shape(0);
         for (const auto &a : arrs) {
             if (a.ndim() != 1 || a.shape(0) != n)
                 throw std::runtime_error("IntGroups.add: equal-length 1-D columns");
-            cols.push_back(Col{reinterpret_cast<const char *>(a.data()), a.strides(0)});
+            cols.push_back(mw::int_groups::Col{reinterpret_cast<const char *>(a.data()), a.strides(0)});
         }
         if (n_groups() + n >= static_cast<py::ssize_t>(std::numeric_limits<int32_t>::max()))
             throw std::runtime_error("IntGroups: too many groups");
@@ -1316,113 +1298,20 @@ class IntGroups {
         int64_t *out = ids.mutable_data();
         {
             py::gil_scoped_release nogil;
-            uint64_t key[8], hs[kPrefetchBlock];
             MW_CANCEL_SERIAL_SETUP(cancel_flag);
-            for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
-                // Between blocks the grouping is whole; an abort leaves the
-                // rows added so far, and the caller discards the object.
-                MW_CANCEL_SERIAL_POLL();
-                const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
-                // `RowGroups::add`'s two read-only prefetch passes, then the
-                // rows in order: the groups and their numbers are the walk's.
-                for (py::ssize_t i = i0; i < i1; ++i) {
-                    uint64_t h = 0x9e3779b97f4a7c15ULL;
-                    for (size_t k = 0; k < width_; ++k) h = mix(h ^ cols[k].at(i));
-                    hs[i - i0] = h;
-                    MW_PREFETCH(table_.data() + (static_cast<size_t>(h) & mask_));
-                }
-                for (py::ssize_t i = i0; i < i1; ++i) {
-                    const uint64_t slot = table_[static_cast<size_t>(hs[i - i0]) & mask_];
-                    if (slot != 0) MW_PREFETCH(group_key((slot & 0xffffffffULL) - 1));
-                }
-                for (py::ssize_t i = i0; i < i1; ++i) {
-                    for (size_t k = 0; k < width_; ++k) key[k] = cols[k].at(i);
-                    if (2 * (static_cast<size_t>(n_groups()) + 1) > table_.size()) rehash();
-                    const uint64_t h = hs[i - i0];
-                    const uint64_t tag = h & 0xffffffff00000000ULL;
-                    size_t s = static_cast<size_t>(h) & mask_;
-                    for (;;) {
-                        const uint64_t slot = table_[s];
-                        if (slot == 0) {
-                            const py::ssize_t g = n_groups();
-                            push_key(key);
-                            table_[s] = tag | (static_cast<uint64_t>(g) + 1);
-                            out[i] = g;
-                            break;
-                        }
-                        const uint64_t g = (slot & 0xffffffffULL) - 1;
-                        if ((slot & 0xffffffff00000000ULL) == tag && same(key, g)) {
-                            out[i] = static_cast<int64_t>(g);
-                            break;
-                        }
-                        s = (s + 1) & mask_;
-                    }
-                }
-            }
+            // Between blocks the grouping is whole; an abort leaves the rows
+            // added so far, and the caller discards the object.
+            core_.add(cols.data(), n, out, [&] { MW_CANCEL_SERIAL_POLL(); });
         }
         return ids;
     }
 
-    py::ssize_t n_groups() const { return static_cast<py::ssize_t>(n_); }
+    py::ssize_t n_groups() const { return core_.n_groups(); }
 
-    py::ssize_t nbytes() const {
-        return static_cast<py::ssize_t>((blocks_.size() * kBlock * width_ + table_.size()) * 8);
-    }
+    py::ssize_t nbytes() const { return core_.nbytes(); }
 
   private:
-    static constexpr size_t kBlock = size_t(1) << 12;
-
-    const uint64_t *group_key(uint64_t g) const {
-        return blocks_[g / kBlock].get() + width_ * (g % kBlock);
-    }
-
-    void push_key(const uint64_t *key) {
-        if (n_ % kBlock == 0)
-            blocks_.emplace_back(new uint64_t[kBlock * width_]);
-        std::memcpy(blocks_.back().get() + width_ * (n_ % kBlock), key, width_ * 8);
-        ++n_;
-    }
-
-    bool same(const uint64_t *key, uint64_t g) const {
-        const uint64_t *k = group_key(g);
-        for (size_t c = 0; c < width_; ++c)
-            if (k[c] != key[c]) return false;
-        return true;
-    }
-
-    // `RowGroups::rehash`: every group re-entered in number order, which
-    // moves slots and never a group or its number.
-    void rehash() {
-        size_t cap = table_.size() * 2;
-        std::vector<uint64_t> fresh(cap, 0);
-        const size_t mask = cap - 1;
-        const size_t n_g = n_;
-        uint64_t hs[kPrefetchBlock];
-        for (size_t g0 = 0; g0 < n_g; g0 += kPrefetchBlock) {
-            const size_t g1 = std::min(n_g, g0 + static_cast<size_t>(kPrefetchBlock));
-            for (size_t g = g0; g < g1; ++g) {
-                const uint64_t *k = group_key(g);
-                uint64_t h = 0x9e3779b97f4a7c15ULL;
-                for (size_t c = 0; c < width_; ++c) h = mix(h ^ k[c]);
-                hs[g - g0] = h;
-                MW_PREFETCH(fresh.data() + (static_cast<size_t>(h) & mask));
-            }
-            for (size_t g = g0; g < g1; ++g) {
-                const uint64_t h = hs[g - g0];
-                size_t t = static_cast<size_t>(h) & mask;
-                while (fresh[t] != 0) t = (t + 1) & mask;
-                fresh[t] = (h & 0xffffffff00000000ULL) | (static_cast<uint64_t>(g) + 1);
-            }
-        }
-        table_.swap(fresh);
-        mask_ = cap - 1;
-    }
-
-    size_t width_;
-    size_t mask_ = 0;
-    size_t n_ = 0;
-    std::vector<std::unique_ptr<uint64_t[]>> blocks_;
-    std::vector<uint64_t> table_;
+    mw::int_groups::IntGroups core_;
 };
 
 // Each row's `factorize_ints` of a (groups, line) table of non-negative ids
