@@ -3,15 +3,18 @@
 
 `somm_trans::anchored_grid` (`_somm_transmitted_core.cpp`) ports
 `_transmitted_anchors.get_grid`: the lattice fixed in metres, the eight
-anchors at F_REF * 1.1**j and their degree-7 blend in ln f. bs2's buried fill
+anchors at F_REF * 1.1**j, their degree-7 blend in ln f, and that blend
+resampled (ten Lagrange points per axis) onto the nodes the exact grid has at
+the request (momwire#2022). bs2's buried fill
 and the point-matched sinusoidal lane read it when the feature is requested,
 so the executables can carry it once its reach is raised; today no
 executable requests it (no `EXE_FEATURES` row).
 
 Bit for bit, or within the declared drift, and why. Every transcendental on
 the lattice is libm's in C++, and Python's goes through numpy in two places
-that matter: `np.exp` (the z' ladder, the fill's R nodes) and `np.sin` /
-`np.cos` of the fill's theta nodes. The copies are the same bits exactly
+that matter: `np.exp` (the z' ladder, the fill's R nodes) and `np.log` (the
+served ladder's resampling targets), and `np.sin` / `np.cos` of the fill's
+theta nodes. The copies are the same bits exactly
 when both of these hold on the box, and the gates probe both:
 - numpy's float64 exp and log are libm's (every x86-64 dispatch below
   AVX-512; numpy's AVX-512 exp and log differ in the last bit on a few per
@@ -26,16 +29,23 @@ when both of these hold on the box, and the gates probe both:
   bits on such a box, which is not this change's call.
 Where either fails the two blends agree to 2e-13 of scale (1.8e-13 measured
 with numpy's AVX-512 on Rocketlake, 2.6e-16 on Haswell), and the gates hold
-the feature's declared drift, 1e-8. The test
+the feature's declared drift, 3e-8. The test
 session turns numpy's AVX-512 off (tests/conftest.py), so on x86-64 the first
 holds under pytest and the `sincos` probe is the one that decides: the gates
 run bit for bit on Rocketlake (glibc 2.39) and within the drift on Haswell.
 
 What is held:
-- the blend, its lattice and each of its anchors, single- and multi-depth;
+- the served grid, the blend it was resampled from, the blend's lattice and
+  each of its anchors, single- and multi-depth;
 - the blend's own arithmetic, numpy's over the C++ anchors, bit for bit
   everywhere (no transcendental in it);
-- the declines, where Python returns None;
+- the resampling's arithmetic, `_on_exact_nodes` over the C++ blend, bit for
+  bit wherever numpy's log is libm's (the served ladder's targets are its
+  only transcendental), and on random tables over both contraction orders.
+  numpy's einsum hands each axis to BLAS (`zgemm`), which sums a target's
+  products in index order, fused, from +0; the C++ sums the stencil the same
+  way, and the matrix's zeros outside it add nothing;
+- the declines, where Python returns None, the wide outer radius's included;
 - a sweep sharing its anchors;
 - a full anchor store that evicts an anchor of the stencil being summed;
 - bs2's buried Z and the sinusoidal printout with the feature on, against
@@ -58,6 +68,7 @@ import pytest
 
 from momwire import _accel
 from momwire import _sommerfeld as som
+from momwire import _sommerfeld_transmitted as trans
 from momwire import _transmitted_anchors as anchors
 from momwire._constants import C_LIGHT
 from momwire._ground_refl import eps_tilde
@@ -78,7 +89,7 @@ EPS0 = 8.8541878128e-12
 SOIL = (13.0, 0.005)
 F0 = 7.1e6
 R_MIN, R_MAX, DEPTH = 0.2, 2.0, 0.15
-DRIFT = 1e-8  # the registry's `drift` for transmitted_anchors
+DRIFT = 3e-8  # the registry's `drift` for transmitted_anchors
 
 
 def _numpy_is_libm() -> bool:
@@ -180,44 +191,95 @@ def fresh():
     acc.transmitted_anchors_stats(True)
 
 
-def _check_blend(f_hz, r):
-    g = anchors.get_grid(mu=som._MU0, **r)
-    c = _cxx(r, parts=True)
-    assert g is not None and "declined" not in c, c
-    # the lattice and the request's own constants: the same floats
-    for k in (
-        "r_min",
-        "r_max",
-        "lnr0",
-        "dlnr",
-        "n_r",
-        "th_min",
-        "th0",
-        "dth",
-        "n_th",
-        "lam_p",
-        "lam_m",
-        "r_cap",
-        "k2",
-        "omega",
-        "eps_t",
-        "k_m",
-    ):
-        assert getattr(g, k) == c[k], k
+_STATE = (
+    "r_min",
+    "r_max",
+    "lnr0",
+    "dlnr",
+    "n_r",
+    "th_min",
+    "th0",
+    "dth",
+    "n_th",
+    "lam_p",
+    "lam_m",
+    "r_cap",
+    "k2",
+    "omega",
+    "eps_t",
+    "k_m",
+)
+
+
+def _same_state(g, c, what):
+    """The axes and the request's own constants: the same floats."""
+    for k in _STATE:
+        assert getattr(g, k) == c[k], (what, k)
     if NUMPY_IS_LIBM:  # the ladder is exp's alone
-        assert np.array_equal(g.zp_nodes, c["zp_nodes"])
+        assert np.array_equal(g.zp_nodes, c["zp_nodes"]), what
         assert (g.zp_min, g.zp_max, g.lnz0, g.dlnz) == (
             c["zp_min"],
             c["zp_max"],
             c["lnz0"],
             c["dlnz"],
-        )
+        ), what
     else:
-        assert np.allclose(g.zp_nodes, c["zp_nodes"], rtol=1e-15, atol=0.0)
-    # the anchors, each the exact fill at its own frequency on the lattice
+        assert np.allclose(g.zp_nodes, c["zp_nodes"], rtol=1e-15, atol=0.0), what
+
+
+def _as_blend(c, r):
+    """The C++ blend as `_on_exact_nodes` reads a Python one."""
+    b = object.__new__(trans.TransmittedGrid)
+    lat = anchors._Lattice(c["r_min"], c["r_max"], c["zp_nodes"])
+    anchors._set_lattice(b, lat, r["eps_t"], r["k2"], r["omega"], som._MU0)
+    b._vals = c["vals"]
+    return b
+
+
+def _check_resampling(c, r):
+    """`_on_exact_nodes` over the C++ blend against the C++ served grid, and
+    the contraction order einsum's greedy path takes against the C++ one."""
+    py = anchors._on_exact_nodes(
+        _as_blend(c["blend"], r),
+        r["k2"],
+        r["r_max"],
+        r["zp_min"],
+        r["zp_max"],
+        r["r_min"],
+    )
+    _same_state(py, c, "served nodes")
+    z, _, n_r, n_th = c["blend"]["vals"].shape
+    path = np.einsum_path(
+        "zsrt,ar,bt->zsab",
+        np.empty((z, 5, n_r, n_th)),
+        np.empty((c["n_r"], n_r)),
+        np.empty((c["n_th"], n_th)),
+        optimize=True,
+    )[0]
+    assert c["r_first"] == (path[1] == (0, 1)), path
+    if NUMPY_IS_LIBM or z == 1:
+        assert np.array_equal(_bits(py._vals), _bits(c["vals"]))
+    else:
+        _agree(c["vals"], py._vals, "resampling")
+
+
+def _check_blend(f_hz, r):
+    g = anchors.get_grid(mu=som._MU0, **r)
+    c = _cxx(r, parts=True)
+    assert g is not None and "declined" not in c, c
+    _same_state(g, c, "served")
+    # the blend's lattice: the family's, fixed in metres
     js, u = anchors._stencil(f_hz)
     eps_r, q = anchors._soil(r["eps_t"], r["omega"])
-    lat = anchors._Lattice(g.r_min, g.r_max, g.zp_nodes)
+    lat = anchors._lattice(
+        f_hz, js, r["r_max"], r["zp_min"], r["zp_max"], r["r_min"], eps_r, q
+    )
+    blend = anchors._blend(
+        lat, js, u, r["eps_t"], r["k2"], r["omega"], som._MU0, eps_r, q, 1e-9, 0
+    )
+    _same_state(blend, c["blend"], "blend")
+    # the anchors, each the exact fill at its own frequency on the lattice
+    lat = anchors._Lattice(blend.r_min, blend.r_max, blend.zp_nodes)
     assert len(c["anchors"]) == anchors.ANCHOR_POINTS
     for j, a in zip(js, c["anchors"], strict=True):
         key = ("below-above-anchor", eps_r, q, int(j), lat.key(), float(som._MU0))
@@ -228,8 +290,10 @@ def _check_blend(f_hz, r):
     v = None
     for a, w in zip(c["anchors"], anchors._weights(u, js), strict=True):
         v = a["vals"] * w if v is None else v + a["vals"] * w
-    assert np.array_equal(_bits(v), _bits(c["vals"]))
-    _agree(c["vals"], g._vals, "blend")
+    assert np.array_equal(_bits(v), _bits(c["blend"]["vals"]))
+    _agree(c["blend"]["vals"], blend._vals, "blend")
+    _check_resampling(c, r)
+    _agree(c["vals"], g._vals, "served")
 
 
 def test_the_cxx_blend_is_pythons_on_one_rung(fresh):
@@ -249,8 +313,13 @@ def test_the_cxx_blend_is_pythons_on_a_ladder(fresh):
         dict(r_max=70.0),
         # under the radial floor at the stencil's anchors
         dict(r_min=1e-9),
+        # 5 cm deep and 15 m out: the lattice's outer radius, three rows past
+        # the request, buckets to 22.7 m, whose grazing floor (0.027 deg) is
+        # above the exact grid's (0 at its 18.2 m), so the exact grid serves;
+        # before momwire#2022 the lattice stopped at 18.2 m and served
+        dict(r_max=15.0, zp=(0.05, 0.05)),
     ],
-    ids=["r_cap", "r_min_floor"],
+    ids=["r_cap", "r_min_floor", "outer_rows_floor"],
 )
 def test_the_cxx_route_declines_where_python_does(fresh, case):
     r = _req(F0, **case)
@@ -302,8 +371,93 @@ def test_a_full_anchor_store_never_frees_a_stencil_anchor(fresh):
     v = None
     for a, w in zip(c["anchors"], anchors._weights(u, js), strict=True):
         v = a["vals"] * w if v is None else v + a["vals"] * w
-    assert np.array_equal(_bits(v), _bits(c["vals"]))
-    _agree(c["vals"], g._vals, "blend over an evicted anchor")
+    assert np.array_equal(_bits(v), _bits(c["blend"]["vals"]))
+    _check_resampling(c, _req(F0))
+    _agree(c["vals"], g._vals, "served over an evicted anchor")
+
+
+class _Served:
+    """`_Nodes`' shape, on axes the test spells."""
+
+    def __init__(self, lnr0, n_r, th_min, dth, n_th, zp_nodes):
+        self.lnr0, self.n_r = lnr0, n_r
+        self.th_min, self.dth, self.n_th = th_min, dth, n_th
+        self.zp_nodes = np.asarray(zp_nodes, dtype=float)
+        self.r_min = math.exp(lnr0)
+        self.r_max = math.exp(lnr0 + trans._R_STEP_LOG * (n_r - 1))
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # (lattice r_max, rungs, served row offset in rows, served rows,
+        # served theta points, served rungs): the served theta axis decides
+        # which axis einsum contracts first (few points: theta)
+        (10.0, 1, 2.37, 24, 31, None),
+        (10.0, 1, 4.81, 28, 5, None),
+        (6.0, 9, 1.5, 12, 30, 12),
+        (6.0, 24, -0.6, 22, 6, 30),
+    ],
+    ids=["r_first", "theta_first", "nine_rungs", "theta_first_rungs_clamped"],
+)
+def test_the_cxx_resampling_is_pythons_on_random_tables(monkeypatch, case):
+    """`_on_exact_nodes` (Python's `_resample_matrix` weights and einsum)
+    against the C++ resampling alone, on the same random table: no
+    transcendental but the served ladder's `np.log` targets."""
+    r_max, rungs, offset, n_r, n_th, served_rungs = case
+    r = _req(F0)
+    zp = (
+        np.exp(np.linspace(math.log(0.1), math.log(0.6), rungs))
+        if rungs > 1
+        else [DEPTH]
+    )
+    lat = anchors._Lattice(0.2, r_max, zp)
+    rng = np.random.default_rng(2022 + rungs)
+    shape = (lat.zp_nodes.size, 5, lat.n_r, lat.n_th)
+    vals = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    blend = object.__new__(trans.TransmittedGrid)
+    anchors._set_lattice(blend, lat, r["eps_t"], r["k2"], r["omega"], som._MU0)
+    blend._vals = vals
+    th_min = lat.th_min + 0.3 * lat.dth
+    dth = (0.5 * math.pi - th_min) / (n_th - 1)
+    served_zp = (
+        np.exp(np.linspace(math.log(0.11), math.log(0.62), served_rungs))
+        if served_rungs
+        else [DEPTH]
+    )
+    nodes = _Served(
+        lat.lnr0 + trans._R_STEP_LOG * offset, n_r, th_min, dth, n_th, served_zp
+    )
+    monkeypatch.setattr(anchors, "_Nodes", lambda *_a, **_k: nodes)
+    py = anchors._on_exact_nodes(blend, r["k2"], r_max, 0.1, 0.6, None)
+    got, r_first = acc.transmitted_anchors_resample(
+        vals,
+        blend.lnr0,
+        blend.th0,
+        blend.dth,
+        list(blend.zp_nodes),
+        blend.lnz0,
+        blend.dlnz,
+        nodes.lnr0,
+        nodes.n_r,
+        nodes.th_min,
+        nodes.dth,
+        nodes.n_th,
+        list(nodes.zp_nodes),
+    )
+    path = np.einsum_path(
+        "zsrt,ar,bt->zsab",
+        vals,
+        np.empty((n_r, lat.n_r)),
+        np.empty((n_th, lat.n_th)),
+        optimize=True,
+    )[0]
+    assert r_first == (path[1] == (0, 1)), path
+    assert r_first == (case[4] > 10)
+    if NUMPY_IS_LIBM or not served_rungs:
+        assert np.array_equal(_bits(py._vals), _bits(got))
+    else:
+        _agree(got, py._vals, "resampling")
 
 
 # ---- the fills that read it ---------------------------------------------------
@@ -376,6 +530,16 @@ def _nec4_compare():
     return mod
 
 
+def _fill_compare():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_sinusoidal_fill_compare",
+        ROOT / "scripts" / "core_split" / "sinusoidal_fill_compare.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 # A vertical over a separate buried wire (test_nec4_run_core's mixed case),
 # swept over three frequencies so the three blends share eight anchors.
 MIXED_SWEEP = (
@@ -388,14 +552,18 @@ MIXED_SWEEP = (
 def test_the_sinusoidal_printout_with_anchors_is_pythons(fresh, monkeypatch):
     """The point-matched lane's C++ printout with the feature requested
     against the Python slot's with it on, past line 2 (Python stamps the
-    feature there; the hook requests it unstamped); and the C++ printout
-    with it off moves digits in the currents, so the comparison is not
-    blind to the feature."""
+    feature there; the hook requests it unstamped). Served on the exact
+    grid's nodes (momwire#2022) the feature moves this deck's Z by ~1e-10, so
+    its five-figure printout reads the same on and off; the fill dump (G, the
+    port coefficients and Y, bit for bit) is what shows the anchored route
+    ran: on is Python's on, and is not off."""
     if not hasattr(acc, "sinusoidal_nec4_printout"):
         pytest.skip("no compiled accelerator with the NEC-4.2 run half")
     rc = _nec4_compare()
+    fc = _fill_compare()
     try:
         blas = rc.blas_addresses("sinusoidal")
+        fill_blas = fc.blas_addresses()
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
     from threadpoolctl import threadpool_limits
@@ -406,20 +574,29 @@ def test_the_sinusoidal_printout_with_anchors_is_pythons(fresh, monkeypatch):
         ok, off = _sin_printout(rc, MIXED_SWEEP, blas)
         assert ok, off
         assert acc.transmitted_anchors_stats()["blends"] == 0
+        fill_off = fc.cxx_fill(MIXED_SWEEP, acc, fill_blas)
+        assert acc.transmitted_anchors_stats()["blends"] == 0
         ok, on = _sin_printout(rc, MIXED_SWEEP, blas, FEATURE)
         assert ok, on
         st = acc.transmitted_anchors_stats()
         assert st["blends"] == 3 and st["anchor_fills"] == anchors.ANCHOR_POINTS, st
+        fill_on = acc.sinusoidal_fill_dump(
+            MIXED_SWEEP.encode("latin-1"), fill_blas, fc.WHOLE, FEATURE
+        )
         # the request was for that run only
-        ok, again = _sin_printout(rc, MIXED_SWEEP, blas)
-        assert ok and rc.mask(again)[0] == rc.mask(off)[0]
-        assert acc.transmitted_anchors_stats()["blends"] == 3
+        assert fc.cxx_fill(MIXED_SWEEP, acc, fill_blas) == fill_off
+        st = acc.transmitted_anchors_stats()
+        assert st["blends"] == 3 and st["anchor_fills"] == anchors.ANCHOR_POINTS, st
         monkeypatch.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
         som._GRID_CACHE.clear()
         py = rc.py_printout(MIXED_SWEEP, "sinusoidal")
-    assert anchors.STATS["blends"] == 3
-    body = [rc.mask(t)[0].split("\n")[2:] for t in (py, on, off)]
+        assert anchors.STATS["blends"] == 3
+        som._GRID_CACHE.clear()
+        fill_py = fc.py_fill(MIXED_SWEEP)
+    body = [rc.mask(t)[0].split("\n")[2:] for t in (py, on)]
     assert body[0] == body[1], rc.first_difference(
         "\n".join(body[0]), "\n".join(body[1])
     )
-    assert body[1] != body[2]
+    if SAME_BITS:
+        assert fill_on == fill_py, rc.first_difference(fill_py, fill_on)
+    assert fill_on != fill_off
