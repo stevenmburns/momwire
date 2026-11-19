@@ -253,6 +253,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_sin_pair_reuse_small_deck_1969.py",
                 "tests/test_pair_reuse_contract_1982.py",
                 "tests/test_pair_reuse_chunked_2020.py",
+                "tests/test_sin_pair_reuse_fold_census.py",
             ),
             label="pair reuse",
             summary=(

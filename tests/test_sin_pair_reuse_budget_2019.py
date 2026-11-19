@@ -149,7 +149,7 @@ def test_a_plan_is_held_to_its_fill_exactly(monkeypatch):
     plan = _direct_plan()
     need = pr.fill_nbytes(plan)
     assert need == pr.plan_nbytes(plan) + 48 * (plan.n_classes + plan.n_near)
-    monkeypatch.setattr(pr, "CENSUS_BYTES_PER_BAND_CLASS", 0)
+    monkeypatch.setattr(pr, "BAND_BYTES_PER_PAIR", 0)
     assert _direct_plan(budget=need - 1) is pr.OVER_BUDGET
     served = _direct_plan(budget=need)
     assert served is not pr.OVER_BUDGET
@@ -166,7 +166,8 @@ def test_the_blocks_share_one_budget(monkeypatch):
     assert direct[1] > 0
     need = pr.fill_nbytes(next(iter(s._sin_reuse_plans.values()))[1])
     pr.clear_shared_plans()
-    monkeypatch.setattr(pr, "CENSUS_BYTES_PER_BAND_CLASS", 0)
+    monkeypatch.setattr(pr, "BAND_BYTES_PER_PAIR", 0)
+    monkeypatch.setattr(pr, "GROUND_BAND_BYTES_PER_PAIR", 0)
     monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", need + 1)
     on, s = _fill(pair_reuse=True, ground_z=0.0)
     assert s.pair_reuse_declined == _reason(need + 1)
@@ -191,67 +192,98 @@ def test_a_declined_census_is_not_repeated(monkeypatch):
     assert s.pair_reuse_declined == _reason(700_000)
 
 
-def _bands(sizes):
+class _Held:
+    """A `_Fold` stand-in: `held()` is `base` plus `per` for each band
+    folded, `floor()` `floor_per` for each."""
+
+    def __init__(self, base=0, per=0, floor_per=0):
+        self.base, self.per, self.floor_per, self.folded = base, per, floor_per, []
+        self.map_bytes = 0
+
+    def __len__(self):
+        return len(self.folded)
+
+    def held(self):
+        return self.base + self.per * len(self.folded)
+
+    def floor(self):
+        return self.floor_per * len(self.folded)
+
+    def fold(self, i, r):
+        self.folded.append((i, r))
+
+
+def _census(census, n, budget, band_bytes, band=None):
     calls = []
 
-    def band(i):
-        calls.append(i)
-        return ([np.zeros(sizes[i], np.int64)],)
+    def default(s):
+        calls.append(s)
+        return s * 10
 
-    return band, calls
+    out = pr._census_bands(
+        band or default, list(range(n)), census, census.fold, budget, band_bytes
+    )
+    return out, calls
 
 
-def test_no_budget_runs_every_band_in_order():
-    band, calls = _bands([3] * 40)
-    out = pr._census_bands(band, list(range(40)), 0, None)
+def test_no_budget_folds_every_band_in_order():
+    held = _Held()
+    out, calls = _census(held, 40, None, 0)
+    assert out is not None
     assert sorted(calls) == list(range(40))
-    assert [r[0][0].size for r in out] == [3] * 40
+    assert held.folded == [(i, 10 * i) for i in range(40)]
 
 
-def test_the_pilot_stops_a_census_it_projects_past_the_budget():
-    band, calls = _bands([100] * 80)
-    budget = pr.CENSUS_BYTES_PER_BAND_CLASS * 100 * 79
-    assert pr._census_bands(band, list(range(80)), 0, budget) is None
-    assert len(calls) == pr.PILOT_BANDS
+def test_a_census_that_fits_folds_every_band_in_order():
+    held = _Held(base=100, per=7)
+    out, _ = _census(held, 50, 100 + 7 * 50 + 30, 10)
+    assert out is not None and out <= 100 + 7 * 50 + 30
+    assert [i for i, _ in held.folded] == list(range(50))
 
 
-def test_the_running_count_stops_what_the_pilot_missed():
-    """The pilot's bands are light and the others heavy: the projection
-    passes and the count of the classes actually kept declines."""
-    n = 80
-    light = set(np.linspace(0, n - 1, pr.PILOT_BANDS).astype(np.int64).tolist())
-    sizes = [1 if i in light else 100 for i in range(n)]
-    band, _ = _bands(sizes)
-    budget = pr.CENSUS_BYTES_PER_BAND_CLASS * 1000
-    assert pr._census_bands(band, list(range(n)), 0, budget) is None
+def test_the_count_stops_the_census_once_it_passes_the_budget():
+    held = _Held(base=100, per=7)
+    out, calls = _census(held, 80, 100 + 7 * 20, 0)
+    assert out is None
+    assert len(held.folded) == 21  # the fold that passed it is the last
+    assert len(calls) < 80
 
 
-def test_a_census_that_fits_keeps_every_band_in_order():
-    sizes = [i % 7 + 1 for i in range(50)]
-    band, calls = _bands(sizes)
-    budget = pr.CENSUS_BYTES_PER_BAND_CLASS * sum(sizes)
-    out = pr._census_bands(band, list(range(50)), 0, budget)
-    assert sorted(calls) == list(range(50))
-    assert [r[0][0].size for r in out] == sizes
+def test_the_plans_floor_stops_the_census():
+    held = _Held(floor_per=5)
+    out, _ = _census(held, 80, 5 * 30, 0)
+    assert out is None
+    assert len(held.folded) == 31
 
 
-def test_the_pilot_runs_its_bands_a_few_at_a_time():
-    """A pool's worth of bands at once is the peak the pilot is there to
-    avoid paying on a deck that will decline."""
+def test_a_band_starts_only_where_it_fits():
+    """Each band in flight counts `band_bytes` until it is folded: under a
+    budget with room for two beside what is held, no more than two run at
+    once, however many workers the pool has."""
     lock = threading.Lock()
     now = [0, 0]
 
-    def band(_):
+    def band(s):
         with lock:
             now[0] += 1
             now[1] = max(now)
-        time.sleep(0.02)
+        time.sleep(0.01)
         with lock:
             now[0] -= 1
-        return ([np.zeros(100, np.int64)],)
+        return s
 
-    assert pr._census_bands(band, list(range(80)), 0, 1) is None
+    held = _Held(base=1000)
+    out, _ = _census(held, 30, 1000 + 2 * 50, 50, band)
+    assert out is not None and out <= 1000 + 2 * 50
     assert now[1] <= 2
+    assert len(held.folded) == 30
+
+
+def test_a_census_with_no_room_for_one_band_runs_none():
+    held = _Held(base=1000)
+    out, calls = _census(held, 10, 1000 + 49, 50)
+    assert out is None
+    assert calls == []
 
 
 def test_a_census_hands_its_pages_back_once(monkeypatch):
