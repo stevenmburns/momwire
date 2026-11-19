@@ -3738,6 +3738,10 @@ def test_the_ek_answer_is_momwires_own_extended_kernel_solve(scoped_engine):
     only slack allowed is the printout's own `%13.5E` rounding, so this catches
     a kernel flag that reached a DIFFERENT constructor, a mesh the portal built
     differently under EK, or an announcement printed over a reduced-kernel fill.
+
+    The direct solve asks for NEC-2's end cap, which this launcher's
+    sinusoidal route takes by default (momwire#2033, Steve 2026-11-19) where
+    the Python API does not.
     """
     import numpy as np
     from momwire import SinusoidalSolver
@@ -3749,6 +3753,7 @@ def test_the_ek_answer_is_momwires_own_extended_kernel_solve(scoped_engine):
             feeds=[(0, 2.5, 1.0)],
             wavelength=299_792_458.0 / 30e6,
             wire_radius=0.2,
+            nec2_end_cap=True,
             **kwargs,
         )
         direct, _coeffs = solver.compute_impedance()
@@ -3766,8 +3771,9 @@ def test_the_fat_wire_ek_pair_tracks_nec2c_on_both_sides_of_the_card(scoped_engi
     the SHIFT is held too — a passthrough that quietly did nothing would keep
     the reduced side inside 5 % and fail here, which is the mode this exists
     to catch. The sinusoidal basis is used because it is the roster's
-    NEC-closest rung (issue #822); on this deck it lands 0.5 % from nec2c
-    reduced and 3.1 % extended.
+    NEC-closest rung (issue #822); on this deck it lands 0.011 % from nec2c
+    reduced and 0.008 % extended under NEC-2's end cap, this launcher's
+    default since momwire#2033 (0.45 % and 3.5 % without it).
     """
     _rc, off, _e = _run_main(["--basis", "sinusoidal"], deck=_fat_deck())
     _rc, on, _e = _run_main(["--basis", "sinusoidal"], deck=_fat_deck("EK"))
