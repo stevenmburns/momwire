@@ -799,9 +799,10 @@ FEATURES: dict[str, Feature] = {
         # NEC-2 engines, not better physics (momwire#1327 kept no cap as the
         # default). Off by default and never seeded: `drift` is 1.0, no
         # bound, because it changes the answer on purpose. Offered (Steve,
-        # 2026-11-19), so antennaknobs shows it as an unticked box on the
-        # hosted app (reach 1), labelled as changing the answer, not faster. momwire#2033
-        # measured the end condition's effect at up to 58 % of Zin, stock nec2c
+        # 2026-11-19), so antennaknobs shows it as an unticked box wherever
+        # it is certified (levels 1-3 of its reach: the hosted app, Linux sse2
+        # and Windows installs; not macOS), labelled as changing the answer,
+        # not faster, and never seeded on. momwire#2033 measured the end condition's effect at up to 58 % of Zin, stock nec2c
         # against this solver over 65 frequencies of a fat-wire log-periodic
         # Yagi.
         #
@@ -820,9 +821,19 @@ FEATURES: dict[str, Feature] = {
         # MOMWIRE_X_NEC2_END_CAP=0 gives the no-cap answer and =1 the
         # refusing one; unset, a deck the cap would refuse runs without it
         # and its printout says so (`_nec2_end_cap.launcher_default`).
+        #
+        # Reach 4, `dropin-linux-windows` (Steve, 2026-11-19), so that default
+        # is certified on the route it runs on: certified on the drop-in on
+        # the evidence of the nec2c agreement (the 71 nec_portal decks through
+        # the launcher, =0 byte-identical to the uncapped printouts and the
+        # default identical to =1; the synthetic decks above at nec2c's five
+        # printed figures) and the W8IO whip and log-periodic Yagi (the
+        # default's Z identical to =1, timing unchanged). Python-kind, so the
+        # macOS drop-in (level 5) still runs it, uncertified. No executable
+        # carries it: reach 4 is short of the first executable level.
         Feature(
             name="nec2_end_cap",
-            reach=1,
+            reach=4,
             env="MOMWIRE_X_NEC2_END_CAP",
             solvers=("sinusoidal",),
             kind="python",

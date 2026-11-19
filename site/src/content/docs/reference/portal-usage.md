@@ -134,7 +134,9 @@ compatibility choice, not better physics: a flat cap is worth about 0.10a of
 extra length per end and this condition acts like three to four times that
 on coarse meshes, so it moves Zin most on fat wires (up to 58 % on a fat-wire
 log-periodic Yagi against the no-cap answer). The other bases, the NEC-4.2
-and NEC-5 launchers and the Python API keep the zero-current end.
+and NEC-5 launchers and the Python API keep the zero-current end. The cap
+is certified for the drop-ins on Linux and Windows; on macOS it runs the
+same code, not yet certified there.
 
 | `MOMWIRE_X_NEC2_END_CAP` | `momwire-nec2c-sinusoidal` |
 |---|---|
