@@ -532,6 +532,7 @@ class WorkerPool:
             # started the server, and is not when one was started by hand.
             env = dict(os.environ if self.env is None else self.env)
             _mech.pin_cpu_env(env)
+            _mech.pin_blas_pool(env)
             proc = subprocess.Popen(
                 self.command,
                 stdin=subprocess.PIPE,

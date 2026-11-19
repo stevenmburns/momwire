@@ -438,6 +438,7 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
     front = _FRONT_ENDS.get(dialect)
     if front is not None:
         # NEC-2 (momwire#1611): the registered front end's own printout.
+        _thread_policy.unsized()
         return front.render(text)
     if dialect != "nec5":
         known = ", ".join(repr(name) for name in (*DIALECTS, *_FRONT_ENDS))
@@ -1055,7 +1056,9 @@ def main(
             front = _FRONT_ENDS.get(dialect)
             try:
                 if front is not None:
-                    return front.stream()
+                    with _thread_policy.answering():
+                        _thread_policy.unsized()
+                        return front.stream()
                 return stream(basis=basis, dialect=dialect)
             except BrokenPipeError:
                 # The caller stopped reading: nobody is left to tell.
