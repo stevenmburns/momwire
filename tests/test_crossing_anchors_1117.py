@@ -45,7 +45,7 @@ from momwire import _features
 from momwire._accel import acc
 
 pytestmark = [
-    pytest.mark.reach(7),
+    pytest.mark.reach(8),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "crossing_anchors_1117", False),
         reason="needs the crossing anchors core",
@@ -200,7 +200,7 @@ def _last_trace(stderr: str):
 def test_the_registry_entry():
     f = _features.FEATURES["crossing_anchors"]
     assert (f.reach, f.kind, f.env, f.kwarg, f.default, f.offer) == (
-        7,
+        8,
         "native",
         ENV,
         "crossing_anchors",

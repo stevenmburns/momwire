@@ -486,7 +486,7 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
     # stay refused rather than become accepted and unstamped. Every other
     # carried feature its formulation ignores needs a row.
     # Each BASIS's shallowest level: "bspline" names both bspline
-    # executables (nec5's at level 6 on Windows, nec42's at 8).
+    # executables (nec5's at level 6 on Windows, nec42's at 9).
     shallowest = {
         "razor-2p": F._level("exe-nec5-bspline-razor-2p-windows"),
         "bspline": F._level("exe-nec5-bspline-razor-2p-windows"),

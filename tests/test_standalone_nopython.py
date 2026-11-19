@@ -790,7 +790,7 @@ def test_a_bookkeeping_node_on_a_huge_page_boundary_does_not_deadlock(tmp_path):
     assert (tmp_path / "shim.out").read_bytes() == (tmp_path / "plain.out").read_bytes()
 
 
-# --- momwire#1860's levers, on (reach 8: the executables run them) ----------------
+# --- momwire#1860's levers, on (reach 9: the executables run them) ----------------
 
 _LEVERS_1860 = (
     "MOMWIRE_X_FACTORED_COLUMNS",
@@ -836,7 +836,7 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     assert (b"+crossing_above_rule" in line2) == (bool(on) and honoured), line2
 
 
-# --- momwire#1956's crossing_sheet_retune (reach 7: the nec5 executables) -------
+# --- momwire#1956's crossing_sheet_retune (reach 8: the nec5 executables) -------
 
 _RETUNE = "MOMWIRE_X_CROSSING_SHEET_RETUNE"
 
@@ -848,7 +848,7 @@ def _retune_decks():
     return DECKS_1956
 
 
-@pytest.mark.reach(7)
+@pytest.mark.reach(8)
 @pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
 @pytest.mark.parametrize("on", [False, True], ids=["off", "on"])
 def test_the_sheet_retune_answers_as_the_launcher(on, deck, tmp_path):
@@ -910,7 +910,7 @@ def _retune_run(deck, on, tmp_path):
     return sheets, 1.0 / complex(i_source)
 
 
-@pytest.mark.reach(7)
+@pytest.mark.reach(8)
 @pytest.mark.parametrize("deck", ["hub16", "deep_hub"])
 def test_the_sheet_retune_moves_the_executables_plan_within_its_drift(deck, tmp_path):
     """The route proof the byte gate cannot give (on and off print the same
@@ -965,7 +965,7 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     assert policy == (tmp_path / "one.out").read_bytes()
 
 
-# --- momwire#1971: razor-2p's fill-pair reuse (reach 7: nec5-razor-2p runs it) ---
+# --- momwire#1971: razor-2p's fill-pair reuse (reach 8: nec5-razor-2p runs it) ---
 
 # Synthetic decks past the reuse's small-deck thresholds
 # (`_razor_pair_reuse_core.h`: SMALL_DECK_SEGS_FREE 400 in free space and
@@ -992,8 +992,9 @@ _REUSE_DECKS_1971 = {
     ),
 }
 
+# `\r?`: the MinGW-w64 builds' stderr is in text mode, so the line ends CRLF.
 _REUSE_LINE = re.compile(
-    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)$", re.M
+    r"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)\r?$", re.M
 )
 
 
@@ -1015,7 +1016,7 @@ def _reuse_ran(built: int, declined: int) -> bool:
 @pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
 @pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
 def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
-    """Reach 7 covers the nec5 executables (levels 6 and 7). On ("1") and
+    """Reach 8 covers the nec5 executables (levels 6 to 8). On ("1") and
     off ("0"), the executable's printout is the launcher's byte for byte,
     line 2 naming +razor_pair_reuse on both sides only when it is on. The
     executable and the launcher share the C++ core, so that alone cannot

@@ -78,8 +78,13 @@ def test_the_windows_and_macos_executables_attach_to_the_release():
     text = (WORKFLOWS / "standalone.yml").read_text()
     assert "files: momwire-nec5-windows-x64.zip" in text
     assert "files: momwire-nec5-macos-arm64.tar.gz" in text
+    assert "files: momwire-nec5-windows-x64-single.zip" in text
     readme = (WORKFLOWS.parent.parent / "README.md").read_text(encoding="utf-8")
-    for name in ("momwire-nec5-windows-x64.zip", "momwire-nec5-macos-arm64.tar.gz"):
+    for name in (
+        "momwire-nec5-windows-x64.zip",
+        "momwire-nec5-windows-x64-single.zip",
+        "momwire-nec5-macos-arm64.tar.gz",
+    ):
         assert name in readme
 
 

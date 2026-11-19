@@ -37,13 +37,14 @@ stay Python.
 
 ## Downloads
 
-All three are assets on the latest
+All of them are assets on the latest
 [GitHub release](https://github.com/stevenmburns/momwire/releases/latest).
 
 | platform | asset | status |
 | --- | --- | --- |
 | Linux, 64-bit x86 | [`momwire-nec5-linux-x86_64.tar.gz`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-linux-x86_64.tar.gz) | released |
 | Windows 10/11 and 7 SP1, 64-bit x86 | [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) | preview, signed |
+| Windows 10/11, 64-bit x86, one file per engine | [`momwire-nec5-windows-x64-single.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64-single.zip) | preview, signed, on releases that list it |
 | macOS 14 or later, Apple silicon | [`momwire-nec5-macos-arm64.tar.gz`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-macos-arm64.tar.gz) | preview, unsigned |
 
 **Linux.** The tarball holds an avx2 and an sse2 build of each engine, and
@@ -87,6 +88,16 @@ serves.
 sse2 pair built to run on Windows 7 SP1. The programs are signed with
 momwire's certificate. The DLLs they load ship beside them, so keep each
 folder together. The zip's `README.txt` says which program to use.
+
+**Windows, one file per engine (preview).** A release that lists
+`momwire-nec5-windows-x64-single.zip` among its assets carries it beside that
+zip, which stays the default. It holds `momwire-nec5-razor-2p.exe` and `momwire-nec5-bspline.exe`,
+built with GCC. Each file carries an avx2 and an sse2 build and picks the one
+your processor can run, with no DLLs beside it. Its `-version` line ends the
+build's name in `-ucrt64`, so a deck shows which zip answered. It needs the
+Universal C Runtime: Windows 10 and 11 include it, and on Windows 7 SP1 or 8.1
+install KB2999226 or a Visual C++ 2015 or later redistributable. Its speed
+differs from the default zip's from deck to deck, in both directions.
 
 **macOS (preview).** One build of each engine,
 `momwire-nec5-razor2p-macos` and `momwire-nec5-bs2-macos`, using the
