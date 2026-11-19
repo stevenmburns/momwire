@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import re
+import sys
 
 import numpy as np
 import pytest
@@ -22,8 +23,9 @@ from momwire import _features, _nec2_end_cap
 from momwire.dropin.nec2c import _portal
 from momwire.sinusoidal import SinusoidalSolver
 
-# An experimental feature (`momwire._features`, reach 1).
-pytestmark = pytest.mark.reach(1)
+# An experimental feature (`momwire._features`, reach 4: the drop-in route,
+# where the NEC-2 launcher takes it by default).
+pytestmark = pytest.mark.reach(4)
 
 ENV = "MOMWIRE_X_NEC2_END_CAP"
 PRINTED = 1e-4
@@ -126,7 +128,7 @@ def _dipole(**kw):
 def test_the_registry_entry_is_an_answer_changing_opt_in():
     f = _features.FEATURES["nec2_end_cap"]
     assert (f.reach, f.env, f.kwarg, f.solvers) == (
-        1,
+        _features._level("dropin-linux-windows"),
         ENV,
         "nec2_end_cap",
         ("sinusoidal",),
@@ -135,6 +137,24 @@ def test_the_registry_entry_is_an_answer_changing_opt_in():
     assert f.default is False and f.offer is True
     assert f.drift > _features.DEFAULT_DRIFT_MAX
     assert "changes the answer" in f.label
+
+
+def test_the_launchers_default_is_certified_where_it_runs(monkeypatch):
+    """Reach 4 (Steve, 2026-11-19): the drop-in route on Linux and Windows,
+    where the NEC-2 launcher turns it on unasked. It is Python-kind, so the
+    macOS drop-in, past its reach, runs it uncertified rather than refusing,
+    and no executable carries it."""
+    assert _features.FEATURES["nec2_end_cap"].reach == 4
+    assert _features.certified("nec2_end_cap", "dropin", platform="linux")
+    assert _features.certified("nec2_end_cap", "dropin", platform="win32")
+    assert not _features.certified("nec2_end_cap", "dropin", platform="darwin")
+    assert _features.FEATURES["nec2_end_cap"].kind == "python"
+    assert 4 < _features._level("exe-nec5-bspline-razor-2p-windows")
+    # Line 2 of a drop-in printout that runs it (the NEC-4.2 slot's
+    # sinusoidal route) names it, and on Linux no longer as uncertified.
+    monkeypatch.setenv(ENV, "1")
+    if sys.platform.startswith("linux"):
+        assert _features.stamp("dropin", solver="sinusoidal") == "+nec2_end_cap"
 
 
 @pytest.mark.parametrize("name", sorted(DECKS))
