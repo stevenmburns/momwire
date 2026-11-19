@@ -374,7 +374,11 @@ def _late(deck: str, basis: str, cpus=None) -> dict:
 @pytest.mark.skipif(sys.platform != "linux", reason="copies a Linux shared library")
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
 def test_a_library_loaded_during_the_answer_is_held_to_the_count(basis):
-    seen = _late(_deck(10, 40), basis)
+    # MIDDLE's rule is min(4, cores): below OpenBLAS's default width on a
+    # machine of more than four cores, so the late copy has to be held to it.
+    # A deck of 384 segments or more gets every core, which a late library
+    # already has, and the check would pass whether or not it was held.
+    seen = _late(MIDDLE, basis)
     after = seen["after_solve"]
     assert len(after) >= 3, after  # numpy's, SciPy's and the late copy
     assert set(after.values()) == {min(4, _cores())}, after
