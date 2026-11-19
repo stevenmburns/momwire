@@ -50,6 +50,9 @@ import momwire_serve_client
 # its own interpreter (EZNEC, the native client and the resident pool all
 # start THIS exe), so this line is the bundle's one chance to set it.
 momwire_serve_client.pin_cpu_env()
+# OpenBLAS at one thread as it loads, for the same reason and at the same
+# moment: Windows cannot shrink the pool later (momwire#2023).
+momwire_serve_client.pin_blas_pool()
 
 from momwire.deck._solver import (  # noqa: E402 - after the AVX-512 pin
     basis_from_program_name,

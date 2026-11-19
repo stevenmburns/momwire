@@ -150,7 +150,7 @@ import numpy as np
 import scipy.linalg
 from scipy.linalg import LinAlgWarning
 
-from . import _times
+from . import _thread_policy, _times
 
 ABI = 2
 #: Every table version this module reads: ABI 1 (the LU pair only) and ABI 2
@@ -363,6 +363,7 @@ def _factor_stage(fn):
 @_factor_stage
 def lu_factor(a, overwrite_a=False, check_finite=True):
     """``scipy.linalg.lu_factor``, on the host's getrf when one is published."""
+    _thread_policy.hold()
     a1 = np.asarray(a)
     fns = _host_for(a1.dtype)
     if fns is None or not _square(a1):
@@ -460,6 +461,7 @@ def lu_factor_strict(a, overwrite_a=False, check_finite=True):
     warning). On, the norm is taken before getrf can overwrite ``a`` and an
     rcond below machine epsilon warns as `solve` does.
     """
+    _thread_policy.hold()
     anorm = None
     if condition_check():
         a1 = np.asarray(a)
