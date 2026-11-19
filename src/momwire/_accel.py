@@ -485,6 +485,7 @@ _CANCELLABLE_KERNELS = (
 _CANCELLABLE_METHODS = (
     ("RowIndex", "find"),
     ("RowGroups", "add"),
+    ("IntGroups", "add"),
     # The razor-2p solve prototype polls between windows and inside the
     # moment fill it calls.
     ("RazorSolveContext", "port_solution"),
