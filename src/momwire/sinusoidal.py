@@ -2712,6 +2712,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not per_seg_k and not _complex_k(k) and self._nec4_live(geom):
             factors = self._nec4_end_factors(geom, k, a)
             if factors is not None:
+                # momwire#2033: this route has its own end cap, so NEC-2's
+                # could not act here, and line 2 would claim that it had.
+                if self._nec2_end_cap and _nec2_end_cap.has_free_end(geom):
+                    raise ValueError(_nec2_end_cap.NEC4_JUNCTION_REFUSAL)
                 x_end = _sinusoidal_nec4.end_cap_x(geom, k, self._seg_radius(geom))
                 seg_view = _sinusoidal_nec4.basis_coefs_per_end(
                     geom, k, *factors, x_end
@@ -2731,8 +2735,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a_const = 1.0 / (np.log(2.0 / ka) - _EULER_GAMMA)
 
         # momwire#2033: NEC-2's free ends, where the option is on and the deck
-        # has one. A deck with no free end falls through, bit for bit. The
-        # NEC-4 junction above keeps its own cap: it returned before here.
+        # has one. A deck with no free end falls through, bit for bit.
         if self._nec2_end_cap and _nec2_end_cap.has_free_end(geom):
             if per_seg_k or _complex_k(k):
                 raise ValueError(_nec2_end_cap.BELOW_INTERFACE_REFUSAL)
