@@ -57,6 +57,7 @@ from . import (
     _ground_spec,
     _medium_spec,
     _near_interface,
+    _nec2_end_cap,
     _near_surface,
     _rotational_symmetry,
     _schedule,
@@ -1269,6 +1270,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         point_cplx_staged=None,
         pair_reuse=None,
         rotational_symmetry=False,
+        nec2_end_cap=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1377,7 +1379,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             transmitted_anchors=transmitted_anchors,
             point_cplx_staged=point_cplx_staged,
             pair_reuse=None if pair_reuse is None else bool(pair_reuse),
+            nec2_end_cap=nec2_end_cap,
         )
+        # momwire#2033: NEC-2's free-end condition, a compatibility option
+        # that changes the answer on purpose. None defers to
+        # MOMWIRE_X_NEC2_END_CAP; off is the zero-current end, bit for bit.
+        self._nec2_end_cap = bound["nec2_end_cap"]
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -2722,6 +2729,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (nec2c computes aj from bi[jcox] for every connected segment and
         # resets aj = ap = the self constant before the Q/D formulas).
         a_const = 1.0 / (np.log(2.0 / ka) - _EULER_GAMMA)
+
+        # momwire#2033: NEC-2's free ends, where the option is on and the deck
+        # has one. A deck with no free end falls through, bit for bit. The
+        # NEC-4 junction above keeps its own cap: it returned before here.
+        if self._nec2_end_cap and _nec2_end_cap.has_free_end(geom):
+            if per_seg_k or _complex_k(k):
+                raise ValueError(_nec2_end_cap.BELOW_INTERFACE_REFUSAL)
+            seg_view = _nec2_end_cap.basis_view(
+                geom, k, a_const, self._seg_radius(geom)
+            )
+            self._cached_basis = (geom, k, a_key, seg_view)
+            return seg_view
 
         # Pre-compute every per-segment trig in one vectorized pass.
         kd_arr = k * np.asarray(seg_h, dtype=np.float64)
