@@ -223,7 +223,9 @@ def test_only_the_end_segments_basis_functions_change():
         assert np.abs(view_on["C"][mine] - view_off["C"][mine]).max() > 1e-4
 
 
-def test_a_junction_the_nec4_rule_solves_keeps_its_own_cap(cap_calls):
+def test_a_junction_the_nec4_rule_solves_refuses_by_name(cap_calls):
+    """That route has its own cap, so an answer here could not carry NEC-2's
+    while line 2 said it did."""
     arms = [
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.0]]),
         np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.7]]),
@@ -238,11 +240,10 @@ def test_a_junction_the_nec4_rule_solves_keeps_its_own_cap(cap_calls):
         "junction_rule": "nec42",
     }
     on = SinusoidalSolver(**kw, nec2_end_cap=True)
+    with pytest.raises(ValueError, match="nec2_end_cap cannot act"):
+        on._basis_coefs(on._build_geometry(), on.k)
     off = SinusoidalSolver(**kw, nec2_end_cap=False)
-    view_on = on._basis_coefs(on._build_geometry(), on.k)
-    view_off = off._basis_coefs(off._build_geometry(), off.k)
-    for key in "ABC":
-        assert np.array_equal(view_on[key], view_off[key])
+    off._basis_coefs(off._build_geometry(), off.k)
     assert not cap_calls
 
 
