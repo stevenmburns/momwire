@@ -1,0 +1,490 @@
+"""The C++ fill's `pair_reuse` (`_sin_pair_reuse_core.cpp`) against Python's
+(`_sin_pair_reuse.py`), which stays the reference.
+
+The nec42-sinusoidal executable's fill (`_sinusoidal_fill_core.cpp`) serves
+the feature when it is requested (the in-process hook here; a certification
+build of the executable, `MW_EXE_CERTIFY`, in tests/test_standalone_nec42.py).
+Its reach is level 1, so the shipped executables refuse it.
+
+Held, bit for bit:
+- the per-segment types (`reversible_segment_types`, `reversible_ground_types`);
+- the plan, every array of it (the class map, representatives, codes, near
+  pairs and their blocks, the canonical sources and the radius runs) and
+  what the census counted (`census_peak_bytes`), for the direct block, the
+  PEC image's and a finite ground's reflected term, at several worker
+  counts, the classes numbered where they first occur in the pairs' order;
+- the budget's verdicts: over a ladder of budgets around a deck's census
+  peak, its floor and its plan's fill, the C++ census declines exactly where
+  Python's does;
+- the NEC-4.2 slot's printout and its fill (Z, the port coefficients and
+  Y, by row digest) with the feature requested, against the Python slot's
+  with it on, on decks that serve it over free space, a PEC plane and the
+  Sommerfeld ground; the fill differs from the C++ fill with it off (so the
+  reuse is what ran) and the C++ route reports the census Python's does;
+- every decline, with Python's reason: the NEC-4 junction kernel, a deck
+  below the small-deck threshold, and a census past the budget.
+
+Bit for bit, not within the drift, because nothing here is a new numerical
+path: the key columns are numpy's arithmetic written out per element in its
+order (no contraction), the grouping is the same `IntGroups` code, and the
+values are the same kernels called on the same slices.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from momwire import _accel
+from momwire import _sin_pair_reuse as pr
+from momwire import sinusoidal as S
+from momwire.sinusoidal import SinusoidalSolver
+
+ROOT = Path(__file__).resolve().parents[1]
+FIX = ROOT / "tests" / "fixtures"
+
+acc = _accel.acc
+pytestmark = [
+    pytest.mark.reach(1),
+    pytest.mark.skipif(
+        acc is None or not getattr(acc, "sin_pair_reuse_cxx", False),
+        reason="needs the extension's C++ pair-reuse hooks",
+    ),
+]
+
+LAM = 10.7
+
+
+@pytest.fixture(autouse=True)
+def _clean(monkeypatch):
+    monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
+    pr.clear_shared_plans()
+    acc.sin_pair_reuse_configure(
+        budget=0, small_free=-1, small_ground=-1, workers=0, clear=True
+    )
+    yield
+    pr.clear_shared_plans()
+    acc.sin_pair_reuse_configure(
+        budget=0, small_free=-1, small_ground=-1, workers=0, clear=True
+    )
+
+
+def _solver(wires, radii=None):
+    """An extended-kernel solver (the NEC-4.2 slot's) over straight wires."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return SinusoidalSolver(
+            wires=[np.asarray(w, dtype=np.float64) for w, _ in wires],
+            n_per_edge_per_wire=[[n] for _, n in wires],
+            feed_wire_index=len(wires) // 2,
+            wavelength=LAM,
+            wire_radius=2e-3 if radii is None else radii,
+            extended_kernel=True,
+        )
+
+
+def _curtain(n=10, segs=41, flip=(), tilt=0.0):
+    out = []
+    for i in range(n):
+        a = np.array([0.1 * LAM * i, 0.0, 1.0])
+        b = np.array([0.1 * LAM * i + tilt * (i % 3), 0.0, 1.0 + 0.5 * LAM])
+        out.append(((b, a) if i in flip else (a, b), segs))
+    return [(np.stack(p), s) for p, s in out]
+
+
+def _random_wires(n=24, segs=17, seed=1911):
+    """Straight wires in random directions: every orientation, no symmetry."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        c = rng.uniform(-3.0, 3.0, 3) + np.array([0.0, 0.0, 6.0])
+        d = rng.normal(size=3)
+        d *= 0.2 * LAM / np.linalg.norm(d)
+        out.append((np.stack([c - d, c + d]), segs))
+    return out
+
+
+DECKS = {
+    "curtain": (_curtain(), None),
+    "flipped, tilted": (_curtain(flip=(1, 4, 7), tilt=0.3), None),
+    "two radii": (_curtain(flip=(2,)), [2e-3, 3e-3] * 5),
+    "random wires": (_random_wires(), None),
+}
+
+
+def _inputs(s):
+    geom = s._build_geometry()
+    N = geom["n_segs"]
+    seg_c = np.ascontiguousarray(geom["seg_centers"], dtype=np.float64)
+    seg_t = np.ascontiguousarray(geom["seg_tangents"], dtype=np.float64)
+    seg_h = np.ascontiguousarray(geom["seg_h"], dtype=np.float64)
+    src_a = np.ascontiguousarray(s._seg_radius(geom), dtype=np.float64)
+    a_seg = (
+        np.full(N, float(s._uniform_radius)) if s._uniform_radius is not None else src_a
+    )
+    ind1, ind2 = (np.ascontiguousarray(x, dtype=np.int8) for x in s._ek_gating(geom))
+    # the image as the C++ fill mirrors it, in the NEC-4.2 slot's z = 0
+    img_c = seg_c.copy()
+    img_c[:, 2] = 2 * 0.0 - img_c[:, 2]
+    img_t = seg_t * np.array([1.0, 1.0, -1.0])
+    rows = max(1, int(256 * 1024 * 1024 // (20 * 8 * N)))
+    return dict(
+        N=N, seg_c=seg_c, seg_t=seg_t, seg_h=seg_h, src_a=src_a, a_seg=a_seg,
+        ind1=ind1, ind2=ind2, img_c=img_c, img_t=img_t, rows=rows,
+    )  # fmt: skip
+
+
+def _same(a, b, what):
+    a, b = np.asarray(a), np.asarray(b)
+    assert (a.shape, a.dtype) == (b.shape, b.dtype), (
+        what,
+        a.shape,
+        b.shape,
+        a.dtype,
+        b.dtype,
+    )
+    assert a.tobytes() == b.tobytes(), what
+
+
+def _blocks_same(py, cx, what):
+    assert len(py) == len(cx), what
+    for x, y in zip(py, cx, strict=True):
+        assert (x[0], x[1], x[5], x[6]) == (y[0], y[1], y[5], y[6]), what
+        for k in (2, 3, 4):
+            _same(x[k], y[k], f"{what}[{k}]")
+
+
+def _plan_same(py, cx, ground):
+    if py is pr.OVER_BUDGET:
+        assert cx is None
+        return
+    assert cx is not None
+    _same(py.cls, cx["cls"], "cls")
+    _same(
+        py.rep_flat if ground else py.rep_src,
+        cx["rep_flat" if ground else "rep_src"],
+        "rep",
+    )
+    _same(py.rep_code, cx["rep_code"], "rep_code")
+    assert py.code_bits == cx["code_bits"]
+    _same(py.near_flat, cx["near_flat"], "near_flat")
+    _blocks_same(py.near_blocks, cx["near_blocks"], "near_blocks")
+    if ground:
+        _blocks_same(py.rep_blocks, cx["rep_blocks"], "rep_blocks")
+    else:
+        _same(py.src_c, cx["src_c"], "src_c")
+        _same(py.src_t, cx["src_t"], "src_t")
+        assert [tuple(r) for r in py.runs] == [tuple(r) for r in cx["runs"]]
+    assert pr.fill_nbytes(py) == cx["fill_nbytes"]
+    assert py.census_peak_bytes == cx["census_peak_bytes"]
+
+
+def _both(block, g, types, gtypes, budget, workers, monkeypatch):
+    """Python's plan and the C++ one for `block` of deck inputs `g`."""
+    monkeypatch.setattr(pr, "_workers", lambda: workers)
+    src_type, obs_type, src_rev = types
+    common = (g["seg_h"], g["a_seg"])
+    if block == "reflected":
+        gs, go, gsr, gor = gtypes
+        py = pr.build_ground_plan(
+            g["seg_c"], g["seg_t"], g["seg_c"], g["seg_t"], 0.0, *common, gs, go,
+            g["rows"], src_rev=gsr, obs_rev=gor, budget=budget,
+        )  # fmt: skip
+        cx = acc.sin_pair_reuse_plan(
+            g["seg_c"], g["seg_t"], g["seg_c"], g["seg_t"], *common, gs, go, g["rows"],
+            src_rev=gsr, budget=budget, workers=workers, ground_z=0.0, obs_rev=gor,
+        )  # fmt: skip
+        return py, cx
+    sc, st = (g["seg_c"], g["seg_t"]) if block == "direct" else (g["img_c"], g["img_t"])
+    py = pr.build_plan(
+        g["seg_c"], g["seg_t"], sc, st, *common, src_type, obs_type, g["rows"],
+        src_rev=src_rev, budget=budget,
+    )  # fmt: skip
+    cx = acc.sin_pair_reuse_plan(
+        g["seg_c"], g["seg_t"], sc, st, *common, src_type, obs_type, g["rows"],
+        src_rev=src_rev, budget=budget, workers=workers,
+    )  # fmt: skip
+    return py, cx
+
+
+def _types(g):
+    py = pr.reversible_segment_types(
+        g["seg_h"], g["a_seg"], g["src_a"], g["ind1"], g["ind2"]
+    )
+    gpy = pr.reversible_ground_types(*py, g["seg_t"])
+    return py, gpy
+
+
+@pytest.mark.parametrize("deck", list(DECKS))
+def test_the_types_are_pythons(deck):
+    g = _inputs(_solver(*DECKS[deck]))
+    py, gpy = _types(g)
+    cx = acc.sin_pair_reuse_types(
+        g["seg_h"], g["a_seg"], g["src_a"], g["ind1"], g["ind2"]
+    )
+    gcx = acc.sin_pair_reuse_types(
+        g["seg_h"], g["a_seg"], g["src_a"], g["ind1"], g["ind2"], g["seg_t"]
+    )
+    for a, b in zip((*py, *gpy), (*cx, *gcx), strict=True):
+        _same(np.asarray(a, dtype=np.int64), b, "types")
+    # the reduced kernel's (half-length only)
+    rpy = pr.reversible_segment_types(g["seg_h"], g["a_seg"])
+    rcx = acc.sin_pair_reuse_types(g["seg_h"], g["a_seg"])
+    for a, b in zip(rpy, rcx, strict=True):
+        _same(np.asarray(a, dtype=np.int64), b, "reduced types")
+    # not vacuous: the end codes split the sources into types, reversal moves them
+    assert np.unique(py[0]).size > 1 and np.any(py[0] != py[2])
+
+
+@pytest.mark.parametrize("workers", [1, 3, 8])
+@pytest.mark.parametrize("block", ["direct", "image", "reflected"])
+@pytest.mark.parametrize("deck", list(DECKS))
+def test_the_plan_is_pythons(deck, block, workers, monkeypatch):
+    g = _inputs(_solver(*DECKS[deck]))
+    types, gtypes = _types(g)
+    py, cx = _both(block, g, types, gtypes, None, workers, monkeypatch)
+    _plan_same(py, cx, block == "reflected")
+    # not vacuous: coded orientations, reused pairs where the deck repeats
+    # (random wires repeat little: they are the orientation code's test),
+    # near pairs where they lie
+    assert np.any(py.rep_code != 0)
+    if deck != "random wires":
+        assert py.n_classes < py.n_pairs // 2
+    if block == "direct":
+        assert py.n_near > 0
+
+
+@pytest.mark.parametrize("block", ["direct", "reflected"])
+@pytest.mark.parametrize("deck", ["curtain", "random wires"])
+def test_the_budget_declines_where_pythons_does(deck, block, monkeypatch):
+    """Every budget of a ladder around the deck's own numbers: its class map
+    (declined before any census), the census's peak and floor (declined on
+    the way) and the plan's fill (declined at the end), and between them."""
+    g = _inputs(_solver(*DECKS[deck]))
+    types, gtypes = _types(g)
+    workers = 4
+    lifted, _ = _both(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
+    cls_bytes = int(lifted.cls.nbytes)
+    marks = [cls_bytes, lifted.census_peak_bytes, pr.fill_nbytes(lifted)]
+    ladder = sorted({max(1, m + d) for m in marks for d in (-1, 0, 1)})
+    ladder += [int(x) for x in np.linspace(cls_bytes, 2 * pr.fill_nbytes(lifted), 13)]
+    verdicts = set()
+    for budget in sorted(set(ladder)):
+        py, cx = _both(block, g, types, gtypes, budget, workers, monkeypatch)
+        _plan_same(py, cx, block == "reflected")
+        verdicts.add(py is pr.OVER_BUDGET)
+    assert verdicts == {True, False}
+
+
+# --- the NEC-4.2 slot's printout and fill, through the in-process hook ------
+
+
+def _load(name, rel):
+    spec = importlib.util.spec_from_file_location(name, ROOT / rel)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def tools():
+    rc = _load("core_split_nec4_run_compare", "scripts/core_split/nec4_run_compare.py")
+    fc = _load(
+        "core_split_sinusoidal_fill_compare",
+        "scripts/core_split/sinusoidal_fill_compare.py",
+    )
+    try:
+        blas = rc.blas_addresses("sinusoidal")
+        fill_blas = fc.blas_addresses()
+    except (IndexError, AttributeError, OSError):
+        pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
+    if not hasattr(acc, "sinusoidal_nec4_printout"):
+        pytest.skip("no compiled accelerator with the NEC-4.2 run half")
+    return rc, fc, blas, fill_blas
+
+
+def curtain_deck(n=10, segs=41, ground="free", flip=(), tilt=0.0, radii=None, nf=3):
+    """`n` parallel wires with no junction (the NEC-4.2 slot's NEC-4 kernel
+    serves any junction, and the reuse steps aside from it)."""
+    lines = ["CM pair reuse curtain", "CE"]
+    lam = 299.792458 / 28.0
+    for i in range(n):
+        x = 0.1 * lam * i
+        a, b = (x, 0.0, 1.0), (x + tilt * (i % 3), 0.0, 1.0 + 0.5 * lam)
+        if i in flip:
+            a, b = b, a
+        r = radii[i % len(radii)] if radii else 0.002
+        lines.append(
+            f"GW {i + 1} {segs} {a[0]:.6f} {a[1]:.6f} {a[2]:.6f} "
+            f"{b[0]:.6f} {b[1]:.6f} {b[2]:.6f} {r}"
+        )
+    if ground == "free":
+        lines.append("GE 0")
+    else:
+        lines += ["GE 1", "GN 1" if ground == "pec" else "GN 2 0 0 0 13 .005"]
+    lines += [
+        f"FR 0 {nf} 0 0 28 0.1",
+        f"EX 0 {n // 2 + 1} {segs // 2 + 1} 0 1 0",
+        "XQ",
+        "EN",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+@pytest.fixture
+def py_outcome(monkeypatch):
+    """Each Python fill's `pair_reuse_declined` and census, in fill order."""
+    seen = []
+    orig = S.SinusoidalSolver._fill_report_end
+
+    def wrap(self, ledger):
+        seen.append((self.pair_reuse_declined, dict(self.pair_reuse_census)))
+        return orig(self, ledger)
+
+    monkeypatch.setattr(S.SinusoidalSolver, "_fill_report_end", wrap)
+    return seen
+
+
+def _runs(tools, text, monkeypatch, py_outcome):
+    """(C++ printout on, C++ stats, C++ fill on, C++ fill off, Python's
+    printout on, Python's fill on)."""
+    from threadpoolctl import threadpool_limits
+
+    rc, fc, blas, fill_blas = tools
+    version, variant, marker = rc.pc.stamp()
+    data = text.encode("latin-1")
+    with threadpool_limits(limits=1):
+        acc.sin_pair_reuse_stats(True)
+        ok, on = acc.sinusoidal_nec4_printout(
+            data, blas, version, variant, marker, ["pair_reuse"]
+        )
+        assert ok, on
+        stats = acc.sin_pair_reuse_stats()
+        fill_on = acc.sinusoidal_fill_dump(data, fill_blas, fc.WHOLE, ["pair_reuse"])
+        fill_off = acc.sinusoidal_fill_dump(data, fill_blas, fc.WHOLE, [])
+        monkeypatch.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+        pr.clear_shared_plans()
+        py_outcome.clear()
+        py = rc.py_printout(text, "sinusoidal")
+        outcome = list(py_outcome)
+        pr.clear_shared_plans()
+        fill_py = fc.py_fill(text)
+        monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE")
+    body = [rc.mask(t)[0].split("\n")[2:] for t in (py, on)]
+    assert body[0] == body[1], rc.first_difference(
+        "\n".join(body[0]), "\n".join(body[1])
+    )
+    assert fill_on == fill_py, rc.first_difference(fill_py, fill_on)
+    return stats, outcome, fill_on, fill_off
+
+
+SERVED = {
+    "free space": curtain_deck(),
+    "PEC": curtain_deck(ground="pec"),
+    "Sommerfeld": curtain_deck(ground="somm"),
+    "flipped, tilted": curtain_deck(flip=(1, 4, 7), tilt=0.3),
+    "two radii over PEC": curtain_deck(ground="pec", flip=(0, 3), radii=[0.002, 0.003]),
+    "tilted, two radii, Sommerfeld": curtain_deck(
+        ground="somm", flip=(0, 3), tilt=0.2, radii=[0.002, 0.004]
+    ),
+    # a two-wire junction at one radius keeps NEC-2's kernel and its uniform
+    # end factors (`_sinusoidal_nec4.solved_nodes`), so the reuse serves it;
+    # the junction's ends carry the extended kernel's code 2
+    "a two-wire junction": (
+        "CM vee\nCE\nGW 1 250 0 0 1 0 0 11 .002\nGW 2 250 0 0 11 5 0 16 .002\n"
+        "GE 0\nFR 0 1 0 0 28 0\nEX 0 1 125 0 1 0\nXQ\nEN\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("deck", list(SERVED))
+def test_the_reused_printout_and_fill_are_pythons(deck, tools, monkeypatch, py_outcome):
+    stats, outcome, fill_on, fill_off = _runs(
+        tools, SERVED[deck], monkeypatch, py_outcome
+    )
+    assert stats["last"] == "served"
+    assert outcome and all(o == (None, outcome[0][1]) for o in outcome)
+    assert stats["census"] == outcome[0][1]
+    assert stats["built"] - stats["declined"] >= 1
+    # the reuse ran: the fill is not the fill without it
+    assert fill_on != fill_off
+
+
+DECLINED = {
+    # a junction: the NEC-4.2 slot's NEC-4 kernel, which the reuse never serves
+    "a three-wire junction": (
+        "CM tee\nCE\nGW 1 150 0 0 1 0 0 11 .002\nGW 2 150 0 0 11 5 0 16 .002\n"
+        "GW 3 150 0 0 11 -5 0 16 .002\nGE 0\nFR 0 1 0 0 28 0\nEX 0 1 75 0 1 0\nXQ\nEN\n",
+        "the NEC-4 junction kernel",
+    ),
+    "small deck": (
+        curtain_deck(n=4, segs=41),
+        "too few segments to repay the plan (N < 400)",
+    ),
+    "small deck over the ground": (
+        curtain_deck(n=4, segs=41, ground="somm"),
+        "too few segments to repay the plan (N < 200)",
+    ),
+    "transmitted_mixed m2": (
+        (FIX / "transmitted_mixed" / "m2_dipole_over_buried.nec").read_text(
+            encoding="latin-1"
+        ),
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("deck", list(DECLINED))
+def test_a_declined_deck_declines_as_pythons(deck, tools, monkeypatch, py_outcome):
+    text, reason = DECLINED[deck]
+    stats, outcome, fill_on, fill_off = _runs(tools, text, monkeypatch, py_outcome)
+    assert fill_on == fill_off
+    assert stats["built"] == 0
+    if reason is None:
+        # a mixed deck takes `_assemble_Z_mixed`, which no reuse sees
+        assert stats["last"] == "" and all(o[0] is None and not o[1] for o in outcome)
+    else:
+        assert stats["last"] == reason
+        assert outcome and {o[0] for o in outcome} == {reason}
+
+
+@pytest.mark.parametrize("ground", ["free", "pec", "somm"])
+def test_a_deck_past_the_budget_declines_as_pythons(
+    ground, tools, monkeypatch, py_outcome
+):
+    """A budget the curtain's census passes (0.5 MB: its class map is 0.64 MB)
+    on both routes: the same sentence, and the fill as with the reuse off."""
+    budget = 1 << 19
+    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", budget)
+    acc.sin_pair_reuse_configure(budget=budget, clear=True)
+    stats, outcome, fill_on, fill_off = _runs(
+        tools, curtain_deck(ground=ground), monkeypatch, py_outcome
+    )
+    reason = "the plan and its census would exceed the 0.5 MB budget"
+    assert pr.over_budget_reason() == reason
+    assert stats["last"] == reason
+    assert {o[0] for o in outcome} == {reason}
+    assert fill_on == fill_off
+    # declined once, then found declined at the next frequencies
+    assert stats["built"] == stats["declined"] == 1 and stats["found"] >= 1
+
+
+def test_the_reuse_is_requested_per_run(tools, monkeypatch, py_outcome):
+    """Off is off: the hook without the feature leaves no outcome and builds
+    nothing, after a run that served it."""
+    rc, fc, blas, fill_blas = tools
+    version, variant, marker = rc.pc.stamp()
+    data = SERVED["free space"].encode("latin-1")
+    acc.sin_pair_reuse_stats(True)
+    ok, _ = acc.sinusoidal_nec4_printout(
+        data, blas, version, variant, marker, ["pair_reuse"]
+    )
+    assert ok and acc.sin_pair_reuse_stats()["last"] == "served"
+    acc.sin_pair_reuse_stats(True)
+    ok, _ = acc.sinusoidal_nec4_printout(data, blas, version, variant, marker, [])
+    st = acc.sin_pair_reuse_stats()
+    assert ok and st["last"] == "" and st["built"] == st["found"] == 0

@@ -235,6 +235,12 @@ FEATURES: dict[str, Feature] = {
         # (razor-2p), follow this keyword and this variable, so every solver
         # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
         # supports. Their own keywords and variables are kept as aliases.
+        #
+        # The sinusoidal part is ported to the C++ fill
+        # (`_sin_pair_reuse_core.h`), which the nec42-sinusoidal executable
+        # runs: Python's plan to the byte. It has no EXE_FEATURES row, so the
+        # shipped executables refuse it; a certification build
+        # (MW_EXE_CERTIFY=pair_reuse) runs it for the gates.
         Feature(
             name="pair_reuse",
             reach=1,
@@ -254,6 +260,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_contract_1982.py",
                 "tests/test_pair_reuse_chunked_2020.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
+                "tests/test_sin_pair_reuse_cxx_1911.py",
             ),
             label="pair reuse",
             summary=(

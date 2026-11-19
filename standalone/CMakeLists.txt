@@ -328,6 +328,7 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
     ${MW_SRC}/_sinusoidal_nec4_core.cpp
     ${MW_SRC}/_sinusoidal_front_core.cpp
     ${MW_SRC}/_sinusoidal_fill_core.cpp
+    ${MW_SRC}/_sin_pair_reuse_core.cpp  # momwire#1911: `pair_reuse` (requested only)
     ${MW_SRC}/_sinusoidal_transmitted_core.cpp
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
