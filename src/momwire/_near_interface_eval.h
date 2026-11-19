@@ -224,6 +224,14 @@ struct Features {
     // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
     // either: the crossing fill reads it from the active features.
     bool crossing_anchors = false;
+    // momwire#1911: the point-matched sinusoidal fill's pair reuse
+    // (`_sin_pair_reuse_core.h`). Not a near-interface lever either: the C++
+    // fill reads it from the REQUESTED set, as `SinusoidalSolver` reads its
+    // flag at construction. Its reach is level 1 and it has no EXE_FEATURES
+    // row, so no shipped executable requests it; the in-process hook
+    // (`sinusoidal_nec4_printout(features=)`) and a certification build
+    // (`MW_EXE_CERTIFY`, standalone/CMakeLists.txt) do.
+    bool pair_reuse = false;
     // momwire#1847: the transmitted grid blended from frequency anchors
     // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
     // either: the mixed blocks' grid requests read it, bs2's and the
@@ -241,9 +249,11 @@ bool request_feature(const std::string &name, bool stamped = true);
 // outside the executable's reach); false for a name this route does not carry.
 bool withdraw_feature(const std::string &name);
 // Line 2's feature tail for what was requested stamped, as
-// `_features.stamp()` spells it within every feature's reach: "+name" each,
-// in registry order, or "".
+// `_features.stamp()` spells it: "+name" each, in registry order, or "";
+// followed by " uncertified on this platform" once `stamp_uncertified(true)`
+// (a certification build running a feature past its reach, momwire#1911).
 std::string requested_stamp();
+void stamp_uncertified(bool on);
 
 // One buried fill with the requested features on, as the Python solvers'
 // scopes put them around theirs; restores what was on before.

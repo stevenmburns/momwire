@@ -21,6 +21,7 @@
 #include "_sinusoidal_galerkin_core.h"  // point_field_tensor_cplx_staged (momwire#1849)
 #include "_near_interface_eval.h"  // requested_features (momwire#1849)
 #include "_sinusoidal_nec4_core.h"
+#include "_sin_pair_reuse_core.h"  // `pair_reuse` (momwire#1911)
 #include "_somm_grid_core.h"
 #include "_somm_proj_core.h"
 #include "_somm_below_fill_core.h"
@@ -1974,6 +1975,253 @@ std::vector<cd> assemble_Z_crossing(const Front &fr, const nec4::SolverArgs &arg
     return G;
 }
 
+
+// --- `pair_reuse` (momwire#1911, `_sin_pair_reuse_route`) -------------------
+//
+// The fill served from each congruent pair's one evaluation
+// (`_sin_pair_reuse_core.h`): free space, the PEC image, and the composing
+// Sommerfeld ground's whole reflected term (`c2 Φ_img - S`, on the ground
+// classes). Declined, with `pair_reuse_declined`'s words, in its order: the
+// NEC-4 junction kernel, the folded cos-1 shapes, a fill inside a ground
+// medium, a deck below the small-deck threshold, a census or plan past the
+// budget. A crossing or mixed deck never reaches it (`_assemble_Z_mixed`
+// takes no reuse). The kernels are this file's, called as `_field_tensor`
+// and the band compose them, so a value is the off fill's for the same pair.
+namespace pr = pair_reuse;
+
+struct Reuse {
+    std::shared_ptr<const pr::Plan> plan[2];  // the direct block; the image or reflected one
+    pr::Values vals[2];
+    int blocks = 1;
+};
+
+// `kernel(...)` of `_sin_pair_reuse_route`: the EK field tensor on given
+// observers and sources, `ns` the source segments they stand for.
+void reuse_kernel(const Kernel &K, const double *obs_c, const double *obs_t, ll m, const double *src_c,
+                  const double *src_t, const int64_t *ns, ll n, double a, std::vector<cd> *out) {
+    const Geometry &g = K.fr->geometry;
+    std::vector<double> h(static_cast<std::size_t>(n)), sa(static_cast<std::size_t>(n));
+    std::vector<int8_t> i1(static_cast<std::size_t>(n)), i2(static_cast<std::size_t>(n));
+    for (ll j = 0; j < n; j++) {
+        const std::size_t s = static_cast<std::size_t>(ns[j]), jz = static_cast<std::size_t>(j);
+        h[jz] = g.seg_h[s];
+        sa[jz] = K.src_a[s];
+        i1[jz] = K.ind1[s];
+        i2[jz] = K.ind2[s];
+    }
+    const ll q = static_cast<ll>(K.gx.size());
+    CF oc = f64(obs_c, {m, 3}), ot = f64(obs_t, {m, 3}), sc = f64(src_c, {n, 3}), st = f64(src_t, {n, 3});
+    CF hh = f64(h.data(), {n}), gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q}), s_a = f64(sa.data(), {n});
+    CI8 c1 = CI8::borrow(buffer(i1.data(), 1, {n})), c2 = CI8::borrow(buffer(i2.data(), 1, {n}));
+    const Tensors t = sinusoidal_field_tensor_ek(oc, ot, sc, st, hh, a, K.fr->k, K.fr->eta, gx, gw, s_a, c1, c2, 0);
+    const nd::array_t<cd> *parts[3] = {&std::get<0>(t), &std::get<1>(t), &std::get<2>(t)};
+    for (int c = 0; c < 3; c++) {
+        if (parts[c]->size() != m * n) throw std::logic_error("pair reuse: unexpected field tensor shape");
+        out[c].assign(parts[c]->data(), parts[c]->data() + m * n);
+    }
+}
+
+// `_replay_sommerfeld_remainder` over the source segments `ns` alone
+// (`reflected_rows`' `sub`): S (3, i1 - i0, n), each pair's value the full
+// replay's (each element reads its own source's nodes only).
+void somm_replay_sub(const Front &fr, const Somm &sm, ll i0, ll i1, const int64_t *ns, ll nn,
+                     std::vector<cd> *S) {
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs, M = i1 - i0, q = sm.q, n_src = nn * q;
+    std::vector<double> srcf(static_cast<std::size_t>(3 * n_src)), t_src(static_cast<std::size_t>(3 * n_src)),
+        shp_w(static_cast<std::size_t>(3 * n_src));
+    for (ll j = 0; j < nn; j++)
+        for (ll k = 0; k < q; k++) {
+            const std::size_t from = static_cast<std::size_t>(ns[j] * q + k), to = static_cast<std::size_t>(j * q + k);
+            for (int c = 0; c < 3; c++) {
+                srcf[3 * to + static_cast<std::size_t>(c)] = sm.srcf[3 * from + static_cast<std::size_t>(c)];
+                t_src[3 * to + static_cast<std::size_t>(c)] = sm.t_src[3 * from + static_cast<std::size_t>(c)];
+                shp_w[static_cast<std::size_t>((c * nn + j) * q + k)] = sm.shp_w[static_cast<std::size_t>((c * N + ns[j]) * q + k)];
+            }
+        }
+    for (int s = 0; s < 3; s++) S[s].assign(static_cast<std::size_t>(M * nn), cd(0.0, 0.0));
+    const ll chunk = std::max<ll>(1, kRemainderChunkElems / std::max<ll>(1, n_src));  // `elem_rows`
+    std::vector<double> obs, tob;
+    for (ll a = 0; a < M; a += chunk) {
+        const ll b = std::min(a + chunk, M), m = b - a;
+        obs.assign(static_cast<std::size_t>(3 * m), 0.0);
+        tob.assign(static_cast<std::size_t>(3 * m), 0.0);
+        for (ll r = 0; r < m; r++)
+            for (int c = 0; c < 3; c++) {
+                obs[static_cast<std::size_t>(3 * r + c)] = g.seg_centers[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+                tob[static_cast<std::size_t>(3 * r + c)] = g.seg_tangents[static_cast<std::size_t>(i0 + a + r)][static_cast<std::size_t>(c)];
+            }
+        std::vector<cd> table(static_cast<std::size_t>(m * n_src));
+        somm_core::field_proj_batch(*sm.view, sm.n_reg, m, n_src, obs.data(), tob.data(), srcf.data(), t_src.data(),
+                                    0.0, fr.k, table.data(), 0, true);
+        if (somm_core::lazy_check()) somm_core::check_read(table.data(), table.size(), "sinusoidal sommerfeld remainder");
+        for (ll i = 0; i < m; i++) {
+            const cd *row = table.data() + i * nn * q;
+            for (int s = 0; s < 3; s++) {
+                const double *w = shp_w.data() + s * nn * q;
+                for (ll n = 0; n < nn; n++) {
+                    double are = 0.0, aim = 0.0;
+                    for (ll k = 0; k < q; k++) {
+                        const double r0 = w[n * q + k], i0w = 0.0;
+                        const double r1 = row[n * q + k].real(), im1 = row[n * q + k].imag();
+                        const double re = r0 * r1 - i0w * im1;
+                        const double im = r0 * im1 + i0w * r1;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    S[s][static_cast<std::size_t>((a + i) * nn + n)] = cd(are, aim);
+                }
+            }
+        }
+    }
+}
+
+std::string bytes_of(const void *p, std::size_t n) { return std::string(static_cast<const char *>(p), n); }
+
+std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, bool pec, bool finite,
+                                   const Somm *somm, const std::vector<Point3> &img_c,
+                                   const std::vector<Point3> &img_t, const std::vector<double> &rad) {
+    if (!ni_eval::requested_features().pair_reuse) return nullptr;
+    const Geometry &g = fr.geometry;
+    const ll N = g.n_segs;
+    std::string reason;
+    if (fr.nec4) {
+        reason = "the NEC-4 junction kernel";
+    } else if (cos1) {
+        reason = "the folded cos-1 shapes (k*delta below the well-scaled bound)";
+    } else if (fr.buried) {
+        reason = "a fill inside a ground medium";
+    } else if (!K.ek) {
+        reason = "the reduced-kernel fill (the NEC-4.2 slot never builds one)";
+    } else if (N < pr::small_deck_segs(finite)) {
+        reason = "too few segments to repay the plan (N < " + std::to_string(pr::small_deck_segs(finite)) + ")";
+    }
+    if (!reason.empty()) {
+        pr::set_last_outcome(reason);
+        pr::set_last_census({});
+        return nullptr;
+    }
+    const std::size_t Nz = static_cast<std::size_t>(N);
+    const double *seg_c = g.seg_centers[0].data(), *seg_t = g.seg_tangents[0].data();
+    // the observer radius each kernel call takes, and the source's (EK's table)
+    std::vector<double> a_seg(Nz);
+    for (std::size_t i = 0; i < Nz; i++) a_seg[i] = fr.uniform_radius ? fr.radius_per_wire[0] : rad[i];
+    const pr::Types ty =
+        pr::reversible_segment_types(N, g.seg_h.data(), a_seg.data(), rad.data(), K.ind1.data(), K.ind2.data());
+    pr::GroundTypes gt;
+    if (finite) gt = pr::reversible_ground_types(ty, N, seg_t);
+    // `_schedule.mb_rows(swept_mem_mb, 20 * 8 * N)`: the census's swept rows
+    const ll census_rows = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / (20 * 8 * N));
+    const int workers = pr::workers();
+    auto reuse = std::unique_ptr<Reuse>(new Reuse());
+    reuse->blocks = (pec || finite) ? 2 : 1;
+    const char *names[2] = {"direct", finite ? "reflected" : "image"};
+    const std::string geo = bytes_of(seg_c, 24 * Nz) + bytes_of(seg_t, 24 * Nz) + bytes_of(g.seg_h.data(), 8 * Nz) +
+                            bytes_of(a_seg.data(), 8 * Nz) + bytes_of(rad.data(), 8 * Nz) +
+                            bytes_of(K.ind1.data(), Nz) + bytes_of(K.ind2.data(), Nz);
+    int64_t budget_left = pr::plan_budget();
+    std::vector<pr::CensusEntry> census;
+    for (int b = 0; b < reuse->blocks; b++) {
+        const bool image = b == 1 && pec;
+        const bool reflected = b == 1 && finite;
+        const double *src_c = image ? img_c[0].data() : seg_c, *src_t = image ? img_t[0].data() : seg_t;
+        std::string key = std::string(names[b]) + '\0' + geo + bytes_of(src_c, 24 * Nz) + bytes_of(src_t, 24 * Nz);
+        const double gz = 0.0;  // the NEC-4.2 dialect's interface
+        if (reflected) key += bytes_of(&gz, 8);
+        key += bytes_of(&budget_left, 8);
+        key += bytes_of(&census_rows, 8);
+        pr::CensusInputs in;
+        in.M = N;
+        in.N = N;
+        in.obs_c = seg_c;
+        in.obs_t = seg_t;
+        in.src_c = src_c;
+        in.src_t = src_t;
+        in.seg_h = g.seg_h.data();
+        in.a_obs = a_seg.data();
+        in.rows = census_rows;
+        in.budget = budget_left;
+        in.workers = workers;
+        if (reflected) {
+            in.src_type = gt.src.data();
+            in.obs_type = gt.obs.data();
+            in.src_rev = gt.src_rev.data();
+            in.obs_rev = gt.obs_rev.data();
+            in.ground_z = gz;
+        } else {
+            in.src_type = ty.src.data();
+            in.obs_type = ty.obs.data();
+            in.src_rev = ty.src_rev.data();
+        }
+        reuse->plan[b] = pr::shared_plan(key, [&] { return reflected ? pr::build_ground_plan(in) : pr::build_plan(in); });
+        if (reuse->plan[b] == nullptr) {
+            pr::set_last_outcome(pr::over_budget_reason());
+            pr::set_last_census({});
+            return nullptr;
+        }
+        budget_left -= reuse->plan[b]->fill_nbytes();
+        census.push_back({names[b], N * N, reuse->plan[b]->n_classes(), reuse->plan[b]->n_near()});
+    }
+    // One wavenumber's values: the shipped kernel on each class's
+    // representative (canonically placed, or where it stands over a finite
+    // ground) and on the near pairs, in the original frame.
+    const double origin[3] = {0.0, 0.0, 0.0}, axis[3] = {0.0, 0.0, 1.0};
+    const pr::CanonFn canon = [&](const double *sc, const double *st, const int64_t *ns, int64_t n, int64_t g_obs,
+                                  std::vector<cd> *out) {
+        reuse_kernel(K, origin, axis, 1, sc, st, ns, n, a_seg[static_cast<std::size_t>(g_obs)], out);
+    };
+    auto rows_on = [&](const double *srcs_c, const double *srcs_t) {
+        return pr::RowsFn([&K, &a_seg, seg_c, seg_t, srcs_c, srcs_t](int64_t m0, int64_t m1, const int64_t *ns,
+                                                                    int64_t n, std::vector<cd> *out) {
+            std::vector<double> sc(static_cast<std::size_t>(3 * n)), st(static_cast<std::size_t>(3 * n));
+            for (int64_t j = 0; j < n; j++)
+                for (int c = 0; c < 3; c++) {
+                    sc[static_cast<std::size_t>(3 * j + c)] = srcs_c[3 * ns[j] + c];
+                    st[static_cast<std::size_t>(3 * j + c)] = srcs_t[3 * ns[j] + c];
+                }
+            reuse_kernel(K, seg_c + 3 * m0, seg_t + 3 * m0, m1 - m0, sc.data(), st.data(), ns, n,
+                         a_seg[static_cast<std::size_t>(m0)], out);
+        });
+    };
+    const pr::RowsFn direct_rows = rows_on(seg_c, seg_t);
+    pr::evaluate(*reuse->plan[0], canon, reuse->vals[0]);
+    pr::evaluate_near(*reuse->plan[0], direct_rows, reuse->vals[0]);
+    if (pec) {
+        const pr::RowsFn image_rows = rows_on(img_c[0].data(), img_t[0].data());
+        pr::evaluate(*reuse->plan[1], canon, reuse->vals[1]);
+        pr::evaluate_near(*reuse->plan[1], image_rows, reuse->vals[1]);
+    } else if (finite) {
+        const pr::RowsFn image_rows = rows_on(img_c[0].data(), img_t[0].data());
+        // `reflected_rows`: `c2 Φ_img - S`, in the band's order of operations
+        const pr::RowsFn reflected = [&](int64_t m0, int64_t m1, const int64_t *ns, int64_t n, std::vector<cd> *out) {
+            image_rows(m0, m1, ns, n, out);
+            std::vector<cd> S[3];
+            somm_replay_sub(fr, *somm, m0, m1, ns, n, S);
+            for (int c = 0; c < 3; c++)
+                for (std::size_t q = 0; q < out[c].size(); q++) {
+                    cd &y = out[c][q];
+                    y = nec5::replay::np_cmul(somm->c2, y);  // np.multiply(c2, Pi, out=Pi)
+                    const cd s = S[c][q];
+                    y = cd(y.real() - s.real(), y.imag() - s.imag());  // Pi -= Si
+                }
+        };
+        pr::evaluate_classes(*reuse->plan[1], reflected, reuse->vals[1]);
+        pr::evaluate_near(*reuse->plan[1], reflected, reuse->vals[1]);
+    }
+    pr::set_last_outcome("served");
+    pr::set_last_census(std::move(census));
+    return reuse;
+}
+
+// A band's direct (and image / reflected) blocks over rows [i0, i1).
+struct ReuseBand {
+    std::vector<int64_t> near[2];
+    pr::Block blk[2];
+    ReuseBand(const Reuse &r, ll i0, ll i1) {
+        for (int b = 0; b < r.blocks; b++) blk[b] = pr::band_block(*r.plan[b], r.vals[b], i0, i1, near[b]);
+    }
+};
+
 }  // namespace
 
 bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega, std::vector<cd> &z) {
@@ -1985,6 +2233,8 @@ bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, doub
 }
 
 std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const nec5::NumpyLinalg &np) {
+    pair_reuse::set_last_outcome("");
+    pair_reuse::set_last_census({});
     if (fr.crossing || fr.mixed) return assemble_Z_crossing(fr, args, np);
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
     // GN 2 / GN 3: the Sommerfeld composition (B5c)
@@ -2083,6 +2333,8 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
             img_c.push_back({c[0], c[1], 2.0 * 0.0 - c[2]});
             img_t.push_back({t[0] * 1.0, t[1] * 1.0, t[2] * -1.0});
         }
+    // momwire#1911: `pair_reuse`, or null for the fill below as it was
+    const std::unique_ptr<Reuse> reuse = reuse_route(fr, K, cos1, pec, finite, sp, img_c, img_t, rad);
     std::vector<cd> G(Nz * Nz, cd(0.0, 0.0));
     const bool dense = N < kDenseAssemblyThreshold;
     if (dense) {
@@ -2091,7 +2343,27 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
         for (int c = 0; c < 3; c++)
             for (std::size_t e = 0; e < E.n.size(); e++)
                 M[static_cast<std::size_t>(c)][static_cast<std::size_t>(E.n[e] * N + E.j[e])] = E.v[c][e];
-        const std::vector<std::vector<cd>> Phi = bandf(0, N);
+        std::vector<std::vector<cd>> Phi;
+        if (reuse) {
+            // dense M: `scatter`, the image's subtracted, then `_reduce_phi_band`'s zgemm
+            const ReuseBand rb(*reuse, 0, N);
+            Phi.assign(3, std::vector<cd>(Nz * Nz));
+            cd *dst[3] = {Phi[0].data(), Phi[1].data(), Phi[2].data()};
+            pr::scatter(rb.blk[0], N, N, dst);
+            if (reuse->blocks > 1) {
+                std::vector<std::vector<cd>> img(3, std::vector<cd>(Nz * Nz));
+                cd *idst[3] = {img[0].data(), img[1].data(), img[2].data()};
+                pr::scatter(rb.blk[1], N, N, idst);
+                for (int c = 0; c < 3; c++)
+                    for (std::size_t q = 0; q < Nz * Nz; q++) {
+                        cd &x = Phi[static_cast<std::size_t>(c)][q];
+                        const cd y = img[static_cast<std::size_t>(c)][q];
+                        x = cd(x.real() - y.real(), x.imag() - y.imag());
+                    }
+            }
+        } else {
+            Phi = bandf(0, N);
+        }
         std::vector<cd> tmp(Nz * Nz);
         for (int c = 0; c < 3; c++) {
             const nec5::Op a{Phi[static_cast<std::size_t>(c)].data(), N, N, N, 1};
@@ -2145,8 +2417,20 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     const ll blocks = 1 + ((pec || finite) ? 1 : 0) + (finite ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
     const ll row_bytes = std::max<ll>(3 * blocks, 3 + 2) * N * 16;
     const ll chunk = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / row_bytes);
+    pr::Csc Mc[3];
+    for (int c = 0; c < 3; c++)
+        Mc[c] = pr::Csc{reinterpret_cast<const int64_t *>(cptr.data()), reinterpret_cast<const int64_t *>(crow.data()),
+                        reinterpret_cast<const double *>(cval[c].data())};
     for (ll i0 = 0; i0 < N; i0 += chunk) {
         const ll i1 = std::min(i0 + chunk, N);
+        if (reuse) {
+            // momwire#1916: the classes gathered inside the reduction, the
+            // bits of `scatter` then the band reduction below
+            const ReuseBand rb(*reuse, i0, i1);
+            pr::reduce_band(reinterpret_cast<char *>(G.data() + i0 * N), static_cast<std::ptrdiff_t>(N * sizeof(cd)),
+                            i1 - i0, N, N, rb.blk[0], reuse->blocks > 1 ? &rb.blk[1] : nullptr, Mc, 0);
+            continue;
+        }
         const std::vector<std::vector<cd>> Phi = bandf(i0, i1);
         // `_reduce_phi_band` over this band: per element, P_c = Mcᵀ @ Φcᵀ
         // (csr_matvecs into zeros), then (P0 + P1) + P2 -- the accelerator's

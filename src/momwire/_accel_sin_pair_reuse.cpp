@@ -1,5 +1,7 @@
 #include "_accel_common.h"
 
+#include "_sin_pair_reuse_core.h"
+
 #include <stdexcept>
 #ifdef _OPENMP
 #include <omp.h>
@@ -22,7 +24,8 @@
 // Under the PEC image the image block is gathered the same way and
 // subtracted, `Φ -= Φ_img`, one IEEE subtraction per part as numpy's complex
 // `-=`. The reduction is `reduce_phi_band`'s (`_accel_phi_reduce.cpp`)
-// written out again: per output element a zero plus its column's stored
+// written out again, in `_sin_pair_reuse_core.cpp`, where the C++ fill's
+// reuse route runs the same copy: per output element a zero plus its column's stored
 // entries of M in stored order, one unfused multiply-add each, then
 // `(A + B) + C`. Rows are independent, so the thread count moves nothing;
 // LANES rows share each step of the walk over M, each its own chain.
@@ -49,23 +52,8 @@ using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
 using I32 = py::array_t<int32_t, py::array::c_style>;
 using C128 = py::array_t<cd, py::array::c_style>;
 
-struct Csc {
-    const int64_t *ptr;
-    const int64_t *ind;
-    const double *val;  // interleaved (re, im)
-};
-
-// One block's class map over the band and where its values come from.
-struct Block {
-    const int32_t *cls = nullptr;  // (rows, n_src), row-major
-    const double *rep = nullptr;   // (n_cls, 3) complex, interleaved
-    int64_t n_cls = 0;
-    const int64_t *near_idx = nullptr;  // (k,) sorted flat r * n_src + n, band-local
-    const double *near_val = nullptr;   // (k, 3) complex
-    int64_t n_near = 0;
-    bool coded = false;      // entries are class << 2 | code (momwire#1969)
-    bool neg[4][3] = {};     // shape negated under each code
-};
+using Csc = mw::sinusoidal::pair_reuse::Csc;
+using Block = mw::sinusoidal::pair_reuse::Block;
 
 using F64 = py::array_t<double, py::array::c_style | py::array::forcecast>;
 
@@ -110,65 +98,6 @@ static Block block_of(const I32 &cls, const C128 &rep, const I64 &near_idx,
             throw std::runtime_error("reduce_band: near pairs must be sorted and distinct");
     }
     return b;
-}
-
-// Observer rows reduced together: the reduction's every step is done for
-// LANES rows at once on the same M entry, each row's chain exactly as
-// `reduce_phi_band` runs it, so a lane is that kernel's arithmetic and the
-// compiler may put the lanes in one vector register. That is the whole
-// reason for the layout below; it moves no operation within a chain.
-static constexpr int LANES = 4;
-
-// Row r's three Φ rows into lane `l` of x[0..2], each laid out
-// [source n][re, im][lane]: the take, then the near pairs over it.
-static void gather_row(const Block &b, py::ssize_t r, py::ssize_t n_src, int l,
-                       double *x[3]) {
-    const int32_t *c = b.cls + r * n_src;
-    const int64_t hi = b.n_cls - 1;
-    if (b.coded) {
-        for (py::ssize_t n = 0; n < n_src; ++n) {
-            const int32_t e = c[n];
-            int64_t k = e >> 2;  // arithmetic, as numpy's >> on int32
-            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
-            const bool *ng = b.neg[e & 3];
-            const double *v = b.rep + 6 * k;
-            const py::ssize_t at = 2 * LANES * n + l;
-            x[0][at] = ng[0] ? -v[0] : v[0];
-            x[0][at + LANES] = ng[0] ? -v[1] : v[1];
-            x[1][at] = ng[1] ? -v[2] : v[2];
-            x[1][at + LANES] = ng[1] ? -v[3] : v[3];
-            x[2][at] = ng[2] ? -v[4] : v[4];
-            x[2][at + LANES] = ng[2] ? -v[5] : v[5];
-        }
-    } else {
-        for (py::ssize_t n = 0; n < n_src; ++n) {
-            int64_t k = c[n];
-            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
-            const double *v = b.rep + 6 * k;
-            const py::ssize_t at = 2 * LANES * n + l;
-            x[0][at] = v[0];
-            x[0][at + LANES] = v[1];
-            x[1][at] = v[2];
-            x[1][at + LANES] = v[3];
-            x[2][at] = v[4];
-            x[2][at + LANES] = v[5];
-        }
-    }
-    if (b.n_near == 0) return;
-    const int64_t lo = static_cast<int64_t>(r) * n_src, up = lo + n_src;
-    const int64_t *e0 = std::lower_bound(b.near_idx, b.near_idx + b.n_near, lo);
-    const int64_t *e1 = std::lower_bound(e0, b.near_idx + b.n_near, up);
-    for (const int64_t *e = e0; e < e1; ++e) {
-        const py::ssize_t n = static_cast<py::ssize_t>(*e - lo);
-        const double *v = b.near_val + 6 * (e - b.near_idx);
-        const py::ssize_t at = 2 * LANES * n + l;
-        x[0][at] = v[0];
-        x[0][at + LANES] = v[1];
-        x[1][at] = v[2];
-        x[1][at + LANES] = v[3];
-        x[2][at] = v[4];
-        x[2][at + LANES] = v[5];
-    }
 }
 
 static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 near_val,
@@ -231,68 +160,153 @@ static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 nea
     const py::ssize_t os = out.strides(0);
     {
         py::gil_scoped_release nogil;
-        int nt = 1;
-#ifdef _OPENMP
-        nt = n_threads > 0 ? n_threads : omp_get_max_threads();
-#else
-        (void)n_threads;
-#endif
-        if (nt < 1) nt = 1;
-        const size_t per = static_cast<size_t>(2 * LANES * n_src);
-        const size_t blocks = has_image ? 6 : 3;
-        std::vector<double> bufs(static_cast<size_t>(nt) * blocks * per);
-        const py::ssize_t tiles = (rows + LANES - 1) / LANES;
-#pragma omp parallel for schedule(static) num_threads(nt)
-        for (py::ssize_t tile = 0; tile < tiles; ++tile) {
-            int t = 0;
-#ifdef _OPENMP
-            t = omp_get_thread_num();
-#endif
-            const py::ssize_t r0 = tile * LANES;
-            const int nl = static_cast<int>(std::min<py::ssize_t>(LANES, rows - r0));
-            double *base = bufs.data() + static_cast<size_t>(t) * blocks * per;
-            double *x[3] = {base, base + per, base + 2 * per};
-            // A short last tile's idle lanes compute on zeros, never stored.
-            if (nl < LANES) std::fill(base, base + blocks * per, 0.0);
-            for (int l = 0; l < nl; ++l) gather_row(d, r0 + l, n_src, l, x);
-            if (has_image) {
-                double *y[3] = {base + 3 * per, base + 4 * per, base + 5 * per};
-                for (int l = 0; l < nl; ++l) gather_row(im, r0 + l, n_src, l, y);
-                // `Phi_c -= Phi_i[0]` (and the other two): per part.
-                for (int c = 0; c < 3; c++)
-                    for (size_t q = 0; q < per; ++q) x[c][q] = x[c][q] - y[c][q];
-            }
-            double *o[LANES];
-            for (int l = 0; l < LANES; ++l)
-                o[l] = reinterpret_cast<double *>(O + (r0 + std::min(l, nl - 1)) * os);
-            for (py::ssize_t j = 0; j < cols; ++j) {
-                double sr[3][LANES], si[3][LANES];
-                for (int c = 0; c < 3; c++) {
-                    // reduce_phi_band's chain per lane: a zeroed y, then
-                    // `y += a * x` per stored entry, unfused.
-                    double yr[LANES], yi[LANES];
-                    for (int l = 0; l < LANES; ++l) yr[l] = 0.0, yi[l] = 0.0;
-                    const Csc &m = M[c];
-                    for (int64_t e = m.ptr[j]; e < m.ptr[j + 1]; ++e) {
-                        const double ar = m.val[2 * e], ai = m.val[2 * e + 1];
-                        const double *xr = x[c] + 2 * LANES * m.ind[e];
-                        const double *xi = xr + LANES;
-                        for (int l = 0; l < LANES; ++l) {
-                            const double pr = ar * xr[l] - ai * xi[l];
-                            const double pi = ar * xi[l] + ai * xr[l];
-                            yr[l] = yr[l] + pr;
-                            yi[l] = yi[l] + pi;
-                        }
-                    }
-                    for (int l = 0; l < LANES; ++l) sr[c][l] = yr[l], si[c][l] = yi[l];
-                }
-                for (int l = 0; l < nl; ++l) {
-                    o[l][2 * j] = (sr[0][l] + sr[1][l]) + sr[2][l];
-                    o[l][2 * j + 1] = (si[0][l] + si[1][l]) + si[2][l];
-                }
-            }
-        }
+        mw::sinusoidal::pair_reuse::reduce_band(O, os, rows, cols, n_src, d, has_image ? &im : nullptr, M,
+                                                n_threads);
     }
+}
+
+
+// momwire#1911 in C++ (`_sin_pair_reuse_core.h`): the census and plans the
+// C++ fill builds, for the unit gates against `_sin_pair_reuse.build_plan` /
+// `build_ground_plan` and their types.
+namespace pr = mw::sinusoidal::pair_reuse;
+
+static py::array_t<int64_t> i64_of(const std::vector<int64_t> &v) {
+    py::array_t<int64_t> a(static_cast<py::ssize_t>(v.size()));
+    std::copy(v.begin(), v.end(), a.mutable_data());
+    return a;
+}
+
+static py::list blocks_of(const std::vector<pr::NearBlock> &bs) {
+    py::list out;
+    for (const pr::NearBlock &b : bs)
+        out.append(py::make_tuple(b.m0, b.m1, i64_of(b.ns), i64_of(b.r), i64_of(b.c), b.p0, b.p1));
+    return out;
+}
+
+static py::object plan_dict(const std::shared_ptr<const pr::Plan> &p) {
+    if (p == nullptr) return py::none();
+    py::dict d;
+    py::array_t<int32_t> cls({static_cast<py::ssize_t>(p->M), static_cast<py::ssize_t>(p->N)});
+    std::copy(p->cls.begin(), p->cls.end(), cls.mutable_data());
+    d["cls"] = cls;
+    d[p->ground ? "rep_flat" : "rep_src"] = i64_of(p->rep);
+    if (p->coded) {
+        py::array_t<int8_t> rc(static_cast<py::ssize_t>(p->rep_code.size()));
+        std::copy(p->rep_code.begin(), p->rep_code.end(), rc.mutable_data());
+        d["rep_code"] = rc;
+    } else {
+        d["rep_code"] = py::none();
+    }
+    d["code_bits"] = p->coded ? pr::CODE_BITS : 0;
+    d["near_flat"] = i64_of(p->near_flat);
+    d["near_blocks"] = blocks_of(p->near_blocks);
+    if (p->ground) {
+        d["rep_blocks"] = blocks_of(p->rep_blocks);
+    } else {
+        const py::ssize_t n = static_cast<py::ssize_t>(p->n_classes());
+        py::array_t<double> c({n, py::ssize_t(3)}), t({n, py::ssize_t(3)});
+        std::copy(p->src_c.begin(), p->src_c.end(), c.mutable_data());
+        std::copy(p->src_t.begin(), p->src_t.end(), t.mutable_data());
+        d["src_c"] = c;
+        d["src_t"] = t;
+        py::list runs;
+        for (const pr::Run &r : p->runs) runs.append(py::make_tuple(r.c0, r.c1, r.g_obs));
+        d["runs"] = runs;
+    }
+    d["census_peak_bytes"] = p->census_peak_bytes;
+    d["fill_nbytes"] = p->fill_nbytes();
+    return d;
+}
+
+static py::object sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t, F64 seg_h, F64 a_obs,
+                                      I64 src_type, I64 obs_type, int64_t rows, py::object src_rev,
+                                      py::object budget, int workers, py::object ground_z, py::object obs_rev) {
+    const py::ssize_t M = obs_c.shape(0), N = src_c.shape(0);
+    if (obs_c.ndim() != 2 || obs_c.shape(1) != 3 || obs_t.ndim() != 2 || obs_t.shape(0) != M ||
+        src_c.ndim() != 2 || src_c.shape(1) != 3 || src_t.ndim() != 2 || src_t.shape(0) != N ||
+        seg_h.size() != N || a_obs.size() != M || src_type.size() != N || obs_type.size() != M)
+        throw std::runtime_error("sin_pair_reuse_plan: (M, 3) observers, (N, 3) sources, per-segment columns");
+    pr::CensusInputs in;
+    in.M = M;
+    in.N = N;
+    in.obs_c = obs_c.data();
+    in.obs_t = obs_t.data();
+    in.src_c = src_c.data();
+    in.src_t = src_t.data();
+    in.seg_h = seg_h.data();
+    in.a_obs = a_obs.data();
+    in.src_type = src_type.data();
+    in.obs_type = obs_type.data();
+    I64 srev, orev;
+    if (!src_rev.is_none()) {
+        srev = src_rev.cast<I64>();
+        if (srev.size() != N) throw std::runtime_error("sin_pair_reuse_plan: src_rev per source");
+        in.src_rev = srev.data();
+    }
+    if (!obs_rev.is_none()) {
+        orev = obs_rev.cast<I64>();
+        if (orev.size() != M) throw std::runtime_error("sin_pair_reuse_plan: obs_rev per observer");
+        in.obs_rev = orev.data();
+    }
+    in.rows = rows;
+    in.budget = budget.is_none() ? -1 : budget.cast<int64_t>();
+    in.workers = workers > 0 ? workers : pr::workers();
+    const bool ground = !ground_z.is_none();
+    if (ground) in.ground_z = ground_z.cast<double>();
+    std::shared_ptr<const pr::Plan> p;
+    {
+        py::gil_scoped_release nogil;
+        p = ground ? pr::build_ground_plan(in) : pr::build_plan(in);
+    }
+    return plan_dict(p);
+}
+
+static py::tuple sin_pair_reuse_types(F64 seg_h, F64 a_obs, py::object src_a, py::object ind1, py::object ind2,
+                                      py::object seg_t) {
+    using I8 = py::array_t<int8_t, py::array::c_style | py::array::forcecast>;
+    const py::ssize_t n = seg_h.size();
+    F64 sa;
+    I8 i1, i2;
+    if (!src_a.is_none()) {
+        sa = src_a.cast<F64>();
+        i1 = ind1.cast<I8>();
+        i2 = ind2.cast<I8>();
+    }
+    const pr::Types t = pr::reversible_segment_types(n, seg_h.data(), a_obs.data(),
+                                                     src_a.is_none() ? nullptr : sa.data(),
+                                                     src_a.is_none() ? nullptr : i1.data(),
+                                                     src_a.is_none() ? nullptr : i2.data());
+    if (seg_t.is_none()) return py::make_tuple(i64_of(t.src), i64_of(t.obs), i64_of(t.src_rev));
+    F64 st = seg_t.cast<F64>();
+    const pr::GroundTypes g = pr::reversible_ground_types(t, n, st.data());
+    return py::make_tuple(i64_of(g.src), i64_of(g.obs), i64_of(g.src_rev), i64_of(g.obs_rev));
+}
+
+static py::dict sin_pair_reuse_stats(bool reset) {
+    if (reset) pr::reset_counters();
+    const pr::Counters c = pr::counters();
+    py::dict d;
+    d["built"] = c.built;
+    d["declined"] = c.declined;
+    d["found"] = c.found;
+    d["last"] = pr::last_outcome();
+    py::dict census;
+    for (const pr::CensusEntry &e : pr::last_census()) census[py::str(e.block)] = py::make_tuple(e.pairs, e.classes, e.near);
+    d["census"] = census;
+    d["budget"] = pr::plan_budget();
+    d["workers"] = pr::workers();
+    return d;
+}
+
+static void sin_pair_reuse_configure(py::object budget, py::object small_free, py::object small_ground,
+                                     py::object workers, bool clear) {
+    if (!budget.is_none()) pr::set_plan_budget(budget.cast<int64_t>());
+    if (!small_free.is_none() || !small_ground.is_none())
+        pr::set_small_deck_segs(small_free.is_none() ? pr::small_deck_segs(false) : small_free.cast<int64_t>(),
+                                small_ground.is_none() ? pr::small_deck_segs(true) : small_ground.cast<int64_t>());
+    if (!workers.is_none()) pr::set_workers(workers.cast<int>());
+    if (clear) pr::clear_shared_plans();
 }
 
 }  // namespace sin_pair_reuse
@@ -315,6 +329,27 @@ void register_sin_pair_reuse(py::module_ &m) {
           py::arg("data0"), py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
           py::arg("indptr2"), py::arg("indices2"), py::arg("data2"),
           py::arg("n_threads") = 0, py::arg("signs") = py::none());
+    m.def("sin_pair_reuse_plan", &sin_pair_reuse::sin_pair_reuse_plan, py::arg("obs_c"), py::arg("obs_t"),
+          py::arg("src_c"), py::arg("src_t"), py::arg("seg_h"), py::arg("a_obs"), py::arg("src_type"),
+          py::arg("obs_type"), py::arg("rows"), py::arg("src_rev") = py::none(), py::arg("budget") = py::none(),
+          py::arg("workers") = 0, py::arg("ground_z") = py::none(), py::arg("obs_rev") = py::none(),
+          "momwire#1911: the C++ fill's census, `_sin_pair_reuse.build_plan`'s arguments (with ground_z, "
+          "`build_ground_plan`'s): a dict of the plan's arrays, or None where Python returns OVER_BUDGET. "
+          "workers > 0 sets the census's worker count (`_workers()`).");
+    m.def("sin_pair_reuse_types", &sin_pair_reuse::sin_pair_reuse_types, py::arg("seg_h"), py::arg("a_obs"),
+          py::arg("src_a") = py::none(), py::arg("ind1") = py::none(), py::arg("ind2") = py::none(),
+          py::arg("seg_t") = py::none(),
+          "momwire#1911: `reversible_segment_types` as the C++ fill computes it; with seg_t, "
+          "`reversible_ground_types` of those.");
+    m.def("sin_pair_reuse_stats", &sin_pair_reuse::sin_pair_reuse_stats, py::arg("reset") = false,
+          "momwire#1911: the C++ fill's reuse counters (plans built, of those over budget, found), the last "
+          "fill's outcome ('', 'served' or the decline reason) and census per block; reset first.");
+    m.def("sin_pair_reuse_configure", &sin_pair_reuse::sin_pair_reuse_configure, py::arg("budget") = py::none(),
+          py::arg("small_free") = py::none(), py::arg("small_ground") = py::none(), py::arg("workers") = py::none(),
+          py::arg("clear") = false,
+          "TEST HOOK (momwire#1911): the C++ fill's reuse budget (<= 0 restores 256 MB), small-deck thresholds "
+          "(< 0 restores each), census worker count (<= 0: the OpenMP team's); clear drops the kept plans.");
+    m.attr("sin_pair_reuse_cxx") = true;
     m.attr("pair_reuse_reduce_1916") = true;
     m.attr("pair_reuse_reduce_1969") = true;
 }

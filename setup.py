@@ -442,6 +442,10 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
+    # momwire#1911 in C++: the sinusoidal pair reuse's census, plans and
+    # fused reduction, and the running grouping its census folds into.
+    "src/momwire/_sin_pair_reuse_core.h",
+    "src/momwire/_int_groups_core.h",
     "src/momwire/_sinusoidal_transmitted_core.h",
     # numpy's complex sin / cos / log as the C library's (momwire#1607 B6a).
     "src/momwire/_libm_complex_inline.h",
@@ -585,6 +589,10 @@ _ACCEL_SOURCES = [
     # reduction (`reduce_phi_band`'s order). Its own TU for the reduction's
     # reason: its bits are that order's.
     "src/momwire/_accel_sin_pair_reuse.cpp",
+    # momwire#1911: that reduction, and the census and plans the C++ fill
+    # builds, Python-free; the binding above and the C++ fill call it. Its
+    # own TU: integers and the reduction's fixed order, nothing else.
+    "src/momwire/_sin_pair_reuse_core.cpp",
     # momwire#2016: the fill report's wire map over a sinusoidal reuse plan's
     # class map. Its own TU: integers only, run when the map is read.
     "src/momwire/_accel_fill_report.cpp",
