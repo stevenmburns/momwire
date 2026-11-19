@@ -395,3 +395,118 @@ def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
     warm = exe_run("warm")
     assert cold["ground_built"] > 0 and warm["ground_built"] == 0, (cold, warm)
     assert warm["ground_disk"] >= 1, warm
+
+
+# --- momwire#1911: the sinusoidal fill's pair reuse (reach 1) ---------------
+#
+# The C++ route carries `pair_reuse` (`_sin_pair_reuse_core.h`), but its reach
+# is the hosted app, so a shipped nec42-sinusoidal executable refuses it. A
+# CERTIFICATION build (CMake MW_EXE_CERTIFY=pair_reuse) runs it, and is then
+# held to the launcher with the feature on. Which one is under test is
+# declared, never guessed from its behaviour: MOMWIRE_NEC42_SIN_CERTIFIES
+# names the features the build was built to certify (comma-separated).
+CERTIFIES = set(
+    filter(None, os.environ.get("MOMWIRE_NEC42_SIN_CERTIFIES", "").split(","))
+)
+_REUSE_ENV = "MOMWIRE_X_PAIR_REUSE"
+
+
+def _reuse_curtain(ground: str) -> str:
+    """Ten parallel wires of 41 segments with no junction (410 segments,
+    past both small-deck thresholds): every band of rows repeats."""
+    lam = 299.792458 / 28.0
+    lines = ["CM pair reuse curtain", "CE"]
+    for i in range(10):
+        x = 0.1 * lam * i
+        a, b = (x, 0.0, 1.0), (x + 0.3 * (i % 3), 0.0, 1.0 + 0.5 * lam)
+        if i in (1, 4, 7):
+            a, b = b, a
+        lines.append(
+            f"GW {i + 1} 41 {a[0]:.6f} {a[1]:.6f} {a[2]:.6f} "
+            f"{b[0]:.6f} {b[1]:.6f} {b[2]:.6f} 0.002"
+        )
+    lines += ["GE 0"] if ground == "free" else ["GE 1", "GN 2 0 0 0 13 .005"]
+    lines += ["FR 0 3 0 0 28 0.1", "EX 0 6 21 0 1 0", "XQ", "EN"]
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.skipif(BASIS != "sinusoidal", reason="the nec42-sinusoidal executable's")
+@pytest.mark.skipif("pair_reuse" in CERTIFIES, reason="a certification build runs it")
+def test_pair_reuse_is_refused_by_name(tmp_path):
+    """Asked on, the shipped executable refuses the feature in the registry's
+    sentence before reading the deck, and writes nothing; at 0 it answers."""
+    from momwire import _features
+
+    env = {k: v for k, v in _env().items() if not k.startswith(_features.ENV_PREFIX)}
+    shutil.copy(DIPOLE, tmp_path / DIPOLE.name)
+    r = subprocess.run(
+        [EXE, DIPOLE.name, "reuse.out"],
+        cwd=tmp_path,
+        env=dict(env, **{_REUSE_ENV: "1"}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert r.stderr == _features.EXE_REFUSAL.format(name="pair_reuse") + "\n"
+    assert not (tmp_path / "reuse.out").exists()
+    r = subprocess.run(
+        [EXE, DIPOLE.name, "reuse.out"],
+        cwd=tmp_path,
+        env=dict(env, **{_REUSE_ENV: "0"}),
+        capture_output=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "reuse.out").read_bytes()
+
+
+def _reuse_decks():
+    return [
+        *sorted((FIXTURES / "transmitted_mixed").glob("*.nec")),
+        *sorted((FIXTURES / "nec_portal").glob("*.deck")),
+        "curtain:free",
+        "curtain:somm",
+    ]
+
+
+@pytest.mark.skipif(BASIS != "sinusoidal", reason="the nec42-sinusoidal executable's")
+@pytest.mark.skipif(
+    "pair_reuse" not in CERTIFIES, reason="not a pair_reuse certification build"
+)
+@pytest.mark.parametrize(
+    "deck", _reuse_decks(), ids=lambda p: p if isinstance(p, str) else p.name
+)
+def test_pair_reuse_answers_as_the_launcher(deck, tmp_path):
+    """With the feature on both sides: the launcher's bytes under the time
+    mask, line 2 naming +pair_reuse on both. The curtains serve the reuse
+    (MW_EXE_TIMES's last-fill line says so); the fixtures, all below the
+    small-deck thresholds or mixed, decline it, as Python's route does."""
+    if isinstance(deck, str):
+        path = tmp_path / f"{deck.replace(':', '_')}.nec"
+        path.write_text(_reuse_curtain(deck.split(":")[1]), encoding="latin-1")
+    else:
+        path = deck
+    from momwire import _features
+
+    env = {k: v for k, v in _env().items() if not k.startswith(_features.ENV_PREFIX)}
+    env[_REUSE_ENV] = "1"
+    exe_out = tmp_path / "exe.out"
+    r = subprocess.run(
+        [EXE, str(path), str(exe_out)],
+        env=dict(env, MW_EXE_TIMES="1"),
+        capture_output=True,
+    )
+    assert r.returncode == 0 and r.stdout == b"", r
+    exe = exe_out.read_bytes()
+    if b"NEC ERROR - not served by this build" in exe:
+        pytest.skip("not served by this build")
+    ref_out = tmp_path / "launcher.out"
+    r2 = subprocess.run(
+        [_launcher(), str(path), str(ref_out)], env=env, capture_output=True
+    )
+    assert r2.returncode == 0 and r2.stdout == b"", r2
+    assert _mask(exe) == _mask(ref_out.read_bytes())
+    assert b"+pair_reuse" in exe.split(b"\n")[1]
+    if isinstance(deck, str):
+        assert b"cxx: reuse last fill served" in r.stderr, r.stderr

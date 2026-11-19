@@ -80,6 +80,12 @@ byte-identical.**
   before it reads a deck; set to "0" it is accepted. Today the table is #1860's
   four levers at reach 9, two of them on by default, and #1956's
   `crossing_sheet_retune` at reach 8 (the two nec5 executables).
+- A CERTIFICATION build (CMake `MW_EXE_CERTIFY=<name>`, `EXE_CERTIFYING` in
+  the same file, momwire#1911) also runs a feature its route carries past the
+  feature's reach, so the exe's own bytes can be gated against Python's
+  (`MOMWIRE_NEC42_SIN_CERTIFIES` in `tests/test_standalone_nec42.py`) before
+  the reach is raised. No release build sets it. Today: `pair_reuse` on
+  nec42-sinusoidal.
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 

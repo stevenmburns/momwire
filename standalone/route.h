@@ -49,12 +49,20 @@ bool configure_features(const std::vector<std::string> &names, bool stamped = tr
 // The default-on features (requested from the start, `ni_eval`) that this
 // executable runs off: set off in its environment, or outside its reach.
 bool withdraw_features(const std::vector<std::string> &names);
-// razor-2p's fill-pair reuse plans (momwire#1971, `razor::reuse::cache_counters`)
+// Line 2 says " uncertified on this platform" after the features it names
+// (a certification build running a feature past its reach, as Python's
+// `_features.stamp` says it there; momwire#1911).
+void stamp_uncertified(bool on);
+// razor-2p's fill-pair reuse plans (momwire#1971, `razor::reuse::cache_counters`;
+// on the sinusoidal route its own, `sinusoidal::pair_reuse::counters`)
 // this copy has built, how many of those built came back declined, and how
 // many it found, process totals: the MW_EXE_TIMES gate line's, so a test can
 // tell the reuse ran (built - declined >= 1: a declined plan fills as off;
 // nec5-bspline's and nec42's routes never build one).
 void reuse_plans(long long &built, long long &declined, long long &found);
+// The sinusoidal route's last fill under `pair_reuse` (momwire#1911):
+// "served", the reason it declined, or "" (not asked, or another route's).
+std::string reuse_outcome();
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,
