@@ -1,0 +1,1123 @@
+// The sinusoidal fill's `pair_reuse` in C++ (see `_sin_pair_reuse_core.h`).
+// Each function names the Python it copies; numpy's arithmetic is written
+// out per element in its order, with no contraction (-ffp-contract=off, and
+// the MSVC pragmas below).
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma float_control(precise, on)
+#pragma fp_contract(off)
+#endif
+
+#include "_sin_pair_reuse_core.h"
+
+#include "_int_groups_core.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <list>
+#include <mutex>
+#include <numeric>
+#include <stdexcept>
+#include <utility>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
+namespace mw {
+namespace sinusoidal {
+namespace pair_reuse {
+
+namespace {
+
+std::mutex g_mu;  // the settings, the counters and the cache
+int64_t g_budget = PLAN_BUDGET_BYTES;
+int64_t g_small_free = SMALL_DECK_SEGS_FREE;
+int64_t g_small_ground = SMALL_DECK_SEGS_GROUND;
+int g_workers = 0;
+Counters g_counters;
+std::string g_last;
+std::vector<CensusEntry> g_census;
+
+constexpr int64_t kNearSentinel = -1;  // below every packed exponent-and-type column
+const double kUnit = static_cast<double>(int64_t(1) << KEY_BITS);
+
+// `_trim_heap`: the census's freed pages back before the plan and the fill.
+void trim_heap() {
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
+}
+
+inline int64_t bits_of(double x) {
+    int64_t b;
+    std::memcpy(&b, &x, 8);
+    return b;
+}
+inline double double_of(int64_t b) {
+    double x;
+    std::memcpy(&x, &b, 8);
+    return x;
+}
+// `np.rint(x).astype(np.int64)`
+inline int64_t rint64(double x) { return static_cast<int64_t>(std::nearbyint(x)); }
+
+// numpy's float64 maximum / minimum as `np.clip` spells them
+// (`_NPY_MAX`, `_NPY_MIN`): the first operand where the compare fails.
+inline double clip_max(double a, double b) { return std::isnan(a) ? a : (a > b ? a : b); }
+inline double clip_min(double a, double b) { return std::isnan(a) ? a : (a < b ? a : b); }
+// `np.maximum`: NaN propagates, otherwise the larger (equal: either, the
+// same value up to the sign of a zero, which the operands here never mix).
+inline double np_max(double a, double b) {
+    if (std::isnan(a)) return a;
+    if (std::isnan(b)) return b;
+    return a >= b ? a : b;
+}
+
+// `np.unique(rows, axis=0, return_inverse=True)`'s inverse: each row's rank
+// among the distinct rows, lexicographic in signed int64.
+std::vector<int64_t> type_ids(const std::vector<int64_t> &rows, std::size_t width, std::size_t n) {
+    std::vector<int64_t> order(n);
+    std::iota(order.begin(), order.end(), int64_t(0));
+    auto row = [&](int64_t i) { return rows.data() + static_cast<std::size_t>(i) * width; };
+    auto less = [&](int64_t a, int64_t b) {
+        const int64_t *x = row(a), *y = row(b);
+        for (std::size_t c = 0; c < width; ++c)
+            if (x[c] != y[c]) return x[c] < y[c];
+        return false;
+    };
+    std::stable_sort(order.begin(), order.end(), less);
+    std::vector<int64_t> ids(n);
+    int64_t rank = -1;
+    for (std::size_t k = 0; k < n; ++k) {
+        if (k == 0 || less(order[k - 1], order[k])) ++rank;
+        ids[static_cast<std::size_t>(order[k])] = rank;
+    }
+    return ids;
+}
+
+// `_quantise_length`: (exponent, mantissa) of a positive length.
+inline void quantise_length(double h, int64_t &e, int64_t &q) {
+    int ex = 0;
+    const double m = std::frexp(h, &ex);
+    e = ex;
+    q = rint64(std::ldexp(m, KEY_BITS));
+}
+
+// `_scalars`: z, rho, td, rdt of one pair, in numpy's order of operations.
+inline void scalars(const double *oc, const double *ot, const double *sc, const double *st, double &z,
+                    double &rho, double &td, double &rdt) {
+    double rvx = oc[0] - sc[0];
+    double rvy = oc[1] - sc[1];
+    double rvz = oc[2] - sc[2];
+    const double tnx = st[0], tny = st[1], tnz = st[2];
+    z = (rvx * tnx + rvy * tny) + rvz * tnz;
+    rvx -= z * tnx;
+    rvy -= z * tny;
+    rvz -= z * tnz;
+    rho = std::sqrt((rvx * rvx + rvy * rvy) + rvz * rvz);
+    const double tmx = ot[0], tmy = ot[1], tmz = ot[2];
+    td = (tmx * tnx + tmy * tny) + tmz * tnz;
+    rdt = (rvx * tmx + rvy * tmy) + rvz * tmz;
+}
+
+// The quantum against `scale` (`_band_keys`): the exponent column's e and
+// the step's inverse, off the bits of a positive normal number.
+inline void quantum(double scale, int64_t &e, double &step_inv) {
+    e = (bits_of(scale) >> 52) - 1022;
+    step_inv = double_of((1023 + KEY_BITS - e) << 52);
+}
+
+// `_canonical_codes` for one pair: key columns `k` (a = k[ia], b = k[ib],
+// t = k[it], k[0] the types), keyed in place, its code returned. `ds` / `do_`
+// the type moves of a source / observer reversal (has_*: not None).
+inline int8_t canonical(int64_t *k, int ia, int ib, int it, bool near, bool has_ds, int64_t ds, bool has_do,
+                        int64_t do_) {
+    int64_t &a = k[ia], &b = k[ib], &t = k[it];
+    bool fs = a < 0, fo = b < 0;
+    bool za = a == 0, zb = b == 0;
+    if (near) za = zb = false;
+    if (zb && !za) {
+        // only the observer free: the both-odd column, then the observer types
+        const int64_t tp = fs ? -t : t;
+        bool flip = tp < 0;
+        if (has_do) flip = flip || (tp == 0 && do_ > 0);
+        fo = flip;
+    } else if (za && !zb) {
+        const int64_t tp = fo ? -t : t;
+        bool flip = tp < 0;
+        if (has_ds) flip = flip || (tp == 0 && ds > 0);
+        fs = flip;
+    } else if (za && zb) {
+        // the largest of the four (t, types)
+        bool valid = false, best_s = false, best_o = false;
+        int64_t best_t = 0, best_e = 0;
+        for (int cs = 0; cs < 2; ++cs)
+            for (int co = 0; co < 2; ++co) {
+                const int64_t tc = cs != co ? -t : t;
+                int64_t ec = 0;
+                if (cs && has_ds) ec += ds;
+                if (co && has_do) ec += do_;
+                const bool better = !valid || tc > best_t || (tc == best_t && ec > best_e);
+                if (better) {
+                    best_t = tc;
+                    best_e = ec;
+                    best_s = cs != 0;
+                    best_o = co != 0;
+                }
+                valid = true;
+            }
+        fs = best_s;
+        fo = best_o;
+    }
+    if (fs) a = -a;
+    if (fo) b = -b;
+    if (fs != fo) t = -t;
+    if (has_ds && fs) k[0] += ds;
+    if (has_do && fo) k[0] += do_;
+    return static_cast<int8_t>((fs ? 1 : 0) | (fo ? 2 : 0));
+}
+
+// The direct key of pair (m, n) (`_band_keys` with near=True, then
+// `_canonical_codes(cols, 1, 3, 4, ...)`): k[0..5), its code, its nearness.
+struct DirectKey {
+    const CensusInputs *in;
+    int64_t n_obs_types;
+    bool coded;
+    const int64_t *ds;  // null: None
+    inline int8_t operator()(int64_t m, int64_t n, int64_t *k, bool &near) const {
+        const CensusInputs &I = *in;
+        double z, rho, td, rdt;
+        scalars(I.obs_c + 3 * m, I.obs_t + 3 * m, I.src_c + 3 * n, I.src_t + 3 * n, z, rho, td, rdt);
+        const double H = 0.5 * I.seg_h[n];
+        const double a = I.a_obs[m];
+        const double az = std::fabs(z);
+        near = np_max(az, rho) < NEAR_LENGTHS * np_max(2.0 * H, a);
+        double scale = np_max(az - H, rho);
+        scale = np_max(scale, a);
+        int64_t e;
+        double step_inv;
+        quantum(scale, e, step_inv);
+        if (near) {
+            k[0] = kNearSentinel;
+            k[1] = k[2] = k[3] = k[4] = 0;
+        } else {
+            k[1] = rint64(z * step_inv);
+            k[2] = rint64(rho * step_inv);
+            k[3] = rint64(rdt * step_inv);
+            k[4] = rint64(td * kUnit);
+            k[0] = ((e + (int64_t(1) << 11)) << 40) + (I.src_type[n] * n_obs_types + I.obs_type[m]);
+        }
+        if (!coded) return 0;
+        return canonical(k, 1, 3, 4, near, ds != nullptr, ds ? ds[n] : 0, false, 0);
+    }
+};
+
+// The reflected key (`ground_pair_scalars`, `_ground_band_keys`, then
+// `_canonical_codes(cols, 3, 4, 5, ...)`): k[0..6).
+struct GroundKey {
+    const CensusInputs *in;
+    int64_t n_obs_types;
+    bool coded;
+    const int64_t *ds, *do_;
+    inline int8_t operator()(int64_t m, int64_t n, int64_t *k, bool &near) const {
+        const CensusInputs &I = *in;
+        const double *oc = I.obs_c + 3 * m, *ot = I.obs_t + 3 * m;
+        const double *sc = I.src_c + 3 * n, *st = I.src_t + 3 * n;
+        const double gz = I.ground_z;
+        const double dx = oc[0] - sc[0];
+        const double dy = oc[1] - sc[1];
+        const double hs = (oc[2] - gz) + (sc[2] - gz);
+        const double ax = st[0], ay = st[1], azt = st[2];
+        const double bx = ot[0], by = ot[1];
+        const double dn = std::hypot(dx, dy);
+        const double da = dx * ax + dy * ay;
+        const double db = dx * bx + dy * by;
+        const double ab = bx * ax + by * ay;
+        const double zi = da - hs * azt;
+        double rho = dn * dn;
+        rho += hs * hs;
+        rho -= zi * zi;
+        rho = np_max(rho, 0.0);
+        rho = std::sqrt(rho);
+        const double H = 0.5 * I.seg_h[n];
+        const double a = I.a_obs[m];
+        const double az = std::fabs(zi);
+        near = np_max(az, rho) < NEAR_LENGTHS * np_max(2.0 * H, a);
+        double scale = np_max(az - H, rho);
+        scale = np_max(scale, a);
+        int64_t e;
+        double step_inv;
+        quantum(scale, e, step_inv);
+        if (near) {
+            k[0] = kNearSentinel;
+            k[1] = k[2] = k[3] = k[4] = k[5] = 0;
+        } else {
+            k[1] = rint64(hs * step_inv);
+            k[2] = rint64(dn * step_inv);
+            k[3] = rint64(da * step_inv);
+            k[4] = rint64(db * step_inv);
+            k[5] = rint64(ab * kUnit);
+            k[0] = ((e + (int64_t(1) << 11)) << 40) + (I.src_type[n] * n_obs_types + I.obs_type[m]);
+        }
+        if (!coded) return 0;
+        return canonical(k, 3, 4, 5, near, ds != nullptr, ds ? ds[n] : 0, do_ != nullptr, do_ ? do_[m] : 0);
+    }
+};
+
+// One census band's result: its classes grouped in its pairs' flat order
+// (band-local numbers, written into the class map's rows), each class's
+// first pair and code, and its near pairs.
+struct Band {
+    bool done = false;
+    std::unique_ptr<int_groups::IntGroups> table;
+    std::vector<int64_t> first;  // band-local flat index
+    std::vector<int8_t> code;
+    std::vector<int64_t> near;  // global flat index, ascending
+};
+
+template <class Key>
+void run_band(const Key &key, std::size_t width, int64_t i0, int64_t i1, int64_t N, bool coded, int32_t *cls,
+              Band &b) {
+    b.table.reset(new int_groups::IntGroups(width));
+    const std::size_t Nz = static_cast<std::size_t>(N);
+    std::vector<int64_t> cols(width * Nz), ids(Nz);
+    std::vector<int8_t> codes(Nz);
+    std::vector<int_groups::Col> view(width);
+    for (std::size_t c = 0; c < width; ++c)
+        view[c] = int_groups::Col{reinterpret_cast<const char *>(cols.data() + c * Nz), 8};
+    int64_t k[8] = {};
+    for (int64_t m = i0; m < i1; ++m) {
+        for (int64_t n = 0; n < N; ++n) {
+            bool near = false;
+            codes[static_cast<std::size_t>(n)] = key(m, n, k, near);
+            for (std::size_t c = 0; c < width; ++c) cols[c * Nz + static_cast<std::size_t>(n)] = k[c];
+            if (near) b.near.push_back(m * N + n);
+        }
+        int64_t next = b.table->n_groups();
+        b.table->add(view.data(), static_cast<std::ptrdiff_t>(N), ids.data());
+        int32_t *row = cls + m * N;
+        for (int64_t n = 0; n < N; ++n) {
+            const int64_t g = ids[static_cast<std::size_t>(n)];
+            const int8_t cd_ = codes[static_cast<std::size_t>(n)];
+            if (g == next) {  // a class first seen here: numbered in walk order
+                b.first.push_back((m - i0) * N + n);
+                b.code.push_back(cd_);
+                ++next;
+            }
+            row[n] = coded ? static_cast<int32_t>((g << CODE_BITS) | cd_) : static_cast<int32_t>(g);
+        }
+    }
+    b.done = true;
+}
+
+// `_band_rows`.
+int64_t band_rows(int64_t rows, int64_t M, int64_t N, int64_t budget, int64_t per_pair, int workers) {
+    const int64_t w = std::max(1, workers);
+    rows = std::max<int64_t>(1, rows / w);
+    rows = std::min(rows, std::max<int64_t>(16, (M + 4 * w - 1) / (4 * w)));
+    if (budget >= 0 && per_pair > 0)
+        rows = std::min(rows, std::max<int64_t>(1, static_cast<int64_t>(BAND_SHARE * static_cast<double>(budget)) /
+                                                       (w * N * per_pair)));
+    return rows;
+}
+
+// What a census folds: the classes' payload, per class in number order.
+struct Fold {
+    std::unique_ptr<int_groups::IntGroups> table;
+    int64_t map_bytes = 0;
+    int64_t kept_bytes = 0;
+    std::vector<int64_t> rep_a, rep_b;  // direct: (row, source); ground: (flat, unused)
+    std::vector<int8_t> rep_code;
+    std::vector<int64_t> near;
+    int64_t held() const { return map_bytes + static_cast<int64_t>(table->nbytes()) + kept_bytes; }
+    int64_t floor() const { return map_bytes + PLAN_FLOOR_BYTES_PER_CLASS * table->n_groups(); }
+};
+
+// `_census_bands` + the fold: false where the census stops on the budget.
+template <class Key>
+bool census(const Key &key, std::size_t width, const CensusInputs &in, int64_t rows, bool coded, bool ground,
+            std::vector<int32_t> &cls, Fold &fold, int64_t &peak_out) {
+    const int64_t M = in.M, N = in.N;
+    const int workers = std::max(1, in.workers);
+    const int64_t budget = in.budget;
+    std::vector<int64_t> starts;
+    for (int64_t i0 = 0; i0 < M; i0 += rows) starts.push_back(i0);
+    const int64_t n = static_cast<int64_t>(starts.size());
+    const int64_t band_bytes = (ground ? GROUND_BAND_BYTES_PER_PAIR : BAND_BYTES_PER_PAIR) * rows * N;
+    std::vector<Band> bands(static_cast<std::size_t>(n));
+    std::deque<int64_t> pending;
+    int64_t nxt = 0, peak = 0;
+    auto fits = [&](int64_t k) { return budget < 0 || fold.held() + band_bytes * k <= budget; };
+    auto compute = [&](const std::vector<int64_t> &which) {
+        bool failed = false;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(dynamic, 1) num_threads(workers)
+#endif
+        for (std::ptrdiff_t q = 0; q < static_cast<std::ptrdiff_t>(which.size()); ++q) {
+            const int64_t b = which[static_cast<std::size_t>(q)];
+            try {
+                run_band(key, width, starts[static_cast<std::size_t>(b)],
+                         std::min(M, starts[static_cast<std::size_t>(b)] + rows), N, coded, cls.data(),
+                         bands[static_cast<std::size_t>(b)]);
+            } catch (...) {
+#if defined(_OPENMP)
+#pragma omp critical(mw_sin_reuse_band)
+#endif
+                failed = true;
+            }
+        }
+        if (failed) throw std::bad_alloc();
+    };
+    std::vector<int64_t> ids;
+    for (int64_t i = 0; i < n; ++i) {
+        while (nxt < n && static_cast<int64_t>(pending.size()) < workers &&
+               fits(static_cast<int64_t>(pending.size()) + 1))
+            pending.push_back(nxt++);
+        if (pending.empty()) return false;  // not one band fits beside what is held
+        peak = std::max(peak, fold.held() + band_bytes * static_cast<int64_t>(pending.size()));
+        const int64_t b = pending.front();
+        pending.pop_front();
+        Band &band = bands[static_cast<std::size_t>(b)];
+        if (!band.done) {
+            std::vector<int64_t> which{b};
+            for (int64_t p : pending)
+                if (!bands[static_cast<std::size_t>(p)].done) which.push_back(p);
+            compute(which);
+        }
+        // The fold: the band's distinct keys, in its number order, into the
+        // deck's table; the classes it was first to see kept; its rows of
+        // the map renumbered, codes kept.
+        const int64_t ng = band.table->n_groups();
+        ids.assign(static_cast<std::size_t>(ng), 0);
+        const int64_t g0 = fold.table->n_groups();
+        std::vector<int_groups::Col> view(width);
+        const int64_t blk = static_cast<int64_t>(int_groups::IntGroups::kBlock);
+        for (int64_t q0 = 0; q0 < ng; q0 += blk) {
+            const char *base = reinterpret_cast<const char *>(band.table->group_key(static_cast<uint64_t>(q0)));
+            for (std::size_t c = 0; c < width; ++c)
+                view[c] = int_groups::Col{base + 8 * c, static_cast<std::ptrdiff_t>(8 * width)};
+            fold.table->add(view.data(), std::min<int64_t>(blk, ng - q0), ids.data() + q0);
+        }
+        const int64_t i0 = starts[static_cast<std::size_t>(b)], i1 = std::min(M, i0 + rows);
+        int64_t fresh = 0;
+        for (int64_t g = 0; g < ng; ++g) {
+            if (ids[static_cast<std::size_t>(g)] < g0) continue;
+            const int64_t f = band.first[static_cast<std::size_t>(g)];
+            if (ground) {
+                fold.rep_a.push_back(f + i0 * N);
+            } else {
+                fold.rep_a.push_back(i0 + f / N);
+                fold.rep_b.push_back(f % N);
+            }
+            fold.rep_code.push_back(band.code[static_cast<std::size_t>(g)]);
+            ++fresh;
+        }
+        fold.near.insert(fold.near.end(), band.near.begin(), band.near.end());
+        fold.kept_bytes += 9 * fresh + 8 * static_cast<int64_t>(band.near.size());
+        int32_t *rows_cls = cls.data() + i0 * N;
+        const int64_t cnt = (i1 - i0) * N;
+        for (int64_t p = 0; p < cnt; ++p) {
+            const int32_t e = rows_cls[p];
+            rows_cls[p] = coded ? static_cast<int32_t>((ids[static_cast<std::size_t>(e >> CODE_BITS)] << CODE_BITS) |
+                                                       (e & ((1 << CODE_BITS) - 1)))
+                                : static_cast<int32_t>(ids[static_cast<std::size_t>(e)]);
+        }
+        band = Band();
+        peak = std::max(peak, fold.held() + band_bytes * static_cast<int64_t>(pending.size()));
+        if (budget >= 0 && std::max(peak, fold.floor()) > budget) return false;
+    }
+    peak_out = peak;
+    return true;
+}
+
+// A class map renumbered by `renumber` (`_renumber`), codes kept.
+void renumber_map(std::vector<int32_t> &cls, const std::vector<int64_t> &renumber, bool coded) {
+    const std::ptrdiff_t n = static_cast<std::ptrdiff_t>(cls.size());
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::ptrdiff_t p = 0; p < n; ++p) {
+        const int32_t e = cls[static_cast<std::size_t>(p)];
+        cls[static_cast<std::size_t>(p)] =
+            coded ? static_cast<int32_t>((renumber[static_cast<std::size_t>(e >> CODE_BITS)] << CODE_BITS) |
+                                         (e & ((1 << CODE_BITS) - 1)))
+                  : static_cast<int32_t>(renumber[static_cast<std::size_t>(e)]);
+    }
+}
+
+// The permutation a stable argsort on `key` gives, and whether it moves anything.
+std::vector<int64_t> stable_argsort(const std::vector<int64_t> &key, bool &moved) {
+    std::vector<int64_t> perm(key.size());
+    std::iota(perm.begin(), perm.end(), int64_t(0));
+    std::stable_sort(perm.begin(), perm.end(), [&](int64_t a, int64_t b) {
+        return key[static_cast<std::size_t>(a)] < key[static_cast<std::size_t>(b)];
+    });
+    moved = false;
+    for (std::size_t i = 0; i < perm.size(); ++i)
+        if (perm[i] != static_cast<int64_t>(i)) moved = true;
+    return perm;
+}
+
+// `near_blocks(near_flat, n_src, a_obs, rows)`.
+std::vector<NearBlock> near_blocks(const std::vector<int64_t> &flat, int64_t N, int64_t M, const double *a_obs,
+                                   int64_t rows) {
+    std::vector<NearBlock> out;
+    if (flat.empty()) return out;
+    std::vector<int64_t> edges;
+    for (int64_t e = 0; e <= M; e += rows) edges.push_back(e);
+    for (int64_t i = 1; i < M; ++i)
+        if (a_obs[i] - a_obs[i - 1] != 0.0) edges.push_back(i);
+    edges.push_back(M);
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    const std::size_t K = flat.size();
+    std::vector<int64_t> m_all(K), n_all(K);
+    for (std::size_t i = 0; i < K; ++i) {
+        m_all[i] = flat[i] / N;
+        n_all[i] = flat[i] % N;
+    }
+    for (std::size_t e = 0; e + 1 < edges.size(); ++e) {
+        const int64_t m0 = edges[e], m1 = edges[e + 1];
+        const int64_t p0 = std::lower_bound(m_all.begin(), m_all.end(), m0) - m_all.begin();
+        const int64_t p1 = std::lower_bound(m_all.begin(), m_all.end(), m1) - m_all.begin();
+        if (p1 == p0) continue;
+        NearBlock b;
+        b.m0 = m0;
+        b.m1 = m1;
+        b.p0 = p0;
+        b.p1 = p1;
+        b.ns.assign(n_all.begin() + p0, n_all.begin() + p1);
+        std::sort(b.ns.begin(), b.ns.end());
+        b.ns.erase(std::unique(b.ns.begin(), b.ns.end()), b.ns.end());
+        b.r.resize(static_cast<std::size_t>(p1 - p0));
+        b.c.resize(static_cast<std::size_t>(p1 - p0));
+        for (int64_t p = p0; p < p1; ++p) {
+            b.r[static_cast<std::size_t>(p - p0)] = m_all[static_cast<std::size_t>(p)] - m0;
+            b.c[static_cast<std::size_t>(p - p0)] =
+                std::lower_bound(b.ns.begin(), b.ns.end(), n_all[static_cast<std::size_t>(p)]) - b.ns.begin();
+        }
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+int64_t blocks_nbytes(const std::vector<NearBlock> &bs) {
+    int64_t s = 0;
+    for (const NearBlock &b : bs) s += 8 * static_cast<int64_t>(b.ns.size() + b.r.size() + b.c.size());
+    return s;
+}
+
+// `canonical_sources` of one class: its source's centre and tangent in the
+// canonical observer frame, from the representative's (rho, z, rdt, td).
+inline void canonical_source(double rho, double z, double rdt, double td, double *c, double *t) {
+    const double s = std::sqrt(np_max(0.0, 1.0 - td * td));
+    double alpha = s > 0.0 ? rdt / s : 0.0;
+    alpha = clip_min(clip_max(alpha, -rho), rho);
+    const double beta = std::sqrt(np_max(0.0, rho * rho - alpha * alpha));
+    t[0] = s;
+    t[1] = 0.0;
+    t[2] = td;
+    const double rv0 = -alpha * td + z * s;
+    const double rv1 = beta;
+    const double rv2 = alpha * s + z * td;
+    c[0] = -rv0;
+    c[1] = -rv1;
+    c[2] = -rv2;
+}
+
+const double kCodeSigns[4][3] = {
+    {1.0, 1.0, 1.0},    // 0: as stored
+    {-1.0, 1.0, -1.0},  // 1: source reversed
+    {-1.0, -1.0, -1.0},  // 2: observer reversed
+    {1.0, -1.0, 1.0},   // 3: both
+};
+
+// `to_canonical`: each class's value its canonical orientation's.
+void to_canonical(const Plan &p, std::vector<cd> &vals) {
+    if (!p.coded) return;
+    for (std::size_t c = 0; c < p.rep_code.size(); ++c)
+        for (int s = 0; s < 3; ++s)
+            if (kCodeSigns[p.rep_code[c]][s] < 0) vals[3 * c + static_cast<std::size_t>(s)] = -vals[3 * c + static_cast<std::size_t>(s)];
+}
+
+// `evaluate_pairs`: (n, 3) values of the pairs `blocks` lay out.
+void evaluate_pairs(int64_t n, const std::vector<NearBlock> &blocks, const RowsFn &rows, std::vector<cd> &out) {
+    out.assign(static_cast<std::size_t>(3 * n), cd(0.0, 0.0));
+    bool failed = false;
+    std::string why;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+    for (std::ptrdiff_t q = 0; q < static_cast<std::ptrdiff_t>(blocks.size()); ++q) {
+        const NearBlock &b = blocks[static_cast<std::size_t>(q)];
+        try {
+            std::vector<cd> phis[3];
+            const int64_t nn = static_cast<int64_t>(b.ns.size());
+            rows(b.m0, b.m1, b.ns.data(), nn, phis);
+            for (int64_t i = 0; i < b.p1 - b.p0; ++i) {
+                const std::size_t at = static_cast<std::size_t>(b.r[static_cast<std::size_t>(i)] * nn +
+                                                                b.c[static_cast<std::size_t>(i)]);
+                for (int s = 0; s < 3; ++s)
+                    out[static_cast<std::size_t>(3 * (b.p0 + i) + s)] = phis[s][at];
+            }
+        } catch (const std::exception &e) {
+#if defined(_OPENMP)
+#pragma omp critical(mw_sin_reuse_eval)
+#endif
+            {
+                failed = true;
+                why = e.what();
+            }
+        }
+    }
+    if (failed) throw std::runtime_error(why);
+}
+
+}  // namespace
+
+std::string over_budget_reason() {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.6g", static_cast<double>(plan_budget()) / 1048576.0);
+    return std::string("the plan and its census would exceed the ") + buf + " MB budget";
+}
+
+void set_plan_budget(int64_t bytes) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_budget = bytes > 0 ? bytes : PLAN_BUDGET_BYTES;
+}
+int64_t plan_budget() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_budget;
+}
+void set_small_deck_segs(int64_t free_space, int64_t finite_ground) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_small_free = free_space < 0 ? SMALL_DECK_SEGS_FREE : free_space;
+    g_small_ground = finite_ground < 0 ? SMALL_DECK_SEGS_GROUND : finite_ground;
+}
+int64_t small_deck_segs(bool finite) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return finite ? g_small_ground : g_small_free;
+}
+void set_workers(int w) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_workers = w > 0 ? w : 0;
+}
+int workers() {
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        if (g_workers > 0) return g_workers;
+    }
+#if defined(_OPENMP)
+    return std::max(1, omp_get_max_threads());
+#else
+    return 1;
+#endif
+}
+
+Types reversible_segment_types(int64_t n, const double *seg_h, const double *a_obs, const double *src_a,
+                               const int8_t *ind1, const int8_t *ind2) {
+    const std::size_t nz = static_cast<std::size_t>(n);
+    Types t;
+    // the observer type: the radius, exact
+    std::vector<int64_t> arow(nz);
+    for (std::size_t i = 0; i < nz; ++i) arow[i] = bits_of(a_obs[i]);
+    t.obs = type_ids(arow, 1, nz);
+    if (src_a == nullptr) {
+        std::vector<int64_t> rows(2 * nz);
+        for (std::size_t i = 0; i < nz; ++i) quantise_length(seg_h[i], rows[2 * i], rows[2 * i + 1]);
+        t.src = type_ids(rows, 2, nz);
+        t.src_rev = t.src;
+        return t;
+    }
+    // both orientations in one id space: the end codes swap
+    std::vector<int64_t> rows(5 * 2 * nz);
+    for (std::size_t j = 0; j < 2 * nz; ++j) {
+        const std::size_t i = j % nz;
+        int64_t *r = rows.data() + 5 * j;
+        quantise_length(seg_h[i], r[0], r[1]);
+        r[2] = bits_of(src_a[i]);
+        r[3] = j < nz ? ind1[i] : ind2[i];
+        r[4] = j < nz ? ind2[i] : ind1[i];
+    }
+    const std::vector<int64_t> ids = type_ids(rows, 5, 2 * nz);
+    t.src.assign(ids.begin(), ids.begin() + static_cast<std::ptrdiff_t>(nz));
+    t.src_rev.assign(ids.begin() + static_cast<std::ptrdiff_t>(nz), ids.end());
+    return t;
+}
+
+GroundTypes reversible_ground_types(const Types &t, int64_t n, const double *seg_t) {
+    const std::size_t nz = static_cast<std::size_t>(n);
+    std::vector<int64_t> srows(4 * nz), orows(4 * nz);
+    for (std::size_t j = 0; j < 2 * nz; ++j) {
+        const std::size_t i = j % nz;
+        const double tz = j < nz ? seg_t[3 * i + 2] : -seg_t[3 * i + 2];
+        const int64_t q = rint64(tz * kUnit);  // `_quantise_unit`
+        srows[2 * j] = j < nz ? t.src[i] : t.src_rev[i];
+        srows[2 * j + 1] = q;
+        orows[2 * j] = t.obs[i];
+        orows[2 * j + 1] = q;
+    }
+    const std::vector<int64_t> gs = type_ids(srows, 2, 2 * nz), go = type_ids(orows, 2, 2 * nz);
+    GroundTypes g;
+    g.src.assign(gs.begin(), gs.begin() + static_cast<std::ptrdiff_t>(nz));
+    g.src_rev.assign(gs.begin() + static_cast<std::ptrdiff_t>(nz), gs.end());
+    g.obs.assign(go.begin(), go.begin() + static_cast<std::ptrdiff_t>(nz));
+    g.obs_rev.assign(go.begin() + static_cast<std::ptrdiff_t>(nz), go.end());
+    return g;
+}
+
+int64_t Plan::plan_nbytes() const {
+    int64_t s = 4 * static_cast<int64_t>(cls.size()) + 8 * n_classes() + 8 * n_near() +
+                static_cast<int64_t>(rep_code.size()) + blocks_nbytes(near_blocks);
+    if (ground) return s + blocks_nbytes(rep_blocks);
+    return s + 8 * static_cast<int64_t>(src_c.size() + src_t.size());
+}
+
+std::shared_ptr<const Plan> build_plan(const CensusInputs &in) {
+    const int64_t M = in.M, N = in.N;
+    int64_t n_obs_types = 0;
+    for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_type[m] + 1);
+    const bool coded = in.src_rev != nullptr && M * N <= CODED_PAIRS;
+    std::vector<int64_t> ds;
+    if (coded) {
+        ds.resize(static_cast<std::size_t>(N));
+        bool any = false;
+        for (int64_t n = 0; n < N; ++n) {
+            ds[static_cast<std::size_t>(n)] = (in.src_rev[n] - in.src_type[n]) * n_obs_types;
+            any = any || ds[static_cast<std::size_t>(n)] != 0;
+        }
+        if (!any) ds.clear();
+    }
+    if (in.budget >= 0 && 4 * M * N > in.budget) return nullptr;
+    auto plan = std::make_shared<Plan>();
+    plan->M = M;
+    plan->N = N;
+    plan->coded = coded;
+    plan->cls.resize(static_cast<std::size_t>(M * N));
+    const int64_t rows = band_rows(in.rows, M, N, in.budget, BAND_BYTES_PER_PAIR, in.workers);
+    Fold fold;
+    fold.table.reset(new int_groups::IntGroups(5));
+    fold.map_bytes = 4 * M * N;
+    DirectKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data()};
+    int64_t peak = 0;
+    if (!census(key, 5, in, rows, coded, false, plan->cls, fold, peak)) return nullptr;
+    fold.table.reset();
+    trim_heap();
+    // Classes renumbered so those sharing an observer radius are contiguous
+    // (stable within a radius).
+    const std::size_t n_cls = fold.rep_a.size();
+    std::vector<int64_t> otype(n_cls);
+    for (std::size_t c = 0; c < n_cls; ++c) otype[c] = in.obs_type[fold.rep_a[c]];
+    bool moved = false;
+    const std::vector<int64_t> perm = stable_argsort(otype, moved);
+    if (moved) {
+        std::vector<int64_t> renumber(n_cls);
+        for (std::size_t j = 0; j < n_cls; ++j) renumber[static_cast<std::size_t>(perm[j])] = static_cast<int64_t>(j);
+        renumber_map(plan->cls, renumber, coded);
+    }
+    std::vector<int64_t> rep_obs(n_cls);
+    plan->rep.resize(n_cls);
+    if (coded) plan->rep_code.resize(n_cls);
+    for (std::size_t j = 0; j < n_cls; ++j) {
+        const std::size_t p = static_cast<std::size_t>(perm[j]);
+        rep_obs[j] = fold.rep_a[p];
+        plan->rep[j] = fold.rep_b[p];
+        if (coded) plan->rep_code[j] = fold.rep_code[p];
+    }
+    plan->near_flat.swap(fold.near);
+    fold = Fold();
+    // Each representative's (rho, z, rdt, td), the bits its band computed
+    // (`rep_scalars`), placed in the observer frame.
+    plan->src_c.resize(3 * n_cls);
+    plan->src_t.resize(3 * n_cls);
+    for (std::size_t c = 0; c < n_cls; ++c) {
+        const int64_t m = rep_obs[c], n = plan->rep[c];
+        double z, rho, td, rdt;
+        scalars(in.obs_c + 3 * m, in.obs_t + 3 * m, in.src_c + 3 * n, in.src_t + 3 * n, z, rho, td, rdt);
+        canonical_source(rho, z, rdt, td, plan->src_c.data() + 3 * c, plan->src_t.data() + 3 * c);
+    }
+    for (std::size_t c = 0; c < n_cls;) {
+        std::size_t e = c + 1;
+        while (e < n_cls && in.obs_type[rep_obs[e]] == in.obs_type[rep_obs[c]]) ++e;
+        plan->runs.push_back(Run{static_cast<int64_t>(c), static_cast<int64_t>(e), rep_obs[c]});
+        c = e;
+    }
+    plan->near_blocks = near_blocks(plan->near_flat, N, M, in.a_obs, NEAR_ROWS);
+    plan->census_peak_bytes = peak;
+    if (in.budget >= 0 && plan->fill_nbytes() > in.budget) return nullptr;
+    return plan;
+}
+
+std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in) {
+    const int64_t M = in.M, N = in.N;
+    const bool coded = in.src_rev != nullptr && in.obs_rev != nullptr && M * N <= CODED_PAIRS;
+    int64_t n_obs_types = 0;
+    for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_type[m] + 1);
+    std::vector<int64_t> ds, dob;
+    if (coded) {
+        for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_rev[m] + 1);
+        ds.resize(static_cast<std::size_t>(N));
+        dob.resize(static_cast<std::size_t>(M));
+        bool any_s = false, any_o = false;
+        for (int64_t n = 0; n < N; ++n) {
+            ds[static_cast<std::size_t>(n)] = (in.src_rev[n] - in.src_type[n]) * n_obs_types;
+            any_s = any_s || ds[static_cast<std::size_t>(n)] != 0;
+        }
+        for (int64_t m = 0; m < M; ++m) {
+            dob[static_cast<std::size_t>(m)] = in.obs_rev[m] - in.obs_type[m];
+            any_o = any_o || dob[static_cast<std::size_t>(m)] != 0;
+        }
+        if (!any_s) ds.clear();
+        if (!any_o) dob.clear();
+    }
+    if (in.budget >= 0 && 4 * M * N > in.budget) return nullptr;
+    auto plan = std::make_shared<Plan>();
+    plan->ground = true;
+    plan->M = M;
+    plan->N = N;
+    plan->coded = coded;
+    plan->cls.resize(static_cast<std::size_t>(M * N));
+    const int64_t rows = band_rows(in.rows, M, N, in.budget, GROUND_BAND_BYTES_PER_PAIR, in.workers);
+    Fold fold;
+    fold.table.reset(new int_groups::IntGroups(6));
+    fold.map_bytes = 4 * M * N;
+    GroundKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(), dob.empty() ? nullptr : dob.data()};
+    int64_t peak = 0;
+    if (!census(key, 6, in, rows, coded, true, plan->cls, fold, peak)) return nullptr;
+    fold.table.reset();
+    trim_heap();
+    // Numbered by the representative's flat index (already the order: the
+    // bands run in row order and classes are numbered where they first occur).
+    const std::size_t n_cls = fold.rep_a.size();
+    bool moved = false;
+    const std::vector<int64_t> perm = stable_argsort(fold.rep_a, moved);
+    if (moved) {
+        std::vector<int64_t> renumber(n_cls);
+        for (std::size_t j = 0; j < n_cls; ++j) renumber[static_cast<std::size_t>(perm[j])] = static_cast<int64_t>(j);
+        renumber_map(plan->cls, renumber, coded);
+    }
+    plan->rep.resize(n_cls);
+    if (coded) plan->rep_code.resize(n_cls);
+    for (std::size_t j = 0; j < n_cls; ++j) {
+        const std::size_t p = static_cast<std::size_t>(perm[j]);
+        plan->rep[j] = fold.rep_a[p];
+        if (coded) plan->rep_code[j] = fold.rep_code[p];
+    }
+    plan->near_flat.swap(fold.near);
+    fold = Fold();
+    plan->rep_blocks = near_blocks(plan->rep, N, M, in.a_obs, REP_ROWS);
+    plan->near_blocks = near_blocks(plan->near_flat, N, M, in.a_obs, NEAR_ROWS);
+    plan->census_peak_bytes = peak;
+    if (in.budget >= 0 && plan->fill_nbytes() > in.budget) return nullptr;
+    return plan;
+}
+
+namespace {
+struct Cached {
+    std::string key;
+    std::shared_ptr<const Plan> plan;  // null: over budget
+    int64_t size = 0;
+};
+std::list<Cached> g_cache;  // least recently used first
+}  // namespace
+
+std::shared_ptr<const Plan> shared_plan(const std::string &key,
+                                        const std::function<std::shared_ptr<const Plan>()> &build, bool *built) {
+    if (built) *built = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
+            if (it->key == key) {
+                g_cache.splice(g_cache.end(), g_cache, it);
+                g_counters.found++;
+                return g_cache.back().plan;
+            }
+    }
+    std::shared_ptr<const Plan> plan = build();
+    trim_heap();
+    if (built) *built = true;
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_counters.built++;
+    if (plan == nullptr) g_counters.declined++;
+    // A declined census holds no arrays, but its key is the deck's geometry.
+    const int64_t size = plan != nullptr ? plan->plan_nbytes() : static_cast<int64_t>(key.size());
+    for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
+        if (it->key == key) {
+            g_cache.erase(it);
+            break;
+        }
+    g_cache.push_back(Cached{key, plan, size});
+    int64_t total = 0;
+    for (const Cached &c : g_cache) total += c.size;
+    while (total > SHARED_PLAN_BYTES && g_cache.size() > 1) {
+        total -= g_cache.front().size;
+        g_cache.pop_front();
+    }
+    return plan;
+}
+
+void clear_shared_plans() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_cache.clear();
+}
+
+Counters counters() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_counters;
+}
+void reset_counters() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_counters = Counters();
+    g_last.clear();
+    g_census.clear();
+}
+std::string last_outcome() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_last;
+}
+void set_last_outcome(const std::string &s) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_last = s;
+}
+std::vector<CensusEntry> last_census() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_census;
+}
+void set_last_census(std::vector<CensusEntry> c) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_census = std::move(c);
+}
+
+void evaluate(const Plan &p, const CanonFn &canon, Values &out) {
+    const int64_t n_cls = p.n_classes();
+    out.cls.assign(static_cast<std::size_t>(3 * n_cls), cd(0.0, 0.0));
+    struct Piece {
+        int64_t c0, c1, g_obs;
+    };
+    std::vector<Piece> pieces;
+    for (const Run &r : p.runs)
+        for (int64_t c0 = r.c0; c0 < r.c1; c0 += EVAL_CHUNK) pieces.push_back({c0, std::min(r.c1, c0 + EVAL_CHUNK), r.g_obs});
+    bool failed = false;
+    std::string why;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+    for (std::ptrdiff_t q = 0; q < static_cast<std::ptrdiff_t>(pieces.size()); ++q) {
+        const Piece &pc = pieces[static_cast<std::size_t>(q)];
+        try {
+            std::vector<cd> phis[3];
+            const int64_t n = pc.c1 - pc.c0;
+            canon(p.src_c.data() + 3 * pc.c0, p.src_t.data() + 3 * pc.c0, p.rep.data() + pc.c0, n, pc.g_obs, phis);
+            for (int64_t i = 0; i < n; ++i)
+                for (int s = 0; s < 3; ++s)
+                    out.cls[static_cast<std::size_t>(3 * (pc.c0 + i) + s)] = phis[s][static_cast<std::size_t>(i)];
+        } catch (const std::exception &e) {
+#if defined(_OPENMP)
+#pragma omp critical(mw_sin_reuse_eval)
+#endif
+            {
+                failed = true;
+                why = e.what();
+            }
+        }
+    }
+    if (failed) throw std::runtime_error(why);
+    to_canonical(p, out.cls);
+}
+
+void evaluate_classes(const Plan &p, const RowsFn &rows, Values &out) {
+    evaluate_pairs(p.n_classes(), p.rep_blocks, rows, out.cls);
+    to_canonical(p, out.cls);
+}
+
+void evaluate_near(const Plan &p, const RowsFn &rows, Values &out) {
+    evaluate_pairs(p.n_near(), p.near_blocks, rows, out.near);
+}
+
+// --- the fused gather + reduction (momwire#1916, #1969) ---------------------
+//
+// THE BITS ARE `scatter` + `reduce_phi_band`'s, by construction. The gather
+// is a copy: `np.take(rep[s], cls, mode="clip")` is the clamped class's
+// value, and the near pairs then overwrite theirs, as `scatter` writes them
+// after the take. Under an image block the image is gathered the same way
+// and subtracted, `Φ -= Φ_img`, one IEEE subtraction per part as numpy's
+// complex `-=`. The reduction is `reduce_phi_band`'s (`_accel_phi_reduce.cpp`):
+// per output element a zero plus its column's stored entries of M in stored
+// order, one unfused multiply-add each, then `(A + B) + C`. Rows are
+// independent, so the thread count moves nothing; LANES rows share each step
+// of the walk over M, each its own chain. A coded map's entry is class << 2 |
+// code: the gather takes class `entry >> 2` (clamped) and negates each shape
+// whose sign under the code is negative, an exact negation.
+
+namespace {
+
+// Observer rows reduced together: every step for LANES rows at once on the
+// same M entry, each row's chain exactly as `reduce_phi_band` runs it, so the
+// compiler may put the lanes in one vector register; it moves no operation
+// within a chain.
+constexpr int LANES = 4;
+
+// Row r's three Φ rows into lane `l` of x[0..2], each laid out
+// [source n][re, im][lane]: the take, then the near pairs over it.
+void gather_row(const Block &b, std::ptrdiff_t r, std::ptrdiff_t n_src, int l, double *x[3]) {
+    const int32_t *c = b.cls + r * n_src;
+    const int64_t hi = b.n_cls - 1;
+    if (b.coded) {
+        for (std::ptrdiff_t n = 0; n < n_src; ++n) {
+            const int32_t e = c[n];
+            int64_t k = e >> 2;  // arithmetic, as numpy's >> on int32
+            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
+            const bool *ng = b.neg[e & 3];
+            const double *v = b.rep + 6 * k;
+            const std::ptrdiff_t at = 2 * LANES * n + l;
+            x[0][at] = ng[0] ? -v[0] : v[0];
+            x[0][at + LANES] = ng[0] ? -v[1] : v[1];
+            x[1][at] = ng[1] ? -v[2] : v[2];
+            x[1][at + LANES] = ng[1] ? -v[3] : v[3];
+            x[2][at] = ng[2] ? -v[4] : v[4];
+            x[2][at + LANES] = ng[2] ? -v[5] : v[5];
+        }
+    } else {
+        for (std::ptrdiff_t n = 0; n < n_src; ++n) {
+            int64_t k = c[n];
+            k = k < 0 ? 0 : (k > hi ? hi : k);  // np.take(mode="clip")
+            const double *v = b.rep + 6 * k;
+            const std::ptrdiff_t at = 2 * LANES * n + l;
+            x[0][at] = v[0];
+            x[0][at + LANES] = v[1];
+            x[1][at] = v[2];
+            x[1][at + LANES] = v[3];
+            x[2][at] = v[4];
+            x[2][at + LANES] = v[5];
+        }
+    }
+    if (b.n_near == 0) return;
+    const int64_t lo = static_cast<int64_t>(r) * n_src, up = lo + n_src;
+    const int64_t *e0 = std::lower_bound(b.near_idx, b.near_idx + b.n_near, lo);
+    const int64_t *e1 = std::lower_bound(e0, b.near_idx + b.n_near, up);
+    for (const int64_t *e = e0; e < e1; ++e) {
+        const std::ptrdiff_t n = static_cast<std::ptrdiff_t>(*e - lo);
+        const double *v = b.near_val + 6 * (e - b.near_idx);
+        const std::ptrdiff_t at = 2 * LANES * n + l;
+        x[0][at] = v[0];
+        x[0][at + LANES] = v[1];
+        x[1][at] = v[2];
+        x[1][at + LANES] = v[3];
+        x[2][at] = v[4];
+        x[2][at + LANES] = v[5];
+    }
+}
+
+}  // namespace
+
+void set_code_signs(Block &b) {
+    for (int c = 0; c < 4; ++c)
+        for (int s = 0; s < 3; ++s) b.neg[c][s] = kCodeSigns[c][s] < 0.0;
+    b.coded = true;
+}
+
+void reduce_band(char *O, std::ptrdiff_t os, std::ptrdiff_t rows, std::ptrdiff_t cols, std::ptrdiff_t n_src,
+                 const Block &d, const Block *image, const Csc M[3], int n_threads) {
+    int nt = 1;
+#ifdef _OPENMP
+    nt = n_threads > 0 ? n_threads : omp_get_max_threads();
+#else
+    (void)n_threads;
+#endif
+    if (nt < 1) nt = 1;
+    const bool has_image = image != nullptr;
+    const std::size_t per = static_cast<std::size_t>(2 * LANES * n_src);
+    const std::size_t blocks = has_image ? 6 : 3;
+    std::vector<double> bufs(static_cast<std::size_t>(nt) * blocks * per);
+    const std::ptrdiff_t tiles = (rows + LANES - 1) / LANES;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static) num_threads(nt)
+#endif
+    for (std::ptrdiff_t tile = 0; tile < tiles; ++tile) {
+        int t = 0;
+#ifdef _OPENMP
+        t = omp_get_thread_num();
+#endif
+        const std::ptrdiff_t r0 = tile * LANES;
+        const int nl = static_cast<int>(std::min<std::ptrdiff_t>(LANES, rows - r0));
+        double *base = bufs.data() + static_cast<std::size_t>(t) * blocks * per;
+        double *x[3] = {base, base + per, base + 2 * per};
+        // A short last tile's idle lanes compute on zeros, never stored.
+        if (nl < LANES) std::fill(base, base + blocks * per, 0.0);
+        for (int l = 0; l < nl; ++l) gather_row(d, r0 + l, n_src, l, x);
+        if (has_image) {
+            double *y[3] = {base + 3 * per, base + 4 * per, base + 5 * per};
+            for (int l = 0; l < nl; ++l) gather_row(*image, r0 + l, n_src, l, y);
+            // `Phi_c -= Phi_i[0]` (and the other two): per part.
+            for (int c = 0; c < 3; c++)
+                for (std::size_t q = 0; q < per; ++q) x[c][q] = x[c][q] - y[c][q];
+        }
+        double *o[LANES];
+        for (int l = 0; l < LANES; ++l) o[l] = reinterpret_cast<double *>(O + (r0 + std::min(l, nl - 1)) * os);
+        for (std::ptrdiff_t j = 0; j < cols; ++j) {
+            double sr[3][LANES], si[3][LANES];
+            for (int c = 0; c < 3; c++) {
+                // reduce_phi_band's chain per lane: a zeroed y, then
+                // `y += a * x` per stored entry, unfused.
+                double yr[LANES], yi[LANES];
+                for (int l = 0; l < LANES; ++l) yr[l] = 0.0, yi[l] = 0.0;
+                const Csc &m = M[c];
+                for (int64_t e = m.ptr[j]; e < m.ptr[j + 1]; ++e) {
+                    const double ar = m.val[2 * e], ai = m.val[2 * e + 1];
+                    const double *xr = x[c] + 2 * LANES * m.ind[e];
+                    const double *xi = xr + LANES;
+                    for (int l = 0; l < LANES; ++l) {
+                        const double pr = ar * xr[l] - ai * xi[l];
+                        const double pi = ar * xi[l] + ai * xr[l];
+                        yr[l] = yr[l] + pr;
+                        yi[l] = yi[l] + pi;
+                    }
+                }
+                for (int l = 0; l < LANES; ++l) sr[c][l] = yr[l], si[c][l] = yi[l];
+            }
+            for (int l = 0; l < nl; ++l) {
+                o[l][2 * j] = (sr[0][l] + sr[1][l]) + sr[2][l];
+                o[l][2 * j + 1] = (si[0][l] + si[1][l]) + si[2][l];
+            }
+        }
+    }
+}
+
+void scatter(const Block &b, std::ptrdiff_t rows, std::ptrdiff_t n_src, cd *out[3]) {
+    std::vector<double> buf(static_cast<std::size_t>(3 * 2 * LANES * n_src));
+    const std::size_t per = static_cast<std::size_t>(2 * LANES * n_src);
+    double *x[3] = {buf.data(), buf.data() + per, buf.data() + 2 * per};
+    for (std::ptrdiff_t r = 0; r < rows; ++r) {
+        gather_row(b, r, n_src, 0, x);
+        for (int s = 0; s < 3; ++s)
+            for (std::ptrdiff_t n = 0; n < n_src; ++n)
+                out[s][r * n_src + n] = cd(x[s][2 * LANES * n], x[s][2 * LANES * n + LANES]);
+    }
+}
+
+Block band_block(const Plan &p, const Values &v, int64_t i0, int64_t i1, std::vector<int64_t> &near_idx) {
+    Block b;
+    b.cls = p.cls.data() + i0 * p.N;
+    b.rep = reinterpret_cast<const double *>(v.cls.data());
+    b.n_cls = p.n_classes();
+    const int64_t lo = i0 * p.N, hi = i1 * p.N;
+    const auto e0 = std::lower_bound(p.near_flat.begin(), p.near_flat.end(), lo);
+    const auto e1 = std::lower_bound(e0, p.near_flat.end(), hi);
+    near_idx.assign(e0, e1);
+    for (int64_t &e : near_idx) e -= lo;
+    b.near_idx = near_idx.data();
+    b.near_val = reinterpret_cast<const double *>(v.near.data()) + 6 * (e0 - p.near_flat.begin());
+    b.n_near = static_cast<int64_t>(near_idx.size());
+    if (p.coded) set_code_signs(b);
+    return b;
+}
+
+}  // namespace pair_reuse
+}  // namespace sinusoidal
+}  // namespace mw

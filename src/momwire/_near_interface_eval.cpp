@@ -1031,6 +1031,7 @@ Features default_requested() {
 }
 
 Features g_requested = default_requested(), g_active, g_stamped;
+bool g_stamp_uncertified = false;  // `requested_stamp`'s tail (momwire#1911)
 
 bool *feature_slot(Features &f, const std::string &name) {
     if (name == "point_cplx_staged") return &f.point_cplx_staged;
@@ -1044,6 +1045,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "razor_pair_reuse") return &f.razor_pair_reuse;
     if (name == "crossing_anchors") return &f.crossing_anchors;
     if (name == "transmitted_anchors") return &f.transmitted_anchors;
+    if (name == "pair_reuse") return &f.pair_reuse;
     return nullptr;
 }
 }  // namespace
@@ -1070,6 +1072,7 @@ bool withdraw_feature(const std::string &name) {
 std::string requested_stamp() {
     const Features &f = g_stamped;
     std::string s;
+    if (f.pair_reuse) s += "+pair_reuse";
     if (f.transmitted_anchors) s += "+transmitted_anchors";
     if (f.point_cplx_staged) s += "+point_cplx_staged";
     if (f.factored_columns) s += "+factored_columns";
@@ -1081,8 +1084,11 @@ std::string requested_stamp() {
     if (f.exact_kernel_series) s += "+exact_kernel_series";
     if (f.razor_pair_reuse) s += "+razor_pair_reuse";
     if (f.crossing_anchors) s += "+crossing_anchors";
+    if (!s.empty() && g_stamp_uncertified) s += " uncertified on this platform";
     return s;
 }
+
+void stamp_uncertified(bool on) { g_stamp_uncertified = on; }
 
 FeatureFill::FeatureFill() : saved_(g_active), saved_taken_(g_crossing_taken) {
     g_active = g_requested;
