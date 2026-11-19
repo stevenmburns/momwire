@@ -318,3 +318,193 @@ def test_the_printout_reports_the_counts_used():
     assert "THREADS = 3 (FILL), " in seen["printout"]
     if _blas(seen):
         assert "THREADS = 3 (FILL), 3 (FACTOR)" in seen["printout"]
+
+
+# --------------------------------------------- every OpenBLAS in the process ---
+
+# A copy of SciPy's OpenBLAS is loaded after the pools were set, in the middle
+# of the answer, as a library first imported by the solve would be.
+_LATE_PROBE = """
+import ctypes, json, os, shutil, sys, tempfile, types
+from threadpoolctl import ThreadpoolController, threadpool_info
+from momwire.dropin.nec5 import _serve, _shell
+
+def counts():
+    return {os.path.basename(i["filepath"]): i["num_threads"]
+            for i in threadpool_info() if i["user_api"] == "blas"}
+
+seen = {}
+real = _serve._port_solution
+def spy(solver, shared):
+    source = next(i["filepath"] for i in threadpool_info()
+                  if i["user_api"] == "blas" and "openblas64" not in i["filepath"])
+    copy = os.path.join(tempfile.mkdtemp(), "libscipy_openblas-latecopy.so")
+    shutil.copy(source, copy)
+    seen["handle"] = ctypes.CDLL(copy) and 1
+    sys.modules["_late_blas_probe"] = types.ModuleType("_late_blas_probe")
+    return real(solver, shared)
+_serve._port_solution = spy
+real_finish = _serve._finish_run
+def finish(deck, prepared):
+    seen["after_solve"] = counts()
+    return real_finish(deck, prepared)
+_serve._finish_run = finish
+_shell.render(sys.stdin.read(), basis=sys.argv[1])
+seen["left"] = counts()
+json.dump(seen, sys.stdout)
+"""
+
+
+def _late(deck: str, basis: str, cpus=None) -> dict:
+    clean = {k: v for k, v in os.environ.items() if k not in _VARS}
+    preexec = (lambda: os.sched_setaffinity(0, cpus)) if cpus is not None else None
+    done = subprocess.run(
+        [sys.executable, "-c", _LATE_PROBE, basis],
+        input=deck,
+        env=clean,
+        preexec_fn=preexec,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="copies a Linux shared library")
+@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+def test_a_library_loaded_during_the_answer_is_held_to_the_count(basis):
+    seen = _late(_deck(10, 40), basis)
+    after = seen["after_solve"]
+    assert len(after) >= 3, after  # numpy's, SciPy's and the late copy
+    assert set(after.values()) == {min(4, _cores())}, after
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="copies a Linux shared library")
+def test_a_late_library_stays_inside_the_affinity_mask():
+    allowed = sorted(os.sched_getaffinity(0))
+    if len(allowed) < 2:
+        pytest.skip("needs two CPUs")
+    mask = set(allowed[:2])
+    seen = _late(_deck(10, 40), "razor-2p", cpus=mask)
+    assert max(seen["after_solve"].values()) <= len(mask), seen["after_solve"]
+
+
+# ----------------------------------------------- a pool that starts at one ---
+
+_mech = pytest.importorskip("momwire_serve_client")
+
+
+@pytest.mark.parametrize(
+    ("env", "pinned"),
+    [
+        ({}, True),
+        ({"MOMWIRE_THREADS": "3"}, True),
+        ({"OPENBLAS_NUM_THREADS": "4"}, False),
+        ({"GOTO_NUM_THREADS": "4"}, False),
+        ({"OMP_NUM_THREADS": "4"}, False),
+    ],
+)
+def test_the_pool_starts_small_unless_the_user_gave_a_count(env, pinned):
+    environ = {_mech.BLAS_POOL_TEST_ENV: "1", **env}
+    assert _mech.pin_blas_pool(environ) is pinned
+    assert (environ.get("OPENBLAS_NUM_THREADS") == "1") is pinned or not pinned
+    assert (_mech.BLAS_POOL_ENV in environ) is pinned
+
+
+def test_starting_the_pool_twice_is_the_same_start():
+    environ = {_mech.BLAS_POOL_TEST_ENV: "1"}
+    assert _mech.pin_blas_pool(environ)
+    assert _mech.pin_blas_pool(environ)
+    assert environ["OPENBLAS_NUM_THREADS"] == "1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the start is the default there")
+def test_off_windows_the_pool_starts_as_it_always_did():
+    environ: dict[str, str] = {}
+    assert not _mech.pin_blas_pool(environ)
+    assert environ == {}
+
+
+def test_a_small_start_leaves_the_serial_path_before_any_deck():
+    plan = _thread_policy.targets(None, environ={}, allowed=8, started_small=True)
+    assert plan == {"blas": 2}
+
+
+_SMALL_PROBE = """
+import json, os, sys
+import momwire_serve_client as mech
+assert mech.pin_blas_pool()
+from threadpoolctl import threadpool_info
+from momwire import _thread_policy
+from momwire.dropin.nec5 import _serve, _shell
+
+def blas():
+    return sorted({i["num_threads"] for i in threadpool_info() if i["user_api"] == "blas"})
+
+seen = {"loaded": blas()}
+real = _serve._port_solution
+def spy(solver, shared):
+    seen["fill"] = blas()
+    return real(solver, shared)
+_serve._port_solution = spy
+_shell.render(sys.stdin.read(), basis="razor-2p")
+seen["left"] = blas()
+seen["threads"] = len(os.listdir("/proc/self/task")) if os.path.isdir("/proc/self/task") else None
+seen["env"] = {k: os.environ.get(k) for k in ("OPENBLAS_NUM_THREADS", mech.BLAS_POOL_ENV)}
+with _thread_policy.answering():
+    _thread_policy.unsized()
+    seen["unsized"] = blas()
+json.dump(seen, sys.stdout)
+"""
+
+
+def _small(deck: str, env=None) -> dict:
+    clean = {k: v for k, v in os.environ.items() if k not in _VARS}
+    clean.update({_mech.BLAS_POOL_TEST_ENV: "1"}, **(env or {}))
+    done = subprocess.run(
+        [sys.executable, "-c", _SMALL_PROBE],
+        input=deck,
+        env=clean,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.parametrize(
+    ("deck", "want"),
+    [(SMALL, lambda c: min(2, _cpus())), (MIDDLE, lambda c: min(4, c))],
+    ids=["small", "middling"],
+)
+def test_a_pool_started_small_grows_to_the_decks_count(deck, want):
+    seen = _small(deck)
+    if not seen["loaded"]:
+        pytest.skip("no OpenBLAS loaded to ask")
+    assert seen["loaded"] == [1]
+    assert seen["fill"] == [want(_cores())]
+    assert seen["left"] == [1]
+    # The variables were the start's, not the user's.
+    assert seen["env"] == {"OPENBLAS_NUM_THREADS": None, _mech.BLAS_POOL_ENV: None}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="counts /proc/self/task")
+def test_a_pool_started_small_never_starts_more_workers_than_the_deck_needs():
+    seen = _small(SMALL)
+    rule = min(2, _cpus())
+    # The main thread, one OpenMP team of one, and each OpenBLAS's workers.
+    assert seen["threads"] <= 1 + 2 * (rule - 1) + 1, seen
+
+
+def test_momwire_threads_grows_a_pool_started_small():
+    seen = _small(MIDDLE, {"MOMWIRE_THREADS": "3"})
+    if seen["loaded"]:
+        assert seen["fill"] == [3]
+
+
+def test_an_unmeasured_answer_gets_the_physical_cores():
+    seen = _small(SMALL)
+    if seen["loaded"]:
+        assert seen["unsized"] == [_cores()]
