@@ -451,6 +451,41 @@ def feature_identity(environ=None) -> list[str]:
 THREAD_ENVS = ("MOMWIRE_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 
 
+# OpenBLAS's Windows server cannot shrink its pool (momwire#2023). Lowering the
+# count only hands each parallel region fewer tasks, and every worker the pool
+# started waits on the one queue those tasks go to, so an LU spreads across all
+# of them: 15 workers ran on a 16-CPU laptop whatever the count said. So a
+# Windows engine starts OpenBLAS at one thread, as the standalone executables
+# do, and `momwire._thread_policy` grows it to what each deck asks for.
+# `BLAS_POOL_ENV` says the OPENBLAS_NUM_THREADS beside it is this start, not
+# the user's count. `BLAS_POOL_TEST_ENV` runs the same path off Windows.
+BLAS_POOL_ENV = "MOMWIRE_BLAS_POOL"
+BLAS_POOL_SMALL = "small"
+BLAS_POOL_TEST_ENV = "MOMWIRE_BLAS_POOL_TEST"
+_BLAS_PINS = ("OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS")
+
+
+def pin_blas_pool(environ=None) -> bool:
+    """Start OpenBLAS at one thread in a process about to load it (Windows).
+
+    True when the variables are set. A count the user gave is left alone.
+    Must run before numpy or scipy is imported: OpenBLAS sizes its pool as it
+    loads.
+    """
+    import sys
+
+    env = os.environ if environ is None else environ
+    if sys.platform != "win32" and env.get(BLAS_POOL_TEST_ENV) != "1":
+        return False
+    if env.get(BLAS_POOL_ENV) != BLAS_POOL_SMALL and any(
+        env.get(name, "").strip() for name in _BLAS_PINS
+    ):
+        return False
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env[BLAS_POOL_ENV] = BLAS_POOL_SMALL
+    return True
+
+
 def thread_identity(environ=None) -> list[str]:
     """``["threads.<VAR>=<value>", ...]`` for each thread variable that is
     set and non-empty, else nothing -- so every key with them all unset is

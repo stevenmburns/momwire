@@ -26,6 +26,12 @@ share stays at two or more, because OpenBLAS's one-thread path rounds
 differently from its threaded one. The deck's rule keeps BLAS threaded for the
 same reason: a deck on one OpenMP thread gets two BLAS threads, as it does in
 the executable. Only an explicit count of one puts BLAS on its serial path.
+
+On Windows OpenBLAS cannot shrink a pool it has started, and its workers share
+one queue, so a lowered count still spreads an LU over every worker. A Windows
+engine therefore starts OpenBLAS at one thread
+(:func:`momwire_serve_client.pin_blas_pool`) and this module grows it, which is
+the one case where the deck's rule raises a pool.
 """
 
 from __future__ import annotations
@@ -34,6 +40,8 @@ import contextlib
 import contextvars
 import os
 import sys
+
+import momwire_serve_client as _mech
 
 FORCE_ENV = "MOMWIRE_THREADS"
 OPENMP_ENV = "OMP_NUM_THREADS"
@@ -96,11 +104,14 @@ def targets(
     environ=None,
     share: int | None = None,
     allowed: int | None = None,
+    started_small: bool = False,
 ) -> dict[str, int]:
     """The count each pool is set to, by API; a pool absent is left alone.
 
     ``rule`` is :func:`deck_threads`' count (None: no deck measured yet),
     ``share`` the resident pool's per-worker share (None: a lone worker).
+    ``started_small``: OpenBLAS loaded at one thread (:data:`_started_small`),
+    so before a deck is measured it still has to leave its serial path.
     """
     forced = env_count(FORCE_ENV, environ)
     plan: dict[str, int] = {}
@@ -117,6 +128,9 @@ def targets(
         ):
             cpus = allowed_threads() if allowed is None else allowed
             plan["blas"] = rule if rule > 1 else min(BLAS_FLOOR, cpus)
+        elif rule is None and started_small:
+            cpus = allowed_threads() if allowed is None else allowed
+            plan["blas"] = min(BLAS_FLOOR, cpus)
     if share:
         if "openmp" in plan:
             plan["openmp"] = min(plan["openmp"], share)
@@ -127,6 +141,18 @@ def targets(
 
 _controller = None
 _controller_modules = -1
+_started_small = False
+
+
+def _take_pool_start() -> None:
+    """Read :func:`momwire_serve_client.pin_blas_pool`'s variables once OpenBLAS
+    has loaded, and remove them: from here on the count is this module's, and
+    the printout's environment block says what the user set."""
+    global _started_small
+    if os.environ.get(_mech.BLAS_POOL_ENV) == _mech.BLAS_POOL_SMALL:
+        del os.environ[_mech.BLAS_POOL_ENV]
+        os.environ.pop(BLAS_ENV, None)
+        _started_small = True
 
 
 def _pools():
@@ -151,7 +177,12 @@ class _Scope:
         self.entry: dict[str, tuple[object, int]] = {}
 
     def apply(self) -> None:
-        plan = targets(self.rule, environ=self.environ, share=self.share)
+        plan = targets(
+            self.rule,
+            environ=self.environ,
+            share=self.share,
+            started_small=_started_small,
+        )
         if not plan:
             return
         forced = env_count(FORCE_ENV, self.environ)
@@ -160,8 +191,10 @@ class _Scope:
             if want is None:
                 continue
             _lib, entry = self.entry.setdefault(lib.filepath, (lib, lib.num_threads))
-            # Only MOMWIRE_THREADS may raise a pool past where it stood.
-            count = want if forced else min(want, entry)
+            # Only MOMWIRE_THREADS, or a pool that started small to be grown,
+            # may raise a pool past where it stood.
+            grows = forced or (_started_small and lib.user_api == "blas")
+            count = want if grows else min(want, entry)
             if lib.num_threads != count:
                 lib.set_num_threads(count)
 
@@ -173,6 +206,13 @@ class _Scope:
         # as the executable sizes a whole deck by its largest.
         self.rule = rule
         self.apply()
+
+    def whole_machine(self) -> None:
+        """A path with no deck measure: every physical core."""
+        cores = deck_threads(1, 1 << 40)
+        if cores is not None:
+            self.rule = max(self.rule or 0, cores)
+            self.apply()
 
     def used(self, api: str) -> int | None:
         counts = [
@@ -210,6 +250,7 @@ def answering(environ=None):
     if _SCOPE.get() is not None:
         yield
         return
+    _take_pool_start()
     scope = _Scope(environ, _SHARE.get())
     token = _SCOPE.set(scope)
     try:
@@ -227,6 +268,22 @@ def measured(n_basis: int, crossing_pairs: int = 0, below_pairs: int = 0) -> Non
     if scope is not None:
         scope.measured(n_basis, crossing_pairs, below_pairs)
         _record(scope)
+
+
+def hold() -> None:
+    """Hold a library loaded since the answer's pools were set to the same
+    count: called before each LU, the work that wakes a BLAS pool."""
+    scope = _SCOPE.get()
+    if scope is not None and len(sys.modules) != _controller_modules:
+        scope.apply()
+
+
+def unsized() -> None:
+    """This answer's solve is not measured (the NEC-2 front end). A pool that
+    started small then gets the physical cores; any other is left as it is."""
+    scope = _SCOPE.get()
+    if scope is not None and _started_small:
+        scope.whole_machine()
 
 
 def _record(scope: _Scope) -> None:
