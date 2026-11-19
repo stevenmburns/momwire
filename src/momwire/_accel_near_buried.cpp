@@ -159,69 +159,108 @@ py::tuple transmitted_proj_core(cd eps_t, double k2, double r_max, double zp_min
 }
 
 // momwire#1847: the C++ route's `_transmitted_anchors.get_grid`, every node
-// filled, for the unit gates against Python's blend. None where Python
-// declines (with `why`, its name, under the key "declined"); with `parts`,
-// also the eight anchors' tables it summed, in stencil order.
+// filled, for the unit gates against Python's. None where Python declines
+// (with `why`, its name, under the key "declined"); with `parts`, also the
+// eight anchors' tables it summed, in stencil order, and the blend on the
+// family's lattice before it is resampled onto the exact grid's nodes.
+py::dict grid_state(const somm_trans::Grid &x) {
+    py::dict d;
+    py::array_t<cd> v({static_cast<py::ssize_t>(x.n_zp), py::ssize_t(5), static_cast<py::ssize_t>(x.n_r),
+                       static_cast<py::ssize_t>(x.n_th)});
+    std::copy(x.vals.begin(), x.vals.end(), v.mutable_data());
+    d["vals"] = v;
+    py::array_t<double> zp_nodes(static_cast<py::ssize_t>(x.zp_nodes.size()));
+    std::copy(x.zp_nodes.begin(), x.zp_nodes.end(), zp_nodes.mutable_data());
+    d["zp_nodes"] = zp_nodes;
+    d["eps_t"] = x.eps_t;
+    d["k2"] = x.k2;
+    d["omega"] = x.omega;
+    d["k_m"] = x.k_m;
+    d["lam_p"] = x.lam_p;
+    d["lam_m"] = x.lam_m;
+    d["r_min"] = x.r_min;
+    d["r_cap"] = x.r_cap;
+    d["r_max"] = x.r_max;
+    d["zp_min"] = x.zp_min;
+    d["zp_max"] = x.zp_max;
+    d["lnr0"] = x.lnr0;
+    d["dlnr"] = x.dlnr;
+    d["n_r"] = x.n_r;
+    d["th_min"] = x.th_min;
+    d["th0"] = x.th0;
+    d["dth"] = x.dth;
+    d["n_th"] = x.n_th;
+    d["lnz0"] = x.lnz0;
+    d["dlnz"] = x.dlnz;
+    return d;
+}
+
 py::object transmitted_anchors_grid_core(cd eps_t, double k2, double r_max, double zp_min, double zp_max,
                                          double omega, double mu, py::object r_min, bool parts) {
     const bool has = !r_min.is_none();
     const double rm = has ? r_min.cast<double>() : 0.0;
-    std::vector<std::shared_ptr<const somm_trans::Grid>> anchors;
+    somm_trans::AnchorParts held;
     std::string why;
     std::shared_ptr<const somm_trans::Grid> g;
     {
         py::gil_scoped_release release;
         g = somm_trans::anchored_grid(eps_t, k2, r_max, zp_min, zp_max, omega, mu, has, rm, 0,
-                                      parts ? &anchors : nullptr, &why);
+                                      parts ? &held : nullptr, &why);
     }
-    py::dict d;
     if (g == nullptr) {
+        py::dict d;
         d["declined"] = why;
         return d;
     }
-    auto table = [](const somm_trans::Grid &x) {
-        py::array_t<cd> v({static_cast<py::ssize_t>(x.n_zp), py::ssize_t(5), static_cast<py::ssize_t>(x.n_r),
-                           static_cast<py::ssize_t>(x.n_th)});
-        std::copy(x.vals.begin(), x.vals.end(), v.mutable_data());
-        return v;
-    };
-    d["vals"] = table(*g);
-    py::array_t<double> zp_nodes(static_cast<py::ssize_t>(g->zp_nodes.size()));
-    std::copy(g->zp_nodes.begin(), g->zp_nodes.end(), zp_nodes.mutable_data());
-    d["zp_nodes"] = zp_nodes;
-    d["eps_t"] = g->eps_t;
-    d["k2"] = g->k2;
-    d["omega"] = g->omega;
-    d["k_m"] = g->k_m;
-    d["lam_p"] = g->lam_p;
-    d["lam_m"] = g->lam_m;
-    d["r_min"] = g->r_min;
-    d["r_cap"] = g->r_cap;
-    d["r_max"] = g->r_max;
-    d["zp_min"] = g->zp_min;
-    d["zp_max"] = g->zp_max;
-    d["lnr0"] = g->lnr0;
-    d["dlnr"] = g->dlnr;
-    d["n_r"] = g->n_r;
-    d["th_min"] = g->th_min;
-    d["th0"] = g->th0;
-    d["dth"] = g->dth;
-    d["n_th"] = g->n_th;
-    d["lnz0"] = g->lnz0;
-    d["dlnz"] = g->dlnz;
+    py::dict d = grid_state(*g);
     if (parts) {
         py::list a;
-        for (const auto &x : anchors) {
+        for (const auto &x : held.anchors) {
             py::dict e;
-            e["vals"] = table(*x);
+            e["vals"] = grid_state(*x)["vals"];
             e["eps_t"] = x->eps_t;
             e["k2"] = x->k2;
             e["omega"] = x->omega;
             a.append(e);
         }
         d["anchors"] = a;
+        d["blend"] = grid_state(*held.blend);
+        d["r_first"] = held.r_first;
     }
     return d;
+}
+
+// momwire#1847: `_on_exact_nodes`' resampling alone, from a lattice the test
+// spells (`vals` (n_zp, 5, n_r, n_th) on lnr0 + i dlnr, th0 + j dth and the
+// ladder `zp_nodes`) onto the served axes (`to_*`), for the gate against
+// `_resample_matrix` and its einsum on the same values. Returns the served
+// values and which in-plane axis the contraction took first.
+py::tuple transmitted_anchors_resample(py::array_t<cd, py::array::c_style | py::array::forcecast> vals,
+                                       double lnr0, double th0, double dth, std::vector<double> zp_nodes,
+                                       double lnz0, double dlnz, double to_lnr0, int64_t to_n_r, double to_th0,
+                                       double to_dth, int64_t to_n_th, std::vector<double> to_zp_nodes) {
+    if (vals.ndim() != 4 || vals.shape(1) != 5 || vals.shape(0) != static_cast<py::ssize_t>(zp_nodes.size()))
+        throw std::invalid_argument("vals must be (len(zp_nodes), 5, n_r, n_th)");
+    somm_trans::Grid lat;
+    lat.n_zp = vals.shape(0);
+    lat.n_r = vals.shape(2);
+    lat.n_th = vals.shape(3);
+    lat.lnr0 = lnr0;
+    lat.dlnr = 0.10;  // `_R_STEP_LOG`, which the resampling's R targets step by too
+    lat.th0 = lat.th_min = th0;
+    lat.dth = dth;
+    lat.zp_nodes = std::move(zp_nodes);
+    lat.lnz0 = lnz0;
+    lat.dlnz = dlnz;
+    lat.vals.assign(vals.data(), vals.data() + vals.size());
+    lat.have.assign(static_cast<size_t>(lat.n_zp * lat.n_r * lat.n_th), 1);
+    bool r_first = true;
+    somm_trans::Grid s;
+    {
+        py::gil_scoped_release release;
+        s = somm_trans::resample_onto(lat, to_lnr0, to_n_r, to_th0, to_dth, to_n_th, to_zp_nodes, &r_first);
+    }
+    return py::make_tuple(grid_state(s)["vals"], r_first);
 }
 
 py::dict transmitted_anchors_stats(bool reset, int64_t anchors_max) {
@@ -267,7 +306,14 @@ void register_near_buried(py::module_ &m) {
           py::arg("r_max"), py::arg("zp_min"), py::arg("zp_max"), py::arg("omega"), py::arg("mu"),
           py::arg("r_min") = py::none(), py::arg("parts") = false,
           "momwire#1847: `_transmitted_anchors.get_grid` as the C++ route blends it (a dict of its "
-          "state; {'declined': name} where Python returns None; with parts, the anchors summed).");
+          "state; {'declined': name} where Python returns None; with parts, the anchors summed and the "
+          "blend before its resampling).");
+    m.def("transmitted_anchors_resample", &transmitted_anchors_resample, py::arg("vals"), py::arg("lnr0"),
+          py::arg("th0"), py::arg("dth"), py::arg("zp_nodes"), py::arg("lnz0"), py::arg("dlnz"),
+          py::arg("to_lnr0"), py::arg("to_n_r"), py::arg("to_th0"), py::arg("to_dth"), py::arg("to_n_th"),
+          py::arg("to_zp_nodes"),
+          "momwire#1847: `_on_exact_nodes`' resampling alone, from the given lattice table onto the given "
+          "served axes; (served vals, whether the R axis was contracted first).");
     m.def("transmitted_anchors_stats", &transmitted_anchors_stats, py::arg("reset") = false,
           py::arg("anchors_max") = 0,
           "momwire#1847: the C++ anchored route's counts (`_transmitted_anchors.STATS`); reset forgets "
