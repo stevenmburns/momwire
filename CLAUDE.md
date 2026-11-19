@@ -71,8 +71,8 @@ byte-identical.**
 **Retirement is a third, separate step: the flag itself goes.**
 A default-on feature still carries its off path, its `MOMWIRE_X_<NAME>`
 variable, its kwarg and its registry entry. Retiring deletes them. Not yet
-exercised: the first retirement also writes the `RETIRED` registry shape
-described below.
+exercised: the first deprecation adds the `retiring` field, and the first
+retirement writes the `RETIRED` registry shape, both described below.
 - What it costs, and why it has its own bar:
   - The off path is a built-in check: with it explicitly off, the printout
     is the pre-promotion one. That is how a drift claim is re-measured and
@@ -86,23 +86,33 @@ described below.
   the nightly and every pre-tag sweep clean and no bug traced to it. Its
   reach covers every level where its route exists. Retiring is Steve's call,
   recorded in the entry's comment, like default-on.
-- Deprecate for one release first. The entry says it is retiring, so a front
-  end can show it locked on. The kwarg and the variable still work; turning
-  it off prints a one-line notice naming the release that removes it.
+- Deprecate for one release first. The entry carries `retiring="<release>"`,
+  the release that removes it, so a front end can show it locked on and say
+  when it goes. The kwarg and the variable still work; turning it off prints
+  a one-line notice naming that release.
+- Before the off path is deleted, measure it: in the last build that has
+  both, |dZ|/|Z| on against off over the stable corpus and the pre-tag
+  sweep's decks. Record the worst, and which deck, in the retirement PR.
+  That is the last time the number can be taken.
 - Then retire it in its own PR:
   - Delete the off path and the entry.
   - Move the name to `RETIRED`, which accepts the kwarg, `MOMWIRE_X_<NAME>`
-    and `feature=<name>=off` silently and ignores them, so an old caller or
-    deck never fails.
+    and `feature=<name>=off`, so an old caller or deck never fails. An
+    explicit off is not silent: it prints a one-line notice that the
+    feature was retired in that release and the option is ignored, because
+    the answer is the on path's whatever the caller asked. An explicit on
+    is accepted quietly.
   - Remove it from `EXE_FEATURES`.
-  - The goldens must not move, because the default already took the on
-    path. A golden that moves means the off path was not dead: stop and
-    find out why.
-  - The PR records the final measured |dZ|/|Z| between the last build with
-    the off path and the last without it.
-- The antennaknobs pin PR that adopts the release regenerates the derived
-  fixtures and drops the name from the hand-kept fallback tables
-  (`_FALLBACK_SWITCHES`, `_FALLBACK_FEATURE_SPECS`).
+  - The goldens must not move. They are generated at the default, which
+    already took the on path, so this catches only code the off path
+    shared with the on path. It is a tripwire, not the proof that retiring
+    was safe: that proof is the on-against-off number above. A golden that
+    moves means the off path was not dead: stop and find out why.
+- antennaknobs follows at each step. The pin PR that adopts the deprecating
+  release reads `retiring` and shows the checkbox locked on, with the
+  release named in its hover. The pin PR that adopts the retiring release
+  regenerates the derived fixtures and drops the name from the hand-kept
+  fallback tables (`_FALLBACK_SWITCHES`, `_FALLBACK_FEATURE_SPECS`).
 - First candidates: `factored_columns` and `height_sheet_recal`, default-on
   since 0.94.0. Eligible after 0.95.0; deprecate in 0.96, retire in 0.97.
 
