@@ -14,8 +14,9 @@ Bit for bit, or within the declared drift, and why. Every transcendental on
 the lattice is libm's in C++, and Python's goes through numpy in two places
 that matter: `np.exp` (the z' ladder, the fill's R nodes) and `np.log` (the
 served ladder's resampling targets), and `np.sin` / `np.cos` of the fill's
-theta nodes. The copies are the same bits exactly
-when both of these hold on the box, and the gates probe both:
+theta nodes. And the resampling's sums go through numpy's BLAS. The copies are
+the same bits exactly when all three of these hold on the box, and the gates
+probe each:
 - numpy's float64 exp and log are libm's (every x86-64 dispatch below
   AVX-512; numpy's AVX-512 exp and log differ in the last bit on a few per
   cent of arguments);
@@ -26,13 +27,28 @@ when both of these hold on the box, and the gates probe both:
   arguments in [0, 1.6), on glibc 2.39 (Rocketlake) on none of them. The
   shared exact-grid fill (`fill_nodes`) has the same property, so this is not
   the anchors' own; un-fusing it would move the exact grid's default-path
-  bits on such a box, which is not this change's call.
-Where either fails the two blends agree to 2e-13 of scale (1.8e-13 measured
+  bits on such a box, which is not this change's call;
+- numpy's einsum sums each resampled target in index order, each product
+  fused into the running sum from +0, as the C++ does (`EINSUM_IN_ORDER`).
+  It hands each axis to its BLAS's `zgemm`, and x86-64 OpenBLAS's kernels sum
+  that way; another BLAS (macOS's numpy) may block or reorder the sum. The
+  probe runs a small einsum against that sum spelled in exact arithmetic.
+Where the first two fail the two blends agree to 2e-13 of scale (1.8e-13 measured
 with numpy's AVX-512 on Rocketlake, 2.6e-16 on Haswell), and the gates hold
 the feature's declared drift, 3e-8. The test
 session turns numpy's AVX-512 off (tests/conftest.py), so on x86-64 the first
 holds under pytest and the `sincos` probe is the one that decides: the gates
 run bit for bit on Rocketlake (glibc 2.39) and within the drift on Haswell.
+Where only the third fails, the same sums in another order: the resampling's
+own gates then hold the rounding bound of a sum in any order,
+2 gamma_n (|W_z| x |W_r| x |W_t|) |V| per entry with n the stencil points
+summed plus one per axis (`_resampling_bound`), and everything downstream
+holds the drift. On the anchored grids here that bound is 1.1e-14 to 5e-14
+of scale, so the documented 2e-13 holds and is checked; on the random tables
+it reaches 4.1e-13, since a clamped stencil extrapolates and its |W| grows,
+so there the per-entry bound alone is the gate. Every sum taken in reverse
+order (a stand-in for another BLAS) moved 1.3e-15 of scale at most, a tenth
+of the bound or less.
 
 What is held:
 - the served grid, the blend it was resampled from, the blend's lattice and
@@ -40,11 +56,9 @@ What is held:
 - the blend's own arithmetic, numpy's over the C++ anchors, bit for bit
   everywhere (no transcendental in it);
 - the resampling's arithmetic, `_on_exact_nodes` over the C++ blend, bit for
-  bit wherever numpy's log is libm's (the served ladder's targets are its
-  only transcendental), and on random tables over both contraction orders.
-  numpy's einsum hands each axis to BLAS (`zgemm`), which sums a target's
-  products in index order, fused, from +0; the C++ sums the stencil the same
-  way, and the matrix's zeros outside it add nothing;
+  bit wherever numpy's einsum sums in order and its log is libm's (the served
+  ladder's targets are its only transcendental), and on random tables over
+  both contraction orders; the matrix's zeros outside a stencil add nothing;
 - the declines, where Python returns None, the wide outer radius's included;
 - a sweep sharing its anchors;
 - a full anchor store that evicts an anchor of the stencil being summed;
@@ -61,6 +75,7 @@ import importlib.util
 import math
 import sys
 import warnings
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -132,22 +147,73 @@ def _fill_trig_is_numpys() -> bool:
     return True
 
 
-NUMPY_IS_LIBM = _numpy_is_libm()
-# The anchors' (and so the blends') values are the same bits on both sides.
-SAME_BITS = NUMPY_IS_LIBM and _fill_trig_is_numpys()
-
-
 def _bits(a):
     return np.ascontiguousarray(a, dtype=np.complex128).view(np.uint64)
 
 
-def _agree(a, b, what):
-    """Bit for bit where the box's transcendentals agree (`SAME_BITS`),
+def _fma(a, b, c):
+    """a * b + c rounded once (float of an exact Fraction is correctly
+    rounded)."""
+    return float(Fraction(a) * Fraction(b) + Fraction(c))
+
+
+def _in_order(v, w, axis):
+    """Contract `axis` of complex `v` with the weight matrix `w` (targets,
+    n): each target's nonzero products in index order, fused into the running
+    sum from +0, real and imaginary parts apart."""
+    v = np.moveaxis(v, axis, -1)
+    out = np.empty(v.shape[:-1] + (w.shape[0],), dtype=np.complex128)
+    for idx in np.ndindex(v.shape[:-1]):
+        for t in range(w.shape[0]):
+            re = im = 0.0
+            for k in np.nonzero(w[t])[0]:
+                x = complex(v[idx + (k,)])
+                re = _fma(x.real, float(w[t, k]), re)
+                im = _fma(x.imag, float(w[t, k]), im)
+            out[idx + (t,)] = complex(re, im)
+    return np.moveaxis(out, -1, axis)
+
+
+def _einsum_is_in_order() -> bool:
+    """Whether `_on_exact_nodes`' einsums sum here as the C++ resampling does:
+    both in-plane orders (R first, theta first) and the z' step, on small
+    random tables through `_resample_matrix`'s ten-point stencils."""
+    rng = np.random.default_rng(2022)
+    for n_r, n_t, a_r, a_t in ((14, 12, 6, 12), (14, 12, 14, 3)):
+        v = rng.standard_normal((1, 5, n_r, n_t)) + 1j * rng.standard_normal(
+            (1, 5, n_r, n_t)
+        )
+        w_r = anchors._resample_matrix(0.0, 1.0, n_r, rng.uniform(0, n_r - 1, a_r))
+        w_t = anchors._resample_matrix(0.0, 1.0, n_t, rng.uniform(0, n_t - 1, a_t))
+        got = np.einsum("zsrt,ar,bt->zsab", v, w_r, w_t, optimize=True)
+        first = np.einsum_path("zsrt,ar,bt->zsab", v, w_r, w_t, optimize=True)[0][1]
+        if first == (0, 1):
+            want = _in_order(_in_order(v, w_r, 2), w_t, 3)
+        else:
+            want = _in_order(_in_order(v, w_t, 3), w_r, 2)
+        if not np.array_equal(_bits(got), _bits(want)):
+            return False
+    v = rng.standard_normal((12, 5, 2, 2)) + 1j * rng.standard_normal((12, 5, 2, 2))
+    w_z = anchors._resample_matrix(0.0, 1.0, 12, rng.uniform(0, 11, 9))
+    got = np.einsum("zsab,cz->csab", v, w_z, optimize=True)
+    return np.array_equal(_bits(got), _bits(_in_order(v, w_z, 0)))
+
+
+NUMPY_IS_LIBM = _numpy_is_libm()
+EINSUM_IN_ORDER = _einsum_is_in_order()
+# The anchors' (and so the blends') values are the same bits on both sides,
+# and so the served grid's where the resampling sums in the same order.
+SAME_BLEND_BITS = NUMPY_IS_LIBM and _fill_trig_is_numpys()
+SAME_BITS = SAME_BLEND_BITS and EINSUM_IN_ORDER
+
+
+def _agree(a, b, what, same=None):
+    """Bit for bit where the box agrees (`same`, `SAME_BITS` unless given),
     else within the declared drift of each surface's scale."""
     a = np.asarray(a, dtype=np.complex128)
     b = np.asarray(b, dtype=np.complex128)
     assert a.shape == b.shape, what
-    if SAME_BITS:
+    if SAME_BITS if same is None else same:
         assert np.array_equal(_bits(a), _bits(b)), what
         return
     scale = np.abs(b).reshape(b.shape[:2] + (-1,)).max(-1)
@@ -236,6 +302,43 @@ def _as_blend(c, r):
     return b
 
 
+# u, the unit roundoff of binary64
+_U = 2.0**-53
+
+
+def _resampling_bound(resample):
+    """Each served entry's bound on |a - b| for two evaluations of the same
+    resampling summed in any orders: `resample(vals_abs, abs_weights)` runs
+    `_on_exact_nodes` with |V| and |W|. A sum of n products, each rounded
+    or fused, in any order, is within gamma_n = n u / (1 - n u) of the sum of
+    their magnitudes; the axes nest, so their n add (gamma_m + gamma_n +
+    gamma_m gamma_n <= gamma_(m + n)), and two evaluations err apart by twice
+    that."""
+    orig = anchors._resample_matrix
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(anchors, "_resample_matrix", lambda *a: np.abs(orig(*a)))
+        mag = resample()
+    n = 3 * (anchors._RESAMPLE_POINTS + 1)
+    gamma = n * _U / (1.0 - n * _U)
+    # 1.01: |V| x |W| itself rounds, a relative u per step
+    return 2.02 * gamma * mag
+
+
+def _close_by_the_bound(got, want, bound, what, cap=None):
+    """|got - want| within `bound` per entry, real and imaginary parts apart;
+    with `cap`, the bound itself under that fraction of each surface's
+    scale."""
+    got = np.asarray(got, dtype=np.complex128)
+    want = np.asarray(want, dtype=np.complex128)
+    assert got.shape == want.shape, what
+    assert np.all(np.abs(got.real - want.real) <= bound), what
+    assert np.all(np.abs(got.imag - want.imag) <= bound), what
+    if cap is not None:
+        scale = np.abs(want).reshape(want.shape[:2] + (-1,)).max(-1)
+        worst = np.asarray(bound).reshape(scale.shape + (-1,)).max(-1) / scale
+        assert float(np.max(worst)) < cap, (what, float(np.max(worst)))
+
+
 def _check_resampling(c, r):
     """`_on_exact_nodes` over the C++ blend against the C++ served grid, and
     the contraction order einsum's greedy path takes against the C++ one."""
@@ -257,8 +360,19 @@ def _check_resampling(c, r):
         optimize=True,
     )[0]
     assert c["r_first"] == (path[1] == (0, 1)), path
-    if NUMPY_IS_LIBM or z == 1:
+    if EINSUM_IN_ORDER and (NUMPY_IS_LIBM or z == 1):
         assert np.array_equal(_bits(py._vals), _bits(c["vals"]))
+    elif NUMPY_IS_LIBM or z == 1:
+        mag = _as_blend(c["blend"], r)
+        mag._vals = np.abs(mag._vals)
+        bound = _resampling_bound(
+            lambda: (
+                anchors._on_exact_nodes(
+                    mag, r["k2"], r["r_max"], r["zp_min"], r["zp_max"], r["r_min"]
+                )._vals
+            )
+        )
+        _close_by_the_bound(c["vals"], py._vals, bound, "resampling", cap=2e-13)
     else:
         _agree(c["vals"], py._vals, "resampling")
 
@@ -285,13 +399,13 @@ def _check_blend(f_hz, r):
         key = ("below-above-anchor", eps_r, q, int(j), lat.key(), float(som._MU0))
         pa = anchors._ANCHORS[key]
         assert (a["eps_t"], a["k2"], a["omega"]) == (pa.eps_t, pa.k2, pa.omega), j
-        _agree(a["vals"], pa._vals, f"anchor {j}")
+        _agree(a["vals"], pa._vals, f"anchor {j}", SAME_BLEND_BITS)
     # the blend's arithmetic alone, everywhere: numpy's over the C++ anchors
     v = None
     for a, w in zip(c["anchors"], anchors._weights(u, js), strict=True):
         v = a["vals"] * w if v is None else v + a["vals"] * w
     assert np.array_equal(_bits(v), _bits(c["blend"]["vals"]))
-    _agree(c["blend"]["vals"], blend._vals, "blend")
+    _agree(c["blend"]["vals"], blend._vals, "blend", SAME_BLEND_BITS)
     _check_resampling(c, r)
     _agree(c["vals"], g._vals, "served")
 
@@ -454,8 +568,14 @@ def test_the_cxx_resampling_is_pythons_on_random_tables(monkeypatch, case):
     )[0]
     assert r_first == (path[1] == (0, 1)), path
     assert r_first == (case[4] > 10)
-    if NUMPY_IS_LIBM or not served_rungs:
+    if EINSUM_IN_ORDER and (NUMPY_IS_LIBM or not served_rungs):
         assert np.array_equal(_bits(py._vals), _bits(got))
+    elif NUMPY_IS_LIBM or not served_rungs:
+        blend._vals = np.abs(vals)
+        bound = _resampling_bound(
+            lambda: anchors._on_exact_nodes(blend, r["k2"], r_max, 0.1, 0.6, None)._vals
+        )
+        _close_by_the_bound(got, py._vals, bound, "resampling")
     else:
         _agree(got, py._vals, "resampling")
 
