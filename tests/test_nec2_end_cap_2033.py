@@ -131,7 +131,8 @@ def test_the_registry_entry_is_an_answer_changing_opt_in():
         "nec2_end_cap",
         ("sinusoidal",),
     )
-    assert f.default is False and f.offer is False
+    # Offered (Steve, 2026-11-19) but never on by default or by a seed.
+    assert f.default is False and f.offer is True
     assert f.drift > _features.DEFAULT_DRIFT_MAX
     assert "changes the answer" in f.label
 

@@ -785,8 +785,10 @@ FEATURES: dict[str, Feature] = {
         # X = J1(ka)/J0(ka) in NEC Part I's Eqs. 23 and 54-64, where the
         # default takes it to zero. A compatibility option for comparing with
         # NEC-2 engines, not better physics (momwire#1327 kept no cap as the
-        # default). Off by default, not offered, and never seeded: `drift` is
-        # 1.0, no bound, because it changes the answer on purpose. momwire#2033
+        # default). Off by default and never seeded: `drift` is 1.0, no
+        # bound, because it changes the answer on purpose. Offered (Steve,
+        # 2026-11-19), so antennaknobs shows it as an unticked box on the
+        # hosted app (reach 1), labelled as changing the answer, not faster. momwire#2033
         # measured the end condition's effect at up to 58 % of Zin, stock nec2c
         # against this solver over 65 frequencies of a fat-wire log-periodic
         # Yagi.
@@ -818,7 +820,7 @@ FEATURES: dict[str, Feature] = {
                 "model of a real wire end."
             ),
             drift=1.0,
-            offer=False,
+            offer=True,
         ),
     )
 }
