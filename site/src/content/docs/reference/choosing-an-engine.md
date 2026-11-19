@@ -77,6 +77,14 @@ even there. Don't reach for them on small problems.
   is at fixed *accuracy*, and the census flipped that verdict — next
   section.
 
+One route differs on purpose: the NEC-2 drop-in's `sinusoidal`
+(`momwire-nec2c-sinusoidal`) takes NEC-2's free-end cap by default, so that
+it answers like NEC-2 engines, where every other host and launcher takes the
+current to zero at a free end. Set `MOMWIRE_X_NEC2_END_CAP=0` for the
+zero-current answer there; [the portal page](/reference/portal-usage/#choosing-the-physics-one-command-per-engine)
+has the details. It moves Zin most on fat wires, and it is a match to NEC-2,
+not a better model of a real wire end.
+
 ## Accuracy per segment: why `bspline` d=2 is the default
 
 The basis-convergence census (91 designs) measured accuracy against mesh
