@@ -60,9 +60,9 @@ workers each run the kernel on one OpenMP thread. Classes are found once per
 geometry (the key holds no k), Φ per class once per frequency, then gathered
 into each observer band, so the reduction (`_reduce_phi_band`) is
 unchanged. Memory: an (N_obs, N_src) int32 class map, a quarter of Z, plus
-the class table; no Φ-sized copy. The census holds far more than the plan it
-leaves, each band keeping its own classes until they are merged, and both are
-held to `PLAN_BUDGET_BYTES` (momwire#2019).
+the class table; no Φ-sized copy. The census folds each band's classes into
+one table as it goes, so it holds each class once (THE CENSUS, below),
+and both are held to `PLAN_BUDGET_BYTES` (momwire#2019).
 
 OVER A FINITE GROUND (momwire#1970) the image block is not a free-space
 field: the Sommerfeld fill subtracts C2 Φ_img - S, S the interpolated
@@ -125,6 +125,7 @@ which of its orientations is taken is immaterial. Near pairs keep code 0.
 
 from __future__ import annotations
 
+import collections
 import functools
 import os
 import threading
@@ -173,9 +174,11 @@ _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 #: tail, and which a source falls in can move its Φ by an ulp.
 EVAL_CHUNK = 2048
 
-#: Classes per `canonical_sources` call in `build_plan` (its transients are
-#: about 16 float64 per class).
-_CANON_CHUNK = 1 << 18
+#: Classes per `rep_scalars` + `canonical_sources` call in `build_plan`: the
+#: gathered geometry, the scalars and the placement are ~300 B a class, 20 MB
+#: a call here, beside a plan that holds the budget's rest. Elementwise, so
+#: the chunk moves no value.
+_CANON_CHUNK = 1 << 16
 
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
@@ -280,6 +283,7 @@ CODE_SIGNS = np.array(
 _HAVE_FACTORIZE = _acc is not None and bool(
     getattr(_acc, "exact_factorize_1224", False)
 )
+_HAVE_INT_GROUPS = _acc is not None and bool(getattr(_acc, "int_groups", False))
 
 
 #: The byte budget of one fill's plans AND their census, razor-2p's
@@ -306,26 +310,51 @@ PLAN_BUDGET_BYTES = 256 << 20
 #: pair: the ELT whip's direct block is ~35 MB.
 SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES
 
-#: Peak resident bytes of the census per class a band kept, beside the class
-#: map: each band's keys, representatives and codes (89 B), then at the merge
-#: the joined keys and the hash kernel's table and inverses. Counted per BAND
-#: class because a class seen in many bands is held once per band until the
-#: merge. Measured (Skylake, 4 threads, free space), the census's peak over
-#: its entry per band class: 208 to 235 B over nine decks of 0.55 M to
-#: 7.9 M band classes.
-CENSUS_BYTES_PER_BAND_CLASS = 240
-
 #: Bytes per class and per near pair of one wavenumber's values, the three
 #: complex shapes (`evaluate`, `evaluate_near`).
 VALUE_BYTES = 48
 
-#: Evenly spaced bands censused first, to project the census's size so that
-#: a deck bound to decline does not pay for the rest of it, `PILOT_WIDTH` at
-#: a time: a band's transient is about 240 B per pair, so a pool's worth at
-#: once would itself pass the reuse-off fill's peak on a deck about to decline
-#: (488 MB in the census against 421 MB off, the 3,220-segment tapered Yagi).
-PILOT_BANDS = 4
-PILOT_WIDTH = 2
+#: THE CENSUS folds each band's classes, in band order, into one running
+#: table (`_Fold`), so what it holds grows with the deck's classes, not with
+#: each band's: a class seen in many bands is held once. Holding every band's
+#: classes until one merge at the end, as before, cost ~240 B per BAND class,
+#: and on a deck whose rows repeat that is the deck's classes several times
+#: over: the ELT whip (4,392 segments, 94 bands of 47 rows at 8 threads) has
+#: 0.92 M classes in 5.0 M band classes, a census counted at 1.22 GB (peak
+#: RSS over its entry, Rocketlake: 1.09 GB) for a plan of 201 MB, so its
+#: reuse declined on the 256 MB budget. A class is numbered where it first
+#: occurs in the pairs' flat order either way, so the plan is the same bytes.
+#:
+#: What the census holds is counted (`_Fold.held`) from the class map, the
+#: table's keys and slots (`IntGroups.nbytes`), each class's representative
+#: and the near pairs, plus `BAND_BYTES_PER_PAIR` for every band in flight or
+#: finished and not yet folded. A band starts only where it fits beside that
+#: under the budget, and the census stops once the count, or the plan's
+#: least possible fill (`PLAN_FLOOR_BYTES_PER_CLASS`), passes it: the classes
+#: only grow, so either verdict is final, and a deck that declines has held
+#: no more than the budget on the way.
+#:
+#: Measured on the whip at 8 threads (Rocketlake): counted 200 MB, and peak
+#: RSS over the census's entry 210 MB to the last fold, 228 MB to the plan.
+#:
+#: Peak transient of one band per pair: its scalars, key columns, codes and
+#: grouping (the hash table, at twice the pairs, and its inverses). Measured
+#: (Rocketlake, one worker, so one band at a time, peak RSS over the band's
+#: entry): the direct term at most 130 B (the whip and the LogYag, 33 and 4
+#: bands), the reflected term at most 156 B (curtains of 8 and 20 wires over
+#: a reflection-coefficient ground), each taken here with 5 to 8 % over.
+BAND_BYTES_PER_PAIR = 136
+GROUND_BAND_BYTES_PER_PAIR = 168
+
+#: The share of the budget the bands in flight may take: each band is cut to
+#: at most this over a pool's worth (`_band_rows`), so the rest is the
+#: classes'. Smaller bands move no class (the numbering is the flat order's).
+BAND_SHARE = 0.25
+
+#: The plan's fill holds at least this much per class beside its class map:
+#: one wavenumber's values (`VALUE_BYTES`) and an int64 index (`rep_src`, or
+#: the ground plan's `rep_flat`).
+PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8
 
 _shared_plans: OrderedDict = OrderedDict()
 _shared_lock = threading.Lock()
@@ -587,16 +616,29 @@ def reversible_ground_types(src_type, obs_type, src_rev, seg_t):
 def pair_scalars(obs_c, obs_t, src_c, src_t):
     """z, rho, td, rdt for every (observer, source) pair, (R, N) each, in
     the kernels' own order of operations."""
-    rvx = obs_c[:, None, 0] - src_c[None, :, 0]
-    rvy = obs_c[:, None, 1] - src_c[None, :, 1]
-    rvz = obs_c[:, None, 2] - src_c[None, :, 2]
-    tnx, tny, tnz = src_t[None, :, 0], src_t[None, :, 1], src_t[None, :, 2]
+    return _scalars(obs_c[:, None], obs_t[:, None], src_c[None, :], src_t[None, :])
+
+
+def rep_scalars(obs_c, obs_t, src_c, src_t, obs, src):
+    """`pair_scalars` of the pairs (obs[i], src[i]) only, (G,) each: the same
+    operations element by element, so the same bits as the pair's entry in
+    its band's (R, N) arrays."""
+    return _scalars(obs_c[obs], obs_t[obs], src_c[src], src_t[src])
+
+
+def _scalars(oc, ot, sc, st):
+    # Elementwise in a fixed order: the operands' shapes decide which pairs,
+    # never a value.
+    rvx = oc[..., 0] - sc[..., 0]
+    rvy = oc[..., 1] - sc[..., 1]
+    rvz = oc[..., 2] - sc[..., 2]
+    tnx, tny, tnz = st[..., 0], st[..., 1], st[..., 2]
     z = rvx * tnx + rvy * tny + rvz * tnz
     rvx -= z * tnx
     rvy -= z * tny
     rvz -= z * tnz
     rho = np.sqrt(rvx * rvx + rvy * rvy + rvz * rvz)
-    tmx, tmy, tmz = obs_t[:, None, 0], obs_t[:, None, 1], obs_t[:, None, 2]
+    tmx, tmy, tmz = ot[..., 0], ot[..., 1], ot[..., 2]
     td = tmx * tnx + tmy * tny + tmz * tnz
     rdt = rvx * tmx + rvy * tmy + rvz * tmz
     return z, rho, td, rdt
@@ -763,7 +805,7 @@ def _group(cols):
     two stages, the first stage's ids a column of the second; without it, numpy's
     sorted spelling (other group numbers, the same groups)."""
     if _HAVE_FACTORIZE and cols[0].shape[0] < 2**31 - 2:
-        _, ids = _acc.factorize_ints(list(cols[:3]))
+        first, ids = _acc.factorize_ints(list(cols[:3]))
         rest = list(cols[3:])
         while rest:
             take, rest = rest[:2], rest[2:]
@@ -833,45 +875,160 @@ def _run(fn, items):
     return [r for chunk in _pool().map(run, runs) for r in chunk]
 
 
-def _census_bands(band, starts, map_bytes, budget):
-    """`band` over `starts`, its results in their order, or None once the
-    census would pass `budget` bytes. `budget` None runs every band.
+class _PyGroups:
+    """`IntGroups` without the extension: the held keys and a band's grouped
+    again at each add (`_group`), renumbered in first-appearance order, so
+    the groups and their numbers are the kernel's."""
 
-    `PILOT_BANDS` evenly spaced bands go first and project the whole census,
-    so a deck far past the budget stops after those. The running count then
-    stops the rest as soon as the classes kept pass it. A band's result does
-    not depend on when it ran, so the order moves no class."""
-    if budget is None:
-        return _run(band, starts)
+    def __init__(self, width):
+        self._keys = [np.zeros(0, np.int64) for _ in range(width)]
 
-    def cost(band_classes):
-        return map_bytes + CENSUS_BYTES_PER_BAND_CLASS * band_classes
+    def __len__(self):
+        return int(self._keys[0].size)
 
+    def nbytes(self):
+        return sum(k.nbytes for k in self._keys)
+
+    def add(self, cols):
+        g0 = len(self)
+        joined = [
+            np.concatenate([k, np.asarray(c, np.int64)])
+            for k, c in zip(self._keys, cols)
+        ]
+        first, inv = _group(joined)
+        order = np.argsort(first, kind="stable")
+        rank = np.empty_like(order)
+        rank[order] = np.arange(order.size)
+        self._keys = [j[first[order]] for j in joined]
+        return rank[inv[g0:]]
+
+
+def _nbytes(x):
+    """The bytes of the arrays in a (nested) band result."""
+    if isinstance(x, np.ndarray):
+        return x.nbytes
+    if isinstance(x, (list, tuple)):
+        return sum(_nbytes(y) for y in x)
+    return 0
+
+
+class _Fold:
+    """The census's classes, each band's folded in band order into one table
+    (THE CENSUS, above). `add(keys, kept, near)` takes a band's distinct
+    keys, its per-class payload `kept` (arrays over the same rows) and its
+    near pairs, and returns each key's class, numbered where the class first
+    occurs in the bands' order: one `_group` over every band's keys in turn
+    numbers them so. Only the payload of the classes a band was first to see
+    is kept."""
+
+    def __init__(self, width, map_bytes):
+        self.table = _acc.IntGroups(width) if _HAVE_INT_GROUPS else _PyGroups(width)
+        self.map_bytes = map_bytes
+        self.kept = []
+        self.near = []
+        self._kept_bytes = 0
+
+    def __len__(self):
+        return len(self.table)
+
+    def add(self, keys, kept, near):
+        g0 = len(self.table)
+        ids = np.asarray(self.table.add(list(keys)), dtype=np.int64)
+        # A band's keys are distinct, so each new class is one row, and the
+        # rows of the new classes come in their number order.
+        new = np.flatnonzero(ids >= g0)
+        part = tuple(np.ascontiguousarray(p[new]) for p in kept)
+        self.kept.append(part)
+        self.near.append(near)
+        self._kept_bytes += _nbytes(part) + near.nbytes
+        return ids
+
+    def held(self):
+        """The bytes the census holds, beside the bands in flight."""
+        return self.map_bytes + int(self.table.nbytes()) + self._kept_bytes
+
+    def floor(self):
+        """The least the plan's fill can hold (`PLAN_FLOOR_BYTES_PER_CLASS`)."""
+        return self.map_bytes + PLAN_FLOOR_BYTES_PER_CLASS * len(self)
+
+    def joined(self, j):
+        """Payload column j over every class, in class order."""
+        return np.concatenate([p[j] for p in self.kept])
+
+    def near_flat(self):
+        return np.concatenate(self.near) if self.near else np.zeros(0, np.int64)
+
+    def release(self):
+        """Drop the payload once the plan holds its joined copies."""
+        self.kept.clear()
+        self.near.clear()
+
+
+def _band_rows(rows, M, N, budget, per_pair):
+    """Observer rows per census band: `rows` (the swept budget's) shared out
+    over the pool, none so small that its per-band cost shows, and under a
+    byte budget at most `BAND_SHARE` of it over a pool's worth of bands."""
+    workers = _workers()
+    rows = max(1, int(rows) // workers)
+    # Enough bands to share out, none so small that its per-band cost shows.
+    rows = min(rows, max(16, -(-M // (4 * workers))))
+    if budget is not None and per_pair > 0:
+        rows = min(rows, max(1, int(BAND_SHARE * budget) // (workers * N * per_pair)))
+    return rows
+
+
+def _trim_census():
+    # The table's pages and the bands' (freed in the pool's arenas) go back
+    # before the plan is built beside the map: freed, they still count in
+    # the process's resident set.
+    from .razor import _trim_heap
+
+    _trim_heap()
+
+
+def _census_bands(band, starts, census, fold, budget, band_bytes):
+    """`band(start)` over `starts` on the pool, each result handed to
+    `fold(i, result)` in band order, which folds it into `census` (a
+    `_Fold`). Returns the most the census held (`_Fold.held` and
+    `band_bytes` per band started and not yet folded), or None once that or
+    the plan's floor passes `budget` bytes; a band starts only where it fits.
+    `budget` None runs a pool's worth at once throughout."""
     n = len(starts)
-    at = np.unique(np.linspace(0, n - 1, min(PILOT_BANDS, n)).astype(np.int64))
-    at = at.tolist()
-    out = [None] * n
-    for p in range(0, len(at), PILOT_WIDTH):
-        some = at[p : p + PILOT_WIDTH]
-        for i, r in zip(some, _run(band, [starts[i] for i in some])):
-            out[i] = r
-    seen = sum(out[i][0][0].shape[0] for i in at)
-    if cost(seen * n / len(at)) > budget:
-        return None
-    lock = threading.Lock()
-    over = False
+    workers = _workers()
+    peak = 0
+    pending = collections.deque()
+    nxt = 0
 
-    def guarded(i):
-        nonlocal seen, over
-        if over:
-            return
-        out[i] = band(starts[i])
-        with lock:
-            seen += out[i][0][0].shape[0]
-            over = over or cost(seen) > budget
+    def fits(k):
+        return budget is None or census.held() + band_bytes * k <= budget
 
-    _run(guarded, sorted(set(range(n)) - set(at)))
-    return None if over else out
+    try:
+        for i in range(n):
+            while nxt < n and len(pending) < workers and fits(len(pending) + 1):
+                if workers == 1:
+                    pending.append(band(starts[nxt]))
+                else:
+                    pending.append(_pool().submit(band, starts[nxt]))
+                nxt += 1
+            if not pending:  # not one band fits beside what is held
+                return None
+            peak = max(peak, census.held() + band_bytes * len(pending))
+            r = pending.popleft()
+            fold(i, r if workers == 1 else r.result())
+            del r
+            peak = max(peak, census.held() + band_bytes * len(pending))
+            if budget is not None and max(peak, census.floor()) > budget:
+                return None
+        return peak
+    finally:
+        # A census stopped early: the bands not started never run, and those
+        # running finish before the map they write is dropped.
+        if workers > 1:
+            for p in pending:
+                p.cancel()
+            for p in pending:
+                if not p.cancelled():
+                    p.exception()
 
 
 def build_plan(
@@ -914,10 +1071,7 @@ def build_plan(
     if budget is not None and 4 * M * N > budget:
         return OVER_BUDGET
     cls = np.empty((M, N), dtype=np.int32)
-    workers = _workers()
-    rows = max(1, int(rows) // workers)
-    # Enough bands to share out, none so small that its per-band cost shows.
-    rows = min(rows, max(16, -(-M // (4 * workers))))
+    rows = _band_rows(rows, M, N, budget, BAND_BYTES_PER_PAIR)
     starts = list(range(0, M, rows))
 
     def band(i0):
@@ -941,58 +1095,57 @@ def build_plan(
         else:
             cls[i0:i1] = inv.reshape(i1 - i0, N)
             rep_code = np.zeros(first.size, np.int8)
+        del z, rho, td, rdt
         keys = [c[first] for c in cols]
-        canon = np.stack(
-            [
-                rho.reshape(-1)[first],
-                z.reshape(-1)[first],
-                rdt.reshape(-1)[first],
-                td.reshape(-1)[first],
-            ],
-            axis=1,
-        )
         r_first, n_first = np.divmod(first, N)
-        return keys, canon, r_first + i0, n_first, near, rep_code
+        return keys, r_first + i0, n_first, near, rep_code
 
-    results = _census_bands(band, starts, cls.nbytes, budget)
-    if results is None:
+    census = _Fold(5, cls.nbytes)
+
+    def fold(i, result):
+        # The band's classes numbered as the deck's (`_Fold`), in its rows of
+        # the map, codes kept.
+        keys, r_first, n_first, near, rep_code = result
+        i0 = starts[i]
+        kept = (r_first.astype(np.int32), n_first.astype(np.int32), rep_code)
+        ids = census.add(keys, kept, near)
+        cls[i0 : i0 + rows] = _renumber(cls[i0 : i0 + rows], ids, coded)
+
+    band_bytes = BAND_BYTES_PER_PAIR * rows * N
+    census_peak = _census_bands(band, starts, census, fold, budget, band_bytes)
+    if census_peak is None:
         return OVER_BUDGET
-    census_peak = cls.nbytes + CENSUS_BYTES_PER_BAND_CLASS * sum(
-        r[0][0].shape[0] for r in results
-    )
-    # The bands' classes merged: a key seen in two bands is one class.
-    keys = [np.concatenate([r[0][j] for r in results]) for j in range(5)]
-    gfirst, ginv = _group(keys)
-    del keys
+    census.table = None
+    _trim_census()
     # Classes renumbered so those sharing an observer radius are contiguous
     # (stable within a radius): `evaluate` then runs on slices. A class's
     # members and value are unchanged; only its number moves.
-    rep_obs_g = np.concatenate([r[2] for r in results])[gfirst]
-    perm = np.argsort(obs_type[rep_obs_g], kind="stable")
-    renumber = np.empty(perm.size, dtype=np.int64)
-    renumber[perm] = np.arange(perm.size, dtype=np.int64)
-    ginv = renumber[ginv]
-    gfirst = gfirst[perm]
-    del renumber, rep_obs_g
-    off = 0
-    for (k, *_), i0 in zip(results, starts):
-        i1 = min(M, i0 + rows)
-        n_b = k[0].shape[0]
-        cls[i0:i1] = _renumber(cls[i0:i1], ginv[off : off + n_b], coded)
-        off += n_b
-    rep_obs = np.concatenate([r[2] for r in results])[gfirst].astype(np.int64)
-    rep_src = np.concatenate([r[3] for r in results])[gfirst].astype(np.int64)
-    near_flat = np.concatenate([r[4] for r in results])  # sorted: bands in order
-    rep_code = np.concatenate([r[5] for r in results])[gfirst]
-    canon = np.concatenate([r[1] for r in results])[gfirst]
-    del results, gfirst, ginv
-    n_cls = canon.shape[0]
-    src_c = np.empty((n_cls, 3))
-    src_t = np.empty((n_cls, 3))
+    rep_obs = census.joined(0).astype(np.int64)
+    perm = np.argsort(obs_type[rep_obs], kind="stable")
+    if not np.array_equal(perm, np.arange(perm.size)):
+        renumber = np.empty(perm.size, dtype=np.int64)
+        renumber[perm] = np.arange(perm.size, dtype=np.int64)
+        for i0 in starts:
+            cls[i0 : i0 + rows] = _renumber(cls[i0 : i0 + rows], renumber, coded)
+        del renumber
+    rep_obs = rep_obs[perm]
+    rep_src = census.joined(1)[perm].astype(np.int64)
+    rep_code = census.joined(2)[perm]
+    near_flat = census.near_flat()  # sorted: bands in order
+    census.release()
+    del perm
+    # Each representative's (rho, z, rdt, td), the bits its band computed
+    # (`rep_scalars`), placed in the observer frame.
+    n_cls = rep_src.size
+    can_c = np.empty((n_cls, 3))
+    can_t = np.empty((n_cls, 3))
     for c0 in range(0, n_cls, _CANON_CHUNK):  # bounded transients
         c1 = min(n_cls, c0 + _CANON_CHUNK)
-        src_c[c0:c1], src_t[c0:c1] = canonical_sources(canon[c0:c1])
-    del canon
+        z, rho, td, rdt = rep_scalars(
+            obs_c, obs_t, src_c, src_t, rep_obs[c0:c1], rep_src[c0:c1]
+        )
+        canon = np.stack([rho, z, rdt, td], axis=1)
+        can_c[c0:c1], can_t[c0:c1] = canonical_sources(canon)
     otype = obs_type[rep_obs]
     cuts = np.flatnonzero(np.diff(otype)) + 1
     edges = [0, *cuts.tolist(), int(otype.size)]
@@ -1004,8 +1157,8 @@ def build_plan(
         rep_src=rep_src,
         near_flat=near_flat,
         near_blocks=near_blocks(near_flat, N, a_obs),
-        src_c=src_c,
-        src_t=src_t,
+        src_c=can_c,
+        src_t=can_t,
         runs=runs,
         rep_code=rep_code if coded else None,
         code_bits=CODE_BITS if coded else 0,
@@ -1174,9 +1327,7 @@ def build_ground_plan(
     if budget is not None and 4 * M * N > budget:
         return OVER_BUDGET
     cls = np.empty((M, N), dtype=np.int32)
-    workers = _workers()
-    rows = max(1, int(rows) // workers)
-    rows = min(rows, max(16, -(-M // (4 * workers))))
+    rows = _band_rows(rows, M, N, budget, GROUND_BAND_BYTES_PER_PAIR)
     starts = list(range(0, M, rows))
 
     def band(i0):
@@ -1207,33 +1358,39 @@ def build_ground_plan(
             rep_code = np.zeros(first.size, np.int8)
         return [c[first] for c in cols], first + i0 * N, near, rep_code
 
-    results = _census_bands(band, starts, cls.nbytes, budget)
-    if results is None:
+    census = _Fold(6, cls.nbytes)
+
+    def fold(i, result):
+        keys, rep, near, rep_code = result
+        i0 = starts[i]
+        i1 = min(M, i0 + rows)
+        ids = census.add(keys, (rep, rep_code), near)
+        cls[i0:i1] = _renumber(cls[i0:i1], ids, coded)
+
+    band_bytes = GROUND_BAND_BYTES_PER_PAIR * rows * N
+    census_peak = _census_bands(band, starts, census, fold, budget, band_bytes)
+    if census_peak is None:
         return OVER_BUDGET
-    census_peak = cls.nbytes + CENSUS_BYTES_PER_BAND_CLASS * sum(
-        r[0][0].shape[0] for r in results
-    )
-    n_cols = len(results[0][0])
-    keys = [np.concatenate([r[0][j] for r in results]) for j in range(n_cols)]
-    gfirst, ginv = _group(keys)
-    del keys
-    rep_flat = np.concatenate([r[1] for r in results])[gfirst]
-    rep_code = np.concatenate([r[3] for r in results])[gfirst]
+    census.table = None
+    _trim_census()
+    rep_flat = census.joined(0)
+    rep_code = census.joined(1)
+    # Numbered by the representative's flat index. The bands run in row
+    # order and the hash kernel numbers a class where it first occurs, so
+    # there that is already the order and the map keeps its numbers.
     perm = np.argsort(rep_flat, kind="stable")
-    renumber = np.empty(perm.size, dtype=np.int64)
-    renumber[perm] = np.arange(perm.size, dtype=np.int64)
-    ginv = renumber[ginv]
+    if not np.array_equal(perm, np.arange(perm.size)):
+        renumber = np.empty(perm.size, dtype=np.int64)
+        renumber[perm] = np.arange(perm.size, dtype=np.int64)
+        for i0 in starts:
+            i1 = min(M, i0 + rows)
+            cls[i0:i1] = _renumber(cls[i0:i1], renumber, coded)
+        del renumber
     rep_flat = np.ascontiguousarray(rep_flat[perm], dtype=np.int64)
     rep_code = rep_code[perm]
-    del renumber, perm, gfirst
-    off = 0
-    for (k, *_), i0 in zip(results, starts):
-        i1 = min(M, i0 + rows)
-        n_b = k[0].shape[0]
-        cls[i0:i1] = _renumber(cls[i0:i1], ginv[off : off + n_b], coded)
-        off += n_b
-    near_flat = np.concatenate([r[2] for r in results])
-    del results, ginv
+    near_flat = census.near_flat()
+    census.release()
+    del perm
     plan = GroundPlan(
         cls=cls,
         rep_flat=rep_flat,
