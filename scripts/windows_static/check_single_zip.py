@@ -18,8 +18,6 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-import pefile
-
 TOP = "momwire-nec5-windows-x64-single"
 PROGRAMS = {"momwire-nec5-razor-2p.exe", "momwire-nec5-bspline.exe"}
 EXPECTED = PROGRAMS | {"README.txt", "THIRD-PARTY-NOTICES.txt"}
@@ -29,6 +27,8 @@ UCRT_PREFIX = "api-ms-win-crt-"
 
 def imported_dlls(exe: Path) -> list[str]:
     """Every DLL `exe` names in its import and delay-import tables, lower case."""
+    import pefile  # only the gate's runner has it; the rules above need no PE
+
     pe = pefile.PE(str(exe), fast_load=True)
     try:
         pe.parse_data_directories(

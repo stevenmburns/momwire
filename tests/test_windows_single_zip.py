@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,6 @@ ASSET = "momwire-nec5-windows-x64-single.zip"
 _spec = importlib.util.spec_from_file_location(
     "check_single_zip", ROOT / "scripts" / "windows_static" / "check_single_zip.py"
 )
-pefile = pytest.importorskip("pefile")
 CZ = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("check_single_zip", CZ)
 _spec.loader.exec_module(CZ)
@@ -97,7 +98,8 @@ def test_reading_the_imports_releases_the_file(monkeypatch, tmp_path):
         def close(self):
             closed.append(True)
 
-    monkeypatch.setattr(CZ.pefile, "PE", FakePE)
+    fake = types.SimpleNamespace(PE=FakePE, DIRECTORY_ENTRY=defaultdict(int))
+    monkeypatch.setitem(sys.modules, "pefile", fake)
     assert CZ.imported_dlls(tmp_path / "a.exe") == ["kernel32.dll"]
     assert closed == [True]
 
