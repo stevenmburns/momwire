@@ -775,6 +775,40 @@ FEATURES: dict[str, Feature] = {
             drift=5e-8,
             offer=False,
         ),
+        # NEC-2's free-end condition on the point-matched sinusoidal basis
+        # (momwire#2033, Steve 2026-11-18): the current runs onto the end cap,
+        # X = J1(ka)/J0(ka) in NEC Part I's Eqs. 23 and 54-64, where the
+        # default takes it to zero. A compatibility option for comparing with
+        # NEC-2 engines, not better physics (momwire#1327 kept no cap as the
+        # default). Off by default, not offered, and never seeded: `drift` is
+        # 1.0, no bound, because it changes the answer on purpose. It moved
+        # Zin by up to 58 % on a fat-wire log-periodic Yagi.
+        #
+        # A deck the NEC-4 junction solves keeps that route's own end cap. A
+        # buried or crossing deck with a free end refuses.
+        Feature(
+            name="nec2_end_cap",
+            reach=1,
+            env="MOMWIRE_X_NEC2_END_CAP",
+            solvers=("sinusoidal",),
+            kind="python",
+            issue=2033,
+            since="2026-11-18",
+            kwarg="nec2_end_cap",
+            paths=(
+                "src/momwire/_nec2_end_cap.py",
+                "tests/test_nec2_end_cap_2033.py",
+            ),
+            label="NEC-2 free-end cap (changes the answer)",
+            summary=(
+                "Uses NEC-2's end condition at free wire ends, so the sinusoidal "
+                "solver can be compared with NEC-2 engines. This deliberately "
+                "changes the answer, most on fat wires, and is not a better "
+                "model of a real wire end."
+            ),
+            drift=1.0,
+            offer=False,
+        ),
     )
 }
 
