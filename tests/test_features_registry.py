@@ -499,6 +499,7 @@ DECK = ROOT / "tests" / "fixtures" / "eznec" / "decks" / "0036_dipole-in-free-sp
     [
         ("MOMWIRE_X_OFFSET_REUSE", "offset_reuse"),
         ("MOMWIRE_X_PAIR_REUSE", "pair_reuse"),
+        ("MOMWIRE_X_NEC2_END_CAP", "nec2_end_cap"),
         ("MOMWIRE_X_NOT_YET_REGISTERED", "not_yet_registered"),
         ("MOMWIRE_RAZOR_CXX", "razor_cxx"),
     ],
