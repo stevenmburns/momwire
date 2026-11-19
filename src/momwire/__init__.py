@@ -106,7 +106,10 @@ from ._surface_height import SURFACE_HEIGHT_CLASS
 
 # `accelerated` is True iff the optional C++ accelerator loaded; consumers can
 # assert it to guard against a silent fall-back to the slow pure-Python path.
+from ._fill_report import refused_report as refused_fill_report
+
 __all__ = [
+    "refused_fill_report",
     "SinusoidalSolver",
     "SinusoidalGalerkinSolver",
     "BSplineSolver",

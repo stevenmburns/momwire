@@ -183,6 +183,8 @@ Results and control:
   by every solver's `feed_placements()` (momwire#1059).
 - `Capabilities` — what a solver class declares it spans.
 - `CancelToken`, `SolveAborted` — cooperative cancellation for a long solve.
+- `refused_fill_report` — the `fill_report()` shape for a deck that
+  `rotational_symmetry=True` refused at construction, from the exception.
 - `LatticeFFTUnavailable` — raised when a lattice deck cannot take the FFT path.
 - `accelerated` — True iff the C++ accelerator loaded. Assert it rather than
   discovering a silent fall-back to pure Python by its runtime.

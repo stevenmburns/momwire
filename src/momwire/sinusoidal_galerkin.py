@@ -361,7 +361,6 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _near_interface
 from . import _medium_spec, _schedule, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
 from . import _wire_loading, _wire_spec
 from . import _buried_quadrature
@@ -4534,10 +4533,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         return True
 
-    # The near-interface levers (momwire#1980): every one explicitly off
-    # here, since this family honours none (`_features.Feature.solvers`).
-    @_near_interface.under_levers
-    def _assemble_Z(self, geom, k, eta=None):
+    def _fill_report_end(self, ledger):
+        """Stage times only (momwire#2016): this family honours no `pair_reuse`
+        and has no sector route, so the report reads neither."""
+        ledger.route = "dense"
+        ledger.reuse = None
+
+    def _assemble_Z_filled(self, geom, k, eta=None):
         """Galerkin system matrix G (basis i tested against source basis j).
 
         G[i, j] = ∫ f_i(s) · ŝ·E_j(s) ds

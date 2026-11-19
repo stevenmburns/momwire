@@ -365,6 +365,7 @@ from ._far_readout import _libm
 from . import (
     _below_interface,
     _feed_snap,
+    _fill_report,
     _ground_refl,
     _ground_spec,
     _lapack,
@@ -1648,6 +1649,7 @@ def _same_stamp(a, b) -> bool:
 
 
 class RazorSolver(
+    _fill_report.FillReport,
     _exact_kernel_seam.ExactKernelOption,
     _ElementCurrents,
     _SweptPortSolutions,
@@ -4416,7 +4418,13 @@ class RazorSolver(
         np.add.at(Z, (rows, cols), vals)
         return Z
 
-    def _assemble_Z_prepare(
+    def _assemble_Z_prepare(self, geom, **kwargs):
+        """`_assemble_Z_prepare_filled`, its seconds part of the fill's time in
+        the fill report (momwire#2016)."""
+        with _fill_report.fill_time(self):
+            return self._assemble_Z_prepare_filled(geom, **kwargs)
+
+    def _assemble_Z_prepare_filled(
         self, geom, *, chop=None, loading=True, restrict=None, extended_kernel=None
     ):
         """K-independent work for the razor-blade fill: stencils and moments.
@@ -4848,6 +4856,73 @@ class RazorSolver(
                 prepared["image"]["src_r"] = geom["seg_p0"] + seg_h[:, None] * seg_t
         return prepared
 
+    def _fill_report_plan(self, ref, stats, built, remainder_unplanned):
+        """The running fill's reuse plan, for the fill report (momwire#2016):
+        held weakly, so the report keeps nothing the process's cache dropped."""
+        ledger = _fill_report.ledger_of(self)
+        if built:
+            ledger.census_s += stats["census_seconds"]
+        ledger.pending = (ref, stats, remainder_unplanned)
+
+    def _fill_report_end(self, ledger, route="dense"):
+        """The last fill's reuse, from the plan it read (momwire#2016)."""
+        ledger.route = route
+        if not self._pair_reuse and self.pair_reuse_declined is None:
+            ledger.reuse = None
+            return
+        if ledger.pending is None or self.pair_reuse_declined is not None:
+            ledger.reuse = _fill_report.declined_entry(self.pair_reuse_declined)
+            ledger.last = None
+            return
+        ref, st, remainder_unplanned = ledger.pending
+        n2 = st["n_seg"] ** 2
+        names = ("direct", "image") if st["has_image"] else ("direct",)
+        families = {
+            name: _fill_report.family(
+                n2,
+                st["dcls_block"][b] - st["dnear_block"][b],
+                st["dnear_block"][b],
+                st["devals_block"][b],
+            )
+            for b, name in enumerate(names)
+        }
+        if st["remainder"]:
+            families["remainder"] = _fill_report.family(
+                st["q_pairs"], st["q_classes"], 0, st["q_rep_evals"]
+            )
+        ledger.reuse = _fill_report.reuse_entry(
+            "partial" if remainder_unplanned else "served",
+            declined=(
+                "the composing ground's remainder is filled directly"
+                if remainder_unplanned
+                else None
+            ),
+            families=families,
+            uncounted=("remainder",) if remainder_unplanned else (),
+            plan_bytes=st["budget_bytes"],
+            census_peak_bytes=st["census_peak_bytes"],
+        )
+        ledger.last = ref
+
+    def _fill_report_wires(self, ledger):
+        """The last plan's wire map, in one C++ pass (momwire#2016)."""
+        ref = ledger.last
+        geom = self._cached_geometry
+        if ref is None or geom is None:
+            return {"unavailable": _fill_report.PLAN_GONE}
+        sizes = np.diff(np.asarray(geom["seg_offsets"], dtype=np.int64))
+        n_wires = int(sizes.size)
+        counts = ref.wire_map(
+            np.repeat(np.arange(n_wires, dtype=np.int32), sizes), n_wires
+        )
+        if counts is None:
+            return {"unavailable": _fill_report.PLAN_GONE}
+        dedup = self._wire_dedup
+        labels = _fill_report.wire_labels(
+            n_wires, None if dedup is None else dedup.kept
+        )
+        return _fill_report.wire_block(labels, counts.sum(axis=0))
+
     def _pair_reuse_refusal(self, prepared, k, restrict):
         """Why fill-pair reuse does not serve this fill, or None
         (momwire#1971). It serves the fill `_source_block_rows` runs on its
@@ -4904,7 +4979,7 @@ class RazorSolver(
         # The composing ground's remainder is planned when every path row is
         # its wing centroid along its wing's signed tangent: the rows the plan
         # gathers are then the rows `field_windows` would project.
-        q = image is not None and "src_l" in image and "obs_pts" in image
+        composing = q = image is not None and "src_l" in image and "obs_pts" in image
         if q:
             s_ab = np.stack([prepared["s_a"], prepared["s_b"]], axis=1).ravel()
             sig = geom["wing_sigma"].ravel()
@@ -4931,6 +5006,9 @@ class RazorSolver(
             float(self.ground_z) if q else 0.0,
         )
         _PAIR_REUSE_STATS[0] = plan.stats()
+        self._fill_report_plan(
+            plan.ref(), _PAIR_REUSE_STATS[0], plan.built, composing and not q
+        )
         if plan.declined is not None:
             # A deck the census cannot code (`Plan::declined`): the fill runs
             # as without reuse, and says why.
@@ -4948,9 +5026,10 @@ class RazorSolver(
         """`_assemble_Z_from_prepared_scoped` under this solver's
         near-interface levers (`_near_interface.under_levers`: momwire#1860,
         #1956, set in one place since #1980)."""
-        return self._assemble_Z_from_prepared_scoped(
-            geom, prepared, k, omega, restrict=restrict
-        )
+        with _fill_report.fill_clock(self):
+            return self._assemble_Z_from_prepared_scoped(
+                geom, prepared, k, omega, restrict=restrict
+            )
 
     def _assemble_Z_from_prepared_scoped(
         self, geom, prepared, k, omega, *, restrict=None
@@ -7485,6 +7564,28 @@ class RazorSolver(
             basis=_RazorBasis(geom=geom, k=self.k),
         )
 
+    def _fill_report_cxx(self, ctx, before):
+        """A solve a C++ route ran whole: its own clocks' share of it and the
+        plan the core read (momwire#2016)."""
+        after = ctx.counters
+        ledger = _fill_report.ledger_of(self)
+        ledger.pending = None
+        _fill_report.add_stage_times(
+            self,
+            after["fill_seconds"] - before["fill_seconds"],
+            after["lu_seconds"] - before["lu_seconds"],
+        )
+        last = ctx.reuse_last
+        if last is not None:
+            ref, stats, built, q = last
+            self._fill_report_plan(
+                ref, stats, built, self.ground_eps is not None and not q
+            )
+        if self._pair_reuse:
+            self.pair_reuse_declined = ctx.reuse_declined_reason or None
+        self._fill_report_end(ledger, route="cxx")
+        ledger.pending = None
+
     def _cxx_front_refusal(self):
         """Why the C++ front half does not take this solve, or None.
 
@@ -7572,6 +7673,7 @@ class RazorSolver(
         if reason is None:
             self._checkpoint()
             ctx = _cxx_context()
+            clocks = ctx.counters
             out = ctx.front_port_solution(
                 self._cxx_kwargs,
                 _CHUNK_ELEMS,
@@ -7585,6 +7687,7 @@ class RazorSolver(
             return None
         _CXX_FRONT_ROUTE["front"] = _CXX_FRONT_ROUTE.get("front", 0) + 1
         _CXX_ROUTE["cxx-front"] = _CXX_ROUTE.get("cxx-front", 0) + 1
+        self._fill_report_cxx(ctx, clocks)
         cols = out["cols"]
         if cols.shape[0] > _CXX_POOL_MAX_BASIS:
             ctx.release()
@@ -7727,6 +7830,7 @@ class RazorSolver(
         cols = self._port_columns(geom)
         self._checkpoint()
         ctx = _cxx_context()
+        clocks = ctx.counters
         X, info, Z = ctx.port_solution(
             t2.obs,
             t2.group_i,
@@ -7756,6 +7860,7 @@ class RazorSolver(
             self._cancel_flag,
             _CXX_WANT_Z,
         )
+        self._fill_report_cxx(ctx, clocks)
         if n_basis > _CXX_POOL_MAX_BASIS:
             ctx.release()
         if Z is not None:

@@ -62,7 +62,7 @@ import numpy as np
 from threadpoolctl import threadpool_limits
 from ._identity_memo import frozen_tuple
 from ._vec3 import norm3
-from . import _kcl_nullspace, _lapack
+from . import _fill_report, _kcl_nullspace, _lapack
 from ._near_interface import _table_threads
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
@@ -1149,9 +1149,11 @@ def harmonic_blocks(solver, Z, sectors, axial, harmonics, row_of=None, plans=Non
     if K0 is not None:
         del lams[0]
         harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of, K0=K0)
+        _fill_report.note_sector_block(solver, K0.shape[0])
         out[0] = _factor(K0, plans, 0)
         del K0
     for h in hs:
+        _fill_report.note_sector_block(solver, m)
         out[h] = _factor(lams.pop(h), plans, h)
     return out
 
@@ -1562,6 +1564,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of)
     plans = kcl_plans(solver, kcl_A, sectors, axial, (0,))
     if plans is not None:
+        _fill_report.note_sector_block(solver, K0.shape[0])
         # `kcl_nullspace` (momwire#1983): K_0 reduced to the null space of
         # harmonic 0's rows, which for an invariant drive are all the rows.
         # The same two guards as `z_inv` below, for the same callers.
@@ -1575,6 +1578,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
             out[sectors[t]] = per_sector
         out[axial] = sol[m:]
         return out
+    _fill_report.note_sector_block(solver, K0.shape[0])
     lu = _lapack.lu_factor_strict(K0, overwrite_a=True)
 
     def z_inv(rhs):
@@ -1609,6 +1613,7 @@ def sector_fill(solver, geom, supp_seg, polys, sectors, axial, n_basis_total):
     and `compute_port_solution`. `row_of` is None for the square
     destination."""
     rows = observer_rows(solver, geom)
+    _fill_report.note_sector_rows(solver, rows.size, geom["n_segs_total"])
     # `_compute_Z_operator` takes `rows=` on both of its fills: the buried one
     # (momwire#1029) and, since momwire#1131, the above-ground one -- so the
     # route serves an elevated or surface screen through the same call.

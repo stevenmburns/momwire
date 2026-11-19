@@ -92,6 +92,7 @@ from . import _exact_kernel
 from . import _exact_kernel_base
 from . import _exact_kernel_seam
 from . import _feed_snap
+from . import _fill_report
 from . import _kcl_nullspace
 from . import _ground_mirror
 from . import _ground_refl
@@ -1134,6 +1135,7 @@ class _ChunkedReuse:
         off = plan.ta != plan.tb
         ta, tb, sa, sb = plan.ta[off], plan.tb[off], plan.sa[off], plan.sb[off]
         n = self.nseg
+        self.kept = None  # the off-edge targets the budget kept: None is all
 
         lo, hi = np.minimum(sa, sb), np.maximum(sa, sb)
         keys, cls_of, copies = np.unique(
@@ -1149,6 +1151,7 @@ class _ChunkedReuse:
             take[rank[np.cumsum(nbytes[rank]) <= budget]] = True
             sel = take[cls_of]
             self.cut_blocks = int(np.count_nonzero(~sel))
+            self.kept = sel
             ta, tb, sa, sb = ta[sel], tb[sel], sa[sel], sb[sel]
         self.copied_blocks = int(ta.size)
 
@@ -1672,6 +1675,7 @@ def _offset_reuse_fill(method):
 
 
 class BSplineSolver(
+    _fill_report.FillReport,
     _exact_kernel_seam.ExactKernelOption,
     _ElementCurrents,
     _SweptPortSolutions,
@@ -2289,6 +2293,8 @@ class BSplineSolver(
         # defers to `pair_reuse` (it is that feature's part, momwire#1982),
         # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
         self._offset_reuse = bound["offset_reuse"]
+        # Whether the fill report has reuse to speak of (momwire#2016).
+        self._fill_reuse_asked = bool(bound["pair_reuse"] or bound["offset_reuse"])
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -5540,6 +5546,106 @@ class BSplineSolver(
                 out.append(slice(base + ed_off[i_e], base + ed_off[i_e + 1]))
         return out
 
+    def _fill_report_begin(self):
+        return self.__dict__.get("_fill_served")
+
+    def _fill_report_end(self, ledger):
+        """What the fill that just ended served of `pair_reuse` (momwire#2016).
+
+        A fill that served reuse wrote a new `_fill_served`; one that did not
+        leaves the last one standing, which must not read as this fill's."""
+        ledger.route = (
+            "sector"
+            if self._rotational_map is not None
+            else self._fill_report_route_name
+        )
+        if not self._fill_reuse_asked:
+            ledger.reuse = None
+            return
+        detail = self.__dict__.get("_fill_served")
+        reused = 0
+        if detail is not None and detail is not ledger.mark:
+            served = detail["served"]
+            reused = (
+                served["copied_pairs"]
+                + served["offset_pairs"]
+                - served["offset_distinct"]
+            )
+        if reused <= 0:
+            ledger.reuse = _fill_report.declined_entry(self.pair_reuse_declined)
+            ledger.last = None
+            return
+        pairs = served["pairs"]
+        computed = pairs - reused
+        left_out = []
+        if served["cut_blocks"]:
+            left_out.append(
+                f"{served['cut_blocks']} block(s) did not fit the fill's memory budget"
+            )
+        if len(self.pair_reuse_dropped):
+            left_out.append(
+                f"{len(self.pair_reuse_dropped)} claimed pair(s) do not repeat here"
+            )
+        if self.pair_reuse_remainder_cut:
+            left_out.append(
+                f"{self.pair_reuse_remainder_cut} block(s) left the remainder's copy map"
+            )
+        uncounted = []
+        if self.ground_z is not None:
+            uncounted.append("image")
+            if self.ground_eps is not None:
+                uncounted.append("remainder")
+        plan = detail["plan"]() if detail["plan"] is not None else None
+        ledger.reuse = _fill_report.reuse_entry(
+            "partial" if left_out else "served",
+            declined="; ".join(left_out) or None,
+            families={"direct": _fill_report.family(pairs, computed, 0, computed)},
+            uncounted=uncounted,
+            plan_bytes=(
+                0
+                if plan is None
+                else sum(a.nbytes for a in (plan.ta, plan.tb, plan.sa, plan.sb))
+            ),
+        )
+        ledger.last = detail
+
+    def _fill_report_wires(self, ledger):
+        """The last fill's copied blocks and offset edges, per wire pair, from
+        the plan the solver still holds (momwire#2016)."""
+        detail = ledger.last
+        if detail is None:
+            return {"unavailable": _fill_report.PLAN_GONE}
+        geom = self._build_geometry()
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        sizes = np.diff(seg_off)
+        n_wires = int(sizes.size)
+        reused = np.zeros((n_wires, n_wires), dtype=np.int64)
+        if detail["plan"] is not None:
+            plan = detail["plan"]()
+            if plan is None:
+                return {"unavailable": _fill_report.PLAN_GONE}
+            slices = self._same_edge_slices(geom)
+            starts = np.fromiter((sl.start for sl in slices), dtype=np.int64)
+            n_e = np.fromiter((sl.stop - sl.start for sl in slices), dtype=np.int64)
+            edge_wire = np.searchsorted(seg_off, starts, side="right") - 1
+            ta, tb = plan.ta, plan.tb
+            if detail["off_edge"]:
+                off = ta != tb
+                ta, tb = ta[off], tb[off]
+            if detail["kept"] is not None:
+                ta, tb = ta[detail["kept"]], tb[detail["kept"]]
+            np.add.at(reused, (edge_wire[ta], edge_wire[tb]), n_e[ta] * n_e[tb])
+        for start, n, shared in detail["offset"]:
+            w = int(np.searchsorted(seg_off, start, side="right") - 1)
+            reused[w, w] += n * n - (0 if shared else 2 * n - 1)
+        pairs = np.outer(sizes, sizes)
+        counts = np.stack([pairs - reused, reused, np.zeros_like(reused)], axis=2)
+        dedup = self._wire_dedup
+        labels = _fill_report.wire_labels(
+            n_wires, None if dedup is None else dedup.kept
+        )
+        return _fill_report.wire_block(labels, counts)
+
     def _pair_reuse_worth(self, geom):
         """Whether the `pair_reuse` hint can save more than checking it costs:
         the copied segment pairs per member, estimated from an evenly spaced
@@ -5633,6 +5739,13 @@ class BSplineSolver(
             and self._pair_reuse_plan_cache[0] is geom
         ):
             return self._pair_reuse_plan_cache[1]
+        return _fill_report.timed_census(
+            self, lambda: self._pair_reuse_plan_checked(geom)
+        )()
+
+    def _pair_reuse_plan_checked(self, geom):
+        """`_pair_reuse_plan` past its cache: the check of every member, this
+        hint's census (momwire#2016)."""
         if not self._pair_reuse_worth(geom):
             self.pair_reuse_declined = "too few pairs per member to repay the check"
             self._pair_reuse_plan_cache = (geom, {})
@@ -6308,6 +6421,13 @@ class BSplineSolver(
                 "offset_pairs": 0,
                 "offset_distinct": 0,
             }
+            self._fill_served = {
+                "served": self.pair_reuse_served,
+                "plan": _fill_report.plan_ref(plan),
+                "kept": None,
+                "off_edge": False,
+                "offset": [],
+            }
 
         # Overwrite each same-edge block with analytic static + reg
         if same_edge_prep is None:
@@ -6950,6 +7070,7 @@ class BSplineSolver(
             checkpoint=self._checkpoint,
             keep=None if restrict is None else (lambda e: restrict.covers(e[0])),
         )
+        offset_log = []
         if offset:
             global FREE_OFFSET_EDGES
             arcs = {
@@ -6974,10 +7095,25 @@ class BSplineSolver(
             for sl in offset.values():
                 self._checkpoint()
                 src = table_of.get(sl.start, sl.start)
+                offset_log.append((sl.start, sl.stop - sl.start, src != sl.start))
                 served["tables_shared"] += int(src != sl.start)
                 self._free_offset_block(Z, sl, _table(src), supp_c, polys_c, tan_c)
                 served["offset_pairs"] += (sl.stop - sl.start) ** 2
             FREE_OFFSET_EDGES += len(offset)
+        if restrict is None and (reuse or offset_log):
+            # What the fill report reads (momwire#2016): an offset edge is
+            # served even with no hint, which `pair_reuse_served` does not say.
+            self._fill_served = {
+                "served": served,
+                "plan": (
+                    _fill_report.plan_ref(self._pair_reuse_plan(geom))
+                    if reuse
+                    else None
+                ),
+                "kept": reuse.kept if reuse else None,
+                "off_edge": True,
+                "offset": offset_log,
+            }
         if restrict is None and (reuse or served["tables_shared"]):
             if not reuse:
                 served["computed_pairs"] = served["pairs"] - served["offset_pairs"]
@@ -9745,6 +9881,20 @@ class BSplineSolver(
     def _compute_Z_operator(
         self, geom, supp_seg, polys, same_edge_prep=None, rows=None, compact=False
     ):
+        """`_compute_Z_operator_filled` on the fill report's clock."""
+        with _fill_report.fill_clock(self):
+            return self._compute_Z_operator_filled(
+                geom,
+                supp_seg,
+                polys,
+                same_edge_prep=same_edge_prep,
+                rows=rows,
+                compact=compact,
+            )
+
+    def _compute_Z_operator_filled(
+        self, geom, supp_seg, polys, same_edge_prep=None, rows=None, compact=False
+    ):
         """Loaded (free-space or grounded) dense Z for one k — the operator
         construction shared by `compute_impedance` and `compute_y_matrix`.
 
@@ -11224,7 +11374,24 @@ class BSplineSolver(
         )
 
     @_offset_reuse_fill
-    def _swept_batched_z_chunks(
+    def _swept_batched_z_chunks(self, k_array, *args, **kwargs):
+        """`_swept_batched_z_chunks_filled`, each chunk on the fill report's
+        clock: one fill that covers the chunk's frequencies."""
+        chunks = self._swept_batched_z_chunks_filled(k_array, *args, **kwargs)
+        try:
+            while True:
+                with _fill_report.fill_clock(self) as clock:
+                    try:
+                        item = next(chunks)
+                    except StopIteration:
+                        clock.cancelled = True
+                        return
+                    clock.frequencies = int(item[1].shape[0])
+                yield item
+        finally:
+            chunks.close()
+
+    def _swept_batched_z_chunks_filled(
         self, k_array, geom, supp_seg, polys, n_extra_columns=0
     ):
         """Yield (c0, ks, Z) stacks of the batched swept assembly, where

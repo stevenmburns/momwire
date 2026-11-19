@@ -193,6 +193,7 @@ py::dict counters(const mw::razor::SolveContext &ctx) {
 
 struct ReusePlanHandle {
     std::shared_ptr<const mw::razor::reuse::Plan> plan;
+    bool built = false;  // this call's census built the plan (momwire#2016)
     darr cent, b_obs, seg_h, a, p0[2], t[2], a_ek[2];
     iarr group_i, group_j[2];
     bool has_image = false, remainder = false;
@@ -243,13 +244,38 @@ ReusePlanHandle reuse_plan(darr cent, iarr group_i, darr b_obs, darr seg_h, darr
     const mw::razor::reuse::Geometry g = h.geometry();
     {
         py::gil_scoped_release release;
-        h.plan = mw::razor::reuse::plan_for(g);
+        h.plan = mw::razor::reuse::plan_for(g, &h.built);
     }
     return h;
 }
 
-py::dict reuse_stats(const ReusePlanHandle &h) {
-    const auto &p = *h.plan;
+// A plan as the fill report holds it (momwire#2016): weakly, so that a report
+// never keeps a plan alive past the process's cache.
+struct ReusePlanRef {
+    std::weak_ptr<const mw::razor::reuse::Plan> plan;
+};
+
+// The wire map of a plan still held, or None when the cache has dropped it.
+py::object reuse_wire_map(const ReusePlanRef &r, py::array_t<int32_t, py::array::c_style | py::array::forcecast> wire_of_seg,
+                          int64_t n_wires) {
+    const std::shared_ptr<const mw::razor::reuse::Plan> p = r.plan.lock();
+    if (!p) return py::none();
+    if (wire_of_seg.size() != p->n_seg) throw std::invalid_argument("razor pair_reuse: one wire per segment");
+    if (n_wires < 1) throw std::invalid_argument("razor pair_reuse: n_wires must be positive");
+    const int32_t *w = wire_of_seg.data();
+    for (int64_t s = 0; s < p->n_seg; s++)
+        if (w[s] < 0 || w[s] >= n_wires) throw std::invalid_argument("razor pair_reuse: wire out of range");
+    py::array_t<int64_t> out({static_cast<py::ssize_t>(3), static_cast<py::ssize_t>(n_wires),
+                              static_cast<py::ssize_t>(n_wires), static_cast<py::ssize_t>(3)});
+    int64_t *o = out.mutable_data();
+    {
+        py::gil_scoped_release release;
+        mw::razor::reuse::wire_map(*p, w, n_wires, o);
+    }
+    return out;
+}
+
+py::dict plan_stats(const mw::razor::reuse::Plan &p) {
     py::dict d;
     d["n_seg"] = p.n_seg;
     d["pairs"] = p.pairs;
@@ -266,8 +292,15 @@ py::dict reuse_stats(const ReusePlanHandle &h) {
     d["budget_bytes"] = p.budget_bytes;
     d["census_peak_bytes"] = p.census_peak_bytes;
     d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
+    d["has_image"] = p.has_image;
+    d["remainder"] = p.remainder;
+    d["dcls_block"] = py::make_tuple(p.dcls_block[0], p.dcls_block[1]);
+    d["dnear_block"] = py::make_tuple(p.dnear_block[0], p.dnear_block[1]);
+    d["devals_block"] = py::make_tuple(p.devals_block[0], p.devals_block[1]);
     return d;
 }
+
+py::dict reuse_stats(const ReusePlanHandle &h) { return plan_stats(*h.plan); }
 
 std::shared_ptr<ReuseValues> reuse_values(const ReusePlanHandle &h, double k, darr xg, darr wg,
                                           uintptr_t cancel_flag) {
@@ -1697,6 +1730,15 @@ void register_razor_solve(py::module_ &m) {
         .def("release", &mw::razor::SolveContext::release,
              "Free Z and the window pool; the counters are kept.")
         .def_property_readonly("counters", &counters)
+        .def_property_readonly("reuse_last",
+             [](const mw::razor::SolveContext &c) -> py::object {
+                 const auto p = c.last_plan().lock();
+                 if (!p) return py::none();
+                 return py::make_tuple(ReusePlanRef{p}, plan_stats(*p), c.last_plan_built(),
+                                       c.last_plan_q());
+             },
+             "The last fill's reuse plan as (RazorReusePlanRef, stats, built, remainder "
+             "planned), or None when that fill read none (momwire#2016).")
         .def_property_readonly("reuse_declined_reason",
                                &mw::razor::SolveContext::reuse_declined_reason,
                                "Why the last fill asked for pair reuse and did not take it, or ''.")
@@ -1738,12 +1780,23 @@ void register_razor_solve(py::module_ &m) {
     py::class_<ReuseValues, std::shared_ptr<ReuseValues>>(m, "RazorReuseValues",
         "One wavenumber's class values of a razor reuse plan.")
         .def_readonly("k", &ReuseValues::k);
+    py::class_<ReusePlanRef>(m, "RazorReusePlanRef",
+        "A reuse plan held weakly for the fill report (momwire#2016).")
+        .def_property_readonly("alive", [](const ReusePlanRef &r) { return !r.plan.expired(); },
+             "Whether the process's cache (or a fill) still holds the plan.")
+        .def("wire_map", &reuse_wire_map, py::arg("wire_of_seg"), py::arg("n_wires"),
+             "The (3, W, W, 3) int64 map of family x observer wire x source wire x (computed, "
+             "reused, near), or None when the plan is gone (`reuse::wire_map`).");
     py::class_<ReusePlanHandle>(m, "RazorReusePlan",
         "razor-2p's fill-pair reuse plan (momwire#1971): the classes of the "
         "(centroid observer, source segment) pairs of the direct and image "
         "blocks, and of the composing ground's remainder, from the process's "
         "cache.")
         .def("stats", &reuse_stats)
+        .def_readonly("built", &ReusePlanHandle::built,
+             "Whether this call's census built the plan (False: found in the cache).")
+        .def("ref", [](const ReusePlanHandle &h) { return ReusePlanRef{h.plan}; },
+             "The plan, held weakly (the fill report's).")
         .def_property_readonly("declined", [](const ReusePlanHandle &h) -> py::object {
             if (h.plan->declined.empty()) return py::none();
             return py::str(h.plan->declined);

@@ -265,6 +265,14 @@ struct Plan {
     // The census, for tests and benchmarks.
     int64_t pairs = 0, near_pairs = 0, q_pairs = 0;
     int64_t rep_evals = 0, q_rep_evals = 0;  // pairs the representatives' calls evaluate
+    // The fill report's split of the direct census (momwire#2016), by the
+    // block (0 direct, 1 image) of each class's representative: its classes,
+    // those that are one near pair, and the pairs its calls evaluate.
+    int64_t dcls_block[2] = {0, 0}, dnear_block[2] = {0, 0}, devals_block[2] = {0, 0};
+    // One bit per direct class, set for a near pair's own class. Outside
+    // `nbytes()` and so outside the budget, which it must not move: 1/8 B per
+    // class beside the 41 B the budget counts.
+    std::vector<uint64_t> dnear_bits;
     double census_seconds = 0.0;
     // What the budget counted: nbytes() plus one wavenumber's class values.
     int64_t budget_bytes = 0;
@@ -286,7 +294,8 @@ struct Values {
 // A deck the census cannot code comes back DECLINED (`Plan::declined` says
 // why) rather than throwing: the reuse is an optimisation, and a fill it
 // cannot serve runs as without it.
-std::shared_ptr<const Plan> plan_for(const Geometry &g);
+// `built`, when given, says whether this call ran the census.
+std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built = nullptr);
 // Segments past which a plan declines: an observer-by-source offset of the
 // largest deck must fit the int32 the groups store.
 constexpr int64_t MAX_SEGS = 46340;
@@ -353,6 +362,13 @@ void gather_direct(const Plan &p, int block, const int64_t *need, ptrdiff_t n_ne
 // The remainder rows: row r is segment seg[r]'s, times sign[r], (m, n_seg, 2).
 void gather_remainder(const Plan &p, const int64_t *seg, const double *sign, ptrdiff_t m,
                       view<const double, 1> seg_h, const Values &v, cd *out);
+
+// The fill report's wire map (momwire#2016, `_razor_fill_map_core.cpp`): for
+// family f (0 direct, 1 image, 2 remainder), observer wire i and source wire
+// j, out[((f * W + i) * W + j) * 3 + c] counts that block's pairs computed
+// (c = 0, the first pair of a far class), reused (1) and near (2). One pass
+// over the class maps, with one bit per class of scratch.
+void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out);
 
 // `verify`: the largest per-pair error of `got` against `ref` (two moment
 // planes, n rows by n_seg, the second divided by h), relative to the pair's

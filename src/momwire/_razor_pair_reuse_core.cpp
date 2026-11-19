@@ -127,6 +127,7 @@ struct Rep {
     uint8_t block = 0;
     int32_t obs = 0, src = 0;
     uint8_t code = 0;
+    uint8_t single = 0;  // a pair the key left unshared: a near pair
 };
 
 // What a class costs the plan, past the maps: its per-k values (M0, M1 or
@@ -324,7 +325,7 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
                     if (sbuf[static_cast<size_t>(i)]) {
                         local = static_cast<int32_t>(rp.size());
                         rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                         static_cast<int32_t>(s), 0});
+                                         static_cast<int32_t>(s), 0, 1});
                         n_single[static_cast<size_t>(t)]++;
                     } else {
                         bool added = false;
@@ -332,7 +333,7 @@ int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_
                                                 static_cast<int32_t>(rp.size()), added);
                         if (added)
                             rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                             static_cast<int32_t>(s), code});
+                                             static_cast<int32_t>(s), code, 0});
                     }
                     if (static_cast<uint32_t>(local) >= local_max ||
                         (limit > 0 && static_cast<int64_t>(local) >= limit)) {
@@ -412,6 +413,8 @@ std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const std::stri
     std::vector<Group>().swap(plan->qgroups);
     plan->n_dcls = plan->n_qcls = 0;
     plan->pairs = plan->near_pairs = plan->q_pairs = plan->rep_evals = plan->q_rep_evals = 0;
+    for (int b = 0; b < 2; b++) plan->dcls_block[b] = plan->dnear_block[b] = plan->devals_block[b] = 0;
+    std::vector<uint64_t>().swap(plan->dnear_bits);
     plan->budget_bytes = 0;
     return plan;
 }
@@ -419,6 +422,15 @@ std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const std::stri
 std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     const auto t0 = std::chrono::steady_clock::now();
     auto plan = std::make_shared<Plan>();
+    // On every way out, a declined census's seconds included (momwire#2016).
+    struct Stamp {
+        Plan &p;
+        std::chrono::steady_clock::time_point t0;
+        ~Stamp() {
+            p.census_seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+    } stamp{*plan, t0};
     const int64_t n_seg = g.seg_h.shape(0);
     plan->n_seg = n_seg;
     plan->has_image = g.has_image;
@@ -510,6 +522,17 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     plan->drep_flip.resize(reps.size());
     for (size_t c = 0; c < reps.size(); c++) plan->drep_flip[c] = reps[c].code;
     build_groups(reps, n_seg, n_blocks, plan->dgroups, plan->rep_evals);
+    // The fill report's split (momwire#2016): integers read off the census.
+    plan->dnear_bits.assign((reps.size() + 63) / 64, 0);
+    for (size_t c = 0; c < reps.size(); c++) {
+        plan->dcls_block[reps[c].block]++;
+        if (reps[c].single) {
+            plan->dnear_block[reps[c].block]++;
+            plan->dnear_bits[c / 64] |= uint64_t(1) << (c % 64);
+        }
+    }
+    for (const Group &G : plan->dgroups)
+        plan->devals_block[G.block] += static_cast<int64_t>(G.obs.size() * G.src.size());
 
     if (g.remainder) {
         const double gz = g.ground_z;
@@ -578,8 +601,6 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
     // The exact count, the groups' observer and source lists included.
     plan->budget_bytes = static_cast<int64_t>(plan->nbytes()) + 32 * (plan->n_dcls + plan->n_qcls);
     if (plan->budget_bytes > budget) return decline(plan, budget_reason());
-    plan->census_seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return plan;
 }
 
@@ -654,7 +675,8 @@ size_t Plan::nbytes() const {
     return b;
 }
 
-std::shared_ptr<const Plan> plan_for(const Geometry &g) {
+std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built) {
+    if (built) *built = false;
     check_geometry(g);
     std::string fp = fingerprint_of(g);
     {
@@ -669,6 +691,7 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g) {
             }
     }
     std::shared_ptr<const Plan> p = build(g, std::move(fp));
+    if (built) *built = true;
     std::lock_guard<std::mutex> lock(g_cache_mtx);
     g_counters.built++;
     if (!p->declined.empty()) g_counters.declined++;

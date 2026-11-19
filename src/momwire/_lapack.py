@@ -330,6 +330,14 @@ def factor_seconds() -> float:
     return getattr(_factor_clock, "total", 0.0)
 
 
+def set_factor_sink(sink) -> None:
+    """Add this thread's later LU seconds to ``sink.factor_s`` as well: the
+    fill report's factor time (momwire#2016), which belongs to the solver
+    that filled last on this thread. A running total alone cannot say which
+    solver a stretch of it was, and is not readable from another thread."""
+    _factor_clock.sink = sink
+
+
 def _factor_stage(fn):
     """``fn`` in MOMWIRE_TIMES's ``factor`` stage (:mod:`momwire._times`; a
     no-op when nothing is timed), and in this thread's `factor_seconds`. Its
@@ -349,8 +357,12 @@ def _factor_stage(fn):
             with _times.stage("factor"):
                 return fn(*args, **kwargs)
         finally:
-            _factor_clock.total = factor_seconds() + (time.perf_counter() - t0)
+            elapsed = time.perf_counter() - t0
+            _factor_clock.total = factor_seconds() + elapsed
             _factor_clock.depth = 0
+            sink = getattr(_factor_clock, "sink", None)
+            if sink is not None:
+                sink.factor_s += elapsed
 
     return timed
 

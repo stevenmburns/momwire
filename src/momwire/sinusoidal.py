@@ -50,6 +50,7 @@ from . import (
     _below_interface,
     _crossing_fill,
     _features,
+    _fill_report,
     _feed_snap,
     _field_ground,
     _ground_mirror,
@@ -1099,7 +1100,9 @@ def advise_radius_step(family, junctions, radius_per_wire, served=None):
         )
 
 
-class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
+class SinusoidalSolver(
+    _fill_report.FillReport, _ElementCurrents, _SweptPortSolutions, _Cancelable
+):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
 
@@ -1728,6 +1731,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         was filled through, and the wavenumber that view is read at (a
         wholly-buried solve's k_m, as on the dense path)."""
         with self._operating_medium(geom) as medium:
+            _fill_report.note_sector_rows(self, rows.size, geom["n_segs"])
             G, seg_view = self._assemble_Z(
                 geom, self.k, self._medium_eta(medium), obs_rows=rows
             )
@@ -6577,6 +6581,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # here, since this family honours none (`_features.Feature.solvers`).
     @_near_interface.under_levers
     def _assemble_Z(self, geom, k, eta=None, obs_rows=None):
+        """`_assemble_Z_filled` on the fill report's clock (momwire#2016)."""
+        with _fill_report.fill_clock(self):
+            if obs_rows is None:
+                return self._assemble_Z_filled(geom, k, eta)
+            return self._assemble_Z_filled(geom, k, eta, obs_rows=obs_rows)
+
+    def _assemble_Z_filled(self, geom, k, eta=None, obs_rows=None):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
 
         `obs_rows` (momwire#1912, the sector route): a sorted index array of
@@ -7101,7 +7112,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             budget=budget,
                         )
 
-                plan = _pr.shared_plan((*key, census_rows), build)
+                plan = _pr.shared_plan(
+                    (*key, census_rows), _fill_report.timed_census(self, build)
+                )
                 self._sin_reuse_plans[block] = (key, plan)
             if plan is _pr.OVER_BUDGET:
                 return plan, src_c, src_t
@@ -7275,7 +7288,74 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         serve.reduce_into = reduce_into
         serve.ground_block = ground_block
+        _fill_report.ledger_of(self).pending = (
+            {block: entry[0] for block, entry in blocks.items()},
+            obs_rows,
+        )
         return serve
+
+    def _fill_report_end(self, ledger):
+        """What the fill that just ended served of `pair_reuse`
+        (momwire#2016): the plans `_sin_pair_reuse_route` handed it, or the
+        reason it declined."""
+        ledger.route = "sector" if self._rotational_map is not None else "dense"
+        if not self._pair_reuse_on:
+            ledger.reuse = None
+            return
+        if ledger.pending is None or self.pair_reuse_declined is not None:
+            ledger.reuse = _fill_report.declined_entry(self.pair_reuse_declined)
+            ledger.last = None
+            return
+        from . import _sin_pair_reuse as _pr
+
+        plans, obs_rows = ledger.pending
+        families = {}
+        for block, plan in plans.items():
+            # Every near pair shares one sentinel class, which holds no value.
+            far = plan.n_classes - (1 if plan.n_near else 0)
+            families[block] = _fill_report.family(
+                plan.n_pairs, far, plan.n_near, _pr.kernel_evals(plan)
+            )
+        ledger.reuse = _fill_report.reuse_entry(
+            "served",
+            families=families,
+            plan_bytes=sum(_pr.fill_nbytes(p) for p in plans.values()),
+            census_peak_bytes=max((p.census_peak_bytes or 0) for p in plans.values()),
+        )
+        ledger.last = (
+            {block: _fill_report.plan_ref(p) for block, p in plans.items()},
+            obs_rows,
+        )
+
+    def _fill_report_wires(self, ledger):
+        """The last fill's plans, per wire pair, in one C++ pass each and only
+        when read (momwire#2016)."""
+        if ledger.last is None or _acc is None:
+            return {"unavailable": _fill_report.PLAN_GONE}
+        refs, obs_rows = ledger.last
+        plans = [ref() for ref in refs.values()]
+        if any(plan is None for plan in plans):
+            return {"unavailable": _fill_report.PLAN_GONE}
+        sizes = np.diff(self._seg_offsets(self._build_geometry()))
+        n_wires = int(sizes.size)
+        wire_of = np.repeat(np.arange(n_wires, dtype=np.int32), sizes)
+        wire_of_row = wire_of if obs_rows is None else wire_of[obs_rows]
+        counts = np.zeros((n_wires, n_wires, 3), dtype=np.int64)
+        for plan in plans:
+            counts += _acc.fill_report_wire_map(
+                plan.cls,
+                plan.code_bits,
+                plan.near_flat,
+                wire_of_row,
+                wire_of,
+                plan.n_classes,
+                n_wires,
+            )
+        dedup = getattr(self, "_wire_dedup", None)
+        labels = _fill_report.wire_labels(
+            n_wires, None if dedup is None else dedup.kept
+        )
+        return _fill_report.wire_block(labels, counts)
 
     def _nec4_cap_columns(self, G, geom, k, seg_view, fg, eta):
         """Add each free end's cap-charge field to its basis column, in
