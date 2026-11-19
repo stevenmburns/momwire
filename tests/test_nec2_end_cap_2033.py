@@ -146,7 +146,17 @@ def test_on_matches_capped_nec2c(name, cap_calls, monkeypatch):
 
 
 @pytest.mark.parametrize("name", sorted(DECKS))
-def test_off_matches_uncapped_nec2c(name, cap_calls):
+def test_the_launchers_default_matches_capped_nec2c(name, cap_calls):
+    """Unset, the NEC-2 launcher's sinusoidal route takes the cap (Steve,
+    2026-11-19)."""
+    z = _impedance(DECKS[name])
+    assert abs(z - CAPPED[name]) / abs(CAPPED[name]) < PRINTED
+    assert cap_calls, "the capped basis never ran"
+
+
+@pytest.mark.parametrize("name", sorted(DECKS))
+def test_off_matches_uncapped_nec2c(name, cap_calls, monkeypatch):
+    monkeypatch.setenv(ENV, "0")
     z = _impedance(DECKS[name])
     assert abs(z - UNCAPPED[name]) / abs(UNCAPPED[name]) < PRINTED
     assert not cap_calls, "the capped basis ran with the option off"
@@ -255,3 +265,129 @@ def test_a_wavenumber_nec2_never_defines_refuses(complex_k):
     k = s.k * (1.0 - 0.1j) if complex_k else np.full(geom["n_segs"], s.k)
     with pytest.raises(ValueError, match="nec2_end_cap"):
         s._basis_coefs(geom, k)
+
+
+# -- the NEC-2 launcher's default (Steve, 2026-11-19) -------------------------
+#
+# `momwire-nec2c-sinusoidal` takes the cap when MOMWIRE_X_NEC2_END_CAP is
+# unset; `=0` is the no-cap answer and `=1` the refusing one. A deck the cap
+# cannot act on runs without it by default, and says so in the printout.
+
+# Wall-clock lines: the only ones two runs of one deck may print differently.
+_CLOCK = re.compile(r"FILL: \d+ msec|Compute Time|TIME|msec")
+
+
+def _printout(deck, prog="momwire-nec2c-sinusoidal"):
+    """`main`'s printout, in an engine scope: `main` leaves its basis
+    selected for the process, and a later test's `render_deck` would answer
+    under it."""
+    out = io.StringIO()
+    with _portal.engine_scope():
+        rc = _portal.main(
+            [], stdin=io.StringIO(deck), stdout=out, stderr=io.StringIO(), prog=prog
+        )
+    assert rc == 0
+    return [s for s in out.getvalue().splitlines() if not _CLOCK.search(s)]
+
+
+def _run(monkeypatch, value, deck, prog="momwire-nec2c-sinusoidal"):
+    if value is None:
+        monkeypatch.delenv(ENV, raising=False)
+    else:
+        monkeypatch.setenv(ENV, value)
+    return _printout(deck, prog)
+
+
+def _notices(lines):
+    return [s for s in lines if s.startswith("NEC-2 END CAP")]
+
+
+def test_the_default_is_the_explicit_cap_and_not_the_off_answer(monkeypatch):
+    """Adversarial: unset prints what `=1` prints, line for line (wall-clock
+    lines aside), and NOT what `=0` prints, on a deck whose ends are free."""
+    deck = DECKS["fat_dipole"]
+    default = _run(monkeypatch, None, deck)
+    on = _run(monkeypatch, "1", deck)
+    off = _run(monkeypatch, "0", deck)
+    assert default == on
+    assert default != off
+    monkeypatch.delenv(ENV)
+    z_default = _impedance(deck)
+    monkeypatch.setenv(ENV, "1")
+    assert _impedance(deck) == z_default
+    monkeypatch.setenv(ENV, "0")
+    z_off = _impedance(deck)
+    assert abs(z_off - z_default) / abs(z_default) > 1e-3
+    assert not _notices(default) and not _notices(off)
+
+
+@pytest.mark.parametrize(
+    "prog",
+    [
+        "momwire-nec2c",
+        "momwire-nec2c-sinusoidal-galerkin",
+        "momwire-nec2c-bspline-d1",
+        "momwire-nec2c-pulse",
+    ],
+)
+def test_no_other_basis_takes_the_default(prog, monkeypatch, cap_calls):
+    deck = DECKS["fat_dipole"]
+    assert _run(monkeypatch, None, deck, prog) == _run(monkeypatch, "0", deck, prog)
+    assert not cap_calls
+
+
+def test_the_python_api_and_registry_defaults_stay_off(monkeypatch):
+    monkeypatch.delenv(ENV, raising=False)
+    assert _features.FEATURES["nec2_end_cap"].default is False
+    assert _dipole()._nec2_end_cap is False
+    with _nec2_end_cap.launcher_default():
+        assert _dipole()._nec2_end_cap is True
+        assert _dipole(nec2_end_cap=False)._nec2_end_cap is False
+        monkeypatch.setenv(ENV, "0")
+        assert _dipole()._nec2_end_cap is False
+    monkeypatch.delenv(ENV)
+    assert _dipole()._nec2_end_cap is False
+
+
+# A wholly buried horizontal dipole under Sommerfeld soil: free ends below
+# the interface, which NEC-2 has no condition for.
+BURIED = (
+    "CM buried free-end deck\nCE\n"
+    "GW 1 15 -0.7 0 -0.5 0.7 0 -0.5 0.01\n"
+    "GE -1\nGN 2 0 0 0 13 0.005\n"
+    "EX 0 1 8 0 1 0\nFR 0 1 0 0 100 0\nXQ\nEN\n"
+)
+
+
+def _refused_decks():
+    """(name, deck, junction rule) for the decks the cap refuses."""
+    return [
+        ("buried", BURIED, None, _nec2_end_cap.BELOW_INTERFACE_REFUSAL),
+        ("nec4_tee", DECKS["tee"], "nec42", _nec2_end_cap.NEC4_JUNCTION_REFUSAL),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,deck,rule,refusal", _refused_decks(), ids=lambda v: str(v)[:8]
+)
+def test_a_deck_the_cap_refuses_falls_back_by_default(
+    name, deck, rule, refusal, monkeypatch, cap_calls
+):
+    """Unset: the `=0` printout plus one notice line (and its blank) above
+    MATRIX TIMING. `=1`: today's refusal, as a NEC ERROR."""
+    if rule is None:
+        monkeypatch.delenv("MOMWIRE_JUNCTION_RULE", raising=False)
+    else:
+        monkeypatch.setenv("MOMWIRE_JUNCTION_RULE", rule)
+    default = _run(monkeypatch, None, deck)
+    off = _run(monkeypatch, "0", deck)
+    assert not cap_calls, "the capped basis was built on a deck it cannot act on"
+    notice = _nec2_end_cap.withdrawn_notice(refusal)
+    assert _notices(default) == [notice]
+    at = default.index(notice)
+    assert default[at + 1] == ""
+    assert default[:at] + default[at + 2 :] == off
+    assert not _notices(off)
+    on = "\n".join(_run(monkeypatch, "1", deck))
+    assert f"ERROR: {refusal}" in on
+    assert "NEC-2 END CAP" not in on
