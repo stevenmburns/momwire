@@ -177,7 +177,7 @@ from typing import Callable
 import momwire_serve_client as _mech
 import numpy as np
 
-from ... import _features
+from ... import _features, _nec2_end_cap
 from ..._constants import C_LIGHT as _C_LIGHT
 from ...deck import (
     BASES,
@@ -4014,6 +4014,15 @@ def _render_run_block(
         # shows two (fixtures dipole_mp_multiprocessor / dipole_free_space).
         if group.mp is not None and group.mp.parallel:
             out += [group.mp.line(), ""]
+        # The launcher's default end cap, withdrawn from a deck it cannot act
+        # on (`_nec2_end_cap.launcher_default`): said at column 0 where the MP
+        # advisory sits, one blank of its own, and only then -- a deck the cap
+        # served, or one run with MOMWIRE_X_NEC2_END_CAP set, prints as before.
+        # Not stderr, which NEC2Daemon never drains (see `render_deck`); and
+        # not the banner, which is the process's, where this is the deck's.
+        withdrawn = getattr(result.solver, "nec2_end_cap_withdrawn", None)
+        if withdrawn is not None:
+            out += [_nec2_end_cap.withdrawn_notice(withdrawn), ""]
         out += ["", ""]
         out += [
             _MATRIX_TIMING_HEADER,
@@ -4095,7 +4104,25 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
     The caller also appends the ``NX`` echo — the sentinel must be emitted
     whether the run succeeded or failed, or SimNEC blocks in ``readLine()``
     forever (grammar doc §2 and §10.1).
+
+    On the sinusoidal basis this launcher takes NEC-2's free-end cap by
+    default (``nec2_end_cap``, Steve 2026-11-19): it exists to answer like
+    NEC-2. ``MOMWIRE_X_NEC2_END_CAP`` still decides when it is set, ``0`` for
+    the no-cap answer and ``1`` for the refusing one.
     """
+    if _active_basis_name == _END_CAP_BASIS:
+        with _nec2_end_cap.launcher_default():
+            return _render_deck(body)
+    return _render_deck(body)
+
+
+# The one basis of this launcher that honours `nec2_end_cap` (the registry's
+# `solvers`), and so takes the launcher's default.
+_END_CAP_BASIS = "sinusoidal"
+
+
+def _render_deck(body: str) -> tuple[list[str], list[str]]:
+    """:func:`render_deck`'s body."""
     out: list[str] = ["", "", ""]
     err: list[str] = []
     try:

@@ -811,6 +811,15 @@ FEATURES: dict[str, Feature] = {
         # free end refuses, because that route has its own end cap and this
         # one could not act. A buried or crossing deck with a free end refuses
         # too.
+        #
+        # The NEC-2 drop-in launcher (`momwire-nec2c-sinusoidal`, or any
+        # `momwire-nec2c*` running the sinusoidal basis) turns it ON by
+        # default (Steve, 2026-11-19): that launcher exists to answer like
+        # NEC-2. `default` here stays False, so the Python API, the NEC-4.2
+        # slot, the NEC-5 drop-in and antennaknobs are unchanged. There
+        # MOMWIRE_X_NEC2_END_CAP=0 gives the no-cap answer and =1 the
+        # refusing one; unset, a deck the cap would refuse runs without it
+        # and its printout says so (`_nec2_end_cap.launcher_default`).
         Feature(
             name="nec2_end_cap",
             reach=1,
@@ -883,6 +892,16 @@ def _env_value(feature: Feature) -> bool | None:
         if value is not None and value.strip():
             return value.strip().lower() in _ON
     return None
+
+
+def requested(name: str, kwarg_value: object = None) -> bool | None:
+    """What was asked of `name`: the keyword's value when one was passed (not
+    None), else its variable's (:func:`_env_value`), else None, when nothing
+    asked and the default decides. A route with a default of its own (the
+    NEC-2 launcher's `nec2_end_cap`) reads this to apply it only then."""
+    if kwarg_value is not None:
+        return bool(kwarg_value)
+    return _env_value(FEATURES[name])
 
 
 def _env_on(feature: Feature) -> bool:

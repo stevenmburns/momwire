@@ -1,5 +1,6 @@
 """NEC-2's free-end condition on the point-matched sinusoidal basis
-(momwire#2033): a labelled compatibility option, off by default.
+(momwire#2033): a labelled compatibility option, off by default everywhere
+but the NEC-2 drop-in launcher (`launcher_default` below).
 
 The default basis takes the current to zero at a free wire end. NEC-2 lets it
 flow onto the end cap instead. The public program description (Burke and
@@ -30,6 +31,9 @@ not act there.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+
 import numpy as np
 from scipy.special import j0, j1
 
@@ -46,6 +50,45 @@ NEC4_JUNCTION_REFUSAL = (
     "nec2_end_cap cannot act on a deck the NEC-4 junction rule solves, whose "
     "route carries its own end cap; turn it off for this deck"
 )
+
+# The NEC-2 drop-in launcher's default (Steve, 2026-11-19): that launcher
+# exists to behave like NEC-2, so NEC-2's end condition is its default, and
+# only there. The keyword's default and the registry's stay off. It applies
+# only when nothing asked either way (the keyword is None and
+# MOMWIRE_X_NEC2_END_CAP is unset), and unlike an explicit request it does
+# not refuse a deck the cap cannot act on: that solve runs without the cap,
+# bit for bit the off answer, and keeps the reason on
+# `SinusoidalSolver.nec2_end_cap_withdrawn` for the printout to say so.
+_LAUNCHER_DEFAULT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "momwire_nec2_end_cap_launcher_default", default=False
+)
+
+# What the printout names on a solve the default ran without the cap, keyed
+# on the refusal an explicit request raises there.
+WITHDRAWN = {
+    BELOW_INTERFACE_REFUSAL: "a buried or ground-crossing wire",
+    NEC4_JUNCTION_REFUSAL: "a junction the NEC-4 rule solves",
+}
+
+
+@contextlib.contextmanager
+def launcher_default():
+    """Build solvers in the body with the cap on unless something says off."""
+    token = _LAUNCHER_DEFAULT.set(True)
+    try:
+        yield
+    finally:
+        _LAUNCHER_DEFAULT.reset(token)
+
+
+def launcher_default_on() -> bool:
+    """Whether a solver built now takes the launcher's default."""
+    return _LAUNCHER_DEFAULT.get()
+
+
+def withdrawn_notice(reason: str) -> str:
+    """The printout's line for a solve the default ran without the cap."""
+    return f"NEC-2 END CAP NOT APPLIED: {WITHDRAWN[reason]} has a free end"
 
 
 def has_free_end(geom) -> bool:

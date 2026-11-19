@@ -1388,6 +1388,21 @@ class SinusoidalSolver(
         # that changes the answer on purpose. None defers to
         # MOMWIRE_X_NEC2_END_CAP; off is the zero-current end, bit for bit.
         self._nec2_end_cap = bound["nec2_end_cap"]
+        # The NEC-2 drop-in launcher's default (`_nec2_end_cap.launcher_
+        # default`): on when neither the keyword nor the variable asked, and
+        # SOFT -- settled once, at the first basis view, by
+        # `_settle_nec2_end_cap`, which takes it off a deck an explicit
+        # request would refuse and keeps the reason here.
+        self._nec2_end_cap_soft = False
+        self.nec2_end_cap_withdrawn: str | None = None
+        if (
+            not self._nec2_end_cap
+            and _features.requested("nec2_end_cap", nec2_end_cap) is None
+            and _features.honours("nec2_end_cap", self.FEATURE_SOLVER)
+            and _nec2_end_cap.launcher_default_on()
+        ):
+            self._nec2_end_cap = self._nec2_end_cap_soft = True
+            self.features_bound["nec2_end_cap"] = True
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -2686,6 +2701,8 @@ class SinusoidalSolver(
         else:
             a = self._seg_radius(geom)
             a_key = self._radius_per_wire.tobytes()
+        if self._nec2_end_cap_soft:
+            self._settle_nec2_end_cap()
         # `k` is the solve's scalar wavenumber, or (momwire#1223) one per
         # SEGMENT for a crossing deck, whose two sides run at k_p and k_m.
         per_seg_k = np.ndim(k) == 1
@@ -3014,6 +3031,32 @@ class SinusoidalSolver(
             seg_view["k_entry"] = k[all_seg[order]]
         self._cached_basis = (geom, k, a_key, seg_view)
         return seg_view
+
+    def _settle_nec2_end_cap(self):
+        """Settle the launcher's soft default once, before any basis view is
+        built, on the solver's whole geometry: off, with the reason kept on
+        `nec2_end_cap_withdrawn`, where an explicit request would refuse.
+
+        The two refusals in `_basis_coefs` are a free end on a deck the NEC-4
+        junction solves, and a free end with a complex or per-segment `k`.
+        The second is exactly a deck with a segment below the interface: its
+        basis is built at the lower medium's k_m, complex-typed whatever the
+        soil, and only a crossing deck builds the per-segment one. Deciding
+        it here rather than at the refusal keeps a mixed deck's air view from
+        being built with the cap before its buried view refuses."""
+        self._nec2_end_cap_soft = False
+        geom = self._build_geometry()
+        if not _nec2_end_cap.has_free_end(geom):
+            return
+        if self._nec4_live(geom):
+            reason = _nec2_end_cap.NEC4_JUNCTION_REFUSAL
+        elif self.ground_z is not None and self._below_segments(geom).any():
+            reason = _nec2_end_cap.BELOW_INTERFACE_REFUSAL
+        else:
+            return
+        self._nec2_end_cap = False
+        self.features_bound["nec2_end_cap"] = False
+        self.nec2_end_cap_withdrawn = reason
 
     def _nec4_live(self, geom):
         """Whether this solve takes the NEC-4 junction (momwire#1644): the
