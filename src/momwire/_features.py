@@ -781,11 +781,17 @@ FEATURES: dict[str, Feature] = {
         # default takes it to zero. A compatibility option for comparing with
         # NEC-2 engines, not better physics (momwire#1327 kept no cap as the
         # default). Off by default, not offered, and never seeded: `drift` is
-        # 1.0, no bound, because it changes the answer on purpose. It moved
-        # Zin by up to 58 % on a fat-wire log-periodic Yagi.
+        # 1.0, no bound, because it changes the answer on purpose. momwire#2033
+        # measured the end condition's effect at up to 58 % of Zin, stock nec2c
+        # against this solver over 65 frequencies of a fat-wire log-periodic
+        # Yagi.
         #
-        # A deck the NEC-4 junction solves keeps that route's own end cap. A
-        # buried or crossing deck with a free end refuses.
+        # Verified against nec2c on the NEC-2 route only. The NEC-4.2 slot's
+        # route honours it on a deck with no junction the NEC-4 rule solves,
+        # with no reference compared there. A deck with such a junction and a
+        # free end refuses, because that route has its own end cap and this
+        # one could not act. A buried or crossing deck with a free end refuses
+        # too.
         Feature(
             name="nec2_end_cap",
             reach=1,

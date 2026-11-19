@@ -19,6 +19,13 @@ This is not a better model of a real wire end. A flat cap is worth about 0.10a
 of extra length per end, and this condition measures 3-4 times that on coarse
 meshes (momwire#1327). The option exists so that momwire can be compared with
 NEC-2 engines on equal terms.
+
+Verified against nec2c on the NEC-2 route (`momwire-nec2c-sinusoidal`) only.
+`momwire-nec42-sinusoidal` honours the option on a deck with no junction the
+NEC-4 rule solves, but no reference has been compared on that route, whose
+kernel also differs from the NEC-2 route's. A deck with such a junction and a
+free end refuses: the NEC-4 route carries its own end cap, so this one could
+not act there.
 """
 
 from __future__ import annotations
@@ -33,6 +40,11 @@ from . import _sinusoidal_nec4
 BELOW_INTERFACE_REFUSAL = (
     "nec2_end_cap is NEC-2's free-end condition and NEC-2 has no buried or "
     "ground-crossing wires; turn it off for this deck"
+)
+
+NEC4_JUNCTION_REFUSAL = (
+    "nec2_end_cap cannot act on a deck the NEC-4 junction rule solves, whose "
+    "route carries its own end cap; turn it off for this deck"
 )
 
 
