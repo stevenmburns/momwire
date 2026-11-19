@@ -1280,6 +1280,8 @@ def test_a_table_open_in_another_process_is_skipped_not_an_error(tmp_path):
         if sys.platform == "win32":
             assert seeded[0].exists()
     assert not seeded[1].exists(), "the next-oldest table was not evicted"
+
+
 # --- momwire#1847: the transmitted anchors (reach 1: the executables refuse it) ---
 
 
