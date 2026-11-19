@@ -104,9 +104,11 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
+inline void stamp_uncertified(bool on) { MW_PICK(mws, mwas, stamp_uncertified(on)); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mws, mwas, reuse_plans(built, declined, found));
 }
+inline std::string reuse_outcome() { return MW_PICK(mws, mwas, reuse_outcome()); }
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -127,9 +129,11 @@ inline bool configure_features(const std::vector<std::string> &names, bool stamp
 inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
+inline void stamp_uncertified(bool on) { MW_PICK(mw, mwa, stamp_uncertified(on)); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mw, mwa, reuse_plans(built, declined, found));
 }
+inline std::string reuse_outcome() { return MW_PICK(mw, mwa, reuse_outcome()); }
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -150,6 +154,9 @@ static void reuse_line() {
     rt_threads::reuse_plans(built_t, declined_t, found_t);
     std::fprintf(stderr, "cxx: reuse plans built %lld, declined %lld, found %lld\n", built_s + built_t,
                  declined_s + declined_t, found_s + found_t);
+    // the sinusoidal route's last fill: "served" or why it declined (momwire#1911)
+    const std::string last = rt_threads::reuse_outcome() + rt_serial::reuse_outcome();
+    if (!last.empty()) std::fprintf(stderr, "cxx: reuse last fill %s\n", last.c_str());
 }
 
 #if !MW_EXE_NO_PYTHON
@@ -488,7 +495,27 @@ std::vector<std::string> features_requested() {
     return names;
 }
 
+// A CERTIFICATION build's features (CMake MW_EXE_CERTIFY, momwire#1911):
+// {name, basis}, each also run here, past its reach, on the basis whose C++
+// route carries it, and named on line 2 as Python names it. That is how the
+// executable's own bytes are gated against Python's before its reach is
+// raised. No release build defines these; shipped, the table is empty and
+// the feature is refused like any other without an EXE_FEATURES row.
+const char *const EXE_CERTIFYING[][2] = {
+#if MW_EXE_CERTIFY_PAIR_REUSE
+    {"pair_reuse", "sinusoidal"},
+#endif
+    {nullptr, nullptr},
+};
+
+bool feature_certifying_here(const std::string &name) {
+    for (const auto &c : EXE_CERTIFYING)
+        if (c[0] != nullptr && name == c[0]) return std::string(BASIS) == c[1];
+    return false;
+}
+
 bool feature_runs_here(const std::string &name) {
+    if (feature_certifying_here(name)) return true;
     for (const ExeFeature &f : EXE_FEATURES)
         if (name == f.name) return exe_level() <= f.reach && feature_basis_here(name);
     return false;
@@ -563,12 +590,25 @@ int feature_refusal() {
         rt_serial::withdraw_features(withdrawn);
         rt_threads::withdraw_features(withdrawn);
     }
+    // registry order: a certifying feature (pair_reuse) comes first there
+    bool uncertified = false;
+    for (const auto &c : EXE_CERTIFYING)
+        if (c[0] != nullptr && std::find(stamped.begin(), stamped.end(), c[0]) != stamped.end()) {
+            g_feature_stamp += std::string("+") + c[0];
+            uncertified = true;
+        }
     for (const ExeFeature &f : EXE_FEATURES)
         for (const std::string &name : stamped)
             if (name == f.name) {
                 g_feature_stamp += std::string("+") + f.name;
                 break;
             }
+    // past its reach, line 2 says so after the names, as `_features.stamp`
+    if (uncertified) {
+        g_feature_stamp += " uncertified on this platform";
+        rt_serial::stamp_uncertified(true);
+        rt_threads::stamp_uncertified(true);
+    }
     return 0;
 }
 

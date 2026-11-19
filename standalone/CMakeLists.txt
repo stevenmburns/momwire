@@ -562,6 +562,20 @@ else()
     target_compile_definitions(${MW_EXE} PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
   endif()
 endif()
+# A CERTIFICATION build (momwire#1911): the features named here also run at
+# this executable's level, as a raised reach would let them, so the
+# executable's own bytes can be held to Python's before Steve raises a reach
+# (the route has to exist at the level first). Each name must have a C++
+# route this basis carries (EXE_CERTIFYING in momwire_razor2p.cpp). No
+# release build sets it: shipped, a feature past its reach is refused.
+set(MW_EXE_CERTIFY "" CACHE STRING "certification build only: features run past their reach (pair_reuse, sin42)")
+foreach(_mw_f IN LISTS MW_EXE_CERTIFY)
+  if(_mw_f STREQUAL "pair_reuse" AND MW_EXE_BASIS STREQUAL "sin42")
+    target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_CERTIFY_PAIR_REUSE=1)
+  else()
+    message(FATAL_ERROR "MW_EXE_CERTIFY: ${_mw_f} has no C++ route on MW_EXE_BASIS=${MW_EXE_BASIS}")
+  endif()
+endforeach()
 if(MW_EXE_FAT AND MINGW)
   # The avx2 copies as one archive whose constructors are moved out of the
   # start-up list (defer_ctors.cmake), linked whole, after the sse2 copies
