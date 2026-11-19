@@ -33,12 +33,16 @@ bool withdraw_features(const std::vector<std::string> &names) {
     return ok;
 }
 
+void stamp_uncertified(bool on) { ni_eval::stamp_uncertified(on); }
+
 void reuse_plans(long long &built, long long &declined, long long &found) {
     const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
     built = static_cast<long long>(c.built);
     declined = static_cast<long long>(c.declined);
     found = static_cast<long long>(c.found);
 }
+
+std::string reuse_outcome() { return std::string(); }
 
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);

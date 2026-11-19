@@ -15,7 +15,7 @@
 #include "route.h"
 
 #include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
-#include "_razor_pair_reuse_core.h"  // the reuse plans' counters (momwire#1971)
+#include "_sin_pair_reuse_core.h"  // the reuse plans' counters (momwire#1911)
 
 #include "_sinusoidal_run_core.h"
 #define MW_ROUTE_ENGINE sinusoidal
@@ -120,12 +120,18 @@ bool withdraw_features(const std::vector<std::string> &names) {
     return ok;
 }
 
+void stamp_uncertified(bool on) { ni_eval::stamp_uncertified(on); }
+
+// This route's reuse is the sinusoidal fill's (`pair_reuse`, momwire#1911):
+// its plans, not razor-2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {
-    const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
+    const sinusoidal::pair_reuse::Counters c = sinusoidal::pair_reuse::counters();
     built = static_cast<long long>(c.built);
     declined = static_cast<long long>(c.declined);
     found = static_cast<long long>(c.found);
 }
+
+std::string reuse_outcome() { return sinusoidal::pair_reuse::last_outcome(); }
 
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);
