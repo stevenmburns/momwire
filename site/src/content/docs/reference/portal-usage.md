@@ -147,7 +147,7 @@ the cap cannot act on are a buried or ground-crossing wire with a free end
 (NEC-2 has no wires below the interface) and, under
 `MOMWIRE_JUNCTION_RULE=nec42`, a junction the NEC-4 rule solves with a free
 end anywhere on the deck. By default those run without the cap, and each
-solve says so at column 0 just above MATRIX TIMING:
+solve says so at column 0 between ANTENNA ENVIRONMENT and MATRIX TIMING:
 `NEC-2 END CAP NOT APPLIED: a buried or ground-crossing wire has a free end`.
 The banner does not name the cap: on this route it is the default, as the
 banner never names a default, and `=0` gives back the old printout byte for
@@ -163,12 +163,15 @@ a 0.5 mm half joined to a 1 mm half, the step's effect on Z, in ohms
 | | 20 seg/half | 40 seg/half | 80 seg/half |
 |---|---|---|---|
 | NEC-2 (PyNEC) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
-| `sinusoidal` | −0.59 − 8.86j | −0.76 − 1.18j | −1.01 + 9.47j |
+| `sinusoidal` (this launcher's default, NEC-2's end cap) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
+| `sinusoidal`, `MOMWIRE_X_NEC2_END_CAP=0` | −0.59 − 8.86j | −0.76 − 1.18j | −1.01 + 9.47j |
 | `sinusoidal-galerkin` | −0.02 − 33.44j | −0.00 − 34.04j | +0.01 − 34.42j |
 | `bspline` | −0.07 − 32.55j | −0.03 − 33.42j | −0.01 − 33.95j |
 | NEC-5 | +0.03 − 34.69j | +0.03 − 34.80j | |
 
-That is by design: this row exists to be the NEC-2-closest rung of the
+With the end cap, `sinusoidal` reads PyNEC's row to the printed digit at
+every mesh; without it, to 0.04 Ω. That is by design: this row exists to be
+the NEC-2-closest rung of the
 ladder, and the nec2 slot is meant to match nec2c, so inheriting NEC-2's own
 behaviour on a taper is what "closest" means there. The solver says so: every
 `sinusoidal` solve with two radii at one junction raises a
