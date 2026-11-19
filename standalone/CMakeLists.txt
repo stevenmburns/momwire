@@ -118,13 +118,17 @@ elseif(MW_EXE_VARIANT STREQUAL "fat")
   # for a symbol no object defines. Each avx2 TU's dynamic initializers are
   # moved out of the C runtime's start-up list (fat_avx2_init.h) and run by
   # main() only once it has picked avx2.
-  # MSVC no-Python builds only (the Windows release).
-  if(NOT MSVC OR NOT MW_EXE_NO_PYTHON)
-    message(FATAL_ERROR "MW_EXE_VARIANT=fat is the MSVC no-Python build only")
+  # MinGW-w64 (the single-file experiment, windows-static.yml) instead links
+  # the avx2 copies as one --whole-archive library whose `.ctors` sections
+  # defer_ctors.cmake renames (PE grouped-section sort), and keeps the shared
+  # names: its gate (fat_compare.py) holds fat == one-variant byte for byte.
+  # Windows no-Python builds only.
+  if(NOT (MSVC OR MINGW) OR NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_VARIANT=fat is the Windows (MSVC or MinGW-w64) no-Python build only")
   endif()
   set(MW_EXE_FAT ON)
 elseif(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
-  message(FATAL_ERROR "MW_EXE_VARIANT must be avx2, sse2 or (MSVC no-Python) fat")
+  message(FATAL_ERROR "MW_EXE_VARIANT must be avx2, sse2 or (Windows no-Python) fat")
 endif()
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
 # The release build (standalone/build_release_linux.sh): libgomp linked in
@@ -144,7 +148,7 @@ if(APPLE AND MW_EXE_NO_PYTHON)
 endif()
 # The static OpenBLAS's symbol prefix (blas.h): build_openblas.sh's `mwx_` on
 # Linux; a Windows static library needs none (no interposition there).
-if(WIN32)
+if(WIN32 AND NOT MINGW)
   set(_mw_prefix_default "")
 elseif(MW_ACCELERATE)
   set(_mw_prefix_default "mwa_")
@@ -371,6 +375,16 @@ else()
     set(MW_OMP_FLAG -fopenmp)
   endif()
 endif()
+# Extra flags for the C++ cores, appended last so they win over the defaults
+# above (gcc takes the last -ffp-contract=; cl the last /fp:). Empty in every
+# shipped build: the experiments in windows-static.yml set it (an MSVC build
+# at /fp:precise, a gcc one at -ffp-contract=fast) to measure which part of
+# the code generation a fill-time gap comes from.
+set(MW_EXE_EXTRA_CORE_FLAGS "" CACHE STRING "experiment only: flags appended to the C++ cores")
+if(MW_EXE_EXTRA_CORE_FLAGS)
+  separate_arguments(_mw_extra NATIVE_COMMAND "${MW_EXE_EXTRA_CORE_FLAGS}")
+  list(APPEND MW_CORE_FLAGS ${_mw_extra})
+endif()
 add_library(mw_core OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core PRIVATE ${MW_CORE_FLAGS} ${MW_OMP_FLAG})
@@ -404,7 +418,26 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
 # as two static libraries linked after the sse2 objects. /FI fat_avx2_init.h
 # moves each TU's dynamic initializers into `.mwav$m`, which the C runtime
 # never runs (/wd4075: the warning that says so).
-if(MW_EXE_FAT)
+if(MW_EXE_FAT AND MINGW)
+  # MinGW-w64: -mavx2 -mfma for /arch:AVX2; the constructors are deferred
+  # at archive time (defer_ctors.cmake, below) rather than by a forced header.
+  foreach(_mw_copy IN ITEMS mwa mwas)
+    set(_mw_renames mw=${_mw_copy} xsf=${_mw_copy}_xsf Faddeeva=${_mw_copy}_Faddeeva
+        razor_cplx_brackets=${_mw_copy}_razor_cplx_brackets somm_core=${_mw_copy}_somm_core
+        somm_below=${_mw_copy}_somm_below ni_core=${_mw_copy}_ni_core ni_eval=${_mw_copy}_ni_eval
+        somm_trans=${_mw_copy}_somm_trans ni_point=${_mw_copy}_ni_point
+        near_buried=${_mw_copy}_near_buried offedge_lanes=${_mw_copy}_offedge_lanes
+        somm_sym=${_mw_copy}_somm_sym mw_fg=${_mw_copy}_fg mw1860=${_mw_copy}_mw1860)
+    add_library(mw_core_${_mw_copy} OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
+    target_include_directories(mw_core_${_mw_copy} PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
+    target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_CORE_FLAGS} -mavx2 -mfma)
+    if(_mw_copy STREQUAL "mwa")
+      target_compile_options(mw_core_${_mw_copy} PRIVATE ${MW_OMP_FLAG})
+    endif()
+    target_compile_definitions(mw_core_${_mw_copy} PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+                               ${MW_ROUTE_DEFS} ${_mw_renames})
+  endforeach()
+elseif(MW_EXE_FAT)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   find_program(MW_LLVM_OBJCOPY llvm-objcopy HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
   find_program(MW_LLVM_NM llvm-nm HINTS "$ENV{ProgramFiles}/LLVM/bin" REQUIRED)
@@ -528,7 +561,25 @@ else()
     target_compile_definitions(${MW_EXE} PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
   endif()
 endif()
-if(MW_EXE_FAT)
+if(MW_EXE_FAT AND MINGW)
+  # The avx2 copies as one archive whose constructors are moved out of the
+  # start-up list (defer_ctors.cmake), linked whole, after the sse2 copies
+  # (see MW_EXE_VARIANT=fat) and before OpenBLAS, which they call.
+  set(_mw_avx2_lib "${CMAKE_CURRENT_BINARY_DIR}/libmw_avx2_deferred.a")
+  add_custom_command(OUTPUT "${_mw_avx2_lib}"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${_mw_avx2_lib}"
+    COMMAND ${CMAKE_AR} qc "${_mw_avx2_lib}" $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>
+    COMMAND ${CMAKE_COMMAND} "-DARCHIVE=${_mw_avx2_lib}" "-DOBJCOPY=${CMAKE_OBJCOPY}" "-DOBJDUMP=${CMAKE_OBJDUMP}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/defer_ctors.cmake"
+    COMMAND ${CMAKE_RANLIB} "${_mw_avx2_lib}"
+    DEPENDS mw_core_mwa mw_core_mwas $<TARGET_OBJECTS:mw_core_mwa> $<TARGET_OBJECTS:mw_core_mwas>
+            "${CMAKE_CURRENT_SOURCE_DIR}/defer_ctors.cmake"
+    COMMAND_EXPAND_LISTS VERBATIM)
+  add_custom_target(mw_avx2_deferred DEPENDS "${_mw_avx2_lib}")
+  add_dependencies(${MW_EXE} mw_avx2_deferred)
+  target_link_libraries(${MW_EXE} PRIVATE -Wl,--whole-archive "${_mw_avx2_lib}" -Wl,--no-whole-archive)
+  target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_FAT=1)
+elseif(MW_EXE_FAT)
   # after the sse2 objects (see MW_EXE_VARIANT=fat); the map file is what
   # scripts/windows_fat/check_link.py reads to show which copy each symbol is
   add_dependencies(${MW_EXE} mw_core_fat_libs)
@@ -587,6 +638,47 @@ if(UNIX AND NOT APPLE)
   # libm, libmvec and (unless MW_EXE_STATIC_GOMP) libgomp stay shared, as
   # the extension has them.
   target_link_libraries(${MW_EXE} PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
+endif()
+if(MINGW)
+  # One file (windows-static.yml): every runtime from its archive -- libgomp
+  # (MW_EXE_STATIC_GOMP), libstdc++, libgcc and winpthreads, which libgomp and
+  # the OpenBLAS archives need -- so nothing ships beside the executable.
+  target_link_options(${MW_EXE} PRIVATE -static -static-libgcc -static-libstdc++)
+  target_link_libraries(${MW_EXE} PRIVATE pthread)
+  # MW_EXE_LIBM_SHIM (the libm experiment, WINDOWS-SINGLE-FILE.md): the
+  # executable's exp/sin/cos/... forwarded to a system DLL's (msvcrt.dll or
+  # ucrtbase.dll) instead of mingw-w64's own, which win the link otherwise.
+  set(MW_EXE_LIBM_SHIM "" CACHE STRING "MinGW: forward libm to msvcrt or ucrtbase (empty: mingw-w64's own)")
+  if(MW_EXE_LIBM_SHIM)
+    enable_language(C)
+    target_sources(${MW_EXE} PRIVATE mingw_libm_shim.c)
+    target_compile_definitions(${MW_EXE} PRIVATE MW_LIBM_SHIM_DLL="${MW_EXE_LIBM_SHIM}.dll")
+  endif()
+  # MW_EXE_VMATH_SHIM (optimisation 4, WINDOWS-SINGLE-FILE.md): the avx2 cores'
+  # `omp declare simd` blocks switched on, their vector sin / cos / exp calls
+  # answered by mingw_vmath_shim.cpp. Off by default: an unset build compiles
+  # what it compiled before. MW_EXE_VMATH_SHIM_COUNT adds the call counters
+  # (the proof that it ran; never timed).
+  option(MW_EXE_VMATH_SHIM "MinGW avx2: vector sin/cos/exp over mw_vmath" OFF)
+  option(MW_EXE_VMATH_SHIM_COUNT "MinGW: count the shim's calls, report at exit" OFF)
+  if(MW_EXE_VMATH_SHIM)
+    if(MW_EXE_VARIANT STREQUAL "sse2")
+      message(FATAL_ERROR "MW_EXE_VMATH_SHIM needs the avx2 cores (MW_EXE_VARIANT=avx2 or fat)")
+    endif()
+    add_library(mw_vmath_shim OBJECT mingw_vmath_shim.cpp)
+    target_include_directories(mw_vmath_shim PRIVATE ${MW_SRC})
+    target_compile_options(mw_vmath_shim PRIVATE ${MW_CORE_FLAGS} -mavx2 -mfma)
+    if(MW_EXE_VMATH_SHIM_COUNT)
+      target_compile_definitions(mw_vmath_shim PRIVATE MW_VMATH_SHIM_COUNT=1)
+    endif()
+    target_sources(${MW_EXE} PRIVATE $<TARGET_OBJECTS:mw_vmath_shim>)
+    # The guards also ask for __AVX2__, so a fat build's sse2 copies are unchanged.
+    foreach(_mw_t IN ITEMS mw_core mw_core_serial mw_core_mwa mw_core_mwas)
+      if(TARGET ${_mw_t})
+        target_compile_definitions(${_mw_t} PRIVATE MW_MINGW_VMATH_SHIM=1)
+      endif()
+    endforeach()
+  endif()
 endif()
 
 if(MW_ACCELERATE)

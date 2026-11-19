@@ -310,6 +310,12 @@ std::string format_12g(double x) {
 #if defined(_MSC_VER)
     static _locale_t c = _create_locale(LC_NUMERIC, "C");
     _snprintf_l(buf, sizeof buf, "%.12g", c, x);
+#elif defined(__MINGW32__)
+    // MinGW-w64 (the static Windows executables, windows-static.yml): no POSIX
+    // locale API, and msvcrt.dll's _snprintf_l prints three-digit exponents
+    // (1e+010). The executable never calls setlocale, so the process is in the
+    // C locale throughout, and libstdc++'s __USE_MINGW_ANSI_STDIO printf is C99's.
+    std::snprintf(buf, sizeof buf, "%.12g", x);
 #else
     static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
     locale_t old = uselocale(c);
@@ -511,6 +517,8 @@ std::string py_g(double x, int p = 6) {
 #if defined(_MSC_VER)
     static _locale_t c = _create_locale(LC_NUMERIC, "C");
     _snprintf_l(buf, sizeof buf, fmt, c, x);
+#elif defined(__MINGW32__)
+    std::snprintf(buf, sizeof buf, fmt, x);  // the C locale throughout (format_12g)
 #else
     static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
     locale_t old = uselocale(c);

@@ -1,0 +1,884 @@
+# The no-Python executables on Windows as SINGLE FILES (an experiment beside
+# standalone.yml's MSVC `windows-nopython`, which it does not touch), and the
+# measurements standalone/WINDOWS-SINGLE-FILE.md reports. Dispatch and its
+# own branch only: it adds no check to any PR.
+#
+#   build    MSYS2 MINGW64 (gcc, the msvcrt.dll runtime -- the import shape of
+#            Ward's single-file NEC5CL build), every runtime linked in
+#            (OpenBLAS from build_openblas.sh's two archives, libgomp,
+#            libstdc++, libgcc, winpthreads): razor-2p and bs2, avx2 and sse2;
+#            the FAT pair (both variants in one file, picked by CPU); and the
+#            libm experiment, avx2 with exp/sin/cos/... forwarded to
+#            msvcrt.dll's or ucrtbase.dll's (MW_EXE_LIBM_SHIM).
+#   ucrt64   the same builds from MSYS2 UCRT64 (gcc, ucrtbase.dll through
+#            the api-ms-win-crt-* sets), the candidate product build; and
+#            an avx2 experiment build for the timing only, FMA contraction
+#            (MW_EXE_EXTRA_CORE_FLAGS=-ffp-contract=fast). Run 44112554494
+#            also timed -ffast-math (it broke the buried route: no factor
+#            stage) and the column kernel on mw_vmath (no gain, reverted).
+#   clang64  CLANG64 (clang + compiler-rt + UCRT): the libm question only.
+#   msvc     the MSVC reference, built here from THIS commit (windows-nopython's
+#            toolset and DLLs): avx2 and sse2 as shipped, and avx2 at
+#            /fp:precise; plus the hot TUs' assembly listings, read for calls
+#            to MSVC's vector math library (__vdecl_*).
+#   gates    as windows-nopython: an import table of system DLLs only, the
+#            freeze's Windows 7 import gate, a rehearsal signature, a run from
+#            a System32-only PATH, the launcher contract tests, every fixture
+#            deck and NX chain within PRINTOUT_RTOL_WIN32; the fat pair under
+#            Intel SDE and byte for byte against the one-variant builds.
+#   stress   the exit-hang soak: the UCRT64 fat razor-2p executable, stdout
+#            piped, the shipped exit (ending the process before the static
+#            teardown) as two labels against the C runtime's exit with the
+#            OpenBLAS pools shut down at exit (the positive control),
+#            interleaved; four shards, on dispatch only. A diagnostic.
+#   perf     INDICATIVE timing, every build here against the msvc job's, on
+#            ONE runner, interleaved (a shared VM: the pairing is the point,
+#            not the numbers), and each build's own stage times.
+name: windows-static
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-static-exe-v2, mingw-vmath-shim-1118]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MOMWIRE_BELOW_ANCHORS: "off"  # as standalone.yml: exact tables for the gates
+  # The MINGW64 (msvcrt) builds' full gates and its libm shims: measured in
+  # run 44057069874 (WINDOWS-SINGLE-FILE.md); "1" runs them again. UCRT64,
+  # the candidate product build, is gated on every run.
+  MINGW64_GATES: "0"
+  LIBM_SHIMS: "0"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            git make perl
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libgomp
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+      - name: toolchain
+        shell: msys2 {0}
+        run: |
+          gcc --version | head -1
+          ld --version | head -1
+          [ -f "$(gcc -print-file-name=libgomp.a)" ] || { echo "::error::no libgomp.a"; exit 1; }
+          echo "C++ stdio: $(echo | g++ -dM -E -x c++ -include cstdio - | grep __USE_MINGW_ANSI_STDIO || echo none)"
+          echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt[a-z]*' | sort -u | tr '\n' ' ')"
+          echo "libs after the objects: $(gcc -dumpspecs | grep -A1 '^\*lib:' | tail -1)"
+      - name: libm microbench (MINGW64)
+        continue-on-error: true
+        shell: msys2 {0}
+        run: |
+          gcc -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
+          ./libm_bench.exe > libm-mingw64.txt; rc=$?; cat libm-mingw64.txt; [ $rc -eq 0 ] || exit $rc
+          echo "math symbols the link took from libmingwex (defined in the exe):"
+          nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
+          echo "math imports:"; objdump -p libm_bench.exe | grep -E "DLL Name|\b(exp|log|sin|cos|pow|atan2|_hypot|hypot)$" | tr -s ' ' | tr '\n' ' '; echo
+      - uses: actions/cache/restore@v4
+        id: obcache
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: openblas-mingw64-${{ hashFiles('standalone/build_openblas.sh') }}-v1
+      - name: OpenBLAS (build_openblas.sh, MINGW64)
+        if: steps.obcache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          s=$(date +%s)
+          if ! standalone/build_openblas.sh "$PWD/obw"; then
+            tail -60 obw/build-*.log
+            exit 1
+          fi
+          echo "OpenBLAS: $(( $(date +%s) - s )) s"
+      - uses: actions/cache/save@v4
+        if: steps.obcache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: ${{ steps.obcache.outputs.cache-primary-key }}
+      - name: the archives
+        shell: msys2 {0}
+        run: |
+          # PE COMDAT section names follow the prefix (pe_comdat_prefix.sh says
+          # why); idempotent, so a cached archive takes it too
+          standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
+          standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
+          for a in mwx_:obw/libmwxp.a mwn_:obw/libmwnp.a; do
+            p=${a%%:*} f=${a#*:}
+            bare=$(nm -g --defined-only "$f" 2>/dev/null | awk -v p="$p" 'NF == 3 && index($3, p) != 1' | wc -l)
+            echo "$f: $bare globals without the $p prefix"
+            [ "$bare" -eq 0 ] || exit 1
+          done
+      - name: configure + build (one-variant, libm shims, fat)
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p dist dist-shim dist-fat
+          cfg() {  # DIR BASIS VARIANT [extra cmake args]
+            local d=$1 basis=$2 v=$3; shift 3
+            cmake -S standalone -B "$d" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
+              -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
+              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON "$@" > "$d.cmake.log"
+            local s=$(date +%s)
+            cmake --build "$d" -- -k 0
+            echo "BUILD $d: $(( $(date +%s) - s )) s"
+          }
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            for v in avx2 sse2; do
+              cfg "build-$b-$v" $basis $v
+              cp "build-$b-$v/$target.exe" "dist/momwire-nec5-$b-$v.exe"
+            done
+            for dll in msvcrt ucrtbase; do
+              [ "$LIBM_SHIMS" = 1 ] || continue
+              cfg "build-$b-avx2-$dll" $basis avx2 -DMW_EXE_LIBM_SHIM=$dll
+              cp "build-$b-avx2-$dll/$target.exe" "dist-shim/momwire-nec5-$b-avx2-$dll.exe"
+              MW_EXE_TIMES=1 "dist-shim/momwire-nec5-$b-avx2-$dll.exe" -version 2> shim.txt
+              grep -q "libm from $dll.dll" shim.txt || { cat shim.txt; echo "::error::$b $dll shim not live"; exit 1; }
+            done
+            cfg "build-$b-fat" $basis fat
+            cp "build-$b-fat/$target.exe" "dist-fat/$name.exe"
+            # the deferred avx2 constructors ran (this runner has AVX2), and not on sse2
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=avx2 "dist-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            grep -q "avx2 initializers [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "dist-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            ! grep -q "avx2 initializers" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
+          done
+          echo "math symbols each build defines itself (libmingwex's, or the shim's forwarders):"
+          for e in dist/momwire-nec5-bs2-avx2.exe dist-shim/momwire-nec5-bs2-avx2-ucrtbase.exe; do
+            [ -f "$e" ] || continue
+            echo "  $e: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
+          done
+          # licensing: nothing LGPL/GPL-without-exception linked in (libquadmath, libgfortran)
+          for e in dist/*.exe dist-fat/*.exe; do
+            n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
+            echo "  $e: $n libquadmath/libgfortran symbols"
+          done
+          strip dist/*.exe dist-fat/*.exe
+          [ "$LIBM_SHIMS" != 1 ] || strip dist-shim/*.exe
+          ls -l dist dist-shim dist-fat
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mingw64-exes
+          path: |
+            dist/*.exe
+            dist-shim/*.exe
+            dist-fat/*.exe
+            libm-mingw64.txt
+          retention-days: 7
+
+  ucrt64:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            git make perl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-libgomp
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: toolchain + libm microbench (UCRT64)
+        continue-on-error: true
+        shell: msys2 {0}
+        run: |
+          gcc --version | head -1
+          echo "CRT: $(gcc -dumpspecs | grep -o -- '-lmsvcrt\|-lucrt[a-z]*' | sort -u | tr '\n' ' ')"
+          gcc -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
+          ./libm_bench.exe > libm-ucrt64.txt; rc=$?; cat libm-ucrt64.txt; [ $rc -eq 0 ] || exit $rc
+          echo "math symbols defined in the exe (libmingwex's):"
+          nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
+          echo "imports:"; objdump -p libm_bench.exe | grep "DLL Name"
+          objdump -p libm_bench.exe | awk '/DLL Name: api-ms-win-crt-math/ {f=1; next} /DLL Name/ {f=0} f && NF >= 3 {print $NF}' | tr '\n' ' '; echo
+      - uses: actions/cache/restore@v4
+        id: obcache
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: openblas-ucrt64-${{ hashFiles('standalone/build_openblas.sh') }}-v1
+      - name: OpenBLAS (build_openblas.sh, UCRT64)
+        if: steps.obcache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          s=$(date +%s)
+          if ! standalone/build_openblas.sh "$PWD/obw"; then
+            tail -60 obw/build-*.log
+            exit 1
+          fi
+          echo "OpenBLAS: $(( $(date +%s) - s )) s"
+      - uses: actions/cache/save@v4
+        if: steps.obcache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            obw/libmwxp.a
+            obw/libmwnp.a
+          key: ${{ steps.obcache.outputs.cache-primary-key }}
+      - name: configure + build (UCRT64; avx2, sse2, fat)
+        shell: msys2 {0}
+        run: |
+          set -e
+          standalone/pe_comdat_prefix.sh obw/libmwxp.a mwx_
+          standalone/pe_comdat_prefix.sh obw/libmwnp.a mwn_
+          mkdir -p dist-ucrt dist-ucrt-fat dist-ucrt-exp dist-ucrt-shim dist-ucrt-shim-fat dist-ucrt-shim-count
+          cfg() {  # DIR BASIS VARIANT [extra cmake args]
+            local d=$1 basis=$2 v=$3; shift 3
+            cmake -S standalone -B "$d" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=$basis -DMW_EXE_VARIANT=$v \
+              -DMW_OPENBLAS_LIB="$PWD/obw/libmwxp.a" -DMW_OPENBLAS_NUMPY_LIB="$PWD/obw/libmwnp.a" \
+              -DMW_BLAS_PREFIX=mwx_ -DMW_EXE_STATIC_GOMP=ON "$@" > "$d.cmake.log"
+            local s=$(date +%s)
+            cmake --build "$d" -- -k 0
+            echo "BUILD $d: $(( $(date +%s) - s )) s"
+          }
+          for b in razor2p bs2; do
+            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            for v in avx2 sse2; do
+              cfg "build-$b-$v" $basis $v
+              cp "build-$b-$v/$target.exe" "dist-ucrt/momwire-nec5-$b-$v-ucrt64.exe"
+            done
+            cfg "build-$b-fat" $basis fat
+            cp "build-$b-fat/$target.exe" "dist-ucrt-fat/$name.exe"
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=avx2 "dist-ucrt-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            grep -q "avx2 initializers [1-9]" ctors.txt || { echo "::error::$name ran no avx2 constructors"; exit 1; }
+            MW_EXE_TIMES=1 MOMWIRE_FORCE_VARIANT=sse2 "dist-ucrt-fat/$name.exe" -version 2> ctors.txt; cat ctors.txt
+            ! grep -q "avx2 initializers" ctors.txt || { echo "::error::$name ran avx2 constructors on sse2"; exit 1; }
+            # timing-only experiment (perf job; never gated, never shipped):
+            # FMA contraction, as MSVC's /fp:fast allows it
+            for x in "fma|-DMW_EXE_EXTRA_CORE_FLAGS=-ffp-contract=fast"; do
+              cfg "build-$b-avx2-${x%%|*}" $basis avx2 "${x#*|}"
+              cp "build-$b-avx2-${x%%|*}/$target.exe" "dist-ucrt-exp/momwire-nec5-$b-avx2-${x%%|*}.exe"
+            done
+            # the vector-math shim (standalone/mingw_vmath_shim.cpp): avx2, fat,
+            # and avx2 with call counters. The sse2 build has no shim, so the
+            # fat gates' sse2 reference is the plain one under the shim's name.
+            cfg "build-$b-avx2-shim" $basis avx2 -DMW_EXE_VMATH_SHIM=ON
+            cp "build-$b-avx2-shim/$target.exe" "dist-ucrt-shim/momwire-nec5-$b-avx2-shim.exe"
+            cp "build-$b-sse2/$target.exe" "dist-ucrt-shim/momwire-nec5-$b-sse2-shim.exe"
+            cfg "build-$b-fat-shim" $basis fat -DMW_EXE_VMATH_SHIM=ON
+            cp "build-$b-fat-shim/$target.exe" "dist-ucrt-shim-fat/$name.exe"
+            cfg "build-$b-avx2-shimcount" $basis avx2 -DMW_EXE_VMATH_SHIM=ON -DMW_EXE_VMATH_SHIM_COUNT=ON
+            cp "build-$b-avx2-shimcount/$target.exe" "dist-ucrt-shim-count/momwire-nec5-$b-avx2-shimcount.exe"
+          done
+          # Which objects call the shim, and that the plain build's do not. A
+          # build that never calls it would time exactly as the baseline.
+          for b in razor2p bs2; do
+            for d in shim plain; do
+              t="build-$b-avx2-shim"; [ $d = plain ] && t="build-$b-avx2"
+              n=0
+              for o in $(find "$t/CMakeFiles/mw_core.dir" "$t/CMakeFiles/mw_core_serial.dir" -name '*.obj'); do
+                c=$(objdump -dr "$o" | grep -c 'R_X86_64_PC32.*_ZGVdN4v_\|IMAGE_REL_AMD64_REL32.*_ZGVdN4v_' || true)
+                n=$((n + c))
+                [ "$d" = plain ] || [ "$c" -eq 0 ] || echo "  $b $(basename "$o"): $c vector calls"
+              done
+              echo "$b $d: $n vector call sites"
+              if [ $d = shim ] && [ "$n" -eq 0 ]; then echo "::error::$b: no core calls the shim"; exit 1; fi
+              if [ $d = plain ] && [ "$n" -ne 0 ]; then echo "::error::$b: the plain build calls the shim"; exit 1; fi
+            done
+            e="dist-ucrt-shim/momwire-nec5-$b-avx2-shim.exe"
+            echo "$e defines: $(nm "$e" | grep '_ZGVdN4v_' | tr '\n' ';')"
+            [ "$(nm "$e" | grep -c ' T _ZGVdN4v_')" -eq 3 ] || { echo "::error::$e does not define the three names"; exit 1; }
+          done
+          # gcc's own call site, as compiled here (the ABI the shim must match)
+          o=$(find build-bs2-avx2-shim/CMakeFiles/mw_core.dir -name '_bspline_core.cpp.obj')
+          objdump -dr "$o" | grep -m1 -B10 '_ZGVdN4v_sin' || true
+          # The shim's object: three names, no constructor, no aligned ymm access
+          # through a pointer (the Microsoft ABI's vectors are not 32-byte aligned)
+          o=build-bs2-avx2-shim/CMakeFiles/mw_vmath_shim.dir/mingw_vmath_shim.cpp.obj
+          names=$(nm -g --defined-only "$o" | awk '{print $3}' | grep -v '^\.refptr' | sort | tr '\n' ' ')
+          echo "shim defines: $names"
+          [ "$names" = "_ZGVdN4v_cos _ZGVdN4v_exp _ZGVdN4v_sin " ] || { echo "::error::the shim defines more than its three names"; exit 1; }
+          if objdump -h "$o" | grep -E '\.(c|d)tors|\.CRT'; then echo "::error::the shim has a constructor"; exit 1; fi
+          if objdump -d "$o" | grep -E 'vmov(apd|aps|dqa)[[:space:]].*ymm' | grep -E '\(%r' | grep -v '(%rip)'; then
+            echo "::error::the shim has an aligned ymm access"; exit 1
+          fi
+          e=dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe
+          echo "math symbols the exe defines itself: $(nm "$e" | grep -E ' T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp|__muldc3|__divdc3)$' | awk '{print $3}' | tr '\n' ' ')"
+          for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
+            n=$(nm "$e" | grep -ci 'quadmath\|_gfortran' || true)
+            echo "  $e: $n libquadmath/libgfortran symbols"
+          done
+          strip dist-ucrt/*.exe dist-ucrt-fat/*.exe dist-ucrt-exp/*.exe dist-ucrt-shim/*.exe dist-ucrt-shim-fat/*.exe dist-ucrt-shim-count/*.exe
+          for e in dist-ucrt/*.exe dist-ucrt-fat/*.exe; do
+            echo "== $e $(stat -c %s "$e") bytes"; objdump -p "$e" | grep "DLL Name" | tr -s ' \t' ' ' | tr '\n' ' '; echo
+          done
+          echo "api-ms-win-crt-math imports:"
+          objdump -p dist-ucrt/momwire-nec5-bs2-avx2-ucrt64.exe | awk '/DLL Name: api-ms-win-crt-math/ {f=1; next} /DLL Name/ {f=0} f && NF >= 3 {print $NF}' | tr '\n' ' '; echo
+      # HARD: the shim's ABI under the Microsoft x64 convention and its
+      # fallback edges, on this gcc and this ucrtbase
+      - name: the vector-math shim's ABI and edges
+        shell: msys2 {0}
+        run: |
+          g++ -O2 -fno-tree-vectorize -fopenmp-simd -fno-math-errno -ffp-contract=off -mavx2 -mfma \
+            -DMW_VMATH_SHIM_COUNT -Isrc/momwire -static \
+            scripts/windows_static/vmath_shim_check.cpp standalone/mingw_vmath_shim.cpp -o vmath_shim_check.exe
+          rc=0
+          ./vmath_shim_check.exe > vmath-shim-check.txt 2>&1 || rc=$?
+          cat vmath-shim-check.txt
+          echo "vmath_shim_check exit status: $rc"
+          exit $rc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ucrt64-exes
+          path: |
+            dist-ucrt/*.exe
+            dist-ucrt-fat/*.exe
+            dist-ucrt-exp/*.exe
+            dist-ucrt-shim/*.exe
+            dist-ucrt-shim-fat/*.exe
+            dist-ucrt-shim-count/*.exe
+            libm-ucrt64.txt
+            vmath-shim-check.txt
+          retention-days: 7
+
+  clang64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-toolchain
+      - name: libm microbench (CLANG64)
+        continue-on-error: true
+        shell: msys2 {0}
+        run: |
+          clang --version | head -1
+          clang -O2 -fno-builtin scripts/windows_static/libm_bench.c -o libm_bench.exe
+          ./libm_bench.exe > libm-clang64.txt; rc=$?; cat libm-clang64.txt; [ $rc -eq 0 ] || exit $rc
+          echo "math symbols defined in the exe (libmingwex's):"
+          llvm-nm libm_bench.exe | grep -E " T (exp|log|sin|cos|pow|atan2|hypot|_hypot|sincos|cexp)$" | tr '\n' ' '; echo
+          echo "imports:"; llvm-objdump -p libm_bench.exe | grep "DLL Name"
+          llvm-objdump -p libm_bench.exe | awk '/DLL Name: api-ms-win-crt-math/ {f=1; next} /DLL Name/ {f=0} f && NF >= 2 {print $NF}' | tr '\n' ' '; echo
+          echo "OpenMP runtimes CLANG64 offers: $(ls /clang64/lib | grep -i 'omp' | tr '\n' ' ')"
+
+  # The reference the MinGW builds are timed against, from THIS commit, so the
+  # pairing shares the source tree as well as the runner: windows-nopython's
+  # recipe (standalone.yml: the 14.44 toolset, numpy's OpenBLAS DLL, the VC++
+  # runtime and libomp140 beside each exe). /fp:precise is a timing-only
+  # build; the .asm listings show whether MSVC's fill calls its vector math.
+  msvc:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: numpy's OpenBLAS (scipy-openblas32)
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path standalone/build_openblas.sh -Pattern '^NUMPY_OPENBLAS_VERSION=(.+)$').Matches[0].Groups[1].Value
+          "scipy-openblas32==$v"
+          python -m pip download -q --no-deps --only-binary=:all: "scipy-openblas32==$v" -d obwhl
+          if ($LASTEXITCODE) { exit 1 }
+          python -m zipfile -e (Get-ChildItem obwhl\*.whl).FullName ob
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: '14.44'
+      # The shim's guards must not change what MSVC compiles: the five files'
+      # preprocessed tokens (ep_digest.py: blank lines and spacing do not
+      # count, since a guard continued over two lines moves them), against
+      # MW_MSVC_BASE, the main commit this branch last merged. UPDATE THE PIN
+      # AT EVERY MERGE OF MAIN. The control then switches one guard on under
+      # MSVC and requires the digest to move, so this check cannot pass by
+      # measuring nothing.
+      - name: MSVC's preprocessed tokens are main's, and the check can fail
+        shell: pwsh
+        env:
+          MW_MSVC_BASE: 1dfefeebb1b668d532ea5af17027182ca5f9c7bf
+        run: |
+          git fetch -q --depth=1 origin $env:MW_MSVC_BASE
+          if ($LASTEXITCODE) { exit 1 }
+          git worktree add -q --detach "$env:RUNNER_TEMP\base" $env:MW_MSVC_BASE
+          if ($LASTEXITCODE) { exit 1 }
+          $here = "$PWD"; $fail = 0
+          $digest = "$here\scripts\windows_static\ep_digest.py"
+          $o = "$env:RUNNER_TEMP\ep.txt"
+          $files = '_accel_sinusoidal_cplx.cpp', '_near_interface_point_core.cpp', '_accel_razor_cplx.cpp', '_near_interface_core.cpp', '_bspline_core.cpp'
+          foreach ($f in $files) {
+            foreach ($arch in '/arch:AVX2', '/arch:SSE2') {
+              $raw = @(); $h = @()
+              foreach ($root in $here, "$env:RUNNER_TEMP\base") {
+                Push-Location "$root\src\momwire"
+                cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG $arch /I. /I..\..\extern\xsf\include $f > `"$o`" 2>nul"
+                if ($LASTEXITCODE) { "::error::cl /EP $f failed"; exit 1 }
+                $raw += (Get-FileHash $o).Hash
+                $h += (python $digest $o)
+                Pop-Location
+              }
+              "$f $arch : tokens $($h[0].Substring(0, 16)) $($h[1].Substring(0, 16)); raw bytes $(if ($raw[0] -eq $raw[1]) { 'equal' } else { 'differ (layout only)' })"
+              if ($h[0] -ne $h[1]) { "::error::$f preprocesses differently under MSVC"; $fail = 1 }
+            }
+          }
+          # The negative control: the shim's guard in _bspline_core.cpp, on
+          Push-Location "$here\src\momwire"
+          $src = [IO.File]::ReadAllText("$PWD\_bspline_core.cpp")
+          $guard = '(?m)^#if defined\(__GNUC__\) && !defined\(_MSC_VER\) && !defined\(__APPLE__\) && \\\r?\n\s+\(!defined\(_WIN32\).*$'
+          $on = [regex]::Replace($src, $guard, '#if 1')
+          if ($on -eq $src) { "::error::the control found no shim guard to switch on"; exit 1 }
+          cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG /arch:AVX2 /I. /I..\..\extern\xsf\include _bspline_core.cpp > `"$o`" 2>nul"
+          if ($LASTEXITCODE) { "::error::cl /EP failed on the control's reference"; exit 1 }
+          $ref = (python $digest $o)
+          [IO.File]::WriteAllText("$PWD\_ep_control.cpp", $on)
+          cmd /c "cl /nologo /EP /std:c++17 /D_USE_MATH_DEFINES= /DNDEBUG /arch:AVX2 /I. /I..\..\extern\xsf\include _ep_control.cpp > `"$o`" 2>nul"
+          $rc = $LASTEXITCODE
+          Remove-Item _ep_control.cpp
+          if ($rc) { "::error::cl /EP failed on the control"; exit 1 }
+          $ctl = (python $digest $o)
+          Pop-Location
+          "control, one guard on: tokens $($ctl.Substring(0, 16)) against $($ref.Substring(0, 16))"
+          if ($ctl -eq $ref) { "::error::the control did not move the digest: this check measures nothing"; $fail = 1 }
+          exit $fail
+      - name: configure + build (avx2, sse2, avx2 /fp:precise; razor-2p and bs2)
+        shell: pwsh
+        run: |
+          python -m pip install -q ninja
+          $banner = (cmd /c "cl 2>&1" | Select-Object -First 1)
+          $banner
+          if ($banner -notmatch 'Version 19\.44\.') { throw "cl is not the 14.44 toolset: $banner" }
+          $dll = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
+          $target = @{ 'razor2p' = 'momwire-nec5-razor-2p-standalone'; 'bs2' = 'momwire-nec5-bspline-standalone' }
+          New-Item -ItemType Directory -Force dist-msvc | Out-Null
+          foreach ($b in 'razor2p', 'bs2') {
+            # NAME, VARIANT, extra core flags
+            foreach ($arm in @(@('avx2', 'avx2', '/FAs /Faasm/'), @('sse2', 'sse2', ''), @('avx2-precise', 'avx2', '/fp:precise'))) {
+              $n, $v, $x = $arm
+              if ($x) { New-Item -ItemType Directory -Force "build-$b-$n\asm" | Out-Null }
+              $t0 = Get-Date
+              cmake -S standalone -B "build-$b-$n" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON `
+                "-DMW_EXE_BASIS=$(if ($b -eq 'bs2') { 'bspline_nec5' } else { $b })" "-DMW_EXE_VARIANT=$v" "-DMW_OPENBLAS_LIB=$dll" `
+                -DMW_BLAS_PREFIX=scipy_ "-DMW_EXE_EXTRA_CORE_FLAGS=$x" | Out-File "build-$b-$n.cmake.log"
+              if ($LASTEXITCODE) { Get-Content "build-$b-$n.cmake.log"; exit 1 }
+              cmake --build "build-$b-$n"
+              if ($LASTEXITCODE) { exit 1 }
+              Copy-Item "build-$b-$n\$($target[$b]).exe" "dist-msvc\momwire-nec5-$b-$n.exe"
+              "build-$b-$n : $([int]((Get-Date) - $t0).TotalSeconds) s"
+            }
+          }
+          $crt = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+          Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll dist-msvc
+          foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$crt\$f" dist-msvc }
+          Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" dist-msvc
+          Get-ChildItem dist-msvc | Select-Object Name, Length
+          foreach ($e in Get-ChildItem dist-msvc\*.exe) { "$($e.Name): $((& $e.FullName -version) -join ' ')" }
+      # Which of MSVC's avx2 TUs call its vector math (__vdecl_sin4 and kin,
+      # the auto-vectorizer's calls for a loop of sin/cos/exp): the listing is
+      # the compiler's own output, so no call there means none in the exe.
+      - name: MSVC vector math calls in the avx2 cores (assembly listings)
+        shell: pwsh
+        run: |
+          foreach ($b in 'razor2p', 'bs2') {
+            "=== $b"
+            $hits = Get-ChildItem -Recurse "build-$b-avx2" -Filter *.asm |
+              Select-String -Pattern 'call\s+(__vdecl_\w+)' | ForEach-Object { "$($_.Filename) $($_.Matches[0].Groups[1].Value)" }
+            "listings: $((Get-ChildItem -Recurse "build-$b-avx2" -Filter *.asm).Count)"
+            if ($hits) { $hits | Group-Object | Sort-Object Count -Descending | ForEach-Object { "  $($_.Count) x $($_.Name)" } } else { "  no __vdecl_ call in any listing" }
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msvc-exes
+          path: dist-msvc/*
+          retention-days: 7
+
+  gates:
+    needs: [build, ucrt64]
+    if: always() && needs.build.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v7
+        with:
+          name: mingw64-exes
+      - uses: actions/download-artifact@v7
+        if: needs.ucrt64.result == 'success'
+        with:
+          name: ucrt64-exes
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # gdb, for fat_compare.py's backtrace of a hang (MW_GDB)
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gdb
+      # HARD for the msvcrt builds: the import table names system DLLs only
+      # (anything else -- an OpenBLAS, libgomp, winpthread, libstdc++ or
+      # libgcc DLL -- fails). The UCRT64 builds are listed, and pass with the
+      # api-ms-win-crt-* sets (system DLLs on Windows 10+; Windows 7 needs
+      # KB2999226, as the MSVC zip does).
+      - name: import tables (system DLLs only)
+        shell: pwsh
+        run: |
+          python -m pip install -q pefile
+          $dirs = @('dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat', 'dist-ucrt-shim', 'dist-ucrt-shim-fat') | Where-Object { Test-Path $_ }
+          python scripts/windows_static/pe_imports.py @dirs
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Windows 7 import gate
+        shell: pwsh
+        run: |
+          $fail = 0
+          foreach ($d in 'dist', 'dist-shim', 'dist-fat', 'dist-ucrt', 'dist-ucrt-fat', 'dist-ucrt-shim', 'dist-ucrt-shim-fat') {
+            if (-not (Test-Path $d)) { continue }
+            "== $d"
+            python scripts/eznec_freeze/scan_win7_imports.py $d
+            if ($LASTEXITCODE) { $fail = 1 }
+          }
+          exit $fail
+      - name: rehearsal signature (self-signed)
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire standalone rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          $env:MOMWIRE_SIGN_SHA1 = $cert.Thumbprint
+          $env:MOMWIRE_SIGN_ALLOW_UNTRUSTED = "1"
+          $env:MOMWIRE_SIGN_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
+          $exes = (Get-ChildItem dist\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe -ErrorAction Ignore).FullName
+          python standalone/sign_windows.py $exes
+          if ($LASTEXITCODE) { exit 1 }
+          foreach ($e in $exes) {
+            $s = Get-AuthenticodeSignature $e
+            "$(Split-Path -Leaf $e): $($s.Status) $((Get-Item $e).Length) bytes"
+            if (-not $s.SignerCertificate) { throw "$e is not signed" }
+          }
+      - name: run from a System32-only PATH
+        shell: pwsh
+        run: |
+          $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
+          $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
+          $all = Get-ChildItem dist\*.exe, dist-shim\*.exe, dist-fat\*.exe, dist-ucrt\*.exe, dist-ucrt-fat\*.exe, dist-ucrt-shim\*.exe, dist-ucrt-shim-fat\*.exe -ErrorAction Ignore
+          $env:PATH = "$env:SystemRoot\System32"
+          foreach ($e in $all) {
+            $v = (& $e.FullName -version) -join ' '
+            # the -version line names the toolchain (momwire#1606's NAME field)
+            $tc = if ((Split-Path -Leaf $e.DirectoryName) -like 'dist-ucrt*') { 'ucrt64' } else { 'mingw64' }
+            if ($v -notmatch "^NEC5 momwire-nec5-\S+-standalone-(avx2|sse2)-$tc \[sb\] ") { "::error::$($e.Name): $v names no $tc"; exit 1 }
+            $out = "$env:RUNNER_TEMP\$($e.BaseName).out"
+            & $e.FullName $deck $out
+            if ($LASTEXITCODE) { "::error::$($e.Name) rc=$LASTEXITCODE"; exit 1 }
+            if (Select-String -Quiet "NEC ERROR" $out) { exit 1 }
+            cmd /c "`"$($e.FullName)`" - - < `"$stream`" > `"$out.stream`""
+            if ($LASTEXITCODE) { exit 1 }
+            $n = (Select-String -Pattern 'INPUT LINE .* NX ' "$out.stream").Count
+            "$($e.Name): $v; stream $n structures"
+            if ($n -lt 1) { exit 1 }
+          }
+      - name: momwire environment
+        shell: pwsh
+        run: |
+          python -m venv venv
+          venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
+          venv\Scripts\python -m pip install -q -e ".[test]"
+      - name: contract tests (razor-2p and bs2, one-variant and fat)
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $fail = 0
+          # EXE, basis, the toolchain its -version line must name
+          $sets = @(@('dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe', '', 'ucrt64'), @('dist-ucrt\momwire-nec5-bs2-avx2-ucrt64.exe', 'bspline', 'ucrt64'),
+                    @('dist-ucrt-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'),
+                    @('dist-ucrt-shim\momwire-nec5-razor2p-avx2-shim.exe', '', 'ucrt64'), @('dist-ucrt-shim\momwire-nec5-bs2-avx2-shim.exe', 'bspline', 'ucrt64'),
+                    @('dist-ucrt-shim-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-shim-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'))
+          if ($env:MINGW64_GATES -eq '1') {
+            $sets += @(@('dist\momwire-nec5-razor2p-avx2.exe', '', 'mingw64'), @('dist\momwire-nec5-bs2-avx2.exe', 'bspline', 'mingw64'),
+                       @('dist-fat\momwire-nec5-razor-2p.exe', '', 'mingw64'), @('dist-fat\momwire-nec5-bspline.exe', 'bspline', 'mingw64'))
+          }
+          foreach ($p in $sets) {
+            "=== $($p[0])"
+            $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = (Resolve-Path $p[0]).Path
+            $env:MW_EXE_EXPECT_TOOLCHAIN = $p[2]
+            if ($p[1]) { $env:MOMWIRE_STANDALONE_BASIS = $p[1] } else { Remove-Item Env:MOMWIRE_STANDALONE_BASIS -ErrorAction Ignore }
+            venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs -p no:cacheprovider
+            if ($LASTEXITCODE) { $fail = 1 }
+          }
+          exit $fail
+      # windows-nopython's corpus gate, verbatim but for the executables:
+      # the msvcrt builds both variants, the libm shims and UCRT64 avx2
+      - name: every fixture deck and the NX chains, within PRINTOUT_RTOL_WIN32
+        if: always()
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\venv\Scripts;$env:PATH"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          $fail = 0
+          $runs = @()
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist-ucrt\momwire-nec5-$b-$v-ucrt64.exe") }
+            $runs += ,@($b, 'avx2', "dist-ucrt-shim\momwire-nec5-$b-avx2-shim.exe")
+            if ($env:MINGW64_GATES -eq '1') {
+              foreach ($v in 'avx2', 'sse2') { $runs += ,@($b, $v, "dist\momwire-nec5-$b-$v.exe") }
+            }
+            if ($env:LIBM_SHIMS -eq '1') {
+              foreach ($s in 'msvcrt', 'ucrtbase') { $runs += ,@($b, 'avx2', "dist-shim\momwire-nec5-$b-avx2-$s.exe") }
+            }
+          }
+          foreach ($r in $runs) {
+            $b, $v, $exe = $r
+            if (-not (Test-Path $exe)) { "skipped: no $exe"; continue }
+            if ($v -eq 'sse2') { $env:MOMWIRE_FORCE_VARIANT = 'sse2' } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
+            $extra = @()
+            $L = "$PWD\venv\Scripts\momwire-nec5-razor-2p.exe"
+            if ($b -eq 'bs2') { $extra = @('--basis', 'bspline', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bspline.exe" }
+            $tag = [IO.Path]::GetFileNameWithoutExtension($exe)
+            "=== $tag ($v)"
+            venv\Scripts\python scripts/core_split/exe_compare.py "exe-$tag.jsonl" --standalone --rtol win32 `
+              --exe (Resolve-Path $exe).Path --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
+            if ($LASTEXITCODE) { $fail = 1 }
+          }
+          exit $fail
+      - uses: petarpetrovt/setup-sde@v6.0
+        if: always()
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+      # The fat executables' sse2 path on CPUs that lack AVX2 (Sandy Bridge)
+      # or AVX (Westmere), the avx2 path on Haswell, under Intel SDE (which
+      # faults on any instruction the emulated CPU lacks, static initialisers
+      # included); each printout must be the one-variant executable's bytes.
+      - name: fat executables under SDE (wsm, snb -> sse2; hsw -> avx2)
+        if: always()
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          $decks = @("tests\fixtures\razor_printout_3a\node_gap_two_sources.nec",
+                     "tests\fixtures\bspline_printout_buried\ab_hub16.nec",
+                     "tests\fixtures\eznec\decks\0068_nbs-yagi-ant-book-p-18-7.nec")
+          # SET: fat dir, one-variant dir, one-variant suffix
+          $sets = @(@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'), @('dist-ucrt-shim-fat', 'dist-ucrt-shim', '-shim'))
+          if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
+          $fail = 0
+          foreach ($set in $sets) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+              $fat = (Resolve-Path "$($set[0])\$($b[1]).exe").Path
+              foreach ($cpu in 'wsm', 'snb', 'hsw') {
+                $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
+                $env:OPENBLAS_CORETYPE = if ($cpu -eq 'hsw') { 'Haswell' } else { 'Nehalem' }
+                $one = (Resolve-Path "$($set[1])\momwire-nec5-$($b[0])-$want$($set[2]).exe").Path
+                # whole process first (the system DLLs too: ucrtbase's own
+                # dispatch); on a fault, again checking the exe's image only
+                foreach ($mode in '', '-chip_check_exe_only') {
+                  $m = if ($mode) { @($mode) } else { @() }
+                  $v = (& $sde "-$cpu" @m -- $fat -version) -join ' '
+                  $ok = ($LASTEXITCODE -eq 0) -and ($v -match "-standalone-$want(-[a-z0-9]+)? ")
+                  "$($set[0])\$($b[1]) under -$cpu $mode : $v"
+                  if ($ok) { break }
+                }
+                if (-not $ok) { "::error::$($b[1]) -$cpu picked wrong or failed"; $fail = 1; continue }
+                foreach ($d in $decks) {
+                  foreach ($copy in 'serial', 'threads') {
+                    $o1 = "$env:RUNNER_TEMP\sde.out"
+                    if ($copy -eq 'threads') { $env:MW_EXE_COPY = 'threads'; $env:MOMWIRE_THREADS = '2' } else { Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS -ErrorAction Ignore }
+                    & $sde "-$cpu" @m -- $fat $d $o1
+                    $rc = $LASTEXITCODE
+                    $a = if (Test-Path $o1) { [IO.File]::ReadAllBytes($o1) } else { @() }
+                    Remove-Item $o1 -ErrorAction Ignore
+                    & $one $d $o1
+                    $bb = [IO.File]::ReadAllBytes($o1)
+                    Remove-Item $o1
+                    $same = ($rc -eq 0) -and [System.Linq.Enumerable]::SequenceEqual([byte[]]$a, [byte[]]$bb)
+                    "  $(Split-Path -Leaf $d) $copy : rc=$rc identical=$same"
+                    if (-not $same) { $fail = 1 }
+                  }
+                }
+                Remove-Item Env:MW_EXE_COPY, Env:MOMWIRE_THREADS, Env:OPENBLAS_CORETYPE -ErrorAction Ignore
+              }
+            }
+          }
+          exit $fail
+      - name: fat == one-variant, every fixture deck (razor-2p and bs2, avx2 and sse2)
+        if: always()
+        shell: pwsh
+        run: |
+          $env:MW_GDB = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
+          $sets = @(@('dist-ucrt-fat', 'dist-ucrt', '-ucrt64'), @('dist-ucrt-shim-fat', 'dist-ucrt-shim', '-shim'))
+          if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
+          $fail = 0
+          foreach ($set in $sets) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+              foreach ($v in 'avx2', 'sse2') {
+                "=== $($set[0]) $($b[1]) $v"
+                python scripts/windows_static/fat_compare.py "$($set[0])\$($b[1]).exe" $v "$($set[1])\momwire-nec5-$($b[0])-$v$($set[2]).exe" `
+                  tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
+                if ($LASTEXITCODE) { $fail = 1 }
+              }
+            }
+          }
+          exit $fail
+
+  # The rare exit hang (runs 43944198706 .. 44112554494; the counts and the
+  # backtraces are in WINDOWS-SINGLE-FILE.md). Run 44112554494's soak (with
+  # its control, the C runtime's exit without the pool shutdown) hung in
+  # every arm, `_cexit` + TerminateProcess included (1 in 44,736): OpenBLAS's
+  # own `gotoblas_quit` TerminateThread()s the pool threads in every one.
+  # The exit now ends the process before the static teardown reaches it
+  # (momwire_razor2p.cpp, main's MinGW wrapper). All stdout piped (the hang
+  # never showed with stdout to DEVNULL), on ONE executable (the UCRT64 fat
+  # razor-2p, the candidate product), interleaved:
+  #   default-a, -b     the shipped exit, twice, for twice the runs
+  #   normal-shutdown   the C runtime's exit, the pools shut down at exit:
+  #                     the positive control (9 in 44,736 in run 44112554494)
+  # Four shards of 16 rounds over the fixture corpus, about 70 min each:
+  # on dispatch only.
+  stress:
+    needs: [build, ucrt64]
+    if: always() && needs.ucrt64.result == 'success' && github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        exe: [momwire-nec5-razor-2p, momwire-nec5-bspline]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: ucrt64-exes
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gdb
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # The shim-enabled fat pair: what windows-single ships while its switch is ON
+      - name: soak, UCRT64 fat ${{ matrix.exe }} with the vector-math shim, the shipped exit against the control, stdout piped (shard ${{ matrix.shard }}; diagnostic)
+        shell: pwsh
+        run: |
+          $gdb = "$env:RUNNER_TEMP\msys64\mingw64\bin\gdb.exe"
+          $e = "dist-ucrt-shim-fat\${{ matrix.exe }}.exe"
+          python scripts/windows_static/stress.py 16 $gdb "tests/fixtures,scripts/core_split/nx_decks" `
+            "default-a=$e" "default-b=$e" "normal-shutdown=$e|MW_EXE_EXIT=normal" > stress.txt
+          $rc = $LASTEXITCODE
+          Get-Content stress.txt
+          if ($rc) { exit 1 }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stress-${{ matrix.exe }}-${{ matrix.shard }}
+          path: stress.txt
+          retention-days: 7
+
+  perf:
+    needs: [build, ucrt64, msvc]
+    if: always() && needs.build.result == 'success' && needs.msvc.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: mingw64-exes
+      - uses: actions/download-artifact@v7
+        if: needs.ucrt64.result == 'success'
+        with:
+          name: ucrt64-exes
+      - uses: actions/download-artifact@v7
+        with:
+          name: msvc-exes
+          path: dist-msvc
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: this runner
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          Get-Content libm-mingw64.txt
+          if (Test-Path libm-ucrt64.txt) { Get-Content libm-ucrt64.txt }
+          foreach ($e in Get-ChildItem dist-msvc\*.exe) { "$($e.Name): $((& $e.FullName -version) -join ' ')" }
+      # every executable is built from this commit (the msvc job builds the
+      # reference), so the pairs share the source tree as well as the runner
+      - name: indicative timing, every build vs MSVC (this runner, interleaved)
+        shell: pwsh
+        run: |
+          $M = "$PWD\dist-msvc"; $D = "$PWD\dist"; $U = "$PWD\dist-ucrt"; $X = "$PWD\dist-ucrt-exp"
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            "=== $($b[0])"
+            python scripts/windows_static/time_exes.py "timing-$($b[0]).jsonl" `
+              "msvc/$($b[0])=$M\momwire-nec5-$($b[0])-avx2.exe" `
+              "msvc-precise/$($b[0])=$M\momwire-nec5-$($b[0])-avx2-precise.exe" `
+              "mingw64/$($b[0])=$D\momwire-nec5-$($b[0])-avx2.exe" `
+              "ucrt64/$($b[0])=$U\momwire-nec5-$($b[0])-avx2-ucrt64.exe" `
+              "ucrt64-fma/$($b[0])=$X\momwire-nec5-$($b[0])-avx2-fma.exe" `
+              "ucrt64-fat/$($b[0])=$PWD\dist-ucrt-fat\$($b[1]).exe" `
+              "ucrt64-shim/$($b[0])=$PWD\dist-ucrt-shim\momwire-nec5-$($b[0])-avx2-shim.exe" `
+              "ucrt64-shim-fat/$($b[0])=$PWD\dist-ucrt-shim-fat\$($b[1]).exe" `
+              "msvc-sse2/$($b[0])=$M\momwire-nec5-$($b[0])-sse2.exe" `
+              "ucrt64-sse2/$($b[0])=$U\momwire-nec5-$($b[0])-sse2-ucrt64.exe"
+            if ($LASTEXITCODE) { exit 1 }
+          }
+      - name: stage times, every build vs MSVC
+        if: always()
+        shell: pwsh
+        run: |
+          $M = "$PWD\dist-msvc"; $U = "$PWD\dist-ucrt"; $X = "$PWD\dist-ucrt-exp"
+          $args_ = @()
+          foreach ($b in 'razor2p', 'bs2') {
+            $cand = @("msvc/$b=$M\momwire-nec5-$b-avx2.exe", "msvc-precise/$b=$M\momwire-nec5-$b-avx2-precise.exe",
+                      "ucrt64/$b=$U\momwire-nec5-$b-avx2-ucrt64.exe", "ucrt64-shim/$b=$PWD\dist-ucrt-shim\momwire-nec5-$b-avx2-shim.exe",
+                      "ucrt64-fma/$b=$X\momwire-nec5-$b-avx2-fma.exe",
+                      "msvc-sse2/$b=$M\momwire-nec5-$b-sse2.exe", "ucrt64-sse2/$b=$U\momwire-nec5-$b-sse2-ucrt64.exe")
+            $args_ += $cand | Where-Object { Test-Path ($_ -split '=', 2)[1] }
+          }
+          python scripts/windows_static/stage_times.py @args_ > stages.txt
+          $rc = $LASTEXITCODE
+          Get-Content stages.txt
+          if ($rc) { exit 1 }
+      # The proof that the timed shim builds' code path ran: the counting build
+      # of the same sources, on the same decks (never timed)
+      - name: the shim's call counts
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/windows_static/shim_counts.py `
+            "razor2p=$PWD\dist-ucrt-shim-count\momwire-nec5-razor2p-avx2-shimcount.exe" `
+            "bs2=$PWD\dist-ucrt-shim-count\momwire-nec5-bs2-avx2-shimcount.exe" > shim-counts.txt
+          $rc = $LASTEXITCODE
+          Get-Content shim-counts.txt
+          if ($rc) { exit 1 }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: timing
+          path: |
+            timing-*.jsonl
+            stages.txt
+            shim-counts.txt
+          retention-days: 7

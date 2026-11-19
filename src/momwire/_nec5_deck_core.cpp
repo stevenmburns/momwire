@@ -292,6 +292,12 @@ double strtod_c(const char *s) {
 #if defined(_MSC_VER)
     static _locale_t c = _create_locale(LC_NUMERIC, "C");
     return _strtod_l(s, nullptr, c);
+#elif defined(__MINGW32__)
+    // MinGW-w64 (the static Windows executables, windows-static.yml): no POSIX
+    // locale API, and msvcrt.dll's _snprintf_l prints three-digit exponents
+    // (1e+010). The executable never calls setlocale, so the process is in the
+    // C locale throughout, and libstdc++'s __USE_MINGW_ANSI_STDIO printf is C99's.
+    return std::strtod(s, nullptr);
 #else
     static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
     return strtod_l(s, nullptr, c);
@@ -306,6 +312,11 @@ std::string format_c(const char *fmt, double x) {
 #if defined(_MSC_VER)
         static _locale_t c = _create_locale(LC_NUMERIC, "C");
         const int n = _snprintf_l(buf.data(), buf.size(), fmt, c, x);
+        if (n >= 0 && static_cast<std::size_t>(n) < buf.size()) return buf.data();
+        buf.resize(n >= 0 ? static_cast<std::size_t>(n) + 1 : 2 * buf.size());
+#elif defined(__MINGW32__)
+        // the C locale throughout (strtod_c above)
+        const int n = std::snprintf(buf.data(), buf.size(), fmt, x);
         if (n >= 0 && static_cast<std::size_t>(n) < buf.size()) return buf.data();
         buf.resize(n >= 0 ? static_cast<std::size_t>(n) + 1 : 2 * buf.size());
 #else

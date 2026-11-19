@@ -75,10 +75,11 @@ def test_a_feature_only_diff_selects_its_levels_pr_jobs_only():
     assert sel.stable_files == []
     assert set(sel.required) <= _level_jobs(1) | ALWAYS
     # A deeper reach pulls in the deeper levels' PR jobs that run.
-    deeper = _with_reach("exact_kernel_series", 7)
+    deeper = _with_reach("exact_kernel_series", 8)
     sel = _select(["src/momwire/_accel_exact_kernel_series.cpp"], deeper)
-    # Levels 5-7: test-macos and the bs2/razor exe lanes, not the nec42
-    # ones (levels 8, 9), nor linux-artifact (a build, no level).
+    # Levels 5-8: test-macos and the bs2/razor exe lanes, not the nec42
+    # ones (levels 9, 10), nor linux-artifact (a build, no level), nor the
+    # MinGW preview's job (level 7), which never runs on a pull request.
     assert set(sel.required) == ALWAYS | {"ci.yml:test-macos"} | (
         STANDALONE_LANES
         - {
@@ -87,7 +88,8 @@ def test_a_feature_only_diff_selects_its_levels_pr_jobs_only():
             "standalone.yml:linux-nec42-bs",
         }
     )
-    assert set(sel.required) <= _level_jobs(7) | ALWAYS
+    assert set(sel.required) <= _level_jobs(8) | ALWAYS
+    assert "standalone.yml:windows-single" not in sel.required
 
 
 def test_a_stable_cpp_diff_selects_the_standalone_lanes():

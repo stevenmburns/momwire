@@ -21,7 +21,7 @@ What is held:
   on both formulations, and the plan did change; so does the deep, high-
   frequency hub where the drift was measured largest (razor-2p).
 
-Reach 7 (the two nec5 executables): `DECKS` below are two hubs as NEC-5
+Reach 8 (the two nec5 executables): `DECKS` below are two hubs as NEC-5
 decks, which tests/test_standalone_nopython.py gives each executable off and
 on, against the launcher (byte for byte on Linux, the fixture gates'
 tolerance on Windows and macOS), and the executable's own Zin, on against
@@ -48,9 +48,9 @@ from momwire.razor import RazorSolver
 from test_crossing_serve_524 import _radial_dirs, crossing_deck, hub_deck
 from _lane_gate import assert_lanes_match
 
-# An experimental feature (`momwire._features`, reach 7).
+# An experimental feature (`momwire._features`, reach 8).
 pytestmark = [
-    pytest.mark.reach(7),
+    pytest.mark.reach(8),
     # The decks are the fill tests' shapes, not converged designs: their
     # advisories (a coarse crossing node, an ambiguous feed site) are not
     # what is held here.

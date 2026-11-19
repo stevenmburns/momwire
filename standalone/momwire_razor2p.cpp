@@ -202,7 +202,7 @@ extern "C" void omp_set_num_threads(int);
 #if defined(__GLIBC__)
 #include <malloc.h>  // mallopt
 #endif
-#if defined(__linux__)
+#if defined(__linux__) || defined(__MINGW32__)
 // The static OpenBLAS's pool teardown (a missing one fails the link); the
 // numpy library's too where it is a second archive (blas.h, momwire#1751).
 extern "C" int MWX(blas_thread_shutdown_)(void);
@@ -259,7 +259,20 @@ const char *const EXE_VARIANT = MW_EXE_VARIANT;
 // SimNEC user (or the `CM version` card SimNEC echoes on every deck) can tell
 // this executable from the Python launcher of the same name, and the avx2
 // build from the sse2 one. Everything else in the line is the launcher's.
-#define MW_EXE_VERSION_NAME MW_EXE_LAUNCHER "-standalone-" MW_EXE_VARIANT
+// A MinGW-w64 build (windows-static.yml, the single-file experiment) adds
+// its toolchain after the variant, `...-standalone-avx2-ucrt64`, so a deck's
+// `CM version` card or a bug report says which of two Windows builds of one
+// release answered; the MSVC build (the shipped zip) adds nothing.
+#if defined(__MINGW32__) && defined(__clang__)
+#define MW_EXE_TOOLCHAIN_TAG "-clang64"
+#elif defined(__MINGW32__) && defined(_UCRT)
+#define MW_EXE_TOOLCHAIN_TAG "-ucrt64"
+#elif defined(__MINGW32__)
+#define MW_EXE_TOOLCHAIN_TAG "-mingw64"
+#else
+#define MW_EXE_TOOLCHAIN_TAG ""
+#endif
+#define MW_EXE_VERSION_NAME MW_EXE_LAUNCHER "-standalone-" MW_EXE_VARIANT MW_EXE_TOOLCHAIN_TAG
 
 using Clock = std::chrono::steady_clock;
 const Clock::time_point T0 = Clock::now();
@@ -384,20 +397,20 @@ struct ExeFeature {
 // momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
 // razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
 // which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
-// and momwire#1956's retuned sheet weights (reach 7: the nec5 executables).
+// and momwire#1956's retuned sheet weights (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
-    {"factored_columns", 8, true},
-    {"height_sheet_recal", 8, true},
-    {"crossing_table", 8, false},
-    {"crossing_above_rule", 8, false},
-    {"razor_pair_reuse", 7, false},
-    {"crossing_sheet_retune", 7, false},
-    {"crossing_anchors", 7, false},
+    {"factored_columns", 9, true},
+    {"height_sheet_recal", 9, true},
+    {"crossing_table", 9, false},
+    {"crossing_above_rule", 9, false},
+    {"razor_pair_reuse", 8, false},
+    {"crossing_sheet_retune", 8, false},
+    {"crossing_anchors", 8, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.
 // razor_pair_reuse is razor-2p's fill, but nec5-bspline shares its levels
-// (6 and 7) and its EXE_FEATURES, so without this it would accept the
+// (6 to 8) and its EXE_FEATURES, so without this it would accept the
 // variable, name it on line 2 and fill as with it off. It refuses instead,
 // in the registry's sentence (nec42-bspline is past the reach anyway).
 const char *const EXE_FEATURE_BASES[][2] = {
@@ -432,11 +445,13 @@ bool feature_honoured_here(const std::string &name) {
 // `_features.current_level("exe", basis=...)` places it.
 int exe_level() {
 #if MW_EXE_DIALECT_NEC4
-    return std::string(BASIS) == "sinusoidal" ? 9 : 8;  // exe-nec42-sinusoidal / exe-nec42-bspline
+    return std::string(BASIS) == "sinusoidal" ? 10 : 9;  // exe-nec42-sinusoidal / exe-nec42-bspline
+#elif defined(__MINGW32__)
+    return 7;  // exe-nec5-bspline-razor-2p-windows-mingw
 #elif defined(_WIN32)
     return 6;  // exe-nec5-bspline-razor-2p-windows
 #else
-    return 7;  // exe-nec5-bspline-razor-2p-linux-macos
+    return 8;  // exe-nec5-bspline-razor-2p-linux-macos
 #endif
 }
 
@@ -773,6 +788,41 @@ __attribute__((constructor(101))) void one_blas_thread_at_load() {
 #endif
 }
 #endif
+#if defined(__MINGW32__)
+// The static MinGW-w64 build (windows-static.yml; no OpenBLAS DLL to
+// delay-load): OpenBLAS and libgomp are linked in, so their load-time
+// constructors run before main() and `blas_env_before_load` is too late for
+// them. The Linux constructor's settings, ahead of them; libgomp is GCC's
+// here too, so the same spin count. _putenv_s cannot keep an existing value,
+// hence the checks.
+__attribute__((constructor(101))) void one_blas_thread_at_load() {
+    _putenv_s("OPENBLAS_NUM_THREADS", "1");
+    if (std::getenv("OPENBLAS_THREAD_TIMEOUT") == nullptr) _putenv_s("OPENBLAS_THREAD_TIMEOUT", "16");
+    if (std::getenv("OMP_WAIT_POLICY") == nullptr && std::getenv("GOMP_SPINCOUNT") == nullptr)
+        _putenv_s("GOMP_SPINCOUNT", "30000");
+}
+// Both OpenBLAS pools shut down before the C runtime's exit sequence
+// (d35e80c1; registered from main(), so it runs before the handlers
+// registered at start-up, OpenBLAS's own `gotoblas_quit` among them). Kept
+// for the A/B only: the shutdown is itself what TerminateThread()s the pool
+// threads (main's MinGW wrapper, below, says why that hangs), and the soak
+// measured it hanging more often, not less (9 against 4 in 44,736 each).
+// MW_EXE_EXIT_SHUTDOWN=0 leaves the pools alone.
+void shutdown_blas_pools() {
+    MWX(blas_thread_shutdown_)();
+#if MW_BLAS_TWO_LIBS
+    MWN(blas_thread_shutdown_)();
+#endif
+}
+void shutdown_blas_pools_at_exit() {
+    // only on the normal exit (main's MinGW wrapper, below); the default
+    // ends the process before any pool shutdown runs
+    const char *how = std::getenv("MW_EXE_EXIT");
+    if (how == nullptr || std::string(how) != "normal") return;
+    const char *v = std::getenv("MW_EXE_EXIT_SHUTDOWN");
+    if (v == nullptr || std::string(v) != "0") std::atexit(shutdown_blas_pools);
+}
+#endif
 
 #if !MW_EXE_NO_PYTHON
 // --- where momwire's Python lives -------------------------------------------
@@ -864,6 +914,11 @@ std::string installed_version(const std::string &home) {
 // Windows 10, and answers FALSE for an id it does not know, so on Windows 7
 // an AVX2 CPU would read as baseline. `xcr0_bits` are the register states the
 // OS saves (XCR0), which the instructions need as much as the CPU bits.
+#if defined(__GNUC__)
+// MinGW-w64 gcc: _xgetbv is an xsave intrinsic, callable only from code
+// compiled for it (it runs only once OSXSAVE, checked first, is set).
+__attribute__((target("xsave")))
+#endif
 bool cpuid_has(int leaf7_ebx_bit, unsigned long long xcr0_bits, bool needs_fma) {
     int r[4];
     __cpuid(r, 0);
@@ -926,6 +981,7 @@ void pick_variant() {
     if (mw_fat::avx2) run_avx2_initializers();
 }
 
+#if defined(_MSC_VER)
 // The avx2 copies' dynamic initializers, which the C runtime does NOT run:
 // fat_avx2_init.h (forced on every avx2 TU) puts their pointers in
 // `.mwav$m`, which the linker sorts between these two markers, in link order
@@ -951,6 +1007,33 @@ void run_avx2_initializers() {
     }
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 initializers %d\n", n);
 }
+#else
+// MinGW-w64: the avx2 copies' static constructors, which the C runtime does
+// NOT run: defer_ctors.cmake moves each avx2 object's `.ctors` entries into
+// `.data$mwactors_m*`, which the PE linker sorts between these two markers.
+// They are compiled -mavx2 like the rest of their TU, so on a CPU without
+// AVX they must never run (Intel SDE as Westmere faulted in one, at start-up).
+// Run once, after the pick, before any avx2 code; in reverse order, as
+// libgcc's __do_global_ctors runs `.ctors`.
+using mw_ctor = void (*)();
+__attribute__((section(".data$mwactors_a"), used)) mw_ctor mw_avx2_ctors_begin = nullptr;
+__attribute__((section(".data$mwactors_z"), used)) mw_ctor mw_avx2_ctors_end = nullptr;
+void run_avx2_initializers() {
+    const auto first = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_begin) + sizeof(mw_ctor);
+    const auto last = reinterpret_cast<std::uintptr_t>(&mw_avx2_ctors_end);
+    int n = 0;
+    for (std::uintptr_t a = last; a > first;) {
+        a -= sizeof(mw_ctor);
+        const mw_ctor f = *reinterpret_cast<volatile mw_ctor *>(a);
+        // `.ctors` lists may carry -1 / 0 sentinels; neither is a function
+        if (f != nullptr && reinterpret_cast<std::intptr_t>(f) != -1) {
+            f();
+            n++;
+        }
+    }
+    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: avx2 initializers %d\n", n);
+}
+#endif
 #endif
 
 #if !MW_EXE_NO_PYTHON
@@ -1222,6 +1305,9 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
 
 #if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
+#if defined(__MINGW32__)
+    shutdown_blas_pools_at_exit();
+#endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
@@ -1388,8 +1474,8 @@ mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EX
 std::string probe_version() {
 #if MW_EXE_FAT
     // the variant this run picked, as a one-variant build names its own
-    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_LAUNCHER "-standalone-" + EXE_VARIANT + " [sb] " +
-           VERSION;
+    return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_LAUNCHER "-standalone-" + EXE_VARIANT +
+           MW_EXE_TOOLCHAIN_TAG " [sb] " + VERSION;
 #else
     return std::string(MW_EXE_VERSION_DIALECT " ") + MW_EXE_VERSION_NAME + " [sb] " + VERSION;
 #endif
@@ -1841,7 +1927,62 @@ void blas_env_before_load() {
 
 }  // namespace
 
+#if defined(__MINGW32__)
+// The static MinGW-w64 build ends the process itself once main's work is
+// done, before the static teardown, because of how OpenBLAS's Win32 thread
+// server stops: `blas_thread_shutdown_` (blas_server_win32.c) waits 50 ms
+// for each pool thread and then TerminateThread()s it. A thread killed that
+// way while it holds the process heap lock or the loader lock (a thread on
+// its way out takes the loader lock) leaves the lock held for ever, and the
+// next free() or LoadLibraryExW in the exit sequence waits on it: the two
+// shapes of the rare exit hang (standalone/WINDOWS-SINGLE-FILE.md has the
+// backtraces and the soak). OpenBLAS calls it from its own destructor,
+// `gotoblas_quit`, on every C-runtime exit, and d35e80c1's explicit shutdown
+// called it once more.
+//
+// So `end_before_static_teardown` is registered with atexit at the top of
+// main: the table runs last-in first-out, so it runs AFTER every handler the
+// work registered (the diagnostics that report at exit,
+// MOMWIRE_SOMM_LAZY_CHECK's among them) and BEFORE those registered before
+// main (static destructors, `.dtors`, OpenBLAS's `gotoblas_quit`), and it
+// ends the process there with main's status. Every printout is already
+// closed (fclose) and stdio is flushed.
+//
+// MW_EXE_EXIT (the stress job's A/B): `cexit` runs the whole table and then
+// TerminateProcess (b554dae3, which still hung in 1 of 44,736); `normal`
+// returns from main into the C runtime's exit, with the OpenBLAS pools shut
+// down at exit (`shutdown_blas_pools`) unless MW_EXE_EXIT_SHUTDOWN=0;
+// `terminate` skips the table, and with it the exit-time diagnostics.
+#include <process.h>  // _cexit
+int mw_main(int argc, char **argv);
+namespace {
+// main's status; -1 until main's work is done, so an exit() from inside the
+// work (none in this build) keeps the C runtime's own path
+int g_exit_rc = -1;
+void end_before_static_teardown() {
+    if (g_exit_rc < 0) return;
+    std::fflush(nullptr);
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(g_exit_rc));
+}
+}  // namespace
 int main(int argc, char **argv) {
+    const std::string how = env("MW_EXE_EXIT");
+    if (how.empty()) std::atexit(end_before_static_teardown);
+    const int rc = mw_main(argc, argv);
+    std::fflush(nullptr);
+    if (how == "normal") return rc;
+    g_exit_rc = rc;
+    if (how != "terminate") _cexit();
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(rc));
+    return rc;
+}
+int mw_main(int argc, char **argv) {
+#else
+int main(int argc, char **argv) {
+#endif
+#if defined(__MINGW32__)
+    shutdown_blas_pools_at_exit();
+#endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
     if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);

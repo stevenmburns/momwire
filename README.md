@@ -342,6 +342,15 @@ deck through both Windows builds (avx2 and sse2) on every change and checks
 their printouts against the Python engine's: they match to the printed digit,
 apart from round-off in values that are zero in exact arithmetic.
 
+**Preview: one file per engine.** A release may also carry
+**`momwire-nec5-windows-x64-single.zip`** beside that zip, which stays the
+default; check the release's assets. It holds `momwire-nec5-razor-2p.exe` and `momwire-nec5-bspline.exe`,
+built with GCC (MSYS2 UCRT64): each file carries an avx2 and an sse2 build and
+picks the one the processor can run, with no DLLs beside it. It needs the
+Universal C Runtime, which Windows 10 and 11 include; on Windows 7 SP1 or 8.1
+install KB2999226 or a Visual C++ 2015 or later redistributable. Its speed
+differs from the default zip's from deck to deck, in both directions.
+
 ### The NEC-5 engines on macOS, without Python (preview)
 
 **Preview:** each release from 0.79.0 also carries the same two engines for
