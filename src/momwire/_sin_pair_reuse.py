@@ -347,6 +347,21 @@ def over_budget_reason() -> str:
     )
 
 
+def kernel_evals(plan) -> int:
+    """The (observer, source) pairs one frequency's evaluation hands the
+    kernel: a class's canonical row each, and every direct call's rectangle
+    of rows by sources, which exceeds the pairs it needs (`near_blocks`).
+    Kept on the plan, which never changes once built."""
+    held = plan.__dict__.get("_kernel_evals")
+    if held is None:
+        blocks = (*plan.near_blocks, *getattr(plan, "rep_blocks", ()))
+        held = sum((b[1] - b[0]) * b[2].size for b in blocks)
+        if not hasattr(plan, "rep_blocks"):
+            held += plan.n_classes
+        plan.__dict__["_kernel_evals"] = held
+    return int(held)
+
+
 def plan_nbytes(plan) -> int:
     """The arrays a plan holds, in bytes (its lists of slices are small)."""
     if plan is OVER_BUDGET:
@@ -439,6 +454,9 @@ class Plan:
     # it stands, times CODE_SIGNS[rep_code] is the canonical one).
     rep_code: np.ndarray | None = None  # (n_cls,) int8
     code_bits: int = 0
+    # The census's own peak by `CENSUS_BYTES_PER_BAND_CLASS`, for the fill
+    # report (momwire#2016).
+    census_peak_bytes: int | None = None
 
     @property
     def n_near(self) -> int:
@@ -465,6 +483,7 @@ class GroundPlan:
     near_blocks: list
     rep_code: np.ndarray | None = None  # as `Plan`'s (momwire#1969)
     code_bits: int = 0
+    census_peak_bytes: int | None = None  # as `Plan`'s (momwire#2016)
 
     @property
     def n_near(self) -> int:
@@ -938,6 +957,9 @@ def build_plan(
     results = _census_bands(band, starts, cls.nbytes, budget)
     if results is None:
         return OVER_BUDGET
+    census_peak = cls.nbytes + CENSUS_BYTES_PER_BAND_CLASS * sum(
+        r[0][0].shape[0] for r in results
+    )
     # The bands' classes merged: a key seen in two bands is one class.
     keys = [np.concatenate([r[0][j] for r in results]) for j in range(5)]
     gfirst, ginv = _group(keys)
@@ -987,6 +1009,7 @@ def build_plan(
         runs=runs,
         rep_code=rep_code if coded else None,
         code_bits=CODE_BITS if coded else 0,
+        census_peak_bytes=census_peak,
     )
     return _within_budget(plan, budget)
 
@@ -1187,6 +1210,9 @@ def build_ground_plan(
     results = _census_bands(band, starts, cls.nbytes, budget)
     if results is None:
         return OVER_BUDGET
+    census_peak = cls.nbytes + CENSUS_BYTES_PER_BAND_CLASS * sum(
+        r[0][0].shape[0] for r in results
+    )
     n_cols = len(results[0][0])
     keys = [np.concatenate([r[0][j] for r in results]) for j in range(n_cols)]
     gfirst, ginv = _group(keys)
@@ -1216,6 +1242,7 @@ def build_ground_plan(
         near_blocks=near_blocks(near_flat, N, a_obs),
         rep_code=rep_code if coded else None,
         code_bits=CODE_BITS if coded else 0,
+        census_peak_bytes=census_peak,
     )
     return _within_budget(plan, budget)
 

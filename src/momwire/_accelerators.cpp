@@ -43,6 +43,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_phi_reduce(m);
     register_solve_prep(m);
     register_sin_pair_reuse(m);
+    register_fill_report(m);
     register_qp_pairs(m);
     register_exact_kernel(m);
     register_exact_kernel_point(m);

@@ -584,6 +584,9 @@ _ACCEL_SOURCES = [
     # reduction (`reduce_phi_band`'s order). Its own TU for the reduction's
     # reason: its bits are that order's.
     "src/momwire/_accel_sin_pair_reuse.cpp",
+    # momwire#2016: the fill report's wire map over a sinusoidal reuse plan's
+    # class map. Its own TU: integers only, run when the map is read.
+    "src/momwire/_accel_fill_report.cpp",
     # The remainder order's per-source scan (`_quadrature.remainder_qp_pairs`).
     # Its own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_qp_pairs.cpp",
@@ -611,6 +614,9 @@ _ACCEL_SOURCES = [
     # `_accel_razor_solve.cpp` binds it for the Python route. Its own TU: it
     # only CALLS the kernels, across a TU boundary.
     "src/momwire/_razor_pair_reuse_core.cpp",
+    # momwire#2016: the fill report's wire map over that plan's class maps.
+    # Its own TU: integers only, and no fill calls it.
+    "src/momwire/_razor_fill_map_core.cpp",
     # The razor-2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.

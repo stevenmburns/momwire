@@ -234,11 +234,20 @@ class SolveContext {
     std::vector<int64_t> q_seg_;       // the remainder rows' segments and signs
     std::vector<double> q_sign_;
     std::string reuse_declined_reason_;  // the last fill's, or empty
+    // The last fill's plan for the fill report (momwire#2016): held weakly,
+    // so the report keeps no plan the process's cache has dropped.
+    std::weak_ptr<const reuse::Plan> last_plan_;
+    bool last_plan_built_ = false, last_plan_q_ = false;
     void reuse_begin(const SolveInputs &in);
 
   public:
     // Why the last fill asked for reuse and did not take it, or empty.
     const std::string &reuse_declined_reason() const { return reuse_declined_reason_; }
+    // The plan the last fill read, whether that fill's census built it, and
+    // whether the composing ground's remainder was planned.
+    const std::weak_ptr<const reuse::Plan> &last_plan() const { return last_plan_; }
+    bool last_plan_built() const { return last_plan_built_; }
+    bool last_plan_q() const { return last_plan_q_; }
 
   private:
     void knot_moments(const SolveInputs &in, const SourceSet &src, bool image,

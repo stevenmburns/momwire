@@ -932,6 +932,8 @@ class ArrayBlockSolver(HMatrixSolver):
     forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
 
+    _fill_report_route_name = "array-block"
+
     # Inherits HMatrixSolver's row in every other respect — same basis, same
     # testing, same served axes — and differs in the one cell this class
     # exists for. Spelled as `_replace` on the parent for the same reason
