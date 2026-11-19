@@ -391,3 +391,21 @@ def test_a_deck_the_cap_refuses_falls_back_by_default(
     on = "\n".join(_run(monkeypatch, "1", deck))
     assert f"ERROR: {refusal}" in on
     assert "NEC-2 END CAP" not in on
+
+
+def test_the_shared_launchers_warm_server_keys_each_answer(monkeypatch):
+    """`momwire-nec2c-shared` reuses a warm server by key: unset (the cap,
+    falling back), `=1` (the cap, refusing) and `=0` (no cap) are three
+    engines here, so none may answer for another. A blank value is unset."""
+    import momwire_nec2c_client as client
+
+    def key(value):
+        if value is None:
+            monkeypatch.delenv(ENV, raising=False)
+        else:
+            monkeypatch.setenv(ENV, value)
+        return client.config_key(["--basis", "sinusoidal"], 60.0)
+
+    unset, on, off = key(None), key("1"), key("0")
+    assert len({unset, on, off}) == 3
+    assert key(" ") == unset and key("OFF") == off and key(" yes ") == on

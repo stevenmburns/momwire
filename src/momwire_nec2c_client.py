@@ -361,9 +361,30 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             *(f"{flag}={value}" for flag, value in pairs),
             *_mech.junction_rule_identity(),
             *_mech.feature_identity(),
+            *end_cap_identity(),
             *_mech.thread_identity(),
         ]
     )
+
+
+# This launcher's sinusoidal route takes `nec2_end_cap` by default (Steve,
+# 2026-11-19) where the registry's default is off, so `feature_identity`,
+# which keys only an explicit ON for such a feature, would let a warm server
+# started with the variable unset (the cap) answer a call that set it to 0
+# (no cap). An explicit off keys a server of its own here; unset and on keep
+# the keys they had. Only this client: the EZNEC clients' engines keep the
+# registry's default, where 0 and unset are one engine.
+END_CAP_ENV = "MOMWIRE_X_NEC2_END_CAP"
+
+
+def end_cap_identity(environ=None) -> list[str]:
+    """``["feature=nec2_end_cap=off"]`` when the variable is set to a value
+    that is not on, else nothing."""
+    env = os.environ if environ is None else environ
+    value = env.get(END_CAP_ENV, "").strip()
+    if value and value.lower() not in _mech._FEATURE_ON:
+        return ["feature=nec2_end_cap=off"]
+    return []
 
 
 runtime_dir = _mech.runtime_dir
