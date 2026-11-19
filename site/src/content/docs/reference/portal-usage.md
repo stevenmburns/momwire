@@ -123,6 +123,36 @@ the NEC-5 dialect's `momwire-nec5-razor-2p`, for EZNEC's NEC-5 slot and
 SimNEC's own NEC-5 engine alike ([below](#simnecs-nec-5-engine)), which
 writes a source at a node.
 
+**On this launcher `sinusoidal` takes NEC-2's free-end cap by default**
+(momwire#2033, after 0.94.0). NEC-2 lets the current at a free wire
+end run onto the end cap, I = ±(X/k) dI/ds with X = J₁(ka)/J₀(ka) (NEC
+Part I, Eqs. 23 and 54–64); momwire's sinusoidal basis everywhere else takes
+it to zero there. The NEC-2 drop-in exists to answer like NEC-2, so this one
+route (`momwire-nec2c-sinusoidal`, or any `momwire-nec2c*` run with
+`--basis sinusoidal`) uses NEC-2's condition unless told otherwise. It is a
+compatibility choice, not better physics: a flat cap is worth about 0.10a of
+extra length per end and this condition acts like three to four times that
+on coarse meshes, so it moves Zin most on fat wires (up to 58 % on a fat-wire
+log-periodic Yagi against the no-cap answer). The other bases, the NEC-4.2
+and NEC-5 launchers and the Python API keep the zero-current end.
+
+| `MOMWIRE_X_NEC2_END_CAP` | `momwire-nec2c-sinusoidal` |
+|---|---|
+| unset (the default) | the cap; a deck it cannot act on runs without it |
+| `0` | no cap: the answer, and the printout, of momwire 0.94 |
+| `1` | the cap; a deck it cannot act on is refused with a NEC ERROR |
+
+Set the variable in the environment SimNEC starts the engine in. The decks
+the cap cannot act on are a buried or ground-crossing wire with a free end
+(NEC-2 has no wires below the interface) and, under
+`MOMWIRE_JUNCTION_RULE=nec42`, a junction the NEC-4 rule solves with a free
+end anywhere on the deck. By default those run without the cap, and each
+solve says so at column 0 just above MATRIX TIMING:
+`NEC-2 END CAP NOT APPLIED: a buried or ground-crossing wire has a free end`.
+The banner does not name the cap: on this route it is the default, as the
+banner never names a default, and `=0` gives back the old printout byte for
+byte.
+
 **On a tapered or stepped-radius wire, `sinusoidal` is NEC-2-faithful, not
 converged.** At a junction where two wire radii meet it follows NEC-2, and
 that includes NEC-2's well-known stepped-radius weakness: it mostly ignores
