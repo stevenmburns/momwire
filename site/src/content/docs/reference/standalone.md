@@ -139,10 +139,13 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 
 The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up)
 (named `momwire-eznec-windows.zip` before 0.80.0), is the way to run momwire
-in EZNEC's, SimNEC's or 4nec2's NEC-4.2 engine slot on Windows, and for any
-deck or formulation a standalone program does not serve; in the NEC-5 slot
-either one works. The NEC-2 launchers come with `pip install momwire`, in
-neither zip. The two are built for different launch patterns:
+in EZNEC's, SimNEC's or 4nec2's NEC-4.2 engine slot on Windows, as a NEC-2
+engine (`momwire-nec2c.exe` and `momwire-nec2c-sinusoidal.exe`, the same
+engines `pip install momwire` installs under those names, for SimNEC's NEC-2
+setting and nec2c's command line), and for any deck or formulation a
+standalone program does not serve; in the NEC-5 slot either one works. There
+is no standalone NEC-2 program. The two are built for different launch
+patterns:
 
 - A standalone program is **a new process per run**, with no Python to
   start, so it answers the first run of a session quickly.
@@ -151,7 +154,10 @@ neither zip. The two are built for different launch patterns:
   Its first run pays that start-up. Its warm runs are slower than the
   standalone program's: on Windows, about 20 % on large razor-2p decks and
   a few per cent on large B-spline decks. [Which momwire to run on
-  Windows](/reference/windows/) has the measurements.
+  Windows](/reference/windows/) has the measurements. Its NEC-2 engines are
+  the exception: SimNEC streams a whole run's decks into one engine process,
+  so they start the engine once per run and keep nothing resident between
+  runs.
 
 SimNEC's streaming call (`- -`, decks on stdin separated by `NX`, printouts
 on stdout) works with the standalone programs: one process answers the
