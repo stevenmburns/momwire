@@ -1,18 +1,18 @@
 ---
 title: "Which momwire to run on Windows"
-description: The standalone executable, the EZNEC drop-in, or the single-file preview — which to use on Windows, and what each costs, measured on momwire 0.95.0's release builds.
+description: The standalone executable, the EZNEC drop-in, the single-file preview, or pip — which to use on Windows, and what each costs, measured on momwire 0.95.0's release builds.
 ---
 
-momwire comes for Windows in three forms. All three print the same input
-impedance for a deck they both serve, so the choice is about speed and
-convenience, not about the answer.
+momwire comes for Windows in four forms: three downloads and a Python
+install. Any two of them print the same input impedance for a deck both
+serve, so the choice is about speed and convenience, not about the answer.
 
 | You want | Use |
 |---|---|
 | A NEC-5 deck, run directly or from EZNEC's or SimNEC's NEC-5 engine setting | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
 | A deck the executable refuses (its printout says `not served by this build`), the NEC-4.2 engine slot, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
-| A NEC-2 engine (`momwire-nec2c-<basis>`) | `pip install momwire`: the NEC-2 launchers are in neither zip ([NEC-2 launchers](/reference/portal-usage/)) |
 | One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`, on releases that list it |
+| Every engine, the NEC-2 ones included, or momwire from your own Python | `pip install momwire` (Python 3.10 or later); see [From Python](#from-python) |
 
 ## The standalone executable first
 
@@ -110,6 +110,21 @@ starts its engine once for every frequency of a sweep.
 The tables above time single runs, not a sweep that starts the engine at
 every frequency the way EZNEC does. A sweep like that is being measured, and
 the advice here will be updated if it changes the choice.
+
+## From Python
+
+`pip install momwire` puts the whole engine in your own Python (3.10 or
+later). It installs the same commands the drop-in has, `momwire-nec5-<basis>`
+and `momwire-nec42-<basis>`, running the same Python engine with a resident
+engine between runs, plus two things neither zip has:
+
+- the NEC-2 engines, `momwire-nec2c-<basis>` ([NEC-2 launchers](/reference/portal-usage/));
+- the Python library itself, for scripts and for
+  [antennaknobs](https://antennaknobs.dev).
+
+It updates with `pip install -U momwire`. Point a host program's engine
+setting at the command's full path, which `where momwire-nec5-razor-2p`
+prints in a Command Prompt.
 
 ## The single-file build
 
