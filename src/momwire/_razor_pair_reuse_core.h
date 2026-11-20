@@ -97,6 +97,7 @@
 #pragma once
 
 #include "_mw_core.h"
+#include "_pair_reuse_core.h"
 
 #include <memory>
 #include <string>
@@ -215,7 +216,10 @@ void set_plan_budget(int64_t bytes);
 int64_t plan_budget();
 // Bytes of plans the process keeps between fills, one fill's budget
 // (momwire#2026): a long-lived server holds no more than a single fill may use.
+// The core's cache holds it (`pair_reuse::SHARED_PLAN_BYTES`).
 constexpr size_t SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;
+static_assert(SHARED_PLAN_BYTES == pair_reuse::SHARED_PLAN_BYTES,
+              "the core's cache keeps one razor fill's budget");
 
 // What the plan reads. Views into the caller's arrays; the plan copies what
 // it keeps.
@@ -236,51 +240,21 @@ struct Geometry {
     double ground_z = 0.0;
 };
 
-struct Group {
-    uint8_t block = 0;
-    std::vector<int32_t> obs, src;  // observer rows, the union of their reps' sources
-    std::vector<int32_t> cls, at;   // each class's value at at = row * |src| + col
-};
-
-struct Plan {
-    // Why this plan does not serve the deck, or empty: a deck the census
-    // cannot code (more classes than an int32 entry holds, more segment
-    // types than the key's type field, more segments than `MAX_SEGS`). A
-    // declined plan has no classes; the caller fills as without reuse. It is
-    // cached like any other, so the census is not re-run per frequency.
-    std::string declined;
-    int64_t n_seg = 0;
-    bool has_image = false, remainder = false;
-    std::string fingerprint;
-    // Direct moments: entry = class << 1 | flip, one map per block.
-    std::vector<int32_t> dmap[2];
-    int64_t n_dcls = 0;
-    std::vector<uint8_t> drep_flip;
-    std::vector<Group> dgroups;
-    // The remainder: entry = class << 2 | code.
-    std::vector<int32_t> qmap;
-    int64_t n_qcls = 0;
-    std::vector<uint8_t> qrep_code;
-    std::vector<Group> qgroups;
-    // The census, for tests and benchmarks.
-    int64_t pairs = 0, near_pairs = 0, q_pairs = 0;
-    int64_t rep_evals = 0, q_rep_evals = 0;  // pairs the representatives' calls evaluate
-    // The fill report's split of the direct census (momwire#2016), by the
-    // block (0 direct, 1 image) of each class's representative: its classes,
-    // those that are one near pair, and the pairs its calls evaluate.
-    int64_t dcls_block[2] = {0, 0}, dnear_block[2] = {0, 0}, devals_block[2] = {0, 0};
-    // One bit per direct class, set for a near pair's own class. Outside
-    // `nbytes()` and so outside the budget, which it must not move: 1/8 B per
-    // class beside the 41 B the budget counts.
-    std::vector<uint64_t> dnear_bits;
-    double census_seconds = 0.0;
-    // What the budget counted: nbytes() plus one wavenumber's class values.
-    int64_t budget_bytes = 0;
-    // The largest census-plus-plan estimate the budget saw (kept when the
-    // plan declines, so a declined deck says how far it got).
-    int64_t census_peak_bytes = 0;
-    size_t nbytes() const;
-};
+// razor's plan is the core's (`_pair_reuse_core.h`), with families
+// fam[DIRECT] (W = 4, one flip bit, blocks direct and, over PEC, image) and,
+// over the composing ground, fam[REMAINDER] (W = 9, a 2-bit code, one block),
+// both n_seg x n_seg. A declined plan keeps both specs. razor's own decline
+// reasons, beside the core's (poor compression, the budget): a deck the
+// census cannot code (more classes than an int32 entry holds, more segment
+// types than the key's type field, more segments than `MAX_SEGS`).
+using Plan = pair_reuse::Plan;
+using Group = pair_reuse::Group;
+constexpr int DIRECT = 0, REMAINDER = 1;
+inline int64_t n_segs(const Plan &p) { return p.fam[DIRECT].spec.rows; }
+inline bool has_image(const Plan &p) { return p.fam[DIRECT].spec.n_blocks == 2; }
+inline bool has_remainder(const Plan &p) { return p.fam.size() > REMAINDER; }
+// The cache's tag for razor's plans.
+constexpr const char *BASIS = "razor";
 
 // The per-wavenumber class values (a solve's own; the plan is shared).
 struct Values {
@@ -309,9 +283,7 @@ int64_t class_limit(int family);  // 0 direct, 1 remainder
 // Plans built and found (process totals, for tests), and of those built the
 // ones that came back declined: a declined plan serves nothing (its fill runs
 // as off), so built - declined is what proves a fill reused.
-struct CacheCounters {
-    uint64_t built = 0, found = 0, declined = 0;
-};
+using CacheCounters = pair_reuse::Counters;
 CacheCounters cache_counters();
 void clear_cache();
 
@@ -363,7 +335,7 @@ void gather_direct(const Plan &p, int block, const int64_t *need, ptrdiff_t n_ne
 void gather_remainder(const Plan &p, const int64_t *seg, const double *sign, ptrdiff_t m,
                       view<const double, 1> seg_h, const Values &v, cd *out);
 
-// The fill report's wire map (momwire#2016, `_razor_fill_map_core.cpp`): for
+// The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): for
 // family f (0 direct, 1 image, 2 remainder), observer wire i and source wire
 // j, out[((f * W + i) * W + j) * 3 + c] counts that block's pairs computed
 // (c = 0, the first pair of a far class), reused (1) and near (2). One pass

@@ -260,10 +260,11 @@ py::object reuse_wire_map(const ReusePlanRef &r, py::array_t<int32_t, py::array:
                           int64_t n_wires) {
     const std::shared_ptr<const mw::razor::reuse::Plan> p = r.plan.lock();
     if (!p) return py::none();
-    if (wire_of_seg.size() != p->n_seg) throw std::invalid_argument("razor pair_reuse: one wire per segment");
+    const int64_t n_seg = mw::razor::reuse::n_segs(*p);
+    if (wire_of_seg.size() != n_seg) throw std::invalid_argument("razor pair_reuse: one wire per segment");
     if (n_wires < 1) throw std::invalid_argument("razor pair_reuse: n_wires must be positive");
     const int32_t *w = wire_of_seg.data();
-    for (int64_t s = 0; s < p->n_seg; s++)
+    for (int64_t s = 0; s < n_seg; s++)
         if (w[s] < 0 || w[s] >= n_wires) throw std::invalid_argument("razor pair_reuse: wire out of range");
     py::array_t<int64_t> out({static_cast<py::ssize_t>(3), static_cast<py::ssize_t>(n_wires),
                               static_cast<py::ssize_t>(n_wires), static_cast<py::ssize_t>(3)});
@@ -276,28 +277,31 @@ py::object reuse_wire_map(const ReusePlanRef &r, py::array_t<int32_t, py::array:
 }
 
 py::dict plan_stats(const mw::razor::reuse::Plan &p) {
-    py::dict d;
-    d["n_seg"] = p.n_seg;
-    d["pairs"] = p.pairs;
-    d["near_pairs"] = p.near_pairs;
-    d["classes"] = p.n_dcls;
-    d["rep_evals"] = p.rep_evals;
-    d["groups"] = p.dgroups.size();
-    d["q_pairs"] = p.q_pairs;
-    d["q_classes"] = p.n_qcls;
-    d["q_rep_evals"] = p.q_rep_evals;
-    d["q_groups"] = p.qgroups.size();
-    d["census_seconds"] = p.census_seconds;
-    d["nbytes"] = p.nbytes();
-    d["budget_bytes"] = p.budget_bytes;
-    d["census_peak_bytes"] = p.census_peak_bytes;
-    d["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
-    d["has_image"] = p.has_image;
-    d["remainder"] = p.remainder;
-    d["dcls_block"] = py::make_tuple(p.dcls_block[0], p.dcls_block[1]);
-    d["dnear_block"] = py::make_tuple(p.dnear_block[0], p.dnear_block[1]);
-    d["devals_block"] = py::make_tuple(p.devals_block[0], p.devals_block[1]);
-    return d;
+    namespace rr = mw::razor::reuse;
+    const mw::pair_reuse::FamilyPlan &d = p.fam[rr::DIRECT];
+    const mw::pair_reuse::FamilyPlan *q = rr::has_remainder(p) ? &p.fam[rr::REMAINDER] : nullptr;
+    py::dict out;
+    out["n_seg"] = rr::n_segs(p);
+    out["pairs"] = d.pairs;
+    out["near_pairs"] = d.near;
+    out["classes"] = d.classes;
+    out["rep_evals"] = d.rep_evals;
+    out["groups"] = d.groups.size();
+    out["q_pairs"] = q ? q->pairs : int64_t(0);
+    out["q_classes"] = q ? q->classes : int64_t(0);
+    out["q_rep_evals"] = q ? q->rep_evals : int64_t(0);
+    out["q_groups"] = q ? q->groups.size() : size_t(0);
+    out["census_seconds"] = p.census_seconds;
+    out["nbytes"] = p.nbytes();
+    out["budget_bytes"] = p.budget_bytes;
+    out["census_peak_bytes"] = p.census_peak_bytes;
+    out["declined"] = p.declined.empty() ? py::object(py::none()) : py::object(py::str(p.declined));
+    out["has_image"] = rr::has_image(p);
+    out["remainder"] = q != nullptr;
+    out["dcls_block"] = py::make_tuple(d.cls_block[0], d.cls_block[1]);
+    out["dnear_block"] = py::make_tuple(d.near_block[0], d.near_block[1]);
+    out["devals_block"] = py::make_tuple(d.evals_block[0], d.evals_block[1]);
+    return out;
 }
 
 py::dict reuse_stats(const ReusePlanHandle &h) { return plan_stats(*h.plan); }
@@ -316,7 +320,8 @@ std::shared_ptr<ReuseValues> reuse_values(const ReusePlanHandle &h, double k, da
 
 py::list reuse_q_groups(const ReusePlanHandle &h) {
     py::list out;
-    for (const auto &G : h.plan->qgroups) {
+    if (!mw::razor::reuse::has_remainder(*h.plan)) return out;
+    for (const auto &G : h.plan->fam[mw::razor::reuse::REMAINDER].groups) {
         std::vector<int64_t> o(G.obs.begin(), G.obs.end()), s(G.src.begin(), G.src.end());
         out.append(py::make_tuple(py::array_t<int64_t>(static_cast<py::ssize_t>(o.size()), o.data()),
                                   py::array_t<int64_t>(static_cast<py::ssize_t>(s.size()), s.data())));
@@ -325,8 +330,10 @@ py::list reuse_q_groups(const ReusePlanHandle &h) {
 }
 
 void reuse_store_q(const ReusePlanHandle &h, ReuseValues &v, size_t group, cdarr mom) {
-    if (group >= h.plan->qgroups.size()) throw std::invalid_argument("razor pair_reuse: no such group");
-    const auto &G = h.plan->qgroups[group];
+    if (!mw::razor::reuse::has_remainder(*h.plan) ||
+        group >= h.plan->fam[mw::razor::reuse::REMAINDER].groups.size())
+        throw std::invalid_argument("razor pair_reuse: no such group");
+    const auto &G = h.plan->fam[mw::razor::reuse::REMAINDER].groups[group];
     if (mom.ndim() != 3 || static_cast<size_t>(mom.shape(0)) != G.obs.size() ||
         static_cast<size_t>(mom.shape(1)) != G.src.size() || mom.shape(2) != 2)
         throw std::invalid_argument("razor pair_reuse: a group's moments are (n_obs, n_src, 2)");
@@ -334,7 +341,7 @@ void reuse_store_q(const ReusePlanHandle &h, ReuseValues &v, size_t group, cdarr
 }
 
 py::tuple reuse_gather(const ReusePlanHandle &h, const ReuseValues &v, int block, iarr need) {
-    const ptrdiff_t n = need.size(), ns = static_cast<ptrdiff_t>(h.plan->n_seg);
+    const ptrdiff_t n = need.size(), ns = static_cast<ptrdiff_t>(mw::razor::reuse::n_segs(*h.plan));
     cdarr m0({n, ns}), m1({n, ns});
     cd *p0 = m0.mutable_data(), *p1 = m1.mutable_data();
     const int64_t *nd = need.data();
@@ -346,7 +353,7 @@ py::tuple reuse_gather(const ReusePlanHandle &h, const ReuseValues &v, int block
 }
 
 cdarr reuse_gather_q(const ReusePlanHandle &h, const ReuseValues &v, iarr seg, darr sign) {
-    const ptrdiff_t m = seg.size(), ns = static_cast<ptrdiff_t>(h.plan->n_seg);
+    const ptrdiff_t m = seg.size(), ns = static_cast<ptrdiff_t>(mw::razor::reuse::n_segs(*h.plan));
     if (sign.size() != m) throw std::invalid_argument("razor pair_reuse: one sign per row");
     cdarr out({m, ns, static_cast<ptrdiff_t>(2)});
     cd *o = out.mutable_data();

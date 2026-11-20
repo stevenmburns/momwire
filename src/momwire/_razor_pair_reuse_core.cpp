@@ -1,24 +1,18 @@
 // razor-2p's fill-pair reuse (momwire#1971): see `_razor_pair_reuse_core.h`.
-// Its own TU, so no kernel's codegen moves with it (momwire#1187): it only
-// CALLS the shipped kernels (`seg_moments`, `field_proj_batch`,
-// `moment_reduce`), across a TU boundary.
+// razor's adapter onto the common core (`_pair_reuse_core.h`, momwire#2063):
+// its keys, the evaluation of its representatives, the transforms its gathers
+// apply, and its policy. Its own TU, so no kernel's codegen moves with it
+// (momwire#1187): it only CALLS the shipped kernels (`seg_moments`,
+// `field_proj_batch`, `moment_reduce`), across a TU boundary; the core's
+// census and gather templates are instantiated here, beside the keys.
 #include "_razor_pair_reuse_core.h"
 
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
 
 #include <atomic>
-#include <chrono>
-#include <cstdio>
 #include <cstring>
-#include <list>
-#include <map>
-#include <mutex>
 #include <utility>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 namespace mw {
 namespace razor {
@@ -26,426 +20,69 @@ namespace reuse {
 
 namespace {
 
+using pair_reuse::FamilyPlan;
+using pair_reuse::FamilySpec;
+using pair_reuse::Ids;
+using pair_reuse::Key;
+using pair_reuse::Outcome;
+using pair_reuse::bits;
+using pair_reuse::qword;
+using pair_reuse::quantum;
+
 std::atomic<int> g_probe{PROBE_NONE};
-
-// Rows of the census computed per pass (its key buffer is rows * n_seg keys).
-constexpr ptrdiff_t CENSUS_ROWS = 64;
-constexpr int MAX_PARTS = 32;
-// A partition-local class number, in the census's temporary entries: the
-// part in the top `part_bits(P)` bits of 32, then the local class, then the
-// code. With one part (one thread) the local class has every bit the final
-// entry has; with P parts each part's classes have 2^-part_bits of them.
-inline int part_bits(int P) {
-    int b = 0;
-    while ((1 << b) < P) b++;
-    return b;
-}
 std::atomic<int64_t> g_class_limit[2] = {{0}, {0}};
-
-inline uint64_t mix64(uint64_t x) {
-    x ^= x >> 30;
-    x *= 0xbf58476d1ce4e5b9ull;
-    x ^= x >> 27;
-    x *= 0x94d049bb133111ebull;
-    x ^= x >> 31;
-    return x;
-}
-
-template <int W>
-uint64_t hash_key(const uint64_t *k) {
-    uint64_t h = 0x9e3779b97f4a7c15ull;
-    for (int i = 0; i < W; i++) h = mix64(h ^ k[i]);
-    return h;
-}
-
-// Open addressing over W-word keys; the value is a partition-local class.
-template <int W>
-struct Table {
-    std::vector<uint64_t> keys;
-    std::vector<int32_t> vals;
-    size_t cap = 0, n = 0;
-    void grow() {
-        const size_t nc = cap == 0 ? 1024 : cap * 2;
-        std::vector<uint64_t> ok;
-        std::vector<int32_t> ov;
-        ok.swap(keys);
-        ov.swap(vals);
-        keys.assign(nc * W, 0);
-        vals.assign(nc, -1);
-        const size_t oc = cap;
-        cap = nc;
-        for (size_t i = 0; i < oc; i++)
-            if (ov[i] >= 0) place(&ok[i * W], hash_key<W>(&ok[i * W]), ov[i]);
-    }
-    void place(const uint64_t *k, uint64_t h, int32_t v) {
-        size_t i = static_cast<size_t>(h) & (cap - 1);
-        while (vals[i] >= 0) i = (i + 1) & (cap - 1);
-        std::memcpy(&keys[i * W], k, W * sizeof(uint64_t));
-        vals[i] = v;
-    }
-    // The key's class, or `fresh` (then stored) when it is new.
-    int32_t find_or_add(const uint64_t *k, uint64_t h, int32_t fresh, bool &added) {
-        if (2 * (n + 1) > cap) grow();
-        size_t i = static_cast<size_t>(h) & (cap - 1);
-        while (vals[i] >= 0) {
-            if (std::memcmp(&keys[i * W], k, W * sizeof(uint64_t)) == 0) {
-                added = false;
-                return vals[i];
-            }
-            i = (i + 1) & (cap - 1);
-        }
-        std::memcpy(&keys[i * W], k, W * sizeof(uint64_t));
-        vals[i] = fresh;
-        n++;
-        added = true;
-        return fresh;
-    }
-};
-
-inline uint64_t bits(double x) {
-    uint64_t u;
-    std::memcpy(&u, &x, sizeof u);
-    return u;
-}
-
-// The quantum's exponent and its inverse step: 2^(KEY_BITS - ilogb(D)).
-inline void quantum(double D, int &e, double &inv) {
-    e = std::ilogb(D);
-    inv = std::ldexp(1.0, KEY_BITS - e);
-}
-
-// A quantised value as a key word; false when it does not fit (the pair is
-// then left unshared).
-inline bool qword(double x, double inv, uint64_t &w) {
-    const double y = x * inv;
-    if (!(std::fabs(y) < 4.0e18)) return false;
-    w = static_cast<uint64_t>(static_cast<int64_t>(std::llround(y)));
-    return true;
-}
-
-struct Rep {
-    uint8_t block = 0;
-    int32_t obs = 0, src = 0;
-    uint8_t code = 0;
-    uint8_t single = 0;  // a pair the key left unshared: a near pair
-};
-
-// What a class costs the plan, past the maps: its per-k values (M0, M1 or
-// Q0, Q1, two complex), its group entry (cls, at) and its representative's
-// flip or code byte.
-constexpr int64_t CLASS_BYTES = 2 * 16 + 2 * 4 + 1;
-
-int n_parts() {
-#ifdef _OPENMP
-    const int p = omp_get_max_threads();
-#else
-    const int p = 1;
-#endif
-    return std::max(1, std::min(MAX_PARTS, p));
-}
-
-// Distinct values, numbered in first appearance.
-struct Ids {
-    std::map<std::pair<uint64_t, uint64_t>, int64_t> m;
-    int64_t id(uint64_t a, uint64_t b = 0) {
-        auto it = m.emplace(std::make_pair(a, b), static_cast<int64_t>(m.size()));
-        return it.first->second;
-    }
-};
-
-// The groups the representatives are evaluated in: their observer rows in
-// order, consecutive rows of one block joined while the joint call evaluates
-// at most about twice the pairs it needs.
-void build_groups(const std::vector<Rep> &reps, int64_t n_seg, int n_blocks,
-                  std::vector<Group> &groups, int64_t &evals) {
-    const int64_t n_rows = n_blocks * n_seg;
-    std::vector<int64_t> cnt(static_cast<size_t>(n_rows + 1), 0);
-    for (const Rep &r : reps) cnt[static_cast<size_t>(r.block * n_seg + r.obs + 1)]++;
-    for (int64_t i = 0; i < n_rows; i++) cnt[static_cast<size_t>(i + 1)] += cnt[static_cast<size_t>(i)];
-    std::vector<int32_t> order(reps.size());
-    {
-        std::vector<int64_t> pos(cnt.begin(), cnt.end() - 1);
-        for (size_t c = 0; c < reps.size(); c++)
-            order[static_cast<size_t>(pos[static_cast<size_t>(reps[c].block * n_seg + reps[c].obs)]++)] =
-                static_cast<int32_t>(c);
-    }
-    std::vector<int64_t> mark(static_cast<size_t>(n_seg), -1);
-    int64_t stamp = 0;
-    evals = 0;
-    Group g;
-    int64_t g_reps = 0, g_union = 0;
-    auto flush = [&]() {
-        if (g.obs.empty()) return;
-        // The union, in ascending source order, and each class's place in it.
-        std::vector<int32_t> src;
-        for (int32_t o : g.obs) {
-            const int64_t row = g.block * n_seg + o;
-            for (int64_t q = cnt[static_cast<size_t>(row)]; q < cnt[static_cast<size_t>(row + 1)]; q++)
-                src.push_back(reps[static_cast<size_t>(order[static_cast<size_t>(q)])].src);
-        }
-        std::sort(src.begin(), src.end());
-        src.erase(std::unique(src.begin(), src.end()), src.end());
-        std::vector<int32_t> col(static_cast<size_t>(n_seg), -1);
-        for (size_t u = 0; u < src.size(); u++) col[static_cast<size_t>(src[u])] = static_cast<int32_t>(u);
-        g.src = src;
-        for (size_t oi = 0; oi < g.obs.size(); oi++) {
-            const int64_t row = g.block * n_seg + g.obs[oi];
-            for (int64_t q = cnt[static_cast<size_t>(row)]; q < cnt[static_cast<size_t>(row + 1)]; q++) {
-                const int32_t c = order[static_cast<size_t>(q)];
-                g.cls.push_back(c);
-                g.at.push_back(static_cast<int32_t>(oi * src.size()) + col[static_cast<size_t>(reps[static_cast<size_t>(c)].src)]);
-            }
-        }
-        evals += static_cast<int64_t>(g.obs.size() * g.src.size());
-        groups.push_back(std::move(g));
-        g = Group();
-        g_reps = g_union = 0;
-        stamp++;
-    };
-    for (int b = 0; b < n_blocks; b++) {
-        for (int64_t o = 0; o < n_seg; o++) {
-            const int64_t row = b * n_seg + o;
-            const int64_t lo = cnt[static_cast<size_t>(row)], hi = cnt[static_cast<size_t>(row + 1)];
-            if (lo == hi) continue;
-            if (!g.obs.empty() && g.block != b) flush();
-            // The sources this row would add to the union.
-            int64_t add = 0;
-            for (int64_t q = lo; q < hi; q++) {
-                const int32_t s = reps[static_cast<size_t>(order[static_cast<size_t>(q)])].src;
-                if (mark[static_cast<size_t>(s)] != stamp) add++;
-            }
-            const int64_t rows = static_cast<int64_t>(g.obs.size());
-            if (rows > 0 && (rows + 1 > REP_ROWS ||
-                             (rows + 1) * (g_union + add) > 2 * (g_reps + (hi - lo)) + 256)) {
-                flush();
-            }
-            g.block = static_cast<uint8_t>(b);
-            g.obs.push_back(static_cast<int32_t>(o));
-            for (int64_t q = lo; q < hi; q++) {
-                const int32_t s = reps[static_cast<size_t>(order[static_cast<size_t>(q)])].src;
-                if (mark[static_cast<size_t>(s)] != stamp) {
-                    mark[static_cast<size_t>(s)] = stamp;
-                    g_union++;
-                }
-            }
-            g_reps += hi - lo;
-        }
-    }
-    flush();
-}
-
-// The census of one family (the direct moments, W = 4, or the remainder,
-// W = 9): `key(block, o, s, words, code)` writes a pair's key and code and
-// returns false for a pair that is its own class. Entries go to `maps[b]` as
-// class << code_bits | code; reps are each class's first pair, row-major.
-// Returns the number of classes, or -1 when they cannot be coded (past the
-// int32 entry, a part's share of it, or the test hook's `class_limit`), or
-// -2 when they pass `poor` (`MAX_CLASS_FRACTION` of the family's pairs), or
-// -3 when the census and the plan it is building pass `room` bytes
-// (`PLAN_BUDGET_BYTES` less what is already held): its hash tables (at 1.5x
-// their capacity, the peak of their last growth, old and new arrays both
-// live), its representatives, its chunk buffers, and CLASS_BYTES per class
-// for the plan. Each is checked after every chunk of rows, so a doomed plan
-// stops within one chunk of its bound instead of building its whole table:
-// the plan then declines. Before each chunk the same sum is projected as if
-// every pair in it were a new class (each part's table grown to fit), and a
-// chunk whose projection passes `room` is not run, so the tables never grow
-// past the budget. `peak` is the largest estimate or projection seen.
-template <int W, class KeyFn>
-int64_t census(int64_t n_seg, int n_blocks, int code_bits, int64_t limit, int64_t poor, int64_t room,
-               int64_t &peak, KeyFn key,
-               std::vector<int32_t> *maps, std::vector<Rep> &reps_out, int64_t &singles) {
-    const int P = n_parts();
-    const size_t nn = static_cast<size_t>(n_seg) * static_cast<size_t>(n_seg);
-    for (int b = 0; b < n_blocks; b++) maps[b].assign(nn, 0);
-    std::vector<Table<W>> tables(static_cast<size_t>(P));
-    std::vector<std::vector<Rep>> reps(static_cast<size_t>(P));
-    const ptrdiff_t R = std::min<ptrdiff_t>(CENSUS_ROWS, n_seg);
-    const size_t chunk = static_cast<size_t>(R) * static_cast<size_t>(n_seg);
-    std::vector<uint64_t> kbuf(chunk * W);
-    std::vector<uint64_t> hbuf(chunk);
-    std::vector<uint8_t> cbuf(chunk), sbuf(chunk);
-    // The final entry is class << code_bits | code in a non-negative int32;
-    // the temporary one puts the part above the local class.
-    const int pb = part_bits(P);
-    const int part_shift = 31 - pb;
-    const int64_t cls_max = int64_t(1) << (31 - code_bits);
-    const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
-    std::atomic<bool> overflow{false};
-    std::vector<int64_t> n_single(static_cast<size_t>(P), 0);
-    for (int b = 0; b < n_blocks; b++) {
-        for (int64_t o0 = 0; o0 < n_seg; o0 += R) {
-            const int64_t o1 = std::min<int64_t>(n_seg, o0 + R);
-            const int64_t m = (o1 - o0) * n_seg;
-            // Before the chunk: what the census would hold if this chunk's
-            // pairs were all new classes, each part taking up to twice its
-            // share (the hash spreads them), its table grown to fit and its
-            // representatives' vector doubled. Past the room, the chunk is
-            // not run: the tables never grow past the budget.
-            {
-                const int64_t share = 2 * ((m + P - 1) / P) + 1;
-                int64_t would = static_cast<int64_t>(chunk * (W * 8 + 8 + 2)), so_far = 0;
-                for (int t = 0; t < P; t++) {
-                    const auto &rp = reps[static_cast<size_t>(t)];
-                    const auto &tab = tables[static_cast<size_t>(t)];
-                    const int64_t n_t = static_cast<int64_t>(rp.size());
-                    so_far += n_t;
-                    // at 1.5x its capacity, as after the chunk below
-                    size_t cap = tab.cap == 0 ? 1024 : tab.cap;
-                    while (2 * static_cast<size_t>(tab.n + share) > cap) cap *= 2;
-                    would += static_cast<int64_t>(3 * cap / 2 * (W * 8 + 4));
-                    const size_t rcap = std::max(rp.capacity(), static_cast<size_t>(n_t + share));
-                    would += static_cast<int64_t>(
-                        (rcap > rp.capacity() ? 2 * rcap : rcap) * sizeof(Rep));
-                }
-                would += (so_far + m) * CLASS_BYTES;
-                peak = std::max(peak, would);
-                if (would > room) return -3;
-            }
-#pragma omp parallel for schedule(static)
-            for (int64_t i = 0; i < m; i++) {
-                const int64_t o = o0 + i / n_seg, s = i % n_seg;
-                uint64_t *w = &kbuf[static_cast<size_t>(i) * W];
-                uint8_t code = 0;
-                const bool shared = key(b, o, s, w, code);
-                cbuf[static_cast<size_t>(i)] = code;
-                sbuf[static_cast<size_t>(i)] = shared ? 0 : 1;
-                hbuf[static_cast<size_t>(i)] = shared ? hash_key<W>(w) : mix64(static_cast<uint64_t>(o));
-            }
-#pragma omp parallel for schedule(static, 1)
-            for (int t = 0; t < P; t++) {
-                Table<W> &tab = tables[static_cast<size_t>(t)];
-                std::vector<Rep> &rp = reps[static_cast<size_t>(t)];
-                for (int64_t i = 0; i < m; i++) {
-                    const uint64_t h = hbuf[static_cast<size_t>(i)];
-                    if (static_cast<int>((h >> 40) % static_cast<uint64_t>(P)) != t) continue;
-                    const int64_t o = o0 + i / n_seg, s = i % n_seg;
-                    const uint8_t code = cbuf[static_cast<size_t>(i)];
-                    int32_t local;
-                    if (sbuf[static_cast<size_t>(i)]) {
-                        local = static_cast<int32_t>(rp.size());
-                        rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                         static_cast<int32_t>(s), 0, 1});
-                        n_single[static_cast<size_t>(t)]++;
-                    } else {
-                        bool added = false;
-                        local = tab.find_or_add(&kbuf[static_cast<size_t>(i) * W], h,
-                                                static_cast<int32_t>(rp.size()), added);
-                        if (added)
-                            rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                             static_cast<int32_t>(s), code, 0});
-                    }
-                    if (static_cast<uint32_t>(local) >= local_max ||
-                        (limit > 0 && static_cast<int64_t>(local) >= limit)) {
-                        overflow.store(true);
-                        break;
-                    }
-                    maps[b][static_cast<size_t>(o) * static_cast<size_t>(n_seg) + static_cast<size_t>(s)] =
-                        static_cast<int32_t>((static_cast<uint32_t>(t) << part_shift) |
-                                             (static_cast<uint32_t>(local) << code_bits) | code);
-                }
-            }
-            if (overflow.load()) return -1;
-            int64_t so_far = 0, bytes = static_cast<int64_t>(chunk * (W * 8 + 8 + 2));
-            for (int t = 0; t < P; t++) {
-                const auto &rp = reps[static_cast<size_t>(t)];
-                const auto &tab = tables[static_cast<size_t>(t)];
-                so_far += static_cast<int64_t>(rp.size());
-                bytes += static_cast<int64_t>(rp.capacity() * sizeof(Rep));
-                bytes += static_cast<int64_t>(3 * tab.cap * (W * 8 + 4) / 2);
-            }
-            bytes += so_far * CLASS_BYTES;
-            peak = std::max(peak, bytes);
-            if (so_far > poor) return -2;
-            if (bytes > room) return -3;
-        }
-    }
-    std::vector<int64_t> off(static_cast<size_t>(P + 1), 0);
-    for (int t = 0; t < P; t++) off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
-    const int64_t n_cls = off[static_cast<size_t>(P)];
-    if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return -1;
-    if (n_cls > poor) return -2;
-    const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
-    const uint32_t local_mask = local_max - 1;
-    for (int b = 0; b < n_blocks; b++) {
-        int32_t *mp = maps[b].data();
-#pragma omp parallel for schedule(static)
-        for (int64_t i = 0; i < static_cast<int64_t>(nn); i++) {
-            const uint32_t e = static_cast<uint32_t>(mp[i]);
-            const uint32_t t = pb == 0 ? 0 : e >> part_shift, local = (e >> code_bits) & local_mask;
-            mp[i] = static_cast<int32_t>(((static_cast<uint32_t>(off[t]) + local) << code_bits) | (e & code_mask));
-        }
-    }
-    reps_out.clear();
-    reps_out.reserve(static_cast<size_t>(n_cls));
-    for (int t = 0; t < P; t++)
-        reps_out.insert(reps_out.end(), reps[static_cast<size_t>(t)].begin(), reps[static_cast<size_t>(t)].end());
-    singles = 0;
-    for (int64_t v : n_single) singles += v;
-    return n_cls;
-}
-
-// The most classes a family's census keeps before it declines as poorly
-// compressed (`MAX_CLASS_FRACTION`), of its `pairs`.
-int64_t poor_bound(int64_t pairs) {
-    return static_cast<int64_t>(MAX_CLASS_FRACTION * static_cast<double>(pairs));
-}
-const char *const POOR_REASON = "too few shared pairs to repay the plan";
-
 std::atomic<int64_t> g_plan_budget{0};  // 0: PLAN_BUDGET_BYTES
 
+// What a class's values cost per k: M0, M1 (or Q0, Q1), two complex.
+constexpr int64_t VALUE_BYTES = 2 * 16;
 
-std::string budget_reason() {
-    char buf[96];
-    std::snprintf(buf, sizeof buf, "the plan and its census would exceed the %.6g MB budget",
-                  static_cast<double>(plan_budget()) / double(1 << 20));
-    return buf;
-}
+const pair_reuse::Policy POLICY = [] {
+    pair_reuse::Policy p;
+    p.max_class_fraction = MAX_CLASS_FRACTION;
+    p.rep_rows = REP_ROWS;
+    return p;
+}();
 
-// A plan that does not serve: no classes, its reason, its census time.
-std::shared_ptr<const Plan> decline(std::shared_ptr<Plan> &plan, const std::string &why) {
-    plan->declined = why;
-    for (auto &m : plan->dmap) std::vector<int32_t>().swap(m);
-    std::vector<int32_t>().swap(plan->qmap);
-    std::vector<uint8_t>().swap(plan->drep_flip);
-    std::vector<uint8_t>().swap(plan->qrep_code);
-    std::vector<Group>().swap(plan->dgroups);
-    std::vector<Group>().swap(plan->qgroups);
-    plan->n_dcls = plan->n_qcls = 0;
-    plan->pairs = plan->near_pairs = plan->q_pairs = plan->rep_evals = plan->q_rep_evals = 0;
-    for (int b = 0; b < 2; b++) plan->dcls_block[b] = plan->dnear_block[b] = plan->devals_block[b] = 0;
-    std::vector<uint64_t>().swap(plan->dnear_bits);
-    plan->budget_bytes = 0;
-    return plan;
-}
-
-std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
-    const auto t0 = std::chrono::steady_clock::now();
-    auto plan = std::make_shared<Plan>();
-    // On every way out, a declined census's seconds included (momwire#2016).
-    struct Stamp {
-        Plan &p;
-        std::chrono::steady_clock::time_point t0;
-        ~Stamp() {
-            p.census_seconds =
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        }
-    } stamp{*plan, t0};
+void build(const Geometry &g, Plan &plan_ref) {
+    Plan *const plan = &plan_ref;
+    auto no = [&](const std::string &why) { pair_reuse::decline(*plan, why); };
     const int64_t n_seg = g.seg_h.shape(0);
-    plan->n_seg = n_seg;
-    plan->has_image = g.has_image;
-    plan->remainder = g.remainder;
-    plan->fingerprint = std::move(fingerprint);
-    if (n_seg > MAX_SEGS) return decline(plan, "too many segments to plan");
     const int n_blocks = g.has_image ? 2 : 1;
+    {
+        FamilySpec d;
+        d.name = "direct";
+        d.key_words = 4;
+        d.code_bits = 1;
+        d.n_blocks = n_blocks;
+        d.rows = d.cols = n_seg;
+        d.value_bytes = VALUE_BYTES;
+        d.near_singles = true;
+        d.class_limit = class_limit(0);
+        plan->fam.push_back(FamilyPlan());
+        plan->fam.back().spec = d;
+    }
+    if (g.remainder) {
+        FamilySpec q;
+        q.name = "remainder";
+        q.key_words = 9;
+        q.code_bits = 2;
+        q.n_blocks = 1;
+        q.rows = q.cols = n_seg;
+        q.value_bytes = VALUE_BYTES;
+        q.near_singles = false;
+        q.class_limit = class_limit(1);
+        plan->fam.push_back(FamilyPlan());
+        plan->fam.back().spec = q;
+    }
+    if (n_seg > MAX_SEGS) return no("too many segments to plan");
     // The byte budget (`PLAN_BUDGET_BYTES`): the maps are known before any
     // census (4 B per pair per block, the remainder's included), so a deck
     // whose maps alone pass it declines before allocating them; what is left
-    // bounds each census's classes, at CLASS_BYTES each.
+    // bounds each census's classes, at `pair_reuse::class_bytes` each.
     const int64_t budget = plan_budget();
     const int64_t nn = n_seg * n_seg;
-    const int64_t maps_bytes = 4 * nn * (n_blocks + (g.remainder ? 1 : 0));
-    if (maps_bytes > budget) return decline(plan, budget_reason());
+    const int64_t maps_bytes = pair_reuse::maps_bytes(*plan);
+    if (maps_bytes > budget) return no(pair_reuse::budget_reason(budget));
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
     const int pr = probe();
@@ -470,9 +107,9 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         for (int64_t o = 0; o < n_seg; o++) b_id[static_cast<size_t>(o)] = b_ids.id(bits(g.b_obs(o)));
     if (a_ids.m.size() >= (size_t(1) << 25) || ae_ids.m.size() >= (size_t(1) << 25) ||
         b_ids.m.size() >= (size_t(1) << 25) || h_ids.m.size() >= (size_t(1) << 25))
-        return decline(plan, "too many segment types to key");
+        return no("too many segment types to key");
 
-    auto direct_key = [&](int b, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> bool {
+    auto direct_key = [&](int b, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
         // The axis frame, in `seg_moments`' own spelling (momwire#799).
         const double dx = g.cent(o, 0) - g.p0[b](s, 0);
         const double dy = g.cent(o, 1) - g.p0[b](s, 1);
@@ -489,14 +126,14 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         // Near in units of the kernel's own scale, the longer of h and the
         // radius: where h < a the values vary over a, not h (`NEAR_LENGTHS`).
         const double near = pr == PROBE_NEAR_H ? h : std::max(h, g.a(s));
-        if (!(std::max(av, rho) >= NEAR_LENGTHS * near)) return false;
+        if (!(std::max(av, rho) >= NEAR_LENGTHS * near)) return Key::Own;
         const double D = std::max(std::max(av - 0.5 * h, rho), g.a(s));
-        if (!(D > 0.0) || !std::isfinite(D)) return false;
+        if (!(D > 0.0) || !std::isfinite(D)) return Key::Own;
         int e;
         double inv;
-        quantum(D, e, inv);
+        quantum(D, KEY_BITS, e, inv);
         if (!qword(pr == PROBE_NO_FOLD ? v : av, inv, w[0]) || !qword(rho, inv, w[1]))
-            return false;
+            return Key::Own;
         w[2] = h_id[static_cast<size_t>(s)];
         if (v < 0.0 && w[0] != 0 && pr != PROBE_NO_FLIP && pr != PROBE_NO_FOLD) code = 1;
         const bool elig = ek && g.group_i(o) >= 0 && g.group_i(o) == g.group_j[b](s);
@@ -505,39 +142,20 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
         const uint64_t bt = elig ? static_cast<uint64_t>(b_id[static_cast<size_t>(o)]) : 0;
         w[3] = static_cast<uint64_t>(e + 1100) | (uint64_t(elig) << 11) | (typ << 12) | (bt << 37);
         if (pr == PROBE_NO_TYPE) w[3] = static_cast<uint64_t>(e + 1100);
-        return true;
+        return Key::Shared;
     };
-    std::vector<Rep> reps;
-    int64_t singles = 0;
-    const int64_t d_pairs = static_cast<int64_t>(n_blocks) * n_seg * n_seg;
+    FamilyPlan &dfam = plan->fam[DIRECT];
     int64_t peak = 0;
-    plan->n_dcls = census<4>(n_seg, n_blocks, 1, class_limit(0), poor_bound(d_pairs), budget - maps_bytes,
-                             peak, direct_key, plan->dmap, reps, singles);
+    const Outcome d_out = pair_reuse::census<4>(dfam, POLICY, budget - maps_bytes, peak, direct_key);
     plan->census_peak_bytes = maps_bytes + peak;
-    if (plan->n_dcls == -2) return decline(plan, POOR_REASON);
-    if (plan->n_dcls == -3) return decline(plan, budget_reason());
-    if (plan->n_dcls < 0) return decline(plan, "too many classes to code");
-    plan->near_pairs = singles;
-    plan->pairs = n_blocks * n_seg * n_seg;
-    plan->drep_flip.resize(reps.size());
-    for (size_t c = 0; c < reps.size(); c++) plan->drep_flip[c] = reps[c].code;
-    build_groups(reps, n_seg, n_blocks, plan->dgroups, plan->rep_evals);
-    // The fill report's split (momwire#2016): integers read off the census.
-    plan->dnear_bits.assign((reps.size() + 63) / 64, 0);
-    for (size_t c = 0; c < reps.size(); c++) {
-        plan->dcls_block[reps[c].block]++;
-        if (reps[c].single) {
-            plan->dnear_block[reps[c].block]++;
-            plan->dnear_bits[c / 64] |= uint64_t(1) << (c % 64);
-        }
-    }
-    for (const Group &G : plan->dgroups)
-        plan->devals_block[G.block] += static_cast<int64_t>(G.obs.size() * G.src.size());
+    if (d_out == Outcome::Poor) return no(pair_reuse::POOR_REASON);
+    if (d_out == Outcome::OverBudget) return no(pair_reuse::budget_reason(budget));
+    if (d_out != Outcome::Ok) return no("too many classes to code");
 
     if (g.remainder) {
         const double gz = g.ground_z;
         const double one = std::ldexp(1.0, KEY_BITS);
-        auto q_key = [&](int, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> bool {
+        auto q_key = [&](int, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
             const double zo = g.cent(o, 2) - gz, zs = g.cent(s, 2) - gz;
             const double hs = zo + zs;
             const double dx = g.cent(o, 0) - g.cent(s, 0), dy = g.cent(o, 1) - g.cent(s, 1);
@@ -546,16 +164,16 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
             const double bx = g.t[0](o, 0), by = g.t[0](o, 1), toz = g.t[0](o, 2);
             const double h = g.seg_h(s);
             const double D = std::max(std::sqrt(dd2 + hs * hs), h);
-            if (!(D > 0.0) || !std::isfinite(D)) return false;
+            if (!(D > 0.0) || !std::isfinite(D)) return Key::Own;
             int e;
             double inv;
-            quantum(D, e, inv);
+            quantum(D, KEY_BITS, e, inv);
             uint64_t qhs, qdd, qda, qdb, qab, qtsz, qtoz;
             if (!qword(hs, inv, qhs) || !qword(std::sqrt(dd2), inv, qdd) ||
                 !qword(dx * ax + dy * ay, inv, qda) || !qword(dx * bx + dy * by, inv, qdb) ||
                 !qword(ax * bx + ay * by, one, qab) || !qword(tsz, one, qtsz) ||
                 !qword(toz, one, qtoz))
-                return false;
+                return Key::Own;
             // The orientation whose odd columns are largest, lexicographically.
             auto neg = [](uint64_t x) { return static_cast<uint64_t>(-static_cast<int64_t>(x)); };
             int64_t best[5] = {0, 0, 0, 0, 0};
@@ -578,30 +196,22 @@ std::shared_ptr<const Plan> build(const Geometry &g, std::string fingerprint) {
             w[2] = qdd;
             w[3] = h_id[static_cast<size_t>(s)];
             for (int j = 0; j < 5; j++) w[4 + j] = static_cast<uint64_t>(best[j]);
-            return true;
+            return Key::Shared;
         };
-        std::vector<Rep> qreps;
-        int64_t qsingles = 0;
         // What the direct family holds now (its maps, groups and flags, and
         // its values), plus the remainder's maps, comes out of the budget.
-        const int64_t held =
-            static_cast<int64_t>(plan->nbytes()) + 32 * plan->n_dcls + 4 * nn;
+        const int64_t held = pair_reuse::held_bytes(*plan) + 4 * nn;
         int64_t qpeak = 0;
-        plan->n_qcls = census<9>(n_seg, 1, 2, class_limit(1), poor_bound(nn), budget - held, qpeak, q_key,
-                                 &plan->qmap, qreps, qsingles);
+        const Outcome q_out =
+            pair_reuse::census<9>(plan->fam[REMAINDER], POLICY, budget - held, qpeak, q_key);
         plan->census_peak_bytes = std::max(plan->census_peak_bytes, held + qpeak);
-        if (plan->n_qcls == -2) return decline(plan, POOR_REASON);
-        if (plan->n_qcls == -3) return decline(plan, budget_reason());
-        if (plan->n_qcls < 0) return decline(plan, "too many remainder classes to code");
-        plan->q_pairs = n_seg * n_seg;
-        plan->qrep_code.resize(qreps.size());
-        for (size_t c = 0; c < qreps.size(); c++) plan->qrep_code[c] = qreps[c].code;
-        build_groups(qreps, n_seg, 1, plan->qgroups, plan->q_rep_evals);
+        if (q_out == Outcome::Poor) return no(pair_reuse::POOR_REASON);
+        if (q_out == Outcome::OverBudget) return no(pair_reuse::budget_reason(budget));
+        if (q_out != Outcome::Ok) return no("too many remainder classes to code");
     }
     // The exact count, the groups' observer and source lists included.
-    plan->budget_bytes = static_cast<int64_t>(plan->nbytes()) + 32 * (plan->n_dcls + plan->n_qcls);
-    if (plan->budget_bytes > budget) return decline(plan, budget_reason());
-    return plan;
+    plan->budget_bytes = pair_reuse::held_bytes(*plan);
+    if (plan->budget_bytes > budget) return no(pair_reuse::budget_reason(budget));
 }
 
 template <class T>
@@ -643,10 +253,6 @@ std::string fingerprint_of(const Geometry &g) {
     return s;
 }
 
-std::mutex g_cache_mtx;
-std::list<std::shared_ptr<const Plan>> g_cache;  // most recent first
-CacheCounters g_counters;
-
 void check_geometry(const Geometry &g) {
     const ptrdiff_t n = g.seg_h.shape(0);
     auto bad = [](const char *what) {
@@ -667,44 +273,10 @@ void check_geometry(const Geometry &g) {
 
 }  // namespace
 
-size_t Plan::nbytes() const {
-    size_t b = fingerprint.size() + dmap[0].size() * 4 + dmap[1].size() * 4 + qmap.size() * 4 +
-               drep_flip.size() + qrep_code.size();
-    for (const auto *gs : {&dgroups, &qgroups})
-        for (const Group &g : *gs) b += 4 * (g.obs.size() + g.src.size() + g.cls.size() + g.at.size());
-    return b;
-}
-
 std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built) {
-    if (built) *built = false;
     check_geometry(g);
-    std::string fp = fingerprint_of(g);
-    {
-        std::lock_guard<std::mutex> lock(g_cache_mtx);
-        for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
-            if ((*it)->fingerprint == fp) {
-                std::shared_ptr<const Plan> p = *it;
-                g_cache.erase(it);
-                g_cache.push_front(p);
-                g_counters.found++;
-                return p;
-            }
-    }
-    std::shared_ptr<const Plan> p = build(g, std::move(fp));
-    if (built) *built = true;
-    std::lock_guard<std::mutex> lock(g_cache_mtx);
-    g_counters.built++;
-    if (!p->declined.empty()) g_counters.declined++;
-    g_cache.push_front(p);
-    size_t total = 0;
-    for (auto it = g_cache.begin(); it != g_cache.end();) {
-        total += (*it)->nbytes();
-        if (it != g_cache.begin() && total > SHARED_PLAN_BYTES)
-            it = g_cache.erase(it);
-        else
-            ++it;
-    }
-    return p;
+    return pair_reuse::plan_for(
+        BASIS, fingerprint_of(g), [&g](Plan &p) { build(g, p); }, built);
 }
 
 void set_probe(int p) { g_probe.store(p); }
@@ -729,27 +301,21 @@ int64_t plan_budget() {
 }
 int probe() { return g_probe.load(); }
 
-CacheCounters cache_counters() {
-    std::lock_guard<std::mutex> lock(g_cache_mtx);
-    return g_counters;
-}
+CacheCounters cache_counters() { return pair_reuse::counters(BASIS); }
 
-void clear_cache() {
-    std::lock_guard<std::mutex> lock(g_cache_mtx);
-    g_cache.clear();
-}
+void clear_cache() { pair_reuse::clear_cache(BASIS); }
 
 void eval_direct(const Plan &p, const Geometry &g, view<const double, 1> xg,
                  view<const double, 1> wg, double k, uintptr_t cancel_flag, Values &out) {
     out.k = k;
-    out.d0.assign(static_cast<size_t>(p.n_dcls), cd(0.0, 0.0));
-    out.d1.assign(static_cast<size_t>(p.n_dcls), cd(0.0, 0.0));
+    out.d0.assign(static_cast<size_t>(p.fam[DIRECT].classes), cd(0.0, 0.0));
+    out.d1.assign(static_cast<size_t>(p.fam[DIRECT].classes), cd(0.0, 0.0));
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
     std::vector<double> obs, p0, t, h, a, aek, bo;
     std::vector<int64_t> gi, gj;
     std::vector<cd> m0, m1;
-    for (const Group &G : p.dgroups) {
+    for (const Group &G : p.fam[DIRECT].groups) {
         const int b = G.block;
         const ptrdiff_t no = static_cast<ptrdiff_t>(G.obs.size()), ns = static_cast<ptrdiff_t>(G.src.size());
         obs.resize(static_cast<size_t>(3 * no));
@@ -806,14 +372,14 @@ void eval_remainder(const Plan &p, const Geometry &g, const somm_proj::GridView 
                     size_t n_reg, const double *rem_src, const double *rem_t_src,
                     const double *W, ptrdiff_t n_qp, double k, uintptr_t cancel_flag,
                     Values &out) {
-    if (!p.remainder) throw std::invalid_argument("razor pair_reuse: the plan has no remainder");
-    out.q0.assign(static_cast<size_t>(p.n_qcls), cd(0.0, 0.0));
-    out.q1.assign(static_cast<size_t>(p.n_qcls), cd(0.0, 0.0));
-    const ptrdiff_t n_seg = static_cast<ptrdiff_t>(p.n_seg), q = n_qp;
+    if (!has_remainder(p)) throw std::invalid_argument("razor pair_reuse: the plan has no remainder");
+    out.q0.assign(static_cast<size_t>(p.fam[REMAINDER].classes), cd(0.0, 0.0));
+    out.q1.assign(static_cast<size_t>(p.fam[REMAINDER].classes), cd(0.0, 0.0));
+    const ptrdiff_t n_seg = static_cast<ptrdiff_t>(n_segs(p)), q = n_qp;
     std::vector<double> pts, tans, src, tsrc, Wg;
     std::vector<cd> proj, mom;
-    for (size_t gi = 0; gi < p.qgroups.size(); gi++) {
-        const Group &G = p.qgroups[gi];
+    for (size_t gi = 0; gi < p.fam[REMAINDER].groups.size(); gi++) {
+        const Group &G = p.fam[REMAINDER].groups[gi];
         const ptrdiff_t no = static_cast<ptrdiff_t>(G.obs.size()), ns = static_cast<ptrdiff_t>(G.src.size());
         pts.resize(static_cast<size_t>(3 * no));
         tans.resize(static_cast<size_t>(3 * no));
@@ -847,88 +413,75 @@ void eval_remainder(const Plan &p, const Geometry &g, const somm_proj::GridView 
 }
 
 void store_remainder(const Plan &p, size_t group, const cd *mom, Values &out) {
-    if (group >= p.qgroups.size()) throw std::invalid_argument("razor pair_reuse: no such group");
-    if (out.q0.size() != static_cast<size_t>(p.n_qcls)) {
-        out.q0.assign(static_cast<size_t>(p.n_qcls), cd(0.0, 0.0));
-        out.q1.assign(static_cast<size_t>(p.n_qcls), cd(0.0, 0.0));
+    if (!has_remainder(p) || group >= p.fam[REMAINDER].groups.size()) throw std::invalid_argument("razor pair_reuse: no such group");
+    if (out.q0.size() != static_cast<size_t>(p.fam[REMAINDER].classes)) {
+        out.q0.assign(static_cast<size_t>(p.fam[REMAINDER].classes), cd(0.0, 0.0));
+        out.q1.assign(static_cast<size_t>(p.fam[REMAINDER].classes), cd(0.0, 0.0));
     }
-    const Group &G = p.qgroups[group];
+    const Group &G = p.fam[REMAINDER].groups[group];
     for (size_t i = 0; i < G.cls.size(); i++) {
         const size_t at = static_cast<size_t>(G.at[i]);
         out.q0[static_cast<size_t>(G.cls[i])] = mom[2 * at];
         out.q1[static_cast<size_t>(G.cls[i])] = mom[2 * at + 1];
     }
-    if (group + 1 == p.qgroups.size()) out.has_q = true;
+    if (group + 1 == p.fam[REMAINDER].groups.size()) out.has_q = true;
 }
 
 void gather_direct(const Plan &p, int block, const int64_t *need, ptrdiff_t n_need,
                    view<const double, 1> seg_h, const Values &v, cd *m0, cd *m1) {
     if (!v.has_d) throw std::invalid_argument("razor pair_reuse: no direct values");
-    if (block < 0 || block > (p.has_image ? 1 : 0))
-        throw std::invalid_argument("razor pair_reuse: no such block");
-    const ptrdiff_t n_seg = static_cast<ptrdiff_t>(p.n_seg);
-    const int32_t *map = p.dmap[block].data();
+    const ptrdiff_t ns = static_cast<ptrdiff_t>(n_segs(p));
     const cd *d0 = v.d0.data(), *d1 = v.d1.data();
-    const uint8_t *rf = p.drep_flip.data();
-    for (ptrdiff_t i = 0; i < n_need; i++)
-        if (need[i] < 0 || need[i] >= n_seg) throw std::invalid_argument("razor pair_reuse: observer out of range");
-#pragma omp parallel for schedule(static)
-    for (ptrdiff_t i = 0; i < n_need; i++) {
-        const int32_t *row = map + need[i] * n_seg;
-        cd *o0 = m0 + i * n_seg, *o1 = m1 + i * n_seg;
-        for (ptrdiff_t s = 0; s < n_seg; s++) {
-            const int32_t e = row[s];
-            const int32_t c = e >> 1;
-            const cd a0 = d0[c], a1 = d1[c];
-            o0[s] = a0;
-            if ((e & 1) != rf[c]) {
-                const double h = seg_h(s);
-                o1[s] = cd(h * a0.real() - a1.real(), h * a0.imag() - a1.imag());
-            } else {
-                o1[s] = a1;
-            }
+    pair_reuse::gather(p.fam[DIRECT], block, need, n_need, [&](ptrdiff_t i, ptrdiff_t s, int32_t c, int rel) {
+        const cd a0 = d0[c], a1 = d1[c];
+        m0[i * ns + s] = a0;
+        if (rel) {
+            // The source reversed: M1 -> h M0 - M1.
+            const double h = seg_h(s);
+            m1[i * ns + s] = cd(h * a0.real() - a1.real(), h * a0.imag() - a1.imag());
+        } else {
+            m1[i * ns + s] = a1;
         }
-    }
+    });
 }
 
 void gather_remainder(const Plan &p, const int64_t *seg, const double *sign, ptrdiff_t m,
                       view<const double, 1> seg_h, const Values &v, cd *out) {
     if (!v.has_q) throw std::invalid_argument("razor pair_reuse: no remainder values");
-    const ptrdiff_t n_seg = static_cast<ptrdiff_t>(p.n_seg);
-    for (ptrdiff_t r = 0; r < m; r++)
-        if (seg[r] < 0 || seg[r] >= n_seg) throw std::invalid_argument("razor pair_reuse: observer out of range");
-    const int32_t *map = p.qmap.data();
+    if (!has_remainder(p)) throw std::invalid_argument("razor pair_reuse: the plan has no remainder");
+    const ptrdiff_t ns = static_cast<ptrdiff_t>(n_segs(p));
     const cd *q0 = v.q0.data(), *q1 = v.q1.data();
-    const uint8_t *rc = p.qrep_code.data();
-#pragma omp parallel for schedule(static)
-    for (ptrdiff_t r = 0; r < m; r++) {
-        const int32_t *row = map + seg[r] * n_seg;
+    pair_reuse::gather(p.fam[REMAINDER], 0, seg, m, [&](ptrdiff_t r, ptrdiff_t s, int32_t c, int rel) {
         const bool neg_row = sign[r] < 0.0;
-        cd *o = out + 2 * r * n_seg;
-        for (ptrdiff_t s = 0; s < n_seg; s++) {
-            const int32_t e = row[s];
-            const int32_t c = e >> 2;
-            const int rel = (e & 3) ^ rc[c];
-            double a0r = q0[c].real(), a0i = q0[c].imag(), a1r = q1[c].real(), a1i = q1[c].imag();
-            if (rel & 1) {
-                // The source reversed: (Q0, Q1) -> (-Q0, Q1 - h Q0).
-                const double h = seg_h(s);
-                const double n1r = a1r - h * a0r, n1i = a1i - h * a0i;
-                a0r = -a0r;
-                a0i = -a0i;
-                a1r = n1r;
-                a1i = n1i;
-            }
-            if (((rel & 2) != 0) != neg_row) {
-                a0r = -a0r;
-                a0i = -a0i;
-                a1r = -a1r;
-                a1i = -a1i;
-            }
-            o[2 * s] = cd(a0r, a0i);
-            o[2 * s + 1] = cd(a1r, a1i);
+        double a0r = q0[c].real(), a0i = q0[c].imag(), a1r = q1[c].real(), a1i = q1[c].imag();
+        if (rel & 1) {
+            // The source reversed: (Q0, Q1) -> (-Q0, Q1 - h Q0).
+            const double h = seg_h(s);
+            const double n1r = a1r - h * a0r, n1i = a1i - h * a0i;
+            a0r = -a0r;
+            a0i = -a0i;
+            a1r = n1r;
+            a1i = n1i;
         }
-    }
+        if (((rel & 2) != 0) != neg_row) {
+            a0r = -a0r;
+            a0i = -a0i;
+            a1r = -a1r;
+            a1i = -a1i;
+        }
+        cd *o = out + 2 * (r * ns + s);
+        o[0] = cd(a0r, a0i);
+        o[1] = cd(a1r, a1i);
+    });
+}
+
+void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out) {
+    const int64_t W = n_wires;
+    std::fill(out, out + 3 * W * W * 3, int64_t(0));
+    if (n_segs(p) == 0) return;
+    pair_reuse::wire_map(p.fam[DIRECT], wire_of_seg, wire_of_seg, n_wires, out);
+    if (has_remainder(p))
+        pair_reuse::wire_map(p.fam[REMAINDER], wire_of_seg, wire_of_seg, n_wires, out + 2 * W * W * 3);
 }
 
 double verify_error(const cd *ref0, const cd *ref1, const cd *got0, const cd *got1,

@@ -386,6 +386,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
+    "src/momwire/_pair_reuse_core.h",
     "src/momwire/_razor_pair_reuse_core.h",
     "src/momwire/_razor_front_core.h",
     "src/momwire/_razor_buried_core.h",
@@ -623,9 +624,11 @@ _ACCEL_SOURCES = [
     # `_accel_razor_solve.cpp` binds it for the Python route. Its own TU: it
     # only CALLS the kernels, across a TU boundary.
     "src/momwire/_razor_pair_reuse_core.cpp",
-    # momwire#2016: the fill report's wire map over that plan's class maps.
-    # Its own TU: integers only, and no fill calls it.
-    "src/momwire/_razor_fill_map_core.cpp",
+    # momwire#2063: the common pair-reuse core under it (the groups, the
+    # budget and declines, the plan cache, the fill report's wire map). Its
+    # own TU: integers only; the census and gather templates it declares are
+    # instantiated in the adapter's TU above, beside the keys.
+    "src/momwire/_pair_reuse_core.cpp",
     # The razor-2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.

@@ -707,6 +707,8 @@ FEATURES: dict[str, Feature] = {
             paths=(
                 "src/momwire/_razor_pair_reuse_core.cpp",
                 "src/momwire/_razor_pair_reuse_core.h",
+                "src/momwire/_pair_reuse_core.cpp",
+                "src/momwire/_pair_reuse_core.h",
                 "tests/test_razor_pair_reuse_1971.py",
             ),
             label="razor pair reuse",

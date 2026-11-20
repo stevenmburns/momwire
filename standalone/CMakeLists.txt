@@ -265,6 +265,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_accel_razor_cplx.cpp
   ${MW_SRC}/_razor_solve_core.cpp
   ${MW_SRC}/_razor_pair_reuse_core.cpp  # momwire#1971: fill-pair reuse
+  ${MW_SRC}/_pair_reuse_core.cpp  # momwire#2063: its common core
   ${MW_SRC}/_razor_front_core.cpp
   ${MW_SRC}/_razor_buried_core.cpp
   ${MW_SRC}/_razor_exact_core.cpp
