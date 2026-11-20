@@ -9,17 +9,23 @@ convenience, not about the answer.
 
 | You want | Use |
 |---|---|
-| The fastest run of a deck the executable accepts | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
-| A deck the executable refuses, or momwire inside EZNEC, SimNEC or 4nec2 | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
+| A NEC-5 deck, run directly or from EZNEC's or SimNEC's NEC-5 engine setting | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
+| A deck the executable refuses (its printout says `not served by this build`), the NEC-2 or NEC-4.2 engine slots, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
 | One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`, on releases that list it |
 
 ## The standalone executable first
 
 When the standalone executable accepts a deck, it is the faster way to
-solve it. When it doesn't, it says so: it names what it refuses, writes no
-printout, and exits with status 2. That is the cue to run the same deck
-through the drop-in, which serves everything the Python engines serve. The
-[standalone page](/reference/standalone/) lists what the executables carry.
+solve it, whether you run it yourself or point EZNEC's or SimNEC's NEC-5
+engine setting at it. When it doesn't, it says so: the printout it writes
+names what it refuses (`not served by this build: ...`) instead of the
+answer. That is the cue to run the same deck through the drop-in, which
+serves everything the Python engines serve.
+
+The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-2 or
+NEC-4.2 engine slot in EZNEC, SimNEC or 4nec2, or for another formulation,
+use the drop-in. The [standalone page](/reference/standalone/)
+lists what the executables carry.
 
 Leave the thread settings alone. Both forms size their thread pools from the
 deck and from the cores you allow them, and since 0.95.0 they choose the same

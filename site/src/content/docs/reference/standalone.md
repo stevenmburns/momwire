@@ -31,9 +31,9 @@ NEC5 momwire-nec5-razor-2p [sb] 0.87.1                    the Python command
 To use one from SimNEC or EZNEC, point the NEC-5 engine setting at the
 program, inside its unpacked folder. A deck an engine does not serve yet is
 refused in the printout by name (`not served by this build: ...`), and the
-Python command serves it. A deck carrying 4nec2's `GA`, `GH`, `GM`, `GX`, `GS`
-or `PT` cards is one of those for now (momwire#1669). The other formulations
-stay Python.
+Python command serves it. 4nec2's `GA`, `GH`, `GM`, `GX`, `GS` and `PT` cards
+are served by the executables too, since momwire 0.84.0 (momwire#1669). The
+other formulations stay Python.
 
 ## Downloads
 
@@ -138,8 +138,10 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 ## How they differ from the EZNEC drop-in
 
 The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up)
-(named `momwire-eznec-windows.zip` before 0.80.0), is still the supported way
-to run momwire under EZNEC, SimNEC or 4nec2 on Windows. The two are built for different launch patterns:
+(named `momwire-eznec-windows.zip` before 0.80.0), is the way to run momwire
+in EZNEC's, SimNEC's or 4nec2's NEC-2 and NEC-4.2 engine slots on Windows,
+and for any deck or formulation a standalone program does not serve; in the
+NEC-5 slot either one works. The two are built for different launch patterns:
 
 - A standalone program is **a new process per run**, with no Python to
   start, so it answers the first run of a session quickly.
