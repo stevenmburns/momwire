@@ -424,6 +424,24 @@ to run for a while after switching over — `entries` and `bytes` then report
 what the process is actually holding. Neither flag changes a byte of the
 printout, in any mode.
 
+### Pair reuse within one fill
+
+A big deck repeats itself: many pairs of segments sit in the same pose
+relative to each other. `MOMWIRE_X_PAIR_REUSE=1`, set in the environment
+SimNEC starts the engine in, fills each class of repeated pairs once and
+copies the result to the rest. It is **off by default**. On the
+`sinusoidal` route (`momwire-nec2c-sinusoidal`) it finds the classes itself,
+in free space and over a perfect or finite ground, on decks large enough to
+pay for the search; a small deck runs the ordinary fill. It moves Z by at
+most about 5e-10 relative, far below the printed digits.
+
+It is certified for the drop-ins on Linux and Windows (after 0.95.0). On
+macOS it runs the same code, not yet certified there. This launcher's
+printout keeps nec2c's layout and does not name it; the NEC-4.2 and NEC-5
+drop-ins name it on printout line 2 (`+pair_reuse`, followed by
+`uncertified on this platform` on macOS). The standalone executables refuse
+it.
+
 ## How many engines to run
 
 A momwire process is not a 2 MB C binary: each carries NumPy, SciPy and
