@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Thirteen gates, derived from the seam's own contract (momwire#497 U1):
+Fourteen gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.dropin.nec5``'s byte for byte (the printout carries no
@@ -126,6 +126,17 @@ Thirteen gates, derived from the seam's own contract (momwire#497 U1):
    junction-rule variables, so the launcher's ``-key-elements`` must append
    exactly what the Python client appends for the same environment,
    lower-case variable names included (Windows folds their case).
+14. **The NEC-2 names** (momwire#2059) -- ``build.py``'s ``NEC2_LAUNCHERS``
+   are present and answer as ``momwire.dropin.nec2c.main`` (the pip console
+   scripts of the same names) answers under the same program name: the
+   ``-version`` probe byte for byte with the same exit status, and an
+   ``NX``-framed stream of three ``tests/fixtures/nec_portal`` decks on stdin
+   with the stdout the module's but for the wall-clock ``msec`` values
+   (masked as the portal's own two-run gates mask them), every structure
+   SOLVED, the sinusoidal one under its ``+sin`` banner and answering
+   differently from the default.  And ``momwire-nec2c --selftest`` prints
+   ``PASS``: it spawns the engine again as ``-m momwire.dropin.nec2c``, which
+   in a bundle is this exe, so it is the gate on that spelling too.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -215,6 +226,11 @@ def _nec5_launchers() -> tuple[str, ...]:
 def _nec4_launchers() -> tuple[str, ...]:
     """``build.py``'s NEC-4.2 names (EZNEC's External NEC-4.2 slot)."""
     return tuple(_build_module().NEC4_LAUNCHERS)
+
+
+def _nec2_launchers() -> tuple[str, ...]:
+    """``build.py``'s NEC-2 names (SimNEC's NEC-2 engine, momwire#2059)."""
+    return tuple(_build_module().NEC2_LAUNCHERS)
 
 
 # Two serving decks spanning the seam's range — a bare-wire rung-1 model and
@@ -1180,6 +1196,134 @@ def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+# Gate 14's stream: three decks of the nec2c corpus, NX-framed as SimNEC
+# frames them, so one launch answers a multi-deck session.
+NEC2_FIXTURES = REPO / "tests" / "fixtures" / "nec_portal"
+NEC2_STREAM = (
+    "catalog_dipoles_invvee",
+    "catalog_beams_moxon",
+    "catalog_verticals_vertical",
+)
+NEC2_BANNER = "VERSION:nec2c.ae6ty.momwire"
+
+
+def _nec2_canon(data: bytes) -> str:
+    """The wall-clock fields masked -- the portal's own capture script's
+    rule, by path, since scripts/ is not a package."""
+    spec = importlib.util.spec_from_file_location(
+        "nec_portal_capture", REPO / "scripts" / "nec_portal_capture.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.canonicalize_timings(data.decode("latin-1"))
+
+
+def _nec2_module(
+    stem: str, args: list[str], stdin: bytes
+) -> subprocess.CompletedProcess:
+    """The pip console script ``stem``: ``momwire.dropin.nec2c.main()``
+    under that program name."""
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys;from momwire.dropin.nec2c import main;"
+            f"sys.argv[0] = {stem!r};sys.exit(main())",
+            *args,
+        ],
+        input=stdin,
+        capture_output=True,
+        timeout=600,
+    )
+
+
+def _gate_nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 14 -- the NEC-2 names (momwire#2059)."""
+    failures = 0
+    stream = b"".join((NEC2_FIXTURES / f"{n}.deck").read_bytes() for n in NEC2_STREAM)
+    answers: dict[str, str] = {}
+    for stem in _nec2_launchers():
+        launcher = exe.with_name(f"{stem}{exe.suffix}")
+        if not launcher.is_file():
+            print(f"FAIL {launcher.name}: shipped NEC-2 launcher is MISSING")
+            failures += 1
+            continue
+        probe = subprocess.run(
+            [str(launcher), "-version"],
+            capture_output=True,
+            timeout=120,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        want = _nec2_module(stem, ["-version"], b"")
+        if probe.returncode != 0 or probe.stdout != want.stdout:
+            print(
+                f"FAIL {launcher.name} -version: exit {probe.returncode}, "
+                f"{probe.stdout!r} (the module's: {want.stdout!r})"
+            )
+            failures += 1
+            continue
+        result = subprocess.run(
+            [str(launcher)],
+            input=stream,
+            capture_output=True,
+            timeout=600,
+            env=env,
+            cwd=work,
+        )
+        module = _nec2_module(stem, [], stream)
+        text = _nec2_canon(result.stdout)
+        solved = text.count(SOLVED)
+        if result.returncode != module.returncode:
+            print(
+                f"FAIL {launcher.name} (NX stream): exit {result.returncode}, "
+                f"the module's {module.returncode}"
+            )
+            failures += 1
+        elif text != _nec2_canon(module.stdout):
+            print(f"FAIL {launcher.name} (NX stream): stdout is not the module's")
+            failures += 1
+        elif NEC2_BANNER not in text or solved < len(NEC2_STREAM):
+            print(
+                f"FAIL {launcher.name} (NX stream): {solved} solves under "
+                f"{NEC2_BANNER!r}, expected {len(NEC2_STREAM)}"
+            )
+            failures += 1
+        elif stem.endswith("-sinusoidal") and f"{NEC2_BANNER}.9.1+sin" not in text:
+            print(f"FAIL {launcher.name}: not under the sinusoidal banner")
+            failures += 1
+        else:
+            answers[stem] = text
+            print(
+                f"ok   {launcher.name}: {probe.stdout.decode().strip()}, "
+                f"{len(NEC2_STREAM)} NX-framed decks = the module's"
+            )
+    if len(answers) > 1 and len(set(answers.values())) < len(answers):
+        print("FAIL NEC-2 launchers: two names answered the stream identically")
+        failures += 1
+
+    stem = "momwire-nec2c"
+    launcher = exe.with_name(f"{stem}{exe.suffix}")
+    if launcher.is_file():
+        selftest = subprocess.run(
+            [str(launcher), "--selftest"],
+            capture_output=True,
+            timeout=600,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        lines = selftest.stdout.decode("latin-1").splitlines()
+        if selftest.returncode != 0 or not lines or lines[-1].strip() != "PASS":
+            print(
+                f"FAIL {launcher.name} --selftest: exit {selftest.returncode}, "
+                f"{selftest.stdout[-2000:]!r}"
+            )
+            failures += 1
+        else:
+            print(f"ok   {launcher.name} --selftest: PASS")
+    return failures
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__, file=sys.stderr)
@@ -1227,6 +1371,7 @@ def main() -> int:
         failures += _gate_4nec2(exe, work, env)
         failures += _gate_stream(exe, work, env)
         failures += _gate_identity(exe, env)
+        failures += _gate_nec2(exe, work, env)
     finally:
         stop(room)
 

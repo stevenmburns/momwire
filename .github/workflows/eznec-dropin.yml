@@ -2,7 +2,8 @@ name: eznec-dropin
 
 # Build the packaged Windows bundle for the external-engine slots of EZNEC,
 # SimNEC and 4nec2: the native launchers they point at
-# (momwire-nec5[-<basis>].exe and momwire-nec42[-<basis>].exe: one compiled
+# (momwire-nec5[-<basis>].exe, momwire-nec42[-<basis>].exe and, since
+# momwire#2059, SimNEC's NEC-2 momwire-nec2c[-<basis>].exe: one compiled
 # client copied per name, build.py's launcher_stems()) plus the ONE frozen
 # engine they run (momwire-engine.exe — momwire.dropin.nec5 under PyInstaller,
 # one-dir; the one-file form is disqualified, it self-extracts on every
@@ -319,6 +320,12 @@ jobs:
       # on Linux with sh-script engine shims, which cannot run here, so the
       # smoke's residency gate (two launches, one spawned daemon) is what says
       # the fast path works on the OS it ships to.
+      #
+      # Gate 14 (momwire#2059) is the NEC-2 launchers' only Windows verdict:
+      # momwire-nec2c.exe and momwire-nec2c-sinusoidal.exe answer `-version`
+      # and an NX-framed stream of nec_portal decks as the pip console
+      # scripts of those names do, and `momwire-nec2c.exe --selftest` prints
+      # PASS through the frozen engine.
       - run: python scripts/eznec_freeze/smoke.py dist/momwire/momwire-nec5.exe
       # The ONLY Windows 7 check before a user runs it: there is no Win7
       # runner, so the smoke above proves the freeze, not Win7. Fails on any
