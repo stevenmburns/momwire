@@ -10,9 +10,9 @@ serve, so the choice is about speed and convenience, not about the answer.
 | You want | Use |
 |---|---|
 | A NEC-5 deck, run directly or from EZNEC's or SimNEC's NEC-5 engine setting | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
-| A deck the executable refuses (its printout says `not served by this build`), the NEC-4.2 engine slot, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
+| A deck the executable refuses (its printout says `not served by this build`), the NEC-4.2 engine slot, a NEC-2 engine, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
 | One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`, on releases that list it |
-| Every engine, the NEC-2 ones included, or momwire from your own Python | `pip install momwire` (Python 3.10 or later); see [From Python](#from-python) |
+| momwire from your own Python, as a library or as commands | `pip install momwire` (Python 3.10 or later); see [From Python](#from-python) |
 
 ## The standalone executable first
 
@@ -24,17 +24,21 @@ answer. That is the cue to run the same deck through the drop-in, which
 runs the Python engine and serves more decks.
 
 The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-4.2
-engine slot in EZNEC, SimNEC or 4nec2, or for another formulation, use the
-drop-in. The NEC-2 engines (`momwire-nec2c-<basis>`) are in neither zip: they
-come with `pip install momwire` ([NEC-2 launchers](/reference/portal-usage/)).
+engine slot in EZNEC, SimNEC or 4nec2, for a NEC-2 engine, or for another
+formulation, use the drop-in. Its NEC-2 engines, `momwire-nec2c.exe` and
+`momwire-nec2c-sinusoidal.exe`, are the same engines as the `pip install
+momwire` commands of those names, and answer SimNEC's NEC-2 engine setting and
+nec2c's command line the same way ([NEC-2 launchers](/reference/portal-usage/)).
 
-The drop-in ships two launchers per slot. Any other formulation is one copy
-away: copy a launcher in the unpacked folder and rename the copy
-`momwire-nec5-<basis>.exe` or `momwire-nec42-<basis>.exe`, and that basis
-answers in that slot ([Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation)).
-A copy named for NEC-2 does not become a NEC-2 engine: the drop-in reads its
-name for the NEC-5 or NEC-4.2 dialect only. The [standalone page](/reference/standalone/)
-lists what the executables carry.
+The drop-in ships two launchers per dialect. Any other formulation is one
+copy away: copy a launcher in the unpacked folder and rename the copy
+`momwire-nec5-<basis>.exe`, `momwire-nec42-<basis>.exe` or
+`momwire-nec2c-<basis>.exe`, and that basis answers in that dialect
+([Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation)).
+A name carrying `nec2c` is read first, so a copy named for NEC-2 is a NEC-2
+engine whichever launcher it was copied from, and a basis after `nec2c-`
+that does not exist is refused by name rather than served as the default. The
+[standalone page](/reference/standalone/) lists what the executables carry.
 
 Leave the thread settings alone. Both forms size their thread pools from the
 deck and from the cores you allow them, and since 0.95.0 they choose the same
@@ -106,6 +110,11 @@ starts its engine once for every frequency of a sweep.
 - **SimNEC's streaming call** (`- -`, a chain of decks on standard input)
   lets one standalone process answer the whole chain, so it keeps its
   ground tables in memory from one deck to the next.
+- **The drop-in's NEC-2 engines start one engine per run.** SimNEC's NEC-2
+  protocol streams every deck of a run into one engine process, so the
+  engine's start-up is paid once per run, not once per deck, and there is no
+  resident engine between runs. The pip install's `momwire-nec2c-shared`
+  keeps one; the drop-in does not ship it.
 
 The tables above time single runs. A sweep that starts the engine at every
 frequency, the way EZNEC does, gives the same answer. On the same laptop,
@@ -127,11 +136,12 @@ this run could not separate. The two forms' printouts were byte-identical at all
 ## From Python
 
 `pip install momwire` puts the whole engine in your own Python (3.10 or
-later). It installs the same commands the drop-in has, `momwire-nec5-<basis>`
-and `momwire-nec42-<basis>`, running the same Python engine with a resident
-engine between runs, plus two things neither zip has:
+later). It installs the same commands the drop-in has, `momwire-nec5-<basis>`,
+`momwire-nec42-<basis>` and the NEC-2 engines `momwire-nec2c-<basis>`
+([NEC-2 launchers](/reference/portal-usage/)), running the same Python
+engine, one command per basis, plus two things neither zip has:
 
-- the NEC-2 engines, `momwire-nec2c-<basis>` ([NEC-2 launchers](/reference/portal-usage/));
+- `momwire-nec2c-shared`, a NEC-2 engine that stays resident between runs;
 - the Python library itself, for scripts and for
   [antennaknobs](https://antennaknobs.dev).
 

@@ -36,6 +36,17 @@ momwire-nec2c -version     # NEC2 momwire-nec2c [sb] <version>
 `python -m momwire.dropin.nec2c` is the same program under its long name, for an
 environment where the console script is awkward to reach.
 
+**On Windows without Python**, the drop-in zip,
+[`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip),
+ships `momwire-nec2c.exe` and `momwire-nec2c-sinusoidal.exe`. Unzip it into a
+folder of its own (`C:\momwire\`) and give SimNEC the full path of one of
+them. They are the same engine as the pip commands of the same names and
+answer the same way, the `-version` probe, the `NX` stream and
+`--selftest` included, and a copy you rename `momwire-nec2c-<basis>.exe` in
+that folder selects its basis by the rule below. They start the engine once
+per SimNEC run and keep nothing resident between runs; the resident
+`momwire-nec2c-shared` comes with pip only.
+
 Before a live session, run the built-in smoke. It needs no checkout: it
 spawns one resident copy of itself, sends embedded decks through it the way
 SimNEC does, exercises every basis, and prints `PASS` or `FAIL`.

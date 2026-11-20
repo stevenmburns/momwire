@@ -134,8 +134,9 @@ solved.
 
 ## Choosing the formulation
 
-The bundle carries seven launchers and the one engine they run, and the
-choice is the engine PATH you set. One family per EZNEC engine option:
+The bundle carries six launchers and the one engine they run, and the
+choice is the engine PATH you set. One family per EZNEC engine option, and
+one for NEC-2:
 
 ```text
 EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
@@ -147,8 +148,20 @@ EZNEC's External NEC-4.2 slot:
 momwire-nec42.exe             the default — degree-2 B-spline (nec42-bspline)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
+SimNEC's NEC-2 engine, and nec2c's command line:
+momwire-nec2c.exe             the default — degree-2 B-spline (bspline)
+momwire-nec2c-sinusoidal.exe  the sinusoidal basis, point matched
+
 momwire-engine.exe            the compute engine the launchers run
 ```
+
+The `momwire-nec2c` names are the [NEC-2 launchers](/reference/portal-usage/)
+that `pip install momwire` installs under the same names, frozen: they speak
+NEC-2's protocol (decks on standard input, printouts on standard output, the
+`-version` probe), not EZNEC's, and EZNEC has no NEC-2 engine slot to put
+them in. A name carrying `nec2c` is read before every other marker, so a
+copy named for NEC-2 is a NEC-2 engine. They run the engine once per run
+rather than keeping it resident.
 
 The name picks the deck dialect as well as the basis, so a `momwire-nec42`
 name belongs in EZNEC's NEC-4.2 slot and a `momwire-nec5` name in its NEC-5
@@ -306,8 +319,8 @@ mesh before it is information about either engine.
 `nec5-` (or `nec42-`) selects it, a Windows `.exe` stripped first. So a copy
 you make yourself works — copy a **launcher** (a couple of hundred kilobytes,
 not the engine), rename the copy to `momwire-nec5-<basis>.exe` (or
-`momwire-nec42-<basis>.exe`) in the same folder, and that basis answers in that
-slot. This is the same rule the [NEC-2 launcher's](/reference/portal-usage/)
+`momwire-nec42-<basis>.exe`, or `momwire-nec2c-<basis>.exe` for NEC-2) in the
+same folder, and that basis answers in that slot. This is the same rule the [NEC-2 launcher's](/reference/portal-usage/)
 `momwire-nec2c-<basis>` commands use, with one owner behind both. The bundle
 ships two per slot because that is what the parity work was about; the rest
 are a copy away:
