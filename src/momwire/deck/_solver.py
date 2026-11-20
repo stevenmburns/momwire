@@ -456,6 +456,12 @@ NEC4_MARKER = "nec4"
 # only `nec4` (a renamed copy) still reads past `nec4`, as it did before.
 NEC42_MARKER = "nec42"
 
+# The marker of the NEC-2 engines (momwire#2059): `momwire-nec2c[-<basis>]`,
+# the pip console scripts' names, which SimNEC recognises by `nec2c` in the
+# engine path.  The basis is read past `nec2c-`, by the rule
+# `momwire.dropin.nec2c` reads it (`basis_from_program_name(prog, "nec2c-")`).
+NEC2C_MARKER = "nec2c"
+
 
 def _program_stem(prog: str) -> str:
     """``prog``'s basename, casefolded, a Windows ``.exe`` stripped — the
@@ -465,14 +471,23 @@ def _program_stem(prog: str) -> str:
 
 
 def dialect_from_program_name(prog: str) -> str:
-    """``"nec4"`` when the program's name carries :data:`NEC4_MARKER`, else
-    ``"nec5"`` — the EZNEC drop-in's two slots (momwire#1295).
+    """``"nec2"`` when the program's name carries :data:`NEC2C_MARKER`,
+    else ``"nec4"`` when it carries :data:`NEC4_MARKER`, else ``"nec5"``.
 
     A substring test, casefolded, so a renamed copy (``My-NEC4-engine.exe``)
     still answers the slot its name claims; the NEC-5 names
-    (``momwire-eznec*``, ``momwire-nec5*``) can never carry it.
+    (``momwire-eznec*``, ``momwire-nec5*``) can never carry either marker.
+
+    ``nec2c`` is read FIRST, in SimNEC's own order (``nec2c``, then ``nec5``,
+    momwire#1239): a name carrying it is the NEC-2 engine whatever else it
+    carries (momwire#2059).  Before that marker existed a copy of the frozen
+    engine named ``momwire-nec2c-sinusoidal.exe`` answered as NEC-5, which is
+    momwire#628's failure reached by a rename.
     """
-    return "nec4" if NEC4_MARKER in _program_stem(prog) else "nec5"
+    stem = _program_stem(prog)
+    if NEC2C_MARKER in stem:
+        return "nec2"
+    return "nec4" if NEC4_MARKER in stem else "nec5"
 
 
 def nec4_basis_from_program_name(prog: str) -> str | None:
