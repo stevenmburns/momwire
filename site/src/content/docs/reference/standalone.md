@@ -139,9 +139,10 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 
 The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up)
 (named `momwire-eznec-windows.zip` before 0.80.0), is the way to run momwire
-in EZNEC's, SimNEC's or 4nec2's NEC-2 and NEC-4.2 engine slots on Windows,
-and for any deck or formulation a standalone program does not serve; in the
-NEC-5 slot either one works. The two are built for different launch patterns:
+in EZNEC's, SimNEC's or 4nec2's NEC-4.2 engine slot on Windows, and for any
+deck or formulation a standalone program does not serve; in the NEC-5 slot
+either one works. The NEC-2 launchers come with `pip install momwire`, in
+neither zip. The two are built for different launch patterns:
 
 - A standalone program is **a new process per run**, with no Python to
   start, so it answers the first run of a session quickly.

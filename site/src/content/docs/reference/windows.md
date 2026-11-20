@@ -10,7 +10,8 @@ convenience, not about the answer.
 | You want | Use |
 |---|---|
 | A NEC-5 deck, run directly or from EZNEC's or SimNEC's NEC-5 engine setting | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
-| A deck the executable refuses (its printout says `not served by this build`), the NEC-2 or NEC-4.2 engine slots, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
+| A deck the executable refuses (its printout says `not served by this build`), the NEC-4.2 engine slot, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
+| A NEC-2 engine (`momwire-nec2c-<basis>`) | `pip install momwire`: the NEC-2 launchers are in neither zip ([NEC-2 launchers](/reference/portal-usage/)) |
 | One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`, on releases that list it |
 
 ## The standalone executable first
@@ -20,11 +21,12 @@ solve it, whether you run it yourself or point EZNEC's or SimNEC's NEC-5
 engine setting at it. When it doesn't, it says so: the printout it writes
 names what it refuses (`not served by this build: ...`) instead of the
 answer. That is the cue to run the same deck through the drop-in, which
-serves everything the Python engines serve.
+runs the Python engine and serves more decks.
 
-The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-2 or
-NEC-4.2 engine slot in EZNEC, SimNEC or 4nec2, or for another formulation,
-use the drop-in. The [standalone page](/reference/standalone/)
+The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-4.2
+engine slot in EZNEC, SimNEC or 4nec2, or for another formulation, use the
+drop-in. The NEC-2 engines (`momwire-nec2c-<basis>`) are in neither zip: they
+come with `pip install momwire` ([NEC-2 launchers](/reference/portal-usage/)). The [standalone page](/reference/standalone/)
 lists what the executables carry.
 
 Leave the thread settings alone. Both forms size their thread pools from the
