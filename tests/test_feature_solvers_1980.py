@@ -388,9 +388,13 @@ def test_kcl_nullspace_on_razor_2p_leaves_line_2_bare(no_features):
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline", "sinusoidal"])
 def test_the_whole_pair_reuse_switch_stays_named_where_it_runs(no_features, basis):
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    # Reach 4: certified on the Linux and Windows drop-in, not macOS's.
+    plain = (
+        "" if F.certified("pair_reuse", "dropin") else " uncertified on this platform"
+    )
     with F.context_scope("dropin"):
         assert _printout.engine_stamp(basis) == (
-            _bare_stamp(basis) + " +pair_reuse uncertified on this platform"
+            _bare_stamp(basis) + " +pair_reuse" + plain
         )
 
 

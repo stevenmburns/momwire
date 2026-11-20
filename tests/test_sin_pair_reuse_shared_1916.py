@@ -17,7 +17,7 @@ from momwire._accel import acc
 from momwire.sinusoidal import SinusoidalSolver
 
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(4),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "pair_reuse_reduce_1916", False),
         reason="accelerator None or without pair_reuse_reduce_1916",

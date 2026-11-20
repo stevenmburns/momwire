@@ -397,10 +397,11 @@ def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
     assert warm["ground_disk"] >= 1, warm
 
 
-# --- momwire#1911: the sinusoidal fill's pair reuse (reach 1) ---------------
+# --- momwire#1911: the sinusoidal fill's pair reuse (reach 4) ---------------
 #
 # The C++ route carries `pair_reuse` (`_sin_pair_reuse_core.h`), but its reach
-# is the hosted app, so a shipped nec42-sinusoidal executable refuses it. A
+# stops at the drop-in (level 4), so a shipped nec42-sinusoidal executable
+# refuses it. A
 # CERTIFICATION build (CMake MW_EXE_CERTIFY=pair_reuse) runs it, and is then
 # held to the launcher with the feature on. Which one is under test is
 # declared, never guessed from its behaviour: MOMWIRE_NEC42_SIN_CERTIFIES

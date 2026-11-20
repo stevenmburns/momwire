@@ -4,7 +4,8 @@
 The nec42-sinusoidal executable's fill (`_sinusoidal_fill_core.cpp`) serves
 the feature when it is requested (the in-process hook here; a certification
 build of the executable, `MW_EXE_CERTIFY`, in tests/test_standalone_nec42.py).
-Its reach is level 1, so the shipped executables refuse it.
+Its reach is level 4, the drop-in, short of every executable level, so the
+shipped executables refuse it.
 
 Held, bit for bit:
 - the per-segment types (`reversible_segment_types`, `reversible_ground_types`);
@@ -49,7 +50,7 @@ FIX = ROOT / "tests" / "fixtures"
 
 acc = _accel.acc
 pytestmark = [
-    pytest.mark.reach(1),
+    pytest.mark.reach(4),
     pytest.mark.skipif(
         acc is None or not getattr(acc, "sin_pair_reuse_cxx", False),
         reason="needs the extension's C++ pair-reuse hooks",

@@ -241,9 +241,21 @@ FEATURES: dict[str, Feature] = {
         # runs: Python's plan to the byte. It has no EXE_FEATURES row, so the
         # shipped executables refuse it; a certification build
         # (MW_EXE_CERTIFY=pair_reuse) runs it for the gates.
+        #
+        # Reach 4, `dropin-linux-windows` (Steve, 2026-11-19; it was reach 1,
+        # the hosted app only, from 11-04): certified for every Python route
+        # but macOS, the hosted app, Linux sse2, Windows installs and the
+        # drop-in on Linux and Windows, so MOMWIRE_X_PAIR_REUSE=1 with the
+        # Windows NEC-2 drop-in (`momwire-nec2c-sinusoidal`) is a certified
+        # use. Python-kind, so the macOS drop-in (level 5) still runs it,
+        # stamped uncertified. Still off by default and not offered. No
+        # executable carries it: reach 4 is short of the first executable
+        # level (6), and there is no EXE_FEATURES row, so they refuse it.
+        # Its bspline part `offset_reuse` moves with it; its razor-2p part
+        # `razor_pair_reuse` already reaches 8.
         Feature(
             name="pair_reuse",
-            reach=1,
+            reach=4,
             env="MOMWIRE_X_PAIR_REUSE",
             solvers=("bspline", "razor", "sinusoidal"),
             kind="python",
@@ -261,6 +273,10 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_chunked_2020.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
                 "tests/test_sin_pair_reuse_cxx_1911.py",
+                "tests/test_sin_pair_reuse_1916.py",
+                "tests/test_sin_pair_reuse_shared_1916.py",
+                "tests/test_sin_pair_reuse_budget_2019.py",
+                "tests/test_sin_pair_reuse_keys_1982.py",
             ),
             label="pair reuse",
             summary=(
@@ -295,9 +311,12 @@ FEATURES: dict[str, Feature] = {
         # variable still turn it on or off alone. Not retired: within one
         # edge the moment depends only on the segment offset, which a whole-
         # block copy between edge pairs does not use, so the two compose.
+        # Reach 4 with the whole (Steve, 2026-11-19): it is what
+        # MOMWIRE_X_PAIR_REUSE turns on for bspline, so a certified whole
+        # never stamps a bspline drop-in printout uncertified through it.
         Feature(
             name="offset_reuse",
-            reach=1,
+            reach=4,
             env="MOMWIRE_X_OFFSET_REUSE",
             solvers=("bspline",),
             kind="python",
