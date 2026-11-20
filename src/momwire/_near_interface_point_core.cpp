@@ -80,10 +80,18 @@ static const int NP = 4;  // POINT_KEYS
 // `_column_rule_j1`'s second weight vector, on `mw899::column_rule`'s own
 // nodes: the J0/H0 factor of each weight replaced by the J1 one --
 // lam rho (J1/lam rho) in the head and mid, H1/2 and H2/2 on the rays. Like
-// the numpy route it REBUILDS the path pieces rather than dividing the J0
-// factor out (which would fail at a J0 zero), and it checks the rebuilt nodes
-// against the rule's own: a J1 weight on a different node than its J0 twin
-// would be a silent error. Returns false on a mismatch; the caller raises.
+// the numpy route it rebuilds the path pieces rather than dividing the J0
+// factor out (which would fail at a J0 zero), but it rebuilds only the Gauss
+// abscissae and weights: every node VALUE, and the head's path derivative,
+// is read from the rule's own s.lam. A J1 weight on a different node than
+// its J0 twin would be a silent error, and an independently rounded second
+// copy of the nodes is not the same floats under /fp:fast (momwire#2054:
+// MSVC 14.52 rounds the two rebuilds differently), so the nodes are taken,
+// never recomputed. What is checked is the COUNT -- each piece's rebuilt
+// panel walk fits in what is left of s.lam, and the pieces exhaust it. Not a
+// tolerance on the values: rounding can move a count only by moving the walk
+// itself (an edge, a sub_seed step), and that is a different rule, which the
+// count reports. Returns false on a count mismatch; the caller raises.
 static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
                            double lam_mult, int p, double detour,
                            const double *gx, const double *gw, int ng,
@@ -93,11 +101,13 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
     // The extents `column_rule` itself used, D1 included (momwire#1595).
     double a_head, lam_top;
     mw899::column_extents(rho, k_p, k_m, s_min, lam_mult, a_head, lam_top);
+    const size_t K = s.lam.size();
     w1.clear();
-    w1.reserve(s.lam.size());
+    w1.reserve(K);
     std::vector<double> edges, seeded, t, wt;
     size_t idx = 0;
-    auto same = [&](const cd &l) { return idx < s.lam.size() && s.lam[idx++] == l; };
+    // The next n nodes of the rule exist: the piece's count fits.
+    auto fits = [&](size_t n) { return n <= K - idx; };
 
     double H = std::min(0.35 * a_head, detour / std::max(rho, 1e-12));
     H = std::max(H, 1e-6 * a_head);
@@ -115,10 +125,13 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
     mw899::sub_seed(edges, rho, seeded);
     mw899::fixed_gauss(seeded, p, gx, gw, ng, t, wt);
+    if (!fits(t.size())) return false;
     for (size_t i = 0; i < t.size(); ++i) {
-        const cd l(t[i], H * std::sin(MW_PI * t[i] / a_head));
-        const cd dl(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * t[i] / a_head));
-        if (!same(l)) return false;
+        // The head node's real part is its abscissa exactly, so the
+        // derivative is taken at the rule's own t.
+        const cd l = s.lam[idx++];
+        const double tr = l.real();
+        const cd dl(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * tr / a_head));
         cd b0, b1x;
         mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
         w1.push_back(wt[i] * dl * (l * rho) * b1x);
@@ -130,9 +143,9 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
         edges.push_back(lam_top);
         mw899::sub_seed(edges, rho, seeded);
         mw899::fixed_gauss(seeded, p, gx, gw, ng, t, wt);
+        if (!fits(t.size())) return false;
         for (size_t i = 0; i < t.size(); ++i) {
-            const cd l(t[i], 0.0);
-            if (!same(l)) return false;
+            const cd l = s.lam[idx++];
             cd b0, b1x;
             mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
             w1.push_back(wt[i] * (l * rho) * b1x);
@@ -152,24 +165,22 @@ static bool column_rule_j1(double rho, double k_p, const cd &k_m, double s_min,
     const cd ray = std::exp(cd(0.0, 0.25 * MW_PI));
     if (rho == 0.0) {
         // One up-ray, J1(0) = 0: the rho keys are an exact zero on the axis.
-        for (size_t i = 0; i < t.size(); ++i) {
-            if (!same(lam_top + t[i] * ray)) return false;
-            w1.push_back(cd(0.0, 0.0));
-        }
+        if (!fits(t.size())) return false;
+        idx += t.size();
+        w1.resize(idx, cd(0.0, 0.0));
     } else {
+        if (!fits(2 * t.size())) return false;
         for (size_t i = 0; i < t.size(); ++i) {
-            const cd up = lam_top + t[i] * ray;
-            if (!same(up)) return false;
+            const cd up = s.lam[idx++];
             w1.push_back(wt[i] * ray * 0.5 * xsf::cyl_hankel_1(1.0, up * rho));
         }
         for (size_t i = 0; i < t.size(); ++i) {
-            const cd dn = lam_top + t[i] * std::conj(ray);
-            if (!same(dn)) return false;
+            const cd dn = s.lam[idx++];
             w1.push_back(wt[i] * std::conj(ray) * 0.5 *
                          xsf::cyl_hankel_2(1.0, dn * rho));
         }
     }
-    return idx == s.lam.size();
+    return idx == K;
 }
 
 // `point_keys_columns`' factor rows with the weights folded in, such that
@@ -462,7 +473,7 @@ static size_t build(double rho, double k_p, const cd &k_m, double theta, double 
 
 // One column's rule into `s`: the steepest-descent rule for a far column,
 // else `_column_rule_j1` and the point factors. Returns false when the J1
-// weights left the rule's nodes; K is the rule's node count.
+// rule's panel walk did not count out the rule's nodes; K is the node count.
 template <class ZB, class PB>
 static bool column(double rho, double k_p, const cd &kpc, const cd &km, const ZB &zb, const PB &pb,
                    const double *z, std::ptrdiff_t lo, std::ptrdiff_t hi, double lam_mult, int p, double detour,
