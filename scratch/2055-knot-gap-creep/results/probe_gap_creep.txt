@@ -1,0 +1,65 @@
+gap law at a = 1 mm: 6.845e-06 S per tripling
+== 1. bendload, a = 1 mm: Z_in with one Y entry free at a time
+   (the others held at their r = 1 values)
+   r                  all             Y11 only             Y12 only             Y22 only
+   1    43.0075-415.7355j    43.0075-415.7355j    43.0075-415.7355j    43.0075-415.7355j
+   3    42.9035-414.0707j    45.7016-411.7650j    38.3640-419.0321j    44.6996-414.7169j
+   9    42.8107-412.8225j    47.3018-409.1509j    35.3588-421.0538j    45.7561-414.0161j
+  27    42.7003-411.6194j    48.2729-407.1519j    33.3274-422.3720j    46.4596-413.4584j
+  81    42.5226-409.9813j    48.7776-405.2013j    31.9256-423.2597j    46.9547-412.8719j
+   susceptance step per tripling, in units of the gap law
+    1->3   dB11  2.79  dB22  4.90  dG11 2.01e-05 S  dG22 4.33e-05 S
+    3->9   dB11  1.87  dB22  3.31  dG11 1.26e-05 S  dG22 2.73e-05 S
+    9->27  dB11  1.49  dB22  2.57  dG11 8.33e-06 S  dG22 1.82e-05 S
+   27->81  dB11  1.55  dB22  2.61  dG11 5.68e-06 S  dG22 1.24e-05 S
+
+== 2. bendload, same ports and load, thinner wire
+a=0.001 r= 1 h/a=   250.0  Z_in 43.0075-415.7355j
+a=0.001 r= 3 h/a=    83.3  Z_in 42.9035-414.0707j  step -0.1040+1.6648j
+a=0.001 r= 9 h/a=    27.8  Z_in 42.8107-412.8225j  step -0.0928+1.2482j
+a=0.001 r=27 h/a=     9.3  Z_in 42.7003-411.6194j  step -0.1104+1.2031j
+a=0.001 r=81 h/a=     3.1  Z_in 42.5226-409.9813j  step -0.1777+1.6381j
+a=0.0001 r= 1 h/a=  2500.0  Z_in 48.1975-527.6135j
+a=0.0001 r= 3 h/a=   833.3  Z_in 48.1586-526.8550j  step -0.0389+0.7585j
+a=0.0001 r= 9 h/a=   277.8  Z_in 48.1344-526.4296j  step -0.0242+0.4254j
+a=0.0001 r=27 h/a=    92.6  Z_in 48.1171-526.1653j  step -0.0173+0.2643j
+a=0.0001 r=81 h/a=    30.9  Z_in 48.1023-525.9715j  step -0.0148+0.1938j
+a=1e-05 r= 1 h/a= 25000.0  Z_in 52.1202-627.8568j
+a=1e-05 r= 3 h/a=  8333.3  Z_in 52.0995-627.4018j  step -0.0207+0.4550j
+a=1e-05 r= 9 h/a=  2777.8  Z_in 52.0890-627.1810j  step -0.0104+0.2209j
+a=1e-05 r=27 h/a=   925.9  Z_in 52.0833-627.0701j  step -0.0057+0.1109j
+a=1e-05 r=81 h/a=   308.6  Z_in 52.0798-627.0095j  step -0.0035+0.0606j
+
+== 3. short straight wire, a = 1 mm: no load, no bend
+node gap   r= 1  Z 6.7684-1106.8322j
+node gap   r= 3  Z 6.7118-1099.9389j  step -0.0565+6.8933j  dB/law  0.83
+node gap   r= 9  Z 6.6619-1094.5703j  step -0.0499+5.3687j  dB/law  0.65
+node gap   r=27  Z 6.6041-1088.9918j  step -0.0578+5.5785j  dB/law  0.68
+node gap   r=81  Z 6.5129-1080.8937j  step -0.0912+8.0981j  dB/law  1.01
+point feed r= 1  Z 8.3583-1229.3639j
+point feed r= 3  Z 7.3730-1152.8360j  step -0.9853+76.5279j  dB/law  7.89
+point feed r= 9  Z 6.9919-1121.3487j  step -0.3811+31.4873j  dB/law  3.56
+point feed r=27  Z 6.8133-1106.1048j  step -0.1786+15.2438j  dB/law  1.80
+point feed r=81  Z 6.7052-1096.7342j  step -0.1081+9.3706j  dB/law  1.13
+
+== 4. a 24-gon loop (no wire ends) against an open wire, a = 1 mm
+loop, point feed               r= 1  Y 3.370575e-03-3.059824e-03j
+loop, point feed               r= 3  Y 3.368741e-03-3.007507e-03j  dG/|Y| -4.06e-04  dB/|Y| +1.16e-02
+loop, point feed               r= 9  Y 3.368474e-03-2.984079e-03j  dG/|Y| -5.93e-05  dB/|Y| +5.21e-03
+loop, point feed               r=27  Y 3.368454e-03-2.972290e-03j  dG/|Y| -4.46e-06  dB/|Y| +2.62e-03
+loop, point feed               r=81  Y 3.368455e-03-2.964853e-03j  dG/|Y| +1.23e-07  dB/|Y| +1.66e-03
+loop, fixed-width source       r= 1  Y 3.368694e-03-3.066327e-03j
+loop, fixed-width source       r= 3  Y 3.366863e-03-3.034350e-03j  dG/|Y| -4.04e-04  dB/|Y| +7.06e-03
+loop, fixed-width source       r= 9  Y 3.366597e-03-3.033929e-03j  dG/|Y| -5.87e-05  dB/|Y| +9.30e-05
+loop, fixed-width source       r=27  Y 3.366577e-03-3.033036e-03j  dG/|Y| -4.42e-06  dB/|Y| +1.97e-04
+loop, fixed-width source       r=81  Y 3.366578e-03-3.032131e-03j  dG/|Y| +1.22e-07  dB/|Y| +2.00e-04
+open wire, point feed          r= 1  Y 9.299517e-03+6.739282e-03j
+open wire, point feed          r= 3  Y 9.354494e-03+6.764811e-03j  dG/|Y| +4.76e-03  dB/|Y| +2.21e-03
+open wire, point feed          r= 9  Y 9.387786e-03+6.771352e-03j  dG/|Y| +2.88e-03  dB/|Y| +5.65e-04
+open wire, point feed          r=27  Y 9.409604e-03+6.771845e-03j  dG/|Y| +1.88e-03  dB/|Y| +4.25e-05
+open wire, point feed          r=81  Y 9.424413e-03+6.771503e-03j  dG/|Y| +1.28e-03  dB/|Y| -2.95e-05
+open wire, fixed-width source  r= 1  Y 9.292590e-03+6.726311e-03j
+open wire, fixed-width source  r= 3  Y 9.347521e-03+6.731165e-03j  dG/|Y| +4.77e-03  dB/|Y| +4.21e-04
+open wire, fixed-width source  r= 9  Y 9.380789e-03+6.714368e-03j  dG/|Y| +2.88e-03  dB/|Y| -1.46e-03
+open wire, fixed-width source  r=27  Y 9.402593e-03+6.703842e-03j  dG/|Y| +1.89e-03  dB/|Y| -9.12e-04
+open wire, fixed-width source  r=81  Y 9.417392e-03+6.696934e-03j  dG/|Y| +1.28e-03  dB/|Y| -5.98e-04
