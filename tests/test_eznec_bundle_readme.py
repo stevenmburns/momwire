@@ -52,15 +52,21 @@ def _resolved(stem: str) -> tuple[str, str]:
     return dialect, _serve.BASIS if suffix is None else suffix
 
 
-def test_the_bundle_ships_four_launchers_in_two_families():
-    """momwire#1583 dropped the three deprecated `momwire-eznec*` names; the
-    signing post-condition's "all N executables" is this count plus one."""
+def test_the_bundle_ships_six_launchers_in_three_families():
+    """momwire#1583 dropped the three deprecated `momwire-eznec*` names and
+    momwire#2059 added the NEC-2 pair; the signing post-condition's "all N
+    executables" is this count plus one."""
     build = _build()
     stems = build.launcher_stems()
-    assert len(stems) == len(set(stems)) == 4
+    assert len(stems) == len(set(stems)) == 6
     assert set(build.NEC5_LAUNCHERS) == {"momwire-nec5", "momwire-nec5-razor-2p"}
     assert set(build.NEC4_LAUNCHERS) == {"momwire-nec42", "momwire-nec42-sinusoidal"}
-    assert set(stems) == {*build.NEC5_LAUNCHERS, *build.NEC4_LAUNCHERS}
+    assert set(build.NEC2_LAUNCHERS) == {"momwire-nec2c", "momwire-nec2c-sinusoidal"}
+    assert set(stems) == {
+        *build.NEC5_LAUNCHERS,
+        *build.NEC4_LAUNCHERS,
+        *build.NEC2_LAUNCHERS,
+    }
     assert not any("eznec" in stem for stem in stems)
     assert build.ENGINE_NAME == "momwire-engine"
     assert build.ENGINE_NAME not in stems
@@ -80,6 +86,12 @@ def test_every_launcher_answers_the_slot_and_basis_its_family_claims():
         assert dialect == "nec4" and basis in NEC2_BASES, stem
     assert _resolved("momwire-nec42") == ("nec4", _serve.BASIS)
     assert _resolved("momwire-nec42-sinusoidal") == ("nec4", "sinusoidal")
+    for stem in build.NEC2_LAUNCHERS:
+        # The NEC-2 route reads its basis as the pip launcher does, past
+        # `nec2c-`; no suffix is that route's own default.
+        assert dialect_from_program_name(stem) == "nec2", stem
+        suffix = basis_from_program_name(stem, "nec2c-")
+        assert suffix is None or suffix in NEC2_BASES, stem
 
 
 def test_the_engine_name_selects_no_basis():
@@ -95,6 +107,10 @@ def test_the_primary_names_are_also_console_scripts():
     build = _build()
     for stem in (*build.NEC5_LAUNCHERS, *build.NEC4_LAUNCHERS):
         assert scripts.get(stem) == "momwire_eznec_client:main", stem
+    # The NEC-2 pair is the pip install's NEC-2 engine under the same names
+    # (momwire#2059), so the bundle's copies answer as those scripts do.
+    for stem in build.NEC2_LAUNCHERS:
+        assert scripts.get(stem) == "momwire.dropin.nec2c:main", stem
 
 
 def _site_known_bases() -> dict[str, set[str]]:
@@ -255,7 +271,7 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
     assert "C:\\momwire\\momwire-nec5.exe < nec2d.tmp" in lines
     assert "C:\\momwire\\momwire-nec42.exe < nec2d.tmp" in lines
     head = text.split("\n\n", 1)[0]
-    assert "SimNEC (its NEC-5 and NEC-4.2 engines)" in " ".join(head.split())
+    assert "SimNEC (its NEC-5, NEC-4.2 and NEC-2 engines)" in " ".join(head.split())
     assert "its NEC-4.2 engine" in " ".join(head.split())
 
 

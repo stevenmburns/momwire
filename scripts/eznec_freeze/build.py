@@ -6,8 +6,8 @@ pyinstaller are installed::
     python scripts/eznec_freeze/build.py
 
 Produces ``dist/momwire/`` containing the launchers EZNEC, SimNEC and 4nec2
-point at -- ``momwire-nec5[-<basis>][.exe]`` and ``momwire-nec42[-<basis>][.exe]``
--- the single frozen ``momwire-engine[.exe]`` they run, and that engine's
+point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec42[-<basis>][.exe]``
+and ``momwire-nec2c[-<basis>][.exe]`` -- the single frozen ``momwire-engine[.exe]`` they run, and that engine's
 ``_internal`` runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
 the engine needs its runtime beside it in turn.
 
@@ -86,6 +86,20 @@ NEC4_LAUNCHERS = {
     "momwire-nec42": "the default, degree-2 B-spline (bs2)",
     "momwire-nec42-sinusoidal": "the sinusoidal basis, point matched",
 }
+# The NEC-2 engines (momwire#2059): `momwire-nec2c[-<basis>]`, the pip console
+# scripts' own names, for SimNEC's NEC-2 engine (it recognises one by `nec2c`
+# in the path) and nec2c's command line.  The same native launcher again: a
+# `nec2c` name makes it a pass-through to the engine's NEC-2 route
+# (`momwire.dropin.nec2c.main`), stdin and stdout and exit status, because
+# that protocol is a stream the resident daemon does not speak.  The default,
+# plus sinusoidal: point-matched sinusoidal is the basis family NEC-2 itself
+# belongs to, the engine of record people hold against nec2c (the W8IO
+# benchmark's), and the one the NEC-2 free-end cap is for (on by default since
+# 0.95.0).  Any other basis is a copy away, as in the other two families.
+NEC2_LAUNCHERS = {
+    "momwire-nec2c": "the default, degree-2 B-spline (bs2)",
+    "momwire-nec2c-sinusoidal": "the sinusoidal basis, point matched",
+}
 
 # The bases copied as `<LAUNCHER>-<basis>` beside the compiled launcher,
 # derived from the NEC-5 table so the two cannot disagree; the smoke reads
@@ -142,9 +156,9 @@ def win7_prerequisites(ucrt_bundled: bool) -> str:
 
 
 def launcher_stems() -> tuple[str, ...]:
-    """Every launcher the bundle ships, by file stem: the NEC-5 family, then
-    the NEC-4.2 one.  The engine is not a launcher."""
-    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS)
+    """Every launcher the bundle ships, by file stem: the NEC-5 family, the
+    NEC-4.2 one, then the NEC-2 one.  The engine is not a launcher."""
+    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS, *NEC2_LAUNCHERS)
 
 
 # The version this freeze bakes into the bundle (momwire#1277), as a top-level
@@ -299,6 +313,10 @@ def launcher_table(suffix: str) -> str:
             NEC4_LAUNCHERS,
         ),
         (
+            "NEC-2 (SimNEC's NEC-2 engine, nec2c's command line):",
+            NEC2_LAUNCHERS,
+        ),
+        (
             "And the engine itself, which is not a launcher:",
             {ENGINE_NAME: "the compute engine the launchers run"},
         ),
@@ -330,12 +348,12 @@ def readme_text(
         raise ValueError(f"unknown bundle target {target!r}; expected one of {TARGETS}")
     win7 = win7_prerequisites(ucrt_bundled) if target == "win7" else ""
     return (
-        f"momwire {release} — momwire as a NEC-5 or NEC-4.2 engine for the\n"
-        "antenna programs that run an external one: EZNEC Pro+ v7 (External\n"
-        "NEC-5 and External NEC-4.2), SimNEC (its NEC-5 and NEC-4.2 engines)\n"
-        "and 4nec2 (its NEC-5 package and its NEC-4.2 engine).  The program\n"
-        "writes a deck, runs the engine, and reads back the printout; momwire\n"
-        "answers in its place.\n"
+        f"momwire {release} — momwire as a NEC-5, NEC-4.2 or NEC-2 engine for\n"
+        "the antenna programs that run an external one: EZNEC Pro+ v7\n"
+        "(External NEC-5 and External NEC-4.2), SimNEC (its NEC-5, NEC-4.2\n"
+        "and NEC-2 engines) and 4nec2 (its NEC-5 package and its NEC-4.2\n"
+        "engine).  The program writes a deck, runs the engine, and reads back\n"
+        "the printout; momwire answers in its place.\n"
         "\n"
         f"{signing_note}\n"
         "\n"
@@ -436,6 +454,12 @@ def readme_text(
         "which is why the NEC-4.2 launchers carry it; they answer SimNEC's\n"
         "single, batch and stream modes alike.  A copy named with just nec4\n"
         "still answers the NEC-4.2 slot in EZNEC.\n"
+        "\n"
+        "SimNEC's NEC-2 engine is momwire-nec2c.exe or\n"
+        "momwire-nec2c-sinusoidal.exe: SimNEC recognises a NEC-2 engine by\n"
+        "nec2c in its name.  These speak NEC-2's own protocol (decks in,\n"
+        "printouts out, one engine for the whole run), so they do not keep a\n"
+        "resident engine: each run pays the engine's start-up once.\n"
         "\n"
         "INSTALLING FOR 4NEC2.  Extract the zip into a folder of its own,\n"
         "as above (C:\\momwire\\ here), and point 4nec2 at a launcher there by\n"
@@ -626,8 +650,8 @@ def main() -> int:
     # two do not disagree and must not be made to agree: the launcher
     # variants are byte-identical copies of `exe` (verified on the v0.44.0
     # release — two launcher names shared SHA256 111B8A48…, 192,768 bytes),
-    # so there are two DISTINCT signed artifacts across FIVE shipped files
-    # since momwire#1583 dropped the three deprecated names: four launchers
+    # so there are two DISTINCT signed artifacts across SEVEN shipped files
+    # since momwire#2059 added the NEC-2 pair: six launchers
     # (`launcher_stems()`) plus the engine. The distinct
     # count stays 2 however many variants ship, which is the whole point of
     # copying a signed binary rather than signing each one.
