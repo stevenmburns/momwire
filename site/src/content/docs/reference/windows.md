@@ -107,9 +107,22 @@ starts its engine once for every frequency of a sweep.
   lets one standalone process answer the whole chain, so it keeps its
   ground tables in memory from one deck to the next.
 
-The tables above time single runs, not a sweep that starts the engine at
-every frequency the way EZNEC does. A sweep like that is being measured, and
-the advice here will be updated if it changes the choice.
+The tables above time single runs. A sweep that starts the engine at every
+frequency, the way EZNEC does, gives the same answer. On the same laptop,
+with nec5-razor-2p and 51 single-frequency decks launched one at a time:
+
+| Deck | Standalone, warm | Drop-in, warm | Standalone, cold | Drop-in, cold |
+|---|---|---|---|---|
+| Fan dipole over Sommerfeld ground | 3.55 s | 3.86 s | 3.71 s | 15.39 s |
+| The same fan dipole in free space | 2.06 s | 2.13 s | 2.00 s | 3.30 s |
+
+Warm, with the drop-in's engine already running and the standalone
+program's ground tables already cached, the drop-in takes 4–9 % longer.
+Cold, the standalone program barely notices: its first launch over the
+Sommerfeld ground took 0.12 s, building its ground tables included. The
+drop-in's first launch took 11.6 s: the first after a reboot, so it includes
+starting its engine, a cold disk cache and building its ground tables, which
+this run could not separate. The two forms' printouts were byte-identical at all 51 points.
 
 ## From Python
 
