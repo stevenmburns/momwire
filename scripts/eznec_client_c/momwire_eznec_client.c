@@ -174,6 +174,21 @@ typedef int lock_t;
 #define NEC42_MARKER "nec42"
 #define NEC4_KEY_ELEMENT "dialect=nec4"
 
+/* momwire#2059: a name carrying `nec2c` is the NEC-2 engine,
+ * `momwire-nec2c[-<basis>]`, and that is another PROTOCOL as well as another
+ * dialect -- nec2c's command line and SimNEC's portal: decks on stdin,
+ * printouts on stdout, NX framing, the `-version` probe -- which the resident
+ * daemon does not speak.  So such a launcher is a pass-through: the engine
+ * runs on this process's own stdin and stdout with this launcher's whole
+ * argv, behind PROGRAM_FLAG and this launcher's name, and answers through
+ * `momwire.dropin.nec2c.main`, which reads the basis past `nec2c-` and the
+ * `-version` line off that name as the pip launcher does.  Read FIRST, before
+ * every other marker, in SimNEC's own order (`nec2c`, then `nec5`,
+ * momwire#1239): before this a copy named for nec2c served NEC-5 silently.
+ * PROGRAM_FLAG is entry.py's, spelt again here. */
+#define NEC2C_MARKER "nec2c"
+#define PROGRAM_FLAG "--program"
+
 /* The `-version` line (momwire#1606), `momwire_serve_client.version_line`'s:
  * the slot's dialect, this launcher's name, its interface modes and the full
  * version, e.g. `NEC42 momwire-nec42-sinusoidal [sb] 0.82.0`.  The dialect
@@ -2368,6 +2383,81 @@ static int streamed(const setup_t *setup)
     return status < 0 ? 1 : status;
 }
 
+/* Whether this program's NAME carries NEC2C_MARKER: its basename, lowered
+ * as `basis_of` lowers it.  A substring, as `dialect_from_program_name`
+ * reads it, so `.exe` needs no stripping. */
+static int names_nec2c(const char *argv0)
+{
+    char name[PATH_CAP];
+    const char *base = argv0;
+    size_t i;
+
+    for (i = 0; argv0[i] != '\0'; i++) {
+        if (argv0[i] == '/' || argv0[i] == '\\') {
+            base = argv0 + i + 1;
+        }
+    }
+    if (copy_str(name, sizeof name, base) != 0) {
+        return 0;
+    }
+    for (i = 0; name[i] != '\0'; i++) {
+        if (name[i] >= 'A' && name[i] <= 'Z') {
+            name[i] = (char)(name[i] - 'A' + 'a');
+        }
+    }
+    return strstr(name, NEC2C_MARKER) != NULL;
+}
+
+/* A NEC-2 launcher (NEC2C_MARKER): the engine, one-shot, on this process's
+ * stdin and stdout, told this launcher's name and handed its argv untouched;
+ * the engine's exit status is this one's.  No daemon -- a NEC-2 host holds
+ * one engine process for a whole run and streams decks into it, so there is
+ * no per-deck launch for residency to save -- and no printout file of our
+ * own: stdout is the channel, so an engine that cannot start is named there
+ * with a non-zero exit, as `streamed` does. */
+static int nec2c_forwarded(int argc, char **argv)
+{
+    static setup_t setup;
+    char **args;
+    proc_t child;
+    int n = 0;
+    int i;
+    int status;
+
+    memset(&setup, 0, sizeof setup);
+    if (identify(&setup, argv[0]) != 0) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - %s\n", g_reason);
+        return 1;
+    }
+    if (!file_exists(setup.engine)) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - no engine at %s\n",
+               setup.engine);
+        return 1;
+    }
+    args = (char **)malloc(sizeof(char *) * ((size_t)argc + 3));
+    if (args == NULL) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - out of memory\n");
+        return 1;
+    }
+    args[n++] = setup.engine;
+    args[n++] = (char *)PROGRAM_FLAG;
+    args[n++] = argv[0];
+    for (i = 1; i < argc; i++) {
+        args[n++] = argv[i];
+    }
+    args[n] = NULL;
+    fflush(stdout);
+    child = launch(setup.engine, args, NULL, 0, 1);
+    free(args);
+    if (child == NO_PROC) {
+        printf(" ***** NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - %s\n", g_reason);
+        return 1;
+    }
+    status = wait_forever(child);
+    forget_process(child);
+    return status < 0 ? 1 : status;
+}
+
 /* Rung 4: the file is the only channel there is.
  *
  * Without the engine there is no header echo, and EZNEC may reject a
@@ -2446,6 +2536,11 @@ int main(int argc, char **argv)
      * so every path below returns 0 -- including the two argument faults,
      * which print what the real engine prints and write no file because
      * there is no output path to write one to. */
+    if (argc >= 1 && names_nec2c(argv[0])) {
+        /* Not EZNEC's contract at all: nec2c's, stdout and the exit status
+         * included (momwire#2059). */
+        return nec2c_forwarded(argc, argv);
+    }
     if (argc == 2 && strcmp(argv[1], "-version") == 0) {
         print_version_line(argv[0]);
         return 0;
