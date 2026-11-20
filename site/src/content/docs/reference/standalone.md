@@ -145,8 +145,10 @@ to run momwire under EZNEC, SimNEC or 4nec2 on Windows. The two are built for di
   start, so it answers the first run of a session quickly.
 - The drop-in keeps **a resident engine** that the first run starts and
   later runs reuse (see [Launch economics](/reference/eznec-nec5/#launch-economics)).
-  Its first run pays that start-up; its warm runs are close to the
-  standalone program's.
+  Its first run pays that start-up. Its warm runs are slower than the
+  standalone program's: on Windows, about 20 % on large razor-2p decks and
+  a few per cent on large B-spline decks. [Which momwire to run on
+  Windows](/reference/windows/) has the measurements.
 
 SimNEC's streaming call (`- -`, decks on stdin separated by `NX`, printouts
 on stdout) works with the standalone programs: one process answers the

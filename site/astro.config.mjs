@@ -109,6 +109,7 @@ export default defineConfig({
             { label: "Running momwire as a NEC-2 engine", slug: "reference/portal-usage" },
             { label: "Running momwire as EZNEC's NEC-5 engine", slug: "reference/eznec-nec5" },
             { label: "The standalone executables", slug: "reference/standalone" },
+            { label: "Which momwire to run on Windows", slug: "reference/windows" },
             { label: "Choosing an engine: cost, memory, accuracy", slug: "reference/choosing-an-engine" },
             { label: "Speed against NEC-5", slug: "reference/speed-vs-nec5" },
           ],
