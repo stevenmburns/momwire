@@ -26,7 +26,14 @@ runs the Python engine and serves more decks.
 The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-4.2
 engine slot in EZNEC, SimNEC or 4nec2, or for another formulation, use the
 drop-in. The NEC-2 engines (`momwire-nec2c-<basis>`) are in neither zip: they
-come with `pip install momwire` ([NEC-2 launchers](/reference/portal-usage/)). The [standalone page](/reference/standalone/)
+come with `pip install momwire` ([NEC-2 launchers](/reference/portal-usage/)).
+
+The drop-in ships two launchers per slot. Any other formulation is one copy
+away: copy a launcher in the unpacked folder and rename the copy
+`momwire-nec5-<basis>.exe` or `momwire-nec42-<basis>.exe`, and that basis
+answers in that slot ([Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation)).
+A copy named for NEC-2 does not become a NEC-2 engine: the drop-in reads its
+name for the NEC-5 or NEC-4.2 dialect only. The [standalone page](/reference/standalone/)
 lists what the executables carry.
 
 Leave the thread settings alone. Both forms size their thread pools from the
