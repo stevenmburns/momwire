@@ -345,7 +345,7 @@ def test_every_ci_job_is_placed_once_or_unassigned():
 def test_current_level(context, platform, basis, variant, level):
     kw = dict(basis=basis, platform=platform, variant=variant)
     assert F.current_level(context, **kw) == level
-    assert F.certified("offset_reuse", context, **kw) == (level <= 1)
+    assert F.certified("transmitted_anchors", context, **kw) == (level <= 1)
 
 
 def test_the_mingw_executable_has_its_own_level():
@@ -435,9 +435,9 @@ def test_a_native_feature_outside_its_reach_refuses(no_features, monkeypatch):
 
 
 def test_a_python_feature_outside_its_reach_runs(no_features):
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    assert F.FEATURES["offset_reuse"].kind == "python"
-    assert F.enabled("offset_reuse", context="dropin") is True
+    no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
+    assert F.FEATURES["transmitted_anchors"].kind == "python"
+    assert F.enabled("transmitted_anchors", context="dropin") is True
 
 
 # --- the stamp ------------------------------------------------------------------
@@ -453,37 +453,44 @@ def _bare_stamp(basis):
 def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
     assert F.stamp() == "" and F.stamp("dropin") == ""
     assert _printout.engine_stamp("bspline") == _bare_stamp("bspline")
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
+    no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     # The drop-in is past reach 1 everywhere, so the platform is named.
     with F.context_scope("dropin"):
-        assert F.stamp() == "+offset_reuse uncertified on this platform"
+        assert F.stamp() == "+transmitted_anchors uncertified on this platform"
         assert _printout.engine_stamp("bspline") == (
-            _bare_stamp("bspline") + " +offset_reuse uncertified on this platform"
+            _bare_stamp("bspline")
+            + " +transmitted_anchors uncertified on this platform"
         )
     # Outside a drop-in entry the route is Python's: level 1 on Linux avx2.
-    plain = "" if F.certified("offset_reuse") else " uncertified on this platform"
-    assert F.stamp() == "+offset_reuse" + plain
+    plain = (
+        "" if F.certified("transmitted_anchors") else " uncertified on this platform"
+    )
+    assert F.stamp() == "+transmitted_anchors" + plain
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    assert F.stamp("dropin") == "+pair_reuse+offset_reuse uncertified on this platform"
+    assert (
+        F.stamp("dropin")
+        == "+pair_reuse+transmitted_anchors uncertified on this platform"
+    )
 
 
 def test_the_dropin_entry_runs_as_the_dropin(no_features):
     from momwire.dropin.nec5 import _shell
 
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
+    no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     deck = (ROOT / "tests" / "fixtures" / _GOLDEN_CASES[0][0]).read_text("latin-1")
     line2 = _shell.render(deck, basis="bspline").split("\n")[1]
     assert (
-        line2 == _bare_stamp("bspline") + " +offset_reuse uncertified on this platform"
+        line2
+        == _bare_stamp("bspline") + " +transmitted_anchors uncertified on this platform"
     )
 
 
 def test_a_long_basis_keeps_the_feature_tail(no_features):
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
+    no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     with F.context_scope("dropin"):
         line = _printout.engine_stamp("b" * 200)
     assert len(line) <= 79
-    assert line.endswith(" +offset_reuse uncertified on this platform")
+    assert line.endswith(" +transmitted_anchors uncertified on this platform")
 
 
 # The flags-off printout: the golden corpus (scripts/golden_printouts.py),

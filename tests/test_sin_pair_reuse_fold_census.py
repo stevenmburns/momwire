@@ -19,8 +19,9 @@ from momwire import sinusoidal
 from momwire._accel import acc
 from momwire.sinusoidal import SinusoidalSolver
 
-# An experimental feature (`momwire._features`, reach 1).
-pytestmark = pytest.mark.reach(1)
+# An experimental feature (`momwire._features`, reach 4: through the drop-in
+# on Linux and Windows).
+pytestmark = pytest.mark.reach(4)
 
 LAM = 10.7
 WIRES, SEGS = 10, 41  # 410 segments: past SMALL_DECK_SEGS_FREE

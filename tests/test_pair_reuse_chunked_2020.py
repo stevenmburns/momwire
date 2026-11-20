@@ -25,8 +25,9 @@ from momwire.array_block import ArrayBlockSolver
 from momwire.bspline import BSplineSolver
 from momwire.hmatrix import HMatrixSolver
 
-# An experimental feature (`momwire._features`, reach 1).
-pytestmark = pytest.mark.reach(1)
+# An experimental feature (`momwire._features`, reach 4: through the drop-in
+# on Linux and Windows).
+pytestmark = pytest.mark.reach(4)
 
 LAM = 21.26
 

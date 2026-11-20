@@ -25,8 +25,9 @@ import pytest
 from momwire import _sin_pair_reuse as pr
 from momwire.sinusoidal import SinusoidalSolver
 
-# An experimental feature (`momwire._features`, reach 1).
-pytestmark = pytest.mark.reach(1)
+# An experimental feature (`momwire._features`, reach 4: through the drop-in
+# on Linux and Windows).
+pytestmark = pytest.mark.reach(4)
 
 
 @pytest.fixture(autouse=True)
