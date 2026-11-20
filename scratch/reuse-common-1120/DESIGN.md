@@ -636,3 +636,40 @@ affected functions. #1209 (memory: slow-lane-gate) and #1194 show the same.
   (AK#2233).
 - Keep the reason sentences verbatim through every stage. A changed sentence
   is a change AK displays.
+
+## Addendum 2026-11-20: offset reuse is a core stage, not bspline's alone
+
+Steve, after reading this survey: "Don't we want offset_reuse to work in
+razor2p too". Agreed, and it fits the razor-2p rule (numerical machinery that
+reproduces NEC-5's formulation is allowed; new modelling is not). Copying a
+near pair's value from a congruent same-edge pair solves the same problem.
+
+- razor's census EXCLUDES near pairs (`NEAR_LENGTHS = 4` x max(h, a),
+  `_razor_pair_reuse_core.h:57-72,119`) because it keys on rounded geometry and
+  near-singular values amplify that rounding (the #1971 hairpin moved Zin
+  1.5e-5 with every pair passing `verify` at 2e-13). Its far within-edge pairs
+  ARE already shared, by the census itself.
+- bspline's `offset_reuse` shares exactly those near pairs, within one uniform
+  straight edge, from the exact offset parameterisation (Toeplitz/Hankel),
+  not from rounded coordinates, so the rounding the census fears never arises.
+
+So the core gains an optional OFFSET stage, for any basis whose near-pair
+values are translation-invariant along a uniform straight edge; each basis
+adapter says whether it qualifies.
+
+Revised stages:
+1. extract the core under razor-2p (byte-identical);
+2. sinusoidal onto the core;
+3. bspline onto the core, porting `offset_reuse` INTO THE CORE as the generic
+   offset stage (bspline is its first user, and the bspline exe needs it);
+4. measure razor's and sinusoidal's near-pair share of fill time (the fill
+   report separates near pairs) and enable the offset stage where it pays,
+   gated against each basis's own non-reuse near fill: bytes where the offset
+   arithmetic reproduces the fill's, else the reuse drift bound, plus razor's
+   NEC-5 parity gate;
+5. sampling early exit (#2061) once in the core;
+6. reach raises for the executables.
+
+Expected size of the win is unmeasured: near pairs are O(N) in count but
+carry the singular quadrature and the self term, so they matter most on
+long uniformly meshed wires and little on bent or graded meshes.
