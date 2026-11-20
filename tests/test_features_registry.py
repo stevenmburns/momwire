@@ -450,6 +450,22 @@ def _bare_stamp(basis):
     return f" momwire {version} {basis} {variant}"
 
 
+def _assert_stamped(line, basis, tail):
+    """Line 2 with a feature ``tail``: the tail whole, and the basis cut to
+    keep the line within its columns. How far it is cut depends on the
+    variant label, which differs by platform (macOS's is longer than
+    Linux's), so the test does not name the cut."""
+    version = _printout._momwire_version()
+    variant = _printout._accelerator_variant()
+    assert len(line) <= _printout._STAMP_COLUMNS
+    head, sep, rest = line.partition(f" {variant} ")
+    assert sep and rest == tail, line
+    prefix = f" momwire {version} "
+    assert head.startswith(prefix), line
+    name = head[len(prefix) :]
+    assert name and basis.startswith(name), line
+
+
 def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
     assert F.stamp() == "" and F.stamp("dropin") == ""
     assert _printout.engine_stamp("bspline") == _bare_stamp("bspline")
@@ -457,9 +473,10 @@ def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
     # The drop-in is past reach 1 everywhere, so the platform is named.
     with F.context_scope("dropin"):
         assert F.stamp() == "+transmitted_anchors uncertified on this platform"
-        assert _printout.engine_stamp("bspline") == (
-            _bare_stamp("bspline")
-            + " +transmitted_anchors uncertified on this platform"
+        _assert_stamped(
+            _printout.engine_stamp("bspline"),
+            "bspline",
+            "+transmitted_anchors uncertified on this platform",
         )
     # Outside a drop-in entry the route is Python's: level 1 on Linux avx2.
     plain = (
@@ -479,9 +496,8 @@ def test_the_dropin_entry_runs_as_the_dropin(no_features):
     no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     deck = (ROOT / "tests" / "fixtures" / _GOLDEN_CASES[0][0]).read_text("latin-1")
     line2 = _shell.render(deck, basis="bspline").split("\n")[1]
-    assert (
-        line2
-        == _bare_stamp("bspline") + " +transmitted_anchors uncertified on this platform"
+    _assert_stamped(
+        line2, "bspline", "+transmitted_anchors uncertified on this platform"
     )
 
 
