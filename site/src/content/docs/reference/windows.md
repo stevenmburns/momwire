@@ -61,17 +61,18 @@ A to H in order of the executable's B-spline time.
 | G | 15.73 s | 14.08 s | 0.90 |
 | H | 33.50 s | 32.01 s | 0.96 |
 
-On the three largest decks here (E, G and H) the drop-in takes about 20 %
-longer than the executable with razor-2p, and 4–6 % longer overall with
-B-spline, where it is faster on two of the three. On small decks it takes 40–80 % longer
-with razor-2p. That is a fixed cost of a tenth to two-thirds of a second per
-run, not a cost that grows with the deck. Pinned to four cores with
+On the four slowest decks (E to H), the drop-in takes
+18–20 % longer than the executable with razor-2p on three of them, and 54 %
+longer on F. With B-spline it ranges from 10 % faster (G) to 53 % longer
+(F). F is the outlier in both. The drop-in's overhead is tracked in
+[momwire#2040](https://github.com/stevenmburns/momwire/issues/2040). On the small decks (A to D) it takes 45–80 % longer with razor-2p. That
+is a fixed cost of a tenth to two-thirds of a second per run, not a cost
+that grows with the deck. Pinned to four cores with
 `start /affinity 55`, the ratios are the same within the noise of those
 small runs.
 
 These are one machine's numbers on eight decks: take them as typical, not as
-a guarantee for yours. The gap on the drop-in's slowest decks is tracked in
-[momwire#2040](https://github.com/stevenmburns/momwire/issues/2040).
+a guarantee for yours.
 
 ## The single-file build
 
