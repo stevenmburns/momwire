@@ -80,6 +80,28 @@ small runs.
 These are one machine's numbers on eight decks: take them as typical, not as
 a guarantee for yours.
 
+## One process per run, or a resident engine
+
+The two forms start differently, and that matters most to EZNEC, which
+starts its engine once for every frequency of a sweep.
+
+- **The standalone executable is a new process per run.** It has no Python
+  to start, so its first run is quick, but it keeps nothing in memory
+  between runs. It does keep the Sommerfeld ground tables in a disk cache, so
+  a run on a soil it has seen before reads them back instead of building
+  them again.
+- **The drop-in keeps a resident engine.** The first calculation starts it,
+  later ones reuse it, and it retires after fifteen idle minutes. Besides
+  skipping the start-up, it keeps some of what it computed in memory from
+  one run to the next, such as its near-ground tables.
+- **SimNEC's streaming call** (`- -`, a chain of decks on standard input)
+  lets one standalone process answer the whole chain, so it keeps its
+  ground tables in memory from one deck to the next.
+
+The tables above time single runs, not a sweep that starts the engine at
+every frequency the way EZNEC does. A sweep like that is being measured, and
+the advice here will be updated if it changes the choice.
+
 ## The single-file build
 
 The single-file build carries both the avx2 and the sse2 build of an engine
