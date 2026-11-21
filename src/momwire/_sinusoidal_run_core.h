@@ -56,6 +56,7 @@ class Engine : public nec4::RunEngine {
     double solver_omega(std::size_t index) override;
     double solver_eps0(std::size_t index) override;
     const nec4::WireDedup *dedup(std::size_t index) override;
+    std::string nec2_end_cap_withdrawn(std::size_t index) override;
 
   protected:
     // momwire#1718 S3: the Sinusoidal-Galerkin engine answers `solve` itself
