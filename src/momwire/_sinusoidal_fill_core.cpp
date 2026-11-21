@@ -631,13 +631,24 @@ Reduced reduced_cos1(const RedConst &K, double z, double rho, double H) {
     return f;
 }
 
+// `_field_ground.PairWeights` at one band: `PairTables.weights(eps_t)`'s
+// rho_v and rho_v + rho_h beside the tables `project` reads, each
+// (i1 - i0, n) in C order
+struct ReflWeights {
+    std::vector<cd> rho_v, rho_vh;
+    const double *px = nullptr, *py = nullptr, *tm_p = nullptr, *tn_p = nullptr;
+};
+
 // `_field_tensor(geom_src, k, src_centers=sc, src_tangents=st, obs_rows=(i0,
 // i1), cos_shape="cos-1")` at a real k with the reduced kernel and one
 // radius: (Phi_const, Phi_sin, Phi_cos), (i1 - i0, n) in C order, `sh` the
-// sources' full lengths
+// sources' full lengths. With `w`, the reflection-coefficient image's numpy
+// route instead: `_field_components` on the image sources, then
+// `PairWeights.project` in place of the plain projection.
 std::vector<std::vector<cd>> field_tensor_reduced_cos1(const Front &fr, const Kernel &K, ll i0, ll i1,
                                                        const std::vector<Point3> &sc_, const std::vector<Point3> &st_,
-                                                       const std::vector<double> &sh, double k, double eta) {
+                                                       const std::vector<double> &sh, double k, double eta,
+                                                       const ReflWeights *w = nullptr) {
     const Geometry &g = fr.geometry;
     const ll n = static_cast<ll>(sc_.size());
     const RedConst C = red_const(k, eta, K.gx, K.gw);
@@ -664,6 +675,22 @@ std::vector<std::vector<cd>> field_tensor_reduced_cos1(const Front &fr, const Ke
             const double rpf = sdot3(rho_vec, ot.data()) / rho;
             const Reduced f = reduced_cos1(C, z, rho, 0.5 * sh[jz]);
             const std::size_t at = static_cast<std::size_t>((i - i0) * n + j);
+            if (w != nullptr) {
+                // `PairWeights.project`: rho_p = (rho_vec_x px + rho_vec_y py)
+                // / rho_eval, then per shape `rho_v * tm_E - rho_vh * tm_p * E_p`
+                const double rho_p = (rho_vec[0] * w->px[at] + rho_vec[1] * w->py[at]) / rho;
+                const cd rv = w->rho_v[at], rvh_tm = cr(w->rho_vh[at], w->tm_p[at]);
+                const double tn = w->tn_p[at];
+                const auto weighted = [&](cd ez, cd er) {
+                    const cd tm_E = cadd(rc(td, ez), rc(rpf, er));
+                    const cd E_p = cadd(rc(tn, ez), rc(rho_p, er));
+                    return csub(cm(rv, tm_E), cm(rvh_tm, E_p));
+                };
+                out[0][at] = weighted(f.ezc, f.erc);
+                out[1][at] = weighted(f.ezs, f.ers);
+                out[2][at] = weighted(f.ezo, f.ero);
+                continue;
+            }
             out[0][at] = cadd(rc(td, f.ezc), rc(rpf, f.erc));
             out[1][at] = cadd(rc(td, f.ezs), rc(rpf, f.ers));
             out[2][at] = cadd(rc(td, f.ezo), rc(rpf, f.ero));
@@ -870,12 +897,159 @@ std::vector<std::vector<cd>> somm_replay(const Front &fr, const Somm &sm, ll i0,
     return S;
 }
 
+// --- the reflection-coefficient ground (GN 0, `fg.mode == "fold"` weighted) -
+//
+// `_field_tensor_image_refl`: the image sources' field, Fresnel-weighted per
+// pair (NEC's IPERF=0 dyad) before the tangential projection, then
+// subtracted as the PEC image is. The literal shapes take the fused kernels
+// Python's accelerated fill calls (`sinusoidal_field_tensor_refl`, or its
+// `_ek_refl` twin), handed the k-independent tables
+// `_field_ground.specular_pair_prep` builds; the folded cos-1 shapes take
+// numpy's `_field_components` + `PairWeights.project`, element by element.
+
+cd np_csqrt(cd z);  // numpy's complex sqrt (glibc's csqrt), below
+
+const double kReflTiny = 1e-30;  // `_ground_refl._TINY`
+
+// `specular_pair_prep(seg_centers, seg_tangents, 0.0, (i0, i1))`: the band's
+// observers against every REAL source, each (i1 - i0, n) in C order.
+// Elementwise in numpy (`_specular_ray_tile`), so each pair alone, each
+// operation as the tile performs it.
+struct ReflTables {
+    std::vector<double> cos_th, px, py, tm_p, tn_p;
+};
+
+ReflTables refl_tables(const Geometry &g, ll i0, ll i1) {
+    const ll n = g.n_segs;
+    const std::size_t sz = static_cast<std::size_t>((i1 - i0) * n);
+    ReflTables t;
+    t.cos_th.resize(sz);
+    t.px.resize(sz);
+    t.py.resize(sz);
+    t.tm_p.resize(sz);
+    t.tn_p.resize(sz);
+    const double gz = 0.0;
+    for (ll i = i0; i < i1; i++) {
+        const Point3 &c = g.seg_centers[static_cast<std::size_t>(i)];
+        const Point3 &ot = g.seg_tangents[static_cast<std::size_t>(i)];
+        for (ll j = 0; j < n; j++) {
+            const Point3 &cs = g.seg_centers[static_cast<std::size_t>(j)];
+            const Point3 &st = g.seg_tangents[static_cast<std::size_t>(j)];
+            const std::size_t at = static_cast<std::size_t>((i - i0) * n + j);
+            const double dx = c[0] - cs[0];
+            const double dy = c[1] - cs[1];
+            const double dz = (c[2] + cs[2]) - 2.0 * gz;  // `cos_th -= 2.0 * ground_z`
+            const double hyp = std::hypot(dx, dy);        // np.hypot: libm's
+            double r = dx * dx;
+            r += dy * dy;
+            r += dz * dz;
+            r = std::sqrt(r);
+            r = std::isnan(r) ? r : (r >= kReflTiny ? r : kReflTiny);  // np.maximum(., _TINY)
+            t.cos_th[at] = dz / r;
+            const bool unsafe = !(hyp > kReflTiny);
+            const double inv_hyp = 1.0 / (unsafe ? 1.0 : hyp);
+            t.px[at] = unsafe ? 1.0 : -(dy * inv_hyp);
+            t.py[at] = unsafe ? 0.0 : dx * inv_hyp;
+            // `tm_p = obs_t_x * px; tm_p += obs_t_y * py`, the source's likewise
+            t.tm_p[at] = ot[0] * t.px[at] + ot[1] * t.py[at];
+            t.tn_p[at] = st[0] * t.px[at] + st[1] * t.py[at];
+        }
+    }
+    return t;
+}
+
+// `PairTables.weights(eps_t)`: `_ground_refl.fresnel_rho` over the band
+// (eps_t a Python complex against numpy's float tables), then rho_v + rho_h
+ReflWeights refl_weights(const ReflTables &t, cd eps_t) {
+    ReflWeights w;
+    const std::size_t sz = t.cos_th.size();
+    w.rho_v.resize(sz);
+    w.rho_vh.resize(sz);
+    for (std::size_t q = 0; q < sz; q++) {
+        const double ct = t.cos_th[q];
+        const double sin2 = 1.0 - ct * ct;
+        const cd root = np_csqrt(csubr(eps_t, sin2));  // np.sqrt(eps_t - sin2)
+        const cd ec = cr(eps_t, ct);                   // eps_t * cos_th
+        const cd rho_v = nec5::replay::np_cdiv(csub(ec, root), cadd(ec, root));
+        const cd rho_h = nec5::replay::np_cdiv(rsub(ct, root), radd(ct, root));
+        w.rho_v[q] = rho_v;
+        w.rho_vh[q] = cadd(rho_v, rho_h);
+    }
+    w.px = t.px.data();
+    w.py = t.py.data();
+    w.tm_p = t.tm_p.data();
+    w.tn_p = t.tn_p.data();
+    return w;
+}
+
+// One fused-kernel call over observer rows [r0, r1) of a band starting at i0
+Tensors call_refl(const Kernel &K, ll i0, ll r0, ll r1, double a, const std::vector<Point3> &src_c,
+                  const std::vector<Point3> &src_t, const ReflTables &t, cd eps_t) {
+    const Geometry &g = K.fr->geometry;
+    const ll n = g.n_segs;
+    const ll q = static_cast<ll>(K.gx.size());
+    CF oc = pts(g.seg_centers, r0, r1), ot = pts(g.seg_tangents, r0, r1);
+    CF sc = pts(src_c, 0, n), st = pts(src_t, 0, n);
+    CF h = f64(g.seg_h.data(), {n});
+    CF gx = f64(K.gx.data(), {q}), gw = f64(K.gw.data(), {q});
+    const std::size_t off = static_cast<std::size_t>((r0 - i0) * n);
+    CF ct = f64(t.cos_th.data() + off, {r1 - r0, n}), px = f64(t.px.data() + off, {r1 - r0, n}),
+       py = f64(t.py.data() + off, {r1 - r0, n}), tm = f64(t.tm_p.data() + off, {r1 - r0, n}),
+       tn = f64(t.tn_p.data() + off, {r1 - r0, n});
+    if (K.ek) {
+        CF sa = f64(K.src_a.data(), {n});
+        CI8 i1 = CI8::borrow(buffer(K.ind1.data(), 1, {n})), i2 = CI8::borrow(buffer(K.ind2.data(), 1, {n}));
+        return sinusoidal_field_tensor_ek_refl(oc, ot, sc, st, h, a, K.fr->k, K.fr->eta, gx, gw, sa, i1, i2, ct, px,
+                                               py, tm, tn, eps_t, 0);
+    }
+    return sinusoidal_field_tensor_refl(oc, ot, sc, st, h, a, K.fr->k, K.fr->eta, gx, gw, ct, px, py, tm, tn, eps_t,
+                                        0);
+}
+
+// `_field_tensor_image_refl(geom, k, obs_rows=(i0, i1), ground=fg,
+// cos_shape=...)`: (Φ_const, Φ_sin, Φ_cos), each (i1 - i0, N) in C order
+std::vector<std::vector<cd>> image_refl(const Kernel &K, ll i0, ll i1, bool cos1, const std::vector<Point3> &img_c,
+                                        const std::vector<Point3> &img_t, cd eps_t) {
+    const Front &fr = *K.fr;
+    const ll n = fr.geometry.n_segs;
+    const ReflTables t = refl_tables(fr.geometry, i0, i1);
+    if (cos1) {
+        // the fused kernels transcribe the literal cos only (#606): numpy's
+        // `_field_components`, which this copy has on the reduced kernel
+        if (K.ek) decline("the folded cos-1 shapes with the extended kernel over a reflection-coefficient ground");
+        const ReflWeights w = refl_weights(t, eps_t);
+        return field_tensor_reduced_cos1(fr, K, i0, i1, img_c, img_t, fr.geometry.seg_h, fr.k, fr.eta, &w);
+    }
+    std::vector<std::vector<cd>> out(3, std::vector<cd>(static_cast<std::size_t>((i1 - i0) * n)));
+    auto put = [&](const Tensors &x, ll r0, ll r1) {
+        const nd::array_t<cd> *parts[3] = {&std::get<0>(x), &std::get<1>(x), &std::get<2>(x)};
+        for (int c = 0; c < 3; c++) {
+            if (parts[c]->size() != (r1 - r0) * n) throw std::logic_error("refl tensor: unexpected shape");
+            std::copy(parts[c]->data(), parts[c]->data() + (r1 - r0) * n,
+                      out[static_cast<std::size_t>(c)].begin() + (r0 - i0) * n);
+        }
+    };
+    if (fr.uniform_radius) {
+        put(call_refl(K, i0, i0, i1, fr.radius_per_wire[0], img_c, img_t, t, eps_t), i0, i1);
+        return out;
+    }
+    // `_radius_runs(geom, obs_rows)`: one call per constant-radius observer
+    // run, the tables sliced to the same rows
+    for (const auto &run : K.runs) {
+        const ll s0 = run.first.first, e0 = run.first.second;
+        if (!(s0 < i1 && e0 > i0)) continue;
+        const ll r0 = std::max(s0, i0), r1 = std::min(e0, i1);
+        put(call_refl(K, i0, r0, r1, run.second, img_c, img_t, t, eps_t), r0, r1);
+    }
+    return out;
+}
+
 // One band's Φ triple (`_field_tensor` on the real sources), less the
 // image's over a perfect ground (`Phi_c -= Phi_i[0]`, ...), or over the
 // composing Sommerfeld ground less `c2 * Phi_img - S`.
 std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool pec,
                                   const std::vector<Point3> &img_c, const std::vector<Point3> &img_t,
-                                  const Somm *somm = nullptr) {
+                                  const Somm *somm = nullptr, const cd *refl_eps = nullptr) {
     const Geometry &g = K.fr->geometry;
     // the folded cos-1 shapes: the extended kernel's own route, or on the
     // reduced kernel (the NEC-2 portal's default, momwire#2065) numpy's
@@ -886,8 +1060,9 @@ std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool
         return field_tensor_reduced_cos1(*K.fr, K, i0, i1, c, t, g.seg_h, K.fr->k, K.fr->eta);
     };
     std::vector<std::vector<cd>> phi = tensor(g.seg_centers, g.seg_tangents);
-    if (!pec && somm == nullptr) return phi;
-    std::vector<std::vector<cd>> img = tensor(img_c, img_t);
+    if (!pec && somm == nullptr && refl_eps == nullptr) return phi;
+    std::vector<std::vector<cd>> img =
+        refl_eps != nullptr ? image_refl(K, i0, i1, cos1, img_c, img_t, *refl_eps) : tensor(img_c, img_t);
     if (somm != nullptr) {
         const std::vector<std::vector<cd>> S = somm_replay(*K.fr, *somm, i0, i1);
         for (int c = 0; c < 3; c++)
@@ -2088,7 +2263,7 @@ void somm_replay_sub(const Front &fr, const Somm &sm, ll i0, ll i1, const int64_
 }
 
 
-std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, bool pec, bool finite,
+std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, bool pec, bool finite, bool refl,
                                    const Somm *somm, const std::vector<Point3> &img_c,
                                    const std::vector<Point3> &img_t, const std::vector<double> &rad) {
     if (!ni_eval::requested_features().pair_reuse) return nullptr;
@@ -2103,14 +2278,17 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
         reason = "a fill inside a ground medium";
     } else if (!K.ek) {
         reason = "the reduced-kernel fill (the NEC-4.2 slot never builds one)";
-    } else if (N < pr::small_deck_segs(finite)) {
-        reason = "too few segments to repay the plan (N < " + std::to_string(pr::small_deck_segs(finite)) + ")";
+    } else if (N < pr::small_deck_segs(finite || refl)) {
+        reason = "too few segments to repay the plan (N < " + std::to_string(pr::small_deck_segs(finite || refl)) + ")";
     }
     if (!reason.empty()) {
         pr::set_last_outcome(reason);
         pr::set_last_census({});
         return nullptr;
     }
+    // momwire#1970: Python serves the reflection coefficient's "reflected"
+    // block on the ground classes; that plan is not copied here
+    if (refl) decline("pair_reuse over a reflection-coefficient ground (its reflected block is not copied)");
     const std::size_t Nz = static_cast<std::size_t>(N);
     const double *seg_c = g.seg_centers[0].data(), *seg_t = g.seg_tangents[0].data();
     // the observer radius each kernel call takes, and the source's (EK's table)
@@ -2240,11 +2418,11 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     pair_reuse::set_last_census({});
     if (fr.crossing || fr.mixed) return assemble_Z_crossing(fr, args, np);
     // GN 1: the perfect ground's image fold (`fg.mode == "fold"`, unweighted);
-    // GN 2 / GN 3: the Sommerfeld composition (B5c)
+    // GN 0: the same fold under the Fresnel dyad (weighted, momwire#2065's
+    // NEC-2 portal); GN 2 / GN 3: the Sommerfeld composition (B5c)
     const bool pec = args.ground.kind == nec4::Ground::pec;
     const bool finite = args.ground.kind == nec4::Ground::finite;  // GN 2 / GN 3: Sommerfeld
-    if (args.ground.kind != nec4::Ground::none && !pec && !finite)
-        decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
+    const bool refl = args.ground.kind == nec4::Ground::finite_fast;  // GN 0: reflection coefficient
 
     if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
     const razor::WireLoading loading = wire_loading(args);
@@ -2314,6 +2492,9 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     // `_image_source_centers_tangents`: the sources mirrored in z = 0
     // (`2 * ground_z - z`, `tangents * [1, 1, -1]`)
     std::vector<Point3> img_c, img_t;
+    // `fg.eps_tilde`: `_ground_refl.eps_tilde((eps_r, sigma), omega, eps0)`
+    const cd refl_eps(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
+    const cd *rp = refl ? &refl_eps : nullptr;
     Somm somm;
     if (finite && !fr.buried) somm_prepare(fr, args, cos1, somm);
     const Somm *sp = finite && !fr.buried ? &somm : nullptr;
@@ -2328,16 +2509,16 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     }
     auto bandf = [&](ll i0, ll i1) {
         return fr.buried ? band_buried(fr, K, i0, i1, cos1, eta_b, img_c, img_t, below, rad)
-                         : band(K, i0, i1, cos1, pec, img_c, img_t, sp);
+                         : band(K, i0, i1, cos1, pec, img_c, img_t, sp, rp);
     };
-    if (pec || finite)
+    if (pec || finite || refl)
         for (std::size_t i = 0; i < Nz; i++) {
             const Point3 &c = g.seg_centers[i], &t = g.seg_tangents[i];
             img_c.push_back({c[0], c[1], 2.0 * 0.0 - c[2]});
             img_t.push_back({t[0] * 1.0, t[1] * 1.0, t[2] * -1.0});
         }
     // momwire#1911: `pair_reuse`, or null for the fill below as it was
-    const std::unique_ptr<Reuse> reuse = reuse_route(fr, K, cos1, pec, finite, sp, img_c, img_t, rad);
+    const std::unique_ptr<Reuse> reuse = reuse_route(fr, K, cos1, pec, finite, refl, sp, img_c, img_t, rad);
     std::vector<cd> G(Nz * Nz, cd(0.0, 0.0));
     const bool dense = N < kDenseAssemblyThreshold;
     if (dense) {
@@ -2417,7 +2598,7 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     }
 
     // `_schedule.mb_rows(swept_mem_mb, _fill_row_bytes(N))` in free space
-    const ll blocks = 1 + ((pec || finite) ? 1 : 0) + (finite ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
+    const ll blocks = 1 + ((pec || finite || refl) ? 1 : 0) + (finite ? 1 : 0);  // 1 + (ground_z is not None) + sommerfeld
     const ll row_bytes = std::max<ll>(3 * blocks, 3 + 2) * N * 16;
     const ll chunk = std::max<ll>(1, (kSweptMemMb * 1024 * 1024) / row_bytes);
     pr::Csc Mc[3];
