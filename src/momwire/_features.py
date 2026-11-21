@@ -899,15 +899,16 @@ FEATURES: dict[str, Feature] = {
         # whip's Z by 5.1e-4. On those decks, with the NEC-2 launcher's
         # settings, momwire then reads nec2c's five printed figures.
         #
-        # `issue` is 0 until the feature's issue is filed (the registry test
-        # holds it > 0).
+        # Stage 1 of momwire#2082: the Python route at reach 1. Its follow-ups
+        # (reach, the nec2c executable, the EK and folded speed-ups,
+        # antennaknobs' importer) are listed there.
         Feature(
             name="nec2_far_approx",
             reach=1,
             env="MOMWIRE_X_NEC2_FAR_APPROX",
             solvers=("sinusoidal",),
             kind="native",
-            issue=0,
+            issue=2082,
             since="2026-11-20",
             kwarg="nec2_far_approx",
             paths=(
