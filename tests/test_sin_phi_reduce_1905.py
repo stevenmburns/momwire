@@ -88,6 +88,9 @@ def counts(monkeypatch):
         return multi(self, other)
 
     monkeypatch.setattr(sn, "_acc", _Acc())
+    # The two-pass band, whose reduction these gates are about: the fused
+    # fill (momwire#2069) would serve the free decks without calling it.
+    monkeypatch.setattr(sn, "_FILL_ROWS_ACCEL", False)
     monkeypatch.setattr(cls, "_matmul_vector", spy_vec)
     monkeypatch.setattr(cls, "_matmul_multivector", spy_multi)
     return seen

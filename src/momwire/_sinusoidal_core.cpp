@@ -27,6 +27,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <tuple>
 #include <vector>
@@ -1693,6 +1694,166 @@ sinusoidal_field_tensor_cplx(
     bool folded,
     uintptr_t cancel_flag) {
     return ::sinusoidal_field_tensor_cplx(obs_centers, obs_tangents, obs_radius, src_centers, src_tangents, seg_h, k, eta, gl_t, gl_w, folded, cancel_flag);
+}
+
+// ---------------------------------------------------------------------------
+// The point-matched fill's rows with the contraction fused in (momwire#2069):
+// `_assemble_Z`'s band, `Z = Φ₀@M₀ + Φ₁@M₁ + Φ₂@M₂` with Φ the direct
+// tensor less, under a PEC ground, the image tensor, computed one observer
+// row at a time with no Φ band.
+//
+// The bits are the two-pass fill's, by construction:
+//  - a row's Φ entries are the tensor kernels' own: the same tile functions
+//    (`sin_row_tile` / `ek_row_tile`) over the same per-call constants,
+//    formed by the same loops as the tensor entry points form them, at the
+//    observer's own radius (`a_rows[m]`, the scalar `_field_tensor` passes
+//    per radius run, so squared to the same `a_sq`);
+//  - the image is subtracted element by element, `Φ_c -= Φ_img,c`, which is
+//    numpy's complex `-=`: the real and imaginary parts apart;
+//  - the contraction is `reduce_phi_band`'s loop (`_accel_phi_reduce.cpp`)
+//    to the operation: per output column j and per shape c a zero, then
+//    column j's stored entries of M_c in stored order, each the unfused
+//    `(a.re·x.re − a.im·x.im, a.re·x.im + a.im·x.re)` added re and im, then
+//    the three shapes summed `(A + B) + C`. An output element reads only its
+//    own observer row of Φ, which is why holding one row is enough, and why
+//    what changes is only where that row lives: one thread's buffer, 48·N
+//    bytes, instead of a band of a Φ array.
+// No element's chain is split or reordered, and nothing here reduces across
+// elements, so the thread count moves no bit. `-ffp-contract=off` (setup.py)
+// keeps every product its own rounding, as it does in both TUs whose
+// arithmetic this joins.
+//
+// `out` is written at `out[m * out_rs + j * out_cs]` (elements), so a caller
+// can hand in any complex128 layout; `_assemble_Z` hands in its row band.
+void sinusoidal_fill_rows(const FillRowsArgs &A) {
+    const size_t M = A.M, N = A.N, n_qp = A.n_qp, cols = A.cols;
+    const double k = A.k, eta = A.eta;
+    const bool image = A.img_c != nullptr;
+
+    // Per-source-segment precompute, the tensor entry points' loops verbatim.
+    std::vector<double> H_n(N), sin_kH(N), cos_kH(N), sa_v(A.ek ? N : 0);
+    std::vector<unsigned char> ext1_v(A.ek ? N : 0), ext2_v(A.ek ? N : 0);
+    if (A.ek) {
+        for (size_t n = 0; n < N; n++) {
+            H_n[n] = 0.5 * A.seg_h[n];
+            sin_kH[n] = std::sin(k * H_n[n]);
+            cos_kH[n] = std::cos(k * H_n[n]);
+            sa_v[n] = A.src_a[n];
+            ext1_v[n] = (A.ind1[n] != 2) ? 1 : 0;
+            ext2_v[n] = (A.ind2[n] != 2) ? 1 : 0;
+        }
+    } else {
+        for (size_t n = 0; n < N; n++) {
+            H_n[n] = 0.5 * A.seg_h[n];
+            sin_kH[n] = std::sin(k * H_n[n]);
+            cos_kH[n] = std::cos(k * H_n[n]);
+        }
+    }
+    std::vector<double> glt_v(n_qp), glw_v(n_qp);
+    for (size_t q = 0; q < n_qp; q++) {
+        glt_v[q] = A.gl_t[q];
+        glw_v[q] = A.gl_w[q];
+    }
+    const size_t S = n_qp + 2;
+
+    // The two kernels' prefactors, each as its tensor entry point forms it.
+    const double four_pi_k = 4.0 * M_PI * k;
+    const double pref_z_im = eta / four_pi_k;
+    const double pref_rho_const_im = -eta / four_pi_k;
+    const double con_im = eta / (4.0 * M_PI * k);
+    const double k_sq = k * k;
+    const SinRowConst KS_dir{N, n_qp, S, A.src_c, A.src_t,
+                             H_n.data(), sin_kH.data(), cos_kH.data(),
+                             glt_v.data(), glw_v.data(), k, pref_z_im, pref_rho_const_im};
+    const SinRowConst KS_img{N, n_qp, S, A.img_c, A.img_t,
+                             H_n.data(), sin_kH.data(), cos_kH.data(),
+                             glt_v.data(), glw_v.data(), k, pref_z_im, pref_rho_const_im};
+    const EkRowConst KE_dir{N, n_qp, S, A.src_c, A.src_t,
+                            H_n.data(), sin_kH.data(), cos_kH.data(), sa_v.data(),
+                            ext1_v.data(), ext2_v.data(), glt_v.data(), glw_v.data(),
+                            k, con_im, k_sq};
+    const EkRowConst KE_img{N, n_qp, S, A.img_c, A.img_t,
+                            H_n.data(), sin_kH.data(), cos_kH.data(), sa_v.data(),
+                            ext1_v.data(), ext2_v.data(), glt_v.data(), glw_v.data(),
+                            k, con_im, k_sq};
+    const size_t T = src_tile(N);
+
+    int nt = 1;
+#ifdef _OPENMP
+    nt = A.n_threads > 0 ? A.n_threads : omp_get_max_threads();
+#endif
+    if (nt < 1) nt = 1;
+
+    using cd = std::complex<double>;
+    MW_CANCEL_SETUP(A.cancel_flag);
+    #pragma omp parallel num_threads(nt)
+    {
+        // One thread's whole working set, allocated once (momwire#2070): the
+        // tile scratch, the row's three Φ (48·N bytes) and one tile of image.
+        SinRowScratch ss(A.ek ? 0 : T, n_qp, false);
+        EkRowScratch es(A.ek ? T : 0, n_qp, false);
+        std::vector<cd> row(3 * N);
+        std::vector<cd> img(image ? 3 * T : 0);
+        const SinReflRow R{};
+        #pragma omp for schedule(static)
+        for (size_t m = 0; m < M; m++) {
+            MW_CANCEL_POLL();
+            const double a = A.a_rows[m];
+            const double a_sq = a * a;
+            const double *cm = A.obs_c + 3 * m, *tm = A.obs_t + 3 * m;
+            cd *x0 = row.data(), *x1 = x0 + N, *x2 = x1 + N;
+            for (size_t n0 = 0; n0 < N; n0 += T) {
+                const size_t n1 = std::min(N, n0 + T);
+                if (A.ek)
+                    ek_row_tile<false>(KE_dir, a_sq, cm[0], cm[1], cm[2], tm[0], tm[1], tm[2],
+                                       R, n0, n1, es, x0 + n0, x1 + n0, x2 + n0);
+                else
+                    sin_row_tile<false>(KS_dir, a_sq, cm[0], cm[1], cm[2], tm[0], tm[1], tm[2],
+                                        R, n0, n1, ss, x0 + n0, x1 + n0, x2 + n0);
+                if (!image) continue;
+                cd *i0 = img.data(), *i1 = i0 + T, *i2 = i1 + T;
+                if (A.ek)
+                    ek_row_tile<false>(KE_img, a_sq, cm[0], cm[1], cm[2], tm[0], tm[1], tm[2],
+                                       R, n0, n1, es, i0, i1, i2);
+                else
+                    sin_row_tile<false>(KS_img, a_sq, cm[0], cm[1], cm[2], tm[0], tm[1], tm[2],
+                                        R, n0, n1, ss, i0, i1, i2);
+                // `Phi_c -= Phi_i[0]` (and _s, _co): numpy's complex `-=`.
+                for (size_t n = n0; n < n1; n++) {
+                    x0[n] -= i0[n - n0];
+                    x1[n] -= i1[n - n0];
+                    x2[n] -= i2[n - n0];
+                }
+            }
+            // `reduce_phi_band`'s loop, element for element.
+            const double *x[3] = {reinterpret_cast<const double *>(x0),
+                                  reinterpret_cast<const double *>(x1),
+                                  reinterpret_cast<const double *>(x2)};
+            cd *o = A.out + static_cast<std::ptrdiff_t>(m) * A.out_rs;
+            for (size_t j = 0; j < cols; ++j) {
+                double sr[3], si[3];
+                for (int c = 0; c < 3; c++) {
+                    // csr_matvecs: a zeroed y, then `y += a * x` per stored entry
+                    double yr = 0.0, yi = 0.0;
+                    const FillRowsCsc &mc = A.csc[c];
+                    for (int64_t e = mc.ptr[j]; e < mc.ptr[j + 1]; ++e) {
+                        const double ar = mc.val[2 * e], ai = mc.val[2 * e + 1];
+                        const double *xe = x[c] + 2 * mc.ind[e];
+                        const double xr = xe[0], xi = xe[1];
+                        const double pr = ar * xr - ai * xi;
+                        const double pi = ar * xi + ai * xr;
+                        yr = yr + pr;
+                        yi = yi + pi;
+                    }
+                    sr[c] = yr;
+                    si[c] = yi;
+                }
+                o[static_cast<std::ptrdiff_t>(j) * A.out_cs] =
+                    cd((sr[0] + sr[1]) + sr[2], (si[0] + si[1]) + si[2]);
+            }
+        }
+    }
+    MW_THROW_IF_ABORTED();
 }
 
 }  // namespace sinusoidal

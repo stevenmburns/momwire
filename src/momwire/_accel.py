@@ -394,6 +394,9 @@ _CANCELLABLE_KERNELS = (
     "sinusoidal_field_tensor_refl",
     "sinusoidal_field_tensor_cplx",
     "point_field_tensor_cplx_staged",
+    # momwire#2069: the fill's rows with the contraction fused in, which
+    # polls the same flag per observer row.
+    "sinusoidal_fill_rows",
     # The extended-kernel twins take and poll the same flag. `_ek` was left off
     # this tuple when momwire#245 added it, so a cancelled EK solve surfaced the
     # raw ``AcceleratorAborted`` instead of ``SolveAborted``; #259 adds both

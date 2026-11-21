@@ -435,6 +435,19 @@ _HAVE_PHI_REDUCE_ACCEL = _acc is not None and bool(
 )
 
 
+# momwire#2069: the fill's rows with the contraction fused into the kernel
+# (`_acc.sinusoidal_fill_rows`), where the band would take the real-k C++
+# kernel at the literal shapes and `reduce_phi_band`'s sparse route: free
+# space or a PEC image, either kernel. Each observer row's Φ is computed into
+# one thread's buffer and contracted there, in `reduce_phi_band`'s order, so
+# no Φ band exists and Z's bits are the two-pass fill's
+# (`SinusoidalSolver._fused_fill_rows`). False takes the two-pass fill, the
+# reference the fused one is gated against bit for bit
+# (tests/test_sin_fill_rows_2069.py).
+_FILL_ROWS_ACCEL = True
+_HAVE_FILL_ROWS = _acc is not None and bool(getattr(_acc, "sin_fill_rows_2069", False))
+
+
 def _phi_reduce_takes(Phi, Ms, out):
     """Whether `_acc.reduce_phi_band` can take this band: complex128 rows
     that are contiguous, CSC Ms with complex128 data whose shape matches."""
@@ -6815,6 +6828,12 @@ class SinusoidalSolver(
         # Its plans cover the rows this fill fills and no others (the sector
         # route's are a 1/N subset), numbered as the row-compact G is.
         reuse = self._sin_pair_reuse_route(geom, k, cos_shape, fg, eta, obs_rows)
+        # momwire#2069: the band's kernel and reduction in one pass, or None.
+        fused = (
+            None
+            if reuse is not None
+            else self._fused_fill_rows(geom, k, eta, cos_shape, fg, (M_A, M_B, M_C))
+        )
 
         if obs_rows is None:
             spans = [(0, N)]
@@ -6839,6 +6858,12 @@ class SinusoidalSolver(
             ):
                 # momwire#1916: the classes gathered inside the reduction,
                 # the bits of the band below, no per-pair Φ materialised.
+                if obs_rows is not None:
+                    at += i1 - i0
+                continue
+            if fused is not None:
+                # The band below, fused: no Φ band (momwire#2069).
+                fused(i0, i1, G[local[0] : local[1]])
                 if obs_rows is not None:
                     at += i1 - i0
                 continue
@@ -6931,6 +6956,108 @@ class SinusoidalSolver(
         )
         self._apply_loading(G, geom, seg_view, k, obs_rows=obs_rows)
         return G, seg_view
+
+    def _fused_fill_rows(self, geom, k, eta, cos_shape, fg, Ms):
+        """The band of `_assemble_Z_filled` with the reduction fused into the
+        kernel (momwire#2069): a callable `(i0, i1, out)` writing observer
+        rows `i0:i1` of Z into `out`, or None, the two-pass band.
+
+        Served exactly where the band would run the real-k C++ kernel at the
+        literal shapes (`_field_tensor`'s first two branches, either kernel)
+        and reduce through `_acc.reduce_phi_band` (sparse CSC `Ms`), in free
+        space or over a PEC image. A finite ground keeps the two-pass band:
+        its image term comes from the Fresnel tables or the Sommerfeld
+        remainder, built per band in numpy.
+
+        The bits are the band's. Its Φ entries are those kernels' own tile
+        functions at the observer's radius (the scalar `_field_tensor`
+        passes per radius run, here per row), the image is subtracted as
+        `Phi_c -= Phi_i[0]` subtracts it, and each Z element is then
+        `reduce_phi_band`'s chain over its column's stored entries. Since an
+        output element reads only its own observer row of Φ, holding one
+        row per thread is all the fusion changes: where Φ lives, not the
+        order anything is summed in.
+        """
+        if not (
+            _FILL_ROWS_ACCEL
+            and _HAVE_FILL_ROWS
+            and _PHI_REDUCE_ACCEL
+            and _HAVE_PHI_REDUCE_ACCEL
+        ):
+            return None
+        if self._nec4_live(geom) or cos_shape != "cos" or _complex_k(k):
+            return None
+        ek = bool(self.extended_kernel)
+        if not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR):
+            return None
+        for M in Ms:
+            if not isinstance(M, scipy.sparse.csc_matrix) or M.dtype != np.complex128:
+                return None
+        # Free space, or the plain mirrored image (PEC): `fg.image_field`'s
+        # unweighted arm, which `fold` alone does not tell from refl-coef.
+        if fg is not None and not (fg.mode == "fold" and not fg._weighted):
+            return None
+        N = geom["n_segs"]
+        if any(M.shape != (N, N) for M in Ms):
+            return None
+        eta = float(self._fill_eta(k, eta))
+        seg_c = np.ascontiguousarray(geom["seg_centers"], dtype=np.float64)
+        seg_t = np.ascontiguousarray(geom["seg_tangents"], dtype=np.float64)
+        seg_h = np.ascontiguousarray(geom["seg_h"], dtype=np.float64)
+        gx, gw = self._leggauss_cached(self.n_qp_const)
+        gx = np.ascontiguousarray(gx, dtype=np.float64)
+        gw = np.ascontiguousarray(gw, dtype=np.float64)
+        # The observer radius per row: the scalar `_field_tensor` hands each
+        # call, the uniform one or its constant-radius run's.
+        if self._uniform_radius is not None:
+            a_rows = np.full(N, float(self._uniform_radius))
+        else:
+            a_rows = np.empty(N, dtype=np.float64)
+            for s, e, a in self._radius_runs(geom):
+                a_rows[s:e] = a
+        if ek:
+            ind1, ind2 = self._ek_gating(geom)
+            src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
+            ind1 = np.ascontiguousarray(ind1, dtype=np.int8)
+            ind2 = np.ascontiguousarray(ind2, dtype=np.int8)
+        else:
+            src_a = ind1 = ind2 = None
+        if fg is None:
+            img_c = img_t = None
+        else:
+            img_c, img_t = (
+                np.ascontiguousarray(x, dtype=np.float64)
+                for x in self._image_source_centers_tangents(geom)
+            )
+        csc = []
+        for M in Ms:
+            csc += [M.indptr, M.indices, M.data]
+        k = float(k)
+
+        def fill(i0, i1, out):
+            _acc.sinusoidal_fill_rows(
+                out,
+                seg_c[i0:i1],
+                seg_t[i0:i1],
+                a_rows[i0:i1],
+                seg_c,
+                seg_t,
+                img_c,
+                img_t,
+                seg_h,
+                k,
+                eta,
+                gx,
+                gw,
+                src_a,
+                ind1,
+                ind2,
+                *csc,
+                0,
+                self._cancel_flag,
+            )
+
+        return fill
 
     def _sin_pair_reuse_route(self, geom, k, cos_shape, fg, eta, obs_rows=None):
         """`pair_reuse` for one `_assemble_Z` fill (momwire#1911): a callable

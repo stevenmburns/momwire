@@ -399,6 +399,124 @@ sinusoidal_field_tensor_cplx(
         ndb::in(obs_centers), ndb::in(obs_tangents), ndb::in(obs_radius), ndb::in(src_centers), ndb::in(src_tangents), ndb::in(seg_h), k, eta, ndb::in(gl_t), ndb::in(gl_w), folded, cancel_flag));
 }
 
+// momwire#2069: the fused fill's rows, the BINDING half. The arithmetic is
+// `mw::sinusoidal::sinusoidal_fill_rows` (`_sinusoidal_core.cpp`); what is
+// here is the checking of Python's operands and the GIL.
+using F64C = py::array_t<double, py::array::c_style | py::array::forcecast>;
+using I64C = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
+using I8C = py::array_t<int8_t, py::array::c_style | py::array::forcecast>;
+
+static void fill_rows_vec3(const F64C &a, py::ssize_t n, const char *what) {
+    if (a.ndim() != 2 || a.shape(0) != n || a.shape(1) != 3)
+        throw std::runtime_error(std::string("sinusoidal_fill_rows: ") + what +
+                                 " must have shape (n, 3)");
+}
+
+static void fill_rows_vec1(const py::array &a, py::ssize_t n, const char *what) {
+    if (a.ndim() != 1 || a.shape(0) != n)
+        throw std::runtime_error(std::string("sinusoidal_fill_rows: ") + what +
+                                 " must have shape (n,)");
+}
+
+static void sinusoidal_fill_rows(
+    py::array out, F64C obs_c, F64C obs_t, F64C a_rows, F64C src_c, F64C src_t,
+    py::object img_c, py::object img_t, F64C seg_h, double k, double eta,
+    F64C gl_t, F64C gl_w, py::object src_a, py::object ind1, py::object ind2,
+    I64C ptr0, I64C ind0, py::array val0, I64C ptr1, I64C idx1, py::array val1,
+    I64C ptr2, I64C idx2, py::array val2, int n_threads, uintptr_t cancel_flag) {
+    const auto cplx = py::dtype::of<std::complex<double>>();
+    if (out.ndim() != 2 || !out.dtype().is(cplx))
+        throw std::runtime_error("sinusoidal_fill_rows: out must be a 2-D complex128 array");
+    if (!out.writeable()) throw std::runtime_error("sinusoidal_fill_rows: out is read-only");
+    const py::ssize_t cs = static_cast<py::ssize_t>(sizeof(std::complex<double>));
+    if (out.strides(0) % cs != 0 || out.strides(1) % cs != 0)
+        throw std::runtime_error("sinusoidal_fill_rows: out's strides must be whole elements");
+    const py::ssize_t M = out.shape(0), cols = out.shape(1);
+    const py::ssize_t N = src_c.ndim() == 2 ? src_c.shape(0) : -1;
+    fill_rows_vec3(obs_c, M, "obs_centers");
+    fill_rows_vec3(obs_t, M, "obs_tangents");
+    fill_rows_vec1(a_rows, M, "a_rows");
+    fill_rows_vec3(src_c, N, "src_centers");
+    fill_rows_vec3(src_t, N, "src_tangents");
+    fill_rows_vec1(seg_h, N, "seg_h");
+    if (gl_t.ndim() != 1 || gl_w.ndim() != 1 || gl_t.shape(0) != gl_w.shape(0))
+        throw std::runtime_error("sinusoidal_fill_rows: gl_t and gl_w must have matching length");
+    const bool image = !img_c.is_none();
+    if (image == img_t.is_none())
+        throw std::runtime_error("sinusoidal_fill_rows: img_centers and img_tangents go together");
+    F64C ic, it;
+    if (image) {
+        ic = F64C::ensure(img_c);
+        it = F64C::ensure(img_t);
+        if (!ic || !it) throw std::runtime_error("sinusoidal_fill_rows: bad image sources");
+        fill_rows_vec3(ic, N, "img_centers");
+        fill_rows_vec3(it, N, "img_tangents");
+    }
+    const bool ek = !src_a.is_none();
+    if (ek == ind1.is_none() || ek == ind2.is_none())
+        throw std::runtime_error("sinusoidal_fill_rows: src_a, ind1 and ind2 go together");
+    F64C sa;
+    I8C i1, i2;
+    if (ek) {
+        sa = F64C::ensure(src_a);
+        i1 = I8C::ensure(ind1);
+        i2 = I8C::ensure(ind2);
+        if (!sa || !i1 || !i2) throw std::runtime_error("sinusoidal_fill_rows: bad EK tables");
+        fill_rows_vec1(sa, N, "src_a");
+        fill_rows_vec1(i1, N, "ind1");
+        fill_rows_vec1(i2, N, "ind2");
+    }
+    mw::sinusoidal::FillRowsArgs A;
+    I64C ptr[3] = {ptr0, ptr1, ptr2}, ind[3] = {ind0, idx1, idx2};
+    py::array val[3] = {val0, val1, val2};
+    for (int c = 0; c < 3; c++) {
+        const py::array &v = val[c];
+        if (v.ndim() != 1 || !v.dtype().is(cplx) || (v.size() > 1 && v.strides(0) != cs))
+            throw std::runtime_error("sinusoidal_fill_rows: M data must be contiguous complex128");
+        if (ptr[c].ndim() != 1 || ptr[c].size() != cols + 1 || ind[c].ndim() != 1 ||
+            ind[c].size() != v.size())
+            throw std::runtime_error(
+                "sinusoidal_fill_rows: M must be CSC with out's columns (indptr cols + 1, "
+                "indices as long as data)");
+        const int64_t *p = ptr[c].data(), *ix = ind[c].data();
+        if (p[0] < 0 || p[cols] > static_cast<int64_t>(v.size()))
+            throw std::runtime_error("sinusoidal_fill_rows: indptr out of range");
+        for (py::ssize_t j = 0; j < cols; j++)
+            if (p[j + 1] < p[j]) throw std::runtime_error("sinusoidal_fill_rows: indptr not monotone");
+        for (py::ssize_t e = 0; e < ind[c].size(); e++)
+            if (ix[e] < 0 || ix[e] >= N)
+                throw std::runtime_error("sinusoidal_fill_rows: index out of range");
+        A.csc[c] = mw::sinusoidal::FillRowsCsc{p, ix, static_cast<const double *>(v.data())};
+    }
+    A.M = static_cast<size_t>(M);
+    A.N = static_cast<size_t>(N);
+    A.n_qp = static_cast<size_t>(gl_t.shape(0));
+    A.cols = static_cast<size_t>(cols);
+    A.obs_c = obs_c.data();
+    A.obs_t = obs_t.data();
+    A.a_rows = a_rows.data();
+    A.src_c = src_c.data();
+    A.src_t = src_t.data();
+    A.img_c = image ? ic.data() : nullptr;
+    A.img_t = image ? it.data() : nullptr;
+    A.seg_h = seg_h.data();
+    A.k = k;
+    A.eta = eta;
+    A.gl_t = gl_t.data();
+    A.gl_w = gl_w.data();
+    A.ek = ek;
+    A.src_a = ek ? sa.data() : nullptr;
+    A.ind1 = ek ? i1.data() : nullptr;
+    A.ind2 = ek ? i2.data() : nullptr;
+    A.out = static_cast<std::complex<double> *>(out.mutable_data());
+    A.out_rs = out.strides(0) / cs;
+    A.out_cs = out.strides(1) / cs;
+    A.n_threads = n_threads;
+    A.cancel_flag = cancel_flag;
+    py::gil_scoped_release nogil;
+    mw::sinusoidal::sinusoidal_fill_rows(A);
+}
+
 void register_sinusoidal(py::module_ &m) {
     // Capability flag, not a value (momwire#258). The two EKSCX entry points
     // dropped their build-wide `want_swapped` argument when the IRA arm went
@@ -637,4 +755,23 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
           py::arg("scale") = std::complex<double>(1.0, 0.0));
+
+    m.def("sinusoidal_fill_rows", &sinusoidal_fill_rows,
+          "The point-matched fill's rows with the contraction fused in "
+          "(momwire#2069): out[m, j] = (Phi0 @ M0 + Phi1 @ M1 + Phi2 @ M2)[m, j] "
+          "with Phi the real-k literal-cos tensor of `sinusoidal_field_tensor` "
+          "(or `_ek` when src_a/ind1/ind2 are given) at observer m's radius "
+          "a_rows[m], less the PEC image's (img_centers/img_tangents, or None), "
+          "contracted in `reduce_phi_band`'s order: the two-pass bits, no Phi "
+          "band. out is any complex128 (M, cols) layout.",
+          py::arg("out"), py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("a_rows"), py::arg("src_centers"), py::arg("src_tangents"),
+          py::arg("img_centers"), py::arg("img_tangents"), py::arg("seg_h"),
+          py::arg("k"), py::arg("eta"), py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("src_a"), py::arg("ind1"), py::arg("ind2"),
+          py::arg("indptr0"), py::arg("indices0"), py::arg("data0"),
+          py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
+          py::arg("indptr2"), py::arg("indices2"), py::arg("data2"),
+          py::arg("n_threads") = 0, py::arg("cancel_flag") = 0);
+    m.attr("sin_fill_rows_2069") = true;
 }
