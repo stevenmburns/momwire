@@ -129,6 +129,10 @@ LEVELS: tuple[Level, ...] = (
     ),
     Level("exe-nec42-bspline", "the nec42-bspline executable, all platforms"),
     Level("exe-nec42-sinusoidal", "the nec42-sinusoidal executable, all platforms"),
+    Level(
+        "exe-nec2c-sinusoidal",
+        "the nec2c-sinusoidal executable (the NEC-2 portal), all platforms",
+    ),
 )
 DEEPEST = len(LEVELS)
 
@@ -1122,6 +1126,8 @@ _EXE_BASES = {
     "bspline_nec42": "nec42-bspline",
     "nec42-sinusoidal": "nec42-sinusoidal",
     "sin42": "nec42-sinusoidal",
+    "nec2c-sinusoidal": "nec2c-sinusoidal",
+    "nec2c_sin": "nec2c-sinusoidal",
 }
 
 

@@ -67,6 +67,9 @@
 #if MW_EXE_DIALECT_NEC4
 #include "_nec4_printout_core.h"
 #endif
+#if MW_EXE_DIALECT_NEC2
+#include "_nec2_printout_core.h"
+#endif
 #include "route.h"
 #define mw mws
 #include "route.h"
@@ -109,6 +112,13 @@ inline void reuse_plans(long long &built, long long &declined, long long &found)
     MW_PICK(mws, mwas, reuse_plans(built, declined, found));
 }
 inline std::string reuse_outcome() { return MW_PICK(mws, mwas, reuse_outcome()); }
+#if MW_EXE_DIALECT_NEC2
+inline bool nec2_render(const std::string &t, int cap, std::vector<std::string> &out, std::vector<std::string> &err,
+                        std::string &why, bool *failed, std::string *kind, std::string *message) {
+    return MW_PICK(mws, mwas, nec2_render(t, cap, out, err, why, failed, kind, message));
+}
+inline long long nec2_largest_solve(const std::string &t) { return MW_PICK(mws, mwas, nec2_largest_solve(t)); }
+#endif
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -134,6 +144,12 @@ inline void reuse_plans(long long &built, long long &declined, long long &found)
     MW_PICK(mw, mwa, reuse_plans(built, declined, found));
 }
 inline std::string reuse_outcome() { return MW_PICK(mw, mwa, reuse_outcome()); }
+#if MW_EXE_DIALECT_NEC2
+inline bool nec2_render(const std::string &t, int cap, std::vector<std::string> &out, std::vector<std::string> &err,
+                        std::string &why, bool *failed, std::string *kind, std::string *message) {
+    return MW_PICK(mw, mwa, nec2_render(t, cap, out, err, why, failed, kind, message));
+}
+#endif
 inline bool answer(const std::string &t, const std::string &version, const std::string &variant,
                    const std::string &arrays_dir, std::string &printout, std::string &reason,
                    bool *failed = nullptr, std::string *kind = nullptr, std::string *message = nullptr,
@@ -191,6 +207,7 @@ static void reuse_line() {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -239,13 +256,20 @@ namespace {
 #define MW_EXE_LAUNCHER "momwire-nec5-razor-2p"
 #endif
 // The EZNEC slot whose printout this answers: 1 for the NEC-4.2 slot
-// (`momwire-nec42-sinusoidal`, momwire#1607 B4b), else NEC-5.
+// (`momwire-nec42-sinusoidal`, momwire#1607 B4b), else NEC-5. Or, with
+// MW_EXE_DIALECT_NEC2, the NEC-2 portal (`momwire-nec2c-sinusoidal`,
+// momwire#2065), whose command line is nec2c's (nec2c_cli.inc).
 #ifndef MW_EXE_DIALECT_NEC4
 #define MW_EXE_DIALECT_NEC4 0
+#endif
+#ifndef MW_EXE_DIALECT_NEC2
+#define MW_EXE_DIALECT_NEC2 0
 #endif
 // The slot's version-line dialect, the line's first field.
 #if MW_EXE_DIALECT_NEC4
 #define MW_EXE_VERSION_DIALECT "NEC42"
+#elif MW_EXE_DIALECT_NEC2
+#define MW_EXE_VERSION_DIALECT "NEC2"
 #else
 #define MW_EXE_VERSION_DIALECT "NEC5"
 #endif
@@ -452,7 +476,9 @@ bool feature_honoured_here(const std::string &name) {
 // This executable's level in support/hierarchy.toml, as
 // `_features.current_level("exe", basis=...)` places it.
 int exe_level() {
-#if MW_EXE_DIALECT_NEC4
+#if MW_EXE_DIALECT_NEC2
+    return 11;  // exe-nec2c-sinusoidal
+#elif MW_EXE_DIALECT_NEC4
     return std::string(BASIS) == "sinusoidal" ? 10 : 9;  // exe-nec42-sinusoidal / exe-nec42-bspline
 #elif defined(__MINGW32__)
     return 7;  // exe-nec5-bspline-razor-2p-windows-mingw
@@ -516,6 +542,13 @@ bool feature_certifying_here(const std::string &name) {
 
 bool feature_runs_here(const std::string &name) {
     if (feature_certifying_here(name)) return true;
+#if MW_EXE_DIALECT_NEC2
+    // NEC-2's free-end cap is the NEC-2 route's own launcher default, read
+    // by the route (`nec2_end_cap_mode`, momwire#2033) as the Python
+    // launcher reads it: MOMWIRE_X_NEC2_END_CAP=1 is the refusing request
+    // and =0 the uncapped answer. The NEC-2 printout carries no line 2.
+    if (name == "nec2_end_cap") return true;
+#endif
     for (const ExeFeature &f : EXE_FEATURES)
         if (name == f.name) return exe_level() <= f.reach && feature_basis_here(name);
     return false;
@@ -570,7 +603,8 @@ int feature_refusal() {
     // honours it (`feature_honoured_here`).
     std::vector<std::string> stamped, unstamped, withdrawn;
     for (const std::string &name : names)
-        if (!feature_default_here(name))
+        if (name == "nec2_end_cap") continue;  // the NEC-2 route's own (above)
+        else if (!feature_default_here(name))
             (feature_honoured_here(name) ? stamped : unstamped).push_back(name);
     for (const ExeFeature &f : EXE_FEATURES) {
         if (!f.default_on) continue;
@@ -1914,6 +1948,10 @@ int stream(int forced_threads) {
     return 0;
 }
 
+#if MW_EXE_DIALECT_NEC2
+#include "nec2c_cli.inc"
+#endif
+
 #if defined(_WIN32)
 // The Windows build's OpenBLAS is the DLL SciPy's wheels bundle, beside the
 // executable and DELAY-LOADED (CMakeLists.txt), so this runs before its load
@@ -1999,6 +2037,9 @@ int main(int argc, char **argv) {
     blas_env_before_load();
 #endif
     std::vector<std::string> args(argv + 1, argv + argc);
+#if MW_EXE_DIALECT_NEC2
+    return nec2cli::nec2c_main(args);  // nec2c's command line (nec2c_cli.inc)
+#endif
     if (args.size() == 1 && args[0] == "-version") {
         std::printf("%s\n", probe_version().c_str());
         return 0;

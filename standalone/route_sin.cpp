@@ -18,6 +18,9 @@
 #include "_sin_pair_reuse_core.h"  // the reuse plans' counters (momwire#1911)
 
 #include "_sinusoidal_run_core.h"
+#if MW_ROUTE_NEC2
+#include "_nec2_printout_core.h"  // the NEC-2 portal's printout (momwire#2065)
+#endif
 #define MW_ROUTE_ENGINE sinusoidal
 #define MW_ROUTE_BASIS "sinusoidal"
 #include "_somm_below_fill_core.h"
@@ -186,6 +189,55 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     if (served) *served = go_on;
     return true;
 }
+
+#if MW_ROUTE_NEC2
+namespace {
+
+// One engine per deck: the point-matched sinusoidal basis over its build.
+class SinEngines : public nec4::EngineFactory {
+  public:
+    explicit SinEngines(const sinusoidal::FillLinalg &la) : la_(la) {}
+    nec4::RunEngine &engine_for(const nec4::StructureBuild &structure) override {
+        engine_.reset(new sinusoidal::Engine(structure, la_));
+        return *engine_;
+    }
+
+  private:
+    sinusoidal::FillLinalg la_;
+    std::unique_ptr<sinusoidal::Engine> engine_;
+};
+
+}  // namespace
+
+bool nec2_render(const std::string &latin1_body, int end_cap, std::vector<std::string> &out,
+                 std::vector<std::string> &err, std::string &reason, bool *failed, std::string *failure_kind,
+                 std::string *failure_message) {
+    if (failed) *failed = false;
+    const sinusoidal::FillLinalg la = linalg();
+    nec2::DeckOptions options;
+    options.basis = MW_ROUTE_BASIS;
+    options.nec2_end_cap = end_cap;
+    try {
+        SinEngines engines(la);
+        return nec2::render_deck(latin1_body, options, engines, la.np, out, err, reason);
+    } catch (const std::bad_alloc &) {
+        if (failed) *failed = true;
+        if (failure_kind) *failure_kind = "MemoryError";
+        if (failure_message) *failure_message = "std::bad_alloc";
+        reason = "an allocation failed";
+    } catch (const std::exception &e) {
+        if (failed) *failed = true;
+        if (failure_kind) *failure_kind = "RuntimeError";
+        if (failure_message) *failure_message = e.what();
+        reason = e.what();
+    }
+    out.clear();
+    err.clear();
+    return false;
+}
+
+long long nec2_largest_solve(const std::string &latin1_body) { return nec2::largest_solve(latin1_body); }
+#endif
 
 }  // namespace exe
 }  // namespace mw
