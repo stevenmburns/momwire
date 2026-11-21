@@ -309,6 +309,25 @@ static bool parse_pair_reuse(const py::object &reuse_edge_seg0, const py::object
     return true;
 }
 
+// The fill report's counts (momwire#2068): `out` None, or a writeable
+// contiguous int64 array of 3 that takes (walked, copied, cached) -- see
+// `somm_core::RemainderCounts`.
+static int64_t *counts_out(const py::object &out) {
+    if (out.is_none()) return nullptr;
+    py::array arr = py::reinterpret_borrow<py::array>(out);
+    if (!arr.dtype().is(py::dtype::of<int64_t>()) || arr.ndim() != 1 || arr.shape(0) != 3 ||
+        !arr.writeable() || arr.strides(0) != (py::ssize_t)sizeof(int64_t))
+        throw std::invalid_argument("counts must be a writeable contiguous (3,) int64 array");
+    return static_cast<int64_t *>(arr.mutable_data());
+}
+
+static void write_counts(int64_t *out, const somm_core::RemainderCounts &c) {
+    if (!out) return;
+    out[0] = c.walked;
+    out[1] = c.copied;
+    out[2] = c.cached;
+}
+
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_nodes,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tang,
@@ -332,8 +351,9 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         far,
     uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0, bool reference = false,
     py::object reuse_edge_seg0 = py::none(), py::object reuse_seg_edge = py::none(),
-    py::object reuse_src = py::none()) {
+    py::object reuse_src = py::none(), py::object counts = py::none()) {
     using somm_proj::cd;
+    int64_t *counts_p = counts_out(counts);
     auto ndI = obs_nodes.unchecked<3>();
     auto tgI = obs_tang.unchecked<2>();
     auto WvI = W_obs.unchecked<3>();
@@ -388,14 +408,16 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     const double *sn = src_nodes.data(), *st = src_tang.data(), *sw = W_src.data();
     const int64_t *li = loc_I.data(), *lj = loc_J.data();
     const double *pi = pI.data(), *pj = pJ.data();
+    somm_core::RemainderCounts rc;
     {
         py::gil_scoped_release release;
         somm_core::remainder_bspline_Q(G, ground_z, k, on, ot, ow, nsI, sn, st, sw, nsJ, q, d1,
                                        li, pi, nI, lj, pj, nJ, symmetric, max_jf_bytes, Qp,
-                                       cancel_flag, use_reuse ? &reuse : nullptr);
+                                       cancel_flag, use_reuse ? &reuse : nullptr, &rc);
     }
     if (use_reuse)
         g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
+    write_counts(counts_p, rc);
     return Q;
 }
 
@@ -426,8 +448,10 @@ static void sommerfeld_remainder_bspline_Q_into(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_ptr,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_col,
     py::array side, uintptr_t cancel_flag = 0, py::object reuse_edge_seg0 = py::none(),
-    py::object reuse_seg_edge = py::none(), py::object reuse_src = py::none()) {
+    py::object reuse_seg_edge = py::none(), py::object reuse_src = py::none(),
+    py::object counts = py::none()) {
     using somm_proj::cd;
+    int64_t *counts_p = counts_out(counts);
     if (nodes.ndim() != 3 || nodes.shape(2) != 3)
         throw std::runtime_error("nodes must be (n_seg, q, 3)");
     const py::ssize_t ns = nodes.shape(0), q = nodes.shape(1);
@@ -474,13 +498,15 @@ static void sommerfeld_remainder_bspline_Q_into(
     g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
     const double *nd = nodes.data(), *tg = tang.data(), *w = W.data(), *pl = polys.data();
     const int64_t *lc = loc.data();
+    somm_core::RemainderCounts rc;
     {
         py::gil_scoped_release release;
         somm_core::remainder_bspline_Q_sink(G, ground_z, k, nd, tg, w, ns, q, d1, lc, pl, nb, 0, K,
-                                            cancel_flag, use_reuse ? &reuse : nullptr);
+                                            cancel_flag, use_reuse ? &reuse : nullptr, &rc);
     }
     if (use_reuse)
         g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
+    write_counts(counts_p, rc);
 }
 
 // momwire#1752 K2: many `sommerfeld_remainder_bspline_Q` calls of one shape
@@ -724,7 +750,8 @@ void register_somm(py::module_ &m) {
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
           py::arg("reference") = false, py::arg("reuse_edge_seg0") = py::none(),
-          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none());
+          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none(),
+          py::arg("counts") = py::none());
     m.def("sommerfeld_remainder_bspline_Q_into", &sommerfeld_remainder_bspline_Q_into,
           "The dense block's symmetric route folded straight into T "
           "(sign -1: T -= Q, +1: T += Q) with no Q held; entries in the "
@@ -738,7 +765,8 @@ void register_somm(py::module_ &m) {
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"), py::arg("T"),
           py::arg("sign"), py::arg("ex_ptr"), py::arg("ex_col"), py::arg("side"),
           py::arg("cancel_flag") = 0, py::arg("reuse_edge_seg0") = py::none(),
-          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none());
+          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none(),
+          py::arg("counts") = py::none());
     m.def("remainder_q_symmetric_calls",
           []() { return g_remainder_symmetric_calls.load(); },
           "How many sommerfeld_remainder_bspline_Q calls the symmetric route "
