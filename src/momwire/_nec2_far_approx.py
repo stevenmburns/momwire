@@ -68,7 +68,7 @@ DEFAULT_RANGE = 1.0
 # The relative width, |d - R| <= TIE_REL * R, inside which a pair's side of
 # the range is a matter of rounding for `pair_reuse`'s classes: their
 # members differ from the representative by 2^-(KEY_BITS + 1) relative
-# (KEY_BITS = 48, `_sin_pair_reuse`) and the canonical frame adds a few ulp,
+# (KEY_BITS = 48, `_sin_pair_reuse_core.h`) and the canonical frame adds a few ulp,
 # so 2^-30 leaves a margin of about 2^17.
 TIE_REL = 2.0**-30
 
