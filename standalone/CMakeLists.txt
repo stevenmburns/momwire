@@ -167,6 +167,15 @@ else()
   set(_mw_prefix_default "mwx_")
 endif()
 set(MW_BLAS_PREFIX "${_mw_prefix_default}" CACHE STRING "symbol prefix of MW_OPENBLAS_LIB")
+# MinGW-w64: every aligned vector move assembled as its unaligned twin. Win64
+# keeps frames 16-byte aligned and passes a 32-byte vector by pointer (the
+# vector-math shim's call, mingw_vmath_shim.cpp), so a ymm vmovapd there can
+# fault. MSYS2's gcc 16.2.0-4 never emitted one; 16.2.0-7 does (the shim's
+# aligned-ymm gate in standalone.yml, red from 2026-11-21). The assembler flag
+# holds it whatever the compiler package does; same speed on AVX hardware.
+if(MINGW)
+  add_compile_options(-Wa,-muse-unaligned-vector-move)
+endif()
 if(NOT MW_OPENBLAS_LIB AND NOT MW_ACCELERATE)
   message(FATAL_ERROR "set MW_OPENBLAS_LIB to an mwx_-prefixed static OpenBLAS")
 endif()
