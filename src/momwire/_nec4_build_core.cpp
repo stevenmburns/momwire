@@ -668,12 +668,13 @@ std::vector<ll> wires_below(const std::vector<std::vector<Point3>> &polylines, c
 
 std::string repr_str(const std::string &s) { return "'" + s + "'"; }
 
-// `_solver.junction_rule(model)` on the nec4 dialect: "nec42" unless
+// `_solver.junction_rule(model)`: the dialect's default (`model.junction_rule`,
+// "nec42" on the nec4 dialect, "nec2" on the nec2 one) unless
 // MOMWIRE_JUNCTION_RULE names a rule; an unknown one is refused with the
 // reference's sentence.
-std::string junction_rule_env() {
+std::string junction_rule_env(const Model &model) {
     const char *e = std::getenv("MOMWIRE_JUNCTION_RULE");
-    if (e == nullptr || *e == '\0') return "nec42";
+    if (e == nullptr || *e == '\0') return model.junction_rule;
     const std::string v(e);
     if (v == "nec2" || v == "nec42") return v;
     refuse("MOMWIRE_JUNCTION_RULE=" + repr_str(v) +
@@ -708,7 +709,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
     // `build_solver`'s `junction_rule(model)` (momwire#1644): the nec4
     // dialect's default "nec42" unless MOMWIRE_JUNCTION_RULE names a rule,
     // for the point-matched sinusoidal basis only.
-    a.junction_rule_nec42 = basis == "sinusoidal" && junction_rule_env() == "nec42";
+    a.junction_rule_nec42 = basis == "sinusoidal" && junction_rule_env(model) == "nec42";
     // _wire_loading
     std::size_t n = prep.mesh.materials.size();
     a.conductivity.assign(n, kNaN);
@@ -1227,6 +1228,23 @@ Build build(const std::string &text, const std::string &basis) {
         if (!go_on) break;
     }
     return out;
+}
+
+void build_portal_structure(const StructureSeam &s, const std::string &basis, StructureBuild &out) {
+    try {
+        build_structure(s, basis, out);
+        out.kind = StructureBuild::built;
+    } catch (const Refused &e) {
+        out.kind = StructureBuild::refused;
+        out.message = e.message;
+    } catch (const nec5::ParseError &e) {
+        out.kind = StructureBuild::raised;
+        out.error_kind = e.kind;
+        out.message = e.message;
+    } catch (const Declined &e) {
+        out.kind = StructureBuild::declined;
+        out.message = e.what();
+    }
 }
 
 std::string dump_build(const std::string &text, const std::string &basis) {

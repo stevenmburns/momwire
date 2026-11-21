@@ -2402,8 +2402,8 @@ void catenary_lengths(const nec5::Card &card, double *length, double *chord_leng
     *chord_length = py_sum(d.data(), static_cast<int>(d.size()));
 }
 
-Geometry geometry_of(const std::vector<Card> &cards) {
-    Structure st = build_geometry(cards, Dialect::nec4);
+Geometry geometry_of(const std::vector<Card> &cards, Dialect dialect) {
+    Structure st = build_geometry(cards, dialect);
     Geometry g;
     for (const FlatWire &w : st.wires) {
         GeometryWire v;

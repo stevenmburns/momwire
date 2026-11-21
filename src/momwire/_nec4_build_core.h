@@ -70,6 +70,11 @@ struct SolverArgs {
     Ground ground;                                       // ground_z= / ground_eps= / ground_model=
     bool exact_kernel_auto = false;                      // bspline's exact_kernel='auto'
     bool junction_rule_nec42 = false;                   // junction_rule='nec42' (momwire#1644)
+    // nec2_end_cap= (momwire#2033): 0 off (the keyword's default), 1 asked
+    // for, 2 the NEC-2 launcher's own default (`_nec2_end_cap.launcher_default`:
+    // on unless the deck is one the cap cannot act on, which then solves
+    // without it and says so). Only the point-matched sinusoidal front reads it.
+    int nec2_end_cap = 0;
 };
 
 // `_wire_spec.WireDedup` (momwire#1042): how a solver's INPUT wires map onto
@@ -154,6 +159,12 @@ struct Build {
     std::vector<StructureBuild> structures;  // through the first not built
     std::size_t n_structures = 0;
 };
+
+// One served structure's build alone (`DeckSolver.__init__` and `at` for
+// every run of `s.plan`), whatever dialect `s.deck` was read in: the NEC-2
+// portal's executable builds each deck through it (momwire#2065). `out.kind`
+// says how it ended, as `build` reports a structure.
+void build_portal_structure(const StructureSeam &s, const std::string &basis, StructureBuild &out);
 
 // The seam front, then each served structure's build, for one basis.
 Build build(const std::string &latin1_text, const std::string &basis);

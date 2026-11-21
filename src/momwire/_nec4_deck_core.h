@@ -207,8 +207,9 @@ struct Geometry {
     long long cell_wires = 0, cell_segments = 0;
 };
 // `build_geometry(cards)` over a deck's geometry cards (GW GA GH GM GS GX GR GE, in
-// order); throws as Python raises, or Declined.
-Geometry geometry_of(const std::vector<nec5::Card> &geometry_cards);
+// order) in `dialect` (the nec4 one's GA, GH and CW builders, or the nec2
+// one's, momwire#1651); throws as Python raises, or Declined.
+Geometry geometry_of(const std::vector<nec5::Card> &geometry_cards, Dialect dialect = Dialect::nec4);
 
 // `momwire.deck.parse(text, dialect=...)`: throws nec5::ParseError as Python
 // raises (DeckError, ValueError, OverflowError, IndexError), or Declined.
