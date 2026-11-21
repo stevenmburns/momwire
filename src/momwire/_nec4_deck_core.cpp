@@ -2321,6 +2321,10 @@ std::string dump_model(const Model &m, const std::string &p) {
     for (std::size_t k = 0; k < m.current_feeds.size(); k++) o.i(at(p + ".current_feeds", k), m.current_feeds[k]);
     o.b(p + ".extended_kernel_default", m.extended_kernel_default);
     o.str(p + ".junction_rule", m.junction_rule);
+    // KH's range (`DeckModel.interaction_range`): read only with the opt-in
+    // `nec2_far_approx` on, which no C++ route carries, so this reader
+    // refuses KH always and the field is always None here.
+    o.none(p + ".interaction_range");
     return o.s;
 }
 
