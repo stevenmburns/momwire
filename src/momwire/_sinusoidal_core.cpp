@@ -147,6 +147,374 @@ static inline std::complex<double> refl_project(const ReflPair &p,
 // this template exists so the reflection path stops paying the pure-numpy
 // `_field_components` fill (~35× the kernel cost, super-quadratic once
 // its (M,N,n_qp) temporaries fall out of cache).
+// The source axis in tiles (momwire#2070). A row's three stages run over one
+// tile of `kSrcTile` sources at a time, in scratch a thread allocates once
+// and keeps across its rows: about 360 bytes a source (n_qp = 8), so 92 KB a
+// tile, against 1.4 MB a ROW on a 4,392-segment deck before, allocated and
+// zero-filled per row, which at 8 threads overflowed an 8 MB L3.
+//
+// It moves no bit. Every pair's arithmetic is its own, so where a source
+// sits in a tile changes nothing, with one exception, and it is the reason
+// for the constant's value: stage B's `omp simd` sweep. GCC lowers it to
+// libmvec's vector sin/cos over whole vectors from the buffer's start and
+// libm's scalar ones on the last (length mod VF) elements, with no peel for
+// alignment (read off the avx2 and sse2 objects). The scalar and vector
+// functions can differ in the last bit, so a phase must land in the same
+// half of that split as it did in the whole-row sweep. A tile starts at a
+// source that is a multiple of `kSrcTile`, so at a phase offset that is a
+// multiple of `kSrcTile`·S, hence of every VF up to 16 (AVX-512's 8 with
+// GCC's 2x unroll included): an interior tile is all vector, and the last
+// tile's scalar tail is exactly the row's last (P mod VF) phases, the ones
+// the row sweep took scalar.
+constexpr size_t kSrcTile = 256;
+static_assert(kSrcTile % 16 == 0, "a tile must start on a whole vector of every width");
+
+// The reduced kernel's per-call constants, read-only and shared by the
+// threads: the sources, their per-segment precompute, the rule and the
+// prefactors, exactly as `sinusoidal_field_tensor_impl` formed them.
+struct SinRowConst {
+    size_t N, n_qp, S;
+    const double *sc, *st;  // (N, 3) source centres / tangents
+    const double *H_n, *sin_kH, *cos_kH;
+    const double *glt, *glw;
+    double k, pref_z_im, pref_rho_const_im;
+};
+
+// One observer row's reflection tables, already offset to the row (REFL).
+struct SinReflRow {
+    const double *cth, *px, *py, *tmp, *tnp;
+    std::complex<double> eps_t;
+};
+
+// The reduced kernel's per-thread scratch, for a tile of `T` sources.
+struct SinRowScratch {
+    std::vector<double> ph, cphb, sphb;
+    std::vector<double> rho_eval_a, dz1_a, dz2_a, r0_1_a, r0_2_a, td_a, rpf_a;
+    std::vector<double> r0q_inv_a;
+    std::vector<double> rho_p_a;
+    SinRowScratch(size_t T, size_t n_qp, bool refl)
+        : ph(T * (n_qp + 2)), cphb(T * (n_qp + 2)), sphb(T * (n_qp + 2)),
+          rho_eval_a(T), dz1_a(T), dz2_a(T), r0_1_a(T), r0_2_a(T), td_a(T), rpf_a(T),
+          r0q_inv_a(T * n_qp), rho_p_a(refl ? T : 0) {}
+};
+
+// One observer row against sources [n0, n1): the three stages the row loop
+// ran, verbatim but for the indexing (a tile's scratch is indexed from n0,
+// and pc/ps/pco point at source n0's entries). `a_sq` is the OBSERVER's
+// radius squared, `cm`/`tm` its centre and tangent.
+template<bool REFL>
+static inline void sin_row_tile(const SinRowConst &K, double a_sq,
+                                double cmx, double cmy, double cmz,
+                                double tmx, double tmy, double tmz,
+                                const SinReflRow &R, size_t n0, size_t n1,
+                                SinRowScratch &s,
+                                std::complex<double> *pc,
+                                std::complex<double> *ps,
+                                std::complex<double> *pco) {
+    const double k = K.k;
+    const size_t n_qp = K.n_qp;
+    const size_t S = K.S;
+    const double pref_z_im = K.pref_z_im;
+    const double pref_rho_const_im = K.pref_rho_const_im;
+    const double *sc = K.sc, *st = K.st;
+    const double *H_n = K.H_n, *sin_kH = K.sin_kH, *cos_kH = K.cos_kH;
+    const double *glt_v = K.glt, *glw_v = K.glw;
+    double *ph = s.ph.data(), *cphb = s.cphb.data(), *sphb = s.sphb.data();
+    double *rho_eval_a = s.rho_eval_a.data(), *dz1_a = s.dz1_a.data(),
+           *dz2_a = s.dz2_a.data(), *r0_1_a = s.r0_1_a.data(),
+           *r0_2_a = s.r0_2_a.data(), *td_a = s.td_a.data(), *rpf_a = s.rpf_a.data();
+    double *r0q_inv_a = s.r0q_inv_a.data();
+    double *rho_p_a = s.rho_p_a.data();
+    const size_t P = (n1 - n0) * S;
+
+    // ---- Stage A: geometry + phase generation -----------------------------
+    for (size_t n = n0; n < n1; n++) {
+        const size_t ln = n - n0;
+        double cnx = sc[3 * n + 0], cny = sc[3 * n + 1], cnz = sc[3 * n + 2];
+        double tnx = st[3 * n + 0], tny = st[3 * n + 1], tnz = st[3 * n + 2];
+        double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
+        double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+        double rho_vx = rvx - z_eval * tnx;
+        double rho_vy = rvy - z_eval * tny;
+        double rho_vz = rvz - z_eval * tnz;
+        double rho_axis = std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+        double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+        double td = tmx*tnx + tmy*tny + tmz*tnz;
+        double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
+
+        double H = H_n[n];
+        double dz2 = z_eval - H;
+        double dz1 = z_eval + H;
+        double r0_2 = std::sqrt(rho_eval*rho_eval + dz2*dz2);
+        double r0_1 = std::sqrt(rho_eval*rho_eval + dz1*dz1);
+
+        rho_eval_a[ln] = rho_eval;
+        dz1_a[ln] = dz1; dz2_a[ln] = dz2;
+        r0_1_a[ln] = r0_1; r0_2_a[ln] = r0_2;
+        td_a[ln] = td; rpf_a[ln] = rho_dot_tobs / rho_eval;
+        if (REFL) {
+            rho_p_a[ln] = (rho_vx * R.px[n] + rho_vy * R.py[n]) / rho_eval;
+        }
+
+        size_t base = ln * S;
+        ph[base + 0] = -k * r0_2;
+        ph[base + 1] = -k * r0_1;
+        for (size_t q = 0; q < n_qp; q++) {
+            double z_q = H * glt_v[q];
+            double dz_q = z_eval - z_q;
+            double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
+            // HALF phase (momwire#799). This slice of the table serves
+            // only the smooth remainder, whose real part is `cos − 1` =
+            // −2 sin²(y/2); the full-angle sine comes back from the same
+            // two values as 2 sin(y/2) cos(y/2), so nothing extra is
+            // evaluated. Same reconstruction idiom as `IX_H2`/`IX_H1` in
+            // the swept kernel below.
+            ph[base + 2 + q] = -0.5 * k * r0_q;
+            r0q_inv_a[ln * n_qp + q] = 1.0 / r0_q;
+        }
+    }
+
+    // ---- Stage B: vectorized sincos over every phase ----------------------
+    // Split cos and sin into separate omp-simd loops (libmvec has no vector
+    // sincos) so each body stays vectorizable to _ZGVdN4v_{cos,sin}
+    // (AVX2, 4 doubles per call). `kSrcTile` keeps the vector/scalar split.
+    MW_OMP_SIMD()
+    for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
+    MW_OMP_SIMD()
+    for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
+
+    // ---- Stage C: assembly ------------------------------------------------
+    for (size_t n = n0; n < n1; n++) {
+        const size_t ln = n - n0;
+        size_t base = ln * S;
+        double cph_2 = cphb[base + 0], sph_2 = sphb[base + 0];
+        double cph_1 = cphb[base + 1], sph_1 = sphb[base + 1];
+        double rho_eval = rho_eval_a[ln];
+        double dz1 = dz1_a[ln], dz2 = dz2_a[ln];
+        double r0_1 = r0_1_a[ln], r0_2 = r0_2_a[ln];
+        double td = td_a[ln], rho_proj_factor = rpf_a[ln];
+        double H = H_n[n];
+        double inv_r0_2 = 1.0 / r0_2;
+        double inv_r0_1 = 1.0 / r0_1;
+        double G0_2_re = cph_2 * inv_r0_2, G0_2_im = sph_2 * inv_r0_2;
+        double G0_1_re = cph_1 * inv_r0_1, G0_1_im = sph_1 * inv_r0_1;
+
+        // (1 + j k r0) / r0² split into re/im
+        double inv_r0_2_sq = inv_r0_2 * inv_r0_2;
+        double inv_r0_1_sq = inv_r0_1 * inv_r0_1;
+        double one_jkr_2_re = inv_r0_2_sq;
+        double one_jkr_2_im = k * r0_2 * inv_r0_2_sq;
+        double one_jkr_1_re = inv_r0_1_sq;
+        double one_jkr_1_im = k * r0_1 * inv_r0_1_sq;
+
+        // ---- Const source -------------------------------------------------
+        // Erho_const = pref_rho_const * (
+        //     (1 + j k r0_2) * rho_eval * G0_2 / r0_2²
+        //   - (1 + j k r0_1) * rho_eval * G0_1 / r0_1²
+        // )
+        // Let A_2 = (1 + jk r0_2) / r0_2² = one_jkr_2 (complex).
+        // term_2 = A_2 * G0_2 — complex product.
+        auto cmul = [](double ar, double ai, double br, double bi,
+                       double &cr, double &ci) {
+            cr = ar*br - ai*bi;
+            ci = ar*bi + ai*br;
+        };
+
+        double term_const2_re, term_const2_im;
+        cmul(one_jkr_2_re, one_jkr_2_im, G0_2_re, G0_2_im,
+             term_const2_re, term_const2_im);
+        double term_const1_re, term_const1_im;
+        cmul(one_jkr_1_re, one_jkr_1_im, G0_1_re, G0_1_im,
+             term_const1_re, term_const1_im);
+        double rho_diff_re = rho_eval * (term_const2_re - term_const1_re);
+        double rho_diff_im = rho_eval * (term_const2_im - term_const1_im);
+        // pref_rho_const = j * pref_rho_const_im  (pure imaginary scalar)
+        double Erho_const_re = -pref_rho_const_im * rho_diff_im;
+        double Erho_const_im =  pref_rho_const_im * rho_diff_re;
+
+        double inv_rho_eval = 1.0 / rho_eval;  // used by pref_rho below
+        // int_inv_r0.  H - z_eval = -dz2;  -H - z_eval = -dz1. Through
+        // `stable_asinh_diff` (momwire#799) — the literal difference of
+        // two O(log) asinh values loses ε·|asinh|·z/(2H) on a collinear
+        // deck's far pairs, 8.4e-13 at 801 segments.
+        double int_inv_r0 = stable_asinh_diff(-dz1, -dz2,
+                                              rho_eval * rho_eval,
+                                              r0_1, r0_2);
+
+        // Quadrature for the smooth remainder of int_G0:
+        //   reg(q) = (exp(-jk r0_q) - 1) / r0_q,   r0_q = sqrt(ρ² + (z - H gx[q])²)
+        //   int_reg = H * Σ_q reg(q) * gw[q]
+        double int_reg_re = 0.0, int_reg_im = 0.0;
+        for (size_t q = 0; q < n_qp; q++) {
+            double hc_q = cphb[base + 2 + q];
+            double hs_q = sphb[base + 2 + q];
+            double inv_r0_q = r0q_inv_a[ln * n_qp + q];
+            // (exp(jphase) - 1) / r0, cancellation-free (momwire#799):
+            // cos y − 1 = −2 sin²(y/2), sin y = 2 sin(y/2) cos(y/2).
+            double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
+            double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
+            int_reg_re += reg_re * glw_v[q];
+            int_reg_im += reg_im * glw_v[q];
+        }
+        int_reg_re *= H;
+        int_reg_im *= H;
+        double int_G0_re = int_inv_r0 + int_reg_re;
+        double int_G0_im = int_reg_im;
+
+        // Ez_const_boundary = (1+jk r0_2) dz2 G0_2 / r0_2² - (1+jk r0_1) dz1 G0_1 / r0_1²
+        double Ez_boundary_re = dz2 * term_const2_re - dz1 * term_const1_re;
+        double Ez_boundary_im = dz2 * term_const2_im - dz1 * term_const1_im;
+        double k_sq = k * k;
+        // Ez_const = -pref_z * (Ez_boundary + k² int_G0). pref_z = j * pref_z_im.
+        double inside_re = Ez_boundary_re + k_sq * int_G0_re;
+        double inside_im = Ez_boundary_im + k_sq * int_G0_im;
+        // Multiply by -j * pref_z_im
+        double Ez_const_re =  pref_z_im * inside_im;
+        double Ez_const_im = -pref_z_im * inside_re;
+
+        // ---- Sine source (Eq 76, 77) --------------------------------------
+        double sin2 = sin_kH[n];
+        double cos2 = cos_kH[n];
+        double sin1 = -sin2;
+        double cos1 =  cos2;
+
+        // bracket_sin_2 = G0_2 * (k dz2 cos2 + (1 - dz2² (1+jk r0_2)/r0_2²) sin2)
+        double inner_2_re = 1.0 - dz2*dz2 * one_jkr_2_re;
+        double inner_2_im =     - dz2*dz2 * one_jkr_2_im;
+        double bracket_sin_2_re = k*dz2*cos2 + inner_2_re*sin2;
+        double bracket_sin_2_im =              inner_2_im*sin2;
+        double bsin2_re, bsin2_im;
+        cmul(G0_2_re, G0_2_im, bracket_sin_2_re, bracket_sin_2_im,
+             bsin2_re, bsin2_im);
+
+        double inner_1_re = 1.0 - dz1*dz1 * one_jkr_1_re;
+        double inner_1_im =     - dz1*dz1 * one_jkr_1_im;
+        double bracket_sin_1_re = k*dz1*cos1 + inner_1_re*sin1;
+        double bracket_sin_1_im =              inner_1_im*sin1;
+        double bsin1_re, bsin1_im;
+        cmul(G0_1_re, G0_1_im, bracket_sin_1_re, bracket_sin_1_im,
+             bsin1_re, bsin1_im);
+        double Erho_sin_inner_re = bsin2_re - bsin1_re;
+        double Erho_sin_inner_im = bsin2_im - bsin1_im;
+        // pref_rho = -j eta / (4 pi k rho_eval)
+        double pref_rho_im = pref_rho_const_im * inv_rho_eval;
+        double Erho_sin_re = -pref_rho_im * Erho_sin_inner_im;
+        double Erho_sin_im =  pref_rho_im * Erho_sin_inner_re;
+
+        // bracket_sin_z = G0 * (k cos - (1+jk r0) dz / r0² sin)
+        double bracket_sin_z_2_re = k*cos2 - dz2*one_jkr_2_re*sin2;
+        double bracket_sin_z_2_im =        - dz2*one_jkr_2_im*sin2;
+        double bszin2_re, bszin2_im;
+        cmul(G0_2_re, G0_2_im, bracket_sin_z_2_re, bracket_sin_z_2_im,
+             bszin2_re, bszin2_im);
+        double bracket_sin_z_1_re = k*cos1 - dz1*one_jkr_1_re*sin1;
+        double bracket_sin_z_1_im =        - dz1*one_jkr_1_im*sin1;
+        double bszin1_re, bszin1_im;
+        cmul(G0_1_re, G0_1_im, bracket_sin_z_1_re, bracket_sin_z_1_im,
+             bszin1_re, bszin1_im);
+        double Ez_sin_inner_re = bszin2_re - bszin1_re;
+        double Ez_sin_inner_im = bszin2_im - bszin1_im;
+        // pref_z = +j pref_z_im
+        double Ez_sin_re = -pref_z_im * Ez_sin_inner_im;
+        double Ez_sin_im =  pref_z_im * Ez_sin_inner_re;
+
+        // ---- Cosine source ------------------------------------------------
+        // bracket_cos_2 = G0_2 * (-k dz2 sin2 + (1 - dz2² (1+jk r0_2)/r0_2²) cos2)
+        double bracket_cos_2_re = -k*dz2*sin2 + inner_2_re*cos2;
+        double bracket_cos_2_im =              inner_2_im*cos2;
+        double bcos2_re, bcos2_im;
+        cmul(G0_2_re, G0_2_im, bracket_cos_2_re, bracket_cos_2_im,
+             bcos2_re, bcos2_im);
+        double bracket_cos_1_re = -k*dz1*sin1 + inner_1_re*cos1;
+        double bracket_cos_1_im =              inner_1_im*cos1;
+        double bcos1_re, bcos1_im;
+        cmul(G0_1_re, G0_1_im, bracket_cos_1_re, bracket_cos_1_im,
+             bcos1_re, bcos1_im);
+        double Erho_cos_inner_re = bcos2_re - bcos1_re;
+        double Erho_cos_inner_im = bcos2_im - bcos1_im;
+        double Erho_cos_re = -pref_rho_im * Erho_cos_inner_im;
+        double Erho_cos_im =  pref_rho_im * Erho_cos_inner_re;
+
+        double bracket_cos_z_2_re = -k*sin2 - dz2*one_jkr_2_re*cos2;
+        double bracket_cos_z_2_im =         - dz2*one_jkr_2_im*cos2;
+        double bczin2_re, bczin2_im;
+        cmul(G0_2_re, G0_2_im, bracket_cos_z_2_re, bracket_cos_z_2_im,
+             bczin2_re, bczin2_im);
+        double bracket_cos_z_1_re = -k*sin1 - dz1*one_jkr_1_re*cos1;
+        double bracket_cos_z_1_im =         - dz1*one_jkr_1_im*cos1;
+        double bczin1_re, bczin1_im;
+        cmul(G0_1_re, G0_1_im, bracket_cos_z_1_re, bracket_cos_z_1_im,
+             bczin1_re, bczin1_im);
+        double Ez_cos_inner_re = bczin2_re - bczin1_re;
+        double Ez_cos_inner_im = bczin2_im - bczin1_im;
+        double Ez_cos_re = -pref_z_im * Ez_cos_inner_im;
+        double Ez_cos_im =  pref_z_im * Ez_cos_inner_re;
+
+        if (REFL) {
+            // Fresnel ρ_v / ρ_h at this pair's specular angle
+            // (principal-branch sqrt — matches _ground_refl.fresnel_rho),
+            // then NEC's field dyad:
+            //   t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
+            //   t_m·E = td·E_z + rho_proj·E_ρ
+            //   E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ
+            //
+            // `refl_pair` / `refl_project` above are this same algebra,
+            // and the extended kernel (momwire#259) calls them — but THIS
+            // copy stays open-coded on purpose. Routing the reduced path
+            // through the helpers is a byte-level change: the factors then
+            // reach the multiply-adds through a struct and GCC contracts
+            // them differently, which measured out at ≤3.6e-15 on the
+            // tensor and 7.1e-14 on a grounded Z. The reduced refl path is
+            // frozen armor (#233 gate 4 / #259 gate 3), so the duplication
+            // is the cheaper price. Both copies are independently anchored
+            // to the same numpy oracle, `_field_tensor_image_refl`'s
+            // `_project_weighted` — that, not code sharing, is what keeps
+            // them from drifting.
+            const std::complex<double> eps_t = R.eps_t;
+            double ct = R.cth[n];
+            std::complex<double> root =
+                std::sqrt(eps_t - (1.0 - ct * ct));
+            std::complex<double> rho_v =
+                (eps_t * ct - root) / (eps_t * ct + root);
+            std::complex<double> rho_h = (ct - root) / (ct + root);
+            std::complex<double> rvh = rho_v + rho_h;
+            double tmp = R.tmp[n], tnp = R.tnp[n], rp = rho_p_a[ln];
+
+            auto weighted = [&](double Ez_re, double Ez_im,
+                                double Erho_re, double Erho_im) {
+                std::complex<double> Ez(Ez_re, Ez_im);
+                std::complex<double> Erho(Erho_re, Erho_im);
+                std::complex<double> tm_E =
+                    td * Ez + rho_proj_factor * Erho;
+                std::complex<double> E_p = tnp * Ez + rp * Erho;
+                return rho_v * tm_E - rvh * (tmp * E_p);
+            };
+            pc[ln] = weighted(Ez_const_re, Ez_const_im,
+                              Erho_const_re, Erho_const_im);
+            ps[ln] = weighted(Ez_sin_re, Ez_sin_im,
+                              Erho_sin_re, Erho_sin_im);
+            pco[ln] = weighted(Ez_cos_re, Ez_cos_im,
+                               Erho_cos_re, Erho_cos_im);
+        } else {
+            // Project to obs tangent: Phi = td * Ez + rho_proj * Erho.
+            pc[ln] = std::complex<double>(
+                td * Ez_const_re + rho_proj_factor * Erho_const_re,
+                td * Ez_const_im + rho_proj_factor * Erho_const_im);
+            ps[ln] = std::complex<double>(
+                td * Ez_sin_re + rho_proj_factor * Erho_sin_re,
+                td * Ez_sin_im + rho_proj_factor * Erho_sin_im);
+            pco[ln] = std::complex<double>(
+                td * Ez_cos_re + rho_proj_factor * Erho_cos_re,
+                td * Ez_cos_im + rho_proj_factor * Erho_cos_im);
+        }
+    }
+}
+
+// The tile width a call with N sources uses: never wider than N, never 0.
+static inline size_t src_tile(size_t N) {
+    return N < kSrcTile ? (N > 0 ? N : 1) : kSrcTile;
+}
+
 template<bool REFL>
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
@@ -215,9 +583,9 @@ sinusoidal_field_tensor_impl(
     py::array_t<std::complex<double>> Phi_const({M, N});
     py::array_t<std::complex<double>> Phi_sin({M, N});
     py::array_t<std::complex<double>> Phi_cos({M, N});
-    auto pc = Phi_const.mutable_unchecked<2>();
-    auto ps = Phi_sin.mutable_unchecked<2>();
-    auto pco = Phi_cos.mutable_unchecked<2>();
+    std::complex<double> *pc = Phi_const.mutable_data();
+    std::complex<double> *ps = Phi_sin.mutable_data();
+    std::complex<double> *pco = Phi_cos.mutable_data();
 
     // Phase 0: release the GIL for the heavy compute region below.
     py::gil_scoped_release release;
@@ -245,311 +613,40 @@ sinusoidal_field_tensor_impl(
     const double pref_rho_const_im = -eta / four_pi_k;
     const double a_sq = a * a;
 
-    // The oscillatory sincos is batched across all N source segments (per
-    // observer m) into one flat buffer so it vectorizes — the per-pair scalar
-    // calls were unvectorizable. Three stages per m: (A) geometry + phases,
-    // (B) one omp-simd sincos sweep over the buffer, (C) assembly.
+    // The oscillatory sincos is batched across a tile of source segments
+    // (per observer m) into one flat buffer so it vectorizes — the per-pair
+    // scalar calls were unvectorizable. Three stages per tile: (A) geometry
+    // + phases, (B) one omp-simd sincos sweep over the buffer, (C) assembly
+    // (`sin_row_tile`).
     //
     // Phases per source segment: 2 boundary (r0_2, r0_1) + n_qp quadrature nodes.
     const size_t S = n_qp + 2;
-    const size_t P = N * S;
+    const SinRowConst K{N, n_qp, S, src_centers.data(), src_tangents.data(),
+                        H_n.data(), sin_kH.data(), cos_kH.data(),
+                        glt_v.data(), glw_v.data(), k, pref_z_im, pref_rho_const_im};
+    const size_t T = src_tile(N);
 
     MW_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(static)
-    for (size_t m = 0; m < M; m++) {
-        MW_CANCEL_POLL();
-        // Per-iteration scratch (per-thread under the parallel-for). Sizes are
-        // tiny (P ~ N*(n_qp+2)); allocation cost is negligible next to the
-        // sincos + assembly work it feeds.
-        std::vector<double> ph(P), cphb(P), sphb(P);
-        std::vector<double> rho_eval_a(N), dz1_a(N), dz2_a(N),
-                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N);
-        std::vector<double> r0q_inv_a(N * n_qp);
-        // REFL: ρ̂·p̂ per source segment for this observer row (ρ̂ =
-        // rho_vec/rho_eval; p̂ is horizontal so only x/y contribute).
-        std::vector<double> rho_p_a(REFL ? N : 0);
-
-        double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
-        double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
-
-        // ---- Stage A: geometry + phase generation -------------------------
-        for (size_t n = 0; n < N; n++) {
-            double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
-            double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
-            double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
-            double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
-            double rho_vx = rvx - z_eval * tnx;
-            double rho_vy = rvy - z_eval * tny;
-            double rho_vz = rvz - z_eval * tnz;
-            double rho_axis = std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
-            double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
-            double td = tmx*tnx + tmy*tny + tmz*tnz;
-            double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
-
-            double H = H_n[n];
-            double dz2 = z_eval - H;
-            double dz1 = z_eval + H;
-            double r0_2 = std::sqrt(rho_eval*rho_eval + dz2*dz2);
-            double r0_1 = std::sqrt(rho_eval*rho_eval + dz1*dz1);
-
-            rho_eval_a[n] = rho_eval;
-            dz1_a[n] = dz1; dz2_a[n] = dz2;
-            r0_1_a[n] = r0_1; r0_2_a[n] = r0_2;
-            td_a[n] = td; rpf_a[n] = rho_dot_tobs / rho_eval;
+    #pragma omp parallel
+    {
+        // Per-thread scratch for one tile, kept across the thread's rows
+        // (momwire#2070).
+        SinRowScratch s(T, n_qp, REFL);
+        #pragma omp for schedule(static)
+        for (size_t m = 0; m < M; m++) {
+            MW_CANCEL_POLL();
+            SinReflRow R{};
             if (REFL) {
-                size_t mn = m * N + n;
-                rho_p_a[n] = (rho_vx * px_p[mn] + rho_vy * py_p[mn]) / rho_eval;
+                const size_t mN = m * N;
+                R = SinReflRow{cth_p + mN, px_p + mN, py_p + mN, tmp_p + mN, tnp_p + mN, eps_t};
             }
-
-            size_t base = n * S;
-            ph[base + 0] = -k * r0_2;
-            ph[base + 1] = -k * r0_1;
-            for (size_t q = 0; q < n_qp; q++) {
-                double z_q = H * glt_v[q];
-                double dz_q = z_eval - z_q;
-                double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
-                // HALF phase (momwire#799). This slice of the table serves
-                // only the smooth remainder, whose real part is `cos − 1` =
-                // −2 sin²(y/2); the full-angle sine comes back from the same
-                // two values as 2 sin(y/2) cos(y/2), so nothing extra is
-                // evaluated. Same reconstruction idiom as `IX_H2`/`IX_H1` in
-                // the swept kernel below.
-                ph[base + 2 + q] = -0.5 * k * r0_q;
-                r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
-            }
-        }
-
-        // ---- Stage B: vectorized sincos over every phase ------------------
-        // Split cos and sin into separate omp-simd loops (libmvec has no vector
-        // sincos) so each body stays vectorizable to _ZGVdN4v_{cos,sin}
-        // (AVX2, 4 doubles per call).
-        MW_OMP_SIMD()
-        for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
-        MW_OMP_SIMD()
-        for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
-
-        // ---- Stage C: assembly --------------------------------------------
-        for (size_t n = 0; n < N; n++) {
-            size_t base = n * S;
-            double cph_2 = cphb[base + 0], sph_2 = sphb[base + 0];
-            double cph_1 = cphb[base + 1], sph_1 = sphb[base + 1];
-            double rho_eval = rho_eval_a[n];
-            double dz1 = dz1_a[n], dz2 = dz2_a[n];
-            double r0_1 = r0_1_a[n], r0_2 = r0_2_a[n];
-            double td = td_a[n], rho_proj_factor = rpf_a[n];
-            double H = H_n[n];
-            double inv_r0_2 = 1.0 / r0_2;
-            double inv_r0_1 = 1.0 / r0_1;
-            double G0_2_re = cph_2 * inv_r0_2, G0_2_im = sph_2 * inv_r0_2;
-            double G0_1_re = cph_1 * inv_r0_1, G0_1_im = sph_1 * inv_r0_1;
-
-            // (1 + j k r0) / r0² split into re/im
-            double inv_r0_2_sq = inv_r0_2 * inv_r0_2;
-            double inv_r0_1_sq = inv_r0_1 * inv_r0_1;
-            double one_jkr_2_re = inv_r0_2_sq;
-            double one_jkr_2_im = k * r0_2 * inv_r0_2_sq;
-            double one_jkr_1_re = inv_r0_1_sq;
-            double one_jkr_1_im = k * r0_1 * inv_r0_1_sq;
-
-            // ---- Const source -------------------------------------------------
-            // Erho_const = pref_rho_const * (
-            //     (1 + j k r0_2) * rho_eval * G0_2 / r0_2²
-            //   - (1 + j k r0_1) * rho_eval * G0_1 / r0_1²
-            // )
-            // Let A_2 = (1 + jk r0_2) / r0_2² = one_jkr_2 (complex).
-            // term_2 = A_2 * G0_2 — complex product.
-            auto cmul = [](double ar, double ai, double br, double bi,
-                           double &cr, double &ci) {
-                cr = ar*br - ai*bi;
-                ci = ar*bi + ai*br;
-            };
-
-            double term_const2_re, term_const2_im;
-            cmul(one_jkr_2_re, one_jkr_2_im, G0_2_re, G0_2_im,
-                 term_const2_re, term_const2_im);
-            double term_const1_re, term_const1_im;
-            cmul(one_jkr_1_re, one_jkr_1_im, G0_1_re, G0_1_im,
-                 term_const1_re, term_const1_im);
-            double rho_diff_re = rho_eval * (term_const2_re - term_const1_re);
-            double rho_diff_im = rho_eval * (term_const2_im - term_const1_im);
-            // pref_rho_const = j * pref_rho_const_im  (pure imaginary scalar)
-            double Erho_const_re = -pref_rho_const_im * rho_diff_im;
-            double Erho_const_im =  pref_rho_const_im * rho_diff_re;
-
-            double inv_rho_eval = 1.0 / rho_eval;  // used by pref_rho below
-            // int_inv_r0.  H - z_eval = -dz2;  -H - z_eval = -dz1. Through
-            // `stable_asinh_diff` (momwire#799) — the literal difference of
-            // two O(log) asinh values loses ε·|asinh|·z/(2H) on a collinear
-            // deck's far pairs, 8.4e-13 at 801 segments.
-            double int_inv_r0 = stable_asinh_diff(-dz1, -dz2,
-                                                  rho_eval * rho_eval,
-                                                  r0_1, r0_2);
-
-            // Quadrature for the smooth remainder of int_G0:
-            //   reg(q) = (exp(-jk r0_q) - 1) / r0_q,   r0_q = sqrt(ρ² + (z - H gx[q])²)
-            //   int_reg = H * Σ_q reg(q) * gw[q]
-            double int_reg_re = 0.0, int_reg_im = 0.0;
-            for (size_t q = 0; q < n_qp; q++) {
-                double hc_q = cphb[base + 2 + q];
-                double hs_q = sphb[base + 2 + q];
-                double inv_r0_q = r0q_inv_a[n * n_qp + q];
-                // (exp(jphase) - 1) / r0, cancellation-free (momwire#799):
-                // cos y − 1 = −2 sin²(y/2), sin y = 2 sin(y/2) cos(y/2).
-                double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
-                double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
-                int_reg_re += reg_re * glw_v[q];
-                int_reg_im += reg_im * glw_v[q];
-            }
-            int_reg_re *= H;
-            int_reg_im *= H;
-            double int_G0_re = int_inv_r0 + int_reg_re;
-            double int_G0_im = int_reg_im;
-
-            // Ez_const_boundary = (1+jk r0_2) dz2 G0_2 / r0_2² - (1+jk r0_1) dz1 G0_1 / r0_1²
-            double Ez_boundary_re = dz2 * term_const2_re - dz1 * term_const1_re;
-            double Ez_boundary_im = dz2 * term_const2_im - dz1 * term_const1_im;
-            double k_sq = k * k;
-            // Ez_const = -pref_z * (Ez_boundary + k² int_G0). pref_z = j * pref_z_im.
-            double inside_re = Ez_boundary_re + k_sq * int_G0_re;
-            double inside_im = Ez_boundary_im + k_sq * int_G0_im;
-            // Multiply by -j * pref_z_im
-            double Ez_const_re =  pref_z_im * inside_im;
-            double Ez_const_im = -pref_z_im * inside_re;
-
-            // ---- Sine source (Eq 76, 77) --------------------------------------
-            double sin2 = sin_kH[n];
-            double cos2 = cos_kH[n];
-            double sin1 = -sin2;
-            double cos1 =  cos2;
-
-            // bracket_sin_2 = G0_2 * (k dz2 cos2 + (1 - dz2² (1+jk r0_2)/r0_2²) sin2)
-            double inner_2_re = 1.0 - dz2*dz2 * one_jkr_2_re;
-            double inner_2_im =     - dz2*dz2 * one_jkr_2_im;
-            double bracket_sin_2_re = k*dz2*cos2 + inner_2_re*sin2;
-            double bracket_sin_2_im =              inner_2_im*sin2;
-            double bsin2_re, bsin2_im;
-            cmul(G0_2_re, G0_2_im, bracket_sin_2_re, bracket_sin_2_im,
-                 bsin2_re, bsin2_im);
-
-            double inner_1_re = 1.0 - dz1*dz1 * one_jkr_1_re;
-            double inner_1_im =     - dz1*dz1 * one_jkr_1_im;
-            double bracket_sin_1_re = k*dz1*cos1 + inner_1_re*sin1;
-            double bracket_sin_1_im =              inner_1_im*sin1;
-            double bsin1_re, bsin1_im;
-            cmul(G0_1_re, G0_1_im, bracket_sin_1_re, bracket_sin_1_im,
-                 bsin1_re, bsin1_im);
-            double Erho_sin_inner_re = bsin2_re - bsin1_re;
-            double Erho_sin_inner_im = bsin2_im - bsin1_im;
-            // pref_rho = -j eta / (4 pi k rho_eval)
-            double pref_rho_im = pref_rho_const_im * inv_rho_eval;
-            double Erho_sin_re = -pref_rho_im * Erho_sin_inner_im;
-            double Erho_sin_im =  pref_rho_im * Erho_sin_inner_re;
-
-            // bracket_sin_z = G0 * (k cos - (1+jk r0) dz / r0² sin)
-            double bracket_sin_z_2_re = k*cos2 - dz2*one_jkr_2_re*sin2;
-            double bracket_sin_z_2_im =        - dz2*one_jkr_2_im*sin2;
-            double bszin2_re, bszin2_im;
-            cmul(G0_2_re, G0_2_im, bracket_sin_z_2_re, bracket_sin_z_2_im,
-                 bszin2_re, bszin2_im);
-            double bracket_sin_z_1_re = k*cos1 - dz1*one_jkr_1_re*sin1;
-            double bracket_sin_z_1_im =        - dz1*one_jkr_1_im*sin1;
-            double bszin1_re, bszin1_im;
-            cmul(G0_1_re, G0_1_im, bracket_sin_z_1_re, bracket_sin_z_1_im,
-                 bszin1_re, bszin1_im);
-            double Ez_sin_inner_re = bszin2_re - bszin1_re;
-            double Ez_sin_inner_im = bszin2_im - bszin1_im;
-            // pref_z = +j pref_z_im
-            double Ez_sin_re = -pref_z_im * Ez_sin_inner_im;
-            double Ez_sin_im =  pref_z_im * Ez_sin_inner_re;
-
-            // ---- Cosine source ------------------------------------------------
-            // bracket_cos_2 = G0_2 * (-k dz2 sin2 + (1 - dz2² (1+jk r0_2)/r0_2²) cos2)
-            double bracket_cos_2_re = -k*dz2*sin2 + inner_2_re*cos2;
-            double bracket_cos_2_im =              inner_2_im*cos2;
-            double bcos2_re, bcos2_im;
-            cmul(G0_2_re, G0_2_im, bracket_cos_2_re, bracket_cos_2_im,
-                 bcos2_re, bcos2_im);
-            double bracket_cos_1_re = -k*dz1*sin1 + inner_1_re*cos1;
-            double bracket_cos_1_im =              inner_1_im*cos1;
-            double bcos1_re, bcos1_im;
-            cmul(G0_1_re, G0_1_im, bracket_cos_1_re, bracket_cos_1_im,
-                 bcos1_re, bcos1_im);
-            double Erho_cos_inner_re = bcos2_re - bcos1_re;
-            double Erho_cos_inner_im = bcos2_im - bcos1_im;
-            double Erho_cos_re = -pref_rho_im * Erho_cos_inner_im;
-            double Erho_cos_im =  pref_rho_im * Erho_cos_inner_re;
-
-            double bracket_cos_z_2_re = -k*sin2 - dz2*one_jkr_2_re*cos2;
-            double bracket_cos_z_2_im =         - dz2*one_jkr_2_im*cos2;
-            double bczin2_re, bczin2_im;
-            cmul(G0_2_re, G0_2_im, bracket_cos_z_2_re, bracket_cos_z_2_im,
-                 bczin2_re, bczin2_im);
-            double bracket_cos_z_1_re = -k*sin1 - dz1*one_jkr_1_re*cos1;
-            double bracket_cos_z_1_im =         - dz1*one_jkr_1_im*cos1;
-            double bczin1_re, bczin1_im;
-            cmul(G0_1_re, G0_1_im, bracket_cos_z_1_re, bracket_cos_z_1_im,
-                 bczin1_re, bczin1_im);
-            double Ez_cos_inner_re = bczin2_re - bczin1_re;
-            double Ez_cos_inner_im = bczin2_im - bczin1_im;
-            double Ez_cos_re = -pref_z_im * Ez_cos_inner_im;
-            double Ez_cos_im =  pref_z_im * Ez_cos_inner_re;
-
-            if (REFL) {
-                // Fresnel ρ_v / ρ_h at this pair's specular angle
-                // (principal-branch sqrt — matches _ground_refl.fresnel_rho),
-                // then NEC's field dyad:
-                //   t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
-                //   t_m·E = td·E_z + rho_proj·E_ρ
-                //   E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ
-                //
-                // `refl_pair` / `refl_project` above are this same algebra,
-                // and the extended kernel (momwire#259) calls them — but THIS
-                // copy stays open-coded on purpose. Routing the reduced path
-                // through the helpers is a byte-level change: the factors then
-                // reach the multiply-adds through a struct and GCC contracts
-                // them differently, which measured out at ≤3.6e-15 on the
-                // tensor and 7.1e-14 on a grounded Z. The reduced refl path is
-                // frozen armor (#233 gate 4 / #259 gate 3), so the duplication
-                // is the cheaper price. Both copies are independently anchored
-                // to the same numpy oracle, `_field_tensor_image_refl`'s
-                // `_project_weighted` — that, not code sharing, is what keeps
-                // them from drifting.
-                size_t mn = m * N + n;
-                double ct = cth_p[mn];
-                std::complex<double> root =
-                    std::sqrt(eps_t - (1.0 - ct * ct));
-                std::complex<double> rho_v =
-                    (eps_t * ct - root) / (eps_t * ct + root);
-                std::complex<double> rho_h = (ct - root) / (ct + root);
-                std::complex<double> rvh = rho_v + rho_h;
-                double tmp = tmp_p[mn], tnp = tnp_p[mn], rp = rho_p_a[n];
-
-                auto weighted = [&](double Ez_re, double Ez_im,
-                                    double Erho_re, double Erho_im) {
-                    std::complex<double> Ez(Ez_re, Ez_im);
-                    std::complex<double> Erho(Erho_re, Erho_im);
-                    std::complex<double> tm_E =
-                        td * Ez + rho_proj_factor * Erho;
-                    std::complex<double> E_p = tnp * Ez + rp * Erho;
-                    return rho_v * tm_E - rvh * (tmp * E_p);
-                };
-                pc(m, n) = weighted(Ez_const_re, Ez_const_im,
-                                    Erho_const_re, Erho_const_im);
-                ps(m, n) = weighted(Ez_sin_re, Ez_sin_im,
-                                    Erho_sin_re, Erho_sin_im);
-                pco(m, n) = weighted(Ez_cos_re, Ez_cos_im,
-                                     Erho_cos_re, Erho_cos_im);
-            } else {
-                // Project to obs tangent: Phi = td * Ez + rho_proj * Erho.
-                pc(m, n) = std::complex<double>(
-                    td * Ez_const_re + rho_proj_factor * Erho_const_re,
-                    td * Ez_const_im + rho_proj_factor * Erho_const_im);
-                ps(m, n) = std::complex<double>(
-                    td * Ez_sin_re + rho_proj_factor * Erho_sin_re,
-                    td * Ez_sin_im + rho_proj_factor * Erho_sin_im);
-                pco(m, n) = std::complex<double>(
-                    td * Ez_cos_re + rho_proj_factor * Erho_cos_re,
-                    td * Ez_cos_im + rho_proj_factor * Erho_cos_im);
+            const double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
+            const double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
+            const size_t mN = m * N;
+            for (size_t n0 = 0; n0 < N; n0 += T) {
+                const size_t n1 = std::min(N, n0 + T);
+                sin_row_tile<REFL>(K, a_sq, cmx, cmy, cmz, tmx, tmy, tmz, R, n0, n1, s,
+                                   pc + mN + n0, ps + mN + n0, pco + mN + n0);
             }
         }
     }
@@ -791,6 +888,230 @@ struct EkGeomRow {
     bool swapped;
 };
 
+// The extended kernel's per-call constants, read-only and shared by the
+// threads, exactly as `sinusoidal_field_tensor_ek_impl` formed them.
+struct EkRowConst {
+    size_t N, n_qp, S;
+    const double *sc, *st;  // (N, 3) source centres / tangents
+    const double *H_n, *sin_kH, *cos_kH, *sa_v;
+    const unsigned char *ext1_v, *ext2_v;
+    const double *glt, *glw;
+    double k, con_im, k_sq;
+};
+
+// The extended kernel's per-thread scratch, for a tile of `T` sources
+// (momwire#2070; `kSrcTile` above is why a tile moves no bit).
+struct EkRowScratch {
+    std::vector<double> ph, cphb, sphb;
+    std::vector<EkGeomRow> gmr;
+    std::vector<double> r0q_inv_a;
+    std::vector<double> rho_p_a;
+    EkRowScratch(size_t T, size_t n_qp, bool refl)
+        : ph(T * (n_qp + 2)), cphb(T * (n_qp + 2)), sphb(T * (n_qp + 2)),
+          gmr(T), r0q_inv_a(T * n_qp), rho_p_a(refl ? T : 0) {}
+};
+
+// One observer row against sources [n0, n1) under EKSCX: the row loop's
+// three stages, verbatim but for the indexing, as `sin_row_tile`.
+template<bool REFL>
+static inline void ek_row_tile(const EkRowConst &K, double a_sq,
+                               double cmx, double cmy, double cmz,
+                               double tmx, double tmy, double tmz,
+                               const SinReflRow &R, size_t n0, size_t n1,
+                               EkRowScratch &s,
+                               std::complex<double> *pc,
+                               std::complex<double> *ps,
+                               std::complex<double> *pco) {
+    const double k = K.k;
+    const size_t n_qp = K.n_qp;
+    const size_t S = K.S;
+    const double con_im = K.con_im;
+    const double k_sq = K.k_sq;
+    const double *sc = K.sc, *st = K.st;
+    const double *H_n = K.H_n, *sin_kH = K.sin_kH, *cos_kH = K.cos_kH, *sa_v = K.sa_v;
+    const unsigned char *ext1_v = K.ext1_v, *ext2_v = K.ext2_v;
+    const double *glt_v = K.glt, *glw_v = K.glw;
+    double *ph = s.ph.data(), *cphb = s.cphb.data(), *sphb = s.sphb.data();
+    EkGeomRow *gmr = s.gmr.data();
+    double *r0q_inv_a = s.r0q_inv_a.data();
+    double *rho_p_a = s.rho_p_a.data();
+    const size_t P = (n1 - n0) * S;
+
+    // ---- Stage A: geometry + phase generation -----------------------------
+    for (size_t n = n0; n < n1; n++) {
+        const size_t ln = n - n0;
+        double cnx = sc[3 * n + 0], cny = sc[3 * n + 1], cnz = sc[3 * n + 2];
+        double tnx = st[3 * n + 0], tny = st[3 * n + 1], tnz = st[3 * n + 2];
+        double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
+        double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+        double rho_vx = rvx - z_eval * tnx;
+        double rho_vy = rvy - z_eval * tny;
+        double rho_vz = rvz - z_eval * tnz;
+        double rho_axis = std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+        // EFLD's RHX: the a-regularized radial distance, on the OBSERVER's
+        // radius. Shared with the reduced kernel — NEC computes it before
+        // it chooses between EKSC and EKSCX (f.2919-2962), and the ρ̂
+        // projection uses this UNSWAPPED distance either way.
+        double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+        double td = tmx*tnx + tmy*tny + tmz*tnz;
+        double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
+        if (REFL) {
+            rho_p_a[ln] = (rho_vx * R.px[n] + rho_vy * R.py[n]) / rho_eval;
+        }
+
+        double H = H_n[n];
+        double rhx = rho_eval;
+        double src_an = sa_v[n];
+        // f.3186-3192. One comparison decides both the ordering and the
+        // IRA arm, per pair — see the IRA note at the top of this block.
+        bool sw = rhx < src_an;
+        double rh = sw ? src_an : rhx;
+        double b = sw ? rhx : src_an;
+        // NEC's Z2 = SH - Z and Z1 = -(SH + Z); momwire's dz_i is -Z_i.
+        double z2 = H - z_eval;
+        double z1 = -(H + z_eval);
+        bool ext1 = ext1_v[n] != 0;
+        bool ext2 = ext2_v[n] != 0;
+        // GXX integrates at the ORDERED radius, GX at the original one.
+        double rad1 = ext1 ? rh : rhx;
+        double rad2 = ext2 ? rh : rhx;
+        double r2_1 = z1*z1 + rad1*rad1;
+        double r2_2 = z2*z2 + rad2*rad2;
+        double r_1 = std::sqrt(r2_1);
+        double r_2 = std::sqrt(r2_2);
+
+        EkGeomRow &g = gmr[ln];
+        g.z_eval = z_eval; g.rhx = rhx; g.rh = rh; g.b = b;
+        g.z1 = z1; g.z2 = z2;
+        g.r2_1 = r2_1; g.r_1 = r_1; g.r2_2 = r2_2; g.r_2 = r_2;
+        g.td = td; g.rpf = rho_dot_tobs / rho_eval;
+        g.ext1 = ext1; g.ext2 = ext2;
+        g.swapped = sw;
+
+        size_t base = ln * S;
+        ph[base + 0] = -k * r_1;
+        ph[base + 1] = -k * r_2;
+        // INTX (f.3223-3227) integrates e^{-jkR}/R along the segment at the
+        // ORDERED radius RH, not at RHX.
+        for (size_t q = 0; q < n_qp; q++) {
+            double z_q = H * glt_v[q];
+            double dz_q = z_eval - z_q;
+            double r0_q = std::sqrt(rh*rh + dz_q*dz_q);
+            // HALF phase, for the remainder's stable spelling below
+            // (momwire#799) — the reduced kernel's treatment verbatim.
+            ph[base + 2 + q] = -0.5 * k * r0_q;
+            r0q_inv_a[ln * n_qp + q] = 1.0 / r0_q;
+        }
+    }
+
+    // ---- Stage B: vectorized sincos over every phase ----------------------
+    MW_OMP_SIMD()
+    for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
+    MW_OMP_SIMD()
+    for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
+
+    // ---- Stage C: assembly ------------------------------------------------
+    for (size_t n = n0; n < n1; n++) {
+        const size_t ln = n - n0;
+        const EkGeomRow &g = gmr[ln];
+        size_t base = ln * S;
+        double H = H_n[n];
+        double ss = sin_kH[n];
+        double cs = cos_kH[n];
+
+        EkEnd e1 = g.ext1
+            ? ek_end_gxx(k, g.z1, g.rh, g.b, g.r2_1, g.r_1,
+                         cphb[base + 0], sphb[base + 0], g.swapped)
+            : ek_end_gx(g.z1, g.rhx, g.r2_1, g.r_1, k,
+                        cphb[base + 0], sphb[base + 0]);
+        EkEnd e2 = g.ext2
+            ? ek_end_gxx(k, g.z2, g.rh, g.b, g.r2_2, g.r_2,
+                         cphb[base + 1], sphb[base + 1], g.swapped)
+            : ek_end_gx(g.z2, g.rhx, g.r2_2, g.r_2, k,
+                        cphb[base + 1], sphb[base + 1]);
+
+        // f.3213-3222, verbatim — algebraically the same brackets the
+        // reduced path spells per endpoint; only the G-quantities changed.
+        EkC ez_sin = ek_mul_j(con_im, (e2.g1 - e1.g1) * cs * k
+                                      - (e2.g1p + e1.g1p) * ss);
+        EkC ez_cos = ek_mul_j(-con_im, (e2.g1 + e1.g1) * ss * k
+                                       + (e2.g1p - e1.g1p) * cs);
+        EkC erho_sin = ek_mul_j(
+            -con_im,
+            (g.z2 * e2.g2p + g.z1 * e1.g2p + e2.g2 + e1.g2) * ss
+                - (g.z2 * e2.g2 - g.z1 * e1.g2) * cs * k);
+        EkC erho_cos = ek_mul_j(
+            -con_im,
+            (g.z2 * e2.g2p - g.z1 * e1.g2p + e2.g2 - e1.g2) * cs
+                + (g.z2 * e2.g2 + g.z1 * e1.g2) * ss * k);
+        EkC erho_const = ek_mul_j(con_im, e2.g3 - e1.g3);
+
+        // f.3223-3227: the constant-current term. INTX integrates
+        // e^{-jkR}/R along the segment at RH, and the extended kernel
+        // scales that integral by (1 - (kB/2)²) while adding back a
+        // (kB/2)²-weighted reduced-kernel end difference — the O(a²) piece
+        // of Eq 98 that the ρ-expansion of the axial term leaves behind.
+        // Unlike the per-end substitutions this factor is NOT gated: it
+        // applies whenever EK is on, even when both ends fell back to GX.
+        // Spelled as two divisions, matching the numpy `(H - z)/rh` and
+        // `(-H - z)/rh`, rather than one reciprocal and two products.
+        const double rh2 = g.rh * g.rh;
+        const double rr2 = std::sqrt(rh2 + g.z2 * g.z2);
+        const double rr1 = std::sqrt(rh2 + g.z1 * g.z1);
+        double int_inv_r0 = stable_asinh_diff(g.z1, g.z2, rh2, rr1, rr2);
+        double int_reg_re = 0.0, int_reg_im = 0.0;
+        for (size_t q = 0; q < n_qp; q++) {
+            double inv_r0_q = r0q_inv_a[ln * n_qp + q];
+            double hc_q = cphb[base + 2 + q], hs_q = sphb[base + 2 + q];
+            double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
+            double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
+            int_reg_re += reg_re * glw_v[q];
+            int_reg_im += reg_im * glw_v[q];
+        }
+        EkC int_G0 = EkC{int_inv_r0 + int_reg_re * H, int_reg_im * H};
+        double bk = k * g.b;
+        double bk2 = 0.25 * bk * bk;
+        EkC ez_const = ek_mul_j(
+            -con_im,
+            e2.g1p - e1.g1p + (k_sq * (1.0 - bk2)) * int_G0
+                - bk2 * (e2.gzp - e1.gzp));
+
+        double td = g.td, rpf = g.rpf;
+        if (REFL) {
+            // The Fresnel tail, byte-for-byte the reduced kernel's (see
+            // `refl_pair` / `refl_project`). The EK tables replace E_z/E_ρ
+            // and nothing else: `td`, `rpf` and `rho_p_a` are EFLD's
+            // pre-kernel geometry, so the dyad sees the same four factors
+            // it sees with EK off — which is exactly how the numpy path
+            // spells it, `_field_tensor_image_refl`'s `_project_weighted`
+            // consuming whichever tables `_field_components_bcast`
+            // returned.
+            ReflPair rp = refl_pair(R.eps_t, R.cth[n], R.tmp[n], R.tnp[n],
+                                    rho_p_a[ln], td, rpf);
+            auto weighted = [&](EkC ez, EkC erho) {
+                return refl_project(rp,
+                                    std::complex<double>(ez.re, ez.im),
+                                    std::complex<double>(erho.re, erho.im));
+            };
+            pc[ln] = weighted(ez_const, erho_const);
+            ps[ln] = weighted(ez_sin, erho_sin);
+            pco[ln] = weighted(ez_cos, erho_cos);
+        } else {
+            // The consuming projection is the reduced kernel's:
+            //   Phi = td·E_z + rho_proj·E_ρ   (`_field_tensor`'s tail).
+            pc[ln] = std::complex<double>(
+                td * ez_const.re + rpf * erho_const.re,
+                td * ez_const.im + rpf * erho_const.im);
+            ps[ln] = std::complex<double>(
+                td * ez_sin.re + rpf * erho_sin.re,
+                td * ez_sin.im + rpf * erho_sin.im);
+            pco[ln] = std::complex<double>(
+                td * ez_cos.re + rpf * erho_cos.re,
+                td * ez_cos.im + rpf * erho_cos.im);
+        }
+    }
+}
+
 template<bool REFL>
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
@@ -870,9 +1191,9 @@ sinusoidal_field_tensor_ek_impl(
     py::array_t<std::complex<double>> Phi_const({M, N});
     py::array_t<std::complex<double>> Phi_sin({M, N});
     py::array_t<std::complex<double>> Phi_cos({M, N});
-    auto pc = Phi_const.mutable_unchecked<2>();
-    auto ps = Phi_sin.mutable_unchecked<2>();
-    auto pco = Phi_cos.mutable_unchecked<2>();
+    std::complex<double> *pc = Phi_const.mutable_data();
+    std::complex<double> *ps = Phi_sin.mutable_data();
+    std::complex<double> *pco = Phi_cos.mutable_data();
 
     py::gil_scoped_release release;
 
@@ -905,193 +1226,31 @@ sinusoidal_field_tensor_ek_impl(
     // nodes. Same layout as `sinusoidal_field_tensor_impl`, with slot 0 = end 1
     // (NEC's Z1 side) and slot 1 = end 2.
     const size_t S = n_qp + 2;
-    const size_t P = N * S;
+    const EkRowConst K{N, n_qp, S, src_centers.data(), src_tangents.data(),
+                       H_n.data(), sin_kH.data(), cos_kH.data(), sa_v.data(),
+                       ext1_v.data(), ext2_v.data(), glt_v.data(), glw_v.data(),
+                       k, con_im, k_sq};
+    const size_t T = src_tile(N);
 
     MW_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(static)
-    for (size_t m = 0; m < M; m++) {
-        MW_CANCEL_POLL();
-        std::vector<double> ph(P), cphb(P), sphb(P);
-        std::vector<EkGeomRow> gmr(N);
-        std::vector<double> r0q_inv_a(N * n_qp);
-        // REFL: ρ̂·p̂ per source segment for this observer row, off the
-        // UNSWAPPED rho_eval (= RHX) — p̂ is horizontal so only x/y contribute.
-        std::vector<double> rho_p_a(REFL ? N : 0);
-
-        double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
-        double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
-
-        // ---- Stage A: geometry + phase generation -------------------------
-        for (size_t n = 0; n < N; n++) {
-            double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
-            double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
-            double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
-            double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
-            double rho_vx = rvx - z_eval * tnx;
-            double rho_vy = rvy - z_eval * tny;
-            double rho_vz = rvz - z_eval * tnz;
-            double rho_axis = std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
-            // EFLD's RHX: the a-regularized radial distance, on the OBSERVER's
-            // radius. Shared with the reduced kernel — NEC computes it before
-            // it chooses between EKSC and EKSCX (f.2919-2962), and the ρ̂
-            // projection uses this UNSWAPPED distance either way.
-            double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
-            double td = tmx*tnx + tmy*tny + tmz*tnz;
-            double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
+    #pragma omp parallel
+    {
+        EkRowScratch s(T, n_qp, REFL);
+        #pragma omp for schedule(static)
+        for (size_t m = 0; m < M; m++) {
+            MW_CANCEL_POLL();
+            SinReflRow R{};
             if (REFL) {
-                size_t mn = m * N + n;
-                rho_p_a[n] = (rho_vx * px_p[mn] + rho_vy * py_p[mn]) / rho_eval;
+                const size_t mN = m * N;
+                R = SinReflRow{cth_p + mN, px_p + mN, py_p + mN, tmp_p + mN, tnp_p + mN, eps_t};
             }
-
-            double H = H_n[n];
-            double rhx = rho_eval;
-            double src_an = sa_v[n];
-            // f.3186-3192. One comparison decides both the ordering and the
-            // IRA arm, per pair — see the IRA note at the top of this block.
-            bool sw = rhx < src_an;
-            double rh = sw ? src_an : rhx;
-            double b = sw ? rhx : src_an;
-            // NEC's Z2 = SH - Z and Z1 = -(SH + Z); momwire's dz_i is -Z_i.
-            double z2 = H - z_eval;
-            double z1 = -(H + z_eval);
-            bool ext1 = ext1_v[n] != 0;
-            bool ext2 = ext2_v[n] != 0;
-            // GXX integrates at the ORDERED radius, GX at the original one.
-            double rad1 = ext1 ? rh : rhx;
-            double rad2 = ext2 ? rh : rhx;
-            double r2_1 = z1*z1 + rad1*rad1;
-            double r2_2 = z2*z2 + rad2*rad2;
-            double r_1 = std::sqrt(r2_1);
-            double r_2 = std::sqrt(r2_2);
-
-            EkGeomRow &g = gmr[n];
-            g.z_eval = z_eval; g.rhx = rhx; g.rh = rh; g.b = b;
-            g.z1 = z1; g.z2 = z2;
-            g.r2_1 = r2_1; g.r_1 = r_1; g.r2_2 = r2_2; g.r_2 = r_2;
-            g.td = td; g.rpf = rho_dot_tobs / rho_eval;
-            g.ext1 = ext1; g.ext2 = ext2;
-            g.swapped = sw;
-
-            size_t base = n * S;
-            ph[base + 0] = -k * r_1;
-            ph[base + 1] = -k * r_2;
-            // INTX (f.3223-3227) integrates e^{-jkR}/R along the segment at the
-            // ORDERED radius RH, not at RHX.
-            for (size_t q = 0; q < n_qp; q++) {
-                double z_q = H * glt_v[q];
-                double dz_q = z_eval - z_q;
-                double r0_q = std::sqrt(rh*rh + dz_q*dz_q);
-                // HALF phase, for the remainder's stable spelling below
-                // (momwire#799) — the reduced kernel's treatment verbatim.
-                ph[base + 2 + q] = -0.5 * k * r0_q;
-                r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
-            }
-        }
-
-        // ---- Stage B: vectorized sincos over every phase ------------------
-        MW_OMP_SIMD()
-        for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
-        MW_OMP_SIMD()
-        for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
-
-        // ---- Stage C: assembly --------------------------------------------
-        for (size_t n = 0; n < N; n++) {
-            const EkGeomRow &g = gmr[n];
-            size_t base = n * S;
-            double H = H_n[n];
-            double ss = sin_kH[n];
-            double cs = cos_kH[n];
-
-            EkEnd e1 = g.ext1
-                ? ek_end_gxx(k, g.z1, g.rh, g.b, g.r2_1, g.r_1,
-                             cphb[base + 0], sphb[base + 0], g.swapped)
-                : ek_end_gx(g.z1, g.rhx, g.r2_1, g.r_1, k,
-                            cphb[base + 0], sphb[base + 0]);
-            EkEnd e2 = g.ext2
-                ? ek_end_gxx(k, g.z2, g.rh, g.b, g.r2_2, g.r_2,
-                             cphb[base + 1], sphb[base + 1], g.swapped)
-                : ek_end_gx(g.z2, g.rhx, g.r2_2, g.r_2, k,
-                            cphb[base + 1], sphb[base + 1]);
-
-            // f.3213-3222, verbatim — algebraically the same brackets the
-            // reduced path spells per endpoint; only the G-quantities changed.
-            EkC ez_sin = ek_mul_j(con_im, (e2.g1 - e1.g1) * cs * k
-                                          - (e2.g1p + e1.g1p) * ss);
-            EkC ez_cos = ek_mul_j(-con_im, (e2.g1 + e1.g1) * ss * k
-                                           + (e2.g1p - e1.g1p) * cs);
-            EkC erho_sin = ek_mul_j(
-                -con_im,
-                (g.z2 * e2.g2p + g.z1 * e1.g2p + e2.g2 + e1.g2) * ss
-                    - (g.z2 * e2.g2 - g.z1 * e1.g2) * cs * k);
-            EkC erho_cos = ek_mul_j(
-                -con_im,
-                (g.z2 * e2.g2p - g.z1 * e1.g2p + e2.g2 - e1.g2) * cs
-                    + (g.z2 * e2.g2 + g.z1 * e1.g2) * ss * k);
-            EkC erho_const = ek_mul_j(con_im, e2.g3 - e1.g3);
-
-            // f.3223-3227: the constant-current term. INTX integrates
-            // e^{-jkR}/R along the segment at RH, and the extended kernel
-            // scales that integral by (1 - (kB/2)²) while adding back a
-            // (kB/2)²-weighted reduced-kernel end difference — the O(a²) piece
-            // of Eq 98 that the ρ-expansion of the axial term leaves behind.
-            // Unlike the per-end substitutions this factor is NOT gated: it
-            // applies whenever EK is on, even when both ends fell back to GX.
-            // Spelled as two divisions, matching the numpy `(H - z)/rh` and
-            // `(-H - z)/rh`, rather than one reciprocal and two products.
-            const double rh2 = g.rh * g.rh;
-            const double rr2 = std::sqrt(rh2 + g.z2 * g.z2);
-            const double rr1 = std::sqrt(rh2 + g.z1 * g.z1);
-            double int_inv_r0 = stable_asinh_diff(g.z1, g.z2, rh2, rr1, rr2);
-            double int_reg_re = 0.0, int_reg_im = 0.0;
-            for (size_t q = 0; q < n_qp; q++) {
-                double inv_r0_q = r0q_inv_a[n * n_qp + q];
-                double hc_q = cphb[base + 2 + q], hs_q = sphb[base + 2 + q];
-                double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
-                double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
-                int_reg_re += reg_re * glw_v[q];
-                int_reg_im += reg_im * glw_v[q];
-            }
-            EkC int_G0 = EkC{int_inv_r0 + int_reg_re * H, int_reg_im * H};
-            double bk = k * g.b;
-            double bk2 = 0.25 * bk * bk;
-            EkC ez_const = ek_mul_j(
-                -con_im,
-                e2.g1p - e1.g1p + (k_sq * (1.0 - bk2)) * int_G0
-                    - bk2 * (e2.gzp - e1.gzp));
-
-            double td = g.td, rpf = g.rpf;
-            if (REFL) {
-                // The Fresnel tail, byte-for-byte the reduced kernel's (see
-                // `refl_pair` / `refl_project`). The EK tables replace E_z/E_ρ
-                // and nothing else: `td`, `rpf` and `rho_p_a` are EFLD's
-                // pre-kernel geometry, so the dyad sees the same four factors
-                // it sees with EK off — which is exactly how the numpy path
-                // spells it, `_field_tensor_image_refl`'s `_project_weighted`
-                // consuming whichever tables `_field_components_bcast`
-                // returned.
-                size_t mn = m * N + n;
-                ReflPair rp = refl_pair(eps_t, cth_p[mn], tmp_p[mn], tnp_p[mn],
-                                        rho_p_a[n], td, rpf);
-                auto weighted = [&](EkC ez, EkC erho) {
-                    return refl_project(rp,
-                                        std::complex<double>(ez.re, ez.im),
-                                        std::complex<double>(erho.re, erho.im));
-                };
-                pc(m, n) = weighted(ez_const, erho_const);
-                ps(m, n) = weighted(ez_sin, erho_sin);
-                pco(m, n) = weighted(ez_cos, erho_cos);
-            } else {
-                // The consuming projection is the reduced kernel's:
-                //   Phi = td·E_z + rho_proj·E_ρ   (`_field_tensor`'s tail).
-                pc(m, n) = std::complex<double>(
-                    td * ez_const.re + rpf * erho_const.re,
-                    td * ez_const.im + rpf * erho_const.im);
-                ps(m, n) = std::complex<double>(
-                    td * ez_sin.re + rpf * erho_sin.re,
-                    td * ez_sin.im + rpf * erho_sin.im);
-                pco(m, n) = std::complex<double>(
-                    td * ez_cos.re + rpf * erho_cos.re,
-                    td * ez_cos.im + rpf * erho_cos.im);
+            const double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
+            const double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
+            const size_t mN = m * N;
+            for (size_t n0 = 0; n0 < N; n0 += T) {
+                const size_t n1 = std::min(N, n0 + T);
+                ek_row_tile<REFL>(K, a_sq, cmx, cmy, cmz, tmx, tmy, tmz, R, n0, n1, s,
+                                  pc + mN + n0, ps + mN + n0, pco + mN + n0);
             }
         }
     }
