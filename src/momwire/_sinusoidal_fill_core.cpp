@@ -641,11 +641,14 @@ std::vector<std::vector<cd>> field_tensor_reduced_cos1(const Front &fr, const Ke
     const Geometry &g = fr.geometry;
     const ll n = static_cast<ll>(sc_.size());
     const RedConst C = red_const(k, eta, K.gx, K.gw);
-    const double a = fr.radius_per_wire[0];
+    // the OBSERVER segment's radius (`_field_components`' `a`): one scalar,
+    // or per observer row on a deck of several radii
+    const std::vector<double> rad = fr.uniform_radius ? std::vector<double>() : seg_radius(fr);
     std::vector<std::vector<cd>> out(3, std::vector<cd>(static_cast<std::size_t>((i1 - i0) * n)));
     for (ll i = i0; i < i1; i++) {
         const Point3 &oc = g.seg_centers[static_cast<std::size_t>(i)];
         const Point3 &ot = g.seg_tangents[static_cast<std::size_t>(i)];
+        const double a = fr.uniform_radius ? fr.radius_per_wire[0] : rad[static_cast<std::size_t>(i)];
         for (ll j = 0; j < n; j++) {
             const std::size_t jz = static_cast<std::size_t>(j);
             const Point3 &sc = sc_[jz];
@@ -874,11 +877,17 @@ std::vector<std::vector<cd>> band(const Kernel &K, ll i0, ll i1, bool cos1, bool
                                   const std::vector<Point3> &img_c, const std::vector<Point3> &img_t,
                                   const Somm *somm = nullptr) {
     const Geometry &g = K.fr->geometry;
-    std::vector<std::vector<cd>> phi = cos1 ? field_tensor_cos1(K, i0, i1, g.seg_centers, g.seg_tangents)
-                                            : field_tensor(K, i0, i1, g.seg_centers, g.seg_tangents);
+    // the folded cos-1 shapes: the extended kernel's own route, or on the
+    // reduced kernel (the NEC-2 portal's default, momwire#2065) numpy's
+    // `_field_components`, copied at one radius
+    const auto tensor = [&](const std::vector<Point3> &c, const std::vector<Point3> &t) {
+        if (!cos1) return field_tensor(K, i0, i1, c, t);
+        if (K.ek || K.nec4) return field_tensor_cos1(K, i0, i1, c, t);
+        return field_tensor_reduced_cos1(*K.fr, K, i0, i1, c, t, g.seg_h, K.fr->k, K.fr->eta);
+    };
+    std::vector<std::vector<cd>> phi = tensor(g.seg_centers, g.seg_tangents);
     if (!pec && somm == nullptr) return phi;
-    std::vector<std::vector<cd>> img =
-        cos1 ? field_tensor_cos1(K, i0, i1, img_c, img_t) : field_tensor(K, i0, i1, img_c, img_t);
+    std::vector<std::vector<cd>> img = tensor(img_c, img_t);
     if (somm != nullptr) {
         const std::vector<std::vector<cd>> S = somm_replay(*K.fr, *somm, i0, i1);
         for (int c = 0; c < 3; c++)
@@ -1453,8 +1462,10 @@ void contact_correction(const Front &fr, const nec4::SolverArgs &args, const Ker
     const cd eps_t(args.ground.eps_r, (-args.ground.sigma) / (fr.omega * 8.8541878188e-12));
     const cd c2 = py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0), cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
     const cd one_minus_c2(1.0 - c2.real(), 0.0 - c2.imag());
-    const std::vector<double> &a_obs = K.src_a.empty() ? std::vector<double>() : K.src_a;
-    std::vector<double> rad = a_obs;
+    // `a_obs = self._seg_radius(geom)`: the kernel's per-source table where
+    // it carries one (EK), the segments' own radii on the reduced kernel
+    // (the NEC-2 portal's default, momwire#2065)
+    std::vector<double> rad = K.src_a.empty() ? seg_radius(fr) : K.src_a;
     if (rad.empty()) decline("a contact correction without the segment radii");
     std::vector<double> obs_t_flat(3 * Nz);
     for (std::size_t m = 0; m < Nz; m++)
@@ -2245,11 +2256,11 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
 
     if (args.has_insulation) decline("an insulated wire (momwire#1607 B5b)");
     const razor::WireLoading loading = wire_loading(args);
-    // The NEC-4.2 slot builds every solver with the extended kernel; the
-    // reduced-kernel route (`sinusoidal_field_tensor`) is wired below but no
-    // deck reaches it, so it is declined rather than served ungated.
-    if (!args.extended_kernel && !fr.nec4 && !fr.buried)
-        decline("the reduced-kernel fill (the NEC-4.2 slot never builds one)");
+    // The NEC-4.2 slot builds every solver with the extended kernel. The
+    // reduced-kernel route (`sinusoidal_field_tensor`, the kernel Python's
+    // accelerated fill calls) is the NEC-2 portal's default (no EK card),
+    // gated there by the nec2c corpus (momwire#2065,
+    // tests/test_standalone_nec2c.py).
     // `_operating_medium`'s `refuse_out_of_scope`: the extended kernel has no
     // medium below the interface (the reference refuses; not worded here)
     if (fr.buried && args.extended_kernel) decline("the extended kernel below the interface (the reference refuses)");
