@@ -63,10 +63,14 @@ std::vector<Card> post_ge_cards(const std::string &text) {
     return cards;
 }
 
-// `portal._portal.parse_deck(text, dialect="nec4")`
-PortalDeck parse_deck(const std::string &text) {
+// `portal._portal.parse_deck(text, dialect=...)`: the nec4 slot's, or the
+// nec2 portal's (momwire#2065), whose walk differs in two cards: CW is no
+// geometry card of the nec2 dialect, and EK does not keep a run of LD cards
+// open there (`ld_run_transparent`).
+PortalDeck parse_deck(const std::string &text, Dialect dialect = Dialect::nec4) {
     PortalDeck d;
-    d.model = parse(text, Dialect::nec4);
+    d.model = parse(text, dialect);
+    const bool nec4 = dialect == Dialect::nec4;
     const Model &model = d.model;
     std::vector<Card> loads;
     std::vector<PortalSource> sources;
@@ -85,7 +89,7 @@ PortalDeck parse_deck(const std::string &text) {
             d.comments.push_back(nec5::latin1_to_utf8(card.text()));
             continue;
         }
-        if (one_of(m, {"GW", "GA", "GH", "CW", "GM", "GS", "GX", "GR", "GE"})) {
+        if (one_of(m, {"GW", "GA", "GH", "GM", "GS", "GX", "GR", "GE"}) || (nec4 && m == "CW")) {
             d.geometry.push_back(card);
             continue;
         }
@@ -93,7 +97,7 @@ PortalDeck parse_deck(const std::string &text) {
         // the run of LD cards (momwire#1812): the first LD of a new run clears
         // the table as LD -1 does; PT, PQ, MP and EK (nec4) keep a run open
         const bool opens_a_run = m == "LD" && !ld_run_open;
-        if (!one_of(m, {"PT", "PQ", "MP", "EK"})) ld_run_open = m == "LD";
+        if (!(one_of(m, {"PT", "PQ", "MP"}) || (nec4 && m == "EK"))) ld_run_open = m == "LD";
         if (m == "LD") {
             if (card.i(0) == Int(-1) || opens_a_run) loads.clear();
             if (card.i(0) != Int(-1)) loads.push_back(card);
@@ -152,7 +156,7 @@ PortalDeck parse_deck(const std::string &text) {
     d.quiet = model.quiet;
     d.has_reduced_field = model.has_reduced_field;
     d.reduced_field = model.reduced_field;
-    d.structure = geometry_of(d.geometry);
+    d.structure = geometry_of(d.geometry, dialect);
     return d;
 }
 
@@ -583,6 +587,10 @@ Seam seam(const std::string &text, const std::string &basis) {
         if (!go_on) break;
     }
     return out;
+}
+
+PortalDeck parse_portal_deck(const std::string &latin1_text, Dialect dialect) {
+    return parse_deck(latin1_text, dialect);
 }
 
 std::string dump_seam(const std::string &text, const std::string &basis) {
