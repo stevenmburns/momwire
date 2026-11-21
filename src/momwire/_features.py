@@ -136,6 +136,13 @@ LEVELS: tuple[Level, ...] = (
 )
 DEEPEST = len(LEVELS)
 
+# Features an executable runs as its launcher's own default although the
+# feature's reach is short of that executable's level: {feature: level id}.
+# Each is a maintainer's named exception, recorded in the feature's entry
+# with the gate that certifies it on that executable; the executables' main
+# (`feature_runs_here`, under its dialect) carries exactly these.
+EXE_LAUNCHER_DEFAULTS: dict[str, str] = {"nec2_end_cap": "exe-nec2c-sinusoidal"}
+
 
 def _level(level_id: str) -> int:
     """The 1-based number of the level named `level_id`. Every number below
@@ -855,8 +862,17 @@ FEATURES: dict[str, Feature] = {
         # default identical to =1; the synthetic decks above at nec2c's five
         # printed figures) and the W8IO whip and log-periodic Yagi (the
         # default's Z identical to =1, timing unchanged). Python-kind, so the
-        # macOS drop-in (level 5) still runs it, uncertified. No executable
-        # carries it: reach 4 is short of the first executable level.
+        # macOS drop-in (level 5) still runs it, uncertified.
+        #
+        # One executable carries it by NAMED EXCEPTION (Steve, 2026-11-20,
+        # momwire#2065): the nec2c-sinusoidal executable (level 11) runs it as
+        # its launcher's own default, as the Python launcher does, certified
+        # by the same corpus gate run against that launcher (the 71 nec_portal
+        # decks: 69 byte-identical with the cap at its default, =0 and =1, the
+        # 2 GN 0 decks refused by name, 0 differing; tests/test_standalone_
+        # nec2c.py). Reach stays 4: reach is one number, so raising it to 11
+        # would certify levels 5..10 (the macOS drop-in among them) on no
+        # evidence. :data:`EXE_LAUNCHER_DEFAULTS` records the exception.
         Feature(
             name="nec2_end_cap",
             reach=4,
