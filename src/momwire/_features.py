@@ -876,6 +876,58 @@ FEATURES: dict[str, Feature] = {
             drift=1.0,
             offer=True,
         ),
+        # NEC-2's interaction approximation (`_nec2_far_approx`): a pair whose
+        # segment centres are more than the range apart (1 wavelength, NEC-2's
+        # default, or a deck's KH card, which the NEC-2 reader accepts only
+        # with this on) takes the source segment's current lumped into a
+        # dipole at its centre. APPROXIMATE, so never on by default anywhere:
+        # it trades the answer's last digits for a cheaper fill
+        # (`_sinusoidal_far_core.cpp`), and moves momwire-nec2c-sinusoidal
+        # toward NEC-2 engines on the decks where they apply it. NEC-2
+        # dialect only: the NEC-4 junction rule and buried or crossing wires
+        # refuse. Native (a new C++ kernel), reach 1: certified on Linux avx2
+        # Python only, so the drop-in route (level 4) refuses it.
+        #
+        # `drift` 1e-3, a declared bound above everything measured
+        # (2026-11-20, Linux avx2, the port admittances on against off at
+        # NEC-2's 1 wavelength): 1.3e-4 at most, on a 1049-segment raised
+        # whip with radials over a Fresnel ground; 2e-5 to 9e-5 on the same
+        # family at 1049-4387 segments in free space, over PEC and over
+        # Sommerfeld; 5.4e-5 at most over the 71 nec_portal decks, 13 of
+        # which have a pair beyond the range; 1.2e-6 on a 688-segment
+        # log-periodic. OpenNEC's own approximation moved a 5,000-segment
+        # whip's Z by 5.1e-4. On those decks, with the NEC-2 launcher's
+        # settings, momwire then reads nec2c's five printed figures.
+        #
+        # `issue` is 0 until the feature's issue is filed (the registry test
+        # holds it > 0).
+        Feature(
+            name="nec2_far_approx",
+            reach=1,
+            env="MOMWIRE_X_NEC2_FAR_APPROX",
+            solvers=("sinusoidal",),
+            kind="native",
+            issue=0,
+            since="2026-11-20",
+            kwarg="nec2_far_approx",
+            paths=(
+                "src/momwire/_nec2_far_approx.py",
+                "src/momwire/_sinusoidal_far_core.cpp",
+                "src/momwire/_sinusoidal_far_core.h",
+                "src/momwire/_accel_sinusoidal_far.cpp",
+                "tests/test_nec2_far_approx.py",
+            ),
+            label="NEC-2 far-pair approximation",
+            summary=(
+                "Uses NEC-2's interaction approximation: segment pairs more "
+                "than a wavelength apart (or a deck's KH range) are filled "
+                "from a lumped current, as NEC-2 does. A faster fill on large "
+                "decks, and closer to NEC-2 engines there, at the cost of the "
+                "answer's last digits."
+            ),
+            drift=1e-3,
+            offer=True,
+        ),
     )
 }
 
