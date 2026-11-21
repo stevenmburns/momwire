@@ -340,7 +340,18 @@ def test_python_on_runs_and_stays_within_the_drift(tmp_path):
     assert rel.max() <= _features.FEATURES["crossing_anchors"].drift + 5e-5
 
 
-@pytest.mark.parametrize("case", sorted(DECLINES))
+# The two large declines run in the slow lane (0.96.0 release: their
+# default-lane medians passed the 5 s budget, scripts/test_durations.py).
+_SLOW_DECLINES = {"electrically-large", "wide-band"}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(c, marks=pytest.mark.slow) if c in _SLOW_DECLINES else c
+        for c in sorted(DECLINES)
+    ],
+)
 def test_python_declines_fill_as_off(case, tmp_path):
     off, _ = _python(DECLINES[case], tmp_path / "off", _clean_env())
     on, err = _python(

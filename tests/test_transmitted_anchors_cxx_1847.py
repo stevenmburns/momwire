@@ -410,6 +410,9 @@ def _check_blend(f_hz, r):
     _agree(c["vals"], g._vals, "served")
 
 
+# Slow lane at the 0.96.0 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 def test_the_cxx_blend_is_pythons_on_one_rung(fresh):
     _check_blend(F0, _req(F0))
 
@@ -450,6 +453,9 @@ def test_a_soil_with_a_growing_loss_is_declined(fresh):
     assert set(_cxx(r)) == {"declined"}
 
 
+# Slow lane at the 0.96.0 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 def test_a_sweep_shares_its_cxx_anchors(fresh):
     for f in (F0, F0 * 1.02, F0 * 1.05):
         assert "declined" not in _cxx(_req(f))
@@ -462,6 +468,9 @@ def test_a_sweep_shares_its_cxx_anchors(fresh):
     assert st["blends"] == 3 and st["nodes_filled"] == nodes, st
 
 
+# Slow lane at the 0.96.0 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 def test_a_full_anchor_store_never_frees_a_stencil_anchor(fresh):
     """The anchor store is a FIFO (Python's `_ANCHORS_MAX`, 96 here capped
     to 16 so two soils fill it): a request whose stencil finds anchors J..J+6
@@ -586,6 +595,9 @@ def test_the_cxx_resampling_is_pythons_on_random_tables(monkeypatch, case):
 FEATURE = ["transmitted_anchors"]  # requested per call: `ni_eval::FeatureRequest`
 
 
+# Slow lane at the 0.96.0 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "deck", ["m2_dipole_over_buried.nec", "m3_two_radii.nec"], ids=lambda s: s[:2]
 )
@@ -668,6 +680,9 @@ MIXED_SWEEP = (
 )
 
 
+# Slow lane at the 0.96.0 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="the NEC-4.2 reader's rules")
 def test_the_sinusoidal_printout_with_anchors_is_pythons(fresh, monkeypatch):
     """The point-matched lane's C++ printout with the feature requested
