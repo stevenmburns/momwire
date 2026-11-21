@@ -149,7 +149,7 @@ def test_the_launchers_default_is_certified_where_it_runs(monkeypatch):
     assert _features.certified("nec2_end_cap", "dropin", platform="win32")
     assert not _features.certified("nec2_end_cap", "dropin", platform="darwin")
     assert _features.FEATURES["nec2_end_cap"].kind == "python"
-    assert 4 < _features._level("exe-nec5-bspline-razor-2p-windows")
+    assert 4 < _features._level("exe-nec5-bs2-razor2p-windows")
     # Line 2 of a drop-in printout that runs it (the NEC-4.2 slot's
     # sinusoidal route) names it, and on Linux no longer as uncertified.
     monkeypatch.setenv(ENV, "1")
@@ -187,9 +187,7 @@ def test_the_pins_can_tell_the_two_conditions_apart():
         assert abs(CAPPED[name] - UNCAPPED[name]) / abs(CAPPED[name]) > 5 * PRINTED
 
 
-@pytest.mark.parametrize(
-    "prog", ["momwire-nec2c-sinusoidal-galerkin", "momwire-nec2c-bspline"]
-)
+@pytest.mark.parametrize("prog", ["momwire-nec2c-sg", "momwire-nec2c-bs2"])
 def test_the_other_solvers_ignore_it(prog, cap_calls, monkeypatch):
     off = _impedance(DECKS["fat_dipole"], prog)
     monkeypatch.setenv(ENV, "1")
@@ -345,8 +343,8 @@ def test_the_default_is_the_explicit_cap_and_not_the_off_answer(monkeypatch):
     "prog",
     [
         "momwire-nec2c",
-        "momwire-nec2c-sinusoidal-galerkin",
-        "momwire-nec2c-bspline-d1",
+        "momwire-nec2c-sg",
+        "momwire-nec2c-bs1",
         "momwire-nec2c-pulse",
     ],
 )

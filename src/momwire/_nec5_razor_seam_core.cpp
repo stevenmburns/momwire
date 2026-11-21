@@ -1,4 +1,4 @@
-// The NEC-5 seam's structure half for razor-2p: razor's answers to what a
+// The NEC-5 seam's structure half for razor2p: razor's answers to what a
 // basis decides -- see `_nec5_razor_seam_core.h`. The ladder, the mesh and
 // the ports are the engine-neutral seam's (`_nec5_seam_core.cpp`); each hook
 // here names the Python it is a copy of (`eznec/_serve.py` unless said
@@ -29,20 +29,20 @@ namespace nec5 {
 
 const RazorPrepared &razor_part(const Prepared &p) {
     const RazorPrepared *r = dynamic_cast<const RazorPrepared *>(p.engine.get());
-    if (r == nullptr) throw std::logic_error("a preparation razor-2p's engine did not make");
+    if (r == nullptr) throw std::logic_error("a preparation razor2p's engine did not make");
     return *r;
 }
 
 RazorPrepared &razor_part(Prepared &p) {
     RazorPrepared *r = dynamic_cast<RazorPrepared *>(p.engine.get());
-    if (r == nullptr) throw std::logic_error("a preparation razor-2p's engine did not make");
+    if (r == nullptr) throw std::logic_error("a preparation razor2p's engine did not make");
     return *r;
 }
 
 const SeamBasis &RazorSeamEngine::basis() const {
     static const SeamBasis row = [] {
         SeamBasis b;
-        b.name = "razor-2p";
+        b.name = "razor2p";
         b.cut_spelling = false;            // not in `_CUT_SPELLING`
         b.crossing_node_spelling = false;  // node gaps, but no junction ports
         return b;

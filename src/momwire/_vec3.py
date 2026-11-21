@@ -7,7 +7,7 @@ the work to BLAS ``ddot``, whose answer depends on the machine: on
 Skylake/Haswell OpenBLAS sums ``(a0*b0 + a1*b1) + a2*b2`` with plain
 roundings, on AVX-512 machines (Rocketlake, GitHub's runners) it fuses the
 products into FMAs, and on the 453-deck corpus that moved 34 decks'
-razor-2p geometry. A reference that a second implementation (the C++
+razor2p geometry. A reference that a second implementation (the C++
 standalone path) has to match bit for bit cannot depend on which BLAS
 kernel the host picked.
 

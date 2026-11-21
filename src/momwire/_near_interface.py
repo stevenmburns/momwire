@@ -653,7 +653,7 @@ def _twin_columns(k_p, k_m, rho_c, offsets, zs, zps, lam_mult, cache=None):
         # A call takes the table on its OWN work inside the extents: what an
         # earlier call already spent on the twin is spent, and counting it
         # took the table for a late call that a build did not pay for
-        # (aca_vertical_screen under nec5-bspline: 816 rows for a 40 ms
+        # (aca_vertical_screen under nec5-bs2: 816 rows for a 40 ms
         # build). Once a call has taken it, the fill keeps it.
         cost = 0.0
         if n_in:
@@ -3125,7 +3125,7 @@ _SHEET_DEAD = 18.0
 # The weight is a node's cost against a column setup's. Phase 1's polar nodes
 # were each a column of one (weight 1); a strip-grid node shares its setup
 # with its dyadic s strip, ~12 us against ~94 (laptop), and 0.15 is where it
-# measured (laptop, razor-2p, sheets against off): hub_deck(16) x2 1.48 ->
+# measured (laptop, razor2p, sheets against off): hub_deck(16) x2 1.48 ->
 # 1.39 s and x4 2.65 -> 1.98 s (both take the radials' plane now; phase 1
 # declined them), the Beverage at nseg 21 takes its height sheet (warm 1.92 ->
 # 0.21 s) as at 84 (11.9 -> 1.37 s).
@@ -3158,8 +3158,8 @@ _SHEET_HEIGHT_WEIGHT = 0.15
 # 0.01 for both is where it measured (momwire#1956: Skylake, the two
 # executables' C++ twin, the scoping decks, T1 and T4, median of 3, the
 # Sommerfeld store off ("cold") and primed ("warm")): 0.03 still declines
-# fat_hub's radial plane (warm 64 -> 40 ms at 0.01, nec5-razor-2p T4) and
-# nec5-bspline's d3_hub plane; 0.005 takes the EFHW rod's depths as planes
+# fat_hub's radial plane (warm 64 -> 40 ms at 0.01, nec5-razor2p T4) and
+# nec5-bs2's d3_hub plane; 0.005 takes the EFHW rod's depths as planes
 # and its cold solve goes 211 -> 338 ms; a height weight lowered alone takes
 # heights the radials' plane would have served (hub32 cold 223 -> 269 ms).
 _SHEET_RETUNE_BUILD_WEIGHT = 0.01
@@ -3171,7 +3171,7 @@ _SHEET_RETUNE_HEIGHT_WEIGHT = 0.01
 # under a vertical) keep `_SHEET_ROW_WORTH`, so a mast's heights are not
 # split off the column they share (and the factored route, L1, serves).
 #
-# Measured (Rocketlake, T=1, efhw_hi at 3.62 MHz, nec5-razor-2p): the
+# Measured (Rocketlake, T=1, efhw_hi at 3.62 MHz, nec5-razor2p): the
 # counterpoise's 23,712 rows at z = 0.01 cost 106 ms exact (4.5 us a row,
 # setups included) and its sheet's 14,256 nodes 117 ms to build (8.2 us a
 # node), so one row is worth ~0.55 node: 0.082 in this rule's units against
@@ -3183,7 +3183,7 @@ _SHEET_RETUNE_HEIGHT_WEIGHT = 0.01
 # ~20 % of those rows' exact cost; that is what the timing gates watch.
 _SHEET_HEIGHT_LONE_WORTH = 1.0 / 10.0
 # momwire#1860 L2: heights within this many ulp of each other are one height
-# in the census and one sheet (`SheetPlan.lo` / `.hi`). nec5-bspline's
+# in the census and one sheet (`SheetPlan.lo` / `.hi`). nec5-bs2's
 # knots put the EFHW's 0.01 m counterpoise at 0.009999999999999998, 0.01
 # and 0.010000000000000002, which split one sheet's rows three ways (and,
 # forced, built three tables and ran slower).
@@ -3493,7 +3493,7 @@ _DISTINCT_PAIRS_FLAT_MAX = 20_000_000
 # ... and it expands them a z WINDOW at a time, about this many pairs per
 # window (momwire#1940 U1). Two pairs whose z differ are distinct, so the
 # count is the sum of the windows' counts, and no window needs another's
-# pairs. The whole expansion held at once was the buried razor-2p fill's
+# pairs. The whole expansion held at once was the buried razor2p fill's
 # high-water mark at hub x16 (one census +143 MB) and +518 MB at the
 # 48-radial screen x11. A window ends only where z changes, so one z held by
 # more pairs than this is a window of its own: the bound is the larger of

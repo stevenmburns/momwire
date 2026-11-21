@@ -7,9 +7,9 @@ Both are built from each momwire release and tested on every change: these
 programs run every test deck on Windows (avx2 and sse2) and their printouts
 are checked against the Python engine's.
 
-The engines are nec5-razor-2p (what the Python command
-`momwire-nec5-razor-2p` answers) and nec5-bspline, momwire's default B-spline
-formulation (what `momwire-nec5-bspline` answers). Each takes the forms the real engine takes:
+The engines are nec5-razor2p (what the Python command
+`momwire-nec5-razor2p` answers) and nec5-bs2, momwire's default B-spline
+formulation (what `momwire-nec5-bs2` answers). Each takes the forms the real engine takes:
 
     momwire-nec5-razor2p-avx2.exe DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
     momwire-nec5-razor2p-avx2.exe - -                     (SimNEC's streaming form)
@@ -18,7 +18,7 @@ formulation (what `momwire-nec5-bspline` answers). Each takes the forms the real
 The -version line is the Python command's with "-standalone" and the build
 added to the name, e.g.
 
-    NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1
+    NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.87.1
 
 so SimNEC (and the "CM version" card it puts on each deck) shows which
 program ran.

@@ -1,4 +1,4 @@
-// razor-2p's BURIED fill in C++ (momwire#1512 step 3): the matrix of a deck
+// razor2p's BURIED fill in C++ (momwire#1512 step 3): the matrix of a deck
 // with wires below a GN 0 / GN 2 ground, the same bits as
 // `RazorSolver._assemble_Z_crossing` / `_assemble_Z_below_plane`. No Python.
 //

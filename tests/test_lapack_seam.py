@@ -235,7 +235,7 @@ def test_default_route_on_moment_matrices_from_real_decks(no_host, monkeypatch):
         return real_factor(a, *args, **kw)
 
     monkeypatch.setattr(_lapack, "lu_factor", spy)
-    for deck, basis in (("0033", "bspline"), ("0035", "sinusoidal-galerkin")):
+    for deck, basis in (("0033", "bs2"), ("0035", "sg")):
         (path,) = DECKS.glob(f"{deck}_*.nec")
         _shell.render(path.read_text(), basis=basis)
     monkeypatch.setattr(_lapack, "lu_factor", real_factor)
@@ -396,14 +396,14 @@ def _masked(text):
 # the sites they reach: a dipole (the plain solve), junctions (the KCL Schur
 # solve), networks and two sources (the port-space solves of both seams).
 NEC5_DECKS = ("0010", "0033", "0012", "0035")
-NEC5_BASES = ("bspline", "razor-2p", "sinusoidal-galerkin")
+NEC5_BASES = ("bs2", "razor2p", "sg")
 NEC2_DECKS = (
     "dipole_free_space",
     "catalog_dipoles_invvee",
     "dipole_nt_network",
     "two_source_sensor_lines",
 )
-NEC2_BASES = ("bspline", "sinusoidal", "sinusoidal-galerkin", "pulse")
+NEC2_BASES = ("bs2", "sinusoidal", "sg", "pulse")
 NEC2_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 
 
@@ -788,7 +788,7 @@ def test_fake_host_products_run_end_to_end(monkeypatch):
     host's products: every routed module made its product through the seam
     and the host ran it. scipy's BLAS is not numpy's, so the products' last
     bits may move against the default (measured on Haswell: 312 of 4,645
-    products on razor-2p, rel <= 2e-15) -- and no printout moved there, over
+    products on razor2p, rel <= 2e-15) -- and no printout moved there, over
     2,011. The gate asks for no more than a printed last digit."""
     callers = set()
     real = _lapack.matmul

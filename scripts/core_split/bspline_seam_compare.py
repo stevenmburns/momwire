@@ -4,7 +4,7 @@ the solver's construction.
 
     python scripts/core_split/bspline_seam_compare.py OUT.jsonl DECK_OR_DIR...
 
-The Python seam runs `_shell.render(text, basis="bspline")` with
+The Python seam runs `_shell.render(text, basis="bs2")` with
 `_serve._prepare` recorded and `_serve._port_solution` stubbed out (the fill
 is not what this compares, and the front half is not ported), so the record
 is each deck's first preparation: BSplineSolver's keyword arguments, the
@@ -62,7 +62,7 @@ def python_seam(text):
     _serve._port_solution = lambda solver, shared: None
     _printout.render_refusal = refusal
     try:
-        _shell.render(text, basis="bspline")
+        _shell.render(text, basis="bs2")
         rec["outcome"] = "refused" if rec["refusals"] else "served"
     except Exception as exc:  # noqa: BLE001 -- the escape IS the answer here
         rec["outcome"] = "raised"

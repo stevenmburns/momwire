@@ -132,7 +132,7 @@ BSPLINE_THR_N204_LOSS = 4.759522e-05
 def test_dans_through_deck_reads_its_copper_loss():
     """thr_n204 on Sin-Galerkin: 4.761e-5 W and 99.32 %. Before the fix the
     same solve read 4.971e-4 W and 92.91 %."""
-    b = _budget("thr_n204", "sinusoidal-galerkin")
+    b = _budget("thr_n204", "sg")
     assert b.wire_loss == pytest.approx(BSPLINE_THR_N204_LOSS, rel=0.01)
     assert b.efficiency_percent == pytest.approx(99.32, abs=0.01)
 
@@ -150,15 +150,13 @@ def test_decks_without_a_sliver_read_what_they_did(name):
     # to the reduced one, which moved them by 1.85e-5 and 3.44e-5 relative
     # (the reduced kernel still reads 4.732208e-05 and 4.761358e-05 exactly).
     want = {"thr_n21": 4.732296e-05, "hs_n204": 4.761522e-05}[name]
-    assert _budget(name, "sinusoidal-galerkin").wire_loss == pytest.approx(
-        want, rel=2e-6
-    )
+    assert _budget(name, "sg").wire_loss == pytest.approx(want, rel=2e-6)
 
 
 @pytest.mark.slow
 def test_dans_through_deck_loses_what_bspline_loses():
     """The issue's gate: the same deck on both bases."""
-    sg = _budget("thr_n204", "sinusoidal-galerkin")
-    bs = _budget("thr_n204", "bspline")
+    sg = _budget("thr_n204", "sg")
+    bs = _budget("thr_n204", "bs2")
     assert sg.wire_loss == pytest.approx(bs.wire_loss, rel=0.01)
     assert sg.efficiency_percent == pytest.approx(bs.efficiency_percent, abs=0.01)

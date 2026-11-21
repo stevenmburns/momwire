@@ -130,15 +130,15 @@ momwire-dropin-client = "momwire_eznec_client:main"
 # The NEC-5 family (momwire#1239): the same thin client under names carrying
 # `nec5`, which is what SimNEC reads to write NEC-5 decks. The basis rides on
 # the name past `nec5-`; plain `momwire-nec5` is the default basis, and
-# `momwire-nec5-razor-2p` is NEC-5's own formulation twin. No `sinusoidal` or
+# `momwire-nec5-razor2p` is NEC-5's own formulation twin. No `sinusoidal` or
 # `pulse`: NEC-5 drives its sources at KNOTS, and those two bases feed only
 # at segment centres, so they refuse every NEC-5 deck (measured on SimNEC's
 # own decks; the refusal names the basis).
 momwire-nec5 = "momwire_eznec_client:main"
-momwire-nec5-razor-2p = "momwire_eznec_client:main"
-momwire-nec5-bspline = "momwire_eznec_client:main"
-momwire-nec5-bspline-d1 = "momwire_eznec_client:main"
-momwire-nec5-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec5-razor2p = "momwire_eznec_client:main"
+momwire-nec5-bs2 = "momwire_eznec_client:main"
+momwire-nec5-bs1 = "momwire_eznec_client:main"
+momwire-nec5-sg = "momwire_eznec_client:main"
 momwire-nec5-hmatrix = "momwire_eznec_client:main"
 momwire-nec5-arrayblock = "momwire_eznec_client:main"
 # The NEC-4.2 family (momwire#1295): the same thin client under names carrying
@@ -146,14 +146,14 @@ momwire-nec5-arrayblock = "momwire_eznec_client:main"
 # deck dialect. Shipped as `nec42` (momwire#1443): SimNEC recognises an engine
 # by `nec42` in its path, and the name rule reads the basis past `nec42`. The
 # roster is the centre-feeding bases (`deck.NEC2_BASES`); plain
-# `momwire-nec42` is bspline, and `-sinusoidal` is point matching, the
+# `momwire-nec42` is bs2, and `-sinusoidal` is point matching, the
 # basis family NEC-4.2 itself belongs to. No razor name: razor places gaps at
 # knots only, and a renamed razor copy refuses by name in the printout.
 momwire-nec42 = "momwire_eznec_client:main"
 momwire-nec42-sinusoidal = "momwire_eznec_client:main"
-momwire-nec42-bspline = "momwire_eznec_client:main"
-momwire-nec42-bspline-d1 = "momwire_eznec_client:main"
-momwire-nec42-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec42-bs2 = "momwire_eznec_client:main"
+momwire-nec42-bs1 = "momwire_eznec_client:main"
+momwire-nec42-sg = "momwire_eznec_client:main"
 momwire-nec42-hmatrix = "momwire_eznec_client:main"
 momwire-nec42-arrayblock = "momwire_eznec_client:main"
 momwire-nec42-pulse = "momwire_eznec_client:main"
@@ -161,17 +161,17 @@ momwire-nec42-pulse = "momwire_eznec_client:main"
 # filename-only host dialog (SimNEC's, and Windows generally — no symlinks
 # needed) selects the solver by pointing at the right name. No code behind
 # these beyond portal:main — argv[0]'s "nec2c-<suffix>" does the selection.
-momwire-nec2c-bspline = "momwire.dropin.nec2c:main"
-momwire-nec2c-bspline-d1 = "momwire.dropin.nec2c:main"
+momwire-nec2c-bs2 = "momwire.dropin.nec2c:main"
+momwire-nec2c-bs1 = "momwire.dropin.nec2c:main"
 momwire-nec2c-hmatrix = "momwire.dropin.nec2c:main"
 momwire-nec2c-arrayblock = "momwire.dropin.nec2c:main"
 momwire-nec2c-sinusoidal = "momwire.dropin.nec2c:main"
-momwire-nec2c-sinusoidal-galerkin = "momwire.dropin.nec2c:main"
+momwire-nec2c-sg = "momwire.dropin.nec2c:main"
 # No razor name here (momwire#821): the nec2 dialect addresses segment
 # centres and razor places gaps at knots, so `deck.build_solver` refuses every
 # nec2 deck under it. `momwire-nec2c-razor-2p` / `-razor-nec5` shipped from
 # v0.36.1 to v0.46.0 and are retired; razor is served by the NEC-5 dialect's
-# launchers (`momwire-nec5-razor-2p`).
+# launchers (`momwire-nec5-razor2p`).
 momwire-nec2c-pulse = "momwire.dropin.nec2c:main"
 
 [project.urls]
@@ -217,7 +217,7 @@ testpaths = ["tests"]
 # `simplefilter`, which overrides this for the duration, so the advisory stays
 # gated here even though it is silent everywhere else. Verified, not assumed.
 filterwarnings = [
-    "ignore:razor-2p is first order in the far mesh",
+    "ignore:razor2p is first order in the far mesh",
     # momwire#865's low-stand-off advisory, silenced the same way and for the
     # same reason: by its OPENING WORDS, never by category. Matching a category
     # makes pytest import momwire while parsing filters, ahead of the conftest's
@@ -420,7 +420,7 @@ repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-w
 # this run is its only MSVC check.
 # test_somm_lanes_1441.py: the Sommerfeld integrands' lanes (momwire#1441
 # step 3) against their walk, at the win32 tolerance.
-# test_razor_cxx_solve_proto.py rides here for the razor-2p solve prototype:
+# test_razor_cxx_solve_proto.py rides here for the razor2p solve prototype:
 # its LAPACK is SciPy's own, read from `cython_lapack`'s capsules, and this is
 # the only run of that pointer path against an MSVC build. So does
 # test_razor_cxx_front.py, the prototype's C++ front half: its TU asks MSVC

@@ -1,8 +1,8 @@
 """One pair-reuse contract (momwire#1982 step 1).
 
 `pair_reuse` is the one user-facing pair-reuse switch: one keyword, taken by
-every solver that reuses (bspline, sinusoidal, razor-2p), and one variable,
-MOMWIRE_X_PAIR_REUSE. Its parts, bspline's `offset_reuse` and razor-2p's
+every solver that reuses (bspline, sinusoidal, razor2p), and one variable,
+MOMWIRE_X_PAIR_REUSE. Its parts, bspline's `offset_reuse` and razor2p's
 `razor_pair_reuse`, follow it; their own keywords and variables are kept as
 aliases and win. What is held here:
 
@@ -156,7 +156,7 @@ def test_pair_reuse_reaches_the_dropin_on_linux_and_windows():
     the drop-in on Linux and Windows, so MOMWIRE_X_PAIR_REUSE=1 with the NEC-2
     drop-in on Windows is certified. Python-kind, so the macOS drop-in, past
     its reach, runs it uncertified; no executable carries it. Its bspline
-    part moves with it; the razor-2p part already reaches further."""
+    part moves with it; the razor2p part already reaches further."""
     whole = F.FEATURES["pair_reuse"]
     assert whole.reach == F._level("dropin-linux-windows") == 4
     assert whole.kind == "python" and not whole.default and not whole.offer
@@ -164,7 +164,7 @@ def test_pair_reuse_reaches_the_dropin_on_linux_and_windows():
         assert F.certified("pair_reuse", "dropin", platform=platform)
         assert F.certified("pair_reuse", platform=platform, variant="sse2")
     assert not F.certified("pair_reuse", "dropin", platform="darwin")
-    assert whole.reach < F._level("exe-nec5-bspline-razor-2p-windows")
+    assert whole.reach < F._level("exe-nec5-bs2-razor2p-windows")
     for name in PARTS:
         assert F.FEATURES[name].reach >= whole.reach, name
 
@@ -209,7 +209,7 @@ def test_bspline_with_pair_reuse_true_is_offset_reuse_to_the_bit(no_features):
     assert not np.array_equal(a.view(np.uint64), off.view(np.uint64))
 
 
-# --- razor-2p ------------------------------------------------------------------
+# --- razor2p ------------------------------------------------------------------
 
 
 def _razor(**kw):

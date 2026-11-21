@@ -107,8 +107,8 @@ def test_the_fixtures_are_the_captures_as_written():
         ("C:\\EZNEC 7.0\\Docs\\momwire-nec42.exe", "nec4", None),
         ("momwire-nec42-sinusoidal.exe", "nec4", "sinusoidal"),
         ("Momwire-NEC42-Sinusoidal-Galerkin.EXE", "nec4", "sinusoidal-galerkin"),
-        ("/opt/bin/momwire-nec42-bspline-d1", "nec4", "bspline-d1"),
-        ("momwire-nec42-razor-2p.exe", "nec4", "razor-2p"),
+        ("/opt/bin/momwire-nec42-bs1", "nec4", "bs1"),
+        ("momwire-nec42-razor2p.exe", "nec4", "razor2p"),
         ("momwire-nec42-", "nec4", ""),
         ("momwire-nec42x", "nec4", "x"),
         # A renamed copy carrying `nec4` but not `nec42` reads as it did
@@ -118,11 +118,11 @@ def test_the_fixtures_are_the_captures_as_written():
         ("C:\\EZNEC 7.0\\Docs\\momwire-nec4.exe", "nec4", None),
         ("momwire-nec4-sinusoidal.exe", "nec4", "sinusoidal"),
         ("Momwire-NEC4-Sinusoidal-Galerkin.EXE", "nec4", "sinusoidal-galerkin"),
-        ("/opt/bin/momwire-nec4-bspline-d1", "nec4", "bspline-d1"),
+        ("/opt/bin/momwire-nec4-bs1", "nec4", "bs1"),
         ("My-NEC4-engine.exe", "nec4", "engine"),
         # Copies the README cannot stop someone making: each NAMES its basis,
         # so each reaches the refusal rather than the default.
-        ("momwire-nec4-razor-2p.exe", "nec4", "razor-2p"),
+        ("momwire-nec4-razor2p.exe", "nec4", "razor2p"),
         ("momwire-nec4-", "nec4", ""),
         ("momwire-nec4-rzaor", "nec4", "rzaor"),
         ("momwire-nec43.exe", "nec4", "3"),
@@ -130,8 +130,8 @@ def test_the_fixtures_are_the_captures_as_written():
         ("momwire-nec4-capture.exe", "nec4", "capture"),
         # The NEC-5 family is untouched.
         ("momwire-eznec.exe", "nec5", None),
-        ("momwire-eznec-razor-2p.exe", "nec5", None),
-        ("momwire-nec5-razor-2p", "nec5", None),
+        ("momwire-eznec-razor2p.exe", "nec5", None),
+        ("momwire-nec5-razor2p", "nec5", None),
         ("python", "nec5", None),
     ],
 )
@@ -147,12 +147,12 @@ def test_the_name_picks_the_slot_and_the_basis(prog, dialect, basis):
     [
         ("momwire-nec42.exe", "nec4", _serve.BASIS),
         ("momwire-nec42-sinusoidal.exe", "nec4", "sinusoidal"),
-        ("momwire-nec42-razor-2p.exe", "nec4", "razor-2p"),
+        ("momwire-nec42-razor2p.exe", "nec4", "razor2p"),
         ("momwire-nec42-.exe", "nec4", ""),
         ("momwire-nec4.exe", "nec4", _serve.BASIS),
         ("momwire-nec4-sinusoidal.exe", "nec4", "sinusoidal"),
         ("momwire-eznec.exe", "nec5", _serve.BASIS),
-        ("momwire-eznec-razor-2p.exe", "nec5", "razor-2p"),
+        ("momwire-eznec-razor2p.exe", "nec5", "razor2p"),
         ("momwire-eznec-engine.exe", "nec5", _serve.BASIS),
         ("momwire-engine.exe", "nec5", _serve.BASIS),
     ],
@@ -215,7 +215,7 @@ def test_a_nec4_server_never_shares_a_nec5_servers_key():
 def test_the_slots_roster_is_the_centre_feeding_bases():
     for basis in NEC2_BASES:
         assert basis_refusal(basis) is None, basis
-    for basis in ("razor-2p", "razor-nec5"):
+    for basis in ("razor2p",):
         sentence = basis_refusal(basis)
         assert sentence is not None and repr(basis) in sentence
         assert "segment centres" in sentence
@@ -471,9 +471,9 @@ def _aip_row_of(text: str, basis: str):
 def test_a_gn_file_name_moves_no_bit_of_the_solve(ground_type):
     """The licensed engine's black-box evidence (momwire#1443): the same
     impedance with and without NOFILE on every GN type.  Here, bit for bit."""
-    bare = _aip_row_of(_gn(None, ground_type), "bspline")
+    bare = _aip_row_of(_gn(None, ground_type), "bs2")
     for name in _GN_FILE_NAMES:
-        named = _aip_row_of(_gn(name, ground_type), "bspline")
+        named = _aip_row_of(_gn(name, ground_type), "bs2")
         assert named.impedance == bare.impedance, name
         assert named.current == bare.current, name
 
@@ -483,8 +483,8 @@ def test_ex6_and_ex0_are_two_drives_of_one_problem():
     the same impedance to every printed digit; here the current source pins
     the source current at the card's value and leaves the impedance the
     voltage drive's own."""
-    current = _aip_row("0223", "bspline")
-    voltage = _aip_row("0224", "bspline")
+    current = _aip_row("0223", "bs2")
+    voltage = _aip_row("0224", "bs2")
     assert current.current == 1.414214 + 0j
     assert voltage.volts == 1.414214 + 0j
     assert current.impedance == pytest.approx(voltage.impedance, rel=1e-12)
@@ -515,7 +515,7 @@ FOURSQUARE_NEC4 = (
 MIXED_NEC4 = CARDIOID_NEC4.replace("EX 6,2,1,0,0.,-1.414214", "EX 0,2,1,0,0.,-1.414214")
 
 
-def _phased_records(text: str, basis: str = "bspline"):
+def _phased_records(text: str, basis: str = "bs2"):
     from momwire.dropin.nec2c._portal import DeckSolver, _run_records, parse_deck
 
     deck = parse_deck(text, dialect="nec4")
@@ -641,7 +641,7 @@ def test_a_phased_drive_through_a_network_pins_the_source_current():
 
 @pytest.mark.integration
 def test_a_phased_drive_serves_in_the_nec42_printout():
-    text = render(CARDIOID_NEC4, basis="bspline", dialect="nec4")
+    text = render(CARDIOID_NEC4, basis="bs2", dialect="nec4")
     assert "NEC ERROR" not in text
     block = text.split("- - - ANTENNA INPUT PARAMETERS - - -", 1)[1]
     rows = [line for line in block.splitlines()[:8] if re.match(r"\s+\d+\s+\d+ ", line)]
@@ -652,7 +652,7 @@ def test_a_phased_drive_serves_in_the_nec42_printout():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5", "rzaor", ""])
+@pytest.mark.parametrize("basis", ["razor2p", "rzaor", ""])
 def test_a_basis_the_slot_cannot_serve_refuses_in_the_printout(basis):
     text = render(deck_text("0224"), basis=basis, dialect="nec4")
     assert " ***** NEC ERROR - " in text
@@ -667,7 +667,7 @@ def test_a_basis_the_slot_cannot_serve_refuses_in_the_printout(basis):
 def test_a_served_printout_is_the_nec42_layout():
     """Phase 2: the NEC-4.2 banner and sections, not the portal's NEC-2 body
     (the layout itself is gated in test_eznec_nec42_printout_1295.py)."""
-    text = render(deck_text("0224"), basis="bspline", dialect="nec4")
+    text = render(deck_text("0224"), basis="bs2", dialect="nec4")
     assert "NEC ERROR" not in text
     assert "NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)" in text
     assert "- - - SEGMENTATION DATA - - -" in text
@@ -734,7 +734,7 @@ def test_the_quoted_targets_are_the_licensed_printouts_own_rows():
 
 @pytest.mark.integration
 @pytest.mark.slow
-@pytest.mark.parametrize("basis", ["bspline", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["bs2", "sinusoidal"])
 def test_the_impedance_against_the_licensed_engine(basis, capsys):
     rows = []
     for capture in CAPTURES:

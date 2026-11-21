@@ -1,4 +1,4 @@
-// razor-2p's fill-pair reuse (momwire#1971): the census that finds which
+// razor2p's fill-pair reuse (momwire#1971): the census that finds which
 // (observer, source segment) pairs of the fill share a value, the evaluation
 // of one representative per class, and the gather of each window's moments
 // from the class values. Python-free: the solve core (`SolveContext::fill`,
@@ -129,7 +129,7 @@ constexpr double VERIFY_TOL = 1e-9;
 // costing about what a small deck's fill saves: in free space and over the
 // PEC image, and over a finite ground (the composing Sommerfeld ground, the
 // reflection coefficient), whose image term is dearer per pair and repays
-// sooner. `verify` (mode 2) ignores them. Measured, Rocketlake, nec5-razor-2p
+// sooner. `verify` (mode 2) ignores them. Measured, Rocketlake, nec5-razor2p
 // through the NEC-5 shell (the Python route), wall seconds per deck, on / off,
 // cold (one deck, fresh process, the plan built) and warm (the deck streamed
 // 6x through one process, the plan found), median of 3 (momwire#1971):

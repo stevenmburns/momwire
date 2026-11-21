@@ -30,18 +30,18 @@ vs. array geometry:
 
 | Antenna class | Use | Why |
 | --- | --- | --- |
-| Single elements, small loops, beams, multiband dipoles | **`bspline`** (degree 2 — the default everywhere), with **`sinusoidal`** as a cross-check | both solve in milliseconds here; d=2 converges at far coarser meshes (below), the other confirms the answer |
+| Single elements, small loops, beams, multiband dipoles | **`bs2`** (degree 2 — the default everywhere), with **`sinusoidal`** as a cross-check | both solve in milliseconds here; d=2 converges at far coarser meshes (below), the other confirms the answer |
 | Large single-wire structures (rhombics, long-wires, big loops) | **`hmatrix`** (ACA) | sub-quadratic scaling — the only engine in the field that wins `rhombic` at high segmentation |
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
-| Cross-checking against NEC-5 behaviour | **`razor-2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
-| Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
+| Cross-checking against NEC-5 behaviour | **`razor2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
+| Telling basis effects from testing effects | **`sg`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
 | Reading a textbook scheme against the modern ones | **`pulse`** | Harrington's 1967 pulse expansion, point-matched — the oldest thin-wire MoM there is, and the slowest-converging engine here by a wide margin (below) |
-| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`), with **`sinusoidal-galerkin`** and **`razor-2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks (since 0.66) and a single near-normal crossing (its two members' tilts off vertical summing to 30° or less), such as a ground rod or the buried radial vertical, whose rise meets a buried hub below the plane; it refuses oblique crossings, a hub at the crossing node itself, and several crossings per deck by name, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
+| Buried radials, screens, buried fed elements | **`bs2`** (or `bs1`), with **`sg`** and **`razor2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks (since 0.66) and a single near-normal crossing (its two members' tilts off vertical summing to 30° or less), such as a ground rod or the buried radial vertical, whose rise meets a buried hub below the plane; it refuses oblique crossings, a hub at the crossing node itself, and several crossings per deck by name, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
 a solve *costs*, not which engine wins it. One exception is capability,
-not cost: wires below the interface are served by `bspline`, `bspline-d1`,
-`sinusoidal-galerkin` and `razor-2p`, and by `sinusoidal` when no wire
+not cost: wires below the interface are served by `bs2`, `bs1`,
+`sg` and `razor2p`, and by `sinusoidal` when no wire
 crosses the interface or one near-normal crossing does (a ground rod, or a
 radial screen whose rise meets its hub below the plane; an oblique crossing,
 or radials meeting the mast at the plane itself, refuse by name), and a
@@ -85,7 +85,7 @@ zero-current answer there; [the portal page](/reference/portal-usage/#choosing-t
 has the details. It moves Zin most on fat wires, and it is a match to NEC-2,
 not a better model of a real wire end.
 
-## Accuracy per segment: why `bspline` d=2 is the default
+## Accuracy per segment: why `bs2` d=2 is the default
 
 The basis-convergence census (91 designs) measured accuracy against mesh
 density: **B-spline degree 2 is within 2 % of the converged answer at
@@ -94,17 +94,17 @@ sinusoidal basis needs 3–15× more segments to reach the same value. Single
 closed loops converge on d=2 as coarse as N=7. The gap is largest on
 port-fed, junction-heavy, and closely-spaced-wire geometry — and the
 momwire#182 instrument showed most of it is the *point matching*, not the
-basis: rerun under Galerkin testing (`sinusoidal-galerkin`), the 1–23 %
+basis: rerun under Galerkin testing (`sg`), the 1–23 %
 junction-heavy gaps collapse to 0.01–0.33 %.
 
 Dense cost scales as N² in memory and N²–N³ in fill/factor time, so an
 engine that converges at one-third the mesh is roughly an order of
 magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
-`bspline` d=2 is the default in every drop-in engine and every host.
+`bs2` d=2 is the default in every drop-in engine and every host.
 
 ## The razor lane, and its certification twin
 
-`razor-2p` — `razor-nec5` is its deprecated spelling — tests the tent
+`razor2p` tests the tent
 expansion with NEC-5's razor-blade rule at NEC-5's own identified two-point
 quadrature. It is the orderable member of `RazorSolver`. The class also
 takes Gauss-Legendre nodes along the same testing path, which was a second
@@ -112,22 +112,22 @@ roster entry, plain `razor`, until momwire#753 retired it (decided
 2026-09-02): the two lanes are one class differing only in that sampling
 choice, and measured 2026-08-18, the GL lane cost 20x the wall time
 (20.2 s vs 0.97 s at N=1600 free space) for a 0.001 Ω difference from
-`razor-2p` — not worth ordering. The class stays; the GL lane is reached
+`razor2p` — not worth ordering. The class stays; the GL lane is reached
 by constructing `RazorSolver(nec5_quadrature=False, ...)` directly rather
 than through `--basis` or a portal name.
 
-| | `razor-2p` / `razor-nec5` | GL quadrature (`RazorSolver` constructed directly) |
+| | `razor2p` | GL quadrature (`RazorSolver` constructed directly) |
 | --- | --- | --- |
 | Role | Interactive lane | Convergence / certification lane |
-| Speed | Sub-second to N≈300–400 free, N≈200–400 grounded; 2–4× behind `bspline` beyond that | 12–80× slower than `bspline`; over a second even at N=100 under any ground |
+| Speed | Sub-second to N≈300–400 free, N≈200–400 grounded; 2–4× behind `bs2` beyond that | 12–80× slower than `bs2`; over a second even at N=100 under any ground |
 | Memory | Same order as the other dense bases | Exceeds an 8 GB working set by N≈800 grounded / N≈1600 free |
 | Use for | Ordinary solves, A/B checks against NEC-5 behaviour | Convergence ladders, certification against NEC-5 printouts |
 
-On the models where we hold a licensed reference, `razor-2p` rides the
+On the models where we hold a licensed reference, `razor2p` rides the
 licensed engine's own convergence path at the 0.01 % level — it converges
 *along* NEC-5's trajectory, not merely to its endpoint. Node gaps
 (momwire#603), the extended kernel (on a buried deck, on the above-ground
-wires, as `bspline` serves it; momwire#1614), contact over the Sommerfeld
+wires, as `bs2` serves it; momwire#1614), contact over the Sommerfeld
 ground (momwire#624), buried wires and the crossing junction are all served; what
 the row still refuses — a feed named by arclength (`feeds=`) at a junction
 of three or more wire ends (a deck's node address serves a source on a
@@ -150,7 +150,7 @@ classical one is worth being able to do without leaving the roster, not
 because it competes: it converges at O(1/N) where degree-2 B-splines converge
 far faster, so it wants a mesh several times finer for the same figure.
 
-Measured on a 10 m dipole at 14 MHz against `bspline`'s converged
+Measured on a 10 m dipole at 14 MHz against `bs2`'s converged
 64.02 − 54.81j Ω:
 
 | Segments | Δ/a | `pulse` |
@@ -162,7 +162,7 @@ Measured on a 10 m dipole at 14 MHz against `bspline`'s converged
 
 At the segment counts a host dialog defaults to, that is a *visibly*
 different answer, and it is the formulation's own error rather than a defect
-— pick it when that is what you want to see, and `bspline` otherwise.
+— pick it when that is what you want to see, and `bs2` otherwise.
 
 It also serves less: no wire loading (an `LD 5` or `LD 6` is refused by name),
 no junction ports, no node gaps, no extended kernel, and one scalar radius.
@@ -198,10 +198,10 @@ Every engine solves a thin-wire equation; the `EK` card's O(a²) tube
 correction matters below Δ/a ≈ 3 and costs about 1.0–1.3× the reduced
 solve. **All six families serve it** — the razor twins were the last
 holdout, reduced-kernel by design until momwire#603 gave them the tube
-correction too. One narrow refusal survives: `sinusoidal-galerkin` declines
+correction too. One narrow refusal survives: `sg` declines
 `EK` on a deck where two wires of different radii meet at a junction,
 measured divergent rather than merely inaccurate there. On a deck with
-buried wires `bspline`, `razor-2p` and `sinusoidal-galerkin` (since
+buried wires `bs2`, `razor2p` and `sg` (since
 momwire#1626) serve it in part: extended on the above-ground wires, reduced on
 the buried ones; `sinusoidal` solves such a deck reduced (momwire#1636). On
 ordinary thin wire it changes the answer by less than the mesh does. A NEC-2 deck asks for it

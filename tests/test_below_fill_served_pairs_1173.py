@@ -7,7 +7,7 @@ fill from the kernel's extremes over EVERY pair: a zeroed pair's grazing angle
 and its R1 clamped to the cap. On antennaknobs' Beverage (a ground rod at each
 end, 246 m = 10.7 lambda_m apart) the two rods' cross pairs therefore filled
 the floor, low and mid bands of all three R1 zones -- 36 s of a 54 s cold
-razor-2p solve, for values that are discarded. momwire#1187 had already
+razor2p solve, for values that are discarded. momwire#1187 had already
 switched to the capped pairs' angles, but only when a past-cap pair lay UNDER
 the grazing floor (and it kept R1 at the cap, so the far annulus still
 filled). Whether a deck paid therefore flipped on a few hundredths of a degree:

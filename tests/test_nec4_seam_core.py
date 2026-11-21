@@ -63,7 +63,7 @@ FIXTURE_DECKS = [
 ]
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_every_fixture_deck_reaches_the_same_seam(basis, acc):
     counts, mismatches = nc.compare(FIXTURE_DECKS, basis)
     assert not mismatches, mismatches[:3]
@@ -374,7 +374,7 @@ def _python_lands(text: str, basis: str) -> str:
     return kind
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
 def test_a_hand_written_deck_reaches_the_same_seam(name, text, expect, basis, acc):
     lands = _python_lands(text, basis)
@@ -399,4 +399,4 @@ def test_a_chain_stops_at_its_first_refusal(acc):
 
 
 def test_a_basis_this_copy_does_not_serve_is_declined(acc):
-    assert " ? declined " in nc.cxx_seam(deck(), "razor-2p", acc)
+    assert " ? declined " in nc.cxx_seam(deck(), "razor2p", acc)

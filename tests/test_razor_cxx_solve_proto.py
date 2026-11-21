@@ -1,4 +1,4 @@
-"""The razor-2p C++ solve prototype (`_razor_solve_core.cpp`) against the
+"""The razor2p C++ solve prototype (`_razor_solve_core.cpp`) against the
 Python route it replaces, byte for byte.
 
 `razor._RAZOR_CXX = True` routes `compute_port_solution` through one native

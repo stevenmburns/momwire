@@ -68,10 +68,10 @@ ERROR_RE = re.compile(r"^ERROR")
 DECK_TIMEOUT_S = 60.0
 
 PORTAL_BASES = (
-    "bspline",
-    "bspline-d1",
+    "bs2",
+    "bs1",
     "sinusoidal",
-    "sinusoidal-galerkin",
+    "sg",
     "hmatrix",
     "arrayblock",
 )

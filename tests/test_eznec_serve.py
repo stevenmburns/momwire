@@ -2845,7 +2845,7 @@ def test_the_wavelength_is_nec_s_own_metre_megahertz_product():
 
 @pytest.mark.integration
 def test_the_basis_is_the_house_default():
-    """``bspline`` — ``BSplineSolver`` at degree 2, which is what
+    """``bs2`` — ``BSplineSolver`` at degree 2, which is what
     ``momwire.deck.build_solver``'s default entry constructs and what the
     portal answers every NEC-2 deck with.  Recorded as a gate because a
     silent change of basis would move every number in every printout this
@@ -2853,14 +2853,14 @@ def test_the_basis_is_the_house_default():
 
     Since momwire#603 U3 the basis is a `serve(deck, basis=...)` argument and
     this is its DEFAULT.  The degree is no longer named beside it: the roster
-    entry carries a family's extra kwargs and ``bspline``'s names no degree, so
+    entry carries a family's extra kwargs and ``bs2``'s names no degree, so
     what has to hold is that the class this seam reaches for by default really
     does default to the degree the captures were gated at.  Its one binding is
     the exact ring kernel's "auto" (momwire#1428), which engages only below
     h/a 3 and so moves no capture this seam is gated against."""
     from momwire.deck._solver import BASES
 
-    assert _serve.BASIS == "bspline"
+    assert _serve.BASIS == "bs2"
     solver_class, basis_kwargs = BASES[_serve.BASIS]
     assert solver_class is BSplineSolver
     assert dict(basis_kwargs) == {"exact_kernel": "auto"}

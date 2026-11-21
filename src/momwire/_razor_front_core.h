@@ -1,4 +1,4 @@
-// razor-2p's FRONT HALF in C++: solver construction (the validations and
+// razor2p's FRONT HALF in C++: solver construction (the validations and
 // normalisations `RazorSolver.__init__` performs), the geometry
 // (`_build_geometry`, junction detection, the wings), the k-independent
 // preparation `SolveContext::fill` reads (`_assemble_Z_prepare` on its
@@ -31,7 +31,7 @@
 // builds for a GD card) or the composing Sommerfeld ground
 // (`ground_eps=(eps_r, sigma)`, `ground_model="sommerfeld"`: the seam's GN 0
 // / GN 2, momwire#1479 S3; the grid is `_somm_grid_core.h`'s), a real k,
-// razor-2p's two-point path rule (`nec5_quadrature=True`), with or without
+// razor2p's two-point path rule (`nec5_quadrature=True`), with or without
 // the extended kernel, and the exact ring kernel where "auto" engages it
 // (`_razor_exact_core.h`, radius steps included). Anything else `build` declines BY NAME (returns the
 // reason) and the caller keeps the Python front half: a wire listed twice
@@ -144,7 +144,7 @@ struct FrontInputs {
     // segments "auto" does not ask (a deck seam's z = 0 cut pieces)
     std::vector<int64_t> exact_auto_skip;
     // The three quadrature orders the constructor validates (`n_qp_path`
-    // None = derived; razor-2p's path rule never reads it).
+    // None = derived; razor2p's path rule never reads it).
     bool n_qp_path_given = false;
     int64_t n_qp_path = 0;
     int64_t n_qp_source = 12;

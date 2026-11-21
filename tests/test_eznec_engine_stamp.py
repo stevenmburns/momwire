@@ -151,13 +151,15 @@ def test_the_default_stamp_is_the_four_fields_in_order():
     assert_stamped("1\n" + line + "\n", basis=_serve.BASIS)
 
 
-def test_the_basis_field_is_the_name_that_was_threaded():
-    """Verbatim, deprecated spellings included: what a bug report needs is
-    which exe answered, and ``razor-nec5`` is a name a launcher copy can
-    carry (the bundle shipped one until momwire#1583) even though it
-    resolves to the same solver ``razor-2p`` does."""
-    for basis in ("bspline", "razor-2p", "razor-nec5", "hmatrix"):
+def test_the_basis_field_is_the_canonical_name_that_was_threaded():
+    """A canonical name stamps itself; a deprecated spelling stamps its
+    canonical name and names itself at the end of the line (momwire#2091),
+    so a bug report still says which file answered."""
+    for basis in ("bs2", "razor2p", "hmatrix"):
         assert engine_stamp(basis).split()[2] == basis
+    line = engine_stamp("razor-2p")
+    assert line.split()[2] == "razor2p"
+    assert line.endswith(" (renamed from razor-2p)")
 
 
 def test_a_missing_package_version_stamps_unknown_rather_than_raising(monkeypatch):
@@ -169,8 +171,8 @@ def test_a_missing_package_version_stamps_unknown_rather_than_raising(monkeypatc
         raise importlib.metadata.PackageNotFoundError(name)
 
     _metadata_says(monkeypatch, boom)
-    assert engine_stamp("bspline") == (
-        f" momwire unknown bspline {momwire.accelerator_variant or 'none'}"
+    assert engine_stamp("bs2") == (
+        f" momwire unknown bs2 {momwire.accelerator_variant or 'none'}"
     )
 
 
@@ -178,13 +180,13 @@ def test_any_metadata_failure_is_caught_not_just_the_documented_one(monkeypatch)
     """A half-written ``dist-info`` raises from inside the reader rather than
     as ``PackageNotFoundError``, so the handler is deliberately blanket."""
     _metadata_says(monkeypatch, lambda name: (_ for _ in ()).throw(OSError("x")))
-    assert engine_stamp("bspline").split()[1] == "unknown"
+    assert engine_stamp("bs2").split()[1] == "unknown"
 
 
 @pytest.mark.parametrize("label", ["avx2", "sse2", "legacy"])
 def test_the_variant_field_is_whatever_this_process_loaded(monkeypatch, label):
     monkeypatch.setattr(momwire, "accelerator_variant", label)
-    assert engine_stamp("bspline").split()[3] == label
+    assert engine_stamp("bs2").split()[3] == label
 
 
 def test_no_extension_loaded_stamps_none(monkeypatch):
@@ -194,7 +196,7 @@ def test_no_extension_loaded_stamps_none(monkeypatch):
     process is the pure-Python one, and the fallback warning goes to a stream
     EZNEC never displays."""
     monkeypatch.setattr(momwire, "accelerator_variant", None)
-    assert engine_stamp("bspline").split()[3] == "none"
+    assert engine_stamp("bs2").split()[3] == "none"
 
 
 def test_an_unnamed_basis_still_stamps_four_fields():
@@ -202,7 +204,7 @@ def test_an_unnamed_basis_still_stamps_four_fields():
     copy a user can make, and it travels verbatim so the deck refuses by name
     rather than being rounded off to the default (``entry.py::basis_for``).
     A blank field there would silently make the stamp a three-field line."""
-    assert engine_stamp("") == engine_stamp(" \t ") != engine_stamp("bspline")
+    assert engine_stamp("") == engine_stamp(" \t ") != engine_stamp("bs2")
     assert engine_stamp("").split()[2] == "-"
 
 
@@ -263,7 +265,7 @@ def test_the_stamp_gate_rejects_the_licensed_build_tag(cid):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", [_serve.BASIS, "razor-2p"])
+@pytest.mark.parametrize("basis", [_serve.BASIS, "razor2p"])
 def test_the_one_shot_route_stamps_the_basis_it_was_launched_as(tmp_path, basis):
     """``_shell.main(..., basis=...)`` — the frozen exe's own path, where the
     basis came from the launcher's filename before argv was read."""
@@ -278,7 +280,7 @@ def test_the_one_shot_route_stamps_the_basis_it_was_launched_as(tmp_path, basis)
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", [_serve.BASIS, "razor-2p"])
+@pytest.mark.parametrize("basis", [_serve.BASIS, "razor2p"])
 def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, basis):
     """``--serve --basis <name>``, from the flag down to the bytes on the wire.
 
@@ -348,7 +350,7 @@ def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, ba
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", [_serve.BASIS, "razor-2p"])
+@pytest.mark.parametrize("basis", [_serve.BASIS, "razor2p"])
 def test_a_refused_deck_is_stamped_too_and_the_frame_is_untouched(basis):
     """A refusal has to say which engine refused.  The frame is the contract
     and this checks it survived the extra field: the comment echo intact (or
@@ -370,9 +372,9 @@ def test_the_dialect_refusal_path_is_stamped_as_well():
     """``_shell.render``'s first gate, which reaches ``render_refusal`` from a
     ``DeckError`` rather than from a ``ServeRefusal`` — a different call site
     with the same obligation."""
-    text = _shell.render(NOT_NEC5_DECK, basis="razor-2p")
+    text = _shell.render(NOT_NEC5_DECK, basis="razor2p")
     assert "NEC ERROR" in text
-    assert_stamped(text, basis="razor-2p")
+    assert_stamped(text, basis="razor2p")
 
 
 @pytest.mark.integration
@@ -381,10 +383,10 @@ def test_an_unreadable_deck_is_stamped_although_it_has_no_echo(tmp_path):
     It cannot pass EZNEC's belongs-to-this-run check whatever it says, but it
     is still written, and it still names the engine that could not read."""
     out = tmp_path / "NEC5.OUT"
-    _shell.run(tmp_path / "does-not-exist.nec", out, basis="razor-2p")
+    _shell.run(tmp_path / "does-not-exist.nec", out, basis="razor2p")
     written = out.read_bytes().decode("latin-1")
     assert "UNABLE TO READ INPUT FILE" in written
-    assert_stamped(written, basis="razor-2p")
+    assert_stamped(written, basis="razor2p")
 
 
 @pytest.mark.integration
@@ -399,10 +401,10 @@ def test_the_last_ditch_internal_error_printout_is_stamped(monkeypatch, tmp_path
 
     monkeypatch.setattr(_shell, "run", boom)
     deck = FIXTURE_DIR / capture("0010")["deck"]
-    assert _shell.main([str(deck), str(out)], basis="razor-2p") == 0
+    assert _shell.main([str(deck), str(out)], basis="razor2p") == 0
     written = out.read_bytes().decode("latin-1")
     assert "INTERNAL ERROR IN MOMWIRE ENGINE" in written
-    assert_stamped(written, basis="razor-2p")
+    assert_stamped(written, basis="razor2p")
 
 
 @pytest.mark.integration
@@ -414,10 +416,10 @@ def test_the_seams_own_last_line_of_defence_is_stamped(monkeypatch):
         raise RuntimeError("injected")
 
     monkeypatch.setattr(_shell, "render", boom)
-    text, err = _shell.seam(basis="razor-2p").answer(deck_text("0010"), "")
+    text, err = _shell.seam(basis="razor2p").answer(deck_text("0010"), "")
     assert err == ""
     assert "INTERNAL ERROR IN MOMWIRE ENGINE" in text
-    assert_stamped(text, basis="razor-2p")
+    assert_stamped(text, basis="razor2p")
 
 
 # --------------------------------------------------------------------------
@@ -463,7 +465,7 @@ def test_the_baked_version_wins_over_the_metadata_in_a_frozen_bundle(
     _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked="9.8.7")
     assert mech.momwire_version() == "9.8.7"
-    assert engine_stamp("bspline").split()[1] == "9.8.7"
+    assert engine_stamp("bs2").split()[1] == "9.8.7"
     assert mech.dist_version() == ("9", "8")
 
 
@@ -476,7 +478,7 @@ def test_the_metadata_is_the_fallback_when_a_bundle_has_nothing_baked(
     _freeze(monkeypatch, tmp_path, baked=None)
     assert importlib.util.find_spec(mech.BUILD_VERSION_MODULE) is None
     assert mech.momwire_version() == "0.66.0"
-    assert engine_stamp("bspline").split()[1] == "0.66.0"
+    assert engine_stamp("bs2").split()[1] == "0.66.0"
 
 
 @pytest.mark.parametrize("baked", ["", "   ", None])
@@ -498,7 +500,7 @@ def test_a_source_install_never_reads_a_baked_module_even_one_on_the_path(
     module.VERSION = "9.8.7"
     monkeypatch.setitem(sys.modules, mech.BUILD_VERSION_MODULE, module)
     assert mech.momwire_version() == importlib.metadata.version("momwire")
-    assert engine_stamp("bspline").split()[1] == importlib.metadata.version("momwire")
+    assert engine_stamp("bs2").split()[1] == importlib.metadata.version("momwire")
 
 
 def test_a_clean_tree_carries_no_baked_file_and_the_metadata_answers():
@@ -535,9 +537,9 @@ def test_build_py_bakes_what_the_readers_import(monkeypatch, tmp_path):
 def test_a_clean_bundle_stamps_no_overlay_marker(monkeypatch, tmp_path):
     _plant(tmp_path, "0.68.0")
     _freeze(monkeypatch, tmp_path, baked="0.68.0")
-    line = engine_stamp("bspline")
+    line = engine_stamp("bs2")
     assert "stale" not in line
-    assert_stamped("1\n" + line + "\n", basis="bspline")
+    assert_stamped("1\n" + line + "\n", basis="bs2")
 
 
 def test_an_overlaid_bundle_keeps_its_version_and_says_it_is_mixed(
@@ -548,13 +550,12 @@ def test_an_overlaid_bundle_keeps_its_version_and_says_it_is_mixed(
     _plant(tmp_path, "0.66.0", "0.68.0")
     _freeze(monkeypatch, tmp_path, baked="0.68.0")
     assert mech.bundle_dist_versions() == ["0.66.0", "0.68.0"]
-    line = engine_stamp("bspline")
+    line = engine_stamp("bs2")
     assert line == (
-        f" momwire 0.68.0 bspline {momwire.accelerator_variant or 'none'}"
-        " (stale: 0.66.0)"
+        f" momwire 0.68.0 bs2 {momwire.accelerator_variant or 'none'} (stale: 0.66.0)"
     )
     marker = " (stale: 0.66.0)"
-    assert_stamped("1\n" + line[: -len(marker)] + "\n", basis="bspline")
+    assert_stamped("1\n" + line[: -len(marker)] + "\n", basis="bs2")
 
 
 def test_the_overlay_marker_survives_a_long_launcher_name(monkeypatch, tmp_path):
@@ -570,7 +571,7 @@ def test_the_overlay_marker_survives_a_long_launcher_name(monkeypatch, tmp_path)
 def test_many_stale_releases_are_counted_rather_than_listed(monkeypatch, tmp_path):
     _plant(tmp_path, "0.60.0", "0.61.0", "0.62.0", "0.63.0", "0.68.0")
     _freeze(monkeypatch, tmp_path, baked="0.68.0")
-    line = engine_stamp("bspline")
+    line = engine_stamp("bs2")
     assert line.endswith(" (stale: 4 versions)"), line
     assert len(line) < 80, line
 
@@ -590,7 +591,7 @@ def test_an_unreadable_bundle_dir_detects_nothing_and_never_raises(
 ):
     _freeze(monkeypatch, tmp_path / "does-not-exist", baked="0.68.0")
     assert mech.bundle_dist_versions() == []
-    assert "stale" not in engine_stamp("bspline")
+    assert "stale" not in engine_stamp("bs2")
 
 
 def test_the_clients_version_probes_read_the_baked_version(monkeypatch, tmp_path):
@@ -792,7 +793,7 @@ def test_the_stamp_reads_the_version_once_per_process(monkeypatch):
         return "1.2.3"
 
     monkeypatch.setattr(mech, "momwire_version", counted)
-    first = engine_stamp("bspline")
-    second = engine_stamp("razor-2p")
+    first = engine_stamp("bs2")
+    second = engine_stamp("razor2p")
     assert first.split()[1] == second.split()[1] == "1.2.3"
     assert len(calls) == 1

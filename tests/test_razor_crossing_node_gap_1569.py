@@ -1,4 +1,4 @@
-"""momwire#1569: razor-2p's node gap at a crossing node.
+"""momwire#1569: razor2p's node gap at a crossing node.
 
 Dan AC6LA's buried-radial verticals put the source at the base of the
 vertical, on the node at z = 0 where the vertical meets buried wires. That

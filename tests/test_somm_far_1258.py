@@ -273,7 +273,7 @@ def _pairs(name):
     deck = (FIXTURES / f"{name}.nec").read_text()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        ours = _rows(render(deck, basis="razor-2p"))
+        ours = _rows(render(deck, basis="razor2p"))
     theirs = _rows((FIXTURES / f"{name}.out").read_text(encoding="latin-1"))
     out = []
     for (_, eo), (pt, et) in zip(ours, theirs, strict=True):
@@ -296,7 +296,7 @@ def _kept(rows):
 @pytest.mark.slow
 @pytest.mark.parametrize("name", DECKS)
 def test_the_near_field_past_the_table_is_the_licensed_engines(name):
-    """razor-2p (NEC-5's formulation twin) against x13, per point. Within 15
+    """razor2p (NEC-5's formulation twin) against x13, per point. Within 15
     degrees of the horizon -- where the field is the ground wave and the
     frozen edge was wrong by up to 58x -- the vector difference is held to
     1 % of the licensed |E| at that point (measured worst 5.5e-3, most of

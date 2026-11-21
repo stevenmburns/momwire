@@ -34,7 +34,7 @@ def _stepped(n: int) -> str:
     return DIPOLE.read_text().replace("FR 0,1,0,0,14.2", f"FR 0,{n},0,0,14.0,0.2")
 
 
-def _one_shot(deck: Path, tmp_path: Path, capsys, *, basis: str = "razor-2p"):
+def _one_shot(deck: Path, tmp_path: Path, capsys, *, basis: str = "razor2p"):
     out = tmp_path / f"{deck.stem}.out"
     assert _shell.main([str(deck), str(out)], basis=basis) == 0
     return out.read_text(encoding="latin-1"), capsys.readouterr().err
@@ -53,7 +53,7 @@ def test_a_stage_is_free_when_off():
     assert _times.current() is None
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize("deck", [DIPOLE, BURIED], ids=["dipole", "buried"])
 def test_on_fills_the_timing_lines_and_moves_nothing_else(
     deck, basis, tmp_path, capsys, monkeypatch
@@ -104,7 +104,7 @@ def test_a_multi_run_deck_times_its_one_solve(tmp_path, capsys, monkeypatch):
 
 def test_the_resident_answer_frames_its_line_ahead(monkeypatch):
     body = DIPOLE.read_text()
-    answer = _shell.seam(basis="razor-2p").answer
+    answer = _shell.seam(basis="razor2p").answer
     plain, _ = answer(body, "")
     timed, _ = answer(_mech.TIMES_REQUEST.decode("latin-1") + body, "")
     # the wire's text wrapper writes \n as CRLF: read it as the client does
@@ -142,7 +142,7 @@ def test_a_stream_writes_a_line_per_structure(monkeypatch, capsys):
     one = data[: data.rindex(b"EN")] + b"NX\n"
     chunks = [one + one, b""]
     out = io.BytesIO()
-    _shell.stream(lambda: chunks.pop(0), out.write, basis="razor-2p")
+    _shell.stream(lambda: chunks.pop(0), out.write, basis="razor2p")
     lines = tc.times_lines(capsys.readouterr().err)
     assert [c["route"] for c in lines] == ["stream", "stream"]
     fills, runs = tc.printout_timing(out.getvalue())

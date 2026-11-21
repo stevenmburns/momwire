@@ -8,11 +8,11 @@ It clears every ``MOMWIRE_X_*`` variable and every alias the registry knows,
 then renders the two golden corpora `scripts/golden_printouts.py`
 writes, through the entry EZNEC launches (`momwire.dropin.nec5._shell.render`):
 
-* the NEC-5 corpus (tests/fixtures/golden_printouts: bspline and razor-2p
+* the NEC-5 corpus (tests/fixtures/golden_printouts: bspline and razor2p
   through the NEC-5 slot), and
 * the stable-path corpus (tests/fixtures/stable_path_goldens: sin42 and bs42
   through the NEC-4.2 slot, Sinusoidal-Galerkin through both slots, more
-  finite grounds and a buried-radial hub for bspline and razor-2p).
+  finite grounds and a buried-radial hub for bspline and razor2p).
 
 Regime, as the generator pins it: one BLAS/OpenMP thread, the Sommerfeld disk
 store off (tests/conftest.py), AVX-512 off (the same), and the accelerator
@@ -237,7 +237,7 @@ def test_flags_off_printout_is_byte_identical(
 
 # The self-test: one Python-kind feature on, one deck. The tripwire must see
 # it, on line 2 (the feature stamp), whatever the feature does to the numbers.
-_SELF_TEST = ("eznec_nec42/0228_dipole-10m-free.nec", "nec4", "bspline")
+_SELF_TEST = ("eznec_nec42/0228_dipole-10m-free.nec", "nec4", "bs2")
 
 
 def test_the_tripwire_fires_when_a_flag_is_on(monkeypatch, current_stack):

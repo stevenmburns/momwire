@@ -1971,7 +1971,7 @@ def census_pays_view(grid, n_pairs):
     against EVERY node of the view's masters, not the ones still unfilled,
     and no census when none is unfilled. What a census saves is the nodes no
     point of a sweep reads, and that does not shrink as the masters fill (on
-    efhw_hi a razor-2p census reads ~77 % of each master on a rung pair's
+    efhw_hi a razor2p census reads ~77 % of each master on a rung pair's
     first point and 1-9 nodes more on each later one); set against the
     unfilled nodes, the test flipped on the pair's second point and filled
     every node left. A pair whose census does not pay fresh fills every node

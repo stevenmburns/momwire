@@ -295,7 +295,7 @@ def test_a_later_point_of_a_rung_pair_fills_only_what_it_reads(
     only the nodes it reads (the old test filled every node left), and its
     impedance is the eager fill's bit for bit. The census's per-pair cost is
     set so that it pays on the fresh pair and not on what the first point
-    leaves unfilled, as it falls on efhw_hi's razor-2p sweep."""
+    leaves unfilled, as it falls on efhw_hi's razor2p sweep."""
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "1")
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE_DIR", str(tmp_path / "probe"))
     seen = []

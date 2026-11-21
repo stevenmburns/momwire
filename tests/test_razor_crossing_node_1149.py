@@ -1,4 +1,4 @@
-"""razor-2p's CROSSING node — momwire#1149 U2.
+"""razor2p's CROSSING node — momwire#1149 U2.
 
 A crossing deck carries a junction IN the interface: a buried member and an
 above member meeting at a node on the plane (a bonded ground screen, a

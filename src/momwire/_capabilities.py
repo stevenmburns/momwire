@@ -60,9 +60,9 @@ _AXES = (
 #
 # The booleans above say what a solver SERVES. These say what it is MADE OF,
 # which is a different question and the one a panel needs: a user choosing
-# between `bspline` and `hmatrix` cannot see from a name that the physics is
+# between `bs2` and `hmatrix` cannot see from a name that the physics is
 # identical and only the solve strategy differs, and a user choosing
-# `sinusoidal-galerkin` over `sinusoidal` cannot see that the basis is the
+# `sg` over `sinusoidal` cannot see that the basis is the
 # same and only the testing changed. The roster names are, in effect, saved
 # presets over the product space below, which nobody had written down.
 #
@@ -211,7 +211,7 @@ class Capabilities(NamedTuple):
 
     Both cells are True on most rows, which is not a contradiction: a family
     that never snaps at all lands wherever it was named and satisfies both.
-    `RazorSolver` is the only False here (`_snap_to_knot`), and `bspline-d1`
+    `RazorSolver` is the only False here (`_snap_to_knot`), and `bs1`
     is deliberately NOT in its class though both are tent bases — the axis is
     WHERE THE PORT ENDS UP, not how accurate it is once there. d=1 places the
     gap at the arclength it was given and pays for it in accuracy; razor puts

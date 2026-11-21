@@ -9,7 +9,7 @@ solve rather than the constructor. `StandOffFloorError` names it, still a
 ValueError for every other caller, and both seams now refuse it by name.
 
 The C++ cores print the same bytes (`test_razor_core_standalone`'s
-`test_the_stand_off_floor_refuses_as_python_does`); razor-2p has no floor and
+`test_the_stand_off_floor_refuses_as_python_does`); razor2p has no floor and
 serves the deck.
 """
 
@@ -38,12 +38,12 @@ def test_the_floor_is_still_a_value_error():
 
 
 def test_the_nec5_seam_refuses_the_floor_by_name():
-    (line,) = _error_lines(_shell.render(NEC5.read_text(), basis="bspline"))
+    (line,) = _error_lines(_shell.render(NEC5.read_text(), basis="bs2"))
     assert line.startswith(SENTENCE), line
     assert "INTERNAL ERROR" not in line
     assert line.endswith("See stevenmburns/momwire#865"), line
 
 
 def test_the_nec42_slot_refuses_the_floor_in_the_same_words():
-    (line,) = _error_lines(_nec4.render(NEC4.read_text(), basis="bspline"))
+    (line,) = _error_lines(_nec4.render(NEC4.read_text(), basis="bs2"))
     assert line.startswith(SENTENCE), line

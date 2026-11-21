@@ -51,11 +51,11 @@ TAIL = (
 LD5_ALL = "LD 5,0,0,0,5.7471E+7,1.\n"
 
 # The bases that serve the hand-written crossing junction on this deck.
-# `razor-nec5` is the shipped alias of `razor-2p`; `sinusoidal` refuses every
+# `razor-nec5` is the shipped alias of `razor2p`; `sinusoidal` refuses every
 # knot feed (`test_sinusoidal_refuses_both_spellings_alike`).
-SERVED = ("bspline", "razor-2p", "razor-nec5", "bspline-d1", "sinusoidal-galerkin")
+SERVED = ("bs2", "razor2p", "bs1", "sg")
 # The two the PR lane carries; the rest are the integration lane's.
-FAST = ("bspline", "razor-2p")
+FAST = ("bs2", "razor2p")
 
 
 def fixture(name: str) -> str:
@@ -257,7 +257,7 @@ def _equivalence(basis: str, n: int, feed: int, ld: str = LD5_ALL) -> None:
     assert auto == written, f"{basis} n={n}: {auto!r} vs {written!r}"
 
 
-@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p"])
 def test_a_hand_written_sliver_is_the_users(basis):
     """momwire#1649: thr_n204's 9.46 um above half, CUT by the seam, does not
     switch "auto" on; the same piece WRITTEN as a card is the user's segment

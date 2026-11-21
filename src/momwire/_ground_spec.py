@@ -137,7 +137,7 @@ def ground_touch_tol(polyline):
     purpose.
 
     momwire#429 unit 4 (the audit's rank 7): five byte-identical spellings
-    of these two lines lived in `bspline`, `razor`, `pulse` and
+    of these two lines lived in `bs2`, `razor`, `pulse` and
     `sinusoidal` (twice), the B-spline one already cited BY NAME from the
     other three's docstrings. The VALUE is unchanged and this unit changed
     no tolerance anywhere — the tree carries six disagreeing tolerances

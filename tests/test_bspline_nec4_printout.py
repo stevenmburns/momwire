@@ -3,10 +3,10 @@ B-spline basis (bs2, the slot's default), byte for byte, and solves the same
 arrays to the bit.
 
 `src/momwire/_bspline_nec4_run_core.cpp` answers the NEC-4.2 run half
-(`_nec4_run_core.cpp`) for `basis="bspline"` (momwire#1607 Phase C1): bs2's
+(`_nec4_run_core.cpp`) for `basis="bs2"` (momwire#1607 Phase C1): bs2's
 own front, fill and readouts on the slot's build.
-`scripts/core_split/nec4_run_compare.py --basis bspline --arrays` holds the
-C++ printout equal to `_nec4.render(text, basis="bspline")` with only the two
+`scripts/core_split/nec4_run_compare.py --basis bs2 --arrays` holds the
+C++ printout equal to `_nec4.render(text, basis="bs2")` with only the two
 measured-time lines masked, and each solve's operator Z, port columns B,
 coefficients X and port admittances Y equal to the ones `BSplineSolver` hands
 its port solve and returns, over:
@@ -27,7 +27,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
-BASIS = "bspline"
+BASIS = "bs2"
 
 pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 12), reason="the reader copies CPython 3.12's float rules"

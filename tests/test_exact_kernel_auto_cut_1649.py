@@ -29,7 +29,7 @@ USER_SHORT = (
     "GW 2,1,0.,0.,1.,0.,0.,1.01,.005\n" + TAIL
 )
 
-BASES = ["bspline", "razor-2p"]
+BASES = ["bs2", "razor2p"]
 
 
 def _solver(text, basis, monkeypatch):
@@ -73,5 +73,5 @@ def test_a_short_segment_the_user_wrote_still_switches_auto_on(basis, monkeypatc
 
 def test_a_deck_with_no_cut_passes_no_skip(monkeypatch):
     text = "CM 1649\nCE\nGW 1,10,0.,0.,1.,0.,0.,0.,.005\n" + TAIL
-    built = _solver(text, "bspline", monkeypatch)
+    built = _solver(text, "bs2", monkeypatch)
     assert "exact_kernel_auto_skip" not in built["kwargs"]

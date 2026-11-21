@@ -89,7 +89,7 @@ def _z(cls, included_deg, n, **extra):
 def _siblings(included_deg, n):
     """The three formulations that agree with each other."""
     return {
-        "bspline": _z(BSplineSolver, included_deg, n, degree=2),
+        "bs2": _z(BSplineSolver, included_deg, n, degree=2),
         "sin-galerkin": _z(SinusoidalGalerkinSolver, included_deg, n),
         "razor": _z(RazorSolver, included_deg, n),
     }
@@ -163,7 +163,7 @@ def test_the_same_basis_under_galerkin_testing_is_clean():
     """The discriminator, stated as a gate (#573's result, at a kink).
 
     `SinusoidalGalerkinSolver` is the SAME three-term basis on the SAME mesh;
-    only the testing rule differs. It sits with `bspline` and `razor`, not
+    only the testing rule differs. It sits with `bs2` and `razor`, not
     with `SinusoidalSolver` — so the bend gap cannot be blamed on the basis,
     and any future "fix" that moves the basis rather than the testing rule is
     aiming at the wrong thing.

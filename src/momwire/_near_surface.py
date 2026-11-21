@@ -8,7 +8,7 @@ start AT the surface, z = 0) on a shallow slope.
 
 The crossing-node study (momwire#1149, comment of 11-14; #1687) measured that
 zone. Wherever a wire's axis lies within about 2a of z = 0 for a stretch, on
-either side, razor-2p and nec5-bspline converge TOGETHER to a mesh-converged
+either side, razor2p and nec5-bs2 converge TOGETHER to a mesh-converged
 answer about 0.5 ohm in X away from NEC-5's; move the wire out of the zone and
 the gap goes. There every thin-wire model, NEC-5's included, is outside its
 own validity (the surface of a wire within one radius of the interface
@@ -18,7 +18,7 @@ This is an ADVISORY, never a refusal: a sloping radial has to start at the
 surface, so refusing it would refuse a shape people build. It is pure
 geometry, read once per solver from facts every basis already holds (the
 polylines, the per-wire media labels, the conductor radii, the wavelength),
-so it is ONE check shared by razor-2p, the B-spline family and the
+so it is ONE check shared by razor2p, the B-spline family and the
 sinusoidal family, and it cannot move a number.
 
 ## The rule, and why
@@ -69,7 +69,7 @@ Out of scope, on purpose:
 
 * ABOVE-ground wire. momwire#865 owns it: the B-spline family refuses an edge
   below h = 2a and `SurfaceRadialHeight` advises up to h = 20a, so a second
-  message there would be a double one. (razor-2p and the sinusoidal family
+  message there would be a double one. (razor2p and the sinusoidal family
   have no above-ground floor today; the study's +0.5 mm control shows the
   same class of gap there. That is a separate item.)
 * Jacketed wire. The question for a buried insulated wire is the jacket's
@@ -315,7 +315,7 @@ def warn_for_solver(solver, media):
     """`warn_near_surface` with a solver's own attributes, once per solver.
 
     Called from each basis's `_wire_media()` where its labels are first
-    computed. razor-2p computes them inside `__init__`, BEFORE
+    computed. razor2p computes them inside `__init__`, BEFORE
     `_wire_loading.configure_loading` has set the jacket and the conductor
     radius this rule reads, so until that has run the labels are parked on the
     solver and `configure_loading` calls `flush` as its last step. Either way

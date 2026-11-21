@@ -1,4 +1,4 @@
-"""razor-2p wire loading on CROSSING decks — momwire#1149 U3.
+"""razor2p wire loading on CROSSING decks — momwire#1149 U3.
 
 Until U3 a crossing deck refused every kind of loading
 (`_CROSSING_LOADING_REFUSAL`), because the crossing tent is filled as two

@@ -705,7 +705,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
     a.uniform_radius = std::all_of(a.radii.begin(), a.radii.end(), [&](double r) { return r == a.radii[0]; });
     a.junctions = prep.mesh.junctions;
     a.ground = env.ground;
-    a.exact_kernel_auto = basis == "bspline";
+    a.exact_kernel_auto = basis == "bs2";
     // `build_solver`'s `junction_rule(model)` (momwire#1644): the nec4
     // dialect's default "nec42" unless MOMWIRE_JUNCTION_RULE names a rule,
     // for the point-matched sinusoidal basis only.
@@ -747,7 +747,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
         // Sinusoidal-Galerkin row declares (momwire#1718 S3): a radius step at
         // a junction (`len(set(radii)) > 1` and a junction whose members
         // differ). Its buried case is a partial there, not a refusal.
-        if (basis == "sinusoidal-galerkin" && !reason) {
+        if (basis == "sg" && !reason) {
             bool stepped = false;
             if (std::any_of(a.radii.begin(), a.radii.end(), [&](double r) { return r != a.radii[0]; }))
                 for (const auto &members : a.junctions)
@@ -766,7 +766,7 @@ OperatingPoint build_point(const Model &model, const Prepared &prep, const std::
                                     reason + " (momwire#1326)");
         }
     }
-    if (ek && (basis == "bspline" || basis == "sinusoidal-galerkin")) {  // both declare the buried partial
+    if (ek && (basis == "bs2" || basis == "sg")) {  // both declare the buried partial
         std::vector<ll> below = wires_below(a.wires, a.ground);
         if (!below.empty()) {
             if (fallback_default && below.size() == a.wires.size()) {

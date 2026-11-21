@@ -3,7 +3,7 @@
     python scripts/core_split/capture_window.py OUT.npz [--nsegs N]
         [--extended-kernel] [--prefix P]
 
-Runs a razor-2p (`nec5_quadrature`) solve of a horizontal 10 m dipole 6 m up
+Runs a razor2p (`nec5_quadrature`) solve of a horizontal 10 m dipole 6 m up
 in free space and records the INPUTS of the first
 `razor_seg_moments` -> `razor_assemble_t1` -> `razor_t2_rows` chain whose
 calls hand each other their outputs directly (M0/M1 into T1, T1 into the

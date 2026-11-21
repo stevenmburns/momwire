@@ -35,7 +35,7 @@ from momwire.dropin.nec5 import _shell
 from momwire.dropin.nec5._shell import render
 
 EZNEC_DECKS = Path(__file__).parent / "fixtures" / "eznec" / "decks"
-BASES = ("bspline", "razor-2p")
+BASES = ("bs2", "razor2p")
 
 _NX_ECHO = re.compile(r"^ \*\*\*\*\* INPUT LINE +(\d+) +NX\b")
 _EN_ECHO = re.compile(r"^ \*\*\*\*\* INPUT LINE +(\d+) +EN\b")

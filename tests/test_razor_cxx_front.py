@@ -1,9 +1,9 @@
-"""razor-2p's FRONT half in C++ (`_razor_front_core.cpp`) against the Python
+"""razor2p's FRONT half in C++ (`_razor_front_core.cpp`) against the Python
 front half it hardens, byte for byte.
 
 The core takes `RazorSolver`'s own constructor arguments and builds what the
 Python front half builds -- the geometry (`_build_geometry`'s dict), every
-table `_assemble_Z_prepare` hands the fill on razor-2p's centroid-sharing
+table `_assemble_Z_prepare` hands the fill on razor2p's centroid-sharing
 branch, and the port columns -- then fills and factors
 (`RazorSolveContext.front_port_solution`). Each case below holds:
 

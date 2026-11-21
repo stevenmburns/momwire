@@ -211,7 +211,7 @@ def test_the_executables_carry_exactly_the_features_that_reach_them():
     # C++ route carries (EXE_FEATURES), so a feature that reaches an
     # executable's level must be in that table, at the registry's reach, and
     # one in the table must reach one.
-    first_exe = F._level("exe-nec5-bspline-razor-2p-windows")
+    first_exe = F._level("exe-nec5-bs2-razor2p-windows")
     reaching = {n: f.reach for n, f in F.FEATURES.items() if f.reach >= first_exe}
     assert _exe_features() == reaching
 
@@ -234,7 +234,7 @@ def test_the_executables_levels_are_the_registrys():
 
 def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     # `EXE_FEATURE_BASES`: a carried feature only one formulation's route
-    # runs (razor_pair_reuse, razor-2p's fill; nec5-bspline shares its
+    # runs (razor_pair_reuse, razor2p's fill; nec5-bs2 shares its
     # levels and refuses it). Each row names a carried feature and a basis
     # an executable is built as (CMakeLists.txt's MW_EXE_BASIS_NAME, or the
     # main's default).
@@ -246,8 +246,8 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)"\}', table[1])
     assert len(rows) == table[1].count("{"), table[1]
     assert dict(rows) == {
-        "razor_pair_reuse": "razor-2p",
-        "crossing_anchors": "razor-2p",
+        "razor_pair_reuse": "razor2p",
+        "crossing_anchors": "razor2p",
     }
     cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text(encoding="utf-8")
     bases = set(re.findall(r'MW_EXE_BASIS_NAME="([a-z0-9-]+)"', cmake))
@@ -361,9 +361,9 @@ def test_every_ci_job_is_placed_once_or_unassigned():
         ("exe", "linux", "bspline_nec42", None, 9),
         ("exe", "win32", "sin42", None, 10),
         # the long forms (momwire#1831)
-        ("exe", "win32", "nec5-razor-2p", None, 6),
-        ("exe", "linux", "nec5-bspline", None, 8),
-        ("exe", "darwin", "nec42-bspline", None, 9),
+        ("exe", "win32", "nec5-razor2p", None, 6),
+        ("exe", "linux", "nec5-bs2", None, 8),
+        ("exe", "darwin", "nec42-bs2", None, 9),
         ("exe", "linux", "nec42-sinusoidal", None, 10),
     ],
 )
@@ -376,17 +376,17 @@ def test_current_level(context, platform, basis, variant, level):
 def test_the_mingw_executable_has_its_own_level():
     # The single-file MinGW-w64 build (Steve, 2026-11-17): its own level,
     # directly after the MSVC executables', whichever basis it is built as.
-    msvc = F._level("exe-nec5-bspline-razor-2p-windows")
-    mingw = F._level("exe-nec5-bspline-razor-2p-windows-mingw")
+    msvc = F._level("exe-nec5-bs2-razor2p-windows")
+    mingw = F._level("exe-nec5-bs2-razor2p-windows-mingw")
     assert mingw == msvc + 1
-    for basis in ("razor2p", "bspline_nec5", "nec5-razor-2p", "nec5-bspline"):
+    for basis in ("razor2p", "bspline_nec5", "nec5-razor2p", "nec5-bs2"):
         kw = dict(basis=basis, platform="win32")
         assert F.current_level("exe", **kw) == msvc
         assert F.current_level("exe", **kw, toolchain="mingw") == mingw
     # Only the Windows nec5 executables split: the toolchain moves no other.
     assert F.current_level(
         "exe", basis="razor2p", platform="linux", toolchain="mingw"
-    ) == F._level("exe-nec5-bspline-razor-2p-linux-macos")
+    ) == F._level("exe-nec5-bs2-razor2p-linux-macos")
     assert F.current_level(
         "exe", basis="sin42", platform="win32", toolchain="mingw"
     ) == F._level("exe-nec42-sinusoidal")
@@ -417,10 +417,10 @@ def test_every_carried_feature_reaches_the_linux_and_macos_executables():
     # below it refuses the feature there. The two tables are held equal
     # elsewhere, so a row left behind by a re-rank passes that test when it is
     # wrong in both: this one holds each table to the level itself.
-    level_id = "exe-nec5-bspline-razor-2p-linux-macos"
+    level_id = "exe-nec5-bs2-razor2p-linux-macos"
     level = F._level(level_id)
     assert _exe_level_returns()[level_id] == level
-    assert level > F._level("exe-nec5-bspline-razor-2p-windows-mingw")
+    assert level > F._level("exe-nec5-bs2-razor2p-windows-mingw")
     carried = _exe_features()
     assert carried
     for name, reach in carried.items():
@@ -493,14 +493,14 @@ def _assert_stamped(line, basis, tail):
 
 def test_the_stamp_shows_only_when_a_feature_is_on(no_features):
     assert F.stamp() == "" and F.stamp("dropin") == ""
-    assert _printout.engine_stamp("bspline") == _bare_stamp("bspline")
+    assert _printout.engine_stamp("bs2") == _bare_stamp("bs2")
     no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     # The drop-in is past reach 1 everywhere, so the platform is named.
     with F.context_scope("dropin"):
         assert F.stamp() == "+transmitted_anchors uncertified on this platform"
         _assert_stamped(
-            _printout.engine_stamp("bspline"),
-            "bspline",
+            _printout.engine_stamp("bs2"),
+            "bs2",
             "+transmitted_anchors uncertified on this platform",
         )
     # Outside a drop-in entry the route is Python's: level 1 on Linux avx2.
@@ -520,10 +520,8 @@ def test_the_dropin_entry_runs_as_the_dropin(no_features):
 
     no_features.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1")
     deck = (ROOT / "tests" / "fixtures" / _GOLDEN_CASES[0][0]).read_text("latin-1")
-    line2 = _shell.render(deck, basis="bspline").split("\n")[1]
-    _assert_stamped(
-        line2, "bspline", "+transmitted_anchors uncertified on this platform"
-    )
+    line2 = _shell.render(deck, basis="bs2").split("\n")[1]
+    _assert_stamped(line2, "bs2", "+transmitted_anchors uncertified on this platform")
 
 
 def test_a_long_basis_keeps_the_feature_tail(no_features):
@@ -537,8 +535,8 @@ def test_a_long_basis_keeps_the_feature_tail(no_features):
 # The flags-off printout: the golden corpus (scripts/golden_printouts.py),
 # whose byte gate masks line 2, plus line 2 itself held to main's form.
 _GOLDEN_CASES = [
-    ("eznec/decks/0036_dipole-in-free-space.nec", "bspline"),
-    ("eznec/decks/0036_dipole-in-free-space.nec", "razor-2p"),
+    ("eznec/decks/0036_dipole-in-free-space.nec", "bs2"),
+    ("eznec/decks/0036_dipole-in-free-space.nec", "razor2p"),
 ]
 
 
@@ -641,7 +639,7 @@ def test_the_exe_refuses_a_feature(tmp_path, var, name):
     not EXE, reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a built executable"
 )
 def test_the_exe_runs_the_features_it_carries(tmp_path):
-    # nec5-razor-2p's executable carries momwire#1860's levers: each runs,
+    # nec5-razor2p's executable carries momwire#1860's levers: each runs,
     # and line 2 names the ones on in registry order, as Python's stamp does
     # (reach 9 covers the drop-in, so no "uncertified" either side).
     env = {

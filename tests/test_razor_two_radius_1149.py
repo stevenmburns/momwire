@@ -1,4 +1,4 @@
-"""razor-2p's TWO-RADIUS crossing node — momwire#1149 U2b-2.
+"""razor2p's TWO-RADIUS crossing node — momwire#1149 U2b-2.
 
 A ground rod at one radius under a mast at another (the v0.61.0 shape, bspline
 since antennaknobs plan U5) is served by razor as the crossing deck it is,

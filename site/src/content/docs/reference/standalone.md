@@ -1,12 +1,12 @@
 ---
 title: "The standalone executables"
-description: momwire's nec5-razor-2p and nec5-bspline engines as native programs with no Python in them — downloads for Linux, Windows and macOS, which program to run, and how to set the thread count.
+description: momwire's nec5-razor2p and nec5-bs2 engines as native programs with no Python in them — downloads for Linux, Windows and macOS, which program to run, and how to set the thread count.
 ---
 
 Each release since 0.79 carries two of momwire's NEC-5 engines as native
-programs with no Python in them: **nec5-razor-2p** (what the Python command
-`momwire-nec5-razor-2p` answers) and **nec5-bspline**, the default degree-2 B-spline
-formulation (what `momwire-nec5-bspline` answers). They read a NEC-5 deck
+programs with no Python in them: **nec5-razor2p** (what the Python command
+`momwire-nec5-razor2p` answers) and **nec5-bs2**, the default degree-2 B-spline
+formulation (what `momwire-nec5-bs2` answers). They read a NEC-5 deck
 and write the same printout the Python engines write. Nothing needs
 installing: no Python, no pip, no momwire.
 
@@ -24,8 +24,8 @@ on macOS), so SimNEC's `NECVersion` row and the `CM version` card it puts on
 each deck tell the two apart:
 
 ```text
-NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1    this program
-NEC5 momwire-nec5-razor-2p [sb] 0.87.1                    the Python command
+NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.87.1    this program
+NEC5 momwire-nec5-razor2p [sb] 0.87.1                    the Python command
 ```
 
 To use one from SimNEC or EZNEC, point the NEC-5 engine setting at the
@@ -76,7 +76,7 @@ and an insulated wire (IS); the Python command serves those decks.
 
 **NEC-4.2 default engine, Linux (preview).** The Linux tarball also holds
 `momwire-nec42-linux`, what the Python command `momwire-nec42` (the NEC-4.2
-slot's default, nec42-bspline) answers, with its own avx2 and sse2 builds and picker.
+slot's default, nec42-bs2) answers, with its own avx2 and sse2 builds and picker.
 Its printout is the Python command's byte for byte except the two
 measured-time lines. It refuses a near field over a buried wire in the
 Python command's own words (the Python command refuses it too). As a preview
@@ -91,7 +91,7 @@ folder together. The zip's `README.txt` says which program to use.
 
 **Windows, one file per engine (preview).** A release that lists
 `momwire-nec5-windows-x64-single.zip` among its assets carries it beside that
-zip, which stays the default. It holds `momwire-nec5-razor-2p.exe` and `momwire-nec5-bspline.exe`,
+zip, which stays the default. It holds `momwire-nec5-razor2p.exe` and `momwire-nec5-bs2.exe`,
 built with GCC. Each file carries an avx2 and an sse2 build and picks the one
 your processor can run, with no DLLs beside it. Its `-version` line ends the
 build's name in `-ucrt64`, so a deck shows which zip answered. It needs the
@@ -132,7 +132,7 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
   the top of the zip. On Windows 7 SP1 use the `win7` folder; it carries
   Microsoft's Universal C Runtime for Windows 7, and its programs also run
   on Windows 10 and 11.
-- **nec5-razor-2p or nec5-bspline.** The same choice as between the Python engines: see
+- **nec5-razor2p or nec5-bs2.** The same choice as between the Python engines: see
   [Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation).
 
 ## How they differ from the EZNEC drop-in
@@ -152,7 +152,7 @@ patterns:
 - The drop-in keeps **a resident engine** that the first run starts and
   later runs reuse (see [Launch economics](/reference/eznec-nec5/#launch-economics)).
   Its first run pays that start-up. Its warm runs are slower than the
-  standalone program's: on Windows, about 20 % on large razor-2p decks and
+  standalone program's: on Windows, about 20 % on large razor2p decks and
   a few per cent on large B-spline decks. [Which momwire to run on
   Windows](/reference/windows/) has the measurements. Its NEC-2 engines are
   the exception: SimNEC streams a whole run's decks into one engine process,
@@ -255,7 +255,7 @@ program from that same window. The printout's timing lines then show in the
 program's NEC output, and the `times:` lines go to the terminal you started
 it from, if the program passes the engine's standard error through.
 
-The Python commands (`momwire-nec5-razor-2p`, `momwire-nec5-bspline` and the
+The Python commands (`momwire-nec5-razor2p`, `momwire-nec5-bs2` and the
 others) honour the same variable and write the same line. On those, warm
 runs answered by the resident engine report `route=resident`, and
 `other_ms` includes starting or reaching that engine.

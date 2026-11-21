@@ -29,7 +29,7 @@ import pytest
 from momwire.dropin.nec5 import _nec4, _shell
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
-BASIS = "bspline"
+BASIS = "bs2"
 
 # The issue's base deck: Dan's shape, a vertical over GN 3 with SimNEC's
 # NOFILE on the ground card.

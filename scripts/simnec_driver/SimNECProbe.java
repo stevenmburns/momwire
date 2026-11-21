@@ -1,5 +1,5 @@
 // SimNECProbe: launch a NEC-2 engine the way SimNEC does and print what SimNEC hides
-// (exit code, stderr).       java SimNECProbe.java /absolute/path/to/momwire-nec2c-bspline
+// (exit code, stderr).       java SimNECProbe.java /absolute/path/to/momwire-nec2c-bs2
 // 1. probe (Execute.testCommand): sh -c '"<cmd>" -version', stdin closed, exit code first.
 // 2. daemon (NEC2Daemon): sh -c '"<cmd>"', cwd=home, deck+NX to stdin, stdout to the NX echo.
 import java.io.*;

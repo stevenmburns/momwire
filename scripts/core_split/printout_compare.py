@@ -1,5 +1,5 @@
-"""The C++ NEC-5 printout for razor-2p (`_nec5_razor_printout_core.cpp`, unit
-3a) against `momwire-nec5-razor-2p`'s, deck by deck, whole file against
+"""The C++ NEC-5 printout for razor2p (`_nec5_razor_printout_core.cpp`, unit
+3a) against `momwire-nec5-razor2p`'s, deck by deck, whole file against
 whole file.
 
     python scripts/core_split/printout_compare.py OUT.jsonl DECK_OR_DIR...
@@ -8,7 +8,7 @@ whole file.
 
 (`--texts` reads deck texts as JSON strings, one per line, as
 `nec5_harvest_plugin.py` records them; `--golden` compares against the
-stored razor-2p printouts of a checkout that carries
+stored razor2p printouts of a checkout that carries
 `scripts/golden_printouts.py` (momwire#1473), engine stamp
 masked as they mask it, instead of a fresh Python render.)
 
@@ -16,7 +16,7 @@ The C++ side is `nec5_razor_printout_driver` (built here from the core TUs
 with setup.py's Linux flags, as `tests/test_razor_core_standalone.py` builds
 it, unless `--driver EXE` names one): deck file in, printout bytes out, no
 Python. The Python side is what the launcher writes: `_shell.render(text,
-basis="razor-2p")` (the default, Python route), or the last line of defence's
+basis="razor2p")` (the default, Python route), or the last line of defence's
 INTERNAL ERROR printout when it raises, through `write_printout`'s CRLF and
 latin-1 transliteration. Line 2's stamp fields are Python's own, handed to
 the driver.
@@ -62,9 +62,9 @@ import numpy as np  # noqa: E402 - after the AVX-512 pin
 ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
-BASIS = "razor-2p"
+BASIS = "razor2p"
 DRIVER = "nec5_razor_printout_driver"
-# `--basis bspline` (momwire#1517) builds bs2's driver; its TUs are among
+# `--basis bs2` (momwire#1517) builds bs2's driver; its TUs are among
 # the standalone test's CORE_SOURCES.
 
 
@@ -172,7 +172,7 @@ def _standalone_test_module():
     return mod
 
 
-def build_driver(out_dir: Path, basis: str = "razor-2p") -> Path:
+def build_driver(out_dir: Path, basis: str = "razor2p") -> Path:
     """The driver, from the core TUs alone, with the loaded variant's flags
     (the standalone test's compile)."""
     from momwire import _accel
@@ -195,7 +195,7 @@ def build_driver(out_dir: Path, basis: str = "razor-2p") -> Path:
         str(ROOT / "extern" / "xsf" / "include"),
     ]
     driver = {
-        "bspline": "nec5_bspline_printout_driver",
+        "bs2": "nec5_bspline_printout_driver",
     }.get(basis, DRIVER)
     sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{driver}.cpp"]
     procs, objects = [], []

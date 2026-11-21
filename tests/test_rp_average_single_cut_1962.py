@@ -99,7 +99,7 @@ def _shape(line: str) -> str:
     return _NUMBER.sub("#", line.rstrip())
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize(("directory", "stem"), list(DECKS), ids=IDS)
 def test_momwire_prints_the_engines_pattern_block(directory, stem, basis):
     engine = _pattern_block(_engine(directory, stem))

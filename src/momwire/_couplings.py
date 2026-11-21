@@ -82,7 +82,7 @@ class Coupling(NamedTuple):
     `applies_to` names the solver class(es) that actually raise this. It is
     NOT decoration: a coupling is per-class, and a consumer filtering by "can
     this backend be configured to `value_a`" mis-attributes three of the six
-    rows below — it would tell a `bspline` user that the extended kernel
+    rows below — it would tell a `bs2` user that the extended kernel
     forbids `near_correction=False`, a keyword `BSplineSolver` does not have
     (measured: TypeError, not a refusal). Filter on this field, never on
     `value_a` reachability.

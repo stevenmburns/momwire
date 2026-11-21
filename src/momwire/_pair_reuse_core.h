@@ -4,7 +4,7 @@
 // declines, the process's plan cache and its counters, the decode loop of
 // the gather and the fill report's wire map. Python-free.
 //
-// A basis supplies an ADAPTER (razor-2p's: `_razor_pair_reuse_core.cpp`):
+// A basis supplies an ADAPTER (razor2p's: `_razor_pair_reuse_core.cpp`):
 // its families, its key (what a pair's value reads of the geometry, and the
 // orientation code it folds), the evaluation of each class's representative,
 // the transform a gathered value takes when its orientation differs from its

@@ -1,4 +1,4 @@
-// razor-2p's crossing blocks in C++ (momwire#1512 B4b/c): the cross blocks
+// razor2p's crossing blocks in C++ (momwire#1512 B4b/c): the cross blocks
 // between the two media and the crossing node charges, the same bits as
 // `RazorSolver._assemble_Z_crossing`'s steps 4-5 (`_crossing_fill.
 // cross_complete_block` / `cross_complete_block_reversed` with razor's path

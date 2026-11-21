@@ -25,7 +25,7 @@ before running it. It prints the probe's exit code and stderr, then submits
 one dipole deck to the resident daemon and prints how that ended:
 
 ```
-java SimNECProbe.java /absolute/path/to/momwire-nec2c-bspline
+java SimNECProbe.java /absolute/path/to/momwire-nec2c-bs2
 ```
 
 Everything below is the full driver, which exists for CI.
@@ -35,7 +35,7 @@ Everything below is the full driver, which exists for CI.
 Java 11 or newer, no build step:
 
 ```
-java scripts/simnec_driver/SimNECDriver.java /abs/path/momwire-nec2c-bspline [deck ...]
+java scripts/simnec_driver/SimNECDriver.java /abs/path/momwire-nec2c-bs2 [deck ...]
 ```
 
 Options: `--home DIR` (the daemon's cwd), `--repeat N` (each deck N times

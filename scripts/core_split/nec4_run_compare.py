@@ -11,9 +11,9 @@ exact pattern and counted per deck (`mask`):
     "                        FILL=<%9.3f> SEC.,  FACTOR=<%9.3f> SEC."
     " RUN TIME =<%10.3f>"
 
-A deck the C++ declines is counted apart, with its reason. `--basis bspline`
+A deck the C++ declines is counted apart, with its reason. `--basis bs2`
 holds `bspline_nec4_printout` (momwire#1607 Phase C1) to
-`_nec4.render(text, basis="bspline")`. With `--arrays` (bspline), each
+`_nec4.render(text, basis="bs2")`. With `--arrays` (bspline), each
 solve's operator Z, port columns B, coefficients X and port admittances Y
 are held to the bit too, against the ones `BSplineSolver` hands its port
 solve (`_solve_with_kcl_ports`) and returns (`compute_port_solution`).
@@ -42,7 +42,7 @@ BASIS = "sinusoidal"
 # The basis -> its C++ printout binding
 BINDINGS = {
     "sinusoidal": "sinusoidal_nec4_printout",
-    "bspline": "bspline_nec4_printout",
+    "bs2": "bspline_nec4_printout",
 }
 
 # The two measured-time lines, exactly (`_printout._timing`, `_closing`).
@@ -104,7 +104,7 @@ def blas_addresses(basis: str = BASIS) -> list[int]:
         (npl, "scipy_cblas_ddot64_"),
         (spl, "scipy_zgesvx_"),
     )
-    if basis == "bspline":
+    if basis == "bs2":
         names += (
             (npl, "scipy_cblas_dsyrk64_"),
             (npl, "scipy_cblas_zdotc_sub64_"),
@@ -139,7 +139,7 @@ def cxx_arrays(text: str, acc=None, blas=None):
     version, variant, marker = pc.stamp()
     return acc.bspline_nec4_printout(
         text.encode("latin-1"),
-        blas or blas_addresses("bspline"),
+        blas or blas_addresses("bs2"),
         version,
         variant,
         marker,
@@ -172,7 +172,7 @@ def py_arrays(text: str):
     BSplineSolver._solve_with_kcl_ports = solve_hook
     BSplineSolver.compute_port_solution = cps_hook
     try:
-        out = py_printout(text, "bspline")
+        out = py_printout(text, "bs2")
     finally:
         BSplineSolver._solve_with_kcl_ports = orig_solve
         BSplineSolver.compute_port_solution = orig_cps
@@ -274,7 +274,7 @@ def main(argv=None) -> int:
         "--arrays", action="store_true", help="bspline: also Z, B, X, Y per solve"
     )
     args = ap.parse_args(argv)
-    if args.arrays and args.basis != "bspline":
+    if args.arrays and args.basis != "bs2":
         ap.error("--arrays is bspline's")
     out = open(args.out, "w") if args.out else None  # noqa: SIM115 — closed below
     bad = 0

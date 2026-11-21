@@ -892,7 +892,7 @@ def pattern_fields(
     # take theirs: numpy's complex absolute dispatches by CPU (its AVX-512 and
     # AVX2 loops disagree in the last bit on large arrays), and a gain is a
     # printed number. Measured printout-neutral on the NEC-5 seam's 2,225
-    # pattern decks (corpus, fixtures, harvested suite texts; razor-2p and
+    # pattern decks (corpus, fixtures, harvested suite texts; razor2p and
     # bspline): the bits of a gain move, no printed digit did.
     g_v = norm * _libm(abs, m_theta) ** 2
     g_h = norm * _libm(abs, m_phi) ** 2

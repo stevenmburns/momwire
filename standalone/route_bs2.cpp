@@ -1,5 +1,5 @@
 // The C++ route of `momwire-nec5-bs2` (route.h, momwire#1517 Phase A):
-// `momwire-nec5-bspline`'s printout for the decks bs2's C++ serves, on the
+// `momwire-nec5-bs2`'s printout for the decks bs2's C++ serves, on the
 // executable's OpenBLAS. Compiled once per namespace, as route.cpp.
 //
 // PYTHON'S TWO LIBRARIES. The launcher runs bs2 on two OpenBLAS builds:
@@ -9,11 +9,11 @@
 // their wheels' commits (build_openblas.sh, momwire#1751): numpy's CBLAS
 // calls go to numpy's (MWN, through the LP64 adapters below), the LAPACK to
 // SciPy's (MWX). Elsewhere one library answers both. The gate
-// (exe_compare --basis bspline) is what says their bits agree.
+// (exe_compare --basis bs2) is what says their bits agree.
 //
 // MW_ROUTE_NEC4 (momwire#1607 Phase C2): the same route for `momwire-nec42`,
 // the NEC-4.2 slot's default basis: bs2 on the slot's run half
-// (`_bspline_nec4_run_core.h`, `_nec4.render(text, basis="bspline")`), on the
+// (`_bspline_nec4_run_core.h`, `_nec4.render(text, basis="bs2")`), on the
 // same adapters.
 #include "route.h"
 
@@ -163,7 +163,7 @@ long long largest_solve(const std::string &latin1_text, bool open_end, long long
     if (below_pairs) *below_pairs = 0;
 #if MW_ROUTE_NEC4
     // the size policy reads n_basis alone here
-    return nec4::largest_solve(latin1_text, "bspline", open_end);
+    return nec4::largest_solve(latin1_text, "bs2", open_end);
 #endif
     const nec5::SeamResult r = nec5::bspline_seam(latin1_text, open_end);
     if (r.route != nec5::SeamResult::served) return -1;
@@ -258,7 +258,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     return true;
 #else
     std::vector<nec5::RunArrays> arrays;
-    const nec5::PrintoutResult r = nec5::bspline_printout(latin1_text, "bspline", stamp, lp, sym, np,
+    const nec5::PrintoutResult r = nec5::bspline_printout(latin1_text, "bs2", stamp, lp, sym, np,
                                                           arrays_dir.empty() ? nullptr : &arrays, open_end);
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;

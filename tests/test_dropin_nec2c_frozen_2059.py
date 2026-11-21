@@ -65,14 +65,14 @@ _CC = shutil.which(os.environ.get("CC", "")) or shutil.which("cc")
         ("momwire-nec2c", "nec2"),
         ("momwire-nec2c-sinusoidal.exe", "nec2"),
         (r"C:\momwire\Momwire-NEC2C-Sinusoidal.EXE", "nec2"),
-        ("/opt/bin/momwire-nec2c-bspline-d1", "nec2"),
+        ("/opt/bin/momwire-nec2c-bs1", "nec2"),
         ("momwire-nec2c-", "nec2"),
         # SimNEC's order: `nec2c` wins over every other marker in the name.
         ("momwire-nec2c-nec42", "nec2"),
         ("momwire-nec5-nec2c", "nec2"),
         # The other families are untouched.
         ("momwire-nec42-sinusoidal.exe", "nec4"),
-        ("momwire-nec5-razor-2p.exe", "nec5"),
+        ("momwire-nec5-razor2p.exe", "nec5"),
         ("momwire-engine.exe", "nec5"),
         # `nec2` without the `c` is not the marker.
         ("momwire-nec2-sinusoidal", "nec5"),

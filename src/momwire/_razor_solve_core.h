@@ -1,4 +1,4 @@
-// razor-2p's whole k-dependent solve in C++: every row window of the fill
+// razor2p's whole k-dependent solve in C++: every row window of the fill
 // (seg_moments -> assemble_t1 -> t2_rows, real sources and, over a perfect
 // ground, the mirrored ones folded in) written straight into Z, then the LU
 // factorisation and the solve for the port columns. No Python anywhere, so a

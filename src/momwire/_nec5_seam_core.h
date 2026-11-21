@@ -17,7 +17,7 @@
 // asks it of the solver class and its capability row: the basis' name in the
 // sentences, which spelling of a series EMF the mesh takes (`_CUT_SPELLING`,
 // `_crossing_spelling`), `_check_basis_can_host`, and `_solver_for` with the
-// constructed solver's front half. razor-2p's engine is
+// constructed solver's front half. razor2p's engine is
 // `_nec5_razor_seam_core.h`; another basis plugs in the same way.
 //
 //     mw::nec5::SeamResult r = mw::nec5::seam(latin1_text, engine);
@@ -199,7 +199,7 @@ struct SeamStructure {  // `Structure`: the STRUCTURE SPECIFICATION counts
 };
 
 // What an engine built for one preparation: its solver's arguments and the
-// constructed solver's front half (razor-2p: `RazorPrepared`,
+// constructed solver's front half (razor2p: `RazorPrepared`,
 // `_nec5_razor_seam_core.h`). The seam only holds it.
 struct EnginePrepared {
     virtual ~EnginePrepared() = default;
@@ -220,7 +220,7 @@ struct Prepared {
     std::vector<Node> source_sites;  // the drive's addresses, deck order
     std::vector<SeamCard> cards;     // `_cards`: lines, then networks, deck order
     std::vector<Int> phantom_tags;   // `_phantom_tags`, deck order
-    // Built up to the front, whose fill is not in C++ yet (razor-2p's buried
+    // Built up to the front, whose fill is not in C++ yet (razor2p's buried
     // fill, momwire#1512): kept on a declined route so a gate can compare the
     // preparation, never solved.
     bool unsolved = false;
@@ -272,7 +272,7 @@ struct SeamRaised {
 // What the seam asks of a basis that is not a hook: the Python seam reads
 // each off the solver class or its capability row.
 struct SeamBasis {
-    // the name the sentences carry ("razor-2p")
+    // the name the sentences carry ("razor2p")
     std::string name;
     // `_CUT_SPELLING`: a GW is cut at every node a card addresses inside it,
     // and a K = 2 junction's series EMF is a node gap (`build_mesh`'s
@@ -310,7 +310,7 @@ class SeamEngine {
     virtual Built build(Prepared &p) const = 0;
     // The whole seam's answer, once at its start (`r` empty) and once when
     // every structure has been prepared: what a basis keeps across the
-    // run's fills (razor-2p's `crossing_anchors` band plan). Nothing by
+    // run's fills (razor2p's `crossing_anchors` band plan). Nothing by
     // default.
     virtual void seam_done(const SeamResult &r) const { (void)r; }
 };

@@ -2382,7 +2382,7 @@ _S2_SOMMERFELD = [g for g in _S2_GROUNDS if g != "PEC"]
 
 
 @pytest.mark.parametrize(
-    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bs2", "point-matched"]
 )
 @pytest.mark.parametrize("ground", _S2_SOMMERFELD)
 def test_gs2_lifted_fat_wire_shift_is_within_the_cross_basis_bar(ground, other):
@@ -2391,7 +2391,7 @@ def test_gs2_lifted_fat_wire_shift_is_within_the_cross_basis_bar(ground, other):
 
 
 @pytest.mark.parametrize(
-    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bs2", "point-matched"]
 )
 @pytest.mark.parametrize("deck", list(_S2_DECKS))
 def test_gs2_the_sommerfeld_ground_does_not_move_the_cross_basis_mismatch(deck, other):
@@ -2416,7 +2416,7 @@ def test_gs2_the_sommerfeld_ground_does_not_move_the_cross_basis_mismatch(deck, 
 
 
 @pytest.mark.parametrize(
-    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bs2", "point-matched"]
 )
 def test_gs2_contact_shift_over_sea_is_within_the_cross_basis_bar(other):
     """Sea water is the finite ground on which every basis still agrees about

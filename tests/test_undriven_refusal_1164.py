@@ -40,7 +40,7 @@ FAMILIES = [
     ("sinusoidal", SinusoidalSolver, {}),
     ("sin-galerkin", SinusoidalGalerkinSolver, {}),
     ("razor", RazorSolver, {}),
-    ("bspline-d1", BSplineSolver, {"degree": 1}),
+    ("bs1", BSplineSolver, {"degree": 1}),
     ("bspline-d2", BSplineSolver, {"degree": 2}),
     ("hmatrix", HMatrixSolver, {}),
 ]

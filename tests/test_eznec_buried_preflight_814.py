@@ -106,7 +106,7 @@ def _with_the_pre_u2_cell(caps):
 
 def test_razor_serves_a_crossing_deck_since_u2():
     assert RazorSolver.capabilities.refusal("buried", "crossing_junction") is None
-    _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+    _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor2p", RazorSolver)
 
 
 def test_a_declared_crossing_cell_is_refused_with_the_rows_sentence(monkeypatch):
@@ -115,7 +115,7 @@ def test_a_declared_crossing_cell_is_refused_with_the_rows_sentence(monkeypatch)
     )
     declared = RazorSolver.capabilities.refusal("buried", "crossing_junction")
     with pytest.raises(ServeRefusal) as exc:
-        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor2p", RazorSolver)
     assert str(exc.value).endswith(declared)
     assert "runs below a FINITE ground plane" in str(exc.value)
 
@@ -130,9 +130,9 @@ def test_the_two_buried_decks_get_DIFFERENT_answers(monkeypatch):
         RazorSolver, "capabilities", _with_the_pre_u2_cell(RazorSolver.capabilities)
     )
     assert RazorSolver.capabilities.refusal("buried") is None
-    _check_basis_can_host(_buried_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+    _check_basis_can_host(_buried_mesh(), SOMMERFELD, "razor2p", RazorSolver)
     with pytest.raises(ServeRefusal) as exc:
-        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor2p", RazorSolver)
     assert "cross the interface at a junction" in str(exc.value)
 
 
@@ -144,14 +144,14 @@ def test_the_two_buried_decks_get_DIFFERENT_answers(monkeypatch):
 @pytest.mark.parametrize("mesh", [_buried_mesh(), _crossing_mesh()])
 def test_the_flip_makes_the_seam_serve_without_touching_the_seam(mesh, monkeypatch):
     monkeypatch.setattr(RazorSolver, "capabilities", _flipped(RazorSolver.capabilities))
-    _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)
+    _check_basis_can_host(mesh, SOMMERFELD, "razor2p", RazorSolver)
 
 
 @pytest.mark.parametrize("mesh", [_buried_mesh(), _crossing_mesh()])
 def test_bspline_already_serves_both(mesh):
     """The family that has served buried decks since momwire#553 must not be
     refused by a check written for the one that does not."""
-    _check_basis_can_host(mesh, SOMMERFELD, "bspline", BSplineSolver)
+    _check_basis_can_host(mesh, SOMMERFELD, "bs2", BSplineSolver)
 
 
 # ---------------------------------------------------------------------------
@@ -165,11 +165,11 @@ def test_no_lower_medium_means_no_buried_question(ground):
     `GD` or a perfect image has no half-space for a wire to be buried IN, so a
     wire below THAT plane is a different geometry with its own refusal, raised
     where that geometry is diagnosed and not here."""
-    _check_basis_can_host(_buried_mesh(), ground, "razor-2p", RazorSolver)
+    _check_basis_can_host(_buried_mesh(), ground, "razor2p", RazorSolver)
 
 
 def test_a_deck_with_nothing_below_is_untouched():
-    _check_basis_can_host(_above_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+    _check_basis_can_host(_above_mesh(), SOMMERFELD, "razor2p", RazorSolver)
 
 
 def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell(monkeypatch):
@@ -190,4 +190,4 @@ def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell(monkeyp
     monkeypatch.setattr(
         RazorSolver, "capabilities", _with_the_pre_u2_cell(RazorSolver.capabilities)
     )
-    _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)
+    _check_basis_can_host(mesh, SOMMERFELD, "razor2p", RazorSolver)

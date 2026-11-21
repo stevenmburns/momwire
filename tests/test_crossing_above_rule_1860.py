@@ -1,7 +1,7 @@
 """A crossing deck's above/above remainder at the above-ground rule
 (momwire#1860 B1, the opt-in feature `crossing_above_rule`).
 
-nec5-bspline's and nec42-bspline's crossing route filled the above x above
+nec5-bs2's and nec42-bs2's crossing route filled the above x above
 Sommerfeld remainder as a field-form block at `n_qp_buried_field` (q = 6), the
 order the cross block's 1/R^3 integrand needs, where the same deck without its
 buried rod fills those pairs at `n_qp_sommerfeld` plus #1189's raised pairs.
@@ -23,7 +23,7 @@ What is held:
 - on a lazy view, B1 reads exactly what it reads on the whole grid;
 - on, a row-restricted fill's rows are the full fill's rows, bit for bit;
 - on, the printed input impedance is within `ZIN_RTOL` of off for
-  nec5-bspline and nec42-bspline on the EFHW-like inverted L (141 and 590
+  nec5-bs2 and nec42-bs2 on the EFHW-like inverted L (141 and 590
   segments), a buried-hub vertical and a rod Beverage (synthetic decks).
 """
 
@@ -146,7 +146,7 @@ def _render(deck, dialect):
 
     # Level 1, as antennaknobs runs it: the shell's render without its
     # drop-in context.
-    return _shell.render.__wrapped__(deck, basis="bspline", dialect=dialect)
+    return _shell.render.__wrapped__(deck, basis="bs2", dialect=dialect)
 
 
 @pytest.fixture

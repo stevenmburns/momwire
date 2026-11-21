@@ -1,4 +1,4 @@
-// geometry -> currents with no Python: razor-2p's front half
+// geometry -> currents with no Python: razor2p's front half
 // (`_razor_front_core.h`), fill and LU (`_razor_solve_core.h`) driven from a
 // plain-text deck.
 //

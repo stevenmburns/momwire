@@ -14,7 +14,7 @@ names, each measuring the readout rather than the solve:
       transmitted far-zone factors as 1/R;
   G5  the above/above regime is untouched;
   G6  the black boxes: NEC-5 (exe/nec5-ripplefix) printouts of decks whose
-      solves agree with razor-2p's (tests/fixtures/near_buried_1653/README.txt).
+      solves agree with razor2p's (tests/fixtures/near_buried_1653/README.txt).
 
 Two identities ride along: e = 1 collapses the transmitted field onto the
 free-space element sum in both directions, and the mixed-potential
@@ -196,7 +196,7 @@ def _jumps(s, c, xy, d):
 _XY = [(0.7, 0.4), (3.0, 1.0), (0.0, 2.0)]
 
 
-@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor-2p"])
+@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor2p"])
 @pytest.mark.parametrize("source", ["below", "above"])
 def test_g1_the_field_is_continuous_across_the_interface(cls, source, record_property):
     """Tangential E, normal D and H match across z = 0, and the mismatch
@@ -216,7 +216,7 @@ def test_g1_the_field_is_continuous_across_the_interface(cls, source, record_pro
     assert near[0] < far[0] / 20.0 and near[1] < far[1] / 5.0, (far, near)
 
 
-@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor-2p"])
+@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor2p"])
 def test_g1_continuity_on_a_crossing_deck(cls, record_property):
     """Both source sides at once: a vertical rising from the crossing node
     over a buried hub and radials. Every observer sees all four regimes'
@@ -234,14 +234,14 @@ def test_g1_continuity_on_a_crossing_deck(cls, record_property):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor-2p"])
+@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver], ids=["bs2", "razor2p"])
 def test_g2_reaction_between_a_buried_and_an_above_probe_is_reciprocal(
     cls, record_property
 ):
     """<E_A, J_B> (the above dipole's field on the buried one's current) is
     <E_B, J_A> (the reverse): the downward transmitted regime against the
     upward one, through the readout, read at subdiv 4. On a 10 m / 5 m pair
-    it measured 3.8e-6 / 9.6e-7 / 2.4e-7 at subdiv 4 / 8 / 16 (bs2; razor-2p
+    it measured 3.8e-6 / 9.6e-7 / 2.4e-7 at subdiv 4 / 8 / 16 (bs2; razor2p
     alike), falling as subdiv^-2: it is the readout's own midpoint
     quadrature, not a regime mismatch."""
     a_wire = np.array([(-3.0, 1.0, 1.0), (3.0, 1.0, 1.5)])
@@ -254,7 +254,7 @@ def test_g2_reaction_between_a_buried_and_an_above_probe_is_reciprocal(
     r_ba = np.sum(_field(sb, cb, ea[0], sub=4) * ea[1])
     rel = abs(r_ab - r_ba) / abs(r_ab)
     record_property("reciprocity_rel", f"{rel:.3e}")
-    # measured 7.4e-5 (bs2) / 7.0e-5 (razor-2p) on this closer pair
+    # measured 7.4e-5 (bs2) / 7.0e-5 (razor2p) on this closer pair
     assert rel < 2e-4, (r_ab, r_ba)
 
 
@@ -490,16 +490,14 @@ def _tables(text):
     ],
 )
 def test_g6_razor_2p_reads_the_nec5_reference_near_fields(stem, record_property):
-    """Decks whose razor-2p solve agrees with NEC-5's (Z to 0.03 %): every
+    """Decks whose razor2p solve agrees with NEC-5's (Z to 0.03 %): every
     NE/NH table - 1 cm above the surface, 5 cm and 50 cm into it, out to
     210 m and at R = 300 m - agrees with exe/nec5-ripplefix's printout.
     Measured per-table median 1.8e-4 .. 8.6e-4 relative per point, and at
     R = 300 m (the last table) 1.9e-3 / 3.6e-3: that one is the ABOVE
     wire's reflected remainder at range (d2's vertical; the unchanged
     above/above regime), whose bar is the grazing band's 1e-2."""
-    ours = _tables(
-        render((FIXTURES / f"{stem}.nec5.nec").read_text(), basis="razor-2p")
-    )
+    ours = _tables(render((FIXTURES / f"{stem}.nec5.nec").read_text(), basis="razor2p"))
     ref = _tables((FIXTURES / f"{stem}.nec5.ripplefix.out").read_text(errors="replace"))
     assert len(ours) == len(ref) == 9
     medians = []

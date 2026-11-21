@@ -342,7 +342,7 @@ def test_the_node_block_tracks_the_arbiters(eps_one):
         ]
         theirs = Z[np.ix_(cols, cols)]
 
-    for M, tag in ((ours, "sg"), (theirs, "bspline")):
+    for M, tag in ((ours, "sg"), (theirs, "bs2")):
         offd = abs(M[0, 1]) / abs(M[0, 0])
         assert 0.85 < offd < 1.05, (tag, offd)
     # Opposite overall sign between the families, on a term whose sign is not

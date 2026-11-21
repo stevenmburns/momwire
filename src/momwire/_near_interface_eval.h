@@ -216,11 +216,11 @@ struct Features {
     // near-interface lever either: the razor seam reads it into
     // `FrontInputs::exact_kernel_series`.
     bool exact_kernel_series = false;
-    // momwire#1971: razor-2p's fill-pair reuse. Not a near-interface lever:
+    // momwire#1971: razor2p's fill-pair reuse. Not a near-interface lever:
     // carried here because this is where an executable's requested features
     // live; the razor seam reads it into `FrontInputs::pair_reuse`.
     bool razor_pair_reuse = false;
-    // razor-2p's cross blocks from anchors across a sweep
+    // razor2p's cross blocks from anchors across a sweep
     // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
     // either: the crossing fill reads it from the active features.
     bool crossing_anchors = false;

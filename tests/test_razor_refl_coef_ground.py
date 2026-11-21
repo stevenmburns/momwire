@@ -117,7 +117,7 @@ GROUNDS = {
     "refl": {"ground_z": 0.0, "ground_eps": EPS},
 }
 REFERENCES = {
-    "bspline": (BSplineSolver, {"degree": 2}),
+    "bs2": (BSplineSolver, {"degree": 2}),
     "sinusoidal": (SinusoidalSolver, {}),
     "sin-galerkin": (SinusoidalGalerkinSolver, {}),
 }
@@ -271,7 +271,7 @@ def test_converged_deltas_against_the_galerkin_siblings(ladders, gname, lane):
     """
     n = LADDER[-1]
     z = ladders[(gname, "refl", lane, n)]
-    for rname in ("bspline", "sin-galerkin"):
+    for rname in ("bs2", "sin-galerkin"):
         d = abs(z - ladders[(gname, "refl", rname, n)])
         assert d < 1.35, f"{gname} {lane} vs {rname}: |ΔZ| = {d:.4f} Ω at N={n}"
 
@@ -293,7 +293,7 @@ def test_the_dipole_ladder_walks_toward_the_galerkin_answer(ladders, lane):
     pinning a coincidence. `test_the_ground_adds_no_cross_formulation_gap`
     is the claim that survives on both decks.
     """
-    ref = ladders[("dipole@0.25", "refl", "bspline", LADDER[-1])]
+    ref = ladders[("dipole@0.25", "refl", "bs2", LADDER[-1])]
     seq = [abs(ladders[("dipole@0.25", "refl", lane, n)] - ref) for n in LADDER]
     for a, b in zip(seq, seq[1:]):
         assert b < a, f"the ladder is not closing: {seq}"

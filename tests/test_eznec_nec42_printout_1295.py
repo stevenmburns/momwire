@@ -80,7 +80,7 @@ PROBES = tuple(sorted(p.name.split("_")[0] for p in PROBES_DIR.glob("*.nec")))
 # phased drive (README there): the stock Cardioid and a 40 m four-square.
 MULTI = tuple(sorted(p.name.split("_")[0] for p in MULTI_DIR.glob("*.nec")))
 CASES = CAPTURES + PROBES + MULTI
-BASIS = "bspline"
+BASIS = "bs2"
 
 
 def deck_text(capture: str) -> str:
@@ -888,7 +888,7 @@ def skeleton(line: str) -> tuple[str, tuple[tuple[int, str], ...]]:
 
 # The slot's default basis and its point-matched twin, the launcher a
 # NEC-4.2 user compares against first (``momwire-nec42-sinusoidal.exe``).
-SERVED_BASES = ("bspline", "sinusoidal")
+SERVED_BASES = ("bs2", "sinusoidal")
 
 
 @pytest.fixture(scope="module", params=SERVED_BASES)

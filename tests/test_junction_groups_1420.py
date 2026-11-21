@@ -172,7 +172,7 @@ def test_the_seam_groups_on_the_grid_and_detects_once_per_solver(monkeypatch):
     monkeypatch.setattr(RazorSolver, "_detect_junctions", count("detect", detect))
     monkeypatch.setattr(RazorSolver, "_find_junctions", count("find", find))
     monkeypatch.setattr(RazorSolver, "__init__", count("solvers", init))
-    out = render(MONOPOLE, basis="razor-2p")
+    out = render(MONOPOLE, basis="razor2p")
     assert "NEC ERROR" not in out
     assert calls["walk"] == 0 and calls["cells"] >= 1
     assert calls["solvers"] >= 1

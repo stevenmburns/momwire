@@ -6,7 +6,7 @@ rebuilds that table from a file the engine writes beside the printout when
 the deck's ``GE`` card carries a nonzero third field (``GE 0 0 1``):
 ``<printout stem>.GMO``.
 
-Everything here is read off ONE sample: Ward AE6TY's razor-2p port (76.7)
+Everything here is read off ONE sample: Ward AE6TY's razor2p port (76.7)
 run on Dan AC6LA's 4nec2 Example 3 (``tests/fixtures/4nec2_example3/``),
 which this module reproduces byte for byte.  No NEC-5 source or manual was
 read.  The layout, in the sample's own terms:

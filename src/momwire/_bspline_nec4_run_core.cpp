@@ -229,13 +229,13 @@ nec4::RunEngine &Engines::engine_for(const nec4::StructureBuild &structure) {
 bool printout(const std::string &text, const nec5::EngineStamp &stamp, const Linalg &la, std::string &out,
               std::string &why, std::vector<SolveArrays> *arrays) {
     Engines engines(la, arrays);
-    return nec4::render(text, "bspline", stamp, engines, la.np, out, why);
+    return nec4::render(text, "bs2", stamp, engines, la.np, out, why);
 }
 
 bool printout_piece(const std::string &text, const nec5::EngineStamp &stamp, const Linalg &la, std::string &out,
                     std::string &why, bool &go_on) {
     Engines engines(la);
-    return nec4::render_piece(text, "bspline", stamp, engines, la.np, out, why, go_on);
+    return nec4::render_piece(text, "bs2", stamp, engines, la.np, out, why, go_on);
 }
 
 }  // namespace bspline_nec4

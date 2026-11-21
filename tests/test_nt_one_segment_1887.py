@@ -196,10 +196,10 @@ def _as_ld4(dialect: str, deck: Path, z: complex) -> str:
 
 
 ROUTES = [
-    ("nec5", "bspline"),
-    ("nec5", "razor-2p"),
+    ("nec5", "bs2"),
+    ("nec5", "razor2p"),
     ("nec42", "sinusoidal"),
-    ("nec42", "bspline"),
+    ("nec42", "bs2"),
 ]
 
 
@@ -228,12 +228,12 @@ def test_a_zero_sum_card_leaves_the_gap_open(dialect, basis):
 
 
 # The black boxes' printed Z for the two decks (the module docstring's table).
-# nec5-razor-2p prints the no-card dipole within 3e-5 of NEC-5 and
+# nec5-razor2p prints the no-card dipole within 3e-5 of NEC-5 and
 # nec42-sinusoidal within 2e-4 of NEC-4.2, so the tolerances are the basis
 # gap, an order below what dropping y12 moves (about 10 %).
 REFERENCE = [
-    ("nec5", "razor-2p", SUMMED, 89.348 - 86.459j, 1e-4),
-    ("nec5", "razor-2p", ZERO_SUM, 28.059 - 563.12j, 1e-4),
+    ("nec5", "razor2p", SUMMED, 89.348 - 86.459j, 1e-4),
+    ("nec5", "razor2p", ZERO_SUM, 28.059 - 563.12j, 1e-4),
     ("nec42", "sinusoidal", SUMMED, 88.2427 - 77.2813j, 2e-3),
     ("nec42", "sinusoidal", ZERO_SUM, 31.7281 - 566.125j, 2e-3),
 ]

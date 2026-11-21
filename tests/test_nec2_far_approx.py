@@ -228,7 +228,7 @@ def test_kh_reaches_the_sinusoidal_solver_and_no_other_basis(far_on):
     assert s.features_bound["nec2_far_approx"] is True
     assert s.nec2_far_approx_range == 0.3
     with pytest.raises(ValueError, match="KH sets NEC-2's interaction approximation"):
-        build_solver(model, basis="bspline")
+        build_solver(model, basis="bs2")
 
 
 def test_on_without_kh_takes_nec2s_one_wavelength(far_on):

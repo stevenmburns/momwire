@@ -646,7 +646,7 @@ def test_loading_kwargs_are_validated(kw, match):
 # --------------------------------------------------------------------------
 LADDER = (24, 48, 96, 192)
 REFERENCES = {
-    "bspline": (BSplineSolver, {"degree": 2}),
+    "bs2": (BSplineSolver, {"degree": 2}),
     "sin-galerkin": (SinusoidalGalerkinSolver, {}),
 }
 # A trap of MODERATE size for the gated column; see the docstring of
@@ -790,7 +790,7 @@ def test_wire_loss_power_agrees_across_formulations():
     got = {}
     for label, cls, extra in (
         ("razor", RazorSolver, {}),
-        ("bspline", BSplineSolver, {"degree": 2}),
+        ("bs2", BSplineSolver, {"degree": 2}),
         ("sin-galerkin", SinusoidalGalerkinSolver, {}),
     ):
         sim = cls(
@@ -803,7 +803,7 @@ def test_wire_loss_power_agrees_across_formulations():
         )
         _z_in, coeffs = sim.compute_impedance()
         got[label] = sim.wire_loss_power(coeffs)[0]
-    for ref in ("bspline", "sin-galerkin"):
+    for ref in ("bs2", "sin-galerkin"):
         rel = abs(got["razor"] - got[ref]) / got[ref]
         assert rel < 0.01, f"{got}"
 

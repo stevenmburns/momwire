@@ -318,7 +318,7 @@ def test_the_declared_drift_holds_where_it_used_to_break(text, f_mhz, monkeypatc
         som._GRID_CACHE.clear()
         anchors.reset()
         monkeypatch.setenv("MOMWIRE_X_TRANSMITTED_ANCHORS", "1" if on else "0")
-        s = build_solver(model, basis="bspline", frequency_mhz=f_mhz).solver
+        s = build_solver(model, basis="bs2", frequency_mhz=f_mhz).solver
         return 1.0 / complex(s.compute_port_solution().y.ravel()[0])
 
     off = zin(False)

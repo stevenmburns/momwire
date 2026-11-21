@@ -66,7 +66,7 @@ FIXTURE_DECKS = [
 ]
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline", "sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2", "sg"])
 def test_every_fixture_deck_builds_the_same(basis, acc):
     counts, mismatches = nc.compare(FIXTURE_DECKS, basis)
     assert not mismatches, mismatches[:3]
@@ -230,7 +230,7 @@ def _python_lands(text: str, basis: str) -> str:
     return kind
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline", "sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2", "sg"])
 @pytest.mark.parametrize("name, text, expect", CASES, ids=[c[0] for c in CASES])
 def test_a_hand_written_deck_builds_the_same(name, text, expect, basis, acc):
     lands = _python_lands(text, basis)
@@ -254,12 +254,12 @@ def test_a_hand_written_deck_builds_the_same(name, text, expect, basis, acc):
         ),
         (
             "wholly_buried",
-            "bspline",
+            "bs2",
             "every wire of this deck is below the ground plane",
         ),
         (
             "crossing_junction",
-            "bspline",
+            "bs2",
             "1 of 2 wires below the plane kept the reduced kernel",
         ),
     ],
@@ -283,10 +283,8 @@ def test_a_radius_step_junction_builds_the_galerkin_basis_on_the_reduced_kernel(
     printout gate when that C++ copy was archived, momwire archive branch
     `archive/sg-cxx-1117`: this half of it checks the build, which stays.)"""
     text = next(c[1] for c in CASES if c[0] == "radius_step")
-    dump = nc.cxx_build(text, "sinusoidal-galerkin", acc)
-    assert (
-        nc.dc.first_difference(nc.py_build(text, "sinusoidal-galerkin"), dump) is None
-    )
+    dump = nc.cxx_build(text, "sg", acc)
+    assert nc.dc.first_difference(nc.py_build(text, "sg"), dump) is None
     assert "points[0].extended_kernel = bool False" in dump
     assert "radius step at a junction".encode().hex() in dump
     sin = nc.cxx_build(text, "sinusoidal", acc)

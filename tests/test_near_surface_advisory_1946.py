@@ -139,7 +139,7 @@ def test_silent_on_a_vertical_through_the_interface(cls, radius):
 def test_silent_on_above_ground_wire(cls):
     """Above the interface is momwire#865's (the B-spline family refuses an
     edge under h = 2a; `SurfaceRadialHeight` advises up to 20a): no second
-    message from this one. razor-2p and the sinusoidal family serve it."""
+    message from this one. razor2p and the sinusoidal family serve it."""
     wires = [np.array([[0.0, 0.0, 0.003], [5.0, 0.0, 0.003]])]
     assert _advisories(cls, wires) == []
 

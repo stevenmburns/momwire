@@ -168,7 +168,7 @@ def test_the_python_launcher_streams_in_the_nec4_slot(monkeypatch):
     assert "main(['-', '-'], basis='pulse', dialect='nec4')" in code
 
 
-@pytest.mark.parametrize("prog", ["momwire-nec5", "momwire-nec5-razor-2p"])
+@pytest.mark.parametrize("prog", ["momwire-nec5", "momwire-nec5-razor2p"])
 def test_the_python_launchers_nec5_stream_is_unchanged(monkeypatch, prog):
     seen = {}
 

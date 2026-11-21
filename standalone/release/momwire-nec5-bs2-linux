@@ -1,6 +1,6 @@
 #!/bin/sh
 # momwire-nec5-bs2-linux: momwire's bs2 (B-spline) NEC-5 engine, no Python
-# (momwire#1517), `momwire-nec5-bspline`'s twin. Runs the build beside it
+# (momwire#1517), `momwire-nec5-bs2`'s twin. Runs the build beside it
 # that this CPU runs, the way
 # momwire's own accelerator chooses (momwire._accel): avx2 on a CPU with
 # AVX2 and FMA, sse2 on any other x86-64 CPU. MOMWIRE_FORCE_VARIANT=avx2 or

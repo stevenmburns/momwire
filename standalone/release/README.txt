@@ -1,7 +1,7 @@
-momwire-nec5-razor2p-linux: momwire's nec5-razor-2p engine as one native
+momwire-nec5-razor2p-linux: momwire's nec5-razor2p engine as one native
 Linux program, with no Python in it (momwire#1512).
 
-It answers a NEC-5 deck the way the Python command `momwire-nec5-razor-2p`
+It answers a NEC-5 deck the way the Python command `momwire-nec5-razor2p`
 does, byte for byte, without installing Python or momwire:
 
     ./momwire-nec5-razor2p-linux DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
@@ -11,10 +11,10 @@ does, byte for byte, without installing Python or momwire:
 The -version line is the Python command's with "-standalone" and the build
 that answered added to the name, e.g.
 
-    NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1
+    NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.87.1
 
 so SimNEC (and the "CM version" card it puts on each deck) shows which one
-ran. The nec5-bspline and NEC-4.2 programs below do the same.
+ran. The nec5-bs2 and NEC-4.2 programs below do the same.
 
 To use it from SimNEC, point the NEC-5 engine setting at
 momwire-nec5-razor2p-linux in this folder. Keep the three programs together:
@@ -29,8 +29,8 @@ What it does not serve yet is refused in the printout, by name ("not served
 by this build: ..."); the Python command serves those decks.
 
 momwire-nec5-bs2-linux is the same kind of program for momwire's default
-B-spline formulation (nec5-bspline): it answers a deck as the Python command
-`momwire-nec5-bspline` does, byte for byte, and takes the same three forms
+B-spline formulation (nec5-bs2): it answers a deck as the Python command
+`momwire-nec5-bs2` does, byte for byte, and takes the same three forms
 and the same picking (momwire-nec5-bs2-linux-avx2 / -sse2 beside it). It
 serves free space, wire loading, networks, the extended kernel, wires above
 a perfect or Sommerfeld ground, a structure wholly below a Sommerfeld
@@ -57,7 +57,7 @@ fields, and it still refuses by name, for now:
 The Python command serves those decks.
 
 PREVIEW: momwire-nec42-linux is the same kind of program for the NEC-4.2
-slot's default engine, momwire's nec42-bspline formulation (the B-spline basis,
+slot's default engine, momwire's nec42-bs2 formulation (the B-spline basis,
 momwire#1607 Phase C): the native twin of the Python command
 `momwire-nec42`. It answers a NEC-4.2 deck as that command does, byte for
 byte apart from the two lines that report measured time, and takes the

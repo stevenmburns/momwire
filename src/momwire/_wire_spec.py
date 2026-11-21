@@ -842,7 +842,7 @@ class GapMeshFloor(UserWarning):
       (momwire#1675, a = 38 mm monopole over PEC at 14 MHz, bspline, X at
       delta/a 2.8 / 1.4 / 0.70 / 0.35 / 0.18: -0.00 / +0.01 / -0.05 /
       -0.25 / -0.31 ohm, where NEC-5's own point gap holds to delta/a
-      ~0.35 and razor-2p's to ~0.7). A deck refined past it moves by tenths
+      ~0.35 and razor2p's to ~0.7). A deck refined past it moves by tenths
       of an ohm per halving, which reads as non-convergence on a chart.
 
     Measured on a free-space 600 MHz dipole (L = 0.24 m, a = 3.175 mm, a 2 a
@@ -1072,7 +1072,7 @@ class ShortSegments(UserWarning):
 
     Below delta/a = 2 no thin-wire kernel here is inside its validity (NEC's
     own limit for its extended kernel), and the answer stops converging as the
-    mesh is refined: razor-2p leaves NEC-5's ladder below delta ~ a, and the
+    mesh is refined: razor2p leaves NEC-5's ladder below delta ~ a, and the
     reduced-kernel lanes rise with no limit. Advisory only: nothing is
     remeshed or refused. Independent of `GapMeshFloor`, which is the stricter,
     gap-local floor for the delta-gap source; a deck can raise both.

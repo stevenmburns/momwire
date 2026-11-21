@@ -85,7 +85,7 @@ from pathlib import Path
 
 import momwire_serve_client as _mech
 
-from ... import _features, _thread_policy, _times
+from ... import _basis_names, _features, _thread_policy, _times
 from ...deck import DeckError
 from ...deck._nec5 import (
     LongExponentToken,
@@ -402,6 +402,22 @@ def _advise_long_exponents(text: str) -> None:
         warnings.warn(LongExponentToken(note), stacklevel=3)
 
 
+def _canonical_basis(entry: Callable[..., object]) -> Callable[..., object]:
+    """Run a drop-in entry with its ``basis`` keyword canonicalised
+    (momwire#2091): a deprecated spelling answers as its canonical name, so
+    every refusal and advisory below names the canonical one, and line 2
+    notes the spelling (`_basis_names.spelled`). Nested entries see the
+    canonical name and leave the record alone."""
+
+    @functools.wraps(entry)
+    def canonical(*args: object, basis: str = _serve.BASIS, **kwargs: object):
+        with _basis_names.spelled(basis) as name:
+            return entry(*args, basis=name, **kwargs)
+
+    return canonical
+
+
+@_canonical_basis
 @_features.in_context("dropin")
 @_thread_policy.answering()
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
@@ -744,6 +760,7 @@ def _render_chain(structures: list[Nec5Structure], *, basis: str) -> str:
     return "".join(printouts)
 
 
+@_canonical_basis
 def run(
     deck_path: str | Path,
     printout_path: str | Path,
@@ -889,6 +906,7 @@ def _emit_times(times) -> None:
     print(times.line(), file=_stderr(), flush=True)
 
 
+@_canonical_basis
 def stream(
     read=None, write=None, *, basis: str = _serve.BASIS, dialect: str = "nec5"
 ) -> int:
@@ -997,6 +1015,7 @@ def _quiet_advisories(entry: Callable[..., int]) -> Callable[..., int]:
 
 
 @_quiet_advisories
+@_canonical_basis
 def main(
     argv: list[str] | None = None,
     *,
@@ -1100,6 +1119,7 @@ def main(
     return 0
 
 
+@_canonical_basis
 def _report_internal_error(
     deck_path: str | Path,
     printout_path: str | Path,
@@ -1178,6 +1198,7 @@ def framed(printout: str, gmo: str | None) -> str:
     return f"{_GMO_FRAME_START}{gmo}{_GMO_FRAME_END}{printout}"
 
 
+@_canonical_basis
 def seam_failure(
     body: str, exc: BaseException, *, basis: str = _serve.BASIS, dialect: str = "nec5"
 ) -> tuple[str, str]:

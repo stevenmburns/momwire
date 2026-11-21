@@ -1,4 +1,4 @@
-// momwire-razor2p: `momwire-nec5-razor-2p` as one native executable.
+// momwire-razor2p: `momwire-nec5-razor2p` as one native executable.
 //
 //     momwire-razor2p DECK PRINTOUT        (EZNEC's and SimNEC's form)
 //     momwire-razor2p < PATHS              (4nec2's: the two names on stdin)
@@ -245,7 +245,7 @@ namespace {
 // The formulation this executable answers for, as the printout's stamp
 // names it (CMakeLists.txt's MW_EXE_BASIS), and the program's own name.
 #ifndef MW_EXE_BASIS_NAME
-#define MW_EXE_BASIS_NAME "razor-2p"
+#define MW_EXE_BASIS_NAME "razor2p"
 #endif
 #ifndef MW_EXE_PROGRAM
 #define MW_EXE_PROGRAM "momwire-razor2p"
@@ -253,7 +253,7 @@ namespace {
 // The Python launcher this executable stands in for (CMakeLists.txt sets it
 // per basis): its printouts are that launcher's, byte for byte.
 #ifndef MW_EXE_LAUNCHER
-#define MW_EXE_LAUNCHER "momwire-nec5-razor-2p"
+#define MW_EXE_LAUNCHER "momwire-nec5-razor2p"
 #endif
 // The EZNEC slot whose printout this answers: 1 for the NEC-4.2 slot
 // (`momwire-nec42-sinusoidal`, momwire#1607 B4b), else NEC-5. Or, with
@@ -287,7 +287,7 @@ const char *const EXE_VARIANT = MW_EXE_VARIANT;
 #endif
 // The NAME field of the `-version` line (momwire#1606), the one place every
 // build gets it: the launcher's name, then `-standalone` and the C++ core's
-// variant, e.g. `momwire-nec5-razor-2p-standalone-avx2` (momwire#1831), so a
+// variant, e.g. `momwire-nec5-razor2p-standalone-avx2` (momwire#1831), so a
 // SimNEC user (or the `CM version` card SimNEC echoes on every deck) can tell
 // this executable from the Python launcher of the same name, and the avx2
 // build from the sse2 one. Everything else in the line is the launcher's.
@@ -427,7 +427,7 @@ struct ExeFeature {
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
 // momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
-// razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
+// razor2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
 // which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
 // and momwire#1956's retuned sheet weights (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
@@ -441,13 +441,13 @@ const ExeFeature EXE_FEATURES[] = {
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.
-// razor_pair_reuse is razor-2p's fill, but nec5-bspline shares its levels
+// razor_pair_reuse is razor2p's fill, but nec5-bs2 shares its levels
 // (6 to 8) and its EXE_FEATURES, so without this it would accept the
 // variable, name it on line 2 and fill as with it off. It refuses instead,
-// in the registry's sentence (nec42-bspline is past the reach anyway).
+// in the registry's sentence (nec42-bs2 is past the reach anyway).
 const char *const EXE_FEATURE_BASES[][2] = {
-    {"razor_pair_reuse", "razor-2p"},
-    {"crossing_anchors", "razor-2p"},
+    {"razor_pair_reuse", "razor2p"},
+    {"crossing_anchors", "razor2p"},
 };
 
 bool feature_basis_here(const std::string &name) {
@@ -457,14 +457,14 @@ bool feature_basis_here(const std::string &name) {
 }
 
 // A carried feature a BASIS accepts and whose formulation ignores it:
-// {basis, name}. razor-2p's route takes crossing_above_rule and, as Python's
-// razor-2p, never reads it, so it runs as before (it changes nothing) and is
+// {basis, name}. razor2p's route takes crossing_above_rule and, as Python's
+// razor2p, never reads it, so it runs as before (it changes nothing) and is
 // never named on line 2, as `_features.stamp` names only what the running
 // solver honours (momwire#1980). A feature `EXE_FEATURE_BASES` refuses on a
 // basis needs no row here: a refusal never reaches line 2.
 // tests/test_feature_solvers_1980.py holds this to the registry.
 const char *const EXE_IGNORED[][2] = {
-    {"razor-2p", "crossing_above_rule"},
+    {"razor2p", "crossing_above_rule"},
 };
 
 bool feature_honoured_here(const std::string &name) {
@@ -479,13 +479,13 @@ int exe_level() {
 #if MW_EXE_DIALECT_NEC2
     return 11;  // exe-nec2c-sinusoidal
 #elif MW_EXE_DIALECT_NEC4
-    return std::string(BASIS) == "sinusoidal" ? 10 : 9;  // exe-nec42-sinusoidal / exe-nec42-bspline
+    return std::string(BASIS) == "sinusoidal" ? 10 : 9;  // exe-nec42-sinusoidal / exe-nec42-bs2
 #elif defined(__MINGW32__)
-    return 7;  // exe-nec5-bspline-razor-2p-windows-mingw
+    return 7;  // exe-nec5-bs2-razor2p-windows-mingw
 #elif defined(_WIN32)
-    return 6;  // exe-nec5-bspline-razor-2p-windows
+    return 6;  // exe-nec5-bs2-razor2p-windows
 #else
-    return 8;  // exe-nec5-bspline-razor-2p-linux-macos
+    return 8;  // exe-nec5-bs2-razor2p-linux-macos
 #endif
 }
 
@@ -800,7 +800,7 @@ void set_threads(int n, bool omp) {
 // THREAD_TIMEOUT, 2^28 cycles (~0.1 s), before they sleep (momwire#1772).
 // Between the BLAS calls of a fill -- the image weights, the loading Gram --
 // that spin took the CPUs the fill's OpenMP threads needed: at four threads
-// on a four-core Haswell it cost the buried and screen fills 15-28 %, razor-2p
+// on a four-core Haswell it cost the buried and screen fills 15-28 %, razor2p
 // as much as bs2. 2^16 cycles still catches a call that follows at once; a
 // pool that then sleeps wakes on the next call. It sets only how long an idle
 // thread spins: what a call computes, and on how many threads, is unchanged.
@@ -812,9 +812,9 @@ void set_threads(int n, bool omp) {
 // the factor that follows, against OpenBLAS's threads (Linux: libgomp reads
 // GOMP_SPINCOUNT in its own load-time constructor, after this one). Measured
 // on Skylake (4 cores / 8 threads), exe wall at MOMWIRE_THREADS = 8:
-// sd_gn2_dipole101 razor-2p 63.7 -> 9.7 ms, ak_yagi_free 52.5 -> 7.8,
+// sd_gn2_dipole101 razor2p 63.7 -> 9.7 ms, ak_yagi_free 52.5 -> 7.8,
 // fs_yagi820 72.9 -> 44.9, gn2_dipole401 sg5 164.8 -> 106.0, bs2 159.9 ->
-// 124.9; at 4: fs_yagi820 razor-2p 55.4 -> 47.2, sd_fs_yagi805 sg5 133.3 ->
+// 124.9; at 4: fs_yagi820 razor2p 55.4 -> 47.2, sd_fs_yagi805 sg5 133.3 ->
 // 124.4; at 2 within noise. The cost is a wake where a region follows a wait
 // longer than the spin: the buried bs2 fills at 3-4 threads, +1-2 %. 30,000
 // iterations is the knee (10,000 and passive cost those fills 5-13 %). Only
@@ -1464,7 +1464,7 @@ int main(int argc, char **argv) {
 
 #if MW_EXE_NO_PYTHON
 // ============================================================================
-// The no-Python build (momwire#1512 step 1): `momwire-nec5-razor-2p-standalone`.
+// The no-Python build (momwire#1512 step 1): `momwire-nec5-razor2p-standalone`.
 //
 // Everything the launcher does, in this process, with nothing loaded: the
 // client's argv rules (`momwire_eznec_client.main`: `-version`, 4nec2's
@@ -1511,7 +1511,7 @@ mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EX
 // `probe_version`: `momwire_serve_client.version_line`'s line (momwire#1606),
 // the dialect, this executable's name (MW_EXE_VERSION_NAME), its interface
 // modes and this build's full release, e.g.
-// `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.82.0`.
+// `NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.82.0`.
 std::string probe_version() {
 #if MW_EXE_FAT
     // the variant this run picked, as a one-variant build names its own

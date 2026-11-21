@@ -1,4 +1,4 @@
-"""razor-2p's DETACHED buried route — momwire#1149 U1.
+"""razor2p's DETACHED buried route — momwire#1149 U1.
 
 A detached deck carries wires above the interface and wires below it, with
 no junction in the plane: an elevated vertical over a buried radial screen
@@ -336,13 +336,13 @@ def test_loading_converges_onto_bsplines():
         shift = {}
         for name, cls, extra in (
             ("razor", RazorSolver, {"nec5_quadrature": True}),
-            ("bspline", BSplineSolver, {}),
+            ("bs2", BSplineSolver, {}),
         ):
             Z0, _ = two_port(cls, detached(m), **extra)
             ZL, _ = two_port(cls, detached(m, **kw), **extra)
             shift[name] = np.diag(ZL - Z0)
         assert np.all(shift["razor"].real > 0)
-        gaps.append(np.max(np.abs(shift["razor"] - shift["bspline"])))
+        gaps.append(np.max(np.abs(shift["razor"] - shift["bs2"])))
     assert all(b < a for a, b in zip(gaps, gaps[1:])), gaps
     assert gaps[-1] / gaps[0] < 0.5, gaps
 

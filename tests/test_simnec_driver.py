@@ -23,9 +23,7 @@ DRIVER = ROOT / "scripts" / "simnec_driver" / "SimNECDriver.java"
 DECK = ROOT / "tests" / "fixtures" / "nec_portal" / "dipole_free_space.deck"
 JAVA = shutil.which("java")
 _bindir = Path(sys.executable).parent
-ENGINE = _bindir / (
-    "momwire-nec2c-bspline.exe" if os.name == "nt" else "momwire-nec2c-bspline"
-)
+ENGINE = _bindir / ("momwire-nec2c-bs2.exe" if os.name == "nt" else "momwire-nec2c-bs2")
 
 pytestmark = [
     pytest.mark.skipif(JAVA is None, reason="no java on PATH"),

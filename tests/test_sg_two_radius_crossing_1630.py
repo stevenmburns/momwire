@@ -64,7 +64,7 @@ def _printout_z(stem):
     raise AssertionError(f"no impedance row in {stem}.out")
 
 
-def _deck_z(stem, basis="sinusoidal-galerkin"):
+def _deck_z(stem, basis="sg"):
     model = parse((FIX / f"{stem}.nec42.nec").read_text(), dialect="nec4")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -249,7 +249,7 @@ def test_g10_the_extended_kernel_at_a_two_radius_node_is_refused_by_name():
     assert str(err.value) == sg_mod._EK_STEPPED_RADIUS_JUNCTION_REFUSAL
     model = parse((FIX / "hub1_v19mm.nec42.nec").read_text(), dialect="nec4")
     with pytest.warns(ExtendedKernelDefault) as seen:
-        built = build_solver(model, basis="sinusoidal-galerkin")
+        built = build_solver(model, basis="sg")
     assert built.extended_kernel is False
     assert any(
         sg_mod._EK_STEPPED_RADIUS_JUNCTION_REFUSAL in str(w.message) for w in seen
@@ -259,7 +259,7 @@ def test_g10_the_extended_kernel_at_a_two_radius_node_is_refused_by_name():
         z_default = _z(built.solver.compute_impedance())
         z_reduced = _z(
             build_solver(
-                model, basis="sinusoidal-galerkin", extended_kernel=False
+                model, basis="sg", extended_kernel=False
             ).solver.compute_impedance()
         )
     assert z_default == z_reduced

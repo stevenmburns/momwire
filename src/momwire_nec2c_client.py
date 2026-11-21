@@ -91,13 +91,37 @@ _VALUE_FLAGS = ("--basis", "--cache-stats", "--idle-timeout", "--save-decks")
 # centres and razor cannot place a gap there.
 BASIS_NAMES = (
     "arrayblock",
-    "bspline",
-    "bspline-d1",
+    "bs1",
+    "bs2",
     "hmatrix",
     "pulse",
+    "sg",
     "sinusoidal",
-    "sinusoidal-galerkin",
 )
+
+# The deprecated spellings the engine still answers (momwire#2091), each as
+# the name it answers as: `momwire._basis_names.BASIS_ALIASES`, restated for
+# the same NumPy start-up and pinned equal to it (less the razor names, which
+# this dialect refuses) by ``tests/test_basis_names_2091.py``. They are
+# forwarded verbatim, so the engine's banner notes the spelling.
+BASIS_ALIASES = {
+    "bspline": "bs2",
+    "bspline-d1": "bs1",
+    "sinusoidal-galerkin": "sg",
+}
+
+
+def _unknown(name: str, named: str) -> str:
+    """The probe's refusal of a name the engine does not serve: a retired
+    spelling (`_basis_names.RETIRED_BASES`, restated) by name, else the
+    roster."""
+    if name == "razor-nec5":
+        return (
+            f"basis {name!r} was renamed and is no longer accepted; "
+            f"use 'razor2p' (momwire#2091) ({named})"
+        )
+    return f"unknown {named}; choices: {_CHOICES}"
+
 
 # Spelt as the stock engine spells it: `', '.join(sorted(_BASES))`.
 _CHOICES = ", ".join(BASIS_NAMES)
@@ -239,8 +263,8 @@ def filename_basis(prog: str) -> str | None:
 
     ===================================  ============
     ``momwire-nec2c-shared``             ``None``
-    ``momwire-nec2c-shared-bspline-d1``  ``bspline-d1``
-    ``momwire-nec2c-bspline-d1``         ``bspline-d1``
+    ``momwire-nec2c-shared-bs1``         ``bs1``
+    ``momwire-nec2c-bs1``                ``bs1``
     ``momwire-nec2c``                    ``None``
     ===================================  ============
 
@@ -254,7 +278,7 @@ def filename_basis(prog: str) -> str | None:
     because those are `_solver.basis_from_program_name`'s rules and this copy
     exists only because the client may not import momwire. A COPY is the thing
     that drifts, so what it copies is the whole rule: a Windows rename to
-    ``Momwire-Nec2c-Bspline-D1.exe`` names bspline-d1, and ``momwire-nec2c-``
+    ``Momwire-Nec2c-BS1.exe`` names bs1, and ``momwire-nec2c-``
     names a basis it failed to spell.
     """
     return _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_SHARED_SEGMENT)
@@ -308,8 +332,8 @@ def resolve_engine(
     if "--basis" in engine:
         index = engine.index("--basis")
         name = engine[index + 1] if index + 1 < len(engine) else ""
-        if name not in BASIS_NAMES:
-            return engine, f"unknown --basis {name!r}; choices: {_CHOICES}"
+        if name not in BASIS_NAMES and name not in BASIS_ALIASES:
+            return engine, _unknown(name, f"--basis {name!r}")
         return engine, None
 
     suffix = filename_basis(sys.argv[0] if prog is None else prog)
@@ -320,8 +344,8 @@ def resolve_engine(
         name, source = env_name, "MOMWIRE_NEC2C_BASIS"
     else:
         return engine, None
-    if name not in BASIS_NAMES:
-        return engine, f"unknown basis {name!r} from {source}; choices: {_CHOICES}"
+    if name not in BASIS_NAMES and name not in BASIS_ALIASES:
+        return engine, _unknown(name, f"basis {name!r} from {source}")
     return [*engine, "--basis", name], None
 
 

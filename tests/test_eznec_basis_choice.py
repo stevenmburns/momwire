@@ -13,7 +13,7 @@ The gates here are about the choice, not about any one basis's physics:
 printout-carrying captures round-tripping byte for byte in
 ``test_eznec_printout.py``.  Two of
 this module's asserts are about the mechanism of that: the roster's
-``bspline`` entry carries no ``degree``, and it does not need to.
+``bs2`` entry carries no ``degree``, and it does not need to.
 
 **Every family answers or refuses; none of them raises.**  A basis that
 cannot host a deck says so in the printout, naming the basis and the reason,
@@ -105,7 +105,7 @@ def test_the_seam_takes_a_basis_and_answers_in_it():
     """0010 is a free-space dipole every family below can host.
 
     Three DIFFERENT numbers from three formulations of one antenna, which is
-    the whole of what "selectable" has to mean.  razor-nec5 is the twin, so
+    the whole of what "selectable" has to mean.  razor2p is the twin, so
     it is the one that REPRODUCES the licensed engine's 79.948 + 29.919j —
     a statement about which reference it tracks, not about which of the
     three is nearest the converged answer.
@@ -113,10 +113,10 @@ def test_the_seam_takes_a_basis_and_answers_in_it():
     deck = parse_nec5(deck_text("0010"))
     z = {
         basis: _serve.serve(deck, basis=basis).sources[0].impedance
-        for basis in ("bspline", "bspline-d1", "razor-nec5")
+        for basis in ("bs2", "bs1", "razor2p")
     }
     assert len({(round(v.real, 6), round(v.imag, 6)) for v in z.values()}) == 3
-    assert z["razor-nec5"] == pytest.approx(79.948 + 29.919j, abs=5e-3)
+    assert z["razor2p"] == pytest.approx(79.948 + 29.919j, abs=5e-3)
     # The default and the name of the default are one answer.
     assert _serve.serve(deck).sources[0].impedance == z[_serve.BASIS]
 
@@ -175,7 +175,7 @@ def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
 
     ONE entry refuses now, not three, and the shrinking is the arc: momwire#654
     made the zero-width point gap this family's default and momwire#648 made
-    that gap land at the arclength it was given, so ``sinusoidal-galerkin``
+    that gap land at the arclength it was given, so ``sg``
     serves the corpus.  What is left is the TESTING, and it is permanent — the
     match points ARE the segment centres, so a delta at a knot point-samples
     to nothing in every row and the RHS is the unexcited problem (momwire#177).
@@ -209,7 +209,7 @@ def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
     is only that the deck comes back as an ANSWER, with a real impedance in
     it, and with neither the old refusal nor a leaked traceback.
     """
-    text = render(deck_text("0021"), basis="razor-nec5")
+    text = render(deck_text("0021"), basis="razor2p")
     assert "NEC ERROR" not in text
     assert "INTERNAL ERROR" not in text
     assert "FINITE ground plane" not in text
@@ -286,7 +286,7 @@ def test_the_eznec_marker_reads_the_basis_off_the_filename(prog, expected):
     "prog,expected",
     [
         ("momwire-nec2c", None),
-        ("momwire-nec2c-bspline-d1", "bspline-d1"),
+        ("momwire-nec2c-bs1", "bs1"),
         ("C:\\SimNEC\\Momwire-Nec2c-Sinusoidal-Galerkin.EXE", "sinusoidal-galerkin"),
         ("momwire-nec2c-", ""),
     ],
@@ -426,8 +426,8 @@ def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
 @pytest.mark.parametrize(
     "flags",
     [
-        ["--en-optional", "--basis", "razor-2p"],
-        ["--basis", "razor-2p", "--en-optional"],
+        ["--en-optional", "--basis", "razor2p"],
+        ["--basis", "razor2p", "--en-optional"],
     ],
 )
 def test_the_stdin_allowance_rides_the_one_shot_as_a_leading_flag(monkeypatch, flags):
@@ -447,7 +447,7 @@ def test_the_stdin_allowance_rides_the_one_shot_as_a_leading_flag(monkeypatch, f
     assert entry.run(["momwire-engine.exe", *flags, "d.inp", "d.out"]) == 0
     assert seen == {
         "argv": ["d.inp", "d.out"],
-        "basis": "razor-2p",
+        "basis": "razor2p",
         "en_optional": True,
     }
     assert entry.run(["momwire-engine.exe", "d.inp", "--en-optional"]) == 0
@@ -574,7 +574,7 @@ def _row(refusals=()):
 
     The point-matched entries refuse every deck in the corpus, so they are the
     row's floor rather than entries each shape below repeats.  It used to be
-    the sinusoidal family's three; ``sinusoidal-galerkin`` joined the served
+    the sinusoidal family's three; ``sg`` joined the served
     set in momwire#648, and ``pulse`` joined the floor in momwire#564.
     """
     row = dict.fromkeys(BASES, SERVED)
@@ -591,7 +591,7 @@ def _row(refusals=()):
 # as ``NOT_ARRAYBLOCK`` and then ``NOT_RAZOR`` both did.
 EVERY_BASIS = _row()
 # 0013 and 0033, the two five-wire apexes.  Every basis that carries a node
-# port serves them — including `sinusoidal-galerkin`, which is why momwire#611
+# port serves them — including `sg`, which is why momwire#611
 # wanted it here and momwire#648 delivered it — and the ones that do not
 # refuse for that rather than for the drive.
 APEX = _row(dict.fromkeys(_POINT_MATCHED, NO_NODE_GAPS))
@@ -743,27 +743,26 @@ def test_every_basis_that_answers_at_all_accepts_the_same_59():
 
     So the corpus divides in two: the point-matched entries, which refuse
     everything, and every other basis, which accepts the same 77.  ``hmatrix``,
-    ``arrayblock``, the razor family and now ``sinusoidal-galerkin`` are their
+    ``arrayblock``, the razor family and now ``sg`` are their
     own solvers rather than bspline variants — three different bases and three
     different testing schemes — so their agreeing on the accept SET is a
     measurement, not a tautology, and it is the property "we accept the same
     decks" names.
 
-    ``sinusoidal-galerkin`` joined the accepting side in momwire#648, and it is
+    ``sg`` joined the accepting side in momwire#648, and it is
     the strongest reading this gate has carried: it shares a BASIS with the one
     entry that refuses and shares nothing else with the ones it now agrees
     with.  The dividing line in this dialect is the TESTING, and the accept set
     is where that shows up as an equality rather than an argument.
     """
-    bspline = _accepted_by("bspline")
+    bspline = _accepted_by("bs2")
     assert len(bspline) == 77
     for basis in (
-        "bspline-d1",
+        "bs1",
         "hmatrix",
         "arrayblock",
-        "razor-2p",
-        "razor-nec5",
-        "sinusoidal-galerkin",
+        "razor2p",
+        "sg",
     ):
         assert _accepted_by(basis) == bspline, basis
     assert all(not _accepted_by(basis) for basis in _POINT_MATCHED)
@@ -822,13 +821,12 @@ def test_the_crossing_source_spelling_is_read_off_the_capability_row():
     from momwire.dropin.nec5._serve import _crossing_spelling
 
     assert {name: _crossing_spelling(cls) for name, (cls, _) in BASES.items()} == {
-        "bspline": "node",
-        "bspline-d1": "node",
+        "bs2": "node",
+        "bs1": "node",
         "hmatrix": "node",
         "arrayblock": "node",
         "sinusoidal": "gap",
-        "sinusoidal-galerkin": "node",
-        "razor-2p": "gap",
-        "razor-nec5": "gap",
+        "sg": "node",
+        "razor2p": "gap",
         "pulse": "gap",
     }

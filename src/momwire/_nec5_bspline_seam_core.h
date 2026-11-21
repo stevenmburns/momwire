@@ -4,7 +4,7 @@
 // decides, so a parsed deck comes out as the keyword arguments the Python seam
 // hands `BSplineSolver` (`construct_solver`), with no Python anywhere:
 //
-//   * `basis()`: "bspline", the CUT spelling (`_CUT_SPELLING` is
+//   * `basis()`: "bs2", the CUT spelling (`_CUT_SPELLING` is
 //     `(BSplineSolver,)`: a GW is cut at every node a card addresses inside
 //     it, and a series EMF at a two-wire node is a node gap), and a node gap
 //     on a crossing node (`_crossing_spelling`: node gaps AND junction ports);

@@ -1,7 +1,7 @@
 """`fill_report()` (momwire#2016): what a fill served, read back.
 
 The counts here are checked against something other than the code that keeps
-them: a Python re-derivation of razor-2p's key, a spy on the sinusoidal kernel
+them: a Python re-derivation of razor2p's key, a spy on the sinusoidal kernel
 and on bspline's moment fill, and the sector map's own row count.
 """
 
@@ -132,7 +132,7 @@ def reconciles(reuse):
         lambda: SinusoidalGalerkinSolver(**yagi()),
         lambda: HMatrixSolver(**yagi()),
     ],
-    ids=["bspline", "razor", "sinusoidal", "galerkin", "hmatrix"],
+    ids=["bs2", "razor", "sinusoidal", "galerkin", "hmatrix"],
 )
 def test_before_a_solve_it_is_empty_and_serialisable(make):
     report = make().fill_report()
@@ -150,7 +150,7 @@ def test_before_a_solve_it_is_empty_and_serialisable(make):
         (lambda: SinusoidalSolver(**yagi()), "dense"),
         (lambda: SinusoidalGalerkinSolver(**yagi()), "dense"),
     ],
-    ids=["bspline", "razor", "sinusoidal", "galerkin"],
+    ids=["bs2", "razor", "sinusoidal", "galerkin"],
 )
 def test_stage_times_are_read_on_every_solve(make, route):
     s = make()
@@ -220,7 +220,7 @@ def test_no_census_without_the_option(monkeypatch):
     monkeypatch.setattr(
         BSplineSolver,
         "_pair_reuse_plan_checked",
-        lambda *a, **k: calls.append("bspline") or real_check(*a, **k),
+        lambda *a, **k: calls.append("bs2") or real_check(*a, **k),
     )
     for s in (razor(), SinusoidalSolver(**yagi()), BSplineSolver(**yagi())):
         s.compute_impedance()
@@ -435,7 +435,7 @@ def test_the_map_is_skipped_on_request():
 
 
 def razor_classes_by_brute_force(s):
-    """razor-2p's direct classes, re-derived in Python from the header's
+    """razor2p's direct classes, re-derived in Python from the header's
     description of the key (free space, reduced kernel)."""
     geom = s._build_geometry()
     p0 = np.asarray(geom["seg_p0"])
@@ -536,7 +536,7 @@ def solved(make):
         lambda: SinusoidalSolver(**yagi(), pair_reuse=True),
         lambda: BSplineSolver(**yagi(), pair_reuse=hint_of(yagi())),
     ],
-    ids=["razor", "sinusoidal", "bspline"],
+    ids=["razor", "sinusoidal", "bs2"],
 )
 def test_reading_the_report_moves_no_later_solve(make):
     s, first = solved(make)
@@ -551,7 +551,7 @@ def test_reading_the_report_moves_no_later_solve(make):
 
 
 @pytest.mark.parametrize(
-    "cls", [BSplineSolver, SinusoidalSolver], ids=["bspline", "sinusoidal"]
+    "cls", [BSplineSolver, SinusoidalSolver], ids=["bs2", "sinusoidal"]
 )
 def test_the_sector_route_reports_the_map(cls):
     deck = radial_screen(n_radials=8)

@@ -633,7 +633,7 @@ EN
 def _feed_z(f_mhz):
     from momwire.dropin.nec5 import _shell
 
-    answered = _shell._answer(_DECK.format(f=f_mhz), basis="bspline")
+    answered = _shell._answer(_DECK.format(f=f_mhz), basis="bs2")
     assert not isinstance(answered, str), answered[-800:]
     port = answered[1][0].sources[0]
     return complex(port.voltage) / complex(port.current)

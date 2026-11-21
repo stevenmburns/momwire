@@ -179,7 +179,7 @@ def test_g1441_l3_a_buried_deck_with_and_without_the_lanes(monkeypatch, tmp_path
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    rc = _shell.main([str(DECK), str(out)], basis="razor-2p")
+                    rc = _shell.main([str(DECK), str(out)], basis="razor2p")
             finally:
                 restore()
         assert rc == 0

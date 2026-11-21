@@ -56,7 +56,7 @@ def _error_line(printout: str) -> str:
     return line
 
 
-@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p"])
 def test_a_radius_spread_below_a_crossing_node_is_refused_by_name(basis):
     line = _error_line(render(_text(SPREAD), basis=basis))
     assert line == " ***** NEC ERROR - " + _SPREAD_SENTENCE
@@ -79,13 +79,11 @@ def test_bs2_raises_the_spread_in_the_solve_not_the_constructor():
     with pytest.MonkeyPatch.context() as m:
         m.setattr(BSplineSolver, "compute_port_solution", spy)
         with pytest.raises(_serve.ServeRefusal):
-            _serve.serve(parse_nec5(_text(SPREAD)), basis="bspline")
+            _serve.serve(parse_nec5(_text(SPREAD)), basis="bs2")
     assert seen == ["solve"]
 
 
-@pytest.mark.parametrize(
-    "basis, theta", [("bspline", "0.01531"), ("razor-2p", "0.01528")]
-)
+@pytest.mark.parametrize("basis, theta", [("bs2", "0.01531"), ("razor2p", "0.01528")])
 def test_a_grazing_pair_inside_the_cap_is_refused_by_name(basis, theta):
     line = _error_line(render(_text(GRAZE), basis=basis))
     assert line.startswith(" ***** NEC ERROR - " + _GRAZE_HEAD + theta + " deg ")

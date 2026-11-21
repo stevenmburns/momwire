@@ -1,6 +1,6 @@
 """The C++ bspline port solve's twin of momwire#1898 (`kcl_nullspace`):
 `bspline::solve_ports` (`_bspline_fill_core.cpp`), the solve the
-nec5-bspline and nec42-bspline executables run, eliminates the junction
+nec5-bs2 and nec42-bs2 executables run, eliminates the junction
 rows before the factor exactly as `BSplineSolver._solve_reduced` does.
 
 The feature keeps reach 1: no executable requests it (`EXE_FEATURES`
@@ -18,7 +18,7 @@ a small cage) and on crafted matrices:
   Schur route, say why in the same words, and agree to the bit (or are both
   singular);
 - `bspline_nec4_printout(..., features=["kcl_nullspace"])` byte for byte
-  against `_nec4.render(text, basis="bspline")` under
+  against `_nec4.render(text, basis="bs2")` under
   MOMWIRE_X_KCL_NULLSPACE=1, the time lines masked, every solve's arrays to
   the bit, and the C++ route counter moved by one "reduced" per solve;
 - with the flag off, the C++ never enters the reduction and both copies
@@ -402,7 +402,7 @@ def _cxx_printout(text, features, marker):
     version, variant, _overlay = rc.pc.stamp()
     return acc.bspline_nec4_printout(
         text.encode("latin-1"),
-        rc.blas_addresses("bspline"),
+        rc.blas_addresses("bs2"),
         version,
         variant,
         marker,
@@ -423,7 +423,7 @@ def test_the_nec42_printout_on_is_pythons_byte_for_byte(name, monkeypatch):
     from momwire import _features
 
     try:
-        rc.blas_addresses("bspline")
+        rc.blas_addresses("bs2")
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
     text = DECKS[name]
@@ -446,7 +446,7 @@ def test_the_nec42_printout_on_is_pythons_byte_for_byte(name, monkeypatch):
 @pytest.mark.parametrize("name", list(DECKS))
 def test_the_nec42_printout_off_is_unchanged(name):
     try:
-        rc.blas_addresses("bspline")
+        rc.blas_addresses("bs2")
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
     text = DECKS[name]
@@ -479,7 +479,7 @@ def test_feature_scopes_on_two_threads_neither_leak_nor_cross():
     import threading
 
     try:
-        rc.blas_addresses("bspline")
+        rc.blas_addresses("bs2")
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
     text = DECKS["t_junction"]

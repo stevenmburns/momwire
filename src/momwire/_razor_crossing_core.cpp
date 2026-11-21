@@ -1,4 +1,4 @@
-// razor-2p's crossing blocks in C++: see `_razor_crossing_core.h`. Every
+// razor2p's crossing blocks in C++: see `_razor_crossing_core.h`. Every
 // step names the `_crossing_fill.py` / razor.py function it replays.
 #include "_razor_crossing_core.h"
 #include "_cpu_count.h"
@@ -1297,7 +1297,7 @@ void crossing_front_at(const Front &f, double k, Front &o) {
 // crossing decks (a vertical over 2-8 buried radials; 1.8-28 MHz; 1-9.5 %
 // bands; radials 0.1-1 wavelength, to 40 m; depth 0.02-1.5 m; sigma 1e-3 to
 // 3e-2, eps_r 5-30; some sloped), each at a forced n_a = 5, 7, 9 against
-// off, the nec5-razor-2p executable's full-precision Zin: every point above
+// off, the nec5-razor2p executable's full-precision Zin: every point above
 // the 3e-11 rounding floor satisfies |dZ|/|Z| <= 1.39e-2 X + 1.25 P (X, P
 // the two terms in `bound`). C_phase is twice that; C_origin four times,
 // because the origin term rests on two small-deck points (a held-out set of

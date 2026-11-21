@@ -1,4 +1,4 @@
-// razor-2p's k-dependent solve in one C++ call: see `_razor_solve_core.h`.
+// razor2p's k-dependent solve in one C++ call: see `_razor_solve_core.h`.
 //
 // Each window replays `RazorSolver._source_block_rows` on its
 // `t1_on_centroids` branch, step for step:

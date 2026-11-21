@@ -42,7 +42,7 @@ from momwire.razor import RazorSolver
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_crossing_source_1282"
 
-KNOT_BASES = ("razor-nec5", "razor-2p", "bspline", "bspline-d1", "sinusoidal-galerkin")
+KNOT_BASES = ("razor2p", "bs2", "bs1", "sg")
 
 # Each basis's own answer on the two placements, measured on Haswell at
 # f95a912 (`scratch` probe through `_serve.serve`). Pinned to 1e-3 ohm: four
@@ -54,8 +54,7 @@ PINNED = {
     # crossing node at z = 0. Before: 70.8068660130 - 0.2415288500j /
     # 71.4387098395 + 0.4515876592j. The move is 18 mOhm; the offset from
     # NEC-5 goes 0.455 -> 0.468 ohm, the node's own (CoarseCrossingNode).
-    "razor-nec5": (70.8198013935 - 0.2284093660j, 71.4518660216 + 0.4649614256j),
-    "razor-2p": (70.8198013935 - 0.2284093660j, 71.4518660216 + 0.4649614256j),
+    "razor2p": (70.8198013935 - 0.2284093660j, 71.4518660216 + 0.4649614256j),
     # momwire#1170 stage 0: the B-spline rows moved, and only they. This
     # deck's dialect solves extended by default, and until then its buried
     # radials sent the whole deck back to the reduced kernel; now the
@@ -70,8 +69,8 @@ PINNED = {
     # 1.9232 -> 1.9215 and 2.2078 -> 2.2061 ohm). Before: 71.1222331958 +
     # 1.1974414978j / 71.7035730045 + 2.1820406785j (bspline) and
     # 71.0004567564 + 0.9485060802j / 71.6033974267 + 1.6890268420j (d1).
-    "bspline": (71.1209327873 + 1.1959561344j, 71.7022582105 + 2.1805195725j),
-    "bspline-d1": (70.9991655466 + 0.9470253701j, 71.6020801445 + 1.6875193744j),
+    "bs2": (71.1209327873 + 1.1959561344j, 71.7022582105 + 2.1805195725j),
+    "bs1": (70.9991655466 + 0.9470253701j, 71.6020801445 + 1.6875193744j),
     # momwire#1354: the mixed-potential fill. The direct fill read
     # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
     # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
@@ -84,7 +83,7 @@ PINNED = {
     # 2.1204 -> 2.1161 ohm), and forcing the reduced kernel reads the old
     # pins within 0.4 milliohm. Measured on Rocketlake; macOS arm64 CI reads
     # the end1 pin to 1e-10.
-    "sinusoidal-galerkin": (
+    "sg": (
         71.1104775851 + 1.1094078316j,
         71.6922338638 + 2.0910463692j,
     ),
@@ -96,8 +95,8 @@ PIN_OHM = 1e-3
 # to 6 mOhm (measured 5.5); the Galerkin bases differ from NEC-5 in the
 # near-node reactance at this mesh (the node is unresolved, `CoarseCrossingNode`
 # says so: 258 mm against a 25 mm bar) and land within 0.30 ohm (measured
-# 0.300 bspline, 0.057 bspline-d1, 0.294 SG).
-SHIFT_OHM = {"razor-nec5": 0.02, "razor-2p": 0.02}
+# 0.300 bspline, 0.057 bs1, 0.294 SG).
+SHIFT_OHM = {"razor2p": 0.02}
 SHIFT_OHM_GALERKIN = 0.35
 
 # Spelling invariance: the two addresses solve one port on every basis, so
@@ -233,7 +232,7 @@ _TWO_IN_THE_PLANE = (
 
 
 @pytest.mark.parametrize("ground", ["GN 1", "GN 0,0,0,0,13.,.005"])
-@pytest.mark.parametrize("basis", ["bspline", "razor-nec5", "sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p", "sg"])
 def test_a_grounded_junction_with_nothing_buried_keeps_its_refusal(ground, basis):
     """Two wires meeting IN the plane over a PEC or a finite ground with no
     buried member: the node is #151's grounded junction, a short to the plane
@@ -257,7 +256,7 @@ def test_a_lone_wire_ending_in_the_plane_is_still_a_ground_contact():
 
 
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p"])
 def test_a_crossing_node_of_three_wires_is_the_node_port_on_the_named_wire(basis):
     """A second buried wire ending on the node: K = 3 (momwire#1569, the
     slant layout's shape). Served as the node port on the named wire -- an
@@ -267,7 +266,7 @@ def test_a_crossing_node_of_three_wires_is_the_node_port_on_the_named_wire(basis
     text = _deck("dan_end1").replace(
         "GE -1,-1", "GW 7,2,0.,0.,0.,.5,0.,-.0254,1.02616E-3\nGE -1,-1"
     )
-    solver_class = BSplineSolver if basis == "bspline" else RazorSolver
+    solver_class = BSplineSolver if basis == "bs2" else RazorSolver
     mesh, site = _site(text, solver_class)
     assert site.crossing and site.spelling == "node"
     (group,) = [g for g in mesh.junctions if (site.piece, site.end) in g]

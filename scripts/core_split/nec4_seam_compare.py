@@ -44,7 +44,7 @@ from momwire.dropin.nec2c import _portal
 
 HERE = pathlib.Path(__file__).resolve().parent
 SUFFIXES = {".nec", ".deck"}
-BASES = ("sinusoidal", "bspline")
+BASES = ("sinusoidal", "bs2")
 
 
 def _deck_compare():

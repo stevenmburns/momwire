@@ -27,7 +27,7 @@ its own body would restore exactly the problem this closes.
 On `wire_to_element`'s precedent (momwire#932), including keeping the
 private spelling working so nothing in this tree or in a consumer moves.
 Costs nothing at import: both modules were already loaded by `import
-momwire` before the export existed (measured — `razor` and `bspline` pull
+momwire` before the export existed (measured — `razor` and `bs2` pull
 them in), so this adds a name, not a module.
 """
 

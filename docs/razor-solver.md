@@ -462,22 +462,22 @@ against a 0.20 Ω bar, offsets constant to 0.0211 Ω against 0.05 Ω.
 
 ## The deck front ends (momwire#432; the nec2 one retired at momwire#821)
 
-Both dialect front ends read `momwire.deck.BASES`, where `"razor-2p"` — and
-`"razor-nec5"`, its deprecated spelling — bind this class at the identified
+Both dialect front ends read `momwire.deck.BASES`, where `"razor2p"` binds
+this class at the identified
 quadrature below (`nec5_quadrature=True`, the same "one class, one extra
-kwarg" shape `"bspline-d1"` uses for the degree axis). The other lane this
+kwarg" shape `"bs1"` uses for the degree axis). The other lane this
 class can take — Gauss-Legendre nodes along the testing path,
 `nec5_quadrature=False` — was the roster's plain `razor` entry until
 momwire#753 retired it as not worth ordering (measured 20x the wall time for
-a 0.001 Ω difference from `razor-2p`); it stays reachable by constructing
+a 0.001 Ω difference from `razor2p`); it stays reachable by constructing
 `RazorSolver(...)` directly. Exactly one of the two front ends serves the
 razor names, and which one follows from where this class puts a gap.
 
 **The NEC-5 dialect (`momwire.eznec`) serves razor.** It writes a source at
 a NODE, and this class carries its sites on knots, so that dialect's grid is
 this family's own: `tests/test_razor_nec5_corpus.py` measures 77 of 80
-captures served (exactly the set `bspline` serves), 202 feed/load snaps and
-zero ambiguous ones. The EZNEC drop-in ships `momwire-nec5-razor-2p` as a
+captures served (exactly the set `bs2` serves), 202 feed/load snaps and
+zero ambiguous ones. The EZNEC drop-in ships `momwire-nec5-razor2p` as a
 signed launcher (momwire#1295 phase 4); the deprecated
 `momwire-eznec-razor-2p` and `-razor-nec5` names it shipped first (momwire#819)
 were dropped in momwire#1583;

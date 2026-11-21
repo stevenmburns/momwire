@@ -6,7 +6,7 @@ around it that does not depend on how that solver integrates: the
 `exact_kernel=False | True | "auto"` option and its resolution, the
 construction-time and fill-route refusals, the coaxial groups the correction
 covers, and the axial frame of a group. It was `BSplineSolver`'s own code
-until momwire#1433 lifted it here so razor-2p (#1433), sin (#1434) and SG
+until momwire#1433 lifted it here so razor2p (#1433), sin (#1434) and SG
 (#1435) take the same option with the same semantics, and so a front end
 (the roster in `deck/_solver.py`, the advisories in `_wire_spec`) can ask a
 solver class the same questions whichever family it is.
@@ -25,10 +25,10 @@ them; a node-sampled outer integral over a self or adjacent pair sees an
 (u - e) ln|u - e| endpoint singularity and converges algebraically (~n^-4),
 eight orders short of the 1e-12 the 2-D closed form holds -- and a
 re-spelling of bs2's correction would change its bits, which this module's
-own gate forbids. A point- or path-tested row (razor-2p's centroids, sin's
+own gate forbids. A point- or path-tested row (razor2p's centroids, sin's
 match points) has no outer integral to lose: it needs only the 1-D moments of
 K against the source polynomials at an observer point, which is the kernel
-layer's second primitive, 1-D point moments (razor-2p, momwire#1433). So the
+layer's second primitive, 1-D point moments (razor2p, momwire#1433). So the
 kernel and its integration primitives are shared, this plumbing is shared,
 and each solver keeps the lines that assemble a primitive into its own rows.
 """

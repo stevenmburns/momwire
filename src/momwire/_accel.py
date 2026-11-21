@@ -493,7 +493,7 @@ _CANCELLABLE_METHODS = (
     ("RowIndex", "find"),
     ("RowGroups", "add"),
     ("IntGroups", "add"),
-    # The razor-2p solve prototype polls between windows and inside the
+    # The razor2p solve prototype polls between windows and inside the
     # moment fill it calls.
     ("RazorSolveContext", "port_solution"),
     ("RazorSolveContext", "front_port_solution"),

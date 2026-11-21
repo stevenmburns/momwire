@@ -4,7 +4,7 @@
 // CPython routine whose arithmetic it replays; the text it writes is that
 // Python's, byte for byte, and so is the order in which it computes (an
 // exception escapes where Python's does). What the solver answers is its
-// `PrintoutEngine`'s (razor-2p: `_nec5_razor_printout_core.cpp`).
+// `PrintoutEngine`'s (razor2p: `_nec5_razor_printout_core.cpp`).
 #include "_nec5_printout_core.h"
 #include "_fma_inline.h"
 // `max_image_distance` (`_sommerfeld.max_image_distance`, which every basis'

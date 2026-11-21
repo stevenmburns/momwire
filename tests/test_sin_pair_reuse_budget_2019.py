@@ -1,7 +1,7 @@
 """`pair_reuse`'s byte budget on the sinusoidal fill (momwire#2019).
 
 The census and the plan of one fill are held to
-`_sin_pair_reuse.PLAN_BUDGET_BYTES`, razor-2p's budget. A deck past it says so
+`_sin_pair_reuse.PLAN_BUDGET_BYTES`, razor2p's budget. A deck past it says so
 in `pair_reuse_declined` and fills bit for bit as with reuse off; a deck
 inside it keeps its classes. The budget is moved here so that small decks
 reach both sides.
@@ -234,7 +234,7 @@ def test_a_census_with_no_room_for_one_band_runs_none():
 
 def test_the_plans_kept_between_solvers_are_one_fills_budget():
     """A long-lived process holds no more plans than one fill may use, on the
-    sinusoidal solver and on razor-2p (momwire#2026)."""
+    sinusoidal solver and on razor2p (momwire#2026)."""
     assert pr.SHARED_PLAN_BYTES == pr.PLAN_BUDGET_BYTES == 256 << 20
     header = Path(pr.__file__).with_name("_razor_pair_reuse_core.h").read_text()
     assert "SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;" in header

@@ -67,11 +67,11 @@ jobs = [
 ]
 
 [[level]]
-id = "exe-nec5-bspline-razor-2p-windows"
-description = "the nec5-bspline and nec5-razor-2p executables on Windows, avx2 and sse2"
+id = "exe-nec5-bs2-razor2p-windows"
+description = "the nec5-bs2 and nec5-razor2p executables on Windows, avx2 and sse2"
 jobs = [
-    "standalone.yml:windows",  # nec5-razor-2p with its embedded-Python fallback
-    "standalone.yml:windows-nopython",  # nec5-razor-2p and nec5-bspline, avx2 and sse2
+    "standalone.yml:windows",  # nec5-razor2p with its embedded-Python fallback
+    "standalone.yml:windows-nopython",  # nec5-razor2p and nec5-bs2, avx2 and sse2
 ]
 
 # The single-file MinGW-w64 (UCRT64) build, a preview beside the MSVC zip. Its
@@ -79,23 +79,23 @@ jobs = [
 # feature's reach can stop at the MSVC build. Directly after it, so a reach
 # that covers the Linux and macOS executables covers this build too.
 [[level]]
-id = "exe-nec5-bspline-razor-2p-windows-mingw"
-description = "the nec5-bspline and nec5-razor-2p single-file MinGW-w64 (UCRT64) executables on Windows, avx2 and sse2 in one file (preview)"
+id = "exe-nec5-bs2-razor2p-windows-mingw"
+description = "the nec5-bs2 and nec5-razor2p single-file MinGW-w64 (UCRT64) executables on Windows, avx2 and sse2 in one file (preview)"
 jobs = [
     "standalone.yml:windows-single",  # tags, main pushes and dispatch; never on a pull request
 ]
 
 [[level]]
-id = "exe-nec5-bspline-razor-2p-linux-macos"
-description = "the nec5-bspline and nec5-razor-2p executables on Linux and macOS"
+id = "exe-nec5-bs2-razor2p-linux-macos"
+description = "the nec5-bs2 and nec5-razor2p executables on Linux and macOS"
 jobs = [
     "standalone.yml:linux",
     "standalone.yml:macos-nopython",
 ]
 
 [[level]]
-id = "exe-nec42-bspline"
-description = "the nec42-bspline executable, all platforms"
+id = "exe-nec42-bs2"
+description = "the nec42-bs2 executable, all platforms"
 jobs = [
     "standalone.yml:linux-nec42-bs",  # Linux only today
 ]

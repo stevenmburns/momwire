@@ -8,7 +8,7 @@ the licensed NEC-5's stepped layout. The gates:
   * the frequency list is NEC-2's (linear and multiplicative, accumulated a
     step at a time), and it is the list NEC-5 printed on every probe;
   * the LAYOUT is the licensed one line for line, numbers masked, on every
-    served probe, on razor-2p and bspline;
+    served probe, on razor2p and bspline;
   * each frequency block is exactly the printout a one-frequency deck at that
     frequency gives, and the impedances agree with NEC-5's on razor-nec5;
   * the decks NEC-5 answers in a way this seam does not reproduce are refused
@@ -53,7 +53,7 @@ BURIED = tuple(
 )
 SERVED = (*FREE_SPACE, *BURIED)
 ONE_FREQUENCY = ("p01_lin1", "p06_zero", "p10b_ne_single")
-TWIN = "razor-nec5"
+TWIN = "razor2p"
 _NUMBER = re.compile(r"[-+]?\d+(\.\d+)?(E?[-+]\d+)?")
 
 
@@ -168,7 +168,7 @@ def test_a_stepping_type_nec_does_not_define_is_refused():
 # -- the printout ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize("name", SERVED)
 def test_the_layout_is_the_licensed_one(name, basis):
     ours = _from_structure(_ours(render(_deck(name), basis=basis).splitlines()))
@@ -215,7 +215,7 @@ def _stepped_and_singles(text, basis):
     return stepped, singles
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize(
     "name",
     [
@@ -237,7 +237,7 @@ CORPUS = sorted((Path(__file__).parent / "fixtures" / "eznec" / "decks").glob("*
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_every_corpus_deck_steps_to_its_one_point_printouts(basis):
     """Every EZNEC corpus deck, its FR turned into three steps 1 % apart:
     each block is that frequency's one-point printout. The decks whose last
@@ -261,13 +261,13 @@ def test_every_corpus_deck_steps_to_its_one_point_printouts(basis):
 
 @pytest.mark.parametrize(
     ("basis", "method"),
-    [("razor-2p", "_assemble_Z_prepare"), ("bspline", "_same_edge_prep")],
+    [("razor2p", "_assemble_Z_prepare"), ("bs2", "_same_edge_prep")],
 )
 def test_the_wavenumber_independent_half_is_built_once(monkeypatch, basis, method):
     from momwire.bspline import BSplineSolver
     from momwire.razor import RazorSolver
 
-    cls = RazorSolver if basis == "razor-2p" else BSplineSolver
+    cls = RazorSolver if basis == "razor2p" else BSplineSolver
     calls = []
     real = getattr(cls, method)
 
@@ -289,7 +289,7 @@ def test_every_frequency_is_solved_in_this_process(monkeypatch):
         return real(deck, **kw)
 
     monkeypatch.setattr(_serve, "serve", spy)
-    render(_deck("p03_lin5"), basis="razor-2p")
+    render(_deck("p03_lin5"), basis="razor2p")
     assert seen == [26.0, 27.0, 28.0, 29.0, 30.0]
 
 
@@ -302,7 +302,7 @@ def test_every_frequency_is_solved_in_this_process(monkeypatch):
     ],
 )
 def test_what_nec5_answers_differently_is_refused_by_name(name, says):
-    out = render(_deck(name), basis="razor-2p")
+    out = render(_deck(name), basis="razor2p")
     assert "NEC ERROR" in out
     assert says in out
 
@@ -310,5 +310,5 @@ def test_what_nec5_answers_differently_is_refused_by_name(name, says):
 @pytest.mark.parametrize("name", ONE_FREQUENCY)
 def test_a_one_frequency_deck_prints_as_it_always_did(name):
     text = _deck(name)
-    assert "- - FREQUENCY - -" in render(text, basis="razor-2p")
-    assert render(text, basis="razor-2p").count("- - FREQUENCY - -") == 1
+    assert "- - FREQUENCY - -" in render(text, basis="razor2p")
+    assert render(text, basis="razor2p").count("- - FREQUENCY - -") == 1

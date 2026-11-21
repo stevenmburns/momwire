@@ -330,7 +330,7 @@ def test_a_crossing_deck_changes_kernel_at_the_node():
 
 
 # ---------------------------------------------------------------------------
-# razor-2p, on the same rule (momwire#1614)
+# razor2p, on the same rule (momwire#1614)
 # ---------------------------------------------------------------------------
 
 RAZOR = dict(cls=RazorSolver, nec5_quadrature=True)

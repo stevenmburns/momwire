@@ -75,8 +75,8 @@ def test_bspline_carries_the_cards_effect(n):
     """bspline is a different basis, so its gate is the card's own effect:
     the change in X the card makes agrees with nec2c's to 2 % (measured
     0.9 %, 0.4 %, 0.1 % at 5, 9, 17 segments)."""
-    loaded = _z(_deck(n, 1e-9), "bspline")
-    bare = _z(_deck(n, 0.0), "bspline")
+    loaded = _z(_deck(n, 1e-9), "bs2")
+    bare = _z(_deck(n, 0.0), "bs2")
     oracle = (NEC2C[n, 1e-9, 2, 0.0] - NEC2C_BARE[n]).imag
     assert abs((loaded - bare).imag / oracle - 1.0) < 0.02
 

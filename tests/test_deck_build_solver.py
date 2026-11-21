@@ -93,7 +93,7 @@ def test_every_nec2_basis_builds_the_same_model():
         assert built.basis == name
         families.add(solver_class)
     assert len(families) == 6
-    assert set(BASES) - set(NEC2_BASES) == {"razor-2p", "razor-nec5"}
+    assert set(BASES) - set(NEC2_BASES) == {"razor2p"}
 
 
 def test_the_nec2_roster_is_the_centre_feeds_column_of_the_matrix():
@@ -105,7 +105,7 @@ def test_the_nec2_roster_is_the_centre_feeds_column_of_the_matrix():
         assert (name in NEC2_BASES) is bool(solver_class.capabilities.centre_feeds)
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
+@pytest.mark.parametrize("basis", ["razor2p"])
 def test_a_centre_snapping_basis_refuses_a_fed_deck_by_name(basis):
     """The `centre_feeds` gate momwire#673 declared and momwire#821 landed.
 
@@ -157,15 +157,15 @@ def test_a_zero_voltage_deck_solves_to_the_one_volt_impedance():
 
 def test_the_default_basis_is_the_degree_2_bspline():
     built = build_solver(parse(DIPOLE))
-    assert built.basis == "bspline"
-    assert isinstance(built.solver, BASES["bspline"][0])
+    assert built.basis == "bs2"
+    assert isinstance(built.solver, BASES["bs2"][0])
 
 
 def test_an_unknown_basis_refuses_by_name():
     with pytest.raises(ValueError) as excinfo:
-        build_solver(parse(DIPOLE), basis="bs2")
+        build_solver(parse(DIPOLE), basis="bs42")
     message = str(excinfo.value)
-    assert "unknown basis 'bs2'" in message
+    assert "unknown basis 'bs42'" in message
     # The refusal is the roster's own source, so a new family cannot be added
     # without the message learning its name.
     for name in BASES:

@@ -67,7 +67,7 @@ jobs:
           "$bin/python" -m pip install "${{ inputs.momwire || 'momwire' }}"
           "$bin/python" -c "import momwire, importlib.metadata as m; print('momwire', m.version('momwire'), 'accelerated' if momwire.accelerated else 'NUMPY FALLBACK')"
           ls "$bin" | grep momwire-nec2c
-          if [[ "$RUNNER_OS" == Windows ]]; then echo "ENGINE=$bin/momwire-nec2c-bspline.exe" >> "$GITHUB_ENV"; else echo "ENGINE=$bin/momwire-nec2c-bspline" >> "$GITHUB_ENV"; fi
+          if [[ "$RUNNER_OS" == Windows ]]; then echo "ENGINE=$bin/momwire-nec2c-bs2.exe" >> "$GITHUB_ENV"; else echo "ENGINE=$bin/momwire-nec2c-bs2" >> "$GITHUB_ENV"; fi
       - name: Drive it the way SimNEC does (all launch shapes)
         if: runner.os != 'Windows'
         run: bash scripts/simnec_driver/run_shapes.sh "$ENGINE"
@@ -97,4 +97,4 @@ jobs:
           CC: clang
           CXX: clang++
       - name: Drive it the way SimNEC does (all launch shapes)
-        run: bash scripts/simnec_driver/run_shapes.sh "$(python -c 'import sys, os; print(os.path.join(os.path.dirname(sys.executable), "momwire-nec2c-bspline"))')"
+        run: bash scripts/simnec_driver/run_shapes.sh "$(python -c 'import sys, os; print(os.path.join(os.path.dirname(sys.executable), "momwire-nec2c-bs2"))')"

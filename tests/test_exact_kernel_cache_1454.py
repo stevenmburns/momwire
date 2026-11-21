@@ -268,7 +268,7 @@ def test_the_seam_sequence_matches_fresh_printouts():
     ]
 
     def render(cfg):
-        return _shell.render(deck.format(**cfg), basis="razor-2p")
+        return _shell.render(deck.format(**cfg), basis="razor2p")
 
     def strip(text):
         return "\n".join(x for x in text.splitlines() if "TIME" not in x)

@@ -9,7 +9,7 @@
 // this is a second implementation of the same formulas (`pair_moments2`,
 // `pair_moments2_far`, the two-radius piece rule `_integrate_two_radius`),
 // not a bit-for-bit replay of numpy's array arithmetic, the way
-// `PointCrossRowsCore` is razor-2p's. Every value depends on its own pair
+// `PointCrossRowsCore` is razor2p's. Every value depends on its own pair
 // alone, never on the window, the batch or the thread count.
 //
 // Included INSIDE each TU's namespace, after `_exact_kernel_ring_inline.h`,

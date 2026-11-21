@@ -88,13 +88,13 @@ The basis, and why it is the one
 --------------------------------
 ``BSplineSolver`` at the repo's own default configuration — ``degree=2``,
 ``feed_model="point"``, no enrichment — which is what
-``momwire.deck.build_solver``'s ``"bspline"`` entry constructs and what the
+``momwire.deck.build_solver``'s ``"bs2"`` entry constructs and what the
 portal solves every NEC-2 deck with, plus the EXTENDED KERNEL (momwire#1326):
 NEC-5's own kernel behaves as EK-on and this dialect has no card to say
 otherwise, so every basis here takes it unless it or the deck cannot, and
 then solves reduced with an ``ExtendedKernelDefault`` advisory.  A deck with
-buried wires keeps it above ground on ``bspline`` (momwire#1170 stage 0), on
-``razor-2p`` (momwire#1614) and on ``sinusoidal-galerkin`` (momwire#1626): the
+buried wires keeps it above ground on ``bs2`` (momwire#1170 stage 0), on
+``razor2p`` (momwire#1614) and on ``sg`` (momwire#1626): the
 buried wires solve reduced, and the same advisory says which.
 
 The family used to be no choice at all, and that claim was wrong.  NEC-5
@@ -662,9 +662,9 @@ EPSC_CONDUCTIVITY_FACTOR = 59.96
 # committed printout in `tests/fixtures/eznec/printouts` is byte-gated
 # against it — a silent change here would move every number in every one of
 # them and break nothing else.  No degree sits beside it any more: the roster
-# entry carries that (`BASES["bspline-d1"]`), and `BSplineSolver`'s own
+# entry carries that (`BASES["bs1"]`), and `BSplineSolver`'s own
 # default is the 2 this seam wants.
-BASIS = "bspline"
+BASIS = "bs2"
 
 # The families that keep the CUT spelling of a series EMF, and the whole of
 # why: their committed printouts are byte-gated against it.  Moving them
@@ -860,8 +860,8 @@ _REFUSE_CROSSING_SOURCE_NO_KNOT = (
     "never on a node, and the only segment-centre spelling of this source is "
     "a segment straddling the interface, which is not a well-posed feed - "
     "NEC-4.2, whose sources are segment-centred too, refuses it or solves it "
-    "wrong. The knot bases serve it - bspline, bspline-d1, razor-2p and "
-    "sinusoidal-galerkin"
+    "wrong. The knot bases serve it - bspline, bs1, razor2p and "
+    "sg"
 )
 _REFUSE_BURIED_NO_MEDIUM = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
@@ -3106,7 +3106,7 @@ def _solver_for(
     presence of a keyword rather than by its value, so a seam that spelled
     its own rule here would be a second copy of a list that has to stay
     exactly the first one.  ``basis_kwargs`` is the roster entry's own —
-    ``degree`` for ``bspline-d1``, ``nec5_quadrature`` for ``razor-nec5`` —
+    ``degree`` for ``bs1``, ``nec5_quadrature`` for ``razor2p`` —
     which is why no degree is named here: ``BSplineSolver``'s default IS the
     2 this seam wants, and passing it explicitly is what a family without a
     degree axis refuses.
@@ -5304,7 +5304,7 @@ def _port_solution(solver, shared: dict | None):
         )
         if 2 * nm * nm * sum_ne2 * 16 > solver.swept_mem_mb * 2**20:
             return solver.compute_port_solution()
-        key = ("bspline", type(solver), solver.extended_kernel, _geometry_digest(geom))
+        key = ("bs2", type(solver), solver.extended_kernel, _geometry_digest(geom))
         prep = shared.get(key)
         if prep is None:
             prep = shared[key] = solver._same_edge_prep(geom)

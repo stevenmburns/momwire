@@ -10,7 +10,7 @@ and these tests hold momwire to its printouts:
   counts and the Reflection symmetry block — byte for byte;
 * every segment centre and length in the Wire Currents table, to the
   printout's own precision;
-* the feed impedance, razor-2p (NEC-5's own basis) within a tolerance
+* the feed impedance, razor2p (NEC-5's own basis) within a tolerance
   measured on these decks;
 * PT -1 dropping the Wire Currents table and nothing else;
 * and the forms this dialect refuses, each by name.
@@ -113,7 +113,7 @@ def test_every_segment_centre_and_length_is_the_engines(name):
             assert abs(a - b) <= 5e-6 * max(abs(b), 1e-2) + reach, (name, mine, engine)
 
 
-# razor-2p is NEC-5's own basis. Measured against the licensed engine on these
+# razor2p is NEC-5's own basis. Measured against the licensed engine on these
 # 29 decks (2026-10-24), its worst row is 8.7e-5 of |Z| (y10); bs2 on the same
 # coarse meshes is 1.6 % to 31 % off, its own basis rather than a misread card.
 RAZOR_RTOL = 2e-4
@@ -121,7 +121,7 @@ RAZOR_RTOL = 2e-4
 
 @pytest.mark.parametrize("name", PROBES)
 def test_the_feed_impedance_agrees_with_the_engine_on_razor_2p(name):
-    ours = _impedances(render(deck(name), basis="razor-2p"))
+    ours = _impedances(render(deck(name), basis="razor2p"))
     theirs = _impedances(oracle(name))
     assert len(ours) == len(theirs)
     for z, ref in zip(ours, theirs, strict=True):

@@ -732,7 +732,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     default = default_out.read_bytes()
 
     # Keyed off the exe's OWN stem, so the marker's hyphen count is the exe's
-    # business and not this loop's: `momwire-nec5` -> `razor-2p`, and a
+    # business and not this loop's: `momwire-nec5` -> `razor2p`, and a
     # rename of the bundle does not silently reslice the basis.  Casefolded
     # for the same reason `basis_from_program_name` is — this loop has to read
     # the name the way the exe reads it, or a `Momwire-Nec5-Razor-2p.exe`

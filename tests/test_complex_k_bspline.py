@@ -1278,7 +1278,7 @@ def test_gu1_8_refuse_complex_k_names_the_caller():
 
 def test_gu1_8_the_solver_family_is_untouched_by_the_widening():
     """The widened path is the kernel layer only: no solver grew a medium
-    in unit 1, and `bspline`'s module namespace is the place a stray
+    in unit 1, and `bs2`'s module namespace is the place a stray
     complex-k solver knob would first show up."""
     assert not hasattr(BSplineSolver, "medium")
     assert not hasattr(BSplineSolver, "eps_tilde")

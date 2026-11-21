@@ -47,7 +47,7 @@ cancel, so any rounding of their geometry other than the structure's own,
 including the canonical frame's, is amplified into the answer.
 
 The kernel scale is the longer of the source's length and the observer's
-radius, max(2H, a), razor-2p's rule (momwire#1971, ported by #1982). Where
+radius, max(2H, a), razor2p's rule (momwire#1971, ported by #1982). Where
 a segment is shorter than its radius the kernel varies over a, not h, and
 a rule in source lengths alone shared pairs a few h apart but inside a
 radius. Measured on a hairpin (two 10 m wires 2a apart joined by a 2a
@@ -278,7 +278,7 @@ CODE_SIGNS = np.array(
 HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False))
 
 
-#: The byte budget of one fill's plans AND their census, razor-2p's
+#: The byte budget of one fill's plans AND their census, razor2p's
 #: (`_razor_pair_reuse_core.h`, PLAN_BUDGET_BYTES) and for its reason: the
 #: 512 MB hosted bound is this, one dense Z (144 MB at the 3000-segment cap)
 #: and the interpreter. Past it the fill declines (`over_budget_reason`) and
@@ -361,7 +361,7 @@ OVER_BUDGET = _OverBudget()
 
 
 def over_budget_reason() -> str:
-    """`pair_reuse_declined` for a deck past the budget, razor-2p's words."""
+    """`pair_reuse_declined` for a deck past the budget, razor2p's words."""
     return (
         "the plan and its census would exceed the "
         f"{PLAN_BUDGET_BYTES / 2**20:.6g} MB budget"

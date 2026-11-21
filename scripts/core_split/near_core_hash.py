@@ -3,7 +3,7 @@
     python scripts/core_split/near_core_hash.py record DIR DECK_OR_DIR...
     python scripts/core_split/near_core_hash.py replay DIR
 
-`record` renders each deck with razor-2p (the Python route) and saves the
+`record` renders each deck with razor2p (the Python route) and saves the
 arguments and answer of up to 4 calls per deck of each of
 `near_interface_six_columns` (the column cache dropped: it is value-neutral,
 and the replay runs without it as well as with a fresh one) and
@@ -85,7 +85,7 @@ def record(out_dir, decks, per=4):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 try:
-                    _shell.render(d.read_text(encoding="latin-1"), basis="razor-2p")
+                    _shell.render(d.read_text(encoding="latin-1"), basis="razor2p")
                 except Exception:  # noqa: BLE001
                     pass
     finally:

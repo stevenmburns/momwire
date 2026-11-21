@@ -23,7 +23,7 @@ names what it refuses (`not served by this build: ...`) instead of the
 answer. That is the cue to run the same deck through the drop-in, which
 runs the Python engine and serves more decks.
 
-The Windows executables are nec5-bspline and nec5-razor-2p. For the NEC-4.2
+The Windows executables are nec5-bs2 and nec5-razor2p. For the NEC-4.2
 engine slot in EZNEC, SimNEC or 4nec2, for a NEC-2 engine, or for another
 formulation, use the drop-in. Its NEC-2 engines, `momwire-nec2c.exe` and
 `momwire-nec2c-sinusoidal.exe`, are the same engines as the `pip install
@@ -54,7 +54,7 @@ a warm-up, the two forms interleaved, nothing pinned. The drop-in's times are
 its warm runs, with its engine already started. The eight decks are listed
 A to H in order of the executable's B-spline time.
 
-**nec5-razor-2p**
+**nec5-razor2p**
 
 | Deck | Executable | Drop-in | Drop-in / executable |
 |---|---|---|---|
@@ -67,7 +67,7 @@ A to H in order of the executable's B-spline time.
 | G | 5.74 s | 6.79 s | 1.18 |
 | H | 21.97 s | 26.39 s | 1.20 |
 
-**nec5-bspline**
+**nec5-bs2**
 
 | Deck | Executable | Drop-in | Drop-in / executable |
 |---|---|---|---|
@@ -81,10 +81,10 @@ A to H in order of the executable's B-spline time.
 | H | 33.50 s | 32.01 s | 0.96 |
 
 On the four slowest decks (E to H), the drop-in takes
-18–20 % longer than the executable with razor-2p on three of them, and 54 %
+18–20 % longer than the executable with razor2p on three of them, and 54 %
 longer on F. With B-spline it ranges from 10 % faster (G) to 53 % longer
 (F). F is the outlier in both. The drop-in's overhead is tracked in
-[momwire#2040](https://github.com/stevenmburns/momwire/issues/2040). On the small decks (A to D) it takes 45–80 % longer with razor-2p. That
+[momwire#2040](https://github.com/stevenmburns/momwire/issues/2040). On the small decks (A to D) it takes 45–80 % longer with razor2p. That
 is a fixed cost of a tenth to two-thirds of a second per run, not a cost
 that grows with the deck. Pinned to four cores with
 `start /affinity 55`, the ratios are the same within the noise of those
@@ -118,7 +118,7 @@ starts its engine once for every frequency of a sweep.
 
 The tables above time single runs. A sweep that starts the engine at every
 frequency, the way EZNEC does, gives the same answer. On the same laptop,
-with nec5-razor-2p and 51 single-frequency decks launched one at a time:
+with nec5-razor2p and 51 single-frequency decks launched one at a time:
 
 | Deck | Standalone, warm | Drop-in, warm | Standalone, cold | Drop-in, cold |
 |---|---|---|---|---|
@@ -146,7 +146,7 @@ engine, one command per basis, plus two things neither zip has:
   [antennaknobs](https://antennaknobs.dev).
 
 It updates with `pip install -U momwire`. Point a host program's engine
-setting at the command's full path, which `where momwire-nec5-razor-2p`
+setting at the command's full path, which `where momwire-nec5-razor2p`
 prints in a Command Prompt.
 
 ## The single-file build
@@ -156,7 +156,7 @@ in one program, with no DLLs beside it. On the same laptop and decks, with a
 build that predates 0.95.0, it ran at about the speed of the standalone
 executable: within about 5 % over all eight decks, with neither form ahead
 across the board. The standalone executable was 3–16 % faster on the largest
-decks, and the single-file build was faster on some razor-2p decks. Its
+decks, and the single-file build was faster on some razor2p decks. Its
 printouts matched the standalone executable's to the last printed digit.
 
 It is a preview: use it when one file matters more to you than the last few

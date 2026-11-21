@@ -47,7 +47,7 @@ The gates, matching the issue's requirements:
    is NEC-2's own basis (a SAME-BASIS comparison, the only kind momwire#510
    allows gating), plus a power BOUND on the loading's own share of R_in;
 3. the nec5 dialect against our licensed NEC-5 materials on
-   ``basis="razor-nec5"``, the formulation twin;
+   ``basis="razor2p"``, the formulation twin;
 4. an adversarial probe — the card lands on the wire it names and no other;
 5. the range rules: whole wire and whole structure, explicit and wildcard,
    a partial range refusing, ``LD 2`` + ``LD 5`` composing, and a basis
@@ -561,7 +561,7 @@ NEC5_GATE = 0.005
 
 @pytest.mark.parametrize("card", list(NEC5))
 def test_razor_nec5_matches_the_licensed_binary_with_the_card_present(card):
-    z_mw = _serve.serve(parse_nec5(nec5_deck(card)), basis="razor-nec5")
+    z_mw = _serve.serve(parse_nec5(nec5_deck(card)), basis="razor2p")
     z_mw = z_mw.sources[0].impedance
     z_oracle = NEC5[card]
     rel = abs(z_mw - z_oracle) / abs(z_oracle)
@@ -573,8 +573,8 @@ def test_the_loading_delta_itself_matches_the_licensed_binary(card):
     """The sharper form: the twin's own basis gap is common to both runs, so
     the DELTA the card makes is what this issue actually changed.  Measured
     1.2e-3 (LD 2) and 1.0e-3 (LD 3) relative."""
-    bare = _serve.serve(parse_nec5(nec5_deck()), basis="razor-nec5")
-    loaded = _serve.serve(parse_nec5(nec5_deck(card)), basis="razor-nec5")
+    bare = _serve.serve(parse_nec5(nec5_deck()), basis="razor2p")
+    loaded = _serve.serve(parse_nec5(nec5_deck(card)), basis="razor2p")
     delta_mw = loaded.sources[0].impedance - bare.sources[0].impedance
     delta_oracle = NEC5[card] - NEC5[""]
     rel = abs(delta_mw - delta_oracle) / abs(delta_oracle)

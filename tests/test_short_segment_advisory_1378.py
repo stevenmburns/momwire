@@ -38,10 +38,10 @@ A = 3.175e-3
 # the advisory lives in the constructors, and a subclass that skipped its
 # parent's tail would read as silent here.
 SOLVERS = [
-    ("bspline", BSplineSolver, {}),
+    ("bs2", BSplineSolver, {}),
     ("hmatrix", HMatrixSolver, {}),
     ("arrayblock", ArrayBlockSolver, {}),
-    ("razor-2p", RazorSolver, {"nec5_quadrature": True}),
+    ("razor2p", RazorSolver, {"nec5_quadrature": True}),
     ("razor-gl", RazorSolver, {"nec5_quadrature": False}),
     ("sinusoidal", SinusoidalSolver, {}),
     ("sin-galerkin", SinusoidalGalerkinSolver, {}),
@@ -181,7 +181,7 @@ NX
 """
 
 
-@pytest.mark.parametrize("basis", ["bspline", "hmatrix", "arrayblock", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["bs2", "hmatrix", "arrayblock", "sinusoidal"])
 def test_a_plane_split_that_shortens_the_mesh_is_seen(basis):
     """Negative control for 'the check runs on the final mesh'. The deck's
     own segments are all 3 radii (6 mm at a = 2 mm) and the input check would
@@ -205,7 +205,7 @@ def test_the_same_deck_without_the_plane_is_silent():
     free = _PLANE_SPLIT.replace("GE 1\nGN 2 0 0 0 13. 0.005\n", "GE 0\n")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        build_solver(parse(free), basis="bspline", frequency_mhz=300.0)
+        build_solver(parse(free), basis="bs2", frequency_mhz=300.0)
     assert [w for w in caught if issubclass(w.category, ShortSegments)] == []
 
 

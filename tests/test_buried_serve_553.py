@@ -1189,7 +1189,7 @@ ANCHOR_ENVELOPE_OHM = 6.0
 # `why` names a DECISION, not a wait -- an xfail whose reason promises a
 # continuation that no longer exists reads as work in flight.
 _TRUNK_REFUSAL = {
-    "bspline": (
+    "bs2": (
         BSplineSolver,
         "stands an END in the ground plane",
         "the contact+buried combination is refused — momwire#567",

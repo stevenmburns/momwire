@@ -1099,7 +1099,7 @@ def radius_step_message(family, found, nec4_dialect=False):
         f"{family}: {where}.{why} At a change of wire radius this basis follows "
         "NEC-2, including NEC-2's known weakness there: it underestimates the "
         "effect of the step, and more so as the mesh is refined. Basis "
-        "sinusoidal-galerkin or bspline gives the converged answer "
+        "sg or bspline gives the converged answer "
         "(momwire#1632, momwire#1644)."
     )
 

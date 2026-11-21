@@ -856,7 +856,7 @@ def test_sg_knot_feeds_describes_the_point_gap_the_roster_can_build():
     `feed_model`. A future roster edit re-adding a `"segment"` spelling would
     hand `eznec/_serve.py`'s `knot_feeds` gate an instance the cell does not
     describe — the exact failure momwire#611 exists to prevent."""
-    cls, kwargs = BASES["sinusoidal-galerkin"]
+    cls, kwargs = BASES["sg"]
     assert cls.capabilities.knot_feeds is True
 
     # (1) the roster cannot construct the snapping instance
@@ -892,12 +892,12 @@ def test_sg_knot_feeds_describes_the_point_gap_the_roster_can_build():
 # exactly one of the two grids:
 #
 #     family                    odd (centre)   even (knot)
-#     bspline, bspline-d1       ~1e-14         ~1e-14      lands both, snaps never
+#     bspline, bs1       ~1e-14         ~1e-14      lands both, snaps never
 #     hmatrix, arrayblock       ~1e-14         ~1e-14
-#     sinusoidal-galerkin       ~4e-15         ~4e-15
+#     sg       ~4e-15         ~4e-15
 #     sinusoidal                ~1e-12         1.8e-01     snaps to the centre
 #     pulse, harrington         ~2e-15         1.7e-01
-#     razor-2p, razor-nec5      1.8e-01        2e-16       snaps to the knot
+#     razor2p, razor-nec5      1.8e-01        2e-16       snaps to the knot
 #
 # The bars are the knot probe's, unchanged, because the separation is the
 # same twelve orders: nothing measured sits between 1e-10 and 1e-3.
@@ -937,7 +937,7 @@ def test_the_two_feed_axes_are_complements_not_duplicates(basis):
     that snaps on each side is not the same family.
 
     This is the claim that makes `centre_feeds` a separate axis rather than
-    `not knot_feeds`: `bspline` and `sinusoidal-galerkin` are True on BOTH,
+    `not knot_feeds`: `bs2` and `sg` are True on BOTH,
     because they never snap at all and land wherever they were named. A
     single axis could not say that.
     """
@@ -961,7 +961,7 @@ def test_razor_is_the_only_family_that_refuses_a_centre_gap():
         for basis, (cls, _kw) in BASES.items()
         if not cls.capabilities.centre_feeds
     }
-    assert snapping == {"razor-2p", "razor-nec5"}, snapping
+    assert snapping == {"razor2p"}, snapping
     for basis in snapping:
         cls, _kw = BASES[basis]
         assert cls.capabilities.refusal("centre_feeds"), (

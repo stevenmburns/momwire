@@ -407,7 +407,7 @@ def test_g1133_an_in_plane_other_junction_still_refuses_by_name():
 
 def test_g1133_the_other_trunks_share_the_above_side_scope(monkeypatch):
     """The scope function is shared, so the lift must reach the trunks that
-    read it — `sinusoidal-galerkin` is one of the three bases the reporting
+    read it — `sg` is one of the three bases the reporting
     deck's census left as candidates, and all three sat behind this refusal."""
     sg = SinusoidalGalerkinSolver
     assert tuple(sg(**above_side_deck())._crossing_junction_indices()) == (0,)

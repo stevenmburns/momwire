@@ -74,7 +74,7 @@ _serve._port_solution = spy
 request = json.load(sys.stdin)
 share = request.get("share")
 with _times.answering("test") as times, _thread_policy.frame_share(share):
-    printout = _shell.seam(basis="razor-2p").answer(request["deck"], "")[0]
+    printout = _shell.seam(basis="razor2p").answer(request["deck"], "")[0]
 seen["left"] = pools()
 seen["line"] = times.line()
 seen["printout"] = printout
@@ -372,7 +372,7 @@ def _late(deck: str, basis: str, cpus=None) -> dict:
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="copies a Linux shared library")
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_a_library_loaded_during_the_answer_is_held_to_the_count(basis):
     # MIDDLE's rule is min(4, cores): below OpenBLAS's default width on a
     # machine of more than four cores, so the late copy has to be held to it.
@@ -390,7 +390,7 @@ def test_a_late_library_stays_inside_the_affinity_mask():
     if len(allowed) < 2:
         pytest.skip("needs two CPUs")
     mask = set(allowed[:2])
-    seen = _late(_deck(10, 40), "razor-2p", cpus=mask)
+    seen = _late(_deck(10, 40), "razor2p", cpus=mask)
     assert max(seen["after_solve"].values()) <= len(mask), seen["after_solve"]
 
 
@@ -452,7 +452,7 @@ def spy(solver, shared):
     seen["fill"] = blas()
     return real(solver, shared)
 _serve._port_solution = spy
-_shell.render(sys.stdin.read(), basis="razor-2p")
+_shell.render(sys.stdin.read(), basis="razor2p")
 seen["left"] = blas()
 seen["threads"] = len(os.listdir("/proc/self/task")) if os.path.isdir("/proc/self/task") else None
 seen["env"] = {k: os.environ.get(k) for k in ("OPENBLAS_NUM_THREADS", mech.BLAS_POOL_ENV)}

@@ -4,7 +4,7 @@ Four fields separated by spaces, proposed to AE6TY for SimNEC: the deck
 dialect, the launcher's name (always starting ``momwire``), the interface
 modes in square brackets, and the full momwire version::
 
-    NEC5 momwire-nec5-razor-2p [sb] 0.82.0
+    NEC5 momwire-nec5-razor2p [sb] 0.82.0
 
 Before this the NEC-4.2 launchers answered ``NEC5momwire.<major>.<minor>``,
 the NEC-5 slot's line, so SimNEC read engine 5 for them.
@@ -42,8 +42,8 @@ def _engine_number(line: str) -> str:
     ("prog", "dialect", "name"),
     [
         ("momwire-nec5", "NEC5", "momwire-nec5"),
-        ("momwire-nec5-razor-2p", "NEC5", "momwire-nec5-razor-2p"),
-        ("momwire-nec5-bspline.exe", "NEC5", "momwire-nec5-bspline"),
+        ("momwire-nec5-razor2p", "NEC5", "momwire-nec5-razor2p"),
+        ("momwire-nec5-bs2.exe", "NEC5", "momwire-nec5-bs2"),
         ("momwire-eznec-client", "NEC5", "momwire-nec5"),
         ("momwire-nec42", "NEC42", "momwire-nec42"),
         ("/opt/bin/momwire-nec42-sinusoidal", "NEC42", "momwire-nec42-sinusoidal"),
@@ -74,7 +74,7 @@ def test_a_renamed_copy_still_names_itself_as_ours():
 @pytest.mark.parametrize(
     ("line", "number"),
     [
-        (eznec_client.probe_version("momwire-nec5-razor-2p"), "5"),
+        (eznec_client.probe_version("momwire-nec5-razor2p"), "5"),
         (eznec_client.probe_version("momwire-nec42"), "4"),
         (nec2c_client.probe_version(), "2"),
         (nec_portal.probe_version("sinusoidal"), "2"),
@@ -90,8 +90,8 @@ def test_deployed_simnec_reads_the_right_engine_number(line, number):
 @pytest.mark.parametrize(
     ("launcher", "number"),
     [
-        ("momwire-nec5-razor-2p", "5"),
-        ("momwire-nec5-bspline", "5"),
+        ("momwire-nec5-razor2p", "5"),
+        ("momwire-nec5-bs2", "5"),
         ("momwire-nec42", "4"),
         ("momwire-nec42-sinusoidal", "4"),
     ],
@@ -121,7 +121,7 @@ def test_the_version_is_the_full_one():
 
 def test_the_nec2_lines_agree_between_the_portal_and_its_client():
     assert nec2c_client.probe_version() == nec_portal.PROBE_VERSION
-    for suffix in (None, "bspline", "sinusoidal", "pulse"):
+    for suffix in (None, "bs2", "sinusoidal", "pulse"):
         assert nec2c_client.probe_version(suffix=suffix) == nec_portal.probe_version(
             suffix
         )

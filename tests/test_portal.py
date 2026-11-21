@@ -47,11 +47,11 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 @pytest.fixture(autouse=True)
 def _one_engine_per_test():
     """Every test here runs inside :func:`engine_scope`, so a `--basis` one
-    test's `main()` selects (a `bspline-d1` gate, a `sinusoidal` one) cannot
+    test's `main()` selects (a `bs1` gate, a `sinusoidal` one) cannot
     outlive it: `configure_engine` sets the basis and never puts it back, and
     which test follows which is xdist's choice, so the leak turned
     `test_engine_scope_puts_the_basis_back_for_whatever_follows` red whenever
-    a `bspline-d1` test ran just before it on the same worker. A test's own
+    a `bs1` test ran just before it on the same worker. A test's own
     scope nests inside this one."""
     with nec_portal.engine_scope():
         yield
@@ -2949,7 +2949,7 @@ def test_basis_flag_rides_the_version_probe():
     unchanged (Double-parsed by Execute) with any valid --basis present."""
     from momwire.dropin.nec2c import PROBE_VERSION
 
-    rc, out, _ = _run_main(["--basis", "sinusoidal-galerkin", "-version"])
+    rc, out, _ = _run_main(["--basis", "sg", "-version"])
     assert rc == 0 and out == f"{PROBE_VERSION}\n"
 
 
@@ -2962,7 +2962,7 @@ def test_basis_flag_solves_and_stamps_the_banner():
         "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
         "GE 0\nEX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n"
     )
-    rc, out, err = _run_main(["--basis=sinusoidal-galerkin"], deck=deck)
+    rc, out, err = _run_main(["--basis=sg"], deck=deck)
     assert rc == 0 and err == ""
     assert "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
     assert "ANTENNA INPUT PARAMETERS" in out
@@ -3144,20 +3144,20 @@ def test_sinusoidal_has_no_converged_variant():
     assert rc == 3 and "sinusoidal-converged" not in out.split("choices:")[1]
 
 
-# --- bspline-d1 (issue #821): the degree axis, same solver class -----------
+# --- bs1 (issue #821): the degree axis, same solver class -----------
 
 
 @pytest.mark.integration
 def test_bspline_d1_basis_flag_solves_and_stamps_the_banner():
-    """`bspline-d1` is BSplineSolver with degree=1 bound — same public
-    `compute_port_solution()` path as plain `bspline` (momwire#232; degree is
+    """`bs1` is BSplineSolver with degree=1 bound — same public
+    `compute_port_solution()` path as plain `bs2` (momwire#232; degree is
     just a constructor knob), so it answers a deck and stamps +bs1."""
     deck = (
         "CE basis\n"
         "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
         "GE 0\nEX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n"
     )
-    rc, out, err = _run_main(["--basis=bspline-d1"], deck=deck)
+    rc, out, err = _run_main(["--basis=bs1"], deck=deck)
     assert rc == 0 and err == ""
     assert "VERSION:nec2c.ae6ty.momwire.9.1+bs1" in out
     assert "ANTENNA INPUT PARAMETERS" in out
@@ -3166,7 +3166,7 @@ def test_bspline_d1_basis_flag_solves_and_stamps_the_banner():
         for ln in out.splitlines()
         if ln.startswith("    1 ") and len(ln.split()) == 11
     ]
-    assert rows, "no AIP data row under the bspline-d1 basis"
+    assert rows, "no AIP data row under the bs1 basis"
 
 
 @pytest.mark.integration
@@ -3178,11 +3178,9 @@ def test_bspline_d1_basis_solves_hard_fixture_classes(name):
     """bs1 is degree=1 on the exact same BSplineSolver class the default
     basis uses (engines/momwire.py:_parity_for_solver changes the mesh
     parity, not the code path), so it must clear every hard fixture class the
-    default `bspline` basis clears: Sommerfeld ground, GD second medium, TL
+    default `bs2` basis clears: Sommerfeld ground, GD second medium, TL
     and NT networks, LD4 loading, PT toggling, RP patterns."""
-    rc, out, err = _run_main(
-        ["--basis", "bspline-d1"], deck=fixture_deck(name) + "\nNX\n"
-    )
+    rc, out, err = _run_main(["--basis", "bs1"], deck=fixture_deck(name) + "\nNX\n")
     assert rc == 0
     assert err == ""
     assert "ANTENNA INPUT PARAMETERS" in out
@@ -3207,7 +3205,7 @@ def test_bspline_d1_free_space_impedance_within_loose_bound_of_committed_oracle(
     dipole; 15% is the bound this measurement actually supports. R stays at
     the tighter 5% since it tracks a shallower dependency on basis order."""
     _rc, out, _err = _run_main(
-        ["--basis", "bspline-d1"],
+        ["--basis", "bs1"],
         deck=fixture_deck("dipole_free_space") + "\nNX\n",
     )
     ours = aip_tables(out)[0][0]
@@ -3227,7 +3225,7 @@ def test_bspline_d1_answer_differs_from_the_default_degree():
     disagree here — measured X=40.27 (d1) vs X=46.00 (d2), 12% apart — so a
     silently-ignored kwarg is detectable."""
     deck = fixture_deck("dipole_free_space") + "\nNX\n"
-    _rc, out_d1, _err = _run_main(["--basis", "bspline-d1"], deck=deck)
+    _rc, out_d1, _err = _run_main(["--basis", "bs1"], deck=deck)
     _rc, out_d2, _err = _run_main([], deck=deck)
     x_d1 = float(aip_tables(out_d1)[0][0][7])
     x_d2 = float(aip_tables(out_d2)[0][0][7])
@@ -3266,9 +3264,7 @@ def test_the_basis_main_selects_outlives_the_call_within_one_invocation():
     same process therefore answers — and stamps its banner — under the basis
     that `main` selected, not under the shipped default."""
     with nec_portal.engine_scope():
-        _rc, _out, _err = _run_main(
-            ["--basis", "sinusoidal-galerkin"], deck=_SCOPE_DIPOLE + "NX\n"
-        )
+        _rc, _out, _err = _run_main(["--basis", "sg"], deck=_SCOPE_DIPOLE + "NX\n")
         after, _err = run_deck(_SCOPE_DIPOLE)
     assert "VERSION:nec2c.ae6ty.momwire.9.1+sg" in after, (
         "a run_deck following main() answered under some other engine — the "
@@ -3286,12 +3282,10 @@ def test_engine_scope_puts_the_basis_back_for_whatever_follows():
     assert "+sg" not in before, "the suite arrived here with a basis selected"
 
     with nec_portal.engine_scope():
-        _rc, _out, _err = _run_main(
-            ["--basis", "sinusoidal-galerkin"], deck=_SCOPE_DIPOLE + "NX\n"
-        )
-        assert nec_portal._active_basis_name == "sinusoidal-galerkin"
+        _rc, _out, _err = _run_main(["--basis", "sg"], deck=_SCOPE_DIPOLE + "NX\n")
+        assert nec_portal._active_basis_name == "sg"
 
-    assert nec_portal._active_basis_name == "bspline"
+    assert nec_portal._active_basis_name == "bs2"
     after, _err = run_deck(_SCOPE_DIPOLE)
     assert "+sg" not in after, "the scoped basis leaked past the block"
     assert body_lines(before) == body_lines(after), (
@@ -3331,7 +3325,7 @@ def test_engine_scope_restores_the_cache_flags_and_drops_what_it_filled(tmp_path
 # are BSplineSolver subclasses that solve the SAME operator with a compressed
 # representation and GMRES instead of a dense fill and an LU. That makes the
 # roster's usual disabled-path probe (differ-from-default) useless — a silent
-# collapse to plain `bspline` would print the same digits — so the armour here
+# collapse to plain `bs2` would print the same digits — so the armour here
 # is two-sided: the printout must AGREE with the default basis, and a spy must
 # see the accelerated solve actually run.
 
@@ -3484,11 +3478,11 @@ def test_the_accelerators_answer_the_hard_fixture_classes(name, basis):
 @pytest.mark.parametrize("basis", ["hmatrix", "arrayblock"])
 def test_the_accelerators_agree_with_the_default_basis_and_the_oracle(basis):
     """Agreement, not difference, is the probe here: same physics as
-    `bspline`, so the accelerated answer must land on the default's to the
+    `bs2`, so the accelerated answer must land on the default's to the
     iterative solve tolerance (measured: identical to every printed digit,
     79.524+46.003j) while still clearing the 5% oracle bound (measured 0.77%
     from nec2c's 79.240+45.364j). A collapse to a DIFFERENT basis is what this
-    catches; a collapse to dense `bspline` is caught by the spy test above."""
+    catches; a collapse to dense `bs2` is caught by the spy test above."""
     deck = fixture_deck("dipole_free_space") + "\nNX\n"
     rc, out, err = _run_main(["--basis", basis], deck=deck)
     assert rc == 0 and err == ""
@@ -3614,7 +3608,7 @@ def _one_aip(text: str) -> tuple[complex, complex]:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", ["bspline", "sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["bs2", "sg"])
 def test_a_driven_segment_load_is_applied_exactly_once(basis):
     """`Z_loaded − Z_unloaded == Z_L` on the port-algebra route.
 
@@ -3843,7 +3837,7 @@ def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", ["sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["sg"])
 def test_a_galerkin_basis_serves_an_ek_deck(basis, scoped_engine):
     """The un-refusal (momwire 0.27.0), on the class of deck that reaches it
     in real life.
@@ -3937,7 +3931,7 @@ def cache_reset(serving: bool = True) -> None:
     to it). This pins the start of a cache test either way; the test that
     SELECTS a basis is the one that has to bound it, with the ``scoped_engine``
     fixture over momwire's own ``engine_scope`` (momwire#587)."""
-    nec_portal._active_basis = nec_portal._BASES["bspline"]
+    nec_portal._active_basis = nec_portal._BASES["bs2"]
     nec_portal._cache_serving = serving
     nec_portal._cache_stats_path = None
     nec_portal._reset_solver_cache()
@@ -5098,15 +5092,13 @@ def test_filename_suffix_selects_the_basis():
     apart; ``--basis`` and the environment never change it)."""
     from momwire.dropin.nec2c._portal import probe_version
 
-    rc, out, _ = _run_main(
-        ["-version"], prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin"
-    )
-    assert rc == 0 and out == f"{probe_version('sinusoidal-galerkin')}\n"
-    assert out.startswith("NEC2 momwire-nec2c-sinusoidal-galerkin ")
+    rc, out, _ = _run_main(["-version"], prog="/opt/simnec/momwire-nec2c-sg")
+    assert rc == 0 and out == f"{probe_version('sg')}\n"
+    assert out.startswith("NEC2 momwire-nec2c-sg ")
     rc, out, _ = _run_main(
         [],
         deck=_SG_DECK,
-        prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin",
+        prog="/opt/simnec/momwire-nec2c-sg",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
@@ -5116,7 +5108,7 @@ def test_filename_suffix_windows_exe_is_stripped():
     rc, out, _ = _run_main(
         [],
         deck=_SG_DECK,
-        prog="C:\\SimNEC\\momwire-nec2c-sinusoidal-galerkin.EXE",
+        prog="C:\\SimNEC\\momwire-nec2c-sg.EXE",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
@@ -5130,9 +5122,9 @@ def test_unknown_filename_suffix_fails_the_probe_fast():
 @pytest.mark.integration
 def test_explicit_basis_beats_the_filename():
     rc, out, _ = _run_main(
-        ["--basis=sinusoidal-galerkin"],
+        ["--basis=sg"],
         deck=_SG_DECK,
-        prog="./momwire-nec2c-bspline-d1",
+        prog="./momwire-nec2c-bs1",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
@@ -5147,11 +5139,11 @@ def test_plain_name_and_module_spelling_select_nothing(monkeypatch):
 
 @pytest.mark.integration
 def test_env_var_selects_and_filename_beats_it(monkeypatch):
-    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal-galerkin")
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sg")
     rc, out, _ = _run_main([], deck=_SG_DECK, prog="/usr/bin/momwire-nec2c")
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
     # the filename wins over the environment
-    rc, out, _ = _run_main([], deck=_SG_DECK, prog="/usr/bin/momwire-nec2c-bspline")
+    rc, out, _ = _run_main([], deck=_SG_DECK, prog="/usr/bin/momwire-nec2c-bs2")
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out
 
 
@@ -5192,7 +5184,7 @@ def test_every_basis_ships_as_a_named_entry_point():
     # The lockstep is with the nec2 roster, not the whole of `deck.BASES`:
     # razor is in the latter and ships no nec2c command (momwire#821).
     retired = set(BASES) - set(NEC2_BASES)
-    assert retired == {"razor-2p", "razor-nec5"}, retired
+    assert retired == {"razor2p"}, retired
     for name in retired:
         assert f"momwire-nec2c-{name}" not in scripts, name
 
@@ -5209,7 +5201,7 @@ def test_every_basis_ships_as_a_named_entry_point():
 # stale copy of one gets the same line.
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
+@pytest.mark.parametrize("basis", ["razor2p"])
 def test_a_razor_basis_is_refused_at_configure_time_with_its_reason(basis):
     from momwire.razor import RazorSolver
 
@@ -5218,7 +5210,7 @@ def test_a_razor_basis_is_refused_at_configure_time_with_its_reason(basis):
         rest, code = nec_portal.configure_engine(["--basis", basis], out)
         assert code == 3 and rest == []
         # And the process was left on the default, not on a basis it refused.
-        assert nec_portal._active_basis_name == "bspline"
+        assert nec_portal._active_basis_name == "bs2"
     line = out.getvalue()
     assert f"--basis {basis!r} does not serve the nec2 dialect" in line
     assert line.rstrip("\n").endswith(
@@ -5250,4 +5242,4 @@ def test_an_unknown_name_still_reads_as_a_typo():
     line = out.getvalue()
     assert line.startswith("unknown --basis 'rzaor-2p'; choices: ")
     assert "razor" not in line.split("choices:")[1]
-    assert "sinusoidal-galerkin" in line
+    assert "sg" in line

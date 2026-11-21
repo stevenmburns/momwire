@@ -517,7 +517,7 @@ def _ek_axis_groups(seg_l, seg_r, tangents, seg_a, tol=1e-6):
     Z jumped there (bs2 +0.12+0.23j Ω at a 0.05° bend on a 50 mm wire; razor
     +0.08+0.17j Ω at a 1.0001:1 step), where licensed NEC-4.2 and NEC-5 move
     by print resolution. Extending every pair is continuous in geometry, and
-    on razor-2p — NEC-5's formulation twin — it reproduces NEC-5's bend
+    on razor2p — NEC-5's formulation twin — it reproduces NEC-5's bend
     response (≤ 0.013 Ω at 90°) and, with the two-radius factor, its
     radius-step response (≤ 0.016 Ω at every ratio to 20:1, angle and mesh
     measured). The coaxial factor of R applied to a non-coaxial pair is

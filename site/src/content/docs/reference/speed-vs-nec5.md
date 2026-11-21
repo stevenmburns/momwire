@@ -1,19 +1,19 @@
 ---
 title: "Speed against NEC-5"
-description: Measured run times of momwire's standalone razor-2p executable against the licensed NEC-5 console engine (NEC5CL_x13) on eight decks, with the machine, core placement, thread counts and method stated.
+description: Measured run times of momwire's standalone razor2p executable against the licensed NEC-5 console engine (NEC5CL_x13) on eight decks, with the machine, core placement, thread counts and method stated.
 ---
 
 This page records one measured comparison: momwire's standalone
-**nec5-razor-2p** executable against the licensed NEC-5 console engine,
+**nec5-razor2p** executable against the licensed NEC-5 console engine,
 `NEC5CL_x13.exe`, the one EZNEC 7 ships. Both run the same decks on the
 same Windows laptop. The results come from one machine and one set of
 decks, so they are not a general speed claim. NEC-5 is faster on one of
 the eight decks, and by a wide margin; the table says so.
 
-razor-2p is the like-for-like engine because it uses NEC-5's formulation.
+razor2p is the like-for-like engine because it uses NEC-5's formulation.
 On every deck here its input impedance matches x13's to a few thousandths
 of an ohm in free space, and to about 0.1 % over Sommerfeld ground. The
-default nec5-bspline engine is a different basis, so its impedances differ
+default nec5-bs2 engine is a different basis, so its impedances differ
 from NEC-5's by 1–9 % on these decks (see [Choosing an
 engine](/reference/choosing-an-engine/)). It was timed as well but is left
 out of the comparison.
@@ -60,7 +60,7 @@ Measured 2026-11-17.
 
 Ratio = x13 time ÷ momwire time. Above 1 means momwire was faster.
 
-| Deck | Segments × frequencies | x13 | razor-2p, 1 thread | razor-2p, default |
+| Deck | Segments × frequencies | x13 | razor2p, 1 thread | razor2p, default |
 | --- | --- | --- | --- | --- |
 | 2-band fan dipole, Sommerfeld ground | 106 × 21 | 0.51 s | 0.19 s (2.7×) | 0.21 s (2.4×) |
 | 5-band fan dipole, Sommerfeld ground | 296 × 21 | 2.28 s | 1.14 s (2.0×) | 0.61 s (3.7×) |
@@ -99,9 +99,9 @@ executable after 0.93.0, warm runs:
 | Configuration | 1 thread | Default |
 | --- | --- | --- |
 | x13 | 1.82 s | — |
-| razor-2p, both off | 11.2 s (0.16×) | 4.81 s (0.38×) |
-| razor-2p, `crossing_sheet_retune` | 2.94 s (0.62×) | 2.07 s (0.88×) |
-| razor-2p, `crossing_table` | 4.12 s (0.44×) | 2.56 s (0.71×) |
+| razor2p, both off | 11.2 s (0.16×) | 4.81 s (0.38×) |
+| razor2p, `crossing_sheet_retune` | 2.94 s (0.62×) | 2.07 s (0.88×) |
+| razor2p, `crossing_table` | 4.12 s (0.44×) | 2.56 s (0.71×) |
 
 - **x13 still wins this deck,** by 1.6× at one thread and 1.1× at default
   threads, even with the sheets.

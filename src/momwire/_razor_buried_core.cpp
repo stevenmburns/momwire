@@ -1,4 +1,4 @@
-// razor-2p's buried fill in C++: see `_razor_buried_core.h`.
+// razor2p's buried fill in C++: see `_razor_buried_core.h`.
 #include "_razor_buried_core.h"
 
 #include "_razor_crossing_core.h"

@@ -1,4 +1,4 @@
-"""momwire#845: razor-2p states its far-mesh accuracy class at construction.
+"""momwire#845: razor2p states its far-mesh accuracy class at construction.
 
 The advisory is UNCONDITIONAL, which makes it easy to gate badly. A test that
 merely asserts "a warning came out" passes just as happily if the text is
@@ -58,14 +58,14 @@ def _warnings_from(**kwargs):
 
 
 @pytest.mark.parametrize(
-    "lane", [{"nec5_quadrature": True}, {}], ids=["razor-2p", "razor-GL"]
+    "lane", [{"nec5_quadrature": True}, {}], ids=["razor2p", "razor-GL"]
 )
 def test_both_razor_lanes_state_the_class_once(lane):
     """Exactly one advisory per construction, on EITHER razor lane.
 
     The GL lane is in the gate deliberately. The first-order class belongs to
     the path-TESTING rule that both lanes share (#845's probe 3 puts razor-GL
-    within 2 ohm of razor-2p at every mesh), so scoping the advisory to the
+    within 2 ohm of razor2p at every mesh), so scoping the advisory to the
     shipped `nec5_quadrature` roster entry would leave a lane that carries the
     defect and says nothing about it -- and the caller who reaches GL is doing
     convergence or certification work, i.e. the one who most needs the

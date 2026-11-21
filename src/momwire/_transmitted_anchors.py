@@ -3,7 +3,7 @@
 
 `_sommerfeld_transmitted.get_grid_below_above` keys its grid on the EXACT
 eps_t and frequency, so a sweep over a deck with wires on both sides of the
-interface fills a fresh grid at every point: 0.82 s of a 1.4 s nec5-bspline
+interface fills a fresh grid at every point: 0.82 s of a 1.4 s nec5-bs2
 call on `mixed_vert_over_buried24`, the whole of the per-point ground cost.
 Nothing in the exact grid is shared between frequencies, and `scaled_to`
 records why no normalisation can share it: the observer axes are paced by

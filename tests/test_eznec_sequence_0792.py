@@ -32,7 +32,7 @@ HEAD = "\n".join(
 )
 
 
-def _out(cards, basis="razor-2p"):
+def _out(cards, basis="razor2p"):
     return render(HEAD + "\n" + "\n".join(cards) + "\n", basis=basis)
 
 
@@ -43,10 +43,10 @@ def _frequencies(out):
 @pytest.mark.parametrize(
     "basis",
     [
-        "razor-2p",
+        "razor2p",
         # Default-lane budget is 5 s; CI median 9.9 s Linux, 5.4 s macOS
-        # (momwire 0.82.0 release prep). razor-2p keeps the guard on PRs.
-        pytest.param("bspline", marks=pytest.mark.slow),
+        # (momwire 0.82.0 release prep). razor2p keeps the guard on PRs.
+        pytest.param("bs2", marks=pytest.mark.slow),
     ],
 )
 def test_dans_fr_after_xq_runs_each_loop_at_its_own_fr(basis):
@@ -104,7 +104,7 @@ def test_a_later_run_that_changes_a_load_is_refused_by_name():
 RP_NE = FIXTURE.with_name("rp_ne_two_runs.nec")
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_an_rp_and_an_ne_before_each_xq_print_one_of_each_per_run(basis):
     """momwire#1579 (Ward AE6TY's two-excitation deck): RP then NE before the
     same XQ, twice. NEC-5 runs the RP on the spot and the NE on the solution
@@ -139,7 +139,7 @@ def test_the_seam_hook_names_every_read_kind():
 RP_NE_ONE = FIXTURE.with_name("rp_ne_one_xq.nec")
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_an_rp_and_an_ne_before_one_xq_print_in_nec5s_order(basis):
     """RP then NE before ONE XQ (Dan's lastConstructedNEC shape) prints in
     NEC-5's (x13's) order, as the repeated shape does (Steve, 10-19; 0.79 put

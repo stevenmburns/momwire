@@ -11,7 +11,7 @@ are decided here.
 The deck is read by :func:`momwire.deck._nec4.parse_nec4`, which addresses a
 source by segment CENTRE — so the slot's roster is
 :data:`~momwire.deck.NEC2_BASES`, the families whose ``centre_feeds``
-capability holds.  A basis outside it (razor-2p, razor-nec5) is refused BY
+capability holds.  A basis outside it (razor2p) is refused BY
 NAME in the printout before any deck is read: razor places a gap only on a
 knot, and moving a centre feed half a cell silently is momwire#821's failure.
 
@@ -36,6 +36,7 @@ from dataclasses import replace
 import numpy as np
 
 from ... import _thread_policy
+from ..._basis_names import canonical_basis, retired_refusal
 from ...deck import BASES, NEC2_BASES
 from ...deck._nec5 import Nec5Structure, ends_on_nx, split_structures
 from . import _printout
@@ -135,8 +136,13 @@ def basis_refusal(basis: str) -> str | None:
     Two cases, told apart so the user can act on the right one: a name the
     roster does not know is a typo and the sentence lists the choices; a
     roster basis that cannot place a centre feed is refused in its own
-    family's declared words.
+    family's declared words. A deprecated spelling reads as its canonical
+    name (the launcher shell has canonicalised it already, and warned).
     """
+    retired = retired_refusal(basis)
+    if retired is not None:
+        return retired
+    basis = canonical_basis(basis, warn=False)
     if basis in NEC2_BASES:
         return None
     if basis in BASES:

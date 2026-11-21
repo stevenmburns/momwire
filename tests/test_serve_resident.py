@@ -887,7 +887,7 @@ def test_a_client_with_a_runtime_dir_never_imports_tempfile(short_room):
     [
         [],
         [""],
-        ["eznec.0.76", sys.executable, "900.0", "basis=razor-2p"],
+        ["eznec.0.76", sys.executable, "900.0", "basis=razor2p"],
         ["nec2c.1.2", "/opt/py/bin/python", "1e9", "dialect=nec4", "Ω µ"],
     ],
 )

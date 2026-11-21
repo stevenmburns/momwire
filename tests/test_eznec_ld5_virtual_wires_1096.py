@@ -71,5 +71,5 @@ def test_razor_nec5_agrees_with_the_licensed_binary_on_the_deck():
     wires only. 1 % is looser than the twin's usual bar, because the drive
     reaches the antenna through the NT and the virtual wire, where the two
     formulations place the gap differently by one knot."""
-    z = _serve.serve(parse_nec5(DECK), basis="razor-nec5").sources[0].impedance
+    z = _serve.serve(parse_nec5(DECK), basis="razor2p").sources[0].impedance
     assert abs(z - LICENSED_Z) / abs(LICENSED_Z) < 1e-2, z

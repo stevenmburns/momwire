@@ -9,10 +9,10 @@
 # -> OUT_DIR/momwire-nec5-linux-x86_64.tar.gz, which unpacks to one
 # directory holding four engines, each a command and its two builds:
 #
-#   momwire-nec5-razor2p-linux        razor-2p: picks the build this CPU runs
+#   momwire-nec5-razor2p-linux        razor2p: picks the build this CPU runs
 #   momwire-nec5-razor2p-linux-avx2   the C++ core compiled -mavx2 -mfma
 #   momwire-nec5-razor2p-linux-sse2   the x86-64 baseline build
-#   momwire-nec5-bs2-linux            bs2 (`momwire-nec5-bspline`), the same
+#   momwire-nec5-bs2-linux            bs2 (`momwire-nec5-bs2`), the same
 #   momwire-nec5-bs2-linux-avx2       picking and the same two builds
 #   momwire-nec5-bs2-linux-sse2
 #   momwire-nec42-sinusoidal-linux       PREVIEW (momwire#1607): the NEC-4.2
@@ -23,8 +23,8 @@
 #                                        (bs2)
 #   README.txt
 #
-# Each build is `momwire-nec5-razor-2p-standalone` / `momwire-nec5-bspline-standalone` /
-# `momwire-nec42-sinusoidal-standalone` / `momwire-nec42-bspline-standalone`
+# Each build is `momwire-nec5-razor2p-standalone` / `momwire-nec5-bs2-standalone` /
+# `momwire-nec42-sinusoidal-standalone` / `momwire-nec42-bs2-standalone`
 # (MW_EXE_NO_PYTHON), renamed: `nec5`
 # in the name is what makes SimNEC write it NEC-5 decks (momwire#1239), and
 # `nec42` NEC-4.2 decks (momwire#1443). OpenBLAS, libstdc++, libgcc and (where the
@@ -53,10 +53,10 @@ STATIC_GOMP=OFF
 STAGE=$(mktemp -d)/$PKG
 mkdir -p "$STAGE" "$OUT"
 # engine: command name, CMake basis, the target it builds
-for engine in "$NAME razor2p momwire-nec5-razor-2p-standalone" \
-              "momwire-nec5-bs2-linux bspline_nec5 momwire-nec5-bspline-standalone" \
+for engine in "$NAME razor2p momwire-nec5-razor2p-standalone" \
+              "momwire-nec5-bs2-linux bspline_nec5 momwire-nec5-bs2-standalone" \
               "momwire-nec42-sinusoidal-linux sin42 momwire-nec42-sinusoidal-standalone" \
-              "momwire-nec42-linux bspline_nec42 momwire-nec42-bspline-standalone"; do
+              "momwire-nec42-linux bspline_nec42 momwire-nec42-bs2-standalone"; do
     set -- $engine
     cmd=$1 basis=$2 target=$3
     for v in avx2 sse2; do

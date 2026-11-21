@@ -126,7 +126,7 @@ bool withdraw_features(const std::vector<std::string> &names) {
 void stamp_uncertified(bool on) { ni_eval::stamp_uncertified(on); }
 
 // This route's reuse is the sinusoidal fill's (`pair_reuse`, momwire#1911):
-// its plans, not razor-2p's.
+// its plans, not razor2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {
     const mw::pair_reuse::Counters c = sinusoidal::pair_reuse::counters();
     built = static_cast<long long>(c.built);

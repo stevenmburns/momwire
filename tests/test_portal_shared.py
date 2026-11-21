@@ -779,16 +779,16 @@ def test_the_clients_basis_roster_is_the_engines_own():
         ("momwire-nec2c-shared", None),
         ("/opt/venv/bin/momwire-nec2c-shared", None),
         # Its own spelling.
-        ("momwire-nec2c-shared-sinusoidal-galerkin", "sinusoidal-galerkin"),
-        ("momwire-nec2c-shared-sinusoidal-galerkin", "sinusoidal-galerkin"),
+        ("momwire-nec2c-shared-sg", "sg"),
+        ("momwire-nec2c-shared-sg", "sg"),
         # The STOCK spelling, which the #528 docs teach: a user who copies
         # this command to that name has named a basis, and serving them the
         # default instead is the silent wrong answer #628 is about.
-        ("momwire-nec2c-sinusoidal-galerkin", "sinusoidal-galerkin"),
+        ("momwire-nec2c-sg", "sg"),
         # Windows, and the names that select nothing.
         (
-            "C:\\Program Files\\momwire-nec2c-shared-sinusoidal-galerkin.exe",
-            "sinusoidal-galerkin",
+            "C:\\Program Files\\momwire-nec2c-shared-sg.exe",
+            "sg",
         ),
         ("momwire-nec2c", None),
         ("python", None),
@@ -820,9 +820,9 @@ def test_the_three_sources_keep_the_engines_own_precedence(monkeypatch):
     order, which the client now has to reproduce because it resolves first."""
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "hmatrix")
     flag, error = client.resolve_engine(
-        ["--basis", "sinusoidal-galerkin"], prog="momwire-nec2c-shared-sinusoidal"
+        ["--basis", "sg"], prog="momwire-nec2c-shared-sinusoidal"
     )
-    assert error is None and flag == ["--basis", "sinusoidal-galerkin"]
+    assert error is None and flag == ["--basis", "sg"]
 
     name, error = client.resolve_engine([], prog="momwire-nec2c-shared-sinusoidal")
     assert error is None and name == ["--basis", "sinusoidal"]
@@ -859,7 +859,7 @@ def test_an_unknown_basis_from_any_source_is_refused_naming_it(
     _engine, error = client.resolve_engine(list(engine), prog=prog)
     assert error is not None
     assert "nope" in error and source in error
-    assert "sinusoidal-galerkin" in error, "the refusal has to say what the choices are"
+    assert "sg" in error, "the refusal has to say what the choices are"
 
 
 @pytest.mark.integration
@@ -871,32 +871,28 @@ def test_a_basis_chosen_by_environment_or_name_is_a_different_server(monkeypatch
     plain, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
     baseline = client.config_key(plain, 900.0)
 
-    named, _error = client.resolve_engine(
-        [], prog="momwire-nec2c-shared-sinusoidal-galerkin"
-    )
+    named, _error = client.resolve_engine([], prog="momwire-nec2c-shared-sg")
     assert client.config_key(named, 900.0) != baseline
 
-    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal-galerkin")
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sg")
     from_env, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
     assert client.config_key(from_env, 900.0) != baseline
 
     # ...and the two routes to ONE engine are one server, like `--basis=X` and
     # `--basis X` before them.
     assert client.config_key(from_env, 900.0) == client.config_key(named, 900.0)
-    flagged, _error = client.resolve_engine(["--basis", "sinusoidal-galerkin"])
+    flagged, _error = client.resolve_engine(["--basis", "sg"])
     assert client.config_key(flagged, 900.0) == client.config_key(named, 900.0)
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    "first,second", [("sinusoidal-galerkin", None), (None, "sinusoidal-galerkin")]
-)
+@pytest.mark.parametrize("first,second", [("sg", None), (None, "sg")])
 def test_two_clients_choosing_by_environment_do_not_share_one_server(
     runtime, first, second
 ):
     """momwire#628's reproduction, both orderings — whoever spawns first used
     to decide the physics for both. The second ordering is the worse one: the
-    client that ASKED for sinusoidal-galerkin was the one silently downgraded, and
+    client that ASKED for sg was the one silently downgraded, and
     neither transcript carried a hint, because the banner names whatever
     actually answered rather than what was requested."""
     deck = fixture_deck("dipole_free_space")
@@ -905,7 +901,7 @@ def test_two_clients_choosing_by_environment_do_not_share_one_server(
     assert (one.returncode, two.returncode) == (0, 0), (one.stderr, two.stderr)
 
     for run, want in ((one, first), (two, second)):
-        assert ("+sg" in run.stdout) is (want == "sinusoidal-galerkin"), (
+        assert ("+sg" in run.stdout) is (want == "sg"), (
             f"a client that asked for {want!r} was answered by another engine"
         )
     assert len(sockets(runtime)) == 2, "two engines shared one server"
@@ -943,12 +939,12 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     `configure_engine` takes it as EXPLICIT and never consults the
     environment at all.
     """
-    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal-galerkin")
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sg")
     engine, error = client.resolve_engine([], prog="momwire-nec2c-shared")
     assert error is None
 
     command = client._server_command("/tmp/x.sock", engine, 900.0, "/tmp/x.log")
-    assert command[-2:] == ["--basis", "sinusoidal-galerkin"]
+    assert command[-2:] == ["--basis", "sg"]
 
     # And the engine's own parser reads that command as an explicit choice,
     # which is what makes the inherited environment irrelevant to the server.
@@ -956,7 +952,7 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     with nec_portal.engine_scope():
         rest, code = nec_portal.configure_engine(list(engine), io.StringIO())
         assert (code, rest) == (None, [])
-        assert nec_portal._active_basis_name == "sinusoidal-galerkin"
+        assert nec_portal._active_basis_name == "sg"
 
 
 @pytest.mark.integration

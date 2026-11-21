@@ -3,7 +3,7 @@
 `src/momwire/_nec5_deck_core.cpp` copies momwire's NEC-5 reader
 (`deck/_cards.py`, `deck/_nec5.py`) and the EZNEC seam's text-level front
 (`_serve.split_runs`, `_shell._answer` up to the solve) so that a Python-free
-executable reads a deck exactly as `momwire-nec5-razor-2p` does. Python stays
+executable reads a deck exactly as `momwire-nec5-razor2p` does. Python stays
 the reference; these tests hold the copy to it:
 
 * every NEC deck in `tests/fixtures`, through both views (`parse_nec5`, and

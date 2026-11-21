@@ -1,7 +1,7 @@
 // The two-radius exact ring kernel K2(z; a1, a2) (momwire#1438): the ring
 // kernel between coaxial rings of two radii, near and far, in C++. Shared by
 // the point moments across a radius step (`_exact_kernel_cross_inline.h`,
-// razor-2p's) and the Galerkin pair moments across one
+// razor2p's) and the Galerkin pair moments across one
 // (`_exact_kernel_coaxial_cross_inline.h`, bs2's, momwire#1615), so the two
 // formulations evaluate K2 with one text.
 //

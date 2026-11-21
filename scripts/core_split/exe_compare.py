@@ -1,6 +1,6 @@
-"""momwire-razor2p (standalone/, unit 4) against `momwire-nec5-razor-2p`, deck
+"""momwire-razor2p (standalone/, unit 4) against `momwire-nec5-razor2p`, deck
 by deck, whole printout file against whole printout file; with `--basis
-bspline`, the bs2 executable against `momwire-nec5-bspline` (momwire#1517).
+bspline`, the bs2 executable against `momwire-nec5-bs2` (momwire#1517).
 
     OPENBLAS_NUM_THREADS=T OMP_NUM_THREADS=T \\
     python scripts/core_split/exe_compare.py OUT.jsonl --exe EXE [--launcher L] \\
@@ -13,7 +13,7 @@ Every deck is answered four ways:
 * ``fallback`` -- the same executable with every deck forced through the
                   embedded Python (MW_EXE_FORCE_FALLBACK=1), the executable's
                   OpenBLAS published as `sys._mw_host_lapack`;
-* ``launcher`` -- the real `momwire-nec5-razor-2p` (its own resident server,
+* ``launcher`` -- the real `momwire-nec5-razor2p` (its own resident server,
                   started fresh in a private runtime directory with this
                   process's environment, so at T threads; the server divides
                   the cores among its live workers, so an auto-mode gate runs
@@ -31,7 +31,7 @@ Each deck is counted by the route that answered it in the ``exe`` pass
 took the fallback measures nothing, so both counts are printed. One JSON line
 per deck; a summary on stdout; exit status 1 on any mismatch.
 
-``--standalone``: EXE is the no-Python build (`momwire-nec5-razor-2p-standalone`,
+``--standalone``: EXE is the no-Python build (`momwire-nec5-razor2p-standalone`,
 momwire#1512). There is no fallback to force, so each deck is answered by the
 executable, the launcher and ``python`` only. A deck the C++ route serves,
 refuses or raises on must print the launcher's bytes; a deck it declines
@@ -89,14 +89,14 @@ def _run(what: str, deck: Path, command, **kwargs):
 # The no-Python executables' printouts against Python's on Windows (MSVC
 # /fp:fast against numpy), by printout_tolerance.ratio. DERIVED, not chosen
 # (momwire#1558), as tests/_lane_gate.py's LANE_RTOL_WIN32 was: measured over
-# every fixture deck and NX chain, 380 decks for razor-2p and 383 for bs2, in
+# every fixture deck and NX chain, 380 decks for razor2p and 383 for bs2, in
 # avx2 and sse2, at one thread, on two machines (3052 printouts; the rest of
 # each set byte-identical). Not byte-identical / worst ratio:
 #
 #                  Windows builder           windows-latest
 #                  (MSVC 14.44, i5-1240P)    (standalone.yml run 39096316098)
-#   razor-2p avx2  27 / 1.11e-15             3 / 6.2e-18
-#   razor-2p sse2   5 / 1.65e-16            29 / 1.42e-15
+#   razor2p avx2  27 / 1.11e-15             3 / 6.2e-18
+#   razor2p sse2   5 / 1.65e-16            29 / 1.42e-15
 #   bs2 avx2       27 / 2.25e-16            29 / 8.37e-15
 #   bs2 sse2       18 / 1.54e-16            28 / 2.52e-16
 #
@@ -114,7 +114,7 @@ PRINTOUT_RTOL_WIN32 = 1e-13
 # the entry points numpy's and SciPy's wheels do, blas_accelerate_*.c).
 # DERIVED as the Windows bar was, over every fixture deck and NX chain at one
 # thread on macos-15 arm64 (standalone.yml run 39121557059, measured at a
-# loose 1e-3): razor-2p 380 of 380 byte-identical; bs2 382 of 383, the other
+# loose 1e-3): razor2p 380 of 380 byte-identical; bs2 382 of 383, the other
 # a gyrator network (net_gyrator_on_phantom_pinned) at a ratio of 8.11e-19.
 # Never against x86's printouts, which round differently. 12x headroom on
 # the one measured runner; a runner whose Accelerate rounds differently will
@@ -226,8 +226,8 @@ def main(argv=None):
     exe = _arg(args, "--exe")
     launcher = _arg(args, "--launcher")
     workers = int(_arg(args, "--workers", "4"))
-    # `--basis bspline` (momwire#1517 Phase A): the bs2 executable, against
-    # `momwire-nec5-bspline` (pass it as --launcher) and bs2's python route
+    # `--basis bs2` (momwire#1517 Phase A): the bs2 executable, against
+    # `momwire-nec5-bs2` (pass it as --launcher) and bs2's python route
     basis = _arg(args, "--basis", pc.BASIS)
     standalone = "--standalone" in args
     if standalone:

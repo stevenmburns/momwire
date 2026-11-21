@@ -2,7 +2,7 @@
 
 `_near_interface._distinct_pairs` used to walk every group in Python with one
 `np.unique` per shared height (106 censuses of 5 920 groups on a 4-radial
-buried screen at 500 segs/wl: 1.9 s of a 5.3 s razor-2p solve). It now counts
+buried screen at 500 segs/wl: 1.9 s of a 5.3 s razor2p solve). It now counts
 the distinct pairs of the expanded (z, rho) set; the walk stays as the
 fallback for a census whose expansion is large, and as the reference here.
 """
@@ -73,7 +73,7 @@ def test_a_large_census_takes_the_walk(monkeypatch):
 
 
 def test_the_census_of_a_shallow_screen_is_unchanged(monkeypatch):
-    """Every census a razor-2p solve of the #1672 shallow geometry takes
+    """Every census a razor2p solve of the #1672 shallow geometry takes
     (46 at 300 segs/wl), counted both ways."""
     seen = []
     orig = ni._distinct_pairs
@@ -84,6 +84,6 @@ def test_the_census_of_a_shallow_screen_is_unchanged(monkeypatch):
         return n
 
     monkeypatch.setattr(ni, "_distinct_pairs", spy)
-    render(_shallow_screen(300), basis="razor-2p")
+    render(_shallow_screen(300), basis="razor2p")
     assert seen, "the census never ran"
     assert all(a == b for a, b in seen), seen

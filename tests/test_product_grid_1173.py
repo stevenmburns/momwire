@@ -107,7 +107,7 @@ def sloped_radials_deck(depths=(0.10, 0.20, 0.30, 0.40), length=5.0, n_seg=10):
 
 
 def buried_dipole_razor():
-    """test_buried_serve_553's phase-0 vertical dipole, as razor-2p."""
+    """test_buried_serve_553's phase-0 vertical dipole, as razor2p."""
     n, length, depth = 11, 1.0, 0.15
     return RazorSolver(
         wires=[np.array([(0.0, 0.0, -(depth + length)), (0.0, 0.0, -depth)])],
@@ -625,13 +625,13 @@ def test_the_support_block_is_the_full_blocks_slice(corner, monkeypatch):
 def _wa7ark(nec5):
     """WA7ARK's 40 m EFHW with its jumper to a ground rod, built the way
     `serve` builds it (`test_eznec_phantom_geometry_1139.built`) as razor:
-    razor-2p on the nec5 lane, the bare RazorSolver on the default one."""
+    razor2p on the nec5 lane, the bare RazorSolver on the default one."""
     import test_eznec_phantom_geometry_1139 as ph
 
     from momwire.dropin.nec5 import _serve
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_serve, "BASIS", "razor-2p")
+        mp.setattr(_serve, "BASIS", "razor2p")
         if not nec5:
             mp.setattr(ph, "basis_entry", lambda _b: (RazorSolver, {}))
         _mesh, s = ph.built(ph.wa7ark_deck())

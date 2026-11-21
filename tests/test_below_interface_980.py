@@ -13,11 +13,11 @@ crossing, transmitted and razor suites; what this file adds is the SHAPE:
               `_crossing_junctions` both route through the shared function,
               and the shared function refuses on the same decks by the same
               sentences the wrappers used to.
-    G-980C-3  `bspline` still exports every historical name (`_BURIED_*`,
+    G-980C-3  `bs2` still exports every historical name (`_BURIED_*`,
               `_N_QP_BURIED_FIELD`) as the module's own object — `_couplings`
               and the eznec seam import them there.
     G-980C-4  `_pair_extents_below` stays bspline's and is looked up at call
-              time — its own tests monkeypatch it through `bspline`, and the
+              time — its own tests monkeypatch it through `bs2`, and the
               plan must see the patch.
 """
 

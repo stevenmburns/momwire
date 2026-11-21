@@ -14,7 +14,7 @@
 //     and `wire_loss_power` (0: a loaded deck declines in the seam).
 //
 //     mw::nec5::PrintoutResult r = mw::nec5::bspline_printout(
-//         latin1_text, "bspline", stamp, lapack, sym_lapack, numpy);
+//         latin1_text, "bs2", stamp, lapack, sym_lapack, numpy);
 //
 // `numpy.dsyrk` must be set (the assembler's `tangents @ tangents.T`).
 #pragma once
