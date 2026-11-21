@@ -108,6 +108,12 @@ struct Seam {
 // name is Declined.
 Seam seam(const std::string &latin1_text, const std::string &basis);
 
+// `portal._portal.parse_deck(text, dialect)` alone: the reader, then the
+// portal's card walk. Throws nec5::ParseError as Python raises and Declined
+// where this copy declines. The NEC-2 portal's executable reads every deck
+// through it (momwire#2065).
+PortalDeck parse_portal_deck(const std::string &latin1_text, Dialect dialect);
+
 // The comparison format (`scripts/core_split/nec4_seam_compare.py`).
 std::string dump_seam(const std::string &latin1_text, const std::string &basis);
 
