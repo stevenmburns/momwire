@@ -7219,6 +7219,10 @@ class SinusoidalSolver(
             return None
         if self._nec4_live(geom) or cos_shape != "cos" or _complex_k(k):
             return None
+        # `nec2_far_approx` lumps the far pairs inside `_field_tensor`, which
+        # the fused pass does not call: the two-pass band carries it.
+        if self._nec2_far_approx and not self._far_suspended:
+            return None
         ek = bool(self.extended_kernel)
         if not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR):
             return None
