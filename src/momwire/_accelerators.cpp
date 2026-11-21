@@ -33,6 +33,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_bspline(m);
     register_sinusoidal(m);
     register_sinusoidal_nec4(m);
+    register_sinusoidal_far(m);
     register_somm(m);
     register_mw568(m);
     register_razor(m);
