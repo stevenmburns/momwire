@@ -1415,7 +1415,9 @@ void image_coeffs(cd eps_c, double rx, double ry, double rz, cd &rho_h, cd &rho_
 std::vector<cd> cliff_image_moments(const Grid &g, double k, const std::vector<double> &mid,
                                     const std::vector<cd> &moment, FarGround ground, double eps_r,
                                     double sigma, double freq_hz, const replay::FarCliff &cl) {
-    if (cl.mode != 3) throw Decline{"a far-field cliff other than the circular one"};
+    // RP 3's circular cliff, and RP 2's linear one (`_cliff_medium_2`: the
+    // edge is the line x = CLT, which the NEC-2 portal reads, momwire#2065)
+    if (cl.mode != 3 && cl.mode != 2) throw Decline{"a far-field cliff other than the circular or linear one"};
     const std::size_t n = mid.size() / 3;
     const int64_t nt = g.nt, np_ = g.np_;
     // `_image_moments(mid, moment, ground_z)`
@@ -1455,7 +1457,7 @@ std::vector<cd> cliff_image_moments(const Grid &g, double k, const std::vector<d
             const double dr = tan_t[it] * (o[2] - 0.0);
             const double along = dr * g.cos_p[ip] + o[0];
             const double across = o[1] + dr * g.sin_p[ip];
-            const bool beyond = std::hypot(along, across) >= cl.edge_distance;
+            const bool beyond = (cl.mode == 3 ? std::hypot(along, across) : along) >= cl.edge_distance;
             // `carrier * np.where(beyond, step, 0.0)`, then `carrier *= ~beyond`
             const cd f_far = np_cmul(carrier, beyond ? step[it] : cd(0.0, 0.0));
             const cd f_near = np_cmul(carrier, cd(beyond ? 0.0 : 1.0, 0.0));
@@ -3958,6 +3960,64 @@ NearBlock near_field(const Request &rq, const std::vector<double> &points, const
     }
     return out;
 }
+void pattern_fields(const std::vector<double> &thetas_deg, const std::vector<double> &phis_deg,
+                    const std::vector<double> &mid, const std::vector<cd> &moment, double k, int ground,
+                    double eps_r, double sigma, double freq_hz, double p_in, const FarCliff *cliff,
+                    const cd *prop, std::vector<cd> &e_theta, std::vector<cd> &e_phi, std::vector<double> &g_v,
+                    std::vector<double> &g_h) {
+    const int64_t nt = static_cast<int64_t>(thetas_deg.size()), nph = static_cast<int64_t>(phis_deg.size());
+    nec5::Grid g;
+    g.nt = nt;
+    g.np_ = nph;
+    // `np.radians(thetas_deg)`, as `pattern_block` forms the grid
+    for (double t : thetas_deg) {
+        const double r = t * nec5::DEG_TO_RAD;
+        g.theta.push_back(r);
+        g.sin_t.push_back(std::sin(r));
+        g.cos_t.push_back(std::cos(r));
+    }
+    for (double ph : phis_deg) {
+        const double r = ph * nec5::DEG_TO_RAD;
+        g.sin_p.push_back(std::sin(r));
+        g.cos_p.push_back(std::cos(r));
+    }
+    for (int64_t it = 0; it < nt; it++)
+        for (int64_t ip = 0; ip < nph; ip++) {
+            g.rx.push_back(g.sin_t[it] * g.cos_p[ip]);
+            g.ry.push_back(g.sin_t[it] * g.sin_p[ip]);
+            g.rz.push_back(g.cos_t[it]);
+        }
+    const nec5::FarGround fg =
+        ground == 1 ? nec5::FarGround::pec : ground == 2 ? nec5::FarGround::refl : nec5::FarGround::free;
+    std::vector<cd> m_theta, m_phi;
+    nec5::far_moments(g, k, mid, moment, fg, eps_r, sigma, freq_hz, m_theta, m_phi, cliff);
+    // `scale = -1j * ETA0 * k / (4.0 * math.pi)`, then `scale * prop`
+    cd scale = nec5::py_cdiv(nec5::py_cmul(nec5::py_cmul(cd(-0.0, -1.0), cd(nec5::ETA0, 0.0)), cd(k, 0.0)),
+                             cd(4.0 * 3.141592653589793, 0.0));
+    if (prop != nullptr) {
+        // a Python complex times numpy's complex128 scalar: numpy's scalar
+        // product (the subclass's reflected operator), never fused
+        const cd a = scale, b = *prop;
+        scale = cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+    } else {
+        scale = nec5::py_cmul(scale, cd(1.0, 0.0));  // `scale * complex(1.0)`
+    }
+    const double norm = p_in > 0 ? ((nec5::ETA0 * k) * k) / ((8.0 * 3.141592653589793) * p_in) : 0.0;
+    const std::size_t n = m_theta.size();
+    e_theta.assign(n, cd(0.0, 0.0));
+    e_phi.assign(n, cd(0.0, 0.0));
+    g_v.assign(n, 0.0);
+    g_h.assign(n, 0.0);
+    for (std::size_t q = 0; q < n; q++) {
+        e_theta[q] = np_cmul(scale, m_theta[q]);
+        e_phi[q] = np_cmul(scale, m_phi[q]);
+        const double at = std::hypot(m_theta[q].real(), m_theta[q].imag());
+        const double ap = std::hypot(m_phi[q].real(), m_phi[q].imag());
+        g_v[q] = norm * (at * at);
+        g_h[q] = norm * (ap * ap);
+    }
+}
+
 }  // namespace replay
 
 }  // namespace nec5

@@ -347,6 +347,7 @@ const nec4::WireDedup *Engine::dedup(std::size_t index) {
     const Front &fr = front_at(index);
     return fr.dedup.active ? &fr.dedup : nullptr;
 }
+std::string Engine::nec2_end_cap_withdrawn(std::size_t index) { return front_at(index).nec2_end_cap_withdrawn; }
 double Engine::solver_eps0(std::size_t index) {
     (void)index;
     return 8.8541878188e-12;  // the sinusoidal solver's `eps` (the fill's eps~)

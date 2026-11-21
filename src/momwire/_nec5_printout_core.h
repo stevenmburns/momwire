@@ -384,6 +384,17 @@ PatternBlock far_pattern(const Request &rq, const std::vector<double> &mid,
                          const std::vector<cd> &moment, int ground, double eps_r, double sigma,
                          double frequency_mhz, double wavelength, double p_in, double p_radiated,
                          const FarCliff *cliff = nullptr);
+// `_far_readout.pattern_fields(mid, moment, k, thetas, phis, ground, 0,
+// freq_hz, p_in, cliff=, prop=)` (the one pattern path the NEC-2 portal and
+// the NEC-5 seam print): E(theta), E(phi) and the two power gains on the
+// (theta, phi) grid, C order (theta-major). `ground` and `cliff` as for
+// `far_pattern`; `prop`, when given, is the NEC-2 portal's EXP(-JKR)/R, a
+// numpy complex128 scalar. Throws `PrintoutDecline` where `far_pattern` does.
+void pattern_fields(const std::vector<double> &thetas_deg, const std::vector<double> &phis_deg,
+                    const std::vector<double> &mid, const std::vector<cd> &moment, double k, int ground,
+                    double eps_r, double sigma, double freq_hz, double p_in, const FarCliff *cliff,
+                    const cd *prop, std::vector<cd> &e_theta, std::vector<cd> &e_phi, std::vector<double> &g_v,
+                    std::vector<double> &g_h);
 // `DeckSolver._composed(reducer, y, z_load, wavelength, driven)` over the
 // seam's network solve: `y_eff` with the series loads folded in (`y` itself
 // when none), the flat network with `held` held, and `reduced_ports(...,
