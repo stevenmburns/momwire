@@ -715,8 +715,11 @@ struct Ctx {
     }
 };
 
-std::size_t point_for(const StructureBuild &sb, double freq, bool ek, const Environment &env) {
-    if (env.ground.kind == Ground::finite_fast) decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
+std::size_t point_for(const StructureBuild &sb, double freq, bool ek, const Environment &env, bool nec2) {
+    // GN 0 reaches the NEC-2 portal only (momwire#2065); the NEC-4.2 deck
+    // refuses it before a run
+    if (env.ground.kind == Ground::finite_fast && !nec2)
+        decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
     for (std::size_t i = 0; i < sb.points.size(); i++)
         // the build's `same_ground`: a finite ground's point is its kind AND
         // its (eps_r, sigma), so a GN re-armed with new constants at a
@@ -887,7 +890,7 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     RunResult r;
     // a wire below the plane is the engine's to serve or decline
     // (momwire#1607 B6: the sinusoidal front's `_wire_media`)
-    r.point = point_for(*c.sb, freq, group.ek, group.environment);
+    r.point = point_for(*c.sb, freq, group.ek, group.environment, c.nec2);
     r.pec = group.environment.ground.kind == Ground::pec;
     r.finite = group.environment.ground.kind == Ground::finite;
     r.eps_r = group.environment.ground.eps_r;

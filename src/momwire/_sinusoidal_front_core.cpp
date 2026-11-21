@@ -540,6 +540,27 @@ const char *const kCrossingTwoRadiusRefusal =
     " serve the two-radius node and track NEC-5's radius response to under 0.5 ohm, or give every w"
     "ire one radius";
 
+// `_ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL` (UTF-8)
+const char *const kRefuseContactReflCoef =
+    "ground CONTACT under ground_model='refl-coef' is refused (momwire#282 stage 1, 2026-08-18): "
+    "the reflection-coefficient ground's Phi-term weight is a specular-angle approximation with n"
+    "o validity at zero clearance (momwire#153), and at contact it does not approximate the answe"
+    "r at all. Measured on a base-fed quarter-wave vertical over average soil (eps_r 13, sigma 0."
+    "005 S/m) at 14 MHz, N=41: refl-coef gives 27.0+12.6j ohm against this solver's own sommerfel"
+    "d answer of 51.5+23.2j ohm on the same deck and the NEC-5 binary's printed 52.4+22.7j ohm "
+    "\xe2\x80\x94"
+    " 27 ohm out, and on the WRONG SIDE of the 40.7+23.3j ohm PEC answer, so it is not a degraded"
+    " approximation but a different number. This row was served and silently wrong; docs/design/c"
+    "ontact-over-finite-ground.md 3.6 has the measurement. The MODEL is what has no story at the "
+    "plane, not momwire's implementation of it: NEC-2's own reflection-coefficient ground (nec2c,"
+    " GN 0) prints 175-779j ohm over average soil and 155-1248j ohm over poor soil on the same co"
+    "ntact monopole, against a sane 39.4+22.1j ohm over GN 1 ""\xe2\x80\x94"
+    " a reflection coefficient is a plane-wave object evaluated on a specular ray, and at zero cl"
+    "earance there is no such ray. Use ground_model='sommerfeld', which is contact-capable (momwi"
+    "re#151) and gated there against the binary, or raise the wire clear of the plane ""\xe2\x80\x94"
+    " refl-coef stays served, and stays the default, for wires standing clear in its 0.1-0.5 lamb"
+    "da validity window";
+
 // `_medium_spec._REFUSE_BURIED_PEC`
 const char *const kRefuseBuriedPec =
     "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = {gz:g}) over a PERFECTLY"
@@ -1704,7 +1725,18 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
     f.dedup = drop_duplicated_wires(in, f.args, galerkin);
     const nec4::SolverArgs &args = f.args;
     const auto &pls = args.wires;
-    if (args.ground.kind == nec4::Ground::finite_fast) decline("a reflection-coefficient ground");
+    // momwire#282 stage 1: ground CONTACT under the reflection-coefficient
+    // ground (GN 0) is refused at construction, every touching end named
+    if (args.ground.kind == nec4::Ground::finite_fast) {
+        const std::vector<std::pair<ll, bool>> touching = contact_ends(pls, 0.0);
+        if (!touching.empty()) {
+            std::string where;
+            for (std::size_t i = 0; i < touching.size(); i++)
+                where += (i ? ", wire " : "wire ") + std::to_string(touching[i].first) +
+                         (touching[i].second ? " start" : " end");
+            refuse_ni(where + " lies in the ground plane: " + kRefuseContactReflCoef);
+        }
+    }
     const bool has_ground = args.ground.kind != nec4::Ground::none;
     const bool lower_medium = args.ground.kind == nec4::Ground::finite;  // the Sommerfeld half-space
     const double gz = 0.0;
@@ -2066,9 +2098,10 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
         basis_coefs_complex(f, a, kseg, true);
         return f;
     }
-    if (args.junction_rule_nec42) {
-        // momwire#1644: `_nec4_live` -- the deck has a node the rule solves
-        // (a refl-coef ground or a buried wire is declined above).
+    if (args.junction_rule_nec42 && args.ground.kind != nec4::Ground::finite_fast) {
+        // momwire#1644: `_nec4_live` -- the deck has a node the rule solves,
+        // and its ground is not the reflection-coefficient one (which keeps
+        // NEC-2's basis and kernel); a buried wire is declined above.
         const std::vector<std::size_t> nodes = nec4_solved_nodes(f);
         if (!nodes.empty()) {
             nec4_basis(f, a, nodes);
