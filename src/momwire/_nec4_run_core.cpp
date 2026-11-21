@@ -697,6 +697,9 @@ struct Ctx {
     const Tables *t = nullptr;
     RunEngine *engine = nullptr;
     const nec5::NumpyLinalg *np = nullptr;
+    // the NEC-2 portal's run (momwire#2065, `PortalSolve`): its GD card is a
+    // far-field cliff only an RP 2 / RP 3 reads, never this slot's ground
+    bool nec2 = false;
     std::map<std::size_t, Walk> walks;
     std::map<std::size_t, std::vector<std::size_t>> matches;
     const Walk &walk(std::size_t point) {
@@ -888,7 +891,7 @@ RunResult solve_group(Ctx &c, const PortalGroup &group, double freq, ll group_in
     const nec5::Card *gd = nullptr;
     for (const nec5::Card &card : c.ss->deck.data_cards)
         if (card.mnemonic == "GD") gd = &card;
-    if (gd != nullptr && group.environment.has_second_medium) {
+    if (gd != nullptr && group.environment.has_second_medium && !c.nec2) {
         if (!(gd->i(0) == nec5::Int(2))) decline("a GD card other than GD 2 (the slot refuses it)");
         const SecondMedium &sm = group.environment.second_medium;
         r.has_far_field_ground = true;
@@ -1783,6 +1786,131 @@ bool render_piece(const std::string &text, const std::string &basis, const nec5:
     out.clear();
     go_on = false;
     return false;
+}
+
+// --- the NEC-2 portal's run half (momwire#2065) --------------------------------
+
+struct PortalSolve::Impl {
+    const StructureSeam *ss = nullptr;
+    const StructureBuild *sb = nullptr;
+    Tables t;
+    Ctx c;
+};
+
+PortalSolve::PortalSolve(const StructureSeam &ss, const StructureBuild &sb, RunEngine &engine,
+                         const nec5::NumpyLinalg &np)
+    : impl_(new Impl) {
+    impl_->ss = &ss;
+    impl_->sb = &sb;
+    impl_->t = tables_of(ss, sb);
+    impl_->c.ss = &ss;
+    impl_->c.sb = &sb;
+    impl_->c.t = &impl_->t;
+    impl_->c.engine = &engine;
+    impl_->c.np = &np;
+    impl_->c.nec2 = true;
+}
+
+PortalSolve::~PortalSolve() = default;
+
+void PortalSolve::seed() { impl_->c.engine->solve(0); }
+
+PortalRun PortalSolve::solve_group(const PortalGroup &group, double freq, long long group_index) {
+    const RunResult r = nec4::solve_group(impl_->c, group, freq, group_index);
+    PortalRun out;
+    out.driven = r.driven;
+    out.v_gap = r.v_gap;
+    out.v_applied = r.v_applied;
+    out.i_port = r.i_port;
+    out.i_source = r.i_source;
+    out.coeffs = r.coeffs;
+    out.segment_currents = r.segment_currents;
+    out.segment_charges = r.segment_charges;
+    out.p_in = r.p_in;
+    out.p_structure = r.p_structure;
+    out.p_radiated = r.p_radiated;
+    out.efficiency = r.efficiency;
+    out.p_network = r.p_network;
+    out.fill_seconds = r.fill_seconds;
+    out.factor_seconds = r.factor_seconds;
+    out.wavelength = r.wavelength;
+    out.networked = r.networked;
+    out.network_points = r.network_points;
+    out.point = r.point;
+    out.pec = r.pec;
+    out.finite = r.finite;
+    out.eps_r = r.eps_r;
+    out.sigma = r.sigma;
+    out.end_cap_withdrawn = impl_->c.engine->nec2_end_cap_withdrawn(r.point);
+    return out;
+}
+
+void PortalSolve::far_elements(const PortalRun &r, std::vector<double> &mid, std::vector<std::complex<double>> &moment) {
+    // `solver.element_currents(coeffs)` (subdiv 1: the knot currents), in
+    // the caller's wires, as the slot's `pattern` builds them
+    Ctx &c = impl_->c;
+    const std::vector<std::vector<cd>> solved_cur = c.engine->currents_at_knots(r.point, r.coeffs);
+    const WireDedup *dd = c.engine->dedup(r.point);
+    std::vector<std::vector<Point3>> polys;
+    std::vector<std::vector<ll>> npes;
+    std::vector<ll> solved;
+    input_walk(c.sb->points[r.point].args, dd, polys, npes, solved);
+    std::vector<std::vector<cd>> cur;
+    std::vector<std::vector<double>> knots;
+    for (std::size_t p = 0; p < polys.size(); p++) {
+        knots.push_back(knots_of(polys[p], npes[p]));
+        cur.push_back(solved[p] >= 0 ? solved_cur.at(static_cast<std::size_t>(solved[p])) : std::vector<cd>());
+    }
+    if (dd != nullptr)
+        for (const WireDedup::Dropped &d : dd->removed) {
+            const std::size_t t = static_cast<std::size_t>(solved.at(static_cast<std::size_t>(d.twin)));
+            cur.at(static_cast<std::size_t>(d.copy)).assign(solved_cur.at(t).size(), cd(0.0, 0.0));
+        }
+    mid.clear();
+    moment.clear();
+    for (std::size_t p = 0; p < cur.size(); p++) {
+        const std::vector<double> &k = knots[p];
+        if (cur[p].size() != k.size() / 3) decline("an engine's knots that do not match the walk");
+        for (std::size_t q = 0; q + 1 < cur[p].size(); q++) {
+            const cd element = cm(cd(0.5, 0.0), cadd(cur[p][q + 1], cur[p][q]));
+            for (int m = 0; m < 3; m++) {
+                mid.push_back(0.5 * (k[3 * (q + 1) + m] + k[3 * q + m]));
+                moment.push_back(cm(element, cd(k[3 * (q + 1) + m] - k[3 * q + m], 0.0)));
+            }
+        }
+    }
+}
+
+PrintNearBlock PortalSolve::near_field(const nec5::Card &card, const PortalRun &r) {
+    RunResult rr;
+    rr.point = r.point;
+    rr.coeffs = r.coeffs;
+    rr.wavelength = r.wavelength;
+    rr.pec = r.pec;
+    rr.finite = r.finite;
+    rr.eps_r = r.eps_r;
+    rr.sigma = r.sigma;
+    return nec4::near_field(impl_->c, card, rr);
+}
+
+bool PortalSolve::loaded_twice(long long group_index) const {
+    return nec4::loaded_twice(impl_->sb->tables, group_index);
+}
+
+long long PortalSolve::global_segment(const nec5::Int &tag, const nec5::Int &seg) const {
+    return nec4::global_segment(impl_->ss->deck.structure.wires, tag, seg);
+}
+
+std::vector<const NetworkCard *> PortalSolve::live_networks(long long group_index) const {
+    std::vector<const NetworkCard *> out;
+    const std::vector<OperatingPoint> &points = impl_->sb->points;
+    if (points.empty()) return out;
+    for (const LiveCard &lc : live_cards(impl_->ss->deck, points[0].ports, group_index)) out.push_back(lc.card);
+    return out;
+}
+
+void PortalSolve::tl_line(const NetworkCard &card, double &z0, double &length, bool &crossed) const {
+    nec4::tl_line(impl_->ss->deck, card, z0, length, crossed);
 }
 
 long long largest_solve(const std::string &text, const std::string &basis, bool open_end) {

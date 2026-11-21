@@ -46,6 +46,7 @@
 #include "_nec4_printout_core.h"
 
 #include <complex>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,14 @@ class RunEngine {
         (void)index;
         return nullptr;
     }
+    // `solver.nec2_end_cap_withdrawn` (momwire#2033): the refusal an explicit
+    // `nec2_end_cap` would raise on this operating point's deck, when the
+    // NEC-2 launcher's default ran it without the cap; "" otherwise (and on
+    // every basis but the point-matched sinusoidal one).
+    virtual std::string nec2_end_cap_withdrawn(std::size_t index) {
+        (void)index;
+        return std::string();
+    }
 };
 
 // Builds the engine for one built structure (its operating points).
@@ -130,6 +139,56 @@ bool render_piece(const std::string &latin1_text, const std::string &basis,
                   const nec5::EngineStamp &stamp, EngineFactory &engines,
                   const nec5::NumpyLinalg &np, std::string &utf8_printout, std::string &why,
                   bool &go_on);
+
+// --- the NEC-2 portal's run half (momwire#2065) ------------------------------
+// `portal._portal.DeckSolver` over one built structure (`build_portal_structure`
+// of a deck read by `parse_portal_deck(text, Dialect::nec2)`), for the
+// NEC-2 printout writer (`_nec2_printout_core.h`): the same port algebra,
+// readouts and near field the slot's run half above is made of, handed
+// over as numbers rather than as a NEC-4.2 printout. A run Python would
+// refuse throws Refusal with its words; one this copy does not answer,
+// Declined.
+struct PortalRun {  // portal._portal.GroupResult
+    std::vector<std::pair<long long, std::pair<long long, std::complex<double>>>> driven;  // (port, (seg, volts))
+    std::vector<std::complex<double>> v_gap, v_applied, i_port, i_source, coeffs;
+    std::vector<std::complex<double>> segment_currents, segment_charges;
+    double p_in = 0, p_structure = 0, p_radiated = 0, efficiency = 0, p_network = 0;
+    double fill_seconds = 0, factor_seconds = 0, wavelength = 0;
+    bool networked = false;
+    std::vector<std::pair<long long, std::pair<long long, long long>>> network_points;  // (tag, (seg, port))
+    std::size_t point = 0;
+    bool pec = false, finite = false;
+    double eps_r = 0, sigma = 0;
+    std::string end_cap_withdrawn;  // `solver.nec2_end_cap_withdrawn`, "" for none
+};
+
+class PortalSolve {
+  public:
+    PortalSolve(const StructureSeam &ss, const StructureBuild &sb, RunEngine &engine, const nec5::NumpyLinalg &np);
+    ~PortalSolve();
+    PortalSolve(const PortalSolve &) = delete;
+    PortalSolve &operator=(const PortalSolve &) = delete;
+    // `DeckSolver.__init__`'s seed fill: the first operating point's port
+    // solution, whose refusal Python raises before the structure prints
+    void seed();
+    // `DeckSolver.solve_group(group, freq, group_index)`
+    PortalRun solve_group(const PortalGroup &group, double freq, long long group_index);
+    // `DeckSolver.current_elements(result)`: midpoints and moments, (n, 3)
+    void far_elements(const PortalRun &r, std::vector<double> &mid, std::vector<std::complex<double>> &moment);
+    // `_near_field_lines`' readout: one NE / NH grid's rows
+    PrintNearBlock near_field(const nec5::Card &card, const PortalRun &r);
+    bool loaded_twice(long long group_index) const;
+    // `global_segment(*structure.locate(tag, seg))`
+    long long global_segment(const Int &tag, const Int &seg) const;
+    // `live_cards(model, plan, group)`'s cards
+    std::vector<const NetworkCard *> live_networks(long long group_index) const;
+    // `card_branches(card, ...)[0]`'s line: |Z0|, the resolved length, crossed
+    void tl_line(const NetworkCard &card, double &z0, double &length, bool &crossed) const;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 // The largest solve (segments) the deck's built structures prepare, or -1
 // (the executable's thread policy).
