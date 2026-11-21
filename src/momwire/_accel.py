@@ -385,6 +385,10 @@ acc, LOADED, VARIANT = _load()
 _CANCELLABLE_KERNELS = (
     # momwire#1644: the NEC-4 dialect's kernel (`_accel_sinusoidal_nec4.cpp`).
     "sinusoidal_field_tensor_nec4",
+    # NEC-2's interaction approximation (`_accel_sinusoidal_far.cpp`).
+    "sinusoidal_field_tensor_far",
+    "sinusoidal_field_tensor_refl_far",
+    "sinusoidal_far_overlay",
     "assemble_Z_bspline",
     "assemble_Z_bspline_windowed",
     "assemble_Z_bspline_weighted_windowed",

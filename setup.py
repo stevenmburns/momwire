@@ -364,6 +364,8 @@ _ACCEL_HEADERS = [
     # The Sinusoidal-Galerkin far fill's Python-free core (momwire#1718 S1).
     "src/momwire/_sinusoidal_galerkin_core.h",
     "src/momwire/_sinusoidal_nec4_core.h",
+    # NEC-2's interaction approximation (`nec2_far_approx`).
+    "src/momwire/_sinusoidal_far_core.h",
     "src/momwire/_sinusoidal_series_inline.h",
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
     # TUs and `_accel_somm_proj_inline.h`.
@@ -500,6 +502,10 @@ _ACCEL_SOURCES = [
     # TUs so that no existing kernel's codegen can move with them.
     "src/momwire/_sinusoidal_nec4_core.cpp",
     "src/momwire/_accel_sinusoidal_nec4.cpp",
+    # NEC-2's interaction approximation, its kernel and its
+    # binding, in their own TUs for the same reason.
+    "src/momwire/_sinusoidal_far_core.cpp",
+    "src/momwire/_accel_sinusoidal_far.cpp",
     "src/momwire/_accel_somm.cpp",
     # The Sommerfeld near-field remainder (`_field_point`), one spelled
     # kernel rather than numpy's CPU-dependent arctan2 and einsum; its
