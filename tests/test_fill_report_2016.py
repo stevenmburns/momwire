@@ -314,11 +314,15 @@ def test_bspline_offset_edges_alone_are_served():
     reconciles(reuse)
 
 
-def test_the_families_on_bspline_say_what_they_cannot_count():
+def test_the_families_on_bspline_count_the_ground_image():
+    # momwire#2068: the image is its own family (it used to be uncounted).
     deck = yagi(height=6.0)
     s = BSplineSolver(**deck, pair_reuse=hint_of(deck), ground_z=0.0)
     s.compute_impedance()
-    assert s.fill_report()["reuse"]["uncounted"] == ["image"]
+    reuse = s.fill_report()["reuse"]
+    assert reuse["uncounted"] == []
+    assert set(reuse["families"]) == {"direct", "image"}
+    reconciles(reuse)
 
 
 # ------------------------------------------- reporting what was served
