@@ -1,0 +1,12 @@
+CE sweep over one ground, then a second gn 0 re-arms
+GW 1 17 0. -2.6 7. 0. 2.6 7. 0.001
+GE -1
+GN 0 0 0 0 13. 0.005
+EX 0 1 9 0 1.
+FR 0 4 0 0 27.5 0.5
+RP 0 7 1 1000 0. 0. 15. 0.
+XQ
+GN 0 0 0 0 30. 0.02
+FR 0 2 0 0 28. 1.
+XQ
+NX

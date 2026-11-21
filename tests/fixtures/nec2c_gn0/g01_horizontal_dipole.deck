@@ -1,0 +1,9 @@
+CE horizontal half-wave dipole 10 m over average ground, elevation cut
+GW 1 21 0. -5.2 10. 0. 5.2 10. 0.001
+GE -1
+GN 0 0 0 0 13. 0.005
+EX 0 1 11 0 1.
+FR 0 1 0 0 14.1 0
+RP 0 91 1 1000 0. 0. 1. 0.
+XQ
+NX

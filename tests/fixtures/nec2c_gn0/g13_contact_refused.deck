@@ -1,0 +1,10 @@
+CE two wires standing on the gn 0 plane (the reference refuses contact)
+GW 1 9 0. 0. 0. 0. 0. 5. 0.001
+GW 2 9 3. 0. 5. 3. 0. 0. 0.001
+GW 3 5 6. 0. 2. 6. 0. 4. 0.001
+GE 1
+GN 0 0 0 0 13. 0.005
+EX 0 1 1 0 1.
+FR 0 1 0 0 14. 0
+XQ
+NX

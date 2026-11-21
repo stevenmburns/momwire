@@ -1,0 +1,10 @@
+CE two short parallel wires of two radii at 160 m (cos-1 shapes, sparse assembly, 19600 pairs)
+GW 1 70 0. -1.2 3. 0. 1.2 3. 0.0005
+GW 2 70 0.3 -1.2 3.5 0.3 1.2 3.5 0.002
+GE -1
+GN 0 0 0 0 20. 0.01
+EX 0 1 35 0 1.
+FR 0 1 0 0 1.83 0
+RP 0 7 1 1000 0. 0. 15. 0.
+XQ
+NX

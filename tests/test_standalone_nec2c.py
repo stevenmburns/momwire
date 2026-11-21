@@ -19,7 +19,15 @@ whose two numbers are masked by exact line pattern (`_mask`). Covered:
   `--legacy-probe`, an unknown `--basis` and `--save-decks`;
 - NEC-2's free-end cap (momwire#2033): the launcher's default (on, withdrawn
   with its line where it cannot act), `MOMWIRE_X_NEC2_END_CAP=0` (off) and
-  `=1` (the refusing request).
+  `=1` (the refusing request);
+- the reflection-coefficient ground (GN 0): the corpus's two GN 0 decks and
+  the hand-written ones in `tests/fixtures/nec2c_gn0` (horizontal, vertical
+  and sloping wires, a yagi, a moxon on the sparse route, a long wire filled
+  in several bands, loads, grounds from poor soil to near-PEC, two radii,
+  the extended kernel, the folded cos-1 shapes, RP 0 / 2 / 3, a frequency
+  sweep and a re-armed GN, and the refusals: ground contact, NE), each
+  served -- never declined -- at the launcher's bytes under every end-cap
+  setting.
 
 The executable needs its OpenBLAS and a CMake build, which only the
 `standalone` workflow's Linux job makes, so this module runs only when
@@ -52,7 +60,7 @@ pytestmark = pytest.mark.skipif(
 DIPOLE = CORPUS_DIR / "dipole_free_space.deck"
 PATTERN = CORPUS_DIR / "dipole_rp_pattern.deck"
 # A deck the dialect refuses by name (RP mode 1, the surface wave): the
-# ERROR frame. (The corpus's GN 0 decks are not served by this build yet.)
+# ERROR frame.
 REFUSED_TEXT = (
     b"CE refused by name\nGW 1 9 0 0 -2.5 0 0 2.5 .001\nGE 0\nEX 0 1 5 0 1 0\n"
     b"FR 0 1 0 0 30\nRP 1 1 1 1000 0 0 0 0 1000\nNX\n"
@@ -169,6 +177,44 @@ def test_the_corpus_is_mostly_served(tmp_path):
         r = _run(EXE, [], deck.read_bytes(), tmp_path, _env())
         served += NOT_SERVED not in r.stdout
     assert served >= 60, served
+
+
+GN0_CORPUS = [
+    CORPUS_DIR / "dipole_reflection_ground.deck",
+    CORPUS_DIR / "dipole_rp2_cliff_on_the_gn_card.deck",
+]
+GN0 = sorted((ROOT / "tests" / "fixtures" / "nec2c_gn0").glob("*.deck"))
+# the GN 0 decks the launcher refuses: a wire end in the plane (momwire#282
+# stage 1, at construction) and a near field over the ground
+GN0_REFUSED = {"g13_contact_refused", "g14_contact_one_end", "g15_ne_refused"}
+REFL_COEF = b"FINITE GROUND - REFLECTION COEFFICIENT APPROXIMATION"
+# The long wire (N = 1801, past `_schedule.mb_rows`' one-band height) is
+# about its banded fill, not the cap: it runs at the default cap only.
+_CAPS = {None: "default", "0": "off", "1": "on"}
+_GN0_CASES = [
+    pytest.param(deck, cap, id=f"{deck.stem}-{name}")
+    for deck in GN0_CORPUS + GN0
+    for cap, name in _CAPS.items()
+    if cap is None or deck.stem != "g12_long_wire_banded"
+]
+
+
+@pytest.mark.parametrize(("deck", "cap"), _GN0_CASES)
+def test_a_reflection_coefficient_deck_answers_as_the_launcher(deck, cap, tmp_path):
+    """GN 0: the Fresnel-weighted image block (`_field_tensor_image_refl`)
+    in the C++ fill. Served, never declined -- a decline fails here rather
+    than skipping -- and the launcher's bytes under each end-cap setting;
+    a deck the launcher refuses, its refusal."""
+    exe, ref, _, _ = _both(
+        [], tmp_path, stdin=deck.read_bytes(), env={"MOMWIRE_X_NEC2_END_CAP": cap}
+    )
+    assert NOT_SERVED not in exe.stdout, exe.stdout[-600:]
+    _same(exe, ref)
+    if deck.stem in GN0_REFUSED:
+        assert b"\nERROR: " in exe.stdout
+    else:
+        assert REFL_COEF in exe.stdout
+        assert b"ANTENNA INPUT PARAMETERS" in exe.stdout
 
 
 def _cards(deck: Path) -> bytes:
