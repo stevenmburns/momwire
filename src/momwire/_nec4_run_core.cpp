@@ -718,8 +718,15 @@ struct Ctx {
 std::size_t point_for(const StructureBuild &sb, double freq, bool ek, const Environment &env) {
     if (env.ground.kind == Ground::finite_fast) decline("a reflection-coefficient ground (not the NEC-4.2 slot's)");
     for (std::size_t i = 0; i < sb.points.size(); i++)
+        // the build's `same_ground`: a finite ground's point is its kind AND
+        // its (eps_r, sigma), so a GN re-armed with new constants at a
+        // frequency already solved takes its own point
         if (sb.points[i].frequency_mhz == freq && sb.points[i].extended_kernel_asked == ek &&
-            sb.points[i].args.ground.kind == env.ground.kind)
+            sb.points[i].args.ground.kind == env.ground.kind &&
+            (env.ground.kind != Ground::finite_fast && env.ground.kind != Ground::finite
+                 ? true
+                 : sb.points[i].args.ground.eps_r == env.ground.eps_r &&
+                       sb.points[i].args.ground.sigma == env.ground.sigma))
             return i;
     decline("an operating point the build did not make");
 }
