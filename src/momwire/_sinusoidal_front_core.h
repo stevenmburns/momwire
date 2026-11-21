@@ -133,10 +133,22 @@ struct Front {
     // wing column per member appended (`_crossing_wing_view`, `n_wings` of
     // them after the N segment bases), and a TWO-RADIUS node's radii
     // (`_two_radius_crossing`)
+    // NEC-2's free-end cap (momwire#2033): the basis above carries it
+    // (`nec2_end_cap`); or the NEC-2 launcher's default withdrew it from this
+    // deck, and `nec2_end_cap_withdrawn` is the refusal an explicit request
+    // would raise (`SinusoidalSolver.nec2_end_cap_withdrawn`), "" otherwise.
+    bool nec2_end_cap = false;
+    std::string nec2_end_cap_withdrawn;
     long long n_wings = 0;
     bool two_radius = false;
     double a_above = 0, a_below = 0;
 };
+
+// `_nec2_end_cap`'s two refusals (UTF-8), the sentences an explicit
+// `nec2_end_cap` raises on a deck it cannot act on, and the keys of
+// `_nec2_end_cap.WITHDRAWN`.
+extern const char *const kNec2CapBelowInterface;
+extern const char *const kNec2CapNec4Junction;
 
 // Throws FrontError where Python raises, nec4::Declined where this copy
 // declines.
