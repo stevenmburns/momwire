@@ -76,9 +76,19 @@ std::string refuse_mixed_drive_kinds(long long count, long long voltages, long l
 
 std::string refuse_duplicate_ex(const std::string &at) {
     return "two EX cards address " + at +
-           "; one node is one port, so the second card is a second generator in series "
-           "across the same gap - the one repeat served is EZNEC's 1e-10 V load probe beside "
-           "an EX 4, and this seam will not decide how two set currents share one path";
+           " and at least one of them is an EX 4 (a set current); one node is one port, so the "
+           "second card is a second generator in series across the same gap - set VOLTAGES "
+           "there are served, driving the gap with their sum, but NEC-5 itself refuses a "
+           "voltage and a current source on one segment, and this seam will not decide how two "
+           "set currents share one path";
+}
+
+std::string refuse_series_ex_at_network_point(const std::string &at, const std::string &card) {
+    return "two EX 0 cards address " + at + ", which is also an end of " + card +
+           ", so it is a network CONNECTION POINT - and there NEC-5 does not answer repeated "
+           "set voltages as generators in series: two 0.5 V cards print a different current "
+           "from one 1 V card, and not half of it either. Off the network the repeat is served "
+           "as the sum of its volts; here, write the one EX 0 with the summed voltage";
 }
 
 std::string refuse_two_drives_one_port(const std::string &first, const std::string &second) {
@@ -192,11 +202,8 @@ std::string network_card_name(const char *mnemonic, const Node &a, const Node &b
     return std::string("the ") + mnemonic + " card between " + at_of(a) + " and " + at_of(b);
 }
 
-// `_load_probe_refusal`.
-std::string load_probe_refusal(const Deck &d) {
-    std::vector<Node> loaded;
-    for (const Load &l : d.loads) loaded.push_back(l.at);
-    // the connection points, the first card naming each (`setdefault`)
+// `_network_points`: every TL/NT end, the first card naming each (`setdefault`).
+std::vector<std::pair<Node, std::string>> network_points(const Deck &d) {
     std::vector<std::pair<Node, std::string>> network;
     const auto claim = [&](const Node &at, const std::string &name) {
         for (const auto &kv : network)
@@ -207,6 +214,14 @@ std::string load_probe_refusal(const Deck &d) {
         for (const Node &at : {t.end_a, t.end_b}) claim(at, network_card_name("TL", t.end_a, t.end_b));
     for (const Network &n : d.networks)
         for (const Node &at : {n.end_a, n.end_b}) claim(at, network_card_name("NT", n.end_a, n.end_b));
+    return network;
+}
+
+// `_load_probe_refusal`.
+std::string load_probe_refusal(const Deck &d) {
+    std::vector<Node> loaded;
+    for (const Load &l : d.loads) loaded.push_back(l.at);
+    const std::vector<std::pair<Node, std::string>> network = network_points(d);
     long long voltages = 0;
     for (const Source &s : d.sources)
         if (s.kind.is_zero()) voltages++;
@@ -281,15 +296,19 @@ std::string drive_refusal(const Deck &d) {
         std::string mixed = load_probe_refusal(d);
         if (!mixed.empty()) return mixed;
     }
-    // A repeated address is served only as EZNEC's repeated load probe
-    // (momwire#1787): every card at it an EX 0 on a mixed deck, which
-    // `load_probe_refusal` above has already vetted.
-    const bool probes = voltages != 0 && voltages != static_cast<long long>(d.sources.size());
+    // A repeated address is served when every card at it is an EX 0 off the
+    // network: generators in series across one gap, driven by their sum
+    // (`_drive_refusal` has the oracle evidence). An EX 4 at it, or a TL/NT
+    // end under it, stays refused.
+    const std::vector<std::pair<Node, std::string>> network = network_points(d);
     std::map<Node, bool, NodeLess> seen;  // address -> its first card is an EX 0
     for (const Source &s : d.sources) {
         auto it = seen.find(s.at);
-        if (it != seen.end() && !(probes && it->second && s.kind.is_zero()))
-            return refuse_duplicate_ex(at_of(s.at));
+        if (it != seen.end()) {
+            if (!(it->second && s.kind.is_zero())) return refuse_duplicate_ex(at_of(s.at));
+            for (const auto &kv : network)
+                if (same_node(kv.first, s.at)) return refuse_series_ex_at_network_point(at_of(s.at), kv.second);
+        }
         seen.emplace(s.at, s.kind.is_zero());
     }
     return "";
@@ -1364,7 +1383,7 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             if (site == nullptr || site->column < 0) continue;
             auto it = seen.find(site->column);
             // the same address twice is `drive_refusal`'s served repeated
-            // probe (momwire#1787); this is two addresses on one cut
+            // set voltage (generators in series); this is two addresses on one cut
             if (it != seen.end() && !same_node(it->second, s.at))
                 throw Refusal{refuse_two_drives_one_port(at_of(it->second), at_of(s.at))};
             seen[site->column] = s.at;

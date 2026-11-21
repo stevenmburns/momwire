@@ -1066,7 +1066,14 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             int64_t index = -1;
             for (const SeamSite &site : p.mesh.sites)
                 if (same_node(site.at, src.at)) index = site.index;
-            spec[static_cast<std::size_t>(row_of[index])] = cd(src.drive_re, src.drive_im);
+            cd &slot = spec[static_cast<std::size_t>(row_of[index])];
+            // A repeated address is every card an EX 0 (`drive_refusal`):
+            // generators in series, the gap driven by their sum. The first
+            // card is written, not added to a zero (`_multi_drive_state`).
+            if (current_kind.count(index) != 0)
+                slot = slot + cd(src.drive_re, src.drive_im);
+            else
+                slot = cd(src.drive_re, src.drive_im);
             current_kind[index] = !src.kind.is_zero();
         }
         std::vector<int64_t> i_sites, v_sites, i_rows, v_rows;
