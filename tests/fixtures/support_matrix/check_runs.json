@@ -1,5 +1,5 @@
 {
- "_source": "check runs of momwire 6d99dc315 (push to main) and 1c0adb5f3 (PR #1833 head), from GET /repos/stevenmburns/momwire/commits/<sha>/check-runs joined to /actions/runs on check_suite_id; captured 2026-11-06 for tests/test_support_matrix.py",
+ "_source": "check runs of momwire 6d99dc315 (push to main) and 1c0adb5f3 (PR #1833 head), from GET /repos/stevenmburns/momwire/commits/<sha>/check-runs joined to /actions/runs on check_suite_id; captured 2026-11-06 for tests/test_support_matrix.py; plus one hand-added record, standalone.yml's linux-nec2c (momwire#2065), a job no CI run had made yet: its check name is its job id, as linux-nec42's is (sha 'none')",
  "check_runs": [
   {
    "sha": "1c0adb5f3",
@@ -405,6 +405,13 @@
    "event": "push",
    "workflow": "wheels.yml",
    "name": "which pythons to smoke",
+   "conclusion": "success"
+  },
+  {
+   "sha": "none",
+   "event": "pull_request",
+   "workflow": "standalone.yml",
+   "name": "linux-nec2c",
    "conclusion": "success"
   }
  ]
