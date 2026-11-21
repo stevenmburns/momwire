@@ -5163,6 +5163,7 @@ def test_every_basis_ships_as_a_named_entry_point():
     import tomllib
     from pathlib import Path
 
+    from momwire._basis_names import BASIS_ALIASES
     from momwire.deck import BASES, NEC2_BASES
     from momwire.dropin.nec2c import _portal as nec_portal
 
@@ -5172,7 +5173,11 @@ def test_every_basis_ships_as_a_named_entry_point():
     named = {
         name: target
         for name, target in scripts.items()
-        if name.startswith("momwire-nec2c-") and name != "momwire-nec2c-shared"
+        if name.startswith("momwire-nec2c-")
+        and name != "momwire-nec2c-shared"
+        # #2091's deprecated spellings: test_basis_names_2091 holds each to
+        # its canonical script.
+        and not any(name.endswith(f"-{old}") for old in BASIS_ALIASES)
     }
     for name, target in named.items():
         assert target == "momwire.dropin.nec2c:main", name

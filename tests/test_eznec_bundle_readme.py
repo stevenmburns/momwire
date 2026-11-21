@@ -137,7 +137,14 @@ def test_the_reference_pages_known_bases_are_the_rosters():
     list leaves out the bases that refuse every deck in that dialect
     (`sinusoidal`, `pulse`: centre-fed only) and the retired `razor-nec5`
     spelling; the NEC-4.2 list is `NEC2_BASES`."""
-    scripts = _console_scripts()
+    from momwire._basis_names import BASIS_ALIASES
+
+    # #2091's deprecated spellings are pip-only aliases, absent from the page.
+    scripts = {
+        k: v
+        for k, v in _console_scripts().items()
+        if not any(k.endswith(f"-{old}") for old in BASIS_ALIASES)
+    }
     nec5 = {
         basis_from_program_name(k, "nec5-")
         for k in scripts

@@ -229,8 +229,15 @@ def test_every_nec4_console_script_names_a_basis_the_slot_serves():
     scripts = tomllib.loads((ENTRY.parents[2] / "pyproject.toml").read_text())[
         "project"
     ]["scripts"]
+    from momwire._basis_names import BASIS_ALIASES
+
+    # #2091's deprecated spellings: test_basis_names_2091 holds each to its
+    # canonical script.
     family = {
-        k: v for k, v in scripts.items() if dialect_from_program_name(k) == "nec4"
+        k: v
+        for k, v in scripts.items()
+        if dialect_from_program_name(k) == "nec4"
+        and not any(k.endswith(f"-{old}") for old in BASIS_ALIASES)
     }
     assert "momwire-nec42" in family and "momwire-nec42-sinusoidal" in family
     # momwire#1443: the old `momwire-nec4*` launchers are not shipped; every
