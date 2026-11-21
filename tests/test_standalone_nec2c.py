@@ -323,6 +323,8 @@ def test_4nec2s_names_on_stdin(names, tmp_path):
         ["--legacy-probe", "-version"],
         ["--basis", "nonesuch", "-version"],
         ["--basis=nonesuch"],
+        # a retired spelling refused by name, as the launcher words it (#2091)
+        ["--basis", "razor-nec5", "-version"],
         ["--cache-stats"],
         ["--save-decks"],
         ["--save-decks", "no-such-dir", "-version"],

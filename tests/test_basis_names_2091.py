@@ -371,9 +371,41 @@ _OLD_TOKEN = re.compile(
 )
 
 
+# The deprecated console scripts pip still installs for the deprecation window
+# (pyproject's DEPRECATED block): exactly these, and nowhere but pip. Removing
+# the aliases removes this set and that block together.
+DEPRECATED_SCRIPTS = frozenset(
+    f"momwire-{dialect}-{old}"
+    for dialect, olds in (
+        ("nec5", ("razor-2p", "bspline", "bspline-d1", "sinusoidal-galerkin")),
+        ("nec42", ("bspline", "bspline-d1", "sinusoidal-galerkin")),
+        ("nec2c", ("bspline", "bspline-d1", "sinusoidal-galerkin")),
+    )
+    for old in olds
+)
+
+
+def _console_scripts() -> dict[str, str]:
+    return tomllib.loads(PYPROJECT.read_text())["project"]["scripts"]
+
+
+def test_pip_installs_exactly_the_deprecated_scripts_each_beside_its_canonical_one():
+    scripts = _console_scripts()
+    old = {n for n in scripts if _OLD_TOKEN.search(n)}
+    assert old == DEPRECATED_SCRIPTS
+    for name in DEPRECATED_SCRIPTS:
+        dialect, basis = name.removeprefix("momwire-").split("-", 1)
+        canonical = f"momwire-{dialect}-{ALIASES[basis]}"
+        assert scripts[name] == scripts[canonical], (name, canonical)
+
+
 def _shipped_names() -> dict[str, str]:
-    scripts = tomllib.loads(PYPROJECT.read_text())["project"]["scripts"]
-    names = {name: "pyproject console script" for name in scripts}
+    scripts = _console_scripts()
+    names = {
+        name: "pyproject console script"
+        for name in scripts
+        if name not in DEPRECATED_SCRIPTS
+    }
     names.update({stem: "drop-in launcher" for stem in FREEZE.launcher_stems()})
     names[FREEZE.ENGINE_NAME] = "drop-in engine"
     cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text()
@@ -492,7 +524,7 @@ ALLOWED = {
     "src/momwire/dropin/nec5/_printout.py": 1,  # the deprecation note's example
     "src/momwire/dropin/nec5/_serve.py": 1,  # a dated measurement in the module docstring
     "src/momwire_nec2c_client.py": 4,  # the alias table and retired name, restated
-    "standalone/nec2c_cli.inc": 3,  # the alias table, restated
+    "standalone/nec2c_cli.inc": 6,  # the alias table, restated; razor-nec5 refused by name
 }
 
 

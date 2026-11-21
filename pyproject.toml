@@ -173,6 +173,23 @@ momwire-nec2c-sg = "momwire.dropin.nec2c:main"
 # v0.36.1 to v0.46.0 and are retired; razor is served by the NEC-5 dialect's
 # launchers (`momwire-nec5-razor2p`).
 momwire-nec2c-pulse = "momwire.dropin.nec2c:main"
+# DEPRECATED spellings (momwire#2091), installed for the deprecation window
+# only so an existing host path or script keeps working: each reads its basis
+# from argv[0], canonicalises it, and notes "(renamed from ...)" on the
+# printout. pip only: the Windows zip ships the new names alone (Steve,
+# 2026-11-21). Remove with the aliases, no earlier than two minor releases
+# after 0.97.0; tests/test_basis_names_2091.py holds this block to exactly
+# these names.
+momwire-nec5-razor-2p = "momwire_eznec_client:main"
+momwire-nec5-bspline = "momwire_eznec_client:main"
+momwire-nec5-bspline-d1 = "momwire_eznec_client:main"
+momwire-nec5-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec42-bspline = "momwire_eznec_client:main"
+momwire-nec42-bspline-d1 = "momwire_eznec_client:main"
+momwire-nec42-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec2c-bspline = "momwire.dropin.nec2c:main"
+momwire-nec2c-bspline-d1 = "momwire.dropin.nec2c:main"
+momwire-nec2c-sinusoidal-galerkin = "momwire.dropin.nec2c:main"
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/momwire"
