@@ -5,6 +5,7 @@
 #include "_pair_reuse_core.h"
 
 #include <chrono>
+#include <type_traits>
 #include <cstdio>
 #include <list>
 #include <mutex>
@@ -105,6 +106,7 @@ struct Entry {
 std::mutex g_cache_mtx;
 std::list<Entry> g_cache;  // most recent first
 std::map<std::string, Counters> g_counters;
+int64_t g_cache_bytes = -1;  // the test hook's; < 0: SHARED_PLAN_BYTES
 
 }  // namespace
 
@@ -113,15 +115,23 @@ namespace detail {
 void finish(FamilyPlan &f, const std::vector<Rep> &reps, int64_t singles, const Policy &pol) {
     f.classes = static_cast<int64_t>(reps.size());
     f.pairs = static_cast<int64_t>(f.spec.n_blocks) * f.spec.rows * f.spec.cols;
-    f.near = f.spec.near_singles ? singles : 0;
+    f.near = (f.spec.near_singles ? singles : 0) + static_cast<int64_t>(f.near_flat.size());
     f.rep_code.resize(reps.size());
     for (size_t c = 0; c < reps.size(); c++) f.rep_code[c] = reps[c].code;
-    build_groups(reps, f.spec.rows, f.spec.cols, f.spec.n_blocks, pol.rep_rows, f.groups, f.rep_evals);
+    if (f.spec.keep_reps) {
+        f.rep_flat.resize(reps.size());
+        for (size_t c = 0; c < reps.size(); c++)
+            f.rep_flat[c] = (reps[c].block * f.spec.rows + reps[c].obs) * f.spec.cols + reps[c].src;
+    }
+    if (pol.rep_rows > 0)
+        build_groups(reps, f.spec.rows, f.spec.cols, f.spec.n_blocks, pol.rep_rows, f.groups, f.rep_evals);
     // The fill report's split (momwire#2016): integers read off the census.
-    if (f.spec.near_singles) f.near_bits.assign((reps.size() + 63) / 64, 0);
+    // A near class is a single (`near_singles`) or a Key::Near class.
+    const bool near_classes = f.spec.near_singles || !f.near_flat.empty();
+    if (near_classes) f.near_bits.assign((reps.size() + 63) / 64, 0);
     for (size_t c = 0; c < reps.size(); c++) {
         f.cls_block[reps[c].block]++;
-        if (f.spec.near_singles && reps[c].single) {
+        if ((f.spec.near_singles && reps[c].single == 1) || reps[c].single == 2) {
             f.near_block[reps[c].block]++;
             f.near_bits[c / 64] |= uint64_t(1) << (c % 64);
         }
@@ -130,16 +140,87 @@ void finish(FamilyPlan &f, const std::vector<Rep> &reps, int64_t singles, const 
         f.evals_block[G.block] += static_cast<int64_t>(G.obs.size() * G.src.size());
 }
 
+void first_appearance(FamilyPlan &f, std::vector<Rep> &reps) {
+    const int64_t rows = f.spec.rows, cols = f.spec.cols;
+    auto flat = [&](const Rep &r) { return (r.block * rows + r.obs) * cols + r.src; };
+    std::vector<int64_t> order(reps.size());
+    for (size_t c = 0; c < reps.size(); c++) order[c] = static_cast<int64_t>(c);
+    // Every class has its own first pair, so the order is strict.
+    std::sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
+        return flat(reps[static_cast<size_t>(a)]) < flat(reps[static_cast<size_t>(b)]);
+    });
+    bool moved = false;
+    for (size_t j = 0; j < order.size(); j++) moved = moved || order[j] != static_cast<int64_t>(j);
+    if (!moved) return;
+    std::vector<int64_t> new_of_old(reps.size());
+    for (size_t j = 0; j < order.size(); j++) new_of_old[static_cast<size_t>(order[j])] = static_cast<int64_t>(j);
+    renumber(f, new_of_old);
+    std::vector<Rep> sorted(reps.size());
+    for (size_t j = 0; j < order.size(); j++) sorted[j] = reps[static_cast<size_t>(order[j])];
+    reps.swap(sorted);
+}
+
 }  // namespace detail
 
+void renumber(FamilyPlan &f, const std::vector<int64_t> &new_of_old) {
+    if (!f.groups.empty()) throw std::invalid_argument("pair_reuse: a family with groups cannot be renumbered");
+    const int cb = f.spec.code_bits;
+    const int32_t mask = (int32_t(1) << cb) - 1;
+    for (int b = 0; b < f.spec.n_blocks; b++) {
+        int32_t *mp = f.map[b].data();
+        const int64_t n = static_cast<int64_t>(f.map[b].size());
+#pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < n; i++) {
+            const int32_t e = mp[i];
+            mp[i] = static_cast<int32_t>((new_of_old[static_cast<size_t>(e >> cb)] << cb) | (e & mask));
+        }
+    }
+    auto permute = [&](auto &v) {
+        if (v.empty()) return;
+        std::remove_reference_t<decltype(v)> out(v.size());
+        for (size_t c = 0; c < v.size(); c++) out[static_cast<size_t>(new_of_old[c])] = v[c];
+        v.swap(out);
+    };
+    permute(f.rep_code);
+    permute(f.rep_flat);
+    if (!f.near_bits.empty()) {
+        std::vector<uint64_t> nb(f.near_bits.size(), 0);
+        for (size_t c = 0; c < new_of_old.size(); c++)
+            if (f.near_bits[c / 64] & (uint64_t(1) << (c % 64))) {
+                const uint64_t d = static_cast<uint64_t>(new_of_old[c]);
+                nb[d / 64] |= uint64_t(1) << (d % 64);
+            }
+        f.near_bits.swap(nb);
+    }
+}
+
+BandBudget::BandBudget(int64_t budget, int64_t band_bytes, int workers, int64_t n_bands, int64_t held)
+    : budget_(budget), band_bytes_(band_bytes), n_bands_(n_bands), held_(held), workers_(std::max(1, workers)) {}
+
+bool BandBudget::start(int64_t i) {
+    // The bands in flight are [i, next_): start more while they fit.
+    while (next_ < n_bands_ && next_ - i < workers_ && fits(next_ - i + 1)) next_++;
+    if (next_ <= i) return false;  // not one band fits beside what is held
+    max_in_flight_ = std::max(max_in_flight_, next_ - i);
+    peak_ = std::max(peak_, held_ + band_bytes_ * (next_ - i));
+    cur_ = i;
+    return true;
+}
+
+bool BandBudget::fold(int64_t held, int64_t floor) {
+    held_ = held;
+    peak_ = std::max(peak_, held_ + band_bytes_ * (next_ - cur_ - 1));
+    return !(budget_ >= 0 && std::max(peak_, floor) > budget_);
+}
+
 size_t FamilyPlan::nbytes() const {
-    size_t b = map[0].size() * 4 + map[1].size() * 4 + rep_code.size();
+    size_t b = map[0].size() * 4 + map[1].size() * 4 + rep_code.size() + 8 * (near_flat.size() + rep_flat.size());
     for (const Group &g : groups) b += 4 * (g.obs.size() + g.src.size() + g.cls.size() + g.at.size());
     return b;
 }
 
 size_t Plan::nbytes() const {
-    size_t b = fingerprint.size();
+    size_t b = fingerprint.size() + ext_bytes;
     for (const FamilyPlan &f : fam) b += f.nbytes();
     return b;
 }
@@ -199,11 +280,13 @@ std::shared_ptr<const Plan> plan_for(const std::string &basis, std::string finge
     Counters &c = g_counters[basis];
     c.built++;
     if (!p->declined.empty()) c.declined++;
+    if (g_cache_bytes == 0) return p;
+    const size_t limit = g_cache_bytes < 0 ? SHARED_PLAN_BYTES : static_cast<size_t>(g_cache_bytes);
     g_cache.push_front(Entry{basis, p});
     size_t total = 0;
     for (auto it = g_cache.begin(); it != g_cache.end();) {
         total += it->plan->nbytes();
-        if (it != g_cache.begin() && total > SHARED_PLAN_BYTES)
+        if (it != g_cache.begin() && total > limit)
             it = g_cache.erase(it);
         else
             ++it;
@@ -215,6 +298,16 @@ Counters counters(const std::string &basis) {
     std::lock_guard<std::mutex> lock(g_cache_mtx);
     auto it = g_counters.find(basis);
     return it == g_counters.end() ? Counters() : it->second;
+}
+
+void reset_counters(const std::string &basis) {
+    std::lock_guard<std::mutex> lock(g_cache_mtx);
+    g_counters.erase(basis);
+}
+
+void set_cache_bytes(int64_t bytes) {
+    std::lock_guard<std::mutex> lock(g_cache_mtx);
+    g_cache_bytes = bytes < 0 ? -1 : bytes;
 }
 
 void clear_cache(const std::string &basis) {
@@ -230,7 +323,8 @@ void wire_map(const FamilyPlan &f, const int32_t *wire_of_row, const int32_t *wi
               int64_t n_wires, int64_t *out) {
     const int64_t rows = f.spec.rows, cols = f.spec.cols, W = n_wires;
     const int cb = f.spec.code_bits;
-    const bool near = f.spec.near_singles && !f.near_bits.empty();
+    // near bits are kept for near singles and for a Key::Near class
+    const bool near = !f.near_bits.empty();
     // A class is computed at its first pair in the census's order (block by
     // block, row-major), which is the pair the census made its representative.
     std::vector<uint64_t> seen(static_cast<size_t>((f.classes + 63) / 64), 0);
