@@ -1,0 +1,11 @@
+CE extended kernel over gn 0 with two radii and a frequency sweep
+GW 1 11 0. -2.5 5. 0. 2.5 5. 0.001
+GW 2 9 1. -2.2 5.5 1. 2.2 5.5 0.004
+GE -1
+GN 0 0 0 0 7. 0.002
+EK
+FR 0 3 0 0 29. 0.5
+EX 0 1 6 0 1.
+RP 0 10 2 1000 0. 0. 10. 90.
+XQ
+NX

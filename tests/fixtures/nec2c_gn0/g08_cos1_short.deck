@@ -1,0 +1,9 @@
+CE short horizontal wire at 160 m, k*delta below the well-scaled bound
+GW 1 41 0. -0.75 2. 0. 0.75 2. 0.0005
+GE -1
+GN 0 0 0 0 13. 0.005
+EX 0 1 21 0 1.
+FR 0 1 0 0 1.8 0
+RP 0 7 1 1000 0. 0. 15. 0.
+XQ
+NX

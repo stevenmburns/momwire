@@ -1,0 +1,8 @@
+CE long horizontal wire, enough segments for several fill bands
+GW 1 1801 0. -150. 6. 0. 150. 6. 0.002
+GE -1
+GN 0 0 0 0 13. 0.005
+EX 0 1 300 0 1.
+FR 0 1 0 0 7.1 0
+XQ
+NX

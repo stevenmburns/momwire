@@ -1,0 +1,13 @@
+CE loaded dipole at 6 m over very lossy ground
+GW 1 19 0. -3.6 6. 0. 3.6 6. 0.0015
+GE -1
+GN 0 0 0 0 4. 0.3
+LD 5 1 1 19 3.7e7
+LD 0 1 4 4 10. 2.e-6 0.
+LD 1 1 16 16 1.e4 0. 5.e-12
+LD 4 1 8 8 5. -20.
+EX 0 1 10 0 1.
+FR 0 1 0 0 21.2 0
+RP 0 19 1 1000 0. 0. 5. 0.
+XQ
+NX
