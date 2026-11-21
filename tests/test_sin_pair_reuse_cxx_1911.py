@@ -471,7 +471,15 @@ DECLINED = {
 }
 
 
-@pytest.mark.parametrize("deck", list(DECLINED))
+# The buried deck runs in the slow lane (0.96.0 release: its default-lane
+# median passed the 5 s budget, scripts/test_durations.py).
+@pytest.mark.parametrize(
+    "deck",
+    [
+        pytest.param(d, marks=pytest.mark.slow) if d == "transmitted_mixed m2" else d
+        for d in DECLINED
+    ],
+)
 def test_a_declined_deck_declines_as_pythons(deck, tools, monkeypatch, py_outcome):
     text, reason = DECLINED[deck]
     stats, outcome, fill_on, fill_off = _runs(tools, text, monkeypatch, py_outcome)
