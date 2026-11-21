@@ -45,6 +45,13 @@ pytestmark = [
         acc is None or not hasattr(acc, "sinusoidal_field_tensor_far"),
         reason="the accelerator is not built",
     ),
+    # Native kind: below its reach (Linux sse2, Windows, macOS) the solver
+    # refuses with FeatureNotCertified. That is the registry working, not the
+    # approximation these tests are about.
+    pytest.mark.skipif(
+        _features.current_level() > _features.FEATURES["nec2_far_approx"].reach,
+        reason="nec2_far_approx is native and not certified at this level",
+    ),
 ]
 
 ENV = "MOMWIRE_X_NEC2_FAR_APPROX"
