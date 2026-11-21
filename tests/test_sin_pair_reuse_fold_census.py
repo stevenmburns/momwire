@@ -140,7 +140,7 @@ def test_off_is_the_shipped_fill_bit_for_bit(monkeypatch):
     assert off.tobytes() == base.tobytes()
 
 
-# IntGroups: one `_group` over every add's rows in turn.
+# IntGroups (the census's tables): first appearance over every add's rows in turn.
 
 
 def _reference(chunks):
@@ -160,18 +160,13 @@ def _chunks(width, sizes, hi, seed):
     ]
 
 
-def _tables():
-    out = [pr._PyGroups]
-    if acc is not None and getattr(acc, "int_groups", False):
-        out.append(acc.IntGroups)
-    return out
-
-
-@pytest.mark.parametrize("make", _tables(), ids=lambda m: m.__name__)
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "int_groups", False), reason="needs IntGroups"
+)
 @pytest.mark.parametrize("width", [1, 3, 5, 6, 8])
-def test_groups_are_numbered_across_adds(make, width):
+def test_groups_are_numbered_across_adds(width):
     chunks = _chunks(width, [0, 7, 500, 1, 3000, 64], 3, seed=width)
-    table = make(width)
+    table = acc.IntGroups(width)
     got = []
     for cols in chunks:
         got += np.asarray(table.add(cols)).tolist()

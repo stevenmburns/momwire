@@ -114,10 +114,24 @@ def _no_env(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
     pr.clear_shared_plans()
     yield
+    acc.sin_pair_reuse_configure(probe=0)
     pr.clear_shared_plans()
 
 
 # ---------------------------------------------------------------- the key
+
+
+def _canonical_codes(cols, ia, ib, it, near, n_src, ds=None, do=None):
+    """The C++ census's canonical orientation over key columns, in place as
+    the columns, returning the codes."""
+    rows, code = acc.sin_pair_reuse_canonical(
+        np.stack(cols, axis=1), ia, ib, it,
+        near=None if near is None else np.asarray(near, np.uint8),
+        n_src=n_src, ds=ds, do=do,
+    )  # fmt: skip
+    for j, c in enumerate(cols):
+        c[...] = rows[:, j]
+    return code
 
 
 def test_the_four_orientations_key_alike():
@@ -154,7 +168,7 @@ def test_the_four_orientations_key_alike():
             ox = obs if fo else obs_rev
             ds = (sx - so) * n_obs
             do = ox - oo
-            code = pr._canonical_codes(cols, 1, 3, 4, None, N, ds=ds, do=do)
+            code = _canonical_codes(cols, 1, 3, 4, None, N, ds=ds, do=do)
             got = np.stack(cols, axis=1)
             if canon is None:
                 canon, code0, distinct = got, code, None
@@ -176,12 +190,12 @@ def test_the_four_orientations_key_alike():
 
 
 def test_a_near_pair_keeps_code_zero():
-    cols = [np.array([pr._NEAR_SENTINEL, 7], np.int64)] + [
+    cols = [np.array([-1, 7], np.int64)] + [  # -1: the near sentinel
         np.array([0, -3], np.int64) for _ in range(4)
     ]
     near = np.array([True, False])
-    code = pr._canonical_codes(cols, 1, 3, 4, near, 2, ds=np.array([5, 5]))
-    assert code[0] == 0 and cols[0][0] == pr._NEAR_SENTINEL
+    code = _canonical_codes(cols, 1, 3, 4, near, 2, ds=np.array([5, 5]))
+    assert code[0] == 0 and cols[0][0] == -1
     assert code[1] == 3
 
 
@@ -421,6 +435,8 @@ WRONG_GROUND_CODES = {
     "source-lost": np.array([0, 0, 2, 2], np.int8),
     "observer-lost": np.array([0, 1, 0, 1], np.int8),
 }
+#: The C++ probe's order of the maps (`_sin_pair_reuse_core.h`, PROBE_GROUND_CODES).
+_PROBE_ORDER = {"swapped": 0, "source-lost": 1, "observer-lost": 2}
 
 
 @pytest.mark.parametrize("ground", ["refl-coef", "sommerfeld"])
@@ -432,14 +448,9 @@ def test_a_wrong_reflected_code_is_caught(wrong, ground, monkeypatch):
     deck = _polygon(reverse=REVERSED)
     kw = GROUNDS[ground]
     base, _ = _fill(deck, **kw)
-    real = pr._canonical_codes
-    perm = WRONG_GROUND_CODES[wrong]
-
-    def lying(cols, *a, **k):
-        code = real(cols, *a, **k)
-        return perm[code] if len(cols) == 6 else code
-
-    monkeypatch.setattr(pr, "_canonical_codes", lying)
+    # The census's reflected codes mapped through the wrong map (the C++
+    # probe, PROBE_GROUND_CODES + its index).
+    acc.sin_pair_reuse_configure(probe=4 + _PROBE_ORDER[wrong])
     bad, s = _fill(deck, pair_reuse=True, **kw)
     assert set(s.pair_reuse_census) == {"direct", "reflected"}
     # Measured (Skylake): "swapped" moves only the sin shape of the

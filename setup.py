@@ -443,8 +443,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec4_printout_core.h",
     "src/momwire/_sinusoidal_front_core.h",
     "src/momwire/_sinusoidal_fill_core.h",
-    # momwire#1911 in C++: the sinusoidal pair reuse's census, plans and
-    # fused reduction, and the running grouping its census folds into.
+    # momwire#1911 in C++: the sinusoidal pair reuse's adapter to the common
+    # core (its keys, plans and fused reduction), and the grouping its
+    # census's tables are.
     "src/momwire/_sin_pair_reuse_core.h",
     "src/momwire/_int_groups_core.h",
     "src/momwire/_sinusoidal_transmitted_core.h",
@@ -590,13 +591,12 @@ _ACCEL_SOURCES = [
     # reduction (`reduce_phi_band`'s order). Its own TU for the reduction's
     # reason: its bits are that order's.
     "src/momwire/_accel_sin_pair_reuse.cpp",
-    # momwire#1911: that reduction, and the census and plans the C++ fill
-    # builds, Python-free; the binding above and the C++ fill call it. Its
-    # own TU: integers and the reduction's fixed order, nothing else.
+    # momwire#1911: that reduction, and the sinusoidal adapter to the common
+    # reuse core (its keys, the census it instantiates, its plans),
+    # Python-free; the binding above (the Python route) and the C++ fill call
+    # it. Its own TU: the keys in numpy's order, unfused, and the
+    # reduction's fixed order, nothing else.
     "src/momwire/_sin_pair_reuse_core.cpp",
-    # momwire#2016: the fill report's wire map over a sinusoidal reuse plan's
-    # class map. Its own TU: integers only, run when the map is read.
-    "src/momwire/_accel_fill_report.cpp",
     # The remainder order's per-source scan (`_quadrature.remainder_qp_pairs`).
     # Its own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_qp_pairs.cpp",
@@ -624,10 +624,11 @@ _ACCEL_SOURCES = [
     # `_accel_razor_solve.cpp` binds it for the Python route. Its own TU: it
     # only CALLS the kernels, across a TU boundary.
     "src/momwire/_razor_pair_reuse_core.cpp",
-    # momwire#2063: the common pair-reuse core under it (the groups, the
-    # budget and declines, the plan cache, the fill report's wire map). Its
-    # own TU: integers only; the census and gather templates it declares are
-    # instantiated in the adapter's TU above, beside the keys.
+    # momwire#2063: the common pair-reuse core under razor-2p's and the
+    # sinusoidal adapters (the groups, the budgets and declines, the plan
+    # cache, the fill report's wire map). Its own TU: integers only; the
+    # census and gather templates it declares are instantiated in each
+    # adapter's TU, beside the keys.
     "src/momwire/_pair_reuse_core.cpp",
     # The razor-2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.

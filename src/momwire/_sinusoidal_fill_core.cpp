@@ -2076,7 +2076,6 @@ void somm_replay_sub(const Front &fr, const Somm &sm, ll i0, ll i1, const int64_
     }
 }
 
-std::string bytes_of(const void *p, std::size_t n) { return std::string(static_cast<const char *>(p), n); }
 
 std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, bool pec, bool finite,
                                    const Somm *somm, const std::vector<Point3> &img_c,
@@ -2116,20 +2115,13 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
     auto reuse = std::unique_ptr<Reuse>(new Reuse());
     reuse->blocks = (pec || finite) ? 2 : 1;
     const char *names[2] = {"direct", finite ? "reflected" : "image"};
-    const std::string geo = bytes_of(seg_c, 24 * Nz) + bytes_of(seg_t, 24 * Nz) + bytes_of(g.seg_h.data(), 8 * Nz) +
-                            bytes_of(a_seg.data(), 8 * Nz) + bytes_of(rad.data(), 8 * Nz) +
-                            bytes_of(K.ind1.data(), Nz) + bytes_of(K.ind2.data(), Nz);
     int64_t budget_left = pr::plan_budget();
     std::vector<pr::CensusEntry> census;
     for (int b = 0; b < reuse->blocks; b++) {
         const bool image = b == 1 && pec;
         const bool reflected = b == 1 && finite;
         const double *src_c = image ? img_c[0].data() : seg_c, *src_t = image ? img_t[0].data() : seg_t;
-        std::string key = std::string(names[b]) + '\0' + geo + bytes_of(src_c, 24 * Nz) + bytes_of(src_t, 24 * Nz);
         const double gz = 0.0;  // the NEC-4.2 dialect's interface
-        if (reflected) key += bytes_of(&gz, 8);
-        key += bytes_of(&budget_left, 8);
-        key += bytes_of(&census_rows, 8);
         pr::CensusInputs in;
         in.M = N;
         in.N = N;
@@ -2153,7 +2145,7 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
             in.obs_type = ty.obs.data();
             in.src_rev = ty.src_rev.data();
         }
-        reuse->plan[b] = pr::shared_plan(key, [&] { return reflected ? pr::build_ground_plan(in) : pr::build_plan(in); });
+        reuse->plan[b] = pr::shared_plan(in, reflected);
         if (reuse->plan[b] == nullptr) {
             pr::set_last_outcome(pr::over_budget_reason());
             pr::set_last_census({});

@@ -119,6 +119,7 @@ def _no_env(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
     pr.clear_shared_plans()
     yield
+    acc.sin_pair_reuse_configure(probe=0)
     pr.clear_shared_plans()
 
 
@@ -187,11 +188,13 @@ def test_a_sweep_keeps_one_census():
 
 
 def _keys(oc, ot, sc, st, gz=0.0, H=0.05, a=1e-3):
-    sc_ = pr.ground_pair_scalars(oc, ot, sc, st, gz)
-    cols, _ = pr._ground_band_keys(
-        sc_, np.array([H]), np.array([a]), np.zeros((1, 1), np.int64)
+    """The reflected key of one pair, as the C++ census keys it (uncoded,
+    the types zero)."""
+    zero = np.zeros(1, np.int64)
+    words, _, _ = acc.sin_pair_reuse_keys(
+        oc, ot, sc, st, np.array([2 * H]), np.array([a]), zero, zero, ground_z=gz
     )
-    return [int(c[0]) for c in cols]
+    return [int(c) for c in words[0]]
 
 
 def test_the_key_is_the_ground_group_s():
@@ -229,43 +232,16 @@ def test_the_key_is_the_ground_group_s():
     assert tilted != base
 
 
-def _height_blind(monkeypatch):
-    real = pr._ground_band_keys
-
-    def blind(scalars, H, a_obs, type_id):
-        cols, near = real(scalars, H, a_obs, type_id)
-        cols[1][:] = 0  # the height sum
-        return cols, near
-
-    monkeypatch.setattr(pr, "_ground_band_keys", blind)
+def _height_blind():
+    """The reflected key without its height sum (the C++ probe)."""
+    acc.sin_pair_reuse_configure(probe=2)
 
 
-def _free_space_key(monkeypatch):
+def _free_space_key():
     """The direct block's 3-D key standing in for the ground one: classes
-    from `build_plan` over the real sources, the segment types without the
-    vertical tangent."""
-    monkeypatch.setattr(pr, "ground_segment_types", lambda s, o, t: (s, o))
-
-    def as_ground(obs_c, obs_t, src_c, src_t, gz, seg_h, a_obs, st, ot, rows, **_):
-        # Uncoded (no reversed types): the classes as stored (momwire#1969).
-        plan = pr.build_plan(obs_c, obs_t, src_c, src_t, seg_h, a_obs, st, ot, rows)
-        N = src_c.shape[0]
-        _, first, inv = np.unique(
-            plan.cls.reshape(-1), return_index=True, return_inverse=True
-        )
-        order = np.argsort(first)
-        renum = np.empty_like(order)
-        renum[order] = np.arange(order.size)
-        rep_flat = first[order].astype(np.int64)
-        return pr.GroundPlan(
-            cls=renum[inv].reshape(plan.cls.shape).astype(np.int32),
-            rep_flat=rep_flat,
-            rep_blocks=pr.near_blocks(rep_flat, N, a_obs),
-            near_flat=plan.near_flat,
-            near_blocks=plan.near_blocks,
-        )
-
-    monkeypatch.setattr(pr, "build_ground_plan", as_ground)
+    keyed as the direct block's over the real sources, uncoded, the segment
+    types without the vertical tangent (the C++ probe)."""
+    acc.sin_pair_reuse_configure(probe=3)
 
 
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
@@ -284,7 +260,7 @@ def test_a_key_blind_to_the_ground_is_caught(ground, deck, wrong, monkeypatch):
     n_pairs, good_cls, _ = s.pair_reuse_census["reflected"]
     assert _rel(on, base) <= MATRIX
     pr.clear_shared_plans()
-    wrong(monkeypatch)
+    wrong()
     bad, s = _z(deck(), pair_reuse=True, **GROUNDS[ground])
     _, bad_cls, _ = s.pair_reuse_census["reflected"]
     assert bad_cls < good_cls

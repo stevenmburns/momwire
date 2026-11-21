@@ -1,7 +1,6 @@
-// The sinusoidal fill's `pair_reuse` in C++ (see `_sin_pair_reuse_core.h`).
-// Each function names the Python it copies; numpy's arithmetic is written
-// out per element in its order, with no contraction (-ffp-contract=off, and
-// the MSVC pragmas below).
+// The sinusoidal fill's `pair_reuse` adapter (see `_sin_pair_reuse_core.h`).
+// The keys are numpy's arithmetic written out per element in its order,
+// with no contraction (-ffp-contract=off, and the MSVC pragmas below).
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma float_control(precise, on)
 #pragma fp_contract(off)
@@ -15,8 +14,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <deque>
-#include <list>
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
@@ -33,21 +30,26 @@ namespace mw {
 namespace sinusoidal {
 namespace pair_reuse {
 
+namespace core = mw::pair_reuse;
+
 namespace {
 
-std::mutex g_mu;  // the settings, the counters and the cache
+std::mutex g_mu;  // the settings, the last outcome and census
 int64_t g_budget = PLAN_BUDGET_BYTES;
 int64_t g_small_free = SMALL_DECK_SEGS_FREE;
 int64_t g_small_ground = SMALL_DECK_SEGS_GROUND;
 int g_workers = 0;
-Counters g_counters;
+int g_probe = 0;
 std::string g_last;
 std::vector<CensusEntry> g_census;
 
 constexpr int64_t kNearSentinel = -1;  // below every packed exponent-and-type column
 const double kUnit = static_cast<double>(int64_t(1) << KEY_BITS);
 
-// `_trim_heap`: the census's freed pages back before the plan and the fill.
+// The reflected codes under PROBE_GROUND_CODES + j.
+const int8_t kProbeCodes[3][4] = {{0, 2, 1, 3}, {0, 0, 2, 2}, {0, 1, 0, 1}};
+
+// The census's freed pages back before the plan and the fill.
 void trim_heap() {
 #if defined(__GLIBC__)
     malloc_trim(0);
@@ -101,7 +103,7 @@ std::vector<int64_t> type_ids(const std::vector<int64_t> &rows, std::size_t widt
     return ids;
 }
 
-// `_quantise_length`: (exponent, mantissa) of a positive length.
+// (exponent, mantissa) of a positive length at KEY_BITS relative bits.
 inline void quantise_length(double h, int64_t &e, int64_t &q) {
     int ex = 0;
     const double m = std::frexp(h, &ex);
@@ -109,7 +111,7 @@ inline void quantise_length(double h, int64_t &e, int64_t &q) {
     q = rint64(std::ldexp(m, KEY_BITS));
 }
 
-// `_scalars`: z, rho, td, rdt of one pair, in numpy's order of operations.
+// z, rho, td, rdt of one pair, in numpy's order of operations.
 inline void scalars(const double *oc, const double *ot, const double *sc, const double *st, double &z,
                     double &rho, double &td, double &rdt) {
     double rvx = oc[0] - sc[0];
@@ -126,16 +128,21 @@ inline void scalars(const double *oc, const double *ot, const double *sc, const 
     rdt = (rvx * tmx + rvy * tmy) + rvz * tmz;
 }
 
-// The quantum against `scale` (`_band_keys`): the exponent column's e and
-// the step's inverse, off the bits of a positive normal number.
+// The quantum against `scale`: the exponent column's e and the step's
+// inverse, off the bits of a positive normal number (frexp's exponent and
+// 2^(KEY_BITS - e)).
 inline void quantum(double scale, int64_t &e, double &step_inv) {
     e = (bits_of(scale) >> 52) - 1022;
     step_inv = double_of((1023 + KEY_BITS - e) << 52);
 }
 
-// `_canonical_codes` for one pair: key columns `k` (a = k[ia], b = k[ib],
-// t = k[it], k[0] the types), keyed in place, its code returned. `ds` / `do_`
-// the type moves of a source / observer reversal (has_*: not None).
+// The canonical orientation of one pair: key columns `k` (a = k[ia], b =
+// k[ib], t = k[it], k[0] the types), keyed in place, its code returned. `ds`
+// / `do_` the type moves of a source / observer reversal (has_*: one is
+// given). Of the four orientations the largest key is taken, in the order
+// (a, b, t, the types): the sign of a decides the source flip and that of b
+// the observer's, and only where one is zero do the rest decide. A near pair
+// (its key the sentinel) keeps code 0.
 inline int8_t canonical(int64_t *k, int ia, int ib, int it, bool near, bool has_ds, int64_t ds, bool has_do,
                         int64_t do_) {
     int64_t &a = k[ia], &b = k[ib], &t = k[it];
@@ -183,13 +190,22 @@ inline int8_t canonical(int64_t *k, int ia, int ib, int it, bool near, bool has_
     return static_cast<int8_t>((fs ? 1 : 0) | (fo ? 2 : 0));
 }
 
-// The direct key of pair (m, n) (`_band_keys` with near=True, then
-// `_canonical_codes(cols, 1, 3, 4, ...)`): k[0..5), its code, its nearness.
+// The near rule's kernel scale: max(2H, a), the source's length or the
+// observer's radius, whichever is longer (PROBE_NEAR_H: 2H alone).
+inline double near_scale(double H, double a, int probe) {
+    return probe == PROBE_NEAR_H ? 2.0 * H : np_max(2.0 * H, a);
+}
+
+// The direct key of pair (m, n): the source-frame scalars quantised, the
+// near pairs the sentinel; then the canonical orientation (columns e, z,
+// rho, rdt, td: z odd under the source's reversal, rdt under the
+// observer's, td under either). k[0..5), its code, its nearness.
 struct DirectKey {
     const CensusInputs *in;
     int64_t n_obs_types;
     bool coded;
     const int64_t *ds;  // null: None
+    int probe;
     inline int8_t operator()(int64_t m, int64_t n, int64_t *k, bool &near) const {
         const CensusInputs &I = *in;
         double z, rho, td, rdt;
@@ -197,7 +213,9 @@ struct DirectKey {
         const double H = 0.5 * I.seg_h[n];
         const double a = I.a_obs[m];
         const double az = std::fabs(z);
-        near = np_max(az, rho) < NEAR_LENGTHS * np_max(2.0 * H, a);
+        near = np_max(az, rho) < NEAR_LENGTHS * near_scale(H, a, probe);
+        // The pair's singular distance, from the observer centre to the
+        // source SEGMENT, within sqrt(2), floored at the observer radius.
         double scale = np_max(az - H, rho);
         scale = np_max(scale, a);
         int64_t e;
@@ -211,6 +229,8 @@ struct DirectKey {
             k[2] = rint64(rho * step_inv);
             k[3] = rint64(rdt * step_inv);
             k[4] = rint64(td * kUnit);
+            // The exponent and the type share a column: |e| < 2^11 always,
+            // and the type id is below N^2 < 2^40.
             k[0] = ((e + (int64_t(1) << 11)) << 40) + (I.src_type[n] * n_obs_types + I.obs_type[m]);
         }
         if (!coded) return 0;
@@ -218,13 +238,16 @@ struct DirectKey {
     }
 };
 
-// The reflected key (`ground_pair_scalars`, `_ground_band_keys`, then
-// `_canonical_codes(cols, 3, 4, 5, ...)`): k[0..6).
+// The reflected key: the height sum, |d|, d.a, d.b, a.b against the pair's
+// distance to the IMAGE segment, the near test against it; then the
+// canonical orientation (d.a odd under the source's reversal, d.b under the
+// observer's, a.b under either). k[0..6).
 struct GroundKey {
     const CensusInputs *in;
     int64_t n_obs_types;
     bool coded;
     const int64_t *ds, *do_;
+    int probe;
     inline int8_t operator()(int64_t m, int64_t n, int64_t *k, bool &near) const {
         const CensusInputs &I = *in;
         const double *oc = I.obs_c + 3 * m, *ot = I.obs_t + 3 * m;
@@ -239,6 +262,9 @@ struct GroundKey {
         const double da = dx * ax + dy * ay;
         const double db = dx * bx + dy * by;
         const double ab = bx * ax + by * ay;
+        // The image segment's tangent is (a, -t_nz) and the observer sits
+        // at (d, hs) from its centre. rho by difference is inaccurate only
+        // near the image axis within its span, a near pair.
         const double zi = da - hs * azt;
         double rho = dn * dn;
         rho += hs * hs;
@@ -248,7 +274,7 @@ struct GroundKey {
         const double H = 0.5 * I.seg_h[n];
         const double a = I.a_obs[m];
         const double az = std::fabs(zi);
-        near = np_max(az, rho) < NEAR_LENGTHS * np_max(2.0 * H, a);
+        near = np_max(az, rho) < NEAR_LENGTHS * near_scale(H, a, probe);
         double scale = np_max(az - H, rho);
         scale = np_max(scale, a);
         int64_t e;
@@ -258,7 +284,7 @@ struct GroundKey {
             k[0] = kNearSentinel;
             k[1] = k[2] = k[3] = k[4] = k[5] = 0;
         } else {
-            k[1] = rint64(hs * step_inv);
+            k[1] = probe == PROBE_HEIGHT_BLIND ? 0 : rint64(hs * step_inv);
             k[2] = rint64(dn * step_inv);
             k[3] = rint64(da * step_inv);
             k[4] = rint64(db * step_inv);
@@ -266,57 +292,61 @@ struct GroundKey {
             k[0] = ((e + (int64_t(1) << 11)) << 40) + (I.src_type[n] * n_obs_types + I.obs_type[m]);
         }
         if (!coded) return 0;
-        return canonical(k, 3, 4, 5, near, ds != nullptr, ds ? ds[n] : 0, do_ != nullptr, do_ ? do_[m] : 0);
+        const int8_t code =
+            canonical(k, 3, 4, 5, near, ds != nullptr, ds ? ds[n] : 0, do_ != nullptr, do_ ? do_[m] : 0);
+        if (probe >= PROBE_GROUND_CODES && probe < PROBE_GROUND_CODES + 3)
+            return kProbeCodes[probe - PROBE_GROUND_CODES][code];
+        return code;
     }
 };
 
-// One census band's result: its classes grouped in its pairs' flat order
-// (band-local numbers, written into the class map's rows), each class's
-// first pair and code, and its near pairs.
-struct Band {
-    bool done = false;
-    std::unique_ptr<int_groups::IntGroups> table;
-    std::vector<int64_t> first;  // band-local flat index
-    std::vector<int8_t> code;
-    std::vector<int64_t> near;  // global flat index, ascending
+// The census's parts' table: an `IntGroups` (the fold table's own layout,
+// which the budget's figures count), each new key given the core's `fresh`
+// class.
+template <int W>
+struct GroupTable {
+    std::unique_ptr<int_groups::IntGroups> g;
+    std::vector<int32_t> local;  // each group's class
+    size_t cap = 0, n = 0;       // the core's measured accounting, unused here
+    int32_t find_or_add(const uint64_t *k, uint64_t, int32_t fresh, bool &added) {
+        if (!g) g.reset(new int_groups::IntGroups(W));
+        const int64_t id = g->add_row(k);
+        added = id == static_cast<int64_t>(local.size());
+        if (added) local.push_back(fresh);
+        return local[static_cast<std::size_t>(id)];
+    }
 };
 
-template <class Key>
-void run_band(const Key &key, std::size_t width, int64_t i0, int64_t i1, int64_t N, bool coded, int32_t *cls,
-              Band &b) {
-    b.table.reset(new int_groups::IntGroups(width));
-    const std::size_t Nz = static_cast<std::size_t>(N);
-    std::vector<int64_t> cols(width * Nz), ids(Nz);
-    std::vector<int8_t> codes(Nz);
-    std::vector<int_groups::Col> view(width);
-    for (std::size_t c = 0; c < width; ++c)
-        view[c] = int_groups::Col{reinterpret_cast<const char *>(cols.data() + c * Nz), 8};
-    int64_t k[8] = {};
-    for (int64_t m = i0; m < i1; ++m) {
-        for (int64_t n = 0; n < N; ++n) {
-            bool near = false;
-            codes[static_cast<std::size_t>(n)] = key(m, n, k, near);
-            for (std::size_t c = 0; c < width; ++c) cols[c * Nz + static_cast<std::size_t>(n)] = k[c];
-            if (near) b.near.push_back(m * N + n);
-        }
-        int64_t next = b.table->n_groups();
-        b.table->add(view.data(), static_cast<std::ptrdiff_t>(N), ids.data());
-        int32_t *row = cls + m * N;
-        for (int64_t n = 0; n < N; ++n) {
-            const int64_t g = ids[static_cast<std::size_t>(n)];
-            const int8_t cd_ = codes[static_cast<std::size_t>(n)];
-            if (g == next) {  // a class first seen here: numbered in walk order
-                b.first.push_back((m - i0) * N + n);
-                b.code.push_back(cd_);
-                ++next;
-            }
-            row[n] = coded ? static_cast<int32_t>((g << CODE_BITS) | cd_) : static_cast<int32_t>(g);
-        }
-    }
-    b.done = true;
+// What one running `IntGroups` fold table of `width` columns holds after
+// its `n`th group, `extra` when it was called again since (its keys in
+// blocks of kBlock groups; its slots, 16 doubled while 2 (n_ + 1) passes
+// them at a call made with n_ groups).
+int64_t fold_table_bytes(int64_t n, bool extra, int64_t width) {
+    const int64_t blk = static_cast<int64_t>(int_groups::IntGroups::kBlock);
+    const int64_t need = 2 * (n + (extra ? 1 : 0));
+    int64_t slots = 16;
+    while (slots < need) slots *= 2;
+    return (((n + blk - 1) / blk) * blk * width + slots) * 8;
 }
 
-// `_band_rows`.
+// THE CENSUS'S BUDGET (the header's): the core's band budget over what one
+// fold table holds after each band.
+struct FigureHook {
+    static constexpr bool tail = true;
+    core::BandBudget bands;
+    int64_t map_bytes, width;
+    bool start(int64_t i) { return bands.start(i); }
+    bool done(int64_t, int64_t classes, int64_t near, bool tail_new) {
+        // A band whose last new key came after its last new class called
+        // the table again with every class in it (`fold_table_bytes`).
+        const int64_t held = map_bytes + fold_table_bytes(classes, !tail_new, width) + 9 * classes + 8 * near;
+        return bands.fold(held, map_bytes + PLAN_FLOOR_BYTES_PER_CLASS * classes);
+    }
+};
+
+// `_band_rows`: rows per census band, the swept rows shared out over the
+// workers, none so small that its per-band cost shows, and under a budget
+// at most BAND_SHARE of it over a pool's worth.
 int64_t band_rows(int64_t rows, int64_t M, int64_t N, int64_t budget, int64_t per_pair, int workers) {
     const int64_t w = std::max(1, workers);
     rows = std::max<int64_t>(1, rows / w);
@@ -327,128 +357,46 @@ int64_t band_rows(int64_t rows, int64_t M, int64_t N, int64_t budget, int64_t pe
     return rows;
 }
 
-// What a census folds: the classes' payload, per class in number order.
-struct Fold {
-    std::unique_ptr<int_groups::IntGroups> table;
-    int64_t map_bytes = 0;
-    int64_t kept_bytes = 0;
-    std::vector<int64_t> rep_a, rep_b;  // direct: (row, source); ground: (flat, unused)
-    std::vector<int8_t> rep_code;
-    std::vector<int64_t> near;
-    int64_t held() const { return map_bytes + static_cast<int64_t>(table->nbytes()) + kept_bytes; }
-    int64_t floor() const { return map_bytes + PLAN_FLOOR_BYTES_PER_CLASS * table->n_groups(); }
-};
-
-// `_census_bands` + the fold: false where the census stops on the budget.
-template <class Key>
-bool census(const Key &key, std::size_t width, const CensusInputs &in, int64_t rows, bool coded, bool ground,
-            std::vector<int32_t> &cls, Fold &fold, int64_t &peak_out) {
+// One family's census (`W` key words) by `key`, into `plan->fam`; false
+// where it declines (the budget, or past the int32 coding).
+template <int W, class Key>
+bool census(const Key &key, const CensusInputs &in, bool coded, int64_t per_pair, const char *name, Plan &plan) {
     const int64_t M = in.M, N = in.N;
     const int workers = std::max(1, in.workers);
-    const int64_t budget = in.budget;
-    std::vector<int64_t> starts;
-    for (int64_t i0 = 0; i0 < M; i0 += rows) starts.push_back(i0);
-    const int64_t n = static_cast<int64_t>(starts.size());
-    const int64_t band_bytes = (ground ? GROUND_BAND_BYTES_PER_PAIR : BAND_BYTES_PER_PAIR) * rows * N;
-    std::vector<Band> bands(static_cast<std::size_t>(n));
-    std::deque<int64_t> pending;
-    int64_t nxt = 0, peak = 0;
-    auto fits = [&](int64_t k) { return budget < 0 || fold.held() + band_bytes * k <= budget; };
-    auto compute = [&](const std::vector<int64_t> &which) {
-        bool failed = false;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(dynamic, 1) num_threads(workers)
-#endif
-        for (std::ptrdiff_t q = 0; q < static_cast<std::ptrdiff_t>(which.size()); ++q) {
-            const int64_t b = which[static_cast<std::size_t>(q)];
-            try {
-                run_band(key, width, starts[static_cast<std::size_t>(b)],
-                         std::min(M, starts[static_cast<std::size_t>(b)] + rows), N, coded, cls.data(),
-                         bands[static_cast<std::size_t>(b)]);
-            } catch (...) {
-#if defined(_OPENMP)
-#pragma omp critical(mw_sin_reuse_band)
-#endif
-                failed = true;
-            }
-        }
-        if (failed) throw std::bad_alloc();
-    };
-    std::vector<int64_t> ids;
-    for (int64_t i = 0; i < n; ++i) {
-        while (nxt < n && static_cast<int64_t>(pending.size()) < workers &&
-               fits(static_cast<int64_t>(pending.size()) + 1))
-            pending.push_back(nxt++);
-        if (pending.empty()) return false;  // not one band fits beside what is held
-        peak = std::max(peak, fold.held() + band_bytes * static_cast<int64_t>(pending.size()));
-        const int64_t b = pending.front();
-        pending.pop_front();
-        Band &band = bands[static_cast<std::size_t>(b)];
-        if (!band.done) {
-            std::vector<int64_t> which{b};
-            for (int64_t p : pending)
-                if (!bands[static_cast<std::size_t>(p)].done) which.push_back(p);
-            compute(which);
-        }
-        // The fold: the band's distinct keys, in its number order, into the
-        // deck's table; the classes it was first to see kept; its rows of
-        // the map renumbered, codes kept.
-        const int64_t ng = band.table->n_groups();
-        ids.assign(static_cast<std::size_t>(ng), 0);
-        const int64_t g0 = fold.table->n_groups();
-        std::vector<int_groups::Col> view(width);
-        const int64_t blk = static_cast<int64_t>(int_groups::IntGroups::kBlock);
-        for (int64_t q0 = 0; q0 < ng; q0 += blk) {
-            const char *base = reinterpret_cast<const char *>(band.table->group_key(static_cast<uint64_t>(q0)));
-            for (std::size_t c = 0; c < width; ++c)
-                view[c] = int_groups::Col{base + 8 * c, static_cast<std::ptrdiff_t>(8 * width)};
-            fold.table->add(view.data(), std::min<int64_t>(blk, ng - q0), ids.data() + q0);
-        }
-        const int64_t i0 = starts[static_cast<std::size_t>(b)], i1 = std::min(M, i0 + rows);
-        int64_t fresh = 0;
-        for (int64_t g = 0; g < ng; ++g) {
-            if (ids[static_cast<std::size_t>(g)] < g0) continue;
-            const int64_t f = band.first[static_cast<std::size_t>(g)];
-            if (ground) {
-                fold.rep_a.push_back(f + i0 * N);
-            } else {
-                fold.rep_a.push_back(i0 + f / N);
-                fold.rep_b.push_back(f % N);
-            }
-            fold.rep_code.push_back(band.code[static_cast<std::size_t>(g)]);
-            ++fresh;
-        }
-        fold.near.insert(fold.near.end(), band.near.begin(), band.near.end());
-        fold.kept_bytes += 9 * fresh + 8 * static_cast<int64_t>(band.near.size());
-        int32_t *rows_cls = cls.data() + i0 * N;
-        const int64_t cnt = (i1 - i0) * N;
-        for (int64_t p = 0; p < cnt; ++p) {
-            const int32_t e = rows_cls[p];
-            rows_cls[p] = coded ? static_cast<int32_t>((ids[static_cast<std::size_t>(e >> CODE_BITS)] << CODE_BITS) |
-                                                       (e & ((1 << CODE_BITS) - 1)))
-                                : static_cast<int32_t>(ids[static_cast<std::size_t>(e)]);
-        }
-        band = Band();
-        peak = std::max(peak, fold.held() + band_bytes * static_cast<int64_t>(pending.size()));
-        if (budget >= 0 && std::max(peak, fold.floor()) > budget) return false;
-    }
-    peak_out = peak;
+    const int64_t rows = band_rows(in.rows, M, N, in.budget, per_pair, workers);
+    core::FamilyPlan &f = plan.fam;
+    f.spec.name = name;
+    f.spec.key_words = W;
+    f.spec.code_bits = coded ? CODE_BITS : 0;
+    f.spec.n_blocks = 1;
+    f.spec.rows = M;
+    f.spec.cols = N;
+    f.spec.value_bytes = 3 * 16;
+    f.spec.numbering = core::Numbering::FirstAppearance;
+    f.spec.keep_reps = true;
+    core::Policy pol;
+    pol.rep_rows = 0;
+    pol.census_rows = rows;
+    pol.measured = false;
+    const int64_t n_bands = (M + rows - 1) / rows;
+    const int64_t map_bytes = 4 * M * N;
+    FigureHook hook{core::BandBudget(in.budget, per_pair * rows * N, workers, n_bands,
+                                     map_bytes + fold_table_bytes(0, false, W)),
+                    map_bytes, W};
+    int64_t unused = 0;
+    const core::Outcome out = core::census<W, GroupTable<W>>(
+        f, pol, 0, unused,
+        [&](int, int64_t o, int64_t s, uint64_t *w, uint8_t &code) {
+            int64_t k[W];
+            bool near = false;
+            code = static_cast<uint8_t>(key(o, s, k, near));
+            std::memcpy(w, k, sizeof k);
+            return near ? core::Key::Near : core::Key::Shared;
+        },
+        hook);
+    if (out != core::Outcome::Ok) return false;
+    plan.census_peak_bytes = hook.bands.peak();
     return true;
-}
-
-// A class map renumbered by `renumber` (`_renumber`), codes kept.
-void renumber_map(std::vector<int32_t> &cls, const std::vector<int64_t> &renumber, bool coded) {
-    const std::ptrdiff_t n = static_cast<std::ptrdiff_t>(cls.size());
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (std::ptrdiff_t p = 0; p < n; ++p) {
-        const int32_t e = cls[static_cast<std::size_t>(p)];
-        cls[static_cast<std::size_t>(p)] =
-            coded ? static_cast<int32_t>((renumber[static_cast<std::size_t>(e >> CODE_BITS)] << CODE_BITS) |
-                                         (e & ((1 << CODE_BITS) - 1)))
-                  : static_cast<int32_t>(renumber[static_cast<std::size_t>(e)]);
-    }
 }
 
 // The permutation a stable argsort on `key` gives, and whether it moves anything.
@@ -464,7 +412,9 @@ std::vector<int64_t> stable_argsort(const std::vector<int64_t> &key, bool &moved
     return perm;
 }
 
-// `near_blocks(near_flat, n_src, a_obs, rows)`.
+// The direct kernel calls that evaluate the pairs `flat` (sorted flat
+// indices): per run of up to `rows` observer rows of one radius, the union
+// of their sources, and where each pair sits in that call's block.
 std::vector<NearBlock> near_blocks(const std::vector<int64_t> &flat, int64_t N, int64_t M, const double *a_obs,
                                    int64_t rows) {
     std::vector<NearBlock> out;
@@ -513,8 +463,11 @@ int64_t blocks_nbytes(const std::vector<NearBlock> &bs) {
     return s;
 }
 
-// `canonical_sources` of one class: its source's centre and tangent in the
-// canonical observer frame, from the representative's (rho, z, rdt, td).
+// The source's centre and tangent placing a class in the canonical observer
+// frame (the observer at the origin along +z), from its representative's
+// (rho, z, rdt, td). With the source tangent u = (s, 0, td), s = sqrt(1 -
+// td^2), the radial vector is alpha p + beta q over p = (-td, 0, s) and q =
+// (0, 1, 0): alpha s = rdt and alpha^2 + beta^2 = rho^2.
 inline void canonical_source(double rho, double z, double rdt, double td, double *c, double *t) {
     const double s = std::sqrt(np_max(0.0, 1.0 - td * td));
     double alpha = s > 0.0 ? rdt / s : 0.0;
@@ -541,9 +494,9 @@ const double kCodeSigns[4][3] = {
 // `to_canonical`: each class's value its canonical orientation's.
 void to_canonical(const Plan &p, std::vector<cd> &vals) {
     if (!p.coded) return;
-    for (std::size_t c = 0; c < p.rep_code.size(); ++c)
+    for (std::size_t c = 0; c < p.fam.rep_code.size(); ++c)
         for (int s = 0; s < 3; ++s)
-            if (kCodeSigns[p.rep_code[c]][s] < 0) vals[3 * c + static_cast<std::size_t>(s)] = -vals[3 * c + static_cast<std::size_t>(s)];
+            if (kCodeSigns[p.fam.rep_code[c]][s] < 0) vals[3 * c + static_cast<std::size_t>(s)] = -vals[3 * c + static_cast<std::size_t>(s)];
 }
 
 // `evaluate_pairs`: (n, 3) values of the pairs `blocks` lay out.
@@ -579,13 +532,29 @@ void evaluate_pairs(int64_t n, const std::vector<NearBlock> &blocks, const RowsF
     if (failed) throw std::runtime_error(why);
 }
 
+// The type moves of a source reversal, (src_rev - src_type) * n_obs_types,
+// or empty where no reversal moves a type (None).
+std::vector<int64_t> source_moves(const CensusInputs &in, int64_t n_obs_types) {
+    std::vector<int64_t> ds(static_cast<std::size_t>(in.N));
+    bool any = false;
+    for (int64_t n = 0; n < in.N; ++n) {
+        ds[static_cast<std::size_t>(n)] = (in.src_rev[n] - in.src_type[n]) * n_obs_types;
+        any = any || ds[static_cast<std::size_t>(n)] != 0;
+    }
+    if (!any) ds.clear();
+    return ds;
+}
+
+int64_t max_type(const int64_t *t, int64_t n) {
+    int64_t m = 0;
+    for (int64_t i = 0; i < n; ++i) m = std::max(m, t[i] + 1);
+    return m;
+}
+
 }  // namespace
 
-std::string over_budget_reason() {
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "%.6g", static_cast<double>(plan_budget()) / 1048576.0);
-    return std::string("the plan and its census would exceed the ") + buf + " MB budget";
-}
+std::string over_budget_reason(int64_t budget) { return core::budget_reason(budget); }
+std::string over_budget_reason() { return over_budget_reason(plan_budget()); }
 
 void set_plan_budget(int64_t bytes) {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -618,6 +587,14 @@ int workers() {
 #else
     return 1;
 #endif
+}
+void set_probe(int p) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_probe = p;
+}
+int probe() {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_probe;
 }
 
 Types reversible_segment_types(int64_t n, const double *seg_h, const double *a_obs, const double *src_a,
@@ -653,18 +630,25 @@ Types reversible_segment_types(int64_t n, const double *seg_h, const double *a_o
 
 GroundTypes reversible_ground_types(const Types &t, int64_t n, const double *seg_t) {
     const std::size_t nz = static_cast<std::size_t>(n);
+    GroundTypes g;
+    if (probe() == PROBE_FREE_KEY) {  // the types without the vertical tangent
+        g.src = t.src;
+        g.obs = t.obs;
+        g.src_rev = t.src_rev;
+        g.obs_rev = t.obs;
+        return g;
+    }
     std::vector<int64_t> srows(4 * nz), orows(4 * nz);
     for (std::size_t j = 0; j < 2 * nz; ++j) {
         const std::size_t i = j % nz;
         const double tz = j < nz ? seg_t[3 * i + 2] : -seg_t[3 * i + 2];
-        const int64_t q = rint64(tz * kUnit);  // `_quantise_unit`
+        const int64_t q = rint64(tz * kUnit);  // a direction cosine at KEY_BITS absolute bits
         srows[2 * j] = j < nz ? t.src[i] : t.src_rev[i];
         srows[2 * j + 1] = q;
         orows[2 * j] = t.obs[i];
         orows[2 * j + 1] = q;
     }
     const std::vector<int64_t> gs = type_ids(srows, 2, 2 * nz), go = type_ids(orows, 2, 2 * nz);
-    GroundTypes g;
     g.src.assign(gs.begin(), gs.begin() + static_cast<std::ptrdiff_t>(nz));
     g.src_rev.assign(gs.begin() + static_cast<std::ptrdiff_t>(nz), gs.end());
     g.obs.assign(go.begin(), go.begin() + static_cast<std::ptrdiff_t>(nz));
@@ -673,67 +657,48 @@ GroundTypes reversible_ground_types(const Types &t, int64_t n, const double *seg
 }
 
 int64_t Plan::plan_nbytes() const {
-    int64_t s = 4 * static_cast<int64_t>(cls.size()) + 8 * n_classes() + 8 * n_near() +
-                static_cast<int64_t>(rep_code.size()) + blocks_nbytes(near_blocks);
+    int64_t s = 4 * static_cast<int64_t>(cls().size()) + 8 * n_classes() + 8 * n_near() +
+                (coded ? static_cast<int64_t>(fam.rep_code.size()) : 0) + blocks_nbytes(near_blocks);
     if (ground) return s + blocks_nbytes(rep_blocks);
     return s + 8 * static_cast<int64_t>(src_c.size() + src_t.size());
 }
 
 std::shared_ptr<const Plan> build_plan(const CensusInputs &in) {
     const int64_t M = in.M, N = in.N;
-    int64_t n_obs_types = 0;
-    for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_type[m] + 1);
+    const int64_t n_obs_types = max_type(in.obs_type, M);
     const bool coded = in.src_rev != nullptr && M * N <= CODED_PAIRS;
-    std::vector<int64_t> ds;
-    if (coded) {
-        ds.resize(static_cast<std::size_t>(N));
-        bool any = false;
-        for (int64_t n = 0; n < N; ++n) {
-            ds[static_cast<std::size_t>(n)] = (in.src_rev[n] - in.src_type[n]) * n_obs_types;
-            any = any || ds[static_cast<std::size_t>(n)] != 0;
-        }
-        if (!any) ds.clear();
-    }
+    const std::vector<int64_t> ds = coded ? source_moves(in, n_obs_types) : std::vector<int64_t>();
     if (in.budget >= 0 && 4 * M * N > in.budget) return nullptr;
     auto plan = std::make_shared<Plan>();
     plan->M = M;
     plan->N = N;
     plan->coded = coded;
-    plan->cls.resize(static_cast<std::size_t>(M * N));
-    const int64_t rows = band_rows(in.rows, M, N, in.budget, BAND_BYTES_PER_PAIR, in.workers);
-    Fold fold;
-    fold.table.reset(new int_groups::IntGroups(5));
-    fold.map_bytes = 4 * M * N;
-    DirectKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data()};
-    int64_t peak = 0;
-    if (!census(key, 5, in, rows, coded, false, plan->cls, fold, peak)) return nullptr;
-    fold.table.reset();
+    const DirectKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(), probe()};
+    const int64_t per_pair = in.band_bytes_per_pair >= 0 ? in.band_bytes_per_pair : BAND_BYTES_PER_PAIR;
+    if (!census<5>(key, in, coded, per_pair, "direct", *plan)) return nullptr;
     trim_heap();
+    core::FamilyPlan &f = plan->fam;
     // Classes renumbered so those sharing an observer radius are contiguous
-    // (stable within a radius).
-    const std::size_t n_cls = fold.rep_a.size();
+    // (stable within a radius): `evaluate` then runs on slices.
+    const std::size_t n_cls = f.rep_flat.size();
     std::vector<int64_t> otype(n_cls);
-    for (std::size_t c = 0; c < n_cls; ++c) otype[c] = in.obs_type[fold.rep_a[c]];
+    for (std::size_t c = 0; c < n_cls; ++c) otype[c] = in.obs_type[f.rep_flat[c] / N];
     bool moved = false;
     const std::vector<int64_t> perm = stable_argsort(otype, moved);
     if (moved) {
         std::vector<int64_t> renumber(n_cls);
         for (std::size_t j = 0; j < n_cls; ++j) renumber[static_cast<std::size_t>(perm[j])] = static_cast<int64_t>(j);
-        renumber_map(plan->cls, renumber, coded);
+        core::renumber(f, renumber);
     }
     std::vector<int64_t> rep_obs(n_cls);
     plan->rep.resize(n_cls);
-    if (coded) plan->rep_code.resize(n_cls);
     for (std::size_t j = 0; j < n_cls; ++j) {
-        const std::size_t p = static_cast<std::size_t>(perm[j]);
-        rep_obs[j] = fold.rep_a[p];
-        plan->rep[j] = fold.rep_b[p];
-        if (coded) plan->rep_code[j] = fold.rep_code[p];
+        rep_obs[j] = f.rep_flat[j] / N;
+        plan->rep[j] = f.rep_flat[j] % N;
     }
-    plan->near_flat.swap(fold.near);
-    fold = Fold();
-    // Each representative's (rho, z, rdt, td), the bits its band computed
-    // (`rep_scalars`), placed in the observer frame.
+    std::vector<int64_t>().swap(f.rep_flat);
+    // Each representative's (rho, z, rdt, td), the bits its key computed,
+    // placed in the observer frame.
     plan->src_c.resize(3 * n_cls);
     plan->src_t.resize(3 * n_cls);
     for (std::size_t c = 0; c < n_cls; ++c) {
@@ -748,33 +713,29 @@ std::shared_ptr<const Plan> build_plan(const CensusInputs &in) {
         plan->runs.push_back(Run{static_cast<int64_t>(c), static_cast<int64_t>(e), rep_obs[c]});
         c = e;
     }
-    plan->near_blocks = near_blocks(plan->near_flat, N, M, in.a_obs, NEAR_ROWS);
-    plan->census_peak_bytes = peak;
+    plan->near_blocks = near_blocks(f.near_flat, N, M, in.a_obs, NEAR_ROWS);
     if (in.budget >= 0 && plan->fill_nbytes() > in.budget) return nullptr;
     return plan;
 }
 
 std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in) {
     const int64_t M = in.M, N = in.N;
-    const bool coded = in.src_rev != nullptr && in.obs_rev != nullptr && M * N <= CODED_PAIRS;
-    int64_t n_obs_types = 0;
-    for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_type[m] + 1);
+    const int pb = probe();
+    // PROBE_FREE_KEY: the direct block's key, uncoded, standing in.
+    const bool free_key = pb == PROBE_FREE_KEY;
+    const bool coded = !free_key && in.src_rev != nullptr && in.obs_rev != nullptr && M * N <= CODED_PAIRS;
+    int64_t n_obs_types = max_type(in.obs_type, M);
     std::vector<int64_t> ds, dob;
     if (coded) {
-        for (int64_t m = 0; m < M; ++m) n_obs_types = std::max(n_obs_types, in.obs_rev[m] + 1);
-        ds.resize(static_cast<std::size_t>(N));
+        n_obs_types = std::max(n_obs_types, max_type(in.obs_rev, M));
+        ds = source_moves(in, n_obs_types);
         dob.resize(static_cast<std::size_t>(M));
-        bool any_s = false, any_o = false;
-        for (int64_t n = 0; n < N; ++n) {
-            ds[static_cast<std::size_t>(n)] = (in.src_rev[n] - in.src_type[n]) * n_obs_types;
-            any_s = any_s || ds[static_cast<std::size_t>(n)] != 0;
-        }
+        bool any = false;
         for (int64_t m = 0; m < M; ++m) {
             dob[static_cast<std::size_t>(m)] = in.obs_rev[m] - in.obs_type[m];
-            any_o = any_o || dob[static_cast<std::size_t>(m)] != 0;
+            any = any || dob[static_cast<std::size_t>(m)] != 0;
         }
-        if (!any_s) ds.clear();
-        if (!any_o) dob.clear();
+        if (!any) dob.clear();
     }
     if (in.budget >= 0 && 4 * M * N > in.budget) return nullptr;
     auto plan = std::make_shared<Plan>();
@@ -782,98 +743,82 @@ std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in) {
     plan->M = M;
     plan->N = N;
     plan->coded = coded;
-    plan->cls.resize(static_cast<std::size_t>(M * N));
-    const int64_t rows = band_rows(in.rows, M, N, in.budget, GROUND_BAND_BYTES_PER_PAIR, in.workers);
-    Fold fold;
-    fold.table.reset(new int_groups::IntGroups(6));
-    fold.map_bytes = 4 * M * N;
-    GroundKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(), dob.empty() ? nullptr : dob.data()};
-    int64_t peak = 0;
-    if (!census(key, 6, in, rows, coded, true, plan->cls, fold, peak)) return nullptr;
-    fold.table.reset();
+    const int64_t per_pair = in.band_bytes_per_pair >= 0 ? in.band_bytes_per_pair : GROUND_BAND_BYTES_PER_PAIR;
+    bool ok;
+    if (free_key) {
+        const DirectKey key{&in, n_obs_types, false, nullptr, 0};
+        ok = census<5>(key, in, false, per_pair, "reflected", *plan);
+    } else {
+        const GroundKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(),
+                            dob.empty() ? nullptr : dob.data(), pb};
+        ok = census<6>(key, in, coded, per_pair, "reflected", *plan);
+    }
+    if (!ok) return nullptr;
     trim_heap();
-    // Numbered by the representative's flat index (already the order: the
-    // bands run in row order and classes are numbered where they first occur).
-    const std::size_t n_cls = fold.rep_a.size();
-    bool moved = false;
-    const std::vector<int64_t> perm = stable_argsort(fold.rep_a, moved);
-    if (moved) {
-        std::vector<int64_t> renumber(n_cls);
-        for (std::size_t j = 0; j < n_cls; ++j) renumber[static_cast<std::size_t>(perm[j])] = static_cast<int64_t>(j);
-        renumber_map(plan->cls, renumber, coded);
-    }
-    plan->rep.resize(n_cls);
-    if (coded) plan->rep_code.resize(n_cls);
-    for (std::size_t j = 0; j < n_cls; ++j) {
-        const std::size_t p = static_cast<std::size_t>(perm[j]);
-        plan->rep[j] = fold.rep_a[p];
-        if (coded) plan->rep_code[j] = fold.rep_code[p];
-    }
-    plan->near_flat.swap(fold.near);
-    fold = Fold();
+    // Numbered by the representative's flat index: the census's own order.
+    core::FamilyPlan &f = plan->fam;
+    plan->rep.swap(f.rep_flat);
     plan->rep_blocks = near_blocks(plan->rep, N, M, in.a_obs, REP_ROWS);
-    plan->near_blocks = near_blocks(plan->near_flat, N, M, in.a_obs, NEAR_ROWS);
-    plan->census_peak_bytes = peak;
+    plan->near_blocks = near_blocks(f.near_flat, N, M, in.a_obs, NEAR_ROWS);
     if (in.budget >= 0 && plan->fill_nbytes() > in.budget) return nullptr;
     return plan;
 }
 
 namespace {
-struct Cached {
-    std::string key;
-    std::shared_ptr<const Plan> plan;  // null: over budget
-    int64_t size = 0;
-};
-std::list<Cached> g_cache;  // least recently used first
+
+void append(std::string &key, const void *p, std::size_t n) {
+    if (p != nullptr) key.append(static_cast<const char *>(p), n);
+    key.push_back('|');
+}
+
+// Every input the census reads, and the hooks in force.
+std::string plan_key(const CensusInputs &in, bool ground) {
+    const std::size_t M = static_cast<std::size_t>(in.M), N = static_cast<std::size_t>(in.N);
+    std::string key = ground ? "reflected|" : "direct|";
+    const int64_t head[6] = {in.M, in.N, in.rows, in.budget, in.band_bytes_per_pair, probe()};
+    append(key, head, sizeof head);
+    append(key, in.obs_c, 24 * M);
+    append(key, in.obs_t, 24 * M);
+    append(key, in.src_c, 24 * N);
+    append(key, in.src_t, 24 * N);
+    append(key, in.seg_h, 8 * N);
+    append(key, in.a_obs, 8 * M);
+    append(key, in.src_type, 8 * N);
+    append(key, in.obs_type, 8 * M);
+    append(key, in.src_rev, 8 * N);
+    if (ground) {
+        append(key, in.obs_rev, 8 * M);
+        append(key, &in.ground_z, 8);
+    }
+    return key;
+}
+
 }  // namespace
 
-std::shared_ptr<const Plan> shared_plan(const std::string &key,
-                                        const std::function<std::shared_ptr<const Plan>()> &build, bool *built) {
-    if (built) *built = false;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
-            if (it->key == key) {
-                g_cache.splice(g_cache.end(), g_cache, it);
-                g_counters.found++;
-                return g_cache.back().plan;
+std::shared_ptr<const Plan> shared_plan(const CensusInputs &in, bool ground, bool *built) {
+    const std::shared_ptr<const core::Plan> p = core::plan_for(
+        BASIS, plan_key(in, ground),
+        [&](core::Plan &out) {
+            std::shared_ptr<const Plan> sp = ground ? build_ground_plan(in) : build_plan(in);
+            trim_heap();
+            if (sp == nullptr) {
+                core::decline(out, over_budget_reason(in.budget));
+                return;
             }
-    }
-    std::shared_ptr<const Plan> plan = build();
-    trim_heap();
-    if (built) *built = true;
-    std::lock_guard<std::mutex> lock(g_mu);
-    g_counters.built++;
-    if (plan == nullptr) g_counters.declined++;
-    // A declined census holds no arrays, but its key is the deck's geometry.
-    const int64_t size = plan != nullptr ? plan->plan_nbytes() : static_cast<int64_t>(key.size());
-    for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
-        if (it->key == key) {
-            g_cache.erase(it);
-            break;
-        }
-    g_cache.push_back(Cached{key, plan, size});
-    int64_t total = 0;
-    for (const Cached &c : g_cache) total += c.size;
-    while (total > SHARED_PLAN_BYTES && g_cache.size() > 1) {
-        total -= g_cache.front().size;
-        g_cache.pop_front();
-    }
-    return plan;
+            out.ext_bytes = static_cast<std::size_t>(sp->plan_nbytes());
+            out.ext = sp;
+        },
+        built);
+    if (!p->declined.empty()) return nullptr;
+    return std::shared_ptr<const Plan>(p, static_cast<const Plan *>(p->ext.get()));
 }
 
-void clear_shared_plans() {
-    std::lock_guard<std::mutex> lock(g_mu);
-    g_cache.clear();
-}
+void clear_shared_plans() { core::clear_cache(BASIS); }
 
-Counters counters() {
-    std::lock_guard<std::mutex> lock(g_mu);
-    return g_counters;
-}
+core::Counters counters() { return core::counters(BASIS); }
 void reset_counters() {
+    core::reset_counters(BASIS);
     std::lock_guard<std::mutex> lock(g_mu);
-    g_counters = Counters();
     g_last.clear();
     g_census.clear();
 }
@@ -892,6 +837,41 @@ std::vector<CensusEntry> last_census() {
 void set_last_census(std::vector<CensusEntry> c) {
     std::lock_guard<std::mutex> lock(g_mu);
     g_census = std::move(c);
+}
+
+void pair_keys(const CensusInputs &in, bool ground, std::vector<int64_t> &words, std::vector<int8_t> &codes,
+               std::vector<uint8_t> &near) {
+    const int64_t M = in.M, N = in.N, W = ground ? 6 : 5;
+    int64_t n_obs_types = max_type(in.obs_type, M);
+    if (ground && in.obs_rev != nullptr) n_obs_types = std::max(n_obs_types, max_type(in.obs_rev, M));
+    std::vector<int64_t> ds, dob;
+    if (in.src_rev != nullptr) ds = source_moves(in, n_obs_types);
+    if (ground && in.obs_rev != nullptr) {
+        dob.resize(static_cast<std::size_t>(M));
+        for (int64_t m = 0; m < M; ++m) dob[static_cast<std::size_t>(m)] = in.obs_rev[m] - in.obs_type[m];
+    }
+    const bool coded = in.src_rev != nullptr && (!ground || in.obs_rev != nullptr);
+    words.assign(static_cast<std::size_t>(M * N * W), 0);
+    codes.assign(static_cast<std::size_t>(M * N), 0);
+    near.assign(static_cast<std::size_t>(M * N), 0);
+    const int pb = probe();
+    const DirectKey dk{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(), pb};
+    const GroundKey gk{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(),
+                       dob.empty() ? nullptr : dob.data(), pb};
+    for (int64_t m = 0; m < M; ++m)
+        for (int64_t n = 0; n < N; ++n) {
+            const std::size_t i = static_cast<std::size_t>(m * N + n);
+            bool nr = false;
+            codes[i] = ground ? gk(m, n, words.data() + i * W, nr) : dk(m, n, words.data() + i * W, nr);
+            near[i] = nr ? 1 : 0;
+        }
+}
+
+void canonical_codes(int64_t *rows, int width, int64_t n, int ia, int ib, int it, const uint8_t *near,
+                     int64_t n_src, const int64_t *ds, const int64_t *do_, int8_t *codes) {
+    for (int64_t i = 0; i < n; ++i)
+        codes[i] = canonical(rows + i * width, ia, ib, it, near != nullptr && near[i] != 0, ds != nullptr,
+                             ds ? ds[i % n_src] : 0, do_ != nullptr, do_ ? do_[i / n_src] : 0);
 }
 
 void evaluate(const Plan &p, const CanonFn &canon, Values &out) {
@@ -1103,16 +1083,16 @@ void scatter(const Block &b, std::ptrdiff_t rows, std::ptrdiff_t n_src, cd *out[
 
 Block band_block(const Plan &p, const Values &v, int64_t i0, int64_t i1, std::vector<int64_t> &near_idx) {
     Block b;
-    b.cls = p.cls.data() + i0 * p.N;
+    b.cls = p.cls().data() + i0 * p.N;
     b.rep = reinterpret_cast<const double *>(v.cls.data());
     b.n_cls = p.n_classes();
     const int64_t lo = i0 * p.N, hi = i1 * p.N;
-    const auto e0 = std::lower_bound(p.near_flat.begin(), p.near_flat.end(), lo);
-    const auto e1 = std::lower_bound(e0, p.near_flat.end(), hi);
+    const auto e0 = std::lower_bound(p.near_flat().begin(), p.near_flat().end(), lo);
+    const auto e1 = std::lower_bound(e0, p.near_flat().end(), hi);
     near_idx.assign(e0, e1);
     for (int64_t &e : near_idx) e -= lo;
     b.near_idx = near_idx.data();
-    b.near_val = reinterpret_cast<const double *>(v.near.data()) + 6 * (e0 - p.near_flat.begin());
+    b.near_val = reinterpret_cast<const double *>(v.near.data()) + 6 * (e0 - p.near_flat().begin());
     b.n_near = static_cast<int64_t>(near_idx.size());
     if (p.coded) set_code_signs(b);
     return b;

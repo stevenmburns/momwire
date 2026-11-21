@@ -38,6 +38,7 @@ Scope (deliberately narrow):
 import cmath
 import contextlib
 import math
+import time
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass
@@ -6979,7 +6980,10 @@ class SinusoidalSolver(
             reason = "the folded cos-1 shapes (k*delta below the well-scaled bound)"
         elif _complex_k(k) or self._active_medium is not None:
             reason = "a fill inside a ground medium"
-        elif not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR):
+        elif (
+            not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR)
+            or not _pr.HAVE_PLAN
+        ):
             reason = "no C++ field-tensor kernel"
         elif finite and fg.mode == "fold" and not fg.standard_fresnel:
             reason = "a reflection coefficient other than Fresnel's"
@@ -7078,8 +7082,9 @@ class SinusoidalSolver(
         axis = np.array([[0.0, 0.0, 1.0]])
 
         def canonical(src_c, src_t, ns, g_obs):
-            # One observer row at the origin along +z (`_sin_pair_reuse.
-            # canonical_sources`), each source its class representative's.
+            # One observer row at the origin along +z (the plan's canonical
+            # sources, `_sin_pair_reuse_core.cpp`), each source its class
+            # representative's.
             return kernel(origin, axis, src_c, src_t, seg_h[ns], ob_a[g_obs], ns)
 
         # The census transient: ~20 float64/int64 per pair in a band.
@@ -7138,48 +7143,31 @@ class SinusoidalSolver(
                 plan = held[1]
             else:
                 # The process's cache, not only this solver's: a solver per
-                # frequency (the portal) finds the first one's classes. The
-                # band height is in the key because the class numbering
-                # follows the bands, and a renumbered plan can move Z an ulp.
+                # frequency (the portal) finds the first one's classes. Its
+                # key is every array the census reads, the band height
+                # included, because the class numbering follows the bands
+                # and a renumbered plan can move Z an ulp.
                 if block == "reflected":
-
-                    def build():
-                        return _pr.build_ground_plan(
-                            ob_c,
-                            ob_t,
-                            src_c,
-                            src_t,
-                            gz,
-                            seg_h,
-                            ob_a,
-                            g_src_type,
-                            g_obs_type,
-                            census_rows,
-                            src_rev=g_src_rev,
-                            obs_rev=g_obs_rev,
-                            budget=budget,
-                        )
-
+                    args = (
+                        ob_c,
+                        ob_t,
+                        src_c,
+                        src_t,
+                        seg_h,
+                        ob_a,
+                        g_src_type,
+                        g_obs_type,
+                    )
+                    revs = dict(src_rev=g_src_rev, obs_rev=g_obs_rev, ground_z=gz)
                 else:
-
-                    def build():
-                        return _pr.build_plan(
-                            ob_c,
-                            ob_t,
-                            src_c,
-                            src_t,
-                            seg_h,
-                            ob_a,
-                            src_type,
-                            ob_type,
-                            census_rows,
-                            src_rev=src_rev,
-                            budget=budget,
-                        )
-
-                plan = _pr.shared_plan(
-                    (*key, census_rows), _fill_report.timed_census(self, build)
+                    args = (ob_c, ob_t, src_c, src_t, seg_h, ob_a, src_type, ob_type)
+                    revs = dict(src_rev=src_rev)
+                t0 = time.perf_counter()
+                plan, built = _pr.shared(
+                    block, *args, census_rows, budget=budget, **revs
                 )
+                if built:
+                    _fill_report.ledger_of(self).census_s += time.perf_counter() - t0
                 self._sin_reuse_plans[block] = (key, plan)
             if plan is _pr.OVER_BUDGET:
                 return plan, src_c, src_t
@@ -7388,7 +7376,7 @@ class SinusoidalSolver(
             census_peak_bytes=max((p.census_peak_bytes or 0) for p in plans.values()),
         )
         ledger.last = (
-            {block: _fill_report.plan_ref(p) for block, p in plans.items()},
+            {block: p.handle.ref() for block, p in plans.items()},
             obs_rows,
         )
 
@@ -7398,24 +7386,18 @@ class SinusoidalSolver(
         if ledger.last is None or _acc is None:
             return {"unavailable": _fill_report.PLAN_GONE}
         refs, obs_rows = ledger.last
-        plans = [ref() for ref in refs.values()]
-        if any(plan is None for plan in plans):
+        if not all(ref.alive for ref in refs.values()):
             return {"unavailable": _fill_report.PLAN_GONE}
         sizes = np.diff(self._seg_offsets(self._build_geometry()))
         n_wires = int(sizes.size)
         wire_of = np.repeat(np.arange(n_wires, dtype=np.int32), sizes)
         wire_of_row = wire_of if obs_rows is None else wire_of[obs_rows]
         counts = np.zeros((n_wires, n_wires, 3), dtype=np.int64)
-        for plan in plans:
-            counts += _acc.fill_report_wire_map(
-                plan.cls,
-                plan.code_bits,
-                plan.near_flat,
-                wire_of_row,
-                wire_of,
-                plan.n_classes,
-                n_wires,
-            )
+        for ref in refs.values():
+            got = ref.wire_map(wire_of_row, wire_of, n_wires)
+            if got is None:
+                return {"unavailable": _fill_report.PLAN_GONE}
+            counts += got
         dedup = getattr(self, "_wire_dedup", None)
         labels = _fill_report.wire_labels(
             n_wires, None if dedup is None else dedup.kept

@@ -29,8 +29,14 @@ differs from its representative by at most 2^-(KEY_BITS+1) relative to the
 scale at which Φ varies (k r times that in phase), and takes its Φ. Pairs
 that straddle a quantum land in neighbouring classes, which costs
 compression, never accuracy. The classes are exact-equality groups of the
-quantised integers (the `factorize_ints` hash kernel, staged over its three
-columns), so no two different keys can share a class.
+quantised integers, so no two different keys can share a class.
+
+THE PLAN IS C++ (momwire#2063): the keys, the census and the plan cache are
+`_sin_pair_reuse_core.cpp`, the sinusoidal adapter to the common reuse core
+(`_pair_reuse_core.h`), and the C++ fill (the nec42-sinusoidal executable)
+runs the same plan. This module holds the plan's views (`Plan`,
+`GroundPlan`), the evaluation through the shipped kernels, the gather and
+the reduction, and `verify`.
 
 EXCLUDED: a pair whose observer lies within `NEAR_LENGTHS` kernel scales of
 the source's centre (in the max norm of |z| and rho: the self term and its
@@ -60,9 +66,8 @@ workers each run the kernel on one OpenMP thread. Classes are found once per
 geometry (the key holds no k), Φ per class once per frequency, then gathered
 into each observer band, so the reduction (`_reduce_phi_band`) is
 unchanged. Memory: an (N_obs, N_src) int32 class map, a quarter of Z, plus
-the class table; no Φ-sized copy. The census folds each band's classes into
-one table as it goes, so it holds each class once (THE CENSUS, below),
-and both are held to `PLAN_BUDGET_BYTES` (momwire#2019).
+the class table; no Φ-sized copy. The census holds each class once (THE
+CENSUS, below), and both are held to `PLAN_BUDGET_BYTES` (momwire#2019).
 
 OVER A FINITE GROUND (momwire#1970) the image block is not a free-space
 field: the Sommerfeld fill subtracts C2 Φ_img - S, S the interpolated
@@ -125,11 +130,8 @@ which of its orientations is taken is immaterial. Near pairs keep code 0.
 
 from __future__ import annotations
 
-import collections
 import functools
 import os
-import threading
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -140,7 +142,7 @@ from ._accel import acc as _acc
 #: Relative resolution of the key, in bits.
 KEY_BITS = 48
 
-#: Pairs whose observer lies within this many kernel scales (`_near_scale`:
+#: Pairs whose observer lies within this many kernel scales (`near_scale`:
 #: the source's length, or the observer's radius where that is longer) of
 #: the source's centre are not shared: each is evaluated directly, in the
 #: original frame. Their field is near-singular, and the basis sums over neighbouring
@@ -162,8 +164,6 @@ NEAR_ROWS = 16
 #: 1 row 0.56 s (the Python around each call).
 REP_ROWS = 16
 
-_NEAR_SENTINEL = -1  # below every packed exponent-and-type column
-
 #: Sources per kernel call in `evaluate` (its per-row scratch is ~360 bytes
 #: per source). At 8192 each worker's scratch spilled out of its core's
 #: cache: on the ELT whip at 8 workers (Rocketlake) the kernel's summed
@@ -173,12 +173,6 @@ _NEAR_SENTINEL = -1  # below every packed exponent-and-type column
 #: bit-free one: the kernel's batched sincos is a vector loop with a scalar
 #: tail, and which a source falls in can move its Φ by an ulp.
 EVAL_CHUNK = 2048
-
-#: Classes per `rep_scalars` + `canonical_sources` call in `build_plan`: the
-#: gathered geometry, the scalars and the placement are ~300 B a class, 20 MB
-#: a call here, beside a plan that holds the budget's rest. Elementwise, so
-#: the chunk moves no value.
-_CANON_CHUNK = 1 << 16
 
 #: `pair_reuse="verify"`: per-pair agreement bound, |Φ_reused - Φ_direct|
 #: over the pair's largest |Φ_direct| among the three shapes.
@@ -280,10 +274,8 @@ CODE_SIGNS = np.array(
     ]
 )
 
-_HAVE_FACTORIZE = _acc is not None and bool(
-    getattr(_acc, "exact_factorize_1224", False)
-)
-_HAVE_INT_GROUPS = _acc is not None and bool(getattr(_acc, "int_groups", False))
+#: The extension's C++ plan (momwire#2063): without it the reuse declines.
+HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False))
 
 
 #: The byte budget of one fill's plans AND their census, razor-2p's
@@ -304,19 +296,22 @@ _HAVE_INT_GROUPS = _acc is not None and bool(getattr(_acc, "int_groups", False))
 #:   11 elements, each its own h     1111   164    296    292  reuses
 PLAN_BUDGET_BYTES = 256 << 20
 
-#: Bytes of plans the process keeps between solvers (`shared_plan`), one
-#: fill's budget (momwire#2026): a long-lived server holds no more than a
-#: single fill may use. A plan is mostly its int32 class map, 4 bytes per
-#: pair: the ELT whip's direct block is ~35 MB.
+#: Bytes of plans the process keeps between solvers (`shared`), one fill's
+#: budget (momwire#2026): a long-lived server holds no more than a single
+#: fill may use. A plan is mostly its int32 class map, 4 bytes per pair: the
+#: ELT whip's direct block is ~35 MB. The cache is the common core's
+#: (`_pair_reuse_core.h`, SHARED_PLAN_BYTES), one for every basis.
 SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES
 
 #: Bytes per class and per near pair of one wavenumber's values, the three
 #: complex shapes (`evaluate`, `evaluate_near`).
 VALUE_BYTES = 48
 
-#: THE CENSUS folds each band's classes, in band order, into one running
-#: table (`_Fold`), so what it holds grows with the deck's classes, not with
-#: each band's: a class seen in many bands is held once. Holding every band's
+#: THE CENSUS (the C++ core's) holds each class once, so what it holds grows
+#: with the deck's classes, not with each band's. Its budget counts what one
+#: running table folding the bands in order would hold (`IntGroups`), as the
+#: numpy census it replaced did (momwire#2063): a class seen in many bands is
+#: held once. Holding every band's
 #: classes until one merge at the end, as before, cost ~240 B per BAND class,
 #: and on a deck whose rows repeat that is the deck's classes several times
 #: over: the ELT whip (4,392 segments, 94 bands of 47 rows at 8 threads) has
@@ -325,9 +320,9 @@ VALUE_BYTES = 48
 #: reuse declined on the 256 MB budget. A class is numbered where it first
 #: occurs in the pairs' flat order either way, so the plan is the same bytes.
 #:
-#: What the census holds is counted (`_Fold.held`) from the class map, the
-#: table's keys and slots (`IntGroups.nbytes`), each class's representative
-#: and the near pairs, plus `BAND_BYTES_PER_PAIR` for every band in flight or
+#: What the census holds is counted from the class map, the table's keys and
+#: slots (`IntGroups.nbytes`), each class's representative and the near
+#: pairs, plus `BAND_BYTES_PER_PAIR` for every band in flight or
 #: finished and not yet folded. A band starts only where it fits beside that
 #: under the budget, and the census stops once the count, or the plan's
 #: least possible fill (`PLAN_FLOOR_BYTES_PER_CLASS`), passes it: the classes
@@ -347,7 +342,7 @@ BAND_BYTES_PER_PAIR = 136
 GROUND_BAND_BYTES_PER_PAIR = 168
 
 #: The share of the budget the bands in flight may take: each band is cut to
-#: at most this over a pool's worth (`_band_rows`), so the rest is the
+#: at most this over a pool's worth (`band_rows` in C++), so the rest is the
 #: classes'. Smaller bands move no class (the numbering is the flat order's).
 BAND_SHARE = 0.25
 
@@ -355,9 +350,6 @@ BAND_SHARE = 0.25
 #: one wavenumber's values (`VALUE_BYTES`) and an int64 index (`rep_src`, or
 #: the ground plan's `rep_flat`).
 PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8
-
-_shared_plans: OrderedDict = OrderedDict()
-_shared_lock = threading.Lock()
 
 
 class _OverBudget:
@@ -410,50 +402,10 @@ def fill_nbytes(plan) -> int:
     return plan_nbytes(plan) + VALUE_BYTES * (plan.n_classes + plan.n_near)
 
 
-def _within_budget(plan, budget):
-    """`plan`, or `OVER_BUDGET` where its fill would pass `budget`."""
-    return plan if budget is None or fill_nbytes(plan) <= budget else OVER_BUDGET
-
-
-def shared_plan(key, build):
-    """The plan for `key` from the process's cache, else `build()`'s, kept.
-
-    A plan holds no k, and its key is the geometry's bytes, so it outlives
-    the solver that found it: the portal builds one solver per frequency and
-    a design server one per knob turn back to a value, and each would pay the
-    census again with a per-instance cache (momwire#1916 part C). Plans are
-    never written after `build_plan` returns, so solvers share one object.
-    Least recently used first out past `SHARED_PLAN_BYTES`, the newest kept
-    whatever its size. Two threads missing the same key both build; the
-    second's plan replaces the first's, and either is the same classes.
-    """
-    with _shared_lock:
-        held = _shared_plans.get(key)
-        if held is not None:
-            _shared_plans.move_to_end(key)
-            return held[0]
-    plan = build()
-    # The census's pages go back before the fill: they sit free in the pool's
-    # arenas, where Z and the fill's arrays would not reuse them.
-    from .razor import _trim_heap
-
-    _trim_heap()
-    # A declined census holds no arrays, but its key is the deck's geometry.
-    size = plan_nbytes(plan) or sum(len(x) for x in key if isinstance(x, bytes))
-    with _shared_lock:
-        _shared_plans[key] = (plan, size)
-        _shared_plans.move_to_end(key)
-        total = sum(v[1] for v in _shared_plans.values())
-        while total > SHARED_PLAN_BYTES and len(_shared_plans) > 1:
-            _, (_, dropped) = _shared_plans.popitem(last=False)
-            total -= dropped
-    return plan
-
-
 def clear_shared_plans() -> None:
     """Drop every kept plan (tests, and a caller done with its decks)."""
-    with _shared_lock:
-        _shared_plans.clear()
+    if HAVE_PLAN:
+        _acc.sin_pair_reuse_configure(clear=True)
 
 
 class PairReuseMismatch(AssertionError):
@@ -472,7 +424,7 @@ class Plan:
     near_blocks: list  # (m0, m1, sources, row, col) per direct kernel call
     # The canonical evaluation's inputs, k-independent, so built with the
     # classes (momwire#1916): each class's source in the observer frame
-    # (`canonical_sources` of the representative's rho, z, rdt, td), and the
+    # (`canonical_source` of the representative's rho, z, rdt, td), and the
     # runs of classes sharing an observer radius, as (c0, c1, observer
     # segment). Classes are numbered so that each run is contiguous.
     src_c: np.ndarray  # (n_cls, 3) float64
@@ -483,9 +435,10 @@ class Plan:
     # it stands, times CODE_SIGNS[rep_code] is the canonical one).
     rep_code: np.ndarray | None = None  # (n_cls,) int8
     code_bits: int = 0
-    # The census's own peak by `CENSUS_BYTES_PER_BAND_CLASS`, for the fill
-    # report (momwire#2016).
+    # What the census counted at its most (momwire#2016, #2019).
     census_peak_bytes: int | None = None
+    # The C++ plan the arrays are views of (`_acc.SinReusePlan`).
+    handle: object = None
 
     @property
     def n_near(self) -> int:
@@ -513,6 +466,7 @@ class GroundPlan:
     rep_code: np.ndarray | None = None  # as `Plan`'s (momwire#1969)
     code_bits: int = 0
     census_peak_bytes: int | None = None  # as `Plan`'s (momwire#2016)
+    handle: object = None  # as `Plan`'s
 
     @property
     def n_near(self) -> int:
@@ -527,296 +481,6 @@ class GroundPlan:
         return int(self.rep_flat.size)
 
 
-def _types(cols):
-    """Dense ids for the distinct rows of a few per-segment columns."""
-    stacked = np.stack([np.asarray(c) for c in cols], axis=1)
-    _, ids = np.unique(stacked, axis=0, return_inverse=True)
-    return np.asarray(ids, dtype=np.int64).reshape(-1)
-
-
-def _quantise_length(h):
-    """(exponent, mantissa) of a positive length at KEY_BITS relative bits."""
-    m, e = np.frexp(h)
-    return e.astype(np.int64), np.rint(np.ldexp(m, KEY_BITS)).astype(np.int64)
-
-
-def segment_types(seg_h, a_obs, src_a=None, ind1=None, ind2=None):
-    """Per-segment source-type and observer-type ids.
-
-    The source type holds what Φ reads of the source besides its pose: its
-    half-length (quantised like the key) and, under the extended kernel, its
-    radius and end codes (exact). The observer type is its radius (exact),
-    the scalar each kernel call takes."""
-    e, q = _quantise_length(np.asarray(seg_h, dtype=np.float64))
-    cols = [e, q]
-    if src_a is not None:
-        cols += [
-            np.asarray(src_a, dtype=np.float64).view(np.int64),
-            np.asarray(ind1, dtype=np.int64),
-            np.asarray(ind2, dtype=np.int64),
-        ]
-    src_type = _types(cols)
-    obs_type = _types([np.asarray(a_obs, dtype=np.float64).view(np.int64)])
-    return src_type, obs_type
-
-
-def _quantise_unit(x):
-    """A direction cosine at KEY_BITS absolute bits."""
-    return np.rint(np.asarray(x, dtype=np.float64) * float(1 << KEY_BITS)).astype(
-        np.int64
-    )
-
-
-def ground_segment_types(src_type, obs_type, seg_t):
-    """`segment_types`' ids refined by each segment's vertical tangent
-    component, which the reflected term reads and a horizontal isometry
-    keeps (`build_ground_plan`)."""
-    tz = _quantise_unit(np.asarray(seg_t, dtype=np.float64)[:, 2])
-    return _types([src_type, tz]), _types([obs_type, tz])
-
-
-def reversible_segment_types(seg_h, a_obs, src_a=None, ind1=None, ind2=None):
-    """`segment_types`, and each source's type with its tangent reversed, in
-    one id space: (src_type, obs_type, src_rev). Reversal swaps the two end
-    codes (the extended kernel's); nothing else the type holds has a
-    direction, so without them src_rev is src_type."""
-    if src_a is None:
-        src_type, obs_type = segment_types(seg_h, a_obs)
-        return src_type, obs_type, src_type
-    n = len(seg_h)
-
-    def twice(x):
-        x = np.asarray(x)
-        return np.concatenate([x, x])
-
-    src_type, obs_type = segment_types(
-        twice(seg_h),
-        twice(a_obs),
-        twice(src_a),
-        np.concatenate([np.asarray(ind1), np.asarray(ind2)]),
-        np.concatenate([np.asarray(ind2), np.asarray(ind1)]),
-    )
-    return src_type[:n], obs_type[:n], src_type[n:]
-
-
-def reversible_ground_types(src_type, obs_type, src_rev, seg_t):
-    """`ground_segment_types` for both orientations of every segment, in one
-    id space: (g_src, g_obs, g_src_rev, g_obs_rev). Reversing a tangent
-    negates its vertical component, and a source's end codes swap."""
-    n = len(src_type)
-    seg_t = np.asarray(seg_t, dtype=np.float64)
-    g_src, g_obs = ground_segment_types(
-        np.concatenate([src_type, src_rev]),
-        np.concatenate([obs_type, obs_type]),
-        np.concatenate([seg_t, -seg_t]),
-    )
-    return g_src[:n], g_obs[:n], g_src[n:], g_obs[n:]
-
-
-def pair_scalars(obs_c, obs_t, src_c, src_t):
-    """z, rho, td, rdt for every (observer, source) pair, (R, N) each, in
-    the kernels' own order of operations."""
-    return _scalars(obs_c[:, None], obs_t[:, None], src_c[None, :], src_t[None, :])
-
-
-def rep_scalars(obs_c, obs_t, src_c, src_t, obs, src):
-    """`pair_scalars` of the pairs (obs[i], src[i]) only, (G,) each: the same
-    operations element by element, so the same bits as the pair's entry in
-    its band's (R, N) arrays."""
-    return _scalars(obs_c[obs], obs_t[obs], src_c[src], src_t[src])
-
-
-def _scalars(oc, ot, sc, st):
-    # Elementwise in a fixed order: the operands' shapes decide which pairs,
-    # never a value.
-    rvx = oc[..., 0] - sc[..., 0]
-    rvy = oc[..., 1] - sc[..., 1]
-    rvz = oc[..., 2] - sc[..., 2]
-    tnx, tny, tnz = st[..., 0], st[..., 1], st[..., 2]
-    z = rvx * tnx + rvy * tny + rvz * tnz
-    rvx -= z * tnx
-    rvy -= z * tny
-    rvz -= z * tnz
-    rho = np.sqrt(rvx * rvx + rvy * rvy + rvz * rvz)
-    tmx, tmy, tmz = ot[..., 0], ot[..., 1], ot[..., 2]
-    td = tmx * tnx + tmy * tny + tmz * tnz
-    rdt = rvx * tmx + rvy * tmy + rvz * tmz
-    return z, rho, td, rdt
-
-
-def _near_scale(H, a_obs):
-    """The near rule's kernel scale per (observer, source) pair, (R, N):
-    max(2H, a), the source's length or the observer's radius, whichever is
-    longer (see the module docstring)."""
-    return np.maximum(2.0 * H[None, :], np.asarray(a_obs)[:, None])
-
-
-def _band_keys(z, rho, td, rdt, H, a_obs, type_id, near=False):
-    """The quantised key columns of one band (int64, (R*N,) each).
-
-    With `near=True`, a NEAR pair (`NEAR_LENGTHS`) takes the one sentinel
-    key: its value is the direct kernel's, written over the gather. Returns
-    the columns and the near mask (or None)."""
-    # The pair's singular distance, from the observer centre to the source
-    # SEGMENT (its axis beside the span, its nearer end beyond it), within
-    # a factor sqrt(2) as max(rho, |z| - H), floored at the observer radius.
-    az = np.abs(z)
-    near = (
-        (np.maximum(az, rho) < NEAR_LENGTHS * _near_scale(H, a_obs)).reshape(-1)
-        if near and NEAR_LENGTHS > 0
-        else None
-    )
-    az -= H[None, :]
-    scale = np.maximum(az, rho, out=az)
-    np.maximum(scale, a_obs[:, None], out=scale)
-    # frexp's exponent and 2^(KEY_BITS - e), off the bits (scale is a
-    # positive normal number): the same integers, without two slow ufuncs.
-    e = (scale.view(np.int64) >> 52) - 1022
-    del scale, az
-    step_inv = ((1023 + KEY_BITS - e) << 52).view(np.float64)
-    zq = np.rint(z * step_inv).astype(np.int64)
-    rq = np.rint(rho * step_inv).astype(np.int64)
-    dq = np.rint(rdt * step_inv).astype(np.int64)
-    del step_inv
-    tq = np.rint(td * float(1 << KEY_BITS)).astype(np.int64)
-    # The exponent and the type share a column: |e| < 2^11 always, and the
-    # type id is below N^2 < 2^40.
-    e += 1 << 11
-    e <<= 40
-    e += type_id
-    cols = [c.reshape(-1) for c in (e, zq, rq, dq, tq)]
-    if near is not None and near.any():
-        idx = np.flatnonzero(near)
-        cols[0][idx] = _NEAR_SENTINEL
-        for c in cols[1:]:
-            c[idx] = 0
-    return cols, near
-
-
-def _canonical_codes(cols, ia, ib, it, near, n_src, ds=None, do=None):
-    """Key one band's pairs in their canonical orientation, in place, and
-    return each pair's flips (int8 codes, `CODE_BITS`).
-
-    `cols` are a band's key columns, (R*N,) each: `cols[ia]` is odd under a
-    source reversal only, `cols[ib]` under an observer reversal only,
-    `cols[it]` under either, and `cols[0]` packs the types, which a source
-    reversal moves by `ds` (per source, (N,)) and an observer reversal by
-    `do` (per row, (R,)); None where a reversal leaves them. Of the four
-    orientations the largest key is taken, in the order (ia, ib, it, the
-    types): the sign of ia decides the source flip and that of ib the
-    observer's, and only where one is zero do the rest decide. Near pairs
-    (their key the sentinel) keep code 0."""
-    a, b, t, e = cols[ia], cols[ib], cols[it], cols[0]
-    fs = a < 0
-    fo = b < 0
-    za = a == 0
-    zb = b == 0
-    if near is not None:
-        za &= ~near
-        zb &= ~near
-
-    def ds_of(idx):
-        return None if ds is None else ds[idx % n_src]
-
-    def do_of(idx):
-        return None if do is None else do[idx // n_src]
-
-    # Only the observer free: the both-odd column, then the observer types.
-    idx = np.flatnonzero(zb & ~za)
-    if idx.size:
-        tp = np.where(fs[idx], -t[idx], t[idx])
-        flip = tp < 0
-        d = do_of(idx)
-        if d is not None:
-            flip |= (tp == 0) & (d > 0)
-        fo[idx] = flip
-    # Only the source free: likewise, then the source types.
-    idx = np.flatnonzero(za & ~zb)
-    if idx.size:
-        tp = np.where(fo[idx], -t[idx], t[idx])
-        flip = tp < 0
-        d = ds_of(idx)
-        if d is not None:
-            flip |= (tp == 0) & (d > 0)
-        fs[idx] = flip
-    # Both free: the largest of the four (t, types).
-    idx = np.flatnonzero(za & zb)
-    if idx.size:
-        t_i = t[idx]
-        d_s = ds_of(idx)
-        d_o = do_of(idx)
-        valid = np.zeros(idx.size, dtype=bool)
-        best_t = np.zeros(idx.size, dtype=np.int64)
-        best_e = np.zeros(idx.size, dtype=np.int64)
-        best_s = np.zeros(idx.size, dtype=bool)
-        best_o = np.zeros(idx.size, dtype=bool)
-        for cs in (False, True):
-            for co in (False, True):
-                tc = -t_i if cs != co else t_i
-                ec = np.zeros(idx.size, dtype=np.int64)
-                if cs and d_s is not None:
-                    ec += d_s
-                if co and d_o is not None:
-                    ec += d_o
-                better = ~valid | (tc > best_t) | ((tc == best_t) & (ec > best_e))
-                best_t = np.where(better, tc, best_t)
-                best_e = np.where(better, ec, best_e)
-                best_s[better] = cs
-                best_o[better] = co
-                valid[:] = True
-        fs[idx] = best_s
-        fo[idx] = best_o
-    np.negative(a, out=a, where=fs)
-    np.negative(b, out=b, where=fo)
-    np.negative(t, out=t, where=fs ^ fo)
-    R = a.size // n_src
-    if ds is not None:
-        e.reshape(R, n_src)[...] += ds[None, :] * fs.reshape(R, n_src)
-    if do is not None:
-        e.reshape(R, n_src)[...] += do[:, None] * fo.reshape(R, n_src)
-    code = fs.view(np.int8).copy()
-    code |= fo.view(np.int8) << 1
-    return code
-
-
-def _coded_band(inv, code):
-    """A band's class map entries: class << CODE_BITS | code."""
-    out = inv.astype(np.int32)
-    out <<= CODE_BITS
-    out |= code
-    return out
-
-
-def _renumber(cls_rows, ginv, coded):
-    """A band's class map, its band-local classes replaced by the merged
-    ones, the codes (if any) kept."""
-    g = ginv.astype(np.int32)
-    if not coded:
-        return g[cls_rows]
-    out = g[cls_rows >> CODE_BITS]
-    out <<= CODE_BITS
-    out |= cls_rows & ((1 << CODE_BITS) - 1)
-    return out
-
-
-def _group(cols):
-    """`(first, inverse)`: exact-equality groups of the rows of int64
-    columns. The hash kernel takes three columns, so five are grouped in
-    two stages, the first stage's ids a column of the second; without it, numpy's
-    sorted spelling (other group numbers, the same groups)."""
-    if _HAVE_FACTORIZE and cols[0].shape[0] < 2**31 - 2:
-        first, ids = _acc.factorize_ints(list(cols[:3]))
-        rest = list(cols[3:])
-        while rest:
-            take, rest = rest[:2], rest[2:]
-            first, ids = _acc.factorize_ints([np.asarray(ids, np.int64), *take])
-        return np.asarray(first, np.int64), np.asarray(ids, np.int64).reshape(-1)
-    _, first, inv = np.unique(
-        np.stack(cols, axis=1), axis=0, return_index=True, return_inverse=True
-    )
-    return np.asarray(first, np.int64), np.asarray(inv, np.int64).reshape(-1)
-
-
 def _limit_openmp():
     """A pool worker's kernels run on one OpenMP thread: the pool is the
     parallelism. libgomp keeps the thread count per calling thread, so this
@@ -828,9 +492,10 @@ def _limit_openmp():
 
 @functools.lru_cache(maxsize=1)
 def _pool():
-    """The census's, the evaluation's and the gather's pool: as many workers
-    as this process may run on, held to OMP_NUM_THREADS where the caller
-    pinned one."""
+    """The evaluation's and the gather's pool, whose size is also the
+    census's worker count (its bands' budget): as many workers as this
+    process may run on, held to OMP_NUM_THREADS where the caller pinned
+    one."""
     try:
         n = len(os.sched_getaffinity(0))
     except AttributeError:
@@ -875,160 +540,93 @@ def _run(fn, items):
     return [r for chunk in _pool().map(run, runs) for r in chunk]
 
 
-class _PyGroups:
-    """`IntGroups` without the extension: the held keys and a band's grouped
-    again at each add (`_group`), renumbered in first-appearance order, so
-    the groups and their numbers are the kernel's."""
+def reversible_segment_types(seg_h, a_obs, src_a=None, ind1=None, ind2=None):
+    """Per-segment type ids: (src_type, obs_type, src_rev).
 
-    def __init__(self, width):
-        self._keys = [np.zeros(0, np.int64) for _ in range(width)]
-
-    def __len__(self):
-        return int(self._keys[0].size)
-
-    def nbytes(self):
-        return sum(k.nbytes for k in self._keys)
-
-    def add(self, cols):
-        g0 = len(self)
-        joined = [
-            np.concatenate([k, np.asarray(c, np.int64)])
-            for k, c in zip(self._keys, cols)
-        ]
-        first, inv = _group(joined)
-        order = np.argsort(first, kind="stable")
-        rank = np.empty_like(order)
-        rank[order] = np.arange(order.size)
-        self._keys = [j[first[order]] for j in joined]
-        return rank[inv[g0:]]
+    The source type holds what Φ reads of the source besides its pose: its
+    half-length (quantised at KEY_BITS relative bits) and, under the extended
+    kernel, its radius and end codes (exact); `src_rev` is each source's type
+    with its tangent reversed, in one id space (the end codes swap; without
+    them it is src_type). The observer type is its radius (exact), the scalar
+    each kernel call takes. The C++ census's own (`_sin_pair_reuse_core.h`)."""
+    if src_a is None:
+        return _acc.sin_pair_reuse_types(seg_h, a_obs)
+    return _acc.sin_pair_reuse_types(seg_h, a_obs, src_a, ind1, ind2)
 
 
-def _nbytes(x):
-    """The bytes of the arrays in a (nested) band result."""
-    if isinstance(x, np.ndarray):
-        return x.nbytes
-    if isinstance(x, (list, tuple)):
-        return sum(_nbytes(y) for y in x)
-    return 0
+def reversible_ground_types(src_type, obs_type, src_rev, seg_t):
+    """The types refined by each segment's vertical tangent component, which
+    the reflected term reads and a horizontal isometry keeps
+    (`build_ground_plan`), for both orientations of every segment, in one id
+    space: (g_src, g_obs, g_src_rev, g_obs_rev). Reversing a tangent negates
+    its vertical component, and a source's end codes swap. The C++ census's
+    own."""
+    i64 = functools.partial(np.ascontiguousarray, dtype=np.int64)
+    return _acc.sin_pair_reuse_ground_types(
+        i64(src_type),
+        i64(obs_type),
+        i64(src_rev),
+        np.ascontiguousarray(seg_t, dtype=np.float64),
+    )
 
 
-class _Fold:
-    """The census's classes, each band's folded in band order into one table
-    (THE CENSUS, above). `add(keys, kept, near)` takes a band's distinct
-    keys, its per-class payload `kept` (arrays over the same rows) and its
-    near pairs, and returns each key's class, numbered where the class first
-    occurs in the bands' order: one `_group` over every band's keys in turn
-    numbers them so. Only the payload of the classes a band was first to see
-    is kept."""
-
-    def __init__(self, width, map_bytes):
-        self.table = _acc.IntGroups(width) if _HAVE_INT_GROUPS else _PyGroups(width)
-        self.map_bytes = map_bytes
-        self.kept = []
-        self.near = []
-        self._kept_bytes = 0
-
-    def __len__(self):
-        return len(self.table)
-
-    def add(self, keys, kept, near):
-        g0 = len(self.table)
-        ids = np.asarray(self.table.add(list(keys)), dtype=np.int64)
-        # A band's keys are distinct, so each new class is one row, and the
-        # rows of the new classes come in their number order.
-        new = np.flatnonzero(ids >= g0)
-        part = tuple(np.ascontiguousarray(p[new]) for p in kept)
-        self.kept.append(part)
-        self.near.append(near)
-        self._kept_bytes += _nbytes(part) + near.nbytes
-        return ids
-
-    def held(self):
-        """The bytes the census holds, beside the bands in flight."""
-        return self.map_bytes + int(self.table.nbytes()) + self._kept_bytes
-
-    def floor(self):
-        """The least the plan's fill can hold (`PLAN_FLOOR_BYTES_PER_CLASS`)."""
-        return self.map_bytes + PLAN_FLOOR_BYTES_PER_CLASS * len(self)
-
-    def joined(self, j):
-        """Payload column j over every class, in class order."""
-        return np.concatenate([p[j] for p in self.kept])
-
-    def near_flat(self):
-        return np.concatenate(self.near) if self.near else np.zeros(0, np.int64)
-
-    def release(self):
-        """Drop the payload once the plan holds its joined copies."""
-        self.kept.clear()
-        self.near.clear()
+def _as_plan(handle, ground):
+    """`Plan` / `GroundPlan` over a C++ plan's arrays."""
+    if handle is None:
+        return OVER_BUDGET
+    common = dict(
+        cls=handle.cls,
+        near_flat=handle.near_flat,
+        near_blocks=handle.near_blocks,
+        rep_code=handle.rep_code,
+        code_bits=handle.code_bits,
+        census_peak_bytes=handle.census_peak_bytes,
+        handle=handle,
+    )
+    if ground:
+        return GroundPlan(rep_flat=handle.rep, rep_blocks=handle.rep_blocks, **common)
+    return Plan(
+        rep_src=handle.rep,
+        src_c=handle.src_c,
+        src_t=handle.src_t,
+        runs=handle.runs,
+        **common,
+    )
 
 
-def _band_rows(rows, M, N, budget, per_pair):
-    """Observer rows per census band: `rows` (the swept budget's) shared out
-    over the pool, none so small that its per-band cost shows, and under a
-    byte budget at most `BAND_SHARE` of it over a pool's worth of bands."""
-    workers = _workers()
-    rows = max(1, int(rows) // workers)
-    # Enough bands to share out, none so small that its per-band cost shows.
-    rows = min(rows, max(16, -(-M // (4 * workers))))
-    if budget is not None and per_pair > 0:
-        rows = min(rows, max(1, int(BAND_SHARE * budget) // (workers * N * per_pair)))
-    return rows
-
-
-def _trim_census():
-    # The table's pages and the bands' (freed in the pool's arenas) go back
-    # before the plan is built beside the map: freed, they still count in
-    # the process's resident set.
-    from .razor import _trim_heap
-
-    _trim_heap()
-
-
-def _census_bands(band, starts, census, fold, budget, band_bytes):
-    """`band(start)` over `starts` on the pool, each result handed to
-    `fold(i, result)` in band order, which folds it into `census` (a
-    `_Fold`). Returns the most the census held (`_Fold.held` and
-    `band_bytes` per band started and not yet folded), or None once that or
-    the plan's floor passes `budget` bytes; a band starts only where it fits.
-    `budget` None runs a pool's worth at once throughout."""
-    n = len(starts)
-    workers = _workers()
-    peak = 0
-    pending = collections.deque()
-    nxt = 0
-
-    def fits(k):
-        return budget is None or census.held() + band_bytes * k <= budget
-
-    try:
-        for i in range(n):
-            while nxt < n and len(pending) < workers and fits(len(pending) + 1):
-                if workers == 1:
-                    pending.append(band(starts[nxt]))
-                else:
-                    pending.append(_pool().submit(band, starts[nxt]))
-                nxt += 1
-            if not pending:  # not one band fits beside what is held
-                return None
-            peak = max(peak, census.held() + band_bytes * len(pending))
-            r = pending.popleft()
-            fold(i, r if workers == 1 else r.result())
-            del r
-            peak = max(peak, census.held() + band_bytes * len(pending))
-            if budget is not None and max(peak, census.floor()) > budget:
-                return None
-        return peak
-    finally:
-        # A census stopped early: the bands not started never run, and those
-        # running finish before the map they write is dropped.
-        if workers > 1:
-            for p in pending:
-                p.cancel()
-            for p in pending:
-                if not p.cancelled():
-                    p.exception()
+def _census(
+    ground,
+    obs_c,
+    obs_t,
+    src_c,
+    src_t,
+    seg_h,
+    a_obs,
+    src_type,
+    obs_type,
+    rows,
+    src_rev,
+    obs_rev,
+    ground_z,
+    budget,
+    shared,
+):
+    f64 = functools.partial(np.ascontiguousarray, dtype=np.float64)
+    i64 = functools.partial(np.ascontiguousarray, dtype=np.int64)
+    if not CANONICAL:
+        src_rev = obs_rev = None
+    handle, built = _acc.sin_pair_reuse_plan(
+        f64(obs_c), f64(obs_t), f64(src_c), f64(src_t), f64(seg_h), f64(a_obs),
+        i64(src_type), i64(obs_type), int(rows),
+        src_rev=None if src_rev is None else i64(src_rev),
+        budget=budget,
+        workers=_workers(),
+        ground_z=None if not ground else float(ground_z),
+        obs_rev=None if obs_rev is None else i64(obs_rev),
+        band_bytes=GROUND_BAND_BYTES_PER_PAIR if ground else BAND_BYTES_PER_PAIR,
+        shared=shared,
+    )  # fmt: skip
+    return _as_plan(handle, ground), built
 
 
 def build_plan(
@@ -1044,8 +642,9 @@ def build_plan(
     src_rev=None,
     budget=None,
 ):
-    """The class map over every (observer, source) pair, found in observer
-    bands whose transients together hold `rows` rows (O(rows * N_src)).
+    """The class map over every (observer, source) pair (`Plan`), the C++
+    census's, uncached, found in observer bands whose transients together
+    hold `rows` rows.
 
     With `src_rev` (each source's type reversed, `reversible_segment_types`)
     and `CANONICAL`, the pairs are keyed in their canonical orientation and
@@ -1054,142 +653,73 @@ def build_plan(
     With `budget` (bytes), returns `OVER_BUDGET` where the census or the
     plan's fill would pass it (momwire#2019); the map is counted before it is
     allocated."""
-    obs_c = np.asarray(obs_c, dtype=np.float64)
-    obs_t = np.asarray(obs_t, dtype=np.float64)
-    src_c = np.asarray(src_c, dtype=np.float64)
-    src_t = np.asarray(src_t, dtype=np.float64)
-    a_obs = np.asarray(a_obs, dtype=np.float64)
-    H = 0.5 * np.asarray(seg_h, dtype=np.float64)
-    M, N = obs_c.shape[0], src_c.shape[0]
-    n_obs_types = int(obs_type.max()) + 1
-    coded = src_rev is not None and CANONICAL and M * N <= CODED_PAIRS
-    ds = None
-    if coded:
-        ds = (np.asarray(src_rev, np.int64) - src_type) * n_obs_types
-        if not ds.any():
-            ds = None
-    if budget is not None and 4 * M * N > budget:
-        return OVER_BUDGET
-    cls = np.empty((M, N), dtype=np.int32)
-    rows = _band_rows(rows, M, N, budget, BAND_BYTES_PER_PAIR)
-    starts = list(range(0, M, rows))
-
-    def band(i0):
-        i1 = min(M, i0 + rows)
-        z, rho, td, rdt = pair_scalars(obs_c[i0:i1], obs_t[i0:i1], src_c, src_t)
-        type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
-        cols, near = _band_keys(z, rho, td, rdt, H, a_obs[i0:i1], type_id, True)
-        del type_id
-        # (e, z, rho, rdt, td): z odd under the source's reversal, rdt under
-        # the observer's, td under either.
-        code = _canonical_codes(cols, 1, 3, 4, near, N, ds=ds) if coded else None
-        near = (
-            np.zeros(0, np.int64)
-            if near is None
-            else np.flatnonzero(near).astype(np.int64) + i0 * N
-        )
-        first, inv = _group(cols)
-        if coded:
-            cls[i0:i1] = _coded_band(inv, code).reshape(i1 - i0, N)
-            rep_code = code[first]
-        else:
-            cls[i0:i1] = inv.reshape(i1 - i0, N)
-            rep_code = np.zeros(first.size, np.int8)
-        del z, rho, td, rdt
-        keys = [c[first] for c in cols]
-        r_first, n_first = np.divmod(first, N)
-        return keys, r_first + i0, n_first, near, rep_code
-
-    census = _Fold(5, cls.nbytes)
-
-    def fold(i, result):
-        # The band's classes numbered as the deck's (`_Fold`), in its rows of
-        # the map, codes kept.
-        keys, r_first, n_first, near, rep_code = result
-        i0 = starts[i]
-        kept = (r_first.astype(np.int32), n_first.astype(np.int32), rep_code)
-        ids = census.add(keys, kept, near)
-        cls[i0 : i0 + rows] = _renumber(cls[i0 : i0 + rows], ids, coded)
-
-    band_bytes = BAND_BYTES_PER_PAIR * rows * N
-    census_peak = _census_bands(band, starts, census, fold, budget, band_bytes)
-    if census_peak is None:
-        return OVER_BUDGET
-    census.table = None
-    _trim_census()
-    # Classes renumbered so those sharing an observer radius are contiguous
-    # (stable within a radius): `evaluate` then runs on slices. A class's
-    # members and value are unchanged; only its number moves.
-    rep_obs = census.joined(0).astype(np.int64)
-    perm = np.argsort(obs_type[rep_obs], kind="stable")
-    if not np.array_equal(perm, np.arange(perm.size)):
-        renumber = np.empty(perm.size, dtype=np.int64)
-        renumber[perm] = np.arange(perm.size, dtype=np.int64)
-        for i0 in starts:
-            cls[i0 : i0 + rows] = _renumber(cls[i0 : i0 + rows], renumber, coded)
-        del renumber
-    rep_obs = rep_obs[perm]
-    rep_src = census.joined(1)[perm].astype(np.int64)
-    rep_code = census.joined(2)[perm]
-    near_flat = census.near_flat()  # sorted: bands in order
-    census.release()
-    del perm
-    # Each representative's (rho, z, rdt, td), the bits its band computed
-    # (`rep_scalars`), placed in the observer frame.
-    n_cls = rep_src.size
-    can_c = np.empty((n_cls, 3))
-    can_t = np.empty((n_cls, 3))
-    for c0 in range(0, n_cls, _CANON_CHUNK):  # bounded transients
-        c1 = min(n_cls, c0 + _CANON_CHUNK)
-        z, rho, td, rdt = rep_scalars(
-            obs_c, obs_t, src_c, src_t, rep_obs[c0:c1], rep_src[c0:c1]
-        )
-        canon = np.stack([rho, z, rdt, td], axis=1)
-        can_c[c0:c1], can_t[c0:c1] = canonical_sources(canon)
-    otype = obs_type[rep_obs]
-    cuts = np.flatnonzero(np.diff(otype)) + 1
-    edges = [0, *cuts.tolist(), int(otype.size)]
-    runs = [
-        (c0, c1, int(rep_obs[c0])) for c0, c1 in zip(edges[:-1], edges[1:]) if c1 > c0
-    ]
-    plan = Plan(
-        cls=cls,
-        rep_src=rep_src,
-        near_flat=near_flat,
-        near_blocks=near_blocks(near_flat, N, a_obs),
-        src_c=can_c,
-        src_t=can_t,
-        runs=runs,
-        rep_code=rep_code if coded else None,
-        code_bits=CODE_BITS if coded else 0,
-        census_peak_bytes=census_peak,
-    )
-    return _within_budget(plan, budget)
+    return _census(
+        False, obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows,
+        src_rev, None, None, budget, False,
+    )[0]  # fmt: skip
 
 
-def near_blocks(near_flat, n_src, a_obs, rows=None):
-    """The direct kernel calls that evaluate the near pairs: per run of up to
-    NEAR_ROWS observer rows of one radius, the union of their near sources,
-    and where each near pair sits in that call's (rows, sources) block."""
-    rows = NEAR_ROWS if rows is None else rows
-    m_all, n_all = np.divmod(near_flat, n_src)
-    out = []
-    if near_flat.size == 0:
-        return out
-    # Cut at every NEAR_ROWS boundary and at every change of observer radius.
-    cut = np.flatnonzero(np.diff(a_obs)) + 1
-    edges = np.union1d(np.arange(0, a_obs.shape[0] + 1, rows), cut)
-    edges = np.union1d(edges, [a_obs.shape[0]])
-    lo = np.searchsorted(m_all, edges[:-1], side="left")
-    hi = np.searchsorted(m_all, edges[1:], side="left")
-    for m0, m1, p0, p1 in zip(edges[:-1], edges[1:], lo, hi):
-        if p1 == p0:
-            continue
-        ns, col = np.unique(n_all[p0:p1], return_inverse=True)
-        out.append(
-            (int(m0), int(m1), ns, m_all[p0:p1] - m0, col.reshape(-1), int(p0), int(p1))
-        )
-    return out
+def build_ground_plan(
+    obs_c,
+    obs_t,
+    src_c,
+    src_t,
+    ground_z,
+    seg_h,
+    a_obs,
+    src_type,
+    obs_type,
+    rows,
+    src_rev=None,
+    obs_rev=None,
+    budget=None,
+):
+    """The reflected term's class map (`GroundPlan`) over every (observer,
+    source) pair, the REAL sources' (the image is the evaluator's), the C++
+    census's, uncached. `src_type` / `obs_type` are
+    `reversible_ground_types`'. Classes are numbered by their
+    representative's flat index, the first pair of the class, so the
+    representatives are row runs for the evaluation's calls. With `src_rev`
+    / `obs_rev` and `CANONICAL`, the pairs are keyed in their canonical
+    orientation; `budget` is `build_plan`'s."""
+    return _census(
+        True, obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type, obs_type, rows,
+        src_rev, obs_rev, ground_z, budget, False,
+    )[0]  # fmt: skip
+
+
+def shared(
+    block,
+    obs_c,
+    obs_t,
+    src_c,
+    src_t,
+    seg_h,
+    a_obs,
+    src_type,
+    obs_type,
+    rows,
+    src_rev=None,
+    obs_rev=None,
+    ground_z=None,
+    budget=None,
+):
+    """`build_plan` (`block` "direct" or "image") or `build_ground_plan`
+    ("reflected") through the process's plan cache: (plan or OVER_BUDGET,
+    whether a census ran).
+
+    A plan holds no k, and its key is every array the census reads, so it
+    outlives the solver that found it: the portal builds one solver per
+    frequency and a design server one per knob turn back to a value, and
+    each would pay the census again with a per-instance cache (momwire#1916
+    part C). Plans are never written once built, so solvers share one. Least
+    recently used first out past `SHARED_PLAN_BYTES`, the newest kept
+    whatever its size; a declined census is kept too, so that a sweep does
+    not repeat it per frequency."""
+    return _census(
+        block == "reflected", obs_c, obs_t, src_c, src_t, seg_h, a_obs, src_type,
+        obs_type, rows, src_rev, obs_rev, ground_z, budget, True,
+    )  # fmt: skip
 
 
 def evaluate_near(plan, direct):
@@ -1214,196 +744,6 @@ def evaluate_pairs(n, blocks, direct):
     return out
 
 
-def ground_pair_scalars(obs_c, obs_t, src_c, src_t, ground_z):
-    """What the reflected term reads of every (observer, source) pair, (R, N)
-    each: the height sum hs, the horizontal separation |d|, d.a, d.b and
-    a.b (module docstring); then the observer's axial and radial
-    coordinates in the IMAGE segment's frame, the scale and the near test."""
-    dx = obs_c[:, None, 0] - src_c[None, :, 0]
-    dy = obs_c[:, None, 1] - src_c[None, :, 1]
-    hs = (obs_c[:, None, 2] - ground_z) + (src_c[None, :, 2] - ground_z)
-    ax, ay, az = src_t[None, :, 0], src_t[None, :, 1], src_t[None, :, 2]
-    bx, by = obs_t[:, None, 0], obs_t[:, None, 1]
-    dn = np.hypot(dx, dy)
-    da = dx * ax + dy * ay
-    db = dx * bx + dy * by
-    del dx, dy
-    ab = bx * ax + by * ay
-    # The image segment's tangent is (a, -t_nz) and the observer sits at
-    # (d, hs) from its centre. rho by difference is inaccurate only near the
-    # image axis within its span, a near pair.
-    zi = da - hs * az
-    rho = dn * dn
-    rho += hs * hs
-    rho -= zi * zi
-    np.maximum(rho, 0.0, out=rho)
-    np.sqrt(rho, out=rho)
-    return hs, dn, da, db, ab, zi, rho
-
-
-def _ground_band_keys(scalars, H, a_obs, type_id):
-    """`_band_keys` for the reflected term: the quantised columns of one
-    band (int64, (R*N,) each) and the near mask, from `ground_pair_scalars`.
-
-    The step is 2^-KEY_BITS of the pair's distance to the image SEGMENT,
-    rounded down to a power of two; a near pair (`NEAR_LENGTHS` against the
-    image segment, the test the PEC image's plan applies) takes the
-    sentinel key and its value from the direct evaluator."""
-    hs, dn, da, db, ab, zi, rho = scalars
-    az = np.abs(zi)
-    near = (
-        (np.maximum(az, rho) < NEAR_LENGTHS * _near_scale(H, a_obs)).reshape(-1)
-        if NEAR_LENGTHS > 0
-        else None
-    )
-    az -= H[None, :]
-    scale = np.maximum(az, rho, out=az)
-    np.maximum(scale, a_obs[:, None], out=scale)
-    e = (scale.view(np.int64) >> 52) - 1022
-    del scale, az
-    step_inv = ((1023 + KEY_BITS - e) << 52).view(np.float64)
-    lengths = [np.rint(x * step_inv).astype(np.int64) for x in (hs, dn, da, db)]
-    del step_inv
-    e += 1 << 11
-    e <<= 40
-    e += type_id
-    cols = [c.reshape(-1) for c in (e, *lengths, _quantise_unit(ab))]
-    if near is not None and near.any():
-        idx = np.flatnonzero(near)
-        cols[0][idx] = _NEAR_SENTINEL
-        for c in cols[1:]:
-            c[idx] = 0
-    return cols, near
-
-
-def build_ground_plan(
-    obs_c,
-    obs_t,
-    src_c,
-    src_t,
-    ground_z,
-    seg_h,
-    a_obs,
-    src_type,
-    obs_type,
-    rows,
-    src_rev=None,
-    obs_rev=None,
-    budget=None,
-):
-    """The reflected term's class map (`GroundPlan`) over every (observer,
-    source) pair, the REAL sources' (the image is the evaluator's), found in
-    bands of `rows` rows like `build_plan`'s. `src_type` / `obs_type` are
-    `ground_segment_types`'. Classes are numbered by their representative's
-    flat index, the first pair of the class in the bands' order, so the
-    representatives are row runs for `near_blocks`.
-
-    With `src_rev` / `obs_rev` (`reversible_ground_types`) and `CANONICAL`,
-    the pairs are keyed in their canonical orientation, as `build_plan`'s:
-    d.a is odd under the source's reversal, d.b under the observer's, a.b
-    under either, and the types carry t_nz, t_mz and the end codes. `budget`
-    is `build_plan`'s."""
-    obs_c = np.asarray(obs_c, dtype=np.float64)
-    obs_t = np.asarray(obs_t, dtype=np.float64)
-    src_c = np.asarray(src_c, dtype=np.float64)
-    src_t = np.asarray(src_t, dtype=np.float64)
-    a_obs = np.asarray(a_obs, dtype=np.float64)
-    H = 0.5 * np.asarray(seg_h, dtype=np.float64)
-    M, N = obs_c.shape[0], src_c.shape[0]
-    coded = (
-        src_rev is not None
-        and obs_rev is not None
-        and CANONICAL
-        and M * N <= CODED_PAIRS
-    )
-    n_obs_types = int(obs_type.max()) + 1
-    ds = do = None
-    if coded:
-        n_obs_types = max(n_obs_types, int(np.max(obs_rev)) + 1)
-        ds = (np.asarray(src_rev, np.int64) - src_type) * n_obs_types
-        do = np.asarray(obs_rev, np.int64) - obs_type
-        ds = ds if ds.any() else None
-        do = do if do.any() else None
-    if budget is not None and 4 * M * N > budget:
-        return OVER_BUDGET
-    cls = np.empty((M, N), dtype=np.int32)
-    rows = _band_rows(rows, M, N, budget, GROUND_BAND_BYTES_PER_PAIR)
-    starts = list(range(0, M, rows))
-
-    def band(i0):
-        i1 = min(M, i0 + rows)
-        scalars = ground_pair_scalars(
-            obs_c[i0:i1], obs_t[i0:i1], src_c, src_t, ground_z
-        )
-        type_id = src_type[None, :] * n_obs_types + obs_type[i0:i1, None]
-        cols, near = _ground_band_keys(scalars, H, a_obs[i0:i1], type_id)
-        del scalars, type_id
-        # (e, hs, |d|, d.a, d.b, a.b).
-        code = None
-        if coded:
-            code = _canonical_codes(
-                cols, 3, 4, 5, near, N, ds=ds, do=None if do is None else do[i0:i1]
-            )
-        near = (
-            np.zeros(0, np.int64)
-            if near is None
-            else np.flatnonzero(near).astype(np.int64) + i0 * N
-        )
-        first, inv = _group(cols)
-        if coded:
-            cls[i0:i1] = _coded_band(inv, code).reshape(i1 - i0, N)
-            rep_code = code[first]
-        else:
-            cls[i0:i1] = inv.reshape(i1 - i0, N)
-            rep_code = np.zeros(first.size, np.int8)
-        return [c[first] for c in cols], first + i0 * N, near, rep_code
-
-    census = _Fold(6, cls.nbytes)
-
-    def fold(i, result):
-        keys, rep, near, rep_code = result
-        i0 = starts[i]
-        i1 = min(M, i0 + rows)
-        ids = census.add(keys, (rep, rep_code), near)
-        cls[i0:i1] = _renumber(cls[i0:i1], ids, coded)
-
-    band_bytes = GROUND_BAND_BYTES_PER_PAIR * rows * N
-    census_peak = _census_bands(band, starts, census, fold, budget, band_bytes)
-    if census_peak is None:
-        return OVER_BUDGET
-    census.table = None
-    _trim_census()
-    rep_flat = census.joined(0)
-    rep_code = census.joined(1)
-    # Numbered by the representative's flat index. The bands run in row
-    # order and the hash kernel numbers a class where it first occurs, so
-    # there that is already the order and the map keeps its numbers.
-    perm = np.argsort(rep_flat, kind="stable")
-    if not np.array_equal(perm, np.arange(perm.size)):
-        renumber = np.empty(perm.size, dtype=np.int64)
-        renumber[perm] = np.arange(perm.size, dtype=np.int64)
-        for i0 in starts:
-            i1 = min(M, i0 + rows)
-            cls[i0:i1] = _renumber(cls[i0:i1], renumber, coded)
-        del renumber
-    rep_flat = np.ascontiguousarray(rep_flat[perm], dtype=np.int64)
-    rep_code = rep_code[perm]
-    near_flat = census.near_flat()
-    census.release()
-    del perm
-    plan = GroundPlan(
-        cls=cls,
-        rep_flat=rep_flat,
-        rep_blocks=near_blocks(rep_flat, N, a_obs, rows=REP_ROWS),
-        near_flat=near_flat,
-        near_blocks=near_blocks(near_flat, N, a_obs),
-        rep_code=rep_code if coded else None,
-        code_bits=CODE_BITS if coded else 0,
-        census_peak_bytes=census_peak,
-    )
-    return _within_budget(plan, budget)
-
-
 def to_canonical(values, rep_code):
     """Class values, each its representative's as it stands, made the
     canonical orientation's in place: times CODE_SIGNS[rep_code] per shape,
@@ -1422,32 +762,6 @@ def evaluate_classes(plan, direct):
     `to_canonical`."""
     vals = evaluate_pairs(plan.n_classes, plan.rep_blocks, direct)
     return to_canonical(vals, plan.rep_code)
-
-
-def canonical_sources(canon):
-    """Source centres and tangents placing each class in the canonical
-    observer frame: the observer at the origin along +z.
-
-    With the source tangent u = (s, 0, td), s = sqrt(1 - td^2), the radial
-    vector is alpha p + beta q over p = (-td, 0, s) and q = (0, 1, 0), both
-    normal to u: alpha s = rdt (its projection on the observer tangent) and
-    alpha^2 + beta^2 = rho^2. The observer sits at rho_vec + z u from the
-    source's centre."""
-    rho, z, rdt, td = canon[:, 0], canon[:, 1], canon[:, 2], canon[:, 3]
-    s = np.sqrt(np.maximum(0.0, 1.0 - td * td))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        alpha = np.where(s > 0.0, rdt / s, 0.0)
-    alpha = np.clip(alpha, -rho, rho)
-    beta = np.sqrt(np.maximum(0.0, rho * rho - alpha * alpha))
-    n = canon.shape[0]
-    t = np.zeros((n, 3))
-    t[:, 0] = s
-    t[:, 2] = td
-    rv = np.empty((n, 3))  # observer minus source
-    rv[:, 0] = -alpha * td + z * s
-    rv[:, 1] = beta
-    rv[:, 2] = alpha * s + z * td
-    return -rv, t
 
 
 def evaluate(plan, call, obs_type=None):

@@ -1,5 +1,6 @@
-"""The C++ fill's `pair_reuse` (`_sin_pair_reuse_core.cpp`) against Python's
-(`_sin_pair_reuse.py`), which stays the reference.
+"""The sinusoidal `pair_reuse` plan (`_sin_pair_reuse_core.cpp`, on the
+common reuse core), which both routes run (momwire#2063 stage 2), and the C++
+fill's use of it against the Python route's.
 
 The nec42-sinusoidal executable's fill (`_sinusoidal_fill_core.cpp`) serves
 the feature when it is requested (the in-process hook here; a certification
@@ -7,16 +8,18 @@ build of the executable, `MW_EXE_CERTIFY`, in tests/test_standalone_nec42.py).
 Its reach is level 4, the drop-in, short of every executable level, so the
 shipped executables refuse it.
 
-Held, bit for bit:
-- the per-segment types (`reversible_segment_types`, `reversible_ground_types`);
+Held:
+- the per-segment types (`reversible_segment_types`, `reversible_ground_types`)
+  against numpy's spelling of them, `np.unique` over the same columns;
 - the plan, every array of it (the class map, representatives, codes, near
-  pairs and their blocks, the canonical sources and the radius runs) and
-  what the census counted (`census_peak_bytes`), for the direct block, the
-  PEC image's and a finite ground's reflected term, at several worker
-  counts, the classes numbered where they first occur in the pairs' order;
+  pairs and their blocks, the canonical sources and the radius runs), for
+  the direct block, the PEC image's and a finite ground's reflected term,
+  at any OpenMP thread count (the census's parts) and any worker count (its
+  bands), the classes numbered where they first occur in the pairs' order;
+  and what the census counted (`census_peak_bytes`) at any thread count;
 - the budget's verdicts: over a ladder of budgets around a deck's census
-  peak, its floor and its plan's fill, the C++ census declines exactly where
-  Python's does;
+  peak, its floor and its plan's fill, a deck declines from one budget down
+  and serves the same plan above it;
 - the NEC-4.2 slot's printout and its fill (Z, the port coefficients and
   Y, by row digest) with the feature requested, against the Python slot's
   with it on, on decks that serve it over free space, a PEC plane and the
@@ -25,10 +28,8 @@ Held, bit for bit:
 - every decline, with Python's reason: the NEC-4 junction kernel, a deck
   below the small-deck threshold, and a census past the budget.
 
-Bit for bit, not within the drift, because nothing here is a new numerical
-path: the key columns are numpy's arithmetic written out per element in its
-order (no contraction), the grouping is the same `IntGroups` code, and the
-values are the same kernels called on the same slices.
+Bit for bit, not within the drift: the two routes evaluate the same classes
+with the same kernels on the same slices.
 """
 
 from __future__ import annotations
@@ -159,57 +160,45 @@ def _blocks_same(py, cx, what):
             _same(x[k], y[k], f"{what}[{k}]")
 
 
-def _plan_same(py, cx, ground):
-    if py is pr.OVER_BUDGET:
-        assert cx is None
+def _plan_same(a, b, ground, peak=True):
+    if a is pr.OVER_BUDGET or b is pr.OVER_BUDGET:
+        assert a is b
         return
-    assert cx is not None
-    _same(py.cls, cx["cls"], "cls")
+    _same(a.cls, b.cls, "cls")
     _same(
-        py.rep_flat if ground else py.rep_src,
-        cx["rep_flat" if ground else "rep_src"],
-        "rep",
+        a.rep_flat if ground else a.rep_src, b.rep_flat if ground else b.rep_src, "rep"
     )
-    _same(py.rep_code, cx["rep_code"], "rep_code")
-    assert py.code_bits == cx["code_bits"]
-    _same(py.near_flat, cx["near_flat"], "near_flat")
-    _blocks_same(py.near_blocks, cx["near_blocks"], "near_blocks")
+    _same(a.rep_code, b.rep_code, "rep_code")
+    assert a.code_bits == b.code_bits
+    _same(a.near_flat, b.near_flat, "near_flat")
+    _blocks_same(a.near_blocks, b.near_blocks, "near_blocks")
     if ground:
-        _blocks_same(py.rep_blocks, cx["rep_blocks"], "rep_blocks")
+        _blocks_same(a.rep_blocks, b.rep_blocks, "rep_blocks")
     else:
-        _same(py.src_c, cx["src_c"], "src_c")
-        _same(py.src_t, cx["src_t"], "src_t")
-        assert [tuple(r) for r in py.runs] == [tuple(r) for r in cx["runs"]]
-    assert pr.fill_nbytes(py) == cx["fill_nbytes"]
-    assert py.census_peak_bytes == cx["census_peak_bytes"]
+        _same(a.src_c, b.src_c, "src_c")
+        _same(a.src_t, b.src_t, "src_t")
+        assert [tuple(r) for r in a.runs] == [tuple(r) for r in b.runs]
+    assert pr.fill_nbytes(a) == b.handle.fill_nbytes == pr.fill_nbytes(b)
+    if peak:
+        assert a.census_peak_bytes == b.census_peak_bytes
 
 
-def _both(block, g, types, gtypes, budget, workers, monkeypatch):
-    """Python's plan and the C++ one for `block` of deck inputs `g`."""
+def _plan(block, g, types, gtypes, budget, workers, monkeypatch):
+    """The plan for `block` of deck inputs `g`, at `workers` census workers."""
     monkeypatch.setattr(pr, "_workers", lambda: workers)
     src_type, obs_type, src_rev = types
     common = (g["seg_h"], g["a_seg"])
     if block == "reflected":
         gs, go, gsr, gor = gtypes
-        py = pr.build_ground_plan(
+        return pr.build_ground_plan(
             g["seg_c"], g["seg_t"], g["seg_c"], g["seg_t"], 0.0, *common, gs, go,
             g["rows"], src_rev=gsr, obs_rev=gor, budget=budget,
         )  # fmt: skip
-        cx = acc.sin_pair_reuse_plan(
-            g["seg_c"], g["seg_t"], g["seg_c"], g["seg_t"], *common, gs, go, g["rows"],
-            src_rev=gsr, budget=budget, workers=workers, ground_z=0.0, obs_rev=gor,
-        )  # fmt: skip
-        return py, cx
     sc, st = (g["seg_c"], g["seg_t"]) if block == "direct" else (g["img_c"], g["img_t"])
-    py = pr.build_plan(
+    return pr.build_plan(
         g["seg_c"], g["seg_t"], sc, st, *common, src_type, obs_type, g["rows"],
         src_rev=src_rev, budget=budget,
     )  # fmt: skip
-    cx = acc.sin_pair_reuse_plan(
-        g["seg_c"], g["seg_t"], sc, st, *common, src_type, obs_type, g["rows"],
-        src_rev=src_rev, budget=budget, workers=workers,
-    )  # fmt: skip
-    return py, cx
 
 
 def _types(g):
@@ -220,65 +209,108 @@ def _types(g):
     return py, gpy
 
 
+def _ids(*cols):
+    """numpy's dense ids for the distinct rows of per-segment columns."""
+    _, ids = np.unique(np.stack(cols, axis=1), axis=0, return_inverse=True)
+    return np.asarray(ids, dtype=np.int64).reshape(-1)
+
+
+def _numpy_types(g):
+    """`reversible_segment_types` and `reversible_ground_types` in numpy:
+    the half-length at 48 relative bits, the radius and end codes exact,
+    both orientations in one id space; then the vertical tangent component
+    at 48 absolute bits."""
+    n = g["N"]
+    m, e = np.frexp(np.concatenate([g["seg_h"]] * 2))
+    cols = [
+        e.astype(np.int64),
+        np.rint(np.ldexp(m, 48)).astype(np.int64),
+        np.concatenate([g["src_a"]] * 2).view(np.int64),
+        np.concatenate([g["ind1"], g["ind2"]]).astype(np.int64),
+        np.concatenate([g["ind2"], g["ind1"]]).astype(np.int64),
+    ]
+    src = _ids(*cols)
+    obs = _ids(g["a_seg"].view(np.int64))
+    tz = np.rint(np.concatenate([g["seg_t"][:, 2], -g["seg_t"][:, 2]]) * 2.0**48)
+    tz = tz.astype(np.int64)
+    g_src = _ids(src, tz)
+    g_obs = _ids(np.concatenate([obs, obs]), tz)
+    return (src[:n], obs, src[n:]), (g_src[:n], g_obs[:n], g_src[n:], g_obs[n:])
+
+
 @pytest.mark.parametrize("deck", list(DECKS))
-def test_the_types_are_pythons(deck):
+def test_the_types_are_numpys(deck):
     g = _inputs(_solver(*DECKS[deck]))
-    py, gpy = _types(g)
-    cx = acc.sin_pair_reuse_types(
-        g["seg_h"], g["a_seg"], g["src_a"], g["ind1"], g["ind2"]
-    )
-    gcx = acc.sin_pair_reuse_types(
-        g["seg_h"], g["a_seg"], g["src_a"], g["ind1"], g["ind2"], g["seg_t"]
-    )
+    cx, gcx = _types(g)
+    py, gpy = _numpy_types(g)
     for a, b in zip((*py, *gpy), (*cx, *gcx), strict=True):
-        _same(np.asarray(a, dtype=np.int64), b, "types")
+        _same(a, b, "types")
     # the reduced kernel's (half-length only)
-    rpy = pr.reversible_segment_types(g["seg_h"], g["a_seg"])
-    rcx = acc.sin_pair_reuse_types(g["seg_h"], g["a_seg"])
-    for a, b in zip(rpy, rcx, strict=True):
-        _same(np.asarray(a, dtype=np.int64), b, "reduced types")
+    m, e = np.frexp(g["seg_h"])
+    rpy = _ids(e.astype(np.int64), np.rint(np.ldexp(m, 48)).astype(np.int64))
+    rcx = pr.reversible_segment_types(g["seg_h"], g["a_seg"])
+    for a, b in zip((rpy, py[1], rpy), rcx, strict=True):
+        _same(a, b, "reduced types")
     # not vacuous: the end codes split the sources into types, reversal moves them
     assert np.unique(py[0]).size > 1 and np.any(py[0] != py[2])
 
 
-@pytest.mark.parametrize("workers", [1, 3, 8])
 @pytest.mark.parametrize("block", ["direct", "image", "reflected"])
 @pytest.mark.parametrize("deck", list(DECKS))
-def test_the_plan_is_pythons(deck, block, workers, monkeypatch):
+def test_the_plan_is_one_whatever_the_threads(deck, block, monkeypatch):
+    """The census hashes its pairs into one part per OpenMP thread and
+    numbers the classes by their first pair whatever the parts, and its
+    bands follow the workers: the plan is the same bytes at any of either,
+    and the census's count at any thread count."""
+    from threadpoolctl import threadpool_limits
+
     g = _inputs(_solver(*DECKS[deck]))
     types, gtypes = _types(g)
-    py, cx = _both(block, g, types, gtypes, None, workers, monkeypatch)
-    _plan_same(py, cx, block == "reflected")
+    with threadpool_limits(limits=1, user_api="openmp"):
+        one = _plan(block, g, types, gtypes, None, 3, monkeypatch)
+    for threads in (2, 5, 8):
+        with threadpool_limits(limits=threads, user_api="openmp"):
+            got = _plan(block, g, types, gtypes, None, 3, monkeypatch)
+        _plan_same(one, got, block == "reflected")
+    for workers in (1, 8):
+        got = _plan(block, g, types, gtypes, None, workers, monkeypatch)
+        _plan_same(one, got, block == "reflected", peak=False)
     # not vacuous: coded orientations, reused pairs where the deck repeats
     # (random wires repeat little: they are the orientation code's test),
     # near pairs where they lie
-    assert np.any(py.rep_code != 0)
+    assert np.any(one.rep_code != 0)
     if deck != "random wires":
-        assert py.n_classes < py.n_pairs // 2
+        assert one.n_classes < one.n_pairs // 2
     if block == "direct":
-        assert py.n_near > 0
+        assert one.n_near > 0
 
 
 @pytest.mark.parametrize("block", ["direct", "reflected"])
 @pytest.mark.parametrize("deck", ["curtain", "random wires"])
-def test_the_budget_declines_where_pythons_does(deck, block, monkeypatch):
+def test_the_budget_holds_the_plan(deck, block, monkeypatch):
     """Every budget of a ladder around the deck's own numbers: its class map
     (declined before any census), the census's peak and floor (declined on
-    the way) and the plan's fill (declined at the end), and between them."""
+    the way) and the plan's fill (declined at the end), and between them.
+    Where it serves, the plan is the one a budget that never binds finds,
+    held to that budget: its census's count and its fill within it."""
     g = _inputs(_solver(*DECKS[deck]))
     types, gtypes = _types(g)
     workers = 4
-    lifted, _ = _both(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
+    lifted = _plan(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
     cls_bytes = int(lifted.cls.nbytes)
     marks = [cls_bytes, lifted.census_peak_bytes, pr.fill_nbytes(lifted)]
     ladder = sorted({max(1, m + d) for m in marks for d in (-1, 0, 1)})
     ladder += [int(x) for x in np.linspace(cls_bytes, 2 * pr.fill_nbytes(lifted), 13)]
-    verdicts = set()
+    verdicts = []
     for budget in sorted(set(ladder)):
-        py, cx = _both(block, g, types, gtypes, budget, workers, monkeypatch)
-        _plan_same(py, cx, block == "reflected")
-        verdicts.add(py is pr.OVER_BUDGET)
-    assert verdicts == {True, False}
+        got = _plan(block, g, types, gtypes, budget, workers, monkeypatch)
+        verdicts.append(got is pr.OVER_BUDGET)
+        if got is not pr.OVER_BUDGET:
+            # the bands are cut to the budget, so the census's count moves
+            _plan_same(lifted, got, block == "reflected", peak=False)
+            assert budget >= max(got.census_peak_bytes, pr.fill_nbytes(got))
+    assert set(verdicts) == {True, False}
+    assert verdicts[0] and not verdicts[-1]
 
 
 # --- the NEC-4.2 slot's printout and fill, through the in-process hook ------
