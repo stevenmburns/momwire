@@ -506,6 +506,9 @@ class _Nec4Parser(_Nec2Parser):
     # NEC-4.2 reads past EK (`_ek`), and an EK between two LD cards keeps
     # their run there (momwire#1812), where nec2c's EK ends it.
     _ld_run_transparent = _LD_RUN_TRANSPARENT | {"EK"}
+    # NEC-2's KH (`nec2_far_approx`) is not this dialect's: KH refuses here
+    # whatever that feature says.
+    _reads_kh = False
 
     def __init__(self) -> None:
         super().__init__()
