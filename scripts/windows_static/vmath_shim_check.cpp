@@ -2,7 +2,7 @@
 // windows-static.yml (standalone/mingw_vmath_shim.cpp says what the shim is).
 //
 //   g++ -O2 -fno-tree-vectorize -fopenmp-simd -fno-math-errno -ffp-contract=off
-//       -mavx2 -mfma -DMW_VMATH_SHIM_COUNT -Isrc/momwire
+//       -mavx2 -mfma -Wa,-muse-unaligned-vector-move -DMW_VMATH_SHIM_COUNT -Isrc/momwire
 //       scripts/windows_static/vmath_shim_check.cpp standalone/mingw_vmath_shim.cpp
 //
 // 1. ABI, through a hand-written caller (`mw_abi_probe`, not gcc's): the

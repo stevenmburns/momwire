@@ -1215,7 +1215,7 @@ jobs:
             echo "::error::the shim has an aligned ymm access"; exit 1
           fi
           g++ -O2 -fno-tree-vectorize -fopenmp-simd -fno-math-errno -ffp-contract=off -mavx2 -mfma \
-            -DMW_VMATH_SHIM_COUNT -Isrc/momwire -static \
+            -Wa,-muse-unaligned-vector-move -DMW_VMATH_SHIM_COUNT -Isrc/momwire -static \
             scripts/windows_static/vmath_shim_check.cpp standalone/mingw_vmath_shim.cpp -o vmath_shim_check.exe
           rc=0
           ./vmath_shim_check.exe > vmath-shim-check.txt 2>&1 || rc=$?
