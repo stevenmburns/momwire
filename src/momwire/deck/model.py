@@ -483,6 +483,13 @@ class DeckModel:
     # either dialect.  Last for the reason :attr:`networks` gives.
     junction_rule: str = "nec2"
 
+    # The KH card's range, in wavelengths (NEC-2's interaction approximation,
+    # read only with the opt-in `nec2_far_approx` on; `momwire._nec2_far_
+    # approx`), or None when the deck sent none. `build_solver` passes it to
+    # the one family that honours the feature and refuses it for any other.
+    # Last for the reason :attr:`networks` gives.
+    interaction_range: float | None = None
+
     @property
     def environment(self) -> Environment:
         """The deck's last environment, as one value.

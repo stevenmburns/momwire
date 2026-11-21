@@ -16,6 +16,7 @@ arclengths and ports and has never heard of a tag.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
@@ -262,8 +263,17 @@ class _Nec2Parser:
     _geometry_mnemonics = _GEOMETRY_CARDS
     _refused_by_name = _REFUSED_BY_NAME
     _geometry_builders = None
+    # Whether this dialect reads KH when the opt-in `nec2_far_approx` is on
+    # (NEC-2's interaction approximation, `momwire._nec2_far_approx`). The
+    # nec4 dialect's subclass does not: its engine's KH is not NEC-2's.
+    _reads_kh = True
 
-    def __init__(self) -> None:
+    def __init__(self, nec2_far_approx: bool | None = None) -> None:
+        # `nec2_far_approx` as a caller passed it (None defers to
+        # MOMWIRE_X_NEC2_FAR_APPROX), read only at a KH card.
+        self._far_approx_request = nec2_far_approx
+        # KH's range, wavelengths (`_kh`); None while no KH was read.
+        self._kh_range: float | None = None
         self.comments: list[str] = []
         self.quiet = False
         self.reduced_field: int | None = None
@@ -471,6 +481,35 @@ class _Nec2Parser:
         self._sources.append((tag, seg, voltage))
 
     # -- EK (spec ``#ek--extended-thin-wire-kernel``) -----------------------
+
+    def _kh_served(self) -> bool:
+        """Whether KH is read rather than refused: on the nec2 dialect with
+        `nec2_far_approx` on, and off it by the same sentence as always."""
+        if not self._reads_kh:
+            return False
+        from .. import _features
+
+        return _features.enabled("nec2_far_approx", self._far_approx_request)
+
+    def _kh(self, card: Card) -> None:
+        # NEC-2's KH: the range is F1, the card's fifth field (I1-I4 are
+        # unused), in wavelengths; measured on nec2c 1.3.1, which prints it
+        # back in its frequency block (`momwire._nec2_far_approx`). The range
+        # is one per deck here, so a KH after an execute card refuses rather
+        # than moving only the later fills.
+        if self._executed:
+            raise DeckError(
+                "KH after an execute card is not supported by this engine: "
+                "give the interaction approximation's range once, before the "
+                "first execute card"
+            )
+        value = card.f(4)
+        if not (math.isfinite(value) and value >= 0.0):
+            raise DeckError(
+                f"KH's range (field 5) must be a finite, non-negative number of "
+                f"wavelengths, got {value!r}"
+            )
+        self._kh_range = float(value)
 
     def _ek(self, card: Card) -> None:
         # The test is I1 == -1 and nothing else: EK, EK 0, EK 1, EK 2 and
@@ -1153,6 +1192,7 @@ class _Nec2Parser:
             if (
                 head
                 and (message := self._refused_by_name.get(head[0].upper())) is not None
+                and not (head[0].upper() == "KH" and self._kh_served())
             ):
                 # By-name refusals fire BEFORE the tokenizer converts fields
                 # (#486): SY's fields are 4nec2 symbolic expressions, so the
@@ -1192,6 +1232,9 @@ class _Nec2Parser:
                 self.quiet = True
             if (ff := _directive(text, "FF")) is not None:
                 self.reduced_field = ff
+            return
+        if card.mnemonic == "KH" and self._kh_served():
+            self._kh(card)
             return
         if (message := self._refused_by_name.get(card.mnemonic)) is not None:
             raise DeckError(message)
@@ -1459,12 +1502,17 @@ class _Nec2Parser:
             reduced_field=self.reduced_field,
             deferred=(),
             networks=tuple(self._networks),
+            interaction_range=self._kh_range,
         )
 
 
-def parse_nec2(text: str) -> DeckModel:
-    """Parse one ``nec2`` deck body into a :class:`DeckModel`."""
-    return parsed_with_structure(_Nec2Parser(), text)[0]
+def parse_nec2(text: str, *, nec2_far_approx: bool | None = None) -> DeckModel:
+    """Parse one ``nec2`` deck body into a :class:`DeckModel`.
+
+    `nec2_far_approx` is the opt-in feature's value for this deck (None
+    defers to MOMWIRE_X_NEC2_FAR_APPROX): on, a KH card is read into
+    :attr:`DeckModel.interaction_range`; off, it is refused as always."""
+    return parsed_with_structure(_Nec2Parser(nec2_far_approx), text)[0]
 
 
 def parsed_with_structure(

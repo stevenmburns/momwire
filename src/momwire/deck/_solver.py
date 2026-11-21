@@ -1235,6 +1235,27 @@ def build_solver(
         rule = junction_rule(model)
         if rule != "nec2":
             basis_kwargs = MappingProxyType({**basis_kwargs, "junction_rule": rule})
+    if getattr(model, "interaction_range", None) is not None:
+        # A KH card, read because `nec2_far_approx` was on when the deck was
+        # parsed (`momwire._nec2_far_approx`): its range reaches the one
+        # family that honours the feature, and any other basis refuses it
+        # rather than solving without the approximation the deck asked for.
+        from .. import _features
+
+        family = getattr(solver_class, "FEATURE_SOLVER", "")
+        if not _features.honours("nec2_far_approx", family):
+            raise ValueError(
+                f"KH sets NEC-2's interaction approximation (nec2_far_approx), "
+                f"which basis {basis!r} does not serve; the sinusoidal basis "
+                f"does"
+            )
+        basis_kwargs = MappingProxyType(
+            {
+                **basis_kwargs,
+                "nec2_far_approx": True,
+                "nec2_far_approx_range": float(model.interaction_range),
+            }
+        )
 
     if model.feeds and not solver_class.capabilities.centre_feeds:
         wire, arclength, _v = model.feeds[0]
