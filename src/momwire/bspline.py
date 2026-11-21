@@ -2287,6 +2287,10 @@ class BSplineSolver(
         # What the last fill did with the hint (momwire#2020), counted where
         # the blocks were served, or None when no fill read a plan.
         self.pair_reuse_served = None
+        # What the running fill's ground terms did (momwire#2068), by family:
+        # written where the image and the Sommerfeld remainder are filled,
+        # reset at each fill's start, read by `_fill_report_end`.
+        self._fill_ground_notes = {}
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
         # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
         # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
@@ -4401,6 +4405,8 @@ class BSplineSolver(
         )
         for sl, arc, a_eff in self._near_image_edge_blocks(geom):
             J[:, :, sl, sl] = self._near_image_analytic_block(arc, a_eff, k)
+        n = int(seg_l.shape[0])
+        self._note_ground_fill("image", n * n, n * n, n * n)
         return J
 
     def _image_refl_prep(self, geom):
@@ -4903,6 +4909,8 @@ class BSplineSolver(
                     is not None
                 ):
                     return Q
+            copy_map = self._remainder_reuse_args(geom, gz)
+            counts = np.zeros(3, dtype=np.int64)
             Q = _acc.sommerfeld_remainder_bspline_Q(
                 nodes_c,
                 tang_c,
@@ -4918,10 +4926,13 @@ class BSplineSolver(
                 float(self.k),
                 *_sommerfeld.grid_cpp_args(grid),
                 int(self._cancel_flag),
-                **self._remainder_reuse_args(geom, gz),
+                **copy_map,
+                counts=counts,
             )
-            if pairs is not None and pairs[0].size:
+            n_raised = 0 if pairs is None else int(pairs[0].size)
+            if n_raised:
                 self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
+            self._note_remainder_kernel(n_seg, counts, copy_map, n_raised)
             return Q
 
         n_nodes = n_seg * q
@@ -4965,8 +4976,11 @@ class BSplineSolver(
                     Q[rows] += np.einsum(
                         "mp,pPmn,nP->mn", polys[rows, a, :], J_blk, polys[:, b, :]
                     )
-        if pairs is not None and pairs[0].size:
+        n_raised = 0 if pairs is None else int(pairs[0].size)
+        if n_raised:
             self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
+        n2 = int(n_seg) ** 2
+        self._note_ground_fill("remainder", n2, n2, n2 + n_raised)
         return Q
 
     def _Z_sommerfeld_remainder_into(self, T, sign, geom, supp_seg, polys, eps_t):
@@ -5025,6 +5039,8 @@ class BSplineSolver(
             np.int64
         )
         side = np.zeros(E.size, dtype=np.complex128)
+        copy_map = self._remainder_reuse_args(geom, gz)
+        counts = np.zeros(3, dtype=np.int64)
         _acc.sommerfeld_remainder_bspline_Q_into(
             np.ascontiguousarray(nodes, dtype=np.float64),
             np.ascontiguousarray(tang, dtype=np.float64),
@@ -5040,7 +5056,11 @@ class BSplineSolver(
             np.ascontiguousarray(ex_col, dtype=np.int64),
             side,
             int(self._cancel_flag),
-            **self._remainder_reuse_args(geom, gz),
+            **copy_map,
+            counts=counts,
+        )
+        self._note_remainder_kernel(
+            n_seg, counts, copy_map, int(pairs[0].size) if raised else 0
         )
         if raised:
             self._remainder_pair_correction(
@@ -5547,7 +5567,84 @@ class BSplineSolver(
         return out
 
     def _fill_report_begin(self):
+        self._fill_ground_notes = {}
         return self.__dict__.get("_fill_served")
+
+    def _note_ground_fill(
+        self, name, pairs, computed, kernel_evals, offset=(), copy_map=None
+    ):
+        """Count one fill of a ground term, `name` "image" or "remainder",
+        for the fill report (momwire#2068). Called once per whole-mesh fill
+        of the term; a fill of chosen rows notes nothing, so its term reads
+        as uncounted.
+
+        THE PAIR CONVENTION is the direct family's: ORDERED segment pairs,
+        n_seg^2 for a whole-mesh fill, each counted once however many times
+        a kernel formed it. `computed` are the pairs whose value was formed
+        from their own geometry (a pair taken from its reciprocal by the
+        transpose counts here, as in the direct fill), so `pairs - computed`
+        were copied from another pair's value: by `copy_map` (the remainder's
+        pair-reuse map, `_remainder_reuse_map`) or by offset along an edge
+        (`offset`, ``[(start, n)]``: n^2 pairs from 2n - 1 distinct values,
+        as the direct family counts an offset edge). `kernel_evals` is what
+        the kernel was called on, which exceeds `computed` where pairs are
+        formed twice (a segment in two tiles' support halos, the copy
+        cache's own fill, #1189's raised pairs)."""
+        notes = self.__dict__.setdefault("_fill_ground_notes", {})
+        note = notes.setdefault(
+            name,
+            {"pairs": 0, "computed": 0, "kernel_evals": 0, "offset": [], "maps": []},
+        )
+        note["pairs"] += int(pairs)
+        note["computed"] += int(computed)
+        note["kernel_evals"] += int(kernel_evals)
+        note["offset"].extend((int(a), int(n)) for a, n in offset)
+        if copy_map is not None:
+            note["maps"].append(copy_map)
+
+    @staticmethod
+    def _copy_map_blocks(copy_map):
+        """The target edge pairs `copy_map` copies and their segment counts:
+        ``(ta, tb, n_ta, n_tb)``."""
+        seg0 = np.asarray(copy_map["reuse_edge_seg0"], dtype=np.int64)
+        nseg = np.diff(seg0)
+        ta, tb = np.nonzero(np.asarray(copy_map["reuse_src"]) >= 0)
+        return ta, tb, nseg[ta], nseg[tb]
+
+    @staticmethod
+    def _offset_saved(offset):
+        """Pairs an offset fill copies: n^2 - (2n - 1) per edge."""
+        return sum(n * n - (2 * n - 1) for _start, n in offset)
+
+    def _note_remainder_kernel(self, n_seg, counts, copy_map, n_raised):
+        """Note the fused kernel's whole-mesh remainder (momwire#2068) from
+        the counts it returned (`RemainderCounts`: walked, copied, cached).
+
+        The copied pairs are read off the map, not off the kernel's `copied`:
+        the kernel counts a pair each time its tile walk forms it, and a
+        segment in two tiles' halos is walked twice. The map is the set of
+        pairs copied, once each, whenever the kernel used it, which it did
+        exactly when it filled its cache (`cached` > 0); a map it did not use
+        (the cache over its budget) copied nothing."""
+        walked, copied, cached = (int(c) for c in counts)
+        pairs = int(n_seg) ** 2
+        used = copy_map if copy_map and cached > 0 else None
+        reused = 0
+        if used is not None:
+            _ta, _tb, na, nb = self._copy_map_blocks(used)
+            reused = int(np.sum(na * nb))
+        if copy_map and used is None:
+            self.__dict__.setdefault("_fill_ground_notes", {})[
+                "remainder_map_unused"
+            ] = True
+        evals = (walked - copied + cached) if walked else pairs - reused
+        self._note_ground_fill(
+            "remainder",
+            pairs,
+            pairs - reused,
+            evals + int(n_raised),
+            copy_map=used,
+        )
 
     def _fill_report_end(self, ledger):
         """What the fill that just ended served of `pair_reuse` (momwire#2016).
@@ -5590,16 +5687,27 @@ class BSplineSolver(
             left_out.append(
                 f"{self.pair_reuse_remainder_cut} block(s) left the remainder's copy map"
             )
+        # The ground terms (momwire#2068): each its own family, counted where
+        # it was filled (`_note_ground_fill`); a term this ground has that no
+        # whole-mesh fill noted is listed, not guessed.
+        families = {"direct": _fill_report.family(pairs, computed, 0, computed)}
         uncounted = []
-        if self.ground_z is not None:
-            uncounted.append("image")
-            if self.ground_eps is not None:
-                uncounted.append("remainder")
+        notes = self.__dict__.get("_fill_ground_notes", {})
+        for name in self._ground_families():
+            note = notes.get(name)
+            if note is None:
+                uncounted.append(name)
+                continue
+            families[name] = _fill_report.family(
+                note["pairs"], note["computed"], 0, note["kernel_evals"]
+            )
+        if notes.get("remainder_map_unused"):
+            left_out.append("the remainder's copy map did not fit the kernel's cache")
         plan = detail["plan"]() if detail["plan"] is not None else None
         ledger.reuse = _fill_report.reuse_entry(
             "partial" if left_out else "served",
             declined="; ".join(left_out) or None,
-            families={"direct": _fill_report.family(pairs, computed, 0, computed)},
+            families=families,
             uncounted=uncounted,
             plan_bytes=(
                 0
@@ -5607,7 +5715,20 @@ class BSplineSolver(
                 else sum(a.nbytes for a in (plan.ta, plan.tb, plan.sa, plan.sb))
             ),
         )
-        ledger.last = detail
+        ledger.last = {
+            **detail,
+            "ground": {n: notes[n] for n in families if n in notes},
+        }
+
+    def _ground_families(self):
+        """The ground terms this solver's fill adds to the direct one: the
+        image over any ground, and the Sommerfeld remainder over a finite
+        one modelled by it."""
+        if self.ground_z is None:
+            return ()
+        if self.ground_eps is not None and self.ground_model == "sommerfeld":
+            return ("image", "remainder")
+        return ("image",)
 
     def _fill_report_wires(self, ledger):
         """The last fill's copied blocks and offset edges, per wire pair, from
@@ -5640,6 +5761,22 @@ class BSplineSolver(
             reused[w, w] += n * n - (0 if shared else 2 * n - 1)
         pairs = np.outer(sizes, sizes)
         counts = np.stack([pairs - reused, reused, np.zeros_like(reused)], axis=2)
+        # The ground families (momwire#2068), from what their fills noted.
+        for name, note in detail.get("ground", {}).items():
+            if note["pairs"] != int(pairs.sum()):
+                return {"unavailable": f"the {name} term was not one whole-mesh fill"}
+            g_reused = np.zeros((n_wires, n_wires), dtype=np.int64)
+            for start, n in note["offset"]:
+                w = int(np.searchsorted(seg_off, start, side="right") - 1)
+                g_reused[w, w] += n * n - (2 * n - 1)
+            for copy_map in note["maps"]:
+                seg0 = np.asarray(copy_map["reuse_edge_seg0"], dtype=np.int64)
+                edge_wire = np.searchsorted(seg_off, seg0[:-1], side="right") - 1
+                ta, tb, na, nb = self._copy_map_blocks(copy_map)
+                np.add.at(g_reused, (edge_wire[ta], edge_wire[tb]), na * nb)
+            counts += np.stack(
+                [pairs - g_reused, g_reused, np.zeros_like(g_reused)], axis=2
+            )
         dedup = self._wire_dedup
         labels = _fill_report.wire_labels(
             n_wires, None if dedup is None else dedup.kept
@@ -6292,6 +6429,13 @@ class BSplineSolver(
             )
             ex_row, ex_col = np.divmod(E, nb)
             T[ex_row, ex_col] += sign * side
+        spans = [(sl.start, sl.stop - sl.start) for sl, _kind in edges]
+        n2 = int(n_seg) ** 2
+        computed = n2 - self._offset_saved(spans)
+        n_raised = 0 if pairs is None else int(pairs[0].size)
+        self._note_ground_fill(
+            "remainder", n2, computed, computed + n_raised, offset=spans
+        )
         return T
 
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
@@ -7590,6 +7734,11 @@ class BSplineSolver(
                     Z, sl, kind, _image_moments, weights_fn, supp_c, polys_c
                 )
             IMAGE_OFFSET_EDGES += len(offset)
+        if restrict is None:
+            spans = [(sl.start, sl.stop - sl.start) for sl, _kind in offset.values()]
+            n2 = int(n_segs) ** 2
+            computed = n2 - self._offset_saved(spans)
+            self._note_ground_fill("image", n2, computed, computed, offset=spans)
 
         # Near-image fixup (momwire#631), the image-side twin of the
         # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep
