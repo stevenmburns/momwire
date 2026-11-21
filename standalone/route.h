@@ -64,6 +64,17 @@ void reuse_plans(long long &built, long long &declined, long long &found);
 // "served", the reason it declined, or "" (not asked, or another route's).
 std::string reuse_outcome();
 
+// The NEC-2 portal (momwire#2065; route_sin.cpp, MW_ROUTE_NEC2 only): one
+// deck body's frame as `render_deck(body)` writes it (`_nec2_printout_core.h`),
+// UTF-8 lines with no banner and no NX echo, and its stderr lines. False:
+// declined, `reason` says why; `failed` as for `answer`. `end_cap`: the
+// `nec2_end_cap` mode (0 off, 1 asked for, 2 the launcher's default).
+bool nec2_render(const std::string &latin1_body, int end_cap, std::vector<std::string> &out,
+                 std::vector<std::string> &err, std::string &reason, bool *failed = nullptr,
+                 std::string *failure_kind = nullptr, std::string *failure_message = nullptr);
+// The largest solve (segments) one deck body asks for, or -1.
+long long nec2_largest_solve(const std::string &latin1_body);
+
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,
             bool *failed = nullptr, std::string *failure_kind = nullptr,

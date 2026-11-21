@@ -7,6 +7,9 @@
 # -DMW_EXE_BASIS=bspline_nec42 with
 # MW_EXE_NO_PYTHON builds `momwire-nec42-bspline-standalone`, the slot's default
 # launcher `momwire-nec42` (nec42-bspline, momwire#1607 Phase C2).
+# -DMW_EXE_BASIS=nec2c_sin with MW_EXE_NO_PYTHON builds
+# `momwire-nec2c-sinusoidal-standalone`, the NEC-2 portal's
+# `momwire-nec2c-sinusoidal` (momwire#2065), Linux first.
 #
 #   cmake -S standalone -B build-exe -G Ninja \
 #         -DMW_OPENBLAS_LIB=/path/to/libmwxp.a \
@@ -61,8 +64,8 @@ option(MW_EXE_NO_PYTHON "build momwire-nec5-razor-2p-standalone, with no Python 
 # Which formulation the executable answers for (momwire#1517 Phase A): razor2p
 # (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
 # route_bs2.cpp, no-Python builds only). Both from the same cores.
-set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bspline_nec5, bspline_nec42 or sin42")
-set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bspline_nec5 bspline_nec42 sin42)
+set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p, bspline_nec5, bspline_nec42, sin42 or nec2c_sin")
+set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bspline_nec5 bspline_nec42 sin42 nec2c_sin)
 if(MW_EXE_BASIS STREQUAL "bspline_nec5")
   if(NOT MW_EXE_NO_PYTHON)
     message(FATAL_ERROR "MW_EXE_BASIS=bspline_nec5 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
@@ -72,6 +75,14 @@ elseif(MW_EXE_BASIS STREQUAL "sin42")
   # `momwire-nec42-sinusoidal` (momwire#1607 B4b): the NEC-4.2 slot, point
   # matched; the hybrid (the embedded launcher answers what the C++ route
   # declines) or, with MW_EXE_NO_PYTHON, the no-Python build
+  set(MW_ROUTE route_sin.cpp)
+elseif(MW_EXE_BASIS STREQUAL "nec2c_sin")
+  # `momwire-nec2c-sinusoidal` (momwire#2065): the NEC-2 portal, point
+  # matched, over the sinusoidal route's cores (MW_ROUTE_NEC2) and the NEC-2
+  # printout writer; no-Python only, Linux first
+  if(NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_BASIS=nec2c_sin builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
+  endif()
   set(MW_ROUTE route_sin.cpp)
 elseif(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # `momwire-nec42` (momwire#1607 Phase C2): the NEC-4.2 slot's default
@@ -84,7 +95,7 @@ elseif(MW_EXE_BASIS STREQUAL "bspline_nec42")
 elseif(MW_EXE_BASIS STREQUAL "razor2p")
   set(MW_ROUTE route.cpp)
 else()
-  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bspline_nec5, bspline_nec42 or sin42")
+  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p, bspline_nec5, bspline_nec42, sin42 or nec2c_sin")
 endif()
 # Which of the extension's two x86-64 variants the C++ core is compiled as
 # (setup.py `_VARIANTS`): avx2 (-mavx2 -mfma), or sse2, the x86-64 baseline
@@ -294,7 +305,8 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_crossing_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
-if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "sin42")
+if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "sin42"
+   OR MW_EXE_BASIS STREQUAL "nec2c_sin")
   # the transmitted family (momwire#1718 S12): the below->above table and its
   # projection, which a mixed deck's cross blocks read on every basis that
   # fills them
@@ -315,7 +327,7 @@ if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42"
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
     ${MW_SRC}/_nec5_bspline_printout_core.cpp)
 endif()
-if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
+if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "nec2c_sin")
   # the NEC-4.2 slot's reader, seam, build, printout writer and run half, and
   # the sinusoidal basis' point-matched kernels, front half, fill and answers
   # (momwire#1607 A1-B4a)
@@ -334,7 +346,11 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
 endif()
-if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42")
+if(MW_EXE_BASIS STREQUAL "nec2c_sin")
+  # the NEC-2 portal's printout writer (momwire#2065), over the run half above
+  list(APPEND MW_CORE_SOURCES ${MW_SRC}/_nec2_printout_core.cpp)
+endif()
+if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_EXE_BASIS STREQUAL "nec2c_sin")
   # the point-matched fill's opt-in staged complex rows (momwire#1849,
   # `point_cplx_staged`), which `_sinusoidal_fill_core.cpp` above calls: the
   # complex Galerkin far fill's tile, and its libmvec sweep in its own TU
@@ -394,6 +410,9 @@ target_compile_definitions(mw_core PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFI
 if(MW_EXE_BASIS STREQUAL "bspline_nec42")
   # route_bs2.cpp answers for the NEC-4.2 slot (both copies)
   set(MW_ROUTE_DEFS MW_ROUTE_NEC4=1)
+elseif(MW_EXE_BASIS STREQUAL "nec2c_sin")
+  # route_sin.cpp answers for the NEC-2 portal too (both copies)
+  set(MW_ROUTE_DEFS MW_ROUTE_NEC2=1)
 endif()
 target_compile_definitions(mw_core PRIVATE ${MW_ROUTE_DEFS})
 add_library(mw_core_serial OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
@@ -504,6 +523,21 @@ elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bspline_nec42")
     MW_EXE_BASIS_NAME="bspline"
     MW_EXE_PROGRAM="momwire-nec42"
     MW_EXE_LAUNCHER="momwire-nec42"
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}")
+elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "nec2c_sin")
+  set(MW_EXE momwire-nec2c-sinusoidal-standalone)
+  add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
+                 $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_NO_PYTHON=1
+    MW_EXE_DIALECT_NEC2=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_BASIS_NAME="sinusoidal"
+    MW_EXE_PROGRAM="momwire-nec2c-sinusoidal"
+    MW_EXE_LAUNCHER="momwire-nec2c-sinusoidal"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 elseif(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "sin42")

@@ -559,6 +559,72 @@ jobs:
           OMP_NUM_THREADS: "1"
 
 
+  # `linux-nec2c` (momwire#2065): the NEC-2 portal's
+  # `momwire-nec2c-sinusoidal` as one no-Python executable
+  # (MW_EXE_BASIS=nec2c_sin), avx2 and sse2, built on the runner against the
+  # static OpenBLAS linux-artifact cached. Not shipped yet (the tarball does
+  # not carry it), so `release-linux` does not wait on it. Gated by
+  # tests/test_standalone_nec2c.py against this environment's launcher: the
+  # 71-deck nec2c corpus on stdin, nec2c's command line and NEC-2's
+  # free-end cap, the MATRIX TIMING line's measured numbers masked.
+  linux-nec2c:
+    needs: linux-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        id: ccache
+        # Optional speed-up, not a gate (see `linux-nec42`).
+        continue-on-error: true
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          save: false
+      - name: momwire environment
+        run: |
+          pip install --upgrade pip
+          pip install "setuptools>=61.0" wheel pybind11 cmake ninja
+          pip install -e .[test] --no-build-isolation
+        env:
+          CC: ${{ steps.ccache.outcome == 'success' && 'ccache gcc' || 'gcc' }}
+          CXX: ${{ steps.ccache.outcome == 'success' && 'ccache g++' || 'g++' }}
+      - name: static OpenBLAS (linux-artifact's cache)
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/mwx-openblas-manylinux/libmwxp.a
+            ~/mwx-openblas-manylinux/libmwnp.a
+          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
+          fail-on-cache-miss: true
+      - name: build (avx2 and sse2)
+        run: |
+          OB=$HOME/mwx-openblas-manylinux
+          for v in avx2 sse2; do
+            cmake -S standalone -B build-nec2c-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_BASIS=nec2c_sin -DMW_EXE_VARIANT=$v \
+              -DMW_OPENBLAS_LIB=$OB/libmwxp.a -DMW_OPENBLAS_NUMPY_LIB=$OB/libmwnp.a
+            cmake --build build-nec2c-$v
+          done
+          ldd build-nec2c-avx2/momwire-nec2c-sinusoidal-standalone
+      - name: no-Python build against the launcher (avx2)
+        run: pytest -q -n 4 tests/test_standalone_nec2c.py -rs
+        env:
+          MOMWIRE_NEC2C_SIN_STANDALONE_EXE: ${{ github.workspace }}/build-nec2c-avx2/momwire-nec2c-sinusoidal-standalone
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: no-Python build against the launcher (sse2)
+        run: pytest -q -n 4 tests/test_standalone_nec2c.py -rs
+        env:
+          MOMWIRE_NEC2C_SIN_STANDALONE_EXE: ${{ github.workspace }}/build-nec2c-sse2/momwire-nec2c-sinusoidal-standalone
+          MOMWIRE_FORCE_VARIANT: sse2
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+
   # `linux-nec42-bs` (momwire#1607 Phase C): the NEC-4.2 slot's default
   # `momwire-nec42` (bs2) as one no-Python executable
   # (MW_EXE_BASIS=bspline_nec42), shipped in the tarball as a PREVIEW. The builds
