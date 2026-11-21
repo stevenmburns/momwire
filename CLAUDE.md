@@ -140,12 +140,22 @@ decides.
 Each `known.json` entry names the issue that will retire it. Delete the entry
 when that issue closes.
 
-**Engine names: the long form only**, dialect first as in the launchers:
-`nec5-bspline`, `nec42-bspline`, `nec5-razor-2p`, `nec42-sinusoidal`.
-- Never write `bs42`: it drops the d=2. In new text, `bs2` and `sin42` are
-  retired too.
-- The level ids, CMake targets and exe file names that still carry the old
-  names are renamed under #1831, the file names at a release.
+**Engine names** (Steve, 2026-11-21, momwire#2091):
+- A SHORT name is the basis alone and carries no dash: `bs2` (the default
+  degree-2 B-spline), `bs1`, `sg`, `razor2p`, `sinusoidal`, `pulse`,
+  `hmatrix`, `arrayblock`.
+- A LONG name is dialect, then basis: `nec5-bs2`, `nec42-bs2`,
+  `nec5-razor2p`, `nec42-sinusoidal`, `nec2c-bs2`. The dialect parts are
+  exactly `nec5`, `nec42`, `nec2c` (SimNEC identifies the dialect by those
+  substrings in an engine's path).
+- Never fold the dialect into a basis name: `bs42` and `sin42` are banned.
+- `bspline`, `bspline-d1`, `sinusoidal-galerkin` and `razor-2p` are
+  deprecated aliases (`_basis_names.BASIS_ALIASES`, plus pip-only console
+  scripts), removed no earlier than two minor releases after 0.97.0; never
+  write them in new text. `razor-nec5` is retired: refused by name.
+- Solver FAMILY names (`bspline`, `razor`, `sinusoidal_galerkin` in
+  `_features`), module and class names, and the CMake `MW_EXE_BASIS` build
+  tokens are not basis names and keep their spelling.
 
 ## Lanes: run CI's commands, not your own
 

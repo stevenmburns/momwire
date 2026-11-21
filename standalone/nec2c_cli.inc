@@ -488,7 +488,12 @@ int nec2c_main(std::vector<std::string> rest) {
                                              "bspline", "bspline-d1", "sinusoidal-galerkin"};
         bool known = false;
         for (const char *r : roster) known = known || basis == r;
-        if (known)
+        // a retired spelling is refused by name, as the launcher's
+        // `_basis_names.retired_refusal` words it (momwire#2091)
+        if (basis == "razor-nec5")
+            std::printf("basis 'razor-nec5' was renamed and is no longer accepted; use 'razor2p' "
+                        "(momwire#2091) (--basis 'razor-nec5')\n");
+        else if (known)
             std::printf("--basis %s is not this executable's: it answers the sinusoidal basis only, and the "
                         "P%cthon launcher momwire-nec2c answers the others\n",
                         py_repr(basis).c_str(), 'y');
