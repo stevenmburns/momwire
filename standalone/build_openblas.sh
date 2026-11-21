@@ -66,6 +66,17 @@
 set -euo pipefail
 W=$(realpath -m "${1:?usage: build_openblas.sh WORKDIR}")
 
+# MinGW-w64 (the UCRT64 single-file executables, momwire#2087): every aligned
+# vector move assembled as its unaligned twin, as standalone/CMakeLists.txt
+# does for momwire's own MinGW objects (#2086). Win64 keeps frames 16-byte
+# aligned, and MSYS2's gcc 16.2.0-7 emits ymm vmovapd through pointers that
+# 16.2.0-4 did not; the HASWELL C kernels would take them on a cold rebuild.
+# Linux builds are unchanged.
+EXTRA_CFLAGS=""
+case "${MSYSTEM:-}" in
+    UCRT64 | MINGW64) EXTRA_CFLAGS=" -Wa,-muse-unaligned-vector-move" ;;
+esac
+
 # numpy's: the products (MWN)
 NUMPY_OPENBLAS_VERSION=0.3.34.237.2
 NUMPY_OPENBLAS_REPORTS=0.3.34.237.2
@@ -85,7 +96,7 @@ build() {
     # the version string the wheel reports (openblas-libs stamps it on newer
     # tags, its build-openblas.sh; SciPy's tag leaves the source's own)
     sed -e "s/^VERSION = .*/VERSION = ${reports}/" -i Makefile.rule
-    CFLAGS="-fvisibility=protected -Wno-uninitialized" make -j"$(nproc)" \
+    CFLAGS="-fvisibility=protected -Wno-uninitialized${EXTRA_CFLAGS}" make -j"$(nproc)" \
         BUFFERSIZE=20 DYNAMIC_ARCH=1 QUIET_MAKE=1 USE_OPENMP=0 NUM_THREADS=64 \
         DYNAMIC_LIST="PRESCOTT NEHALEM SANDYBRIDGE HASWELL" BINARY=64 \
         TARGET=PRESCOTT NOFORTRAN=1 NO_SHARED=1 > "$W/build-$prefix.log" 2>&1

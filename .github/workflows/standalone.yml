@@ -1202,6 +1202,18 @@ jobs:
       # HARD when the shim ships: its ABI under the Microsoft x64 convention
       # and its fallback edges, on this gcc and this ucrtbase, and its object:
       # three names, no constructor, no aligned ymm access through a pointer.
+      # REPORT ONLY (momwire#2087): aligned ymm moves through a register in
+      # the OpenBLAS archives the executables link. build_openblas.sh passes
+      # the unaligned-move flag to its C kernels; whether OpenBLAS's
+      # hand-written .S kernels take CFLAGS too is what this count shows,
+      # before it becomes a gate.
+      - name: OpenBLAS archives, aligned ymm moves (report)
+        shell: msys2 {0}
+        run: |
+          for a in obw/libmwxp.a obw/libmwnp.a; do
+            n=$(objdump -d "$a" | grep -E 'vmov(apd|aps|dqa)[[:space:]].*ymm' | grep -E '\(%r' | grep -vc '(%rip)' || true)
+            echo "$a: $n aligned ymm moves through a register"
+          done
       - name: the vector-math shim's ABI, edges and object
         if: env.MW_EXE_VMATH_SHIM == 'ON'
         shell: msys2 {0}
