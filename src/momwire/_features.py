@@ -1166,6 +1166,8 @@ _BASIS_SOLVERS = {
     "sinusoidal": "sinusoidal",
     "nec42-sinusoidal": "sinusoidal",
     "sin42": "sinusoidal",
+    "nec2c-sinusoidal": "sinusoidal",
+    "nec2c_sin": "sinusoidal",
     "sinusoidal-galerkin": "sinusoidal_galerkin",
     "pulse": "",
 }

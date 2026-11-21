@@ -104,12 +104,19 @@ def test_a_promoted_feature_is_turned_off_by_the_keyword_or_the_variable(
 
 
 def test_a_promoted_feature_is_off_by_default_outside_its_reach(no_features):
-    # The nec42-sinusoidal executable's level is past reach 9: no default
-    # there, and asking still refuses (a native feature).
-    assert F.current_level("exe", basis="nec42-sinusoidal") == len(F.LEVELS)
+    # The nec42-sinusoidal executable's level (10) is past reach 9: no
+    # default there, and asking still refuses (a native feature). The
+    # nec2c-sinusoidal one (momwire#2065) is deeper still, the deepest.
+    assert F.current_level("exe", basis="nec42-sinusoidal") == F._level(
+        "exe-nec42-sinusoidal"
+    )
+    assert F.current_level("exe", basis="nec2c-sinusoidal") == len(F.LEVELS)
     f = F.FEATURES["factored_columns"]
-    assert f.default and f.reach < len(F.LEVELS) and f.kind == "native"
-    assert F.certified("factored_columns", "exe", basis="nec42-sinusoidal") is False
+    assert (
+        f.default and f.reach < F._level("exe-nec42-sinusoidal") and f.kind == "native"
+    )
+    for basis in ("nec42-sinusoidal", "nec2c-sinusoidal"):
+        assert F.certified("factored_columns", "exe", basis=basis) is False
 
 
 def test_the_env_names_follow_the_pattern():
