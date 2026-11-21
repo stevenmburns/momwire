@@ -167,6 +167,24 @@ def _exe_features():
     return {n: r for n, (r, _d) in _exe_table().items()}
 
 
+def test_a_launcher_default_exception_is_the_registrys_and_only_that():
+    """The executables' main runs a feature past its reach only where
+    `EXE_LAUNCHER_DEFAULTS` names it (momwire#2065): today NEC-2's end cap,
+    on the nec2c-sinusoidal executable alone, under its dialect's guard."""
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    body = re.search(r"bool feature_runs_here\(.*?\n\}", src, re.S)
+    assert body is not None
+    carved = set(re.findall(r'if \(name == "([a-z0-9_]+)"\) return true;', body[0]))
+    assert carved == set(F.EXE_LAUNCHER_DEFAULTS)
+    assert "#if MW_EXE_DIALECT_NEC2" in body[0]
+    ids = [lvl.id for lvl in F.LEVELS]
+    for name, level in F.EXE_LAUNCHER_DEFAULTS.items():
+        assert level in ids
+        # an exception, not a reach: the level lies past the feature's reach
+        assert ids.index(level) + 1 > F.FEATURES[name].reach
+        assert name not in _exe_table()
+
+
 def test_the_executables_defaults_are_the_registrys():
     assert {n: d for n, (_r, d) in _exe_table().items()} == {
         n: F.FEATURES[n].default for n in _exe_table()

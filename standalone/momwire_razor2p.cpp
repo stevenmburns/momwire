@@ -546,7 +546,8 @@ bool feature_runs_here(const std::string &name) {
     // NEC-2's free-end cap is the NEC-2 route's own launcher default, read
     // by the route (`nec2_end_cap_mode`, momwire#2033) as the Python
     // launcher reads it: MOMWIRE_X_NEC2_END_CAP=1 is the refusing request
-    // and =0 the uncapped answer. The NEC-2 printout carries no line 2.
+    // and =0 the uncapped answer. The NEC-2 printout carries no line 2. A
+    // named exception (Steve, 2026-11-20): `_features.EXE_LAUNCHER_DEFAULTS`.
     if (name == "nec2_end_cap") return true;
 #endif
     for (const ExeFeature &f : EXE_FEATURES)
