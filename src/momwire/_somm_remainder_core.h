@@ -26,7 +26,9 @@ namespace somm_core {
 // (tb, ta) mapped to (sb, sa) -- and throws std::invalid_argument otherwise.
 // The source blocks are filled once into a cache of at most `max_jf_bytes`
 // (0: the 64 MiB default); a map whose cache would not fit is not used.
-// `copied` reports the segment pairs served from the cache.
+// `copied` reports the TARGET segment pairs served from the cache (a source
+// pair's walk entries are read from it too, momwire#2073, and counted in
+// `RemainderCounts::copied` only).
 struct PairReuse {
     std::ptrdiff_t n_edges = 0;
     const int64_t *edge_seg0 = nullptr;  // (n_edges)
@@ -39,9 +41,11 @@ struct PairReuse {
 // What the symmetric route did, for the fill report (momwire#2068), counted
 // in ORDERED segment-pair entries: `walked` the entries the tile walk formed
 // (a segment in two tiles' support halos is walked in both, so this can pass
-// ns^2), `copied` those of them taken from the pair-reuse cache, and `cached`
-// the entries filled into that cache up front (0 when no map was used). The
-// kernel evaluated `walked - copied + cached` entries. Tallied per tile pair
+// ns^2), `copied` those of them read from the pair-reuse cache -- a target's
+// copy or, since momwire#2073, a source pair's own block, which the walk no
+// longer forms again -- and `cached` the entries filled into that cache up
+// front (0 when no map was used). The kernel evaluated
+// `walked - copied + cached` entries. Tallied per tile pair
 // and per cache block, never inside the per-pair loop.
 struct RemainderCounts {
     long long walked = 0;

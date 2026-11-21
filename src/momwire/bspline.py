@@ -5621,7 +5621,8 @@ class BSplineSolver(
         the counts it returned (`RemainderCounts`: walked, copied, cached).
 
         The copied pairs are read off the map, not off the kernel's `copied`:
-        the kernel counts a pair each time its tile walk forms it, and a
+        the kernel counts a pair each time its tile walk reads it from the
+        cache, a source pair's own block included (momwire#2073), and a
         segment in two tiles' halos is walked twice. The map is the set of
         pairs copied, once each, whenever the kernel used it, which it did
         exactly when it filled its cache (`cached` > 0); a map it did not use

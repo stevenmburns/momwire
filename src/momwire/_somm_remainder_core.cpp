@@ -304,7 +304,18 @@ static void remainder_Q_symmetric(
     // Repeated edge pairs (momwire#1809): each source block is filled once,
     // up front, by the same per-pair calls the walk makes (node_block, then
     // contract, either orientation), and the walk copies it for every target
-    // segment pair. `rep_off[s]` is source pair s's offset in the cache, its
+    // segment pair -- and for the source pair itself (momwire#2073), which
+    // before was formed a second time. That read is exact, not a copy up to
+    // rounding: the cache holds the walk's own computation of that pair. The
+    // fill may form an ordered pair from node_block's reverse half where the
+    // walk forms it from the forward half of the swapped call, and the two
+    // agree bit for bit: the reverse half's differences are formed as the
+    // forward half's would be (sx - ox), hypot ignores their signs, the
+    // height sum is one addition either way round, and proj_project gets the
+    // same arguments (the TU is built -ffp-contract=off, so no call site
+    // fuses differently). With both orders of a source pair in the cache,
+    // the walk calls node_block for no pair the map names.
+    // `rep_off[s]` is source pair s's offset in the cache, its
     // entries [(x * nseg[sb] + y) * dd + p * d1 + P] like a tile's.
     std::ptrdiff_t E = 0;
     std::vector<int64_t> rep_off;
@@ -372,20 +383,28 @@ static void remainder_Q_symmetric(
             if (pysim_aborted.load()) return;
         }
     }
-    // The cached block standing for segment pair (si, sj), or null to fill it.
-    const auto cached = [&](std::ptrdiff_t si, std::ptrdiff_t sj) -> const cd * {
+    // The cached block standing for segment pair (si, sj), or null to fill
+    // it: a target's source block, or a source pair's own. `own` says which.
+    const auto cached = [&](std::ptrdiff_t si, std::ptrdiff_t sj, bool &own) -> const cd * {
         const int32_t ei = reuse->seg_edge[si], ej = reuse->seg_edge[sj];
         if (ei < 0 || ej < 0) return nullptr;
-        const int32_t sp = reuse->src[(size_t)ei * E + ej];
-        if (sp < 0) return nullptr;
+        const size_t t = (size_t)ei * E + ej;
+        int32_t sp = reuse->src[t];
+        own = sp < 0;
+        if (own) {
+            if (rep_off[t] < 0) return nullptr;
+            sp = (int32_t)t;
+        }
         const std::ptrdiff_t sb = sp % E;
         const std::ptrdiff_t x = si - reuse->edge_seg0[ei], y = sj - reuse->edge_seg0[ej];
         return &cache[(size_t)rep_off[(size_t)sp] +
                       ((size_t)x * reuse->edge_nseg[sb] + y) * dd];
     };
-    long long copied = 0, walked = 0;
+    // `copied` the target entries the walk copied, `sourced` the source
+    // entries it read back (momwire#2073); both are cache reads.
+    long long copied = 0, sourced = 0, walked = 0;
 
-    #pragma omp parallel reduction(+ : copied, walked)
+    #pragma omp parallel reduction(+ : copied, sourced, walked)
     {
         std::vector<cd> JAB((size_t)dd * smax * smax), JBA(JAB.size());
         std::vector<cd> fw((size_t)q * q), bw((size_t)q * q), rows((size_t)d1 * q);
@@ -420,15 +439,16 @@ static void remainder_Q_symmetric(
                 for (std::ptrdiff_t y = diag ? x : 0; y < ny; ++y) {
                     const std::ptrdiff_t sj = TB.segs[(size_t)y];
                     cd *jxy = &JAB[((size_t)x * ny + y) * dd];
-                    const cd *cx = reuse ? cached(si, sj) : nullptr;
+                    bool ox = false, oy = false;
+                    const cd *cx = reuse ? cached(si, sj, ox) : nullptr;
                     const cd *cy =
-                        reuse && si != sj ? cached(sj, si) : nullptr;
+                        reuse && si != sj ? cached(sj, si, oy) : nullptr;
                     if (!cx || (si != sj && !cy))
                         somm_sym::node_block(G, ground_z, k, S, si, sj, fw.data(),
                                              bw.data());
                     if (cx) {
                         std::copy(cx, cx + dd, jxy);
-                        ++copied;
+                        ++(ox ? sourced : copied);
                     } else {
                         somm_sym::contract(S, d1, si, sj, fw.data(), rows.data(), jxy);
                     }
@@ -442,7 +462,7 @@ static void remainder_Q_symmetric(
                                    : &JBA[((size_t)y * nx + x) * dd];
                     if (cy) {
                         std::copy(cy, cy + dd, jyx);
-                        ++copied;
+                        ++(oy ? sourced : copied);
                     } else {
                         somm_sym::contract(S, d1, sj, si, bw.data(), rows.data(), jyx);
                     }
@@ -457,7 +477,7 @@ static void remainder_Q_symmetric(
     if (reuse) reuse->copied = copied;
     if (counts) {
         counts->walked = walked;
-        counts->copied = copied;
+        counts->copied = copied + sourced;
     }
 }
 
