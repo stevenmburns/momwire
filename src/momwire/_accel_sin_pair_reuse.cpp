@@ -166,10 +166,13 @@ static void reduce_band(py::array out, I32 cls, C128 rep, I64 near_idx, C128 nea
 }
 
 
-// momwire#1911 in C++ (`_sin_pair_reuse_core.h`): the census and plans the
-// C++ fill builds, for the unit gates against `_sin_pair_reuse.build_plan` /
-// `build_ground_plan` and their types.
+// momwire#1911 / #2063: the plans both routes run (`_sin_pair_reuse_core.h`),
+// for the Python route (`_sin_pair_reuse.py`) and the tests. A plan's arrays
+// are read in place: numpy views over the plan, which they keep alive.
 namespace pr = mw::sinusoidal::pair_reuse;
+namespace core = mw::pair_reuse;
+
+using Ptr = std::shared_ptr<const pr::Plan>;
 
 static py::array_t<int64_t> i64_of(const std::vector<int64_t> &v) {
     py::array_t<int64_t> a(static_cast<py::ssize_t>(v.size()));
@@ -184,44 +187,58 @@ static py::list blocks_of(const std::vector<pr::NearBlock> &bs) {
     return out;
 }
 
-static py::object plan_dict(const std::shared_ptr<const pr::Plan> &p) {
-    if (p == nullptr) return py::none();
-    py::dict d;
-    py::array_t<int32_t> cls({static_cast<py::ssize_t>(p->M), static_cast<py::ssize_t>(p->N)});
-    std::copy(p->cls.begin(), p->cls.end(), cls.mutable_data());
-    d["cls"] = cls;
-    d[p->ground ? "rep_flat" : "rep_src"] = i64_of(p->rep);
-    if (p->coded) {
-        py::array_t<int8_t> rc(static_cast<py::ssize_t>(p->rep_code.size()));
-        std::copy(p->rep_code.begin(), p->rep_code.end(), rc.mutable_data());
-        d["rep_code"] = rc;
-    } else {
-        d["rep_code"] = py::none();
+// A read-only view of `n` (or rows x cols) elements at `data`, owned by `p`.
+template <class T>
+static py::array view(const Ptr &p, const T *data, std::vector<py::ssize_t> shape, py::dtype dt) {
+    py::capsule owner(new Ptr(p), [](void *q) { delete static_cast<Ptr *>(q); });
+    std::vector<py::ssize_t> strides(shape.size());
+    py::ssize_t st = static_cast<py::ssize_t>(sizeof(T));
+    for (size_t i = shape.size(); i-- > 0;) {
+        strides[i] = st;
+        st *= shape[i];
     }
-    d["code_bits"] = p->coded ? pr::CODE_BITS : 0;
-    d["near_flat"] = i64_of(p->near_flat);
-    d["near_blocks"] = blocks_of(p->near_blocks);
-    if (p->ground) {
-        d["rep_blocks"] = blocks_of(p->rep_blocks);
-    } else {
-        const py::ssize_t n = static_cast<py::ssize_t>(p->n_classes());
-        py::array_t<double> c({n, py::ssize_t(3)}), t({n, py::ssize_t(3)});
-        std::copy(p->src_c.begin(), p->src_c.end(), c.mutable_data());
-        std::copy(p->src_t.begin(), p->src_t.end(), t.mutable_data());
-        d["src_c"] = c;
-        d["src_t"] = t;
-        py::list runs;
-        for (const pr::Run &r : p->runs) runs.append(py::make_tuple(r.c0, r.c1, r.g_obs));
-        d["runs"] = runs;
-    }
-    d["census_peak_bytes"] = p->census_peak_bytes;
-    d["fill_nbytes"] = p->fill_nbytes();
-    return d;
+    py::array a(dt, shape, strides, data, owner);
+    a.attr("flags").attr("writeable") = false;
+    return a;
 }
 
-static py::object sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t, F64 seg_h, F64 a_obs,
-                                      I64 src_type, I64 obs_type, int64_t rows, py::object src_rev,
-                                      py::object budget, int workers, py::object ground_z, py::object obs_rev) {
+struct PlanHandle {
+    Ptr plan;
+    bool built = false;
+};
+
+struct PlanRef {
+    std::weak_ptr<const pr::Plan> plan;
+};
+
+// The fill report's wire map (momwire#2016) of one plan: (W, W, 3) int64,
+// per observer wire and source wire the pairs computed, reused and near
+// (`pair_reuse::wire_map`), or None once the plan is gone.
+static py::object wire_map(const PlanRef &r, py::array_t<int32_t, py::array::c_style | py::array::forcecast> row,
+                           py::array_t<int32_t, py::array::c_style | py::array::forcecast> col, int64_t n_wires) {
+    const Ptr p = r.plan.lock();
+    if (p == nullptr) return py::none();
+    if (row.size() != p->M || col.size() != p->N || n_wires < 1)
+        throw std::invalid_argument("fill_report: one wire per row and per source");
+    for (py::ssize_t i = 0; i < row.size(); i++)
+        if (row.data()[i] < 0 || row.data()[i] >= n_wires) throw std::invalid_argument("fill_report: wire out of range");
+    for (py::ssize_t i = 0; i < col.size(); i++)
+        if (col.data()[i] < 0 || col.data()[i] >= n_wires) throw std::invalid_argument("fill_report: wire out of range");
+    const py::ssize_t W = static_cast<py::ssize_t>(n_wires);
+    py::array_t<int64_t> out({W, W, py::ssize_t(3)});
+    int64_t *o = out.mutable_data();
+    {
+        py::gil_scoped_release nogil;
+        std::fill(o, o + W * W * 3, int64_t(0));
+        core::wire_map(p->fam, row.data(), col.data(), n_wires, o);
+    }
+    return out;
+}
+
+static py::tuple sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t, F64 seg_h, F64 a_obs,
+                                     I64 src_type, I64 obs_type, int64_t rows, py::object src_rev,
+                                     py::object budget, int workers, py::object ground_z, py::object obs_rev,
+                                     int64_t band_bytes, bool shared) {
     const py::ssize_t M = obs_c.shape(0), N = src_c.shape(0);
     if (obs_c.ndim() != 2 || obs_c.shape(1) != 3 || obs_t.ndim() != 2 || obs_t.shape(0) != M ||
         src_c.ndim() != 2 || src_c.shape(1) != 3 || src_t.ndim() != 2 || src_t.shape(0) != N ||
@@ -252,14 +269,20 @@ static py::object sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t
     in.rows = rows;
     in.budget = budget.is_none() ? -1 : budget.cast<int64_t>();
     in.workers = workers > 0 ? workers : pr::workers();
+    in.band_bytes_per_pair = band_bytes;
     const bool ground = !ground_z.is_none();
     if (ground) in.ground_z = ground_z.cast<double>();
-    std::shared_ptr<const pr::Plan> p;
+    Ptr p;
+    bool built = true;
     {
         py::gil_scoped_release nogil;
-        p = ground ? pr::build_ground_plan(in) : pr::build_plan(in);
+        if (shared)
+            p = pr::shared_plan(in, ground, &built);
+        else
+            p = ground ? pr::build_ground_plan(in) : pr::build_plan(in);
     }
-    return plan_dict(p);
+    if (p == nullptr) return py::make_tuple(py::none(), built);
+    return py::make_tuple(PlanHandle{p, built}, built);
 }
 
 static py::tuple sin_pair_reuse_types(F64 seg_h, F64 a_obs, py::object src_a, py::object ind1, py::object ind2,
@@ -283,9 +306,113 @@ static py::tuple sin_pair_reuse_types(F64 seg_h, F64 a_obs, py::object src_a, py
     return py::make_tuple(i64_of(g.src), i64_of(g.obs), i64_of(g.src_rev), i64_of(g.obs_rev));
 }
 
+static py::tuple sin_pair_reuse_ground_types(I64 src_type, I64 obs_type, I64 src_rev, F64 seg_t) {
+    const py::ssize_t n = src_type.size();
+    if (obs_type.size() != n || src_rev.size() != n || seg_t.size() != 3 * n)
+        throw std::runtime_error("sin_pair_reuse_ground_types: per-segment types and (n, 3) tangents");
+    pr::Types t;
+    t.src.assign(src_type.data(), src_type.data() + n);
+    t.obs.assign(obs_type.data(), obs_type.data() + n);
+    t.src_rev.assign(src_rev.data(), src_rev.data() + n);
+    const pr::GroundTypes g = pr::reversible_ground_types(t, n, seg_t.data());
+    return py::make_tuple(i64_of(g.src), i64_of(g.obs), i64_of(g.src_rev), i64_of(g.obs_rev));
+}
+
+static py::tuple sin_pair_reuse_keys(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t, F64 seg_h, F64 a_obs,
+                                     I64 src_type, I64 obs_type, py::object ground_z, py::object src_rev,
+                                     py::object obs_rev) {
+    pr::CensusInputs in;
+    in.M = obs_c.shape(0);
+    in.N = src_c.shape(0);
+    if (obs_t.shape(0) != in.M || src_t.shape(0) != in.N || seg_h.size() != in.N || a_obs.size() != in.M ||
+        src_type.size() != in.N || obs_type.size() != in.M)
+        throw std::runtime_error("sin_pair_reuse_keys: (M, 3) observers, (N, 3) sources, per-segment columns");
+    in.obs_c = obs_c.data();
+    in.obs_t = obs_t.data();
+    in.src_c = src_c.data();
+    in.src_t = src_t.data();
+    in.seg_h = seg_h.data();
+    in.a_obs = a_obs.data();
+    in.src_type = src_type.data();
+    in.obs_type = obs_type.data();
+    I64 srev, orev;
+    if (!src_rev.is_none()) {
+        srev = src_rev.cast<I64>();
+        in.src_rev = srev.data();
+    }
+    if (!obs_rev.is_none()) {
+        orev = obs_rev.cast<I64>();
+        in.obs_rev = orev.data();
+    }
+    const bool ground = !ground_z.is_none();
+    if (ground) in.ground_z = ground_z.cast<double>();
+    std::vector<int64_t> words;
+    std::vector<int8_t> codes;
+    std::vector<uint8_t> near;
+    pr::pair_keys(in, ground, words, codes, near);
+    const py::ssize_t P = static_cast<py::ssize_t>(codes.size()), W = ground ? 6 : 5;
+    py::array_t<int64_t> w({P, W});
+    std::copy(words.begin(), words.end(), w.mutable_data());
+    py::array_t<int8_t> c(P);
+    std::copy(codes.begin(), codes.end(), c.mutable_data());
+    py::array_t<bool> nr(P);
+    for (py::ssize_t i = 0; i < P; i++) nr.mutable_data()[i] = near[static_cast<size_t>(i)] != 0;
+    return py::make_tuple(w, c, nr);
+}
+
+static py::tuple sin_pair_reuse_canonical(py::array_t<int64_t, py::array::c_style | py::array::forcecast> rows,
+                                          int ia, int ib, int it, py::object near, int64_t n_src, py::object ds,
+                                          py::object dob) {
+    if (rows.ndim() != 2 || rows.shape(1) < 1 || rows.shape(1) > 8)
+        throw std::runtime_error("sin_pair_reuse_canonical: (n, width) int64 key rows");
+    const py::ssize_t n = rows.shape(0), W = rows.shape(1);
+    for (int c : {ia, ib, it})
+        if (c < 1 || c >= W) throw std::runtime_error("sin_pair_reuse_canonical: column out of range");
+    py::array_t<int64_t> out({n, W});
+    std::copy(rows.data(), rows.data() + n * W, out.mutable_data());
+    using U8 = py::array_t<uint8_t, py::array::c_style | py::array::forcecast>;
+    U8 nm;
+    I64 d1, d2;
+    if (!near.is_none()) nm = near.cast<U8>();
+    if (!ds.is_none()) d1 = ds.cast<I64>();
+    if (!dob.is_none()) d2 = dob.cast<I64>();
+    if ((!near.is_none() && nm.size() != n) || (!ds.is_none() && d1.size() != n_src) ||
+        (!dob.is_none() && d2.size() * n_src != n) || n_src < 1 || n % n_src != 0)
+        throw std::runtime_error("sin_pair_reuse_canonical: near per row, ds per source, do per observer");
+    py::array_t<int8_t> codes(n);
+    pr::canonical_codes(out.mutable_data(), static_cast<int>(W), n, ia, ib, it, near.is_none() ? nullptr : nm.data(),
+                        n_src, ds.is_none() ? nullptr : d1.data(), dob.is_none() ? nullptr : d2.data(),
+                        codes.mutable_data());
+    return py::make_tuple(out, codes);
+}
+
+// TEST HOOK: the band budget alone over `n_bands` bands, the census holding
+// `base` + `per` bytes per band folded and its floor `floor_per` per band.
+static py::dict band_budget(int64_t n_bands, int64_t budget, int64_t band_bytes, int workers, int64_t base,
+                            int64_t per, int64_t floor_per) {
+    core::BandBudget bb(budget, band_bytes, workers, n_bands, base);
+    int64_t started = 0, folded = 0;
+    bool ok = true;
+    for (int64_t i = 0; i < n_bands && ok; i++) {
+        if (!bb.start(i)) {
+            ok = false;
+            break;
+        }
+        started++;
+        folded++;
+        ok = bb.fold(base + per * folded, floor_per * folded);
+    }
+    py::dict d;
+    d["peak"] = ok ? py::object(py::int_(bb.peak())) : py::none();
+    d["started"] = started;
+    d["folded"] = folded;
+    d["max_in_flight"] = bb.max_in_flight();
+    return d;
+}
+
 static py::dict sin_pair_reuse_stats(bool reset) {
     if (reset) pr::reset_counters();
-    const pr::Counters c = pr::counters();
+    const core::Counters c = pr::counters();
     py::dict d;
     d["built"] = c.built;
     d["declined"] = c.declined;
@@ -300,12 +427,14 @@ static py::dict sin_pair_reuse_stats(bool reset) {
 }
 
 static void sin_pair_reuse_configure(py::object budget, py::object small_free, py::object small_ground,
-                                     py::object workers, bool clear) {
+                                     py::object workers, bool clear, py::object probe, py::object cache_bytes) {
     if (!budget.is_none()) pr::set_plan_budget(budget.cast<int64_t>());
     if (!small_free.is_none() || !small_ground.is_none())
         pr::set_small_deck_segs(small_free.is_none() ? pr::small_deck_segs(false) : small_free.cast<int64_t>(),
                                 small_ground.is_none() ? pr::small_deck_segs(true) : small_ground.cast<int64_t>());
     if (!workers.is_none()) pr::set_workers(workers.cast<int>());
+    if (!probe.is_none()) pr::set_probe(probe.cast<int>());
+    if (!cache_bytes.is_none()) core::set_cache_bytes(cache_bytes.cast<int64_t>());
     if (clear) pr::clear_shared_plans();
 }
 
@@ -329,27 +458,106 @@ void register_sin_pair_reuse(py::module_ &m) {
           py::arg("data0"), py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
           py::arg("indptr2"), py::arg("indices2"), py::arg("data2"),
           py::arg("n_threads") = 0, py::arg("signs") = py::none());
+    using sin_pair_reuse::PlanHandle;
+    using sin_pair_reuse::PlanRef;
+    using sin_pair_reuse::Ptr;
+    using sin_pair_reuse::view;
+    namespace pr = mw::sinusoidal::pair_reuse;
+    py::class_<PlanRef>(m, "SinReusePlanRef", "A sinusoidal reuse plan held weakly (the fill report's).")
+        .def_property_readonly("alive", [](const PlanRef &r) { return !r.plan.expired(); },
+                               "Whether the process's cache (or a fill) still holds the plan.")
+        .def("wire_map", &sin_pair_reuse::wire_map, py::arg("wire_of_row"), py::arg("wire_of_col"),
+             py::arg("n_wires"),
+             "The (W, W, 3) int64 map of observer wire x source wire x (computed, reused, near), or None "
+             "when the plan is gone (`pair_reuse::wire_map`, momwire#2016).");
+    py::class_<PlanHandle>(m, "SinReusePlan",
+                           "A sinusoidal fill-pair reuse plan (momwire#1911, #2063): its arrays as read-only "
+                           "views that keep it alive.")
+        .def_readonly("built", &PlanHandle::built, "Whether this call's census built the plan.")
+        .def_property_readonly("ground", [](const PlanHandle &h) { return h.plan->ground; })
+        .def_property_readonly("cls", [](const PlanHandle &h) {
+            const Ptr &p = h.plan;
+            return view(p, p->cls().data(), {static_cast<py::ssize_t>(p->M), static_cast<py::ssize_t>(p->N)},
+                        py::dtype::of<int32_t>());
+        })
+        .def_property_readonly("rep", [](const PlanHandle &h) {
+            const Ptr &p = h.plan;
+            return view(p, p->rep.data(), {static_cast<py::ssize_t>(p->rep.size())}, py::dtype::of<int64_t>());
+        })
+        .def_property_readonly("rep_code", [](const PlanHandle &h) -> py::object {
+            const Ptr &p = h.plan;
+            if (!p->coded) return py::none();
+            return view(p, p->fam.rep_code.data(), {static_cast<py::ssize_t>(p->fam.rep_code.size())},
+                        py::dtype::of<int8_t>());
+        })
+        .def_property_readonly("code_bits", [](const PlanHandle &h) { return h.plan->coded ? pr::CODE_BITS : 0; })
+        .def_property_readonly("near_flat", [](const PlanHandle &h) {
+            const Ptr &p = h.plan;
+            return view(p, p->near_flat().data(), {static_cast<py::ssize_t>(p->near_flat().size())},
+                        py::dtype::of<int64_t>());
+        })
+        .def_property_readonly("near_blocks", [](const PlanHandle &h) { return sin_pair_reuse::blocks_of(h.plan->near_blocks); })
+        .def_property_readonly("rep_blocks", [](const PlanHandle &h) { return sin_pair_reuse::blocks_of(h.plan->rep_blocks); })
+        .def_property_readonly("src_c", [](const PlanHandle &h) {
+            const Ptr &p = h.plan;
+            return view(p, p->src_c.data(), {static_cast<py::ssize_t>(p->src_c.size() / 3), py::ssize_t(3)},
+                        py::dtype::of<double>());
+        })
+        .def_property_readonly("src_t", [](const PlanHandle &h) {
+            const Ptr &p = h.plan;
+            return view(p, p->src_t.data(), {static_cast<py::ssize_t>(p->src_t.size() / 3), py::ssize_t(3)},
+                        py::dtype::of<double>());
+        })
+        .def_property_readonly("runs", [](const PlanHandle &h) {
+            py::list runs;
+            for (const auto &r : h.plan->runs) runs.append(py::make_tuple(r.c0, r.c1, r.g_obs));
+            return runs;
+        })
+        .def_property_readonly("census_peak_bytes", [](const PlanHandle &h) { return h.plan->census_peak_bytes; })
+        .def_property_readonly("plan_nbytes", [](const PlanHandle &h) { return h.plan->plan_nbytes(); })
+        .def_property_readonly("fill_nbytes", [](const PlanHandle &h) { return h.plan->fill_nbytes(); })
+        .def("ref", [](const PlanHandle &h) { return PlanRef{h.plan}; }, "The plan, held weakly.");
     m.def("sin_pair_reuse_plan", &sin_pair_reuse::sin_pair_reuse_plan, py::arg("obs_c"), py::arg("obs_t"),
           py::arg("src_c"), py::arg("src_t"), py::arg("seg_h"), py::arg("a_obs"), py::arg("src_type"),
           py::arg("obs_type"), py::arg("rows"), py::arg("src_rev") = py::none(), py::arg("budget") = py::none(),
           py::arg("workers") = 0, py::arg("ground_z") = py::none(), py::arg("obs_rev") = py::none(),
-          "momwire#1911: the C++ fill's census, `_sin_pair_reuse.build_plan`'s arguments (with ground_z, "
-          "`build_ground_plan`'s): a dict of the plan's arrays, or None where Python returns OVER_BUDGET. "
-          "workers > 0 sets the census's worker count (`_workers()`).");
+          py::arg("band_bytes") = -1, py::arg("shared") = false,
+          "momwire#1911 / #2063: the sinusoidal census and plan (with ground_z, the reflected term's): "
+          "(SinReusePlan or None where it declines on the budget, whether a census ran). `shared` reads "
+          "and keeps the process's cache; workers > 0 sets the band budget's worker count, band_bytes >= 0 "
+          "its bytes per pair.");
     m.def("sin_pair_reuse_types", &sin_pair_reuse::sin_pair_reuse_types, py::arg("seg_h"), py::arg("a_obs"),
           py::arg("src_a") = py::none(), py::arg("ind1") = py::none(), py::arg("ind2") = py::none(),
           py::arg("seg_t") = py::none(),
-          "momwire#1911: `reversible_segment_types` as the C++ fill computes it; with seg_t, "
-          "`reversible_ground_types` of those.");
+          "momwire#1911: `reversible_segment_types`; with seg_t, `reversible_ground_types` of those.");
+    m.def("sin_pair_reuse_ground_types", &sin_pair_reuse::sin_pair_reuse_ground_types, py::arg("src_type"),
+          py::arg("obs_type"), py::arg("src_rev"), py::arg("seg_t"),
+          "momwire#1911: `reversible_ground_types` of given types.");
+    m.def("sin_pair_reuse_keys", &sin_pair_reuse::sin_pair_reuse_keys, py::arg("obs_c"), py::arg("obs_t"),
+          py::arg("src_c"), py::arg("src_t"), py::arg("seg_h"), py::arg("a_obs"), py::arg("src_type"),
+          py::arg("obs_type"), py::arg("ground_z") = py::none(), py::arg("src_rev") = py::none(),
+          py::arg("obs_rev") = py::none(),
+          "TESTS: every pair's key words (M*N, 5 or 6), code and near flag, as the census keys them.");
+    m.def("sin_pair_reuse_canonical", &sin_pair_reuse::sin_pair_reuse_canonical, py::arg("rows"), py::arg("ia"),
+          py::arg("ib"), py::arg("it"), py::arg("near") = py::none(), py::arg("n_src") = 1,
+          py::arg("ds") = py::none(), py::arg("do") = py::none(),
+          "TESTS: the canonical orientation of key rows (n, width): (the keyed rows, their codes).");
+    m.def("pair_reuse_band_budget", &sin_pair_reuse::band_budget, py::arg("n_bands"), py::arg("budget"),
+          py::arg("band_bytes"), py::arg("workers"), py::arg("base") = 0, py::arg("per") = 0,
+          py::arg("floor_per") = 0,
+          "TESTS: `pair_reuse::BandBudget` over a census holding base + per bytes a band folded: "
+          "peak (None: stopped), started, folded, max_in_flight.");
     m.def("sin_pair_reuse_stats", &sin_pair_reuse::sin_pair_reuse_stats, py::arg("reset") = false,
-          "momwire#1911: the C++ fill's reuse counters (plans built, of those over budget, found), the last "
-          "fill's outcome ('', 'served' or the decline reason) and census per block; reset first.");
+          "momwire#1911: the reuse counters (plans built, of those over budget, found; both routes), the C++ "
+          "fill's last outcome ('', 'served' or the decline reason) and census per block; reset first.");
     m.def("sin_pair_reuse_configure", &sin_pair_reuse::sin_pair_reuse_configure, py::arg("budget") = py::none(),
           py::arg("small_free") = py::none(), py::arg("small_ground") = py::none(), py::arg("workers") = py::none(),
-          py::arg("clear") = false,
+          py::arg("clear") = false, py::arg("probe") = py::none(), py::arg("cache_bytes") = py::none(),
           "TEST HOOK (momwire#1911): the C++ fill's reuse budget (<= 0 restores 256 MB), small-deck thresholds "
-          "(< 0 restores each), census worker count (<= 0: the OpenMP team's); clear drops the kept plans.");
+          "(< 0 restores each), census worker count (<= 0: the OpenMP team's), the adversarial probe (0 none), "
+          "the plan cache's bytes (< 0 restores it, 0 keeps none); clear drops the kept plans.");
     m.attr("sin_pair_reuse_cxx") = true;
+    m.attr("sin_pair_reuse_2063") = true;
     m.attr("pair_reuse_reduce_1916") = true;
     m.attr("pair_reuse_reduce_1969") = true;
 }

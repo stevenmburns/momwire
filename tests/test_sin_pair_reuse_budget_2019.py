@@ -9,8 +9,6 @@ reach both sides.
 
 from __future__ import annotations
 
-import threading
-import time
 import warnings
 from pathlib import Path
 
@@ -18,7 +16,6 @@ import numpy as np
 import pytest
 
 from momwire import _sin_pair_reuse as pr
-from momwire import razor
 from momwire._accel import acc
 from momwire.sinusoidal import SinusoidalSolver
 
@@ -138,12 +135,10 @@ def test_verify_is_held_to_the_budget(monkeypatch):
     assert on.tobytes() == base.tobytes()
 
 
-def test_the_class_map_alone_declines_before_any_band(monkeypatch):
-    def no_census(*_):
-        raise AssertionError("the census ran")
-
-    monkeypatch.setattr(pr, "_census_bands", no_census)
+def test_the_class_map_alone_declines_before_any_band():
     assert _direct_plan(budget=4 * 405 * 405 - 1) is pr.OVER_BUDGET
+    # one band fits beside the map: the census runs and stops on its count
+    assert _direct_plan(budget=4 * 405 * 405 + 1) is pr.OVER_BUDGET
 
 
 def test_a_plan_is_held_to_its_fill_exactly(monkeypatch):
@@ -178,121 +173,63 @@ def test_the_blocks_share_one_budget(monkeypatch):
 
 def test_a_declined_census_is_not_repeated(monkeypatch):
     """A solver per frequency finds the first one's verdict in the cache."""
-    runs = []
-    census = pr._census_bands
-
-    def counted(*a):
-        runs.append(1)
-        return census(*a)
-
-    monkeypatch.setattr(pr, "_census_bands", counted)
+    acc.sin_pair_reuse_stats(True)
     monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", 700_000)
     _fill(pair_reuse=True)
     _, s = _fill(pair_reuse=True)
-    assert len(runs) == 1
+    stats = acc.sin_pair_reuse_stats()
+    assert stats["built"] == stats["declined"] == 1 and stats["found"] == 1
     assert s.pair_reuse_declined == _reason(700_000)
 
 
-class _Held:
-    """A `_Fold` stand-in: `held()` is `base` plus `per` for each band
-    folded, `floor()` `floor_per` for each."""
-
-    def __init__(self, base=0, per=0, floor_per=0):
-        self.base, self.per, self.floor_per, self.folded = base, per, floor_per, []
-        self.map_bytes = 0
-
-    def __len__(self):
-        return len(self.folded)
-
-    def held(self):
-        return self.base + self.per * len(self.folded)
-
-    def floor(self):
-        return self.floor_per * len(self.folded)
-
-    def fold(self, i, r):
-        self.folded.append((i, r))
-
-
-def _census(census, n, budget, band_bytes, band=None):
-    calls = []
-
-    def default(s):
-        calls.append(s)
-        return s * 10
-
-    out = pr._census_bands(
-        band or default, list(range(n)), census, census.fold, budget, band_bytes
+def _census(n, budget, band_bytes, base=0, per=0, floor_per=0, workers=8):
+    """The census's band budget alone (`pair_reuse::BandBudget`), the census
+    holding `base` plus `per` for each band folded and its floor
+    `floor_per` for each."""
+    return acc.pair_reuse_band_budget(
+        n, -1 if budget is None else budget, band_bytes, workers, base, per, floor_per
     )
-    return out, calls
 
 
 def test_no_budget_folds_every_band_in_order():
-    held = _Held()
-    out, calls = _census(held, 40, None, 0)
-    assert out is not None
-    assert sorted(calls) == list(range(40))
-    assert held.folded == [(i, 10 * i) for i in range(40)]
+    out = _census(40, None, 0)
+    assert out["peak"] is not None
+    assert out["started"] == out["folded"] == 40
 
 
 def test_a_census_that_fits_folds_every_band_in_order():
-    held = _Held(base=100, per=7)
-    out, _ = _census(held, 50, 100 + 7 * 50 + 30, 10)
-    assert out is not None and out <= 100 + 7 * 50 + 30
-    assert [i for i, _ in held.folded] == list(range(50))
+    out = _census(50, 100 + 7 * 50 + 30, 10, base=100, per=7)
+    assert out["peak"] is not None and out["peak"] <= 100 + 7 * 50 + 30
+    assert out["folded"] == 50
 
 
 def test_the_count_stops_the_census_once_it_passes_the_budget():
-    held = _Held(base=100, per=7)
-    out, calls = _census(held, 80, 100 + 7 * 20, 0)
-    assert out is None
-    assert len(held.folded) == 21  # the fold that passed it is the last
-    assert len(calls) < 80
+    out = _census(80, 100 + 7 * 20, 0, base=100, per=7)
+    assert out["peak"] is None
+    assert out["folded"] == 21  # the fold that passed it is the last
+    assert out["started"] < 80
 
 
 def test_the_plans_floor_stops_the_census():
-    held = _Held(floor_per=5)
-    out, _ = _census(held, 80, 5 * 30, 0)
-    assert out is None
-    assert len(held.folded) == 31
+    out = _census(80, 5 * 30, 0, floor_per=5)
+    assert out["peak"] is None
+    assert out["folded"] == 31
 
 
 def test_a_band_starts_only_where_it_fits():
     """Each band in flight counts `band_bytes` until it is folded: under a
-    budget with room for two beside what is held, no more than two run at
-    once, however many workers the pool has."""
-    lock = threading.Lock()
-    now = [0, 0]
-
-    def band(s):
-        with lock:
-            now[0] += 1
-            now[1] = max(now)
-        time.sleep(0.01)
-        with lock:
-            now[0] -= 1
-        return s
-
-    held = _Held(base=1000)
-    out, _ = _census(held, 30, 1000 + 2 * 50, 50, band)
-    assert out is not None and out <= 1000 + 2 * 50
-    assert now[1] <= 2
-    assert len(held.folded) == 30
+    budget with room for two beside what is held, no more than two count at
+    once, however many workers there are."""
+    out = _census(30, 1000 + 2 * 50, 50, base=1000)
+    assert out["peak"] is not None and out["peak"] <= 1000 + 2 * 50
+    assert out["max_in_flight"] == 2
+    assert out["folded"] == 30
 
 
 def test_a_census_with_no_room_for_one_band_runs_none():
-    held = _Held(base=1000)
-    out, calls = _census(held, 10, 1000 + 49, 50)
-    assert out is None
-    assert calls == []
-
-
-def test_a_census_hands_its_pages_back_once(monkeypatch):
-    trims = []
-    monkeypatch.setattr(razor, "_trim_heap", lambda: trims.append(1))
-    assert pr.shared_plan(("k",), lambda: pr.OVER_BUDGET) is pr.OVER_BUDGET
-    assert pr.shared_plan(("k",), lambda: pr.OVER_BUDGET) is pr.OVER_BUDGET
-    assert len(trims) == 1
+    out = _census(10, 1000 + 49, 50, base=1000)
+    assert out["peak"] is None
+    assert out["started"] == 0
 
 
 def test_the_plans_kept_between_solvers_are_one_fills_budget():
@@ -304,16 +241,24 @@ def test_the_plans_kept_between_solvers_are_one_fills_budget():
     assert "PLAN_BUDGET_BYTES = size_t(256) << 20;" in header
 
 
-def test_the_cache_drops_the_oldest_plan_past_its_budget(monkeypatch):
-    class Sized:
-        near_blocks = ()
+def test_the_cache_drops_the_oldest_plan_past_its_budget():
+    """Under a cache of one byte the newest plan is kept and the one before
+    it dropped (the common core's, `_pair_reuse_core.h`)."""
 
-        def __init__(self, n):
-            self.values = np.zeros(n, np.uint8)
+    def fill(radius):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s = SinusoidalSolver(**{**_yagi(), "wire_radius": radius}, pair_reuse=True)
+            s._assemble_Z(s._build_geometry(), s.k)
 
-    monkeypatch.setattr(pr, "_shared_plans", type(pr._shared_plans)())
-    monkeypatch.setattr(pr, "SHARED_PLAN_BYTES", 100)
-    monkeypatch.setattr(razor, "_trim_heap", lambda: None)
-    pr.shared_plan(("a",), lambda: Sized(60))
-    pr.shared_plan(("b",), lambda: Sized(60))
-    assert list(pr._shared_plans) == [("b",)]
+    acc.sin_pair_reuse_configure(cache_bytes=1)
+    try:
+        acc.sin_pair_reuse_stats(True)
+        fill(2e-3)
+        fill(3e-3)  # another deck
+        fill(3e-3)  # the newest is kept
+        assert acc.sin_pair_reuse_stats()["built"] == 2
+        fill(2e-3)  # the first was dropped
+        assert acc.sin_pair_reuse_stats()["built"] == 3
+    finally:
+        acc.sin_pair_reuse_configure(cache_bytes=-1, clear=True)

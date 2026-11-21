@@ -7,7 +7,7 @@ one shares the shape of. Each was measured here (synthetic decks):
   its radius the kernel varies over a, not h, and pairs a few h apart but
   inside a radius were shared. It REPRODUCES here: on a hairpin whose
   bridge segments are 0.095 a long, Zin moved 1.4e-3 against the flag-off
-  fill. The rule is now in max(2H, a), razor's (`_near_scale`), and the
+  fill. The rule is now in max(2H, a), razor's (`near_scale`, in the C++ census), and the
   same deck moves 1.6e-9.
 - The source length quantised against the pair distance. It does NOT
   reproduce: this key quantises the half-length against itself at KEY_BITS
@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from momwire import _sin_pair_reuse as pr
+from momwire._accel import acc
 from momwire.sinusoidal import SinusoidalSolver
 
 # An experimental feature (`momwire._features`, reach 4: through the drop-in
@@ -84,9 +85,12 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs(monkeypatch):
 
     # The rule in source lengths alone: fewer near pairs, and the answer
     # moves by orders more (measured 1.4e-3).
-    monkeypatch.setattr(pr, "_near_scale", lambda H, a_obs: 2.0 * H[None, :])
+    acc.sin_pair_reuse_configure(probe=1)  # the C++ census's PROBE_NEAR_H
     pr.clear_shared_plans()
-    wrong, s = _zin(deck, True)
+    try:
+        wrong, s = _zin(deck, True)
+    finally:
+        acc.sin_pair_reuse_configure(probe=0, clear=True)
     assert s.pair_reuse_census["direct"][2] < n_near
     bad = abs(wrong - off) / abs(off)
     assert bad > 1e-5, bad
@@ -94,10 +98,23 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs(monkeypatch):
 
 def test_the_near_rule_is_unchanged_where_segments_outrun_their_radius():
     # 2H >= a everywhere: max(2H, a) is 2H, the rule as it was.
-    H = np.array([0.05, 0.1, 0.002])
-    a = np.array([0.001, 0.004])
-    assert np.array_equal(pr._near_scale(H, a), np.broadcast_to(2.0 * H, (2, 3)))
-    assert pr._near_scale(np.array([0.01]), np.array([0.05]))[0, 0] == 0.05
+    # A pair is near where its observer lies within 4 kernel scales of the
+    # source's centre: each observer here sits on the source's axis just
+    # inside and just outside 4 max(2H, a), as the C++ census keys it.
+    def near(H, a, d):
+        zero = np.zeros(1, np.int64)
+        _, _, nr = acc.sin_pair_reuse_keys(
+            np.array([[0.0, 0.0, d]]), np.array([[1.0, 0.0, 0.0]]),
+            np.zeros((1, 3)), np.array([[0.0, 0.0, 1.0]]),
+            np.array([2 * H]), np.array([a]), zero, zero,
+        )  # fmt: skip
+        return bool(nr[0])
+
+    for H, a in [(0.05, 0.001), (0.1, 0.004), (0.002, 0.001), (0.01, 0.05)]:
+        scale = max(2 * H, a)
+        assert near(H, a, 0.99 * 4 * scale) and not near(H, a, 1.01 * 4 * scale)
+    # where 2H >= a the scale is 2H, the rule as it was
+    assert not near(0.05, 0.001, 4 * 0.1 * 1.01) and near(0.05, 0.001, 0.39)
 
 
 def test_segments_of_different_lengths_never_share_a_class():

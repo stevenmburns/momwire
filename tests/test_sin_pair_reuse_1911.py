@@ -24,6 +24,7 @@ import pytest
 
 from momwire import _features
 from momwire import _sin_pair_reuse as pr
+from momwire._accel import acc
 from momwire.sinusoidal import SinusoidalSolver
 
 from test_rotational_sinusoidal_1912 import FEED, LIFT, build, cage
@@ -156,18 +157,14 @@ def test_the_key_separates_what_differs():
     shift = rng.normal(size=3)
     moved = [obs_c @ q.T + shift, obs_t @ q.T, src_c @ q.T + shift, src_t @ q.T]
     far = [obs_c + np.array([[1e-9, 0.0, 0.0]]), obs_t, src_c, src_t]
-    H = np.array([0.05])
+    zero = np.zeros(1, np.int64)
     keys = []
     for oc, ot, sc, st in ([obs_c, obs_t, src_c, src_t], moved, far):
-        z, rho, td, rdt = pr.pair_scalars(oc, ot, sc, st)
-        keys.append(
-            [
-                int(c[0])
-                for c in pr._band_keys(
-                    z, rho, td, rdt, H, np.array([1e-3]), np.zeros((1, 1), np.int64)
-                )[0]
-            ]
+        # The direct key as the C++ census keys it (uncoded, the types zero).
+        words, _, _ = acc.sin_pair_reuse_keys(
+            oc, ot, sc, st, np.array([0.1]), np.array([1e-3]), zero, zero
         )
+        keys.append([int(c) for c in words[0]])
     # A rigid motion moves each quantised scalar by at most its rounding.
     assert all(abs(a - b) <= 1 for a, b in zip(keys[0], keys[1]))
     assert keys[0] != keys[2]

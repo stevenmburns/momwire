@@ -236,11 +236,12 @@ FEATURES: dict[str, Feature] = {
         # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
         # supports. Their own keywords and variables are kept as aliases.
         #
-        # The sinusoidal part is ported to the C++ fill
-        # (`_sin_pair_reuse_core.h`), which the nec42-sinusoidal executable
-        # runs: Python's plan to the byte. It has no EXE_FEATURES row, so the
-        # shipped executables refuse it; a certification build
-        # (MW_EXE_CERTIFY=pair_reuse) runs it for the gates.
+        # The sinusoidal part's plan is one C++ copy on the common reuse core
+        # (`_sin_pair_reuse_core.h`, momwire#2063), which the Python route
+        # and the C++ fill (the nec42-sinusoidal executable) both run. It has
+        # no EXE_FEATURES row, so the shipped executables refuse it; a
+        # certification build (MW_EXE_CERTIFY=pair_reuse) runs it for the
+        # gates.
         #
         # Reach 4, `dropin-linux-windows` (Steve, 2026-11-19; it was reach 1,
         # the hosted app only, from 11-04): certified for every Python route

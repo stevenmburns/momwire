@@ -125,7 +125,7 @@ void stamp_uncertified(bool on) { ni_eval::stamp_uncertified(on); }
 // This route's reuse is the sinusoidal fill's (`pair_reuse`, momwire#1911):
 // its plans, not razor-2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {
-    const sinusoidal::pair_reuse::Counters c = sinusoidal::pair_reuse::counters();
+    const mw::pair_reuse::Counters c = sinusoidal::pair_reuse::counters();
     built = static_cast<long long>(c.built);
     declined = static_cast<long long>(c.declined);
     found = static_cast<long long>(c.found);

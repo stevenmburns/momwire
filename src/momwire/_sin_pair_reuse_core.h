@@ -1,42 +1,49 @@
-// The point-matched sinusoidal fill's `pair_reuse` (momwire#1911) in C++,
-// Python-free: `_sin_pair_reuse.py`'s census, plans, class evaluation and
-// fused reduction, for the C++ fill (`_sinusoidal_fill_core.cpp`, which the
-// nec42-sinusoidal executable and the in-process NEC-4.2 hook run) and the
-// extension's bindings (`_accel_sin_pair_reuse.cpp`).
+// The point-matched sinusoidal fill's `pair_reuse` (momwire#1911): the
+// sinusoidal basis's ADAPTER to the common reuse core (`_pair_reuse_core.h`,
+// momwire#2063), Python-free, and the one plan both routes run: the Python
+// route (`_sin_pair_reuse.py`, through `_accel_sin_pair_reuse.cpp`) and the
+// C++ fill (`_sinusoidal_fill_core.cpp`, which the nec42-sinusoidal
+// executable and the in-process NEC-4.2 hook run).
 //
-// PYTHON IS THE REFERENCE, and the plan is its plan to the byte: the same
-// key columns (`_band_keys`, `_ground_band_keys`, in the same order of
-// floating-point operations, unfused), the same canonical orientation and
-// codes (`_canonical_codes`), the same grouping and numbering. A class is
-// numbered where it first occurs in the pairs' flat order: each band groups
-// its pairs in flat order and its distinct keys are folded, in band order,
-// into one running table (`IntGroups`, `_int_groups_core.h`, the very code
-// Python's `_Fold` calls), then renumbered by a stable sort on the
-// representative's observer type (direct) or flat index (ground). The type
-// ids are `np.unique(axis=0)`'s: rank of each row among the distinct rows,
-// lexicographic in signed int64.
+// THE CORE runs the census (`pair_reuse::census`: exact-equality classes of
+// the keys below, numbered `FirstAppearance`, where each first occurs in the
+// pairs' flat order whatever the thread count), keeps the plans
+// (`pair_reuse::plan_for`, basis "sinusoidal"), counts them, and draws the
+// fill report's wire map. The near pairs share one SENTINEL key (`Key::Near`)
+// and are listed in the family's `near_flat`; their values are evaluated
+// directly and written over the gather.
 //
-// THE BUDGET is Python's accounting, not a measurement of this route: what
-// `_Fold.held` counts (the class map, the table's `nbytes`, 9 B per class and
-// 8 B per near pair kept) plus `BAND_BYTES_PER_PAIR` per band started and not
-// folded, bands started by `_census_bands`' rule over the same number of
-// workers, the same band height (`_band_rows`) and the plan's fill
-// (`fill_nbytes`) held to what is left. So a deck declines here exactly where
-// Python's census declines at the same worker count, with the same reason.
-// What this route holds per band in flight (its keys and band table, at
-// most ~72 B a pair) is under the 136 B Python measured, so the count bounds
-// it too.
+// THIS ADAPTER supplies what is the basis's own:
+// - the keys (`DirectKey`, `GroundKey`): the four source-frame scalars, or
+//   the reflected term's ground invariants, quantised at KEY_BITS against
+//   the pair's singular distance, numpy's operations in their order with no
+//   contraction, as the numpy census they replace (momwire#2063 stage 2)
+//   computed them; the canonical orientation and its 2-bit code
+//   (`canonical`); the near rule, max(|z|, rho) < 4 max(2H, a);
+// - the classes renumbered by a stable sort on the representative's
+//   observer type (the direct plan), so each radius's classes are one run;
+// - THE BUDGET's accounting, Python's figures (`pair_reuse::BandBudget`):
+//   what one running `IntGroups` fold table would hold (its keys and slots,
+//   9 B per class, 8 B per near pair, the class map) plus
+//   `BAND_BYTES_PER_PAIR` per band in flight, bands of `band_rows` rows
+//   started over `workers`, and the plan's fill (`fill_nbytes`) held to what
+//   is left. So a deck declines where the numpy census declined, at the same
+//   worker count, and reports the same census peak. The census's own tables
+//   are `IntGroups` too, one per part.
 //
-// THE VALUES are the shipped kernel's, called as Python calls it: the
+// THE VALUES are the shipped kernel's, called as the fill calls it: the
 // canonical observer row against `EVAL_CHUNK` classes of one observer radius
 // at a time (a source's position in the kernel's batched sincos can move its
-// value an ulp, so the pieces are Python's), and the near pairs and the
-// ground's representatives in `near_blocks`' calls. The caller supplies the
-// kernels (`CanonFn`, `RowsFn`); this file never calls one itself.
+// value an ulp, so the class order and the pieces are part of the plan), and
+// the near pairs and the ground's representatives in `near_blocks`' calls.
+// The caller supplies the kernels (`CanonFn`, `RowsFn`); this file never
+// calls one itself.
 //
-// THE REDUCTION is `_accel_sin_pair_reuse.cpp`'s fused gather + reduce
-// (momwire#1916, #1969), moved here so both routes run one copy.
+// THE REDUCTION is the fused gather + reduce (momwire#1916, #1969), one copy
+// for both routes, with the orientation's transform, `CODE_SIGNS`.
 #pragma once
+
+#include "_pair_reuse_core.h"
 
 #include <complex>
 #include <cstddef>
@@ -64,14 +71,17 @@ constexpr int64_t SMALL_DECK_SEGS_GROUND = 200;
 constexpr int CODE_BITS = 2;
 constexpr int64_t CODED_PAIRS = int64_t(1) << (31 - CODE_BITS);
 constexpr int64_t PLAN_BUDGET_BYTES = int64_t(256) << 20;
-constexpr int64_t SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;
 constexpr int64_t VALUE_BYTES = 48;
 constexpr int64_t BAND_BYTES_PER_PAIR = 136;
 constexpr int64_t GROUND_BAND_BYTES_PER_PAIR = 168;
 constexpr double BAND_SHARE = 0.25;
 constexpr int64_t PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8;
+// The core's cache tag.
+const char *const BASIS = "sinusoidal";
 
-// `over_budget_reason()`, for the budget in force.
+// The decline sentence for a plan past `budget` bytes (the core's), and for
+// the budget in force.
+std::string over_budget_reason(int64_t budget);
 std::string over_budget_reason();
 
 // TEST HOOKS, bound for Python's tests only; nothing in the executables sets
@@ -85,6 +95,22 @@ void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 int64_t small_deck_segs(bool finite);
 void set_workers(int workers);
 int workers();
+// TEST HOOK (the adversarial gates): a deliberately wrong plan, so a test
+// can show the drift gates and `verify` catch it. 0 none; PROBE_NEAR_H the
+// near rule in source lengths alone (2H, not max(2H, a)); PROBE_HEIGHT_BLIND
+// the reflected key without its height sum; PROBE_FREE_KEY the reflected
+// term keyed as the direct block (its 3-D key, uncoded, the types without
+// the vertical tangent); PROBE_GROUND_CODES + j the reflected codes mapped
+// through `kProbeCodes[j]` (their flips swapped, the source's lost, the
+// observer's lost). A plan is keyed on the probe it was built under.
+enum : int {
+    PROBE_NEAR_H = 1,
+    PROBE_HEIGHT_BLIND = 2,
+    PROBE_FREE_KEY = 3,
+    PROBE_GROUND_CODES = 4,  // + 0, 1, 2
+};
+void set_probe(int probe);
+int probe();
 
 // Per-segment type ids (`reversible_segment_types`): the source type, the
 // observer type, and the source type with its tangent reversed, in one id
@@ -110,22 +136,27 @@ struct Run {  // `Plan.runs`: classes [c0, c1) share observer segment g_obs's ra
     int64_t c0 = 0, c1 = 0, g_obs = 0;
 };
 
-// `Plan` (direct / PEC image) or `GroundPlan` (`ground`).
+// `Plan` (direct / PEC image) or `GroundPlan` (`ground`): the core's family
+// (its class map, (M, N) class << CODE_BITS | code when coded, else class;
+// the representatives' codes; the near pairs) and what this basis evaluates
+// it with.
 struct Plan {
     bool ground = false;
     int64_t M = 0, N = 0;
     bool coded = false;
-    std::vector<int32_t> cls;       // (M, N): class << CODE_BITS | code (coded), else class
-    std::vector<int64_t> rep;       // direct: `rep_src`; ground: `rep_flat`
-    std::vector<int8_t> rep_code;   // empty when not coded
-    std::vector<int64_t> near_flat;
+    mw::pair_reuse::FamilyPlan fam;
+    std::vector<int64_t> rep;                        // direct: `rep_src`; ground: `rep_flat`
     std::vector<NearBlock> near_blocks, rep_blocks;  // rep_blocks: ground only
     std::vector<double> src_c, src_t;                // direct: the canonical sources (n_cls, 3)
     std::vector<Run> runs;                           // direct only
     int64_t census_peak_bytes = 0;
+    const std::vector<int32_t> &cls() const { return fam.map[0]; }
+    const std::vector<int64_t> &near_flat() const { return fam.near_flat; }
     int64_t n_classes() const { return static_cast<int64_t>(rep.size()); }
-    int64_t n_near() const { return static_cast<int64_t>(near_flat.size()); }
-    // `plan_nbytes`: the arrays Python's plan holds, in bytes.
+    int64_t n_near() const { return static_cast<int64_t>(fam.near_flat.size()); }
+    // `plan_nbytes`: the arrays the plan holds, in Python's terms (the class
+    // map, the representatives, their codes when coded, the near pairs and
+    // the calls' index arrays, the canonical sources).
     int64_t plan_nbytes() const;
     // `fill_nbytes`: those and one wavenumber's values.
     int64_t fill_nbytes() const { return plan_nbytes() + VALUE_BYTES * (n_classes() + n_near()); }
@@ -145,30 +176,26 @@ struct CensusInputs {
     int64_t rows = 1;     // the census's swept rows (`census_rows`)
     int64_t budget = -1;  // bytes, < 0 for none
     int workers = 1;
+    int64_t band_bytes_per_pair = -1;  // < 0: BAND_BYTES_PER_PAIR (ground: GROUND_...)
 };
 
-// `build_plan` / `build_ground_plan`; null is `OVER_BUDGET`.
+// `build_plan` / `build_ground_plan`, uncached; null is `OVER_BUDGET`.
 std::shared_ptr<const Plan> build_plan(const CensusInputs &in);
 std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in);
 
-// `shared_plan`: the plan for `key` from the process's cache, else `build()`'s,
-// kept (null, an over-budget census, is kept too). Least recently used first
-// out past SHARED_PLAN_BYTES, the newest kept whatever its size. `built`
-// says whether this call ran the census.
-std::shared_ptr<const Plan> shared_plan(const std::string &key,
-                                        const std::function<std::shared_ptr<const Plan>()> &build,
-                                        bool *built = nullptr);
+// The plan of these inputs from the process's cache (the core's, keyed on
+// every array the census reads, the budget, the rows and the test hooks in
+// force), else built and kept, a declined one too. Null: declined.
+// `built` says whether this call ran the census.
+std::shared_ptr<const Plan> shared_plan(const CensusInputs &in, bool ground, bool *built = nullptr);
 void clear_shared_plans();
 
 // Plans built (censuses run), of those the ones over budget, and plans found
-// in the cache: process totals. Built - declined >= 1 is what proves a fill
-// reused. `last` is the last fill's outcome: "" (reuse not asked, or the
-// fill took a route the reuse never sees), "served", or the reason it
-// declined, `pair_reuse_declined`'s words.
-struct Counters {
-    uint64_t built = 0, declined = 0, found = 0;
-};
-Counters counters();
+// in the cache: process totals (the core's, for this basis). Built -
+// declined >= 1 is what proves a fill reused. `last` is the last C++ fill's
+// outcome: "" (reuse not asked, or the fill took a route the reuse never
+// sees), "served", or the reason it declined, `pair_reuse_declined`'s words.
+mw::pair_reuse::Counters counters();
 void reset_counters();
 std::string last_outcome();
 void set_last_outcome(const std::string &s);
@@ -180,6 +207,15 @@ struct CensusEntry {
 };
 std::vector<CensusEntry> last_census();
 void set_last_census(std::vector<CensusEntry> c);
+
+// FOR THE TESTS: every pair's key words (M * N rows of 5, or 6 for the
+// reflected term), its code and whether it is near, as the census keys them;
+// and `canonical` on given key rows (`ia`, `ib`, `it` the odd columns, `ds`
+// / `do_` per source / observer or null).
+void pair_keys(const CensusInputs &in, bool ground, std::vector<int64_t> &words, std::vector<int8_t> &codes,
+               std::vector<uint8_t> &near);
+void canonical_codes(int64_t *rows, int width, int64_t n, int ia, int ib, int it, const uint8_t *near,
+                     int64_t n_src, const int64_t *ds, const int64_t *do_, int8_t *codes);
 
 // The kernels the evaluation calls. `rows`: the shipped evaluator in the
 // original frame on observer rows [m0, m1) against source segments ns[0..n),

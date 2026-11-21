@@ -41,18 +41,20 @@ EN
 """
 
 
+class _Builds:
+    """The censuses run since the fixture began (the C++ plan cache's
+    counters)."""
+
+    def __len__(self):
+        return int(acc.sin_pair_reuse_stats()["built"])
+
+
 @pytest.fixture
 def builds(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
-    calls = []
-    orig = pr.build_plan
-
-    def counting(*a, **k):
-        calls.append(1)
-        return orig(*a, **k)
-
-    monkeypatch.setattr(pr, "build_plan", counting)
-    return calls
+    acc.sin_pair_reuse_stats(True)
+    yield _Builds()
+    acc.sin_pair_reuse_configure(cache_bytes=-1, clear=True)
 
 
 def _deck(dx=1.5):
@@ -94,8 +96,8 @@ def test_other_wires_are_another_plan(builds):
     assert len(builds) == 2
 
 
-def test_the_budget_keeps_the_newest(builds, monkeypatch):
-    monkeypatch.setattr(pr, "SHARED_PLAN_BYTES", 1)
+def test_the_budget_keeps_the_newest(builds):
+    acc.sin_pair_reuse_configure(cache_bytes=1)
     _z(dx=1.5)
     _z(dx=1.6)
     _z(dx=1.6)
@@ -114,7 +116,7 @@ def test_the_portal_pays_one_census_for_a_sweep(builds, monkeypatch):
     assert len(builds) == 1
     # The same run with every solver building its own: three censuses, and
     # the same printout.
-    monkeypatch.setattr(pr, "shared_plan", lambda key, build: build())
+    acc.sin_pair_reuse_configure(cache_bytes=0, clear=True)  # each builds
     own = render(DECK, basis="sinusoidal", dialect="nec4")
     assert len(builds) == 4
 
