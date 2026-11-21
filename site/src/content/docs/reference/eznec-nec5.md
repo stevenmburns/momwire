@@ -30,6 +30,54 @@ That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
 
+### In 4nec2
+
+Steps 1–3 are the same: the unblocked zip extracted to a folder of its
+own, `C:\momwire\` below. Nothing is copied into 4nec2's folders. 4nec2
+runs an engine from its own `exe` folder (`C:\4nec2\exe` in a default
+install) and hands it the deck's and printout's names on standard input,
+the way it runs its bundled engines; every momwire launcher reads that
+form. Which file you change depends on the slot.
+
+**NEC-2.** 4nec2 normally picks one of its bundled `nec2dxs` engines by
+model size. Choose **Settings → Nec engine → Manual select** and pick a
+NEC-2 launcher:
+
+```text
+C:\momwire\momwire-nec2c.exe              the default (nec2c-bspline)
+C:\momwire\momwire-nec2c-sinusoidal.exe   NEC-2's own formulation (the twin)
+```
+
+**NEC-4.2.** Edit `4nec2.bat` in 4nec2's `exe` folder and make its engine
+line one of these (pasting the line is less error-prone than typing a
+path into Manual select, which also works here):
+
+```text
+C:\momwire\momwire-nec42.exe < nec2d.tmp
+C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp
+```
+
+**NEC-5.** This goes through 4nec2's NEC-5 package (the NEC5CL_x13 setup
+with `Edit_inp.exe` and `Edit_out.exe`); install that first. In
+`4nec2.bat`, keep the `Edit_inp.exe` and `Edit_out.exe` lines, since 4nec2
+reads its results through them, and change only the engine line between
+them:
+
+```text
+Edit_inp.exe
+C:\momwire\momwire-nec5.exe < nec2d.tmp
+Edit_out.exe
+```
+
+with `momwire-nec5-razor-2p.exe` in place of `momwire-nec5.exe` for the
+NEC-5 twin. Leave **Manual select** alone for NEC-5: naming a launcher
+there does not work (momwire#1503).
+
+For a new release, replace `C:\momwire\` as in
+[Updating](#updating-to-a-new-release); the 4nec2 settings and the
+`4nec2.bat` lines stay as they are. The same steps are in the zip's
+`README.txt`.
+
 ### Names changed in 0.80.0
 
 From 0.97.0 the basis names carry no dashes (momwire#2091): the zip's
