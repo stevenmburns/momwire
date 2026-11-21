@@ -146,6 +146,7 @@ class Walk:
         orig_cb = SinusoidalSolver._class_bands
         orig_rr = SinusoidalSolver._replay_remainder
         orig_reduce = sn._reduce_phi_band
+        orig_fused = SinusoidalSolver._fused_fill_rows
         walk = self
 
         def field_tensor(self_, geom, k, *a, **kw):
@@ -153,6 +154,19 @@ class Walk:
             if kw.get("src_centers") is None and "obs_rows" in kw:
                 walk.s1.append(tuple(kw["obs_rows"]))
             return orig_ft(self_, geom, k, *a, **kw)
+
+        def fused_fill_rows(self_, *a, **kw):
+            # The fused band (momwire#2069) is an S1 band too: it fills the
+            # same rows the two-pass band's `_field_tensor` call would name.
+            fill = orig_fused(self_, *a, **kw)
+            if fill is None:
+                return None
+
+            def spy(i0, i1, out):
+                walk.s1.append((i0, i1))
+                return fill(i0, i1, out)
+
+            return spy
 
         def class_bands(self_, geom, keep, idx, *a, **kw):
             bands = []
@@ -188,6 +202,7 @@ class Walk:
 
         monkeypatch.setattr(SinusoidalSolver, "_field_tensor", field_tensor)
         monkeypatch.setattr(SinusoidalSolver, "_class_bands", class_bands)
+        monkeypatch.setattr(SinusoidalSolver, "_fused_fill_rows", fused_fill_rows)
         monkeypatch.setattr(SinusoidalSolver, "_replay_remainder", replay_remainder)
         monkeypatch.setattr(sn, "_reduce_phi_band", reduce_phi_band)
         sim._checkpoint = checkpoint
