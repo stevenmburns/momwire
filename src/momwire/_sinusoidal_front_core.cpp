@@ -13,6 +13,8 @@
 #include "_sinusoidal_nec4_core.h"
 #include "_fma_inline.h"
 #include "_somm_below_grid_core.h"
+#include "xsf/cephes/j0.h"
+#include "xsf/cephes/j1.h"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +32,14 @@
 
 namespace mw {
 namespace sinusoidal {
+
+// `_nec2_end_cap.BELOW_INTERFACE_REFUSAL` / `NEC4_JUNCTION_REFUSAL`
+const char *const kNec2CapBelowInterface =
+    "nec2_end_cap is NEC-2's free-end condition and NEC-2 has no buried or "
+    "ground-crossing wires; turn it off for this deck";
+const char *const kNec2CapNec4Junction =
+    "nec2_end_cap cannot act on a deck the NEC-4 junction rule solves, whose "
+    "route carries its own end cap; turn it off for this deck";
 
 namespace {
 
@@ -203,6 +213,9 @@ std::vector<std::size_t> nec4_solved_nodes(const Front &f) {
     return out;
 }
 
+void per_end_basis(Front &f, const std::vector<double> &am, const std::vector<double> &ap,
+                   const std::vector<double> &X);
+
 // `SinusoidalSolver._nec4_end_factors` + `_sinusoidal_nec4.end_cap_x` +
 // `_sinusoidal_nec4.basis_coefs_per_end`, numpy's elementwise order.
 void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::size_t> &nodes) {
@@ -245,12 +258,27 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
         for (std::size_t q = 0; q < segs.size(); q++) (segs[q].second ? am : ap)[segs[q].first] = fac[q];
     }
     // end_cap_x
-    std::vector<double> X(n), kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), tanh_(n);
+    std::vector<double> X(n);
     const double half_k = 0.5 * k;
     for (std::size_t i = 0; i < n; i++) {
         const bool free_m = g.nm_count[i] == 0 && !g.ground_minus[i] && !g.crossing_minus[i];
         const bool free_p = g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i];
         X[i] = (free_m || free_p) ? half_k * a[i] : 0.0;
+    }
+    per_end_basis(f, am, ap, X);
+    f.nec4 = true;
+}
+
+// `_sinusoidal_nec4.basis_coefs_per_end(geom, k, a_minus, a_plus, x_end)` at
+// the front's real k, numpy's elementwise order: the NEC-4 junction's basis
+// (`nec4_basis`) and NEC-2's free-end cap (`nec2_cap_basis`, momwire#2033).
+void per_end_basis(Front &f, const std::vector<double> &am, const std::vector<double> &ap,
+                   const std::vector<double> &X) {
+    const Geometry &g = f.geometry;
+    const double k = f.k;
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    std::vector<double> kd(n), sin_kd(n), cos_kd(n), s2(n), c2(n), s4(n), recip(n), tanh_(n);
+    for (std::size_t i = 0; i < n; i++) {
         kd[i] = k * g.seg_h[i];
         sin_kd[i] = mw_libm_c::rsin(kd[i]);
         cos_kd[i] = mw_libm_c::rcos(kd[i]);
@@ -413,7 +441,39 @@ void nec4_basis(Front &f, const std::vector<double> &a, const std::vector<std::s
         v.AC.push_back(cd(all_AC[o], 0.0));
         v.sigma.push_back(all_sigma[o]);
     }
-    f.nec4 = true;
+}
+
+// --- NEC-2's free-end cap (momwire#2033, `_nec2_end_cap`) ---------------------
+
+// `_nec2_end_cap.has_free_end(geom)`: a segment end in free space
+bool has_free_end(const Geometry &g) {
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    for (std::size_t i = 0; i < n; i++) {
+        if (g.nm_count[i] == 0 && !g.ground_minus[i] && !g.crossing_minus[i]) return true;
+        if (g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i]) return true;
+    }
+    return false;
+}
+
+// `_nec2_end_cap.basis_view(geom, k, a_const, seg_radius)`: the log rule's
+// factor at both ends of every segment, and NEC-2's X = J1(ka)/J0(ka) at a
+// segment with a free end (scipy's j0 / j1, cephes', as xsf vendors them).
+void nec2_cap_basis(Front &f, const std::vector<double> &a) {
+    const Geometry &g = f.geometry;
+    const double k = f.k;
+    const std::size_t n = static_cast<std::size_t>(g.n_segs);
+    std::vector<double> base(n), X(n);
+    for (std::size_t i = 0; i < n; i++) {
+        const double ka = k * a[i];
+        base[i] = 1.0 / (std::log(2.0 / ka) - kEulerGamma);
+    }
+    for (std::size_t i = 0; i < n; i++) {
+        const bool free_m = g.nm_count[i] == 0 && !g.ground_minus[i] && !g.crossing_minus[i];
+        const bool free_p = g.np_count[i] == 0 && !g.ground_plus[i] && !g.crossing_plus[i];
+        const double ka = k * a[i];
+        X[i] = (free_m || free_p) ? xsf::cephes::j1(ka) / xsf::cephes::j0(ka) : 0.0;
+    }
+    per_end_basis(f, base, base, X);
 }
 
 
@@ -1914,6 +1974,33 @@ Front front(const nec4::SolverArgs &in, bool galerkin) {
         for (std::size_t w = 0; w < n_w; w++)
             for (ll s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = f.radius_per_wire[w];
     }
+    // momwire#2033: NEC-2's free-end cap, where it is asked for (or is the
+    // NEC-2 launcher's default) and the deck has a free end. A deck with no
+    // free end falls through, bit for bit. The launcher's default settles
+    // first (`SinusoidalSolver._settle_nec2_end_cap`): off, with the reason
+    // kept, on a deck the NEC-4 junction solves or with a wire below the
+    // interface, where an explicit request refuses (`_basis_coefs`).
+    if (args.nec2_end_cap != 0 && has_free_end(g)) {
+        const bool below_any = std::find(f.below_wire.begin(), f.below_wire.end(), true) != f.below_wire.end();
+        const bool nec4_live = args.junction_rule_nec42 && !below_any && !nec4_solved_nodes(f).empty();
+        if (args.nec2_end_cap == 2) {
+            if (nec4_live) {
+                f.nec2_end_cap_withdrawn = kNec2CapNec4Junction;
+            } else if (below_any) {
+                f.nec2_end_cap_withdrawn = kNec2CapBelowInterface;
+            } else {
+                nec2_cap_basis(f, a);
+                f.nec2_end_cap = true;
+                return f;
+            }
+        } else {
+            if (nec4_live) fail(kNec2CapNec4Junction);
+            if (below_any) fail(kNec2CapBelowInterface);
+            nec2_cap_basis(f, a);
+            f.nec2_end_cap = true;
+            return f;
+        }
+    }
     if (f.buried) {
         // `_operating_medium`: a wholly-buried deck is solved in the lower
         // medium, its basis at k_m (`_readout_view`); `_nec4_live` is false
@@ -2135,6 +2222,14 @@ SegView basis_coefs(const Front &fr, double k) {
     } else {
         for (std::size_t w = 0; w < g.wire_first.size(); w++)
             for (long long s = g.wire_first[w]; s <= g.wire_last[w]; s++) a[static_cast<std::size_t>(s)] = fr.radius_per_wire[w];
+    }
+    if (fr.nec2_end_cap) {
+        // `_basis_coefs(geom, k)` takes the cap at any real k (momwire#2033)
+        Front at_k;
+        at_k.geometry = fr.geometry;
+        at_k.k = k;
+        nec2_cap_basis(at_k, a);
+        return at_k.basis;
     }
     return basis_coefs_at(g, a, k);
 }
