@@ -1,13 +1,13 @@
-"""razor-2p's far-mesh accuracy class, as a measured table and one advisory.
+"""razor2p's far-mesh accuracy class, as a measured table and one advisory.
 
 `RazorSolver`'s path (razor-blade) testing rule is NEC-5's rule, reproduced by
-design — momwire#603 measures razor-2p equal to licensed NEC-5 at EQUAL mesh.
+design — momwire#603 measures razor2p equal to licensed NEC-5 at EQUAL mesh.
 That agreement says the two share a convergence class; it does not say either
-is converged. momwire#845 measured the class: **razor-2p is first order in the
+is converged. momwire#845 measured the class: **razor2p is first order in the
 far mesh on every deck family**, where `BSplineSolver` at degree 2 is already
 converged at the same segment count.
 
-So a razor-2p answer at a catalog-default mesh is systematically off, by an
+So a razor2p answer at a catalog-default mesh is systematically off, by an
 amount nobody can see from the answer itself. This module states that once, at
 construction.
 
@@ -52,12 +52,12 @@ from typing import NamedTuple
 
 
 class RazorFarMeshClass(UserWarning):
-    """razor-2p is first order in the far mesh; its default-mesh answer is not
+    """razor2p is first order in the far mesh; its default-mesh answer is not
     converged. Advisory only — nothing is remeshed and nothing is refused."""
 
 
 class FarMeshClass(NamedTuple):
-    """One measured statement of razor-2p's far-mesh class.
+    """One measured statement of razor2p's far-mesh class.
 
     Relative figures are |dZ| against a converged `BSplineSolver` degree-2
     reference, as a percentage of |Z| at the same deck and mesh.
@@ -74,7 +74,7 @@ class FarMeshClass(NamedTuple):
 
 
 # Measured 2026-09-03 on antennaknobs main fc0e5c68c with momwire 9eda56f, over
-# the 100 razor-2p-served catalog decks (88 free / 83 Sommerfeld carry a
+# the 100 razor2p-served catalog decks (88 free / 83 Sommerfeld carry a
 # reportable number; the rest are cost-guarded, refused, or lack a bounded
 # reference). Medians halve per mesh doubling: 2.29 -> 1.27 -> 0.70 ohm.
 FAR_MESH_CLASS = FarMeshClass(
@@ -106,7 +106,7 @@ def far_mesh_class_message(cls: FarMeshClass = FAR_MESH_CLASS) -> str:
 
     THE FIRST LINE IS LOAD-BEARING. `pyproject.toml`'s pytest `filterwarnings`
     silences this advisory across the suite by matching the opening words
-    ("razor-2p is first order in the far mesh"), NOT by category — matching by
+    ("razor2p is first order in the far mesh"), NOT by category — matching by
     category makes pytest import momwire while parsing filters, ahead of the
     conftest's per-worker `OMP_NUM_THREADS` pin, which cost 681 s against 189 s
     on the default lane. So rewording that opening phrase silently un-silences
@@ -114,7 +114,7 @@ def far_mesh_class_message(cls: FarMeshClass = FAR_MESH_CLASS) -> str:
     the filter in the same commit.
     """
     return (
-        f"razor-2p is first order in the far mesh: its path (razor-blade) "
+        f"razor2p is first order in the far mesh: its path (razor-blade) "
         f"testing rule is NEC-5's, which converges more slowly than a "
         f"Galerkin-tested basis, so a coarse answer is systematically off "
         f"rather than noisy. Measured over {cls.n_decks} antennaknobs catalog "

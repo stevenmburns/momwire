@@ -1,4 +1,4 @@
-// razor-2p's fill-pair reuse (momwire#1971): see `_razor_pair_reuse_core.h`.
+// razor2p's fill-pair reuse (momwire#1971): see `_razor_pair_reuse_core.h`.
 // razor's adapter onto the common core (`_pair_reuse_core.h`, momwire#2063):
 // its keys, the evaluation of its representatives, the transforms its gathers
 // apply, and its policy. Its own TU, so no kernel's codegen moves with it

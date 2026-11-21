@@ -59,7 +59,7 @@ def test_the_bundle_ships_six_launchers_in_three_families():
     build = _build()
     stems = build.launcher_stems()
     assert len(stems) == len(set(stems)) == 6
-    assert set(build.NEC5_LAUNCHERS) == {"momwire-nec5", "momwire-nec5-razor-2p"}
+    assert set(build.NEC5_LAUNCHERS) == {"momwire-nec5", "momwire-nec5-razor2p"}
     assert set(build.NEC4_LAUNCHERS) == {"momwire-nec42", "momwire-nec42-sinusoidal"}
     assert set(build.NEC2_LAUNCHERS) == {"momwire-nec2c", "momwire-nec2c-sinusoidal"}
     assert set(stems) == {
@@ -73,7 +73,7 @@ def test_the_bundle_ships_six_launchers_in_three_families():
     assert build.NAME == "momwire"
     assert build.LAUNCHER in stems
     # The smoke's gate 4 reads SHIPPED_VARIANTS as the copies of LAUNCHER.
-    assert build.SHIPPED_VARIANTS == ("razor-2p",)
+    assert build.SHIPPED_VARIANTS == ("razor2p",)
 
 
 def test_every_launcher_answers_the_slot_and_basis_its_family_claims():
@@ -135,7 +135,7 @@ def test_the_reference_pages_known_bases_are_the_rosters():
     families, which `test_eznec_nec42_1295` and
     `test_nec5_command_family_1239` hold to the roster in turn.  The NEC-5
     list leaves out the bases that refuse every deck in that dialect
-    (`sinusoidal`, `pulse`: centre-fed only) and the deprecated `razor-nec5`
+    (`sinusoidal`, `pulse`: centre-fed only) and the retired `razor-nec5`
     spelling; the NEC-4.2 list is `NEC2_BASES`."""
     scripts = _console_scripts()
     nec5 = {
@@ -235,8 +235,8 @@ def test_the_readme_says_which_names_changed():
         ("momwire-eznec-windows-win7.zip", "momwire-windows-win7.zip"),
         ("momwire-eznec-engine.exe", "momwire-engine.exe"),
         ("momwire-eznec.exe", "momwire-nec5.exe"),
-        ("momwire-eznec-razor-2p.exe", "momwire-nec5-razor-2p.exe"),
-        ("momwire-eznec-razor-nec5.exe", "momwire-nec5-razor-2p.exe"),
+        ("momwire-eznec-razor-2p.exe", "momwire-nec5-razor2p.exe"),
+        ("momwire-eznec-razor-nec5.exe", "momwire-nec5-razor2p.exe"),
     ):
         (row,) = [ln for ln in text.splitlines() if f" {old} " in ln]
         assert row.rstrip().endswith(new), row
@@ -275,5 +275,5 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
     assert "its NEC-4.2 engine" in " ".join(head.split())
 
 
-NEC5_SLOT_LINES = ("momwire-nec5", "momwire-nec5-razor-2p")
+NEC5_SLOT_LINES = ("momwire-nec5", "momwire-nec5-razor2p")
 NEC42_SLOT_LINES = ("momwire-nec42", "momwire-nec42-sinusoidal")

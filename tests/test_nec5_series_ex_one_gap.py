@@ -18,7 +18,7 @@ there):
   sum (two 0.5 V cards print a different current from one 1 V card), so that
   shape is refused by name.
 
-The tolerance against the oracle is each basis's own: razor-2p is NEC-5's
+The tolerance against the oracle is each basis's own: razor2p is NEC-5's
 formulation twin (0.1 %, as tests/test_eznec_simnec_nec5_1230.py holds it);
 bspline differs by basis, so each repeated deck may disagree with NEC-5 no
 more than the same deck written with one summed card does, which is what
@@ -38,8 +38,8 @@ from momwire.dropin.nec5._serve import serve
 from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "nec5_series_ex"
-TWIN = "razor-2p"
-BASES = (TWIN, "bspline")
+TWIN = "razor2p"
+BASES = (TWIN, "bs2")
 TWIN_TOLERANCE = 1e-3
 
 # deck -> the one-summed-card deck it must answer as
@@ -134,7 +134,7 @@ def test_every_card_on_a_gap_carries_the_one_gap_current(name, basis):
 
 @pytest.mark.parametrize("name", sorted(SERVED))
 def test_razor_2p_lands_on_the_licensed_rows(name):
-    """razor-2p is NEC-5's twin: every row's current and impedance to 0.1 %."""
+    """razor2p is NEC-5's twin: every row's current and impedance to 0.1 %."""
     ours = _blocks(render(deck(name), basis=TWIN).splitlines())
     for mine, licensed in zip(ours, _blocks(oracle(name)), strict=True):
         for a, b in zip(mine, licensed, strict=True):
@@ -173,8 +173,8 @@ def test_bspline_disagrees_with_nec5_no_more_than_the_one_card_deck(name):
     """bspline is not NEC-5's basis; what the repeat must not do is ADD to the
     disagreement the same drive written as one card already has."""
     one = SERVED[name]
-    (rep,) = _blocks(render(deck(name), basis="bspline").splitlines())
-    (ref,) = _blocks(render(deck(one), basis="bspline").splitlines())
+    (rep,) = _blocks(render(deck(name), basis="bs2").splitlines())
+    (ref,) = _blocks(render(deck(one), basis="bs2").splitlines())
     (lic_one,) = _blocks(oracle(one))
     control = _rel(_complex(ref[0], 1), _complex(lic_one[0], 1))
     for a, b in zip(rep, _blocks(oracle(name))[0], strict=True):

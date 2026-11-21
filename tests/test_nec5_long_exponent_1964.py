@@ -103,13 +103,13 @@ def test_the_sentence():
 def test_the_seam_warns_and_prints_as_before():
     """The advisory, never a refusal; the printout carries no note."""
     with pytest.warns(LongExponentToken, match=r"momwire#1964") as caught:
-        out = _shell.render(_deck("1.000000000000000e+00"), basis="razor-2p")
+        out = _shell.render(_deck("1.000000000000000e+00"), basis="razor2p")
     assert "(1.000000000000000e+00)" in str(caught[0].message)
     assert "NEC ERROR" not in out
     assert "misreads" not in out
     with warnings.catch_warnings():
         warnings.simplefilter("error", LongExponentToken)
-        short = _shell.render(_deck("1.00000000000000e+00"), basis="razor-2p")
+        short = _shell.render(_deck("1.00000000000000e+00"), basis="razor2p")
     assert "NEC ERROR" not in short
     # One field's spelling apart (the card echo), the two decks print the
     # same printout: the same lines, the same results.
@@ -188,10 +188,10 @@ def test_a_streamed_structure_cut_at_nx_warns_too():
     file's whole text."""
     first = _deck("1.000000000000000e+00").replace("EN\n", "NX\n")
     with pytest.warns(LongExponentToken, match=r"momwire#1964"):
-        out, go_on = _shell._stream_piece(first, basis="razor-2p")
+        out, go_on = _shell._stream_piece(first, basis="razor2p")
     assert go_on and "NEC ERROR" not in out
     with warnings.catch_warnings():
         warnings.simplefilter("error", LongExponentToken)
         _shell._stream_piece(
-            _deck("1.00000000000000e+00").replace("EN\n", "NX\n"), basis="razor-2p"
+            _deck("1.00000000000000e+00").replace("EN\n", "NX\n"), basis="razor2p"
         )

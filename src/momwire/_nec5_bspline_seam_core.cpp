@@ -34,7 +34,7 @@ BSplinePrepared &bspline_part(Prepared &p) {
 const SeamBasis &BSplineSeamEngine::basis() const {
     static const SeamBasis row = [] {
         SeamBasis b;
-        b.name = "bspline";
+        b.name = "bs2";
         b.cut_spelling = true;            // `_CUT_SPELLING = (BSplineSolver,)`
         b.crossing_node_spelling = true;  // node gaps and junction ports
         return b;

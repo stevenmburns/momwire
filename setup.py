@@ -610,7 +610,7 @@ _ACCEL_SOURCES = [
     # row-window dedup. Its own TU so that no existing kernel's codegen can
     # move with it (momwire#1187).
     "src/momwire/_accel_exact_kernel.cpp",
-    # momwire#1433: the exact ring kernel's point moments (razor-2p, and the
+    # momwire#1433: the exact ring kernel's point moments (razor2p, and the
     # point-tested families after it). Its own TU for 1410's reason; the
     # kernel itself is the shared `_exact_kernel_ring_inline.h`.
     "src/momwire/_accel_exact_kernel_point.cpp",
@@ -620,7 +620,7 @@ _ACCEL_SOURCES = [
     # momwire#1497: the fused elementwise complex multiply (`_cmul.cmul`). Its
     # own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_cmul.cpp",
-    # The razor-2p solve prototype: every fill window and the LU in one C++
+    # The razor2p solve prototype: every fill window and the LU in one C++
     # call (`_razor_solve_core.cpp`, Python-free) and its binding. Their own
     # TUs: they only CALL the razor kernels, across a TU boundary, so no
     # kernel's codegen can move with them (momwire#1187).
@@ -630,17 +630,17 @@ _ACCEL_SOURCES = [
     # `_accel_razor_solve.cpp` binds it for the Python route. Its own TU: it
     # only CALLS the kernels, across a TU boundary.
     "src/momwire/_razor_pair_reuse_core.cpp",
-    # momwire#2063: the common pair-reuse core under razor-2p's and the
+    # momwire#2063: the common pair-reuse core under razor2p's and the
     # sinusoidal adapters (the groups, the budgets and declines, the plan
     # cache, the fill report's wire map). Its own TU: integers only; the
     # census and gather templates it declares are instantiated in each
     # adapter's TU, beside the keys.
     "src/momwire/_pair_reuse_core.cpp",
-    # The razor-2p FRONT half (construction, geometry, the prepared tables,
+    # The razor2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.
     "src/momwire/_razor_front_core.cpp",
-    # razor-2p's BURIED fill (momwire#1512 step 3): the media's own fronts,
+    # razor2p's BURIED fill (momwire#1512 step 3): the media's own fronts,
     # their fold, the cross blocks; Python-free. Its own TU: it only calls
     # the kernels and the solve core, across TU boundaries.
     "src/momwire/_razor_buried_core.cpp",
@@ -675,7 +675,7 @@ _ACCEL_SOURCES = [
     # 1410's reason.
     "src/momwire/_exact_kernel_coaxial_core.cpp",
     "src/momwire/_accel_razor_solve.cpp",
-    # The NEC-5 deck reader (unit 2a of the standalone razor-2p executable):
+    # The NEC-5 deck reader (unit 2a of the standalone razor2p executable):
     # `deck/_nec5.py` and the EZNEC seam's text-level front in C++, Python-
     # free, and its test-facing binding. Their own TUs: no float arithmetic
     # beyond parsing, and nothing calls them on the default path.
@@ -715,7 +715,7 @@ _ACCEL_SOURCES = [
     "src/momwire/_accel_nec4_printout.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
     # The NEC-5 seam's structure half (unit 2b): the scope ladder, the mesh
-    # and the ports, for any basis (`_nec5_seam_core.cpp`), and razor-2p's
+    # and the ports, for any basis (`_nec5_seam_core.cpp`), and razor2p's
     # answers to what a basis decides, deck -> RazorSolver's arguments
     # (`_nec5_razor_seam_core.cpp`, momwire#1517 step 0); Python-free, and
     # `_accel_razor_solve.cpp` binds them. Their own TUs: O(N) geometry, and
@@ -733,7 +733,7 @@ _ACCEL_SOURCES = [
     "src/momwire/_nec5_bspline_printout_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, Python-free, for any basis (`_nec5_printout_core.cpp`),
-    # and razor-2p's answers to what the solver is asked
+    # and razor2p's answers to what the solver is asked
     # (`_nec5_razor_printout_core.cpp`, momwire#1517 step 0). Nothing binds
     # them yet (the standalone driver is their caller); they are built here so
     # every platform's toolchain compiles them. Their own TUs: nothing calls

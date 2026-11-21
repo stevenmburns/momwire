@@ -114,7 +114,7 @@ def record(out: Path, decks: list[str]) -> None:
         warnings.simplefilter("ignore")
         for p in paths:
             try:
-                _shell.render(p.read_text(encoding="latin-1"), basis="razor-2p")
+                _shell.render(p.read_text(encoding="latin-1"), basis="razor2p")
             except Exception:  # noqa: BLE001 - a deck that raises still recorded its calls
                 pass
     out.write_text("".join(json.dumps(list(c)) + "\n" for c in sorted(calls)))

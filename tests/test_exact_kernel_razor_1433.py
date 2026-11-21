@@ -71,7 +71,7 @@ def _extended(z, a, k):
 @pytest.mark.parametrize(
     ("c", "h"),
     [
-        (-0.001, 0.002),  # observer at the centre (razor-2p's self term)
+        (-0.001, 0.002),  # observer at the centre (razor2p's self term)
         (-0.0015, 0.002),  # inside, off centre
         (0.0, 0.002),  # at the start
         (-0.002, 0.002),  # at the end
@@ -329,7 +329,7 @@ def test_point_gap_warns_under_true_only():
     assert not rt(_warnings_of(exact_kernel="auto", **FAT))
 
 
-# -- the roster: razor-2p binds "auto" through the NEC-5 seam ------------------
+# -- the roster: razor2p binds "auto" through the NEC-5 seam ------------------
 
 _SEAM_DECK = (
     "CM synthetic fat-wire dipole (momwire#1433)\nCE\n"
@@ -351,7 +351,7 @@ def _seam_counted(monkeypatch):
     return seen
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
+@pytest.mark.parametrize("basis", ["razor2p"])
 def test_the_seam_runs_the_exact_kernel_on_a_fat_wire(monkeypatch, basis):
     from momwire.dropin.nec5 import _shell
 
@@ -368,7 +368,7 @@ def test_the_seam_prints_the_same_bytes_above_the_gate(monkeypatch, a):
     from momwire.dropin.nec5 import _shell
 
     seen = _seam_counted(monkeypatch)
-    ours = _shell.render(_SEAM_DECK.format(a=a), basis="razor-2p")
+    ours = _shell.render(_SEAM_DECK.format(a=a), basis="razor2p")
     assert seen == []
     monkeypatch.setattr(
         _solver,
@@ -376,8 +376,8 @@ def test_the_seam_prints_the_same_bytes_above_the_gate(monkeypatch, a):
         MappingProxyType(
             {
                 **_solver.BASES,
-                "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+                "razor2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
             }
         ),
     )
-    assert _shell.render(_SEAM_DECK.format(a=a), basis="razor-2p") == ours
+    assert _shell.render(_SEAM_DECK.format(a=a), basis="razor2p") == ours

@@ -181,7 +181,7 @@ def snap(
 def warn_tie(family, what, target, wire, lo, hi, picked, *, stacklevel):
     """`snap`'s warning for a tie the deck's symmetry does not excuse
     (momwire#1262): the sites at arclengths `lo` and `hi`, `picked` taken.
-    Its own function so a snap made elsewhere (razor-2p's C++ front half,
+    Its own function so a snap made elsewhere (razor2p's C++ front half,
     which reports its ties) warns in the same words; `stacklevel` counts from
     the caller's frame, as `warnings.warn`'s does."""
     where = "" if wire is None else f" on wire {wire}"

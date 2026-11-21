@@ -116,7 +116,7 @@ GROUNDS = {
     "somm": SOMM,
 }
 REFERENCES = {
-    "bspline": (BSplineSolver, {"degree": 2}),
+    "bs2": (BSplineSolver, {"degree": 2}),
     "sinusoidal": (SinusoidalSolver, {}),
     "sin-galerkin": (SinusoidalGalerkinSolver, {}),
 }
@@ -324,7 +324,7 @@ def test_converged_deltas_against_the_galerkin_siblings(ladders, gname, lane):
     """
     n = LADDER[-1]
     z = ladders[(gname, "somm", lane, n)]
-    for rname in ("bspline", "sin-galerkin"):
+    for rname in ("bs2", "sin-galerkin"):
         d = abs(z - ladders[(gname, "somm", rname, n)])
         assert d < 1.35, f"{gname} {lane} vs {rname}: |ΔZ| = {d:.4f} Ω at N={n}"
 
@@ -347,7 +347,7 @@ def test_the_dipole_ladders_walk_toward_the_galerkin_answer(ladders, gname, lane
     razor and the reference walk in opposite directions in R and X, so a
     monotone bar would pin a coincidence.
     """
-    ref = ladders[(gname, "somm", "bspline", LADDER[-1])]
+    ref = ladders[(gname, "somm", "bs2", LADDER[-1])]
     seq = [abs(ladders[(gname, "somm", lane, n)] - ref) for n in LADDER]
     for a, b in zip(seq, seq[1:]):
         assert b < a, f"the ladder is not closing: {seq}"

@@ -6,23 +6,23 @@ the default. Use that zip unless you want one file with nothing beside it.
 
 The programs:
 
-    momwire-nec5-razor-2p.exe    nec5-razor-2p (the Python command
-                                 `momwire-nec5-razor-2p`)
-    momwire-nec5-bspline.exe     nec5-bspline, momwire's default B-spline
-                                 formulation (`momwire-nec5-bspline`)
+    momwire-nec5-razor2p.exe     nec5-razor2p (the Python command
+                                 `momwire-nec5-razor2p`)
+    momwire-nec5-bs2.exe         nec5-bs2, momwire's default B-spline
+                                 formulation (`momwire-nec5-bs2`)
 
 Each file holds an avx2 and an sse2 build and picks the one your processor can
 run, so there is one program per engine. Nothing else needs to sit beside it.
 Each takes the forms the real engine takes:
 
-    momwire-nec5-razor-2p.exe DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
-    momwire-nec5-razor-2p.exe - -                     (SimNEC's streaming form)
-    momwire-nec5-razor-2p.exe -version
+    momwire-nec5-razor2p.exe DECK.nec PRINTOUT.out    (EZNEC's and SimNEC's form)
+    momwire-nec5-razor2p.exe - -                      (SimNEC's streaming form)
+    momwire-nec5-razor2p.exe -version
 
 The -version line is the Python command's with "-standalone", the build that
 answered and "-ucrt64" added to the name, e.g.
 
-    NEC5 momwire-nec5-razor-2p-standalone-avx2-ucrt64 [sb] 0.94.0
+    NEC5 momwire-nec5-razor2p-standalone-avx2-ucrt64 [sb] 0.94.0
 
 so SimNEC (and the "CM version" card it puts on each deck) shows that this
 preview answered, and not the programs in momwire-nec5-windows-x64.zip.

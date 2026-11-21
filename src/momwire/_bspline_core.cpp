@@ -7257,7 +7257,7 @@ seg_seg_static_moments_bspline_uniform_ek_table(double h, double a, size_t N,
 // three are elementwise, so each is spelled here with numpy's own operations
 // in numpy's own order, one output element per iteration, and the answer is
 // bit-identical at any thread count. The callers in `_bspline_kernels` /
-// `bspline` keep the numpy spelling as the fallback and as the reference.
+// `bs2` keep the numpy spelling as the fallback and as the reference.
 
 // `out[p, q, i - r0, j] = table[p, q, j - i + (N - 1)]` for rows [r0, r1):
 // numpy's `table[:, :, idx]` gather, a copy.

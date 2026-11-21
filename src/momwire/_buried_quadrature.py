@@ -180,12 +180,12 @@ SINUSOIDAL_GALERKIN = BuriedQuadrature(
 )
 
 POLICIES: dict[str, BuriedQuadrature] = {
-    "bspline": BSPLINE,
-    "sinusoidal-galerkin": SINUSOIDAL_GALERKIN,
+    "bs2": BSPLINE,
+    "sg": SINUSOIDAL_GALERKIN,
 }
 
 
 def sinusoidal_galerkin() -> BuriedQuadrature:
     """SG's entry, read at fill time (not bound at import) so a test can
     swap it through `POLICIES` and reach the production route."""
-    return POLICIES["sinusoidal-galerkin"]
+    return POLICIES["sg"]

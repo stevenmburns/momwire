@@ -56,13 +56,13 @@ def _momwire(xnda: int, basis: str, stem: str = "rp") -> list[str]:
     return _lines(_shell.render(text, basis=basis))
 
 
-@pytest.mark.parametrize("source", ["engine", "razor-2p", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "razor2p", "bs2"])
 def test_a3_prints_exactly_what_a1_prints(source):
     get = _engine if source == "engine" else lambda x: _momwire(x, source)
     assert get(1003) == get(1001)
 
 
-@pytest.mark.parametrize("source", ["engine", "razor-2p", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "razor2p", "bs2"])
 def test_a2_prints_the_trailer_without_the_rows(source):
     get = _engine if source == "engine" else lambda x: _momwire(x, source)
     a1, a2 = get(1001), get(1002)
@@ -72,7 +72,7 @@ def test_a2_prints_the_trailer_without_the_rows(source):
     assert any("AVERAGE POWER GAIN=" in line for line in a2)
 
 
-@pytest.mark.parametrize("source", ["engine", "razor-2p"])
+@pytest.mark.parametrize("source", ["engine", "razor2p"])
 def test_a0_prints_the_rows_without_the_trailer(source):
     get = _engine if source == "engine" else lambda x: _momwire(x, source)
     a0, a1 = get(1000), get(1001)
@@ -92,7 +92,7 @@ def test_the_engine_and_momwire_lay_the_a2_block_out_alike():
         end = next(k for k, l in enumerate(lines) if "POWER RADIATED ASSUMING" in l)
         return lines[start : end + 1]
 
-    engine, mine = block(_engine(1002)), block(_momwire(1002, "razor-2p"))
+    engine, mine = block(_engine(1002)), block(_momwire(1002, "razor2p"))
     assert len(engine) == len(mine)
     for e, m in zip(engine, mine, strict=True):
         if "AVERAGE POWER GAIN=" in e or "POWER RADIATED" in e:
@@ -133,11 +133,11 @@ def test_d1_heads_the_rows_directive_gains_as_the_engine_does():
     for xnda in (1010, 1011):
         engine = _gain_heading(_engine(xnda, "lossy"))
         assert "- DIRECTIVE GAINS -" in engine
-        assert _gain_heading(_momwire(xnda, "razor-2p", "lossy")) == engine
+        assert _gain_heading(_momwire(xnda, "razor2p", "lossy")) == engine
     assert "- POWER GAINS -" in _gain_heading(_engine(1001, "lossy"))
 
 
-@pytest.mark.parametrize("source", ["engine", "razor-2p"])
+@pytest.mark.parametrize("source", ["engine", "razor2p"])
 def test_d1_moves_the_rows_by_the_efficiency_and_not_the_trailer(source):
     """On a 40-ohm-loaded dipole (76.9 % efficient) every row's gain moves by
     10 log10(Pin / Prad) and the average-gain trailer stays a power gain."""
@@ -171,10 +171,10 @@ def test_d1_is_the_power_gain_over_the_radiated_power_bit_for_bit():
     from momwire.deck._nec5 import parse_nec5 as parse
 
     text = (FIXTURES / "lossy1011.nec").read_text(encoding="latin-1")
-    data = _serve.serve(parse(text), basis="razor-2p")
+    data = _serve.serve(parse(text), basis="razor2p")
     (block,) = data.patterns
     assert block.directive
-    power = _serve.serve(parse(text.replace(" 1011 ", " 1001 ")), basis="razor-2p")
+    power = _serve.serve(parse(text.replace(" 1011 ", " 1001 ")), basis="razor2p")
     (pblock,) = power.patterns
     assert not pblock.directive
     budget = data.power

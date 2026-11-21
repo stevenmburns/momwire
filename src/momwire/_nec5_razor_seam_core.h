@@ -1,11 +1,11 @@
-// The NEC-5 seam's structure half for razor-2p in C++: the engine-neutral
+// The NEC-5 seam's structure half for razor2p in C++: the engine-neutral
 // seam (`_nec5_seam_core.h`: the ladder, the mesh, the ports, the cards)
-// with razor-2p's answers to what a basis decides, so a parsed deck comes
+// with razor2p's answers to what a basis decides, so a parsed deck comes
 // out as the arguments the seam hands `RazorSolver` (`_razor_front_core.h`'s
 // `FrontInputs`) and the front half built on them, or the refusal the seam
 // prints, with no Python anywhere:
 //
-//   * `basis()`: "razor-2p", the delta-gap spelling (razor is not in
+//   * `basis()`: "razor2p", the delta-gap spelling (razor is not in
 //     `_CUT_SPELLING`) and a gap on a crossing node (`_crossing_spelling`:
 //     razor carries ONE tent across the node, so it has no junction ports);
 //   * `check_can_host`: `_check_basis_can_host` on razor's capability row,
@@ -37,7 +37,7 @@
 namespace mw {
 namespace nec5 {
 
-// razor-2p's part of one preparation.
+// razor2p's part of one preparation.
 struct RazorPrepared final : EnginePrepared {
     razor::FrontInputs inputs;  // what the seam passes RazorSolver
     // The C++ front half built on `inputs` (construction, geometry, tables,
@@ -61,7 +61,7 @@ class RazorSeamEngine final : public SeamEngine {
     void seam_done(const SeamResult &r) const override;
 };
 
-// The whole seam for razor-2p: `seam(latin1_text, RazorSeamEngine(), open_end)`.
+// The whole seam for razor2p: `seam(latin1_text, RazorSeamEngine(), open_end)`.
 SeamResult razor_seam(const std::string &latin1_text, bool open_end = false);
 
 }  // namespace nec5

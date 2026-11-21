@@ -93,7 +93,7 @@ bool census_pays(double n_pairs, std::size_t unfilled);
 // EVERY node of the view's masters, not the ones still unfilled, and no
 // census when none is unfilled. The census's saving is what a sweep never
 // reads, and that does not shrink as the masters fill: on efhw_hi a
-// razor-2p census reads ~77 % of each master on a pair's first point and
+// razor2p census reads ~77 % of each master on a pair's first point and
 // only 1-9 nodes more on each later one. Set against the unfilled nodes, the
 // test flipped on the pair's second point (192 unfilled, the census's ~30 ms
 // over half their cheapest fill) and filled every remaining node -- the

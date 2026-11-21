@@ -171,7 +171,7 @@ def test_member_choice_is_immaterial_at_degree_two():
     assert abs(za - zb) < 1e-9, f"{za:.6f} vs {zb:.6f}"
 
 
-@pytest.mark.parametrize("family", ["bspline", "sg"])
+@pytest.mark.parametrize("family", ["bs2", "sg"])
 def test_mixed_port_y_is_symmetric(family):
     """Apex node gap × mid-arm gap feed: drive == readout per column, so
     the two-port Y is machine-symmetric on both families."""
@@ -181,7 +181,7 @@ def test_mixed_port_y_is_symmetric(family):
         node_gaps=[(0, "end", 0j)],
         **_SPLIT_KW,
     )
-    if family == "bspline":
+    if family == "bs2":
         s = BSplineSolver(degree=2, **kw)
     else:
         # variational: the honest gap-feed readout. Under the default

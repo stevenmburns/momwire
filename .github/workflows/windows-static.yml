@@ -6,7 +6,7 @@
 #   build    MSYS2 MINGW64 (gcc, the msvcrt.dll runtime -- the import shape of
 #            Ward's single-file NEC5CL build), every runtime linked in
 #            (OpenBLAS from build_openblas.sh's two archives, libgomp,
-#            libstdc++, libgcc, winpthreads): razor-2p and bs2, avx2 and sse2;
+#            libstdc++, libgcc, winpthreads): razor2p and bs2, avx2 and sse2;
 #            the FAT pair (both variants in one file, picked by CPU); and the
 #            libm experiment, avx2 with exp/sin/cos/... forwarded to
 #            msvcrt.dll's or ucrtbase.dll's (MW_EXE_LIBM_SHIM).
@@ -26,7 +26,7 @@
 #            a System32-only PATH, the launcher contract tests, every fixture
 #            deck and NX chain within PRINTOUT_RTOL_WIN32; the fat pair under
 #            Intel SDE and byte for byte against the one-variant builds.
-#   stress   the exit-hang soak: the UCRT64 fat razor-2p executable, stdout
+#   stress   the exit-hang soak: the UCRT64 fat razor2p executable, stdout
 #            piped, the shipped exit (ending the process before the static
 #            teardown) as two labels against the C runtime's exit with the
 #            OpenBLAS pools shut down at exit (the positive control),
@@ -142,8 +142,8 @@ jobs:
             echo "BUILD $d: $(( $(date +%s) - s )) s"
           }
           for b in razor2p bs2; do
-            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
-            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            basis=$b target=momwire-nec5-razor2p-standalone name=momwire-nec5-razor2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bs2-standalone name=momwire-nec5-bs2
             for v in avx2 sse2; do
               cfg "build-$b-$v" $basis $v
               cp "build-$b-$v/$target.exe" "dist/momwire-nec5-$b-$v.exe"
@@ -257,8 +257,8 @@ jobs:
             echo "BUILD $d: $(( $(date +%s) - s )) s"
           }
           for b in razor2p bs2; do
-            basis=$b target=momwire-nec5-razor-2p-standalone name=momwire-nec5-razor-2p
-            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bspline-standalone name=momwire-nec5-bspline
+            basis=$b target=momwire-nec5-razor2p-standalone name=momwire-nec5-razor2p
+            [ $b = bs2 ] && basis=bspline_nec5 target=momwire-nec5-bs2-standalone name=momwire-nec5-bs2
             for v in avx2 sse2; do
               cfg "build-$b-$v" $basis $v
               cp "build-$b-$v/$target.exe" "dist-ucrt/momwire-nec5-$b-$v-ucrt64.exe"
@@ -461,7 +461,7 @@ jobs:
           "control, one guard on: tokens $($ctl.Substring(0, 16)) against $($ref.Substring(0, 16))"
           if ($ctl -eq $ref) { "::error::the control did not move the digest: this check measures nothing"; $fail = 1 }
           exit $fail
-      - name: configure + build (avx2, sse2, avx2 /fp:precise; razor-2p and bs2)
+      - name: configure + build (avx2, sse2, avx2 /fp:precise; razor2p and bs2)
         shell: pwsh
         run: |
           python -m pip install -q ninja
@@ -469,7 +469,7 @@ jobs:
           $banner
           if ($banner -notmatch 'Version 19\.44\.') { throw "cl is not the 14.44 toolset: $banner" }
           $dll = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
-          $target = @{ 'razor2p' = 'momwire-nec5-razor-2p-standalone'; 'bs2' = 'momwire-nec5-bspline-standalone' }
+          $target = @{ 'razor2p' = 'momwire-nec5-razor2p-standalone'; 'bs2' = 'momwire-nec5-bs2-standalone' }
           New-Item -ItemType Directory -Force dist-msvc | Out-Null
           foreach ($b in 'razor2p', 'bs2') {
             # NAME, VARIANT, extra core flags
@@ -603,20 +603,20 @@ jobs:
           python -m venv venv
           venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
           venv\Scripts\python -m pip install -q -e ".[test]"
-      - name: contract tests (razor-2p and bs2, one-variant and fat)
+      - name: contract tests (razor2p and bs2, one-variant and fat)
         shell: pwsh
         run: |
           $env:PATH = "$PWD\venv\Scripts;$env:PATH"
           $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
           $fail = 0
           # EXE, basis, the toolchain its -version line must name
-          $sets = @(@('dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe', '', 'ucrt64'), @('dist-ucrt\momwire-nec5-bs2-avx2-ucrt64.exe', 'bspline', 'ucrt64'),
-                    @('dist-ucrt-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'),
-                    @('dist-ucrt-shim\momwire-nec5-razor2p-avx2-shim.exe', '', 'ucrt64'), @('dist-ucrt-shim\momwire-nec5-bs2-avx2-shim.exe', 'bspline', 'ucrt64'),
-                    @('dist-ucrt-shim-fat\momwire-nec5-razor-2p.exe', '', 'ucrt64'), @('dist-ucrt-shim-fat\momwire-nec5-bspline.exe', 'bspline', 'ucrt64'))
+          $sets = @(@('dist-ucrt\momwire-nec5-razor2p-avx2-ucrt64.exe', '', 'ucrt64'), @('dist-ucrt\momwire-nec5-bs2-avx2-ucrt64.exe', 'bs2', 'ucrt64'),
+                    @('dist-ucrt-fat\momwire-nec5-razor2p.exe', '', 'ucrt64'), @('dist-ucrt-fat\momwire-nec5-bs2.exe', 'bs2', 'ucrt64'),
+                    @('dist-ucrt-shim\momwire-nec5-razor2p-avx2-shim.exe', '', 'ucrt64'), @('dist-ucrt-shim\momwire-nec5-bs2-avx2-shim.exe', 'bs2', 'ucrt64'),
+                    @('dist-ucrt-shim-fat\momwire-nec5-razor2p.exe', '', 'ucrt64'), @('dist-ucrt-shim-fat\momwire-nec5-bs2.exe', 'bs2', 'ucrt64'))
           if ($env:MINGW64_GATES -eq '1') {
-            $sets += @(@('dist\momwire-nec5-razor2p-avx2.exe', '', 'mingw64'), @('dist\momwire-nec5-bs2-avx2.exe', 'bspline', 'mingw64'),
-                       @('dist-fat\momwire-nec5-razor-2p.exe', '', 'mingw64'), @('dist-fat\momwire-nec5-bspline.exe', 'bspline', 'mingw64'))
+            $sets += @(@('dist\momwire-nec5-razor2p-avx2.exe', '', 'mingw64'), @('dist\momwire-nec5-bs2-avx2.exe', 'bs2', 'mingw64'),
+                       @('dist-fat\momwire-nec5-razor2p.exe', '', 'mingw64'), @('dist-fat\momwire-nec5-bs2.exe', 'bs2', 'mingw64'))
           }
           foreach ($p in $sets) {
             "=== $($p[0])"
@@ -652,8 +652,8 @@ jobs:
             if (-not (Test-Path $exe)) { "skipped: no $exe"; continue }
             if ($v -eq 'sse2') { $env:MOMWIRE_FORCE_VARIANT = 'sse2' } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
             $extra = @()
-            $L = "$PWD\venv\Scripts\momwire-nec5-razor-2p.exe"
-            if ($b -eq 'bs2') { $extra = @('--basis', 'bspline', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bspline.exe" }
+            $L = "$PWD\venv\Scripts\momwire-nec5-razor2p.exe"
+            if ($b -eq 'bs2') { $extra = @('--basis', 'bs2', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bs2.exe" }
             $tag = [IO.Path]::GetFileNameWithoutExtension($exe)
             "=== $tag ($v)"
             venv\Scripts\python scripts/core_split/exe_compare.py "exe-$tag.jsonl" --standalone --rtol win32 `
@@ -683,7 +683,7 @@ jobs:
           if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
           foreach ($set in $sets) {
-            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor2p'), @('bs2', 'momwire-nec5-bs2'))) {
               $fat = (Resolve-Path "$($set[0])\$($b[1]).exe").Path
               foreach ($cpu in 'wsm', 'snb', 'hsw') {
                 $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
@@ -720,7 +720,7 @@ jobs:
             }
           }
           exit $fail
-      - name: fat == one-variant, every fixture deck (razor-2p and bs2, avx2 and sse2)
+      - name: fat == one-variant, every fixture deck (razor2p and bs2, avx2 and sse2)
         if: always()
         shell: pwsh
         run: |
@@ -729,7 +729,7 @@ jobs:
           if ($env:MINGW64_GATES -eq '1') { $sets += ,@('dist-fat', 'dist', '') }
           $fail = 0
           foreach ($set in $sets) {
-            foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+            foreach ($b in @(@('razor2p', 'momwire-nec5-razor2p'), @('bs2', 'momwire-nec5-bs2'))) {
               foreach ($v in 'avx2', 'sse2') {
                 "=== $($set[0]) $($b[1]) $v"
                 python scripts/windows_static/fat_compare.py "$($set[0])\$($b[1]).exe" $v "$($set[1])\momwire-nec5-$($b[0])-$v$($set[2]).exe" `
@@ -748,7 +748,7 @@ jobs:
   # The exit now ends the process before the static teardown reaches it
   # (momwire_razor2p.cpp, main's MinGW wrapper). All stdout piped (the hang
   # never showed with stdout to DEVNULL), on ONE executable (the UCRT64 fat
-  # razor-2p, the candidate product), interleaved:
+  # razor2p, the candidate product), interleaved:
   #   default-a, -b     the shipped exit, twice, for twice the runs
   #   normal-shutdown   the C runtime's exit, the pools shut down at exit:
   #                     the positive control (9 in 44,736 in run 44112554494)
@@ -763,7 +763,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-        exe: [momwire-nec5-razor-2p, momwire-nec5-bspline]
+        exe: [momwire-nec5-razor2p, momwire-nec5-bs2]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -829,7 +829,7 @@ jobs:
         shell: pwsh
         run: |
           $M = "$PWD\dist-msvc"; $D = "$PWD\dist"; $U = "$PWD\dist-ucrt"; $X = "$PWD\dist-ucrt-exp"
-          foreach ($b in @(@('razor2p', 'momwire-nec5-razor-2p'), @('bs2', 'momwire-nec5-bspline'))) {
+          foreach ($b in @(@('razor2p', 'momwire-nec5-razor2p'), @('bs2', 'momwire-nec5-bs2'))) {
             "=== $($b[0])"
             python scripts/windows_static/time_exes.py "timing-$($b[0]).jsonl" `
               "msvc/$($b[0])=$M\momwire-nec5-$($b[0])-avx2.exe" `

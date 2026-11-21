@@ -86,15 +86,16 @@ FR 0 1 0 0 14.1
 XQ
 EN
 """
-built = build_solver(parse(deck), basis="bspline")
+built = build_solver(parse(deck), basis="bs2")
 y = built.solver.compute_port_solution().y
 port = built.ports.feed_ports[0]  # the solver row this EX card drives
 print(f"Z = {1.0 / y[port, port]:.1f} ohm")  # Z = 67.0-41.1j ohm
 ```
 
 `parse()` returns a dialect-neutral `DeckModel`; `build_solver()` maps it onto
-one of the seven `BASES` names (five solver families — `"bspline"` is the
-default, the degree-2 B-spline) and returns the solver together with a
+one of the eight `BASES` names (six solver families — `"bs2"` is the
+default, the degree-2 B-spline; the names before momwire#2091, such as
+`"bspline"`, still work and warn) and returns the solver together with a
 `PortPlan`. The plan is what makes the solver's ports readable: which row is
 which `EX` or `LD` card, each load's `LoadSpec`, and one drive vector per
 execute group over a port set that never changes. Stamping a load impedance
@@ -139,7 +140,7 @@ momwire-nec2c --basis sinusoidal < dipole.nec     # or run a deck by hand
 ```
 
 SimNEC's **NEC-5** slot takes the `momwire-nec5[-<basis>]` commands instead
-(`momwire-nec5-razor-2p` is NEC-5's own formulation): SimNEC picks the deck
+(`momwire-nec5-razor2p` is NEC-5's own formulation): SimNEC picks the deck
 syntax from `nec2c` or `nec5` in the engine's path.
 
 Setup, the two filename rules SimNEC enforces, `--basis`, the caching flags
@@ -244,11 +245,11 @@ warns and falls back to the slower pure-Python path. On Linux the system
 
 Each release also carries **`momwire-nec5-linux-x86_64.tar.gz`**: two of
 momwire's NEC-5 engines as native programs, with no Python in them. They are
-nec5-razor-2p (`momwire-nec5-razor-2p`) and nec5-bspline, the default B-spline formulation
-(`momwire-nec5-bspline`). You do not need Python, pip or momwire installed.
+nec5-razor2p (`momwire-nec5-razor2p`) and nec5-bs2, the default B-spline formulation
+(`momwire-nec5-bs2`). You do not need Python, pip or momwire installed.
 Their printouts are byte for byte the Python commands'. Their `-version` line
 is the command's with `-standalone` and the build added to the name, e.g.
-`NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] <version>`.
+`NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] <version>`.
 
 ```bash
 tar -xzf momwire-nec5-linux-x86_64.tar.gz
@@ -256,7 +257,7 @@ cd momwire-nec5-linux-x86_64
 ./momwire-nec5-razor2p-linux -version
 ./momwire-nec5-razor2p-linux deck.nec deck.out   # EZNEC's and SimNEC's form
 ./momwire-nec5-razor2p-linux - - < chain.nec     # SimNEC's streaming form
-./momwire-nec5-bs2-linux deck.nec deck.out       # the same forms, nec5-bspline
+./momwire-nec5-bs2-linux deck.nec deck.out       # the same forms, nec5-bs2
 ```
 
 For SimNEC, point the NEC-5 engine setting at `momwire-nec5-razor2p-linux`
@@ -267,7 +268,7 @@ with glibc 2.28 or newer (RHEL/Alma 8, Debian 10, Ubuntu 18.10 and later);
 everything else is built in. A deck an engine does not serve yet is refused
 in the printout by name ("not served by this build: ..."), and the Python
 command serves it. The other formulations stay Python. The existing Windows
-`momwire-nec5-razor-2p.exe` in the EZNEC drop-in zip is unchanged.
+`momwire-nec5-razor2p.exe` in the EZNEC drop-in zip is unchanged.
 
 ### The NEC-4.2 sinusoidal engine on Linux, without Python (preview)
 
@@ -291,7 +292,7 @@ serves those decks.
 
 **Preview:** the same tarball also carries `momwire-nec42-linux`
 (momwire#1607 Phase C), the native twin of the Python command
-`momwire-nec42`, the NEC-4.2 slot's default (nec42-bspline, the B-spline basis), with
+`momwire-nec42`, the NEC-4.2 slot's default (nec42-bs2, the B-spline basis), with
 the same `-avx2` / `-sse2` picking and the same three forms. Its printouts
 are the Python command's byte for byte, apart from the two lines that report
 measured time. It serves free space, a perfect ground (GN 1), a Sommerfeld
@@ -344,7 +345,7 @@ apart from round-off in values that are zero in exact arithmetic.
 
 **Preview: one file per engine.** A release may also carry
 **`momwire-nec5-windows-x64-single.zip`** beside that zip, which stays the
-default; check the release's assets. It holds `momwire-nec5-razor-2p.exe` and `momwire-nec5-bspline.exe`,
+default; check the release's assets. It holds `momwire-nec5-razor2p.exe` and `momwire-nec5-bs2.exe`,
 built with GCC (MSYS2 UCRT64): each file carries an avx2 and an sse2 build and
 picks the one the processor can run, with no DLLs beside it. It needs the
 Universal C Runtime, which Windows 10 and 11 include; on Windows 7 SP1 or 8.1
@@ -419,7 +420,7 @@ Sinusoidal-Galerkin solves never run it.
 numpy and OpenBLAS switch to AVX-512 code on a processor that has it, and
 that code rounds differently in the last bits. momwire's own entry points
 (the `momwire-nec5`/`momwire-nec42`/`momwire-nec2c-shared` commands and the
-servers they start, the Windows drop-in, the Linux razor-2p program and the
+servers they start, the Windows drop-in, the Linux razor2p program and the
 test suite) turn it off on such a processor, by setting
 `NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` before numpy
 loads, so the printout doesn't change with the processor. A value you set
@@ -428,7 +429,7 @@ This doesn't cover everything. `momwire-nec2c`, `python -m momwire...` run by
 hand, a resident server one of those started, and a program that imports
 numpy before momwire have all loaded numpy before the pin. For those, call
 `momwire_serve_client.pin_cpu_env()` before importing numpy, or set the two
-variables in the environment. The Windows razor-2p hybrid's own OpenBLAS DLL
+variables in the environment. The Windows razor2p hybrid's own OpenBLAS DLL
 picks its kernels before any code can pin it. Even pinned, a value that
 cancels to almost nothing can still print differently in its last digits.
 

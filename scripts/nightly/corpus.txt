@@ -1,8 +1,8 @@
 # The Skylake nightly's committed corpus (scripts/nightly/audit.py).
 #
 # "<dialects> <directory>": every *.nec and *.deck directly in the directory
-# (not recursive), from the repo root. nec5 decks go to the nec5-bspline
-# and nec5-razor-2p executables, nec42 decks to nec42-bspline and
+# (not recursive), from the repo root. nec5 decks go to the nec5-bs2
+# and nec5-razor2p executables, nec42 decks to nec42-bs2 and
 # nec42-sinusoidal. Every line names an in-repo fixture directory only: a deck the nightly reports by name is one
 # anyone can open. tests/test_skylake_nightly.py fails if a line names a
 # directory that holds no deck.

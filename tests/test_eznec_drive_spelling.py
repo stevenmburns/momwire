@@ -335,7 +335,7 @@ def test_razor_nec5_serves_every_capture_but_the_three_named(cid):
     capability refusals through :func:`~momwire.dropin.nec5._serve.serve` rather
     than letting a constructor raise into EZNEC's face.
     """
-    text = render(deck_text(cid), basis="razor-nec5")
+    text = render(deck_text(cid), basis="razor2p")
     assert ("NEC ERROR" in text) == (cid in UNSERVED)
 
 
@@ -362,7 +362,7 @@ def test_the_five_wire_apex_lands_on_the_licensed_engine(razor_seam=None):
     is what makes it a check on the apex PORT.
     """
     reference = input_impedance(printout_text("0013"))
-    served = input_impedance(render(deck_text("0013"), basis="razor-nec5"))
+    served = input_impedance(render(deck_text("0013"), basis="razor2p"))
     bspline = input_impedance(render(deck_text("0013")))
     assert reference == pytest.approx(55.621 + 8.273j, abs=1e-3)
     assert abs(served - reference) / abs(reference) < 1e-4
@@ -409,7 +409,7 @@ def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid):
     corpus the served decks sit a median 0.00 % and a worst 0.03 % away;
     these four are pinned so the claim has a gate.
     """
-    served = input_impedance(render(deck_text(cid), basis="razor-nec5"))
+    served = input_impedance(render(deck_text(cid), basis="razor2p"))
     reference = input_impedance(printout_text(cid))
     assert reference is not None and served is not None
     assert abs(served - reference) / abs(reference) < 1e-3
@@ -426,7 +426,7 @@ def test_the_w7el_triple_still_answers_series_where_it_must():
     reproduces the pair through the delta-gap spelling.
     """
     z = {
-        cid: input_impedance(render(deck_text(cid), basis="razor-nec5"))
+        cid: input_impedance(render(deck_text(cid), basis="razor2p"))
         for cid in ("0012", "0014", "0016", "0017")
     }
     assert z["0012"] == z["0014"] == z["0016"]  # one point, two tags, one answer
@@ -444,7 +444,7 @@ def test_the_current_table_is_not_printed_180_degrees_out(cid):
     turn.  Read on the largest currents in the table, where a phase is
     meaningful.
     """
-    served = _wire_currents(render(deck_text(cid), basis="razor-nec5"))
+    served = _wire_currents(render(deck_text(cid), basis="razor2p"))
     reference = _wire_currents(printout_text(cid))
     assert len(served) == len(reference) and served
     pairs = sorted(zip(reference, served), key=lambda p: -abs(p[0]))[:5]

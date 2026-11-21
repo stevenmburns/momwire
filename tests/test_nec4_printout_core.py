@@ -67,7 +67,7 @@ def _decks(root: pathlib.Path) -> list[pathlib.Path]:
     ]
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 @pytest.mark.slow  # median over the 5 s default-lane budget at 0.84.0
 def test_the_nec42_fixtures_print_the_same(basis, acc):
     counts, mismatches = nc.compare(_decks(FIXTURES / "eznec_nec42"), basis)
@@ -75,7 +75,7 @@ def test_the_nec42_fixtures_print_the_same(basis, acc):
     assert counts["printout"] >= 50, counts
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_every_refusal_before_a_solve_prints_the_same(basis, acc):
     counts, mismatches = nc.compare(_decks(FIXTURES), basis, refusals_only=True)
     assert not mismatches, mismatches[:2]
@@ -83,7 +83,7 @@ def test_every_refusal_before_a_solve_prints_the_same(basis, acc):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_every_fixture_deck_prints_the_same(basis, acc):
     counts, mismatches = nc.compare(_decks(FIXTURES), basis)
     assert not mismatches, mismatches[:2]

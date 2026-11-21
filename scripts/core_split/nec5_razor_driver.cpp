@@ -1,6 +1,6 @@
 // deck text -> currents with no Python: the NEC-5 deck reader
 // (`_nec5_deck_core.h`), the seam's structure half (`_nec5_razor_seam_core.h`),
-// razor-2p's front half (`_razor_front_core.h`), the fill and the LU
+// razor2p's front half (`_razor_front_core.h`), the fill and the LU
 // (`_razor_solve_core.h`).
 //
 //     nec5_razor_driver LIBOPENBLAS.so OUTDIR DECK...

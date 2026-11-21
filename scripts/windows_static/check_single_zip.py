@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 TOP = "momwire-nec5-windows-x64-single"
-PROGRAMS = {"momwire-nec5-razor-2p.exe", "momwire-nec5-bspline.exe"}
+PROGRAMS = {"momwire-nec5-razor2p.exe", "momwire-nec5-bs2.exe"}
 EXPECTED = PROGRAMS | {"README.txt", "THIRD-PARTY-NOTICES.txt"}
 SYSTEM = {"kernel32.dll", "advapi32.dll", "ntdll.dll"}
 UCRT_PREFIX = "api-ms-win-crt-"

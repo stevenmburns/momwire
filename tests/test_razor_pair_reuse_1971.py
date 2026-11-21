@@ -1,4 +1,4 @@
-"""razor-2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`).
+"""razor2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`).
 
 The fill finds its own classes of (centroid observer, source segment) pairs:
 the direct and image moments keyed on what `seg_moments` reads (the axis

@@ -1,4 +1,4 @@
-"""The NEC-5 seam's structure half for razor-2p in C++ (`_nec5_razor_seam_core`,
+"""The NEC-5 seam's structure half for razor2p in C++ (`_nec5_razor_seam_core`,
 unit 2b of the standalone executable) is the Python seam's, deck by deck.
 
 Each hand-written deck below first asserts where the PYTHON seam lands (so a

@@ -349,9 +349,7 @@ def test_the_dialects_choose_the_rule():
         warnings.simplefilter("ignore")
         nec2 = build_solver(parse(text, dialect="nec2"), basis="sinusoidal").solver
         nec4 = build_solver(parse(text, dialect="nec4"), basis="sinusoidal").solver
-        sg = build_solver(
-            parse(text, dialect="nec4"), basis="sinusoidal-galerkin"
-        ).solver
+        sg = build_solver(parse(text, dialect="nec4"), basis="sg").solver
     assert nec2.junction_rule == "nec2"
     assert nec4.junction_rule == "nec42"
     assert sg.junction_rule == "nec2"
@@ -416,10 +414,10 @@ def test_an_unknown_override_is_refused_by_name(monkeypatch):
 def test_sin_galerkin_takes_no_rule(rule, monkeypatch):
     """The Galerkin subclass never sees the option, set or not: same Z."""
     text = _STEP_DECK.format(a1=0.001, a2=0.005)
-    _, z0 = _deck_z(text, "nec4", basis="sinusoidal-galerkin")
+    _, z0 = _deck_z(text, "nec4", basis="sg")
     if rule is not None:
         monkeypatch.setenv("MOMWIRE_JUNCTION_RULE", rule)
-    solver, z = _deck_z(text, "nec4", basis="sinusoidal-galerkin")
+    solver, z = _deck_z(text, "nec4", basis="sg")
     assert solver.junction_rule == "nec2" and z == z0
 
 

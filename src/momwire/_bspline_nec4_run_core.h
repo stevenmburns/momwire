@@ -1,6 +1,6 @@
 // The B-spline basis (bs2) on the NEC-4.2 slot's run half (momwire#1607
 // Phase C1), with no Python in it: `nec4::RunEngine` over bs2's own cores.
-// The slot's build (`nec4::build(text, "bspline")`) hands each operating
+// The slot's build (`nec4::build(text, "bs2")`) hands each operating
 // point the keyword arguments `construct_solver(BSplineSolver, {"exact_kernel":
 // "auto"}, ...)` takes on this dialect: centre-addressed delta gaps, the
 // junctions as declared, the extended kernel per the dialect default (in
@@ -19,7 +19,7 @@
 // not serve (bs2's NotImplementedError among them, whose wording it does not
 // promise) is declined by name, never misread.
 //
-// `printout(text, ...)` is `_nec4.render(text, basis="bspline")`, or a
+// `printout(text, ...)` is `_nec4.render(text, basis="bs2")`, or a
 // decline.
 #pragma once
 
@@ -45,7 +45,7 @@ struct Linalg {
 };
 
 // One solve's arrays, for the gate (`scripts/core_split/nec4_run_compare.py
-// --basis bspline`): the operator the port solve takes, the port columns,
+// --basis bs2`): the operator the port solve takes, the port columns,
 // the coefficients and the port admittances, as numpy holds them.
 struct SolveArrays {
     long long n_basis = 0, n_ports = 0;
@@ -98,12 +98,12 @@ class Engines : public nec4::EngineFactory {
 // argument bs2's front does not take here.
 nec5::BSplineFrontInputs front_inputs(const nec4::SolverArgs &args);
 
-// `_nec4.render(text, basis="bspline")`: true with the printout (UTF-8, LF),
+// `_nec4.render(text, basis="bs2")`: true with the printout (UTF-8, LF),
 // or false with the reason this copy declines. `arrays`, when given,
 // receives each solve's arrays in solve order.
 bool printout(const std::string &latin1_text, const nec5::EngineStamp &stamp, const Linalg &la,
               std::string &utf8_printout, std::string &why, std::vector<SolveArrays> *arrays = nullptr);
-// `_shell._stream_piece(text, basis="bspline", dialect="nec4")`
+// `_shell._stream_piece(text, basis="bs2", dialect="nec4")`
 // (`nec4::render_piece`).
 bool printout_piece(const std::string &latin1_text, const nec5::EngineStamp &stamp, const Linalg &la,
                     std::string &utf8_printout, std::string &why, bool &go_on);

@@ -34,7 +34,7 @@ import warnings
 from momwire.dropin.nec5 import _nec4, _printout
 
 SUFFIXES = {".nec", ".deck"}
-BASES = ("sinusoidal", "bspline")
+BASES = ("sinusoidal", "bs2")
 
 
 def accel():

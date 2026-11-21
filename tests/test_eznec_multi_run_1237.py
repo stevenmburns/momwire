@@ -31,7 +31,7 @@ from momwire.dropin.nec5._shell import render
 
 FIXTURES = Path(__file__).parent / "fixtures" / "eznec_multi_run_1237"
 DECKS = ("two-port", "two-port-xq", "two-port-ground")
-TWIN = "razor-nec5"
+TWIN = "razor2p"
 _NUMBER = re.compile(r"[-+]?\d+(\.\d+)?(E?[-+]\d+)?")
 
 

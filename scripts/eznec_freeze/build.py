@@ -71,7 +71,7 @@ LAUNCHER = "momwire-nec5"
 # `momwire_eznec_client.c`), so a copy is a working launcher and costs ~31 KB
 # rather than a second 117 MB runtime.  Two per slot, not the whole roster:
 # the default plus the one formulation each slot's parity work was about
-# (razor-2p is NEC-5's own; point-matched sinusoidal is the family NEC-4.2
+# (razor2p is NEC-5's own; point-matched sinusoidal is the family NEC-4.2
 # belongs to), and the reference page says how to make any other, which is a
 # copy (the README links it; momwire#1593 kept the README to install steps).
 #
@@ -80,7 +80,7 @@ LAUNCHER = "momwire-nec5"
 # is under WHICH ONE.
 NEC5_LAUNCHERS = {
     "momwire-nec5": "the default, degree-2 B-spline (bs2)",
-    "momwire-nec5-razor-2p": "the tent basis, razor-blade testing",
+    "momwire-nec5-razor2p": "the tent basis, razor-blade testing",
 }
 NEC4_LAUNCHERS = {
     "momwire-nec42": "the default, degree-2 B-spline (bs2)",
@@ -358,6 +358,14 @@ def readme_text(
         f"{signing_note}\n"
         "\n"
         f"{win7}"
+        "NAMES CHANGED IN 0.97.0.  The basis names lost their dashes:\n"
+        "\n"
+        "  RENAMED momwire-nec5-razor-2p.exe       -> momwire-nec5-razor2p.exe\n"
+        "\n"
+        "A program still pointed at the old name keeps working for now, and\n"
+        "line 2 of its printout ends in '(renamed from razor-2p)'.  The old\n"
+        "name will stop working in a later release: change the engine path.\n"
+        "\n"
         "NAMES CHANGED IN 0.80.0.  Earlier releases used names that said\n"
         '"eznec".  If your program\'s engine path points at an old name,\n'
         "change it to the new one:\n"
@@ -367,8 +375,8 @@ def readme_text(
         "  folder  momwire-eznec\\                  -> momwire\\\n"
         "  engine  momwire-eznec-engine.exe        -> momwire-engine.exe\n"
         "  REMOVED momwire-eznec.exe               -> use momwire-nec5.exe\n"
-        "  REMOVED momwire-eznec-razor-2p.exe      -> use momwire-nec5-razor-2p.exe\n"
-        "  REMOVED momwire-eznec-razor-nec5.exe    -> use momwire-nec5-razor-2p.exe\n"
+        "  REMOVED momwire-eznec-razor-2p.exe      -> use momwire-nec5-razor2p.exe\n"
+        "  REMOVED momwire-eznec-razor-nec5.exe    -> use momwire-nec5-razor2p.exe\n"
         "\n"
         "The momwire-nec5 and momwire-nec42 launcher names are unchanged.\n"
         "\n"
@@ -435,7 +443,7 @@ def readme_text(
         "answer in different formulations.  Each slot's default is momwire's\n"
         "own degree-2 B-spline basis.\n"
         "\n"
-        "In the NEC-5 slot, momwire-nec5-razor-2p is the tent basis with\n"
+        "In the NEC-5 slot, momwire-nec5-razor2p is the tent basis with\n"
         "razor-blade path testing at NEC-5's two-point rule — the same\n"
         "formulation NEC-5 itself uses, which is why it agrees with the\n"
         "licensed engine to a few thousandths of an ohm.\n"
@@ -444,10 +452,10 @@ def readme_text(
         "basis with point matching, the basis family NEC-4.2 itself belongs\n"
         "to.  razor cannot serve this slot: NEC-4.2 decks put their sources\n"
         "at segment centres and razor places sources at knots, so a\n"
-        "momwire-nec42-razor-2p copy refuses, by name, in the printout.\n"
+        "momwire-nec42-razor2p copy refuses, by name, in the printout.\n"
         "\n"
         "SIMNEC.  Point SimNEC's NEC-5 engine setting at momwire-nec5.exe or\n"
-        "momwire-nec5-razor-2p.exe.  SimNEC decides which deck syntax to write\n"
+        "momwire-nec5-razor2p.exe.  SimNEC decides which deck syntax to write\n"
         "from the engine's NAME, which must contain nec5, as both of these\n"
         "do.  Same engine, same warm start; a path with no spaces in it is\n"
         "safest.  SimNEC recognises a NEC-4.2 engine by nec42 in its name,\n"
@@ -477,7 +485,7 @@ def readme_text(
         "    rem Copy/paste one of the engine choices below,\n"
         '    rem without the leading "rem " characters.\n'
         "    rem C:\\momwire\\momwire-nec5.exe < nec2d.tmp\n"
-        "    rem C:\\momwire\\momwire-nec5-razor-2p.exe < nec2d.tmp\n"
+        "    rem C:\\momwire\\momwire-nec5-razor2p.exe < nec2d.tmp\n"
         "\n"
         "    C:\\momwire\\momwire-nec5.exe < nec2d.tmp\n"
         "\n"

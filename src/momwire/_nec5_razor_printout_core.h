@@ -1,9 +1,9 @@
-// The NEC-5 seam's run half and printout for razor-2p in C++: the
+// The NEC-5 seam's run half and printout for razor2p in C++: the
 // engine-neutral run half and writer (`_nec5_printout_core.h`) with
-// razor-2p's answers to what the solver is asked, so deck text comes out as
-// the bytes `momwire-nec5-razor-2p` writes, with no Python anywhere:
+// razor2p's answers to what the solver is asked, so deck text comes out as
+// the bytes `momwire-nec5-razor2p` writes, with no Python anywhere:
 //
-//   * `seam()`: razor-2p's structure half (`_nec5_razor_seam_core.h`);
+//   * `seam()`: razor2p's structure half (`_nec5_razor_seam_core.h`);
 //   * `solve`: `RazorSolver.compute_port_solution` -- the fill and the LU
 //     (`razor::solve_ports`), then its last line, `Y = cols.T @ X`;
 //   * the readouts: `currents_at_knots` (`_end_wings` included),
@@ -13,7 +13,7 @@
 //     (momwire#1042).
 //
 //     mw::nec5::PrintoutResult r = mw::nec5::razor_printout(
-//         latin1_text, "razor-2p", stamp, ctx, lapack, numpy);
+//         latin1_text, "razor2p", stamp, ctx, lapack, numpy);
 //     // r.route: printed (r.printout: the file's bytes) | declined (r.reason)
 //
 // The Python seam stays the reference: `scripts/core_split/printout_compare.py`
@@ -57,7 +57,7 @@ class RazorPrintoutEngine final : public PrintoutEngine {
     const razor::Lapack &lapack_;
 };
 
-// The whole of `momwire-nec5-razor-2p` for one deck file's bytes:
+// The whole of `momwire-nec5-razor2p` for one deck file's bytes:
 // `printout(latin1_text, basis, stamp, RazorPrintoutEngine(ctx, lapack), np,
 // arrays, open_end)`.
 PrintoutResult razor_printout(const std::string &latin1_text, const std::string &basis,

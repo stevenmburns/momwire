@@ -37,7 +37,7 @@ KINDS = {
     "HORIZONTAL GAIN": 4,
     "TOTAL GAIN": 5,
 }
-BASES = ("bspline", "sinusoidal")
+BASES = ("bs2", "sinusoidal")
 # The slot's cells against licensed NEC-4.2's: a cell is a difference of two
 # gains, and momwire's bases are not NEC-4.2's. MEASURED over all 4159
 # compared cells of the 66 decks (2026-11-17, Rocketlake), linear minor axes
@@ -96,7 +96,7 @@ def _reference(stem: str) -> str:
 _RENDERED: dict[tuple[str, str], str] = {}
 
 
-def _momwire(stem: str, basis: str = "bspline") -> str:
+def _momwire(stem: str, basis: str = "bs2") -> str:
     key = (stem, basis)
     if key not in _RENDERED:
         text = render(_deck(stem), basis=basis, dialect="nec4")
@@ -255,7 +255,7 @@ def test_the_census_refusal_is_gone():
 def test_an_xnda_no_capture_shows_still_refuses(xnda):
     text = _deck("free1501").replace(" 1501 ", f" {xnda} ")
     with pytest.raises(_nec4.Nec4Refusal, match=f"RP with XNDA {xnda}"):
-        _nec4.solve(text, basis="bspline")
+        _nec4.solve(text, basis="bs2")
 
 
 # A few decks on the default lane, the whole set under `integration`.

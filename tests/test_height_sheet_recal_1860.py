@@ -3,7 +3,7 @@ feature `height_sheet_recal`).
 
 On the EFHW deck of #1860, the 1 cm counterpoise's rows (its nodes x the
 buried rod's) were declined a height sheet by the census's row worth, and
-nec5-bspline's knots put that height at three values a few ulp apart. On,
+nec5-bs2's knots put that height at three values a few ulp apart. On,
 the census values a horizontal wire's rows (a fixed (x, y) group holding no
 other height) at `_SHEET_HEIGHT_LONE_WORTH`, keeps a mast's at
 `_SHEET_ROW_WORTH`, and snaps heights within `_SHEET_HEIGHT_SNAP_ULPS`.
@@ -190,11 +190,11 @@ def test_on_the_efhw_deck_takes_the_counterpoise_sheet_and_zin_agrees(
 
     monkeypatch.setattr(ni, "sheet_plan", spy)
     monkeypatch.setenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", "0")
-    off = _shell.render(EFHW_HI, basis="razor-2p", dialect="nec5")
+    off = _shell.render(EFHW_HI, basis="razor2p", dialect="nec5")
     assert plans and all(0.01 not in p.heights.tolist() for p in plans)
     plans.clear()
     monkeypatch.setenv("MOMWIRE_X_HEIGHT_SHEET_RECAL", "1")
-    on = _shell.render(EFHW_HI, basis="razor-2p", dialect="nec5")
+    on = _shell.render(EFHW_HI, basis="razor2p", dialect="nec5")
     assert plans and all(0.01 in p.heights.tolist() for p in plans)
     z_off, z_on = _zin(off), _zin(on)
     assert abs(z_on - z_off) <= 1e-9 * abs(z_off)

@@ -33,8 +33,8 @@ KINDS = {
 # momwire's gains against x13's on these decks: the two solvers differ in
 # their last digits as everywhere (momwire's B-spline and razor bases against
 # NEC-5's own), and a cell is a difference of two such gains. MEASURED over
-# all 8082 compared cells on bspline and razor-2p (2026-11-15): worst 0.04 dB
-# (bspline, free1101_gnor10, a cell 24 dB down) and 0.01 dB (razor-2p). The
+# all 8082 compared cells on bspline and razor2p (2026-11-15): worst 0.04 dB
+# (bspline, free1101_gnor10, a cell 24 dB down) and 0.01 dB (razor2p). The
 # bar is that with headroom, far below anything the table's layout decides
 # (a column split, a sign, which row is the peak).
 CELL_DB = 0.1
@@ -60,7 +60,7 @@ def _deck(stem: str) -> str:
 _RENDERED: dict[tuple[str, str], str] = {}
 
 
-def _momwire(stem: str, basis: str = "bspline") -> str:
+def _momwire(stem: str, basis: str = "bs2") -> str:
     key = (stem, basis)
     if key not in _RENDERED:
         _RENDERED[key] = _shell.render(_deck(stem), basis=basis).replace("\r\n", "\n")
@@ -178,7 +178,7 @@ def _column(n: int) -> int | None:
     return {3: 2, 4: 3, 5: 4}.get(n)
 
 
-@pytest.mark.parametrize("source", ["engine", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "bs2"])
 @pytest.mark.parametrize("stem", _decks())
 def test_each_cell_is_its_rows_gain_less_the_factor(stem, source):
     """N = 3 / 4 / 5 read the VERT. / HOR. / TOTAL column; the factor is
@@ -211,7 +211,7 @@ def test_each_cell_is_its_rows_gain_less_the_factor(stem, source):
             assert abs(cell[2] - (gain - table["factor"])) <= 0.0101, (stem, cell, gain)
 
 
-@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p"])
 @pytest.mark.parametrize("stem", _decks())
 def test_momwire_lays_the_table_out_as_the_engine(stem, basis):
     """Every table line for line: the heading, the name, the factor line's
@@ -242,7 +242,7 @@ def test_momwire_lays_the_table_out_as_the_engine(stem, basis):
             assert abs(ec[2] - mc[2]) <= CELL_DB, (stem, ec, mc)
 
 
-def _block(stem: str, basis: str = "razor-2p") -> list:
+def _block(stem: str, basis: str = "razor2p") -> list:
     data = _serve.serve(parse_nec5(_deck(stem)), basis=basis)
     return data.patterns
 
@@ -275,7 +275,7 @@ def test_momwire_cells_are_the_gains_less_the_factor_exactly(stem):
             assert abs(cell[2] + block.normalization_db - expect) <= 1e-9
 
 
-@pytest.mark.parametrize("source", ["engine", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "bs2"])
 def test_a2_prints_the_table_without_the_rows(source):
     get = _engine if source == "engine" else _momwire
     a1, a2 = _tables(get("free1501")), _tables(get("free1502"))
@@ -285,7 +285,7 @@ def test_a2_prints_the_table_without_the_rows(source):
     assert [t["lines"] for t in a0] == [t["lines"] for t in a1]
 
 
-@pytest.mark.parametrize("source", ["engine", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "bs2"])
 def test_d1_moves_the_factor_and_not_the_cells(source):
     get = _engine if source == "engine" else _momwire
     for n in (1, 5):
@@ -294,7 +294,7 @@ def test_d1_moves_the_factor_and_not_the_cells(source):
         assert d1["factor"] - d0["factor"] == pytest.approx(1.34, abs=0.011)
 
 
-@pytest.mark.parametrize("source", ["engine", "bspline"])
+@pytest.mark.parametrize("source", ["engine", "bs2"])
 def test_gnor_is_the_factor_in_db(source):
     get = _engine if source == "engine" else _momwire
     base = _tables(get("free1501"))[0]

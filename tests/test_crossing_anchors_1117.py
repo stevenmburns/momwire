@@ -1,4 +1,4 @@
-"""razor-2p's cross blocks across a sweep from anchors (`crossing_anchors`,
+"""razor2p's cross blocks across a sweep from anchors (`crossing_anchors`,
 `_razor_crossing_core.h`'s `anchors`).
 
 On a stepping FR of a deck whose wire crosses the ground, the above x below
@@ -54,10 +54,10 @@ pytestmark = [
 ]
 
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
-BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor-2p")
+BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor2p")
 _needs_exe = pytest.mark.skipif(
-    not EXE or BASIS != "razor-2p",
-    reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a razor-2p executable",
+    not EXE or BASIS != "razor2p",
+    reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a razor2p executable",
 )
 
 ENV = "MOMWIRE_X_CROSSING_ANCHORS"
@@ -142,7 +142,7 @@ def _zin(printout: bytes) -> list[complex]:
 
 
 def _launcher() -> str:
-    name = "momwire-nec5-razor-2p"
+    name = "momwire-nec5-razor2p"
     found = shutil.which(name) or str(Path(sys.executable).parent / name)
     assert Path(found).exists(), found
     return found
@@ -164,12 +164,12 @@ def _run(prog, deck_text, d: Path, env) -> tuple[bytes, str]:
 
 
 def _python(deck_text, d: Path, env) -> tuple[bytes, str]:
-    """The cold Python route, `_shell.main` with basis razor-2p."""
+    """The cold Python route, `_shell.main` with basis razor2p."""
     d.mkdir(parents=True)
     (d / "deck.nec").write_text(deck_text, newline="")
     code = (
         "import sys; from momwire.dropin.nec5._shell import main; "
-        "sys.exit(main(sys.argv[1:], basis='razor-2p'))"
+        "sys.exit(main(sys.argv[1:], basis='razor2p'))"
     )
     r = subprocess.run(
         [sys.executable, "-c", code, "deck.nec", "deck.out"],

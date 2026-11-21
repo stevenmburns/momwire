@@ -56,14 +56,14 @@ def test_every_dialect_refuses_sy_by_name(deck, parse, sentence):
 
 @pytest.mark.parametrize("deck", DECKS, ids=lambda p: p.stem)
 def test_the_nec5_printout_names_sy(deck):
-    out = _shell.render(deck.read_text(), basis="razor-2p")
+    out = _shell.render(deck.read_text(), basis="razor2p")
     assert f" ***** NEC ERROR - {NEC5}" in out.splitlines()
     assert "NON-NUMERICAL" not in out
 
 
 @pytest.mark.parametrize("deck", DECKS, ids=lambda p: p.stem)
 def test_the_nec42_printout_names_its_own_dialect(deck):
-    """The NEC-4.2 slot (`momwire-nec42-sinusoidal`, `momwire-nec42-bspline`)
+    """The NEC-4.2 slot (`momwire-nec42-sinusoidal`, `momwire-nec42-bs2`)
     reads the nec4 dialect, and its SY sentence says so rather than naming
     the nec2 dialect it inherits its other refusals from (census 11-15). The
     C++ reader's copy is held to it by test_nec4_deck_core's

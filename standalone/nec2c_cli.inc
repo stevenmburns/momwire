@@ -27,7 +27,7 @@ const char *const ARG_ERROR_OUTPUT = "ERROR getting output file from command lin
 const char *const REMOVED_FLAG_REFUSAL =
     "--legacy-probe was removed in momwire 0.83.0; drop it from the portal dialog command line";
 // `deck.NEC2_BASES`, sorted: `_basis_refusal`'s choices
-const char *const ROSTER = "arrayblock, bspline, bspline-d1, hmatrix, pulse, sinusoidal, sinusoidal-galerkin";
+const char *const ROSTER = "arrayblock, bs1, bs2, hmatrix, pulse, sg, sinusoidal";
 const char *const BANNER_SUFFIX = "+sin";  // `_BANNER_SUFFIXES["sinusoidal"]`
 
 int g_end_cap = 2;
@@ -482,8 +482,10 @@ int nec2c_main(std::vector<std::string> rest) {
     }
     std::string basis;
     if (take_value(rest, "--basis", basis) && basis != BASIS) {
-        static const char *const roster[] = {"arrayblock", "bspline", "bspline-d1", "hmatrix", "pulse",
-                                             "sinusoidal-galerkin"};
+        // the others in the roster, and their deprecated spellings
+        // (`_basis_names.BASIS_ALIASES`, momwire#2091)
+        static const char *const roster[] = {"arrayblock", "bs1", "bs2", "hmatrix", "pulse", "sg",
+                                             "bspline", "bspline-d1", "sinusoidal-galerkin"};
         bool known = false;
         for (const char *r : roster) known = known || basis == r;
         if (known)

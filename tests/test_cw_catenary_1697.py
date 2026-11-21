@@ -8,7 +8,7 @@ momwire to both printouts:
   length" line included, byte for byte;
 * the NEC-4.2 wire table, its catenary entry included, byte for byte;
 * every NEC-4.2 segment centre and length, to that printout's precision;
-* the feed impedance, razor-2p against NEC-5 and the sinusoidal basis
+* the feed impedance, razor2p against NEC-5 and the sinusoidal basis
   against NEC-4.2, within tolerances measured on these decks;
 * and the forms both dialects refuse, each by name.
 
@@ -133,14 +133,14 @@ def test_the_curve_length_is_what_both_engines_echo(name):
         assert f"{catenary_length(card):.5E}" == f"{float(echoed.group(1)):.5E}"
 
 
-# razor-2p is NEC-5's own basis. Measured against the licensed engine on these
+# razor2p is NEC-5's own basis. Measured against the licensed engine on these
 # 8 decks (2026-10-25), its worst row is 2.08e-4 of |Z| (c2, fed at a wire end).
 RAZOR_RTOL = 3e-4
 
 
 @pytest.mark.parametrize("name", PROBES)
 def test_the_feed_impedance_agrees_with_nec5_on_razor_2p(name):
-    z = _impedance(render(deck(name), basis="razor-2p"))
+    z = _impedance(render(deck(name), basis="razor2p"))
     ref = _impedance(oracle(name, "nec5"))
     assert abs(z - ref) <= RAZOR_RTOL * abs(ref), (name, z, ref)
 

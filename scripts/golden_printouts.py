@@ -7,7 +7,7 @@ process. None of them pins momwire's own NUMBERS, so moving a unit of the
 pipeline into C++ had nothing to be byte-identical TO. This is that thing: a
 corpus of printouts rendered through the very entry EZNEC launches
 (`momwire.dropin.nec5._shell.render`), for both bases a drop-in launcher serves
-(``bspline``, the `momwire-nec5` default, and ``razor-2p``), over the NEC-5
+(``bs2``, the `momwire-nec5` default, and ``razor2p``), over the NEC-5
 fixture decks the seam serves in about a second or less.
 
     python scripts/golden_printouts.py            # rewrite tests/fixtures/golden_printouts/
@@ -17,7 +17,7 @@ A second corpus, the STABLE-PATH one (``--corpus stable``, written to
 tests/fixtures/stable_path_goldens/), widens the same record past the NEC-5
 seam's two bases: the NEC-4.2 slot on the point-matched sinusoidal (sin42)
 and B-spline (bs42) bases, Sinusoidal-Galerkin (a Python engine) on both
-slots, more finite grounds for bspline and razor-2p, and a buried-radial
+slots, more finite grounds for bspline and razor2p, and a buried-radial
 deck. With the NEC-5 corpus it is what `tests/test_stable_path_tripwire.py`
 holds byte-identical with every experimental flag at its default
 (`momwire._features`: off, but for the default-on features, which are on):
@@ -62,7 +62,7 @@ FIXTURES = ROOT / "tests" / "fixtures"
 GOLDEN = FIXTURES / "golden_printouts"
 MANIFEST = GOLDEN / "manifest.json"
 
-BASES = ("bspline", "razor-2p")
+BASES = ("bs2", "razor2p")
 
 # Deck paths relative to tests/fixtures: NEC-5 fixture decks the seam serves
 # on both bases, chosen for cost. Measured on one core (Haswell i7-4770K,
@@ -228,7 +228,7 @@ _SG_NEC42_DECKS = (
     "eznec_nec42/0232_dipole-10m-gn3.nec",
 )
 
-# bspline and razor-2p beyond the NEC-5 corpus: two more bare-GD
+# bspline and razor2p beyond the NEC-5 corpus: two more bare-GD
 # (reflection-coefficient) decks, two more GN 0 (Sommerfeld) decks, and one
 # small buried-radial deck (an eight-radial hub), which the NEC-5 corpus has
 # none of.
@@ -242,9 +242,9 @@ _NEC5_EXTRA_DECKS = (
 
 STABLE_CASES = (
     *((d, "nec4", "sinusoidal") for d in _NEC42_DECKS),
-    *((d, "nec4", "bspline") for d in _NEC42_DECKS),
-    *((d, "nec5", "sinusoidal-galerkin") for d in _SG_NEC5_DECKS),
-    *((d, "nec4", "sinusoidal-galerkin") for d in _SG_NEC42_DECKS),
+    *((d, "nec4", "bs2") for d in _NEC42_DECKS),
+    *((d, "nec5", "sg") for d in _SG_NEC5_DECKS),
+    *((d, "nec4", "sg") for d in _SG_NEC42_DECKS),
     *((d, "nec5", b) for d in _NEC5_EXTRA_DECKS for b in BASES),
 )
 

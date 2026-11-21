@@ -349,7 +349,7 @@ def test_import_and_a_bs2_render_load_no_scipy_interpolate(tmp_path):
         "                  (['scipy', 'interpolate'], ['scipy', 'optimize']))\n"
         "print('import', heavy())\n"
         "from momwire.dropin.nec5._shell import main\n"
-        "rc = main([sys.argv[1], sys.argv[2]], basis='bspline')\n"
+        "rc = main([sys.argv[1], sys.argv[2]], basis='bs2')\n"
         "print('render', rc, heavy())\n"
     )
     p = subprocess.run(

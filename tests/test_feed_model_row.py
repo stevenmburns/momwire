@@ -117,11 +117,11 @@ def test_the_bspline_family_declares_both_and_leads_with_point():
 
     These four rows said ("segment-gap",) while defaulting to the point gap —
     so a panel reading the row described the wrong source on every stock
-    solve. `bspline-d1` is the same class under a bound kwarg, and the two
+    solve. `bs1` is the same class under a bound kwarg, and the two
     accelerators inherit via `_replace`, which is why one wrong literal
     reached four rows.
     """
-    for name in ("bspline", "bspline-d1", "hmatrix", "arrayblock"):
+    for name in ("bs2", "bs1", "hmatrix", "arrayblock"):
         assert BASES[name][0].capabilities.axes["feed_model"] == (
             "point-gap",
             "segment-gap",

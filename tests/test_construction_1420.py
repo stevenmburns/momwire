@@ -164,7 +164,7 @@ def test_the_seam_takes_the_vector_paths(monkeypatch):
     out = render(
         "CM monopole\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\nGW 2 4 0 0 5 1 0 5 1e-3\n"
         "GE 1\nGN 1\nFR 0 1 0 0 14\nEX 0 1 1 0 1 0\nXQ\nEN\n",
-        basis="razor-2p",
+        basis="razor2p",
     )
     assert "NEC ERROR" not in out
     assert calls["keys"] >= 1 and calls["lengths"] >= 1 and calls["full"] == 0

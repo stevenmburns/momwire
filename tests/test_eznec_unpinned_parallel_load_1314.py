@@ -34,7 +34,7 @@ DECK = (
 )
 PINS = ("LD 4,4,1,0,1.E+10,0.", "LD 4,4,2,0,1.E+10,0.")
 
-# 0017's ANTENNA INPUT PARAMETERS row, licensed NEC-5 (razor-2p's own basis).
+# 0017's ANTENNA INPUT PARAMETERS row, licensed NEC-5 (razor2p's own basis).
 NEC5 = 1.9534e02 - 5.7458e01j
 
 
@@ -50,7 +50,7 @@ def _unpinned() -> str:
     return "\n".join(lines) + "\n"
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_the_unpinned_deck_is_the_pinned_circuit(basis):
     pinned = serve(parse_nec5(_pinned()), basis=basis)
     unpinned = serve(parse_nec5(_unpinned()), basis=basis)
@@ -60,14 +60,14 @@ def test_the_unpinned_deck_is_the_pinned_circuit(basis):
 
 
 def test_the_unpinned_deck_answers_nec5():
-    z = complex(serve(parse_nec5(_unpinned()), basis="razor-2p").sources[0].impedance)
+    z = complex(serve(parse_nec5(_unpinned()), basis="razor2p").sources[0].impedance)
     assert abs(z - NEC5) < 5e-3, z
 
 
 def test_a_held_site_reads_zero_volts():
     """The virtual ends are held, so the connection-point rows print an exact
     zero there rather than the solve's round-off."""
-    run = serve(parse_nec5(_unpinned()), basis="razor-2p")
+    run = serve(parse_nec5(_unpinned()), basis="razor2p")
     virtual = [row for row in run.network_excitation if row.tag == 4]
     assert len(virtual) == 2, run.network_excitation
     for row in virtual:
@@ -95,17 +95,17 @@ def _with(text: str, swaps) -> str:
 
 def test_an_unpinned_line_end_on_the_parked_wire_is_refused():
     with pytest.raises(ServeRefusal, match=r"TL card ends at 4,1 .* no LD card pins"):
-        serve(parse_nec5(_with(_unpinned(), LINES)), basis="razor-2p")
+        serve(parse_nec5(_with(_unpinned(), LINES)), basis="razor2p")
 
 
 def test_an_nt_that_reaches_its_parked_end_is_refused():
     """Y22 nonzero: the card reads the node, so the pin matters."""
     two_port = (("NT 3,-1,4,1,.01,0.,0.,0.,0.,0.", "NT 3,-1,4,1,.01,0.,0.,0.,.01,0."),)
     with pytest.raises(ServeRefusal, match=r"NT card ends at 4,1"):
-        serve(parse_nec5(_with(_unpinned(), two_port)), basis="razor-2p")
+        serve(parse_nec5(_with(_unpinned(), two_port)), basis="razor2p")
 
 
 def test_the_pinned_line_deck_is_served():
-    run = serve(parse_nec5(_with(_pinned(), LINES)), basis="razor-2p")
+    run = serve(parse_nec5(_with(_pinned(), LINES)), basis="razor2p")
     z = complex(run.sources[0].impedance)
     assert z == pytest.approx(62.69176 - 76.62733j, abs=1e-4)

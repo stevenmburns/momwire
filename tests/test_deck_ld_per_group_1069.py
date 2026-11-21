@@ -28,7 +28,7 @@ SERIES = LoadSpec("series", r=50.0, l=1e-6, c=0.0)
 
 def _group_impedances(text: str) -> list[complex]:
     deck = parse_deck(text)
-    solver = DeckSolver(deck, basis="bspline")
+    solver = DeckSolver(deck, basis="bs2")
     out = []
     for index, group in enumerate(deck.groups):
         if group is None:

@@ -2,7 +2,7 @@
 
 They used to embed numpy's array printing (``got [ 0.001 -0.002]``), a
 tuple shape (``got shape (3,)``) and Python's string repr (``wire 0
-'start'``). The razor-2p C++ front half (momwire#1479) reproduces these
+'start'``). The razor2p C++ front half (momwire#1479) reproduces these
 messages word for word, and copying another language's printing into C++ is
 the wrong dependency, so the text is fixed here: ``%.12g`` numbers,
 comma-separated in brackets, shapes as ``3`` / ``2x3``, and wire ends as
@@ -73,9 +73,9 @@ def test_the_inert_wire_refusal_names_the_basis_without_a_repr():
         "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,4,0,1.,0.\nXQ\nEN\n"
     )
     with pytest.raises(_serve.ServeRefusal) as exc:
-        _serve.serve(deck, basis="razor-2p")
+        _serve.serve(deck, basis="razor2p")
     assert str(exc.value) == (
         "wire 2 is one segment long and meets no other wire at either end, so "
-        "basis razor-2p has no basis function to put on it and it would "
+        "basis razor2p has no basis function to put on it and it would "
         "scatter nothing (momwire#608); this deck declares 1 such GW card"
     )

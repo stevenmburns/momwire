@@ -12,7 +12,7 @@ and nothing notices. This file closes that gap in both directions:
 
 1. every refusal sentence the Python side can emit, enumerated from the
    source (each ``_REFUSE_*`` / ``_STEPPING_*`` constant and every literal
-   ``raise ServeRefusal(...)``), is printed by the C++ seam -- razor-2p or
+   ``raise ServeRefusal(...)``), is printed by the C++ seam -- razor2p or
    bspline, route ``refused``, never ``declined`` -- for at least one deck
    under ``tests/fixtures``. The existing gates then hold that sentence
    equal to Python's. A sentence no deck can reach sits in :data:`ALLOWED`
@@ -61,10 +61,10 @@ CXX_SOURCES = (
     SRC / "_nec5_deck_core.cpp",
 )
 # The two bases the C++ seams port, and their in-process hooks.
-SEAMS = {"razor-2p": "nec5_razor_seam", "bspline": "nec5_bspline_seam"}
+SEAMS = {"razor2p": "nec5_razor_seam", "bs2": "nec5_bspline_seam"}
 NAMED = re.compile(r"_(REFUSE|STEPPING)_[A-Z0-9_]+")
 
-# A refusal no deck reaches on razor-2p or bspline, by its key in
+# A refusal no deck reaches on razor2p or bspline, by its key in
 # :func:`python_refusals`, with the reason. Each reason is verified below
 # (`test_every_allowance_holds`), so an entry cannot outlive its reason.
 ALLOWED = {
@@ -389,7 +389,7 @@ def test_every_allowance_holds(printed):
             assert reached, deck
             assert not any(re.fullmatch(regex, m, re.S) for m in reached), deck
             assert all(
-                {("razor-2p", deck.name), ("bspline", deck.name)} <= printed[m]
+                {("razor2p", deck.name), ("bs2", deck.name)} <= printed[m]
                 for m in reached
             ), deck
         else:

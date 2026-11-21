@@ -1,10 +1,10 @@
-"""razor-2p's BURIED fill in C++ (momwire#1512 step 3) against the Python
+"""razor2p's BURIED fill in C++ (momwire#1512 step 3) against the Python
 route, stage by stage, deck by deck.
 
     python scripts/core_split/buried_z_compare.py [--fill] OUT.jsonl DECK_OR_DIR...
 
 Each deck goes through the Python launcher's own route (`_shell.render(text,
-basis="razor-2p")`, the C++ route forced off), with `RazorSolver.__init__`'s
+basis="razor2p")`, the C++ route forced off), with `RazorSolver.__init__`'s
 keyword arguments recorded and the matrix snapshotted at the buried
 assembly's stage boundaries (`razor._assemble_Z_crossing` and
 `_assemble_Z_below_plane`):
@@ -106,7 +106,7 @@ def python_stages(text):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            _shell.render(text, basis="razor-2p")
+            _shell.render(text, basis="razor2p")
     except Exception:  # noqa: BLE001 -- a raising deck is the seam gate's, not this one's
         pass
     finally:

@@ -392,7 +392,7 @@ _SOMM_BELOW_DTH_STEEP_DEG = 2.5
 # a Dan-like 16-radial deck, the `dan_end1` fixtures and Ward's
 # above-and-below deck, (2, 8, 1) moved the feed Z by at most 2.5e-5
 # relative while per-point error reached ~1e-2 -- against a mesh-doubling
-# step of 1e-3 or more and a razor-2p/bspline spread of ~1e-2 on the same
+# step of 1e-3 or more and a razor2p/bspline spread of ~1e-2 on the same
 # decks -- and cut the table from 5,954 to 754 nodes (Dan-like) and 7,462 to
 # 644 (Ward). The band's step is the one axis Z reads: doubling it costs
 # 1.4e-4 on 25 mm-deep radials, so it stays.

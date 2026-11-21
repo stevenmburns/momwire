@@ -55,8 +55,8 @@ DECKS = Path(__file__).resolve().parent / "fixtures" / "eznec" / "decks"
 # momwire#1583, and the client must never be called that — it would spawn
 # itself.
 CLIENT_NAME = "momwire-eznec"
-TWIN_NAME = "momwire-eznec-razor-nec5"
-TWIN_BASIS = "razor-nec5"
+TWIN_NAME = "momwire-eznec-razor2p"
+TWIN_BASIS = "razor2p"
 ENGINE_NAME = "momwire-engine"
 
 # A name that asked for a basis and spelt none: the marker with nothing after
@@ -68,7 +68,7 @@ EMPTY_NAME = "momwire-eznec-"
 # in the engine path, so the same launcher ships again under these names and
 # reads the basis past `nec5-` when `eznec-` is absent.
 NEC5_NAME = "momwire-nec5"
-NEC5_TWIN_NAME = "momwire-nec5-razor-2p"
+NEC5_TWIN_NAME = "momwire-nec5-razor2p"
 
 # smoke.py's gate-4 deck: a free-space dipole every basis hosts and on which
 # the two SHIPPED bases disagree — bspline answers 85.073+45.369j where
@@ -433,12 +433,12 @@ def test_a_variant_named_copy_answers_in_the_basis_its_name_claims(
 @pytest.mark.integration
 @pytest.mark.slow
 def test_a_nec5_named_copy_answers_in_the_basis_past_the_marker(client_exe, tmp_path):
-    """momwire#1239: ``momwire-nec5-razor-2p`` serves razor-2p, not the
+    """momwire#1239: ``momwire-nec5-razor2p`` serves razor2p, not the
     default — the same anti-coincidence pair as the EZNEC twin's gate."""
     bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_TWIN_NAME,))
     room = _room()
     deck = _deck(BASIS_DECK)
-    expected = _oracle(deck, tmp_path, basis="razor-2p")
+    expected = _oracle(deck, tmp_path, basis="razor2p")
     assert expected != _oracle(deck, tmp_path), "the gate's deck stopped disagreeing"
     try:
         out = tmp_path / "nec5-twin.out"
@@ -529,7 +529,7 @@ def test_a_named_empty_basis_never_shares_the_defaults_server(client_exe, tmp_pa
         pytest.param(CLIENT_NAME, "default", id="unnamed"),
         # The nec5 names key the SAME servers as their EZNEC twins: the
         # element is the basis, never the spelling that selected it.
-        pytest.param(NEC5_TWIN_NAME, "basis=razor-2p", id="nec5-named"),
+        pytest.param(NEC5_TWIN_NAME, "basis=razor2p", id="nec5-named"),
         pytest.param(NEC5_NAME, "default", id="nec5-unnamed"),
     ],
 )
@@ -742,7 +742,7 @@ def _flag_value(args: list[str], flag: str) -> str | None:
         "momwire-nec4-sinusoidal",
         "momwire-nec4-",
         "momwire-nec43",
-        "momwire-nec5-razor-2p",
+        "momwire-nec5-razor2p",
     ],
 )
 def test_the_c_name_rule_is_the_stdlib_one(client_exe, tmp_path, monkeypatch, name):
@@ -809,7 +809,7 @@ def _4nec2_oracle(tmp_path: Path, basis: str | None) -> bytes:
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("name", "basis"), [(NEC5_NAME, None), (NEC5_TWIN_NAME, "razor-2p")]
+    ("name", "basis"), [(NEC5_NAME, None), (NEC5_TWIN_NAME, "razor2p")]
 )
 def test_the_c_client_reads_4nec2s_names_from_stdin(client_exe, tmp_path, name, basis):
     """``ENGINE < nec2d.tmp`` against a real daemon: the names arrive on

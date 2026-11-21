@@ -8,9 +8,9 @@ list) is answered by each of the four no-Python executables that serve its
 dialect and by the Python route those executables replay, in this process's
 workers (`_shell.render_files`, written as `_shell.printout_bytes` writes it):
 
-    nec5-bspline      momwire-nec5-bspline-standalone      basis bspline,    NEC-5
-    nec5-razor-2p     momwire-nec5-razor-2p-standalone     basis razor-2p,   NEC-5
-    nec42-bspline     momwire-nec42-bspline-standalone     basis bspline,    NEC-4.2
+    nec5-bs2      momwire-nec5-bs2-standalone      basis bspline,    NEC-5
+    nec5-razor2p     momwire-nec5-razor2p-standalone     basis razor2p,   NEC-5
+    nec42-bs2     momwire-nec42-bs2-standalone     basis bspline,    NEC-4.2
     nec42-sinusoidal  momwire-nec42-sinusoidal-standalone  basis sinusoidal, NEC-4.2
 
 (the CMake target names, long form since momwire#1831).
@@ -58,22 +58,22 @@ HERE = Path(__file__).resolve().parent
 
 # name -> (CMake MW_EXE_BASIS, the target it builds, the Python basis, dialect)
 EXES = {
-    "nec5-bspline": (
+    "nec5-bs2": (
         "bspline_nec5",
-        "momwire-nec5-bspline-standalone",
-        "bspline",
+        "momwire-nec5-bs2-standalone",
+        "bs2",
         "nec5",
     ),
-    "nec5-razor-2p": (
+    "nec5-razor2p": (
         "razor2p",
-        "momwire-nec5-razor-2p-standalone",
-        "razor-2p",
+        "momwire-nec5-razor2p-standalone",
+        "razor2p",
         "nec5",
     ),
-    "nec42-bspline": (
+    "nec42-bs2": (
         "bspline_nec42",
-        "momwire-nec42-bspline-standalone",
-        "bspline",
+        "momwire-nec42-bs2-standalone",
+        "bs2",
         "nec42",
     ),
     "nec42-sinusoidal": (

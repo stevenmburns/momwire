@@ -18,7 +18,7 @@ Gates, the first three failing with the production change reverted:
 
 1. the probe is not a phantom;
 2. served, its driving point and the vertical's coupled current are NEC-5's
-   (razor-2p, the served default, to 4 digits);
+   (razor2p, the served default, to 4 digits);
 3. the B-spline engine serves it too, within its basis difference;
 4. what must NOT move: a parked wire an NT connects to is still the phantom,
    and is now named in an advisory.
@@ -89,7 +89,7 @@ def test_an_unconnected_short_far_wire_is_not_a_phantom():
 
 
 def test_the_probe_solves_as_nec5_does():
-    rows = input_rows(served("razor-2p"))
+    rows = input_rows(served("razor2p"))
     assert [r[0] for r in rows] == [1, 2, 1, 2]
     (_, _, probe_z), (_, vertical_i, _), _, (_, _, vertical_z) = rows
     assert probe_z == pytest.approx(NEC5_PROBE_Z, rel=1e-4)
@@ -101,7 +101,7 @@ def test_the_bspline_engine_solves_the_probe_too():
     # A 2-segment wire is where the two bases differ most (~8 % in the
     # probe's reactance); the gate is that it carries current at all, and
     # couples to the vertical with NEC-5's magnitude.
-    rows = input_rows(served("bspline"))
+    rows = input_rows(served("bs2"))
     (_, _, probe_z), (_, vertical_i, _), _, _ = rows
     assert probe_z == pytest.approx(NEC5_PROBE_Z, rel=0.15)
     assert abs(vertical_i) == pytest.approx(abs(NEC5_VERTICAL_I), rel=0.15)

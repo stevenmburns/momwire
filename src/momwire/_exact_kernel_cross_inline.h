@@ -1,7 +1,7 @@
 // The exact ring kernel ACROSS a radius step (momwire#1438): the two-radius
 // kernel K2(z; a1, a2), its point moments and their rows over one coaxial
 // line (`_exact_kernel.PointCrossRows`), in C++ so that the solvers and the
-// standalone razor-2p path (momwire#1479) evaluate them with one text.
+// standalone razor2p path (momwire#1479) evaluate them with one text.
 //
 // The numpy route stays the reference the tests hold this to; this is a
 // second implementation of the same formulas, not a bit-for-bit replay of

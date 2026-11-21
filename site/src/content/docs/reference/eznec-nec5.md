@@ -32,6 +32,14 @@ become momwire's.
 
 ### Names changed in 0.80.0
 
+From 0.97.0 the basis names carry no dashes (momwire#2091): the zip's
+`momwire-nec5-razor-2p.exe` is now `momwire-nec5-razor2p.exe`, and the pip
+commands `momwire-nec5-bspline`, `-bspline-d1` and `-sinusoidal-galerkin`
+(and their `nec42` and `nec2c` twins) are now `-bs2`, `-bs1` and `-sg`. A
+copy of a launcher under its old name still answers, as the new name does,
+and says so on line 2 of the printout; change the engine path before a later
+release removes the old names.
+
 Earlier releases used names that said "eznec". The same zip serves SimNEC
 and 4nec2 too, so 0.80.0 dropped it. If an engine path points at an old
 name, change it to the new one:
@@ -43,8 +51,8 @@ name, change it to the new one:
 | folder `momwire-eznec\` | folder `momwire\` |
 | `momwire-eznec-engine.exe` | `momwire-engine.exe` |
 | `momwire-eznec.exe` (removed) | `momwire-nec5.exe` |
-| `momwire-eznec-razor-2p.exe` (removed) | `momwire-nec5-razor-2p.exe` |
-| `momwire-eznec-razor-nec5.exe` (removed) | `momwire-nec5-razor-2p.exe` |
+| `momwire-eznec-razor-2p.exe` (removed) | `momwire-nec5-razor2p.exe` |
+| `momwire-eznec-razor-nec5.exe` (removed) | `momwire-nec5-razor2p.exe` |
 
 The `momwire-nec5` and `momwire-nec42` launcher names are unchanged.
 
@@ -62,7 +70,7 @@ libraries.
   resident engine described below. Wait fifteen minutes for it to retire, or
   end `momwire-engine.exe` in Task Manager.
 - Line 2 of every `NEC5.OUT` names the engine that answered, for example
-  ` momwire 0.69.0 bspline avx2`. If it ends in `(stale: 0.66.0)`, the
+  ` momwire 0.69.0 bs2 avx2`. If it ends in `(stale: 0.66.0)`, the
   folder holds files from an older release: delete it and extract the
   current zip fresh.
 
@@ -140,12 +148,12 @@ one for NEC-2:
 
 ```text
 EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
-momwire-nec5.exe              the default — degree-2 B-spline (nec5-bspline)
-momwire-nec5-razor-2p.exe     the tent basis with razor-blade path testing,
+momwire-nec5.exe              the default — degree-2 B-spline (nec5-bs2)
+momwire-nec5-razor2p.exe     the tent basis with razor-blade path testing,
                               at NEC-5's two-point rule
 
 EZNEC's External NEC-4.2 slot:
-momwire-nec42.exe             the default — degree-2 B-spline (nec42-bspline)
+momwire-nec42.exe             the default — degree-2 B-spline (nec42-bs2)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
 SimNEC's NEC-2 engine, and nec2c's command line:
@@ -168,7 +176,7 @@ name belongs in EZNEC's NEC-4.2 slot and a `momwire-nec5` name in its NEC-5
 slot. In the NEC-4.2 slot, `sinusoidal` is the basis family NEC-4.2 itself
 belongs to; razor cannot serve there, because NEC-4.2 decks put their sources
 at segment centres and razor places sources at knots, so a
-`momwire-nec42-razor-2p` copy refuses by name.
+`momwire-nec42-razor2p` copy refuses by name.
 
 In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 - **Current sources** (`EX 6`), including several at once, so a phased array
@@ -223,9 +231,9 @@ engines: on a 28 MHz dipole whose segments are 1.5 radii long it is 4 to 5 Ω
 nearer NEC-4.2. On thin wire it moves the answer by a fraction of an ohm. A few
 decks cannot take the extended kernel: a wire below the ground on
 `sinusoidal`, or two wires of different radii meeting at a junction on
-`sinusoidal-galerkin`. Those decks are solved with the reduced kernel, and the
+`sg`. Those decks are solved with the reduced kernel, and the
 engine logs an `ExtendedKernelDefault` advisory instead of refusing. On
-`bspline`, `razor-2p` (since momwire#1614) and `sinusoidal-galerkin` (since
+`bs2`, `razor2p` (since momwire#1614) and `sg` (since
 momwire#1626), a deck with wires below the ground keeps the extended kernel on
 its above-ground wires; the buried wires use the reduced kernel, and the
 advisory says so.
@@ -240,17 +248,19 @@ engine answers correctly either way, but naming it directly gives up the
 warm start above for nothing.
 
 They accept the same models — measured, deck by deck, on the whole captured
-corpus — and answer in different formulations. `razor-2p` is the tent basis
+corpus — and answer in different formulations. `razor2p` is the tent basis
 with razor-blade path testing at NEC-5's two-point rule — the formulation
 NEC-5 itself uses.
 
-`razor-nec5` is the **deprecated spelling** of the same basis (#785/#794). It
-runs the same engine and answers identically; the zip stopped shipping a
-launcher named for it in 0.80.0. Use `momwire-nec5-razor-2p.exe`.
+`razor-2p` and `razor-nec5` are **deprecated spellings** of the same basis
+(momwire#2091, #785/#794). A launcher copied under either name runs the same
+engine and answers identically, and line 2 of its printout ends in
+`(renamed from <name>)`; they will stop working in a later release. Use
+`momwire-nec5-razor2p.exe`.
 
 ### Reproduction is not accuracy
 
-`razor-2p` agrees with the licensed engine **because it runs the same
+`razor2p` agrees with the licensed engine **because it runs the same
 algorithm**, not because it is more correct. It inherits that engine's
 discretization error along with its answers, and NEC-5's razor-blade testing
 rule is known to walk its impedance slowly — O(1/N).
@@ -265,7 +275,7 @@ segments" is a NEC-2 convention, where sources sit at segment centres.
 Measured on a 0.476 λ dipole in free space, even meshes, one deck per rung —
 momwire through this seam, the licensed engine on the same deck text:
 
-| segments | licensed NEC-5 | nec5-bspline | nec5-razor-2p | \|razor − NEC-5\| |
+| segments | licensed NEC-5 | nec5-bs2 | nec5-razor2p | \|razor − NEC-5\| |
 |---|---|---|---|---|
 | 4 | 56.118 − 108.593j | 67.645 − 31.146j | 56.116 − 108.586j | **0.007** |
 | 20 | 66.667 − 35.880j | 67.739 − 29.155j | 66.665 − 35.877j | **0.003** |
@@ -280,7 +290,7 @@ asks each basis about **itself**: the same decks through the same seam, each
 basis scored against **its own N = 160 answer** — the finest rung of the
 table above, so every number here can be read off it.
 
-| segments | nec5-bspline error | nec5-razor-2p error |
+| segments | nec5-bs2 error | nec5-razor2p error |
 |---|---|---|
 | 4 | 2.81 Ω | 80.14 Ω |
 | 20 | 0.82 Ω | 6.67 Ω |
@@ -289,19 +299,19 @@ table above, so every number here can be read off it.
 Both converge. At matched mesh the B-spline basis is 5.8–28× nearer its own
 limit, which is the O(1/N) walk of razor-blade testing priced in segments.
 
-Neither is "converged at coarse mesh" — nec5-bspline is still 2.8 Ω out at four
+Neither is "converged at coarse mesh" — nec5-bs2 is still 2.8 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is
 there.
 
 **Where the last ohm actually lives** (measured 2026-08-26; `parity_limits()`
 in the probe script is the receipt). Extrapolate both ladders and the two
-formulations nearly meet: nec5-razor-2p's limit lands 0.08–0.21 Ω from nec5-bspline's,
+formulations nearly meet: nec5-razor2p's limit lands 0.08–0.21 Ω from nec5-bs2's,
 depending on the extrapolation model. Of the roughly one ohm between the
 bases at N = 160 (0.95 Ω through this seam, 1.05 Ω on the probe's direct
 ladder), almost all is the twin still descending the O(1/N) path it shares
 with the licensed engine, and only the fraction-of-an-ohm remainder is
 formulation. The same run settles a tooling question: with the feed
-pinned at the exact centre, nec5-bspline's limit is the same whether that centre is a
+pinned at the exact centre, nec5-bs2's limit is the same whether that centre is a
 knot (even N) or the middle of a span (odd N) — 0.009 Ω apart — so the
 knot-feed machinery is not what separates the bases. One deck, free space;
 but on it, the second table sharpens: the default is not merely nearer *its
@@ -326,10 +336,10 @@ ships two per slot because that is what the parity work was about; the rest
 are a copy away:
 
 ```text
-NEC-5 slot:    bspline  bspline-d1  hmatrix  arrayblock  razor-2p
-               sinusoidal-galerkin
-NEC-4.2 slot:  bspline  bspline-d1  hmatrix  arrayblock  sinusoidal
-               sinusoidal-galerkin  pulse
+NEC-5 slot:    bs2  bs1  hmatrix  arrayblock  razor2p
+               sg
+NEC-4.2 slot:  bs2  bs1  hmatrix  arrayblock  sinusoidal
+               sg  pulse
 ```
 
 The `momwire-nec5` names are also what
@@ -348,7 +358,7 @@ them as `momwire-nec4[-<basis>].exe`.) A copy named with just `nec4` — no
 under point matching the match points are the segment centres, so a delta at a
 node point-samples to nothing in every row and there is no excitation left to
 solve. It says so by name in the printout rather than answering about a
-different antenna. `sinusoidal-galerkin` has no such trouble: its test
+different antenna. `sg` has no such trouble: its test
 integral collapses the same delta to a well-defined drive, and it serves the
 corpus alongside the B-spline and razor families. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
@@ -364,7 +374,7 @@ negative instead of settling. Every engine does this, the licensed NEC-5
 included. They differ only in how fine a mesh it takes (momwire#1675). For a 38 mm
 vertical over perfect ground at 14 MHz, base-fed, X in ohms:
 
-| segs/λ | Δ/a at the feed | licensed NEC-5 | nec5-razor-2p | nec5-bspline |
+| segs/λ | Δ/a at the feed | licensed NEC-5 | nec5-razor2p | nec5-bs2 |
 |---|---|---|---|---|
 | 200 | 2.8 | −0.52 | −0.53 | +0.01 |
 | 400 | 1.4 | −0.08 | −0.09 | −0.05 |
@@ -372,13 +382,13 @@ vertical over perfect ground at 14 MHz, base-fed, X in ohms:
 | 1600 | 0.35 | −0.01 | −0.17 | −0.31 |
 | 3200 | 0.18 | −0.14 | −0.26 | −0.34 |
 
-`nec5-bspline` gets near its converged value at a far coarser mesh than the other two,
+`nec5-bs2` gets near its converged value at a far coarser mesh than the other two,
 then starts sliding first, at about Δ/a = 1. On a convergence chart that looks
 like a curve that never settles. It is the feed model, not the antenna, and on a
 fat wire the tail is a few tenths of an ohm. Keep the segments at a feed no
 shorter than the wire's radius. Below that, the engine raises a `GapMeshFloor`
 advisory naming the source. Only a source of fixed width converges past it,
-and no deck card asks for one. Through momwire's own API, nec5-bspline's end-port
+and no deck card asks for one. Through momwire's own API, nec5-bs2's end-port
 feed does: two facing wire ends a real gap apart, under the exact kernel.
 
 :::caution[Not a supported configuration]
@@ -411,7 +421,7 @@ refusals are one named sentence, about one observation point.
 For example:
 
 ```
- momwire 0.55.0 bspline avx2
+ momwire 0.55.0 bs2 avx2
 ```
 
 Three facts after the name: the release, the formulation that answered (the
@@ -475,7 +485,7 @@ changes nothing you can see.
   - A wire end within 1e-4 of an element length of an earlier wire's end
     joins it, as NEC-5 joins them, so a hand-typed `GW` meets an arc's end.
 
-  On these cards razor-2p matches the licensed engine to 0.01 % of the
+  On these cards razor2p matches the licensed engine to 0.01 % of the
   feed impedance (29 probe decks).
 - **Grounds**: free space (`GN -1`), perfect ground (`GN 1`), the
   Sommerfeld finite ground (`GN 0` / `GN 2`) including ground contact, and
@@ -601,13 +611,13 @@ capability statements rather than deck errors:
   the source can sit *on* the node (`EX 0,1,-1`), and naming the node through
   the buried wire instead (`EX 0,6,-1`) gives the same answer. That matches
   the licensed engine, which prints the same impedance for both. Every knot
-  engine serves it (`bspline`, `bspline-d1`, `razor-2p`,
-  `sinusoidal-galerkin`). *Since 0.79 (momwire#1569)* the node may also be
+  engine serves it (`bs2`, `bs1`, `razor2p`,
+  `sg`). *Since 0.79 (momwire#1569)* the node may also be
   where several buried wires meet the one wire rising from it: radials
   starting at a vertical's base, say. With more than two wires at the node
   an address cannot say which branch the source sits in, so the source is
   the node port on the named rising wire, between that wire and the buried
-  wires together. Checked on `bspline` and `razor-2p`, the same source
+  wires together. Checked on `bs2` and `razor2p`, the same source
   written one segment up the rising wire converges onto it under
   refinement, and the licensed engine reaches the same limit. A node with
   **more than one rising wire** still refuses by name; the sentence says to
@@ -649,12 +659,12 @@ full eight-engine roster and the cross-basis validation workflow are
 documented. On the models where we hold a licensed NEC-5 reference, the
 drop-in's printouts agree with the engine's element for element at the
 sub-percent level, and the in-house razor-blade formulation
-(`razor-2p`) rides the licensed engine's own convergence path at the
+(`razor2p`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
 
 ## The standalone executables
 
-Each release since 0.79 also carries the nec5-razor-2p and nec5-bspline engines as native
+Each release since 0.79 also carries the nec5-razor2p and nec5-bs2 engines as native
 programs with no Python in them, for Linux and, as previews, for Windows and
 macOS. They write the Python engines' printouts, one process per
 run, and SimNEC's streaming call works with them.

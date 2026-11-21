@@ -172,7 +172,7 @@ DECKS = {
 }
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize(
     "name",
     [
@@ -220,7 +220,7 @@ def test_finish_matches_the_walks_at_the_seam(monkeypatch, name, basis):
     monkeypatch.setattr(_serve, "_element_currents_and_charges", check_elements)
     render(DECKS[name], basis=basis)
     assert seen["geometry"] >= 1 and seen["elements"] >= 1
-    if basis == "razor-2p":
+    if basis == "razor2p":
         assert seen["razor"] >= 1
 
 
@@ -238,7 +238,7 @@ def test_the_hub_deck_reaches_a_pairwise_sum():
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(RazorSolver, "_end_wings", spy)
-        render(DECKS["hub11"], basis="razor-2p")
+        render(DECKS["hub11"], basis="razor2p")
     assert max(seen) > 8
 
 
@@ -253,4 +253,4 @@ def test_a_seeded_one_bit_change_fails_the_finish_gate(monkeypatch):
 
     monkeypatch.setattr(_serve, "_element_geometry", seeded)
     with pytest.raises(AssertionError):
-        test_finish_matches_the_walks_at_the_seam(monkeypatch, "hub4", "razor-2p")
+        test_finish_matches_the_walks_at_the_seam(monkeypatch, "hub4", "razor2p")

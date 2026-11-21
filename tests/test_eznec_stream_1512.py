@@ -28,7 +28,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "razor_printout_3a"
 DIPOLE = (FIXTURES / "node_gap_two_sources.nec").read_text(encoding="latin-1")
 CHAIN_THEN_REFUSAL = (FIXTURES / "chain_then_refusal.nec").read_text(encoding="latin-1")
 RAISES = (FIXTURES / "echo_raises_nxq.nec").read_text(encoding="latin-1")
-BASIS = "razor-2p"
+BASIS = "razor2p"
 
 
 def _body(deck: str) -> str:
@@ -152,7 +152,7 @@ def test_nothing_on_stdin_prints_nothing():
 def _launch(args: list[str], data: bytes) -> subprocess.CompletedProcess:
     code = (
         "import sys, momwire_eznec_client as c; "
-        "sys.argv[0] = 'momwire-nec5-razor-2p'; sys.exit(c.main())"
+        "sys.argv[0] = 'momwire-nec5-razor2p'; sys.exit(c.main())"
     )
     return subprocess.run(
         [sys.executable, "-c", code, *args],

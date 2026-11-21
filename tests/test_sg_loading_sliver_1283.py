@@ -111,8 +111,6 @@ def test_dans_through_deck_loads_like_bspline():
         loaded = fixture("thr_n204")
         bare = loaded.replace(LD5_ALL, "")
         assert bare != loaded
-        d_sg = serve_z(loaded, "sinusoidal-galerkin") - serve_z(
-            bare, "sinusoidal-galerkin"
-        )
-        d_bs = serve_z(loaded, "bspline") - serve_z(bare, "bspline")
+        d_sg = serve_z(loaded, "sg") - serve_z(bare, "sg")
+        d_bs = serve_z(loaded, "bs2") - serve_z(bare, "bs2")
     assert abs(d_sg - d_bs) < 0.1 * abs(d_bs), (d_sg, d_bs)

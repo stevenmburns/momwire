@@ -1,4 +1,4 @@
-// The NEC-5 seam's run half for razor-2p: razor's answers to what the solver
+// The NEC-5 seam's run half for razor2p: razor's answers to what the solver
 // is asked -- see `_nec5_razor_printout_core.h`. The run half and the writer
 // are the engine-neutral printout's (`_nec5_printout_core.cpp`); each reader
 // here names razor.py's method it is a copy of, and computes with that

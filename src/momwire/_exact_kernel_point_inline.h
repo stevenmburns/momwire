@@ -266,7 +266,7 @@ class PointRowsCore {
 };
 
 // ---------------------------------------------------------------------------
-// The point-tested correction's assembly (razor-2p's wing algebra, #1433):
+// The point-tested correction's assembly (razor2p's wing algebra, #1433):
 //
 //   Z[m, n] += cA_r * sum_{e in n} t_e dmom_e(o_r)  -  cP_r * sum_{e in n} q_e dM0(o_r, j_e)
 //

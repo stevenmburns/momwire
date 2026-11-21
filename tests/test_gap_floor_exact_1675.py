@@ -46,7 +46,7 @@ def test_the_exact_floor_sits_above_the_extended_one():
 @pytest.mark.parametrize(("segs", "fires"), [(400, False), (800, True)])
 def test_bs2_names_the_feed_once_its_segments_pass_the_radius(segs, fires):
     """Δ/a 1.41 is silent; Δ/a 0.70 names the source and the end-port feed."""
-    found = _gap_advisories(_deck(segs), "bspline")
+    found = _gap_advisories(_deck(segs), "bs2")
     assert bool(found) is fires, found
     if fires:
         assert "exact ring kernel" in found[0]

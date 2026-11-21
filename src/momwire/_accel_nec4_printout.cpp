@@ -488,7 +488,7 @@ void register_nec4_printout(py::module_ &m) {
         },
         py::arg("latin1_text"), py::arg("blas"), py::arg("version"), py::arg("variant"), py::arg("marker"),
         py::arg("arrays") = false, py::arg("features") = std::vector<std::string>(),
-        "(True, the slot's printout, solves) for basis 'bspline' from the C++ run half, or "
+        "(True, the slot's printout, solves) for basis 'bs2' from the C++ run half, or "
         "(False, why it declines, solves); `solves` is each solve's (Z, B, X, Y) when `arrays`. "
         "`features`: registry names requested around the run (a test's switch).");
 }

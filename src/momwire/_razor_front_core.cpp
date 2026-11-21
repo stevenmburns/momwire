@@ -1,4 +1,4 @@
-// razor-2p's front half in C++: see `_razor_front_core.h`.
+// razor2p's front half in C++: see `_razor_front_core.h`.
 //
 // Every step below names the Python it replays (razor.py unless said
 // otherwise) and keeps that Python's floating-point spelling operation for

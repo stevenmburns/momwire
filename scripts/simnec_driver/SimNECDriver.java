@@ -24,7 +24,7 @@
 //
 // Usage (Java 11+, no build step):
 //
-//     java scripts/simnec_driver/SimNECDriver.java /abs/path/momwire-nec2c-bspline [deck ...]
+//     java scripts/simnec_driver/SimNECDriver.java /abs/path/momwire-nec2c-bs2 [deck ...]
 //
 // Options: --home DIR (cwd for the daemon, default user.home), --repeat N
 // (submit each deck N times down the one process), --probe-only,

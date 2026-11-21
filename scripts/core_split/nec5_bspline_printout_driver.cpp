@@ -2,8 +2,8 @@
 // file out for bspline (bs2), with no Python: `nec5_razor_printout_driver`'s
 // protocol (see there) over `_nec5_bspline_printout_core.h`. NUMPY_OPENBLAS
 // also supplies `scipy_cblas_dsyrk64_` (the assembler's `tangents @
-// tangents.T`). `scripts/core_split/printout_compare.py --basis bspline`
-// requires every printed byte to be `_shell.render(text, basis="bspline")`'s.
+// tangents.T`). `scripts/core_split/printout_compare.py --basis bs2`
+// requires every printed byte to be `_shell.render(text, basis="bs2")`'s.
 #include "_nec5_bspline_printout_core.h"
 #include "_somm_below_fill_core.h"
 

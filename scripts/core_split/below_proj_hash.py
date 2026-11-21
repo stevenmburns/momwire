@@ -3,7 +3,7 @@
     python scripts/core_split/below_proj_hash.py record DIR DECK_OR_DIR...
     python scripts/core_split/below_proj_hash.py replay DIR
 
-`record` renders each deck with razor-2p (the Python route) and saves the
+`record` renders each deck with razor2p (the Python route) and saves the
 arguments and the answer of every `remainder_field_proj_batch_below` call
 the fill makes (blocked and lanes as called), one .npz per call. `replay`
 calls the CURRENT build's kernel on each saved argument set, the lanes off
@@ -75,7 +75,7 @@ def record(out_dir, decks, per_deck=3):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 try:
-                    _shell.render(d.read_text(encoding="latin-1"), basis="razor-2p")
+                    _shell.render(d.read_text(encoding="latin-1"), basis="razor2p")
                 except Exception:  # noqa: BLE001 -- a refusing deck records nothing
                     pass
     finally:

@@ -207,7 +207,7 @@ def render() -> str:
     #
     # The tables above say what a row SERVES. This one says what it is
     # composed of, which is the question a panel needs and the one the
-    # roster names were silently carrying: `bspline` and `hmatrix` are
+    # roster names were silently carrying: `bs2` and `hmatrix` are
     # identical physics differing in assembly, `sinusoidal` and its Galerkin
     # sibling are one basis differing in testing, and nothing in either name
     # says so.
@@ -234,9 +234,9 @@ def render() -> str:
         "## What each solver is made of",
         "",
         "The tables above are what a row SERVES. This is what it IS — the axes",
-        "antennaknobs#1006 named, so a panel can show that `bspline` and",
+        "antennaknobs#1006 named, so a panel can show that `bs2` and",
         "`hmatrix` differ in assembly and nothing else, and that",
-        "`sinusoidal-galerkin` differs from `sinusoidal` in the testing alone.",
+        "`sg` differs from `sinusoidal` in the testing alone.",
         "",
         "**A cell lists every value the class can be configured to, not one",
         "value.** `degree=`, `nec5_quadrature=`, `extended_kernel=` and",

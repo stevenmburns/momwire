@@ -1,7 +1,7 @@
 """momwire-razor2p (standalone/, unit 4): the launcher's contract, at the edges.
 
 The corpus gate (`scripts/core_split/exe_compare.py`) holds every deck's
-printout to `momwire-nec5-razor-2p`'s. These tests hold the rest of the
+printout to `momwire-nec5-razor2p`'s. These tests hold the rest of the
 contract, where the executable must behave as the launcher does without a
 deck to compare: the stdin form, `-version`, the argument errors, SimNEC's
 streaming call, a deck asking for a `.GMO` file, the version check, and the
@@ -37,8 +37,8 @@ EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
 
 
 def _launcher() -> str:
-    name = "momwire-nec5-razor-2p" + (".exe" if sys.platform == "win32" else "")
-    found = shutil.which("momwire-nec5-razor-2p") or str(
+    name = "momwire-nec5-razor2p" + (".exe" if sys.platform == "win32" else "")
+    found = shutil.which("momwire-nec5-razor2p") or str(
         Path(sys.executable).parent / name
     )
     assert Path(found).exists(), found

@@ -17,7 +17,7 @@ Its long-wire (TEM) series equivalent is R′_d = Re(zq)·k₀²
 * tan δ = 0 / None / NaN is bit-identical to no kwarg, free space and buried,
   with zq structurally None on a free-space wire;
 * a jacketed free-space half-wave dipole at tan δ = 0.01: ΔR_in agrees
-  across bs2 / sin / SG / razor-2p, and with the first-order estimates from
+  across bs2 / sin / SG / razor2p, and with the first-order estimates from
   the solved current;
 * the power budget closes against a FAR-FIELD radiated power (independent of
   the fill), efficiency falls with tan δ, and a flipped sign — in the term
@@ -65,14 +65,14 @@ FAMILIES = {
     "bs2": BSplineSolver,
     "sin": SinusoidalSolver,
     "sg": SinusoidalGalerkinSolver,
-    "razor-2p": RazorSolver,
+    "razor2p": RazorSolver,
 }
 
 
 def _build(family, d):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        if family == "razor-2p":
+        if family == "razor2p":
             return RazorSolver(**d, nec5_quadrature=True)
         return FAMILIES[family](**d)
 
@@ -248,7 +248,7 @@ def test_a_lossy_buried_jacket_carries_both_charge_terms_as_summands():
 
 
 def test_the_resistance_shift_agrees_across_every_family():
-    """Measured ΔR_in: bs2 0.20417, sin 0.20378, SG 0.20417, razor-2p
+    """Measured ΔR_in: bs2 0.20417, sin 0.20378, SG 0.20417, razor2p
     0.20292 Ω (spread 0.6 %); ΔX ≈ −0.011 Ω on all four."""
     dr = {}
     for family in FAMILIES:
@@ -322,7 +322,7 @@ def _budget_gate(family, budgets):
 @pytest.mark.parametrize("family", list(FAMILIES))
 def test_the_power_budget_closes_and_efficiency_falls(family):
     """Measured: lossless floors 3.6e-5 (bs2, SG), 4.1e-4 (sin), −2.6e-4
-    (razor-2p) of P_in; each lossy budget sits on its floor to < 1e-3 of its
+    (razor2p) of P_in; each lossy budget sits on its floor to < 1e-3 of its
     1.7e-5 W of dielectric loss; efficiency 1 → 0.99971 → 0.99716."""
     budgets = {t: _budget(family, t) for t in (None, 1e-3, TAN_D)}
     assert _budget_gate(family, budgets)

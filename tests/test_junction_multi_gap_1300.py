@@ -144,7 +144,7 @@ RAZOR_OHM = 0.05
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize(("case", "ground"), sorted(NEC5_X1))
 def test_razor_reproduces_nec5_with_objects_on_several_wires(case, ground):
-    z = _z(case, ground, "razor-2p")
+    z = _z(case, ground, "razor2p")
     assert abs(z - NEC5_X1[case, ground]) <= RAZOR_OHM, z
 
 
@@ -158,8 +158,8 @@ def test_the_far_arm_load_is_not_in_series_and_the_mirror_agrees():
     45.7 - j31.8 instead.  And the mirror deck — source through the far arm,
     load through wire 1 — is the same circuit by symmetry of the T and
     prints the same number."""
-    z = _z("ex1_ld50w2", "fs", "razor-2p")
-    z_mirror = _z("ex2_ld50w1", "fs", "razor-2p")
+    z = _z("ex1_ld50w2", "fs", "razor2p")
+    z_mirror = _z("ex2_ld50w1", "fs", "razor2p")
     assert abs(z - z_mirror) <= 1e-6 * abs(z)
     assert abs(z - (NEC5_CTRL_FS + 50.0)) > 30.0
 
@@ -171,14 +171,14 @@ def test_the_far_arm_load_is_not_in_series_and_the_mirror_agrees():
 
 
 # err(x4) / err(x1), each against NEC-5 on the same mesh, measured on Haswell
-# 2026-10-03: SG 0.32-0.34 on all nine; bspline-d1 0.05-0.30; bspline
+# 2026-10-03: SG 0.32-0.34 on all nine; bs1 0.05-0.30; bspline
 # 0.23-0.43 and 0.59 on 2ld over PEC (4.78 -> 2.82 ohm), its slowest row.
 CONVERGENCE_RATIO = 0.7
 
 
 @pytest.mark.integration
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("basis", ("bspline", "bspline-d1", "sinusoidal-galerkin"))
+@pytest.mark.parametrize("basis", ("bs2", "bs1", "sg"))
 @pytest.mark.parametrize(("case", "ground"), sorted(NEC5_X4))
 def test_galerkin_bases_converge_toward_nec5(basis, case, ground):
     err1 = abs(_z(case, ground, basis) - NEC5_X1[case, ground])
@@ -195,7 +195,7 @@ def test_the_bspline_accelerators_serve_the_same_ports(basis, ground):
     it); on a deck this small they answer bspline to their compression's
     tolerance (measured <= 0.002 ohm)."""
     z = _z("2ld", ground, basis)
-    assert abs(z - _z("2ld", ground, "bspline")) <= 0.01, z
+    assert abs(z - _z("2ld", ground, "bs2")) <= 0.01, z
 
 
 # --------------------------------------------------------------------------

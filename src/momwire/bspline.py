@@ -2282,7 +2282,7 @@ class BSplineSolver(
         self.pair_reuse_dropped = ()
         self.pair_reuse_remainder_cut = 0
         # Why the hint was not used (None when it was, or none was given):
-        # the sinusoidal and razor-2p solvers' readout, of the same type.
+        # the sinusoidal and razor2p solvers' readout, of the same type.
         self.pair_reuse_declined = None
         # What the last fill did with the hint (momwire#2020), counted where
         # the blocks were served, or None when no fill read a plan.

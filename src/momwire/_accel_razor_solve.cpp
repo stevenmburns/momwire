@@ -1738,7 +1738,7 @@ static int crossing_anchor_apply(py::array z, iarr idx, cdarr raw, std::vector<d
 void register_razor_solve(py::module_ &m) {
     m.attr("razor_solve_proto") = true;
     py::class_<mw::razor::SolveContext>(m, "RazorSolveContext",
-        "razor-2p's k-dependent solve in one C++ call (prototype): every row "
+        "razor2p's k-dependent solve in one C++ call (prototype): every row "
         "window of the fill (free space or a perfect ground's image fold) "
         "written into Z, then SciPy's own zgetrf/zgetrs. Holds the buffer "
         "pool reused across windows and solves, and counters.")
@@ -1774,7 +1774,7 @@ void register_razor_solve(py::module_ &m) {
         .def("front_port_solution", &front_port_solution, py::arg("kwargs"),
              py::arg("chunk_elems") = 2000000, py::arg("cancel_flag") = 0,
              py::arg("want_z") = false, py::arg("want_front") = false,
-             "razor-2p's whole solve from RazorSolver's own keyword arguments: "
+             "razor2p's whole solve from RazorSolver's own keyword arguments: "
              "construction, geometry, the prepared tables, the port columns, "
              "the fill and the LU, all in C++ (`_razor_front_core.h`). Returns "
              "a dict: 'decline' names what the front half does not cover (and "
@@ -1816,7 +1816,7 @@ void register_razor_solve(py::module_ &m) {
              "The (3, W, W, 3) int64 map of family x observer wire x source wire x (computed, "
              "reused, near), or None when the plan is gone (`reuse::wire_map`).");
     py::class_<ReusePlanHandle>(m, "RazorReusePlan",
-        "razor-2p's fill-pair reuse plan (momwire#1971): the classes of the "
+        "razor2p's fill-pair reuse plan (momwire#1971): the classes of the "
         "(centroid observer, source segment) pairs of the direct and image "
         "blocks, and of the composing ground's remainder, from the process's "
         "cache.")
@@ -1928,7 +1928,7 @@ void register_razor_solve(py::module_ &m) {
     m.attr("nec5_razor_seam_proto") = true;
     m.def("nec5_razor_seam", &nec5_razor_seam, py::arg("latin1"), py::arg("solve") = false,
           py::arg("features") = std::vector<std::string>(),
-          "TEST HOOK: the NEC-5 seam's structure half for razor-2p in C++ "
+          "TEST HOOK: the NEC-5 seam's structure half for razor2p in C++ "
           "(`_nec5_razor_seam_core.h`): a deck's latin-1 bytes in; the route, "
           "each structure's and run's outcome, and per preparation the "
           "RazorSolver keyword arguments, the mesh, the port columns and, "

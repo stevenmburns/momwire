@@ -17,7 +17,7 @@
 // What the SOLVER answers -- `compute_port_solution` and the readouts
 // (`currents_at_knots`, `current_slopes`, the element sampler,
 // `wire_loss_power`) -- is asked of a `PrintoutEngine` (below), with the
-// structure half's `SeamEngine`. razor-2p's is `_nec5_razor_printout_core.h`;
+// structure half's `SeamEngine`. razor2p's is `_nec5_razor_printout_core.h`;
 // another basis plugs in the same way.
 //
 //     mw::nec5::PrintoutResult r = mw::nec5::printout(
@@ -136,7 +136,7 @@ using cblas_dgemv_fn = void (*)(int order, int trans, np_int m, np_int n, double
 using cblas_ddot_fn = double (*)(np_int n, const double *x, np_int incx, const double *y, np_int incy);
 
 struct NumpyLinalg {
-    // null: an engine whose fill needs them declines (razor-2p's does not)
+    // null: an engine whose fill needs them declines (razor2p's does not)
     cblas_dsyrk_fn dsyrk = nullptr;
     cblas_dgemm_fn dgemm = nullptr;
     cblas_dgemv_fn dgemv = nullptr;
@@ -228,7 +228,7 @@ struct CMat {
 // n_ports) and `.y` (C-ordered n_ports x n_ports).
 struct Solved {
     int64_t n_basis = 0, n_ports = 0;
-    // `x`'s layout: column-major (razor-2p's LU output) unless `x_c_order`
+    // `x`'s layout: column-major (razor2p's LU output) unless `x_c_order`
     // (bs2's KCL Schur result, `W - X @ Lam`, which numpy allocates in C
     // order); numpy's matmul chooses its BLAS call by these strides.
     bool x_c_order = false;
@@ -269,7 +269,7 @@ class CurrentSampler {
 // The run half's questions of one basis' constructed solver
 // (`compute_port_solution` and the readouts `_finish`, `_pattern` and
 // `_near_field` call), and the structure half it answers them for.
-// razor-2p's is `_nec5_razor_printout_core.h`'s.
+// razor2p's is `_nec5_razor_printout_core.h`'s.
 class PrintoutEngine {
   public:
     virtual ~PrintoutEngine() = default;

@@ -55,7 +55,7 @@ the failure it is best at.
 Giving it its own band would be a shrug if it stopped there, so it does not:
 ``test_the_pulse_entry_is_off_the_shared_band_by_convergence_not_by_plumbing``
 refines the same deck and requires the answer to walk INTO the shared band.
-Measured here, R / X against ``bspline``'s converged 64.02 - 54.81j:
+Measured here, R / X against ``bs2``'s converged 64.02 - 54.81j:
 
 |   N | Delta/a | ``pulse``          |
 |-----|---------|--------------------|
@@ -184,7 +184,7 @@ def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
         assert marker not in out, f"{basis}: took the error path ({marker})"
 
     # 3. The banner says which physics answered, exactly.  Equality rather
-    #    than containment: `bspline`'s suffix is empty, so `suffix in out`
+    #    than containment: `bs2`'s suffix is empty, so `suffix in out`
     #    would pass for it no matter what ran.  The printout is bracketed by
     #    the banner box, so there is more than one such line and EVERY one of
     #    them has to agree; how many there are is the fixture tests' business.

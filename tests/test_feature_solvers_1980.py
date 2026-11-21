@@ -12,7 +12,7 @@ What is held here:
   whole (momwire#1982). The one exception is declared, not implied: a feature
   in `DEFERRED` is taken by the constructor and resolved where it first acts;
 - line 2 of a printout never names a feature the running solver ignores
-  (`_features.stamp`'s `solver`): MOMWIRE_X_KCL_NULLSPACE=1 on a razor-2p
+  (`_features.stamp`'s `solver`): MOMWIRE_X_KCL_NULLSPACE=1 on a razor2p
   deck leaves line 2 bare, as the executable refuses it outright, while
   MOMWIRE_X_PAIR_REUSE=1 there still names the whole its part runs for;
 - the executables stamp the same way: a carried feature a basis ignores is
@@ -84,7 +84,7 @@ def _construct(kind, **kw):
         return BSplineSolver(
             wires=wire, n_per_edge_per_wire=[[21]], wire_radius=1e-3, **kw
         )
-    basis = {"sinusoidal": "sinusoidal", "sinusoidal_galerkin": "sinusoidal-galerkin"}
+    basis = {"sinusoidal": "sinusoidal", "sinusoidal_galerkin": "sg"}
     assert not kw
     return build_solver(parse(DIPOLE, dialect="nec2"), basis=basis[kind]).solver
 
@@ -222,9 +222,7 @@ def test_the_galerkin_fill_never_reads_what_its_family_does_not_honour(
 
     for attr in ("_pair_reuse_on", "_pair_reuse_verify", "_point_cplx_staged"):
         monkeypatch.setattr(SinusoidalGalerkinSolver, attr, spy(attr), raising=False)
-    built = build_solver(
-        parse(_SG_DECKS[deck], dialect="nec2"), basis="sinusoidal-galerkin"
-    )
+    built = build_solver(parse(_SG_DECKS[deck], dialect="nec2"), basis="sg")
     built.solver.compute_impedance()
     assert read == []
 
@@ -369,9 +367,9 @@ def test_kcl_nullspace_on_razor_2p_leaves_line_2_bare(no_features):
 
     no_features.setenv("MOMWIRE_X_KCL_NULLSPACE", "1")
     with F.context_scope("dropin"):
-        assert _printout.engine_stamp("razor-2p") == _bare_stamp("razor-2p")
-        assert _printout.engine_stamp("bspline") == (
-            _bare_stamp("bspline") + " +kcl_nullspace uncertified on this platform"
+        assert _printout.engine_stamp("razor2p") == _bare_stamp("razor2p")
+        assert _printout.engine_stamp("bs2") == (
+            _bare_stamp("bs2") + " +kcl_nullspace uncertified on this platform"
         )
     deck = (
         ROOT
@@ -381,11 +379,11 @@ def test_kcl_nullspace_on_razor_2p_leaves_line_2_bare(no_features):
         / "decks"
         / "0036_dipole-in-free-space.nec"
     ).read_text("latin-1")
-    line2 = _shell.render(deck, basis="razor-2p").split("\n")[1]
-    assert line2 == _bare_stamp("razor-2p")
+    line2 = _shell.render(deck, basis="razor2p").split("\n")[1]
+    assert line2 == _bare_stamp("razor2p")
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2", "sinusoidal"])
 def test_the_whole_pair_reuse_switch_stays_named_where_it_runs(no_features, basis):
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     # Reach 4: certified on the Linux and Windows drop-in, not macOS's.
@@ -400,7 +398,7 @@ def test_the_whole_pair_reuse_switch_stays_named_where_it_runs(no_features, basi
 
 @pytest.mark.parametrize(
     ("basis", "part"),
-    [("razor-2p", "RAZOR_PAIR_REUSE"), ("bspline", "OFFSET_REUSE")],
+    [("razor2p", "RAZOR_PAIR_REUSE"), ("bs2", "OFFSET_REUSE")],
 )
 def test_the_whole_is_not_named_where_its_part_is_set_off(no_features, basis, part):
     # The whole acts on these two families only through the part.
@@ -413,11 +411,11 @@ def test_the_whole_is_not_named_where_its_part_is_set_off(no_features, basis, pa
 @pytest.mark.parametrize(
     ("name", "honoured", "ignored"),
     [
-        ("offset_reuse", "bspline", "razor-2p"),
-        ("razor_pair_reuse", "razor-2p", "bspline"),
-        ("crossing_anchors", "razor-2p", "bspline"),
-        ("crossing_above_rule", "bspline", "razor-2p"),
-        ("point_cplx_staged", "sinusoidal", "sinusoidal-galerkin"),
+        ("offset_reuse", "bs2", "razor2p"),
+        ("razor_pair_reuse", "razor2p", "bs2"),
+        ("crossing_anchors", "razor2p", "bs2"),
+        ("crossing_above_rule", "bs2", "razor2p"),
+        ("point_cplx_staged", "sinusoidal", "sg"),
     ],
 )
 def test_each_feature_is_named_on_its_family_alone(
@@ -434,7 +432,7 @@ def test_exact_kernel_series_is_named_on_razor_2p_only_when_on(no_features, valu
     if value is not None:
         no_features.setenv("MOMWIRE_X_EXACT_KERNEL_SERIES", value)
     with F.context_scope("python"):
-        stamp = _printout.engine_stamp("razor-2p")
+        stamp = _printout.engine_stamp("razor2p")
         if value == "1":
             # Reach 1: past it the stamp says so, and line 2's width limit may
             # shorten the basis field to make room, so only the tail is exact.
@@ -443,8 +441,8 @@ def test_exact_kernel_series_is_named_on_razor_2p_only_when_on(no_features, valu
                 tail += " uncertified on this platform"
             assert stamp.endswith(tail), stamp
         else:
-            assert stamp == _bare_stamp("razor-2p")
-        for basis in ("bspline", "sinusoidal"):
+            assert stamp == _bare_stamp("razor2p")
+        for basis in ("bs2", "sinusoidal"):
             assert _printout.engine_stamp(basis) == _bare_stamp(basis)
 
 
@@ -482,18 +480,18 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
     assert only_on is not None
     only_on = dict(re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)"\}', only_on[1]))
     bases = _exe_bases()
-    assert {"razor-2p", "bspline", "sinusoidal"} <= bases
+    assert {"razor2p", "bs2", "sinusoidal"} <= bases
     # A feature an executable carries but cannot reach (the nec42-sinusoidal
     # one, past the levers' reach) is refused, never stamped, so it needs no
-    # row. Nor does one `EXE_FEATURE_BASES` keeps to another basis: nec5-bspline
+    # row. Nor does one `EXE_FEATURE_BASES` keeps to another basis: nec5-bs2
     # refuses razor_pair_reuse and crossing_anchors, and a refused request must
     # stay refused rather than become accepted and unstamped. Every other
     # carried feature its formulation ignores needs a row.
-    # Each BASIS's shallowest level: "bspline" names both bspline
+    # Each BASIS's shallowest level: "bs2" names both B-spline
     # executables (nec5's at level 6 on Windows, nec42's at 9).
     shallowest = {
-        "razor-2p": F._level("exe-nec5-bspline-razor-2p-windows"),
-        "bspline": F._level("exe-nec5-bspline-razor-2p-windows"),
+        "razor2p": F._level("exe-nec5-bs2-razor2p-windows"),
+        "bs2": F._level("exe-nec5-bs2-razor2p-windows"),
         "sinusoidal": F._level("exe-nec42-sinusoidal"),
     }
     assert set(shallowest) == bases
@@ -510,10 +508,10 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
             if not F.honours(name, kind):
                 expected.add((basis, name))
     assert ignored == expected
-    # What keeps nec5-bspline's refusal: the two razor-2p-only rows stay.
+    # What keeps nec5-bs2's refusal: the two razor2p-only rows stay.
     assert only_on == {
-        "razor_pair_reuse": "razor-2p",
-        "crossing_anchors": "razor-2p",
+        "razor_pair_reuse": "razor2p",
+        "crossing_anchors": "razor2p",
     }
 
 
@@ -553,8 +551,8 @@ EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
     not EXE, reason="MOMWIRE_RAZOR2P_STANDALONE_EXE does not name a built executable"
 )
 def test_the_razor_exe_runs_crossing_above_rule_unstamped(tmp_path):
-    # nec5-razor-2p's executable carries crossing_above_rule and, as Python's
-    # razor-2p, ignores it: it runs, and line 2 stays bare, as Python's does.
+    # nec5-razor2p's executable carries crossing_above_rule and, as Python's
+    # razor2p, ignores it: it runs, and line 2 stays bare, as Python's does.
     env = {
         k: v
         for k, v in os.environ.items()

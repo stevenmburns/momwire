@@ -104,7 +104,7 @@ struct Seam {
 };
 
 // `_nec4.render(text, basis=...)` up to the solve. `basis` must be one this
-// copy serves ("sinusoidal", "bspline", "sinusoidal-galerkin"); any other
+// copy serves ("sinusoidal", "bs2", "sg"); any other
 // name is Declined.
 Seam seam(const std::string &latin1_text, const std::string &basis);
 

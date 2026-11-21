@@ -156,11 +156,11 @@ def test_render_refuses_exactly_as_before(monkeypatch):
     refusals = 0
     for path in MULTI:
         for text in _mutants(path.read_text(encoding="latin-1"), rng, 60):
-            got = new(text, basis="razor-2p")
+            got = new(text, basis="razor2p")
             if not isinstance(got, str):
                 continue
             refusals += 1
-            assert got == _old_answer(text, basis="razor-2p")
+            assert got == _old_answer(text, basis="razor2p")
     assert refusals >= 50
 
 
@@ -184,7 +184,7 @@ def test_the_seam_parses_the_geometry_once(monkeypatch):
 
     monkeypatch.setattr(_nec5, "parse_card", spy_card)
     monkeypatch.setattr(_nec5._Nec5Parser, "clone", spy_clone)
-    _shell.render(text, basis="razor-2p")
+    _shell.render(text, basis="razor2p")
     assert seen["gw"] == gw_lines  # once, where it was 1 + len(runs) times
     assert seen["clone"] == 1 + len(runs)
 

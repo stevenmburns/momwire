@@ -1,4 +1,4 @@
-"""The C++ NEC-5 seam for razor-2p (`_nec5_razor_seam_core.cpp`, unit 2b)
+"""The C++ NEC-5 seam for razor2p (`_nec5_razor_seam_core.cpp`, unit 2b)
 against the Python seam, deck by deck.
 
     python scripts/core_split/seam_compare.py OUT.jsonl DECK_OR_DIR...
@@ -9,8 +9,8 @@ against the Python seam, deck by deck.
 
 Each deck (`.nec` / `.deck`, read latin-1 as the seam reads it) goes through
 
-1. the PYTHON seam, as `momwire-nec5-razor-2p` serves it
-   (`_shell.render(text, basis="razor-2p")`, the Python route forced), with
+1. the PYTHON seam, as `momwire-nec5-razor2p` serves it
+   (`_shell.render(text, basis="razor2p")`, the Python route forced), with
    `_serve._prepare` and `RazorSolver.__init__` / `compute_port_solution`
    recorded: every preparation's structure, mesh, medium and source sites,
    the keyword arguments the seam hands `RazorSolver`, the solved
@@ -99,7 +99,7 @@ def python_seam(text):
     RazorSolver.compute_port_solution = cps
     _printout.render_refusal = refusal
     try:
-        _shell.render(text, basis="razor-2p")
+        _shell.render(text, basis="razor2p")
         rec["outcome"] = "refused" if rec["refusals"] else "served"
         rec["message"] = rec["refusals"][-1] if rec["refusals"] else ""
         rec["error_kind"] = ""

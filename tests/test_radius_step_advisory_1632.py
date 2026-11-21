@@ -52,7 +52,7 @@ def test_a_radius_step_warns_once_naming_the_wires_and_radii():
     assert msg.startswith("SinusoidalSolver: wires of different radius meet")
     assert "wires 0 and 1 (0.5 mm to 1 mm)" in msg
     assert "follows NEC-2" in msg
-    assert "sinusoidal-galerkin or bspline" in msg
+    assert "sg or bspline" in msg
     assert "momwire#1632" in msg and "momwire#1644" in msg
 
 
@@ -74,7 +74,7 @@ def test_two_radii_that_never_meet_are_silent():
 
 
 @pytest.mark.parametrize(
-    "cls", [SinusoidalGalerkinSolver, BSplineSolver], ids=["sin-galerkin", "bspline"]
+    "cls", [SinusoidalGalerkinSolver, BSplineSolver], ids=["sin-galerkin", "bs2"]
 )
 def test_the_converged_bases_are_silent(cls):
     assert _advisories(cls, (0.0005, 0.001)) == []
@@ -109,7 +109,7 @@ EN
 
 @pytest.mark.parametrize(
     "basis, fires",
-    [("sinusoidal", True), ("sinusoidal-galerkin", False), ("bspline", False)],
+    [("sinusoidal", True), ("sg", False), ("bs2", False)],
 )
 def test_the_deck_front_door_carries_it(basis, fires):
     """Through `momwire.deck` (the nec2 portal's and the NEC-4.2 slot's

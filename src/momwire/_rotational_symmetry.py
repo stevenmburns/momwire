@@ -886,7 +886,7 @@ def _rest_of_the_rule(solver, polylines, axis, axial, n, sectors, rev, tol, exte
 # geometry, and `harmonic_zero_block` and `solve` are linear algebra on the
 # assembled Z. What is solver-shaped — the fills, the drive, the readout — is
 # reached through the solver that is handed in, which is also what keeps this
-# module free of an import back into `bspline`.
+# module free of an import back into `bs2`.
 #
 # Phase 2 grows exactly this code: phase 3's general drive builds the other
 # N-1 harmonic blocks beside `harmonic_zero_block`, and an off-axis port

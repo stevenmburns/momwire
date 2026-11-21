@@ -250,7 +250,7 @@ def main() -> int:
                 "replay": True,
                 "gaps": args.gaps,
                 "capture": str(args.capture),
-                "basis": args.basis or "bspline",
+                "basis": args.basis or "bs2",
                 "date": _dt.datetime.now().isoformat(timespec="seconds"),
                 "wall_s": round(wall, 2),
                 "portal": portal,

@@ -122,8 +122,8 @@ def test_the_dropin_client_is_the_eznec_client_under_a_new_name():
     [
         ("momwire-dropin-client", "momwire-nec5"),
         ("momwire-eznec-client", "momwire-nec5"),
-        ("momwire-dropin-client-razor-2p", "momwire-nec5-razor-2p"),
-        ("momwire-eznec-client-razor-2p", "momwire-nec5-razor-2p"),
+        ("momwire-dropin-client-razor2p", "momwire-nec5-razor2p"),
+        ("momwire-eznec-client-razor2p", "momwire-nec5-razor2p"),
         ("Momwire-Dropin-Client-Bspline.exe", "momwire-nec5-bspline"),
     ],
 )

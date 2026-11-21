@@ -380,7 +380,7 @@ def test_a_render_runs_the_accelerated_route(deck, at_least):
 
     text = next(DECKS.glob(f"{deck}_*.nec")).read_text()
     before = dict(_cmul.CALLS)
-    out = _shell.render(text, basis="razor-2p")
+    out = _shell.render(text, basis="razor2p")
     assert "ERROR" not in out
     assert _cmul.CALLS["accel"] - before["accel"] >= at_least
     assert _cmul.CALLS["numpy"] == before["numpy"]

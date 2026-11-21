@@ -205,6 +205,7 @@ from ...deck._networks import build_reducer, card_branches, live_cards, reduced_
 # because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
+from ..._basis_names import canonical_basis, deprecation_note, retired_refusal
 from ...deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
@@ -282,17 +283,17 @@ from ..._vec3 import norm3, dot3
 # zero-width point gap has no collocation RHS (momwire#212) and the solver
 # refuses it rather than silently serving the segment gap, which is the same
 # constraint the CLI's MOMWIRE_BASIS_VARIANTS records.
-# `bspline-d1` (issue #821) is the degree axis instead: same BSplineSolver
-# class as `bspline`, degree=1 bound — a d1-vs-d2 convergence check a SimNEC
+# `bs1` (issue #821) is the degree axis instead: same BSplineSolver
+# class as `bs2`, degree=1 bound — a d1-vs-d2 convergence check a SimNEC
 # user can run as two portal entries, zero new physics.
 # `hmatrix` and `arrayblock` (issue #830, on Ward's ask for large arrays) are
-# a third axis again: the SAME B-spline physics as `bspline`, solved by an
+# a third axis again: the SAME B-spline physics as `bs2`, solved by an
 # accelerated operator instead of a dense fill — hierarchical ACA compression
 # for `hmatrix`, and for `arrayblock` the element-aware block decomposition
 # that becomes an FFT convolution over a regular same-shape lattice. Neither
 # is a fidelity choice, so neither has a `-converged` twin and neither can be
-# read against `bspline` as a physics A/B: they answer "can this deck be
-# solved at array scale", and their answers must AGREE with `bspline` to the
+# read against `bs2` as a physics A/B: they answer "can this deck be
+# solved at array scale", and their answers must AGREE with `bs2` to the
 # iterative solve tolerance. `arrayblock` degrades to the parent H-matrix on
 # a deck with no repeated-block structure (momwire#143 `_degenerate_partition`)
 # rather than refusing, so both entries are safe on arbitrary decks.
@@ -312,12 +313,12 @@ from ..._vec3 import norm3, dot3
 # the budget reads `_NATIVE_LOADING` (#433) — both are the seam's, and the
 # NEC-5 dialect that still serves razor uses them.
 _BANNER_SUFFIXES = {
-    "bspline": "",
-    "bspline-d1": "+bs1",
+    "bs2": "",
+    "bs1": "+bs1",
     "hmatrix": "+hm",
     "arrayblock": "+ab",
     "sinusoidal": "+sin",
-    "sinusoidal-galerkin": "+sg",
+    "sg": "+sg",
     "pulse": "+pulse",
 }
 # ONE roster, read one way (#846 phase III). The portal and the dialect used
@@ -334,9 +335,12 @@ _BASES = {
     name: (cls, kwargs, _BANNER_SUFFIXES[name])
     for name, (cls, kwargs) in NEC2_BASES.items()
 }
-_active_basis = _BASES["bspline"]
+_active_basis = _BASES["bs2"]
 # The same name, as ``momwire.deck.build_solver`` takes it.
-_active_basis_name = "bspline"
+_active_basis_name = "bs2"
+# The deprecated spelling that selected it (momwire#2091), or None: the
+# banner's VERSION line notes it (`_banner_lines`).
+_active_basis_spelled: str | None = None
 
 __all__ = [
     "BANNER_VERSION",
@@ -493,8 +497,14 @@ def _banner_lines() -> tuple:
     a non-default one appends its suffix (`+sg` / `+bs1`) so a session
     transcript records which physics answered. Only the PRINTOUT banner —
     the `-version` probe line never changes, since SimNEC Double-parses it.
+    A basis selected by a deprecated spelling (momwire#2091) adds
+    ``(renamed from <spelling>)`` after the suffix, the one difference
+    between its printout and its canonical name's.
     """
     suffix = _active_basis[2]
+    note = deprecation_note(_active_basis_spelled)
+    if note:
+        suffix += f" {note}"
     if not suffix:
         return _BANNER
     return tuple(
@@ -4403,7 +4413,7 @@ def _selftest(stdout) -> int:
 
     for basis, suffix in (
         ("sinusoidal", "+sin"),
-        ("bspline-d1", "+bs1"),
+        ("bs1", "+bs1"),
         ("hmatrix", "+hm"),
         ("arrayblock", "+ab"),
     ):
@@ -4424,7 +4434,7 @@ def _selftest(stdout) -> int:
     # decks (with and without the card) preserves the session-survival half of
     # the old gate — a traceback on either would cost its NX sentinel.
     galerkin = _alt(
-        "sinusoidal-galerkin",
+        "sg",
         _SELFTEST_DECKS[0] + _SELFTEST_DECKS[0].replace("EK\n", ""),
     )
     sentinels = sum(
@@ -4477,8 +4487,12 @@ def _basis_refusal(name: str, source: str) -> str:
     named = (
         f"--basis {name!r}" if source == "--basis" else f"basis {name!r} from {source}"
     )
-    if name in BASES:
-        cls, _kwargs = BASES[name]
+    retired = retired_refusal(name)
+    if retired is not None:
+        return f"{retired} ({named})\n"
+    canonical = canonical_basis(name, warn=False)
+    if canonical in BASES:
+        cls, _kwargs = BASES[canonical]
         return (
             f"{named} does not serve the nec2 dialect, which addresses segment "
             f"centres: {cls.capabilities.refusal('centre_feeds')}\n"
@@ -4525,9 +4539,10 @@ def configure_engine(
     # the printout banner, and an unknown name from ANY of the three sources
     # fails fast and nonzero at the probe, naming its source.
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
-    global _save_decks_dir, _decks_saved
-    _active_basis = _BASES["bspline"]  # per-invocation default, never sticky
-    _active_basis_name = "bspline"
+    global _save_decks_dir, _decks_saved, _active_basis_spelled
+    _active_basis = _BASES["bs2"]  # per-invocation default, never sticky
+    _active_basis_name = "bs2"
+    _active_basis_spelled = None
     _save_decks_dir = None
     _decks_saved = 0
     # The cross-deck cache and its two flags are per invocation for the same
@@ -4553,12 +4568,14 @@ def configure_engine(
         else:
             k = next(i for i, a in enumerate(rest) if a.startswith("--basis="))
             name = rest.pop(k).split("=", 1)[1]
-        if name not in _BASES:
+        canonical = canonical_basis(name)
+        if canonical not in _BASES:
             stdout.write(_basis_refusal(name, "--basis"))
             stdout.flush()
             return [], 3
-        _active_basis = _BASES[name]
-        _active_basis_name = name
+        _active_basis = _BASES[canonical]
+        _active_basis_name = canonical
+        _active_basis_spelled = None if canonical == name else name
         explicit = True
 
     if not explicit:
@@ -4571,12 +4588,14 @@ def configure_engine(
         else:
             name = None
         if name is not None:
-            if name not in _BASES:
+            canonical = canonical_basis(name)
+            if canonical not in _BASES:
                 stdout.write(_basis_refusal(name, source))
                 stdout.flush()
                 return [], 3
-            _active_basis = _BASES[name]
-            _active_basis_name = name
+            _active_basis = _BASES[canonical]
+            _active_basis_name = canonical
+            _active_basis_spelled = None if canonical == name else name
 
     # --cache-stats PATH writes the measurement file (see `_write_cache_stats`)
     # and, on its own, turns the daemon into a COUNTER: every deck is solved
@@ -4667,7 +4686,7 @@ def engine_scope():
     snapshot::
 
         with engine_scope():
-            main(["--basis", "sinusoidal-galerkin"], stdin=deck, stdout=out)
+            main(["--basis", "sg"], stdin=deck, stdout=out)
         # the basis, the cache flags and the cache are as they were
 
     The cache is emptied on exit rather than restored, for the same reason
@@ -4676,11 +4695,12 @@ def engine_scope():
     it anyway and would only occupy the cap.
     """
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
-    global _save_decks_dir, _decks_saved
+    global _save_decks_dir, _decks_saved, _active_basis_spelled
 
     saved = (
         _active_basis,
         _active_basis_name,
+        _active_basis_spelled,
         _cache_serving,
         _cache_stats_path,
         _save_decks_dir,
@@ -4692,6 +4712,7 @@ def engine_scope():
         (
             _active_basis,
             _active_basis_name,
+            _active_basis_spelled,
             _cache_serving,
             _cache_stats_path,
             _save_decks_dir,

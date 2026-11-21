@@ -21,7 +21,7 @@ What is held:
   each member's group) and changing the thread count (which changes the
   parallel unit) move no bit;
 - on, a buried crossing deck (a rod under a vertical) asks the twin for the
-  route on both nec5-bspline and nec5-razor-2p, and its Z agrees with off.
+  route on both nec5-bs2 and nec5-razor2p, and its Z agrees with off.
 """
 
 from __future__ import annotations

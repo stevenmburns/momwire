@@ -1,4 +1,4 @@
-"""razor-2p's WIRE LOSS takes |I| from libm's hypot (momwire#1479).
+"""razor2p's WIRE LOSS takes |I| from libm's hypot (momwire#1479).
 
 `RazorSolver.wire_loss_power` integrates ½·Re Z'·∫|I|² dl from the knot
 currents. Its |I| was numpy's complex absolute, whose AVX-512 and AVX2 loops

@@ -118,7 +118,7 @@ def _spread(cls, locus, **kw):
 
 # (id, class, kwargs, the locus this family ties on)
 POSITION_CAPABLE = [
-    ("bspline-d1", BSplineSolver, {"degree": 1}, None),
+    ("bs1", BSplineSolver, {"degree": 1}, None),
     ("bspline-d2", BSplineSolver, {"degree": 2}, None),
     ("galerkin-point", SinusoidalGalerkinSolver, {"feed_model": "point"}, None),
 ]

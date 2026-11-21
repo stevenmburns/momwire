@@ -2,7 +2,7 @@
 // Each function names the Python it is a copy of (`eznec/_serve.py` unless
 // said otherwise); its sentences are that Python's, byte for byte, and so is
 // the order in which it asks its questions. What a basis decides is its
-// `SeamEngine`'s (razor-2p: `_nec5_razor_seam_core.cpp`).
+// `SeamEngine`'s (razor2p: `_nec5_razor_seam_core.cpp`).
 #include "_nec5_seam_core.h"
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and

@@ -5,7 +5,7 @@
 # environment, a path with a space, a name-selected engine, and a name that
 # selects nothing (which must fail, with the exit code and message shown).
 #
-#     bash scripts/simnec_driver/run_shapes.sh /abs/path/momwire-nec2c-bspline [deck ...]
+#     bash scripts/simnec_driver/run_shapes.sh /abs/path/momwire-nec2c-bs2 [deck ...]
 #
 # Exit status is the number of shapes that did not behave.
 set -u
@@ -72,13 +72,13 @@ shape "GUI-launch environment" pass \
 
 # 3. A path with a space, which SimNEC double-quotes on this route.
 mkdir -p "$work/dir with space"
-ln -s "$engine" "$work/dir with space/momwire-nec2c-bspline"
+ln -s "$engine" "$work/dir with space/momwire-nec2c-bs2"
 shape "path with a space" pass \
-  "$java" "$driver" "$work/dir with space/momwire-nec2c-bspline" "${decks[@]}"
+  "$java" "$driver" "$work/dir with space/momwire-nec2c-bs2" "${decks[@]}"
 
 # 4. Selecting a different basis by the file name alone (momwire#528).
 #
-# This row used razor-2p until momwire#821 retired razor from the nec2 front
+# This row used razor2p until momwire#821 retired razor from the nec2 front
 # door (`ef5e9dc`, 2026-09-02; Steve's decision (a), 2026-09-03). Every parsed
 # nec2 deck carries feeds and `RazorSolver.capabilities.centre_feeds` is False,
 # so razor now refuses this dialect BY NAME and the row's expected pass became
@@ -89,7 +89,7 @@ shape "name-selected engine (sinusoidal)" pass \
   "$java" "$driver" "$work/momwire-nec2c-sinusoidal" "${decks[@]}"
 
 # 4b. And the retirement itself, as a shape rather than as a footnote: a
-# razor-2p drop-in must refuse, and must refuse for the STATED reason.
+# razor2p drop-in must refuse, and must refuse for the STATED reason.
 #
 # The sentence is checked, not just the exit code. Shape 5 below also exits 3,
 # so a code-only assertion would pass on either failure and could not tell
@@ -97,14 +97,14 @@ shape "name-selected engine (sinusoidal)" pass \
 # row exists to separate.
 #
 # NOTE for `-f momwire=momwire==0.46.0` and earlier: this row pins CURRENT
-# behaviour and will fail against a pre-0.47.0 engine, where razor-2p still
+# behaviour and will fail against a pre-0.47.0 engine, where razor2p still
 # served. That is the row reporting a real difference between releases rather
 # than a broken check -- v0.47.0 (2026-09-03) is the first release carrying
 # the retirement.
-ln -s "$engine" "$work/momwire-nec2c-razor-2p"
-shape_saying "name-selected engine (razor-2p, retired by momwire#821)" \
+ln -s "$engine" "$work/momwire-nec2c-razor2p"
+shape_saying "name-selected engine (razor2p, retired by momwire#821)" \
   "does not serve the nec2 dialect" \
-  "$java" "$driver" "$work/momwire-nec2c-razor-2p" "${decks[@]}"
+  "$java" "$driver" "$work/momwire-nec2c-razor2p" "${decks[@]}"
 
 # 5. A name that selects nothing: momwire exits 3 at the probe and says why.
 ln -s "$engine" "$work/momwire-nec2c-bogus"

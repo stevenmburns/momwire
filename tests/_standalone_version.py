@@ -4,8 +4,8 @@ It is its Python launcher's line (`momwire_serve_client.version_line`,
 momwire#1606) with one difference, in NAME: the launcher's name, then
 ``-standalone`` and the C++ core's variant, so a user can tell the two apart::
 
-    NEC5 momwire-nec5-razor-2p [sb] 0.87.1                  the launcher
-    NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1  the executable
+    NEC5 momwire-nec5-razor2p [sb] 0.87.1                  the launcher
+    NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.87.1  the executable
 
 The variant is the one compiled in (``MW_EXE_VARIANT``): ``avx2`` or ``sse2``,
 ``legacy`` on macOS. Where ``MOMWIRE_FORCE_VARIANT`` names one, the lanes run

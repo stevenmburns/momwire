@@ -43,7 +43,7 @@ def interpreter(monkeypatch):
 def _keys():
     return (
         eznec.config_key(None, 600.0),
-        eznec.config_key("razor-2p", 600.0, "nec5"),
+        eznec.config_key("razor2p", 600.0, "nec5"),
         eznec.config_key(None, 600.0, "nec4"),
         nec2c.config_key([], 600.0),
     )

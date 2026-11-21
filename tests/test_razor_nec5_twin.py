@@ -103,7 +103,7 @@ def ladders():
     """
     return {
         "razor": {n: _razor_z(n) for n in _RAZOR_NS},
-        "bspline": {n: _bspline_z(n) for n in _BSPLINE_NS},
+        "bs2": {n: _bspline_z(n) for n in _BSPLINE_NS},
     }
 
 
@@ -211,7 +211,7 @@ def test_galerkin_tent_does_not_walk_like_nec5(ladders):
     the two solvers share.
     """
     razor = ladders["razor"]
-    bspline = ladders["bspline"]
+    bspline = ladders["bs2"]
     razor_diffs = [razor[2 * n].imag - razor[n].imag for n in (12, 24, 48)]
     bspline_diffs = [bspline[2 * n].imag - bspline[n].imag for n in (12, 24, 48)]
 

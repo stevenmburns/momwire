@@ -59,7 +59,7 @@ def _fed(n, d, **kw):
 
 # (family, kwargs, the stencil that fails as measured, one that does not)
 CASES = [
-    ("bspline", BSplineSolver, {}, (3, 0.1), (1, 0.1)),
+    ("bs2", BSplineSolver, {}, (3, 0.1), (1, 0.1)),
     ("bspline-segment", BSplineSolver, {"feed_model": "segment"}, (3, 0.3), (1, 0.1)),
     ("sin-galerkin", SinusoidalGalerkinSolver, {}, (3, 0.3), (1, 0.1)),
     ("sinusoidal", SinusoidalSolver, {}, (1, 0.3), (1, 2.0)),

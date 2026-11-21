@@ -138,7 +138,7 @@ capability flag (`_use_transmitted_accel`):
 combiners (`_combine_transmitted`, `_combine_transmitted_transposed`) stay
 numpy: closed forms or fully-vectorized pair algebra costing less than the
 call that would dispatch them, and the vector spellings have no per-pair
-consumer — `bspline`'s Galerkin fill reads the PROJECTED table. So does
+consumer — `bs2`'s Galerkin fill reads the PROJECTED table. So does
 everything that is a CONTRACT rather than arithmetic — the side-of-interface
 refusals, the `Health` bookkeeping and `TransmittedGrid.eval`'s four
 refusals — so each of those messages and counters has exactly one home.

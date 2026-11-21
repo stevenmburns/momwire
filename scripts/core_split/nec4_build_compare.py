@@ -28,7 +28,7 @@ The exceptions `solve` turns into a refusal (PortalError, ValueError,
 NotImplementedError, LinAlgError) are refusals here too.
 
     python scripts/core_split/nec4_build_compare.py DIR [DIR ...] \\
-        [--basis sinusoidal|bspline|sinusoidal-galerkin|both] [--driver PATH] [--show 5]
+        [--basis sinusoidal|bspline|sg|both] [--driver PATH] [--show 5]
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from momwire.dropin.nec2c import _portal
 
 HERE = pathlib.Path(__file__).resolve().parent
 SUFFIXES = {".nec", ".deck"}
-BASES = ("sinusoidal", "bspline", "sinusoidal-galerkin")
+BASES = ("sinusoidal", "bs2", "sg")
 
 
 def _load(name: str, file: str):

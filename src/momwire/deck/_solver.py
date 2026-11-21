@@ -30,7 +30,7 @@ port-algebra route's zero-volt gap and serves a load through its own
 the ``LoadSpec`` into the fill itself rather than leaving it on the plan for
 a consumer to stamp — :attr:`PortPlan.loaded_ports` still names the site (the
 plan does not change shape by basis), but nothing further needs doing with
-it when the basis is ``"razor-2p"`` or ``"razor-nec5"``.
+it when the basis is ``"razor2p"``.
 
 **One geometry, every group.**  The port set is the union over every execute
 group, so a deck with two ``XQ`` cards under two different ``EX`` sets is one
@@ -58,6 +58,7 @@ from typing import Any
 
 import numpy as np
 
+from .._basis_names import canonical_basis, retired_refusal
 from .._below_interface import ExtendedKernelAboveGround
 from .._constants import C_LIGHT
 from .._ground_spec import ground_touch_tol
@@ -90,20 +91,23 @@ __all__ = [
 
 _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 
-# The basis roster, spelled as antennaknobs' ``--basis`` names so one string
-# selects the same physics on either side of the portal.  Six solver
-# FAMILIES, eight entries: the extra two are a degree and a quadrature rule,
-# not new code paths.  It was nine until momwire#654 collapsed the two
+# The basis roster: six solver FAMILIES, eight entries, the extra two a
+# degree and a quadrature rule rather than new code paths.  It was nine until momwire#654 collapsed the two
 # Galerkin spellings into one — the third extra was a FEED MODEL, and a menu
-# with two spellings of one dish is what that issue was about.  "bspline" is
+# with two spellings of one dish is what that issue was about.  "bs2" is
 # the degree-2 B-spline — the default here as it is there.
 #
-# `razor-2p` (momwire#432) is RazorSolver — the tent basis with razor-blade
+# Canonical names only (momwire#2091): the spellings that shipped before it
+# (`bspline`, `bspline-d1`, `sinusoidal-galerkin`, `razor-2p`)
+# are `momwire._basis_names.BASIS_ALIASES`, which :func:`basis_entry` and
+# every front end resolve at entry, so a name read from this mapping is
+# never an alias.
+#
+# `razor2p` (momwire#432) is RazorSolver — the tent basis with razor-blade
 # testing, the formulation NEC-5 identifies with; the measurements retreated
-# from calling it a twin (momwire#785) — see ``docs/razor-solver.md``.
-# "razor-nec5" is its deprecated spelling
-# (momwire#316): same class, `nec5_quadrature=True`, the same "one class,
-# one extra kwarg" shape `bspline-d1` set for a degree axis. Plain `razor` —
+# from calling it a twin (momwire#785) — see ``docs/razor-solver.md``. It is
+# `nec5_quadrature=True` on that class (momwire#316), the same "one class,
+# one extra kwarg" shape `bs1` set for a degree axis. Plain `razor` —
 # the Gauss-Legendre testing-path lane of the same class — retired from this
 # roster at momwire#753; it is still reached by constructing
 # `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg defaults to
@@ -121,14 +125,14 @@ BASES = MappingProxyType(
         # has h/a < `EXACT_KERNEL_AUTO_H_OVER_A` (3, `_exact_kernel_seam`), so every
         # mesh above that builds the call it always did, bit for bit. It is
         # bound HERE, on the roster name, so every front end that reads
-        # `bspline` -- the NEC-5 and NEC-4.2 seams (`momwire.dropin.nec5`, SimNEC's
-        # and EZNEC's `momwire-nec5-bspline`), the nec2 portal and
+        # `bs2` -- the NEC-5 and NEC-4.2 seams (`momwire.dropin.nec5`, SimNEC's
+        # and EZNEC's `momwire-nec5-bs2`), the nec2 portal and
         # `build_solver` -- solves the deck antennaknobs' bs2 solves
         # (antennaknobs#1965 passes "auto" there by default). Not on
-        # `bspline-d1`, whose degree the exact kernel was never gated at, nor
+        # `bs1`, whose degree the exact kernel was never gated at, nor
         # on the H-matrix / array-block subclasses, which do not serve it.
-        "bspline": (BSplineSolver, MappingProxyType({"exact_kernel": "auto"})),
-        "bspline-d1": (BSplineSolver, MappingProxyType({"degree": 1})),
+        "bs2": (BSplineSolver, MappingProxyType({"exact_kernel": "auto"})),
+        "bs1": (BSplineSolver, MappingProxyType({"degree": 1})),
         "hmatrix": (HMatrixSolver, MappingProxyType({})),
         "arrayblock": (ArrayBlockSolver, MappingProxyType({})),
         "sinusoidal": (SinusoidalSolver, MappingProxyType({})),
@@ -141,49 +145,28 @@ BASES = MappingProxyType(
         # payoff gates name `"segment"` as their matched control — but a
         # roster entry is a menu item, and this menu had two spellings of one
         # dish with no way to tell them apart from the outside.
-        "sinusoidal-galerkin": (SinusoidalGalerkinSolver, MappingProxyType({})),
-        # `razor-2p` takes NEC-5's identified two-point trapezoid at the wing
+        "sg": (SinusoidalGalerkinSolver, MappingProxyType({})),
+        # `razor2p` takes NEC-5's identified two-point trapezoid at the wing
         # centroids (momwire#316); `_path_nodes_per_wing` names the rule. The
         # other lane `RazorSolver` can take — `n_qp_path` Gauss-Legendre
         # nodes per wing along the same testing path — was this roster's
         # plain `razor` entry until momwire#753 retired it: the SAME class
         # differing only in that sampling choice, measured at 20x the wall
         # time (20.2 s vs 0.97 s at N=1600 free space) for a 0.001 ohm
-        # difference from `razor-2p` — not worth ordering, on momwire#654's
+        # difference from `razor2p` — not worth ordering, on momwire#654's
         # rule that a roster entry is a menu item. It stays reachable for
         # convergence and certification work by constructing
         # `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg
         # defaults to `False`.
         #
-        # Both razor names bind `exact_kernel="auto"` (momwire#1433), on the
+        # It binds `exact_kernel="auto"` (momwire#1433), on the
         # bs2 entry's terms: it engages only where some segment is under 3
         # radii, so every mesh above that builds the call it always did, bit
-        # for bit. Below it, razor-2p's extended kernel leaves NEC-5's ladder
+        # for bit. Below it, razor2p's extended kernel leaves NEC-5's ladder
         # (#1378, #1422), and the exact ring kernel puts it back on it: on
-        # Dan's tapered dipole at 2000 segs/lambda razor-2p reads X 0.355 ohm
-        # from NEC-5 and razor-2p exact 0.036 (scratch/1433, the PR's tables).
-        "razor-2p": (
-            RazorSolver,
-            MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
-        ),
-        # DEPRECATED spelling of `razor-2p`, kept because it shipped: in the
-        # EZNEC drop-in's launcher names (`momwire-eznec-razor-nec5`,
-        # momwire#819, until momwire#1583 dropped it) and in antennaknobs'
-        # CLI roster.
-        #
-        # The rename is about the CLAIM the name makes, not about any host
-        # mis-reading it: `razor-2p` describes the quadrature rule, where
-        # `razor-nec5` names another vendor's product and implies a special
-        # relationship the measurements do not support. The two lanes share a
-        # limit with bspline rather than tracking NEC-5 in particular — on the
-        # ByDipole1 ladder razor-2p and bs2 are 0.124 ohm apart at N=3072 and
-        # closing as N^-0.73 — so this lane is SLOWER than bspline, not
-        # specially agreeing with anything.
-        #
-        # Neither razor name serves the `nec2` dialect (momwire#821): see
-        # `NEC2_BASES` below. Both stay in THIS roster because the NEC-5
-        # dialect (`momwire.dropin.nec5`) reads it and serves them.
-        "razor-nec5": (
+        # Dan's tapered dipole at 2000 segs/lambda razor2p reads X 0.355 ohm
+        # from NEC-5 and razor2p exact 0.036 (scratch/1433, the PR's tables).
+        "razor2p": (
             RazorSolver,
             MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
         ),
@@ -380,9 +363,15 @@ def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
 
     Both dialect front ends resolve a ``--basis`` name and both owe the same
     sentence when it is not one; this is that one place (momwire#603 U3).
+    A deprecated spelling (`BASIS_ALIASES`) answers as its canonical name,
+    with a ``DeprecationWarning`` at the caller's caller (momwire#2091); a
+    retired one (`RETIRED_BASES`) is a ``ValueError`` saying what to use.
     """
+    retired = retired_refusal(basis)
+    if retired is not None:
+        raise ValueError(retired)
     try:
-        return BASES[basis]
+        return BASES[canonical_basis(basis, stacklevel=3)]
     except KeyError:
         known = ", ".join(repr(name) for name in BASES)
         raise ValueError(f"unknown basis {basis!r}; known bases: {known}") from None
@@ -1188,7 +1177,7 @@ def construct_solver(
 def build_solver(
     model: DeckModel,
     *,
-    basis: str = "bspline",
+    basis: str = "bs2",
     group: int | None = None,
     frequency_mhz: float | None = None,
     extended_kernel: bool | None = None,
@@ -1198,9 +1187,9 @@ def build_solver(
 ) -> BuiltSolver:
     """Construct a solver for ``model`` and return it with its port plan.
 
-    ``basis`` is one of :data:`BASES` — the same seven names antennaknobs'
-    ``--basis`` takes, so a deck solved through either front end can be asked
-    for the same physics by the same word.
+    ``basis`` is one of :data:`BASES`, or a deprecated spelling of one
+    (`momwire._basis_names.BASIS_ALIASES`), which answers as its canonical
+    name with a ``DeprecationWarning``.
 
     ``group`` selects which execute group's frequency, extended-kernel
     setting and ENVIRONMENT the solver is built for; the default is the

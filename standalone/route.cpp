@@ -126,7 +126,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     razor::SolveContext ctx;
     std::vector<nec5::RunArrays> arrays;
     const nec5::PrintoutResult r =
-        nec5::razor_printout(latin1_text, "razor-2p", stamp, ctx, lp, np,
+        nec5::razor_printout(latin1_text, "razor2p", stamp, ctx, lp, np,
                              arrays_dir.empty() ? nullptr : &arrays, open_end);
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;

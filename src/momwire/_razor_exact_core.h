@@ -1,4 +1,4 @@
-// razor-2p's exact ring-kernel correction (momwire#1433) for the standalone
+// razor2p's exact ring-kernel correction (momwire#1433) for the standalone
 // path (momwire#1479), Python-free: `_razor_exact_plan.build_plan` (the
 // geometry-only tables of every one-radius coaxial group) and
 // `RazorSolver._add_exact_kernel_correction` (per group and observer window:

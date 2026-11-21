@@ -1,4 +1,4 @@
-// WIRE loading for razor-2p's C++ path (momwire#1479): the per-metre series
+// WIRE loading for razor2p's C++ path (momwire#1479): the per-metre series
 // impedance `_wire_loading.series_impedance_per_wire` puts on each wire -- an
 // LD 5 conductivity's internal impedance (skin effect, through the vendored
 // xsf's `cyl_bessel_ie`, which IS scipy.special.ive's code: measured equal on

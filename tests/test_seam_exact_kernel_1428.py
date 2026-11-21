@@ -1,11 +1,11 @@
 """The deck front ends' bs2 asks for the exact ring kernel, "auto" (momwire#1428).
 
 antennaknobs passes ``exact_kernel="auto"`` to bs2 by default (its #1965);
-the NEC-5 seam SimNEC and EZNEC drive (``momwire-nec5-bspline``) passed
+the NEC-5 seam SimNEC and EZNEC drive (``momwire-nec5-bs2``) passed
 nothing, so it solved with the class default (off) and the two front ends
 disagreed on fat wires: Dan's TaperedDipole at 2000 segs/lambda read
 X = -2.511 ohm through the seam against -0.144 ohm from bs2 with "auto"
-(momwire#1422). The roster now binds "auto" on the ``bspline`` name.
+(momwire#1422). The roster now binds "auto" on the ``bs2`` name.
 
 The gates drive the REAL seams -- the resident server's connection handler
 (``momwire.dropin.nec5._resident._connection``, the function the warm daemon runs
@@ -56,9 +56,7 @@ _NEC2 = (
     "EX 0 1 6 0 1 0\nFR 0 1 0 0 299.7925\nXQ\nEN\n"
 )
 
-_ROSTER_OFF = MappingProxyType(
-    {**BASES, "bspline": (BSplineSolver, MappingProxyType({}))}
-)
+_ROSTER_OFF = MappingProxyType({**BASES, "bs2": (BSplineSolver, MappingProxyType({}))})
 
 
 def _deck(a: float) -> str:
@@ -100,7 +98,7 @@ def _roster_without_auto(monkeypatch) -> None:
     monkeypatch.setattr(_solver, "BASES", _ROSTER_OFF)
 
 
-def _serve_resident(deck: str, basis: str = "bspline") -> str:
+def _serve_resident(deck: str, basis: str = "bs2") -> str:
     """One deck through the warm daemon's connection handler, over a real
     socket pair, exactly as the thin client sends it: the bytes, then EOF."""
     ours, theirs = socket.socketpair()
@@ -177,11 +175,11 @@ def _close(printed: complex, exact: complex) -> bool:
 
 
 def test_the_roster_binds_auto_on_bs2_and_razor_and_nowhere_else():
-    assert BASES["bspline"][1]["exact_kernel"] == "auto"
-    assert NEC2_BASES["bspline"][1]["exact_kernel"] == "auto"
+    assert BASES["bs2"][1]["exact_kernel"] == "auto"
+    assert NEC2_BASES["bs2"][1]["exact_kernel"] == "auto"
     bound = {name for name, (_c, kw) in BASES.items() if "exact_kernel" in kw}
-    # razor-2p and its deprecated spelling since momwire#1433.
-    assert bound == {"bspline", "razor-2p", "razor-nec5"}
+    # razor2p and its deprecated spelling since momwire#1433.
+    assert bound == {"bs2", "razor2p"}
     # The name it binds must be a choice each class declares.
     for name in bound:
         cls, kw = BASES[name]
@@ -222,23 +220,23 @@ def test_red_control_without_the_binding_the_seam_is_off(
 def test_an_ordinary_mesh_prints_the_same_bytes(monkeypatch, corrections, built, a):
     """h/a >= 3: "auto" resolves off, and the printout is byte-for-byte the
     one the roster without the binding prints."""
-    ours = _shell.render(_deck(a), basis="bspline")
+    ours = _shell.render(_deck(a), basis="bs2")
     assert corrections == []
     assert [s.exact_kernel for s in built] == [False]
     assert [s.exact_kernel_requested for s in built] == ["auto"]
     _roster_without_auto(monkeypatch)
-    before = _shell.render(_deck(a), basis="bspline")
+    before = _shell.render(_deck(a), basis="bs2")
     assert ours == before
 
 
 def test_the_one_shot_render_and_the_daemon_agree(corrections):
-    assert _shell.render(_deck(FAT), basis="bspline") == _serve_resident(
+    assert _shell.render(_deck(FAT), basis="bs2") == _serve_resident(
         _deck(FAT)
     ).replace("\r\n", "\n")
     assert corrections == [12, 12]
 
 
-@pytest.mark.parametrize("basis", ["bspline-d1", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["bs1", "sinusoidal"])
 def test_other_bases_are_untouched(corrections, basis):
     _shell.render(_deck(FAT), basis=basis)
     assert corrections == []
@@ -250,7 +248,7 @@ def test_other_bases_are_untouched(corrections, basis):
 
 def test_the_nec42_slot_runs_it_too(corrections):
     text = _NEC2.format(a=f"{FAT:g}")
-    printout = render_nec4(text, basis="bspline")
+    printout = render_nec4(text, basis="bs2")
     assert "NEC ERROR" not in printout
     assert corrections == [11]
 
@@ -261,7 +259,7 @@ def test_the_portal_runs_it_too(corrections):
     out, err = io.StringIO(), io.StringIO()
     with _portal.engine_scope():
         rc = _portal.main(
-            ["--basis", "bspline"],
+            ["--basis", "bs2"],
             stdin=io.StringIO(_NEC2.format(a=f"{FAT:g}")),
             stdout=out,
             stderr=err,

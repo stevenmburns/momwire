@@ -42,7 +42,7 @@ def _deck(third: int, load: str) -> str:
     return _QUAD.format(third=third, load=load)
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_a_node_address_on_the_tag_names_its_first_wire(basis):
     shared = render(_deck(2, _LD4), basis=basis)
     unique = render(_deck(3, _LD4), basis=basis)
@@ -52,19 +52,19 @@ def test_a_node_address_on_the_tag_names_its_first_wire(basis):
 
 
 def test_razor_reads_the_licensed_engines_first_wire_load():
-    z = _z(render(_deck(2, _LD4), basis="razor-2p"))
+    z = _z(render(_deck(2, _LD4), basis="razor2p"))
     assert z == pytest.approx(124.40 - 0.984j, abs=0.02)
 
 
 def test_a_tag_wide_load_reaches_every_wire_carrying_the_tag():
-    shared = _z(render(_deck(2, _LD5), basis="razor-2p"))
-    one_side = _z(render(_deck(3, _LD5), basis="razor-2p"))
+    shared = _z(render(_deck(2, _LD5), basis="razor2p"))
+    one_side = _z(render(_deck(3, _LD5), basis="razor2p"))
     assert shared == pytest.approx(1056.6 + 8.29j, rel=2e-3)
     assert one_side == pytest.approx(362.9 - 153.1j, rel=1e-2)
 
 
 def test_the_currents_table_prints_the_shared_tag_on_both_wires():
-    out = render(_deck(2, _LD4), basis="razor-2p")
+    out = render(_deck(2, _LD4), basis="razor2p")
     table = out.split("Wire Currents", 1)[1]
     tags = [int(m) for m in re.findall(r"^\s+\d+\s+(\d+)\s+[-0-9]", table, re.M)]
     assert tags[:44] == [1] * 11 + [2] * 22 + [4] * 11

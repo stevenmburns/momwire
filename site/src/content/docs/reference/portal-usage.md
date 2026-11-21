@@ -86,9 +86,9 @@ directly, no arguments and no wrapper scripts:
 
 ```text
 momwire-nec2c                                # the default — degree-2 B-spline (bspline)
-momwire-nec2c-bspline-d1                     # the same physics at degree 1 (tent basis)
+momwire-nec2c-bs1                     # the same physics at degree 1 (tent basis)
 momwire-nec2c-sinusoidal                     # NEC-2's own formulation
-momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
+momwire-nec2c-sg            # the same basis, tested variationally
 momwire-nec2c-hmatrix                        # same physics, hierarchical (ACA) solve
 momwire-nec2c-arrayblock                     # same physics, element-block/FFT solve
 momwire-nec2c-pulse                          # Harrington's pulse basis, point-matched
@@ -103,7 +103,7 @@ with a fixed precedence — an explicit `--basis <name>` flag beats the
 filename, and the filename beats a `MOMWIRE_NEC2C_BASIS` environment
 variable; the plain `momwire-nec2c` with neither is the default.
 
-Four axes live in that list. `sinusoidal` and `sinusoidal-galerkin` are
+Four axes live in that list. `sinusoidal` and `sg` are
 the **fidelity** ladder: the three-term basis point-matched with NEC's own
 delta-gap source answers "does this reproduce NEC-2's behaviour, mesh walk
 and all", and the Galerkin entry and the B-spline default answer "what
@@ -112,7 +112,7 @@ momwire#654: it differed only in its feed model, which is not a choice a
 portal dialog can put to you meaningfully, and the better of the two is now
 the plain name's default. There is no `sinusoidal-converged`: a
 zero-width gap has no collocation right-hand side, so the flag does not offer
-a name the solver refuses. `bspline-d1` is the **degree** axis — the same
+a name the solver refuses. `bs1` is the **degree** axis — the same
 B-spline physics at degree 1, so pairing it with the default is the cheapest
 convergence check available. `hmatrix` and `arrayblock` are the **solve**
 axis, not a physics choice: the same B-spline operator held compressed and
@@ -120,17 +120,17 @@ solved iteratively, so a large array answers without a dense fill.
 `arrayblock` is the one to reach for on a repeated-element array — identical
 elements on a regular lattice become an FFT convolution over the element grid
 — and it degrades to the hierarchical solve on a deck with no repeated
-structure, so it is safe to leave on. Its answers must agree with `bspline`'s;
+structure, so it is safe to leave on. Its answers must agree with `bs2`'s;
 if they do not, the deck is telling you about conditioning, not about basis.
 **There is no razor command here.** The tent-basis, razor-blade formulation
-NEC-5 identifies with (`razor-2p`) is not a nec2 engine: a NEC-2 deck puts
+NEC-5 identifies with (`razor2p`) is not a nec2 engine: a NEC-2 deck puts
 its source at a segment *centre* and razor places its gap at a *knot*, so
 it would answer for an antenna half a segment from the one you drew. Since
 momwire#821 the NEC-2 drop-in refuses the name at configure time rather than serve
 that — `momwire-nec2c-razor-nec5` and `momwire-nec2c-razor-2p`, which
 shipped from 0.36.1 to 0.46.0, are gone, and a copy you kept fails the
 version probe with the reason. Razor is served where its grid is the deck's:
-the NEC-5 dialect's `momwire-nec5-razor-2p`, for EZNEC's NEC-5 slot and
+the NEC-5 dialect's `momwire-nec5-razor2p`, for EZNEC's NEC-5 slot and
 SimNEC's own NEC-5 engine alike ([below](#simnecs-nec-5-engine)), which
 writes a source at a node.
 
@@ -178,8 +178,8 @@ a 0.5 mm half joined to a 1 mm half, the step's effect on Z, in ohms
 | NEC-2 (PyNEC) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
 | `sinusoidal` (this launcher's default, NEC-2's end cap) | −0.59 − 8.90j | −0.77 − 1.21j | −1.01 + 9.43j |
 | `sinusoidal`, `MOMWIRE_X_NEC2_END_CAP=0` | −0.59 − 8.86j | −0.76 − 1.18j | −1.01 + 9.47j |
-| `sinusoidal-galerkin` | −0.02 − 33.44j | −0.00 − 34.04j | +0.01 − 34.42j |
-| `bspline` | −0.07 − 32.55j | −0.03 − 33.42j | −0.01 − 33.95j |
+| `sg` | −0.02 − 33.44j | −0.00 − 34.04j | +0.01 − 34.42j |
+| `bs2` | −0.07 − 32.55j | −0.03 − 33.42j | −0.01 − 33.95j |
 | NEC-5 | +0.03 − 34.69j | +0.03 − 34.80j | |
 
 With the end cap, `sinusoidal` reads PyNEC's row to the printed digit at
@@ -189,10 +189,10 @@ ladder, and the nec2 slot is meant to match nec2c, so inheriting NEC-2's own
 behaviour on a taper is what "closest" means there. The solver says so: every
 `sinusoidal` solve with two radii at one junction raises a
 `RadiusStepJunction` advisory naming the wires. A NEC-4.2-style step for the
-NEC-4 dialect is momwire#1644. For the converged answer use `bspline` or
-`sinusoidal-galerkin`; `bspline-d1` with `EK` armed (the `EK` card, above) is
+NEC-4 dialect is momwire#1644. For the converged answer use `bs2` or
+`sg`; `bs1` with `EK` armed (the `EK` card, above) is
 the row measured closest to NEC-5 on Ward Harriman AE6TY's flagship 20:1
-tapered dipole. `sinusoidal-galerkin` REFUSES `EK` outright on any deck
+tapered dipole. `sg` REFUSES `EK` outright on any deck
 where two wires of different radii meet at a junction — measured divergent
 rather than merely inaccurate there; see the `EK` card entry in
 [the nec2 deck grammar
@@ -207,7 +207,7 @@ version probe loudly at configure time rather than serving the default.
 ### When the dialog is a file picker
 
 It always is — and the named commands above exist precisely so that the file
-*is* the choice. Point the dialog at `momwire-nec2c-sinusoidal-galerkin` and
+*is* the choice. Point the dialog at `momwire-nec2c-sg` and
 that is the engine; two entries differing only in name are two engines. Both
 filename rules above apply to every spelling, shipped or hand-made: keep
 `nec2c` in the name, and keep `out` out of the whole path.
@@ -221,29 +221,29 @@ containing `nec5` gets NEC-5 decks. So the NEC-5 slot takes a different family
 of commands, and the `momwire-nec2c` names above will not work there:
 
 ```bash
-momwire-nec5                        # the default — degree-2 B-spline (nec5-bspline)
-momwire-nec5-razor-2p               # NEC-5's own formulation (tent basis, razor testing)
-momwire-nec5-bspline-d1             # degree-1 B-spline
-momwire-nec5-sinusoidal-galerkin    # sinusoidal basis, tested variationally
-momwire-nec5-hmatrix                # nec5-bspline, hierarchical (ACA) solve
-momwire-nec5-arrayblock             # nec5-bspline, element-block/FFT solve
+momwire-nec5                        # the default — degree-2 B-spline (nec5-bs2)
+momwire-nec5-razor2p               # NEC-5's own formulation (tent basis, razor testing)
+momwire-nec5-bs1             # degree-1 B-spline
+momwire-nec5-sg    # sinusoidal basis, tested variationally
+momwire-nec5-hmatrix                # nec5-bs2, hierarchical (ACA) solve
+momwire-nec5-arrayblock             # nec5-bs2, element-block/FFT solve
 ```
 
-`razor-2p` is the one to pick for agreement with the licensed NEC-5: it runs
+`razor2p` is the one to pick for agreement with the licensed NEC-5: it runs
 the same algorithm, and in SimNEC it reproduces the licensed engine's
 impedances to about 0.01 Ω on the examples we have run. There is no
 `sinusoidal` or `pulse` command in this family: a NEC-5 deck puts its source
 at a **knot**, and those two bases can only feed a segment centre, so they
 would refuse every deck SimNEC writes.
 
-Setup is the same as for the NEC-2 slot: `which momwire-nec5-razor-2p` and give
+Setup is the same as for the NEC-2 slot: `which momwire-nec5-razor2p` and give
 SimNEC that absolute path (one without spaces is safest). Its `-version` probe
-answers `NEC5 momwire-nec5-razor-2p [sb] <version>`. These commands run the same warm engine
+answers `NEC5 momwire-nec5-razor2p [sb] <version>`. These commands run the same warm engine
 as the EZNEC drop-in, so a run after the first answers in milliseconds, and
 SimNEC's N-port measurement (one run block per port in a single deck) is served
 as NEC-5 serves it. On Windows without Python, the drop-in zip,
 [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip),
-ships `momwire-nec5.exe` and `momwire-nec5-razor-2p.exe`, the same names it
+ships `momwire-nec5.exe` and `momwire-nec5-razor2p.exe`, the same names it
 tells EZNEC's NEC-5 slot to use.
 
 ## The version probe
@@ -260,8 +260,8 @@ NEC2 momwire-nec2c [sb] 0.82.0
    executable from the [standalone downloads](/reference/standalone/) adds
    `-standalone` and the build it is (`avx2`, `sse2`, or `legacy` on macOS)
    to the name of the Python command it stands in for, e.g.
-   `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.87.1` beside the
-   command's `NEC5 momwire-nec5-razor-2p [sb] 0.87.1` (momwire#1831). That is
+   `NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.87.1` beside the
+   command's `NEC5 momwire-nec5-razor2p [sb] 0.87.1` (momwire#1831). That is
    the only difference: the printouts are the same.
 3. The interface modes it serves beyond one deck per call, in square
    brackets: `s` for streaming, `b` for batch (decks chained by `NX`). Every
@@ -519,11 +519,11 @@ shared command reads its own name the way the stock one does, with its own
 `shared` segment consumed rather than mistaken for a solver:
 
 ```bash
-ln -s "$(which momwire-nec2c-shared)" ~/bin/momwire-nec2c-shared-bspline-d1
-momwire-nec2c-shared-bspline-d1 -version    # a bspline-d1 server, and only bspline-d1 decks
+ln -s "$(which momwire-nec2c-shared)" ~/bin/momwire-nec2c-shared-bs1
+momwire-nec2c-shared-bs1 -version    # a bs1 server, and only bs1 decks
 ```
 
-`momwire-nec2c-bspline-d1` works as a link name too — the spelling the named
+`momwire-nec2c-bs1` works as a link name too — the spelling the named
 commands above teach — and a bare `momwire-nec2c-shared` selects nothing, so
 it stays the default engine. A name matching no solver fails the `-version`
 probe loudly, naming its source, exactly as the stock command does. So the crew arithmetic above inverts —

@@ -176,7 +176,7 @@ def cross_residuals(Gm, Gf, is_a):
 
 def collapse(base, gap):
     """`(residual, the other sign)` for one base at one rung."""
-    if base == "bspline":
+    if base == "bs2":
         Gm, Gf = G_bs(mk(BSplineSolver, gap)), G_bs(mk(BSplineSolver, gap, free=True))
         is_a = above_mask_bs(mk(BSplineSolver, gap))
         minus, plus = cross_residuals(Gm, Gf, is_a)
@@ -197,11 +197,11 @@ def collapse(base, gap):
 # sg rungs at 0.005/0.002/0.02/0.1 m and bspline at 0.1/0.5 m joined them
 # (Linux medians 10.0/8.8/7.8/5.9 and 6.7/6.1 s).
 _G1004_SLOW = {
-    (0.02, "bspline"),
-    (0.005, "bspline"),
-    (0.002, "bspline"),
-    (0.1, "bspline"),
-    (0.5, "bspline"),
+    (0.02, "bs2"),
+    (0.005, "bs2"),
+    (0.002, "bs2"),
+    (0.1, "bs2"),
+    (0.5, "bs2"),
     (0.1, "sg"),
     (0.02, "sg"),
     (0.005, "sg"),
@@ -215,12 +215,12 @@ _G1004_SLOW = {
         pytest.param(g, b, marks=pytest.mark.slow)
         if (g, b) in _G1004_SLOW
         else pytest.param(g, b)
-        for b in ("bspline", "sg")
+        for b in ("bs2", "sg")
         for g in sorted(LADDER, reverse=True)
     ],
 )
 def test_the_near_plane_cross_block_collapses(base, gap, record_property):
-    bar = LADDER[gap][0 if base == "bspline" else 1]
+    bar = LADDER[gap][0 if base == "bs2" else 1]
     rel, other = collapse(base, gap)
     record_property(f"collapse_{base}_{gap}", rel)
     record_property(f"other_sign_{base}_{gap}", other)
@@ -243,7 +243,7 @@ def test_the_near_plane_cross_block_collapses(base, gap, record_property):
     [
         # median over the 5 s default-lane budget at 0.84.1 (bspline) and
         # 0.84.3 (sg, 5.26 s over 25 runs)
-        pytest.param("bspline", marks=pytest.mark.slow),
+        pytest.param("bs2", marks=pytest.mark.slow),
         pytest.param("sg", marks=pytest.mark.slow),
     ],
 )
@@ -281,14 +281,14 @@ def test_the_two_bases_agree_on_the_near_plane_deck(record_property):
     with warnings.catch_warnings():
         _quiet()
         rels = {}
-        for tag, cls in (("bspline", BSplineSolver), ("sg", SinusoidalGalerkinSolver)):
+        for tag, cls in (("bs2", BSplineSolver), ("sg", SinusoidalGalerkinSolver)):
             zm = complex(mk(cls, gap).compute_impedance()[0])
             zf = complex(mk(cls, gap, free=True).compute_impedance()[0])
             rels[tag] = abs(zm - zf) / abs(zf)
             record_property(f"z_collapse_{tag}", rels[tag])
     for tag, r in rels.items():
         assert r < 5e-03, f"{tag} impedance collapse {r:.4e}"
-    spread = abs(rels["bspline"] - rels["sg"]) / max(rels.values())
+    spread = abs(rels["bs2"] - rels["sg"]) / max(rels.values())
     assert spread < 0.10, f"the two bases' collapse residuals differ by {spread:.1%}"
 
 

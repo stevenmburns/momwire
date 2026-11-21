@@ -333,7 +333,7 @@ _FINEST_BAR = {
 @pytest.mark.parametrize("name", ["ward", "step2", "fat"])
 @pytest.mark.parametrize("label,col", [("bs1-ek", 3), ("bs2-ek", 5)])
 def test_ek_residual_decays_down_the_ladder(name, label, col, ek_decay_lane):
-    """CLAIM: `bspline-d1 + EK` and `bspline-d2 + EK` are the study's
+    """CLAIM: `bs1 + EK` and `bspline-d2 + EK` are the study's
     identified fat-section twin (§5) — the binary is EXTENDED/tubular
     everywhere, so an EK Galerkin row is the two-axis (basis + kernel) match.
     Its residual against NEC-5 must STRICTLY SHRINK down the gated ladder,

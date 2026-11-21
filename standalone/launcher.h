@@ -1,4 +1,4 @@
-// The launcher layer of `momwire-nec5-razor-2p`, in C++ for the no-Python
+// The launcher layer of `momwire-nec5-razor2p`, in C++ for the no-Python
 // build (MW_EXE_NO_PYTHON, momwire#1512 step 1): what `momwire_eznec_client`
 // and `momwire.dropin.nec5._shell` do around a deck before and after the solve --
 // the stdin form's two names, the paths as the printout names them, the deck

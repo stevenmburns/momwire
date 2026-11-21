@@ -24,7 +24,7 @@ What deliberately stays with the solvers: the `_wire_media` cache (the memo
 is per instance and the labels come from `_medium_spec` already), the
 `CrossingContext` adapter (it names the basis — polynomials for bspline and
 razor, a sampler for SG), `_pair_extents_below` (an accelerated kernel with a
-numpy twin, monkeypatched by its own tests through `bspline`), and the
+numpy twin, monkeypatched by its own tests through `bs2`), and the
 moment-shaped fills.
 """
 
@@ -57,14 +57,14 @@ N_QP_BURIED_FIELD = 6
 # whole field and falls like 1/R^3). The block's grazing pairs are still
 # raised past it by the #1672 rule, now keyed off this base. Measured in the
 # PR: Z_in moves at most 6e-4 ohm at the decks' own mesh, against a mesh error
-# of ohms; razor-2p's below remainder reads 3 source nodes a segment too.
+# of ohms; razor2p's below remainder reads 3 source nodes a segment too.
 N_QP_BELOW_REMAINDER = 3
 
 # The named refusals a buried deck may draw. Every one names the geometry AND
 # the limit in the same sentence, because the two buried Sommerfeld families
 # refuse rather than clamp — there is no negligible tail to freeze below the
 # interface — and a serve-time refusal with no numbers in it is not
-# actionable. `bspline` re-exports them under its historical `_BURIED_*`
+# actionable. `bs2` re-exports them under its historical `_BURIED_*`
 # names for `_couplings` and the tests.
 BURIED_ENRICHMENT_REFUSAL = (
     "use_singular_enrichment=True + a wire below the ground plane is not "
@@ -829,7 +829,7 @@ def _crossing_above_remainder(
     at the base order plus #1189's raised pairs (`_remainder_prep`): that is
     the rule this takes, through the same field-form block and the same
     pair correction, on the grid `crossing_above_grid` chose. On efhw_hi
-    (nec5-bspline, T1) it is ~0.5 s of a ~2.1 s fill.
+    (nec5-bs2, T1) it is ~0.5 s of a ~2.1 s fill.
 
     The base-order block is subtracted as the shipped block is
     (`sub_field_galerkin`, observer-restricted by `narrow`); the raised
@@ -985,7 +985,7 @@ def serve_plan(
 
     `pair_extents(x, y, d_b, *, r1_cap, floor) -> (r1_max, th_min)` is the
     caller's — bspline's `_pair_extents_below`, an accelerated kernel with a
-    numpy twin whose own tests monkeypatch it through `bspline`. `th_min`
+    numpy twin whose own tests monkeypatch it through `bs2`. `th_min`
     answers the floor over the pairs inside the cap only (momwire#1187),
     which is the whole of the grazing floor's reach: a pair past the cap is
     served as zero.

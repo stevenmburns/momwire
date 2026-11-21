@@ -292,7 +292,7 @@ def _zin(text):
 # Measured on Skylake (momwire#1860 L5, both engines; Z from this module's
 # route), then x3 for margin and a printed last digit:
 #   efhw_lo 1.7e-5, efhw_hi 1.9e-5, d3_hub 9.4e-4, Beverage 8.4e-5
-# d4_slant (momwire#1860 accuracy study, v0.89.0, razor-2p only) 4.8-7.3e-4
+# d4_slant (momwire#1860 accuracy study, v0.89.0, razor2p only) 4.8-7.3e-4
 # at f0 x 0.97 / 1.00 / 1.03 (re-measured here: 4.9, 6.3, 7.2e-4; ~0.035 ohm),
 # then x4: 3e-3. Its 6,037 table rows are what the census takes.
 # (diag(Z^-1) at most 1.05e-3).
@@ -308,7 +308,7 @@ CASES = [
     not _features.certified("crossing_table"),
     reason="crossing_table is not certified on this platform",
 )
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize(("deck", "tol"), CASES)
 def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
     off, z_off, _ = _printout(deck, basis, False, monkeypatch)
@@ -328,10 +328,10 @@ def test_on_the_printed_zin_stays_in_its_class(monkeypatch, deck, tol, basis):
 @pytest.mark.parametrize("scale", ["0.97", "1.00", "1.03"])
 def test_d4_slant_takes_the_table_and_stays_in_its_class(monkeypatch, scale):
     # The census takes the table here (6,037 rows at the deck's own
-    # frequency) under nec5-razor-2p; no other test covers this deck.
+    # frequency) under nec5-razor2p; no other test covers this deck.
     deck = f"d4_slant@{scale}"
-    off, _, _ = _printout(deck, "razor-2p", False, monkeypatch)
-    on, _, served = _printout(deck, "razor-2p", True, monkeypatch)
+    off, _, _ = _printout(deck, "razor2p", False, monkeypatch)
+    on, _, served = _printout(deck, "razor2p", True, monkeypatch)
     assert served > 0
     a, b = _zin(off), _zin(on)
     assert abs(b - a) <= 3e-3 * abs(a), (a, b)
@@ -348,7 +348,7 @@ def test_d4_slant_takes_the_table_and_stays_in_its_class(monkeypatch, scale):
         # efhw_hi's main crossing call alone outweighs the build, and its
         # fill drops 1179 -> ~935 ms; no single call of the other three does,
         # and taking the table there measured slower (efhw_lo +9 ms,
-        # aca_vertical_screen under nec5-bspline +42 ms) or no faster.
+        # aca_vertical_screen under nec5-bs2 +42 ms) or no faster.
         pytest.param("efhw_hi", True, marks=pytest.mark.slow),
         ("efhw_lo", False),
         # median over the 5 s default-lane budget at 0.90.0
@@ -363,5 +363,5 @@ def test_the_census_takes_the_table_where_it_pays(monkeypatch, deck, taken):
 
     monkeypatch.setenv("MOMWIRE_X_CROSSING_TABLE", "1")
     ni._CROSSING_TABLE_STATS["table_rows"] = 0
-    _shell.render.__wrapped__(_deck_text(deck), basis="razor-2p", dialect="nec5")
+    _shell.render.__wrapped__(_deck_text(deck), basis="razor2p", dialect="nec5")
     assert (ni._CROSSING_TABLE_STATS["table_rows"] > 0) is taken

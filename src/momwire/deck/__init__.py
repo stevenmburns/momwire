@@ -41,6 +41,7 @@ from ._nec5 import (
     Nec5Wire,
     parse_nec5,
 )
+from .._basis_names import BASIS_ALIASES, canonical_basis
 from ._solver import (
     BASES,
     NEC2_BASES,
@@ -113,6 +114,8 @@ __all__ = [
     "PortSite",
     "BASES",
     "NEC2_BASES",
+    "BASIS_ALIASES",
+    "canonical_basis",
     # the card reader, for a consumer that must echo a deck as written
     "Card",
     "parse_card",

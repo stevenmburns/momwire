@@ -5,14 +5,14 @@ preview release asset.
     ./momwire-nec5-razor2p-macos DECK.nec PRINTOUT.out   (EZNEC's and SimNEC's form)
     ./momwire-nec5-razor2p-macos - -                     (SimNEC's streaming form)
     ./momwire-nec5-razor2p-macos -version
-    ./momwire-nec5-bs2-macos DECK.nec PRINTOUT.out       (the same forms, nec5-bspline)
+    ./momwire-nec5-bs2-macos DECK.nec PRINTOUT.out       (the same forms, nec5-bs2)
 
 The -version line is the Python command's with "-standalone-legacy" added to
-the name, e.g. NEC5 momwire-nec5-razor-2p-standalone-legacy [sb] 0.87.1, so
+the name, e.g. NEC5 momwire-nec5-razor2p-standalone-legacy [sb] 0.87.1, so
 SimNEC shows which one ran.
 
-They answer a deck the way the Python commands `momwire-nec5-razor-2p` and
-`momwire-nec5-bspline` do on the same Mac, and need nothing installed: the
+They answer a deck the way the Python commands `momwire-nec5-razor2p` and
+`momwire-nec5-bs2` do on the same Mac, and need nothing installed: the
 math library is the system's Accelerate, and the OpenMP runtime is built in.
 There are no libraries beside them.
 

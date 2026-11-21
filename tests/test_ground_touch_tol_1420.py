@@ -351,10 +351,10 @@ def test_the_seam_runs_the_table_path(monkeypatch):
         "GW 2 4 0 0 5 1 0 5 1e-3\nGE 1\nGN 1\nFR 0 1 0 0 14\n"
         "EX 0 1 1 0 1 0\nXQ\nEN\n"
     )
-    out = render(monopole, basis="razor-2p")
+    out = render(monopole, basis="razor2p")
     assert "NEC ERROR" not in out
     buried = monopole.replace("GW 2 4 0 0 5 1 0 5", "GW 2 4 0 0 -1 1 0 -1")
-    assert "below" in render(buried, basis="razor-2p")
+    assert "below" in render(buried, basis="razor2p")
     assert counts["table"] > 0 and counts["vector"] > 0
     assert counts["per_card_in_rules"] == 0
 
@@ -449,7 +449,7 @@ def test_the_seam_takes_the_vector_ground_paths(monkeypatch):
         "CM contact monopole\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\n"
         "GW 2 4 0 0 5 1 0 5 1e-3\nGE 1\nGN 1\nFR 0 1 0 0 14\n"
         "EX 0 1 1 0 1 0\nXQ\nEN\n",
-        basis="razor-2p",
+        basis="razor2p",
     )
     assert "NEC ERROR" not in out
     assert calls["vector"] >= 2 and calls["walk"] == 0

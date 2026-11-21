@@ -131,7 +131,7 @@ def test_the_engine_prints_nan_over_a_zero_step(stem):
     )
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 @pytest.mark.parametrize("stem", STEMS)
 def test_momwire_prints_the_engines_trailer(stem, basis):
     """The solid angle exactly, a zero step's NaN lines exactly, and the
@@ -189,7 +189,7 @@ def test_the_nec42_slot_keeps_its_trailer():
     assert avg != "NaN"
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_momwire_differs_from_the_engine_by_one_factor(basis):
     """momwire's averages sit a fixed fraction under x13's on every deck of
     one geometry (its input power and currents are another solver's), so

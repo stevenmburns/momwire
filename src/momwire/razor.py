@@ -1257,7 +1257,7 @@ _COMBINE_IN_PLACE = True
 # Windows that took that combine, for the gate that it ran.
 _COMBINE_COUNT = [0]
 
-# The razor-2p solve PROTOTYPE in C++ (`_razor_solve_core.cpp`): every fill
+# The razor2p solve PROTOTYPE in C++ (`_razor_solve_core.cpp`): every fill
 # window and the LU of `compute_port_solution` in one native call, for the
 # decks it covers (`RazorSolver._cxx_route_refusal`); every other deck takes
 # the Python route below it, which stays the reference. Opt-in while it is a
@@ -1280,7 +1280,7 @@ _CXX_POOL_MAX_BASIS = 1024
 # TEST-ONLY: keep a copy of the filled Z (before the LU) as `solver._cxx_z`.
 _CXX_WANT_Z = False
 
-# The razor-2p FRONT half in C++ (`_razor_front_core.cpp`, unit 1 of the
+# The razor2p FRONT half in C++ (`_razor_front_core.cpp`, unit 1 of the
 # standalone executable): under the same opt-in, a `compute_port_solution`
 # with nothing prepared hands the constructor's OWN arguments to C++, which
 # validates and normalises them as `__init__` does, builds the geometry, the
@@ -1960,7 +1960,7 @@ class RazorSolver(
         # addresses -- lands half a cell from where it was named. That is not
         # a defect: it is this family answering the node question well, and
         # this cell is where it says it answers the centre question by moving
-        # the port instead. `bspline-d1` is a tent basis too and is True here,
+        # the port instead. `bs1` is a tent basis too and is True here,
         # because the axis is where the port ENDS UP, not the accuracy once
         # there.
         centre_feeds=False,
@@ -2280,7 +2280,7 @@ class RazorSolver(
             raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
         if self.n_qp_source < 1 or self.n_qp_sommerfeld < 1:
             raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
-        # razor-2p's far-mesh accuracy class, stated ONCE per construction
+        # razor2p's far-mesh accuracy class, stated ONCE per construction
         # (momwire#845). Emitted after the argument validation above so a
         # deck that is going to be refused is refused rather than advised
         # about, and before any geometry work so the advisory never depends
@@ -2291,7 +2291,7 @@ class RazorSolver(
         #
         # BOTH lanes, not just `nec5_quadrature`. The class belongs to the
         # path-TESTING rule, which the two razor lanes share: #845's probe 3
-        # puts razor-GL within 2 ohm of razor-2p at every mesh, so the
+        # puts razor-GL within 2 ohm of razor2p at every mesh, so the
         # Gauss-Legendre lane is in the same first-order class and owes the
         # same statement. An earlier draft scoped this to the shipped roster
         # entry on the grounds that reaching GL means constructing
@@ -7768,7 +7768,7 @@ class RazorSolver(
         """Why the C++ solve prototype does not cover this solve, or None.
 
         It covers the fill `_source_block_rows` runs on its centroid-sharing
-        branch (`t1_on_centroids`: razor-2p's two-point path rule with the
+        branch (`t1_on_centroids`: razor2p's two-point path rule with the
         fused kernels built), at a real k, over free space or a PERFECT
         ground, with or without the extended kernel, and nothing more.
         """

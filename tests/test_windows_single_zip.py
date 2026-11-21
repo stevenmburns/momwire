@@ -44,7 +44,7 @@ def test_the_expected_tree_passes():
     "extra",
     [
         f"{CZ.TOP}/libopenblas.dll",
-        f"{CZ.TOP}/win7/momwire-nec5-razor-2p.exe",
+        f"{CZ.TOP}/win7/momwire-nec5-razor2p.exe",
         "stray.txt",
     ],
 )

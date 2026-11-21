@@ -1,5 +1,5 @@
 // deck file in -> printout file out, with no Python: the NEC-5 deck reader,
-// the seam's structure half, razor-2p's front half, the fill and the LU,
+// the seam's structure half, razor2p's front half, the fill and the LU,
 // the run half and the printout writer (`_nec5_razor_printout_core.h`).
 //
 //     nec5_razor_printout_driver SCIPY_OPENBLAS NUMPY_OPENBLAS BASIS VERSION VARIANT MARKER
@@ -34,7 +34,7 @@
 //         # `{:13.5E}` `{:11.4E}` `{:12.4E}` `{:10.3E}` `{:10.4f}` `{:7.2f}` `{:7.3f}` cells
 // `scripts/core_split/printout_compare.py` and
 // `tests/test_razor_core_standalone.py` require every byte to be
-// `momwire-nec5-razor-2p`'s.
+// `momwire-nec5-razor2p`'s.
 #include "_nec5_razor_printout_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"

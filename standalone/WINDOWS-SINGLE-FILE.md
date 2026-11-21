@@ -40,16 +40,16 @@ policy's count on that VM.
   - MSVC's own fill listings call `__vdecl_sin4`, `__vdecl_cos4` and
     `__vdecl_exp4` (42 / 38 / 11 call sites in `_bspline_core`, 4 in
     `_razor_core`).
-  - Built at `/fp:precise`, MSVC's razor-2p free-space fill is **400.6 ms,
+  - Built at `/fp:precise`, MSVC's razor2p free-space fill is **400.6 ms,
     the same as UCRT64's 401.1 ms**, against 180.5 ms at the shipped
     `/fp:fast`.
   - On Linux, gcc with libmvec switched off loses a similar factor
-    (1.85-2.33x): razor-2p free-space fill 222 -> 517 ms, bs2 buried
+    (1.85-2.33x): razor2p free-space fill 222 -> 517 ms, bs2 buried
     447 -> 917 ms.
   - FMA contraction (`-ffp-contract=fast`) buys 0-8 %. `-ffast-math` broke
     the buried route and bought at most 4 % in free space.
-- **UCRT64 against MSVC, total wall, one thread:** razor-2p free space 1.73x
-  slower; bs2 free space 0.94x (faster); razor-2p buried 0.88x (faster); bs2
+- **UCRT64 against MSVC, total wall, one thread:** razor2p free space 1.73x
+  slower; bs2 free space 0.94x (faster); razor2p buried 0.88x (faster); bs2
   buried 1.32x slower. The OpenBLAS factor is 8-44 % faster under MinGW.
 - **The exit hang is diagnosed, and b554dae3 did not fix it.**
   - The control run the earlier version lacked shows hangs in every exit
@@ -78,11 +78,11 @@ runs it again).
 | rehearsal signature (`sign_windows.py`) | pass, 6 exes (4 one-variant + 2 fat) | pass, 6 exes |
 | run from a System32-only PATH (deck + SimNEC stream) | pass, all builds | pass |
 | `-version` names the toolchain (new, 9afe2612) | `...-standalone-avx2-mingw64 [sb] 0.93.0`, all 6 exes (run 4) | `...-standalone-avx2-ucrt64 [sb] 0.93.0`, all 6 exes, and the fat pair under SDE names the variant it picked (runs 4-5) |
-| launcher contract tests (`test_standalone_nopython.py`) | pass: razor-2p 49 + 4 skipped, bs2 52 + 1 skipped, fat likewise (run 1) | pass, one-variant and fat, with `MW_EXE_EXPECT_TOOLCHAIN=ucrt64`: razor-2p 50 + 4 skipped, bs2 53 + 1 skipped (runs 4-5; main's merge added one test each). Run 5 is the 068af7d0 exit: the test that reads the exit-time atexit report still passes |
-| corpus vs the launcher, `--rtol win32` | 0 mismatches, 783 razor-2p / 786 bs2 decks, avx2 and sse2 (run 1) | 0 mismatches, 783 razor-2p / 786 bs2 decks, avx2 and sse2; worst ratio 5.66e-15 / 4.54e-16 (razor-2p), 4.71e-16 / 5.54e-15 (bs2) (runs 3-5) |
+| launcher contract tests (`test_standalone_nopython.py`) | pass: razor2p 49 + 4 skipped, bs2 52 + 1 skipped, fat likewise (run 1) | pass, one-variant and fat, with `MW_EXE_EXPECT_TOOLCHAIN=ucrt64`: razor2p 50 + 4 skipped, bs2 53 + 1 skipped (runs 4-5; main's merge added one test each). Run 5 is the 068af7d0 exit: the test that reads the exit-time atexit report still passes |
+| corpus vs the launcher, `--rtol win32` | 0 mismatches, 783 razor2p / 786 bs2 decks, avx2 and sse2 (run 1) | 0 mismatches, 783 razor2p / 786 bs2 decks, avx2 and sse2; worst ratio 5.66e-15 / 4.54e-16 (razor2p), 4.71e-16 / 5.54e-15 (bs2) (runs 3-5) |
 | fat exe under Intel SDE (Westmere, Sandy Bridge -> sse2; Haswell -> avx2), printouts == one-variant | pass, whole-process checking (run 1) | pass, whole-process checking: ucrtbase's own dispatch did not fault (runs 2-4). The MSVC fat build needs `-chip_check_exe_only` for VCRUNTIME140's memcpy |
-| fat == one-variant byte for byte, every fixture deck x 2 copies x both paths | razor-2p avx2: 1402/1404 (both differences were exit hangs, not bytes); others 1404/1404 (run 1) | 1404/1404 in all four (runs 2-5) |
-| the avx2 initializers run only on the avx2 path | 10 (razor-2p) and 12 (bs2) deferred `.ctors` entries; none on sse2 | same |
+| fat == one-variant byte for byte, every fixture deck x 2 copies x both paths | razor2p avx2: 1402/1404 (both differences were exit hangs, not bytes); others 1404/1404 (run 1) | 1404/1404 in all four (runs 2-5) |
+| the avx2 initializers run only on the avx2 path | 10 (razor2p) and 12 (bs2) deferred `.ctors` entries; none on sse2 | same |
 | no libquadmath / libgfortran linked (licensing) | 0 symbols in each exe | 0 |
 | CI registry (`test_every_ci_job_is_placed_once_or_unassigned`) | the seven `windows-static.yml` jobs are placed as unassigned (60732c4b); it failed on this branch before | |
 
@@ -135,7 +135,7 @@ Which symbols resolve where (nm on the exe, objdump on its imports):
 | 2 | **MSYS2 UCRT64** | **the candidate**: ucrtbase's libm with no code change |
 | 2b | CLANG64 | libm only (ucrtbase too, ~1.2x UCRT64's per call). A CLANG64 exe would swap libgomp for LLVM's libomp and build OpenBLAS with clang: a second OpenMP runtime and OpenBLAS toolchain, for no libm gain. Not built |
 | 3 | `-fno-math-errno` | already in every gcc build's `MW_CORE_FLAGS`; the gaps were measured with it on |
-| 3b | `-ffp-contract=fast` (FMA contraction, as `/fp:fast` allows) | razor-2p free-space fill -7.5 %, bs2 free -2 %, bs2 buried -5 %, razor-2p buried +1 %. Small, and it gives up the IEEE contract the gcc branches keep. Not adopted |
+| 3b | `-ffp-contract=fast` (FMA contraction, as `/fp:fast` allows) | razor2p free-space fill -7.5 %, bs2 free -2 %, bs2 buried -5 %, razor2p buried +1 %. Small, and it gives up the IEEE contract the gcc branches keep. Not adopted |
 | 3c | `-ffast-math -fno-finite-math-only` | **broken**: the buried decks ran with no factor stage (Linux and Windows alike), and free space gained 0.5-4 %. Not adopted, and not safe without the corpus gate |
 | 3d | the near-interface column kernel on `mw_vmath` for MinGW avx2 (8819db99) | **no gain**: bs2 buried fill 683 ms against 635 without at one thread, 515 against 523 at two (Linux: 905 against 917). Those decks do not spend their fill there. Reverted (edf19053) |
 | 4 | vector math for gcc on Windows | costed below; not built, as briefed |
@@ -146,19 +146,19 @@ Three measurements, all run 4 unless marked, fill stage in ms at one thread:
 
 | deck | MSVC `/fp:fast` (shipped) | MSVC `/fp:precise` | UCRT64 | UCRT64 FMA | Linux gcc, libmvec on | Linux gcc, libmvec off |
 |---|---|---|---|---|---|---|
-| razor-2p fs_yagi 6x201 | **180.5** | 400.6 | 401.1 | 371.0 | 222.3 | 517.2 |
+| razor2p fs_yagi 6x201 | **180.5** | 400.6 | 401.1 | 371.0 | 222.3 | 517.2 |
 | bs2 fs_yagi 6x201 | 502.4 | 660.3 | **476.6** | 465.8 | 318.3 | 601.5 |
-| razor-2p buried hub 32x20 | 368.4 | 431.4 | **325.4** | 329.1 | 251.3 | 466.1 |
+| razor2p buried hub 32x20 | 368.4 | 431.4 | **325.4** | 329.1 | 251.3 | 466.1 |
 | bs2 buried hub 32x20 | **503.3** | 736.4 | 682.6 | 648.9 | 447.1 | 917.3 |
 
 (The Linux columns are Skylake, a different machine: compare within the
 pair, not across.)
 
-1. **MSVC at `/fp:precise` loses exactly the lead.** razor-2p free space
+1. **MSVC at `/fp:precise` loses exactly the lead.** razor2p free space
    becomes UCRT64's time to the millisecond, and bs2 buried goes past it.
    `/fp:fast` is what licenses MSVC's vectoriser to call its vector math.
 2. **The listings show the calls.** The `msvc` job compiles the avx2 cores
-   with `/FAs` and counts `call __vdecl_*` in them. razor-2p: 4 x
+   with `/FAs` and counts `call __vdecl_*` in them. razor2p: 4 x
    `__vdecl_sin4` in `_razor_core`; `__vdecl_cos4` / `__vdecl_exp4` /
    `__vdecl_tan4` in the Sommerfeld cores. bs2: 42 x `__vdecl_sin4`, 38 x
    `__vdecl_cos4` and 11 x `__vdecl_exp4` in `_bspline_core`, plus the
@@ -170,28 +170,28 @@ pair, not across.)
    Linux build with them compiled out (the `_WIN32` guard's effect, tried
    on Skylake with a scratch define) has no `_ZGVdN4v_` import and a fill
    1.85-2.33x slower. MSVC's `/fp:precise`-to-`/fp:fast` ratio on the same
-   decks is 1.17-2.22x: largest on razor-2p free space for both compilers,
+   decks is 1.17-2.22x: largest on razor2p free space for both compilers,
    and smaller for MSVC elsewhere.
    Under gcc on Windows, sse2 and avx2 fills are therefore about equal
-   (razor-2p free: 405.8 vs 401.1 ms). MSVC's sse2 fill is 316 ms against
+   (razor2p free: 405.8 vs 401.1 ms). MSVC's sse2 fill is 316 ms against
    its avx2's 180 (its sse2 listings were not read).
 
 FMA contraction is not it (3b), and neither is reassociation (3c's free
-space). The remaining razor-2p free-space and bs2 buried gaps are vector
+space). The remaining razor2p free-space and bs2 buried gaps are vector
 `sin`/`cos`/`exp`, and nothing else measured.
 
 ### Wall time and stages vs MSVC (run 4, avx2, ms; ratio to MSVC in brackets)
 
 Medians of 3 per stage (`stage_times.py`); `total` is the exe's own clock.
 Run 5, on another runner (EPYC 7763, about 20 % slower in absolute terms),
-repeats the ratios. UCRT64 against MSVC, total at one thread: razor-2p free
-space 1.65x, bs2 free 0.96x, razor-2p buried 0.88x, bs2 buried 1.31x.
-MSVC `/fp:precise`'s razor-2p free-space fill is again UCRT64's (479.8
+repeats the ratios. UCRT64 against MSVC, total at one thread: razor2p free
+space 1.65x, bs2 free 0.96x, razor2p buried 0.88x, bs2 buried 1.31x.
+MSVC `/fp:precise`'s razor2p free-space fill is again UCRT64's (479.8
 against 469.6 ms; `/fp:fast` 229.7).
 
 | deck | threads | exe | start | seam | ground | fill | factor | rest | total |
 |---|---|---|---|---|---|---|---|---|---|
-| razor-2p fs_yagi 6x201 | 1 | MSVC | 4.0 | 1.0 | 0 | 180.5 | 98.5 | 4.5 | 291.0 |
+| razor2p fs_yagi 6x201 | 1 | MSVC | 4.0 | 1.0 | 0 | 180.5 | 98.5 | 4.5 | 291.0 |
 | | | UCRT64 | 4.3 | 1.0 | 0 | 401.1 | 90.7 | 3.5 | 502.9 (1.73) |
 | | 2 | MSVC | 3.2 | 1.9 | 0 | 99.8 | 93.6 | 4.4 | 207.2 |
 | | | UCRT64 | 4.5 | 1.9 | 0 | 211.3 | 52.1 | 3.5 | 275.6 (1.33) |
@@ -199,7 +199,7 @@ against 469.6 ms; `/fp:fast` 229.7).
 | | | UCRT64 | 4.9 | 1.1 | 0 | 476.6 | 94.6 | 4.1 | 582.0 (0.94) |
 | | 2 | MSVC | 3.9 | 2.5 | 0 | 304.4 | 87.3 | 5.2 | 417.2 |
 | | | UCRT64 | 3.8 | 2.3 | 0 | 313.6 | 56.9 | 4.1 | 382.6 (0.92) |
-| razor-2p buried hub 32x20 | 1 | MSVC | 3.8 | 1.4 | 0.5 | 368.4 | 17.3 | 3.1 | 394.9 |
+| razor2p buried hub 32x20 | 1 | MSVC | 3.8 | 1.4 | 0.5 | 368.4 | 17.3 | 3.1 | 394.9 |
 | | | UCRT64 | 4.0 | 1.4 | 0.8 | 325.4 | 15.2 | 2.5 | 350.1 (0.89) |
 | | 2 | MSVC | 4.1 | 2.7 | 0.5 | 199.1 | 17.5 | 3.4 | 230.0 |
 | | | UCRT64 | 4.3 | 2.6 | 0.8 | 172.3 | 10.6 | 2.4 | 193.9 (0.84) |
@@ -209,11 +209,11 @@ against 469.6 ms; `/fp:fast` 229.7).
 | | | UCRT64 | 4.1 | 2.4 | 1.1 | 515.1 | 13.3 | 2.7 | 539.4 (1.52) |
 
 sse2, one thread (the Windows 7 / pre-AVX2 path): UCRT64 against MSVC's sse2
-is 1.19x on razor-2p free space (507.6 vs 427.5 ms total), and faster
-elsewhere: bs2 free 0.77x (750.4 vs 976.0), razor-2p buried 0.88x (431.0 vs
+is 1.19x on razor2p free space (507.6 vs 427.5 ms total), and faster
+elsewhere: bs2 free 0.77x (750.4 vs 976.0), razor2p buried 0.88x (431.0 vs
 489.6), bs2 buried 0.87x (841.3 vs 968.4).
 
-The fat UCRT64 exe times as its one-variant exe (razor-2p 6x201, one thread:
+The fat UCRT64 exe times as its one-variant exe (razor2p 6x201, one thread:
 0.505 vs 0.510 s, `time_exes.py`, run 4).
 
 - **The whole gap is the fill.** Start-up, the size-policy seam, the
@@ -224,7 +224,7 @@ The fat UCRT64 exe times as its one-variant exe (razor-2p 6x201, one thread:
   scipy's one DLL.
 - **bs2 buried scales worse at two threads under libgomp:** 683 -> 515 ms
   (1.33x) against MSVC's 503 -> 321 (1.57x), now from one source tree with
-  one thread policy. razor-2p buried scales normally (325 -> 172). Not
+  one thread policy. razor2p buried scales normally (325 -> 172). Not
   investigated: a 2-core VM is the wrong place to measure thread scaling.
 
 ### Optimisation 4 (costed, not built): vector math for gcc on Windows
@@ -260,8 +260,8 @@ The cheapest route is now **in-repo**, not SLEEF:
 
 ### 1. Performance
 
-- **UCRT64, one thread:** razor-2p free space 1.73x MSVC, bs2 buried 1.32x
-  (1.52x at two threads); bs2 free space and razor-2p buried faster than
+- **UCRT64, one thread:** razor2p free space 1.73x MSVC, bs2 buried 1.32x
+  (1.52x at two threads); bs2 free space and razor2p buried faster than
   MSVC.
 - **Closing it:** optimisation 4, about 1 day.
 - **Shipping without it:** the zip's README says which program to prefer
@@ -282,7 +282,7 @@ The cheapest route is now **in-repo**, not SLEEF:
   land in the normal-exit runs, gives 0.4^5 ~ 0.010 pooled and
   (33,576/55,968)^5 ~ 0.08 for the `_cexit` arm alone. The pooled row also
   mixed MINGW64 runs with UCRT64 runs.
-- **The control (run 4).** UCRT64 fat razor-2p, stdout piped, 44,736 runs
+- **The control (run 4).** UCRT64 fat razor2p, stdout piped, 44,736 runs
   per arm, interleaved:
 
   | exit | runs | hangs | where the main thread waits |
@@ -374,7 +374,7 @@ The cheapest route is now **in-repo**, not SLEEF:
     restore caches from its own branch and from main, so main must hold a
     warm entry or every PR pays the cold build.
   - With the cache warm: 4 one-variant + 2 fat exes in about 23 min
-    (razor-2p one-variant 2 min, fat 4 min; bs2 one-variant 4 min, fat 7 min).
+    (razor2p one-variant 2 min, fat 4 min; bs2 one-variant 4 min, fat 7 min).
 - **Gates:** contract tests ~3 min, corpus ~4 min per build x variant,
   `fat_compare` ~27 min for the four combinations, SDE ~1 min, venv 10-14
   min. About 60-80 min of Windows runner time per run in all.
@@ -412,9 +412,9 @@ The cheapest route is now **in-repo**, not SLEEF:
   `libscipy_openblas.dll`, `msvcp140.dll`, `vcruntime140.dll`,
   `vcruntime140_1.dll`, `libomp140.x86_64.dll`, `README.txt`, and `win7\`
   with the sse2 pair, the same DLLs and Microsoft's app-local UCRT.
-- **Single file:** `momwire-nec5-razor-2p.exe` and
-  `momwire-nec5-bspline.exe`, the launcher names (the fat pair picks avx2
-  or sse2 by CPU), and `README.txt`. Each fat exe is 27 MB (razor-2p) and
+- **Single file:** `momwire-nec5-razor2p.exe` and
+  `momwire-nec5-bs2.exe`, the launcher names (the fat pair picks avx2
+  or sse2 by CPU), and `README.txt`. Each fat exe is 27 MB (razor2p) and
   39 MB (bs2) stripped, against MSVC's 4.6-6.8 MB per exe plus the DLLs.
   The OpenBLAS archives are most of that (two DYNAMIC_ARCH builds linked
   in).
@@ -428,7 +428,7 @@ The cheapest route is now **in-repo**, not SLEEF:
 - README-windows.txt says the `-version` line is there "so SimNEC (and the
   CM version card it puts on each deck) shows which program ran".
 - Before 9afe2612 every Windows build printed
-  `NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.93.0`, so with a
+  `NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.93.0`, so with a
   preview beside the MSVC zip, a deck or a bug report could not say which
   build answered.
 - Now a MinGW build adds its toolchain after the variant:
@@ -535,8 +535,8 @@ zip.**
   on Windows 10/11.
 - It passes every gate the MSVC zip passes, and SDE without the exe-only
   waiver.
-- It is faster than MSVC on bs2 free space and razor-2p buried, faster on
-  sse2 almost everywhere, and 1.3-1.7x slower on razor-2p free space and
+- It is faster than MSVC on bs2 free space and razor2p buried, faster on
+  sse2 almost everywhere, and 1.3-1.7x slower on razor2p free space and
   bs2 buried.
 - Making it the default is a performance call to take after optimisation
   4, not before.
@@ -561,7 +561,7 @@ Ordered tasks:
    (which program, the `-version` tag), README.md, the site table, and the
    test_release_notes assertion (0.5 day).
 7. Optional, Steve's call: optimisation 4 (libmvec names over `mw_vmath`)
-   to close the razor-2p free-space and bs2 buried fill gaps (1 day). Then
+   to close the razor2p free-space and bs2 buried fill gaps (1 day). Then
    decide whether the single file replaces the MSVC zip.
 
 Total to a shipped preview: about 2.5-3 days of work, plus CI waits.

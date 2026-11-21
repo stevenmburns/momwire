@@ -81,7 +81,7 @@ def _elevated_sommerfeld_table():
     first. Order does not move a printout (measured: the corpus rendered in
     reverse order, and single cases in fresh processes, are byte-identical to
     it), so this changes where the time is reported, not what is compared."""
-    G.render("eznec/decks/0113_back-yard-dipole.nec", "bspline")
+    G.render("eznec/decks/0113_back-yard-dipole.nec", "bs2")
 
 
 def _dump(deck: str, basis: str, text: str) -> None:

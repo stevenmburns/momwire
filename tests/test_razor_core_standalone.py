@@ -113,7 +113,7 @@ CORE_SOURCES = (
     "_nec4_printout_core.cpp",
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
     # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents);
-    # the engine-neutral seam and razor-2p's engine over it.
+    # the engine-neutral seam and razor2p's engine over it.
     "_nec5_seam_core.cpp",
     "_nec5_razor_seam_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
@@ -345,7 +345,7 @@ def test_the_nec4_deck_reader_in_cxx_alone_is_pythons(driver, dialect):
     assert counts["declined"] <= 3, counts
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_the_nec4_seam_in_cxx_alone_is_pythons(driver, basis):
     """momwire#1607 A2: the NEC-4.2 slot's front (`_nec4.render` up to the
     solve), built from the core TUs alone (`nec4_seam_driver`), serves and
@@ -369,7 +369,7 @@ def test_the_nec4_seam_in_cxx_alone_is_pythons(driver, basis):
 
 
 @pytest.mark.slow  # median over the 5 s default-lane budget at 0.90.0
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_the_nec4_build_in_cxx_alone_is_pythons(driver, basis):
     """momwire#1607 A2b: the NEC-4.2 build (DeckSolver's construction and
     every operating point's solver arguments), built from the core TUs alone
@@ -392,7 +392,7 @@ def test_the_nec4_build_in_cxx_alone_is_pythons(driver, basis):
     assert counts["declined"] <= 3, counts
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "bspline"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "bs2"])
 def test_the_nec4_refusal_printouts_in_cxx_alone_are_the_slots(driver, basis):
     """momwire#1607 A3: every fixture deck the NEC-4.2 slot refuses before a
     solve prints, from the core TUs alone (`nec4_printout_driver`: the C++
@@ -1031,7 +1031,7 @@ def _one_blas_thread_everywhere(monkeypatch):
 
 
 def _read_deck(path):
-    """The fixture deck as RazorSolver's keyword arguments (razor-2p)."""
+    """The fixture deck as RazorSolver's keyword arguments (razor2p)."""
     kw = dict(
         wires=[],
         n_per_edge_per_wire=[],
@@ -1279,7 +1279,7 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     reader, the seam's structure half, the front half, the fill and the LU,
     the run half and the printout writer -- in a process with no Python:
     every deck the C++ path prints is, byte for byte, the file
-    `momwire-nec5-razor-2p` writes for it (results, refusals and the
+    `momwire-nec5-razor2p` writes for it (results, refusals and the
     INTERNAL ERROR frame alike; both sides on one BLAS thread). Below the
     printed digits, every run either side finishes carries the same bytes:
     the solve's Y (`cols.T @ X`, numpy's zgemm / zdotu), the coefficients
@@ -1361,7 +1361,7 @@ def test_the_sequence_decks_print_as_python_does(driver, tmp_path):
     transfer), RP then NE before one XQ, two RP before one XQ, an FR after
     an XQ, a stepping first run followed by another, a request after a
     no-op XQ -- prints through the C++ core, which declined every one of
-    them in 0.80.0, byte for byte as `momwire-nec5-razor-2p` writes it."""
+    them in 0.80.0, byte for byte as `momwire-nec5-razor2p` writes it."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
@@ -1439,7 +1439,7 @@ def test_the_lumped_load_decks_print_their_loads(driver, tmp_path):
 
 
 def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
-    """RP prints through the C++ run half (razor-2p's element moments, the
+    """RP prints through the C++ run half (razor2p's element moments, the
     moment sums in numpy's einsum order, the PEC image or the image weighted
     by the GD medium's Fresnel coefficients, the hypot gains, the dust floor
     and the polarisation ellipse, the average gain, the range form). Each
@@ -1473,7 +1473,7 @@ def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
 
 def test_the_near_field_decks_print_their_fields(driver, tmp_path):
     """NE / NH print through the C++ run half over free space and GN 1:
-    the grid (rectangular, or spherical with its axes exact), razor-2p's
+    the grid (rectangular, or spherical with its axes exact), razor2p's
     current resampled eight ways along each edge (numpy's linspace and
     interp), the mixed-potential E (current and node-charge sums) or the H
     curl, the PEC image, the zero floor. Each committed deck prints with its
@@ -1537,8 +1537,8 @@ PARKED_ONE_PORT_NTS = NET_DECKS / "net_one_port_nts_on_parked_wire.nec"
 @pytest.mark.parametrize(
     ("basis", "exe"),
     [
-        ("razor-2p", "nec5_razor_printout_driver"),
-        ("bspline", "nec5_bspline_printout_driver"),
+        ("razor2p", "nec5_razor_printout_driver"),
+        ("bs2", "nec5_bspline_printout_driver"),
     ],
 )
 def test_one_port_nts_on_an_unpinned_parked_wire_print_as_python(
@@ -1584,9 +1584,9 @@ def test_the_stand_off_floor_refuses_as_python_does(driver, tmp_path):
     nec5 = STAND_OFF_FLOOR / "bare_radials_below_floor_nec5.nec"
     with _one_thread():
         (ans,) = pc.run_driver(
-            driver[0]["nec5_bspline_printout_driver"], [nec5], tmp_path, basis="bspline"
+            driver[0]["nec5_bspline_printout_driver"], [nec5], tmp_path, basis="bs2"
         )
-        ref = pc.python_printout(nec5.read_bytes().decode("latin-1"), basis="bspline")
+        ref = pc.python_printout(nec5.read_bytes().decode("latin-1"), basis="bs2")
     assert (ans["route"], ans["seam"], ans["raised"]) == ("printed", "refused", ""), ans
     assert b"NEC ERROR - wire 0 runs at h = 0.900 mm" in ref
     assert ans["printout"] == ref, pc.first_difference(ref, ans["printout"])
@@ -1599,7 +1599,7 @@ def test_sy_decks_refuse_by_name_as_python_does(driver, tmp_path):
     """An SY card (4nec2's symbolic variables) is refused by name before its
     fields are converted, by the C++ reader as by `parse_card`: the printout
     names SY rather than NON-NUMERICAL CHARACTER IN FIELD, byte for byte as
-    `momwire-nec5-razor-2p` writes it."""
+    `momwire-nec5-razor2p` writes it."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
@@ -1967,8 +1967,8 @@ BSPLINE_EXACT_DECKS = SPLIT / "bspline_exact_decks"
 BSPLINE_BURIED_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_buried"
 
 
-def _bspline_printouts(driver, decks, tmp_path, basis="bspline"):
-    """bs2's driver against `_shell.render(text, basis="bspline")` over
+def _bspline_printouts(driver, decks, tmp_path, basis="bs2"):
+    """bs2's driver against `_shell.render(text, basis="bs2")` over
     `decks`, both on one BLAS thread: every printed deck byte for byte, and
     every finished run's arrays. Returns (counts, decline reasons)."""
     pc = _printout_compare_module()
@@ -2023,7 +2023,7 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     whole chain in a process with no Python -- the reader, the seam with the
     cut spelling, the front half, the dense fill, the KCL Schur solve, the
     spline readouts and sampler, the run half and the writer. Every deck it
-    prints is, byte for byte, what `_shell.render(text, basis="bspline")`
+    prints is, byte for byte, what `_shell.render(text, basis="bs2")`
     prints, and every finished run carries Python's Y, coefficients and port
     vectors -- wire loading (LD 5 / 2 / 3) and the exact ring-kernel
     correction (step 2), a perfect ground's image term (step 3a) and the
@@ -2092,7 +2092,7 @@ def test_the_mixed_decks_print_as_python(driver, tmp_path):
     block's raised order), a pattern with and without a near field --
     through the two transmitted blocks over the below->above table filled in
     C++ (`_somm_transmitted_core`), byte for byte as `_shell.render(text,
-    basis="bspline")` prints them. GN 3 and a NEC-4 load spelling refuse in
+    basis="bs2")` prints them. GN 3 and a NEC-4 load spelling refuse in
     this dialect, in its own words."""
     decks = sorted(MIXED_DECKS.glob("*.nec"))
     assert len(decks) == 10
@@ -2108,7 +2108,7 @@ def test_the_grazing_buried_decks_print_as_python(driver, tmp_path):
     """momwire#1672: radials leaving a base at z = 0 a few centimetres into
     the soil list below/below pairs whose remainder bs2 raises to their own
     order (`_below_pair_correction`) -- in C++ alone, byte for byte as
-    `_shell.render(text, basis="bspline")` prints them, every run's arrays
+    `_shell.render(text, basis="bs2")` prints them, every run's arrays
     included. None declines."""
     decks = sorted(GRAZING_1672_DECKS.glob("*.nec"))
     assert len(decks) == 3
@@ -2119,7 +2119,7 @@ def test_the_grazing_buried_decks_print_as_python(driver, tmp_path):
 CARDS_1669_DECKS = ROOT / "tests" / "fixtures" / "nec5_4nec2_cards_1669"
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     """momwire#1671: GA, GH, GM, GX, GS and PT, read as 4nec2 writes them
     (#1669), through the whole C++ chain on both bases -- a bent wire as one
@@ -2128,7 +2128,7 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     every run's arrays. None declines."""
     decks = sorted(CARDS_1669_DECKS.glob("*.nec"))
     assert len(decks) == 29
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     else:
         pc = _printout_compare_module()
@@ -2178,7 +2178,7 @@ SINGLE_CUT_DECKS = sorted(NORMALIZED_GAIN_DECKS.glob("small*.nec")) + sorted(
 )
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_a_single_cut_prints_no_average_as_python(driver, tmp_path, basis):
     """momwire#1962: an RP card with one theta or one phi averages nothing on
     the NEC-5 engine (no trailer at A = 1 or 3, the rows at A = 2;
@@ -2190,7 +2190,7 @@ def test_a_single_cut_prints_no_average_as_python(driver, tmp_path, basis):
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
         assert not reasons and counts.get("served", 0) == 10, (counts, reasons)
     else:
@@ -2219,7 +2219,7 @@ AVERAGE_QUADRATURE_DECKS = sorted(
 )
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_the_average_quadrature_decks_print_as_python(driver, tmp_path, basis):
     """RP 0's average gain on the NEC-5 engine: phi by the trapezoid rule,
     the theta bands clipped to the span, NaN over a zero step
@@ -2231,7 +2231,7 @@ def test_the_average_quadrature_decks_print_as_python(driver, tmp_path, basis):
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
         assert not reasons and counts.get("served", 0) == 25, (counts, reasons)
     else:
@@ -2255,7 +2255,7 @@ def test_the_average_quadrature_decks_print_as_python(driver, tmp_path, basis):
     assert nan == [p.stem for p in decks if p.stem.startswith("z_")]
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
     """RP with XNDA N = 1 to 5: the NORMALIZED GAIN table through the C++
     printout core (`pattern_block`'s cells and factor, `pattern_lines`' three
@@ -2264,7 +2264,7 @@ def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
     frequencies and several RP cards. None declines."""
     decks = sorted(NORMALIZED_GAIN_DECKS.glob("*.nec"))
     assert len(decks) == 54
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     else:
         pc = _printout_compare_module()
@@ -2302,11 +2302,11 @@ def test_the_normalized_gain_decks_print_as_python(driver, tmp_path, basis):
 REFUSAL_1117_DECKS = ROOT / "tests" / "fixtures" / "nec5_refusal_sentences_1117"
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
 def test_the_census_refusals_print_as_python(driver, tmp_path, basis):
     """The 11-17 census's two bs2 refusals (`test_nec5_refusal_sentences_1117`):
     a radius spread below a crossing node and a grazing pair inside the
-    Sommerfeld range cap, through the C++ seam and run half on razor-2p and
+    Sommerfeld range cap, through the C++ seam and run half on razor2p and
     bs2, byte for byte as `_shell.render` prints them: the refusal sentence,
     never a decline or an INTERNAL ERROR frame."""
     decks = sorted(REFUSAL_1117_DECKS.glob("*.nec"))
@@ -2314,7 +2314,7 @@ def test_the_census_refusals_print_as_python(driver, tmp_path, basis):
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
         assert not reasons, reasons
         assert sum(counts.values()) == 2, counts
@@ -2344,10 +2344,10 @@ def test_the_census_refusals_print_as_python(driver, tmp_path, basis):
 CW_1697_DECKS = ROOT / "tests" / "fixtures" / "nec_cw_catenary_1697"
 
 
-@pytest.mark.parametrize("basis", ["razor-2p", "bspline", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["razor2p", "bs2", "sinusoidal"])
 def test_the_catenary_decks_print_as_python(driver, tmp_path, basis):
     """momwire#1697: CW through the whole C++ chain -- the NEC-5 reader's one
-    bent wire and its echo on razor-2p and bs2, and the NEC-4.2 slot's
+    bent wire and its echo on razor2p and bs2, and the NEC-4.2 slot's
     catenary entry on the sinusoidal basis -- byte for byte as `_shell.render`
     prints them. None declines."""
     decks = sorted(CW_1697_DECKS.glob("*.nec"))
@@ -2355,7 +2355,7 @@ def test_the_catenary_decks_print_as_python(driver, tmp_path, basis):
     if basis == "sinusoidal":
         assert _nec42_sinusoidal_printouts(driver, decks) == 8
         return
-    if basis == "bspline":
+    if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     else:
         counts, reasons = _razor_printouts(driver, decks, tmp_path)

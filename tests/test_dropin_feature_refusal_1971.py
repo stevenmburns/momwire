@@ -13,7 +13,7 @@ promotion).
 
 Not vacuous: each front end is handed a deck it SOLVES (the control run,
 with the variable off, prints an impedance table and no error), and the
-feature is one its own solve asks for: razor_cxx (reach 1) in nec5-razor-2p's
+feature is one its own solve asks for: razor_cxx (reach 1) in nec5-razor2p's
 razor route, point_cplx_staged (reach 1) in the sinusoidal solver that
 nec42-sinusoidal and nec2c-sinusoidal build. The drop-in is level 4 (5 on
 macOS), past both reaches.
@@ -42,7 +42,7 @@ DIPOLE = (
 # (launcher, feature, how the deck reaches it: "file" = argv deck + printout,
 # "stdin" = the nec2c portal's stdin stream, its frame on stdout).
 FRONT_ENDS = {
-    "nec5-razor-2p": ("momwire-nec5-razor-2p", "razor_cxx", "file"),
+    "nec5-razor2p": ("momwire-nec5-razor2p", "razor_cxx", "file"),
     "nec42-sinusoidal": ("momwire-nec42-sinusoidal", "point_cplx_staged", "file"),
     "nec2c-sinusoidal": ("momwire-nec2c-sinusoidal", "point_cplx_staged", "stdin"),
 }

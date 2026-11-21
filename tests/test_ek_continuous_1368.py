@@ -158,7 +158,7 @@ _NEC5_STEP_X1 = {
     20: 112.6048303283927 - 86.74172283505371j,
 }
 # Measured |ΔE_razor − ΔE_NEC-5| = 0.0087 ohm worst at x1 (0.016 at x5):
-# NEC-5's print resolution at these Z. razor-2p's reduced row is NEC-5's
+# NEC-5's print resolution at these Z. razor2p's reduced row is NEC-5's
 # reduced twin, so the response is read as the EK-minus-reduced change.
 _NEC5_STEP_BAR = 0.02
 

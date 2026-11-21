@@ -1,4 +1,4 @@
-"""razor-2p's two key faults, measured on the sinusoidal fill (momwire#1982).
+"""razor2p's two key faults, measured on the sinusoidal fill (momwire#1982).
 
 Razor's pair reuse (momwire#1971) found two faults in a key the sinusoidal
 one shares the shape of. Each was measured here (synthetic decks):

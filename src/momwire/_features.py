@@ -23,13 +23,13 @@ The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
 9, so every executable but nec42-sinusoidal's, and razor_pair_reuse, reach 8,
-which only nec5-razor-2p's route carries, so nec5-bspline refuses it by
+which only nec5-razor2p's route carries, so nec5-bs2 refuses it by
 basis, ``EXE_FEATURE_BASES``). One started with any other ``MOMWIRE_X_``
 variable on refuses before it reads a deck (:data:`EXE_REFUSAL`).
 
 A feature may be a PART of another (``part_of``): one user-facing switch
 that turns on what each solver supports of it. Today that is ``pair_reuse``,
-whose parts are bspline's ``offset_reuse`` and razor-2p's
+whose parts are bspline's ``offset_reuse`` and razor2p's
 ``razor_pair_reuse`` (momwire#1982). Asking for the whole turns each part
 on; a part's own keyword or variable, its older spelling, still wins (see
 :func:`enabled` for the order). A native part asked for only through the
@@ -60,6 +60,8 @@ import functools
 import os
 import sys
 from dataclasses import dataclass
+
+from ._basis_names import canonical_engine
 
 __all__ = [
     "DEFAULT_DRIFT_MAX",
@@ -115,19 +117,19 @@ LEVELS: tuple[Level, ...] = (
         " dialects) on macOS",
     ),
     Level(
-        "exe-nec5-bspline-razor-2p-windows",
-        "the nec5-bspline and nec5-razor-2p executables on Windows, avx2 and sse2",
+        "exe-nec5-bs2-razor2p-windows",
+        "the nec5-bs2 and nec5-razor2p executables on Windows, avx2 and sse2",
     ),
     Level(
-        "exe-nec5-bspline-razor-2p-windows-mingw",
-        "the nec5-bspline and nec5-razor-2p single-file MinGW-w64 (UCRT64)"
+        "exe-nec5-bs2-razor2p-windows-mingw",
+        "the nec5-bs2 and nec5-razor2p single-file MinGW-w64 (UCRT64)"
         " executables on Windows, avx2 and sse2 in one file (preview)",
     ),
     Level(
-        "exe-nec5-bspline-razor-2p-linux-macos",
-        "the nec5-bspline and nec5-razor-2p executables on Linux and macOS",
+        "exe-nec5-bs2-razor2p-linux-macos",
+        "the nec5-bs2 and nec5-razor2p executables on Linux and macOS",
     ),
-    Level("exe-nec42-bspline", "the nec42-bspline executable, all platforms"),
+    Level("exe-nec42-bs2", "the nec42-bs2 executable, all platforms"),
     Level("exe-nec42-sinusoidal", "the nec42-sinusoidal executable, all platforms"),
     Level(
         "exe-nec2c-sinusoidal",
@@ -243,7 +245,7 @@ FEATURES: dict[str, Feature] = {
         #
         # The one user-facing pair-reuse switch (momwire#1982): its parts,
         # `offset_reuse` (bspline, within one edge) and `razor_pair_reuse`
-        # (razor-2p), follow this keyword and this variable, so every solver
+        # (razor2p), follow this keyword and this variable, so every solver
         # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
         # supports. Their own keywords and variables are kept as aliases.
         #
@@ -263,7 +265,7 @@ FEATURES: dict[str, Feature] = {
         # stamped uncertified. Still off by default and not offered. No
         # executable carries it: reach 4 is short of the first executable
         # level (6), and there is no EXE_FEATURES row, so they refuse it.
-        # Its bspline part `offset_reuse` moves with it; its razor-2p part
+        # Its bspline part `offset_reuse` moves with it; its razor2p part
         # `razor_pair_reuse` already reaches 8.
         Feature(
             name="pair_reuse",
@@ -293,10 +295,10 @@ FEATURES: dict[str, Feature] = {
             label="pair reuse",
             summary=(
                 "Fills each repeated pose of a pair of wires or segments once and "
-                "copies the rest. nec5-bspline and nec42-bspline need the front "
+                "copies the rest. nec5-bs2 and nec42-bs2 need the front "
                 "end's hint of which edge pairs share a pose, and also fill a "
                 "uniform wire's own entries once per segment offset; the "
-                "sinusoidal solver and nec5-razor-2p find their own classes, in "
+                "sinusoidal solver and nec5-razor2p find their own classes, in "
                 "free space and over a perfect or finite ground, on decks large "
                 "enough to pay for the search."
             ),
@@ -416,7 +418,7 @@ FEATURES: dict[str, Feature] = {
         # on a grid-shaped column each exponential factor once per distinct
         # z and z', the product per member. A new C++ path, a few ulp from
         # the member route and not bit-identical to it. Reach 9: the
-        # nec5-razor-2p, nec5-bspline and nec42-bspline executables carry it
+        # nec5-razor2p, nec5-bs2 and nec42-bs2 executables carry it
         # (the ports of #1860's measurement build). On by default since
         # 2026-11-15 (Steve), as is height_sheet_recal: certified through
         # level 9, and level 10's nec42-sinusoidal route has no column twin
@@ -500,13 +502,13 @@ FEATURES: dict[str, Feature] = {
             drift=5e-3,
             offer=True,
         ),
-        # nec5-bspline's and nec42-bspline's crossing route fills the above x
+        # nec5-bs2's and nec42-bs2's crossing route fills the above x
         # above Sommerfeld remainder at the no-rod deck's rule (momwire#1860
         # B1): the base order plus #1189's raised pairs, where the shipped
         # route takes the cross block's q = 6, on a grid no dearer than the
         # shipped one (else that fill declines). The shipped kernels, a
         # different quadrature. Reach 9: the two bspline executables carry it;
-        # nec5-razor-2p's accepts the variable and, as Python's razor-2p,
+        # nec5-razor2p's accepts the variable and, as Python's razor2p,
         # ignores it.
         Feature(
             name="crossing_above_rule",
@@ -522,13 +524,13 @@ FEATURES: dict[str, Feature] = {
             summary=(
                 "On a deck where a wire crosses the ground, fill the above-ground "
                 "pairs with the rule used when nothing crosses, keeping the finer "
-                "rule next to the crossing. Helps nec5-bspline and nec42-bspline "
+                "rule next to the crossing. Helps nec5-bs2 and nec42-bs2 "
                 "when most of the antenna is above ground. Measured to move the "
                 "input impedance by at most 3e-8 relative."
             ),
             # Not default-on: approved for promotion 2026-11-15, held back
             # because the pre-tag sweep measured |dZin|/|Zin| = 1.28e-6 on
-            # default|sommerfeld|ground_rod_efhw_wa7ark (nec5-bspline, Skylake),
+            # default|sommerfeld|ground_rod_efhw_wa7ark (nec5-bs2, Skylake),
             # over this declared 1e-7 and over DEFAULT_DRIFT_MAX.
             drift=1e-7,
             offer=True,
@@ -544,7 +546,7 @@ FEATURES: dict[str, Feature] = {
         # deck pays without the warm gain.
         # Reach 8 (momwire#1956 promotion, 2026-11-17): the two nec5
         # executables carry it (their C++ census reads the same two
-        # constants, `ni_eval::sheet_build_weight`); the nec42-bspline
+        # constants, `ni_eval::sheet_build_weight`); the nec42-bs2
         # executable (level 9) does not, and refuses it.
         Feature(
             name="crossing_sheet_retune",
@@ -566,13 +568,13 @@ FEATURES: dict[str, Feature] = {
             # |dZin|/|Zin| against off, every run (frequency) of every deck
             # in tests/fixtures with a ground card (168) and the momwire#1956
             # scoping decks, both executables' C++ twin
-            # (Skylake, T4): at most 6.2e-13 (fat_hub, nec5-razor-2p;
-            # nec5-bspline 3.2e-13), the plane sheets' own interpolation error
+            # (Skylake, T4): at most 6.2e-13 (fat_hub, nec5-razor2p;
+            # nec5-bs2 3.2e-13), the plane sheets' own interpolation error
             # where a row moves from the column twin to a sheet. Deeper and
             # higher in frequency the plan takes more planes (2 -> 51-75) and
             # the error grows with them: a 16-radial hub at 1.5 m, 28 MHz,
-            # 2.5 m radials and vertical measures 9.77e-12 on razor-2p
-            # (1.2e-13 nec5-bspline), 3.0 m at 14 MHz 6.15e-12, 5.0 m at
+            # 2.5 m radials and vertical measures 9.77e-12 on razor2p
+            # (1.2e-13 nec5-bs2), 3.0 m at 14 MHz 6.15e-12, 5.0 m at
             # 14 MHz 3.65e-12; the same to the bit on Haswell and Skylake.
             # (Those figures are the Python route's, on the dict-built decks
             # of tests/test_crossing_sheet_retune_1956.py: the 1.5 m / 28 MHz
@@ -585,9 +587,9 @@ FEATURES: dict[str, Feature] = {
             # out, the vertical and its 7th-of-15 feed counted from the base;
             # the worst case 30 MHz and 5 m, not 28 MHz and 2.5 m). The worst
             # measured: 1.93e-11 on
-            # nec5-bspline at 30 MHz, 1.5 m, 5 m (that module's
-            # DECKS["deep_hub"], 1.40e-11 on nec5-razor-2p there), and
-            # 1.56e-11 on nec5-razor-2p at 28 MHz, 0.5 m, 5 m; the sse2
+            # nec5-bs2 at 30 MHz, 1.5 m, 5 m (that module's
+            # DECKS["deep_hub"], 1.40e-11 on nec5-razor2p there), and
+            # 1.56e-11 on nec5-razor2p at 28 MHz, 0.5 m, 5 m; the sse2
             # builds the same on those two, and the launcher's own route on
             # DECKS["deep_hub"] the same digits (1.93e-11 / 1.40e-11).
             # The declared 6e-11 is NOT a measurement: it is margin, about 3x
@@ -619,13 +621,13 @@ FEATURES: dict[str, Feature] = {
             ),
             label="eliminate junction constraints",
             summary=(
-                "Solve nec5-bspline's and nec42-bspline's junction conservation "
+                "Solve nec5-bs2's and nec42-bs2's junction conservation "
                 "by eliminating one wire end per junction before the factor, "
                 "instead of carrying the constraints through the solve. Fewer "
                 "unknowns and no extra solves on junction-dense designs (coils, "
                 "cages, grids)."
             ),
-            # Measured on the ELT whip (2,029 rows), nec5-bspline degrees 1
+            # Measured on the ELT whip (2,029 rows), nec5-bs2 degrees 1
             # and 2, free space and Sommerfeld: at most 6.7e-13.
             drift=1e-12,
             offer=True,
@@ -662,13 +664,13 @@ FEATURES: dict[str, Feature] = {
                 "last printed digits: at most 2.3e-14 of Zin as measured; the "
                 "bound is conservative."
             ),
-            # Measured on 105 synthetic razor-2p dipoles (h/a 1.1 to 230; free
+            # Measured on 105 synthetic razor2p dipoles (h/a 1.1 to 230; free
             # space, PEC and Sommerfeld ground; 54 of them at wavelengths just
             # inside the series' own bounds): |dZin|/|Zin| at most 2.3e-14.
             drift=1e-9,
             offer=False,
         ),
-        # razor-2p's solve in one C++ call from Python (the prototype, PR
+        # razor2p's solve in one C++ call from Python (the prototype, PR
         # #1479).
         Feature(
             name="razor_cxx",
@@ -688,13 +690,13 @@ FEATURES: dict[str, Feature] = {
             ),
             label="razor C++ solve",
             summary=(
-                "Runs nec5-razor-2p's whole solve in one C++ call from Python. A "
+                "Runs nec5-razor2p's whole solve in one C++ call from Python. A "
                 "prototype. Not measured at Zin; the bound is conservative."
             ),
             drift=1e-6,
             offer=False,
         ),
-        # razor-2p's fill-pair reuse (momwire#1971): the fill finds its own
+        # razor2p's fill-pair reuse (momwire#1971): the fill finds its own
         # classes of (centroid observer, source segment) pairs, the direct
         # and image moments keyed on what the kernel reads and the composing
         # ground's remainder on the height-aware key, evaluates one
@@ -704,9 +706,9 @@ FEATURES: dict[str, Feature] = {
             name="razor_pair_reuse",
             # Reach 8: every Python route (the hosted app, Linux sse2,
             # Windows, the drop-in, macOS) and the nec5 executables (levels 6
-            # to 8, nec5-razor-2p's `EXE_FEATURES` row; nec5-bspline, which
+            # to 8, nec5-razor2p's `EXE_FEATURES` row; nec5-bs2, which
             # shares those levels, refuses it by basis). Not 9 or 10: those
-            # are the nec42 executables, and neither has a razor-2p route to
+            # are the nec42 executables, and neither has a razor2p route to
             # run it in. Still off by default and not offered (Steve, 11-17;
             # it was reach 1, the hosted app only, from 11-16).
             reach=8,
@@ -725,7 +727,7 @@ FEATURES: dict[str, Feature] = {
             ),
             label="razor pair reuse",
             summary=(
-                "nec5-razor-2p fills each class of congruent segment pairs once "
+                "nec5-razor2p fills each class of congruent segment pairs once "
                 "and copies the rest, in free space and over a perfect or "
                 "Sommerfeld ground (the buried fill excepted)."
             ),
@@ -759,7 +761,7 @@ FEATURES: dict[str, Feature] = {
             # are aliases. Outside its reach, asked for only that way, off.
             part_of="pair_reuse",
         ),
-        # razor-2p's cross blocks across a frequency sweep from anchors
+        # razor2p's cross blocks across a frequency sweep from anchors
         # (`_razor_crossing_core.cpp`, `set_band_plan`): the above x below
         # blocks and the crossing node charges computed exactly at a few
         # wavenumbers spanning the sweep (Chebyshev-Lobatto, the plan's two
@@ -775,12 +777,12 @@ FEATURES: dict[str, Feature] = {
         # electrically for 12, a fill outside the plan or on another
         # geometry. One C++ core for the plan, the
         # entries and the interpolation (`_razor_crossing_core.h`'s
-        # `anchors`): the nec5-razor-2p executable's fill and RazorSolver's
+        # `anchors`): the nec5-razor2p executable's fill and RazorSolver's
         # (`_crossing_anchors_now`, which fills its anchors with its own
         # cross terms), so the two print the same bytes. It acts where a
         # seam hands the fill its sweep: the NEC-5 seam's stepping FR, in
         # C++ and in the drop-in. Reach 8: the Python routes and the nec5
-        # executables (nec5-razor-2p's alone, `EXE_FEATURE_BASES`).
+        # executables (nec5-razor2p's alone, `EXE_FEATURE_BASES`).
         Feature(
             name="crossing_anchors",
             reach=8,
@@ -799,7 +801,7 @@ FEATURES: dict[str, Feature] = {
                 "interpolate them at the rest, instead of computing them at "
                 "every frequency."
             ),
-            # |dZin|/|Zin| against off, full precision (the nec5-razor-2p
+            # |dZin|/|Zin| against off, full precision (the nec5-razor2p
             # executable's MW_EXE_ARRAYS, Rocketlake, the same threads both
             # sides), every point of a 21-point sweep, the anchor count the
             # error rule chose:
@@ -1182,17 +1184,18 @@ def active() -> list[str]:
 
 
 # The executable a basis name selects, by its level family. Keys are the
-# names an executable or a caller may spell: the long form, the build tokens
-# (`MW_EXE_BASIS`) and the solver model values.
+# names an executable or a caller may spell: the long form, the short form
+# and the build tokens (`MW_EXE_BASIS` in standalone/CMakeLists.txt, which
+# are CMake cache values, not names a user types). A deprecated spelling is
+# canonicalised before the lookup (`_basis_names.canonical_engine`).
 _EXE_BASES = {
-    "nec5-razor-2p": "nec5-bspline-razor-2p",
-    "razor-2p": "nec5-bspline-razor-2p",
-    "razor2p": "nec5-bspline-razor-2p",
-    "nec5-bspline": "nec5-bspline-razor-2p",
-    "bspline_nec5": "nec5-bspline-razor-2p",
-    "bspline": "nec5-bspline-razor-2p",
-    "nec42-bspline": "nec42-bspline",
-    "bspline_nec42": "nec42-bspline",
+    "nec5-razor2p": "nec5-bs2-razor2p",
+    "razor2p": "nec5-bs2-razor2p",
+    "nec5-bs2": "nec5-bs2-razor2p",
+    "bs2": "nec5-bs2-razor2p",
+    "bspline_nec5": "nec5-bs2-razor2p",
+    "nec42-bs2": "nec42-bs2",
+    "bspline_nec42": "nec42-bs2",
     "nec42-sinusoidal": "nec42-sinusoidal",
     "sin42": "nec42-sinusoidal",
     "nec2c-sinusoidal": "nec2c-sinusoidal",
@@ -1221,32 +1224,32 @@ def _os(platform: str | None) -> str:
 # solve reads none of its features and only their dense fallback does, which
 # a table keyed on the basis cannot tell apart deck by deck.
 _BASIS_SOLVERS = {
-    "bspline": "bspline",
-    "bspline-d1": "bspline",
+    "bs2": "bspline",
+    "bs1": "bspline",
     "hmatrix": "bspline",
     "arrayblock": "bspline",
-    "nec5-bspline": "bspline",
-    "nec42-bspline": "bspline",
+    "nec5-bs2": "bspline",
+    "nec42-bs2": "bspline",
     "bspline_nec5": "bspline",
     "bspline_nec42": "bspline",
-    "razor-2p": "razor",
-    "razor-nec5": "razor",
     "razor2p": "razor",
-    "nec5-razor-2p": "razor",
+    "nec5-razor2p": "razor",
     "sinusoidal": "sinusoidal",
     "nec42-sinusoidal": "sinusoidal",
     "sin42": "sinusoidal",
     "nec2c-sinusoidal": "sinusoidal",
     "nec2c_sin": "sinusoidal",
-    "sinusoidal-galerkin": "sinusoidal_galerkin",
+    "sg": "sinusoidal_galerkin",
     "pulse": "",
 }
 
 
 def basis_solver(basis: str | None) -> str | None:
     """The solver family (:data:`SOLVERS`) basis name `basis` runs, ``""``
-    for one that honours no feature, or None when the name is not known."""
-    return _BASIS_SOLVERS.get(basis or "")
+    for one that honours no feature, or None when the name is not known.
+    A deprecated spelling reads as its canonical name, silently: this is
+    asked while printing, where the front end has already warned."""
+    return _BASIS_SOLVERS.get(canonical_engine(basis or "", warn=False))
 
 
 _UNSET: object = object()
@@ -1300,15 +1303,15 @@ def current_level(
     if context == "dropin":
         return _level("macos" if os_name == "macos" else "dropin-linux-windows")
     if context == "exe":
-        family = _EXE_BASES.get(basis or "")
+        family = _EXE_BASES.get(canonical_engine(basis or "", warn=False))
         if family is None:
             raise ValueError(f"no standalone executable for basis {basis!r}")
-        if family == "nec5-bspline-razor-2p":
+        if family == "nec5-bs2-razor2p":
             if os_name != "windows":
-                return _level("exe-nec5-bspline-razor-2p-linux-macos")
+                return _level("exe-nec5-bs2-razor2p-linux-macos")
             if toolchain == "mingw":
-                return _level("exe-nec5-bspline-razor-2p-windows-mingw")
-            return _level("exe-nec5-bspline-razor-2p-windows")
+                return _level("exe-nec5-bs2-razor2p-windows-mingw")
+            return _level("exe-nec5-bs2-razor2p-windows")
         return _level(f"exe-{family}")
     raise ValueError(f"context must be python, dropin or exe, not {context!r}")
 

@@ -59,6 +59,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 from ... import _features
+from ..._basis_names import canonical_basis, deprecation_note, spelling
 from ...deck._cards import Card, parse_card
 from ...deck._nec4 import catenary_length, helix_vertices
 from ...deck._nec5 import Nec5Deck
@@ -237,10 +238,14 @@ def engine_stamp(basis: str) -> str:
     byte gate masks it by position — a new line would renumber the printout.
 
     ``basis`` is the name that was THREADED to this printout — the launcher
-    filename's suffix, or the seam's default — not a canonicalization of it:
-    ``razor-nec5`` stamps ``razor-nec5`` even though it resolves to the same
-    solver ``razor-2p`` does, because what a bug report needs to say is which
-    exe answered.
+    filename's suffix, or the seam's default. A deprecated spelling
+    (`momwire._basis_names.BASIS_ALIASES`) stamps its CANONICAL name, so the
+    field reads the same for every spelling of one solver, and the tail
+    names the spelling that was used (``(renamed from razor-2p)``,
+    momwire#2091): a bug report still says which file answered, and the
+    user learns the name to switch to. It rides at the END of the tail,
+    after the overlay marker and the features, because it is the one part
+    of line 2 that goes away by itself when the user renames the file.
     """
     version = _stamp_field(_momwire_version()) or _STAMP_UNKNOWN_VERSION
     variant = _stamp_field(_accelerator_variant()) or _STAMP_NO_VARIANT
@@ -254,6 +259,10 @@ def engine_stamp(basis: str) -> str:
     features = _features.stamp(solver=_features.basis_solver(basis))
     if features:
         tail += f" {features}"
+    note = deprecation_note(basis) or deprecation_note(spelling())
+    if note:
+        tail += f" {note}"
+        basis = canonical_basis(basis, warn=False)
     # The marker's room is reserved BEFORE the basis is cut, so a long
     # launcher name loses its own tail rather than the overlay warning.
     room = (

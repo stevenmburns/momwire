@@ -262,7 +262,7 @@ def test_served_agrees_with_the_licensed_engine_on_the_export():
     the basis measured against the licensed engine's own tent-basis
     arithmetic -- lands at 54.036-14.823j, within 0.01 ohm."""
     deck = parse_nec5((FIXTURES / "invvee_apex.nec").read_text())
-    served = _serve.serve(deck, basis="razor-nec5")
+    served = _serve.serve(deck, basis="razor2p")
     z = served.sources[0].impedance
     licensed = complex(54.038, -14.823)
     assert abs(z - licensed) < 0.01
@@ -297,7 +297,7 @@ def test_served_agrees_with_the_native_ak_solve_on_the_same_basis():
     from momwire.razor import RazorSolver
 
     deck = parse_nec5((FIXTURES / "invvee_apex.nec").read_text())
-    served = _serve.serve(deck, basis="razor-nec5")
+    served = _serve.serve(deck, basis="razor2p")
     z_served = served.sources[0].impedance
 
     wires = deck.wires

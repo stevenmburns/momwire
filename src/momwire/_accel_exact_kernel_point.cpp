@@ -8,7 +8,7 @@
 #endif
 
 // momwire#1433: the exact ring kernel's POINT moments in C++ -- the 1-D
-// primitive a point- or path-tested solver needs (razor-2p's centroids
+// primitive a point- or path-tested solver needs (razor2p's centroids
 // first; sin's match points next, momwire#1434).
 //
 // A port of `_exact_kernel.point_moments` / `PointRows`: for an observer at
@@ -207,7 +207,7 @@ class PointCrossRowsAccel {
 };
 
 // ---------------------------------------------------------------------------
-// The point-tested correction's assembly (razor-2p's wing algebra, #1433):
+// The point-tested correction's assembly (razor2p's wing algebra, #1433):
 //
 //   Z[m, n] += cA_r * sum_{e in n} t_e dmom_e(o_r)  -  cP_r * sum_{e in n} q_e dM0(o_r, j_e)
 //

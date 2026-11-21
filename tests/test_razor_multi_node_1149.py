@@ -1,4 +1,4 @@
-"""razor-2p on decks with SEVERAL crossing nodes — momwire#1149 U2b-3.
+"""razor2p on decks with SEVERAL crossing nodes — momwire#1149 U2b-3.
 
 The shared crossing scope has served any number of crossing junctions from
 `MIN_CROSSING_NODE_SEPARATION_M` apart since antennaknobs plan U9, and razor's

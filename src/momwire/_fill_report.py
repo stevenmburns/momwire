@@ -192,7 +192,7 @@ class fill_clock:
 
 class fill_time:
     """``with fill_time(solver):`` around work that belongs to the fill but
-    runs ahead of it (razor-2p's k-independent prepare): its seconds count
+    runs ahead of it (razor2p's k-independent prepare): its seconds count
     toward `fill_s`, and it is not a fill of its own."""
 
     __slots__ = ("ledger", "t0")
@@ -211,7 +211,7 @@ class fill_time:
 
 
 def add_stage_times(solver, fill_s, factor_s, frequencies=1):
-    """A fill and factor measured elsewhere (the razor-2p C++ route's own
+    """A fill and factor measured elsewhere (the razor2p C++ route's own
     clocks), counted as one fill."""
     ledger = ledger_of(solver)
     ledger.fill_s += float(fill_s)

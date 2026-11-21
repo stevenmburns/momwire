@@ -193,7 +193,7 @@ def test_the_five_decks_serve_and_name_no_refusal():
     """The headline, end to end through the shell: all five come back as
     printouts, none of them carrying a ``NEC ERROR``."""
     for cid in sorted(ONE_SEGMENT_CENSUS):
-        text = render(deck_text(cid), basis="razor-nec5")
+        text = render(deck_text(cid), basis="razor2p")
         assert "NEC ERROR" not in text, cid
         assert "INTERNAL ERROR" not in text, cid
 
@@ -202,10 +202,10 @@ def test_the_five_decks_serve_and_name_no_refusal():
 def test_an_inert_wire_still_comes_back_as_a_printout():
     """The refusal that survives goes through the seam's channel, naming the
     wire and the basis — never as an exception into EZNEC's face."""
-    text = render(NEITHER_END, basis="razor-nec5")
+    text = render(NEITHER_END, basis="razor2p")
     assert "NEC ERROR" in text
     assert "INTERNAL ERROR" not in text
-    assert "razor-nec5" in text
+    assert "razor2p" in text
     assert "meets no other wire at either end" in text
 
 
@@ -213,7 +213,7 @@ def test_an_inert_wire_still_comes_back_as_a_printout():
 def test_the_default_basis_hosts_the_inert_wire_it_refuses_for_razor():
     """The refusal is razor's basis and not the seam's opinion of the model:
     the same deck serves under the default."""
-    assert "NEC ERROR" not in render(NEITHER_END, basis="bspline")
+    assert "NEC ERROR" not in render(NEITHER_END, basis="bs2")
 
 
 # --------------------------------------------------------------------------

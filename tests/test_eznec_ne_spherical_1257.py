@@ -14,7 +14,7 @@ wrote and the licensed NEC-5's printouts of them. The gates:
     for digit against the licensed printouts;
   * the LAYOUT — the whole printout from the structure heading down, numbers
     masked, is the licensed one on both decks and on two bases;
-  * the VALUES — on razor-2p, NEC-5's formulation twin, every cell inside a
+  * the VALUES — on razor2p, NEC-5's formulation twin, every cell inside a
     stated envelope, with the rows that are excluded named and the reason
     for each asserted where the reason is the oracle's;
   * a point BELOW a finite ground refuses by name, over a perfect ground it
@@ -50,7 +50,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "eznec_ne_spherical_1257"
 FREE = "dipole-ne1-free"
 GROUND = pytest.param("dipole-ne1-ground", marks=pytest.mark.integration)
 DECKS = (FREE, GROUND)
-TWIN = "razor-2p"
+TWIN = "razor2p"
 _NUMBER = re.compile(r"[-+]?\d+(\.\d+)?(E?[-+]\d+)?")
 
 
@@ -235,7 +235,7 @@ def _range(point: np.ndarray) -> int:
     return round(math.log10(float(np.linalg.norm(point))))
 
 
-# The value envelopes, on razor-2p (NEC-5's formulation twin), as the vector
+# The value envelopes, on razor2p (NEC-5's formulation twin), as the vector
 # difference over the table's own scale at that range. The scale is the
 # largest licensed |E| among the rows the envelope covers.
 _ENVELOPE = {"dipole-ne1-free": 1e-3, "dipole-ne1-ground": 1e-2}
@@ -390,7 +390,7 @@ def test_an_ne_1_deck_goes_through_the_engines_file_seam(tmp_path):
 
 @pytest.fixture
 def razor_server(short_room, transport):  # noqa: F811 - the imported fixtures
-    """The resident server the ``momwire-nec5-razor-2p`` client talks to."""
+    """The resident server the ``momwire-nec5-razor2p`` client talks to."""
     path = str(short_room / f"srv{mech.address_suffix(transport)}")
     log = io.StringIO()
 

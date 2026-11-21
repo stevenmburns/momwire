@@ -4,7 +4,7 @@ A buried wire within a segment of the surface sees its own mirror there at
 d + d', and the below/below Sommerfeld remainder carries a spike of that
 width. Both bases integrated it at one flat order, so radials leaving a base
 at z = 0 and sloping a few centimetres into the soil converged tens of ohms
-slowly in X. razor-2p now keys the order to grazing height
+slowly in X. razor2p now keys the order to grazing height
 (`_remainder_qp`, as above ground), and bs2 raises the listed pairs to their
 own order (`_below_pair_correction`), both only as far as the grid's
 grazing floor serves.
@@ -14,7 +14,7 @@ The decks under ``tests/fixtures/buried_grazing_1672`` are a 5 m vertical
 base node, at 14 MHz over GN 2 (eps 13, sigma 0.005): ``shallow`` slopes to
 5 cm, ``deep`` to 0.5 m; ``_s40`` / ``_s200`` are 40 and 200 segments per
 wavelength. The licensed NEC-5 (nec5cl-simd-d0c1383, a black box,
-2026-10-24) reads them as below; momwire main (26785ef6) read razor-2p
+2026-10-24) reads them as below; momwire main (26785ef6) read razor2p
 60.54 - j23.83 and bs2 65.96 - j17.39 on ``shallow_s40``.
 """
 
@@ -56,18 +56,18 @@ def _deck(name: str) -> str:
 
 @pytest.mark.parametrize("name", sorted(NEC5))
 def test_razor_reads_the_shallow_radials_as_nec5_does(name):
-    """razor-2p is NEC-5's own basis: with the remainder resolved it lands
+    """razor2p is NEC-5's own basis: with the remainder resolved it lands
     on the licensed engine at a coarse mesh too (main was 7 + j17 ohm off on
     shallow_s40)."""
-    z = _z(render(_deck(name), basis="razor-2p"))
+    z = _z(render(_deck(name), basis="razor2p"))
     assert abs(z - NEC5[name]) < 0.5, (name, z)
 
 
 def test_bs2_converges_on_the_shallow_radials():
     """bs2 converges to its own value; what #1672 fixes is how fast. Main
     moved 9.4 ohm in X between 40 and 200 segments per wavelength."""
-    z40 = _z(render(_deck("shallow_s40"), basis="bspline"))
-    z200 = _z(render(_deck("shallow_s200"), basis="bspline"))
+    z40 = _z(render(_deck("shallow_s40"), basis="bs2"))
+    z200 = _z(render(_deck("shallow_s200"), basis="bs2"))
     assert abs(z40 - z200) < 2.5, (z40, z200)
 
 
@@ -117,7 +117,7 @@ def _shallow_orders(name):
 
     rz._remainder_qp_per_source = spy
     try:
-        render(_deck(name), basis="razor-2p")
+        render(_deck(name), basis="razor2p")
     finally:
         rz._remainder_qp_per_source = orig
     return seen
@@ -170,7 +170,7 @@ def test_ragged_windows_are_each_segment_at_its_own_order():
 
     pg.RemainderBelow.field_windows = spy
     try:
-        render(_deck("shallow_s40"), basis="razor-2p")
+        render(_deck("shallow_s40"), basis="razor2p")
     finally:
         pg.RemainderBelow.field_windows = orig
     rem, observers, sources, kw = seen["args"]

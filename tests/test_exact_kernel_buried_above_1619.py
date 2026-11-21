@@ -5,7 +5,7 @@ Until this, any wire below the ground refused `exact_kernel=True`
 (`BURIED_REFUSAL`: the kernel is written for a real wavenumber) and "auto"
 resolved False on every buried deck, so a fat vertical over buried radials
 never got the exact kernel however short its segments. Above ground the
-wavenumber is real, so stage 1 serves the combination IN PART on razor-2p and
+wavenumber is real, so stage 1 serves the combination IN PART on razor2p and
 bs2, by the rule the extended kernel follows there (momwire#1170 on bs2,
 momwire#1614 on razor):
 
@@ -42,7 +42,7 @@ L_V, L_R = 5.0253, 5.1816
 WL14 = 299792458.0 / 14e6
 GROUND = dict(ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
 FAMILIES = {
-    "razor-2p": (RazorSolver, dict(nec5_quadrature=True)),
+    "razor2p": (RazorSolver, dict(nec5_quadrature=True)),
     "bs2": (BSplineSolver, {}),
 }
 
@@ -248,7 +248,7 @@ def test_razor_plans_the_above_medium_only(monkeypatch):
 
     monkeypatch.setattr(PLAN, "ENABLED", False)
     monkeypatch.setattr(PLAN, "build_plan", spy)
-    s = solver("razor-2p", hub(FINE), exact=True)
+    s = solver("razor2p", hub(FINE), exact=True)
     assert s._wire_media()[-1] == _medium_spec.BELOW
     _z(s)
     assert len(seen) == 1
@@ -266,7 +266,7 @@ def test_razor_plans_the_above_medium_only(monkeypatch):
 def test_razor_knot_observer_is_not_corrected():
     """A chopped row's T2 ends at the knot, in the plane: its coefficient
     there is zeroed (the knot keeps the fill's kernel), and only there."""
-    s = solver("razor-2p", hub(FINE), exact=True)
+    s = solver("razor2p", hub(FINE), exact=True)
     geom = s._build_geometry()
     geom_a, _rows, chop = s._medium_geometry(geom, _medium_spec.ABOVE)
     rows = np.array(sorted(chop), dtype=np.int64)
@@ -310,7 +310,7 @@ def test_swapped_kernel_reproduces_the_buried_fill(monkeypatch, family, deck, ek
     move beyond the fill's quadrature accuracy. This is what shows the base
     removed is the one the buried fill's above medium put there."""
     kern = _extended if ek else _reduced
-    kw = {} if family == "razor-2p" else dict(n_qp_pair_same_edge=8)
+    kw = {} if family == "razor2p" else dict(n_qp_pair_same_edge=8)
     d = DECKS[deck](FINE)
     base = _z(solver(family, d, exact=False, ek=ek, **kw))
     monkeypatch.setattr(EK, "_USE_ACCEL", False)

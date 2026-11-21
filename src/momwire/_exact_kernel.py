@@ -647,7 +647,7 @@ def coaxial_rows(x0, sgn, h, a, k, nd, max_cached=None):
 # --------------------------------------------------------------------------
 # point moments: the 1-D primitive (momwire#1433)
 # --------------------------------------------------------------------------
-# A point- or path-tested row (razor-2p's centroids, sin's match points)
+# A point- or path-tested row (razor2p's centroids, sin's match points)
 # observes the field at a POINT on the wire's surface, so what it needs of a
 # coaxial source segment is the 1-D moments of K against the source's local
 # polynomial,
@@ -1140,7 +1140,7 @@ class CoaxialCrossRowsAccel:
     do not depend on the window, the batch or the thread count; the agreement
     is gated at a tolerance (tests/test_exact_kernel_two_radius_1438.py). It
     is the one implementation the bs2 solver and the standalone bs2 route
-    (momwire#1615) share, as `PointCrossRowsAccel` is razor-2p's."""
+    (momwire#1615) share, as `PointCrossRowsAccel` is razor2p's."""
 
     def __init__(self, x0, sgn, h, a, lab, k, nd, max_cached=None, *, n_threads=0):
         h = np.asarray(h, dtype=np.float64)
@@ -1341,7 +1341,7 @@ class PointCrossRowsAccel:
     so the bits do not depend on the batch or the thread count; the
     agreement is gated at a tolerance (tests/test_exact_kernel_two_radius_
     1438.py). It is the one implementation the solvers and the standalone
-    razor-2p path (momwire#1479) share."""
+    razor2p path (momwire#1479) share."""
 
     def __init__(self, x0, sgn, h, a, lab, k, nq, max_cached=None, *, n_threads=0):
         h = np.asarray(h, dtype=np.float64)

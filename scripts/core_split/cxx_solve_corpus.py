@@ -2,8 +2,8 @@
 
     python scripts/core_split/cxx_solve_corpus.py OUT.jsonl DECK_OR_DIR...
 
-Every deck is served as `momwire-nec5-razor-2p` serves it
-(`momwire.dropin.nec5._shell.render(text, basis="razor-2p")`), twice:
+Every deck is served as `momwire-nec5-razor2p` serves it
+(`momwire.dropin.nec5._shell.render(text, basis="razor2p")`), twice:
 
 1. with `compute_port_solution` instrumented: each call runs the PYTHON
    route first (Z captured as `_bspline._lu_solve` receives it) and then the
@@ -112,16 +112,16 @@ def main():
             t = time.perf_counter()
             RazorSolver.compute_port_solution = cps
             try:
-                _shell.render(text, basis="razor-2p")
+                _shell.render(text, basis="razor2p")
             except Exception as exc:  # noqa: BLE001 -- recorded per deck
                 row["error"] = f"{type(exc).__name__}: {exc}"
             finally:
                 RazorSolver.compute_port_solution = orig_cps
             row["solves"] = per_deck.get("solves", [])
             razor._RAZOR_CXX = False
-            p_py = _shell.render(text, basis="razor-2p")
+            p_py = _shell.render(text, basis="razor2p")
             razor._RAZOR_CXX = True
-            p_cx = _shell.render(text, basis="razor-2p")
+            p_cx = _shell.render(text, basis="razor2p")
             razor._RAZOR_CXX = None
             row["printout_same"] = p_py == p_cx
             row["refused"] = "NEC ERROR" in p_py or not row["solves"]

@@ -1,10 +1,10 @@
-"""Where a WARM razor-2p solve's time goes, phase by phase.
+"""Where a WARM razor2p solve's time goes, phase by phase.
 
     python scripts/core_split/profile_razor_solve.py OUT.json
         [--n 12 50 108 400 800] [--ground free pec] [--reps R]
 
 One "solve" is what a served deck pays per run: construct a `RazorSolver`
-(razor-2p: `nec5_quadrature=True, exact_kernel="auto"`), then
+(razor2p: `nec5_quadrature=True, exact_kernel="auto"`), then
 `compute_port_solution()`, then the knot-current readout of its column. The
 geometry is the core-split notes' dipole: horizontal, 10 m, 6 m up, radius
 2 mm (`--radius`), lambda = 22 m; `pec` adds a perfect ground plane at z = 0. Each

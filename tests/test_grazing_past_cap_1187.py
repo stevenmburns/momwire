@@ -25,7 +25,7 @@ Gates here:
 4. the Beverage's pre-flight serves on every lane, and REFUSES with the cap
    exemption disabled (the negative control);
 5. (slow) the Beverage itself is solved on bspline and sinusoidal-Galerkin
-   over average and poor soil, and agrees with razor-2p at the band the
+   over average and poor soil, and agrees with razor2p at the band the
    validation page states for the buried class.
 
 Bit identity of everything served before is gated by the harness named in
@@ -250,22 +250,22 @@ def test_with_the_cap_exemption_disabled_the_beverage_refuses(monkeypatch, soil)
 # 5. the Beverage, solved (slow)
 # ----------------------------------------------------------------------
 
-# razor-2p on this deck over the same soils — antennaknobs#1707's measured
+# razor2p on this deck over the same soils — antennaknobs#1707's measured
 # feed (the antenna side of its 9:1 transformer, term port on 500 ohm), which
 # a licensed NEC-5 at the design's mesh reproduces to 0.1 ohm (677.0 - 97.6j
 # and 751.0 - 270.0j).
 RAZOR_2P_FEED = {"average": 677.0 - 97.6j, "poor": 750.9 - 269.8j}
 # Measured at momwire#1187 on this deck (Haswell, OMP 4; the same numbers come
 # out of antennaknobs' own `wire.beverage` build on these lanes, to the
-# printed digit). Both bases sit ~2 ohm (0.27-0.29 %) under razor-2p and
+# printed digit). Both bases sit ~2 ohm (0.27-0.29 %) under razor2p and
 # NEC-5, R low in both soils, and 0.1 ohm from each other.
 MEASURED = {
-    ("bspline", "average"): 675.196 - 98.488j,
+    ("bs2", "average"): 675.196 - 98.488j,
     # momwire#1354: the mixed-potential fill, 0.009 / 0.007 ohm from
     # bspline's answer (1e-5 relative; the direct fill read 675.172 - 98.538j
     # / 748.853 - 269.494j, 0.06 / 0.11 ohm from it).
     ("sg", "average"): 675.193 - 98.496j,
-    ("bspline", "poor"): 748.945 - 269.428j,
+    ("bs2", "poor"): 748.945 - 269.428j,
     ("sg", "poor"): 748.943 - 269.435j,
 }
 # The buried class on the validation page: 0.2 % in R on the buried dipole,
@@ -278,12 +278,12 @@ BAND_REL = 0.004
 @pytest.mark.slow
 @pytest.mark.parametrize("soil", ["average", "poor"])
 @pytest.mark.parametrize(
-    "cls", [BSplineSolver, SinusoidalGalerkinSolver], ids=["bspline", "sg"]
+    "cls", [BSplineSolver, SinusoidalGalerkinSolver], ids=["bs2", "sg"]
 )
 def test_the_beverage_is_served_and_agrees_with_razor_2p(cls, soil):
     d = beverage_deck(AVERAGE if soil == "average" else POOR)
     z = _quiet(feed_z, cls(**d))
-    lane = "bspline" if cls is BSplineSolver else "sg"
+    lane = "bs2" if cls is BSplineSolver else "sg"
     assert abs(z - MEASURED[(lane, soil)]) < 0.05, z
     ref = RAZOR_2P_FEED[soil]
     assert abs(z - ref) < BAND_REL * abs(ref), (z, ref)

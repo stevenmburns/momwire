@@ -346,12 +346,12 @@ def version_line(dialect: str, name: str, modes: str = LAUNCHER_MODES) -> str:
     SimNEC: the deck dialect (``NEC5``, ``NEC42`` or ``NEC2``), the
     launcher's own name (always starting ``momwire``), the interface modes in
     square brackets (``[sb]``; ``[]`` would mean one deck per call only), and
-    the full momwire version, e.g. ``NEC5 momwire-nec5-razor-2p [sb] 0.82.0``.
+    the full momwire version, e.g. ``NEC5 momwire-nec5-razor2p [sb] 0.82.0``.
 
     This is the Python launchers' line. The C++ executables under
     ``standalone/`` answer the same line with NAME suffixed
     ``-standalone-<variant>`` (``avx2``, ``sse2``, or ``legacy`` on macOS),
-    e.g. ``NEC5 momwire-nec5-razor-2p-standalone-avx2 [sb] 0.82.0``, so a
+    e.g. ``NEC5 momwire-nec5-razor2p-standalone-avx2 [sb] 0.82.0``, so a
     user can tell the two apart (momwire#1831); every rule below holds for
     both. Nothing reads the line back to choose a basis: that comes from the
     program's file name.

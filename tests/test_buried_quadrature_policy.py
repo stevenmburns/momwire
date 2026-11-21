@@ -57,12 +57,12 @@ def test_bspline_reads_its_entry():
     # are not a second knob, so they may not say something else
     assert (b.wholly_buried_order, b.wholly_buried_ladder) == (b.base_order, b.ladder)
     assert b.near is None
-    assert BQ.POLICIES["bspline"] is b
+    assert BQ.POLICIES["bs2"] is b
 
 
 def test_sg_reads_its_entry_and_the_divergence_is_declared():
     sg = BQ.SINUSOIDAL_GALERKIN
-    assert BQ.POLICIES["sinusoidal-galerkin"] is sg
+    assert BQ.POLICIES["sg"] is sg
     assert (sg.base_order, sg.ladder) == (32, ((2.0, 8), (16.0, 4)))
     # the wholly-buried route is bspline's FREE-SPACE rule, by value
     assert (sg.wholly_buried_order, sg.wholly_buried_ladder) == (
@@ -183,14 +183,14 @@ def _sg_render(
     monkeypatch, deck, policy=None, *, graded=None, watch_near=False, text=None
 ):
     """Y of `deck` (or of the deck `text`) through the NEC-5 render SG serves
-    (`momwire-nec5-sinusoidal-galerkin`), the fill routes that ran, the
+    (`momwire-nec5-sg`), the fill routes that ran, the
     WindowFill (n_qp, ladder) pairs built, and with `watch_near` every
     near_pair_moments call checked against the near ratio. `graded` sets ONE
     graded order for every touching pair, acute or not."""
     from momwire.dropin.nec5 import _shell
 
     if policy is not None:
-        monkeypatch.setitem(BQ.POLICIES, "sinusoidal-galerkin", policy)
+        monkeypatch.setitem(BQ.POLICIES, "sg", policy)
     if graded is not None:
         monkeypatch.setattr(SMP, "GRADED_N_PER_PANEL", graded)
         monkeypatch.setattr(SMP, "GRADED_ACUTE_N_PER_PANEL", graded)
@@ -249,7 +249,7 @@ def _sg_render(
         warnings.simplefilter("ignore")
         if text is None:
             text = deck.read_text(encoding="latin-1")
-        out = _shell.render(text, basis="sinusoidal-galerkin")
+        out = _shell.render(text, basis="sg")
     monkeypatch.undo()
     assert seen["y"], out[-2000:]
     return seen

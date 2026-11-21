@@ -41,7 +41,7 @@ DIPOLE_NEC2 = (
 )
 
 
-def _built(text: str, dialect: str, basis: str = "bspline"):
+def _built(text: str, dialect: str, basis: str = "bs2"):
     return build_solver(parse(text, dialect=dialect), basis=basis)
 
 
@@ -133,7 +133,7 @@ T_NODE = (
 )
 
 
-@pytest.mark.parametrize("basis", ["sinusoidal", "sinusoidal-galerkin"])
+@pytest.mark.parametrize("basis", ["sinusoidal", "sg"])
 def test_a_fine_t_node_under_the_default_kernel_is_advised(basis):
     """The default turns the extended kernel on for NEC-4 decks, whose twin
     is sinusoidal, and under it those families fail at a finely meshed node
@@ -166,7 +166,7 @@ def _capture(cid: str) -> str:
     return path.read_text(encoding="latin-1")
 
 
-@pytest.mark.parametrize("basis", ["bspline", "razor-2p"])
+@pytest.mark.parametrize("basis", ["bs2", "razor2p"])
 def test_the_nec5_slot_solves_extended(monkeypatch, basis):
     seen = _kernel_seen(monkeypatch)
     _serve.serve(parse_nec5(_capture("0010")), basis=basis)
@@ -204,7 +204,7 @@ def _z(printout: str) -> complex:
 def test_the_nec42_slot_prints_ek_as_nec42_does():
     """NEC-4.2's own layout (the binary given ``EK 0``, 2026-10-04): the
     card's echo, a blank line, its note, a blank line, the next echo."""
-    printout = render_nec4(DIPOLE_NEC2.format(ek="EK 0\n"), basis="bspline")
+    printout = render_nec4(DIPOLE_NEC2.format(ek="EK 0\n"), basis="bs2")
     assert "NEC ERROR" not in printout
     lines = printout.splitlines()
     at = next(i for i, ln in enumerate(lines) if "INPUT LINE" in ln and " EK " in ln)
@@ -214,7 +214,7 @@ def test_the_nec42_slot_prints_ek_as_nec42_does():
         "",
     ]
     assert "INPUT LINE" in lines[at + 4]
-    assert _z(printout) == _z(render_nec4(DIPOLE_NEC2.format(ek=""), basis="bspline"))
+    assert _z(printout) == _z(render_nec4(DIPOLE_NEC2.format(ek=""), basis="bs2"))
 
 
 def _p10() -> tuple[str, complex]:
@@ -229,20 +229,20 @@ def _force_reduced(monkeypatch) -> None:
     )
 
 
-@pytest.mark.parametrize("basis", ["bspline", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["bs2", "sinusoidal"])
 def test_the_fat_dipole_lands_nearer_nec42_with_the_default(monkeypatch, basis):
     """p10, a 28 MHz dipole at Delta/a = 1.5: the issue's ladder measured the
     extended kernel 4-5 ohm nearer NEC-4.2 there on both families.
 
     Measured with bs2's exact ring kernel OFF: the roster binds "auto" on
-    ``bspline`` (momwire#1428), which engages at this Delta/a and takes every
+    ``bs2`` (momwire#1428), which engages at this Delta/a and takes every
     pair of a straight wire, so the kernel this test is about would have
     nothing to act on (the next test)."""
     monkeypatch.setattr(
         _solver,
         "BASES",
         MappingProxyType(
-            {**_solver.BASES, "bspline": (BSplineSolver, MappingProxyType({}))}
+            {**_solver.BASES, "bs2": (BSplineSolver, MappingProxyType({}))}
         ),
     )
     text, target = _p10()
@@ -259,8 +259,8 @@ def test_under_the_exact_kernel_the_straight_fat_dipole_ignores_ek(monkeypatch):
     kernel the dialect defaults to acts on none of them and turning it off
     moves no number."""
     text, _target = _p10()
-    on = _z(render_nec4(text, basis="bspline"))
+    on = _z(render_nec4(text, basis="bs2"))
     _force_reduced(monkeypatch)
     with pytest.warns(ExtendedKernelDefault):
-        off = _z(render_nec4(text, basis="bspline"))
+        off = _z(render_nec4(text, basis="bs2"))
     assert on == off

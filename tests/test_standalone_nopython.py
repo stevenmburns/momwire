@@ -1,8 +1,8 @@
-"""momwire-nec5-razor-2p-standalone (standalone/, MW_EXE_NO_PYTHON, momwire#1512):
+"""momwire-nec5-razor2p-standalone (standalone/, MW_EXE_NO_PYTHON, momwire#1512):
 the launcher layer with no Python in the process.
 
 The corpus gate (`scripts/core_split/exe_compare.py --standalone`) holds every
-deck's printout to `momwire-nec5-razor-2p`'s. These tests hold the launcher
+deck's printout to `momwire-nec5-razor2p`'s. These tests hold the launcher
 layer the executable now answers itself -- `momwire_eznec_client`'s argv
 rules and `_shell`'s frame -- to the launcher's own bytes: the argument
 errors, `-version`, SimNEC's streaming call, 4nec2's stdin form, an
@@ -37,10 +37,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 SPLIT = ROOT / "scripts" / "core_split"
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
-# Which formulation the executable is (momwire#1517 Phase A): razor-2p (the
-# default), or bspline for `momwire-nec5-bspline-standalone`, compared with
-# `momwire-nec5-bspline`.
-BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor-2p")
+# Which formulation the executable is (momwire#1517 Phase A): razor2p (the
+# default), or bspline for `momwire-nec5-bs2-standalone`, compared with
+# `momwire-nec5-bs2`.
+BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor2p")
 
 pytestmark = pytest.mark.skipif(
     not EXE,
@@ -503,7 +503,7 @@ def test_momwire_times_streams_a_line_per_structure(tmp_path):
 MIXED = FIXTURES / "transmitted_mixed" / "m3_two_radii.nec"
 
 
-@pytest.mark.skipif(BASIS != "bspline", reason="the transmitted blocks are bs2's fill")
+@pytest.mark.skipif(BASIS != "bs2", reason="the transmitted blocks are bs2's fill")
 def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
     """A mixed deck (wires above and below, no crossing node) fills the
     below->above grid; the executable keeps it in its Sommerfeld store as
@@ -560,7 +560,7 @@ def test_the_transmitted_grid_is_stored_and_moves_no_byte(tmp_path):
 MIXED_MORE = FIXTURES / "transmitted_store" / "m3_plus_short_vertical.nec"
 
 
-@pytest.mark.skipif(BASIS != "bspline", reason="the transmitted blocks are bs2's fill")
+@pytest.mark.skipif(BASIS != "bs2", reason="the transmitted blocks are bs2's fill")
 def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
     """The executable fills the below->above grid node by node, only where
     the deck's pairs read it. A second deck on the same grid key (the same
@@ -612,13 +612,13 @@ def test_the_transmitted_grid_fills_only_what_its_reads_add(tmp_path):
 
 LAZY_ABOVE = FIXTURES / "lazy_above" / "gn2_dipole41.nec"
 LAZY_ABOVE_READER = {
-    "bspline": "bspline sommerfeld remainder",
+    "bs2": "bspline sommerfeld remainder",
 }
 
 
 @pytest.mark.skipif(
     BASIS not in LAZY_ABOVE_READER,
-    reason="razor-2p's windows took their census already (momwire#1512)",
+    reason="razor2p's windows took their census already (momwire#1512)",
 )
 def test_the_above_remainder_fills_only_the_nodes_it_reads(tmp_path):
     """bs2's above-ground remainder reads a
@@ -809,7 +809,7 @@ def test_the_1860_levers_answer_as_the_launcher(on, tmp_path):
     on, and unset (L1 and L2 on by default, L5 and B1 off): the executable's
     printout is the launcher's, line 2 naming on both sides only the levers
     on whose default is off (crossing_table, crossing_above_rule) and that
-    the formulation honours: razor-2p accepts crossing_above_rule and never
+    the formulation honours: razor2p accepts crossing_above_rule and never
     read it, so neither side names it there (momwire#1980)."""
     from momwire import _features
 
@@ -936,7 +936,7 @@ CROSSING = FIXTURES / "razor_printout_crossing" / "slant_base_source.nec"
 def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     # momwire#1956: the size policy (`threads_for`) gives every core to a
     # buried deck with CROSSING_PAIRS above x below segment pairs or more,
-    # whatever its basis count. nec5-bspline reported none, so a crossing
+    # whatever its basis count. nec5-bs2 reported none, so a crossing
     # deck under 128 basis ran on one thread. Both formulations report them
     # now, and the policy's printout is the one thread's, byte for byte.
     shutil.copy(CROSSING, tmp_path / CROSSING.name)
@@ -965,7 +965,7 @@ def test_a_small_crossing_deck_reports_its_pairs_to_the_thread_policy(tmp_path):
     assert policy == (tmp_path / "one.out").read_bytes()
 
 
-# --- momwire#1971: razor-2p's fill-pair reuse (reach 8: nec5-razor-2p runs it) ---
+# --- momwire#1971: razor2p's fill-pair reuse (reach 8: nec5-razor2p runs it) ---
 
 # Synthetic decks past the reuse's small-deck thresholds
 # (`_razor_pair_reuse_core.h`: SMALL_DECK_SEGS_FREE 400 in free space and
@@ -1013,7 +1013,7 @@ def _reuse_ran(built: int, declined: int) -> bool:
     return built - declined >= 1
 
 
-@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+@pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's feature")
 @pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
 def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
     """Reach 8 covers the nec5 executables (levels 6 to 8). On ("1") and
@@ -1077,7 +1077,7 @@ _DECLINING_DECK_1971 = (
 )
 
 
-@pytest.mark.skipif(BASIS != "razor-2p", reason="razor-2p's feature")
+@pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's feature")
 def test_razor_pair_reuse_gate_does_not_count_a_declined_plan(tmp_path, monkeypatch):
     """The adversarial case for `test_razor_pair_reuse_runs_as_the_launcher`:
     with the reuse on, a deck whose plan is built and declines prints the
@@ -1125,12 +1125,12 @@ def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch
         assert b"+razor_pair_reuse" not in line2, line2
 
 
-@pytest.mark.skipif(BASIS != "bspline", reason="nec5-bspline's refusal")
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's refusal")
 def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
-    """nec5-bspline shares nec5-razor-2p's support levels (6 and 7) and its
+    """nec5-bs2 shares nec5-razor2p's support levels (6 and 7) and its
     feature table, so the reach alone would let it accept
     MOMWIRE_X_RAZOR_PAIR_REUSE, name it on line 2 and fill as with it off.
-    The feature is razor-2p's fill, so this executable refuses it, in the
+    The feature is razor2p's fill, so this executable refuses it, in the
     registry's sentence, before reading the deck, and writes nothing."""
     from momwire import _features
 

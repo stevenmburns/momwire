@@ -26,7 +26,7 @@ RANGE_M = 1000.0
 # NEC-5's own formulation twin, the one the SimNEC link selects by name; the
 # licensed comparisons below are like for like only on it (the default basis
 # is B-spline, several ohms of X from NEC-5 at this mesh).
-TWIN = "razor-nec5"
+TWIN = "razor2p"
 FREQ_MHZ = 7.331794
 
 
