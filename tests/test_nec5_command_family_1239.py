@@ -41,7 +41,13 @@ def test_every_name_reads_as_a_nec5_engine_to_simnec():
 def test_no_name_offers_a_basis_that_refuses_nec5_decks():
     """NEC-5 drives at KNOTS; the centre-fed bases refuse every NEC-5 deck,
     so they get no nec5 name."""
-    bases = {mech.filename_basis(n, "nec5-") for n in _family()} - {None}
+    from momwire._basis_names import BASIS_ALIASES
+
+    # #2091's deprecated spellings resolve through the alias table.
+    bases = {
+        BASIS_ALIASES.get(b, b)
+        for b in (mech.filename_basis(n, "nec5-") for n in _family())
+    } - {None}
     assert bases <= set(BASES)
     assert not bases & {"sinusoidal", "pulse"}
 
