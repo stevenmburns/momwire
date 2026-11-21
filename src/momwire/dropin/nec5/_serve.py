@@ -747,10 +747,20 @@ _REFUSE_UNPINNED_PHANTOM = (
     "circuit node (what EZNEC means) - add the LD 4 pin EZNEC writes"
 )
 _REFUSE_DUPLICATE_EX = (
-    "two EX cards address {at}; one node is one port, so the second card is a "
-    "second generator in series across the same gap - the one repeat served is "
-    "EZNEC's 1e-10 V load probe beside an EX 4, and this seam will not decide "
-    "how two set currents share one path"
+    "two EX cards address {at} and at least one of them is an EX 4 (a set "
+    "current); one node is one port, so the second card is a second generator "
+    "in series across the same gap - set VOLTAGES there are served, driving the "
+    "gap with their sum, but NEC-5 itself refuses a voltage and a current "
+    "source on one segment, and this seam will not decide how two set currents "
+    "share one path"
+)
+_REFUSE_SERIES_EX_AT_NETWORK_POINT = (
+    "two EX 0 cards address {at}, which is also an end of {card}, so it is a "
+    "network CONNECTION POINT - and there NEC-5 does not answer repeated set "
+    "voltages as generators in series: two 0.5 V cards print a different "
+    "current from one 1 V card, and not half of it either. Off the network the "
+    "repeat is served as the sum of its volts; here, write the one EX 0 with "
+    "the summed voltage"
 )
 _REFUSE_TWO_DRIVES_ONE_PORT = (
     "{first} and {second} are the two sides of ONE cut and an EX card drives "
@@ -1583,13 +1593,7 @@ def _load_probe_refusal(deck: Nec5Deck) -> str | None:
     point, and W7EL's own oracle triple is what says so.
     """
     loaded = {load.at for load in deck.loads}
-    network: dict[Nec5Node, str] = {}
-    for line in deck.transmission_lines:
-        for at in (line.end_a, line.end_b):
-            network.setdefault(at, _network_card_name("TL", line.end_a, line.end_b))
-    for net in deck.networks:
-        for at in (net.end_a, net.end_b):
-            network.setdefault(at, _network_card_name("NT", net.end_a, net.end_b))
+    network = _network_points(deck)
 
     kinds = [source.kind for source in deck.sources]
     voltages = kinds.count(0)
@@ -1616,6 +1620,18 @@ def _load_probe_refusal(deck: Nec5Deck) -> str | None:
         if source.at in network:
             return _REFUSE_PROBE_AT_NETWORK_POINT.format(at=at, card=network[source.at])
     return None
+
+
+def _network_points(deck: Nec5Deck) -> dict[Nec5Node, str]:
+    """Every ``TL``/``NT`` end, named by the first card that reaches it."""
+    network: dict[Nec5Node, str] = {}
+    for line in deck.transmission_lines:
+        for at in (line.end_a, line.end_b):
+            network.setdefault(at, _network_card_name("TL", line.end_a, line.end_b))
+    for net in deck.networks:
+        for at in (net.end_a, net.end_b):
+            network.setdefault(at, _network_card_name("NT", net.end_a, net.end_b))
+    return network
 
 
 def _network_card_name(mnemonic: str, end_a: Nec5Node, end_b: Nec5Node) -> str:
@@ -1698,23 +1714,38 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
     # THROUGH a network since momwire#1105 - one row per card either way, and
     # the drive row unmoved by the probe.
     #
-    # A repeated address is served in ONE shape (momwire#1787): every card at
-    # it is one of those load probes, on a mixed deck, so `_load_probe_refusal`
-    # above has already vetted each of them.  EZNEC writes one probe per
-    # lumped load, so two loads at one node - stacked traps - give two
-    # identical probes at one address.  NEC-5 solves that as ONE passive probe
-    # (the drive row is the one-probe deck's to every printed digit) and
-    # prints its row once per card; the excitation below writes one value per
-    # port, so the repeat collapses there by construction and each card still
-    # gets its row.  Anything else at a repeated address stays refused.
-    probes = bool(voltages) and voltages != len(kinds)
+    # A repeated address is served when every card at it is an EX 0, off the
+    # network.  Several set voltages on one gap are generators in SERIES
+    # across it: the gap is driven by their sum, they all carry the one gap
+    # current, and NEC-5 prints one row per card, in card order, each with
+    # its own volts, that shared current, and its own V/I and power (licensed
+    # NEC-5, black box: two 0.5 V cards print the one 1 V card's current, and
+    # so do three cards whose volts sum to 1 V).  SimNEC writes that shape
+    # when two of a model's ports sit at one point - one XQ per port, 1 V on
+    # one card and 1e-10 V on the rest - and EZNEC writes it as stacked-trap
+    # load probes, two identical 1e-10 V cards at one node (momwire#1787,
+    # where on a mixed deck `_load_probe_refusal` above has already vetted
+    # each of them).  `_multi_drive_state` adds the volts.
+    #
+    # Two repeats stay refused.  Any card at the address an EX 4: NEC-5
+    # itself refuses a voltage and a current source on one segment, and two
+    # set currents on one path are the existing sentence's case.  And a
+    # repeated EX 0 at a TL/NT CONNECTION POINT: there NEC-5 does NOT answer
+    # with the series sum (two 0.5 V cards print a different current from
+    # one 1 V card, and not half of it either), which is the port-voltage
+    # constraint `_REFUSE_PROBE_AT_NETWORK_POINT` describes, met again.
+    network = _network_points(deck)
     seen: dict[Nec5Node, int] = {}
     for source in deck.sources:
         first = seen.get(source.at)
-        if first is not None and not (probes and first == 0 and source.kind == 0):
-            return _REFUSE_DUPLICATE_EX.format(
-                at=f"{source.at.tag},{source.at.written}"
-            )
+        if first is not None:
+            at = f"{source.at.tag},{source.at.written}"
+            if not (first == 0 and source.kind == 0):
+                return _REFUSE_DUPLICATE_EX.format(at=at)
+            if source.at in network:
+                return _REFUSE_SERIES_EX_AT_NETWORK_POINT.format(
+                    at=at, card=network[source.at]
+                )
         seen.setdefault(source.at, source.kind)
     return None
 
@@ -3752,8 +3783,17 @@ def _multi_drive_state(
     spec = np.zeros(len(driven), dtype=np.complex128)
     kind_of: dict[int, int] = {}
     for source in deck.sources:
-        spec[row_of[site_of[source.at]]] = source.drive
-        kind_of[site_of[source.at]] = source.kind
+        index = site_of[source.at]
+        if index in kind_of:
+            # A repeated address reaches here only with an EX 0 on every card
+            # at it (`_drive_refusal`): generators in series across one gap,
+            # so the gap is driven by the SUM of their volts, which is what
+            # NEC-5 does with them.  The first card is written rather than
+            # added to a zero, so a deck with no repeat keeps its bits.
+            spec[row_of[index]] = spec[row_of[index]] + source.drive
+        else:
+            spec[row_of[index]] = source.drive
+        kind_of[index] = source.kind
     # The partition, in two spellings each: SITE indices to write a vector
     # over the whole mesh with, ROW positions to cut the driven-by-driven map
     # with.  `driven` is in site order and so are both lists, which is what
@@ -4126,9 +4166,9 @@ def _check_one_port_per_drive(
         if site.column < 0:
             continue
         first = seen.get(site.column)
-        # The SAME address twice reached here only as EZNEC's repeated load
-        # probe, which :func:`_drive_refusal` serves (momwire#1787); this
-        # check is for two different addresses on one cut.
+        # The SAME address twice reaches here only as repeated set voltages
+        # off the network - generators in series, which :func:`_drive_refusal`
+        # serves; this check is for two different addresses on one cut.
         if first is not None and first != source.at:
             raise ServeRefusal(
                 _REFUSE_TWO_DRIVES_ONE_PORT.format(

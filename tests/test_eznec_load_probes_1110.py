@@ -304,10 +304,12 @@ def test_a_tiny_voltage_at_an_unloaded_node_is_not_a_load_probe():
 def test_two_probes_at_one_node_answer_as_one_probe_printed_once_per_card():
     """momwire#1787: stacked traps give two identical probes at one address.
 
-    NEC-5 solves them as ONE passive probe: the drive row matches the
-    one-probe deck to every printed digit, and the probe row is printed once
-    per card, identically, rather than as one 2e-10 V source.  The seam holds
-    the same identity on its own render, byte for byte.
+    NEC-5 drives the gap with the two probes' SUM, 2e-10 V, as it does any
+    repeated set voltage (tests/test_nec5_series_ex_one_gap.py), and prints a
+    row per card, each with its own 1e-10 V: a probe that small moves nothing
+    the printout shows, so the drive row matches the one-probe deck to every
+    printed digit.  The seam holds the same identity on its own render, byte
+    for byte.
     """
     name = "M_0195_two_loads_one_node"
     lines = deck(name).splitlines()
@@ -321,8 +323,8 @@ def test_two_probes_at_one_node_answer_as_one_probe_printed_once_per_card():
 
 
 def test_a_repeated_address_that_is_not_all_probes_still_refuses():
-    """The repeat served is the probe's alone: a second EX 4 at the drive's
-    own address is two set currents on one gap, and stays refused by name."""
+    """A second EX 4 at the drive's own address is two set currents on one
+    gap, and stays refused by name (a repeated EX 0 is served)."""
     doubled = deck("0195").replace(
         "EX 4,1,6,0,1.414214,0.", "EX 4,1,6,0,1.414214,0.\nEX 4,1,6,0,1.414214,0."
     )

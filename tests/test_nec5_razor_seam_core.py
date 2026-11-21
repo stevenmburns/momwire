@@ -212,11 +212,33 @@ CASES = {
     "duplicate_ex": (
         HEAD
         + DIPOLE
-        + "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\nEX 0,1,6,0,1.,0.\n"
+        + "GE 0,-1\nFR 0,1,0,0,30.\nEX 4,1,6,0,1.,0.\nEX 4,1,6,0,1.,0.\n"
         + RP
         + "EN\n",
         "refused",
-        "two EX cards address 1,6",
+        "two EX cards address 1,6 and at least one of them is an EX 4",
+    ),
+    # Two set voltages on one gap are generators in series: served, the gap
+    # driven by their sum. At a TL/NT end they are not, by name.
+    "series_ex_one_gap": (
+        HEAD
+        + DIPOLE
+        + "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,6,0,.7,.2\nEX 0,1,6,0,.3,-.2\n"
+        + RP
+        + "EN\n",
+        "served",
+        "",
+    ),
+    "series_ex_at_a_network_point": (
+        HEAD
+        + DIPOLE
+        + "GW 2,3,0.,10.,5.,0.,10.3,5.,.001\n"
+        + "GE 0,-1\nFR 0,1,0,0,30.\nTL 1,6,2,2,50.,1.,0.,0.,0.,0.\n"
+        + "EX 0,1,6,0,.5,0.\nEX 0,1,6,0,.5,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "two EX 0 cards address 1,6, which is also an end of the TL card",
     ),
     "mixed_drive_generator": (
         HEAD
