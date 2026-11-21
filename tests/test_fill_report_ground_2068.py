@@ -161,8 +161,10 @@ def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
     n2 = n_segs(deck) ** 2
     assert rem["pairs"] == n2
     assert rem["reused"] == copied > 0
-    # One tile: every ordered pair walked once, the cache's own fill on top.
-    assert rem["kernel_evals"] > rem["computed"]
+    # One tile: every ordered pair walked once, and the walk reads the source
+    # pairs back from the cache that filled them (momwire#2073), so each pair
+    # the kernel did not copy is evaluated exactly once.
+    assert rem["kernel_evals"] == rem["computed"]
 
     geom = s._build_geometry()
     cmap = s._remainder_reuse_args(geom, 0.0)
@@ -185,6 +187,24 @@ def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
                     assert abs(Q[j, 2] - Q[j0, 2]) <= 1e-9 * scale
                 count += 1
     assert count == rem["reused"]
+
+
+def test_remainder_reuse_saves_kernel_work():
+    """momwire#2073: the walk reads the copy map's source pairs back from the
+    cache that filled them, so every reused pair is kernel work saved. Before,
+    the walk formed each source pair a second time, and on a deck of mostly
+    reused pairs the kernel evaluated more entries than there are pairs.
+
+    Eight elements of 31 segments span two basis tiles, so the halo repeats
+    are in play: the saving falls short of the reuse by those alone (under
+    1 % here; base 7be69268 saved 72 % of the reuse)."""
+    deck = row(n_el=8, n_seg=31, step=(3.0, 0.0, 0.0))
+    s = solve(deck, SOMMERFELD, offset_reuse=False)
+    rem = s.fill_report()["reuse"]["families"]["remainder"]
+    assert rem["reused"] > rem["pairs"] // 2
+    assert rem["kernel_evals"] < rem["pairs"]
+    assert rem["pairs"] - rem["kernel_evals"] >= 0.99 * rem["reused"]
+    reconciles(s.fill_report()["reuse"])
 
 
 def test_offset_edges_count_as_reuse_in_the_ground_families():
