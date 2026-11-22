@@ -392,7 +392,30 @@ def run_sweep(night: Path, harness: Path, order_by: Path | None, case_ids=None) 
     ]  # fmt: skip
     if order_by and order_by.is_file():
         cmd += ["--order-by", order_by]
-    sh(cmd, logf=night / "sweep.log", cwd=harness)
+    env = sweep_env(night)
+    try:
+        sh(cmd, logf=night / "sweep.log", cwd=harness, env=env)
+    finally:
+        # tables only this night's sweep reads; 14 nights are kept
+        shutil.rmtree(env["MOMWIRE_SOMM_CACHE_DIR"], ignore_errors=True)
+
+
+def sweep_env(night: Path) -> dict:
+    """The sweep's environment: an empty Sommerfeld disk cache of its own.
+
+    The cache is keyed on the fill modules' bytes, the compiled extension
+    included, so the first night on a new commit rebuilds every Sommerfeld
+    table and a second night on the same commit reads them back. Timed against
+    each other, the two differ by the table build: wire.beverage 0.18 s warm
+    against 1.40 s cold (the 11-07 base was a warm night; every new commit
+    since read as a 7.8x slowdown, 11-09 to 11-21). Every night cold measures
+    what a user pays once per release, the same way each night."""
+    env = env_base()
+    cache = night / "somm-cache"
+    shutil.rmtree(cache, ignore_errors=True)
+    cache.mkdir(parents=True)
+    env["MOMWIRE_SOMM_CACHE_DIR"] = str(cache)
+    return env
 
 
 def driver_timed(harness: Path) -> list[str]:
