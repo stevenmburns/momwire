@@ -279,3 +279,29 @@ def test_the_nightlys_temporaries_live_under_its_root(tmp_path, monkeypatch):
     monkeypatch.setattr(nightly, "TMP", tmp_path / "tmp")
     assert nightly.env_base()["TMPDIR"] == str(tmp_path / "tmp")
     assert (tmp_path / "tmp").is_dir()
+
+
+def test_the_sweep_times_a_cold_sommerfeld_cache_of_its_own(tmp_path, monkeypatch):
+    """The Sommerfeld disk cache is keyed on the build, so a night on a new
+    commit was cold and a repeat night warm (wire.beverage 1.40 s against
+    0.18 s), and the sweep compared the two as a regression."""
+    seen = {}
+    monkeypatch.setattr(nightly, "TMP", tmp_path / "tmp")
+    monkeypatch.setattr(nightly, "MW", tmp_path / "mw")
+    (tmp_path / "mw").mkdir()
+    monkeypatch.setattr(nightly, "git", lambda *a: "f" * 40)
+
+    def fake_sh(cmd, **kw):
+        cache = Path(kw["env"]["MOMWIRE_SOMM_CACHE_DIR"])
+        seen.update(kw, empty=cache.is_dir() and not any(cache.iterdir()))
+
+    monkeypatch.setattr(nightly, "sh", fake_sh)
+    night = tmp_path / "night"
+    stale = night / "somm-cache" / "old.npz"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("x")
+    nightly.run_sweep(night, tmp_path / "harness", None)
+    cache = Path(seen["env"]["MOMWIRE_SOMM_CACHE_DIR"])
+    assert cache == night.resolve() / "somm-cache"
+    assert seen["empty"]  # the sweep ran on an empty cache
+    assert not cache.exists()  # and it is gone after the sweep
