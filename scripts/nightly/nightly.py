@@ -84,9 +84,18 @@ def log(msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
+#: Temporary files of every child, and pytest's base directory. Skylake's root
+#: disk is 145 GB and filled to 99 % (2026-11-21) partly from
+#: /tmp/pytest-of-<user>, 2.3 GB a run; ROOT is on the large disk.
+TMP = ROOT / "tmp"
+PYTEST_BASETEMP = ROOT / "pytest-tmp"
+
+
 def env_base() -> dict:
     env = dict(os.environ)
     env["PATH"] = f"{HOME / '.local' / 'bin'}:{VENV / 'bin'}:{env.get('PATH', '')}"
+    TMP.mkdir(parents=True, exist_ok=True)
+    env["TMPDIR"] = str(TMP)
     return env
 
 
@@ -348,6 +357,7 @@ def run_anchors_auto(night: Path) -> None:
     sh(
         [
             PY, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "-n", "0",
+            f"--basetemp={PYTEST_BASETEMP}",
             "-m", "slow", "tests/test_standalone_anchors_auto.py",
         ],
         cwd=MW,
@@ -988,6 +998,36 @@ def install(_a) -> int:
     return 0
 
 
+def accept(night: Path, note: str, state: dict) -> int:
+    """Make `night` the base the next nights are compared with.
+
+    The base moves by itself only on a green night, so an intended change to
+    an answer keeps every later night red until it is accepted here (or matched
+    by known.json). Review the night's findings first; the acceptance is
+    appended to accepted.jsonl with the note, the base it replaces and who
+    ran it."""
+    night = night.resolve()
+    meta = json.loads((night / "night.json").read_text())
+    tri = night / "triage.json"
+    counts = json.loads(tri.read_text()).get("counts", {}) if tri.is_file() else {}
+    rec = dict(
+        accepted=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        sha=meta["sha"],
+        date=meta["date"],
+        dir=str(night),
+        counts=counts,
+        replaces=state.get("last_green"),
+        by=os.environ.get("USER", ""),
+        note=note,
+    )
+    with (ROOT / "accepted.jsonl").open("a") as f:
+        f.write(json.dumps(rec) + "\n")
+    state["last_green"] = dict(sha=meta["sha"], date=meta["date"], dir=str(night))
+    save_state(state)
+    log(f"accepted {meta['date']} ({meta['sha'][:12]}) as the green base: {note}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1020,6 +1060,12 @@ def main() -> int:
     p.add_argument("night", type=Path)
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("install")
+    c = sub.add_parser(
+        "accept",
+        help="make a reviewed red night the green base (its findings accepted)",
+    )
+    c.add_argument("night", type=Path)
+    c.add_argument("--note", required=True, help="why its findings are accepted")
     a = ap.parse_args()
     if a.cmd == "install":
         return install(a)
@@ -1035,6 +1081,8 @@ def main() -> int:
     if a.cmd == "run":
         return do_night(a)
     state = load_state()
+    if a.cmd == "accept":
+        return accept(a.night, a.note, state)
     if a.cmd == "report":
         report(a.night, state, dry_run=a.dry_run, prev_status=state.get("last_status"))
         return 0

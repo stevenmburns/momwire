@@ -207,3 +207,75 @@ def test_sweep_z_bar(tmp_path):
         sweep(night, z)
         f = triage.triage(night, base, tmp_path / "none.json")["findings"]
         assert (f[0]["severity"] if f else None) == want, z
+
+
+def _printout(night: Path, key: str, text: str) -> None:
+    d = night / "py-avx2-T1"
+    d.mkdir(exist_ok=True)
+    (d / f"{key}.py").write_text(text)
+
+
+_BODY = " NEC\n momwire {v} {basis} avx2\n IMPEDANCE {z}\n"
+
+
+def _drift(tmp_path, *, base_label, label, v0, v1, basis0, basis1, z0, z1):
+    base = _night(tmp_path / "base", [_row(base_label, "d", key="kb", py_sha="b")])
+    night = _night(tmp_path / "night", [_row(label, "d", key="kn", py_sha="n")])
+    _printout(base, "kb", _BODY.format(v=v0, basis=basis0, z=z0))
+    _printout(night, "kn", _BODY.format(v=v1, basis=basis1, z=z1))
+    return [
+        f
+        for f in triage.triage(night, base, tmp_path / "none.json")["findings"]
+        if f["kind"] == "py-drift"
+    ]
+
+
+def test_py_drift_masks_the_identity_line(tmp_path):
+    """A release reads as 'a number moved 8.42e-02' on every deck when line 2's
+    version is compared as numbers (0.87.1 -> 0.95.1, the 11-07..11-21 reds)."""
+    f = _drift(
+        tmp_path, base_label="e", label="e", v0="0.87.1", v1="0.95.1",
+        basis0="razor-2p", basis1="razor2p", z0="7.1521E+01", z1="7.1521E+01",
+    )  # fmt: skip
+    assert f == []
+
+
+def test_py_drift_still_sees_a_number_off_the_identity_line(tmp_path):
+    f = _drift(
+        tmp_path, base_label="e", label="e", v0="0.87.1", v1="0.95.1",
+        basis0="bspline", basis1="bspline", z0="7.1521E+01", z1="7.2000E+01",
+    )  # fmt: skip
+    assert [x["severity"] for x in f] == ["severe"]
+
+
+def test_a_base_from_before_the_rename_pairs_with_the_new_label(tmp_path):
+    """momwire#2091: without the label map the base has no row for
+    nec5-razor2p and the drift check compares nothing, in silence."""
+    f = _drift(
+        tmp_path, base_label="nec5-razor-2p", label="nec5-razor2p",
+        v0="0.95.1", v1="0.96.0", basis0="razor-2p", basis1="razor2p",
+        z0="7.1521E+01", z1="7.2000E+01",
+    )  # fmt: skip
+    assert [(x["exe"], x["severity"]) for x in f] == [("nec5-razor2p", "severe")]
+
+
+def test_accept_moves_the_base_and_records_why(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "ROOT", tmp_path)
+    monkeypatch.setattr(nightly, "STATE", tmp_path / "state.json")
+    night = _night(tmp_path / "red", [_row("e", "d")], sha="2" * 40)
+    (night / "triage.json").write_text(json.dumps({"counts": {"severe": 3}}))
+    state = {"last_green": {"sha": "1" * 40, "date": "2026-11-07", "dir": "old"}}
+    assert nightly.accept(night, "reviewed: intended", state) == 0
+    s = json.loads((tmp_path / "state.json").read_text())
+    assert s["last_green"] == {"sha": "2" * 40, "date": "2026-11-06", "dir": str(night)}
+    (rec,) = map(json.loads, (tmp_path / "accepted.jsonl").read_text().splitlines())
+    assert rec["note"] == "reviewed: intended"
+    assert rec["replaces"]["date"] == "2026-11-07" and rec["counts"] == {"severe": 3}
+
+
+def test_the_nightlys_temporaries_live_under_its_root(tmp_path, monkeypatch):
+    assert nightly.TMP.is_relative_to(nightly.ROOT)
+    assert nightly.PYTEST_BASETEMP.is_relative_to(nightly.ROOT)
+    monkeypatch.setattr(nightly, "TMP", tmp_path / "tmp")
+    assert nightly.env_base()["TMPDIR"] == str(tmp_path / "tmp")
+    assert (tmp_path / "tmp").is_dir()

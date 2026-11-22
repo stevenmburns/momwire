@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -75,13 +76,39 @@ def load_jsonl(p: Path) -> list[dict]:
     return [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
 
 
+#: Executable labels as momwire#2091 renamed them. A night audited before the
+#: rename keys its rows by the old label; without this map every comparison
+#: against such a base finds no row to compare and passes in silence.
+RENAMED_LABELS = {
+    "nec5-bspline": "nec5-bs2",
+    "nec5-razor-2p": "nec5-razor2p",
+    "nec42-bspline": "nec42-bs2",
+}
+
+
 def audit_rows(night: Path) -> dict[str, dict[tuple[str, str], dict]]:
-    """{cell: {(exe, deck): row}}"""
+    """{cell: {(exe, deck): row}}, the exe label as it is spelled today"""
     out = {}
     for p in sorted(night.glob("audit-*.jsonl")):
         cell = p.stem[len("audit-") :]
-        out[cell] = {(r["exe"], r["deck"]): r for r in load_jsonl(p)}
+        rows = {}
+        for r in load_jsonl(p):
+            r["exe"] = RENAMED_LABELS.get(r["exe"], r["exe"])
+            rows[(r["exe"], r["deck"])] = r
+        out[cell] = rows
     return out
+
+
+#: Printout line 2, momwire's identity: version, basis, variant and any stamp.
+#: It changes with every release (and spelled the basis's old name before
+#: momwire#2091), so night over night it is masked: read as numbers, a version
+#: bump from 0.87.1 to 0.95.1 is "a number moved 8.42e-02" on every deck. The
+#: same night's exe == Python comparison still holds it byte for byte.
+_IDENTITY = re.compile(rb"(?m)^[ \t]*momwire [0-9][^\r\n]*")
+
+
+def without_identity(printout: bytes) -> bytes:
+    return _IDENTITY.sub(b" momwire <identity>", printout)
 
 
 class Printouts:
@@ -224,6 +251,10 @@ def triage_audit(night: Path, base: Path | None) -> list[dict]:
                 continue
             w = dict(cell=cell, exe=key2[0], deck=key2[1])
             ref, got = green.get(b.get("key", "")), tonight.get(r.get("key", ""))
+            if ref is not None and got is not None:
+                ref, got = without_identity(ref), without_identity(got)
+                if ref == got:
+                    continue
             ratio = _ratio(ref, got) if ref is not None and got is not None else None
             if ratio is None:
                 sev, det = "severe", "the printout's text changed"

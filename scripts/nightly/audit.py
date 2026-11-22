@@ -197,7 +197,17 @@ def _alarm(*_):
 
 
 def _python(text: str, basis: str, dialect: str) -> tuple[bytes, str | None]:
-    from momwire.dropin.nec5 import _shell
+    try:
+        from momwire.dropin.nec5 import _shell
+    except ImportError:
+        # A commit before momwire#1831 (11-07), which a bisect probes: the
+        # NEC-5 launcher's shell was momwire.eznec's.
+        from momwire.eznec import _shell
+    try:
+        from momwire._basis_names import canonical_basis  # noqa: F401
+    except ImportError:
+        # Before momwire#2091 the only spelling was razor-2p.
+        basis = {"razor2p": "razor-2p"}.get(basis, basis)
 
     kw = dict(basis=basis) if dialect == "nec5" else dict(basis=basis, dialect="nec4")
     signal.signal(signal.SIGALRM, _alarm)
