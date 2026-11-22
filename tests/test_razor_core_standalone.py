@@ -2049,9 +2049,13 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     # Not vacuous: results, refusals and the INTERNAL ERROR frame all print.
     assert counts.get("served", 0) >= 80 and counts.get("refused", 0) >= 100, counts
-    # two decks that once raised now refuse on the GW card (non-finite
-    # field, too many segments: `deck._cards.gw_field_refusal`)
-    assert counts.get("raised|frame", 0) >= 2, counts
+    # The frame prints from the echo (`echo_raises_nxq`), as razor2p's test
+    # pins. No fixture raises in the seam any more: two decks that did now
+    # refuse on the GW card (non-finite field, too many segments:
+    # `deck._cards.gw_field_refusal`), and the two copies the solver cannot
+    # merge (dup_counts_differ_raises, dup_twin_fed_raises_h1705) are refused
+    # in the deck's GW tags (momwire#2107)
+    assert counts.get("served|frame", 0) >= 1, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
         "front:bspline-buried-two-radius-spread",
