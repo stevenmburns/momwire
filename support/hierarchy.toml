@@ -71,7 +71,7 @@ id = "exe-nec5-bs2-razor2p-windows"
 description = "the nec5-bs2 and nec5-razor2p executables on Windows, avx2 and sse2"
 jobs = [
     "standalone.yml:windows",  # nec5-razor2p with its embedded-Python fallback
-    "standalone.yml:windows-nopython",  # nec5-razor2p and nec5-bs2, avx2 and sse2
+    "standalone.yml:windows-nopython",  # nec5-razor2p and nec5-bs2, one fat program each (avx2 + sse2)
 ]
 
 # The single-file MinGW-w64 (UCRT64) build, a preview beside the MSVC zip. Its
@@ -134,7 +134,6 @@ jobs = [
 "standalone.yml:release-windows" = "attaches the Windows executables to a release"
 "standalone.yml:release-windows-single" = "attaches the single-file MinGW-w64 Windows preview to a release"
 "standalone.yml:release-macos" = "attaches the macOS executables to a release"
-"windows-fat.yml:windows-fat" = "the experimental fat MSVC executables (avx2 + sse2 in one), on dispatch only; not the shipped zip"
 "windows-static.yml:build" = "the single-file MinGW-w64 experiment (MINGW64 builds), on dispatch and its own branch only; not the shipped zip"
 "windows-static.yml:ucrt64" = "the single-file MinGW-w64 experiment (UCRT64 builds), on dispatch and its own branch only"
 "windows-static.yml:clang64" = "the single-file MinGW-w64 experiment (CLANG64's libm), on dispatch and its own branch only"

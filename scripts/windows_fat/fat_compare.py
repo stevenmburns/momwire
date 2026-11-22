@@ -12,6 +12,11 @@ so must the exit status and stdout. Prints one line per mismatch and the
 counts; exits 1 on any mismatch, or when nothing was compared.
 
 --auto: FAT picks its own variant by CPU (no MOMWIRE_FORCE_VARIANT).
+--by-name: FAT is a copy under a deprecated variant name
+(`momwire-nec5-razor2p-sse2.exe`, momwire#2090) and picks the variant that
+name asks for (no MOMWIRE_FORCE_VARIANT); every printout it writes must
+carry line 2's "(renamed from <its file stem>)" note, which is the one
+difference allowed and is removed before the bytes are compared.
 --sde/--cpu: both run under Intel SDE emulating CPU (`wsm`, `snb`, `hsw`),
 which faults on any instruction that CPU lacks. Both, not FAT alone: the
 DLLs beside them (OpenBLAS, the UCRT's math, the VC++ runtime) pick their
@@ -78,6 +83,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("single")
     ap.add_argument("dirs", nargs="+")
     ap.add_argument("--auto", action="store_true")
+    ap.add_argument("--by-name", action="store_true")
     ap.add_argument("--sde")
     ap.add_argument("--cpu")
     ap.add_argument("--sde-extra", default="", help="comma-separated SDE options")
@@ -94,6 +100,8 @@ def main(argv: list[str]) -> int:
     )
     decks = sorted(set().union(*decks))
     copies = a.copies.split(",")
+    # line 2's tail, after the blank that joins it (exe_name.h)
+    note = f" (renamed from {Path(a.fat).stem})".encode()
     work = Path(tempfile.mkdtemp())
     jobs = [(i, deck, copy) for i, deck in enumerate(decks) for copy in copies]
 
@@ -110,20 +118,27 @@ def main(argv: list[str]) -> int:
         else:
             env.pop("MW_EXE_COPY", None)
         fat_env = dict(env)
-        if a.auto:
+        if a.auto or a.by_name:
             fat_env.pop("MOMWIRE_FORCE_VARIANT", None)
         # the same printout path for both, in case a printout names it
         out = work / f"{i}-{copy}.out"
         x = run(fat_cmd, deck, out, fat_env)
         y = run(one_cmd, deck, out, env)
-        return deck, copy, x, y
+        noted = None
+        if a.by_name and x[0] >= 0:
+            noted = note in x[2]
+            x = (x[0], x[1], x[2].replace(note, b""))
+        return deck, copy, x, y, noted
 
-    same = differ = refused = faulted = nonzero = 0
+    same = differ = refused = faulted = nonzero = unnoted = 0
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
-        for deck, copy, x, y in pool.map(one, jobs):
+        for deck, copy, x, y, noted in pool.map(one, jobs):
             if -998 in (x[0], y[0]):
                 faulted += 1
                 continue
+            if noted is False:
+                unnoted += 1
+                print(f"NO NOTE {copy} {deck}: line 2 lacks {note!r}", flush=True)
             if x[0] != 0 or y[0] != 0:
                 nonzero += 1
             if x == y:
@@ -149,13 +164,20 @@ def main(argv: list[str]) -> int:
                     flush=True,
                 )
     how = f"under SDE -{a.cpu}" if a.sde else "native"
-    pick = "picked by CPU" if a.auto else "forced"
+    pick = (
+        f"picked by the name {Path(a.fat).name}"
+        if a.by_name
+        else "picked by CPU"
+        if a.auto
+        else "forced"
+    )
     print(
         f"{a.variant} ({pick}, {how}): {same} identical ({refused} of them the same refusal),"
         f" {differ} different, {faulted} SDE faults, {nonzero} with a nonzero exit,"
         f" {len(decks)} decks x {len(copies)} copies"
+        + (f", {unnoted} without the rename note" if a.by_name else "")
     )
-    return 1 if differ or faulted or not same else 0
+    return 1 if differ or faulted or unnoted or not same else 0
 
 
 if __name__ == "__main__":
