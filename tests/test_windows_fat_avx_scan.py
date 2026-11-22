@@ -89,3 +89,26 @@ def test_a_guarded_function_is_allowed_and_a_bare_one_is_not():
 def test_an_avx_instruction_is_found(line, mnem):
     (hit,) = CL.avx_instructions(CLEAN + line + "\n")
     assert hit[1:3] == ("0000000000000040", mnem) and hit[4] is False
+
+
+CALL_GUARDED = """\
+?find_trivial@@YAPEBX0PEBXG@Z:
+  0000000000000000: E8 00 00 00 00     call        ?_Use_avx2@std@@YA_NXZ
+  0000000000000005: 84 C0              test        al,al
+  0000000000000007: 74 20              je          0000000000000029
+  0000000000000030: C5 FE 6F 09        vmovdqu     ymm1,ymmword ptr [r9]
+  0000000000000034: C3                 ret
+"""
+
+
+def test_a_call_to_a_cpu_check_helper_is_a_guard():
+    """The STL's vectorized algorithms ask through a helper (`_Use_avx2`)."""
+    ((fn, _a, mnem, _o, guarded),) = CL.avx_instructions(CALL_GUARDED)
+    assert (mnem, guarded) == ("vmovdqu", True)
+
+
+def test_an_unguarded_function_keeps_its_first_instructions_for_the_report():
+    CL.avx_instructions.preambles.clear()
+    CL.avx_instructions(GUARDED)  # its `?bare@...` has no check
+    lines = CL.avx_instructions.preambles["?bare@mw@@YANN@Z"]
+    assert lines and "vfmsub213sd" in lines[0]

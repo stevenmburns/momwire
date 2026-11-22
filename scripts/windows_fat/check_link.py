@@ -136,6 +136,9 @@ LABEL = re.compile(r"^(\S[^:]*(?::[^:\s][^:]*)*):\s*$")
 # what a run-time CPU check reads: MSVC's own (its auto-vectorizer's ISA
 # dispatch and the STL's vectorized algorithms test it before an AVX path)
 CPU_CHECK = ("__isa_available", "__isa_enabled")
+# ...or calls a helper that does (the STL's vectorized algorithms ask through
+# one, `_Use_avx2` and the like): a call whose target names the ISA
+CPU_CHECK_CALL = re.compile(r"\bcall\s+\S*(?:isa|Use_avx|Use_sse|cpu_feature)", re.I)
 
 
 def avx_instructions(disasm: str) -> list[tuple[str, str, str, str, bool]]:
@@ -148,10 +151,16 @@ def avx_instructions(disasm: str) -> list[tuple[str, str, str, str, bool]]:
     match."""
     found = []
     fn, body, hits = "?", [], []
+    preambles = avx_instructions.preambles
 
     def close():
-        guarded = any(c in line for line in body for c in CPU_CHECK)
+        guarded = any(
+            any(c in line for c in CPU_CHECK) or CPU_CHECK_CALL.search(line)
+            for line in body
+        )
         found.extend((fn, *h, guarded) for h in hits)
+        if hits and not guarded:
+            preambles.setdefault(fn, [ln for ln in body if DISASM_LINE.match(ln)][:24])
 
     for line in disasm.splitlines():
         lab = LABEL.match(line)
@@ -173,6 +182,11 @@ def avx_instructions(disasm: str) -> list[tuple[str, str, str, str, bool]]:
             hits.append((addr, mnem, ops.strip()))
     close()
     return found
+
+
+# the first instructions of each function an AVX hit had no check in, by
+# name, for the failure report: where its guard is, if it has one
+avx_instructions.preambles = {}
 
 
 def obj_symbols(dumpbin: str, obj: Path) -> set[str]:
@@ -328,6 +342,10 @@ def main(argv: list[str]) -> int:
             guarded_fns.add(f"{p.name} {fn}")
     for g in sorted(guarded_fns):
         print(f"  guarded: {g}")
+    for fn, lines in avx_instructions.preambles.items():
+        print(f"  no CPU check in {fn}; its first instructions:")
+        for ln in lines:
+            print(f"    {ln.strip()}")
     if n_avx:
         bad = 1
     print(
