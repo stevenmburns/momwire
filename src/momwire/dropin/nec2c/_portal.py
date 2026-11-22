@@ -2115,6 +2115,11 @@ class DeckSolver:
             extended_kernel=bool(extended_kernel),
             environment=environment,
             mesh=self._mesh,
+            # momwire#2088: advisories name the deck's own GW tags. The
+            # model's wires are the structure's pieces, in order.
+            wire_names=[
+                self.structure.wires[p.wire].tag for p in self.structure.pieces
+            ],
         )
 
     def _entry(self, built) -> dict:

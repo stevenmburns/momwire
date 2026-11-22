@@ -1066,18 +1066,34 @@ def radius_step_junctions(junctions, radius_per_wire):
     return found
 
 
-def radius_step_message(family, found, nec4_dialect=False):
+def _step_names(wires, wire_labels):
+    """``(noun, names)`` for the wires of one step: the deck's own tags when
+    every wire has them, else the solver's wire indices, called that."""
+    if wire_labels is not None and all(wire_labels[w] is not None for w in wires):
+        tags = sorted({t for w in wires for t in wire_labels[w]})
+        return "wires", tags
+    return "wire indices", list(wires)
+
+
+def radius_step_message(family, found, nec4_dialect=False, wire_labels=None):
     """The advisory sentence for `radius_step_junctions`' result.
     `nec4_dialect`: the solver asked for the NEC-4 junction and these steps
-    are ones it does not serve."""
+    are ones it does not serve.
+
+    `wire_labels` (momwire#2088): per solver wire, the deck's own tags (a
+    sequence of ints, or None for a wire with none). With them the message
+    names the deck's wires, which is what a reader can find; without, it
+    names the solver's zero-based wire INDICES and says so, since a Python
+    caller built the wire list and knows that order."""
     named = []
     for _j, wires, a_lo, a_hi in found[:_RADIUS_STEP_NAMED]:
+        noun, names = _step_names(wires, wire_labels)
         who = (
-            " and ".join(str(w) for w in wires)
-            if len(wires) <= 2
-            else ", ".join(str(w) for w in wires)
+            " and ".join(str(w) for w in names)
+            if len(names) <= 2
+            else ", ".join(str(w) for w in names)
         )
-        named.append(f"wires {who} ({a_lo * 1e3:.3g} mm to {a_hi * 1e3:.3g} mm)")
+        named.append(f"{noun} {who} ({a_lo * 1e3:.3g} mm to {a_hi * 1e3:.3g} mm)")
     more = len(found) - _RADIUS_STEP_NAMED
     if more > 0:
         named.append(f"and {more} more")
@@ -1104,7 +1120,9 @@ def radius_step_message(family, found, nec4_dialect=False):
     )
 
 
-def advise_radius_step(family, junctions, radius_per_wire, served=None):
+def advise_radius_step(
+    family, junctions, radius_per_wire, served=None, wire_labels=None
+):
     """Warn `RadiusStepJunction` once when any junction joins two radii.
     Called from the point-matched constructor once the junctions are final.
 
@@ -1116,7 +1134,12 @@ def advise_radius_step(family, junctions, radius_per_wire, served=None):
         found = [f for f in found if f[0] not in served]
     if found:
         warnings.warn(
-            radius_step_message(family, found, nec4_dialect=served is not None),
+            radius_step_message(
+                family,
+                found,
+                nec4_dialect=served is not None,
+                wire_labels=wire_labels,
+            ),
             RadiusStepJunction,
             stacklevel=3,
         )
@@ -1297,6 +1320,7 @@ class SinusoidalSolver(
         nec2_end_cap=None,
         nec2_far_approx=None,
         nec2_far_approx_range=None,
+        wire_labels=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1719,11 +1743,23 @@ class SinusoidalSolver(
             # momwire#1632: wires of different radius meeting at a junction.
             # The point-matched lane only (Sin-Galerkin never reaches this
             # block), because it is this lane that follows NEC-2 there.
+            #
+            # momwire#2088: `wire_labels` is the deck's own name for each INPUT
+            # wire (its GW tags), from `momwire.deck`; the Python API has none
+            # and the advisory then says wire INDICES. Restricted to the wires
+            # actually solved, as the junctions it is read against are.
             advise_radius_step(
                 type(self).__name__,
                 self.junctions,
                 self._radius_per_wire,
                 served=self._nec4_served_junctions(),
+                wire_labels=(
+                    None
+                    if wire_labels is None
+                    else self._wire_dedup.to_solved(wire_labels)
+                    if self._wire_dedup is not None
+                    else list(wire_labels)
+                ),
             )
         # momwire#1912: the opt-in sector (block-circulant) route, as on
         # `BSplineSolver` (momwire#1029). LAST, because the check reads the
