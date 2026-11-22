@@ -46,6 +46,29 @@ def test_a_clean_sse2_object_has_none():
     assert CL.avx_instructions(CLEAN) == []
 
 
+GUARDED = """\
+?find@std@@YAPEBGPEBG0G@Z:
+  0000000000000000: 83 3D 00 00 00 00  cmp         dword ptr [__isa_available],2
+                    02
+  0000000000000007: 7C 20              jl          0000000000000029
+  0000000000000030: C5 FE 6F 09        vmovdqu     ymm1,ymmword ptr [r9]
+  0000000000000034: C5 F8 77           vzeroupper
+  0000000000000037: C3                 ret
+?bare@mw@@YANN@Z:
+  0000000000000000: C4 E2 F1 AB D9     vfmsub213sd xmm3,xmm3,xmm1
+  0000000000000005: C3                 ret
+"""
+
+
+def test_a_guarded_function_is_allowed_and_a_bare_one_is_not():
+    hits = CL.avx_instructions(GUARDED)
+    assert [(h[0], h[2], h[4]) for h in hits] == [
+        ("?find@std@@YAPEBGPEBG0G@Z", "vmovdqu", True),
+        ("?find@std@@YAPEBGPEBG0G@Z", "vzeroupper", True),
+        ("?bare@mw@@YANN@Z", "vfmsub213sd", False),
+    ]
+
+
 @pytest.mark.parametrize(
     "line, mnem",
     [
@@ -65,4 +88,4 @@ def test_a_clean_sse2_object_has_none():
 )
 def test_an_avx_instruction_is_found(line, mnem):
     (hit,) = CL.avx_instructions(CLEAN + line + "\n")
-    assert hit[0] == "0000000000000040" and hit[1] == mnem
+    assert hit[1:3] == ("0000000000000040", mnem) and hit[4] is False

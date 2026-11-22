@@ -27,7 +27,10 @@ the linked bytes:
 3. INSTRUCTIONS. No sse2 or main object holds an AVX-family instruction
    (VEX or EVEX encoded: a `v` mnemonic, a ymm/zmm/k register, BMI1/BMI2). MSVC compiles an AVX intrinsic without /arch:AVX2, so a
    header can put one in the sse2 half; check 2 cannot see that, and running
-   decks under SDE sees it only on the paths those decks reach (the whole
+   decks under SDE sees it only on the paths those decks reach. An AVX
+   instruction in a function that reads MSVC's `__isa_available` is allowed
+   (listed, not failed): the compiler's own ISA dispatch and the STL's
+   vectorized algorithms put AVX code there, behind that check (the whole
    fixture corpus under SDE Westmere took over 2 h a program; Steve, 11-22:
    the static scan instead). Objects are read with `dumpbin /disasm`, every
    instruction of every one, whatever path reaches it.
@@ -128,12 +131,35 @@ DISASM_LINE = re.compile(
 )
 
 
-def avx_instructions(disasm: str) -> list[tuple[str, str, str]]:
-    """Every AVX-family instruction in `dumpbin /disasm` text, as (address,
-    mnemonic, operands). A continuation line (more bytes, no mnemonic) does
-    not match."""
+# a function label in `dumpbin /disasm` text: a symbol at column 0, then ':'
+LABEL = re.compile(r"^(\S[^:]*(?::[^:\s][^:]*)*):\s*$")
+# what a run-time CPU check reads: MSVC's own (its auto-vectorizer's ISA
+# dispatch and the STL's vectorized algorithms test it before an AVX path)
+CPU_CHECK = ("__isa_available", "__isa_enabled")
+
+
+def avx_instructions(disasm: str) -> list[tuple[str, str, str, str, bool]]:
+    """Every AVX-family instruction in `dumpbin /disasm` text, as (function,
+    address, mnemonic, operands, guarded). `guarded` is whether the function
+    holding it reads a CPU_CHECK symbol: MSVC emits AVX code without
+    /arch:AVX2 only behind such a check (its auto-vectorizer's dispatch, the
+    STL's vectorized algorithms), and the CPU it guards against is the one the
+    SDE checks emulate. A continuation line (more bytes, no mnemonic) does not
+    match."""
     found = []
+    fn, body, hits = "?", [], []
+
+    def close():
+        guarded = any(c in line for line in body for c in CPU_CHECK)
+        found.extend((fn, *h, guarded) for h in hits)
+
     for line in disasm.splitlines():
+        lab = LABEL.match(line)
+        if lab and not line.startswith(("Dump of", "File Type", "  ")):
+            close()
+            fn, body, hits = lab.group(1), [], []
+            continue
+        body.append(line)
         m = DISASM_LINE.match(line)
         if not m:
             continue
@@ -144,7 +170,8 @@ def avx_instructions(disasm: str) -> list[tuple[str, str, str]]:
             or mnem.startswith("kmov")
             or AVX_REG.search(ops)
         ):
-            found.append((addr, mnem, ops.strip()))
+            hits.append((addr, mnem, ops.strip()))
+    close()
     return found
 
 
@@ -281,7 +308,8 @@ def main(argv: list[str]) -> int:
     )
 
     # 3. instructions
-    n_avx = 0
+    n_avx = n_guarded = 0
+    guarded_fns: set[str] = set()
     for p in objs:
         out = subprocess.run(
             [dumpbin, "/nologo", "/disasm", str(p)],
@@ -291,13 +319,21 @@ def main(argv: list[str]) -> int:
             check=True,
         ).stdout
         hits = avx_instructions(out)
-        n_avx += len(hits)
-        for addr, mnem, ops in hits[:5]:
-            print(f"AVX {p.relative_to(build)} +{addr}: {mnem} {ops}")
+        bare = [h for h in hits if not h[4]]
+        n_avx += len(bare)
+        n_guarded += len(hits) - len(bare)
+        for fn, addr, mnem, ops, _ in bare[:5]:
+            print(f"AVX {p.relative_to(build)} {fn} +{addr}: {mnem} {ops}")
+        for fn in sorted({h[0] for h in hits if h[4]}):
+            guarded_fns.add(f"{p.name} {fn}")
+    for g in sorted(guarded_fns):
+        print(f"  guarded: {g}")
     if n_avx:
         bad = 1
     print(
         f"instructions: {len(objs)} sse2/main objects, {n_avx} AVX-family instructions"
+        f" with no CPU check in their function ({n_guarded} behind one, in"
+        f" {len(guarded_fns)} functions)"
     )
 
     # 4. counts
