@@ -153,10 +153,11 @@ WireDedup drop_duplicated_wires(WireArgs &args) {
     }
     if (removed.empty()) return dd;
     const auto refuse = [](size_t r, size_t twin, const std::string &why) {
-        throw FrontValueError("BSplineSolver: wires " + std::to_string(twin) + " and " +
-                              std::to_string(r) + " are the same wire listed twice, and " + why +
-                              ", so they cannot be merged into one conductor. Delete wire " +
-                              std::to_string(r) + ", or make the two copies identical - momwire#1042");
+        throw FrontDuplicateWire("BSplineSolver: wires " + std::to_string(twin) + " and " +
+                                     std::to_string(r) + " are the same wire listed twice, and " + why +
+                                     ", so they cannot be merged into one conductor. Delete wire " +
+                                     std::to_string(r) + ", or make the two copies identical - momwire#1042",
+                                 r, twin, why);
     };
     // in `removed`'s insertion order, as Python's dict iterates
     for (size_t r : removed_order) {

@@ -685,6 +685,14 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
     return "";
 }
 
+std::string duplicate_wire_refusal(const SeamMesh &mesh, std::size_t copy, std::size_t twin, const std::string &why) {
+    const Int &first = mesh.pieces.at(twin).tag, &dup = mesh.pieces.at(copy).tag;
+    const std::string named = first != dup ? "tags " + first.str() + " and " + dup.str() : "tag " + first.str();
+    return "the GW wires of " + named + " are one wire listed twice, and " + why +
+           ", so they cannot be merged into one conductor: delete the copy (tag " + dup.str() +
+           "), or make the two copies identical - momwire#1042";
+}
+
 std::string internal_error_reason(const std::string &error_kind, const std::string &message) {
     return "INTERNAL ERROR IN MOMWIRE ENGINE - " + error_kind + ": " + message;
 }

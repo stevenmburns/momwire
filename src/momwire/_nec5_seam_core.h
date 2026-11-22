@@ -324,6 +324,11 @@ SeamResult seam(const std::string &latin1_text, const SeamEngine &engine, bool o
 // scope, else the sentence; `declined` names a decline instead.
 std::string scope_refusal(const Deck &deck, std::string &declined);
 
+// `_serve._prepare`'s refusal of a wire listed twice the solver cannot
+// merge (`copy` / `twin`: its wire indices, which are `mesh`'s pieces), in
+// the deck's GW tags (momwire#2107).
+std::string duplicate_wire_refusal(const SeamMesh &mesh, std::size_t copy, std::size_t twin, const std::string &why);
+
 // `_shell._internal_error_reason`: the last line of defence's sentence.
 std::string internal_error_reason(const std::string &error_kind, const std::string &message);
 

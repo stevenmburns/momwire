@@ -5313,6 +5313,18 @@ def _prepare(
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
     except ValueError as exc:
+        # A wire listed twice that the constructor cannot merge (momwire#1042)
+        # is a statement about the deck, refused by name in its GW tags, not
+        # an INTERNAL ERROR frame (momwire#2107).
+        duplicate = getattr(exc, "duplicate", None)
+        if duplicate is not None:
+            named, copy = _duplicate_tags(duplicate, mesh)
+            raise ServeRefusal(
+                f"the GW wires of {named} are one wire listed twice, and "
+                f"{duplicate.why}, so they cannot be merged into one conductor: "
+                f"delete the copy (tag {copy}), or make the two copies "
+                f"identical - momwire#1042"
+            ) from None
         _refuse_if_grazing(exc)
         raise
     _thread_policy.measured(*_solve_size(mesh, medium))
@@ -5375,6 +5387,17 @@ def _solve_size(mesh: _Mesh, medium: GroundMedium | None) -> tuple[int, int, int
     if above:
         return above + below, above * below, 0
     return below, 0, below * below
+
+
+def _duplicate_tags(duplicate, mesh: _Mesh) -> tuple[str, int]:
+    """``(named, copy tag)`` for a wire listed twice that the solver cannot
+    merge (momwire#2107; ``duplicate`` is its ValueError's
+    ``_wire_spec.DuplicateWireRefusal``): the deck's own ``GW`` tags, which
+    :func:`_prepare` refuses in. The solver's wires are the mesh's pieces,
+    one for one (:func:`_solver_for`), and a piece carries its card's tag."""
+    first = mesh.pieces[duplicate.twin].tag
+    copy = mesh.pieces[duplicate.copy].tag
+    return (f"tags {first} and {copy}" if first != copy else f"tag {first}"), copy
 
 
 def _refuse_if_grazing(exc: ValueError) -> None:

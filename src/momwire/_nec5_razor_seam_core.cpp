@@ -202,6 +202,15 @@ SeamEngine::Built RazorSeamEngine::build(Prepared &p) const {
     try {
         why = part.front->build(part.inputs);
     } catch (const razor::FrontError &e) {
+        if (e.dup_copy >= 0 && p.mesh.pieces.size() > static_cast<std::size_t>(std::max(e.dup_copy, e.dup_twin))) {
+            // `_prepare` refuses a ValueError carrying `duplicate` in the
+            // deck's GW tags (momwire#2107)
+            b.kind = Built::refused;
+            b.error_kind = "ValueError";
+            b.message = duplicate_wire_refusal(p.mesh, static_cast<std::size_t>(e.dup_copy),
+                                               static_cast<std::size_t>(e.dup_twin), e.dup_why);
+            return b;
+        }
         // `_prepare` refuses a NotImplementedError from the constructor and
         // from `compute_port_solution` alike (census 11-17)
         const bool ni = e.kind == razor::FrontErrorKind::not_implemented;
