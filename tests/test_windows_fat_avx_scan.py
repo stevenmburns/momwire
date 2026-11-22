@@ -112,3 +112,21 @@ def test_an_unguarded_function_keeps_its_first_instructions_for_the_report():
     CL.avx_instructions(GUARDED)  # its `?bare@...` has no check
     lines = CL.avx_instructions.preambles["?bare@mw@@YANN@Z"]
     assert lines and "vfmsub213sd" in lines[0]
+
+
+WMEMCMP = """\
+wmemcmp:
+  0000000000000000: 33 C0              xor         eax,eax
+  000000000000000F: 39 05 00 00 00 00  cmp         dword ptr [_Avx2WmemEnabled],eax
+  000000000000001E: 74 3F              je          000000000000005F
+  0000000000000030: C4 C1 7E 6F 09     vmovdqu     ymm1,ymmword ptr [r9]
+  000000000000003A: C5 FD D7 C9        vpmovmskb   ecx,ymm1
+"""
+
+
+def test_the_ucrts_wmemcmp_flag_is_a_guard():
+    """What run 45045528002 found in the Sommerfeld cores: the UCRT's inline
+    wmemcmp tests `_Avx2WmemEnabled` before its AVX2 loop."""
+    hits = CL.avx_instructions(WMEMCMP)
+    assert [h[2] for h in hits] == ["vmovdqu", "vpmovmskb"]
+    assert all(h[4] for h in hits)

@@ -135,7 +135,13 @@ DISASM_LINE = re.compile(
 LABEL = re.compile(r"^(\S[^:]*(?::[^:\s][^:]*)*):\s*$")
 # what a run-time CPU check reads: MSVC's own (its auto-vectorizer's ISA
 # dispatch and the STL's vectorized algorithms test it before an AVX path)
-CPU_CHECK = ("__isa_available", "__isa_enabled")
+CPU_CHECK = (
+    "__isa_available",
+    "__isa_enabled",
+    # the UCRT's own flag for its AVX2 wmem* paths (wchar.h's inline
+    # wmemcmp tests it first), set from the CPU at start-up
+    "_Avx2WmemEnabled",
+)
 # ...or calls a helper that does (the STL's vectorized algorithms ask through
 # one, `_Use_avx2` and the like): a call whose target names the ISA
 CPU_CHECK_CALL = re.compile(r"\bcall\s+\S*(?:isa|Use_avx|Use_sse|cpu_feature)", re.I)
