@@ -487,26 +487,31 @@ its own build tag, so it is the one line that already carried an engine
 identity; the comment block EZNEC checks the printout against, the banner and
 every table heading are untouched.
 
-### Advisories: on stderr, and only when asked
+### Advisories: on stderr
 
 Besides refusals, momwire raises **advisories**: a warning about the mesh,
-the kernel or a feed that does not stop the solve, such as `CoarseCrossingNode`
-or `GapMeshFloor`. They never go in the printout, so it stays in the engine's
-own layout. Since 0.84.0 the launchers also keep them **off stderr by
-default**, because the licensed engines write nothing there. SimNEC's stream
-mode (`- -`) is one engine process for a whole sweep, and a host that never
-reads that process's stderr stalled the stream once a few kilobytes of
-advisories had filled the pipe (momwire#1673).
+the kernel or a feed that does not stop the solve, such as `DuplicateWire`,
+`CoarseCrossingNode` or `GapMeshFloor`. They never go in the printout, so it
+stays in the engine's own layout. They go to the launcher's **stderr**, on
+every route: a one-shot run, the stdin form, SimNEC's stream mode (`- -`), and
+a deck the warm engine answers, whose advisories travel back to the launcher
+that sent it. Each deck shows its own advisories, even when the deck before
+it raised the same ones.
 
-To see them, set the environment variable before your program starts:
+One engine process writes at most 3072 bytes of advisories, then one line
+saying the rest were not shown, then nothing more. So a host that never
+reads the engine's stderr cannot stall it on a full pipe (momwire#1673): the
+smallest pipe a host is known to hand over holds about 4 KB.
+
+To turn them off, set the environment variable before your program starts:
 
 ```
-MOMWIRE_ADVISORIES=stderr
+MOMWIRE_ADVISORIES=off
 ```
 
-Set it only when your program reads the engine's stderr. If it does not,
-SimNEC's stream mode can stall again. EZNEC never shows stderr, so there it
-changes nothing you can see.
+`MOMWIRE_ADVISORIES=stderr`, the setting that turned them on before, is
+still accepted and now means the default. EZNEC does not show stderr, so
+there neither setting changes anything you can see.
 
 ## What serves
 
