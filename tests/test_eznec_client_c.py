@@ -558,6 +558,7 @@ def test_the_key_is_the_d2_digest_and_not_a_private_hash(
             os.path.realpath(str(bundle / ENGINE_NAME)),
             repr(900.0),
             mech.WIRE,
+            mech.ADVISORIES_WIRE,
             basis_element,
             # momwire#1979: the environment this run inherits (an xdist
             # worker pins the thread counts), appended as Python appends it.
@@ -675,6 +676,7 @@ def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
             os.path.realpath(str(bundle / ENGINE_NAME)),
             repr(900.0),
             mech.WIRE,
+            mech.ADVISORIES_WIRE,
             "dialect=nec4",
             "basis=sinusoidal",
             *_python_env_elements(),
@@ -1229,6 +1231,7 @@ def _fixed_elements(bundle: Path, name: str) -> list[str]:
         os.path.realpath(str(bundle / ENGINE_NAME)),
         repr(900.0),
         mech.WIRE,
+        mech.ADVISORIES_WIRE,
     ]
     if name == NEC4_TWIN_NAME:
         return [*head, "dialect=nec4", "basis=sinusoidal"]
@@ -1296,6 +1299,68 @@ def test_a_warm_server_never_answers_a_call_under_another_feature(client_exe, tm
         call(4, threaded)
         assert len(_listening(room)) == 3, _listening(room)
         assert len(sorted(room.glob(f"*{suffix}"))) == 3
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# advisories on stderr (momwire#1673 reversed)
+# --------------------------------------------------------------------------
+
+
+def _c_bytes(name: str) -> bytes:
+    """A ``static const char NAME[] = "...";`` constant's bytes."""
+    match = re.search(
+        rf'static const char {name}\[\] = "((?:[^"\\]|\\.)*)";', SOURCE.read_text()
+    )
+    assert match is not None, name
+    return match[1].encode("latin-1").decode("unicode_escape").encode("latin-1")
+
+
+def test_the_c_advisories_constants_are_the_python_ones():
+    assert _c_string("ADVISORIES_ENV") == mech.ADVISORIES_ENV
+    assert _c_string("ADVISORIES_KEY_ELEMENT") == mech.ADVISORIES_WIRE
+    assert _c_bytes("ADVISORIES_REQUEST") == mech.ADVISORIES_REQUEST
+    assert _c_bytes("ADVISORIES_FRAME_START") == mech.ADVISORIES_FRAME_START
+    assert _c_bytes("ADVISORIES_FRAME_END") == mech.ADVISORIES_FRAME_END
+    off = _c_list("ADVISORIES_OFF")
+    assert set(off) == mech._ADVISORIES_OFF and len(off) == len(mech._ADVISORIES_OFF)
+    assert all(v == v.lower() for v in off)
+
+
+_DUP_DECK = DECKS.parent.parent / "razor_printout_small" / "dup_reversed_rp_ne_pq.nec"
+
+
+@pytest.mark.integration
+def test_a_served_deck_carries_its_advisories_to_the_c_clients_stderr(
+    client_exe, tmp_path, monkeypatch
+):
+    """The Windows drop-in's launcher: a deck the warm server answers raised
+    its advisories in the server's process, and they come back framed to
+    THIS process's stderr, the second warm deck's as well as the first's.
+    ``MOMWIRE_ADVISORIES=off`` sends no request and gets none back, and the
+    printout is the one-shot's either way."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_TWIN_NAME,))
+    room = _room()
+    expected = _oracle(_DUP_DECK, tmp_path, basis="razor2p")
+    try:
+        for index, setting in enumerate((None, None, "off")):
+            out = tmp_path / f"advised-{index}.out"
+            # `_run` passes this process's environment on
+            monkeypatch.delenv("PYTHONWARNINGS", raising=False)
+            if setting is None:
+                monkeypatch.delenv("MOMWIRE_ADVISORIES", raising=False)
+            else:
+                monkeypatch.setenv("MOMWIRE_ADVISORIES", setting)
+            proc = _run(bundle, NEC5_TWIN_NAME, [str(_DUP_DECK), str(out)], room)
+            assert proc.returncode == 0
+            assert len(_listening(room)) == 1, "the deck was not served warm"
+            assert out.read_bytes() == expected
+            if setting is None:
+                assert "DuplicateWire" in proc.stderr, (index, proc.stderr[:600])
+            else:
+                assert proc.stderr == "", proc.stderr[:600]
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
