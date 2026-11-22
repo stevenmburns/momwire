@@ -249,6 +249,27 @@ static const char GMO_FRAME_END[] = "\0\r\n";
 #define GMO_FRAME_END_LEN (sizeof GMO_FRAME_END - 1)
 #define GMO_SUFFIX ".GMO"
 #define EN_OPTIONAL_FLAG "--en-optional"
+/* The deck's advisories on this launcher's stderr (momwire#1673 reversed):
+ * `momwire_serve_client`'s ADVISORIES_* constants.  The request rides ahead
+ * of EN_OPTIONAL_REQUEST, the frame comes back ahead of the `.GMO` frame, and
+ * the server has already held it to one process's cap, so it is written as
+ * it arrives.  ADVISORIES_OFF is `_ADVISORIES_OFF`; keep the brace-per-line
+ * shape, the test reads it. */
+#define ADVISORIES_ENV "MOMWIRE_ADVISORIES"
+static const char ADVISORIES_REQUEST[] = "\0ADVISORIES\n";
+#define ADVISORIES_REQUEST_LEN (sizeof ADVISORIES_REQUEST - 1)
+static const char ADVISORIES_FRAME_START[] = "\0ADVISORIES\r\n";
+#define ADVISORIES_FRAME_START_LEN (sizeof ADVISORIES_FRAME_START - 1)
+static const char ADVISORIES_FRAME_END[] = "\0\r\n";
+#define ADVISORIES_FRAME_END_LEN (sizeof ADVISORIES_FRAME_END - 1)
+#define ADVISORIES_KEY_ELEMENT "advisories=framed"
+static const char *const ADVISORIES_OFF[] = {
+    "0",
+    "false",
+    "no",
+    "none",
+    "off",
+};
 
 #define TRANSPORT_ENV "MOMWIRE_SERVE_TRANSPORT"
 #define UNIX_SUFFIX ".sock"
@@ -979,24 +1000,37 @@ static void strip_span(const char *value, const char **start, size_t *len)
     *len = n;
 }
 
-static int is_feature_on(const char *value)
+/* `value.strip().lower()` is one of `words`. */
+static int is_one_of(const char *value, const char *const *words, size_t count)
 {
     const char *s;
     size_t n;
     size_t i;
     size_t k;
     strip_span(value, &s, &n);
-    for (i = 0; i < COUNT_OF(FEATURE_ON); i++) {
-        if (strlen(FEATURE_ON[i]) != n) {
+    for (i = 0; i < count; i++) {
+        if (strlen(words[i]) != n) {
             continue;
         }
-        for (k = 0; k < n && ascii_lower(s[k]) == FEATURE_ON[i][k]; k++) {
+        for (k = 0; k < n && ascii_lower(s[k]) == words[i][k]; k++) {
         }
         if (k == n) {
             return 1;
         }
     }
     return 0;
+}
+
+static int is_feature_on(const char *value)
+{
+    return is_one_of(value, FEATURE_ON, COUNT_OF(FEATURE_ON));
+}
+
+/* `momwire_serve_client.advisories_on`: on unless MOMWIRE_ADVISORIES is off. */
+static int advisories_on(void)
+{
+    const char *value = getenv(ADVISORIES_ENV);
+    return value == NULL || !is_one_of(value, ADVISORIES_OFF, COUNT_OF(ADVISORIES_OFF));
 }
 
 static int cmp_str(const void *a, const void *b)
@@ -1150,13 +1184,14 @@ static int key_material(const char *engine_resolved, int nec4, int named_basis,
                         const char *basis, buf_t *out)
 {
     static const char nul = '\0';
-    const char *fixed[4];
+    const char *fixed[5];
     size_t i;
 
     fixed[0] = ENGINE_TAG;
     fixed[1] = engine_resolved;
     fixed[2] = IDLE_TIMEOUT_REPR;
     fixed[3] = WIRE_KEY_ELEMENT;
+    fixed[4] = ADVISORIES_KEY_ELEMENT;
     for (i = 0; i < COUNT_OF(fixed); i++) {
         if (buf_add(out, fixed[i], strlen(fixed[i]) + 1) != 0) {
             return -1;
@@ -2168,6 +2203,49 @@ static sock_t obtain(const setup_t *setup)
     }
 }
 
+/* The advisories frame at the head of `*data`, when there is one: its body
+ * (CRLF to LF, which a text-mode stderr turns back on Windows) goes to
+ * stderr after the printout is written, and `*data` / `*len` step past it.
+ * A frame that never closes is not an answer this engine writes. */
+static int split_advisories(const char **data, size_t *len, const char **body,
+                            size_t *body_len)
+{
+    size_t i;
+
+    *body = NULL;
+    *body_len = 0;
+    if (*len < ADVISORIES_FRAME_START_LEN ||
+        memcmp(*data, ADVISORIES_FRAME_START, ADVISORIES_FRAME_START_LEN) != 0) {
+        return 0;
+    }
+    for (i = ADVISORIES_FRAME_START_LEN; i + ADVISORIES_FRAME_END_LEN <= *len; i++) {
+        if (memcmp(*data + i, ADVISORIES_FRAME_END, ADVISORIES_FRAME_END_LEN) == 0) {
+            break;
+        }
+    }
+    if (i + ADVISORIES_FRAME_END_LEN > *len) {
+        note("the resident engine's advisories frame never closed");
+        return -1;
+    }
+    *body = *data + ADVISORIES_FRAME_START_LEN;
+    *body_len = i - ADVISORIES_FRAME_START_LEN;
+    *data += i + ADVISORIES_FRAME_END_LEN;
+    *len -= i + ADVISORIES_FRAME_END_LEN;
+    return 0;
+}
+
+static void write_advisories(const char *body, size_t len)
+{
+    size_t i;
+    for (i = 0; i < len; i++) {
+        if (body[i] == '\r' && i + 1 < len && body[i + 1] == '\n') {
+            continue;
+        }
+        fputc((unsigned char)body[i], stderr);
+    }
+    fflush(stderr);
+}
+
 /* The answer's files: the `.GMO` frame's contents beside the printout when
  * the answer carries one (momwire#1488), then the printout.  A frame that
  * never closes is not an answer this engine writes, so it fails over to
@@ -2212,6 +2290,12 @@ static int served(const setup_t *setup, const char *deck_path,
     sock_t sock;
     int status = -1;
 
+    if (advisories_on() &&
+        buf_add(&deck, ADVISORIES_REQUEST, ADVISORIES_REQUEST_LEN) != 0) {
+        note("out of memory reading %s", deck_path);
+        buf_free(&deck);
+        return -1;
+    }
     if (setup->en_optional &&
         buf_add(&deck, EN_OPTIONAL_REQUEST, EN_OPTIONAL_REQUEST_LEN) != 0) {
         note("out of memory reading %s", deck_path);
@@ -2264,7 +2348,23 @@ static int served(const setup_t *setup, const char *deck_path,
         buf_free(&answer);
         return -1;
     }
-    status = write_answer(printout_path, answer.data, answer.len);
+    {
+        const char *rest = answer.data;
+        size_t rest_len = answer.len;
+        const char *shown;
+        size_t shown_len;
+        status = split_advisories(&rest, &rest_len, &shown, &shown_len);
+        if (status == 0 && rest_len == 0) {
+            note("the resident engine answered advisories and no printout");
+            status = -1;
+        }
+        if (status == 0) {
+            status = write_answer(printout_path, rest, rest_len);
+        }
+        if (status == 0 && shown != NULL) {
+            write_advisories(shown, shown_len);
+        }
+    }
     buf_free(&answer);
     return status;
 }
