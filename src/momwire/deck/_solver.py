@@ -49,6 +49,7 @@ polyline arrays rather than a fresh rounding of the same walk.
 
 from __future__ import annotations
 
+import inspect
 import os
 import warnings
 from collections.abc import Callable, Mapping, Sequence
@@ -1055,6 +1056,7 @@ def construct_solver(
     before_construct: Callable[[], None] | None = None,
     warn_depth: int = 1,
     cancel: Any = None,
+    wire_labels: Sequence[Sequence[int] | None] | None = None,
 ) -> tuple[Any, bool]:
     """One roster solver, constructed from a mesh a dialect already built.
 
@@ -1155,6 +1157,16 @@ def construct_solver(
                 advisories.append(advisory)
     if extended_kernel:
         kwargs["extended_kernel"] = True
+    if (
+        wire_labels is not None
+        and "wire_labels" in inspect.signature(solver_class.__init__).parameters
+    ):
+        # momwire#2088: the deck's own names for the solver's wires, for the
+        # constructor's advisories. Only a family that takes them is handed
+        # them, the way `port_kwargs` filters the port keys.
+        kwargs["wire_labels"] = [
+            None if label is None else list(label) for label in wire_labels
+        ]
     if before_construct is not None:
         before_construct()
     solver = solver_class(
@@ -1174,6 +1186,34 @@ def construct_solver(
     return solver, bool(extended_kernel)
 
 
+def _wire_labels(
+    wire_names: Sequence[int | None] | None, mesh: Any
+) -> list[tuple[int, ...] | None] | None:
+    """The deck's own wire names behind each solver wire (momwire#2088).
+
+    ``wire_names`` is one name per MODEL wire, from the dialect front end that
+    knows them (the model itself stays free of NEC vocabulary): the nec2
+    portal passes each wire's ``GW`` tag.  ``None`` means the caller has no
+    names, and the solver then advises in its own wire indices.
+
+    One entry per polyline: the sorted distinct tags of the model wires it
+    was chained from, so a card the importer split into several solver wires
+    names that one tag from each, and a solver wire that merged several cards
+    names all of them.  ``None`` when any of its model wires carries no tag
+    (a dialect that has none to give), which sends the advisory back to the
+    solver's own index.
+    """
+    if wire_names is None:
+        return None
+    labels: list[tuple[int, ...] | None] = []
+    for origin in mesh.wire_origin:
+        names = {wire_names[w] for w in origin}
+        labels.append(
+            None if None in names else tuple(sorted(n for n in names if n is not None))
+        )
+    return labels
+
+
 def build_solver(
     model: DeckModel,
     *,
@@ -1184,6 +1224,7 @@ def build_solver(
     environment: Environment | None = None,
     mesh: PreparedMesh | None = None,
     cancel: Any = None,
+    wire_names: Sequence[int | None] | None = None,
 ) -> BuiltSolver:
     """Construct a solver for ``model`` and return it with its port plan.
 
@@ -1202,6 +1243,11 @@ def build_solver(
     translation is not repeated, which is the whole of the per-operating-point
     cost that does not belong to the fill.  Passing a handle prepared for a
     different model raises.
+
+    ``wire_names`` (momwire#2088) is the deck's own name for each of the
+    model's wires, in model order: the nec2 front end passes the ``GW`` tags,
+    so an advisory about a wire says "wire 5" where the deck says GW 5. A
+    caller without names leaves it None and the advisory says "wire indices".
 
     Raises ``ValueError`` for an unknown basis, a model with no wires, a
     port set the geometry cannot host, and -- this being the `nec2` seam,
@@ -1386,6 +1432,7 @@ def build_solver(
         advisories=advisories,
         before_construct=_refuse_wire_loading,
         cancel=cancel,
+        wire_labels=_wire_labels(wire_names, built_mesh),
     )
     # Renumber onto the rows that were just built, from the same flags the
     # `feeds` list was filtered by, so the plan cannot drift from the matrix

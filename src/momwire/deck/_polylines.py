@@ -94,6 +94,12 @@ class Mesh:
     port_order: tuple[int, ...]
     # (polyline, "start"|"end") per node gap, in the model's own order.
     node_gap_members: tuple[tuple[int, str], ...]
+    # Per polyline, the sorted model wires (indices into
+    # :attr:`DeckModel.wires`) its spans came from: the way back from a
+    # solver's wire index to the deck's own wire, for messages (momwire#2088).
+    # One polyline may chain several model wires, and one model wire may be
+    # cut across several polylines.
+    wire_origin: tuple[tuple[int, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -396,6 +402,7 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
     edge_elements: list[list[int]] = []
     radii: list[float] = []
     materials: list[WireMaterial | None] = []
+    origins: list[tuple[int, ...]] = []
     span_place: dict[int, tuple[int, int]] = {}  # span -> (polyline, position)
     span_direction: dict[int, int] = {}  # +1 when walked p0 -> p1
     junction_ends: dict[int, list[tuple[int, str]]] = {
@@ -428,6 +435,7 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
         head = spans[edges[path_edges[0]][2]]
         radii.append(head.radius)
         materials.append(head.material)
+        origins.append(tuple(sorted({spans[edges[e][2]].wire for e in path_edges})))
         for position, edge in enumerate(path_edges):
             span = edges[edge][2]
             span_place[span] = (index, position)
@@ -533,6 +541,7 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
         materials=tuple(materials),
         ports=tuple(placed),
         port_order=tuple(order),
+        wire_origin=tuple(origins),
         node_gap_members=tuple(
             _node_gap_member(model, spans, span_place, span_direction, edge_elements, k)
             for k in range(len(model.node_gaps))

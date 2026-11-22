@@ -50,7 +50,7 @@ def _advisories(cls, radii, wires=(LEFT, RIGHT), **kw):
 def test_a_radius_step_warns_once_naming_the_wires_and_radii():
     (msg,) = _advisories(SinusoidalSolver, (0.0005, 0.001))
     assert msg.startswith("SinusoidalSolver: wires of different radius meet")
-    assert "wires 0 and 1 (0.5 mm to 1 mm)" in msg
+    assert "wire indices 0 and 1 (0.5 mm to 1 mm)" in msg
     assert "follows NEC-2" in msg
     assert "sg or bspline" in msg
     assert "momwire#1632" in msg and "momwire#1644" in msg
@@ -85,7 +85,7 @@ def test_several_junctions_are_counted_and_capped():
     msg = radius_step_message("SinusoidalSolver", found)
     assert "meet at 6 junctions" in msg
     assert "and 2 more" in msg
-    assert "wires 3 and 4" in msg and "wires 4 and 5" not in msg
+    assert "wire indices 3 and 4" in msg and "indices 4 and 5" not in msg
 
 
 def test_the_scan_reads_each_junction_once():
