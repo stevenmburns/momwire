@@ -29,8 +29,10 @@
 # (tests/test_standalone_exe.py). Windows identity is measured on the Windows
 # builder.
 #
-# `windows-nopython` (momwire#1558): the no-Python builds under MSVC,
-# razor2p and bs2, avx2 and sse2, against the OpenBLAS DLL of numpy's
+# `windows-nopython` (momwire#1558, #2090): the no-Python builds under MSVC,
+# razor2p and bs2, each ONE fat program carrying the avx2 and the sse2 cores
+# and picking one at start by CPUID (MW_EXE_VARIANT=fat, momwire#1975),
+# against the OpenBLAS DLL of numpy's
 # release (scipy-openblas32 at the NUMPY_OPENBLAS_VERSION
 # standalone/build_openblas.sh records, the LP64 twin of the scipy-openblas64
 # numpy's wheels bundle, momwire#1751): ONE library on Windows, where Linux
@@ -40,12 +42,20 @@
 # runtime beside them too, so the directory needs nothing installed. Gated:
 # the launcher-layer contract tests, and every fixture deck and NX chain
 # against this environment's launcher -- within PRINTOUT_RTOL_WIN32
-# (exe_compare.py --rtol win32), since Windows needs no bit-compatibility.
-# Built with the MSVC 14.44 toolset and signed (eznec-dropin.yml's signing
-# mode: the real certificate on a tag or an azure_sign dispatch, a
-# self-signed rehearsal otherwise), with a win7 folder of the sse2 builds
-# carrying Microsoft's app-local UCRT, every binary through the freeze's
-# Windows 7 import gate. Zipped as momwire-nec5-windows-x64.zip and attached
+# (exe_compare.py --rtol win32), since Windows needs no bit-compatibility;
+# and the fat gates (scripts/windows_fat/): the link (no start-up entry in an
+# avx2 copy), fat == one-variant byte for byte on every fixture deck with
+# each path forced, the pick by CPU under Intel SDE (Westmere and Sandy
+# Bridge sse2, Haswell avx2), and the 0.96.0 names -- shipped as copies of
+# the fat program for the deprecation window, each running the variant its
+# name names (standalone/exe_name.h) -- answering as that variant's build
+# does, line 2's rename note aside. The four one-variant builds are built
+# only as those gates' reference. Built with the MSVC 14.44 toolset and
+# signed (eznec-dropin.yml's signing mode: the real certificate on a tag or
+# an azure_sign dispatch, a self-signed rehearsal otherwise), with a win7
+# folder of the same fat pair carrying Microsoft's app-local UCRT, every
+# binary through the freeze's Windows 7 import gate. Zipped as
+# momwire-nec5-windows-x64.zip and attached
 # to the release on a pushed tag (`release-windows`), as a PREVIEW;
 # momwire-windows.zip is untouched.
 #
@@ -94,6 +104,7 @@ on:
       - "scripts/core_split/bspline_chunked_decks/**"
       - "scripts/core_split/bspline_exact_decks/**"
       - "scripts/core_split/bs2_stream_decks/**"
+      - "scripts/windows_fat/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -114,6 +125,7 @@ on:
       - "scripts/core_split/bspline_chunked_decks/**"
       - "scripts/core_split/bspline_exact_decks/**"
       - "scripts/core_split/bs2_stream_decks/**"
+      - "scripts/windows_fat/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -771,7 +783,7 @@ jobs:
   # Windows 7 folder: the preview release asset (see the header).
   windows-nopython:
     runs-on: windows-latest
-    timeout-minutes: 150
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
         with:
@@ -797,18 +809,22 @@ jobs:
           python -m venv venv
           venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
           venv\Scripts\python -m pip install -q -e ".[test]"
+          venv\Scripts\python -m pip install -q pefile
       # EVERY executable is built with the MSVC 14.44 toolset, as
       # eznec-dropin.yml's Win7 leg is: from 14.5x on, MSVCP140.dll imports
       # CopyFile2, CreateFile2 and GetSystemTimePreciseAsFileTime, none of
       # which Windows 7 has (that leg's run 38427318212 failed its import gate
       # on exactly that), and a runtime older than the toolset that compiled
-      # the code is unsupported. One toolset for all four builds, so the
-      # Windows 7 folder's sse2 programs are the very sse2 builds the gates
-      # below run. Ninja, so the build takes the compiler this puts on PATH.
+      # the code is unsupported. One toolset for all six builds, so the
+      # Windows 7 folder's programs are the very fat builds the gates below
+      # run. Ninja, so the build takes the compiler this puts on PATH.
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           toolset: '14.44'
-      - name: configure + build (MSVC 14.44, four executables)
+      # The two fat programs ship (MW_EXE_VARIANT=fat, momwire#1975 and
+      # #2090); the four one-variant builds exist only as the gates' reference
+      # (fat == one-variant, below) and never reach the zip.
+      - name: configure + build (MSVC 14.44, the fat pair and the four one-variant references)
         shell: pwsh
         run: |
           python -m pip install -q ninja
@@ -817,14 +833,37 @@ jobs:
           if ($banner -notmatch 'Version 19\.44\.') { throw "cl is not the 14.44 toolset: $banner" }
           $dll = "$PWD\ob\scipy_openblas32\lib\libscipy_openblas.dll"
           foreach ($b in 'razor2p', 'bs2') {
-            foreach ($v in 'avx2', 'sse2') {
+            foreach ($v in 'avx2', 'sse2', 'fat') {
+              $t0 = Get-Date
               cmake -S standalone -B "build-$b-$v" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW_EXE_NO_PYTHON=ON `
                 "-DMW_EXE_BASIS=$(if ($b -eq 'bs2') { 'bspline_nec5' } else { $b })" "-DMW_EXE_VARIANT=$v" "-DMW_OPENBLAS_LIB=$dll" -DMW_BLAS_PREFIX=scipy_
               if ($LASTEXITCODE) { exit 1 }
               cmake --build "build-$b-$v"
               if ($LASTEXITCODE) { exit 1 }
+              "build-$b-$v : $([int]((Get-Date) - $t0).TotalSeconds) s"
             }
           }
+      # Gate (scripts/windows_fat/check_link.py, read back from the image and
+      # the map file): no start-up entry reaches an avx2 copy, the deferred
+      # avx2 initializers run on avx2 only, and no COMDAT an sse2 object
+      # defines resolved to its avx2 copy. Before signing; the signature
+      # changes no section.
+      - name: the fat link (start-up tables, deferred initializers, COMDATs)
+        shell: pwsh
+        run: |
+          $target = @{ 'razor2p' = 'momwire-nec5-razor2p-standalone'; 'bs2' = 'momwire-nec5-bs2-standalone' }
+          $crt = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            "=== $b"
+            # the script runs the program (MW_EXE_TIMES): the DLLs beside it, as staged
+            Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll "build-$b-fat"
+            foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$crt\$f" "build-$b-fat" }
+            Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" "build-$b-fat"
+            venv\Scripts\python scripts/windows_fat/check_link.py "build-$b-fat\$($target[$b]).exe" "build-$b-fat\$($target[$b]).map" "build-$b-fat"
+            if ($LASTEXITCODE) { $fail = 1 }
+          }
+          exit $fail
       # THE SIGNING MODE, decided once, as eznec-dropin.yml decides it (#711;
       # that file says why each step is the way it is):
       #
@@ -902,39 +941,49 @@ jobs:
           "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # Before staging, so every copy carries the signature and every gate
       # below runs signed bytes. The AZURE_* credentials exist in azure mode
-      # only, as in eznec-dropin.yml.
-      - name: sign the four executables
+      # only, as in eznec-dropin.yml. Two programs: every executable in the zip
+      # is a copy of one of them.
+      - name: sign the two fat executables
         env:
           AZURE_TENANT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_TENANT_ID || '' }}
           AZURE_CLIENT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_ID || '' }}
           AZURE_CLIENT_SECRET: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_SECRET || '' }}
         run: >-
           python standalone/sign_windows.py
-          build-razor2p-avx2/momwire-nec5-razor2p-standalone.exe build-razor2p-sse2/momwire-nec5-razor2p-standalone.exe
-          build-bs2-avx2/momwire-nec5-bs2-standalone.exe build-bs2-sse2/momwire-nec5-bs2-standalone.exe
-      # The zip's tree: the four programs under their release names with the
-      # DLLs they load beside them -- numpy's OpenBLAS, the 14.44 toolset's own
-      # VC++ runtime and LLVM's OpenMP runtime (the System32 copy, as
+          build-razor2p-fat/momwire-nec5-razor2p-standalone.exe build-bs2-fat/momwire-nec5-bs2-standalone.exe
+      # The zip's tree: the two fat programs under their names, and the 0.96.0
+      # names (`momwire-nec5-<basis>-avx2.exe` / `-sse2.exe`) as copies of
+      # them for the deprecation window -- a copy runs the variant its name
+      # names (standalone/exe_name.h) and says so on printout line 2 -- with
+      # the DLLs they load beside them: numpy's OpenBLAS, the 14.44 toolset's
+      # own VC++ runtime and LLVM's OpenMP runtime (the System32 copy, as
       # scripts/eznec_freeze/build.py bundles it, and as that freeze's Win7 leg
-      # ships it through the same import gate) -- and win7\, the two sse2
-      # programs with the same DLLs plus Microsoft's app-local Universal C
-      # Runtime from the Windows SDK (on Windows 10 and 11 the system's own
-      # copy wins, so it is harmless there).
+      # ships it through the same import gate). And win7\: the same fat pair
+      # and the old sse2 names, with the same DLLs plus Microsoft's app-local
+      # Universal C Runtime from the Windows SDK (on Windows 10 and 11 the
+      # system's own copy wins, so it is harmless there). The fat programs
+      # import exactly what the one-variant builds import (gated below), and
+      # read the CPU with CPUID and XGETBV, not IsProcessorFeaturePresent, so
+      # Windows 7 SP1 picks avx2 where the CPU and the OS have it.
+      #
+      # dist\one: the four one-variant reference builds, with the same DLLs,
+      # for the fat == one-variant gates. Never zipped.
       - name: stage
         shell: pwsh
         run: |
           $D = "dist\momwire-nec5-windows-x64"
           $W7 = "$D\win7"
-          New-Item -ItemType Directory -Force $W7 | Out-Null
-          # The CMake target (long form, momwire#1831) for each release file
-          # name; the file names change only at a release.
+          $one = "dist\one"
+          New-Item -ItemType Directory -Force $W7, $one | Out-Null
+          # The CMake target (long form, momwire#1831) for each release file name.
           $target = @{ 'razor2p' = 'momwire-nec5-razor2p-standalone'; 'bs2' = 'momwire-nec5-bs2-standalone' }
           foreach ($b in 'razor2p', 'bs2') {
-            $t = $target[$b]
-            foreach ($v in 'avx2', 'sse2') {
-              Copy-Item "build-$b-$v\$t.exe" "$D\momwire-nec5-$b-$v.exe"
-            }
-            Copy-Item "build-$b-sse2\$t.exe" "$W7\momwire-nec5-$b-sse2.exe"
+            $fat = "build-$b-fat\$($target[$b]).exe"
+            foreach ($dir in $D, $W7) { Copy-Item $fat "$dir\momwire-nec5-$b.exe" }
+            # the deprecated names (momwire#2090): copies of the fat program
+            foreach ($v in 'avx2', 'sse2') { Copy-Item $fat "$D\momwire-nec5-$b-$v.exe" }
+            Copy-Item $fat "$W7\momwire-nec5-$b-sse2.exe"
+            foreach ($v in 'avx2', 'sse2') { Copy-Item "build-$b-$v\$($target[$b]).exe" "$one\momwire-nec5-$b-$v.exe" }
           }
           $crt = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
           $ucrt = Join-Path $env:UniversalCRTSdkDir "Redist\$($env:UCRTVersion)\ucrt\DLLs\x64"
@@ -942,7 +991,7 @@ jobs:
             $ucrt = (Get-ChildItem "$env:UniversalCRTSdkDir\Redist\*\ucrt\DLLs\x64\ucrtbase.dll" | Sort-Object FullName | Select-Object -Last 1).DirectoryName
           }
           "VC++ runtime: $crt"; "app-local UCRT: $ucrt"
-          foreach ($dir in $D, $W7) {
+          foreach ($dir in $D, $W7, $one) {
             Copy-Item ob\scipy_openblas32\lib\libscipy_openblas.dll $dir
             foreach ($f in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item "$crt\$f" $dir }
             Copy-Item "$env:SystemRoot\System32\libomp140.x86_64.dll" $dir
@@ -950,28 +999,65 @@ jobs:
           Copy-Item "$ucrt\*.dll" $W7
           Copy-Item standalone\release\README-windows.txt "$D\README.txt"
           Get-ChildItem -Recurse $D | Select-Object FullName, Length, @{n='version';e={$_.VersionInfo.FileVersion}}
-      # Windows 7: no runner can run it, so the only check is the one the
-      # freeze's Win7 leg uses -- every PE file's import and delay-import
-      # tables against what Windows 7 SP1 provides (curated; see the script).
-      - name: Windows 7 import gate (every binary in the zip)
+      # Gate: exactly the fat pair, its old-name copies (each the fat
+      # program's bytes), the DLLs and README.txt; nothing else.
+      - name: the zip's tree (programs, copies, DLLs)
         shell: pwsh
         run: |
+          python scripts/windows_fat/check_zip.py dist\momwire-nec5-windows-x64
+          if ($LASTEXITCODE) { exit 1 }
+      # Gate: the fat programs load what the one-variant builds load (load-time
+      # and delay-load lists), and Windows 7: no runner can run it, so the only
+      # check is the one the freeze's Win7 leg uses -- every PE file's import
+      # and delay-import tables against what Windows 7 SP1 provides (curated;
+      # see the script).
+      - name: import tables (fat against one-variant) and the Windows 7 import gate (every binary in the zip)
+        shell: pwsh
+        run: |
+          # the dependency lists (load-time and delay-load), header to Summary
+          function deps($exe) {
+            $out = @(dumpbin /nologo /dependents $exe)
+            $a = [array]::FindIndex($out, [Predicate[string]]{ param($l) $l -match 'Image has the following' })
+            $z = [array]::FindIndex($out, [Predicate[string]]{ param($l) $l -match '^\s*Summary' })
+            (($out[$a..($z - 1)] | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ }) -join '; ')
+          }
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            $f = "dist\momwire-nec5-windows-x64\momwire-nec5-$b.exe"
+            $df = deps $f
+            "momwire-nec5-$b.exe (fat): $((Get-Item $f).Length) bytes; $df"
+            foreach ($v in 'avx2', 'sse2') {
+              $o = "dist\one\momwire-nec5-$b-$v.exe"
+              $do = deps $o
+              "  one-variant $v : $((Get-Item $o).Length) bytes; $do"
+              if ($df -ne $do) { "::error::momwire-nec5-$b fat imports differ from $v"; $fail = 1 }
+            }
+          }
           python -m pip install -q pefile
           python scripts/eznec_freeze/scan_win7_imports.py dist\momwire-nec5-windows-x64
-          if ($LASTEXITCODE) { exit 1 }
-      # Each program carries the signature, the win7 copies included; in azure
-      # mode the chain must verify (sign.py checked the built files already).
+          if ($LASTEXITCODE) { $fail = 1 }
+          exit $fail
+      # Each program carries the signature, the copies and win7's included;
+      # in azure mode the chain must verify (sign.py checked the built files
+      # already). Ten programs: the fat pair and four old names at the top,
+      # the fat pair and two old names in win7.
       - name: signatures in the staged tree
         shell: pwsh
         run: |
-          foreach ($e in Get-ChildItem -Recurse dist\momwire-nec5-windows-x64 -Filter *.exe) {
+          $want = 10
+          $exes = @(Get-ChildItem -Recurse dist\momwire-nec5-windows-x64 -Filter *.exe)
+          foreach ($e in $exes) {
             $s = Get-AuthenticodeSignature $e.FullName
             "$($e.FullName): $($s.Status) $($s.SignerCertificate.Subject)"
             if (-not $s.SignerCertificate) { throw "$($e.Name) is not signed" }
             if ($env:MOMWIRE_SIGN_MODE -eq 'azure' -and $s.Status -ne 'Valid') { throw "$($e.Name): $($s.Status)" }
           }
+          if ($exes.Count -ne $want) { throw "$($exes.Count) executables in the zip's tree, expected $want" }
+          "signature present on all $($exes.Count) executables"
       # The tree alone: a PATH of System32 only, so each program finds every
-      # DLL it needs beside it; a deck and a SimNEC stream each.
+      # DLL it needs beside it; a deck and a SimNEC stream each. Each names
+      # the variant it should run: a new name the CPU's (this runner has
+      # AVX2), an old name its own, with line 2's rename note.
       - name: run from the staged tree
         shell: pwsh
         run: |
@@ -979,35 +1065,99 @@ jobs:
           $deck = "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec"
           $stream = "$PWD\scripts\core_split\nx_decks\simnec_stream_2281566.nec"
           $env:PATH = "$env:SystemRoot\System32"
+          Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore
           foreach ($e in Get-ChildItem -Recurse $D -Filter *.exe) {
-            & $e.FullName -version
+            $old = if ($e.BaseName -match '-(avx2|sse2)$') { $Matches[1] } else { '' }
+            $want = if ($old) { $old } else { 'avx2' }
+            $ver = & $e.FullName -version
+            $ver
+            if ($ver -notmatch "-standalone-$want ") { "::error::$($e.Name): -version names no $want"; exit 1 }
             $out = "$env:RUNNER_TEMP\$($e.Directory.Name)-$($e.BaseName).out"
             & $e.FullName $deck $out
             if ($LASTEXITCODE) { exit 1 }
-            "$($e.Directory.Name)\$($e.Name): $((Get-Content $out)[1])"
+            $line2 = (Get-Content $out)[1]
+            "$($e.Directory.Name)\$($e.Name): $line2"
             if (Select-String -Quiet "NEC ERROR" $out) { exit 1 }
+            if ($line2 -notmatch "^ momwire \S+ \S+ $want( |$)") { "::error::$($e.Name): line 2 names no $want"; exit 1 }
+            $note = "(renamed from $($e.BaseName))"
+            if ($old -and -not $line2.EndsWith(" $note")) { "::error::$($e.Name): line 2 lacks $note"; exit 1 }
+            if (-not $old -and $line2 -match 'renamed from') { "::error::$($e.Name): line 2 carries a rename note"; exit 1 }
             cmd /c "`"$($e.FullName)`" - - < `"$stream`" > `"$out.stream`""
             if ($LASTEXITCODE) { exit 1 }
             $n = (Select-String -Pattern 'INPUT LINE .* NX ' "$out.stream").Count
             "  stream: $n structures"
             if ($n -lt 1) { exit 1 }
           }
-      - name: contract tests (razor2p and bs2)
+      # Gate: byte for byte against the one-variant builds, both paths forced,
+      # every fixture deck and NX chain, the serial and the threaded copies
+      # (scripts/windows_fat/fat_compare.py).
+      - name: fat == one-variant, every fixture deck (razor2p and bs2, avx2 and sse2)
+        shell: pwsh
+        run: |
+          $D = "dist\momwire-nec5-windows-x64"
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              "=== momwire-nec5-$b $v"
+              venv\Scripts\python scripts/windows_fat/fat_compare.py "$D\momwire-nec5-$b.exe" $v "dist\one\momwire-nec5-$b-$v.exe" `
+                tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      # Gate (momwire#2090): each deprecated name, picked by its NAME on this
+      # avx2 runner (no MOMWIRE_FORCE_VARIANT), answers every fixture deck
+      # with the one-variant build of the variant it names, byte for byte
+      # apart from line 2's rename note, which every printout must carry
+      # (fat_compare.py --by-name). So an old -sse2 path computes the sse2
+      # build's bytes here, not the CPU's avx2 pick. Then the variable wins
+      # over the name.
+      - name: the deprecated names, picked by name (every fixture deck)
+        shell: pwsh
+        run: |
+          $D = "dist\momwire-nec5-windows-x64"
+          $fail = 0
+          foreach ($b in 'razor2p', 'bs2') {
+            foreach ($v in 'avx2', 'sse2') {
+              "=== momwire-nec5-$b-$v.exe"
+              venv\Scripts\python scripts/windows_fat/fat_compare.py "$D\momwire-nec5-$b-$v.exe" $v "dist\one\momwire-nec5-$b-$v.exe" `
+                tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks --by-name --copies policy
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+            "=== win7\momwire-nec5-$b-sse2.exe"
+            venv\Scripts\python scripts/windows_fat/fat_compare.py "$D\win7\momwire-nec5-$b-sse2.exe" sse2 "dist\one\momwire-nec5-$b-sse2.exe" `
+              tests/fixtures/razor_printout_3a/node_gap_two_sources.nec tests/fixtures/bspline_printout_buried/ab_hub16.nec `
+              tests/fixtures/eznec/decks/0068_nbs-yagi-ant-book-p-18-7.nec --by-name
+            if ($LASTEXITCODE) { $fail = 1 }
+            # MOMWIRE_FORCE_VARIANT wins over the name; MW_EXE_TIMES names both
+            foreach ($c in @(@('sse2', '', 'sse2'), @('sse2', 'avx2', 'avx2'), @('avx2', 'sse2', 'sse2'))) {
+              if ($c[1]) { $env:MOMWIRE_FORCE_VARIANT = $c[1] } else { Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore }
+              $env:MW_EXE_TIMES = '1'
+              $t = (& "$D\momwire-nec5-$b-$($c[0]).exe" -version 2>&1) -join ' | '
+              Remove-Item Env:MW_EXE_TIMES
+              "momwire-nec5-$b-$($c[0]).exe, MOMWIRE_FORCE_VARIANT='$($c[1])': $t"
+              if ($t -notmatch "simd $($c[2])" -or $t -notmatch "the name asks $($c[0])") { "::error::momwire-nec5-$b-$($c[0]).exe ran no $($c[2])"; $fail = 1 }
+            }
+            Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore
+          }
+          exit $fail
+      - name: contract tests (razor2p and bs2, the fat programs)
         shell: pwsh
         run: |
           $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
           $env:PATH = "$PWD\venv\Scripts;$env:PATH"
           $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
-          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-razor2p-avx2.exe"
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-razor2p.exe"
           venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
           if ($LASTEXITCODE) { exit 1 }
-          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-bs2-avx2.exe"
+          $env:MOMWIRE_RAZOR2P_STANDALONE_EXE = "$D\momwire-nec5-bs2.exe"
           $env:MOMWIRE_STANDALONE_BASIS = "bs2"
           venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_nopython.py -rs
           if ($LASTEXITCODE) { exit 1 }
       # Every fixture deck and the NX chains, as the launcher answers them,
       # within PRINTOUT_RTOL_WIN32; a deck a build does not serve refused by
-      # name. sse2 against the launcher on the extension's sse2 variant.
+      # name. The fat programs: avx2 by CPU, and sse2 forced, against the
+      # launcher on the extension's sse2 variant.
       - name: every fixture deck and the NX chains (razor2p and bs2, avx2 and sse2)
         shell: pwsh
         run: |
@@ -1023,7 +1173,7 @@ jobs:
               if ($b -eq 'bs2') { $extra = @('--basis', 'bs2', 'scripts/core_split/bs2_stream_decks'); $L = "$PWD\venv\Scripts\momwire-nec5-bs2.exe" }
               "=== $b $v"
               venv\Scripts\python scripts/core_split/exe_compare.py "exe-win-$b-$v.jsonl" --standalone --rtol win32 `
-                --exe "$D\momwire-nec5-$b-$v.exe" --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
+                --exe "$D\momwire-nec5-$b.exe" --launcher $L --workers 4 @extra tests/fixtures scripts/core_split/nx_decks
               if ($LASTEXITCODE) { $fail = 1 }
             }
           }
@@ -1035,6 +1185,75 @@ jobs:
           name: standalone-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: exe-win-*.jsonl
           if-no-files-found: ignore
+      # Gate: Intel SDE emulates each CPU's CPUID and faults on any
+      # instruction it lacks -- static initialisers included. The fat program
+      # picks by CPU here (no MOMWIRE_FORCE_VARIANT); the one-variant build of
+      # the variant that CPU should get answers under the same emulated CPU
+      # (the DLLs pick their kernels by CPUID too). -chip_check_exe_only: the
+      # check covers the executable's own instructions -- where both copies
+      # live -- and not the DLLs', which are the one-variant builds' own and
+      # fault under -wsm on their own (windows-fat.yml run 44010094276: the
+      # VC++ runtime's memcpy).
+      - uses: petarpetrovt/setup-sde@v6.0
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+      - name: SDE (wsm, snb -> sse2; hsw -> avx2), the picked path and three decks
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          $D = (Resolve-Path dist\momwire-nec5-windows-x64).Path
+          $fail = 0
+          Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore
+          foreach ($b in 'razor2p', 'bs2') {
+            $fat = "$D\momwire-nec5-$b.exe"
+            foreach ($cpu in 'wsm', 'snb', 'hsw') {
+              $want = if ($cpu -eq 'hsw') { 'avx2' } else { 'sse2' }
+              $env:MW_EXE_TIMES = '1'
+              $v = (& $sde "-$cpu" -chip_check_exe_only -- $fat -version 2>&1) -join ' | '
+              $rc = $LASTEXITCODE
+              Remove-Item Env:MW_EXE_TIMES
+              "momwire-nec5-$b under -$cpu : rc=$rc $v"
+              if ($rc -or $v -notmatch "-standalone-$want " -or $v -notmatch "simd $want") { "::error::momwire-nec5-$b -$cpu picked wrong or failed"; $fail = 1; continue }
+              if ($want -eq 'sse2' -and $v -match 'avx2 initializers') { "::error::momwire-nec5-$b -$cpu ran avx2 initializers"; $fail = 1 }
+              if ($want -eq 'avx2' -and $v -notmatch 'avx2 initializers') { "::error::momwire-nec5-$b -$cpu ran no avx2 initializers"; $fail = 1 }
+              venv\Scripts\python scripts/windows_fat/fat_compare.py $fat $want "dist\one\momwire-nec5-$b-$want.exe" `
+                tests/fixtures/razor_printout_3a/node_gap_two_sources.nec tests/fixtures/bspline_printout_buried/ab_hub16.nec `
+                tests/fixtures/eznec/decks/0068_nbs-yagi-ant-book-p-18-7.nec --auto --sde $sde --cpu $cpu --sde-extra=-chip_check_exe_only
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+            # an old -avx2 name on a CPU without AVX: no fault, the avx2
+            # build's refusal in the printout, with the rename note
+            $out = "$env:RUNNER_TEMP\wsm-$b-avx2.out"
+            $o = (& $sde -wsm -chip_check_exe_only -- "$D\momwire-nec5-$b-avx2.exe" "$PWD\tests\fixtures\razor_printout_3a\node_gap_two_sources.nec" $out 2>&1) -join ' | '
+            $rc = $LASTEXITCODE
+            $text = if (Test-Path $out) { Get-Content -Raw $out } else { '' }
+            "momwire-nec5-$b-avx2.exe under -wsm: rc=$rc $o"
+            ($text -split "`n")[1]
+            if ($rc -or $o -match 'SDE-ERROR' -or $text -notmatch 'lacks AVX2 and FMA' -or $text -notmatch "\(renamed from momwire-nec5-$b-avx2\)") {
+              "::error::momwire-nec5-$b-avx2.exe under -wsm did not refuse cleanly"; $fail = 1
+            }
+          }
+          exit $fail
+      # Westmere over the whole corpus (~35 min a program): tags, main pushes
+      # and dispatch, not pull requests, which run the three decks above.
+      - name: SDE Westmere, every fixture deck (the sse2 path picked by CPU)
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $sde = Join-Path $env:SDE_PATH 'sde.exe'
+          $D = "dist\momwire-nec5-windows-x64"
+          $fail = 0
+          Remove-Item Env:MOMWIRE_FORCE_VARIANT -ErrorAction Ignore
+          foreach ($b in 'razor2p', 'bs2') {
+            "=== momwire-nec5-$b -wsm"
+            $t0 = Get-Date
+            venv\Scripts\python scripts/windows_fat/fat_compare.py "$D\momwire-nec5-$b.exe" sse2 "dist\one\momwire-nec5-$b-sse2.exe" `
+              tests/fixtures scripts/core_split/nx_decks scripts/core_split/bs2_stream_decks --auto --sde $sde --cpu wsm --sde-extra=-chip_check_exe_only
+            if ($LASTEXITCODE) { $fail = 1 }
+            "  $([int]((Get-Date) - $t0).TotalSeconds) s"
+          }
+          exit $fail
       # The name rides on the ZIP FILE, as eznec-dropin.yml's does: canonical
       # only on a pushed tag; a dispatch with the real certificate is a
       # SIGNTEST, and every other run a SELFSIGNED-rehearsal, so an unzipped
@@ -1048,6 +1267,9 @@ jobs:
                   else { "$stem-SELFSIGNED-rehearsal" }
           "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Compress-Archive -Path dist\momwire-nec5-windows-x64 -DestinationPath "dist\$base.zip"
+          "dist\$base.zip: $((Get-Item "dist\$base.zip").Length) bytes"
+          python scripts/windows_fat/check_zip.py "dist\$base.zip"
+          if ($LASTEXITCODE) { exit 1 }
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE }}
