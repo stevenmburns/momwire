@@ -6887,14 +6887,25 @@ class SinusoidalSolver(
     # The near-interface levers (momwire#1980): every one explicitly off
     # here, since this family honours none (`_features.Feature.solvers`).
     @_near_interface.under_levers
-    def _assemble_Z(self, geom, k, eta=None, obs_rows=None):
-        """`_assemble_Z_filled` on the fill report's clock (momwire#2016)."""
+    def _assemble_Z(self, geom, k, eta=None, obs_rows=None, order="C"):
+        """`_assemble_Z_filled` on the fill report's clock (momwire#2016).
+
+        `order="F"` (momwire#2071) asks for Z in LAPACK's order where the
+        fill can write it so; see `_assemble_Z_filled`. Only a caller that
+        factors Z as Z (not Zᵀ) asks, since the order decides nothing else.
+        """
         with _fill_report.fill_clock(self):
+            if order != "C":
+                # SG's override of `_assemble_Z_filled` takes no order; its
+                # own solves never ask for one.
+                return self._assemble_Z_filled(
+                    geom, k, eta, obs_rows=obs_rows, order=order
+                )
             if obs_rows is None:
                 return self._assemble_Z_filled(geom, k, eta)
             return self._assemble_Z_filled(geom, k, eta, obs_rows=obs_rows)
 
-    def _assemble_Z_filled(self, geom, k, eta=None, obs_rows=None):
+    def _assemble_Z_filled(self, geom, k, eta=None, obs_rows=None, order="C"):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
 
         `obs_rows` (momwire#1912, the sector route): a sorted index array of
@@ -7069,7 +7080,18 @@ class SinusoidalSolver(
 
         if obs_rows is None:
             spans = [(0, N)]
-            G = np.zeros((N, N), dtype=np.complex128)
+            # momwire#2071: Z in LAPACK's order where every writer below
+            # takes any strides -- the fused band (`out[m*rs + j*cs]`) and
+            # the loading after it (numpy, elementwise; the NEC-4 cap columns
+            # and the contact correction never follow the fused band, which
+            # declines both NEC-4 and a finite ground). Each element is
+            # computed as before and only stored elsewhere, so this Z is the
+            # C-order Z's bits, and it is exactly the matrix
+            # `_lapack.solve`'s Fortran copy of that Z would have been. The
+            # two-pass band and `pair_reuse` reduce into contiguous rows
+            # only, so they keep C order (and the solve's copy).
+            f_order = order == "F" and fused is not None
+            G = np.zeros((N, N), dtype=np.complex128, order="F" if f_order else "C")
         else:
             spans = _schedule.runs(obs_rows)
             G = np.zeros((obs_rows.size, N), dtype=np.complex128)
@@ -8689,7 +8711,15 @@ class SinusoidalSolver(
             return self._compute_port_solution_rotational()
         geom = self._build_geometry()
         with self._operating_medium(geom) as medium:
-            G, seg_view = self._assemble_Z(geom, self.k, self._medium_eta(medium))
+            # Z in LAPACK's order where the fill writes it so (momwire#2071),
+            # factored below in its own storage: the bytes the solve's
+            # Fortran copy of a C-order Z would hold, so the same getrf and
+            # the same answer, without the copy. `compute_impedance` factors
+            # Zᵀ of the C-order fill instead, also copy-free; asking it for F
+            # order would change its pivots.
+            G, seg_view = self._assemble_Z(
+                geom, self.k, self._medium_eta(medium), order="F"
+            )
             k_solve = self.k
         feed_segs = geom["feed_segs"]
         n_ports = len(feed_segs)
@@ -8701,7 +8731,9 @@ class SinusoidalSolver(
         B = np.zeros((n_segs, n_ports), dtype=np.complex128)
         for j, fi in enumerate(feed_segs):
             B[fi, j] = -1.0 / geom["seg_h"][fi]
-        alphas = _lapack.solve(G, B)  # (n_segs, n_ports)
+        # G holds the factors after an F-ordered solve; nothing reads it.
+        alphas = _lapack.solve(G, B, overwrite_a=True)  # (n_segs, n_ports)
+        del G
 
         Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
         for j in range(n_ports):
