@@ -2648,14 +2648,14 @@ std::vector<cd> assemble_Z(const Front &fr, const nec4::SolverArgs &args, const 
     return G;
 }
 
-PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const FillLinalg &la) {
+PortSolution solve_ports(const Front &fr, std::vector<cd> &&G, const FillLinalg &la) {
     if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
     PortSolution ps;
-    ps.G = assemble_Z(fr, args, la.np);
     const Geometry &g = fr.geometry;
     const SegView &sv = fr.basis;
     const ll N = g.n_segs, P = static_cast<ll>(g.feed_segs.size());
     const std::size_t Nz = static_cast<std::size_t>(N), Pz = static_cast<std::size_t>(P);
+    if (G.size() != Nz * Nz) decline("a Z of the wrong size");
     ps.n = N;
     ps.n_ports = P;
     // B[fi, j] = -1 / seg_h[fi]
@@ -2665,50 +2665,36 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
         x[fi + j * Nz] = cd(-1.0 / g.seg_h[fi], 0.0);
     }
     if (P > 0) {
-        // `scipy.linalg.solve(G, B)`: finite inputs, then the structure it detects
-        for (const cd &v : ps.G)
+        // `_lapack.solve_transposed(G, B)` (momwire#2071): finite inputs, then
+        // getrf on G's own buffer and getrs 'T'. G is row-major, which LAPACK
+        // reads as Zᵀ, so its factors overwrite it and no second N x N array
+        // exists. Every square Z of order >= 2 is factored as general: the
+        // Python route runs no structure detection either, so there is no
+        // symmetric or banded Z to decline. No gecon: Python's estimate only
+        // decides a LinAlgWarning, which the launchers send to a sink
+        // (`_quiet_advisories`), so it never reaches a printout or stderr.
+        for (const cd &v : G)
             if (!std::isfinite(v.real()) || !std::isfinite(v.imag())) decline("a non-finite Z");
         if (N == 1) {
-            if (ps.G[0] == cd(0.0, 0.0)) decline("a singular 1x1 Z");
-            for (std::size_t j = 0; j < Pz; j++) x[j] = nec5::replay::np_cdiv(x[j], ps.G[0]);
+            // `scipy.linalg.solve`'s scalar route: a plain division
+            if (G[0] == cd(0.0, 0.0)) decline("a singular 1x1 Z");
+            for (std::size_t j = 0; j < Pz; j++) x[j] = nec5::replay::np_cdiv(x[j], G[0]);
         } else {
-            // scipy takes a diagonal, triangular or tridiagonal matrix (lower
-            // or upper bandwidth at most 1), a symmetric and a Hermitian one
-            // to other drivers (measured: a wider band, a block-diagonal one
-            // and scattered zeros all take getrf / getrs)
-            bool sym = true, her = true;
-            std::size_t lower = 0, upper = 0;
-            for (std::size_t i = 0; i < Nz; i++)
-                for (std::size_t j = 0; j < Nz; j++) {
-                    const cd a = ps.G[i * Nz + j], b = ps.G[j * Nz + i];
-                    if (a != cd(0.0, 0.0)) {
-                        if (i > j) lower = std::max(lower, i - j);
-                        if (j > i) upper = std::max(upper, j - i);
-                    }
-                    if (j > i) {
-                        if (a != b) sym = false;
-                        if (a != std::conj(b)) her = false;
-                    } else if (j == i && a.imag() != 0.0) {
-                        her = false;
-                    }
-                }
-            if (lower <= 1 || upper <= 1) decline("a banded or triangular Z (scipy's structure detection)");
-            if (sym || her) decline("a symmetric or Hermitian Z (scipy's structure detection)");
             const auto t_factor = std::chrono::steady_clock::now();
-            std::vector<cd> lu(Nz * Nz);
-            for (std::size_t i = 0; i < Nz; i++)
-                for (std::size_t j = 0; j < Nz; j++) lu[i + j * Nz] = ps.G[i * Nz + j];
             std::vector<int> ipiv(Nz);
             int n = static_cast<int>(N), nrhs = static_cast<int>(P), info = 0;
-            la.lu.getrf(&n, &n, lu.data(), &n, ipiv.data(), &info);
+            la.lu.getrf(&n, &n, G.data(), &n, ipiv.data(), &info);
             if (info != 0) decline("a singular Z (scipy's LinAlgError)");
-            char trans = 'N';
-            la.lu.getrs(&trans, &n, &nrhs, lu.data(), &n, ipiv.data(), x.data(), &n, &info);
+            char trans = 'T';
+            la.lu.getrs(&trans, &n, &nrhs, G.data(), &n, ipiv.data(), x.data(), &n, &info);
             if (info != 0) decline("getrs failed");
             ps.factor_seconds =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - t_factor).count();
         }
     }
+    // The factors die here, before the readout: nothing past the solve
+    // reads Z.
+    std::vector<cd>().swap(G);
     ps.coeffs.assign(Nz * Pz, cd(0.0, 0.0));
     for (std::size_t i = 0; i < Nz; i++)
         for (std::size_t j = 0; j < Pz; j++) ps.coeffs[i * Pz + j] = x[i + j * Nz];
@@ -2728,6 +2714,11 @@ PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const 
             ps.y[i * Pz + j] = nec5::replay::np_csum(terms);
         }
     return ps;
+}
+
+PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const FillLinalg &la) {
+    if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
+    return solve_ports(fr, assemble_Z(fr, args, la.np), la);
 }
 
 // --- the comparison format ---------------------------------------------------
@@ -2799,9 +2790,17 @@ std::string dump_fill(const std::string &text, const FillLinalg &la, std::size_t
             std::string q = at(p + ".points", j);
             try {
                 const Front fr = front(sb.points[j].args);
-                const PortSolution ps = port_solution(fr, fr.args, la);
-                const std::size_t n = static_cast<std::size_t>(ps.n), np_ = static_cast<std::size_t>(ps.n_ports);
-                matrix(o, q + ".G", ps.G, n, n, whole);
+                // Z is dumped as filled, before `solve_ports` factors it in its
+                // own buffer: `port_solution`'s two halves, with nothing kept
+                // past the dump (a decline drops the G lines with the point).
+                if (la.lu.getrf == nullptr || la.lu.getrs == nullptr) decline("no LU routines");
+                std::vector<cd> G = assemble_Z(fr, fr.args, la.np);
+                const std::size_t n = static_cast<std::size_t>(fr.geometry.n_segs);
+                Out z;
+                matrix(z, q + ".G", G, n, n, whole);
+                const PortSolution ps = solve_ports(fr, std::move(G), la);
+                const std::size_t np_ = static_cast<std::size_t>(ps.n_ports);
+                o.s += z.s;
                 matrix(o, q + ".coeffs", ps.coeffs, n, np_, whole);
                 matrix(o, q + ".y", ps.y, np_, np_, whole);
             } catch (const FrontError &e) {

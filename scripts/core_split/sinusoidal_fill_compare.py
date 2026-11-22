@@ -3,13 +3,14 @@ by deck.
 
 `src/momwire/_sinusoidal_fill_core.cpp` copies `SinusoidalSolver.
 compute_port_solution` in free space (momwire#1607 B3): `_assemble_Z`'s
-chunks, field tensors and reduction, `_lapack.solve(G, B)` and the feed
-currents into Y.
+chunks, field tensors and reduction, `_lapack.solve_transposed(G, B)` (Zᵀ
+factored in G's own storage, momwire#2071) and the feed currents into Y.
 
 The operating points come from the NEC-4.2 build, recorded exactly as
 `sinusoidal_front_compare.py` records them. Each point's constructor kwargs
 are handed to the REAL `SinusoidalSolver`, its `compute_port_solution()` is
-run with `_assemble_Z`'s G captured, and G, the coefficients and Y are dumped
+run with `_assemble_Z`'s G copied as filled (the solve then overwrites it
+with its factors), and G, the coefficients and Y are dumped
 in the format the core's `dump_fill` writes: whole up to 64 columns (or
 `whole`), by row digest beyond (`_digest`). A deck the C++ declines anywhere is counted apart
 and not compared.

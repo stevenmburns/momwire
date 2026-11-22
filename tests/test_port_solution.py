@@ -392,11 +392,11 @@ def _count(monkeypatch, obj, name):
 
 
 # (namespace, entry point) each segment family factors through. The
-# point-matched family solves through `_lapack.solve`, which on a general G
-# runs SciPy's getrf + getrs directly rather than `scipy.linalg.solve`, so it
+# point-matched family solves through `_lapack.solve_transposed` (Gᵀ in G's
+# own storage, momwire#2071), which runs SciPy's getrf + getrs directly, so it
 # is counted there; the Galerkin family factors G with `scipy.linalg.lu_factor`.
 SEGMENT_FACTOR = {
-    SinusoidalSolver: ("_lapack", "solve"),
+    SinusoidalSolver: ("_lapack", "solve_transposed"),
     SinusoidalGalerkinSolver: ("scipy.linalg", "lu_factor"),
 }
 
@@ -422,7 +422,7 @@ def test_one_fill_and_one_factorisation_per_call(monkeypatch, cls, fixture, requ
     solver = cls(**_tight(cls, fixture()))
     fills = _count(monkeypatch, solver, fill_name)
     # The segment families' solve counter goes on the module-level entry
-    # point they call (`SEGMENT_FACTOR`): `_lapack.solve` for the
+    # point they call (`SEGMENT_FACTOR`): `_lapack.solve_transposed` for the
     # point-matched family, `lu_factor` for the Galerkin one, which factors G
     # in place (`_solve_in_place`, momwire#1224).
     module = type(solver).__module__

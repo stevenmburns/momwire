@@ -4,8 +4,8 @@ the bit.
 `src/momwire/_sinusoidal_fill_core.cpp` copies `compute_port_solution` in
 free space (momwire#1607 B3): `_assemble_Z` (the field tensors from B1's
 kernels, numpy's zgemm reduction below `_DENSE_ASSEMBLY_THRESHOLD` and
-scipy's CSR tile sums above it), `scipy.linalg.solve(G, B)` and the feed
-currents into Y. `scripts/core_split/sinusoidal_fill_compare.py` runs the
+scipy's CSR tile sums above it), `_lapack.solve_transposed(G, B)` (getrf on
+Zᵀ in G's own storage, getrs 'T'; momwire#2071) and the feed currents into Y. `scripts/core_split/sinusoidal_fill_compare.py` runs the
 REAL solver at every operating point the NEC-4.2 build records, and these
 tests hold the C++ dump (Z, the coefficients, Y) equal to it over:
 - the NEC-4.2 fixtures;
