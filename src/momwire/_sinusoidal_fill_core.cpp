@@ -2671,8 +2671,8 @@ PortSolution solve_ports(const Front &fr, std::vector<cd> &&G, const FillLinalg 
         // exists. Every square Z of order >= 2 is factored as general: the
         // Python route runs no structure detection either, so there is no
         // symmetric or banded Z to decline. No gecon: Python's estimate only
-        // decides a LinAlgWarning, which the launchers send to a sink
-        // (`_quiet_advisories`), so it never reaches a printout or stderr.
+        // decides a LinAlgWarning, an advisory that never reaches a printout
+        // (the launchers show advisories on stderr; this route raises none).
         for (const cd &v : G)
             if (!std::isfinite(v.real()) || !std::isfinite(v.imag())) decline("a non-finite Z");
         if (N == 1) {
