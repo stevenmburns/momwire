@@ -1,24 +1,23 @@
 {
- "commit": "78fab8f6dda186392087b1847d06d99a200c7789",
+ "commit": "5f6f05a699ab6db2d609d5bb655e44afaac6a8c8",
  "generator": "scripts/golden_printouts.py --corpus stable",
  "version_mask": "<version>",
  "regime": {
-  "momwire": "0.87.1",
+  "momwire": "0.96.0",
   "accelerator_variant": "avx2",
-  "numpy": "2.5.4",
+  "numpy": "2.5.5",
   "scipy": "1.18.1",
-  "python": "3.12.15",
+  "python": "3.12.3",
   "machine": "x86_64",
   "system": "Linux",
-  "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+  "cpu": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
   "threadpools_during_render": [
    {
-    "user_api": "blas",
-    "internal_api": "openblas",
+    "user_api": "openmp",
+    "internal_api": "openmp",
     "num_threads": 1,
-    "filepath": "libscipy_openblas64_-f48b354e.so",
-    "version": "0.3.34.106.0",
-    "architecture": "Haswell"
+    "filepath": "libgomp.so.1.0.0",
+    "version": null
    },
    {
     "user_api": "blas",
@@ -29,11 +28,12 @@
     "architecture": "Haswell"
    },
    {
-    "user_api": "openmp",
-    "internal_api": "openmp",
+    "user_api": "blas",
+    "internal_api": "openblas",
     "num_threads": 1,
-    "filepath": "libgomp.so.1.0.0",
-    "version": null
+    "filepath": "libscipy_openblas64_-4b78795a.so",
+    "version": "0.3.34.237.2",
+    "architecture": "Haswell"
    }
   ],
   "somm_disk_cache": "0"
@@ -45,7 +45,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__0223_dipole-ex6.out",
    "deck_sha256": "4acf2dfb07eafe7fa005d01db4f17656d7b79888d5f865698498da3acdbe6d12",
-   "printout_sha256": "5a34515af89dd3173e4cca7ba354679ee6ef6be73fb1345fa5881588277ffb26"
+   "printout_sha256": "a89042944de92b57a9d6ca46c7bd9538ebb0a9ef66cb801430c905be2e3f4574"
   },
   {
    "deck": "eznec_nec42/0224_dipole-ex0.nec",
@@ -141,7 +141,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__0237_dipole-ex6-elevation.out",
    "deck_sha256": "350ab569dfea9eaa5c2eb40b8bcc4b7f22da3bd47f2e68950dfd904064b679b8",
-   "printout_sha256": "e8529c83e8821ab525b0de4c353a46623332b7424dc0ce8acbbd64be8c2345ad"
+   "printout_sha256": "85824a49ef5e6dbc42ff7538122b9f28c06e0ca946d0114aa9cdc8a5f7992c88"
   },
   {
    "deck": "eznec_nec42/0238_dipole-ex6-3d.nec",
@@ -149,7 +149,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__0238_dipole-ex6-3d.out",
    "deck_sha256": "fdcf569b473f478729c4431f7b1535f03d79f5a8cc6fe4bd922c998b1bdd4796",
-   "printout_sha256": "afd1849d6cbfac3c71d22134e9f122cfb69ee9bf436c02ebe64ee5ec135d17fa"
+   "printout_sha256": "757086095458e8eecc68d4597a3617ec7dbaf447502c8d375f78b64782fea481"
   },
   {
    "deck": "eznec_nec42/0239_dipole-buried-gn3.nec",
@@ -157,7 +157,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__0239_dipole-buried-gn3.out",
    "deck_sha256": "763dd1f760be6c62bd90d29081e64b53d308a173d837d2e713d485cdacf0e453",
-   "printout_sha256": "a827ab42aab7ecb5965eae3ce785512a861fc77eec0a8f342ea55e91befbf1e5"
+   "printout_sha256": "e027a721c66221f1c6efc5c21e08fd3a6bdd86a55a9024817ca5d3befbd5beee"
   },
   {
    "deck": "eznec_nec42/multisource/m1_cardioid-2-current-sources.nec",
@@ -205,7 +205,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__probes__p4_near_field.out",
    "deck_sha256": "3c0b8ea9813fdbf550aba73182bbc381d693eea5f67c71a37f54e903c2b93f32",
-   "printout_sha256": "934a69351f72267011de3d7817b934580016198e79a1dea0fcb30065e87fe0b1"
+   "printout_sha256": "db5dd83c94d96621020e884c1be406b7407ec9db3542ce66f5381c771b2b13ab"
   },
   {
    "deck": "eznec_nec42/probes/p5_gd_xq.nec",
@@ -261,7 +261,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__probes__p13_ne1_gn3.out",
    "deck_sha256": "8c0ffea44273c07a834eabad8322f3654607f6750942a1218eb11adaa2eb1cac",
-   "printout_sha256": "0b60559abb91e1a3e984a4319014d783fe18d9f84075a5b020eb0ad8b4fc19e5"
+   "printout_sha256": "e6e5388462556535f34ef3fd93f948b35966646942f2e9e1214ba525b99fbb14"
   },
   {
    "deck": "eznec_nec42/probes/p15_ne1_gn2.nec",
@@ -269,7 +269,7 @@
    "basis": "sinusoidal",
    "golden": "nec4-sinusoidal/eznec_nec42__probes__p15_ne1_gn2.out",
    "deck_sha256": "531c4b7530d3228c1c57869046c2dfbf76aedf5ebd9e961399cb9dc87e63273d",
-   "printout_sha256": "b5482041f68d0977de88194718d8e3bfd81cc9dd41b3af65f85960ab1103426b"
+   "printout_sha256": "01b2d444aa80fd803c7346bcb6bd10e933dea716b8fc8a5e0a8e328651d0e20d"
   },
   {
    "deck": "eznec_nec42/probes/p16_rp_range_gn3.nec",
