@@ -269,7 +269,8 @@ at a point in space, not as NEC-5's current source on a segment. For a
 current source on a segment, write `EX 6` with the same tag and segment.
 
 A wire listed twice (two wire cards whose ends coincide, in either
-direction) is refused by `momwire-nec42-sinusoidal`, naming the `GW` tags of
+direction) is refused by `momwire-nec42-sinusoidal`, `momwire-nec42-bs2`
+and `momwire-nec42-bs1`, naming the `GW` tags of
 each set of copies; NEC-4.2 stops on such a deck too. Delete the copy. A
 `GM` that moves a wire without copying it is not a duplicate and serves.
 

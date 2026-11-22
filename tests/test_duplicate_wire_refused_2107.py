@@ -1,8 +1,10 @@
-"""A wire listed twice on the NEC-4.2 slot's sinusoidal route: refused by
-name (momwire#2107).
+"""A wire listed twice on the NEC-4.2 slot's sinusoidal, bspline and
+bspline-d1 routes: refused by name (momwire#2107).
 
-The NEC-4.2 slot on the sinusoidal basis (`momwire-nec42-sinusoidal`).
-#1042's merge does not reach this route whole: the nec4 dialect's mesh cuts
+The NEC-4.2 slot on the sinusoidal basis (`momwire-nec42-sinusoidal`), and
+since Steve's 11-22 decision on the bs2 and bs1 bases too, which print the
+same rounding residue (bs2: 43.95 ohm for the reversed parasite where the
+deck without its copy prints 65.22; bs1: 40.08 against 58.58). #1042's merge does not reach this route whole: the nec4 dialect's mesh cuts
 each wire into pieces, the copy merges piece by piece, and the pieces at its
 ends, joined differently from their twins', stay in place, so Z is singular
 and the printout reads rounding residue (duplicate_monopoles_on_gn1 printed
@@ -12,8 +14,9 @@ slot refuses it, before the build, in the deck's own GW tags: any count of
 copies, either direction. A GM that moves without copying is no duplicate
 and prints. The Python slot and the C++ run half say the same sentence.
 
-The bs2 basis on the same slot is out of this issue's scope (Steve, 11-22)
-and is pinned as not refusing, so a widening is a deliberate edit.
+The slot's other bases are not widened here: pulse refuses the copy in
+its own words, and arrayblock / hmatrix are pinned as printing, so a
+widening is a deliberate edit.
 """
 
 from __future__ import annotations
@@ -92,23 +95,31 @@ def _render(text: str, basis: str) -> str:
         return _nec4.render(text, basis=basis)
 
 
+# the bases the slot refuses a duplicate on (`_nec4._REFUSES_DUPLICATES`),
+# each by its canonical name and, for bs2 and bs1, its long spelling
+REFUSING = ["sinusoidal", "bs2", "bspline", "bs1", "bspline-d1"]
+
+
+@pytest.mark.parametrize("basis", REFUSING)
 @pytest.mark.parametrize("name", list(DUPLICATES))
-def test_the_sinusoidal_nec42_slot_refuses_a_wire_listed_twice(name):
+def test_the_nec42_slot_refuses_a_wire_listed_twice(name, basis):
     text, named, copies = DUPLICATES[name]
-    out = _render(text, "sinusoidal")
+    out = _render(text, basis)
     assert sentence(named, copies) in out, out[-700:]
     assert "CURRENTS AND LOCATION" not in out
 
 
-def test_a_gm_that_copies_nothing_still_prints():
-    out = _render(BY_GM, "sinusoidal")
+@pytest.mark.parametrize("basis", REFUSING)
+def test_a_gm_that_copies_nothing_still_prints(basis):
+    out = _render(BY_GM, basis)
     assert "NEC ERROR" not in out, out[-700:]
     assert "ANTENNA INPUT PARAMETERS" in out
 
 
-def test_the_bs2_nec42_slot_is_not_widened():
-    # Steve's 11-22 scope: the sinusoidal basis only
-    out = _render(DUPLICATES["reversed"][0], "bs2")
+@pytest.mark.parametrize("basis", ["arrayblock", "hmatrix"])
+def test_the_other_bases_are_not_widened(basis):
+    # Steve's 11-22 scope: sinusoidal, bs2 and bs1
+    out = _render(DUPLICATES["reversed"][0], basis)
     assert "momwire#2107" not in out
     assert "ANTENNA INPUT PARAMETERS" in out
 
@@ -131,34 +142,39 @@ def _run_compare():
     return mod
 
 
-@pytest.fixture(scope="module")
-def cxx():
+# the bases with a C++ NEC-4.2 run half (bs1 has none: it builds in Python)
+CXX_BASES = ["sinusoidal", "bs2"]
+
+
+@pytest.fixture(scope="module", params=CXX_BASES)
+def cxx(request):
     from momwire import _accel
 
-    if _accel.acc is None or not hasattr(_accel.acc, "sinusoidal_nec4_printout"):
-        pytest.skip("no compiled accelerator with the NEC-4.2 run half")
     rc = _run_compare()
+    basis = request.param
+    if _accel.acc is None or not hasattr(_accel.acc, rc.BINDINGS[basis]):
+        pytest.skip(f"no compiled accelerator with the {basis} NEC-4.2 run half")
     try:
-        rc.blas_addresses()
+        rc.blas_addresses(basis)
     except (IndexError, AttributeError, OSError):
         pytest.skip("no bundled OpenBLAS beside numpy / SciPy (not a wheel install)")
-    return rc, _accel.acc
+    return rc, _accel.acc, basis
 
 
 @pytest.mark.parametrize("name", list(DUPLICATES))
 def test_the_cxx_run_half_refuses_it_in_the_same_words(name, cxx):
-    rc, acc = cxx
+    rc, acc, basis = cxx
     text, named, copies = DUPLICATES[name]
-    ok, out = rc.cxx_printout(text, acc)
+    ok, out = rc.cxx_printout(text, acc, basis=basis)
     assert ok, out[:400]
     assert sentence(named, copies) in out, out[-700:]
-    a, _ = rc.mask(rc.py_printout(text))
+    a, _ = rc.mask(rc.py_printout(text, basis))
     b, _ = rc.mask(out)
     assert rc.first_difference(a, b) is None, rc.first_difference(a, b)
 
 
 def test_the_cxx_run_half_prints_the_gm_deck(cxx):
-    rc, acc = cxx
-    ok, out = rc.cxx_printout(BY_GM, acc)
+    rc, acc, basis = cxx
+    ok, out = rc.cxx_printout(BY_GM, acc, basis=basis)
     assert ok, out[:400]
     assert "NEC ERROR" not in out
