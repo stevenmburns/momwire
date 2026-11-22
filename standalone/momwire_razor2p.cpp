@@ -57,7 +57,9 @@
 // each answer writes one `times:` line on stderr, its stages in milliseconds
 // (`_mw_times.h`). Off, nothing is timed and the printout is unchanged.
 //   MW_EXE_COPY=threads      one thread through the OpenMP copy, not the serial one
-//   MOMWIRE_FORCE_VARIANT=avx2|sse2  (fat build) the path, instead of the CPU's pick
+//   MOMWIRE_FORCE_VARIANT=avx2|sse2  (fat build) the path, instead of the CPU's pick;
+//                            a deprecated `-avx2` / `-sse2` file name asks the
+//                            same when the variable is unset (exe_name.h)
 //   MW_EXE_FAIL=alloc|runtime  (no-Python build) throw from the solve, to test
 //                            the INTERNAL ERROR printout
 #include "_mw_times.h"
@@ -70,6 +72,7 @@
 #if MW_EXE_DIALECT_NEC2
 #include "_nec2_printout_core.h"
 #endif
+#include "exe_name.h"
 #include "route.h"
 #define mw mws
 #include "route.h"
@@ -108,6 +111,7 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mws, mwas, stamp_uncertified(on)); }
+inline void stamp_note(const std::string &note) { MW_PICK(mws, mwas, stamp_note(note)); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mws, mwas, reuse_plans(built, declined, found));
 }
@@ -140,6 +144,7 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mw, mwa, stamp_uncertified(on)); }
+inline void stamp_note(const std::string &note) { MW_PICK(mw, mwa, stamp_note(note)); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mw, mwa, reuse_plans(built, declined, found));
 }
@@ -581,6 +586,12 @@ bool feature_default_here(const std::string &name) {
 // Line 2's feature tail for this run (the routes' `ni_eval::requested_stamp`,
 // for the printouts this file writes itself).
 std::string g_feature_stamp;
+#if MW_EXE_FAT
+// The variant a deprecated `-avx2` / `-sse2` name asks for, or "", and line
+// 2's "(renamed from ...)" note for it (`pick_variant`, exe_name.h).
+std::string g_name_variant;
+std::string g_name_note;
+#endif
 
 // One sentence on stderr and exit 2 when a feature this executable does not
 // run is on; 0 (go on) otherwise, with the ones it runs asked of both copies
@@ -644,6 +655,15 @@ int feature_refusal() {
         rt_serial::stamp_uncertified(true);
         rt_threads::stamp_uncertified(true);
     }
+#if MW_EXE_FAT
+    // a deprecated variant name (`pick_variant`): its note ends line 2, after
+    // the features, as Python's basis rename note does (`_printout.engine_stamp`)
+    if (!g_name_note.empty()) {
+        g_feature_stamp += (g_feature_stamp.empty() ? "" : " ") + g_name_note;
+        rt_serial::stamp_note(g_name_note);
+        rt_threads::stamp_note(g_name_note);
+    }
+#endif
     return 0;
 }
 
@@ -1012,9 +1032,27 @@ bool cxx_variant_ok() {
 // MOMWIRE_FORCE_VARIANT, the extension's override, names one: sse2 forces the
 // baseline; avx2 on a CPU without it is the avx2 build's own refusal
 // (`cxx_variant_ok`), and no avx2 code runs.
+//
+// The executable's own name asks too (momwire#2090, exe_name.h): a copy
+// under a deprecated `-avx2` / `-sse2` name runs that variant, as the
+// variable would, and the variable wins when both are given. Line 2 then
+// carries the rename note (`g_name_note`, `feature_refusal`).
 void run_avx2_initializers();
+std::string own_path() {
+#if defined(_WIN32)
+    std::string buf(32768, '\0');
+    const DWORD n = GetModuleFileNameA(nullptr, &buf[0], static_cast<DWORD>(buf.size()));
+    buf.resize(n < buf.size() ? n : 0);
+    return buf;
+#else
+    return "";
+#endif
+}
 void pick_variant() {
-    const std::string forced = env("MOMWIRE_FORCE_VARIANT");
+    g_name_variant = mw_exe_name::variant_from_path(own_path());
+    g_name_note = mw_exe_name::deprecation_note(MW_EXE_LAUNCHER, g_name_variant);
+    std::string forced = env("MOMWIRE_FORCE_VARIANT");
+    if (forced.empty()) forced = g_name_variant;
     const bool has = cpu_has_avx2();
     const bool avx2 = forced == "avx2" || (forced != "sse2" && has);
     EXE_VARIANT = avx2 ? "avx2" : "sse2";
@@ -1351,7 +1389,10 @@ int main(int argc, char **argv) {
 #endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
-    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+    if (env("MW_EXE_TIMES") == "1") {
+        std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+        if (!g_name_variant.empty()) std::fprintf(stderr, "cxx: the name asks %s\n", g_name_variant.c_str());
+    }
 #endif
     if (const int refused = feature_refusal()) return refused;
     times_begin();
@@ -2030,7 +2071,10 @@ int main(int argc, char **argv) {
 #endif
 #if MW_EXE_FAT
     pick_variant();  // before anything reaches a route copy (feature_refusal does)
-    if (env("MW_EXE_TIMES") == "1") std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+    if (env("MW_EXE_TIMES") == "1") {
+        std::fprintf(stderr, "cxx: simd %s\n", EXE_VARIANT);
+        if (!g_name_variant.empty()) std::fprintf(stderr, "cxx: the name asks %s\n", g_name_variant.c_str());
+    }
 #endif
     if (const int refused = feature_refusal()) return refused;
     times_begin();

@@ -53,6 +53,9 @@ bool withdraw_features(const std::vector<std::string> &names);
 // (a certification build running a feature past its reach, as Python's
 // `_features.stamp` says it there; momwire#1911).
 void stamp_uncertified(bool on);
+// Line 2 ends in `note` after the features (a deprecated executable name's
+// "(renamed from ...)", momwire#2090); "" (the default) adds nothing.
+void stamp_note(const std::string &note);
 // razor2p's fill-pair reuse plans (momwire#1971, `razor::reuse::cache_counters`;
 // on the sinusoidal route its own, `sinusoidal::pair_reuse::counters`)
 // this copy has built, how many of those built came back declined, and how
