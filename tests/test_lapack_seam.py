@@ -474,6 +474,7 @@ def _spy_callers(monkeypatch):
         "factor_and_solve",
         "lu_solve",
         "solve",
+        "solve_transposed",
         "solve_stacked",
         "inv_stacked",
     ):

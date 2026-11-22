@@ -17,6 +17,9 @@ here                        default call
 :func:`lu_factor`           ``scipy.linalg.lu_factor``
 :func:`lu_solve`            ``scipy.linalg.lu_solve``
 :func:`solve`               ``scipy.linalg.solve`` (default arguments)
+:func:`solve_transposed`    SciPy's getrf on ``a.T`` in place, getrs 'T'
+                            (momwire#2071; it replaced ``solve`` at its
+                            call sites, not a scipy call)
 :func:`solve_stacked`       ``numpy.linalg.solve``
 :func:`inv_stacked`         ``numpy.linalg.inv``
 :func:`matmul`              ``a @ b``
@@ -116,6 +119,9 @@ contract:
   near-singular. A call this route hands to ``scipy.linalg.solve`` itself
   (a 1 x 1, a rectangular matrix, a structure scipy would not solve as
   general) warns as scipy does.
+- ``solve_transposed``: ``solve``'s errors, warning, pivot screen and
+  condition estimate (rcond₁ of ``a``, from the factors of ``aᵀ``), on
+  ``a``'s own storage; its docstring says what differs.
 - ``solve_stacked``/``inv_stacked``: numpy's broadcasting of stacked
   matrices, a 1-D right-hand side read as a vector, the common result dtype,
   ``LinAlgError`` on an exactly singular slice, and no finiteness check.
@@ -674,6 +680,143 @@ def solve(a, b):
     return _warn_ill(rcond, dtype, x.reshape(b0.shape))
 
 
+# ---------------------------------------------------------------------------
+# solve_transposed: a row-major A factored as Aᵀ in its own storage
+# ---------------------------------------------------------------------------
+
+#: `solve_transposed` calls since import, by how A reached getrf: "in_place"
+#: (A's own storage) or "copied" (A was not a writeable C-contiguous array of
+#: the solve's dtype). Tests read it to prove the route ran.
+TRANSPOSED_SOLVES = {"in_place": 0, "copied": 0}
+
+
+def _finite_1norm_c(a1):
+    """``(all finite, ‖a1‖₁)`` of the C-contiguous square `a1`, read in place.
+
+    The norm is lange("1") of `a1`'s Fortran copy as `solve` takes it: per
+    column, ``|a(i, j)|`` summed from zero for i ascending, then the
+    maximum. The accelerator's `finite_1norm_c` is that pass with no copy;
+    without it, lange("I") of the F-ordered view ``a1.T`` sums the same
+    column chains (zlange's infinity-norm loop: row i of ``a1.T`` is column
+    i of ``a1``, accumulated in ascending column order of ``a1.T``)."""
+    dtype = a1.dtype
+    if (
+        _SOLVE_PREP_ACCEL
+        and a1.shape[0] >= _SOLVE_PREP_MIN_N
+        and dtype in (np.complex128, np.float64)
+    ):
+        try:
+            from ._accel import acc
+        except ImportError:  # pragma: no cover - the accelerator module is optional
+            acc = None
+        if acc is not None and getattr(acc, "solve_prep_2071", False):
+            finite, anorm = acc.finite_1norm_c(a1)
+            return bool(finite), float(anorm)
+    if not np.isfinite(a1).all():
+        return False, float("nan")
+    lange = scipy.linalg.get_lapack_funcs("lange", (a1.T,))
+    return True, float(lange("I", a1.T))
+
+
+@_factor_stage
+def solve_transposed(a, b):
+    """Solve ``a x = b`` by factoring ``aᵀ`` IN ``a``'s OWN STORAGE.
+
+    A C-ordered (row-major) ``a`` read column-major is ``aᵀ``, so getrf on
+    ``a.T`` factors it with no copy and getrs with trans='T' solves
+    ``(aᵀ)ᵀ x = b``. One dense matrix lives through the factor, where `solve`
+    holds ``a`` and its Fortran copy. ``a`` is DESTROYED (it holds the
+    factors of ``aᵀ``) when it is a writeable C-contiguous array of the
+    solve's dtype; any other ``a`` is copied once into C order first, which
+    changes no bit of the answer.
+
+    `solve`'s contract otherwise, on both routes (host, and scipy's own
+    getrf / getrs):
+
+    - a non-finite ``a`` or ``b`` raises ``ValueError``;
+    - an exactly singular ``a`` raises ``LinAlgError("singular matrix")``;
+    - the condition estimate runs under :func:`condition_check` or when
+      :func:`_pivots_suspect` flags the factors, and an rcond below machine
+      epsilon warns. It estimates `solve`'s quantity, rcond₁(a): on factors
+      of ``aᵀ`` that is gecon with norm='I' and anorm = ‖aᵀ‖_∞ = ‖a‖₁, the
+      maximum column sum of ``a`` read in place (:func:`_finite_1norm_c`,
+      the bits `solve` hands its gecon).
+
+    NOT `solve`'s answer to the bit: partial pivoting on ``aᵀ`` picks other
+    pivots than on ``a``, so the solution differs in the last digits (a
+    backward-stable LU either way). Nor does it run SciPy's structure
+    detection (symmetric, Hermitian, banded, triangular): every square ``a``
+    of order >= 2 is factored as general, so a caller's answer never depends
+    on whether its matrix happens to look structured, and an executable that
+    replays the call is one getrf + getrs. A 1 x 1, a rectangular or empty
+    system, or a dtype LAPACK's getrf does not take is `scipy.linalg.solve`'s.
+    """
+    a1 = np.asarray(a)
+    b0 = np.asarray(b)
+    dtype = np.result_type(a1.dtype, b0.dtype)
+    if (
+        not _square(a1)
+        or a1.shape[0] == 1
+        or b0.ndim not in (1, 2)
+        or b0.size == 0
+        or b0.shape[0] != a1.shape[0]
+        or dtype not in (np.float32, np.float64, np.complex64, np.complex128)
+    ):
+        return scipy.linalg.solve(a, b)
+    if a1.dtype == dtype and a1.flags.c_contiguous and a1.flags.writeable:
+        TRANSPOSED_SOLVES["in_place"] += 1
+    else:
+        a1 = np.array(a1, dtype=dtype, order="C", copy=True)
+        TRANSPOSED_SOLVES["copied"] += 1
+    # Taken before getrf overwrites a, whether or not the estimate runs: the
+    # screen decides after the factor.
+    a_finite, anorm = _finite_1norm_c(a1)
+    if not (a_finite and np.isfinite(b0).all()):
+        raise ValueError("array must not contain infs or NaNs")
+    at = a1.T  # F-contiguous: aᵀ in LAPACK's order, a's own bytes
+    always = condition_check()
+    n = a1.shape[0]
+    x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
+    gecon = scipy.linalg.get_lapack_funcs("gecon", (at,))
+    fns = _host_for(dtype)
+    if fns is not None:
+        ipiv, info = _getrf(fns, at)
+        if info != 0:
+            if info > 0:
+                raise np.linalg.LinAlgError(SINGULAR)
+            raise ValueError(f"illegal value in argument {-info} of the host's getrf")
+        info = _getrs(fns, at, ipiv, x, trans=1)
+        if info != 0:
+            raise ValueError(f"illegal value in argument {-info} of the host's getrs")
+        lu = at
+        if not (always or _pivots_suspect(lu)):
+            return x.reshape(b0.shape)
+    else:
+        getrf, getrs = scipy.linalg.get_lapack_funcs(("getrf", "getrs"), (at,))
+        # overwrite_a on an F-contiguous array of getrf's own dtype is f2py's
+        # in-place case: lu IS a's storage.
+        lu, ipiv, info = getrf(at, overwrite_a=True)
+        if info != 0:
+            if info > 0:
+                raise np.linalg.LinAlgError(SINGULAR)
+            raise ValueError(f"illegal value in argument {-info} of getrf")
+        estimate = always or _pivots_suspect(lu)
+        beside = estimate and n >= _GECON_BESIDE_MIN_N
+        cond = _gecon_beside(gecon, lu, anorm, norm="I") if beside else None
+        try:
+            x, info = getrs(lu, ipiv, x, trans=1, overwrite_b=True)
+        finally:
+            rcond = None if cond is None else cond()
+        if info != 0:
+            raise ValueError(f"illegal value in argument {-info} of getrs")
+        if not estimate:
+            return x.reshape(b0.shape)
+        if rcond is not None:
+            return _warn_ill(rcond, dtype, x.reshape(b0.shape))
+    rcond, _info = gecon(lu, anorm, norm="I")
+    return _warn_ill(rcond, dtype, x.reshape(b0.shape))
+
+
 #: At and above this order the no-host `solve` runs gecon on a second
 #: thread beside getrs (momwire#1916). Both only read the factors, so neither
 #: moves the other's bits; gecon is single-threaded, so it costs a core for
@@ -682,15 +825,15 @@ def solve(a, b):
 _GECON_BESIDE_MIN_N = 1024
 
 
-def _gecon_beside(gecon, lu, anorm):
-    """Start `gecon(lu, anorm, norm="1")` on a thread; returns the join,
+def _gecon_beside(gecon, lu, anorm, norm="1"):
+    """Start `gecon(lu, anorm, norm=norm)` on a thread; returns the join,
     which gives rcond, or None where the thread raised (the caller then runs
     gecon itself, so its error is the caller's)."""
     box = {}
 
     def run():
         try:
-            box["rcond"] = gecon(lu, anorm, norm="1")[0]
+            box["rcond"] = gecon(lu, anorm, norm=norm)[0]
         except Exception:  # noqa: BLE001 - the caller reruns gecon and sees it
             pass
 

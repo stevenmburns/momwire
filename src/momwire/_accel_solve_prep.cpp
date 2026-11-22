@@ -117,6 +117,61 @@ static py::tuple dispatch(py::array a, int n_threads) {
     throw std::runtime_error("fortran_copy_1norm: a must be complex128 or float64");
 }
 
+// momwire#2071: `fortran_copy_1norm`'s flag and norm with no copy, for
+// `_lapack.solve_transposed`, which factors the C-ordered `a` as aᵀ in its
+// own storage. The loop is `fortran_copy_1norm`'s without the store: each
+// column's chain is zero, then |a(i, j)| for i ascending, one thread's, and
+// the maximum is exact, so the norm is that pass's (and lange("1")'s of the
+// copy) to the bit at every thread count. It is ‖a‖₁ = ‖aᵀ‖_∞, the anorm
+// gecon('I') takes over aᵀ's factors.
+template <typename T>
+static py::tuple finite_1norm_c(py::array a, int n_threads) {
+    if (a.ndim() != 2) throw std::runtime_error("finite_1norm_c: a must be 2-D");
+    if (!(a.flags() & py::array::c_style))
+        throw std::runtime_error("finite_1norm_c: a must be C-contiguous");
+    const py::ssize_t m = a.shape(0), n = a.shape(1);
+    const T *src = static_cast<const T *>(a.data());
+    std::vector<double> colsum(static_cast<size_t>(n), 0.0);
+    int bad = 0;
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = n_threads > 0 ? n_threads : omp_get_max_threads();
+#else
+        (void)n_threads;
+#endif
+        if (nt < 1) nt = 1;
+        const py::ssize_t n_strips = (n + TILE - 1) / TILE;
+#pragma omp parallel for schedule(dynamic, 1) num_threads(nt) reduction(| : bad)
+        for (py::ssize_t s = 0; s < n_strips; ++s) {
+            const py::ssize_t j0 = s * TILE, j1 = std::min(n, j0 + TILE);
+            double sums[TILE];
+            for (py::ssize_t j = j0; j < j1; ++j) sums[j - j0] = 0.0;
+            for (py::ssize_t i = 0; i < m; ++i) {
+                const T *row = src + i * n;
+                for (py::ssize_t j = j0; j < j1; ++j) {
+                    const T v = row[j];
+                    if (!finite(v)) bad |= 1;
+                    sums[j - j0] = sums[j - j0] + mag(v);
+                }
+            }
+            for (py::ssize_t j = j0; j < j1; ++j) colsum[j] = sums[j - j0];
+        }
+    }
+    double anorm = 0.0;
+    for (py::ssize_t j = 0; j < n; ++j)
+        if (anorm < colsum[j]) anorm = colsum[j];
+    return py::make_tuple(bad == 0, anorm);
+}
+
+static py::tuple dispatch_c(py::array a, int n_threads) {
+    if (a.dtype().is(py::dtype::of<std::complex<double>>()))
+        return finite_1norm_c<std::complex<double>>(a, n_threads);
+    if (a.dtype().is(py::dtype::of<double>())) return finite_1norm_c<double>(a, n_threads);
+    throw std::runtime_error("finite_1norm_c: a must be complex128 or float64");
+}
+
 }  // namespace solve_prep
 
 void register_solve_prep(py::module_ &m) {
@@ -128,4 +183,11 @@ void register_solve_prep(py::module_ &m) {
           "strips, n_threads > 0 sets the team. momwire#1916.",
           py::arg("a"), py::arg("n_threads") = 0);
     m.attr("solve_prep_1916") = true;
+    m.def("finite_1norm_c", &solve_prep::dispatch_c,
+          "(finite, anorm) for a C-contiguous 2-D complex128 or float64 `a`, "
+          "read in place: `fortran_copy_1norm`'s flag and norm without the "
+          "copy. OpenMP over column strips, n_threads > 0 sets the team. "
+          "momwire#2071.",
+          py::arg("a"), py::arg("n_threads") = 0);
+    m.attr("solve_prep_2071") = true;
 }
