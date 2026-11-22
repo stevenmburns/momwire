@@ -8,6 +8,7 @@ here calls it.
 
     report_tools.py nights RESULTS
     report_tools.py summary NIGHT
+    report_tools.py masked NIGHT BASE
     report_tools.py diff NIGHT BASE EXE DECK
     report_tools.py sweep RESULTS CASE
 """
@@ -95,6 +96,36 @@ def diff(night: Path, base: Path, exe: str, deck: str, context: int = 2) -> str:
     return "\n".join(out[:200]) if out else "identical once line 2 is masked"
 
 
+def masked(night: Path, base: Path, show: int = 30) -> str:
+    """Every avx2-T1 Python printout that differs from the base: how many
+    differ only on line 2 (momwire's identity) and which differ elsewhere."""
+    rows, brows = triage.audit_rows(night), triage.audit_rows(base)
+    cell = "avx2-T1"
+    tonight, green = triage.Printouts(night), triage.Printouts(base)
+    only_id, real, missing = collections.Counter(), [], 0
+    for key, r in sorted(rows.get(cell, {}).items()):
+        b = brows.get(cell, {}).get(key)
+        if b is None or r.get("py_sha") == b.get("py_sha"):
+            continue
+        got, ref = tonight.get(r.get("key", "")), green.get(b.get("key", ""))
+        if got is None or ref is None:
+            missing += 1
+        elif triage.without_identity(got) == triage.without_identity(ref):
+            only_id[key[0]] += 1
+        else:
+            real.append(key)
+    lines = [
+        f"differ only on line 2: {sum(only_id.values())} {dict(only_id)}",
+        f"differ elsewhere: {len(real)}",
+        *(f"    {e}  {d}" for e, d in real[:show]),
+    ]
+    if len(real) > show:
+        lines.append(f"    ... {len(real) - show} more")
+    if missing:
+        lines.append(f"printout not saved for one night: {missing}")
+    return "\n".join(lines)
+
+
 def sweep(results: Path, case: str) -> str:
     """One sweep case across every night: commit, wall time, Z, outcome."""
     out = []
@@ -120,6 +151,9 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("nights").add_argument("results", type=Path)
     sub.add_parser("summary").add_argument("night", type=Path)
+    m = sub.add_parser("masked")
+    for name in ("night", "base"):
+        m.add_argument(name, type=Path)
     d = sub.add_parser("diff")
     for name in ("night", "base"):
         d.add_argument(name, type=Path)
@@ -133,6 +167,8 @@ def main(argv=None) -> int:
         print(nights(a.results))
     elif a.cmd == "summary":
         print(summary(a.night))
+    elif a.cmd == "masked":
+        print(masked(a.night, a.base))
     elif a.cmd == "diff":
         print(diff(a.night, a.base, a.exe, a.deck))
     else:

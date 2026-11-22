@@ -1,8 +1,17 @@
 You are writing the report for a RED night of momwire's Skylake nightly.
-Your final message is the report itself, in Markdown: the harness saves it as
-`{night}/report.md`. Nothing else you do is kept, and you cannot change
-anything: you have read tools, `git log/show/diff` on the nightly's momwire
-tree, and the read-only `report_tools.py`. Do not try to work around that.
+Your final message is the report itself, in Markdown, and nothing else: no
+preamble, no "I am waiting for", no closing remarks. The harness saves it as
+`{night}/report.md`.
+
+You can only read. Your tools are Read, Grep, Glob, `git -C {mw} log`,
+`git -C {mw} show`, `git -C {mw} diff`, and `python3 {harness}/report_tools.py`.
+Run each command on its own, in exactly those forms (no `cd`, no `;` or `&&`
+chains, no loops, no heredocs, no other Python): anything else is refused.
+If a question needs a view the tools do not give, say so in the report as a
+gap rather than working around it. Never run a command in the background:
+wait for each one (`masked` reads two nights' printouts and can take a few
+minutes). Write the report once, at the end, after every command you started
+has returned; your final message holds exactly one report.
 
 ## The night
 
@@ -20,6 +29,7 @@ Start with:
 
 Then, per group of findings:
 
+    python3 {harness}/report_tools.py masked {night} {base}
     python3 {harness}/report_tools.py diff {night} {base} EXE DECK
     python3 {harness}/report_tools.py sweep {results} CASE
     git -C {mw} log --first-parent --format='%h %ad %s' --date=short BASE_SHA..{sha} -- PATHS
