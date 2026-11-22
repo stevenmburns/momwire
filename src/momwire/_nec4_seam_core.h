@@ -105,8 +105,9 @@ struct Seam {
 
 // `_nec4.render(text, basis=...)` up to the solve. `basis` must be one this
 // copy serves ("sinusoidal", "bs2", "sg"); any other
-// name is Declined. `refuse_duplicates=false` skips the sinusoidal basis'
-// refusal of a wire listed twice (`_nec4._REFUSES_DUPLICATES`, momwire#2107),
+// name is Declined. `refuse_duplicates=false` skips the sinusoidal and bs2
+// bases' refusal of a wire listed twice (`_nec4._REFUSES_DUPLICATES`,
+// momwire#2107),
 // for the front and fill comparisons alone, which hold the constructor's
 // #1042 merge to Python's on decks the slot itself no longer builds.
 Seam seam(const std::string &latin1_text, const std::string &basis, bool refuse_duplicates = true);

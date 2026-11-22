@@ -457,7 +457,8 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
 
 
 # The bases on which this slot refuses a wire listed twice (momwire#2107)
-# rather than solving it: the sinusoidal basis only (Steve, 11-22). The #1042
+# rather than solving it: the sinusoidal, bs2 and bs1 bases (Steve, 11-22;
+# bs2 and bs1 print the same residue). The #1042
 # merge does not reach this route whole: the nec4 dialect's mesh cuts a wire
 # into pieces, so a copy merges piece by piece, and the pieces at its ends,
 # joined differently from their twins', stay in place; Z is singular and the
@@ -465,7 +466,7 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
 # at its geometry check (black box, 11-22: the 12 duplicate decks of
 # tests/test_nec4_run_core.py's CASES, and dup_reversed_rp_ne_pq). The C++
 # run half asks the same question (`nec4::duplicate_wire_refusal`).
-_REFUSES_DUPLICATES = frozenset({"sinusoidal"})
+_REFUSES_DUPLICATES = frozenset({"sinusoidal", "bs2", "bs1"})
 
 
 def _tag_list(tags: list[int]) -> str:

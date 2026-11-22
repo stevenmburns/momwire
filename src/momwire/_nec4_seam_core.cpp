@@ -391,8 +391,9 @@ StructureSeam structure_seam(const std::string &text, const std::string &echo, b
         }
         further_tables(text, s.deck, s);
         served_shape(text, s.deck, s);
-        // `_REFUSES_DUPLICATES` (momwire#2107): the sinusoidal basis only
-        if (refuse_duplicates && basis == "sinusoidal") {
+        // `_REFUSES_DUPLICATES` (momwire#2107): sinusoidal and bs2 (bs1, the
+        // third, has no C++ seam on this slot and builds in Python)
+        if (refuse_duplicates && (basis == "sinusoidal" || basis == "bs2")) {
             const std::string why = duplicate_wire_refusal(s.deck.structure);
             if (!why.empty()) refuse(why);
         }
