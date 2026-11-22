@@ -385,7 +385,11 @@ CASES = [
             DUP_DIPOLE + DUP_PARASITE + "GW 3 31 .2 0 .23 .2 0 -.23 .001\n",
             FR + "EX 0 1 21 0 1\nNE 0 1 3 1 .3 -.1 0 0 .1 0\n",
         ),
-        "printed",
+        # Z is exactly singular here (the copy is not merged on this route,
+        # momwire#2107): the copying factor pivoted on rounding residue and
+        # printed a feed Z 20 % off the single-copy deck's; the factor of Zᵀ
+        # (momwire#2071) meets the zero pivot, so both sides refuse.
+        "declined",
     ),
     (
         "duplicate_three_times",
