@@ -818,6 +818,143 @@ def split_times(answer: bytes) -> tuple[bytes | None, bytes]:
     return answer[len(TIMES_FRAME_START) : end], answer[end + len(TIMES_FRAME_END) :]
 
 
+# --------------------------------------------------------------------------
+# advisories on stderr
+# --------------------------------------------------------------------------
+#
+# The advisories a deck raises (Python warnings: `DuplicateWire`,
+# `CoarseCrossingNode`, ...) go to the launcher's stderr by default.
+# MOMWIRE_ADVISORIES=off drops them, as every launcher did from momwire#1673
+# until SimNEC's stream learned to drain the pipe; `stderr` is still read,
+# and now names the default.
+#
+# A deck the WARM SERVER answers raises its advisories in the server's
+# process, whose stderr is the server log. So a launcher that wants them sends
+# ADVISORIES_REQUEST in the request (after TIMES_REQUEST, before
+# EN_OPTIONAL_REQUEST), and the engine answers with ADVISORIES_FRAME_START,
+# the advisories exactly as Python would have displayed them (UTF-8, each
+# "\n" sent as CRLF by the answer's own translation), ADVISORIES_FRAME_END,
+# after the times frame and ahead of the `.GMO` frame and the printout. The
+# frame is present, possibly empty, whenever it was asked for. A warning's
+# text never holds NUL (the engine replaces one), so the end marker cannot
+# occur inside it. ADVISORIES_WIRE is hashed into the EZNEC launchers' server
+# key, so a launcher that asks never reaches a server that would read the
+# request line as deck text.
+#
+# The cap (momwire#1673's guard, kept): a host that never drains the pipe
+# blocks the engine once the pipe is full, and the smallest pipe a host is
+# known to hand over is about 4 KB (a default Windows anonymous pipe; Linux
+# cannot shrink one below a 4096-byte page). One process therefore writes at
+# most ADVISORIES_CAP bytes of advisories, then ADVISORIES_CAPPED once, then
+# nothing: 3072 + the ~150-byte note stays more than 850 bytes inside a 4 KB
+# pipe, and in a stream nothing else reaches stderr unless asked for
+# (MOMWIRE_TIMES). Bytes are counted as :func:`advisory_cost` counts them, an
+# upper bound for any console encoding and newline translation. The size is
+# set by the largest structure measured: momwire#1673's buried-radial deck
+# (`buried_grazing_1672/shallow_s40.nec`, bs2) raises three advisories,
+# 2.9 KB as Python displays them (one alone is 1.6 KB), and a cap of 2048
+# cut its third, the crossing-node advisory the deck is about. So a stream
+# shows at least its first structure's advisories whole; a deck whose only
+# advisory is a duplicate wire (0.5 KB) shows five.
+ADVISORIES_ENV = "MOMWIRE_ADVISORIES"
+_ADVISORIES_OFF = frozenset({"off", "0", "no", "false", "none"})
+ADVISORIES_REQUEST = b"\x00ADVISORIES\n"
+ADVISORIES_FRAME_START = b"\x00ADVISORIES\r\n"
+ADVISORIES_FRAME_END = b"\x00\r\n"
+ADVISORIES_WIRE = "advisories=framed"
+ADVISORIES_CAP = 3072
+ADVISORIES_CAPPED = (
+    f"momwire: further advisories not shown (one process writes at most "
+    f"{ADVISORIES_CAP} bytes of them); {ADVISORIES_ENV}=off turns them off\n"
+)
+
+
+def advisories_on(environ=None) -> bool:
+    """Advisories on stderr: unless ``MOMWIRE_ADVISORIES`` is off / 0 / no /
+    false / none (any case). Unset, ``stderr`` and anything else are on."""
+    env = os.environ if environ is None else environ
+    return env.get(ADVISORIES_ENV, "").strip().lower() not in _ADVISORIES_OFF
+
+
+def advisory_cost(text: str) -> int:
+    """The most bytes ``text`` can occupy in a pipe: each character as ASCII
+    or its backslash escape (never fewer bytes than any encoding a console
+    uses, Python's ``backslashreplace`` included), plus one per newline for a
+    CRLF translation."""
+    return len(text.encode("ascii", "backslashreplace")) + text.count("\n")
+
+
+class AdvisoryBudget:
+    """What one process may still write of its advisories (the cap above).
+
+    :meth:`take` returns what to write for one piece of text: the text while
+    it fits whole, :data:`ADVISORIES_CAPPED` for the first piece that does
+    not, and ``""`` from then on."""
+
+    def __init__(self, cap: int = ADVISORIES_CAP) -> None:
+        self.cap = cap
+        self.used = 0
+        self.capped = False
+
+    def take(self, text: str) -> str:
+        if self.capped:
+            return ""
+        cost = advisory_cost(text)
+        if self.used + cost <= self.cap:
+            self.used += cost
+            return text
+        self.capped = True
+        return ADVISORIES_CAPPED
+
+
+class CappedStderr:
+    """A text stream that writes to ``stream`` within an
+    :class:`AdvisoryBudget`. Python's warning display writes each warning in
+    one ``write``, so the cap falls between advisories, never inside one."""
+
+    def __init__(self, stream, budget: AdvisoryBudget | None = None) -> None:
+        self.stream = stream
+        self.budget = AdvisoryBudget() if budget is None else budget
+
+    def write(self, text: str) -> int:
+        out = self.budget.take(text)
+        if out:
+            self.stream.write(out)
+            self.stream.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self.stream, name)
+
+
+def capped_advisories(texts) -> str:
+    """``texts`` joined as one process may write them (the cap above)."""
+    budget = AdvisoryBudget()
+    return "".join(budget.take(text) for text in texts)
+
+
+def split_advisories(answer: bytes) -> tuple[bytes | None, bytes]:
+    """``(advisories, rest)`` from a resident engine's answer bytes, as
+    :func:`split_times`; the advisories as sent (UTF-8, CRLF)."""
+    if not answer.startswith(ADVISORIES_FRAME_START):
+        return None, answer
+    end = answer.find(ADVISORIES_FRAME_END, len(ADVISORIES_FRAME_START))
+    if end < 0:
+        raise ValueError("the resident engine's advisories frame never closed")
+    return (
+        answer[len(ADVISORIES_FRAME_START) : end],
+        answer[end + len(ADVISORIES_FRAME_END) :],
+    )
+
+
+def advisories_text(raw: bytes) -> str:
+    """An advisories frame's body as text for a text-mode stderr."""
+    return raw.replace(b"\r\n", b"\n").decode("utf-8", "replace")
+
+
 def split_answer(answer: bytes) -> tuple[bytes | None, bytes]:
     """``(gmo, printout)`` from a resident engine's answer bytes.
 

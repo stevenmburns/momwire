@@ -107,6 +107,9 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
         *_mech.interpreter_identity(),
         f"{idle_timeout!r}",
         _mech.WIRE,
+        # The advisories frame (momwire#1673 reversed): a launcher that asks
+        # for it must never reach a server that would solve the request line.
+        _mech.ADVISORIES_WIRE,
     ]
     if dialect != "nec5":
         elements.append(f"dialect={dialect}")
@@ -311,6 +314,16 @@ def _stream(basis: str | None, dialect: str = "nec5") -> int:
         return 2
 
 
+def _write_advisories(raw: bytes) -> None:
+    """A served deck's advisories frame on this launcher's stderr. A stderr
+    that cannot take them loses them: the printout is already written."""
+    try:
+        sys.stderr.write(_mech.advisories_text(raw))
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+
+
 def _report_times(line: bytes | None, started: float, wrote: float) -> None:
     """MOMWIRE_TIMES: the resident engine's ``times:`` line, with this
     launcher's own printout write and its whole wall time, on stderr."""
@@ -387,16 +400,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     timed = _mech.times_requested()
+    advised = _mech.advisories_on()
     try:
         started = _time.perf_counter()
         with open(deck_path, "rb") as handle:
             deck_bytes = handle.read()
         if en_optional:
             deck_bytes = _mech.EN_OPTIONAL_REQUEST + deck_bytes
+        if advised:
+            # The deck's advisories, raised in the server's process, come
+            # back framed to this one's stderr.
+            deck_bytes = _mech.ADVISORIES_REQUEST + deck_bytes
         if timed:
             deck_bytes = _mech.TIMES_REQUEST + deck_bytes
         answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT, dialect)
         line, answer = _mech.split_times(answer)
+        shown, answer = _mech.split_advisories(answer)
+        if not answer:
+            raise ConnectionError("the resident engine answered no printout")
         gmo, printout = _mech.split_answer(answer)
         wrote = _time.perf_counter()
         if gmo is not None:
@@ -404,6 +425,9 @@ def main(argv: list[str] | None = None) -> int:
                 handle.write(gmo)
         with open(printout_path, "wb") as handle:
             handle.write(printout)
+        if shown:
+            # Already within one process's cap: the server capped it.
+            _write_advisories(shown)
         if timed:
             _report_times(line, started, wrote)
         return 0

@@ -75,6 +75,7 @@ def test_outside_a_venv_the_key_is_the_one_it_was(interpreter):
             BASE,
             repr(600.0),
             mech.WIRE,
+            mech.ADVISORIES_WIRE,
             "default",
             *mech.junction_rule_identity(),
             # momwire#1893: nothing when no thread variable is set, but the

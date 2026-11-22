@@ -1,11 +1,12 @@
-"""momwire#1673: the launchers write nothing on stderr unless asked.
+"""momwire#1673's switch: ``MOMWIRE_ADVISORIES=off`` writes nothing on stderr.
 
-SimNEC's streaming call (``- -``) never drains the engine's stderr, so once
-the advisories a long stream raises pass the pipe's size (about 4 KB on
-Windows) the engine blocks on the write and the host waits forever for a
-printout. The real engines write nothing there, and now neither does
-`_shell.main`: the warnings still reach anyone recording them, and
-``MOMWIRE_ADVISORIES=stderr`` puts them back on the pipe.
+SimNEC's streaming call (``- -``) used to never drain the engine's stderr, so
+once the advisories a long stream raises passed the pipe's size (about 4 KB
+on Windows) the engine blocked on the write and the host waited forever for
+a printout. The launchers then wrote nothing there; now they write the
+advisories by default, within a per-process cap
+(tests/test_advisories_stderr_default.py), and ``off`` is the old silence:
+the warnings still reach anyone recording them.
 """
 
 from __future__ import annotations
@@ -43,32 +44,39 @@ def _run(args, stdin, env_extra):
     )
 
 
+OFF = {_shell.ADVISORIES_ENV: "off"}
+
+
 @pytest.mark.integration
-def test_a_stream_of_advisory_decks_writes_nothing_on_stderr():
-    quiet = _run(["-", "-"], STREAM, {})
+def test_a_stream_of_advisory_decks_writes_nothing_on_stderr_when_off():
+    quiet = _run(["-", "-"], STREAM, OFF)
     assert quiet.returncode == 0
     assert quiet.stdout.count(b"ANTENNA INPUT PARAMETERS") == 2
     assert quiet.stderr == b"", quiet.stderr[:400]
-    # ...and the same stream with the advisories asked for carries them
-    loud = _run(["-", "-"], STREAM, {_shell.ADVISORIES_ENV: "stderr"})
+    # ...and the same stream by default carries them
+    loud = _run(["-", "-"], STREAM, {})
     assert b"CoarseCrossingNode" in loud.stderr
     assert loud.stdout == quiet.stdout
 
 
 @pytest.mark.integration
-def test_a_one_shot_writes_nothing_on_stderr(tmp_path):
+def test_a_one_shot_writes_nothing_on_stderr_when_off(tmp_path):
     deck = tmp_path / "d.nec"
     deck.write_text(DECK)
     out = tmp_path / "d.out"
-    r = _run([str(deck), str(out)], "", {})
+    r = _run([str(deck), str(out)], "", OFF)
     assert r.returncode == 0 and r.stderr == b"", r.stderr[:400]
     assert "ANTENNA INPUT PARAMETERS" in out.read_text()
 
 
-def test_the_advisories_are_still_raised_in_process(tmp_path, monkeypatch):
-    """Only the display is dropped: a caller recording warnings around
-    `main` still sees every advisory."""
-    monkeypatch.delenv(_shell.ADVISORIES_ENV, raising=False)
+@pytest.mark.parametrize("setting", [None, "off"])
+def test_the_advisories_are_still_raised_in_process(tmp_path, monkeypatch, setting):
+    """Only the display changes: a caller recording warnings around `main`
+    sees every advisory, displayed or sunk."""
+    if setting is None:
+        monkeypatch.delenv(_shell.ADVISORIES_ENV, raising=False)
+    else:
+        monkeypatch.setenv(_shell.ADVISORIES_ENV, setting)
     deck = tmp_path / "d.nec"
     deck.write_text(DECK)
     with warnings.catch_warnings(record=True) as seen:
