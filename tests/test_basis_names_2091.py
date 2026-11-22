@@ -172,6 +172,10 @@ def _launcher_render(prog: str, deck: Path, tmp_path: Path) -> str:
     try:
         mp.setattr(eznec_client, "_served_bytes", served)
         mp.setattr("sys.argv", [prog, str(deck), str(out)])
+        # The stub hands back the seam's text without the server's CRLF
+        # translation, which the advisories frame's markers are spelt in;
+        # names, not advisories, are under test here.
+        mp.setenv("MOMWIRE_ADVISORIES", "off")
         assert eznec_client.main(None) == 0
     finally:
         mp.undo()
