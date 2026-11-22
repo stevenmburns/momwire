@@ -24,7 +24,15 @@ the linked bytes:
    path could reach it, and the linker must have kept the sse2 copy. Objects
    are read with `dumpbin /symbols`.
 
-3. The counts: how much of the image each copy supplies.
+3. INSTRUCTIONS. No sse2 or main object holds an AVX-family instruction
+   (VEX or EVEX encoded: a `v` mnemonic, a ymm/zmm/k register, BMI1/BMI2). MSVC compiles an AVX intrinsic without /arch:AVX2, so a
+   header can put one in the sse2 half; check 2 cannot see that, and running
+   decks under SDE sees it only on the paths those decks reach (the whole
+   fixture corpus under SDE Westmere took over 2 h a program; Steve, 11-22:
+   the static scan instead). Objects are read with `dumpbin /disasm`, every
+   instruction of every one, whatever path reaches it.
+
+4. The counts: how much of the image each copy supplies.
 
 Exits 1 on any violation.
 """
@@ -39,7 +47,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pefile
 
 AVX2_LIBS = ("mw_core_mwa:", "mw_core_mwas:")
 # an avx2 copy's own name: in a renamed namespace, as MSVC mangles it
@@ -92,6 +99,55 @@ def parse_map(path: Path):
     return base, groups, syms
 
 
+# The x86-64 baseline's own `v` mnemonics: not VEX encoded
+NOT_VEX = {"verr", "verw"}
+# VEX-encoded general-purpose instructions (BMI1, BMI2). LZCNT and TZCNT are
+# left out: MSVC's <bit> emits them without /arch, behind its own run-time
+# __isa_available check, and on an older CPU they decode as BSR/BSF.
+NON_V_AVX = {
+    "andn",
+    "bextr",
+    "blsi",
+    "blsmsk",
+    "blsr",
+    "bzhi",
+    "mulx",
+    "pdep",
+    "pext",
+    "rorx",
+    "sarx",
+    "shlx",
+    "shrx",
+}
+# a register operand, not a mangled name (`?f@k1@@...`): bounded by the
+# operand list's own separators
+AVX_REG = re.compile(r"(?:^|[\s,{])(?:[yz]mm\d+|k[0-7])(?=$|[\s,}])")
+# `  0000000000000010: C5 FD 10 04 11     vmovupd     ymm0,ymmword ptr [rcx]`
+DISASM_LINE = re.compile(
+    r"^\s*([0-9A-F]+): (?:[0-9A-F]{2} )+\s*([a-z][a-z0-9]*)\s*(.*)$"
+)
+
+
+def avx_instructions(disasm: str) -> list[tuple[str, str, str]]:
+    """Every AVX-family instruction in `dumpbin /disasm` text, as (address,
+    mnemonic, operands). A continuation line (more bytes, no mnemonic) does
+    not match."""
+    found = []
+    for line in disasm.splitlines():
+        m = DISASM_LINE.match(line)
+        if not m:
+            continue
+        addr, mnem, ops = m.groups()
+        if (
+            (mnem.startswith("v") and mnem not in NOT_VEX)
+            or mnem in NON_V_AVX
+            or mnem.startswith("kmov")
+            or AVX_REG.search(ops)
+        ):
+            found.append((addr, mnem, ops.strip()))
+    return found
+
+
 def obj_symbols(dumpbin: str, obj: Path) -> set[str]:
     out = subprocess.run(
         [dumpbin, "/nologo", "/symbols", str(obj)],
@@ -112,6 +168,9 @@ def obj_symbols(dumpbin: str, obj: Path) -> set[str]:
 
 
 def main(argv: list[str]) -> int:
+    # here, not at the top: the parser tests run where pefile is not installed
+    import pefile
+
     exe, mapfile, build = Path(argv[0]), Path(argv[1]), Path(argv[2])
     dumpbin = os.environ.get("DUMPBIN", "dumpbin")
     base, groups, syms = parse_map(mapfile)
@@ -221,7 +280,27 @@ def main(argv: list[str]) -> int:
         f" {len(clash)} resolved to the avx2 copy"
     )
 
-    # 3. counts
+    # 3. instructions
+    n_avx = 0
+    for p in objs:
+        out = subprocess.run(
+            [dumpbin, "/nologo", "/disasm", str(p)],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=True,
+        ).stdout
+        hits = avx_instructions(out)
+        n_avx += len(hits)
+        for addr, mnem, ops in hits[:5]:
+            print(f"AVX {p.relative_to(build)} +{addr}: {mnem} {ops}")
+    if n_avx:
+        bad = 1
+    print(
+        f"instructions: {len(objs)} sse2/main objects, {n_avx} AVX-family instructions"
+    )
+
+    # 4. counts
     by = {"avx2": 0, "other": 0}
     for s in syms:
         by["avx2" if is_avx2(s[2]) else "other"] += 1

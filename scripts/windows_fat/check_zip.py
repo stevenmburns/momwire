@@ -13,9 +13,9 @@ and, for the deprecation window, the 0.96.0 names as byte-for-byte copies of
 those programs (a copy runs the variant its name names, standalone/exe_name.h):
 
     momwire-nec5-<basis>-avx2.exe    momwire-nec5-<basis>-sse2.exe
-    win7/momwire-nec5-<basis>-sse2.exe
 
-win7/ holds the same fat pair and its old sse2 names, beside Microsoft's
+win7/ holds the fat pair alone (no old names: Steve, 11-22, to keep the zip
+small; a Windows 7 setup on an old name switches to the new one), beside Microsoft's
 app-local Universal C Runtime. Every folder carries the DLLs the programs
 load; nothing else may be there. Exits 1 on any departure, a copy that is not
 its program's bytes included.
@@ -60,7 +60,6 @@ def expected_programs() -> dict[str, str]:
         want[f"{TOP}/win7/{program(b)}"] = fat
         for v in ("avx2", "sse2"):
             want[f"{TOP}/{deprecated(b, v)}"] = fat
-        want[f"{TOP}/win7/{deprecated(b, 'sse2')}"] = fat
     return want
 
 

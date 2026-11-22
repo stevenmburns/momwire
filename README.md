@@ -333,8 +333,9 @@ programs, signed with momwire's certificate. The zip holds
 and an sse2 build and picks, when it starts, the one the processor can run.
 A `win7` folder holds the same two programs beside the runtime Windows 7 SP1
 needs. (Up to 0.96.0 each engine came as an `-avx2` and an `-sse2` program;
-those names are deprecated, still ship as copies that run the build they
-name, and will be removed in a later release.) The DLLs they load ship beside them, so nothing
+those names are deprecated, still ship at the top of the zip, not in `win7`,
+as copies that run the build they name, and will be removed in a later
+release.) The DLLs they load ship beside them, so nothing
 needs installing; keep each folder together. A deck an engine does not serve
 yet is refused in the printout by name, as on Linux. These programs and the
 drop-in,

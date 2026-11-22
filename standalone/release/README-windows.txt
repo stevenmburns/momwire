@@ -55,10 +55,12 @@ per processor build, and you chose between them:
   DEPRECATED momwire-nec5-razor2p-sse2.exe       -> momwire-nec5-razor2p.exe
   DEPRECATED momwire-nec5-bs2-avx2.exe           -> momwire-nec5-bs2.exe
   DEPRECATED momwire-nec5-bs2-sse2.exe           -> momwire-nec5-bs2.exe
-  DEPRECATED win7\momwire-nec5-razor2p-sse2.exe  -> win7\momwire-nec5-razor2p.exe
-  DEPRECATED win7\momwire-nec5-bs2-sse2.exe      -> win7\momwire-nec5-bs2.exe
+  REMOVED    win7\momwire-nec5-razor2p-sse2.exe  -> win7\momwire-nec5-razor2p.exe
+  REMOVED    win7\momwire-nec5-bs2-sse2.exe      -> win7\momwire-nec5-bs2.exe
 
-The old names still ship, as copies of the new programs, so an engine path
+The win7 folder carries the new names only; point a Windows 7 setup at
+win7\momwire-nec5-razor2p.exe or win7\momwire-nec5-bs2.exe. In this folder
+the old names still ship, as copies of the new programs, so an engine path
 pointed at one keeps working for now. A copy runs the build its name names,
 as before: an -sse2 name runs sse2 even on an AVX2 processor, and an -avx2
 name on a processor without AVX2 refuses each deck in the printout, saying
