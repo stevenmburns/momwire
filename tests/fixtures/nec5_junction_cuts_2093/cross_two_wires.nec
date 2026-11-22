@@ -1,0 +1,11 @@
+CM momwire#2093 two wires crossing at an interior node of each
+CE
+GW 1,20,0.,-5.,10.,0.,5.,10.,.001
+GW 2,20,-5.,0.,10.,5.,0.,10.,.001
+GE 0,-1
+FR 0,1,0,0,14.
+GN -1
+EX 0,1,5,0,1.,0.
+PQ 0
+XQ 0
+EN

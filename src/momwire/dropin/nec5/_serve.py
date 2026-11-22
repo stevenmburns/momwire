@@ -1859,6 +1859,8 @@ class Structure:
     # fused node key -> how many ELEMENT ends meet there, image included
     degree: dict[tuple[int, int, int], int]
     ground_plane: bool
+    # each wire's `_node_key` per node, beside `points`
+    keys: tuple[tuple[tuple[int, int, int], ...], ...] = ()
 
     @property
     def node_count(self) -> int:
@@ -1953,6 +1955,7 @@ def structure_of(deck: Nec5Deck) -> Structure:
         points=points,
         degree=degree,
         ground_plane=ground_plane,
+        keys=tuple(tuple(wire_keys) for _, wire_keys in nodes),
     )
 
 
@@ -2118,6 +2121,10 @@ class _Piece:
     piece is served (momwire#608 — a junctioned one-segment wire carries the
     tents an interior segment carries), so this is a conditioning preference
     now and not a refusal.
+
+    Every basis also cuts a ``GW`` at a node inside it that another wire's
+    node lands on (:func:`_junction_cuts`, momwire#2093): a crossing or a T is
+    a junction, and the mesh junctions piece ends only.
     """
 
     tag: int
@@ -2307,6 +2314,78 @@ def _addressed_nodes(deck: Nec5Deck) -> dict[int, set[int]]:
     return at
 
 
+def _junction_cuts(
+    structure: Structure, phantom: frozenset[int]
+) -> dict[int, tuple[int, ...]]:
+    """wire index -> the nodes inside it that another wire's node lands on.
+
+    NEC-5 connects wires wherever they share a node, interior or end: two
+    wires crossing at an interior node of each give the impedance their
+    four-wire spelling gives, and a wire whose end lands mid-wire is a T
+    (momwire#2093; licensed NEC-5, black box: 69.718 - j106.22 ohm for both
+    spellings of the crossing deck, `tests/test_nec5_junction_cuts_2093.py`).
+    The mesh junctions piece ENDS, so each such node becomes one by cutting
+    the wire there, which is lossless: the same elements, the same nodes, and
+    the junction's KCL row is the connection.
+
+    An interior node has two element ends of its own wire, so a degree above
+    two (:attr:`Structure.degree`, which adds a ground image at wire ends
+    only) is another wire there.  A phantom wire is no geometry and stands
+    clear of everything by construction, so it is skipped.
+    """
+    cuts: dict[int, tuple[int, ...]] = {}
+    degree = structure.degree
+    for index, (wire, keys) in enumerate(
+        zip(structure.wires, structure.keys, strict=True)
+    ):
+        if wire.tag in phantom:
+            continue
+        joins = tuple(k for k in range(1, len(keys) - 1) if degree[keys[k]] > 2)
+        if joins:
+            cuts[index] = joins
+    return cuts
+
+
+def _join_branches(
+    deck: Nec5Deck, structure: Structure, cuts: dict[int, tuple[int, ...]]
+) -> dict[tuple[int, int], str]:
+    """``(tag, node)`` at a junction cut -> the end of the piece a card there
+    names: ``"end"`` (the piece holding segment ``node``) or ``"start"`` (the
+    piece holding segment ``node + 1``).
+
+    At a node where only the wire itself passes the two are one series gap; at
+    a junction cut they are two branches, and NEC-5 puts the card in the
+    branch of the segment the card names (black box, momwire#2093): the signed
+    node ``k`` and an explicit ``(segment k, end 2)`` both name segment ``k``,
+    and ``(segment k + 1, end 1)`` names segment ``k + 1`` -- each answers as
+    the split spelling's address on that piece does. ``TL`` and ``NT`` have
+    the signed spelling only. Two cards naming the two branches of one
+    address would be two sites at one ``(tag, node)``, which is refused.
+    """
+    joined = {
+        (structure.wires[index].tag, k) for index, nodes in cuts.items() for k in nodes
+    }
+    if not joined:
+        return {}
+    branch: dict[tuple[int, int], str] = {}
+    named = [(s.at, s.end_code) for s in deck.sources]
+    named += [(ld.at, ld.end_code) for ld in deck.loads]
+    named += [(end, 0) for end in _network_ends(deck)]
+    for at, end_code in named:
+        key = (at.tag, at.node)
+        if key not in joined:
+            continue
+        which = "start" if end_code == 1 else "end"
+        if branch.setdefault(key, which) != which:
+            raise ServeRefusal(
+                f"cards address node {at.node} of tag {at.tag} through both of "
+                f"its segments ({at.node} and {at.node + 1}); another wire joins "
+                f"wire {at.tag} at that node, so the two name different branches "
+                f"of one junction, and this seam serves one branch per address"
+            )
+    return branch
+
+
 def build_mesh(
     deck: Nec5Deck,
     structure: Structure,
@@ -2322,6 +2401,12 @@ def build_mesh(
     junction's KCL row carries the current across, and the deck's own node
     structure survives into the mesh, which is the whole point of a dialect
     that addresses nodes.
+
+    A ``GW`` IS cut, on every basis, where another wire's node lands inside it
+    (:func:`_junction_cuts`): NEC-5 connects there, and the cut piece ends meet
+    in an ordinary junction.  Every piece keeps its deck nodes
+    (``first_node``/``last_node``), so element and node numbering stay the
+    deck's; a card at the cut names the branch :func:`_join_branches` gives.
 
     Two ways to spell one series EMF
     --------------------------------
@@ -2401,6 +2486,8 @@ def build_mesh(
             stacklevel=2,
         )
     addressed = _addressed_nodes(deck)
+    joins = _junction_cuts(structure, phantom)
+    branches = _join_branches(deck, structure, joins)
     crossings = _plane_crossings(deck)
     crossing_nodes = frozenset(_crossing_nodes(deck))
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
@@ -2413,7 +2500,9 @@ def build_mesh(
     # its (tag, node) entries; a later wire carrying the tag is meshed plain.
     owned: set[int] = set()
 
-    for wire, points in zip(structure.wires, structure.points, strict=True):
+    for wire_index, (wire, points) in enumerate(
+        zip(structure.wires, structure.points, strict=True)
+    ):
         last = wire.segment_count
         owner = wire.tag not in owned
         owned.add(wire.tag)
@@ -2427,6 +2516,11 @@ def build_mesh(
             k for k in (addressed.get(wire.tag, ()) if owner else ()) if 0 < k < last
         )
         bounds = [0, *addressed_inside, last] if cut else [0, last]
+        wire_joins = joins.get(wire_index, ())
+        if wire_joins:
+            bounds = sorted({*bounds, *wire_joins})
+        # junction cut -> the piece ending there, for `branches`' "end"
+        ending_at: dict[int, int] = {}
         lower_half = _NO_PIECE
         for a, b, start, end, cut_start, cut_end in _wire_runs(
             points, bounds, crossings.get(wire.tag)
@@ -2458,6 +2552,7 @@ def build_mesh(
                 piece_of_node[(wire.tag, a)] = (index, "start")
             if owner and not cut_end:
                 piece_of_node.setdefault((wire.tag, b), (index, "end"))
+                ending_at[b] = index
             for k in addressed_inside:
                 if a < k < b:
                     piece = mesh.pieces[index]
@@ -2479,6 +2574,10 @@ def build_mesh(
                 continue
             for element in range(b - a):
                 mesh.element_of.append((index, element))
+        if owner:
+            for k in wire_joins:
+                if branches.get((wire.tag, k), "end") == "end" and k in ending_at:
+                    piece_of_node[(wire.tag, k)] = (ending_at[k], "end")
 
     # -- junctions: fused node key -> the piece ends that meet there --------
     #

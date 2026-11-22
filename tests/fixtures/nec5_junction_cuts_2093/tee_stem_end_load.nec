@@ -1,0 +1,12 @@
+CM momwire#2093 momwire#2094: a load at the stem end on the T
+CE
+GW 1,20,0.,-5.,10.,0.,5.,10.,.001
+GW 2,8,0.,0.,10.,0.,0.,6.,.001
+GE 0,-1
+FR 0,1,0,0,14.
+GN -1
+LD 4,2,-1,0,50.,25.
+EX 0,1,5,0,1.,0.
+PQ 0
+XQ 0
+EN
