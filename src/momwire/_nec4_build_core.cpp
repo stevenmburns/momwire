@@ -1191,10 +1191,10 @@ void dump_tables(Out &o, const std::string &p, const BuildTables &t) {
 
 }  // namespace
 
-Build build(const std::string &text, const std::string &basis) {
+Build build(const std::string &text, const std::string &basis, bool refuse_duplicates) {
     Build out;
     out.basis = basis;
-    Seam s = seam(text, basis);
+    Seam s = seam(text, basis, refuse_duplicates);
     out.n_structures = s.chained ? 0 : 1;
     if (s.chained) {
         std::vector<nec5::Structure> all;

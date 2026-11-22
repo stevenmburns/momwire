@@ -567,15 +567,23 @@ def test_steps_over_ground_track_nec42(name):
 )
 def test_a_singular_node_keeps_the_log_rule(deck):
     """Coincident members (a wire left in place twice) give the junction
-    solve no unique split; that node keeps the log rule and the deck prints
-    as it did rather than raising."""
+    solve no unique split; that node keeps the log rule and the build
+    answers rather than raising. The NEC-4.2 slot refuses such a deck by
+    name before the build since momwire#2107, so the build is asked
+    directly, as the slot made it before."""
+    from momwire.dropin.nec2c._portal import DeckSolver, parse_deck
     from momwire.dropin.nec5 import _nec4
 
     text = (
         pathlib.Path(__file__).parent / "fixtures" / "razor_printout_small" / deck
     ).read_text()
     out = _nec4.render(text, basis="sinusoidal")
-    assert "ZeroDivisionError" not in out
+    assert "momwire#2107" in out and "ZeroDivisionError" not in out
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        solver = DeckSolver(parse_deck(text, dialect="nec4"), basis="sinusoidal")
+    y = solver.at(14.0)["Y"]
+    assert np.isfinite(y).all()
 
 
 @pytest.mark.parametrize("n", (20, 40))

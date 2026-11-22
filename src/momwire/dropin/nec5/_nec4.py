@@ -456,6 +456,71 @@ def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]
     return runs
 
 
+# The bases on which this slot refuses a wire listed twice (momwire#2107)
+# rather than solving it: the sinusoidal basis only (Steve, 11-22). The #1042
+# merge does not reach this route whole: the nec4 dialect's mesh cuts a wire
+# into pieces, so a copy merges piece by piece, and the pieces at its ends,
+# joined differently from their twins', stay in place; Z is singular and the
+# printout reads rounding residue. Licensed NEC-4.2 stops on every such deck
+# at its geometry check (black box, 11-22: the 12 duplicate decks of
+# tests/test_nec4_run_core.py's CASES, and dup_reversed_rp_ne_pq). The C++
+# run half asks the same question (`nec4::duplicate_wire_refusal`).
+_REFUSES_DUPLICATES = frozenset({"sinusoidal"})
+
+
+def _tag_list(tags: list[int]) -> str:
+    """``tag 3``, ``tags 3 and 4``, ``tags 3, 4 and 5``; six at most."""
+    shown = [str(t) for t in tags[:6]]
+    if len(tags) > 6:
+        shown.append(f"{len(tags) - 6} more")
+    if len(shown) == 1:
+        return f"tag {shown[0]}"
+    return "tags " + ", ".join(shown[:-1]) + " and " + shown[-1]
+
+
+def duplicate_wire_refusal(structure) -> str | None:
+    """The sentence refusing a deck that lists a wire twice, or ``None``.
+
+    ``structure`` is the deck's :class:`~momwire.deck._nec2_geometry.
+    Nec2Structure`, after every ``GM`` / ``GS`` / ``GX``: a wire here is one
+    straight row (an arc or a helix contributes one per segment). Two rows
+    are one wire listed twice when their ends coincide, in either order, by
+    :func:`momwire._wire_spec.find_duplicated_wires`' test (equal up to the
+    rounding of a transform), so a ``GM`` that moves without copying is not
+    one. Each pair is named by the deck's own ``GW`` tags, and the copy (the
+    later row of the pair) is the one the sentence says to delete.
+    """
+    from ..._wire_spec import find_duplicated_wires
+
+    wires = structure.wires
+    dups = find_duplicated_wires([np.array([w.p1, w.p2], dtype=float) for w in wires])
+    if not dups:
+        return None
+    # One set per path, in deck order: the first row's tag, then each copy's
+    # (a tag the set already holds is not repeated, so two rows of one tag
+    # read "tag 2").
+    sets: dict[int, list[int]] = {}
+    copies: list[int] = []
+    for copy, first, _reversed in dups:
+        tags = sets.setdefault(first, [wires[first].tag])
+        if wires[copy].tag not in tags:
+            tags.append(wires[copy].tag)
+        if wires[copy].tag not in copies:
+            copies.append(wires[copy].tag)
+    named = "; ".join(_tag_list(tags) for tags in list(sets.values())[:6])
+    if len(sets) > 6:
+        named += f"; and {len(sets) - 6} more sets"
+    return (
+        f"the deck lists a wire more than once: the GW wires of {named} "
+        f"coincide, end for end in either direction, so each set is one "
+        f"conductor written more than once and the current has no unique "
+        f"split between the copies. This engine's NEC-4.2 slot does not merge "
+        f"them, and NEC-4.2 refuses such a deck too: delete the "
+        f"{'copy' if len(copies) == 1 else 'copies'} ({_tag_list(copies)}) "
+        f"and run the deck again - momwire#2107"
+    )
+
+
 def solve(text: str, *, basis: str) -> Nec4Printout:
     """Solve one deck and return every number its NEC-4.2 printout prints.
 
@@ -480,6 +545,10 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
         raise Nec4Refusal(str(exc)) from exc
     echo_at, further = _further_tables(text, deck)
     plan = _served_shape(text, deck, echo_at, further)
+    if canonical_basis(basis, warn=False) in _REFUSES_DUPLICATES:
+        duplicate = duplicate_wire_refusal(deck.structure)
+        if duplicate is not None:
+            raise Nec4Refusal(duplicate)
     runs: list[Nec4Run | Nec4Report] = []
     try:
         solver = DeckSolver(deck, basis=basis)

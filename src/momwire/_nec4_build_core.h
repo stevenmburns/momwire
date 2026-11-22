@@ -166,8 +166,9 @@ struct Build {
 // says how it ended, as `build` reports a structure.
 void build_portal_structure(const StructureSeam &s, const std::string &basis, StructureBuild &out);
 
-// The seam front, then each served structure's build, for one basis.
-Build build(const std::string &latin1_text, const std::string &basis);
+// The seam front, then each served structure's build, for one basis
+// (`refuse_duplicates`: as `seam`'s).
+Build build(const std::string &latin1_text, const std::string &basis, bool refuse_duplicates = true);
 std::string dump_build(const std::string &latin1_text, const std::string &basis);
 
 }  // namespace nec4

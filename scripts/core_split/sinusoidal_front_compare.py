@@ -81,7 +81,21 @@ def _front(kw: dict, p: str, out: list[str]) -> None:
 
 
 def _points(text, echo, closing):
-    """The structure's recorded constructor kwargs, and whether it went on."""
+    """The structure's recorded constructor kwargs, and whether it went on.
+
+    The slot refuses a wire listed twice on this basis before the build
+    (momwire#2107); the comparison still holds the constructor's own #1042
+    merge to Python's, so it builds such a deck anyway, as the C++ dumps do
+    (`nec4::build(text, "sinusoidal", false)`)."""
+    saved = _nec4._REFUSES_DUPLICATES
+    _nec4._REFUSES_DUPLICATES = frozenset()
+    try:
+        return _points_built(text, echo, closing)
+    finally:
+        _nec4._REFUSES_DUPLICATES = saved
+
+
+def _points_built(text, echo, closing):
     with sc._stubbed() as seen:
         try:
             _nec4.render_structure(
