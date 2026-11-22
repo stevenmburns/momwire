@@ -118,19 +118,26 @@ class Printouts:
     def __init__(self, night: Path):
         self.dir = night / "py-avx2-T1"
         self.tar = night / "py-avx2-T1.tar.xz"
-        self._tf = None
+        self._all = None
 
     def get(self, key: str) -> bytes | None:
         p = self.dir / f"{key}.py"
         if p.is_file():
             return p.read_bytes()
         if self.tar.is_file():
-            if self._tf is None:
-                self._tf = tarfile.open(self.tar)
-            try:
-                return self._tf.extractfile(f"py-avx2-T1/{key}.py").read()
-            except KeyError:
-                return None
+            if self._all is None:
+                # One pass, in archive order. An xz stream cannot seek back,
+                # so a lookup per member in any other order decompresses from
+                # the start each time: quadratic over a night's ~2,450
+                # printouts (the report agent's first trial never finished
+                # a corpus-wide comparison).
+                self._all = {}
+                with tarfile.open(self.tar) as tf:
+                    for m in tf:
+                        f = tf.extractfile(m) if m.isfile() else None
+                        if f is not None:
+                            self._all[m.name] = f.read()
+            return self._all.get(f"py-avx2-T1/{key}.py")
         return None
 
 

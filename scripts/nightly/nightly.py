@@ -1066,9 +1066,13 @@ def agent_command(night: Path, base: Path, sha: str, cells) -> list[str]:
 
     No Write or Edit: the agent's last message is the report, saved by
     `agent_report`. Bash is limited to git's read commands on the nightly
-    tree and `report_tools.py`, which only reads; any other tool is refused
-    (print mode refuses what is not allowed). It never accepts a base, never
-    changes the harness and never deletes: those stay with a person."""
+    tree and `report_tools.py`, which only reads. `--permission-mode default`
+    is what makes that list a whitelist: under the account's own default
+    (Skylake's is `auto`) the allowed list only adds approvals, and the first
+    trial ran heredoc Python, loops and sleeps (2026-11-21). In print mode the
+    default mode refuses anything not allowed. It never accepts a base, never
+    changes the harness and never deletes: those stay with a person. There is
+    no OS sandbox under it: bwrap cannot map a user namespace on Skylake."""
     prompt = (
         (HERE / "report_prompt.md")
         .read_text()
@@ -1095,8 +1099,10 @@ def agent_command(night: Path, base: Path, sha: str, cells) -> list[str]:
     return [
         CLAUDE, "-p", prompt,
         "--output-format", "text",
+        "--permission-mode", "default",
         "--allowedTools", *allowed,
         "--disallowedTools", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch",
+        "Agent",
     ]  # fmt: skip
 
 

@@ -314,6 +314,9 @@ def test_the_report_agent_can_only_read(tmp_path):
     cmd = nightly.agent_command(tmp_path / "n", tmp_path / "b", "c" * 40, ["avx2-T1"])
     allowed = cmd[cmd.index("--allowedTools") + 1 : cmd.index("--disallowedTools")]
     denied = cmd[cmd.index("--disallowedTools") + 1 :]
+    # the allowed list is a whitelist only in the default mode (an account
+    # in auto mode would otherwise approve more)
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
     assert not {"Write", "Edit", "NotebookEdit"} & set(allowed)
     assert {"Write", "Edit", "NotebookEdit"} <= set(denied)
     bash = [t for t in allowed if t.startswith("Bash(")]
@@ -381,8 +384,31 @@ def test_report_tools_read_and_never_write(tmp_path):
     d = report_tools.diff(night, base, "e", "d")
     assert "-" + " IMPEDANCE 7.1521E+01" in d and "+ IMPEDANCE 7.2000E+01" in d
     assert "0.87.1" not in d and "0.95.1" not in d  # line 2 masked
+    m = report_tools.masked(night, base)
+    assert "differ only on line 2: 0" in m and "differ elsewhere: 1" in m
     lines = report_tools.nights(tmp_path).splitlines()
     assert [x.split()[0] for x in lines] == ["base", "night"]
     assert "red" in lines[1] and '"severe": 1' in lines[1]
     after = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     assert before == after
+
+
+def test_printouts_read_a_packed_night_in_one_pass(tmp_path):
+    import tarfile
+
+    night = tmp_path / "n"
+    (night / "py-avx2-T1").mkdir(parents=True)
+    for k in ("a", "b", "c"):
+        (night / "py-avx2-T1" / f"{k}.py").write_text(f"printout {k}\n")
+    with tarfile.open(night / "py-avx2-T1.tar.xz", "w:xz") as tf:
+        tf.add(night / "py-avx2-T1", arcname="py-avx2-T1")
+    for k in ("a", "b", "c"):
+        (night / "py-avx2-T1" / f"{k}.py").unlink()
+    (night / "py-avx2-T1").rmdir()
+    p = triage.Printouts(night)
+    assert [p.get(k) for k in ("c", "a", "b", "zz")] == [
+        b"printout c\n",
+        b"printout a\n",
+        b"printout b\n",
+        None,
+    ]
