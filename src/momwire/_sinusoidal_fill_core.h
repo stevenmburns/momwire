@@ -14,9 +14,10 @@
 //   row tiles above it (each element its own zero plus its column's stored
 //   entries in row order, one unfused complex multiply-add each, the three
 //   products summed `(A + B) + C`);
-// - the port solve: `_lapack.solve(G, B)`, which is `scipy.linalg.solve`'s
-//   general route -- getrf on the Fortran copy, getrs 'N' -- on whichever
-//   LAPACK the caller hands in (the binding passes SciPy's own; an
+// - the port solve: `_lapack.solve_transposed(G, B)` (momwire#2071) --
+//   getrf on the row-major Z's own buffer, which LAPACK reads as Zᵀ, then
+//   getrs 'T'; no copy, so one N x N array lives through the factor -- on
+//   whichever LAPACK the caller hands in (the binding passes SciPy's own; an
 //   executable its bundled OpenBLAS, as `_lapack`'s host route does);
 // - `_feed_segment_current` at each feed segment's centre, into Y;
 // - a wholly-buried deck (momwire#1607 B6a), the whole fill at the lower
@@ -43,10 +44,9 @@
 // - on a crossing deck, the folded cos-1 shape (the reduced kernel's numpy
 //   route) and a repeated (segment, basis) entry;
 // - an insulated wire;
-// - a matrix scipy's solve would NOT take as general: exactly symmetric or
-//   Hermitian, or of lower or upper bandwidth at most 1 (its diagonal,
-//   triangular and tridiagonal detection), or not finite; a singular one
-//   (scipy's LinAlgError);
+// - a Z that is not finite, or exactly singular (the ValueError and the
+//   LinAlgError `solve_transposed` raises); no structure is declined, as
+//   `solve_transposed` detects none;
 // - a basis view with a repeated (segment, basis) pair (scipy would sum it,
 //   numpy's assignment would keep the last).
 #pragma once
@@ -65,17 +65,16 @@ namespace sinusoidal {
 struct FillLinalg {
     // numpy's own CBLAS (the dense reduction's `Φ @ M`, N < 60)
     nec5::NumpyLinalg np;
-    // the LU pair `scipy.linalg.solve` reaches
+    // the LU pair `_lapack.solve_transposed` reaches (SciPy's getrf / getrs)
     razor::Lapack lu;
 };
 
 struct PortSolution {
     long long n = 0, n_ports = 0;
-    std::vector<std::complex<double>> G;       // (n, n), C order: `_assemble_Z`'s
     std::vector<std::complex<double>> coeffs;  // (n, n_ports), C order
     std::vector<std::complex<double>> y;       // (n_ports, n_ports), C order
-    // Wall seconds in the LU (the copy into F order, getrf, getrs): the
-    // printout's FACTOR=, so its FILL= is the O(N^2) fill alone.
+    // Wall seconds in the LU (getrf, getrs): the printout's FACTOR=, so its
+    // FILL= is the O(N^2) fill alone.
     double factor_seconds = 0;
 };
 
@@ -89,8 +88,13 @@ std::vector<std::complex<double>> assemble_Z(const Front &fr, const nec4::Solver
 bool wire_impedance_per_wire(const Front &fr, const nec4::SolverArgs &args, double omega,
                              std::vector<std::complex<double>> &z_wire);
 
-// `compute_port_solution()` in free space.
+// `compute_port_solution()` in free space: `assemble_Z`, then `solve_ports`.
 PortSolution port_solution(const Front &fr, const nec4::SolverArgs &args, const FillLinalg &la);
+
+// The port solve over an assembled Z (`assemble_Z`'s, C order), which it
+// CONSUMES: the factors of Zᵀ overwrite it, and it is released before the
+// readout. `dump_fill` dumps Z between the two halves.
+PortSolution solve_ports(const Front &fr, std::vector<std::complex<double>> &&G, const FillLinalg &la);
 
 // The comparison format (`sinusoidal_fill_compare.py`), per operating point
 // of each built structure of a deck: a matrix of up to `whole` columns

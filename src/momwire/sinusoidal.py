@@ -8701,7 +8701,16 @@ class SinusoidalSolver(
         B = np.zeros((n_segs, n_ports), dtype=np.complex128)
         for j, fi in enumerate(feed_segs):
             B[fi, j] = -1.0 / geom["seg_h"][fi]
-        alphas = _lapack.solve(G, B)  # (n_segs, n_ports)
+        # Gᵀ factored in G's own storage, solved with trans='T' (momwire#2071):
+        # every fill writes G row-major, which LAPACK reads as Gᵀ, so one
+        # dense matrix lives through the factor where `_lapack.solve`'s
+        # Fortran copy made two (867 MB against the 806 MB bound of one Z +
+        # 512 MB on the W8IO whip, N = 4392). Pivoting on Gᵀ moved the last
+        # digits once against the copy's; the NEC-2 and NEC-4.2 sinusoidal
+        # executables factor the same way (`port_solution`), so they stay
+        # this route's bytes. G holds the factors afterwards.
+        alphas = _lapack.solve_transposed(G, B)  # (n_segs, n_ports)
+        del G
 
         Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
         for j in range(n_ports):
@@ -8773,7 +8782,9 @@ class SinusoidalSolver(
                     G, seg_view = self._assemble_Z(
                         geom, self.k, self._medium_eta(medium)
                     )
-                alpha = _lapack.solve(G, v)
+                # Gᵀ in G's storage, as `compute_port_solution` (momwire#2071).
+                alpha = _lapack.solve_transposed(G, v)
+                del G
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out
 
