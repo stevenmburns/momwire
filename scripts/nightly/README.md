@@ -141,6 +141,35 @@ and `cell`. A missing pattern matches anything. Each entry also carries a
 finding is listed as known and does not turn the night red. Adding to the
 list is a PR like any other.
 
+### Moving the base: `accept`
+
+The base is the last green night, and it moves by itself only on a green
+night. So a change to an answer that was meant (a fix, a widened refusal)
+keeps every later night red until it is accepted. A finding that will recur
+until an issue retires it belongs on the known list; a one-off intended change
+is accepted by making the reviewed night the base:
+
+```
+venv/bin/python harness/nightly.py accept results/<date> --note "<why, with the PRs>"
+```
+
+It rewrites `state.json`'s `last_green` and appends the night, its counts, the
+base it replaces and the note to `accepted.jsonl`. Review every finding first:
+accepting a night also hides from later nights anything it carried, a timing
+regression included (2026-11-21: the base had sat at 11-07 for two weeks, and
+a sweep slowdown from 11-09 would have vanished with it).
+
+### What py-drift does not compare
+
+Printout line 2, momwire's identity (version, basis, variant, stamps), is
+masked night over night: read as numbers, the version bump 0.87.1 -> 0.95.1
+was "a number moved 8.42e-02" on all 2,438 decks, every night from 11-10 to
+11-21. The same night's exe == Python check still holds line 2 byte for byte.
+A base audited before momwire#2091 keys its rows by the old executable labels
+(`nec5-bspline`, `nec5-razor-2p`, `nec42-bspline`); triage maps them to the new
+ones, without which the drift check would find no row to compare and pass in
+silence.
+
 ## Reporting
 
 The issue's body is replaced with the latest night every night the nightly
@@ -173,6 +202,13 @@ The units are `~/.config/systemd/user/momwire-skylake-nightly.{service,timer}`
 The service has `MemoryMax=24G` and `MemorySwapMax=0`, and the script takes
 `flock ~/antennas/.nightly.lock` itself. Lingering is on for `smburns`, so
 the timer fires without a login.
+
+## Temporary files
+
+Every child process gets `TMPDIR=<root>/tmp`, and the anchors phase's pytest
+runs with `--basetemp=<root>/pytest-tmp` (emptied by pytest at each run), so
+neither lands on Skylake's 145 GB root disk: `/tmp/pytest-of-<user>` holds
+about 2.3 GB a run, and the root disk was at 99 % on 2026-11-21.
 
 ## Re-running a night by hand
 
