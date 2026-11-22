@@ -117,6 +117,56 @@ static py::tuple dispatch(py::array a, int n_threads) {
     throw std::runtime_error("fortran_copy_1norm: a must be complex128 or float64");
 }
 
+// momwire#2071: the same finiteness flag and 1-norm, read from a matrix that
+// is ALREADY Fortran-ordered (a fill that wrote LAPACK's order), with no copy.
+// A column is contiguous here, so a thread owns whole columns and each
+// column's chain is `fortran_copy_1norm`'s: zero, then |a(i, j)| for i
+// ascending, through the same `mag`. The maximum is exact. So the norm is the
+// copying pass's to the bit at every thread count, and with it gecon's
+// anorm.
+template <typename T>
+static py::tuple finite_1norm_f(py::array a, int n_threads) {
+    if (a.ndim() != 2) throw std::runtime_error("finite_1norm_f: a must be 2-D");
+    if (!(a.flags() & py::array::f_style))
+        throw std::runtime_error("finite_1norm_f: a must be F-contiguous");
+    const py::ssize_t m = a.shape(0), n = a.shape(1);
+    const T *src = static_cast<const T *>(a.data());
+    std::vector<double> colsum(static_cast<size_t>(n), 0.0);
+    int bad = 0;
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = n_threads > 0 ? n_threads : omp_get_max_threads();
+#else
+        (void)n_threads;
+#endif
+        if (nt < 1) nt = 1;
+#pragma omp parallel for schedule(dynamic, TILE) num_threads(nt) reduction(| : bad)
+        for (py::ssize_t j = 0; j < n; ++j) {
+            const T *col = src + j * m;
+            double sum = 0.0;
+            for (py::ssize_t i = 0; i < m; ++i) {
+                const T v = col[i];
+                if (!finite(v)) bad |= 1;
+                sum = sum + mag(v);
+            }
+            colsum[j] = sum;
+        }
+    }
+    double anorm = 0.0;
+    for (py::ssize_t j = 0; j < n; ++j)
+        if (anorm < colsum[j]) anorm = colsum[j];
+    return py::make_tuple(bad == 0, anorm);
+}
+
+static py::tuple dispatch_f(py::array a, int n_threads) {
+    if (a.dtype().is(py::dtype::of<std::complex<double>>()))
+        return finite_1norm_f<std::complex<double>>(a, n_threads);
+    if (a.dtype().is(py::dtype::of<double>())) return finite_1norm_f<double>(a, n_threads);
+    throw std::runtime_error("finite_1norm_f: a must be complex128 or float64");
+}
+
 }  // namespace solve_prep
 
 void register_solve_prep(py::module_ &m) {
@@ -128,4 +178,10 @@ void register_solve_prep(py::module_ &m) {
           "strips, n_threads > 0 sets the team. momwire#1916.",
           py::arg("a"), py::arg("n_threads") = 0);
     m.attr("solve_prep_1916") = true;
+    m.def("finite_1norm_f", &solve_prep::dispatch_f,
+          "(finite, anorm) for an F-contiguous 2-D complex128 or float64 `a`, "
+          "read in place: `fortran_copy_1norm`'s flag and norm without the "
+          "copy. OpenMP over columns, n_threads > 0 sets the team. momwire#2071.",
+          py::arg("a"), py::arg("n_threads") = 0);
+    m.attr("solve_prep_2071") = true;
 }

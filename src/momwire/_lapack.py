@@ -565,6 +565,48 @@ def _solve_prep(a1, dtype):
     return lu, bool(finite), float(anorm)
 
 
+#: Copies `solve` did not take: an ``overwrite_a`` call whose A was already
+#: F-contiguous, factored in its own storage (momwire#2071). Tests read it to
+#: prove the copy-free route ran.
+IN_PLACE_SOLVES = {"count": 0}
+
+
+def _in_place_prep(a1, dtype, overwrite_a):
+    """`(A itself, all finite, lange("1") norm)` when `solve` may factor A in
+    its own storage: asked to (``overwrite_a``), and A already LAPACK's
+    matrix -- F-contiguous, writeable, of the solve's dtype. None otherwise,
+    and the copy is taken as before.
+
+    The norm is the copying routes' to the bit: on an F-ordered A,
+    `finite_1norm_f` sums each column as `fortran_copy_1norm` does, and
+    scipy's `lange` reads A exactly as it reads the copy (the same bytes in
+    the same layout)."""
+    if not (overwrite_a and a1.flags.f_contiguous and a1.flags.writeable):
+        return None
+    if a1.dtype != dtype:
+        return None
+    acc = None
+    if (
+        _SOLVE_PREP_ACCEL
+        and a1.shape[0] >= _SOLVE_PREP_MIN_N
+        and dtype in (np.complex128, np.float64)
+    ):
+        try:
+            from ._accel import acc
+        except ImportError:  # pragma: no cover - the accelerator module is optional
+            acc = None
+    if acc is not None and getattr(acc, "solve_prep_2071", False):
+        finite, anorm = acc.finite_1norm_f(a1)
+        finite, anorm = bool(finite), float(anorm)
+    else:
+        finite = bool(np.isfinite(a1).all())
+        lange = scipy.linalg.get_lapack_funcs("lange", (a1,))
+        # A non-finite A raises before the norm is read; lange is not asked.
+        anorm = float(lange("1", a1)) if finite else 0.0
+    IN_PLACE_SOLVES["count"] += 1
+    return a1, finite, anorm
+
+
 #: The environment variable that turns `solve`'s condition estimate on.
 CONDITION_CHECK_ENV = "MOMWIRE_CONDITION_CHECK"
 
@@ -596,10 +638,17 @@ def _pivots_suspect(lu) -> bool:
 
 
 @_factor_stage
-def solve(a, b):
+def solve(a, b, overwrite_a=False):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
     published. The condition estimate runs under :func:`condition_check`
-    or when :func:`_pivots_suspect` flags the factors."""
+    or when :func:`_pivots_suspect` flags the factors.
+
+    ``overwrite_a`` (momwire#2071) lets an F-contiguous ``a`` of the solve's
+    dtype be factored in its own storage, so ``a`` holds the factors after;
+    any other ``a`` is copied as before. Both are the same getrf on the same
+    bytes, so the answer, the error and the warning are the copying solve's
+    to the bit. A call this route hands to ``scipy.linalg.solve`` leaves
+    ``a`` alone."""
     a1 = np.asarray(a)
     b0 = np.asarray(b)
     dtype = np.result_type(a1.dtype, b0.dtype)
@@ -614,10 +663,13 @@ def solve(a, b):
     ):
         return scipy.linalg.solve(a, b)
     always = condition_check()
-    prep = _solve_prep(a1, dtype)
+    prep = _in_place_prep(a1, dtype, overwrite_a)
+    if prep is None:
+        prep = _solve_prep(a1, dtype)
     if prep is not None:
-        # The copy, the finiteness check and lange's 1-norm in one threaded
-        # pass (momwire#1916): the same matrix, error and norm.
+        # The copy (or, in place, A itself), the finiteness check and
+        # lange's 1-norm in one threaded pass (momwire#1916, #2071): the
+        # same matrix, error and norm.
         lu, a_finite, anorm = prep
         if not (a_finite and np.isfinite(b0).all()):
             raise ValueError("array must not contain infs or NaNs")
