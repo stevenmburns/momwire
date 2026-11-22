@@ -1324,10 +1324,15 @@ bool Front::dedup(const FrontInputs &in, FrontInputs &out) {
     if (removed.empty()) return false;
 
     const auto refuse = [](size_t r, size_t twin, const std::string &why) {
-        value_error("RazorSolver: wires " + std::to_string(twin) + " and " + std::to_string(r) +
-                    " are the same wire listed twice, and " + why +
-                    ", so they cannot be merged into one conductor. Delete wire " +
-                    std::to_string(r) + ", or make the two copies identical - momwire#1042");
+        FrontError e(FrontErrorKind::value_error,
+                     "RazorSolver: wires " + std::to_string(twin) + " and " + std::to_string(r) +
+                         " are the same wire listed twice, and " + why +
+                         ", so they cannot be merged into one conductor. Delete wire " + std::to_string(r) +
+                         ", or make the two copies identical - momwire#1042");
+        e.dup_copy = static_cast<long long>(r);
+        e.dup_twin = static_cast<long long>(twin);
+        e.dup_why = why;
+        throw e;
     };
     const bool radius_list = !in.radius_shape.empty() && in.radius.size() == n;
     for (const auto &rm : removed) {

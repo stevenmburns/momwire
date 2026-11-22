@@ -385,6 +385,20 @@ class DuplicateWire(UserWarning):
     matrix`; row-order fills answer from rounding residue)."""
 
 
+class DuplicateWireRefusal(NamedTuple):
+    """What `drop_duplicated_wires` refused, on its ValueError's
+    ``duplicate`` attribute: the two wires (``copy``, ``twin``: the solver's
+    wire indices) and ``why``, so a front end that knows the deck's own wire
+    names can say the same in them (momwire#2107: the NEC-5 seam names the GW
+    tags, as a refusal rather than an INTERNAL ERROR frame). The exception
+    stays a plain ValueError with the constructor's sentence, which every
+    caller and every printout has always read."""
+
+    copy: int
+    twin: int
+    why: str
+
+
 class WireDedup(NamedTuple):
     """How a constructor's INPUT wires map onto the wires it solves.
 
@@ -639,11 +653,13 @@ def drop_duplicated_wires(
     n = len(wires)
 
     def refuse(r, twin, why):
-        raise ValueError(
+        exc = ValueError(
             f"{family}: wires {twin} and {r} are the same wire listed twice, "
             f"and {why}, so they cannot be merged into one conductor. Delete "
             f"wire {r}, or make the two copies identical - momwire#1042"
         )
+        exc.duplicate = DuplicateWireRefusal(r, twin, why)
+        raise exc
 
     removed, kept_coincident = _merge_connected_alike(wires, dups, junctions)
     if kept_coincident and coincident_refusal:

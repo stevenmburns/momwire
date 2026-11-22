@@ -88,6 +88,16 @@ struct FrontValueError : std::runtime_error {
 struct FrontStandOffFloor : FrontValueError {
     using FrontValueError::FrontValueError;
 };
+// a ValueError carrying `_wire_spec.DuplicateWireRefusal`: a wire listed
+// twice the constructor cannot merge. `copy` / `twin` are the solver's wire
+// indices and `why` the reason, for a deck seam that names the deck's own
+// tags (momwire#2107).
+struct FrontDuplicateWire : FrontValueError {
+    FrontDuplicateWire(const std::string &m, std::size_t c, std::size_t t, const std::string &w)
+        : FrontValueError(m), copy(c), twin(t), why(w) {}
+    std::size_t copy, twin;
+    std::string why;
+};
 struct FrontNotPorted : std::runtime_error {
     using std::runtime_error::runtime_error;
     // `python`: the message is Python's own NotImplementedError sentence (the

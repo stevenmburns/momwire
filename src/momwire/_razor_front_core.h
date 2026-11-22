@@ -73,6 +73,11 @@ enum class FrontErrorKind { value_error, not_implemented };
 struct FrontError : std::runtime_error {
     FrontErrorKind kind;
     bool solve_phase = false;
+    // `_wire_spec.DuplicateWireRefusal` (momwire#2107): the solver's wire
+    // indices of a wire listed twice that cannot be merged, and why; -1 for
+    // every other error
+    long long dup_copy = -1, dup_twin = -1;
+    std::string dup_why;
     FrontError(FrontErrorKind k, const std::string &m, bool solve = false)
         : std::runtime_error(m), kind(k), solve_phase(solve) {}
 };
