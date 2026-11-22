@@ -395,7 +395,7 @@ def render_files(
 def _advise_long_exponents(text: str) -> None:
     """momwire#1964: an exponent token past 20 characters, as a warning.
     Not a refusal (momwire's reading is the deck's), an advisory; the
-    launchers show it only under MOMWIRE_ADVISORIES=stderr. A file's whole
+    launchers show it on stderr unless MOMWIRE_ADVISORIES=off. A file's whole
     text and each streamed structure (:func:`_stream_piece`) both pass here."""
     note = long_exponent_note(long_exponent_tokens(text))
     if note is not None:
@@ -865,7 +865,13 @@ def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str,
 
 def _timed_piece(piece: str, basis: str, write, dialect: str = "nec5") -> bool:
     """One stream piece answered and written (``go_on``); under
-    MOMWIRE_TIMES with its ``times:`` line on stderr."""
+    MOMWIRE_TIMES with its ``times:`` line on stderr. Each piece's own
+    advisories display (:func:`_deck_advisories`)."""
+    with _deck_advisories():
+        return _timed_piece_body(piece, basis, write, dialect)
+
+
+def _timed_piece_body(piece: str, basis: str, write, dialect: str) -> bool:
     if not _times.env_on():
         printout, go_on = _stream_piece(piece, basis=basis, dialect=dialect)
         write(printout_bytes(printout))
@@ -974,47 +980,65 @@ def stream(
     return 0
 
 
-# momwire#1673: what the launchers print on stderr. Nothing, by default: the
-# real engines write nothing there, and a host that never drains the pipe
-# (SimNEC's stream, `- -`) blocks the engine on a full pipe once the
-# advisories one long stream raises pass its size (a Windows anonymous pipe
-# is about 4 KB; a buried-radial sweep raises ~1.5 KB per structure). So
-# `main` answers with `sys.stderr` pointed at a sink, which is where Python's
-# warnings display goes. The printout is unchanged, a
-# `warnings.catch_warnings(record=True)` around `main` still records every
-# advisory, and the shell's own deliberate lines (the streaming refusal,
-# MOMWIRE_TIMES) still reach the real stderr through `_stderr()`.
-# `MOMWIRE_ADVISORIES=stderr` leaves stderr alone, for a host that reads it
-# as a diagnostic feed.
-ADVISORIES_ENV = "MOMWIRE_ADVISORIES"
+# What the launchers print on stderr: the advisories the user's deck raises
+# (Python warnings), by default. momwire#1673 sank them, because SimNEC's
+# stream (`- -`) never drained the pipe and the engine blocked on a full one;
+# SimNEC drains it now. `main` answers with `sys.stderr` -- where Python's
+# warning display writes -- wrapped in the per-process cap
+# (`momwire_serve_client.CappedStderr`, which says why 3072 bytes), the guard
+# that keeps a host that still never drains the pipe from hanging.
+# `MOMWIRE_ADVISORIES=off` points it at a sink instead, today's silence.
+# Either way the printout is unchanged, a `warnings.catch_warnings(record=
+# True)` around `main` still records every advisory, and the shell's own
+# deliberate lines (the streaming refusal, MOMWIRE_TIMES) reach the real
+# stderr, uncapped, through `_stderr()`.
+ADVISORIES_ENV = _mech.ADVISORIES_ENV
 _REAL_STDERR: list = []
 
 
 def _stderr():
-    """The process's real stderr, under `main`'s sink or not."""
+    """The process's real stderr, under `main`'s cap or sink or not."""
     return _REAL_STDERR[-1] if _REAL_STDERR else sys.stderr
 
 
-def _quiet_advisories(entry: Callable[..., int]) -> Callable[..., int]:
-    """Run a launcher entry point with stderr pointed at a sink
-    (momwire#1673), unless ``MOMWIRE_ADVISORIES=stderr`` asks otherwise."""
+def _deck_advisories():
+    """A context for one deck's answer in which each of ITS advisories
+    displays again, whatever an earlier deck in this process displayed.
+
+    Python shows a ``default``-action warning once per (text, category,
+    line) per process, so in a stream, a warm server or a second ``main`` in
+    one interpreter the second deck's identical advisory would vanish.
+    Entering :class:`warnings.catch_warnings` invalidates that memory (the
+    filters are copied, the registries' version moves), and leaves the
+    filters and the display -- a caller's recorder included -- as they were.
+    """
+    return warnings.catch_warnings()
+
+
+def _advisories_routed(entry: Callable[..., int]) -> Callable[..., int]:
+    """Run a launcher entry point with its advisories on stderr within the
+    per-process cap, or on a sink under ``MOMWIRE_ADVISORIES=off``."""
 
     @functools.wraps(entry)
-    def quiet(*args: object, **kwargs: object) -> int:
-        if os.environ.get(ADVISORIES_ENV, "").strip().lower() == "stderr":
-            return entry(*args, **kwargs)
-        _REAL_STDERR.append(sys.stderr)
-        with open(os.devnull, "w", encoding="utf-8") as sink:
-            sys.stderr = sink
-            try:
+    def routed(*args: object, **kwargs: object) -> int:
+        real = sys.stderr
+        _REAL_STDERR.append(real)
+        try:
+            if _mech.advisories_on():
+                # A budget per call: each launcher process makes exactly one.
+                sys.stderr = _mech.CappedStderr(real)
+                with _deck_advisories():
+                    return entry(*args, **kwargs)
+            with open(os.devnull, "w", encoding="utf-8") as sink:
+                sys.stderr = sink
                 return entry(*args, **kwargs)
-            finally:
-                sys.stderr = _REAL_STDERR.pop()
+        finally:
+            sys.stderr = _REAL_STDERR.pop()
 
-    return quiet
+    return routed
 
 
-@_quiet_advisories
+@_advisories_routed
 @_canonical_basis
 def main(
     argv: list[str] | None = None,
@@ -1176,18 +1200,42 @@ _GMO_FRAME_END = _mech.GMO_FRAME_END.decode("latin-1").replace("\r\n", "\n")
 _TIMES_REQUEST = _mech.TIMES_REQUEST.decode("latin-1")
 _TIMES_FRAME_START = _mech.TIMES_FRAME_START.decode("latin-1").replace("\r\n", "\n")
 _TIMES_FRAME_END = _mech.TIMES_FRAME_END.decode("latin-1").replace("\r\n", "\n")
+_ADVISORIES_REQUEST = _mech.ADVISORIES_REQUEST.decode("latin-1")
+_ADVISORIES_FRAME_START = _mech.ADVISORIES_FRAME_START.decode("latin-1").replace(
+    "\r\n", "\n"
+)
+_ADVISORIES_FRAME_END = _mech.ADVISORIES_FRAME_END.decode("latin-1").replace(
+    "\r\n", "\n"
+)
 
 
 def _request(body: str) -> tuple[str, bool]:
     """``(deck text, en_optional)`` from a resident request's body: a launcher
     whose paths came from stdin sends :data:`momwire_serve_client.
     EN_OPTIONAL_REQUEST` ahead of the deck (after MOMWIRE_TIMES's request
-    line, :data:`momwire_serve_client.TIMES_REQUEST`, when it sends one)."""
+    line, :data:`momwire_serve_client.TIMES_REQUEST`, and the advisories'
+    :data:`momwire_serve_client.ADVISORIES_REQUEST`, when it sends them)."""
     if body.startswith(_TIMES_REQUEST):
         body = body[len(_TIMES_REQUEST) :]
+    if body.startswith(_ADVISORIES_REQUEST):
+        body = body[len(_ADVISORIES_REQUEST) :]
     if body.startswith(_EN_OPTIONAL_REQUEST):
         return body[len(_EN_OPTIONAL_REQUEST) :], True
     return body, False
+
+
+def advisories(caught: list[warnings.WarningMessage]) -> str:
+    """Recorded warnings as an advisories frame's body: each displayed as
+    Python displays it on stderr, within one process's cap, as the UTF-8
+    bytes the frame carries spelt one latin-1 character per byte (the answer
+    stream's codec). NUL, which would end the frame, is never in it."""
+    shown = [
+        warnings.formatwarning(
+            w.message, w.category, w.filename, w.lineno, w.line
+        ).replace("\x00", "?")
+        for w in caught
+    ]
+    return _mech.capped_advisories(shown).encode("utf-8").decode("latin-1")
 
 
 def framed(printout: str, gmo: str | None) -> str:
@@ -1256,9 +1304,21 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
             # `times:` line framed ahead of the rest
             body = body[len(_TIMES_REQUEST) :]
             with _times.answering("resident") as times:
-                answered = _answer_body(body)
+                answered = _advised_body(body)
             return f"{_TIMES_FRAME_START}{times.line()}{_TIMES_FRAME_END}{answered}", ""
-        return _answer_body(body), ""
+        return _advised_body(body), ""
+
+    def _advised_body(body: str) -> str:
+        if not body.startswith(_ADVISORIES_REQUEST):
+            # Not asked for (MOMWIRE_ADVISORIES=off, or a launcher that
+            # never asks): this deck's advisories go to this process's
+            # stderr, the server log, each deck's own
+            with _deck_advisories():
+                return _answer_body(body)
+        body = body[len(_ADVISORIES_REQUEST) :]
+        with warnings.catch_warnings(record=True) as caught:
+            answered = _answer_body(body)
+        return f"{_ADVISORIES_FRAME_START}{advisories(caught)}{_ADVISORIES_FRAME_END}{answered}"
 
     def _answer_body(body: str) -> str:
         try:

@@ -7,8 +7,8 @@ echo: ``-5.79364253832523e-06``, 21 characters, read as -5.7936, and
 spelling read as written, and a token with no exponent read fine at 26).
 momwire reads every one of them as written, which is what the deck means,
 so it does not refuse: the NEC-5 seam raises a :class:`LongExponentToken`
-advisory naming the tokens (the launchers show it under
-``MOMWIRE_ADVISORIES=stderr``), and the printout is unchanged.
+advisory naming the tokens (the launchers show it on stderr unless
+``MOMWIRE_ADVISORIES=off``), and the printout is unchanged.
 
 The C++ reader's copy (``_nec5_deck_core.cpp``'s ``long_exponent_note``,
 through ``text_probe``) says the same sentence, byte for byte, over the

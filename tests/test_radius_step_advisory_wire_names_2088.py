@@ -34,8 +34,8 @@ def _launcher(name: str) -> str:
 def _run(deck: str, launcher: str = "momwire-nec2c-sinusoidal", advisories=True):
     """``(stdout, stderr)`` of one launcher run over `deck`."""
     env = {"PATH": str(_BIN)}
-    if advisories:
-        env["MOMWIRE_ADVISORIES"] = "stderr"
+    if not advisories:
+        env["MOMWIRE_ADVISORIES"] = "off"
     done = subprocess.run(
         [_launcher(launcher), "-", "-"],
         input=deck,
