@@ -1,0 +1,11 @@
+CM momwire#2093 an off-centre T: the signed node names segment 10's branch
+CE
+GW 1,24,0.,-5.,10.,0.,7.,10.,.001
+GW 2,8,0.,0.,10.,0.,0.,6.,.001
+GE 0,-1
+FR 0,1,0,0,14.
+GN -1
+EX 0,1,10,0,1.,0.
+PQ 0
+XQ 0
+EN

@@ -2116,6 +2116,49 @@ def test_the_grazing_buried_decks_print_as_python(driver, tmp_path):
     assert counts.get("served", 0) == 3 and not reasons, (counts, reasons)
 
 
+def _razor_printouts(driver, decks, tmp_path):
+    """razor2p's driver against `_shell.render(text)` over `decks`, both on
+    one BLAS thread: every printed deck byte for byte, and every finished
+    run's arrays. Returns (counts, decline reasons)."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+    os.environ.update(_ONE_THREAD)
+    try:
+        answers = pc.run_driver(
+            driver[0]["nec5_razor_printout_driver"], decks, tmp_path, arrays=True
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    counts, reasons = {}, {}
+    with _one_thread():
+        for path, ans in zip(decks, answers, strict=True):
+            if ans["route"] == "declined":
+                reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
+                continue
+            key = ans["seam"] + ("|frame" if ans["raised"] else "")
+            counts[key] = counts.get(key, 0) + 1
+            py_runs = []
+            ref = pc.python_printout(path.read_bytes().decode("latin-1"), runs=py_runs)
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
+            if ans["raised"]:
+                continue
+            assert len(ans["runs"]) == len(py_runs), path
+            for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
+                for name in pc.ARRAYS:
+                    mine = np.ascontiguousarray(py[name], dtype=np.complex128)
+                    assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
+                counts["runs"] = counts.get("runs", 0) + 1
+    return counts, reasons
+
+
 CARDS_1669_DECKS = ROOT / "tests" / "fixtures" / "nec5_4nec2_cards_1669"
 
 
@@ -2131,45 +2174,27 @@ def test_the_4nec2_card_decks_print_as_python(driver, tmp_path, basis):
     if basis == "bs2":
         counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     else:
-        pc = _printout_compare_module()
-        if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
-            pytest.skip(
-                "no bundled OpenBLAS beside SciPy / numpy (not a wheel install)"
-            )
-        saved = {k: os.environ.get(k) for k in _ONE_THREAD}
-        os.environ.update(_ONE_THREAD)
-        try:
-            answers = pc.run_driver(
-                driver[0]["nec5_razor_printout_driver"], decks, tmp_path, arrays=True
-            )
-        finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-        counts, reasons = {}, {}
-        with _one_thread():
-            for path, ans in zip(decks, answers, strict=True):
-                if ans["route"] == "declined":
-                    reasons[ans["reason"]] = reasons.get(ans["reason"], 0) + 1
-                    continue
-                counts[ans["seam"]] = counts.get(ans["seam"], 0) + 1
-                py_runs = []
-                text = path.read_bytes().decode("latin-1")
-                ref = pc.python_printout(text, runs=py_runs)
-                assert ans["printout"] == ref, (
-                    f"{path}: {pc.first_difference(ref, ans['printout'])}"
-                )
-                assert len(ans["runs"]) == len(py_runs), path
-                for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
-                    for name in pc.ARRAYS:
-                        mine = np.ascontiguousarray(py[name], dtype=np.complex128)
-                        assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
-                    counts["runs"] = counts.get("runs", 0) + 1
+        counts, reasons = _razor_printouts(driver, decks, tmp_path)
     assert not reasons, reasons
     assert counts.get("served", 0) == 29, counts
     assert counts.get("runs", 0) >= 29, counts
+
+
+JUNCTION_CUT_DECKS = ROOT / "tests" / "fixtures" / "nec5_junction_cuts_2093"
+
+
+@pytest.mark.parametrize("basis", ["razor2p", "bs2"])
+def test_the_junction_cut_decks_print_as_python(driver, tmp_path, basis):
+    """momwire#2093 / #2094: a crossing, a T and the cards addressed on one,
+    through the whole C++ chain on both bases, byte for byte as
+    `_shell.render` prints them, and every run's arrays; the one deck naming
+    both branches of a joined node refuses alike. None declines."""
+    decks = sorted(JUNCTION_CUT_DECKS.glob("*.nec"))
+    assert len(decks) == 12
+    printouts = _bspline_printouts if basis == "bs2" else _razor_printouts
+    counts, reasons = printouts(driver, decks, tmp_path)
+    assert not reasons, reasons
+    assert counts == {"served": 11, "refused": 1, "runs": 11}, counts
 
 
 NORMALIZED_GAIN_DECKS = ROOT / "tests" / "fixtures" / "rp_normalized_gain"

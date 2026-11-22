@@ -1111,6 +1111,51 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     // a repeated tag's addresses are its FIRST wire's (`_serve.build_mesh`,
     // momwire#1695): only that wire takes the tag's cuts and (tag, node) entries
     std::set<Int> owned;
+    // `_junction_cuts` (momwire#2093): the nodes inside a wire where another
+    // wire's node lands -- an interior node's degree above its own two
+    std::vector<std::vector<long long>> joins(d.wires.size());
+    std::set<std::pair<Int, long long>, PairLess> joined;
+    for (size_t i = 0; i < d.wires.size(); i++) {
+        const Wire &w = d.wires[i];
+        if (is_phantom(w.tag)) continue;
+        for (long long k = 1; k < nseg[i]; k++) {
+            grid_point(w, nseg[i], k, pt);
+            const auto dg = degree.find(node_key(pt));
+            if (dg != degree.end() && dg->second > 2) {
+                joins[i].push_back(k);
+                joined.insert({w.tag, k});
+            }
+        }
+    }
+    // `_join_branches`: the piece end a card at a junction cut names, by the
+    // segment it names (an explicit end 1 names segment node + 1)
+    std::map<std::pair<Int, long long>, End, PairLess> branches;
+    if (!joined.empty()) {
+        std::vector<std::pair<Node, bool>> named;  // (address, names segment node + 1)
+        for (const Source &s : d.sources) named.emplace_back(s.at, s.end_code == Int(1));
+        for (const Load &l : d.loads) named.emplace_back(l.at, l.end_code == Int(1));
+        for (const TransmissionLine &t : d.transmission_lines) {
+            named.emplace_back(t.end_a, false);
+            named.emplace_back(t.end_b, false);
+        }
+        for (const Network &n : d.networks) {
+            named.emplace_back(n.end_a, false);
+            named.emplace_back(n.end_b, false);
+        }
+        for (const auto &nm : named) {
+            const long long node = nm.first.node.i64();
+            const std::pair<Int, long long> key{nm.first.tag, node};
+            if (!joined.count(key)) continue;
+            const End which = nm.second ? End::start : End::end;
+            const auto ins = branches.emplace(key, which);
+            if (ins.first->second != which)
+                throw Refusal{"cards address node " + std::to_string(node) + " of tag " + nm.first.tag.str() +
+                              " through both of its segments (" + std::to_string(node) + " and " +
+                              std::to_string(node + 1) + "); another wire joins wire " + nm.first.tag.str() +
+                              " at that node, so the two name different branches of one junction, and "
+                              "this seam serves one branch per address"};
+        }
+    }
     for (size_t i = 0; i < d.wires.size(); i++) {
         const Wire &w = d.wires[i];
         const long long last = nseg[i];
@@ -1143,9 +1188,12 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             r.cut_start = r.cut_end = false;
             return r;
         };
-        // `bounds = [0, *addressed_inside, last] if cut else [0, last]`
+        // `bounds = [0, *addressed_inside, last] if cut else [0, last]`, and
+        // every junction cut
         std::set<long long> bounds{0, last};
         if (cut) bounds.insert(inside_nodes.begin(), inside_nodes.end());
+        bounds.insert(joins[i].begin(), joins[i].end());
+        std::map<long long, long long> ending_at;  // junction cut -> the piece ending there
         if (c == nullptr) {
             std::vector<long long> v(bounds.begin(), bounds.end());
             for (size_t q = 0; q + 1 < v.size(); q++) runs.push_back(plain(v[q], v[q + 1]));
@@ -1201,8 +1249,10 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             piece.cut_end = r.cut_end;
             mesh.pieces.push_back(piece);
             if (owner && !r.cut_start) piece_of_node[{w.tag, r.a}] = {index, End::start};
-            if (owner && !r.cut_end)
+            if (owner && !r.cut_end) {
                 piece_of_node.emplace(std::make_pair(w.tag, r.b), std::make_pair(index, End::end));
+                ending_at[r.b] = index;
+            }
             for (long long k : inside_nodes)
                 if (r.a < k && k < r.b) {
                     double pk[3];
@@ -1239,6 +1289,13 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             }
             for (long long k = 0; k < r.b - r.a; k++) mesh.element_of.emplace_back(index, k);
         }
+        if (owner)
+            for (long long k : joins[i]) {
+                const auto br = branches.find({w.tag, k});
+                const auto ea = ending_at.find(k);
+                if ((br == branches.end() || br->second == End::end) && ea != ending_at.end())
+                    piece_of_node[{w.tag, k}] = {ea->second, End::end};
+            }
     }
     junctions_of(mesh);
 
