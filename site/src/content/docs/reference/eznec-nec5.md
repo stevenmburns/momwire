@@ -268,6 +268,11 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 at a point in space, not as NEC-5's current source on a segment. For a
 current source on a segment, write `EX 6` with the same tag and segment.
 
+A wire listed twice (two wire cards whose ends coincide, in either
+direction) is refused by `momwire-nec42-sinusoidal`, naming the `GW` tags of
+each set of copies; NEC-4.2 stops on such a deck too. Delete the copy. A
+`GM` that moves a wire without copying it is not a duplicate and serves.
+
 Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
 
 **Both slots solve with the extended thin-wire kernel** (since momwire#1326).

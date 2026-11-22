@@ -35,10 +35,11 @@ masked, by exact pattern and with the same count on both sides, over:
   splitting the reflection points, with a range, an average, further tables,
   a monopole on the ground, an empty second medium, and GD in free space
   (its block printed, no number moved);
-- a wire listed twice (momwire#1042): merged on the dense and the sparse
-  route, reversed, three times, made by GM, as a T's arm, over GN 1 and
-  GN 2, under LD 5, with PQ / RP / NE; refused for a feed on the pair,
-  differing segment counts, radii, and LD 2 / LD 5 on the copy alone;
+- a wire listed twice: refused in the deck's GW tags (momwire#2107), as
+  licensed NEC-4.2 refuses it, on the dense and the sparse route, reversed,
+  three times, as a T's arm, over GN 1 and GN 2, under LD 5, with PQ / RP /
+  NE, for a feed on the pair, differing segment counts, radii, and LD 2 /
+  LD 5 on the copy alone; a GM that moves without copying prints;
 - a wholly-buried deck (momwire#1607 B6a): a dipole over GN 2 with PQ and
   RP, GN 3 with LD 5, an FR sweep under EX 6, a buried hub, two radii with a
   port load; the refusals in Python's words (a buried wire over GN 1, and
@@ -366,9 +367,11 @@ CASES = [
         ),
         "printed",
     ),
-    # momwire#1042: a wire listed twice is solved once (the dropped copy
-    # reads its twin's current in the tables and none in RP / NE), or refused
-    # in the constructor's words
+    # A wire listed twice is refused in the deck's GW tags (momwire#2107):
+    # #1042's merge reaches this route piece by piece only, so Z was singular
+    # and the printout read rounding residue; licensed NEC-4.2 refuses every
+    # one of these decks at its geometry check (black box, 11-22) except
+    # duplicate_by_gm, whose GM moves without copying
     (
         "duplicate_sparse_ld5_pq_rp",
         deck(
@@ -377,7 +380,7 @@ CASES = [
             + FR
             + "EX 0 1 21 0 1\nPQ 0\nRP 0 7 4 1000 0 0 30 90\n",
         ),
-        "printed",
+        "refused",
     ),
     (
         "duplicate_reversed_sparse_ne",
@@ -385,11 +388,9 @@ CASES = [
             DUP_DIPOLE + DUP_PARASITE + "GW 3 31 .2 0 .23 .2 0 -.23 .001\n",
             FR + "EX 0 1 21 0 1\nNE 0 1 3 1 .3 -.1 0 0 .1 0\n",
         ),
-        # Z is exactly singular here (the copy is not merged on this route,
-        # momwire#2107): the copying factor pivoted on rounding residue and
-        # printed a feed Z 20 % off the single-copy deck's; the factor of Zᵀ
-        # (momwire#2071) meets the zero pivot, so both sides refuse.
-        "declined",
+        # Z was exactly singular here (#2071's factor of Zᵀ met the zero
+        # pivot and both sides declined); refused before the build now
+        "refused",
     ),
     (
         "duplicate_three_times",
@@ -399,7 +400,7 @@ CASES = [
             + "GW 4 9 .2 0 .23 .2 0 -.23 .001\n",
             FR + "EX 0 1 6 0 1\nPQ 0\nXQ\n",
         ),
-        "printed",
+        "refused",
     ),
     (
         "duplicate_by_gm",
@@ -415,7 +416,7 @@ CASES = [
             DIPOLE + "GW 2 5 0 0 .25 .2 0 .25 .001\nGW 3 5 0 0 .25 .2 0 .25 .001\n",
             FR + "EX 0 1 6 0 1\nPQ 0\nXQ\n",
         ),
-        "printed",
+        "refused",
     ),
     (
         "duplicate_monopoles_on_gn1",
@@ -425,7 +426,7 @@ CASES = [
             "GN 1\n" + FR + "EX 0 1 1 0 1\nRP 0 10 4 1000 0 0 10 90\n",
             "GE 1",
         ),
-        "printed",
+        "refused",
     ),
     (
         "duplicate_reversed_over_gn2",
@@ -437,7 +438,7 @@ CASES = [
             + "EX 0 1 5 0 1\nPQ 0\nRP 0 10 4 1000 0 0 10 90\n",
             "GE 1",
         ),
-        "printed",
+        "refused",
     ),
     (
         "duplicate_fed_refused",
@@ -849,6 +850,41 @@ CASES = [
 _SLOW = {"crossing_folded_rise_rod", "crossing_folded_sparse"}
 
 
+def _duplicate_sentence(named: str, copies: str) -> str:
+    """The NEC-4.2 slot's refusal of a wire listed twice (momwire#2107)."""
+    return (
+        f"the deck lists a wire more than once: the GW wires of {named} "
+        "coincide, end for end in either direction, so each set is one "
+        "conductor written more than once and the current has no unique split "
+        "between the copies. This engine's NEC-4.2 slot does not merge them, "
+        f"and NEC-4.2 refuses such a deck too: delete the {copies} and run the "
+        "deck again - momwire#2107"
+    )
+
+
+# Every duplicate case's sentence, in its own GW tags
+_DUPLICATE_SENTENCES = {
+    name: _duplicate_sentence("tags 2 and 3", "copy (tag 3)")
+    for name in (
+        "duplicate_sparse_ld5_pq_rp",
+        "duplicate_reversed_sparse_ne",
+        "duplicate_tee_arm",
+        "duplicate_monopoles_on_gn1",
+        "duplicate_reversed_over_gn2",
+        "duplicate_counts_differ_refused",
+        "duplicate_radius_differs_refused",
+        "duplicate_ld2_on_the_copy_refused",
+        "duplicate_ld5_on_the_copy_refused",
+    )
+}
+_DUPLICATE_SENTENCES["duplicate_three_times"] = _duplicate_sentence(
+    "tags 2, 3 and 4", "copies (tags 3 and 4)"
+)
+_DUPLICATE_SENTENCES["duplicate_fed_refused"] = _duplicate_sentence(
+    "tags 1 and 2", "copy (tag 2)"
+)
+
+
 @pytest.mark.parametrize(
     "name, text, expect",
     [pytest.param(*c, marks=pytest.mark.slow) if c[0] in _SLOW else c for c in CASES],
@@ -869,6 +905,8 @@ def test_a_hand_written_deck_prints_the_same(name, text, expect, acc):
         assert "NEC ERROR - " in cxx and na == nb == 0, (na, nb)
     else:
         assert na == nb and na >= 2, (na, nb)
+    if name in _DUPLICATE_SENTENCES:
+        assert "NEC ERROR - " + _DUPLICATE_SENTENCES[name] in cxx, cxx[-600:]
 
 
 def test_the_masks_hide_only_the_two_timing_lines():

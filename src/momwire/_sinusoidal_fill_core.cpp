@@ -2773,7 +2773,8 @@ std::string dump_fill(const std::string &text, const FillLinalg &la, std::size_t
     Out o;
     nec4::Build b;
     try {
-        b = nec4::build(text, "sinusoidal");
+        // the #1042 merge itself, on the decks the slot refuses (momwire#2107)
+        b = nec4::build(text, "sinusoidal", false);
     } catch (const Declined &e) {
         return "fill ? declined " + nec5::dump_hex(e.what()) + "\n";
     }

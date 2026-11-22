@@ -2309,7 +2309,8 @@ std::string dump_front(const std::string &text) {
     Out o;
     nec4::Build b;
     try {
-        b = nec4::build(text, "sinusoidal");
+        // the #1042 merge itself, on the decks the slot refuses (momwire#2107)
+        b = nec4::build(text, "sinusoidal", false);
     } catch (const Declined &e) {
         return "front ? declined " + nec5::dump_hex(e.what()) + "\n";
     }

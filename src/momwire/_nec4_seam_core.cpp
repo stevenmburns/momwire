@@ -4,6 +4,9 @@
 #include "_nec4_seam_core.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -293,8 +296,88 @@ void served_shape(const std::string &text, const PortalDeck &deck, StructureSeam
     out.plan = runs;
 }
 
+// `np.round(x, 9)`, as `_wire_spec._vertex_key` rounds a vertex.
+double round9(double x) { return std::nearbyint(x * 1e9) / 1e9 + 0.0; }
+
+// `_nec4._tag_list`
+std::string tag_list(const std::vector<Int> &tags) {
+    std::vector<std::string> shown;
+    for (std::size_t k = 0; k < tags.size() && k < 6; k++) shown.push_back(tags[k].str());
+    if (tags.size() > 6) shown.push_back(std::to_string(tags.size() - 6) + " more");
+    if (shown.size() == 1) return "tag " + shown[0];
+    std::string out = "tags ";
+    for (std::size_t k = 0; k + 1 < shown.size(); k++) out += (k ? ", " : "") + shown[k];
+    return out + " and " + shown.back();
+}
+
+// `_nec4.duplicate_wire_refusal(deck.structure)`: the sentence, or "" when
+// no two rows coincide. The search is `_wire_spec.find_duplicated_wires`'
+// over each row's two ends.
+std::string duplicate_wire_refusal(const Geometry &g) {
+    const std::vector<GeometryWire> &wires = g.wires;
+    if (wires.empty()) return "";
+    double scale = 1.0;
+    for (const GeometryWire &w : wires)
+        for (int c = 0; c < 3; c++) scale = std::max(scale, std::max(std::fabs(w.p1[c]), std::fabs(w.p2[c])));
+    const double tol = 1e-12 * scale;
+    typedef std::vector<std::array<double, 3>> Key;
+    std::map<Key, std::size_t> seen;
+    std::vector<std::pair<std::size_t, std::vector<Int>>> sets;  // first row, its tags
+    std::vector<Int> copies;
+    const auto has = [](const std::vector<Int> &v, const Int &t) {
+        return std::find(v.begin(), v.end(), t) != v.end();
+    };
+    for (std::size_t i = 0; i < wires.size(); i++) {
+        const GeometryWire &w = wires[i];
+        Key fwd = {{round9(w.p1[0]), round9(w.p1[1]), round9(w.p1[2])},
+                   {round9(w.p2[0]), round9(w.p2[1]), round9(w.p2[2])}};
+        Key rev(fwd.rbegin(), fwd.rend());
+        const Key &key = std::min(fwd, rev);
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen[key] = i;
+            continue;
+        }
+        const GeometryWire &t = wires[it->second];
+        // `np.max(np.abs(twin - pl)) <= tol`, forward then reversed: a NaN
+        // difference fails it
+        bool fwd_ok = true, rev_ok = true;
+        double fmax = 0.0, rmax = 0.0;
+        for (int c = 0; c < 3; c++) {
+            const double d[2] = {std::fabs(t.p1[c] - w.p1[c]), std::fabs(t.p2[c] - w.p2[c])};
+            const double r[2] = {std::fabs(t.p1[c] - w.p2[c]), std::fabs(t.p2[c] - w.p1[c])};
+            for (int e = 0; e < 2; e++) {
+                if (std::isnan(d[e])) fwd_ok = false;
+                if (std::isnan(r[e])) rev_ok = false;
+                fmax = std::max(fmax, d[e]);
+                rmax = std::max(rmax, r[e]);
+            }
+        }
+        if (!((fwd_ok && fmax <= tol) || (rev_ok && rmax <= tol))) continue;
+        const std::size_t first = it->second;
+        auto set = std::find_if(sets.begin(), sets.end(), [&](const auto &s) { return s.first == first; });
+        if (set == sets.end()) {
+            sets.push_back({first, {t.tag}});
+            set = sets.end() - 1;
+        }
+        if (!has(set->second, w.tag)) set->second.push_back(w.tag);
+        if (!has(copies, w.tag)) copies.push_back(w.tag);
+    }
+    if (sets.empty()) return "";
+    std::string named;
+    for (std::size_t k = 0; k < sets.size() && k < 6; k++) named += (k ? "; " : "") + tag_list(sets[k].second);
+    if (sets.size() > 6) named += "; and " + std::to_string(sets.size() - 6) + " more sets";
+    return "the deck lists a wire more than once: the GW wires of " + named +
+           " coincide, end for end in either direction, so each set is one conductor written more than once "
+           "and the current has no unique split between the copies. This engine's NEC-4.2 slot does not "
+           "merge them, and NEC-4.2 refuses such a deck too: delete the " +
+           std::string(copies.size() == 1 ? "copy" : "copies") + " (" + tag_list(copies) +
+           ") and run the deck again - momwire#2107";
+}
+
 // `_nec4.render_structure` / `solve`, up to `DeckSolver`.
-StructureSeam structure_seam(const std::string &text, const std::string &echo, bool closing) {
+StructureSeam structure_seam(const std::string &text, const std::string &echo, bool closing,
+                             const std::string &basis, bool refuse_duplicates) {
     StructureSeam s;
     s.deck_text = text;
     s.echo_text = echo;
@@ -308,6 +391,11 @@ StructureSeam structure_seam(const std::string &text, const std::string &echo, b
         }
         further_tables(text, s.deck, s);
         served_shape(text, s.deck, s);
+        // `_REFUSES_DUPLICATES` (momwire#2107): the sinusoidal basis only
+        if (refuse_duplicates && basis == "sinusoidal") {
+            const std::string why = duplicate_wire_refusal(s.deck.structure);
+            if (!why.empty()) refuse(why);
+        }
         s.kind = StructureSeam::served;
     } catch (const Refusal &e) {
         s.kind = StructureSeam::refused;
@@ -567,7 +655,7 @@ void dump_structure_seam(Out &o, const std::string &p, const StructureSeam &s) {
 
 }  // namespace
 
-Seam seam(const std::string &text, const std::string &basis) {
+Seam seam(const std::string &text, const std::string &basis, bool refuse_duplicates) {
     if (basis != "sinusoidal" && basis != "bs2" && basis != "sg")
         throw Declined("basis '" + basis + "' is not one this copy of the NEC-4.2 seam serves");
     Seam out;
@@ -575,13 +663,14 @@ Seam seam(const std::string &text, const std::string &basis) {
     std::vector<nec5::Structure> structures;
     if (!nec5::split_structures(text, structures)) {
         out.chained = false;
-        out.structures.push_back(structure_seam(text, text, true));
+        out.structures.push_back(structure_seam(text, text, true, basis, refuse_duplicates));
         return out;
     }
     out.chained = true;
     for (std::size_t k = 0; k < structures.size(); k++) {
         bool last = k + 1 == structures.size() && !structures[k].ends_on_nx();
-        StructureSeam s = structure_seam(structures[k].deck_text(), structures[k].echo_text(), last);
+        StructureSeam s = structure_seam(structures[k].deck_text(), structures[k].echo_text(), last, basis,
+                                         refuse_duplicates);
         bool go_on = s.kind == StructureSeam::served;
         out.structures.push_back(s);
         if (!go_on) break;
