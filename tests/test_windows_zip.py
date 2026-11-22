@@ -24,8 +24,13 @@ CZ = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("check_zip", CZ)
 _spec.loader.exec_module(CZ)
 
+
 T = CZ.TOP
-UCRT = ["ucrtbase.dll", "api-ms-win-crt-math-l1-1-0.dll", "api-ms-win-core-file-l1-1-0.dll"]
+UCRT = [
+    "ucrtbase.dll",
+    "api-ms-win-crt-math-l1-1-0.dll",
+    "api-ms-win-core-file-l1-1-0.dll",
+]
 GOOD = sorted(
     set(CZ.expected_programs())
     | {f"{T}/{d}" for d in CZ.DLLS}
@@ -46,11 +51,10 @@ def test_the_programs_are_the_fat_pair_and_the_old_names():
         for name in (
             f"{T}/momwire-nec5-{b}-avx2.exe",
             f"{T}/momwire-nec5-{b}-sse2.exe",
-            f"{T}/win7/momwire-nec5-{b}-sse2.exe",
             f"{T}/win7/momwire-nec5-{b}.exe",
         ):
             assert progs[name] == f"{T}/momwire-nec5-{b}.exe"
-    assert len(progs) == 10
+    assert len(progs) == 8
 
 
 def test_the_expected_tree_passes():
@@ -61,6 +65,7 @@ def test_the_expected_tree_passes():
     "extra",
     [
         f"{T}/win7/momwire-nec5-razor2p-avx2.exe",  # never shipped there
+        f"{T}/win7/momwire-nec5-bs2-sse2.exe",  # the old names stay out of win7
         f"{T}/momwire-nec5-razor-2p-avx2.exe",
         f"{T}/api-ms-win-crt-math-l1-1-0.dll",  # the UCRT is win7's alone
         f"{T}/ucrtbase.dll",
@@ -76,7 +81,7 @@ def test_a_stray_file_fails(extra):
     [
         f"{T}/momwire-nec5-bs2.exe",
         f"{T}/momwire-nec5-razor2p-sse2.exe",
-        f"{T}/win7/momwire-nec5-bs2-sse2.exe",
+        f"{T}/win7/momwire-nec5-bs2.exe",
         f"{T}/win7/libscipy_openblas.dll",
         f"{T}/win7/ucrtbase.dll",
         f"{T}/README.txt",
@@ -109,7 +114,24 @@ def test_a_copy_that_is_not_its_programs_bytes_fails(tmp_path, capsys):
 
 
 def test_the_workflow_gates_the_staged_tree_and_the_zip():
-    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["windows-nopython"]["steps"]
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "windows-nopython"
+    ]["steps"]
     runs = "\n".join(s.get("run", "") for s in steps)
     assert "scripts/windows_fat/check_zip.py dist\\momwire-nec5-windows-x64" in runs
     assert 'scripts/windows_fat/check_zip.py "dist\\$base.zip"' in runs
+
+
+def test_the_workflow_runs_no_corpus_under_sde():
+    """The whole-corpus SDE Westmere pass is gone (over 2 h a program; Steve,
+    11-22); check_link.py's static instruction scan stands in its place."""
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "windows-nopython"
+    ]["steps"]
+    assert not [
+        s
+        for s in steps
+        if "--sde" in s.get("run", "") and "tests/fixtures " in s.get("run", "")
+    ]
+    (link,) = [s for s in steps if s.get("name", "").startswith("the fat link")]
+    assert "scripts/windows_fat/check_link.py" in link["run"]

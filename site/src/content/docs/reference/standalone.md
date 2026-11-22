@@ -89,7 +89,8 @@ one your processor can run when it starts. A `win7` folder holds the same two
 programs beside the runtime Windows 7 SP1 needs. The programs are signed with
 momwire's certificate. The DLLs they load ship beside them, so keep each
 folder together. Up to 0.96.0 each engine came as an `-avx2` and an `-sse2`
-program; those names are deprecated. They still ship, as copies that run the
+program; those names are deprecated. They still ship at the top of the zip
+(not in `win7`, which carries the new names only), as copies that run the
 build they name (an `-sse2` name runs sse2 on any processor) and end line 2
 of the printout in `(renamed from momwire-nec5-bs2-sse2)` or the like, and
 will be removed in a later release.
