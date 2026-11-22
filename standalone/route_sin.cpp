@@ -125,6 +125,16 @@ bool withdraw_features(const std::vector<std::string> &names) {
 
 void stamp_uncertified(bool on) { ni_eval::stamp_uncertified(on); }
 
+// Line 2's last note (a deprecated executable name's, momwire#2090), after
+// the features' tail. Function-local, so no avx2 copy gains a start-up entry.
+namespace {
+std::string &line2_note() {
+    static std::string note;
+    return note;
+}
+}  // namespace
+void stamp_note(const std::string &note) { line2_note() = note; }
+
 // This route's reuse is the sinusoidal fill's (`pair_reuse`, momwire#1911):
 // its plans, not razor2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {
@@ -163,6 +173,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     stamp.version = version;
     stamp.variant = variant;
     stamp.marker = ni_eval::requested_stamp();  // `_features.stamp()`'s tail
+    if (!line2_note().empty()) stamp.marker += (stamp.marker.empty() ? "" : " ") + line2_note();
     std::string out, why;
     bool ok, go_on = false;
     try {
