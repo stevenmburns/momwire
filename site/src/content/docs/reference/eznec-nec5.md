@@ -44,7 +44,7 @@ model size. Choose **Settings → Nec engine → Manual select** and pick a
 NEC-2 launcher:
 
 ```text
-C:\momwire\momwire-nec2c.exe              the default (nec2c-bspline)
+C:\momwire\momwire-nec2c.exe              the default (nec2c-bs2)
 C:\momwire\momwire-nec2c-sinusoidal.exe   NEC-2's own formulation (the twin)
 ```
 
@@ -69,7 +69,7 @@ C:\momwire\momwire-nec5.exe < nec2d.tmp
 Edit_out.exe
 ```
 
-with `momwire-nec5-razor-2p.exe` in place of `momwire-nec5.exe` for the
+with `momwire-nec5-razor2p.exe` in place of `momwire-nec5.exe` for the
 NEC-5 twin. Leave **Manual select** alone for NEC-5: naming a launcher
 there does not work (momwire#1503).
 
@@ -205,7 +205,7 @@ momwire-nec42.exe             the default — degree-2 B-spline (nec42-bs2)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
 SimNEC's NEC-2 engine, and nec2c's command line:
-momwire-nec2c.exe             the default — degree-2 B-spline (bspline)
+momwire-nec2c.exe             the default — degree-2 B-spline (nec2c-bs2)
 momwire-nec2c-sinusoidal.exe  the sinusoidal basis, point matched
 
 momwire-engine.exe            the compute engine the launchers run
