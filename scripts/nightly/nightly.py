@@ -539,6 +539,8 @@ def do_night(a) -> int:
 
     prev_status = state.get("last_status")
     report(night, state, dry_run=a.dry_run, prev_status=prev_status)
+    if result["status"] == "red" and base and not a.dry_run:
+        agent_report(night, base, sha, cells)
     if not a.dry_run:
         state["last_status"] = result["status"]
         state["last_night"] = dict(
@@ -1026,6 +1028,86 @@ def accept(night: Path, note: str, state: dict) -> int:
     save_state(state)
     log(f"accepted {meta['date']} ({meta['sha'][:12]}) as the green base: {note}")
     return 0
+
+
+# ------------------------------------------------------------------ report agent
+#: How long the report agent may take, and the switch that turns it off.
+AGENT_TIMEOUT_S = 1800
+AGENT_ENV = "MW_NIGHTLY_AGENT"
+#: The CLI, resolved on env_base()'s PATH (~/.local/bin first) unless absolute.
+CLAUDE = os.environ.get("MW_NIGHTLY_CLAUDE", "claude")
+
+
+def agent_command(night: Path, base: Path, sha: str, cells) -> list[str]:
+    """`claude -p` with the report prompt, and only read access.
+
+    No Write or Edit: the agent's last message is the report, saved by
+    `agent_report`. Bash is limited to git's read commands on the nightly
+    tree and `report_tools.py`, which only reads; any other tool is refused
+    (print mode refuses what is not allowed). It never accepts a base, never
+    changes the harness and never deletes: those stay with a person."""
+    prompt = (
+        (HERE / "report_prompt.md")
+        .read_text()
+        .format(
+            night=night,
+            base=base,
+            results=night.parent,
+            mw=MW,
+            harness=HERE,
+            sha=sha,
+            cells=", ".join(cells),
+        )
+    )
+    tools = HERE / "report_tools.py"
+    allowed = [
+        "Read",
+        "Grep",
+        "Glob",
+        f"Bash(git -C {MW} log:*)",
+        f"Bash(git -C {MW} show:*)",
+        f"Bash(git -C {MW} diff:*)",
+        f"Bash(python3 {tools}:*)",
+    ]
+    return [
+        CLAUDE, "-p", prompt,
+        "--output-format", "text",
+        "--allowedTools", *allowed,
+        "--disallowedTools", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch",
+    ]  # fmt: skip
+
+
+def agent_report(night: Path, base: Path, sha: str, cells) -> None:
+    """Write `night/report.md` from the report agent, on a red night. It never
+    fails the night: no `claude`, a timeout or an error is logged and the
+    night goes on as before."""
+    if os.environ.get(AGENT_ENV, "1") == "0":
+        log(f"report agent: off ({AGENT_ENV}=0)")
+        return
+    env = env_base()
+    exe = shutil.which(CLAUDE, path=env["PATH"])
+    if not exe:
+        log(f"report agent: no {CLAUDE} on PATH; skipped")
+        return
+    t0 = time.time()
+    try:
+        p = subprocess.run(
+            [exe, *agent_command(night, base, sha, cells)[1:]],
+            cwd=night,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=AGENT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f"report agent: {type(exc).__name__}: {exc}")
+        return
+    (night / "report-agent.log").write_text(p.stderr)
+    if p.returncode != 0 or not p.stdout.strip():
+        log(f"report agent: rc={p.returncode}, no report (report-agent.log)")
+        return
+    (night / "report.md").write_text(p.stdout)
+    log(f"report agent: report.md in {time.time() - t0:.0f} s")
 
 
 def main() -> int:
