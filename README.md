@@ -329,17 +329,19 @@ on any launcher. Sin-Galerkin and the other bases take no junction rule.
 Each release from 0.79.0 also carries
 **`momwire-nec5-windows-x64.zip`**, the same two engines as native Windows
 programs, signed with momwire's certificate. The zip holds
-`momwire-nec5-razor2p-avx2.exe` and `momwire-nec5-bs2-avx2.exe` for a
-processor with AVX2, the `-sse2` pair for any other 64-bit x86 processor, and
-a `win7` folder with the sse2 pair built to run on Windows 7 SP1. The zip's
-README.txt says which to use. The DLLs they load ship beside them, so nothing
+`momwire-nec5-razor2p.exe` and `momwire-nec5-bs2.exe`: each carries an avx2
+and an sse2 build and picks, when it starts, the one the processor can run.
+A `win7` folder holds the same two programs beside the runtime Windows 7 SP1
+needs. (Up to 0.96.0 each engine came as an `-avx2` and an `-sse2` program;
+those names are deprecated, still ship as copies that run the build they
+name, and will be removed in a later release.) The DLLs they load ship beside them, so nothing
 needs installing; keep each folder together. A deck an engine does not serve
 yet is refused in the printout by name, as on Linux. These programs and the
 drop-in,
 [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip)
 (named `momwire-eznec-windows.zip` before 0.80.0), are the two supported ways
 to run momwire under EZNEC, SimNEC or 4nec2 on Windows. CI runs every test
-deck through both Windows builds (avx2 and sse2) on every change and checks
+deck through both builds (avx2 and sse2) of each program on every change and checks
 their printouts against the Python engine's: they match to the printed digit,
 apart from round-off in values that are zero in exact arithmetic.
 
