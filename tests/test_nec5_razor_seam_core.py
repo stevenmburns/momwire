@@ -314,6 +314,15 @@ CASES = {
         "served",
         "",
     ),
+    "interior_node_on_overlapping_wires": (
+        HEAD
+        + "GW 1,10,0.,-2.5,5.,0.,2.5,5.,.001\nGW 2,4,0.,0.,5.,0.,2.,5.,.001\n"
+        + "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "addresses a node INSIDE wire 1 where 2 more element ends meet",
+    ),
     "grounded_junction": (
         HEAD
         + MONO

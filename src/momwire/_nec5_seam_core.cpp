@@ -1112,19 +1112,59 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     // momwire#1695): only that wire takes the tag's cuts and (tag, node) entries
     std::set<Int> owned;
     // `_junction_cuts` (momwire#2093): the nodes inside a wire where another
-    // wire's node lands -- an interior node's degree above its own two
+    // wire's node lands -- an interior node's degree above its own two --
+    // except where either of the wire's own elements there is another wire's
+    // too (overlapping metal, meshed as before)
     std::vector<std::vector<long long>> joins(d.wires.size());
     std::set<std::pair<Int, long long>, PairLess> joined;
-    for (size_t i = 0; i < d.wires.size(); i++) {
-        const Wire &w = d.wires[i];
-        if (is_phantom(w.tag)) continue;
-        for (long long k = 1; k < nseg[i]; k++) {
-            grid_point(w, nseg[i], k, pt);
-            const auto dg = degree.find(node_key(pt));
-            if (dg != degree.end() && dg->second > 2) {
-                joins[i].push_back(k);
-                joined.insert({w.tag, k});
+    {
+        std::vector<std::vector<long long>> candidates(d.wires.size());
+        bool any = false;
+        for (size_t i = 0; i < d.wires.size(); i++) {
+            const Wire &w = d.wires[i];
+            if (is_phantom(w.tag)) continue;
+            for (long long k = 1; k < nseg[i]; k++) {
+                grid_point(w, nseg[i], k, pt);
+                const auto dg = degree.find(node_key(pt));
+                if (dg != degree.end() && dg->second > 2) {
+                    candidates[i].push_back(k);
+                    any = true;
+                }
             }
+        }
+        if (any) {
+            const auto wire_keys = [&](size_t i) {
+                std::vector<NodeKey> keys;
+                for (long long k = 0; k <= nseg[i]; k++) {
+                    grid_point(d.wires[i], nseg[i], k, pt);
+                    keys.push_back(node_key(pt));
+                }
+                return keys;
+            };
+            const auto element = [](const NodeKey &a, const NodeKey &b) {
+                return a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+            };
+            // element (its two node keys, unordered) -> the wires carrying it
+            std::map<std::pair<NodeKey, NodeKey>, std::set<size_t>> carriers;
+            std::vector<std::vector<NodeKey>> keys(d.wires.size());
+            for (size_t i = 0; i < d.wires.size(); i++) {
+                if (is_phantom(d.wires[i].tag)) continue;
+                keys[i] = wire_keys(i);
+                for (size_t k = 0; k + 1 < keys[i].size(); k++)
+                    carriers[element(keys[i][k], keys[i][k + 1])].insert(i);
+            }
+            const auto shared = [&](size_t i, const NodeKey &a, const NodeKey &b) {
+                const std::set<size_t> &c = carriers[element(a, b)];
+                return c.size() > (c.count(i) ? 1u : 0u);
+            };
+            for (size_t i = 0; i < d.wires.size(); i++)
+                for (long long k : candidates[i]) {
+                    const auto &ks = keys[i];
+                    const size_t q = static_cast<size_t>(k);
+                    if (shared(i, ks[q - 1], ks[q]) || shared(i, ks[q], ks[q + 1])) continue;
+                    joins[i].push_back(k);
+                    joined.insert({d.wires[i].tag, k});
+                }
         }
     }
     // `_join_branches`: the piece end a card at a junction cut names, by the

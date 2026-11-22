@@ -2332,17 +2332,48 @@ def _junction_cuts(
     two (:attr:`Structure.degree`, which adds a ground image at wire ends
     only) is another wire there.  A phantom wire is no geometry and stands
     clear of everything by construction, so it is skipped.
+
+    A node where either of the wire's own elements is also another wire's
+    element is not cut: that is overlapping metal, not a junction, and it is
+    meshed as before (an exact copy is the solver's duplicate-wire rule,
+    momwire#1042; a node gap on one stays the solver's refusal).
     """
-    cuts: dict[int, tuple[int, ...]] = {}
     degree = structure.degree
+    candidates: dict[int, list[int]] = {}
     for index, (wire, keys) in enumerate(
         zip(structure.wires, structure.keys, strict=True)
     ):
         if wire.tag in phantom:
             continue
-        joins = tuple(k for k in range(1, len(keys) - 1) if degree[keys[k]] > 2)
+        joins = [k for k in range(1, len(keys) - 1) if degree[keys[k]] > 2]
         if joins:
-            cuts[index] = joins
+            candidates[index] = joins
+    if not candidates:
+        return {}
+    # element (its two node keys, unordered) -> the wires carrying it
+    carriers: dict[tuple, set[int]] = {}
+    for index, (wire, keys) in enumerate(
+        zip(structure.wires, structure.keys, strict=True)
+    ):
+        if wire.tag in phantom:
+            continue
+        for a, b in zip(keys[:-1], keys[1:]):
+            carriers.setdefault((a, b) if a <= b else (b, a), set()).add(index)
+
+    def shared(index: int, a, b) -> bool:
+        return len(carriers[(a, b) if a <= b else (b, a)] - {index}) > 0
+
+    cuts: dict[int, tuple[int, ...]] = {}
+    for index, joins in candidates.items():
+        keys = structure.keys[index]
+        kept = tuple(
+            k
+            for k in joins
+            if not shared(index, keys[k - 1], keys[k])
+            and not shared(index, keys[k], keys[k + 1])
+        )
+        if kept:
+            cuts[index] = kept
     return cuts
 
 
@@ -2873,11 +2904,10 @@ def _interior_site(
 
     The node must be one this wire alone passes through.  Its degree counts
     ELEMENT ends (:meth:`Structure.unknown_count`), so an untouched interior
-    node has exactly two; anything more is another wire's end landing on it,
-    which the cut used to weld and a delta gap does not.  Serving that as a
-    gap would model a T-junction as an unconnected wire — a well-posed WRONG
-    answer — so it refuses instead.  No captured deck writes one: all 78
-    addressed interior nodes in the corpus have degree 2.
+    node has exactly two.  Another wire's node landing there is a junction
+    cut (:func:`_junction_cuts`, momwire#2093) and never reaches here; what
+    can is overlapping metal, which a delta gap on one wire's knot would
+    leave unconnected, so it refuses.
     """
     piece_index, arclength = inside
     point = structure.points[structure.index_of(tag)][node]
