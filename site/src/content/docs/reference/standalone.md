@@ -83,11 +83,16 @@ Python command's own words (the Python command refuses it too). As a preview
 it still refuses by name an insulated wire (IS), which the Python command
 serves.
 
-**Windows (preview).** The zip holds `momwire-nec5-razor2p-avx2.exe` and
-`momwire-nec5-bs2-avx2.exe`, the `-sse2` pair, and a `win7` folder with an
-sse2 pair built to run on Windows 7 SP1. The programs are signed with
+**Windows (preview).** The zip holds `momwire-nec5-razor2p.exe` and
+`momwire-nec5-bs2.exe`. Each carries an avx2 and an sse2 build and picks the
+one your processor can run when it starts. A `win7` folder holds the same two
+programs beside the runtime Windows 7 SP1 needs. The programs are signed with
 momwire's certificate. The DLLs they load ship beside them, so keep each
-folder together. The zip's `README.txt` says which program to use.
+folder together. Up to 0.96.0 each engine came as an `-avx2` and an `-sse2`
+program; those names are deprecated. They still ship, as copies that run the
+build they name (an `-sse2` name runs sse2 on any processor) and end line 2
+of the printout in `(renamed from momwire-nec5-bs2-sse2)` or the like, and
+will be removed in a later release.
 
 **Windows, one file per engine (preview).** A release that lists
 `momwire-nec5-windows-x64-single.zip` among its assets carries it beside that
@@ -124,10 +129,10 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 - **avx2 or sse2.** The avx2 build needs a processor with AVX2 and FMA
   (Intel from Haswell on, apart from some Celeron and Pentium models; AMD
   from Excavator on, and every Ryzen). The sse2 build runs on any 64-bit x86
-  processor, only more slowly. On Linux the picker chooses for you. On
-  Windows, if you are not sure, use sse2: an avx2 program on a processor
-  without AVX2 does not crash, it refuses each deck in the printout and
-  says why.
+  processor, only more slowly. On Linux the picker chooses for you; on
+  Windows each program carries both builds and chooses for itself. A
+  deprecated `-avx2` Windows name on a processor without AVX2 does not
+  crash: it refuses each deck in the printout and says why.
 - **Windows 10/11 or Windows 7.** On Windows 10 or 11 use the programs at
   the top of the zip. On Windows 7 SP1 use the `win7` folder; it carries
   Microsoft's Universal C Runtime for Windows 7, and its programs also run
