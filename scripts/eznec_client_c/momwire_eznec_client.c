@@ -249,26 +249,39 @@ static const char GMO_FRAME_END[] = "\0\r\n";
 #define GMO_FRAME_END_LEN (sizeof GMO_FRAME_END - 1)
 #define GMO_SUFFIX ".GMO"
 #define EN_OPTIONAL_FLAG "--en-optional"
-/* The deck's advisories on this launcher's stderr (momwire#1673 reversed):
- * `momwire_serve_client`'s ADVISORIES_* constants.  The request rides ahead
- * of EN_OPTIONAL_REQUEST, the frame comes back ahead of the `.GMO` frame, and
- * the server has already held it to one process's cap, so it is written as
- * it arrives.  ADVISORIES_OFF is `_ADVISORIES_OFF`; keep the brace-per-line
- * shape, the test reads it. */
+/* The deck's advisories on this launcher's stderr (momwire#1673 reversed),
+ * in the mode MOMWIRE_ADVISORIES names (momwire#2119; off by default):
+ * `momwire_serve_client`'s ADVISORIES_* constants.  The request, the head,
+ * the mode and a newline, rides ahead of EN_OPTIONAL_REQUEST and is not sent
+ * at all when off; the frame comes back ahead of the `.GMO` frame, the
+ * server has already held it to one process's cap, and it is written under
+ * the divider naming the deck when it holds an advisory.  The two word
+ * tables are `_ADVISORIES_WORDS`' (anything else is off); keep the
+ * brace-per-line shape, the test reads it. */
 #define ADVISORIES_ENV "MOMWIRE_ADVISORIES"
-static const char ADVISORIES_REQUEST[] = "\0ADVISORIES\n";
+static const char ADVISORIES_REQUEST[] = "\0ADVISORIES ";
 #define ADVISORIES_REQUEST_LEN (sizeof ADVISORIES_REQUEST - 1)
 static const char ADVISORIES_FRAME_START[] = "\0ADVISORIES\r\n";
 #define ADVISORIES_FRAME_START_LEN (sizeof ADVISORIES_FRAME_START - 1)
 static const char ADVISORIES_FRAME_END[] = "\0\r\n";
 #define ADVISORIES_FRAME_END_LEN (sizeof ADVISORIES_FRAME_END - 1)
-#define ADVISORIES_KEY_ELEMENT "advisories=framed"
-static const char *const ADVISORIES_OFF[] = {
-    "0",
-    "false",
-    "no",
-    "none",
-    "off",
+#define ADVISORIES_KEY_ELEMENT "advisories=modes"
+#define ADVISORIES_DIVIDER_HEAD "momwire: advisories for "
+#define ADVISORIES_LABEL_ROOM 200
+static const char ADVISORIES_CAPPED[] =
+    "momwire: further advisories not shown (one process writes at most 3072 "
+    "bytes of them); MOMWIRE_ADVISORIES=off turns them off\r\n";
+#define ADVISORIES_CAPPED_LEN (sizeof ADVISORIES_CAPPED - 1)
+static const char *const ADVISORIES_DECK[] = {
+    "1",
+    "deck",
+    "on",
+    "stderr",
+    "true",
+    "yes",
+};
+static const char *const ADVISORIES_ALL[] = {
+    "all",
 };
 
 #define TRANSPORT_ENV "MOMWIRE_SERVE_TRANSPORT"
@@ -1026,11 +1039,21 @@ static int is_feature_on(const char *value)
     return is_one_of(value, FEATURE_ON, COUNT_OF(FEATURE_ON));
 }
 
-/* `momwire_serve_client.advisories_on`: on unless MOMWIRE_ADVISORIES is off. */
-static int advisories_on(void)
+/* `momwire_serve_client.advisories_mode`: "off" unless MOMWIRE_ADVISORIES
+ * names a writing mode. */
+static const char *advisories_mode(void)
 {
     const char *value = getenv(ADVISORIES_ENV);
-    return value == NULL || !is_one_of(value, ADVISORIES_OFF, COUNT_OF(ADVISORIES_OFF));
+    if (value == NULL) {
+        return "off";
+    }
+    if (is_one_of(value, ADVISORIES_DECK, COUNT_OF(ADVISORIES_DECK))) {
+        return "deck";
+    }
+    if (is_one_of(value, ADVISORIES_ALL, COUNT_OF(ADVISORIES_ALL))) {
+        return "all";
+    }
+    return "off";
 }
 
 static int cmp_str(const void *a, const void *b)
@@ -2234,9 +2257,26 @@ static int split_advisories(const char **data, size_t *len, const char **body,
     return 0;
 }
 
-static void write_advisories(const char *body, size_t len)
+/* `momwire_serve_client.served_advisories`: the divider naming the deck
+ * (its head cut to "..." past ADVISORIES_LABEL_ROOM bytes), then the frame,
+ * when the frame holds an advisory; the cap's note alone without one. */
+static void write_advisories(const char *body, size_t len, const char *deck_path)
 {
     size_t i;
+    if (len == 0) {
+        return;
+    }
+    if (!(len == ADVISORIES_CAPPED_LEN &&
+          memcmp(body, ADVISORIES_CAPPED, ADVISORIES_CAPPED_LEN) == 0)) {
+        size_t label_len = strlen(deck_path);
+        fputs(ADVISORIES_DIVIDER_HEAD, stderr);
+        if (label_len > ADVISORIES_LABEL_ROOM) {
+            fputs("...", stderr);
+            deck_path += label_len - (ADVISORIES_LABEL_ROOM - 3);
+        }
+        fputs(deck_path, stderr);
+        fputc('\n', stderr);
+    }
     for (i = 0; i < len; i++) {
         if (body[i] == '\r' && i + 1 < len && body[i + 1] == '\n') {
             continue;
@@ -2289,9 +2329,11 @@ static int served(const setup_t *setup, const char *deck_path,
     char frame_line[32];
     sock_t sock;
     int status = -1;
+    const char *mode = advisories_mode();
 
-    if (advisories_on() &&
-        buf_add(&deck, ADVISORIES_REQUEST, ADVISORIES_REQUEST_LEN) != 0) {
+    if (strcmp(mode, "off") != 0 &&
+        (buf_add(&deck, ADVISORIES_REQUEST, ADVISORIES_REQUEST_LEN) != 0 ||
+         buf_add(&deck, mode, strlen(mode)) != 0 || buf_add(&deck, "\n", 1) != 0)) {
         note("out of memory reading %s", deck_path);
         buf_free(&deck);
         return -1;
@@ -2362,7 +2404,7 @@ static int served(const setup_t *setup, const char *deck_path,
             status = write_answer(printout_path, rest, rest_len);
         }
         if (status == 0 && shown != NULL) {
-            write_advisories(shown, shown_len);
+            write_advisories(shown, shown_len, deck_path);
         }
     }
     buf_free(&answer);

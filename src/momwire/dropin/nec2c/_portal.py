@@ -4726,7 +4726,7 @@ def engine_scope():
         _reset_solver_cache()
 
 
-def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
+def resident_loop(stdin, stdout, stderr, solve_lock=None, scope=None) -> int:
     """The banner, then decks off ``stdin`` until it ends. The protocol itself.
 
     Decks are framed on stdin by an ``NX`` card — no length prefix, no
@@ -4759,8 +4759,14 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     reader synthesizes an ``EN`` when input runs out mid-deck and runs what
     it has (#458, observed live in the #413 4nec2 capture); a body of
     nothing but blank lines still runs nothing.
+
+    ``scope`` wraps the seam, and changes no printout byte: the launcher
+    shell's ``- -`` passes :func:`momwire.dropin.nec5._shell.deck_scoped`,
+    which makes each structure one deck of the process's advisories
+    (momwire#2119).
     """
-    return run_session(portal_seam(), stdin, stdout, stderr, solve_lock)
+    the_seam = portal_seam() if scope is None else scope(portal_seam())
+    return run_session(the_seam, stdin, stdout, stderr, solve_lock)
 
 
 # --------------------------------------------------------------------------
@@ -4816,7 +4822,9 @@ def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> i
         _shell.FrontEnd(
             render=file_printout,
             refusal=file_refusal,
-            stream=lambda: resident_loop(stdin, stdout, stderr),
+            stream=lambda: resident_loop(
+                stdin, stdout, stderr, scope=_shell.deck_scoped
+            ),
         ),
     )
     return _shell.main(

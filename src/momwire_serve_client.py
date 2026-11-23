@@ -823,45 +823,79 @@ def split_times(answer: bytes) -> tuple[bytes | None, bytes]:
 # --------------------------------------------------------------------------
 #
 # The advisories a deck raises (Python warnings: `DuplicateWire`,
-# `CoarseCrossingNode`, ...) go to the launcher's stderr by default.
-# MOMWIRE_ADVISORIES=off drops them, as every launcher did from momwire#1673
-# until SimNEC's stream learned to drain the pipe; `stderr` is still read,
-# and now names the default.
+# `CoarseCrossingNode`, `RazorFarMeshClass`, ...) reach the launcher's stderr
+# only when MOMWIRE_ADVISORIES asks for them (momwire#2119):
+#
+#   off     the default (unset, empty, or a value no other mode reads):
+#           nothing, as before 0.97.0;
+#   deck    each distinct advisory once per deck (what 0.97.0 did by default);
+#   all     every occurrence, a deck's own repeats included.
+#
+# `stderr` (momwire#1673's opt-in) and on / 1 / yes / true read as `deck`;
+# off / 0 / no / false / none as `off`. Case and surrounding space are
+# ignored, and a value none of these reads is `off`, never a refusal: a typo
+# must not cost a user an engine. "Distinct" is the text as Python displays
+# it.
+#
+# Why off by default: EZNEC launches the engine once per frequency and shows
+# no stderr, and on Windows each write to that unread console cost the warm
+# drop-in 15-21 ms a launch (momwire#2119).
+#
+# Before the FIRST advisory a deck writes, and never for a deck that writes
+# none, the launcher writes a divider naming the deck (:func:`advisories_
+# divider`): the deck file it was given, or `structure N of the stream`
+# (N from 1, the structures between NX cards), in every writing mode.
 #
 # A deck the WARM SERVER answers raises its advisories in the server's
-# process, whose stderr is the server log. So a launcher that wants them sends
-# ADVISORIES_REQUEST in the request (after TIMES_REQUEST, before
-# EN_OPTIONAL_REQUEST), and the engine answers with ADVISORIES_FRAME_START,
-# the advisories exactly as Python would have displayed them (UTF-8, each
-# "\n" sent as CRLF by the answer's own translation), ADVISORIES_FRAME_END,
-# after the times frame and ahead of the `.GMO` frame and the printout. The
-# frame is present, possibly empty, whenever it was asked for. A warning's
-# text never holds NUL (the engine replaces one), so the end marker cannot
-# occur inside it. ADVISORIES_WIRE is hashed into the EZNEC launchers' server
-# key, so a launcher that asks never reaches a server that would read the
-# request line as deck text.
+# process, whose stderr is the server log. So a launcher that wants them
+# sends ADVISORIES_REQUEST, the mode and "\n" (:func:`advisories_request`;
+# after TIMES_REQUEST, before EN_OPTIONAL_REQUEST), and none in `off`. The
+# engine answers with ADVISORIES_FRAME_START, the advisories exactly as
+# Python displays them (UTF-8, each "\n" sent as CRLF by the answer's own
+# translation), ADVISORIES_FRAME_END, after the times frame and ahead of the
+# `.GMO` frame and the printout. The frame is present, possibly empty,
+# whenever it was asked for. A warning's text never holds NUL (the engine
+# replaces one), so the end marker cannot occur inside it. The launcher
+# writes the divider, then the frame, when the frame holds an advisory.
 #
-# The cap (momwire#1673's guard, kept): a host that never drains the pipe
-# blocks the engine once the pipe is full, and the smallest pipe a host is
-# known to hand over is about 4 KB (a default Windows anonymous pipe; Linux
-# cannot shrink one below a 4096-byte page). One process therefore writes at
-# most ADVISORIES_CAP bytes of advisories, then ADVISORIES_CAPPED once, then
-# nothing: 3072 + the ~150-byte note stays more than 850 bytes inside a 4 KB
-# pipe, and in a stream nothing else reaches stderr unless asked for
-# (MOMWIRE_TIMES). Bytes are counted as :func:`advisory_cost` counts them, an
-# upper bound for any console encoding and newline translation. The size is
-# set by the largest structure measured: momwire#1673's buried-radial deck
+# ADVISORIES_WIRE is hashed into the EZNEC launchers' server key, so a
+# launcher never reaches a server that reads its request differently
+# (0.97.0's carried no mode).
+#
+# The cap (momwire#1673's guard, kept in every mode): a host that never
+# drains the pipe blocks the engine once the pipe is full, and the smallest
+# pipe a host is known to hand over is about 4 KB (a default Windows
+# anonymous pipe; Linux cannot shrink one below a 4096-byte page). One process
+# therefore writes at most ADVISORIES_CAP bytes of advisories, then
+# ADVISORIES_CAPPED once, then nothing: 3072 + the ~150-byte note stays more
+# than 850 bytes inside a 4 KB pipe, and in a stream nothing else reaches
+# stderr unless asked for (MOMWIRE_TIMES). A divider and the advisory after
+# it are one piece of the cap, so a divider is never written alone. A served
+# deck's divider is the launcher's and the frame was capped by the server, so
+# there the divider rides in the margin, bounded by ADVISORIES_LABEL_ROOM.
+# Bytes are counted as :func:`advisory_cost` counts them, an upper bound for
+# any console encoding and newline translation. The size is set by the
+# largest structure measured: momwire#1673's buried-radial deck
 # (`buried_grazing_1672/shallow_s40.nec`, bs2) raises three advisories,
 # 2.9 KB as Python displays them (one alone is 1.6 KB), and a cap of 2048
 # cut its third, the crossing-node advisory the deck is about. So a stream
 # shows at least its first structure's advisories whole; a deck whose only
 # advisory is a duplicate wire (0.5 KB) shows five.
 ADVISORIES_ENV = "MOMWIRE_ADVISORIES"
+ADVISORIES_MODES = ("off", "deck", "all")
+# The words each mode reads; anything else is `off`. The C launcher carries
+# the two writing modes' tables (tests/test_eznec_client_c.py holds them).
 _ADVISORIES_OFF = frozenset({"off", "0", "no", "false", "none"})
-ADVISORIES_REQUEST = b"\x00ADVISORIES\n"
+_ADVISORIES_WORDS = {
+    "deck": frozenset({"deck", "stderr", "on", "1", "yes", "true"}),
+    "all": frozenset({"all"}),
+}
+ADVISORIES_REQUEST = b"\x00ADVISORIES "
 ADVISORIES_FRAME_START = b"\x00ADVISORIES\r\n"
 ADVISORIES_FRAME_END = b"\x00\r\n"
-ADVISORIES_WIRE = "advisories=framed"
+ADVISORIES_WIRE = "advisories=modes"
+ADVISORIES_DIVIDER_HEAD = "momwire: advisories for "
+ADVISORIES_LABEL_ROOM = 200
 ADVISORIES_CAP = 3072
 ADVISORIES_CAPPED = (
     f"momwire: further advisories not shown (one process writes at most "
@@ -869,11 +903,41 @@ ADVISORIES_CAPPED = (
 )
 
 
-def advisories_on(environ=None) -> bool:
-    """Advisories on stderr: unless ``MOMWIRE_ADVISORIES`` is off / 0 / no /
-    false / none (any case). Unset, ``stderr`` and anything else are on."""
+def advisories_mode(environ=None) -> str:
+    """``MOMWIRE_ADVISORIES`` as one of :data:`ADVISORIES_MODES` (the table
+    above): ``off`` unless the value names a writing mode."""
     env = os.environ if environ is None else environ
-    return env.get(ADVISORIES_ENV, "").strip().lower() not in _ADVISORIES_OFF
+    value = env.get(ADVISORIES_ENV, "").strip().lower()
+    for mode, words in _ADVISORIES_WORDS.items():
+        if value in words:
+            return mode
+    return "off"
+
+
+def advisories_on(environ=None) -> bool:
+    """Advisories on stderr: any mode but ``off``."""
+    return advisories_mode(environ) != "off"
+
+
+def advisories_request(mode: str) -> bytes:
+    """The request line asking a warm server for a deck's advisories."""
+    return ADVISORIES_REQUEST + mode.encode("ascii") + b"\n"
+
+
+def stream_label(number: int) -> str:
+    """A stream's structure ``number`` (from 1), as its divider names it."""
+    return f"structure {number} of the stream"
+
+
+def advisories_divider(label: str) -> str:
+    """The line written before a deck's first advisory: ``label`` (a deck
+    path, or :func:`stream_label`), its head cut to ``...`` when it would
+    cost more than :data:`ADVISORIES_LABEL_ROOM`."""
+    if advisory_cost(label) > ADVISORIES_LABEL_ROOM:
+        while label and advisory_cost(label) > ADVISORIES_LABEL_ROOM - 3:
+            label = label[1:]
+        label = "..." + label
+    return f"{ADVISORIES_DIVIDER_HEAD}{label}\n"
 
 
 def advisory_cost(text: str) -> int:
@@ -908,16 +972,43 @@ class AdvisoryBudget:
 
 
 class CappedStderr:
-    """A text stream that writes to ``stream`` within an
-    :class:`AdvisoryBudget`. Python's warning display writes each warning in
-    one ``write``, so the cap falls between advisories, never inside one."""
+    """A text stream that writes a process's advisories to ``stream`` in one
+    of the writing modes, within an :class:`AdvisoryBudget`.
 
-    def __init__(self, stream, budget: AdvisoryBudget | None = None) -> None:
+    Python's warning display writes each warning in one ``write``, so the cap
+    falls between advisories, never inside one, and each ``write`` is one
+    advisory's displayed text: what ``deck`` remembers since
+    :meth:`begin_deck`. The divider :meth:`begin_deck`
+    names is written with the deck's first advisory, as one piece of the cap.
+    A write of whitespace alone is passed on as it is."""
+
+    def __init__(
+        self, stream, budget: AdvisoryBudget | None = None, mode: str = "deck"
+    ) -> None:
         self.stream = stream
         self.budget = AdvisoryBudget() if budget is None else budget
+        self.mode = mode
+        self.seen: set[str] = set()
+        self.divider = ""
+
+    def begin_deck(self, label: str) -> None:
+        """A deck starts: its first advisory goes under ``label``'s divider."""
+        self.divider = advisories_divider(label)
+        self.seen = set()
 
     def write(self, text: str) -> int:
-        out = self.budget.take(text)
+        if not text.strip():
+            out = self.budget.take(text) if text else ""
+        else:
+            remembered = self.mode == "deck"
+            if remembered and text in self.seen:
+                return len(text)
+            piece = self.divider + text
+            out = self.budget.take(piece)
+            if out == piece:
+                self.divider = ""
+                if remembered:
+                    self.seen.add(text)
         if out:
             self.stream.write(out)
             self.stream.flush()
@@ -953,6 +1044,16 @@ def split_advisories(answer: bytes) -> tuple[bytes | None, bytes]:
 def advisories_text(raw: bytes) -> str:
     """An advisories frame's body as text for a text-mode stderr."""
     return raw.replace(b"\r\n", b"\n").decode("utf-8", "replace")
+
+
+def served_advisories(raw: bytes, label: str) -> str:
+    """What a launcher writes for a served deck's advisories frame: the
+    divider naming ``label`` and the frame, when it holds an advisory; the
+    cap's note alone when that is all it holds; nothing for an empty one."""
+    text = advisories_text(raw)
+    if not text or text == ADVISORIES_CAPPED:
+        return text
+    return advisories_divider(label) + text
 
 
 def split_answer(answer: bytes) -> tuple[bytes | None, bytes]:

@@ -73,6 +73,7 @@ field, so their runs write exactly what they wrote before.
 from __future__ import annotations
 
 import codecs
+import contextlib
 import functools
 import io
 import os
@@ -395,7 +396,7 @@ def render_files(
 def _advise_long_exponents(text: str) -> None:
     """momwire#1964: an exponent token past 20 characters, as a warning.
     Not a refusal (momwire's reading is the deck's), an advisory; the
-    launchers show it on stderr unless MOMWIRE_ADVISORIES=off. A file's whole
+    launchers show it on stderr when MOMWIRE_ADVISORIES asks. A file's whole
     text and each streamed structure (:func:`_stream_piece`) both pass here."""
     note = long_exponent_note(long_exponent_tokens(text))
     if note is not None:
@@ -863,10 +864,14 @@ def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str,
         )
 
 
-def _timed_piece(piece: str, basis: str, write, dialect: str = "nec5") -> bool:
-    """One stream piece answered and written (``go_on``); under
-    MOMWIRE_TIMES with its ``times:`` line on stderr. Each piece's own
-    advisories display (:func:`_deck_advisories`)."""
+def _timed_piece(
+    piece: str, basis: str, write, dialect: str = "nec5", number: int = 1
+) -> bool:
+    """One stream piece, the stream's structure ``number``, answered and
+    written (``go_on``); under MOMWIRE_TIMES with its ``times:`` line on
+    stderr. Its advisories are its own deck's (:func:`_begin_deck`,
+    :func:`_deck_advisories`)."""
+    _begin_deck(_mech.stream_label(number))
     with _deck_advisories():
         return _timed_piece_body(piece, basis, write, dialect)
 
@@ -957,6 +962,7 @@ def stream(
     pending = ""
     swallow_lf = False  # an NX line cut at a bare CR whose LF had not arrived
     final = False
+    number = 0  # the structure being answered, from 1 (its advisories' divider)
     while not final:
         data = read()
         final = not data
@@ -970,28 +976,28 @@ def stream(
             cut = next_structure(pending, final=final)
             if cut is None:
                 if final and pending.strip():
-                    _timed_piece(pending, basis, write, dialect)
+                    number += 1
+                    _timed_piece(pending, basis, write, dialect, number)
                 break
             end = cut[0]
             piece, pending = pending[:end], pending[end:]
             swallow_lf = piece.endswith("\r") and not pending and not final
-            if not _timed_piece(piece, basis, write, dialect):
+            number += 1
+            if not _timed_piece(piece, basis, write, dialect, number):
                 return 0
     return 0
 
 
 # What the launchers print on stderr: the advisories the user's deck raises
-# (Python warnings), by default. momwire#1673 sank them, because SimNEC's
-# stream (`- -`) never drained the pipe and the engine blocked on a full one;
-# SimNEC drains it now. `main` answers with `sys.stderr` -- where Python's
-# warning display writes -- wrapped in the per-process cap
-# (`momwire_serve_client.CappedStderr`, which says why 3072 bytes), the guard
-# that keeps a host that still never drains the pipe from hanging.
-# `MOMWIRE_ADVISORIES=off` points it at a sink instead, today's silence.
-# Either way the printout is unchanged, a `warnings.catch_warnings(record=
-# True)` around `main` still records every advisory, and the shell's own
-# deliberate lines (the streaming refusal, MOMWIRE_TIMES) reach the real
-# stderr, uncapped, through `_stderr()`.
+# (Python warnings), in the mode MOMWIRE_ADVISORIES names
+# (`momwire_serve_client.advisories_mode`, momwire#2119), and by default
+# nothing. `main` answers with `sys.stderr` -- where Python's warning
+# display writes -- wrapped in that mode's per-process memory and cap
+# (`momwire_serve_client.CappedStderr`, which says why 3072 bytes), or, off,
+# pointed at a sink. Either way the printout is unchanged, a
+# `warnings.catch_warnings(record=True)` around `main` still records every
+# advisory, and the shell's own deliberate lines (the streaming refusal,
+# MOMWIRE_TIMES) reach the real stderr, uncapped, through `_stderr()`.
 ADVISORIES_ENV = _mech.ADVISORIES_ENV
 _REAL_STDERR: list = []
 
@@ -1001,9 +1007,32 @@ def _stderr():
     return _REAL_STDERR[-1] if _REAL_STDERR else sys.stderr
 
 
-def _deck_advisories():
+def _begin_deck(label: str) -> None:
+    """A deck starts on this process's advisories stream: its first advisory
+    is written under the divider naming ``label`` (a no-op when off)."""
+    if isinstance(sys.stderr, _mech.CappedStderr):
+        sys.stderr.begin_deck(label)
+
+
+def _active_mode() -> str:
+    """The mode `main` is writing advisories in; ``deck`` outside it (or
+    off), which is how a recorder around a deck has always seen them."""
+    if isinstance(sys.stderr, _mech.CappedStderr):
+        return sys.stderr.mode
+    return "deck"
+
+
+# The actions that show a warning once per location (or per process); `all`
+# mode shows every occurrence instead. `ignore` and `error` are kept, whoever
+# installed them.
+_ONCE_ACTIONS = frozenset({"default", "module", "once"})
+
+
+@contextlib.contextmanager
+def _deck_advisories(mode: str | None = None, *, record: bool = False):
     """A context for one deck's answer in which each of ITS advisories
-    displays again, whatever an earlier deck in this process displayed.
+    displays again, whatever an earlier deck in this process displayed; with
+    ``record``, yields the list they are recorded in.
 
     Python shows a ``default``-action warning once per (text, category,
     line) per process, so in a stream, a warm server or a second ``main`` in
@@ -1011,23 +1040,41 @@ def _deck_advisories():
     Entering :class:`warnings.catch_warnings` invalidates that memory (the
     filters are copied, the registries' version moves), and leaves the
     filters and the display -- a caller's recorder included -- as they were.
+
+    ``mode`` ``all`` (default: :func:`_active_mode`) also shows a deck's
+    repeats: within the copy, each once-showing filter becomes ``always``,
+    and ``always`` catches what no filter matches, so an ``ignore`` or
+    ``error`` filter still wins where it did. ``warnings.defaultaction`` is
+    never touched (``catch_warnings`` would not restore it).
     """
-    return warnings.catch_warnings()
+    if mode is None:
+        mode = _active_mode()
+    with warnings.catch_warnings(record=record) as caught:
+        if mode == "all":
+            warnings.filters[:] = [
+                ("always", *entry[1:]) if entry[0] in _ONCE_ACTIONS else entry
+                for entry in warnings.filters
+            ]
+            # Appended, and through the API: the registries' version moves.
+            warnings.simplefilter("always", append=True)
+        yield caught
 
 
 def _advisories_routed(entry: Callable[..., int]) -> Callable[..., int]:
-    """Run a launcher entry point with its advisories on stderr within the
-    per-process cap, or on a sink under ``MOMWIRE_ADVISORIES=off``."""
+    """Run a launcher entry point with its advisories on stderr in the
+    ``MOMWIRE_ADVISORIES`` mode within the per-process cap, or on a sink when
+    off (the default)."""
 
     @functools.wraps(entry)
     def routed(*args: object, **kwargs: object) -> int:
         real = sys.stderr
         _REAL_STDERR.append(real)
         try:
-            if _mech.advisories_on():
+            mode = _mech.advisories_mode()
+            if mode != "off":
                 # A budget per call: each launcher process makes exactly one.
-                sys.stderr = _mech.CappedStderr(real)
-                with _deck_advisories():
+                sys.stderr = _mech.CappedStderr(real, mode=mode)
+                with _deck_advisories(mode):
                     return entry(*args, **kwargs)
             with open(os.devnull, "w", encoding="utf-8") as sink:
                 sys.stderr = sink
@@ -1036,6 +1083,22 @@ def _advisories_routed(entry: Callable[..., int]) -> Callable[..., int]:
             sys.stderr = _REAL_STDERR.pop()
 
     return routed
+
+
+def deck_scoped(the_seam: Seam) -> Seam:
+    """``the_seam`` with each answer one deck of this process's advisories:
+    its structure's divider (:func:`momwire_serve_client.stream_label`,
+    counted from 1 per seam) and its own once-per-location memory. For a
+    front end whose stream is a session over a seam (NEC-2's)."""
+    count = [0]
+
+    def answer(body: str, terminator: str):
+        count[0] += 1
+        _begin_deck(_mech.stream_label(count[0]))
+        with _deck_advisories():
+            return the_seam.answer(body, terminator)
+
+    return replace(the_seam, answer=answer)
 
 
 @_advisories_routed
@@ -1113,6 +1176,7 @@ def main(
         print(STREAMING_REFUSAL, file=_stderr())
         return 2
     times_on = _times.env_on()
+    _begin_deck(deck_path)
     try:
         if times_on:
             with _times.answering("python", **_times_pre()) as times:
@@ -1209,6 +1273,21 @@ _ADVISORIES_FRAME_END = _mech.ADVISORIES_FRAME_END.decode("latin-1").replace(
 )
 
 
+def _advisories_asked(body: str) -> tuple[str | None, str]:
+    """``(mode, rest)`` for a body that starts with the advisories' request
+    line (:func:`momwire_serve_client.advisories_request`), else ``(None,
+    body)``. A mode this engine does not know reads as ``deck``."""
+    if not body.startswith(_ADVISORIES_REQUEST):
+        return None, body
+    cut = body.find("\n", len(_ADVISORIES_REQUEST))
+    if cut < 0:
+        return None, body
+    mode = body[len(_ADVISORIES_REQUEST) : cut].strip()
+    if mode not in _mech.ADVISORIES_MODES or mode == "off":
+        mode = "deck"
+    return mode, body[cut + 1 :]
+
+
 def _request(body: str) -> tuple[str, bool]:
     """``(deck text, en_optional)`` from a resident request's body: a launcher
     whose paths came from stdin sends :data:`momwire_serve_client.
@@ -1217,24 +1296,25 @@ def _request(body: str) -> tuple[str, bool]:
     :data:`momwire_serve_client.ADVISORIES_REQUEST`, when it sends them)."""
     if body.startswith(_TIMES_REQUEST):
         body = body[len(_TIMES_REQUEST) :]
-    if body.startswith(_ADVISORIES_REQUEST):
-        body = body[len(_ADVISORIES_REQUEST) :]
+    _, body = _advisories_asked(body)
     if body.startswith(_EN_OPTIONAL_REQUEST):
         return body[len(_EN_OPTIONAL_REQUEST) :], True
     return body, False
 
 
-def advisories(caught: list[warnings.WarningMessage]) -> str:
+def advisories(caught: list[warnings.WarningMessage], mode: str = "deck") -> str:
     """Recorded warnings as an advisories frame's body: each displayed as
-    Python displays it on stderr, within one process's cap, as the UTF-8
-    bytes the frame carries spelt one latin-1 character per byte (the answer
-    stream's codec). NUL, which would end the frame, is never in it."""
-    shown = [
-        warnings.formatwarning(
+    Python displays it on stderr, each distinct text once (every occurrence
+    in mode ``all``), within one process's cap, as the UTF-8 bytes the frame
+    carries spelt one latin-1 character per byte (the answer stream's
+    codec). NUL, which would end the frame, is never in it."""
+    shown: list[str] = []
+    for w in caught:
+        text = warnings.formatwarning(
             w.message, w.category, w.filename, w.lineno, w.line
         ).replace("\x00", "?")
-        for w in caught
-    ]
+        if mode == "all" or text not in shown:
+            shown.append(text)
     return _mech.capped_advisories(shown).encode("utf-8").decode("latin-1")
 
 
@@ -1290,6 +1370,11 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
     deck that asks for a ``.GMO`` file gets it framed ahead of the printout
     (:func:`framed`), which the launcher writes beside the printout.
 
+    A body that starts with the advisories' request line gets the deck's
+    advisories framed ahead of the rest, in the mode the line names
+    (momwire#2119), within one process's cap: the launcher that sent it
+    writes them as they come.
+
     The :class:`~momwire.serve.Seam` invariant — ``answer`` never raises —
     is kept the same way :func:`main` keeps exit 0: anything
     :func:`render`'s three gates did not foresee comes back as the
@@ -1309,16 +1394,17 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
         return _advised_body(body), ""
 
     def _advised_body(body: str) -> str:
-        if not body.startswith(_ADVISORIES_REQUEST):
+        mode, body = _advisories_asked(body)
+        if mode is None:
             # Not asked for (MOMWIRE_ADVISORIES=off, or a launcher that
             # never asks): this deck's advisories go to this process's
             # stderr, the server log, each deck's own
-            with _deck_advisories():
+            with _deck_advisories("deck"):
                 return _answer_body(body)
-        body = body[len(_ADVISORIES_REQUEST) :]
-        with warnings.catch_warnings(record=True) as caught:
+        with _deck_advisories(mode, record=True) as caught:
             answered = _answer_body(body)
-        return f"{_ADVISORIES_FRAME_START}{advisories(caught)}{_ADVISORIES_FRAME_END}{answered}"
+        shown = advisories(caught, mode)
+        return f"{_ADVISORIES_FRAME_START}{shown}{_ADVISORIES_FRAME_END}{answered}"
 
     def _answer_body(body: str) -> str:
         try:

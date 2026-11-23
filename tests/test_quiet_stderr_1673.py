@@ -3,10 +3,10 @@
 SimNEC's streaming call (``- -``) used to never drain the engine's stderr, so
 once the advisories a long stream raises passed the pipe's size (about 4 KB
 on Windows) the engine blocked on the write and the host waited forever for
-a printout. The launchers then wrote nothing there; now they write the
-advisories by default, within a per-process cap
-(tests/test_advisories_stderr_default.py), and ``off`` is the old silence:
-the warnings still reach anyone recording them.
+a printout. The launchers then wrote nothing there. 0.97.0 wrote them by
+default; since momwire#2119 ``off`` is the default again, and the writing
+modes keep a per-process cap (tests/test_advisories_modes_2119.py). Off, the
+warnings still reach anyone recording them.
 """
 
 from __future__ import annotations
@@ -53,8 +53,9 @@ def test_a_stream_of_advisory_decks_writes_nothing_on_stderr_when_off():
     assert quiet.returncode == 0
     assert quiet.stdout.count(b"ANTENNA INPUT PARAMETERS") == 2
     assert quiet.stderr == b"", quiet.stderr[:400]
-    # ...and the same stream by default carries them
-    loud = _run(["-", "-"], STREAM, {})
+    # ...as by default (momwire#2119), and a writing mode carries them
+    assert _run(["-", "-"], STREAM, {}).stderr == b""
+    loud = _run(["-", "-"], STREAM, {_shell.ADVISORIES_ENV: "deck"})
     assert b"CoarseCrossingNode" in loud.stderr
     assert loud.stdout == quiet.stdout
 
@@ -69,7 +70,7 @@ def test_a_one_shot_writes_nothing_on_stderr_when_off(tmp_path):
     assert "ANTENNA INPUT PARAMETERS" in out.read_text()
 
 
-@pytest.mark.parametrize("setting", [None, "off"])
+@pytest.mark.parametrize("setting", [None, "off", "deck", "all"])
 def test_the_advisories_are_still_raised_in_process(tmp_path, monkeypatch, setting):
     """Only the display changes: a caller recording warnings around `main`
     sees every advisory, displayed or sunk."""
