@@ -493,31 +493,46 @@ its own build tag, so it is the one line that already carried an engine
 identity; the comment block EZNEC checks the printout against, the banner and
 every table heading are untouched.
 
-### Advisories: on stderr
+### Advisories: on stderr, when you ask
 
 Besides refusals, momwire raises **advisories**: a warning about the mesh,
 the kernel or a feed that does not stop the solve, such as `DuplicateWire`,
 `CoarseCrossingNode` or `GapMeshFloor`. They never go in the printout, so it
-stays in the engine's own layout. They go to the launcher's **stderr**, on
-every route: a one-shot run, the stdin form, SimNEC's stream mode (`- -`), and
-a deck the warm engine answers, whose advisories travel back to the launcher
-that sent it. Each deck shows its own advisories, even when the deck before
-it raised the same ones.
+stays in the engine's own layout. By default the engine writes none of them.
+To see them, set `MOMWIRE_ADVISORIES` before your program starts:
+
+| value | what the launcher writes on stderr |
+|---|---|
+| `off`, or not set | nothing (the default) |
+| `deck` | each different advisory once per deck |
+| `all` | every one, including a deck's repeats of the same advisory |
+
+`stderr`, `on`, `1`, `yes` and `true` mean `deck`. Case does not matter, and a
+value the engine does not recognise reads as `off`. Two advisories are
+different when their text is: under `deck`, a deck that raises the same
+advisory at each of its frequencies shows it once, and `all` shows each.
+
+Every route honours the setting: a one-shot run, the stdin form, SimNEC's
+stream mode, and a deck the warm engine answers, whose advisories travel back
+to the launcher that sent it. Before the first advisory of each deck the
+launcher writes a line naming the deck, so you can tell which deck raised it:
+
+```
+momwire: advisories for C:\EZNEC\Models\dipole.ez.nec
+momwire: advisories for structure 2 of the stream
+```
+
+A deck that writes no advisory gets no such line.
 
 One engine process writes at most 3072 bytes of advisories, then one line
 saying the rest were not shown, then nothing more. So a host that never
 reads the engine's stderr cannot stall it on a full pipe (momwire#1673): the
 smallest pipe a host is known to hand over holds about 4 KB.
 
-To turn them off, set the environment variable before your program starts:
-
-```
-MOMWIRE_ADVISORIES=off
-```
-
-`MOMWIRE_ADVISORIES=stderr`, the setting that turned them on before, is
-still accepted and now means the default. EZNEC does not show stderr, so
-there neither setting changes anything you can see.
+EZNEC does not show stderr, so under EZNEC no setting changes anything you
+can see. Writing advisories to that unseen console cost each EZNEC launch
+about 15-21 ms on Windows, which is why they are off unless asked for
+(momwire#2119).
 
 ## What serves
 
