@@ -310,7 +310,12 @@ def test_the_nec2_stream_divides_its_structures_too(setting):
     assert text.count("RadiusStepJunction") == 2
     assert runs["off"].stderr == b""
     untimed = [
-        b"\n".join(ln for ln in r.stdout.splitlines() if b"FILL:" not in ln)
+        b"\n".join(
+            ln
+            for ln in r.stdout.splitlines()
+            # wall-clock lines: FILL, and the EN's RUN TIME (momwire#2133)
+            if b"FILL:" not in ln and not ln.startswith(b" RUN TIME =")
+        )
         for r in runs.values()
     ]
     assert untimed[0] == untimed[1]

@@ -184,9 +184,14 @@ def test_resident_loop_is_the_generic_loop_over_the_portal_seam():
     )
 
     def strip_timing(text: str) -> str:
-        # The FILL cell is wall-clock — the one line two live solves of one
-        # deck may legitimately disagree on (same rule as the corpus gates).
-        return "\n".join(line for line in text.split("\n") if "FILL:" not in line)
+        # The FILL cell and the run's RUN TIME trailer (momwire#2133) are
+        # wall-clock — the lines two live solves of one deck may legitimately
+        # disagree on (same rule as the corpus gates).
+        return "\n".join(
+            line
+            for line in text.split("\n")
+            if "FILL:" not in line and not line.startswith(" RUN TIME =")
+        )
 
     assert strip_timing(via_entry.getvalue()) == strip_timing(via_seam.getvalue())
     assert via_entry.getvalue().count("ANTENNA INPUT PARAMETERS") == 2
