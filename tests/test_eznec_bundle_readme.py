@@ -269,7 +269,8 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
     by its full path, in every slot. Tested in 4nec2 5.8.8 on 2026-11-23:
     4nec2 runs every engine through 4nec2.bat and Manual select cannot name
     a program, so every slot goes through the batch file, in a copy of the
-    4nec2 folder, with Wait in DOS box unticked (no pause)."""
+    4nec2 folder, with Wait in DOS box unticked (no pause). NEC-2 is not
+    supported in 4nec2 (its NEC-2 engines expect the NEC-2D layout)."""
     build = _build()
     text = build.readme_text("9.9.9", "SIGNING: unsigned.", ".exe")
     assert "which is the exception" not in text
@@ -282,6 +283,7 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
     assert "Manual select cannot" in " ".join(text.split())
     assert "Wait in DOS box unticked" in " ".join(text.split())
     assert "COPY of the 4nec2" in " ".join(text.split())
+    assert "NEC-2 is not supported in 4nec2" in " ".join(text.split())
     head = text.split("\n\n", 1)[0]
     assert "SimNEC (its NEC-5, NEC-4.2 and NEC-2 engines)" in " ".join(head.split())
     assert "its NEC-4.2 engine" in " ".join(head.split())
