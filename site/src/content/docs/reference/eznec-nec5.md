@@ -35,32 +35,37 @@ become momwire's.
 Steps 1–3 are the same: the unblocked zip extracted to a folder of its
 own, `C:\momwire\` below. Tested with 4nec2 5.8.8.
 
-4nec2 reaches an outside engine only through `4nec2.bat` in its `exe`
-folder (`C:\4nec2\exe` in a default install). Its **Settings → Nec
-engine** menu can't name one: **Manual select** sets the size of 4nec2's
-own bundled engine, not a program. Back up `4nec2.bat` before you edit it.
+4nec2 runs every engine through `4nec2.bat` in its `exe` folder
+(`C:\4nec2\exe` in a default install): for each run it calls the batch
+file with the engine's name, and the batch file runs that engine on
+`nec2d.tmp`. **Settings → Nec engine** only chooses which name 4nec2
+passes in; **Manual select** sets that name and the segment limit, and
+does not name an outside program.
 
-**NEC-4.2 and NEC-2.** In **Settings → Nec engine**, tick **Wait in DOS
-box** and leave the engine choice as it is. Then, in `4nec2.bat`:
+So momwire goes in by editing `4nec2.bat`. Because that file serves every
+engine choice, do it in a **copy of the 4nec2 folder** (for example
+`C:\4nec2MW\`), and keep your original 4nec2 for its own engines.
 
-- replace the engine line, `%nec2d% < nec2d.tmp`, with one of
+**NEC-4.2 and NEC-2.** In the copy's `exe\4nec2.bat`, replace the engine
+line, `%nec2d% < nec2d.tmp`, with one of
 
-  ```text
-  C:\momwire\momwire-nec42.exe < nec2d.tmp              NEC-4.2, the default (nec42-bs2)
-  C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp   NEC-4.2's own formulation (the twin)
-  C:\momwire\momwire-nec2c.exe < nec2d.tmp              NEC-2, the default (nec2c-bs2)
-  C:\momwire\momwire-nec2c-sinusoidal.exe < nec2d.tmp   NEC-2's own formulation (the twin)
-  ```
+```text
+C:\momwire\momwire-nec42.exe < nec2d.tmp              NEC-4.2, the default (nec42-bs2)
+C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp   NEC-4.2's own formulation (the twin)
+C:\momwire\momwire-nec2c.exe < nec2d.tmp              NEC-2, the default (nec2c-bs2)
+C:\momwire\momwire-nec2c-sinusoidal.exe < nec2d.tmp   NEC-2's own formulation (the twin)
+```
 
-- and delete both `if "%3" == "" pause` lines, so the DOS box closes by
-  itself instead of waiting for a key on every run.
+and leave the rest of the file as it is. In **Settings → Nec engine**,
+keep any of 4nec2's own engines selected (for example `Nec2dXS*.exe`) and
+leave **Wait in DOS box** unticked: 4nec2 then tells the batch file not to
+pause, and no key press is needed. The NEC-2 launchers need momwire 0.97.2
+or later here: 4nec2 reads a printout's `RUN TIME` line to accept a run,
+and earlier NEC-2 printouts had none (momwire#2133).
 
-That line now answers every run 4nec2 makes through its DOS box. To go
-back to 4nec2's own engines, put the backed-up `4nec2.bat` back, or keep
-the edited one in a copy of the 4nec2 folder, as the NEC-5 setup does.
-The NEC-2 launchers need momwire 0.97.2 or later here: 4nec2 reads a
-printout's `RUN TIME` line to accept a run, and earlier NEC-2 printouts
-had none (momwire#2133).
+4nec2 reuses a model's last printout, without running the engine, when the
+model has not changed since. After switching engines, edit the model or
+delete its `.out` file in 4nec2's `out` folder to get a fresh run.
 
 **NEC-5.** This goes through the NEC-5 package for 4nec2 that Dan, AC6LA,
 describes in his QRZ post
