@@ -29,6 +29,7 @@ import momwire._far_readout as fr
 import momwire._wire_spec as WS
 import momwire.sinusoidal as S
 from momwire import _nec2_end_cap
+from momwire._identity_memo import IdentityMemo
 from momwire.deck import build_solver, parse_nec2, prepare_mesh
 from momwire.dropin.nec2c import _portal, engine_scope
 
@@ -278,3 +279,63 @@ def test_decks_served_by_one_process_answer_as_a_fresh_process_does():
     # The edit is a different antenna, not a replay of the first.
     assert frames[0] != frames[2]
     assert frames[0] == frames[3]
+
+
+def test_the_element_map_is_found_by_the_meshs_identity_and_not_over_shared(
+    monkeypatch,
+):
+    """Every step of a deck asks for the same segment-to-element map, and a
+    prepared mesh's solvers are recognised by their frozen polylines rather
+    than by a copy of every coordinate. A different structure in the same
+    DeckSolver (never produced by the portal, but the method must not assume
+    it) recomputes."""
+    deck = _portal.parse_deck(DECKS["free_space"])
+    solver = _portal.DeckSolver(deck, basis="sinusoidal")
+    calls = []
+    real = solver._element_match_uncached
+    monkeypatch.setattr(
+        solver,
+        "_element_match_uncached",
+        lambda s, rows=None: calls.append(s) or real(s, rows),
+    )
+    model = parse_nec2(DECKS["free_space"])
+    mesh = prepare_mesh(model)
+    with _nec2_end_cap.launcher_default():
+        steps = [
+            build_solver(model, basis="sinusoidal", frequency_mhz=f, mesh=mesh).solver
+            for f in (14.0, 14.5, 15.0)
+        ]
+    first = solver._element_match(steps[0])
+    assert all(solver._element_match(s) is first for s in steps[1:])
+    assert len(calls) == 1
+    other = parse_nec2(DECKS["free_space"].replace("5.1 10 0 5.1", "5.1 10 0 5.4"))
+    moved = build_solver(
+        other, basis="sinusoidal", frequency_mhz=14.0, mesh=prepare_mesh(other)
+    ).solver
+    assert solver._element_match(moved) is not first
+    assert len(calls) == 2
+
+
+def test_the_memo_is_safe_to_hit_from_several_threads():
+    import threading
+
+    memo = IdentityMemo(size=2)
+    arrays = [np.zeros(3) for _ in range(6)]
+    for a in arrays:
+        a.setflags(write=False)
+    errors = []
+
+    def work(seed):
+        try:
+            for i in range(400):
+                a = arrays[(seed + i) % len(arrays)]
+                assert memo.get((a,), None, lambda a=a: id(a)) == id(a)
+        except Exception as exc:  # noqa: BLE001 - the test reports whatever broke
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
