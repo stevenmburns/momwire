@@ -46,22 +46,21 @@ So momwire goes in by editing `4nec2.bat`. Because that file serves every
 engine choice, do it in a **copy of the 4nec2 folder** (for example
 `C:\4nec2MW\`), and keep your original 4nec2 for its own engines.
 
-**NEC-4.2 and NEC-2.** In the copy's `exe\4nec2.bat`, replace the engine
-line, `%nec2d% < nec2d.tmp`, with one of
+**NEC-4.2, and NEC-2 models.** In the copy's `exe\4nec2.bat`, replace the
+engine line, `%nec2d% < nec2d.tmp`, with one of
 
 ```text
 C:\momwire\momwire-nec42.exe < nec2d.tmp              NEC-4.2, the default (nec42-bs2)
 C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp   NEC-4.2's own formulation (the twin)
-C:\momwire\momwire-nec2c.exe < nec2d.tmp              NEC-2, the default (nec2c-bs2)
-C:\momwire\momwire-nec2c-sinusoidal.exe < nec2d.tmp   NEC-2's own formulation (the twin)
 ```
 
 and leave the rest of the file as it is. In **Settings → Nec engine**,
 keep any of 4nec2's own engines selected (for example `Nec2dXS*.exe`) and
 leave **Wait in DOS box** unticked: 4nec2 then tells the batch file not to
-pause, and no key press is needed. The NEC-2 launchers need momwire 0.97.2
-or later here: 4nec2 reads a printout's `RUN TIME` line to accept a run,
-and earlier NEC-2 printouts had none (momwire#2133).
+pause, and no key press is needed. 4nec2 reads a NEC-4.2 printout whichever
+of its engines is selected, so a NEC-2 model runs this way too. The
+`momwire-nec2c` launchers are for SimNEC's NEC-2 engine and nec2c's command
+line: their printout is nec2c's layout, which 4nec2 does not read.
 
 4nec2 reuses a model's last printout, without running the engine, when the
 model has not changed since. After switching engines, edit the model or

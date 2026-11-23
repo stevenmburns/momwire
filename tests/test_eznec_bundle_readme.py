@@ -288,9 +288,4 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
 
 
 NEC5_SLOT_LINES = ("momwire-nec5", "momwire-nec5-razor2p")
-NEC42_SLOT_LINES = (
-    "momwire-nec42",
-    "momwire-nec42-sinusoidal",
-    "momwire-nec2c",
-    "momwire-nec2c-sinusoidal",
-)
+NEC42_SLOT_LINES = ("momwire-nec42", "momwire-nec42-sinusoidal")
