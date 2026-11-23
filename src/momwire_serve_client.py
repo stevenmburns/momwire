@@ -1710,6 +1710,26 @@ def pin_cpu_env(environ=None) -> dict[str, str]:
     return added
 
 
+def stock_main(argv=None) -> int:
+    """The console-script entry of the plain ``momwire-nec2c*`` launchers
+    (the ones that run the engine in their own process, with no thin client
+    in front): pin AVX-512 off, THEN import the portal and run it.
+
+    The order is the point. ``momwire.dropin.nec2c:main`` as an entry point
+    imports the ``momwire`` package, and with it NumPy, before any line of
+    ``main`` runs, so a pin made inside ``main`` reaches only the children.
+    This module imports nothing heavy, so the pin lands before NumPy is read
+    in. The thin clients pin at the top of their own ``main`` for the same
+    reason; this is the same call for the one launcher that has no client.
+    ``sys.argv[0]`` is the console script's, untouched, so the basis the
+    launcher's name selects (``momwire-nec2c-sinusoidal``) is read as before.
+    """
+    pin_cpu_env()
+    from momwire.dropin.nec2c import main
+
+    return main(argv)
+
+
 __all__ = [
     "BUILD_VERSION_MODULE",
     "LAUNCHER_MODES",
@@ -1739,6 +1759,7 @@ __all__ = [
     "read_rendezvous",
     "runtime_dir",
     "socket_path",
+    "stock_main",
     "spawn_server",
     "stale_versions",
     "transport",
