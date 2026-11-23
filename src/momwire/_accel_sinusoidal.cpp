@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 #include "_mw_nd_binding.h"
 #include "_sinusoidal_core.h"
+#include "_sinusoidal_far_core.h"
 #include "_sinusoidal_galerkin_core.h"
 
 #include <string>
@@ -423,7 +424,8 @@ static void sinusoidal_fill_rows(
     py::object img_c, py::object img_t, F64C seg_h, double k, double eta,
     F64C gl_t, F64C gl_w, py::object src_a, py::object ind1, py::object ind2,
     I64C ptr0, I64C ind0, py::array val0, I64C ptr1, I64C idx1, py::array val1,
-    I64C ptr2, I64C idx2, py::array val2, int n_threads, uintptr_t cancel_flag) {
+    I64C ptr2, I64C idx2, py::array val2, int n_threads, uintptr_t cancel_flag,
+    py::object far_r) {
     const auto cplx = py::dtype::of<std::complex<double>>();
     if (out.ndim() != 2 || !out.dtype().is(cplx))
         throw std::runtime_error("sinusoidal_fill_rows: out must be a 2-D complex128 array");
@@ -513,8 +515,18 @@ static void sinusoidal_fill_rows(
     A.out_cs = out.strides(1) / cs;
     A.n_threads = n_threads;
     A.cancel_flag = cancel_flag;
+    // momwire#2082 step 1: `far_r` (metres) is `nec2_far_approx`'s range, and
+    // the rows are then `_sinusoidal_far_core.cpp`'s far-aware twin.
+    const bool far = !far_r.is_none();
+    const double far_m = far ? far_r.cast<double>() : 0.0;
+    if (far && ek)
+        throw std::runtime_error(
+            "sinusoidal_fill_rows: far_r serves the reduced kernel only");
     py::gil_scoped_release nogil;
-    mw::sinusoidal::sinusoidal_fill_rows(A);
+    if (far)
+        mw::sinusoidal::sinusoidal_fill_rows_far(A, far_m);
+    else
+        mw::sinusoidal::sinusoidal_fill_rows(A);
 }
 
 void register_sinusoidal(py::module_ &m) {
@@ -763,7 +775,10 @@ void register_sinusoidal(py::module_ &m) {
           "(or `_ek` when src_a/ind1/ind2 are given) at observer m's radius "
           "a_rows[m], less the PEC image's (img_centers/img_tangents, or None), "
           "contracted in `reduce_phi_band`'s order: the two-pass bits, no Phi "
-          "band. out is any complex128 (M, cols) layout.",
+          "band. out is any complex128 (M, cols) layout. far_r (metres, or None) "
+          "is nec2_far_approx's range: the pairs beyond it take the lumped "
+          "source's field, the bits of sinusoidal_field_tensor_far (momwire#2082; "
+          "the reduced kernel only).",
           py::arg("out"), py::arg("obs_centers"), py::arg("obs_tangents"),
           py::arg("a_rows"), py::arg("src_centers"), py::arg("src_tangents"),
           py::arg("img_centers"), py::arg("img_tangents"), py::arg("seg_h"),
@@ -772,6 +787,8 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("indptr0"), py::arg("indices0"), py::arg("data0"),
           py::arg("indptr1"), py::arg("indices1"), py::arg("data1"),
           py::arg("indptr2"), py::arg("indices2"), py::arg("data2"),
-          py::arg("n_threads") = 0, py::arg("cancel_flag") = 0);
+          py::arg("n_threads") = 0, py::arg("cancel_flag") = 0,
+          py::arg("far_r") = py::none());
     m.attr("sin_fill_rows_2069") = true;
+    m.attr("sin_fill_rows_far_2082") = true;
 }
