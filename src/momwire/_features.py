@@ -952,9 +952,15 @@ FEATURES: dict[str, Feature] = {
             offer=True,
         ),
         # The dense port solve by complex64 LU and complex128 iterative
-        # refinement (momwire#2125): `_lapack.solve` / `solve_transposed`
-        # under `mixed_lu_scope`, which the sinusoidal solver sets around its
-        # one-shot solves (`compute_port_solution`, the swept impedance).
+        # refinement (momwire#2125): `_lapack.solve` / `solve_transposed` /
+        # `factor_and_solve` under `mixed_lu_scope`, which each family sets
+        # around its one-shot solve: sinusoidal (`compute_port_solution`, the
+        # swept impedance), bs2 / bs1 (`_solve_with_kcl*`'s `_lu_solve` and
+        # the KCL-reduced solve; hmatrix and arrayblock only on their dense
+        # fallback), razor2p (its three `_lu_solve`s) and sg
+        # (`_solve_constrained`). Not the factors a solver keeps for later
+        # solves (`lu_factor_strict`), the stacked swept solves, or the
+        # rotational-symmetry sectors.
         # Shipped LAPACK and BLAS routines only (cgetrf, cgetrs, the complex128
         # residual product), so python-kind: on the drop-in it runs,
         # uncertified, and the NEC-2 launcher's nec2c-layout printout does
@@ -971,26 +977,42 @@ FEATURES: dict[str, Feature] = {
         # refuse the variable (no EXE_FEATURES row).
         #
         # `drift`, |dZin|/|Zin| flag on against off (Rocketlake, 2026-11-23,
-        # the NEC-2 launcher route; every solve refined, none fell back):
-        #   W8IO ELT whip, n = 4392, 13 frequencies, 8 threads   2.5e-13
+        # 8 threads). Sinusoidal, the NEC-2 launcher route:
+        #   W8IO ELT whip, n = 4392, 13 frequencies              2.5e-13
         #     (the same off at 4 threads against 8: 2.1e-13)
-        #   the 71 tests/fixtures/nec_portal decks, 76 solves    4.0e-13
-        #     (the ordinary factor of A, not Aᵀ, against off: 2.1e-13)
-        # Both inside complex128's own scatter; 1e-12 is the worst with 2.5x
-        # margin, far under DEFAULT_DRIFT_MAX. The whip's printout is
-        # byte-identical bar its timing lines; on the corpus two noise-level
-        # fields move (the tilt of a circularly polarised wave, a 1e-17
-        # imaginary part), and the ordinary factor of A moves them too.
+        # bs2 / bs1 / sg (momwire#2125 follow-up), the size rule forced off so
+        # every solve is tried: the 71 nec_portal decks and every deck of
+        # scripts/nightly/corpus.txt (nec4 dialect), 628 per engine:
+        #   bs2 5.2e-13, bs1 2.1e-12, sg 7.1e-12 (a buried sg deck whose
+        #   second complex128 factor itself moves Zin 1.1e-11; sg's worst
+        #   such scatter is 2.4e-11)
+        # razor2p, on the solution, through the NEC-5 drop-in: 4.9e-12.
+        # Against an 80-bit reference (n <= 700, about 800 solves per engine)
+        # the refined answer's worst error is no larger than the ordinary
+        # route's: bs2 3.0e-12 (ordinary 3.1e-12), bs1 1.7e-12 (6.0e-12), sg
+        # 2.6e-13 (5.5e-12), razor2p 1.1e-12 (1.1e-12). 2e-11 covers the
+        # worst with 2.8x margin, far under DEFAULT_DRIFT_MAX. Large decks
+        # (n 2404 to 10442, bs2 / sg / razor2p / bs2 with kcl_nullspace)
+        # print byte-identically bar timing and line 2.
         #
-        # Speed, the whip through momwire-nec2c-sinusoidal (5 paired runs,
-        # medians, AVX-512 off): 8 threads 12.16 s -> 10.16 s (1.19x), 1
-        # thread 63.2 s -> 46.0 s (1.37x); with pair_reuse 1.23x and 1.54x.
-        # Peak RSS 582 -> 737 MiB (the allowance, 1.5 Z + 512 MB, is 954 MiB).
+        # Speed (5 paired runs, medians, AVX-512 off; one frequency of the
+        # NEC-5 whip): sinusoidal whip, 13 frequencies, 8 threads 1.19x, 1
+        # thread 1.37x (with pair_reuse 1.23x / 1.54x); razor2p whip (n 6372)
+        # 1.13x / 1.40x; bs2 whip with kcl_nullspace (n 10442) 1.15x / 1.42x;
+        # a free-space bs2 array (n 4818) 1.05x / 1.28x; over Sommerfeld
+        # ground (n 3614) and buried (n 2404), where the fill dominates,
+        # 1.00x at 8 threads and 1.05x / 1.03x at one. The bs2 whip itself
+        # declines: its Schur solve carries 2095 right-hand sides.
+        # A stall fallback costs the complex64 factor and a sweep: 0.86x on
+        # an over-segmented free-space pair (n 5204, kΔ 1e-3).
+        # Peak RSS: sinusoidal whip 582 -> 737 MiB, razor2p whip 806 -> 1080
+        # MiB, bs2 whip with kcl_nullspace 3252 -> 3635 MiB, each under its
+        # 1.5 Z + 512 MB allowance.
         Feature(
             name="mixed_lu",
             reach=1,
             env="MOMWIRE_X_MIXED_LU",
-            solvers=("sinusoidal",),
+            solvers=("bspline", "razor", "sinusoidal", "sinusoidal_galerkin"),
             kind="python",
             issue=2125,
             since="2026-11-23",
@@ -1004,7 +1026,7 @@ FEATURES: dict[str, Feature] = {
                 "solve that does not converge cleanly is redone the ordinary "
                 "way. Memory: the matrix plus a half-size copy."
             ),
-            drift=1e-12,
+            drift=2e-11,
             offer=True,
         ),
     )

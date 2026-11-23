@@ -2196,6 +2196,7 @@ class BSplineSolver(
         pair_reuse=None,
         offset_reuse=None,
         transmitted_anchors=None,
+        mixed_lu=None,
         factored_columns=None,
         height_sheet_recal=None,
         crossing_table=None,
@@ -2270,6 +2271,7 @@ class BSplineSolver(
             crossing_sheet_retune=crossing_sheet_retune,
             crossing_above_rule=crossing_above_rule,
             kcl_nullspace=kcl_nullspace,
+            mixed_lu=mixed_lu,
         )
         if not bound["pair_reuse"]:
             hint = None
@@ -2332,6 +2334,11 @@ class BSplineSolver(
         # "reduced", or "schur: <why the rows were not reducible>".
         self._kcl_nullspace = bound["kcl_nullspace"]
         self.kcl_nullspace_route = None
+        # momwire#2125: the one-shot dense solve by complex64 LU and complex128
+        # refinement, falling back to the ordinary in-place factor
+        # (`_lapack.mixed_lu_scope`, opened around `_lu_solve` only). Off is
+        # the flag-off solve, bit for bit.
+        self._mixed_lu = bound["mixed_lu"]
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > _BSPLINE_MAX_DEGREE:
@@ -8224,6 +8231,13 @@ class BSplineSolver(
             [self._solve_reduced(Z[i], V, plan, False) for i in range(Z.shape[0])]
         )
 
+    def _mixed_scope(self):
+        """`_lapack.mixed_lu_scope` at this solver's `mixed_lu` (momwire#2125),
+        opened around the one-shot dense factor and nothing else: the Schur
+        step's small λ solve stays outside it, as do the stacked swept solves.
+        A subclass whose constructor never reached the binding is off."""
+        return _lapack.mixed_lu_scope(getattr(self, "_mixed_lu", False))
+
     def _solve_with_kcl(self, Z, v, kcl_A, overwrite=False):
         """Constrained solve [Z A^T; A 0] [I; λ] = [v; 0] via Schur.
 
@@ -8241,16 +8255,19 @@ class BSplineSolver(
         if overwrite:
             Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
-            return _lu_solve(Z, v, overwrite_a=overwrite)
+            with self._mixed_scope():
+                return _lu_solve(Z, v, overwrite_a=overwrite)
         plan = self._kcl_plan(kcl_A)
         if plan is not None:
-            return self._solve_reduced(Z, v, plan, overwrite)
+            with self._mixed_scope():
+                return self._solve_reduced(Z, v, plan, overwrite)
         n_b = Z.shape[0]
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128, order="F")
         rhs[:, 0] = v
         rhs[:, 1:] = kcl_A.T
-        sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
+        with self._mixed_scope():
+            sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         w = sol[:, 0]
         X = sol[:, 1:]
         lam = _lapack.solve(kcl_A @ X, kcl_A @ w)
@@ -8266,16 +8283,19 @@ class BSplineSolver(
         if overwrite:
             Z = _fortran_in_place(Z)
         if kcl_A.shape[0] == 0:
-            return _lu_solve(Z, V, overwrite_a=overwrite)
+            with self._mixed_scope():
+                return _lu_solve(Z, V, overwrite_a=overwrite)
         plan = self._kcl_plan(kcl_A)
         if plan is not None:
-            return self._solve_reduced(Z, V, plan, overwrite)
+            with self._mixed_scope():
+                return self._solve_reduced(Z, V, plan, overwrite)
         n_b, n_p = V.shape
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, n_p + n_c), dtype=np.complex128, order="F")
         rhs[:, :n_p] = V
         rhs[:, n_p:] = kcl_A.T
-        sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
+        with self._mixed_scope():
+            sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         W = sol[:, :n_p]
         X = sol[:, n_p:]
         Lam = _lapack.solve(kcl_A @ X, kcl_A @ W)

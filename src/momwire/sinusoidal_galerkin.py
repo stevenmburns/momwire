@@ -6746,11 +6746,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             voltages = self._port_voltages()
             self._checkpoint()  # after assembly, before the dense solve
 
-            alpha = _solve_constrained(
-                G,
-                U @ voltages,
-                self._crossing_continuity_rows(geom, seg_view, self.k),
-            )
+            # mixed_lu (momwire#2125) is bound by the base constructor for
+            # this family too; the scope covers the one dense factor.
+            with _lapack.mixed_lu_scope(self._mixed_lu):
+                alpha = _solve_constrained(
+                    G,
+                    U @ voltages,
+                    self._crossing_continuity_rows(geom, seg_view, self.k),
+                )
 
             # Inside the medium too (momwire#1159): an off-centre point gap's
             # readout writes the shapes at `self.k`, which is k_m only here.
@@ -6811,9 +6814,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 geom, self.k, self._medium_eta(medium)
             )
             U = self._drive_columns(geom, seg_view, self.k)
-            alphas = _solve_constrained(
-                G, U, self._crossing_continuity_rows(geom, seg_view, self.k)
-            )
+            with _lapack.mixed_lu_scope(self._mixed_lu):
+                alphas = _solve_constrained(
+                    G, U, self._crossing_continuity_rows(geom, seg_view, self.k)
+                )
             Y = np.stack(
                 [
                     self._port_currents(alphas[:, j], geom, seg_view, U)

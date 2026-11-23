@@ -2065,6 +2065,7 @@ class RazorSolver(
         razor_pair_reuse=None,
         pair_reuse=None,
         crossing_anchors=None,
+        mixed_lu=None,
         cancel=None,
         **unsupported,
     ):
@@ -2166,6 +2167,7 @@ class RazorSolver(
             razor_pair_reuse=(
                 None if razor_pair_reuse is None else bool(razor_pair_reuse)
             ),
+            mixed_lu=mixed_lu,
         )
         # momwire#1860 L1: the near-interface columns' factored route. None
         # defers to MOMWIRE_X_FACTORED_COLUMNS (`_features`, reach 1, native);
@@ -2190,6 +2192,11 @@ class RazorSolver(
         # stepping FR); a lone solve has no sweep and fills exactly.
         self._crossing_anchors = bound["crossing_anchors"]
         self._crossing_anchor_plan = None
+        # momwire#2125: the one-shot dense solve by complex64 LU and complex128
+        # refinement, falling back to the ordinary in-place factor
+        # (`_lapack.mixed_lu_scope`, opened around each `_lu_solve`). Off is
+        # the flag-off solve, bit for bit.
+        self._mixed_lu = bound["mixed_lu"]
         # momwire#1971: fill-pair reuse. None defers to
         # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
         # checks every window against the shipped fill. Off (0) is the fill
@@ -7477,7 +7484,8 @@ class RazorSolver(
         # a full n_basis² copy and is the same factorisation of the same
         # numbers, bit for bit. (Nothing ever read the old `self.z` stash,
         # which would now hold the factors; it is gone, as in bspline.)
-        coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
+        with _lapack.mixed_lu_scope(self._mixed_lu):
+            coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
         voltages = self._port_voltages()
         port_currents = cols.T @ coeffs
         z_per_port = port_impedances(voltages, port_currents)
@@ -7587,7 +7595,8 @@ class RazorSolver(
 
         self._checkpoint()
         # In place, as in `compute_impedance`: Z is dead after this solve.
-        X = _bspline._lu_solve(Z, cols.astype(np.complex128), overwrite_a=True)
+        with _lapack.mixed_lu_scope(self._mixed_lu):
+            X = _bspline._lu_solve(Z, cols.astype(np.complex128), overwrite_a=True)
         Y = _lapack.matmul(cols.T, X)
         return PortSolution(
             y=Y,
@@ -8310,7 +8319,8 @@ class RazorSolver(
             self._checkpoint()
             k = float(k)
             Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
-            coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
+            with _lapack.mixed_lu_scope(self._mixed_lu):
+                coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
             feed_currents[i] = cols.T @ coeffs
 
         z_per_feed = port_impedances(voltages[None, :], feed_currents)
