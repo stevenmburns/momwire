@@ -122,6 +122,10 @@ contract:
 - ``solve_transposed``: ``solve``'s errors, warning, pivot screen and
   condition estimate (rcond₁ of ``a``, from the factors of ``aᵀ``), on
   ``a``'s own storage; its docstring says what differs.
+- ``solve`` / ``solve_transposed`` under :func:`mixed_lu_scope` (the opt-in
+  ``mixed_lu`` feature, momwire#2125): complex64 getrf plus complex128
+  iterative refinement where it converges, else the ordinary route and its
+  bits (:func:`_mixed_refine`). Never on the host route.
 - ``solve_stacked``/``inv_stacked``: numpy's broadcasting of stacked
   matrices, a 1-D right-hand side read as a vector, the common result dtype,
   ``LinAlgError`` on an exactly singular slice, and no finiteness check.
@@ -144,6 +148,8 @@ fuses too, whatever loop the embedded numpy would have taken.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import ctypes
 import functools
 import os
@@ -601,11 +607,262 @@ def _pivots_suspect(lu) -> bool:
     return not (hi > 0 and d.min() >= PIVOT_SCREEN * hi)
 
 
+# ---------------------------------------------------------------------------
+# mixed_lu (momwire#2125): complex64 getrf, complex128 iterative refinement
+# ---------------------------------------------------------------------------
+#
+# The design is LAPACK's own zcgesv (factor in single, refine with a
+# double-precision residual, fall back to the double factor on failure),
+# with four changes: a tighter stop (MIXED_TOLERANCE), the refinement must
+# CONTRACT at a fixed rate on every sweep that has not yet converged, it
+# takes at least two corrections, and it serves the transposed factor
+# `solve_transposed` needs (zcgesv has no trans). The original complex128 matrix is never written: the residuals
+# need it, and the fallback factors it exactly as the flag-off route does,
+# so a fallback returns the flag-off bits.
+
+# Whether `solve` / `solve_transposed` try the mixed route: set by a solver
+# around its own solve (`mixed_lu_scope`), so the flag belongs to the
+# request that built the solver and a concurrent one can say no. A
+# ContextVar, so each thread (and each asyncio task) has its own.
+_MIXED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "momwire_mixed_lu", default=False
+)
+
+
+@contextlib.contextmanager
+def mixed_lu_scope(on: bool):
+    """Run the body with the ``mixed_lu`` route on (`on` True) or off for
+    `solve` and `solve_transposed` in this thread / context."""
+    token = _MIXED.set(bool(on))
+    try:
+        yield
+    finally:
+        _MIXED.reset(token)
+
+
+#: u, LAPACK's dlamch('E'): the unit roundoff of complex128 (2**-53).
+_U64 = float(np.finfo(np.float64).eps) / 2
+#: The unit roundoff of complex64 (2**-24).
+_U32 = float(np.finfo(np.float32).eps) / 2
+
+#: The stop, per column, on the normwise backward error in the 1-norm,
+#: ``eta = ||b - A x||_1 / (||A||_1 ||x||_1)``: a column is converged when
+#: eta <= MIXED_TOLERANCE (u64), or when eta <= sqrt(n) u64 (zcgesv's own
+#: stop, `_mixed_accept`) AND the last sweep cut the residual by less than
+#: MIXED_CONTRACTION: it has reached the floor of a complex128 residual and
+#: no further sweep can improve it.
+#:
+#: Why not zcgesv's bar alone: on the W8IO whip (n = 4392, 13 frequencies)
+#: two corrections land at eta 4e-15 to 7e-15, under sqrt(n) u64 = 7.3e-15,
+#: and leave the solution 4e-12 to 6e-12 (max-norm, relative) from the
+#: ordinary route's, where two ordinary complex128 factorizations (pivots on
+#: A and on Aᵀ) differ by 5e-13 to 1e-12. That iterate is still contracting
+#: (by 1e-4), so it is not at the floor; one more correction reaches eta
+#: 1.4e-17 to 1.9e-17 and 5e-13 to 1e-12 from the ordinary route, inside the
+#: scatter. The ordinary route's own eta there is 6.6e-16 to 1.2e-15.
+#: Why not u64 alone: on small decks the floor sits a little above it
+#: (1.6e-16 to 1.8e-16 on two n = 83, 86 corpus decks), where sweeps stop
+#: contracting with the answer already as good as it gets.
+MIXED_TOLERANCE = _U64
+
+
+def _mixed_accept(n: int) -> float:
+    """zcgesv's stop, sqrt(n) u64: the backward error a column may stop at
+    once it has stopped contracting (MIXED_TOLERANCE)."""
+    return float(np.sqrt(n)) * _U64
+
+
+#: The most refinement corrections a solve may take before it falls back.
+MIXED_SWEEPS_MAX = 5
+#: The fewest corrections a solve takes before it may stop: one correction
+#: can land under the tolerance by luck of a single step; a second one that
+#: holds it there is the evidence the iteration has settled.
+MIXED_SWEEPS_MIN = 2
+
+#: Every sweep that has not yet converged must cut each column's residual
+#: 1-norm by at least this factor, or the solve falls back. Derivation: the
+#: complex64 solution's backward error starts at the complex64 level (about
+#: u32 times the growth: 3e-8 to 5e-7 on the whip and the corpus) and must
+#: end at MIXED_TOLERANCE, u64, a fall of about u64 / u32 = 2**-29; at a
+#: steady rate theta that
+#: takes log(2**-29) / log(theta) sweeps, so a cap of MIXED_SWEEPS_MAX = 5
+#: is only reachable when theta <= 2**(-29/5) = 2**-5.8. theta = 2**-6 is
+#: that bound rounded down: a solve contracting more slowly could not finish
+#: inside the cap, and is sent to the ordinary route at its first slow sweep
+#: instead of after five. The rate is about kappa(A) u32 (Higham, ASNA 2nd
+#: ed., ch. 12), so this also declines an ill-conditioned matrix on its own
+#: evidence, with no condition estimate: on random complex test matrices
+#: (n = 120) the rate is 1e-3 at kappa_2 1e5, 1e-2 at 1e6 (refined), 2e-2
+#: at 3e6 and 0.1 at 1e7 (fallback). The W8IO whip (kappa_1 1.2e5 to
+#: 1.5e5) contracts by 1e-4 to 3e-4 a sweep.
+MIXED_CONTRACTION = 2.0**-6
+
+#: Above this many right-hand sides the route declines: each column costs a
+#: residual product and a complex64 back-substitution per sweep, which
+#: overtakes the factor saving. Measured on the W8IO whip's Z (n = 4392,
+#: Rocketlake, 8 threads, 3 sweeps, medians of 5 paired runs, ordinary over
+#: mixed): 1.50x at 1 right-hand side, 1.27x at 3, 1.16x at 8, 1.11x at 32,
+#: 1.04x at 64, 0.94x at 96, 0.80x at 128. The saving is O(n^3) and the
+#: refinement O(n^2 nrhs), so the break-even grows with n and is higher at
+#: one thread; 64 is the 8-thread figure at this n, the conservative one.
+MIXED_MAX_NRHS = 64
+
+# The cast guard, on the matrix 1-norm the solve already reads. No entry
+# exceeds ||A||_1, so ||A||_1 <= _CAST_HI keeps every entry 2**32 below
+# complex64's overflow (headroom for pivot growth and the back-substitution's
+# sums). An entry that matters, one within u32 of the largest (at least
+# ||A||_1 / n), stays a normal complex64 number when ||A||_1 / n >= _CAST_LO.
+_CAST_HI = float(np.finfo(np.float32).max) * 2.0**-32
+_CAST_LO = float(np.finfo(np.float32).tiny) * 2.0**24
+
+#: mixed-route outcomes since import (tests and gates read them to prove the
+#: route ran): "refined" (answered by the route), "fallback" (tried, then
+#: answered by the ordinary route), "declined" (asked for but not tried:
+#: a host LAPACK, a dtype other than complex128, too many right-hand sides),
+#: and "sweeps", the refinement corrections taken by refined solves.
+MIXED_SOLVES = {"refined": 0, "fallback": 0, "declined": 0, "sweeps": 0}
+#: Each fallback by its reason: "range" (the cast guard), "singular" (an
+#: exactly singular complex64 factor), "nonfinite" (an inf or NaN in a
+#: complex64 solve or a residual), "stall" (a sweep short of
+#: MIXED_CONTRACTION), "cap" (MIXED_SWEEPS_MAX corrections, no convergence).
+MIXED_FALLBACKS = {"range": 0, "singular": 0, "nonfinite": 0, "stall": 0, "cap": 0}
+#: The last mixed attempt in this process: its outcome, corrections, and per
+#: check the largest normwise backward error over the columns and the
+#: largest residual ratio (sweep over the sweep before).
+MIXED_LAST: dict = {}
+
+
+def _mixed_declined() -> None:
+    MIXED_SOLVES["declined"] += 1
+
+
+def _mixed_fallback(reason: str, record: dict) -> None:
+    MIXED_SOLVES["fallback"] += 1
+    MIXED_FALLBACKS[reason] += 1
+    record["outcome"] = reason
+    MIXED_LAST.clear()
+    MIXED_LAST.update(record)
+
+
+def _mixed_correction(getrs, lu32, ipiv, r, trans):
+    """Solve ``op(A) d = r`` with the complex64 factors, `r` (n, k) complex128.
+
+    Each column is scaled by a power of two to a largest magnitude in
+    [0.5, 1) before the cast and scaled back after, both exact, so a
+    residual near complex128's roundoff never underflows complex64."""
+    m = np.abs(r).max(axis=0)
+    e = np.where(m > 0, np.frexp(m)[1], 0).astype(np.float64)
+    r32 = np.asfortranarray(r * np.exp2(-e), dtype=np.complex64)
+    d32, info = getrs(lu32, ipiv, r32, trans=trans, overwrite_b=True)
+    if info != 0:
+        raise ValueError(f"illegal value in argument {-info} of getrs")
+    return d32.astype(np.complex128) * np.exp2(e)
+
+
+def _mixed_refine(a1, at32, trans, b2, anorm):
+    """`a1 x = b2` by mixed-precision iterative refinement, or None to fall
+    back to the ordinary complex128 route.
+
+    `a1` is the complex128 matrix (read, never written), `at32` a callable
+    returning a fresh F-contiguous complex64 matrix that LAPACK's getrf
+    factors, and `trans` the getrs flag that turns its factors into a solve
+    with `a1` (`solve_transposed`: ``a1ᵀ`` and 1; `solve`: ``a1`` and 0).
+    `b2` is the (n, k) complex128 right-hand side (not written) and `anorm`
+    ||a1||_1. Returns the (n, k) complex128 solution, F-ordered.
+
+    Stop: every column's normwise backward error in the 1-norm,
+    ``||r||_1 / (||A||_1 ||x||_1)``, at or under MIXED_TOLERANCE (u64), or
+    under `_mixed_accept` once it no longer contracts, after at least
+    MIXED_SWEEPS_MIN corrections. A column above `_mixed_accept` that has
+    not cut its residual by MIXED_CONTRACTION since the last check is a
+    stall: the solve falls back.
+    Memory: the complex64 factors (half of a1) and (n, k) vectors; the
+    factors are dropped before returning, either way."""
+    n = a1.shape[0]
+    record: dict = {"n": n, "nrhs": b2.shape[1], "sweeps": 0, "eta": [], "ratio": []}
+    if not (n * _CAST_LO <= anorm <= _CAST_HI):
+        _mixed_fallback("range", record)
+        return None
+    lu32 = at32()
+    getrf, getrs = scipy.linalg.get_lapack_funcs(("getrf", "getrs"), (lu32,))
+    lu32, ipiv, info = getrf(lu32, overwrite_a=True)
+    if info != 0:
+        del lu32
+        _mixed_fallback("singular", record)
+        return None
+    tau, accept = MIXED_TOLERANCE, _mixed_accept(n)
+    x = _mixed_correction(getrs, lu32, ipiv, b2, trans)
+    prev = None
+    k = 0
+    while True:
+        if not np.isfinite(x).all():
+            reason = "nonfinite"
+            break
+        r = b2 - a1 @ x
+        rn = np.abs(r).sum(axis=0)
+        xn = np.abs(x).sum(axis=0)
+        if not (np.isfinite(rn).all() and np.isfinite(xn).all()):
+            reason = "nonfinite"
+            break
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eta = np.where(rn > 0, rn / (anorm * xn), 0.0)
+        record["eta"].append(float(eta.max()))
+        slow = np.zeros(eta.shape, dtype=bool)
+        if prev is not None:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = np.where(prev > 0, rn / prev, 0.0)
+            record["ratio"].append(float(ratio.max()))
+            slow = ratio > MIXED_CONTRACTION
+        # Converged: at u64, or at the floor (no longer contracting) under
+        # zcgesv's bar. Not contracting above that bar is a stall.
+        done = (eta <= tau) | (slow & (eta <= accept))
+        if np.any(slow & ~done):
+            reason = "stall"
+            break
+        if k >= MIXED_SWEEPS_MIN and done.all():
+            del lu32
+            record["sweeps"] = k
+            record["outcome"] = "refined"
+            MIXED_SOLVES["refined"] += 1
+            MIXED_SOLVES["sweeps"] += k
+            MIXED_LAST.clear()
+            MIXED_LAST.update(record)
+            return np.asfortranarray(x)
+        if k == MIXED_SWEEPS_MAX:
+            reason = "cap"
+            break
+        x = x + _mixed_correction(getrs, lu32, ipiv, r, trans)
+        prev = rn
+        k += 1
+        record["sweeps"] = k
+    del lu32
+    _mixed_fallback(reason, record)
+    return None
+
+
+def _mixed_wanted(fns, dtype, b0) -> bool:
+    """Whether a `solve` / `solve_transposed` call tries the mixed route:
+    asked for (`mixed_lu_scope`), and not declined (counted) for a host
+    LAPACK (it publishes no complex64 getrf), a dtype other than complex128,
+    or more than MIXED_MAX_NRHS right-hand sides."""
+    if not _MIXED.get():
+        return False
+    nrhs = 1 if b0.ndim == 1 else b0.shape[1]
+    if fns is not None or dtype != _C128 or nrhs > MIXED_MAX_NRHS:
+        _mixed_declined()
+        return False
+    return True
+
+
 @_factor_stage
 def solve(a, b):
     """``scipy.linalg.solve(a, b)``, on the host's getrf + getrs when one is
     published. The condition estimate runs under :func:`condition_check`
-    or when :func:`_pivots_suspect` flags the factors."""
+    or when :func:`_pivots_suspect` flags the factors.
+
+    Under :func:`mixed_lu_scope` a C-ordered complex128 system on the
+    no-host route is first tried by :func:`_mixed_refine`; where that
+    falls back, everything below runs as with the flag off."""
     a1 = np.asarray(a)
     b0 = np.asarray(b)
     dtype = np.result_type(a1.dtype, b0.dtype)
@@ -619,6 +876,27 @@ def solve(a, b):
         or (fns is None and not _scipy_takes_gesv(a1, dtype))
     ):
         return scipy.linalg.solve(a, b)
+    if _mixed_wanted(fns, dtype, b0):
+        # Before the Fortran copy below, so the route holds a1 and its
+        # complex64 copy, never a1 twice. A C-ordered complex128 a1 only:
+        # its 1-norm is read in place (`_finite_1norm_c`); any other layout
+        # declines. A non-finite system goes on to the ordinary error.
+        x = None
+        if a1.dtype == dtype and a1.flags.c_contiguous:
+            a_finite, anorm = _finite_1norm_c(a1)
+            if a_finite and np.isfinite(b0).all():
+                n = a1.shape[0]
+                x = _mixed_refine(
+                    a1,
+                    lambda: np.array(a1, dtype=np.complex64, order="F"),
+                    0,
+                    _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype),
+                    anorm,
+                )
+        else:
+            _mixed_declined()
+        if x is not None:
+            return x.reshape(b0.shape)
     always = condition_check()
     prep = _solve_prep(a1, dtype)
     if prep is not None:
@@ -750,6 +1028,16 @@ def solve_transposed(a, b):
     on whether its matrix happens to look structured, and an executable that
     replays the call is one getrf + getrs. A 1 x 1, a rectangular or empty
     system, or a dtype LAPACK's getrf does not take is `scipy.linalg.solve`'s.
+
+    Under :func:`mixed_lu_scope` (the ``mixed_lu`` feature, momwire#2125) a
+    complex128 system on the no-host route with at most `MIXED_MAX_NRHS`
+    right-hand sides is first tried by :func:`_mixed_refine`, which factors
+    a complex64 copy of ``aᵀ`` and leaves ``a`` INTACT; it answers only when
+    the refinement reaches complex128's backward error, so no condition
+    warning could fire there and the estimate is not run. Where it falls
+    back, the route below runs on the untouched ``a`` and returns the
+    flag-off answer to the bit. The factor clock counts the whole call,
+    refinement and any fallback included.
     """
     a1 = np.asarray(a)
     b0 = np.asarray(b)
@@ -777,8 +1065,18 @@ def solve_transposed(a, b):
     always = condition_check()
     n = a1.shape[0]
     x = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
-    gecon = scipy.linalg.get_lapack_funcs("gecon", (at,))
     fns = _host_for(dtype)
+    if _mixed_wanted(fns, dtype, b0):
+        # aᵀ cast to complex64 (a straight cast: `at` is already in LAPACK's
+        # order) and factored there; a and x are left as they are, so a
+        # fallback runs the lines below on exactly what the flag-off call
+        # sees.
+        xm = _mixed_refine(
+            a1, lambda: np.array(at, dtype=np.complex64, order="F"), 1, x, anorm
+        )
+        if xm is not None:
+            return xm.reshape(b0.shape)
+    gecon = scipy.linalg.get_lapack_funcs("gecon", (at,))
     if fns is not None:
         ipiv, info = _getrf(fns, at)
         if info != 0:
