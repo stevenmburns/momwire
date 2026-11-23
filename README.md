@@ -423,12 +423,13 @@ Sinusoidal-Galerkin solves never run it.
 numpy and OpenBLAS switch to AVX-512 code on a processor that has it, and
 that code rounds differently in the last bits. momwire's own entry points
 (the `momwire-nec5`/`momwire-nec42`/`momwire-nec2c-shared` commands and the
-servers they start, the Windows drop-in, the Linux razor2p program and the
-test suite) turn it off on such a processor, by setting
+servers they start, the plain `momwire-nec2c` and `momwire-nec2c-<basis>`
+commands, the Windows drop-in, the Linux razor2p program and the test suite)
+turn it off on such a processor, by setting
 `NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` before numpy
 loads, so the printout doesn't change with the processor. A value you set
 yourself is left alone, and on a processor without AVX-512 nothing is set.
-This doesn't cover everything. `momwire-nec2c`, `python -m momwire...` run by
+This doesn't cover everything. `python -m momwire...` run by
 hand, a resident server one of those started, and a program that imports
 numpy before momwire have all loaded numpy before the pin. For those, call
 `momwire_serve_client.pin_cpu_env()` before importing numpy, or set the two

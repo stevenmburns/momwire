@@ -398,7 +398,10 @@ OpenBLAS's SkylakeX kernels round differently under AVX-512. On Rocketlake
 they moved 21 of the 108 golden printouts (every one a network deck, BLAS the
 bulk of it). So `momwire_serve_client.pin_cpu_env` sets
 `NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` on an AVX-512 CPU
-(nothing on any other) in the thin clients, the frozen `entry.py`, the pool's
+(nothing on any other) in the thin clients, the plain `momwire-nec2c*`
+console scripts (their entry is `momwire_serve_client.stock_main`, which pins
+and then runs the portal: an entry that imports `momwire` first has already
+read numpy in), the frozen `entry.py`, the pool's
 worker env, the standalone exe's embedded Python, and the gates:
 `tests/conftest.py`, `scripts/golden_printouts.py`, `scripts/eznec_freeze/smoke.py`
 and `scripts/core_split/printout_compare.py` (so `exe_compare`/`stream_compare`); `standalone/build_openblas.sh` leaves SKYLAKEX out of
