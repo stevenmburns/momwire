@@ -116,22 +116,28 @@ starts its engine once for every frequency of a sweep.
   resident engine between runs. The pip install's `momwire-nec2c-shared`
   keeps one; the drop-in does not ship it.
 
-The tables above time single runs. A sweep that starts the engine at every
-frequency, the way EZNEC does, gives the same answer. On the same laptop,
-with nec5-razor2p and 51 single-frequency decks launched one at a time:
+The tables above time single runs, on 0.95.0. A sweep that starts the engine
+at every frequency, the way EZNEC does, was re-measured on the signed
+momwire 0.97.1 zips on the same laptop, with nec5-razor2p and 51
+single-frequency decks launched one at a time (median of 3 interleaved
+loops for warm):
 
 | Deck | Standalone, warm | Drop-in, warm | Standalone, cold | Drop-in, cold |
 |---|---|---|---|---|
-| Fan dipole over Sommerfeld ground | 3.55 s | 3.86 s | 3.71 s | 15.39 s |
-| The same fan dipole in free space | 2.06 s | 2.13 s | 2.00 s | 3.30 s |
+| Fan dipole over Sommerfeld ground | 3.39 s | 3.66 s | 3.42 s | 4.70 s |
+| The same fan dipole in free space | 1.96 s | 2.09 s | 2.35 s | 3.25 s |
 
 Warm, with the drop-in's engine already running and the standalone
-program's ground tables already cached, the drop-in takes 4–9 % longer.
-Cold, the standalone program barely notices: its first launch over the
-Sommerfeld ground took 0.12 s, building its ground tables included. The
-drop-in's first launch took 11.6 s: the first after a reboot, so it includes
-starting its engine, a cold disk cache and building its ground tables, which
-this run could not separate. The two forms' printouts were byte-identical at all 51 points.
+program's ground tables already cached, the drop-in takes 7–8 % longer:
+about 71 ms a launch against 66 over Sommerfeld ground, 41 against 38 in
+free space. Cold, most of the drop-in's extra time is its first launch,
+about 1.2 s, which starts its engine; the standalone program's first launch
+took 0.1 s. The two forms' printouts were byte-identical at all 51 points.
+
+In 0.97.0 the drop-in fell further behind, 36 % and 52 % warm: it wrote an
+advisory to its standard error on every launch, which EZNEC never reads, and
+that cost about 15–23 ms a launch. Since 0.97.1 advisories are off unless
+`MOMWIRE_ADVISORIES` asks for them ([advisories](/reference/eznec-nec5/#advisories-on-stderr-when-you-ask)).
 
 ## From Python
 
