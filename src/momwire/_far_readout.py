@@ -442,6 +442,35 @@ _PHASE_CACHE_MAX_ELEMENTS = 4_000_000  # complex128 entries: 64 MB per array
 _PHASE_CACHE_LOCK = threading.Lock()  # the resident server solves concurrently
 
 
+# The direction-by-centre dot products inside that factor are k-free too, and
+# the factor is not: a frequency sweep on one structure changes k at every
+# step and so misses the cache above, while ``k * (r_hat . centres)`` is the
+# same product against the same dots. They are kept apart, so a sweep forms
+# them once. A hit returns the very array a fresh einsum would, and the
+# factor is still ``exp(1j * (k * dots))``, so no number moves. Same bounds.
+_DOT_CACHE: OrderedDict = OrderedDict()
+_DOT_CACHE_MAX_ELEMENTS = 2_000_000  # float64 entries: 16 MB per array
+
+
+def _direction_dots(rhat, centres, grid_key):
+    """``einsum('ijc,nc->ijn', rhat, centres)``, from the cache when the same
+    grid and centres were asked for before (the product with k is not part
+    of it)."""
+    key = (grid_key, centres.shape, centres.tobytes())
+    with _PHASE_CACHE_LOCK:
+        hit = _DOT_CACHE.get(key)
+        if hit is not None:
+            _DOT_CACHE.move_to_end(key)
+            return hit
+    dots = np.einsum("ijc,nc->ijn", rhat, centres)
+    if dots.size <= _DOT_CACHE_MAX_ELEMENTS:
+        with _PHASE_CACHE_LOCK:
+            _DOT_CACHE[key] = dots
+            while len(_DOT_CACHE) > _PHASE_CACHE_ENTRIES:
+                _DOT_CACHE.popitem(last=False)
+    return dots
+
+
 def _phase_factor(rhat, centres, k, grid_key):
     """``exp(j k r_hat . centres)`` on the direction grid, from the cache when
     the same grid, centres and k were asked for before."""
@@ -451,7 +480,7 @@ def _phase_factor(rhat, centres, k, grid_key):
         if hit is not None:
             _PHASE_CACHE.move_to_end(key)
             return hit
-    phase = k * np.einsum("ijc,nc->ijn", rhat, centres)
+    phase = k * _direction_dots(rhat, centres, grid_key)
     factor = np.exp(1j * phase)
     if factor.size <= _PHASE_CACHE_MAX_ELEMENTS:
         with _PHASE_CACHE_LOCK:
