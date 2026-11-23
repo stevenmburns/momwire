@@ -33,35 +33,43 @@ become momwire's.
 ### In 4nec2
 
 Steps 1–3 are the same: the unblocked zip extracted to a folder of its
-own, `C:\momwire\` below. Nothing is copied into 4nec2's folders. 4nec2
-runs an engine from its own `exe` folder (`C:\4nec2\exe` in a default
-install) and hands it the deck's and printout's names on standard input,
-the way it runs its bundled engines; every momwire launcher reads that
-form. Which file you change depends on the slot.
+own, `C:\momwire\` below. Tested with 4nec2 5.8.8.
 
-**NEC-2.** 4nec2 normally picks one of its bundled `nec2dxs` engines by
-model size. Choose **Settings → Nec engine → Manual select** and pick a
-NEC-2 launcher:
+4nec2 reaches an outside engine only through `4nec2.bat` in its `exe`
+folder (`C:\4nec2\exe` in a default install). Its **Settings → Nec
+engine** menu can't name one: **Manual select** sets the size of 4nec2's
+own bundled engine, not a program. Back up `4nec2.bat` before you edit it.
 
-```text
-C:\momwire\momwire-nec2c.exe              the default (nec2c-bs2)
-C:\momwire\momwire-nec2c-sinusoidal.exe   NEC-2's own formulation (the twin)
-```
+**NEC-4.2 and NEC-2.** In **Settings → Nec engine**, tick **Wait in DOS
+box** and leave the engine choice as it is. Then, in `4nec2.bat`:
 
-**NEC-4.2.** Edit `4nec2.bat` in 4nec2's `exe` folder and make its engine
-line one of these (pasting the line is less error-prone than typing a
-path into Manual select, which also works here):
+- replace the engine line, `%nec2d% < nec2d.tmp`, with one of
 
-```text
-C:\momwire\momwire-nec42.exe < nec2d.tmp
-C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp
-```
+  ```text
+  C:\momwire\momwire-nec42.exe < nec2d.tmp              NEC-4.2, the default (nec42-bs2)
+  C:\momwire\momwire-nec42-sinusoidal.exe < nec2d.tmp   NEC-4.2's own formulation (the twin)
+  C:\momwire\momwire-nec2c.exe < nec2d.tmp              NEC-2, the default (nec2c-bs2)
+  C:\momwire\momwire-nec2c-sinusoidal.exe < nec2d.tmp   NEC-2's own formulation (the twin)
+  ```
 
-**NEC-5.** This goes through 4nec2's NEC-5 package (the NEC5CL_x13 setup
-with `Edit_inp.exe` and `Edit_out.exe`); install that first. In
-`4nec2.bat`, keep the `Edit_inp.exe` and `Edit_out.exe` lines, since 4nec2
-reads its results through them, and change only the engine line between
-them:
+- and delete both `if "%3" == "" pause` lines, so the DOS box closes by
+  itself instead of waiting for a key on every run.
+
+That line now answers every run 4nec2 makes through its DOS box. To go
+back to 4nec2's own engines, put the backed-up `4nec2.bat` back, or keep
+the edited one in a copy of the 4nec2 folder, as the NEC-5 setup does.
+The NEC-2 launchers need momwire 0.97.2 or later here: 4nec2 reads a
+printout's `RUN TIME` line to accept a run, and earlier NEC-2 printouts
+had none (momwire#2133).
+
+**NEC-5.** This goes through the NEC-5 package for 4nec2 that Dan, AC6LA,
+describes in his QRZ post
+[Using NEC-5 with 4nec2](https://forums.qrz.com/index.php?threads/using-nec-5-with-4nec2.817589/#post-7249839),
+which sets 4nec2 up in a copy of its folder with `Edit_inp.exe`,
+`Edit_out.exe` and its own `4nec2.bat`. Install it as his post says. Then,
+in that copy's `4nec2.bat`, keep the `Edit_inp.exe` and `Edit_out.exe`
+lines, since 4nec2 reads its results through them, and change only the
+engine line between them:
 
 ```text
 Edit_inp.exe
@@ -69,9 +77,10 @@ C:\momwire\momwire-nec5.exe < nec2d.tmp
 Edit_out.exe
 ```
 
-with `momwire-nec5-razor2p.exe` in place of `momwire-nec5.exe` for the
-NEC-5 twin. Leave **Manual select** alone for NEC-5: naming a launcher
-there does not work (momwire#1503).
+with `momwire-nec5-razor2p.exe` for the NEC-5 twin, or the standalone
+program's `momwire-nec5-bs2.exe` from its own folder. NEC-5 puts a source
+at a junction between segments, so give a centre-fed wire an even number
+of segments.
 
 For a new release, replace `C:\momwire\` as in
 [Updating](#updating-to-a-new-release); the 4nec2 settings and the
