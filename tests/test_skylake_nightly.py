@@ -412,3 +412,219 @@ def test_printouts_read_a_packed_night_in_one_pass(tmp_path):
         b"printout b\n",
         None,
     ]
+
+
+# ------------------------------------------- bisect probes of older trees
+# The 2026-11-22 and 11-23 bisects passed the dash-free names (momwire#2091)
+# to 276e88fb, which predates them: Python answered "unknown basis 'bs2'",
+# the executable step re-ran the night's own binary, and the bisect reported
+# "reproduces at the last green commit: not a regression" from that.
+
+
+def test_the_legacy_spellings_are_the_alias_table_inverted():
+    from momwire._basis_names import BASIS_ALIASES
+
+    assert audit.LEGACY_BASIS == {new: old for old, new in BASIS_ALIASES.items()}
+    assert {b for _, _, b, _ in audit.EXES.values()} <= set(BASIS_ALIASES.values()) | {
+        "sinusoidal"
+    }
+
+
+@pytest.mark.parametrize(
+    ("renamed", "want"),
+    [(True, ["bs2", "razor2p", "bs2", "sinusoidal"]),
+     (False, ["bspline", "razor-2p", "bspline", "sinusoidal"])],
+)  # fmt: skip
+def test_python_is_asked_in_the_trees_spelling(monkeypatch, renamed, want):
+    import momwire.dropin.nec5 as nec5
+
+    asked = []
+
+    class Shell:
+        @staticmethod
+        def render_files(text, **kw):
+            asked.append(kw["basis"])
+            return [b"ok"]
+
+        printout_bytes = staticmethod(lambda out: out)
+
+    monkeypatch.setattr(nec5, "_shell", Shell)
+    monkeypatch.setattr(audit, "_renamed", lambda: renamed)
+    for _, _, basis, dialect in audit.EXES.values():
+        assert audit._python("deck", basis, dialect) == (b"ok", None)
+    assert asked == want
+
+
+def test_a_basis_the_tree_does_not_know_is_a_harness_finding(tmp_path):
+    assert audit.unrunnable(b"NEC ERROR - unknown basis 'bs2' for EZNEC", "bs2")
+    assert audit.unrunnable(b"NEC ERROR - unknown basis 'pulse2'", "bs2") is None
+    base = _night(tmp_path / "base", [_row("e", "d")])
+    night = _night(
+        tmp_path / "night",
+        [_row("e", "d", py_sha="b", py_outcome="refused", identical_masked=False,
+              py_unrunnable="unknown basis 'bs2'")],
+    )  # fmt: skip
+    found = triage.triage_audit(night, base)
+    assert [(f["kind"], f["severity"]) for f in found] == [("harness", "severe")]
+
+
+HELP = """The following are some of the valid targets for this Makefile:
+... all (the default if no target is given)
+... clean
+... mw_core
+... {target}
+... home/x/mw/src/momwire/_bspline_core.o
+"""
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "momwire-nec42-standalone",  # 276e88fb, before momwire#1831
+        "momwire-nec42-bspline-standalone",  # before momwire#2091
+        "momwire-nec42-bs2-standalone",
+    ],
+)
+def test_the_exe_target_is_the_one_the_tree_defines(target):
+    assert nightly.standalone_target(HELP.format(target=target)) == target
+
+
+def test_a_build_dir_without_one_standalone_target_fails():
+    with pytest.raises(RuntimeError):
+        nightly.standalone_target(HELP.format(target="mw_core_serial"))
+
+
+def _fake_cmake(monkeypatch, tmp_path, tree_target, makes):
+    monkeypatch.setattr(nightly, "EXES", tmp_path / "exes")
+
+    class P:
+        stdout = HELP.format(target=tree_target)
+
+    def fake_sh(cmd, **kw):
+        cmd = list(map(str, cmd))
+        if cmd[-2:] == ["--target", "help"]:
+            return P
+        if "--build" in cmd and makes:
+            Path(cmd[2], cmd[-1]).write_text("built")
+        return P
+
+    monkeypatch.setattr(nightly, "sh", fake_sh)
+    b = tmp_path / "exes" / "bspline_nec42-avx2"
+    b.mkdir(parents=True)
+    for stale in ("momwire-nec42-bs2-standalone", tree_target):
+        (b / stale).write_text("the night's binary")
+    return b
+
+
+def test_a_probe_never_runs_the_nights_own_binary(monkeypatch, tmp_path):
+    """make calls a target the tree does not define "up to date" when a file
+    of that name is in the shared build dir."""
+    old = "momwire-nec42-standalone"
+    b = _fake_cmake(monkeypatch, tmp_path, old, makes=True)
+    targets = {}
+    nightly.build_exes([("nec42-bs2", "avx2")], tmp_path, tmp_path / "log", targets)
+    assert targets == {"nec42-bs2": old}
+    assert (b / old).read_text() == "built"
+    _fake_cmake(monkeypatch, tmp_path / "2", old, makes=False)
+    with pytest.raises(RuntimeError, match="made no"):
+        nightly.build_exes([("nec42-bs2", "avx2")], tmp_path, tmp_path / "log")
+
+
+def test_the_audit_runs_the_target_the_probe_built(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(nightly, "sh", lambda cmd, **kw: seen.setdefault("cmd", cmd))
+    nightly.run_cell(
+        "avx2-T1", tmp_path, exe_targets={"nec42-bs2": "momwire-nec42-standalone"}
+    )
+    cmd = list(map(str, seen["cmd"]))
+    assert cmd[cmd.index("--exe-target") + 1] == "nec42-bs2=momwire-nec42-standalone"
+
+
+DRIFT = triage.finding("py-drift", "severe", "x", cell="avx2-T1", exe="e", deck="d")
+
+
+def _probe(monkeypatch, tmp_path, row):
+    """probe() with the builds faked and the audit writing `row`."""
+    for name in ("build_python", "build_exes", "openblas", "pack", "log"):
+        monkeypatch.setattr(nightly, name, lambda *a, **k: None)
+    monkeypatch.setattr(nightly, "git", lambda *a: "")
+    monkeypatch.setattr(nightly, "load_state", dict)
+
+    def fake_cell(cell, d, **kw):
+        (d / f"audit-{cell}.jsonl").write_text(json.dumps(row) + "\n")
+
+    monkeypatch.setattr(nightly, "run_cell", fake_cell)
+    base = _night(tmp_path / "base", [_row("e", "d")])
+    return nightly.probe("a" * 40, [DRIFT], base, tmp_path / "work")
+
+
+def test_a_probe_that_cannot_run_python_is_untested(monkeypatch, tmp_path):
+    row = _row("e", "d", py_sha="b", py_outcome="refused", identical_masked=False,
+               py_unrunnable="unknown basis 'bs2'", cell="avx2-T1")  # fmt: skip
+    assert _probe(monkeypatch, tmp_path, row) == nightly.UNTESTED
+    why = (tmp_path / "work" / ("a" * 12) / "untested.txt").read_text()
+    assert "unknown basis 'bs2'" in why
+
+
+@pytest.mark.parametrize(("py_sha", "want"), [("a", "good"), ("b", "bad")])
+def test_a_probe_that_ran_is_good_or_bad(monkeypatch, tmp_path, py_sha, want):
+    row = _row("e", "d", py_sha=py_sha, cell="avx2-T1")
+    assert _probe(monkeypatch, tmp_path, row) == want
+
+
+def _bisect(monkeypatch, tmp_path, verdicts):
+    """bisect() over commits c1..c4 (c4 tonight), each probe's verdict from
+    `verdicts`; returns (bisect.json, the commit `mw` was left on)."""
+    commits = ["c1", "c2", "c3", "c4"]
+    head = {"sha": "c4"}
+
+    def fake_git(*a):
+        if a[0] == "rev-parse":
+            return head["sha"] if a[1] == "HEAD" else a[1]
+        if a[0] == "rev-list":
+            return " ".join(commits)
+        if a[0] == "checkout":
+            head["sha"] = a[-1]
+        return "subject"
+
+    def fake_probe(sha, *a):
+        head["sha"] = sha
+        v = verdicts[sha]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    monkeypatch.setattr(nightly, "git", fake_git)
+    monkeypatch.setattr(nightly, "probe", fake_probe)
+    monkeypatch.setattr(nightly, "build_python", lambda *a, **k: None)
+    monkeypatch.setattr(nightly, "log", lambda *a: None)
+    monkeypatch.setattr(nightly, "MW", tmp_path / "mw")
+    monkeypatch.setattr(nightly, "TMP", tmp_path / "tmp")
+    night = _night(tmp_path / "night", [], sha="c4")
+    base = _night(tmp_path / "base", [], sha="c0")
+    result = dict(findings=[DRIFT])
+    try:
+        return nightly.bisect(night, base, result), head["sha"]
+    except RuntimeError:
+        return None, head["sha"]
+
+
+def test_an_untested_green_commit_is_no_verdict(monkeypatch, tmp_path):
+    out, left = _bisect(monkeypatch, tmp_path, {"c0": nightly.UNTESTED})
+    assert out["result"].startswith("could not test the last green commit")
+    assert "not a regression" not in out["result"]
+    assert left == "c4"
+
+
+def test_an_untested_commit_inside_the_range_is_stepped_over(monkeypatch, tmp_path):
+    v = {"c0": "good", "c1": "good", "c2": nightly.UNTESTED, "c3": "bad"}
+    out, left = _bisect(monkeypatch, tmp_path, v)
+    assert out["first_bad"] == "c3" and out["untested"] == ["c2"]
+    assert not out["exact"] and left == "c4"
+
+
+@pytest.mark.parametrize("verdict", ["good", "bad", RuntimeError("probe died")])
+def test_the_bisect_puts_mw_back(monkeypatch, tmp_path, verdict):
+    v = {"c0": verdict, "c1": "good", "c2": "good", "c3": "good"}
+    _, left = _bisect(monkeypatch, tmp_path, v)
+    assert left == "c4"

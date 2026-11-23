@@ -179,6 +179,18 @@ def triage_audit(night: Path, base: Path | None) -> list[dict]:
                         **w,
                     )
                 )
+            if r.get("py_unrunnable"):
+                # The harness gave the tree a basis name it does not know:
+                # nothing about this row measured momwire.
+                out.append(
+                    finding(
+                        "harness",
+                        "severe",
+                        f"Python was not run: {r['py_unrunnable']}",
+                        **w,
+                    )
+                )
+                continue
             if r.get("py_error"):
                 new = b is not None and not b.get("py_error")
                 out.append(
@@ -252,7 +264,9 @@ def triage_audit(night: Path, base: Path | None) -> list[dict]:
         tonight, green = Printouts(night), Printouts(base)
         for key2, r in sorted(rows[cell].items()):
             b = brows[cell].get(key2)
-            if b is None or r.get("py_error") or b.get("py_error"):
+            if b is None or any(
+                x.get(k) for x in (r, b) for k in ("py_error", "py_unrunnable")
+            ):
                 continue
             if r["py_sha"] == b["py_sha"]:
                 continue

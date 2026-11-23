@@ -24,6 +24,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -268,11 +269,39 @@ def openblas(logf: Path, prune: bool = True) -> Path:
     return d
 
 
-def build_exes(pairs, ob: Path, logf: Path) -> dict:
-    """Build (exe name, variant) pairs; their -version lines."""
+def standalone_target(help_text: str) -> str:
+    """The one no-Python executable a configured build dir makes, from
+    `cmake --build <dir> --target help`. Its name is the tree's: a bisect
+    probes trees from before the long names (momwire#1831,
+    `momwire-nec42-standalone`) and before the dash-free ones (momwire#2091,
+    `momwire-nec42-bspline-standalone`)."""
+    found = sorted(
+        {
+            m.group(1)
+            for m in re.finditer(
+                r"^\.\.\. (momwire-\S+-standalone)\s*$", help_text, re.M
+            )
+        }
+    )
+    if len(found) != 1:
+        raise RuntimeError(f"expected one *-standalone target, found {found}")
+    return found[0]
+
+
+def build_exes(pairs, ob: Path, logf: Path, targets: dict | None = None) -> dict:
+    """Build (exe name, variant) pairs; their -version lines. `targets`, when
+    given, receives each name's target as the checked-out tree names it.
+
+    The build dir is shared by every commit the nightly builds, and the
+    binary lives in it under its target's name, so `make <target>` for a
+    target the tree does not define is "up to date" whenever a file of that
+    name is there: on 2026-11-23 a probe of 276e88fb asked for
+    momwire-nec42-bs2-standalone and ran the night's own binary. So the
+    target is read from the configured tree, and its file is removed before
+    the build: a build that makes nothing fails here."""
     versions = {}
     for name, v in pairs:
-        cmake_basis, target, _, _ = audit.EXES[name]
+        cmake_basis, _, _, _ = audit.EXES[name]
         b = EXES / f"{cmake_basis}-{v}"
         sh(
             [
@@ -284,7 +313,15 @@ def build_exes(pairs, ob: Path, logf: Path) -> dict:
             ],
             logf=logf,
         )  # fmt: skip
+        target = standalone_target(
+            sh(["cmake", "--build", b, "--target", "help"]).stdout
+        )
+        (b / target).unlink(missing_ok=True)
         sh(["cmake", "--build", b, "-j", BUILD_JOBS, "--target", target], logf=logf)
+        if not (b / target).is_file():
+            raise RuntimeError(f"cmake --build made no {b / target}")
+        if targets is not None:
+            targets[name] = target
         versions[f"{name}-{v}"] = sh(
             [b / target, "-version"], check=False
         ).stdout.strip()
@@ -319,7 +356,12 @@ def ensure_ak(logf: Path) -> Path:
 
 # --------------------------------------------------------------------- runs
 def run_cell(
-    cell: str, night: Path, *, only: Path | None = None, exe_names=None
+    cell: str,
+    night: Path,
+    *,
+    only: Path | None = None,
+    exe_names=None,
+    exe_targets: dict | None = None,
 ) -> None:
     out = night / f"audit-{cell}.jsonl"
     cmd = [
@@ -342,6 +384,8 @@ def run_cell(
         cmd += ["--only", only]
     if exe_names:
         cmd += ["--exe-names", ",".join(exe_names)]
+    for name, target in sorted((exe_targets or {}).items()):
+        cmd += ["--exe-target", f"{name}={target}"]
     sh(cmd, logf=night / f"audit-{cell}.log", cwd=ROOT)
 
 
@@ -641,21 +685,57 @@ def force_red(night: Path, result: dict, fake_bad: str) -> dict:
 FAKE_BAD = None
 
 
+UNTESTED = "untested"
+
+
+def untested(d: Path, targets: list[dict]) -> str | None:
+    """Why the probe in `d` did not measure its targets, or None when it did.
+
+    A probe that fails to RUN a target is no verdict on it: never 'bad',
+    which reads as the finding reproducing (the 2026-11-22/23 bisects, where
+    every Python answer at 276e88fb was "unknown basis 'bs2'"), and never
+    'good' either. Only a measured row counts."""
+    rows = triage.audit_rows(d)
+    for f in targets:
+        if "exe" in f:
+            r = rows.get(f["cell"], {}).get((f["exe"], f["deck"]))
+            if r is None:
+                return f"no audit row for {f['exe']} {f['deck']}"
+            if r.get("py_unrunnable"):
+                return (
+                    f"{f['exe']} {f['deck']}: Python was not run ({r['py_unrunnable']})"
+                )
+    sweep = triage.sweep_rows(d)
+    for f in targets:
+        if f["kind"].startswith("sweep-"):
+            r = sweep.get(f["case"])
+            if r is None:
+                return f"no sweep row for {f['case']}"
+            if f["kind"] != "sweep-outcome" and r.get("outcome") != "ok":
+                return (
+                    f"{f['case']}: {r.get('outcome')} ({(r.get('message') or '')[:80]})"
+                )
+    return None
+
+
 def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
     """'bad' when any target reproduces at `sha` (against the green night),
-    'good' when none does, 'skip' when `sha` does not build."""
+    'good' when none does, 'skip' when `sha` does not build, UNTESTED when it
+    built but a target could not be run there (`untested`; the reason is in
+    the probe's `untested.txt`)."""
     d = work / sha[:12]
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     git("checkout", "-q", "--detach", sha)
     git("reset", "-q", "--hard", sha)
     logf = d / "build.log"
+    exe_targets = {}
     try:
         build_python(logf, load_state())
         audit_t = [f for f in targets if "exe" in f]
         pairs = sorted({(f["exe"], f["cell"].split("-")[0]) for f in audit_t})
         if pairs:
-            build_exes(pairs, openblas(logf, prune=False), logf)
+            build_exes(pairs, openblas(logf, prune=False), logf, exe_targets)
     except Exception:  # noqa: BLE001 - an unbuildable commit is skipped
         return "skip"
     if any(f["kind"] == "fake" for f in targets):
@@ -673,10 +753,22 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
     for cell, pairs2 in by_cell.items():
         only = d / f"only-{cell}.txt"
         only.write_text("".join(f"{e}\t{k}\n" for e, k in sorted(pairs2)))
-        run_cell(cell, d, only=only, exe_names=sorted({e for e, _ in pairs2}))
+        run_cell(
+            cell,
+            d,
+            only=only,
+            exe_names=sorted({e for e, _ in pairs2}),
+            exe_targets=exe_targets,
+        )
     cases = {f["case"] for f in targets if f["kind"].startswith("sweep-")}
     if cases:
         run_sweep(d, ensure_ak(logf), None, case_ids=cases)
+    why = untested(d, targets)
+    if why:
+        (d / "untested.txt").write_text(why + "\n")
+        log(f"bisect: {sha[:12]} untested: {why}")
+        pack(d)
+        return UNTESTED
     got = {
         f["id"]
         for f in triage.triage(d, base, HERE / "known.json")["findings"]
@@ -687,6 +779,32 @@ def probe(sha: str, targets: list[dict], base: Path, work: Path) -> str:
 
 
 def bisect(night: Path, base: Path, result: dict, good_sha: str | None = None) -> dict:
+    """Bisect the night's red findings; `mw` is back where it was when this
+    returns or raises (2026-11-22/23: an early return left it at the last
+    green commit, and the report agent then read that tree's fixtures as
+    the night's)."""
+    start = git("rev-parse", "HEAD")
+    try:
+        return _bisect(night, base, result, good_sha)
+    finally:
+        restore(start)
+
+
+def restore(sha: str) -> None:
+    """Put `mw` back on `sha` and rebuild Python there, so the tree and the
+    compiled extension on disk are the night's again (the next night rebuilds
+    anyway; this is for whoever reads or runs it in between)."""
+    try:
+        git("checkout", "-q", "--detach", sha)
+        git("reset", "-q", "--hard", sha)
+        (MW / ".sweep_sha").unlink(missing_ok=True)
+        build_python(TMP / "restore-build.log", load_state())
+        log(f"bisect: mw restored to {sha[:12]}")
+    except Exception as exc:  # noqa: BLE001 - logged; the report still goes out
+        log(f"bisect: restoring mw to {sha[:12]} FAILED: {exc}")
+
+
+def _bisect(night: Path, base: Path, result: dict, good_sha: str | None) -> dict:
     meta = json.loads((night / "night.json").read_text())
     good_sha = git(
         "rev-parse", good_sha or json.loads((base / "night.json").read_text())["sha"]
@@ -717,6 +835,12 @@ def bisect(night: Path, base: Path, result: dict, good_sha: str | None = None) -
     v = probe(good_sha, picked, base, work)
     steps.append([good_sha, v])
     log(f"bisect: last green {good_sha[:12]} -> {v}")
+    if v in ("skip", UNTESTED):
+        why = work / good_sha[:12] / "untested.txt"
+        out["result"] = "could not test the last green commit: no verdict" + (
+            f" ({why.read_text().strip()})" if why.is_file() else " (it does not build)"
+        )
+        return out
     if v != "good":
         out["result"] = (
             "reproduces at the last green commit: not a regression in this range"
@@ -735,7 +859,7 @@ def bisect(night: Path, base: Path, result: dict, good_sha: str | None = None) -
         v = probe(commits[mid], picked, base, work)
         steps.append([commits[mid], v])
         log(f"bisect: {commits[mid][:12]} -> {v}")
-        if v == "skip":
+        if v in ("skip", UNTESTED):
             skipped.add(mid)
         elif v == "bad":
             hi = mid
@@ -745,15 +869,17 @@ def bisect(night: Path, base: Path, result: dict, good_sha: str | None = None) -
     out["first_bad"] = first
     out["first_bad_subject"] = git("log", "-1", "--format=%s", first)
     out["range"] = [commits[lo] if lo >= 0 else good_sha, first]
-    out["exact"] = all(k in skipped for k in range(lo + 1, hi))
+    # exact only when nothing untried is left between the two: a gap of
+    # skipped or untested commits is a range, not a first bad commit
+    out["exact"] = hi - lo == 1
     out.setdefault(
         "result",
         "first bad commit"
         if out["exact"]
-        else "narrowed to a range (unbuildable commits inside)",
+        else "narrowed to a range (unbuildable or untested commits inside)",
     )
+    out["untested"] = [c for c, v in steps if v == UNTESTED]
     out["wall_s"] = round(time.time() - t0, 1)
-    git("checkout", "-q", "--detach", bad_sha)
     return out
 
 
