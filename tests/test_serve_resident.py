@@ -274,17 +274,50 @@ def test_an_idle_server_stops_itself_and_unlinks_its_socket(short_room, transpor
 
 def test_the_client_modules_import_stdlib_only():
     """The same rule the portal's client is held to, at the source, for all
-    three thin modules — the saving IS the import not happening."""
-    import re
+    three thin modules — the saving IS the import not happening.
+
+    The rule is about what loading the module costs, so it reads the module's
+    own scope. One function-local import is allowed, and only that one:
+    ``momwire_serve_client.stock_main`` is the plain launchers' entry, which
+    pins AVX-512 off and THEN imports the portal; no client ever calls it, so
+    a client that imports this module still pays nothing."""
+    import ast
+
+    allowed = {("momwire_serve_client", "stock_main")}
+
+    def offenders(module):
+        tree = ast.parse(Path(module.__file__).read_text())
+        found = []
+
+        def walk(node, scope):
+            for child in ast.iter_child_nodes(node):
+                inner = (
+                    child.name
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    else scope
+                )
+                names = []
+                if isinstance(child, ast.Import):
+                    names = [a.name for a in child.names]
+                elif isinstance(child, ast.ImportFrom) and not child.level:
+                    names = [child.module or ""]
+                for name in names:
+                    if (
+                        name.split(".")[0] in ("momwire", "numpy", "scipy")
+                        and (
+                            module.__name__,
+                            scope,
+                        )
+                        not in allowed
+                    ):
+                        found.append(f"{name} (line {child.lineno}, in {scope})")
+                walk(child, inner)
+
+        walk(tree, "<module>")
+        return found
 
     for module in (eznec_client, mech):
-        source = Path(module.__file__).read_text()
-        offenders = [
-            line.strip()
-            for line in source.splitlines()
-            if re.match(r"\s*(import|from)\s+(momwire|numpy|scipy)\b", line)
-        ]
-        assert not offenders, f"{module.__name__}: {offenders}"
+        assert not offenders(module), f"{module.__name__}: {offenders(module)}"
 
 
 def test_config_key_tells_a_named_empty_basis_from_no_basis_at_all():
