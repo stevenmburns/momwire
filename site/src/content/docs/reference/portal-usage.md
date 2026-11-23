@@ -470,9 +470,12 @@ bit. It is **off by default**.
 On the W8IO ELT whip (4,392 segments, 13 frequencies) the printout is
 identical to the stock one apart from its timing lines, and the input
 impedance moves by at most 2.5e-13 relative, the same size as the difference
-between two ordinary solves at different thread counts. It costs memory:
-the matrix plus a half-size copy, where the ordinary solve holds the matrix
-alone. A solve with more than 64 ports is solved the ordinary way.
+between two ordinary solves at different thread counts. The whole run took
+10.2 s instead of 12.2 s at 8 threads, and 46 s instead of 63 s at one
+thread (an 8-core Intel i7-11700K, Linux). It costs memory: the matrix plus
+a half-size copy, where the ordinary solve holds the matrix alone (737 MiB
+peak instead of 582 MiB on the whip). A solve with more than 64 ports is
+solved the ordinary way.
 
 It is certified for the hosted antennaknobs app only (Linux, avx2). On the
 drop-ins it runs the same code, not yet certified there; this launcher's

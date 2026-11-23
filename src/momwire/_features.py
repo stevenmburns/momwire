@@ -970,7 +970,22 @@ FEATURES: dict[str, Feature] = {
         # LAPACK route: the executables' table carries no cgetrf, so they
         # refuse the variable (no EXE_FEATURES row).
         #
-        # `drift`: see the measured table below the entry (momwire#2125).
+        # `drift`, |dZin|/|Zin| flag on against off (Rocketlake, 2026-11-23,
+        # the NEC-2 launcher route; every solve refined, none fell back):
+        #   W8IO ELT whip, n = 4392, 13 frequencies, 8 threads   2.5e-13
+        #     (the same off at 4 threads against 8: 2.1e-13)
+        #   the 71 tests/fixtures/nec_portal decks, 76 solves    4.0e-13
+        #     (the ordinary factor of A, not Aᵀ, against off: 2.1e-13)
+        # Both inside complex128's own scatter; 1e-12 is the worst with 2.5x
+        # margin, far under DEFAULT_DRIFT_MAX. The whip's printout is
+        # byte-identical bar its timing lines; on the corpus two noise-level
+        # fields move (the tilt of a circularly polarised wave, a 1e-17
+        # imaginary part), and the ordinary factor of A moves them too.
+        #
+        # Speed, the whip through momwire-nec2c-sinusoidal (5 paired runs,
+        # medians, AVX-512 off): 8 threads 12.16 s -> 10.16 s (1.19x), 1
+        # thread 63.2 s -> 46.0 s (1.37x); with pair_reuse 1.23x and 1.54x.
+        # Peak RSS 582 -> 737 MiB (the allowance, 1.5 Z + 512 MB, is 954 MiB).
         Feature(
             name="mixed_lu",
             reach=1,
