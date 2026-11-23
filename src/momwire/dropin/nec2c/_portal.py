@@ -205,6 +205,7 @@ from ...deck._networks import build_reducer, card_branches, live_cards, reduced_
 # because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
+from ..._identity_memo import frozen_tuple
 from ..._basis_names import canonical_basis, deprecation_note, retired_refusal
 from ...deck._solver import (
     _NATIVE_LOADING,
@@ -2703,16 +2704,39 @@ class DeckSolver:
         last = getattr(self, "_element_match_last", None)
         if last is not None and last[0]() is solver:
             return last[1]
-        key = (
-            tuple(np.asarray(p, dtype=float).tobytes() for p in solver.wires_polylines),
-            tuple(tuple(int(n) for n in ns) for ns in solver.n_per_edge_per_wire),
-        )
-        held = getattr(self, "_element_match_held", None)
-        if held is not None and held[0] == key:
-            result = held[1]
-        else:
-            result = self._element_match_uncached(solver)
-            self._element_match_held = (key, result)
+        # A prepared mesh hands every solver the same frozen arrays, so the
+        # structure the held map was made for is recognised by who its
+        # polylines ARE (`_identity_memo`: the held tuple keeps them alive, so
+        # an id is never another array's) and the segment counts, not by a
+        # copy of every coordinate. Any other solver takes the bytes key.
+        frozen = frozen_tuple(solver.wires_polylines)
+        counts = None
+        result = None
+        fast = getattr(self, "_element_match_fast", None)
+        if frozen is not None:
+            counts = tuple(map(tuple, solver.n_per_edge_per_wire))
+            if (
+                fast is not None
+                and fast[0] == counts
+                and len(fast[1]) == len(frozen)
+                and all(a is b for a, b in zip(fast[1], frozen, strict=True))
+            ):
+                result = fast[2]
+        if result is None:
+            key = (
+                tuple(
+                    np.asarray(p, dtype=float).tobytes() for p in solver.wires_polylines
+                ),
+                tuple(tuple(int(n) for n in ns) for ns in solver.n_per_edge_per_wire),
+            )
+            held = getattr(self, "_element_match_held", None)
+            if held is not None and held[0] == key:
+                result = held[1]
+            else:
+                result = self._element_match_uncached(solver)
+                self._element_match_held = (key, result)
+            if frozen is not None:
+                self._element_match_fast = (counts, frozen, result)
         try:
             self._element_match_last = (weakref.ref(solver), result)
         except TypeError:  # a solver that takes no weak reference
