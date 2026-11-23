@@ -17,7 +17,8 @@ import numpy as np
 import pytest
 
 from momwire import _features, _lapack
-from momwire.deck import build_solver, parse_nec2
+from momwire.deck import build_solver, parse, parse_nec2
+from momwire.razor import RazorSolver
 from momwire.sinusoidal import SinusoidalSolver
 
 pytestmark = pytest.mark.reach(1)
@@ -32,6 +33,16 @@ TWO_PORT = (
     "CM d\nCE\nGW 1 41 0 0 -2.5 0 0 2.5 0.001\nGW 2 41 1 0 -2.5 1 0 2.5 0.001\n"
     "GE 0\nEX 0 1 21 0 1 0\nEX 0 2 21 0 1 0\nFR 0 1 0 0 28.0\nXQ\nEN\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def any_size(request, monkeypatch):
+    """The size rule off (MIXED_MIN_N, `_mixed_nrhs_cap`), so these small
+    systems take the route; the test of the rule itself opts out."""
+    if request.node.name == "test_the_size_rule":
+        return
+    monkeypatch.setattr(_lapack, "MIXED_MIN_N", 0)
+    monkeypatch.setattr(_lapack, "_mixed_nrhs_cap", lambda n: _lapack.MIXED_MAX_NRHS)
 
 
 @pytest.fixture
@@ -203,19 +214,21 @@ def test_a_singular_system_still_raises_the_ordinary_error():
 # --- what declines without trying ------------------------------------------------
 
 
-def test_too_many_right_hand_sides_decline():
-    a = _well(n=200, seed=7)
-    k = _lapack.MIXED_MAX_NRHS
-    _off, _a, _on, _b, (solves, _f) = _flag_off_and_on(
-        _lapack.solve_transposed, a, _rhs(200, k)
-    )
-    assert solves["refined"] == 1
-    b = _rhs(200, k + 1)
-    x_off, _a, x_on, _b, (solves, fallbacks) = _flag_off_and_on(
-        _lapack.solve_transposed, a, b
-    )
-    assert solves == {"declined": 1} and not fallbacks
-    assert x_on.tobytes() == x_off.tobytes()
+def test_the_size_rule():
+    cap = _lapack._mixed_nrhs_cap
+    assert (cap(1024), cap(2048), cap(4392), cap(12534)) == (3, 13, 64, 182)
+    for n, k, outcome in [
+        (1023, 1, "declined"),
+        (1024, 3, "refined"),
+        (1024, 4, "declined"),
+    ]:
+        a, b = _well(n=n, seed=7), _rhs(n, k)
+        x_off, _a, x_on, _b, (solves, fallbacks) = _flag_off_and_on(
+            _lapack.factor_and_solve, a, b
+        )
+        assert solves.get(outcome) == 1 and not fallbacks, (n, k, solves)
+        if outcome == "declined":
+            assert x_on.tobytes() == x_off.tobytes()
 
 
 def test_a_real_system_declines():
@@ -322,13 +335,152 @@ def test_the_swept_impedance_runs_it(no_features):
     assert _moved(before)[0]["refined"] == 2
 
 
-def test_the_galerkin_family_ignores_it(no_features):
-    no_features.setenv(ENV, "1")
-    solver = build_solver(parse_nec2(DIPOLE), basis="sg").solver
-    assert solver.features_bound["mixed_lu"] is False
+# --- factor_and_solve: bs2, bs1, razor2p, sg --------------------------------
+
+
+@pytest.mark.parametrize("order", ["F", "C"])
+def test_factor_and_solve_refines_either_order_and_keeps_a(order):
+    a = np.asarray(_well(seed=12), order=order)
+    b = _rhs(160, 2)
+    x_off, a_off, x_on, a_on, (solves, fallbacks) = _flag_off_and_on(
+        lambda m, v: _lapack.factor_and_solve(m, v, overwrite_a=True), a, b
+    )
+    assert solves["refined"] == 1 and not fallbacks
+    assert np.abs(x_on - x_off).max() <= 1e-13 * np.abs(x_off).max()
+    # Refined, a is untouched although overwrite_a asked; flag off, an
+    # F-ordered a held its factors (factored in place).
+    assert a_on.tobytes() == a.tobytes()
+    if order == "F":
+        assert a_off.tobytes() != a.tobytes()
+
+
+@pytest.mark.parametrize("order", ["F", "C"])
+def test_factor_and_solve_fallback_is_the_in_place_flag_off_route(order):
+    a = np.asarray(_conditioned(1e9), order=order)
+    b = _rhs(120)
+    x_off, a_off, x_on, a_on, (solves, fallbacks) = _flag_off_and_on(
+        lambda m, v: _lapack.factor_and_solve(m, v, overwrite_a=True), a, b
+    )
+    assert solves == {"fallback": 1} and fallbacks == {"stall": 1}
+    assert x_on.tobytes() == x_off.tobytes()
+    # The fallback factored a in place exactly as the flag-off call did.
+    assert a_on.tobytes() == a_off.tobytes()
+
+
+def test_factor_and_solve_declines_a_strided_matrix():
+    a = _well(n=200, seed=13)[::2, ::2]  # neither C- nor F-contiguous
+    b = _rhs(100)
+    x_off = _lapack.factor_and_solve(a, b)
     before = _counts()
+    with _lapack.mixed_lu_scope(True):
+        x_on = _lapack.factor_and_solve(a, b)
+    assert _moved(before) == ({"declined": 1}, {})
+    assert x_on.tobytes() == x_off.tobytes()
+
+
+T_JUNCTION = (
+    "CM t\nCE\nGW 1 21 0 0 0 0 0 5 0.001\nGW 2 15 0 0 5 0 3 7 0.001\n"
+    "GW 3 15 0 0 5 0 -3 7 0.001\nGE 0\nEX 0 1 11 0 1 0\nFR 0 1 0 0 28.0\nXQ\nEN\n"
+)
+
+
+def _razor(**kw):
+    wire = [[[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]]]
+    return RazorSolver(
+        wires=wire,
+        nsegs=21,
+        wire_radius=1e-3,
+        wavelength=20.0,
+        nec5_quadrature=True,
+        **kw,
+    )
+
+
+def _engine(name, deck):
+    if name == "razor2p":
+        return _razor()
+    return build_solver(parse_nec2(deck), basis=name).solver
+
+
+@pytest.mark.parametrize("deck", [DIPOLE, T_JUNCTION], ids=["dipole", "junction"])
+@pytest.mark.parametrize("name", ["bs2", "bs1", "sg", "razor2p"])
+def test_each_engine_runs_it_on_the_variable(no_features, name, deck):
+    if name == "razor2p" and deck is T_JUNCTION:
+        pytest.skip("one razor2p geometry is enough")
+    y_off = _engine(name, deck).compute_port_solution().y
+    no_features.setenv(ENV, "1")
+    solver = _engine(name, deck)
+    assert solver.features_bound["mixed_lu"] is True
+    before = _counts()
+    y_on = solver.compute_port_solution().y
+    solves, fallbacks = _moved(before)
+    assert solves.get("refined", 0) >= 1 and not fallbacks, (solves, fallbacks)
+    assert np.abs(y_on - y_off).max() <= 1e-11 * np.abs(y_off).max()
+
+
+def test_a_badly_scaled_matrix_refines_past_its_backward_error(no_features):
+    # sg on a SimNEC stream deck (45 unknowns, rows and columns spanning
+    # 1.5e5, kappa_1 3e7): the normwise backward error reaches u64 after two
+    # corrections while the answer is still 5e-10 from the flag-off one; the
+    # forward test (MIXED_FORWARD_TOLERANCE) takes the sweep that closes it.
+    from pathlib import Path
+
+    deck = Path(__file__).parents[1] / "scripts/core_split/nx_decks"
+    model = parse((deck / "simnec_stream_2281585.nec").read_text(), dialect="nec4")
+    z_off = 1 / build_solver(model, basis="sg").solver.compute_port_solution().y[0, 0]
+    no_features.setenv(ENV, "1")
+    before = _counts()
+    z_on = 1 / build_solver(model, basis="sg").solver.compute_port_solution().y[0, 0]
+    assert _moved(before)[0]["refined"] == 1
+    assert _lapack.MIXED_LAST["eta"][2] <= _lapack.MIXED_TOLERANCE
+    assert _lapack.MIXED_LAST["sweeps"] >= 3
+    assert abs(z_on - z_off) <= 1e-11 * abs(z_off)
+
+
+@pytest.mark.parametrize("name", ["bs2", "sg", "razor2p"])
+def test_each_engine_impedance_runs_it(no_features, name):
+    no_features.setenv(ENV, "1")
+    solver = _engine(name, DIPOLE)
+    before = _counts()
+    solver.compute_impedance()
+    assert _moved(before)[0].get("refined", 0) >= 1
+
+
+def test_the_kcl_lambda_solve_stays_outside_the_scope(no_features, monkeypatch):
+    # bs2's Schur step solves a small (n_c x n_c) system with `_lapack.solve`
+    # after the big factor; only the big factor is in the scope.
+    no_features.setenv(ENV, "1")
+    seen = []
+    real = _lapack.solve
+
+    def spy(a, b):
+        seen.append(_lapack._MIXED.get())
+        return real(a, b)
+
+    monkeypatch.setattr(_lapack, "solve", spy)
+    solver = _engine("bs2", T_JUNCTION)
     solver.compute_port_solution()
-    assert _moved(before) == ({}, {})
+    assert seen and not any(seen)
+
+
+@pytest.mark.parametrize("name", ["bs2", "razor2p", "sg"])
+def test_flag_off_still_factors_z_in_place(no_features, monkeypatch, name):
+    calls = []
+    real = _lapack.lu_factor
+
+    def spy(a, overwrite_a=False, check_finite=True):
+        a1 = np.asarray(a)
+        calls.append((overwrite_a, a1.flags.f_contiguous, a1.shape[0]))
+        return real(a, overwrite_a=overwrite_a, check_finite=check_finite)
+
+    monkeypatch.setattr(_lapack, "lu_factor", spy)
+    _engine(name, DIPOLE).compute_port_solution()
+    big = max(calls, key=lambda c: c[2])
+    assert big[0] and big[1], calls  # overwrite_a on an F-ordered Z: in place
+    calls.clear()
+    no_features.setenv(ENV, "1")
+    _engine(name, DIPOLE).compute_port_solution()
+    assert not calls  # refined: no complex128 factor at all
 
 
 def test_the_registry_entry():
@@ -343,4 +495,4 @@ def test_the_registry_entry():
     assert f.offer and not f.default and f.label and f.summary
     # A last-digits feature: antennaknobs labels it "(faster)".
     assert f.drift < _features.DEFAULT_DRIFT_MAX
-    assert f.solvers == ("sinusoidal",)
+    assert f.solvers == ("bspline", "razor", "sinusoidal", "sinusoidal_galerkin")
