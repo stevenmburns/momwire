@@ -38,6 +38,7 @@ from pathlib import Path
 
 import pytest
 
+import momwire_serve_client
 from momwire.dropin.nec2c import _portal as nec_portal
 from momwire.dropin.nec2c import deck_frame, main, run_deck
 
@@ -2855,7 +2856,9 @@ def test_the_console_script_target_resolves():
     module_name, _, attr = target.partition(":")
     assert attr, f"{target!r} names no callable"
     entry = getattr(importlib.import_module(module_name), attr)
-    assert entry is nec_portal.main
+    # The plain launcher enters at the pin (`momwire_serve_client.stock_main`,
+    # which then runs the portal's `main`; tests/test_stock_launcher_pin.py).
+    assert entry is momwire_serve_client.stock_main
     assert callable(entry)
 
 
