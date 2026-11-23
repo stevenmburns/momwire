@@ -20,7 +20,8 @@ The numbers here come from three standing benchmark studies — the
 [ground-model benchmark](https://github.com/stevenmburns/antennaknobs/blob/main/docs/status/2026-07-08-ground-model-benchmark.md)
 (the same designs × 4 ground models), and the
 [basis-convergence census](https://github.com/stevenmburns/antennaknobs/blob/main/docs/status/2026-07-20-basis-convergence-census.md)
-(91 designs, meshes N=7–641). Timings quoted at N=81 segments/wire on a
+(91 designs, meshes N=7–641), plus a 2026-11-23 segment-count ladder
+on five antennas (below). Timings quoted at N=81 segments/wire on a
 4-core box unless stated.
 
 ## The selection matrix
@@ -30,7 +31,7 @@ vs. array geometry:
 
 | Antenna class | Use | Why |
 | --- | --- | --- |
-| Single elements, small loops, beams, multiband dipoles | **`bs2`** (degree 2 — the default everywhere), with **`sinusoidal`** as a cross-check | both solve in milliseconds here; d=2 converges at far coarser meshes (below), the other confirms the answer |
+| Single elements, small loops, beams, multiband dipoles | **`bs2`** (degree 2 — the default everywhere), with **`sinusoidal`** as a cross-check | both solve in milliseconds here; d=2 converges at coarse meshes to the answer NEC-5's formulation converges to (below), and `sinusoidal` confirms it where it converges |
 | Large single-wire structures (rhombics, long-wires, big loops) | **`hmatrix`** (ACA) | sub-quadratic scaling — the only engine in the field that wins `rhombic` at high segmentation |
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
 | Cross-checking against NEC-5 behaviour | **`razor2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
@@ -87,20 +88,44 @@ not a better model of a real wire end.
 
 ## Accuracy per segment: why `bs2` d=2 is the default
 
-The basis-convergence census (91 designs) measured accuracy against mesh
-density: **B-spline degree 2 is within 2 % of the converged answer at
-N=15–21 segments per quarter-wave on 80 % of scorable designs**, where the
-sinusoidal basis needs 3–15× more segments to reach the same value. Single
-closed loops converge on d=2 as coarse as N=7. The gap is largest on
-port-fed, junction-heavy, and closely-spaced-wire geometry — and the
-momwire#182 instrument showed most of it is the *point matching*, not the
-basis: rerun under Galerkin testing (`sg`), the 1–23 %
-junction-heavy gaps collapse to 0.01–0.33 %.
+A segment-count ladder on five antennas (momwire 0.97.1, 2026-11-23)
+measured how many segments each engine needs to settle within 1 % of the
+answer it converges to, and whether the engines converge to the same
+answer. The antennas: an inverted vee in free space and over average soil,
+a hentenna, Ward AE6TY's 20:1 tapered dipole
+([antenna-problem-decks](https://github.com/stevenmburns/antenna-problem-decks)),
+and L. B. Cebik W4RNL's 3-element 20 m yagi with telescoping, tapered
+elements.
 
-Dense cost scales as N² in memory and N²–N³ in fill/factor time, so an
-engine that converges at one-third the mesh is roughly an order of
-magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
-`bs2` d=2 is the default in every drop-in engine and every host.
+| antenna | `bs2` | `razor2p` | `sinusoidal`, NEC-2 rules | `sinusoidal`, NEC-4.2 rules |
+| --- | --- | --- | --- | --- |
+| inverted vee, free space | 124 | 452 | 123 | 123 |
+| inverted vee, over soil | 124 | 780 | 123 | 123 |
+| hentenna | 122 | 1,332 | not converged at 12,000 | not converged |
+| tapered dipole | 31 | 211 | not converged | not converged |
+| tapered yagi | 428 | 1,770 | not converged | not converged |
+
+- **`bs2` and `razor2p` converge to the same answer**, within 0.01 to
+  0.23 Ω on every case, and `bs2` gets there with 4 to 11 times fewer
+  segments. `razor2p` is NEC-5's formulation, so this is also the answer
+  NEC-5 converges to.
+- **Point-matched `sinusoidal` converges to that answer on a simple wire**
+  like the inverted vee, with as few segments as `bs2`. It does not on
+  every antenna. On the hentenna the NEC-2 rules are still 1.9 Ω short at
+  12,000 segments and the NEC-4.2 rules settle about 8.7 Ω away. Where the
+  wire's radius steps, neither converges: on the tapered yagi the NEC-2
+  rules end 55 Ω away (10.6 + j47.7 against 29.8 − j4.3 Ω), and refining
+  the mesh makes it worse.
+- **Most of that gap is the point matching, not the basis**: rerun under
+  Galerkin testing (`sg`), the junction-heavy gaps of an earlier 91-design
+  census collapsed from 1–23 % to 0.01–0.33 % (momwire#182).
+
+So the reason `bs2` is the default is that it reaches the same converged
+answer as NEC-5's formulation, on every antenna tried, at a fraction of
+the segments; not that it needs fewer segments than `sinusoidal` where
+`sinusoidal` converges. Dense cost scales as N² in memory and N²–N³ in
+fill/factor time, so 4 to 11 times fewer segments is more than an order
+of magnitude cheaper at equal accuracy.
 
 ## The razor lane, and its certification twin
 
