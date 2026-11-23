@@ -110,7 +110,7 @@ def test_the_primary_names_are_also_console_scripts():
     # The NEC-2 pair is the pip install's NEC-2 engine under the same names
     # (momwire#2059), so the bundle's copies answer as those scripts do.
     for stem in build.NEC2_LAUNCHERS:
-        assert scripts.get(stem) == "momwire.dropin.nec2c:main", stem
+        assert scripts.get(stem) == "momwire_serve_client:stock_main", stem
 
 
 def _site_known_bases() -> dict[str, set[str]]:

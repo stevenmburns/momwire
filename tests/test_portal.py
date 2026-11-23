@@ -5180,7 +5180,7 @@ def test_every_basis_ships_as_a_named_entry_point():
         and not any(name.endswith(f"-{old}") for old in BASIS_ALIASES)
     }
     for name, target in named.items():
-        assert target == "momwire.dropin.nec2c:main", name
+        assert target == "momwire_serve_client:stock_main", name
         suffix = nec_portal._filename_basis(name)
         assert suffix in NEC2_BASES, name
     assert set(NEC2_BASES) == {nec_portal._filename_basis(n) for n in named}, (

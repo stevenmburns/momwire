@@ -1277,8 +1277,10 @@ def test_the_shared_console_script_obeys_simnecs_filename_rules():
 def test_the_stock_console_script_is_untouched():
     """The stock engine is the supported default and this issue does not move
     it. Pinned here as well as in ``test_portal.py`` because the risk being
-    guarded is a future tidy-up that rewires BOTH entries at once."""
-    assert _console_scripts()["momwire-nec2c"] == "momwire.dropin.nec2c:main"
+    guarded is a future tidy-up that rewires BOTH entries at once. Its entry is
+    ``momwire_serve_client:stock_main``, which pins AVX-512 off and then runs
+    the portal's ``main`` (``test_stock_launcher_pin.py``)."""
+    assert _console_scripts()["momwire-nec2c"] == "momwire_serve_client:stock_main"
 
 
 def test_every_momwire_subpackage_is_shipped():
