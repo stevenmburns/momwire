@@ -457,9 +457,10 @@ it.
 
 ### Mixed-precision solve
 
-`MOMWIRE_X_MIXED_LU=1` changes how the `sinusoidal` route
-(`momwire-nec2c-sinusoidal`) solves its matrix, not how it fills it. The
-matrix is factored in single precision, about twice as fast as the ordinary
+`MOMWIRE_X_MIXED_LU=1` changes how the engine solves its matrix, not how it
+fills it, on every dense engine: `sinusoidal` (`momwire-nec2c-sinusoidal`),
+`bs2`, `bs1` and `sg`, and `razor2p` on the NEC-5 drop-in. The matrix is
+factored in single precision, about twice as fast as the ordinary
 double-precision factor, and the answer is then refined against the
 double-precision matrix until it is as accurate as the ordinary solve. Each
 refinement step must cut the error by a fixed factor; a matrix where it does
@@ -467,20 +468,30 @@ not (an ill-conditioned one), or one whose values single precision cannot
 hold, is solved the ordinary way instead, with the ordinary answer to the
 bit. It is **off by default**.
 
-On the W8IO ELT whip (4,392 segments, 13 frequencies) the printout is
-identical to the stock one apart from its timing lines, and the input
-impedance moves by at most 2.5e-13 relative, the same size as the difference
-between two ordinary solves at different thread counts. The whole run took
-10.2 s instead of 12.2 s at 8 threads, and 46 s instead of 63 s at one
-thread (an 8-core Intel i7-11700K, Linux). It costs memory: the matrix plus
-a half-size copy, where the ordinary solve holds the matrix alone (737 MiB
-peak instead of 582 MiB on the whip). A solve with more than 64 ports is
-solved the ordinary way.
+It pays only on large decks: below 1,024 unknowns, or with more right-hand
+sides than the size makes worthwhile (3 at 1,024 unknowns, 64 at 4,392;
+each port, and on `bs2` each junction constraint, is one), the ordinary
+solve runs. On the W8IO ELT whip (4,392 segments, 13 frequencies) the
+`sinusoidal` printout is identical to the stock one apart from its timing
+lines, and the input impedance moves by at most 2.5e-13 relative, the same
+size as the difference between two ordinary solves at different thread
+counts. The whole run took 10.2 s instead of 12.2 s at 8 threads, and 46 s
+instead of 63 s at one thread (an 8-core Intel i7-11700K, Linux). On
+`razor2p` the same whip (6,372 unknowns, one frequency) took 2.6 s instead
+of 3.0 s at 8 threads and 9.5 s instead of 13.3 s at one; over ground, where
+the fill dominates, the gain is a few percent at most. A deck that falls
+back pays for the single-precision factor it tried: 14 % slower on an
+over-segmented 5,200-unknown pair of dipoles.
+
+It costs memory: the matrix plus a half-size copy, where the ordinary solve
+holds the matrix alone (737 MiB peak instead of 582 MiB on the
+`sinusoidal` whip, 1,080 MiB instead of 806 MiB on `razor2p`).
 
 It is certified for the hosted antennaknobs app only (Linux, avx2). On the
-drop-ins it runs the same code, not yet certified there; this launcher's
-printout keeps nec2c's layout and does not name it. The standalone
-executables refuse it.
+drop-ins it runs the same code, not yet certified there: the NEC-4.2 and
+NEC-5 drop-ins name it on printout line 2 (`+mixed_lu uncertified on this
+platform`), and the NEC-2 launcher's printout keeps nec2c's layout and does
+not name it. The standalone executables refuse it.
 
 ## How many engines to run
 
