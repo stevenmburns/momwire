@@ -48,9 +48,11 @@ class could otherwise serve a member the other side's value.
 SCOPE. The NEC-2 dialect's kernels on the real-k fill: free space, the PEC
 image, the reflection-coefficient image (Fresnel's), and the Sommerfeld
 ground's C2-scaled image, whose interpolated remainder stays exact; the
-reduced kernel has its own far-pair kernel (the speed), the extended kernel
-and the folded cos-1 shapes take the shipped tensors with the far pairs
-overwritten (the answer, at the shipped cost). It refuses a NEC-4 junction
+reduced kernel has its own far-pair kernel (the speed), served inside the
+fused fill in free space and over PEC (`sinusoidal_fill_rows(far_r=)`,
+momwire#2082) to the two-pass route's bits; the extended kernel and the
+folded cos-1 shapes take the shipped tensors with the far pairs overwritten
+(the answer, at the shipped cost, on the two-pass band). It refuses a NEC-4 junction
 rule, a buried or ground-crossing wire, and a reflection coefficient other
 than Fresnel's (`REFUSALS`).
 """
