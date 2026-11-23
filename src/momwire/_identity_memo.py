@@ -28,6 +28,7 @@ compare, unlike the coordinates.
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from typing import Any, Callable, Hashable, Sequence
 
@@ -69,6 +70,10 @@ class IdentityMemo:
     def __init__(self, size: int = 4):
         self._size = size
         self._entries: OrderedDict = OrderedDict()
+        # The resident server solves on several threads, and a lookup that
+        # moves an entry to the end races an eviction that removes it. The
+        # lock covers the table only, never the computation.
+        self._lock = threading.Lock()
         # Counted for the tests: a memo whose hit count never moves measured
         # nothing (the global instructions' "a green gate can measure nothing").
         self.hits = 0
@@ -86,19 +91,24 @@ class IdentityMemo:
         if arrays is None:
             return compute()
         key = (tuple(map(id, arrays)), extra)
-        entry = self._entries.get(key)
-        if entry is not None:
-            held, value = entry
-            if len(held) == len(arrays) and all(x is y for x, y in zip(held, arrays)):
-                self._entries.move_to_end(key)
-                self.hits += 1
-                return value
-        self.misses += 1
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                held, value = entry
+                if len(held) == len(arrays) and all(
+                    x is y for x, y in zip(held, arrays)
+                ):
+                    self._entries.move_to_end(key)
+                    self.hits += 1
+                    return value
+            self.misses += 1
         value = compute()
-        self._entries[key] = (arrays, value)
-        while len(self._entries) > self._size:
-            self._entries.popitem(last=False)
+        with self._lock:
+            self._entries[key] = (arrays, value)
+            while len(self._entries) > self._size:
+                self._entries.popitem(last=False)
         return value
 
     def clear(self) -> None:
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
