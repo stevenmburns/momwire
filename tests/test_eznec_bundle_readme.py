@@ -266,8 +266,9 @@ def test_the_first_run_note_reads_as_dan_worded_it():
 def test_4nec2_runs_the_launchers_from_their_own_folder():
     """momwire#1652 (Dan AC6LA): 4nec2 is set up like EZNEC and SimNEC, with
     the bundle in a folder of its own and 4nec2.bat naming a launcher there
-    by its full path, in both slots; nothing is copied into 4nec2's
-    folders."""
+    by its full path, in every slot. Tested in 4nec2 5.8.8 on 2026-11-23:
+    Manual select cannot name a program, so the NEC-2 slot goes through
+    4nec2.bat too, with its pause lines removed."""
     build = _build()
     text = build.readme_text("9.9.9", "SIGNING: unsigned.", ".exe")
     assert "which is the exception" not in text
@@ -277,10 +278,17 @@ def test_4nec2_runs_the_launchers_from_their_own_folder():
         assert f"rem C:\\momwire\\{name}.exe < nec2d.tmp" in lines, name
     assert "C:\\momwire\\momwire-nec5.exe < nec2d.tmp" in lines
     assert "C:\\momwire\\momwire-nec42.exe < nec2d.tmp" in lines
+    assert "Manual select sets the size of 4nec2's own" in text
+    assert 'if "%3" == "" pause' in text
     head = text.split("\n\n", 1)[0]
     assert "SimNEC (its NEC-5, NEC-4.2 and NEC-2 engines)" in " ".join(head.split())
     assert "its NEC-4.2 engine" in " ".join(head.split())
 
 
 NEC5_SLOT_LINES = ("momwire-nec5", "momwire-nec5-razor2p")
-NEC42_SLOT_LINES = ("momwire-nec42", "momwire-nec42-sinusoidal")
+NEC42_SLOT_LINES = (
+    "momwire-nec42",
+    "momwire-nec42-sinusoidal",
+    "momwire-nec2c",
+    "momwire-nec2c-sinusoidal",
+)
