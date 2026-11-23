@@ -107,8 +107,9 @@ def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") ->
         *_mech.interpreter_identity(),
         f"{idle_timeout!r}",
         _mech.WIRE,
-        # The advisories frame (momwire#1673 reversed): a launcher that asks
-        # for it must never reach a server that would solve the request line.
+        # The advisories frame (momwire#1673 reversed, momwire#2119's modes):
+        # a launcher that asks for it must never reach a server that would
+        # read the request line differently.
         _mech.ADVISORIES_WIRE,
     ]
     if dialect != "nec5":
@@ -314,11 +315,13 @@ def _stream(basis: str | None, dialect: str = "nec5") -> int:
         return 2
 
 
-def _write_advisories(raw: bytes) -> None:
-    """A served deck's advisories frame on this launcher's stderr. A stderr
-    that cannot take them loses them: the printout is already written."""
+def _write_advisories(raw: bytes, deck_path: str) -> None:
+    """A served deck's advisories frame on this launcher's stderr, under the
+    divider naming the deck (:func:`momwire_serve_client.served_advisories`).
+    A stderr that cannot take them loses them: the printout is already
+    written."""
     try:
-        sys.stderr.write(_mech.advisories_text(raw))
+        sys.stderr.write(_mech.served_advisories(raw, deck_path))
         sys.stderr.flush()
     except (OSError, ValueError):
         pass
@@ -400,17 +403,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     timed = _mech.times_requested()
-    advised = _mech.advisories_on()
+    advised = _mech.advisories_mode()
     try:
         started = _time.perf_counter()
         with open(deck_path, "rb") as handle:
             deck_bytes = handle.read()
         if en_optional:
             deck_bytes = _mech.EN_OPTIONAL_REQUEST + deck_bytes
-        if advised:
+        if advised != "off":
             # The deck's advisories, raised in the server's process, come
-            # back framed to this one's stderr.
-            deck_bytes = _mech.ADVISORIES_REQUEST + deck_bytes
+            # back framed to this one's stderr, in this mode.
+            deck_bytes = _mech.advisories_request(advised) + deck_bytes
         if timed:
             deck_bytes = _mech.TIMES_REQUEST + deck_bytes
         answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT, dialect)
@@ -427,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             handle.write(printout)
         if shown:
             # Already within one process's cap: the server capped it.
-            _write_advisories(shown)
+            _write_advisories(shown, deck_path)
         if timed:
             _report_times(line, started, wrote)
         return 0

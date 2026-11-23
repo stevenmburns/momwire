@@ -1318,34 +1318,177 @@ def _c_bytes(name: str) -> bytes:
     return match[1].encode("latin-1").decode("unicode_escape").encode("latin-1")
 
 
+def _c_concat(name: str) -> bytes:
+    """A ``static const char NAME[] =`` constant spelt as adjacent literals."""
+    literal = r'"(?:[^"\\]|\\.)*"'
+    match = re.search(
+        rf"static const char {name}\[\] =\s*((?:{literal}\s*)+);", SOURCE.read_text()
+    )
+    assert match is not None, name
+    raw = "".join(part[1:-1] for part in re.findall(literal, match[1]))
+    return raw.encode("latin-1").decode("unicode_escape").encode("latin-1")
+
+
 def test_the_c_advisories_constants_are_the_python_ones():
     assert _c_string("ADVISORIES_ENV") == mech.ADVISORIES_ENV
     assert _c_string("ADVISORIES_KEY_ELEMENT") == mech.ADVISORIES_WIRE
     assert _c_bytes("ADVISORIES_REQUEST") == mech.ADVISORIES_REQUEST
     assert _c_bytes("ADVISORIES_FRAME_START") == mech.ADVISORIES_FRAME_START
     assert _c_bytes("ADVISORIES_FRAME_END") == mech.ADVISORIES_FRAME_END
-    off = _c_list("ADVISORIES_OFF")
-    assert set(off) == mech._ADVISORIES_OFF and len(off) == len(mech._ADVISORIES_OFF)
-    assert all(v == v.lower() for v in off)
+    assert _c_string("ADVISORIES_DIVIDER_HEAD") == mech.ADVISORIES_DIVIDER_HEAD
+    room = re.search(r"#define ADVISORIES_LABEL_ROOM (\d+)\n", SOURCE.read_text())
+    assert room is not None and int(room[1]) == mech.ADVISORIES_LABEL_ROOM
+    capped = mech.ADVISORIES_CAPPED.replace("\n", "\r\n").encode()
+    assert _c_concat("ADVISORIES_CAPPED") == capped  # as the frame carries it
+    # The mode tables (momwire#2119): each writing mode's words, and off is
+    # everything else on both sides.
+    for mode, table in (
+        ("deck", "ADVISORIES_DECK"),
+        ("all", "ADVISORIES_ALL"),
+    ):
+        words = _c_list(table)
+        assert set(words) == mech._ADVISORIES_WORDS[mode], mode
+        assert len(words) == len(set(words)) and all(w == w.lower() for w in words)
+    assert set(mech._ADVISORIES_WORDS) == set(mech.ADVISORIES_MODES) - {"off"}
 
 
 _DUP_DECK = DECKS.parent.parent / "razor_printout_small" / "dup_reversed_rp_ne_pq.nec"
+
+# A stand-in daemon that records each request's bytes and answers one canned
+# frame (when asked) and printout: the C launcher and the Python one, given
+# the same answer, must send the same bytes and write the same stderr.
+_RECORDING_DAEMON = """
+import sys
+import momwire_serve_client as mech
+from momwire.serve._server import serve_forever, take_value
+
+argv = [a for a in sys.argv[1:] if a != "--serve"]
+path, argv = take_value(argv, "--socket")
+log_path, argv = take_value(argv, "--log")
+record = {record!r}
+frame = {frame!r}
+
+def connection(conn, number, log, solve_lock, pool=None):
+    reader = conn.makefile("rb")
+    body = mech.read_deck_frame(reader)
+    reader.close()
+    with open(record, "ab") as handle:
+        handle.write(len(body).to_bytes(8, "big") + body)
+    answer = b" canned printout\\r\\n"
+    if body.startswith(mech.ADVISORIES_REQUEST):
+        answer = mech.ADVISORIES_FRAME_START + frame + mech.ADVISORIES_FRAME_END + answer
+    conn.sendall(answer)
+
+sys.exit(serve_forever(path, "60", log_path, connection))
+"""
+
+_CANNED_ADVISORY = b"x.py:1: DuplicateWire: canned\r\n  line\r\n"
+
+
+def _recorded(path: Path) -> list[bytes]:
+    data = path.read_bytes() if path.exists() else b""
+    out = []
+    while data:
+        n = int.from_bytes(data[:8], "big")
+        out.append(data[8 : 8 + n])
+        data = data[8 + n :]
+    return out
+
+
+_SETTINGS = (None, "", "off", "nonsense", "stream", "deck", " DECK ", "stderr")
+_SETTINGS += ("on", "1", "yes", "true", "all")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "frame",
+    [
+        _CANNED_ADVISORY,
+        b"",
+        mech.ADVISORIES_CAPPED.replace("\n", "\r\n").encode(),
+    ],
+    ids=["advisory", "empty", "note-alone"],
+)
+def test_the_c_and_python_launchers_send_and_write_the_same_bytes(
+    client_exe, tmp_path, monkeypatch, capsys, frame
+):
+    """For every mode spelling, against the same answer: the request bytes
+    the C launcher sends are the Python one's, and so is its stderr -- the
+    divider naming the deck only when the frame holds an advisory, the
+    deck's label cut the same way when it is long."""
+    import momwire_eznec_client as eznec_client
+
+    record = tmp_path / "c-requests.bin"
+    daemon = tmp_path / "recording_daemon.py"
+    daemon.write_text(_RECORDING_DAEMON.format(record=str(record), frame=frame))
+    shim = f'#!/bin/sh\nexec "{sys.executable}" "{daemon}" "$@"\n'
+    bundle = _bundle(client_exe, shim, names=(NEC5_NAME,))
+    room = _room()
+    deep = tmp_path / ("d" * 120) / ("e" * 120)
+    deep.mkdir(parents=True)
+    decks = [tmp_path / "d.nec", deep / "d.nec"]
+    for deck in decks:
+        deck.write_bytes(_DUP_DECK.read_bytes())
+    py_sent: list[bytes] = []
+
+    def served(deck_bytes, _basis, _idle, _dialect="nec5"):
+        py_sent.append(deck_bytes)
+        answer = b" canned printout\r\n"
+        if deck_bytes.startswith(mech.ADVISORIES_REQUEST):
+            return (
+                mech.ADVISORIES_FRAME_START + frame + mech.ADVISORIES_FRAME_END + answer
+            )
+        return answer
+
+    monkeypatch.setattr(eznec_client, "_served_bytes", served)
+    monkeypatch.delenv("PYTHONWARNINGS", raising=False)
+    try:
+        for setting in _SETTINGS:
+            for deck in decks:
+                if setting is None:
+                    monkeypatch.delenv("MOMWIRE_ADVISORIES", raising=False)
+                else:
+                    monkeypatch.setenv("MOMWIRE_ADVISORIES", setting)
+                out = tmp_path / "c.out"
+                proc = _run(bundle, NEC5_NAME, [str(deck), str(out)], room)
+                assert proc.returncode == 0, proc.stderr
+                assert out.read_bytes() == b" canned printout\r\n"
+                capsys.readouterr()
+                py_out = tmp_path / "py.out"
+                monkeypatch.setattr("sys.argv", [NEC5_NAME, str(deck), str(py_out)])
+                assert eznec_client.main(None) == 0
+                py_err = capsys.readouterr().err
+                assert proc.stderr == py_err, (setting, deck, proc.stderr, py_err)
+                assert _recorded(record)[-1] == py_sent[-1], setting
+                mode = mech.advisories_mode({"MOMWIRE_ADVISORIES": setting or ""})
+                if mode == "off" or not frame:
+                    assert py_err == ""
+                elif frame == _CANNED_ADVISORY:
+                    assert py_err.startswith(mech.advisories_divider(str(deck)))
+                else:
+                    assert py_err == mech.ADVISORIES_CAPPED
+        assert len(_listening(room)) == 1
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
 
 
 @pytest.mark.integration
 def test_a_served_deck_carries_its_advisories_to_the_c_clients_stderr(
     client_exe, tmp_path, monkeypatch
 ):
-    """The Windows drop-in's launcher: a deck the warm server answers raised
-    its advisories in the server's process, and they come back framed to
-    THIS process's stderr, the second warm deck's as well as the first's.
-    ``MOMWIRE_ADVISORIES=off`` sends no request and gets none back, and the
-    printout is the one-shot's either way."""
+    """The Windows drop-in's launcher against the real warm server: a deck
+    the server answers raised its advisories in the server's process, and
+    they come back framed to THIS process's stderr under the divider naming
+    the deck, on every launch in ``deck`` and ``all`` mode, and never by
+    default. The printout is the one-shot's every time."""
     bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_TWIN_NAME,))
     room = _room()
     expected = _oracle(_DUP_DECK, tmp_path, basis="razor2p")
+    plan = (None, "deck", "deck", "stream", "off", "all")
+    shown = []
     try:
-        for index, setting in enumerate((None, None, "off")):
+        for index, setting in enumerate(plan):
             out = tmp_path / f"advised-{index}.out"
             # `_run` passes this process's environment on
             monkeypatch.delenv("PYTHONWARNINGS", raising=False)
@@ -1357,10 +1500,14 @@ def test_a_served_deck_carries_its_advisories_to_the_c_clients_stderr(
             assert proc.returncode == 0
             assert len(_listening(room)) == 1, "the deck was not served warm"
             assert out.read_bytes() == expected
-            if setting is None:
-                assert "DuplicateWire" in proc.stderr, (index, proc.stderr[:600])
-            else:
-                assert proc.stderr == "", proc.stderr[:600]
+            shown.append(proc.stderr.count("DuplicateWire"))
+            if setting in (None, "off", "stream"):
+                assert proc.stderr == "", (setting, proc.stderr[:300])
+            if proc.stderr:
+                head = mech.advisories_divider(str(_DUP_DECK))
+                assert proc.stderr.startswith(head), proc.stderr[:300]
+                assert proc.stderr.count(mech.ADVISORIES_DIVIDER_HEAD) == 1
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
+    assert shown == [0, 1, 1, 0, 0, 1]

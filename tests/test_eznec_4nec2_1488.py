@@ -630,14 +630,17 @@ def test_the_thin_client_reads_4nec2s_names_from_stdin(
     monkeypatch.chdir(engine_dir)
     _stdin(monkeypatch, _NAMES)
     monkeypatch.setattr("sys.argv", [str(engine_dir / name)])
+    monkeypatch.setenv(mech.ADVISORIES_ENV, "deck")
     sent = _in_process_server(monkeypatch, basis)
 
     assert eznec_client.main(None) == 0
 
     assert capsys.readouterr().out == ""
-    # the advisories' request (on by default) rides ahead of the stdin form's
+    # the advisories' request (asked for) rides ahead of the stdin form's
     assert len(sent) == 1
-    assert sent[0].startswith(mech.ADVISORIES_REQUEST + mech.EN_OPTIONAL_REQUEST)
+    assert sent[0].startswith(
+        mech.advisories_request("deck") + mech.EN_OPTIONAL_REQUEST
+    )
     assert (out_dir / "EXAMPLE3.GMO").read_bytes() == (
         EXAMPLE3 / "EXAMPLE3.GMO"
     ).read_bytes()
@@ -660,14 +663,15 @@ def test_the_thin_client_reads_4nec2s_names_from_stdin_for_nec42(
     monkeypatch.chdir(engine_dir)
     _stdin(monkeypatch, _NAMES)
     monkeypatch.setattr("sys.argv", [str(engine_dir / "momwire-nec42-sinusoidal")])
+    monkeypatch.delenv(mech.ADVISORIES_ENV, raising=False)
     sent = _in_process_server(monkeypatch, "sinusoidal")
 
     assert eznec_client.main(None) == 0
 
     assert capsys.readouterr().out == ""
-    # the advisories' request (on by default) rides ahead of the stdin form's
+    # no advisories' request by default (momwire#2119): the stdin form's first
     assert len(sent) == 1
-    assert sent[0].startswith(mech.ADVISORIES_REQUEST + mech.EN_OPTIONAL_REQUEST)
+    assert sent[0].startswith(mech.EN_OPTIONAL_REQUEST)
     printout = (out_dir / "EXAMPLE3.out").read_bytes().decode("latin-1")
     assert "NEC ERROR" not in printout and "NEC-4.2" in printout
     assert sorted(p.name for p in out_dir.iterdir()) == ["EXAMPLE3.inp", "EXAMPLE3.out"]
@@ -681,8 +685,12 @@ def test_the_thin_clients_two_argument_form_sends_the_deck_verbatim(
     monkeypatch.setattr(
         "sys.argv", ["momwire-nec5", str(deck), str(tmp_path / "d.out")]
     )
+    monkeypatch.delenv(mech.ADVISORIES_ENV, raising=False)
     sent = _in_process_server(monkeypatch, _serve.BASIS)
     assert eznec_client.main(None) == 0
-    # verbatim behind the advisories' request, which is on by default
-    assert sent == [mech.ADVISORIES_REQUEST + deck.read_bytes()]
+    # verbatim: advisories are off by default and ask for nothing
+    assert sent == [deck.read_bytes()]
+    monkeypatch.setenv(mech.ADVISORIES_ENV, "all")
+    assert eznec_client.main(None) == 0
+    assert sent[1] == mech.advisories_request("all") + deck.read_bytes()
     assert not (tmp_path / "d.GMO").exists()
