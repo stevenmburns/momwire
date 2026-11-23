@@ -28,7 +28,16 @@ from momwire.dropin.nec2c import _portal
 
 from test_sector_map_once_1929 import DECK
 
-_MEMOS = (WS._DUPLICATES_MEMO, WS._COINCIDENCE_MEMO, WS._SHORT_SEGMENTS_MEMO)
+# `_JUNCTIONS_MEMO` holds the whole normalised junction answer, so the
+# coincidence check inside it runs once (a miss) and is never asked again: its
+# three later steps are served one level up. `_GEOMETRY_MEMO` is the solver's
+# geometry tables.
+_MEMOS = (
+    WS._DUPLICATES_MEMO,
+    WS._JUNCTIONS_MEMO,
+    WS._SHORT_SEGMENTS_MEMO,
+    S._GEOMETRY_MEMO,
+)
 
 
 @pytest.fixture(params=[False, True], ids=["dense", "sector"])
@@ -65,24 +74,28 @@ def _sweep():
 
 def test_each_check_runs_once_across_the_fr_loop(route):
     before = [(m.hits, m.misses) for m in _MEMOS]
+    coincidence = (WS._COINCIDENCE_MEMO.hits, WS._COINCIDENCE_MEMO.misses)
     memoised = _sweep()
     assert len(memoised) == 4
     for memo, (hits, misses) in zip(_MEMOS, before, strict=True):
         # One computation for the structure, and the other three steps served.
         assert memo.misses - misses == 1
         assert memo.hits - hits == 3
+    assert WS._COINCIDENCE_MEMO.misses - coincidence[1] == 1
+    assert WS._COINCIDENCE_MEMO.hits - coincidence[0] == 0
 
     # The same sweep with memos that hold nothing: the same bits.
     for memo in _MEMOS:
         memo.clear()
     RS._SECTOR_MAP_CACHE.clear()
-    sizes = [m._size for m in _MEMOS]
+    memos = (*_MEMOS, WS._COINCIDENCE_MEMO)
+    sizes = [m._size for m in memos]
     try:
-        for memo in _MEMOS:
+        for memo in memos:
             memo._size = 0
         fresh = _sweep()
     finally:
-        for memo, size in zip(_MEMOS, sizes, strict=True):
+        for memo, size in zip(memos, sizes, strict=True):
             memo._size = size
     for a, b in zip(memoised, fresh, strict=True):
         for x, y in zip(a, b, strict=True):

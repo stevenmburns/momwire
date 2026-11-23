@@ -28,11 +28,16 @@ from ._vec3 import norm3
 _DUPLICATES_MEMO = IdentityMemo()
 _COINCIDENCE_MEMO = IdentityMemo()
 _SHORT_SEGMENTS_MEMO = IdentityMemo()
+_JUNCTIONS_MEMO = IdentityMemo()
 
 
 def _counts_key(n_per_edge_per_wire):
-    """The segment counts BY VALUE, as a memo's ``extra``."""
-    return tuple(tuple(int(c) for c in counts) for counts in n_per_edge_per_wire)
+    """The segment counts BY VALUE, as a memo's ``extra``. ``tuple`` of each
+    wire's counts, not a Python loop over every one: equal counts give equal
+    tuples whether they are ints or numpy integers."""
+    key = tuple(map(tuple, n_per_edge_per_wire))
+    hash(key)  # an unhashable count is the caller's TypeError, as int() was
+    return key
 
 
 def format_numbers(values) -> str:
@@ -248,6 +253,49 @@ def normalize_junctions(junctions, wires_polylines, n_per_edge_per_wire):
     row pins ``I_end = 0``, which is numerically a free end; as a junction
     PORT it is the natural form of a lone-conductor-end attachment.
     """
+    pls = frozen_tuple(wires_polylines)
+    if pls is not None and not (
+        junctions is None
+        or (
+            isinstance(junctions, (list, tuple))
+            and all(isinstance(group, (list, tuple)) for group in junctions)
+        )
+    ):
+        pls = None  # an iterator can be read once: building the key would eat it
+    if pls is not None:
+        # A solver per FR step re-validated the same groups
+        # (a hub of a few thousand wire ends is ~10 ms of Python a step).
+        # The answer is a function of the frozen polylines, the counts and
+        # the groups as given; it is handed back as fresh lists, because the
+        # caller owns what it gets. A refusal raises out of the compute and
+        # is never stored.
+        try:
+            extra = (
+                None
+                if junctions is None
+                else tuple(tuple(map(tuple, group)) for group in junctions),
+                _counts_key(n_per_edge_per_wire),
+            )
+            hash(extra)
+        except (TypeError, ValueError):
+            pls = None
+    if pls is None:
+        return _normalize_junctions(junctions, wires_polylines, n_per_edge_per_wire)
+    held = _JUNCTIONS_MEMO.get(
+        pls,
+        extra,
+        lambda: tuple(
+            tuple(group)
+            for group in _normalize_junctions(
+                junctions, wires_polylines, n_per_edge_per_wire
+            )
+        ),
+    )
+    return [list(group) for group in held]
+
+
+def _normalize_junctions(junctions, wires_polylines, n_per_edge_per_wire):
+    """`normalize_junctions`' work, every call (see there)."""
     n_w = len(wires_polylines)
     if junctions is None:
         junctions = coincident_end_groups(wires_polylines)

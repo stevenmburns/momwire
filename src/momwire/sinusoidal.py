@@ -72,6 +72,7 @@ from . import (
     _wire_spec,
 )
 from . import _mesh_walk
+from ._identity_memo import IdentityMemo, frozen_tuple
 from . import bspline as _bspline
 from . import _lapack
 from .bspline import SINGULAR_ENRICHMENT_NEVER
@@ -90,6 +91,13 @@ from ._stable import asinh_diff
 from ._stable import expm1_neg_j as _expm1_neg_j
 from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
 from ._vec3 import norm3
+
+# The geometry tables of the structure last solved, held by the
+# identity of its prepared mesh's frozen polylines (`_identity_memo`) so a
+# solver per FR step of one deck builds them once. Two entries: the deck being
+# served and, in a resident daemon, the one before it. Entries hold strong
+# references to their polylines, so an id in a key is never another array's.
+_GEOMETRY_MEMO = IdentityMemo(size=2)
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 # The opt-in `nec2_far_approx` (NEC-2's interaction approximation): the
@@ -2370,7 +2378,77 @@ class SinusoidalSolver(
         is refused here, momwire#212), so a feed sits at its segment's centre."""
         return False
 
+    def _geometry_memo_key(self):
+        """``(frozen polylines, extra)`` for :data:`_GEOMETRY_MEMO`, or None
+        when this solver's geometry is not safe to share.
+
+        The tables are a function of the structure, never of k: the wires
+        (the very arrays of a prepared mesh, recognised by identity, so a
+        solver built from any other arrays never hits), their segment counts,
+        the junction groups, where the feeds sit and how they snap, the ground
+        plane's height and the junction rule. The class is in the key because
+        the snap and the crossing rules are the family's. A deck that sets a
+        finite ground, a lower medium or any per-wire loading is left alone:
+        the crossing test and the feed snap's mirror test read those, and a
+        multi-frequency deck is the case that pays, not these.
+        """
+        if self.ground_eps is not None:
+            return None
+        for name in (
+            "wire_conductivity",
+            "insulation_radius",
+            "insulation_eps_r",
+            "insulation_loss_tangent",
+            "distributed_rlc",
+        ):
+            if getattr(self, name, None) is not None:
+                return None
+        arrays = frozen_tuple(self.wires_polylines)
+        if arrays is None:
+            return None
+        try:
+            extra = (
+                type(self),
+                tuple(map(tuple, self.n_per_edge_per_wire)),
+                tuple(map(tuple, self.junctions)),
+                tuple((int(w), arc) for w, arc, _v in self.feeds),
+                self.feed_model,
+                self.ground_z,
+                self.junction_rule,
+                np.asarray(self._radius_per_wire, dtype=np.float64).tobytes(),
+            )
+            hash(extra)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        return arrays, extra
+
     def _build_geometry(self):
+        """The geometry tables (:meth:`_build_geometry_fresh`), shared by every
+        solver of one prepared mesh: a deck solves one structure at every
+        frequency and the tables do not know the frequency, so the second
+        solver takes the first's. Only a solver whose inputs
+        :meth:`_geometry_memo_key` can name shares; any other builds its own,
+        as it always did. A hit is the very dict a fresh build returns, its
+        arrays made read-only so a solver that wrote to them would fail where
+        it wrote rather than change another solver's answer."""
+        if self._cached_geometry is not None:
+            return self._cached_geometry
+        key = self._geometry_memo_key()
+        if key is None:
+            return self._build_geometry_fresh()
+        geom = _GEOMETRY_MEMO.get(key[0], key[1], self._build_geometry_frozen)
+        self._cached_geometry = geom
+        return geom
+
+    def _build_geometry_frozen(self):
+        """:meth:`_build_geometry_fresh`, its arrays read-only (see there)."""
+        geom = self._build_geometry_fresh()
+        for value in geom.values():
+            if isinstance(value, np.ndarray):
+                value.setflags(write=False)
+        return geom
+
+    def _build_geometry_fresh(self):
         """Discretize wires into segments and build the N^-/N^+ neighbor
         tables for every segment, with arc-flip σ signs.
 
