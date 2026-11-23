@@ -3,9 +3,10 @@ momwire#2065): the NEC-2 portal's point-matched sinusoidal launcher,
 `momwire-nec2c-sinusoidal`, as one Python-free executable.
 
 Every byte is held to the launcher's (this environment's
-`momwire-nec2c-sinusoidal`), except the one line each solve fills with
-MEASURED time -- MATRIX TIMING's `FILL: <ms> msec  FACTOR: <ms> msec` --
-whose two numbers are masked by exact line pattern (`_mask`). Covered:
+`momwire-nec2c-sinusoidal`), except the lines filled with MEASURED time --
+MATRIX TIMING's `FILL: <ms> msec  FACTOR: <ms> msec`, each solve's, and the
+` RUN TIME =` trailer an EN closes the run with (momwire#2133) -- whose
+numbers are masked by exact line pattern (`_mask`). Covered:
 
 - every deck of the nec2c corpus (`tests/fixtures/nec_portal`, the 71 decks
   the drop-in is held to against nec2c itself), sent on stdin as SimNEC sends
@@ -67,11 +68,12 @@ REFUSED_TEXT = (
 )
 
 FILL = re.compile(rb"^( {31}FILL: )\d+( msec  FACTOR: )\d+( msec)\r?$", re.M)
+RUN_TIME = re.compile(rb"^( RUN TIME =)[ 0-9.]{10}(\r?)$", re.M)
 NOT_SERVED = b"not served by this build"
 
 
 def _mask(printout: bytes) -> bytes:
-    return FILL.sub(rb"\1<t>\2<t>\3", printout)
+    return RUN_TIME.sub(rb"\1<t>\2", FILL.sub(rb"\1<t>\2<t>\3", printout))
 
 
 def _launcher() -> str:

@@ -13,7 +13,8 @@
 //
 // Every byte is the Python launcher's (`tests/test_standalone_nec2c.py`):
 // the banner, each deck's frame (`deck_frame`: the printout, the NX or EN
-// echo, the banner again after an NX), EOF closing an open deck as EN does,
+// echo, the banner again after an NX, the RUN TIME trailer after an EN),
+// EOF closing an open deck as EN does,
 // the argument errors of the shared launcher shell, `--legacy-probe`'s
 // refusal and `--save-decks`. What the C++ route does not answer is a
 // refusal frame naming why ("not served by this build: ..."), and the
@@ -110,6 +111,24 @@ void save_deck(const std::string &latin1_body) {
 #endif
 }
 
+// `_RUN_STARTED`: when the current run (`session`) began, RUN TIME's zero
+std::chrono::steady_clock::time_point g_run_started = std::chrono::steady_clock::now();
+
+// `run_time_lines(frame, started)` (momwire#2133): the trailer an EN frame
+// closes the run with -- a blank line and ` RUN TIME =` with the run's wall
+// seconds in %10.3f, nec2dxs's line -- or nothing for a frame that carries a
+// refusal (an `ERROR: ` line).
+void append_run_time(std::vector<std::string> &out) {
+    for (const std::string &l : out)
+        if (l.compare(0, 7, "ERROR: ") == 0) return;
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - g_run_started).count();
+    char cell[64];
+    std::snprintf(cell, sizeof cell, "%10.3f", seconds);
+    out.push_back(std::string());
+    out.push_back(std::string(" RUN TIME =") + cell);
+}
+
 // `deck_frame(body, terminator)`: the frame's stdout text and stderr text
 // (UTF-8, `\n`), each as `_frame_chunks` joins them.
 void deck_frame(const std::string &body, const std::string &terminator, std::string &out_text,
@@ -153,6 +172,7 @@ void deck_frame(const std::string &body, const std::string &terminator, std::str
     for (const std::string &l : out)
         if (l.compare(0, 15, "  DATA CARD No:") == 0) echoed++;
     out.push_back(mw::nec2::sentinel_card(echoed + 1, terminator));
+    if (terminator == "EN") append_run_time(out);
     if (terminator == "NX") {
         const std::vector<std::string> banner = mw::nec2::banner_lines(BANNER_SUFFIX);
         out.insert(out.end(), banner.begin() + 1, banner.end());
@@ -278,6 +298,7 @@ bool blank(const std::string &latin1) {
 // stdout). `utf8_in`: the lines are UTF-8 (stdin), else latin-1 (a file).
 template <class Sink>
 int session(Lines &lines, bool utf8_in, Sink sink) {
+    g_run_started = std::chrono::steady_clock::now();  // `resident_loop`
     if (!sink(join(mw::nec2::banner_lines(BANNER_SUFFIX)) + "\n")) return 0;
     std::vector<std::string> body;
     bool body_ok = true;
