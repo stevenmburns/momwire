@@ -1321,6 +1321,7 @@ class SinusoidalSolver(
         nec2_far_approx=None,
         nec2_far_approx_range=None,
         wire_labels=None,
+        mixed_lu=None,
     ):
         # momwire#1644: which condition on charge a junction's basis functions
         # take. "nec2" (the default) is NEC-2's log rule at every segment end,
@@ -1431,7 +1432,12 @@ class SinusoidalSolver(
             pair_reuse=None if pair_reuse is None else bool(pair_reuse),
             nec2_end_cap=nec2_end_cap,
             nec2_far_approx=nec2_far_approx,
+            mixed_lu=mixed_lu,
         )
+        # momwire#2125: the dense port solve by complex64 LU and complex128
+        # refinement, falling back to the ordinary factor (`_lapack`'s
+        # `mixed_lu_scope`). Off is the flag-off solve, bit for bit.
+        self._mixed_lu = bound["mixed_lu"]
         # momwire#2033: NEC-2's free-end condition, a compatibility option
         # that changes the answer on purpose. None defers to
         # MOMWIRE_X_NEC2_END_CAP; off is the zero-current end, bit for bit.
@@ -8745,7 +8751,10 @@ class SinusoidalSolver(
         # digits once against the copy's; the NEC-2 and NEC-4.2 sinusoidal
         # executables factor the same way (`port_solution`), so they stay
         # this route's bytes. G holds the factors afterwards.
-        alphas = _lapack.solve_transposed(G, B)  # (n_segs, n_ports)
+        # Under `mixed_lu` (momwire#2125) the complex64 route may answer and
+        # leave G intact; it is dropped here either way.
+        with _lapack.mixed_lu_scope(self._mixed_lu):
+            alphas = _lapack.solve_transposed(G, B)  # (n_segs, n_ports)
         del G
 
         Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
@@ -8819,7 +8828,8 @@ class SinusoidalSolver(
                         geom, self.k, self._medium_eta(medium)
                     )
                 # Gᵀ in G's storage, as `compute_port_solution` (momwire#2071).
-                alpha = _lapack.solve_transposed(G, v)
+                with _lapack.mixed_lu_scope(self._mixed_lu):
+                    alpha = _lapack.solve_transposed(G, v)
                 del G
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out

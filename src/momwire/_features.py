@@ -951,6 +951,47 @@ FEATURES: dict[str, Feature] = {
             drift=1e-3,
             offer=True,
         ),
+        # The dense port solve by complex64 LU and complex128 iterative
+        # refinement (momwire#2125): `_lapack.solve` / `solve_transposed`
+        # under `mixed_lu_scope`, which the sinusoidal solver sets around its
+        # one-shot solves (`compute_port_solution`, the swept impedance).
+        # Shipped LAPACK and BLAS routines only (cgetrf, cgetrs, the complex128
+        # residual product), so python-kind: on the drop-in it runs,
+        # uncertified, and the NEC-2 launcher's nec2c-layout printout does
+        # not name it. The refinement must reach a normwise backward error of
+        # u64 (2**-53), or the floor of a complex128 residual under zcgesv's
+        # sqrt(n) u64, after at least two corrections, contracting
+        # by 2**-6 each sweep, within five; anything else -- no contraction,
+        # the cap, an inf or NaN, a singular complex64 factor, a matrix whose
+        # range complex64 cannot hold -- falls back to the ordinary complex128
+        # factor on the untouched Z and returns the flag-off bits. Memory:
+        # Z stays intact for the residuals, plus its complex64 copy, 1.5 Z
+        # (the allowance with the flag on is 1.5 * 16 N^2 + 512 MB). No host
+        # LAPACK route: the executables' table carries no cgetrf, so they
+        # refuse the variable (no EXE_FEATURES row).
+        #
+        # `drift`: see the measured table below the entry (momwire#2125).
+        Feature(
+            name="mixed_lu",
+            reach=1,
+            env="MOMWIRE_X_MIXED_LU",
+            solvers=("sinusoidal",),
+            kind="python",
+            issue=2125,
+            since="2026-11-23",
+            kwarg="mixed_lu",
+            paths=("tests/test_mixed_lu_2125.py",),
+            label="mixed-precision solve",
+            summary=(
+                "Factors the moment matrix in single precision, about twice as "
+                "fast, then refines the answer against the double-precision "
+                "matrix until it is as accurate as the ordinary solve; any "
+                "solve that does not converge cleanly is redone the ordinary "
+                "way. Memory: the matrix plus a half-size copy."
+            ),
+            drift=1e-12,
+            offer=True,
+        ),
     )
 }
 
