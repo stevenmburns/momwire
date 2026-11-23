@@ -316,6 +316,9 @@ def test_the_interpolant_is_exact_on_a_polynomial():
 # --- the Python route ------------------------------------------------------------
 
 
+# Slow lane at the 0.97.1 release: its default-lane median passed the 5 s
+# budget (scripts/test_durations.py, 25 main runs).
+@pytest.mark.slow
 def test_python_off_and_unset_are_the_same_bytes(tmp_path):
     unset, err = _python(SWEEP, tmp_path / "unset", _clean_env(**{TRACE: "1"}))
     off, _ = _python(SWEEP, tmp_path / "off", _clean_env(**{ENV: "0", TRACE: "1"}))
