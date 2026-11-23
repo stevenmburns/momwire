@@ -122,10 +122,11 @@ contract:
 - ``solve_transposed``: ``solve``'s errors, warning, pivot screen and
   condition estimate (rcond₁ of ``a``, from the factors of ``aᵀ``), on
   ``a``'s own storage; its docstring says what differs.
-- ``solve`` / ``solve_transposed`` under :func:`mixed_lu_scope` (the opt-in
-  ``mixed_lu`` feature, momwire#2125): complex64 getrf plus complex128
-  iterative refinement where it converges, else the ordinary route and its
-  bits (:func:`_mixed_refine`). Never on the host route.
+- ``solve`` / ``solve_transposed`` / ``factor_and_solve`` under
+  :func:`mixed_lu_scope` (the opt-in ``mixed_lu`` feature, momwire#2125):
+  complex64 getrf plus complex128 iterative refinement where it converges,
+  else the ordinary route and its bits (:func:`_mixed_refine`). Never on the
+  host route.
 - ``solve_stacked``/``inv_stacked``: numpy's broadcasting of stacked
   matrices, a 1-D right-hand side read as a vector, the common result dtype,
   ``LinAlgError`` on an exactly singular slice, and no finiteness check.
@@ -513,9 +514,69 @@ def factor_and_solve(a, b, overwrite_a=False, overwrite_b=False):
     answer to the bit, without its condition estimate (see
     `lu_factor_strict`). ``overwrite_a`` factors an F-contiguous ``a`` in its
     own storage (``a`` then holds the factors); ``overwrite_b`` lets an
-    F-ordered ``b`` take the solution."""
+    F-ordered ``b`` take the solution.
+
+    Under :func:`mixed_lu_scope` (the ``mixed_lu`` feature, momwire#2125) the
+    system is first tried by `_mixed_factor_and_solve`, which leaves ``a``
+    intact whatever ``overwrite_a`` says; where it falls back or declines,
+    the two lines below run exactly as with the flag off, ``overwrite_a``
+    and all, so the answer is the flag-off one to the bit."""
+    if _MIXED.get():
+        x = _mixed_factor_and_solve(a, b)
+        if x is not None:
+            return x
     lu_piv = lu_factor_strict(a, overwrite_a=overwrite_a)
     return lu_solve(lu_piv, b, overwrite_b=overwrite_b)
+
+
+@_factor_stage
+def _mixed_factor_and_solve(a, b):
+    """`factor_and_solve`'s mixed-precision attempt: the solution, or None
+    for the ordinary route. A matrix in either order is read in place: an
+    F-ordered ``a`` (the dense fills' layout) is cast to complex64 as it
+    stands and solved with trans 0; a C-ordered one is cast as ``aᵀ`` and
+    solved with trans 1, as `solve_transposed` does. Any other layout, or an
+    ``a`` whose dtype is not the solve's, declines. A non-finite system goes
+    on uncounted to the ordinary route, which raises. In the factor stage,
+    so a printout's FACTOR time is the whole attempt; a fallback's own
+    factor is counted after it."""
+    a1, b0 = np.asarray(a), np.asarray(b)
+    if not (
+        _square(a1)
+        and a1.shape[0] > 1
+        and b0.ndim in (1, 2)
+        and b0.size
+        and b0.shape[0] == a1.shape[0]
+    ):
+        return None
+    dtype = np.result_type(a1.dtype, b0.dtype)
+    if not _mixed_wanted(_host_for(dtype), dtype, b0):
+        return None
+    if a1.dtype != dtype or not (a1.flags.f_contiguous or a1.flags.c_contiguous):
+        _mixed_declined()
+        return None
+    # The matrix norm is the one `_finite_1norm_c` reads in place, threaded:
+    # ||a1||_1 of a C-ordered a1, ||a1||_inf (= ||a1ᵀ||_1) of an F-ordered
+    # one, whose transpose is C-ordered. scipy's single-threaded lange("1")
+    # on the F-ordered matrix took 0.16 s at n = 4096 (8 threads), most of
+    # the factor saving.
+    if a1.flags.f_contiguous:
+        finite, anorm = _finite_1norm_c(a1.T)
+        norm, trans, src = "inf", 0, a1
+    else:
+        finite, anorm = _finite_1norm_c(a1)
+        norm, trans, src = "1", 1, a1.T
+
+    def at32():
+        return np.array(src, dtype=np.complex64, order="F")
+
+    if not (finite and np.isfinite(b0).all()):
+        return None
+    _thread_policy.hold()
+    n = a1.shape[0]
+    b2 = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, dtype)
+    x = _mixed_refine(a1, at32, trans, b2, anorm, norm)
+    return None if x is None else x.reshape(b0.shape)
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +727,26 @@ _U32 = float(np.finfo(np.float32).eps) / 2
 MIXED_TOLERANCE = _U64
 
 
+#: The forward half of the stop (momwire#2125, from the sg census): a
+#: normwise backward error at u64 is not enough on a badly scaled matrix.
+#: On a 45-unknown sg deck whose rows and columns span 1.5e5 (kappa_1 3e7)
+#: two corrections reach eta 5e-17 and leave the answer 6e-11 from the
+#: ordinary route's, where a second complex128 factor sits 1e-12 from it;
+#: its componentwise backward error is still 9e-11. So a column must also
+#: have stopped changing: its last correction d_k, as ||d_k||_inf /
+#: ||x||_inf, times that correction's contraction d_k / d_(k-1) (the error
+#: it leaves), at or under MIXED_FORWARD_TOLERANCE, 2**-44 (5.7e-14), a
+#: seventeenth of the declared drift and under the complex128 scatter; or,
+#: once the corrections stop contracting (MIXED_CONTRACTION), the last one
+#: at or under MIXED_FORWARD_FLOOR, 2**-40 (9.1e-13). One more sweep there
+#: reaches 1.2e-12 from the ordinary route, the second factor's own scatter.
+#: (Not sqrt(n) u64: on a bs1 deck, n = 404, the corrections contract by
+#: 2e-3 while the residual is already at its floor, and that bar takes all
+#: five sweeps for an answer 4e-13 from the ordinary one.)
+MIXED_FORWARD_TOLERANCE = 2.0**-44
+MIXED_FORWARD_FLOOR = 2.0**-40
+
+
 def _mixed_accept(n: int) -> float:
     """zcgesv's stop, sqrt(n) u64: the backward error a column may stop at
     once it has stopped contracting (MIXED_TOLERANCE)."""
@@ -697,15 +778,29 @@ MIXED_SWEEPS_MIN = 2
 #: 1.5e5) contracts by 1e-4 to 3e-4 a sweep.
 MIXED_CONTRACTION = 2.0**-6
 
-#: Above this many right-hand sides the route declines: each column costs a
-#: residual product and a complex64 back-substitution per sweep, which
-#: overtakes the factor saving. Measured on the W8IO whip's Z (n = 4392,
-#: Rocketlake, 8 threads, 3 sweeps, medians of 5 paired runs, ordinary over
-#: mixed): 1.50x at 1 right-hand side, 1.27x at 3, 1.16x at 8, 1.11x at 32,
-#: 1.04x at 64, 0.94x at 96, 0.80x at 128. The saving is O(n^3) and the
-#: refinement O(n^2 nrhs), so the break-even grows with n and is higher at
-#: one thread; 64 is the 8-thread figure at this n, the conservative one.
+#: Where the route declines by size: below MIXED_MIN_N unknowns, or above
+#: `_mixed_nrhs_cap(n)` right-hand sides. The complex64 factor saves O(n^3)
+#: and each sweep costs O(n^2 nrhs); at small n neither threads well.
+#: Measured on Rocketlake (`factor_and_solve`, F-ordered, overwrite_a,
+#: random complex matrices refining in 2 sweeps, medians of 5, ordinary over
+#: mixed), 8 threads: n = 512 0.95x, 768 1.04x, 1024 1.14x, 2048 1.57x,
+#: 4096 1.53x at one right-hand side; at three, 1024 0.93x, 1536 1.00x,
+#: 2048 1.32x, 4096 1.21x. One thread: 512 0.88x, 768 1.05x, 1024 1.15x,
+#: 4096 1.63x. And the whip's own Z (n = 4392, 8 threads, 3 sweeps):
+#: 1.50x at 1, 1.27x at 3, 1.16x at 8, 1.04x at 64, 0.94x at 96. So
+#: n >= 1024, and the cap grows as n^2 to 64 at n = 4392 (3 at 1024, 13 at
+#: 2048) and as n past it, the asymptote the O(n^3) / O(n^2 nrhs) ratio
+#: gives (182 at the bs2 whip's 12,534).
+MIXED_MIN_N = 1024
 MIXED_MAX_NRHS = 64
+MIXED_NRHS_N = 4392
+
+
+def _mixed_nrhs_cap(n: int) -> int:
+    """The most right-hand sides the route takes at order `n`."""
+    r = n / MIXED_NRHS_N
+    return int(MIXED_MAX_NRHS * min(r * r, r))
+
 
 # The cast guard, on the matrix 1-norm the solve already reads. No entry
 # exceeds ||A||_1, so ||A||_1 <= _CAST_HI keeps every entry 2**32 below
@@ -759,16 +854,20 @@ def _mixed_correction(getrs, lu32, ipiv, r, trans):
     return d32.astype(np.complex128) * np.exp2(e)
 
 
-def _mixed_refine(a1, at32, trans, b2, anorm):
+def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
     """`a1 x = b2` by mixed-precision iterative refinement, or None to fall
     back to the ordinary complex128 route.
 
     `a1` is the complex128 matrix (read, never written), `at32` a callable
     returning a fresh F-contiguous complex64 matrix that LAPACK's getrf
     factors, and `trans` the getrs flag that turns its factors into a solve
-    with `a1` (`solve_transposed`: ``a1ᵀ`` and 1; `solve`: ``a1`` and 0).
-    `b2` is the (n, k) complex128 right-hand side (not written) and `anorm`
-    ||a1||_1. Returns the (n, k) complex128 solution, F-ordered.
+    with `a1` (`solve_transposed`: ``a1ᵀ`` and 1; `solve`: ``a1`` and 0;
+    `factor_and_solve` either, by ``a1``'s order).
+    `b2` is the (n, k) complex128 right-hand side (not written), `anorm`
+    ||a1|| in the norm `norm` names ("1", or "inf" for `factor_and_solve`'s
+    F-ordered matrix), and the backward error is taken in that norm, the
+    vector norms to match. Returns the (n, k) complex128 solution,
+    F-ordered.
 
     Stop: every column's normwise backward error in the 1-norm,
     ``||r||_1 / (||A||_1 ||x||_1)``, at or under MIXED_TOLERANCE (u64), or
@@ -779,7 +878,14 @@ def _mixed_refine(a1, at32, trans, b2, anorm):
     Memory: the complex64 factors (half of a1) and (n, k) vectors; the
     factors are dropped before returning, either way."""
     n = a1.shape[0]
-    record: dict = {"n": n, "nrhs": b2.shape[1], "sweeps": 0, "eta": [], "ratio": []}
+    record: dict = {
+        "n": n,
+        "nrhs": b2.shape[1],
+        "sweeps": 0,
+        "eta": [],
+        "ratio": [],
+        "delta": [],
+    }
     if not (n * _CAST_LO <= anorm <= _CAST_HI):
         _mixed_fallback("range", record)
         return None
@@ -793,14 +899,19 @@ def _mixed_refine(a1, at32, trans, b2, anorm):
     tau, accept = MIXED_TOLERANCE, _mixed_accept(n)
     x = _mixed_correction(getrs, lu32, ipiv, b2, trans)
     prev = None
+    # The last correction's size, ||d||_inf / ||x||_inf per column, and the
+    # one before it (the forward test; None until two corrections exist).
+    delta = dprev = None
     k = 0
     while True:
         if not np.isfinite(x).all():
             reason = "nonfinite"
             break
         r = b2 - a1 @ x
-        rn = np.abs(r).sum(axis=0)
-        xn = np.abs(x).sum(axis=0)
+        if norm == "1":
+            rn, xn = np.abs(r).sum(axis=0), np.abs(x).sum(axis=0)
+        else:
+            rn, xn = np.abs(r).max(axis=0), np.abs(x).max(axis=0)
         if not (np.isfinite(rn).all() and np.isfinite(xn).all()):
             reason = "nonfinite"
             break
@@ -813,10 +924,25 @@ def _mixed_refine(a1, at32, trans, b2, anorm):
                 ratio = np.where(prev > 0, rn / prev, 0.0)
             record["ratio"].append(float(ratio.max()))
             slow = ratio > MIXED_CONTRACTION
-        # Converged: at u64, or at the floor (no longer contracting) under
+        # Backward: at u64, or at the floor (no longer contracting) under
         # zcgesv's bar. Not contracting above that bar is a stall.
-        done = (eta <= tau) | (slow & (eta <= accept))
-        if np.any(slow & ~done):
+        back = (eta <= tau) | (slow & (eta <= accept))
+        # Forward (`MIXED_FORWARD_TOLERANCE`): the error the last correction
+        # leaves, predicted as its size times its contraction; or the
+        # correction stopped contracting at a size under the floor. One that
+        # stops contracting above the floor stalls.
+        fwd = np.zeros(eta.shape, dtype=bool)
+        fwd_slow = np.zeros(eta.shape, dtype=bool)
+        if dprev is not None:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rho = np.where(dprev > 0, delta / dprev, 0.0)
+            fwd_slow = rho > MIXED_CONTRACTION
+            fwd = (delta * np.minimum(rho, 1.0) <= MIXED_FORWARD_TOLERANCE) | (
+                fwd_slow & (delta <= MIXED_FORWARD_FLOOR)
+            )
+            record["delta"].append(float(delta.max()))
+        done = back & fwd
+        if np.any(slow & ~back) or np.any(fwd_slow & ~fwd):
             reason = "stall"
             break
         if k >= MIXED_SWEEPS_MIN and done.all():
@@ -831,7 +957,14 @@ def _mixed_refine(a1, at32, trans, b2, anorm):
         if k == MIXED_SWEEPS_MAX:
             reason = "cap"
             break
-        x = x + _mixed_correction(getrs, lu32, ipiv, r, trans)
+        d = _mixed_correction(getrs, lu32, ipiv, r, trans)
+        x = x + d
+        with np.errstate(divide="ignore", invalid="ignore"):
+            xm = np.abs(x).max(axis=0)
+            dprev, delta = delta, np.where(xm > 0, np.abs(d).max(axis=0) / xm, 0.0)
+        if dprev is None:
+            # x0 was the first correction: the whole of x.
+            dprev = np.ones_like(delta)
         prev = rn
         k += 1
         record["sweeps"] = k
@@ -841,14 +974,21 @@ def _mixed_refine(a1, at32, trans, b2, anorm):
 
 
 def _mixed_wanted(fns, dtype, b0) -> bool:
-    """Whether a `solve` / `solve_transposed` call tries the mixed route:
-    asked for (`mixed_lu_scope`), and not declined (counted) for a host
-    LAPACK (it publishes no complex64 getrf), a dtype other than complex128,
-    or more than MIXED_MAX_NRHS right-hand sides."""
+    """Whether a `solve` / `solve_transposed` / `factor_and_solve` call tries
+    the mixed route: asked for (`mixed_lu_scope`), and not declined (counted)
+    for a host LAPACK (it publishes no complex64 getrf), a dtype other than
+    complex128, fewer than MIXED_MIN_N unknowns, or more right-hand sides
+    than `_mixed_nrhs_cap` allows at this order."""
     if not _MIXED.get():
         return False
+    n = b0.shape[0]
     nrhs = 1 if b0.ndim == 1 else b0.shape[1]
-    if fns is not None or dtype != _C128 or nrhs > MIXED_MAX_NRHS:
+    if (
+        fns is not None
+        or dtype != _C128
+        or n < MIXED_MIN_N
+        or nrhs > _mixed_nrhs_cap(n)
+    ):
         _mixed_declined()
         return False
     return True
@@ -1030,8 +1170,8 @@ def solve_transposed(a, b):
     system, or a dtype LAPACK's getrf does not take is `scipy.linalg.solve`'s.
 
     Under :func:`mixed_lu_scope` (the ``mixed_lu`` feature, momwire#2125) a
-    complex128 system on the no-host route with at most `MIXED_MAX_NRHS`
-    right-hand sides is first tried by :func:`_mixed_refine`, which factors
+    complex128 system on the no-host route that the size rule takes
+    (`_mixed_wanted`) is first tried by :func:`_mixed_refine`, which factors
     a complex64 copy of ``aᵀ`` and leaves ``a`` INTACT; it answers only when
     the refinement reaches complex128's backward error, so no condition
     warning could fire there and the estimate is not run. Where it falls
