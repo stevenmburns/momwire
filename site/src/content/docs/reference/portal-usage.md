@@ -455,6 +455,30 @@ drop-ins name it on printout line 2 (`+pair_reuse`, followed by
 `uncertified on this platform` on macOS). The standalone executables refuse
 it.
 
+### Mixed-precision solve
+
+`MOMWIRE_X_MIXED_LU=1` changes how the `sinusoidal` route
+(`momwire-nec2c-sinusoidal`) solves its matrix, not how it fills it. The
+matrix is factored in single precision, about twice as fast as the ordinary
+double-precision factor, and the answer is then refined against the
+double-precision matrix until it is as accurate as the ordinary solve. Each
+refinement step must cut the error by a fixed factor; a matrix where it does
+not (an ill-conditioned one), or one whose values single precision cannot
+hold, is solved the ordinary way instead, with the ordinary answer to the
+bit. It is **off by default**.
+
+On the W8IO ELT whip (4,392 segments, 13 frequencies) the printout is
+identical to the stock one apart from its timing lines, and the input
+impedance moves by at most 2.5e-13 relative, the same size as the difference
+between two ordinary solves at different thread counts. It costs memory:
+the matrix plus a half-size copy, where the ordinary solve holds the matrix
+alone. A solve with more than 64 ports is solved the ordinary way.
+
+It is certified for the hosted antennaknobs app only (Linux, avx2). On the
+drop-ins it runs the same code, not yet certified there; this launcher's
+printout keeps nec2c's layout and does not name it. The standalone
+executables refuse it.
+
 ## How many engines to run
 
 A momwire process is not a 2 MB C binary: each carries NumPy, SciPy and
