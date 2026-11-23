@@ -48,8 +48,13 @@ def _run(deck: str, launcher: str = "momwire-nec2c-sinusoidal", advisories=True)
 
 
 def _untimed(printout: str) -> str:
-    """The printout without its wall-clock FILL/FACTOR line."""
-    return "\n".join(ln for ln in printout.splitlines() if "FILL:" not in ln)
+    """The printout without its wall-clock lines: FILL/FACTOR and the
+    closing RUN TIME (momwire#2133)."""
+    return "\n".join(
+        ln
+        for ln in printout.splitlines()
+        if "FILL:" not in ln and not ln.startswith(" RUN TIME =")
+    )
 
 
 def _step_lines(stderr: str) -> list[str]:

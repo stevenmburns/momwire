@@ -160,6 +160,7 @@ stderr; the protocol is byte-identical in all three modes.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 import io
 import itertools
@@ -739,6 +740,37 @@ _NEAR_H_TABLE_HEADER = (
     "      AMPS/M  DEGREES",
 )
 _NEAR_FIELD_TIME = "    Near Field Compute Time 0"
+
+# The run's closing trailer (momwire#2133): NEC-2's own engines end a run
+# with one, and 4nec2 rejects a printout without it ("Check output"). The
+# shape is 4nec2's bundled nec2dxs's, measured in its captures: the EN echo,
+# one blank line, then the label and the run's wall-clock seconds right-
+# justified in ten columns to three decimals (`` RUN TIME =     0.063``),
+# the NEC-4.2 and NEC-5 slots' trailer exactly. Once per program run, after
+# the EN that ends it: an NX-closed deck carries none (nec2dxs prints one
+# RUN TIME at the end of a chained deck), so SimNEC's resident stream, which
+# is NX-framed and never sends EN, never sees the line. SimNEC's reader would
+# take it anyway: ``RUN TIME =`` is one of its end-of-response triggers
+# (grammar doc section 2), as genuine nec2c's ``TOTAL RUN TIME:`` is.
+_RUN_TIME_LABEL = " RUN TIME ="
+
+# When the current run began (:func:`resident_loop`): its RUN TIME's zero.
+# A context variable, so a shared server's connections, each a run of its
+# own, keep their own.
+_RUN_STARTED: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "nec2c_run_started", default=None
+)
+
+
+def run_time_lines(frame: list[str], started: float) -> list[str]:
+    """The trailer that closes a run on ``EN``: a blank line and ``RUN TIME``,
+    or nothing when the frame carries a refusal (an ``ERROR:`` line), which
+    NEC-2's engines end without one and which 4nec2 should then flag, as the
+    NEC-5 slot's refusal printout has no ``RUN TIME`` either."""
+    if any(line.startswith(_ERROR_TOKEN) for line in frame):
+        return []
+    return ["", f"{_RUN_TIME_LABEL}{time.perf_counter() - started:10.3f}"]
+
 
 # Elements per momwire mesh segment when evaluating a near field: the one
 # constant every seam's near field resamples at (`momwire._near_readout`).
@@ -4243,13 +4275,20 @@ def deck_frame(body: str, terminator: str = "NX") -> tuple[list[str], list[str]]
     ``terminator="EN"`` is the standalone variant (#901): the echo names the
     card that actually arrived, and the trailing banner is omitted — genuine
     nec2c reprints its banner only at NX, in anticipation of a next deck that
-    EN says will never come.
+    EN says will never come. EN ends the run, so its frame closes with the
+    ``RUN TIME`` trailer (:func:`run_time_lines`, momwire#2133), counted from
+    the start of the :func:`resident_loop` it arrived in.
     """
     global _decks_rendered
+    started = _RUN_STARTED.get()
+    if started is None:  # a frame with no run around it: its own seconds
+        started = time.perf_counter()
     _save_deck(body)
     out, err = render_deck(body)
     echoed = sum(1 for line in out if line.startswith("  DATA CARD No:"))
     out.append(fmt_data_card(echoed + 1, Card(terminator, (), terminator)))
+    if terminator == "EN":
+        out += run_time_lines(out, started)
     if terminator == "NX":
         # The oracle reprints its banner right after consuming NX, in
         # anticipation of the next deck; SEEKING ignores it. Reproduced so a
@@ -4766,7 +4805,11 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None, scope=None) -> int:
     (momwire#2119).
     """
     the_seam = portal_seam() if scope is None else scope(portal_seam())
-    return run_session(the_seam, stdin, stdout, stderr, solve_lock)
+    token = _RUN_STARTED.set(time.perf_counter())  # RUN TIME's zero
+    try:
+        return run_session(the_seam, stdin, stdout, stderr, solve_lock)
+    finally:
+        _RUN_STARTED.reset(token)
 
 
 # --------------------------------------------------------------------------
