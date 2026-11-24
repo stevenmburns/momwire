@@ -1,6 +1,6 @@
 ---
 title: "Which momwire to run on Windows"
-description: The standalone executable, the EZNEC drop-in, the single-file preview, or pip — which to use on Windows, and what each costs, measured on momwire 0.95.0's release builds.
+description: The standalone executable, the EZNEC drop-in, the single-file preview, or pip — which to use on Windows, and what each costs, measured on momwire 0.95.0's and 0.97.1's release builds.
 ---
 
 momwire comes for Windows in four forms: three downloads and a Python
@@ -36,17 +36,19 @@ engines, which is the one 4nec2 reads
 
 The drop-in ships two launchers per dialect. Any other formulation is one
 copy away: copy a launcher in the unpacked folder and rename the copy
-`momwire-nec5-<basis>.exe`, `momwire-nec42-<basis>.exe` or
-`momwire-nec2c-<basis>.exe`, and that basis answers in that dialect
+`momwire-nec5-<basis>.exe`, `momwire-nec42-<basis>.exe`,
+`momwire-nec2c-<basis>.exe` or `momwire-nec2d-<basis>.exe`, and that basis
+answers in that dialect
 ([Choosing the formulation](/reference/eznec-nec5/#choosing-the-formulation)).
-A name carrying `nec2c` is read first, so a copy named for NEC-2 is a NEC-2
-engine whichever launcher it was copied from, and a basis after `nec2c-`
-that does not exist is refused by name rather than served as the default. The
+A name carrying `nec2c` or `nec2d` is read first, so a copy named for NEC-2 is
+a NEC-2 engine whichever launcher it was copied from, and a basis after
+`nec2c-` that does not exist is refused by name rather than served as the
+default. The
 [standalone page](/reference/standalone/) lists what the executables carry.
 
 Leave the thread settings alone. Both forms size their thread pools from the
-deck and from the cores you allow them, and since 0.95.0 they choose the same
-counts, so neither needs a variable set to run at its best. The
+deck and from the cores you allow them, and they choose the same counts, so
+neither needs a variable set to run at its best. The
 [threads section](/reference/standalone/#threads) covers the cases where
 setting `MOMWIRE_THREADS` helps.
 
@@ -138,17 +140,18 @@ free space. Cold, most of the drop-in's extra time is its first launch,
 about 1.2 s, which starts its engine; the standalone program's first launch
 took 0.1 s. The two forms' printouts were byte-identical at all 51 points.
 
-In 0.97.0 the drop-in fell further behind, 36 % and 52 % warm: it wrote an
-advisory to its standard error on every launch, which EZNEC never reads, and
-that cost about 15–23 ms a launch. Since 0.97.1 advisories are off unless
+The drop-in writes advisories to its standard error only when
 `MOMWIRE_ADVISORIES` asks for them ([advisories](/reference/eznec-nec5/#advisories-on-stderr-when-you-ask)).
+EZNEC never reads that stream. On momwire 0.97.0's zips, which wrote them on
+every launch, the drop-in took 36 % and 52 % longer than the standalone
+program warm on these two sweeps; writing them cost about 15–23 ms a launch.
 
 ## From Python
 
 `pip install momwire` puts the whole engine in your own Python (3.10 or
 later). It installs the same commands the drop-in has, `momwire-nec5-<basis>`,
-`momwire-nec42-<basis>` and the NEC-2 engines `momwire-nec2c-<basis>`
-([NEC-2 launchers](/reference/portal-usage/)), running the same Python
+`momwire-nec42-<basis>` and the NEC-2 engines `momwire-nec2c-<basis>` and
+`momwire-nec2d-<basis>` ([NEC-2 launchers](/reference/portal-usage/)), running the same Python
 engine, one command per basis, plus two things neither zip has:
 
 - `momwire-nec2c-shared`, a NEC-2 engine that stays resident between runs;
