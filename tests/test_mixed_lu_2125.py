@@ -479,7 +479,7 @@ def test_a_badly_scaled_matrix_refines_past_its_backward_error(no_features):
     assert abs(z_on - z_off) <= 1e-11 * abs(z_off)
 
 
-@pytest.mark.parametrize("name", ["bs2", "sg", "razor2p"])
+@pytest.mark.parametrize("name", ["bs2", "sg", "razor2p", "sinusoidal"])
 def test_each_engine_impedance_runs_it(no_features, name):
     no_features.setenv(ENV, "1")
     solver = _engine(name, DIPOLE)
@@ -538,3 +538,173 @@ def test_the_registry_entry():
     # A last-digits feature: antennaknobs labels it "(faster)".
     assert f.drift < _features.DEFAULT_DRIFT_MAX
     assert f.solvers == ("bspline", "razor", "sinusoidal", "sinusoidal_galerkin")
+
+
+# --- the kept factor: `lu_factor_kept` / `MixedLU` (sinusoidal's Z_factors) ---
+
+
+def _kept(a, on=True):
+    """`lu_factor_kept` of a's transpose (F-ordered, given away), as the
+    sinusoidal impedance factors Gᵀ in G's storage."""
+    g = a.copy()
+    with _lapack.mixed_lu_scope(on):
+        return g, _lapack.lu_factor_kept(g.T, overwrite_a=True)
+
+
+def test_flag_off_the_kept_factor_is_lu_factor_strict():
+    a = _well(seed=20)
+    g, f = _kept(a, on=False)
+    lu, piv = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    assert isinstance(f, tuple)
+    assert f[0].tobytes() == lu.tobytes() and f[1].tobytes() == piv.tobytes()
+    assert np.shares_memory(f[0], g)  # in place, as before
+
+
+def test_every_solve_from_the_kept_factor_refines():
+    # trans 1 solves G x = b, trans 0 the adjoint Gᵀ w = r; several columns
+    # too. Each refines from the one complex64 factor, and G is never
+    # factored in complex128 (no lu_factor call): Z + 0.5 Z, not 2 Z.
+    a = _well(seed=21)
+    lu_off = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    before = _counts()
+    g, f = _kept(a)
+    assert isinstance(f, _lapack.MixedLU) and f.refining
+    assert g.tobytes() == a.tobytes()  # G intact for the residuals
+    for trans, b in [(1, _rhs(160)), (0, _rhs(160, seed=5)), (1, _rhs(160, 3))]:
+        x_off = _lapack.lu_solve(lu_off, b, trans=trans)
+        x_on = _lapack.lu_solve(f, b, trans=trans)
+        assert _lapack.MIXED_LAST["outcome"] == "refined"
+        assert x_on.shape == x_off.shape
+        assert np.abs(x_on - x_off).max() <= 1e-13 * np.abs(x_off).max()
+    solves, fallbacks = _moved(before)
+    assert solves["refined"] == 3 and not fallbacks
+    assert f.refining and g.tobytes() == a.tobytes()
+
+
+def test_the_kept_forward_solve_is_solve_transposeds_mixed_answer():
+    # The same complex64 cast of Gᵀ, norm, flag and right-hand side as the
+    # one-shot route: the same bits.
+    a, b = _well(seed=22), _rhs(160)
+    _g, f = _kept(a)
+    with _lapack.mixed_lu_scope(True):
+        x_one = _lapack.solve_transposed(a.copy(), b)
+    assert _lapack.lu_solve(f, b, trans=1).tobytes() == x_one.tobytes()
+
+
+def test_a_later_solve_that_falls_back_factors_g_in_place():
+    # Refined at trans 1 (the forward drive), then a solve that stalls: the
+    # complex64 factor is dropped and G is factored in its own storage, the
+    # flag-off call, so that and every later solve are the flag-off bits.
+    a = _conditioned(1e7)
+    lu_off = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    g, f = _kept(a)
+    before = _counts()
+    x = _lapack.lu_solve(f, _rhs(120), trans=1)
+    assert _moved(before) == ({"fallback": 1}, {"stall": 1})
+    assert not f.refining
+    assert x.tobytes() == _lapack.lu_solve(lu_off, _rhs(120), trans=1).tobytes()
+    assert g.tobytes() == lu_off[0].T.tobytes()  # G holds the factors now
+    b = _rhs(120, 2, seed=9)
+    before = _counts()
+    w = _lapack.lu_solve(f, b, trans=0)
+    assert _moved(before) == ({}, {})
+    assert w.tobytes() == _lapack.lu_solve(lu_off, b, trans=0).tobytes()
+
+
+@pytest.mark.parametrize(
+    "a, reason",
+    [
+        (_well(seed=23) * 1e39, "range"),
+        (np.array([[1.0, 1.0], [1.0, 1.0 + 1e-10]], dtype=np.complex128), "singular"),
+    ],
+    ids=["range", "singular"],
+)
+def test_a_factor_time_fallback_is_lu_factor_strict(a, reason):
+    lu_off = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    before = _counts()
+    _g, f = _kept(a)
+    assert _moved(before) == ({"fallback": 1}, {reason: 1})
+    assert isinstance(f, tuple)
+    assert f[0].tobytes() == lu_off[0].tobytes()
+
+
+def test_an_exactly_singular_kept_factor_raises():
+    with pytest.raises(np.linalg.LinAlgError, match=_lapack.SINGULAR):
+        _kept(np.ones((4, 4), dtype=np.complex128))
+
+
+def test_a_matrix_the_caller_keeps_declines():
+    # Without overwrite_a the caller still owns a; the kept factor would
+    # alias it, so the route steps aside.
+    a = np.asfortranarray(_well(seed=24))
+    before = _counts()
+    with _lapack.mixed_lu_scope(True):
+        f = _lapack.lu_factor_kept(a)
+    assert _moved(before) == ({"declined": 1}, {})
+    assert isinstance(f, tuple)
+
+
+def test_a_solve_the_route_does_not_take_factors_g_and_answers():
+    a, b = _well(seed=25), _rhs(160)
+    lu_off = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    _g, f = _kept(a)
+    before = _counts()
+    x = _lapack.lu_solve(f, b, trans=2)
+    assert _moved(before) == ({"declined": 1}, {})
+    assert not f.refining
+    assert x.tobytes() == _lapack.lu_solve(lu_off, b, trans=2).tobytes()
+
+
+def test_unpacking_a_kept_factor_gives_the_flag_off_pair():
+    import scipy.linalg as sl
+
+    a, b = _well(seed=26), _rhs(160)
+    lu_off = _lapack.lu_factor_strict(a.copy().T, overwrite_a=True)
+    _g, f = _kept(a)
+    x = sl.lu_solve(f, b, trans=1)  # scipy unpacks (lu, piv)
+    assert x.tobytes() == sl.lu_solve(lu_off, b, trans=1).tobytes()
+    assert not f.refining
+
+
+def test_the_sinusoidal_impedance_keeps_a_mixed_factor(no_features, monkeypatch):
+    # The entry antennaknobs solves through (`compute_impedance`): its
+    # Z_factors serve the drive AND the wire-loading adjoint (Gᵀ w = r),
+    # refined, with no complex128 factor of G at all.
+    s_off = build_solver(parse_nec2(DIPOLE), basis="sinusoidal").solver
+    z_off, alpha_off = s_off.compute_impedance()
+    r = _rhs(alpha_off.shape[0], seed=27)
+    w_off = _lapack.lu_solve(s_off.Z_factors, r, trans=0)
+    calls = []
+    real = _lapack.lu_factor
+    monkeypatch.setattr(
+        _lapack, "lu_factor", lambda *a, **k: calls.append(1) or real(*a, **k)
+    )
+    no_features.setenv(ENV, "1")
+    s_on = build_solver(parse_nec2(DIPOLE), basis="sinusoidal").solver
+    before = _counts()
+    z_on, alpha_on = s_on.compute_impedance()
+    w_on = _lapack.lu_solve(s_on.Z_factors, r, trans=0)
+    solves, fallbacks = _moved(before)
+    assert solves["refined"] == 2 and not fallbacks, (solves, fallbacks)
+    assert isinstance(s_on.Z_factors, _lapack.MixedLU) and not calls
+    assert abs(z_on - z_off) <= 1e-11 * abs(z_off)
+    assert np.abs(alpha_on - alpha_off).max() <= 1e-11 * np.abs(alpha_off).max()
+    assert np.abs(w_on - w_off).max() <= 1e-11 * np.abs(w_off).max()
+
+
+def test_flag_off_the_sinusoidal_impedance_factors_g_in_place(no_features, monkeypatch):
+    calls = []
+    real = _lapack.lu_factor
+
+    def spy(a, overwrite_a=False, check_finite=True):
+        a1 = np.asarray(a)
+        calls.append((overwrite_a, a1.flags.f_contiguous, a1.shape[0]))
+        return real(a, overwrite_a=overwrite_a, check_finite=check_finite)
+
+    monkeypatch.setattr(_lapack, "lu_factor", spy)
+    s = build_solver(parse_nec2(DIPOLE), basis="sinusoidal").solver
+    before = _counts()
+    s.compute_impedance()
+    assert _moved(before) == ({}, {})
+    assert calls == [(True, True, s.Z_factors[0].shape[0])]
+    assert isinstance(s.Z_factors, tuple)

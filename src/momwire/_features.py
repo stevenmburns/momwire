@@ -958,8 +958,13 @@ FEATURES: dict[str, Feature] = {
         # swept impedance), bs2 / bs1 (`_solve_with_kcl*`'s `_lu_solve` and
         # the KCL-reduced solve; hmatrix and arrayblock only on their dense
         # fallback), razor2p (its three `_lu_solve`s) and sg
-        # (`_solve_constrained`). Not the factors a solver keeps for later
-        # solves (`lu_factor_strict`), the stacked swept solves, or the
+        # (`_solve_constrained`). Sinusoidal's kept factor too
+        # (`compute_impedance`'s Z_factors, the entry antennaknobs solves
+        # through): `lu_factor_kept` keeps the complex64 LU beside the intact
+        # Z (`_lapack.MixedLU`), and each later solve (the adjoint, another
+        # right-hand side) refines from it until one falls back and factors Z
+        # in place. Not the other kept factors (`lu_factor_strict`:
+        # arrayblock's groups), the stacked swept solves, or the
         # rotational-symmetry sectors.
         # Shipped LAPACK and BLAS routines only (cgetrf, cgetrs, the complex128
         # residual product), so python-kind: on the drop-in it runs,

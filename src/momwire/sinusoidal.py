@@ -8674,7 +8674,13 @@ class SinusoidalSolver(
         # wire-loading adjoint oracle needs Gᵀw = r, which is the same
         # factorization at trans=0. One getrf serves both. An exactly
         # singular G raises, as every dense route does (momwire#1981).
-        lu_piv = _lapack.lu_factor_strict(G.T, overwrite_a=True)
+        # Under `mixed_lu` (momwire#2125) the kept factor is a `MixedLU`: the
+        # complex64 LU of Gᵀ with G intact beside it (1.5 Z), every solve
+        # through it refined against G until one falls back and factors G in
+        # place, the flag-off call on the same bytes. Off, `lu_factor_kept`
+        # IS `lu_factor_strict`.
+        with _lapack.mixed_lu_scope(self._mixed_lu):
+            lu_piv = _lapack.lu_factor_kept(G.T, overwrite_a=True)
         alpha = _lapack.lu_solve(lu_piv, v, trans=1)
 
         Z_drive = self._feed_impedances(alpha, geom, seg_view, voltages)
