@@ -6,8 +6,8 @@ description: Which of momwire's eight engines to pick — the selection matrix, 
 Eight engines over seven solver families answer through one kernel, and
 every one of them is reachable
 by name — as a `--basis` argument, as its own `momwire-nec2c-<basis>`
-command in [SimNEC's dialog](/reference/portal-usage/) (all but the razor
-pair: a NEC-2 deck feeds a segment *centre* and razor places its gap at a
+command in [SimNEC's dialog](/reference/portal-usage/) (all but
+`razor2p`: a NEC-2 deck feeds a segment *centre* and razor places its gap at a
 knot, so that front door refuses it by name, momwire#821), or as the
 solver behind [EZNEC's engine slot](/reference/eznec-nec5/) (which serves
 the default, and is where razor lives). This page is the engine-side
@@ -37,7 +37,7 @@ vs. array geometry:
 | Cross-checking against NEC-5 behaviour | **`razor2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sg`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
 | Reading a textbook scheme against the modern ones | **`pulse`** | Harrington's 1967 pulse expansion, point-matched — the oldest thin-wire MoM there is, and the slowest-converging engine here by a wide margin (below) |
-| Buried radials, screens, buried fed elements | **`bs2`** (or `bs1`), with **`sg`** and **`razor2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks (since 0.66) and a single near-normal crossing (its two members' tilts off vertical summing to 30° or less), such as a ground rod or the buried radial vertical, whose rise meets a buried hub below the plane; it refuses oblique crossings, a hub at the crossing node itself, and several crossings per deck by name, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
+| Buried radials, screens, buried fed elements | **`bs2`** (or `bs1`), with **`sg`** and **`razor2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks and a single near-normal crossing (its two members' tilts off vertical summing to 30° or less), such as a ground rod or the buried radial vertical, whose rise meets a buried hub below the plane; it refuses oblique crossings, a hub at the crossing node itself, and several crossings per deck by name, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
 a solve *costs*, not which engine wins it. One exception is capability,
@@ -79,7 +79,7 @@ even there. Don't reach for them on small problems.
   section.
 
 One route differs on purpose: the NEC-2 drop-in's `sinusoidal`
-(`momwire-nec2c-sinusoidal`) takes NEC-2's free-end cap by default, so that
+(`momwire-nec2c-sinusoidal`, and `momwire-nec2d-sinusoidal` for 4nec2) takes NEC-2's free-end cap by default, so that
 it answers like NEC-2 engines, where every other host and launcher takes the
 current to zero at a free end. Set `MOMWIRE_X_NEC2_END_CAP=0` for the
 zero-current answer there; [the portal page](/reference/portal-usage/#choosing-the-physics-one-command-per-engine)
@@ -132,11 +132,10 @@ of magnitude cheaper at equal accuracy.
 `razor2p` tests the tent
 expansion with NEC-5's razor-blade rule at NEC-5's own identified two-point
 quadrature. It is the orderable member of `RazorSolver`. The class also
-takes Gauss-Legendre nodes along the same testing path, which was a second
-roster entry, plain `razor`, until momwire#753 retired it (decided
-2026-09-02): the two lanes are one class differing only in that sampling
-choice, and measured 2026-08-18, the GL lane cost 20x the wall time
-(20.2 s vs 0.97 s at N=1600 free space) for a 0.001 Ω difference from
+takes Gauss-Legendre nodes along the same testing path, and that lane is not
+on the roster (momwire#753): the two lanes are one class differing only in
+that sampling choice, and measured 2026-08-18, the GL lane cost 20x the wall
+time (20.2 s vs 0.97 s at N=1600 free space) for a 0.001 Ω difference from
 `razor2p` — not worth ordering. The class stays; the GL lane is reached
 by constructing `RazorSolver(nec5_quadrature=False, ...)` directly rather
 than through `--basis` or a portal name.
@@ -156,7 +155,7 @@ wires, as `bs2` serves it; momwire#1614), contact over the Sommerfeld
 ground (momwire#624), buried wires and the crossing junction are all served; what
 the row still refuses — a feed named by arclength (`feeds=`) at a junction
 of three or more wire ends (a deck's node address serves a source on a
-crossing node under one rising wire at any member count, since 0.79), a
+crossing node under one rising wire at any member count), a
 wire crossing the interface mid-span rather than at a junction, ground
 contact combined with buried wires, contact under the
 reflection-coefficient ground, and a feed named at a segment *centre*, which
@@ -200,8 +199,8 @@ deck there for the same reason `sinusoidal` does.
 The dense bases form an N×N complex matrix: memory grows as **N²**, and a
 runaway segment count costs hundreds of megabytes before it costs minutes.
 Practical envelopes on an 8 GB working set: the GL-quadrature certification
-lane (`RazorSolver` constructed directly with `nec5_quadrature=False` —
-off the `--basis` roster since momwire#753) exceeds it by N≈800 grounded /
+lane (`RazorSolver` constructed directly with `nec5_quadrature=False`, which is
+not on the `--basis` roster) exceeds it by N≈800 grounded /
 N≈1600 free (the table above); the other dense bases reach further at the same N because their
 peak was engineered down deliberately — the memory-release series
 (momwire 0.29.0's certified peaks, then the #318/#323 B-spline reductions)
@@ -221,13 +220,11 @@ what they were measured at, bit for bit.
 
 Every engine solves a thin-wire equation; the `EK` card's O(a²) tube
 correction matters below Δ/a ≈ 3 and costs about 1.0–1.3× the reduced
-solve. **All six families serve it** — the razor twins were the last
-holdout, reduced-kernel by design until momwire#603 gave them the tube
-correction too. One narrow refusal survives: `sg` declines
+solve. **Every family but `pulse` serves it** (razor: momwire#603).
+One narrow refusal: `sg` declines
 `EK` on a deck where two wires of different radii meet at a junction,
 measured divergent rather than merely inaccurate there. On a deck with
-buried wires `bs2`, `razor2p` and `sg` (since
-momwire#1626) serve it in part: extended on the above-ground wires, reduced on
+buried wires `bs2`, `razor2p` and `sg` (momwire#1626) serve it in part: extended on the above-ground wires, reduced on
 the buried ones; `sinusoidal` solves such a deck reduced (momwire#1636). On
 ordinary thin wire it changes the answer by less than the mesh does. A NEC-2 deck asks for it
 with its `EK` card. NEC-4 and NEC-5 decks get it by default (momwire#1326),
