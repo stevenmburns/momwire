@@ -1,6 +1,6 @@
 ---
 title: "Running momwire as a NEC-2 engine"
-description: Install the NEC-2 launcher (momwire-nec2c), point SimNEC at it, pick an engine by name (one command per solver since 0.36.1), read the version probe and the refusals, and swap in the shared resident engine.
+description: Install the NEC-2 launcher (momwire-nec2c), point SimNEC at it, pick an engine by name (one command per solver), read the version probe and the refusals, and swap in the shared resident engine.
 ---
 
 [SimNEC](https://ae6ty.com/smith_charts/) (AE6TY) does not link its NEC
@@ -11,8 +11,10 @@ feedpoint out of each printout to build the antenna's Y matrix.
 
 momwire ships that process. `pip install momwire` puts **`momwire-nec2c`** on
 your path: the **NEC-2 launcher** (`momwire-nec2c` and its siblings), a
-drop-in for the engine binary with momwire's solver behind it. It has two
-front ends, SimNEC and 4nec2; this page covers SimNEC. The Smith chart, the
+drop-in for the engine binary with momwire's solver behind it. This page
+covers SimNEC; 4nec2's NEC-2 engine takes the `momwire-nec2d` twins, the same
+engine writing the NEC-2D printout layout 4nec2 reads
+([In 4nec2](/reference/eznec-nec5/#in-4nec2)). The Smith chart, the
 tuner and the sweeps stay SimNEC's; the electromagnetics become momwire's.
 
 The deck language is momwire's own **`nec2` dialect** — wire structures and
@@ -38,7 +40,8 @@ environment where the console script is awkward to reach.
 
 **On Windows without Python**, the drop-in zip,
 [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip),
-ships `momwire-nec2c.exe` and `momwire-nec2c-sinusoidal.exe`. Unzip it into a
+ships `momwire-nec2c.exe` and `momwire-nec2c-sinusoidal.exe` (and the
+`momwire-nec2d` pair, for 4nec2). Unzip it into a
 folder of its own (`C:\momwire\`) and give SimNEC the full path of one of
 them. They are the same engine as the pip commands of the same names and
 answer the same way, the `-version` probe, the `NX` stream and
@@ -80,12 +83,12 @@ Both rules apply to wrappers and symlinks exactly as they do to the script.
 
 ## Choosing the physics: one command per engine
 
-Since momwire 0.36.1 every solver is its own command — `pip install momwire`
+Every solver is its own command — `pip install momwire`
 puts all of these on your path, and SimNEC's engine dialog takes any of them
 directly, no arguments and no wrapper scripts:
 
 ```text
-momwire-nec2c                                # the default — degree-2 B-spline (bspline)
+momwire-nec2c                                # the default — degree-2 B-spline (bs2)
 momwire-nec2c-bs1                     # the same physics at degree 1 (tent basis)
 momwire-nec2c-sinusoidal                     # NEC-2's own formulation
 momwire-nec2c-sg            # the same basis, tested variationally
@@ -107,10 +110,9 @@ Four axes live in that list. `sinusoidal` and `sg` are
 the **fidelity** ladder: the three-term basis point-matched with NEC's own
 delta-gap source answers "does this reproduce NEC-2's behaviour, mesh walk
 and all", and the Galerkin entry and the B-spline default answer "what
-does a better-converged basis say". There was a second Galerkin name until
-momwire#654: it differed only in its feed model, which is not a choice a
-portal dialog can put to you meaningfully, and the better of the two is now
-the plain name's default. There is no `sinusoidal-converged`: a
+does a better-converged basis say". There is one Galerkin name, with one
+feed model: a feed model is not a choice a portal dialog can put to you
+meaningfully, so `sg` uses the better of the two measured (momwire#654). There is no `sinusoidal-converged`: a
 zero-width gap has no collocation right-hand side, so the flag does not offer
 a name the solver refuses. `bs1` is the **degree** axis — the same
 B-spline physics at degree 1, so pairing it with the default is the cheapest
@@ -125,22 +127,21 @@ if they do not, the deck is telling you about conditioning, not about basis.
 **There is no razor command here.** The tent-basis, razor-blade formulation
 NEC-5 identifies with (`razor2p`) is not a nec2 engine: a NEC-2 deck puts
 its source at a segment *centre* and razor places its gap at a *knot*, so
-it would answer for an antenna half a segment from the one you drew. Since
-momwire#821 the NEC-2 drop-in refuses the name at configure time rather than serve
-that — `momwire-nec2c-razor-nec5` and `momwire-nec2c-razor-2p`, which
-shipped from 0.36.1 to 0.46.0, are gone, and a copy you kept fails the
-version probe with the reason. Razor is served where its grid is the deck's:
+it would answer for an antenna half a segment from the one you drew. The
+NEC-2 drop-in refuses a razor name at configure time rather than serve that
+(momwire#821): a copy named `momwire-nec2c-razor2p`, `momwire-nec2c-razor-2p`
+or `momwire-nec2c-razor-nec5` fails the version probe with the reason. Razor is served where its grid is the deck's:
 the NEC-5 dialect's `momwire-nec5-razor2p`, for EZNEC's NEC-5 slot and
 SimNEC's own NEC-5 engine alike ([below](#simnecs-nec-5-engine)), which
 writes a source at a node.
 
 **On this launcher `sinusoidal` takes NEC-2's free-end cap by default**
-(momwire#2033, after 0.94.0). NEC-2 lets the current at a free wire
+(momwire#2033). NEC-2 lets the current at a free wire
 end run onto the end cap, I = ±(X/k) dI/ds with X = J₁(ka)/J₀(ka) (NEC
 Part I, Eqs. 23 and 54–64); momwire's sinusoidal basis everywhere else takes
 it to zero there. The NEC-2 drop-in exists to answer like NEC-2, so this one
-route (`momwire-nec2c-sinusoidal`, or any `momwire-nec2c*` run with
-`--basis sinusoidal`) uses NEC-2's condition unless told otherwise. It is a
+route (`momwire-nec2c-sinusoidal` and `momwire-nec2d-sinusoidal`, or any
+`momwire-nec2c*` or `momwire-nec2d*` run with `--basis sinusoidal`) uses NEC-2's condition unless told otherwise. It is a
 compatibility choice, not better physics: a flat cap is worth about 0.10a of
 extra length per end and this condition acts like three to four times that
 on coarse meshes, so it moves Zin most on fat wires (up to 58 % on a fat-wire
@@ -152,7 +153,7 @@ same code, not yet certified there.
 | `MOMWIRE_X_NEC2_END_CAP` | `momwire-nec2c-sinusoidal` |
 |---|---|
 | unset (the default) | the cap; a deck it cannot act on runs without it |
-| `0` | no cap: the answer, and the printout, of momwire 0.94 |
+| `0` | no cap: the zero-current end, as every other route takes it |
 | `1` | the cap; a deck it cannot act on is refused with a NEC ERROR |
 
 Set the variable in the environment SimNEC starts the engine in. The decks
@@ -163,7 +164,7 @@ end anywhere on the deck. By default those run without the cap, and each
 solve says so at column 0 between ANTENNA ENVIRONMENT and MATRIX TIMING:
 `NEC-2 END CAP NOT APPLIED: a buried or ground-crossing wire has a free end`.
 The banner does not name the cap: on this route it is the default, as the
-banner never names a default, and `=0` gives back the old printout byte for
+banner never names a default, and `=0` gives the uncapped printout byte for
 byte.
 
 **On a tapered or stepped-radius wire, `sinusoidal` is NEC-2-faithful, not
@@ -214,7 +215,7 @@ filename rules above apply to every spelling, shipped or hand-made: keep
 
 ## SimNEC's NEC-5 engine
 
-SimNEC also has a NEC-5 engine slot, and momwire fills it too (since 0.66.0).
+SimNEC also has a NEC-5 engine slot, and momwire fills it too.
 SimNEC decides which deck **syntax** to write from the engine's path, not from
 anything the engine says: a path containing `nec2c` gets NEC-2 decks, one
 containing `nec5` gets NEC-5 decks. So the NEC-5 slot takes a different family
@@ -278,9 +279,9 @@ identifiable as one everywhere the version travels.
 **The number is momwire's own version** — the engine's, which is the number
 that changes solve results. An engine release moves it; nothing else does.
 
-Every NEC-2 launcher answers this one form. The older `--legacy-probe` flag
-was removed in 0.83.0: a portal dialog line that still carries it is refused
-at the probe with a line saying so, and the fix is to delete the flag. The
+Every NEC-2 launcher answers this one form. A portal dialog line that carries
+the retired `--legacy-probe` flag is refused at the probe with a line saying
+so, and the fix is to delete the flag. The
 probe line names the launcher, not
 the engine: `--basis` never changes it, and only the printout banner records
 which basis answered. A copy named for a basis (`momwire-nec2c-pulse`) gives
@@ -300,13 +301,13 @@ a stock `.nec` file's final `EN` card does the same job and then ends the run.
 End of input terminates a deck too, exactly as `EN` does — so a file with
 neither, a deck that stops at `XQ`, solves and exits the same way.
 
-Since momwire 0.83.0 the NEC-2 commands also take the call forms every momwire
-launcher answers (momwire#1611):
+The NEC-2 commands also take the call forms every momwire launcher answers
+(momwire#1611):
 
 ```bash
 momwire-nec2c dipole.nec dipole.out     # input file, output file
 momwire-nec2c - - < chain.nec           # streaming: decks on stdin, printouts on stdout
-momwire-nec2c < nec2d.tmp               # 4nec2's form: the two file names on stdin
+momwire-nec2c < nec2d.tmp               # 4nec2's call form: the two file names on stdin
 ```
 
 The two-file form writes the same printout the redirect above prints, with
@@ -316,7 +317,8 @@ own NEC-2 protocol spelled out, so it prints exactly what the bare command
 prints. With no arguments, the first line on stdin decides: a NEC card means
 decks, as SimNEC sends them, and anything else (or the name of a file that
 exists) is the input file's name, with the output file's on the next line, as
-4nec2 writes `nec2d.tmp`.
+4nec2 writes `nec2d.tmp`. 4nec2 itself reads only the NEC-2D layout, so its
+NEC-2 engine is `momwire-nec2d`, which takes the same forms.
 
 ## Saving the decks SimNEC sends
 
@@ -441,12 +443,12 @@ A big deck repeats itself: many pairs of segments sit in the same pose
 relative to each other. `MOMWIRE_X_PAIR_REUSE=1`, set in the environment
 SimNEC starts the engine in, fills each class of repeated pairs once and
 copies the result to the rest. It is **off by default**. On the
-`sinusoidal` route (`momwire-nec2c-sinusoidal`) it finds the classes itself,
+`sinusoidal` route (`momwire-nec2c-sinusoidal`, `momwire-nec2d-sinusoidal`) it finds the classes itself,
 in free space and over a perfect or finite ground, on decks large enough to
 pay for the search; a small deck runs the ordinary fill. It moves Z by at
 most about 5e-10 relative, far below the printed digits.
 
-It is certified for the drop-ins on Linux and Windows (after 0.95.0). On
+It is certified for the drop-ins on Linux and Windows. On
 macOS it runs the same code, not yet certified there. This launcher's
 printout keeps nec2c's layout and does not name it; the NEC-4.2 and NEC-5
 drop-ins name it on printout line 2 (`+pair_reuse`, followed by
