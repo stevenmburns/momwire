@@ -56,18 +56,19 @@ def row(n_el=4, n_seg=21, height=6.0, length=10.0, step=(4.0, 0.0, 0.0)):
     }
 
 
-def hint_of(deck):
-    """Every ordered pair of elements at one index offset is one class."""
-    n = len(deck["wires"])
-    classes = {}
-    for a in range(n):
-        for b in range(a, n):
-            classes.setdefault(b - a, []).append(((a, 0), (b, 0)))
-    return [c for c in classes.values() if len(c) > 1]
+@pytest.fixture(autouse=True)
+def _small_decks():
+    """Serve the reuse on these small decks, from no plan left by another
+    test."""
+    acc.bspline_reuse_set_small_deck_segs(0)
+    acc.bspline_reuse_cache_clear()
+    yield
+    acc.bspline_reuse_set_small_deck_segs(-1)
+    acc.bspline_reuse_cache_clear()
 
 
 def solve(deck, ground, **kw):
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck), **ground, **kw)
+    s = BSplineSolver(**deck, pair_reuse=True, **ground, **kw)
     s.compute_impedance()
     return s
 
@@ -151,9 +152,7 @@ def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
     the map copies has the same horizontal offsets and heights, node for
     node, as the pair it is copied from."""
     deck = row(n_el=3, n_seg=13)
-    s = BSplineSolver(
-        **deck, pair_reuse=hint_of(deck), **SOMMERFELD, offset_reuse=False
-    )
+    s = BSplineSolver(**deck, pair_reuse=True, **SOMMERFELD, offset_reuse=False)
     before = acc.remainder_q_reused_pairs()
     s.compute_impedance()
     copied = acc.remainder_q_reused_pairs() - before

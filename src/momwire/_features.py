@@ -234,14 +234,17 @@ class Feature:
 FEATURES: dict[str, Feature] = {
     f.name: f
     for f in (
-        # Each congruent pair's fill once, the rest copied. BSplineSolver: a
-        # front end's hint that edge pairs share a pose, one block filled per
-        # pose (PRs #1810, #1811), Python's plan over the copy the Sommerfeld
-        # remainder kernel shipped in 0.87.0; the hint is DATA, so there the
-        # variable alone reuses nothing. SinusoidalSolver (momwire#1911): the
-        # point-matched fill finds its own classes of (observer, source)
-        # pairs and evaluates each one's field tensors once with the shipped
-        # kernel, free space and PEC image; there the variable alone is on.
+        # Each congruent pair's fill once, the rest copied. BSplineSolver
+        # (momwire#2063): the Galerkin fill finds its own classes of
+        # (observer segment, source segment) pairs on the common core
+        # (`_bspline_pair_reuse_core.h`) and evaluates each class's moments
+        # once with the shipped off-edge kernel, its Sommerfeld remainder
+        # copying the blocks those classes make congruent through the
+        # plane; a front end's edge-pair hint (PRs #1810, #1811) is read as
+        # on. SinusoidalSolver (momwire#1911): the point-matched fill finds
+        # its own classes of (observer, source) pairs and evaluates each
+        # one's field tensors once with the shipped kernel, free space and
+        # PEC image. On every solver the variable alone is on.
         #
         # The one user-facing pair-reuse switch (momwire#1982): its parts,
         # `offset_reuse` (bspline, within one edge) and `razor_pair_reuse`
@@ -278,6 +281,8 @@ FEATURES: dict[str, Feature] = {
             kwarg="pair_reuse",
             paths=(
                 "src/momwire/_sin_pair_reuse.py",
+                "src/momwire/_bspline_pair_reuse_core.cpp",
+                "src/momwire/_bspline_pair_reuse_core.h",
                 "tests/test_pair_reuse_1809.py",
                 "tests/test_sin_pair_reuse_1911.py",
                 "tests/test_sin_pair_reuse_ground_1970.py",
@@ -294,16 +299,22 @@ FEATURES: dict[str, Feature] = {
             ),
             label="pair reuse",
             summary=(
-                "Fills each repeated pose of a pair of wires or segments once and "
-                "copies the rest. nec5-bs2 and nec42-bs2 need the front "
-                "end's hint of which edge pairs share a pose, and also fill a "
-                "uniform wire's own entries once per segment offset; the "
-                "sinusoidal solver and nec5-razor2p find their own classes, in "
-                "free space and over a perfect or finite ground, on decks large "
-                "enough to pay for the search."
+                "Fills each repeated pose of a pair of segments once and copies "
+                "the rest. Every solver finds its own classes, in free space and "
+                "over a perfect or finite ground, on decks large enough to pay "
+                "for the search; nec5-bs2 and nec42-bs2 also fill a uniform "
+                "wire's own entries once per segment offset."
             ),
             # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
-            # bspline: 1e-12. sinusoidal: the class map moves Z itself by
+            # bspline (the census, momwire#2063, with `offset_reuse` on and
+            # off): 6.8e-14 worst over the reuse tests' decks and the stage's
+            # set (Yagis of one and two edges, parallel dipoles, a vertical
+            # stack, a line grid; free, PEC, Sommerfeld; EK on and off), and
+            # 3.1e-12 on antennaknobs' 10-element Yagi (both layouts, free,
+            # PEC, Sommerfeld), where the hint route moved it 3.2e-12: the
+            # offset part's. A 0.3 m loop at 137 kHz moves 1.4e-8, where
+            # its off fill moves 5e-7 translated 3.7 m (and `offset_reuse`
+            # alone 3e-7). sinusoidal: the class map moves Z itself by
             # ~1e-12 relative to its largest entry, and the solve amplifies
             # that at the feed. Measured over every frequency of the 11-16
             # reuse ladders (13 each; gsfd_* 101), dense:
