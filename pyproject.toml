@@ -173,6 +173,21 @@ momwire-nec2c-sg = "momwire_serve_client:stock_main"
 # v0.36.1 to v0.46.0 and are retired; razor is served by the NEC-5 dialect's
 # launchers (`momwire-nec5-razor2p`).
 momwire-nec2c-pulse = "momwire_serve_client:stock_main"
+# The NEC-2D engines (momwire#2138): the same program as `momwire-nec2c*`, the
+# same NEC-2 deck reading, refusals and solve, printing LLNL's Fortran NEC-2
+# layout (NEC-2D, what 4nec2's `nec2dxs` engines write) instead of nec2c's,
+# because 4nec2 reads nothing else. The layout rides on the NAME, as the basis
+# does: `nec2d` in it selects the NEC-2D printout, the basis is read past
+# `nec2d-`. `nec2d` does not contain `nec2c`, so SimNEC never takes one for
+# its NEC-2 engine. The roster is the nec2c one, name for name.
+momwire-nec2d = "momwire_serve_client:stock_main"
+momwire-nec2d-bs2 = "momwire_serve_client:stock_main"
+momwire-nec2d-bs1 = "momwire_serve_client:stock_main"
+momwire-nec2d-hmatrix = "momwire_serve_client:stock_main"
+momwire-nec2d-arrayblock = "momwire_serve_client:stock_main"
+momwire-nec2d-sinusoidal = "momwire_serve_client:stock_main"
+momwire-nec2d-sg = "momwire_serve_client:stock_main"
+momwire-nec2d-pulse = "momwire_serve_client:stock_main"
 # DEPRECATED spellings (momwire#2091), installed for the deprecation window
 # only so an existing host path or script keeps working: each reads its basis
 # from argv[0], canonicalises it, and notes "(renamed from ...)" on the

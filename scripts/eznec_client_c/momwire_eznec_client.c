@@ -185,8 +185,11 @@ typedef int lock_t;
  * `-version` line off that name as the pip launcher does.  Read FIRST, before
  * every other marker, in SimNEC's own order (`nec2c`, then `nec5`,
  * momwire#1239): before this a copy named for nec2c served NEC-5 silently.
- * PROGRAM_FLAG is entry.py's, spelt again here. */
+ * PROGRAM_FLAG is entry.py's, spelt again here.  A name carrying `nec2d` is
+ * the same engine printing LLNL's NEC-2D layout for 4nec2 (momwire#2138), so
+ * it is a NEC-2 name here too: the engine reads the layout off the name. */
 #define NEC2C_MARKER "nec2c"
+#define NEC2D_MARKER "nec2d"
 #define PROGRAM_FLAG "--program"
 
 /* The `-version` line (momwire#1606), `momwire_serve_client.version_line`'s:
@@ -2525,9 +2528,9 @@ static int streamed(const setup_t *setup)
     return status < 0 ? 1 : status;
 }
 
-/* Whether this program's NAME carries NEC2C_MARKER: its basename, lowered
- * as `basis_of` lowers it.  A substring, as `dialect_from_program_name`
- * reads it, so `.exe` needs no stripping. */
+/* Whether this program's NAME carries NEC2C_MARKER or NEC2D_MARKER: its
+ * basename, lowered as `basis_of` lowers it.  A substring, as
+ * `dialect_from_program_name` reads it, so `.exe` needs no stripping. */
 static int names_nec2c(const char *argv0)
 {
     char name[PATH_CAP];
@@ -2547,10 +2550,11 @@ static int names_nec2c(const char *argv0)
             name[i] = (char)(name[i] - 'A' + 'a');
         }
     }
-    return strstr(name, NEC2C_MARKER) != NULL;
+    return strstr(name, NEC2C_MARKER) != NULL
+        || strstr(name, NEC2D_MARKER) != NULL;
 }
 
-/* A NEC-2 launcher (NEC2C_MARKER): the engine, one-shot, on this process's
+/* A NEC-2 launcher (NEC2C_MARKER or NEC2D_MARKER): the engine, one-shot, on this process's
  * stdin and stdout, told this launcher's name and handed its argv untouched;
  * the engine's exit status is this one's.  No daemon -- a NEC-2 host holds
  * one engine process for a whole run and streams decks into it, so there is
