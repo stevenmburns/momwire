@@ -159,6 +159,8 @@ import threading
 import time
 import warnings
 
+import math
+
 import numpy as np
 import scipy.linalg
 from scipy.linalg import LinAlgWarning
@@ -738,13 +740,35 @@ MIXED_TOLERANCE = _U64
 #: it leaves), at or under MIXED_FORWARD_TOLERANCE, 2**-44 (5.7e-14), a
 #: seventeenth of the declared drift and under the complex128 scatter; or,
 #: once the corrections stop contracting (MIXED_CONTRACTION), the last one
-#: at or under MIXED_FORWARD_FLOOR, 2**-40 (9.1e-13). One more sweep there
-#: reaches 1.2e-12 from the ordinary route, the second factor's own scatter.
+#: at or under MIXED_FORWARD_FLOOR.
 #: (Not sqrt(n) u64: on a bs1 deck, n = 404, the corrections contract by
 #: 2e-3 while the residual is already at its floor, and that bar takes all
 #: five sweeps for an answer 4e-13 from the ordinary one.)
 MIXED_FORWARD_TOLERANCE = 2.0**-44
-MIXED_FORWARD_FLOOR = 2.0**-40
+
+#: MIXED_FORWARD_FLOOR is set from the declared drift (2e-11), not from a
+#: small deck's scatter. It was 2**-40 (9.1e-13), the two-factor scatter of
+#: decks of a few hundred unknowns; but that scatter grows with the order,
+#: and a correction that has stopped contracting overstates the error it
+#: leaves. Measured on a 10-element Yagi in free space (laptop, max-norm of
+#: the currents relative to the largest; momwire#2125 thread):
+#:
+#:   engine    n      Z vs Z^T     mixed vs both     last correction
+#:   bs2       4307   2.1e-13      4.3-5.4e-13       5.4e-13
+#:   razor2p   5922   1.2e-12      0.4-1.0e-12       1.7e-12
+#:   bs2       5931   4.2e-13      4.0-4.4e-13       6.2e-12
+#:   razor2p   7528   7.6e-13      2.8e-12           2.9e-11
+#:   bs2       9329   1.4e-12      1.9-2.4e-12       3.5e-11
+#:   razor2p   9318   6.2e-12      2.6-5.0e-12       5.3e-11
+#:
+#: ("Z vs Z^T": two complex128 factors, pivots on Z and on Z^T.) The last
+#: correction is up to 10x the error left, and at 2**-40 every rung from 5.9k
+#: fell back after paying for the complex64 factor and its sweeps. At 2**-34
+#: (5.8e-11) every rung refines, each answer within 4x of the two-factor
+#: scatter and within a quarter of the drift. The badly scaled sg deck above
+#: is decided by MIXED_FORWARD_TOLERANCE while it still contracts, so the
+#: floor does not reach it (test_a_badly_scaled_matrix_refines_past_its_backward_error).
+MIXED_FORWARD_FLOOR = 2.0**-34
 
 
 def _mixed_accept(n: int) -> float:
@@ -753,7 +777,8 @@ def _mixed_accept(n: int) -> float:
     return float(np.sqrt(n)) * _U64
 
 
-#: The most refinement corrections a solve may take before it falls back.
+#: The most refinement corrections a solve may take before it falls back,
+#: at the smallest orders; `_mixed_sweeps_cap` grows it with n.
 MIXED_SWEEPS_MAX = 5
 #: The fewest corrections a solve takes before it may stop: one correction
 #: can land under the tolerance by luck of a single step; a second one that
@@ -777,6 +802,38 @@ MIXED_SWEEPS_MIN = 2
 #: at 3e6 and 0.1 at 1e7 (fallback). The W8IO whip (kappa_1 1.2e5 to
 #: 1.5e5) contracts by 1e-4 to 3e-4 a sweep.
 MIXED_CONTRACTION = 2.0**-6
+
+#: The sweep cap grows with the order. A correction costs O(n^2 nrhs) (a
+#: complex128 residual and a complex64 getrs) against the O(n^3) the complex64
+#: factor saves, so the corrections the saving pays for grow as n / nrhs.
+#: Measured on Skylake (i7-6700K, 8 threads, one right-hand side, the
+#: 10-element Yagi's Z, cgetrf and the refined solves' sweeps against zgetrf):
+#: the saving covers about 7 corrections at n = 2153, 13 at 4307 and 33 at
+#: 7539. The cap is about half of that, n / MIXED_SWEEPS_N, so a solve that
+#: uses every correction still saves; never under MIXED_SWEEPS_MAX.
+#: Why it must grow: the rate is about kappa(Z) u32, and Z's condition grows
+#: with the mesh (the Yagi contracts by 4e-4 at n = 1079, 8e-3 at 4307, 2e-2
+#: at 9329), so a fixed cap of five sends every large solve back to the
+#: ordinary route, after paying for the complex64 factor (1.5x the ordinary
+#: factor on that ladder).
+MIXED_SWEEPS_N = 640
+#: The loosest stall bar the growing cap may reach: kappa u32 <= 1/4.
+MIXED_STALL_LOOSEST = 2.0**-2
+
+
+def _mixed_sweeps_cap(n: int, nrhs: int) -> int:
+    """The most corrections a solve of order `n` with `nrhs` columns takes."""
+    return max(MIXED_SWEEPS_MAX, n // (MIXED_SWEEPS_N * max(nrhs, 1)))
+
+
+def _mixed_stall(cap: int) -> float:
+    """The slowest per-sweep contraction that can still finish inside `cap`
+    corrections: the fall of 2**-29 (u64 / u32) at rate theta takes
+    29 / -log2(theta) sweeps, so theta = 2**-ceil(29 / cap). At the base cap
+    of five that is MIXED_CONTRACTION, 2**-6, the rule it replaces; never
+    looser than MIXED_STALL_LOOSEST."""
+    return min(2.0 ** -math.ceil(29 / cap), MIXED_STALL_LOOSEST)
+
 
 #: Where the route declines by size: below MIXED_MIN_N unknowns, or above
 #: `_mixed_nrhs_cap(n)` right-hand sides. The complex64 factor saves O(n^3)
@@ -819,7 +876,7 @@ MIXED_SOLVES = {"refined": 0, "fallback": 0, "declined": 0, "sweeps": 0}
 #: Each fallback by its reason: "range" (the cast guard), "singular" (an
 #: exactly singular complex64 factor), "nonfinite" (an inf or NaN in a
 #: complex64 solve or a residual), "stall" (a sweep short of
-#: MIXED_CONTRACTION), "cap" (MIXED_SWEEPS_MAX corrections, no convergence).
+#: `_mixed_stall`), "cap" (`_mixed_sweeps_cap` corrections, no convergence).
 MIXED_FALLBACKS = {"range": 0, "singular": 0, "nonfinite": 0, "stall": 0, "cap": 0}
 #: The last mixed attempt in this process: its outcome, corrections, and per
 #: check the largest normwise backward error over the columns and the
@@ -873,8 +930,8 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
     ``||r||_1 / (||A||_1 ||x||_1)``, at or under MIXED_TOLERANCE (u64), or
     under `_mixed_accept` once it no longer contracts, after at least
     MIXED_SWEEPS_MIN corrections. A column above `_mixed_accept` that has
-    not cut its residual by MIXED_CONTRACTION since the last check is a
-    stall: the solve falls back.
+    not cut its residual by `_mixed_stall` since the last check is a stall:
+    the solve falls back. At most `_mixed_sweeps_cap` corrections.
     Memory: the complex64 factors (half of a1) and (n, k) vectors; the
     factors are dropped before returning, either way."""
     n = a1.shape[0]
@@ -886,6 +943,9 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
         "ratio": [],
         "delta": [],
     }
+    cap = _mixed_sweeps_cap(n, b2.shape[1])
+    stall = _mixed_stall(cap)
+    record["cap"] = cap
     if not (n * _CAST_LO <= anorm <= _CAST_HI):
         _mixed_fallback("range", record)
         return None
@@ -919,11 +979,13 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
             eta = np.where(rn > 0, rn / (anorm * xn), 0.0)
         record["eta"].append(float(eta.max()))
         slow = np.zeros(eta.shape, dtype=bool)
+        stalled = slow
         if prev is not None:
             with np.errstate(divide="ignore", invalid="ignore"):
                 ratio = np.where(prev > 0, rn / prev, 0.0)
             record["ratio"].append(float(ratio.max()))
             slow = ratio > MIXED_CONTRACTION
+            stalled = ratio > stall
         # Backward: at u64, or at the floor (no longer contracting) under
         # zcgesv's bar. Not contracting above that bar is a stall.
         back = (eta <= tau) | (slow & (eta <= accept))
@@ -933,16 +995,21 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
         # stops contracting above the floor stalls.
         fwd = np.zeros(eta.shape, dtype=bool)
         fwd_slow = np.zeros(eta.shape, dtype=bool)
+        fwd_stalled = fwd_slow
         if dprev is not None:
             with np.errstate(divide="ignore", invalid="ignore"):
                 rho = np.where(dprev > 0, delta / dprev, 0.0)
             fwd_slow = rho > MIXED_CONTRACTION
+            fwd_stalled = rho > stall
             fwd = (delta * np.minimum(rho, 1.0) <= MIXED_FORWARD_TOLERANCE) | (
                 fwd_slow & (delta <= MIXED_FORWARD_FLOOR)
             )
             record["delta"].append(float(delta.max()))
         done = back & fwd
-        if np.any(slow & ~back) or np.any(fwd_slow & ~fwd):
+        # A slow sweep (MIXED_CONTRACTION) above the bars is a stall only
+        # when it is also too slow to finish inside the cap (`_mixed_stall`);
+        # MIXED_CONTRACTION alone still marks the floor in `back` and `fwd`.
+        if np.any(stalled & ~back) or np.any(fwd_stalled & ~fwd):
             reason = "stall"
             break
         if k >= MIXED_SWEEPS_MIN and done.all():
@@ -954,7 +1021,7 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
             MIXED_LAST.clear()
             MIXED_LAST.update(record)
             return np.asfortranarray(x)
-        if k == MIXED_SWEEPS_MAX:
+        if k == cap:
             reason = "cap"
             break
         d = _mixed_correction(getrs, lu32, ipiv, r, trans)
