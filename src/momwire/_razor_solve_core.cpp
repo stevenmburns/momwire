@@ -147,6 +147,71 @@ void poll(uintptr_t flag) {
 
 void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t lo,
                           ptrdiff_t hi, bool image) {
+    const ptrdiff_t n = n_, nb = hi - lo;
+    const bool compose = image && in.compose;
+    view<cd, 2> dst;
+    if (!image) {
+        // Z's window: column-major, so the rows are the short stride.
+        ptrdiff_t shp[2] = {nb, n}, st[2] = {static_cast<ptrdiff_t>(sizeof(cd)),
+                                             static_cast<ptrdiff_t>(sizeof(cd) * n)};
+        dst = view<cd, 2>(z_.data() + lo, shp, st);
+    } else {
+        reserve(img_, static_cast<size_t>(nb * n));
+        dst = c_view<cd, 2>(img_.data(), {nb, n});
+    }
+    if (reuse_ && in.pair_reuse == 1) {
+        // momwire#2144: the window's c_A T1 - T2 / c_Phi straight from the
+        // class values, the same entries the moment planes below give
+        // (`reuse::assemble_rows`). `verify` (2) keeps the planes: it checks
+        // them.
+        reuse::RowTables tb;
+        tb.s_a = in.s_a;
+        tb.s_b = in.s_b;
+        tb.h_a = in.h_a;
+        tb.h_b = in.h_b;
+        tb.q_a = in.q_a;
+        tb.q_b = in.q_b;
+        tb.fall_a = in.fall_a;
+        tb.fall_b = in.fall_b;
+        tb.wts = in.wts;
+        tb.grounded = in.grounded;
+        tb.c_a_imag = in.c_a_imag;
+        tb.c_phi_imag = in.c_phi_imag;
+        if (compose) {
+            tb.weighted = true;
+            tb.obs_tans = in.comp.obs_tans;
+            tb.src_t = in.comp.src_t;
+            tb.sig_a = in.comp.sig_a;
+            tb.sig_b = in.comp.sig_b;
+            tb.c2 = in.comp.c2;
+        } else {
+            tb.tans = in.tans;
+            tb.td_a = src.td_a;
+            tb.td_b = src.td_b;
+        }
+        reuse::assemble_rows(*plan_, vals_, image ? 1 : 0, lo, hi, tb, in.seg_h, dst);
+        counters.reuse_windows++;
+        counters.reuse_row_windows++;
+    } else {
+        planes(in, src, lo, hi, image, dst);
+    }
+    if (compose) compose_rows(in, lo, hi);
+    if (image) {
+        // `out[lo:hi] -= rows`: one complex subtraction per entry.
+        cd *z = z_.data();
+        const cd *im = img_.data();
+        for (ptrdiff_t j = 0; j < n; j++) {
+            cd *col = z + j * n + lo;
+            for (ptrdiff_t r = 0; r < nb; r++) col[r] -= im[r * n + j];
+        }
+        counters.image_windows++;
+    }
+}
+
+// The window's rows through its moment planes: the moments (or, reusing, their
+// gather), T1 and the fused T2, into `dst`.
+void SolveContext::planes(const SolveInputs &in, const SourceSet &src, ptrdiff_t lo,
+                          ptrdiff_t hi, bool image, view<cd, 2> dst) {
     const ptrdiff_t n = n_, nb = hi - lo, n_seg = in.seg_h.shape(0);
     const int64_t *sa = in.s_a.data(), *sb = in.s_b.data();
 
@@ -272,16 +337,6 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
                                                        static_cast<ptrdiff_t>(sizeof(cd))};
     view<const cd, 2> m0k(n_chop ? m0k_tab.data() : nullptr, k_shape, k_st);
     const view<const cd, 2> t1c(vt1);
-    view<cd, 2> dst;
-    if (!image) {
-        // Z's window: column-major, so the rows are the short stride.
-        ptrdiff_t shp[2] = {nb, n}, st[2] = {static_cast<ptrdiff_t>(sizeof(cd)),
-                                             static_cast<ptrdiff_t>(sizeof(cd) * n)};
-        dst = view<cd, 2>(z_.data() + lo, shp, st);
-    } else {
-        reserve(img_, static_cast<size_t>(nb * n));
-        dst = c_view<cd, 2>(img_.data(), {nb, n});
-    }
     view<const cd, 2> m0w(vm0);
     if (compose) {
         // `M0c[a - c0 : b - c0] *= w_Phi`: each part one fused multiply-add.
@@ -316,7 +371,15 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
             }
     }
     counters.t2_rows_calls++;
-    if (compose) {
+}
+
+// The composing ground's remainder rows Q of the image window, added into
+// its rows (`img_`) before the one minus.
+void SolveContext::compose_rows(const SolveInputs &in, ptrdiff_t lo, ptrdiff_t hi) {
+    const ptrdiff_t n = n_, nb = hi - lo, n_seg = in.seg_h.shape(0);
+    const int64_t *sa = in.s_a.data(), *sb = in.s_b.data();
+    const ptrdiff_t np = static_cast<ptrdiff_t>(in.n_path);
+    {
         // The remainder over the window's path points (`field_windows`,
         // `distinct=True`), its arc moments, and the Q rows, added before
         // the one minus: `rows_T1 += Q_rows`.
@@ -400,16 +463,6 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         const cd *q = q_.data();
         for (size_t i = 0, e = static_cast<size_t>(nb * n); i < e; i++) im[i] += q[i];
         counters.compose_windows++;
-    }
-    if (image) {
-        // `out[lo:hi] -= rows`: one complex subtraction per entry.
-        cd *z = z_.data();
-        const cd *im = img_.data();
-        for (ptrdiff_t j = 0; j < n; j++) {
-            cd *col = z + j * n + lo;
-            for (ptrdiff_t r = 0; r < nb; r++) col[r] -= im[r * n + j];
-        }
-        counters.image_windows++;
     }
 }
 

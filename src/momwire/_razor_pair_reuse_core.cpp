@@ -7,10 +7,13 @@
 // census and gather templates are instantiated here, beside the keys.
 #include "_razor_pair_reuse_core.h"
 
+#include "_fma_inline.h"
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -308,8 +311,7 @@ void clear_cache() { pair_reuse::clear_cache(BASIS); }
 void eval_direct(const Plan &p, const Geometry &g, view<const double, 1> xg,
                  view<const double, 1> wg, double k, uintptr_t cancel_flag, Values &out) {
     out.k = k;
-    out.d0.assign(static_cast<size_t>(p.fam[DIRECT].classes), cd(0.0, 0.0));
-    out.d1.assign(static_cast<size_t>(p.fam[DIRECT].classes), cd(0.0, 0.0));
+    out.d.assign(static_cast<size_t>(2 * p.fam[DIRECT].classes), cd(0.0, 0.0));
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
     std::vector<double> obs, p0, t, h, a, aek, bo;
@@ -361,8 +363,8 @@ void eval_direct(const Plan &p, const Geometry &g, view<const double, 1> xg,
                     view<cd, 2>::contiguous(m0.data(), {no, ns}),
                     view<cd, 2>::contiguous(m1.data(), {no, ns}));
         for (size_t q = 0; q < G.cls.size(); q++) {
-            out.d0[static_cast<size_t>(G.cls[q])] = m0[static_cast<size_t>(G.at[q])];
-            out.d1[static_cast<size_t>(G.cls[q])] = m1[static_cast<size_t>(G.at[q])];
+            out.d[2 * static_cast<size_t>(G.cls[q])] = m0[static_cast<size_t>(G.at[q])];
+            out.d[2 * static_cast<size_t>(G.cls[q]) + 1] = m1[static_cast<size_t>(G.at[q])];
         }
     }
     out.has_d = true;
@@ -431,9 +433,9 @@ void gather_direct(const Plan &p, int block, const int64_t *need, ptrdiff_t n_ne
                    view<const double, 1> seg_h, const Values &v, cd *m0, cd *m1) {
     if (!v.has_d) throw std::invalid_argument("razor pair_reuse: no direct values");
     const ptrdiff_t ns = static_cast<ptrdiff_t>(n_segs(p));
-    const cd *d0 = v.d0.data(), *d1 = v.d1.data();
+    const cd *d = v.d.data();
     pair_reuse::gather(p.fam[DIRECT], block, need, n_need, [&](ptrdiff_t i, ptrdiff_t s, int32_t c, int rel) {
-        const cd a0 = d0[c], a1 = d1[c];
+        const cd a0 = d[2 * static_cast<size_t>(c)], a1 = d[2 * static_cast<size_t>(c) + 1];
         m0[i * ns + s] = a0;
         if (rel) {
             // The source reversed: M1 -> h M0 - M1.
@@ -473,6 +475,246 @@ void gather_remainder(const Plan &p, const int64_t *seg, const double *sign, ptr
         o[0] = cd(a0r, a0i);
         o[1] = cd(a1r, a1i);
     });
+}
+
+// ---------------------------------------------------------------------------
+// momwire#2144: a window's entries from the class values, tile by tile.
+//
+// WHY IT IS THE SAME ARITHMETIC. Under the NEC-5 path rule basis row r's two
+// path points are the centroids of its wings sa[r], sb[r], and its T2 reads
+// the same two centroids (plus = sb[r]; minus = sa[r], dropped on a grounded
+// row). So entry (r, j) reads exactly four pairs, {sa[r], sb[r]} x {sa[j],
+// sb[j]}, each one's (M0, M1) as `gather_direct` writes it (the class value,
+// M1 -> h M0 - M1 on a reversed source), and then the per-entry expressions
+// of `assemble_t1` / `assemble_t1_weighted` (window kind 1) and the fused
+// `t2_rows`, spelled here term for term in their order. Every entry is
+// independent of every other in all three kernels, and the build does not
+// contract (-ffp-contract=off), so neither the tiling nor the loop order
+// moves a bit: the reuse-on fill's Z is the three-kernel route's exactly
+// (`test_razor_reuse_rows_2144.py` holds that against `verify`, which keeps
+// the three kernels).
+//
+// WHY TILES. The three-kernel route writes an (n_need, n_seg) M0 and M1 per
+// window, reads them back for T1, writes T1, and reads M0 and T1 back for
+// T2: at razor's window budget (`_CHUNK_ELEMS`, ~470 rows on a 2,000-basis
+// deck) each plane is tens of MB, so the assembly ran at memory speed and
+// cost more than the reused kernel did (momwire#2144's profile). A tile of
+// TILE_ROWS x TILE_COLS entries gathers its own (<= 2 TILE_ROWS) x (<= 2
+// TILE_COLS) pairs, about 50 kB, and assembles from cache. Neighbouring
+// tiles share their edge pairs, so a pair is gathered about (1 + 1/TILE_ROWS)
+// (1 + 1/TILE_COLS) times, against once per window before.
+namespace {
+
+constexpr ptrdiff_t TILE_ROWS = 16, TILE_COLS = 64;
+
+// Segment s's index in the tile's list, appended on first sight (mark[s] is
+// -1 outside the tile, and is reset by the caller after it).
+inline int32_t local_index(std::vector<int32_t> &mark, std::vector<int64_t> &list, int64_t s) {
+    int32_t &m = mark[static_cast<size_t>(s)];
+    if (m < 0) {
+        m = static_cast<int32_t>(list.size());
+        list.push_back(s);
+    }
+    return m;
+}
+
+}  // namespace
+
+void assemble_rows(const Plan &p, const Values &v, int block, ptrdiff_t lo, ptrdiff_t hi,
+                   const RowTables &t, view<const double, 1> seg_h, view<cd, 2> out) {
+    const char *who = "razor pair_reuse assemble_rows";
+    if (!v.has_d) throw std::invalid_argument("razor pair_reuse: no direct values");
+    const FamilyPlan &f = p.fam[DIRECT];
+    if (block < 0 || block >= f.spec.n_blocks || f.map[block].empty())
+        throw std::invalid_argument("pair_reuse: no such block");
+    const ptrdiff_t n = t.s_a.shape(0), n_seg = static_cast<ptrdiff_t>(n_segs(p));
+    if (lo < 0 || hi > n || lo > hi) throw std::invalid_argument(std::string(who) + ": rows out of range");
+    if (out.shape(0) != hi - lo || out.shape(1) != n)
+        throw std::invalid_argument(std::string(who) + ": out must be (hi - lo, n_basis)");
+    if (t.s_b.shape(0) != n || t.h_a.shape(0) != n || t.h_b.shape(0) != n || t.q_a.shape(0) != n ||
+        t.q_b.shape(0) != n || t.fall_a.shape(0) != n || t.fall_b.shape(0) != n ||
+        t.wts.shape(0) != 2 * n || seg_h.shape(0) != n_seg)
+        throw std::invalid_argument(std::string(who) + ": per-basis arrays disagree on n_basis");
+    if (t.weighted) {
+        if (t.obs_tans.shape(0) != 2 * n || t.obs_tans.shape(1) != 3 || t.src_t.shape(0) != n_seg ||
+            t.src_t.shape(1) != 3 || t.sig_a.shape(0) != n || t.sig_b.shape(0) != n)
+            throw std::invalid_argument(std::string(who) + ": the weighted tables are mis-shaped");
+    } else if (t.tans.shape(0) != 2 * n || t.tans.shape(1) != 3 || t.td_a.shape(0) != 3 ||
+               t.td_a.shape(1) != n || t.td_b.shape(0) != 3 || t.td_b.shape(1) != n) {
+        throw std::invalid_argument(std::string(who) + ": the tangent tables are mis-shaped");
+    }
+    if (!(t.c_phi_imag != 0.0)) throw std::invalid_argument(std::string(who) + ": c_Phi must be nonzero");
+    for (ptrdiff_t j = 0; j < n; j++)
+        if (t.s_a(j) < 0 || t.s_a(j) >= n_seg || t.s_b(j) < 0 || t.s_b(j) >= n_seg)
+            throw std::invalid_argument(std::string(who) + ": wing segment index out of range");
+    if (lo == hi || n == 0) return;
+
+    // `assemble_t1`'s per-column reciprocals, the same division once per
+    // column instead of once per entry.
+    std::vector<double> inv_ha(static_cast<size_t>(n)), inv_hb(static_cast<size_t>(n));
+    for (ptrdiff_t j = 0; j < n; j++) {
+        inv_ha[static_cast<size_t>(j)] = 1.0 / t.h_a(j);
+        inv_hb[static_cast<size_t>(j)] = 1.0 / t.h_b(j);
+    }
+    std::vector<char> grounded(static_cast<size_t>(hi - lo), 0);
+    for (ptrdiff_t g = 0; g < t.grounded.shape(0); g++) {
+        const int64_t row = t.grounded(g);
+        if (row >= lo && row < hi) grounded[static_cast<size_t>(row - lo)] = 1;
+    }
+
+    const int32_t *map = f.map[block].data();
+    const uint8_t *rc = f.rep_code.data();
+    const int cb = f.spec.code_bits;
+    const int32_t mask = (int32_t(1) << cb) - 1;
+    const cd *d = v.d.data();
+    const double a = t.c_a_imag;
+    const double scl = 1.0 / t.c_phi_imag;
+    const cd c2 = t.c2;
+    const bool weighted = t.weighted;
+    // `t2_rows`' walk: rows innermost on a window of the column-major Z.
+    const bool rows_inner =
+        std::llabs(static_cast<long long>(out.st[0])) < std::llabs(static_cast<long long>(out.st[1]));
+    const ptrdiff_t n_rt = (hi - lo + TILE_ROWS - 1) / TILE_ROWS;
+    const ptrdiff_t n_ct = (n + TILE_COLS - 1) / TILE_COLS;
+    const ptrdiff_t n_tiles = n_rt * n_ct;
+
+#pragma omp parallel
+    {
+        std::vector<int32_t> mark(static_cast<size_t>(n_seg), -1);
+        std::vector<int64_t> osegs, ssegs;
+        osegs.reserve(2 * TILE_ROWS);
+        ssegs.reserve(2 * TILE_COLS);
+        int32_t ra[TILE_ROWS], rb[TILE_ROWS], ca[TILE_COLS], cbl[TILE_COLS];
+        std::vector<cd> m0, m1, m0w;
+#pragma omp for schedule(static)
+        for (ptrdiff_t tile = 0; tile < n_tiles; tile++) {
+            const ptrdiff_t r0 = lo + (tile / n_ct) * TILE_ROWS, r1 = std::min(hi, r0 + TILE_ROWS);
+            const ptrdiff_t j0 = (tile % n_ct) * TILE_COLS, j1 = std::min(n, j0 + TILE_COLS);
+            osegs.clear();
+            for (ptrdiff_t r = r0; r < r1; r++) {
+                ra[r - r0] = local_index(mark, osegs, t.s_a(r));
+                rb[r - r0] = local_index(mark, osegs, t.s_b(r));
+            }
+            for (int64_t s : osegs) mark[static_cast<size_t>(s)] = -1;
+            ssegs.clear();
+            for (ptrdiff_t j = j0; j < j1; j++) {
+                ca[j - j0] = local_index(mark, ssegs, t.s_a(j));
+                cbl[j - j0] = local_index(mark, ssegs, t.s_b(j));
+            }
+            for (int64_t s : ssegs) mark[static_cast<size_t>(s)] = -1;
+            const ptrdiff_t no = static_cast<ptrdiff_t>(osegs.size());
+            const ptrdiff_t ns = static_cast<ptrdiff_t>(ssegs.size());
+
+            // `gather_direct`'s visit, on the tile's pairs.
+            const size_t nt = static_cast<size_t>(no * ns);
+            if (m0.size() < nt) {
+                m0.resize(nt);
+                m1.resize(nt);
+                if (weighted) m0w.resize(nt);
+            }
+            for (ptrdiff_t io = 0; io < no; io++) {
+                const int32_t *row = map + osegs[static_cast<size_t>(io)] * n_seg;
+                for (ptrdiff_t is = 0; is < ns; is++) {
+                    const int64_t s = ssegs[static_cast<size_t>(is)];
+                    const int32_t e = row[s];
+                    const int32_t c = e >> cb;
+                    const cd a0 = d[2 * static_cast<size_t>(c)], a1 = d[2 * static_cast<size_t>(c) + 1];
+                    const size_t i = static_cast<size_t>(io * ns + is);
+                    m0[i] = a0;
+                    if ((e & mask) ^ rc[c]) {
+                        // The source reversed: M1 -> h M0 - M1.
+                        const double h = seg_h(s);
+                        m1[i] = cd(h * a0.real() - a1.real(), h * a0.imag() - a1.imag());
+                    } else {
+                        m1[i] = a1;
+                    }
+                    if (weighted) {
+                        // The solve core's `M0c *= w_Phi`, w_Phi = C2: numpy's
+                        // fused complex product.
+                        const double ar = a0.real(), ai = a0.imag();
+                        m0w[i] = cd(mw_fma::exact(ar, c2.real(), -(ai * c2.imag())),
+                                    mw_fma::exact(ar, c2.imag(), ai * c2.real()));
+                    }
+                }
+            }
+            const cd *M0 = m0.data(), *M1 = m1.data(), *MW = weighted ? m0w.data() : m0.data();
+
+            auto entry = [&](ptrdiff_t r, ptrdiff_t j) {
+                const ptrdiff_t la = ca[j - j0], lb = cbl[j - j0];
+                const ptrdiff_t qrow[2] = {ra[r - r0] * ns, rb[r - r0] * ns};
+                const double inv_a = inv_ha[static_cast<size_t>(j)];
+                const double inv_b = inv_hb[static_cast<size_t>(j)];
+                const bool fall_j_a = t.fall_a(j), fall_j_b = t.fall_b(j);
+                double xr, xi;
+                if (!weighted) {
+                    // `assemble_t1`.
+                    const double a0 = t.td_a(0, j), a1 = t.td_a(1, j), a2 = t.td_a(2, j);
+                    const double b0 = t.td_b(0, j), b1 = t.td_b(1, j), b2 = t.td_b(2, j);
+                    double acc_re = 0.0, acc_im = 0.0;
+                    for (ptrdiff_t pp = 0; pp < 2; pp++) {
+                        const ptrdiff_t o = 2 * r + pp, q = qrow[pp];
+                        std::complex<double> ma = M1[q + la] * inv_a;
+                        if (fall_j_a) ma = M0[q + la] - ma;
+                        std::complex<double> mb = M1[q + lb] * inv_b;
+                        if (fall_j_b) mb = M0[q + lb] - mb;
+                        const double dot_a = t.tans(o, 0) * a0 + t.tans(o, 1) * a1 + t.tans(o, 2) * a2;
+                        const double dot_b = t.tans(o, 0) * b0 + t.tans(o, 1) * b1 + t.tans(o, 2) * b2;
+                        const double wo = t.wts(o);
+                        const double gre = dot_a * ma.real() + dot_b * mb.real();
+                        const double gim = dot_a * ma.imag() + dot_b * mb.imag();
+                        acc_re += wo * gre;
+                        acc_im += wo * gim;
+                    }
+                    xr = acc_re;
+                    xi = acc_im;
+                } else {
+                    // `assemble_t1_weighted` under WINDOW_RULE_CONSTANT_MIRROR:
+                    // `razor_a_window` is C2 times the mirrored tangent dot.
+                    const int64_t ja = t.s_a(j), jb = t.s_b(j);
+                    const double sg_a = t.sig_a(j), sg_b = t.sig_b(j);
+                    const double atx = t.src_t(ja, 0), aty = t.src_t(ja, 1), atz = t.src_t(ja, 2);
+                    const double btx = t.src_t(jb, 0), bty = t.src_t(jb, 1), btz = t.src_t(jb, 2);
+                    std::complex<double> acc(0.0, 0.0);
+                    for (ptrdiff_t pp = 0; pp < 2; pp++) {
+                        const ptrdiff_t o = 2 * r + pp, q = qrow[pp];
+                        std::complex<double> ma = M1[q + la] * inv_a;
+                        if (fall_j_a) ma = M0[q + la] - ma;
+                        std::complex<double> mb = M1[q + lb] * inv_b;
+                        if (fall_j_b) mb = M0[q + lb] - mb;
+                        const double tx = t.obs_tans(o, 0), ty = t.obs_tans(o, 1), tz = t.obs_tans(o, 2);
+                        const double td_img_a = tx * atx + ty * aty - tz * atz;
+                        const double td_img_b = tx * btx + ty * bty - tz * btz;
+                        const std::complex<double> wa = (c2 * td_img_a) * sg_a;
+                        const std::complex<double> wb = (c2 * td_img_b) * sg_b;
+                        acc += t.wts(o) * (wa * ma + wb * mb);
+                    }
+                    xr = acc.real();
+                    xi = acc.imag();
+                }
+                // The fused `t2_rows`: plus is sb[r]'s row, minus sa[r]'s.
+                const cd pa = MW[qrow[1] + la], pb = MW[qrow[1] + lb];
+                double dar = pa.real(), dai = pa.imag(), dbr = pb.real(), dbi = pb.imag();
+                if (!grounded[static_cast<size_t>(r - lo)]) {
+                    const cd ma = MW[qrow[0] + la], mb = MW[qrow[0] + lb];
+                    dar = dar - ma.real();
+                    dai = dai - ma.imag();
+                    dbr = dbr - mb.real();
+                    dbi = dbi - mb.imag();
+                }
+                const double qa = t.q_a(j), qb = t.q_b(j);
+                const double t2r = dar * qa + dbr * qb;
+                const double t2i = dai * qa + dbi * qb;
+                out(r - lo, j) = cd(-(a * xi) - t2i * scl, a * xr + t2r * scl);
+            };
+            if (rows_inner) {
+                for (ptrdiff_t j = j0; j < j1; j++)
+                    for (ptrdiff_t r = r0; r < r1; r++) entry(r, j);
+            } else {
+                for (ptrdiff_t r = r0; r < r1; r++)
+                    for (ptrdiff_t j = j0; j < j1; j++) entry(r, j);
+            }
+        }
+    }
 }
 
 void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out) {

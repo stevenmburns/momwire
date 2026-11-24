@@ -153,6 +153,9 @@ struct Counters {
     // windows whose moments / remainder rows came from it.
     uint64_t reuse_fills = 0, reuse_declined = 0, reuse_windows = 0, reuse_q_windows = 0;
     uint64_t reuse_q_declined = 0;
+    // momwire#2144: the reused windows assembled straight from the class
+    // values (`reuse::assemble_rows`), with no moment planes.
+    uint64_t reuse_row_windows = 0;
     double reuse_verify_worst = 0.0, reuse_seconds = 0.0;
     double fill_seconds = 0.0, lu_seconds = 0.0;
 };
@@ -262,6 +265,9 @@ class SolveContext {
     }
     void window(const SolveInputs &in, const SourceSet &src, ptrdiff_t lo,
                 ptrdiff_t hi, bool image);
+    void planes(const SolveInputs &in, const SourceSet &src, ptrdiff_t lo, ptrdiff_t hi,
+                bool image, view<cd, 2> dst);
+    void compose_rows(const SolveInputs &in, ptrdiff_t lo, ptrdiff_t hi);
 };
 
 }  // namespace razor
