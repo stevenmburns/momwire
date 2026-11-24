@@ -724,6 +724,7 @@ FEATURES: dict[str, Feature] = {
                 "src/momwire/_pair_reuse_core.cpp",
                 "src/momwire/_pair_reuse_core.h",
                 "tests/test_razor_pair_reuse_1971.py",
+                "tests/test_razor_reuse_rows_2144.py",
             ),
             label="razor pair reuse",
             summary=(
