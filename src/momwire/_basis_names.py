@@ -4,9 +4,11 @@ A SHORT name is the basis alone (``bs2``, ``bs1``, ``sg``, ``razor2p``,
 ``sinusoidal``); a LONG name is dialect, then basis (``nec5-bs2``,
 ``nec42-sinusoidal``, ``nec2c-bs2``). Short names carry no dash (momwire#2091),
 so a long name splits at its first dash with no ambiguity. The dialect parts
-are exactly ``nec5``, ``nec42`` and ``nec2c``: SimNEC identifies an engine's
-dialect by those substrings in its path. A name that folds the dialect into
-the basis (``bs42``, ``sin42``) is not a basis name.
+are exactly ``nec5``, ``nec42``, ``nec2c`` and ``nec2d``: SimNEC identifies an
+engine's dialect by the first three of those substrings in its path, and
+``nec2d`` is the NEC-2 dialect printed in LLNL's NEC-2D layout for 4nec2
+(momwire#2138). A name that folds the dialect into the basis (``bs42``,
+``sin42``) is not a basis name.
 
 `BASIS_ALIASES` maps each spelling that shipped before the rename to the name
 it now answers as. An alias answers exactly as its canonical name does: every
@@ -58,7 +60,7 @@ RETIRED_BASES = MappingProxyType({"razor-nec5": "razor2p"})
 
 # The dialect prefixes of a long name, longest first so `nec42-` is not read
 # as `nec4` + `2-...`.
-DIALECTS = ("nec42", "nec2c", "nec5", "nec4")
+DIALECTS = ("nec42", "nec2c", "nec2d", "nec5", "nec4")
 
 
 def _warn(name: str, canonical: str, stacklevel: int) -> None:
