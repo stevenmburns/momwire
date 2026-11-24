@@ -60,6 +60,12 @@ export default defineConfig({
       ],
       sidebar: [
         {
+          label: "Start here",
+          items: [
+            { label: "Quick start: EZNEC, SimNEC, 4nec2", slug: "start/windows-quickstart" },
+          ],
+        },
+        {
           label: "Act I — From a wire to a matrix",
           items: [
             { label: "The question", slug: "act-1/the-question" },
