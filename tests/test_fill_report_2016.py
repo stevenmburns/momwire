@@ -80,28 +80,22 @@ def _small_decks_and_fresh_plans(monkeypatch):
     """Serve the reuse on these small decks, from no plan left by another
     test."""
     acc.razor_reuse_set_small_deck_segs(0, 0)
+    acc.bspline_reuse_set_small_deck_segs(0)
     monkeypatch.setattr(pr, "SMALL_DECK_SEGS_FREE", 0)
     monkeypatch.setattr(pr, "SMALL_DECK_SEGS_GROUND", 0)
     acc.razor_reuse_cache_clear()
+    acc.bspline_reuse_cache_clear()
     pr.clear_shared_plans()
     yield
     acc.razor_reuse_set_small_deck_segs(-1, -1)
+    acc.bspline_reuse_set_small_deck_segs(-1)
     acc.razor_reuse_cache_clear()
+    acc.bspline_reuse_cache_clear()
     pr.clear_shared_plans()
 
 
 def razor(deck=None, **kw):
     return RazorSolver(nec5_quadrature=True, **(deck or yagi()), **kw)
-
-
-def hint_of(deck):
-    """Every ordered pair of elements at one spacing is one class."""
-    n = len(deck["wires"])
-    classes = {}
-    for a in range(n):
-        for b in range(a, n):
-            classes.setdefault(b - a, []).append(((a, 0), (b, 0)))
-    return [c for c in classes.values() if len(c) > 1]
 
 
 def reconciles(reuse):
@@ -216,11 +210,11 @@ def test_no_census_without_the_option(monkeypatch):
         "sin_pair_reuse_plan",
         lambda *a, **k: calls.append("sin") or real_plan(*a, **k),
     )
-    real_check = BSplineSolver._pair_reuse_plan_checked
+    real_bs2 = acc.bspline_reuse_plan
     monkeypatch.setattr(
-        BSplineSolver,
-        "_pair_reuse_plan_checked",
-        lambda *a, **k: calls.append("bs2") or real_check(*a, **k),
+        acc,
+        "bspline_reuse_plan",
+        lambda *a, **k: calls.append("bs2") or real_bs2(*a, **k),
     )
     for s in (razor(), SinusoidalSolver(**yagi()), BSplineSolver(**yagi())):
         s.compute_impedance()
@@ -282,20 +276,22 @@ def test_sinusoidal_counts_reconcile(ground, names):
 
 def test_bspline_counts_reconcile_on_the_tensor_route():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck), offset_reuse=False)
+    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "tensor"
     reuse = s.fill_report()["reuse"]
     assert reuse["state"] == "served"
     assert reuse["reused"] == served["copied_pairs"]
-    assert reuse["computed"] == served["computed_pairs"]
+    assert reuse["near"] == served["near_pairs"]
+    same = sum(n * n for (n,) in deck["n_per_edge_per_wire"])
+    assert reuse["computed"] == served["classes"] + same
     reconciles(reuse)
 
 
 def test_bspline_counts_reconcile_on_the_chunked_route():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck))
+    s = BSplineSolver(**deck, pair_reuse=True)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
@@ -307,7 +303,7 @@ def test_bspline_counts_reconcile_on_the_chunked_route():
 
 
 def test_bspline_offset_edges_alone_are_served():
-    s = BSplineSolver(**yagi(), pair_reuse=True)
+    s = BSplineSolver(**yagi(), offset_reuse=True)
     s.compute_impedance()
     assert s.pair_reuse_served is None
     reuse = s.fill_report()["reuse"]
@@ -319,7 +315,7 @@ def test_bspline_offset_edges_alone_are_served():
 def test_the_families_on_bspline_count_the_ground_image():
     # momwire#2068: the image is its own family (it used to be uncounted).
     deck = yagi(height=6.0)
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck), ground_z=0.0)
+    s = BSplineSolver(**deck, pair_reuse=True, ground_z=0.0)
     s.compute_impedance()
     reuse = s.fill_report()["reuse"]
     assert reuse["uncounted"] == []
@@ -353,7 +349,7 @@ def test_a_plan_past_its_allowance_reports_the_decline(monkeypatch):
 def test_a_later_unserved_fill_does_not_read_as_served():
     """The batched sweep reads no plan, whatever the fill before it served."""
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck), offset_reuse=False)
+    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
     s.compute_impedance()
     assert s.fill_report()["reuse"]["state"] == "served"
     s.compute_impedance_swept(np.array([0.99, 1.01]) * 2 * math.pi / LAM)
@@ -362,22 +358,9 @@ def test_a_later_unserved_fill_does_not_read_as_served():
     assert "batched sweep" in reuse["declined"]
 
 
-def test_blocks_the_chunked_budget_cut_read_as_partial(monkeypatch):
-    deck = yagi()
-    # Room for one or two of the four source classes (127 kB each).
-    monkeypatch.setattr(bspline_mod, "_CHUNKED_REUSE_BUDGET_SHARE", 0.003)
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck), swept_mem_mb=64)
-    s.compute_impedance()
-    served = s.pair_reuse_served
-    assert served["cut_blocks"] > 0 and served["copied_blocks"] > 0
-    reuse = s.fill_report()["reuse"]
-    assert reuse["state"] == "partial" and "budget" in reuse["declined"]
-    reconciles(reuse)
-
-
 def test_the_accelerated_operator_declines_by_name():
     deck = yagi()
-    s = HMatrixSolver(**deck, pair_reuse=hint_of(deck))
+    s = HMatrixSolver(**deck, pair_reuse=True)
     s.compute_impedance()
     report = s.fill_report()
     assert report["route"] == "hmatrix"
@@ -507,15 +490,17 @@ def test_bspline_computed_pairs_match_a_spy_on_the_moment_fill(monkeypatch):
 
     monkeypatch.setattr(bspline_mod, "_seg_seg_full_moments_offedge", spy)
     deck = yagi(n_el=4, n_seg=15)
-    s = BSplineSolver(**deck, pair_reuse=hint_of(deck))
+    s = BSplineSolver(**deck, pair_reuse=True)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
-    assert sum(pairs) == served["computed_pairs"]
+    assert sum(pairs) == served["kernel_evals"]
     reuse = s.fill_report()["reuse"]
+    assert reuse["families"]["direct"]["kernel_evals"] >= reuse["computed"]
     assert reuse["computed"] == (
         reuse["pairs"]
         - served["copied_pairs"]
+        - served["near_pairs"]
         - served["offset_pairs"]
         + served["offset_distinct"]
     )
@@ -535,7 +520,7 @@ def solved(make):
     [
         lambda: razor(pair_reuse=True),
         lambda: SinusoidalSolver(**yagi(), pair_reuse=True),
-        lambda: BSplineSolver(**yagi(), pair_reuse=hint_of(yagi())),
+        lambda: BSplineSolver(**yagi(), pair_reuse=True),
     ],
     ids=["razor", "sinusoidal", "bs2"],
 )

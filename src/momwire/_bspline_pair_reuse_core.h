@@ -124,7 +124,7 @@ constexpr const char *BASIS = "bs2";
 int64_t kept_bytes_per_class(int degree);
 // THE ALLOWANCE (momwire#2123): 4 B a pair for the class map plus
 // `kept_bytes_per_class` per class the 2x cap allows, `pair_reuse::plan_allowance`
-// (82.5 B a pair at d = 2), or the TEST HOOK's bytes.
+// (84.5 B a pair at d = 2), or the TEST HOOK's bytes.
 int64_t plan_allowance(const Plan &p, int degree);
 void set_plan_allowance(int64_t bytes);  // TEST HOOK, <= 0 restores
 void set_class_limit(int64_t classes);   // TEST HOOK, 0: the coding's only
@@ -183,10 +183,11 @@ void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd 
 // keyed alike and copied between congruent edges.
 //
 // Not the direct classes: a block copies only when every pair of it would,
-// and the direct key's rounding of a pair's geometry splits congruent pairs
-// across a quantum one time in a few hundred, so whole blocks of the direct
-// classes rarely agree (on the 10-element Yagi's 104-segment edges, none
-// would).
+// and the direct key's rounding of a pair's geometry now and then splits
+// congruent pairs across a quantum, which costs a pair only compression but a
+// block its copy: matched by direct classes elementwise, the 10-element
+// Yagi's remainder computed 1.85 M of its 4.68 M pairs, against 0.58 M by
+// edge pairs (the hint route's 0.58 M too).
 struct RemainderGeometry {
     const double *seg_l = nullptr, *seg_r = nullptr;  // (n, 3)
     const double *a = nullptr;                        // (n)

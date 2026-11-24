@@ -179,17 +179,18 @@ def _bspline(**kw):
 
 def test_bspline_pair_reuse_turns_on_offset_reuse(no_features):
     s = _bspline()
-    assert s._offset_reuse is False and s._pair_reuse_given is None
+    assert s._offset_reuse is False and s._reuse_on is False
     assert s.pair_reuse_declined is None
-    s = _bspline(pair_reuse=True)  # on, with no hint to copy
-    assert s._offset_reuse is True and s._pair_reuse_given is None
+    s = _bspline(pair_reuse=True)  # on: the census finds the classes
+    assert s._offset_reuse is True and s._reuse_on is True
     s = _bspline(pair_reuse="verify")  # the other solvers' check: on here
-    assert s._offset_reuse is True and s._pair_reuse_given is None
+    assert s._offset_reuse is True and s._reuse_on is True
     s = _bspline(pair_reuse=False)
-    assert s._offset_reuse is False and s._pair_reuse_given is None
+    assert s._offset_reuse is False and s._reuse_on is False
     hint = [[(0, 0), (0, 0)]]
-    s = _bspline(pair_reuse=hint)
-    assert s._offset_reuse is True and s._pair_reuse_given is hint
+    s = _bspline(pair_reuse=hint)  # a front end's hint reads as on, unkept
+    assert s._offset_reuse is True and s._reuse_on is True
+    assert not any(v is hint for v in vars(s).values())
     # The alias wins.
     assert _bspline(pair_reuse=hint, offset_reuse=False)._offset_reuse is False
     assert _bspline(pair_reuse=False, offset_reuse=True)._offset_reuse is True
@@ -199,8 +200,12 @@ def test_bspline_pair_reuse_turns_on_offset_reuse(no_features):
 
 
 def test_bspline_with_pair_reuse_true_is_offset_reuse_to_the_bit(no_features):
+    # One 21-segment wire, under the census's small-deck threshold: the plan
+    # declines by name and the whole is its part.
     z_alias = _bspline(offset_reuse=True).compute_impedance()[0]
-    z_whole = _bspline(pair_reuse=True).compute_impedance()[0]
+    whole = _bspline(pair_reuse=True)
+    z_whole = whole.compute_impedance()[0]
+    assert whole.pair_reuse_declined.startswith("too few segments to repay the plan")
     z_off = _bspline().compute_impedance()[0]
     a, b = (np.atleast_1d(np.asarray(z, dtype=complex)) for z in (z_alias, z_whole))
     assert np.array_equal(a.view(np.uint64), b.view(np.uint64))

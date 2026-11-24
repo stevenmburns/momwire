@@ -1251,7 +1251,7 @@ class ArrayBlockSolver(HMatrixSolver):
             return H
         # Ahead of the operator cache: a hit builds nothing, and reads no hint
         # either (momwire#2020).
-        self._decline_unread_hint("the array-block operator does not read the hint")
+        self._decline_unread_plan("the array-block operator does not read the hint")
         key = (
             self._geometry_cache_key(),
             float(self.k),
@@ -1436,7 +1436,7 @@ class ArrayBlockSolver(HMatrixSolver):
             tol = self.aca_tol
         if k is None:
             k = self.k
-        self._decline_unread_hint("the array-block operator does not read the hint")
+        self._decline_unread_plan("the array-block operator does not read the hint")
         part = self.array_partition()
         ctx = self._context()
         n = ctx["n_basis"]
