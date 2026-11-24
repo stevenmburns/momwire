@@ -11,7 +11,7 @@ serve, so the choice is about speed and convenience, not about the answer.
 |---|---|
 | A NEC-5 deck, run directly or from EZNEC's or SimNEC's NEC-5 engine setting | The standalone executable, [`momwire-nec5-windows-x64.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-nec5-windows-x64.zip) |
 | A deck the executable refuses (its printout says `not served by this build`), the NEC-4.2 engine slot, a NEC-2 engine, or another formulation | The drop-in, [`momwire-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-windows.zip) |
-| One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`, on releases that list it |
+| One file per engine, nothing beside it | The single-file build (preview), `momwire-nec5-windows-x64-single.zip`: `momwire-nec5-bs2.exe` and `momwire-nec5-razor2p.exe`, NEC-5 only |
 | momwire from your own Python, as a library or as commands | `pip install momwire` (Python 3.10 or later); see [From Python](#from-python) |
 
 ## The standalone executable first
@@ -29,6 +29,10 @@ formulation, use the drop-in. Its NEC-2 engines, `momwire-nec2c.exe` and
 `momwire-nec2c-sinusoidal.exe`, are the same engines as the `pip install
 momwire` commands of those names, and answer SimNEC's NEC-2 engine setting and
 nec2c's command line the same way ([NEC-2 launchers](/reference/portal-usage/)).
+4nec2's NEC-2 slot takes `momwire-nec2d.exe` and `momwire-nec2d-sinusoidal.exe`
+instead: the same engines, writing the printout layout of 4nec2's own NEC-2
+engines, which is the one 4nec2 reads
+([In 4nec2](/reference/eznec-nec5/#in-4nec2)).
 
 The drop-in ships two launchers per dialect. Any other formulation is one
 copy away: copy a launcher in the unpacked folder and rename the copy
