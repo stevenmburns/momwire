@@ -1302,6 +1302,13 @@ _HAVE_PAIR_REUSE = _acc is not None and bool(
     getattr(_acc, "razor_pair_reuse_1971", False)
 )
 _PAIR_REUSE_ROUTE = {}
+# momwire#2144: a reused window assembled from the class values in one pass
+# (`reuse::assemble_rows`), without its moment planes.
+_HAVE_REUSE_ROWS = _HAVE_PAIR_REUSE and bool(
+    getattr(_acc, "razor_reuse_rows_2144", False)
+)
+# The windows it assembled, for tests: a gate on its answer first proves it ran.
+_REUSE_ROWS_COUNT = [0]
 # The last plan's census (`RazorReusePlan.stats()`): pairs, classes, the
 # representatives' evaluations, the census's seconds. For tests and studies.
 _PAIR_REUSE_STATS = [None]
@@ -7080,6 +7087,40 @@ class RazorSolver(
             if chop is not None
             else np.empty((0, prepared["n_seg"]), dtype=np.complex128)
         )
+        # momwire#2144: a reused block's rows straight from the class values,
+        # where the three-kernel route below would run its C++ kernels on them
+        # (the T1 assemblers on centroid rows, the fused T2): unweighted, or
+        # the composing ground's constant-mirror window, whose w_Phi is the
+        # same C2 (`PotentialGround.weight_windows`). `verify` keeps the
+        # three kernels, which it checks.
+        rows_direct = (
+            reuse is not None
+            and reuse.mode == 1
+            and _HAVE_REUSE_ROWS
+            and _HAVE_RAZOR_T1_ROWS_ACCEL
+            and t2_fuse
+            and chop is None
+            and n_path == 2
+            and (
+                (w_A_fn is None and _use_razor_assemble_accel())
+                or (
+                    w_rule is not None
+                    and w_rule.kind == _potential_ground.WINDOW_RULE_CONSTANT_MIRROR
+                )
+            )
+        )
+        if rows_direct:
+            wts_flat = wts.reshape(-1)
+            if w_A_fn is None:
+                rows_tabs = {"tans": tans.reshape(-1, 3), "td_a": td_a, "td_b": td_b}
+            else:
+                rows_tabs = {
+                    "obs_tans": sources["obs_tans"],
+                    "src_t": sources["src_t"],
+                    "sig_a": sig_a,
+                    "sig_b": sig_b,
+                    "c2": complex(w_rule.coefficient),
+                }
         # Each window's T1 rows (`t1`, the window's own C-order array) are
         # combined with T2 into `rows_T1`, which holds the finished block's
         # rows. Without `into`, only one window of the block exists at a
@@ -7099,141 +7140,169 @@ class RazorSolver(
             # `restrict` their image in its target (momwire#1337).
             d0, d1 = (lo, hi) if restrict is None else restrict.target(lo, hi)
             rows_T1 = _schedule.row_window(into, d0, d1, n_basis)
-            if shared is not None:
-                # Under NEC-5's path rule the window's T1 observers are the
-                # centroids of its wings (`_testing_paths`), each one twice
-                # (once per basis it ends), and T2 reads the same centroids:
-                # each is evaluated once, by the centroid token, and T1 reads
-                # its observers' rows through `obs_row` (the assemblers) or a
-                # gather (numpy). A moment row is a function of its observer
-                # alone (`_FusedMoments.rows`), and these are the same floats
-                # `cent` gives both prepares.
-                need = np.unique(np.concatenate([s_a[lo:hi], s_b[lo:hi]]))
-                if reuse is not None:
-                    # momwire#1971: the window's rows from the class values.
-                    M0, M1 = reuse.plan.gather(reuse.values, block, need)
-                    if reuse.mode == 2:
-                        R0, R1 = (
+            if rows_direct:
+                # momwire#2144: the window's finished rows straight from the
+                # class values (`reuse::assemble_rows`): the gather, T1 and the
+                # fused T2 below give these entries bit for bit, through two
+                # (n_need, n_seg) moment planes and a T1 this never forms.
+                reuse.plan.assemble_rows(
+                    reuse.values,
+                    block,
+                    lo,
+                    hi,
+                    rows_T1,
+                    s_a,
+                    s_b,
+                    h_a,
+                    h_b,
+                    q_a,
+                    q_b,
+                    fall_mask_a,
+                    fall_mask_b,
+                    wts_flat,
+                    grounded,
+                    c_A.imag,
+                    c_Phi.imag,
+                    **rows_tabs,
+                )
+                _REUSE_ROWS_COUNT[0] += 1
+                t1 = None
+            else:
+                if shared is not None:
+                    # Under NEC-5's path rule the window's T1 observers are the
+                    # centroids of its wings (`_testing_paths`), each one twice
+                    # (once per basis it ends), and T2 reads the same centroids:
+                    # each is evaluated once, by the centroid token, and T1 reads
+                    # its observers' rows through `obs_row` (the assemblers) or a
+                    # gather (numpy). A moment row is a function of its observer
+                    # alone (`_FusedMoments.rows`), and these are the same floats
+                    # `cent` gives both prepares.
+                    need = np.unique(np.concatenate([s_a[lo:hi], s_b[lo:hi]]))
+                    if reuse is not None:
+                        # momwire#1971: the window's rows from the class values.
+                        M0, M1 = reuse.plan.gather(reuse.values, block, need)
+                        if reuse.mode == 2:
+                            R0, R1 = (
+                                sources["t2_chunks"]
+                                .take(need)
+                                .evaluate(self, k, need_m1=True, n_obs=need.size)
+                            )
+                            _reuse_check(R0, R1, M0, M1, reuse.seg_h, "moment")
+                            del R0, R1
+                    else:
+                        M0, M1 = (
                             sources["t2_chunks"]
                             .take(need)
                             .evaluate(self, k, need_m1=True, n_obs=need.size)
                         )
-                        _reuse_check(R0, R1, M0, M1, reuse.seg_h, "moment")
-                        del R0, R1
-                else:
-                    M0, M1 = (
-                        sources["t2_chunks"]
-                        .take(need)
-                        .evaluate(self, k, need_m1=True, n_obs=need.size)
+                    obs_row = np.searchsorted(
+                        need, np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel()
                     )
-                obs_row = np.searchsorted(
-                    need, np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel()
-                )
-                shared[0] = (lo, hi, need, M0)
-            else:
-                M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
-                obs_row = None
-            by_rows = obs_row is not None and _HAVE_RAZOR_T1_ROWS_ACCEL
-            if obs_row is not None and not (
-                by_rows
-                and (
-                    (w_A_fn is None and _use_razor_assemble_accel())
-                    or w_rule is not None
-                )
-            ):
-                M0, M1 = M0[obs_row], M1[obs_row]
-                obs_row = None
-            t1_rows = {} if obs_row is None else {"obs_row": obs_row}
-            if w_A_fn is None and _use_razor_assemble_accel():
-                # momwire#780: the gather, the falling-wing correction, the
-                # tangent contraction, the weighting and the path-point sum in
-                # ONE pass, so the (n_obs, n_basis) complex intermediate the
-                # numpy branch builds and immediately reduces is never formed.
-                # At n_path = 64 on a 200-segment deck that temporary is ~32 MB
-                # per chunk, and the assembly around it measured 52-76% of
-                # razor's wall time (both lanes, both grounds).
-                #
-                # Both lanes come through here. `n_path` is a loop bound in the
-                # kernel, not a branch: 2 under `nec5_quadrature`, 2*n_qp_path
-                # under Gauss-Legendre.
-                t1 = _acc.razor_assemble_t1(
-                    M0,
-                    M1,
-                    s_a,
-                    s_b,
-                    h_a,
-                    h_b,
-                    fall_mask_a,
-                    fall_mask_b,
-                    tans[lo:hi].reshape(-1, 3),
-                    td_a,
-                    td_b,
-                    wts[lo:hi].reshape(-1),
-                    n_path,
-                    **t1_rows,
-                )
-            elif w_rule is not None:
-                # momwire#744, extended to the composing ground by #806: the
-                # weighted twin of the branch above. The per-pair A-term
-                # window is formed INSIDE the tile from the same geometry the
-                # numpy closure reads, so the (n_obs_chunk, n_seg) window
-                # plane is never materialised -- at N=801 over a refl-coef
-                # ground that plane and the contraction around it were 40%
-                # and 28% of the fill.
-                #
-                # WHICH window is the ground's own answer, arriving as a rule
-                # rather than as attributes this fill reads. That is the whole
-                # of #806: C2 reaches Z through the windows, and #804's draft
-                # doubled the exact-image half by reading the coefficient
-                # here.
-                #
-                # The observer rows are this chunk's path points, sliced out
-                # of the SAME arrays `w_A_fn` closes over, so the kernel and
-                # the closure cannot disagree about which observers these are.
-                t1 = _acc.razor_assemble_t1_weighted(
-                    M0,
-                    M1,
-                    s_a,
-                    s_b,
-                    h_a,
-                    h_b,
-                    fall_mask_a,
-                    fall_mask_b,
-                    sig_a,
-                    sig_b,
-                    sources["obs_pts"][lo * n_path : hi * n_path],
-                    sources["obs_tans"][lo * n_path : hi * n_path],
-                    sources["src_c"],
-                    sources["src_t"],
-                    wts[lo:hi].reshape(-1),
-                    n_path,
-                    w_rule.kind,
-                    w_rule.eps_t,
-                    w_rule.ground_z,
-                    w_rule.coefficient,
-                    **t1_rows,
-                )
-            else:
-                mom_a = M1[:, s_a] / h_a[None, :]
-                mom_b = M1[:, s_b] / h_b[None, :]
-                if fall_a.size:
-                    mom_a[:, fall_a] = M0[:, s_a[fall_a]] - mom_a[:, fall_a]
-                if fall_b.size:
-                    mom_b[:, fall_b] = M0[:, s_b[fall_b]] - mom_b[:, fall_b]
-                if w_A_fn is None:
-                    t_out = tans[lo:hi].reshape(-1, 3)
-                    integrand = (t_out @ td_a) * mom_a + (t_out @ td_b) * mom_b
+                    shared[0] = (lo, hi, need, M0)
                 else:
-                    # The window's observer rows are this chunk's path points,
-                    # which are rows [lo, hi) of the path table flattened by
-                    # `n_path` — the same reshape the unweighted branch takes
-                    # on `tans`.
-                    w_A, _w_Phi_unused = w_A_fn(lo * n_path, hi * n_path)
-                    wA_a = w_A[:, s_a] * sig_a[None, :]
-                    wA_b = w_A[:, s_b] * sig_b[None, :]
-                    integrand = wA_a * mom_a + wA_b * mom_b
-                integrand *= wts[lo:hi].reshape(-1)[:, None]
-                t1 = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+                    M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
+                    obs_row = None
+                by_rows = obs_row is not None and _HAVE_RAZOR_T1_ROWS_ACCEL
+                if obs_row is not None and not (
+                    by_rows
+                    and (
+                        (w_A_fn is None and _use_razor_assemble_accel())
+                        or w_rule is not None
+                    )
+                ):
+                    M0, M1 = M0[obs_row], M1[obs_row]
+                    obs_row = None
+                t1_rows = {} if obs_row is None else {"obs_row": obs_row}
+                if w_A_fn is None and _use_razor_assemble_accel():
+                    # momwire#780: the gather, the falling-wing correction, the
+                    # tangent contraction, the weighting and the path-point sum in
+                    # ONE pass, so the (n_obs, n_basis) complex intermediate the
+                    # numpy branch builds and immediately reduces is never formed.
+                    # At n_path = 64 on a 200-segment deck that temporary is ~32 MB
+                    # per chunk, and the assembly around it measured 52-76% of
+                    # razor's wall time (both lanes, both grounds).
+                    #
+                    # Both lanes come through here. `n_path` is a loop bound in the
+                    # kernel, not a branch: 2 under `nec5_quadrature`, 2*n_qp_path
+                    # under Gauss-Legendre.
+                    t1 = _acc.razor_assemble_t1(
+                        M0,
+                        M1,
+                        s_a,
+                        s_b,
+                        h_a,
+                        h_b,
+                        fall_mask_a,
+                        fall_mask_b,
+                        tans[lo:hi].reshape(-1, 3),
+                        td_a,
+                        td_b,
+                        wts[lo:hi].reshape(-1),
+                        n_path,
+                        **t1_rows,
+                    )
+                elif w_rule is not None:
+                    # momwire#744, extended to the composing ground by #806: the
+                    # weighted twin of the branch above. The per-pair A-term
+                    # window is formed INSIDE the tile from the same geometry the
+                    # numpy closure reads, so the (n_obs_chunk, n_seg) window
+                    # plane is never materialised -- at N=801 over a refl-coef
+                    # ground that plane and the contraction around it were 40%
+                    # and 28% of the fill.
+                    #
+                    # WHICH window is the ground's own answer, arriving as a rule
+                    # rather than as attributes this fill reads. That is the whole
+                    # of #806: C2 reaches Z through the windows, and #804's draft
+                    # doubled the exact-image half by reading the coefficient
+                    # here.
+                    #
+                    # The observer rows are this chunk's path points, sliced out
+                    # of the SAME arrays `w_A_fn` closes over, so the kernel and
+                    # the closure cannot disagree about which observers these are.
+                    t1 = _acc.razor_assemble_t1_weighted(
+                        M0,
+                        M1,
+                        s_a,
+                        s_b,
+                        h_a,
+                        h_b,
+                        fall_mask_a,
+                        fall_mask_b,
+                        sig_a,
+                        sig_b,
+                        sources["obs_pts"][lo * n_path : hi * n_path],
+                        sources["obs_tans"][lo * n_path : hi * n_path],
+                        sources["src_c"],
+                        sources["src_t"],
+                        wts[lo:hi].reshape(-1),
+                        n_path,
+                        w_rule.kind,
+                        w_rule.eps_t,
+                        w_rule.ground_z,
+                        w_rule.coefficient,
+                        **t1_rows,
+                    )
+                else:
+                    mom_a = M1[:, s_a] / h_a[None, :]
+                    mom_b = M1[:, s_b] / h_b[None, :]
+                    if fall_a.size:
+                        mom_a[:, fall_a] = M0[:, s_a[fall_a]] - mom_a[:, fall_a]
+                    if fall_b.size:
+                        mom_b[:, fall_b] = M0[:, s_b[fall_b]] - mom_b[:, fall_b]
+                    if w_A_fn is None:
+                        t_out = tans[lo:hi].reshape(-1, 3)
+                        integrand = (t_out @ td_a) * mom_a + (t_out @ td_b) * mom_b
+                    else:
+                        # The window's observer rows are this chunk's path points,
+                        # which are rows [lo, hi) of the path table flattened by
+                        # `n_path` — the same reshape the unweighted branch takes
+                        # on `tans`.
+                        w_A, _w_Phi_unused = w_A_fn(lo * n_path, hi * n_path)
+                        wA_a = w_A[:, s_a] * sig_a[None, :]
+                        wA_b = w_A[:, s_b] * sig_b[None, :]
+                        integrand = wA_a * mom_a + wA_b * mom_b
+                    integrand *= wts[lo:hi].reshape(-1)[:, None]
+                    t1 = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
             if rem_fn is not None:
                 # The remainder rides the same window, and the same wing
                 # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
@@ -7308,7 +7377,9 @@ class RazorSolver(
                         wts[lo:hi].reshape(-1),
                         n_path,
                     )
-            if t2_accel:
+            if rows_direct:
+                pass  # T2 is in `rows_T1` already
+            elif t2_accel:
                 # momwire#1290: T2's gathers, the two prefactors and the write
                 # into Z's window in one pass, instead of seven
                 # (rows, n_basis) temporaries and a copy into column-major

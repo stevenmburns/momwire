@@ -259,7 +259,9 @@ constexpr const char *BASIS = "razor";
 // The per-wavenumber class values (a solve's own; the plan is shared).
 struct Values {
     double k = 0.0;
-    std::vector<cd> d0, d1;  // direct, per class
+    // Direct, per class c: M0 at d[2c], M1 at d[2c + 1], so a gather's one
+    // random read is one 32 B value, not two from separate tables.
+    std::vector<cd> d;
     std::vector<cd> q0, q1;  // the remainder, per class
     bool has_d = false, has_q = false;
 };
@@ -334,6 +336,39 @@ void gather_direct(const Plan &p, int block, const int64_t *need, ptrdiff_t n_ne
 // The remainder rows: row r is segment seg[r]'s, times sign[r], (m, n_seg, 2).
 void gather_remainder(const Plan &p, const int64_t *seg, const double *sign, ptrdiff_t m,
                       view<const double, 1> seg_h, const Values &v, cd *out);
+
+// What one block's entries read beside the moments (`assemble_rows`): the
+// tables `assemble_t1` (or, `weighted`, the constant-mirror window of
+// `assemble_t1_weighted`) and the fused `t2_rows` take, indexed by GLOBAL
+// basis row and path point (o = 2 r + p: the NEC-5 path rule, the only one
+// the plan serves).
+struct RowTables {
+    view<const int64_t, 1> s_a, s_b;           // (n_basis) wing segments
+    view<const double, 1> h_a, h_b, q_a, q_b;  // (n_basis)
+    view<const bool, 1> fall_a, fall_b;        // (n_basis)
+    view<const double, 1> wts;                 // (2 n_basis) path weights
+    view<const int64_t, 1> grounded;           // rows whose T2 drops its A centroid
+    // Unweighted (free space, the PEC image): the path tangents (2 n_basis,
+    // 3) and the sigma-folded source tangents (3, n_basis).
+    view<const double, 2> tans, td_a, td_b;
+    // Weighted (the composing ground's image, WINDOW_RULE_CONSTANT_MIRROR):
+    // the path tangents (2 n_basis, 3), the segment tangents (n_seg, 3), the
+    // wing signs (n_basis) and C2, which is the window's coefficient and the
+    // w_Phi that scales T2's M0.
+    bool weighted = false;
+    view<const double, 2> obs_tans, src_t;
+    view<const double, 1> sig_a, sig_b;
+    cd c2;
+    double c_a_imag = 0.0, c_phi_imag = 0.0;  // c_A, c_Phi, both purely imaginary
+};
+
+// momwire#2144: rows [lo, hi) of one block's c_A T1 - T2 / c_Phi from the
+// class values, into `out` ((hi - lo, n_basis), any strides): bit for bit
+// the entries `gather_direct`, `assemble_t1` (or its weighted twin) and the
+// fused `t2_rows` give, without the window's (n_need, n_seg) moment planes
+// or its T1. Unchopped rows only (a chopped fill declines the reuse).
+void assemble_rows(const Plan &p, const Values &v, int block, ptrdiff_t lo, ptrdiff_t hi,
+                   const RowTables &t, view<const double, 1> seg_h, view<cd, 2> out);
 
 // The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): for
 // family f (0 direct, 1 image, 2 remainder), observer wire i and source wire

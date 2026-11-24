@@ -180,6 +180,7 @@ py::dict counters(const mw::razor::SolveContext &ctx) {
     d["reuse_windows"] = c.reuse_windows;
     d["reuse_q_windows"] = c.reuse_q_windows;
     d["reuse_q_declined"] = c.reuse_q_declined;
+    d["reuse_row_windows"] = c.reuse_row_windows;
     d["reuse_verify_worst"] = c.reuse_verify_worst;
     d["reuse_seconds"] = c.reuse_seconds;
     return d;
@@ -350,6 +351,61 @@ py::tuple reuse_gather(const ReusePlanHandle &h, const ReuseValues &v, int block
         mw::razor::reuse::gather_direct(*h.plan, block, nd, n, in<double, 1>(h.seg_h), v, p0, p1);
     }
     return py::make_tuple(m0, m1);
+}
+
+// momwire#2144: rows [lo, hi) of one block's finished entries into `out`, a
+// row window of Z or the window's own array, written in place through its
+// strides (taken as it is: an array_t would answer a column-major window
+// with a C-contiguous copy). `weighted` is the composing ground's image: its
+// tables replace `tans`, `td_a`, `td_b`.
+void reuse_assemble_rows(const ReusePlanHandle &h, const ReuseValues &v, int block,
+                         ptrdiff_t lo, ptrdiff_t hi, py::array out, iarr s_a, iarr s_b,
+                         darr h_a, darr h_b, darr q_a, darr q_b, barr fall_a, barr fall_b,
+                         darr wts, iarr grounded, double c_a_imag, double c_phi_imag,
+                         py::object tans, py::object td_a, py::object td_b,
+                         py::object obs_tans, py::object src_t, py::object sig_a,
+                         py::object sig_b, py::object c2) {
+    if (!py::isinstance<py::array_t<cd>>(out) || out.ndim() != 2 || !out.writeable())
+        throw std::invalid_argument("razor pair_reuse: out must be a writeable 2-D complex128 array");
+    const ptrdiff_t shp[2] = {out.shape(0), out.shape(1)};
+    const ptrdiff_t st[2] = {out.strides(0), out.strides(1)};
+    const mw::view<cd, 2> o(static_cast<cd *>(out.mutable_data()), shp, st);
+    mw::razor::reuse::RowTables t;
+    t.s_a = in<int64_t, 1>(s_a);
+    t.s_b = in<int64_t, 1>(s_b);
+    t.h_a = in<double, 1>(h_a);
+    t.h_b = in<double, 1>(h_b);
+    t.q_a = in<double, 1>(q_a);
+    t.q_b = in<double, 1>(q_b);
+    t.fall_a = in<bool, 1>(fall_a);
+    t.fall_b = in<bool, 1>(fall_b);
+    t.wts = in<double, 1>(wts);
+    t.grounded = in<int64_t, 1>(grounded);
+    t.c_a_imag = c_a_imag;
+    t.c_phi_imag = c_phi_imag;
+    // Held here so the views below outlive the call's conversions.
+    darr ta, tda, tdb, ot, stt, sga, sgb;
+    t.weighted = !obs_tans.is_none();
+    if (t.weighted) {
+        ot = obs_tans.cast<darr>();
+        stt = src_t.cast<darr>();
+        sga = sig_a.cast<darr>();
+        sgb = sig_b.cast<darr>();
+        t.obs_tans = in<double, 2>(ot);
+        t.src_t = in<double, 2>(stt);
+        t.sig_a = in<double, 1>(sga);
+        t.sig_b = in<double, 1>(sgb);
+        t.c2 = c2.cast<cd>();
+    } else {
+        ta = tans.cast<darr>();
+        tda = td_a.cast<darr>();
+        tdb = td_b.cast<darr>();
+        t.tans = in<double, 2>(ta);
+        t.td_a = in<double, 2>(tda);
+        t.td_b = in<double, 2>(tdb);
+    }
+    py::gil_scoped_release release;
+    mw::razor::reuse::assemble_rows(*h.plan, v, block, lo, hi, t, in<double, 1>(h.seg_h), o);
 }
 
 cdarr reuse_gather_q(const ReusePlanHandle &h, const ReuseValues &v, iarr seg, darr sign) {
@@ -1805,6 +1861,7 @@ void register_razor_solve(py::module_ &m) {
 
     // momwire#1971: fill-pair reuse for the Python route.
     m.attr("razor_pair_reuse_1971") = true;
+    m.attr("razor_reuse_rows_2144") = true;
     py::class_<ReuseValues, std::shared_ptr<ReuseValues>>(m, "RazorReuseValues",
         "One wavenumber's class values of a razor reuse plan.")
         .def_readonly("k", &ReuseValues::k);
@@ -1839,7 +1896,18 @@ void register_razor_solve(py::module_ &m) {
         .def("gather", &reuse_gather, py::arg("values"), py::arg("block"), py::arg("need"),
              "A window's (M0, M1) rows for observers `need` of block 0 (real) or 1 (image).")
         .def("gather_q", &reuse_gather_q, py::arg("values"), py::arg("seg"), py::arg("sign"),
-             "The remainder rows (m, n_seg, 2): row r is segment seg[r]'s times sign[r].");
+             "The remainder rows (m, n_seg, 2): row r is segment seg[r]'s times sign[r].")
+        .def("assemble_rows", &reuse_assemble_rows, py::arg("values"), py::arg("block"),
+             py::arg("lo"), py::arg("hi"), py::arg("out"), py::arg("s_a"), py::arg("s_b"),
+             py::arg("h_a"), py::arg("h_b"), py::arg("q_a"), py::arg("q_b"), py::arg("fall_a"),
+             py::arg("fall_b"), py::arg("wts"), py::arg("grounded"), py::arg("c_a_imag"),
+             py::arg("c_phi_imag"), py::arg("tans") = py::none(), py::arg("td_a") = py::none(),
+             py::arg("td_b") = py::none(), py::arg("obs_tans") = py::none(),
+             py::arg("src_t") = py::none(), py::arg("sig_a") = py::none(),
+             py::arg("sig_b") = py::none(), py::arg("c2") = py::none(),
+             "momwire#2144: rows [lo, hi) of block 0 (real) or 1 (image) as c_A T1 - T2 / "
+             "c_Phi, from the class values, into `out` in place; the gather, T1 and the fused "
+             "T2's entries bit for bit.");
     m.def("razor_reuse_plan", &reuse_plan, py::arg("cent"), py::arg("group_i"), py::arg("b_obs"),
           py::arg("seg_h"), py::arg("a"), py::arg("real"), py::arg("image"), py::arg("remainder"),
           py::arg("ground_z"),
