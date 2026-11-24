@@ -1,6 +1,6 @@
 ---
 title: momwire
-description: A pure-Python method-of-moments antenna engine — the solver behind the antennaknobs workbench, and a drop-in for the engine slots of tools you already run, EZNEC Pro+ and SimNEC — with a five-act primer as supplemental reading.
+description: A pure-Python method-of-moments antenna engine — the solver behind the antennaknobs workbench, and a drop-in for the engine slots of tools you already run, EZNEC Pro+, SimNEC and 4nec2 — with a five-act primer as supplemental reading.
 template: splash
 hero:
   title: momwire
@@ -49,7 +49,8 @@ browser simulator.
 
 ## The drop-in engines
 
-momwire also stands behind the external-engine mechanisms of two tools — no new
+momwire also stands behind the external-engine mechanisms of three tools, EZNEC
+Pro+, SimNEC and 4nec2 — no new
 interface to learn, no files to convert. The host writes its deck, momwire
 answers in the host's own printout format, and any deck asking for something
 it does not serve gets a sentence naming the card, the wire, or the missing
@@ -59,21 +60,21 @@ capability. Nothing is ever served silently wrong.
   <LinkCard
     title="momwire as EZNEC's NEC-5 engine"
     href="/reference/eznec-nec5/"
-    description="The NEC-5 dialect drop-in engine for EZNEC Pro+'s external-engine slot — byte-compatible printouts, named refusals, a packaged Windows executable."
+    description="The NEC-5 and NEC-4.2 drop-in engine for EZNEC Pro+'s external-engine slots, and for 4nec2 — byte-compatible printouts, named refusals, a packaged Windows executable."
   />
   <LinkCard
     title="momwire as a NEC-2 engine"
     href="/reference/portal-usage/"
-    description="A drop-in nec2c: eight solvers, one command each, cross-basis validation from SimNEC's own dialog."
+    description="A drop-in nec2c: seven solvers, one command each, cross-basis validation from SimNEC's own dialog."
   />
 </CardGrid>
 
 What answers underneath is one engine with eight selectable formulations
-over six solver families — B-splines, sinusoids point-matched and tested
-variationally, and the razor-blade-tested tent basis of NEC-5's own class —
-sharing one kernel, so any deck can be cross-checked across bases with one
-command. (A pulse basis is in the library too, as the primer's Act I builds
-one, but it is not on the roster and no front end can select it.) On the models where we hold licensed references, the
+over seven solver families — B-splines (and two compressed solves of the same
+operator), sinusoids point-matched and tested variationally, the
+razor-blade-tested tent basis of NEC-5's own class, and Harrington's
+point-matched pulse basis — sharing one kernel, so any deck can be
+cross-checked across bases with one command. On the models where we hold licensed references, the
 default engine agrees at the sub-percent level, and the in-house NEC-5
 formulation twin rides the licensed engine's own convergence path at the
 0.01 % level. Where it disagrees or cannot answer, it says so by name:
