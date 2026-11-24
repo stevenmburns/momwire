@@ -32,8 +32,8 @@ To use one from SimNEC or EZNEC, point the NEC-5 engine setting at the
 program, inside its unpacked folder. A deck an engine does not serve yet is
 refused in the printout by name (`not served by this build: ...`), and the
 Python command serves it. 4nec2's `GA`, `GH`, `GM`, `GX`, `GS` and `PT` cards
-are served by the executables too, since momwire 0.84.0 (momwire#1669). The
-other formulations stay Python.
+are served by the executables too (momwire#1669). The other formulations stay
+Python.
 
 ## Downloads
 
@@ -143,13 +143,14 @@ xattr -dr com.apple.quarantine momwire-nec5-macos-arm64
 
 ## How they differ from the EZNEC drop-in
 
-The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up)
-(named `momwire-eznec-windows.zip` before 0.80.0), is the way to run momwire
-in EZNEC's, SimNEC's or 4nec2's NEC-4.2 engine slot on Windows, as a NEC-2
-engine (`momwire-nec2c.exe` and `momwire-nec2c-sinusoidal.exe`, the same
-engines `pip install momwire` installs under those names, for SimNEC's NEC-2
-setting and nec2c's command line), and for any deck or formulation a
-standalone program does not serve; in the NEC-5 slot either one works. There
+The drop-in, [`momwire-windows.zip`](/reference/eznec-nec5/#setting-it-up),
+is the way to run momwire in EZNEC's, SimNEC's or 4nec2's NEC-4.2 engine slot
+on Windows, as a NEC-2 engine (`momwire-nec2c.exe` and
+`momwire-nec2c-sinusoidal.exe` for SimNEC's NEC-2 setting and nec2c's command
+line, `momwire-nec2d.exe` and `momwire-nec2d-sinusoidal.exe` for 4nec2's; the
+same engines `pip install momwire` installs under those names), and for any
+deck or formulation a standalone program does not serve; in the NEC-5 slot
+either one works. There
 is no standalone NEC-2 program. The two are built for different launch
 patterns:
 
