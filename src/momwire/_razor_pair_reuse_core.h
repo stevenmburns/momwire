@@ -159,16 +159,16 @@ int64_t small_deck_segs(bool finite);
 // the gates can run the reuse on cheap decks below them.
 void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 // THE ALLOWANCE (momwire#2123, the common core's `plan_allowance`): each
-// family keeps at most half its pairs as classes (`pair_reuse::class_cap`,
-// 2x compression; the direct family's pairs are n_blocks * n_seg^2, the
+// family keeps at most three quarters of its pairs as classes
+// (`pair_reuse::class_cap`, 4/3x compression; the direct family's pairs are n_blocks * n_seg^2, the
 // remainder's n_seg^2), checked after every chunk of rows, so a deck that
 // does not compress stops within a chunk of the cap, "more than C classes
-// for P pairs (the cap is 2x compression)"; and the kept plan (`Plan::nbytes` and one
+// for P pairs (the cap is 4/3x compression)"; and the kept plan (`Plan::nbytes` and one
 // wavenumber's class values, 32 B a class) is held to 4 B per pair per map
 // plus `kept_bytes_per_class` (49 B, the plan's own per-class layout:
 // `pair_reuse::class_bytes`' 41 and at most one row and one source in its
 // group's lists; measured 41.5 B a class on the 10-element Yagi, 42.9 on the
-// 155-segment triangle and dipoles) per class the cap allows, 28.5 B per
+// 155-segment triangle and dipoles) per class the cap allows, 40.75 B per
 // pair per map, "the kept plan would exceed its allowance of X MB". The census's own tables (its hash
 // tables, representatives and chunk buffers) are a transient freed before
 // the fill's Z is allocated: they are counted (`census_peak_bytes`) but not

@@ -7369,7 +7369,7 @@ class SinusoidalSolver(
         `SMALL_DECK_SEGS_GROUND` (a finite ground) declines, the census
         costing more than its fill saves; `pair_reuse="verify"` ignores it.
         Those two are checked after the rest, so a deck the reuse could not
-        serve anyway says why. A deck whose census passes the class cap (2x
+        serve anyway says why. A deck whose census passes the class cap (4/3x
         compression) or whose plan passes its allowance declines too
         (`_sin_pair_reuse.plan_allowance`, momwire#2123), under "verify" as
         well: that bound is the process's memory, not a saving.

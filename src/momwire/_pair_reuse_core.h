@@ -95,8 +95,9 @@ inline int64_t class_bytes(const FamilySpec &f) {
 // THE ALLOWANCE (momwire#2123, Steve 11-24): what `pair_reuse` may hold on
 // top of the fill's own bound (512 MB + one dense Z), for every basis.
 //
-// - THE CLASS CAP. A family keeps at most pairs / CLASS_CAP_COMPRESSION
-//   classes (N^2 / 2 per class map): a deck that does not reach 2x
+// - THE CLASS CAP. A family keeps at most pairs / (4/3) classes (3 N^2 / 4
+//   per class map; Steve 11-24, loosened from 2x so the radial screens at
+//   random angles, 1.4-1.8x, still reuse): a deck that does not reach 4/3x
 //   compression declines, `cap_reason`. The census checks it after every
 //   pass of rows and stops the moment the count passes it.
 // - THE KEPT PLAN: 4 B per pair for each class map (two over a ground) plus,
@@ -104,8 +105,8 @@ inline int64_t class_bytes(const FamilySpec &f) {
 //   derived from its layout (`plan_allowance(pairs, per_class)`; Steve
 //   11-24, option 1: each engine's real per-class cost). razor2p's is its
 //   adapter's `kept_bytes_per_class` (49 B), sinusoidal's its
-//   KEPT_BYTES_PER_CLASS (105 B direct, 73 B reflected): at the cap 28.5,
-//   56.5 and 40.5 B a pair. A
+//   KEPT_BYTES_PER_CLASS (105 B direct, 73 B reflected): at the cap 40.75,
+//   82.75 and 58.75 B a pair. A
 //   plan whose own bytes pass it declines, `allowance_reason`.
 // - THE CENSUS is a transient: its tables are freed before the fill's Z is
 //   allocated, so its peak is charged against that room, not added to the
@@ -113,18 +114,25 @@ inline int64_t class_bytes(const FamilySpec &f) {
 //   it (so a deck that declines has held no more than a census at the cap).
 // - Allowances ADD with the other opt-ins' (mixed_lu: 1.5 Z + 512 MB). No
 //   one place sums them: each opt-in bounds its own share.
-constexpr int64_t CLASS_CAP_COMPRESSION = 2;
+constexpr double CLASS_CAP_COMPRESSION = 4.0 / 3.0;
 // TEST HOOK: the cap's compression in place of CLASS_CAP_COMPRESSION (<= 0
 // restores it; 1 caps nothing but the pairs), so the plan's own tests can
-// build plans of decks that do not compress. Plans are keyed on it. Bound for
-// Python's tests only; nothing in the executables sets it.
-void set_cap_compression(int64_t c);
-int64_t cap_compression();
+// build plans of decks that do not compress. Plans are keyed on it
+// (`cap_key`). Bound for Python's tests only; nothing in the executables
+// sets it.
+void set_cap_compression(double c);
+double cap_compression();
+// The cap in force as one integer, its bits, for plan keys.
+int64_t cap_key();
 // The classes a family of `pairs` pairs may keep, and its kept plan's bytes
 // for an engine keeping `per_class` bytes a class beside its class map.
-inline int64_t class_cap(int64_t pairs) { return pairs / cap_compression(); }
+// Python's `class_cap` is the same IEEE division and truncation, so both
+// routes stop at the same count.
+inline int64_t class_cap(int64_t pairs) {
+    return static_cast<int64_t>(static_cast<double>(pairs) / cap_compression());
+}
 inline int64_t plan_allowance(int64_t pairs, int64_t per_class) { return 4 * pairs + per_class * class_cap(pairs); }
-// The decline sentences: "more than C classes for P pairs (the cap is 2x
+// The decline sentences: "more than C classes for P pairs (the cap is 4/3x
 // compression)", and "the kept plan would exceed its allowance of X MB".
 // The cap's names the cap, not the count the census stopped at: that count
 // follows the census's passes of rows, which differ between routes (the
@@ -218,7 +226,7 @@ void decline(Plan &p, const std::string &why);
 // fixed cap, not the allowance, so that a long-lived server stays bounded
 // whatever decks it has seen. It held one fill's whole budget when that was
 // 256 MB, and stays there (momwire#2123); a fill's own plans may pass it
-// (up to 56.5 B a pair per map at the cap, `plan_allowance`), so the newest `keep`
+// (up to 82.75 B a pair per map at the cap, `plan_allowance`), so the newest `keep`
 // entries are kept whatever their size, and before any census the cache is
 // cut back to this, so a census never runs beside more than this of older
 // decks' plans.

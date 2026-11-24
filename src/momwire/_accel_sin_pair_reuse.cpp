@@ -526,7 +526,7 @@ void register_sin_pair_reuse(py::module_ &m) {
           "momwire#1911 / #2063 / #2123: the sinusoidal census and plan (with ground_z, the reflected "
           "term's): (SinReusePlan or None where it declines, whether a census ran, the decline's reason or "
           "''). `allowance` is the kept plan's bytes (None: 4 B per pair, `sin_pair_reuse_kept_bytes` per "
-          "class the 2x cap allows and per near pair). `shared` reads and keeps the process's cache (`keep`: its newest entries kept whatever "
+          "class the 4/3x cap allows and per near pair). `shared` reads and keeps the process's cache (`keep`: its newest entries kept whatever "
           "their size, 2 for a fill's second block); workers > 0 sets the census's worker count, "
           "band_bytes >= 0 its band bytes per pair.");
     m.def("sin_pair_reuse_types", &sin_pair_reuse::sin_pair_reuse_types, py::arg("seg_h"), py::arg("a_obs"),

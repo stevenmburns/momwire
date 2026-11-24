@@ -4,6 +4,7 @@
 // fill computes passes through it (momwire#1187).
 #include "_pair_reuse_core.h"
 
+#include <cstring>
 #include <chrono>
 #include <type_traits>
 #include <cstdio>
@@ -107,7 +108,7 @@ std::mutex g_cache_mtx;
 std::list<Entry> g_cache;  // most recent first
 std::map<std::string, Counters> g_counters;
 int64_t g_cache_bytes = -1;  // the test hook's; < 0: SHARED_PLAN_BYTES
-std::atomic<int64_t> g_cap_compression{CLASS_CAP_COMPRESSION};
+std::atomic<double> g_cap_compression{CLASS_CAP_COMPRESSION};
 
 }  // namespace
 
@@ -238,14 +239,20 @@ int64_t held_bytes(const Plan &p) {
     return b;
 }
 
-void set_cap_compression(int64_t c) { g_cap_compression.store(c > 0 ? c : CLASS_CAP_COMPRESSION); }
-int64_t cap_compression() { return g_cap_compression.load(); }
+void set_cap_compression(double c) { g_cap_compression.store(c > 0.0 ? c : CLASS_CAP_COMPRESSION); }
+double cap_compression() { return g_cap_compression.load(); }
+int64_t cap_key() {
+    const double c = cap_compression();
+    int64_t k;
+    std::memcpy(&k, &c, sizeof k);
+    return k;
+}
 
 std::string cap_reason(int64_t pairs) {
-    char buf[128];
-    std::snprintf(buf, sizeof buf, "more than %lld classes for %lld pairs (the cap is %lldx compression)",
-                  static_cast<long long>(class_cap(pairs)), static_cast<long long>(pairs),
-                  static_cast<long long>(cap_compression()));
+    // %.4g, as Python's `cap_reason` writes it: "1.333x", "1x".
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "more than %lld classes for %lld pairs (the cap is %.4gx compression)",
+                  static_cast<long long>(class_cap(pairs)), static_cast<long long>(pairs), cap_compression());
     return buf;
 }
 

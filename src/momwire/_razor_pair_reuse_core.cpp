@@ -234,7 +234,7 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, class_limit(0));
     put(s, class_limit(1));
     put(s, plan_allowance_override());
-    put(s, pair_reuse::cap_compression());
+    put(s, pair_reuse::cap_key());
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);

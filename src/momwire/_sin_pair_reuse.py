@@ -286,7 +286,9 @@ HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False
 #:
 #: * THE CLASS CAP: a plan (the direct block's, the image's or the reflected
 #:   term's, each its own class map) keeps at most `class_cap` of its pairs,
-#:   M N / CLASS_CAP_COMPRESSION: a deck that does not reach 2x compression
+#:   M N / CLASS_CAP_COMPRESSION (4/3; Steve 11-24, loosened from 2x so
+#:   the radial screens at random angles still reuse): a deck that does not
+#:   reach 4/3x compression
 #:   declines (`cap_reason`). The census stops the moment its count passes
 #:   the cap, after the band that passed it.
 #: * THE KEPT PLAN: its fill (`fill_nbytes`) is held to `plan_allowance`, 4 B
@@ -294,7 +296,7 @@ HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False
 #:   class the cap allows (Steve 11-24, option 1: each engine's own per-class
 #:   cost, from the plan's layout in C++, `KEPT_BYTES_PER_CLASS`: 105 B
 #:   direct, its canonical sources kept; 73 B reflected) and for each near
-#:   pair (`NEAR_KEPT_BYTES`, 72 B): 56.5 B a pair at the cap direct, 40.5 B
+#:   pair (`NEAR_KEPT_BYTES`, 72 B): 82.75 B a pair at the cap direct, 58.75 B
 #:   reflected (`allowance_reason`). Each plan is held to its own; over a
 #:   ground there are two maps.
 #: * THE CENSUS is a transient: it runs before the fill allocates its Z and
@@ -332,9 +334,9 @@ HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False
 #:
 #: Every deck reuses: the 2.4x "each its own h" decks, which #2019's budget
 #: declined, are inside the cap, and their plans are what the allowance
-#: holds (56.5 B a pair at the cap); the 3220-segment one costs 4.6 s against
+#: holds (82.75 B a pair at the cap); the 3220-segment one costs 4.6 s against
 #: 1.2 s off at one frequency, the census paid up front.
-CLASS_CAP_COMPRESSION = 2
+CLASS_CAP_COMPRESSION = 4.0 / 3.0
 
 #: TEST HOOK: the kept plan's allowance in bytes, per plan, in place of
 #: `plan_allowance` (None: the derived one), so small decks reach the
@@ -406,7 +408,7 @@ KEPT_BYTES_PER_CLASS, GROUND_KEPT_BYTES_PER_CLASS, NEAR_KEPT_BYTES = (
 
 def class_cap(pairs: int) -> int:
     """The classes a plan of `pairs` pairs may keep (the core's)."""
-    return int(pairs) // CLASS_CAP_COMPRESSION
+    return int(int(pairs) / CLASS_CAP_COMPRESSION)
 
 
 def plan_allowance(pairs: int, ground: bool = False, near: int = 0) -> int:
@@ -422,7 +424,7 @@ def cap_reason(pairs: int) -> str:
     cap, not the count the census stopped at, which follows its bands."""
     return (
         f"more than {class_cap(pairs)} classes for {int(pairs)} pairs "
-        f"(the cap is {CLASS_CAP_COMPRESSION}x compression)"
+        f"(the cap is {CLASS_CAP_COMPRESSION:.4g}x compression)"
     )
 
 

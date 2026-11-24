@@ -20,7 +20,7 @@ Held:
 - the allowance's verdicts (momwire#2123): over a ladder of allowances
   around a deck's class map and its plan's fill, a deck declines from one
   allowance down and serves the same plan above it; and the class cap's, a
-  deck short of 2x compression declining with the cap named;
+  deck short of 4/3x compression declining with the cap named;
 - the NEC-4.2 slot's printout and its fill (Z, the port coefficients and
   Y, by row digest) with the feature requested, against the Python slot's
   with it on, on decks that serve it over free space, a PEC plane and the
@@ -266,7 +266,7 @@ def test_the_plan_is_one_whatever_the_threads(deck, block, monkeypatch):
     numbers the classes by their first pair whatever the parts, and its
     bands follow the workers: the plan is the same bytes at any of either,
     and the census's count at any thread count. The random wires compress
-    less than 2x: the cap is lifted (`pair_reuse_cap_compression(1)`), this
+    less than 4/3x: the cap is lifted (`pair_reuse_cap_compression(1)`), this
     test being the plan's, not the cap's (nor the allowance's, lifted too)."""
     from threadpoolctl import threadpool_limits
 
@@ -327,8 +327,8 @@ def test_the_allowance_holds_the_plan(deck, block, monkeypatch):
 
 @pytest.mark.parametrize("block", ["direct", "image", "reflected"])
 def test_the_cap_holds_the_plan(block, monkeypatch):
-    """The random wires keep more than half their pairs as classes: under
-    the cap (2x compression) every block's census stops and declines with
+    """The random wires keep more than three quarters of their pairs as
+    classes: under the cap (4/3x compression) every block's census stops and declines with
     the cap named, at any worker count; the curtain, far under it, serves."""
     for deck, served in (("random wires", False), ("curtain", True)):
         g = _inputs(_solver(*DECKS[deck]))
@@ -572,7 +572,7 @@ def random_deck(ground="free", n=24, segs=17, seed=1911, nf=2):
 
 
 @pytest.mark.parametrize("ground", ["free", "pec", "somm"])
-def test_a_deck_short_of_2x_compression_declines_as_pythons(
+def test_a_deck_short_of_the_cap_declines_as_pythons(
     ground, tools, monkeypatch, py_outcome
 ):
     """The random wires pass the class cap at the default allowance on both
@@ -580,7 +580,7 @@ def test_a_deck_short_of_2x_compression_declines_as_pythons(
     at, which follows each route's bands), and the fill as off."""
     reason = pr.cap_reason(408 * 408)
     assert reason == (
-        "more than 83232 classes for 166464 pairs (the cap is 2x compression)"
+        "more than 124848 classes for 166464 pairs (the cap is 1.333x compression)"
     )
     stats, outcome, fill_on, fill_off = _runs(
         tools, random_deck(ground=ground), monkeypatch, py_outcome
