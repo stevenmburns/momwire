@@ -452,6 +452,12 @@ NEC42_MARKER = "nec42"
 # `momwire.dropin.nec2c` reads it (`basis_from_program_name(prog, "nec2c-")`).
 NEC2C_MARKER = "nec2c"
 
+# The marker of the NEC-2D engines (momwire#2138): `momwire-nec2d[-<basis>]`,
+# the same NEC-2 deck dialect and solve as `nec2c`, printing LLNL's Fortran
+# NEC-2 (NEC-2D) layout that 4nec2's `nec2dxs` engines write.  `nec2d` does
+# not contain `nec2c`, so SimNEC never takes one for its NEC-2 engine.
+NEC2D_MARKER = "nec2d"
+
 
 def _program_stem(prog: str) -> str:
     """``prog``'s basename, casefolded, a Windows ``.exe`` stripped — the
@@ -461,8 +467,10 @@ def _program_stem(prog: str) -> str:
 
 
 def dialect_from_program_name(prog: str) -> str:
-    """``"nec2"`` when the program's name carries :data:`NEC2C_MARKER`,
-    else ``"nec4"`` when it carries :data:`NEC4_MARKER`, else ``"nec5"``.
+    """``"nec2"`` when the program's name carries :data:`NEC2C_MARKER` or
+    :data:`NEC2D_MARKER` (momwire#2138: the NEC-2D launchers read NEC-2 decks
+    and differ only in the printout), else ``"nec4"`` when it carries
+    :data:`NEC4_MARKER`, else ``"nec5"``.
 
     A substring test, casefolded, so a renamed copy (``My-NEC4-engine.exe``)
     still answers the slot its name claims; the NEC-5 names
@@ -475,9 +483,26 @@ def dialect_from_program_name(prog: str) -> str:
     momwire#628's failure reached by a rename.
     """
     stem = _program_stem(prog)
-    if NEC2C_MARKER in stem:
+    if NEC2C_MARKER in stem or NEC2D_MARKER in stem:
         return "nec2"
     return "nec4" if NEC4_MARKER in stem else "nec5"
+
+
+def nec2_layout_from_program_name(prog: str) -> str:
+    """The printout layout a NEC-2 program name selects (momwire#2138):
+    ``"nec2d"`` when it carries :data:`NEC2D_MARKER` and not
+    :data:`NEC2C_MARKER`, else ``"nec2c"``.
+
+    ``nec2c`` wins a name carrying both, as it wins every other marker
+    (:func:`dialect_from_program_name`): SimNEC picks its NEC-2 engine by
+    that substring, and the printout SimNEC reads is the nec2c one.  A name
+    carrying neither (``python -m momwire.dropin.nec2c``) is the nec2c one,
+    as it always was.
+    """
+    stem = _program_stem(prog)
+    if NEC2D_MARKER in stem and NEC2C_MARKER not in stem:
+        return "nec2d"
+    return "nec2c"
 
 
 def nec4_basis_from_program_name(prog: str) -> str | None:

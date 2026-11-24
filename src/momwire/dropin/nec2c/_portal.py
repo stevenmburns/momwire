@@ -206,7 +206,12 @@ from ...deck._networks import build_reducer, card_branches, live_cards, reduced_
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
 from ..._basis_names import canonical_basis, deprecation_note, retired_refusal
-from ...deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
+from ...deck._solver import (
+    _NATIVE_LOADING,
+    NEC2_BASES,
+    basis_from_program_name,
+    nec2_layout_from_program_name,
+)
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -341,6 +346,12 @@ _active_basis_name = "bs2"
 # The deprecated spelling that selected it (momwire#2091), or None: the
 # banner's VERSION line notes it (`_banner_lines`).
 _active_basis_spelled: str | None = None
+# The printout layout this invocation writes (momwire#2138): ``"nec2c"``,
+# the SimNEC/nec2c one every printer in this module spells, or ``"nec2d"``,
+# LLNL's Fortran NEC-2 layout (:mod:`._nec2d`) for 4nec2.  Read off the
+# program name by :func:`configure_engine`; the deck reading and the solve
+# are the same under both.
+_active_layout = "nec2c"
 
 __all__ = [
     "BANNER_VERSION",
@@ -397,18 +408,20 @@ __all__ = [
 # ``NEC2`` with a non-digit after the 2, for every reason above.
 
 
-def nec2_launcher_name(suffix: str | None) -> str:
+def nec2_launcher_name(suffix: str | None, layout: str = "nec2c") -> str:
     """The launcher's name from what its file name selects: ``momwire-nec2c``
-    for none, ``momwire-nec2c-<suffix>`` for a copy named for a basis.  Only
+    for none, ``momwire-nec2c-<suffix>`` for a copy named for a basis, and
+    the same under ``nec2d`` for the NEC-2D launchers (momwire#2138).  Only
     the NAME counts: ``--basis`` and ``MOMWIRE_NEC2C_BASIS`` pick the engine
     but never change the ``-version`` line, which is the launcher's."""
-    return f"momwire-nec2c-{suffix}" if suffix else "momwire-nec2c"
+    return f"momwire-{layout}-{suffix}" if suffix else f"momwire-{layout}"
 
 
-def probe_version(suffix: str | None = None) -> str:
+def probe_version(suffix: str | None = None, layout: str = "nec2c") -> str:
     """The ``-version`` line (momwire#1606) for a launcher whose file name
-    selects ``suffix`` (``_filename_basis``)."""
-    return _mech.version_line("NEC2", nec2_launcher_name(suffix))
+    selects ``suffix`` (``_filename_basis``).  A NEC-2D launcher answers
+    ``NEC2 momwire-nec2d ...``: the same deck dialect, its own name."""
+    return _mech.version_line("NEC2", nec2_launcher_name(suffix, layout))
 
 
 PROBE_VERSION = probe_version()
@@ -3479,36 +3492,35 @@ def _environment_lines(ground: Ground, freq_mhz: float) -> list[str]:
     return lines
 
 
-def _pattern_lines(
+@dataclass(frozen=True)
+class PatternGrid:
+    """One ``RP`` card's far field over its grid, before any layout: the
+    compute half of :func:`_pattern_lines`, shared with the NEC-2D printout
+    (momwire#2138) so both layouts print one solve's numbers.
+
+    ``e_theta``/``e_phi`` are the PRINTED fields (at the card's range when it
+    has one), ``g_v``/``g_h`` the linear power gains, both ``(n_theta,
+    n_phi)``; ``floor_scale`` converts a printed field to the amplitude
+    ``FFLD`` returns, the basis NEC's field floor is written in."""
+
+    mode: int
+    second: SecondMedium | None
+    rng: float
+    at_range: bool
+    prop: complex
+    thetas: np.ndarray
+    phis: np.ndarray
+    e_theta: np.ndarray
+    e_phi: np.ndarray
+    g_v: np.ndarray
+    g_h: np.ndarray
+    floor_scale: float
+
+
+def pattern_grid(
     card: Card, solver: DeckSolver, result: GroupResult, freq_mhz: float
-) -> list[str]:
-    """The RADIATION PATTERNS table for one ``RP 0`` / ``RP 2`` / ``RP 3``.
-
-    Two of the card's fields change the table's SHAPE rather than its values,
-    and both are issue #802's:
-
-    * ``I1 > 1`` (a cliff mode) prepends the FAR FIELD GROUND PARAMETERS
-      block. It is printed whenever the mode asks for one, even in free space
-      where it can move nothing;
-    * ``F5 = RFLD = 0`` is the gain-only form. The two-line RANGE /
-      EXP(-JKR)/R header is not printed at all, and the E columns carry the
-      far-field amplitude itself instead of the field at a range — the same
-      numbers scaled by ``RFLD/lambda``. The GAIN columns never depended on
-      the range and do not move.
-
-    A deck with wires BELOW the interface prints this table like any other
-    (momwire#570). ``_far_moments`` serves those elements through the
-    transmitted far-zone factors rather than through an image, so nothing
-    here has to know which side of the plane the current is on.
-
-    **Where the soil's absorption shows.** Not in the POWER BUDGET: this
-    portal follows NEC's own books, where radiated power is the input minus
-    the structure's own loss, so a buried deck's EFFICIENCY is still about
-    its conductors. The energy the ground takes shows up in the pattern
-    itself — every buried element's contribution carries the transmitted
-    wave's decaying depth leg — and, integrated, in the AVERAGE POWER GAIN
-    line below, which for a buried deck comes out well under 1.
-    """
+) -> PatternGrid:
+    """:class:`PatternGrid` for one ``RP 0`` / ``RP 2`` / ``RP 3`` card."""
     mode = card.i(0)
     n_theta, n_phi = max(card.i(1), 1), max(card.i(2), 1)
     theta0, phi0, d_theta, d_phi = card.f(4), card.f(5), card.f(6), card.f(7)
@@ -3540,6 +3552,64 @@ def _pattern_lines(
     # The printed field over the amplitude FFLD returns, which is the basis
     # NEC's blank-SENSE threshold is written in.
     floor_scale = 1.0 / (wavelength * abs(prop))
+    return PatternGrid(
+        mode,
+        second,
+        rng,
+        at_range,
+        prop,
+        thetas,
+        phis,
+        e_theta,
+        e_phi,
+        g_v,
+        g_h,
+        floor_scale,
+    )
+
+
+def _pattern_lines(
+    card: Card, solver: DeckSolver, result: GroupResult, freq_mhz: float
+) -> list[str]:
+    """The RADIATION PATTERNS table for one ``RP 0`` / ``RP 2`` / ``RP 3``.
+
+    Two of the card's fields change the table's SHAPE rather than its values,
+    and both are issue #802's:
+
+    * ``I1 > 1`` (a cliff mode) prepends the FAR FIELD GROUND PARAMETERS
+      block. It is printed whenever the mode asks for one, even in free space
+      where it can move nothing;
+    * ``F5 = RFLD = 0`` is the gain-only form. The two-line RANGE /
+      EXP(-JKR)/R header is not printed at all, and the E columns carry the
+      far-field amplitude itself instead of the field at a range — the same
+      numbers scaled by ``RFLD/lambda``. The GAIN columns never depended on
+      the range and do not move.
+
+    A deck with wires BELOW the interface prints this table like any other
+    (momwire#570). ``_far_moments`` serves those elements through the
+    transmitted far-zone factors rather than through an image, so nothing
+    here has to know which side of the plane the current is on.
+
+    **Where the soil's absorption shows.** Not in the POWER BUDGET: this
+    portal follows NEC's own books, where radiated power is the input minus
+    the structure's own loss, so a buried deck's EFFICIENCY is still about
+    its conductors. The energy the ground takes shows up in the pattern
+    itself — every buried element's contribution carries the transmitted
+    wave's decaying depth leg — and, integrated, in the AVERAGE POWER GAIN
+    line below, which for a buried deck comes out well under 1.
+    """
+    field = pattern_grid(card, solver, result, freq_mhz)
+    mode, second, rng, at_range, prop = (
+        field.mode,
+        field.second,
+        field.rng,
+        field.at_range,
+        field.prop,
+    )
+    thetas, phis, e_theta, e_phi = field.thetas, field.phis, field.e_theta, field.e_phi
+    g_v, g_h, floor_scale = field.g_v, field.g_h, field.floor_scale
+    n_theta, n_phi = len(thetas), len(phis)
+    d_theta, d_phi = card.f(6), card.f(7)
 
     out = []
     if mode in _CLIFF_KIND:
@@ -3651,6 +3721,25 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> li
     the point evaluator does not serve yet (momwire#524 phase 3).
     """
     magnetic = card.mnemonic == "NH"
+    points, field = near_field_values(card, solver, result)
+
+    header = _NEAR_H_HEADER if magnetic else _NEAR_E_HEADER
+    table = _NEAR_H_TABLE_HEADER if magnetic else _NEAR_E_TABLE_HEADER
+    out = [header, "", *table] if magnetic else [header, *table]
+    for point, (fx, fy, fz) in zip(points, field, strict=True):
+        out.append(fmt_near_field_row(point, fx, fy, fz))
+    out.append(_NEAR_FIELD_TIME)
+    return out
+
+
+def near_field_values(
+    card: Card, solver: DeckSolver, result: GroupResult
+) -> tuple[np.ndarray, list[tuple[complex, complex, complex]]]:
+    """``(points, [(Fx, Fy, Fz)])``: one ``NE``/``NH`` grid's field, the
+    compute half of :func:`_near_field_lines` (shared with the NEC-2D
+    printout, momwire#2138), each component already through the printed
+    dust floor described there."""
+    magnetic = card.mnemonic == "NH"
     # NEC varies X fastest, then Y, then Z (dipole_ne_nearfield.out).
     points = rectangular_grid(
         tuple(max(card.i(k), 1) for k in (1, 2, 3)),
@@ -3674,10 +3763,8 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> li
         result.solver.omega,
     )
 
-    header = _NEAR_H_HEADER if magnetic else _NEAR_E_HEADER
-    table = _NEAR_H_TABLE_HEADER if magnetic else _NEAR_E_TABLE_HEADER
-    out = [header, "", *table] if magnetic else [header, *table]
-    for point, value in zip(points, field, strict=True):
+    values = []
+    for value in field:
         fx, fy, fz = complex(value[0]), complex(value[1]), complex(value[2])
         # Same departure as _pattern_lines (momwire#403), extended to this
         # table (momwire#464): a symmetry-killed component is fill round-off,
@@ -3701,9 +3788,8 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> li
             fy = 0j
         if fz.real * fz.real + fz.imag * fz.imag <= _PRINTED_DUST_FLOOR2:
             fz = 0j
-        out.append(fmt_near_field_row(point, fx, fy, fz))
-    out.append(_NEAR_FIELD_TIME)
-    return out
+        values.append((fx, fy, fz))
+    return points, values
 
 
 def _refuse_finite_ground_near_field(card: Card, solver: DeckSolver, points, ground_z):
@@ -3834,6 +3920,16 @@ def _network_lines(
                 continue
             out.append(_network_row(solver, card))
     out += ["", "", _NETWORK_EXCITATION_HEADER, *_NETWORK_EXCITATION_TABLE_HEADER]
+    out += [fmt_aip_row(*row) for row in network_excitation_rows(result)]
+    return [*out, "", ""]
+
+
+def network_excitation_rows(result: GroupResult) -> list[tuple]:
+    """The ``STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS`` rows,
+    each :func:`fmt_aip_row`'s seven arguments (shared with the NEC-2D
+    printout, momwire#2138)."""
+    points = result.network_points
+    rows = []
     v_applied = result.v_applied
     i_port = result.i_port
     for tag, segment, port in points:
@@ -3860,8 +3956,8 @@ def _network_lines(
             <= _PRINTED_DUST_FLOOR2
         ):
             current = 0j
-        out.append(
-            fmt_aip_row(
+        rows.append(
+            (
                 tag,
                 segment,
                 volts,
@@ -3871,7 +3967,7 @@ def _network_lines(
                 0.5 * (volts * np.conj(current)).real,
             )
         )
-    return [*out, "", ""]
+    return rows
 
 
 def _kind_order(kinds) -> list[str]:
@@ -3891,17 +3987,26 @@ def _network_row(solver: DeckSolver, card) -> str:
     here before it shows up in any impedance — which is the cheapest possible
     gate on that rule and the reason ``dipole_tl_zero_length`` is a fixture.
     """
+    ends, values, kind = network_row_values(solver, card)
+    return fmt_network_row(*ends, values, kind)
+
+
+def network_row_values(solver: DeckSolver, card) -> tuple[list[int], tuple, str]:
+    """``([tag, seg, tag, seg], six reals, kind)`` for one ``NETWORK DATA``
+    row: :func:`_network_row`'s numbers, shared with the NEC-2D printout
+    (momwire#2138). ``kind`` is ``""`` for an ``NT`` card, ``STRAIGHT`` or
+    ``CROSSED`` for a ``TL`` one, whose length is the resolved one."""
     ends = []
     for tag, seg in (card.address_a, card.address_b):
         segment = solver.global_segment(*solver.structure.locate(tag, seg))
         ends += [solver.segments[segment - 1].tag, segment]
     f1, f2, f3, f4, f5, f6 = card.payload
     if card.kind == "NT":
-        return fmt_network_row(*ends, (f1, f2, f3, f4, f5, f6), "")
+        return ends, (f1, f2, f3, f4, f5, f6), ""
     branches = card_branches(card, 0, 1, solver.model.wires)
     line = branches[0]
-    return fmt_network_row(
-        *ends,
+    return (
+        ends,
         (line.z0, line.length, f3, f4, f5, f6),
         "CROSSED" if line.transposed else "STRAIGHT",
     )
@@ -4466,7 +4571,8 @@ def _filename_basis(prog: str) -> str | None:
     """The basis a copy/symlink NAME selects, or None for the plain spelling.
 
     ``momwire-nec2c-<basis>`` — everything after ``nec2c-`` in the program's
-    basename, case-insensitively, with a Windows ``.exe`` stripped first.
+    basename, case-insensitively, with a Windows ``.exe`` stripped first; and
+    for a NEC-2D launcher (momwire#2138) everything after ``nec2d-``.
     ``momwire-nec2c`` bare (no trailing ``-``) selects nothing, and so does
     any name without the ``nec2c-`` marker (``python -m momwire.dropin.nec2c``, a
     pytest runner, …). A name ending AT the marker returns ``""``, which is
@@ -4474,7 +4580,7 @@ def _filename_basis(prog: str) -> str | None:
     unknown suffix must fail fast at the probe, exactly like an unknown
     ``--basis``.
     """
-    return basis_from_program_name(prog, "nec2c-")
+    return basis_from_program_name(prog, f"{nec2_layout_from_program_name(prog)}-")
 
 
 def _basis_refusal(name: str, source: str) -> str:
@@ -4544,8 +4650,15 @@ def configure_engine(
     # the printout banner, and an unknown name from ANY of the three sources
     # fails fast and nonzero at the probe, naming its source.
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
-    global _save_decks_dir, _decks_saved, _active_basis_spelled
+    global _save_decks_dir, _decks_saved, _active_basis_spelled, _active_layout
     _active_basis = _BASES["bs2"]  # per-invocation default, never sticky
+    # The printout layout rides on the program NAME alone (momwire#2138):
+    # `nec2d` in it writes LLNL's NEC-2D layout for 4nec2, anything else the
+    # nec2c one SimNEC reads.  No flag and no environment variable: a name
+    # is what both hosts' engine dialogs choose.
+    _active_layout = nec2_layout_from_program_name(
+        sys.argv[0] if prog is None else prog
+    )
     _active_basis_name = "bs2"
     _active_basis_spelled = None
     _save_decks_dir = None
@@ -4700,7 +4813,7 @@ def engine_scope():
     it anyway and would only occupy the cap.
     """
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
-    global _save_decks_dir, _decks_saved, _active_basis_spelled
+    global _save_decks_dir, _decks_saved, _active_basis_spelled, _active_layout
 
     saved = (
         _active_basis,
@@ -4710,6 +4823,7 @@ def engine_scope():
         _cache_stats_path,
         _save_decks_dir,
         _decks_saved,
+        _active_layout,
     )
     try:
         yield
@@ -4722,6 +4836,7 @@ def engine_scope():
             _cache_stats_path,
             _save_decks_dir,
             _decks_saved,
+            _active_layout,
         ) = saved
         _reset_solver_cache()
 
@@ -4817,6 +4932,25 @@ def _shell_forms(args: list[str], stdin, stdout, stderr, en_optional=False) -> i
     """
     from ..nec5 import _shell
 
+    if _active_layout == "nec2d":
+        # The NEC-2D printout (momwire#2138), registered under its own key:
+        # the shell reads the deck file as the nec2 front end does but leaves
+        # its end to the printout, whose reader closes it as NEC-2D's does.
+        from . import _nec2d
+
+        _shell.register_front_end(
+            "nec2d",
+            _shell.FrontEnd(
+                render=_nec2d.file_printout,
+                refusal=_nec2d.file_refusal,
+                stream=lambda: _nec2d.resident_loop(
+                    stdin, stdout, stderr, scope=_shell.deck_scoped
+                ),
+            ),
+        )
+        return _shell.main(
+            args, basis=_active_basis_name, dialect="nec2d", en_optional=en_optional
+        )
     _shell.register_front_end(
         "nec2",
         _shell.FrontEnd(
@@ -4883,7 +5017,7 @@ def main(
 
     if any(a.lstrip("-").lower() == "version" for a in argv):
         suffix = _filename_basis(sys.argv[0] if prog is None else prog)
-        stdout.write(f"{probe_version(suffix)}\n")
+        stdout.write(f"{probe_version(suffix, _active_layout)}\n")
         stdout.flush()
         return 0
 
@@ -4911,4 +5045,8 @@ def main(
                 names.append(second)
             return _shell_forms(names, stdin, stdout, stderr, en_optional=True)
         stdin = itertools.chain([first], stdin)
+    if _active_layout == "nec2d":
+        from . import _nec2d
+
+        return _nec2d.resident_loop(stdin, stdout, stderr)
     return resident_loop(stdin, stdout, stderr)

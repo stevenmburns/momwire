@@ -385,8 +385,11 @@ def render_files(
     reader already closes one there, and an ``EN`` added would print as a
     card echo of its own, so ``nec2`` keeps the stdin form's rule: closed
     when ``en_optional`` says the names came from stdin (momwire#1488).
+    The NEC-2D front end (``nec2d``, momwire#2138) is never closed here: its
+    printout closes a deck at end of file as NEC-2D's reader does, whose
+    ``EN`` echo carries the last card's fields.
     """
-    if en_optional or dialect != "nec2":
+    if dialect != "nec2d" and (en_optional or dialect != "nec2"):
         text = close_deck(text)
     printout = render(text, basis=basis, dialect=dialect)
     gmo = _gmo.gmo_text(text) if dialect == "nec5" else None
