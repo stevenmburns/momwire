@@ -83,7 +83,14 @@ struct FamilySpec {
     bool keep_reps = false;
 };
 
-inline int64_t class_bytes(const FamilySpec &f) { return f.value_bytes + 2 * 4 + 1; }
+// What a class costs a plan past its maps, from the layout: one wavenumber's
+// values, its group entry (`Group::cls`, `Group::at`) and its
+// representative's code (`FamilyPlan::rep_code`). razor2p: 32 + 8 + 1 = 41 B
+// (measured on the 10-element Yagi: 41.5 B a class, the groups' observer and
+// source lists the rest).
+inline int64_t class_bytes(const FamilySpec &f) {
+    return f.value_bytes + static_cast<int64_t>(2 * sizeof(int32_t) + sizeof(uint8_t));
+}
 
 // THE ALLOWANCE (momwire#2123, Steve 11-24): what `pair_reuse` may hold on
 // top of the fill's own bound (512 MB + one dense Z), for every basis.
@@ -92,11 +99,14 @@ inline int64_t class_bytes(const FamilySpec &f) { return f.value_bytes + 2 * 4 +
 //   classes (N^2 / 2 per class map): a deck that does not reach 2x
 //   compression declines, `cap_reason`. The census checks it after every
 //   pass of rows and stops the moment the count passes it.
-// - THE KEPT PLAN: 4 B per pair for each class map (two over a ground) plus
-//   PLAN_FLOOR_BYTES_PER_CLASS for each class the cap allows, one
-//   wavenumber's values and an index: `plan_allowance`, 4 + 56 / 2 = 32 B
-//   per pair, two Z per map at the cap. A plan whose own bytes pass it
-//   declines, `allowance_reason`.
+// - THE KEPT PLAN: 4 B per pair for each class map (two over a ground) plus,
+//   for each class the cap allows, what the engine's plan keeps per class,
+//   derived from its layout (`plan_allowance(pairs, per_class)`; Steve
+//   11-24, option 1: each engine's real per-class cost). razor2p's is its
+//   adapter's `kept_bytes_per_class` (49 B), sinusoidal's its
+//   KEPT_BYTES_PER_CLASS (105 B direct, 73 B reflected): at the cap 28.5,
+//   56.5 and 40.5 B a pair. A
+//   plan whose own bytes pass it declines, `allowance_reason`.
 // - THE CENSUS is a transient: its tables are freed before the fill's Z is
 //   allocated, so its peak is charged against that room, not added to the
 //   kept plan, and it has no byte bound of its own: the cap is what stops
@@ -104,18 +114,16 @@ inline int64_t class_bytes(const FamilySpec &f) { return f.value_bytes + 2 * 4 +
 // - Allowances ADD with the other opt-ins' (mixed_lu: 1.5 Z + 512 MB). No
 //   one place sums them: each opt-in bounds its own share.
 constexpr int64_t CLASS_CAP_COMPRESSION = 2;
-// One wavenumber's values (sinusoidal's three complex shapes, 48 B; razor's
-// two, 32 B) and an 8 B index: sinusoidal's `PLAN_FLOOR_BYTES_PER_CLASS`.
-constexpr int64_t PLAN_FLOOR_BYTES_PER_CLASS = 56;
 // TEST HOOK: the cap's compression in place of CLASS_CAP_COMPRESSION (<= 0
 // restores it; 1 caps nothing but the pairs), so the plan's own tests can
 // build plans of decks that do not compress. Plans are keyed on it. Bound for
 // Python's tests only; nothing in the executables sets it.
 void set_cap_compression(int64_t c);
 int64_t cap_compression();
-// The classes a family of `pairs` pairs may keep, and its kept plan's bytes.
+// The classes a family of `pairs` pairs may keep, and its kept plan's bytes
+// for an engine keeping `per_class` bytes a class beside its class map.
 inline int64_t class_cap(int64_t pairs) { return pairs / cap_compression(); }
-inline int64_t plan_allowance(int64_t pairs) { return 4 * pairs + PLAN_FLOOR_BYTES_PER_CLASS * class_cap(pairs); }
+inline int64_t plan_allowance(int64_t pairs, int64_t per_class) { return 4 * pairs + per_class * class_cap(pairs); }
 // The decline sentences: "more than C classes for P pairs (the cap is 2x
 // compression)", and "the kept plan would exceed its allowance of X MB".
 // The cap's names the cap, not the count the census stopped at: that count
@@ -210,7 +218,7 @@ void decline(Plan &p, const std::string &why);
 // fixed cap, not the allowance, so that a long-lived server stays bounded
 // whatever decks it has seen. It held one fill's whole budget when that was
 // 256 MB, and stays there (momwire#2123); a fill's own plans may pass it
-// (32 B a pair per map at the cap, `plan_allowance`), so the newest `keep`
+// (up to 56.5 B a pair per map at the cap, `plan_allowance`), so the newest `keep`
 // entries are kept whatever their size, and before any census the cache is
 // cut back to this, so a census never runs beside more than this of older
 // decks' plans.

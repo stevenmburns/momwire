@@ -525,8 +525,8 @@ void register_sin_pair_reuse(py::module_ &m) {
           py::arg("band_bytes") = -1, py::arg("shared") = false, py::arg("keep") = 1,
           "momwire#1911 / #2063 / #2123: the sinusoidal census and plan (with ground_z, the reflected "
           "term's): (SinReusePlan or None where it declines, whether a census ran, the decline's reason or "
-          "''). `allowance` is the kept plan's bytes (None: 4 B per pair plus 56 B per class the 2x cap "
-          "allows). `shared` reads and keeps the process's cache (`keep`: its newest entries kept whatever "
+          "''). `allowance` is the kept plan's bytes (None: 4 B per pair, `sin_pair_reuse_kept_bytes` per "
+          "class the 2x cap allows and per near pair). `shared` reads and keeps the process's cache (`keep`: its newest entries kept whatever "
           "their size, 2 for a fill's second block); workers > 0 sets the census's worker count, "
           "band_bytes >= 0 its band bytes per pair.");
     m.def("sin_pair_reuse_types", &sin_pair_reuse::sin_pair_reuse_types, py::arg("seg_h"), py::arg("a_obs"),
@@ -560,6 +560,10 @@ void register_sin_pair_reuse(py::module_ &m) {
           "one, momwire#2123), small-deck thresholds "
           "(< 0 restores each), census worker count (<= 0: the OpenMP team's), the adversarial probe (0 none), "
           "the plan cache's bytes (< 0 restores it, 0 keeps none); clear drops the kept plans.");
+    // momwire#2123: what a plan keeps per class (direct, reflected) and per
+    // near pair, the allowance's per-engine costs, from the plan's layout.
+    m.attr("sin_pair_reuse_kept_bytes") =
+        py::make_tuple(pr::KEPT_BYTES_PER_CLASS, pr::GROUND_KEPT_BYTES_PER_CLASS, pr::NEAR_KEPT_BYTES);
     m.attr("sin_pair_reuse_cxx") = true;
     m.attr("sin_pair_reuse_2063") = true;
     m.attr("pair_reuse_reduce_1916") = true;

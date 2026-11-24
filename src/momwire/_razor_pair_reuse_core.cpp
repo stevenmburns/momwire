@@ -303,12 +303,20 @@ void set_class_limit(int64_t direct, int64_t remainder) {
 int64_t class_limit(int family) { return g_class_limit[family == 0 ? 0 : 1].load(); }
 void set_plan_allowance(int64_t bytes) { g_plan_allowance.store(bytes <= 0 ? 0 : bytes); }
 int64_t plan_allowance_override() { return g_plan_allowance.load(); }
+int64_t kept_bytes_per_class(const pair_reuse::FamilySpec &f) {
+    // `class_bytes` (values, group entry, code) and, at most, one observer
+    // row and one source in its group's lists (`Group::obs`, `Group::src`):
+    // a class adds its representative's row and source to its group at most
+    // once each.
+    return pair_reuse::class_bytes(f) + static_cast<int64_t>(2 * sizeof(int32_t));
+}
 int64_t plan_allowance(const pair_reuse::Plan &p) {
     const int64_t b = g_plan_allowance.load();
     if (b > 0) return b;
     int64_t a = 0;
     for (const FamilyPlan &f : p.fam)
-        for (int blk = 0; blk < f.spec.n_blocks; blk++) a += pair_reuse::plan_allowance(f.spec.rows * f.spec.cols);
+        for (int blk = 0; blk < f.spec.n_blocks; blk++)
+            a += pair_reuse::plan_allowance(f.spec.rows * f.spec.cols, kept_bytes_per_class(f.spec));
     return a;
 }
 int probe() { return g_probe.load(); }

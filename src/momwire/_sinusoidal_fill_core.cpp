@@ -2304,8 +2304,8 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
     auto reuse = std::unique_ptr<Reuse>(new Reuse());
     reuse->blocks = (pec || finite) ? 2 : 1;
     const char *names[2] = {"direct", finite ? "reflected" : "image"};
-    // momwire#2123: each block's plan is held to its own allowance (32 B a
-    // pair per class map, `pair_reuse::plan_allowance`), so blocks no longer
+    // momwire#2123: each block's plan is held to its own allowance (its map
+    // and its per-class cost, `pr::allowance_of`), so blocks no longer
     // share one budget; any block's decline declines the fill whole.
     const int64_t allowance = pr::plan_allowance_override();
     std::vector<pr::CensusEntry> census;

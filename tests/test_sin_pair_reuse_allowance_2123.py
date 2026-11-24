@@ -4,7 +4,8 @@ replaced #2019's fixed 256 MB budget).
 Each plan (the direct block's, the PEC image's, the reflected term's) keeps
 at most half its pairs as classes, `_sin_pair_reuse.class_cap` (2x
 compression), and its fill is held to `plan_allowance`, 4 B per pair plus
-56 B per class the cap allows. A deck past either says so in
+what the plan keeps per class (its layout's, 105 B direct, 73 B reflected)
+for each class the cap allows, and 72 B per near pair. A deck past either says so in
 `pair_reuse_declined` and fills bit for bit as with reuse off; a deck inside
 both keeps its classes. The allowance is moved here (`ALLOWANCE_BYTES`) so
 that small decks reach both sides.
@@ -110,14 +111,15 @@ def _random_wires(n=14, segs=31, seed=2123):
 def test_the_allowance_is_the_cores():
     """One allowance for every basis and route (`_pair_reuse_core.h`)."""
     assert pr.CLASS_CAP_COMPRESSION == acc.pair_reuse_class_cap_compression == 2
-    assert pr.PLAN_FLOOR_BYTES_PER_CLASS == acc.pair_reuse_plan_floor_bytes_per_class
-    assert pr.PLAN_FLOOR_BYTES_PER_CLASS == pr.VALUE_BYTES + 8 == 56
     assert acc.pair_reuse_cap_compression() == 2
+    # the plan's layout: values 48 B, rep 8, code 1, and the canonical source
+    # 48 (direct) or the rep call's r and c 16 (reflected); near pairs 72 B
+    kept = (pr.KEPT_BYTES_PER_CLASS, pr.GROUND_KEPT_BYTES_PER_CLASS, pr.NEAR_KEPT_BYTES)
+    assert kept == acc.sin_pair_reuse_kept_bytes == (105, 73, 72)
     n = 405 * 405
     assert pr.class_cap(n) == n // 2
-    # 4 B a pair for the map, 56 B for each class the cap allows: 32 B a pair
-    assert pr.plan_allowance(n) == 4 * n + 56 * (n // 2)
-    assert pr.plan_allowance(2 * n) == 64 * n
+    assert pr.plan_allowance(n) == 4 * n + 105 * (n // 2)
+    assert pr.plan_allowance(n, ground=True, near=10) == 4 * n + 73 * (n // 2) + 720
 
 
 def test_the_reasons_are_the_cores_words():
@@ -148,7 +150,10 @@ def test_a_deck_inside_the_allowance_reuses_as_without_one(ground, monkeypatch):
     assert s.pair_reuse_declined is None
     assert "direct" in s.pair_reuse_census
     for plan in (p for _, p in s._sin_reuse_plans.values()):
-        assert pr.fill_nbytes(plan) <= pr.plan_allowance(plan.n_pairs)
+        refl = isinstance(plan, pr.GroundPlan)
+        assert pr.fill_nbytes(plan) <= pr.plan_allowance(
+            plan.n_pairs, refl, plan.n_near
+        )
         assert plan.n_classes <= pr.class_cap(plan.n_pairs)
     pr.clear_shared_plans()
     monkeypatch.setattr(pr, "ALLOWANCE_BYTES", BIG)
@@ -186,14 +191,12 @@ def test_a_plan_is_held_to_its_fill_exactly():
 
 @pytest.mark.parametrize("ground", ["free", "sommerfeld"])
 def test_a_deck_short_of_2x_compression_declines_on_the_cap(ground, monkeypatch):
-    """Random wires: nearly every far pair is its own class. At the default
-    allowance the census stops first on the allowance (the least its plan
-    could keep, 104 B a class, passes 32 B a pair at ~0.27 M N classes,
-    before the cap's 0.5 M N): that is the sinusoidal plan's common case.
-    With the allowance lifted it passes M N / 2 classes and stops there, the
-    cap named; either way the fill is the fill without the reuse. Under a
-    cap that binds nothing too (`pair_reuse_cap_compression(1)`), the same
-    deck's plan keeps more than half its pairs: the cap is what declined it."""
+    """Random wires: nearly every far pair is its own class, so the census
+    passes M N / 2 classes and stops there, with the cap named, and the fill
+    is the fill without the reuse. Under a cap that binds nothing
+    (`pair_reuse_cap_compression(1)`, the test hook) and an allowance that
+    never binds, the same deck's plan keeps more than half its pairs: the
+    cap is what declined it."""
     kw = {**_random_wires(), **GROUNDS[ground]}
 
     def fill(pair_reuse=None):
@@ -208,15 +211,11 @@ def test_a_deck_short_of_2x_compression_declines_on_the_cap(ground, monkeypatch)
     base, s = fill()
     n = s._build_geometry()["n_segs"]
     on, s = fill(pair_reuse=True)
-    assert s.pair_reuse_declined == pr.allowance_reason(pr.plan_allowance(n * n))
-    assert on.tobytes() == base.tobytes()
-    pr.clear_shared_plans()
-    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", BIG)
-    on, s = fill(pair_reuse=True)
     assert s.pair_reuse_declined == pr.cap_reason(n * n)
     assert s.pair_reuse_census == {}
     assert on.tobytes() == base.tobytes()
     pr.clear_shared_plans()
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", BIG)
     acc.pair_reuse_cap_compression(1)
     try:
         _, s = fill(pair_reuse=True)
@@ -229,18 +228,20 @@ def test_a_deck_short_of_2x_compression_declines_on_the_cap(ground, monkeypatch)
 
 
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
-def test_a_deck_short_of_the_plans_bytes_declines_on_the_allowance(ground):
+def test_a_deck_between_2x_and_its_plans_bytes_reuses(ground):
     """The tapered elements compress 3.04x (free space: 53,895 classes of
-    164,025 pairs), past the cap, but the sinusoidal direct plan keeps
-    ~103 B a class beyond its map (one wavenumber's values 48 B, the
-    representative 8 B, the canonical sources 48 B), where the allowance
-    counts 56 B: its 6.55 MB fill passes the 5.25 MB allowance, so it
-    declines on bytes, not on the cap, and fills as off. (It was served
-    under #2019's 256 MB budget.)"""
+    164,025 pairs). The sinusoidal direct plan keeps ~103 B a class beyond
+    its map; held to 56 B a class it declined, though #2019's 256 MB budget
+    served it. Charged the plan's own per-class cost, it reuses, within the
+    reuse's drift of off."""
     base, _ = _fill(taper=0.03, **GROUNDS[ground])
     on, s = _fill(pair_reuse=True, taper=0.03, **GROUNDS[ground])
-    assert s.pair_reuse_declined == pr.allowance_reason(pr.plan_allowance(405**2))
-    assert on.tobytes() == base.tobytes()
+    assert s.pair_reuse_declined is None
+    pairs, classes, _ = s.pair_reuse_census["direct"]
+    assert 2 < pairs / classes < 3.7
+    # the matrix within the reuse's own bound (the ground module's MATRIX)
+    rel = float(np.max(np.abs(on - base)) / np.max(np.abs(base)))
+    assert rel <= 3e-12
 
 
 def test_each_block_is_held_to_its_own_allowance(monkeypatch):

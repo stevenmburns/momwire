@@ -328,20 +328,13 @@ def test_the_allowance_holds_the_plan(deck, block, monkeypatch):
 @pytest.mark.parametrize("block", ["direct", "image", "reflected"])
 def test_the_cap_holds_the_plan(block, monkeypatch):
     """The random wires keep more than half their pairs as classes: under
-    the cap (2x compression), the allowance lifted so the cap is what binds,
-    every block's census stops and declines with the cap named, at any
-    worker count; the curtain, far under it, serves. At the default
-    allowance the random wires stop first on the allowance (the least the
-    plan could keep passes it before the cap)."""
+    the cap (2x compression) every block's census stops and declines with
+    the cap named, at any worker count; the curtain, far under it, serves."""
     for deck, served in (("random wires", False), ("curtain", True)):
         g = _inputs(_solver(*DECKS[deck]))
         types, gtypes = _types(g)
-        default = _plan(block, g, types, gtypes, None, 4, monkeypatch)
-        if not served:
-            n2 = g["N"] ** 2
-            assert default == pr.Declined(pr.allowance_reason(pr.plan_allowance(n2)))
         for workers in (1, 4):
-            got = _plan(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
+            got = _plan(block, g, types, gtypes, None, workers, monkeypatch)
             if served:
                 assert not isinstance(got, pr.Declined)
                 assert got.n_classes <= pr.class_cap(got.n_pairs)
@@ -472,12 +465,10 @@ SERVED = {
 
 @pytest.mark.parametrize("deck", list(SERVED))
 def test_the_reused_printout_and_fill_are_pythons(deck, tools, monkeypatch, py_outcome):
-    """Several of these decks compress less than 2x (the tilted curtains, the
-    junction) or keep more than the allowance: both are lifted on both
-    routes (the hooks), this test being the served plan's parity."""
+    """Two of these decks compress less than 2x (the tilted Sommerfeld
+    curtain, the junction): the class cap is lifted on both routes (the
+    hook), this test being the served plan's parity."""
     acc.pair_reuse_cap_compression(1)
-    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", 1 << 40)
-    acc.sin_pair_reuse_configure(allowance=1 << 40, clear=True)
     stats, outcome, fill_on, fill_off = _runs(
         tools, SERVED[deck], monkeypatch, py_outcome
     )
@@ -580,26 +571,17 @@ def random_deck(ground="free", n=24, segs=17, seed=1911, nf=2):
     return "\n".join([*lines, "XQ", "EN"]) + "\n"
 
 
-@pytest.mark.parametrize("lifted", [False, True], ids=["default", "lifted"])
 @pytest.mark.parametrize("ground", ["free", "pec", "somm"])
 def test_a_deck_short_of_2x_compression_declines_as_pythons(
-    ground, lifted, tools, monkeypatch, py_outcome
+    ground, tools, monkeypatch, py_outcome
 ):
-    """The random wires decline on both routes in the same sentence, and
-    fill as off: at the default allowance on the allowance (the least the
-    plan could keep passes it first), and with the allowance lifted on the
-    class cap (the cap, not the count the census stopped at, which follows
-    each route's bands)."""
-    n2 = 408 * 408
-    if lifted:
-        monkeypatch.setattr(pr, "ALLOWANCE_BYTES", 1 << 40)
-        acc.sin_pair_reuse_configure(allowance=1 << 40, clear=True)
-        reason = pr.cap_reason(n2)
-        assert reason == (
-            "more than 83232 classes for 166464 pairs (the cap is 2x compression)"
-        )
-    else:
-        reason = pr.allowance_reason(pr.plan_allowance(n2))
+    """The random wires pass the class cap at the default allowance on both
+    routes: the same sentence (the cap, not the count the census stopped
+    at, which follows each route's bands), and the fill as off."""
+    reason = pr.cap_reason(408 * 408)
+    assert reason == (
+        "more than 83232 classes for 166464 pairs (the cap is 2x compression)"
+    )
     stats, outcome, fill_on, fill_off = _runs(
         tools, random_deck(ground=ground), monkeypatch, py_outcome
     )

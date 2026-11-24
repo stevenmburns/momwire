@@ -26,9 +26,8 @@
 //   block's, the image's or the reflected term's, each its own class map)
 //   keeps at most M N / 2 classes, the census stopping once it passes that
 //   (`pair_reuse::class_cap`), and its fill (`fill_nbytes`) is held to
-//   `pair_reuse::plan_allowance(M N)`, 32 B a pair; the census also stops
-//   once the least the finished plan would keep passes that (the .cpp's
-//   KEPT_BYTES_PER_CLASS). The census's peak is
+//   `allowance_of`: the map, KEPT_BYTES_PER_CLASS (below) per class the
+//   cap allows and NEAR_KEPT_BYTES per near pair. The census's peak is
 //   counted in Python's figures (`pair_reuse::BandBudget`, unbounded): what
 //   one running `IntGroups` fold table would hold (its keys and slots, 9 B
 //   per class, 8 B per near pair, the class map) plus `BAND_BYTES_PER_PAIR`
@@ -79,15 +78,30 @@ constexpr int64_t VALUE_BYTES = 48;
 constexpr int64_t BAND_BYTES_PER_PAIR = 136;
 constexpr int64_t GROUND_BAND_BYTES_PER_PAIR = 168;
 constexpr double BAND_SHARE = 0.25;
-constexpr int64_t PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8;
-static_assert(PLAN_FLOOR_BYTES_PER_CLASS == mw::pair_reuse::PLAN_FLOOR_BYTES_PER_CLASS,
-              "the allowance's per-class floor is sinusoidal's values and index");
+static_assert(VALUE_BYTES == 3 * sizeof(std::complex<double>), "one wavenumber's three shapes");
+// What a plan keeps per class beside its class map (momwire#2123, the
+// allowance's per-class cost), from `Plan`'s layout, as `plan_nbytes` and
+// `fill_nbytes` count it: one wavenumber's values (`Values::cls`, 48 B), the
+// representative (`rep`, int64), its code (`fam.rep_code`, one byte), and
+// the direct plan's canonical source (`src_c`, `src_t`: two (3,) doubles,
+// 48 B) or the ground plan's place in its representatives' calls
+// (`rep_blocks`' r and c, two int64). Direct 105 B, reflected 73 B; measured
+// on the 405-segment tapered Yagi, 103 and 74 B a class all told (the near
+// pairs and the calls' source lists averaged in).
+constexpr int64_t KEPT_BYTES_PER_CLASS =
+    VALUE_BYTES + sizeof(int64_t) + sizeof(uint8_t) + 6 * sizeof(double);
+constexpr int64_t GROUND_KEPT_BYTES_PER_CLASS =
+    VALUE_BYTES + sizeof(int64_t) + sizeof(uint8_t) + 2 * sizeof(int64_t);
+// And per near pair, which is no class (they share one sentinel key): its
+// flat index (`near_flat`), one wavenumber's values (`Values::near`) and its
+// place in its call (`near_blocks`' r and c). 72 B.
+constexpr int64_t NEAR_KEPT_BYTES = sizeof(int64_t) + VALUE_BYTES + 2 * sizeof(int64_t);
 // The core's cache tag.
 const char *const BASIS = "sinusoidal";
 
 // TEST HOOKS, bound for Python's tests only; nothing in the executables sets
 // them. The C++ fill's kept-plan allowance in bytes, per plan (<= 0 restores
-// the derived one, `pair_reuse::plan_allowance`; read back as -1), the
+// the derived one, `allowance_of`; read back as -1), the
 // small-deck thresholds (< 0 restores each constant), and the census's
 // worker count (<= 0: the OpenMP team's, `_workers()`'s counterpart). A plan
 // is keyed on the allowance it was built under, as Python's.
@@ -176,13 +190,15 @@ struct CensusInputs {
     const int64_t *src_rev = nullptr, *obs_rev = nullptr;  // null: keyed along the stored tangents
     double ground_z = 0.0;
     int64_t rows = 1;     // the census's swept rows (`census_rows`)
-    int64_t allowance = -1;  // the kept plan's bytes, < 0: pair_reuse::plan_allowance(M N)
+    int64_t allowance = -1;  // the kept plan's bytes, < 0: `allowance_of`'s derived one
     int workers = 1;
     int64_t band_bytes_per_pair = -1;  // < 0: BAND_BYTES_PER_PAIR (ground: GROUND_...)
 };
 
-// The allowance a plan of these inputs is held to (`CensusInputs::allowance`).
-int64_t allowance_of(const CensusInputs &in);
+// The allowance a plan of these inputs is held to (`CensusInputs::allowance`
+// when set): its map, KEPT_BYTES_PER_CLASS (GROUND_... for `ground`) per
+// class the cap allows, and NEAR_KEPT_BYTES per near pair.
+int64_t allowance_of(const CensusInputs &in, bool ground, int64_t n_near);
 
 // `build_plan` / `build_ground_plan`, uncached; null where it declines, and
 // `why` (when given) the reason, `pair_reuse_declined`'s words.

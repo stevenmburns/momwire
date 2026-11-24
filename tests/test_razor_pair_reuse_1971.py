@@ -548,20 +548,25 @@ def test_the_cache_counts_a_declined_plan_apart():
 
 
 def test_the_allowance_is_the_cores():
-    # one allowance for both bases and routes (`_pair_reuse_core.h`): the
-    # class cap at 2x compression, 4 B a pair per map plus 56 B per class
-    # the cap allows (momwire#2123, Steve 11-24)
+    # one rule for both bases and routes (`_pair_reuse_core.h`): the class
+    # cap at 2x compression, 4 B a pair per map plus the engine's own
+    # per-class plan cost for each class the cap allows (momwire#2123, Steve
+    # 11-24): razor2p's, from its layout, one wavenumber's two complex
+    # values, its group entry (two int32), its code (one byte) and at most
+    # one row and one source in its group's lists (two int32)
     assert acc.pair_reuse_class_cap_compression == 2
-    assert acc.pair_reuse_plan_floor_bytes_per_class == 56
-    assert core_words.plan_allowance(1000) == 4 * 1000 + 56 * 500
+    assert acc.razor_reuse_kept_bytes_per_class == 32 + 8 + 1 + 8
 
 
 def _allowance(st):
-    """The derived allowance of a plan's stats: 32 B a pair for each map
-    (the direct family's blocks and the composing ground's remainder)."""
+    """The derived allowance of a plan's stats: 4 B a pair and 49 B a class
+    the cap allows, for each map (the direct family's blocks and the
+    composing ground's remainder)."""
     n2 = st["n_seg"] ** 2
     maps = (2 if st["has_image"] else 1) + (1 if st["remainder"] else 0)
-    return maps * core_words.plan_allowance(n2)
+    return maps * (
+        4 * n2 + acc.razor_reuse_kept_bytes_per_class * core_words.class_cap(n2)
+    )
 
 
 @_needs_cert
