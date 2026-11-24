@@ -54,8 +54,8 @@ reference corpus the card histogram is `GW` 104, `EX` 55, `XQ` 52, `FR` 49,
 `NX` 45, `GE` 45, `CE` 45, `CM` 21, `GN` 16, `RP` 7, `LD` 7, `GD` 5, `PT` 3,
 `EK` 3, `MP` 2, two `TL`, two `NT`, and one each of `NE`, `NH`, `GS`, `GM`.
 Zero patches, zero arcs, zero helices. The dialect covers what real decks
-contain, and since momwire#1651 the arc ([`GA`](#ga--wire-arc)) and the helix
-([`GH`](#gh--helix)) too, which 4nec2's decks use: both are wires, gated against
+contain, and the arc ([`GA`](#ga--wire-arc)) and the helix
+([`GH`](#gh--helix)) too (momwire#1651), which 4nec2's decks use: both are wires, gated against
 nec2c.
 
 The network cards were themselves once outside it, refused by name as out of
@@ -1064,7 +1064,7 @@ NEC's answer. This dialect folds the field into a per-metre series
 capacitance `C' × d²`, using each wire's own segment length `d`. Against
 nec2c on a 5 m dipole at 30 MHz (5 to 33 segments), the folded deck lands
 within 0.2 Ω of nec2c on the point-matched sinusoidal basis and within
-0.5 to 5.4 Ω on bspline, where the card itself moves X by 14 to 496 Ω. The
+0.5 to 5.4 Ω on bs2, where the card itself moves X by 14 to 496 Ω. The
 `nec4` dialect still refuses a nonzero field, because NEC-4.2 has not been
 measured on it. `R'` and `L'` are genuinely per unit length on both engines
 and are served as written.
@@ -1373,7 +1373,7 @@ On `--basis sg`, `EK` is REFUSED at solver construction if
 the deck has a junction where two `GW` sections carry different radii —
 measured divergent there, not merely inaccurate (momwire#398 D2). Every
 other basis serves `EK` on a stepped-radius deck; see [Choosing the
-physics](/reference/portal-usage/#choosing-the-physics---basis) for the
+physics](/reference/portal-usage/#choosing-the-physics-one-command-per-engine) for the
 row-by-row guidance on tapered and stepped-radius wire.
 
 ## XQ — execute
@@ -1631,12 +1631,11 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `ZO` | `ZO (impedance normalisation) is not supported by this engine` |
 
 [`GX`](#gx--structure-reflection), [`GR`](#gr--cylindrical-structure-rotation),
-[`GA`](#ga--wire-arc) and [`GH`](#gh--helix) were on this table and are now
-built. The three "yet" messages mark the cards a patch model would bring, not
+[`GA`](#ga--wire-arc) and [`GH`](#gh--helix) are built; see their sections.
+The three "yet" messages mark the cards a patch model would bring, not
 a dialect decision.
 
-`TL` and `NT` were on this table and have left it: the dialect reads them, and
-what they refuse is [by value](#fields-refused-by-value) — a nonpositive
+`TL` and `NT` are read by the dialect, and what they refuse is [by value](#fields-refused-by-value) — a nonpositive
 endpoint segment, a zero characteristic impedance, and the non-contiguous
 destroy pattern.
 
