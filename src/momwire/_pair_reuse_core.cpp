@@ -117,7 +117,7 @@ namespace detail {
 void finish(FamilyPlan &f, const std::vector<Rep> &reps, int64_t singles, const Policy &pol) {
     f.classes = static_cast<int64_t>(reps.size());
     f.pairs = static_cast<int64_t>(f.spec.n_blocks) * f.spec.rows * f.spec.cols;
-    f.near = (f.spec.near_singles ? singles : 0) + static_cast<int64_t>(f.near_flat.size());
+    f.near = (f.spec.near_singles ? singles : 0) + static_cast<int64_t>(f.near_flat.size()) + f.near_unlisted;
     f.rep_code.resize(reps.size());
     for (size_t c = 0; c < reps.size(); c++) f.rep_code[c] = reps[c].code;
     if (f.spec.keep_reps) {
@@ -129,7 +129,7 @@ void finish(FamilyPlan &f, const std::vector<Rep> &reps, int64_t singles, const 
         build_groups(reps, f.spec.rows, f.spec.cols, f.spec.n_blocks, pol.rep_rows, f.groups, f.rep_evals);
     // The fill report's split (momwire#2016): integers read off the census.
     // A near class is a single (`near_singles`) or a Key::Near class.
-    const bool near_classes = f.spec.near_singles || !f.near_flat.empty();
+    const bool near_classes = f.spec.near_singles || !f.near_flat.empty() || f.near_unlisted > 0;
     if (near_classes) f.near_bits.assign((reps.size() + 63) / 64, 0);
     for (size_t c = 0; c < reps.size(); c++) {
         f.cls_block[reps[c].block]++;

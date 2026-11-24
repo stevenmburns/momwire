@@ -81,6 +81,11 @@ struct FamilySpec {
     Numbering numbering = Numbering::PartOffsets;
     // Keep each class's representative's flat index (`rep_flat`).
     bool keep_reps = false;
+    // List `Key::Near` pairs in `near_flat`. Off, they are only counted
+    // (`near_unlisted`): an adapter whose sentinel class stands for pairs it
+    // fills by its own route (bspline's same-edge blocks) needs no list,
+    // which would cost 8 B a pair.
+    bool list_near = true;
 };
 
 // What a class costs a plan past its maps, from the layout: one wavenumber's
@@ -179,6 +184,8 @@ struct FamilyPlan {
     std::vector<int64_t> near_flat;
     // `keep_reps`: each class's representative's flat index, likewise.
     std::vector<int64_t> rep_flat;
+    // `Key::Near` pairs not listed (`list_near` off).
+    int64_t near_unlisted = 0;
     int64_t pairs = 0, classes = 0, near = 0;
     int64_t rep_evals = 0;  // pairs the representatives' calls evaluate
     // The fill report's split (momwire#2016), by the block of each class's
@@ -503,7 +510,7 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     const int64_t cls_max = int64_t(1) << (31 - code_bits);
     const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
     std::atomic<bool> overflow{false};
-    std::vector<int64_t> n_single(static_cast<size_t>(P), 0);
+    std::vector<int64_t> n_single(static_cast<size_t>(P), 0), n_unlisted(static_cast<size_t>(P), 0);
     int64_t ci = 0;  // the chunk's index, over every block
     for (int b = 0; b < n_blocks; b++) {
         int32_t *mp = f.map[b].data();
@@ -572,7 +579,12 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
                         if (added)
                             rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
                                              static_cast<int32_t>(s), code, static_cast<uint8_t>(sb)});
-                        if (sb == 2) nr.push_back((b * rows + o) * cols + s);
+                        if (sb == 2) {
+                            if (spec.list_near)
+                                nr.push_back((b * rows + o) * cols + s);
+                            else
+                                n_unlisted[static_cast<size_t>(t)]++;
+                        }
                     }
                     if (Hook::tail) {
                         std::vector<int32_t> &st = stamps[static_cast<size_t>(t)];
@@ -604,7 +616,7 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
                 const auto &rp = reps[static_cast<size_t>(t)];
                 const auto &tab = tables[static_cast<size_t>(t)];
                 so_far += static_cast<int64_t>(rp.size());
-                n_near += static_cast<int64_t>(nears[static_cast<size_t>(t)].size());
+                n_near += static_cast<int64_t>(nears[static_cast<size_t>(t)].size()) + n_unlisted[static_cast<size_t>(t)];
                 bytes += static_cast<int64_t>(rp.capacity() * sizeof(Rep));
                 bytes += static_cast<int64_t>(3 * tab.cap * (W * 8 + 4) / 2);
                 if (last_i[static_cast<size_t>(t)] > tail_i) {
@@ -664,6 +676,8 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     if (spec.numbering == Numbering::FirstAppearance) first_appearance(f, all);
     int64_t singles = 0;
     for (int64_t v : n_single) singles += v;
+    f.near_unlisted = 0;
+    for (int64_t v : n_unlisted) f.near_unlisted += v;
     detail::finish(f, all, singles, pol);
     return Outcome::Ok;
 }
