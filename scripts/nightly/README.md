@@ -246,7 +246,21 @@ happens for a rotation cell that did not run on the green night. The
 bisect then halves the range. Each probe rebuilds Python and only the
 executables the findings name, and re-runs only their decks or sweep cases.
 An unbuildable commit is skipped, and the search stops at a 100-minute
-budget. To re-run it:
+budget.
+
+A probe runs an older tree in that tree's own names: Python is asked for
+the pre-#2091 spelling of a basis (`bspline`, `razor-2p`, ... on a tree
+without `momwire._basis_names`), and the executable is the one
+`*-standalone` target the tree's CMake defines (`momwire-nec42-standalone`
+before #1831, `momwire-nec42-bspline-standalone` before #2091), its old file
+removed first. A probe that built but could not RUN a target (Python refused
+the basis name, a row is missing, a sweep case did not come back ok) is
+`untested`, with its reason in the probe's `untested.txt`: stepped over like
+an unbuildable commit, and at the last green commit "could not test the last
+green commit: no verdict". It never counts as reproducing (the 2026-11-22/23
+bisects read 276e88fb's "unknown basis 'bs2'" as just that). When the bisect
+ends, however it ends, `mw/` is back on the commit it started from and
+Python is rebuilt there. To re-run it:
 
 ```
 venv/bin/python harness/nightly.py bisect results/<red date> [--base results/<green date>]

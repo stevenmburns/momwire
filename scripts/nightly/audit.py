@@ -8,12 +8,16 @@ list) is answered by each of the four no-Python executables that serve its
 dialect and by the Python route those executables replay, in this process's
 workers (`_shell.render_files`, written as `_shell.printout_bytes` writes it):
 
-    nec5-bs2      momwire-nec5-bs2-standalone      basis bspline,    NEC-5
-    nec5-razor2p     momwire-nec5-razor2p-standalone     basis razor2p,   NEC-5
-    nec42-bs2     momwire-nec42-bs2-standalone     basis bspline,    NEC-4.2
+    nec5-bs2          momwire-nec5-bs2-standalone          basis bs2,        NEC-5
+    nec5-razor2p      momwire-nec5-razor2p-standalone      basis razor2p,    NEC-5
+    nec42-bs2         momwire-nec42-bs2-standalone         basis bs2,        NEC-4.2
     nec42-sinusoidal  momwire-nec42-sinusoidal-standalone  basis sinusoidal, NEC-4.2
 
-(the CMake target names, long form since momwire#1831).
+(the CMake target names, long form since momwire#1831, dash-free since
+momwire#2091). A bisect probes trees older than either rename: there the
+target is whatever the tree's CMake builds (`--exe-target`, from
+nightly.standalone_target) and the basis is the tree's spelling of it
+(`tree_basis`).
 
 A cell is a variant and a thread count, `<avx2|sse2>-T<n>`: the executables
 built for that variant, Python's accelerator forced to it
@@ -86,6 +90,32 @@ EXES = {
 DECK_SUFFIXES = (".nec", ".deck")
 TIMEOUT_S = 900
 ERR = b"NEC ERROR - "
+
+# Each basis's spelling before momwire#2091 (6cc665d3): the inverse of
+# momwire._basis_names.BASIS_ALIASES, restated because a tree that needs it has
+# no such module (tests/test_skylake_nightly.py pins the two equal). A bisect
+# that passed `bs2` to such a tree got "unknown basis 'bs2'" from every probe
+# and read the refusal as the finding reproducing (the 2026-11-22/23 nights).
+LEGACY_BASIS = {
+    "bs2": "bspline",
+    "bs1": "bspline-d1",
+    "sg": "sinusoidal-galerkin",
+    "razor2p": "razor-2p",
+}
+
+
+def tree_basis(basis: str, renamed: bool) -> str:
+    """`basis` as a tree spells it: unchanged on a tree that has the
+    dash-free names (`renamed`), its pre-#2091 spelling otherwise."""
+    return basis if renamed else LEGACY_BASIS.get(basis, basis)
+
+
+def unrunnable(printout: bytes, basis: str) -> str | None:
+    """Why a Python printout measured the harness, not the tree: the tree
+    refused the basis NAME it was given. None for any other printout."""
+    needle = f"unknown basis {basis!r}".encode()
+    return needle.decode() if needle in printout else None
+
 
 # The NEC-4.2 slot's two measured times (run_audit_nec42.py's mask): their
 # numbers only, by exact line pattern, and the count of masked lines kept.
@@ -196,6 +226,15 @@ def _alarm(*_):
     raise _Alarm
 
 
+def _renamed() -> bool:
+    """Whether the momwire this process imports has the dash-free names."""
+    try:
+        from momwire._basis_names import canonical_basis  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _python(text: str, basis: str, dialect: str) -> tuple[bytes, str | None]:
     try:
         from momwire.dropin.nec5 import _shell
@@ -203,12 +242,7 @@ def _python(text: str, basis: str, dialect: str) -> tuple[bytes, str | None]:
         # A commit before momwire#1831 (11-07), which a bisect probes: the
         # NEC-5 launcher's shell was momwire.eznec's.
         from momwire.eznec import _shell
-    try:
-        from momwire._basis_names import canonical_basis  # noqa: F401
-    except ImportError:
-        # Before momwire#2091 the only spelling was razor-2p.
-        basis = {"razor2p": "razor-2p"}.get(basis, basis)
-
+    basis = tree_basis(basis, _renamed())
     kw = dict(basis=basis) if dialect == "nec5" else dict(basis=basis, dialect="nec4")
     signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(TIMEOUT_S)
@@ -263,6 +297,9 @@ def one(job: dict) -> dict:
     rec["py_s"] = round(time.perf_counter() - t0, 3)
     if err:
         rec["py_error"] = err
+    why = unrunnable(py_bytes, tree_basis(basis, _renamed()))
+    if why:
+        rec["py_unrunnable"] = why  # triage: a harness finding; a probe: untested
     exe_m, rec["exe_masked"] = mask(exe_bytes)
     py_m, rec["py_masked"] = mask(py_bytes)
     rec["exe_outcome"], rec["py_outcome"] = outcome(exe_bytes), outcome(py_bytes)
@@ -291,6 +328,13 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--only", type=Path, help='lines "<exe>\\t<deck label>"')
     ap.add_argument("--exe-names", default=",".join(EXES))
+    ap.add_argument(
+        "--exe-target",
+        action="append",
+        default=[],
+        metavar="NAME=TARGET",
+        help="the file an older tree's CMake builds for NAME (a bisect probe)",
+    )
     ap.add_argument("--local-corpus", type=Path)
     ap.add_argument("--save-printouts", type=Path)
     ap.add_argument("--workers", type=int, default=0)
@@ -325,8 +369,10 @@ def main() -> int:
         }
     decks = read_corpus(a.tree.resolve(), a.local_corpus)
     jobs = []
+    targets = dict(t.split("=", 1) for t in a.exe_target)
     for name in a.exe_names.split(","):
         cmake_basis, target, _, dialect = EXES[name]
+        target = targets.get(name, target)
         exe = a.exes / f"{cmake_basis}-{variant}" / target
         if not exe.is_file():
             raise SystemExit(f"no executable {exe}")
