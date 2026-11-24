@@ -958,8 +958,13 @@ FEATURES: dict[str, Feature] = {
         # swept impedance), bs2 / bs1 (`_solve_with_kcl*`'s `_lu_solve` and
         # the KCL-reduced solve; hmatrix and arrayblock only on their dense
         # fallback), razor2p (its three `_lu_solve`s) and sg
-        # (`_solve_constrained`). Not the factors a solver keeps for later
-        # solves (`lu_factor_strict`), the stacked swept solves, or the
+        # (`_solve_constrained`). Sinusoidal's kept factor too
+        # (`compute_impedance`'s Z_factors, the entry antennaknobs solves
+        # through): `lu_factor_kept` keeps the complex64 LU beside the intact
+        # Z (`_lapack.MixedLU`), and each later solve (the adjoint, another
+        # right-hand side) refines from it until one falls back and factors Z
+        # in place. Not the other kept factors (`lu_factor_strict`:
+        # arrayblock's groups), the stacked swept solves, or the
         # rotational-symmetry sectors.
         # Shipped LAPACK and BLAS routines only (cgetrf, cgetrs, the complex128
         # residual product), so python-kind: on the drop-in it runs,
@@ -991,7 +996,18 @@ FEATURES: dict[str, Feature] = {
         # the refined answer's worst error is no larger than the ordinary
         # route's: bs2 3.0e-12 (ordinary 3.1e-12), bs1 1.7e-12 (6.0e-12), sg
         # 2.6e-13 (5.5e-12), razor2p 1.1e-12 (1.1e-12). 2e-11 covers the
-        # worst with 2.8x margin, far under DEFAULT_DRIFT_MAX. Large decks
+        # worst with 2.8x margin, far under DEFAULT_DRIFT_MAX.
+        # Re-declared 1e-10 (Steve, 11-24) once antennaknobs reached the
+        # mixed route on Sinusoidal's kept factor: the 10-element Yagi in free
+        # space (beams.yagi, 8 directors; laptop, 8 threads) refines at every
+        # rung with the gap growing as the mesh refines and Z's condition
+        # with it (kappa_1 5.3e5 at n 2153; the mixed answer settles near
+        # kappa u64, the ordinary one lower):
+        #   n     1079     2153     4307     5931     7539     9329
+        #   Zin   4.6e-12  9.2e-12  9.9e-12  2.0e-11  3.3e-11  1.9e-11
+        # 3.3e-11 at worst, 3x under the bound. The bound is measured, not a
+        # guarantee: a deck finer or worse conditioned than these may exceed
+        # it, still far under LAST_DIGITS_DRIFT (a five-figure printout). Large decks
         # (n 2404 to 10442, bs2 / sg / razor2p / bs2 with kcl_nullspace)
         # print byte-identically bar timing and line 2.
         #
@@ -1026,7 +1042,7 @@ FEATURES: dict[str, Feature] = {
                 "solve that does not converge cleanly is redone the ordinary "
                 "way. Memory: the matrix plus a half-size copy."
             ),
-            drift=2e-11,
+            drift=1e-10,
             offer=True,
         ),
     )

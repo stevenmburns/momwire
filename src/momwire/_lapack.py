@@ -417,7 +417,14 @@ def lu_factor(a, overwrite_a=False, check_finite=True):
 
 @_factor_stage
 def lu_solve(lu_and_piv, b, trans=0, overwrite_b=False, check_finite=True):
-    """``scipy.linalg.lu_solve``, on the host's getrs when one is published."""
+    """``scipy.linalg.lu_solve``, on the host's getrs when one is published.
+
+    A `MixedLU` (`lu_factor_kept` under `mixed_lu_scope`) is served by its
+    own `MixedLU.solve`, refined against the matrix it keeps."""
+    if isinstance(lu_and_piv, MixedLU):
+        return lu_and_piv.solve(
+            b, trans=trans, overwrite_b=overwrite_b, check_finite=check_finite
+        )
     lu, piv = lu_and_piv
     lu = np.asarray(lu)
     b0 = np.asarray(b)
@@ -746,7 +753,7 @@ MIXED_TOLERANCE = _U64
 #: five sweeps for an answer 4e-13 from the ordinary one.)
 MIXED_FORWARD_TOLERANCE = 2.0**-44
 
-#: MIXED_FORWARD_FLOOR is set from the declared drift (2e-11), not from a
+#: MIXED_FORWARD_FLOOR is set from the declared drift (2e-11 when set; 1e-10 since), not from a
 #: small deck's scatter. It was 2**-40 (9.1e-13), the two-factor scatter of
 #: decks of a few hundred unknowns; but that scatter grows with the order,
 #: and a correction that has stopped contracting overstates the error it
@@ -934,28 +941,54 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
     the solve falls back. At most `_mixed_sweeps_cap` corrections.
     Memory: the complex64 factors (half of a1) and (n, k) vectors; the
     factors are dropped before returning, either way."""
-    n = a1.shape[0]
-    record: dict = {
+    record = _mixed_record(a1.shape[0], b2.shape[1])
+    if not _mixed_in_range(a1.shape[0], anorm):
+        _mixed_fallback("range", record)
+        return None
+    factors = _mixed_factor32(at32)
+    if factors is None:
+        _mixed_fallback("singular", record)
+        return None
+    return _mixed_sweeps(a1, *factors, trans, b2, anorm, norm, record)
+
+
+def _mixed_record(n: int, nrhs: int) -> dict:
+    """A fresh MIXED_LAST record for one solve of order `n`, `nrhs` columns."""
+    return {
         "n": n,
-        "nrhs": b2.shape[1],
+        "nrhs": nrhs,
         "sweeps": 0,
         "eta": [],
         "ratio": [],
         "delta": [],
+        "cap": _mixed_sweeps_cap(n, nrhs),
     }
-    cap = _mixed_sweeps_cap(n, b2.shape[1])
-    stall = _mixed_stall(cap)
-    record["cap"] = cap
-    if not (n * _CAST_LO <= anorm <= _CAST_HI):
-        _mixed_fallback("range", record)
-        return None
+
+
+def _mixed_in_range(n: int, anorm: float) -> bool:
+    """The cast guard (`_CAST_HI`, `_CAST_LO`) on ||A|| of order `n`."""
+    return n * _CAST_LO <= anorm <= _CAST_HI
+
+
+def _mixed_factor32(at32):
+    """complex64 getrf of the fresh F-ordered matrix `at32()` returns:
+    ``(lu32, ipiv, getrs)``, or None when a pivot is exactly zero."""
     lu32 = at32()
     getrf, getrs = scipy.linalg.get_lapack_funcs(("getrf", "getrs"), (lu32,))
     lu32, ipiv, info = getrf(lu32, overwrite_a=True)
     if info != 0:
-        del lu32
-        _mixed_fallback("singular", record)
         return None
+    return lu32, ipiv, getrs
+
+
+def _mixed_sweeps(a1, lu32, ipiv, getrs, trans, b2, anorm, norm, record):
+    """`_mixed_refine`'s iteration on complex64 factors already taken: the
+    (n, k) F-ordered solution, or None (the fallback counted and recorded).
+    `lu32` is only read, so a kept factor (`MixedLU`) serves every solve
+    from the one cgetrf."""
+    n = a1.shape[0]
+    cap = record["cap"]
+    stall = _mixed_stall(cap)
     tau, accept = MIXED_TOLERANCE, _mixed_accept(n)
     x = _mixed_correction(getrs, lu32, ipiv, b2, trans)
     prev = None
@@ -1013,7 +1046,6 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
             reason = "stall"
             break
         if k >= MIXED_SWEEPS_MIN and done.all():
-            del lu32
             record["sweeps"] = k
             record["outcome"] = "refined"
             MIXED_SOLVES["refined"] += 1
@@ -1035,7 +1067,6 @@ def _mixed_refine(a1, at32, trans, b2, anorm, norm="1"):
         prev = rn
         k += 1
         record["sweeps"] = k
-    del lu32
     _mixed_fallback(reason, record)
     return None
 
@@ -1048,8 +1079,12 @@ def _mixed_wanted(fns, dtype, b0) -> bool:
     than `_mixed_nrhs_cap` allows at this order."""
     if not _MIXED.get():
         return False
-    n = b0.shape[0]
-    nrhs = 1 if b0.ndim == 1 else b0.shape[1]
+    return _mixed_takes(fns, dtype, b0.shape[0], 1 if b0.ndim == 1 else b0.shape[1])
+
+
+def _mixed_takes(fns, dtype, n: int, nrhs: int) -> bool:
+    """`_mixed_wanted`'s size, dtype and host rule for an order-`n` solve of
+    `nrhs` columns, the scope aside; a refusal counts as declined."""
     if (
         fns is not None
         or dtype != _C128
@@ -1320,6 +1355,156 @@ def solve_transposed(a, b):
             return _warn_ill(rcond, dtype, x.reshape(b0.shape))
     rcond, _info = gecon(lu, anorm, norm="I")
     return _warn_ill(rcond, dtype, x.reshape(b0.shape))
+
+
+# ---------------------------------------------------------------------------
+# a kept factor under mixed_lu: complex64 LU + the complex128 matrix
+# ---------------------------------------------------------------------------
+
+
+class MixedLU:
+    """The factor a solver KEEPS for later solves, under ``mixed_lu``
+    (momwire#2125): the complex64 LU of ``m`` and ``m`` itself, intact.
+
+    Made only by `lu_factor_kept`; used wherever ``(lu, piv)`` from
+    `lu_factor_strict` would be, through `lu_solve`. Every solve,
+    ``op(m) x = b`` with ``trans`` 0 (``m``) or 1 (``mᵀ``), is refined by
+    `_mixed_sweeps` against ``m`` from the one complex64 factor, so a later
+    right-hand side (the adjoint, another drive) costs O(n^2) sweeps, not a
+    factor. The first solve that falls back (stall, cap, nonfinite), or one
+    the route does not take (``trans`` 2, more columns than
+    `_mixed_nrhs_cap`, a non-complex128 ``b``), drops the complex64 factor
+    and factors ``m`` IN PLACE by `lu_factor_strict`, the call the flag-off
+    route makes on the same untouched bytes; that solve and every later one
+    are then the ordinary `lu_solve`, the flag-off bits.
+
+    Memory: ``m`` (Z) and the complex64 factor (0.5 Z) until a fallback,
+    then the complex128 factor in ``m``'s storage alone (Z). Never a
+    complex128 factor beside ``m``: the opt-in allowance is 1.5 Z + 512 MB.
+
+    Unpacking it (``lu, piv = f``, as `scipy.linalg.lu_solve` does) factors
+    ``m`` first, so the pair is the flag-off one; that costs the complex128
+    factor and ends the refinement."""
+
+    __slots__ = ("_m", "_anorm", "_lu32", "_ipiv", "_getrs", "_lu")
+
+    def __init__(self, m, anorm_t, lu32, ipiv, getrs):
+        self._m = m  # F-contiguous, writeable, complex128; owned from here
+        # ||op(m)||_1 by trans: 1 is ||mᵀ||_1 (taken with the factor, as
+        # `solve_transposed` takes it); 0, ||m||_1, on its first use.
+        self._anorm = {1: anorm_t}
+        self._lu32, self._ipiv, self._getrs = lu32, ipiv, getrs
+        self._lu = None
+
+    @property
+    def refining(self) -> bool:
+        """True until a solve has fallen back to the complex128 factor."""
+        return self._lu is None
+
+    def __iter__(self):
+        return iter(self._factored())
+
+    def _factored(self):
+        """``(lu, piv)`` of ``m``, factored in place on first call."""
+        if self._lu is None:
+            self._lu32 = self._ipiv = self._getrs = None  # before m's factor
+            self._lu = lu_factor_strict(self._m, overwrite_a=True)
+            self._m = None
+        return self._lu
+
+    def _anorm_for(self, trans: int) -> float:
+        if trans not in self._anorm:
+            lange = scipy.linalg.get_lapack_funcs("lange", (self._m,))
+            self._anorm[trans] = float(lange("1", self._m))
+        return self._anorm[trans]
+
+    def solve(self, b, trans=0, overwrite_b=False, check_finite=True):
+        """`lu_solve`'s contract on the kept factor (see the class)."""
+        if self._lu is not None:
+            return lu_solve(self._lu, b, trans, overwrite_b, check_finite)
+        b0 = np.asarray(b)
+        n = self._m.shape[0]
+        if b0.ndim in (1, 2) and b0.shape[0] != n:
+            raise ValueError(
+                f"the right-hand side has {b0.shape[0]} rows; "
+                f"the factors are {n} by {n}"
+            )
+        nrhs = 1 if b0.ndim == 1 else (b0.shape[1] if b0.ndim == 2 else 0)
+        if (
+            b0.ndim not in (1, 2)
+            or b0.size == 0
+            or trans not in (0, 1)
+            or np.result_type(_C128, b0.dtype) != _C128
+            or nrhs > _mixed_nrhs_cap(n)
+        ):
+            _mixed_declined()
+            return lu_solve(self._factored(), b, trans, overwrite_b, check_finite)
+        if check_finite and not np.isfinite(b0).all():
+            raise ValueError("array must not contain infs or NaNs")
+        _thread_policy.hold()
+        b2 = _fortran_copy(b0.reshape(n, 1) if b0.ndim == 1 else b0, _C128)
+        # op(m) as the residual product reads it: m.T is C-contiguous, m
+        # F-contiguous; matmul reads either in place.
+        a1 = self._m.T if trans == 1 else self._m
+        x = _mixed_sweeps(
+            a1,
+            self._lu32,
+            self._ipiv,
+            self._getrs,
+            trans,
+            b2,
+            self._anorm_for(trans),
+            "1",
+            _mixed_record(n, b2.shape[1]),
+        )
+        if x is not None:
+            return x.reshape(b0.shape)
+        return lu_solve(self._factored(), b, trans, overwrite_b, check_finite)
+
+
+@_factor_stage
+def lu_factor_kept(a, overwrite_a=False, check_finite=True):
+    """`lu_factor_strict` for a factor the caller KEEPS and solves through
+    `lu_solve` (the sinusoidal impedance's ``Z_factors``).
+
+    Outside `mixed_lu_scope`, or where the route does not take ``a``, this
+    IS ``lu_factor_strict(a, overwrite_a, check_finite)``: the same bits.
+    Under the scope, a complex128 ``a`` that `_mixed_takes` at one
+    right-hand side and that can be given away (``overwrite_a`` on an
+    F-contiguous writeable array: the factor would have destroyed it
+    anyway) is cast to complex64 and factored, and a `MixedLU` holding both
+    is returned; ``a`` stays intact inside it for the residuals. A matrix
+    out of the cast's range, or exactly singular in complex64, counts its
+    fallback and is factored here by `lu_factor_strict`, so an exactly
+    singular ``a`` raises its ordinary error. Any other ``a`` (not
+    giveable, not complex128) counts as declined."""
+    if not _MIXED.get():
+        return lu_factor_strict(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    a1 = np.asarray(a)
+    if not (_square(a1) and a1.shape[0] > 1):
+        return lu_factor_strict(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    n = a1.shape[0]
+    if not _mixed_takes(_host_for(a1.dtype), a1.dtype, n, 1):
+        return lu_factor_strict(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    if not (overwrite_a and a1.flags.f_contiguous and a1.flags.writeable):
+        _mixed_declined()
+        return lu_factor_strict(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    # ||a1ᵀ||_1, the norm `solve_transposed` reads for the same system: a1ᵀ
+    # is C-contiguous, read in place and threaded.
+    finite, anorm_t = _finite_1norm_c(a1.T)
+    if not finite:
+        # The ordinary route's error, uncounted (as `_mixed_factor_and_solve`).
+        return lu_factor_strict(a, overwrite_a=overwrite_a, check_finite=check_finite)
+    _thread_policy.hold()
+    record = _mixed_record(n, 1)
+    if not _mixed_in_range(n, anorm_t):
+        _mixed_fallback("range", record)
+        return lu_factor_strict(a1, overwrite_a=True, check_finite=check_finite)
+    factors = _mixed_factor32(lambda: np.array(a1, dtype=np.complex64, order="F"))
+    if factors is None:
+        _mixed_fallback("singular", record)
+        return lu_factor_strict(a1, overwrite_a=True, check_finite=check_finite)
+    return MixedLU(a1, anorm_t, *factors)
 
 
 #: At and above this order the no-host `solve` runs gecon on a second
