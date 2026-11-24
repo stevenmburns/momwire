@@ -433,7 +433,7 @@ def test_no_shipped_name_carries_an_old_basis_name():
 
 def test_the_drop_in_signs_one_file_per_launcher_and_the_engine():
     stems = FREEZE.launcher_stems()
-    assert len(stems) == len(set(stems)) == 6
+    assert len(stems) == len(set(stems)) == 8
     assert not any(_OLD_TOKEN.search(stem) for stem in stems)
 
 
@@ -449,7 +449,7 @@ def test_the_drop_in_signs_one_file_per_launcher_and_the_engine():
 
 _OLD_IN_TEXT = re.compile(
     r"(?<![\w.])(?:razor-2p|razor-nec5|bspline-d1|sinusoidal-galerkin)(?![\w-])"
-    r"|(?<![\w])(?:nec5|nec42|nec4|nec2c|eznec|dropin)-bspline(?![\w])"
+    r"|(?<![\w])(?:nec5|nec42|nec4|nec2c|nec2d|eznec|dropin)-bspline(?![\w])"
     r"|--basis[ =]bspline(?![\w-])|basis\s*=\s*['\"]bspline['\"]"
     r"|`bspline`|^bspline$|['\"]bspline['\"]|momwire \S+ bspline "
 )

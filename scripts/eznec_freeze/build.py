@@ -6,8 +6,8 @@ pyinstaller are installed::
     python scripts/eznec_freeze/build.py
 
 Produces ``dist/momwire/`` containing the launchers EZNEC, SimNEC and 4nec2
-point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec42[-<basis>][.exe]``
-and ``momwire-nec2c[-<basis>][.exe]`` -- the single frozen ``momwire-engine[.exe]`` they run, and that engine's
+point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec42[-<basis>][.exe]``,
+``momwire-nec2c[-<basis>][.exe]`` and ``momwire-nec2d[-<basis>][.exe]`` -- the single frozen ``momwire-engine[.exe]`` they run, and that engine's
 ``_internal`` runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
 the engine needs its runtime beside it in turn.
 
@@ -100,6 +100,16 @@ NEC2_LAUNCHERS = {
     "momwire-nec2c": "the default, degree-2 B-spline (bs2)",
     "momwire-nec2c-sinusoidal": "the sinusoidal basis, point matched",
 }
+# The NEC-2D engines (momwire#2138): the NEC-2 route again, for 4nec2's NEC-2
+# engine, printing LLNL's Fortran NEC-2 (NEC-2D) layout that 4nec2's own
+# `nec2dxs` engines write, because 4nec2 reads nothing else.  A `nec2d` name
+# is a NEC-2 name to the launcher and the engine alike; the printout layout
+# rides on it as the basis does.  The same pair as the nec2c family, for the
+# same reasons.
+NEC2D_LAUNCHERS = {
+    "momwire-nec2d": "the default, degree-2 B-spline (bs2)",
+    "momwire-nec2d-sinusoidal": "the sinusoidal basis, point matched",
+}
 
 # The bases copied as `<LAUNCHER>-<basis>` beside the compiled launcher,
 # derived from the NEC-5 table so the two cannot disagree; the smoke reads
@@ -157,8 +167,9 @@ def win7_prerequisites(ucrt_bundled: bool) -> str:
 
 def launcher_stems() -> tuple[str, ...]:
     """Every launcher the bundle ships, by file stem: the NEC-5 family, the
-    NEC-4.2 one, then the NEC-2 one.  The engine is not a launcher."""
-    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS, *NEC2_LAUNCHERS)
+    NEC-4.2 one, the NEC-2 one, then the NEC-2D one.  The engine is not a
+    launcher."""
+    return (*NEC5_LAUNCHERS, *NEC4_LAUNCHERS, *NEC2_LAUNCHERS, *NEC2D_LAUNCHERS)
 
 
 # The version this freeze bakes into the bundle (momwire#1277), as a top-level
@@ -317,6 +328,10 @@ def launcher_table(suffix: str) -> str:
             NEC2_LAUNCHERS,
         ),
         (
+            "NEC-2D (4nec2's NEC-2 engine):",
+            NEC2D_LAUNCHERS,
+        ),
+        (
             "And the engine itself, which is not a launcher:",
             {ENGINE_NAME: "the compute engine the launchers run"},
         ),
@@ -469,15 +484,28 @@ def readme_text(
         "printouts out, one engine for the whole run), so they do not keep a\n"
         "resident engine: each run pays the engine's start-up once.\n"
         "\n"
-        "INSTALLING FOR 4NEC2.  Extract the zip into a folder of its own,\n"
-        "as above (C:\\momwire\\ here), and point 4nec2 at a launcher there:\n"
-        "for NEC-2 in 4nec2's settings, for NEC-4.2 and NEC-5 by editing\n"
-        "4nec2.bat in 4nec2's exe folder (e.g. C:\\4nec2\\exe), changing only\n"
-        "the engine line.  Nothing is copied into 4nec2's folders.\n"
+        "4nec2's NEC-2 engine is momwire-nec2d.exe or\n"
+        "momwire-nec2d-sinusoidal.exe: the same engine as the nec2c pair,\n"
+        "writing its printout in the layout of 4nec2's own NEC-2 engines\n"
+        "(NEC-2D), which is the one 4nec2 reads.\n"
         "\n"
-        "  NEC-2.  No 4nec2.bat edit: choose Settings > Nec engine > Manual\n"
-        "  select and pick C:\\momwire\\momwire-nec2c.exe (the default) or\n"
-        "  C:\\momwire\\momwire-nec2c-sinusoidal.exe (NEC-2's own formulation).\n"
+        "INSTALLING FOR 4NEC2.  Extract the zip into a folder of its own,\n"
+        "as above (C:\\momwire\\ here), and point 4nec2 at a launcher there\n"
+        "by editing 4nec2.bat in 4nec2's exe folder (e.g. C:\\4nec2\\exe),\n"
+        "changing only the engine line.  Work in a copy of the 4nec2 folder\n"
+        "if you want to keep the original 4nec2 as it was.  Nothing is copied\n"
+        "into 4nec2's folders.\n"
+        "\n"
+        "  NEC-2.  Choose one of 4nec2's own NEC-2 engines under Settings >\n"
+        "  Nec engine, turn off Settings > Wait in DOS box, and make the\n"
+        "  engine line of 4nec2.bat one of:\n"
+        "\n"
+        "    rem C:\\momwire\\momwire-nec2d.exe < nec2d.tmp\n"
+        "    rem C:\\momwire\\momwire-nec2d-sinusoidal.exe < nec2d.tmp\n"
+        "\n"
+        "    C:\\momwire\\momwire-nec2d.exe < nec2d.tmp\n"
+        "\n"
+        "  The first is the default, the second NEC-2's own formulation.\n"
         "\n"
         "  NEC-5.  This uses 4nec2's NEC-5 package (the NEC5CL_x13 setup with\n"
         "  Edit_inp.exe and Edit_out.exe); install it first if it is not\n"
@@ -663,9 +691,10 @@ def main() -> int:
     # two do not disagree and must not be made to agree: the launcher
     # variants are byte-identical copies of `exe` (verified on the v0.44.0
     # release — two launcher names shared SHA256 111B8A48…, 192,768 bytes),
-    # so there are two DISTINCT signed artifacts across SEVEN shipped files
-    # since momwire#2059 added the NEC-2 pair: six launchers
-    # (`launcher_stems()`) plus the engine. The distinct
+    # so there are two DISTINCT signed artifacts across NINE shipped files
+    # since momwire#2138 added the NEC-2D pair (seven after momwire#2059's
+    # NEC-2 pair): eight launchers (`launcher_stems()`) plus the engine.
+    # The distinct
     # count stays 2 however many variants ship, which is the whole point of
     # copying a signed binary rather than signing each one.
     signed = signer.sign_if_configured([engine, exe])

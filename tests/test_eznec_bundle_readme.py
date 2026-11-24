@@ -52,20 +52,22 @@ def _resolved(stem: str) -> tuple[str, str]:
     return dialect, _serve.BASIS if suffix is None else suffix
 
 
-def test_the_bundle_ships_six_launchers_in_three_families():
-    """momwire#1583 dropped the three deprecated `momwire-eznec*` names and
-    momwire#2059 added the NEC-2 pair; the signing post-condition's "all N
-    executables" is this count plus one."""
+def test_the_bundle_ships_eight_launchers_in_four_families():
+    """momwire#1583 dropped the three deprecated `momwire-eznec*` names,
+    momwire#2059 added the NEC-2 pair and momwire#2138 the NEC-2D pair; the
+    signing post-condition's "all N executables" is this count plus one."""
     build = _build()
     stems = build.launcher_stems()
-    assert len(stems) == len(set(stems)) == 6
+    assert len(stems) == len(set(stems)) == 8
     assert set(build.NEC5_LAUNCHERS) == {"momwire-nec5", "momwire-nec5-razor2p"}
     assert set(build.NEC4_LAUNCHERS) == {"momwire-nec42", "momwire-nec42-sinusoidal"}
     assert set(build.NEC2_LAUNCHERS) == {"momwire-nec2c", "momwire-nec2c-sinusoidal"}
+    assert set(build.NEC2D_LAUNCHERS) == {"momwire-nec2d", "momwire-nec2d-sinusoidal"}
     assert set(stems) == {
         *build.NEC5_LAUNCHERS,
         *build.NEC4_LAUNCHERS,
         *build.NEC2_LAUNCHERS,
+        *build.NEC2D_LAUNCHERS,
     }
     assert not any("eznec" in stem for stem in stems)
     assert build.ENGINE_NAME == "momwire-engine"
@@ -91,6 +93,12 @@ def test_every_launcher_answers_the_slot_and_basis_its_family_claims():
         # `nec2c-`; no suffix is that route's own default.
         assert dialect_from_program_name(stem) == "nec2", stem
         suffix = basis_from_program_name(stem, "nec2c-")
+        assert suffix is None or suffix in NEC2_BASES, stem
+    for stem in build.NEC2D_LAUNCHERS:
+        # The NEC-2D pair is the NEC-2 route too (momwire#2138), its basis
+        # read past `nec2d-`.
+        assert dialect_from_program_name(stem) == "nec2", stem
+        suffix = basis_from_program_name(stem, "nec2d-")
         assert suffix is None or suffix in NEC2_BASES, stem
 
 
