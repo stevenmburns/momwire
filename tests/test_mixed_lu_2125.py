@@ -190,6 +190,48 @@ def test_a_slow_contraction_is_not_waited_for():
     assert max(_lapack.MIXED_LAST["ratio"]) > _lapack.MIXED_CONTRACTION
 
 
+def test_the_sweep_cap_grows_with_n_and_loosens_the_stall_bar():
+    # Small orders keep the five-sweep cap and its 2**-6 bar exactly.
+    assert _lapack._mixed_sweeps_cap(1024, 1) == _lapack.MIXED_SWEEPS_MAX == 5
+    assert _lapack._mixed_stall(5) == _lapack.MIXED_CONTRACTION
+    # The cap grows as n / nrhs; the bar is the rate that finishes inside it.
+    assert _lapack._mixed_sweeps_cap(9329, 1) == 14
+    assert _lapack._mixed_sweeps_cap(9329, 3) == 5
+    assert _lapack._mixed_stall(14) == 2.0**-3
+    assert _lapack._mixed_stall(1000) == _lapack.MIXED_STALL_LOOSEST
+    for cap in range(5, 40):
+        theta = _lapack._mixed_stall(cap)
+        assert -29 / np.log2(theta) <= cap or theta == _lapack.MIXED_STALL_LOOSEST
+
+
+def test_a_slow_contraction_is_waited_for_when_the_cap_allows(monkeypatch):
+    # kappa 3e6 contracts by about 0.02 a sweep, slower than the base bar
+    # (MIXED_CONTRACTION, 2**-6), so at the five-sweep cap it stalls. With
+    # the cap a large order gets, it refines, within 4x of the gap between
+    # the ordinary answer (`solve_transposed` factors a^T) and a second
+    # complex128 factor's, pivoting on a.
+    a, b = _conditioned(3e6), _rhs(120)
+    with _lapack.mixed_lu_scope(True):
+        before = _counts()
+        _lapack.solve_transposed(a.copy(), b)
+    assert _moved(before)[1] == {"stall": 1}
+    monkeypatch.setattr(_lapack, "MIXED_SWEEPS_N", 8)  # n = 120: cap 15
+    x_off, _a_off, x_on, _a_on, (solves, fallbacks) = _flag_off_and_on(
+        _lapack.solve_transposed, a, b
+    )
+    assert solves["refined"] == 1 and not fallbacks, (solves, fallbacks)
+    assert _lapack.MIXED_LAST["cap"] == 15
+    assert max(_lapack.MIXED_LAST["ratio"][:-1]) > _lapack.MIXED_CONTRACTION
+    import scipy.linalg as sl
+
+    x_other = sl.lu_solve(sl.lu_factor(a), b)
+    scatter = np.abs(x_other - x_off).max()
+    assert np.abs(x_on - x_off).max() <= 4 * scatter, (
+        np.abs(x_on - x_off).max(),
+        scatter,
+    )
+
+
 @pytest.mark.parametrize("scale", [1e39, 1e-40], ids=["overflow", "underflow"])
 def test_a_matrix_complex64_cannot_hold_falls_back_before_the_cast(scale):
     # 1e39 exceeds complex64's largest finite value (3.4e38), and 1e-40 is
