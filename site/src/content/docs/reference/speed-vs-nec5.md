@@ -87,11 +87,11 @@ crosses the ground. Both are off by default.
 - **`crossing_sheet_retune`** (`MOMWIRE_X_CROSSING_SHEET_RETUNE=1`) serves
   the crossing from precomputed sheets. Its declared drift is 6e-11, and
   on this deck its impedances print identically to flag-off at every
-  frequency. The executables carry it from the release after 0.93.0.
+  frequency. The executables carry it.
 - **`crossing_table`** (`MOMWIRE_X_CROSSING_TABLE=1`) reads the crossing
   rows from one table per frequency. It is faster than the exact path but
   approximate: on this deck its impedance moves by up to 9.0e-4 relative,
-  about 0.07 Ω. 0.93.0's executables already carry it.
+  about 0.07 Ω. The executables carry it.
 
 Buried-radial vertical, same machine and placement, a main-branch
 executable after 0.93.0, warm runs:
@@ -113,7 +113,7 @@ executable after 0.93.0, warm runs:
 
 ## Fill reuse
 
-The `razor_pair_reuse` feature follows 0.93.0. It fills each class of
+The `razor_pair_reuse` feature fills each class of
 repeated segment pairs once and copies the result. It is off by default and
 turned on with `MOMWIRE_X_RAZOR_PAIR_REUSE=1`. The printed impedances are
 identical with it on and off.
