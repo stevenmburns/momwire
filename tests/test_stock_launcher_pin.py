@@ -97,12 +97,13 @@ def test_every_plain_launcher_goes_through_the_pin():
     plain = {
         name: target
         for name, target in _scripts().items()
-        if name.startswith("momwire-nec2c")
+        if name.startswith(("momwire-nec2c", "momwire-nec2d"))
         and name != "momwire-nec2c-shared"
         and target != "momwire_nec2c_client:main"
     }
     assert plain, "no plain launcher found"
     assert {"momwire-nec2c", "momwire-nec2c-sinusoidal"} <= plain.keys()
+    assert {"momwire-nec2d", "momwire-nec2d-sinusoidal"} <= plain.keys()
     assert set(plain.values()) <= {"momwire_serve_client:stock_main"}
     # Nothing is left on the unpinned target.
     assert "momwire.dropin.nec2c:main" not in _scripts().values()
