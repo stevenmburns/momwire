@@ -115,6 +115,19 @@ def _rel(a, b):
 
 
 @pytest.fixture(autouse=True)
+def _cap_lifted():
+    """momwire#2123: the crossed and tilted stacks' reflected terms keep more
+    than half their pairs as classes, so under the class cap (2x
+    compression) they decline; lifted (`pair_reuse_cap_compression`), the
+    reuse whose correctness these tests are for is what runs."""
+    acc.pair_reuse_cap_compression(1)
+    pr.clear_shared_plans()
+    yield
+    acc.pair_reuse_cap_compression(-1)
+    pr.clear_shared_plans()
+
+
+@pytest.fixture(autouse=True)
 def _no_env(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
     pr.clear_shared_plans()

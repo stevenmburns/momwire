@@ -329,39 +329,20 @@ int64_t fold_table_bytes(int64_t n, bool extra, int64_t width) {
     return (((n + blk - 1) / blk) * blk * width + slots) * 8;
 }
 
-// The least a finished plan keeps per class beyond its class map, what
-// `Plan::plan_nbytes` and one wavenumber's values must count for it: the
-// values (VALUE_BYTES) and the representative (8 B), and the direct plan's
-// canonical source (centre and tangent, 48 B) or the ground plan's place in
-// its representatives' calls (`rep_blocks`' r and c, 16 B). Measured whole
-// (momwire#2123, the 405-segment tapered Yagi): 103 B a class direct, 74 B
-// reflected, beside the allowance's 56.
-constexpr int64_t KEPT_BYTES_PER_CLASS = VALUE_BYTES + 8 + 48;
-constexpr int64_t GROUND_KEPT_BYTES_PER_CLASS = VALUE_BYTES + 8 + 16;
-
 // THE CENSUS'S PEAK (the header's): the core's band budget, unbounded, over
 // what one fold table holds after each band. The class cap stops it (the
-// core's `Policy::capped`); so does the plan's allowance, once the least the
-// finished plan would keep (`KEPT_BYTES_PER_CLASS` a class, the near pairs'
-// values and index) passes it: the classes only grow, so that verdict is
-// final, and a deck that declines on its bytes stops there rather than
-// counting every class first.
+// core's `Policy::capped`), not its bytes: under the allowance a plan at
+// the cap is what the allowance holds.
 struct FigureHook {
     static constexpr bool tail = true;
     core::BandBudget bands;
-    int64_t map_bytes, width, allowance, per_class;
-    bool over = false;  // stopped on the allowance
+    int64_t map_bytes, width;
     bool start(int64_t i) { return bands.start(i); }
     bool done(int64_t, int64_t classes, int64_t near, bool tail_new) {
         // A band whose last new key came after its last new class called
         // the table again with every class in it (`fold_table_bytes`).
         const int64_t held = map_bytes + fold_table_bytes(classes, !tail_new, width) + 9 * classes + 8 * near;
-        bands.fold(held, 0);
-        // the near pairs share one sentinel class, which keeps nothing
-        const int64_t least =
-            map_bytes + per_class * std::max<int64_t>(0, classes - 1) + (VALUE_BYTES + 8) * near;
-        over = least > allowance;
-        return !over;
+        return bands.fold(held, 0);
     }
 };
 
@@ -383,11 +364,11 @@ int64_t band_rows(int64_t rows, int64_t M, int64_t N, int64_t budget, int64_t pe
 // where it declines (the class cap, or past the int32 coding), `why` then
 // the reason.
 template <int W, class Key>
-bool census(const Key &key, const CensusInputs &in, bool coded, int64_t per_pair, int64_t per_class,
-            const char *name, Plan &plan, std::string &why) {
+bool census(const Key &key, const CensusInputs &in, bool coded, bool ground, int64_t per_pair, const char *name,
+            Plan &plan, std::string &why) {
     const int64_t M = in.M, N = in.N;
     const int workers = std::max(1, in.workers);
-    const int64_t rows = band_rows(in.rows, M, N, allowance_of(in), per_pair, workers);
+    const int64_t rows = band_rows(in.rows, M, N, allowance_of(in, ground, 0), per_pair, workers);
     core::FamilyPlan &f = plan.fam;
     f.spec.name = name;
     f.spec.key_words = W;
@@ -407,7 +388,7 @@ bool census(const Key &key, const CensusInputs &in, bool coded, int64_t per_pair
     const int64_t map_bytes = 4 * M * N;
     FigureHook hook{core::BandBudget(-1, per_pair * rows * N, workers, n_bands,
                                      map_bytes + fold_table_bytes(0, false, W)),
-                    map_bytes, W, allowance_of(in), per_class};
+                    map_bytes, W};
     int64_t unused = 0;
     const core::Outcome out = core::census<W, GroupTable<W>>(
         f, pol, 0, unused,
@@ -422,10 +403,6 @@ bool census(const Key &key, const CensusInputs &in, bool coded, int64_t per_pair
     plan.census_peak_bytes = hook.bands.peak();
     if (out == core::Outcome::Poor) {
         why = core::cap_reason(M * N);
-        return false;
-    }
-    if (hook.over) {
-        why = core::allowance_reason(allowance_of(in));
         return false;
     }
     if (out != core::Outcome::Ok) {
@@ -597,8 +574,10 @@ int64_t plan_allowance_override() {
     std::lock_guard<std::mutex> lock(g_mu);
     return g_allowance;
 }
-int64_t allowance_of(const CensusInputs &in) {
-    return in.allowance >= 0 ? in.allowance : core::plan_allowance(in.M * in.N);
+int64_t allowance_of(const CensusInputs &in, bool ground, int64_t n_near) {
+    if (in.allowance >= 0) return in.allowance;
+    return core::plan_allowance(in.M * in.N, ground ? GROUND_KEPT_BYTES_PER_CLASS : KEPT_BYTES_PER_CLASS) +
+           NEAR_KEPT_BYTES * n_near;
 }
 void set_small_deck_segs(int64_t free_space, int64_t finite_ground) {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -705,7 +684,7 @@ std::shared_ptr<const Plan> build_plan(const CensusInputs &in, std::string *why)
         if (why) *why = std::move(r);
         return nullptr;
     };
-    const int64_t allowance = allowance_of(in);
+    const int64_t allowance = allowance_of(in, false, 0);  // the map's and the classes', before the census
     const int64_t M = in.M, N = in.N;
     const int64_t n_obs_types = max_type(in.obs_type, M);
     const bool coded = in.src_rev != nullptr && M * N <= CODED_PAIRS;
@@ -717,7 +696,7 @@ std::shared_ptr<const Plan> build_plan(const CensusInputs &in, std::string *why)
     plan->coded = coded;
     const DirectKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(), probe()};
     const int64_t per_pair = in.band_bytes_per_pair >= 0 ? in.band_bytes_per_pair : BAND_BYTES_PER_PAIR;
-    if (!census<5>(key, in, coded, per_pair, KEPT_BYTES_PER_CLASS, "direct", *plan, reason)) return no(reason);
+    if (!census<5>(key, in, coded, false, per_pair, "direct", *plan, reason)) return no(reason);
     trim_heap();
     core::FamilyPlan &f = plan->fam;
     // Classes renumbered so those sharing an observer radius are contiguous
@@ -756,7 +735,8 @@ std::shared_ptr<const Plan> build_plan(const CensusInputs &in, std::string *why)
         c = e;
     }
     plan->near_blocks = near_blocks(f.near_flat, N, M, in.a_obs, NEAR_ROWS);
-    if (plan->fill_nbytes() > allowance) return no(core::allowance_reason(allowance));
+    const int64_t held_to = allowance_of(in, false, plan->n_near());
+    if (plan->fill_nbytes() > held_to) return no(core::allowance_reason(held_to));
     return plan;
 }
 
@@ -766,7 +746,7 @@ std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in, std::strin
         if (why) *why = std::move(r);
         return nullptr;
     };
-    const int64_t allowance = allowance_of(in);
+    const int64_t allowance = allowance_of(in, true, 0);  // the map's and the classes', before the census
     const int64_t M = in.M, N = in.N;
     const int pb = probe();
     // PROBE_FREE_KEY: the direct block's key, uncoded, standing in.
@@ -795,11 +775,11 @@ std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in, std::strin
     bool ok;
     if (free_key) {
         const DirectKey key{&in, n_obs_types, false, nullptr, 0};
-        ok = census<5>(key, in, false, per_pair, GROUND_KEPT_BYTES_PER_CLASS, "reflected", *plan, reason);
+        ok = census<5>(key, in, false, true, per_pair, "reflected", *plan, reason);
     } else {
         const GroundKey key{&in, n_obs_types, coded, ds.empty() ? nullptr : ds.data(),
                             dob.empty() ? nullptr : dob.data(), pb};
-        ok = census<6>(key, in, coded, per_pair, GROUND_KEPT_BYTES_PER_CLASS, "reflected", *plan, reason);
+        ok = census<6>(key, in, coded, true, per_pair, "reflected", *plan, reason);
     }
     if (!ok) return no(reason);
     trim_heap();
@@ -808,7 +788,8 @@ std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in, std::strin
     plan->rep.swap(f.rep_flat);
     plan->rep_blocks = near_blocks(plan->rep, N, M, in.a_obs, REP_ROWS);
     plan->near_blocks = near_blocks(f.near_flat, N, M, in.a_obs, NEAR_ROWS);
-    if (plan->fill_nbytes() > allowance) return no(core::allowance_reason(allowance));
+    const int64_t held_to = allowance_of(in, true, plan->n_near());
+    if (plan->fill_nbytes() > held_to) return no(core::allowance_reason(held_to));
     return plan;
 }
 
@@ -823,8 +804,8 @@ void append(std::string &key, const void *p, std::size_t n) {
 std::string plan_key(const CensusInputs &in, bool ground) {
     const std::size_t M = static_cast<std::size_t>(in.M), N = static_cast<std::size_t>(in.N);
     std::string key = ground ? "reflected|" : "direct|";
-    const int64_t head[7] = {in.M, in.N, in.rows, allowance_of(in), core::cap_compression(), in.band_bytes_per_pair,
-                             probe()};
+    const int64_t head[7] = {in.M, in.N, in.rows, allowance_of(in, ground, 0), core::cap_compression(),
+                             in.band_bytes_per_pair, probe()};
     append(key, head, sizeof head);
     append(key, in.obs_c, 24 * M);
     append(key, in.obs_t, 24 * M);

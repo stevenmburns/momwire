@@ -290,20 +290,17 @@ HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False
 #:   declines (`cap_reason`). The census stops the moment its count passes
 #:   the cap, after the band that passed it.
 #: * THE KEPT PLAN: its fill (`fill_nbytes`) is held to `plan_allowance`, 4 B
-#:   per pair for the class map plus `PLAN_FLOOR_BYTES_PER_CLASS` for each
-#:   class the cap allows, 32 B a pair, two Z per map (`allowance_reason`).
-#:   Each plan is held to its own; over a ground there are two maps.
+#:   per pair for the class map plus what the plan really keeps for each
+#:   class the cap allows (Steve 11-24, option 1: each engine's own per-class
+#:   cost, from the plan's layout in C++, `KEPT_BYTES_PER_CLASS`: 105 B
+#:   direct, its canonical sources kept; 73 B reflected) and for each near
+#:   pair (`NEAR_KEPT_BYTES`, 72 B): 56.5 B a pair at the cap direct, 40.5 B
+#:   reflected (`allowance_reason`). Each plan is held to its own; over a
+#:   ground there are two maps.
 #: * THE CENSUS is a transient: it runs before the fill allocates its Z and
 #:   is freed first, so its peak is charged against that room, not added to
-#:   the plan's, and no byte budget bounds it: the cap does (and the
-#:   allowance, once the plan it is building could no longer fit). Its peak
-#:   is reported (`census_peak_bytes`).
-#: * WHAT A PLAN KEEPS is more than the allowance's 56 B a class: the direct
-#:   plan also keeps each class's canonical source (48 B), ~103 B a class in
-#:   all, and the reflected plan its place in the representatives' calls,
-#:   ~74 B (measured on the 405-segment tapered Yagi). So a deck between 2x
-#:   and ~3.7x compression (direct; ~2.6x reflected) declines on the
-#:   allowance before the cap.
+#:   the plan's, and no byte budget bounds it: the cap does. Its peak is
+#:   reported (`census_peak_bytes`).
 #: * Allowances ADD with the other opt-ins' (mixed_lu: 1.5 Z + 512 MB); no
 #:   one place sums them.
 #:
@@ -321,22 +318,22 @@ HAVE_PLAN = _acc is not None and bool(getattr(_acc, "sin_pair_reuse_2063", False
 #:   11 elements, each its own h     1111   164    296    292  reuses
 #:
 #: The same decks rebuilt from those descriptions (momwire#2123, i7-8550U, 4
-#: threads), reuse off / on under the allowance, and on's |dZin| / |Zin|
-#: against off where it reuses (the registry's drift is 5e-10):
+#: threads), reuse off / on under the allowance, on's |dZin| / |Zin| against
+#: off (the registry's drift is 5e-10), and the kept plan:
 #:
-#:   deck                            segs   off   on    classes    dZin
-#:   20 elements, each its own h     3220   257   374   declines (allowance)
-#:   20 elements of 5 lengths        3020   239   384   1,072,096  6.6e-11
-#:   20 equal elements               3020   239   280       3,391  4.4e-11
-#:   the same, unequal spacing       3020   239   281       9,067  3.8e-11
-#:   the same, equal, Sommerfeld     3020   584   321   3,391 + 3,112 1.4e-10
-#:   uniform dipole                  4001   348   418       5,173  2.3e-12
-#:   11 elements, each its own h     1111   110   121   declines (allowance)
+#:   deck                            segs   off   on    classes      dZin     plan
+#:   20 elements, each its own h     3220   258   728   4,318,673    6.8e-11  497 MB
+#:   20 elements of 5 lengths        3020   238   384   1,072,096    6.6e-11  151 MB
+#:   20 equal elements               3020   238   286       3,391    4.3e-11   39 MB
+#:   the same, unequal spacing       3020   238   288       9,067    3.8e-11   39 MB
+#:   the same, equal, Sommerfeld     3020   584   334   3,391+3,112  1.4e-10   75 MB
+#:   uniform dipole                  4001   348   429       5,173    2.3e-12   67 MB
+#:   11 elements, each its own h     1111   110   166     504,126    4.2e-12   59 MB
 #:
-#: The five-length deck (8.5x compression) newly reuses, its plan 151 MB.
-#: The two "each its own h" decks compress short of ~3.7x and decline on the
-#: allowance, the census stopping where the least its plan could keep passed
-#: it (before that stop: 590 MB and 3.8 s for the 3220-segment deck).
+#: Every deck reuses: the 2.4x "each its own h" decks, which #2019's budget
+#: declined, are inside the cap, and their plans are what the allowance
+#: holds (56.5 B a pair at the cap); the 3220-segment one costs 4.6 s against
+#: 1.2 s off at one frequency, the census paid up front.
 CLASS_CAP_COMPRESSION = 2
 
 #: TEST HOOK: the kept plan's allowance in bytes, per plan, in place of
@@ -374,11 +371,9 @@ VALUE_BYTES = 48
 #: slots (`IntGroups.nbytes`), each class's representative and the near
 #: pairs, plus `BAND_BYTES_PER_PAIR` for every band in flight or
 #: finished and not yet folded (`census_peak_bytes`). No byte budget bounds
-#: it (momwire#2123): it stops once the count passes the class cap, or once
-#: the least the finished plan would keep passes the plan's allowance (the
-#: C++ core's KEPT_BYTES_PER_CLASS, 104 B a class direct and 72 B reflected,
-#: and 56 B a near pair). The classes only grow, so either verdict is final,
-#: and a deck that declines has held no more than a census at the cap.
+#: it (momwire#2123): it stops once the count passes the class cap. The
+#: classes only grow, so that verdict is final, and a deck that declines has
+#: held no more than a census at the cap.
 #:
 #: Measured on the whip at 8 threads (Rocketlake, momwire#2063): counted
 #: 200 MB, and peak RSS over the census's entry 210 MB to the last fold,
@@ -394,15 +389,19 @@ BAND_BYTES_PER_PAIR = 136
 GROUND_BAND_BYTES_PER_PAIR = 168
 
 #: The share of the plan's allowance the bands in flight may take: each band
-#: is cut to at most this over a pool's worth (`band_rows` in C++), 8 B a
+#: is cut to at most this over a pool's worth (`band_rows` in C++), ~14 B a
 #: pair at the default allowance. Smaller bands move no class (the numbering
 #: is the flat order's).
 BAND_SHARE = 0.25
 
-#: The plan's fill holds at least this much per class beside its class map:
-#: one wavenumber's values (`VALUE_BYTES`) and an int64 index (`rep_src`, or
-#: the ground plan's `rep_flat`).
-PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8
+#: What a plan keeps per class (the direct plan, the reflected one) and per
+#: near pair beside its class map: the C++ adapter's constants, derived there
+#: from the plan's layout (`_sin_pair_reuse_core.h`, KEPT_BYTES_PER_CLASS).
+KEPT_BYTES_PER_CLASS, GROUND_KEPT_BYTES_PER_CLASS, NEAR_KEPT_BYTES = (
+    getattr(_acc, "sin_pair_reuse_kept_bytes", (None, None, None))
+    if _acc is not None
+    else (None, None, None)
+)
 
 
 def class_cap(pairs: int) -> int:
@@ -410,9 +409,12 @@ def class_cap(pairs: int) -> int:
     return int(pairs) // CLASS_CAP_COMPRESSION
 
 
-def plan_allowance(pairs: int) -> int:
-    """The bytes a plan of `pairs` pairs may keep (the core's)."""
-    return 4 * int(pairs) + PLAN_FLOOR_BYTES_PER_CLASS * class_cap(pairs)
+def plan_allowance(pairs: int, ground: bool = False, near: int = 0) -> int:
+    """The bytes a plan of `pairs` pairs and `near` near pairs may keep (the
+    C++ adapter's `allowance_of`): its map, the plan's per-class cost for
+    each class the cap allows, and its near pairs'."""
+    per_class = GROUND_KEPT_BYTES_PER_CLASS if ground else KEPT_BYTES_PER_CLASS
+    return 4 * int(pairs) + per_class * class_cap(pairs) + NEAR_KEPT_BYTES * int(near)
 
 
 def cap_reason(pairs: int) -> str:

@@ -165,8 +165,11 @@ void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 // does not compress stops within a chunk of the cap, "more than C classes
 // for P pairs (the cap is 2x compression)"; and the kept plan (`Plan::nbytes` and one
 // wavenumber's class values, 32 B a class) is held to 4 B per pair per map
-// plus 56 B per class the cap allows, 32 B per pair per map, "the kept plan
-// would exceed its allowance of X MB". The census's own tables (its hash
+// plus `kept_bytes_per_class` (49 B, the plan's own per-class layout:
+// `pair_reuse::class_bytes`' 41 and at most one row and one source in its
+// group's lists; measured 41.5 B a class on the 10-element Yagi, 42.9 on the
+// 155-segment triangle and dipoles) per class the cap allows, 28.5 B per
+// pair per map, "the kept plan would exceed its allowance of X MB". The census's own tables (its hash
 // tables, representatives and chunk buffers) are a transient freed before
 // the fill's Z is allocated: they are counted (`census_peak_bytes`) but not
 // bounded, the cap stopping them. One exception: the solve core keeps its Z
@@ -209,6 +212,9 @@ void set_plan_allowance(int64_t bytes);
 // The allowance in force for a plan of these families' maps: the hook's
 // bytes, or the sum of `pair_reuse::plan_allowance` over every map.
 int64_t plan_allowance(const pair_reuse::Plan &p);
+// What a class of family `f` costs the kept plan, the allowance's per-class
+// term.
+int64_t kept_bytes_per_class(const pair_reuse::FamilySpec &f);
 int64_t plan_allowance_override();
 
 // What the plan reads. Views into the caller's arrays; the plan copies what

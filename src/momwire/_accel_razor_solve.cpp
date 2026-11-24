@@ -1932,7 +1932,7 @@ void register_razor_solve(py::module_ &m) {
           "remainder classes (0: the int32 coding's own limit only).");
     m.def("razor_reuse_plan_allowance", &mw::razor::reuse::set_plan_allowance, py::arg("bytes"),
           "TEST HOOK (momwire#2123): later plans decline past `bytes` of kept plan (<= 0: the derived "
-          "allowance, 4 B per pair per map plus 56 B per class the 2x cap allows).");
+          "allowance, 4 B per pair per map plus `razor_reuse_kept_bytes_per_class` per class the 2x cap allows).");
     m.def("pair_reuse_cap_compression", [](int64_t c) {
         if (c != 0) mw::pair_reuse::set_cap_compression(c);
         return mw::pair_reuse::cap_compression();
@@ -1940,7 +1940,11 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK (momwire#2123): the class cap's compression for later plans, both bases (< 0 "
           "restores 2, 1 caps nothing; 0 only reads it). Returns the one in force.");
     m.attr("pair_reuse_class_cap_compression") = static_cast<int64_t>(mw::pair_reuse::CLASS_CAP_COMPRESSION);
-    m.attr("pair_reuse_plan_floor_bytes_per_class") = static_cast<int64_t>(mw::pair_reuse::PLAN_FLOOR_BYTES_PER_CLASS);
+    {
+        mw::pair_reuse::FamilySpec d;
+        d.value_bytes = 2 * static_cast<int64_t>(sizeof(std::complex<double>));  // the direct family: M0, M1
+        m.attr("razor_reuse_kept_bytes_per_class") = mw::razor::reuse::kept_bytes_per_class(d);
+    }
     m.attr("razor_reuse_max_segs") = mw::razor::reuse::MAX_SEGS;
     m.def("razor_reuse_small_deck_segs", &mw::razor::reuse::small_deck_segs, py::arg("finite"),
           "Segments below which pair reuse steps aside: over a finite ground when "
