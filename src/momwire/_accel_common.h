@@ -48,6 +48,7 @@ void register_row_scatter(py::module_ &m);
 void register_phi_reduce(py::module_ &m);
 void register_solve_prep(py::module_ &m);
 void register_sin_pair_reuse(py::module_ &m);
+void register_bspline_pair_reuse(py::module_ &m);
 void register_qp_pairs(py::module_ &m);
 void register_exact_kernel(py::module_ &m);
 void register_exact_kernel_point(py::module_ &m);

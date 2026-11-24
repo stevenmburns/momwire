@@ -390,6 +390,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_pair_reuse_core.h",
     "src/momwire/_razor_pair_reuse_core.h",
+    "src/momwire/_bspline_pair_reuse_core.h",
     "src/momwire/_razor_front_core.h",
     "src/momwire/_razor_buried_core.h",
     "src/momwire/_somm_below_proj_core.h",
@@ -636,6 +637,13 @@ _ACCEL_SOURCES = [
     # census and gather templates it declares are instantiated in each
     # adapter's TU, beside the keys.
     "src/momwire/_pair_reuse_core.cpp",
+    # momwire#2063 stage 3: bs2's adapter to the common core (its key, the
+    # census it instantiates, the gather's layout, the remainder's block map)
+    # and its binding. Their own TUs: they call no kernel (Python evaluates
+    # the representatives with the shipped off-edge fill), and the key's
+    # arithmetic is compiled beside nothing else.
+    "src/momwire/_bspline_pair_reuse_core.cpp",
+    "src/momwire/_accel_bspline_pair_reuse.cpp",
     # The razor2p FRONT half (construction, geometry, the prepared tables,
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.
