@@ -753,7 +753,7 @@ MIXED_TOLERANCE = _U64
 #: five sweeps for an answer 4e-13 from the ordinary one.)
 MIXED_FORWARD_TOLERANCE = 2.0**-44
 
-#: MIXED_FORWARD_FLOOR is set from the declared drift (2e-11), not from a
+#: MIXED_FORWARD_FLOOR is set from the declared drift (2e-11 when set; 1e-10 since), not from a
 #: small deck's scatter. It was 2**-40 (9.1e-13), the two-factor scatter of
 #: decks of a few hundred unknowns; but that scatter grows with the order,
 #: and a correction that has stopped contracting overstates the error it
