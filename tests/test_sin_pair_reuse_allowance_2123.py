@@ -2,8 +2,8 @@
 replaced #2019's fixed 256 MB budget).
 
 Each plan (the direct block's, the PEC image's, the reflected term's) keeps
-at most half its pairs as classes, `_sin_pair_reuse.class_cap` (2x
-compression), and its fill is held to `plan_allowance`, 4 B per pair plus
+at most three quarters of its pairs as classes,
+`_sin_pair_reuse.class_cap` (4/3x compression, Steve 11-24), and its fill is held to `plan_allowance`, 4 B per pair plus
 what the plan keeps per class (its layout's, 105 B direct, 73 B reflected)
 for each class the cap allows, and 72 B per near pair. A deck past either says so in
 `pair_reuse_declined` and fills bit for bit as with reuse off; a deck inside
@@ -110,21 +110,21 @@ def _random_wires(n=14, segs=31, seed=2123):
 
 def test_the_allowance_is_the_cores():
     """One allowance for every basis and route (`_pair_reuse_core.h`)."""
-    assert pr.CLASS_CAP_COMPRESSION == acc.pair_reuse_class_cap_compression == 2
-    assert acc.pair_reuse_cap_compression() == 2
+    assert pr.CLASS_CAP_COMPRESSION == acc.pair_reuse_class_cap_compression == 4 / 3
+    assert acc.pair_reuse_cap_compression() == 4 / 3
     # the plan's layout: values 48 B, rep 8, code 1, and the canonical source
     # 48 (direct) or the rep call's r and c 16 (reflected); near pairs 72 B
     kept = (pr.KEPT_BYTES_PER_CLASS, pr.GROUND_KEPT_BYTES_PER_CLASS, pr.NEAR_KEPT_BYTES)
     assert kept == acc.sin_pair_reuse_kept_bytes == (105, 73, 72)
     n = 405 * 405
-    assert pr.class_cap(n) == n // 2
-    assert pr.plan_allowance(n) == 4 * n + 105 * (n // 2)
-    assert pr.plan_allowance(n, ground=True, near=10) == 4 * n + 73 * (n // 2) + 720
+    assert pr.class_cap(n) == 123_018  # 3 n / 4, truncated
+    assert pr.plan_allowance(n) == 4 * n + 105 * (3 * n // 4)
+    assert pr.plan_allowance(n, ground=True, near=10) == 4 * n + 73 * (3 * n // 4) + 720
 
 
 def test_the_reasons_are_the_cores_words():
     assert pr.cap_reason(164_025) == (
-        "more than 82012 classes for 164025 pairs (the cap is 2x compression)"
+        "more than 123018 classes for 164025 pairs (the cap is 1.333x compression)"
     )
     assert pr.allowance_reason(1 << 19) == (
         "the kept plan would exceed its allowance of 0.5 MB"
@@ -190,13 +190,13 @@ def test_a_plan_is_held_to_its_fill_exactly():
 
 
 @pytest.mark.parametrize("ground", ["free", "sommerfeld"])
-def test_a_deck_short_of_2x_compression_declines_on_the_cap(ground, monkeypatch):
+def test_a_deck_short_of_the_cap_declines_on_the_cap(ground, monkeypatch):
     """Random wires: nearly every far pair is its own class, so the census
-    passes M N / 2 classes and stops there, with the cap named, and the fill
+    passes 3 M N / 4 classes and stops there, with the cap named, and the fill
     is the fill without the reuse. Under a cap that binds nothing
     (`pair_reuse_cap_compression(1)`, the test hook) and an allowance that
-    never binds, the same deck's plan keeps more than half its pairs: the
-    cap is what declined it."""
+    never binds, the same deck's plan keeps more than three quarters of its
+    pairs: the cap is what declined it."""
     kw = {**_random_wires(), **GROUNDS[ground]}
 
     def fill(pair_reuse=None):
@@ -220,15 +220,15 @@ def test_a_deck_short_of_2x_compression_declines_on_the_cap(ground, monkeypatch)
     try:
         _, s = fill(pair_reuse=True)
         assert s.pair_reuse_declined is None
-        # the direct block: more than half its pairs are classes
-        assert s.pair_reuse_census["direct"][1] > n * n // 2
+        # the direct block: more than three quarters of its pairs are classes
+        assert s.pair_reuse_census["direct"][1] > 3 * n * n // 4
     finally:
         acc.pair_reuse_cap_compression(-1)
         pr.clear_shared_plans()
 
 
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
-def test_a_deck_between_2x_and_its_plans_bytes_reuses(ground):
+def test_a_deck_inside_the_cap_and_its_plans_bytes_reuses(ground):
     """The tapered elements compress 3.04x (free space: 53,895 classes of
     164,025 pairs). The sinusoidal direct plan keeps ~103 B a class beyond
     its map; held to 56 B a class it declined, though #2019's 256 MB budget

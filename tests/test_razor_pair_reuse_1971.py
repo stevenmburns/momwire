@@ -482,8 +482,9 @@ def _capped(st):
 @_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 def test_a_deck_that_compresses_poorly_declines(ground):
-    """The census stops once its classes pass the class cap, half its pairs
-    (2x compression, momwire#2123's `pair_reuse::class_cap`): the plan's
+    """The census stops once its classes pass the class cap
+    (three quarters of its pairs, 4/3x compression, momwire#2123's
+    `pair_reuse::class_cap`): the plan's
     memory grows with its classes (~200 B each at the census's peak), so a
     deck whose pairs are nearly all distinct would cost that for little gain.
     It declines with the cap named, reported in `pair_reuse_declined`, and
@@ -549,12 +550,12 @@ def test_the_cache_counts_a_declined_plan_apart():
 
 def test_the_allowance_is_the_cores():
     # one rule for both bases and routes (`_pair_reuse_core.h`): the class
-    # cap at 2x compression, 4 B a pair per map plus the engine's own
+    # cap at 4/3x compression, 4 B a pair per map plus the engine's own
     # per-class plan cost for each class the cap allows (momwire#2123, Steve
     # 11-24): razor2p's, from its layout, one wavenumber's two complex
     # values, its group entry (two int32), its code (one byte) and at most
     # one row and one source in its group's lists (two int32)
-    assert acc.pair_reuse_class_cap_compression == 2
+    assert acc.pair_reuse_class_cap_compression == 4 / 3
     assert acc.razor_reuse_kept_bytes_per_class == 32 + 8 + 1 + 8
 
 

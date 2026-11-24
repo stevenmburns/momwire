@@ -804,7 +804,7 @@ void append(std::string &key, const void *p, std::size_t n) {
 std::string plan_key(const CensusInputs &in, bool ground) {
     const std::size_t M = static_cast<std::size_t>(in.M), N = static_cast<std::size_t>(in.N);
     std::string key = ground ? "reflected|" : "direct|";
-    const int64_t head[7] = {in.M, in.N, in.rows, allowance_of(in, ground, 0), core::cap_compression(),
+    const int64_t head[7] = {in.M, in.N, in.rows, allowance_of(in, ground, 0), core::cap_key(),
                              in.band_bytes_per_pair, probe()};
     append(key, head, sizeof head);
     append(key, in.obs_c, 24 * M);
