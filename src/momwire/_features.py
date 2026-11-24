@@ -289,7 +289,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_sin_pair_reuse_cxx_1911.py",
                 "tests/test_sin_pair_reuse_1916.py",
                 "tests/test_sin_pair_reuse_shared_1916.py",
-                "tests/test_sin_pair_reuse_budget_2019.py",
+                "tests/test_sin_pair_reuse_allowance_2123.py",
                 "tests/test_sin_pair_reuse_keys_1982.py",
             ),
             label="pair reuse",

@@ -2304,7 +2304,10 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
     auto reuse = std::unique_ptr<Reuse>(new Reuse());
     reuse->blocks = (pec || finite) ? 2 : 1;
     const char *names[2] = {"direct", finite ? "reflected" : "image"};
-    int64_t budget_left = pr::plan_budget();
+    // momwire#2123: each block's plan is held to its own allowance (32 B a
+    // pair per class map, `pair_reuse::plan_allowance`), so blocks no longer
+    // share one budget; any block's decline declines the fill whole.
+    const int64_t allowance = pr::plan_allowance_override();
     std::vector<pr::CensusEntry> census;
     for (int b = 0; b < reuse->blocks; b++) {
         const bool image = b == 1 && pec;
@@ -2321,7 +2324,7 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
         in.seg_h = g.seg_h.data();
         in.a_obs = a_seg.data();
         in.rows = census_rows;
-        in.budget = budget_left;
+        in.allowance = allowance;
         in.workers = workers;
         if (reflected) {
             in.src_type = gt.src.data();
@@ -2334,13 +2337,13 @@ std::unique_ptr<Reuse> reuse_route(const Front &fr, const Kernel &K, bool cos1, 
             in.obs_type = ty.obs.data();
             in.src_rev = ty.src_rev.data();
         }
-        reuse->plan[b] = pr::shared_plan(in, reflected);
+        std::string why;
+        reuse->plan[b] = pr::shared_plan(in, reflected, nullptr, &why, b + 1);
         if (reuse->plan[b] == nullptr) {
-            pr::set_last_outcome(pr::over_budget_reason());
+            pr::set_last_outcome(why);
             pr::set_last_census({});
             return nullptr;
         }
-        budget_left -= reuse->plan[b]->fill_nbytes();
         census.push_back({names[b], N * N, reuse->plan[b]->n_classes(), reuse->plan[b]->n_near()});
     }
     // One wavenumber's values: the shipped kernel on each class's

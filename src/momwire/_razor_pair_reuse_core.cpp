@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace mw {
@@ -34,14 +35,14 @@ using pair_reuse::quantum;
 
 std::atomic<int> g_probe{PROBE_NONE};
 std::atomic<int64_t> g_class_limit[2] = {{0}, {0}};
-std::atomic<int64_t> g_plan_budget{0};  // 0: PLAN_BUDGET_BYTES
+std::atomic<int64_t> g_plan_allowance{0};  // 0: the derived allowance
 
 // What a class's values cost per k: M0, M1 (or Q0, Q1), two complex.
 constexpr int64_t VALUE_BYTES = 2 * 16;
 
 const pair_reuse::Policy POLICY = [] {
     pair_reuse::Policy p;
-    p.max_class_fraction = MAX_CLASS_FRACTION;
+    p.capped = true;  // `pair_reuse::class_cap`
     p.rep_rows = REP_ROWS;
     return p;
 }();
@@ -78,14 +79,19 @@ void build(const Geometry &g, Plan &plan_ref) {
         plan->fam.back().spec = q;
     }
     if (n_seg > MAX_SEGS) return no("too many segments to plan");
-    // The byte budget (`PLAN_BUDGET_BYTES`): the maps are known before any
-    // census (4 B per pair per block, the remainder's included), so a deck
-    // whose maps alone pass it declines before allocating them; what is left
-    // bounds each census's classes, at `pair_reuse::class_bytes` each.
-    const int64_t budget = plan_budget();
+    // The allowance (`plan_allowance`, the header's): the maps are known
+    // before any census (4 B per pair per block, the remainder's included),
+    // so a deck whose maps alone pass it (only under the test hook) declines
+    // before allocating them. The census is bounded by the class cap alone
+    // (its `room` unbounded); its tables are counted into its peak.
+    const int64_t allowance = plan_allowance(*plan);
     const int64_t nn = n_seg * n_seg;
     const int64_t maps_bytes = pair_reuse::maps_bytes(*plan);
-    if (maps_bytes > budget) return no(pair_reuse::budget_reason(budget));
+    if (maps_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
+    constexpr int64_t kUnbounded = std::numeric_limits<int64_t>::max();
+    auto capped = [](const FamilyPlan &f) {
+        return pair_reuse::cap_reason(int64_t(f.spec.n_blocks) * f.spec.rows * f.spec.cols);
+    };
     const bool ek = g.group_i.size() > 0 && g.group_j[0].size() > 0;
     const bool has_b = ek && g.b_obs.size() > 0;
     const int pr = probe();
@@ -149,10 +155,9 @@ void build(const Geometry &g, Plan &plan_ref) {
     };
     FamilyPlan &dfam = plan->fam[DIRECT];
     int64_t peak = 0;
-    const Outcome d_out = pair_reuse::census<4>(dfam, POLICY, budget - maps_bytes, peak, direct_key);
+    const Outcome d_out = pair_reuse::census<4>(dfam, POLICY, kUnbounded, peak, direct_key);
     plan->census_peak_bytes = maps_bytes + peak;
-    if (d_out == Outcome::Poor) return no(pair_reuse::POOR_REASON);
-    if (d_out == Outcome::OverBudget) return no(pair_reuse::budget_reason(budget));
+    if (d_out == Outcome::Poor) return no(capped(dfam));
     if (d_out != Outcome::Ok) return no("too many classes to code");
 
     if (g.remainder) {
@@ -201,20 +206,18 @@ void build(const Geometry &g, Plan &plan_ref) {
             for (int j = 0; j < 5; j++) w[4 + j] = static_cast<uint64_t>(best[j]);
             return Key::Shared;
         };
-        // What the direct family holds now (its maps, groups and flags, and
-        // its values), plus the remainder's maps, comes out of the budget.
+        // The census's peak counts what the direct family holds now (its
+        // maps, groups and flags, and its values) and the remainder's maps.
         const int64_t held = pair_reuse::held_bytes(*plan) + 4 * nn;
         int64_t qpeak = 0;
-        const Outcome q_out =
-            pair_reuse::census<9>(plan->fam[REMAINDER], POLICY, budget - held, qpeak, q_key);
+        const Outcome q_out = pair_reuse::census<9>(plan->fam[REMAINDER], POLICY, kUnbounded, qpeak, q_key);
         plan->census_peak_bytes = std::max(plan->census_peak_bytes, held + qpeak);
-        if (q_out == Outcome::Poor) return no(pair_reuse::POOR_REASON);
-        if (q_out == Outcome::OverBudget) return no(pair_reuse::budget_reason(budget));
+        if (q_out == Outcome::Poor) return no(capped(plan->fam[REMAINDER]));
         if (q_out != Outcome::Ok) return no("too many remainder classes to code");
     }
     // The exact count, the groups' observer and source lists included.
     plan->budget_bytes = pair_reuse::held_bytes(*plan);
-    if (plan->budget_bytes > budget) return no(pair_reuse::budget_reason(budget));
+    if (plan->budget_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
 }
 
 template <class T>
@@ -230,7 +233,8 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, static_cast<int32_t>(probe()));
     put(s, class_limit(0));
     put(s, class_limit(1));
-    put(s, plan_budget());
+    put(s, plan_allowance_override());
+    put(s, pair_reuse::cap_compression());
     put(s, g.has_image);
     put(s, g.remainder);
     put(s, g.ground_z);
@@ -297,10 +301,15 @@ void set_class_limit(int64_t direct, int64_t remainder) {
     g_class_limit[1].store(remainder < 0 ? 0 : remainder);
 }
 int64_t class_limit(int family) { return g_class_limit[family == 0 ? 0 : 1].load(); }
-void set_plan_budget(int64_t bytes) { g_plan_budget.store(bytes <= 0 ? 0 : bytes); }
-int64_t plan_budget() {
-    const int64_t b = g_plan_budget.load();
-    return b > 0 ? b : static_cast<int64_t>(PLAN_BUDGET_BYTES);
+void set_plan_allowance(int64_t bytes) { g_plan_allowance.store(bytes <= 0 ? 0 : bytes); }
+int64_t plan_allowance_override() { return g_plan_allowance.load(); }
+int64_t plan_allowance(const pair_reuse::Plan &p) {
+    const int64_t b = g_plan_allowance.load();
+    if (b > 0) return b;
+    int64_t a = 0;
+    for (const FamilyPlan &f : p.fam)
+        for (int blk = 0; blk < f.spec.n_blocks; blk++) a += pair_reuse::plan_allowance(f.spec.rows * f.spec.cols);
+    return a;
 }
 int probe() { return g_probe.load(); }
 

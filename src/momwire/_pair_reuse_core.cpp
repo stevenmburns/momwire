@@ -107,6 +107,7 @@ std::mutex g_cache_mtx;
 std::list<Entry> g_cache;  // most recent first
 std::map<std::string, Counters> g_counters;
 int64_t g_cache_bytes = -1;  // the test hook's; < 0: SHARED_PLAN_BYTES
+std::atomic<int64_t> g_cap_compression{CLASS_CAP_COMPRESSION};
 
 }  // namespace
 
@@ -237,10 +238,21 @@ int64_t held_bytes(const Plan &p) {
     return b;
 }
 
-std::string budget_reason(int64_t budget_bytes) {
+void set_cap_compression(int64_t c) { g_cap_compression.store(c > 0 ? c : CLASS_CAP_COMPRESSION); }
+int64_t cap_compression() { return g_cap_compression.load(); }
+
+std::string cap_reason(int64_t pairs) {
+    char buf[128];
+    std::snprintf(buf, sizeof buf, "more than %lld classes for %lld pairs (the cap is %lldx compression)",
+                  static_cast<long long>(class_cap(pairs)), static_cast<long long>(pairs),
+                  static_cast<long long>(cap_compression()));
+    return buf;
+}
+
+std::string allowance_reason(int64_t allowance_bytes) {
     char buf[96];
-    std::snprintf(buf, sizeof buf, "the plan and its census would exceed the %.6g MB budget",
-                  static_cast<double>(budget_bytes) / double(1 << 20));
+    std::snprintf(buf, sizeof buf, "the kept plan would exceed its allowance of %.6g MB",
+                  static_cast<double>(allowance_bytes) / double(1 << 20));
     return buf;
 }
 
@@ -254,9 +266,30 @@ void decline(Plan &p, const std::string &why) {
     p.budget_bytes = 0;
 }
 
+namespace {
+
+// Drop the least recently used entries past the newest `keep` while the
+// cache holds more than `limit` bytes (the caller holds the lock).
+void trim(size_t limit, int keep) {
+    size_t total = 0;
+    int i = 0;
+    for (auto it = g_cache.begin(); it != g_cache.end(); i++) {
+        total += it->plan->nbytes();
+        if (i >= keep && total > limit)
+            it = g_cache.erase(it);
+        else
+            ++it;
+    }
+}
+
+size_t cache_limit() { return g_cache_bytes < 0 ? SHARED_PLAN_BYTES : static_cast<size_t>(g_cache_bytes); }
+
+}  // namespace
+
 std::shared_ptr<const Plan> plan_for(const std::string &basis, std::string fingerprint,
-                                     const std::function<void(Plan &)> &build, bool *built) {
+                                     const std::function<void(Plan &)> &build, bool *built, int keep) {
     if (built) *built = false;
+    keep = std::max(1, keep);
     {
         std::lock_guard<std::mutex> lock(g_cache_mtx);
         for (auto it = g_cache.begin(); it != g_cache.end(); ++it)
@@ -267,6 +300,9 @@ std::shared_ptr<const Plan> plan_for(const std::string &basis, std::string finge
                 g_counters[basis].found++;
                 return e.plan;
             }
+        // A census never runs beside more than the cap of older plans, the
+        // ones this fill has just used (the newest keep - 1) excepted.
+        trim(cache_limit(), keep - 1);
     }
     auto plan = std::make_shared<Plan>();
     plan->basis = basis;
@@ -281,16 +317,8 @@ std::shared_ptr<const Plan> plan_for(const std::string &basis, std::string finge
     c.built++;
     if (!p->declined.empty()) c.declined++;
     if (g_cache_bytes == 0) return p;
-    const size_t limit = g_cache_bytes < 0 ? SHARED_PLAN_BYTES : static_cast<size_t>(g_cache_bytes);
     g_cache.push_front(Entry{basis, p});
-    size_t total = 0;
-    for (auto it = g_cache.begin(); it != g_cache.end();) {
-        total += it->plan->nbytes();
-        if (it != g_cache.begin() && total > limit)
-            it = g_cache.erase(it);
-        else
-            ++it;
-    }
+    trim(cache_limit(), keep);
     return p;
 }
 

@@ -17,16 +17,18 @@ Held:
   at any OpenMP thread count (the census's parts) and any worker count (its
   bands), the classes numbered where they first occur in the pairs' order;
   and what the census counted (`census_peak_bytes`) at any thread count;
-- the budget's verdicts: over a ladder of budgets around a deck's census
-  peak, its floor and its plan's fill, a deck declines from one budget down
-  and serves the same plan above it;
+- the allowance's verdicts (momwire#2123): over a ladder of allowances
+  around a deck's class map and its plan's fill, a deck declines from one
+  allowance down and serves the same plan above it; and the class cap's, a
+  deck short of 2x compression declining with the cap named;
 - the NEC-4.2 slot's printout and its fill (Z, the port coefficients and
   Y, by row digest) with the feature requested, against the Python slot's
   with it on, on decks that serve it over free space, a PEC plane and the
   Sommerfeld ground; the fill differs from the C++ fill with it off (so the
   reuse is what ran) and the C++ route reports the census Python's does;
 - every decline, with Python's reason: the NEC-4 junction kernel, a deck
-  below the small-deck threshold, and a census past the budget.
+  below the small-deck threshold, a plan past its allowance, and a census
+  past the class cap.
 
 Bit for bit, not within the drift: the two routes evaluate the same classes
 with the same kernels on the same slices.
@@ -65,13 +67,15 @@ LAM = 10.7
 def _clean(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
     pr.clear_shared_plans()
+    acc.pair_reuse_cap_compression(-1)
     acc.sin_pair_reuse_configure(
-        budget=0, small_free=-1, small_ground=-1, workers=0, clear=True
+        allowance=0, small_free=-1, small_ground=-1, workers=0, clear=True
     )
     yield
     pr.clear_shared_plans()
+    acc.pair_reuse_cap_compression(-1)
     acc.sin_pair_reuse_configure(
-        budget=0, small_free=-1, small_ground=-1, workers=0, clear=True
+        allowance=0, small_free=-1, small_ground=-1, workers=0, clear=True
     )
 
 
@@ -161,8 +165,8 @@ def _blocks_same(py, cx, what):
 
 
 def _plan_same(a, b, ground, peak=True):
-    if a is pr.OVER_BUDGET or b is pr.OVER_BUDGET:
-        assert a is b
+    if isinstance(a, pr.Declined) or isinstance(b, pr.Declined):
+        assert a == b
         return
     _same(a.cls, b.cls, "cls")
     _same(
@@ -183,7 +187,7 @@ def _plan_same(a, b, ground, peak=True):
         assert a.census_peak_bytes == b.census_peak_bytes
 
 
-def _plan(block, g, types, gtypes, budget, workers, monkeypatch):
+def _plan(block, g, types, gtypes, allowance, workers, monkeypatch):
     """The plan for `block` of deck inputs `g`, at `workers` census workers."""
     monkeypatch.setattr(pr, "_workers", lambda: workers)
     src_type, obs_type, src_rev = types
@@ -192,12 +196,12 @@ def _plan(block, g, types, gtypes, budget, workers, monkeypatch):
         gs, go, gsr, gor = gtypes
         return pr.build_ground_plan(
             g["seg_c"], g["seg_t"], g["seg_c"], g["seg_t"], 0.0, *common, gs, go,
-            g["rows"], src_rev=gsr, obs_rev=gor, budget=budget,
+            g["rows"], src_rev=gsr, obs_rev=gor, allowance=allowance,
         )  # fmt: skip
     sc, st = (g["seg_c"], g["seg_t"]) if block == "direct" else (g["img_c"], g["img_t"])
     return pr.build_plan(
         g["seg_c"], g["seg_t"], sc, st, *common, src_type, obs_type, g["rows"],
-        src_rev=src_rev, budget=budget,
+        src_rev=src_rev, allowance=allowance,
     )  # fmt: skip
 
 
@@ -261,19 +265,23 @@ def test_the_plan_is_one_whatever_the_threads(deck, block, monkeypatch):
     """The census hashes its pairs into one part per OpenMP thread and
     numbers the classes by their first pair whatever the parts, and its
     bands follow the workers: the plan is the same bytes at any of either,
-    and the census's count at any thread count."""
+    and the census's count at any thread count. The random wires compress
+    less than 2x: the cap is lifted (`pair_reuse_cap_compression(1)`), this
+    test being the plan's, not the cap's (nor the allowance's, lifted too)."""
     from threadpoolctl import threadpool_limits
 
+    acc.pair_reuse_cap_compression(1)
+    big = 1 << 40
     g = _inputs(_solver(*DECKS[deck]))
     types, gtypes = _types(g)
     with threadpool_limits(limits=1, user_api="openmp"):
-        one = _plan(block, g, types, gtypes, None, 3, monkeypatch)
+        one = _plan(block, g, types, gtypes, big, 3, monkeypatch)
     for threads in (2, 5, 8):
         with threadpool_limits(limits=threads, user_api="openmp"):
-            got = _plan(block, g, types, gtypes, None, 3, monkeypatch)
+            got = _plan(block, g, types, gtypes, big, 3, monkeypatch)
         _plan_same(one, got, block == "reflected")
     for workers in (1, 8):
-        got = _plan(block, g, types, gtypes, None, workers, monkeypatch)
+        got = _plan(block, g, types, gtypes, big, workers, monkeypatch)
         _plan_same(one, got, block == "reflected", peak=False)
     # not vacuous: coded orientations, reused pairs where the deck repeats
     # (random wires repeat little: they are the orientation code's test),
@@ -287,30 +295,58 @@ def test_the_plan_is_one_whatever_the_threads(deck, block, monkeypatch):
 
 @pytest.mark.parametrize("block", ["direct", "reflected"])
 @pytest.mark.parametrize("deck", ["curtain", "random wires"])
-def test_the_budget_holds_the_plan(deck, block, monkeypatch):
-    """Every budget of a ladder around the deck's own numbers: its class map
-    (declined before any census), the census's peak and floor (declined on
-    the way) and the plan's fill (declined at the end), and between them.
-    Where it serves, the plan is the one a budget that never binds finds,
-    held to that budget: its census's count and its fill within it."""
+def test_the_allowance_holds_the_plan(deck, block, monkeypatch):
+    """Every allowance of a ladder around the deck's own numbers: its class
+    map (declined before any census) and the plan's fill (declined at the
+    end), and between them. Where it serves, the plan is the one an
+    allowance that never binds finds, its fill within it. The census has no
+    byte bound (its bands follow the allowance, so its count moves). Under
+    the cap lifted, as the random wires need."""
+    acc.pair_reuse_cap_compression(1)
     g = _inputs(_solver(*DECKS[deck]))
     types, gtypes = _types(g)
     workers = 4
     lifted = _plan(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
     cls_bytes = int(lifted.cls.nbytes)
-    marks = [cls_bytes, lifted.census_peak_bytes, pr.fill_nbytes(lifted)]
+    fill = pr.fill_nbytes(lifted)
+    marks = [cls_bytes, fill]
     ladder = sorted({max(1, m + d) for m in marks for d in (-1, 0, 1)})
-    ladder += [int(x) for x in np.linspace(cls_bytes, 2 * pr.fill_nbytes(lifted), 13)]
+    ladder += [int(x) for x in np.linspace(cls_bytes, 2 * fill, 13)]
     verdicts = []
-    for budget in sorted(set(ladder)):
-        got = _plan(block, g, types, gtypes, budget, workers, monkeypatch)
-        verdicts.append(got is pr.OVER_BUDGET)
-        if got is not pr.OVER_BUDGET:
-            # the bands are cut to the budget, so the census's count moves
+    for allowance in sorted(set(ladder)):
+        got = _plan(block, g, types, gtypes, allowance, workers, monkeypatch)
+        declined = isinstance(got, pr.Declined)
+        verdicts.append(declined)
+        assert declined == (allowance < fill), allowance
+        if declined:
+            assert got.reason == pr.allowance_reason(allowance)
+        else:
             _plan_same(lifted, got, block == "reflected", peak=False)
-            assert budget >= max(got.census_peak_bytes, pr.fill_nbytes(got))
-    assert set(verdicts) == {True, False}
     assert verdicts[0] and not verdicts[-1]
+
+
+@pytest.mark.parametrize("block", ["direct", "image", "reflected"])
+def test_the_cap_holds_the_plan(block, monkeypatch):
+    """The random wires keep more than half their pairs as classes: under
+    the cap (2x compression), the allowance lifted so the cap is what binds,
+    every block's census stops and declines with the cap named, at any
+    worker count; the curtain, far under it, serves. At the default
+    allowance the random wires stop first on the allowance (the least the
+    plan could keep passes it before the cap)."""
+    for deck, served in (("random wires", False), ("curtain", True)):
+        g = _inputs(_solver(*DECKS[deck]))
+        types, gtypes = _types(g)
+        default = _plan(block, g, types, gtypes, None, 4, monkeypatch)
+        if not served:
+            n2 = g["N"] ** 2
+            assert default == pr.Declined(pr.allowance_reason(pr.plan_allowance(n2)))
+        for workers in (1, 4):
+            got = _plan(block, g, types, gtypes, 1 << 40, workers, monkeypatch)
+            if served:
+                assert not isinstance(got, pr.Declined)
+                assert got.n_classes <= pr.class_cap(got.n_pairs)
+            else:
+                assert got == pr.Declined(pr.cap_reason(g["N"] ** 2)), got
 
 
 # --- the NEC-4.2 slot's printout and fill, through the in-process hook ------
@@ -436,6 +472,12 @@ SERVED = {
 
 @pytest.mark.parametrize("deck", list(SERVED))
 def test_the_reused_printout_and_fill_are_pythons(deck, tools, monkeypatch, py_outcome):
+    """Several of these decks compress less than 2x (the tilted curtains, the
+    junction) or keep more than the allowance: both are lifted on both
+    routes (the hooks), this test being the served plan's parity."""
+    acc.pair_reuse_cap_compression(1)
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", 1 << 40)
+    acc.sin_pair_reuse_configure(allowance=1 << 40, clear=True)
     stats, outcome, fill_on, fill_off = _runs(
         tools, SERVED[deck], monkeypatch, py_outcome
     )
@@ -494,24 +536,77 @@ def test_a_declined_deck_declines_as_pythons(deck, tools, monkeypatch, py_outcom
 
 
 @pytest.mark.parametrize("ground", ["free", "pec", "somm"])
-def test_a_deck_past_the_budget_declines_as_pythons(
+def test_a_deck_past_the_allowance_declines_as_pythons(
     ground, tools, monkeypatch, py_outcome
 ):
-    """A budget the curtain's census passes (0.5 MB: its class map is 0.64 MB)
-    on both routes: the same sentence, and the fill as with the reuse off."""
-    budget = 1 << 19
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", budget)
-    acc.sin_pair_reuse_configure(budget=budget, clear=True)
+    """An allowance the curtain's plan passes (0.7 MB: its class map is 0.64
+    MB) on both routes: the same sentence, and the fill as with the reuse
+    off."""
+    allowance = 700_000
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", allowance)
+    acc.sin_pair_reuse_configure(allowance=allowance, clear=True)
     stats, outcome, fill_on, fill_off = _runs(
         tools, curtain_deck(ground=ground), monkeypatch, py_outcome
     )
-    reason = "the plan and its census would exceed the 0.5 MB budget"
-    assert pr.over_budget_reason() == reason
+    reason = "the kept plan would exceed its allowance of 0.667572 MB"
+    assert pr.allowance_reason(allowance) == reason
     assert stats["last"] == reason
     assert {o[0] for o in outcome} == {reason}
     assert fill_on == fill_off
     # declined once, then found declined at the next frequencies
     assert stats["built"] == stats["declined"] == 1 and stats["found"] >= 1
+
+
+def random_deck(ground="free", n=24, segs=17, seed=1911, nf=2):
+    """`_random_wires` as a deck: no junction, nearly every far pair its own
+    class, 408 segments."""
+    lam = 299.792458 / 28.0
+    rng = np.random.default_rng(seed)
+    lines = ["CM pair reuse random wires", "CE"]
+    for i in range(n):
+        c = rng.uniform(-3.0, 3.0, 3) + np.array([0.0, 0.0, 6.0])
+        d = rng.normal(size=3)
+        d *= 0.2 * lam / np.linalg.norm(d)
+        a, b = c - d, c + d
+        lines.append(
+            f"GW {i + 1} {segs} {a[0]:.6f} {a[1]:.6f} {a[2]:.6f} "
+            f"{b[0]:.6f} {b[1]:.6f} {b[2]:.6f} 0.002"
+        )
+    if ground == "free":
+        lines.append("GE 0")
+    else:
+        lines += ["GE 1", "GN 1" if ground == "pec" else "GN 2 0 0 0 13 .005"]
+    lines += [f"FR 0 {nf} 0 0 28 0.1", f"EX 0 {n // 2 + 1} {segs // 2 + 1} 0 1 0"]
+    return "\n".join([*lines, "XQ", "EN"]) + "\n"
+
+
+@pytest.mark.parametrize("lifted", [False, True], ids=["default", "lifted"])
+@pytest.mark.parametrize("ground", ["free", "pec", "somm"])
+def test_a_deck_short_of_2x_compression_declines_as_pythons(
+    ground, lifted, tools, monkeypatch, py_outcome
+):
+    """The random wires decline on both routes in the same sentence, and
+    fill as off: at the default allowance on the allowance (the least the
+    plan could keep passes it first), and with the allowance lifted on the
+    class cap (the cap, not the count the census stopped at, which follows
+    each route's bands)."""
+    n2 = 408 * 408
+    if lifted:
+        monkeypatch.setattr(pr, "ALLOWANCE_BYTES", 1 << 40)
+        acc.sin_pair_reuse_configure(allowance=1 << 40, clear=True)
+        reason = pr.cap_reason(n2)
+        assert reason == (
+            "more than 83232 classes for 166464 pairs (the cap is 2x compression)"
+        )
+    else:
+        reason = pr.allowance_reason(pr.plan_allowance(n2))
+    stats, outcome, fill_on, fill_off = _runs(
+        tools, random_deck(ground=ground), monkeypatch, py_outcome
+    )
+    assert stats["last"] == reason
+    assert {o[0] for o in outcome} == {reason}
+    assert fill_on == fill_off
+    assert stats["built"] == stats["declined"] == 1
 
 
 def test_the_reuse_is_requested_per_run(tools, monkeypatch, py_outcome):

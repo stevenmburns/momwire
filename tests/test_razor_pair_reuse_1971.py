@@ -42,6 +42,7 @@ import numpy as np
 import pytest
 
 from momwire import _features, razor
+from momwire import _sin_pair_reuse as core_words
 from momwire._accel import acc
 from momwire.razor import RazorSolver
 
@@ -76,7 +77,8 @@ def _clean(monkeypatch):
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
-    acc.razor_reuse_plan_budget(0)
+    acc.razor_reuse_plan_allowance(0)
+    acc.pair_reuse_cap_compression(-1)
     acc.razor_reuse_cache_clear()
     # The decks here are cheap on purpose, below the small-deck thresholds,
     # and test the reuse itself: lift them (test_small_decks_step_aside
@@ -87,7 +89,8 @@ def _clean(monkeypatch):
     acc.razor_reuse_probe(0)
     acc.razor_reuse_class_limit(0)
     acc.razor_reuse_set_small_deck_segs(-1, -1)
-    acc.razor_reuse_plan_budget(0)
+    acc.razor_reuse_plan_allowance(0)
+    acc.pair_reuse_cap_compression(-1)
     acc.razor_reuse_cache_clear()
 
 
@@ -287,7 +290,10 @@ def test_segments_shorter_than_their_radius_keep_their_near_pairs():
     bridge-on-bridge pairs a few h apart are within a radius, where the
     reduced kernel varies over a. Under the rule in h alone (the probe)
     they are shared, every pair still passes `verify` (2e-13), and Zin
-    moves 1.5e-5. With the right rule it moves ~4e-11."""
+    moves 1.5e-5. With the right rule it moves ~4e-11. The hairpin keeps
+    between 1/2 and 3/4 of its pairs as classes, so the class cap (1/2) is
+    lifted: this gate is the key's."""
+    acc.pair_reuse_cap_compression(1)
     wires = _hairpin()
     off = _hairpin_zin(False, wires)
     on = _hairpin_zin(True, wires)
@@ -467,28 +473,31 @@ def _random_wires(n=8, seed=3):
     return out
 
 
-POOR = "too few shared pairs to repay the plan"
+def _capped(st):
+    """The cap's sentence for the direct family of a plan's stats: its pairs
+    are both blocks' over a PEC image or the reflection coefficient's."""
+    return core_words.cap_reason((2 if st["has_image"] else 1) * st["n_seg"] ** 2)
 
 
 @_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
 def test_a_deck_that_compresses_poorly_declines(ground):
-    """The census stops once its classes pass MAX_CLASS_FRACTION (3/4) of
-    its pairs (`_razor_pair_reuse_core.h`): the plan's memory grows with its
-    classes (~200 B each at the census's peak), so a deck whose pairs are
-    nearly all distinct would cost that for little gain. It declines with
-    its reason, reported in `pair_reuse_declined`, and fills as off bit for
-    bit; a deck that compresses well (the triangle and dipoles, well under 3/4)
-    still reuses."""
+    """The census stops once its classes pass the class cap, half its pairs
+    (2x compression, momwire#2123's `pair_reuse::class_cap`): the plan's
+    memory grows with its classes (~200 B each at the census's peak), so a
+    deck whose pairs are nearly all distinct would cost that for little gain.
+    It declines with the cap named, reported in `pair_reuse_declined`, and
+    fills as off bit for bit; a deck that compresses well (the triangle and
+    dipoles, well under 1/2) still reuses."""
     wires = _random_wires()
     off = _solver(wires, False, GROUNDS[ground]).compute_port_solution().y
     razor._PAIR_REUSE_ROUTE.clear()
     s = _solver(wires, True, GROUNDS[ground])
     y = s.compute_port_solution().y
     assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
-    assert s.pair_reuse_declined == POOR
     st = razor._PAIR_REUSE_STATS[0]
-    assert st["declined"] == POOR and st["classes"] == 0, st
+    assert s.pair_reuse_declined == _capped(st)
+    assert st["declined"] == _capped(st) and st["classes"] == 0, st
     np.testing.assert_array_equal(y, off)
     # the declined plan is cached: a second fill does not re-run the census
     b0, f0 = _cache()
@@ -505,6 +514,10 @@ def test_a_deck_that_compresses_poorly_declines(ground):
 @_needs_cert
 def test_a_deck_that_compresses_poorly_declines_on_the_cxx_route(monkeypatch):
     wires = _random_wires()
+    # the Python route's verdict, which the C++ route must give in its words
+    py = _solver(wires, True, SOMM)
+    py.compute_port_solution()
+    assert py.pair_reuse_declined == _capped(razor._PAIR_REUSE_STATS[0])
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
     off = _solve(wires, False, ground=SOMM)
     ctx = razor._cxx_context()
@@ -514,7 +527,7 @@ def test_a_deck_that_compresses_poorly_declines_on_the_cxx_route(monkeypatch):
     assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
     assert after["reuse_declined"] == before["reuse_declined"] + 1
     assert after["reuse_fills"] == before["reuse_fills"]
-    assert ctx.reuse_declined_reason == POOR
+    assert ctx.reuse_declined_reason == py.pair_reuse_declined
     np.testing.assert_array_equal(y, off)
 
 
@@ -534,21 +547,33 @@ def test_the_cache_counts_a_declined_plan_apart():
     assert (c2["built"] - c1["built"], c2["declined"] - c1["declined"]) == (1, 0)
 
 
-def test_the_plan_budget_is_256_mb():
-    # 512 MB hosted bound = this budget + one dense Z (144 MB at the
-    # 3000-segment cap) + headroom (`_razor_pair_reuse_core.h`, Steve 11-17).
-    assert acc.razor_reuse_plan_budget_bytes == 256 << 20
+def test_the_allowance_is_the_cores():
+    # one allowance for both bases and routes (`_pair_reuse_core.h`): the
+    # class cap at 2x compression, 4 B a pair per map plus 56 B per class
+    # the cap allows (momwire#2123, Steve 11-24)
+    assert acc.pair_reuse_class_cap_compression == 2
+    assert acc.pair_reuse_plan_floor_bytes_per_class == 56
+    assert core_words.plan_allowance(1000) == 4 * 1000 + 56 * 500
+
+
+def _allowance(st):
+    """The derived allowance of a plan's stats: 32 B a pair for each map
+    (the direct family's blocks and the composing ground's remainder)."""
+    n2 = st["n_seg"] ** 2
+    maps = (2 if st["has_image"] else 1) + (1 if st["remainder"] else 0)
+    return maps * core_words.plan_allowance(n2)
 
 
 @_needs_cert
 @pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
-def test_a_plan_past_its_byte_budget_declines(ground):
-    """The plan and its census (maps, groups and flags, one wavenumber's
-    class values, the census's hash tables) are held to PLAN_BUDGET_BYTES at
-    their peak. Lowered by the test hook to one byte under this deck's peak,
-    the census stops and the plan declines with the budget named, fills as
-    off bit for bit, and is cached; lowered under the maps alone, it declines
-    before any census; at the deck's own peak it is served."""
+def test_a_plan_past_its_allowance_declines(ground):
+    """The kept plan (maps, groups and flags, one wavenumber's class values)
+    is held to its allowance; the census's hash tables are counted in its
+    peak but not bounded (the class cap bounds them). Lowered by the test
+    hook to one byte under this plan, it declines with the allowance named,
+    fills as off bit for bit, and is cached; lowered under the maps alone,
+    it declines before any census; at the plan's own bytes it is served, and
+    the derived allowance holds it."""
     wires = _triangle() + _dipoles(heights=(9.0, 9.0), xs=(0.0, 1.5))
     g = GROUNDS[ground]
     off = _solver(wires, False, g).compute_port_solution().y
@@ -558,36 +583,36 @@ def test_a_plan_past_its_byte_budget_declines(ground):
     assert st["budget_bytes"] == st["nbytes"] + 32 * (st["classes"] + st["q_classes"])
     # the census's tables are counted: the peak is above the plan's own bytes
     assert st["census_peak_bytes"] > st["budget_bytes"], st
-    need = st["census_peak_bytes"]
+    assert st["budget_bytes"] <= _allowance(st)
+    need = st["budget_bytes"]
     n_maps = 2 if ground != "free" else 1
     if ground == "sommerfeld":
         n_maps += 1
     maps = 4 * n_maps * (st["pairs"] // (2 if ground != "free" else 1))
-    for budget in (need - 1, maps - 1):
-        acc.razor_reuse_plan_budget(budget)
-        why = f"the plan and its census would exceed the {budget / 2**20:.6g} MB budget"
+    for allowance in (need - 1, maps - 1):
+        acc.razor_reuse_plan_allowance(allowance)
         razor._PAIR_REUSE_ROUTE.clear()
         s = _solver(wires, True, g)
         y = s.compute_port_solution().y
         assert razor._PAIR_REUSE_ROUTE == {"declined": 1}
-        assert s.pair_reuse_declined == why
+        assert s.pair_reuse_declined == core_words.allowance_reason(allowance)
         assert razor._PAIR_REUSE_STATS[0]["classes"] == 0
         np.testing.assert_array_equal(y, off)
         b0, f0 = _cache()
         _solver(wires, True, g).compute_port_solution()
         assert _cache() == (b0, f0 + 1)
-    acc.razor_reuse_plan_budget(need)
+    acc.razor_reuse_plan_allowance(need)
     s = _solver(wires, True, g)
     s.compute_port_solution()
     assert s.pair_reuse_declined is None
 
 
 @_needs_cert
-def test_a_plan_past_its_byte_budget_declines_on_the_cxx_route(monkeypatch):
+def test_a_plan_past_its_allowance_declines_on_the_cxx_route(monkeypatch):
     wires = _triangle()
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
     off = _solve(wires, False, ground=SOMM)
-    acc.razor_reuse_plan_budget(1024)
+    acc.razor_reuse_plan_allowance(1024)
     ctx = razor._cxx_context()
     before = dict(ctx.counters)
     y = _solve(wires, True, ground=SOMM)
@@ -595,9 +620,7 @@ def test_a_plan_past_its_byte_budget_declines_on_the_cxx_route(monkeypatch):
     assert razor._CXX_FRONT_ROUTE.get("front", 0) > 0
     assert after["reuse_declined"] == before["reuse_declined"] + 1
     assert after["reuse_fills"] == before["reuse_fills"]
-    assert ctx.reuse_declined_reason == (
-        f"the plan and its census would exceed the {1024 / 2**20:.6g} MB budget"
-    )
+    assert ctx.reuse_declined_reason == core_words.allowance_reason(1024)
     np.testing.assert_array_equal(y, off)
 
 
@@ -732,7 +755,10 @@ def test_segments_of_different_lengths_never_share_a_class():
     On this loop the lengthened side's segments shared classes with the
     others', and R moved 8.1e-5 (identically under translation, so not
     noise), while every pair passed `verify` at ~4e-11. With h exact it
-    moves ~2e-9, the flag-off fill's own translation noise (1e-9 - 2e-9)."""
+    moves ~2e-9, the flag-off fill's own translation noise (1e-9 - 2e-9).
+    The loop keeps more than half its pairs as classes, so the class cap is
+    lifted: this gate is the key's."""
+    acc.pair_reuse_cap_compression(1)
     d = 4e-11 * 0.3
     off = _small_loop_zin(False, d)
     on = _small_loop_zin(True, d)

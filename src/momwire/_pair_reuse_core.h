@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -84,11 +85,52 @@ struct FamilySpec {
 
 inline int64_t class_bytes(const FamilySpec &f) { return f.value_bytes + 2 * 4 + 1; }
 
+// THE ALLOWANCE (momwire#2123, Steve 11-24): what `pair_reuse` may hold on
+// top of the fill's own bound (512 MB + one dense Z), for every basis.
+//
+// - THE CLASS CAP. A family keeps at most pairs / CLASS_CAP_COMPRESSION
+//   classes (N^2 / 2 per class map): a deck that does not reach 2x
+//   compression declines, `cap_reason`. The census checks it after every
+//   pass of rows and stops the moment the count passes it.
+// - THE KEPT PLAN: 4 B per pair for each class map (two over a ground) plus
+//   PLAN_FLOOR_BYTES_PER_CLASS for each class the cap allows, one
+//   wavenumber's values and an index: `plan_allowance`, 4 + 56 / 2 = 32 B
+//   per pair, two Z per map at the cap. A plan whose own bytes pass it
+//   declines, `allowance_reason`.
+// - THE CENSUS is a transient: its tables are freed before the fill's Z is
+//   allocated, so its peak is charged against that room, not added to the
+//   kept plan, and it has no byte bound of its own: the cap is what stops
+//   it (so a deck that declines has held no more than a census at the cap).
+// - Allowances ADD with the other opt-ins' (mixed_lu: 1.5 Z + 512 MB). No
+//   one place sums them: each opt-in bounds its own share.
+constexpr int64_t CLASS_CAP_COMPRESSION = 2;
+// One wavenumber's values (sinusoidal's three complex shapes, 48 B; razor's
+// two, 32 B) and an 8 B index: sinusoidal's `PLAN_FLOOR_BYTES_PER_CLASS`.
+constexpr int64_t PLAN_FLOOR_BYTES_PER_CLASS = 56;
+// TEST HOOK: the cap's compression in place of CLASS_CAP_COMPRESSION (<= 0
+// restores it; 1 caps nothing but the pairs), so the plan's own tests can
+// build plans of decks that do not compress. Plans are keyed on it. Bound for
+// Python's tests only; nothing in the executables sets it.
+void set_cap_compression(int64_t c);
+int64_t cap_compression();
+// The classes a family of `pairs` pairs may keep, and its kept plan's bytes.
+inline int64_t class_cap(int64_t pairs) { return pairs / cap_compression(); }
+inline int64_t plan_allowance(int64_t pairs) { return 4 * pairs + PLAN_FLOOR_BYTES_PER_CLASS * class_cap(pairs); }
+// The decline sentences: "more than C classes for P pairs (the cap is 2x
+// compression)", and "the kept plan would exceed its allowance of X MB".
+// The cap's names the cap, not the count the census stopped at: that count
+// follows the census's passes of rows, which differ between routes (the
+// Python route's bands follow its pool, the executable's its threads), and
+// both routes must decline in the same words.
+std::string cap_reason(int64_t pairs);
+std::string allowance_reason(int64_t allowance_bytes);
+
 // The adapter's census policy.
 struct Policy {
-    // A census keeping more classes than this fraction of its family's pairs
-    // declines, POOR_REASON.
-    double max_class_fraction = 1.0;
+    // A census keeping more classes than `class_cap` of its family's pairs
+    // declines (Outcome::Poor, `cap_reason`). Off, only the int32 coding and
+    // the spec's `class_limit` bound the classes.
+    bool capped = true;
     // Observer rows per representative evaluation call, at most; 0 builds
     // no groups (an adapter with its own evaluation schedule).
     int rep_rows = 16;
@@ -160,25 +202,33 @@ int64_t held_bytes(const Plan &p);
 enum class Outcome : int8_t { Ok, Uncodeable, Poor, OverBudget };
 enum class Key : uint8_t { Shared, Own, Near };
 
-const char *const POOR_REASON = "too few shared pairs to repay the plan";
-std::string budget_reason(int64_t budget_bytes);
 // A plan that does not serve: its families keep their specs and lose their
 // classes; its census time and peak are kept.
 void decline(Plan &p, const std::string &why);
 
-// Bytes of plans the process keeps between fills, one fill's budget
-// (momwire#2026): a long-lived server holds no more than a single fill may use.
+// Bytes of OLD plans the process keeps between fills (momwire#2026): a
+// fixed cap, not the allowance, so that a long-lived server stays bounded
+// whatever decks it has seen. It held one fill's whole budget when that was
+// 256 MB, and stays there (momwire#2123); a fill's own plans may pass it
+// (32 B a pair per map at the cap, `plan_allowance`), so the newest `keep`
+// entries are kept whatever their size, and before any census the cache is
+// cut back to this, so a census never runs beside more than this of older
+// decks' plans.
 constexpr size_t SHARED_PLAN_BYTES = size_t(256) << 20;
 
 // The plan of `basis` keyed `fingerprint`, from the process's cache or built:
 // `build` fills a fresh Plan whose basis and fingerprint are already set (the
-// fingerprint counts in its budget), and its wall time is the plan's
+// fingerprint counts in its bytes), and its wall time is the plan's
 // census_seconds, a decline's included (momwire#2016). The cache keeps the
-// most recent plans of every basis under SHARED_PLAN_BYTES, the newest
-// always. `built`, when given, says whether this call ran `build`.
+// most recent plans of every basis under SHARED_PLAN_BYTES, and the newest
+// `keep` always: a fill of two plans (sinusoidal's direct and reflected
+// blocks, each its own census) passes 2 for its second, so the first, just
+// used, is not dropped for it and re-censused at every frequency. Before a
+// build, entries past the newest `keep - 1` go first while the cache is over
+// SHARED_PLAN_BYTES. `built`, when given, says whether this call ran `build`.
 std::shared_ptr<const Plan> plan_for(const std::string &basis, std::string fingerprint,
                                      const std::function<void(Plan &)> &build,
-                                     bool *built = nullptr);
+                                     bool *built = nullptr, int keep = 1);
 // Plans built and found (process totals, per basis, for tests), and of those
 // built the ones that came back declined: a declined plan serves nothing, so
 // built - declined is what proves a fill reused.
@@ -382,7 +432,8 @@ struct NoHook {
 // Otherwise it declines:
 //   Uncodeable: the classes pass the int32 entry, a part's share of it, or
 //     the spec's `class_limit`;
-//   Poor: they pass `max_class_fraction` of the family's pairs;
+//   Poor: they pass `class_cap` of the family's pairs (`pol.capped`);
+//     f.classes holds the count when it stopped;
 //   OverBudget: the census and the plan it is building pass `room` bytes
 //     (the budget less what is already held): its hash tables (at 1.5x their
 //     capacity, the peak of their last growth, old and new arrays both live),
@@ -411,8 +462,8 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     const int n_blocks = spec.n_blocks, code_bits = spec.code_bits;
     const int64_t rows = spec.rows, cols = spec.cols, limit = spec.class_limit;
     const int64_t CLASS_BYTES = class_bytes(spec);
-    const int64_t poor = static_cast<int64_t>(
-        pol.max_class_fraction * static_cast<double>(static_cast<int64_t>(n_blocks) * rows * cols));
+    const int64_t poor = pol.capped ? class_cap(static_cast<int64_t>(n_blocks) * rows * cols)
+                                    : std::numeric_limits<int64_t>::max();
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(rows) * static_cast<size_t>(cols);
     for (int b = 0; b < n_blocks; b++) f.map[b].assign(nn, 0);
@@ -547,12 +598,18 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
             }
             if (!hook.done(ci, so_far, n_near, tail_new)) return Outcome::OverBudget;
             if (!pol.measured) {
-                if (so_far > poor) return Outcome::Poor;
+                if (so_far > poor) {
+                    f.classes = so_far;
+                    return Outcome::Poor;
+                }
                 continue;
             }
             bytes += so_far * CLASS_BYTES;
             peak = std::max(peak, bytes);
-            if (so_far > poor) return Outcome::Poor;
+            if (so_far > poor) {
+                f.classes = so_far;
+                return Outcome::Poor;
+            }
             if (bytes > room) return Outcome::OverBudget;
         }
     }
@@ -563,7 +620,10 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
         off[static_cast<size_t>(t + 1)] = off[static_cast<size_t>(t)] + static_cast<int64_t>(reps[static_cast<size_t>(t)].size());
     const int64_t n_cls = off[static_cast<size_t>(P)];
     if (n_cls >= cls_max || (limit > 0 && n_cls > limit)) return Outcome::Uncodeable;
-    if (n_cls > poor) return Outcome::Poor;
+    if (n_cls > poor) {
+        f.classes = n_cls;
+        return Outcome::Poor;
+    }
     const uint32_t code_mask = (uint32_t(1) << code_bits) - 1;
     const uint32_t local_mask = local_max - 1;
     for (int b = 0; b < n_blocks; b++) {

@@ -340,12 +340,13 @@ def test_a_small_deck_reports_the_decline():
     assert reuse["pairs"] is None and reuse["wires"] is None
 
 
-def test_an_over_budget_plan_reports_the_decline(monkeypatch):
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", 1024)
+def test_a_plan_past_its_allowance_reports_the_decline(monkeypatch):
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", 1024)
     s = SinusoidalSolver(**yagi(), pair_reuse=True)
     s.compute_impedance()
     reuse = s.fill_report()["reuse"]
-    assert reuse["state"] == "declined" and "budget" in reuse["declined"]
+    assert reuse["state"] == "declined"
+    assert reuse["declined"] == pr.allowance_reason(1024)
     assert s.fill_report()["times"]["census_s"] >= 0.0
 
 
