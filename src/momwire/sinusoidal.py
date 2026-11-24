@@ -453,6 +453,14 @@ _HAVE_PHI_REDUCE_ACCEL = _acc is not None and bool(
 # (tests/test_sin_fill_rows_2069.py).
 _FILL_ROWS_ACCEL = True
 _HAVE_FILL_ROWS = _acc is not None and bool(getattr(_acc, "sin_fill_rows_2069", False))
+# momwire#2082 step 1: the same rows with `nec2_far_approx` on (the kernel's
+# `far_r`), the bits of the two-pass far route (`_far_field_tensor`'s
+# `sinusoidal_field_tensor_far`, then `reduce_phi_band`). The reduced kernel
+# only; under the extended kernel the far pairs are overlaid on the shipped
+# tensors (`_far_overlay`), which keeps the two-pass band.
+_HAVE_FILL_ROWS_FAR = _acc is not None and bool(
+    getattr(_acc, "sin_fill_rows_far_2082", False)
+)
 
 
 def _phi_reduce_takes(Phi, Ms, out):
@@ -7231,9 +7239,11 @@ class SinusoidalSolver(
         rows `i0:i1` of Z into `out`, or None, the two-pass band.
 
         Served exactly where the band would run the real-k C++ kernel at the
-        literal shapes (`_field_tensor`'s first two branches, either kernel)
-        and reduce through `_acc.reduce_phi_band` (sparse CSC `Ms`), in free
-        space or over a PEC image. A finite ground keeps the two-pass band:
+        literal shapes (`_field_tensor`'s first two branches, either kernel,
+        or with `nec2_far_approx` on its reduced-kernel twin,
+        `_far_field_tensor`'s `sinusoidal_field_tensor_far`) and reduce
+        through `_acc.reduce_phi_band` (sparse CSC `Ms`), in free space or
+        over a PEC image. A finite ground keeps the two-pass band:
         its image term comes from the Fresnel tables or the Sommerfeld
         remainder, built per band in numpy.
 
@@ -7255,11 +7265,16 @@ class SinusoidalSolver(
             return None
         if self._nec4_live(geom) or cos_shape != "cos" or _complex_k(k):
             return None
-        # `nec2_far_approx` lumps the far pairs inside `_field_tensor`, which
-        # the fused pass does not call: the two-pass band carries it.
-        if self._nec2_far_approx and not self._far_suspended:
-            return None
         ek = bool(self.extended_kernel)
+        # `nec2_far_approx` (momwire#2082 step 1): the kernel lumps the far
+        # pairs itself, as `_far_field_tensor`'s reduced-kernel twin does, to
+        # the bit. The extended kernel has no lumped twin (its far pairs are
+        # overlaid on the shipped tensors), so it keeps the two-pass band.
+        far_r = None
+        if self._nec2_far_approx and not self._far_suspended:
+            if ek or not _HAVE_FILL_ROWS_FAR:
+                return None
+            far_r = self._far_range_m(k)
         if not (_HAVE_FIELD_TENSOR_EK if ek else _HAVE_FIELD_TENSOR):
             return None
         for M in Ms:
@@ -7305,6 +7320,7 @@ class SinusoidalSolver(
         for M in Ms:
             csc += [M.indptr, M.indices, M.data]
         k = float(k)
+        far_kw = {} if far_r is None else {"far_r": far_r}
 
         def fill(i0, i1, out):
             _acc.sinusoidal_fill_rows(
@@ -7327,6 +7343,7 @@ class SinusoidalSolver(
                 *csc,
                 0,
                 self._cancel_flag,
+                **far_kw,
             )
 
         return fill

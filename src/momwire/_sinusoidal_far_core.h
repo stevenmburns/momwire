@@ -11,6 +11,7 @@
 #pragma once
 
 #include "_mw_nd.h"
+#include "_sinusoidal_core.h"
 
 #include <complex>
 #include <cstdint>
@@ -88,6 +89,13 @@ sinusoidal_far_overlay(
     std::complex<double> eps_t,
     double far_r,
     uintptr_t cancel_flag);
+
+// `sinusoidal_fill_rows` (`_sinusoidal_core.h`, momwire#2069) with the far
+// pairs lumped at `far_r` metres (momwire#2082 step 1): Z's rows with the
+// contraction fused in, the bits of `sinusoidal_field_tensor_far` (direct,
+// less the PEC image's when `img_c` is set) reduced by `reduce_phi_band`. The
+// reduced kernel only (`A.ek` refuses). The caller holds no GIL here.
+void sinusoidal_fill_rows_far(const FillRowsArgs &A, double far_r);
 
 // How many (observer, source) pairs of the given arrays have a centre
 // distance within `rel` of `far_r` (|d - far_r| <= rel * far_r): the pairs
