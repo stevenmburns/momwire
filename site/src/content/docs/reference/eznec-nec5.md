@@ -224,12 +224,12 @@ choice is the engine PATH you set. One family per EZNEC engine option, one
 for NEC-2 and one for 4nec2's NEC-2:
 
 ```text
-EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
+NEC-5 (EZNEC's External NEC-5, SimNEC's NEC-5, 4nec2's NEC-5):
 momwire-nec5.exe              the default — degree-2 B-spline (nec5-bs2)
 momwire-nec5-razor2p.exe     the tent basis with razor-blade path testing,
                               at NEC-5's two-point rule
 
-EZNEC's External NEC-4.2 slot:
+NEC-4.2 (EZNEC's External NEC-4.2, SimNEC's NEC-4.2, 4nec2's NEC-4.2):
 momwire-nec42.exe             the default — degree-2 B-spline (nec42-bs2)
 momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
@@ -248,8 +248,8 @@ The `momwire-nec2c` names are the [NEC-2 launchers](/reference/portal-usage/)
 that `pip install momwire` installs under the same names, frozen: they speak
 NEC-2's protocol (decks on standard input, printouts on standard output, the
 `-version` probe), not EZNEC's, and EZNEC has no NEC-2 engine slot to put
-them in. A name carrying `nec2c` is read before every other marker, so a
-copy named for NEC-2 is a NEC-2 engine. They run the engine once per run
+them in. A name carrying `nec2c` or `nec2d` is read before every other
+marker, so a copy named for NEC-2 is a NEC-2 engine. They run the engine once per run
 rather than keeping it resident. The `momwire-nec2d` names are the same program: a name
 carrying `nec2d` reads the same NEC-2 decks and solves them the same way, and
 writes the printout in LLNL's Fortran NEC-2 (NEC-2D) layout that 4nec2 reads.
@@ -289,7 +289,7 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
   leaves out the CURRENTS AND LOCATION table from that card on, as NEC-4.2
   does, and prints everything else. Every other `PT` form is refused.
 - **Geometry beyond `GW`:** `GM`, `GS`, the reflection `GX`, the wire arc
-  `GA`, and the helix `GH` as NEC-4.2 reads it. NEC-4.2's `GH` is not NEC-2's:
+  `GA`, the catenary `CW`, and the helix `GH` as NEC-4.2 reads it. NEC-4.2's `GH` is not NEC-2's:
   its real fields are the number of turns, the length along Z, the helix
   radius at each end and the wire radius at each end. A deck that writes
   NEC-2's `GH` fields (turn spacing, length, four radii, wire radius) means
@@ -311,7 +311,7 @@ each set of copies; NEC-4.2 stops on such a deck too. Delete the copy. A
 
 Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
 
-**Both slots solve with the extended thin-wire kernel** (since momwire#1326).
+**Both slots solve with the extended thin-wire kernel** (momwire#1326).
 NEC-5's own kernel behaves as the extended one, and NEC-4.2 has a single
 thin-wire model with no kernel switch: an `EK` card in a NEC-4.2 deck is read,
 echoed, and ignored, and the printout says so in NEC-4.2's own words, "THE EK
@@ -322,15 +322,9 @@ decks cannot take the extended kernel: a wire below the ground on
 `sinusoidal`, or two wires of different radii meeting at a junction on
 `sg`. Those decks are solved with the reduced kernel, and the
 engine logs an `ExtendedKernelDefault` advisory instead of refusing. On
-`bs2`, `razor2p` (since momwire#1614) and `sg` (since
-momwire#1626), a deck with wires below the ground keeps the extended kernel on
+`bs2`, `razor2p` (momwire#1614) and `sg` (momwire#1626), a deck with wires below the ground keeps the extended kernel on
 its above-ground wires; the buried wires use the reduced kernel, and the
 advisory says so.
-
-**The `momwire-eznec` launchers are gone** (0.80.0). They were what earlier
-releases said to point EZNEC at; point that path at the `momwire-nec5` name
-in the table [above](#names-changed-in-0800) instead, which answers
-identically and also works in SimNEC.
 
 Point EZNEC at a **launcher**, never at `momwire-engine.exe` — the
 engine answers correctly either way, but naming it directly gives up the
@@ -341,11 +335,12 @@ corpus — and answer in different formulations. `razor2p` is the tent basis
 with razor-blade path testing at NEC-5's two-point rule — the formulation
 NEC-5 itself uses.
 
-`razor-2p` and `razor-nec5` are **deprecated spellings** of the same basis
-(momwire#2091, #785/#794). A launcher copied under either name runs the same
-engine and answers identically, and line 2 of its printout ends in
-`(renamed from <name>)`; they will stop working in a later release. Use
-`momwire-nec5-razor2p.exe`.
+`razor-2p` is a **deprecated spelling** of the same basis (momwire#2091). A
+launcher copied under that name runs the same engine and answers
+identically, and line 2 of its printout ends in `(renamed from <name>)`; it
+will stop working in a later release. `razor-nec5` is **retired**
+(#785/#794): a launcher named for it refuses, by name, and says to use
+`razor2p`. Use `momwire-nec5-razor2p.exe`.
 
 ### Reproduction is not accuracy
 
@@ -418,8 +413,8 @@ mesh before it is information about either engine.
 `nec5-` (or `nec42-`) selects it, a Windows `.exe` stripped first. So a copy
 you make yourself works — copy a **launcher** (a couple of hundred kilobytes,
 not the engine), rename the copy to `momwire-nec5-<basis>.exe` (or
-`momwire-nec42-<basis>.exe`, or `momwire-nec2c-<basis>.exe` for NEC-2) in the
-same folder, and that basis answers in that slot. This is the same rule the [NEC-2 launcher's](/reference/portal-usage/)
+`momwire-nec42-<basis>.exe`, or `momwire-nec2c-<basis>.exe` for NEC-2, or
+`momwire-nec2d-<basis>.exe` for 4nec2's NEC-2) in the same folder, and that basis answers in that slot. This is the same rule the [NEC-2 launcher's](/reference/portal-usage/)
 `momwire-nec2c-<basis>` commands use, with one owner behind both. The bundle
 ships two per slot because that is what the parity work was about; the rest
 are a copy away:
@@ -438,9 +433,8 @@ needs, since SimNEC reads `nec5` in the path.
 The NEC-4.2 launchers carry `nec42` for the same reason: SimNEC recognises an
 engine by `nec42` in its name, as it does `nec5`, so `momwire-nec42.exe` is
 what its NEC-4.2 engine setting takes, in each of SimNEC's processing modes:
-single, batch (several runs in one deck, `NX` between them) and stream (`- -`)
-since momwire#1592. (Releases before momwire#1443 shipped
-them as `momwire-nec4[-<basis>].exe`.) A copy named with just `nec4` — no
+single, batch (several runs in one deck, `NX` between them) and stream
+(`- -`). A copy named with just `nec4` — no
 `2` — still answers EZNEC's NEC-4.2 slot, its basis read past `nec4-`.
 
 `sinusoidal` cannot answer the NEC-5 dialect — every deck in it drives a NODE, and
@@ -452,7 +446,7 @@ integral collapses the same delta to a well-defined drive, and it serves the
 corpus alongside the B-spline and razor families. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
 typo can never be served as the default. The match is case-insensitive, as
-Windows filenames are, so `Momwire-NEC5-Razor-2p.exe` is the twin too.
+Windows filenames are, so `Momwire-NEC5-Razor2p.exe` is the twin too.
 
 ### Refining the mesh at a feed on a fat wire
 
@@ -573,11 +567,11 @@ about 15-21 ms on Windows, which is why they are off unless asked for
 
 - **Geometry**: `GW` wires — straight, junctioned, tapered via stepped
   radii, exactly as EZNEC emits them (EZNEC resolves its own transforms
-  before writing the deck). Since momwire#1669, also the geometry cards
-  4nec2's NEC-5 package writes, each read as the licensed NEC-5 reads it
+  before writing the deck). Also the geometry cards
+  4nec2's NEC-5 package writes (momwire#1669), each read as the licensed NEC-5 reads it
   (measured as a black box):
-  - `GA`, the wire arc, and `GH`, the helix, each as **one wire** of its
-    segment count, so `EX` and `LD` address its nodes as they address a
+  - `GA`, the wire arc, `GH`, the helix, and `CW`, NEC-5's catenary, each
+    as **one wire** of its segment count, so `EX` and `LD` address its nodes as they address a
     `GW`'s. `GH` is read as NEC-4.2 and NEC-5 read it: turns, the length
     along Z, the helix radius at each end and the wire radius at each end.
     A `GH` whose two wire radii differ is refused, and so is a `GA` or `GH`
@@ -603,14 +597,14 @@ about 15-21 ms on Windows, which is why they are off unless asked for
   including phased multi-source drives; sources address nodes the way NEC-5
   does.
 - **Loads and networks**: `LD 4` impedance loads, `LD 5` wire conductivity,
-  `LD 2` / `LD 3` per-unit-length RLC (*added 2026-09-16, momwire#1088* —
+  `LD 2` / `LD 3` per-unit-length RLC (momwire#1088 —
   the shape antennaknobs' own NEC-5 writer emits for a jacketed wire, an
   `LD 2` inductance per metre beside an `LD 5`; the cards' capacitance
   field refuses, see the [nec2 grammar
   page](/reference/deck-grammar-nec2/#ld--loading) for the measurement),
   insulation (`IS`), transmission lines and non-radiating networks
   (`TL` / `NT`), including the mixed table layouts.
-- **Multi-run decks** (*added in 0.66, momwire#1237*): a deck with several
+- **Multi-run decks** (momwire#1237): a deck with several
   `EX … RP`/`XQ` blocks runs each block in turn, its `EX` cards replacing
   the source set, and prints the groups the way NEC-5 does. That is the
   shape SimNEC writes for an N-port measurement (one port at 1 V, the others
@@ -631,7 +625,7 @@ about 15-21 ms on Windows, which is why they are off unless asked for
   a measured 2–6 % of the licensed engine's captured cells, the same
   envelope class as the feedpoint impedances.
   The grid can be rectangular (`NE 0`: X, Y, Z in metres) or spherical
-  (`NE 1` / `NH 1`, *added momwire#1257*): R in metres, then θ measured from
+  (`NE 1` / `NH 1`, momwire#1257): R in metres, then θ measured from
   the zenith, then φ from +x toward +y, both in degrees, walked R fastest,
   then θ, then φ. That is NEC-5's order, which is not NEC-2's (NEC-2 puts φ
   second); an elevation angle is 90° − θ. The table prints X, Y, Z either
@@ -664,7 +658,7 @@ about 15-21 ms on Windows, which is why they are off unless asked for
 The refusals are part of the product, and the interesting ones are honest
 capability statements rather than deck errors:
 
-- **Buried wires now serve — with measured edges.** Wires strictly below
+- **Buried wires serve — with measured edges.** Wires strictly below
   the interface over the Sommerfeld ground get **impedance, currents,
   charges, the radiation pattern and the near field**: detached buried radials and screens,
   bonded radial screens and ground rods (the wire that crosses the
@@ -721,8 +715,8 @@ capability statements rather than deck errors:
   the buried wire instead (`EX 0,6,-1`) gives the same answer. That matches
   the licensed engine, which prints the same impedance for both. Every knot
   engine serves it (`bs2`, `bs1`, `razor2p`,
-  `sg`). *Since 0.79 (momwire#1569)* the node may also be
-  where several buried wires meet the one wire rising from it: radials
+  `sg`). The node may also be where several buried wires meet the one
+  wire rising from it (momwire#1569): radials
   starting at a vertical's base, say. With more than two wires at the node
   an address cannot say which branch the source sits in, so the source is
   the node port on the named rising wire, between that wire and the buried
@@ -752,9 +746,8 @@ capability statements rather than deck errors:
   there is no measured reading of the soil under it. Over the Sommerfeld
   ground (`GN 0` / `GN 2`) the same point serves, and over the perfect
   ground it serves as it does in the licensed engine.
-- **Cards outside the emitted dialect** — surface patches, geometry
-  generators (arcs, helices, catenaries), incident-wave excitation, load
-  types other than `LD 2` / `LD 3` / `LD 4` / `LD 5`, magnetic grounds —
+- **Cards outside the emitted dialect** — surface patches, incident-wave
+  excitation, load types other than `LD 2` / `LD 3` / `LD 4` / `LD 5`, magnetic grounds —
   refuse naming the card.
   EZNEC never writes these; a hand-written deck that does gets a sentence,
   not a guess.
@@ -773,7 +766,7 @@ sub-percent level, and the in-house razor-blade formulation
 
 ## The standalone executables
 
-Each release since 0.79 also carries the nec5-razor2p and nec5-bs2 engines as native
+Each release also carries the nec5-razor2p and nec5-bs2 engines as native
 programs with no Python in them, for Linux and, as previews, for Windows and
 macOS. They write the Python engines' printouts, one process per
 run, and SimNEC's streaming call works with them.
