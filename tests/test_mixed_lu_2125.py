@@ -462,9 +462,12 @@ def test_each_engine_runs_it_on_the_variable(no_features, name, deck):
 
 def test_a_badly_scaled_matrix_refines_past_its_backward_error(no_features):
     # sg on a SimNEC stream deck (45 unknowns, rows and columns spanning
-    # 1.5e5, kappa_1 3e7): the normwise backward error reaches u64 after two
-    # corrections while the answer is still 5e-10 from the flag-off one; the
-    # forward test (MIXED_FORWARD_TOLERANCE) takes the sweep that closes it.
+    # 1.5e5, kappa_1 3e7): the normwise backward error reaches the backward
+    # stop after two corrections while the answer is still 5e-10 from the
+    # flag-off one; the forward test (MIXED_FORWARD_TOLERANCE) takes the sweep
+    # that closes it. The bar is `_mixed_accept` (sqrt(n) u64, 7.4e-16 here),
+    # the one the stop applies once a column no longer contracts: x86-64
+    # lands at u64 (1.1e-16), macOS arm64's BLAS at 2.0e-16, both past it.
     from pathlib import Path
 
     deck = Path(__file__).parents[1] / "scripts/core_split/nx_decks"
@@ -474,7 +477,9 @@ def test_a_badly_scaled_matrix_refines_past_its_backward_error(no_features):
     before = _counts()
     z_on = 1 / build_solver(model, basis="sg").solver.compute_port_solution().y[0, 0]
     assert _moved(before)[0]["refined"] == 1
-    assert _lapack.MIXED_LAST["eta"][2] <= _lapack.MIXED_TOLERANCE
+    assert _lapack.MIXED_LAST["eta"][2] <= _lapack._mixed_accept(
+        _lapack.MIXED_LAST["n"]
+    )
     assert _lapack.MIXED_LAST["sweeps"] >= 3
     assert abs(z_on - z_off) <= 1e-11 * abs(z_off)
 
