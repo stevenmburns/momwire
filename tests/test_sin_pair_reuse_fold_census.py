@@ -2,9 +2,10 @@
 
 A deck whose rows repeat (the ELT whip: 0.92 M classes, 5.0 M band classes)
 used to hold every band's classes until one merge, a census five times its
-plan, and declined on the 256 MB budget. The census now holds each class
-once (`_sin_pair_reuse`, THE CENSUS). Here in miniature: a curtain of equal
-parallel wires, whose every band of rows sees most of the deck's classes.
+plan, and declined on the 256 MB budget of the time (momwire#2019). The
+census now holds each class once (`_sin_pair_reuse`, THE CENSUS). Here in
+miniature: a curtain of equal parallel wires, whose every band of rows sees
+most of the deck's classes.
 """
 
 from __future__ import annotations
@@ -26,12 +27,10 @@ pytestmark = pytest.mark.reach(4)
 LAM = 10.7
 WIRES, SEGS = 10, 41  # 410 segments: past SMALL_DECK_SEGS_FREE
 
-# The miniature's numbers at 8 workers (bands of 16 rows before the budget
-# cuts them): 168,100 pairs, 463 classes, 2,990 near pairs; a plan whose
-# fill is 0.90 MB beside a 0.64 MB class map. The census that held every
-# band's classes counted 2.58 MB (8.1 k band classes at 240 B), the fold
-# 1.26 MB. A 2 MB budget sits between them.
-BUDGET = 2 << 20
+# The miniature's numbers at 8 workers: 168,100 pairs, 463 classes, 2,990
+# near pairs; a plan whose fill is 0.90 MB beside a 0.64 MB class map. The
+# census that held every band's classes counted 2.58 MB (8.1 k band classes
+# at 240 B, bands of 16 rows), the fold 1.26 MB.
 BIG = 1 << 40
 
 
@@ -70,14 +69,15 @@ def _fill(pair_reuse=None):
     return G, s
 
 
-def test_a_deck_whose_rows_repeat_reuses_inside_the_budget(monkeypatch):
-    """The whip's failure in miniature: declined on the budget before the
-    fold, served now, with the classes a budget that never binds finds."""
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", BIG)
+def test_a_deck_whose_rows_repeat_reuses(monkeypatch):
+    """The whip's deck in miniature, served with the classes an allowance
+    that never binds finds (its bands follow the allowance: the same
+    plan)."""
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", BIG)
     lifted, s = _fill(pair_reuse=True)
     assert s.pair_reuse_declined is None
     pr.clear_shared_plans()
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", BUDGET)
+    monkeypatch.setattr(pr, "ALLOWANCE_BYTES", None)
     on, s = _fill(pair_reuse=True)
     assert s.pair_reuse_declined is None
     pairs, classes, near = s.pair_reuse_census["direct"]
@@ -85,19 +85,20 @@ def test_a_deck_whose_rows_repeat_reuses_inside_the_budget(monkeypatch):
     assert classes < pairs // 300
     report = s.fill_report(wires=False)["reuse"]
     assert report["state"] == "served"
-    assert report["census_peak_bytes"] <= BUDGET
+    # the fold's count, under what holding every band's classes counted
+    assert report["census_peak_bytes"] < 2_580_000
     assert on.tobytes() == lifted.tobytes()
 
 
 def test_the_census_holds_its_classes_once(monkeypatch):
     """What the census counts grows with the deck's classes: beside the map
-    and the bands in flight (`BAND_SHARE` of the budget), a few hundred
-    bytes a class, where holding each band's would be ~240 B per class per
-    band that sees it."""
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", BUDGET)
+    and the bands in flight (`BAND_SHARE` of the plan's allowance), a few
+    hundred bytes a class, where holding each band's would be ~240 B per
+    class per band that sees it."""
     _, s = _fill(pair_reuse=True)
     plan = next(iter(s._sin_reuse_plans.values()))[1]
-    held = plan.census_peak_bytes - plan.cls.nbytes - pr.BAND_SHARE * BUDGET
+    bands = pr.BAND_SHARE * pr.plan_allowance(plan.n_pairs)
+    held = plan.census_peak_bytes - plan.cls.nbytes - bands
     assert held < 600 * plan.n_classes + 8 * plan.n_near + (256 << 10)
 
 
@@ -120,7 +121,6 @@ class _Counting:
 def test_the_served_fill_evaluates_a_fraction_of_the_pairs(monkeypatch):
     """Adversarial: the kernel itself is counted, so a fill that declined,
     or one that reports reuse and evaluates every pair anyway, fails."""
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", BUDGET)
     counting = _Counting(acc)
     monkeypatch.setattr(sinusoidal, "_acc", counting)
     _, s = _fill(pair_reuse=True)
@@ -133,7 +133,6 @@ def test_the_served_fill_evaluates_a_fraction_of_the_pairs(monkeypatch):
 
 
 def test_off_is_the_shipped_fill_bit_for_bit(monkeypatch):
-    monkeypatch.setattr(pr, "PLAN_BUDGET_BYTES", BUDGET)
     base, _ = _fill()
     off, s = _fill(pair_reuse=False)
     assert s.pair_reuse_declined is None and s.pair_reuse_census == {}

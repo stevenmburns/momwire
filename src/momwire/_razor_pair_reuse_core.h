@@ -158,68 +158,58 @@ int64_t small_deck_segs(bool finite);
 // TEST HOOK: move the thresholds (a negative value restores its constant), so
 // the gates can run the reuse on cheap decks below them.
 void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
-// A census that keeps more classes than this fraction of its family's pairs
-// (the direct family's: n_blocks * n_seg^2; the remainder's: n_seg^2)
-// declines, "too few shared pairs to repay the plan", checked after every
-// chunk of rows so a poor deck stops within a chunk of the bound rather than
-// building its whole table. Without it the memory grows with the deck's
-// classes, up to one per pair: the maps are 4 B per pair per block whatever
-// the deck, but the census tables, the representatives and the per-k values
-// (32 B a class) grow with the classes. Measured, Rocketlake, the Python
-// route at 8 threads (momwire#1971 follow-up), peak RSS, reuse on / off:
+// THE ALLOWANCE (momwire#2123, the common core's `plan_allowance`): each
+// family keeps at most half its pairs as classes (`pair_reuse::class_cap`,
+// 2x compression; the direct family's pairs are n_blocks * n_seg^2, the
+// remainder's n_seg^2), checked after every chunk of rows, so a deck that
+// does not compress stops within a chunk of the cap, "more than C classes
+// for P pairs (the cap is 2x compression)"; and the kept plan (`Plan::nbytes` and one
+// wavenumber's class values, 32 B a class) is held to 4 B per pair per map
+// plus 56 B per class the cap allows, 32 B per pair per map, "the kept plan
+// would exceed its allowance of X MB". The census's own tables (its hash
+// tables, representatives and chunk buffers) are a transient freed before
+// the fill's Z is allocated: they are counted (`census_peak_bytes`) but not
+// bounded, the cap stopping them. One exception: the solve core keeps its Z
+// pool between solves of one context (`SolveContext::z_`), so there a
+// census for a NEW geometry runs beside the last solve's Z (a plan found in
+// the cache runs no census).
 //
-//   deck (segs)                 classes/pairs   no bound     3/4 (declines)
-//   75 random wires x 40 (3000) free    0.99    2045 / 296   1087 / 296
-//   the same over PEC                   0.99    3865 / 328   1955 / 328
-//   25 random wires x 40 (1000) Sommerfeld  0.98          331 / 131
-//   24 random radials x 40 (960) free   0.57     188 / 141   (served)
+// The cap replaced a 3/4 class fraction and a fixed 256 MB budget of plan
+// and census together (momwire#1971, #2019), which no fraction serving
+// sky_m24 (0.34 classes per pair) could hold at the hosted 3000-segment cap.
+// Measured then, Rocketlake, the Python route at 8 threads, peak RSS, reuse
+// on / off, with no bound:
+//
+//   deck (segs)                 classes/pairs   no bound
+//   75 random wires x 40 (3000) free    0.99    2045 / 296
+//   the same over PEC                   0.99    3865 / 328
+//   24 random radials x 40 (960) free   0.57     188 / 141
 //   the #1971 benchmark decks: fd_h27 0.0095, fd_h51 0.005, gfd_h51 0.003
 //     (remainder 0.001), p_m24 0.25, sky_m24 0.34, gsky_m24 0.34 (0.34)
 //
-// 3/4 serves every benchmark deck, the radial screens at random angles
-// (0.57 here, 0.73 for #1971's 24 x 40 off-axis hub, `KEY_BITS`' note) and
-// the gates' hairpin and lengthened loop (between 1/2 and 3/4: 1/2 declines
-// both), and turns away a deck whose pairs are nearly all distinct, at about
-// 120 B per class it kept: half the unbounded cost on the random decks
-// above. It does NOT hold the hosted bound (512 MB beyond one dense matrix)
-// at the hosted cap of 3000 segments, and no fraction that serves sky_m24
-// (0.34) can: 0.34 of 9e6 pairs at ~120 B is 0.37 GB in free space and
-// twice that over a ground: PLAN_BUDGET_BYTES, below, is that bound.
-constexpr double MAX_CLASS_FRACTION = 0.75;
-// The byte budget of the plan AND its census, at their peak: the plan's
-// maps (4 B per pair per block, the composing ground's remainder included),
-// groups and flags (`Plan::nbytes`) and one wavenumber's class values (32 B
-// a class), and the census's transient hash tables, representatives and
-// chunk buffers (about 80 B a class more, freed before the fill). The 512 MB
-// hosted bound is this 256 MB, plus one dense Z (144 MB at the 3000-segment
-// cap), plus headroom (Steve, 11-17). The maps are counted before any
-// census, so a deck whose maps alone pass it declines before allocating
-// them; each census then counts its tables (at 1.5x their capacity, the
-// peak of their last growth) and its classes (CLASS_BYTES, 41 B, each)
-// after every chunk of rows, as MAX_CLASS_FRACTION is checked, so a doomed
-// plan stops within a chunk of the budget; the finished plan is held to it
-// exactly. Past it the plan declines, "the plan and its census would exceed
-// the 256 MB budget". Measured, Rocketlake, Python route, 8 threads, the
-// estimate with the budget lifted (census + plan, MB) / peak RSS on vs off:
-//   fd_h27 42, fd_h51 90, gfd_h51 189: served under 256;
-//   sky_m24 334, p_m24 347, gsky_m24 729 (plan alone 226): declined under
-//     256 (accepted for gsky_m24, Steve 11-17); with the budget, gsky_m24
-//     peaks at 273 MB on / 243 off (802 served without it);
-//   3000-segment random wires: 321 / 297 MB free, 352 / 328 PEC (2045 and
-//     3865 before any bound).
-constexpr size_t PLAN_BUDGET_BYTES = size_t(256) << 20;
-// TEST HOOK: the budget in force (a value <= 0 restores PLAN_BUDGET_BYTES),
-// so a test can reach the decline on a small deck. A plan is keyed on the
-// budget it was built under. Bound for Python's tests only; nothing in the
-// executables sets it.
-void set_plan_budget(int64_t bytes);
-int64_t plan_budget();
-// Bytes of plans the process keeps between fills, one fill's budget
-// (momwire#2026): a long-lived server holds no more than a single fill may use.
-// The core's cache holds it (`pair_reuse::SHARED_PLAN_BYTES`).
-constexpr size_t SHARED_PLAN_BYTES = PLAN_BUDGET_BYTES;
-static_assert(SHARED_PLAN_BYTES == pair_reuse::SHARED_PLAN_BYTES,
-              "the core's cache keeps one razor fill's budget");
+// At the cap of 1/2 the random wires decline within a chunk of it, and the
+// radial screen at random angles (0.57), the gates' hairpin and lengthened
+// loop (between 1/2 and 3/4) decline too; every benchmark deck is served.
+//
+// Measured under the allowance (momwire#2123, i7-8550U, 8 threads, the
+// Python route), the 10-element Yagi (2,154 segments), which declined under
+// the 256 MB budget: free space, 0.85 M classes (5.5x), plan 51 MB, census
+// counted at 312 MB (363 B a class beyond the map) where the RSS rose 143 MB
+// over it (155 B a class), peak RSS 358 MB on / 280 off, |dZin| / |Zin|
+// 9e-14; Sommerfeld, 1.68 M + 0.83 M remainder classes (5.5x), plan 152 MB,
+// counted 658 MB (252 B a class) where the RSS rose 369 MB (132 B), peak
+// RSS 509 / 250, 7e-14. The count is the census's own estimate (its tables
+// at 1.5x capacity, vectors at their doubled reserve), so it reads about
+// twice the pages the census touches.
+// TEST HOOK: the kept plan's allowance in bytes in place of the derived one
+// (a value <= 0 restores it), so a test can reach that decline on a small
+// deck. A plan is keyed on the allowance it was built under. Bound for
+// Python's tests only; nothing in the executables sets it.
+void set_plan_allowance(int64_t bytes);
+// The allowance in force for a plan of these families' maps: the hook's
+// bytes, or the sum of `pair_reuse::plan_allowance` over every map.
+int64_t plan_allowance(const pair_reuse::Plan &p);
+int64_t plan_allowance_override();
 
 // What the plan reads. Views into the caller's arrays; the plan copies what
 // it keeps.

@@ -237,8 +237,8 @@ static py::object wire_map(const PlanRef &r, py::array_t<int32_t, py::array::c_s
 
 static py::tuple sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t, F64 seg_h, F64 a_obs,
                                      I64 src_type, I64 obs_type, int64_t rows, py::object src_rev,
-                                     py::object budget, int workers, py::object ground_z, py::object obs_rev,
-                                     int64_t band_bytes, bool shared) {
+                                     py::object allowance, int workers, py::object ground_z, py::object obs_rev,
+                                     int64_t band_bytes, bool shared, int keep) {
     const py::ssize_t M = obs_c.shape(0), N = src_c.shape(0);
     if (obs_c.ndim() != 2 || obs_c.shape(1) != 3 || obs_t.ndim() != 2 || obs_t.shape(0) != M ||
         src_c.ndim() != 2 || src_c.shape(1) != 3 || src_t.ndim() != 2 || src_t.shape(0) != N ||
@@ -267,22 +267,23 @@ static py::tuple sin_pair_reuse_plan(F64 obs_c, F64 obs_t, F64 src_c, F64 src_t,
         in.obs_rev = orev.data();
     }
     in.rows = rows;
-    in.budget = budget.is_none() ? -1 : budget.cast<int64_t>();
+    in.allowance = allowance.is_none() ? -1 : allowance.cast<int64_t>();
     in.workers = workers > 0 ? workers : pr::workers();
     in.band_bytes_per_pair = band_bytes;
     const bool ground = !ground_z.is_none();
     if (ground) in.ground_z = ground_z.cast<double>();
     Ptr p;
     bool built = true;
+    std::string why;
     {
         py::gil_scoped_release nogil;
         if (shared)
-            p = pr::shared_plan(in, ground, &built);
+            p = pr::shared_plan(in, ground, &built, &why, keep);
         else
-            p = ground ? pr::build_ground_plan(in) : pr::build_plan(in);
+            p = ground ? pr::build_ground_plan(in, &why) : pr::build_plan(in, &why);
     }
-    if (p == nullptr) return py::make_tuple(py::none(), built);
-    return py::make_tuple(PlanHandle{p, built}, built);
+    if (p == nullptr) return py::make_tuple(py::none(), built, why);
+    return py::make_tuple(PlanHandle{p, built}, built, py::str(""));
 }
 
 static py::tuple sin_pair_reuse_types(F64 seg_h, F64 a_obs, py::object src_a, py::object ind1, py::object ind2,
@@ -421,14 +422,14 @@ static py::dict sin_pair_reuse_stats(bool reset) {
     py::dict census;
     for (const pr::CensusEntry &e : pr::last_census()) census[py::str(e.block)] = py::make_tuple(e.pairs, e.classes, e.near);
     d["census"] = census;
-    d["budget"] = pr::plan_budget();
+    d["allowance"] = pr::plan_allowance_override();
     d["workers"] = pr::workers();
     return d;
 }
 
-static void sin_pair_reuse_configure(py::object budget, py::object small_free, py::object small_ground,
+static void sin_pair_reuse_configure(py::object allowance, py::object small_free, py::object small_ground,
                                      py::object workers, bool clear, py::object probe, py::object cache_bytes) {
-    if (!budget.is_none()) pr::set_plan_budget(budget.cast<int64_t>());
+    if (!allowance.is_none()) pr::set_plan_allowance(allowance.cast<int64_t>());
     if (!small_free.is_none() || !small_ground.is_none())
         pr::set_small_deck_segs(small_free.is_none() ? pr::small_deck_segs(false) : small_free.cast<int64_t>(),
                                 small_ground.is_none() ? pr::small_deck_segs(true) : small_ground.cast<int64_t>());
@@ -519,13 +520,15 @@ void register_sin_pair_reuse(py::module_ &m) {
         .def("ref", [](const PlanHandle &h) { return PlanRef{h.plan}; }, "The plan, held weakly.");
     m.def("sin_pair_reuse_plan", &sin_pair_reuse::sin_pair_reuse_plan, py::arg("obs_c"), py::arg("obs_t"),
           py::arg("src_c"), py::arg("src_t"), py::arg("seg_h"), py::arg("a_obs"), py::arg("src_type"),
-          py::arg("obs_type"), py::arg("rows"), py::arg("src_rev") = py::none(), py::arg("budget") = py::none(),
+          py::arg("obs_type"), py::arg("rows"), py::arg("src_rev") = py::none(), py::arg("allowance") = py::none(),
           py::arg("workers") = 0, py::arg("ground_z") = py::none(), py::arg("obs_rev") = py::none(),
-          py::arg("band_bytes") = -1, py::arg("shared") = false,
-          "momwire#1911 / #2063: the sinusoidal census and plan (with ground_z, the reflected term's): "
-          "(SinReusePlan or None where it declines on the budget, whether a census ran). `shared` reads "
-          "and keeps the process's cache; workers > 0 sets the band budget's worker count, band_bytes >= 0 "
-          "its bytes per pair.");
+          py::arg("band_bytes") = -1, py::arg("shared") = false, py::arg("keep") = 1,
+          "momwire#1911 / #2063 / #2123: the sinusoidal census and plan (with ground_z, the reflected "
+          "term's): (SinReusePlan or None where it declines, whether a census ran, the decline's reason or "
+          "''). `allowance` is the kept plan's bytes (None: 4 B per pair plus 56 B per class the 2x cap "
+          "allows). `shared` reads and keeps the process's cache (`keep`: its newest entries kept whatever "
+          "their size, 2 for a fill's second block); workers > 0 sets the census's worker count, "
+          "band_bytes >= 0 its band bytes per pair.");
     m.def("sin_pair_reuse_types", &sin_pair_reuse::sin_pair_reuse_types, py::arg("seg_h"), py::arg("a_obs"),
           py::arg("src_a") = py::none(), py::arg("ind1") = py::none(), py::arg("ind2") = py::none(),
           py::arg("seg_t") = py::none(),
@@ -548,12 +551,13 @@ void register_sin_pair_reuse(py::module_ &m) {
           "TESTS: `pair_reuse::BandBudget` over a census holding base + per bytes a band folded: "
           "peak (None: stopped), started, folded, max_in_flight.");
     m.def("sin_pair_reuse_stats", &sin_pair_reuse::sin_pair_reuse_stats, py::arg("reset") = false,
-          "momwire#1911: the reuse counters (plans built, of those over budget, found; both routes), the C++ "
+          "momwire#1911: the reuse counters (plans built, of those declined, found; both routes), the C++ "
           "fill's last outcome ('', 'served' or the decline reason) and census per block; reset first.");
-    m.def("sin_pair_reuse_configure", &sin_pair_reuse::sin_pair_reuse_configure, py::arg("budget") = py::none(),
+    m.def("sin_pair_reuse_configure", &sin_pair_reuse::sin_pair_reuse_configure, py::arg("allowance") = py::none(),
           py::arg("small_free") = py::none(), py::arg("small_ground") = py::none(), py::arg("workers") = py::none(),
           py::arg("clear") = false, py::arg("probe") = py::none(), py::arg("cache_bytes") = py::none(),
-          "TEST HOOK (momwire#1911): the C++ fill's reuse budget (<= 0 restores 256 MB), small-deck thresholds "
+          "TEST HOOK (momwire#1911): the C++ fill's kept-plan allowance per plan (<= 0 restores the derived "
+          "one, momwire#2123), small-deck thresholds "
           "(< 0 restores each), census worker count (<= 0: the OpenMP team's), the adversarial probe (0 none), "
           "the plan cache's bytes (< 0 restores it, 0 keeps none); clear drops the kept plans.");
     m.attr("sin_pair_reuse_cxx") = true;

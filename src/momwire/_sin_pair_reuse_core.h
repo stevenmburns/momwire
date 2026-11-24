@@ -22,14 +22,19 @@
 //   (`canonical`); the near rule, max(|z|, rho) < 4 max(2H, a);
 // - the classes renumbered by a stable sort on the representative's
 //   observer type (the direct plan), so each radius's classes are one run;
-// - THE BUDGET's accounting, Python's figures (`pair_reuse::BandBudget`):
-//   what one running `IntGroups` fold table would hold (its keys and slots,
-//   9 B per class, 8 B per near pair, the class map) plus
-//   `BAND_BYTES_PER_PAIR` per band in flight, bands of `band_rows` rows
-//   started over `workers`, and the plan's fill (`fill_nbytes`) held to what
-//   is left. So a deck declines where the numpy census declined, at the same
-//   worker count, and reports the same census peak. The census's own tables
-//   are `IntGroups` too, one per part.
+// - THE ALLOWANCE (momwire#2123, the common core's): each plan (the direct
+//   block's, the image's or the reflected term's, each its own class map)
+//   keeps at most M N / 2 classes, the census stopping once it passes that
+//   (`pair_reuse::class_cap`), and its fill (`fill_nbytes`) is held to
+//   `pair_reuse::plan_allowance(M N)`, 32 B a pair; the census also stops
+//   once the least the finished plan would keep passes that (the .cpp's
+//   KEPT_BYTES_PER_CLASS). The census's peak is
+//   counted in Python's figures (`pair_reuse::BandBudget`, unbounded): what
+//   one running `IntGroups` fold table would hold (its keys and slots, 9 B
+//   per class, 8 B per near pair, the class map) plus `BAND_BYTES_PER_PAIR`
+//   per band in flight, bands of `band_rows` rows started over `workers`,
+//   each cut to BAND_SHARE of the allowance. The census's own tables are
+//   `IntGroups` too, one per part.
 //
 // THE VALUES are the shipped kernel's, called as the fill calls it: the
 // canonical observer row against `EVAL_CHUNK` classes of one observer radius
@@ -70,27 +75,24 @@ constexpr int64_t SMALL_DECK_SEGS_FREE = 400;
 constexpr int64_t SMALL_DECK_SEGS_GROUND = 200;
 constexpr int CODE_BITS = 2;
 constexpr int64_t CODED_PAIRS = int64_t(1) << (31 - CODE_BITS);
-constexpr int64_t PLAN_BUDGET_BYTES = int64_t(256) << 20;
 constexpr int64_t VALUE_BYTES = 48;
 constexpr int64_t BAND_BYTES_PER_PAIR = 136;
 constexpr int64_t GROUND_BAND_BYTES_PER_PAIR = 168;
 constexpr double BAND_SHARE = 0.25;
 constexpr int64_t PLAN_FLOOR_BYTES_PER_CLASS = VALUE_BYTES + 8;
+static_assert(PLAN_FLOOR_BYTES_PER_CLASS == mw::pair_reuse::PLAN_FLOOR_BYTES_PER_CLASS,
+              "the allowance's per-class floor is sinusoidal's values and index");
 // The core's cache tag.
 const char *const BASIS = "sinusoidal";
 
-// The decline sentence for a plan past `budget` bytes (the core's), and for
-// the budget in force.
-std::string over_budget_reason(int64_t budget);
-std::string over_budget_reason();
-
 // TEST HOOKS, bound for Python's tests only; nothing in the executables sets
-// them. The budget in force (<= 0 restores PLAN_BUDGET_BYTES), the small-deck
-// thresholds (< 0 restores each constant), and the census's worker count
-// (<= 0: the OpenMP team's, `_workers()`'s counterpart). A plan is keyed on
-// the budget it was built under, as Python's.
-void set_plan_budget(int64_t bytes);
-int64_t plan_budget();
+// them. The C++ fill's kept-plan allowance in bytes, per plan (<= 0 restores
+// the derived one, `pair_reuse::plan_allowance`; read back as -1), the
+// small-deck thresholds (< 0 restores each constant), and the census's
+// worker count (<= 0: the OpenMP team's, `_workers()`'s counterpart). A plan
+// is keyed on the allowance it was built under, as Python's.
+void set_plan_allowance(int64_t bytes);
+int64_t plan_allowance_override();
 void set_small_deck_segs(int64_t free_space, int64_t finite_ground);
 int64_t small_deck_segs(bool finite);
 void set_workers(int workers);
@@ -174,20 +176,26 @@ struct CensusInputs {
     const int64_t *src_rev = nullptr, *obs_rev = nullptr;  // null: keyed along the stored tangents
     double ground_z = 0.0;
     int64_t rows = 1;     // the census's swept rows (`census_rows`)
-    int64_t budget = -1;  // bytes, < 0 for none
+    int64_t allowance = -1;  // the kept plan's bytes, < 0: pair_reuse::plan_allowance(M N)
     int workers = 1;
     int64_t band_bytes_per_pair = -1;  // < 0: BAND_BYTES_PER_PAIR (ground: GROUND_...)
 };
 
-// `build_plan` / `build_ground_plan`, uncached; null is `OVER_BUDGET`.
-std::shared_ptr<const Plan> build_plan(const CensusInputs &in);
-std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in);
+// The allowance a plan of these inputs is held to (`CensusInputs::allowance`).
+int64_t allowance_of(const CensusInputs &in);
+
+// `build_plan` / `build_ground_plan`, uncached; null where it declines, and
+// `why` (when given) the reason, `pair_reuse_declined`'s words.
+std::shared_ptr<const Plan> build_plan(const CensusInputs &in, std::string *why = nullptr);
+std::shared_ptr<const Plan> build_ground_plan(const CensusInputs &in, std::string *why = nullptr);
 
 // The plan of these inputs from the process's cache (the core's, keyed on
-// every array the census reads, the budget, the rows and the test hooks in
-// force), else built and kept, a declined one too. Null: declined.
-// `built` says whether this call ran the census.
-std::shared_ptr<const Plan> shared_plan(const CensusInputs &in, bool ground, bool *built = nullptr);
+// every array the census reads, the allowance, the rows and the test hooks
+// in force), else built and kept, a declined one too. Null: declined, and
+// `why` the reason. `built` says whether this call ran the census. `keep`
+// is the core's (`pair_reuse::plan_for`): 2 for a fill's second block.
+std::shared_ptr<const Plan> shared_plan(const CensusInputs &in, bool ground, bool *built = nullptr,
+                                        std::string *why = nullptr, int keep = 1);
 void clear_shared_plans();
 
 // Plans built (censuses run), of those the ones over budget, and plans found
