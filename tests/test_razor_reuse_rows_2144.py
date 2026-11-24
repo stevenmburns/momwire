@@ -45,7 +45,7 @@ def _clean(monkeypatch):
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     acc.razor_reuse_probe(0)
-    acc.razor_reuse_plan_budget(0)
+    acc.razor_reuse_plan_allowance(0)
     acc.razor_reuse_cache_clear()
     # cheap decks, below the small-deck thresholds on purpose
     acc.razor_reuse_set_small_deck_segs(0, 0)
