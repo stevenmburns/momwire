@@ -61,11 +61,22 @@ setup does; 4nec2 only passes that name to the batch file, which ignores
 it), and leave **Wait in DOS box** unticked: 4nec2 then tells the batch
 file not to pause, and no key press is needed.
 
-**NEC-2 is not supported in 4nec2.** 4nec2's NEC-2 engines read a NEC-2
-deck and write the NEC-2D printout layout, which momwire does not write.
-Don't point a NEC-2 engine choice at a NEC-4.2 launcher: it would read the
-NEC-2 deck under NEC-4.2's rules. (momwire's `momwire-nec2c` launchers are
-SimNEC's NEC-2 engine; 4nec2 does not read their printout.)
+**NEC-2.** 4nec2's NEC-2 engines are its bundled `nec2dxs` builds of
+NEC-2D, and 4nec2 reads their printout layout and no other. So the
+launchers for that slot are the `momwire-nec2d` pair: the same engine as
+`momwire-nec2c`, writing NEC-2D's layout. Make the same edit in the copy's
+`exe\4nec2.bat`, with one of
+
+```text
+C:\momwire\momwire-nec2d.exe < nec2d.tmp              the default (nec2d-bs2)
+C:\momwire\momwire-nec2d-sinusoidal.exe < nec2d.tmp   NEC-2's own formulation (the twin)
+```
+
+and choose one of 4nec2's own NEC-2 engines in **Settings → Nec engine**,
+with **Wait in DOS box** unticked. Don't point a NEC-2 engine choice at a
+NEC-4.2 launcher: it would read the NEC-2 deck under NEC-4.2's rules.
+(The `momwire-nec2c` launchers are SimNEC's NEC-2 engine; 4nec2 does not
+read their printout.)
 
 4nec2 reuses a model's last printout, without running the engine, when the
 model has not changed since. After switching engines, edit the model or
@@ -208,9 +219,9 @@ solved.
 
 ## Choosing the formulation
 
-The bundle carries six launchers and the one engine they run, and the
-choice is the engine PATH you set. One family per EZNEC engine option, and
-one for NEC-2:
+The bundle carries eight launchers and the one engine they run, and the
+choice is the engine PATH you set. One family per EZNEC engine option, one
+for NEC-2 and one for 4nec2's NEC-2:
 
 ```text
 EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
@@ -226,6 +237,10 @@ SimNEC's NEC-2 engine, and nec2c's command line:
 momwire-nec2c.exe             the default — degree-2 B-spline (nec2c-bs2)
 momwire-nec2c-sinusoidal.exe  the sinusoidal basis, point matched
 
+4nec2's NEC-2 engine (the same, printing NEC-2D's layout):
+momwire-nec2d.exe             the default — degree-2 B-spline (nec2d-bs2)
+momwire-nec2d-sinusoidal.exe  the sinusoidal basis, point matched
+
 momwire-engine.exe            the compute engine the launchers run
 ```
 
@@ -235,7 +250,9 @@ NEC-2's protocol (decks on standard input, printouts on standard output, the
 `-version` probe), not EZNEC's, and EZNEC has no NEC-2 engine slot to put
 them in. A name carrying `nec2c` is read before every other marker, so a
 copy named for NEC-2 is a NEC-2 engine. They run the engine once per run
-rather than keeping it resident.
+rather than keeping it resident. The `momwire-nec2d` names are the same program: a name
+carrying `nec2d` reads the same NEC-2 decks and solves them the same way, and
+writes the printout in LLNL's Fortran NEC-2 (NEC-2D) layout that 4nec2 reads.
 
 The name picks the deck dialect as well as the basis, so a `momwire-nec42`
 name belongs in EZNEC's NEC-4.2 slot and a `momwire-nec5` name in its NEC-5

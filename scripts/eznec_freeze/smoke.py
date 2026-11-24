@@ -137,6 +137,9 @@ Fourteen gates, derived from the seam's own contract (momwire#497 U1):
    differently from the default.  And ``momwire-nec2c --selftest`` prints
    ``PASS``: it spawns the engine again as ``-m momwire.dropin.nec2c``, which
    in a bundle is this exe, so it is the gate on that spelling too.
+   The NEC-2D names (``NEC2D_LAUNCHERS``, momwire#2138) are held to the same
+   two answers, their stream under NEC-2D's banner (its wall-clock FILL and
+   RUN TIME fields masked).
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -229,8 +232,10 @@ def _nec4_launchers() -> tuple[str, ...]:
 
 
 def _nec2_launchers() -> tuple[str, ...]:
-    """``build.py``'s NEC-2 names (SimNEC's NEC-2 engine, momwire#2059)."""
-    return tuple(_build_module().NEC2_LAUNCHERS)
+    """``build.py``'s NEC-2 names (SimNEC's NEC-2 engine, momwire#2059) and
+    NEC-2D names (4nec2's NEC-2 engine, momwire#2138)."""
+    build = _build_module()
+    return (*build.NEC2_LAUNCHERS, *build.NEC2D_LAUNCHERS)
 
 
 # Two serving decks spanning the seam's range — a bare-wire rung-1 model and
@@ -1205,6 +1210,7 @@ NEC2_STREAM = (
     "catalog_verticals_vertical",
 )
 NEC2_BANNER = "VERSION:nec2c.ae6ty.momwire"
+NEC2D_BANNER = "NUMERICAL ELECTROMAGNETICS CODE (NEC-2D)"
 
 
 def _nec2_canon(data: bytes) -> str:
@@ -1215,7 +1221,10 @@ def _nec2_canon(data: bytes) -> str:
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.canonicalize_timings(data.decode("latin-1"))
+    text = module.canonicalize_timings(data.decode("latin-1"))
+    # The NEC-2D layout's wall-clock fields (momwire#2138).
+    text = re.sub(r"FILL= *[\d.]+ SEC\.,  FACTOR= *[\d.]+ SEC\.", "FILL= T", text)
+    return re.sub(r" RUN TIME = *[\d.]+", " RUN TIME = T", text)
 
 
 def _nec2_module(
@@ -1283,13 +1292,19 @@ def _gate_nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
         elif text != _nec2_canon(module.stdout):
             print(f"FAIL {launcher.name} (NX stream): stdout is not the module's")
             failures += 1
-        elif NEC2_BANNER not in text or solved < len(NEC2_STREAM):
+        elif (NEC2D_BANNER if "nec2d" in stem else NEC2_BANNER) not in text or (
+            solved < len(NEC2_STREAM)
+        ):
             print(
-                f"FAIL {launcher.name} (NX stream): {solved} solves under "
-                f"{NEC2_BANNER!r}, expected {len(NEC2_STREAM)}"
+                f"FAIL {launcher.name} (NX stream): {solved} solves, expected "
+                f"{len(NEC2_STREAM)} under its banner"
             )
             failures += 1
-        elif stem.endswith("-sinusoidal") and f"{NEC2_BANNER}.9.1+sin" not in text:
+        elif (
+            stem.endswith("-sinusoidal")
+            and "nec2c" in stem
+            and f"{NEC2_BANNER}.9.1+sin" not in text
+        ):
             print(f"FAIL {launcher.name}: not under the sinusoidal banner")
             failures += 1
         else:
