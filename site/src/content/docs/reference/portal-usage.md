@@ -442,18 +442,29 @@ printout, in any mode.
 A big deck repeats itself: many pairs of segments sit in the same pose
 relative to each other. `MOMWIRE_X_PAIR_REUSE=1`, set in the environment
 SimNEC starts the engine in, fills each class of repeated pairs once and
-copies the result to the rest. It is **off by default**. On the
-`sinusoidal` route (`momwire-nec2c-sinusoidal`, `momwire-nec2d-sinusoidal`) it finds the classes itself,
-in free space and over a perfect or finite ground, on decks large enough to
-pay for the search; a small deck runs the ordinary fill. It moves Z by at
-most about 5e-10 relative, far below the printed digits.
+copies the result to the rest. It is one switch for every drop-in and every
+standalone executable, and each turns on its own engine's reuse. It is
+**off by default**.
 
-It is certified for the drop-ins on Linux and Windows. On
-macOS it runs the same code, not yet certified there. This launcher's
-printout keeps nec2c's layout and does not name it; the NEC-4.2 and NEC-5
-drop-ins name it on printout line 2 (`+pair_reuse`, followed by
-`uncertified on this platform` on macOS). The standalone executables refuse
-it.
+- **`sinusoidal`** (`momwire-nec2c-sinusoidal`, `momwire-nec2d-sinusoidal`,
+  `momwire-nec42-sinusoidal`, and the nec42-sinusoidal and nec2c-sinusoidal
+  executables) finds the classes itself, in free space and over a perfect or
+  finite ground, on decks large enough to pay for the search; a small deck
+  runs the ordinary fill. It moves Z by at most about 5e-10 relative.
+- **`razor2p`** (the NEC-5 drop-in and the nec5-razor2p executable) does the
+  same, and moves Z by at most about 2e-9 relative.
+  `MOMWIRE_X_RAZOR_PAIR_REUSE` is its older spelling and still works; when
+  it is set, it decides.
+- **`bs2`** on the drop-ins fills each uniform wire's own entries once per
+  segment offset. The nec5-bs2 and nec42-bs2 executables accept the switch
+  and run the ordinary fill: their reuse is not ported yet.
+
+Every one of these is far below the printed digits. It pays where one
+geometry is solved many times; if it is slower on your deck, turn it off.
+
+The NEC-4.2 and NEC-5 printouts name it on line 2 (`+pair_reuse`) wherever
+it runs; on macOS the `bs2` drop-in adds `uncertified on this platform`.
+The NEC-2 printout keeps nec2c's layout and does not name it.
 
 ### Mixed-precision solve
 

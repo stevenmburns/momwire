@@ -189,6 +189,19 @@ thread variables is [on the EZNEC page](/reference/eznec-nec5/#threads).
 - **A chain of related decks**: stream it through one process (`- -`)
   rather than launching the program once per deck.
 
+## Fill reuse
+
+Set `MOMWIRE_X_PAIR_REUSE=1` to fill each class of repeated segment pairs
+once and copy the result to the rest. It is the same switch the Python
+drop-ins take, and every program here accepts it: nec5-razor2p,
+nec42-sinusoidal and nec2c-sinusoidal run their own engine's reuse, and
+nec5-bs2 and nec42-bs2 run the ordinary fill, because their reuse is not
+ported yet. It is off by default, and it moves Z far below the printed
+digits. It pays where one geometry is solved many times; if it is slower on
+your deck, turn it off.
+[Pair reuse within one fill](/reference/portal-usage/#pair-reuse-within-one-fill)
+has the details.
+
 ## Where the time goes
 
 For measured run times against the licensed NEC-5 console engine, see
