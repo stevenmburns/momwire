@@ -1129,6 +1129,23 @@ _BS2_REUSE_DECKS = {
         "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 51 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
     ),
 }
+# Three in a row at one height (213 segments): blocks (1, 2) and (2, 3) are
+# alike, so the image term copies between edges (momwire#2074), which two
+# dipoles never do (their one cross block and its reverse are both sources).
+_ROW3 = (
+    "GW 1 71 0 -2.5 6 0 2.5 6 0.001\nGW 2 71 2.3 -2.5 6 2.3 2.5 6 0.001\n"
+    "GW 3 71 4.6 -2.5 6 4.6 2.5 6 0.001\n"
+)
+_BS2_REUSE_DECKS["pec-row"] = (
+    "CM momwire#2074: three dipoles in a row over a perfect ground\nCE\n"
+    + _ROW3
+    + "GE 1\nGN 1\nEX 0 2 36 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+)
+_BS2_REUSE_DECKS["sommerfeld-row"] = (
+    "CM momwire#2074: three dipoles in a row over Sommerfeld ground\nCE\n"
+    + _ROW3
+    + "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 2 36 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+)
 
 
 def _no_bs2_reuse_vars(monkeypatch):
