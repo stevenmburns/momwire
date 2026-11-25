@@ -113,10 +113,11 @@ executable after 0.93.0, warm runs:
 
 ## Fill reuse
 
-The `razor_pair_reuse` feature fills each class of
-repeated segment pairs once and copies the result. It is off by default and
-turned on with `MOMWIRE_X_RAZOR_PAIR_REUSE=1`. The printed impedances are
-identical with it on and off.
+Fill reuse fills each class of repeated segment pairs once and copies the
+result. It is off by default and turned on with `MOMWIRE_X_PAIR_REUSE=1`,
+the one switch every drop-in and executable takes
+(`MOMWIRE_X_RAZOR_PAIR_REUSE=1`, its older spelling on `razor2p`, does the
+same). The printed impedances are identical with it on and off.
 
 These runs used the same machine and a main-branch executable at default
 threads:
