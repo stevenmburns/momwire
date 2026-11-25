@@ -1318,10 +1318,11 @@ def _render_structure(printer: _Printer, body: str) -> tuple[list[str], int]:
     """One structure under the launcher's end-cap default (the portal's
     :func:`~._portal.render_deck` rule)."""
     _p._save_deck(body)
-    if _p._active_basis_name == _p._END_CAP_BASIS:
-        with _nec2_end_cap.launcher_default():
-            return printer.structure(body)
-    return printer.structure(body)
+    with _features.pragma_scope(body):
+        if _p._active_basis_name == _p._END_CAP_BASIS:
+            with _nec2_end_cap.launcher_default():
+                return printer.structure(body)
+        return printer.structure(body)
 
 
 def nec2d_seam() -> Seam:

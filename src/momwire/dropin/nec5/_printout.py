@@ -259,6 +259,11 @@ def engine_stamp(basis: str) -> str:
     features = _features.stamp(solver=_features.basis_solver(basis))
     if features:
         tail += f" {features}"
+    # A deck's pragma card this route ignores (`_features.pragma_note`):
+    # after the features, before the rename note.
+    pragmas = _features.pragma_note()
+    if pragmas:
+        tail += f" {pragmas}"
     note = deprecation_note(basis) or deprecation_note(spelling())
     if note:
         tail += f" {note}"
