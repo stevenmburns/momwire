@@ -28,9 +28,15 @@ tests/test_deck_pragma_dropin.py.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from momwire import _features as F
+
+ROOT = Path(__file__).resolve().parents[1]
+EXE_MAIN = ROOT / "standalone" / "momwire_razor2p.cpp"
 
 
 @pytest.fixture
@@ -139,6 +145,31 @@ def test_the_pragma_features_are_the_ones_that_cannot_change_the_answer():
         if not f.pragma:
             assert not F.pragma_eligible(name), name
     assert not F.pragma_eligible("no_such_feature")
+
+
+def _exe_pragma_list() -> list[str]:
+    m = re.search(
+        r"const char \*const PRAGMA_FEATURES\[\] = \{([^}]*)\};", EXE_MAIN.read_text()
+    )
+    assert m, "PRAGMA_FEATURES not found in the executables' main"
+    return re.findall(r'"([^"]+)"', m[1])
+
+
+def test_the_executables_pragma_list_is_the_registrys():
+    names = _exe_pragma_list()
+    assert sorted(names) == sorted(PRAGMA) and len(names) == len(PRAGMA)
+
+
+def test_the_executables_take_pair_reuse_only():
+    # Owner decision (momwire#1338): rotational symmetry is the drop-ins'
+    # alone, so the executables carry no row for it and a pragma for it
+    # there is ignored (named on line 2), never refused. pair_reuse reaches
+    # every executable.
+    src = EXE_MAIN.read_text()
+    table = re.search(r"const ExeFeature EXE_FEATURES\[\] = \{(.*?)\n\};", src, re.S)
+    carried = set(re.findall(r'\{"([a-z_0-9]+)",', table[1]))
+    assert "pair_reuse" in carried
+    assert "rotational_symmetry" not in carried
 
 
 # --- the scope --------------------------------------------------------------------

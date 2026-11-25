@@ -1090,6 +1090,12 @@ std::string requested_stamp() {
 
 void stamp_uncertified(bool on) { g_stamp_uncertified = on; }
 
+void reset_requested() {
+    g_requested = default_requested();
+    g_stamped = Features{};
+    g_stamp_uncertified = false;
+}
+
 FeatureFill::FeatureFill() : saved_(g_active), saved_taken_(g_crossing_taken) {
     g_active = g_requested;
     g_crossing_taken = false;  // one fill, one `_CrossingFill`

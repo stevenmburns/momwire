@@ -112,6 +112,7 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mws, mwas, stamp_uncertified(on)); }
 inline void stamp_note(const std::string &note) { MW_PICK(mws, mwas, stamp_note(note)); }
+inline void reset_features() { MW_PICK(mws, mwas, reset_features()); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mws, mwas, reuse_plans(built, declined, found));
 }
@@ -145,6 +146,7 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mw, mwa, stamp_uncertified(on)); }
 inline void stamp_note(const std::string &note) { MW_PICK(mw, mwa, stamp_note(note)); }
+inline void reset_features() { MW_PICK(mw, mwa, reset_features()); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mw, mwa, reuse_plans(built, declined, found));
 }
@@ -627,11 +629,15 @@ std::string g_name_variant;
 std::string g_name_note;
 #endif
 
+// What the environment asked for (`features_requested`), once it passed
+// `feature_refusal`: what every deck runs with, bar its own pragma cards.
+std::vector<std::string> g_env_asked;
+
+void configure_asked(const std::vector<std::string> &asked, const std::string &pragma_note);
+
 // One sentence on stderr and exit 2 when a feature this executable does not
 // run is on; 0 (go on) otherwise, with the ones it runs asked of both copies
-// of the C++ route. A default-on feature (`feature_default_here`) is asked
-// too unless its variable is set, and, as in `_features.stamp`, line 2 names
-// only the features on whose default here is off.
+// of the C++ route (`configure_asked`).
 int feature_refusal() {
     const std::vector<std::string> asked = features_requested();
     for (const std::string &name : asked) {
@@ -642,6 +648,18 @@ int feature_refusal() {
                      name.c_str(), 'y');
         return 2;
     }
+    g_env_asked = asked;
+    configure_asked(asked, "");
+    return 0;
+}
+
+// The features `asked` asks of both copies of the C++ route, from their
+// start (the default-on ones only). A default-on feature
+// (`feature_default_here`) is asked too unless its variable is set, and, as
+// in `_features.stamp`, line 2 names only the features on whose default here
+// is off; `pragma_note` (`_features.pragma_note`) follows them there.
+void configure_asked(const std::vector<std::string> &asked, const std::string &pragma_note) {
+    g_feature_stamp.clear();
     // The C++ route requests the default-on features from the start
     // (`ni_eval`); one set off here, or outside this level's reach, is
     // withdrawn. Asked on, a default-here one is already requested and
@@ -714,17 +732,132 @@ int feature_refusal() {
         rt_serial::stamp_uncertified(true);
         rt_threads::stamp_uncertified(true);
     }
+    // line 2's notes after the features, as `_printout.engine_stamp` writes
+    // them: the deck's ignored pragma cards, then (fat build) a deprecated
+    // variant name's (`pick_variant`), as Python's basis rename note
+    std::string note = pragma_note;
 #if MW_EXE_FAT
-    // a deprecated variant name (`pick_variant`): its note ends line 2, after
-    // the features, as Python's basis rename note does (`_printout.engine_stamp`)
-    if (!g_name_note.empty()) {
-        g_feature_stamp += (g_feature_stamp.empty() ? "" : " ") + g_name_note;
-        rt_serial::stamp_note(g_name_note);
-        rt_threads::stamp_note(g_name_note);
-    }
+    if (!g_name_note.empty()) note += (note.empty() ? "" : " ") + g_name_note;
 #endif
-    return 0;
+    if (!note.empty()) {
+        g_feature_stamp += (g_feature_stamp.empty() ? "" : " ") + note;
+        rt_serial::stamp_note(note);
+        rt_threads::stamp_note(note);
+    }
 }
+
+// --- per-deck pragmas (`_features.deck_pragmas`, momwire's pragma cards) -----
+//
+// A deck's `CM momwire: <name>` card asks for feature <name> for that deck
+// alone, as its variable set on would: the variable set either way wins (0 is
+// the user's kill switch), and it goes the way `feature_refusal` sends the
+// variable (`configure_asked`), so a whole whose part this basis lacks is
+// withheld as there. Only the registry's pragma features (`Feature.pragma`,
+// tests/test_features_registry.py holds this list to it) that this
+// executable carries are taken; any other name is ignored, never refused,
+// and named on line 2 ("(pragma ignored: ...)"). The reader is Python's,
+// character for character (tests/test_deck_pragma.py).
+const char *const PRAGMA_FEATURES[] = {"pair_reuse", "rotational_symmetry"};
+
+bool pragma_blank(char c) { return c == ' ' || c == '\t'; }
+
+std::vector<std::string> deck_pragmas(const std::string &text) {
+    std::vector<std::string> names;
+    std::size_t at = 0;
+    while (at <= text.size()) {
+        std::size_t end = text.find_first_of("\r\n", at);
+        if (end == std::string::npos) end = text.size();
+        std::size_t k = at;
+        while (k < end && pragma_blank(text[k])) k++;
+        const bool cm = end - k >= 2 && (text[k] == 'C' || text[k] == 'c') &&
+                        (text[k + 1] == 'M' || text[k + 1] == 'm');
+        if (cm) {
+            k += 2;
+            while (k < end && pragma_blank(text[k])) k++;
+            static const char prefix[] = "momwire:";
+            const std::size_t n = sizeof prefix - 1;
+            bool match = end - k >= n;
+            for (std::size_t j = 0; match && j < n; j++)
+                match = std::tolower(static_cast<unsigned char>(text[k + j])) == prefix[j];
+            if (match) {
+                k += n;
+                while (k < end && pragma_blank(text[k])) k++;
+                std::string name;
+                for (; k < end; k++) {
+                    const unsigned char c = static_cast<unsigned char>(text[k]);
+                    const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                      (c >= '0' && c <= '9') || c == '_';
+                    if (!word) break;
+                    name += static_cast<char>(std::tolower(c));
+                }
+                if (!name.empty() && std::find(names.begin(), names.end(), name) == names.end())
+                    names.push_back(name);
+            }
+        }
+        at = end + 1;
+    }
+    return names;
+}
+
+bool pragma_runs_here(const std::string &name) {
+    for (const char *p : PRAGMA_FEATURES)
+        if (name == p) return feature_runs_here(name);
+    return false;
+}
+
+#if !MW_EXE_NO_PYTHON
+// The pragma features this executable does not carry: its embedded
+// launcher (the fallback) withholds them (`_features.withhold_pragmas`), so
+// its Python answer ignores them as the C++ route does.
+std::vector<std::string> pragmas_withheld() {
+    std::vector<std::string> out;
+    for (const char *p : PRAGMA_FEATURES)
+        if (!feature_runs_here(p)) out.emplace_back(p);
+    return out;
+}
+#endif
+
+// One deck answered under its own pragma cards (`_features.pragma_scope`):
+// the route's requests and line 2 re-made for the deck, then back to the
+// environment's after it. A scope inside another is the outer one's, and a
+// deck with no pragma card changes nothing.
+class DeckPragmas {
+  public:
+    explicit DeckPragmas(const std::string &text) {
+        if (depth()++ > 0) return;
+        std::vector<std::string> asked = g_env_asked;
+        std::string ignored;
+        for (const std::string &name : deck_pragmas(text)) {
+            if (!pragma_runs_here(name)) {
+                ignored += (ignored.empty() ? "" : ", ") + name;
+                continue;
+            }
+            if (feature_env_set(name)) continue;  // the variable decides
+            asked.push_back(name);
+        }
+        if (asked.size() == g_env_asked.size() && ignored.empty()) return;
+        active_ = true;
+        reconfigure(asked, ignored.empty() ? "" : "(pragma ignored: " + ignored + ")");
+    }
+    ~DeckPragmas() {
+        depth()--;
+        if (active_) reconfigure(g_env_asked, "");
+    }
+    DeckPragmas(const DeckPragmas &) = delete;
+    DeckPragmas &operator=(const DeckPragmas &) = delete;
+
+  private:
+    static int &depth() {
+        static int d = 0;
+        return d;
+    }
+    static void reconfigure(const std::vector<std::string> &asked, const std::string &note) {
+        rt_serial::reset_features();
+        rt_threads::reset_features();
+        configure_asked(asked, note);
+    }
+    bool active_ = false;
+};
 
 void set_env(const char *name, const std::string &value) {
 #if defined(_WIN32)
@@ -1409,7 +1542,14 @@ int fallback(const std::string &home, const std::vector<std::string> &args) {
     std::string argv = "[";
     for (const std::string &a : args) argv += py_str(a) + ", ";
     argv += "]";
-    return run_python(home, std::string(FALLBACK_PY) + "_rc = _launcher(" + argv + ")\n");
+    // the pragma features this executable does not carry, ignored by its
+    // Python answer as by its C++ route (`DeckPragmas`)
+    std::string withheld = "[";
+    for (const std::string &p : pragmas_withheld()) withheld += py_str(p) + ", ";
+    withheld += "]";
+    return run_python(home, std::string(FALLBACK_PY) +
+                                "import momwire._features as _mwf\n_mwf.withhold_pragmas(" + withheld +
+                                ")\n_rc = _launcher(" + argv + ")\n");
 }
 
 // A refusal printout naming the mismatch (the deck's comment echo kept, as
@@ -1488,6 +1628,7 @@ int main(int argc, char **argv) {
         why = "unreadable";
     else if (!MW_EXE_DIALECT_NEC4 && may_request_gmo(text))  // the NEC-4.2 slot writes none
         why = "gmo";
+    const DeckPragmas pragmas(text);  // the fallback reads its own (`_shell.render`)
     if (why.empty()) {
         const Clock::time_point t = Clock::now();
         // The Sommerfeld masters' own store (momwire#1479 S4), keyed by this
@@ -1806,6 +1947,7 @@ void report_internal_error(const std::string &deck, const std::string &out,
 // as the PyError the INTERNAL ERROR frame reports.
 std::string render(const std::string &deck_path, const std::string &text, int forced_threads,
                    bool &raised, bool open_end = false, bool *served = nullptr) {
+    const DeckPragmas pragmas(text);
     raised = false;
     if (served) *served = false;
     if (!cxx_variant_ok())
@@ -1948,6 +2090,8 @@ int run_deck(const std::string &deck, const std::string &out, bool en_optional, 
 // decline, an exception).
 std::string stream_piece(const std::string &piece, bool cut_at_nx, int forced_threads,
                          bool &go_on) {
+    // the piece's pragma cards hold for its refusals too (`_shell._stream_piece`)
+    const DeckPragmas pragmas(piece);
     go_on = false;
     try {
         const std::string inject = env("MW_EXE_FAIL");  // gate hook, as run_deck's

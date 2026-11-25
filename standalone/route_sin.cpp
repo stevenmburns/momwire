@@ -135,6 +135,11 @@ std::string &line2_note() {
 }  // namespace
 void stamp_note(const std::string &note) { line2_note() = note; }
 
+void reset_features() {
+    ni_eval::reset_requested();
+    line2_note().clear();
+}
+
 // This route's reuse is the sinusoidal fill's (`pair_reuse`, momwire#1911):
 // its plans, not razor2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {

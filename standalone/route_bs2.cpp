@@ -150,6 +150,11 @@ std::string &line2_note() {
 }  // namespace
 void stamp_note(const std::string &note) { line2_note() = note; }
 
+void reset_features() {
+    ni_eval::reset_requested();
+    line2_note().clear();
+}
+
 void reuse_plans(long long &built, long long &declined, long long &found) {
     const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
     built = static_cast<long long>(c.built);
