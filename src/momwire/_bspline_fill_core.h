@@ -8,6 +8,7 @@
 #pragma once
 
 #include "_bspline_front_core.h"
+#include "_bspline_pair_reuse_core.h"
 #include "_mw_nd.h"
 #include "_nec5_printout_core.h"
 #include "_razor_solve_core.h"
@@ -73,7 +74,35 @@ struct FillParams {
     std::vector<std::pair<double, int64_t>> ladder;  // `pair_order_ladder`
     int64_t n_qp_same_edge = 4;
     bool extended_kernel = true;
+    // The fill-reuse switch (`_features` `pair_reuse`, momwire#2063): the
+    // census's classes (`BSplineSolver._reuse_on`), read through `plan`
+    // below; and its part `offset_reuse` (momwire#1809,
+    // `BSplineSolver._offset_reuse`): a uniform edge's same-edge reg moments
+    // by offset, and the offset edges' own blocks from their distinct
+    // moments. Both off is the fill as it always was, bit for bit.
+    bool pair_reuse = false;
+    bool offset_reuse = false;
+    // A stepping FR's frequency served with the sweep's hoisted same-edge
+    // prep (`_serve._port_solution`): the chunked fill then assembles no
+    // offset edge's own block from its distinct moments (Python's `offset`
+    // is the whole-mesh fill's), and every edge takes the same-edge fixup.
+    bool sweep_shared = false;
+    // `_reuse_plan(geom)` (`reuse_plan` below), or null: no census, or a
+    // census that does not serve the deck.
+    std::shared_ptr<const reuse::Plan> plan;
 };
+
+// `BSplineSolver._reuse_plan(geom)`: with `fp.pair_reuse`, the census's plan
+// of this geometry from the process's cache (`reuse::plan_for`), or null
+// when it is off, the deck is under the small-deck threshold, or the plan
+// declines. Every route below that reads a plan reads `fp.plan`.
+std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vector<double> &radius_per_wire,
+                                              const FillParams &fp);
+
+// `_free_offset_edges(geom)` under `fp.offset_reuse` (empty otherwise): the
+// uniform straight edges of 12 segments or more, as [start, stop) segment
+// ranges. A deck with one takes the chunked fill (`_compute_Z_operator`).
+std::vector<std::pair<int64_t, int64_t>> free_offset_edges(const Geometry &g, const FillParams &fp);
 
 // `_build_J_blocks(geom, k)`: (d+1, d+1, N, N) C order. `radius_per_wire`:
 // the conductor radius of each wire.
@@ -152,9 +181,16 @@ bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_so
 // the fused kernel (`somm_core::remainder_bspline_Q`, the symmetric route),
 // then the raised pairs' graded correction (`_remainder_pair_correction`,
 // momwire#1189 / #1201).
+// `fp` (optional) carries `pair_reuse`'s plan: the kernel then copies the
+// blocks `_remainder_reuse_args` names (momwire#1809's copy map, cut to
+// `_REMAINDER_REUSE_CACHE_BYTES`); and `offset_reuse`: the offset edges' own
+// blocks from their distinct moments (`_remainder_offset_fold`) where
+// `_remainder_offset_edges` takes them.
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                                    double ground_z, cdouble eps_t, double k, double omega, double mu,
-                                   int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np);
+                                   int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np,
+                                   const FillParams *fp = nullptr,
+                                   const std::vector<double> *radius_per_wire = nullptr);
 
 // TEST HOOK: `_remainder_graded.pair_moments(..., I, J, ...)` on `grid`
 // (n, d1, d1) and the base-order `_remainder_pair_moments` of each (I[n],

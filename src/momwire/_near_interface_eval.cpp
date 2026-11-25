@@ -1046,6 +1046,7 @@ bool *feature_slot(Features &f, const std::string &name) {
     if (name == "crossing_anchors") return &f.crossing_anchors;
     if (name == "transmitted_anchors") return &f.transmitted_anchors;
     if (name == "pair_reuse") return &f.pair_reuse;
+    if (name == "offset_reuse") return &f.offset_reuse;
     return nullptr;
 }
 }  // namespace
@@ -1073,6 +1074,7 @@ std::string requested_stamp() {
     const Features &f = g_stamped;
     std::string s;
     if (f.pair_reuse) s += "+pair_reuse";
+    if (f.offset_reuse) s += "+offset_reuse";
     if (f.transmitted_anchors) s += "+transmitted_anchors";
     if (f.point_cplx_staged) s += "+point_cplx_staged";
     if (f.factored_columns) s += "+factored_columns";

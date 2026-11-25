@@ -224,6 +224,12 @@ struct Prepared {
     // fill, momwire#1512): kept on a declined route so a gate can compare the
     // preparation, never solved.
     bool unsolved = false;
+    // One of a stepping FR's frequencies, or of a sequence run's (momwire#1508):
+    // `_shell._answer` serves it with a sweep state (`_serve._port_solution`'s
+    // `shared`), on which bs2's fill reads its same-edge blocks from the
+    // sweep's hoisted prep. That moves no byte unless `offset_reuse` is on
+    // (`bspline_solve_front`).
+    bool sweep_shared = false;
 };
 
 struct RunOutcome {

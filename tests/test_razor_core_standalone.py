@@ -156,6 +156,8 @@ CORE_SOURCES = (
     "_nec5_bspline_seam_core.cpp",
     "_bspline_front_core.cpp",
     "_bspline_fill_core.cpp",
+    # `pair_reuse`'s census, which the fill reads (momwire#2063).
+    "_bspline_pair_reuse_core.cpp",
     "_bspline_transmitted_core.cpp",
     "_bspline_crossing_core.cpp",
     "_nec5_bspline_printout_core.cpp",

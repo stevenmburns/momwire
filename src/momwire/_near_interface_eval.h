@@ -233,6 +233,14 @@ struct Features {
     // reader, so on another route it only names the switch on line 2. The
     // in-process hook (`sinusoidal_nec4_printout(features=)`) requests it too.
     bool pair_reuse = false;
+    // momwire#1809: `pair_reuse`'s part on bs2, `offset_reuse` (a uniform
+    // edge's same-edge moments by offset, and the offset edges' own blocks
+    // from their distinct moments). Not a near-interface lever either: bs2's
+    // C++ fill reads it, with `pair_reuse` for the census
+    // (`_nec5_bspline_printout_core.cpp`), from the REQUESTED set. The bs2
+    // executables request it through the whole (`EXE_PARTS`) or by its own
+    // variable.
+    bool offset_reuse = false;
     // momwire#1847: the transmitted grid blended from frequency anchors
     // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
     // either: the mixed blocks' grid requests read it, bs2's and the
