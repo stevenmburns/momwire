@@ -231,3 +231,37 @@ def test_momwire_times_on_both_routes(route, tmp_path):
     ((fill, factor),), (run_time,) = tc.printout_timing(on)
     assert fill + factor <= run_time + 1e-3
     assert tc.timed_extras(on)[1:] == (5, 1)
+
+
+def test_the_fallback_ignores_the_pragmas_the_executable_does_not_carry(tmp_path):
+    """A deck's pragma cards hold on both of the hybrid's routes alike: the
+    C++ route runs `CM momwire: pair_reuse` and ignores
+    `CM momwire: rotational_symmetry` (no executable carries it), and the
+    embedded launcher, forced, is told to ignore it too
+    (`_features.withhold_pragmas`), so the two printouts are one, line 2
+    naming the one and noting the other."""
+    body = DIPOLE.read_text(encoding="latin-1")
+    deck = tmp_path / "pragma.nec"
+    deck.write_text(
+        "CM momwire: pair_reuse\nCM momwire: rotational_symmetry\n" + body,
+        encoding="latin-1",
+        newline="",
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MOMWIRE_X_")}
+    outs = {}
+    for force in ("0", "1"):
+        routes = tmp_path / f"routes{force}"
+        out = tmp_path / f"{force}.out"
+        r = _run(
+            [EXE, str(deck), str(out)],
+            cwd=tmp_path,
+            env=dict(env, MW_EXE_FORCE_FALLBACK=force),
+            routes=routes,
+        )
+        assert r.returncode == 0, r.stderr
+        route = routes.read_text().split(" ", 1)[0]
+        assert route.startswith("fallback" if force == "1" else "cxx"), route
+        outs[force] = out.read_bytes()
+    line2 = outs["0"].split(b"\n")[1].rstrip(b"\r")
+    assert line2.endswith(b" +pair_reuse (pragma ignored: rotational_symmetry)"), line2
+    assert outs["1"] == outs["0"]
