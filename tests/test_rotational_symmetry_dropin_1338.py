@@ -357,7 +357,11 @@ def test_each_dropin_runs_the_sector_route(no_features, route, basis, ground):
         # The portal keeps nec2c's layout, which has no line for it.
         assert "rotational_symmetry" not in on_text
     else:
-        assert lines_on[1] == lines_off[1] + " +rotational_symmetry"
+        # The stamp is certified only within the feature's reach: the macOS
+        # drop-in (level 5, past reach 4) runs it stamped uncertified.
+        level = F.current_level("dropin")
+        tail = "" if level <= FEATURE.reach else " uncertified on this platform"
+        assert lines_on[1] == lines_off[1] + " +rotational_symmetry" + tail
         assert "+rotational_symmetry" not in off_text
 
 
