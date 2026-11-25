@@ -341,8 +341,8 @@ FEATURES: dict[str, Feature] = {
         # never stamps a bspline drop-in printout uncertified through it.
         # Reach 9 since bs2's C++ fill carries it (momwire#2063 stage 4): the
         # nec5-bs2 and nec42-bs2 executables (levels 6 to 9) run it, with the
-        # whole's census, at the launcher's bytes (`EXE_PARTS`). PROPOSED, not
-        # yet the maintainer's call: it also certifies the macOS drop-in.
+        # whole's census, at the launcher's bytes (`EXE_PARTS`); it also
+        # certifies the macOS drop-in (Steve, 2026-11-25).
         Feature(
             name="offset_reuse",
             reach=9,
@@ -358,7 +358,11 @@ FEATURES: dict[str, Feature] = {
                 "Fills a uniform edge's same-edge moments once per segment offset;"
                 " turned on with pair reuse, alongside its copies between edges."
             ),
-            drift=1e-12,
+            # Measured on the 821-deck exe corpus (momwire#2063 stage 4):
+            # worst 2.5e-11 (WA7ARK-OCF), Python's own offset fill, so the
+            # 1e-12 the unit decks show understated it. Still far under
+            # DEFAULT_DRIFT_MAX.
+            drift=5e-11,
             offer=False,
             part_of="pair_reuse",
         ),
