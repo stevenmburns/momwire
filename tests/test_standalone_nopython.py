@@ -1369,6 +1369,33 @@ def test_the_pragma_reader_is_pythons(cards, tmp_path):
         assert "pragma" not in line2, line2
 
 
+# Line 2 past its 79 columns (momwire#2158): the note's names go first, then
+# the note, and the basis name stays. Ten ignored names, one card each, overflow
+# with the names and fit as "(pragma ignored)"; one name of a hundred and
+# twenty characters is cut the same way, since the note's short form fits.
+_OVERLONG_CASES = (
+    "".join(f"CM momwire: zq{i:02d}\n" for i in range(10)),
+    "CM momwire: " + "z" * 120 + "\n",
+)
+
+
+@pytest.mark.parametrize("cards", _OVERLONG_CASES, ids=["ten-names", "one-long-name"])
+def test_an_overlong_line_2_is_cut_as_pythons(cards, tmp_path):
+    name = "long.nec"
+
+    def prepare(d):
+        body = DIPOLE.read_bytes().decode("latin-1")
+        (d / name).write_bytes((cards + body).encode("latin-1"))
+
+    exe, ref, de, dl = _both([name, "r.out"], tmp_path, prepare=prepare)
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    line2 = (de / "r.out").read_bytes().split(b"\n")[1].rstrip(b"\r").decode("latin-1")
+    assert len(line2) <= 79, line2
+    assert f" {BASIS} " in line2, line2
+    assert line2.endswith(" (pragma ignored)"), line2
+
+
 @pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's reuse")
 def test_the_pragma_is_per_structure_in_a_stream(tmp_path, monkeypatch):
     """SimNEC's `- -`, one process: a structure with the card, one without,
