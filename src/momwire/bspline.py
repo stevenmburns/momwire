@@ -5711,6 +5711,51 @@ class BSplineSolver(
             "reuse_src": src,
         }
 
+    def _image_copy_map(self, geom, skip):
+        """The image term's copy map (momwire#2074): the remainder's
+        (`_remainder_reuse_args`), less the own blocks of the edges starting
+        at `skip` (the offset edges, assembled from their tables, and the
+        near-image ones, which the fixup recomputes), or None for no copy.
+
+        The remainder's map holds: it copies a block between edge pairs
+        congruent under a motion that keeps the plane (their segmentations,
+        the six end-point distances and four heights alike, `remainder_blocks`),
+        and an image moment is the free-space moment of the observer segment
+        against its source's mirror, which the same motion carries to the
+        source block's, segment for segment: the distance from a point at
+        height h1 to the mirror of one at h2 is sqrt(rho^2 + (h1 + h2)^2),
+        rho the horizontal distance, which the key fixes. Every segment's
+        radius is in the key, so the extended kernel's two radii (every
+        real/image pair is extended since momwire#1368) are the source's; and
+        the fill ladder bins a pair by that same mirrored distance over the
+        longer segment, so a copy and its source part only by the key's
+        rounding (a pair on a tier boundary can take the other tier, an
+        error the ladder bounds by its own). What is copied is the moments
+        alone: the weights
+        (PEC's mirrored tangent dot, the Fresnel dyad and cos theta of the
+        reflection coefficient, the Sommerfeld image's C2) are each pair's
+        own, so the map does not depend on the image model.
+
+        The map is cut to the remainder kernel's cache budget, which is also
+        this cache's: one block per source pair, both orders, (d+1)^2
+        moments a pair."""
+        if not self._reuse_on:
+            return None
+        cmap = self._remainder_reuse_args(geom, self.ground_z)
+        if not cmap:
+            return None
+        seg0 = np.asarray(cmap["reuse_edge_seg0"], dtype=np.int64)
+        src = np.array(cmap["reuse_src"], dtype=np.int32)
+        own = np.flatnonzero([int(s) in skip for s in seg0[:-1]])
+        src[own, own] = -1
+        if not np.any(src >= 0):
+            return None
+        return {
+            "reuse_edge_seg0": seg0,
+            "reuse_seg_edge": np.asarray(cmap["reuse_seg_edge"]),
+            "reuse_src": src,
+        }
+
     def _offset_edges(self, geom):
         """The uniform straight edges of `_REG_TOEPLITZ_MIN_N` segments or
         more that lie horizontal ("toeplitz") or vertical ("hankel"), as
@@ -7107,6 +7152,7 @@ class BSplineSolver(
         # by offset (`_image_offset_block`). Whole-mesh fills only, and not
         # for an edge the near-image fixup corrects (its block is analytic).
         offset = {}
+        copy = None
         if restrict is None:
             near = {e[0].start for e in self._near_image_edge_blocks(geom)}
             offset = {
@@ -7114,7 +7160,61 @@ class BSplineSolver(
                 for sl, kind in self._offset_edges(geom)
                 if sl.start not in near
             }
+            copy = self._image_copy_map(geom, near | set(offset))
         cuts = sorted({b for sl, _ in offset.values() for b in (sl.start, sl.stop)})
+        # momwire#2074: the edge blocks the copy map serves, and their
+        # sources, are read from a cache of the sources' moments filled first
+        # (`reads[x, y]`, the flat source block, or -1 for the kernel's). The
+        # rows of an edge that reads any are runs of their own (`_pieces`).
+        cache = {}
+        if copy is not None:
+            c_seg0 = copy["reuse_edge_seg0"]
+            c_edge = copy["reuse_seg_edge"]
+            c_src = copy["reuse_src"]
+            n_e = c_src.shape[0]
+            sources = np.unique(c_src[c_src >= 0])
+            reads = c_src.astype(np.int64)
+            reads.flat[sources] = sources
+            for t, f in enumerate(sources.tolist()):
+                if t % _REUSE_GROUPS_PER_CHECKPOINT == 0:
+                    self._checkpoint()
+                sa, sb = divmod(f, n_e)
+                cache[f] = _image_moments(
+                    c_seg0[sa], c_seg0[sa + 1], c_seg0[sb], c_seg0[sb + 1]
+                )
+            reading = (reads >= 0).any(axis=1)
+            cuts = sorted(
+                {*cuts}
+                | {int(c_seg0[x]) for x in np.flatnonzero(reading)}
+                | {int(c_seg0[x + 1]) for x in np.flatnonzero(reading)}
+            )
+
+        def _pieces(r0, r1, c0, c1):
+            """Rows [r0, r1) against columns [c0, c1) as ``(J, a, b)``,
+            columns [a, b) in order: the kernel's moments over each run of
+            columns the cache does not hold, and each block it does, read in
+            place (assembled from the cache rather than copied into a window,
+            which on a mostly copied mesh costs what the kernel saved). A run
+            that reads the cache lies on one edge (`cuts`); a span starts and
+            ends on edges' boundaries."""
+            x = -1 if copy is None else int(c_edge[r0])
+            if x < 0 or not reading[x]:
+                yield _image_moments(r0, r1, c0, c1), c0, c1
+                return
+            lo = int(c_seg0[x])
+            pend = None
+            for y in range(int(c_edge[c0]), int(c_edge[c1 - 1]) + 1):
+                a, b = int(c_seg0[y]), int(c_seg0[y + 1])
+                f = int(reads[x, y])
+                if f < 0:
+                    pend = a if pend is None else pend
+                    continue
+                if pend is not None:
+                    yield _image_moments(r0, r1, pend, a), pend, a
+                    pend = None
+                yield cache[f][:, :, r0 - lo : r1 - lo, :], a, b
+            if pend is not None:
+                yield _image_moments(r0, r1, pend, c1), pend, c1
 
         def _assemble_window(J, r0, r1, c0, c1, w_A, w_Phi, m_idx, n_idx):
             _acc.assemble_Z_bspline_weighted_windowed(
@@ -7145,7 +7245,8 @@ class BSplineSolver(
 
         def _image_block_split(i0, i1):
             """The chunk's rows run by run: a run on an offset edge skips
-            that edge's own columns."""
+            that edge's own columns, and a run on an edge the copy map serves
+            reads its blocks from the cache (`_window`)."""
             bounds = [i0, *(c for c in cuts if i0 < c < i1), i1]
             for r0, r1 in itertools.pairwise(bounds):
                 hit = next(
@@ -7162,20 +7263,21 @@ class BSplineSolver(
                 w_A_win, w_Phi_win = weights_fn(r0, r1)
                 m_idx = _touching(r0, r1)
                 for c0, c1 in spans:
-                    _assemble_window(
-                        _image_moments(r0, r1, c0, c1),
-                        r0,
-                        r1,
-                        c0,
-                        c1,
-                        w_A_win[:, c0:c1],
-                        w_Phi_win[:, c0:c1],
-                        m_idx,
-                        _touching(c0, c1),
-                    )
+                    for J, a, b in _pieces(r0, r1, c0, c1):
+                        _assemble_window(
+                            J,
+                            r0,
+                            r1,
+                            a,
+                            b,
+                            w_A_win[:, a:b],
+                            w_Phi_win[:, a:b],
+                            m_idx,
+                            _touching(a, b),
+                        )
 
         def _image_block(i0, i1, j0, j1):
-            if offset:
+            if offset or copy is not None:
                 _image_block_split(i0, i1)
                 return
             J_chunk = _image_moments(i0, i1, 0, n_segs)
@@ -7244,7 +7346,18 @@ class BSplineSolver(
             spans = [(sl.start, sl.stop - sl.start) for sl, _kind in offset.values()]
             n2 = int(n_segs) ** 2
             computed = n2 - self._offset_saved(spans)
-            self._note_ground_fill("image", n2, computed, computed, offset=spans)
+            evals = computed
+            if copy is not None:
+                _ta, _tb, na, nb = self._copy_map_blocks(copy)
+                computed -= int(np.sum(na * nb))
+                # A source block the sweep never reads (an offset edge's own,
+                # assembled from its table) was formed for the cache alone.
+                own = np.diag(reads)[[s in offset for s in c_seg0[:-1]]]
+                own_n = np.diff(c_seg0)[[s in offset for s in c_seg0[:-1]]]
+                evals = computed + int(np.sum(own_n[own >= 0] ** 2))
+            self._note_ground_fill(
+                "image", n2, computed, evals, offset=spans, copy_map=copy
+            )
 
         # Near-image fixup (momwire#631), the image-side twin of the
         # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep

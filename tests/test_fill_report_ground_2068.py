@@ -104,8 +104,8 @@ def test_sommerfeld_reports_three_families_and_nothing_uncounted():
     image, rem = reuse["families"]["image"], reuse["families"]["remainder"]
     # Same pair convention in every family: ordered segment pairs.
     assert reuse["families"]["direct"]["pairs"] == image["pairs"] == rem["pairs"] == n2
-    # pair_reuse never copies the image term.
-    assert image["pairs"] == image["computed"] and image["reused"] == 0
+    # The image copies the remainder's blocks (momwire#2074): one map.
+    assert image["reused"] == rem["reused"] > 0
     assert rem["computed"] + rem["reused"] + rem["near"] == rem["pairs"]
     assert rem["reused"] > 0
     reconciles(reuse)
@@ -216,7 +216,13 @@ def test_offset_edges_count_as_reuse_in_the_ground_families():
     reuse = s.fill_report()["reuse"]
     image = reuse["families"]["image"]
     n = deck["n_per_edge_per_wire"][0][0]
-    assert image["reused"] == len(deck["wires"]) * (n * n - (2 * n - 1))
+    # Beside the spread, the blocks between edges the copy map serves
+    # (momwire#2074), which leaves the offset edges' own blocks to the spread.
+    (cmap,) = s._fill_ground_notes["image"]["maps"]
+    _ta, _tb, na, nb = s._copy_map_blocks(cmap)
+    copied = int(np.sum(na * nb))
+    assert copied > 0
+    assert image["reused"] == len(deck["wires"]) * (n * n - (2 * n - 1)) + copied
     reconciles(reuse)
 
 

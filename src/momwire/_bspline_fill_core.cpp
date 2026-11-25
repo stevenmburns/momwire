@@ -2815,6 +2815,20 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
 }
 
 
+namespace {
+// `_remainder_reuse_map(geom, gz)`: the `pair_reuse` plan as the fused
+// remainder kernel's copy map (`remainder_blocks`, cut to fit the kernel's
+// cache budget, best copies per cached byte first), or false for none. The
+// image term reads it too (momwire#2074, `_image_copy_map`).
+struct CopyMap {
+    std::vector<int64_t> edge_seg0;
+    std::vector<int32_t> edge_nseg, seg_edge, src;
+    somm_core::PairReuse reuse;
+};
+bool remainder_copy_map(const Geometry &g, const std::vector<double> &radius_per_wire, const FillParams &fp,
+                        double gz, CopyMap &m);
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // The image term above a ground (momwire#1517 step 3)
 // ---------------------------------------------------------------------------
@@ -2941,13 +2955,15 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
     // block is assembled from its distinct moments (`_image_offset_block`),
     // not swept; never for an edge the near-image fixup corrects
     std::vector<OffsetEdge> offset;
-    if (fp.offset_reuse) {
-        std::vector<int64_t> near;
+    std::vector<int64_t> near;
+    if (fp.offset_reuse || fp.plan) {
         for (size_t w = 0; w < g.per_wire.size(); w++)
             for (size_t e = 0; e + 1 < g.per_wire[w].edge_offsets.size(); e++) {
                 double a_eff = 0.0;
                 if (near_image(w, e, a_eff)) near.push_back(g.seg_offsets[w] + g.per_wire[w].edge_offsets[e]);
             }
+    }
+    if (fp.offset_reuse) {
         for (const OffsetEdge &o : offset_edges_of(g, false))
             if (std::find(near.begin(), near.end(), o.s0) == near.end()) offset.push_back(o);
     }
@@ -2956,14 +2972,93 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
         cuts.push_back(o.s0);
         cuts.push_back(o.s1);
     }
-    std::sort(cuts.begin(), cuts.end());
-    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
     // `_image_moments(r0, r1, c0, c1)`
     const auto image_moments = [&](int64_t r0, int64_t r1, int64_t c0, int64_t c1) {
         const std::vector<size_t> rows = range(r0, r1), cols = range(c0, c1);
         std::vector<double> a_sub(a_row.begin() + r0, a_row.begin() + r1);
         return offedge(real.take(rows), img.take(cols), a_sub, fp.k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
                        fp.ladder);
+    };
+    // momwire#2074, `_image_copy_map`: the remainder's map less the own
+    // blocks of the offset and near-image edges; `reads[x * E + y]` is the
+    // flat source block whose cached moments block (x, y) takes, or -1.
+    CopyMap cm;
+    bool copy = fp.plan && remainder_copy_map(g, radius_per_wire, fp, gr.ground_z, cm);
+    int64_t E = 0;
+    std::vector<int64_t> reads;
+    std::vector<uint8_t> reading;
+    std::map<int64_t, Block> cache;
+    if (copy) {
+        E = static_cast<int64_t>(cm.edge_nseg.size());
+        for (int64_t x = 0; x < E; x++) {
+            const int64_t s0 = cm.edge_seg0[static_cast<size_t>(x)];
+            bool skip = std::find(near.begin(), near.end(), s0) != near.end();
+            for (const OffsetEdge &o : offset) skip = skip || o.s0 == s0;
+            if (skip) cm.src[static_cast<size_t>(x * E + x)] = -1;
+        }
+        reads.assign(cm.src.begin(), cm.src.end());
+        std::set<int64_t> sources;
+        for (int32_t f : cm.src)
+            if (f >= 0) sources.insert(f);
+        copy = !sources.empty();
+        for (int64_t f : sources) {
+            reads[static_cast<size_t>(f)] = f;
+            const int64_t sa = f / E, sb = f % E;
+            cache.emplace(f, image_moments(cm.edge_seg0[static_cast<size_t>(sa)],
+                                           cm.edge_seg0[static_cast<size_t>(sa + 1)],
+                                           cm.edge_seg0[static_cast<size_t>(sb)],
+                                           cm.edge_seg0[static_cast<size_t>(sb + 1)]));
+        }
+        reading.assign(static_cast<size_t>(E), 0);
+        for (int64_t x = 0; copy && x < E; x++)
+            for (int64_t y = 0; y < E; y++)
+                if (reads[static_cast<size_t>(x * E + y)] >= 0) reading[static_cast<size_t>(x)] = 1;
+        for (int64_t x = 0; copy && x < E; x++)
+            if (reading[static_cast<size_t>(x)]) {
+                cuts.push_back(cm.edge_seg0[static_cast<size_t>(x)]);
+                cuts.push_back(cm.edge_seg0[static_cast<size_t>(x + 1)]);
+            }
+    }
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    // `_pieces(r0, r1, c0, c1)`: `put(J, a, b)` for each run of columns the
+    // cache does not hold (the kernel's moments) and each block it does (the
+    // cache's rows r0 - lo .. r1 - lo), columns in order
+    const auto pieces = [&](int64_t r0, int64_t r1, int64_t c0, int64_t c1,
+                            const std::function<void(const Block &, int64_t, int64_t)> &put) {
+        const int64_t x = copy ? cm.seg_edge[static_cast<size_t>(r0)] : -1;
+        if (x < 0 || !reading[static_cast<size_t>(x)]) {
+            put(image_moments(r0, r1, c0, c1), c0, c1);
+            return;
+        }
+        const int64_t m = r1 - r0, lo = cm.edge_seg0[static_cast<size_t>(x)];
+        const int64_t n_x = cm.edge_seg0[static_cast<size_t>(x + 1)] - lo;
+        int64_t pend = -1;
+        for (int64_t y = cm.seg_edge[static_cast<size_t>(c0)]; y <= cm.seg_edge[static_cast<size_t>(c1 - 1)]; y++) {
+            const int64_t a = cm.edge_seg0[static_cast<size_t>(y)], b = cm.edge_seg0[static_cast<size_t>(y + 1)];
+            const int64_t f = reads[static_cast<size_t>(x * E + y)];
+            if (f < 0) {
+                if (pend < 0) pend = a;
+                continue;
+            }
+            if (pend >= 0) {
+                put(image_moments(r0, r1, pend, a), pend, a);
+                pend = -1;
+            }
+            const Block &src = cache.at(f);
+            if (m == n_x) {
+                put(src, a, b);
+                continue;
+            }
+            const int64_t w = b - a;
+            Block J(static_cast<size_t>(nd * nd * m * w), false);
+            for (int64_t pq = 0; pq < nd * nd; pq++) {
+                const cdouble *from = &src[static_cast<size_t>((pq * n_x + (r0 - lo)) * w)];
+                std::copy(from, from + m * w, &J[static_cast<size_t>(pq * m * w)]);
+            }
+            put(J, a, b);
+        }
+        if (pend >= 0) put(image_moments(r0, r1, pend, c1), pend, c1);
     };
     // columns [c0, c1) of (m, N) weight windows
     const auto cols_of = [&](const std::vector<cdouble> &W, int64_t m, int64_t c0, int64_t c1) {
@@ -2975,7 +3070,7 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
     };
     for (int64_t i0 = 0; i0 < N; i0 += chunk) {
         const int64_t i1 = std::min(i0 + chunk, N);
-        if (!offset.empty()) {
+        if (!offset.empty() || copy) {
             // `_image_block_split`: the chunk's rows run by run, a run on an
             // offset edge skipping that edge's own columns
             std::vector<int64_t> bounds{i0};
@@ -3001,9 +3096,10 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
                 weights(r0, r1, wA, wP);
                 const std::vector<int64_t> m_idx = touching(r0, r1);
                 for (const auto &sp : spans)
-                    assemble(image_moments(r0, r1, sp.first, sp.second), cols_of(wA, r1 - r0, sp.first, sp.second),
-                             cols_of(wP, r1 - r0, sp.first, sp.second), m_idx, touching(sp.first, sp.second), r0,
-                             r1, sp.first, sp.second);
+                    pieces(r0, r1, sp.first, sp.second, [&](const Block &J, int64_t a, int64_t b) {
+                        assemble(J, cols_of(wA, r1 - r0, a, b), cols_of(wP, r1 - r0, a, b), m_idx, touching(a, b),
+                                 r0, r1, a, b);
+                    });
             }
             continue;
         }
@@ -4175,14 +4271,6 @@ void remainder_pair_census(const Geometry &g, const Basis &b, double gz, double 
 
 namespace {
 
-// `_remainder_reuse_map(geom, gz)`: the `pair_reuse` plan as the fused
-// remainder kernel's copy map (`remainder_blocks`, cut to fit the kernel's
-// cache budget, best copies per cached byte first), or false for none.
-struct CopyMap {
-    std::vector<int64_t> edge_seg0;
-    std::vector<int32_t> edge_nseg, seg_edge, src;
-    somm_core::PairReuse reuse;
-};
 bool remainder_copy_map(const Geometry &g, const std::vector<double> &radius_per_wire, const FillParams &fp,
                         double gz, CopyMap &m) {
     if (!fp.plan) return false;
