@@ -400,9 +400,9 @@ def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
 # --- momwire#1911: the one fill-reuse switch, MOMWIRE_X_PAIR_REUSE --------------
 #
 # Every executable accepts it (reach 11, `EXE_PARTS`): nec42-sinusoidal runs
-# the point-matched fill's plan (`_sin_pair_reuse_core.h`) and is held to the
-# launcher with it on; nec42-bs2 has no C++ reuse yet, so there it is
-# withheld and the printout is the one with it off.
+# the point-matched fill's plan (`_sin_pair_reuse_core.h`), nec42-bs2 bs2's
+# census and its part `offset_reuse` (momwire#2063), and each is held to the
+# launcher with it on.
 _REUSE_ENV = "MOMWIRE_X_PAIR_REUSE"
 
 
@@ -425,34 +425,6 @@ def _reuse_curtain(ground: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-@pytest.mark.skipif(BASIS != "bs2", reason="the nec42-bs2 executable's")
-def test_pair_reuse_is_accepted_and_withheld_on_bs2(tmp_path):
-    """Asked on, nec42-bs2 answers, and its printout is the one with the
-    switch unset, line 2 included: bs2's part is Python's alone, so here
-    the whole is withheld, neither run nor named. A curtain past the
-    small-deck thresholds, so a reuse that ran would have had a deck to
-    run on."""
-    from momwire import _features
-
-    env = {k: v for k, v in _env().items() if not k.startswith(_features.ENV_PREFIX)}
-    deck = tmp_path / "curtain.nec"
-    deck.write_text(_reuse_curtain("free"), encoding="latin-1")
-    outs = {}
-    for state in (None, "1"):
-        out = tmp_path / f"{state}.out"
-        run_env = dict(env, MW_EXE_TIMES="1")
-        if state is not None:
-            run_env[_REUSE_ENV] = state
-        r = subprocess.run(
-            [EXE, str(deck), str(out)], env=run_env, capture_output=True, check=False
-        )
-        assert r.returncode == 0 and r.stdout == b"", r
-        assert b"cxx: reuse plans built 0," in r.stderr, r.stderr
-        outs[state] = _mask(out.read_bytes())
-    assert b"NEC ERROR" not in outs[None][0]
-    assert outs["1"] == outs[None]
-
-
 def _reuse_decks():
     return [
         *sorted((FIXTURES / "transmitted_mixed").glob("*.nec")),
@@ -462,15 +434,16 @@ def _reuse_decks():
     ]
 
 
-@pytest.mark.skipif(BASIS != "sinusoidal", reason="the nec42-sinusoidal executable's")
 @pytest.mark.parametrize(
     "deck", _reuse_decks(), ids=lambda p: p if isinstance(p, str) else p.name
 )
 def test_pair_reuse_answers_as_the_launcher(deck, tmp_path):
     """With the feature on both sides: the launcher's bytes under the time
-    mask, line 2 naming +pair_reuse on both. The curtains serve the reuse
-    (MW_EXE_TIMES's last-fill line says so); the fixtures, all below the
-    small-deck thresholds or mixed, decline it, as Python's route does."""
+    mask, line 2 naming +pair_reuse on both. The curtains serve the reuse (a
+    plan built that did not decline; on nec42-sinusoidal MW_EXE_TIMES's
+    last-fill line says so too); the fixtures, all below the small-deck
+    thresholds or mixed, decline it, as Python's route does (on nec42-bs2
+    the part `offset_reuse` still runs on their long edges)."""
     if isinstance(deck, str):
         path = tmp_path / f"{deck.replace(':', '_')}.nec"
         path.write_text(_reuse_curtain(deck.split(":")[1]), encoding="latin-1")
@@ -498,7 +471,8 @@ def test_pair_reuse_answers_as_the_launcher(deck, tmp_path):
     assert _mask(exe) == _mask(ref_out.read_bytes())
     assert b"+pair_reuse" in exe.split(b"\n")[1]
     if isinstance(deck, str):
-        assert b"cxx: reuse last fill served" in r.stderr, r.stderr
+        if BASIS == "sinusoidal":
+            assert b"cxx: reuse last fill served" in r.stderr, r.stderr
         m = re.search(
             rb"cxx: reuse plans built (\d+), declined (\d+), found (\d+)", r.stderr
         )
