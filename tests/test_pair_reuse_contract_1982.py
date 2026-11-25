@@ -20,6 +20,7 @@ aliases and win. What is held here:
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import warnings
 
@@ -179,7 +180,9 @@ def test_pair_reuse_reaches_every_level():
         "nec2c-sinusoidal",
     ):
         assert F.certified("pair_reuse", "exe", basis=basis, platform="linux")
-    assert F.FEATURES["offset_reuse"].reach == F._level("dropin-linux-windows")
+    # bspline's part reaches the bs2 executables (nec42-bs2 the deepest),
+    # whose C++ fill runs it beside the whole's census (momwire#2063)
+    assert F.FEATURES["offset_reuse"].reach == F._level("exe-nec42-bs2")
     assert F.FEATURES["razor_pair_reuse"].reach == F._level(
         "exe-nec5-bs2-razor2p-linux-macos"
     )
@@ -187,11 +190,19 @@ def test_pair_reuse_reaches_every_level():
 
 def test_a_part_past_its_reach_stamps_the_whole_uncertified(no_features):
     """The whole certified, the part that runs not: line 2 says uncertified
-    on that family alone (the macOS drop-in: level 5, past offset_reuse's
-    4, inside razor_pair_reuse's 8; sinusoidal has no part)."""
+    on that family alone. No shipped level puts bspline past offset_reuse's
+    reach (9, every level bspline runs on), so the part is held to an
+    earlier reach, 4, which the macOS drop-in (level 5) lies past, inside
+    razor_pair_reuse's 8; sinusoidal has no part."""
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     no_features.setattr(F, "_os", lambda platform=None: "macos")
     assert F.current_level("dropin") == F._level("macos")
+    assert F.stamp("dropin", solver="bspline") == "+pair_reuse"
+    no_features.setitem(
+        F.FEATURES,
+        "offset_reuse",
+        dataclasses.replace(F.FEATURES["offset_reuse"], reach=4),
+    )
     tail = " uncertified on this platform"
     assert F.stamp("dropin", solver="bspline") == "+pair_reuse" + tail
     assert F.stamp("dropin", solver="razor") == "+pair_reuse"

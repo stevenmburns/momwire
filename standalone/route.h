@@ -61,7 +61,8 @@ void stamp_note(const std::string &note);
 // this copy has built, how many of those built came back declined, and how
 // many it found, process totals: the MW_EXE_TIMES gate line's, so a test can
 // tell the reuse ran (built - declined >= 1: a declined plan fills as off;
-// nec5-bs2's and nec42's routes never build one).
+// on nec5-bs2's and nec42-bs2's routes bs2's census,
+// `bspline::reuse::cache_counters`).
 void reuse_plans(long long &built, long long &declined, long long &found);
 // The sinusoidal route's last fill under `pair_reuse` (momwire#1911):
 // "served", the reason it declined, or "" (not asked, or another route's).

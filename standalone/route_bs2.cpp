@@ -18,7 +18,7 @@
 #include "route.h"
 
 #include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
-#include "_razor_pair_reuse_core.h"  // the reuse plans' counters (momwire#1971)
+#include "_bspline_pair_reuse_core.h"  // the reuse plans' counters (momwire#2063)
 #if MW_ROUTE_NEC4
 #include "_bspline_nec4_run_core.h"
 #endif
@@ -150,8 +150,10 @@ std::string &line2_note() {
 }  // namespace
 void stamp_note(const std::string &note) { line2_note() = note; }
 
+// This route's reuse is bs2's census (`pair_reuse`, momwire#2063): its
+// plans, not razor2p's.
 void reuse_plans(long long &built, long long &declined, long long &found) {
-    const razor::reuse::CacheCounters c = razor::reuse::cache_counters();
+    const mw::pair_reuse::Counters c = bspline::reuse::cache_counters();
     built = static_cast<long long>(c.built);
     declined = static_cast<long long>(c.declined);
     found = static_cast<long long>(c.found);

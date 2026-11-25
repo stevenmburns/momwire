@@ -512,10 +512,12 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
             if not F.honours(name, kind):
                 expected.add((basis, name))
     assert ignored == expected
-    # What keeps nec5-bs2's refusal: the two razor2p-only rows stay.
+    # What keeps nec5-bs2's refusal: the two razor2p-only rows stay; and
+    # nec5-razor2p's of bs2's offset_reuse.
     assert only_on == {
         "razor_pair_reuse": "razor2p",
         "crossing_anchors": "razor2p",
+        "offset_reuse": "bs2",
     }
 
 
