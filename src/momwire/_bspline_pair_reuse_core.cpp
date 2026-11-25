@@ -358,7 +358,7 @@ void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std:
         const double dx = u[0] - v[0], dy = u[1] - v[1], dz = u[2] - v[2];
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     };
-    constexpr int RW = 12;
+    static constexpr int RW = 12;  // static: MSVC (C2131) will not read a local constexpr inside a [&] lambda as a constant
     // The ordered block (x, y): the edges' counts and segmentations, the six
     // distances of (x0, x1, y0, y1) and their four heights above the plane,
     // on a step of 2^-KEY_BITS of the structure's size. Read from (y, x) it
