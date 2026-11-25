@@ -20,6 +20,7 @@ the route counted each time so a stamp alone cannot pass:
 from __future__ import annotations
 
 import io
+import os
 import re
 import threading
 import warnings
@@ -93,6 +94,22 @@ def nec5(deck, basis, dialect="nec5"):
         return _shell.render(deck + "EN\n", basis=basis, dialect=dialect)
 
 
+# The solver family each basis runs on, for the stamp a drop-in prints.
+FAMILY = {"bs2": "bspline", "razor2p": "razor", "sinusoidal": "sinusoidal"}
+
+
+def stamp_as_variable(var, basis):
+    """Line 2's tail as the variable alone would stamp it: the feature's
+    name, and "uncertified on this platform" where what runs is past its
+    reach (the macOS drop-in is level 5)."""
+    with pytest.MonkeyPatch.context() as m:
+        for k in list(os.environ):
+            if k.startswith(F.ENV_PREFIX):
+                m.delenv(k)
+        m.setenv(var, "1")
+        return " " + F.stamp("dropin", solver=FAMILY[basis])
+
+
 def portal(deck, basis="sinusoidal", argv=(), quiet=True):
     out = io.StringIO()
     with warnings.catch_warnings():
@@ -123,7 +140,9 @@ def test_pair_reuse_pragma_alone_turns_it_on(no_features, dialect, basis):
         probe = Solvers(m)
         text = nec5(deck, basis, dialect)
     assert "ERROR" not in text, text[-600:]
-    assert text.splitlines()[1].endswith(" +pair_reuse"), text.splitlines()[1]
+    tail = stamp_as_variable(PAIR, basis)
+    assert tail.startswith(" +pair_reuse")
+    assert text.splitlines()[1].endswith(tail), text.splitlines()[1]
     assert probe.reuse() == [("served", True)]
     # It is the variable, to the byte.
     no_features.setenv(PAIR, "1")
@@ -230,7 +249,9 @@ def test_rotational_symmetry_pragma_alone_turns_it_on(
     assert probe.sector_solves > 0 and any(probe.mapped)
     assert declined == []
     if route != "nec2c":  # the NEC-2 printout has no line 2
-        assert text.splitlines()[1].endswith(" +rotational_symmetry")
+        tail = stamp_as_variable(ROT, basis)
+        assert tail.startswith(" +rotational_symmetry")
+        assert text.splitlines()[1].endswith(tail), text.splitlines()[1]
     no_features.setenv(ROT, "1")
     by_var, _probe, _ = _rot_run(no_features, route, basis, deck)
     assert unclocked(by_var) == unclocked(text)
@@ -329,7 +350,13 @@ def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
                 )
     assert rc == 0
     line2 = out.read_bytes().decode("latin-1").splitlines()[1]
-    assert line2.endswith(" +pair_reuse (pragma ignored: zzz)"), line2
+    tail = stamp_as_variable(PAIR, "bs2") + " (pragma ignored: zzz)"
+    if len(line2) < 79:
+        assert line2.endswith(tail), line2
+    else:
+        # Past the 79 columns (macOS: the stamp says uncertified) the line is
+        # cut, today basis name first and the note mid-word (momwire#2158).
+        assert tail.startswith(line2[line2.index(" +pair_reuse") :]), line2
     assert probe.reuse() == [("served", True)]
 
 
@@ -360,7 +387,8 @@ def test_a_stream_scopes_each_structure(no_features):
             assert _shell.stream(lambda: chunks.pop(0), outs.append, basis="bs2") == 0
     assert probe.reuse() == [None, ("served", True), None]
     line2s = [o.decode("latin-1").split("\n")[1].rstrip("\r") for o in outs]
-    assert line2s[1] == line2s[0] + " +pair_reuse" and line2s[2] == line2s[0]
+    assert line2s[1] == line2s[0] + stamp_as_variable(PAIR, "bs2")
+    assert line2s[2] == line2s[0]
 
 
 def test_the_portal_cache_keys_its_entries_on_the_pragmas(no_features):
@@ -447,7 +475,7 @@ def test_one_warm_server_answers_each_deck_under_its_own_pragmas(
         shots = [_shell.render(d, basis="bs2") for d in (plain, asked, plain)]
     for text, shot in zip(texts, shots, strict=True):
         assert unclocked(text.replace("\r\n", "\n")) == unclocked(shot)
-    assert texts[1].split("\r\n")[1].endswith(" +pair_reuse")
+    assert texts[1].split("\r\n")[1].endswith(stamp_as_variable(PAIR, "bs2"))
     assert "+" not in texts[0].split("\r\n")[1]
     assert texts[0] == texts[2] or unclocked(texts[0]) == unclocked(texts[2])
 
@@ -506,7 +534,8 @@ def test_one_spawned_server_answers_each_deck_under_its_own_pragmas(tmp_path):
                         pass
         shutil.rmtree(room, ignore_errors=True)
     line2s = [o.split("\r\n")[1] for o in outs]
-    assert line2s[1] == line2s[0] + " +pair_reuse", line2s
+    tail = stamp_as_variable(PAIR, _shell._serve.BASIS)
+    assert line2s[1] == line2s[0] + tail, line2s
     assert line2s[2] == line2s[0] and "+" not in line2s[0]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
