@@ -1041,6 +1041,70 @@ FEATURES: dict[str, Feature] = {
             drift=2e-11,
             offer=True,
         ),
+        # The sector (block-circulant) route for a deck that is N identical
+        # sectors about one vertical axis (momwire#1029 bspline, #1897 off-
+        # axis verticals, #1912 sinusoidal): one sector's rows filled, one
+        # block solved per harmonic. Its keyword is older than this entry,
+        # and keeps its contract: True refuses a deck the route does not
+        # serve. The variable is the drop-ins' way in (Steve, 2026-11-24, on
+        # momwire#1338: "Lets just do it for the dropin. We want it optin."):
+        # with the keyword unset it TRIES the route and, on a deck or a
+        # solver it does not serve, solves densely and says why
+        # (`rotational_symmetry_declined`, the fill report's
+        # `sector.declined`, a RotationalSymmetryDeclined warning). Never
+        # auto-selected and off by default.
+        #
+        # bs2 / bs1 and the point-matched sinusoidal solver honour it. razor2p
+        # has no sector route yet (momwire#1251), so it is not in `solvers`:
+        # there the variable is accepted, unread and unstamped, and the deck
+        # is solved as with it off. Nor is the Galerkin subclass, whose
+        # keyword refuses by name.
+        #
+        # Reach 4, `dropin-linux-windows`, as pair_reuse: the drop-in on
+        # Linux and Windows is the route asked for, and the levels above it
+        # are every Python route but macOS. Python-kind (shipped fills and
+        # LAPACK on one sector's rows), so the macOS drop-in (level 5) runs it
+        # stamped uncertified. No executable carries it: there is no C++
+        # sector route and no EXE_FEATURES row, so they refuse the variable.
+        #
+        # `drift`, |dZin|/|Zin| on against off through the drop-ins (laptop,
+        # avx2, 2026-11-24; the port admittance at full precision), on
+        # radial screens generated as each dialect writes them: a vertical on
+        # the axis fed on the axis over N = 2 to 24 radials, flat or drooping,
+        # rotated off the axes, free space, PEC and Sommerfeld (above the
+        # ground, and buried through the portal and NEC-4.2), one to three
+        # frequencies:
+        #   NEC-5 bs2 / bs1, NEC-4.2 bs2, portal bs2 and sinusoidal, with
+        #     N = 2-24 at 7-11 segments a wire: 1.4e-11 or less, except
+        #     drooping and rotated N = 5 over Sommerfeld 2.3e-10 (sinusoidal)
+        #     and N = 7 rotated 1.1 rad at 21-31 segments a wire 4.3e-10.
+        #   The 80 EZNEC capture decks through NEC-5 bs2: 3 take the route
+        #     (0013, 0033, 0034; 1.3e-12 at most), the other 77 decline and
+        #     print the flag-off printout bar line 2.
+        # The 4.3e-10 is the dense fill's own rounding, not the route: the
+        # same deck solved densely moves 6.2e-10 when it is rotated 1.1 rad
+        # about the axis. 1e-9, the route's own acceptance bar (its tests'
+        # TOL), is 2.3x the worst; far under DEFAULT_DRIFT_MAX.
+        Feature(
+            name="rotational_symmetry",
+            reach=4,
+            env="MOMWIRE_X_ROTATIONAL_SYMMETRY",
+            solvers=("bspline", "sinusoidal"),
+            kind="python",
+            issue=1338,
+            since="2026-11-24",
+            kwarg="rotational_symmetry",
+            paths=("tests/test_rotational_symmetry_dropin_1338.py",),
+            label="rotational symmetry (radial screens)",
+            summary=(
+                "Solves a deck that is N identical sectors about one vertical "
+                "axis (a vertical over a radial screen) from one sector's rows, "
+                "one block per harmonic, instead of the whole matrix. A deck "
+                "that is not built that way is solved as usual."
+            ),
+            drift=1e-9,
+            offer=False,
+        ),
     )
 }
 

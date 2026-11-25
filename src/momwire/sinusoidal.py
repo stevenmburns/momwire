@@ -1167,8 +1167,11 @@ class SinusoidalSolver(
 
     `rotational_symmetry`
         The sector (block-circulant) route, opt-in (momwire#1912):
-        `BSplineSolver`'s (momwire#1029, #1897) on this basis. False (the
-        default) changes nothing. True asks for a deck that is N copies of
+        `BSplineSolver`'s (momwire#1029, #1897) on this basis. False changes
+        nothing. None (the default) defers to MOMWIRE_X_ROTATIONAL_SYMMETRY
+        (momwire#1338), unset is False; on, a deck the route serves takes it
+        and any other is solved densely, the reason in
+        `rotational_symmetry_declined`. True asks for a deck that is N copies of
         one sector about a vertical axis, whose port set the rotation maps
         onto itself: the fill is then ONE sector's match points (and the
         axial wires') against every source, and the solve the (m + p)
@@ -1316,7 +1319,7 @@ class SinusoidalSolver(
         transmitted_anchors=None,
         point_cplx_staged=None,
         pair_reuse=None,
-        rotational_symmetry=False,
+        rotational_symmetry=None,
         nec2_end_cap=None,
         nec2_far_approx=None,
         nec2_far_approx_range=None,
@@ -1433,7 +1436,11 @@ class SinusoidalSolver(
             nec2_end_cap=nec2_end_cap,
             nec2_far_approx=nec2_far_approx,
             mixed_lu=mixed_lu,
+            rotational_symmetry=(
+                None if rotational_symmetry is None else bool(rotational_symmetry)
+            ),
         )
+        self._rotational_bound = bound["rotational_symmetry"]
         # momwire#2125: the dense port solve by complex64 LU and complex128
         # refinement, falling back to the ordinary factor (`_lapack`'s
         # `mixed_lu_scope`). Off is the flag-off solve, bit for bit.
@@ -1774,9 +1781,14 @@ class SinusoidalSolver(
         # the dense fill or solve reads changes, and no route code runs.
         self._rotational_map = None
         self._rotational_copy_spread = None
-        self.rotational_symmetry = bool(rotational_symmetry)
-        if self.rotational_symmetry:
-            self._rotational_map = self._rotational_check()
+        # momwire#1338: the keyword insists (a deck the route does not serve
+        # is refused); None defers to MOMWIRE_X_ROTATIONAL_SYMMETRY, which
+        # takes the route where it serves and otherwise declines, naming why
+        # (`rotational_symmetry_declined`). The Galerkin subclass does not
+        # honour the variable (`_features`), so there only the keyword asks.
+        self.rotational_symmetry, self._rotational_map = _rotational_symmetry.resolve(
+            self, rotational_symmetry, self._rotational_bound, self._rotational_check
+        )
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule — the same
