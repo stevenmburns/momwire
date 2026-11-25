@@ -5396,8 +5396,10 @@ class BSplineSolver(
         computed = pairs - reused - near
         left_out = []
         if self.pair_reuse_remainder_cut:
+            # One map serves the image and the remainder (momwire#2074).
+            terms = " and ".join(self._ground_families())
             left_out.append(
-                f"{self.pair_reuse_remainder_cut} block(s) left the remainder's copy map"
+                f"{self.pair_reuse_remainder_cut} block(s) left the {terms} copy map"
             )
         # The ground terms (momwire#2068): each its own family, counted where
         # it was filled (`_note_ground_fill`); a term this ground has that no
@@ -5423,6 +5425,16 @@ class BSplineSolver(
             )
         if notes.get("remainder_map_unused"):
             left_out.append("the remainder's copy map did not fit the kernel's cache")
+        # A ground term filled with no copy between edges, beside a direct
+        # term that served (momwire#2074): the offset spread within an edge
+        # is not that copy, and a horizontal array copies most of its blocks.
+        for name in families:
+            note = notes.get(name)
+            if note is None or note["maps"]:
+                continue
+            if name == "remainder" and notes.get("remainder_map_unused"):
+                continue
+            left_out.append(f"the {name} term copied no block between edges")
         ledger.reuse = _fill_report.reuse_entry(
             "partial" if left_out else "served",
             declined="; ".join(left_out) or None,
