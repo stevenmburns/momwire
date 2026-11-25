@@ -507,3 +507,46 @@ def test_pair_reuse_steps_aside_on_the_reduced_kernel(tmp_path):
     timed = _run(EXE, [], deck, tmp_path, _env(**on, MW_EXE_TIMES="1"))
     assert _reuse_counts(timed.stderr)[0] == 0, timed.stderr
     assert _REDUCED in timed.stderr, timed.stderr
+
+
+# --- per-deck pragmas: `CM momwire: <name>` (`_features.deck_pragmas`) --------
+#
+# The card reads as the variable set on for its deck alone (`DeckPragmas`,
+# per `deck_frame`, as the launcher's `render_deck`): the plan runs for the
+# decks that carry it in a session that also answers decks that do not, and
+# the variable at "0" beats it. The NEC-2 printout has no line 2, so an
+# ignored card (rotational_symmetry, the drop-ins' alone) changes no byte.
+
+
+def _reuse_ran_per_deck(stderr: bytes) -> list[bool]:
+    totals = [(int(m[1]) - int(m[2]), int(m[3])) for m in _REUSE_LINE.finditer(stderr)]
+    return [b != a for a, b in zip([(0, 0), *totals], totals, strict=False)]
+
+
+def test_the_pair_reuse_pragma_runs_per_deck(tmp_path):
+    asked = b"CM momwire: pair_reuse\n" + _reuse_curtain("free")
+    plain = _reuse_curtain("free")
+    stream = asked + plain + asked
+    unset = {"MOMWIRE_X_PAIR_REUSE": None}
+    exe, ref, _de, _dl = _both([], tmp_path / "both", stdin=stream, env=unset)
+    assert NOT_SERVED not in exe.stdout, exe.stdout[-600:]
+    _same(exe, ref)
+    timed = _run(EXE, [], stream, tmp_path, _env(**unset, MW_EXE_TIMES="1"))
+    assert _reuse_ran_per_deck(timed.stderr) == [True, False, True], timed.stderr
+    assert _mask(timed.stdout) == _mask(exe.stdout)
+    killed = _run(
+        EXE, [], stream, tmp_path, _env(MOMWIRE_X_PAIR_REUSE="0", MW_EXE_TIMES="1")
+    )
+    assert _reuse_ran_per_deck(killed.stderr) == [False, False, False], killed.stderr
+    assert _mask(killed.stdout) == _mask(exe.stdout)
+
+
+def test_a_rotational_symmetry_pragma_is_ignored_not_refused(tmp_path):
+    card = b"CM momwire: rotational_symmetry\n" + DIPOLE.read_bytes()
+    prose = b"CM momwire- rotational_symmetry\n" + DIPOLE.read_bytes()
+    a = _run(EXE, [], card, tmp_path, _env())
+    b = _run(EXE, [], prose, tmp_path, _env())
+    assert a.returncode == b.returncode == 0
+    assert NOT_SERVED not in a.stdout and b"ERROR" not in a.stdout, a.stdout[-600:]
+    assert _mask(a.stdout).replace(b"momwire:", b"momwire-") == _mask(b.stdout)
+    assert a.stderr == b.stderr

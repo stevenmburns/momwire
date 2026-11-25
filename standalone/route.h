@@ -56,6 +56,10 @@ void stamp_uncertified(bool on);
 // Line 2 ends in `note` after the features (a deprecated executable name's
 // "(renamed from ...)", momwire#2090); "" (the default) adds nothing.
 void stamp_note(const std::string &note);
+// Every feature request, stamp tail and note back to the start (the
+// default-on features only), so a deck's pragma cards are requested from
+// scratch and withdrawn after it (`DeckPragmas` in momwire_razor2p.cpp).
+void reset_features();
 // razor2p's fill-pair reuse plans (momwire#1971, `razor::reuse::cache_counters`;
 // on the sinusoidal route its own, `sinusoidal::pair_reuse::counters`)
 // this copy has built, how many of those built came back declined, and how

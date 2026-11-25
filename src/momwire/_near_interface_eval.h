@@ -255,6 +255,11 @@ bool withdraw_feature(const std::string &name);
 // (a certification build running a feature past its reach, momwire#1911).
 std::string requested_stamp();
 void stamp_uncertified(bool on);
+// Back to the start: the default-on features requested unstamped, nothing
+// else, and no " uncertified" tail. An executable re-requests what one deck's
+// pragma cards add (`DeckPragmas` in standalone/momwire_razor2p.cpp) from
+// here, and what its environment asks after that deck.
+void reset_requested();
 
 // One buried fill with the requested features on, as the Python solvers'
 // scopes put them around theirs; restores what was on before.

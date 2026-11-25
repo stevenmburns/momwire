@@ -1227,6 +1227,146 @@ def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
     assert not (tmp_path / "reuse.out").exists()
 
 
+# --- per-deck pragmas: `CM momwire: <name>` (`_features.deck_pragmas`) --------
+#
+# A deck's pragma card reads as the feature's variable set on, for that deck
+# alone, through the same resolution the variable takes (`DeckPragmas` in
+# standalone/momwire_razor2p.cpp): nec5-razor2p runs its part, nec5-bs2
+# withholds the whole, and the variable at "0" beats the card. These
+# executables carry pair_reuse only: a rotational_symmetry card is ignored,
+# never refused, and named on line 2.
+
+_PRAGMA = "CM momwire: pair_reuse\n"
+_ROT_PRAGMA = "CM momwire: rotational_symmetry\n"
+_ROT_NOTE = b" (pragma ignored: rotational_symmetry)"
+
+
+@pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's reuse")
+@pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
+def test_the_pair_reuse_pragma_runs_as_the_launcher(ground, tmp_path, monkeypatch):
+    """The card alone: the launcher's bytes, line 2 naming +pair_reuse on
+    both, the reuse RUN (a plan built that did not decline), and every other
+    byte the variable's. The variable at "0" beats it: no plan, no stamp,
+    still the launcher's bytes."""
+    _no_reuse_vars(monkeypatch)
+    name = "pragma.nec"
+
+    def prepare(d):
+        (d / name).write_text(_PRAGMA + _REUSE_DECKS_1971[ground], newline="")
+
+    lines = {}
+    for state in (None, "1", "0"):
+        run = tmp_path / str(state)
+        run.mkdir()
+        env = {"MW_EXE_TIMES": "1"}
+        if state is not None:
+            env["MOMWIRE_X_PAIR_REUSE"] = state
+        exe, ref, de, dl = _both([name, "p.out"], run, prepare=prepare, env=env)
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        built, declined, _found = _reuse_counts(exe.stderr)
+        assert _reuse_ran(built, declined) == (state != "0"), (state, built, declined)
+        lines[state] = (de / "p.out").read_bytes()
+    assert lines[None] == lines["1"]
+    assert lines[None].split(b"\n")[1].rstrip().endswith(b" +pair_reuse")
+    assert b"+" not in lines["0"].split(b"\n")[1]
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's withholding")
+def test_nec5_bspline_withholds_the_pair_reuse_pragma_as_the_variable(
+    tmp_path, monkeypatch
+):
+    """bs2's part is Python's alone here, so the card does what the variable
+    does on this executable: no plan built, the printout the one with it
+    off, line 2 included."""
+    _no_reuse_vars(monkeypatch)
+    deck = tmp_path / "pragma.nec"
+    deck.write_text(_PRAGMA + _REUSE_DECKS_1971["free"], newline="")
+    outs = {}
+    for state in (None, "1"):
+        env = dict(os.environ, MW_EXE_TIMES="1")
+        if state is not None:
+            env["MOMWIRE_X_PAIR_REUSE"] = state
+        out = tmp_path / f"{state}.out"
+        r = subprocess.run(
+            [EXE, deck.name, out.name], cwd=tmp_path, env=env, capture_output=True
+        )
+        assert r.returncode == 0, r.stderr
+        assert _reuse_counts(r.stderr)[0] == 0, r.stderr
+        outs[state] = out.read_bytes()
+    assert b"NEC ERROR" not in outs[None]
+    assert outs[None] == outs["1"]
+    assert b"+" not in outs[None].split(b"\n")[1]
+
+
+def test_a_rotational_symmetry_pragma_is_ignored_not_refused(tmp_path, monkeypatch):
+    """The executables carry no rotational symmetry (the drop-ins' alone),
+    so its card is ignored: exit 0, a printout, and line 2 says so; every
+    other byte is the deck's with the card spelled as prose."""
+    _no_reuse_vars(monkeypatch)
+    monkeypatch.delenv("MOMWIRE_X_ROTATIONAL_SYMMETRY", raising=False)
+    body = DIPOLE.read_text(encoding="latin-1")
+    outs = {}
+    for key, head in (
+        ("card", _ROT_PRAGMA),
+        ("prose", "CM momwire- rotational_symmetry\n"),
+    ):
+        deck = tmp_path / f"{key}.nec"
+        deck.write_text(head + body, encoding="latin-1", newline="")
+        out = tmp_path / f"{key}.out"
+        r = subprocess.run(
+            [EXE, deck.name, out.name], cwd=tmp_path, capture_output=True, check=False
+        )
+        assert r.returncode == 0 and r.stderr == b"", r
+        outs[key] = out.read_bytes().split(b"\n")
+    card, prose = outs["card"], outs["prose"]
+    assert card[1].rstrip(b"\r") == prose[1].rstrip(b"\r") + _ROT_NOTE
+    assert [x.replace(b"momwire:", b"momwire-") for x in card[2:]] == prose[2:]
+
+
+@pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's reuse")
+def test_the_pragma_is_per_structure_in_a_stream(tmp_path, monkeypatch):
+    """SimNEC's `- -`, one process: a structure with the card, one without,
+    one with again. Each printout is the launcher's, line 2 naming the
+    reuse on the first and third only, and the plans built are the two
+    structures that asked."""
+    _no_reuse_vars(monkeypatch)
+    body = _REUSE_DECKS_1971["free"].replace("EN\n", "NX\n")
+    stream = (_PRAGMA + body + body + _PRAGMA + body).encode("latin-1")
+    runs = []
+    for name, prog in (("exe", EXE), ("launcher", _launcher())):
+        d = tmp_path / name
+        d.mkdir()
+        runs.append(
+            subprocess.run(
+                [prog, "-", "-"],
+                cwd=d,
+                input=stream,
+                env=dict(os.environ, MW_EXE_TIMES="1"),
+                capture_output=True,
+                check=False,
+            )
+        )
+    exe, ref = runs
+    assert (
+        (exe.returncode, exe.stdout) == (ref.returncode, ref.stdout) == (0, ref.stdout)
+    )
+    # MW_EXE_TIMES's reuse line after each structure (process totals)
+    totals = [
+        (int(m[1]) - int(m[2]), int(m[3]))
+        for m in _REUSE_LINE.finditer(exe.stderr.decode("latin-1"))
+    ]
+    assert len(totals) == 3, exe.stderr
+    ran = [b != a for a, b in zip([(0, 0), *totals], totals, strict=False)]
+    assert ran == [True, False, True], totals
+    stamps = [
+        b" +pair_reuse" in line
+        for line in exe.stdout.split(b"\n")
+        if line.startswith(b" momwire ")
+    ]
+    assert stamps == [True, False, True], stamps
+
+
 # --- one bound across every build's store (momwire#2014) ----------------------
 
 _MB = 1 << 20

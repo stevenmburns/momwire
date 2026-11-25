@@ -114,6 +114,7 @@ void save_deck(const std::string &latin1_body) {
 // (UTF-8, `\n`), each as `_frame_chunks` joins them.
 void deck_frame(const std::string &body, const std::string &terminator, std::string &out_text,
                 std::string &err_text) {
+    const DeckPragmas pragmas(body);  // `render_deck`'s (`_features.pragma_scoped`)
     save_deck(body);
     std::vector<std::string> out, err;
     std::string why, kind, message;
