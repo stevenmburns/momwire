@@ -24,8 +24,10 @@ and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; among them momwire#1860's four levers,
 reach 9, so every executable but nec42-sinusoidal's, razor_pair_reuse, reach
 8, which only nec5-razor2p's route carries, so nec5-bs2 refuses it by basis,
-``EXE_FEATURE_BASES``, and the whole ``pair_reuse``, reach 11, which every
-executable accepts and maps to its own route's reuse, ``EXE_PARTS``). One
+``EXE_FEATURE_BASES``, offset_reuse, reach 9, which only the bs2 routes
+carry, so nec5-razor2p refuses it by basis, and the whole ``pair_reuse``,
+reach 11, which every executable accepts and maps to its own route's reuse,
+``EXE_PARTS``). One
 started with any other ``MOMWIRE_X_`` variable on refuses before it reads a
 deck (:data:`EXE_REFUSAL`).
 
@@ -275,12 +277,10 @@ FEATURES: dict[str, Feature] = {
         # own basis's reuse (`EXE_FEATURES` and `EXE_PARTS` in
         # standalone/momwire_razor2p.cpp): nec5-razor2p its part
         # `razor_pair_reuse`, the two sinusoidal executables this plan, and
-        # nec5-bs2 and nec42-bs2 nothing yet -- their part `offset_reuse` is
-        # Python's, so there the whole is withheld and the printout is the
-        # one with it off. Where it runs, a part is certified only as far as
-        # its own reach, and line 2 says so (`stamp`): the macOS bspline
-        # drop-in (level 5, past `offset_reuse`'s 4) stamps it uncertified.
-        # Still off by default and not offered.
+        # nec5-bs2 and nec42-bs2 the census and their part `offset_reuse`,
+        # both in bs2's C++ fill (momwire#2063), at the launcher's bytes.
+        # Where it runs, a part is certified only as far as its own reach,
+        # and line 2 says so (`stamp`). Still off by default and not offered.
         Feature(
             name="pair_reuse",
             reach=11,
@@ -351,9 +351,13 @@ FEATURES: dict[str, Feature] = {
         # Reach 4 with the whole (Steve, 2026-11-19): it is what
         # MOMWIRE_X_PAIR_REUSE turns on for bspline, so a certified whole
         # never stamps a bspline drop-in printout uncertified through it.
+        # Reach 9 since bs2's C++ fill carries it (momwire#2063 stage 4): the
+        # nec5-bs2 and nec42-bs2 executables (levels 6 to 9) run it, with the
+        # whole's census, at the launcher's bytes (`EXE_PARTS`). PROPOSED, not
+        # yet the maintainer's call: it also certifies the macOS drop-in.
         Feature(
             name="offset_reuse",
-            reach=4,
+            reach=9,
             env="MOMWIRE_X_OFFSET_REUSE",
             solvers=("bspline",),
             kind="python",

@@ -435,13 +435,16 @@ struct ExeFeature {
 };
 // The one fill-reuse switch, `pair_reuse` (momwire#1982; reach 11, every
 // executable), which each formulation maps to its own route's reuse
-// (`EXE_PARTS`); momwire#1860's levers, ported to the buried fills' C++
+// (`EXE_PARTS`); bs2's part of it, `offset_reuse` (momwire#1809, reach 9:
+// the bs2 executables, levels 6 to 9; bs2's C++ fill reads it beside the
+// whole's census, `_nec5_bspline_printout_core.cpp`); momwire#1860's levers, ported to the buried fills' C++
 // (`ni_eval::Features`), razor2p's fill-pair reuse (momwire#1971,
 // `_razor_pair_reuse_core.h`, which `_nec5_razor_seam_core.cpp` reads from
 // `ni_eval::requested_features`), and momwire#1956's retuned sheet weights
 // (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
     {"pair_reuse", 11, false},
+    {"offset_reuse", 9, false},
     {"factored_columns", 9, true},
     {"height_sheet_recal", 9, true},
     {"crossing_table", 9, false},
@@ -455,10 +458,12 @@ const ExeFeature EXE_FEATURES[] = {
 // razor_pair_reuse is razor2p's fill, but nec5-bs2 shares its levels
 // (6 to 8) and its EXE_FEATURES, so without this it would accept the
 // variable, name it on line 2 and fill as with it off. It refuses instead,
-// in the registry's sentence (nec42-bs2 is past the reach anyway).
+// in the registry's sentence (nec42-bs2 is past the reach anyway). Likewise
+// offset_reuse is bs2's fill alone, and nec5-razor2p shares its levels.
 const char *const EXE_FEATURE_BASES[][2] = {
     {"razor_pair_reuse", "razor2p"},
     {"crossing_anchors", "razor2p"},
+    {"offset_reuse", "bs2"},
 };
 
 bool feature_basis_here(const std::string &name) {
@@ -479,17 +484,16 @@ bool feature_basis_here(const std::string &name) {
 //   sinusoidal  the whole itself: the point-matched fill reads the
 //               `pair_reuse` slot (`_sin_pair_reuse_core.h`) and the family
 //               has no part;
-//   bs2         nothing yet (""): its part, offset_reuse, is Python's alone,
-//               so here it is withheld as `_features.withheld` withholds a
-//               native part outside its reach -- requested nowhere, named
-//               nowhere, the printout the one with it off.
+//   bs2         its part, offset_reuse (momwire#1809), and the whole's own
+//               slot, which bs2's fill reads as `BSplineSolver` reads
+//               `_reuse_on`: the census's classes (`_bspline_pair_reuse_core.h`,
+//               momwire#2063). Both are bs2's C++ fill's; the part's own
+//               variable wins when set, as for razor2p.
 // tests/test_features_registry.py holds this to the registry's parts.
 const char *const EXE_PARTS[][3] = {
     {"pair_reuse", "razor2p", "razor_pair_reuse"},
     {"pair_reuse", "sinusoidal", "pair_reuse"},
-    // bs2's C++ reuse core (momwire#2063 stage 3) lands as this row's part;
-    // route_bs2.cpp then reads the slot it names.
-    {"pair_reuse", "bs2", ""},
+    {"pair_reuse", "bs2", "offset_reuse"},
 };
 
 // The row of EXE_PARTS for whole `name` on this basis, or nullptr when
@@ -672,7 +676,7 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
     // (on, the part is in `asked` and named itself; off, the whole did
     // nothing). A whole whose part is none here, or does not run here, is
     // withheld: neither requested nor named.
-    std::vector<std::string> names, parts;
+    std::vector<std::string> names, parts, whole_unstamped;
     for (const std::string &name : asked) {
         const char *const *row = whole_parts_here(name);
         if (row == nullptr) {
@@ -683,7 +687,15 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
         if (part.empty() || !feature_runs_here(part)) continue;
         if (part != name) {
             if (feature_env_set(part)) {
-                if (std::find(asked.begin(), asked.end(), part) == asked.end()) continue;
+                if (std::find(asked.begin(), asked.end(), part) == asked.end()) {
+                    // the part set off under its whole: nothing of the whole
+                    // is named, but its own slot still runs where a route
+                    // reads it (bs2's census, as `BSplineSolver._reuse_on`
+                    // follows the whole alone); razor2p's route reads only
+                    // its part
+                    whole_unstamped.push_back(name);
+                    continue;
+                }
             } else {
                 parts.push_back(part);
             }
@@ -691,6 +703,7 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
         names.push_back(name);
     }
     std::vector<std::string> stamped, unstamped = parts, withdrawn;
+    unstamped.insert(unstamped.end(), whole_unstamped.begin(), whole_unstamped.end());
     for (const std::string &name : names)
         if (name == "nec2_end_cap") continue;  // the NEC-2 route's own (above)
         else if (!feature_default_here(name))

@@ -248,6 +248,7 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     assert dict(rows) == {
         "razor_pair_reuse": "razor2p",
         "crossing_anchors": "razor2p",
+        "offset_reuse": "bs2",
     }
     cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text(encoding="utf-8")
     bases = set(re.findall(r'MW_EXE_BASIS_NAME="([a-z0-9-]+)"', cmake))
@@ -300,12 +301,12 @@ def test_a_whole_runs_on_each_executable_what_its_route_carries():
             else:
                 expected = ""
             assert parts[(whole, basis)] == expected, (whole, basis)
-    # Today: razor2p's part, the sinusoidal plan, and bs2 withheld until
-    # its C++ reuse core lands (momwire#2063 stage 3).
+    # Today: razor2p's part, the sinusoidal plan, and bs2's part, which its
+    # C++ fill runs beside the whole's census (momwire#2063).
     assert parts == {
         ("pair_reuse", "razor2p"): "razor_pair_reuse",
         ("pair_reuse", "sinusoidal"): "pair_reuse",
-        ("pair_reuse", "bs2"): "",
+        ("pair_reuse", "bs2"): "offset_reuse",
     }
 
 
