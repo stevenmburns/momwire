@@ -1324,6 +1324,51 @@ def test_a_rotational_symmetry_pragma_is_ignored_not_refused(tmp_path, monkeypat
     assert [x.replace(b"momwire:", b"momwire-") for x in card[2:]] == prose[2:]
 
 
+# The reader's table (tests/test_deck_pragma.py) through both programs: every
+# name is one this build does not take, so line 2's "(pragma ignored: ...)"
+# shows exactly what each reader found, in order.
+_READER_CASES = (
+    "CM momwire: zq\n",
+    "cm MOMWIRE: Zq\n",
+    "  \tCM \t momwire:\t  zq tail\n",
+    "CM \tmomwire: zq\n",
+    "CMmomwire:zq\n",
+    "CM momwire: zq,zr\n",
+    "CM momwire: zq-x\n",
+    "CM momwire: 42x\n",
+    "CM momwire:\n",
+    "CM momwire: ??? zq\n",
+    "CM uses momwire: zq\n",
+    "CM momwire : zq\n",
+    "CE momwire: zq\n",
+    "CM momwire: zq\nCM momwire: zr\nCM momwire: ZQ\n",
+    "CM a\r\nCM momwire: zq\r\n",
+    "CM momwire: zq\xe9x\n",
+    "CM momwire: \xb2zq\n",
+)
+
+
+@pytest.mark.parametrize("cards", _READER_CASES)
+def test_the_pragma_reader_is_pythons(cards, tmp_path):
+    from momwire import _features
+
+    name = "reader.nec"
+
+    def prepare(d):
+        body = DIPOLE.read_bytes().decode("latin-1")
+        (d / name).write_bytes((cards + body).encode("latin-1"))
+
+    exe, ref, de, dl = _both([name, "r.out"], tmp_path, prepare=prepare)
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    line2 = (de / "r.out").read_bytes().split(b"\n")[1].rstrip(b"\r").decode("latin-1")
+    found = _features.deck_pragmas(cards)
+    if found:
+        assert line2.endswith(f" (pragma ignored: {', '.join(found)})"), line2
+    else:
+        assert "pragma" not in line2, line2
+
+
 @pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's reuse")
 def test_the_pragma_is_per_structure_in_a_stream(tmp_path, monkeypatch):
     """SimNEC's `- -`, one process: a structure with the card, one without,
