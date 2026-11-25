@@ -296,7 +296,7 @@ static const char *const ADVISORIES_ALL[] = {
  * feature_identity and thread_identity, spelt again here because this
  * program cannot import it.  These tables are COPIES of that module's
  * JUNCTION_RULE_ENV, FEATURE_ENV_PREFIX, FEATURE_ALIASES, FEATURE_DEFAULT_ON,
- * _FEATURE_ON and THREAD_ENVS (which tests/test_features_registry.py holds
+ * FEATURE_PARTS, _FEATURE_ON and THREAD_ENVS (which tests/test_features_registry.py holds
  * equal to the registry); tests/test_eznec_client_c.py holds each copy equal
  * to its original, and the elements built from them equal Python's over a
  * table of environments.  Keep the brace-per-line shapes: the test reads
@@ -310,6 +310,10 @@ static const char *const FEATURE_ALIASES[][2] = {
 static const char *const FEATURE_DEFAULT_ON[] = {
     "factored_columns",
     "height_sheet_recal",
+};
+static const char *const FEATURE_PARTS[] = {
+    "offset_reuse",
+    "razor_pair_reuse",
 };
 static const char *const FEATURE_ON[] = {
     "1",
@@ -1099,6 +1103,7 @@ static int env_elements(buf_t *out)
         size_t var_len;
         size_t a;
         int default_on = 0;
+        int part = 0;
         int on;
         const char *s;
         size_t n;
@@ -1140,9 +1145,16 @@ static int env_elements(buf_t *out)
                 default_on = 1;
             }
         }
+        for (a = 0; a < COUNT_OF(FEATURE_PARTS); a++) {
+            if (strcmp(item, FEATURE_PARTS[a]) == 0) {
+                part = 1;
+            }
+        }
         on = is_feature_on(value);
         strip_span(value, &s, &n);
-        if (default_on && n > 0 && !on) {
+        /* A default-on feature, or a part of a whole (which the whole's
+         * variable alone turns on), keys its explicit "0" as "=off". */
+        if ((default_on || part) && n > 0 && !on) {
             memcpy(item + name_len, "=off", sizeof "=off");
         } else if (default_on || !on) {
             free(item);
