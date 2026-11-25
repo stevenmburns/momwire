@@ -3634,11 +3634,30 @@ std::string engine_stamp(const std::string &basis, const EngineStamp &stamp) {
     if (version.empty()) version = "unknown";
     std::string variant = stamp_field(stamp.variant);
     if (variant.empty()) variant = "none";
-    const std::string tail = stamp.marker.empty() ? std::string() : " " + stamp.marker;
-    const long long room = 79LL - 9 - static_cast<long long>(version.size()) -
-                           static_cast<long long>(variant.size()) -
-                           static_cast<long long>(tail.size()) - 2;
-    std::string name = stamp_field(basis).substr(0, static_cast<std::size_t>(std::max(room, 0LL)));
+    // `_printout.compose_stamp`: the pragma note's names, the note, the
+    // rename note, and only then the basis name give way, each step taken
+    // while the whole basis still does not fit.
+    std::string short_pragma = stamp.pragma_note;
+    const std::size_t colon = short_pragma.find(": ");
+    if (colon != std::string::npos) short_pragma = short_pragma.substr(0, colon) + ")";
+    const std::string full_name = stamp_field(basis);
+    const long long fixed_cols = 9 + static_cast<long long>(version.size()) +
+                                 static_cast<long long>(variant.size()) + 2;
+    const std::string steps[4][2] = {{stamp.pragma_note, stamp.rename_note},
+                                     {short_pragma, stamp.rename_note},
+                                     {"", stamp.rename_note},
+                                     {"", ""}};
+    std::string tail;
+    long long room = 0;
+    for (const auto &step : steps) {
+        std::string chosen = stamp.marker;
+        for (const std::string &part : step)
+            if (!part.empty()) chosen += (chosen.empty() ? "" : " ") + part;
+        tail = chosen.empty() ? std::string() : " " + chosen;
+        room = 79LL - fixed_cols - static_cast<long long>(tail.size());
+        if (static_cast<long long>(full_name.size()) <= room) break;
+    }
+    std::string name = full_name.substr(0, static_cast<std::size_t>(std::max(room, 0LL)));
     if (name.empty()) name = "-";
     const std::string line = " momwire " + version + " " + name + " " + variant + tail;
     return line.substr(0, 79);

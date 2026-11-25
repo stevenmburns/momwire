@@ -250,35 +250,60 @@ def engine_stamp(basis: str) -> str:
     version = _stamp_field(_momwire_version()) or _STAMP_UNKNOWN_VERSION
     variant = _stamp_field(_accelerator_variant()) or _STAMP_NO_VARIANT
     marker = _overlay_marker(version)
-    tail = f" {marker}" if marker else ""
     # The experimental features the environment turned on (`_features`) that
     # this basis's solver honours (momwire#1980: a variable it ignores is
     # not named), and whether this platform is outside any one's reach.
     # Nothing when none is on, so a flags-off line 2 is the line it always
     # was.
     features = _features.stamp(solver=_features.basis_solver(basis))
-    if features:
-        tail += f" {features}"
+    fixed = " ".join(part for part in (marker, features) if part)
     # A deck's pragma card this route ignores (`_features.pragma_note`):
     # after the features, before the rename note.
     pragmas = _features.pragma_note()
-    if pragmas:
-        tail += f" {pragmas}"
-    note = deprecation_note(basis) or deprecation_note(spelling())
-    if note:
-        tail += f" {note}"
+    rename = deprecation_note(basis) or deprecation_note(spelling())
+    if rename:
         basis = canonical_basis(basis, warn=False)
-    # The marker's room is reserved BEFORE the basis is cut, so a long
-    # launcher name loses its own tail rather than the overlay warning.
-    room = (
-        _STAMP_COLUMNS
-        - len(_STAMP_PREFIX)
-        - len(version)
-        - len(variant)
-        - len(tail)
-        - 2
-    )
-    name = _stamp_field(basis)[: max(room, 0)] or _STAMP_UNNAMED_BASIS
+    return compose_stamp(basis, version, variant, fixed, pragmas, rename)
+
+
+def compose_stamp(
+    basis: str,
+    version: str,
+    variant: str,
+    fixed: str,
+    pragmas: str = "",
+    rename: str = "",
+) -> str:
+    """Line 2 from its parts, cut to :data:`_STAMP_COLUMNS` in a fixed order.
+
+    ``fixed`` is the overlay marker and the feature stamp, already joined; it
+    is never cut, because it says which numbers to distrust.  When the whole
+    line does not fit, the pieces that are only informational go first, so
+    the BASIS NAME survives (momwire#2158: it is the field a bug report most
+    needs, since it says which engine answered):
+
+    1. the pragma note's names, ``(pragma ignored: a, b)`` -> ``(pragma ignored)``;
+    2. the pragma note;
+    3. the rename note, which goes away by itself when the file is renamed;
+    4. only then the basis name, to whatever room is left.
+
+    Each step is taken only while the whole basis still does not fit, so a
+    line that fits is byte-identical to the uncut one, and a basis too long
+    for any room has already lost every note.  The C++ ``engine_stamp``
+    (``_nec5_printout_core.cpp``) takes the same steps.
+    """
+    short = pragmas.split(": ", 1)[0] + ")" if ": " in pragmas else pragmas
+    name = _stamp_field(basis)
+    fixed_cols = len(_STAMP_PREFIX) + len(version) + len(variant) + 2
+    chosen = ""
+    for pragma, note in ((pragmas, rename), (short, rename), ("", rename), ("", "")):
+        chosen = " ".join(part for part in (fixed, pragma, note) if part)
+        tail = f" {chosen}" if chosen else ""
+        if len(name) <= _STAMP_COLUMNS - fixed_cols - len(tail):
+            break
+    tail = f" {chosen}" if chosen else ""
+    room = _STAMP_COLUMNS - fixed_cols - len(tail)
+    name = name[: max(room, 0)] or _STAMP_UNNAMED_BASIS
     # The clamp is belt and braces for the two fields this function does not
     # bound (a metadata version is short in practice, and the variant labels
     # are a closed set), so the column limit holds without trusting either.
