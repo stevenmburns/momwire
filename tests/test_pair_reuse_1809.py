@@ -225,7 +225,7 @@ def _random_wires(count=12, n=11):
 def test_reciprocity_needs_equal_radii():
     """Random wires repeat nothing but each pair's transpose: at one radius
     every pair between two wires shares a class with its reverse (2x); with a
-    radius per wire it shares none, and the census passes the 2x cap."""
+    radius per wire it shares none, and the census passes the 4/3x cap."""
     deck = _random_wires()
     N = 12 * 11
     same = 12 * 11 * 11
@@ -243,7 +243,8 @@ def test_reciprocity_needs_equal_radii():
     s = _solver(0, True, **kw)
     z1 = _z(s)
     assert s.pair_reuse_declined == (
-        f"more than {N * N // 2} classes for {N * N} pairs (the cap is 2x compression)"
+        f"more than {int(N * N / (4.0 / 3.0))} classes for {N * N} pairs "
+        "(the cap is 1.333x compression)"
     )
     assert np.array_equal(_bits(_z(_solver(0, False, **kw))), _bits(z1))
 

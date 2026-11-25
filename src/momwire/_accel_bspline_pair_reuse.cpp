@@ -213,7 +213,7 @@ void register_bspline_pair_reuse(py::module_ &m) {
           "TEST HOOK: later plans decline past this many classes (0: the coding's own limit).");
     m.def("bspline_reuse_plan_allowance", &br::set_plan_allowance, py::arg("bytes"),
           "TEST HOOK (momwire#2123): later plans decline past `bytes` of kept plan (<= 0: the derived "
-          "allowance, 4 B per pair plus `bspline_reuse_kept_bytes_per_class` per class the 2x cap allows).");
+          "allowance, 4 B per pair plus `bspline_reuse_kept_bytes_per_class` per class the 4/3x cap allows).");
     m.def("bspline_reuse_small_deck_segs", &br::small_deck_segs,
           "Segments below which bs2's pair reuse steps aside.");
     m.def("bspline_reuse_set_small_deck_segs", &br::set_small_deck_segs, py::arg("segs"),
