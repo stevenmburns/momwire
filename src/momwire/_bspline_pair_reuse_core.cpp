@@ -193,7 +193,7 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, g_class_limit.load());
     put(s, g_length_bits.load());
     put(s, g_plan_allowance.load());
-    put(s, pair_reuse::cap_compression());
+    put(s, pair_reuse::cap_key());
     put(s, static_cast<int64_t>(g.thresholds.size()));
     for (double t : g.thresholds) put(s, t);
     put(s, g.group_i != nullptr);

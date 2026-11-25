@@ -123,7 +123,7 @@ constexpr const char *BASIS = "bs2";
 // group's lists. d = 2: 144 + 9 + 8 = 161 B.
 int64_t kept_bytes_per_class(int degree);
 // THE ALLOWANCE (momwire#2123): 4 B a pair for the class map plus
-// `kept_bytes_per_class` per class the 2x cap allows, `pair_reuse::plan_allowance`
+// `kept_bytes_per_class` per class the 4/3x cap allows, `pair_reuse::plan_allowance`
 // (84.5 B a pair at d = 2), or the TEST HOOK's bytes.
 int64_t plan_allowance(const Plan &p, int degree);
 void set_plan_allowance(int64_t bytes);  // TEST HOOK, <= 0 restores
