@@ -5423,6 +5423,17 @@ class BSplineSolver(
             )
         if notes.get("remainder_map_unused"):
             left_out.append("the remainder's copy map did not fit the kernel's cache")
+        # A ground term filled with no copy between edges, beside a direct
+        # term that served (momwire#2074): the offset spread within an edge
+        # is not that copy. The image term has no copy map yet (#2159), so
+        # over a finite or perfect ground this always names it.
+        for name in families:
+            note = notes.get(name)
+            if note is None or note["maps"]:
+                continue
+            if name == "remainder" and notes.get("remainder_map_unused"):
+                continue
+            left_out.append(f"the {name} term copied no block between edges")
         ledger.reuse = _fill_report.reuse_entry(
             "partial" if left_out else "served",
             declined="; ".join(left_out) or None,
