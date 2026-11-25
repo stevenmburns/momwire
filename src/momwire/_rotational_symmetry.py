@@ -54,6 +54,7 @@ from __future__ import annotations
 import hashlib
 import math
 import pickle
+import warnings
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
@@ -88,6 +89,63 @@ class RotationalSymmetryRefused(NotImplementedError):
     """Raised by `rotational_symmetry=True` when a deck is not N copies of one
     sector about a vertical axis. The message names the first failing
     condition of `PLAN-phase1.md` §3 and the way out."""
+
+
+class RotationalSymmetryDeclined(UserWarning):
+    """MOMWIRE_X_ROTATIONAL_SYMMETRY asked for the sector route on a deck or
+    a solver it does not serve, so the deck was solved densely. The message
+    is the reason, also kept on the solver as `rotational_symmetry_declined`
+    and in its fill report's `sector.declined` (momwire#1338)."""
+
+
+# The refusal's way out, which a decline does not need: the dense solve has
+# already been taken.
+_DECLINED_TAIL = " " + _WAY_OUT
+
+
+def resolve(solver, kwarg_value, bound, check, extra_refusal=None):
+    """`(on, sector map)` for a constructor's `rotational_symmetry` (momwire#1338).
+
+    The keyword is the contract it always was: True takes the route and a
+    deck it does not serve is REFUSED (`check` raises
+    `RotationalSymmetryRefused`), False is the dense solve. None defers to
+    the registry (`bound`, `_features.bind`'s answer, so
+    MOMWIRE_X_ROTATIONAL_SYMMETRY): on, the route is TRIED, and a deck it
+    does not serve -- or a solver whose own `solve_strategy` axis has no
+    "sector" (the H-matrix and array-block subclasses), or `extra_refusal`,
+    a sentence the caller computed -- is DECLINED instead: solved densely,
+    the reason kept on `solver.rotational_symmetry_declined` and warned as
+    :class:`RotationalSymmetryDeclined`. The variable asks for what this
+    solver can do here, as `pair_reuse`'s does; only the keyword insists."""
+    solver.rotational_symmetry_declined = None
+    if kwarg_value is not None:
+        if not kwarg_value:
+            return False, None
+        return True, check()
+    if not bound:
+        return False, None
+    strategies = solver.capabilities.axes.get("solve_strategy", ())
+    if "sector" not in strategies:
+        reason = (
+            f"rotational symmetry: {type(solver).__name__} has no sector solve "
+            f"(its solve_strategy is {', '.join(strategies)})."
+        )
+    elif extra_refusal is not None:
+        reason = extra_refusal
+    else:
+        try:
+            return True, check()
+        except RotationalSymmetryRefused as exc:
+            reason = str(exc)
+    if reason.endswith(_DECLINED_TAIL):
+        reason = reason[: -len(_DECLINED_TAIL)]
+    solver.rotational_symmetry_declined = reason
+    warnings.warn(
+        f"MOMWIRE_X_ROTATIONAL_SYMMETRY: solved densely; {reason}",
+        RotationalSymmetryDeclined,
+        stacklevel=3,
+    )
+    return False, None
 
 
 class SectorMap(NamedTuple):

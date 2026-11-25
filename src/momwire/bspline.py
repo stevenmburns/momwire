@@ -2022,8 +2022,11 @@ class BSplineSolver(
         production shapes); below ~64 the batching win starts eroding
         (chunk=1 costs ~+75% on the worst shapes).
     rotational_symmetry : the sector (block-circulant) route, opt-in
-        (momwire#1029). False (default) changes nothing — no attribute the
-        dense path reads moves, and no line of route code runs. True asks for
+        (momwire#1029). False changes nothing — no attribute the dense path
+        reads moves, and no line of route code runs. None (the default)
+        defers to MOMWIRE_X_ROTATIONAL_SYMMETRY (`_features`, momwire#1338),
+        unset is False; on, a deck the route serves takes it and any other is
+        solved densely, the reason in `rotational_symmetry_declined`. True asks for
         a deck that is N copies of one sector about a vertical axis — the
         sector wires may include vertical ones off the axis (momwire#1897) —
         whose port set the rotation maps onto itself: `compute_impedance`
@@ -2192,7 +2195,7 @@ class BSplineSolver(
         tikhonov_lambda=1e-3,
         auto_tap_ratio_threshold=0.3,
         swept_mem_mb=256,
-        rotational_symmetry=False,
+        rotational_symmetry=None,
         pair_reuse=None,
         offset_reuse=None,
         transmitted_anchors=None,
@@ -2272,7 +2275,11 @@ class BSplineSolver(
             crossing_above_rule=crossing_above_rule,
             kcl_nullspace=kcl_nullspace,
             mixed_lu=mixed_lu,
+            rotational_symmetry=(
+                None if rotational_symmetry is None else bool(rotational_symmetry)
+            ),
         )
+        self._rotational_bound = bound["rotational_symmetry"]
         if not bound["pair_reuse"]:
             hint = None
         # Renumbered to the solved wires on first use (`_solved_pair_reuse`):
@@ -2778,9 +2785,23 @@ class BSplineSolver(
         # on the sector assignment, read back by the gates. None until a
         # sector solve has run.
         self._rotational_copy_spread = None
-        self.rotational_symmetry = bool(rotational_symmetry)
-        if self.rotational_symmetry:
-            self._rotational_map = self._rotational_check()
+        # momwire#1338: the keyword insists (a deck the route does not serve
+        # is refused), while None defers to MOMWIRE_X_ROTATIONAL_SYMMETRY,
+        # which asks for the route where it serves and otherwise declines,
+        # naming why (`rotational_symmetry_declined`). exact_kernel=True is
+        # one such reason: with the keyword it is refused above.
+        self.rotational_symmetry, self._rotational_map = _rotational_symmetry.resolve(
+            self,
+            rotational_symmetry,
+            self._rotational_bound,
+            self._rotational_check,
+            extra_refusal=(
+                "rotational symmetry: exact_kernel=True does not serve the sector"
+                " route's restricted rows (momwire#1408)."
+                if self.exact_kernel_requested is True
+                else None
+            ),
+        )
         if self.exact_kernel_requested == "auto":
             self.exact_kernel = self._resolve_exact_kernel_auto()
         # The advisories below read the RESOLVED kernel (momwire#1412), so they

@@ -63,11 +63,14 @@ the process's cache has dropped reads `{"unavailable": reason}` rather than
 being rebuilt: the report never runs a census.
 
 Nothing here runs unless its option is on: no reuse analysis without
-`pair_reuse`, and no symmetry probe without `rotational_symmetry=True`.
+`pair_reuse`, and no symmetry probe without `rotational_symmetry=True` or
+MOMWIRE_X_ROTATIONAL_SYMMETRY.
 
 A deck refused by `rotational_symmetry=True` refuses at construction, so there
 is no solver to ask: :func:`refused_report` gives the same shape from the
-exception.
+exception. A deck MOMWIRE_X_ROTATIONAL_SYMMETRY asked for and the solver
+declined (momwire#1338) is solved densely, and its `sector` block is that
+same shape, `declined` the reason.
 """
 
 from __future__ import annotations
@@ -328,10 +331,16 @@ class FillReport:
         return {"unavailable": "this solver has no wire map"}
 
     def _fill_report_sector(self, ledger):
-        """The `sector` block, or None when the route is not on."""
+        """The `sector` block, or None when the route is not on. A route
+        MOMWIRE_X_ROTATIONAL_SYMMETRY asked for and the solver declined
+        (momwire#1338) reads as :func:`refused_report`'s block does: no
+        sectors, and `declined` the reason."""
         smap = getattr(self, "_rotational_map", None)
         if smap is None:
-            return None
+            declined = getattr(self, "rotational_symmetry_declined", None)
+            if declined is None:
+                return None
+            return refused_report(declined)["sector"]
         wire_sector = {}
         for s, wires in enumerate(smap.sectors):
             for w in wires:
