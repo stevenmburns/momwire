@@ -203,6 +203,13 @@ your deck, turn it off.
 [Pair reuse within one fill](/reference/portal-usage/#pair-reuse-within-one-fill)
 has the details.
 
+A deck can turn reuse on for itself with a comment card,
+`CM momwire: pair_reuse`, which every program here reads as the variable set
+to `1` for that deck alone; `MOMWIRE_X_PAIR_REUSE=0` still turns it off.
+These programs take no other pragma: a `CM momwire: rotational_symmetry`
+card is ignored and noted on line 2. See
+[Turning a feature on in the deck](/reference/portal-usage/#turning-a-feature-on-in-the-deck).
+
 ## Where the time goes
 
 For measured run times against the licensed NEC-5 console engine, see
