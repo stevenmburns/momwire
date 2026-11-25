@@ -38,9 +38,12 @@ namespace nec5 {
 // (`_bspline_nec4_run_core.h`, momwire#1607 Phase C); `Z_out` / `B_out`, when
 // given, receive the operator and the port columns the solve takes (the
 // gates' arrays). A front the C++ does not serve throws PrintoutDecline.
+// `sweep_shared`: the front is one frequency of a stepping FR (or a sequence
+// run, `Prepared::sweep_shared`), served as `_serve._port_solution` serves
+// one with a sweep state.
 Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, const bspline::SymLapack &sym,
                            const NumpyLinalg &np, std::vector<cd> *Z_out = nullptr,
-                           std::vector<double> *B_out = nullptr);
+                           std::vector<double> *B_out = nullptr, bool sweep_shared = false);
 
 class BSplinePrintoutEngine final : public PrintoutEngine {
   public:

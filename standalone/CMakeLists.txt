@@ -331,6 +331,7 @@ if(MW_EXE_BASIS STREQUAL "bspline_nec5" OR MW_EXE_BASIS STREQUAL "bspline_nec42"
     ${MW_SRC}/_somm_pairs_core.cpp
     ${MW_SRC}/_bspline_front_core.cpp
     ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_bspline_pair_reuse_core.cpp  # momwire#2063: `pair_reuse`'s census
     ${MW_SRC}/_bspline_transmitted_core.cpp
     ${MW_SRC}/_bspline_crossing_core.cpp
     ${MW_SRC}/_nec5_bspline_seam_core.cpp
