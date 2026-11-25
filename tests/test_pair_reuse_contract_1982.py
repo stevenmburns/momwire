@@ -142,13 +142,20 @@ def test_withheld_is_false_unless_the_whole_asked(no_features):
 
 
 def test_the_stamp_names_the_whole_not_its_parts(no_features):
+    """Line 2 names the whole only. Its certification is what RUNS: the whole
+    reaches every level, but under it bspline runs offset_reuse, a Python
+    part that runs outside its reach too, so a level past that reach (macOS,
+    the drop-ins on Linux) stamps uncertified. razor's native part is
+    withheld outside its reach when only the whole asked, so it never
+    uncertifies the stamp."""
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    plain = "" if F.certified("pair_reuse") else " uncertified on this platform"
-    assert F.stamp() == "+pair_reuse" + plain
-    dropin = (
-        "" if F.certified("pair_reuse", "dropin") else " uncertified on this platform"
-    )
-    assert F.stamp("dropin") == "+pair_reuse" + dropin
+    bspline_part = F.FEATURES["offset_reuse"]
+    assert bspline_part.kind == "python"
+    for context in (None, "dropin"):
+        level = F.current_level(context) if context else F.current_level()
+        tail = "" if level <= bspline_part.reach else " uncertified on this platform"
+        args = (context,) if context else ()
+        assert F.stamp(*args) == "+pair_reuse" + tail, context
 
 
 def test_pair_reuse_reaches_every_level():
