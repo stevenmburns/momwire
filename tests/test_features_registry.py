@@ -799,6 +799,30 @@ def test_the_warm_server_keys_carry_a_default_on_feature_turned_off(no_features)
     assert mech.FEATURE_ENV_PREFIX == F.ENV_PREFIX
 
 
+def test_the_warm_server_keys_carry_a_pragma_feature_turned_off(no_features):
+    # A deck's pragma card reads as the feature's variable set on, so a
+    # server started with the variable unset honours it: the variable's "0",
+    # the user's kill switch, must key a server of its own, and its "1" one
+    # of its own too, as any feature's.
+    import momwire_eznec_client as ez
+    import momwire_nec2c_client as n2
+    import momwire_serve_client as mech
+
+    assert mech.FEATURE_PRAGMA == {n for n, f in F.FEATURES.items() if f.pragma}
+    base = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+    for name in sorted(mech.FEATURE_PRAGMA):
+        var = F.FEATURES[name].env
+        no_features.setenv(var, "")
+        assert (ez.config_key(None, 900.0), n2.config_key([], 900.0)) == base
+        no_features.setenv(var, "0")
+        off = (ez.config_key(None, 900.0), n2.config_key([], 900.0))
+        assert off[0] != base[0] and off[1] != base[1], name
+        assert mech.feature_identity() == [f"feature={name}=off"]
+        no_features.setenv(var, "1")
+        assert mech.feature_identity() == [f"feature={name}"]
+        no_features.delenv(var)
+
+
 def test_the_warm_server_keys_carry_the_thread_environment(monkeypatch):
     # momwire#1893: a server inherits its spawner's thread variables, so a
     # different thread count must never reach a server started under another.

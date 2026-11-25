@@ -296,7 +296,7 @@ static const char *const ADVISORIES_ALL[] = {
  * feature_identity and thread_identity, spelt again here because this
  * program cannot import it.  These tables are COPIES of that module's
  * JUNCTION_RULE_ENV, FEATURE_ENV_PREFIX, FEATURE_ALIASES, FEATURE_DEFAULT_ON,
- * FEATURE_PARTS, _FEATURE_ON and THREAD_ENVS (which tests/test_features_registry.py holds
+ * FEATURE_PARTS, FEATURE_PRAGMA, _FEATURE_ON and THREAD_ENVS (which tests/test_features_registry.py holds
  * equal to the registry); tests/test_eznec_client_c.py holds each copy equal
  * to its original, and the elements built from them equal Python's over a
  * table of environments.  Keep the brace-per-line shapes: the test reads
@@ -314,6 +314,10 @@ static const char *const FEATURE_DEFAULT_ON[] = {
 static const char *const FEATURE_PARTS[] = {
     "offset_reuse",
     "razor_pair_reuse",
+};
+static const char *const FEATURE_PRAGMA[] = {
+    "pair_reuse",
+    "rotational_symmetry",
 };
 static const char *const FEATURE_ON[] = {
     "1",
@@ -1104,6 +1108,7 @@ static int env_elements(buf_t *out)
         size_t a;
         int default_on = 0;
         int part = 0;
+        int pragma = 0;
         int on;
         const char *s;
         size_t n;
@@ -1150,11 +1155,18 @@ static int env_elements(buf_t *out)
                 part = 1;
             }
         }
+        for (a = 0; a < COUNT_OF(FEATURE_PRAGMA); a++) {
+            if (strcmp(item, FEATURE_PRAGMA[a]) == 0) {
+                pragma = 1;
+            }
+        }
         on = is_feature_on(value);
         strip_span(value, &s, &n);
-        /* A default-on feature, or a part of a whole (which the whole's
-         * variable alone turns on), keys its explicit "0" as "=off". */
-        if ((default_on || part) && n > 0 && !on) {
+        /* A default-on feature, a part of a whole (which the whole's
+         * variable alone turns on), or a pragma feature (which a deck's
+         * pragma card turns on unless its variable says no) keys its
+         * explicit "0" as "=off". */
+        if ((default_on || part || pragma) && n > 0 && !on) {
             memcpy(item + name_len, "=off", sizeof "=off");
         } else if (default_on || !on) {
             free(item);

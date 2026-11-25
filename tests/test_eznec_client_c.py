@@ -1129,6 +1129,10 @@ def test_the_c_identity_tables_are_the_python_ones():
     assert len(default_on) == len(mech.FEATURE_DEFAULT_ON)
     parts = _c_list("FEATURE_PARTS")
     assert set(parts) == mech.FEATURE_PARTS and len(parts) == len(mech.FEATURE_PARTS)
+    pragma = _c_list("FEATURE_PRAGMA")
+    assert set(pragma) == mech.FEATURE_PRAGMA and len(pragma) == len(
+        mech.FEATURE_PRAGMA
+    )
     on = _c_list("FEATURE_ON")
     assert set(on) == mech._FEATURE_ON and len(on) == len(mech._FEATURE_ON)
     # The C compare lowercases the value only, so the table must be lower.
@@ -1177,7 +1181,8 @@ def _identity_cases() -> list:
             },
         ),
     ]
-    # Every alias, every default-on feature and every part, so a new one is exercised by
+    # Every alias, every default-on feature, every part and every pragma
+    # feature, so a new one is exercised by
     # construction rather than by remembering to add a row.
     for alias, name in sorted(mech.FEATURE_ALIASES.items()):
         cases.append((f"alias-{name}", {alias: "1"}))
@@ -1192,6 +1197,10 @@ def _identity_cases() -> list:
             cases.append(
                 (f"part-{name}-{value!r}", {"MOMWIRE_X_PAIR_REUSE": "1", var: value})
             )
+    for name in sorted(mech.FEATURE_PRAGMA):
+        var = f"MOMWIRE_X_{name.upper()}"
+        for value in ("0", "off", "1", "", " "):
+            cases.append((f"pragma-{name}-{value!r}", {var: value}))
     for var in mech.THREAD_ENVS:
         cases.append((f"threads-{var}", {var: "3"}))
     return [pytest.param(env, id=case) for case, env in cases]

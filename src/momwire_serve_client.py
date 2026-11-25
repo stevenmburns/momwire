@@ -413,7 +413,11 @@ def junction_rule_identity() -> list[str]:
 # covers it, so their default there is on. A PART of a whole feature
 # (`Feature.part_of`, held equal the same way) is keyed by its "0" too: the
 # whole's variable alone turns it on, so "whole=1, part=0" must not reach a
-# server started with the whole alone (momwire#2153).
+# server started with the whole alone (momwire#2153). So is a feature a deck
+# may ask for in a pragma card (`Feature.pragma`, held equal the same way):
+# the pragma reads as its variable set on, and the variable set to "0" is the
+# user's kill switch, so a call under "0" must not reach a server started
+# with it unset, which would honour the deck's pragma.
 FEATURE_ENV_PREFIX = "MOMWIRE_X_"
 FEATURE_ALIASES = {
     "MOMWIRE_EXACT_KERNEL_SERIES": "exact_kernel_series",
@@ -421,14 +425,16 @@ FEATURE_ALIASES = {
 }
 FEATURE_DEFAULT_ON = frozenset({"factored_columns", "height_sheet_recal"})
 FEATURE_PARTS = frozenset({"offset_reuse", "razor_pair_reuse"})
+FEATURE_PRAGMA = frozenset({"pair_reuse", "rotational_symmetry"})
 _FEATURE_ON = frozenset({"1", "true", "yes", "on"})
 
 
 def feature_identity(environ=None) -> list[str]:
     """``["feature=<name>", ...]`` (sorted) for the features the environment
     turns on whose default is off, and ``"feature=<name>=off"`` for a
-    default-on one, or a part of a whole, it turns off; else nothing -- so
-    every key with each feature unset is the key it was."""
+    default-on one, a part of a whole, or a pragma feature, it turns off;
+    else nothing -- so every key with each feature unset is the key it
+    was."""
     env = os.environ if environ is None else environ
     names = set()
     for var, value in env.items():
@@ -439,10 +445,14 @@ def feature_identity(environ=None) -> list[str]:
         else:
             continue
         on = value.strip().lower() in _FEATURE_ON
-        if name in FEATURE_DEFAULT_ON or name in FEATURE_PARTS:
+        if (
+            name in FEATURE_DEFAULT_ON
+            or name in FEATURE_PARTS
+            or name in FEATURE_PRAGMA
+        ):
             if value.strip() and not on:
                 names.add(f"{name}=off")
-            elif on and name in FEATURE_PARTS:
+            elif on and name not in FEATURE_DEFAULT_ON:
                 names.add(name)
         elif on:
             names.add(name)
