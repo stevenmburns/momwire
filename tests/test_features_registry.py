@@ -660,6 +660,8 @@ DECK = ROOT / "tests" / "fixtures" / "eznec" / "decks" / "0036_dipole-in-free-sp
         # momwire#1454: the C++ route carries it, but its reach is level 1.
         ("MOMWIRE_X_EXACT_KERNEL_SERIES", "exact_kernel_series"),
         ("MOMWIRE_EXACT_KERNEL_SERIES", "exact_kernel_series"),
+        # momwire#1338: a drop-in feature; there is no C++ sector route.
+        ("MOMWIRE_X_ROTATIONAL_SYMMETRY", "rotational_symmetry"),
     ],
 )
 def test_the_exe_refuses_a_feature(tmp_path, var, name):
