@@ -83,6 +83,9 @@ __all__ = [
     "context_scope",
     "in_context",
     "current_level",
+    "pragma_note",
+    "pragma_scope",
+    "deck_pragmas",
     "default_on",
     "enabled",
     "honours",
@@ -227,6 +230,14 @@ class Feature:
     # set ignores the variable and the kwarg, and line 2 does not name it
     # (`stamp`). tests/test_feature_solvers_1980.py holds it to the code.
     solvers: tuple[str, ...] = ()
+    # Whether a deck may ask for it in a comment card (`CM momwire: <name>`,
+    # :func:`deck_pragmas`): the drop-ins and the executables then read the
+    # pragma as if this feature's variable were set on for that deck alone.
+    # Only for a feature that cannot change the printed answer (`drift` <=
+    # DEFAULT_DRIFT_MAX) and that a route declines rather than refuses
+    # where it cannot serve the deck; never a thread, path or approximate
+    # one. The maintainer marks it, in its own PR.
+    pragma: bool = False
 
     @property
     def stable(self) -> bool:
@@ -329,6 +340,7 @@ FEATURES: dict[str, Feature] = {
             # DEFAULT_DRIFT_MAX (antennaknobs' LAST_DIGITS_DRIFT, 1e-6).
             drift=5e-10,
             offer=False,
+            pragma=True,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
         # (PR #1815): the shipped kernels, summed in another order. A part of
@@ -1104,6 +1116,7 @@ FEATURES: dict[str, Feature] = {
             ),
             drift=1e-9,
             offer=False,
+            pragma=True,
         ),
     )
 }
@@ -1146,13 +1159,149 @@ class FeatureNotCertified(RuntimeError):
     """A native feature was asked for outside its reach."""
 
 
+# --- per-deck pragmas --------------------------------------------------------
+#
+# A deck may turn on a `pragma` feature for itself in a comment card, one
+# feature a line:
+#
+#     CM momwire: pair_reuse
+#
+# The card is CM (either case) after any blanks or tabs; its text, after
+# blanks or tabs, starts with "momwire:" (any case), and the name is the run
+# of ASCII letters, digits and underscores after it (blanks or tabs between),
+# lowered; the rest of the line is ignored. Lines end at CR or LF. EZNEC
+# copies a model's description into the deck's CM lines, one line of it a
+# card, so a user types the pragma there. The deck readers never see this:
+# a pragma card is an ordinary comment, echoed as before.
+#
+# A pragma acts as the feature's VARIABLE would for that deck, never as its
+# keyword True: the variable set either way wins (MOMWIRE_X_<NAME>=0 is the
+# user's kill switch), and a route that cannot serve the deck declines as it
+# does under the variable. A name that is not a pragma feature here (unknown,
+# not marked `pragma`, or one this process withholds, `withhold_pragmas`) is
+# ignored and named on line 2 (`pragma_note`). The executables' copy of the
+# reader and the rule is `deck_pragmas` in standalone/momwire_razor2p.cpp;
+# tests/test_deck_pragma.py holds the two to one table.
+
+PRAGMA_PREFIX = "momwire:"
+_PRAGMA_BLANKS = " \t"
+_PRAGMA_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+)
+
+
+def deck_pragmas(text: str) -> list[str]:
+    """The feature names `text`'s ``CM momwire: <name>`` cards ask for, in
+    the order they first appear, each once. Not checked against the
+    registry (:func:`pragma_scope` sorts them)."""
+    names: list[str] = []
+    for line in text.replace("\r", "\n").split("\n"):
+        card = line.lstrip(_PRAGMA_BLANKS)
+        if card[:2].upper() != "CM":
+            continue
+        rest = card[2:].lstrip(_PRAGMA_BLANKS)
+        if rest[: len(PRAGMA_PREFIX)].lower() != PRAGMA_PREFIX:
+            continue
+        rest = rest[len(PRAGMA_PREFIX) :].lstrip(_PRAGMA_BLANKS)
+        end = 0
+        while end < len(rest) and rest[end] in _PRAGMA_NAME_CHARS:
+            end += 1
+        name = rest[:end].lower()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+# The pragma features this process never takes from a deck: set by an
+# executable's embedded launcher (standalone/momwire_razor2p.cpp's fallback)
+# to the ones the executable does not carry, so its Python answer ignores
+# them as the C++ route does.
+_PRAGMA_WITHHELD: frozenset[str] = frozenset()
+
+
+def withhold_pragmas(names) -> None:
+    """Ignore a pragma for each of `names` from now on in this process."""
+    global _PRAGMA_WITHHELD
+    _PRAGMA_WITHHELD = frozenset(names)
+
+
+def pragma_eligible(name: str) -> bool:
+    """Whether a deck's pragma may turn `name` on here."""
+    feature = FEATURES.get(name)
+    return (
+        feature is not None
+        and feature.pragma
+        and feature.drift <= DEFAULT_DRIFT_MAX
+        and not feature.default
+        and name not in _PRAGMA_WITHHELD
+    )
+
+
+# (the pragma features on, the names ignored) for the deck being answered,
+# or None outside a deck's scope.
+_PRAGMAS: contextvars.ContextVar[tuple[frozenset[str], tuple[str, ...]] | None] = (
+    contextvars.ContextVar("momwire_feature_pragmas", default=None)
+)
+
+
+@contextlib.contextmanager
+def pragma_scope(text: str):
+    """Answer one deck under its own pragmas (:func:`deck_pragmas`): each
+    eligible one reads as its variable set on (:func:`_env_value`) unless
+    the variable is set; the rest are named by :func:`pragma_note`. A scope
+    inside another is the outer one's (a chain's structures share their
+    file's), and a deck with no pragma card changes nothing."""
+    if _PRAGMAS.get() is not None:
+        yield
+        return
+    names = deck_pragmas(text)
+    on = frozenset(n for n in names if pragma_eligible(n))
+    ignored = tuple(n for n in names if n not in on)
+    token = _PRAGMAS.set((on, ignored))
+    try:
+        yield
+    finally:
+        _PRAGMAS.reset(token)
+
+
+def pragma_scoped(fn):
+    """Decorate a drop-in entry whose first argument is the deck's text so
+    its body runs under :func:`pragma_scope`."""
+
+    @functools.wraps(fn)
+    def wrapper(text, *args, **kwargs):
+        with pragma_scope(text):
+            return fn(text, *args, **kwargs)
+
+    return wrapper
+
+
+def pragmas_on() -> frozenset[str]:
+    """The pragma features the deck being answered turns on (before the
+    variables, which win), or none."""
+    scope = _PRAGMAS.get()
+    return frozenset() if scope is None else scope[0]
+
+
+def pragma_note() -> str:
+    """Line 2's note for the deck's ignored pragmas: ``""`` when there are
+    none, else ``"(pragma ignored: a, b)"``."""
+    scope = _PRAGMAS.get()
+    if scope is None or not scope[1]:
+        return ""
+    return f"(pragma ignored: {', '.join(scope[1])})"
+
+
 def _env_value(feature: Feature) -> bool | None:
     """What the environment says of `feature`: True (on), False (set to
-    anything else, "0" say) or None (unset or empty: the default)."""
+    anything else, "0" say) or None (unset or empty: the default). Unset, a
+    pragma of the deck being answered (:func:`pragma_scope`) reads as on."""
     for var in (feature.env, *feature.aliases):
         value = os.environ.get(var)
         if value is not None and value.strip():
             return value.strip().lower() in _ON
+    if feature.name in pragmas_on():
+        return True
     return None
 
 
