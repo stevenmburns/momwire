@@ -469,6 +469,37 @@ The NEC-4.2 and NEC-5 printouts name it on line 2 (`+pair_reuse`) wherever
 it runs; on macOS the `bs2` drop-in adds `uncertified on this platform`.
 The NEC-2 printout keeps nec2c's layout and does not name it.
 
+### Rotational symmetry for radial screens
+
+A vertical over a radial screen is N identical sectors turned about one
+vertical axis. `MOMWIRE_X_ROTATIONAL_SYMMETRY=1`, set in the environment
+SimNEC starts the engine in, fills one sector's rows of the matrix instead of
+all of them and solves one small block per harmonic instead of the whole
+matrix. It is **off by default**, and only this variable turns it on: no deck
+gets it by being symmetric.
+
+A deck qualifies when the wires the rotation leaves in place lie on one
+vertical line (the axis), every other wire belongs to one of N copies of the
+same sector (N at least 2), and the sources, loads and ground are the same
+in every sector, as a source on the axis is. Free space, a perfect ground
+and a finite ground all qualify, with the screen above the ground, or below
+it through the NEC-2 and NEC-4.2 drop-ins. A deck that does not qualify is
+solved the ordinary way, with the ordinary answer to the bit, and the reason
+is written to stderr as an advisory (on the NEC-5 and NEC-4.2 drop-ins when
+`MOMWIRE_ADVISORIES` is on). On the decks it serves it moves Z by at most
+about 1e-9 relative, far below the printed digits.
+
+It runs on `bs2` and `bs1` (the NEC-5, NEC-4.2 and NEC-2 drop-ins) and on
+`sinusoidal` through the NEC-2 drop-in (`momwire-nec2c-sinusoidal`). The
+NEC-4.2 drop-in's `sinusoidal` engine solves every deck the ordinary way,
+because this route does not serve the NEC-4.2 junction yet, and `razor2p`
+ignores the variable. It is certified for the drop-ins on Linux and Windows;
+on macOS it runs the same code, not yet certified there. The NEC-2 drop-in's
+printout keeps nec2c's layout and does not name it; the NEC-4.2 and NEC-5
+drop-ins name it on printout line 2 (`+rotational_symmetry`, followed by
+`uncertified on this platform` on macOS). The standalone executables refuse
+it.
+
 ### Mixed-precision solve
 
 `MOMWIRE_X_MIXED_LU=1` changes how the engine solves its matrix, not how it
