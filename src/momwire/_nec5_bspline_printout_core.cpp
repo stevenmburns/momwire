@@ -9,6 +9,7 @@
 #endif
 
 #include "_somm_grid_core.h"
+#include "_near_interface_eval.h"  // the requested fill-reuse features
 
 #include <algorithm>
 #include <cstdint>
@@ -45,7 +46,8 @@ class SplineSampler final : public CurrentSampler {
 }  // namespace
 
 Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, const bspline::SymLapack &sym,
-                           const NumpyLinalg &np, std::vector<cd> *Z_out, std::vector<double> *B_out) {
+                           const NumpyLinalg &np, std::vector<cd> *Z_out, std::vector<double> *B_out,
+                           bool sweep_shared) {
     if (np.dsyrk == nullptr) throw PrintoutDecline{"bspline: no dsyrk for the assembler"};
     if (np.host.zgemm != nullptr) throw PrintoutDecline{"bspline: the host BLAS route is not ported"};
     bspline::FillParams fp;
@@ -55,12 +57,37 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     fp.ladder = bspline::default_ladder(8);
     fp.n_qp_same_edge = 4;
     fp.extended_kernel = fr.extended_kernel;
+    // the fill-reuse switch and its part (momwire#2063, #1809), as the
+    // executable requested them (`EXE_PARTS`)
+    fp.pair_reuse = ni_eval::requested_features().pair_reuse;
+    fp.offset_reuse = ni_eval::requested_features().offset_reuse;
     // `_compute_Z_operator`: the dense tensor within `swept_mem_mb` (256),
     // else the chunked fill; a deck with a wire below the plane takes the
     // buried fill (`_compute_Z_operator_buried`) at the buried pair order
     // (`BURIED_N_QP_PAIR`, `BURIED_PAIR_ORDER_LADDER`)
     std::vector<cd> Z;
+    if (!fr.buried) {
+        // `_reuse_plan(geom)`: the census, shared by the free-space fill and
+        // the Sommerfeld remainder's copy map
+        fp.plan = bspline::reuse_plan(fr.geom, fr.radii, fp);
+        // `_serve._port_solution` with a sweep state: the same-edge blocks
+        // from the sweep's hoisted prep while the static and per-k blocks fit
+        // `swept_mem_mb` (256), which reads no offset edge's own block
+        // (`_compute_Z_dense_chunked`'s `offset` is the whole-mesh fill's)
+        if (sweep_shared) {
+            const int64_t nm = fp.degree + 1;
+            int64_t sum_ne2 = 0;
+            for (const auto &pw : fr.geom.per_wire)
+                for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+                    const int64_t n = pw.edge_offsets[e + 1] - pw.edge_offsets[e];
+                    sum_ne2 += n * n;
+                }
+            fp.sweep_shared = 2 * nm * nm * sum_ne2 * 16 <= (int64_t(256) << 20);
+        }
+    }
     if (fr.buried) {
+        // the buried fill reads no `pair_reuse` plan (`_decline_unread_plan`);
+        // `offset_reuse` reads its same-edge blocks in their Toeplitz form
         // `BURIED_N_QP_PAIR` / `BURIED_PAIR_ORDER_LADDER` (momwire#1752 S2)
         fp.n_qp_pair = 128;
         fp.ladder = {{0.1, 32}, {1.5, 16}, {2.0, 8}, {4.0, 4}};
@@ -74,7 +101,10 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
             // run half refuses it by name, `_refuse_if_grazing`)
             throw PrintoutRaise{"ValueError", e.what()};
         }
-    } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
+    } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256) &&
+               bspline::free_offset_edges(fr.geom, fp).empty()) {
+        // the tensor route; under `offset_reuse` a deck with a free offset
+        // edge takes the chunked fill (`_compute_Z_operator`)
         const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
         Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
     } else {
@@ -100,7 +130,7 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
         // `Z -= remainder.evaluate(supp_seg, polys)`
         if (fr.compose)
             bspline::subtract_sommerfeld_remainder(Z, fr.geom, fr.basis, fr.ground_z, eps_t, fr.k, fr.omega,
-                                                   BSPLINE_MU, 3, np);
+                                                   BSPLINE_MU, 3, np, &fp, &fr.radii);
     }
     // `_apply_loading(Z)`: the distributed series loading, last
     if (fr.loading.active()) {
@@ -141,7 +171,7 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
 }
 
 Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
-    return bspline_solve_front(front_of(p), lapack_, sym_, np);
+    return bspline_solve_front(front_of(p), lapack_, sym_, np, nullptr, nullptr, p.sweep_shared);
 }
 
 void BSplinePrintoutEngine::release(Prepared &p) { bspline_part(p).front.reset(); }

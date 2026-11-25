@@ -1805,6 +1805,7 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
                     Deck step = d;
                     step.frequency_mhz = f;
                     RunOutcome o = run_one(step, engine, r, nullptr);
+                    if (o.kind == RunOutcome::prepared) r.prepared[static_cast<std::size_t>(o.prepared_index)].sweep_shared = true;
                     so.runs.push_back(o);
                     so.steps.emplace_back(g, f);
                     if (o.kind != RunOutcome::prepared) {
@@ -1819,8 +1820,9 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
             // A stepping FR (momwire#1508): `_answer` serves
             // `replace(deck, frequency_mhz=f)` for each frequency in turn,
             // each through the one-point `_prepare` (the sweep state Python
-            // shares between them moves no byte), stopping at the first
-            // refusal or escape.
+            // shares between them moves no byte but under bs2's
+            // `offset_reuse`, `Prepared::sweep_shared`), stopping at the
+            // first refusal or escape.
             if (a.deck.frequencies_too_many) {
                 RunOutcome o;
                 o.kind = RunOutcome::declined;
@@ -1833,6 +1835,7 @@ SeamResult seam(const std::string &text, const SeamEngine &engine, bool open_end
                     Deck step = a.deck;
                     step.frequency_mhz = f;
                     RunOutcome o = run_one(step, engine, r, nullptr);
+                    if (o.kind == RunOutcome::prepared) r.prepared[static_cast<std::size_t>(o.prepared_index)].sweep_shared = true;
                     so.runs.push_back(o);
                     if (o.kind != RunOutcome::prepared) {
                         stop(o);
