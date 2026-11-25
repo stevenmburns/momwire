@@ -332,8 +332,7 @@ def test_the_note_follows_the_features_on_line_2(no_features):
     assert line2.endswith(" +pair_reuse (pragma ignored: nope)"), line2
 
 
-def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
-    # 4nec2's NEC-2D layout carries momwire's line 2 too.
+def _nec2d_line_2(no_features, tmp_path):
     from momwire.dropin.nec2c import engine_scope, main
 
     deck, out = tmp_path / "d.nec", tmp_path / "d.out"
@@ -349,21 +348,43 @@ def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
                     prog="momwire-nec2d-bs2",
                 )
     assert rc == 0
-    line2 = out.read_bytes().decode("latin-1").splitlines()[1]
-    tail = stamp_as_variable(PAIR, "bs2") + " (pragma ignored: zzz)"
-    if len(line2) < 79:
-        assert line2.endswith(tail), line2
-    else:
-        # Past the 79 columns (macOS: the stamp says uncertified) the line is
-        # cut, today basis name first and the note mid-word (momwire#2158).
-        assert tail.startswith(line2[line2.index(" +pair_reuse") :]), line2
     assert probe.reuse() == [("served", True)]
+    return out.read_bytes().decode("latin-1").splitlines()[1]
+
+
+def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
+    # 4nec2's NEC-2D layout carries momwire's line 2 too.
+    line2 = _nec2d_line_2(no_features, tmp_path)
+    tail = stamp_as_variable(PAIR, "bs2") + " (pragma ignored: zzz)"
+    assert line2.endswith(tail) and len(line2) <= 79, line2
+
+
+def test_the_nec2d_line_2_cuts_the_note_before_the_basis(
+    no_features, tmp_path, monkeypatch
+):
+    # macOS (momwire#2158): the stamp says "uncertified on this platform",
+    # and the whole tail no longer fits in 79 columns. The note's names go
+    # first, then the note; the basis name stays.
+    monkeypatch.setattr(F.sys, "platform", "darwin")
+    line2 = _nec2d_line_2(no_features, tmp_path)
+    assert len(line2) <= 79 and line2.split()[2] == "bs2", line2
+    assert line2.split(" +pair_reuse")[1].startswith(" uncertified on this platform")
+    full = stamp_as_variable(PAIR, "bs2") + " (pragma ignored: zzz)"
+    head = line2[: line2.index(" +pair_reuse")]
+    if len(head + full) <= 79:
+        assert line2.endswith(full)
+    elif len(head + stamp_as_variable(PAIR, "bs2") + " (pragma ignored)") <= 79:
+        assert line2.endswith(" (pragma ignored)")
+    else:
+        assert "pragma" not in line2
 
 
 def test_a_long_ignored_name_keeps_line_2_in_its_columns(no_features):
     deck = f"CM momwire: {'x' * 120}\n" + DIPOLES
     line2 = nec5(deck, "razor2p").splitlines()[1]
     assert len(line2) <= 79 and line2.startswith(" momwire "), line2
+    # the basis name is the field a bug report needs (momwire#2158)
+    assert line2.split()[2] == "razor2p", line2
 
 
 # --- per deck, not per process ----------------------------------------------------------
