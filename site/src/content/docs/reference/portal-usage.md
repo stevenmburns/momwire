@@ -450,7 +450,10 @@ standalone executable, and each turns on its own engine's reuse. It is
   `momwire-nec42-sinusoidal`, and the nec42-sinusoidal and nec2c-sinusoidal
   executables) finds the classes itself, in free space and over a perfect or
   finite ground, on decks large enough to pay for the search; a small deck
-  runs the ordinary fill. It moves Z by at most about 5e-10 relative.
+  runs the ordinary fill. It moves Z by at most about 5e-10 relative. The
+  nec2c-sinusoidal executable reuses only under the extended kernel (an `EK`
+  card); without one it runs the ordinary fill, where the Python drop-in
+  reuses either way.
 - **`razor2p`** (the NEC-5 drop-in and the nec5-razor2p executable) does the
   same, and moves Z by at most about 2e-9 relative.
   `MOMWIRE_X_RAZOR_PAIR_REUSE` is its older spelling and still works; when
