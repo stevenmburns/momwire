@@ -350,7 +350,7 @@ if(MW_EXE_BASIS STREQUAL "sin42" OR MW_EXE_BASIS STREQUAL "bspline_nec42" OR MW_
     ${MW_SRC}/_sinusoidal_nec4_core.cpp
     ${MW_SRC}/_sinusoidal_front_core.cpp
     ${MW_SRC}/_sinusoidal_fill_core.cpp
-    ${MW_SRC}/_sin_pair_reuse_core.cpp  # momwire#1911: `pair_reuse` (requested only)
+    ${MW_SRC}/_sin_pair_reuse_core.cpp  # momwire#1911: `pair_reuse`
     ${MW_SRC}/_sinusoidal_transmitted_core.cpp
     ${MW_SRC}/_sinusoidal_crossing_core.cpp
     ${MW_SRC}/_sinusoidal_run_core.cpp)
@@ -610,15 +610,12 @@ endif()
 # this executable's level, as a raised reach would let them, so the
 # executable's own bytes can be held to Python's before Steve raises a reach
 # (the route has to exist at the level first). Each name must have a C++
-# route this basis carries (EXE_CERTIFYING in momwire_razor2p.cpp). No
+# route this basis carries (EXE_CERTIFYING in momwire_razor2p.cpp), and a
+# branch here defining its MW_EXE_CERTIFY_<NAME>; none has one today. No
 # release build sets it: shipped, a feature past its reach is refused.
-set(MW_EXE_CERTIFY "" CACHE STRING "certification build only: features run past their reach (pair_reuse, sin42)")
+set(MW_EXE_CERTIFY "" CACHE STRING "certification build only: features run past their reach")
 foreach(_mw_f IN LISTS MW_EXE_CERTIFY)
-  if(_mw_f STREQUAL "pair_reuse" AND MW_EXE_BASIS STREQUAL "sin42")
-    target_compile_definitions(${MW_EXE} PRIVATE MW_EXE_CERTIFY_PAIR_REUSE=1)
-  else()
-    message(FATAL_ERROR "MW_EXE_CERTIFY: ${_mw_f} has no C++ route on MW_EXE_BASIS=${MW_EXE_BASIS}")
-  endif()
+  message(FATAL_ERROR "MW_EXE_CERTIFY: ${_mw_f} has no certification route on MW_EXE_BASIS=${MW_EXE_BASIS}")
 endforeach()
 if(MW_EXE_FAT AND MINGW)
   # The avx2 copies as one archive whose constructors are moved out of the

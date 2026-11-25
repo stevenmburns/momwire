@@ -2,11 +2,10 @@
 common reuse core), which both routes run (momwire#2063 stage 2), and the C++
 fill's use of it against the Python route's.
 
-The nec42-sinusoidal executable's fill (`_sinusoidal_fill_core.cpp`) serves
-the feature when it is requested (the in-process hook here; a certification
-build of the executable, `MW_EXE_CERTIFY`, in tests/test_standalone_nec42.py).
-Its reach is level 4, the drop-in, short of every executable level, so the
-shipped executables refuse it.
+The sinusoidal executables' fill (`_sinusoidal_fill_core.cpp`) serves the
+feature when it is requested: the in-process hook here, and
+MOMWIRE_X_PAIR_REUSE in the nec42-sinusoidal and nec2c-sinusoidal
+executables (tests/test_standalone_nec42.py, tests/test_standalone_nec2c.py).
 
 Held:
 - the per-segment types (`reversible_segment_types`, `reversible_ground_types`)

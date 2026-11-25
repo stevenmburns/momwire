@@ -151,22 +151,49 @@ def test_the_stamp_names_the_whole_not_its_parts(no_features):
     assert F.stamp("dropin") == "+pair_reuse" + dropin
 
 
-def test_pair_reuse_reaches_the_dropin_on_linux_and_windows():
-    """Reach 4 (Steve, 2026-11-19): the hosted app, Linux sse2, Windows and
-    the drop-in on Linux and Windows, so MOMWIRE_X_PAIR_REUSE=1 with the NEC-2
-    drop-in on Windows is certified. Python-kind, so the macOS drop-in, past
-    its reach, runs it uncertified; no executable carries it. Its bspline
-    part moves with it; the razor2p part already reaches further."""
+def test_pair_reuse_reaches_every_level():
+    """Reach 11, the deepest: every Python route and drop-in, and every
+    executable, each of which accepts MOMWIRE_X_PAIR_REUSE and runs its own
+    basis's reuse (`EXE_PARTS`, held to the registry in
+    tests/test_features_registry.py). Still Python-kind, off by default and
+    not offered. Its parts keep their own reaches: on a family the whole acts
+    on through a part, what runs is certified only as far as the part."""
     whole = F.FEATURES["pair_reuse"]
-    assert whole.reach == F._level("dropin-linux-windows") == 4
+    assert whole.reach == F.DEEPEST and whole.stable
     assert whole.kind == "python" and not whole.default and not whole.offer
-    for platform in ("linux", "win32"):
+    for platform in ("linux", "win32", "darwin"):
         assert F.certified("pair_reuse", "dropin", platform=platform)
         assert F.certified("pair_reuse", platform=platform, variant="sse2")
-    assert not F.certified("pair_reuse", "dropin", platform="darwin")
-    assert whole.reach < F._level("exe-nec5-bs2-razor2p-windows")
-    for name in PARTS:
-        assert F.FEATURES[name].reach >= whole.reach, name
+    for basis in (
+        "razor2p",
+        "bs2",
+        "nec42-bs2",
+        "nec42-sinusoidal",
+        "nec2c-sinusoidal",
+    ):
+        assert F.certified("pair_reuse", "exe", basis=basis, platform="linux")
+    assert F.FEATURES["offset_reuse"].reach == F._level("dropin-linux-windows")
+    assert F.FEATURES["razor_pair_reuse"].reach == F._level(
+        "exe-nec5-bs2-razor2p-linux-macos"
+    )
+
+
+def test_a_part_past_its_reach_stamps_the_whole_uncertified(no_features):
+    """The whole certified, the part that runs not: line 2 says uncertified
+    on that family alone (the macOS drop-in: level 5, past offset_reuse's
+    4, inside razor_pair_reuse's 8; sinusoidal has no part)."""
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    no_features.setattr(F, "_os", lambda platform=None: "macos")
+    assert F.current_level("dropin") == F._level("macos")
+    tail = " uncertified on this platform"
+    assert F.stamp("dropin", solver="bspline") == "+pair_reuse" + tail
+    assert F.stamp("dropin", solver="razor") == "+pair_reuse"
+    assert F.stamp("dropin", solver="sinusoidal") == "+pair_reuse"
+    # unknown family: every part that runs counts
+    assert F.stamp("dropin") == "+pair_reuse" + tail
+    # the bspline part set off: nothing of the whole runs there
+    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "0")
+    assert F.stamp("dropin", solver="bspline") == ""
 
 
 # --- bspline -------------------------------------------------------------------

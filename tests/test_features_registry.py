@@ -257,6 +257,58 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
         assert basis in bases, (basis, bases)
 
 
+def _exe_parts():
+    """`EXE_PARTS` in the executables' main: {(whole, basis): part or ""}."""
+    src = EXE_SOURCE.read_text(encoding="utf-8")
+    table = re.search(
+        r"const char \*const EXE_PARTS\[\]\[3\] = \{(.*?)\n\};", src, re.S
+    )
+    assert table is not None
+    rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)", "([a-z0-9_]*)"\}', table[1])
+    assert len(rows) == table[1].count("{"), table[1]
+    return {(whole, basis): part for whole, basis, part in rows}
+
+
+def test_a_whole_runs_on_each_executable_what_its_route_carries():
+    # `EXE_PARTS`: on each executable's basis, the whole `pair_reuse` turns on
+    # the registry's part for that family when the executables carry it, the
+    # whole itself on a family it honours with no part, and nothing ("",
+    # withheld) when the family's parts are Python's alone.
+    parts = _exe_parts()
+    carried = _exe_features()
+    wholes = {f.part_of for f in F.FEATURES.values() if f.part_of is not None}
+    assert {w for w, _b in parts} == wholes == {"pair_reuse"}
+    bases = {"razor2p", "bs2", "sinusoidal"}
+    for whole in wholes:
+        # every executable accepts the whole: it reaches the deepest level
+        assert F.FEATURES[whole].reach == F.DEEPEST
+        assert carried[whole] == F.DEEPEST
+        assert {b for w, b in parts if w == whole} == bases
+        for basis in bases:
+            family = F.basis_solver(basis)
+            assert F.honours(whole, family), (whole, basis)
+            fam_parts = [
+                p.name
+                for p in F.FEATURES.values()
+                if p.part_of == whole and family in p.solvers
+            ]
+            on_exe = [p for p in fam_parts if p in carried]
+            if not fam_parts:
+                expected = whole
+            elif on_exe:
+                (expected,) = on_exe
+            else:
+                expected = ""
+            assert parts[(whole, basis)] == expected, (whole, basis)
+    # Today: razor2p's part, the sinusoidal plan, and bs2 withheld until
+    # its C++ reuse core lands (momwire#2063 stage 3).
+    assert parts == {
+        ("pair_reuse", "razor2p"): "razor_pair_reuse",
+        ("pair_reuse", "sinusoidal"): "pair_reuse",
+        ("pair_reuse", "bs2"): "",
+    }
+
+
 def test_the_kwarg_overrides_the_env(no_features):
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
     assert F.enabled("offset_reuse") is True
@@ -602,7 +654,6 @@ DECK = ROOT / "tests" / "fixtures" / "eznec" / "decks" / "0036_dipole-in-free-sp
     ("var", "name"),
     [
         ("MOMWIRE_X_OFFSET_REUSE", "offset_reuse"),
-        ("MOMWIRE_X_PAIR_REUSE", "pair_reuse"),
         ("MOMWIRE_X_NEC2_END_CAP", "nec2_end_cap"),
         ("MOMWIRE_X_NOT_YET_REGISTERED", "not_yet_registered"),
         ("MOMWIRE_RAZOR_CXX", "razor_cxx"),

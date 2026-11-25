@@ -431,11 +431,15 @@ struct ExeFeature {
     int reach;
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
-// momwire#1860's levers, ported to the buried fills' C++ (`ni_eval::Features`),
-// razor2p's fill-pair reuse (momwire#1971, `_razor_pair_reuse_core.h`,
-// which `_nec5_razor_seam_core.cpp` reads from `ni_eval::requested_features`),
-// and momwire#1956's retuned sheet weights (reach 8: the nec5 executables).
+// The one fill-reuse switch, `pair_reuse` (momwire#1982; reach 11, every
+// executable), which each formulation maps to its own route's reuse
+// (`EXE_PARTS`); momwire#1860's levers, ported to the buried fills' C++
+// (`ni_eval::Features`), razor2p's fill-pair reuse (momwire#1971,
+// `_razor_pair_reuse_core.h`, which `_nec5_razor_seam_core.cpp` reads from
+// `ni_eval::requested_features`), and momwire#1956's retuned sheet weights
+// (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
+    {"pair_reuse", 11, false},
     {"factored_columns", 9, true},
     {"height_sheet_recal", 9, true},
     {"crossing_table", 9, false},
@@ -459,6 +463,39 @@ bool feature_basis_here(const std::string &name) {
     for (const auto &fb : EXE_FEATURE_BASES)
         if (name == fb[0]) return std::string(BASIS) == fb[1];
     return true;
+}
+
+// What a WHOLE feature (`_features` part_of) runs on each formulation: {whole,
+// basis, the feature that formulation's C++ route reads for it}, as
+// `_features.enabled` resolves a part through its whole. Every executable
+// accepts the whole; what it turns on is its own basis's reuse:
+//   razor2p     its part, razor_pair_reuse (`_razor_pair_reuse_core.h`); the
+//               part's own variable, the older spelling, wins when set. The
+//               whole's own slot is requested only to be named on line 2:
+//               its one reader is the point-matched fill, which this
+//               route does not link;
+//   sinusoidal  the whole itself: the point-matched fill reads the
+//               `pair_reuse` slot (`_sin_pair_reuse_core.h`) and the family
+//               has no part;
+//   bs2         nothing yet (""): its part, offset_reuse, is Python's alone,
+//               so here it is withheld as `_features.withheld` withholds a
+//               native part outside its reach -- requested nowhere, named
+//               nowhere, the printout the one with it off.
+// tests/test_features_registry.py holds this to the registry's parts.
+const char *const EXE_PARTS[][3] = {
+    {"pair_reuse", "razor2p", "razor_pair_reuse"},
+    {"pair_reuse", "sinusoidal", "pair_reuse"},
+    // bs2's C++ reuse core (momwire#2063 stage 3) lands as this row's part;
+    // route_bs2.cpp then reads the slot it names.
+    {"pair_reuse", "bs2", ""},
+};
+
+// The row of EXE_PARTS for whole `name` on this basis, or nullptr when
+// `name` is no whole here.
+const char *const *whole_parts_here(const std::string &name) {
+    for (const auto &row : EXE_PARTS)
+        if (name == row[0] && std::string(BASIS) == row[1]) return row;
+    return nullptr;
 }
 
 // A carried feature a BASIS accepts and whose formulation ignores it:
@@ -530,12 +567,9 @@ std::vector<std::string> features_requested() {
 // {name, basis}, each also run here, past its reach, on the basis whose C++
 // route carries it, and named on line 2 as Python names it. That is how the
 // executable's own bytes are gated against Python's before its reach is
-// raised. No release build defines these; shipped, the table is empty and
-// the feature is refused like any other without an EXE_FEATURES row.
+// raised. No release build defines these, and today none does: shipped, a
+// feature without an EXE_FEATURES row is refused.
 const char *const EXE_CERTIFYING[][2] = {
-#if MW_EXE_CERTIFY_PAIR_REUSE
-    {"pair_reuse", "sinusoidal"},
-#endif
     {nullptr, nullptr},
 };
 
@@ -599,8 +633,8 @@ std::string g_name_note;
 // too unless its variable is set, and, as in `_features.stamp`, line 2 names
 // only the features on whose default here is off.
 int feature_refusal() {
-    const std::vector<std::string> names = features_requested();
-    for (const std::string &name : names) {
+    const std::vector<std::string> asked = features_requested();
+    for (const std::string &name : asked) {
         if (feature_runs_here(name)) continue;
         // "P%cthon", not the word: the no-Python build is held to carry no
         // "python" bytes at all (tests/test_standalone_nopython.py).
@@ -613,14 +647,39 @@ int feature_refusal() {
     // withdrawn. Asked on, a default-here one is already requested and
     // unstamped; any other is requested, and stamped where this formulation
     // honours it (`feature_honoured_here`).
-    std::vector<std::string> stamped, unstamped, withdrawn;
+    //
+    // A whole (`EXE_PARTS`) is named on line 2 where it runs something, as
+    // `_features._runs_on` names it: its part, distinct from it, is requested
+    // unstamped, unless the part's own variable is set, which then decides
+    // (on, the part is in `asked` and named itself; off, the whole did
+    // nothing). A whole whose part is none here, or does not run here, is
+    // withheld: neither requested nor named.
+    std::vector<std::string> names, parts;
+    for (const std::string &name : asked) {
+        const char *const *row = whole_parts_here(name);
+        if (row == nullptr) {
+            names.push_back(name);
+            continue;
+        }
+        const std::string part = row[2];
+        if (part.empty() || !feature_runs_here(part)) continue;
+        if (part != name) {
+            if (feature_env_set(part)) {
+                if (std::find(asked.begin(), asked.end(), part) == asked.end()) continue;
+            } else {
+                parts.push_back(part);
+            }
+        }
+        names.push_back(name);
+    }
+    std::vector<std::string> stamped, unstamped = parts, withdrawn;
     for (const std::string &name : names)
         if (name == "nec2_end_cap") continue;  // the NEC-2 route's own (above)
         else if (!feature_default_here(name))
             (feature_honoured_here(name) ? stamped : unstamped).push_back(name);
     for (const ExeFeature &f : EXE_FEATURES) {
         if (!f.default_on) continue;
-        const bool asked_on = std::find(names.begin(), names.end(), f.name) != names.end();
+        const bool asked_on = std::find(asked.begin(), asked.end(), f.name) != asked.end();
         const bool set_off = feature_env_set(f.name) && !asked_on;
         if (!feature_default_here(f.name) || set_off) withdrawn.emplace_back(f.name);
     }
@@ -636,7 +695,7 @@ int feature_refusal() {
         rt_serial::withdraw_features(withdrawn);
         rt_threads::withdraw_features(withdrawn);
     }
-    // registry order: a certifying feature (pair_reuse) comes first there
+    // registry order: a certifying feature first, as its entry precedes there
     bool uncertified = false;
     for (const auto &c : EXE_CERTIFYING)
         if (c[0] != nullptr && std::find(stamped.begin(), stamped.end(), c[0]) != stamped.end()) {
