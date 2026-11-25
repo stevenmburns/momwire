@@ -755,6 +755,28 @@ def test_the_warm_server_keys_carry_the_features_on(no_features):
     }
 
 
+def test_the_warm_server_keys_carry_a_part_turned_off_under_its_whole(no_features):
+    # The whole's variable alone turns its parts on, so a part's "0" beside
+    # it asks for a different engine and must key a server of its own
+    # (momwire#2153: a warm server started with the whole alone answered a
+    # call that turned razor's part off, with reuse on).
+    import momwire_eznec_client as ez
+    import momwire_serve_client as mech
+
+    assert mech.FEATURE_PARTS == {n for n, f in F.FEATURES.items() if f.part_of}
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    whole = ez.config_key(None, 900.0)
+    for part in sorted(mech.FEATURE_PARTS):
+        var = f"MOMWIRE_X_{part.upper()}"
+        no_features.setenv(var, "0")
+        assert ez.config_key(None, 900.0) != whole, part
+        assert f"feature={part}=off" in mech.feature_identity()
+        no_features.setenv(var, "1")
+        assert f"feature={part}" in mech.feature_identity()
+        no_features.delenv(var)
+        assert ez.config_key(None, 900.0) == whole
+
+
 def test_the_warm_server_keys_carry_a_default_on_feature_turned_off(no_features):
     # A default-on feature is on in a server started with nothing set, so
     # its "0" (not its "1") is what must key a server of its own.
