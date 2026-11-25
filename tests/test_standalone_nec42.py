@@ -397,18 +397,12 @@ def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
     assert warm["ground_disk"] >= 1, warm
 
 
-# --- momwire#1911: the sinusoidal fill's pair reuse (reach 4) ---------------
+# --- momwire#1911: the one fill-reuse switch, MOMWIRE_X_PAIR_REUSE --------------
 #
-# The C++ route carries `pair_reuse` (`_sin_pair_reuse_core.h`), but its reach
-# stops at the drop-in (level 4), so a shipped nec42-sinusoidal executable
-# refuses it. A
-# CERTIFICATION build (CMake MW_EXE_CERTIFY=pair_reuse) runs it, and is then
-# held to the launcher with the feature on. Which one is under test is
-# declared, never guessed from its behaviour: MOMWIRE_NEC42_SIN_CERTIFIES
-# names the features the build was built to certify (comma-separated).
-CERTIFIES = set(
-    filter(None, os.environ.get("MOMWIRE_NEC42_SIN_CERTIFIES", "").split(","))
-)
+# Every executable accepts it (reach 11, `EXE_PARTS`): nec42-sinusoidal runs
+# the point-matched fill's plan (`_sin_pair_reuse_core.h`) and is held to the
+# launcher with it on; nec42-bs2 has no C++ reuse yet, so there it is
+# withheld and the printout is the one with it off.
 _REUSE_ENV = "MOMWIRE_X_PAIR_REUSE"
 
 
@@ -431,35 +425,32 @@ def _reuse_curtain(ground: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-@pytest.mark.skipif(BASIS != "sinusoidal", reason="the nec42-sinusoidal executable's")
-@pytest.mark.skipif("pair_reuse" in CERTIFIES, reason="a certification build runs it")
-def test_pair_reuse_is_refused_by_name(tmp_path):
-    """Asked on, the shipped executable refuses the feature in the registry's
-    sentence before reading the deck, and writes nothing; at 0 it answers."""
+@pytest.mark.skipif(BASIS != "bs2", reason="the nec42-bs2 executable's")
+def test_pair_reuse_is_accepted_and_withheld_on_bs2(tmp_path):
+    """Asked on, nec42-bs2 answers, and its printout is the one with the
+    switch unset, line 2 included: bs2's part is Python's alone, so here
+    the whole is withheld, neither run nor named. A curtain past the
+    small-deck thresholds, so a reuse that ran would have had a deck to
+    run on."""
     from momwire import _features
 
     env = {k: v for k, v in _env().items() if not k.startswith(_features.ENV_PREFIX)}
-    shutil.copy(DIPOLE, tmp_path / DIPOLE.name)
-    r = subprocess.run(
-        [EXE, DIPOLE.name, "reuse.out"],
-        cwd=tmp_path,
-        env=dict(env, **{_REUSE_ENV: "1"}),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 2, (r.stdout, r.stderr)
-    assert r.stderr == _features.EXE_REFUSAL.format(name="pair_reuse") + "\n"
-    assert not (tmp_path / "reuse.out").exists()
-    r = subprocess.run(
-        [EXE, DIPOLE.name, "reuse.out"],
-        cwd=tmp_path,
-        env=dict(env, **{_REUSE_ENV: "0"}),
-        capture_output=True,
-        check=False,
-    )
-    assert r.returncode == 0, r.stderr
-    assert (tmp_path / "reuse.out").read_bytes()
+    deck = tmp_path / "curtain.nec"
+    deck.write_text(_reuse_curtain("free"), encoding="latin-1")
+    outs = {}
+    for state in (None, "1"):
+        out = tmp_path / f"{state}.out"
+        run_env = dict(env, MW_EXE_TIMES="1")
+        if state is not None:
+            run_env[_REUSE_ENV] = state
+        r = subprocess.run(
+            [EXE, str(deck), str(out)], env=run_env, capture_output=True, check=False
+        )
+        assert r.returncode == 0 and r.stdout == b"", r
+        assert b"cxx: reuse plans built 0," in r.stderr, r.stderr
+        outs[state] = _mask(out.read_bytes())
+    assert b"NEC ERROR" not in outs[None][0]
+    assert outs["1"] == outs[None]
 
 
 def _reuse_decks():
@@ -472,9 +463,6 @@ def _reuse_decks():
 
 
 @pytest.mark.skipif(BASIS != "sinusoidal", reason="the nec42-sinusoidal executable's")
-@pytest.mark.skipif(
-    "pair_reuse" not in CERTIFIES, reason="not a pair_reuse certification build"
-)
 @pytest.mark.parametrize(
     "deck", _reuse_decks(), ids=lambda p: p if isinstance(p, str) else p.name
 )
@@ -511,3 +499,19 @@ def test_pair_reuse_answers_as_the_launcher(deck, tmp_path):
     assert b"+pair_reuse" in exe.split(b"\n")[1]
     if isinstance(deck, str):
         assert b"cxx: reuse last fill served" in r.stderr, r.stderr
+        m = re.search(
+            rb"cxx: reuse plans built (\d+), declined (\d+), found (\d+)", r.stderr
+        )
+        assert m and int(m[1]) - int(m[2]) >= 1, r.stderr
+        # On against off in the executable itself: every byte but line 2
+        # (the reuse moves Zin ~1e-10 at most, under a printed digit).
+        off_out = tmp_path / "off.out"
+        off_env = {k: v for k, v in env.items() if k != _REUSE_ENV}
+        r3 = subprocess.run(
+            [EXE, str(path), str(off_out)], env=off_env, capture_output=True
+        )
+        assert r3.returncode == 0, r3
+        on_lines = _mask(exe)[0].split(b"\n")
+        off_lines = _mask(off_out.read_bytes())[0].split(b"\n")
+        assert on_lines[:1] + on_lines[2:] == off_lines[:1] + off_lines[2:]
+        assert on_lines[1] != off_lines[1]

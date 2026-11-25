@@ -429,3 +429,81 @@ def test_a_scratch_directory_is_left_clean():
         assert os.listdir(room) == []
     finally:
         shutil.rmtree(room, ignore_errors=True)
+
+
+# --- the one fill-reuse switch, MOMWIRE_X_PAIR_REUSE (momwire#1911) ----------
+#
+# Reach 11: this executable runs the point-matched fill's plan
+# (`_sin_pair_reuse_core.h`, `EXE_PARTS`). The C++ plan serves the extended
+# kernel only (`reuse_route`: the NEC-4.2 slot never builds a reduced-kernel
+# fill), so a NEC-2 deck reuses under EK and runs the ordinary fill without
+# it, where the launcher's Python plan serves both. The NEC-2 printout
+# carries no line 2, so on prints off's bytes wherever the reuse moves Zin
+# under a printed digit (its drift, 5e-10, is).
+_REUSE_LINE = re.compile(
+    rb"^cxx: reuse plans built (\d+), declined (\d+), found (\d+)\r?$", re.M
+)
+_REDUCED = b"cxx: reuse last fill the reduced-kernel fill"
+
+
+def _reuse_curtain(ground: str, ek: bool = True) -> bytes:
+    """Ten parallel wires of 41 segments with no junction (410 segments,
+    past the free-space and PEC small-deck threshold): every band of rows
+    repeats."""
+    lam = 299.792458 / 28.0
+    lines = ["CE pair reuse curtain"]
+    for i in range(10):
+        x = 0.1 * lam * i
+        a, b = (x, 0.0, 1.0), (x + 0.3 * (i % 3), 0.0, 1.0 + 0.5 * lam)
+        if i in (1, 4, 7):
+            a, b = b, a
+        lines.append(
+            f"GW {i + 1} 41 {a[0]:.6f} {a[1]:.6f} {a[2]:.6f} "
+            f"{b[0]:.6f} {b[1]:.6f} {b[2]:.6f} 0.002"
+        )
+    lines += ["GE 0"] if ground == "free" else ["GE 1", "GN 1"]
+    lines += ["EK"] if ek else []
+    lines += ["EX 0 6 21 0 1. 0", "FR 0 3 0 0 28. 0.1", "XQ", "NX"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _reuse_counts(stderr: bytes) -> tuple[int, int, int]:
+    m = _REUSE_LINE.search(stderr)
+    assert m, stderr
+    return int(m[1]), int(m[2]), int(m[3])
+
+
+@pytest.mark.parametrize("ground", ["free", "pec"])
+def test_pair_reuse_runs_and_answers_as_the_launcher(ground, tmp_path):
+    """Asked on, both sides, an EK deck: the launcher's bytes under the time
+    mask. The plan really ran (MW_EXE_TIMES's reuse line: a plan built that
+    did not decline, and the last fill served), and on is off's bytes.
+    Unset, no plan is built."""
+    deck = _reuse_curtain(ground)
+    on = {"MOMWIRE_X_PAIR_REUSE": "1"}
+    exe, ref, _de, _dl = _both([], tmp_path / "both", stdin=deck, env=on)
+    assert NOT_SERVED not in exe.stdout, exe.stdout[-600:]
+    _same(exe, ref)
+    timed = _run(EXE, [], deck, tmp_path, _env(**on, MW_EXE_TIMES="1"))
+    built, declined, found = _reuse_counts(timed.stderr)
+    assert built - declined >= 1, (built, declined, found)
+    assert b"cxx: reuse last fill served" in timed.stderr, timed.stderr
+    off = _run(
+        EXE, [], deck, tmp_path, _env(MOMWIRE_X_PAIR_REUSE=None, MW_EXE_TIMES="1")
+    )
+    assert _reuse_counts(off.stderr)[0] == 0, off.stderr
+    assert _mask(off.stdout) == _mask(exe.stdout)
+
+
+def test_pair_reuse_steps_aside_on_the_reduced_kernel(tmp_path):
+    """Without EK the C++ plan declines, by name, before building, and the
+    fill is the one with it off; on this deck the launcher's reuse moves no
+    printed digit either, so the bytes are the launcher's."""
+    deck = _reuse_curtain("free", ek=False)
+    on = {"MOMWIRE_X_PAIR_REUSE": "1"}
+    exe, ref, _de, _dl = _both([], tmp_path / "both", stdin=deck, env=on)
+    assert NOT_SERVED not in exe.stdout, exe.stdout[-600:]
+    _same(exe, ref)
+    timed = _run(EXE, [], deck, tmp_path, _env(**on, MW_EXE_TIMES="1"))
+    assert _reuse_counts(timed.stderr)[0] == 0, timed.stderr
+    assert _REDUCED in timed.stderr, timed.stderr

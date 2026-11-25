@@ -1013,19 +1013,32 @@ def _reuse_ran(built: int, declined: int) -> bool:
     return built - declined >= 1
 
 
+# The two spellings nec5-razor2p takes: the one fill-reuse switch, which it
+# maps to its part (`EXE_PARTS`), and the part's own older variable. Each
+# names itself on line 2, as Python's stamp does.
+_REUSE_VARS_1971 = ("MOMWIRE_X_PAIR_REUSE", "MOMWIRE_X_RAZOR_PAIR_REUSE")
+
+
+def _no_reuse_vars(monkeypatch):
+    for var in _REUSE_VARS_1971:
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's feature")
+@pytest.mark.parametrize("var", _REUSE_VARS_1971)
 @pytest.mark.parametrize("ground", sorted(_REUSE_DECKS_1971))
-def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
+def test_razor_pair_reuse_runs_as_the_launcher(ground, var, tmp_path, monkeypatch):
     """Reach 8 covers the nec5 executables (levels 6 to 8). On ("1") and
-    off ("0"), the executable's printout is the launcher's byte for byte,
-    line 2 naming +razor_pair_reuse on both sides only when it is on. The
-    executable and the launcher share the C++ core, so that alone cannot
-    catch a fault in the core: the reuse is also shown to RUN (MW_EXE_TIMES's
-    reuse line: a plan built that did not decline when on, none built when
-    off) and on is held to off
-    byte for byte except line 2 (the reuse moves Zin ~1e-13 here, far under
-    a printed digit)."""
-    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    off ("0"), by either spelling, the executable's printout is the
+    launcher's byte for byte, line 2 naming the variable's feature on both
+    sides only when it is on. The executable and the launcher share the
+    C++ core, so that alone cannot catch a fault in the core: the reuse is
+    also shown to RUN (MW_EXE_TIMES's reuse line: a plan built that did not
+    decline when on, none built when off) and on is held to off byte for
+    byte except line 2 (the reuse moves Zin ~1e-13 here, far under a
+    printed digit)."""
+    _no_reuse_vars(monkeypatch)
+    stamp = b" +" + var.removeprefix("MOMWIRE_X_").lower().encode()
     name = f"reuse_{ground}.nec"
 
     def prepare(d):
@@ -1039,7 +1052,7 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
             [name, "reuse.out"],
             run,
             prepare=prepare,
-            env={"MOMWIRE_X_RAZOR_PAIR_REUSE": state, "MW_EXE_TIMES": "1"},
+            env={var: state, "MW_EXE_TIMES": "1"},
         )
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
@@ -1049,12 +1062,76 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, tmp_path, monkeypatch):
         else:
             assert built == 0 and found == 0, (built, declined, found)
         lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
-        assert (b"+razor_pair_reuse" in lines[state][1]) == (state == "1"), lines[
-            state
-        ][1]
+        assert (b"+" in lines[state][1]) == (state == "1"), lines[state][1]
     on, off = lines["1"], lines["0"]
-    assert on[1].rstrip() == off[1].rstrip() + b" +razor_pair_reuse", (on[1], off[1])
+    assert on[1].rstrip() == off[1].rstrip() + stamp, (on[1], off[1])
     assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+@pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's feature")
+@pytest.mark.parametrize(
+    ("part", "stamp", "runs"),
+    [("0", b"", False), ("1", b" +pair_reuse+razor_pair_reuse", True)],
+)
+def test_the_part_variable_decides_under_the_whole(
+    part, stamp, runs, tmp_path, monkeypatch
+):
+    """MOMWIRE_X_PAIR_REUSE=1 with the part's own variable set: the part's
+    value wins (`_features.enabled`'s order). At 0 nothing reuses and line 2
+    names neither, as Python's stamp names a whole only where it runs; at 1
+    both are named, in registry order. The launcher's bytes either way."""
+    _no_reuse_vars(monkeypatch)
+    name = "reuse_free.nec"
+
+    def prepare(d):
+        (d / name).write_text(_REUSE_DECKS_1971["free"], newline="")
+
+    exe, ref, de, dl = _both(
+        [name, "reuse.out"],
+        tmp_path,
+        prepare=prepare,
+        env={
+            "MOMWIRE_X_PAIR_REUSE": "1",
+            "MOMWIRE_X_RAZOR_PAIR_REUSE": part,
+            "MW_EXE_TIMES": "1",
+        },
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    built, declined, _found = _reuse_counts(exe.stderr)
+    assert _reuse_ran(built, declined) == runs, (built, declined)
+    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
+    line2 = line2.rstrip()
+    assert line2.endswith(stamp) if stamp else b"+" not in line2, line2
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's withholding")
+def test_nec5_bspline_accepts_pair_reuse_and_withholds_it(tmp_path, monkeypatch):
+    """nec5-bs2 accepts the one fill-reuse switch, but bs2's part is Python's
+    alone (`EXE_PARTS`: withheld), so on a deck past the small-deck
+    threshold no plan is built and the printout is the one with the switch
+    unset, line 2 included."""
+    _no_reuse_vars(monkeypatch)
+    deck = tmp_path / "reuse_free.nec"
+    deck.write_text(_REUSE_DECKS_1971["free"], newline="")
+    outs = {}
+    for state in (None, "1"):
+        env = dict(os.environ, MW_EXE_TIMES="1")
+        if state is not None:
+            env["MOMWIRE_X_PAIR_REUSE"] = state
+        out = tmp_path / f"{state}.out"
+        r = subprocess.run(
+            [EXE, deck.name, out.name],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        assert _reuse_counts(r.stderr)[0] == 0, r.stderr
+        outs[state] = out.read_bytes()
+    assert b"NEC ERROR" not in outs[None]
+    assert outs["1"] == outs[None]
 
 
 # Eight wires of random place and direction over Sommerfeld ground (the
@@ -1085,7 +1162,7 @@ def test_razor_pair_reuse_gate_does_not_count_a_declined_plan(tmp_path, monkeypa
     gate that counted plans built would pass it without the reuse having
     run. The reuse line counts that plan as declined, and the gate's proof
     (`_reuse_ran`) is false on it."""
-    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    _no_reuse_vars(monkeypatch)
     name = "reuse_declines.nec"
 
     def prepare(d):
@@ -1108,12 +1185,13 @@ def test_razor_pair_reuse_gate_does_not_count_a_declined_plan(tmp_path, monkeypa
 def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch):
     """Unset or off, either executable's printout is the launcher's, byte for
     byte, with no feature on line 2."""
-    monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)
+    _no_reuse_vars(monkeypatch)
 
     def prepare(d):
         shutil.copy(deck, d / deck.name)
 
-    for i, env in enumerate((None, {"MOMWIRE_X_RAZOR_PAIR_REUSE": "0"})):
+    offs = [None] + [{var: "0"} for var in _REUSE_VARS_1971]
+    for i, env in enumerate(offs):
         run = tmp_path / str(i)
         run.mkdir()
         exe, ref, de, dl = _both(
@@ -1122,7 +1200,7 @@ def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
         line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
-        assert b"+razor_pair_reuse" not in line2, line2
+        assert b"+" not in line2, line2
 
 
 @pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's refusal")

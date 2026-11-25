@@ -137,6 +137,8 @@ void deck_frame(const std::string &body, const std::string &terminator, std::str
     }
     if (printed) {
         log_route(g_render_threads == 1 && env("MW_EXE_COPY") != "threads" ? "cxx:serial" : "cxx:threads", "-");
+        // the gates' proof that a requested reuse ran (momwire#1911)
+        if (env("MW_EXE_TIMES") == "1") reuse_line();
     } else {
         std::string logged = why;
         for (char &c : logged)
