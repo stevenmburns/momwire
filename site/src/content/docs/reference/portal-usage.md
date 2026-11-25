@@ -500,6 +500,44 @@ drop-ins name it on printout line 2 (`+rotational_symmetry`, followed by
 `uncertified on this platform` on macOS). The standalone executables refuse
 it.
 
+### Turning a feature on in the deck
+
+A variable set with `setx` turns a feature on for every deck the engine
+answers, including the one-off solves where reuse costs more than it saves.
+A deck can ask for one for itself instead, in a comment card:
+
+```
+CM momwire: pair_reuse
+```
+
+The card asks for that one deck exactly what the variable set to `1` would,
+and nothing more. Two features take it, the two that cannot change a printed
+digit: `pair_reuse` and `rotational_symmetry`. The rules:
+
+- **One feature a line.** The text after `CM` starts with `momwire:` (any
+  case), then the feature's name; the rest of the line is ignored. For both
+  features, use two lines.
+- **The variable wins.** `MOMWIRE_X_PAIR_REUSE=0` turns reuse off whatever
+  the deck says: it is the switch for turning the pragma off everywhere. Set
+  to `1`, the variable does what it does today, with or without the card.
+- **It asks, it does not insist.** A deck the feature cannot serve runs the
+  ordinary way, as it would under the variable; the card never refuses a
+  deck.
+- **A name it does not take is ignored**, and line 2 of the NEC-5, NEC-4.2
+  and NEC-2D printouts says so: `(pragma ignored: <name>)` (the NEC-2
+  printout has no line 2). Where the feature
+  runs, line 2 names it as the variable would (`+pair_reuse`).
+
+In EZNEC, type the line into the model's description: EZNEC copies the
+description into the deck as `CM` cards, one card per line of text. Put the
+pragma on a line of its own, at the start of the line. NEC itself reads the
+card as a comment, so the same model runs unchanged in any other engine. In
+4nec2 or SimNEC, add the card to the deck's comments.
+
+The standalone executables read the card too, for `pair_reuse` only:
+rotational symmetry is the drop-ins' alone, so there a
+`CM momwire: rotational_symmetry` card is ignored and noted on line 2.
+
 ### Mixed-precision solve
 
 `MOMWIRE_X_MIXED_LU=1` changes how the engine solves its matrix, not how it
