@@ -1105,33 +1105,153 @@ def test_the_part_variable_decides_under_the_whole(
     assert line2.endswith(stamp) if stamp else b"+" not in line2, line2
 
 
-@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's withholding")
-def test_nec5_bspline_accepts_pair_reuse_and_withholds_it(tmp_path, monkeypatch):
-    """nec5-bs2 accepts the one fill-reuse switch, but bs2's part is Python's
-    alone (`EXE_PARTS`: withheld), so on a deck past the small-deck
-    threshold no plan is built and the printout is the one with the switch
-    unset, line 2 included."""
-    _no_reuse_vars(monkeypatch)
+# nec5-bs2's two spellings: the one fill-reuse switch, which turns on the
+# census (`_bspline_pair_reuse_core.h`, the whole's own slot) and bs2's part
+# `offset_reuse` (`EXE_PARTS`), and both at once by their own variables.
+_BS2_REUSE_ENVS = {
+    "whole": ({"MOMWIRE_X_PAIR_REUSE": "1"}, b" +pair_reuse"),
+    "both": (
+        {"MOMWIRE_X_PAIR_REUSE": "1", "MOMWIRE_X_OFFSET_REUSE": "1"},
+        b" +pair_reuse+offset_reuse",
+    ),
+}
+
+
+# bs2's census steps aside under 200 segments (`SMALL_DECK_SEGS`,
+# `_bspline_pair_reuse_core.h`), one threshold on every ground, so its
+# Sommerfeld deck is two 101-segment dipoles (202) where razor2p's is 122.
+_BS2_REUSE_DECKS = {
+    "free": _REUSE_DECKS_1971["free"],
+    "pec": _REUSE_DECKS_1971["pec"],
+    "sommerfeld": (
+        "CM momwire#2063: two parallel dipoles over Sommerfeld ground, 202 segments\n"
+        "CE\nGW 1 101 0 -2.5 6 0 2.5 6 0.001\nGW 2 101 2 -2.5 6 2 2.5 6 0.001\n"
+        "GE 0\nGN 0 0 0 0 13.0 -50.0\nEX 0 1 51 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+    ),
+}
+
+
+def _no_bs2_reuse_vars(monkeypatch):
+    for var in ("MOMWIRE_X_PAIR_REUSE", "MOMWIRE_X_OFFSET_REUSE"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _coeffs(arrays: Path) -> bytes:
+    """Every finished run's coefficients (MW_EXE_ARRAYS), in run order."""
+    return b"".join(p.read_bytes() for p in sorted(arrays.glob("*_coeffs.bin")))
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
+@pytest.mark.parametrize("spelling", sorted(_BS2_REUSE_ENVS))
+@pytest.mark.parametrize("ground", sorted(_BS2_REUSE_DECKS))
+def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeypatch):
+    """bs2's C++ fill runs the census and `offset_reuse` (momwire#2063), as
+    the Python route does. On, the executable's printout is the launcher's
+    byte for byte, line 2 naming what is on; the census RAN (a plan built
+    that did not decline); and on is held to off byte for byte except line
+    2. Off (unset), no plan is built."""
+    _no_bs2_reuse_vars(monkeypatch)
+    env_on, stamp = _BS2_REUSE_ENVS[spelling]
+    name = f"reuse_{ground}.nec"
+
+    def prepare(d):
+        (d / name).write_text(_BS2_REUSE_DECKS[ground], newline="")
+
+    lines = {}
+    for state in ("on", "off"):
+        run = tmp_path / state
+        run.mkdir()
+        env = dict(env_on if state == "on" else {}, MW_EXE_TIMES="1")
+        exe, ref, de, dl = _both([name, "reuse.out"], run, prepare=prepare, env=env)
+        assert exe.returncode == 0, exe.stderr
+        _same(exe, ref, de, dl)
+        built, declined, found = _reuse_counts(exe.stderr)
+        if state == "on":
+            assert _reuse_ran(built, declined), (built, declined, found)
+        else:
+            assert built == 0 and found == 0, (built, declined, found)
+        lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
+        assert b"NEC ERROR" not in lines[state][0]
+    on, off = lines["on"], lines["off"]
+    assert on[1].rstrip() == off[1].rstrip() + stamp, (on[1], off[1])
+    assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
+def test_bs2_reuse_runs_both_its_parts(tmp_path, monkeypatch):
+    """The adversarial case for `test_bs2_pair_reuse_runs_as_the_launcher`:
+    the printout bytes cannot tell a part that ran from one withheld (both
+    move Z far under a printed digit), so the solved coefficients
+    (MW_EXE_ARRAYS) are compared bit for bit. The census alone
+    (MOMWIRE_X_OFFSET_REUSE=0 under the whole), the part alone, and both
+    each give coefficients of their own: an executable that withheld either
+    one would print two of the three alike."""
+    _no_bs2_reuse_vars(monkeypatch)
     deck = tmp_path / "reuse_free.nec"
     deck.write_text(_REUSE_DECKS_1971["free"], newline="")
-    outs = {}
-    for state in (None, "1"):
-        env = dict(os.environ, MW_EXE_TIMES="1")
-        if state is not None:
-            env["MOMWIRE_X_PAIR_REUSE"] = state
-        out = tmp_path / f"{state}.out"
+    runs = {
+        "off": {},
+        "census": {"MOMWIRE_X_PAIR_REUSE": "1", "MOMWIRE_X_OFFSET_REUSE": "0"},
+        "part": {"MOMWIRE_X_OFFSET_REUSE": "1"},
+        "both": {"MOMWIRE_X_PAIR_REUSE": "1"},
+    }
+    coeffs, counts = {}, {}
+    for label, extra in runs.items():
+        arrays = tmp_path / label
+        arrays.mkdir()
+        env = dict(os.environ, MW_EXE_TIMES="1", MW_EXE_ARRAYS=str(arrays), **extra)
         r = subprocess.run(
-            [EXE, deck.name, out.name],
+            [EXE, deck.name, f"{label}.out"],
             cwd=tmp_path,
             env=env,
             capture_output=True,
             check=False,
         )
         assert r.returncode == 0, r.stderr
-        assert _reuse_counts(r.stderr)[0] == 0, r.stderr
-        outs[state] = out.read_bytes()
-    assert b"NEC ERROR" not in outs[None]
-    assert outs["1"] == outs[None]
+        coeffs[label] = _coeffs(arrays)
+        assert coeffs[label], label
+        counts[label] = _reuse_counts(r.stderr)
+    assert len(set(coeffs.values())) == len(coeffs), "a part did not run"
+    for label in ("census", "both"):
+        assert _reuse_ran(*counts[label][:2]), (label, counts[label])
+    for label in ("off", "part"):
+        assert counts[label][0] == 0, (label, counts[label])
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
+@pytest.mark.parametrize(
+    ("part", "stamp", "census"),
+    [("0", b"", True), ("1", b" +pair_reuse+offset_reuse", True)],
+)
+def test_bs2_the_part_variable_decides_under_the_whole(
+    part, stamp, census, tmp_path, monkeypatch
+):
+    """MOMWIRE_X_PAIR_REUSE=1 with MOMWIRE_X_OFFSET_REUSE set: the part's
+    value decides the part, and line 2 names the whole only where its part
+    runs (`_features.stamp`); the census follows the whole either way, as
+    `BSplineSolver._reuse_on` does. The launcher's bytes either way."""
+    _no_bs2_reuse_vars(monkeypatch)
+    name = "reuse_free.nec"
+
+    def prepare(d):
+        (d / name).write_text(_REUSE_DECKS_1971["free"], newline="")
+
+    exe, ref, de, dl = _both(
+        [name, "reuse.out"],
+        tmp_path,
+        prepare=prepare,
+        env={
+            "MOMWIRE_X_PAIR_REUSE": "1",
+            "MOMWIRE_X_OFFSET_REUSE": part,
+            "MW_EXE_TIMES": "1",
+        },
+    )
+    assert exe.returncode == 0, exe.stderr
+    _same(exe, ref, de, dl)
+    built, declined, _found = _reuse_counts(exe.stderr)
+    assert _reuse_ran(built, declined) == census, (built, declined)
+    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1].rstrip()
+    assert line2.endswith(stamp) if stamp else b"+" not in line2, line2
 
 
 # Eight wires of random place and direction over Sommerfeld ground (the
