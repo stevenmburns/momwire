@@ -364,6 +364,20 @@ struct SinBelowSource {
 }  // namespace
 
 void register_nec4_printout(py::module_ &m) {
+    // Line 2 alone, so a test can hold the C++ cut order to Python's
+    // `_printout.compose_stamp` without a solve (momwire#2158).
+    m.def(
+        "nec5_engine_stamp",
+        [](const std::string &basis, const std::string &version, const std::string &variant,
+           const std::string &marker, const std::string &pragma_note, const std::string &rename_note) {
+            mw::nec5::EngineStamp s = stamp_of(version, variant, marker);
+            s.pragma_note = pragma_note;
+            s.rename_note = rename_note;
+            return mw::nec5::engine_stamp(basis, s);
+        },
+        py::arg("basis"), py::arg("version"), py::arg("variant"), py::arg("marker"),
+        py::arg("pragma_note") = "", py::arg("rename_note") = "",
+        "The C++ writer's line 2 (latin-1 text as str).");
     m.def(
         "nec4_render_printout",
         [](py::bytes latin1_echo, py::object data, const std::string &basis, const std::string &version,

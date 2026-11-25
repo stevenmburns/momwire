@@ -159,13 +159,18 @@ struct NumpyLinalg {
 
 // --- the printout ------------------------------------------------------------
 
-// Line 2's three fields (`_printout.engine_stamp`): the release, the
-// compiled variant, and the overlay marker ("" outside an overlaid bundle).
-// The basis is the fourth, passed beside it.
+// Line 2's fields (`_printout.engine_stamp`): the release, the compiled
+// variant, and the overlay marker with the feature stamp ("" outside an
+// overlaid bundle and with every feature off). The basis is passed beside
+// them. The two notes are separate from the marker because they are cut
+// first when line 2 overflows (`_printout.compose_stamp`, momwire#2158): the
+// deck's ignored-pragma note, then the rename note. The marker is never cut.
 struct EngineStamp {
     std::string version;
     std::string variant;
     std::string marker;
+    std::string pragma_note;
+    std::string rename_note;
 };
 
 struct PrintoutResult {

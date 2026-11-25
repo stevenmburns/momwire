@@ -111,7 +111,9 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mws, mwas, withdraw_features(names));
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mws, mwas, stamp_uncertified(on)); }
-inline void stamp_note(const std::string &note) { MW_PICK(mws, mwas, stamp_note(note)); }
+inline void stamp_notes(const std::string &pragma, const std::string &rename) {
+    MW_PICK(mws, mwas, stamp_notes(pragma, rename));
+}
 inline void reset_features() { MW_PICK(mws, mwas, reset_features()); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mws, mwas, reuse_plans(built, declined, found));
@@ -145,7 +147,9 @@ inline bool withdraw_features(const std::vector<std::string> &names) {
     return MW_PICK(mw, mwa, withdraw_features(names));
 }
 inline void stamp_uncertified(bool on) { MW_PICK(mw, mwa, stamp_uncertified(on)); }
-inline void stamp_note(const std::string &note) { MW_PICK(mw, mwa, stamp_note(note)); }
+inline void stamp_notes(const std::string &pragma, const std::string &rename) {
+    MW_PICK(mw, mwa, stamp_notes(pragma, rename));
+}
 inline void reset_features() { MW_PICK(mw, mwa, reset_features()); }
 inline void reuse_plans(long long &built, long long &declined, long long &found) {
     MW_PICK(mw, mwa, reuse_plans(built, declined, found));
@@ -622,6 +626,9 @@ bool feature_default_here(const std::string &name) {
 // Line 2's feature tail for this run (the routes' `ni_eval::requested_stamp`,
 // for the printouts this file writes itself).
 std::string g_feature_stamp;
+// Line 2's two notes, kept apart from the features: they are cut first when
+// line 2 overflows (`engine_stamp`, momwire#2158).
+std::string g_pragma_note, g_rename_note;
 #if MW_EXE_FAT
 // The variant a deprecated `-avx2` / `-sse2` name asks for, or "", and line
 // 2's "(renamed from ...)" note for it (`pick_variant`, exe_name.h).
@@ -660,6 +667,8 @@ int feature_refusal() {
 // is off; `pragma_note` (`_features.pragma_note`) follows them there.
 void configure_asked(const std::vector<std::string> &asked, const std::string &pragma_note) {
     g_feature_stamp.clear();
+    g_pragma_note.clear();
+    g_rename_note.clear();
     // The C++ route requests the default-on features from the start
     // (`ni_eval`); one set off here, or outside this level's reach, is
     // withdrawn. Asked on, a default-here one is already requested and
@@ -735,15 +744,12 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
     // line 2's notes after the features, as `_printout.engine_stamp` writes
     // them: the deck's ignored pragma cards, then (fat build) a deprecated
     // variant name's (`pick_variant`), as Python's basis rename note
-    std::string note = pragma_note;
+    g_pragma_note = pragma_note;
 #if MW_EXE_FAT
-    if (!g_name_note.empty()) note += (note.empty() ? "" : " ") + g_name_note;
+    g_rename_note = g_name_note;
 #endif
-    if (!note.empty()) {
-        g_feature_stamp += (g_feature_stamp.empty() ? "" : " ") + note;
-        rt_serial::stamp_note(note);
-        rt_threads::stamp_note(note);
-    }
+    rt_serial::stamp_notes(g_pragma_note, g_rename_note);
+    rt_threads::stamp_notes(g_pragma_note, g_rename_note);
 }
 
 // --- per-deck pragmas (`_features.deck_pragmas`, momwire's pragma cards) -----
@@ -1563,7 +1569,7 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
     if (out.empty()) return;
     std::string text;
     const bool readable = read_file(deck, text);
-    mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, g_feature_stamp};
+    mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, g_feature_stamp, g_pragma_note, g_rename_note};
 #if MW_EXE_DIALECT_NEC4
     const std::string printout = mw::nec5::printout_bytes(
         mw::nec4::render_nec4_refusal(readable ? &text : nullptr, why, BASIS, stamp));
@@ -1747,7 +1753,9 @@ const char *const STREAMING_REFUSAL =
 
 // Line 2's fields for the printouts this file writes (read after
 // `feature_refusal`, which sets the tail).
-mw::nec5::EngineStamp refusal_stamp() { return mw::nec5::EngineStamp{VERSION, EXE_VARIANT, g_feature_stamp}; }
+mw::nec5::EngineStamp refusal_stamp() {
+    return mw::nec5::EngineStamp{VERSION, EXE_VARIANT, g_feature_stamp, g_pragma_note, g_rename_note};
+}
 
 // `probe_version`: `momwire_serve_client.version_line`'s line (momwire#1606),
 // the dialect, this executable's name (MW_EXE_VERSION_NAME), its interface
