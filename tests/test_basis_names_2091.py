@@ -523,7 +523,7 @@ ALLOWED = {
     "site/src/content/docs/reference/eznec-nec5.md": 8,  # the rename and REMOVED tables
     "site/src/content/docs/reference/portal-usage.md": 2,  # history: retired nec2c razor names
     "src/momwire/_basis_names.py": 6,  # the alias table
-    "src/momwire/_features.py": 19,  # the solver family `bspline`
+    "src/momwire/_features.py": 20,  # the solver family `bspline`
     "src/momwire/bspline.py": 1,  # FEATURE_SOLVER, the family name
     "src/momwire/dropin/nec5/_printout.py": 1,  # the deprecation note's example
     "src/momwire/dropin/nec5/_serve.py": 1,  # a dated measurement in the module docstring
