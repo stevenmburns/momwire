@@ -311,6 +311,28 @@ def test_the_note_follows_the_features_on_line_2(no_features):
     assert line2.endswith(" +pair_reuse (pragma ignored: nope)"), line2
 
 
+def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
+    # 4nec2's NEC-2D layout carries momwire's line 2 too.
+    from momwire.dropin.nec2c import engine_scope, main
+
+    deck, out = tmp_path / "d.nec", tmp_path / "d.out"
+    deck.write_bytes(("CM momwire: pair_reuse\nCM momwire: zzz\n" + DIPOLES).encode())
+    with no_features.context() as m:
+        probe = Solvers(m)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with engine_scope():
+                rc = main(
+                    [str(deck), str(out)],
+                    stdin=io.StringIO(""),
+                    prog="momwire-nec2d-bs2",
+                )
+    assert rc == 0
+    line2 = out.read_bytes().decode("latin-1").splitlines()[1]
+    assert line2.endswith(" +pair_reuse (pragma ignored: zzz)"), line2
+    assert probe.reuse() == [("served", True)]
+
+
 def test_a_long_ignored_name_keeps_line_2_in_its_columns(no_features):
     deck = f"CM momwire: {'x' * 120}\n" + DIPOLES
     line2 = nec5(deck, "razor2p").splitlines()[1]
