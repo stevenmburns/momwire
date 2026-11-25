@@ -458,15 +458,16 @@ standalone executable, and each turns on its own engine's reuse. It is
   same, and moves Z by at most about 2e-9 relative.
   `MOMWIRE_X_RAZOR_PAIR_REUSE` is its older spelling and still works; when
   it is set, it decides.
-- **`bs2`** on the drop-ins fills each uniform wire's own entries once per
-  segment offset. The nec5-bs2 and nec42-bs2 executables accept the switch
-  and run the ordinary fill: their reuse is not ported yet.
+- **`bs2`** (the drop-ins and the nec5-bs2 and nec42-bs2 executables) finds
+  the classes itself on decks of 200 segments or more, and fills each
+  uniform wire's own entries once per segment offset. `MOMWIRE_X_OFFSET_REUSE` turns the second part on or
+  off by itself; when it is set, it decides.
 
 Every one of these is far below the printed digits. It pays where one
 geometry is solved many times; if it is slower on your deck, turn it off.
 
 The NEC-4.2 and NEC-5 printouts name it on line 2 (`+pair_reuse`) wherever
-it runs; on macOS the `bs2` drop-in adds `uncertified on this platform`.
+it runs.
 The NEC-2 printout keeps nec2c's layout and does not name it.
 
 ### Rotational symmetry for radial screens
