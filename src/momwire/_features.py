@@ -21,11 +21,13 @@ On outside its reach, a feature is handled by its KIND:
 
 The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
-``standalone/momwire_razor2p.cpp``; today momwire#1860's four levers, reach
-9, so every executable but nec42-sinusoidal's, and razor_pair_reuse, reach 8,
-which only nec5-razor2p's route carries, so nec5-bs2 refuses it by
-basis, ``EXE_FEATURE_BASES``). One started with any other ``MOMWIRE_X_``
-variable on refuses before it reads a deck (:data:`EXE_REFUSAL`).
+``standalone/momwire_razor2p.cpp``; among them momwire#1860's four levers,
+reach 9, so every executable but nec42-sinusoidal's, razor_pair_reuse, reach
+8, which only nec5-razor2p's route carries, so nec5-bs2 refuses it by basis,
+``EXE_FEATURE_BASES``, and the whole ``pair_reuse``, reach 11, which every
+executable accepts and maps to its own route's reuse, ``EXE_PARTS``). One
+started with any other ``MOMWIRE_X_`` variable on refuses before it reads a
+deck (:data:`EXE_REFUSAL`).
 
 A feature may be a PART of another (``part_of``): one user-facing switch
 that turns on what each solver supports of it. Today that is ``pair_reuse``,
@@ -249,27 +251,25 @@ FEATURES: dict[str, Feature] = {
         # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
         # supports. Their own keywords and variables are kept as aliases.
         #
-        # The sinusoidal part's plan is one C++ copy on the common reuse core
+        # The sinusoidal plan is one C++ copy on the common reuse core
         # (`_sin_pair_reuse_core.h`, momwire#2063), which the Python route
-        # and the C++ fill (the nec42-sinusoidal executable) both run. It has
-        # no EXE_FEATURES row, so the shipped executables refuse it; a
-        # certification build (MW_EXE_CERTIFY=pair_reuse) runs it for the
-        # gates.
+        # and the C++ fill (the nec42-sinusoidal and nec2c-sinusoidal
+        # executables) both run.
         #
-        # Reach 4, `dropin-linux-windows` (Steve, 2026-11-19; it was reach 1,
-        # the hosted app only, from 11-04): certified for every Python route
-        # but macOS, the hosted app, Linux sse2, Windows installs and the
-        # drop-in on Linux and Windows, so MOMWIRE_X_PAIR_REUSE=1 with the
-        # Windows NEC-2 drop-in (`momwire-nec2c-sinusoidal`) is a certified
-        # use. Python-kind, so the macOS drop-in (level 5) still runs it,
-        # stamped uncertified. Still off by default and not offered. No
-        # executable carries it: reach 4 is short of the first executable
-        # level (6), and there is no EXE_FEATURES row, so they refuse it.
-        # Its bspline part `offset_reuse` moves with it; its razor2p part
-        # `razor_pair_reuse` already reaches 8.
+        # Reach 11, every level: every Python route and drop-in, and every
+        # executable, each of which accepts MOMWIRE_X_PAIR_REUSE and runs its
+        # own basis's reuse (`EXE_FEATURES` and `EXE_PARTS` in
+        # standalone/momwire_razor2p.cpp): nec5-razor2p its part
+        # `razor_pair_reuse`, the two sinusoidal executables this plan, and
+        # nec5-bs2 and nec42-bs2 nothing yet -- their part `offset_reuse` is
+        # Python's, so there the whole is withheld and the printout is the
+        # one with it off. Where it runs, a part is certified only as far as
+        # its own reach, and line 2 says so (`stamp`): the macOS bspline
+        # drop-in (level 5, past `offset_reuse`'s 4) stamps it uncertified.
+        # Still off by default and not offered.
         Feature(
             name="pair_reuse",
-            reach=4,
+            reach=11,
             env="MOMWIRE_X_PAIR_REUSE",
             solvers=("bspline", "razor", "sinusoidal"),
             kind="python",
@@ -1451,10 +1451,11 @@ def stamp(context: str | None = None, solver: str | None = None) -> str:
     """What a printout's line 2 adds for the features the environment turns
     on where their default is off: ``""`` when there are none (the line is
     then byte-identical to one without features), else ``"+a+b"``, followed
-    by ``" uncertified on this platform"`` when any of them is outside its
-    reach here (`context` defaulting to the running one). A default-on
-    feature is never named: on, it is the stable path; turned off, the
-    printout is the one before it was promoted.
+    by ``" uncertified on this platform"`` when any of them, or a part of
+    one that runs (:func:`_certified_as_run`), is outside its reach here
+    (`context` defaulting to the running one). A default-on feature is never
+    named: on, it is the stable path; turned off, the printout is the one
+    before it was promoted.
 
     `solver` is the running solver's family (:data:`SOLVERS`, or ``""`` for
     one that honours none; :func:`basis_solver`): only the features that run
@@ -1471,6 +1472,23 @@ def stamp(context: str | None = None, solver: str | None = None) -> str:
     if not names:
         return ""
     text = "".join(f"+{n}" for n in names)
-    if not all(certified(n, context) for n in names):
+    if not all(_certified_as_run(n, solver, context) for n in names):
         text += " uncertified on this platform"
     return text
+
+
+def _certified_as_run(name: str, solver: str | None, context: str) -> bool:
+    """Whether `name`, on in the environment, runs certified here: it is
+    certified, and so is each of its parts that runs on family `solver`
+    (every family when None). A whole reaches as far as its widest family,
+    and on a family it acts on through a part, what runs is the part."""
+    if not certified(name, context):
+        return False
+    for part in FEATURES.values():
+        if part.part_of != name or (solver is not None and solver not in part.solvers):
+            continue
+        on, through_whole = _resolve(part.name, None, None, context)
+        if on and not (through_whole and _withheld_here(part.name, context)):
+            if not certified(part.name, context):
+                return False
+    return True

@@ -225,12 +225,13 @@ struct Features {
     // either: the crossing fill reads it from the active features.
     bool crossing_anchors = false;
     // momwire#1911: the point-matched sinusoidal fill's pair reuse
-    // (`_sin_pair_reuse_core.h`). Not a near-interface lever either: the C++
-    // fill reads it from the REQUESTED set, as `SinusoidalSolver` reads its
-    // flag at construction. Its reach is level 1 and it has no EXE_FEATURES
-    // row, so no shipped executable requests it; the in-process hook
-    // (`sinusoidal_nec4_printout(features=)`) and a certification build
-    // (`MW_EXE_CERTIFY`, standalone/CMakeLists.txt) do.
+    // (`_sin_pair_reuse_core.h`), the one fill-reuse switch's slot. Not a
+    // near-interface lever either: the C++ fill reads it from the REQUESTED
+    // set, as `SinusoidalSolver` reads its flag at construction. The
+    // executables request it with MOMWIRE_X_PAIR_REUSE (`EXE_PARTS` in
+    // standalone/momwire_razor2p.cpp); the point-matched fill is its only
+    // reader, so on another route it only names the switch on line 2. The
+    // in-process hook (`sinusoidal_nec4_printout(features=)`) requests it too.
     bool pair_reuse = false;
     // momwire#1847: the transmitted grid blended from frequency anchors
     // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
