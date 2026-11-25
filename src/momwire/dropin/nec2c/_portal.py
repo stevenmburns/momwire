@@ -3159,6 +3159,11 @@ def _operator_key(deck: PortalDeck) -> tuple:
         model.networks,
         tuple(g.ek for g in deck.groups if g is not None),
         (cls.__name__, tuple(sorted(kwargs.items())), suffix),
+        # The deck's own pragma features (`_features.pragma_scope`): the
+        # solver reads them at construction, as its variables, so a deck
+        # asking for one must not be answered by an entry built without it,
+        # nor the other way round.
+        tuple(sorted(_features.pragmas_on())),
     )
 
 
@@ -4237,6 +4242,7 @@ def _run_block(
 
 
 @_features.in_context("dropin")
+@_features.pragma_scoped
 def render_deck(body: str) -> tuple[list[str], list[str]]:
     """(stdout lines, stderr lines) for one deck body — no banner, no ``NX``.
 

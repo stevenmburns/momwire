@@ -424,6 +424,7 @@ def _canonical_basis(entry: Callable[..., object]) -> Callable[..., object]:
 @_canonical_basis
 @_features.in_context("dropin")
 @_thread_policy.answering()
+@_features.pragma_scoped
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
@@ -818,6 +819,7 @@ _STREAM_CHUNK = 65536
 
 
 @_thread_policy.answering()
+@_features.pragma_scoped
 def _stream_piece(text: str, *, basis: str, dialect: str = "nec5") -> tuple[str, bool]:
     """One piece of a stream as its printout: ``(printout, go_on)``.
 
