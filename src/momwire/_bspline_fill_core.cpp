@@ -1155,9 +1155,12 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
     for (int64_t w0 = 0; w0 < N; w0 += chunk) {
         const int64_t w1 = std::min(w0 + chunk, N);
         if (plan != nullptr) {
-            // `_reuse_block`: the window gathered from the class values, cut
+            // `_reuse_block`: the window assembled from the class values, cut
             // at the edges; each piece's own-edge columns the sweep's own
-            // fill, or zero on an offset edge (its own block comes later)
+            // fill, or zero on an offset edge (its own block comes later).
+            // The window is never written whole (momwire#2166): each tile of
+            // Z reads the class values as it runs, `_reuse_block`'s
+            // `plan.assemble`, bit for bit the gathered window's sum.
             std::vector<int64_t> bounds{w0};
             for (int64_t c : edge_cuts)
                 if (c > w0 && c < w1) bounds.push_back(c);
@@ -1167,18 +1170,25 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                 const size_t e = static_cast<size_t>(std::upper_bound(edge_cuts.begin(), edge_cuts.end(), r0) -
                                                      edge_cuts.begin()) - 1;
                 const int64_t o0 = edges_all[e].s0, o1 = edges_all[e].s1;
-                const size_t m = static_cast<size_t>(r1 - r0);
-                Block J_win(static_cast<size_t>(nd * nd) * m * static_cast<size_t>(N), false);
-                reuse::gather(*plan, r0, r1, values.data(), nd, J_win.data());
                 const bool off_edge = is_offset_start(o0);
                 const Block own = off_edge ? Block() : moments(r0, r1, o0, o1);
-                const size_t no = static_cast<size_t>(o1 - o0);
-                for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
-                    for (size_t i = 0; i < m; i++)
-                        for (size_t j = 0; j < no; j++)
-                            J_win[(pq * m + i) * static_cast<size_t>(N) + static_cast<size_t>(o0) + j] =
-                                off_edge ? cdouble(0.0, 0.0) : own[(pq * m + i) * no + j];
-                accumulate(J_win, r0, r1, 0, N, touching(r0, r1), all_n);
+                reuse::Window w;
+                w.plan = plan;
+                w.values = values.data();
+                w.d1 = nd;
+                w.r0 = r0;
+                w.r1 = r1;
+                w.o0 = o0;
+                w.o1 = o1;
+                w.own = off_edge ? nullptr : own.data();
+                reuse::check_window(w);
+                const std::vector<int64_t> m_idx = touching(r0, r1);
+                assemble_Z_bspline_windowed_tiles(
+                    [&w](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cdouble *out) {
+                        reuse::window_tile(w, rows, nr, cols, nc, out);
+                    },
+                    sa, pa, ta, borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())}),
+                    borrow(all_n, {static_cast<nd::ssize_t>(all_n.size())}), r0, r1, 0, N, omega, eps, mu, Za, 0);
             }
             continue;
         }

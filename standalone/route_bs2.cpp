@@ -19,6 +19,7 @@
 
 #include "_near_interface_eval.h"  // the features this run asked for (momwire#1860)
 #include "_bspline_pair_reuse_core.h"  // the reuse plans' counters (momwire#2063)
+#include "_bspline_core.h"  // the fused windows' counters (momwire#2166)
 #if MW_ROUTE_NEC4
 #include "_bspline_nec4_run_core.h"
 #endif
@@ -166,7 +167,15 @@ void reuse_plans(long long &built, long long &declined, long long &found) {
     found = static_cast<long long>(c.found);
 }
 
-std::string reuse_outcome() { return std::string(); }
+// The chunked fill's windows assembled from the class values (momwire#2166),
+// process totals: tiled where the lane kernel is compiled, whole elsewhere,
+// so a gate can prove the fused assembly ran and not the gathered window.
+std::string reuse_outcome() {
+    const bspline::WindowTileCounts c = bspline::window_tile_counts();
+    if (c.tiled + c.whole == 0) return std::string();
+    return "windows from the class values " + std::to_string(c.tiled) + " tiled, " + std::to_string(c.whole) +
+           " whole";
+}
 
 void configure_grid_cache(const std::string &tag) {
     somm_core::configure_disk_cache(tag);

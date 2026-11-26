@@ -1131,6 +1131,14 @@ _BS2_REUSE_DECKS = {
 }
 
 
+# MW_EXE_TIMES's count of the chunked fill's windows assembled from the class
+# values (momwire#2166, `route_bs2.cpp`'s `reuse_outcome`), process totals.
+_BS2_WINDOWS = re.compile(
+    r"^cxx: reuse last fill windows from the class values (\d+) tiled, (\d+) whole\r?$",
+    re.M,
+)
+
+
 def _no_bs2_reuse_vars(monkeypatch):
     for var in ("MOMWIRE_X_PAIR_REUSE", "MOMWIRE_X_OFFSET_REUSE"):
         monkeypatch.delenv(var, raising=False)
@@ -1166,10 +1174,15 @@ def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeyp
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
         built, declined, found = _reuse_counts(exe.stderr)
+        windows = _BS2_WINDOWS.search(exe.stderr.decode("latin-1"))
         if state == "on":
             assert _reuse_ran(built, declined), (built, declined, found)
+            # momwire#2166: the chunked fill assembled its windows from the
+            # class values (the fused route), not from a gathered window.
+            assert windows and int(windows[1]) + int(windows[2]) >= 1, exe.stderr
         else:
             assert built == 0 and found == 0, (built, declined, found)
+            assert windows is None, exe.stderr
         lines[state] = (de / "reuse.out").read_bytes().split(b"\n")
         assert b"NEC ERROR" not in lines[state][0]
     on, off = lines["on"], lines["off"]
