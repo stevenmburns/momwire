@@ -352,8 +352,11 @@ def _nec2d_line_2(no_features, tmp_path):
     return out.read_bytes().decode("latin-1").splitlines()[1]
 
 
-def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path):
-    # 4nec2's NEC-2D layout carries momwire's line 2 too.
+def test_the_nec2d_printout_names_both_on_line_2(no_features, tmp_path, monkeypatch):
+    # 4nec2's NEC-2D layout carries momwire's line 2 too. On a platform where
+    # the stamp is certified it fits whole; the macOS stamp overflows, which
+    # is the next test's case.
+    monkeypatch.setattr(F.sys, "platform", "linux")
     line2 = _nec2d_line_2(no_features, tmp_path)
     tail = stamp_as_variable(PAIR, "bs2") + " (pragma ignored: zzz)"
     assert line2.endswith(tail) and len(line2) <= 79, line2
