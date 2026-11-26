@@ -1392,13 +1392,11 @@ def test_the_pair_reuse_pragma_runs_as_the_launcher(ground, tmp_path, monkeypatc
     assert b"+" not in lines["0"].split(b"\n")[1]
 
 
-@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's withholding")
-def test_nec5_bspline_withholds_the_pair_reuse_pragma_as_the_variable(
-    tmp_path, monkeypatch
-):
-    """bs2's part is Python's alone here, so the card does what the variable
-    does on this executable: no plan built, the printout the one with it
-    off, line 2 included."""
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
+def test_nec5_bspline_runs_the_pair_reuse_pragma_as_the_variable(tmp_path, monkeypatch):
+    """nec5-bs2 runs bs2's reuse (momwire#2063), so the card does what the
+    variable does on this executable: a plan built, line 2 naming
+    +pair_reuse, and the card's printout the variable's, byte for byte."""
     _no_reuse_vars(monkeypatch)
     deck = tmp_path / "pragma.nec"
     deck.write_text(_PRAGMA + _REUSE_DECKS_1971["free"], newline="")
@@ -1412,11 +1410,11 @@ def test_nec5_bspline_withholds_the_pair_reuse_pragma_as_the_variable(
             [EXE, deck.name, out.name], cwd=tmp_path, env=env, capture_output=True
         )
         assert r.returncode == 0, r.stderr
-        assert _reuse_counts(r.stderr)[0] == 0, r.stderr
+        assert _reuse_counts(r.stderr)[0] >= 1, r.stderr
         outs[state] = out.read_bytes()
     assert b"NEC ERROR" not in outs[None]
     assert outs[None] == outs["1"]
-    assert b"+" not in outs[None].split(b"\n")[1]
+    assert b"+pair_reuse" in outs[None].split(b"\n")[1]
 
 
 def test_a_rotational_symmetry_pragma_is_ignored_not_refused(tmp_path, monkeypatch):

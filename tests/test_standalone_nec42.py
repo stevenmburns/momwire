@@ -516,10 +516,10 @@ def _reuse_totals(stderr: bytes) -> tuple[int, int]:
 
 @pytest.mark.parametrize("ground", ["free", "somm"])
 def test_the_pair_reuse_pragma_goes_the_variables_way(ground, tmp_path):
-    """The card alone: on nec42-sinusoidal the launcher's bytes under the
-    time mask, line 2 naming +pair_reuse, the plan served; on nec42-bs2 the
-    printout with the switch off, as the variable gives there. Either way
-    the card's printout is the variable's, and "0" beats it."""
+    """The card alone, on nec42-sinusoidal and nec42-bs2 (which runs bs2's
+    reuse, momwire#2063): the launcher's bytes under the time mask, line 2
+    naming +pair_reuse, the plan served. The card's printout is the
+    variable's, and "0" beats it."""
     deck = tmp_path / "pragma.nec"
     deck.write_text(_PRAGMA + _reuse_curtain(ground), encoding="latin-1")
     outs, ran = {}, {}
@@ -536,10 +536,6 @@ def test_the_pair_reuse_pragma_goes_the_variables_way(ground, tmp_path):
     assert outs[None] == outs["1"]
     assert not ran["0"]
     assert b"+" not in outs["0"][0].split(b"\n")[1]
-    if BASIS == "bs2":
-        assert not ran[None]
-        assert outs[None] == outs["0"]
-        return
     assert ran[None]
     assert b"+pair_reuse" in outs[None][0].split(b"\n")[1]
     ref_out = tmp_path / "launcher.out"
