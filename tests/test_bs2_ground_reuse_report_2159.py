@@ -127,3 +127,14 @@ def test_bs2_image_compresses_like_the_other_engines():
     assert razor > 50 and sin > 50, (razor, sin)
     assert bs2 * FACTOR >= razor, (bs2, razor, sin)
     assert bs2 * FACTOR >= sin, (bs2, razor, sin)
+
+
+@pytest.mark.parametrize("ground", ["pec", "sommerfeld"])
+def test_one_edge_has_nothing_between_edges_and_reads_served(ground):
+    """A single straight wire is one edge: its ground terms have no block
+    between edges to copy, so nothing is left out."""
+    deck = row(n_el=1, n_seg=41)
+    deck["feed_wire_index"] = 0
+    reuse = reuse_of(BSplineSolver(**deck, **GROUNDS[ground], pair_reuse=True))
+    assert reuse["state"] == "served", reuse["declined"]
+    assert reuse["declined"] is None
