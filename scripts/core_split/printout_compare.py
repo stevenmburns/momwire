@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import glob
 import importlib.util
+import concurrent.futures
 import json
 import os
 import shlex
@@ -198,16 +199,23 @@ def build_driver(out_dir: Path, basis: str = "razor2p") -> Path:
         "bs2": "nec5_bspline_printout_driver",
     }.get(basis, DRIVER)
     sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{driver}.cpp"]
-    procs, objects = [], []
-    for src in sources:
-        obj = out_dir / (src.stem + ".o")
-        cmd = [*base, "-c", str(src), "-o", str(obj)]
-        procs.append((cmd, subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)))
-        objects.append(str(obj))
-    for cmd, proc in procs:
-        _, err = proc.communicate()
-        if proc.returncode:
-            raise SystemExit(f"{shlex.join(cmd)}\n{err}")
+    # A bounded number of compilers at once: all 61 TUs together at -O3 ran
+    # a hosted runner out of memory once bs2's fill core carried the reuse
+    # census (momwire#2162), and GitHub reports that only as a lost runner.
+    jobs = int(os.environ.get("MOMWIRE_BUILD_JOBS") or os.cpu_count() or 2)
+    objects = [str(out_dir / (src.stem + ".o")) for src in sources]
+    cmds = [
+        [*base, "-c", str(src), "-o", obj]
+        for src, obj in zip(sources, objects, strict=True)
+    ]
+
+    def compile_one(cmd):
+        run = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
+        if run.returncode:
+            raise SystemExit(f"{shlex.join(cmd)}\n{run.stderr}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        list(pool.map(compile_one, cmds))
     exe = out_dir / driver
     cmd = [*cxx, *objects, *link_args, "-ldl", "-o", str(exe)]
     run = subprocess.run(cmd, capture_output=True, text=True)
