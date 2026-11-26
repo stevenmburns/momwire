@@ -122,18 +122,19 @@ retirement writes the `RETIRED` registry shape, both described below.
 - `kind="native"` (new C++ or a new numerical path) refuses with
   `FeatureNotCertified`.
 - An exe runs only the features its C++ route carries (`EXE_FEATURES` in
-  `standalone/momwire_razor2p.cpp`) whose reach covers its level, and names
-  them on line 2 as Python does. Any other `MOMWIRE_X_*` variable set on, or a
-  legacy alias such as `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence
-  before it reads a deck; set to "0" it is accepted. Today the table is #1860's
-  four levers at reach 9, two of them on by default, and #1956's
-  `crossing_sheet_retune` at reach 8 (the two nec5 executables).
+  `standalone/momwire_razor2p.cpp`, the table to read for what that is
+  today) whose reach covers its level, and names them on line 2 as Python
+  does. Any other `MOMWIRE_X_*` variable set on, or a legacy alias such as
+  `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before it reads a
+  deck; set to "0" it is accepted. A deck's `CM momwire:` card for a feature
+  it does not run is not refused: line 2 names it as ignored (momwire#2155).
+- `pair_reuse` is one switch, and each executable maps it to its own route's
+  part (`EXE_PARTS` in the same file). Line 2 names the whole only.
 - A CERTIFICATION build (CMake `MW_EXE_CERTIFY=<name>`, `EXE_CERTIFYING` in
-  the same file, momwire#1911) also runs a feature its route carries past the
-  feature's reach, so the exe's own bytes can be gated against Python's
-  (`MOMWIRE_NEC42_SIN_CERTIFIES` in `tests/test_standalone_nec42.py`) before
-  the reach is raised. No release build sets it. Today: `pair_reuse` on
-  nec42-sinusoidal.
+  the same file, momwire#1911) also runs a carried feature past its reach, so
+  the exe's own bytes can be gated against Python's before the reach is
+  raised. No release build sets it, and today no feature uses it
+  (`EXE_CERTIFYING` is empty).
 - The word Python in that sentence is printed through `P%cthon`, because the
   no-Python test greps the binary for "python". Do not "fix" the spelling.
 
