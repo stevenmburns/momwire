@@ -716,5 +716,29 @@ void gather(const FamilyPlan &f, int block, const int64_t *rows, ptrdiff_t n, Vi
     }
 }
 
+// The same decode on a TILE: observers `rows` (nr) against sources `cols`
+// (nc), `visit(io, is, c, rel)` for each, serial (a tile is one thread's
+// work inside the caller's parallel region). The lists are the caller's and
+// checked by it, once per call rather than per tile: this is the inner loop
+// of a fused assembly (razor2p's `assemble_rows` walks the same visit
+// inline; bs2's tile source, momwire#2166, calls this).
+template <class Visit>
+void gather_pairs(const FamilyPlan &f, int block, const int64_t *rows, ptrdiff_t nr, const int64_t *cols,
+                  ptrdiff_t nc, Visit visit) {
+    const ptrdiff_t n_cols = static_cast<ptrdiff_t>(f.spec.cols);
+    const int32_t *map = f.map[block].data();
+    const uint8_t *rc = f.rep_code.data();
+    const int cb = f.spec.code_bits;
+    const int32_t mask = (int32_t(1) << cb) - 1;
+    for (ptrdiff_t io = 0; io < nr; io++) {
+        const int32_t *row = map + rows[io] * n_cols;
+        for (ptrdiff_t is = 0; is < nc; is++) {
+            const int32_t e = row[cols[is]];
+            const int32_t c = e >> cb;
+            visit(io, is, c, (e & mask) ^ rc[c]);
+        }
+    }
+}
+
 }  // namespace pair_reuse
 }  // namespace mw

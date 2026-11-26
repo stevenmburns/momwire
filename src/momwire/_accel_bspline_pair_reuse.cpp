@@ -1,8 +1,11 @@
 // bs2's fill-pair reuse for the Python route (momwire#2063 stage 3): the
 // binding of `_bspline_pair_reuse_core.h`. Its own TU: copies and integers
-// only, no kernel.
+// only, no kernel; `assemble` calls the windowed assembly across the TU
+// boundary (`_bspline_core.h`).
 #include "_accel_common.h"
+#include "_mw_nd_binding.h"
 
+#include "_bspline_core.h"
 #include "_bspline_pair_reuse_core.h"
 
 #include <memory>
@@ -100,6 +103,47 @@ void gather(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, C128 out) 
     br::gather(*h.plan, r0, r1, v, d1, o);
 }
 
+// momwire#2166: observer rows r0..r1 of one edge (own columns o0..o1)
+// assembled into Z from the class values, the window never written whole:
+// `assemble_Z_bspline_windowed(J_win, ...)` on the window `gather` writes
+// with its own columns replaced by `own` (or zero when None), bit for bit.
+void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, int64_t o0, int64_t o1, py::object own,
+              I64 support_seg, F64 polys, F64 tangents, I64 m_idx, I64 n_idx, double omega, double eps, double mu,
+              py::array_t<cd> Z, uintptr_t cancel_flag) {
+    const int64_t n = h.n(), classes = h.plan->fam.at(0).classes;
+    if (values.ndim() != 3 || values.shape(0) != classes || values.shape(1) != values.shape(2))
+        throw std::invalid_argument("bspline pair_reuse: values are (classes, d + 1, d + 1)");
+    br::Window w;
+    w.plan = h.plan.get();
+    w.values = values.data();
+    w.d1 = static_cast<int>(values.shape(1));
+    w.r0 = r0;
+    w.r1 = r1;
+    w.o0 = o0;
+    w.o1 = o1;
+    br::check_window(w);
+    if (support_seg.ndim() != 2 || support_seg.shape(1) != w.d1)
+        throw std::invalid_argument("bspline pair_reuse: support_seg is (n_basis, d + 1)");
+    if (tangents.ndim() != 2 || tangents.shape(0) != n)
+        throw std::invalid_argument("bspline pair_reuse: one tangent per segment of the plan");
+    C128 own_arr;
+    if (!own.is_none()) {
+        own_arr = own.cast<C128>();
+        if (own_arr.ndim() != 4 || own_arr.shape(0) != w.d1 || own_arr.shape(1) != w.d1 ||
+            own_arr.shape(2) != r1 - r0 || own_arr.shape(3) != o1 - o0)
+            throw std::invalid_argument("bspline pair_reuse: own is (d + 1, d + 1, r1 - r0, o1 - o0)");
+        w.own = own_arr.data();
+    }
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    mw::bspline::assemble_Z_bspline_windowed_tiles(
+        [&w](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
+            br::window_tile(w, rows, nr, cols, nc, out);
+        },
+        ndb::in(support_seg), ndb::in(polys), ndb::in(tangents), ndb::in(m_idx), ndb::in(n_idx), r0, r1, 0, n,
+        omega, eps, mu, ndb::in(Z), cancel_flag);
+}
+
 py::tuple remainder_blocks(F64 seg_l, F64 seg_r, F64 a, I64 edge_seg0, double ground_z) {
     const int64_t n = static_cast<int64_t>(a.size()), E = static_cast<int64_t>(edge_seg0.size()) - 1;
     if (seg_l.ndim() != 2 || seg_l.shape(0) != n || seg_l.shape(1) != 3 || seg_r.ndim() != 2 ||
@@ -191,6 +235,13 @@ void register_bspline_pair_reuse(py::module_ &m) {
         .def("gather", &gather, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("out"),
              "Observer rows r0..r1 of the moment tensor, (d + 1, d + 1, r1 - r0, n), from the "
              "class values (classes, d + 1, d + 1).")
+        .def("assemble", &assemble, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("o0"),
+             py::arg("o1"), py::arg("own"), py::arg("support_seg"), py::arg("polys"), py::arg("tangents"),
+             py::arg("m_idx"), py::arg("n_idx"), py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("Z"),
+             py::arg("cancel_flag") = 0,
+             "momwire#2166: observer rows r0..r1 of one edge (its own columns o0..o1: `own`, "
+             "(d + 1, d + 1, r1 - r0, o1 - o0), or zero for None) added into Z from the class values, "
+             "as assemble_Z_bspline_windowed adds the gathered window, without writing the window.")
         .def("ref", [](const PlanHandle &h) { return PlanRef{h.plan}; }, "The plan, held weakly.");
     m.def("bspline_reuse_plan", &reuse_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
           py::arg("edge"), py::arg("group_i"), py::arg("group_j"), py::arg("b_src"), py::arg("thresholds"),
@@ -208,6 +259,18 @@ void register_bspline_pair_reuse(py::module_ &m) {
         d["declined"] = c.declined;
         return d;
     }, "The process's bs2 reuse plans built and found, and how many of those built declined.");
+    m.def("bspline_reuse_window_counts", []() {
+        const mw::bspline::WindowTileCounts c = mw::bspline::window_tile_counts();
+        py::dict d;
+        d["tiled"] = c.tiled;
+        d["whole"] = c.whole;
+        d["tiles"] = c.tiles;
+        return d;
+    }, "Process totals of the fused windowed assembly (TEST HOOK, momwire#2166): calls run tile by "
+       "tile, calls whose window was materialised (no lane kernel), and tiles.");
+    m.def("bspline_reuse_set_window_probe", &br::set_window_probe, py::arg("probe"),
+          "TEST HOOK (momwire#2166): 1 copies a reciprocal member untransposed in the fused "
+          "window; 0 restores.");
     m.def("bspline_reuse_cache_clear", &br::clear_cache, "Drop every cached bs2 reuse plan (TEST HOOK).");
     m.def("bspline_reuse_class_limit", &br::set_class_limit, py::arg("classes"),
           "TEST HOOK: later plans decline past this many classes (0: the coding's own limit).");

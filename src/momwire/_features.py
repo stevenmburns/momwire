@@ -301,6 +301,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_sin_pair_reuse_small_deck_1969.py",
                 "tests/test_pair_reuse_contract_1982.py",
                 "tests/test_pair_reuse_chunked_2020.py",
+                "tests/test_bs2_fused_assembly_2166.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
                 "tests/test_sin_pair_reuse_cxx_1911.py",
                 "tests/test_sin_pair_reuse_1916.py",

@@ -167,6 +167,34 @@ int64_t near_pairs(const Plan &p);
 // for pair (r0 + i, s) of class c. Copies only.
 void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd *out);
 
+// momwire#2166: the direct family's window as a source for the fused
+// assembly (`assemble_Z_bspline_windowed_tiles`, `_bspline_core.h`), so the
+// window is never written whole. Observer rows [r0, r1) lie on one edge,
+// whose own columns [o0, o1) are `own`, (d1^2, r1 - r0, o1 - o0)
+// C-contiguous (the fill's own moments of those pairs), or zero when `own`
+// is null (an offset edge, whose own block is added apart). Every other
+// source is its class's value, transposed under reciprocity: the window
+// `gather` writes with its own-edge columns overwritten, bit for bit. A
+// chopped window (rows off one edge) is not one of these; the fills cut
+// their windows at the edges.
+struct Window {
+    const Plan *plan = nullptr;
+    const cd *values = nullptr;  // (classes, d1, d1)
+    int d1 = 3;
+    int64_t r0 = 0, r1 = 0, o0 = 0, o1 = 0;
+    const cd *own = nullptr;
+};
+// Throws unless `w` is one of the above (the tile source cannot: it runs
+// inside the assembly's parallel region).
+void check_window(const Window &w);
+// out[(pq * nr + io) * nc + is] for rows[io] in [r0, r1), cols[is] in [0, n).
+void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out);
+// TEST HOOK (the adversarial gate): 1 copies a reciprocal member as its
+// class's value untransposed, which no correct fill does, so a test can
+// show the fused path is the one that ran and that its gates see it.
+void set_window_probe(int probe);
+int window_probe();
+
 // THE SOMMERFELD REMAINDER's copy map (3b): its own family, of EDGE pairs,
 // because the fused kernel copies whole blocks between edges. The remainder
 // reads the plane, so it is invariant only under the motions that keep it:
