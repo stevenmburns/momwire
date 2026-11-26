@@ -119,6 +119,9 @@ class _Gathered:
         self._calls.append((r0, r1))
 
 
+_REAL_REUSE_PLAN = BSplineSolver._reuse_plan
+
+
 @pytest.fixture
 def gathered(monkeypatch):
     """Route every plan the fill reads through `_Gathered`."""
@@ -245,6 +248,20 @@ def test_the_fill_is_the_gathered_fill_to_the_bit(ek, swept_mem_mb, monkeypatch)
     assert (
         _moved(Z, _fill(_yagi(pair_reuse=False, offset_reuse=False, **kw))) <= Z_DRIFT
     )
+
+
+def test_degree_one_is_the_gathered_fill_too(gathered):
+    """The tiled assembler switches on the degree (`max_d` 1, 2 or 3): at
+    d = 1 each entry has 2 x 2 wings and (p, q) up to 1."""
+    ref = _fill(_yagi(degree=1))
+    n_gathered = len(gathered)
+    gathered.clear()
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(BSplineSolver, "_reuse_plan", _REAL_REUSE_PLAN)
+        before = _counts()
+        Z = _fill(_yagi(degree=1))
+        assert _ran(before, _counts()) == n_gathered >= 10
+    assert Z.tobytes() == ref.tobytes()
 
 
 def test_a_member_copied_untransposed_moves_only_the_fused_fill(gathered):
