@@ -5284,6 +5284,13 @@ class BSplineSolver(
                 out.append(slice(base + ed_off[i_e], base + ed_off[i_e + 1]))
         return out
 
+    def _between_edge_pairs(self):
+        """The ordered segment pairs outside every edge's own block: the
+        pairs a copy between edges could serve."""
+        geom = self._build_geometry()
+        own = sum((sl.stop - sl.start) ** 2 for sl in self._same_edge_slices(geom))
+        return int(geom["n_segs_total"]) ** 2 - own
+
     def _fill_report_begin(self):
         self._fill_ground_notes = {}
         return self.__dict__.get("_fill_served")
@@ -5427,11 +5434,19 @@ class BSplineSolver(
         # term that served (momwire#2074): the offset spread within an edge
         # is not that copy. The image term has no copy map yet (#2159), so
         # over a finite or perfect ground this always names it.
+        # A mesh of one edge has no block between edges to copy, so its ground
+        # terms leave nothing out: the offset spread within the edge is the
+        # whole of what reuse can do there.
+        between = None
         for name in families:
             note = notes.get(name)
             if note is None or note["maps"]:
                 continue
             if name == "remainder" and notes.get("remainder_map_unused"):
+                continue
+            if between is None:
+                between = self._between_edge_pairs()
+            if between == 0:
                 continue
             left_out.append(f"the {name} term copied no block between edges")
         ledger.reuse = _fill_report.reuse_entry(
