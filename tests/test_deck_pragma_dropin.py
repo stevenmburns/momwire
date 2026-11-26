@@ -19,6 +19,7 @@ the route counted each time so a stamp alone cannot pass:
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import os
 import re
@@ -367,8 +368,14 @@ def test_the_nec2d_line_2_cuts_the_note_before_the_basis(
 ):
     # macOS (momwire#2158): the stamp says "uncertified on this platform",
     # and the whole tail no longer fits in 79 columns. The note's names go
-    # first, then the note; the basis name stays.
+    # first, then the note; the basis name stays. bs2's reuse reaches macOS
+    # since #2162, so the case is made: offset_reuse at its old reach, 4.
     monkeypatch.setattr(F.sys, "platform", "darwin")
+    monkeypatch.setitem(
+        F.FEATURES,
+        "offset_reuse",
+        dataclasses.replace(F.FEATURES["offset_reuse"], reach=4),
+    )
     line2 = _nec2d_line_2(no_features, tmp_path)
     assert len(line2) <= 79 and line2.split()[2] == "bs2", line2
     assert line2.split(" +pair_reuse")[1].startswith(" uncertified on this platform")
