@@ -6407,8 +6407,9 @@ class BSplineSolver(
         `_ObserverRows.windows` for why that is what makes the rows bitwise.
 
         A `pair_reuse` plan is served here too (momwire#2020, #2063): each
-        observer window is gathered from the plan's class values, its own
-        edge's columns the sweep's own fill (or, on an offset edge, the offset
+        observer window is assembled from the plan's class values, tile by
+        tile without writing the window (momwire#2166), its own edge's
+        columns the sweep's own fill (or, on an offset edge, the offset
         route's), and offset edges with the same arcs and radius share one
         table of distinct moments. A restricted fill reads no plan, and says
         so in `pair_reuse_declined`.
@@ -6487,9 +6488,12 @@ class BSplineSolver(
         row_bytes = (d + 1) ** 2 * n_segs * 16 + self._offedge_fallback_row_bytes(
             n_segs
         )
-        # The census's plan (momwire#2063): every window is gathered from the
-        # class values, which are the plan's, counted by its allowance, not
-        # by this fill's budget, so the windows keep the whole budget.
+        # The census's plan (momwire#2063): every window is assembled from
+        # the class values, which are the plan's, counted by its allowance,
+        # not by this fill's budget, so the windows keep the whole budget.
+        # Under the plan no window is written whole (momwire#2166), but the
+        # cuts stay the budget's: each window adds to Z once, so where the
+        # windows are cut is part of Z's bits.
         plan = self._chunked_reuse(geom, same_edge_prep, restrict)
         chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
         # momwire#907: ONE ladder for the whole fill. The same-edge correction
@@ -6542,23 +6546,40 @@ class BSplineSolver(
             }
 
         def _reuse_block(w0, w1, _j0, _j1):
-            """One observer window gathered from the class values, cut at the
-            edges: each piece's own-edge columns are the sweep's own fill
+            """One observer window assembled from the class values, cut at
+            the edges: each piece's own-edge columns are the sweep's own fill
             (the fixup below subtracts exactly them), or zero on an offset
-            edge, whose own block the offset route adds."""
+            edge, whose own block the offset route adds. The window is never
+            written whole (momwire#2166): `plan.assemble` adds to Z what
+            `_accumulate` adds for the window `plan.gather` writes, bit for
+            bit, filling each tile of Z from the class values as it runs."""
             inner = edge_cuts[(edge_cuts > w0) & (edge_cuts < w1)].tolist()
             for r0, r1 in itertools.pairwise([w0, *inner, w1]):
                 e = int(np.searchsorted(edge_cuts, r0, side="right") - 1)
                 own = slices[e]
-                J_win = np.empty((d + 1, d + 1, r1 - r0, n_segs), dtype=np.complex128)
-                plan.gather(values, r0, r1, J_win)
-                if own.start in offset:
-                    J_win[:, :, :, own] = 0.0
-                else:
-                    J_win[:, :, :, own] = _moments(r0, r1, own.start, own.stop)
+                own_J = None
+                if own.start not in offset:
+                    own_J = _moments(r0, r1, own.start, own.stop)
                     served["kernel_evals"] += (r1 - r0) * (own.stop - own.start)
-                _accumulate(J_win, r0, r1, 0, n_segs, _bases_touching(r0, r1), all_n)
-                del J_win
+                plan.assemble(
+                    values,
+                    r0,
+                    r1,
+                    own.start,
+                    own.stop,
+                    own_J,
+                    supp_c,
+                    polys_c,
+                    tan_c,
+                    _bases_touching(r0, r1),
+                    all_n,
+                    float(self.omega),
+                    float(self.eps),
+                    float(self.mu),
+                    Z,
+                    self._cancel_flag,
+                )
+                del own_J
 
         def _sweep_block(w0, w1, j0, j1):
             if offset:

@@ -309,6 +309,56 @@ void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd 
     });
 }
 
+namespace {
+std::atomic<int> g_window_probe{0};
+}
+
+void set_window_probe(int probe) { g_window_probe.store(probe); }
+int window_probe() { return g_window_probe.load(); }
+
+void check_window(const Window &w) {
+    if (!w.plan || !w.values || w.plan->fam.empty())
+        throw std::invalid_argument("bspline pair_reuse: a window needs its plan and values");
+    const FamilyPlan &f = w.plan->fam[0];
+    const int64_t n = f.spec.cols;
+    if (f.map[0].empty()) throw std::invalid_argument("bspline pair_reuse: a declined plan has no window");
+    if (w.d1 < 2 || w.d1 > 4) throw std::invalid_argument("bspline pair_reuse: d + 1 must be 2, 3 or 4");
+    if (!(0 <= w.r0 && w.r0 < w.r1 && w.r1 <= n && 0 <= w.o0 && w.o0 < w.o1 && w.o1 <= n &&
+          w.o0 <= w.r0 && w.r1 <= w.o1))
+        throw std::invalid_argument("bspline pair_reuse: the window's rows must lie on its own edge");
+}
+
+void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
+    const FamilyPlan &f = w.plan->fam[0];
+    const int d1 = w.d1;
+    const int64_t dd = int64_t(d1) * d1, no = w.o1 - w.o0, m = w.r1 - w.r0;
+    const size_t plane = nr * nc;
+    const bool probe = g_window_probe.load(std::memory_order_relaxed) == 1;
+    pair_reuse::gather_pairs(f, 0, rows, static_cast<ptrdiff_t>(nr), cols, static_cast<ptrdiff_t>(nc),
+                             [&](ptrdiff_t io, ptrdiff_t is, int32_t c, int rel) {
+        cd *o = out + io * static_cast<ptrdiff_t>(nc) + is;
+        const int64_t s = cols[is];
+        if (s >= w.o0 && s < w.o1) {
+            // The own edge: the fill's own moments, or the offset route's zero.
+            if (w.own) {
+                const cd *v = w.own + (rows[io] - w.r0) * no + (s - w.o0);
+                for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = v[pq * m * no];
+            } else {
+                for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = cd(0.0, 0.0);
+            }
+            return;
+        }
+        const cd *v = w.values + static_cast<int64_t>(c) * dd;
+        if (rel && !probe) {
+            // The transpose of the class's value (reciprocity), as `gather`.
+            for (int p = 0; p < d1; p++)
+                for (int q = 0; q < d1; q++) o[(p * d1 + q) * plane] = v[q * d1 + p];
+        } else {
+            for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = v[pq];
+        }
+    });
+}
+
 void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std::vector<int64_t> &tb,
                       std::vector<int64_t> &sa, std::vector<int64_t> &sb) {
     ta.clear();

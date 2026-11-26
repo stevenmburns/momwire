@@ -3073,7 +3073,17 @@ assemble_Z_bspline_kernel(
 // cache-resident while it fills. The entries are packed (re, im) per lane
 // pair so a contiguous run of J -- the common case, consecutive bases on
 // consecutive segments -- is read as it lies.
-template<int D, bool COMPLEX_EPS, bool ROW_MAP, bool WEIGHTED, class ZV>
+//
+// PAR false runs the tiles on the calling thread: the tiled window
+// (`assemble_Z_bspline_windowed_tiles`, momwire#2166) calls this per tile
+// from its own parallel region, and an `if(false)` region stays one thread
+// whatever the process's nesting levels.
+#if defined(_MSC_VER)
+#define MW_WINDOWED_LANES_PAR_FOR(c) MW_PRAGMA_(omp parallel for schedule(static) if(c))
+#else
+#define MW_WINDOWED_LANES_PAR_FOR(c) MW_PRAGMA_(omp parallel for collapse(2) schedule(static) if(c))
+#endif
+template<int D, bool COMPLEX_EPS, bool ROW_MAP, bool WEIGHTED, bool PAR = true, class ZV>
 static void
 assemble_Z_bspline_windowed_lanes(
     const double *Jd, const int64_t *ss, const double *pl, const double *Td,
@@ -3162,7 +3172,7 @@ assemble_Z_bspline_windowed_lanes(
     const size_t n_tn = (n_pad + TN - 1) / TN;
 
     MW_CANCEL_SETUP(cancel_flag);
-    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_WINDOWED_LANES_PAR_FOR(PAR)
     for (size_t tm = 0; tm < n_tm; tm++) {
         for (size_t tn = 0; tn < n_tn; tn++) {
             MW_CANCEL_POLL();
@@ -3597,6 +3607,223 @@ assemble_Z_bspline_windowed(
             throw std::runtime_error(
                 "assemble_Z_bspline_windowed: max_d must be 1, 2 or 3");
     }
+}
+
+
+// momwire#2166: the windowed assembly of a window whose moments are never
+// materialised (`assemble_Z_bspline_windowed_tiles`, `_bspline_core.h`). A
+// pair_reuse fill holds one value per class, so a window's J is a copy of
+// those values; writing it whole and reading it back is a round trip through
+// memory of (d+1)^2 complex a pair (144 B at d = 2) that the lane kernel then
+// reads once per basis pair. Here each tile of (m, n) gets its own window,
+// only its rows' and columns' segments, filled by the source and read while
+// it is cache-resident.
+//
+// BIT FOR BIT. A tile's call is the lane kernel itself, on local numbering:
+// the tile's segments renumbered rows first, then columns, each list in
+// ascending order (so consecutive segments stay consecutive and a run of
+// lanes reads J as it lies); a wing outside the window renumbered -1, which
+// the kernel skips exactly as it skips the global wing outside [i0, i1) or
+// [j0, j1); polynomials and tangents copied per local index. Every entry's
+// (a, b) set, operands and operation order are the whole window's, and it
+// is added to Z once per call, as the whole window adds it. The tile shape
+// moves no bit: an entry's arithmetic does not read its neighbours.
+//
+// TILE SHAPE, in bases. 128 x 32 at d = 2 on consecutive bases of one wire
+// is a window of 130 x 34 segments, 9 * 130 * 34 * 16 B = 636 KB, inside a
+// core's share of a shared L3 (the lane kernel's own 64 x 16 tiles run over
+// it four times). Measured on the 10-element Yagi (2164 segments, every edge
+// a window, i7-8550U, 4 threads, medians of 5 to 6): 64 x 16 0.120 s, 64 x 32
+// 0.119, 128 x 16 0.101, 128 x 32 0.098, 256 x 32 0.099, 64 x 64 and
+// 128 x 64 slower and noisier; the gathered window 0.22.
+static constexpr size_t WINDOW_TILE_ROWS = 128;
+static constexpr size_t WINDOW_TILE_COLS = 32;
+static std::atomic<int64_t> g_window_tiled{0}, g_window_whole{0}, g_window_tiles{0};
+
+#if MW_WINDOWED_LANES_1290
+template <class ZV>
+struct WindowTileZ {
+    ZV *z;
+    const int64_t *row;  // local basis row -> Z row
+    const int64_t *col;  // local basis column - n_rows -> Z column
+    int64_t n_rows;
+    std::complex<double> &operator()(int64_t m, int64_t n) const { return (*z)(row[m], col[n - n_rows]); }
+};
+
+template <int D, class ZV>
+static void
+assemble_Z_bspline_windowed_tiles_lanes(
+    const mw::bspline::WindowSource &source, const int64_t *ss, const double *pl, const double *Td,
+    size_t n_segs, const int64_t *mi_p, size_t n_m, const int64_t *ni_p, size_t n_n,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1, double omega_mu, double inv_omega_eps,
+    ZV &z_view, uintptr_t cancel_flag
+) {
+    static constexpr int NM = D + 1;
+    static constexpr size_t NP = (size_t)NM * NM;
+    const size_t TR = WINDOW_TILE_ROWS, TC = WINDOW_TILE_COLS;
+    const size_t n_rt = (n_m + TR - 1) / TR, n_ct = (n_n + TC - 1) / TC;
+    std::atomic<int64_t> tiles{0};
+    MW_CANCEL_SETUP(cancel_flag);
+#pragma omp parallel
+    {
+        std::vector<int32_t> mark(n_segs, -1);
+        std::vector<int64_t> rows, cols;
+        std::vector<int64_t> ss_l((TR + TC) * NM), lm(TR + TC), gm(TR), gn(TC);
+        std::vector<double> pl_l((TR + TC) * NP), td_l;
+        std::vector<std::complex<double>> J;
+        int64_t mine = 0;
+        MW_OMP_FOR_COLLAPSE2
+        for (size_t rt = 0; rt < n_rt; rt++) {
+            for (size_t ct = 0; ct < n_ct; ct++) {
+                MW_CANCEL_POLL();
+                const size_t m0 = rt * TR, m1 = std::min(n_m, m0 + TR);
+                const size_t c0 = ct * TC, c1 = std::min(n_n, c0 + TC);
+                const size_t tm = m1 - m0, tn = c1 - c0;
+                // The tile's segments, each list ascending and distinct.
+                auto collect = [&](std::vector<int64_t> &out, const int64_t *idx, size_t lo, size_t hi,
+                                   int64_t s0, int64_t s1) {
+                    out.clear();
+                    for (size_t t = lo; t < hi; t++)
+                        for (int a = 0; a < NM; a++) {
+                            const int64_t s = ss[idx[t] * NM + a];
+                            if (s >= s0 && s < s1) out.push_back(s);
+                        }
+                    std::sort(out.begin(), out.end());
+                    out.erase(std::unique(out.begin(), out.end()), out.end());
+                };
+                collect(rows, mi_p, m0, m1, i0, i1);
+                collect(cols, ni_p, c0, c1, j0, j1);
+                const int64_t nr = (int64_t)rows.size(), nc = (int64_t)cols.size();
+                // Local bases: the tile's rows 0..tm-1, its columns tm..;
+                // local segments: rows 0..nr-1, columns nr.. (i0 = 0,
+                // i1 = j0 = nr, j1 = nr + nc below).
+                auto renumber = [&](const std::vector<int64_t> &segs, const int64_t *idx, size_t lo, size_t hi,
+                                    int64_t s0, int64_t s1, size_t at, int64_t base, int64_t *glob) {
+                    for (size_t q = 0; q < segs.size(); q++) mark[(size_t)segs[q]] = (int32_t)q;
+                    for (size_t t = lo; t < hi; t++) {
+                        const size_t l = at + (t - lo);
+                        const int64_t g = idx[t];
+                        glob[t - lo] = g;
+                        lm[l] = (int64_t)l;
+                        for (int a = 0; a < NM; a++) {
+                            const int64_t s = ss[g * NM + a];
+                            ss_l[l * NM + a] = (s >= s0 && s < s1) ? base + mark[(size_t)s] : -1;
+                        }
+                        std::copy(pl + (size_t)g * NP, pl + (size_t)(g + 1) * NP, pl_l.begin() + l * NP);
+                    }
+                    for (int64_t s : segs) mark[(size_t)s] = -1;
+                };
+                renumber(rows, mi_p, m0, m1, i0, i1, 0, 0, gm.data());
+                renumber(cols, ni_p, c0, c1, j0, j1, tm, nr, gn.data());
+                td_l.resize((size_t)(nr + nc) * 3);
+                for (int64_t q = 0; q < nr; q++)
+                    for (int c = 0; c < 3; c++) td_l[(size_t)q * 3 + c] = Td[rows[(size_t)q] * 3 + c];
+                for (int64_t q = 0; q < nc; q++)
+                    for (int c = 0; c < 3; c++) td_l[(size_t)(nr + q) * 3 + c] = Td[cols[(size_t)q] * 3 + c];
+                J.resize(NP * (size_t)nr * (size_t)nc);
+                source(rows.data(), (size_t)nr, cols.data(), (size_t)nc, J.data());
+                WindowTileZ<ZV> zt{&z_view, gm.data(), gn.data(), (int64_t)tm};
+                assemble_Z_bspline_windowed_lanes<D, false, false, false, false>(
+                    reinterpret_cast<const double *>(J.data()), ss_l.data(), pl_l.data(), td_l.data(),
+                    nullptr, nullptr, std::complex<double>(1.0, 0.0), lm.data(), lm.data() + tm, tm, tn,
+                    0, nr, nr, nr + nc, omega_mu, inv_omega_eps, 0.0, 0.0, zt, nullptr, 0);
+                mine++;
+            }
+        }
+        tiles.fetch_add(mine, std::memory_order_relaxed);
+    }
+    MW_THROW_IF_ABORTED();
+    g_window_tiles.fetch_add(tiles.load(), std::memory_order_relaxed);
+}
+#endif
+
+static void
+assemble_Z_bspline_windowed_tiles(
+    const mw::bspline::WindowSource &source,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega, double eps_, double mu_,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag
+) {
+    const int D = (int)support_seg.shape(1) - 1;
+    if (support_seg.ndim() != 2 || D < 1 || D > 3)
+        throw std::runtime_error("assemble_Z_bspline_windowed_tiles: max_d must be 1, 2 or 3");
+    const int64_t n_basis = support_seg.shape(0), NM = D + 1;
+    if (polys.ndim() != 3 || polys.shape(0) != n_basis || polys.shape(1) != NM || polys.shape(2) != NM)
+        throw std::runtime_error("polys.shape must be (n_basis, D+1, D+1)");
+    if (tangents.ndim() != 2 || tangents.shape(1) != 3)
+        throw std::runtime_error("tangents.shape must be (n_segs, 3)");
+    const int64_t n_segs = tangents.shape(0);
+    if (!(0 <= i0 && i0 < i1 && i1 <= n_segs && 0 <= j0 && j0 < j1 && j1 <= n_segs))
+        throw std::runtime_error("assemble_Z_bspline_windowed_tiles: the window must lie in the segments");
+    if (Z.ndim() != 2 || Z.shape(0) != n_basis || Z.shape(1) != n_basis)
+        throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
+    // Every index the tiles read, checked here once: the source is called
+    // inside the parallel region and trusts its lists.
+    auto in_basis = [&](const py::array_t<int64_t, py::array::c_style | py::array::forcecast> &ix) {
+        const int64_t *p = ix.data();
+        for (py::ssize_t t = 0; t < ix.shape(0); t++)
+            if (p[t] < 0 || p[t] >= n_basis)
+                throw std::runtime_error("assemble_Z_bspline_windowed_tiles: a basis index out of range");
+    };
+    in_basis(m_idx);
+    in_basis(n_idx);
+    const size_t n_m = (size_t)m_idx.shape(0), n_n = (size_t)n_idx.shape(0);
+    if (n_m == 0 || n_n == 0) return;
+#if MW_WINDOWED_LANES_1290
+    {
+        auto z_view = Z.mutable_unchecked<2>();
+        py::gil_scoped_release release;
+        const double omega_mu = omega * mu_;
+        const double inv_omega_eps = 1.0 / (omega * eps_);
+        const int64_t *ss = support_seg.data();
+        const double *pl = polys.data(), *Td = tangents.data();
+        switch (D) {
+            case 1:
+                assemble_Z_bspline_windowed_tiles_lanes<1>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                    n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
+                break;
+            case 2:
+                assemble_Z_bspline_windowed_tiles_lanes<2>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                    n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
+                break;
+            default:
+                assemble_Z_bspline_windowed_tiles_lanes<3>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                    n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
+                break;
+        }
+    }
+    g_window_tiled.fetch_add(1, std::memory_order_relaxed);
+#else
+    // No lane kernel: the window whole, from one source call, through the
+    // windowed kernel's reference loop.
+    const size_t nr = (size_t)(i1 - i0), nc = (size_t)(j1 - j0);
+    std::vector<int64_t> rows(nr), cols(nc);
+    for (size_t q = 0; q < nr; q++) rows[q] = i0 + (int64_t)q;
+    for (size_t q = 0; q < nc; q++) cols[q] = j0 + (int64_t)q;
+    std::vector<std::complex<double>> J((size_t)(NM * NM) * nr * nc);
+    source(rows.data(), nr, cols.data(), nc, J.data());
+    py::Buffer b;
+    b.ptr = J.data();
+    b.ndim = 4;
+    const py::ssize_t shape[4] = {(py::ssize_t)NM, (py::ssize_t)NM, (py::ssize_t)nr, (py::ssize_t)nc};
+    py::ssize_t acc = (py::ssize_t)sizeof(std::complex<double>);
+    for (int q = 3; q >= 0; q--) {
+        b.shape[q] = shape[q];
+        b.strides[q] = acc;
+        acc *= shape[q];
+    }
+    b.writeable = false;
+    assemble_Z_bspline_windowed(
+        py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>::borrow(b), support_seg,
+        polys, tangents, m_idx, n_idx, i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag, py::none(), false);
+    g_window_whole.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 
@@ -8389,6 +8616,34 @@ void assemble_Z_bspline_windowed(
     bool reference) {
     ::assemble_Z_bspline_windowed(J_chunk, support_seg, polys, tangents, m_idx, n_idx, i0, i1, j0,
         j1, omega, eps_, mu_, Z, cancel_flag, row_of, reference);
+}
+
+void assemble_Z_bspline_windowed_tiles(
+    const WindowSource &source,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0,
+    int64_t i1,
+    int64_t j0,
+    int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag) {
+    ::assemble_Z_bspline_windowed_tiles(source, support_seg, polys, tangents, m_idx, n_idx, i0, i1, j0, j1,
+        omega, eps_, mu_, Z, cancel_flag);
+}
+
+WindowTileCounts window_tile_counts() {
+    WindowTileCounts c;
+    c.tiled = g_window_tiled.load();
+    c.whole = g_window_whole.load();
+    c.tiles = g_window_tiles.load();
+    return c;
 }
 
 py::array_t<std::complex<double>> assemble_Z_bspline(

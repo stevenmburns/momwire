@@ -21,6 +21,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <tuple>
 
 namespace mw {
@@ -428,6 +429,42 @@ void assemble_Z_bspline_windowed(
     uintptr_t cancel_flag,
     nd::object row_of,
     bool reference);
+
+// momwire#2166: `assemble_Z_bspline_windowed` on a window whose moments are
+// never materialised. `source(rows, nr, cols, nc, out)` writes the window's
+// J at observer segments `rows` (each in [i0, i1)) against source segments
+// `cols` (each in [j0, j1)), C-contiguous (d+1, d+1, nr, nc): the values a
+// J_chunk would hold there. It is called from inside a parallel region, on
+// lists of at most a tile's segments, and must not throw. Z (any strides) is
+// added to exactly as `assemble_Z_bspline_windowed(J_chunk, ...)` adds to
+// it, bit for bit: where the lane kernel is compiled (WINDOWED_LANES_1290)
+// each tile of (m, n) runs that kernel on a tile-local window; elsewhere
+// one source call fills the whole window and the windowed kernel runs on it.
+// Free space and the dense target only (no row map, no complex eps).
+using WindowSource = std::function<void(const int64_t *rows, size_t nr, const int64_t *cols, size_t nc,
+                                        std::complex<double> *out)>;
+void assemble_Z_bspline_windowed_tiles(
+    const WindowSource &source,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> support_seg,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> polys,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> tangents,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> m_idx,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> n_idx,
+    int64_t i0,
+    int64_t i1,
+    int64_t j0,
+    int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    nd::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag);
+// Process totals of the calls above (TEST HOOK, momwire#2166): calls whose
+// window ran tile by tile, and calls whose window was materialised.
+struct WindowTileCounts {
+    int64_t tiled = 0, whole = 0, tiles = 0;
+};
+WindowTileCounts window_tile_counts();
 
 nd::array_t<std::complex<double>> assemble_Z_bspline(
     nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> J,
