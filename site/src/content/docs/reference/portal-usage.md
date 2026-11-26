@@ -461,7 +461,9 @@ standalone executable, and each turns on its own engine's reuse. It is
 - **`bs2`** (the drop-ins and the nec5-bs2 and nec42-bs2 executables) finds
   the classes itself on decks of 200 segments or more, and fills each
   uniform wire's own entries once per segment offset. `MOMWIRE_X_OFFSET_REUSE` turns the second part on or
-  off by itself; when it is set, it decides.
+  off by itself; when it is set, it decides. Over a ground, bs2 reuses the
+  direct term and the Sommerfeld remainder but not yet the image term, so it
+  saves less there than the other two engines do.
 
 Every one of these is far below the printed digits. It pays where one
 geometry is solved many times; if it is slower on your deck, turn it off.
