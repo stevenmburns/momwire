@@ -56,12 +56,12 @@ def _clean(monkeypatch):
     acc.bspline_reuse_set_routine_probe(0)
     acc.bspline_reuse_set_same_edge_near_lengths(-1)
     acc.bspline_reuse_set_small_deck_segs(-1)
-    acc.pair_reuse_cap_compression(0)
+    acc.pair_reuse_cap_compression(-1)
     yield
     acc.bspline_reuse_set_routine_probe(0)
     acc.bspline_reuse_set_same_edge_near_lengths(-1)
     acc.bspline_reuse_set_small_deck_segs(-1)
-    acc.pair_reuse_cap_compression(0)
+    acc.pair_reuse_cap_compression(-1)
 
 
 def collinear(n=60):
