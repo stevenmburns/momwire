@@ -284,32 +284,30 @@ def test_bspline_counts_reconcile_on_the_tensor_route():
     assert reuse["state"] == "served"
     assert reuse["reused"] == served["copied_pairs"]
     assert reuse["near"] == served["near_pairs"]
-    same = sum(n * n for (n,) in deck["n_per_edge_per_wire"])
-    assert reuse["computed"] == served["classes"] + same
+    # The same-edge pairs are classes like the rest (momwire#2063 step 3).
+    assert reuse["computed"] == served["classes"]
     reconciles(reuse)
 
 
 def test_bspline_counts_reconcile_on_the_chunked_route():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=True)
+    s = BSplineSolver(**deck, pair_reuse=True, swept_mem_mb=1)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
     reuse = s.fill_report()["reuse"]
-    assert reuse["reused"] == (
-        served["copied_pairs"] + served["offset_pairs"] - served["offset_distinct"]
-    )
+    assert reuse["reused"] == served["copied_pairs"]
     reconciles(reuse)
 
 
-def test_bspline_offset_edges_alone_are_served():
+def test_bspline_offset_reuse_alone_has_no_reuse_to_report():
+    """`offset_reuse` alone copies no pair (momwire#2063 step 3: what is left
+    of it is the regularised moments' Toeplitz form inside the same-edge
+    kernel), so the fill report has no reuse to speak of."""
     s = BSplineSolver(**yagi(), offset_reuse=True)
     s.compute_impedance()
     assert s.pair_reuse_served is None
-    reuse = s.fill_report()["reuse"]
-    assert reuse["state"] == "served"
-    assert reuse["reused"] > 0
-    reconciles(reuse)
+    assert s.fill_report()["reuse"] is None
 
 
 def test_the_families_on_bspline_count_the_ground_image():
@@ -492,28 +490,38 @@ def test_sinusoidal_kernel_evals_match_a_spy_on_the_kernel(monkeypatch):
 
 
 def test_bspline_computed_pairs_match_a_spy_on_the_moment_fill(monkeypatch):
+    """The kernels' pairs: the off-edge kernel's and the same-edge
+    routine's (its class values and its near singles' fixup, momwire#2063
+    step 3, each a window of `_seg_seg_reg_geometry_pairs`)."""
     pairs = []
     real = bspline_mod._seg_seg_full_moments_offedge
+    real_pairs = bspline_mod._seg_seg_reg_geometry_pairs
 
     def spy(seg_l_a, seg_r_a, seg_l_b, *rest, **kw):
         pairs.append(seg_l_a.shape[0] * seg_l_b.shape[0])
         return real(seg_l_a, seg_r_a, seg_l_b, *rest, **kw)
 
+    def spy_pairs(nodes, a, n_qp, rows, cols, **kw):
+        pairs.append(len(rows) * len(cols))
+        return real_pairs(nodes, a, n_qp, rows, cols, **kw)
+
     monkeypatch.setattr(bspline_mod, "_seg_seg_full_moments_offedge", spy)
+    monkeypatch.setattr(bspline_mod, "_seg_seg_reg_geometry_pairs", spy_pairs)
     deck = yagi(n_el=4, n_seg=15)
+    # past the tensor's budget, which this deck's 60 segments fit at 1 MB
+    monkeypatch.setattr(
+        BSplineSolver, "_dense_tensor_fits_budget", lambda self, n: False
+    )
     s = BSplineSolver(**deck, pair_reuse=True)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
-    assert sum(pairs) == served["kernel_evals"]
+    # the same-edge class values' pairs (the C++ routine, not the spy's)
+    assert sum(pairs) + s._reuse_same_edge_formed == served["kernel_evals"]
     reuse = s.fill_report()["reuse"]
     assert reuse["families"]["direct"]["kernel_evals"] >= reuse["computed"]
     assert reuse["computed"] == (
-        reuse["pairs"]
-        - served["copied_pairs"]
-        - served["near_pairs"]
-        - served["offset_pairs"]
-        + served["offset_distinct"]
+        reuse["pairs"] - served["copied_pairs"] - served["near_pairs"]
     )
 
 

@@ -158,7 +158,8 @@ def test_a_hint_is_read_as_on():
 
 def test_each_class_is_evaluated_once(monkeypatch):
     """The off-edge kernel is asked for the plan's groups and nothing more on
-    the tensor route: the representatives' calls, not the copies."""
+    the tensor route: the representatives' calls, not the copies; the
+    same-edge classes are the same-edge routine's (momwire#2063 step 3)."""
     asked = []
     real = bs._seg_seg_full_moments_offedge
 
@@ -170,8 +171,8 @@ def test_each_class_is_evaluated_once(monkeypatch):
     s = _solver(8, True)
     _z(s)
     n = int(s._build_geometry()["n_segs_total"])
-    assert sum(asked) == s.pair_reuse_served["kernel_evals"]
-    assert sum(asked) < (n * n) // 2
+    assert sum(asked) + s._reuse_same_edge_formed == s.pair_reuse_served["kernel_evals"]
+    assert s.pair_reuse_served["kernel_evals"] < (n * n) // 2
     asked.clear()
     _z(_solver(8, False))
     same = sum(k * k for k in (22, 21) + (20,) * 8)
@@ -225,15 +226,23 @@ def _random_wires(count=12, n=11):
 def test_reciprocity_needs_equal_radii():
     """Random wires repeat nothing but each pair's transpose: at one radius
     every pair between two wires shares a class with its reverse (2x); with a
-    radius per wire it shares none, and the census passes the 4/3x cap."""
+    radius per wire it shares none, and the census passes the 4/3x cap. Each
+    wire's own pairs (momwire#2063 step 3): |j - i| <= 3 near singles of the
+    same-edge routine, 7 * 11 - 12 a wire, and each offset past them one
+    class with its reverse, 11 - 4 a wire, the rest copies."""
     deck = _random_wires()
     N = 12 * 11
     same = 12 * 11 * 11
+    singles, shared = 12 * (7 * 11 - 12), 12 * (11 - 4)
+    copied_same = same - singles - shared
     s = _solver(0, True, deck=deck, feeds=None, feed_wire_index=0)
     z1 = _z(s)
     served = s.pair_reuse_served
-    assert served["copied_pairs"] == served["classes"]
-    assert 2 * served["classes"] + served["near_pairs"] == N * N - same
+    assert served["copied_pairs"] - copied_same == served["classes"] - shared
+    assert (
+        2 * (served["classes"] - shared) + served["near_pairs"] - singles
+        == N * N - same
+    )
     assert (
         _rel(z1, _z(_solver(0, False, deck=deck, feeds=None, feed_wire_index=0)))
         <= DRIFT

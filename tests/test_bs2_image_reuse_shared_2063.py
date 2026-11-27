@@ -237,19 +237,22 @@ def test_a_vertical_stack_shares_image_classes_between_edges(ground):
     assert np.array(wires["reused"]).sum() == reuse["reused"]
 
 
-def test_offset_edges_keep_their_route_beside_the_plan():
-    """Under `offset_reuse` an offset edge's own image block is the offset
-    route's (the plan's sentinel, zero in the image tile), and agrees."""
+def test_an_edges_own_image_block_is_the_plans():
+    """An edge's own image block is keyed like any other image pair
+    (momwire#2063 step 3 retired the image offset block): the image tile
+    serves it from the class values, and the fill agrees with the one
+    without reuse."""
     deck = row()
-    before = bspline_mod.IMAGE_OFFSET_EDGES
     (s, z_on), fills, _ = ran(lambda: z_of(deck, PEC, pair_reuse=True))
     assert fills == 1
-    assert bspline_mod.IMAGE_OFFSET_EDGES - before == len(deck["wires"])
     plan = s._reuse_plan(s._build_geometry())
     n = deck["n_per_edge_per_wire"][0][0]
-    assert plan.stats()["image_sentinel_pairs"] == len(deck["wires"]) * n * n
-    _s, z_off = z_of(deck, PEC, pair_reuse=False, offset_reuse=True)
-    assert rel(z_on, z_off) <= 1e-10
+    idx = np.arange(n, dtype=np.int64)
+    own = plan.classes_of(1, idx, idx)
+    # one element's own image pairs share their classes along the edge
+    assert np.unique(own).size < n * n // 4
+    _s, z_off = z_of(deck, PEC, pair_reuse=False, offset_reuse=False)
+    assert rel(z_on, z_off) <= 1e-12
 
 
 @pytest.mark.parametrize("probe", ["scale", "tangent"])

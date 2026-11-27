@@ -1,15 +1,14 @@
 """bspline's chunked fill serves `pair_reuse` (momwire#2020; the census's plan
 since momwire#2063).
 
-`offset_reuse`, a part of `pair_reuse`, sends any deck with a uniform edge of 12
-or more segments down `_compute_Z_dense_chunked`, and that route used to read no
-plan. Now the two compose:
+`_compute_Z_dense_chunked`, the route past the tensor's budget, used to read
+no plan. Now:
 
-- each observer window is gathered from the plan's class values, its own
-  edge's columns the sweep's own fill, counted where they are served and
-  held against what the kernel was actually asked for;
-- congruent offset edges (the same arcs and radius, to the bit) share one
-  table of distinct moments;
+- each observer window is assembled from the plan's class values, the
+  same-edge pairs' among them (momwire#2063 step 3), its near same-edge
+  singles the sweep's own fill, counted where they are served and held
+  against what the kernels were actually asked for;
+- congruent edges share their same-edge classes;
 - the answer stays inside the two features' declared drift;
 - every way a plan goes unread is named in `pair_reuse_declined`, on the
   routes that read no plan (a fill of chosen rows, the buried fill, the
@@ -69,6 +68,8 @@ def _deck(count=8, n=21):
 def _solver(count=8, n=21, **kw):
     wires, segs = _deck(count, n)
     kw.setdefault("pair_reuse", True)
+    # past the tensor's budget (8 x 21 segments: 4 MB): the chunked route
+    kw.setdefault("swept_mem_mb", 2)
     return BSplineSolver(
         wires=wires,
         n_per_edge_per_wire=segs,
@@ -99,15 +100,23 @@ def _moved(Z, ref):
 
 @pytest.fixture
 def kernel_pairs(monkeypatch):
-    """The segment pairs the off-edge kernel is really asked for."""
+    """The segment pairs the kernels are really asked for: the off-edge
+    kernel's and the same-edge routine's (its windows of
+    `_seg_seg_reg_geometry_pairs`, momwire#2063 step 3)."""
     asked = []
     real = bs._seg_seg_full_moments_offedge
+    real_pairs = bs._seg_seg_reg_geometry_pairs
 
     def spy(seg_l_i, seg_r_i, seg_l_j, seg_r_j, *a, **kw):
         asked.append(len(seg_l_i) * len(seg_l_j))
         return real(seg_l_i, seg_r_i, seg_l_j, seg_r_j, *a, **kw)
 
+    def spy_pairs(nodes, a, n_qp, rows, cols, **kw):
+        asked.append(len(rows) * len(cols))
+        return real_pairs(nodes, a, n_qp, rows, cols, **kw)
+
     monkeypatch.setattr(bs, "_seg_seg_full_moments_offedge", spy)
+    monkeypatch.setattr(bs, "_seg_seg_reg_geometry_pairs", spy_pairs)
     return asked
 
 
@@ -126,17 +135,18 @@ def plan_reads(monkeypatch):
 
 
 def test_the_chunked_route_gathers_from_the_plan(kernel_pairs):
-    """Eight dipoles at one spacing: the kernel is asked for the plan's
-    representatives' groups only (every own block is an offset edge's), and
-    every other pair between two dipoles is copied."""
+    """Eight dipoles at one spacing: the kernels are asked for the plan's
+    representatives and the near same-edge singles' sweep and fixup only,
+    and every other pair is copied."""
     s = _solver()
     assert s._offset_reuse, "offset_reuse follows pair_reuse"
     _fill(s)
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
     assert s.pair_reuse_declined is None
-    # The kernel's own count, not the fill's report of itself.
-    assert sum(kernel_pairs) == served["kernel_evals"]
+    # The kernels' own count, not the fill's report of itself (the same-edge
+    # class values' pairs are the C++ routine's).
+    assert sum(kernel_pairs) + s._reuse_same_edge_formed == served["kernel_evals"]
     assert served["copied_pairs"] > 10 * served["classes"] > 0
 
 
@@ -144,29 +154,29 @@ def test_the_counts_reconcile_with_the_matrix():
     s = _solver()
     _fill(s)
     c = s.pair_reuse_served
-    assert (
-        c["copied_pairs"] + c["classes"] + c["near_pairs"] + c["offset_pairs"]
-        == c["pairs"]
-    )
+    assert c["copied_pairs"] + c["classes"] + c["near_pairs"] == c["pairs"]
     assert c["pairs"] == (8 * 21) ** 2
-    assert c["offset_pairs"] == 8 * 21 * 21
 
 
-def test_congruent_offset_edges_share_one_table():
+def test_congruent_edges_share_their_same_edge_classes():
+    """Eight identical dipoles (h > a): each pair under four segment
+    lengths apart, |j - i| <= 3, is a near single of the same-edge routine,
+    and every offset past it is one class for all eight, with reciprocity."""
     s = _solver()
     _fill(s)
     c = s.pair_reuse_served
-    assert c["tables_shared"] == 7
-    assert c["offset_distinct"] == 2 * 21 - 1
+    assert c["near_pairs"] == 8 * (7 * 21 - 12)
+    assert c["same_edge_classes"] - c["near_pairs"] == 21 - 4
 
 
-def test_offset_reuse_alone_shares_no_table_and_reports_as_before():
-    """`offset_reuse` without the whole is its own fill, as before the census:
-    each edge its own table, nothing served to `pair_reuse_served`."""
+def test_offset_reuse_alone_serves_no_pair():
+    """`offset_reuse` without the whole copies no pair: what is left of it
+    (momwire#2063 step 3) is the regularised moments' Toeplitz form inside
+    the same-edge kernel."""
     s = _solver(pair_reuse=False, offset_reuse=True)
     _fill(s)
     assert s.pair_reuse_served is None
-    assert s.fill_report()["reuse"]["computed"] == (8 * 21) ** 2 - 8 * (21 * 21 - 41)
+    assert s.fill_report()["reuse"] is None
 
 
 def test_the_values_reach_the_matrix(monkeypatch):
@@ -199,16 +209,15 @@ def test_over_a_perfect_ground_the_free_space_term_still_copies():
 
 
 def test_the_plan_alone_is_served_when_the_tensor_does_not_fit():
-    """No offset edge in play: the memory budget alone picks the chunked route."""
+    """The memory budget alone picks the chunked route."""
     s = _solver(offset_reuse=False, swept_mem_mb=2)
     assert _moved(_fill(s), _fill(_dense())) <= Z_DRIFT
     assert s.pair_reuse_served["route"] == "chunked"
-    assert s.pair_reuse_served["offset_pairs"] == 0
     assert s.pair_reuse_served["copied_pairs"] > 0
 
 
 def test_the_tensor_route_reports_what_it_served():
-    s = _solver(offset_reuse=False)
+    s = _solver(offset_reuse=False, swept_mem_mb=256)
     _fill(s)
     assert s.pair_reuse_served["route"] == "tensor"
     assert s.pair_reuse_served["copied_pairs"] > 0
