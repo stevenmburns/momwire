@@ -84,6 +84,9 @@ static constexpr size_t MAX_JF_SLAB_BYTES = 64u << 20;  // 64 MiB
 // `max_jf_bytes` budget the bands honour.
 static constexpr std::ptrdiff_t SYM_TILE_MAX = 128;
 
+// `somm_core::set_remainder_tie_rel` (TEST HOOK): < 0 the constant.
+static std::atomic<double> g_tie_rel{-1.0};
+
 namespace somm_sym {
 using somm_proj::cd;
 
@@ -176,6 +179,70 @@ static inline void node_block(const somm_proj::GridView &G, double ground_z,
                 bw[rj * q + qi] = v;
         }
     }
+}
+
+// Whether node pair (rho, hh) is within `tie` (relative) of one of the
+// grid's region breaks (`proj_address`'s select): r1 (clamped to the table's
+// edge) against r_break and r_near, theta against th_split. r_near is a
+// break only where it is short of the edge (a near-only grid has none).
+static inline bool near_break(const somm_proj::GridView &G, double rho, double hh,
+                              double tie) {
+    double r1, th;
+    somm_proj::proj_r1_theta(G, rho, hh, r1, th);
+    const double r1c = r1 > G.r1_max ? G.r1_max : r1;
+    if (std::fabs(r1c - G.r_break) <= tie * G.r_break) return true;
+    if (G.r_near < G.r1_max && std::fabs(r1c - G.r_near) <= tie * G.r_near) return true;
+    return std::fabs(th - G.th_split) <= tie * G.th_split;
+}
+
+// A class representative's moments (the class route): fw as `node_block`
+// forms its forward half, expression for expression, so the value is the
+// walk's own of that pair. False, nothing formed, when a node pair is within
+// `tie` of a region break.
+static inline bool rep_block(const somm_proj::GridView &G, double ground_z, double k,
+                             const Side &S, std::ptrdiff_t i, std::ptrdiff_t j, double tie,
+                             cd *fw, cd *bw) {
+    const std::ptrdiff_t q = S.q;
+    if (tie > 0.0)
+        for (std::ptrdiff_t qi = 0; qi < q; ++qi)
+            for (std::ptrdiff_t rj = 0; rj < q; ++rj) {
+                const double dx = S.node(i, qi, 0) - S.node(j, rj, 0);
+                const double dy = S.node(i, qi, 1) - S.node(j, rj, 1);
+                const double hh = (S.node(i, qi, 2) - ground_z) + (S.node(j, rj, 2) - ground_z);
+                if (near_break(G, std::hypot(dx, dy), hh, tie)) return false;
+            }
+    if (i == j) {
+        node_block(G, ground_z, k, S, i, j, fw, bw);
+        return true;
+    }
+    const double *ti = S.tang + i * 3;
+    for (std::ptrdiff_t qi = 0; qi < q; ++qi) {
+        const double ox = S.node(i, qi, 0), oy = S.node(i, qi, 1), oz = S.node(i, qi, 2);
+        for (std::ptrdiff_t rj = 0; rj < q; ++rj) {
+            const double sx = S.node(j, rj, 0), sy = S.node(j, rj, 1), sz = S.node(j, rj, 2);
+            const double dx = ox - sx;
+            const double dy = oy - sy;
+            const double rho = std::hypot(dx, dy);
+            const double hh = (oz - ground_z) + (sz - ground_z);
+            cd surf[4], g;
+            somm_proj::proj_core(G, k, rho, hh, surf, g);
+            fw[qi * q + rj] = somm_proj::proj_project(G, dx, dy, rho, surf, g, ti[0], ti[1], ti[2],
+                                                      S.ux[j], S.uy[j], S.th[j], S.tz[j]);
+        }
+    }
+    return true;
+}
+
+// A served block into the tile: as it is, or transposed (reciprocity:
+// Jf[p, P] of the pair read from the other side is Jf[P, p]).
+static inline void put_block(const cd *v, bool trans, int d1, cd *out) {
+    const int dd = d1 * d1;
+    if (!trans) {
+        std::copy(v, v + dd, out);
+        return;
+    }
+    for (int p = 0; p < d1; ++p)
+        for (int P = 0; P < d1; ++P) out[p * d1 + P] = v[P * d1 + p];
 }
 
 // One finished entry into the sink (`RemainderSink`): stored, or folded into
@@ -301,107 +368,78 @@ static void remainder_Q_symmetric(
         for (std::ptrdiff_t B = A; B < n_tiles; ++B) pairs.emplace_back(A, B);
     const std::ptrdiff_t n_pairs = (std::ptrdiff_t)pairs.size();
 
-    // Repeated edge pairs (momwire#1809): each source block is filled once,
-    // up front, by the same per-pair calls the walk makes (node_block, then
-    // contract, either orientation), and the walk copies it for every target
-    // segment pair -- and for the source pair itself (momwire#2073), which
-    // before was formed a second time. That read is exact, not a copy up to
-    // rounding: the cache holds the walk's own computation of that pair. The
-    // fill may form an ordered pair from node_block's reverse half where the
-    // walk forms it from the forward half of the swapped call, and the two
-    // agree bit for bit: the reverse half's differences are formed as the
-    // forward half's would be (sx - ox), hypot ignores their signs, the
-    // height sum is one addition either way round, and proj_project gets the
-    // same arguments (the TU is built -ffp-contract=off, so no call site
-    // fuses differently). With both orders of a source pair in the cache,
-    // the walk calls node_block for no pair the map names.
-    // `rep_off[s]` is source pair s's offset in the cache, its
-    // entries [(x * nseg[sb] + y) * dd + p * d1 + P] like a tile's.
-    std::ptrdiff_t E = 0;
-    std::vector<int64_t> rep_off;
-    std::vector<cd> cache;
-    if (reuse) {
-        E = reuse->n_edges;
-        const int32_t *src = reuse->src, *nseg = reuse->edge_nseg;
-        rep_off.assign((size_t)(E * E), -1);
-        size_t total = 0;
-        for (std::ptrdiff_t t = 0; t < E * E; ++t) {
-            const int32_t sp = src[t];
-            if (sp < 0) continue;
-            if (sp >= E * E || src[sp] >= 0)
-                throw std::invalid_argument("pair reuse: a source is itself a copy");
-            const std::ptrdiff_t ta = t / E, tb = t % E, sa = sp / E, sb = sp % E;
-            if (nseg[ta] != nseg[sa] || nseg[tb] != nseg[sb])
-                throw std::invalid_argument("pair reuse: segment counts differ");
-            if (src[tb * E + ta] != (int32_t)(sb * E + sa))
-                throw std::invalid_argument("pair reuse: the map is not closed under reversal");
-            if (rep_off[(size_t)sp] < 0) {
-                rep_off[(size_t)sp] = (int64_t)total;
-                total += (size_t)dd * nseg[sa] * nseg[sb];
-            }
-        }
-        if (total == 0 || total * sizeof(cd) > budget) {
-            reuse = nullptr;  // nothing to copy, or no room: fill everything
-        } else {
-            if (counts) counts->cached = (long long)(total / (size_t)dd);
-            cache.resize(total);
-            // The unordered source pairs; (sb, sa) is a source whenever
-            // (sa, sb) is, by the reversal check, and is filled with it.
-            std::vector<std::pair<std::ptrdiff_t, std::ptrdiff_t>> reps;
-            for (std::ptrdiff_t sp = 0; sp < E * E; ++sp)
-                if (rep_off[(size_t)sp] >= 0 && sp / E <= sp % E)
-                    reps.emplace_back(sp / E, sp % E);
-            const std::ptrdiff_t n_reps = (std::ptrdiff_t)reps.size();
-            const int64_t *seg0 = reuse->edge_seg0;
-            #pragma omp parallel
-            {
-                std::vector<cd> fw((size_t)q * q), bw((size_t)q * q),
-                    rows((size_t)d1 * q);
-                #pragma omp for schedule(dynamic)
-                for (std::ptrdiff_t r = 0; r < n_reps; ++r) {
-                    MW_CANCEL_POLL();
-                    const std::ptrdiff_t a = reps[(size_t)r].first;
-                    const std::ptrdiff_t b = reps[(size_t)r].second;
-                    const std::ptrdiff_t na = nseg[a], nbb = nseg[b];
-                    cd *cab = &cache[(size_t)rep_off[(size_t)(a * E + b)]];
-                    cd *cba = &cache[(size_t)rep_off[(size_t)(b * E + a)]];
-                    for (std::ptrdiff_t x = 0; x < na; ++x) {
-                        const std::ptrdiff_t si = seg0[a] + x;
-                        for (std::ptrdiff_t y = a == b ? x : 0; y < nbb; ++y) {
-                            const std::ptrdiff_t sj = seg0[b] + y;
-                            somm_sym::node_block(G, ground_z, k, S, si, sj,
-                                                 fw.data(), bw.data());
-                            somm_sym::contract(S, d1, si, sj, fw.data(), rows.data(),
-                                               &cab[((size_t)x * nbb + y) * dd]);
-                            if (si == sj) continue;
-                            somm_sym::contract(S, d1, sj, si, bw.data(), rows.data(),
-                                               &cba[((size_t)y * na + x) * dd]);
-                        }
-                    }
-                }
-            }
-            if (pysim_aborted.load()) return;
-        }
-    }
-    // The cached block standing for segment pair (si, sj), or null to fill
-    // it: a target's source block, or a source pair's own. `own` says which.
-    const auto cached = [&](std::ptrdiff_t si, std::ptrdiff_t sj, bool &own) -> const cd * {
-        const int32_t ei = reuse->seg_edge[si], ej = reuse->seg_edge[sj];
-        if (ei < 0 || ej < 0) return nullptr;
-        const size_t t = (size_t)ei * E + ej;
-        int32_t sp = reuse->src[t];
-        own = sp < 0;
-        if (own) {
-            if (rep_off[t] < 0) return nullptr;
-            sp = (int32_t)t;
-        }
-        const std::ptrdiff_t sb = sp % E;
-        const std::ptrdiff_t x = si - reuse->edge_seg0[ei], y = sj - reuse->edge_seg0[ej];
-        return &cache[(size_t)rep_off[(size_t)sp] +
-                      ((size_t)x * reuse->edge_nseg[sb] + y) * dd];
+    // Pair reuse (momwire#2063 step 2b, `somm_core::PairReuse`): each class
+    // but a single evaluated once, at its representative, by the walk's own
+    // per-pair calls (`rep_block`, `contract`), up front; the walk then
+    // serves every member from it, and the representative's own pair too
+    // (momwire#2073: the walk never forms a served pair a second time). A
+    // class whose representative sits at a region break is left to the walk
+    // (`tied`). The representative's value is the walk's own bits of that
+    // pair: `rep_block` forms `node_block`'s forward half expression for
+    // expression (the TU is built -ffp-contract=off, so no call site fuses
+    // differently).
+    const bool by_class = reuse != nullptr;
+    const int32_t *cmap = by_class ? reuse->cls_map : nullptr;
+    const std::ptrdiff_t ns = S.ns, C = by_class ? reuse->n_classes : 0;
+    std::vector<cd> values;
+    std::vector<uint8_t> tied;
+    long long n_eval = 0, n_tied = 0;
+    const auto is_single = [&](std::ptrdiff_t c) {
+        return reuse->single != nullptr && ((reuse->single[c / 64] >> (c % 64)) & 1u) != 0;
     };
-    // `copied` the target entries the walk copied, `sourced` the source
-    // entries it read back (momwire#2073); both are cache reads.
+    if (by_class) {
+        if (!cmap || C < 1 || !reuse->rep_flat || !reuse->rep_code)
+            throw std::invalid_argument("pair reuse: a class map needs its representatives");
+        std::atomic<bool> bad{false};
+        const std::ptrdiff_t nn = ns * ns;
+        #pragma omp parallel for schedule(static)
+        for (std::ptrdiff_t t = 0; t < nn; ++t)
+            if (cmap[t] < 0 || (cmap[t] >> 1) >= C) bad.store(true, std::memory_order_relaxed);
+        for (std::ptrdiff_t c = 0; c < C && !bad.load(); ++c) {
+            const int64_t r = reuse->rep_flat[c];
+            if (r < 0 || r >= nn || (cmap[r] >> 1) != c || (cmap[r] & 1) != reuse->rep_code[c])
+                bad.store(true);
+        }
+        if (bad.load())
+            throw std::invalid_argument("pair reuse: the class map and its representatives disagree");
+        const double tie = somm_core::remainder_tie_rel();
+        values.resize((size_t)C * dd);
+        tied.assign((size_t)C, 0);
+        #pragma omp parallel reduction(+ : n_eval, n_tied)
+        {
+            std::vector<cd> fw((size_t)q * q), bw((size_t)q * q), rows((size_t)d1 * q);
+            #pragma omp for schedule(dynamic, 64)
+            for (std::ptrdiff_t c = 0; c < C; ++c) {
+                MW_CANCEL_POLL();
+                if (is_single(c)) continue;
+                const std::ptrdiff_t si = reuse->rep_flat[c] / ns, sj = reuse->rep_flat[c] % ns;
+                if (!somm_sym::rep_block(G, ground_z, k, S, si, sj, tie, fw.data(), bw.data())) {
+                    tied[(size_t)c] = 1;
+                    ++n_tied;
+                    continue;
+                }
+                somm_sym::contract(S, d1, si, sj, fw.data(), rows.data(), &values[(size_t)c * dd]);
+                ++n_eval;
+            }
+        }
+        if (pysim_aborted.load()) return;
+        if (reuse->tied_out) std::copy(tied.begin(), tied.end(), reuse->tied_out);
+    }
+    // The class value served for segment pair (si, sj), or false to fill it.
+    // `own` says the pair is its class's representative, `trans` that it
+    // reads the value transposed.
+    const auto lookup = [&](std::ptrdiff_t si, std::ptrdiff_t sj, const cd *&v, bool &trans,
+                            bool &own) -> bool {
+        const int32_t e = cmap[si * ns + sj];
+        const std::ptrdiff_t c = e >> 1;
+        if (is_single(c) || tied[(size_t)c]) return false;
+        trans = ((e & 1) ^ reuse->rep_code[c]) != 0;
+        own = reuse->rep_flat[c] == (int64_t)(si * ns + sj);
+        v = &values[(size_t)c * dd];
+        return true;
+    };
+    // `copied` the member entries the walk served, `sourced` the
+    // representatives' own; both are reads of a class value.
     long long copied = 0, sourced = 0, walked = 0;
 
     #pragma omp parallel reduction(+ : copied, sourced, walked)
@@ -439,15 +477,15 @@ static void remainder_Q_symmetric(
                 for (std::ptrdiff_t y = diag ? x : 0; y < ny; ++y) {
                     const std::ptrdiff_t sj = TB.segs[(size_t)y];
                     cd *jxy = &JAB[((size_t)x * ny + y) * dd];
-                    bool ox = false, oy = false;
-                    const cd *cx = reuse ? cached(si, sj, ox) : nullptr;
-                    const cd *cy =
-                        reuse && si != sj ? cached(sj, si, oy) : nullptr;
-                    if (!cx || (si != sj && !cy))
+                    const cd *vx = nullptr, *vy = nullptr;
+                    bool tx = false, ty = false, ox = false, oy = false;
+                    const bool hx = reuse && lookup(si, sj, vx, tx, ox);
+                    const bool hy = reuse && si != sj && lookup(sj, si, vy, ty, oy);
+                    if (!hx || (si != sj && !hy))
                         somm_sym::node_block(G, ground_z, k, S, si, sj, fw.data(),
                                              bw.data());
-                    if (cx) {
-                        std::copy(cx, cx + dd, jxy);
+                    if (hx) {
+                        somm_sym::put_block(vx, tx, d1, jxy);
                         ++(ox ? sourced : copied);
                     } else {
                         somm_sym::contract(S, d1, si, sj, fw.data(), rows.data(), jxy);
@@ -460,8 +498,8 @@ static void remainder_Q_symmetric(
                     }
                     cd *jyx = diag ? &JAB[((size_t)y * ny + x) * dd]
                                    : &JBA[((size_t)y * nx + x) * dd];
-                    if (cy) {
-                        std::copy(cy, cy + dd, jyx);
+                    if (hy) {
+                        somm_sym::put_block(vy, ty, d1, jyx);
                         ++(oy ? sourced : copied);
                     } else {
                         somm_sym::contract(S, d1, sj, si, bw.data(), rows.data(), jyx);
@@ -478,11 +516,28 @@ static void remainder_Q_symmetric(
     if (counts) {
         counts->walked = walked;
         counts->copied = copied + sourced;
+        if (by_class) {
+            counts->cached = n_eval;
+            counts->tied = n_tied;
+            long long tp = 0;
+            if (n_tied > 0) {
+                const std::ptrdiff_t nn = ns * ns;
+                #pragma omp parallel for schedule(static) reduction(+ : tp)
+                for (std::ptrdiff_t t = 0; t < nn; ++t) tp += tied[(size_t)(cmap[t] >> 1)];
+            }
+            counts->tied_pairs = tp;
+        }
     }
 }
 
 
 namespace somm_core {
+
+void set_remainder_tie_rel(double rel) { g_tie_rel.store(rel); }
+double remainder_tie_rel() {
+    const double r = g_tie_rel.load();
+    return r < 0.0 ? REMAINDER_TIE_REL : r;
+}
 
 void remainder_bspline_Q(const somm_proj::GridView &G, double ground_z, double k,
                          const double *obs_nodes, const double *obs_tang, const double *W_obs,

@@ -865,13 +865,6 @@ _PAIR_REUSE_RTOL = 1e-12
 #: ``pair_reuse=True``. Kept until antennaknobs stops importing it.
 _PAIR_REUSE_MIN_PAIRS_PER_MEMBER = 8.0
 
-#: The fused Sommerfeld remainder kernel's cache budget for `pair_reuse`
-#: source blocks: its Jf slab budget (`MAX_JF_SLAB_BYTES` in
-#: `_somm_remainder_core.cpp`, which the Python callers never override). Past
-#: it the kernel drops the whole map, so `_remainder_reuse_args` cuts the map
-#: to fit instead (momwire#1854).
-_REMAINDER_REUSE_CACHE_BYTES = 64 << 20
-
 #: Representative groups evaluated between cancellation checkpoints.
 _REUSE_GROUPS_PER_CHECKPOINT = 64
 
@@ -1989,7 +1982,7 @@ class BSplineSolver(
         self._reuse_image_declined = None
         self._held_reuse_values = None
         self._remainder_reuse_cache = None
-        self.pair_reuse_remainder_cut = 0
+        self._reuse_remainder_declined = None
         # Why the reuse served nothing (None when it served, or was not
         # asked): the sinusoidal and razor2p solvers' readout, of the same
         # type.
@@ -4639,7 +4632,7 @@ class BSplineSolver(
                 ):
                     return Q
             copy_map = self._remainder_reuse_args(geom, gz)
-            counts = np.zeros(3, dtype=np.int64)
+            counts = np.zeros(5, dtype=np.int64)
             Q = _acc.sommerfeld_remainder_bspline_Q(
                 nodes_c,
                 tang_c,
@@ -4769,7 +4762,7 @@ class BSplineSolver(
         )
         side = np.zeros(E.size, dtype=np.complex128)
         copy_map = self._remainder_reuse_args(geom, gz)
-        counts = np.zeros(3, dtype=np.int64)
+        counts = np.zeros(5, dtype=np.int64)
         _acc.sommerfeld_remainder_bspline_Q_into(
             np.ascontiguousarray(nodes, dtype=np.float64),
             np.ascontiguousarray(tang, dtype=np.float64),
@@ -5317,15 +5310,15 @@ class BSplineSolver(
         THE PAIR CONVENTION is the direct family's: ORDERED segment pairs,
         n_seg^2 for a whole-mesh fill, each counted once however many times
         a kernel formed it. `computed` are the pairs whose value was formed
-        from their own geometry (a pair taken from its reciprocal by the
-        transpose counts here, as in the direct fill), so `pairs - computed`
-        were copied from another pair's value: by `copy_map` (the remainder's
-        pair-reuse map, `_remainder_reuse_map`) or by offset along an edge
-        (`offset`, ``[(start, n)]``: n^2 pairs from 2n - 1 distinct values,
-        as the direct family counts an offset edge). `kernel_evals` is what
-        the kernel was called on, which exceeds `computed` where pairs are
-        formed twice (a segment in two tiles' support halos, the copy
-        cache's own fill, #1189's raised pairs). `plan` (a plan's weak ref)
+        from their own geometry, so `pairs - computed` were copied from
+        another pair's value (a member read transposed from its class's
+        value included, as in the direct fill): by `copy_map` (the
+        remainder's class map, `_note_remainder_kernel`'s ``{"plan",
+        "tied"}``) or by offset along an edge (`offset`, ``[(start, n)]``:
+        n^2 pairs from 2n - 1 distinct values, as the direct family counts
+        an offset edge). `kernel_evals` is what the kernel was called on,
+        which exceeds `computed` where pairs are formed twice (a segment in
+        two tiles' support halos, #1189's raised pairs). `plan` (a plan's weak ref)
         says the term copied between edges by the plan's image block
         (momwire#2063 step 2a), whose wire map counts it."""
         notes = self.__dict__.setdefault("_fill_ground_notes", {})
@@ -5350,41 +5343,33 @@ class BSplineSolver(
             note["maps"].append(copy_map)
 
     @staticmethod
-    def _copy_map_blocks(copy_map):
-        """The target edge pairs `copy_map` copies and their segment counts:
-        ``(ta, tb, n_ta, n_tb)``."""
-        seg0 = np.asarray(copy_map["reuse_edge_seg0"], dtype=np.int64)
-        nseg = np.diff(seg0)
-        ta, tb = np.nonzero(np.asarray(copy_map["reuse_src"]) >= 0)
-        return ta, tb, nseg[ta], nseg[tb]
-
-    @staticmethod
     def _offset_saved(offset):
         """Pairs an offset fill copies: n^2 - (2n - 1) per edge."""
         return sum(n * n - (2 * n - 1) for _start, n in offset)
 
     def _note_remainder_kernel(self, n_seg, counts, copy_map, n_raised):
         """Note the fused kernel's whole-mesh remainder (momwire#2068) from
-        the counts it returned (`RemainderCounts`: walked, copied, cached).
+        the counts it returned (`RemainderCounts`: walked, copied, cached,
+        tied, tied_pairs).
 
-        The copied pairs are read off the map, not off the kernel's `copied`:
-        the kernel counts a pair each time its tile walk reads it from the
-        cache, a source pair's own block included (momwire#2073), and a
-        segment in two tiles' halos is walked twice. The map is the set of
-        pairs copied, once each, whenever the kernel used it, which it did
-        exactly when it filled its cache (`cached` > 0); a map it did not use
-        (the cache over its budget) copied nothing."""
-        walked, copied, cached = (int(c) for c in counts)
+        On the class map (momwire#2063 step 2b) each class the kernel served
+        has its first pair computed (`cached` of them, evaluated up front at
+        the representatives) and its others reused; a single, and every pair
+        of a class the tie rule left to the walk (`tied_pairs`), is computed.
+        The kernel's own `copied` is not the count: it reads a pair each time
+        its tile walk forms it, and a segment in two tiles' halos is walked
+        twice."""
+        walked, copied, cached, tied, tied_pairs = (int(c) for c in counts)
         pairs = int(n_seg) ** 2
-        used = copy_map if copy_map and cached > 0 else None
         reused = 0
-        if used is not None:
-            _ta, _tb, na, nb = self._copy_map_blocks(used)
-            reused = int(np.sum(na * nb))
-        if copy_map and used is None:
-            self.__dict__.setdefault("_fill_ground_notes", {})[
-                "remainder_map_unused"
-            ] = True
+        used = None
+        if copy_map:
+            handle = self._remainder_reuse_cache[3]
+            singles = int(handle.stats()["near_pairs"])
+            computed = cached + singles + tied_pairs
+            reused = pairs - computed
+            if reused > 0:
+                used = {"plan": handle.ref(), "tied": np.array(copy_map["reuse_tied"])}
         evals = (walked - copied + cached) if walked else pairs - reused
         self._note_ground_fill(
             "remainder",
@@ -5424,10 +5409,6 @@ class BSplineSolver(
         near = served["near_pairs"]
         computed = pairs - reused - near
         left_out = []
-        if self.pair_reuse_remainder_cut:
-            left_out.append(
-                f"{self.pair_reuse_remainder_cut} block(s) left the remainder's copy map"
-            )
         # The ground terms (momwire#2068): each its own family, counted where
         # it was filled (`_note_ground_fill`); a term this ground has that no
         # whole-mesh fill noted is listed, not guessed.
@@ -5450,8 +5431,6 @@ class BSplineSolver(
             families[name] = _fill_report.family(
                 note["pairs"], note["computed"], 0, note["kernel_evals"]
             )
-        if notes.get("remainder_map_unused"):
-            left_out.append("the remainder's copy map did not fit the kernel's cache")
         # A ground term filled with no copy between edges, beside a direct
         # term that served (momwire#2074): the offset spread within an edge
         # is not that copy. The image term has no copy map yet (#2159), so
@@ -5464,13 +5443,15 @@ class BSplineSolver(
             note = notes.get(name)
             if note is None or note["maps"] or note.get("plans"):
                 continue
-            if name == "remainder" and notes.get("remainder_map_unused"):
-                continue
             if between is None:
                 between = self._between_edge_pairs()
             if between == 0:
                 continue
-            why = self._reuse_image_declined if name == "image" else None
+            why = (
+                self._reuse_image_declined
+                if name == "image"
+                else self.__dict__.get("_reuse_remainder_declined")
+            )
             left_out.append(
                 f"the {name} term copied no block between edges"
                 + (f" ({why})" if why else "")
@@ -5554,11 +5535,16 @@ class BSplineSolver(
                 if block is None:
                     return {"unavailable": _fill_report.PLAN_GONE}
                 g_reused += block[:, :, 1]
-            for copy_map in note["maps"]:
-                seg0 = np.asarray(copy_map["reuse_edge_seg0"], dtype=np.int64)
-                edge_wire = np.searchsorted(seg_off, seg0[:-1], side="right") - 1
-                ta, tb, na, nb = self._copy_map_blocks(copy_map)
-                np.add.at(g_reused, (edge_wire[ta], edge_wire[tb]), na * nb)
+            for used in note["maps"]:
+                # The remainder's class map (momwire#2063 step 2b), the
+                # classes its fill's tie rule left to the walk computed.
+                wire_of_seg = np.repeat(np.arange(n_wires, dtype=np.int32), sizes)
+                block = used["plan"].remainder_wire_map(
+                    used["tied"], wire_of_seg, n_wires
+                )
+                if block is None:
+                    return {"unavailable": _fill_report.PLAN_GONE}
+                g_reused += block[:, :, 1]
             counts += np.stack(
                 [pairs - g_reused, g_reused, np.zeros_like(g_reused)], axis=2
             )
@@ -5791,82 +5777,61 @@ class BSplineSolver(
         }
 
     def _remainder_reuse_args(self, geom, gz):
-        """The `pair_reuse` plan as the fused Sommerfeld remainder kernel's
-        copy map (momwire#1809), or ``{}`` for none. The kernel copies whole
-        blocks between two edges, and the remainder reads each node pair's
-        horizontal distance and height sum, so its census is of edge pairs:
-        a block is copied from one whose edges have its segmentations, end-
-        point distances and heights (`remainder_blocks`,
-        `_bspline_pair_reuse_core.h`), which makes the motion a horizontal
-        one, and the remainder's dyad, projected on the moved tangents, the
-        same number up to the key's rounding. Read only where the direct
-        plan serves.
-
-        The kernel holds every source block in one cache and fills
-        everything when that cache would pass its budget
-        (`_REMAINDER_REUSE_CACHE_BYTES`). So the map is cut to fit, keeping
-        the source pairs with the most copies per cached byte; the copies cut
-        are counted in `pair_reuse_remainder_cut` (momwire#1854). Cached per
-        geometry and ground height: a solve asks more than once."""
+        """The Sommerfeld remainder's `pair_reuse` plan as the fused kernel's
+        class map (momwire#2063 step 2b), or ``{}`` for none: the kernel's
+        ``reuse_*`` keywords. The remainder reads each node pair's horizontal
+        separation and height sum, and the tangents in the pair's horizontal
+        frame, so its census is of segment pairs keyed by those plane
+        invariants (`remainder_plan_for`, `_bspline_pair_reuse_core.h`): a
+        member takes its class's value, evaluated once at the class's
+        representative, transposed under reciprocity. Read only where the
+        direct plan serves. Cached per geometry and ground height: a solve
+        asks more than once. ``reuse_tied`` is written by each fill: the
+        classes its tie rule left to the walk."""
         hit = self._remainder_reuse_cache
         if hit is not None and hit[0] is geom and hit[1] == gz:
             return hit[2]
-        out = self._remainder_reuse_map(geom, gz)
-        self._remainder_reuse_cache = (geom, gz, out)
+        out, handle = self._remainder_reuse_map(geom, gz)
+        self._remainder_reuse_cache = (geom, gz, out, handle)
         return out
 
     def _remainder_reuse_map(self, geom, gz):
-        plan = self._reuse_plan(geom)
-        if plan is None:
-            return {}
-        slices = self._same_edge_slices(geom)
-        E = len(slices)
-        start = np.fromiter((sl.start for sl in slices), dtype=np.int64, count=E)
-        stop = np.fromiter((sl.stop for sl in slices), dtype=np.int64, count=E)
-        n_seg = geom["seg_l"].shape[0]
-        # The kernel takes edges as consecutive runs; anything else is filled.
-        if start[0] != 0 or stop[-1] != n_seg or np.any(stop[:-1] != start[1:]):
-            return {}
-        ta, tb, sa, sb = _acc.bspline_reuse_remainder_blocks(
-            np.ascontiguousarray(geom["seg_l"], dtype=np.float64),
-            np.ascontiguousarray(geom["seg_r"], dtype=np.float64),
-            np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64),
-            np.r_[start, n_seg].astype(np.int64),
+        """`_remainder_reuse_args`' build: ``(kwargs, plan handle)``, or
+        ``({}, None)`` with `_reuse_remainder_declined` saying why when a
+        plan was asked for and declined."""
+        self._reuse_remainder_declined = None
+        if self._reuse_plan(geom) is None:
+            return {}, None
+        seg_l = np.ascontiguousarray(geom["seg_l"], dtype=np.float64)
+        seg_r = np.ascontiguousarray(geom["seg_r"], dtype=np.float64)
+        n_seg = seg_l.shape[0]
+        # The raised pairs (momwire#1189) are their own classes: the walk's
+        # own base-order value is what their correction subtracts.
+        raised = np.zeros(0, dtype=np.int64)
+        if _REMAINDER_PER_PAIR:
+            I, J, _Q = self._remainder_qp_pairs(seg_l, seg_r, gz)
+            raised = np.asarray(I, dtype=np.int64) * n_seg + np.asarray(
+                J, dtype=np.int64
+            )
+        handle = _acc.bspline_reuse_remainder_plan(
+            seg_l,
+            seg_r,
+            np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64),
             float(gz),
+            raised,
+            int(self.degree),
         )
-        if ta.size == 0:
-            return {}
-        # The cache: one block per source pair, both orders of an off-edge
-        # one. Cut by unordered source pair, which keeps the map closed under
-        # reversal, best copies per byte first (ties in source order).
-        nseg = stop - start
-        dd = (self.degree + 1) ** 2
-        lo_s, hi_s = np.minimum(sa, sb), np.maximum(sa, sb)
-        cls_keys, cls_of, copies = np.unique(
-            lo_s * E + hi_s, return_inverse=True, return_counts=True
-        )
-        cls_lo, cls_hi = np.divmod(cls_keys, E)
-        orders = np.where(cls_lo == cls_hi, 1, 2)
-        nbytes = orders * dd * nseg[cls_lo] * nseg[cls_hi] * 16
-        self.pair_reuse_remainder_cut = 0
-        if int(nbytes.sum()) > _REMAINDER_REUSE_CACHE_BYTES:
-            rank = np.lexsort((cls_keys, -(copies / orders)))
-            fits = np.cumsum(nbytes[rank]) <= _REMAINDER_REUSE_CACHE_BYTES
-            take = np.zeros(cls_keys.size, dtype=bool)
-            take[rank[fits]] = True
-            sel = take[cls_of]
-            self.pair_reuse_remainder_cut = int(np.count_nonzero(~sel))
-            ta, tb, sa, sb = ta[sel], tb[sel], sa[sel], sb[sel]
-            if ta.size == 0:
-                return {}
-        src = np.full((E, E), -1, dtype=np.int32)
-        src[ta, tb] = (sa * E + sb).astype(np.int32)
-        seg_edge = np.repeat(np.arange(E, dtype=np.int32), nseg)
+        if handle.declined is not None:
+            self._reuse_remainder_declined = handle.declined
+            return {}, None
+        cls, rep, code, single = handle.remainder_arrays()
         return {
-            "reuse_edge_seg0": np.r_[start, n_seg].astype(np.int64),
-            "reuse_seg_edge": seg_edge,
-            "reuse_src": src,
-        }
+            "reuse_classes": cls,
+            "reuse_rep": rep,
+            "reuse_rep_code": code,
+            "reuse_single": single,
+            "reuse_tied": np.zeros(rep.size, dtype=np.uint8),
+        }, handle
 
     def _offset_edges(self, geom):
         """The uniform straight edges of `_REG_TOEPLITZ_MIN_N` segments or
@@ -5950,9 +5915,9 @@ class BSplineSolver(
         Opt-in with `offset_reuse`. The fused kernel must be loaded, since
         the rest of the block is still its fill. An edge shorter than
         `_REG_TOEPLITZ_MIN_N` keeps the dense fill, as in step 1. When a
-        `pair_reuse` plan applies, the offset route (which cannot take that
-        plan's copy map) is used only where the offset edges hold at least
-        half of the segment pairs."""
+        `pair_reuse` plan applies, the offset route (which cannot take the
+        remainder's class map) is used only where the offset edges hold at
+        least half of the segment pairs."""
         if not (
             _acc is not None
             and hasattr(_acc, "sommerfeld_remainder_bspline_Q")

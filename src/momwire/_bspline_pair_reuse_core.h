@@ -245,38 +245,105 @@ struct ImageWindow {
 void check_image_window(const ImageWindow &w);
 void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out);
 
-// THE SOMMERFELD REMAINDER's copy map (3b): its own family, of EDGE pairs,
-// because the fused kernel copies whole blocks between edges. The remainder
-// reads the plane, so it is invariant only under the motions that keep it:
-// block (x, y) is keyed by the edges' segment counts and segmentations (each
-// inner boundary's arc over the edge's length, and each segment's radius),
-// the six distances of the end points (x0, x1, y0, y1) and their four heights
-// above the plane, all on a step of 2^-KEY_BITS of the structure's size. Two
-// blocks alike in those are alike under a motion that keeps the plane (their
-// horizontal distances are their distances less their height differences),
-// node for node. A block keys on the smaller of its two forms, (x, y) and
-// (y, x), so the map is closed under reversal, the kernel's rule: (y, x)
-// copies (t, s) whenever (x, y) copies (s, t); each class's representative
-// and its transpose are its sources, never targets. Own blocks (x, x) are
-// keyed alike and copied between congruent edges.
+// THE SOMMERFELD REMAINDER BY PLANE INVARIANTS (momwire#2063 step 2b): its
+// own family and its own plan, of segment pairs. The fused kernel's moments
+// of observer segment o against source segment s,
 //
-// Not the direct classes: a block copies only when every pair of it would,
-// and the direct key's rounding of a pair's geometry now and then splits
-// congruent pairs across a quantum, which costs a pair only compression but a
-// block its copy: matched by direct classes elementwise, the 10-element
-// Yagi's remainder computed 1.85 M of its 4.68 M pairs, against 0.58 M by
-// edge pairs (the hint route's 0.58 M too).
-struct RemainderGeometry {
+//     Jf[p, P] = sum_{qi, rj} W[p, o, qi] t_o . F(x_qi, x'_rj) . t_s W[P, s, rj],
+//
+// read F through the grid at each node pair's horizontal separation rho and
+// height sum hh = (z - z_g) + (z' - z_g), and project it on the two
+// tangents in the pair's horizontal frame (`proj_project`: the azimuth of
+// each tangent about the separation); W reads only each segment's length h
+// (and the rule, one for the whole fill). With m the centre difference, A
+// and B the two segments' vectors (r - l) and s, s' the nodes' offsets from
+// the centres, a node pair's horizontal separation is m_h + s A_h - s' B_h
+// and its height sum S + s A_z + s' B_z, S the centres' height sum. So the
+// pair's complete invariants under the motions that keep the plane --
+// horizontal translations, rotations about a vertical axis and reflections
+// in vertical planes (the dyad is a tensor of the plane's symmetry group,
+// and the projection reads the tangents' dots with the separation) -- are
+// the horizontal Gram words m_h.m_h, m_h.A_h, m_h.B_h, A_h.B_h, the vertical
+// parts A_z, B_z, the height sum S and the two lengths h_o, h_s (|A_h| and
+// |B_h| follow from h and A_z). NOT a vertical motion: S moves with it, and
+// the grid reads S; nor the plane's own mirror, which the image key uses.
+// The value is a smooth function of these words wherever the grid is (the
+// Gram words are the O(2) invariants' generators), so a member's error is
+// its words' rounding times the value's slope.
+//
+// THE KEY quantises the Gram words on a step of 2^-KEY_BITS of D^2 and A_z,
+// B_z, S on 2^-KEY_BITS of D, D a lower bound on the pair's distance to the
+// image, hypot(|m_h| - (|A_h| + |B_h|) / 2, S - (|A_z| + |B_z|) / 2) (each
+// part floored at 0) floored to a power of two: the grid's argument r1 =
+// hypot(rho, hh) >= D at every node pair, so a member's r1 errs by at most
+// ~2^-KEY_BITS of r1. h_o, h_s enter by `length_type`, as in the direct key.
+//
+// RECIPROCITY (one code bit): the remainder dyad is reciprocal, so the pair
+// read from the source's side is the transpose, Jf[P, p](s, o) =
+// Jf[p, P](o, s) -- always, the remainder reading no radius. Each pair keys
+// on the smaller of its two forms (lengths swapped, m -> -m: m.A <- -m.B,
+// m.B <- -m.A, A_z <-> B_z), and the kernel transposes a member whose form
+// differs from its representative's: a copy.
+//
+// OWN CLASSES (`Key::Own`, each pair its own single, filled by the kernel's
+// walk as without reuse): pairs nearer than NEAR_LENGTHS max(h_o, h_s),
+// centre to centre or D (the same-segment pairs among them), and the pairs
+// whose remainder order is raised (momwire#1189's list, `raised`): their
+// base-order value is the walk's own, so the later correction, which
+// subtracts the pair's own base moments, lands on the bits it always did.
+//
+// THE GRID'S REGION BREAKS. The interpolant is continuous across a stencil
+// shift inside a region (a 4-point Lagrange rule through the node it
+// shifts at) and past the table's edge (the continuation is anchored on the
+// edge value), but not across the region breaks (r1 at r_break and r_near,
+// theta at th_split), where two tables meet at their interpolation error.
+// The breaks move with the frequency and the plan does not, so the tie rule
+// is the kernel's, per fill: a class whose representative has a node pair
+// within `somm_core::remainder_tie_rel()` (1e-9) of a break is left to the
+// walk, member by member (`RemainderCounts::tied`). A member's r1 and theta
+// sit within ~2^-KEY_BITS of its representative's, far inside 1e-9, so every
+// class the kernel serves has each of its members' node pairs in its
+// representative's region.
+struct RemainderPlanGeometry {
+    int64_t n = 0;
     const double *seg_l = nullptr, *seg_r = nullptr;  // (n, 3)
-    const double *a = nullptr;                        // (n)
-    const int64_t *edge_seg0 = nullptr;               // (E + 1): the edges tile the mesh in order
-    int64_t n_edges = 0;
+    const double *h = nullptr;                        // (n): the lengths W reads (`h_per_seg`)
     double ground_z = 0.0;
+    // The raised pairs, ordered (both orders listed), as flat o * n + s.
+    const int64_t *raised = nullptr;
+    int64_t n_raised = 0;
+    int degree = 2;
 };
-// The block copies: targets (ta, tb) and their sources (sa, sb), row-major
-// in the target.
-void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std::vector<int64_t> &tb,
-                      std::vector<int64_t> &sa, std::vector<int64_t> &sb);
+// The plan for `g`, from the process's cache (keeping the newest two, the
+// direct plan beside it) or built: one family, "remainder", n x n, one code
+// bit, one block; each class's representative is kept (`rep_flat`). Never
+// null; DECLINED with the reason when the census does not serve (the cap,
+// the allowance: the direct family's per-class allowance, which its values,
+// code and representative fit).
+std::shared_ptr<const Plan> remainder_plan_for(const RemainderPlanGeometry &g, bool *built = nullptr);
+// TEST HOOK (the adversarial gate): 1 keys without the height sum, 2 on the
+// tangents' fixed-frame components (m.m and A_h, B_h as they lie) instead of
+// their dots with the separation, 3 on the centres' height DIFFERENCE in
+// place of the sum (a vertical shift keys alike). No correct plan does any.
+// Plans are keyed on it.
+void set_remainder_key_probe(int probe);
+int remainder_key_probe();
+// The plan's class map as the remainder kernel reads it
+// (`somm_core::PairReuse`'s class route).
+struct RemainderClasses {
+    int64_t n = 0, classes = 0;
+    const int32_t *map = nullptr;       // (n * n): class << 1 | code
+    const int64_t *rep_flat = nullptr;  // (classes)
+    const uint8_t *rep_code = nullptr;  // (classes)
+    const uint64_t *single = nullptr;   // (classes + 63) / 64 bits: a pair the key left its own class
+};
+RemainderClasses remainder_classes(const Plan &p);
+// The fill report's wire map of the remainder: (W, W, 3) computed, reused,
+// 0, a class's first pair computed, its others reused, and every pair of a
+// single or of a class the fill left to the walk (`tied`, (classes) bytes,
+// or null) computed.
+void remainder_wire_map(const Plan &p, const uint8_t *tied, const int32_t *wire_of_seg, int64_t n_wires,
+                        int64_t *out);
 
 // The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): block
 // `block`'s (W, W, 3) count of computed, reused and near pairs, the sentinel

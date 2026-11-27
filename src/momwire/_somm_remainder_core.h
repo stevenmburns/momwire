@@ -14,43 +14,59 @@
 
 namespace somm_core {
 
-// Repeated edge pairs the symmetric route may copy instead of fill
-// (momwire#1809). Edges are runs of consecutive segments: edge e is segments
-// [edge_seg0[e], edge_seg0[e] + edge_nseg[e]). `src[ta * n_edges + tb]` is the
-// ordered edge pair (sa * n_edges + sb) whose moment block the pair (ta, tb)
-// copies, segment k of ta standing for segment k of sa, or -1 to fill it.
-// The caller vouches that each copy is exact up to rounding: an isometry
-// keeping every height carries sa onto ta and sb onto tb (the remainder reads
-// only rho and the height sum). The kernel checks only the shape of the map
-// -- matching segment counts, every source filled rather than copied, and
-// (tb, ta) mapped to (sb, sa) -- and throws std::invalid_argument otherwise.
-// The source blocks are filled once into a cache of at most `max_jf_bytes`
-// (0: the 64 MiB default); a map whose cache would not fit is not used.
-// `copied` reports the TARGET segment pairs served from the cache (a source
-// pair's walk entries are read from it too, momwire#2073, and counted in
-// `RemainderCounts::copied` only).
+// Pair reuse on the symmetric route (momwire#1809; by class since
+// momwire#2063 step 2b, which retired the edge-block copy map):
+// `cls_map[si * ns + sj]` is segment pair (si, sj)'s class << 1 | code, in
+// the plan's coding (`mw::bspline::reuse::remainder_plan_for`, whose block
+// comment is the key). Each class but a single (`single`'s bit set: a pair
+// the key left its own) is evaluated once, at its representative
+// `rep_flat[c]` (si * ns + sj), by the walk's own per-pair calls, and every
+// member's block is that value, transposed where its code differs from
+// `rep_code[c]` (reciprocity). A class whose representative has a node pair
+// within `remainder_tie_rel()` of one of the grid's region breaks is left to
+// the walk member by member (`RemainderCounts::tied`; `tied_out`, when
+// given, (n_classes) bytes, says which). The kernel checks the map's shape
+// (classes in range, each representative in its own class with its own
+// code) and throws std::invalid_argument otherwise. The values are held for
+// the call, (n_classes, d1, d1): the plan's allowance counts them. `copied`
+// reports the MEMBER segment pairs served (a representative's own read not
+// counted).
 struct PairReuse {
-    std::ptrdiff_t n_edges = 0;
-    const int64_t *edge_seg0 = nullptr;  // (n_edges)
-    const int32_t *edge_nseg = nullptr;  // (n_edges)
-    const int32_t *seg_edge = nullptr;   // (nsI): the edge of each segment, -1 none
-    const int32_t *src = nullptr;        // (n_edges * n_edges)
+    const int32_t *cls_map = nullptr;    // (ns * ns)
+    std::ptrdiff_t n_classes = 0;
+    const int64_t *rep_flat = nullptr;   // (n_classes)
+    const uint8_t *rep_code = nullptr;   // (n_classes)
+    const uint64_t *single = nullptr;    // ((n_classes + 63) / 64), or null: no singles
+    uint8_t *tied_out = nullptr;         // (n_classes), or null
     long long copied = 0;                // out
 };
+
+// The class route's tie rule (`PairReuse`): a representative's node pair
+// within this of a region break, relative (r1 against r_break and r_near,
+// theta against th_split), leaves its class to the walk. 1e-9: a member's
+// r1 and theta lie within ~2^-40 of its representative's (the key's step),
+// so no member's node pair is in another region than its representative's.
+constexpr double REMAINDER_TIE_REL = 1e-9;
+// TEST HOOK: the tie rule's width in place of REMAINDER_TIE_REL (< 0
+// restores it; 0 turns the rule off). Bound for Python's tests only.
+void set_remainder_tie_rel(double rel);
+double remainder_tie_rel();
 
 // What the symmetric route did, for the fill report (momwire#2068), counted
 // in ORDERED segment-pair entries: `walked` the entries the tile walk formed
 // (a segment in two tiles' support halos is walked in both, so this can pass
-// ns^2), `copied` those of them read from the pair-reuse cache -- a target's
-// copy or, since momwire#2073, a source pair's own block, which the walk no
-// longer forms again -- and `cached` the entries filled into that cache up
-// front (0 when no map was used). The kernel evaluated
-// `walked - copied + cached` entries. Tallied per tile pair
-// and per cache block, never inside the per-pair loop.
+// ns^2), `copied` those of them served from a class value (a representative's
+// own read included, momwire#2073's rule: the walk never forms it again),
+// and `cached` the classes evaluated up front (0 when no map was used). The
+// kernel evaluated `walked - copied + cached` entries. `tied` the classes the
+// tie rule left to the walk and `tied_pairs` their pairs. Tallied per tile
+// pair, never inside the per-pair loop.
 struct RemainderCounts {
     long long walked = 0;
     long long copied = 0;
     long long cached = 0;
+    long long tied = 0;
+    long long tied_pairs = 0;
 };
 
 // Q (nI, nJ) C order: obs_nodes (nsI, q, 3), obs_tang (nsI, 3), W_obs
@@ -59,8 +75,8 @@ struct RemainderCounts {
 // block's call (obs == src throughout), which takes the symmetric route.
 // `max_jf_bytes` 0: the 64 MiB default slab. Cancellation polls
 // `cancel_flag` (0 = none) and throws AbortedError after the loops drain.
-// `reuse` (symmetric route only; null: none) copies repeated edge-pair
-// blocks; with no map the kernel is the one it always was, bit for bit.
+// `reuse` (symmetric route only; null: none) serves each class's members from
+// its value; with no map the kernel is the one it always was, bit for bit.
 void remainder_bspline_Q(const somm_proj::GridView &G, double ground_z, double k,
                          const double *obs_nodes, const double *obs_tang, const double *W_obs,
                          std::ptrdiff_t nsI, const double *src_nodes, const double *src_tang,

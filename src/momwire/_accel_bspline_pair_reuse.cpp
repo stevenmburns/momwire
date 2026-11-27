@@ -215,29 +215,73 @@ void assemble_image(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, I6
         r1, 0, n, omega, eps, mu, scale, ndb::in(Z), cancel_flag);
 }
 
-py::tuple remainder_blocks(F64 seg_l, F64 seg_r, F64 a, I64 edge_seg0, double ground_z) {
-    const int64_t n = static_cast<int64_t>(a.size()), E = static_cast<int64_t>(edge_seg0.size()) - 1;
+// momwire#2063 step 2b: the Sommerfeld remainder's plan of segment pairs.
+// `raised` the ordered pairs whose remainder order is raised, flat o * n + s.
+PlanHandle remainder_plan(F64 seg_l, F64 seg_r, F64 h, double ground_z, I64 raised, int degree) {
+    const int64_t n = static_cast<int64_t>(h.size());
     if (seg_l.ndim() != 2 || seg_l.shape(0) != n || seg_l.shape(1) != 3 || seg_r.ndim() != 2 ||
-        seg_r.shape(0) != n || seg_r.shape(1) != 3 || E < 1 || edge_seg0.data()[E] != n)
-        throw std::invalid_argument("bspline pair_reuse: (n, 3) end points, n radii, E + 1 edge starts ending at n");
-    br::RemainderGeometry g;
+        seg_r.shape(0) != n || seg_r.shape(1) != 3)
+        throw std::invalid_argument("bspline pair_reuse: (n, 3) end points and n lengths");
+    br::RemainderPlanGeometry g;
+    g.n = n;
     g.seg_l = seg_l.data();
     g.seg_r = seg_r.data();
-    g.a = a.data();
-    g.edge_seg0 = edge_seg0.data();
-    g.n_edges = E;
+    g.h = h.data();
     g.ground_z = ground_z;
-    std::vector<int64_t> ta, tb, sa, sb;
+    g.raised = raised.data();
+    g.n_raised = static_cast<int64_t>(raised.size());
+    g.degree = degree;
+    PlanHandle out;
     {
         py::gil_scoped_release release;
-        br::remainder_blocks(g, ta, tb, sa, sb);
+        out.plan = br::remainder_plan_for(g, &out.built);
     }
-    auto arr = [](const std::vector<int64_t> &v) {
-        py::array_t<int64_t> out(static_cast<py::ssize_t>(v.size()));
-        std::copy(v.begin(), v.end(), out.mutable_data());
-        return out;
-    };
-    return py::make_tuple(arr(ta), arr(tb), arr(sa), arr(sb));
+    return out;
+}
+
+// The remainder plan's class map, representatives, their codes and the
+// singles' bits as the remainder kernel's class route reads them: views of
+// the plan's own arrays (no copy), each holding the plan alive.
+py::tuple remainder_arrays(const PlanHandle &h) {
+    const br::RemainderClasses c = br::remainder_classes(*h.plan);
+    if (!c.map) throw std::invalid_argument("bspline pair_reuse: not a served remainder plan");
+    py::object base = py::cast(h);
+    const py::ssize_t n = static_cast<py::ssize_t>(c.n), C = static_cast<py::ssize_t>(c.classes);
+    py::array_t<int32_t> map({n, n}, {static_cast<py::ssize_t>(n * sizeof(int32_t)),
+                                      static_cast<py::ssize_t>(sizeof(int32_t))},
+                             c.map, base);
+    py::array_t<int64_t> rep(C, c.rep_flat, base);
+    py::array_t<uint8_t> code(C, c.rep_code, base);
+    py::object single = py::none();
+    if (c.single) single = py::array_t<uint64_t>((C + 63) / 64, c.single, base);
+    for (py::array a : {py::array(map), py::array(rep), py::array(code)})
+        py::detail::array_proxy(a.ptr())->flags &= ~py::detail::npy_api::NPY_ARRAY_WRITEABLE_;
+    return py::make_tuple(map, rep, code, single);
+}
+
+py::object remainder_wire_map(const PlanRef &r, py::object tied, I32 wire_of_seg, int64_t n_wires) {
+    const std::shared_ptr<const br::Plan> p = r.plan.lock();
+    if (!p) return py::none();
+    const br::RemainderClasses c = br::remainder_classes(*p);
+    if (!c.map) throw std::invalid_argument("bspline pair_reuse: not a served remainder plan");
+    if (wire_of_seg.size() != c.n) throw std::invalid_argument("bspline pair_reuse: one wire per segment");
+    if (n_wires < 1) throw std::invalid_argument("bspline pair_reuse: n_wires must be positive");
+    const int32_t *w = wire_of_seg.data();
+    for (int64_t s = 0; s < c.n; s++)
+        if (w[s] < 0 || w[s] >= n_wires) throw std::invalid_argument("bspline pair_reuse: wire out of range");
+    py::array_t<uint8_t, py::array::c_style | py::array::forcecast> t;
+    if (!tied.is_none()) {
+        t = tied.cast<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>>();
+        if (t.size() != c.classes) throw std::invalid_argument("bspline pair_reuse: one tied flag per class");
+    }
+    py::array_t<int64_t> out({static_cast<py::ssize_t>(n_wires), static_cast<py::ssize_t>(n_wires),
+                              static_cast<py::ssize_t>(3)});
+    int64_t *o = out.mutable_data();
+    {
+        py::gil_scoped_release release;
+        br::remainder_wire_map(*p, tied.is_none() ? nullptr : t.data(), w, n_wires, o);
+    }
+    return out;
 }
 
 py::object wire_map(const PlanRef &r, I32 wire_of_seg, int64_t n_wires, int block) {
@@ -293,7 +337,11 @@ void register_bspline_pair_reuse(py::module_ &m) {
                                "Whether the process's cache (or a fill) still holds the plan.")
         .def("wire_map", &wire_map, py::arg("wire_of_seg"), py::arg("n_wires"), py::arg("block") = 0,
              "The (W, W, 3) int64 map of observer wire x source wire x (computed, reused, near) of one "
-             "block (0 direct, 1 image), or None when the plan is gone.");
+             "block (0 direct, 1 image), or None when the plan is gone.")
+        .def("remainder_wire_map", &remainder_wire_map, py::arg("tied"), py::arg("wire_of_seg"),
+             py::arg("n_wires"),
+             "A remainder plan's (W, W, 3) map of computed, reused and 0 (momwire#2063 step 2b), the "
+             "classes `tied` names ((classes,) uint8, or None) counted computed; None when the plan is gone.");
     py::class_<PlanHandle>(m, "BSplineReusePlan",
                            "bs2's fill-pair reuse plan (momwire#2063): the classes of the (observer "
                            "segment, source segment) pairs of the moment fill, from the process's cache.")
@@ -332,6 +380,10 @@ void register_bspline_pair_reuse(py::module_ &m) {
              "momwire#2166: observer rows r0..r1 of one edge (its own columns o0..o1: `own`, "
              "(d + 1, d + 1, r1 - r0, o1 - o0), or zero for None) added into Z from the class values, "
              "as assemble_Z_bspline_windowed adds the gathered window, without writing the window.")
+        .def("remainder_arrays", &remainder_arrays,
+             "A remainder plan's (class map (n, n) int32, representatives (C,) int64, their codes (C,) "
+             "uint8, singles' bits (C + 63) // 64 uint64 or None), read-only views the remainder "
+             "kernel's class route takes (momwire#2063 step 2b).")
         .def("ref", [](const PlanHandle &h) { return PlanRef{h.plan}; }, "The plan, held weakly.");
     m.def("bspline_reuse_plan", &reuse_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
           py::arg("edge"), py::arg("group_i"), py::arg("group_j"), py::arg("b_src"), py::arg("thresholds"),
@@ -339,9 +391,13 @@ void register_bspline_pair_reuse(py::module_ &m) {
           py::arg("img_mode") = py::none(),
           "The reuse plan for this geometry, from the process's cache or built; with the mirrored end "
           "points and each segment's own-image mode, its image block too (momwire#2063 step 2a).");
-    m.def("bspline_reuse_remainder_blocks", &remainder_blocks, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
-          py::arg("edge_seg0"), py::arg("ground_z"),
-          "The Sommerfeld remainder's block copies, from its census of edge pairs: (ta, tb, sa, sb).");
+    m.def("bspline_reuse_remainder_plan", &remainder_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("h"),
+          py::arg("ground_z"), py::arg("raised"), py::arg("degree"),
+          "The Sommerfeld remainder's plan of segment pairs by plane invariants (momwire#2063 step 2b), "
+          "from the process's cache or built.");
+    m.def("bspline_reuse_set_remainder_key_probe", &br::set_remainder_key_probe, py::arg("probe"),
+          "TEST HOOK (momwire#2063 step 2b): 1 keys the remainder without the height sum, 2 on the "
+          "tangents' fixed-frame components, 3 on the height difference; 0 restores.");
     m.def("bspline_reuse_plan_of_classes", &plan_of_classes, py::arg("cls"),
           "TEST HOOK (the ExternalClasses sub-gate): a plan of the given (n, n) classes.");
     m.def("bspline_reuse_cache", []() {
