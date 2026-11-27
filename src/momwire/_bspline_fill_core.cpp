@@ -347,7 +347,6 @@ bool is_toeplitz(const std::vector<double> &arc) {
 // segments or more takes the Toeplitz form of its reg geometry, and (straight
 // and uniform) the offset routes.
 constexpr size_t REG_TOEPLITZ_MIN_N = 12;
-constexpr double PAIR_REUSE_RTOL = 1e-12;                 // `_PAIR_REUSE_RTOL`
 
 // `_seg_seg_reg_geometry`'s O(N) half on the arcs `arc`: the nodes s_q
 // (n q) and the weight-folded powers wu (nd, n, q).
@@ -463,65 +462,6 @@ std::vector<EdgeIng> edge_ingredients(const Geometry &g, const std::vector<doubl
     return out;
 }
 
-// `_offset_edges(geom)` (`free` false: each horizontal edge "toeplitz", 1,
-// each vertical one "hankel", 2) and `_free_offset_edges(geom)` (`free`
-// true: every straight uniform edge, 0): {s0, s1, kind}.
-struct OffsetEdge {
-    int64_t s0, s1;
-    int kind;
-};
-std::vector<OffsetEdge> offset_edges_of(const Geometry &g, bool free_) {
-    std::vector<OffsetEdge> out;
-    const int64_t N = g.n_segs_total;
-    double ml = 0.0, mr = 0.0;
-    for (int64_t q = 0; q < 3 * N; q++) {
-        ml = std::max(ml, std::fabs(g.seg_l[static_cast<size_t>(q)]));
-        mr = std::max(mr, std::fabs(g.seg_r[static_cast<size_t>(q)]));
-    }
-    const double scale = std::max(std::max(ml, mr), 1e-30);
-    const double tol = PAIR_REUSE_RTOL * scale;
-    for (size_t w = 0; w < g.per_wire.size(); w++) {
-        const WireGeometry &pw = g.per_wire[w];
-        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
-            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
-            const int64_t n = s1 - s0;
-            if (n < static_cast<int64_t>(REG_TOEPLITZ_MIN_N)) continue;
-            const double *L = &g.seg_l[3 * static_cast<size_t>(s0)], *R = &g.seg_r[3 * static_cast<size_t>(s0)];
-            std::vector<double> v(3 * static_cast<size_t>(n)), h(static_cast<size_t>(n));
-            for (int64_t i = 0; i < n; i++) {
-                for (int c = 0; c < 3; c++) v[3 * i + c] = R[3 * i + c] - L[3 * i + c];
-                // np.linalg.norm(v, axis=1): sqrt(add.reduce(v * v))
-                h[i] = std::sqrt((v[3 * i] * v[3 * i] + v[3 * i + 1] * v[3 * i + 1]) + v[3 * i + 2] * v[3 * i + 2]);
-            }
-            bool ok = true;
-            for (int64_t i = 0; i < n && ok; i++) ok = std::fabs(h[i] - h[0]) <= 0.0 + 1e-12 * std::fabs(h[0]);
-            if (!ok) continue;
-            double dv = 0.0, dj = 0.0;
-            for (int64_t i = 0; i < n; i++)
-                for (int c = 0; c < 3; c++) dv = std::max(dv, std::fabs(v[3 * i + c] - v[c]));
-            for (int64_t i = 0; i + 1 < n; i++)
-                for (int c = 0; c < 3; c++) dj = std::max(dj, std::fabs(L[3 * (i + 1) + c] - R[3 * i + c]));
-            if (dv > tol || dj > tol) continue;
-            if (free_) {
-                out.push_back({s0, s1, 0});
-                continue;
-            }
-            // ends = L + R[-1:]
-            double dz = 0.0, dxy = 0.0;
-            for (int64_t i = 0; i <= n; i++) {
-                const double *p = i < n ? &L[3 * i] : &R[3 * (n - 1)];
-                dz = std::max(dz, std::fabs(p[2] - L[2]));
-                for (int c = 0; c < 2; c++) dxy = std::max(dxy, std::fabs(p[c] - L[c]));
-            }
-            if (dz <= tol)
-                out.push_back({s0, s1, 1});
-            else if (dxy <= tol)
-                out.push_back({s0, s1, 2});
-        }
-    }
-    return out;
-}
-
 // `mirror_positions`: 2 * ground_z - z, each end point.
 Segs mirrored(const Geometry &g, double gz) {
     Segs img;
@@ -559,11 +499,9 @@ bool near_image_edge(const Geometry &g, const std::vector<double> &radius_per_wi
     return true;
 }
 
-// `_image_edge_modes(geom)`: the edges whose own image block the offset
-// route assembles (under `offset_reuse`), never one the near-image fixup
-// corrects; and the starts of those it corrects.
-std::vector<OffsetEdge> image_offset_edges(const Geometry &g, const std::vector<double> &radius_per_wire,
-                                           const FillParams &fp, double gz, std::vector<int64_t> *near_out) {
+// `_image_edge_modes(geom)`: the starts of the edges whose own image block
+// the near-image fixup corrects (momwire#631).
+std::vector<int64_t> near_image_starts(const Geometry &g, const std::vector<double> &radius_per_wire, double gz) {
     std::vector<int64_t> near;
     for (size_t w = 0; w < g.per_wire.size(); w++)
         for (size_t e = 0; e + 1 < g.per_wire[w].edge_offsets.size(); e++) {
@@ -571,12 +509,7 @@ std::vector<OffsetEdge> image_offset_edges(const Geometry &g, const std::vector<
             if (near_image_edge(g, radius_per_wire, gz, w, e, a_eff))
                 near.push_back(g.seg_offsets[w] + g.per_wire[w].edge_offsets[e]);
         }
-    std::vector<OffsetEdge> offset;
-    if (fp.offset_reuse)
-        for (const OffsetEdge &o : offset_edges_of(g, false))
-            if (std::find(near.begin(), near.end(), o.s0) == near.end()) offset.push_back(o);
-    if (near_out) *near_out = near;
-    return offset;
+    return near;
 }
 
 // `_reuse_values(plan, geom, k, ladder, ek)`: each class's (d+1, d+1)
@@ -611,129 +544,6 @@ std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, co
         fp.held->values = values;
     }
     return values;
-}
-
-// `_add_block(T, rows, cols, B, sign)`: by slices when both index sets are
-// ranges (`T[r, c] += B` / `-= B`), else `T[np.ix_(rows, cols)] += sign * B`.
-void add_block(std::vector<cdouble> &T, int64_t nb, const std::vector<int64_t> &rows, const std::vector<int64_t> &cols,
-               const std::vector<cdouble> &B, int sign) {
-    const auto span = [](const std::vector<int64_t> &ix) {
-        return !ix.empty() && ix.back() - ix.front() + 1 == static_cast<int64_t>(ix.size());
-    };
-    const size_t nr = rows.size(), nc = cols.size();
-    const bool sliced = span(rows) && span(cols);
-    for (size_t i = 0; i < nr; i++)
-        for (size_t j = 0; j < nc; j++) {
-            cdouble &t = T[static_cast<size_t>(rows[i] * nb + cols[j])];
-            cdouble v = B[i * nc + j];
-            if (!sliced) v = nec5::replay::np_cmul(cdouble(static_cast<double>(sign), 0.0), v);
-            if (sliced && sign < 0)
-                t = cdouble(t.real() - v.real(), t.imag() - v.imag());
-            else
-                t = cdouble(t.real() + v.real(), t.imag() + v.imag());
-        }
-}
-
-// `_offset_basis_block(Z, sl, kind, tab, supp, polys, assemble)`: an offset
-// edge's own block added to Z from its distinct pair moments `tab` (nd, nd,
-// 2n - 1), wings off the edge excluded, row chunks of the edge's moment
-// window served from `tab` ("toeplitz": offset j - i; `hankel`: sum i + j)
-// and landed by `assemble` on the edge's own bases, then added to Z.
-using OffsetAssemble = std::function<void(const Block &J, const std::vector<int64_t> &sub_supp,
-                                          const std::vector<double> &sub_polys, int64_t k_sel, int64_t lo,
-                                          int64_t hi, const std::vector<int64_t> &m_idx, std::vector<cdouble> &B)>;
-void offset_basis_block(std::vector<cdouble> &Z, const Basis &b, int64_t s0, int64_t s1, bool hankel,
-                        const std::vector<cdouble> &tab, double swept_mem_mb, const OffsetAssemble &assemble) {
-    const int nd = b.degree + 1;
-    const int64_t nb = b.n_basis, n = s1 - s0;
-    std::vector<uint8_t> on(static_cast<size_t>(nb * nd), 0);
-    std::vector<int64_t> sel;
-    for (int64_t m = 0; m < nb; m++) {
-        bool any = false;
-        for (int a = 0; a < nd; a++) {
-            bool real = false;
-            for (int p = 0; p < nd; p++) real = real || b.polys[static_cast<size_t>((m * nd + a) * nd + p)] != 0.0;
-            const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + a)];
-            const bool o = real && sg >= s0 && sg < s1;
-            on[static_cast<size_t>(m * nd + a)] = o;
-            any = any || o;
-        }
-        if (any) sel.push_back(m);
-    }
-    const int64_t k_sel = static_cast<int64_t>(sel.size());
-    std::vector<int64_t> sub_supp(static_cast<size_t>(k_sel * nd));
-    std::vector<double> sub_polys(static_cast<size_t>(k_sel * nd * nd));
-    for (int64_t r = 0; r < k_sel; r++) {
-        const int64_t m = sel[static_cast<size_t>(r)];
-        int64_t park = std::numeric_limits<int64_t>::max();
-        for (int a = 0; a < nd; a++)
-            if (on[static_cast<size_t>(m * nd + a)]) park = std::min(park, b.supp_seg[static_cast<size_t>(m * nd + a)]);
-        for (int a = 0; a < nd; a++) {
-            const bool o = on[static_cast<size_t>(m * nd + a)];
-            sub_supp[static_cast<size_t>(r * nd + a)] = o ? b.supp_seg[static_cast<size_t>(m * nd + a)] : park;
-            for (int p = 0; p < nd; p++)
-                sub_polys[static_cast<size_t>((r * nd + a) * nd + p)] =
-                    b.polys[static_cast<size_t>((m * nd + a) * nd + p)] * (o ? 1.0 : 0.0);
-        }
-    }
-    std::vector<cdouble> B(static_cast<size_t>(k_sel * k_sel), cdouble(0.0, 0.0));
-    const int64_t row_bytes = static_cast<int64_t>(nd * nd) * n * 16;
-    // `max(1, min(n, mb_rows(min(swept_mem_mb, 8), row_bytes)))`
-    const double mb = std::min(swept_mem_mb, 8.0);
-    const int64_t rows_fit =
-        mb == std::floor(mb) ? std::max<int64_t>(1, (static_cast<int64_t>(mb) * 1024 * 1024) / row_bytes)
-                             : std::max<int64_t>(1, static_cast<int64_t>(std::floor((mb * 1024 * 1024) /
-                                                                                     static_cast<double>(row_bytes))));
-    const int64_t chunk = std::max<int64_t>(1, std::min(n, rows_fit));
-    const size_t T = static_cast<size_t>(2 * n - 1);
-    for (int64_t c0 = 0; c0 < n; c0 += chunk) {
-        const int64_t c1 = std::min(n, c0 + chunk), m = c1 - c0;
-        Block J(static_cast<size_t>(nd * nd * m * n), false);
-        for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
-            for (int64_t i = 0; i < m; i++)
-                for (int64_t j = 0; j < n; j++)
-                    J[(pq * static_cast<size_t>(m) + static_cast<size_t>(i)) * static_cast<size_t>(n) +
-                      static_cast<size_t>(j)] =
-                        tab[pq * T + static_cast<size_t>(hankel ? c0 + i + j : j - (c0 + i) + n - 1)];
-        const int64_t lo = s0 + c0, hi = s0 + c1;
-        std::vector<int64_t> m_idx;
-        for (int64_t r = 0; r < k_sel; r++)
-            for (int a = 0; a < nd; a++) {
-                const int64_t sg = sub_supp[static_cast<size_t>(r * nd + a)];
-                if (sg >= lo && sg < hi) {
-                    m_idx.push_back(r);
-                    break;
-                }
-            }
-        assemble(J, sub_supp, sub_polys, k_sel, lo, hi, m_idx, B);
-    }
-    add_block(Z, nb, sel, sel, B, 1);
-}
-
-// `_offset_table(row, n, kind, reciprocal)`: (nd, nd, 2n - 1) from the first
-// row's moments (and the last's), each (nd, nd, 1, n).
-std::vector<cdouble> offset_table(const std::function<std::vector<cdouble>(int64_t)> &row, int64_t n, int nd,
-                                  bool hankel, bool reciprocal) {
-    const size_t T = static_cast<size_t>(2 * n - 1), N = static_cast<size_t>(n);
-    std::vector<cdouble> tab(static_cast<size_t>(nd * nd) * T);
-    const std::vector<cdouble> first = row(0);
-    if (!hankel && reciprocal) {
-        for (int p = 0; p < nd; p++)
-            for (int P = 0; P < nd; P++)
-                for (size_t k = 0; k < T; k++)
-                    tab[(static_cast<size_t>(p) * nd + P) * T + k] =
-                        k >= N - 1 ? first[(static_cast<size_t>(p) * nd + P) * N + (k - (N - 1))]
-                                   : first[(static_cast<size_t>(P) * nd + p) * N + (N - 1 - k)];
-        return tab;
-    }
-    const std::vector<cdouble> last = row(n - 1);
-    for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
-        for (size_t k = 0; k < T; k++)
-            if (!hankel)
-                tab[pq * T + k] = k >= N - 1 ? first[pq * N + (k - (N - 1))] : last[pq * N + k];
-            else
-                tab[pq * T + k] = k < N ? first[pq * N + k] : last[pq * N + (k - N + 1)];
-    return tab;
 }
 
 }  // namespace
@@ -773,14 +583,10 @@ std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vect
         // `_reuse_image_args`: the mirrored end points and each segment's
         // own-image mode; a declined image census leaves the direct plan.
         const Segs img = mirrored(g, fp.image_gz);
-        std::vector<int64_t> near;
-        const std::vector<OffsetEdge> offset = image_offset_edges(g, radius_per_wire, fp, fp.image_gz, &near);
+        const std::vector<int64_t> near = near_image_starts(g, radius_per_wire, fp.image_gz);
         std::vector<int8_t> mode(static_cast<size_t>(N), reuse::Keyed);
         for (const EdgeIng &ed : edge_ingredients(g, radius_per_wire)) {
-            int8_t m = reuse::Keyed;
-            for (const OffsetEdge &o : offset)
-                if (o.s0 == ed.s0) m = reuse::OffsetRoute;
-            if (m == reuse::Keyed && std::find(near.begin(), near.end(), ed.s0) != near.end()) m = reuse::OwnPairs;
+            const int8_t m = std::find(near.begin(), near.end(), ed.s0) != near.end() ? reuse::OwnPairs : reuse::Keyed;
             for (int64_t q = ed.s0; q < ed.s1; q++) mode[static_cast<size_t>(q)] = m;
         }
         reuse::Geometry ri = rg;
@@ -792,13 +598,6 @@ std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vect
     }
     std::shared_ptr<const reuse::Plan> p = reuse::plan_for(rg);
     return p->declined.empty() ? p : nullptr;
-}
-
-std::vector<std::pair<int64_t, int64_t>> free_offset_edges(const Geometry &g, const FillParams &fp) {
-    std::vector<std::pair<int64_t, int64_t>> out;
-    if (!fp.offset_reuse || fp.degree > BSPLINE_ACCEL_MAX_D) return out;
-    for (const OffsetEdge &e : offset_edges_of(g, true)) out.push_back({e.s0, e.s1});
-    return out;
 }
 
 std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair) {
@@ -1204,30 +1003,8 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
         return offedge(all.take(rows), all.take(cols), a_sub, fp.k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
                        fp.ladder);
     };
-    // momwire#2063: the census's plan; momwire#1809 step 2: the free offset
-    // edges, whose own blocks are assembled from their distinct moments
-    // (`_free_offset_block`), so the sweep skips their own columns for their
-    // rows and the fixup below skips them
+    // momwire#2063: the census's plan
     const reuse::Plan *plan = fp.plan.get();
-    const std::vector<std::pair<int64_t, int64_t>> offset =
-        fp.sweep_shared ? std::vector<std::pair<int64_t, int64_t>>() : free_offset_edges(g, fp);
-    const auto offset_at = [&](int64_t r) -> const std::pair<int64_t, int64_t> * {
-        for (const auto &o : offset)
-            if (o.first <= r && r < o.second) return &o;
-        return nullptr;
-    };
-    const auto is_offset_start = [&](int64_t s) {
-        for (const auto &o : offset)
-            if (o.first == s) return true;
-        return false;
-    };
-    std::vector<int64_t> cuts;
-    for (const auto &o : offset) {
-        cuts.push_back(o.first);
-        cuts.push_back(o.second);
-    }
-    std::sort(cuts.begin(), cuts.end());
-    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
     std::vector<cdouble> values;
     std::vector<EdgeIng> edges_all;
     std::vector<int64_t> edge_cuts;
@@ -1242,7 +1019,7 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
         if (plan != nullptr) {
             // `_reuse_block`: the window assembled from the class values, cut
             // at the edges; each piece's own-edge columns the sweep's own
-            // fill, or zero on an offset edge (its own block comes later).
+            // fill.
             // The window is never written whole (momwire#2166): each tile of
             // Z reads the class values as it runs, `_reuse_block`'s
             // `plan.assemble`, bit for bit the gathered window's sum.
@@ -1255,8 +1032,7 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                 const size_t e = static_cast<size_t>(std::upper_bound(edge_cuts.begin(), edge_cuts.end(), r0) -
                                                      edge_cuts.begin()) - 1;
                 const int64_t o0 = edges_all[e].s0, o1 = edges_all[e].s1;
-                const bool off_edge = is_offset_start(o0);
-                const Block own = off_edge ? Block() : moments(r0, r1, o0, o1);
+                const Block own = moments(r0, r1, o0, o1);
                 reuse::Window w;
                 w.plan = plan;
                 w.values = values.data();
@@ -1265,7 +1041,7 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                 w.r1 = r1;
                 w.o0 = o0;
                 w.o1 = o1;
-                w.own = off_edge ? nullptr : own.data();
+                w.own = own.data();
                 reuse::check_window(w);
                 const std::vector<int64_t> m_idx = touching(r0, r1);
                 assemble_Z_bspline_windowed_tiles(
@@ -1274,29 +1050,6 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                     },
                     sa, pa, ta, borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())}),
                     borrow(all_n, {static_cast<nd::ssize_t>(all_n.size())}), r0, r1, 0, N, omega, eps, mu, Za, 0);
-            }
-            continue;
-        }
-        if (!offset.empty()) {
-            // `_sweep_block` beside offset edges: the window cut at their
-            // ends, a run on one skipping its own columns
-            std::vector<int64_t> bounds{w0};
-            for (int64_t c : cuts)
-                if (c > w0 && c < w1) bounds.push_back(c);
-            bounds.push_back(w1);
-            for (size_t t = 0; t + 1 < bounds.size(); t++) {
-                const int64_t r0 = bounds[t], r1 = bounds[t + 1];
-                const std::pair<int64_t, int64_t> *sl = offset_at(r0);
-                std::vector<std::pair<int64_t, int64_t>> spans;
-                if (sl == nullptr)
-                    spans.push_back({0, N});
-                else
-                    spans = {{0, sl->first}, {sl->second, N}};
-                const std::vector<int64_t> m_idx = touching(r0, r1);
-                for (const auto &sp : spans)
-                    if (sp.second > sp.first)
-                        accumulate(moments(r0, r1, sp.first, sp.second), r0, r1, sp.first, sp.second, m_idx,
-                                   touching(sp.first, sp.second));
             }
             continue;
         }
@@ -1318,7 +1071,6 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
             const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
             const size_t n = arc.size() - 1;
             if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
-            if (is_offset_start(s0)) continue;  // its own block is the offset route's
             const bool toep = fp.offset_reuse && n >= REG_TOEPLITZ_MIN_N;
             const double h = arc[1] - arc[0];
             const nd::array_t<double> table =
@@ -1395,78 +1147,6 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                 const nd::array_t<std::complex<double>> corr = same_edge_corr_combine(stw, regw, Jw);
                 accumulate(Block::adopt(corr), r0, r1, s0, s1, touching(r0, r1), e_idx);
             }
-        }
-    }
-    if (!offset.empty()) {
-        // `_free_offset_table` / `_free_offset_block`, edge by edge; under
-        // `pair_reuse` offset edges of the same arcs and radius share one
-        // table (`_offset_table_sources`): equal inputs, equal bits
-        const std::vector<EdgeIng> ing = edge_ingredients(g, radius_per_wire);
-        const auto ing_at = [&](int64_t s0) -> const EdgeIng & {
-            for (const EdgeIng &e : ing)
-                if (e.s0 == s0) return e;
-            throw std::logic_error("bspline: an offset edge that is not an edge");
-        };
-        std::map<int64_t, std::vector<cdouble>> tables;
-        const CF tan_c = ta;
-        const auto free_assemble = [&](int64_t s0, int64_t s1) {
-            return [&, s0, s1](const Block &J, const std::vector<int64_t> &sub_supp, const std::vector<double> &sub_polys,
-                               int64_t k_sel, int64_t lo, int64_t hi, const std::vector<int64_t> &m_idx,
-                               std::vector<cdouble> &B) {
-                const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> Jw =
-                    borrow(J, {nd, nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(s1 - s0)});
-                const CI ssa = borrow(sub_supp, {static_cast<nd::ssize_t>(k_sel), nd});
-                const CF spa = borrow(sub_polys, {static_cast<nd::ssize_t>(k_sel), nd, nd});
-                const CI mi = borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())});
-                std::vector<int64_t> ar(static_cast<size_t>(k_sel));
-                for (int64_t r = 0; r < k_sel; r++) ar[static_cast<size_t>(r)] = r;
-                const CI ni = borrow(ar, {static_cast<nd::ssize_t>(k_sel)});
-                nd::array_t<std::complex<double>> Ba =
-                    borrow_mut(B, {static_cast<nd::ssize_t>(k_sel), static_cast<nd::ssize_t>(k_sel)});
-                assemble_Z_bspline_windowed(Jw, ssa, spa, tan_c, mi, ni, lo, hi, s0, s1, omega, eps, mu, Ba, 0,
-                                            nd::none(), false);
-            };
-        };
-        for (const auto &o : offset) {
-            const EdgeIng &e = ing_at(o.first);
-            int64_t src = o.first;
-            if (fp.pair_reuse)
-                for (const auto &p : offset) {
-                    const EdgeIng &f = ing_at(p.first);
-                    if (f.a_w == e.a_w && f.arc->size() == e.arc->size() &&
-                        std::memcmp(f.arc->data(), e.arc->data(), e.arc->size() * sizeof(double)) == 0) {
-                        src = p.first;
-                        break;
-                    }
-                }
-            auto hit = tables.find(src);
-            if (hit == tables.end()) {
-                const EdgeIng &se = ing_at(src);
-                const std::vector<double> &arc = *se.arc;
-                const size_t n = arc.size() - 1;
-                const double h = arc[1] - arc[0];
-                const nd::array_t<double> table =
-                    fp.extended_kernel ? seg_seg_static_moments_bspline_uniform_ek_table(h, se.a_w, n, d, se.a_w)
-                                       : seg_seg_static_moments_bspline_uniform_table(h, se.a_w, n, d);
-                const CF stab = CF::borrow(table.buffer());
-                std::vector<double> s_q, wu;
-                size_t q = 0;
-                reg_nodes(arc, fp.n_qp_same_edge, nd, s_q, wu, q);
-                const auto row = [&](int64_t i) {
-                    const size_t ii = static_cast<size_t>(i);
-                    const nd::array_t<double> st = toeplitz_gather_rows(stab, n, ii, ii + 1);
-                    const std::vector<cdouble> rg =
-                        reg_rows_dense(s_q, wu, q, n, nd, se.a_w, fp.k, fp.extended_kernel, ii, ii + 1);
-                    std::vector<cdouble> out(rg.size());
-                    const double *sp = st.data();
-                    for (size_t t = 0; t < out.size(); t++)
-                        out[t] = cdouble(sp[t] + rg[t].real(), 0.0 + rg[t].imag());
-                    return out;
-                };
-                hit = tables.emplace(src, offset_table(row, static_cast<int64_t>(n), nd, false, false)).first;
-            }
-            offset_basis_block(Z, b, o.first, o.second, false, hit->second, swept_mem_mb,
-                               free_assemble(o.first, o.second));
         }
     }
     return Z;
@@ -3007,19 +2687,8 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
     const auto near_image = [&](size_t w, size_t e, double &a_eff) {
         return near_image_edge(g, radius_per_wire, gr.ground_z, w, e, a_eff);
     };
-    // momwire#1809 step 2: under `offset_reuse` an offset edge's own image
-    // block is assembled from its distinct moments (`_image_offset_block`),
-    // not swept; never for an edge the near-image fixup corrects
-    const std::vector<OffsetEdge> offset = image_offset_edges(g, radius_per_wire, fp, gr.ground_z, nullptr);
     // momwire#2063 step 2a: the plan's image block (`_image_reuse_plan`)
     const reuse::Plan *plan = fp.plan && reuse::has_image(*fp.plan) ? fp.plan.get() : nullptr;
-    std::vector<int64_t> cuts;
-    for (const OffsetEdge &o : offset) {
-        cuts.push_back(o.s0);
-        cuts.push_back(o.s1);
-    }
-    std::sort(cuts.begin(), cuts.end());
-    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
     // `_image_moments(r0, r1, c0, c1)`
     const auto image_moments = [&](int64_t r0, int64_t r1, int64_t c0, int64_t c1) {
         const std::vector<size_t> rows = range(r0, r1), cols = range(c0, c1);
@@ -3054,8 +2723,7 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
         const int64_t i1 = std::min(i0 + chunk, N);
         if (plan != nullptr) {
             // `_image_block_plan`: the chunk against every source from the
-            // class values, each pair weighted by its own (w_A, w_Phi), an
-            // offset edge's own block zero (the offset route's)
+            // class values, each pair weighted by its own (w_A, w_Phi)
             std::vector<cdouble> wA, wP;
             weights(i0, i1, wA, wP);
             using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
@@ -3071,38 +2739,6 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
                 std::complex<double>(-1.0, 0.0), Za, 0);
             continue;
         }
-        if (!offset.empty()) {
-            // `_image_block_split`: the chunk's rows run by run, a run on an
-            // offset edge skipping that edge's own columns
-            std::vector<int64_t> bounds{i0};
-            for (int64_t c : cuts)
-                if (c > i0 && c < i1) bounds.push_back(c);
-            bounds.push_back(i1);
-            for (size_t t = 0; t + 1 < bounds.size(); t++) {
-                const int64_t r0 = bounds[t], r1 = bounds[t + 1];
-                const OffsetEdge *hit = nullptr;
-                for (const OffsetEdge &o : offset)
-                    if (o.s0 <= r0 && r0 < o.s1) {
-                        hit = &o;
-                        break;
-                    }
-                std::vector<std::pair<int64_t, int64_t>> spans;
-                if (hit == nullptr)
-                    spans.push_back({0, N});
-                else
-                    for (const auto &sp : {std::make_pair(int64_t(0), hit->s0), std::make_pair(hit->s1, N)})
-                        if (sp.second > sp.first) spans.push_back(sp);
-                if (spans.empty()) continue;
-                std::vector<cdouble> wA, wP;
-                weights(r0, r1, wA, wP);
-                const std::vector<int64_t> m_idx = touching(r0, r1);
-                for (const auto &sp : spans)
-                    assemble(image_moments(r0, r1, sp.first, sp.second), cols_of(wA, r1 - r0, sp.first, sp.second),
-                             cols_of(wP, r1 - r0, sp.first, sp.second), m_idx, touching(sp.first, sp.second), r0,
-                             r1, sp.first, sp.second);
-            }
-            continue;
-        }
         const std::vector<size_t> rows = range(i0, i1);
         std::vector<double> a_sub(a_row.begin() + i0, a_row.begin() + i1);
         const Block J = offedge(real.take(rows), img, a_sub, fp.k, d, fp.n_qp_pair, ek_cut(ek, &rows, nullptr),
@@ -3112,39 +2748,6 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
         assemble(J, wA, wP, touching(i0, i1), all_n, i0, i1, 0, N);
     }
     std::vector<cdouble>().swap(values);
-    // `_image_offset_block`, each offset edge: the image kernel's own rows
-    // (one, the last too for "hankel"), by offset, with the ground's weights
-    for (const OffsetEdge &o : offset) {
-        const int64_t n = o.s1 - o.s0;
-        const bool hankel = o.kind == 2;
-        const auto row = [&](int64_t i) {
-            const Block r = image_moments(o.s0 + i, o.s0 + i + 1, o.s0, o.s1);
-            return std::vector<cdouble>(r.begin(), r.end());
-        };
-        const std::vector<cdouble> tab = offset_table(row, n, nd, hankel, true);
-        offset_basis_block(
-            Z, b, o.s0, o.s1, hankel, tab, swept_mem_mb,
-            [&](const Block &J, const std::vector<int64_t> &sub_supp, const std::vector<double> &sub_polys,
-                int64_t k_sel, int64_t lo, int64_t hi, const std::vector<int64_t> &m_idx, std::vector<cdouble> &B) {
-                using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
-                std::vector<cdouble> wA, wP;
-                weights(lo, hi, wA, wP);
-                const std::vector<cdouble> wAs = cols_of(wA, hi - lo, o.s0, o.s1), wPs = cols_of(wP, hi - lo, o.s0, o.s1);
-                const CC Jw = borrow(J, {nd, nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
-                const CC wa = borrow(wAs, {static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
-                const CC wp = borrow(wPs, {static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
-                const CI ssa = borrow(sub_supp, {static_cast<nd::ssize_t>(k_sel), nd});
-                const CF spa = borrow(sub_polys, {static_cast<nd::ssize_t>(k_sel), nd, nd});
-                const CI mi = borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())});
-                std::vector<int64_t> ar(static_cast<size_t>(k_sel));
-                for (int64_t r = 0; r < k_sel; r++) ar[static_cast<size_t>(r)] = r;
-                const CI ni = borrow(ar, {static_cast<nd::ssize_t>(k_sel)});
-                nd::array_t<std::complex<double>> Ba =
-                    borrow_mut(B, {static_cast<nd::ssize_t>(k_sel), static_cast<nd::ssize_t>(k_sel)});
-                assemble_Z_bspline_weighted_windowed(Jw, ssa, spa, wa, wp, mi, ni, lo, hi, o.s0, o.s1, omega, eps,
-                                                     mu, std::complex<double>(-1.0, 0.0), Ba, 0, nd::none(), false);
-            });
-    }
     // the near-image fixup (`_near_image_edge_blocks`), wire order
     std::vector<double> t01, w01;
     gl01(fp.n_qp_same_edge, t01, w01);
@@ -4308,409 +3911,6 @@ bool remainder_class_map(const Geometry &g, const FillParams &fp, double gz, con
     return true;
 }
 
-// `_remainder_offset_edges(geom, gz)` with `_remainder_offset_block`'s
-// refusal read ahead: the offset edges `_remainder_offset_fold` fills
-// (kind 1 "toeplitz", 2 "hankel"), or none -- no offset edge, a class map
-// beside offset edges holding under half the pairs, or an edge too
-// irregular to pay, on which the fold returns None and the dense route
-// fills. The refusal reads the basis
-// alone, so it is known before any table is formed.
-bool offset_block_pays(const Basis &b, const std::vector<int64_t> &seg_edge, int64_t e, int64_t s0, int64_t n);
-std::vector<OffsetEdge> remainder_fold_edges(const Geometry &g, const Basis &b,
-                                             const std::vector<double> &radius_per_wire, const FillParams &fp,
-                                             double ground_z, const std::vector<int64_t> &pI,
-                                             const std::vector<int64_t> &pJ) {
-    std::vector<OffsetEdge> none;
-    if (!fp.offset_reuse) return none;
-    const std::vector<OffsetEdge> edges = offset_edges_of(g, false);
-    if (edges.empty()) return none;
-    const int64_t n_seg = g.n_segs_total;
-    ClassMap cm;
-    if (remainder_class_map(g, fp, ground_z, pI, pJ, cm)) {
-        int64_t sq = 0;
-        for (const OffsetEdge &e : edges) sq += (e.s1 - e.s0) * (e.s1 - e.s0);
-        if (static_cast<double>(sq) / static_cast<double>(n_seg * n_seg) < 0.5) return none;
-    }
-    const std::vector<EdgeIng> ing = edge_ingredients(g, radius_per_wire);
-    std::vector<int64_t> seg_edge(static_cast<size_t>(n_seg), -1);
-    for (size_t e = 0; e < ing.size(); e++)
-        for (int64_t q = ing[e].s0; q < ing[e].s1; q++) seg_edge[static_cast<size_t>(q)] = static_cast<int64_t>(e);
-    for (size_t e = 0; e < ing.size(); e++) {
-        bool is_off = false;
-        for (const OffsetEdge &o : edges) is_off = is_off || o.s0 == ing[e].s0;
-        if (is_off && !offset_block_pays(b, seg_edge, static_cast<int64_t>(e), ing[e].s0, ing[e].s1 - ing[e].s0))
-            return none;
-    }
-    return edges;
-}
-
-// One edge's bases for `_remainder_offset_block`: `rows` (the bases with a
-// real wing on edge e), P (their polynomials, wings off the edge zeroed), ls
-// (each wing's segment on the edge, 0 off it), and which are consecutive.
-struct EdgeBases {
-    std::vector<int64_t> rows;
-    std::vector<double> P;      // (nr, d1, d1)
-    std::vector<int64_t> ls;    // (nr, d1)
-    std::vector<uint8_t> cons;  // (nr)
-    std::vector<uint8_t> on;    // (nr, d1)
-};
-EdgeBases edge_bases(const Basis &b, const std::vector<int64_t> &seg_edge, int64_t e, int64_t s0) {
-    const int nd = b.degree + 1;
-    EdgeBases eb;
-    for (int64_t m = 0; m < b.n_basis; m++) {
-        uint8_t on[8] = {0};
-        bool any = false;
-        for (int a = 0; a < nd; a++) {
-            bool real = false;
-            for (int p = 0; p < nd; p++) real = real || b.polys[static_cast<size_t>((m * nd + a) * nd + p)] != 0.0;
-            const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + a)];
-            on[a] = real && seg_edge[static_cast<size_t>(sg)] == e;
-            any = any || on[a];
-        }
-        if (!any) continue;
-        eb.rows.push_back(m);
-        bool all_on = true;
-        for (int a = 0; a < nd; a++) {
-            all_on = all_on && on[a];
-            eb.on.push_back(on[a]);
-            eb.ls.push_back(on[a] ? b.supp_seg[static_cast<size_t>(m * nd + a)] - s0 : 0);
-            for (int p = 0; p < nd; p++)
-                eb.P.push_back(b.polys[static_cast<size_t>((m * nd + a) * nd + p)] * (on[a] ? 1.0 : 0.0));
-        }
-        const int64_t *ls = &eb.ls[eb.ls.size() - static_cast<size_t>(nd)];
-        bool c = all_on;
-        for (int a = 0; a < nd; a++) c = c && ls[a] == ls[0] + a;
-        eb.cons.push_back(c);
-    }
-    return eb;
-}
-
-// `_remainder_offset_block`'s choice of reference basis and its regular
-// set: -1 when it returns None.
-int64_t offset_block_ref(const EdgeBases &eb, int nd, int64_t n, std::vector<uint8_t> &reg) {
-    const size_t nr = eb.rows.size(), pp = static_cast<size_t>(nd * nd);
-    int64_t best = -1, best_d = 0;
-    for (size_t r = 0; r < nr; r++)
-        if (eb.cons[r]) {
-            // np.argmin(np.abs(first[cand] - (n - d1) // 2)): the first minimum
-            const int64_t dist = std::llabs(eb.ls[r * static_cast<size_t>(nd)] - (n - nd) / 2);
-            if (best < 0 || dist < best_d) {
-                best = static_cast<int64_t>(r);
-                best_d = dist;
-            }
-        }
-    if (best < 0) return -1;
-    const double *ref = &eb.P[static_cast<size_t>(best) * pp];
-    double mx = 0.0;
-    for (size_t t = 0; t < pp; t++) mx = std::max(mx, std::fabs(ref[t]));
-    const double tol = 1e-12 * mx;
-    reg.assign(nr, 0);
-    int64_t n_reg = 0;
-    for (size_t r = 0; r < nr; r++) {
-        if (!eb.cons[r]) continue;
-        double dm = 0.0;
-        for (size_t t = 0; t < pp; t++) dm = std::max(dm, std::fabs(eb.P[r * pp + t] - ref[t]));
-        if (dm <= tol) {
-            reg[r] = 1;
-            n_reg++;
-        }
-    }
-    if (2 * n_reg < static_cast<int64_t>(nr)) return -1;
-    return best;
-}
-
-bool offset_block_pays(const Basis &b, const std::vector<int64_t> &seg_edge, int64_t e, int64_t s0, int64_t n) {
-    const EdgeBases eb = edge_bases(b, seg_edge, e, s0);
-    std::vector<uint8_t> reg;
-    return offset_block_ref(eb, b.degree + 1, n, reg) >= 0;
-}
-
-// numpy's complex product of a real (cast to complex) and a complex
-// operand, in its einsum loops' spelling: (x*cr - 0*ci, x*ci + 0*cr)
-inline cdouble rc_mul(double x, cdouble c) { return cdouble(x * c.real() - 0.0 * c.imag(), x * c.imag() + 0.0 * c.real()); }
-// and a complex times a real: (cr*x - ci*0, cr*0 + ci*x)
-inline cdouble cr_mul(cdouble c, double x) { return cdouble(c.real() * x - c.imag() * 0.0, c.real() * 0.0 + c.imag() * x); }
-
-// `_remainder_offset_block(sl, kind, tab, rows, on_edge, supp_seg, polys)`:
-// the edge's own (nr, nr) block of Q from its moment table `tab` (nd, nd,
-// 2n - 1), the regular bases' block from one value per distinct offset, the
-// rest row by row and by symmetry. numpy's einsums as its loops sum them.
-std::vector<cdouble> remainder_offset_block(const EdgeBases &eb, int nd, int64_t n, bool hankel,
-                                            const std::vector<cdouble> &tab, int64_t best,
-                                            const std::vector<uint8_t> &reg) {
-    const size_t nr = eb.rows.size(), d1 = static_cast<size_t>(nd), T = static_cast<size_t>(2 * n - 1);
-    const double *ref = &eb.P[static_cast<size_t>(best) * d1 * d1];
-    const int64_t span = 2 * (n - nd) + 1;
-    // f += einsum("p,pPk,P->k", ref[a], tab[:, :, idx], ref[b]), (a, b) in order
-    std::vector<cdouble> f(static_cast<size_t>(span), cdouble(0.0, 0.0));
-    for (int a = 0; a < nd; a++)
-        for (int bb = 0; bb < nd; bb++)
-            for (int64_t kk = 0; kk < span; kk++) {
-                const int64_t col = hankel ? kk + a + bb : (kk - (n - nd)) + bb - a + n - 1;
-                double sr = 0.0, si = 0.0;
-                for (size_t p = 0; p < d1; p++)
-                    for (size_t P = 0; P < d1; P++) {
-                        const cdouble t = tab[(p * d1 + P) * T + static_cast<size_t>(col)];
-                        const cdouble x = rc_mul(ref[a * d1 + p], t);
-                        const cdouble y = cr_mul(x, ref[bb * d1 + P]);
-                        sr = sr + y.real();
-                        si = si + y.imag();
-                    }
-                cdouble &fk = f[static_cast<size_t>(kk)];
-                fk = cdouble(fk.real() + sr, fk.imag() + si);
-            }
-    std::vector<cdouble> B(nr * nr);
-    std::vector<size_t> ri, ir;
-    for (size_t r = 0; r < nr; r++) (reg[r] ? ri : ir).push_back(r);
-    for (size_t i : ri)
-        for (size_t j : ri) {
-            const int64_t fi = eb.ls[i * d1], fj = eb.ls[j * d1];
-            B[i * nr + j] = f[static_cast<size_t>(hankel ? fi + fj : fj - fi + (n - nd))];
-        }
-    if (!ir.empty()) {
-        const size_t ni = ir.size();
-        std::vector<cdouble> Rw(ni * nr, cdouble(0.0, 0.0));
-        std::vector<cdouble> A(ni * d1 * T);
-        for (int a = 0; a < nd; a++) {
-            // A = einsum("mp,pPk->mPk", P[ir, a, :], tab)
-            for (size_t m = 0; m < ni; m++)
-                for (size_t P = 0; P < d1; P++)
-                    for (size_t kk = 0; kk < T; kk++) {
-                        double sr = 0.0, si = 0.0;
-                        for (size_t p = 0; p < d1; p++) {
-                            const cdouble x = rc_mul(eb.P[(ir[m] * d1 + static_cast<size_t>(a)) * d1 + p],
-                                                     tab[(p * d1 + P) * T + kk]);
-                            sr = sr + x.real();
-                            si = si + x.imag();
-                        }
-                        A[(m * d1 + P) * T + kk] = cdouble(sr, si);
-                    }
-            for (int bb = 0; bb < nd; bb++)
-                // Rw += einsum("mnP,nP->mn", A[m_ix, :, idx], P[:, b, :])
-                for (size_t m = 0; m < ni; m++)
-                    for (size_t c = 0; c < nr; c++) {
-                        const int64_t la = eb.ls[ir[m] * d1 + static_cast<size_t>(a)],
-                                      lb = eb.ls[c * d1 + static_cast<size_t>(bb)];
-                        const size_t col = static_cast<size_t>(hankel ? la + lb : lb - la + n - 1);
-                        double ar = 0.0, ai = 0.0;
-                        for (size_t P = 0; P < d1; P++) {
-                            const cdouble y = cr_mul(A[(m * d1 + P) * T + col], eb.P[(c * d1 + static_cast<size_t>(bb)) * d1 + P]);
-                            ar = ar + y.real();
-                            ai = ai + y.imag();
-                        }
-                        cdouble &w = Rw[m * nr + c];
-                        w = cdouble(w.real() + (0.0 + ar), w.imag() + (0.0 + ai));
-                    }
-        }
-        for (size_t m = 0; m < ni; m++)
-            for (size_t c = 0; c < nr; c++) B[ir[m] * nr + c] = Rw[m * nr + c];
-        for (size_t m = 0; m < ni; m++)
-            for (size_t x = 0; x < nr; x++) B[x * nr + ir[m]] = Rw[m * nr + x];
-    }
-    return B;
-}
-
-
-// `_remainder_offset_fold(T, -1, ...)`: `Z -= Q` with the offset edges'
-// own blocks from their distinct moments, every other segment pair by the
-// fused kernel with one edge's segments as observers at a time (its own
-// block when it is no offset edge, and its block against every later edge,
-// landed with its transpose), and the raised pairs' corrections last.
-void remainder_offset_fold(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
-                           const std::vector<double> &radius_per_wire, const std::vector<OffsetEdge> &fold,
-                           const somm_proj::GridView &view, size_t n_reg, double gz, double k,
-                           const std::vector<double> &nodes, const std::vector<double> &W, int64_t q,
-                           std::vector<cdouble> &side, const std::vector<int64_t> &ex,
-                           const std::function<void()> &correct) {
-    const int nd = b.degree + 1;
-    const size_t d1 = static_cast<size_t>(nd);
-    const int64_t N = g.n_segs_total, nb = b.n_basis;
-    const int sign = -1;
-    const std::vector<EdgeIng> ing = edge_ingredients(g, radius_per_wire);
-    std::vector<int64_t> seg_edge(static_cast<size_t>(N), -1);
-    for (size_t e = 0; e < ing.size(); e++)
-        for (int64_t s = ing[e].s0; s < ing[e].s1; s++) seg_edge[static_cast<size_t>(s)] = static_cast<int64_t>(e);
-    // `wing_edge = np.where(real, seg_edge[supp_seg], -1)`
-    std::vector<int64_t> wing_edge(static_cast<size_t>(nb * nd), -1);
-    for (int64_t m = 0; m < nb; m++)
-        for (int a = 0; a < nd; a++) {
-            bool real = false;
-            for (int p = 0; p < nd; p++) real = real || b.polys[static_cast<size_t>((m * nd + a) * nd + p)] != 0.0;
-            if (real)
-                wing_edge[static_cast<size_t>(m * nd + a)] =
-                    seg_edge[static_cast<size_t>(b.supp_seg[static_cast<size_t>(m * nd + a)])];
-        }
-    const auto kind_of = [&](int64_t s0) {
-        for (const OffsetEdge &o : fold)
-            if (o.s0 == s0) return o.kind;
-        return 0;
-    };
-    const size_t qq = static_cast<size_t>(q);
-    // the offset edges' blocks, each edge's table first
-    std::vector<std::pair<std::vector<int64_t>, std::vector<cdouble>>> blocks;
-    for (size_t e = 0; e < ing.size(); e++) {
-        const int kind = kind_of(ing[e].s0);
-        if (kind == 0) continue;
-        const int64_t s0 = ing[e].s0, n = ing[e].s1 - ing[e].s0;
-        const bool hankel = kind == 2;
-        const size_t nn = static_cast<size_t>(n);
-        // `_remainder_offset_table`: observer segment o's nodes against the
-        // edge's, projected (`remainder_field_proj`), then
-        // einsum("pq,qjr,Pjr->pPj", W[:, o], F, W[:, sl], optimize=True):
-        // numpy's two batched products, each a fused sum from +0 (BLAS)
-        std::vector<double> src(nn * qq * 3), t_src(nn * qq * 3);
-        for (size_t j = 0; j < nn; j++)
-            for (size_t r = 0; r < qq; r++)
-                for (int c = 0; c < 3; c++) {
-                    src[(j * qq + r) * 3 + c] = nodes[((static_cast<size_t>(s0) + j) * qq + r) * 3 + c];
-                    t_src[(j * qq + r) * 3 + c] = g.tangents[3 * (static_cast<size_t>(s0) + j) + c];
-                }
-        const auto row = [&](int64_t i) {
-            const size_t o = static_cast<size_t>(s0 + i);
-            std::vector<double> t_obs(qq * 3);
-            for (size_t r = 0; r < qq; r++)
-                for (int c = 0; c < 3; c++) t_obs[r * 3 + c] = g.tangents[3 * o + c];
-            std::vector<cdouble> F(qq * nn * qq);
-            somm_core::field_proj_batch(view, n_reg, static_cast<std::ptrdiff_t>(qq),
-                                        static_cast<std::ptrdiff_t>(nn * qq), &nodes[o * qq * 3], t_obs.data(),
-                                        src.data(), t_src.data(), gz, k, F.data(), 0, true);
-            // T1[P, q, j] = sum_r W[P, s0 + j, r] F[q, j, r]
-            std::vector<cdouble> T1(d1 * qq * nn);
-            for (size_t P = 0; P < d1; P++)
-                for (size_t a = 0; a < qq; a++)
-                    for (size_t j = 0; j < nn; j++) {
-                        double tr = 0.0, ti = 0.0;
-                        for (size_t r = 0; r < qq; r++) {
-                            const double w = W[(P * static_cast<size_t>(N) + static_cast<size_t>(s0) + j) * qq + r];
-                            const cdouble fv = F[a * nn * qq + j * qq + r];
-                            tr = mw_fma::exact(w, fv.real(), tr);
-                            ti = mw_fma::exact(w, fv.imag(), ti);
-                        }
-                        T1[(P * qq + a) * nn + j] = cdouble(tr, ti);
-                    }
-            // out[p, P, j] = sum_q T1[P, q, j] W[p, o, q]
-            std::vector<cdouble> out(d1 * d1 * nn);
-            for (size_t p = 0; p < d1; p++)
-                for (size_t P = 0; P < d1; P++)
-                    for (size_t j = 0; j < nn; j++) {
-                        double ar = 0.0, ai = 0.0;
-                        for (size_t a = 0; a < qq; a++) {
-                            const double w = W[(p * static_cast<size_t>(N) + o) * qq + a];
-                            const cdouble t = T1[(P * qq + a) * nn + j];
-                            ar = mw_fma::exact(t.real(), w, ar);
-                            ai = mw_fma::exact(t.imag(), w, ai);
-                        }
-                        out[(p * d1 + P) * nn + j] = cdouble(ar, ai);
-                    }
-            return out;
-        };
-        const std::vector<cdouble> tab = offset_table(row, n, nd, hankel, true);
-        const EdgeBases eb = edge_bases(b, seg_edge, static_cast<int64_t>(e), s0);
-        std::vector<uint8_t> reg;
-        const int64_t best = offset_block_ref(eb, nd, n, reg);
-        if (best < 0) throw std::logic_error("bspline: an offset edge's block did not pay after all");
-        blocks.push_back({eb.rows, remainder_offset_block(eb, nd, n, hankel, tab, best, reg)});
-    }
-    for (const auto &bl : blocks) add_block(Z, nb, bl.first, bl.first, bl.second, sign);
-    // `_remainder_kernel_block(obs, src, on_o, rows, on_s, ...)`: the fused
-    // kernel between two contiguous segment runs over the bases whose wings
-    // `on_o` / `on_s` name, a wing elsewhere a zero polynomial at index 0
-    const auto kernel_block = [&](int64_t o0, int64_t o1, int64_t c0, int64_t c1,
-                                  const std::vector<int64_t> &rows, const std::function<bool(int64_t, int)> &on_o,
-                                  const std::function<bool(int64_t, int)> &on_s, std::vector<int64_t> &cols) {
-        cols.clear();
-        for (int64_t m = 0; m < nb; m++)
-            for (int a = 0; a < nd; a++)
-                if (on_s(m, a)) {
-                    cols.push_back(m);
-                    break;
-                }
-        std::vector<cdouble> Qb;
-        if (cols.empty()) return Qb;
-        const size_t ns_o = static_cast<size_t>(o1 - o0), ns_s = static_cast<size_t>(c1 - c0);
-        const auto take = [&](int64_t s0, size_t ns, std::vector<double> &nd_, std::vector<double> &tg,
-                              std::vector<double> &Ws) {
-            nd_.assign(nodes.begin() + static_cast<std::ptrdiff_t>(static_cast<size_t>(s0) * qq * 3),
-                       nodes.begin() + static_cast<std::ptrdiff_t>((static_cast<size_t>(s0) + ns) * qq * 3));
-            tg.assign(g.tangents.begin() + static_cast<std::ptrdiff_t>(3 * static_cast<size_t>(s0)),
-                      g.tangents.begin() + static_cast<std::ptrdiff_t>(3 * (static_cast<size_t>(s0) + ns)));
-            Ws.assign(d1 * ns * qq, 0.0);
-            for (size_t p = 0; p < d1; p++)
-                for (size_t s = 0; s < ns; s++)
-                    for (size_t r = 0; r < qq; r++)
-                        Ws[(p * ns + s) * qq + r] = W[(p * static_cast<size_t>(N) + static_cast<size_t>(s0) + s) * qq + r];
-        };
-        std::vector<double> on_, ot_, ow_, sn_, st_, sw_;
-        take(o0, ns_o, on_, ot_, ow_);
-        take(c0, ns_s, sn_, st_, sw_);
-        const auto locs = [&](const std::vector<int64_t> &bs, int64_t base, const std::function<bool(int64_t, int)> &on,
-                              std::vector<int64_t> &loc, std::vector<double> &pl) {
-            loc.assign(bs.size() * d1, 0);
-            pl.assign(bs.size() * d1 * d1, 0.0);
-            for (size_t r = 0; r < bs.size(); r++)
-                for (int a = 0; a < nd; a++) {
-                    const bool o = on(bs[r], a);
-                    loc[r * d1 + static_cast<size_t>(a)] = o ? b.supp_seg[static_cast<size_t>(bs[r] * nd + a)] - base : 0;
-                    for (int p = 0; p < nd; p++)
-                        pl[(r * d1 + static_cast<size_t>(a)) * d1 + static_cast<size_t>(p)] =
-                            b.polys[static_cast<size_t>((bs[r] * nd + a) * nd + p)] * (o ? 1.0 : 0.0);
-                }
-        };
-        std::vector<int64_t> lI, lJ;
-        std::vector<double> pI, pJ;
-        locs(rows, o0, on_o, lI, pI);
-        locs(cols, c0, on_s, lJ, pJ);
-        // `sommerfeld_remainder_bspline_Q`'s symmetric route: the dense
-        // block's call shape, equal arrays throughout
-        const bool symmetric = o0 == c0 && o1 == c1 && lI == lJ && pI == pJ;
-        Qb.assign(rows.size() * cols.size(), cdouble(0.0, 0.0));
-        somm_core::remainder_bspline_Q(view, gz, k, on_.data(), ot_.data(), ow_.data(), static_cast<std::ptrdiff_t>(ns_o),
-                                       sn_.data(), st_.data(), sw_.data(), static_cast<std::ptrdiff_t>(ns_s),
-                                       static_cast<std::ptrdiff_t>(qq), nd, lI.data(), pI.data(),
-                                       static_cast<std::ptrdiff_t>(rows.size()), lJ.data(), pJ.data(),
-                                       static_cast<std::ptrdiff_t>(cols.size()), symmetric, 0, Qb.data(), 0);
-        return Qb;
-    };
-    for (size_t e = 0; e < ing.size(); e++) {
-        const int64_t s0 = ing[e].s0, s1 = ing[e].s1;
-        const int64_t ee = static_cast<int64_t>(e);
-        const auto on_o = [&](int64_t m, int a) { return wing_edge[static_cast<size_t>(m * nd + a)] == ee; };
-        std::vector<int64_t> rows;
-        for (int64_t m = 0; m < nb; m++)
-            for (int a = 0; a < nd; a++)
-                if (on_o(m, a)) {
-                    rows.push_back(m);
-                    break;
-                }
-        if (rows.empty()) continue;
-        std::vector<int64_t> cols;
-        if (kind_of(s0) == 0) {
-            const std::vector<cdouble> Qb = kernel_block(s0, s1, s0, s1, rows, on_o, on_o, cols);
-            add_block(Z, nb, rows, cols, Qb, sign);
-        }
-        if (s1 >= N) continue;
-        // `(wing_edge > e) & np.isin(supp_seg, later)`, real wings only
-        const auto on_s = [&](int64_t m, int a) { return wing_edge[static_cast<size_t>(m * nd + a)] > ee; };
-        const std::vector<cdouble> Qb = kernel_block(s0, s1, s1, N, rows, on_o, on_s, cols);
-        if (cols.empty()) continue;
-        add_block(Z, nb, rows, cols, Qb, sign);
-        std::vector<cdouble> QT(Qb.size());
-        for (size_t i = 0; i < rows.size(); i++)
-            for (size_t j = 0; j < cols.size(); j++) QT[j * rows.size() + i] = Qb[i * cols.size() + j];
-        add_block(Z, nb, cols, rows, QT, sign);
-    }
-    // the raised pairs: their corrections alone (side from zero), added last
-    if (!ex.empty()) {
-        std::fill(side.begin(), side.end(), cdouble(0.0, 0.0));
-        correct();
-        for (size_t t = 0; t < ex.size(); t++) {
-            const cdouble v = nec5::replay::np_cmul(cdouble(static_cast<double>(sign), 0.0), side[t]);
-            cdouble &z = Z[static_cast<size_t>(ex[t])];
-            z = cdouble(z.real() + v.real(), z.imag() + v.imag());
-        }
-    }
-}
-
 }  // namespace
 
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
@@ -4821,18 +4021,6 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
         };
         remainder_pair_correction(at, g, b, ground_z, k, view, G0, pI, pJ, pQ, n_qp_sommerfeld, np);
     };
-    // momwire#1809 step 2 (`_remainder_offset_edges`): under `offset_reuse`,
-    // the offset edges' own blocks from their distinct moments
-    // (`_remainder_offset_fold`), when they pay
-    const std::vector<OffsetEdge> fold = (fp != nullptr && radius_per_wire != nullptr)
-                                             ? remainder_fold_edges(g, b, *radius_per_wire, *fp, ground_z, pI, pJ)
-                                             : std::vector<OffsetEdge>();
-    if (!fold.empty()) {
-        remainder_offset_fold(Z, g, b, *radius_per_wire, fold, view, n_reg, ground_z, k, nodes, W, q, side, ex,
-                              correct);
-        if (somm_core::lazy_check()) somm_core::check_read(Z.data(), Z.size(), "bspline sommerfeld remainder");
-        return;
-    }
     somm_core::RemainderSink sink;
     sink.T = Z.data();
     sink.rs = static_cast<std::ptrdiff_t>(n_basis);

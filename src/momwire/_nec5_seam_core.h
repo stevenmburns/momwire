@@ -227,8 +227,7 @@ struct Prepared {
     // One of a stepping FR's frequencies, or of a sequence run's (momwire#1508):
     // `_shell._answer` serves it with a sweep state (`_serve._port_solution`'s
     // `shared`), on which bs2's fill reads its same-edge blocks from the
-    // sweep's hoisted prep. That moves no byte unless `offset_reuse` is on
-    // (`bspline_solve_front`).
+    // sweep's hoisted prep, which moves no byte (`bspline_solve_front`).
     bool sweep_shared = false;
 };
 

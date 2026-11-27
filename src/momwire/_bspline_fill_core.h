@@ -78,15 +78,10 @@ struct FillParams {
     // census's classes (`BSplineSolver._reuse_on`), read through `plan`
     // below; and its part `offset_reuse` (momwire#1809,
     // `BSplineSolver._offset_reuse`): a uniform edge's same-edge reg moments
-    // by offset, and the offset edges' own blocks from their distinct
-    // moments. Both off is the fill as it always was, bit for bit.
+    // in their Toeplitz form. Both off is the fill as it always was, bit for
+    // bit.
     bool pair_reuse = false;
     bool offset_reuse = false;
-    // A stepping FR's frequency served with the sweep's hoisted same-edge
-    // prep (`_serve._port_solution`): the chunked fill then assembles no
-    // offset edge's own block from its distinct moments (Python's `offset`
-    // is the whole-mesh fill's), and every edge takes the same-edge fixup.
-    bool sweep_shared = false;
     // `_reuse_plan(geom)` (`reuse_plan` below), or null: no census, or a
     // census that does not serve the deck.
     std::shared_ptr<const reuse::Plan> plan;
@@ -110,11 +105,6 @@ struct FillParams {
 // declines. Every route below that reads a plan reads `fp.plan`.
 std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vector<double> &radius_per_wire,
                                               const FillParams &fp);
-
-// `_free_offset_edges(geom)` under `fp.offset_reuse` (empty otherwise): the
-// uniform straight edges of 12 segments or more, as [start, stop) segment
-// ranges. A deck with one takes the chunked fill (`_compute_Z_operator`).
-std::vector<std::pair<int64_t, int64_t>> free_offset_edges(const Geometry &g, const FillParams &fp);
 
 // `_build_J_blocks(geom, k)`: (d+1, d+1, N, N) C order. `radius_per_wire`:
 // the conductor radius of each wire.
@@ -196,9 +186,7 @@ bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_so
 // `fp` (optional) carries `pair_reuse`'s plan: the kernel then serves each
 // segment pair from its class of the remainder's own plan by plane
 // invariants (`_remainder_reuse_args`, `reuse::remainder_plan_for`,
-// momwire#2063 step 2b); and `offset_reuse`: the offset edges' own
-// blocks from their distinct moments (`_remainder_offset_fold`) where
-// `_remainder_offset_edges` takes them.
+// momwire#2063 step 2b).
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                                    double ground_z, cdouble eps_t, double k, double omega, double mu,
                                    int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np,
