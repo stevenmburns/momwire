@@ -582,7 +582,10 @@ def read_registry(source: str) -> tuple[dict[str, FeatureEntry], str]:
             "paths",
         ]
         kw = dict(zip(fields, (ast.literal_eval(a) for a in call.args)))
-        kw.update({k.arg: ast.literal_eval(k.value) for k in call.keywords})
+        # only the fields it reads: `families` holds calls, not literals
+        kw.update(
+            {k.arg: ast.literal_eval(k.value) for k in call.keywords if k.arg in fields}
+        )
         feats[kw["name"]] = FeatureEntry(
             kw["name"], int(kw["reach"]), tuple(kw.get("paths", ())), ast.dump(call)
         )

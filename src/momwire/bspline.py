@@ -1918,20 +1918,20 @@ class BSplineSolver(
             feed_wire_index = _sites["feed_wire_index"][0][0]
         node_gaps = _sites["node_gaps"]
         self._cancel = cancel
-        # `pair_reuse` (momwire#1982: the one pair-reuse switch, its part
-        # `offset_reuse` following it): True, "verify" or a front end's
-        # edge-pair hint turn it on, False off. Since momwire#2063 the census
-        # finds the classes itself (`_reuse_plan`), so a hint is read as True
-        # and not kept: antennaknobs still sends one (AK#2165), and dropping it
-        # there is a front-end change. Registered in `_features` (reach 4, a
-        # Python route).
-        whole = None if pair_reuse is None else pair_reuse is not False
+        # `pair_reuse` (momwire#1982, one switch since momwire#2063 step 4):
+        # True, "verify" or a front end's edge-pair hint turn on the census
+        # and the same-edge Toeplitz form together, False turns both off.
+        # Since momwire#2063 the census finds the classes itself
+        # (`_reuse_plan`), so a hint is read as True and not kept.
+        # `offset_reuse` is its deprecated spelling here, warned, and
+        # `pair_reuse` wins when both are given (`_features.enabled`).
+        reuse = None if pair_reuse is None else pair_reuse is not False
         # Every feature this family honours is resolved here, once
         # (`_features.bind`, momwire#1980), and read off `bound` below.
         bound = _features.bind(
             self,
             self.FEATURE_SOLVER,
-            pair_reuse=whole,
+            pair_reuse=reuse,
             offset_reuse=offset_reuse,
             transmitted_anchors=transmitted_anchors,
             factored_columns=factored_columns,
@@ -1971,14 +1971,11 @@ class BSplineSolver(
         # reset at each fill's start, read by `_fill_report_end`.
         self._fill_ground_notes = {}
         # momwire#1809, inside a block: a uniform edge's same-edge reg moments
-        # filled by segment offset (2N - 1 entries, not N^2). Opt-in, like
-        # `pair_reuse`: off is the dense fill, bit for bit. None (the default)
-        # defers to `pair_reuse` (it is that feature's part, momwire#1982),
-        # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
-        self._offset_reuse = bound["offset_reuse"]
-        # Whether the fill report has reuse to speak of (momwire#2016): the
-        # census's; `offset_reuse` alone copies no pair (momwire#2063 step 3).
-        self._fill_reuse_asked = bool(bound["pair_reuse"])
+        # filled by segment offset (2N - 1 entries, not N^2), on with the
+        # switch: off is the dense fill, bit for bit.
+        self._offset_reuse = self._reuse_on
+        # Whether the fill report has reuse to speak of (momwire#2016).
+        self._fill_reuse_asked = self._reuse_on
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.

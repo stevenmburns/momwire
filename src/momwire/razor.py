@@ -2157,8 +2157,9 @@ class RazorSolver(
             )
         # Every feature this family honours is resolved here, once
         # (`_features.bind`, momwire#1980), and read off `bound` below.
-        # `pair_reuse` is the whole `razor_pair_reuse` is a part of
-        # (momwire#1982): any truthy value is on. `exact_kernel_series` is
+        # `pair_reuse` (momwire#1982, one switch since momwire#2063 step 4):
+        # any truthy value is on; `razor_pair_reuse` is its deprecated
+        # spelling here, warned, and loses to it. `exact_kernel_series` is
         # resolved where the correction runs (`_exact_kernel_series_on`), so a
         # solve the exact kernel never engages never refuses it.
         bound = _features.bind(
@@ -2204,20 +2205,15 @@ class RazorSolver(
         # (`_lapack.mixed_lu_scope`, opened around each `_lu_solve`). Off is
         # the flag-off solve, bit for bit.
         self._mixed_lu = bound["mixed_lu"]
-        # momwire#1971: fill-pair reuse. None defers to
-        # MOMWIRE_X_RAZOR_PAIR_REUSE (`_features`, native); "verify" also
-        # checks every window against the shipped fill. Off (0) is the fill
-        # as it always was, bit for bit; 1 on, 2 verify.
-        #
-        # momwire#1982: `pair_reuse`, the one pair-reuse switch every solver
-        # takes, asks for it too (any truthy value is on, a front end's
-        # bspline hint included, as on the sinusoidal solver; "verify" as
-        # above). `razor_pair_reuse` and its variable are kept as aliases
-        # and win. Asked for only through `pair_reuse` outside its reach, it
-        # is off, and `pair_reuse_declined` says so.
-        mode = razor_pair_reuse if razor_pair_reuse is not None else pair_reuse
+        # momwire#1971: fill-pair reuse, the switch's razor2p row (native,
+        # `_features`). "verify" also checks every window against the
+        # shipped fill. Off (0) is the fill as it always was, bit for bit; 1
+        # on, 2 verify. Any truthy `pair_reuse` is on, a front end's bspline
+        # hint included, as on the sinusoidal solver. Outside the row's
+        # reach it is off, and `pair_reuse_declined` says so.
+        mode = pair_reuse if pair_reuse is not None else razor_pair_reuse
         verify = isinstance(mode, str) and mode == "verify"
-        self._pair_reuse = 0 if not bound["razor_pair_reuse"] else (2 if verify else 1)
+        self._pair_reuse = 0 if not bound["pair_reuse"] else (2 if verify else 1)
         self._reuse_now = None
         # Why the last fill with reuse on did not take it (the Python route's
         # reason: `_pair_reuse_refusal`, or the plan's own `declined`), or
@@ -2225,7 +2221,7 @@ class RazorSolver(
         # (`reuse_declined_reason`).
         self.pair_reuse_declined = (
             "not certified on this platform"
-            if "razor_pair_reuse" in self.features_withheld
+            if "pair_reuse" in self.features_withheld
             else None
         )
         # The C++ front route reads it with the constructor's own arguments.

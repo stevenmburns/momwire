@@ -22,33 +22,29 @@ On outside its reach, a feature is handled by its KIND:
 The standalone executables run only the features their C++ route carries
 and whose reach covers their level (``EXE_FEATURES`` in
 ``standalone/momwire_razor2p.cpp``; among them momwire#1860's four levers,
-reach 9, so every executable but nec42-sinusoidal's, razor_pair_reuse, reach
-8, which only nec5-razor2p's route carries, so nec5-bs2 refuses it by basis,
-``EXE_FEATURE_BASES``, offset_reuse, reach 9, which only the bs2 routes
-carry, so nec5-razor2p refuses it by basis, and the whole ``pair_reuse``,
-reach 11, which every executable accepts and maps to its own route's reuse,
-``EXE_PARTS``). One
-started with any other ``MOMWIRE_X_`` variable on refuses before it reads a
-deck (:data:`EXE_REFUSAL`).
+reach 9, so every executable but nec42-sinusoidal's, and the one fill-reuse
+switch ``pair_reuse``, reach 11, which every executable accepts and maps to
+its own route's reuse). One started with any other ``MOMWIRE_X_`` variable
+on refuses before it reads a deck (:data:`EXE_REFUSAL`).
 
-A feature may be a PART of another (``part_of``): one user-facing switch
-that turns on what each solver supports of it. Today that is ``pair_reuse``,
-whose parts are bspline's ``offset_reuse`` and razor2p's
-``razor_pair_reuse`` (momwire#1982). Asking for the whole turns each part
-on; a part's own keyword or variable, its older spelling, still wins (see
-:func:`enabled` for the order). A native part asked for only through the
-whole stays off outside its own reach instead of refusing: the whole asks
-for "what this solver supports here", and :func:`withheld` says when that
-was nothing.
+A feature that each solver family runs in its own way carries one
+:class:`FamilyReach` per family (``families``): that family's reach, kind
+and drift, as data on the one row. They are not separately switchable: the
+feature's keyword and variable turn every family's on and off. Today that
+is ``pair_reuse`` (momwire#2063 step 4), whose bspline and razor2p rows
+carry the deprecated spellings those families took before it was one
+switch (``offset_reuse``, ``razor_pair_reuse``: :attr:`FamilyReach.alias`).
+On a family, a NATIVE row outside its reach is withheld (off, and
+:func:`withheld` says so) rather than refused: the switch asks for "what
+this solver supports here".
 
 Each feature also names the solver FAMILIES that honour it (``solvers``,
 keyed on each solver class's ``FEATURE_SOLVER``: :data:`SOLVERS`). A
 constructor resolves the ones its family honours through :func:`bind`, and
 line 2 names only the features the running solver honours (:func:`stamp`'s
 `solver`, from the printout's basis by :func:`basis_solver`): a variable a
-solver ignores is neither read by it nor stamped. A whole feature acts on a
-family with parts only through them, so there it is named only while one of
-those parts runs.
+solver ignores is neither read by it nor stamped. A feature withheld on the
+running family is not named either.
 
 With every feature at its default nothing here changes a byte of line 2:
 the stamp names only a feature that is on where its default is off. With every
@@ -63,6 +59,7 @@ import contextvars
 import functools
 import os
 import sys
+import warnings
 from dataclasses import dataclass
 
 from ._basis_names import canonical_engine
@@ -74,6 +71,7 @@ __all__ = [
     "FEATURES",
     "LEVELS",
     "SOLVERS",
+    "FamilyReach",
     "Feature",
     "FeatureNotCertified",
     "Level",
@@ -90,6 +88,7 @@ __all__ = [
     "deck_pragmas",
     "default_on",
     "enabled",
+    "family",
     "honours",
     "stamp",
     "withheld",
@@ -188,6 +187,36 @@ SOLVERS = ("bspline", "razor", "sinusoidal", "sinusoidal_galerkin")
 DEFAULT_DRIFT_MAX = 1e-6
 
 
+# The deprecated per-family spellings of a feature (`FamilyReach.alias`) are
+# read and warned for two minor releases after the one that made them
+# aliases, as the engine aliases are (`_basis_names`), then removed.
+ALIAS_DEPRECATED_IN = "0.99.0"
+
+
+@dataclass(frozen=True)
+class FamilyReach:
+    """What one solver family runs of a feature: its reach (``<=`` the
+    feature's), its kind, and the author's measured bound on |dZin|/|Zin|
+    on that family (``<=`` the feature's ``drift``). Data only, never a
+    switch of its own.
+
+    `alias` is the keyword this family took for the feature before it was
+    one switch, and ``MOMWIRE_X_<ALIAS>`` its variable: each still turns
+    the feature on or off on this family alone, with a
+    ``DeprecationWarning``, and the feature's own keyword or variable,
+    when given, wins over it (:func:`enabled`)."""
+
+    solver: str
+    reach: int
+    kind: str
+    drift: float
+    alias: str | None = None
+
+    @property
+    def alias_env(self) -> str | None:
+        return None if self.alias is None else ENV_PREFIX + self.alias.upper()
+
+
 @dataclass(frozen=True)
 class Feature:
     name: str
@@ -222,10 +251,11 @@ class Feature:
     # keyword False, or the variable at a value that is not on ("0"),
     # still turns it off. Outside its reach the default is off.
     default: bool = False
-    # The user-facing feature this one is a part of (momwire#1982), or None:
-    # asking for that one (its keyword or its variable) turns this one on,
-    # unless this one's own keyword or variable says otherwise.
-    part_of: str | None = None
+    # One row per solver family that runs it in its own way (`FamilyReach`):
+    # per-family reach, kind, drift and deprecated spelling, as data. A
+    # family with no row runs the feature at the feature's own reach, kind
+    # and drift.
+    families: tuple[FamilyReach, ...] = ()
     # The solver families that honour it (`SOLVERS`; momwire#1980): the ones
     # whose constructor resolves it (`bind`, for a feature with a kwarg) or
     # whose fill reads it where it runs (one without). A solver outside this
@@ -249,42 +279,50 @@ class Feature:
 FEATURES: dict[str, Feature] = {
     f.name: f
     for f in (
-        # Each congruent pair's fill once, the rest copied. BSplineSolver
-        # (momwire#2063): the Galerkin fill finds its own classes of
-        # (observer segment, source segment) pairs on the common core
-        # (`_bspline_pair_reuse_core.h`) and evaluates each class's moments
-        # once with the shipped off-edge kernel; its Sommerfeld remainder
-        # has a plan of its own (momwire#2063 step 2b), its segment pairs
-        # keyed by the plane's invariants (horizontal Gram words, vertical
-        # parts, the height sum), each class evaluated once by the fused
-        # remainder kernel; a front end's edge-pair hint (PRs #1810, #1811)
-        # is read as on. A bs2 frequency sweep with a served plan runs per
-        # frequency to read it, the plan built once for the sweep: the
-        # batched sweep reads none (momwire#2172). SinusoidalSolver (momwire#1911): the point-matched fill finds
-        # its own classes of (observer, source) pairs and evaluates each
-        # one's field tensors once with the shipped kernel, free space and
-        # PEC image. On every solver the variable alone is on.
+        # Each congruent pair's fill once, the rest copied: the one fill-reuse
+        # switch (momwire#1982; one name since momwire#2063 step 4). Every
+        # solver takes `pair_reuse=`, and MOMWIRE_X_PAIR_REUSE turns on the
+        # reuse it supports; False turns all of it off.
         #
-        # The one user-facing pair-reuse switch (momwire#1982): its parts,
-        # `offset_reuse` (bspline, within one edge) and `razor_pair_reuse`
-        # (razor2p), follow this keyword and this variable, so every solver
-        # takes `pair_reuse=` and MOMWIRE_X_PAIR_REUSE turns on the reuse it
-        # supports. Their own keywords and variables are kept as aliases.
+        # BSplineSolver (momwire#2063): the Galerkin fill finds its own
+        # classes of (observer segment, source segment) pairs on the common
+        # core (`_bspline_pair_reuse_core.h`) and evaluates each class's
+        # moments once with the shipped off-edge kernel; its same-edge pairs
+        # are keyed apart, each class the same-edge routine's (step 3); its
+        # Sommerfeld remainder has a plan of its own (step 2b), its segment
+        # pairs keyed by the plane's invariants, each class evaluated once by
+        # the fused remainder kernel; a front end's edge-pair hint (PRs #1810,
+        # #1811) is read as on. A bs2 frequency sweep with a served plan runs
+        # per frequency to read it, the plan built once for the sweep: the
+        # batched sweep reads none (momwire#2172). The same switch fills a
+        # uniform edge's same-edge regularised moments by segment offset, in
+        # their Toeplitz form (PR #1815, what was `offset_reuse`): inert where
+        # the census serves the direct fill (the class values' regularised
+        # part is the dense routine's), it pays where no plan does: the
+        # near-image fixup of a long grazing wire (a 40 m wire 2 cm over PEC,
+        # 1500 segments: 32 % of the fill beside the census), a long wire's
+        # same-edge blocks when the census declines, the buried fill.
         #
-        # The sinusoidal plan is one C++ copy on the common reuse core
+        # RazorSolver (momwire#1971, what was `razor_pair_reuse`): the fill
+        # finds its own classes of (centroid observer, source segment) pairs,
+        # the direct and image moments keyed on what the kernel reads and the
+        # composing ground's remainder on the height-aware key, evaluates one
+        # representative per class with the shipped kernels and gathers the
+        # rest, in Python and in nec5-razor2p (one C++ core).
+        #
+        # SinusoidalSolver (momwire#1911): the point-matched fill finds its
+        # own classes of (observer, source) pairs and evaluates each one's
+        # field tensors once with the shipped kernel, free space and PEC
+        # image: one C++ copy on the common reuse core
         # (`_sin_pair_reuse_core.h`, momwire#2063), which the Python route
-        # and the C++ fill (the nec42-sinusoidal and nec2c-sinusoidal
-        # executables) both run.
+        # and the nec42-sinusoidal and nec2c-sinusoidal executables both run.
         #
         # Reach 11, every level: every Python route and drop-in, and every
         # executable, each of which accepts MOMWIRE_X_PAIR_REUSE and runs its
-        # own basis's reuse (`EXE_FEATURES` and `EXE_PARTS` in
-        # standalone/momwire_razor2p.cpp): nec5-razor2p its part
-        # `razor_pair_reuse`, the two sinusoidal executables this plan, and
-        # nec5-bs2 and nec42-bs2 the census and their part `offset_reuse`,
-        # both in bs2's C++ fill (momwire#2063), at the launcher's bytes.
-        # Where it runs, a part is certified only as far as its own reach,
-        # and line 2 says so (`stamp`). Still off by default and not offered.
+        # own basis's reuse in its C++ fill, at the launcher's bytes. On a
+        # family the row in `families` says how far that family's reuse is
+        # certified, and line 2 says so (`stamp`). Still off by default and
+        # not offered.
         Feature(
             name="pair_reuse",
             reach=11,
@@ -298,7 +336,15 @@ FEATURES: dict[str, Feature] = {
                 "src/momwire/_sin_pair_reuse.py",
                 "src/momwire/_bspline_pair_reuse_core.cpp",
                 "src/momwire/_bspline_pair_reuse_core.h",
+                "src/momwire/_razor_pair_reuse_core.cpp",
+                "src/momwire/_razor_pair_reuse_core.h",
+                "src/momwire/_pair_reuse_core.cpp",
+                "src/momwire/_pair_reuse_core.h",
                 "tests/test_pair_reuse_1809.py",
+                "tests/test_offset_reuse_1809.py",
+                "tests/test_razor_pair_reuse_1971.py",
+                "tests/test_razor_reuse_rows_2144.py",
+                "tests/test_one_reuse_switch_2063.py",
                 "tests/test_sin_pair_reuse_1911.py",
                 "tests/test_sin_pair_reuse_ground_1970.py",
                 "tests/test_sin_pair_reuse_canonical_1969.py",
@@ -323,108 +369,94 @@ FEATURES: dict[str, Feature] = {
                 "for the search; bs2's include a wire's own pairs, one class per "
                 "segment offset."
             ),
-            # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
-            # bspline (the census, momwire#2063, with `offset_reuse` on and
-            # off): 6.8e-14 worst over the reuse tests' decks and the stage's
-            # set (Yagis of one and two edges, parallel dipoles, a vertical
-            # stack, a line grid; free, PEC, Sommerfeld; EK on and off), and
-            # 3.1e-12 on antennaknobs' 10-element Yagi (both layouts, free,
-            # PEC, Sommerfeld), where the hint route moved it 3.2e-12: the
-            # offset part's. Its ground image term on the census
-            # (momwire#2063 step 2a, block 1 of the direct class space, the
-            # weights per pair): 4.5e-13 worst over Yagis of one and two
-            # edges, a V-bent Yagi and a vertical stack on PEC,
-            # reflection-coefficient and Sommerfeld grounds, `offset_reuse`
-            # on and off, and 4.7e-13 on antennaknobs' 10-element Yagi
-            # (PEC, Sommerfeld). Its Sommerfeld remainder on its own plan
-            # (momwire#2063 step 2b): 3.7e-13 worst over the same four decks,
-            # `offset_reuse` on and off, 4.7e-13 and 9.1e-12 on antennaknobs'
-            # 10-element Yagi at 120 and 180 segments a wire (both the
-            # direct term's: the same with the edge-block map before it),
-            # 1.4e-12 on its fan dipole flat and drooped 26.57 degrees.
-            # With its same-edge pairs in the census (momwire#2063 step 3,
-            # keyed apart, each class the same-edge routine's): 3.0e-10 worst,
-            # the #1971 hairpin (its bridge's pairs, all within a radius, near
-            # singles), at both of its memory caps and over refl-coef; 1.1e-12
-            # or less over the step-2a decks, a bent-element Yagi, a 36-edge
-            # loop and two collinear edges, free, PEC, refl-coef and
-            # Sommerfeld, at 256 and 8 MB; 1.0e-11 and 1.3e-13 on
-            # antennaknobs' 10-element Yagi at 180 and 120 segments a wire,
-            # 7.8e-13 on its fan dipole, free and Sommerfeld; 4.5e-12, 3.3e-12
-            # and 1.1e-13 on the 10-element Yagi, 3.5-wavelength long wire and
-            # 32-radial vertical decks. A 40 m wire 2 cm over PEC (1500
-            # segments, its near-image block analytic) moves 2.7e-9, where its
-            # off fill moves 1.05e-8 between its tensor and chunked routes
-            # (the inexact offset block moved it 3.8e-9).
-            # A 0.3 m loop at 137 kHz moves 1.4e-8, where
-            # its off fill moves 5e-7 translated 3.7 m (and `offset_reuse`
-            # alone 3e-7). sinusoidal: the class map moves Z itself by
-            # ~1e-12 relative to its largest entry, and the solve amplifies
-            # that at the feed. Measured over every frequency of the 11-16
-            # reuse ladders (13 each; gsfd_* 101), dense:
-            #   free space (Rocketlake, main 816ccd5b): p_m24 2.15e-10, sky_c24 7.6e-11,
-            #     sky_m24 6.6e-11, fd_h51 9.6e-12;
-            #   finite ground (Skylake, the momwire#1970 change): gsky_m24 9.9e-11
-            #     (Sommerfeld), 8.2e-11 (reflection coefficient); gfd_h51
-            #     1.0e-11 / 4.1e-12; gsky_m12 7.9e-12; every other gfd_*,
-            #     gsfd_*, gsky_m6 6.1e-12 or less.
-            # 5e-10 is the worst (p_m24) with about 2x margin. The 3e-12 this
-            # replaces was the matrix ratio, not |dZin|/|Zin|. Still far under
-            # DEFAULT_DRIFT_MAX (antennaknobs' LAST_DIGITS_DRIFT, 1e-6).
-            drift=5e-10,
+            # The worst of the families' below (razor2p's).
+            drift=2e-9,
             offer=False,
             pragma=True,
-        ),
-        # A uniform edge's same-edge reg moments filled by segment offset
-        # (PR #1815), inside the same-edge kernel: one row of offsets of a
-        # synthesised edge, the shipped kernels, summed in another order. A
-        # part of `pair_reuse` (momwire#1982): on with it, and its own
-        # keyword and variable still turn it on or off alone. Its inexact
-        # mechanisms, the free-space and image offset blocks and the
-        # remainder's offset fold (each spreading one row of an edge's own
-        # moments by index), went with momwire#2063 step 3, when the census
-        # took the same-edge pairs; this is what is left. It is inert where
-        # the census serves the direct fill (the class values' regularised
-        # part is the dense routine's, so the fill without reuse's), and pays
-        # where no plan does: the near-image fixup of a long grazing wire (a
-        # 40 m wire 2 cm over PEC, 1500 segments: 28 % of the fill alone,
-        # 32 % beside the census), a long wire's same-edge blocks when the
-        # census is off (5 % of a 1500-segment wire's fill), the buried
-        # fill.
-        # Reach 4 with the whole (Steve, 2026-11-19): it is what
-        # MOMWIRE_X_PAIR_REUSE turns on for bspline, so a certified whole
-        # never stamps a bspline drop-in printout uncertified through it.
-        # Reach 9 since bs2's C++ fill carries it (momwire#2063 stage 4): the
-        # nec5-bs2 and nec42-bs2 executables (levels 6 to 9) run it, with the
-        # whole's census, at the launcher's bytes (`EXE_PARTS`); it also
-        # certifies the macOS drop-in (Steve, 2026-11-25).
-        Feature(
-            name="offset_reuse",
-            reach=9,
-            env="MOMWIRE_X_OFFSET_REUSE",
-            solvers=("bspline",),
-            kind="python",
-            issue=1809,
-            since="2026-11-05",
-            kwarg="offset_reuse",
-            paths=("tests/test_offset_reuse_1809.py",),
-            label="offset reuse",
-            summary=(
-                "Fills a uniform edge's same-edge regularised moments once per "
-                "segment offset, inside the same-edge kernel; turned on with "
-                "pair reuse."
+            families=(
+                # bspline: reach 9, the Python routes and drop-ins (levels 1
+                # to 5, macOS included: Steve, 2026-11-25) and the nec5-bs2
+                # and nec42-bs2 executables (levels 6 to 9), whose C++ fill
+                # runs the census and the Toeplitz form at the launcher's
+                # bytes (momwire#2063). Not 10 or 11: those executables have
+                # no bs2 route.
+                #
+                # |dZin|/|Zin| against the flag-off fill, the census and the
+                # Toeplitz form together (momwire#2063 step 3, the same-edge
+                # pairs keyed apart): 3.0e-10 worst, the #1971 hairpin (its
+                # bridge's pairs, all within a radius, near singles), at both
+                # of its memory caps and over refl-coef; 1.1e-12 or less over
+                # the step-2a decks (Yagis of one and two edges, a V-bent
+                # Yagi, a vertical stack), a bent-element Yagi, a 36-edge loop
+                # and two collinear edges, free, PEC, refl-coef and
+                # Sommerfeld, at 256 and 8 MB; 1.0e-11 and 1.3e-13 on
+                # antennaknobs' 10-element Yagi at 180 and 120 segments a
+                # wire, 7.8e-13 on its fan dipole, free and Sommerfeld;
+                # 4.5e-12, 3.3e-12 and 1.1e-13 on the 10-element Yagi,
+                # 3.5-wavelength long wire and 32-radial vertical decks.
+                # Outside the bound, recorded: a 40 m wire 2 cm over PEC (1500
+                # segments, its near-image block analytic) moves 2.7e-9, where
+                # its off fill moves 1.05e-8 between its tensor and chunked
+                # routes; a 0.3 m loop at 137 kHz moves 1.4e-8, where its off
+                # fill moves 5e-7 translated 3.7 m. 5e-10 is the hairpin's
+                # with 1.6x margin.
+                FamilyReach(
+                    "bspline",
+                    reach=9,
+                    kind="python",
+                    drift=5e-10,
+                    alias="offset_reuse",
+                ),
+                # razor: reach 8, every Python route and the nec5 executables
+                # (levels 6 to 8; nec5-razor2p's route). Not 9 or 10: the
+                # nec42 executables have no razor2p route. Native: outside its
+                # reach the switch leaves it off (`withheld`).
+                #
+                # |dZin|/|Zin| against the flag-off fill, the worst over every
+                # frequency, the extended kernel on (the NEC-5 shell's), each
+                # deck with exact_kernel auto / True / False (Python route,
+                # Rocketlake, momwire#1971):
+                #
+                #   the six benchmark decks (1097-2535 segs, 13 frequencies):
+                #     gsky_m24 2.6e-13 (Sommerfeld), fd_h51 2.6e-13, sky_m24
+                #     2.0e-13, p_m24 1.9e-13, gfd_h51 1.5e-13 (Sommerfeld),
+                #     fd_h27 3.9e-14;
+                #   tiny bridges, h < a (a 2 mm hairpin, 21-segment bridge):
+                #     3.1e-12 free, 3.7e-12 Sommerfeld, 3.4e-12 translated
+                #     3.3 m (each with exact_kernel False; 1.4e-12 auto /
+                #     True); a folded dipole, a shorted stub, a thick
+                #     monopole: <= 1.3e-13;
+                #   close-spaced two-wire lines (10 m, 1 mm wire, 2.1 to 12 mm
+                #     apart, 41 to 161 segments a side, free / PEC /
+                #     Sommerfeld, at the origin and translated 3.3 m): 4.3e-10
+                #     at the worst (2.1 mm, 41 segments, free, exact_kernel
+                #     False), 4.2e-10 at 2.5 mm, 1e-10 at 6 mm, 4e-11 at 12 mm.
+                #
+                # The lines' drift is the fill's own rounding, not a wrong
+                # class: the flag-off fill moves as much when the same deck is
+                # translated 3.3 m (up to 9.4e-10 at 2.1 mm), the pairs differ
+                # from their representatives only by coordinate rounding
+                # (KEY_BITS), and `verify` passes. 2e-9 is about 5x the worst.
+                FamilyReach(
+                    "razor",
+                    reach=8,
+                    kind="native",
+                    drift=2e-9,
+                    alias="razor_pair_reuse",
+                ),
+                # sinusoidal: every level. The class map moves Z itself by
+                # ~1e-12 relative to its largest entry, and the solve
+                # amplifies that at the feed. Measured over every frequency of
+                # the 11-16 reuse ladders (13 each; gsfd_* 101), dense:
+                #   free space (Rocketlake, main 816ccd5b): p_m24 2.15e-10,
+                #     sky_c24 7.6e-11, sky_m24 6.6e-11, fd_h51 9.6e-12;
+                #   finite ground (Skylake, the momwire#1970 change): gsky_m24
+                #     9.9e-11 (Sommerfeld), 8.2e-11 (reflection coefficient);
+                #     gfd_h51 1.0e-11 / 4.1e-12; gsky_m12 7.9e-12; every other
+                #     gfd_*, gsfd_*, gsky_m6 6.1e-12 or less.
+                # 5e-10 is the worst (p_m24) with about 2x margin.
+                FamilyReach("sinusoidal", reach=11, kind="python", drift=5e-10),
             ),
-            # Since momwire#2063 step 3, the Toeplitz form alone: 2.1e-10
-            # worst, the #1971 hairpin (its 21-segment legs), free space;
-            # 1.5e-12 or less over the step-2a decks, a bent-element Yagi and
-            # two collinear edges, every ground, at 256 and 8 MB; 5.3e-13 or
-            # less on antennaknobs' Yagi and fan dipole; 4.2e-13 on the
-            # 10-element Yagi deck; 7.9e-11 on a 40 m wire 2 cm over PEC.
-            # (Before, with the offset blocks: 2.5e-11 worst on the 821-deck
-            # exe corpus, WA7ARK-OCF.) 5e-10 is the hairpin's with 2.4x margin.
-            drift=5e-10,
-            offer=False,
-            part_of="pair_reuse",
         ),
         # The transmitted (below->above) grid blended from frequency anchors
         # on a lattice fixed in metres (momwire#1847), so a sweep shares its
@@ -774,72 +806,6 @@ FEATURES: dict[str, Feature] = {
             ),
             drift=1e-6,
             offer=False,
-        ),
-        # razor2p's fill-pair reuse (momwire#1971): the fill finds its own
-        # classes of (centroid observer, source segment) pairs, the direct
-        # and image moments keyed on what the kernel reads and the composing
-        # ground's remainder on the height-aware key, evaluates one
-        # representative per class with the shipped kernels and gathers the
-        # rest, in Python and in the executables (one C++ core).
-        Feature(
-            name="razor_pair_reuse",
-            # Reach 8: every Python route (the hosted app, Linux sse2,
-            # Windows, the drop-in, macOS) and the nec5 executables (levels 6
-            # to 8, nec5-razor2p's `EXE_FEATURES` row; nec5-bs2, which
-            # shares those levels, refuses it by basis). Not 9 or 10: those
-            # are the nec42 executables, and neither has a razor2p route to
-            # run it in. Still off by default and not offered (Steve, 11-17;
-            # it was reach 1, the hosted app only, from 11-16).
-            reach=8,
-            env="MOMWIRE_X_RAZOR_PAIR_REUSE",
-            solvers=("razor",),
-            kind="native",
-            issue=1971,
-            since="2026-11-16",
-            kwarg="razor_pair_reuse",
-            paths=(
-                "src/momwire/_razor_pair_reuse_core.cpp",
-                "src/momwire/_razor_pair_reuse_core.h",
-                "src/momwire/_pair_reuse_core.cpp",
-                "src/momwire/_pair_reuse_core.h",
-                "tests/test_razor_pair_reuse_1971.py",
-                "tests/test_razor_reuse_rows_2144.py",
-            ),
-            label="razor pair reuse",
-            summary=(
-                "nec5-razor2p fills each class of congruent segment pairs once "
-                "and copies the rest, in free space and over a perfect or "
-                "Sommerfeld ground (the buried fill excepted)."
-            ),
-            # |dZin|/|Zin| against the flag-off fill, the worst over every
-            # frequency, the extended kernel on (the NEC-5 shell's), each
-            # deck with exact_kernel auto / True / False (Python route,
-            # Rocketlake, momwire#1971):
-            #
-            #   the six benchmark decks (1097-2535 segs, 13 frequencies):
-            #     gsky_m24 2.6e-13 (Sommerfeld), fd_h51 2.6e-13, sky_m24
-            #     2.0e-13, p_m24 1.9e-13, gfd_h51 1.5e-13 (Sommerfeld),
-            #     fd_h27 3.9e-14;
-            #   tiny bridges, h < a (a 2 mm hairpin, 21-segment bridge): 3.1e-12
-            #     free, 3.7e-12 Sommerfeld, 3.4e-12 translated 3.3 m (each
-            #     with exact_kernel False; 1.4e-12 auto / True); a folded
-            #     dipole, a shorted stub, a thick monopole: <= 1.3e-13;
-            #   close-spaced two-wire lines (10 m, 1 mm wire, 2.1 to 12 mm
-            #     apart, 41 to 161 segments a side, free / PEC / Sommerfeld,
-            #     at the origin and translated 3.3 m): 4.3e-10 at the worst
-            #     (2.1 mm, 41 segments, free, exact_kernel False), 4.2e-10 at
-            #     2.5 mm, 1e-10 at 6 mm, 4e-11 at 12 mm.
-            #
-            # The lines' drift is the fill's own rounding, not a wrong class:
-            # the flag-off fill moves as much when the same deck is translated
-            # 3.3 m (up to 9.4e-10 at 2.1 mm), the pairs differ from their
-            # representatives only by coordinate rounding (KEY_BITS), and
-            # `verify` passes. 2e-9 is about 5x the worst.
-            drift=2e-9,
-            offer=False,
-            # momwire#1982: on with `pair_reuse`; its own keyword and variable
-            # are aliases. Outside its reach, asked for only that way, off.
-            part_of="pair_reuse",
         ),
         # razor2p's cross blocks across a frequency sweep from anchors
         # (`_razor_crossing_core.cpp`, `set_band_plan`): the above x below
@@ -1348,14 +1314,42 @@ def pragma_note() -> str:
     return f"(pragma ignored: {', '.join(scope[1])})"
 
 
-def _env_value(feature: Feature) -> bool | None:
+def _set(var: str) -> str | None:
+    value = os.environ.get(var)
+    return value.strip() if value is not None and value.strip() else None
+
+
+def _warn_alias(old: str, new: str, stacklevel: int) -> None:
+    warnings.warn(
+        f"{old} is deprecated; use {new} (momwire#2063)",
+        DeprecationWarning,
+        stacklevel=stacklevel + 1,
+    )
+
+
+def _env_value(
+    feature: Feature, solver: str | None = None, *, warn: bool = False
+) -> bool | None:
     """What the environment says of `feature`: True (on), False (set to
-    anything else, "0" say) or None (unset or empty: the default). Unset, a
-    pragma of the deck being answered (:func:`pragma_scope`) reads as on."""
+    anything else, "0" say) or None (unset or empty: the default).
+
+    The feature's own variable first, then its older spellings
+    (``aliases``), then a family's deprecated variable
+    (:attr:`FamilyReach.alias_env`: `solver`'s alone, or any family's when
+    `solver` is None), each warned when `warn`. Unset, a pragma of the deck
+    being answered (:func:`pragma_scope`) reads as on."""
     for var in (feature.env, *feature.aliases):
-        value = os.environ.get(var)
-        if value is not None and value.strip():
-            return value.strip().lower() in _ON
+        value = _set(var)
+        if value is not None:
+            return value.lower() in _ON
+    for fam in feature.families:
+        if fam.alias_env is None or solver not in (None, fam.solver):
+            continue
+        value = _set(fam.alias_env)
+        if value is not None:
+            if warn:
+                _warn_alias(f"variable {fam.alias_env}", feature.env, stacklevel=5)
+            return value.lower() in _ON
     if feature.name in pragmas_on():
         return True
     return None
@@ -1371,8 +1365,8 @@ def requested(name: str, kwarg_value: object = None) -> bool | None:
     return _env_value(FEATURES[name])
 
 
-def _env_on(feature: Feature) -> bool:
-    return _env_value(feature) is True
+def _env_on(feature: Feature, solver: str | None = None) -> bool:
+    return _env_value(feature, solver) is True
 
 
 def default_on(name: str, context: str | None = None) -> bool:
@@ -1385,25 +1379,37 @@ def default_on(name: str, context: str | None = None) -> bool:
     return certified(name, _CONTEXT.get() if context is None else context)
 
 
-def _resolve(
-    name: str, kwarg_value: object, whole_kwarg: object, context: str | None
+def family(name: str, solver: str | None) -> FamilyReach | None:
+    """Feature `name`'s row for solver family `solver` (``families``), or
+    None when it has none (the feature's own reach, kind and drift apply)."""
+    for fam in FEATURES[name].families:
+        if fam.solver == solver:
+            return fam
+    return None
+
+
+def _decide(
+    name: str,
+    kwarg_value: object,
+    alias_value: object,
+    solver: str | None,
+    context: str | None,
+    warn: bool,
 ) -> tuple[bool, bool]:
-    """(on, through the whole): what :func:`enabled` decides before the
-    reach check, and whether it was the whole feature (``part_of``) that
-    asked."""
-    feature = FEATURES[name]
+    """(asked on, withheld): what :func:`enabled` decides before refusing.
+
+    The order: the keyword, then the family's deprecated keyword
+    (`alias_value`), then the variable, then the family's deprecated
+    variable, then a pragma, then the default. On, a native family row
+    outside its reach is withheld."""
     if kwarg_value is not None:
-        return bool(kwarg_value), False
-    if feature.part_of is not None and whole_kwarg is not None:
-        return bool(whole_kwarg), True
-    env = _env_value(feature)
-    if env is not None:
-        return env, False
-    if feature.part_of is not None:
-        env = _env_value(FEATURES[feature.part_of])
-        if env is not None:
-            return env, True
-    return default_on(name, context), False
+        on = bool(kwarg_value)
+    elif alias_value is not None:
+        on = bool(alias_value)
+    else:
+        env = _env_value(FEATURES[name], solver, warn=warn)
+        on = default_on(name, context) if env is None else env
+    return on, on and _withheld_here(name, solver, context)
 
 
 def enabled(
@@ -1411,7 +1417,8 @@ def enabled(
     kwarg_value: object = None,
     *,
     context: str | None = None,
-    whole_kwarg: object = None,
+    solver: str | None = None,
+    alias_value: object = None,
 ) -> bool:
     """Whether `name` is on: the keyword's value when one was passed (not
     None), else its environment variable when set, else its default
@@ -1419,24 +1426,25 @@ def enabled(
     here). A native feature that is on outside its reach raises
     :class:`FeatureNotCertified`.
 
-    A part (``part_of``) also reads the whole feature, after its own
-    keyword and before its own variable: its own keyword, then the whole's
-    keyword (`whole_kwarg`, the value the caller was given for the whole),
-    then its own variable, then the whole's, then its default. Turned on
-    by the whole alone, a native part outside its reach is off rather than
-    refused (:func:`withheld`)."""
-    on, through_whole = _resolve(name, kwarg_value, whole_kwarg, context)
-    if on and through_whole and _withheld_here(name, context):
+    On solver family `solver`, its row (:func:`family`) adds the family's
+    deprecated keyword (`alias_value`, the value the caller was given for
+    it) after the keyword, and its deprecated variable after the variable:
+    the feature's own spelling, when given, wins. A native row outside its
+    reach is off rather than refused (:func:`withheld`)."""
+    on, held = _decide(name, kwarg_value, alias_value, solver, context, warn=False)
+    if held:
         return False
     if on:
         check(name, context)
     return on
 
 
-def _withheld_here(name: str, context: str | None) -> bool:
-    feature = FEATURES[name]
+def _withheld_here(name: str, solver: str | None, context: str | None) -> bool:
+    fam = family(name, solver)
+    if fam is None or fam.kind != "native":
+        return False
     context = _CONTEXT.get() if context is None else context
-    return feature.kind == "native" and not certified(name, context)
+    return not certified(name, context, solver=solver)
 
 
 def withheld(
@@ -1444,13 +1452,13 @@ def withheld(
     kwarg_value: object = None,
     *,
     context: str | None = None,
-    whole_kwarg: object = None,
+    solver: str | None = None,
+    alias_value: object = None,
 ) -> bool:
-    """Whether the whole feature asked for part `name` and it stayed off
-    because it is native and outside its reach here (:func:`enabled`'s
+    """Whether `name` was asked for on family `solver` and stayed off because
+    that family's row is native and outside its reach here (:func:`enabled`'s
     soft refusal), so a solver can say why it did not reuse."""
-    on, through_whole = _resolve(name, kwarg_value, whole_kwarg, context)
-    return on and through_whole and _withheld_here(name, context)
+    return _decide(name, kwarg_value, alias_value, solver, context, warn=False)[1]
 
 
 def honours(name: str, solver: str) -> bool:
@@ -1476,11 +1484,13 @@ def bind(
     set: SinusoidalGalerkinSolver runs SinusoidalSolver's constructor) is
     off, and its variable is not read.
 
-    A part (``part_of``) is resolved with its whole's value from the same
-    call as `whole_kwarg`, so the whole's keyword reaches it in the order
-    :func:`enabled` documents; a native part the whole alone asked for
-    outside its reach stays off, and its name is kept on
-    ``solver.features_withheld`` (:func:`withheld`).
+    A keyword may also be a deprecated spelling of a feature on `kind`
+    (:attr:`FamilyReach.alias`): it is not a feature, has no answer of its
+    own, and reaches the feature in the order :func:`enabled` documents,
+    with a ``DeprecationWarning`` when it is not None; so does the family's
+    deprecated variable. A feature withheld on `kind` (a native row outside
+    its reach) is off, and its name is kept on ``solver.features_withheld``
+    (:func:`withheld`).
 
     Every feature with a kwarg that `kind` honours must be passed, so the
     registry cannot name a family whose constructor never reads the feature.
@@ -1495,6 +1505,21 @@ def bind(
     and is kept on ``solver.features_deferred``."""
     if kind not in SOLVERS:
         raise ValueError(f"no solver family {kind!r} in the feature registry")
+    spellings = {
+        fam.alias: name
+        for name, f in FEATURES.items()
+        for fam in f.families
+        if fam.alias is not None and fam.solver == kind
+    }
+    alias_values: dict[str, object] = {}
+    for alias, name in spellings.items():
+        if alias in kwargs:
+            value = kwargs.pop(alias)
+            if value is not None:
+                _warn_alias(
+                    f"keyword {alias!r}", f"{FEATURES[name].kwarg!r}", stacklevel=3
+                )
+                alias_values[name] = value
     unknown = sorted((set(kwargs) | set(deferred)) - set(FEATURES))
     if unknown:
         raise TypeError(f"bind: no feature named {', '.join(unknown)}")
@@ -1525,21 +1550,25 @@ def bind(
         if not honours(name, kind):
             bound[name] = False
             continue
-        whole = FEATURES[name].part_of
-        whole_value = kwargs.get(whole) if whole and honours(whole, kind) else None
-        bound[name] = enabled(name, value, whole_kwarg=whole_value)
-        if withheld(name, value, whole_kwarg=whole_value):
+        alias = alias_values.get(name)
+        # once with the deprecation warning, then as `enabled` decides
+        if _decide(name, value, alias, kind, None, warn=True)[1]:
             held.append(name)
+            bound[name] = False
+        else:
+            bound[name] = enabled(name, value, solver=kind, alias_value=alias)
     solver.features_bound = bound
     solver.features_withheld = tuple(held)
     solver.features_deferred = tuple(deferred)
     return bound
 
 
-def active() -> list[str]:
+def active(solver: str | None = None) -> list[str]:
     """The features the environment turns on, in registry order (a
-    default-on one only when its variable says on, not by its default)."""
-    return [name for name, f in FEATURES.items() if _env_on(f)]
+    default-on one only when its variable says on, not by its default), for
+    solver family `solver` (a family's deprecated variable counts only for
+    its own family; None, any family's)."""
+    return [name for name, f in FEATURES.items() if _env_on(f, solver)]
 
 
 # The executable a basis name selects, by its level family. Keys are the
@@ -1683,12 +1712,16 @@ def certified(
     platform: str | None = None,
     variant: str | None = _UNSET,  # type: ignore[assignment]
     toolchain: str | None = None,
+    solver: str | None = None,
 ) -> bool:
-    """Whether `name` is certified where it is running."""
+    """Whether `name` is certified where it is running: on solver family
+    `solver`, as far as that family's row reaches (:func:`family`), else as
+    far as the feature does."""
     level = current_level(
         context, basis=basis, platform=platform, variant=variant, toolchain=toolchain
     )
-    return level <= FEATURES[name].reach
+    fam = None if solver is None else family(name, solver)
+    return level <= (FEATURES[name].reach if fam is None else fam.reach)
 
 
 def check(name: str, context: str | None = None) -> None:
@@ -1709,33 +1742,21 @@ def check(name: str, context: str | None = None) -> None:
 
 def _runs_on(name: str, solver: str, context: str) -> bool:
     """Whether feature `name`, on in the environment, runs on family `solver`:
-    the family honours it and, where the family takes a whole feature through
-    parts (``part_of``), one of those parts resolves on. A part's own variable
-    can turn it off under the whole, and outside its reach a native part the
-    whole alone asked for is withheld: either way the whole did nothing."""
-    if not honours(name, solver):
-        return False
-    parts = [
-        p.name for p in FEATURES.values() if p.part_of == name and solver in p.solvers
-    ]
-    if not parts:
-        return True
-    for part in parts:
-        on, through_whole = _resolve(part, None, None, context)
-        if on and not (through_whole and _withheld_here(part, context)):
-            return True
-    return False
+    the family honours it and does not withhold it (a native family row
+    outside its reach, :func:`withheld`)."""
+    return honours(name, solver) and not _withheld_here(name, solver, context)
 
 
 def stamp(context: str | None = None, solver: str | None = None) -> str:
     """What a printout's line 2 adds for the features the environment turns
     on where their default is off: ``""`` when there are none (the line is
     then byte-identical to one without features), else ``"+a+b"``, followed
-    by ``" uncertified on this platform"`` when any of them, or a part of
-    one that runs (:func:`_certified_as_run`), is outside its reach here
-    (`context` defaulting to the running one). A default-on feature is never
-    named: on, it is the stable path; turned off, the printout is the one
-    before it was promoted.
+    by ``" uncertified on this platform"`` when any of them is outside its
+    reach here as it runs (:func:`_certified_as_run`: its family row's reach
+    on a family that has one), `context` defaulting to the running one. A
+    default-on feature is never named: on, it is the stable path; turned
+    off, the printout is the one before it was promoted. A feature turned
+    on by a family's deprecated variable is named by its own name.
 
     `solver` is the running solver's family (:data:`SOLVERS`, or ``""`` for
     one that honours none; :func:`basis_solver`): only the features that run
@@ -1745,7 +1766,7 @@ def stamp(context: str | None = None, solver: str | None = None) -> str:
     context = _CONTEXT.get() if context is None else context
     names = [
         n
-        for n in active()
+        for n in active(solver or None)
         if not default_on(n, context)
         and (solver is None or _runs_on(n, solver, context))
     ]
@@ -1759,16 +1780,20 @@ def stamp(context: str | None = None, solver: str | None = None) -> str:
 
 def _certified_as_run(name: str, solver: str | None, context: str) -> bool:
     """Whether `name`, on in the environment, runs certified here: it is
-    certified, and so is each of its parts that runs on family `solver`
-    (every family when None). A whole reaches as far as its widest family,
-    and on a family it acts on through a part, what runs is the part."""
+    certified, and so is its row for family `solver` when it has one (with
+    `solver` None, every family's row the environment turns it on for that
+    is not withheld). A feature reaches as far as its widest family; what
+    runs on a family is that family's row."""
     if not certified(name, context):
         return False
-    for part in FEATURES.values():
-        if part.part_of != name or (solver is not None and solver not in part.solvers):
+    feature = FEATURES[name]
+    for fam in feature.families:
+        if solver is not None and fam.solver != solver:
             continue
-        on, through_whole = _resolve(part.name, None, None, context)
-        if on and not (through_whole and _withheld_here(part.name, context)):
-            if not certified(part.name, context):
-                return False
+        if solver is None and not _env_on(feature, fam.solver):
+            continue
+        if _withheld_here(name, fam.solver, context):
+            continue
+        if not certified(name, context, solver=fam.solver):
+            return False
     return True

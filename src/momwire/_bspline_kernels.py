@@ -967,10 +967,11 @@ def _seg_seg_reg_geometry(
 # one-row window of the ordinary geometry (`rows=`), so the same kernels serve
 # it.
 #
-# Opt-in (momwire#1809): `BSplineSolver(offset_reuse=True)` sets this for its
-# own fills (`offset_reuse_scope`). Off, the dense table below is the fill as
-# it always was, bit for bit -- the default path, and the standalone
-# executable's, which fills the same-edge reg densely in C++.
+# Opt-in (momwire#1809): `BSplineSolver(pair_reuse=True)` sets this for its
+# own fills (`offset_reuse_scope`; the keyword was `offset_reuse` before
+# momwire#2063 step 4). Off, the dense table below is the fill as it always
+# was, bit for bit -- the default path, and the standalone executable's
+# without the switch.
 _REG_TOEPLITZ = contextvars.ContextVar("momwire_reg_toeplitz", default=False)
 
 
