@@ -840,6 +840,31 @@ def _seg_seg_static_moments(
     return out
 
 
+def _seg_seg_static_moments_window(seg_endpoints, a, max_d, rows, cols, *, ek=None):
+    """`_seg_seg_static_moments(...)[:, :, rows, cols]` for observer rows
+    `rows` and source columns `cols` (index arrays into one edge): on a
+    uniform edge read straight off the Toeplitz table the windowed static
+    path gathers from (a copy, the same doubles), else the windowed rows'
+    columns. bs2's same-edge class values (momwire#2063 step 3)."""
+    rows = np.asarray(rows, dtype=np.int64)
+    cols = np.asarray(cols, dtype=np.int64)
+    seg_endpoints = np.asarray(seg_endpoints, dtype=np.float64)
+    N = len(seg_endpoints) - 1
+    if max_d <= _BSPLINE_ACCEL_MAX_D and _static_is_toeplitz(seg_endpoints):
+        a_ek = None if ek is None else float(_ek_radius(ek, a))
+        if (ek is None and _HAVE_BSPLINE_STATIC_ACCEL) or (
+            ek is not None and _HAVE_BSPLINE_STATIC_EK_ACCEL
+        ):
+            h = float(np.diff(seg_endpoints)[0])
+            table = _static_toeplitz_table(h, float(a), int(N), int(max_d), a_ek)
+            return np.ascontiguousarray(
+                table[:, :, cols[None, :] - rows[:, None] + (N - 1)]
+            )
+    lo, hi = int(rows.min()), int(rows.max()) + 1
+    block = _seg_seg_static_moments(seg_endpoints, a, max_d, ek=ek, rows=slice(lo, hi))
+    return np.ascontiguousarray(block[:, :, (rows - lo)[:, None], cols[None, :]])
+
+
 def _seg_seg_reg_geometry(
     seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None, dense=False
 ):

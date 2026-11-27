@@ -106,6 +106,25 @@ struct FillParams {
 std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vector<double> &radius_per_wire,
                                               const FillParams &fp);
 
+// `_same_edge_class_values` (momwire#2063 step 3): each same-edge class's
+// moments by the same-edge routine at its representative, the analytic
+// static moments (the edge's Toeplitz table entry j - i) plus the dense
+// regularised part, into `values` (classes, d + 1, d + 1): the shared classes
+// in windows of up to 64 consecutive rows against the columns their
+// representatives span, the near singles in windows of up to 16 against
+// their band (a pair's
+// moments are its own in any window, `_seg_seg_reg_geometry_pairs`). Edges
+// in segment order; returns the pairs the routine formed. Python's route
+// calls it too, so the two are one code.
+struct SameEdgeArc {
+    int64_t s0 = 0, s1 = 0;
+    const double *arc = nullptr;  // (s1 - s0 + 1) arc lengths
+    int64_t n_arc = 0;
+    double a_w = 0.0;
+};
+int64_t same_edge_class_values(const reuse::Plan &plan, const std::vector<SameEdgeArc> &edges, int64_t N,
+                               int degree, double k, int64_t n_qp_same_edge, bool ek, cdouble *values);
+
 // `_build_J_blocks(geom, k)`: (d+1, d+1, N, N) C order. `radius_per_wire`:
 // the conductor radius of each wire.
 CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,

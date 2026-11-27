@@ -161,6 +161,9 @@ struct Geometry {
     const double *seg_r = nullptr;      // (n, 3)
     const double *a = nullptr;          // (n): each observer row's radius
     const int32_t *edge = nullptr;      // (n): the same-edge block it belongs to
+    // (n): its edge's segment length as the same-edge routine reads it, the
+    // static table's h = arc[1] - arc[0] (momwire#2063 step 3)
+    const double *edge_h = nullptr;
     const int64_t *group_i = nullptr;   // (n) EK labels, or null (EK off)
     const int64_t *group_j = nullptr;   // (n), with group_i
     const double *b_src = nullptr;      // (n) EK source tube radii, or null (b = a)
@@ -251,14 +254,17 @@ void near_same_edge_mask(const Plan &p, int64_t r0, int64_t r1, int64_t c0, int6
 // window is never written whole: every pair (o, s), the same-edge pairs
 // among them, is its class's value, transposed under reciprocity, the
 // window `gather` writes, bit for bit; except, with `own`, a near same-edge
-// single in columns [b0, b1) of rows [r0, r1), which is own[(pq * (r1 - r0)
-// + o - r0) * (b1 - b0) + s - b0] (the sweep's own moments, the chunked fill's).
+// single (o, s) of rows [r0, r1) in its row's band [lo, hi), which is
+// own[(pq * (r1 - r0) + o - r0) * bw + s - lo[o - r0]] (the sweep's own
+// moments, the chunked fill's).
 struct Window {
     const Plan *plan = nullptr;
     const cd *values = nullptr;  // (classes, d1, d1)
     int d1 = 3;
-    const cd *own = nullptr;     // (d1^2, r1 - r0, b1 - b0), or null
-    int64_t r0 = 0, r1 = 0, b0 = 0, b1 = 0;
+    const cd *own = nullptr;      // (d1^2, r1 - r0, bw), or null
+    const int64_t *lo = nullptr;  // (r1 - r0), with own
+    const int64_t *hi = nullptr;  // (r1 - r0), with own
+    int64_t r0 = 0, r1 = 0, bw = 0;
 };
 // Throws unless `w` is one of the above (the tile source cannot: it runs
 // inside the assembly's parallel region).
