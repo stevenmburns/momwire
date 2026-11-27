@@ -366,3 +366,109 @@ def test_the_windows_are_the_sweeps():
     before = _counts()
     _fill(s)
     assert _ran(before, _counts()) == len(range(0, n, chunk)) >= 2
+
+
+# The tensor route (momwire#2063, the follow-up to step 3): under the tensor's
+# budget a served plan's Z is assembled tile by tile from the class values in
+# one window of every row, as the chunked route's windows are; the
+# (d+1, d+1, N, N) tensor is never gathered.
+
+
+def _hairpin():
+    """The #1971 hairpin (63 segments): its bridge is thicker than its
+    segments are long (h < a), so its near same-edge singles have a band
+    on the chunked route; on this route they are their class values."""
+    ws = [
+        [[0, -5, 8], [0, 5, 8]],
+        [[0, 5, 8], [0.002, 5, 8]],
+        [[0.002, 5, 8], [0.002, -5, 8]],
+    ]
+    return bs2(
+        wires=[np.array(w, dtype=float) for w in ws],
+        n_per_edge_per_wire=[[21], [21], [21]],
+        feeds=[(0, 5.238095238095238, 1 + 0j)],
+        wire_radius=0.001,
+        wavelength=20.0,
+        pair_reuse=True,
+    )
+
+
+_TENSOR_DECKS = {
+    "yagi": lambda **kw: _yagi(swept_mem_mb=256, **kw),
+    "hairpin": lambda **kw: _hairpin(),
+}
+
+
+@pytest.fixture
+def no_cap():
+    """The census's compression rule lifted (the hairpin's classes)."""
+    bs._acc.pair_reuse_cap_compression(1)
+    yield
+    bs._acc.pair_reuse_cap_compression(0)
+
+
+class _NoGather:
+    """A plan that refuses `gather`: the tensor route must not run it."""
+
+    def __init__(self, plan):
+        self._plan = plan
+
+    def __getattr__(self, name):
+        return getattr(self._plan, name)
+
+    def gather(self, *a):
+        raise AssertionError("the tensor route gathered the tensor")
+
+
+@pytest.mark.parametrize("deck", sorted(_TENSOR_DECKS))
+def test_the_tensor_route_assembles_from_the_class_values(deck, no_cap, monkeypatch):
+    """Under the tensor's budget the served fill takes one fused window of
+    every row (the kernel's count), and neither gathers the tensor nor
+    builds it (`_build_J_blocks`)."""
+    real = BSplineSolver._reuse_plan
+
+    def wrap(self, geom):
+        plan = real(self, geom)
+        return None if plan is None else _NoGather(plan)
+
+    def no_tensor(self, *a, **kw):
+        raise AssertionError("the tensor route built the tensor")
+
+    monkeypatch.setattr(BSplineSolver, "_reuse_plan", wrap)
+    monkeypatch.setattr(BSplineSolver, "_build_J_blocks", no_tensor)
+    s = _TENSOR_DECKS[deck]()
+    before = _counts()
+    _fill(s)
+    assert _ran(before, _counts()) == 1
+    assert s.pair_reuse_served["route"] == "tensor"
+
+
+@pytest.mark.parametrize("ek", [False, True])
+@pytest.mark.parametrize("deck", sorted(_TENSOR_DECKS))
+def test_the_tensor_route_is_the_gathered_tensor_to_the_bit(deck, ek, no_cap, gathered):
+    """Z is the gathered tensor's through the windowed assembler, bit for
+    bit, its near same-edge singles (the hairpin bridge's) their class
+    values: one window, rows [0, N), no own band."""
+    s = _TENSOR_DECKS[deck](extended_kernel=ek)
+    ref = _fill(s)
+    n = int(s._build_geometry()["n_segs_total"])
+    assert gathered == [(0, n)]
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(BSplineSolver, "_reuse_plan", _REAL_REUSE_PLAN)
+        Z = _fill(_TENSOR_DECKS[deck](extended_kernel=ek))
+    assert Z.tobytes() == ref.tobytes()
+
+
+def test_the_tensor_route_moves_z_by_its_sum_order_alone(no_cap, monkeypatch):
+    """Against the gathered tensor through `assemble_Z` (the route it
+    replaced) Z moves at the two assemblers' sum orders: last digits. Not
+    at all on this deck without the lane kernel (sse2, arm64), whose
+    windowed reference loop sums as `assemble_Z` does here."""
+    Z = _fill(_yagi(swept_mem_mb=256))
+    monkeypatch.setattr(bs, "_HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL", False)
+    s = _yagi(swept_mem_mb=256)
+    ref = _fill(s)
+    assert s.pair_reuse_served["route"] == "tensor"
+    assert _moved(Z, ref) <= Z_DRIFT
+    if LANES:
+        assert _moved(Z, ref) > 0.0
