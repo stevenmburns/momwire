@@ -399,6 +399,38 @@ std::vector<cdouble> reg_rows_dense(const std::vector<double> &s_q, const std::v
     return std::vector<cdouble>(A_reg.data(), A_reg.data() + A_reg.size());
 }
 
+// Rows [lo, hi) against columns [c0, c1) of the dense reg geometry's moments
+// at a real k (`_seg_seg_reg_geometry_pairs(nodes, a, n_qp, rows, cols)` read
+// by `_seg_seg_reg_moments_from_geometry`): (nd, nd, hi - lo, c1 - c0). Each
+// entry is the square table's for its pair.
+std::vector<cdouble> reg_window_dense(const std::vector<double> &s_q, const std::vector<double> &wu, size_t q,
+                                      size_t n, int nd, double a_w, double k, bool ek, size_t lo, size_t hi,
+                                      size_t c0, size_t c1) {
+    const size_t m = hi - lo, nc = c1 - c0;
+    std::vector<double> s_row(s_q.begin() + static_cast<std::ptrdiff_t>(lo * q),
+                              s_q.begin() + static_cast<std::ptrdiff_t>(hi * q));
+    std::vector<double> s_col(s_q.begin() + static_cast<std::ptrdiff_t>(c0 * q),
+                              s_q.begin() + static_cast<std::ptrdiff_t>(c1 * q));
+    const CF sr = borrow(s_row, {static_cast<nd::ssize_t>(s_row.size())});
+    const CF sc = borrow(s_col, {static_cast<nd::ssize_t>(s_col.size())});
+    const nd::array_t<double> R = reg_distance_table(sr, sc, a_w * a_w);
+    std::vector<double> wu_r(static_cast<size_t>(nd) * m * q), wu_c(static_cast<size_t>(nd) * nc * q);
+    for (int p = 0; p < nd; p++) {
+        for (size_t i = 0; i < m * q; i++)
+            wu_r[static_cast<size_t>(p) * m * q + i] = wu[static_cast<size_t>(p) * n * q + lo * q + i];
+        for (size_t i = 0; i < nc * q; i++)
+            wu_c[static_cast<size_t>(p) * nc * q + i] = wu[static_cast<size_t>(p) * n * q + c0 * q + i];
+    }
+    const CF wu_row = borrow(wu_r, {nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(q)});
+    const CF wu_col = borrow(wu_c, {nd, static_cast<nd::ssize_t>(nc), static_cast<nd::ssize_t>(q)});
+    const std::vector<double> kv{k};
+    const CF ka = borrow(kv, {1});
+    const CF Rv = CF::borrow(R.buffer());
+    const nd::array_t<std::complex<double>> A_reg = ek ? seg_seg_reg_moments_bspline_swept_ek_window(Rv, wu_row, wu_col, ka, a_w)
+                                                       : seg_seg_reg_moments_bspline_swept_window(Rv, wu_row, wu_col, ka);
+    return std::vector<cdouble>(A_reg.data(), A_reg.data() + A_reg.size());
+}
+
 // The Toeplitz form (`_seg_seg_reg_geometry_toeplitz`, `_toeplitz_reg_gather`):
 // rows [r0, r1) of a uniform edge's (nd, nd, n, n) reg block, every entry
 // read from one observer row, the centre of a 2n - 1 segment edge of
@@ -512,10 +544,90 @@ std::vector<int64_t> near_image_starts(const Geometry &g, const std::vector<doub
     return near;
 }
 
+// `_SAME_EDGE_VALUE_ROWS`: observer rows of one edge per same-edge
+// class-value window.
+constexpr int64_t SAME_EDGE_VALUE_ROWS = 16;
+
+// `_same_edge_class_values(plan, geom, k, values)` (momwire#2063 step 3):
+// each same-edge class's moments by the same-edge routine at its
+// representative, the analytic static moments plus the regularised part
+// (`_seg_seg_static_moments(rows=)`, `_seg_seg_reg_geometry_pairs`), in
+// windows of at most SAME_EDGE_VALUE_ROWS consecutive observer rows against
+// the columns their representatives span, as Python cuts them.
+void same_edge_class_values(const reuse::Plan &plan, const Geometry &g, const std::vector<double> &seg_a,
+                            const FillParams &fp, std::vector<cdouble> &values) {
+    const pair_reuse::FamilyPlan &f = plan.fam.at(0);
+    if (f.apart_cls.empty()) return;
+    const int d = fp.degree, nd = d + 1;
+    const size_t dd = static_cast<size_t>(nd * nd);
+    const int64_t N = g.n_segs_total;
+    struct Edge {
+        int64_t s0, s1;
+        const std::vector<double> *arc;
+    };
+    std::vector<Edge> edges;
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const WireGeometry &pw = g.per_wire[w];
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++)
+            edges.push_back({g.seg_offsets[w] + pw.edge_offsets[e], g.seg_offsets[w] + pw.edge_offsets[e + 1],
+                             &pw.edge_arc_edges[e]});
+    }
+    const size_t m_all = f.apart_cls.size();
+    size_t t = 0, e = 0;
+    while (t < m_all) {
+        while (edges[e].s1 <= f.apart_rep[t] / N) e++;
+        const Edge &ed = edges[e];
+        size_t u_edge = t;  // this edge's representatives: [t, u_edge)
+        while (u_edge < m_all && f.apart_rep[u_edge] / N < ed.s1) u_edge++;
+        const std::vector<double> &arc = *ed.arc;
+        const size_t n = arc.size() - 1;
+        if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+        const double a_w = seg_a[static_cast<size_t>(ed.s0)];
+        const double h = arc[1] - arc[0];
+        const nd::array_t<double> table =
+            fp.extended_kernel ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, n, d, a_w)
+                               : seg_seg_static_moments_bspline_uniform_table(h, a_w, n, d);
+        const CF tab = CF::borrow(table.buffer());
+        std::vector<double> s_q, wu;
+        size_t q = 0;
+        reg_nodes(arc, fp.n_qp_same_edge, nd, s_q, wu, q);
+        const auto row_of = [&](size_t x) { return f.apart_rep[x] / N - ed.s0; };
+        const auto col_of = [&](size_t x) { return f.apart_rep[x] % N - ed.s0; };
+        while (t < u_edge) {
+            const int64_t lo = row_of(t);
+            size_t u = t;
+            int64_t hi = lo + 1, c0 = col_of(t), c1 = c0 + 1;
+            while (u < u_edge && row_of(u) < lo + SAME_EDGE_VALUE_ROWS) {
+                hi = row_of(u) + 1;
+                c0 = std::min(c0, col_of(u));
+                c1 = std::max(c1, col_of(u) + 1);
+                u++;
+            }
+            const size_t m = static_cast<size_t>(hi - lo), nc = static_cast<size_t>(c1 - c0);
+            const nd::array_t<double> st = toeplitz_gather_rows(tab, n, static_cast<size_t>(lo), static_cast<size_t>(hi));
+            const std::vector<cdouble> rg =
+                reg_window_dense(s_q, wu, q, n, nd, a_w, fp.k, fp.extended_kernel, static_cast<size_t>(lo),
+                                 static_cast<size_t>(hi), static_cast<size_t>(c0), static_cast<size_t>(c1));
+            const double *sp = st.data();
+            for (size_t x = t; x < u; x++) {
+                const size_t i = static_cast<size_t>(row_of(x) - lo), j = static_cast<size_t>(col_of(x));
+                const size_t c = static_cast<size_t>(f.apart_cls[x]);
+                for (size_t pq = 0; pq < dd; pq++) {
+                    const double sv = sp[(pq * m + i) * n + j];
+                    const cdouble r = rg[(pq * m + i) * nc + (j - static_cast<size_t>(c0))];
+                    values[c * dd + pq] = cdouble(sv + r.real(), 0.0 + r.imag());
+                }
+            }
+            t = u;
+        }
+    }
+}
+
 // `_reuse_values(plan, geom, k, ladder, ek)`: each class's (d+1, d+1)
 // moments, the shipped off-edge fill over each group's observer rows against
 // the union of its representatives' sources; an image group's (momwire#2063
-// step 2a) against the mirrored sources, as the image fill forms them.
+// step 2a) against the mirrored sources, as the image fill forms them; a
+// same-edge class's by the same-edge routine (`same_edge_class_values`).
 std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, const std::vector<double> &seg_a,
                                   const FillParams &fp, const EK &ek) {
     const pair_reuse::FamilyPlan &f = plan.fam.at(0);
@@ -539,6 +651,7 @@ std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, co
             for (size_t pq = 0; pq < dd; pq++) values[c * dd + pq] = blk[pq * M + at];
         }
     }
+    same_edge_class_values(plan, g, seg_a, fp, values);
     if (image && fp.held) {
         fp.held->plan = &plan;
         fp.held->values = values;
@@ -624,12 +737,13 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
     }
     Block J;
     if (fp.plan) {
-        // momwire#2063: every pair between two edges gathered from its
-        // class's value, each class evaluated once by the off-edge fill; the
-        // same-edge blocks are overwritten below as without reuse
+        // momwire#2063: every pair gathered from its class's value, each
+        // class evaluated once, by the off-edge fill or (a same-edge class,
+        // step 3) the same-edge routine: no overwrite follows
         const std::vector<cdouble> values = reuse_values(*fp.plan, g, seg_a, fp, whole_ek(fp, seg_a));
         J = Block(static_cast<size_t>(nd * nd) * N * N, false);
         reuse::gather(*fp.plan, 0, static_cast<int64_t>(N), values.data(), nd, J.data());
+        return J;
     } else if (slices.size() == 1 && slices[0].first == 0 && slices[0].second == N) {
         J = Block(static_cast<size_t>(nd * nd) * N * N);
     } else {
@@ -1003,54 +1117,73 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
         return offedge(all.take(rows), all.take(cols), a_sub, fp.k, d, fp.n_qp_pair, ek_cut(ek, &rows, &cols),
                        fp.ladder);
     };
-    // momwire#2063: the census's plan
+    // momwire#2063: the census's plan, whose classes hold every pair, the
+    // same-edge ones by the same-edge routine (step 3); its near same-edge
+    // singles are the sweep's own moments and the fixup's correction, as
+    // without reuse (`_near_own`, `_near_same_edge_fixup`)
     const reuse::Plan *plan = fp.plan.get();
     std::vector<cdouble> values;
-    std::vector<EdgeIng> edges_all;
-    std::vector<int64_t> edge_cuts;
+    std::vector<int64_t> band_lo(static_cast<size_t>(N), 0), band_hi(static_cast<size_t>(N), 0);
+    std::vector<std::pair<int64_t, int64_t>> pieces;
     if (plan != nullptr) {
         values = reuse_values(*plan, g, a_row, fp, ek);
-        edges_all = edge_ingredients(g, radius_per_wire);
-        for (const EdgeIng &e : edges_all) edge_cuts.push_back(e.s0);
-        edge_cuts.push_back(N);
+        for (int64_t o = 0; o < N; o++)
+            reuse::same_edge_band(*plan, o, band_lo[static_cast<size_t>(o)], band_hi[static_cast<size_t>(o)]);
+        for (const EdgeIng &e : edge_ingredients(g, radius_per_wire)) pieces.push_back({e.s0, e.s1});
     }
+    // the band [c0, c1) the near singles of rows [r0, r1) span; false: none
+    const auto band = [&](int64_t r0, int64_t r1, int64_t &c0, int64_t &c1) {
+        c0 = N;
+        c1 = 0;
+        for (int64_t o = r0; o < r1; o++)
+            if (band_hi[static_cast<size_t>(o)] > band_lo[static_cast<size_t>(o)]) {
+                c0 = std::min(c0, band_lo[static_cast<size_t>(o)]);
+                c1 = std::max(c1, band_hi[static_cast<size_t>(o)]);
+            }
+        return c1 > c0;
+    };
     for (int64_t w0 = 0; w0 < N; w0 += chunk) {
         const int64_t w1 = std::min(w0 + chunk, N);
         if (plan != nullptr) {
-            // `_reuse_block`: the window assembled from the class values, cut
-            // at the edges; each piece's own-edge columns the sweep's own
-            // fill.
-            // The window is never written whole (momwire#2166): each tile of
-            // Z reads the class values as it runs, `_reuse_block`'s
-            // `plan.assemble`, bit for bit the gathered window's sum.
-            std::vector<int64_t> bounds{w0};
-            for (int64_t c : edge_cuts)
-                if (c > w0 && c < w1) bounds.push_back(c);
-            bounds.push_back(w1);
-            for (size_t t = 0; t + 1 < bounds.size(); t++) {
-                const int64_t r0 = bounds[t], r1 = bounds[t + 1];
-                const size_t e = static_cast<size_t>(std::upper_bound(edge_cuts.begin(), edge_cuts.end(), r0) -
-                                                     edge_cuts.begin()) - 1;
-                const int64_t o0 = edges_all[e].s0, o1 = edges_all[e].s1;
-                const Block own = moments(r0, r1, o0, o1);
-                reuse::Window w;
-                w.plan = plan;
-                w.values = values.data();
-                w.d1 = nd;
-                w.r0 = r0;
-                w.r1 = r1;
-                w.o0 = o0;
-                w.o1 = o1;
-                w.own = own.data();
-                reuse::check_window(w);
-                const std::vector<int64_t> m_idx = touching(r0, r1);
-                assemble_Z_bspline_windowed_tiles(
-                    [&w](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cdouble *out) {
-                        reuse::window_tile(w, rows, nr, cols, nc, out);
-                    },
-                    sa, pa, ta, borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())}),
-                    borrow(all_n, {static_cast<nd::ssize_t>(all_n.size())}), r0, r1, 0, N, omega, eps, mu, Za, 0);
+            // `_reuse_block`: the window assembled from the class values,
+            // never written whole (momwire#2166): each tile of Z reads the
+            // class values as it runs, bit for bit the gathered window's sum;
+            // its near same-edge singles the sweep's own moments (`_near_own`)
+            reuse::Window win;
+            win.plan = plan;
+            win.values = values.data();
+            win.d1 = nd;
+            Block own;
+            int64_t b0 = 0, b1 = 0;
+            if (band(w0, w1, b0, b1)) {
+                const int64_t m = w1 - w0, nb = b1 - b0;
+                own = Block(static_cast<size_t>(nd * nd * m * nb));
+                for (const auto &pc : pieces) {
+                    const int64_t p0 = std::max(w0, pc.first), p1 = std::min(w1, pc.second);
+                    int64_t c0, c1;
+                    if (p0 >= p1 || !band(p0, p1, c0, c1)) continue;
+                    const Block J = moments(p0, p1, c0, c1);
+                    const int64_t pm = p1 - p0, pn = c1 - c0;
+                    for (int64_t pq = 0; pq < nd * nd; pq++)
+                        for (int64_t i = 0; i < pm; i++)
+                            for (int64_t j = 0; j < pn; j++)
+                                own[static_cast<size_t>((pq * m + (p0 - w0 + i)) * nb + (c0 - b0 + j))] =
+                                    J[static_cast<size_t>((pq * pm + i) * pn + j)];
+                }
+                win.own = own.data();
+                win.r0 = w0;
+                win.r1 = w1;
+                win.b0 = b0;
+                win.b1 = b1;
             }
+            reuse::check_window(win);
+            const std::vector<int64_t> m_idx = touching(w0, w1);
+            assemble_Z_bspline_windowed_tiles(
+                [&win](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cdouble *out) {
+                    reuse::window_tile(win, rows, nr, cols, nc, out);
+                },
+                sa, pa, ta, borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())}),
+                borrow(all_n, {static_cast<nd::ssize_t>(all_n.size())}), w0, w1, 0, N, omega, eps, mu, Za, 0);
             continue;
         }
         const std::vector<size_t> rows = range(w0, w1);
@@ -1058,6 +1191,60 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
         const Block J_chunk = offedge(all.take(rows), all, a_sub, fp.k, d, fp.n_qp_pair,
                                       ek_cut(ek, &rows, nullptr), fp.ladder);
         accumulate(J_chunk, w0, w1, 0, N, touching(w0, w1), all_n);
+    }
+    if (plan != nullptr) {
+        // `_near_same_edge_fixup`: the near singles' (A_st + A_reg) - J, each
+        // edge's rows in the fixup's windows against their singles' band,
+        // every other pair's correction zero
+        for (size_t w = 0; w < g.per_wire.size(); w++) {
+            const WireGeometry &pw = g.per_wire[w];
+            const double a_w = radius_per_wire[w];
+            for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+                const std::vector<double> &arc = pw.edge_arc_edges[e];
+                const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+                int64_t c0, c1;
+                if (!band(s0, s1, c0, c1)) continue;
+                const size_t n = arc.size() - 1;
+                if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+                const double h = arc[1] - arc[0];
+                const nd::array_t<double> table =
+                    fp.extended_kernel ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, n, d, a_w)
+                                       : seg_seg_static_moments_bspline_uniform_table(h, a_w, n, d);
+                const CF tab = CF::borrow(table.buffer());
+                std::vector<double> s_q, wu;
+                size_t q = 0;
+                reg_nodes(arc, fp.n_qp_same_edge, nd, s_q, wu, q);
+                const int64_t corr_chunk = mb_rows(static_cast<int64_t>(nd * nd) * static_cast<int64_t>(n) * 16);
+                for (int64_t r0 = s0; r0 < s1; r0 += corr_chunk) {
+                    const int64_t r1 = std::min(r0 + corr_chunk, s1);
+                    if (!band(r0, r1, c0, c1)) continue;
+                    const size_t lo = static_cast<size_t>(r0 - s0), hi = static_cast<size_t>(r1 - s0);
+                    const size_t l0 = static_cast<size_t>(c0 - s0), l1 = static_cast<size_t>(c1 - s0);
+                    const size_t m = hi - lo, nb = l1 - l0;
+                    const nd::array_t<double> st_rows = toeplitz_gather_rows(tab, n, lo, hi);
+                    std::vector<double> st(static_cast<size_t>(nd * nd) * m * nb);
+                    const double *sp = st_rows.data();
+                    for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
+                        for (size_t i = 0; i < m; i++)
+                            for (size_t j = 0; j < nb; j++) st[(pq * m + i) * nb + j] = sp[(pq * m + i) * n + l0 + j];
+                    std::vector<cdouble> rg =
+                        reg_window_dense(s_q, wu, q, n, nd, a_w, fp.k, fp.extended_kernel, lo, hi, l0, l1);
+                    const Block J_win = moments(r0, r1, c0, c1);
+                    using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
+                    const CF stw = borrow(st, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nb)});
+                    const CC regw = borrow(rg, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nb)});
+                    const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nb)});
+                    Block corr = Block::adopt(same_edge_corr_combine(stw, regw, Jw));
+                    std::vector<uint8_t> mask(m * nb);
+                    reuse::near_same_edge_mask(*plan, r0, r1, c0, c1, mask.data());
+                    for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
+                        for (size_t t = 0; t < m * nb; t++)
+                            if (!mask[t]) corr[pq * m * nb + t] = cdouble(0.0, 0.0);
+                    accumulate(corr, r0, r1, c0, c1, touching(r0, r1), touching(c0, c1));
+                }
+            }
+        }
+        return Z;
     }
     // the same-edge fixup, per edge in wire order, in row windows
     std::vector<double> t01, w01;
@@ -2716,7 +2903,6 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
         iw.plan = plan;
         iw.values = values.data();
         iw.d1 = nd;
-        iw.zero_class = reuse::sentinel_class(*plan);
         reuse::check_image_window(iw);
     }
     for (int64_t i0 = 0; i0 < N; i0 += chunk) {

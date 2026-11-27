@@ -122,6 +122,20 @@ py::array_t<int32_t> classes_of(const PlanHandle &h, int block, I64 rows, I64 co
     return out;
 }
 
+// The apart classes (the same-edge routine's, momwire#2063 step 3) and their
+// representatives' flat indices b * n * n + o * n + s, in that flat order.
+py::tuple apart(const PlanHandle &h) {
+    const mw::pair_reuse::FamilyPlan &f = h.plan->fam.at(0);
+    const py::ssize_t m = static_cast<py::ssize_t>(f.apart_cls.size());
+    py::array_t<int64_t> cls(m), rep(m);
+    int64_t *c = cls.mutable_data(), *r = rep.mutable_data();
+    for (py::ssize_t i = 0; i < m; i++) {
+        c[i] = f.apart_cls[static_cast<size_t>(i)];
+        r[i] = f.apart_rep[static_cast<size_t>(i)];
+    }
+    return py::make_tuple(cls, rep);
+}
+
 py::array_t<int64_t> group_blocks(const PlanHandle &h) {
     const std::vector<br::Group> &gs = h.plan->fam.at(0).groups;
     py::array_t<int64_t> out(static_cast<py::ssize_t>(gs.size()));
@@ -144,11 +158,11 @@ void gather(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, C128 out) 
     br::gather(*h.plan, r0, r1, v, d1, o);
 }
 
-// momwire#2166: observer rows r0..r1 of one edge (own columns o0..o1)
-// assembled into Z from the class values, the window never written whole:
-// `assemble_Z_bspline_windowed(J_win, ...)` on the window `gather` writes
-// with its own columns replaced by `own` (or zero when None), bit for bit.
-void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, int64_t o0, int64_t o1, py::object own,
+// momwire#2166: observer rows r0..r1 assembled into Z from the class values,
+// the window never written whole: `assemble_Z_bspline_windowed(J_win, ...)`
+// on the window `gather` writes, bit for bit, its near same-edge singles in
+// columns b0..b1 taken from `own` when given (momwire#2063 step 3).
+void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, py::object own, int64_t b0, int64_t b1,
               I64 support_seg, F64 polys, F64 tangents, I64 m_idx, I64 n_idx, double omega, double eps, double mu,
               py::array_t<cd> Z, uintptr_t cancel_flag) {
     const int64_t n = h.n(), classes = h.plan->fam.at(0).classes;
@@ -158,23 +172,24 @@ void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, int64_t 
     w.plan = h.plan.get();
     w.values = values.data();
     w.d1 = static_cast<int>(values.shape(1));
-    w.r0 = r0;
-    w.r1 = r1;
-    w.o0 = o0;
-    w.o1 = o1;
-    br::check_window(w);
-    if (support_seg.ndim() != 2 || support_seg.shape(1) != w.d1)
-        throw std::invalid_argument("bspline pair_reuse: support_seg is (n_basis, d + 1)");
-    if (tangents.ndim() != 2 || tangents.shape(0) != n)
-        throw std::invalid_argument("bspline pair_reuse: one tangent per segment of the plan");
     C128 own_arr;
     if (!own.is_none()) {
         own_arr = own.cast<C128>();
         if (own_arr.ndim() != 4 || own_arr.shape(0) != w.d1 || own_arr.shape(1) != w.d1 ||
-            own_arr.shape(2) != r1 - r0 || own_arr.shape(3) != o1 - o0)
-            throw std::invalid_argument("bspline pair_reuse: own is (d + 1, d + 1, r1 - r0, o1 - o0)");
+            own_arr.shape(2) != r1 - r0 || own_arr.shape(3) != b1 - b0)
+            throw std::invalid_argument("bspline pair_reuse: own is (d + 1, d + 1, r1 - r0, b1 - b0)");
         w.own = own_arr.data();
+        w.r0 = r0;
+        w.r1 = r1;
+        w.b0 = b0;
+        w.b1 = b1;
     }
+    br::check_window(w);
+    if (!(0 <= r0 && r0 < r1 && r1 <= n)) throw std::invalid_argument("bspline pair_reuse: rows out of range");
+    if (support_seg.ndim() != 2 || support_seg.shape(1) != w.d1)
+        throw std::invalid_argument("bspline pair_reuse: support_seg is (n_basis, d + 1)");
+    if (tangents.ndim() != 2 || tangents.shape(0) != n)
+        throw std::invalid_argument("bspline pair_reuse: one tangent per segment of the plan");
     ndb::NumpyHost host;
     mw::nd::HostScope scope(host);
     mw::bspline::assemble_Z_bspline_windowed_tiles(
@@ -200,7 +215,6 @@ void assemble_image(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, I6
     w.plan = h.plan.get();
     w.values = values.data();
     w.d1 = static_cast<int>(values.shape(1));
-    w.zero_class = br::sentinel_class(*h.plan);
     br::check_image_window(w);
     if (!(0 <= r0 && r0 < r1 && r1 <= n)) throw std::invalid_argument("bspline pair_reuse: rows out of range");
     if (support_seg.ndim() != 2 || support_seg.shape(1) != w.d1)
@@ -312,6 +326,7 @@ py::dict stats(const PlanHandle &h) {
     out["classes"] = f.classes;
     out["near_pairs"] = br::near_pairs(p);
     out["same_edge_pairs"] = br::same_edge_pairs(p);
+    out["same_edge_classes"] = br::same_edge_classes(p);
     out["rep_evals"] = f.rep_evals;
     out["groups"] = static_cast<int64_t>(f.groups.size());
     // Per block, by the block of each class's representative (momwire#2063
@@ -320,7 +335,6 @@ py::dict stats(const PlanHandle &h) {
     out["classes_block"] = py::make_tuple(f.cls_block[0], f.cls_block[1]);
     out["near_block"] = py::make_tuple(f.near_block[0], f.near_block[1]);
     out["evals_block"] = py::make_tuple(f.evals_block[0], f.evals_block[1]);
-    out["image_sentinel_pairs"] = br::image_sentinel_pairs(p);
     out["census_seconds"] = p.census_seconds;
     out["nbytes"] = static_cast<int64_t>(p.nbytes());
     out["budget_bytes"] = p.budget_bytes;
@@ -361,6 +375,10 @@ void register_bspline_pair_reuse(py::module_ &m) {
              "The representatives' evaluation groups: (observer rows, sources, classes, at), "
              "class cls[q]'s value at entry at[q] = row * |sources| + column of the group's call.")
         .def("group_blocks", &group_blocks, "Each group's block, in groups() order (1: the image's).")
+        .def("apart", &apart,
+             "The same-edge routine's classes (momwire#2063 step 3): (classes, their representatives' "
+             "flat indices b * n * n + o * n + s), int64, in that flat order. In no group: the fill "
+             "evaluates them by the same-edge routine.")
         .def("classes_of", &classes_of, py::arg("block"), py::arg("rows"), py::arg("cols"),
              "TEST HOOK: the (len(rows), len(cols)) classes of one block's pairs.")
         .def("assemble_image", &assemble_image, py::arg("values"), py::arg("r0"), py::arg("r1"),
@@ -373,13 +391,30 @@ void register_bspline_pair_reuse(py::module_ &m) {
         .def("gather", &gather, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("out"),
              "Observer rows r0..r1 of the moment tensor, (d + 1, d + 1, r1 - r0, n), from the "
              "class values (classes, d + 1, d + 1).")
-        .def("assemble", &assemble, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("o0"),
-             py::arg("o1"), py::arg("own"), py::arg("support_seg"), py::arg("polys"), py::arg("tangents"),
+        .def("assemble", &assemble, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("own"),
+             py::arg("b0"), py::arg("b1"), py::arg("support_seg"), py::arg("polys"), py::arg("tangents"),
              py::arg("m_idx"), py::arg("n_idx"), py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("Z"),
              py::arg("cancel_flag") = 0,
-             "momwire#2166: observer rows r0..r1 of one edge (its own columns o0..o1: `own`, "
-             "(d + 1, d + 1, r1 - r0, o1 - o0), or zero for None) added into Z from the class values, "
-             "as assemble_Z_bspline_windowed adds the gathered window, without writing the window.")
+             "momwire#2166: observer rows r0..r1 added into Z from the class values, as "
+             "assemble_Z_bspline_windowed adds the gathered window, without writing the window; with "
+             "`own` ((d + 1, d + 1, r1 - r0, b1 - b0)), the near same-edge singles in columns b0..b1 "
+             "take it (momwire#2063 step 3).")
+        .def("same_edge_bands", [](const PlanHandle &h) {
+            const int64_t n = h.n();
+            py::array_t<int64_t> lo(n), hi(n);
+            int64_t *l = lo.mutable_data(), *u = hi.mutable_data();
+            for (int64_t o = 0; o < n; o++) br::same_edge_band(*h.plan, o, l[o], u[o]);
+            return py::make_tuple(lo, hi);
+        }, "Each segment's [lo, hi) columns of its near same-edge singles (lo == hi: none), int64.")
+        .def("near_same_edge_mask", [](const PlanHandle &h, int64_t r0, int64_t r1, int64_t c0, int64_t c1) {
+            const int64_t n = h.n();
+            if (!(0 <= r0 && r0 <= r1 && r1 <= n && 0 <= c0 && c0 <= c1 && c1 <= n))
+                throw std::invalid_argument("bspline pair_reuse: window out of range");
+            py::array_t<bool> out({r1 - r0, c1 - c0});
+            br::near_same_edge_mask(*h.plan, r0, r1, c0, c1, reinterpret_cast<uint8_t *>(out.mutable_data()));
+            return out;
+        }, py::arg("r0"), py::arg("r1"), py::arg("c0"), py::arg("c1"),
+           "The (r1 - r0, c1 - c0) bool mask of a window's near same-edge singles.")
         .def("remainder_arrays", &remainder_arrays,
              "A remainder plan's (class map (n, n) int32, representatives (C,) int64, their codes (C,) "
              "uint8, singles' bits (C + 63) // 64 uint64 or None), read-only views the remainder "
@@ -423,6 +458,11 @@ void register_bspline_pair_reuse(py::module_ &m) {
           "TEST HOOK (momwire#2166): 1 copies a reciprocal member untransposed in the fused "
           "window; 0 restores.");
     m.def("bspline_reuse_cache_clear", &br::clear_cache, "Drop every cached bs2 reuse plan (TEST HOOK).");
+    m.def("bspline_reuse_set_routine_probe", &br::set_routine_probe, py::arg("probe"),
+          "TEST HOOK (momwire#2063 step 3): 1 keys same-edge pairs with the general key and no "
+          "routine bit; 0 restores.");
+    m.def("bspline_reuse_set_same_edge_near_lengths", &br::set_same_edge_near_lengths, py::arg("lengths"),
+          "TEST HOOK (momwire#2063 step 3): the same-edge near rule's lengths for later plans; < 0 restores.");
     m.def("bspline_reuse_set_image_key_probe", &br::set_image_key_probe, py::arg("probe"),
           "TEST HOOK (momwire#2063 step 2a): 1 keys the image block on the source's unmirrored "
           "direction; 0 restores.");

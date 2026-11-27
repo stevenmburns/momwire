@@ -5447,6 +5447,10 @@ def _port_solution(solver, shared: dict | None):
         and not solver.use_singular_enrichment
     ):
         geom = solver._build_geometry()
+        # A fill that reads the `pair_reuse` plan reads no prep: its classes
+        # hold the same-edge pairs (momwire#2063 step 3).
+        if solver._reuse_on and solver._reuse_plan(geom) is not None:
+            return solver.compute_port_solution()
         # Whole-edge blocks, where the one-point fill builds them per
         # observer window (momwire#968): shared only while the static and
         # the per-k regularised block fit the solver's own sweep budget.

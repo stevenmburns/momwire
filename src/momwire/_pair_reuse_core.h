@@ -35,6 +35,15 @@
 // adapter writes (`Key::Near`: a class like any other, its pairs also listed
 // in `near_flat`, sinusoidal's near pairs, whose values the adapter computes
 // directly and writes over the gather).
+//
+// APART CLASSES. A key may also mark a pair as one its adapter evaluates by a
+// routine of its own (`Key::Apart`, or `Key::OwnApart` for one left its own
+// class: bs2's same-edge pairs, the analytic static and regularised split).
+// It is hashed, shared and gathered like any other, and the adapter keeps
+// its keys disjoint from the shared ones (bs2: a routine bit), so a class is
+// all apart or none; its representative is left out of the evaluation
+// groups and listed in `apart_cls` / `apart_rep` instead, and the class is
+// marked in `apart_bits`.
 #pragma once
 
 #include <algorithm>
@@ -191,12 +200,23 @@ struct FamilyPlan {
     std::vector<int64_t> rep_flat;
     // `Key::Near` pairs not listed (`list_near` off).
     int64_t near_unlisted = 0;
+    // The apart classes (`Key::Apart`), in their representatives' flat order
+    // b * rows * cols + o * cols + s, with those flat indices; and the pairs
+    // the key called apart (each class is all of them or none, by the
+    // adapter's key).
+    std::vector<int32_t> apart_cls;
+    std::vector<int64_t> apart_rep;
+    int64_t apart_pairs = 0;
+    // One bit per class, set for an apart class (outside `nbytes()`, as
+    // `near_bits`).
+    std::vector<uint64_t> apart_bits;
     int64_t pairs = 0, classes = 0, near = 0;
     int64_t rep_evals = 0;  // pairs the representatives' calls evaluate
     // The fill report's split (momwire#2016), by the block of each class's
     // representative: its classes, those that are one near pair, and the
     // pairs its calls evaluate.
     int64_t cls_block[2] = {0, 0}, near_block[2] = {0, 0}, evals_block[2] = {0, 0};
+    int64_t apart_block[2] = {0, 0};  // the apart classes among `cls_block`
     // Maps, representatives' codes, groups and the two lists.
     size_t nbytes() const;
 };
@@ -228,7 +248,7 @@ int64_t maps_bytes(const Plan &p);
 int64_t held_bytes(const Plan &p);
 
 enum class Outcome : int8_t { Ok, Uncodeable, Poor, OverBudget };
-enum class Key : uint8_t { Shared, Own, Near };
+enum class Key : uint8_t { Shared, Own, Near, Apart, OwnApart };
 
 // A plan that does not serve: its families keep their specs and lose their
 // classes; its census time and peak are kept.
@@ -432,6 +452,7 @@ struct Rep {
     int32_t obs = 0, src = 0;
     uint8_t code = 0;
     uint8_t single = 0;  // 1: a pair the key left unshared; 2: a Key::Near class
+    uint8_t apart = 0;   // 1: a Key::Apart or Key::OwnApart class
 };
 
 // The finished census into `f`: the representatives' codes, the groups, the
@@ -454,7 +475,9 @@ struct NoHook {
 // THE CENSUS of one family. `key(block, o, s, words, code)` writes a pair's
 // W-word key and its orientation code, and returns Key::Own for a pair that
 // is its own class, Key::Near for one shared under the adapter's sentinel
-// key and listed in `near_flat`. Entries go to `f.map[b]`; each class's
+// key and listed in `near_flat`, Key::Apart for one shared like any other
+// whose class the adapter evaluates itself, and Key::OwnApart for its own
+// class the adapter evaluates itself. Entries go to `f.map[b]`; each class's
 // representative is its first pair, row-major per part, numbered by the
 // spec's `numbering`. On Ok, `f` is finished (codes, groups, counts).
 // Otherwise it declines:
@@ -516,7 +539,8 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     const int64_t cls_max = int64_t(1) << (31 - code_bits);
     const uint32_t local_max = uint32_t(1) << (part_shift - code_bits);
     std::atomic<bool> overflow{false};
-    std::vector<int64_t> n_single(static_cast<size_t>(P), 0), n_unlisted(static_cast<size_t>(P), 0);
+    std::vector<int64_t> n_single(static_cast<size_t>(P), 0), n_unlisted(static_cast<size_t>(P), 0),
+        n_apart(static_cast<size_t>(P), 0);
     int64_t ci = 0;  // the chunk's index, over every block
     for (int b = 0; b < n_blocks; b++) {
         int32_t *mp = f.map[b].data();
@@ -556,8 +580,13 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
                 uint8_t code = 0;
                 const Key k = key(b, o, s, w, code);
                 cbuf[static_cast<size_t>(i)] = code;
-                sbuf[static_cast<size_t>(i)] = k == Key::Own ? 1 : (k == Key::Near ? 2 : 0);
-                hbuf[static_cast<size_t>(i)] = k != Key::Own ? hash_key<W>(w) : mix64(static_cast<uint64_t>(o));
+                sbuf[static_cast<size_t>(i)] = k == Key::Own        ? 1
+                                               : k == Key::Near     ? 2
+                                               : k == Key::Apart    ? 3
+                                               : k == Key::OwnApart ? 4
+                                                                    : 0;
+                const bool own = k == Key::Own || k == Key::OwnApart;
+                hbuf[static_cast<size_t>(i)] = !own ? hash_key<W>(w) : mix64(static_cast<uint64_t>(o));
             }
 #pragma omp parallel for schedule(static, 1)
             for (int t = 0; t < P; t++) {
@@ -572,19 +601,22 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
                     const int64_t o = o0 + i / cols, s = i % cols;
                     const uint8_t code = cbuf[static_cast<size_t>(i)];
                     const uint8_t sb = sbuf[static_cast<size_t>(i)];
+                    const uint8_t ap = sb == 3 || sb == 4;
+                    if (ap) n_apart[static_cast<size_t>(t)]++;
                     int32_t local;
                     bool added = true;
-                    if (sb == 1) {
+                    if (sb == 1 || sb == 4) {
                         local = static_cast<int32_t>(rp.size());
                         rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                         static_cast<int32_t>(s), 0, 1});
+                                         static_cast<int32_t>(s), 0, 1, ap});
                         n_single[static_cast<size_t>(t)]++;
                     } else {
                         local = tab.find_or_add(&kbuf[static_cast<size_t>(i) * W], h,
                                                 static_cast<int32_t>(rp.size()), added);
                         if (added)
                             rp.push_back(Rep{static_cast<uint8_t>(b), static_cast<int32_t>(o),
-                                             static_cast<int32_t>(s), code, static_cast<uint8_t>(sb)});
+                                             static_cast<int32_t>(s), code,
+                                             static_cast<uint8_t>(sb == 2 ? 2 : 0), ap});
                         if (sb == 2) {
                             if (spec.list_near)
                                 nr.push_back((b * rows + o) * cols + s);
@@ -684,6 +716,8 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     for (int64_t v : n_single) singles += v;
     f.near_unlisted = 0;
     for (int64_t v : n_unlisted) f.near_unlisted += v;
+    f.apart_pairs = 0;
+    for (int64_t v : n_apart) f.apart_pairs += v;
     detail::finish(f, all, singles, pol);
     return Outcome::Ok;
 }
