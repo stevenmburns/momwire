@@ -456,14 +456,23 @@ standalone executable, and each turns on its own engine's reuse. It is
   reuses either way.
 - **`razor2p`** (the NEC-5 drop-in and the nec5-razor2p executable) does the
   same, and moves Z by at most about 2e-9 relative.
-  `MOMWIRE_X_RAZOR_PAIR_REUSE` is its older spelling and still works; when
-  it is set, it decides.
 - **`bs2`** (the drop-ins and the nec5-bs2 and nec42-bs2 executables) finds
   the classes itself on decks of 200 segments or more, a wire's own entries
   among them (one class per segment offset), and over a ground its image
-  term and Sommerfeld remainder too. `MOMWIRE_X_OFFSET_REUSE` turns its
-  part on or off by itself (inside the same-edge kernel, a uniform wire's
-  regularised moments by segment offset); when it is set, it decides.
+  term and Sommerfeld remainder too. On any deck it also fills a uniform
+  wire's own regularised moments once per segment offset. It moves Z by at
+  most about 5e-10 relative.
+
+`MOMWIRE_X_PAIR_REUSE=0` turns all of it off. Two older names are
+deprecated. They still work, each for its own engine only, until two minor
+releases after 0.99.0:
+
+- `MOMWIRE_X_RAZOR_PAIR_REUSE` for `razor2p`;
+- `MOMWIRE_X_OFFSET_REUSE` for `bs2`.
+
+Each one now means `MOMWIRE_X_PAIR_REUSE` on that engine, and the
+executables say so on stderr. When `MOMWIRE_X_PAIR_REUSE` is set too, it
+wins.
 
 Every one of these is far below the printed digits. It pays where one
 geometry is solved many times; if it is slower on your deck, turn it off.
