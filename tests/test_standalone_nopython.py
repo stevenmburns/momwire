@@ -1195,10 +1195,10 @@ def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeyp
                 # window.
                 assert direct >= 1, exe.stderr
             else:
-                # Under the tensor's budget the direct block is gathered from
-                # the class values (no window); since momwire#2063 step 3 no
-                # offset edge sends such a deck to the chunked fill.
-                assert direct == 0, exe.stderr
+                # Under the tensor's budget the direct block is one window
+                # of every row assembled from the class values (momwire#2063,
+                # `compute_Z_tensor_reuse`), the tensor never gathered.
+                assert direct == 1, exe.stderr
             # momwire#2063 step 2a: over a ground the image block's windows.
             if not ground.startswith("free"):
                 assert windows and windows[3] is not None, exe.stderr
