@@ -216,31 +216,22 @@ struct Features {
     // near-interface lever either: the razor seam reads it into
     // `FrontInputs::exact_kernel_series`.
     bool exact_kernel_series = false;
-    // momwire#1971: razor2p's fill-pair reuse. Not a near-interface lever:
-    // carried here because this is where an executable's requested features
-    // live; the razor seam reads it into `FrontInputs::pair_reuse`.
-    bool razor_pair_reuse = false;
     // razor2p's cross blocks from anchors across a sweep
     // (`_razor_crossing_core.h`, `set_band_plan`); not a near-interface lever
     // either: the crossing fill reads it from the active features.
     bool crossing_anchors = false;
-    // momwire#1911: the point-matched sinusoidal fill's pair reuse
-    // (`_sin_pair_reuse_core.h`), the one fill-reuse switch's slot. Not a
-    // near-interface lever either: the C++ fill reads it from the REQUESTED
-    // set, as `SinusoidalSolver` reads its flag at construction. The
-    // executables request it with MOMWIRE_X_PAIR_REUSE (`EXE_PARTS` in
-    // standalone/momwire_razor2p.cpp); the point-matched fill is its only
-    // reader, so on another route it only names the switch on line 2. The
-    // in-process hook (`sinusoidal_nec4_printout(features=)`) requests it too.
+    // The one fill-reuse switch (momwire#1982, #2063 step 4). Not a
+    // near-interface lever: carried here because this is where an
+    // executable's requested features live, and each route reads it from
+    // the REQUESTED set, as its solver reads `pair_reuse` at construction:
+    // the point-matched sinusoidal fill's class map (`_sin_pair_reuse_core.h`,
+    // momwire#1911), bs2's census and same-edge Toeplitz form
+    // (`_nec5_bspline_printout_core.cpp`, momwire#2063, #1809), and razor2p's
+    // fill-pair reuse (the razor seam's `FrontInputs::pair_reuse`,
+    // momwire#1971). The executables request it with MOMWIRE_X_PAIR_REUSE
+    // (standalone/momwire_razor2p.cpp); the in-process hook
+    // (`sinusoidal_nec4_printout(features=)`) requests it too.
     bool pair_reuse = false;
-    // momwire#1809: `pair_reuse`'s part on bs2, `offset_reuse` (a uniform
-    // edge's same-edge regularised moments by offset, inside the same-edge
-    // kernel). Not a near-interface lever either: bs2's
-    // C++ fill reads it, with `pair_reuse` for the census
-    // (`_nec5_bspline_printout_core.cpp`), from the REQUESTED set. The bs2
-    // executables request it through the whole (`EXE_PARTS`) or by its own
-    // variable.
-    bool offset_reuse = false;
     // momwire#1847: the transmitted grid blended from frequency anchors
     // (`somm_trans::anchored_grid_reading`). Not a near-interface lever
     // either: the mixed blocks' grid requests read it, bs2's and the

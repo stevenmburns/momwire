@@ -180,8 +180,8 @@ void RazorSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_grou
     }
     in.wavelength = p.wavelength;
     // momwire#1971: fill-pair reuse, when this run asked for it (an
-    // executable's MOMWIRE_X_RAZOR_PAIR_REUSE, `feature_refusal`).
-    in.pair_reuse = ni_eval::requested_features().razor_pair_reuse ? 1 : 0;
+    // executable's MOMWIRE_X_PAIR_REUSE, `feature_refusal`).
+    in.pair_reuse = ni_eval::requested_features().pair_reuse ? 1 : 0;
     // momwire#1454: the exact kernel's k-series, likewise (reach 1: no
     // executable asks for it today; the seam's test hook does).
     in.exact_kernel_series = ni_eval::requested_features().exact_kernel_series;

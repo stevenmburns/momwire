@@ -339,8 +339,9 @@ bool is_toeplitz(const std::vector<double> &arc) {
 }
 
 // ---------------------------------------------------------------------------
-// `pair_reuse` (momwire#2063) and its part `offset_reuse` (momwire#1809) on
-// the C++ fill: Python's routes as `bspline.py` writes them.
+// `pair_reuse` (momwire#2063), the census and the same-edge Toeplitz form
+// (`offset_reuse`, momwire#1809), on the C++ fill: Python's routes as
+// `bspline.py` writes them.
 // ---------------------------------------------------------------------------
 
 // `_REG_TOEPLITZ_MIN_N`: under `offset_reuse`, a uniform edge of this many

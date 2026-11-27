@@ -1162,10 +1162,10 @@ static int env_elements(buf_t *out)
         }
         on = is_feature_on(value);
         strip_span(value, &s, &n);
-        /* A default-on feature, a part of a whole (which the whole's
-         * variable alone turns on), or a pragma feature (which a deck's
-         * pragma card turns on unless its variable says no) keys its
-         * explicit "0" as "=off". */
+        /* A default-on feature, a feature's deprecated per-family spelling
+         * (alone, that family's kill switch for it), or a pragma feature
+         * (which a deck's pragma card turns on unless its variable says no)
+         * keys its explicit "0" as "=off". */
         if ((default_on || part || pragma) && n > 0 && !on) {
             memcpy(item + name_len, "=off", sizeof "=off");
         } else if (default_on || !on) {

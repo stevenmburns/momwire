@@ -57,10 +57,11 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     fp.ladder = bspline::default_ladder(8);
     fp.n_qp_same_edge = 4;
     fp.extended_kernel = fr.extended_kernel;
-    // the fill-reuse switch and its part (momwire#2063, #1809), as the
-    // executable requested them (`EXE_PARTS`)
+    // the one fill-reuse switch, as the executable requested it: the census
+    // and the same-edge Toeplitz form together (momwire#2063, #1809), as
+    // `BSplineSolver` sets `_reuse_on` and `_offset_reuse`
     fp.pair_reuse = ni_eval::requested_features().pair_reuse;
-    fp.offset_reuse = ni_eval::requested_features().offset_reuse;
+    fp.offset_reuse = fp.pair_reuse;
     // `_compute_Z_operator`: the dense tensor within `swept_mem_mb` (256),
     // else the chunked fill; a deck with a wire below the plane takes the
     // buried fill (`_compute_Z_operator_buried`) at the buried pair order
@@ -82,7 +83,7 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     }
     if (fr.buried) {
         // the buried fill reads no `pair_reuse` plan (`_decline_unread_plan`);
-        // `offset_reuse` reads its same-edge blocks in their Toeplitz form
+        // the switch reads its same-edge blocks in their Toeplitz form
         // `BURIED_N_QP_PAIR` / `BURIED_PAIR_ORDER_LADDER` (momwire#1752 S2)
         fp.n_qp_pair = 128;
         fp.ladder = {{0.1, 32}, {1.5, 16}, {2.0, 8}, {4.0, 4}};
