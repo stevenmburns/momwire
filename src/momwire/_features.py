@@ -370,7 +370,7 @@ FEATURES: dict[str, Feature] = {
                 "for the search; bs2's include a wire's own pairs, one class per "
                 "segment offset."
             ),
-            # The worst of the families' below (razor2p's).
+            # The worst of the families' below (razor2p's and bs2's).
             drift=2e-9,
             offer=False,
             pragma=True,
@@ -383,29 +383,36 @@ FEATURES: dict[str, Feature] = {
                 # no bs2 route.
                 #
                 # |dZin|/|Zin| against the flag-off fill, the census and the
-                # Toeplitz form together (momwire#2063 step 3, the same-edge
-                # pairs keyed apart): 3.0e-10 worst, the #1971 hairpin (its
-                # bridge's pairs, all within a radius, near singles), at both
-                # of its memory caps and over refl-coef; 1.1e-12 or less over
-                # the step-2a decks (Yagis of one and two edges, a V-bent
-                # Yagi, a vertical stack), a bent-element Yagi, a 36-edge loop
-                # and two collinear edges, free, PEC, refl-coef and
-                # Sommerfeld, at 256 and 8 MB; 1.0e-11 and 1.3e-13 on
-                # antennaknobs' 10-element Yagi at 180 and 120 segments a
-                # wire, 7.8e-13 on its fan dipole, free and Sommerfeld;
-                # 4.5e-12, 3.3e-12 and 1.1e-13 on the 10-element Yagi,
+                # Toeplitz form together, both routes assembling Z from the
+                # class values tile by tile (momwire#2166; the tensor route
+                # since the follow-up to momwire#2063 step 3, whose sum order
+                # is the windowed assembler's, not `assemble_Z`'s): 1.0e-11
+                # or less over the step-2a decks (Yagis of one and two edges,
+                # a V-bent Yagi, a vertical stack), a 1200-segment Yagi, a
+                # 36-edge loop and two collinear edges, free, PEC, refl-coef
+                # and Sommerfeld; 1.0e-11 and 1.3e-13 on antennaknobs'
+                # 10-element Yagi at 180 and 120 segments a wire, 2.8e-12 on
+                # its fan dipole flat and drooped, free and Sommerfeld;
+                # 4.5e-12, 3.3e-12 and 2.3e-13 on the 10-element Yagi,
                 # 3.5-wavelength long wire and 32-radial vertical decks.
-                # Outside the bound, recorded: a 40 m wire 2 cm over PEC (1500
-                # segments, its near-image block analytic) moves 2.7e-9, where
-                # its off fill moves 1.05e-8 between its tensor and chunked
-                # routes; a 0.3 m loop at 137 kHz moves 1.4e-8, where its off
-                # fill moves 5e-7 translated 3.7 m. 5e-10 is the hairpin's
-                # with 1.6x margin.
+                # Outside 5e-10, the bound every other deck holds: the #1971
+                # hairpin (cond(Z) ~7e9, its bridge's pairs all near singles
+                # at their own bits) moves 1.5e-9 over refl-coef, 1.0e-9 over
+                # PEC and 5.0e-10 free, of which the sum order alone is
+                # 1.3e-9, 8.9e-10 and 7.0e-10 (its flag-off Z through the
+                # windowed assembler), and its two flag-off routes differ by
+                # 2.3e-8. 2e-9 is the hairpin's with 1.3x margin. Outside it,
+                # recorded: a 40 m wire 2 cm over PEC (1500 segments, its
+                # near-image block analytic) moves 2.8e-9, where its off fill
+                # moves 1.05e-8 between its tensor and chunked routes; a
+                # 0.3 m square loop at 137 kHz (440 segments, the tensor
+                # route) moves 5.2e-7, of which the sum order alone is
+                # 5.7e-7, where its off fill moves 5.8e-7 translated 3.7 m.
                 FamilyReach(
                     "bspline",
                     reach=9,
                     kind="python",
-                    drift=5e-10,
+                    drift=2e-9,
                     alias="offset_reuse",
                 ),
                 # razor: reach 8, every Python route and the nec5 executables
