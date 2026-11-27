@@ -248,8 +248,9 @@ static std::vector<py::array_t<uint8_t>> reflected_field_nodes_impl(
 // Calls served by the symmetric route, so a gate can show the route ran
 // rather than infer it from agreement (an untaken route agrees trivially).
 static std::atomic<long long> g_remainder_symmetric_calls{0};
-// Segment pairs the symmetric route served from a pair-reuse cache
-// (momwire#1809): the evidence a gate needs that the copies happened.
+// Member segment pairs the symmetric route served from a pair-reuse class
+// value (momwire#2063 step 2b): the evidence a gate needs that the copies
+// happened.
 static std::atomic<long long> g_remainder_reused_pairs{0};
 
 // True when the obs and src halves of the call are the same data -- the
@@ -264,68 +265,77 @@ static bool same_array(const py::array_t<T, py::array::c_style | py::array::forc
     return std::memcmp(a.data(), b.data(), sizeof(T) * (size_t)a.size()) == 0;
 }
 
-// Pair reuse (momwire#1809): the symmetric route only. Edge e is the run
-// of segments [edge_seg0[e], edge_seg0[e + 1]) (n_edges + 1 entries);
-// seg_edge (nsI) names each segment's edge or -1; src (n_edges, n_edges) the
-// source ordered pair (sa * n_edges + sb) or -1. `holds` keeps the converted
-// arrays `reuse` points into alive; false (reuse untouched) when src is None.
-struct ReuseArrays {
-    py::array_t<int64_t, py::array::c_style | py::array::forcecast> r_seg0;
-    py::array_t<int32_t, py::array::c_style | py::array::forcecast> r_seg_edge, r_src, r_nseg;
+// Pair reuse (momwire#1809; by class since momwire#2063 step 2b,
+// `somm_core::PairReuse`), the symmetric route only: `reuse_classes` (nsI, nsI) int32 class << 1 | code, `reuse_rep` (C) int64
+// each class's representative si * nsI + sj, `reuse_rep_code` (C) uint8,
+// `reuse_single` ((C + 63) / 64) uint64 bits or None, `reuse_tied` None or a
+// writeable (C) uint8 array that takes the classes left to the walk. The
+// arrays are the plan's (`BSplineReusePlan.remainder_arrays`), read in place.
+struct ClassArrays {
+    py::array_t<int32_t, py::array::c_style | py::array::forcecast> cls;
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> rep;
+    py::array_t<uint8_t, py::array::c_style | py::array::forcecast> code;
+    py::array_t<uint64_t, py::array::c_style | py::array::forcecast> single;
 };
-static bool parse_pair_reuse(const py::object &reuse_edge_seg0, const py::object &reuse_seg_edge,
-                             const py::object &reuse_src, py::ssize_t nsI, ReuseArrays &holds,
-                             somm_core::PairReuse &reuse) {
-    using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
+static bool parse_class_reuse(const py::object &classes, const py::object &rep, const py::object &rep_code,
+                              const py::object &single, const py::object &tied, py::ssize_t ns,
+                              ClassArrays &holds, somm_core::PairReuse &reuse) {
     using I32 = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
-    if (reuse_src.is_none()) return false;
-    I64 &r_seg0 = holds.r_seg0;
-    I32 &r_seg_edge = holds.r_seg_edge, &r_src = holds.r_src, &r_nseg = holds.r_nseg;
-    r_seg0 = I64::ensure(reuse_edge_seg0);
-    r_seg_edge = I32::ensure(reuse_seg_edge);
-    r_src = I32::ensure(reuse_src);
-    if (!r_seg0 || !r_seg_edge || !r_src)
-        throw std::invalid_argument("pair reuse: arrays required");
-    const py::ssize_t E = r_seg0.size() - 1;
-    if (E < 1 || r_seg_edge.size() != nsI || r_src.size() != E * E)
-        throw std::invalid_argument("pair reuse: inconsistent array shapes");
-    const int64_t *s0 = r_seg0.data();
-    r_nseg = I32(E);
-    int32_t *ns = r_nseg.mutable_data();
-    for (py::ssize_t e = 0; e < E; ++e) {
-        if (s0[e] < 0 || s0[e + 1] <= s0[e] || s0[e + 1] > nsI)
-            throw std::invalid_argument("pair reuse: bad edge segment ranges");
-        ns[e] = (int32_t)(s0[e + 1] - s0[e]);
+    using I64 = py::array_t<int64_t, py::array::c_style | py::array::forcecast>;
+    using U8 = py::array_t<uint8_t, py::array::c_style | py::array::forcecast>;
+    using U64 = py::array_t<uint64_t, py::array::c_style | py::array::forcecast>;
+    if (classes.is_none()) return false;
+    holds.cls = I32::ensure(classes);
+    holds.rep = I64::ensure(rep);
+    holds.code = U8::ensure(rep_code);
+    if (!holds.cls || !holds.rep || !holds.code) throw std::invalid_argument("pair reuse: class arrays required");
+    const py::ssize_t C = holds.rep.size();
+    if (holds.cls.size() != ns * ns || holds.code.size() != C || C < 1)
+        throw std::invalid_argument("pair reuse: inconsistent class array shapes");
+    reuse.cls_map = holds.cls.data();
+    reuse.n_classes = C;
+    reuse.rep_flat = holds.rep.data();
+    reuse.rep_code = holds.code.data();
+    if (!single.is_none()) {
+        holds.single = U64::ensure(single);
+        if (!holds.single || holds.single.size() != (C + 63) / 64)
+            throw std::invalid_argument("pair reuse: one single bit per class");
+        reuse.single = holds.single.data();
     }
-    const int32_t *se = r_seg_edge.data();
-    for (py::ssize_t i = 0; i < nsI; ++i)
-        if (se[i] >= 0 && (se[i] >= E || i < s0[se[i]] || i >= s0[se[i] + 1]))
-            throw std::invalid_argument("pair reuse: seg_edge disagrees with edge_seg0");
-    reuse.n_edges = E;
-    reuse.edge_seg0 = s0;
-    reuse.edge_nseg = ns;
-    reuse.seg_edge = se;
-    reuse.src = r_src.data();
+    if (!tied.is_none()) {
+        py::array arr = py::reinterpret_borrow<py::array>(tied);
+        if (!arr.dtype().is(py::dtype::of<uint8_t>()) || arr.ndim() != 1 || arr.shape(0) != C ||
+            !arr.writeable() || (C > 1 && arr.strides(0) != 1))
+            throw std::invalid_argument("pair reuse: tied must be a writeable contiguous (C,) uint8 array");
+        reuse.tied_out = static_cast<uint8_t *>(arr.mutable_data());
+    }
     return true;
 }
 
 // The fill report's counts (momwire#2068): `out` None, or a writeable
-// contiguous int64 array of 3 that takes (walked, copied, cached) -- see
-// `somm_core::RemainderCounts`.
-static int64_t *counts_out(const py::object &out) {
+// contiguous int64 array of 3 that takes (walked, copied, cached), or of 5
+// that takes (tied, tied_pairs) too -- see `somm_core::RemainderCounts`.
+static int64_t *counts_out(const py::object &out, int &n_out) {
+    n_out = 0;
     if (out.is_none()) return nullptr;
     py::array arr = py::reinterpret_borrow<py::array>(out);
-    if (!arr.dtype().is(py::dtype::of<int64_t>()) || arr.ndim() != 1 || arr.shape(0) != 3 ||
-        !arr.writeable() || arr.strides(0) != (py::ssize_t)sizeof(int64_t))
-        throw std::invalid_argument("counts must be a writeable contiguous (3,) int64 array");
+    if (!arr.dtype().is(py::dtype::of<int64_t>()) || arr.ndim() != 1 ||
+        (arr.shape(0) != 3 && arr.shape(0) != 5) || !arr.writeable() ||
+        arr.strides(0) != (py::ssize_t)sizeof(int64_t))
+        throw std::invalid_argument("counts must be a writeable contiguous (3,) or (5,) int64 array");
+    n_out = (int)arr.shape(0);
     return static_cast<int64_t *>(arr.mutable_data());
 }
 
-static void write_counts(int64_t *out, const somm_core::RemainderCounts &c) {
+static void write_counts(int64_t *out, int n_out, const somm_core::RemainderCounts &c) {
     if (!out) return;
     out[0] = c.walked;
     out[1] = c.copied;
     out[2] = c.cached;
+    if (n_out == 5) {
+        out[3] = c.tied;
+        out[4] = c.tied_pairs;
+    }
 }
 
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
@@ -350,10 +360,13 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         far,
     uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0, bool reference = false,
-    py::object reuse_edge_seg0 = py::none(), py::object reuse_seg_edge = py::none(),
-    py::object reuse_src = py::none(), py::object counts = py::none()) {
+    py::object counts = py::none(),
+    py::object reuse_classes = py::none(), py::object reuse_rep = py::none(),
+    py::object reuse_rep_code = py::none(), py::object reuse_single = py::none(),
+    py::object reuse_tied = py::none()) {
     using somm_proj::cd;
-    int64_t *counts_p = counts_out(counts);
+    int n_counts = 0;
+    int64_t *counts_p = counts_out(counts, n_counts);
     auto ndI = obs_nodes.unchecked<3>();
     auto tgI = obs_tang.unchecked<2>();
     auto WvI = W_obs.unchecked<3>();
@@ -395,11 +408,12 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         same_array(obs_tang, src_tang) && same_array(W_obs, W_src) &&
         same_array(loc_I, loc_J) && same_array(pI, pJ);
 
-    // Pair reuse (momwire#1809): the symmetric route only (`parse_pair_reuse`).
-    ReuseArrays holds;
+    // Pair reuse: the symmetric route only (`parse_class_reuse`).
+    ClassArrays cholds;
     somm_core::PairReuse reuse;
     const bool use_reuse =
-        symmetric && parse_pair_reuse(reuse_edge_seg0, reuse_seg_edge, reuse_src, nsI, holds, reuse);
+        symmetric && parse_class_reuse(reuse_classes, reuse_rep, reuse_rep_code, reuse_single, reuse_tied, nsI,
+                                       cholds, reuse);
 
     py::array_t<std::complex<double>> Q({nI, nJ});
     if (symmetric) g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
@@ -417,7 +431,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     }
     if (use_reuse)
         g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
-    write_counts(counts_p, rc);
+    write_counts(counts_p, n_counts, rc);
     return Q;
 }
 
@@ -447,11 +461,13 @@ static void sommerfeld_remainder_bspline_Q_into(
     py::array T, int sign,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_ptr,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> ex_col,
-    py::array side, uintptr_t cancel_flag = 0, py::object reuse_edge_seg0 = py::none(),
-    py::object reuse_seg_edge = py::none(), py::object reuse_src = py::none(),
-    py::object counts = py::none()) {
+    py::array side, uintptr_t cancel_flag = 0,
+    py::object counts = py::none(), py::object reuse_classes = py::none(),
+    py::object reuse_rep = py::none(), py::object reuse_rep_code = py::none(),
+    py::object reuse_single = py::none(), py::object reuse_tied = py::none()) {
     using somm_proj::cd;
-    int64_t *counts_p = counts_out(counts);
+    int n_counts = 0;
+    int64_t *counts_p = counts_out(counts, n_counts);
     if (nodes.ndim() != 3 || nodes.shape(2) != 3)
         throw std::runtime_error("nodes must be (n_seg, q, 3)");
     const py::ssize_t ns = nodes.shape(0), q = nodes.shape(1);
@@ -491,10 +507,10 @@ static void sommerfeld_remainder_bspline_Q_into(
         K.ex_col = ex_col.data();
         K.side = static_cast<cd *>(side.mutable_data());
     }
-    ReuseArrays holds;
+    ClassArrays cholds;
     somm_core::PairReuse reuse;
     const bool use_reuse =
-        parse_pair_reuse(reuse_edge_seg0, reuse_seg_edge, reuse_src, ns, holds, reuse);
+        parse_class_reuse(reuse_classes, reuse_rep, reuse_rep_code, reuse_single, reuse_tied, ns, cholds, reuse);
     g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
     const double *nd = nodes.data(), *tg = tang.data(), *w = W.data(), *pl = polys.data();
     const int64_t *lc = loc.data();
@@ -506,7 +522,7 @@ static void sommerfeld_remainder_bspline_Q_into(
     }
     if (use_reuse)
         g_remainder_reused_pairs.fetch_add(reuse.copied, std::memory_order_relaxed);
-    write_counts(counts_p, rc);
+    write_counts(counts_p, n_counts, rc);
 }
 
 // momwire#1752 K2: many `sommerfeld_remainder_bspline_Q` calls of one shape
@@ -749,31 +765,37 @@ void register_somm(py::module_ &m) {
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
-          py::arg("reference") = false, py::arg("reuse_edge_seg0") = py::none(),
-          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none(),
-          py::arg("counts") = py::none());
+          py::arg("reference") = false,
+          py::arg("counts") = py::none(), py::arg("reuse_classes") = py::none(),
+          py::arg("reuse_rep") = py::none(), py::arg("reuse_rep_code") = py::none(),
+          py::arg("reuse_single") = py::none(), py::arg("reuse_tied") = py::none());
     m.def("sommerfeld_remainder_bspline_Q_into", &sommerfeld_remainder_bspline_Q_into,
           "The dense block's symmetric route folded straight into T "
           "(sign -1: T -= Q, +1: T += Q) with no Q held; entries in the "
           "row-CSR exemption go to `side` instead (momwire#1798). The same "
           "entries, to the bit, as sommerfeld_remainder_bspline_Q, the "
-          "pair-reuse map included (momwire#1809).",
+          "pair-reuse class map included (momwire#2063 step 2b).",
           py::arg("nodes"), py::arg("tang"), py::arg("W"), py::arg("loc"),
           py::arg("polys"), py::arg("ground_z"), py::arg("k"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"), py::arg("T"),
           py::arg("sign"), py::arg("ex_ptr"), py::arg("ex_col"), py::arg("side"),
-          py::arg("cancel_flag") = 0, py::arg("reuse_edge_seg0") = py::none(),
-          py::arg("reuse_seg_edge") = py::none(), py::arg("reuse_src") = py::none(),
-          py::arg("counts") = py::none());
+          py::arg("cancel_flag") = 0,
+          py::arg("counts") = py::none(), py::arg("reuse_classes") = py::none(),
+          py::arg("reuse_rep") = py::none(), py::arg("reuse_rep_code") = py::none(),
+          py::arg("reuse_single") = py::none(), py::arg("reuse_tied") = py::none());
     m.def("remainder_q_symmetric_calls",
           []() { return g_remainder_symmetric_calls.load(); },
           "How many sommerfeld_remainder_bspline_Q calls the symmetric route "
           "has served in this process (a gate's evidence that it ran).");
     m.def("remainder_q_reused_pairs",
           []() { return g_remainder_reused_pairs.load(); },
-          "How many segment pairs the symmetric route has copied from a "
-          "pair-reuse cache in this process (momwire#1809).");
+          "How many member segment pairs the symmetric route has served from a "
+          "pair-reuse class value in this process (momwire#2063 step 2b; a "
+          "representative's own pair not counted).");
+    m.def("remainder_set_tie_rel", &somm_core::set_remainder_tie_rel, py::arg("rel"),
+          "TEST HOOK (momwire#2063 step 2b): the class route's tie rule width at the "
+          "grid's region breaks (< 0 restores 1e-9; 0 turns it off).");
 }
 

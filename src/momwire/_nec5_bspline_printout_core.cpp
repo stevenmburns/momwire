@@ -67,8 +67,8 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     // (`BURIED_N_QP_PAIR`, `BURIED_PAIR_ORDER_LADDER`)
     std::vector<cd> Z;
     if (!fr.buried) {
-        // `_reuse_plan(geom)`: the census, shared by the free-space fill and
-        // the Sommerfeld remainder's copy map
+        // `_reuse_plan(geom)`: the census of the free-space fill, which the
+        // Sommerfeld remainder's own plan (momwire#2063 step 2b) waits on
         // with its image block over a ground (momwire#2063 step 2a), the
         // values the direct fill evaluates held for the image fill
         fp.image = fr.has_ground;

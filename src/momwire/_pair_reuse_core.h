@@ -161,6 +161,11 @@ struct Policy {
     // The census's own byte accounting against `room` (razor's). Off, only
     // the hook's and the class coding's limits stop it.
     bool measured = true;
+    // The pairs the cap counts (0: the family's, n_blocks x rows x cols).
+    // bs2's remainder counts its unordered pairs (`remainder_plan_for`): its
+    // kernel already shares each node pair's grid read between the two
+    // orders, so reciprocity alone is no compression there.
+    int64_t cap_pairs = 0;
 };
 
 // The groups the representatives are evaluated in: observer rows of one
@@ -485,7 +490,8 @@ Outcome census(FamilyPlan &f, const Policy &pol, int64_t room, int64_t &peak, Ke
     const int n_blocks = spec.n_blocks, code_bits = spec.code_bits;
     const int64_t rows = spec.rows, cols = spec.cols, limit = spec.class_limit;
     const int64_t CLASS_BYTES = class_bytes(spec);
-    const int64_t poor = pol.capped ? class_cap(static_cast<int64_t>(n_blocks) * rows * cols)
+    const int64_t poor = pol.capped ? class_cap(pol.cap_pairs > 0 ? pol.cap_pairs
+                                                                  : static_cast<int64_t>(n_blocks) * rows * cols)
                                     : std::numeric_limits<int64_t>::max();
     const int P = n_parts();
     const size_t nn = static_cast<size_t>(rows) * static_cast<size_t>(cols);

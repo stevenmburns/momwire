@@ -348,7 +348,6 @@ bool is_toeplitz(const std::vector<double> &arc) {
 // and uniform) the offset routes.
 constexpr size_t REG_TOEPLITZ_MIN_N = 12;
 constexpr double PAIR_REUSE_RTOL = 1e-12;                 // `_PAIR_REUSE_RTOL`
-constexpr int64_t REMAINDER_REUSE_CACHE_BYTES = int64_t(64) << 20;  // `_REMAINDER_REUSE_CACHE_BYTES`
 
 // `_seg_seg_reg_geometry`'s O(N) half on the arcs `arc`: the nodes s_q
 // (n q) and the weight-folded powers wu (nd, n, q).
@@ -4273,114 +4272,61 @@ void remainder_pair_census(const Geometry &g, const Basis &b, double gz, double 
 
 namespace {
 
-// `_remainder_reuse_map(geom, gz)`: the `pair_reuse` plan as the fused
-// remainder kernel's copy map (`remainder_blocks`, cut to fit the kernel's
-// cache budget, best copies per cached byte first), or false for none.
-struct CopyMap {
-    std::vector<int64_t> edge_seg0;
-    std::vector<int32_t> edge_nseg, seg_edge, src;
+// `_remainder_reuse_map(geom, gz)` (momwire#2063 step 2b): the remainder's
+// plan of segment pairs by plane invariants as the fused remainder kernel's
+// class map, or false for none (no direct plan, or the remainder's census
+// declined). `pI`, `pJ` the raised pairs (`_remainder_qp_pairs`), their own
+// classes.
+struct ClassMap {
+    std::shared_ptr<const reuse::Plan> plan;
     somm_core::PairReuse reuse;
 };
-bool remainder_copy_map(const Geometry &g, const std::vector<double> &radius_per_wire, const FillParams &fp,
-                        double gz, CopyMap &m) {
+bool remainder_class_map(const Geometry &g, const FillParams &fp, double gz, const std::vector<int64_t> &pI,
+                         const std::vector<int64_t> &pJ, ClassMap &m) {
     if (!fp.plan) return false;
-    const std::vector<EdgeIng> ing = edge_ingredients(g, radius_per_wire);
-    const int64_t E = static_cast<int64_t>(ing.size()), n_seg = g.n_segs_total;
-    if (E < 1 || ing.front().s0 != 0 || ing.back().s1 != n_seg) return false;
-    for (int64_t e = 0; e + 1 < E; e++)
-        if (ing[static_cast<size_t>(e)].s1 != ing[static_cast<size_t>(e + 1)].s0) return false;
-    std::vector<int64_t> seg0;
-    for (const EdgeIng &e : ing) seg0.push_back(e.s0);
-    seg0.push_back(n_seg);
-    const std::vector<double> seg_a = seg_radius(g, radius_per_wire);
-    reuse::RemainderGeometry rg;
+    const int64_t n = g.n_segs_total;
+    std::vector<int64_t> raised(pI.size());
+    for (size_t t = 0; t < pI.size(); t++) raised[t] = pI[t] * n + pJ[t];
+    reuse::RemainderPlanGeometry rg;
+    rg.n = n;
     rg.seg_l = g.seg_l.data();
     rg.seg_r = g.seg_r.data();
-    rg.a = seg_a.data();
-    rg.edge_seg0 = seg0.data();
-    rg.n_edges = E;
+    rg.h = g.h_per_seg.data();
     rg.ground_z = gz;
-    std::vector<int64_t> ta, tb, sa, sb;
-    reuse::remainder_blocks(rg, ta, tb, sa, sb);
-    if (ta.empty()) return false;
-    std::vector<int64_t> nseg(static_cast<size_t>(E));
-    for (int64_t e = 0; e < E; e++) nseg[static_cast<size_t>(e)] = seg0[static_cast<size_t>(e + 1)] - seg0[static_cast<size_t>(e)];
-    const int64_t dd = static_cast<int64_t>((fp.degree + 1) * (fp.degree + 1));
-    // np.unique of the unordered source pairs, their copies and bytes
-    std::map<int64_t, int64_t> copies;
-    for (size_t t = 0; t < ta.size(); t++) copies[std::min(sa[t], sb[t]) * E + std::max(sa[t], sb[t])]++;
-    std::vector<int64_t> keys, cnt, nbytes;
-    int64_t total = 0;
-    for (const auto &kv : copies) {
-        const int64_t lo = kv.first / E, hi = kv.first % E;
-        const int64_t orders = lo == hi ? 1 : 2;
-        keys.push_back(kv.first);
-        cnt.push_back(kv.second);
-        nbytes.push_back(orders * dd * nseg[static_cast<size_t>(lo)] * nseg[static_cast<size_t>(hi)] * 16);
-        total += nbytes.back();
-    }
-    std::set<int64_t> taken;
-    bool cut = false;
-    if (total > REMAINDER_REUSE_CACHE_BYTES) {
-        cut = true;
-        // np.lexsort((cls_keys, -(copies / orders))): most copies per order
-        // first, ties by key; then the prefix whose bytes fit
-        std::vector<size_t> rank(keys.size());
-        for (size_t i = 0; i < rank.size(); i++) rank[i] = i;
-        const auto ratio = [&](size_t i) {
-            const int64_t lo = keys[i] / E, hi = keys[i] % E;
-            return -(static_cast<double>(cnt[i]) / static_cast<double>(lo == hi ? 1 : 2));
-        };
-        std::stable_sort(rank.begin(), rank.end(), [&](size_t a, size_t b) {
-            const double ra = ratio(a), rb = ratio(b);
-            if (ra != rb) return ra < rb;
-            return keys[a] < keys[b];
-        });
-        int64_t acc = 0;
-        for (size_t i : rank) {
-            acc += nbytes[i];
-            if (acc <= REMAINDER_REUSE_CACHE_BYTES) taken.insert(keys[i]);
-        }
-    }
-    m.src.assign(static_cast<size_t>(E * E), -1);
-    size_t kept = 0;
-    for (size_t t = 0; t < ta.size(); t++) {
-        if (cut && !taken.count(std::min(sa[t], sb[t]) * E + std::max(sa[t], sb[t]))) continue;
-        m.src[static_cast<size_t>(ta[t] * E + tb[t])] = static_cast<int32_t>(sa[t] * E + sb[t]);
-        kept++;
-    }
-    if (kept == 0) return false;
-    m.edge_seg0 = seg0;
-    m.edge_nseg.assign(nseg.begin(), nseg.end());
-    m.seg_edge.assign(static_cast<size_t>(n_seg), 0);
-    for (int64_t e = 0; e < E; e++)
-        for (int64_t q = seg0[static_cast<size_t>(e)]; q < seg0[static_cast<size_t>(e + 1)]; q++)
-            m.seg_edge[static_cast<size_t>(q)] = static_cast<int32_t>(e);
-    m.reuse.n_edges = E;
-    m.reuse.edge_seg0 = m.edge_seg0.data();
-    m.reuse.edge_nseg = m.edge_nseg.data();
-    m.reuse.seg_edge = m.seg_edge.data();
-    m.reuse.src = m.src.data();
+    rg.raised = raised.data();
+    rg.n_raised = static_cast<int64_t>(raised.size());
+    rg.degree = fp.degree;
+    m.plan = reuse::remainder_plan_for(rg);
+    if (!m.plan->declined.empty()) return false;
+    const reuse::RemainderClasses c = reuse::remainder_classes(*m.plan);
+    if (!c.map) return false;
+    m.reuse.cls_map = c.map;
+    m.reuse.n_classes = static_cast<std::ptrdiff_t>(c.classes);
+    m.reuse.rep_flat = c.rep_flat;
+    m.reuse.rep_code = c.rep_code;
+    m.reuse.single = c.single;
     return true;
 }
 
 // `_remainder_offset_edges(geom, gz)` with `_remainder_offset_block`'s
 // refusal read ahead: the offset edges `_remainder_offset_fold` fills
-// (kind 1 "toeplitz", 2 "hankel"), or none -- no offset edge, a copy map
-// that serves most pairs, or an edge too irregular to pay, on which the
-// fold returns None and the dense route fills. The refusal reads the basis
+// (kind 1 "toeplitz", 2 "hankel"), or none -- no offset edge, a class map
+// beside offset edges holding under half the pairs, or an edge too
+// irregular to pay, on which the fold returns None and the dense route
+// fills. The refusal reads the basis
 // alone, so it is known before any table is formed.
 bool offset_block_pays(const Basis &b, const std::vector<int64_t> &seg_edge, int64_t e, int64_t s0, int64_t n);
 std::vector<OffsetEdge> remainder_fold_edges(const Geometry &g, const Basis &b,
                                              const std::vector<double> &radius_per_wire, const FillParams &fp,
-                                             double ground_z) {
+                                             double ground_z, const std::vector<int64_t> &pI,
+                                             const std::vector<int64_t> &pJ) {
     std::vector<OffsetEdge> none;
     if (!fp.offset_reuse) return none;
     const std::vector<OffsetEdge> edges = offset_edges_of(g, false);
     if (edges.empty()) return none;
     const int64_t n_seg = g.n_segs_total;
-    CopyMap cm;
-    if (remainder_copy_map(g, radius_per_wire, fp, ground_z, cm)) {
+    ClassMap cm;
+    if (remainder_class_map(g, fp, ground_z, pI, pJ, cm)) {
         int64_t sq = 0;
         for (const OffsetEdge &e : edges) sq += (e.s1 - e.s0) * (e.s1 - e.s0);
         if (static_cast<double>(sq) / static_cast<double>(n_seg * n_seg) < 0.5) return none;
@@ -4879,7 +4825,7 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
     // the offset edges' own blocks from their distinct moments
     // (`_remainder_offset_fold`), when they pay
     const std::vector<OffsetEdge> fold = (fp != nullptr && radius_per_wire != nullptr)
-                                             ? remainder_fold_edges(g, b, *radius_per_wire, *fp, ground_z)
+                                             ? remainder_fold_edges(g, b, *radius_per_wire, *fp, ground_z, pI, pJ)
                                              : std::vector<OffsetEdge>();
     if (!fold.empty()) {
         remainder_offset_fold(Z, g, b, *radius_per_wire, fold, view, n_reg, ground_z, k, nodes, W, q, side, ex,
@@ -4896,10 +4842,10 @@ void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, c
         sink.ex_col = ex_col.data();
         sink.side = side.data();
     }
-    // `_remainder_reuse_args`: the `pair_reuse` plan's copy map, or none
-    CopyMap cmap;
-    const bool use_map =
-        fp != nullptr && radius_per_wire != nullptr && remainder_copy_map(g, *radius_per_wire, *fp, ground_z, cmap);
+    // `_remainder_reuse_args`: the remainder's class map, or none
+    ClassMap cmap;
+    const bool use_map = fp != nullptr && radius_per_wire != nullptr &&
+                         remainder_class_map(g, *fp, ground_z, pI, pJ, cmap);
     somm_core::remainder_bspline_Q_sink(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, q, nd,
                                         b.supp_seg.data(), b.polys.data(), n_basis, 0, sink, 0,
                                         use_map ? &cmap.reuse : nullptr);

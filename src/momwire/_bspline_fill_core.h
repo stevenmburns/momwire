@@ -193,9 +193,10 @@ bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_so
 // the fused kernel (`somm_core::remainder_bspline_Q`, the symmetric route),
 // then the raised pairs' graded correction (`_remainder_pair_correction`,
 // momwire#1189 / #1201).
-// `fp` (optional) carries `pair_reuse`'s plan: the kernel then copies the
-// blocks `_remainder_reuse_args` names (momwire#1809's copy map, cut to
-// `_REMAINDER_REUSE_CACHE_BYTES`); and `offset_reuse`: the offset edges' own
+// `fp` (optional) carries `pair_reuse`'s plan: the kernel then serves each
+// segment pair from its class of the remainder's own plan by plane
+// invariants (`_remainder_reuse_args`, `reuse::remainder_plan_for`,
+// momwire#2063 step 2b); and `offset_reuse`: the offset edges' own
 // blocks from their distinct moments (`_remainder_offset_fold`) where
 // `_remainder_offset_edges` takes them.
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,

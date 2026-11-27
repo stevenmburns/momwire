@@ -8,9 +8,12 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
+#include <algorithm>
 #include <map>
+#include <string>
 
 namespace mw {
 namespace bspline {
@@ -442,126 +445,204 @@ void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int6
     });
 }
 
-void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std::vector<int64_t> &tb,
-                      std::vector<int64_t> &sa, std::vector<int64_t> &sb) {
-    ta.clear();
-    tb.clear();
-    sa.clear();
-    sb.clear();
-    const int64_t E = g.n_edges, n = g.edge_seg0[E];
-    if (E < 2 || g.edge_seg0[0] != 0) return;
-    for (int64_t e = 0; e < E; e++)
-        if (g.edge_seg0[e + 1] <= g.edge_seg0[e]) throw std::invalid_argument("bspline pair_reuse: an empty edge");
-    // Per edge: its end points and an id of its segmentation (each inner
-    // boundary's arc over the edge's length, on the key's step, and each
-    // segment's radius): two edges of one id and one end-point geometry
-    // carry their nodes at the same places.
-    std::vector<double> p0(static_cast<size_t>(3 * E)), p1(static_cast<size_t>(3 * E));
-    std::vector<uint64_t> pat(static_cast<size_t>(E)), nseg(static_cast<size_t>(E));
-    std::map<std::vector<uint64_t>, uint64_t> pats;
-    const double one = std::ldexp(1.0, KEY_BITS);
-    for (int64_t e = 0; e < E; e++) {
-        const int64_t s0 = g.edge_seg0[e], s1 = g.edge_seg0[e + 1];
-        nseg[static_cast<size_t>(e)] = static_cast<uint64_t>(s1 - s0);
+namespace {
+
+std::atomic<int> g_remainder_key_probe{0};
+
+constexpr int RW = 9;  // the remainder key's words
+
+FamilySpec remainder_spec(int64_t n, int degree) {
+    FamilySpec f;
+    f.name = "remainder";
+    f.key_words = RW;
+    f.code_bits = 1;
+    f.n_blocks = 1;
+    f.rows = f.cols = n;
+    f.value_bytes = value_bytes(degree);
+    f.near_singles = true;
+    f.keep_reps = true;
+    f.class_limit = g_class_limit.load();
+    return f;
+}
+
+std::string remainder_fingerprint(const RemainderPlanGeometry &g) {
+    std::string s("remainder");
+    put(s, g.n);
+    put(s, static_cast<int32_t>(KEY_BITS));
+    put(s, static_cast<int32_t>(g.degree));
+    put(s, g_class_limit.load());
+    put(s, g_length_bits.load());
+    put(s, g_plan_allowance.load());
+    put(s, g_remainder_key_probe.load());
+    put(s, pair_reuse::cap_key());
+    put(s, g.ground_z);
+    s.append(reinterpret_cast<const char *>(g.seg_l), static_cast<size_t>(3 * g.n) * sizeof(double));
+    s.append(reinterpret_cast<const char *>(g.seg_r), static_cast<size_t>(3 * g.n) * sizeof(double));
+    s.append(reinterpret_cast<const char *>(g.h), static_cast<size_t>(g.n) * sizeof(double));
+    put(s, g.n_raised);
+    if (g.n_raised)
+        s.append(reinterpret_cast<const char *>(g.raised), static_cast<size_t>(g.n_raised) * sizeof(int64_t));
+    return s;
+}
+
+// The remainder's cap counts its unordered pairs, n (n + 1) / 2: the
+// kernel's walk already forms each node pair's grid read once for both
+// orders (`node_block`), so a plan whose only compression is reciprocity
+// would save one projection a node pair and cost a census, its map and a
+// class value per unordered pair. Past it the plan declines.
+int64_t remainder_cap_pairs(int64_t n) { return n * (n + 1) / 2; }
+std::string remainder_cap_reason(int64_t n) {
+    // `pair_reuse::cap_reason`'s sentence, of unordered pairs.
+    char buf[176];
+    const int64_t pairs = remainder_cap_pairs(n);
+    std::snprintf(buf, sizeof buf, "more than %lld classes for %lld unordered pairs (the cap is %.4gx compression)",
+                  static_cast<long long>(pair_reuse::class_cap(pairs)), static_cast<long long>(pairs),
+                  pair_reuse::cap_compression());
+    return buf;
+}
+
+void build_remainder(const RemainderPlanGeometry &g, Plan &plan) {
+    auto no = [&](const std::string &why) { pair_reuse::decline(plan, why); };
+    const int64_t n = g.n;
+    plan.fam.push_back(FamilyPlan());
+    plan.fam.back().spec = remainder_spec(n, g.degree);
+    if (n > MAX_SEGS) return no("too many segments to plan");
+    const int64_t allowance = plan_allowance(plan, g.degree);
+    const int64_t maps_bytes = pair_reuse::maps_bytes(plan);
+    if (maps_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
+    // Per segment: its centre, its vector (r - l), the horizontal part's
+    // length, and its length's type.
+    const size_t un = static_cast<size_t>(n);
+    std::vector<double> mid(3 * un), dir(3 * un), hor(un);
+    std::vector<uint64_t> h_id(un);
+    Ids h_ids;
+    for (size_t i = 0; i < un; i++) {
+        const double *l = g.seg_l + 3 * i, *r = g.seg_r + 3 * i;
         for (int c = 0; c < 3; c++) {
-            p0[static_cast<size_t>(3 * e + c)] = g.seg_l[3 * s0 + c];
-            p1[static_cast<size_t>(3 * e + c)] = g.seg_r[3 * (s1 - 1) + c];
+            mid[3 * i + static_cast<size_t>(c)] = 0.5 * (l[c] + r[c]);
+            dir[3 * i + static_cast<size_t>(c)] = r[c] - l[c];
         }
-        std::vector<uint64_t> v;
-        double L = 0.0;
-        for (int c = 0; c < 3; c++) L += (p1[3 * e + c] - p0[3 * e + c]) * (p1[3 * e + c] - p0[3 * e + c]);
-        L = std::sqrt(L);
-        for (int64_t k = s0; k < s1; k++) {
-            double t = 0.0;
-            for (int c = 0; c < 3; c++) t += (g.seg_r[3 * k + c] - p0[3 * e + c]) * (g.seg_r[3 * k + c] - p0[3 * e + c]);
-            uint64_t w = 0;
-            if (!(L > 0.0) || !qword(std::sqrt(t) / L, one, w)) w = ~uint64_t(0);
-            v.push_back(w);
-            v.push_back(bits(g.a[k]));
-        }
-        pat[static_cast<size_t>(e)] = pats.emplace(std::move(v), pats.size()).first->second;
+        hor[i] = std::hypot(dir[3 * i], dir[3 * i + 1]);
+        const std::pair<uint64_t, uint64_t> ht = length_type(g.h[i]);
+        h_id[i] = static_cast<uint64_t>(h_ids.id(ht.first, ht.second));
     }
-    double scale = 0.0;
-    for (int64_t i = 0; i < 3 * n; i++) scale = std::max({scale, std::fabs(g.seg_l[i]), std::fabs(g.seg_r[i])});
-    if (!(scale > 0.0)) return;
-    int e_s;
-    double inv;
-    quantum(scale, KEY_BITS, e_s, inv);
-    auto dist = [](const double *u, const double *v) {
-        const double dx = u[0] - v[0], dy = u[1] - v[1], dz = u[2] - v[2];
-        return std::sqrt(dx * dx + dy * dy + dz * dz);
-    };
-    static constexpr int RW = 12;  // static: MSVC (C2131) will not read a local constexpr inside a [&] lambda as a constant
-    // The ordered block (x, y): the edges' counts and segmentations, the six
-    // distances of (x0, x1, y0, y1) and their four heights above the plane,
-    // on a step of 2^-KEY_BITS of the structure's size. Read from (y, x) it
-    // is the same block transposed (the kernel's reversal rule): the key is
-    // the smaller of the two forms, code 1 the transposed one.
-    auto key = [&](int, int64_t x, int64_t y, uint64_t *w, uint8_t &code) -> Key {
+    if (h_ids.m.size() >= (size_t(1) << 32)) return no("too many segment types to key");
+    std::vector<int64_t> raised(g.raised, g.raised + g.n_raised);
+    std::sort(raised.begin(), raised.end());
+    const int probe = g_remainder_key_probe.load();
+    const double gz = g.ground_z;
+
+    auto key = [&](int, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
         code = 0;
-        const double *P[4] = {&p0[static_cast<size_t>(3 * x)], &p1[static_cast<size_t>(3 * x)],
-                              &p0[static_cast<size_t>(3 * y)], &p1[static_cast<size_t>(3 * y)]};
-        uint64_t d[6], h[4];
-        int q = 0;
-        for (int i = 0; i < 4; i++)
-            for (int j = i + 1; j < 4; j++)
-                if (!qword(dist(P[i], P[j]), inv, d[q++])) return Key::Own;
-        for (int i = 0; i < 4; i++)
-            if (!qword(P[i][2] - g.ground_z, inv, h[i])) return Key::Own;
-        const uint64_t self = x == y ? uint64_t(1) << 62 : 0;
-        const uint64_t f0[RW] = {self | (nseg[static_cast<size_t>(x)] << 31) | nseg[static_cast<size_t>(y)],
-                                 pat[static_cast<size_t>(x)] | (pat[static_cast<size_t>(y)] << 32),
-                                 d[0], d[1], d[2], d[3], d[4], d[5], h[0], h[1], h[2], h[3]};
-        // (y0, y1, x0, x1): d01 <- d23, d02 <- d02, d03 <- d12, d12 <- d03,
-        // d13 <- d13, d23 <- d01.
-        const uint64_t f1[RW] = {self | (nseg[static_cast<size_t>(y)] << 31) | nseg[static_cast<size_t>(x)],
-                                 pat[static_cast<size_t>(y)] | (pat[static_cast<size_t>(x)] << 32),
-                                 d[5], d[1], d[3], d[2], d[4], d[0], h[2], h[3], h[0], h[1]};
-        const bool swap = std::lexicographical_compare(f1, f1 + RW, f0, f0 + RW);
-        std::memcpy(w, swap ? f1 : f0, sizeof f0);
-        code = swap ? 1 : 0;
+        const size_t uo = static_cast<size_t>(o), us = static_cast<size_t>(s);
+        const double *co = &mid[3 * uo], *cs = &mid[3 * us], *A = &dir[3 * uo], *B = &dir[3 * us];
+        const double mx = co[0] - cs[0], my = co[1] - cs[1], mz = co[2] - cs[2];
+        const double hmax = std::max(g.h[o], g.h[s]);
+        const double mh2 = mx * mx + my * my;
+        if (!(std::sqrt(mh2 + mz * mz) >= NEAR_LENGTHS * hmax)) return Key::Own;
+        const double S = (co[2] - gz) + (cs[2] - gz);
+        const double rho_lb = std::max(std::sqrt(mh2) - 0.5 * (hor[uo] + hor[us]), 0.0);
+        const double hh_lb = std::max(S - 0.5 * (std::fabs(A[2]) + std::fabs(B[2])), 0.0);
+        const double D = std::hypot(rho_lb, hh_lb);
+        if (!(D >= NEAR_LENGTHS * hmax) || !std::isfinite(D)) return Key::Own;
+        if (!raised.empty() && std::binary_search(raised.begin(), raised.end(), o * n + s)) return Key::Own;
+        const int e = std::ilogb(D);
+        const double inv1 = std::ldexp(1.0, KEY_BITS - e), inv2 = std::ldexp(1.0, KEY_BITS - 2 * e);
+        double g2[4] = {mh2, mx * A[0] + my * A[1], mx * B[0] + my * B[1], A[0] * B[0] + A[1] * B[1]};
+        double g1[3] = {A[2], B[2], probe == 3 ? co[2] - cs[2] : S};
+        if (probe == 1) g1[2] = 0.0;
+        if (probe == 2) {
+            // the tangents as they lie, not in the pair's frame
+            g2[1] = A[0] * hmax;
+            g2[2] = A[1] * hmax;
+            g2[3] = (B[0] + 3.0 * B[1]) * hmax;
+        }
+        for (int q = 0; q < 4; q++)
+            if (!qword(g2[q], inv2, w[2 + q])) return Key::Own;
+        for (int q = 0; q < 3; q++)
+            if (!qword(g1[q], inv1, w[6 + q])) return Key::Own;
+        w[0] = static_cast<uint64_t>(e + 2200);
+        w[1] = h_id[uo] | (h_id[us] << 32);
+        if (probe == 2) return Key::Shared;  // its words have no reversed form
+        // RECIPROCITY: read from s, m -> -m (m.A <- -m.B, m.B <- -m.A),
+        // the lengths and A_z, B_z swapped; the probe's DIFFERENCE negates.
+        const uint64_t t[RW] = {w[0],
+                                h_id[us] | (h_id[uo] << 32),
+                                w[2],
+                                static_cast<uint64_t>(-static_cast<int64_t>(w[4])),
+                                static_cast<uint64_t>(-static_cast<int64_t>(w[3])),
+                                w[5],
+                                w[7],
+                                w[6],
+                                probe == 3 ? static_cast<uint64_t>(-static_cast<int64_t>(w[8])) : w[8]};
+        int64_t a[RW], b[RW];
+        for (int q = 0; q < RW; q++) {
+            a[q] = static_cast<int64_t>(w[q]);
+            b[q] = static_cast<int64_t>(t[q]);
+        }
+        if (std::lexicographical_compare(b, b + RW, a, a + RW)) {
+            std::memcpy(w, t, sizeof t);
+            code = 1;
+        }
         return Key::Shared;
     };
-    FamilyPlan f;
-    f.spec.name = "remainder";
-    f.spec.key_words = RW;
-    f.spec.code_bits = 1;
-    f.spec.n_blocks = 1;
-    f.spec.rows = f.spec.cols = E;
-    f.spec.value_bytes = 0;
     pair_reuse::Policy pol;
-    pol.capped = false;
-    pol.rep_rows = 0;
-    pol.measured = false;
-    f.spec.keep_reps = true;
+    pol.capped = true;
+    pol.rep_rows = 0;  // the kernel evaluates the representatives
+    pol.cap_pairs = remainder_cap_pairs(n);
+    FamilyPlan &f = plan.fam[0];
     int64_t peak = 0;
-    if (pair_reuse::census<RW>(f, pol, std::numeric_limits<int64_t>::max(), peak, key) != Outcome::Ok) return;
-    // Block (x, y), x <= y, of class c copies its representative (s, t) when
-    // their codes agree, else (t, s), and (y, x) copies the transpose of
-    // that: a block whose two forms key alike could take either, and the
-    // kernel's reversal rule needs the pair. The representative and its
-    // transpose are the sources, filled.
-    const int32_t *map = f.map[0].data();
-    std::vector<int64_t> src(static_cast<size_t>(E * E), -1);
-    for (int64_t x = 0; x < E; x++)
-        for (int64_t y = x; y < E; y++) {
-            const int32_t e = map[x * E + y];
-            const int64_t c = e >> 1;
-            const int64_t rep = f.rep_flat[static_cast<size_t>(c)];
-            int64_t s = rep / E, t = rep % E;
-            if ((e & 1) != f.rep_code[static_cast<size_t>(c)]) std::swap(s, t);
-            if ((s == x && t == y) || (s == y && t == x)) continue;
-            src[static_cast<size_t>(x * E + y)] = s * E + t;
-            src[static_cast<size_t>(y * E + x)] = t * E + s;
+    const Outcome out = pair_reuse::census<RW>(f, pol, std::numeric_limits<int64_t>::max(), peak, key);
+    plan.census_peak_bytes = maps_bytes + peak;
+    if (out == Outcome::Poor) return no(remainder_cap_reason(n));
+    if (out != Outcome::Ok) return no("too many classes to code");
+    plan.budget_bytes = pair_reuse::held_bytes(plan);
+    if (plan.budget_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
+}
+
+}  // namespace
+
+void set_remainder_key_probe(int probe) { g_remainder_key_probe.store(probe); }
+int remainder_key_probe() { return g_remainder_key_probe.load(); }
+
+std::shared_ptr<const Plan> remainder_plan_for(const RemainderPlanGeometry &g, bool *built) {
+    if (g.n <= 0 || !g.seg_l || !g.seg_r || !g.h || (g.n_raised > 0 && !g.raised))
+        throw std::invalid_argument("bspline pair_reuse: an empty or mis-shaped remainder geometry");
+    for (int64_t t = 0; t < g.n_raised; t++)
+        if (g.raised[t] < 0 || g.raised[t] >= g.n * g.n)
+            throw std::invalid_argument("bspline pair_reuse: a raised pair out of range");
+    // keep 2: the direct plan, just used by the same fill, stays cached
+    return pair_reuse::plan_for(
+        BASIS, remainder_fingerprint(g), [&g](Plan &p) { build_remainder(g, p); }, built, 2);
+}
+
+RemainderClasses remainder_classes(const Plan &p) {
+    RemainderClasses c;
+    if (p.fam.empty() || std::string(p.fam[0].spec.name) != "remainder" || p.fam[0].map[0].empty()) return c;
+    const FamilyPlan &f = p.fam[0];
+    c.n = f.spec.rows;
+    c.classes = f.classes;
+    c.map = f.map[0].data();
+    c.rep_flat = f.rep_flat.data();
+    c.rep_code = f.rep_code.data();
+    c.single = f.near_bits.empty() ? nullptr : f.near_bits.data();
+    return c;
+}
+
+void remainder_wire_map(const Plan &p, const uint8_t *tied, const int32_t *wire_of_seg, int64_t n_wires,
+                        int64_t *out) {
+    std::fill(out, out + n_wires * n_wires * 3, int64_t(0));
+    const RemainderClasses c = remainder_classes(p);
+    if (!c.map) return;
+    std::vector<uint8_t> seen(static_cast<size_t>(c.classes), 0);
+    for (int64_t o = 0; o < c.n; o++)
+        for (int64_t s = 0; s < c.n; s++) {
+            const int64_t k = c.map[o * c.n + s] >> 1;
+            const bool single = c.single && (c.single[k / 64] >> (k % 64) & 1);
+            const bool own = single || (tied && tied[k]) || !seen[static_cast<size_t>(k)];
+            seen[static_cast<size_t>(k)] = 1;
+            out[(static_cast<int64_t>(wire_of_seg[o]) * n_wires + wire_of_seg[s]) * 3 + (own ? 0 : 1)]++;
         }
-    for (int64_t q = 0; q < E * E; q++) {
-        const int64_t v = src[static_cast<size_t>(q)];
-        if (v < 0) continue;
-        ta.push_back(q / E);
-        tb.push_back(q % E);
-        sa.push_back(v / E);
-        sb.push_back(v % E);
-    }
 }
 
 void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out, int block) {
