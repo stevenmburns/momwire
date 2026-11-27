@@ -167,8 +167,9 @@ void reuse_plans(long long &built, long long &declined, long long &found) {
     found = static_cast<long long>(c.found);
 }
 
-// The chunked fill's windows assembled from the class values (momwire#2166),
-// process totals: tiled where the lane kernel is compiled, whole elsewhere,
+// The direct fill's windows assembled from the class values (momwire#2166),
+// the chunked route's and the tensor route's one (momwire#2063), process
+// totals: tiled where the lane kernel is compiled, whole elsewhere,
 // so a gate can prove the fused assembly ran and not the gathered window.
 // The image block's (momwire#2063 step 2a) follow when it ran.
 std::string reuse_outcome() {

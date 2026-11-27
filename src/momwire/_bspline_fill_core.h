@@ -141,6 +141,16 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                                        const std::vector<double> &radius_per_wire, const FillParams &fp,
                                        double omega, double eps, double mu, double swept_mem_mb);
 
+// `_tensor_reuse_Z(geom, k, supp_seg, polys)` (momwire#2063): the tensor
+// route's Z under `fp.plan`, assembled tile by tile from the class values in
+// one window of every row, as `compute_Z_chunked`'s windows are
+// (momwire#2166); the tensor is never written. Every pair is its class's
+// value, a near same-edge single included, which is what the fill without
+// reuse writes for it on this route. (n_basis, n_basis) C order.
+std::vector<cdouble> compute_Z_tensor_reuse(const Geometry &g, const Basis &b,
+                                            const std::vector<double> &radius_per_wire, const FillParams &fp,
+                                            double omega, double eps, double mu);
+
 // `_dense_tensor_fits_budget(n_segs)`: one (d+1, d+1, N, N) complex tensor
 // within `swept_mem_mb`.
 bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);

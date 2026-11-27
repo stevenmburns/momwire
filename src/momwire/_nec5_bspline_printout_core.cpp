@@ -98,9 +98,15 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
             throw PrintoutRaise{"ValueError", e.what()};
         }
     } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
-        // the tensor route (`_compute_Z_operator`)
-        const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
-        Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
+        // the tensor route (`_compute_Z_operator`); under a plan its Z is
+        // assembled from the class values, the tensor never written
+        // (`_tensor_reuse_Z`, momwire#2063)
+        if (fp.plan && fp.degree <= 2) {
+            Z = bspline::compute_Z_tensor_reuse(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU);
+        } else {
+            const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
+            Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
+        }
     } else {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
