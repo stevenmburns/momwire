@@ -148,7 +148,7 @@ def _small_decks():
     acc.pair_reuse_cap_compression(1)
     yield
     acc.bspline_reuse_set_small_deck_segs(-1)
-    acc.pair_reuse_cap_compression(0)
+    acc.pair_reuse_cap_compression(-1)
 
 
 _GROUND_DECKS = {
