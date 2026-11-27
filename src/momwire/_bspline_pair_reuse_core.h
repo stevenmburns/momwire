@@ -292,11 +292,20 @@ void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int6
 // base-order value is the walk's own, so the later correction, which
 // subtracts the pair's own base moments, lands on the bits it always did.
 //
+// THE CAP counts the unordered pairs, n (n + 1) / 2: the walk already forms
+// each node pair's grid read once for both orders, so reciprocity alone is
+// no saving here, and a deck with nothing else to share declines.
+//
 // THE GRID'S REGION BREAKS. The interpolant is continuous across a stencil
 // shift inside a region (a 4-point Lagrange rule through the node it
 // shifts at) and past the table's edge (the continuation is anchored on the
-// edge value), but not across the region breaks (r1 at r_break and r_near,
-// theta at th_split), where two tables meet at their interpolation error.
+// edge value), but not in general across the region breaks (r1 at r_break
+// and r_near, theta at th_split), where two tables meet at their
+// interpolation error: a radial break is a shared node row only where both
+// tables' radial steps land on it, and the theta split joins tables of
+// different radial steps (measured: a member across the split that took its
+// representative's table moved Z 4.7e-10 of its largest entry, 8.8e-17
+// under the rule, `test_bs2_remainder_plane_reuse_2063.py`).
 // The breaks move with the frequency and the plan does not, so the tie rule
 // is the kernel's, per fill: a class whose representative has a node pair
 // within `somm_core::remainder_tie_rel()` (1e-9) of a break is left to the
