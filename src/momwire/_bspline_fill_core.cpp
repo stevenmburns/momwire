@@ -544,83 +544,22 @@ std::vector<int64_t> near_image_starts(const Geometry &g, const std::vector<doub
     return near;
 }
 
-// `_SAME_EDGE_VALUE_ROWS`: observer rows of one edge per same-edge
-// class-value window.
-constexpr int64_t SAME_EDGE_VALUE_ROWS = 16;
-
-// `_same_edge_class_values(plan, geom, k, values)` (momwire#2063 step 3):
-// each same-edge class's moments by the same-edge routine at its
-// representative, the analytic static moments plus the regularised part
-// (`_seg_seg_static_moments(rows=)`, `_seg_seg_reg_geometry_pairs`), in
-// windows of at most SAME_EDGE_VALUE_ROWS consecutive observer rows against
-// the columns their representatives span, as Python cuts them.
-void same_edge_class_values(const reuse::Plan &plan, const Geometry &g, const std::vector<double> &seg_a,
-                            const FillParams &fp, std::vector<cdouble> &values) {
-    const pair_reuse::FamilyPlan &f = plan.fam.at(0);
-    if (f.apart_cls.empty()) return;
-    const int d = fp.degree, nd = d + 1;
-    const size_t dd = static_cast<size_t>(nd * nd);
-    const int64_t N = g.n_segs_total;
-    struct Edge {
-        int64_t s0, s1;
-        const std::vector<double> *arc;
-    };
-    std::vector<Edge> edges;
+// each segment edge's ingredients for the same-edge routine
+std::vector<SameEdgeArc> same_edge_arcs(const Geometry &g, const std::vector<double> &seg_a) {
+    std::vector<SameEdgeArc> edges;
     for (size_t w = 0; w < g.per_wire.size(); w++) {
         const WireGeometry &pw = g.per_wire[w];
-        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++)
-            edges.push_back({g.seg_offsets[w] + pw.edge_offsets[e], g.seg_offsets[w] + pw.edge_offsets[e + 1],
-                             &pw.edge_arc_edges[e]});
-    }
-    const size_t m_all = f.apart_cls.size();
-    size_t t = 0, e = 0;
-    while (t < m_all) {
-        while (edges[e].s1 <= f.apart_rep[t] / N) e++;
-        const Edge &ed = edges[e];
-        size_t u_edge = t;  // this edge's representatives: [t, u_edge)
-        while (u_edge < m_all && f.apart_rep[u_edge] / N < ed.s1) u_edge++;
-        const std::vector<double> &arc = *ed.arc;
-        const size_t n = arc.size() - 1;
-        if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
-        const double a_w = seg_a[static_cast<size_t>(ed.s0)];
-        const double h = arc[1] - arc[0];
-        const nd::array_t<double> table =
-            fp.extended_kernel ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, n, d, a_w)
-                               : seg_seg_static_moments_bspline_uniform_table(h, a_w, n, d);
-        const CF tab = CF::borrow(table.buffer());
-        std::vector<double> s_q, wu;
-        size_t q = 0;
-        reg_nodes(arc, fp.n_qp_same_edge, nd, s_q, wu, q);
-        const auto row_of = [&](size_t x) { return f.apart_rep[x] / N - ed.s0; };
-        const auto col_of = [&](size_t x) { return f.apart_rep[x] % N - ed.s0; };
-        while (t < u_edge) {
-            const int64_t lo = row_of(t);
-            size_t u = t;
-            int64_t hi = lo + 1, c0 = col_of(t), c1 = c0 + 1;
-            while (u < u_edge && row_of(u) < lo + SAME_EDGE_VALUE_ROWS) {
-                hi = row_of(u) + 1;
-                c0 = std::min(c0, col_of(u));
-                c1 = std::max(c1, col_of(u) + 1);
-                u++;
-            }
-            const size_t m = static_cast<size_t>(hi - lo), nc = static_cast<size_t>(c1 - c0);
-            const nd::array_t<double> st = toeplitz_gather_rows(tab, n, static_cast<size_t>(lo), static_cast<size_t>(hi));
-            const std::vector<cdouble> rg =
-                reg_window_dense(s_q, wu, q, n, nd, a_w, fp.k, fp.extended_kernel, static_cast<size_t>(lo),
-                                 static_cast<size_t>(hi), static_cast<size_t>(c0), static_cast<size_t>(c1));
-            const double *sp = st.data();
-            for (size_t x = t; x < u; x++) {
-                const size_t i = static_cast<size_t>(row_of(x) - lo), j = static_cast<size_t>(col_of(x));
-                const size_t c = static_cast<size_t>(f.apart_cls[x]);
-                for (size_t pq = 0; pq < dd; pq++) {
-                    const double sv = sp[(pq * m + i) * n + j];
-                    const cdouble r = rg[(pq * m + i) * nc + (j - static_cast<size_t>(c0))];
-                    values[c * dd + pq] = cdouble(sv + r.real(), 0.0 + r.imag());
-                }
-            }
-            t = u;
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+            SameEdgeArc ed;
+            ed.s0 = g.seg_offsets[w] + pw.edge_offsets[e];
+            ed.s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+            ed.arc = pw.edge_arc_edges[e].data();
+            ed.n_arc = static_cast<int64_t>(pw.edge_arc_edges[e].size());
+            ed.a_w = seg_a[static_cast<size_t>(ed.s0)];
+            edges.push_back(ed);
         }
     }
+    return edges;
 }
 
 // `_reuse_values(plan, geom, k, ladder, ek)`: each class's (d+1, d+1)
@@ -651,7 +590,8 @@ std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, co
             for (size_t pq = 0; pq < dd; pq++) values[c * dd + pq] = blk[pq * M + at];
         }
     }
-    same_edge_class_values(plan, g, seg_a, fp, values);
+    same_edge_class_values(plan, same_edge_arcs(g, seg_a), g.n_segs_total, fp.degree, fp.k, fp.n_qp_same_edge,
+                           fp.extended_kernel, values.data());
     if (image && fp.held) {
         fp.held->plan = &plan;
         fp.held->values = values;
@@ -660,6 +600,100 @@ std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, co
 }
 
 }  // namespace
+
+// `SAME_EDGE_VALUE_ROWS`: observer rows of one edge per window of the
+// same-edge routine under a plan (`_SAME_EDGE_VALUE_ROWS`).
+constexpr int64_t SAME_EDGE_VALUE_ROWS = 64;
+// The near singles' windows: rows of a band each, past which a window's
+// columns outgrow its pairs (16 rows: 16 x 22 pairs for 112 singles).
+constexpr int64_t SAME_EDGE_SINGLE_ROWS = 16;
+
+int64_t same_edge_class_values(const reuse::Plan &plan, const std::vector<SameEdgeArc> &edges, int64_t N,
+                               int degree, double k, int64_t n_qp_same_edge, bool ek, cdouble *values) {
+    const pair_reuse::FamilyPlan &f = plan.fam.at(0);
+    if (f.apart_cls.empty()) return 0;
+    const int d = degree, nd = d + 1;
+    const size_t dd = static_cast<size_t>(nd * nd);
+    const size_t m_all = f.apart_cls.size();
+    int64_t formed = 0;
+    size_t t = 0, e = 0;
+    while (t < m_all) {
+        while (edges[e].s1 <= f.apart_rep[t] / N) e++;
+        const SameEdgeArc &ed = edges[e];
+        size_t u_edge = t;  // this edge's representatives: [t, u_edge)
+        while (u_edge < m_all && f.apart_rep[u_edge] / N < ed.s1) u_edge++;
+        const std::vector<double> arc(ed.arc, ed.arc + ed.n_arc);
+        const size_t n = arc.size() - 1;
+        if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+        const double a_w = ed.a_w;
+        const double h = arc[1] - arc[0];
+        const nd::array_t<double> table = ek ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, n, d, a_w)
+                                             : seg_seg_static_moments_bspline_uniform_table(h, a_w, n, d);
+        const double *sp = table.data();
+        const size_t T = 2 * n - 1;
+        std::vector<double> s_q, wu;
+        size_t q = 0;
+        reg_nodes(arc, n_qp_same_edge, nd, s_q, wu, q);
+        const auto row_of = [&](size_t x) { return f.apart_rep[x] / N - ed.s0; };
+        const auto col_of = [&](size_t x) { return f.apart_rep[x] % N - ed.s0; };
+        // One window: rows [lo, hi) against columns [c0, c1), for the
+        // representatives `at`.
+        const auto window = [&](int64_t lo, int64_t hi, int64_t c0, int64_t c1, const std::vector<size_t> &at) {
+            const size_t m = static_cast<size_t>(hi - lo), nc = static_cast<size_t>(c1 - c0);
+            const std::vector<cdouble> rg =
+                reg_window_dense(s_q, wu, q, n, nd, a_w, k, ek, static_cast<size_t>(lo), static_cast<size_t>(hi),
+                                 static_cast<size_t>(c0), static_cast<size_t>(c1));
+            formed += static_cast<int64_t>(m * nc);
+            for (size_t x : at) {
+                const size_t i = static_cast<size_t>(row_of(x)), j = static_cast<size_t>(col_of(x));
+                const size_t c = static_cast<size_t>(f.apart_cls[x]);
+                for (size_t pq = 0; pq < dd; pq++) {
+                    // `_seg_seg_static_moments_window`: the table's entry j - i
+                    const double sv = sp[pq * T + (j + n - 1 - i)];
+                    const cdouble r = rg[(pq * m + (i - static_cast<size_t>(lo))) * nc + (j - static_cast<size_t>(c0))];
+                    values[c * dd + pq] = cdouble(sv + r.real(), 0.0 + r.imag());
+                }
+            }
+        };
+        // The shared classes: windows of up to SAME_EDGE_VALUE_ROWS rows
+        // against the columns their representatives span; the near singles:
+        // windows of up to SAME_EDGE_SINGLE_ROWS rows against their band (a
+        // pair's moments are its own in any window).
+        std::vector<size_t> shared, singles;
+        for (size_t x = t; x < u_edge; x++)
+            (reuse::near_same_edge(plan, f.apart_cls[x]) ? singles : shared).push_back(x);
+        for (size_t a = 0; a < shared.size();) {
+            const int64_t lo = row_of(shared[a]);
+            int64_t hi = lo + 1, c0 = col_of(shared[a]), c1 = c0 + 1;
+            size_t b = a;
+            std::vector<size_t> at;
+            while (b < shared.size() && row_of(shared[b]) < lo + SAME_EDGE_VALUE_ROWS) {
+                hi = row_of(shared[b]) + 1;
+                c0 = std::min(c0, col_of(shared[b]));
+                c1 = std::max(c1, col_of(shared[b]) + 1);
+                at.push_back(shared[b++]);
+            }
+            window(lo, hi, c0, c1, at);
+            a = b;
+        }
+        for (size_t a = 0; a < singles.size();) {
+            const int64_t lo = row_of(singles[a]);
+            int64_t hi = lo + 1, c0 = col_of(singles[a]), c1 = c0 + 1;
+            size_t b = a;
+            std::vector<size_t> at;
+            while (b < singles.size() && row_of(singles[b]) < lo + SAME_EDGE_SINGLE_ROWS) {
+                hi = row_of(singles[b]) + 1;
+                c0 = std::min(c0, col_of(singles[b]));
+                c1 = std::max(c1, col_of(singles[b]) + 1);
+                at.push_back(singles[b++]);
+            }
+            window(lo, hi, c0, c1, at);
+            a = b;
+        }
+        t = u_edge;
+    }
+    return formed;
+}
 
 std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vector<double> &radius_per_wire,
                                               const FillParams &fp) {
@@ -670,9 +704,13 @@ std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vect
     if (N < reuse::small_deck_segs()) return nullptr;
     // `_reuse_plan_built`: each segment's same-edge block
     std::vector<int32_t> edge(static_cast<size_t>(N), -1);
+    std::vector<double> edge_h(static_cast<size_t>(N), 0.0);
     int32_t e = 0;
     for (const EdgeIng &ed : edge_ingredients(g, radius_per_wire)) {
-        for (int64_t q = ed.s0; q < ed.s1; q++) edge[static_cast<size_t>(q)] = e;
+        for (int64_t q = ed.s0; q < ed.s1; q++) {
+            edge[static_cast<size_t>(q)] = e;
+            edge_h[static_cast<size_t>(q)] = (*ed.arc)[1] - (*ed.arc)[0];
+        }
         e++;
     }
     for (int32_t v : edge)
@@ -685,6 +723,7 @@ std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vect
     rg.seg_r = g.seg_r.data();
     rg.a = seg_a.data();
     rg.edge = edge.data();
+    rg.edge_h = edge_h.data();
     if (ek.on) {
         rg.group_i = ek.group_i.data();
         rg.group_j = ek.group_j.data();
@@ -1154,27 +1193,37 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
             win.values = values.data();
             win.d1 = nd;
             Block own;
-            int64_t b0 = 0, b1 = 0;
-            if (band(w0, w1, b0, b1)) {
-                const int64_t m = w1 - w0, nb = b1 - b0;
-                own = Block(static_cast<size_t>(nd * nd * m * nb));
-                for (const auto &pc : pieces) {
-                    const int64_t p0 = std::max(w0, pc.first), p1 = std::min(w1, pc.second);
-                    int64_t c0, c1;
-                    if (p0 >= p1 || !band(p0, p1, c0, c1)) continue;
-                    const Block J = moments(p0, p1, c0, c1);
-                    const int64_t pm = p1 - p0, pn = c1 - c0;
-                    for (int64_t pq = 0; pq < nd * nd; pq++)
-                        for (int64_t i = 0; i < pm; i++)
-                            for (int64_t j = 0; j < pn; j++)
-                                own[static_cast<size_t>((pq * m + (p0 - w0 + i)) * nb + (c0 - b0 + j))] =
-                                    J[static_cast<size_t>((pq * pm + i) * pn + j)];
-                }
+            std::vector<int64_t> lo(band_lo.begin() + w0, band_lo.begin() + w1),
+                hi(band_hi.begin() + w0, band_hi.begin() + w1);
+            int64_t bw = 0;
+            for (int64_t o = w0; o < w1; o++)
+                bw = std::max(bw, band_hi[static_cast<size_t>(o)] - band_lo[static_cast<size_t>(o)]);
+            if (bw > 0) {
+                const int64_t m = w1 - w0;
+                own = Block(static_cast<size_t>(nd * nd * m * bw));
+                for (const auto &pc : pieces)
+                    for (int64_t p0 = std::max(w0, pc.first); p0 < std::min(w1, pc.second);
+                         p0 += SAME_EDGE_VALUE_ROWS) {
+                        const int64_t p1 = std::min({p0 + SAME_EDGE_VALUE_ROWS, w1, pc.second});
+                        int64_t c0, c1;
+                        if (!band(p0, p1, c0, c1)) continue;
+                        const Block J = moments(p0, p1, c0, c1);
+                        const int64_t pm = p1 - p0, pn = c1 - c0;
+                        for (int64_t i = 0; i < pm; i++) {
+                            const int64_t a0 = band_lo[static_cast<size_t>(p0 + i)] - c0,
+                                          a1 = band_hi[static_cast<size_t>(p0 + i)] - c0;
+                            for (int64_t pq = 0; pq < nd * nd; pq++)
+                                for (int64_t j = a0; j < a1; j++)
+                                    own[static_cast<size_t>((pq * m + (p0 - w0 + i)) * bw + (j - a0))] =
+                                        J[static_cast<size_t>((pq * pm + i) * pn + j)];
+                        }
+                    }
                 win.own = own.data();
+                win.lo = lo.data();
+                win.hi = hi.data();
                 win.r0 = w0;
                 win.r1 = w1;
-                win.b0 = b0;
-                win.b1 = b1;
+                win.bw = bw;
             }
             reuse::check_window(win);
             const std::vector<int64_t> m_idx = touching(w0, w1);
@@ -1215,18 +1264,27 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
                 size_t q = 0;
                 reg_nodes(arc, fp.n_qp_same_edge, nd, s_q, wu, q);
                 const int64_t corr_chunk = mb_rows(static_cast<int64_t>(nd * nd) * static_cast<int64_t>(n) * 16);
-                for (int64_t r0 = s0; r0 < s1; r0 += corr_chunk) {
-                    const int64_t r1 = std::min(r0 + corr_chunk, s1);
+                // the fixup's own windows, each cut in SAME_EDGE_VALUE_ROWS rows
+                std::vector<std::pair<int64_t, int64_t>> windows;
+                for (int64_t cs = s0; cs < s1; cs += corr_chunk) {
+                    const int64_t ce = std::min(cs + corr_chunk, s1);
+                    for (int64_t q0 = cs; q0 < ce; q0 += SAME_EDGE_VALUE_ROWS)
+                        windows.push_back({q0, std::min(q0 + SAME_EDGE_VALUE_ROWS, ce)});
+                }
+                for (const auto &wr : windows) {
+                    const int64_t r0 = wr.first, r1 = wr.second;
                     if (!band(r0, r1, c0, c1)) continue;
                     const size_t lo = static_cast<size_t>(r0 - s0), hi = static_cast<size_t>(r1 - s0);
                     const size_t l0 = static_cast<size_t>(c0 - s0), l1 = static_cast<size_t>(c1 - s0);
                     const size_t m = hi - lo, nb = l1 - l0;
-                    const nd::array_t<double> st_rows = toeplitz_gather_rows(tab, n, lo, hi);
+                    // `_seg_seg_static_moments_window`: the table's entry j - i
                     std::vector<double> st(static_cast<size_t>(nd * nd) * m * nb);
-                    const double *sp = st_rows.data();
+                    const double *sp = tab.data();
+                    const size_t T = 2 * n - 1;
                     for (size_t pq = 0; pq < static_cast<size_t>(nd * nd); pq++)
                         for (size_t i = 0; i < m; i++)
-                            for (size_t j = 0; j < nb; j++) st[(pq * m + i) * nb + j] = sp[(pq * m + i) * n + l0 + j];
+                            for (size_t j = 0; j < nb; j++)
+                                st[(pq * m + i) * nb + j] = sp[pq * T + (l0 + j + n - 1 - (lo + i))];
                     std::vector<cdouble> rg =
                         reg_window_dense(s_q, wu, q, n, nd, a_w, fp.k, fp.extended_kernel, lo, hi, l0, l1);
                     const Block J_win = moments(r0, r1, c0, c1);

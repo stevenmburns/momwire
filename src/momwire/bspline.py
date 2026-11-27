@@ -80,6 +80,7 @@ from ._bspline_kernels import (
     _seg_seg_reg_moments_from_geometry_swept,
     _seg_seg_reg_nodes,
     _seg_seg_static_moments,
+    _seg_seg_static_moments_window,
 )
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._quadrature import leggauss
@@ -864,9 +865,10 @@ _PAIR_REUSE_MIN_PAIRS_PER_MEMBER = 8.0
 #: Representative groups evaluated between cancellation checkpoints.
 _REUSE_GROUPS_PER_CHECKPOINT = 64
 
-#: Observer rows of one edge per same-edge class-value window
-#: (`_same_edge_class_values`; the exe's `SAME_EDGE_VALUE_ROWS`).
-_SAME_EDGE_VALUE_ROWS = 16
+#: Observer rows of one edge per window of the same-edge routine under a
+#: plan (`_same_edge_class_values`, `_near_own`, `_near_same_edge_fixup`;
+#: the exe's `SAME_EDGE_VALUE_ROWS`).
+_SAME_EDGE_VALUE_ROWS = 64
 
 # momwire#2063 step 2a: whole-mesh image fills assembled from the plan's
 # class values. Counted so a gate can show the route ran.
@@ -1974,8 +1976,9 @@ class BSplineSolver(
         # defers to `pair_reuse` (it is that feature's part, momwire#1982),
         # then MOMWIRE_X_OFFSET_REUSE, then MOMWIRE_X_PAIR_REUSE (`_features`).
         self._offset_reuse = bound["offset_reuse"]
-        # Whether the fill report has reuse to speak of (momwire#2016).
-        self._fill_reuse_asked = bool(bound["pair_reuse"] or bound["offset_reuse"])
+        # Whether the fill report has reuse to speak of (momwire#2016): the
+        # census's; `offset_reuse` alone copies no pair (momwire#2063 step 3).
+        self._fill_reuse_asked = bool(bound["pair_reuse"])
         # momwire#1847: the below->above grid from frequency anchors, so a
         # sweep shares it. None defers to MOMWIRE_X_TRANSMITTED_ANCHORS
         # (`_features`, reach 1); off is the exact grid, bit for bit.
@@ -5513,8 +5516,12 @@ class BSplineSolver(
             return None
         n = int(geom["n_segs_total"])
         edge = np.full(n, -1, dtype=np.int32)
-        for e, sl in enumerate(self._same_edge_slices(geom)):
+        # each segment's edge h as the same-edge routine reads it (its static
+        # table's, momwire#2063 step 3)
+        edge_h = np.zeros(n, dtype=np.float64)
+        for e, (_w, sl, arc, _a) in enumerate(self._edge_ingredients(geom)):
             edge[sl] = e
+            edge_h[sl] = arc[1] - arc[0]
         if np.any(edge < 0):
             self.pair_reuse_declined = "the edges do not tile the mesh in order"
             return None
@@ -5538,13 +5545,13 @@ class BSplineSolver(
         if isinstance(image, str):
             self._reuse_image_declined = image
         elif image is not None:
-            handle = _acc.bspline_reuse_plan(*args, *image)
+            handle = _acc.bspline_reuse_plan(*args, *image, edge_h=edge_h)
             if handle.declined is None:
                 return handle
             # The image block's census declined: the direct plan alone, as
             # before the image had one.
             self._reuse_image_declined = handle.declined
-        handle = _acc.bspline_reuse_plan(*args)
+        handle = _acc.bspline_reuse_plan(*args, edge_h=edge_h)
         if handle.declined is not None:
             self.pair_reuse_declined = handle.declined
             return None
@@ -5655,62 +5662,28 @@ class BSplineSolver(
         step 3), by the routine the fill without reuse gives every same-edge
         pair: the analytic static moments plus the regularised smooth part
         on the edge's arc (`_seg_seg_static_moments`, `_seg_seg_reg_moments`),
-        at the class's representative. A pair's moments are its own in any
-        call (each R entry, power and reduction is the square table's for
-        that pair, `_seg_seg_reg_geometry_pairs`), so they are formed in
-        windows of at most `_SAME_EDGE_VALUE_ROWS` consecutive observer rows
-        against the columns their representatives span (the exe's
-        `same_edge_class_values` cuts the same windows), the regularised part
-        always densely: `offset_reuse`'s Toeplitz form synthesises the
-        offsets, which is not the routine the fill without reuse runs. The
-        pairs the routine formed are kept in `_reuse_same_edge_formed`."""
-        cls, rep = plan.apart()
-        self._reuse_same_edge_formed = 0
-        if cls.size == 0:
-            return
-        n = int(geom["n_segs_total"])
-        d = self.degree
-        n_qp = self.n_qp_pair_same_edge
-        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
-        obs, src = np.divmod(rep, n)
+        at the class's representative, the regularised part always densely
+        (`offset_reuse`'s Toeplitz form synthesises the offsets, which is not
+        the routine the fill without reuse runs). The exe's own code
+        (`same_edge_class_values`, `_bspline_fill_core.h`) forms them; the
+        pairs it formed are kept in `_reuse_same_edge_formed`."""
         ing = self._edge_ingredients(geom)
-        starts = np.fromiter((sl.start for _w, sl, _arc, _a in ing), dtype=np.int64)
-        edge = np.searchsorted(starts, obs, side="right") - 1
-        formed = 0
-        for e in np.unique(edge):
-            _w, sl, arc, a_w = ing[int(e)]
-            on = np.flatnonzero(edge == e)
-            rows = obs[on] - sl.start
-            cols = src[on] - sl.start
-            nodes = _seg_seg_reg_nodes(arc, d, n_qp)
-            t = 0
-            while t < on.size:
-                lo = int(rows[t])
-                u = int(np.searchsorted(rows, lo + _SAME_EDGE_VALUE_ROWS, side="left"))
-                hi = int(rows[u - 1]) + 1
-                c0, c1 = int(cols[t:u].min()), int(cols[t:u].max()) + 1
-                A_st = _seg_seg_static_moments(
-                    arc, a_w, max_d=d, ek=ek_se, rows=slice(lo, hi)
-                )[:, :, :, c0:c1]
-                A_reg = _seg_seg_reg_moments_from_geometry(
-                    _seg_seg_reg_geometry_pairs(
-                        nodes,
-                        a_w,
-                        n_qp,
-                        np.arange(lo, hi),
-                        np.arange(c0, c1),
-                        ek=ek_se,
-                    ),
-                    k,
-                )
-                J = A_st + A_reg
-                at = on[t:u]
-                values[cls[at]] = np.moveaxis(
-                    J[:, :, rows[t:u] - lo, cols[t:u] - c0], 2, 0
-                )
-                formed += (hi - lo) * (c1 - c0)
-                t = u
-        self._reuse_same_edge_formed = formed
+        self._reuse_same_edge_formed = int(
+            plan.same_edge_values(
+                values,
+                np.fromiter((sl.start for _w, sl, _a, _r in ing), dtype=np.int64),
+                np.fromiter((sl.stop for _w, sl, _a, _r in ing), dtype=np.int64),
+                [
+                    np.ascontiguousarray(arc, dtype=np.float64)
+                    for _w, _sl, arc, _r in ing
+                ],
+                np.fromiter((a_w for _w, _sl, _a, a_w in ing), dtype=np.float64),
+                float(k),
+                int(self.degree),
+                int(self.n_qp_pair_same_edge),
+                bool(self.extended_kernel),
+            )
+        )
 
     def _reuse_served(self, route, plan, n_segs):
         """The `pair_reuse_served` counts of a fill that read `plan`: each
@@ -6240,29 +6213,37 @@ class BSplineSolver(
             pieces = [(sl.start, sl.stop) for sl in self._same_edge_slices(geom)]
 
         def _near_own(r0, r1):
-            """The near same-edge singles of rows [r0, r1) as the sweep forms
-            them, ``(own, b0, b1)``, or ``(None, 0, 0)`` for none: each edge's
-            rows against the band their singles span."""
-            has = band_hi[r0:r1] > band_lo[r0:r1]
-            if not has.any():
-                return None, 0, 0
-            b0 = int(band_lo[r0:r1][has].min())
-            b1 = int(band_hi[r0:r1][has].max())
-            own = np.zeros((d + 1, d + 1, r1 - r0, b1 - b0), dtype=np.complex128)
+            """The banded near same-edge singles of rows [r0, r1) as the
+            sweep forms them, ``(own, lo, hi)``: own ``(d+1, d+1, r1 - r0,
+            bw)``, row i's band columns lo[i]..hi[i]; ``(None,) * 3`` for
+            none. Formed for
+            each edge's rows in windows of `_SAME_EDGE_VALUE_ROWS` against
+            the band their singles span."""
+            lo = band_lo[r0:r1]
+            width = band_hi[r0:r1] - lo
+            if not (width > 0).any():
+                return None, None, None
+            own = np.zeros(
+                (d + 1, d + 1, r1 - r0, int(width.max())), dtype=np.complex128
+            )
             for e0, e1 in pieces:
-                p0, p1 = max(r0, e0), min(r1, e1)
-                if p0 >= p1:
-                    continue
-                h = band_hi[p0:p1] > band_lo[p0:p1]
-                if not h.any():
-                    continue
-                c0 = int(band_lo[p0:p1][h].min())
-                c1 = int(band_hi[p0:p1][h].max())
-                own[:, :, p0 - r0 : p1 - r0, c0 - b0 : c1 - b0] = _moments(
-                    p0, p1, c0, c1
-                )
-                served["kernel_evals"] += (p1 - p0) * (c1 - c0)
-            return own, b0, b1
+                for p0 in range(max(r0, e0), min(r1, e1), _SAME_EDGE_VALUE_ROWS):
+                    p1 = min(p0 + _SAME_EDGE_VALUE_ROWS, r1, e1)
+                    h = band_hi[p0:p1] > band_lo[p0:p1]
+                    if not h.any():
+                        continue
+                    c0 = int(band_lo[p0:p1][h].min())
+                    c1 = int(band_hi[p0:p1][h].max())
+                    J = _moments(p0, p1, c0, c1)
+                    served["kernel_evals"] += (p1 - p0) * (c1 - c0)
+                    for i in np.flatnonzero(h):
+                        a0, a1 = band_lo[p0 + i] - c0, band_hi[p0 + i] - c0
+                        own[:, :, p0 - r0 + i, : a1 - a0] = J[:, :, i, a0:a1]
+            return (
+                own,
+                np.ascontiguousarray(lo, dtype=np.int64),
+                np.ascontiguousarray(band_hi[r0:r1], dtype=np.int64),
+            )
 
         def _reuse_block(w0, w1, _j0, _j1):
             """One observer window assembled from the class values, never
@@ -6271,14 +6252,14 @@ class BSplineSolver(
             bit, filling each tile of Z from the class values as it runs; its
             near same-edge singles the sweep's own moments, as without reuse
             (the fixup below corrects them)."""
-            own, b0, b1 = _near_own(w0, w1)
+            own, lo, hi = _near_own(w0, w1)
             plan.assemble(
                 values,
                 w0,
                 w1,
                 own,
-                b0,
-                b1,
+                lo,
+                hi,
                 supp_c,
                 polys_c,
                 tan_c,
@@ -6505,8 +6486,8 @@ class BSplineSolver(
         rows in the fixup's own windows against the band their singles span,
         every other pair's correction zero (its class value is the routine's
         already). A near single's sum is then the fill without reuse's: its
-        sweep moment in the window, its correction after, in the same
-        windows."""
+        sweep moment in the window, its correction after, in the fixup's
+        windows cut in `_SAME_EDGE_VALUE_ROWS` rows."""
         d = self.degree
         n_qp = self.n_qp_pair_same_edge
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
@@ -6522,18 +6503,27 @@ class BSplineSolver(
             if not _SAME_EDGE_CORR_CHUNKED:
                 corr_chunk = max(1, n_edge)
             nodes = _seg_seg_reg_nodes(arc, d, n_qp)
-            for r0 in range(sl.start, sl.stop, corr_chunk):
-                r1 = min(r0 + corr_chunk, sl.stop)
+            # the fixup's own windows, each cut in `_SAME_EDGE_VALUE_ROWS`
+            # rows against the band their singles span
+            windows = []
+            for c_start in range(sl.start, sl.stop, corr_chunk):
+                c_end = min(c_start + corr_chunk, sl.stop)
+                for q0 in range(c_start, c_end, _SAME_EDGE_VALUE_ROWS):
+                    windows.append((q0, min(q0 + _SAME_EDGE_VALUE_ROWS, c_end)))
+            for r0, r1 in windows:
                 has = band_hi[r0:r1] > band_lo[r0:r1]
                 if not has.any():
                     continue
                 c0 = int(band_lo[r0:r1][has].min())
                 c1 = int(band_hi[r0:r1][has].max())
                 lo, hi = r0 - sl.start, r1 - sl.start
-                A_st = np.ascontiguousarray(
-                    _seg_seg_static_moments(
-                        arc, a_w, max_d=d, ek=ek_se, rows=slice(lo, hi)
-                    )[:, :, :, c0 - sl.start : c1 - sl.start]
+                A_st = _seg_seg_static_moments_window(
+                    arc,
+                    a_w,
+                    d,
+                    np.arange(lo, hi),
+                    np.arange(c0 - sl.start, c1 - sl.start),
+                    ek=ek_se,
                 )
                 A_reg = _seg_seg_reg_moments_from_geometry(
                     _seg_seg_reg_geometry_pairs(

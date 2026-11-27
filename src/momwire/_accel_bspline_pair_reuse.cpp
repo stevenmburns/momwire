@@ -1,11 +1,13 @@
 // bs2's fill-pair reuse for the Python route (momwire#2063 stage 3): the
 // binding of `_bspline_pair_reuse_core.h`. Its own TU: copies and integers
-// only, no kernel; `assemble` calls the windowed assembly across the TU
-// boundary (`_bspline_core.h`).
+// only, no kernel; `assemble` calls the windowed assembly and
+// `same_edge_values` the fill core's same-edge class values across the TU
+// boundary (`_bspline_core.h`, `_bspline_fill_core.h`).
 #include "_accel_common.h"
 #include "_mw_nd_binding.h"
 
 #include "_bspline_core.h"
+#include "_bspline_fill_core.h"
 #include "_bspline_pair_reuse_core.h"
 
 #include <memory>
@@ -34,7 +36,7 @@ using I8 = py::array_t<int8_t, py::array::c_style | py::array::forcecast>;
 
 PlanHandle reuse_plan(F64 seg_l, F64 seg_r, F64 a, I32 edge, py::object group_i, py::object group_j,
                       py::object b_src, std::vector<double> thresholds, int degree, py::object img_l,
-                      py::object img_r, py::object img_mode) {
+                      py::object img_r, py::object img_mode, py::object edge_h) {
     const int64_t n = static_cast<int64_t>(a.size());
     if (seg_l.ndim() != 2 || seg_l.shape(0) != n || seg_l.shape(1) != 3 || seg_r.ndim() != 2 ||
         seg_r.shape(0) != n || seg_r.shape(1) != 3 || edge.size() != n)
@@ -47,6 +49,10 @@ PlanHandle reuse_plan(F64 seg_l, F64 seg_r, F64 a, I32 edge, py::object group_i,
     g.seg_r = seg_r.data();
     g.a = a.data();
     g.edge = edge.data();
+    if (edge_h.is_none()) throw std::invalid_argument("bspline pair_reuse: each segment's edge h (edge_h)");
+    const F64 eh = edge_h.cast<F64>();
+    if (eh.size() != n) throw std::invalid_argument("bspline pair_reuse: n edge lengths");
+    g.edge_h = eh.data();
     if (!group_i.is_none()) {
         gi = group_i.cast<I64>();
         gj = group_j.cast<I64>();
@@ -122,6 +128,35 @@ py::array_t<int32_t> classes_of(const PlanHandle &h, int block, I64 rows, I64 co
     return out;
 }
 
+// momwire#2063 step 3: the same-edge classes' values by the same-edge routine
+// (`mw::bspline::same_edge_class_values`, the exe's own), into `values`.
+int64_t same_edge_values(const PlanHandle &h, py::array_t<cd> values, I64 starts, I64 stops, py::list arcs, F64 radii,
+                         double k, int degree, int64_t n_qp, bool ek) {
+    const int64_t classes = h.plan->fam.at(0).classes, d1 = degree + 1;
+    if (values.ndim() != 3 || values.shape(0) != classes || values.shape(1) != d1 || values.shape(2) != d1 ||
+        !(values.flags() & py::array::c_style))
+        throw std::invalid_argument("bspline pair_reuse: values are C-contiguous (classes, d + 1, d + 1)");
+    const py::ssize_t m = starts.size();
+    if (stops.size() != m || radii.size() != m || static_cast<py::ssize_t>(arcs.size()) != m)
+        throw std::invalid_argument("bspline pair_reuse: one start, stop, arc and radius per edge");
+    std::vector<F64> keep;
+    std::vector<mw::bspline::SameEdgeArc> edges(static_cast<size_t>(m));
+    for (py::ssize_t e = 0; e < m; e++) {
+        keep.push_back(arcs[static_cast<size_t>(e)].cast<F64>());
+        auto &ed = edges[static_cast<size_t>(e)];
+        ed.s0 = starts.data()[e];
+        ed.s1 = stops.data()[e];
+        ed.arc = keep.back().data();
+        ed.n_arc = static_cast<int64_t>(keep.back().size());
+        ed.a_w = radii.data()[e];
+        if (ed.n_arc != ed.s1 - ed.s0 + 1) throw std::invalid_argument("bspline pair_reuse: an edge's arcs are n + 1");
+    }
+    cd *v = values.mutable_data();
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    return mw::bspline::same_edge_class_values(*h.plan, edges, h.n(), degree, k, n_qp, ek, v);
+}
+
 // The apart classes (the same-edge routine's, momwire#2063 step 3) and their
 // representatives' flat indices b * n * n + o * n + s, in that flat order.
 py::tuple apart(const PlanHandle &h) {
@@ -160,10 +195,11 @@ void gather(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, C128 out) 
 
 // momwire#2166: observer rows r0..r1 assembled into Z from the class values,
 // the window never written whole: `assemble_Z_bspline_windowed(J_win, ...)`
-// on the window `gather` writes, bit for bit, its near same-edge singles in
-// columns b0..b1 taken from `own` when given (momwire#2063 step 3).
-void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, py::object own, int64_t b0, int64_t b1,
-              I64 support_seg, F64 polys, F64 tangents, I64 m_idx, I64 n_idx, double omega, double eps, double mu,
+// on the window `gather` writes, bit for bit, its near same-edge singles
+// taken from `own` when given (momwire#2063 step 3): row i's band from column
+// lo[i], own (d + 1, d + 1, r1 - r0, bw).
+void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, py::object own, py::object lo,
+              py::object hi, I64 support_seg, F64 polys, F64 tangents, I64 m_idx, I64 n_idx, double omega, double eps, double mu,
               py::array_t<cd> Z, uintptr_t cancel_flag) {
     const int64_t n = h.n(), classes = h.plan->fam.at(0).classes;
     if (values.ndim() != 3 || values.shape(0) != classes || values.shape(1) != values.shape(2))
@@ -173,16 +209,20 @@ void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, py::obje
     w.values = values.data();
     w.d1 = static_cast<int>(values.shape(1));
     C128 own_arr;
+    I64 lo_arr, hi_arr;
     if (!own.is_none()) {
         own_arr = own.cast<C128>();
+        lo_arr = lo.cast<I64>();
+        hi_arr = hi.cast<I64>();
         if (own_arr.ndim() != 4 || own_arr.shape(0) != w.d1 || own_arr.shape(1) != w.d1 ||
-            own_arr.shape(2) != r1 - r0 || own_arr.shape(3) != b1 - b0)
-            throw std::invalid_argument("bspline pair_reuse: own is (d + 1, d + 1, r1 - r0, b1 - b0)");
+            own_arr.shape(2) != r1 - r0 || lo_arr.size() != r1 - r0 || hi_arr.size() != r1 - r0)
+            throw std::invalid_argument("bspline pair_reuse: own is (d + 1, d + 1, r1 - r0, bw), lo and hi (r1 - r0)");
         w.own = own_arr.data();
+        w.lo = lo_arr.data();
+        w.hi = hi_arr.data();
         w.r0 = r0;
         w.r1 = r1;
-        w.b0 = b0;
-        w.b1 = b1;
+        w.bw = own_arr.shape(3);
     }
     br::check_window(w);
     if (!(0 <= r0 && r0 < r1 && r1 <= n)) throw std::invalid_argument("bspline pair_reuse: rows out of range");
@@ -375,6 +415,10 @@ void register_bspline_pair_reuse(py::module_ &m) {
              "The representatives' evaluation groups: (observer rows, sources, classes, at), "
              "class cls[q]'s value at entry at[q] = row * |sources| + column of the group's call.")
         .def("group_blocks", &group_blocks, "Each group's block, in groups() order (1: the image's).")
+        .def("same_edge_values", &same_edge_values, py::arg("values"), py::arg("starts"), py::arg("stops"),
+             py::arg("arcs"), py::arg("radii"), py::arg("k"), py::arg("degree"), py::arg("n_qp"), py::arg("ek"),
+             "momwire#2063 step 3: each same-edge class's moments at k by the same-edge routine (the exe's "
+             "own code) into `values`, from each edge's segment range, arcs and radius; the pairs formed.")
         .def("apart", &apart,
              "The same-edge routine's classes (momwire#2063 step 3): (classes, their representatives' "
              "flat indices b * n * n + o * n + s), int64, in that flat order. In no group: the fill "
@@ -392,13 +436,13 @@ void register_bspline_pair_reuse(py::module_ &m) {
              "Observer rows r0..r1 of the moment tensor, (d + 1, d + 1, r1 - r0, n), from the "
              "class values (classes, d + 1, d + 1).")
         .def("assemble", &assemble, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("own"),
-             py::arg("b0"), py::arg("b1"), py::arg("support_seg"), py::arg("polys"), py::arg("tangents"),
+             py::arg("lo"), py::arg("hi"), py::arg("support_seg"), py::arg("polys"), py::arg("tangents"),
              py::arg("m_idx"), py::arg("n_idx"), py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("Z"),
              py::arg("cancel_flag") = 0,
              "momwire#2166: observer rows r0..r1 added into Z from the class values, as "
              "assemble_Z_bspline_windowed adds the gathered window, without writing the window; with "
-             "`own` ((d + 1, d + 1, r1 - r0, b1 - b0)), the near same-edge singles in columns b0..b1 "
-             "take it (momwire#2063 step 3).")
+             "`own` ((d + 1, d + 1, r1 - r0, bw)) and `lo`, `hi` ((r1 - r0,) int64), the near same-edge "
+             "singles in columns lo[i]..hi[i] take own[:, :, i, s - lo[i]] (momwire#2063 step 3).")
         .def("same_edge_bands", [](const PlanHandle &h) {
             const int64_t n = h.n();
             py::array_t<int64_t> lo(n), hi(n);
@@ -423,7 +467,7 @@ void register_bspline_pair_reuse(py::module_ &m) {
     m.def("bspline_reuse_plan", &reuse_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
           py::arg("edge"), py::arg("group_i"), py::arg("group_j"), py::arg("b_src"), py::arg("thresholds"),
           py::arg("degree"), py::arg("img_l") = py::none(), py::arg("img_r") = py::none(),
-          py::arg("img_mode") = py::none(),
+          py::arg("img_mode") = py::none(), py::arg("edge_h") = py::none(),
           "The reuse plan for this geometry, from the process's cache or built; with the mirrored end "
           "points and each segment's own-image mode, its image block too (momwire#2063 step 2a).");
     m.def("bspline_reuse_remainder_plan", &remainder_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("h"),
