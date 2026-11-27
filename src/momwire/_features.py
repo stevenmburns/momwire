@@ -256,7 +256,9 @@ FEATURES: dict[str, Feature] = {
         # once with the shipped off-edge kernel, its Sommerfeld remainder
         # copying the blocks those classes make congruent through the
         # plane; a front end's edge-pair hint (PRs #1810, #1811) is read as
-        # on. SinusoidalSolver (momwire#1911): the point-matched fill finds
+        # on. A bs2 frequency sweep with a served plan runs per frequency to
+        # read it, the plan built once for the sweep: the batched sweep reads
+        # none (momwire#2172). SinusoidalSolver (momwire#1911): the point-matched fill finds
         # its own classes of (observer, source) pairs and evaluates each
         # one's field tensors once with the shipped kernel, free space and
         # PEC image. On every solver the variable alone is on.
