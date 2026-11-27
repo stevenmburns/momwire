@@ -33,8 +33,8 @@ pytestmark = [
         reason="needs the razor reuse row assembler",
     ),
     pytest.mark.skipif(
-        acc is not None and not _features.certified("razor_pair_reuse"),
-        reason="razor_pair_reuse is not certified on this platform",
+        acc is not None and not _features.certified("pair_reuse", solver="razor"),
+        reason="razor2p's pair reuse is not certified on this platform",
     ),
     pytest.mark.filterwarnings("ignore"),
 ]

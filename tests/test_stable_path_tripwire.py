@@ -241,18 +241,18 @@ _SELF_TEST = ("eznec_nec42/0228_dipole-10m-free.nec", "nec4", "bs2")
 
 
 def test_the_tripwire_fires_when_a_flag_is_on(monkeypatch, current_stack):
-    assert _features.FEATURES["offset_reuse"].kind == "python"
+    assert _features.FEATURES["pair_reuse"].kind == "python"
     assert (*_SELF_TEST[1:],) in {(dl, b) for _, dl, b in G.STABLE_CASES}
     deck, dialect, basis = _SELF_TEST
     assert mismatch(STABLE, deck, dialect, basis, current_stack) is None
-    monkeypatch.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    assert _features.active() == ["offset_reuse"]
+    monkeypatch.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    assert _features.active() == ["pair_reuse"]
     golden_line2 = _golden(STABLE, deck, dialect, basis).split("\n")[1]
     line2 = G.render_stable(deck, dialect, basis).split("\n")[1]
     assert line2 != golden_line2
-    assert line2.startswith(golden_line2 + " +offset_reuse"), line2
+    assert line2.startswith(golden_line2 + " +pair_reuse"), line2
     failure = mismatch(STABLE, deck, dialect, basis, current_stack)
-    assert failure is not None and "+offset_reuse" in failure, failure
+    assert failure is not None and "+pair_reuse" in failure, failure
     assert REGENERATE[STABLE] in failure
 
 
@@ -262,6 +262,6 @@ def test_the_nec5_corpus_line2_check_fires_when_a_flag_is_on(
     """The NEC-5 corpus masks its whole stamp, so its flags-off line-2 check
     is what sees a flag there."""
     deck, basis = G.CASES[0]
-    monkeypatch.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
+    monkeypatch.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     failure = mismatch(NEC5, deck, "nec5", basis, current_stack)
-    assert failure is not None and "+offset_reuse" in failure, failure
+    assert failure is not None and "+pair_reuse" in failure, failure

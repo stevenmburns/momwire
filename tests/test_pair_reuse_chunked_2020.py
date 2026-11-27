@@ -28,16 +28,17 @@ from momwire.array_block import ArrayBlockSolver
 from momwire.bspline import BSplineSolver
 from momwire.hmatrix import HMatrixSolver
 
+from _reuse_seam import bs2
+
 # An experimental feature (`momwire._features`, reach 4: through the drop-in
 # on Linux and Windows).
 pytestmark = pytest.mark.reach(4)
 
 LAM = 21.26
 
-#: |dZin|/|Zin| the two features declare, added: each moves the answer alone.
-DRIFT = (
-    _features.FEATURES["pair_reuse"].drift + _features.FEATURES["offset_reuse"].drift
-)
+#: |dZin|/|Zin| the switch declares on bspline (the census and the same-edge
+#: Toeplitz form together).
+DRIFT = _features.family("pair_reuse", "bspline").drift
 #: Z itself moves at the key's rounding (2^-40 of a pair's scale), far under
 #: the answer's drift.
 Z_DRIFT = 1e-11
@@ -70,7 +71,7 @@ def _solver(count=8, n=21, **kw):
     kw.setdefault("pair_reuse", True)
     # past the tensor's budget (8 x 21 segments: 4 MB): the chunked route
     kw.setdefault("swept_mem_mb", 2)
-    return BSplineSolver(
+    return bs2(
         wires=wires,
         n_per_edge_per_wire=segs,
         feed_wire_index=0,
@@ -81,7 +82,7 @@ def _solver(count=8, n=21, **kw):
 
 
 def _dense(count=8, n=21, **kw):
-    return _solver(count, n, pair_reuse=False, offset_reuse=False, **kw)
+    return _solver(count, n, pair_reuse=False, toeplitz=False, **kw)
 
 
 def _fill(s, **kw):
@@ -139,7 +140,7 @@ def test_the_chunked_route_gathers_from_the_plan(kernel_pairs):
     representatives and the near same-edge singles' sweep and fixup only,
     and every other pair is copied."""
     s = _solver()
-    assert s._offset_reuse, "offset_reuse follows pair_reuse"
+    assert s._offset_reuse, "the Toeplitz form follows pair_reuse"
     _fill(s)
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
@@ -169,11 +170,11 @@ def test_congruent_edges_share_their_same_edge_classes():
     assert c["same_edge_classes"] - c["near_pairs"] == 21 - 4
 
 
-def test_offset_reuse_alone_serves_no_pair():
-    """`offset_reuse` without the whole copies no pair: what is left of it
-    (momwire#2063 step 3) is the regularised moments' Toeplitz form inside
-    the same-edge kernel."""
-    s = _solver(pair_reuse=False, offset_reuse=True)
+def test_the_toeplitz_form_alone_serves_no_pair():
+    """The same-edge Toeplitz form without the census copies no pair: it is
+    the regularised moments' Toeplitz form inside the same-edge kernel
+    (momwire#2063 step 3)."""
+    s = _solver(pair_reuse=False, toeplitz=True)
     _fill(s)
     assert s.pair_reuse_served is None
     assert s.fill_report()["reuse"] is None
@@ -210,14 +211,14 @@ def test_over_a_perfect_ground_the_free_space_term_still_copies():
 
 def test_the_plan_alone_is_served_when_the_tensor_does_not_fit():
     """The memory budget alone picks the chunked route."""
-    s = _solver(offset_reuse=False, swept_mem_mb=2)
+    s = _solver(toeplitz=False, swept_mem_mb=2)
     assert _moved(_fill(s), _fill(_dense())) <= Z_DRIFT
     assert s.pair_reuse_served["route"] == "chunked"
     assert s.pair_reuse_served["copied_pairs"] > 0
 
 
 def test_the_tensor_route_reports_what_it_served():
-    s = _solver(offset_reuse=False, swept_mem_mb=256)
+    s = _solver(toeplitz=False, swept_mem_mb=256)
     _fill(s)
     assert s.pair_reuse_served["route"] == "tensor"
     assert s.pair_reuse_served["copied_pairs"] > 0
@@ -225,7 +226,7 @@ def test_the_tensor_route_reports_what_it_served():
 
 @pytest.mark.parametrize("swept_mem_mb", [2, 256], ids=["chunked", "tensor"])
 def test_a_swept_fill_is_served_from_its_own_prep(swept_mem_mb):
-    s = _solver(offset_reuse=False, swept_mem_mb=swept_mem_mb)
+    s = _solver(toeplitz=False, swept_mem_mb=swept_mem_mb)
     geom = s._build_geometry()
     prep = s._same_edge_prep(geom)
     _ki, _k, same_edge_k = next(iter(s._same_edge_prep_swept_chunks(prep, [s.k])))
@@ -243,7 +244,7 @@ def test_a_fill_of_chosen_rows_says_it_read_no_plan(plan_reads):
 
 
 def test_reuse_off_reads_no_plan_and_reports_nothing(plan_reads):
-    s = _solver(pair_reuse=False, offset_reuse=True)
+    s = _solver(pair_reuse=False, toeplitz=True)
     _fill(s)
     assert s.pair_reuse_served is None
     assert s.pair_reuse_declined is None
@@ -258,11 +259,12 @@ SOMMERFELD = {
 
 
 def _three(reuse, z=10.0, n=13, **kw):
-    """Three identical parallel wires at height `z`. `offset_reuse` is held on,
-    so on and off differ by the census alone."""
+    """Three identical parallel wires at height `z`. The same-edge Toeplitz
+    form is held on (`_reuse_seam`), so on and off differ by the census
+    alone."""
     wires = [np.array([[3.0 * i, -4.0, z], [3.0 * i, 4.0, z]]) for i in range(3)]
-    kw.setdefault("offset_reuse", True)
-    return BSplineSolver(
+    kw.setdefault("toeplitz", True)
+    return bs2(
         wires=wires,
         n_per_edge_per_wire=[[n] for _ in wires],
         feed_wire_index=0,
@@ -350,20 +352,22 @@ ACCELERATED = {
 
 def _accelerated(cls, reuse):
     """A deck each class serves on its own operator. The size rule that hands
-    a small H-matrix sweep to the dense route is switched off; `offset_reuse`
-    is held on, so on and off differ by the census alone."""
+    a small H-matrix sweep to the dense route is switched off; the same-edge
+    Toeplitz form is held on (`_reuse_seam`), so on and off differ by the
+    census alone."""
     count, n, kw = (
         (4, 41, {"swept_dense_max_bases": 0}) if cls is HMatrixSolver else (6, 21, {})
     )
     wires, segs = _deck(count, n)
-    return cls(
+    return bs2(
+        cls=cls,
         wires=wires,
         n_per_edge_per_wire=segs,
         feed_wire_index=0,
         wavelength=LAM,
         wire_radius=0.002,
         pair_reuse=reuse,
-        offset_reuse=True,
+        toeplitz=True,
         **kw,
     )
 

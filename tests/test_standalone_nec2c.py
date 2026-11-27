@@ -434,7 +434,7 @@ def test_a_scratch_directory_is_left_clean():
 # --- the one fill-reuse switch, MOMWIRE_X_PAIR_REUSE (momwire#1911) ----------
 #
 # Reach 11: this executable runs the point-matched fill's plan
-# (`_sin_pair_reuse_core.h`, `EXE_PARTS`). The C++ plan serves the extended
+# (`_sin_pair_reuse_core.h`). The C++ plan serves the extended
 # kernel only (`reuse_route`: the NEC-4.2 slot never builds a reduced-kernel
 # fill), so a NEC-2 deck reuses under EK and runs the ordinary fill without
 # it, where the launcher's Python plan serves both. The NEC-2 printout

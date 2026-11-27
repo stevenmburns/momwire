@@ -24,6 +24,8 @@ import pytest
 import momwire.bspline as bs
 from momwire.bspline import BSplineSolver
 
+from _reuse_seam import bs2
+
 pytestmark = [
     pytest.mark.reach(4),
     pytest.mark.skipif(
@@ -65,7 +67,7 @@ def _yagi(D=8, n=21, radius=0.006, **kw):
     kw.setdefault("pair_reuse", True)
     # past the tensor's budget (203 segments: 6 MB): the chunked fill
     kw.setdefault("swept_mem_mb", 1)
-    return BSplineSolver(
+    return bs2(
         wires=wires,
         n_per_edge_per_wire=[[m] for _L, m in elems],
         feeds=[(1, None, 1.0 + 0j)],
@@ -240,9 +242,7 @@ def test_the_fill_is_the_gathered_fill_to_the_bit(ek, swept_mem_mb, monkeypatch)
         ref = _fill(_yagi(**kw))
     assert pieces == len(calls) >= 2
     assert Z.tobytes() == ref.tobytes()
-    assert (
-        _moved(Z, _fill(_yagi(pair_reuse=False, offset_reuse=False, **kw))) <= Z_DRIFT
-    )
+    assert _moved(Z, _fill(_yagi(pair_reuse=False, toeplitz=False, **kw))) <= Z_DRIFT
 
 
 def test_degree_one_is_the_gathered_fill_too(gathered):

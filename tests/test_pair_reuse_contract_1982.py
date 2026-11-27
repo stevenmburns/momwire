@@ -1,21 +1,25 @@
-"""One pair-reuse contract (momwire#1982 step 1).
+"""One pair-reuse contract (momwire#1982 step 1; one name since momwire#2063
+step 4).
 
-`pair_reuse` is the one user-facing pair-reuse switch: one keyword, taken by
-every solver that reuses (bspline, sinusoidal, razor2p), and one variable,
-MOMWIRE_X_PAIR_REUSE. Its parts, bspline's `offset_reuse` and razor2p's
-`razor_pair_reuse`, follow it; their own keywords and variables are kept as
-aliases and win. What is held here:
+`pair_reuse` is the one pair-reuse switch: one keyword, taken by every solver
+that reuses (bspline, sinusoidal, razor2p), and one variable,
+MOMWIRE_X_PAIR_REUSE. What each family runs of it, and how far that is
+certified, is data on its one row (`Feature.families`). What is held here:
 
-- the registry: two parts, both of `pair_reuse`, neither offered alone, and
-  no default turned on;
-- the order a part is read in: its keyword, the whole's keyword, its
-  variable, the whole's variable, its default;
-- a native part asked for only through the whole is OFF outside its reach
-  (and `withheld` says so), where its own keyword still refuses;
-- line 2 names only what the environment set, so the whole's variable
-  stamps "+pair_reuse" and not its parts;
-- each solver: the whole turns its reuse on, the alias wins, and
+- the registry: one feature, a row per family, none of them a switch, and no
+  default turned on;
+- the order it is read in on a family: its keyword, the family's deprecated
+  keyword, its variable, the family's deprecated variable, a pragma, its
+  default;
+- a native family row (razor2p's) asked for outside its reach is OFF (and
+  `withheld` says so), by any spelling;
+- line 2 names `pair_reuse` alone, and is uncertified where the family row
+  that runs is past its reach;
+- each solver: the switch turns its reuse on and off, and
   `pair_reuse_declined` is None or a str everywhere.
+
+The deprecated spellings themselves, and their precedence against
+`pair_reuse`, are tests/test_one_reuse_switch_2063.py's.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from momwire.bspline import BSplineSolver
 from momwire.razor import RazorSolver
 from momwire.sinusoidal import SinusoidalSolver
 
-PARTS = {"offset_reuse", "razor_pair_reuse"}
+ALIASES = {"offset_reuse": "bspline", "razor_pair_reuse": "razor"}
 
 
 @pytest.fixture
@@ -40,132 +44,113 @@ def no_features(monkeypatch):
     for f in F.FEATURES.values():
         for var in (f.env, *f.aliases):
             monkeypatch.delenv(var, raising=False)
+        for fam in f.families:
+            if fam.alias_env is not None:
+                monkeypatch.delenv(fam.alias_env, raising=False)
     return monkeypatch
+
+
+def _hold_row(monkeypatch, solver, reach):
+    """Hold `pair_reuse`'s row for `solver` to `reach` for one test."""
+    pr = F.FEATURES["pair_reuse"]
+    rows = tuple(
+        dataclasses.replace(r, reach=reach) if r.solver == solver else r
+        for r in pr.families
+    )
+    monkeypatch.setitem(
+        F.FEATURES, "pair_reuse", dataclasses.replace(pr, families=rows)
+    )
 
 
 # --- the registry ---------------------------------------------------------------
 
 
-def test_pair_reuse_is_the_one_user_facing_switch():
-    parts = {n for n, f in F.FEATURES.items() if f.part_of is not None}
-    assert parts == PARTS
+def test_pair_reuse_is_the_one_switch():
     whole = F.FEATURES["pair_reuse"]
-    assert whole.part_of is None and whole.kwarg == "pair_reuse"
-    assert whole.env == "MOMWIRE_X_PAIR_REUSE"
-    for name in PARTS:
-        f = F.FEATURES[name]
-        assert f.part_of == "pair_reuse"
-        # A part is never offered alone, and nothing here is on by default.
-        assert not f.offer and not f.default
-    assert not whole.default
-    # A part of a part would need an order nobody wrote down.
-    for f in F.FEATURES.values():
-        if f.part_of is not None:
-            assert f.part_of in F.FEATURES
-            assert F.FEATURES[f.part_of].part_of is None
-
-
-def test_offset_reuse_does_not_read_as_retired():
-    summary = F.FEATURES["offset_reuse"].summary.lower()
-    assert "folded" not in summary and "pair reuse" in summary
+    assert whole.kwarg == "pair_reuse" and whole.env == "MOMWIRE_X_PAIR_REUSE"
+    assert not whole.default and not whole.offer
+    assert {r.solver for r in whole.families} == set(whole.solvers)
+    assert {r.alias: r.solver for r in whole.families if r.alias} == ALIASES
+    # No row of the registry is one of its old parts.
+    assert not set(ALIASES) & set(F.FEATURES)
+    assert not any(hasattr(f, "part_of") for f in F.FEATURES.values())
 
 
 def test_every_reusing_solver_takes_the_one_keyword():
     # antennaknobs probes this keyword on the constructor (`_takes_pair_reuse`).
     for cls in (BSplineSolver, SinusoidalSolver, RazorSolver):
         assert "pair_reuse" in inspect.signature(cls.__init__).parameters, cls
-    # The aliases stay.
+    # The deprecated spellings are still taken, for two minor releases.
     assert "offset_reuse" in inspect.signature(BSplineSolver.__init__).parameters
     assert "razor_pair_reuse" in inspect.signature(RazorSolver.__init__).parameters
 
 
-# --- the order a part is read in -----------------------------------------------
+# --- the order it is read in ------------------------------------------------------
 
 
-def test_the_whole_turns_a_part_on(no_features):
-    assert F.enabled("offset_reuse") is False
-    assert F.enabled("offset_reuse", whole_kwarg=True) is True
-    assert F.enabled("offset_reuse", whole_kwarg=False) is False
+def test_the_switch_on_each_family(no_features):
+    for solver in ("bspline", "razor", "sinusoidal", None):
+        assert F.enabled("pair_reuse", solver=solver) is False
+        assert F.enabled("pair_reuse", True, solver=solver) is True
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    assert F.enabled("offset_reuse") is True
-    # The whole's variable is not the part's: only the whole is active.
+    for solver in ("bspline", "razor", "sinusoidal", None):
+        assert F.enabled("pair_reuse", solver=solver) is True
+        # a keyword over a variable: a request can say no
+        assert F.enabled("pair_reuse", False, solver=solver) is False
     assert F.active() == ["pair_reuse"]
 
 
-def test_the_part_s_own_spelling_wins(no_features):
-    # its keyword over the whole's keyword
-    assert F.enabled("offset_reuse", False, whole_kwarg=True) is False
-    assert F.enabled("offset_reuse", True, whole_kwarg=False) is True
-    # its variable over the whole's variable
-    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "0")
-    assert F.enabled("offset_reuse") is False
-    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "0")
+def test_a_feature_without_family_rows_ignores_the_spellings(no_features):
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    assert F.enabled("offset_reuse") is True
-    # a keyword (the whole's) over a variable (the part's): a request can say no
-    assert F.enabled("offset_reuse", whole_kwarg=False) is False
+    assert F.enabled("transmitted_anchors", solver="bspline") is False
+    assert F.active(solver="bspline") == ["pair_reuse"]
 
 
-def test_a_feature_that_is_no_part_ignores_the_whole(no_features):
-    assert F.enabled("transmitted_anchors", whole_kwarg=True) is False
-    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    assert F.enabled("transmitted_anchors") is False
-
-
-def test_a_native_part_through_the_whole_is_off_outside_its_reach(no_features):
-    f = F.FEATURES["razor_pair_reuse"]
-    assert f.kind == "native"
-    # The drop-in is past reach 1 everywhere; this branch must not change a
-    # reach another branch widens, so it only asks where the part reaches.
-    if f.reach >= F.current_level("dropin"):
-        pytest.skip("razor_pair_reuse reaches the drop-in here")
-    for kw in ({"whole_kwarg": True}, {}):
+def test_a_native_family_row_is_off_outside_its_reach(no_features):
+    row = F.family("pair_reuse", "razor")
+    assert row is not None and row.kind == "native"
+    # This branch must not change a reach another branch widens, so it holds
+    # the row to an earlier reach, 4, which the macOS drop-in lies past.
+    no_features.setattr(F, "_os", lambda platform=None: "macos")
+    _hold_row(no_features, "razor", 4)
+    for kw in ({"kwarg_value": True}, {"alias_value": True}, {}):
         if not kw:
             no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-        assert F.enabled("razor_pair_reuse", context="dropin", **kw) is False
-        assert F.withheld("razor_pair_reuse", context="dropin", **kw) is True
-    # Its own keyword and variable still refuse there.
-    with pytest.raises(F.FeatureNotCertified):
-        F.enabled("razor_pair_reuse", True, context="dropin")
-    no_features.setenv("MOMWIRE_X_RAZOR_PAIR_REUSE", "1")
-    with pytest.raises(F.FeatureNotCertified):
-        F.enabled("razor_pair_reuse", context="dropin")
-    assert F.withheld("razor_pair_reuse", context="dropin") is False
+        assert F.enabled("pair_reuse", context="dropin", solver="razor", **kw) is False
+        assert F.withheld("pair_reuse", context="dropin", solver="razor", **kw) is True
+        # never refused, and the other families run it
+        assert F.enabled("pair_reuse", context="dropin", solver="bspline", **kw)
+        assert not F.withheld("pair_reuse", context="dropin", solver="bspline", **kw)
+    assert F.certified("pair_reuse", "dropin") is True
+    assert F.certified("pair_reuse", "dropin", solver="razor") is False
 
 
-def test_withheld_is_false_unless_the_whole_asked(no_features):
-    for name in PARTS:
-        assert F.withheld(name) is False
-        assert F.withheld(name, whole_kwarg=False) is False
-    # A Python part runs outside its reach, so it is never withheld.
-    assert F.withheld("offset_reuse", whole_kwarg=True, context="dropin") is False
+def test_withheld_is_false_unless_asked(no_features):
+    for solver in ("bspline", "razor", "sinusoidal"):
+        assert F.withheld("pair_reuse", solver=solver) is False
+        assert F.withheld("pair_reuse", False, solver=solver) is False
+    # A Python family row runs outside its reach, so it is never withheld.
+    assert F.withheld("pair_reuse", True, solver="bspline", context="dropin") is False
 
 
-def test_the_stamp_names_the_whole_not_its_parts(no_features):
-    """Line 2 names the whole only. Its certification is what RUNS: the whole
-    reaches every level, but under it bspline runs offset_reuse, a Python
-    part that runs outside its reach too, so a level past that reach (macOS,
-    the drop-ins on Linux) stamps uncertified. razor's native part is
-    withheld outside its reach when only the whole asked, so it never
-    uncertifies the stamp."""
+def test_the_stamp_names_the_switch(no_features):
+    """Line 2 names `pair_reuse` only. Its certification is what RUNS: the
+    switch reaches every level, and on bspline its row reaches 9, every level
+    bspline runs on, so no shipped level stamps it uncertified."""
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    bspline_part = F.FEATURES["offset_reuse"]
-    assert bspline_part.kind == "python"
     for context in (None, "dropin"):
-        level = F.current_level(context) if context else F.current_level()
-        tail = "" if level <= bspline_part.reach else " uncertified on this platform"
         args = (context,) if context else ()
-        assert F.stamp(*args) == "+pair_reuse" + tail, context
+        assert F.stamp(*args) == "+pair_reuse", context
+        for solver in ("bspline", "razor", "sinusoidal"):
+            assert F.stamp(*args, solver=solver) == "+pair_reuse", (context, solver)
+    assert F.stamp(solver="") == ""
 
 
 def test_pair_reuse_reaches_every_level():
     """Reach 11, the deepest: every Python route and drop-in, and every
     executable, each of which accepts MOMWIRE_X_PAIR_REUSE and runs its own
-    basis's reuse (`EXE_PARTS`, held to the registry in
-    tests/test_features_registry.py). Still Python-kind, off by default and
-    not offered. Its parts keep their own reaches: on a family the whole acts
-    on through a part, what runs is certified only as far as the part."""
+    basis's reuse. Still Python-kind, off by default and not offered. Each
+    family row keeps the reach its route is certified to."""
     whole = F.FEATURES["pair_reuse"]
     assert whole.reach == F.DEEPEST and whole.stable
     assert whole.kind == "python" and not whole.default and not whole.offer
@@ -180,37 +165,37 @@ def test_pair_reuse_reaches_every_level():
         "nec2c-sinusoidal",
     ):
         assert F.certified("pair_reuse", "exe", basis=basis, platform="linux")
-    # bspline's part reaches the bs2 executables (nec42-bs2 the deepest),
-    # whose C++ fill runs it beside the whole's census (momwire#2063)
-    assert F.FEATURES["offset_reuse"].reach == F._level("exe-nec42-bs2")
-    assert F.FEATURES["razor_pair_reuse"].reach == F._level(
+        family = F.basis_solver(basis)
+        assert F.certified(
+            "pair_reuse", "exe", basis=basis, platform="linux", solver=family
+        ), basis
+    # bspline's row reaches the bs2 executables (nec42-bs2 the deepest),
+    # razor2p's the nec5 executables, the sinusoidal row every level
+    assert F.family("pair_reuse", "bspline").reach == F._level("exe-nec42-bs2")
+    assert F.family("pair_reuse", "razor").reach == F._level(
         "exe-nec5-bs2-razor2p-linux-macos"
     )
+    assert F.family("pair_reuse", "sinusoidal").reach == F.DEEPEST
 
 
-def test_a_part_past_its_reach_stamps_the_whole_uncertified(no_features):
-    """The whole certified, the part that runs not: line 2 says uncertified
-    on that family alone. No shipped level puts bspline past offset_reuse's
-    reach (9, every level bspline runs on), so the part is held to an
-    earlier reach, 4, which the macOS drop-in (level 5) lies past, inside
-    razor_pair_reuse's 8; sinusoidal has no part."""
+def test_a_family_row_past_its_reach_stamps_uncertified(no_features):
+    """The switch certified, the family row that runs not: line 2 says
+    uncertified on that family alone. No shipped level puts bspline past its
+    row's reach (9), so the row is held to an earlier reach, 4, which the
+    macOS drop-in (level 5) lies past, inside razor2p's 8."""
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     no_features.setattr(F, "_os", lambda platform=None: "macos")
     assert F.current_level("dropin") == F._level("macos")
     assert F.stamp("dropin", solver="bspline") == "+pair_reuse"
-    no_features.setitem(
-        F.FEATURES,
-        "offset_reuse",
-        dataclasses.replace(F.FEATURES["offset_reuse"], reach=4),
-    )
+    _hold_row(no_features, "bspline", 4)
     tail = " uncertified on this platform"
     assert F.stamp("dropin", solver="bspline") == "+pair_reuse" + tail
     assert F.stamp("dropin", solver="razor") == "+pair_reuse"
     assert F.stamp("dropin", solver="sinusoidal") == "+pair_reuse"
-    # unknown family: every part that runs counts
+    # unknown family: every row the environment turns on counts
     assert F.stamp("dropin") == "+pair_reuse" + tail
-    # the bspline part set off: nothing of the whole runs there
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "0")
+    # the switch off: nothing runs
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "0")
     assert F.stamp("dropin", solver="bspline") == ""
 
 
@@ -222,7 +207,7 @@ def _bspline(**kw):
     return BSplineSolver(wires=wire, n_per_edge_per_wire=[[21]], wire_radius=1e-3, **kw)
 
 
-def test_bspline_pair_reuse_turns_on_offset_reuse(no_features):
+def test_bspline_pair_reuse_turns_on_the_census_and_the_toeplitz_form(no_features):
     s = _bspline()
     assert s._offset_reuse is False and s._reuse_on is False
     assert s.pair_reuse_declined is None
@@ -236,27 +221,25 @@ def test_bspline_pair_reuse_turns_on_offset_reuse(no_features):
     s = _bspline(pair_reuse=hint)  # a front end's hint reads as on, unkept
     assert s._offset_reuse is True and s._reuse_on is True
     assert not any(v is hint for v in vars(s).values())
-    # The alias wins.
-    assert _bspline(pair_reuse=hint, offset_reuse=False)._offset_reuse is False
-    assert _bspline(pair_reuse=False, offset_reuse=True)._offset_reuse is True
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     assert _bspline()._offset_reuse is True
     assert _bspline(pair_reuse=False)._offset_reuse is False
 
 
-def test_bspline_with_pair_reuse_true_is_offset_reuse_to_the_bit(no_features):
+def test_bspline_pair_reuse_runs_the_toeplitz_form_below_the_census(no_features):
     # One 21-segment wire, under the census's small-deck threshold: the plan
-    # declines by name and the whole is its part.
-    z_alias = _bspline(offset_reuse=True).compute_impedance()[0]
+    # declines by name, and the switch still fills the wire's own block in
+    # its Toeplitz form, which sums in another order, a few ulp from off.
     whole = _bspline(pair_reuse=True)
-    z_whole = whole.compute_impedance()[0]
+    z_whole = np.atleast_1d(np.asarray(whole.compute_impedance()[0], dtype=complex))
     assert whole.pair_reuse_declined.startswith("too few segments to repay the plan")
-    z_off = _bspline().compute_impedance()[0]
-    a, b = (np.atleast_1d(np.asarray(z, dtype=complex)) for z in (z_alias, z_whole))
-    assert np.array_equal(a.view(np.uint64), b.view(np.uint64))
-    # and it ran: offset reuse sums in another order, a few ulp from off
-    off = np.atleast_1d(np.asarray(z_off, dtype=complex))
-    assert not np.array_equal(a.view(np.uint64), off.view(np.uint64))
+    off = np.atleast_1d(np.asarray(_bspline().compute_impedance()[0], dtype=complex))
+    assert not np.array_equal(z_whole.view(np.uint64), off.view(np.uint64))
+    # the Toeplitz form is what moved it: held off, the declined plan is off
+    held = _bspline(pair_reuse=True)
+    held._offset_reuse = False
+    z_held = np.atleast_1d(np.asarray(held.compute_impedance()[0], dtype=complex))
+    assert np.array_equal(z_held.view(np.uint64), off.view(np.uint64))
 
 
 # --- razor2p ------------------------------------------------------------------
@@ -274,8 +257,8 @@ def _razor(**kw):
 
 
 @pytest.mark.skipif(
-    not F.certified("razor_pair_reuse"),
-    reason="razor_pair_reuse is not certified on this platform",
+    not F.certified("pair_reuse", solver="razor"),
+    reason="razor2p's pair reuse is not certified on this platform",
 )
 def test_razor_takes_the_one_switch(no_features):
     assert _razor()._pair_reuse == 0
@@ -284,44 +267,24 @@ def test_razor_takes_the_one_switch(no_features):
     # a front end's bspline hint is on, as on the sinusoidal solver
     assert _razor(pair_reuse=[[(0, 0), (0, 0)]])._pair_reuse == 1
     assert _razor(pair_reuse=False)._pair_reuse == 0
-    # the alias wins, both ways
-    assert _razor(pair_reuse=True, razor_pair_reuse=False)._pair_reuse == 0
-    assert _razor(pair_reuse=False, razor_pair_reuse="verify")._pair_reuse == 2
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     assert _razor()._pair_reuse == 1
     assert _razor(pair_reuse=False)._pair_reuse == 0
-    no_features.setenv("MOMWIRE_X_RAZOR_PAIR_REUSE", "0")
-    assert _razor()._pair_reuse == 0
     for s in (_razor(), _razor(pair_reuse=True)):
         assert s.pair_reuse_declined is None
 
 
-def test_razor_through_the_whole_outside_its_reach_is_off_and_says_so(
-    no_features,
-):
-    if F.certified("razor_pair_reuse", "dropin"):
-        pytest.skip("razor_pair_reuse reaches the drop-in here")
+def test_razor_outside_its_reach_is_off_and_says_so(no_features):
+    _hold_row(no_features, "razor", 4)
+    no_features.setattr(F, "_os", lambda platform=None: "macos")
     with F.context_scope("dropin"):
-        s = _razor(pair_reuse=True)
-        assert s._pair_reuse == 0
-        assert s.pair_reuse_declined == "not certified on this platform"
-        with pytest.raises(F.FeatureNotCertified):
-            _razor(razor_pair_reuse=True)
-
-
-@pytest.mark.skipif(
-    not F.certified("razor_pair_reuse"),
-    reason="razor_pair_reuse is not certified on this platform",
-)
-def test_razor_pair_reuse_true_is_the_alias_to_the_bit(no_features):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        a = _razor(razor_pair_reuse=True).compute_port_solution().y
-        b = _razor(pair_reuse=True).compute_port_solution().y
-    assert np.array_equal(
-        np.asarray(a, dtype=complex).view(np.uint64),
-        np.asarray(b, dtype=complex).view(np.uint64),
-    )
+        for kw in ({"pair_reuse": True}, {"razor_pair_reuse": True}):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                s = _razor(**kw)
+            assert s._pair_reuse == 0, kw
+            assert s.pair_reuse_declined == "not certified on this platform", kw
+            assert s.features_withheld == ("pair_reuse",), kw
 
 
 # --- one readout type ----------------------------------------------------------

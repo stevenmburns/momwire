@@ -15,9 +15,8 @@ its pairs from those values. So:
 - over Sommerfeld ground the remainder serves its pairs from its own plan's
   classes, keyed by the plane's invariants (the height sum among them).
 
-These gates are of the census alone, so each passes `offset_reuse=False`,
-the part's own keyword, which wins (tests/test_offset_reuse_1809.py holds
-the part). Every reuse gate checks the route ran: a counter of plans built
+These gates are of the census alone, so each holds the same-edge Toeplitz
+form off (`_reuse_seam`; tests/test_offset_reuse_1809.py holds the form). Every reuse gate checks the route ran: a counter of plans built
 and not declined, and what the fill says it served.
 """
 
@@ -30,14 +29,15 @@ import pytest
 
 import momwire.bspline as bs
 from momwire import _features
-from momwire.bspline import BSplineSolver
+
+from _reuse_seam import bs2
 
 # An experimental feature (`momwire._features`, reach 4: through the drop-in
 # on Linux and Windows).
 pytestmark = pytest.mark.reach(4)
 
 LAM = 21.1
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "bspline").drift
 SOMM = {"ground_z": 0.0, "ground_eps": (13.0, 0.005), "ground_model": "sommerfeld"}
 
 
@@ -99,13 +99,13 @@ def _solver(D, reuse, extended_kernel=False, ground=None, deck=None, **kw):
         g = SOMM
     kw.setdefault("wire_radius", 0.006)
     kw.setdefault("feeds", [(1, None, 1.0 + 0j)])
-    return BSplineSolver(
+    return bs2(
         wires=wires,
         n_per_edge_per_wire=n,
         wavelength=LAM,
         extended_kernel=extended_kernel,
         pair_reuse=reuse,
-        offset_reuse=False,
+        toeplitz=False,
         **g,
         **kw,
     )
@@ -290,14 +290,14 @@ def _acc_or_skip():
 
 
 def _z_somm(wires, n, reuse):
-    s = BSplineSolver(
+    s = bs2(
         wires=wires,
         n_per_edge_per_wire=n,
         feeds=[(1, None, 1.0 + 0j)],
         wavelength=LAM,
         wire_radius=0.006,
         pair_reuse=reuse,
-        offset_reuse=False,
+        toeplitz=False,
         **SOMM,
     )
     return s, _z(s)

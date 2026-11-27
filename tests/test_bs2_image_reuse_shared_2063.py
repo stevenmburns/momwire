@@ -39,6 +39,8 @@ from momwire import _accel, _features, _potential_ground
 from momwire import bspline as bspline_mod
 from momwire.bspline import BSplineSolver
 
+from _reuse_seam import bs2
+
 acc = _accel.acc
 pytestmark = [
     pytest.mark.skipif(
@@ -48,7 +50,7 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "bspline").drift
 LAM = 21.0
 RADIUS = 0.002
 PEC = {"ground_z": 0.0}
@@ -144,14 +146,14 @@ def _small_decks():
 
 
 def z_of(deck, ground, **kw):
-    s = BSplineSolver(**deck, **ground, **kw)
+    s = bs2(**deck, **ground, **kw)
     geom = s._build_geometry()
     supp, polys, *_ = s._build_basis_polynomials(geom)
     return s, np.array(s._compute_Z_operator(geom, supp, polys))
 
 
 def zin(deck, ground, **kw):
-    s = BSplineSolver(**deck, **ground, **kw)
+    s = bs2(**deck, **ground, **kw)
     return s, complex(np.ravel(s.compute_impedance()[0])[0])
 
 
@@ -175,7 +177,7 @@ def ran(fn):
 def test_the_image_route_ran_and_agrees_with_reuse_off(layout, ground):
     deck = row(step=STACK) if layout == "stack" else row()
     (s_on, z_on), fills, calls = ran(
-        lambda: z_of(deck, GROUNDS[ground], pair_reuse=True, offset_reuse=False)
+        lambda: z_of(deck, GROUNDS[ground], pair_reuse=True, toeplitz=False)
     )
     assert fills == 1 and calls >= 1, (fills, calls)
     note = s_on._fill_ground_notes["image"]
@@ -183,7 +185,7 @@ def test_the_image_route_ran_and_agrees_with_reuse_off(layout, ground):
     _s, z_off = z_of(deck, GROUNDS[ground], pair_reuse=False)
     assert not np.array_equal(z_on, z_off)
     assert rel(z_on, z_off) <= 1e-10
-    _s, a = zin(deck, GROUNDS[ground], pair_reuse=True, offset_reuse=False)
+    _s, a = zin(deck, GROUNDS[ground], pair_reuse=True, toeplitz=False)
     _s, b = zin(deck, GROUNDS[ground], pair_reuse=False)
     assert abs(a - b) / abs(b) <= DRIFT
 
@@ -192,7 +194,7 @@ def test_a_tensor_image_fill_plans_no_image():
     """Past the chunked image fill's degree (`_BSPLINE_ASSEMBLE_ACCEL_MAX_D`)
     the image is the tensor route's, which reads no plan: none is built for
     it, and the report says why."""
-    s = BSplineSolver(**row(), **PEC, pair_reuse=True, offset_reuse=False, degree=3)
+    s = bs2(**row(), **PEC, pair_reuse=True, toeplitz=False, degree=3)
     (_r, fills, _c) = ran(s.compute_impedance)
     assert fills == 0
     assert not s._reuse_plan(s._build_geometry()).image
@@ -205,7 +207,7 @@ def test_the_weighted_tiles_switch_on_the_degree(degree):
     reaches it only through the binding: no image fill serves d = 3)."""
     deck = row()
     (_s, z_on), fills, calls = ran(
-        lambda: z_of(deck, PEC, pair_reuse=True, offset_reuse=False, degree=degree)
+        lambda: z_of(deck, PEC, pair_reuse=True, toeplitz=False, degree=degree)
     )
     assert fills == 1 and calls >= 1
     _s, z_off = z_of(deck, PEC, pair_reuse=False, degree=degree)
@@ -218,10 +220,10 @@ def test_a_vertical_stack_shares_image_classes_between_edges(ground):
     """The old branch's negative test, inverted. Pairs (i, M(j)) and
     (i + 1, M(j - 1)) of an evenly spaced stack are congruent (the same
     height sum and offset), which the edge-block map, keyed on each height,
-    could not see. Without `offset_reuse` every reused image pair is a copy
+    could not see. Without the Toeplitz form every reused image pair is a copy
     by the plan, and the report names no image term left out."""
     deck = row(n_el=6, step=STACK)
-    s = BSplineSolver(**deck, **GROUNDS[ground], pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **GROUNDS[ground], pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     reuse = s.fill_report()["reuse"]
     img = reuse["families"]["image"]
@@ -251,7 +253,7 @@ def test_an_edges_own_image_block_is_the_plans():
     own = plan.classes_of(1, idx, idx)
     # one element's own image pairs share their classes along the edge
     assert np.unique(own).size < n * n // 4
-    _s, z_off = z_of(deck, PEC, pair_reuse=False, offset_reuse=False)
+    _s, z_off = z_of(deck, PEC, pair_reuse=False, toeplitz=False)
     assert rel(z_on, z_off) <= 1e-12
 
 
@@ -262,11 +264,11 @@ def test_a_wrong_sign_in_the_new_route_moves_z(probe, monkeypatch):
     and the reuse-off fill does not move at all."""
     # The tangent's z-flip reads only where both tangents lean (t_z t_z' != 0).
     deck = key_bait() if probe == "tangent" else row()
-    _s, z_on = z_of(deck, PEC, pair_reuse=True, offset_reuse=False)
+    _s, z_on = z_of(deck, PEC, pair_reuse=True, toeplitz=False)
     _s, z_off = z_of(deck, PEC, pair_reuse=False)
     monkeypatch.setattr(bspline_mod, "_IMAGE_REUSE_PROBE", probe)
     (_s, z_bad), fills, _ = ran(
-        lambda: z_of(deck, PEC, pair_reuse=True, offset_reuse=False)
+        lambda: z_of(deck, PEC, pair_reuse=True, toeplitz=False)
     )
     assert fills == 1
     assert rel(z_bad, z_on) > 1e-8
@@ -281,10 +283,10 @@ def test_a_key_that_drops_the_mirror_moves_z():
     direct pairs' moments, and Z moves at O(1) relative to the drift."""
     deck = key_bait()
     _s, z_off = z_of(deck, PEC, pair_reuse=False)
-    _s, z_on = z_of(deck, PEC, pair_reuse=True, offset_reuse=False)
+    _s, z_on = z_of(deck, PEC, pair_reuse=True, toeplitz=False)
     assert rel(z_on, z_off) <= 1e-10
     acc.bspline_reuse_set_image_key_probe(1)
-    s, z_bad = z_of(deck, PEC, pair_reuse=True, offset_reuse=False)
+    s, z_bad = z_of(deck, PEC, pair_reuse=True, toeplitz=False)
     plan = s._reuse_plan(s._build_geometry())
     a, w_s, w_s2 = (np.arange(21), np.arange(21, 30), np.arange(30, 39))
     # The probe's merge: the image pairs (A, M(S)) are the direct (A, S2)'s.
@@ -301,7 +303,7 @@ def test_refl_tilted_and_horizontal_share_classes_not_weights():
     that much, and the class values (moments) copied with each pair's own
     weights agree with the fill without reuse."""
     deck = tilted_twin()
-    s, z_on = z_of(deck, REFL, pair_reuse=True, offset_reuse=False)
+    s, z_on = z_of(deck, REFL, pair_reuse=True, toeplitz=False)
     geom = s._build_geometry()
     plan = s._reuse_plan(geom)
     a, b, b2 = (np.arange(21), np.arange(21, 30), np.arange(30, 39))
@@ -315,7 +317,7 @@ def test_refl_tilted_and_horizontal_share_classes_not_weights():
     assert np.min(d / np.abs(w_A[:, b][same])) > 1e-2
     _s, z_off = z_of(deck, REFL, pair_reuse=False)
     assert rel(z_on, z_off) <= 1e-10
-    _s, za = zin(deck, REFL, pair_reuse=True, offset_reuse=False)
+    _s, za = zin(deck, REFL, pair_reuse=True, toeplitz=False)
     _s, zb = zin(deck, REFL, pair_reuse=False)
     assert abs(za - zb) / abs(zb) <= DRIFT
 
@@ -328,7 +330,7 @@ def test_the_direct_familys_bits_do_not_move_with_the_image(ground, monkeypatch)
     deck = row()
 
     def direct():
-        s = BSplineSolver(**deck, **GROUNDS[ground], pair_reuse=True)
+        s = bs2(**deck, **GROUNDS[ground], pair_reuse=True)
         geom = s._build_geometry()
         supp, polys, *_ = s._build_basis_polynomials(geom)
         plan = s._reuse_plan(geom)
@@ -347,7 +349,7 @@ def test_reuse_off_reads_no_image_plan():
     for ground in GROUNDS.values():
         for off in (False, True):
             (_s, _z), fills, calls = ran(
-                lambda g=ground, o=off: z_of(row(), g, pair_reuse=False, offset_reuse=o)
+                lambda g=ground, o=off: z_of(row(), g, pair_reuse=False, toeplitz=o)
             )
             assert fills == 0 and calls == 0
 
@@ -359,8 +361,9 @@ def test_a_fill_of_chosen_rows_declines_as_before():
     rows = np.arange(42, dtype=np.int64)  # wires 0 and 1
 
     def restricted(reuse):
-        # `offset_reuse` (which follows the switch) is a route of its own here.
-        s = BSplineSolver(**deck, **PEC, pair_reuse=reuse, offset_reuse=False)
+        # The Toeplitz form (which follows the switch) is a route of its own
+        # here.
+        s = bs2(**deck, **PEC, pair_reuse=reuse, toeplitz=False)
         geom = s._build_geometry()
         supp, polys, *_ = s._build_basis_polynomials(geom)
         return s, np.array(s._compute_Z_operator(geom, supp, polys, rows=rows))
@@ -374,7 +377,7 @@ def test_a_fill_of_chosen_rows_declines_as_before():
 
 def test_an_image_ladder_of_its_own_is_not_planned_and_says_why():
     """The image key is the direct key only on the direct fill's ladder."""
-    s = BSplineSolver(**row(), **PEC, pair_reuse=True, image_pair_order_ladder=())
+    s = bs2(**row(), **PEC, pair_reuse=True, image_pair_order_ladder=())
     (_r, fills, _c) = ran(s.compute_impedance)
     assert fills == 0
     reuse = s.fill_report()["reuse"]
@@ -391,12 +394,12 @@ def test_a_declined_image_census_keeps_the_direct_plan():
     plan is the direct block alone: the direct term still serves, and the
     image term is named with its census's reason."""
     deck = row()
-    s = BSplineSolver(**deck, **PEC, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **PEC, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     st = s._reuse_plan(s._build_geometry()).stats()
     acc.bspline_reuse_cache_clear()
     acc.bspline_reuse_class_limit(int(st["classes_block"][0]) + 1)
-    s = BSplineSolver(**deck, **PEC, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **PEC, pair_reuse=True, toeplitz=False)
     (_r, fills, _c) = ran(s.compute_impedance)
     assert fills == 0
     reuse = s.fill_report()["reuse"]
@@ -407,7 +410,7 @@ def test_a_declined_image_census_keeps_the_direct_plan():
 def test_a_buried_deck_plans_no_image():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        s = BSplineSolver(
+        s = bs2(
             **row(n_el=2, height=-0.5),
             **SOMMERFELD,
             pair_reuse=True,

@@ -37,6 +37,8 @@ import pytest
 from momwire import _accel, _features, _ground_refl
 from momwire.bspline import BSplineSolver
 
+from _reuse_seam import bs2
+
 acc = _accel.acc
 pytestmark = [
     pytest.mark.skipif(
@@ -46,7 +48,7 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "bspline").drift
 LAM = 21.0
 RADIUS = 0.002
 SOMMERFELD = {
@@ -111,14 +113,14 @@ def _small_decks():
 
 
 def z_of(deck, reuse, **kw):
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=reuse, offset_reuse=False, **kw)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=reuse, toeplitz=False, **kw)
     geom = s._build_geometry()
     supp, polys, *_ = s._build_basis_polynomials(geom)
     return s, np.array(s._compute_Z_operator(geom, supp, polys))
 
 
 def zin(deck, reuse):
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=reuse, offset_reuse=False)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=reuse, toeplitz=False)
     return complex(np.ravel(s.compute_impedance()[0])[0])
 
 
@@ -165,7 +167,7 @@ def test_a_vertical_stack_shares_classes_through_the_height_sum():
     between elements is then served, and the report names no remainder term
     left out."""
     deck = row(n_el=6, step=(0.0, 0.0, 2.0))
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     plan = plan_of(s)
     n = 21
@@ -319,7 +321,7 @@ def test_a_deck_compressed_only_by_reciprocity_declines():
         d /= np.linalg.norm(d)
         wires.append(np.array([c - 2.0 * d, c + 2.0 * d]))
     deck = deck_of(wires, [15] * 8)
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     why = s._reuse_remainder_declined
     assert why is not None and "unordered pairs" in why, why
@@ -334,7 +336,7 @@ def test_a_declined_remainder_census_keeps_the_direct_plan():
     classes = plan_of(s).classes
     acc.bspline_reuse_cache_clear()
     acc.bspline_reuse_class_limit(classes - 1)
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     reuse = s.fill_report()["reuse"]
     # the direct plan has more classes than the remainder's: still served
@@ -363,7 +365,7 @@ def test_the_fold_and_the_dense_block_serve_the_same_bits():
     with the class map it forms the same entries, to the bit, as the dense
     block, and serves the same member pairs."""
     deck = row()
-    s = BSplineSolver(**deck, **SOMMERFELD, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, **SOMMERFELD, pair_reuse=True, toeplitz=False)
     geom = s._build_geometry()
     supp, polys, *_ = s._build_basis_polynomials(geom)
     eps_t = _ground_refl.eps_tilde(s.ground_eps, s.omega, s.eps)

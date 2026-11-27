@@ -139,6 +139,31 @@ def test_reach_kind_and_dates_are_valid():
         assert f.stable == (f.reach == len(F.LEVELS))
 
 
+def test_family_rows_are_data_within_their_feature():
+    # `Feature.families` (momwire#2063 step 4): one row per family the feature
+    # names, each reaching no further and drifting no more than the feature,
+    # which is the widest and worst of them. A deprecated spelling is no
+    # feature's name, keyword or variable.
+    import math
+
+    names = set(F.FEATURES)
+    kwargs = {f.kwarg for f in F.FEATURES.values()}
+    for f in F.FEATURES.values():
+        solvers = [r.solver for r in f.families]
+        assert len(set(solvers)) == len(solvers), f.name
+        assert set(solvers) <= set(f.solvers), f.name
+        for r in f.families:
+            assert 1 <= r.reach <= f.reach, (f.name, r)
+            assert r.kind in F.KINDS, (f.name, r)
+            assert math.isfinite(r.drift) and 0.0 <= r.drift <= f.drift, (f.name, r)
+            if r.alias is not None:
+                assert r.alias not in names and r.alias not in kwargs, r
+                assert r.alias_env == F.ENV_PREFIX + r.alias.upper()
+        if f.families and set(solvers) == set(f.solvers):
+            assert f.reach == max(r.reach for r in f.families), f.name
+            assert f.drift == max(r.drift for r in f.families), f.name
+
+
 def test_every_offered_feature_carries_its_front_end_fields():
     # momwire#1869: a front end derives its switch from these, so an offered
     # feature must say what to show and how far it moves the answer.
@@ -234,8 +259,8 @@ def test_the_executables_levels_are_the_registrys():
 
 def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     # `EXE_FEATURE_BASES`: a carried feature only one formulation's route
-    # runs (razor_pair_reuse, razor2p's fill; nec5-bs2 shares its
-    # levels and refuses it). Each row names a carried feature and a basis
+    # runs (crossing_anchors, razor2p's fill; nec5-bs2 shares its levels and
+    # refuses it). Each row names a carried feature and a basis
     # an executable is built as (CMakeLists.txt's MW_EXE_BASIS_NAME, or the
     # main's default).
     src = EXE_SOURCE.read_text(encoding="utf-8")
@@ -245,11 +270,7 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
     assert table is not None
     rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)"\}', table[1])
     assert len(rows) == table[1].count("{"), table[1]
-    assert dict(rows) == {
-        "razor_pair_reuse": "razor2p",
-        "crossing_anchors": "razor2p",
-        "offset_reuse": "bs2",
-    }
+    assert dict(rows) == {"crossing_anchors": "razor2p"}
     cmake = (ROOT / "standalone" / "CMakeLists.txt").read_text(encoding="utf-8")
     bases = set(re.findall(r'MW_EXE_BASIS_NAME="([a-z0-9-]+)"', cmake))
     bases |= set(re.findall(r'#define MW_EXE_BASIS_NAME "([a-z0-9-]+)"', src))
@@ -258,65 +279,53 @@ def test_a_basis_only_executable_feature_is_carried_and_names_a_basis():
         assert basis in bases, (basis, bases)
 
 
-def _exe_parts():
-    """`EXE_PARTS` in the executables' main: {(whole, basis): part or ""}."""
+# The executables' basis for each solver family a feature's row names.
+_EXE_BASIS_OF = {"bspline": "bs2", "razor": "razor2p", "sinusoidal": "sinusoidal"}
+
+
+def test_the_executables_read_each_familys_deprecated_reuse_variable():
+    # `REUSE_ALIASES`: each family row's deprecated variable
+    # (`FamilyReach.alias_env`), read on that family's executable basis as
+    # MOMWIRE_X_PAIR_REUSE. No whole-to-part map is left (momwire#2063 step
+    # 4): every route reads the one switch's slot.
     src = EXE_SOURCE.read_text(encoding="utf-8")
+    assert "EXE_PARTS" not in src
     table = re.search(
-        r"const char \*const EXE_PARTS\[\]\[3\] = \{(.*?)\n\};", src, re.S
+        r"const char \*const REUSE_ALIASES\[\]\[2\] = \{(.*?)\n\};", src, re.S
     )
     assert table is not None
-    rows = re.findall(r'\{"([a-z0-9_]+)", "([a-z0-9-]+)", "([a-z0-9_]*)"\}', table[1])
+    rows = re.findall(r'\{"(MOMWIRE_X_[A-Z0-9_]+)", "([a-z0-9-]+)"\}', table[1])
     assert len(rows) == table[1].count("{"), table[1]
-    return {(whole, basis): part for whole, basis, part in rows}
-
-
-def test_a_whole_runs_on_each_executable_what_its_route_carries():
-    # `EXE_PARTS`: on each executable's basis, the whole `pair_reuse` turns on
-    # the registry's part for that family when the executables carry it, the
-    # whole itself on a family it honours with no part, and nothing ("",
-    # withheld) when the family's parts are Python's alone.
-    parts = _exe_parts()
-    carried = _exe_features()
-    wholes = {f.part_of for f in F.FEATURES.values() if f.part_of is not None}
-    assert {w for w, _b in parts} == wholes == {"pair_reuse"}
-    bases = {"razor2p", "bs2", "sinusoidal"}
-    for whole in wholes:
-        # every executable accepts the whole: it reaches the deepest level
-        assert F.FEATURES[whole].reach == F.DEEPEST
-        assert carried[whole] == F.DEEPEST
-        assert {b for w, b in parts if w == whole} == bases
-        for basis in bases:
-            family = F.basis_solver(basis)
-            assert F.honours(whole, family), (whole, basis)
-            fam_parts = [
-                p.name
-                for p in F.FEATURES.values()
-                if p.part_of == whole and family in p.solvers
-            ]
-            on_exe = [p for p in fam_parts if p in carried]
-            if not fam_parts:
-                expected = whole
-            elif on_exe:
-                (expected,) = on_exe
-            else:
-                expected = ""
-            assert parts[(whole, basis)] == expected, (whole, basis)
-    # Today: razor2p's part, the sinusoidal plan, and bs2's part, which its
-    # C++ fill runs beside the whole's census (momwire#2063).
-    assert parts == {
-        ("pair_reuse", "razor2p"): "razor_pair_reuse",
-        ("pair_reuse", "sinusoidal"): "pair_reuse",
-        ("pair_reuse", "bs2"): "offset_reuse",
+    assert dict(rows) == {
+        fam.alias_env: _EXE_BASIS_OF[fam.solver]
+        for fam in F.FEATURES["pair_reuse"].families
+        if fam.alias is not None
     }
+    assert dict(rows) == {
+        "MOMWIRE_X_OFFSET_REUSE": "bs2",
+        "MOMWIRE_X_RAZOR_PAIR_REUSE": "razor2p",
+    }
+    # Only `pair_reuse` has family rows with a spelling of their own.
+    assert {n for n, f in F.FEATURES.items() if any(r.alias for r in f.families)} == {
+        "pair_reuse"
+    }
+    # Every route that reads the switch reads its one slot.
+    ni = (ROOT / "src" / "momwire" / "_near_interface_eval.h").read_text(
+        encoding="utf-8"
+    )
+    assert "bool offset_reuse" not in ni and "bool razor_pair_reuse" not in ni
+    for core in ("_nec5_bspline_printout_core.cpp", "_nec5_razor_seam_core.cpp"):
+        text = (ROOT / "src" / "momwire" / core).read_text(encoding="utf-8")
+        assert "requested_features().pair_reuse" in text, core
 
 
 def test_the_kwarg_overrides_the_env(no_features):
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    assert F.enabled("offset_reuse") is True
-    assert F.enabled("offset_reuse", False) is False
-    no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "0")
-    assert F.enabled("offset_reuse") is False
-    assert F.enabled("offset_reuse", True) is True
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    assert F.enabled("pair_reuse") is True
+    assert F.enabled("pair_reuse", False) is False
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "0")
+    assert F.enabled("pair_reuse") is False
+    assert F.enabled("pair_reuse", True) is True
 
 
 @pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
@@ -338,15 +347,16 @@ def test_an_alias_is_honoured_and_the_canonical_name_wins(no_features):
     assert "exact_kernel_series" not in F.active()
 
 
-def test_offset_reuse_reads_the_env_through_the_registry(no_features):
+def test_the_deprecated_reuse_variable_reads_through_the_registry(no_features):
     from momwire.bspline import BSplineSolver
 
     wire = [[[0.0, -2.5, 10.0], [0.0, 2.5, 10.0]]]
     kw = dict(wires=wire, n_per_edge_per_wire=[[21]], wire_radius=1e-3)
     assert BSplineSolver(**kw)._offset_reuse is False
     no_features.setenv("MOMWIRE_X_OFFSET_REUSE", "1")
-    assert BSplineSolver(**kw)._offset_reuse is True
-    assert BSplineSolver(**kw, offset_reuse=False)._offset_reuse is False
+    with pytest.warns(DeprecationWarning, match="MOMWIRE_X_OFFSET_REUSE"):
+        assert BSplineSolver(**kw)._offset_reuse is True
+    assert BSplineSolver(**kw, pair_reuse=False)._offset_reuse is False
 
 
 # --- the hierarchy ------------------------------------------------------------
@@ -758,26 +768,29 @@ def test_the_warm_server_keys_carry_the_features_on(no_features):
     }
 
 
-def test_the_warm_server_keys_carry_a_part_turned_off_under_its_whole(no_features):
-    # The whole's variable alone turns its parts on, so a part's "0" beside
-    # it asks for a different engine and must key a server of its own
-    # (momwire#2153: a warm server started with the whole alone answered a
-    # call that turned razor's part off, with reuse on).
+def test_the_warm_server_keys_carry_a_deprecated_reuse_variable_turned_off(
+    no_features,
+):
+    # A family's deprecated variable at "0" alone turns that family's reuse
+    # off, a deck's pragma card included, so it asks for a different engine
+    # than nothing set and must key a server of its own (momwire#2153, when
+    # these were the parts of a whole).
     import momwire_eznec_client as ez
     import momwire_serve_client as mech
 
-    assert mech.FEATURE_PARTS == {n for n, f in F.FEATURES.items() if f.part_of}
-    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    whole = ez.config_key(None, 900.0)
-    for part in sorted(mech.FEATURE_PARTS):
-        var = f"MOMWIRE_X_{part.upper()}"
+    assert mech.FEATURE_PARTS == {
+        fam.alias for f in F.FEATURES.values() for fam in f.families if fam.alias
+    }
+    unset = ez.config_key(None, 900.0)
+    for alias in sorted(mech.FEATURE_PARTS):
+        var = f"MOMWIRE_X_{alias.upper()}"
         no_features.setenv(var, "0")
-        assert ez.config_key(None, 900.0) != whole, part
-        assert f"feature={part}=off" in mech.feature_identity()
+        assert ez.config_key(None, 900.0) != unset, alias
+        assert f"feature={alias}=off" in mech.feature_identity()
         no_features.setenv(var, "1")
-        assert f"feature={part}" in mech.feature_identity()
+        assert f"feature={alias}" in mech.feature_identity()
         no_features.delenv(var)
-        assert ez.config_key(None, 900.0) == whole
+        assert ez.config_key(None, 900.0) == unset
 
 
 def test_the_warm_server_keys_carry_a_default_on_feature_turned_off(no_features):

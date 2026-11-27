@@ -1,11 +1,13 @@
-"""bs2's `offset_reuse`: a uniform edge's same-edge reg moments filled by
-segment offset (momwire#1809), inside the same-edge kernel (R).
+"""bs2's same-edge Toeplitz form (what was `offset_reuse`, R): a uniform
+edge's same-edge reg moments filled by segment offset (momwire#1809), inside
+the same-edge kernel.
 
 On a uniform edge the smooth kernel's moment between segments i and j depends
-on j - i alone, so the (N, N) block has 2N - 1 distinct entries. With
-`offset_reuse=True` they come from one row of a 2N - 1 segment edge and the
-block is a strided view of it. Off -- the default -- the dense table is the
-fill as it was, bit for bit.
+on j - i alone, so the (N, N) block has 2N - 1 distinct entries. Under it
+they come from one row of a 2N - 1 segment edge and the block is a strided
+view of it. Off -- the default -- the dense table is the fill as it was, bit
+for bit. `pair_reuse` turns it on with the census (momwire#2063 step 4);
+these gates hold it on alone (`_reuse_seam`).
 
 Its step-2 mechanisms (the free-space offset block, the image offset block,
 the Sommerfeld remainder's offset fold, each spreading one row of an edge's
@@ -14,7 +16,7 @@ census serves those blocks, by the same-edge routine
 (`test_bs2_census_same_edge_2063.py`). Here:
 
 - off is the dense fill (the existing suite holds that), and on a graded edge
-  `offset_reuse=True` changes nothing, because nothing qualifies;
+  the form changes nothing, because nothing qualifies;
 - on, the route runs (a counter, since an untaken route agrees trivially) and
   Z moves at the evaluation-order roundoff the same moments summed in another
   order give, in free space, with the extended kernel, over Sommerfeld ground,
@@ -30,6 +32,8 @@ import pytest
 
 import momwire._bspline_kernels as K
 from momwire.bspline import BSplineSolver
+
+from _reuse_seam import bs2
 
 # An experimental feature (`momwire._features`, reach 4: through the drop-in
 # on Linux and Windows).
@@ -53,13 +57,13 @@ def _solver(n, reuse, *, graded=False, ground=False, **kw):
     wires, segs = _wire(n, graded=graded)
     if ground:
         kw.update(ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
-    return BSplineSolver(
+    return bs2(
         wires=wires,
         n_per_edge_per_wire=segs,
         feeds=[(0, None, 1.0 + 0j)],
         wavelength=LAM,
         wire_radius=0.001,
-        offset_reuse=reuse,
+        toeplitz=reuse,
         **kw,
     )
 
@@ -134,7 +138,7 @@ def test_the_scope_ends_with_the_fill():
 import momwire.bspline as _B  # noqa: E402
 from momwire import _features  # noqa: E402
 
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "bspline").drift
 
 
 @pytest.fixture
@@ -191,12 +195,12 @@ _GROUNDS = {
 def test_the_census_serves_an_edges_own_blocks(deck, ground):
     """An edge's own blocks, which the offset routes spread by index, are
     the census's classes now (the same-edge routine's in the direct block,
-    the image's), and on against off holds the drift, `offset_reuse` on or
-    off beside it."""
+    the image's), and on against off holds the drift, the Toeplitz form on
+    or off beside it."""
     wires, segs = _GROUND_DECKS[deck]
 
     def solver(**kw):
-        return BSplineSolver(
+        return bs2(
             wires=wires,
             n_per_edge_per_wire=segs,
             feeds=[(0, None, 1.0 + 0j)],
@@ -212,8 +216,8 @@ def test_the_census_serves_an_edges_own_blocks(deck, ground):
     st = s._reuse_plan(s._build_geometry()).stats()
     assert 0 < st["same_edge_classes"] < st["same_edge_pairs"] // 2, st
     assert abs(z1 - z0) / abs(z0) <= DRIFT
-    z2 = solver(pair_reuse=True, offset_reuse=True).compute_impedance()[0]
-    assert abs(z2 - z0) / abs(z0) <= DRIFT + _features.FEATURES["offset_reuse"].drift
+    z2 = solver(pair_reuse=True, toeplitz=True).compute_impedance()[0]
+    assert abs(z2 - z0) / abs(z0) <= DRIFT
 
 
 def test_no_offset_block_is_left():

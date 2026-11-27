@@ -36,6 +36,8 @@ from momwire import _accel, _features
 from momwire import bspline as bspline_mod
 from momwire.bspline import BSplineSolver
 
+from _reuse_seam import bs2
+
 acc = _accel.acc
 pytestmark = [
     pytest.mark.skipif(
@@ -45,7 +47,7 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore"),
 ]
 
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "bspline").drift
 LAM = 14.0
 
 
@@ -121,7 +123,7 @@ def hairpin(x0=3.3):
 
 
 def zin(deck, **kw):
-    s = BSplineSolver(**deck, **kw)
+    s = bs2(**deck, **kw)
     return complex(np.ravel(s.compute_impedance()[0])[0]), s
 
 
@@ -229,22 +231,25 @@ def test_a_sweep_that_reads_the_plan_hoists_no_prep(monkeypatch):
         lambda self, geom: calls.append(1) or orig(self, geom),
     )
     deck = bent_yagi()
-    s = BSplineSolver(**deck, pair_reuse=True)
+    s = bs2(**deck, pair_reuse=True)
     ks = 2 * np.pi / np.array([LAM * 1.01, LAM, LAM * 0.99])
     z = s.compute_impedance_swept(ks)
     assert calls == []
     for i, k in enumerate(ks):
-        t = BSplineSolver(**{**deck, "wavelength": 2 * np.pi / k}, pair_reuse=True)
+        t = bs2(**{**deck, "wavelength": 2 * np.pi / k}, pair_reuse=True)
         zi = complex(np.ravel(t.compute_impedance()[0])[0])
         assert abs(complex(np.ravel(z[i])[0]) - zi) / abs(zi) < 1e-12
 
 
-def test_offset_reuse_alone_serves_no_pair():
-    """`offset_reuse` without `pair_reuse` copies no pair: what is left of it
+def test_the_toeplitz_form_alone_serves_no_pair():
+    """The same-edge Toeplitz form (what was `offset_reuse`) held on without
+    the census (`_reuse_seam`) copies no pair: what is left of it
     is the regularised moments' Toeplitz form inside the same-edge kernel."""
     deck = bent_yagi()
     off, _ = zin(deck)
-    alone, s = zin(deck, offset_reuse=True)
+    alone, s = zin(deck, toeplitz=True)
     assert s.pair_reuse_served is None
-    assert abs(alone - off) / abs(off) <= _features.FEATURES["offset_reuse"].drift
+    assert (
+        abs(alone - off) / abs(off) <= _features.family("pair_reuse", "bspline").drift
+    )
     assert not hasattr(bspline_mod, "FREE_OFFSET_EDGES")

@@ -22,7 +22,8 @@ import pytest
 
 from momwire import _accel
 from momwire import bspline as bspline_mod
-from momwire.bspline import BSplineSolver
+
+from _reuse_seam import bs2
 
 acc = _accel.acc
 pytestmark = pytest.mark.skipif(
@@ -69,7 +70,7 @@ def _small_decks():
 
 
 def solve(deck, ground, **kw):
-    s = BSplineSolver(**deck, pair_reuse=True, **ground, **kw)
+    s = bs2(**deck, pair_reuse=True, **ground, **kw)
     s.compute_impedance()
     return s
 
@@ -96,7 +97,7 @@ def n_segs(deck):
 
 def test_sommerfeld_reports_three_families_and_nothing_uncounted():
     deck = row()
-    s = solve(deck, SOMMERFELD, offset_reuse=False)
+    s = solve(deck, SOMMERFELD, toeplitz=False)
     reuse = s.fill_report()["reuse"]
     json.dumps(reuse)
     assert set(reuse["families"]) == {"direct", "image", "remainder"}
@@ -113,7 +114,7 @@ def test_sommerfeld_reports_three_families_and_nothing_uncounted():
 
 
 def test_pec_reports_the_image_and_no_remainder():
-    s = solve(row(), {"ground_z": 0.0}, offset_reuse=False)
+    s = solve(row(), {"ground_z": 0.0}, toeplitz=False)
     reuse = s.fill_report()["reuse"]
     assert set(reuse["families"]) == {"direct", "image"}
     assert reuse["uncounted"] == []
@@ -122,7 +123,7 @@ def test_pec_reports_the_image_and_no_remainder():
 
 def test_a_reflection_coefficient_ground_has_no_remainder_to_count():
     ground = {"ground_z": 0.0, "ground_eps": (13.0, 0.005)}
-    s = solve(row(), ground, offset_reuse=False)
+    s = solve(row(), ground, toeplitz=False)
     reuse = s.fill_report()["reuse"]
     assert set(reuse["families"]) == {"direct", "image"}
     assert reuse["uncounted"] == []
@@ -139,12 +140,12 @@ def test_the_remainder_shares_a_stack_through_the_height_sum():
     """A vertical stack: the direct term repeats (translation), and so does
     the remainder where two pairs' height sums agree (momwire#2063 step 2b):
     elements i and j against k and l when i + j = k + l."""
-    stack = solve(row(step=(0.0, 0.0, 2.0)), SOMMERFELD, offset_reuse=False)
+    stack = solve(row(step=(0.0, 0.0, 2.0)), SOMMERFELD, toeplitz=False)
     reuse = stack.fill_report()["reuse"]
     assert reuse["families"]["direct"]["reused"] > 0
     assert reuse["families"]["remainder"]["reused"] > 0
     reconciles(reuse)
-    side = solve(row(), SOMMERFELD, offset_reuse=False)
+    side = solve(row(), SOMMERFELD, toeplitz=False)
     assert side.fill_report()["reuse"]["families"]["remainder"]["reused"] > 0
 
 
@@ -154,7 +155,7 @@ def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
     member has its representative's horizontal distances and height sums,
     end point for end point (transposed where its code says so)."""
     deck = row(n_el=3, n_seg=13)
-    s = BSplineSolver(**deck, pair_reuse=True, **SOMMERFELD, offset_reuse=False)
+    s = bs2(**deck, pair_reuse=True, **SOMMERFELD, toeplitz=False)
     before = acc.remainder_q_reused_pairs()
     s.compute_impedance()
     copied = acc.remainder_q_reused_pairs() - before
@@ -199,7 +200,7 @@ def test_remainder_reuse_saves_kernel_work():
     are in play: the saving falls short of the reuse by those alone (under
     1 % here; base 7be69268 saved 72 % of the reuse)."""
     deck = row(n_el=8, n_seg=31, step=(3.0, 0.0, 0.0))
-    s = solve(deck, SOMMERFELD, offset_reuse=False)
+    s = solve(deck, SOMMERFELD, toeplitz=False)
     rem = s.fill_report()["reuse"]["families"]["remainder"]
     assert rem["reused"] > rem["pairs"] // 2
     assert rem["kernel_evals"] < rem["pairs"]
@@ -223,7 +224,7 @@ def test_an_edges_own_image_block_counts_by_the_plan():
 
 def test_a_ground_fill_of_chosen_rows_is_not_counted_as_the_mesh():
     """A term no whole-mesh fill noted is listed in `uncounted`."""
-    s = solve(row(), SOMMERFELD, offset_reuse=False)
+    s = solve(row(), SOMMERFELD, toeplitz=False)
     s._fill_ground_notes = {}
     ledger = bspline_mod._fill_report.ledger_of(s)
     s._fill_report_end(ledger)

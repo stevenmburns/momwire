@@ -24,11 +24,14 @@ from momwire import _features
 from momwire.bspline import BSplineSolver
 from momwire.hmatrix import HMatrixSolver
 
+from _reuse_seam import bs2
+
 pytestmark = pytest.mark.reach(4)
 
 LAM = 21.26
-#: `offset_reuse` is held on on both sides, so the two differ by the census.
-DRIFT = _features.FEATURES["pair_reuse"].drift
+#: The same-edge Toeplitz form is held on on both sides (`_reuse_seam`), so
+#: the two differ by the census.
+DRIFT = _features.family("pair_reuse", "bspline").drift
 PEC = {"ground_z": 0.0}
 GROUNDS = {"free": {}, "pec": PEC}
 
@@ -75,8 +78,9 @@ def routes(monkeypatch):
 def _three(reuse, n=13, cls=BSplineSolver, lam=LAM, **kw):
     """Three identical parallel dipoles, fed on the first."""
     wires = [np.array([[3.0 * i, -4.0, 10.0], [3.0 * i, 4.0, 10.0]]) for i in range(3)]
-    kw.setdefault("offset_reuse", True)
-    return cls(
+    kw.setdefault("toeplitz", True)
+    return bs2(
+        cls=cls,
         wires=wires,
         n_per_edge_per_wire=[[n] for _ in wires],
         feed_wire_index=0,

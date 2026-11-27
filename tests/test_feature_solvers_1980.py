@@ -166,14 +166,12 @@ def test_a_feature_a_family_ignores_is_not_read_from_the_environment(no_features
     on = {n for n, v in solver.features_bound.items() if v}
     # On: the python ones the environment asked for, and the promoted ones
     # (on by default where certified), each only where the family honours it.
-    # A native part follows its whole: razor_pair_reuse, on pair_reuse's
-    # variable (momwire#1982).
+    # pair_reuse is python-kind on every family, razor2p's native row
+    # included (certified here, so on).
     honoured = {
         n
         for n in _constructor_features(kind)
-        if F.FEATURES[n].kind == "python"
-        or F.default_on(n)
-        or F.FEATURES[n].part_of == "pair_reuse"
+        if F.FEATURES[n].kind == "python" or F.default_on(n)
     }
     assert on == honoured
 
@@ -291,31 +289,35 @@ def test_a_deferred_feature_refuses_only_where_it_acts(no_features, monkeypatch)
         engaged.compute_port_solution()
 
 
-def test_bind_hands_a_part_its_wholes_value(no_features):
+def test_bind_reads_a_familys_deprecated_keyword_under_the_switch(no_features):
     class _S:
         pass
 
     kw = dict.fromkeys(_bound_features("razor"))
     later = tuple(DEFERRED["razor"])
-    on = {**kw, "pair_reuse": True}
-    assert F.bind(_S(), "razor", deferred=later, **on)["razor_pair_reuse"]
-    off = {**kw, "pair_reuse": False}
-    assert not F.bind(_S(), "razor", deferred=later, **off)["razor_pair_reuse"]
-    # The part's own keyword wins over the whole's.
-    own_off = {**kw, "pair_reuse": True, "razor_pair_reuse": False}
-    assert not F.bind(_S(), "razor", deferred=later, **own_off)["razor_pair_reuse"]
-    # bspline's part takes the same road.
+    with pytest.warns(DeprecationWarning, match="razor_pair_reuse"):
+        bound = F.bind(_S(), "razor", deferred=later, **kw, razor_pair_reuse=True)
+    assert bound["pair_reuse"] and "razor_pair_reuse" not in bound
+    # The switch's own keyword wins over the deprecated one.
+    own_off = {**kw, "pair_reuse": False}
+    with pytest.warns(DeprecationWarning):
+        bound = F.bind(_S(), "razor", deferred=later, **own_off, razor_pair_reuse=True)
+    assert not bound["pair_reuse"]
+    # bspline's takes the same road; razor2p's is no keyword of bspline's.
     kw = dict.fromkeys(_constructor_features("bspline"))
-    assert F.bind(_S(), "bspline", **{**kw, "pair_reuse": True})["offset_reuse"]
+    with pytest.warns(DeprecationWarning, match="offset_reuse"):
+        assert F.bind(_S(), "bspline", **kw, offset_reuse=True)["pair_reuse"]
+    with pytest.raises(TypeError, match="razor_pair_reuse"):
+        F.bind(_S(), "bspline", **kw, razor_pair_reuse=True)
 
 
-def test_a_part_withheld_outside_its_reach_is_kept_and_not_stamped(
+def test_a_family_withheld_outside_its_reach_is_kept_and_not_stamped(
     no_features, monkeypatch
 ):
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
     monkeypatch.setattr(F, "certified", lambda *a, **k: False)
     solver = _construct("razor")
-    assert solver.features_withheld == ("razor_pair_reuse",)
+    assert solver.features_withheld == ("pair_reuse",)
     assert solver._pair_reuse == 0
     assert solver.pair_reuse_declined == "not certified on this platform"
     assert F.stamp("python", solver="razor") == ""
@@ -386,13 +388,9 @@ def test_kcl_nullspace_on_razor_2p_leaves_line_2_bare(no_features):
 @pytest.mark.parametrize("basis", ["razor2p", "bs2", "sinusoidal"])
 def test_the_whole_pair_reuse_switch_stays_named_where_it_runs(no_features, basis):
     no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    # The whole reaches every level; what runs is the family's part, where
-    # it has one, certified as far as that part's reach (offset_reuse's 4
-    # stops short of the macOS drop-in).
-    runs = {"razor2p": "razor_pair_reuse", "bs2": "offset_reuse"}
-    certified = all(
-        F.certified(n, "dropin") for n in ("pair_reuse", runs.get(basis, "pair_reuse"))
-    )
+    # The switch reaches every level; what runs is certified as far as the
+    # family's row reaches.
+    certified = F.certified("pair_reuse", "dropin", solver=F.basis_solver(basis))
     plain = "" if certified else " uncertified on this platform"
     with F.context_scope("dropin"):
         assert _printout.engine_stamp(basis) == (
@@ -401,22 +399,26 @@ def test_the_whole_pair_reuse_switch_stays_named_where_it_runs(no_features, basi
 
 
 @pytest.mark.parametrize(
-    ("basis", "part"),
-    [("razor2p", "RAZOR_PAIR_REUSE"), ("bs2", "OFFSET_REUSE")],
+    ("basis", "old", "other"),
+    [("razor2p", "RAZOR_PAIR_REUSE", "bs2"), ("bs2", "OFFSET_REUSE", "razor2p")],
 )
-def test_the_whole_is_not_named_where_its_part_is_set_off(no_features, basis, part):
-    # The whole acts on these two families only through the part.
-    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
-    no_features.setenv(f"MOMWIRE_X_{part}", "0")
+def test_a_deprecated_variable_names_the_switch_on_its_family_alone(
+    no_features, basis, old, other
+):
+    no_features.setenv(f"MOMWIRE_X_{old}", "1")
     with F.context_scope("dropin"):
-        assert _printout.engine_stamp(basis) == _bare_stamp(basis)
+        assert _printout.engine_stamp(basis) == _bare_stamp(basis) + " +pair_reuse"
+        assert _printout.engine_stamp(other) == _bare_stamp(other)
+    # under the switch's own variable it decides nothing
+    no_features.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    no_features.setenv(f"MOMWIRE_X_{old}", "0")
+    with F.context_scope("dropin"):
+        assert _printout.engine_stamp(basis) == _bare_stamp(basis) + " +pair_reuse"
 
 
 @pytest.mark.parametrize(
     ("name", "honoured", "ignored"),
     [
-        ("offset_reuse", "bs2", "razor2p"),
-        ("razor_pair_reuse", "razor2p", "bs2"),
         ("crossing_anchors", "razor2p", "bs2"),
         ("crossing_above_rule", "bs2", "razor2p"),
         ("point_cplx_staged", "sinusoidal", "sg"),
@@ -488,7 +490,7 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
     # A feature an executable carries but cannot reach (the nec42-sinusoidal
     # one, past the levers' reach) is refused, never stamped, so it needs no
     # row. Nor does one `EXE_FEATURE_BASES` keeps to another basis: nec5-bs2
-    # refuses razor_pair_reuse and crossing_anchors, and a refused request must
+    # refuses crossing_anchors, and a refused request must
     # stay refused rather than become accepted and unstamped. Every other
     # carried feature its formulation ignores needs a row.
     # Each BASIS's shallowest level: "bs2" names both B-spline
@@ -512,13 +514,8 @@ def test_the_executables_stamp_only_what_their_formulation_honours():
             if not F.honours(name, kind):
                 expected.add((basis, name))
     assert ignored == expected
-    # What keeps nec5-bs2's refusal: the two razor2p-only rows stay; and
-    # nec5-razor2p's of bs2's offset_reuse.
-    assert only_on == {
-        "razor_pair_reuse": "razor2p",
-        "crossing_anchors": "razor2p",
-        "offset_reuse": "bs2",
-    }
+    # What keeps nec5-bs2's refusal: the razor2p-only row stays.
+    assert only_on == {"crossing_anchors": "razor2p"}
 
 
 # --- the near-interface levers --------------------------------------------------

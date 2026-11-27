@@ -40,7 +40,7 @@ CLEAN = 1e-10
 
 LAM = 21.1
 # The feature's declared bound; each gate below also states what it measured.
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "sinusoidal").drift
 
 
 def _yagi(D=8, h=None, segs=21):
