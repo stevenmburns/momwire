@@ -75,20 +75,10 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
         fp.image_gz = fr.ground_z;
         fp.held = std::make_shared<bspline::FillParams::HeldValues>();
         fp.plan = bspline::reuse_plan(fr.geom, fr.radii, fp);
-        // `_serve._port_solution` with a sweep state: the same-edge blocks
-        // from the sweep's hoisted prep while the static and per-k blocks fit
-        // `swept_mem_mb` (256), which reads no offset edge's own block
-        // (`_compute_Z_dense_chunked`'s `offset` is the whole-mesh fill's)
-        if (sweep_shared) {
-            const int64_t nm = fp.degree + 1;
-            int64_t sum_ne2 = 0;
-            for (const auto &pw : fr.geom.per_wire)
-                for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
-                    const int64_t n = pw.edge_offsets[e + 1] - pw.edge_offsets[e];
-                    sum_ne2 += n * n;
-                }
-            fp.sweep_shared = 2 * nm * nm * sum_ne2 * 16 <= (int64_t(256) << 20);
-        }
+        // `_serve._port_solution` with a sweep state (`sweep_shared`) reads
+        // its same-edge blocks from the sweep's hoisted prep, the same doubles
+        // the one-point fill forms, so it moves no byte here
+        (void)sweep_shared;
     }
     if (fr.buried) {
         // the buried fill reads no `pair_reuse` plan (`_decline_unread_plan`);
@@ -106,10 +96,8 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
             // run half refuses it by name, `_refuse_if_grazing`)
             throw PrintoutRaise{"ValueError", e.what()};
         }
-    } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256) &&
-               bspline::free_offset_edges(fr.geom, fp).empty()) {
-        // the tensor route; under `offset_reuse` a deck with a free offset
-        // edge takes the chunked fill (`_compute_Z_operator`)
+    } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
+        // the tensor route (`_compute_Z_operator`)
         const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
         Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
     } else {
