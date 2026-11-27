@@ -30,8 +30,11 @@ struct PlanHandle {
     int64_t n() const { return plan->fam.at(0).spec.rows; }
 };
 
+using I8 = py::array_t<int8_t, py::array::c_style | py::array::forcecast>;
+
 PlanHandle reuse_plan(F64 seg_l, F64 seg_r, F64 a, I32 edge, py::object group_i, py::object group_j,
-                      py::object b_src, std::vector<double> thresholds, int degree) {
+                      py::object b_src, std::vector<double> thresholds, int degree, py::object img_l,
+                      py::object img_r, py::object img_mode) {
     const int64_t n = static_cast<int64_t>(a.size());
     if (seg_l.ndim() != 2 || seg_l.shape(0) != n || seg_l.shape(1) != 3 || seg_r.ndim() != 2 ||
         seg_r.shape(0) != n || seg_r.shape(1) != 3 || edge.size() != n)
@@ -58,6 +61,19 @@ PlanHandle reuse_plan(F64 seg_l, F64 seg_r, F64 a, I32 edge, py::object group_i,
     }
     g.thresholds = std::move(thresholds);
     g.degree = degree;
+    F64 il, ir;
+    I8 im;
+    if (!img_l.is_none()) {
+        il = img_l.cast<F64>();
+        ir = img_r.cast<F64>();
+        im = img_mode.cast<I8>();
+        if (il.ndim() != 2 || il.shape(0) != n || il.shape(1) != 3 || ir.ndim() != 2 || ir.shape(0) != n ||
+            ir.shape(1) != 3 || im.size() != n)
+            throw std::invalid_argument("bspline pair_reuse: (n, 3) mirrored end points and n image modes");
+        g.img_l = il.data();
+        g.img_r = ir.data();
+        g.img_mode = im.data();
+    }
     PlanHandle h;
     {
         py::gil_scoped_release release;
@@ -86,6 +102,31 @@ py::list groups(const PlanHandle &h) {
         };
         out.append(py::make_tuple(arr(G.obs), arr(G.src), arr(G.cls), arr(G.at)));
     }
+    return out;
+}
+
+// TEST HOOK: the classes of pairs (rows[i], cols[j]) of one block.
+py::array_t<int32_t> classes_of(const PlanHandle &h, int block, I64 rows, I64 cols) {
+    const mw::pair_reuse::FamilyPlan &f = h.plan->fam.at(0);
+    if (block < 0 || block >= f.spec.n_blocks || f.map[block].empty())
+        throw std::invalid_argument("bspline pair_reuse: no such block");
+    const int64_t n = f.spec.cols;
+    py::array_t<int32_t> out({rows.size(), cols.size()});
+    int32_t *o = out.mutable_data();
+    for (py::ssize_t i = 0; i < rows.size(); i++)
+        for (py::ssize_t j = 0; j < cols.size(); j++) {
+            const int64_t r = rows.data()[i], c = cols.data()[j];
+            if (r < 0 || r >= n || c < 0 || c >= n) throw std::invalid_argument("bspline pair_reuse: pair out of range");
+            o[i * cols.size() + j] = f.map[block][static_cast<size_t>(r * n + c)] >> f.spec.code_bits;
+        }
+    return out;
+}
+
+py::array_t<int64_t> group_blocks(const PlanHandle &h) {
+    const std::vector<br::Group> &gs = h.plan->fam.at(0).groups;
+    py::array_t<int64_t> out(static_cast<py::ssize_t>(gs.size()));
+    int64_t *p = out.mutable_data();
+    for (size_t i = 0; i < gs.size(); i++) p[i] = gs[i].block;
     return out;
 }
 
@@ -144,6 +185,36 @@ void assemble(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, int64_t 
         omega, eps, mu, ndb::in(Z), cancel_flag);
 }
 
+// momwire#2063 step 2a: observer rows r0..r1 against every source, the
+// image block's weighted assembly into Z from the class values
+// (`assemble_Z_bspline_weighted_windowed` on the window the image tile
+// writes), the weights the rows' (r1 - r0, n) windows.
+void assemble_image(const PlanHandle &h, C128 values, int64_t r0, int64_t r1, I64 support_seg, F64 polys,
+                    py::array_t<cd, py::array::c_style | py::array::forcecast> w_A,
+                    py::array_t<cd, py::array::c_style | py::array::forcecast> w_Phi, I64 m_idx, I64 n_idx, double omega, double eps, double mu, cd scale,
+                    py::array_t<cd> Z, uintptr_t cancel_flag) {
+    const int64_t n = h.n(), classes = h.plan->fam.at(0).classes;
+    if (values.ndim() != 3 || values.shape(0) != classes || values.shape(1) != values.shape(2))
+        throw std::invalid_argument("bspline pair_reuse: values are (classes, d + 1, d + 1)");
+    br::ImageWindow w;
+    w.plan = h.plan.get();
+    w.values = values.data();
+    w.d1 = static_cast<int>(values.shape(1));
+    w.zero_class = br::sentinel_class(*h.plan);
+    br::check_image_window(w);
+    if (!(0 <= r0 && r0 < r1 && r1 <= n)) throw std::invalid_argument("bspline pair_reuse: rows out of range");
+    if (support_seg.ndim() != 2 || support_seg.shape(1) != w.d1)
+        throw std::invalid_argument("bspline pair_reuse: support_seg is (n_basis, d + 1)");
+    ndb::NumpyHost host;
+    mw::nd::HostScope scope(host);
+    mw::bspline::assemble_Z_bspline_weighted_windowed_tiles(
+        [&w](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
+            br::image_tile(w, rows, nr, cols, nc, out);
+        },
+        ndb::in(support_seg), ndb::in(polys), ndb::in(w_A), ndb::in(w_Phi), ndb::in(m_idx), ndb::in(n_idx), n, r0,
+        r1, 0, n, omega, eps, mu, scale, ndb::in(Z), cancel_flag);
+}
+
 py::tuple remainder_blocks(F64 seg_l, F64 seg_r, F64 a, I64 edge_seg0, double ground_z) {
     const int64_t n = static_cast<int64_t>(a.size()), E = static_cast<int64_t>(edge_seg0.size()) - 1;
     if (seg_l.ndim() != 2 || seg_l.shape(0) != n || seg_l.shape(1) != 3 || seg_r.ndim() != 2 ||
@@ -169,7 +240,7 @@ py::tuple remainder_blocks(F64 seg_l, F64 seg_r, F64 a, I64 edge_seg0, double gr
     return py::make_tuple(arr(ta), arr(tb), arr(sa), arr(sb));
 }
 
-py::object wire_map(const PlanRef &r, I32 wire_of_seg, int64_t n_wires) {
+py::object wire_map(const PlanRef &r, I32 wire_of_seg, int64_t n_wires, int block) {
     const std::shared_ptr<const br::Plan> p = r.plan.lock();
     if (!p) return py::none();
     const int64_t n = p->fam.at(0).spec.rows;
@@ -183,7 +254,7 @@ py::object wire_map(const PlanRef &r, I32 wire_of_seg, int64_t n_wires) {
     int64_t *o = out.mutable_data();
     {
         py::gil_scoped_release release;
-        br::wire_map(*p, w, n_wires, o);
+        br::wire_map(*p, w, n_wires, o, block);
     }
     return out;
 }
@@ -199,6 +270,13 @@ py::dict stats(const PlanHandle &h) {
     out["same_edge_pairs"] = br::same_edge_pairs(p);
     out["rep_evals"] = f.rep_evals;
     out["groups"] = static_cast<int64_t>(f.groups.size());
+    // Per block, by the block of each class's representative (momwire#2063
+    // step 2a): block 0 the direct pairs, block 1 the image's.
+    out["blocks"] = f.spec.n_blocks;
+    out["classes_block"] = py::make_tuple(f.cls_block[0], f.cls_block[1]);
+    out["near_block"] = py::make_tuple(f.near_block[0], f.near_block[1]);
+    out["evals_block"] = py::make_tuple(f.evals_block[0], f.evals_block[1]);
+    out["image_sentinel_pairs"] = br::image_sentinel_pairs(p);
     out["census_seconds"] = p.census_seconds;
     out["nbytes"] = static_cast<int64_t>(p.nbytes());
     out["budget_bytes"] = p.budget_bytes;
@@ -213,9 +291,9 @@ void register_bspline_pair_reuse(py::module_ &m) {
     py::class_<PlanRef>(m, "BSplineReusePlanRef", "A bs2 reuse plan held weakly (the fill report's).")
         .def_property_readonly("alive", [](const PlanRef &r) { return !r.plan.expired(); },
                                "Whether the process's cache (or a fill) still holds the plan.")
-        .def("wire_map", &wire_map, py::arg("wire_of_seg"), py::arg("n_wires"),
-             "The (W, W, 3) int64 map of observer wire x source wire x (computed, reused, near), "
-             "or None when the plan is gone.");
+        .def("wire_map", &wire_map, py::arg("wire_of_seg"), py::arg("n_wires"), py::arg("block") = 0,
+             "The (W, W, 3) int64 map of observer wire x source wire x (computed, reused, near) of one "
+             "block (0 direct, 1 image), or None when the plan is gone.");
     py::class_<PlanHandle>(m, "BSplineReusePlan",
                            "bs2's fill-pair reuse plan (momwire#2063): the classes of the (observer "
                            "segment, source segment) pairs of the moment fill, from the process's cache.")
@@ -225,6 +303,8 @@ void register_bspline_pair_reuse(py::module_ &m) {
             return py::str(h.plan->declined);
         }, "Why this plan does not serve the deck (it then has no classes), or None.")
         .def_property_readonly("classes", [](const PlanHandle &h) { return h.plan->fam.at(0).classes; })
+        .def_property_readonly("image", [](const PlanHandle &h) { return br::has_image(*h.plan); },
+                               "Whether the plan has the image block (momwire#2063 step 2a).")
         .def_property_readonly("plan_bytes", [](const PlanHandle &h) { return h.plan->budget_bytes; },
                                "The kept plan's bytes: its maps and groups, and one wavenumber's values.")
         .def_property_readonly("census_peak_bytes", [](const PlanHandle &h) { return h.plan->census_peak_bytes; })
@@ -232,6 +312,16 @@ void register_bspline_pair_reuse(py::module_ &m) {
         .def("groups", &groups,
              "The representatives' evaluation groups: (observer rows, sources, classes, at), "
              "class cls[q]'s value at entry at[q] = row * |sources| + column of the group's call.")
+        .def("group_blocks", &group_blocks, "Each group's block, in groups() order (1: the image's).")
+        .def("classes_of", &classes_of, py::arg("block"), py::arg("rows"), py::arg("cols"),
+             "TEST HOOK: the (len(rows), len(cols)) classes of one block's pairs.")
+        .def("assemble_image", &assemble_image, py::arg("values"), py::arg("r0"), py::arg("r1"),
+             py::arg("support_seg"), py::arg("polys"), py::arg("w_A"), py::arg("w_Phi"), py::arg("m_idx"),
+             py::arg("n_idx"), py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("scale"), py::arg("Z"),
+             py::arg("cancel_flag") = 0,
+             "momwire#2063 step 2a: observer rows r0..r1 of the image block added into Z from the class "
+             "values with the rows' (r1 - r0, n) weights, as assemble_Z_bspline_weighted_windowed adds "
+             "the window, without writing the window.")
         .def("gather", &gather, py::arg("values"), py::arg("r0"), py::arg("r1"), py::arg("out"),
              "Observer rows r0..r1 of the moment tensor, (d + 1, d + 1, r1 - r0, n), from the "
              "class values (classes, d + 1, d + 1).")
@@ -245,7 +335,10 @@ void register_bspline_pair_reuse(py::module_ &m) {
         .def("ref", [](const PlanHandle &h) { return PlanRef{h.plan}; }, "The plan, held weakly.");
     m.def("bspline_reuse_plan", &reuse_plan, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
           py::arg("edge"), py::arg("group_i"), py::arg("group_j"), py::arg("b_src"), py::arg("thresholds"),
-          py::arg("degree"), "The reuse plan for this geometry, from the process's cache or built.");
+          py::arg("degree"), py::arg("img_l") = py::none(), py::arg("img_r") = py::none(),
+          py::arg("img_mode") = py::none(),
+          "The reuse plan for this geometry, from the process's cache or built; with the mirrored end "
+          "points and each segment's own-image mode, its image block too (momwire#2063 step 2a).");
     m.def("bspline_reuse_remainder_blocks", &remainder_blocks, py::arg("seg_l"), py::arg("seg_r"), py::arg("a"),
           py::arg("edge_seg0"), py::arg("ground_z"),
           "The Sommerfeld remainder's block copies, from its census of edge pairs: (ta, tb, sa, sb).");
@@ -265,6 +358,8 @@ void register_bspline_pair_reuse(py::module_ &m) {
         d["tiled"] = c.tiled;
         d["whole"] = c.whole;
         d["tiles"] = c.tiles;
+        d["weighted_tiled"] = c.wtiled;
+        d["weighted_whole"] = c.wwhole;
         return d;
     }, "Process totals of the fused windowed assembly (TEST HOOK, momwire#2166): calls run tile by "
        "tile, calls whose window was materialised (no lane kernel), and tiles.");
@@ -272,6 +367,9 @@ void register_bspline_pair_reuse(py::module_ &m) {
           "TEST HOOK (momwire#2166): 1 copies a reciprocal member untransposed in the fused "
           "window; 0 restores.");
     m.def("bspline_reuse_cache_clear", &br::clear_cache, "Drop every cached bs2 reuse plan (TEST HOOK).");
+    m.def("bspline_reuse_set_image_key_probe", &br::set_image_key_probe, py::arg("probe"),
+          "TEST HOOK (momwire#2063 step 2a): 1 keys the image block on the source's unmirrored "
+          "direction; 0 restores.");
     m.def("bspline_reuse_class_limit", &br::set_class_limit, py::arg("classes"),
           "TEST HOOK: later plans decline past this many classes (0: the coding's own limit).");
     m.def("bspline_reuse_plan_allowance", &br::set_plan_allowance, py::arg("bytes"),

@@ -1,16 +1,16 @@
-"""bs2's ground image term is not reused between edges yet (momwire#2159),
-and the fill report says so rather than reading "served".
+"""bs2's fill report over a ground (momwire#2159, #2063 step 2a).
 
-Under `pair_reuse` bs2 copies its direct term by the census and its
-Sommerfeld remainder by its copy map; the image term keeps only the offset
-spread within an edge. Over any ground with an image term, the headline is
-therefore "partial" and names the image term; in free space, which has none,
-it stays "served".
+Under `pair_reuse` bs2 copies its direct term and its ground image term by
+the census (the image as block 1 of the direct class space) and its
+Sommerfeld remainder by its copy map. The headline reads "served" when every
+term copied between edges, and "partial", naming the term, when one did not
+(an image term the plan does not carry is named with the reason:
+`test_bs2_image_reuse_shared_2063.py`); in free space, which has no image, it
+stays "served".
 
-The cross-engine bound is the gap #2159 closes: on equal elements side by
-side, razor2p's and Sinusoidal's image families compress about 125x, bs2's
-1.2x. It is held as a strict expected failure, so the day bs2 reaches it the
-test fails until the marker comes off.
+The cross-engine bound is the gap #2159 closed: on equal elements side by
+side, razor2p's and Sinusoidal's image families compress about 125x; bs2's
+did 1.2x before the image joined the census.
 """
 
 from __future__ import annotations
@@ -84,9 +84,19 @@ def reuse_of(solver):
 
 
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
-def test_a_ground_with_an_image_reads_partial_and_names_it(ground):
+def test_a_ground_whose_image_copies_reads_served(ground):
     reuse = reuse_of(BSplineSolver(**row(), **GROUNDS[ground], pair_reuse=True))
-    # The direct term did serve: the partial is the image's alone.
+    assert reuse["families"]["direct"]["reused"] > 0
+    img = reuse["families"]["image"]
+    assert img["reused"] > img["pairs"] // 2, img
+    assert reuse["state"] == "served", reuse["declined"]
+    assert reuse["declined"] is None
+
+
+def test_an_image_the_plan_does_not_carry_reads_partial_and_names_it():
+    reuse = reuse_of(
+        BSplineSolver(**row(), **PEC, pair_reuse=True, image_pair_order_ladder=())
+    )
     assert reuse["families"]["direct"]["reused"] > 0
     assert reuse["state"] == "partial", reuse["state"]
     assert IMAGE_NOTE in reuse["declined"], reuse["declined"]
@@ -98,16 +108,12 @@ def test_free_space_has_no_image_and_reads_served():
     assert reuse["state"] == "served" and reuse["declined"] is None
 
 
-# The bound #2159 is to meet: bs2's image family within this factor of
-# razor2p's and Sinusoidal's on the same deck. Measured today (Sommerfeld):
-# razor2p 126x, Sinusoidal 124x, bs2 1.18x.
+# The bound #2159 set: bs2's image family within this factor of razor2p's
+# and Sinusoidal's on the same deck. Measured (Sommerfeld): razor2p 126x,
+# Sinusoidal 124x; bs2 1.18x before momwire#2063 step 2a.
 FACTOR = 4.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="momwire#2159: bs2 does not copy its image term between edges yet",
-)
 def test_bs2_image_compresses_like_the_other_engines():
     deck = row(n_el=6)
 

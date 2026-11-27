@@ -104,8 +104,8 @@ def test_sommerfeld_reports_three_families_and_nothing_uncounted():
     image, rem = reuse["families"]["image"], reuse["families"]["remainder"]
     # Same pair convention in every family: ordered segment pairs.
     assert reuse["families"]["direct"]["pairs"] == image["pairs"] == rem["pairs"] == n2
-    # pair_reuse never copies the image term.
-    assert image["pairs"] == image["computed"] and image["reused"] == 0
+    # The image term is copied by the census's image block (momwire#2063).
+    assert image["reused"] > 0 and image["near"] == 0
     assert rem["computed"] + rem["reused"] + rem["near"] == rem["pairs"]
     assert rem["reused"] > 0
     reconciles(reuse)
@@ -208,7 +208,8 @@ def test_remainder_reuse_saves_kernel_work():
 
 def test_offset_edges_count_as_reuse_in_the_ground_families():
     """Under `offset_reuse` an edge's own image block is spread from 2n - 1
-    distinct values: the image family says so."""
+    distinct values: the image family counts them computed, beside the
+    plan's own classes (momwire#2063 step 2a)."""
     deck = row()
     before = bspline_mod.IMAGE_OFFSET_EDGES
     s = solve(deck, SOMMERFELD)
@@ -216,7 +217,10 @@ def test_offset_edges_count_as_reuse_in_the_ground_families():
     reuse = s.fill_report()["reuse"]
     image = reuse["families"]["image"]
     n = deck["n_per_edge_per_wire"][0][0]
-    assert image["reused"] == len(deck["wires"]) * (n * n - (2 * n - 1))
+    st = s._reuse_plan(s._build_geometry()).stats()
+    assert image["computed"] == st["classes_block"][1] + len(deck["wires"]) * (
+        2 * n - 1
+    )
     reconciles(reuse)
 
 

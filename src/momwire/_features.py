@@ -302,6 +302,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_contract_1982.py",
                 "tests/test_pair_reuse_chunked_2020.py",
                 "tests/test_bs2_fused_assembly_2166.py",
+                "tests/test_bs2_image_reuse_shared_2063.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
                 "tests/test_sin_pair_reuse_cxx_1911.py",
                 "tests/test_sin_pair_reuse_1916.py",
@@ -324,7 +325,13 @@ FEATURES: dict[str, Feature] = {
             # stack, a line grid; free, PEC, Sommerfeld; EK on and off), and
             # 3.1e-12 on antennaknobs' 10-element Yagi (both layouts, free,
             # PEC, Sommerfeld), where the hint route moved it 3.2e-12: the
-            # offset part's. A 0.3 m loop at 137 kHz moves 1.4e-8, where
+            # offset part's. Its ground image term on the census
+            # (momwire#2063 step 2a, block 1 of the direct class space, the
+            # weights per pair): 4.5e-13 worst over Yagis of one and two
+            # edges, a V-bent Yagi and a vertical stack on PEC,
+            # reflection-coefficient and Sommerfeld grounds, `offset_reuse`
+            # on and off, and 4.7e-13 on antennaknobs' 10-element Yagi
+            # (PEC, Sommerfeld). A 0.3 m loop at 137 kHz moves 1.4e-8, where
             # its off fill moves 5e-7 translated 3.7 m (and `offset_reuse`
             # alone 3e-7). sinusoidal: the class map moves Z itself by
             # ~1e-12 relative to its largest entry, and the solve amplifies

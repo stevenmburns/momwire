@@ -459,10 +459,35 @@ void assemble_Z_bspline_windowed_tiles(
     double mu_,
     nd::array_t<std::complex<double>> Z,
     uintptr_t cancel_flag);
+// momwire#2063 step 2a: `assemble_Z_bspline_weighted_windowed` on a window
+// whose moments are never materialised, as the call above is to
+// `assemble_Z_bspline_windowed`: the image block's assembly from its class
+// values. `wA_win` / `wPhi_win` are the window's (i1 - i0, j1 - j0) weights;
+// `n_segs` bounds the supports (there are no tangents to read it from).
+void assemble_Z_bspline_weighted_windowed_tiles(
+    const WindowSource &source,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> support_seg,
+    nd::array_t<double, nd::array::c_style | nd::array::forcecast> polys,
+    nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> wA_win,
+    nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> wPhi_win,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> m_idx,
+    nd::array_t<int64_t, nd::array::c_style | nd::array::forcecast> n_idx,
+    int64_t n_segs,
+    int64_t i0,
+    int64_t i1,
+    int64_t j0,
+    int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    std::complex<double> scale,
+    nd::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag);
 // Process totals of the calls above (TEST HOOK, momwire#2166): calls whose
-// window ran tile by tile, and calls whose window was materialised.
+// window ran tile by tile, and calls whose window was materialised; and the
+// weighted twin's (momwire#2063 step 2a).
 struct WindowTileCounts {
-    int64_t tiled = 0, whole = 0, tiles = 0;
+    int64_t tiled = 0, whole = 0, tiles = 0, wtiled = 0, wwhole = 0;
 };
 WindowTileCounts window_tile_counts();
 

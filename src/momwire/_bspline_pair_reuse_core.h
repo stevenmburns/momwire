@@ -145,10 +145,47 @@ struct Geometry {
     const double *b_src = nullptr;      // (n) EK source tube radii, or null (b = a)
     std::vector<double> thresholds;     // the pair-order ladder's ratios
     int degree = 2;
+    // THE IMAGE BLOCK (momwire#2063 step 2a), or null for none: the sources'
+    // end points mirrored in the ground plane, (n, 3) each, as the image fill
+    // hands them to the kernel, and each segment's own-image mode (`ImageMode`).
+    const double *img_l = nullptr, *img_r = nullptr;
+    const int8_t *img_mode = nullptr;   // (n), with img_l
 };
 
+// THE IMAGE BLOCK. bs2's image moment of observer o against source s is the
+// off-edge kernel on o against the MIRRORED segment M(s), on the direct
+// fill's ladder and EK labels (`_image_fill_ladder`, `_ek_axis_labels`:
+// one label for every segment, real or mirrored, and b_j the source's own
+// radius either way). So the pair (o, M(s)) is to the kernel a pair of
+// segments like any other, and the direct key's rigid invariants of it are
+// its complete ones: block 1 keys (o, M(s)) with the direct key, in the
+// direct block's class space (razor2p's n_blocks = 2), and an image pair may
+// take a direct pair's value. The value is the plane-blind moments; every
+// plane-dependent factor (PEC's -Mt tangent dot and the -1, refl-coef's
+// Fresnel dyad, the Sommerfeld image's C2) is the pair's own weight, applied
+// at assembly (`image_tile`). A rigid key on WEIGHTED entries would be wrong
+// over refl-coef, whose weights read the pair's tilt to the plane.
+//
+// A segment against its own edge's image is keyed only on a straight edge
+// the image fill sweeps like any other (`Keyed`). An offset edge's own image
+// block is the offset route's (`OffsetRoute`): the sentinel class, which the
+// image tile writes as zero. A grazing edge's (`OwnPairs`) has the near-image
+// fixup subtract the sweep's own moments of it (momwire#631), so each pair is
+// its own class and its value its own fill's bits.
+enum ImageMode : int8_t { Keyed = 0, OffsetRoute = 1, OwnPairs = 2 };
+// TEST HOOK (the adversarial gate): 1 keys block 1 on the source's UNMIRRORED
+// direction (the image's z-flip dropped from the key only), which no correct
+// plan does. Plans are keyed on it.
+void set_image_key_probe(int probe);
+// Whether `p` has the image block, and the sentinel class (the same-edge
+// pairs', pair (0, 0)'s) the image tile writes as zero.
+bool has_image(const Plan &p);
+int32_t sentinel_class(const Plan &p);
+// Image pairs in the sentinel class (the offset edges' own image blocks).
+int64_t image_sentinel_pairs(const Plan &p);
+
 // The plan for `g`, from the process's cache or built: one family, "direct",
-// n x n, one code bit (reciprocity). Never null; a deck the census does not serve comes
+// n x n, one code bit (reciprocity), over one block, or two with the image. Never null; a deck the census does not serve comes
 // back DECLINED with the reason. `built` says whether this call ran it.
 std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built = nullptr);
 
@@ -195,6 +232,19 @@ void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t 
 void set_window_probe(int probe);
 int window_probe();
 
+// The image block's window as a source for the weighted fused assembly
+// (`assemble_Z_bspline_weighted_windowed_tiles`): every pair (o, s) is its
+// class's block-1 value, transposed under reciprocity, and the sentinel
+// class zero. Rows and columns are any segments: no own edge is cut out.
+struct ImageWindow {
+    const Plan *plan = nullptr;
+    const cd *values = nullptr;  // (classes, d1, d1)
+    int d1 = 3;
+    int32_t zero_class = -1;
+};
+void check_image_window(const ImageWindow &w);
+void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out);
+
 // THE SOMMERFELD REMAINDER's copy map (3b): its own family, of EDGE pairs,
 // because the fused kernel copies whole blocks between edges. The remainder
 // reads the plane, so it is invariant only under the motions that keep it:
@@ -228,10 +278,11 @@ struct RemainderGeometry {
 void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std::vector<int64_t> &tb,
                       std::vector<int64_t> &sa, std::vector<int64_t> &sb);
 
-// The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): the
-// direct family's (W, W, 3) count of computed, reused and near pairs, the
-// same-edge pairs counted near.
-void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out);
+// The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): block
+// `block`'s (W, W, 3) count of computed, reused and near pairs, the sentinel
+// class's pairs counted near. A class is computed at its first pair, block 0
+// first, so an image pair of a class a direct pair opened counts reused.
+void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out, int block = 0);
 
 pair_reuse::Counters cache_counters();
 void clear_cache();

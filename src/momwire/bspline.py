@@ -903,6 +903,13 @@ def _add_block(T, rows, cols, B, sign=1):
 
 IMAGE_OFFSET_EDGES = 0
 FREE_OFFSET_EDGES = 0
+# momwire#2063 step 2a: whole-mesh image fills assembled from the plan's
+# class values. Counted so a gate can show the route ran.
+IMAGE_REUSE_FILLS = 0
+#: TEST HOOK (the adversarial gate): "scale" adds the image block with +1 in
+#: place of -1, "tangent" weights it with the source's unmirrored tangent, in
+#: the plan's image route only. None is the fill.
+_IMAGE_REUSE_PROBE = None
 
 
 def _ek_slice(ek, rows=None, cols=None):
@@ -1977,6 +1984,10 @@ class BSplineSolver(
         # evaluation groups, both per geometry object.
         self._reuse_plan_cache = None
         self._reuse_groups_cache = None
+        # Why the last plan has no image block over a ground (momwire#2063
+        # step 2a), and the class values a direct fill hands the image fill.
+        self._reuse_image_declined = None
+        self._held_reuse_values = None
         self._remainder_reuse_cache = None
         self.pair_reuse_remainder_cut = 0
         # Why the reuse served nothing (None when it served, or was not
@@ -5296,7 +5307,7 @@ class BSplineSolver(
         return self.__dict__.get("_fill_served")
 
     def _note_ground_fill(
-        self, name, pairs, computed, kernel_evals, offset=(), copy_map=None
+        self, name, pairs, computed, kernel_evals, offset=(), copy_map=None, plan=None
     ):
         """Count one fill of a ground term, `name` "image" or "remainder",
         for the fill report (momwire#2068). Called once per whole-mesh fill
@@ -5314,12 +5325,23 @@ class BSplineSolver(
         as the direct family counts an offset edge). `kernel_evals` is what
         the kernel was called on, which exceeds `computed` where pairs are
         formed twice (a segment in two tiles' support halos, the copy
-        cache's own fill, #1189's raised pairs)."""
+        cache's own fill, #1189's raised pairs). `plan` (a plan's weak ref)
+        says the term copied between edges by the plan's image block
+        (momwire#2063 step 2a), whose wire map counts it."""
         notes = self.__dict__.setdefault("_fill_ground_notes", {})
         note = notes.setdefault(
             name,
-            {"pairs": 0, "computed": 0, "kernel_evals": 0, "offset": [], "maps": []},
+            {
+                "pairs": 0,
+                "computed": 0,
+                "kernel_evals": 0,
+                "offset": [],
+                "maps": [],
+                "plans": [],
+            },
         )
+        if plan is not None:
+            note["plans"].append(plan)
         note["pairs"] += int(pairs)
         note["computed"] += int(computed)
         note["kernel_evals"] += int(kernel_evals)
@@ -5440,7 +5462,7 @@ class BSplineSolver(
         between = None
         for name in families:
             note = notes.get(name)
-            if note is None or note["maps"]:
+            if note is None or note["maps"] or note.get("plans"):
                 continue
             if name == "remainder" and notes.get("remainder_map_unused"):
                 continue
@@ -5448,7 +5470,11 @@ class BSplineSolver(
                 between = self._between_edge_pairs()
             if between == 0:
                 continue
-            left_out.append(f"the {name} term copied no block between edges")
+            why = self._reuse_image_declined if name == "image" else None
+            left_out.append(
+                f"the {name} term copied no block between edges"
+                + (f" ({why})" if why else "")
+            )
         ledger.reuse = _fill_report.reuse_entry(
             "partial" if left_out else "served",
             declined="; ".join(left_out) or None,
@@ -5515,6 +5541,19 @@ class BSplineSolver(
             g_reused = np.zeros((n_wires, n_wires), dtype=np.int64)
             for start, n in note["offset"]:
                 g_reused[wire_of(start), wire_of(start)] += n * n - (2 * n - 1)
+            for ref in note.get("plans", []):
+                # The image block (momwire#2063 step 2a): its reused pairs,
+                # the offset edges' own blocks (the sentinel class, counted
+                # near there) already counted above.
+                if len(note["plans"]) != 1:
+                    return {
+                        "unavailable": f"the {name} term was not one whole-mesh fill"
+                    }
+                wire_of_seg = np.repeat(np.arange(n_wires, dtype=np.int32), sizes)
+                block = ref.wire_map(wire_of_seg, n_wires, 1)
+                if block is None:
+                    return {"unavailable": _fill_report.PLAN_GONE}
+                g_reused += block[:, :, 1]
             for copy_map in note["maps"]:
                 seg0 = np.asarray(copy_map["reuse_edge_seg0"], dtype=np.int64)
                 edge_wire = np.searchsorted(seg_off, seg0[:-1], side="right") - 1
@@ -5579,7 +5618,7 @@ class BSplineSolver(
         seg_r = np.ascontiguousarray(geom["seg_r"], dtype=np.float64)
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ladder = self._fill_ladder(self.k, seg_l, seg_r, ek)
-        handle = _acc.bspline_reuse_plan(
+        args = (
             seg_l,
             seg_r,
             np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64),
@@ -5590,10 +5629,77 @@ class BSplineSolver(
             [float(r) for r, _n in ladder],
             int(self.degree),
         )
+        self._reuse_image_declined = None
+        image = self._reuse_image_args(geom, ek, ladder)
+        if isinstance(image, str):
+            self._reuse_image_declined = image
+        elif image is not None:
+            handle = _acc.bspline_reuse_plan(*args, *image)
+            if handle.declined is None:
+                return handle
+            # The image block's census declined: the direct plan alone, as
+            # before the image had one.
+            self._reuse_image_declined = handle.declined
+        handle = _acc.bspline_reuse_plan(*args)
         if handle.declined is not None:
             self.pair_reuse_declined = handle.declined
             return None
         return handle
+
+    def _image_edge_modes(self, geom):
+        """The image fill's own-edge routes of a whole-mesh fill: ``(offset,
+        near)``, offset ``{start: (slice, kind)}`` the edges whose own image
+        block the offset route assembles (`_image_offset_block`), near the
+        starts of those the near-image fixup corrects (momwire#631), which
+        the offset route leaves alone."""
+        near = {e[0].start for e in self._near_image_edge_blocks(geom)}
+        offset = {
+            sl.start: (sl, kind)
+            for sl, kind in self._offset_edges(geom)
+            if sl.start not in near
+        }
+        return offset, near
+
+    def _reuse_image_args(self, geom, ek, ladder):
+        """The image block's census inputs (momwire#2063 step 2a): the
+        mirrored end points and each segment's own-image mode
+        (`ImageMode`, `_bspline_pair_reuse_core.h`); None over no ground, or
+        why the image is not planned. The block keys (o, M(s)) with the
+        direct key, which is the image moment's complete invariant only where
+        the image fill runs the direct fill's kernel on the mirrored
+        segment: its ladder and EK labels."""
+        if self.ground_z is None or self._has_buried_wires():
+            return None
+        if not _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL or not hasattr(
+            _acc, "assemble_Z_bspline_weighted_windowed"
+        ):
+            return "no C++ weighted assembler"
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        if self._image_fill_ladder(self.k, seg_l, seg_r, ek) != ladder:
+            return "the image fill's pair-order ladder is not the direct fill's"
+        if ek is not None:
+            ek_img = self._ek_spec(geom, mirror=True)
+            same_b = (ek.b_j is None) == (ek_img.b_j is None) and (
+                ek.b_j is None or np.array_equal(ek.b_j, ek_img.b_j)
+            )
+            if not (
+                same_b
+                and np.array_equal(ek.group_i, ek_img.group_i)
+                and np.array_equal(ek.group_j, ek_img.group_j)
+            ):
+                return "the image's extended-kernel labels are not the direct fill's"
+        offset, near = self._image_edge_modes(geom)
+        mode = np.zeros(int(geom["n_segs_total"]), dtype=np.int8)
+        for sl in self._same_edge_slices(geom):
+            if sl.start in offset:
+                mode[sl] = 1
+            elif sl.start in near:
+                mode[sl] = 2
+        return (
+            np.ascontiguousarray(self._image_positions(seg_l), dtype=np.float64),
+            np.ascontiguousarray(self._image_positions(seg_r), dtype=np.float64),
+            mode,
+        )
 
     def _reuse_values(self, plan, geom, k, ladder, ek):
         """Each class's moments at `k`, ``(classes, d+1, d+1)``: the shipped
@@ -5601,30 +5707,49 @@ class BSplineSolver(
         its representatives' sources. A pair's moments are its own in any
         call (the tier and phase guard are per pair, momwire#920), so a
         class's value is its representative's fill, bit for bit."""
+        held = self._held_reuse_values
+        if held is not None and held[0] is plan and held[1] == k:
+            return held[2]
         hit = self._reuse_groups_cache
         if hit is None or hit[0] is not plan:
-            hit = self._reuse_groups_cache = (plan, plan.groups())
+            hit = self._reuse_groups_cache = (plan, plan.groups(), plan.group_blocks())
         d = self.degree
         d1 = d + 1
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
         a_row = self._seg_radius(geom)
+        # The image block's representatives (momwire#2063 step 2a): the image
+        # fill's own moments, the observer against the mirrored source.
+        src_ends = [(seg_l, seg_r, ek)]
+        if plan.image:
+            src_ends.append(
+                (
+                    self._image_positions(seg_l),
+                    self._image_positions(seg_r),
+                    self._ek_spec(geom, mirror=True) if ek is not None else None,
+                )
+            )
         values = np.empty((plan.classes, d1, d1), dtype=np.complex128)
-        for g, (obs, src, cls, at) in enumerate(hit[1]):
+        for g, ((obs, src, cls, at), blk) in enumerate(
+            zip(hit[1], hit[2], strict=True)
+        ):
             if g % _REUSE_GROUPS_PER_CHECKPOINT == 0:
                 self._checkpoint()
+            s_l, s_r, s_ek = src_ends[int(blk)]
             block = _seg_seg_full_moments_offedge(
                 seg_l[obs],
                 seg_r[obs],
-                seg_l[src],
-                seg_r[src],
+                s_l[src],
+                s_r[src],
                 a_row[obs],
                 k,
                 d,
                 self.n_qp_pair,
-                ek=_ek_slice(ek, rows=obs, cols=src),
+                ek=_ek_slice(s_ek, rows=obs, cols=src),
                 ladder=ladder,
             )
             values[cls] = np.moveaxis(block.reshape(d1, d1, -1)[:, :, at], 2, 0)
+        # Held for this k's image fill, which takes it (`_accumulate_Z_image_chunked`).
+        self._held_reuse_values = (plan, k, values) if plan.image else None
         return values
 
     def _reuse_served(self, route, plan, n_segs):
@@ -5633,9 +5758,11 @@ class BSplineSolver(
         class between two edges copied, the near pairs evaluated alone.
         The same-edge pairs (one sentinel class) are the fill's own."""
         st = plan.stats()
-        same = int(st["same_edge_pairs"])
-        near = int(st["near_pairs"])
-        far = int(st["classes"]) - near - (1 if same else 0)
+        # The direct block's: the classes whose representative is a direct
+        # pair, the sentinel among them (momwire#2063 step 2a).
+        same = int(st["same_edge_pairs"]) - int(st["image_sentinel_pairs"])
+        near = int(st["near_block"][0]) - (1 if same else 0)
+        far = int(st["classes_block"][0]) - int(st["near_block"][0])
         pairs = int(n_segs) ** 2
         return {
             "route": route,
@@ -5644,7 +5771,7 @@ class BSplineSolver(
             "copied_pairs": pairs - same - far - near,
             "tables_shared": 0,
             "pairs": pairs,
-            "kernel_evals": int(st["rep_evals"]),
+            "kernel_evals": int(st["evals_block"][0]),
             "offset_pairs": 0,
             "offset_distinct": 0,
         }
@@ -6843,6 +6970,17 @@ class BSplineSolver(
         if self._reuse_on:
             self.pair_reuse_declined = reason
 
+    def _image_reuse_plan(self, geom, restrict):
+        """The plan whose image block this image fill assembles from
+        (momwire#2063 step 2a), or None to sweep every pair. A fill of chosen
+        rows reads none, as the direct fill's (`_chunked_reuse`) says."""
+        if not self._reuse_on or restrict is not None:
+            return None
+        plan = self._reuse_plan(geom)
+        if plan is None or not plan.image:
+            return None
+        return plan
+
     def _chunked_reuse(self, geom, same_edge_prep, restrict):
         """The plan this chunked fill gathers from, or None to fill every
         pair (momwire#2020, #2063). Every way the plan goes unread here is
@@ -7155,13 +7293,10 @@ class BSplineSolver(
         # for an edge the near-image fixup corrects (its block is analytic).
         offset = {}
         if restrict is None:
-            near = {e[0].start for e in self._near_image_edge_blocks(geom)}
-            offset = {
-                sl.start: (sl, kind)
-                for sl, kind in self._offset_edges(geom)
-                if sl.start not in near
-            }
+            offset, _near = self._image_edge_modes(geom)
         cuts = sorted({b for sl, _ in offset.values() for b in (sl.start, sl.stop)})
+        # momwire#2063 step 2a: the plan's image block, whole-mesh fills only.
+        plan = self._image_reuse_plan(geom, restrict)
 
         def _assemble_window(J, r0, r1, c0, c1, w_A, w_Phi, m_idx, n_idx):
             _acc.assemble_Z_bspline_weighted_windowed(
@@ -7221,6 +7356,41 @@ class BSplineSolver(
                         _touching(c0, c1),
                     )
 
+        if plan is not None:
+            values = self._reuse_values(plan, geom, k, ladder, ek)
+            self._held_reuse_values = None
+            scale = complex(1.0 if _IMAGE_REUSE_PROBE == "scale" else -1.0)
+
+        def _image_block_plan(i0, i1, j0, j1):
+            """One observer chunk against every source from the class
+            values, the window never written (the image tile, momwire#2063
+            step 2a): every pair its class's moments of (o, M(s)), weighted
+            by its own (w_A, w_Phi), an offset edge's own block zero (the
+            offset route's). No cut at the offset edges: the window holds
+            no own column to skip."""
+            w_A_win, w_Phi_win = weights_fn(i0, i1)
+            if _IMAGE_REUSE_PROBE == "tangent":
+                t = geom["tangents"]
+                w_A_win = np.ascontiguousarray(t[i0:i1] @ t.T, dtype=np.complex128)
+            m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
+            plan.assemble_image(
+                values,
+                int(i0),
+                int(i1),
+                supp_c,
+                polys_c,
+                w_A_win,
+                w_Phi_win,
+                np.nonzero(m_mask)[0].astype(np.int64),
+                all_n,
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                scale,
+                Z,
+                self._cancel_flag,
+            )
+
         def _image_block(i0, i1, j0, j1):
             if offset:
                 _image_block_split(i0, i1)
@@ -7274,11 +7444,15 @@ class BSplineSolver(
         _schedule.sweep(
             [(0, n_segs)],
             chunk,
-            _image_block,
+            _image_block if plan is None else _image_block_plan,
             sources=[(0, n_segs)],
             checkpoint=self._checkpoint,
             restrict=restrict,
         )
+        if plan is not None:
+            global IMAGE_REUSE_FILLS
+            IMAGE_REUSE_FILLS += 1
+            del values
 
         if offset:
             global IMAGE_OFFSET_EDGES
@@ -7290,8 +7464,22 @@ class BSplineSolver(
         if restrict is None:
             spans = [(sl.start, sl.stop - sl.start) for sl, _kind in offset.values()]
             n2 = int(n_segs) ** 2
-            computed = n2 - self._offset_saved(spans)
-            self._note_ground_fill("image", n2, computed, computed, offset=spans)
+            if plan is None:
+                computed = n2 - self._offset_saved(spans)
+                self._note_ground_fill("image", n2, computed, computed, offset=spans)
+            else:
+                # The image block's own classes (their representatives are
+                # image pairs), and each offset edge's 2n - 1 distinct pairs.
+                st = plan.stats()
+                distinct = sum(2 * n - 1 for _start, n in spans)
+                self._note_ground_fill(
+                    "image",
+                    n2,
+                    int(st["classes_block"][1]) + distinct,
+                    int(st["evals_block"][1]) + distinct,
+                    offset=spans,
+                    plan=plan.ref(),
+                )
 
         # Near-image fixup (momwire#631), the image-side twin of the
         # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep
@@ -9729,6 +9917,8 @@ class BSplineSolver(
                 # matrices at once. `Z -=` folds the subtraction into Z's
                 # own buffer, holding two.
                 Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom, ground=ground)
+        # A direct fill's class values not taken by an image fill.
+        self._held_reuse_values = None
 
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
