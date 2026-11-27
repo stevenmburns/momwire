@@ -69,6 +69,11 @@ Solved bspline_solve_front(const BSplineFront &fr, const razor::Lapack &lapack, 
     if (!fr.buried) {
         // `_reuse_plan(geom)`: the census, shared by the free-space fill and
         // the Sommerfeld remainder's copy map
+        // with its image block over a ground (momwire#2063 step 2a), the
+        // values the direct fill evaluates held for the image fill
+        fp.image = fr.has_ground;
+        fp.image_gz = fr.ground_z;
+        fp.held = std::make_shared<bspline::FillParams::HeldValues>();
         fp.plan = bspline::reuse_plan(fr.geom, fr.radii, fp);
         // `_serve._port_solution` with a sweep state: the same-edge blocks
         // from the sweep's hoisted prep while the static and per-k blocks fit

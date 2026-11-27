@@ -523,9 +523,67 @@ std::vector<OffsetEdge> offset_edges_of(const Geometry &g, bool free_) {
     return out;
 }
 
+// `mirror_positions`: 2 * ground_z - z, each end point.
+Segs mirrored(const Geometry &g, double gz) {
+    Segs img;
+    img.l = g.seg_l;
+    img.r = g.seg_r;
+    for (int64_t s = 0; s < g.n_segs_total; s++) {
+        img.l[3 * s + 2] = 2.0 * gz - g.seg_l[3 * s + 2];
+        img.r[3 * s + 2] = 2.0 * gz - g.seg_r[3 * s + 2];
+    }
+    return img;
+}
+
+// `_near_image_edge_blocks`: an edge flat at height h above the plane whose
+// image has come closer than its segments (its a_eff).
+bool near_image_edge(const Geometry &g, const std::vector<double> &radius_per_wire, double gz, size_t w, size_t e,
+                     double &a_eff) {
+    const WireGeometry &pw = g.per_wire[w];
+    const double a_w = radius_per_wire[w];
+    const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+    const std::vector<double> &arc = pw.edge_arc_edges[e];
+    const double h = g.seg_l[3 * static_cast<size_t>(s0) + 2] - gz;
+    const double atol = std::max(a_w, 1e-12);
+    bool flat = true;
+    for (int64_t s = s0; s < s1; s++)
+        for (double z : {g.seg_l[3 * static_cast<size_t>(s) + 2], g.seg_r[3 * static_cast<size_t>(s) + 2]}) {
+            const double v = z - gz;
+            if (!(std::fabs(v - h) <= atol + 0.0 * std::fabs(h))) flat = false;
+        }
+    if (!flat || h <= 0.0) return false;
+    const double two_h = 2.0 * h;
+    double delta = arc[1] - arc[0];
+    for (size_t i = 1; i + 1 < arc.size(); i++) delta = std::min(delta, arc[i + 1] - arc[i]);
+    if (delta <= 0.5 * two_h) return false;
+    a_eff = std::sqrt(a_w * a_w + two_h * two_h);
+    return true;
+}
+
+// `_image_edge_modes(geom)`: the edges whose own image block the offset
+// route assembles (under `offset_reuse`), never one the near-image fixup
+// corrects; and the starts of those it corrects.
+std::vector<OffsetEdge> image_offset_edges(const Geometry &g, const std::vector<double> &radius_per_wire,
+                                           const FillParams &fp, double gz, std::vector<int64_t> *near_out) {
+    std::vector<int64_t> near;
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (size_t e = 0; e + 1 < g.per_wire[w].edge_offsets.size(); e++) {
+            double a_eff = 0.0;
+            if (near_image_edge(g, radius_per_wire, gz, w, e, a_eff))
+                near.push_back(g.seg_offsets[w] + g.per_wire[w].edge_offsets[e]);
+        }
+    std::vector<OffsetEdge> offset;
+    if (fp.offset_reuse)
+        for (const OffsetEdge &o : offset_edges_of(g, false))
+            if (std::find(near.begin(), near.end(), o.s0) == near.end()) offset.push_back(o);
+    if (near_out) *near_out = near;
+    return offset;
+}
+
 // `_reuse_values(plan, geom, k, ladder, ek)`: each class's (d+1, d+1)
 // moments, the shipped off-edge fill over each group's observer rows against
-// the union of its representatives' sources.
+// the union of its representatives' sources; an image group's (momwire#2063
+// step 2a) against the mirrored sources, as the image fill forms them.
 std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, const std::vector<double> &seg_a,
                                   const FillParams &fp, const EK &ek) {
     const pair_reuse::FamilyPlan &f = plan.fam.at(0);
@@ -534,17 +592,24 @@ std::vector<cdouble> reuse_values(const reuse::Plan &plan, const Geometry &g, co
     Segs s;
     s.l = g.seg_l;
     s.r = g.seg_r;
+    const bool image = reuse::has_image(plan);
+    const Segs img = image ? mirrored(g, fp.image_gz) : Segs();
     for (const pair_reuse::Group &G : f.groups) {
         const std::vector<size_t> obs(G.obs.begin(), G.obs.end()), src(G.src.begin(), G.src.end());
         std::vector<double> a_obs;
         for (size_t i : obs) a_obs.push_back(seg_a[i]);
-        const Block blk = offedge(s.take(obs), s.take(src), a_obs, fp.k, fp.degree, fp.n_qp_pair,
+        const Segs &from = G.block ? img : s;
+        const Block blk = offedge(s.take(obs), from.take(src), a_obs, fp.k, fp.degree, fp.n_qp_pair,
                                   ek_cut(ek, &obs, &src), fp.ladder);
         const size_t M = obs.size() * src.size();
         for (size_t t = 0; t < G.cls.size(); t++) {
             const size_t c = static_cast<size_t>(G.cls[t]), at = static_cast<size_t>(G.at[t]);
             for (size_t pq = 0; pq < dd; pq++) values[c * dd + pq] = blk[pq * M + at];
         }
+    }
+    if (image && fp.held) {
+        fp.held->plan = &plan;
+        fp.held->values = values;
     }
     return values;
 }
@@ -705,6 +770,27 @@ std::shared_ptr<const reuse::Plan> reuse_plan(const Geometry &g, const std::vect
     }
     for (const auto &t : fp.ladder) rg.thresholds.push_back(t.first);
     rg.degree = fp.degree;
+    if (fp.image) {
+        // `_reuse_image_args`: the mirrored end points and each segment's
+        // own-image mode; a declined image census leaves the direct plan.
+        const Segs img = mirrored(g, fp.image_gz);
+        std::vector<int64_t> near;
+        const std::vector<OffsetEdge> offset = image_offset_edges(g, radius_per_wire, fp, fp.image_gz, &near);
+        std::vector<int8_t> mode(static_cast<size_t>(N), reuse::Keyed);
+        for (const EdgeIng &ed : edge_ingredients(g, radius_per_wire)) {
+            int8_t m = reuse::Keyed;
+            for (const OffsetEdge &o : offset)
+                if (o.s0 == ed.s0) m = reuse::OffsetRoute;
+            if (m == reuse::Keyed && std::find(near.begin(), near.end(), ed.s0) != near.end()) m = reuse::OwnPairs;
+            for (int64_t q = ed.s0; q < ed.s1; q++) mode[static_cast<size_t>(q)] = m;
+        }
+        reuse::Geometry ri = rg;
+        ri.img_l = img.l.data();
+        ri.img_r = img.r.data();
+        ri.img_mode = mode.data();
+        std::shared_ptr<const reuse::Plan> p = reuse::plan_for(ri);
+        if (p->declined.empty()) return p;
+    }
     std::shared_ptr<const reuse::Plan> p = reuse::plan_for(rg);
     return p->declined.empty() ? p : nullptr;
 }
@@ -2839,15 +2925,10 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
     std::vector<double> a_row;
     for (size_t w = 0; w < g.per_wire.size(); w++)
         for (int64_t q = 0; q < g.per_wire[w].n_total; q++) a_row.push_back(radius_per_wire[w]);
-    Segs real, img;
+    Segs real;
     real.l = g.seg_l;
     real.r = g.seg_r;
-    img.l = g.seg_l;
-    img.r = g.seg_r;
-    for (int64_t s = 0; s < N; s++) {  // `mirror_positions`: 2 * ground_z - z
-        img.l[3 * s + 2] = 2.0 * gr.ground_z - g.seg_l[3 * s + 2];
-        img.r[3 * s + 2] = 2.0 * gr.ground_z - g.seg_r[3 * s + 2];
-    }
+    const Segs img = mirrored(g, gr.ground_z);
     EK ek;  // `_ek_spec(geom, mirror=True)`: one joint label (momwire#1368)
     if (fp.extended_kernel) {
         ek.on = true;
@@ -2924,43 +3005,15 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
     else
         chunk = std::max<int64_t>(
             1, static_cast<int64_t>(std::floor((swept_mem_mb * 1024 * 1024) / static_cast<double>(row_bytes))));
-    // `_near_image_edge_blocks`: an edge flat at height h above the plane
-    // whose image has come closer than its segments (its a_eff)
     const auto near_image = [&](size_t w, size_t e, double &a_eff) {
-        const WireGeometry &pw = g.per_wire[w];
-        const double a_w = radius_per_wire[w];
-        const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
-        const std::vector<double> &arc = pw.edge_arc_edges[e];
-        const double h = g.seg_l[3 * static_cast<size_t>(s0) + 2] - gr.ground_z;
-        const double atol = std::max(a_w, 1e-12);
-        bool flat = true;
-        for (int64_t s = s0; s < s1; s++)
-            for (double z : {g.seg_l[3 * static_cast<size_t>(s) + 2], g.seg_r[3 * static_cast<size_t>(s) + 2]}) {
-                const double v = z - gr.ground_z;
-                if (!(std::fabs(v - h) <= atol + 0.0 * std::fabs(h))) flat = false;
-            }
-        if (!flat || h <= 0.0) return false;
-        const double two_h = 2.0 * h;
-        double delta = arc[1] - arc[0];
-        for (size_t i = 1; i + 1 < arc.size(); i++) delta = std::min(delta, arc[i + 1] - arc[i]);
-        if (delta <= 0.5 * two_h) return false;
-        a_eff = std::sqrt(a_w * a_w + two_h * two_h);
-        return true;
+        return near_image_edge(g, radius_per_wire, gr.ground_z, w, e, a_eff);
     };
     // momwire#1809 step 2: under `offset_reuse` an offset edge's own image
     // block is assembled from its distinct moments (`_image_offset_block`),
     // not swept; never for an edge the near-image fixup corrects
-    std::vector<OffsetEdge> offset;
-    if (fp.offset_reuse) {
-        std::vector<int64_t> near;
-        for (size_t w = 0; w < g.per_wire.size(); w++)
-            for (size_t e = 0; e + 1 < g.per_wire[w].edge_offsets.size(); e++) {
-                double a_eff = 0.0;
-                if (near_image(w, e, a_eff)) near.push_back(g.seg_offsets[w] + g.per_wire[w].edge_offsets[e]);
-            }
-        for (const OffsetEdge &o : offset_edges_of(g, false))
-            if (std::find(near.begin(), near.end(), o.s0) == near.end()) offset.push_back(o);
-    }
+    const std::vector<OffsetEdge> offset = image_offset_edges(g, radius_per_wire, fp, gr.ground_z, nullptr);
+    // momwire#2063 step 2a: the plan's image block (`_image_reuse_plan`)
+    const reuse::Plan *plan = fp.plan && reuse::has_image(*fp.plan) ? fp.plan.get() : nullptr;
     std::vector<int64_t> cuts;
     for (const OffsetEdge &o : offset) {
         cuts.push_back(o.s0);
@@ -2983,8 +3036,42 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
                 out[static_cast<size_t>(i * (c1 - c0) + (j - c0))] = W[static_cast<size_t>(i * N + j)];
         return out;
     };
+    std::vector<cdouble> values;
+    reuse::ImageWindow iw;
+    if (plan != nullptr) {
+        // the direct fill's values of this plan and k, or this fill's own
+        if (fp.held && fp.held->plan == plan)
+            values.swap(fp.held->values);
+        else
+            values = reuse_values(*plan, g, a_row, fp, ek);
+        if (fp.held) *fp.held = FillParams::HeldValues();
+        iw.plan = plan;
+        iw.values = values.data();
+        iw.d1 = nd;
+        iw.zero_class = reuse::sentinel_class(*plan);
+        reuse::check_image_window(iw);
+    }
     for (int64_t i0 = 0; i0 < N; i0 += chunk) {
         const int64_t i1 = std::min(i0 + chunk, N);
+        if (plan != nullptr) {
+            // `_image_block_plan`: the chunk against every source from the
+            // class values, each pair weighted by its own (w_A, w_Phi), an
+            // offset edge's own block zero (the offset route's)
+            std::vector<cdouble> wA, wP;
+            weights(i0, i1, wA, wP);
+            using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
+            const CC wa = borrow(wA, {static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(N)});
+            const CC wp = borrow(wP, {static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(N)});
+            const std::vector<int64_t> m_idx = touching(i0, i1);
+            assemble_Z_bspline_weighted_windowed_tiles(
+                [&iw](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cdouble *out) {
+                    reuse::image_tile(iw, rows, nr, cols, nc, out);
+                },
+                sa, pa, wa, wp, borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())}),
+                borrow(all_n, {static_cast<nd::ssize_t>(all_n.size())}), N, i0, i1, 0, N, omega, eps, mu,
+                std::complex<double>(-1.0, 0.0), Za, 0);
+            continue;
+        }
         if (!offset.empty()) {
             // `_image_block_split`: the chunk's rows run by run, a run on an
             // offset edge skipping that edge's own columns
@@ -3025,6 +3112,7 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
         weights(i0, i1, wA, wP);
         assemble(J, wA, wP, touching(i0, i1), all_n, i0, i1, 0, N);
     }
+    std::vector<cdouble>().swap(values);
     // `_image_offset_block`, each offset edge: the image kernel's own rows
     // (one, the last too for "hankel"), by offset, with the ground's weights
     for (const OffsetEdge &o : offset) {
