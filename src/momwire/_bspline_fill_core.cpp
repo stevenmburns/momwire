@@ -778,7 +778,8 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
     if (fp.plan) {
         // momwire#2063: every pair gathered from its class's value, each
         // class evaluated once, by the off-edge fill or (a same-edge class,
-        // step 3) the same-edge routine: no overwrite follows
+        // step 3) the same-edge routine: no overwrite follows. The tensor
+        // route's Z takes `compute_Z_tensor_reuse` instead, never this tensor
         const std::vector<cdouble> values = reuse_values(*fp.plan, g, seg_a, fp, whole_ek(fp, seg_a));
         J = Block(static_cast<size_t>(nd * nd) * N * N, false);
         reuse::gather(*fp.plan, 0, static_cast<int64_t>(N), values.data(), nd, J.data());
@@ -1394,6 +1395,40 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
             }
         }
     }
+    return Z;
+}
+
+std::vector<cdouble> compute_Z_tensor_reuse(const Geometry &g, const Basis &b,
+                                            const std::vector<double> &radius_per_wire, const FillParams &fp,
+                                            double omega, double eps, double mu) {
+    if (!fp.plan) throw std::invalid_argument("bspline: the tensor route's tiled fill needs a plan");
+    const int nd = fp.degree + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> seg_a;  // `_seg_radius`
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t s = 0; s < g.per_wire[w].n_total; s++) seg_a.push_back(radius_per_wire[w]);
+    const std::vector<cdouble> values = reuse_values(*fp.plan, g, seg_a, fp, whole_ek(fp, seg_a));
+    std::vector<cdouble> Z(static_cast<size_t>(n_basis * n_basis), cdouble(0.0, 0.0));
+    nd::array_t<std::complex<double>> Za = borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis),
+                                                          static_cast<nd::ssize_t>(n_basis)});
+    const CI sa = borrow(b.supp_seg, {static_cast<nd::ssize_t>(n_basis), nd});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
+    const CF ta = borrow(g.tangents, {static_cast<nd::ssize_t>(N), 3});
+    std::vector<int64_t> all_n(static_cast<size_t>(n_basis));
+    for (int64_t m = 0; m < n_basis; m++) all_n[static_cast<size_t>(m)] = m;
+    const CI na = borrow(all_n, {static_cast<nd::ssize_t>(n_basis)});
+    // `_tensor_reuse_Z`: one window, rows [0, N), every pair its class's
+    // value, a near same-edge single included (no own band)
+    reuse::Window win;
+    win.plan = fp.plan.get();
+    win.values = values.data();
+    win.d1 = nd;
+    reuse::check_window(win);
+    assemble_Z_bspline_windowed_tiles(
+        [&win](const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cdouble *out) {
+            reuse::window_tile(win, rows, nr, cols, nc, out);
+        },
+        sa, pa, ta, na, na, 0, N, 0, N, omega, eps, mu, Za, 0);
     return Z;
 }
 
