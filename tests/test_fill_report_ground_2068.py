@@ -207,21 +207,17 @@ def test_remainder_reuse_saves_kernel_work():
     reconciles(s.fill_report()["reuse"])
 
 
-def test_offset_edges_count_as_reuse_in_the_ground_families():
-    """Under `offset_reuse` an edge's own image block is spread from 2n - 1
-    distinct values: the image family counts them computed, beside the
-    plan's own classes (momwire#2063 step 2a)."""
+def test_an_edges_own_image_block_counts_by_the_plan():
+    """An edge's own image block is keyed like the rest of the image block
+    (momwire#2063 step 3 retired its offset spread): the image family counts
+    the plan's image classes computed and every other image pair reused."""
     deck = row()
-    before = bspline_mod.IMAGE_OFFSET_EDGES
     s = solve(deck, SOMMERFELD)
-    assert bspline_mod.IMAGE_OFFSET_EDGES - before == len(deck["wires"])
     reuse = s.fill_report()["reuse"]
     image = reuse["families"]["image"]
-    n = deck["n_per_edge_per_wire"][0][0]
     st = s._reuse_plan(s._build_geometry()).stats()
-    assert image["computed"] == st["classes_block"][1] + len(deck["wires"]) * (
-        2 * n - 1
-    )
+    assert image["computed"] == st["classes_block"][1]
+    assert image["reused"] == image["pairs"] - image["computed"]
     reconciles(reuse)
 
 

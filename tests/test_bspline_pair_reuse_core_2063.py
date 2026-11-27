@@ -6,8 +6,9 @@
   gathers exactly the fill's moments copied block for block, so the gather
   and the representatives' grouped calls are wiring, to the bit;
 - the census keys what the moments read: congruent pairs share a class, the
-  same-edge pairs one sentinel, near pairs their own, and a transpose shares
-  its pair's class only at equal radii;
+  same-edge pairs classes apart (the same-edge routine's, momwire#2063 step
+  3), near pairs their own, and a transpose shares its pair's class only at
+  equal radii;
 - the declines are the core's sentences, and a class costs its layout;
 - the remainder's plan (momwire#2063 step 2b) shares a pair's class with
   its reverse and with its moves along the plane, and reads the height sum.
@@ -64,6 +65,14 @@ def _inputs(s):
     return geom, edge, ek
 
 
+def _edge_h(s, geom):
+    """Each segment's edge h as the same-edge routine reads it."""
+    out = np.zeros(int(geom["n_segs_total"]))
+    for _w, sl, arc, _a in s._edge_ingredients(geom):
+        out[sl] = arc[1] - arc[0]
+    return out
+
+
 def _plan(s, thresholds=()):
     geom, edge, ek = _inputs(s)
     return bs._acc.bspline_reuse_plan(
@@ -76,6 +85,7 @@ def _plan(s, thresholds=()):
         None if ek.b_j is None else np.asarray(ek.b_j, dtype=float),
         list(thresholds),
         2,
+        edge_h=_edge_h(s, geom),
     )
 
 
@@ -140,12 +150,19 @@ def test_the_census_keys_what_the_moments_read():
     st = plan.stats()
     N = st["n_seg"]
     assert st["declined"] is None
-    assert st["same_edge_pairs"] == sum(n * n for n in (22, 21) + (20,) * 8)
-    assert st["near_pairs"] == 0  # 0.2 lambda apart: nothing near
+    sizes = (22, 21) + (20,) * 8
+    assert st["same_edge_pairs"] == sum(n * n for n in sizes)
+    # 0.2 lambda apart, nothing near between elements; within one (h > a),
+    # the pairs under four segment lengths apart, |j - i| <= 3, are near
+    # singles of the same-edge routine.
+    assert st["near_pairs"] == sum(7 * n - 12 for n in sizes)
     # Every off-edge class is evaluated in a group; most pairs are copies.
-    far = st["classes"] - 1
+    far = st["classes"] - st["same_edge_classes"]
     assert far < (N * N - st["same_edge_pairs"]) // 3
-    assert st["rep_evals"] >= st["classes"]
+    assert st["rep_evals"] >= far
+    # The same-edge classes: each element's offsets past the near band once
+    # (with reciprocity), the identical directors sharing theirs.
+    assert st["same_edge_classes"] - st["near_pairs"] == (22 - 4) + (21 - 4) + (20 - 4)
     # The values the census shares agree to the key's rounding.
     vals = _values(s, plan)
     geom = s._build_geometry()
@@ -270,5 +287,5 @@ def test_the_wire_map_counts_every_pair_once():
     wires = np.repeat(np.arange(5, dtype=np.int32), sizes)
     m = plan.ref().wire_map(wires, 5)
     assert m.sum() == N * N
-    assert m[:, :, 2].sum() == st["same_edge_pairs"] + st["near_pairs"]
-    assert m[:, :, 0].sum() == st["classes"] - 1 - st["near_pairs"]
+    assert m[:, :, 2].sum() == st["near_pairs"]
+    assert m[:, :, 0].sum() == st["classes"] - st["near_pairs"]

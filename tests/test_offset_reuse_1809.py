@@ -1,20 +1,26 @@
-"""bs2's `offset_reuse`: a uniform straight edge's same-edge reg moments filled
-by segment offset (momwire#1809).
+"""bs2's `offset_reuse`: a uniform edge's same-edge reg moments filled by
+segment offset (momwire#1809), inside the same-edge kernel (R).
 
 On a uniform edge the smooth kernel's moment between segments i and j depends
 on j - i alone, so the (N, N) block has 2N - 1 distinct entries. With
 `offset_reuse=True` they come from one row of a 2N - 1 segment edge and the
-block is a strided view of it. Off -- the default, and the standalone
-executable's only fill -- the dense table is the fill as it was, bit for bit.
+block is a strided view of it. Off -- the default -- the dense table is the
+fill as it was, bit for bit.
 
-So:
+Its step-2 mechanisms (the free-space offset block, the image offset block,
+the Sommerfeld remainder's offset fold, each spreading one row of an edge's
+own moments by index) are gone since momwire#2063 step 3; `pair_reuse`'s
+census serves those blocks, by the same-edge routine
+(`test_bs2_census_same_edge_2063.py`). Here:
 
 - off is the dense fill (the existing suite holds that), and on a graded edge
   `offset_reuse=True` changes nothing, because nothing qualifies;
 - on, the route runs (a counter, since an untaken route agrees trivially) and
   Z moves at the evaluation-order roundoff the same moments summed in another
   order give, in free space, with the extended kernel, over Sommerfeld ground,
-  on the chunked route and in a frequency sweep.
+  on the chunked route and in a frequency sweep;
+- the decks the offset blocks served are the census's now: an edge's own
+  free-space, image and remainder blocks are classes of its plan, and agree.
 """
 
 from __future__ import annotations
@@ -64,12 +70,6 @@ def _Z(s):
     return s._compute_Z_operator(geom, supp, polys)
 
 
-def _FREE_EDGES():
-    import momwire.bspline as B
-
-    return B.FREE_OFFSET_EDGES
-
-
 def _rel(Z1, Z0):
     return float(np.max(np.abs(Z1 - Z0)) / np.max(np.abs(Z0)))
 
@@ -86,11 +86,9 @@ def _rel(Z1, Z0):
 )
 def test_on_runs_and_moves_z_by_roundoff(kw):
     Z0 = _Z(_solver(81, False, **kw))
-    c0 = K.REG_TOEPLITZ_EDGES + _FREE_EDGES()
+    c0 = K.REG_TOEPLITZ_EDGES
     Z1 = _Z(_solver(81, True, **kw))
-    # The Toeplitz reg form was built, or (since step 2, on a whole-mesh
-    # fill) the edge's own block was assembled by offset instead.
-    assert K.REG_TOEPLITZ_EDGES + _FREE_EDGES() > c0
+    assert K.REG_TOEPLITZ_EDGES > c0  # the Toeplitz reg form was built
     assert _rel(Z1, Z0) <= 1e-13
 
 
@@ -131,31 +129,32 @@ def test_the_scope_ends_with_the_fill():
     assert K.REG_TOEPLITZ_EDGES == c0
 
 
-# -- step 2: the Sommerfeld remainder's own block of an offset edge ----------
+# -- the step-2 decks, served by the census since momwire#2063 step 3 ---------
 
 import momwire.bspline as _B  # noqa: E402
+from momwire import _features  # noqa: E402
+
+DRIFT = _features.FEATURES["pair_reuse"].drift
 
 
-def _ground_solver(wires, segs, reuse, **kw):
-    return BSplineSolver(
-        wires=wires,
-        n_per_edge_per_wire=segs,
-        feeds=[(0, None, 1.0 + 0j)],
-        wavelength=LAM,
-        wire_radius=0.001,
-        offset_reuse=reuse,
-        ground_z=0.0,
-        ground_eps=(13.0, 0.005),
-        ground_model="sommerfeld",
-        **kw,
-    )
+@pytest.fixture
+def _small_decks():
+    """These decks are below the census's small-deck threshold; the census is
+    what is under test, so it runs on them."""
+    acc = _B._acc
+    if acc is None or not hasattr(acc, "bspline_reuse_set_routine_probe"):
+        pytest.skip("bs2's pair-reuse census is not built")
+    acc.bspline_reuse_set_small_deck_segs(0)
+    acc.pair_reuse_cap_compression(1)
+    yield
+    acc.bspline_reuse_set_small_deck_segs(-1)
+    acc.pair_reuse_cap_compression(0)
 
 
 _GROUND_DECKS = {
     # horizontal: the remainder's pair (i, j) depends on j - i
     "horizontal": ([np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]])], [[41]]),
-    # low enough that #1189 raises some pairs' order: those are corrected
-    # after the offset fill, as after the dense one
+    # low enough that #1189 raises some pairs' order
     "horizontal_low": ([np.array([[0.0, -5.0, 0.05], [0.0, 5.0, 0.05]])], [[41]]),
     # vertical: on i + j
     "vertical": ([np.array([[0.0, 0.0, 0.5], [0.0, 0.0, 10.5]])], [[41]]),
@@ -164,7 +163,7 @@ _GROUND_DECKS = {
         [np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 6.0], [20.0, 0.0, 6.0]])],
         [[24, 41]],
     ),
-    # two separate offset edges, and the cross block between them
+    # two separate edges, and the cross block between them
     "two_wires": (
         [
             np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]]),
@@ -172,125 +171,63 @@ _GROUND_DECKS = {
         ],
         [[31], [31]],
     ),
-}
-
-
-@pytest.mark.parametrize("deck", sorted(_GROUND_DECKS))
-def test_the_remainder_by_offset_runs_and_moves_z_by_roundoff(deck):
-    wires, segs = _GROUND_DECKS[deck]
-    Z0 = _Z(_ground_solver(wires, segs, False))
-    c0, i0 = _B.REMAINDER_OFFSET_EDGES, _B.IMAGE_OFFSET_EDGES
-    s1 = _ground_solver(wires, segs, True)
-    Z1 = _Z(s1)
-    assert _B.REMAINDER_OFFSET_EDGES > c0  # the offset route ran
-    # ... and on the image, except where the near-image fixup owns the block
-    assert (_B.IMAGE_OFFSET_EDGES > i0) == (deck != "horizontal_low")
-    assert _rel(Z1, Z0) <= 1e-13
-    z0 = _ground_solver(wires, segs, False).compute_impedance()[0]
-    z1 = _ground_solver(wires, segs, True).compute_impedance()[0]
-    assert abs(z1 - z0) / abs(z0) <= 1e-12
-    if deck == "horizontal_low":
-        orders = s1._last_remainder_orders
-        assert len(orders) > 1  # raised pairs were present, and corrected
-
-
-@pytest.mark.parametrize("deck", ["horizontal", "vertical", "inverted_l"])
-def test_the_image_by_offset_over_a_perfect_ground(deck):
-    """The image term alone (no remainder over PEC) by offset."""
-    wires, segs = _GROUND_DECKS[deck]
-
-    def pec(reuse):
-        return BSplineSolver(
-            wires=wires,
-            n_per_edge_per_wire=segs,
-            feeds=[(0, None, 1.0 + 0j)],
-            wavelength=LAM,
-            wire_radius=0.001,
-            offset_reuse=reuse,
-            ground_z=0.0,
-        )
-
-    Z0 = _Z(pec(False))
-    i0 = _B.IMAGE_OFFSET_EDGES
-    Z1 = _Z(pec(True))
-    assert _B.IMAGE_OFFSET_EDGES > i0
-    assert _rel(Z1, Z0) <= 1e-13
-
-
-def test_a_sloped_edge_keeps_the_dense_remainder():
-    """Height sum and separation both vary along a sloped edge: nothing
-    repeats, and the remainder is the dense fill."""
-    wires = [np.array([[0.0, 0.0, 1.0], [8.0, 0.0, 7.0]])]
-    c0, i0 = _B.REMAINDER_OFFSET_EDGES, _B.IMAGE_OFFSET_EDGES
-    _Z(_ground_solver(wires, [[41]], True))
-    assert _B.REMAINDER_OFFSET_EDGES == c0
-    assert _B.IMAGE_OFFSET_EDGES == i0
-
-
-def test_the_full_block_and_the_fold_agree():
-    """`_Z_sommerfeld_remainder` (the block) and `_into` (folded into T) take
-    the same offset route and land the same numbers."""
-    wires, segs = _GROUND_DECKS["inverted_l"]
-    s = _ground_solver(wires, segs, True)
-    cap = {}
-    orig = BSplineSolver._Z_sommerfeld_remainder_into
-
-    def spy(self, T, sign, geom, supp, polys, eps_t):
-        cap.update(geom=geom, supp=supp, polys=polys, eps_t=eps_t)
-        return orig(self, T, sign, geom, supp, polys, eps_t)
-
-    try:
-        BSplineSolver._Z_sommerfeld_remainder_into = spy
-        _Z(s)
-    finally:
-        BSplineSolver._Z_sommerfeld_remainder_into = orig
-    g, supp, polys, eps_t = cap["geom"], cap["supp"], cap["polys"], cap["eps_t"]
-    with K.offset_reuse_scope(True):
-        Q = s._Z_sommerfeld_remainder(g, supp, polys, eps_t)
-        T = np.zeros_like(Q)
-        s._Z_sommerfeld_remainder_into(T, 1, g, supp, polys, eps_t)
-    assert np.array_equal(T, Q)
-
-
-# -- step 2: an offset edge's own free-space block ---------------------------
-
-_FREE_DECKS = {
-    "horizontal": ([np.array([[0.0, -5.0, 10.0], [0.0, 5.0, 10.0]])], [[41]]),
-    # free space has no preferred direction: a sloped edge qualifies here
+    # free space has no preferred direction: a sloped edge
     "sloped": ([np.array([[0.0, 0.0, 1.0], [8.0, 0.0, 7.0]])], [[41]]),
-    # two uniform pieces at different segment lengths, joined
-    "graded": (
-        [np.array([[0.0, -5.0, 10.0], [0.0, 0.1, 10.0], [0.0, 5.0, 10.0]])],
-        [[27, 54]],
-    ),
-    "inverted_l": _GROUND_DECKS["inverted_l"],
-    "two_wires": _GROUND_DECKS["two_wires"],
+}
+_GROUNDS = {
+    "free": {},
+    "pec": {"ground_z": 0.0},
+    "sommerfeld": {
+        "ground_z": 0.0,
+        "ground_eps": (13.0, 0.005),
+        "ground_model": "sommerfeld",
+    },
 }
 
 
-@pytest.mark.parametrize("ek", [False, True], ids=["thin", "ek"])
-@pytest.mark.parametrize("deck", sorted(_FREE_DECKS))
-def test_the_free_space_block_by_offset(deck, ek):
-    wires, segs = _FREE_DECKS[deck]
+@pytest.mark.usefixtures("_small_decks")
+@pytest.mark.parametrize("ground", sorted(_GROUNDS))
+@pytest.mark.parametrize("deck", sorted(_GROUND_DECKS))
+def test_the_census_serves_an_edges_own_blocks(deck, ground):
+    """An edge's own blocks, which the offset routes spread by index, are
+    the census's classes now (the same-edge routine's in the direct block,
+    the image's), and on against off holds the drift, `offset_reuse` on or
+    off beside it."""
+    wires, segs = _GROUND_DECKS[deck]
 
-    def free(reuse):
+    def solver(**kw):
         return BSplineSolver(
             wires=wires,
             n_per_edge_per_wire=segs,
             feeds=[(0, None, 1.0 + 0j)],
             wavelength=LAM,
             wire_radius=0.001,
-            offset_reuse=reuse,
-            extended_kernel=ek,
+            **_GROUNDS[ground],
+            **kw,
         )
 
-    Z0 = _Z(free(False))
-    c0 = _B.FREE_OFFSET_EDGES
-    Z1 = _Z(free(True))
-    assert _B.FREE_OFFSET_EDGES > c0  # the offset block was assembled
-    assert _rel(Z1, Z0) <= 1e-14
-    z0 = free(False).compute_impedance()[0]
-    z1 = free(True).compute_impedance()[0]
-    # Z moves by roundoff (<= 6e-16 measured); the extended kernel's worse
-    # conditioning carries that to ~1.3e-12 in Zin on these decks.
-    assert abs(z1 - z0) / abs(z0) <= (3e-12 if ek else 1e-12)
+    z0 = solver().compute_impedance()[0]
+    s = solver(pair_reuse=True)
+    z1 = s.compute_impedance()[0]
+    st = s._reuse_plan(s._build_geometry()).stats()
+    assert 0 < st["same_edge_classes"] < st["same_edge_pairs"] // 2, st
+    assert abs(z1 - z0) / abs(z0) <= DRIFT
+    z2 = solver(pair_reuse=True, offset_reuse=True).compute_impedance()[0]
+    assert abs(z2 - z0) / abs(z0) <= DRIFT + _features.FEATURES["offset_reuse"].drift
+
+
+def test_no_offset_block_is_left():
+    """The offset blocks' routes and their counters are gone."""
+    for name in (
+        "FREE_OFFSET_EDGES",
+        "IMAGE_OFFSET_EDGES",
+        "REMAINDER_OFFSET_EDGES",
+    ):
+        assert not hasattr(_B, name)
+    for name in (
+        "_free_offset_edges",
+        "_offset_edges",
+        "_remainder_offset_fold",
+        "_image_offset_block",
+    ):
+        assert not hasattr(BSplineSolver, name)

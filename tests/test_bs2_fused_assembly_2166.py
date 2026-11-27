@@ -6,8 +6,9 @@ the windowed assembly over it. `plan.assemble` fills each tile of Z from the
 class values as it runs instead (`assemble_Z_bspline_windowed_tiles`,
 `_bspline_core.h`), the shape razor2p's `assemble_rows` has (momwire#2144):
 
-- a window assembled is the gathered window's sum, bit for bit, its own
-  edge's columns the fill's own moments or the offset route's zero;
+- a window assembled is the gathered window's sum, bit for bit, its near
+  same-edge singles the fill's own moments (momwire#2063 step 3) or the
+  class values;
 - the fill runs it (counted by the kernel, not by the fill's report), and
   is the fill the gathered windows give, bit for bit;
 - a reciprocal member copied untransposed in the fused source moves Z, and
@@ -52,7 +53,7 @@ def _fresh():
     acc.bspline_reuse_cache_clear()
 
 
-def _yagi(D=8, n=21, **kw):
+def _yagi(D=8, n=21, radius=0.006, **kw):
     """Reflector, driver and D identical directors, 0.2 lambda apart: one
     radius, so reciprocal pairs share classes (code 1, the transpose)."""
     Ld = 0.47 * LAM
@@ -62,12 +63,14 @@ def _yagi(D=8, n=21, **kw):
         for i, (L, _n) in enumerate(elems)
     ]
     kw.setdefault("pair_reuse", True)
+    # past the tensor's budget (203 segments: 6 MB): the chunked fill
+    kw.setdefault("swept_mem_mb", 1)
     return BSplineSolver(
         wires=wires,
         n_per_edge_per_wire=[[m] for _L, m in elems],
         feeds=[(1, None, 1.0 + 0j)],
         wavelength=LAM,
-        wire_radius=0.006,
+        wire_radius=radius,
         **kw,
     )
 
@@ -94,8 +97,8 @@ def _ran(before, after):
 
 class _Gathered:
     """A plan whose `assemble` is the route it replaced: `gather` the window,
-    overwrite its own columns, `assemble_Z_bspline_windowed` (bs2's
-    `_reuse_block` before momwire#2166, verbatim in what it computes)."""
+    overwrite its near same-edge singles with `own`, `assemble_Z_bspline_windowed`
+    (bs2's `_reuse_block` before momwire#2166 in what it computes)."""
 
     def __init__(self, plan, calls):
         self._plan = plan
@@ -105,14 +108,22 @@ class _Gathered:
         return getattr(self._plan, name)
 
     def assemble(
-        self, values, r0, r1, o0, o1, own, supp, polys, tan, m_idx, n_idx, *rest
+        self, values, r0, r1, own, lo, hi, supp, polys, tan, m_idx, n_idx, *rest
     ):
         omega, eps, mu, Z, cancel = rest
         d1 = values.shape[1]
         n = tan.shape[0]
         J = np.empty((d1, d1, r1 - r0, n), dtype=np.complex128)
         self._plan.gather(values, r0, r1, J)
-        J[:, :, :, o0:o1] = 0.0 if own is None else own
+        if own is not None:
+            for i in range(r1 - r0):
+                if hi[i] <= lo[i]:
+                    continue
+                near = self._plan.near_same_edge_mask(r0 + i, r0 + i + 1, lo[i], hi[i])[
+                    0
+                ]
+                cols = lo[i] + np.flatnonzero(near)
+                J[:, :, i, cols] = own[:, :, i, cols - lo[i]]
         bs._acc.assemble_Z_bspline_windowed(
             J, supp, polys, tan, m_idx, n_idx, r0, r1, 0, n, omega, eps, mu, Z, cancel
         )
@@ -150,29 +161,40 @@ def _window_inputs(s):
     return geom, plan, values, supp, polys, tan, ladder, ek
 
 
-@pytest.mark.parametrize("own", ["moments", "zero"])
+@pytest.mark.parametrize("own", ["moments", "classes"])
 def test_a_window_assembled_is_the_gathered_windows_sum_to_the_bit(own):
-    """Rows 5..17 of the driver's edge, its own columns the fill's moments
-    (or zero), added into a Z already holding numbers: `plan.assemble` adds
-    exactly what the gathered window adds."""
-    s = _yagi()
+    """Rows 5..17 of the driver's edge, its near same-edge singles the fill's
+    moments (or the class values), added into a Z already holding numbers:
+    `plan.assemble` adds exactly what the gathered window adds. The wires
+    are thicker than their segments are long (h < a), so the near singles
+    have a band (the hairpin bridge's case)."""
+    s = _yagi(radius=0.6)
     geom, plan, values, supp, polys, tan, ladder, ek = _window_inputs(s)
     sl = s._same_edge_slices(geom)[1]
     r0, r1 = sl.start + 5, sl.start + 17
+    band_lo, band_hi = plan.same_edge_bands()
+    lo = np.ascontiguousarray(band_lo[r0:r1])
+    hi = np.ascontiguousarray(band_hi[r0:r1])
+    b0, b1 = int(lo.min()), int(hi.max())
+    assert sl.start <= b0 < b1 <= sl.stop
     own_J = None
     if own == "moments":
         own_J = bs._seg_seg_full_moments_offedge(
             geom["seg_l"][r0:r1],
             geom["seg_r"][r0:r1],
-            geom["seg_l"][sl],
-            geom["seg_r"][sl],
+            geom["seg_l"][b0:b1],
+            geom["seg_r"][b0:b1],
             s._seg_radius(geom)[r0:r1],
             s.k,
             s.degree,
             s.n_qp_pair,
-            ek=bs._ek_slice(ek, rows=slice(r0, r1), cols=sl),
+            ek=bs._ek_slice(ek, rows=slice(r0, r1), cols=slice(b0, b1)),
             ladder=ladder,
         )
+        band = np.zeros((3, 3, r1 - r0, int((hi - lo).max())), dtype=np.complex128)
+        for i in range(r1 - r0):
+            band[:, :, i, : hi[i] - lo[i]] = own_J[:, :, i, lo[i] - b0 : hi[i] - b0]
+        own_J = band
     nb = supp.shape[0]
     m_idx = np.nonzero(((supp >= r0) & (supp < r1)).any(axis=1))[0].astype(np.int64)
     all_n = np.arange(nb, dtype=np.int64)
@@ -184,49 +206,24 @@ def test_a_window_assembled_is_the_gathered_windows_sum_to_the_bit(own):
     ref = Z0.copy(order="F")
     calls = []
     _Gathered(plan, calls).assemble(
-        values,
-        r0,
-        r1,
-        sl.start,
-        sl.stop,
-        own_J,
-        supp,
-        polys,
-        tan,
-        m_idx,
-        all_n,
-        *args,
-        ref,
-        0,
+        values, r0, r1, own_J, lo, hi, supp, polys, tan, m_idx, all_n, *args, ref, 0
     )
     got = Z0.copy(order="F")
     before = _counts()
     plan.assemble(
-        values,
-        r0,
-        r1,
-        sl.start,
-        sl.stop,
-        own_J,
-        supp,
-        polys,
-        tan,
-        m_idx,
-        all_n,
-        *args,
-        got,
+        values, r0, r1, own_J, lo, hi, supp, polys, tan, m_idx, all_n, *args, got
     )
     assert _ran(before, _counts()) == 1
     assert got.tobytes() == ref.tobytes()
     assert not np.array_equal(got, Z0)
 
 
-@pytest.mark.parametrize("swept_mem_mb", [256, 1], ids=["edge-windows", "chopped-rows"])
+@pytest.mark.parametrize("swept_mem_mb", [1, 2])
 @pytest.mark.parametrize("ek", [False, True])
 def test_the_fill_is_the_gathered_fill_to_the_bit(ek, swept_mem_mb, monkeypatch):
-    """The chunked fill with the plan: every window piece through the fused
-    assembly (the kernel's count), and Z the gathered windows' to the bit.
-    `swept_mem_mb=1` cuts row windows inside an edge as well as at its ends."""
+    """The chunked fill with the plan: every observer window through the
+    fused assembly (the kernel's count), and Z the gathered windows' to the
+    bit; the windows are the sweep's, cut inside the edges."""
     kw = {"extended_kernel": ek, "swept_mem_mb": swept_mem_mb}
     before = _counts()
     Z = _fill(_yagi(**kw))
@@ -241,9 +238,7 @@ def test_the_fill_is_the_gathered_fill_to_the_bit(ek, swept_mem_mb, monkeypatch)
     with monkeypatch.context() as m:
         m.setattr(BSplineSolver, "_reuse_plan", wrap)
         ref = _fill(_yagi(**kw))
-    assert pieces == len(calls) >= 10
-    if swept_mem_mb == 1:
-        assert any(r1 - r0 < 19 for r0, r1 in calls), "no window inside an edge"
+    assert pieces == len(calls) >= 2
     assert Z.tobytes() == ref.tobytes()
     assert (
         _moved(Z, _fill(_yagi(pair_reuse=False, offset_reuse=False, **kw))) <= Z_DRIFT
@@ -260,7 +255,7 @@ def test_degree_one_is_the_gathered_fill_too(gathered):
         m.setattr(BSplineSolver, "_reuse_plan", _REAL_REUSE_PLAN)
         before = _counts()
         Z = _fill(_yagi(degree=1))
-        assert _ran(before, _counts()) == n_gathered >= 10
+        assert _ran(before, _counts()) == n_gathered >= 2
     assert Z.tobytes() == ref.tobytes()
 
 
@@ -313,39 +308,29 @@ def test_a_small_deck_still_declines():
     assert _ran(before, _counts()) > 0
 
 
-def test_a_window_off_its_own_edge_is_refused():
+def test_a_window_out_of_range_is_refused():
     s = _yagi()
     geom, plan, values, supp, polys, tan, *_ = _window_inputs(s)
     sl = s._same_edge_slices(geom)[1]
     nb = supp.shape[0]
+    n = tan.shape[0]
     Z = np.zeros((nb, nb), dtype=complex)
     idx = np.arange(nb, dtype=np.int64)
     args = (float(s.omega), float(s.eps), float(s.mu), Z)
-    for r0, r1 in ((sl.start - 1, sl.start + 3), (sl.stop - 2, sl.stop + 1)):
-        with pytest.raises(ValueError, match="rows must lie on its own edge"):
-            plan.assemble(
-                values,
-                r0,
-                r1,
-                sl.start,
-                sl.stop,
-                None,
-                supp,
-                polys,
-                tan,
-                idx,
-                idx,
-                *args,
-            )
-    bad = np.zeros((3, 3, 4, sl.stop - sl.start + 1), dtype=complex)
+    with pytest.raises(ValueError, match="rows out of range"):
+        plan.assemble(
+            values, n - 2, n + 1, None, None, None, supp, polys, tan, idx, idx, *args
+        )
+    bad = np.zeros((3, 3, 4, 5), dtype=complex)
+    lo = np.full(3, sl.start, dtype=np.int64)  # three rows' bands for four rows
     with pytest.raises(ValueError, match="own is"):
         plan.assemble(
             values,
             sl.start,
             sl.start + 4,
-            sl.start,
-            sl.stop,
             bad,
+            lo,
+            lo + 5,
             supp,
             polys,
             tan,
@@ -358,8 +343,8 @@ def test_a_window_off_its_own_edge_is_refused():
             values[:-1],
             sl.start,
             sl.start + 4,
-            sl.start,
-            sl.stop,
+            None,
+            None,
             None,
             supp,
             polys,
@@ -370,12 +355,14 @@ def test_a_window_off_its_own_edge_is_refused():
         )
 
 
-def test_pieces_are_the_edges_cut_by_the_windows():
-    """`_reuse_block` cuts each observer window at the edges: with one window
-    for the whole mesh, one piece per edge."""
+def test_the_windows_are_the_sweeps():
+    """`_reuse_block` takes the sweep's observer windows whole (momwire#2063
+    step 3: no same-edge column is cut out, so no window is cut at the
+    edges): one fused call per window."""
     s = _yagi()
     geom = s._build_geometry()
-    edges = s._same_edge_slices(geom)
+    n = int(geom["n_segs_total"])
+    chunk = bs._schedule.mb_rows(s.swept_mem_mb, 9 * n * 16)
     before = _counts()
     _fill(s)
-    assert _ran(before, _counts()) == len(edges)
+    assert _ran(before, _counts()) == len(range(0, n, chunk)) >= 2
