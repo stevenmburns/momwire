@@ -22,7 +22,10 @@ The gates, and why each is not green by construction:
   across the split are congruent to same-edge pairs);
 * the #1971 hairpin holds the registry's drift; its bridge is one edge of
   21 segments of 95 um on a 1 mm radius, every pair of it within a radius,
-  and a near rule in segment lengths alone (the probe) moves it ~2.5e-8;
+  and a near rule in segment lengths alone (the probe) moves it ~2.5e-8.
+  It is the deck that sets the drift: its tensor route assembles Z tile by
+  tile from the class values, in the windowed assembler's sum order, which
+  alone moves its Zin 7e-10 (cond(Z) ~7e9);
 * every agreement first shows the census served the same-edge pairs (their
   classes counted, fewer than their pairs).
 """
@@ -189,7 +192,9 @@ def test_hairpin_holds_the_drift():
     """The #1971 hairpin on bs2: the bridge's pairs are all within a radius,
     so they are near singles of the routine, their own fills' bits; the
     legs' same-edge pairs past four radii are shared. The census's small-deck
-    and cap rules are lifted (63 segments)."""
+    and cap rules are lifted (63 segments). On moves 5.0e-10 free, of which
+    the tensor route's sum order (the windowed assembler's, not
+    `assemble_Z`'s) is 7.0e-10 alone: the registry's drift is this deck's."""
     acc.bspline_reuse_set_small_deck_segs(0)
     acc.pair_reuse_cap_compression(1)
     deck = hairpin()

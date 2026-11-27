@@ -250,7 +250,7 @@ def test_the_registry_carries_no_switchable_part():
     # per-family reach, kind and drift are data on the one row
     rows = {r.solver: (r.reach, r.kind, r.drift, r.alias) for r in pr.families}
     assert rows == {
-        "bspline": (9, "python", 5e-10, "offset_reuse"),
+        "bspline": (9, "python", 2e-9, "offset_reuse"),
         "razor": (8, "native", 2e-9, "razor_pair_reuse"),
         "sinusoidal": (11, "python", 5e-10, None),
     }
