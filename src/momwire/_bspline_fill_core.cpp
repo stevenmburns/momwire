@@ -344,8 +344,7 @@ bool is_toeplitz(const std::vector<double> &arc) {
 // ---------------------------------------------------------------------------
 
 // `_REG_TOEPLITZ_MIN_N`: under `offset_reuse`, a uniform edge of this many
-// segments or more takes the Toeplitz form of its reg geometry, and (straight
-// and uniform) the offset routes.
+// segments or more takes the Toeplitz form of its reg geometry.
 constexpr size_t REG_TOEPLITZ_MIN_N = 12;
 
 // `_seg_seg_reg_geometry`'s O(N) half on the arcs `arc`: the nodes s_q

@@ -320,8 +320,8 @@ FEATURES: dict[str, Feature] = {
                 "Fills each repeated pose of a pair of segments once and copies "
                 "the rest. Every solver finds its own classes, in free space and "
                 "over a perfect or finite ground, on decks large enough to pay "
-                "for the search; nec5-bs2 and nec42-bs2 also fill a uniform "
-                "wire's own entries once per segment offset."
+                "for the search; bs2's include a wire's own pairs, one class per "
+                "segment offset."
             ),
             # |dZin|/|Zin|, the registry's measure, against the flag-off fill.
             # bspline (the census, momwire#2063, with `offset_reuse` on and
@@ -342,6 +342,20 @@ FEATURES: dict[str, Feature] = {
             # 10-element Yagi at 120 and 180 segments a wire (both the
             # direct term's: the same with the edge-block map before it),
             # 1.4e-12 on its fan dipole flat and drooped 26.57 degrees.
+            # With its same-edge pairs in the census (momwire#2063 step 3,
+            # keyed apart, each class the same-edge routine's): 3.0e-10 worst,
+            # the #1971 hairpin (its bridge's pairs, all within a radius, near
+            # singles), at both of its memory caps and over refl-coef; 1.1e-12
+            # or less over the step-2a decks, a bent-element Yagi, a 36-edge
+            # loop and two collinear edges, free, PEC, refl-coef and
+            # Sommerfeld, at 256 and 8 MB; 1.0e-11 and 1.3e-13 on
+            # antennaknobs' 10-element Yagi at 180 and 120 segments a wire,
+            # 7.8e-13 on its fan dipole, free and Sommerfeld; 4.5e-12, 3.3e-12
+            # and 1.1e-13 on the 10-element Yagi, 3.5-wavelength long wire and
+            # 32-radial vertical decks. A 40 m wire 2 cm over PEC (1500
+            # segments, its near-image block analytic) moves 2.7e-9, where its
+            # off fill moves 1.05e-8 between its tensor and chunked routes
+            # (the inexact offset block moved it 3.8e-9).
             # A 0.3 m loop at 137 kHz moves 1.4e-8, where
             # its off fill moves 5e-7 translated 3.7 m (and `offset_reuse`
             # alone 3e-7). sinusoidal: the class map moves Z itself by
@@ -362,12 +376,21 @@ FEATURES: dict[str, Feature] = {
             pragma=True,
         ),
         # A uniform edge's same-edge reg moments filled by segment offset
-        # (PR #1815): the shipped kernels, summed in another order. A part of
-        # `pair_reuse` (momwire#1982): on with it, and its own keyword and
-        # variable still turn it on or off alone. Not retired: within one
-        # edge the moment depends only on the segment offset, and the
-        # census leaves the same-edge pairs to the fill (its sentinel
-        # class), so the two compose.
+        # (PR #1815), inside the same-edge kernel: one row of offsets of a
+        # synthesised edge, the shipped kernels, summed in another order. A
+        # part of `pair_reuse` (momwire#1982): on with it, and its own
+        # keyword and variable still turn it on or off alone. Its inexact
+        # mechanisms, the free-space and image offset blocks and the
+        # remainder's offset fold (each spreading one row of an edge's own
+        # moments by index), went with momwire#2063 step 3, when the census
+        # took the same-edge pairs; this is what is left. It is inert where
+        # the census serves the direct fill (the class values' regularised
+        # part is the dense routine's, so the fill without reuse's), and pays
+        # where no plan does: the near-image fixup of a long grazing wire (a
+        # 40 m wire 2 cm over PEC, 1500 segments: 28 % of the fill alone,
+        # 32 % beside the census), a long wire's same-edge blocks when the
+        # census is off (5 % of a 1500-segment wire's fill), the buried
+        # fill.
         # Reach 4 with the whole (Steve, 2026-11-19): it is what
         # MOMWIRE_X_PAIR_REUSE turns on for bspline, so a certified whole
         # never stamps a bspline drop-in printout uncertified through it.
@@ -387,14 +410,19 @@ FEATURES: dict[str, Feature] = {
             paths=("tests/test_offset_reuse_1809.py",),
             label="offset reuse",
             summary=(
-                "Fills a uniform edge's same-edge moments once per segment offset;"
-                " turned on with pair reuse, alongside its copies between edges."
+                "Fills a uniform edge's same-edge regularised moments once per "
+                "segment offset, inside the same-edge kernel; turned on with "
+                "pair reuse."
             ),
-            # Measured on the 821-deck exe corpus (momwire#2063 stage 4):
-            # worst 2.5e-11 (WA7ARK-OCF), Python's own offset fill, so the
-            # 1e-12 the unit decks show understated it. Still far under
-            # DEFAULT_DRIFT_MAX.
-            drift=5e-11,
+            # Since momwire#2063 step 3, the Toeplitz form alone: 2.1e-10
+            # worst, the #1971 hairpin (its 21-segment legs), free space;
+            # 1.5e-12 or less over the step-2a decks, a bent-element Yagi and
+            # two collinear edges, every ground, at 256 and 8 MB; 5.3e-13 or
+            # less on antennaknobs' Yagi and fan dipole; 4.2e-13 on the
+            # 10-element Yagi deck; 7.9e-11 on a 40 m wire 2 cm over PEC.
+            # (Before, with the offset blocks: 2.5e-11 worst on the 821-deck
+            # exe corpus, WA7ARK-OCF.) 5e-10 is the hairpin's with 2.4x margin.
+            drift=5e-10,
             offer=False,
             part_of="pair_reuse",
         ),

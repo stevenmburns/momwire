@@ -59,25 +59,27 @@
 // static moments plus the regularised smooth part on the edge's 1-D arc
 // (`_seg_seg_static_moments`, `_seg_seg_reg_moments`). So they are keyed
 // APART (`Key::Apart`): each class is evaluated by that routine at its
-// representative (`_reuse_values`; the exe's `reuse_values`), and the key
-// carries a ROUTINE BIT (the top bit of w[0], which no general key sets), so a
-// class never holds pairs of both routines and every pair takes the value of
-// the routine its own fill uses. The words are the general key's, which for
-// two segments of one straight edge read (h_i, h_j) and the offset j - i
-// times h, except that D is floored at max(h_i, h_j) (the routine's own
-// scale: the static part is analytic in h and a, the regularised part smooth
-// on the arc, neither singular in a) and no near or tie rule applies (the
-// routine has no ladder). What the routine reads is the edge's segment
-// length h (the static table's, exact by type: one edge, one h), a (exact,
-// by type), the integer offset j - i (exact: a step of D^2 is under 2^-40 of
-// the offset's own) and the arcs' differences, here 2^-40 of D and 2^-44 of
-// h. Two pairs of one edge in a class so take the same static moments to the
-// bit, and the regularised part, whose slope in the arcs is bounded (the
-// kernel (e^{-jkR} - 1) / R), errs by the arcs' own rounding: the #1971
-// hairpin, whose bridge is one 21-segment edge of h = 95 um on a 1 mm
-// radius, moves |dZin|/|Zin| ~1e-12 on against off
-// (`test_bs2_census_same_edge_2063.py`), where razor2p's rounded near
-// pairs moved it 1.5e-5.
+// representative (`same_edge_class_values`, `_bspline_fill_core.h`), and the
+// key carries a ROUTINE BIT (the top bit of w[0], which no general key sets),
+// so a class never holds pairs of both routines and every pair takes the
+// value of the routine its own fill uses. The key is what the routine reads:
+// the edge's segment length h EXACTLY, by type (the static part is its
+// Toeplitz table's entry j - i, the same doubles for every pair of one
+// offset), the radius by type, and the integer offset |j - i| with one code
+// bit for reciprocity ((s, o) is the transpose of (o, s): one edge, one
+// radius, one EK group). The regularised part also reads the arcs, which
+// differ from pair to pair of one offset by their own rounding (an arc is
+// fl(i h), so up to i 2^-53 of h); its kernel (e^{-jkR} - 1) / R is smooth,
+// so a member's value errs by that rounding times a bounded slope.
+//
+// THE NEAR BAND: pairs of one edge with |j - i| h < NEAR_LENGTHS max(h, a)
+// are their own classes of the routine (`Key::OwnApart`), each its own
+// fill's bits. On the #1971 hairpin, whose bridge is one edge of 21
+// segments of 95 um on a 1 mm radius (every pair of it within a radius),
+// sharing the bridge's pairs, whose own values differ by rounding (4e-16 of
+// J), moved Zin 2.5e-8; with the radius in the rule the deck moves 2.8e-10
+// (`test_bs2_census_same_edge_2063.py`). On a wire thinner than its
+// segments the band is |j - i| <= 3.
 //
 // EXCLUDED (their own classes, `Key::Own`).
 // - NEAR pairs of two edges, |m| < NEAR_LENGTHS max(h_i, h_j, a_i)
@@ -233,18 +235,18 @@ int64_t near_pairs(const Plan &p);
 // for pair (r0 + i, s) of class c. Copies only.
 void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd *out);
 
-// THE NEAR SAME-EDGE SINGLES: the pairs of one edge nearer than
-// NEAR_LENGTHS max(h_i, h_j, a_i), each its own class of the same-edge
-// routine (`Key::OwnApart`). The tensor fill takes their class values, the
-// routine's own bits for the pair; the chunked fill keeps them as the fill
-// without reuse forms them, the sweep's off-edge moments in the window and
-// the same-edge fixup's correction after, so a basis whose pairs are all near
-// (the hairpin's bridge) is summed as without reuse, bit for bit: the order
-// of a near block's cancelling sums is what such a deck's Zin reads (the
-// hairpin's tensor and chunked fills without reuse differ by 2.3e-8).
-// Whether class c is one, each row's [lo, hi) band of them (lo == hi: none),
+// THE NEAR SAME-EDGE SINGLES (the near band above). The tensor fill takes
+// their class values, the routine's own bits for the pair. The chunked fill
+// takes them so too on a thin edge, but on an edge whose segments are
+// shorter than its radius (h < a, the hairpin's bridge) it keeps them as the
+// fill without reuse forms them, the sweep's off-edge moments in the window
+// and the same-edge fixup's correction after, so a basis whose pairs are all
+// near is summed as without reuse: the order of such a near block's
+// cancelling sums is what the deck's Zin reads (the hairpin's tensor and
+// chunked fills without reuse differ by 2.3e-8). Whether class c is a near
+// single, each row's [lo, hi) BAND of them on such an edge (lo == hi: none),
 // and out[(o - r0) * (c1 - c0) + (s - c0)] = 1 for the pairs of a window that
-// are.
+// are near singles.
 bool near_same_edge(const Plan &p, int32_t c);
 void same_edge_band(const Plan &p, int64_t o, int64_t &lo, int64_t &hi);
 void near_same_edge_mask(const Plan &p, int64_t r0, int64_t r1, int64_t c0, int64_t c1, uint8_t *out);

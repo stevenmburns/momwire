@@ -92,8 +92,7 @@ struct FamilySpec {
     bool keep_reps = false;
     // List `Key::Near` pairs in `near_flat`. Off, they are only counted
     // (`near_unlisted`): an adapter whose sentinel class stands for pairs it
-    // fills by its own route (bspline's same-edge blocks) needs no list,
-    // which would cost 8 B a pair.
+    // fills by its own route needs no list, which would cost 8 B a pair.
     bool list_near = true;
 };
 
