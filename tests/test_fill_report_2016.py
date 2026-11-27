@@ -347,15 +347,26 @@ def test_a_plan_past_its_allowance_reports_the_decline(monkeypatch):
 
 
 def test_a_later_unserved_fill_does_not_read_as_served():
-    """The batched sweep reads no plan, whatever the fill before it served."""
+    """A fill of chosen rows reads no plan, whatever the fill before it
+    served. (The batched sweep was this test's unserved fill until a sweep
+    with a served plan left it, momwire#2172.)"""
     deck = yagi()
     s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
     s.compute_impedance()
     assert s.fill_report()["reuse"]["state"] == "served"
-    s.compute_impedance_swept(np.array([0.99, 1.01]) * 2 * math.pi / LAM)
+    geom = s._build_geometry()
+    supp, polys, *_ = s._build_basis_polynomials(geom)
+    s._compute_Z_operator(geom, supp, polys, rows=np.arange(geom["seg_offsets"][1]))
     reuse = s.fill_report()["reuse"]
     assert reuse["state"] == "declined"
-    assert "batched sweep" in reuse["declined"]
+    assert "chosen rows" in reuse["declined"]
+
+
+def test_a_sweep_with_a_served_plan_reads_as_served():
+    deck = yagi()
+    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
+    s.compute_impedance_swept(np.array([0.99, 1.01]) * 2 * math.pi / LAM)
+    assert s.fill_report()["reuse"]["state"] == "served"
 
 
 def test_the_accelerated_operator_declines_by_name():
