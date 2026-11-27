@@ -188,9 +188,10 @@ DEFAULT_DRIFT_MAX = 1e-6
 
 
 # The deprecated per-family spellings of a feature (`FamilyReach.alias`) are
-# read and warned for two minor releases after the one that made them
-# aliases, as the engine aliases are (`_basis_names`), then removed.
+# read and warned in the release that made them aliases and removed in the
+# next minor (Steve, 2026-11-27: one minor, not the engine aliases' two).
 ALIAS_DEPRECATED_IN = "0.99.0"
+ALIAS_REMOVED_IN = "0.100.0"
 
 
 @dataclass(frozen=True)
