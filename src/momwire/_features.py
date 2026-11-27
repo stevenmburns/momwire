@@ -253,12 +253,14 @@ FEATURES: dict[str, Feature] = {
         # (momwire#2063): the Galerkin fill finds its own classes of
         # (observer segment, source segment) pairs on the common core
         # (`_bspline_pair_reuse_core.h`) and evaluates each class's moments
-        # once with the shipped off-edge kernel, its Sommerfeld remainder
-        # copying the blocks those classes make congruent through the
-        # plane; a front end's edge-pair hint (PRs #1810, #1811) is read as
-        # on. A bs2 frequency sweep with a served plan runs per frequency to
-        # read it, the plan built once for the sweep: the batched sweep reads
-        # none (momwire#2172). SinusoidalSolver (momwire#1911): the point-matched fill finds
+        # once with the shipped off-edge kernel; its Sommerfeld remainder
+        # has a plan of its own (momwire#2063 step 2b), its segment pairs
+        # keyed by the plane's invariants (horizontal Gram words, vertical
+        # parts, the height sum), each class evaluated once by the fused
+        # remainder kernel; a front end's edge-pair hint (PRs #1810, #1811)
+        # is read as on. A bs2 frequency sweep with a served plan runs per
+        # frequency to read it, the plan built once for the sweep: the
+        # batched sweep reads none (momwire#2172). SinusoidalSolver (momwire#1911): the point-matched fill finds
         # its own classes of (observer, source) pairs and evaluates each
         # one's field tensors once with the shipped kernel, free space and
         # PEC image. On every solver the variable alone is on.
@@ -305,6 +307,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_chunked_2020.py",
                 "tests/test_bs2_fused_assembly_2166.py",
                 "tests/test_bs2_image_reuse_shared_2063.py",
+                "tests/test_bs2_remainder_plane_reuse_2063.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
                 "tests/test_sin_pair_reuse_cxx_1911.py",
                 "tests/test_sin_pair_reuse_1916.py",
@@ -333,7 +336,13 @@ FEATURES: dict[str, Feature] = {
             # edges, a V-bent Yagi and a vertical stack on PEC,
             # reflection-coefficient and Sommerfeld grounds, `offset_reuse`
             # on and off, and 4.7e-13 on antennaknobs' 10-element Yagi
-            # (PEC, Sommerfeld). A 0.3 m loop at 137 kHz moves 1.4e-8, where
+            # (PEC, Sommerfeld). Its Sommerfeld remainder on its own plan
+            # (momwire#2063 step 2b): 3.7e-13 worst over the same four decks,
+            # `offset_reuse` on and off, 4.7e-13 and 9.1e-12 on antennaknobs'
+            # 10-element Yagi at 120 and 180 segments a wire (both the
+            # direct term's: the same with the edge-block map before it),
+            # 1.4e-12 on its fan dipole flat and drooped 26.57 degrees.
+            # A 0.3 m loop at 137 kHz moves 1.4e-8, where
             # its off fill moves 5e-7 translated 3.7 m (and `offset_reuse`
             # alone 3e-7). sinusoidal: the class map moves Z itself by
             # ~1e-12 relative to its largest entry, and the solve amplifies
@@ -356,8 +365,9 @@ FEATURES: dict[str, Feature] = {
         # (PR #1815): the shipped kernels, summed in another order. A part of
         # `pair_reuse` (momwire#1982): on with it, and its own keyword and
         # variable still turn it on or off alone. Not retired: within one
-        # edge the moment depends only on the segment offset, which a whole-
-        # block copy between edge pairs does not use, so the two compose.
+        # edge the moment depends only on the segment offset, and the
+        # census leaves the same-edge pairs to the fill (its sentinel
+        # class), so the two compose.
         # Reach 4 with the whole (Steve, 2026-11-19): it is what
         # MOMWIRE_X_PAIR_REUSE turns on for bspline, so a certified whole
         # never stamps a bspline drop-in printout uncertified through it.
