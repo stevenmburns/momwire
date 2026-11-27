@@ -13,8 +13,9 @@ plan. Now the two compose:
 - the answer stays inside the two features' declared drift;
 - every way a plan goes unread is named in `pair_reuse_declined`, on the
   routes that read no plan (a fill of chosen rows, the buried fill, the
-  batched sweep, the H-matrix and array-block operators) as well: those keep
-  the fill's bits without reuse.
+  H-matrix and array-block operators) as well: those keep the fill's bits
+  without reuse. A sweep with a served plan leaves the batched route to read
+  it (momwire#2172).
 """
 
 from __future__ import annotations
@@ -282,22 +283,27 @@ def test_the_buried_fill_says_nothing_with_reuse_off():
     assert s.pair_reuse_declined is None
 
 
-def test_the_batched_sweep_names_the_plan_it_does_not_read(plan_reads):
+def test_a_sweep_with_a_served_plan_leaves_the_batched_route(plan_reads):
+    """The batched sweep reads no plan, so with one served the sweep runs per
+    k and reads it (momwire#2172, `tests/test_bs2_sweep_reuse_2172.py`)."""
     s = _three(True)
     assert s._swept_batched_available()
     z = s.compute_impedance_swept(_sweep_k())
-    assert s.pair_reuse_declined == "the batched sweep does not read the hint"
-    assert s.pair_reuse_served is None
-    assert not plan_reads
-    assert np.array_equal(z, _three(False).compute_impedance_swept(_sweep_k()))
+    assert s.pair_reuse_declined is None
+    assert s.pair_reuse_served["copied_pairs"] > 0
+    assert len(plan_reads) == 1
+    ref = _three(False).compute_impedance_swept(_sweep_k())
+    assert np.max(np.abs(z - ref) / np.abs(ref)) <= DRIFT
 
 
-def test_the_batched_port_sweep_names_it_too():
+def test_the_port_sweep_leaves_it_too():
     s = _three(True)
     y = [np.asarray(p.y) for p in s.compute_port_solution_swept(_sweep_k())]
-    assert s.pair_reuse_declined == "the batched sweep does not read the hint"
+    assert s.pair_reuse_declined is None
+    assert s.pair_reuse_served["copied_pairs"] > 0
     ref = _three(False).compute_port_solution_swept(_sweep_k())
-    assert all(np.array_equal(a, np.asarray(b.y)) for a, b in zip(y, ref, strict=True))
+    for a, b in zip(y, ref, strict=True):
+        assert np.max(np.abs(a - np.asarray(b.y))) <= DRIFT * np.max(np.abs(b.y))
 
 
 def test_the_batched_sweep_says_nothing_with_reuse_off():

@@ -11228,7 +11228,7 @@ class BSplineSolver(
                 ),
             )
 
-        if self._swept_batched_available():
+        if self._swept_batched_available() and not self._swept_reads_plan(geom):
             for _c0, ks, Z in self._swept_batched_z_chunks(
                 k_array, geom, supp_seg, polys, n_extra_columns=n_extra
             ):
@@ -11282,6 +11282,30 @@ class BSplineSolver(
             and self._accel_serves_n_qp_pair
         )
 
+    def _swept_reads_plan(self, geom):
+        """Whether this sweep leaves the batched route to read the
+        `pair_reuse` plan frequency by frequency (momwire#2172).
+
+        The batched route evaluates every pair's moments over the k chunk and
+        reads no plan; the per-k route evaluates each class once per k and
+        copies the rest, and the plan, being k-independent (its key is
+        geometry, its ladder `_fill_ladder`'s), is built once for the sweep.
+        So with a served plan the per-k route is taken, on the solver whose
+        per-k fill is this class's own: a subclass's `compute_impedance` /
+        `compute_port_solution` (the H-matrix and array-block operators) reads
+        no plan, and the batched route stays theirs. With no plan the census
+        has already named why in `pair_reuse_declined`.
+        """
+        if not self._reuse_on:
+            return False
+        cls = type(self)
+        if not (
+            cls.compute_impedance is BSplineSolver.compute_impedance
+            and cls.compute_port_solution is BSplineSolver.compute_port_solution
+        ):
+            return False
+        return self._reuse_plan(geom) is not None
+
     @_offset_reuse_fill
     def _swept_batched_z_chunks(self, k_array, *args, **kwargs):
         """`_swept_batched_z_chunks_filled`, each chunk on the fill report's
@@ -11326,9 +11350,14 @@ class BSplineSolver(
         for the full rationale; the chunk arithmetic here mirrors it.
 
         No `pair_reuse` plan is read here: the sweep's moments are batched over
-        k, and `pair_reuse_declined` says so (momwire#2020).
+        k. A sweep with a served plan runs per k instead (`_swept_reads_plan`),
+        so with reuse on this route runs where the census declined, whose
+        reason `pair_reuse_declined` keeps, or on a solver whose per-k fill
+        reads no plan, where it says the batched sweep does not (momwire#2020).
         """
-        self._decline_unread_plan("the batched sweep does not read the hint")
+        hit = self._reuse_plan_cache
+        if not (hit is not None and hit[0] is geom and hit[1] is None):
+            self._decline_unread_plan("the batched sweep does not read the hint")
         d = self.degree
         n_k = k_array.shape[0]
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
@@ -11582,7 +11611,9 @@ class BSplineSolver(
         # J / Z / solve in batched calls instead of looping compute_impedance
         # per frequency. Junctions included; see _swept_batched_available
         # for the (enrichment / finite-ground / accel) eligibility rules.
-        if self._swept_batched_available():
+        if self._swept_batched_available() and not self._swept_reads_plan(
+            self._build_geometry()
+        ):
             return self._compute_impedance_swept_batched(k_array)
 
         # k-independent static + reg-geometry, shared across the sweep; the
