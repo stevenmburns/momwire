@@ -5771,6 +5771,66 @@ class BSplineSolver(
             "reuse_tied": np.zeros(rep.size, dtype=np.uint8),
         }, handle
 
+    def _tensor_reuse_Z(self, geom, k, supp_seg, polys, same_edge_prep):
+        """The tensor route's Z under a served plan (momwire#2063), assembled
+        tile by tile from the class values as the chunked route's windows are
+        (momwire#2166, `_reuse_block`), the (d+1, d+1, N, N) tensor never
+        written; None where the plan does not serve or the tiled assembler
+        does not (`_build_J_blocks` then gathers, or fills without reuse).
+
+        One window, rows [0, N): the tensor fits the budget, so the chunked
+        route's cut would be the whole mesh too. Every pair is its class's
+        value, a near same-edge single included: on this route the fill
+        without reuse writes the routine's own (A_st + A_reg) for it, which
+        is its class value, so no band of the sweep's moments and no fixup
+        follow (`own` is None). What moves Z is the sum order alone,
+        `assemble_Z_bspline`'s against the windowed assembler's."""
+        if not (
+            _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+        ):
+            return None
+        plan = self._reuse_plan(geom)
+        if plan is None:
+            return None
+        if same_edge_prep is not None and [p[0] for p in same_edge_prep] != (
+            self._same_edge_slices(geom)
+        ):
+            return None
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        n_segs = int(geom["n_segs_total"])
+        n_basis = supp_seg.shape[0]
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        ladder = self._fill_ladder(k, seg_l, seg_r, ek)
+        values = self._reuse_values(plan, geom, k, ladder, ek)
+        served = self._reuse_served("tensor", plan, n_segs)
+        served["kernel_evals"] += self._reuse_same_edge_formed
+        Z, _row_kw = _schedule.new_target(n_basis)
+        all_n = np.arange(n_basis, dtype=np.int64)
+        self._checkpoint()
+        plan.assemble(
+            values,
+            0,
+            n_segs,
+            None,
+            None,
+            None,
+            np.ascontiguousarray(supp_seg, dtype=np.int64),
+            np.ascontiguousarray(polys, dtype=np.float64),
+            np.ascontiguousarray(geom["tangents"], dtype=np.float64),
+            all_n,
+            all_n,
+            float(self.omega),
+            float(self.eps),
+            float(self.mu),
+            Z,
+            self._cancel_flag,
+        )
+        del values
+        self.pair_reuse_served = served
+        self._reuse_fill_served(served, plan)
+        return Z
+
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
         every (i, j) global segment pair. Returns shape (d+1, d+1, N, N).
@@ -5807,7 +5867,9 @@ class BSplineSolver(
         # momwire#2063: the census's classes. Every pair is gathered from its
         # class's value, each class evaluated once at its representative, by
         # the off-edge fill or, a same-edge class (step 3), by the same-edge
-        # routine: nothing is overwritten.
+        # routine: nothing is overwritten. Only where the tiled assembler does
+        # not serve: the tensor route assembles Z from the class values
+        # without this tensor (`_tensor_reuse_Z`).
         plan = self._reuse_plan(geom)
         if plan is not None and same_slices != self._same_edge_slices(geom):
             self._decline_unread_plan("the swept fill's edges are not the plan's")
@@ -9196,9 +9258,11 @@ class BSplineSolver(
                 geom, self.k, supp_seg, polys, same_edge_prep=same_edge_prep
             )
         else:
-            J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
-            Z = self._assemble_Z(J, supp_seg, polys, geom)
-            del J
+            Z = self._tensor_reuse_Z(geom, self.k, supp_seg, polys, same_edge_prep)
+            if Z is None:
+                J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
+                Z = self._assemble_Z(J, supp_seg, polys, geom)
+                del J
 
         if use_exact:
             self._checkpoint()
