@@ -30,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from _standalone_version import assert_standalone_line
 
@@ -1134,7 +1135,8 @@ _BS2_REUSE_DECKS = {
 # MW_EXE_TIMES's count of the chunked fill's windows assembled from the class
 # values (momwire#2166, `route_bs2.cpp`'s `reuse_outcome`), process totals.
 _BS2_WINDOWS = re.compile(
-    r"^cxx: reuse last fill windows from the class values (\d+) tiled, (\d+) whole\r?$",
+    r"^cxx: reuse last fill windows from the class values (\d+) tiled, (\d+) whole"
+    r"(?:, image (\d+) tiled, (\d+) whole)?\r?$",
     re.M,
 )
 
@@ -1180,6 +1182,10 @@ def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeyp
             # momwire#2166: the chunked fill assembled its windows from the
             # class values (the fused route), not from a gathered window.
             assert windows and int(windows[1]) + int(windows[2]) >= 1, exe.stderr
+            # momwire#2063 step 2a: over a ground the image block too.
+            if ground != "free":
+                assert windows[3] is not None, exe.stderr
+                assert int(windows[3]) + int(windows[4]) >= 1, exe.stderr
         else:
             assert built == 0 and found == 0, (built, declined, found)
             assert windows is None, exe.stderr
@@ -1188,6 +1194,94 @@ def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeyp
     on, off = lines["on"], lines["off"]
     assert on[1].rstrip() == off[1].rstrip() + stamp, (on[1], off[1])
     assert on[:1] + on[2:] == off[:1] + off[2:]
+
+
+# momwire#2063 step 2a: a deck whose image pairs share classes between
+# edges (a vertical stack of equal dipoles) and whose image weights read the
+# tangent's z-flip (a sloping wire beside them), past bs2's 200 segments.
+_BS2_IMAGE_DECK = (
+    "CM momwire#2063 step 2a: a stack of four dipoles and a sloping wire\nCE\n"
+    "GW 1 51 0 -2.5 4.0 0 2.5 4.0 0.001\nGW 2 51 0 -2.5 6.3 0 2.5 6.3 0.001\n"
+    "GW 3 51 0 -2.5 8.6 0 2.5 8.6 0.001\nGW 4 51 0 -2.5 10.9 0 2.5 10.9 0.001\n"
+    "GW 5 31 3.0 -1.5 3.0 3.0 1.5 5.5 0.001\nGE {ge}\n{gn}"
+    "EX 0 1 26 0 1 0\nFR 0 1 0 0 28.5 0\nXQ\nEN\n"
+)
+_BS2_IMAGE_GROUNDS = {
+    "pec": ("1", "GN 1\n"),
+    "sommerfeld": ("0", "GN 0 0 0 0 13.0 -50.0\n"),
+}
+
+
+def _python_i_source(text, monkeypatch, on):
+    """The launcher's route in process (`_shell.render_files`, bs2), its
+    source current at full precision, as `exe_arrays_hook` reads it."""
+    from momwire.dropin.nec5 import _serve, _shell
+
+    if on:
+        monkeypatch.setenv("MOMWIRE_X_PAIR_REUSE", "1")
+    else:
+        monkeypatch.delenv("MOMWIRE_X_PAIR_REUSE", raising=False)
+    seen = []
+    orig = _serve._port_state
+
+    def port_state(*a, **k):
+        seen.append(orig(*a, **k))
+        return seen[-1]
+
+    monkeypatch.setattr(_serve, "_port_state", port_state)
+    _shell.render_files(text, basis="bs2")
+    monkeypatch.setattr(_serve, "_port_state", orig)
+    (i,) = np.ravel(seen[-1].i_source)
+    return complex(i)
+
+
+@pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
+@pytest.mark.parametrize("ground", sorted(_BS2_IMAGE_GROUNDS))
+def test_bs2_image_reuse_is_the_launchers_at_full_precision(
+    ground, tmp_path, monkeypatch
+):
+    """The executable's image block (momwire#2063 step 2a) against the
+    Python route's, on the source current at full precision (MW_EXE_ARRAYS):
+    the printout's five digits cannot see a wrong sign the drift gates
+    would. On, the image windows ran; on moved Zin within the drift of off;
+    and the executable's on is the launcher's on to the rounding of two
+    LU routes, far under that drift."""
+    from momwire import _features
+
+    _no_bs2_reuse_vars(monkeypatch)
+    ge, gn = _BS2_IMAGE_GROUNDS[ground]
+    text = _BS2_IMAGE_DECK.format(ge=ge, gn=gn)
+    deck = tmp_path / "image.nec"
+    deck.write_text(text, newline="")
+    z = {}
+    for state in ("off", "on"):
+        arrays = tmp_path / state
+        arrays.mkdir()
+        env = dict(os.environ, MW_EXE_TIMES="1", MW_EXE_ARRAYS=str(arrays))
+        if state == "on":
+            env["MOMWIRE_X_PAIR_REUSE"] = "1"
+        r = subprocess.run(
+            [EXE, deck.name, f"{state}.out"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        windows = _BS2_WINDOWS.search(r.stderr.decode("latin-1"))
+        if state == "on":
+            assert (
+                windows
+                and windows[3] is not None
+                and int(windows[3]) + int(windows[4]) >= 1
+            )
+        (i_source,) = np.fromfile(arrays / "0_i_source.bin", dtype=np.complex128)
+        z[state] = 1.0 / complex(i_source)
+    drift = _features.FEATURES["pair_reuse"].drift
+    assert z["on"] != z["off"]
+    assert abs(z["on"] - z["off"]) / abs(z["off"]) <= drift
+    z_py = 1.0 / _python_i_source(text, monkeypatch, True)
+    assert abs(z["on"] - z_py) / abs(z_py) <= 1e-11, (z["on"], z_py)
 
 
 @pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")

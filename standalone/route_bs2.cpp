@@ -170,11 +170,15 @@ void reuse_plans(long long &built, long long &declined, long long &found) {
 // The chunked fill's windows assembled from the class values (momwire#2166),
 // process totals: tiled where the lane kernel is compiled, whole elsewhere,
 // so a gate can prove the fused assembly ran and not the gathered window.
+// The image block's (momwire#2063 step 2a) follow when it ran.
 std::string reuse_outcome() {
     const bspline::WindowTileCounts c = bspline::window_tile_counts();
-    if (c.tiled + c.whole == 0) return std::string();
-    return "windows from the class values " + std::to_string(c.tiled) + " tiled, " + std::to_string(c.whole) +
-           " whole";
+    if (c.tiled + c.whole + c.wtiled + c.wwhole == 0) return std::string();
+    std::string out = "windows from the class values " + std::to_string(c.tiled) + " tiled, " +
+                      std::to_string(c.whole) + " whole";
+    if (c.wtiled + c.wwhole > 0)
+        out += ", image " + std::to_string(c.wtiled) + " tiled, " + std::to_string(c.wwhole) + " whole";
+    return out;
 }
 
 void configure_grid_cache(const std::string &tag) {

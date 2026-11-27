@@ -90,6 +90,18 @@ struct FillParams {
     // `_reuse_plan(geom)` (`reuse_plan` below), or null: no census, or a
     // census that does not serve the deck.
     std::shared_ptr<const reuse::Plan> plan;
+    // momwire#2063 step 2a: the ground the image term mirrors in, for the
+    // plan's image block (`_reuse_image_args`); unset in free space or for
+    // a deck the buried fill takes.
+    bool image = false;
+    double image_gz = 0.0;
+    // The class values the direct fill evaluated, held for the image fill
+    // of the same k (`_held_reuse_values`); null holds nothing.
+    struct HeldValues {
+        const reuse::Plan *plan = nullptr;
+        std::vector<cdouble> values;
+    };
+    std::shared_ptr<HeldValues> held;
 };
 
 // `BSplineSolver._reuse_plan(geom)`: with `fp.pair_reuse`, the census's plan
