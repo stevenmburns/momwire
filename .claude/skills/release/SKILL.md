@@ -72,6 +72,22 @@ Publishing). Every step below was learned the hard way; do them in order.
    ```bash
    curl -s https://pypi.org/pypi/momwire/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])"
    ```
+7. **PyPI keeps the newest 30 releases** (Steve, 2026-11-27). A release is
+   19 files of about 245 MB against PyPI's 10 GB project limit, and 0.98.1's
+   upload stopped at it. Every release stays on GitHub. List what falls
+   past 30 and hand the list to Steve, who deletes those releases whole on
+   pypi.org (deletion is his: a deleted filename can never be re-uploaded):
+   ```bash
+   curl -s https://pypi.org/pypi/momwire/json | python3 -c "
+   import json,sys
+   from packaging.version import Version
+   d=json.load(sys.stdin); vs=sorted(d['releases'],key=Version)
+   old=vs[:-30]; print(' '.join(old) or 'none')
+   print('%.2f GB' % (sum(f['size'] for v in old for f in d['releases'][v])/1e9))"
+   ```
+   A publish that hits the limit uploads part of the release; once space is
+   freed, re-run only the failed `publish to PyPI` job (`gh run rerun
+   <run-id> --failed`): `skip-existing` skips the files already up.
 
 ## The signed drop-in (momwire#711)
 
