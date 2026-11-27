@@ -6,10 +6,11 @@ counted in the direct family's unit (ordered segment pairs), and `uncounted`
 is empty when every term was counted.
 
 The counts are tied to the physics rather than to the code that keeps them:
-the remainder copies a pair only where an isometry keeps every height, so a
-stack of horizontal elements (heights differ) copies nothing there while the
-same elements side by side (one height) do; and on a deck the kernel walks in
-one tile, the kernel's own copy counter must equal the reported reuse.
+the remainder shares a pair only where a motion of the plane carries it onto
+its representative, horizontal distances and height sums kept (so a stack of
+horizontal elements shares through equal height sums, momwire#2063 step 2b);
+and on a deck the kernel walks in one tile, the kernel's own counter of
+served pairs must equal the reported reuse.
 """
 
 from __future__ import annotations
@@ -134,23 +135,24 @@ def test_free_space_reports_only_the_direct_family():
     assert reuse["uncounted"] == []
 
 
-def test_the_remainder_copies_nothing_where_the_heights_differ():
-    """A vertical stack: the direct term repeats (translation), the
-    remainder cannot (it reads the height sum)."""
+def test_the_remainder_shares_a_stack_through_the_height_sum():
+    """A vertical stack: the direct term repeats (translation), and so does
+    the remainder where two pairs' height sums agree (momwire#2063 step 2b):
+    elements i and j against k and l when i + j = k + l."""
     stack = solve(row(step=(0.0, 0.0, 2.0)), SOMMERFELD, offset_reuse=False)
     reuse = stack.fill_report()["reuse"]
     assert reuse["families"]["direct"]["reused"] > 0
-    assert reuse["families"]["remainder"]["reused"] == 0
+    assert reuse["families"]["remainder"]["reused"] > 0
     reconciles(reuse)
     side = solve(row(), SOMMERFELD, offset_reuse=False)
     assert side.fill_report()["reuse"]["families"]["remainder"]["reused"] > 0
 
 
 def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
-    """Brute force on a one-tile deck: the kernel's process counter of copied
-    pairs moves by exactly the reported reuse, and every ordered segment pair
-    the map copies has the same horizontal offsets and heights, node for
-    node, as the pair it is copied from."""
+    """Brute force on a one-tile deck: the kernel's process counter of
+    served member pairs moves by exactly the reported reuse, and every
+    member has its representative's horizontal distances and height sums,
+    end point for end point (transposed where its code says so)."""
     deck = row(n_el=3, n_seg=13)
     s = BSplineSolver(**deck, pair_reuse=True, **SOMMERFELD, offset_reuse=False)
     before = acc.remainder_q_reused_pairs()
@@ -160,31 +162,30 @@ def test_the_remainder_reuse_matches_the_kernels_own_counter_and_the_physics():
     n2 = n_segs(deck) ** 2
     assert rem["pairs"] == n2
     assert rem["reused"] == copied > 0
-    # One tile: every ordered pair walked once, and the walk reads the source
-    # pairs back from the cache that filled them (momwire#2073), so each pair
-    # the kernel did not copy is evaluated exactly once.
+    # One tile: every ordered pair walked once, and the walk serves each
+    # class's representative from the value it evaluated, so each pair not
+    # served as a member is evaluated exactly once.
     assert rem["kernel_evals"] == rem["computed"]
 
     geom = s._build_geometry()
-    cmap = s._remainder_reuse_args(geom, 0.0)
-    seg0 = cmap["reuse_edge_seg0"]
-    src = cmap["reuse_src"]
-    E = src.shape[0]
+    cls, rep, code, _single = s._remainder_reuse_cache[3].remainder_arrays()
+    n = cls.shape[0]
     L, R = geom["seg_l"], geom["seg_r"]
     scale = float(np.max(np.abs(np.r_[L, R])))
     count = 0
-    for ta, tb in zip(*np.nonzero(src >= 0), strict=True):
-        sa, sb = divmod(int(src[ta, tb]), E)
-        for x in range(seg0[ta + 1] - seg0[ta]):
-            for y in range(seg0[tb + 1] - seg0[tb]):
-                i, j = seg0[ta] + x, seg0[tb] + y
-                i0, j0 = seg0[sa] + x, seg0[sb] + y
-                for P, Q in ((L, L), (L, R), (R, L), (R, R)):
-                    d_t, d_s = P[i] - Q[j], P[i0] - Q[j0]
-                    assert abs(np.hypot(*d_t[:2]) - np.hypot(*d_s[:2])) <= 1e-9 * scale
-                    assert abs(P[i, 2] - P[i0, 2]) <= 1e-9 * scale
-                    assert abs(Q[j, 2] - Q[j0, 2]) <= 1e-9 * scale
-                count += 1
+    for i in range(n):
+        for j in range(n):
+            c = cls[i, j] >> 1
+            if rep[c] == i * n + j:
+                continue
+            i0, j0 = divmod(int(rep[c]), n)
+            if (cls[i, j] & 1) != code[c]:
+                i0, j0 = j0, i0  # the member reads its value transposed
+            for P, Q in ((L, L), (L, R), (R, L), (R, R)):
+                d_t, d_s = P[i] - Q[j], P[i0] - Q[j0]
+                assert abs(np.hypot(*d_t[:2]) - np.hypot(*d_s[:2])) <= 1e-9 * scale
+                assert abs(P[i, 2] + Q[j, 2] - P[i0, 2] - Q[j0, 2]) <= 1e-9 * scale
+            count += 1
     assert count == rem["reused"]
 
 

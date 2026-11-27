@@ -12,8 +12,8 @@ its pairs from those values. So:
 - the census moves Zin inside the feature's declared drift, and a pair that
   is not a repeat (a director slid 1 um) keys apart;
 - a front end's hint is read as on: the census does not read it;
-- over Sommerfeld ground the remainder copies the blocks the direct classes
-  make congruent through the plane, and none across heights.
+- over Sommerfeld ground the remainder serves its pairs from its own plan's
+  classes, keyed by the plane's invariants (the height sum among them).
 
 These gates are of the census alone, so each passes `offset_reuse=False`,
 the part's own keyword, which wins (tests/test_offset_reuse_1809.py holds
@@ -302,33 +302,27 @@ def test_sommerfeld_off_is_the_fill_bit_for_bit():
     assert np.array_equal(_bits(z0), _bits(z1))
 
 
-def test_sommerfeld_copies_the_remainder_blocks():
-    """Directors 2, 3, 4 of 20 segments: (3, 3) and (4, 4) are the block of
-    (2, 2), and (3, 4) and (4, 3) the blocks of (2, 3) and (3, 2), moved along
-    the boom, heights kept: four ordered blocks of 400 copied at least once
-    each (a segment under two basis tiles is visited by both), and Zin inside
-    the drift."""
+def test_sommerfeld_serves_the_remainder_from_its_classes():
+    """Directors 2, 3, 4 of 20 segments at one height: their pairs are moves
+    of one another along the boom, so the remainder's plan (momwire#2063
+    step 2b) serves at least the four director blocks (3, 3), (4, 4),
+    (3, 4), (4, 3) as members, and Zin stays inside the drift."""
     acc = _acc_or_skip()
     wires, n = _yagi(3, h=15.0)
     _, z0 = _z_somm(wires, n, False)
     c0 = acc.remainder_q_reused_pairs()
     s, z1 = _z_somm(wires, n, True)
     copied = acc.remainder_q_reused_pairs() - c0
-    src = s._remainder_reuse_args(s._build_geometry(), 0.0)["reuse_src"]
-    assert sorted(zip(*np.nonzero(src >= 0), strict=True)) == [
-        (3, 3),
-        (3, 4),
-        (4, 3),
-        (4, 4),
-    ]
+    assert s._remainder_reuse_cache[3] is not None
     assert copied >= 4 * 400
     assert _rel(z1, z0) <= DRIFT
 
 
-def test_sommerfeld_does_not_copy_across_heights():
-    """Three identical dipoles stacked vertically repeat in free space (a
-    translation in z), so the direct moments are shared, but the remainder
-    reads heights, so none of its blocks are."""
+def test_sommerfeld_shares_across_heights_through_the_height_sum():
+    """Three identical dipoles stacked at 8, 16 and 24 m repeat in free
+    space (a translation in z), so the direct moments are shared; the
+    remainder reads the height sum, so (8, 24) shares with (16, 16) and
+    nothing else does across the heights."""
     acc = _acc_or_skip()
     L = 0.47 * LAM
     wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]]) for h in (8.0, 16.0, 24.0)]
@@ -338,28 +332,18 @@ def test_sommerfeld_does_not_copy_across_heights():
     k0 = acc.remainder_q_symmetric_calls()
     s, z1 = _z_somm(wires, n, True)
     assert acc.remainder_q_symmetric_calls() > k0  # the route ran
-    assert acc.remainder_q_reused_pairs() == c0
+    assert acc.remainder_q_reused_pairs() > c0
+    plan = s._remainder_reuse_cache[3]
+    e = [np.arange(21 * i, 21 * (i + 1)) for i in range(3)]
+    far = np.abs(np.subtract.outer(np.arange(21), np.arange(21))) >= 5
+    assert np.array_equal(
+        plan.classes_of(0, e[0], e[2])[far], plan.classes_of(0, e[1], e[1])[far]
+    )
+    assert not np.any(
+        plan.classes_of(0, e[0], e[0])[far] == plan.classes_of(0, e[1], e[1])[far]
+    )
     assert s.pair_reuse_served["copied_pairs"] > 0
     assert _rel(z1, z0) <= DRIFT
-
-
-def test_sommerfeld_refuses_a_malformed_map(monkeypatch):
-    """The kernel checks the map's shape: a source that is itself a copy is
-    an error, not a silent wrong block."""
-    _acc_or_skip()
-    wires, n = _yagi(3, h=15.0)
-    E = 5
-    src = np.full((E, E), -1, dtype=np.int32)
-    src[3, 3] = 2 * E + 2
-    src[4, 4] = 3 * E + 3  # (3,3) is a copy, so it cannot be a source
-    bad = {
-        "reuse_edge_seg0": np.array([0, 22, 43, 63, 83, 103], dtype=np.int64),
-        "reuse_seg_edge": np.repeat(np.arange(E, dtype=np.int32), [22, 21, 20, 20, 20]),
-        "reuse_src": src,
-    }
-    monkeypatch.setattr(BSplineSolver, "_remainder_reuse_args", lambda self, g, gz: bad)
-    with pytest.raises(ValueError, match="pair reuse"):
-        _z_somm(wires, n, False)
 
 
 def test_sommerfeld_fold_copies_as_the_dense_route_does():
@@ -392,21 +376,3 @@ def test_sommerfeld_fold_copies_as_the_dense_route_does():
         assert got.tobytes() == ref.tobytes()
     else:
         assert np.abs(got - ref).max() <= 1e-13 * np.abs(ref).max()
-
-
-def test_sommerfeld_cuts_the_map_to_fit_rather_than_dropping_it(monkeypatch):
-    """The remainder kernel fills everything when its cache of source blocks
-    would pass its budget. The map is cut to fit instead, keeping the source
-    pairs with the most copies per byte: with room for one director pair's
-    two orders (115,200 bytes) but not two, the cut copies are counted and
-    the rest still served."""
-    acc = _acc_or_skip()
-    wires, n = _yagi(4, h=15.0)
-    _, z0 = _z_somm(wires, n, False)
-    monkeypatch.setattr(bs, "_REMAINDER_REUSE_CACHE_BYTES", 120_000)
-    c0 = acc.remainder_q_reused_pairs()
-    s, z1 = _z_somm(wires, n, True)
-    copied = acc.remainder_q_reused_pairs() - c0
-    assert s.pair_reuse_remainder_cut > 0
-    assert copied >= 2 * 400
-    assert _rel(z1, z0) <= DRIFT

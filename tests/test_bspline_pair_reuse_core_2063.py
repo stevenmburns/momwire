@@ -9,8 +9,8 @@
   same-edge pairs one sentinel, near pairs their own, and a transpose shares
   its pair's class only at equal radii;
 - the declines are the core's sentences, and a class costs its layout;
-- the remainder's block map copies only blocks whose every pair has its
-  source's class, closed under reversal.
+- the remainder's plan (momwire#2063 step 2b) shares a pair's class with
+  its reverse and with its moves along the plane, and reads the height sum.
 """
 
 from __future__ import annotations
@@ -220,6 +220,8 @@ def test_a_class_costs_its_layout():
 
 
 def _remainder(s, wires_dz=None):
+    """The remainder's plan by plane invariants (momwire#2063 step 2b), one
+    edge's segments raised `dz` first when `wires_dz` = (edge, dz)."""
     geom = s._build_geometry()
     sl = s._same_edge_slices(geom)
     seg_l, seg_r = geom["seg_l"].copy(), geom["seg_r"].copy()
@@ -227,29 +229,36 @@ def _remainder(s, wires_dz=None):
         e, dz = wires_dz
         seg_l[sl[e], 2] += dz
         seg_r[sl[e], 2] += dz
-    ta, tb, sa, sb = bs._acc.bspline_reuse_remainder_blocks(
+    plan = bs._acc.bspline_reuse_remainder_plan(
         seg_l,
         seg_r,
-        np.ascontiguousarray(s._seg_radius(geom), dtype=float),
-        np.array([x.start for x in sl] + [sl[-1].stop], dtype=np.int64),
+        np.ascontiguousarray(geom["h_per_seg"], dtype=float),
         0.0,
+        np.zeros(0, dtype=np.int64),
+        2,
     )
-    return {(int(a), int(b)): (int(c), int(d)) for a, b, c, d in zip(ta, tb, sa, sb)}
+    return plan, sl
 
 
-def test_the_remainder_blocks_are_closed_and_keep_their_heights():
+def test_the_remainder_classes_are_reciprocal_and_read_the_height_sum():
     """Directors 2, 3, 4 at one height: (3, 4) is (2, 3) moved along the
-    boom, and each director's own block is the first's; (y, x) copies
-    (t, s) whenever (x, y) copies (s, t), and no source is a target."""
+    boom, and each director against itself is the first's; a pair and its
+    reverse share their class. One director 1 m higher: its own pairs keep
+    no height sum of the others, and (3, 4) is no longer (2, 3)."""
     s = _yagi(D=3, h=15.0)
-    got = _remainder(s)
-    assert got == {(3, 3): (2, 2), (4, 4): (2, 2), (3, 4): (2, 3), (4, 3): (3, 2)}
-    for (x, y), (a, b) in got.items():
-        assert got[(y, x)] == (b, a)
-        assert (a, b) not in got
-    # One director 1 m higher: its blocks keep no heights, so only the other
-    # two directors' own blocks still copy.
-    assert _remainder(s, wires_dz=(4, 1.0)) == {(3, 3): (2, 2)}
+    plan, sl = _remainder(s)
+    e = [np.arange(x.start, x.stop) for x in sl]
+    n = 20
+    far = np.abs(np.subtract.outer(np.arange(n), np.arange(n))) >= 5
+    c = plan.classes_of
+    assert np.array_equal(c(0, e[3], e[4]), c(0, e[2], e[3]))
+    assert np.array_equal(c(0, e[3], e[3])[far], c(0, e[2], e[2])[far])
+    assert np.array_equal(c(0, e[4], e[3]), c(0, e[3], e[4]).T)
+    raised, sl = _remainder(s, wires_dz=(4, 1.0))
+    r = raised.classes_of
+    assert np.array_equal(r(0, e[3], e[3])[far], r(0, e[2], e[2])[far])
+    assert not np.any(r(0, e[4], e[4])[far] == r(0, e[2], e[2])[far])
+    assert not np.any(r(0, e[3], e[4]) == r(0, e[2], e[3]))
 
 
 def test_the_wire_map_counts_every_pair_once():
