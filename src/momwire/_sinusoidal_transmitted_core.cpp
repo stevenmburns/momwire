@@ -103,7 +103,7 @@ std::vector<std::vector<cd>> transmitted_block(const Front &fr, const somm_trans
     // `transmitted_anchors` (momwire#1847) requested: the grid blended from
     // frequency anchors where they serve it, else the exact one. This route
     // runs under no `FeatureFill`, so it reads the request itself, as the
-    // razor seam reads `razor_pair_reuse`.
+    // razor seam reads `pair_reuse`.
     // `held` keeps an anchored grid alive past its store's eviction.
     const somm_trans::Grid *grid = nullptr;
     std::shared_ptr<const somm_trans::Grid> held;

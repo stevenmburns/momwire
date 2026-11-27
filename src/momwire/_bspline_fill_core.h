@@ -76,10 +76,10 @@ struct FillParams {
     bool extended_kernel = true;
     // The fill-reuse switch (`_features` `pair_reuse`, momwire#2063): the
     // census's classes (`BSplineSolver._reuse_on`), read through `plan`
-    // below; and its part `offset_reuse` (momwire#1809,
-    // `BSplineSolver._offset_reuse`): a uniform edge's same-edge reg moments
-    // in their Toeplitz form. Both off is the fill as it always was, bit for
-    // bit.
+    // below; and, on with it, a uniform edge's same-edge reg moments in
+    // their Toeplitz form (momwire#1809, `BSplineSolver._offset_reuse`;
+    // apart here so a test can hold one without the other). Both off is the
+    // fill as it always was, bit for bit.
     bool pair_reuse = false;
     bool offset_reuse = false;
     // `_reuse_plan(geom)` (`reuse_plan` below), or null: no census, or a

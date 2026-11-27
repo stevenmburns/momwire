@@ -173,7 +173,7 @@ inline bool answer(const std::string &t, const std::string &version, const std::
 // MW_EXE_TIMES's reuse line (momwire#1971): the fill-pair reuse plans both
 // copies built, how many of those built declined, and how many they found,
 // process totals, so a gate can prove the reuse ran (built - declined >= 1
-// with MOMWIRE_X_RAZOR_PAIR_REUSE on, 0 built with it off). A declined plan
+// with MOMWIRE_X_PAIR_REUSE on, 0 built with it off). A declined plan
 // fills as off, so a plan built is not by itself a reuse that ran.
 static void reuse_line() {
     long long built_s = 0, declined_s = 0, found_s = 0, built_t = 0, declined_t = 0, found_t = 0;
@@ -437,37 +437,33 @@ struct ExeFeature {
     int reach;
     bool default_on;  // the registry's `default`: on within reach unless set off
 };
-// The one fill-reuse switch, `pair_reuse` (momwire#1982; reach 11, every
-// executable), which each formulation maps to its own route's reuse
-// (`EXE_PARTS`); bs2's part of it, `offset_reuse` (momwire#1809, reach 9:
-// the bs2 executables, levels 6 to 9; bs2's C++ fill reads it beside the
-// whole's census, `_nec5_bspline_printout_core.cpp`); momwire#1860's levers, ported to the buried fills' C++
-// (`ni_eval::Features`), razor2p's fill-pair reuse (momwire#1971,
-// `_razor_pair_reuse_core.h`, which `_nec5_razor_seam_core.cpp` reads from
-// `ni_eval::requested_features`), and momwire#1956's retuned sheet weights
-// (reach 8: the nec5 executables).
+// The one fill-reuse switch, `pair_reuse` (momwire#1982, #2063 step 4;
+// reach 11, every executable), which each formulation's C++ route reads from
+// `ni_eval::requested_features` as its own reuse: bs2's census and same-edge
+// Toeplitz form (`_nec5_bspline_printout_core.cpp`), razor2p's fill-pair
+// reuse (`_nec5_razor_seam_core.cpp`, `_razor_pair_reuse_core.h`) and the
+// point-matched fill's class map (`_sin_pair_reuse_core.h`). Every route
+// that reads it is within its family's reach (the registry's `families`:
+// bs2 9, razor2p 8, sinusoidal 11). Then momwire#1860's levers, ported to
+// the buried fills' C++ (`ni_eval::Features`), and momwire#1956's retuned
+// sheet weights (reach 8: the nec5 executables).
 const ExeFeature EXE_FEATURES[] = {
     {"pair_reuse", 11, false},
-    {"offset_reuse", 9, false},
     {"factored_columns", 9, true},
     {"height_sheet_recal", 9, true},
     {"crossing_table", 9, false},
     {"crossing_above_rule", 9, false},
-    {"razor_pair_reuse", 8, false},
     {"crossing_sheet_retune", 8, false},
     {"crossing_anchors", 8, false},
 };
 
 // A carried feature that only one formulation's route runs: {name, basis}.
-// razor_pair_reuse is razor2p's fill, but nec5-bs2 shares its levels
-// (6 to 8) and its EXE_FEATURES, so without this it would accept the
-// variable, name it on line 2 and fill as with it off. It refuses instead,
-// in the registry's sentence (nec42-bs2 is past the reach anyway). Likewise
-// offset_reuse is bs2's fill alone, and nec5-razor2p shares its levels.
+// crossing_anchors is razor2p's fill, but nec5-bs2 shares its levels (6 to
+// 8) and its EXE_FEATURES, so without this it would accept the variable,
+// name it on line 2 and fill as with it off. It refuses instead, in the
+// registry's sentence.
 const char *const EXE_FEATURE_BASES[][2] = {
-    {"razor_pair_reuse", "razor2p"},
     {"crossing_anchors", "razor2p"},
-    {"offset_reuse", "bs2"},
 };
 
 bool feature_basis_here(const std::string &name) {
@@ -476,36 +472,33 @@ bool feature_basis_here(const std::string &name) {
     return true;
 }
 
-// What a WHOLE feature (`_features` part_of) runs on each formulation: {whole,
-// basis, the feature that formulation's C++ route reads for it}, as
-// `_features.enabled` resolves a part through its whole. Every executable
-// accepts the whole; what it turns on is its own basis's reuse:
-//   razor2p     its part, razor_pair_reuse (`_razor_pair_reuse_core.h`); the
-//               part's own variable, the older spelling, wins when set. The
-//               whole's own slot is requested only to be named on line 2:
-//               its one reader is the point-matched fill, which this
-//               route does not link;
-//   sinusoidal  the whole itself: the point-matched fill reads the
-//               `pair_reuse` slot (`_sin_pair_reuse_core.h`) and the family
-//               has no part;
-//   bs2         its part, offset_reuse (momwire#1809), and the whole's own
-//               slot, which bs2's fill reads as `BSplineSolver` reads
-//               `_reuse_on`: the census's classes (`_bspline_pair_reuse_core.h`,
-//               momwire#2063). Both are bs2's C++ fill's; the part's own
-//               variable wins when set, as for razor2p.
-// tests/test_features_registry.py holds this to the registry's parts.
-const char *const EXE_PARTS[][3] = {
-    {"pair_reuse", "razor2p", "razor_pair_reuse"},
-    {"pair_reuse", "sinusoidal", "pair_reuse"},
-    {"pair_reuse", "bs2", "offset_reuse"},
+// The deprecated spellings of `pair_reuse` (`_features.FamilyReach.alias`,
+// momwire#2063 step 4), each its formulation's: {variable, basis}. On its
+// own basis the variable reads as MOMWIRE_X_PAIR_REUSE, with a note on
+// stderr (`reuse_alias_note`), unless that one is set, which wins; on any
+// other basis it is a name this executable does not carry, refused as it
+// always was there. tests/test_features_registry.py holds this to the
+// registry's rows.
+const char *const REUSE_ALIASES[][2] = {
+    {"MOMWIRE_X_OFFSET_REUSE", "bs2"},
+    {"MOMWIRE_X_RAZOR_PAIR_REUSE", "razor2p"},
 };
 
-// The row of EXE_PARTS for whole `name` on this basis, or nullptr when
-// `name` is no whole here.
-const char *const *whole_parts_here(const std::string &name) {
-    for (const auto &row : EXE_PARTS)
-        if (name == row[0] && std::string(BASIS) == row[1]) return row;
-    return nullptr;
+bool env_set(const std::string &var) { return env(var.c_str()).find_first_not_of(" \t\r\n") != std::string::npos; }
+
+// This basis's deprecated `pair_reuse` variable, or "" when it has none.
+std::string reuse_alias_here() {
+    for (const auto &a : REUSE_ALIASES)
+        if (std::string(BASIS) == a[1]) return a[0];
+    return std::string();
+}
+
+// The deprecated variable this run reads for `pair_reuse`, or "": set, on
+// this basis, and MOMWIRE_X_PAIR_REUSE unset.
+std::string reuse_alias_read() {
+    const std::string alias = reuse_alias_here();
+    if (alias.empty() || env_set("MOMWIRE_X_PAIR_REUSE") || !env_set(alias)) return std::string();
+    return alias;
 }
 
 // A carried feature a BASIS accepts and whose formulation ignores it:
@@ -564,12 +557,16 @@ std::vector<std::string> features_requested() {
         const std::size_t eq = kv.find('=');
         if (eq == std::string::npos || kv.compare(0, prefix.size(), prefix) != 0) continue;
         if (!feature_value_on(kv.substr(eq + 1))) continue;
+        // this basis's deprecated `pair_reuse` variable: read below
+        if (kv.substr(0, eq) == reuse_alias_here()) continue;
         std::string name = kv.substr(prefix.size(), eq - prefix.size());
         for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         names.push_back(name);
     }
     for (const auto &alias : FEATURE_ALIASES)
         if (feature_value_on(env(alias[0]))) names.push_back(alias[1]);
+    const std::string reuse_alias = reuse_alias_read();
+    if (!reuse_alias.empty() && feature_value_on(env(reuse_alias.c_str()))) names.emplace_back("pair_reuse");
     return names;
 }
 
@@ -614,8 +611,9 @@ bool feature_env_set(const std::string &name) {
     std::vector<std::string> vars{var};
     for (const auto &alias : FEATURE_ALIASES)
         if (name == alias[1]) vars.emplace_back(alias[0]);
+    if (name == "pair_reuse" && !reuse_alias_here().empty()) vars.push_back(reuse_alias_here());
     for (const std::string &v : vars)
-        if (env(v.c_str()).find_first_not_of(" \t\r\n") != std::string::npos) return true;
+        if (env_set(v)) return true;
     return false;
 }
 
@@ -650,6 +648,10 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
 // run is on; 0 (go on) otherwise, with the ones it runs asked of both copies
 // of the C++ route (`configure_asked`).
 int feature_refusal() {
+    // `_features`' DeprecationWarning for the variable, on stderr
+    const std::string reuse_alias = reuse_alias_read();
+    if (!reuse_alias.empty())
+        std::fprintf(stderr, "%s is deprecated; use MOMWIRE_X_PAIR_REUSE (momwire#2063)\n", reuse_alias.c_str());
     const std::vector<std::string> asked = features_requested();
     for (const std::string &name : asked) {
         if (feature_runs_here(name)) continue;
@@ -678,42 +680,8 @@ void configure_asked(const std::vector<std::string> &asked, const std::string &p
     // withdrawn. Asked on, a default-here one is already requested and
     // unstamped; any other is requested, and stamped where this formulation
     // honours it (`feature_honoured_here`).
-    //
-    // A whole (`EXE_PARTS`) is named on line 2 where it runs something, as
-    // `_features._runs_on` names it: its part, distinct from it, is requested
-    // unstamped, unless the part's own variable is set, which then decides
-    // (on, the part is in `asked` and named itself; off, the whole did
-    // nothing). A whole whose part is none here, or does not run here, is
-    // withheld: neither requested nor named.
-    std::vector<std::string> names, parts, whole_unstamped;
-    for (const std::string &name : asked) {
-        const char *const *row = whole_parts_here(name);
-        if (row == nullptr) {
-            names.push_back(name);
-            continue;
-        }
-        const std::string part = row[2];
-        if (part.empty() || !feature_runs_here(part)) continue;
-        if (part != name) {
-            if (feature_env_set(part)) {
-                if (std::find(asked.begin(), asked.end(), part) == asked.end()) {
-                    // the part set off under its whole: nothing of the whole
-                    // is named, but its own slot still runs where a route
-                    // reads it (bs2's census, as `BSplineSolver._reuse_on`
-                    // follows the whole alone); razor2p's route reads only
-                    // its part
-                    whole_unstamped.push_back(name);
-                    continue;
-                }
-            } else {
-                parts.push_back(part);
-            }
-        }
-        names.push_back(name);
-    }
-    std::vector<std::string> stamped, unstamped = parts, withdrawn;
-    unstamped.insert(unstamped.end(), whole_unstamped.begin(), whole_unstamped.end());
-    for (const std::string &name : names)
+    std::vector<std::string> stamped, unstamped, withdrawn;
+    for (const std::string &name : asked)
         if (name == "nec2_end_cap") continue;  // the NEC-2 route's own (above)
         else if (!feature_default_here(name))
             (feature_honoured_here(name) ? stamped : unstamped).push_back(name);
