@@ -410,10 +410,10 @@ def junction_rule_identity() -> list[str]:
 # (`Feature.default`, held equal the same way) are identity the other way
 # round: on is their default, so only a variable that turns one OFF ("0")
 # keys a server of its own. Every launcher's engine runs where their reach
-# covers it, so their default there is on. A PART of a whole feature
-# (`Feature.part_of`, held equal the same way) is keyed by its "0" too: the
-# whole's variable alone turns it on, so "whole=1, part=0" must not reach a
-# server started with the whole alone (momwire#2153). So is a feature a deck
+# covers it, so their default there is on. A feature's deprecated per-family
+# variable (`FamilyReach.alias`, held equal the same way; once the parts of a
+# whole, momwire#2153) is keyed by its "0" too: alone it is that family's
+# kill switch for the feature, a deck's pragma included. So is a feature a deck
 # may ask for in a pragma card (`Feature.pragma`, held equal the same way):
 # the pragma reads as its variable set on, and the variable set to "0" is the
 # user's kill switch, so a call under "0" must not reach a server started
