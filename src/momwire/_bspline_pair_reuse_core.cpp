@@ -31,6 +31,7 @@ std::atomic<int64_t> g_plan_allowance{0};  // 0: the derived allowance
 std::atomic<int64_t> g_class_limit{0};
 std::atomic<int64_t> g_small{SMALL_DECK_SEGS};
 std::atomic<int> g_length_bits{LENGTH_BITS};
+std::atomic<int> g_image_key_probe{0};
 
 constexpr int W = 6;  // key words
 
@@ -46,12 +47,12 @@ int64_t value_bytes(int degree) {
     return d1 * d1 * static_cast<int64_t>(sizeof(cd));
 }
 
-FamilySpec direct_spec(int64_t n, int degree) {
+FamilySpec direct_spec(int64_t n, int degree, int n_blocks = 1) {
     FamilySpec d;
     d.name = "direct";
     d.key_words = W;
     d.code_bits = 1;
-    d.n_blocks = 1;
+    d.n_blocks = n_blocks;
     d.rows = d.cols = n;
     d.value_bytes = value_bytes(degree);
     d.near_singles = true;
@@ -75,51 +76,68 @@ void build(const Geometry &g, Plan &plan_ref) {
     Plan *const plan = &plan_ref;
     auto no = [&](const std::string &why) { pair_reuse::decline(*plan, why); };
     const int64_t n = g.n;
+    const bool image = g.img_l != nullptr;
     plan->fam.push_back(FamilyPlan());
-    plan->fam.back().spec = direct_spec(n, g.degree);
+    plan->fam.back().spec = direct_spec(n, g.degree, image ? 2 : 1);
     if (n > MAX_SEGS) return no("too many segments to plan");
     const int64_t allowance = plan_allowance(*plan, g.degree);
     const int64_t maps_bytes = pair_reuse::maps_bytes(*plan);
     if (maps_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
 
     // Per segment: its length as the kernel forms it, its centre, its
-    // direction (r - l), and its types.
-    std::vector<double> len(static_cast<size_t>(n)), mid(static_cast<size_t>(3 * n)),
-        dir(static_cast<size_t>(3 * n));
+    // direction (r - l), and its types; with the image, the same of the
+    // mirrored segment, from the end points the image fill hands the kernel.
+    const size_t nb = image ? 2 : 1;
+    std::vector<double> len(nb * static_cast<size_t>(n)), mid(nb * static_cast<size_t>(3 * n)),
+        dir(nb * static_cast<size_t>(3 * n));
     Ids h_ids, a_ids, b_ids;
-    std::vector<uint64_t> h_id(static_cast<size_t>(n)), a_id(static_cast<size_t>(n)),
+    std::vector<uint64_t> h_id(nb * static_cast<size_t>(n)), a_id(static_cast<size_t>(n)),
         b_id(static_cast<size_t>(n), 0);
-    for (int64_t i = 0; i < n; i++) {
-        const double *l = g.seg_l + 3 * i, *r = g.seg_r + 3 * i;
-        const double dx = r[0] - l[0], dy = r[1] - l[1], dz = r[2] - l[2];
-        len[static_cast<size_t>(i)] = std::sqrt(dx * dx + dy * dy + dz * dz);
-        for (int c = 0; c < 3; c++) {
-            mid[static_cast<size_t>(3 * i + c)] = 0.5 * (l[c] + r[c]);
-            dir[static_cast<size_t>(3 * i + c)] = r[c] - l[c];
+    for (size_t blk = 0; blk < nb; blk++)
+        for (int64_t i = 0; i < n; i++) {
+            const double *l = (blk ? g.img_l : g.seg_l) + 3 * i, *r = (blk ? g.img_r : g.seg_r) + 3 * i;
+            const size_t at = blk * static_cast<size_t>(n) + static_cast<size_t>(i);
+            const double dx = r[0] - l[0], dy = r[1] - l[1], dz = r[2] - l[2];
+            len[at] = std::sqrt(dx * dx + dy * dy + dz * dz);
+            for (int c = 0; c < 3; c++) {
+                mid[3 * at + static_cast<size_t>(c)] = 0.5 * (l[c] + r[c]);
+                dir[3 * at + static_cast<size_t>(c)] = r[c] - l[c];
+            }
+            const std::pair<uint64_t, uint64_t> ht = length_type(len[at]);
+            h_id[at] = static_cast<uint64_t>(h_ids.id(ht.first, ht.second));
+            if (blk) continue;
+            a_id[static_cast<size_t>(i)] = static_cast<uint64_t>(a_ids.id(bits(g.a[i])));
+            if (g.b_src) b_id[static_cast<size_t>(i)] = static_cast<uint64_t>(b_ids.id(bits(g.b_src[i])));
         }
-        const std::pair<uint64_t, uint64_t> ht = length_type(len[static_cast<size_t>(i)]);
-        h_id[static_cast<size_t>(i)] = static_cast<uint64_t>(h_ids.id(ht.first, ht.second));
-        a_id[static_cast<size_t>(i)] = static_cast<uint64_t>(a_ids.id(bits(g.a[i])));
-        if (g.b_src) b_id[static_cast<size_t>(i)] = static_cast<uint64_t>(b_ids.id(bits(g.b_src[i])));
-    }
+    // TEST HOOK: block 1 keyed on the source's unmirrored direction.
+    const bool key_probe = image && g_image_key_probe.load() == 1;
     constexpr size_t TYPE_MAX = size_t(1) << 25;
     if (h_ids.m.size() >= (size_t(1) << 32) || a_ids.m.size() >= TYPE_MAX || b_ids.m.size() >= TYPE_MAX)
         return no("too many segment types to key");
     const bool ek = g.group_i != nullptr && g.group_j != nullptr;
     const std::vector<double> &thr = g.thresholds;
 
-    auto key = [&](int, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
+    auto key = [&](int blk, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
         code = 0;
         if (g.edge[o] == g.edge[s]) {
-            for (int q = 0; q < W; q++) w[q] = 0;  // no real key has w[0] == 0
-            return Key::Near;
+            // The sentinel: the direct block's same-edge pairs and the offset
+            // route's own image blocks; a grazing edge's own image pairs are
+            // their own classes; any other own image pair is keyed.
+            const int8_t mode = blk ? g.img_mode[o] : int8_t(OffsetRoute);
+            if (mode == OffsetRoute) {
+                for (int q = 0; q < W; q++) w[q] = 0;  // no real key has w[0] == 0
+                return Key::Near;
+            }
+            if (mode == OwnPairs) return Key::Own;
         }
-        const double *mo = &mid[static_cast<size_t>(3 * o)], *ms = &mid[static_cast<size_t>(3 * s)];
-        const double *A = &dir[static_cast<size_t>(3 * o)], *B = &dir[static_cast<size_t>(3 * s)];
+        // Block 1's source is the mirrored segment.
+        const size_t si = static_cast<size_t>(blk) * static_cast<size_t>(n) + static_cast<size_t>(s);
+        const double *mo = &mid[static_cast<size_t>(3 * o)], *ms = &mid[3 * si];
+        const double *A = &dir[static_cast<size_t>(3 * o)], *B = &dir[3 * (key_probe ? static_cast<size_t>(s) : si)];
         const double mx = mo[0] - ms[0], my = mo[1] - ms[1], mz = mo[2] - ms[2];
         const double mm = mx * mx + my * my + mz * mz;
         const double dm = std::sqrt(mm);
-        const double hi = len[static_cast<size_t>(o)], hj = len[static_cast<size_t>(s)];
+        const double hi = len[static_cast<size_t>(o)], hj = len[si];
         const double hmax = std::max(hi, hj);
         if (!(dm >= NEAR_LENGTHS * std::max(hmax, g.a[o]))) return Key::Own;
         const double ratio = dm / hmax;
@@ -140,7 +158,7 @@ void build(const Geometry &g, Plan &plan_ref) {
         const uint64_t bt = elig && g.b_src ? b_id[static_cast<size_t>(s)] : 0;
         w[0] = static_cast<uint64_t>(e + 2200) | (uint64_t(elig) << 12) | (a_id[static_cast<size_t>(o)] << 13) |
                (bt << 38);
-        w[1] = h_id[static_cast<size_t>(o)] | (h_id[static_cast<size_t>(s)] << 32);
+        w[1] = h_id[static_cast<size_t>(o)] | (h_id[si] << 32);
         // RECIPROCITY: the pair read from s is the transpose, J[P, p, s, o]
         // = J[p, P, o, s], when the two rows' radii (and under the extended
         // kernel their tubes and eligibility) agree: its key is this one's
@@ -151,8 +169,12 @@ void build(const Geometry &g, Plan &plan_ref) {
                          (!elig || !g.b_src || b_id[static_cast<size_t>(o)] == b_id[static_cast<size_t>(s)]) &&
                          elig == (ek && g.group_i[s] >= 0 && g.group_i[s] == g.group_j[o]);
         if (sym) {
+            // The transpose reads this pair's own two segments, source (in
+            // block 1 the mirrored one) first. EK eligibility is one label
+            // for real and mirrored segments alike (`_ek_axis_labels`), so
+            // the direct labels read it in either block.
             const uint64_t t[W] = {w[0],
-                                   h_id[static_cast<size_t>(s)] | (h_id[static_cast<size_t>(o)] << 32),
+                                   h_id[si] | (h_id[static_cast<size_t>(o)] << 32),
                                    w[2],
                                    static_cast<uint64_t>(-static_cast<int64_t>(w[4])),
                                    static_cast<uint64_t>(-static_cast<int64_t>(w[3])),
@@ -207,6 +229,13 @@ std::string fingerprint_of(const Geometry &g) {
         s.append(reinterpret_cast<const char *>(g.group_j), static_cast<size_t>(g.n) * sizeof(int64_t));
     }
     if (g.b_src) s.append(reinterpret_cast<const char *>(g.b_src), static_cast<size_t>(g.n) * sizeof(double));
+    // A plan without the image block keys as it always did.
+    if (g.img_l) {
+        put(s, g_image_key_probe.load());
+        s.append(reinterpret_cast<const char *>(g.img_l), static_cast<size_t>(3 * g.n) * sizeof(double));
+        s.append(reinterpret_cast<const char *>(g.img_r), static_cast<size_t>(3 * g.n) * sizeof(double));
+        s.append(reinterpret_cast<const char *>(g.img_mode), static_cast<size_t>(g.n) * sizeof(int8_t));
+    }
     return s;
 }
 
@@ -223,9 +252,11 @@ int64_t kept_bytes_per_class(int degree) {
 int64_t plan_allowance(const Plan &p, int degree) {
     const int64_t b = g_plan_allowance.load();
     if (b > 0) return b;
+    // Per block, as razor2p's: each block's map and its cap's classes.
     int64_t a = 0;
     for (const FamilyPlan &f : p.fam)
-        a += pair_reuse::plan_allowance(f.spec.rows * f.spec.cols, kept_bytes_per_class(degree));
+        for (int blk = 0; blk < f.spec.n_blocks; blk++)
+            a += pair_reuse::plan_allowance(f.spec.rows * f.spec.cols, kept_bytes_per_class(degree));
     return a;
 }
 
@@ -236,9 +267,13 @@ void set_length_bits(int b) { g_length_bits.store(b < 0 ? LENGTH_BITS : b); }
 int length_bits() { return g_length_bits.load(); }
 int64_t small_deck_segs() { return g_small.load(); }
 
+void set_image_key_probe(int probe) { g_image_key_probe.store(probe); }
+
 std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built) {
     if (g.n <= 0 || !g.seg_l || !g.seg_r || !g.a || !g.edge)
         throw std::invalid_argument("bspline pair_reuse: an empty or mis-shaped geometry");
+    if ((g.img_l == nullptr) != (g.img_r == nullptr) || (g.img_l == nullptr) != (g.img_mode == nullptr))
+        throw std::invalid_argument("bspline pair_reuse: the image's end points and modes go together");
     if ((g.group_i == nullptr) != (g.group_j == nullptr))
         throw std::invalid_argument("bspline pair_reuse: group_i and group_j go together");
     return pair_reuse::plan_for(
@@ -284,6 +319,23 @@ std::shared_ptr<const Plan> plan_of_classes(const int32_t *cls, int64_t n) {
 }
 
 int64_t same_edge_pairs(const Plan &p) { return p.fam.empty() ? 0 : p.fam[0].near_unlisted; }
+
+bool has_image(const Plan &p) { return !p.fam.empty() && p.fam[0].spec.n_blocks == 2 && !p.fam[0].map[1].empty(); }
+
+int32_t sentinel_class(const Plan &p) {
+    // Pair (0, 0) is segment 0 against itself: a same-edge pair.
+    if (p.fam.empty() || p.fam[0].map[0].empty()) return -1;
+    return p.fam[0].map[0][0] >> p.fam[0].spec.code_bits;
+}
+
+int64_t image_sentinel_pairs(const Plan &p) {
+    if (!has_image(p)) return 0;
+    const FamilyPlan &f = p.fam[0];
+    const int32_t c = sentinel_class(p);
+    int64_t k = 0;
+    for (int32_t e : f.map[1]) k += (e >> f.spec.code_bits) == c;
+    return k;
+}
 
 int64_t near_pairs(const Plan &p) {
     return p.fam.empty() ? 0 : p.fam[0].near - p.fam[0].near_unlisted;
@@ -351,6 +403,37 @@ void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t 
         const cd *v = w.values + static_cast<int64_t>(c) * dd;
         if (rel && !probe) {
             // The transpose of the class's value (reciprocity), as `gather`.
+            for (int p = 0; p < d1; p++)
+                for (int q = 0; q < d1; q++) o[(p * d1 + q) * plane] = v[q * d1 + p];
+        } else {
+            for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = v[pq];
+        }
+    });
+}
+
+void check_image_window(const ImageWindow &w) {
+    if (!w.plan || !w.values || !has_image(*w.plan))
+        throw std::invalid_argument("bspline pair_reuse: an image window needs a plan with the image block");
+    if (w.d1 < 2 || w.d1 > 4) throw std::invalid_argument("bspline pair_reuse: d + 1 must be 2, 3 or 4");
+    if (w.zero_class != sentinel_class(*w.plan))
+        throw std::invalid_argument("bspline pair_reuse: the image window's zero class is the sentinel's");
+}
+
+void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
+    const FamilyPlan &f = w.plan->fam[0];
+    const int d1 = w.d1;
+    const int64_t dd = int64_t(d1) * d1;
+    const size_t plane = nr * nc;
+    pair_reuse::gather_pairs(f, 1, rows, static_cast<ptrdiff_t>(nr), cols, static_cast<ptrdiff_t>(nc),
+                             [&](ptrdiff_t io, ptrdiff_t is, int32_t c, int rel) {
+        cd *o = out + io * static_cast<ptrdiff_t>(nc) + is;
+        if (c == w.zero_class) {
+            // An offset edge's own image block: the offset route's.
+            for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = cd(0.0, 0.0);
+            return;
+        }
+        const cd *v = w.values + static_cast<int64_t>(c) * dd;
+        if (rel) {
             for (int p = 0; p < d1; p++)
                 for (int q = 0; q < d1; q++) o[(p * d1 + q) * plane] = v[q * d1 + p];
         } else {
@@ -481,10 +564,16 @@ void remainder_blocks(const RemainderGeometry &g, std::vector<int64_t> &ta, std:
     }
 }
 
-void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out) {
-    std::fill(out, out + n_wires * n_wires * 3, int64_t(0));
+void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out, int block) {
+    const int64_t cell = n_wires * n_wires * 3;
+    std::fill(out, out + cell, int64_t(0));
     if (p.fam.empty() || p.fam[0].map[0].empty()) return;
-    pair_reuse::wire_map(p.fam[0], wire_of_seg, wire_of_seg, n_wires, out);
+    if (block < 0 || block >= p.fam[0].spec.n_blocks) throw std::invalid_argument("bspline pair_reuse: no such block");
+    // Every block in one pass (a class is computed at its first pair, in
+    // block order), then the one asked for.
+    std::vector<int64_t> all(static_cast<size_t>(cell * p.fam[0].spec.n_blocks), 0);
+    pair_reuse::wire_map(p.fam[0], wire_of_seg, wire_of_seg, n_wires, all.data());
+    std::copy(all.begin() + block * cell, all.begin() + (block + 1) * cell, out);
 }
 
 pair_reuse::Counters cache_counters() { return pair_reuse::counters(BASIS); }

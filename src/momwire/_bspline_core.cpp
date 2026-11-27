@@ -3639,6 +3639,7 @@ assemble_Z_bspline_windowed(
 static constexpr size_t WINDOW_TILE_ROWS = 128;
 static constexpr size_t WINDOW_TILE_COLS = 32;
 static std::atomic<int64_t> g_window_tiled{0}, g_window_whole{0}, g_window_tiles{0};
+static std::atomic<int64_t> g_wwindow_tiled{0}, g_wwindow_whole{0};
 
 #if MW_WINDOWED_LANES_1290
 template <class ZV>
@@ -3650,10 +3651,15 @@ struct WindowTileZ {
     std::complex<double> &operator()(int64_t m, int64_t n) const { return (*z)(row[m], col[n - n_rows]); }
 };
 
-template <int D, class ZV>
+// WEIGHTED (the image block, momwire#2063 step 2a): `WA` / `WP` are the
+// window's complex per-pair weights, (i1 - i0, j1 - j0) as the weighted
+// windowed kernel takes them, and each tile gets its own rows' and columns'
+// weights beside its J, in place of the tangents; `scale` as there.
+template <int D, bool WEIGHTED, class ZV>
 static void
 assemble_Z_bspline_windowed_tiles_lanes(
     const mw::bspline::WindowSource &source, const int64_t *ss, const double *pl, const double *Td,
+    const std::complex<double> *WA, const std::complex<double> *WP, std::complex<double> scale,
     size_t n_segs, const int64_t *mi_p, size_t n_m, const int64_t *ni_p, size_t n_n,
     int64_t i0, int64_t i1, int64_t j0, int64_t j1, double omega_mu, double inv_omega_eps,
     ZV &z_view, uintptr_t cancel_flag
@@ -3670,7 +3676,7 @@ assemble_Z_bspline_windowed_tiles_lanes(
         std::vector<int64_t> rows, cols;
         std::vector<int64_t> ss_l((TR + TC) * NM), lm(TR + TC), gm(TR), gn(TC);
         std::vector<double> pl_l((TR + TC) * NP), td_l;
-        std::vector<std::complex<double>> J;
+        std::vector<std::complex<double>> J, wa_l, wp_l;
         int64_t mine = 0;
         MW_OMP_FOR_COLLAPSE2
         for (size_t rt = 0; rt < n_rt; rt++) {
@@ -3715,17 +3721,35 @@ assemble_Z_bspline_windowed_tiles_lanes(
                 };
                 renumber(rows, mi_p, m0, m1, i0, i1, 0, 0, gm.data());
                 renumber(cols, ni_p, c0, c1, j0, j1, tm, nr, gn.data());
-                td_l.resize((size_t)(nr + nc) * 3);
-                for (int64_t q = 0; q < nr; q++)
-                    for (int c = 0; c < 3; c++) td_l[(size_t)q * 3 + c] = Td[rows[(size_t)q] * 3 + c];
-                for (int64_t q = 0; q < nc; q++)
-                    for (int c = 0; c < 3; c++) td_l[(size_t)(nr + q) * 3 + c] = Td[cols[(size_t)q] * 3 + c];
+                if (WEIGHTED) {
+                    // The tile's weights, (nr, nc) on its local segments.
+                    const size_t wrow = (size_t)(j1 - j0);
+                    wa_l.resize((size_t)nr * (size_t)nc);
+                    wp_l.resize((size_t)nr * (size_t)nc);
+                    for (int64_t q = 0; q < nr; q++) {
+                        const size_t r = (size_t)(rows[(size_t)q] - i0) * wrow;
+                        for (int64_t t = 0; t < nc; t++) {
+                            const size_t at = r + (size_t)(cols[(size_t)t] - j0);
+                            wa_l[(size_t)(q * nc + t)] = WA[at];
+                            wp_l[(size_t)(q * nc + t)] = WP[at];
+                        }
+                    }
+                } else {
+                    td_l.resize((size_t)(nr + nc) * 3);
+                    for (int64_t q = 0; q < nr; q++)
+                        for (int c = 0; c < 3; c++) td_l[(size_t)q * 3 + c] = Td[rows[(size_t)q] * 3 + c];
+                    for (int64_t q = 0; q < nc; q++)
+                        for (int c = 0; c < 3; c++) td_l[(size_t)(nr + q) * 3 + c] = Td[cols[(size_t)q] * 3 + c];
+                }
                 J.resize(NP * (size_t)nr * (size_t)nc);
                 source(rows.data(), (size_t)nr, cols.data(), (size_t)nc, J.data());
                 WindowTileZ<ZV> zt{&z_view, gm.data(), gn.data(), (int64_t)tm};
-                assemble_Z_bspline_windowed_lanes<D, false, false, false, false>(
-                    reinterpret_cast<const double *>(J.data()), ss_l.data(), pl_l.data(), td_l.data(),
-                    nullptr, nullptr, std::complex<double>(1.0, 0.0), lm.data(), lm.data() + tm, tm, tn,
+                assemble_Z_bspline_windowed_lanes<D, false, false, WEIGHTED, false>(
+                    reinterpret_cast<const double *>(J.data()), ss_l.data(), pl_l.data(),
+                    WEIGHTED ? nullptr : td_l.data(),
+                    WEIGHTED ? reinterpret_cast<const double *>(wa_l.data()) : nullptr,
+                    WEIGHTED ? reinterpret_cast<const double *>(wp_l.data()) : nullptr,
+                    WEIGHTED ? scale : std::complex<double>(1.0, 0.0), lm.data(), lm.data() + tm, tm, tn,
                     0, nr, nr, nr + nc, omega_mu, inv_omega_eps, 0.0, 0.0, zt, nullptr, 0);
                 mine++;
             }
@@ -3785,15 +3809,18 @@ assemble_Z_bspline_windowed_tiles(
         const double *pl = polys.data(), *Td = tangents.data();
         switch (D) {
             case 1:
-                assemble_Z_bspline_windowed_tiles_lanes<1>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                assemble_Z_bspline_windowed_tiles_lanes<1, false>(source, ss, pl, Td, nullptr, nullptr, 1.0,
+                    (size_t)n_segs, m_idx.data(), n_m,
                     n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
                 break;
             case 2:
-                assemble_Z_bspline_windowed_tiles_lanes<2>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                assemble_Z_bspline_windowed_tiles_lanes<2, false>(source, ss, pl, Td, nullptr, nullptr, 1.0,
+                    (size_t)n_segs, m_idx.data(), n_m,
                     n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
                 break;
             default:
-                assemble_Z_bspline_windowed_tiles_lanes<3>(source, ss, pl, Td, (size_t)n_segs, m_idx.data(), n_m,
+                assemble_Z_bspline_windowed_tiles_lanes<3, false>(source, ss, pl, Td, nullptr, nullptr, 1.0,
+                    (size_t)n_segs, m_idx.data(), n_m,
                     n_idx.data(), n_n, i0, i1, j0, j1, omega_mu, inv_omega_eps, z_view, cancel_flag);
                 break;
         }
@@ -4063,6 +4090,113 @@ assemble_Z_bspline_weighted_windowed(
             throw std::runtime_error(
                 "assemble_Z_bspline_weighted_windowed: max_d must be 1, 2 or 3");
     }
+}
+
+
+// momwire#2063 step 2a: `assemble_Z_bspline_weighted_windowed` on a window
+// whose moments are never materialised, the image block's twin of
+// `assemble_Z_bspline_windowed_tiles` (`_bspline_core.h`). The weights are
+// the window's own, (i1 - i0, j1 - j0); a tile reads its rows' and columns'
+// of them. Bit for bit the weighted kernel on the source's whole window, for
+// the reasons the unweighted tiles are (the lane kernel's entries read no
+// neighbour, and each is added to Z once per call).
+static void
+assemble_Z_bspline_weighted_windowed_tiles(
+    const mw::bspline::WindowSource &source,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_win,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_win,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t n_segs,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega, double eps_, double mu_,
+    std::complex<double> scale,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag
+) {
+    const int D = (int)support_seg.shape(1) - 1;
+    if (support_seg.ndim() != 2 || D < 1 || D > 3)
+        throw std::runtime_error("assemble_Z_bspline_weighted_windowed_tiles: max_d must be 1, 2 or 3");
+    const int64_t n_basis = support_seg.shape(0), NM = D + 1;
+    if (polys.ndim() != 3 || polys.shape(0) != n_basis || polys.shape(1) != NM || polys.shape(2) != NM)
+        throw std::runtime_error("polys.shape must be (n_basis, D+1, D+1)");
+    if (!(0 <= i0 && i0 < i1 && i1 <= n_segs && 0 <= j0 && j0 < j1 && j1 <= n_segs))
+        throw std::runtime_error("assemble_Z_bspline_weighted_windowed_tiles: the window must lie in the segments");
+    for (const auto *w : {&wA_win, &wPhi_win})
+        if (w->ndim() != 2 || w->shape(0) != i1 - i0 || w->shape(1) != j1 - j0)
+            throw std::runtime_error("weight windows must be (i1 - i0, j1 - j0)");
+    if (Z.ndim() != 2 || Z.shape(0) != n_basis || Z.shape(1) != n_basis)
+        throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
+    auto in_basis = [&](const py::array_t<int64_t, py::array::c_style | py::array::forcecast> &ix) {
+        const int64_t *p = ix.data();
+        for (py::ssize_t t = 0; t < ix.shape(0); t++)
+            if (p[t] < 0 || p[t] >= n_basis)
+                throw std::runtime_error("assemble_Z_bspline_weighted_windowed_tiles: a basis index out of range");
+    };
+    in_basis(m_idx);
+    in_basis(n_idx);
+    const int64_t *ssp = support_seg.data();
+    for (py::ssize_t t = 0; t < support_seg.size(); t++)
+        if (ssp[t] >= n_segs)
+            throw std::runtime_error("assemble_Z_bspline_weighted_windowed_tiles: a support past the segments");
+    const size_t n_m = (size_t)m_idx.shape(0), n_n = (size_t)n_idx.shape(0);
+    if (n_m == 0 || n_n == 0) return;
+#if MW_WINDOWED_LANES_1290
+    {
+        auto z_view = Z.mutable_unchecked<2>();
+        py::gil_scoped_release release;
+        const double omega_mu = omega * mu_;
+        const double inv_omega_eps = 1.0 / (omega * eps_);
+        const int64_t *ss = support_seg.data();
+        const double *pl = polys.data();
+        const std::complex<double> *WA = wA_win.data(), *WP = wPhi_win.data();
+        switch (D) {
+            case 1:
+                assemble_Z_bspline_windowed_tiles_lanes<1, true>(source, ss, pl, nullptr, WA, WP, scale,
+                    (size_t)n_segs, m_idx.data(), n_m, n_idx.data(), n_n, i0, i1, j0, j1, omega_mu,
+                    inv_omega_eps, z_view, cancel_flag);
+                break;
+            case 2:
+                assemble_Z_bspline_windowed_tiles_lanes<2, true>(source, ss, pl, nullptr, WA, WP, scale,
+                    (size_t)n_segs, m_idx.data(), n_m, n_idx.data(), n_n, i0, i1, j0, j1, omega_mu,
+                    inv_omega_eps, z_view, cancel_flag);
+                break;
+            default:
+                assemble_Z_bspline_windowed_tiles_lanes<3, true>(source, ss, pl, nullptr, WA, WP, scale,
+                    (size_t)n_segs, m_idx.data(), n_m, n_idx.data(), n_n, i0, i1, j0, j1, omega_mu,
+                    inv_omega_eps, z_view, cancel_flag);
+                break;
+        }
+    }
+    g_wwindow_tiled.fetch_add(1, std::memory_order_relaxed);
+#else
+    // No lane kernel: the window whole, from one source call, through the
+    // weighted kernel's reference loop.
+    const size_t nr = (size_t)(i1 - i0), nc = (size_t)(j1 - j0);
+    std::vector<int64_t> rows(nr), cols(nc);
+    for (size_t q = 0; q < nr; q++) rows[q] = i0 + (int64_t)q;
+    for (size_t q = 0; q < nc; q++) cols[q] = j0 + (int64_t)q;
+    std::vector<std::complex<double>> J((size_t)(NM * NM) * nr * nc);
+    source(rows.data(), nr, cols.data(), nc, J.data());
+    py::Buffer b;
+    b.ptr = J.data();
+    b.ndim = 4;
+    const py::ssize_t shape[4] = {(py::ssize_t)NM, (py::ssize_t)NM, (py::ssize_t)nr, (py::ssize_t)nc};
+    py::ssize_t acc = (py::ssize_t)sizeof(std::complex<double>);
+    for (int q = 3; q >= 0; q--) {
+        b.shape[q] = shape[q];
+        b.strides[q] = acc;
+        acc *= shape[q];
+    }
+    b.writeable = false;
+    assemble_Z_bspline_weighted_windowed(
+        py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>::borrow(b), support_seg,
+        polys, wA_win, wPhi_win, m_idx, n_idx, i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag,
+        py::none(), false);
+    g_wwindow_whole.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 
@@ -8638,11 +8772,36 @@ void assemble_Z_bspline_windowed_tiles(
         omega, eps_, mu_, Z, cancel_flag);
 }
 
+void assemble_Z_bspline_weighted_windowed_tiles(
+    const WindowSource &source,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_win,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_win,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t n_segs,
+    int64_t i0,
+    int64_t i1,
+    int64_t j0,
+    int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    std::complex<double> scale,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag) {
+    ::assemble_Z_bspline_weighted_windowed_tiles(source, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx, n_segs,
+        i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
+}
+
 WindowTileCounts window_tile_counts() {
     WindowTileCounts c;
     c.tiled = g_window_tiled.load();
     c.whole = g_window_whole.load();
     c.tiles = g_window_tiles.load();
+    c.wtiled = g_wwindow_tiled.load();
+    c.wwhole = g_wwindow_whole.load();
     return c;
 }
 
