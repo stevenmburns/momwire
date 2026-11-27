@@ -25,15 +25,18 @@ using detail::Rep;
 void build_groups(const std::vector<Rep> &reps, int64_t n_rows_block, int64_t n_cols, int n_blocks,
                   int rep_rows, std::vector<Group> &groups, int64_t &evals) {
     const int64_t n_rows = n_blocks * n_rows_block;
+    // An apart class (`Key::Apart`) is its adapter's to evaluate: in no group.
     std::vector<int64_t> cnt(static_cast<size_t>(n_rows + 1), 0);
-    for (const Rep &r : reps) cnt[static_cast<size_t>(r.block * n_rows_block + r.obs + 1)]++;
+    for (const Rep &r : reps)
+        if (!r.apart) cnt[static_cast<size_t>(r.block * n_rows_block + r.obs + 1)]++;
     for (int64_t i = 0; i < n_rows; i++) cnt[static_cast<size_t>(i + 1)] += cnt[static_cast<size_t>(i)];
     std::vector<int32_t> order(reps.size());
     {
         std::vector<int64_t> pos(cnt.begin(), cnt.end() - 1);
         for (size_t c = 0; c < reps.size(); c++)
-            order[static_cast<size_t>(pos[static_cast<size_t>(reps[c].block * n_rows_block + reps[c].obs)]++)] =
-                static_cast<int32_t>(c);
+            if (!reps[c].apart)
+                order[static_cast<size_t>(pos[static_cast<size_t>(reps[c].block * n_rows_block + reps[c].obs)]++)] =
+                    static_cast<int32_t>(c);
     }
     std::vector<int64_t> mark(static_cast<size_t>(n_cols), -1);
     int64_t stamp = 0;
@@ -131,6 +134,23 @@ void finish(FamilyPlan &f, const std::vector<Rep> &reps, int64_t singles, const 
     // A near class is a single (`near_singles`) or a Key::Near class.
     const bool near_classes = f.spec.near_singles || !f.near_flat.empty() || f.near_unlisted > 0;
     if (near_classes) f.near_bits.assign((reps.size() + 63) / 64, 0);
+    // The apart classes, in their representatives' flat order.
+    f.apart_cls.clear();
+    f.apart_rep.clear();
+    f.apart_bits.clear();
+    for (size_t c = 0; c < reps.size(); c++)
+        if (reps[c].apart) {
+            if (f.apart_bits.empty()) f.apart_bits.assign((reps.size() + 63) / 64, 0);
+            f.apart_bits[c / 64] |= uint64_t(1) << (c % 64);
+            f.apart_cls.push_back(static_cast<int32_t>(c));
+            f.apart_block[reps[c].block]++;
+        }
+    auto flat = [&](int32_t c) {
+        const Rep &r = reps[static_cast<size_t>(c)];
+        return (static_cast<int64_t>(r.block) * f.spec.rows + r.obs) * f.spec.cols + r.src;
+    };
+    std::sort(f.apart_cls.begin(), f.apart_cls.end(), [&](int32_t a, int32_t b) { return flat(a) < flat(b); });
+    for (int32_t c : f.apart_cls) f.apart_rep.push_back(flat(c));
     for (size_t c = 0; c < reps.size(); c++) {
         f.cls_block[reps[c].block]++;
         if ((f.spec.near_singles && reps[c].single == 1) || reps[c].single == 2) {
@@ -216,7 +236,8 @@ bool BandBudget::fold(int64_t held, int64_t floor) {
 }
 
 size_t FamilyPlan::nbytes() const {
-    size_t b = map[0].size() * 4 + map[1].size() * 4 + rep_code.size() + 8 * (near_flat.size() + rep_flat.size());
+    size_t b = map[0].size() * 4 + map[1].size() * 4 + rep_code.size() + 8 * (near_flat.size() + rep_flat.size()) +
+               4 * apart_cls.size() + 8 * apart_rep.size();
     for (const Group &g : groups) b += 4 * (g.obs.size() + g.src.size() + g.cls.size() + g.at.size());
     return b;
 }

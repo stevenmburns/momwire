@@ -35,8 +35,23 @@ std::atomic<int64_t> g_class_limit{0};
 std::atomic<int64_t> g_small{SMALL_DECK_SEGS};
 std::atomic<int> g_length_bits{LENGTH_BITS};
 std::atomic<int> g_image_key_probe{0};
+std::atomic<int> g_routine_probe{0};
+std::atomic<double> g_same_edge_near{NEAR_LENGTHS};
+// The routine bit: w[0]'s top bit, which no general key sets (its exponent,
+// eligibility and two 25-bit types fill bits 0..62).
+constexpr uint64_t ROUTINE_BIT = uint64_t(1) << 63;
 
 constexpr int W = 6;  // key words
+
+// Per row, the [lo, hi) columns of its near same-edge singles.
+struct Bands {
+    std::vector<int64_t> lo, hi;
+};
+
+bool bit(const std::vector<uint64_t> &b, int64_t c) {
+    return !b.empty() && (b[static_cast<size_t>(c) / 64] >> (c % 64) & 1);
+}
+bool near_apart(const FamilyPlan &f, int64_t c) { return bit(f.near_bits, c) && bit(f.apart_bits, c); }
 
 const pair_reuse::Policy POLICY = [] {
     pair_reuse::Policy p;
@@ -59,7 +74,6 @@ FamilySpec direct_spec(int64_t n, int degree, int n_blocks = 1) {
     d.rows = d.cols = n;
     d.value_bytes = value_bytes(degree);
     d.near_singles = true;
-    d.list_near = false;
     d.class_limit = g_class_limit.load();
     return d;
 }
@@ -119,20 +133,18 @@ void build(const Geometry &g, Plan &plan_ref) {
         return no("too many segment types to key");
     const bool ek = g.group_i != nullptr && g.group_j != nullptr;
     const std::vector<double> &thr = g.thresholds;
+    const bool routine_probe = g_routine_probe.load() == 1;
+    const double same_near = g_same_edge_near.load();
 
     auto key = [&](int blk, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
         code = 0;
-        if (g.edge[o] == g.edge[s]) {
-            // The sentinel: the direct block's same-edge pairs and the offset
-            // route's own image blocks; a grazing edge's own image pairs are
-            // their own classes; any other own image pair is keyed.
-            const int8_t mode = blk ? g.img_mode[o] : int8_t(OffsetRoute);
-            if (mode == OffsetRoute) {
-                for (int q = 0; q < W; q++) w[q] = 0;  // no real key has w[0] == 0
-                return Key::Near;
-            }
-            if (mode == OwnPairs) return Key::Own;
-        }
+        // The direct block's same-edge pairs are the same-edge routine's
+        // (keyed apart); a grazing edge's own image pairs are their own
+        // classes; any other own image pair is keyed like the rest.
+        const bool same = g.edge[o] == g.edge[s];
+        if (same && blk && g.img_mode[o] == OwnPairs) return Key::Own;
+        const bool apart = same && !blk;
+        const Key own = apart ? Key::OwnApart : Key::Own;
         // Block 1's source is the mirrored segment.
         const size_t si = static_cast<size_t>(blk) * static_cast<size_t>(n) + static_cast<size_t>(s);
         const double *mo = &mid[static_cast<size_t>(3 * o)], *ms = &mid[3 * si];
@@ -142,13 +154,16 @@ void build(const Geometry &g, Plan &plan_ref) {
         const double dm = std::sqrt(mm);
         const double hi = len[static_cast<size_t>(o)], hj = len[si];
         const double hmax = std::max(hi, hj);
-        if (!(dm >= NEAR_LENGTHS * std::max(hmax, g.a[o]))) return Key::Own;
-        const double ratio = dm / hmax;
-        for (double t : thr)
-            if (std::fabs(ratio - t) <= TIE_REL * t) return Key::Own;
+        if (!(dm >= (apart && !routine_probe ? same_near : NEAR_LENGTHS) * std::max(hmax, g.a[o]))) return own;
+        // The same-edge routine has no ladder: no tie rule (but the probe's).
+        if (!apart || routine_probe) {
+            const double ratio = dm / hmax;
+            for (double t : thr)
+                if (std::fabs(ratio - t) <= TIE_REL * t) return own;
+        }
         const double D = std::max(dm - 0.5 * (hi + hj), g.a[o]);
         const double D2 = D * D;
-        if (!(D2 > 0.0) || !std::isfinite(D2)) return Key::Own;
+        if (!(D2 > 0.0) || !std::isfinite(D2)) return own;
         int e;
         double inv;
         quantum(D2, KEY_BITS, e, inv);
@@ -156,11 +171,13 @@ void build(const Geometry &g, Plan &plan_ref) {
         const double mB = mx * B[0] + my * B[1] + mz * B[2];
         const double AB = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
         if (!qword(mm, inv, w[2]) || !qword(mA, inv, w[3]) || !qword(mB, inv, w[4]) || !qword(AB, inv, w[5]))
-            return Key::Own;
+            return own;
         const bool elig = ek && g.group_i[o] >= 0 && g.group_i[o] == g.group_j[s];
         const uint64_t bt = elig && g.b_src ? b_id[static_cast<size_t>(s)] : 0;
         w[0] = static_cast<uint64_t>(e + 2200) | (uint64_t(elig) << 12) | (a_id[static_cast<size_t>(o)] << 13) |
                (bt << 38);
+        // The routine bit (the probe drops it).
+        if (apart && !routine_probe) w[0] |= ROUTINE_BIT;
         w[1] = h_id[static_cast<size_t>(o)] | (h_id[si] << 32);
         // RECIPROCITY: the pair read from s is the transpose, J[P, p, s, o]
         // = J[p, P, o, s], when the two rows' radii (and under the extended
@@ -192,7 +209,7 @@ void build(const Geometry &g, Plan &plan_ref) {
                 code = 1;
             }
         }
-        return Key::Shared;
+        return apart ? Key::Apart : Key::Shared;
     };
     FamilyPlan &f = plan->fam[0];
     int64_t peak = 0;
@@ -201,6 +218,30 @@ void build(const Geometry &g, Plan &plan_ref) {
     plan->census_peak_bytes = maps_bytes + peak;
     if (out == Outcome::Poor) return no(pair_reuse::cap_reason(n * n));
     if (out != Outcome::Ok) return no("too many classes to code");
+    // Each row's band of near same-edge singles (`same_edge_band`): the
+    // columns of its own edge whose class is a near single of the routine.
+    auto bands = std::make_shared<Bands>();
+    bands->lo.assign(static_cast<size_t>(n), 0);
+    bands->hi.assign(static_cast<size_t>(n), 0);
+    for (int64_t e0 = 0; e0 < n;) {
+        int64_t e1 = e0;
+        while (e1 < n && g.edge[e1] == g.edge[e0]) e1++;
+        for (int64_t o = e0; o < e1; o++) {
+            int64_t lo = e1, hi = e0;
+            for (int64_t s = e0; s < e1; s++)
+                if (near_apart(f, f.map[0][static_cast<size_t>(o * n + s)] >> f.spec.code_bits)) {
+                    lo = std::min(lo, s);
+                    hi = std::max(hi, s + 1);
+                }
+            if (hi > lo) {
+                bands->lo[static_cast<size_t>(o)] = lo;
+                bands->hi[static_cast<size_t>(o)] = hi;
+            }
+        }
+        e0 = e1;
+    }
+    plan->ext_bytes = 16 * static_cast<size_t>(n);
+    plan->ext = bands;
     plan->budget_bytes = pair_reuse::held_bytes(*plan);
     if (plan->budget_bytes > allowance) return no(pair_reuse::allowance_reason(allowance));
 }
@@ -218,6 +259,8 @@ std::string fingerprint_of(const Geometry &g) {
     put(s, g_class_limit.load());
     put(s, g_length_bits.load());
     put(s, g_plan_allowance.load());
+    put(s, g_routine_probe.load());
+    put(s, g_same_edge_near.load());
     put(s, pair_reuse::cap_key());
     put(s, static_cast<int64_t>(g.thresholds.size()));
     for (double t : g.thresholds) put(s, t);
@@ -271,6 +314,8 @@ int length_bits() { return g_length_bits.load(); }
 int64_t small_deck_segs() { return g_small.load(); }
 
 void set_image_key_probe(int probe) { g_image_key_probe.store(probe); }
+void set_routine_probe(int probe) { g_routine_probe.store(probe); }
+void set_same_edge_near_lengths(double l) { g_same_edge_near.store(l < 0.0 ? NEAR_LENGTHS : l); }
 
 std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built) {
     if (g.n <= 0 || !g.seg_l || !g.seg_r || !g.a || !g.edge)
@@ -321,27 +366,30 @@ std::shared_ptr<const Plan> plan_of_classes(const int32_t *cls, int64_t n) {
     return plan;
 }
 
-int64_t same_edge_pairs(const Plan &p) { return p.fam.empty() ? 0 : p.fam[0].near_unlisted; }
+int64_t same_edge_pairs(const Plan &p) { return p.fam.empty() ? 0 : p.fam[0].apart_pairs; }
+int64_t same_edge_classes(const Plan &p) { return p.fam.empty() ? 0 : static_cast<int64_t>(p.fam[0].apart_cls.size()); }
 
 bool has_image(const Plan &p) { return !p.fam.empty() && p.fam[0].spec.n_blocks == 2 && !p.fam[0].map[1].empty(); }
 
-int32_t sentinel_class(const Plan &p) {
-    // Pair (0, 0) is segment 0 against itself: a same-edge pair.
-    if (p.fam.empty() || p.fam[0].map[0].empty()) return -1;
-    return p.fam[0].map[0][0] >> p.fam[0].spec.code_bits;
+int64_t near_pairs(const Plan &p) { return p.fam.empty() ? 0 : p.fam[0].near; }
+
+bool near_same_edge(const Plan &p, int32_t c) { return !p.fam.empty() && near_apart(p.fam[0], c); }
+
+void same_edge_band(const Plan &p, int64_t o, int64_t &lo, int64_t &hi) {
+    lo = hi = 0;
+    const Bands *b = static_cast<const Bands *>(p.ext.get());
+    if (!b || o < 0 || o >= static_cast<int64_t>(b->lo.size())) return;
+    lo = b->lo[static_cast<size_t>(o)];
+    hi = b->hi[static_cast<size_t>(o)];
 }
 
-int64_t image_sentinel_pairs(const Plan &p) {
-    if (!has_image(p)) return 0;
-    const FamilyPlan &f = p.fam[0];
-    const int32_t c = sentinel_class(p);
-    int64_t k = 0;
-    for (int32_t e : f.map[1]) k += (e >> f.spec.code_bits) == c;
-    return k;
-}
-
-int64_t near_pairs(const Plan &p) {
-    return p.fam.empty() ? 0 : p.fam[0].near - p.fam[0].near_unlisted;
+void near_same_edge_mask(const Plan &p, int64_t r0, int64_t r1, int64_t c0, int64_t c1, uint8_t *out) {
+    const FamilyPlan &f = p.fam.at(0);
+    const int64_t n = f.spec.cols;
+    for (int64_t o = r0; o < r1; o++)
+        for (int64_t s = c0; s < c1; s++)
+            out[(o - r0) * (c1 - c0) + (s - c0)] =
+                near_apart(f, f.map[0][static_cast<size_t>(o * n + s)] >> f.spec.code_bits) ? 1 : 0;
 }
 
 void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd *out) {
@@ -375,32 +423,28 @@ void check_window(const Window &w) {
     if (!w.plan || !w.values || w.plan->fam.empty())
         throw std::invalid_argument("bspline pair_reuse: a window needs its plan and values");
     const FamilyPlan &f = w.plan->fam[0];
-    const int64_t n = f.spec.cols;
     if (f.map[0].empty()) throw std::invalid_argument("bspline pair_reuse: a declined plan has no window");
     if (w.d1 < 2 || w.d1 > 4) throw std::invalid_argument("bspline pair_reuse: d + 1 must be 2, 3 or 4");
-    if (!(0 <= w.r0 && w.r0 < w.r1 && w.r1 <= n && 0 <= w.o0 && w.o0 < w.o1 && w.o1 <= n &&
-          w.o0 <= w.r0 && w.r1 <= w.o1))
-        throw std::invalid_argument("bspline pair_reuse: the window's rows must lie on its own edge");
+    if (w.own && !(0 <= w.r0 && w.r0 < w.r1 && w.r1 <= f.spec.rows && 0 <= w.b0 && w.b0 <= w.b1 && w.b1 <= f.spec.cols))
+        throw std::invalid_argument("bspline pair_reuse: the own band's rows and columns are out of range");
 }
 
 void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
     const FamilyPlan &f = w.plan->fam[0];
     const int d1 = w.d1;
-    const int64_t dd = int64_t(d1) * d1, no = w.o1 - w.o0, m = w.r1 - w.r0;
+    const int64_t dd = int64_t(d1) * d1;
     const size_t plane = nr * nc;
     const bool probe = g_window_probe.load(std::memory_order_relaxed) == 1;
+    const int64_t nb = w.b1 - w.b0, m = w.r1 - w.r0;
     pair_reuse::gather_pairs(f, 0, rows, static_cast<ptrdiff_t>(nr), cols, static_cast<ptrdiff_t>(nc),
                              [&](ptrdiff_t io, ptrdiff_t is, int32_t c, int rel) {
         cd *o = out + io * static_cast<ptrdiff_t>(nc) + is;
         const int64_t s = cols[is];
-        if (s >= w.o0 && s < w.o1) {
-            // The own edge: the fill's own moments, or the offset route's zero.
-            if (w.own) {
-                const cd *v = w.own + (rows[io] - w.r0) * no + (s - w.o0);
-                for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = v[pq * m * no];
-            } else {
-                for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = cd(0.0, 0.0);
-            }
+        if (w.own && s >= w.b0 && s < w.b1 && near_apart(f, c)) {
+            // A near same-edge single: the sweep's own moments of the pair,
+            // which the same-edge fixup corrects as without reuse.
+            const cd *v = w.own + (rows[io] - w.r0) * nb + (s - w.b0);
+            for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = v[pq * m * nb];
             return;
         }
         const cd *v = w.values + static_cast<int64_t>(c) * dd;
@@ -418,8 +462,6 @@ void check_image_window(const ImageWindow &w) {
     if (!w.plan || !w.values || !has_image(*w.plan))
         throw std::invalid_argument("bspline pair_reuse: an image window needs a plan with the image block");
     if (w.d1 < 2 || w.d1 > 4) throw std::invalid_argument("bspline pair_reuse: d + 1 must be 2, 3 or 4");
-    if (w.zero_class != sentinel_class(*w.plan))
-        throw std::invalid_argument("bspline pair_reuse: the image window's zero class is the sentinel's");
 }
 
 void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out) {
@@ -430,11 +472,6 @@ void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int6
     pair_reuse::gather_pairs(f, 1, rows, static_cast<ptrdiff_t>(nr), cols, static_cast<ptrdiff_t>(nc),
                              [&](ptrdiff_t io, ptrdiff_t is, int32_t c, int rel) {
         cd *o = out + io * static_cast<ptrdiff_t>(nc) + is;
-        if (c == w.zero_class) {
-            // An offset edge's own image block: the offset route's.
-            for (int64_t pq = 0; pq < dd; pq++) o[pq * plane] = cd(0.0, 0.0);
-            return;
-        }
         const cd *v = w.values + static_cast<int64_t>(c) * dd;
         if (rel) {
             for (int p = 0; p < d1; p++)

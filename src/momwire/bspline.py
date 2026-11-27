@@ -54,7 +54,6 @@ import contextlib
 import functools
 import inspect
 import math
-import itertools
 import warnings
 from dataclasses import dataclass
 
@@ -75,9 +74,11 @@ from ._bspline_kernels import (
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
+    _seg_seg_reg_geometry_pairs,
     _seg_seg_reg_moments,
     _seg_seg_reg_moments_from_geometry,
     _seg_seg_reg_moments_from_geometry_swept,
+    _seg_seg_reg_nodes,
     _seg_seg_static_moments,
 )
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
@@ -862,6 +863,10 @@ _PAIR_REUSE_MIN_PAIRS_PER_MEMBER = 8.0
 
 #: Representative groups evaluated between cancellation checkpoints.
 _REUSE_GROUPS_PER_CHECKPOINT = 64
+
+#: Observer rows of one edge per same-edge class-value window
+#: (`_same_edge_class_values`; the exe's `SAME_EDGE_VALUE_ROWS`).
+_SAME_EDGE_VALUE_ROWS = 16
 
 # momwire#2063 step 2a: whole-mesh image fills assembled from the plan's
 # class values. Counted so a gate can show the route ran.
@@ -1948,6 +1953,8 @@ class BSplineSolver(
         # step 2a), and the class values a direct fill hands the image fill.
         self._reuse_image_declined = None
         self._held_reuse_values = None
+        # The pairs the same-edge routine formed for the last class values.
+        self._reuse_same_edge_formed = 0
         self._remainder_reuse_cache = None
         self._reuse_remainder_declined = None
         # Why the reuse served nothing (None when it served, or was not
@@ -5345,9 +5352,8 @@ class BSplineSolver(
         # The ground terms (momwire#2068): each its own family, counted where
         # it was filled (`_note_ground_fill`); a term this ground has that no
         # whole-mesh fill noted is listed, not guessed.
-        # The kernel's evaluations: the off-edge kernel's (the plan's groups,
-        # and the chunked route's own-edge columns), and each pair the
-        # same-edge route computed.
+        # The kernels' evaluations: the off-edge kernel's (the plan's groups)
+        # and the same-edge routine's (its classes' rows).
         evals = (
             served["kernel_evals"] + computed - served["classes"]
             if detail["plan"] is not None
@@ -5411,9 +5417,9 @@ class BSplineSolver(
 
     def _fill_report_wires(self, ledger):
         """The last fill's pairs per wire pair (momwire#2016): the direct
-        family's from the plan the process still holds (its wire map counts
-        the same-edge sentinel near; those pairs are filled, so they move to
-        computed), the ground families' from what their fills noted."""
+        family's from the plan the process still holds (the same-edge pairs
+        are classes like the rest since momwire#2063 step 3), the ground
+        families' from what their fills noted."""
         detail = ledger.last
         if detail is None:
             return {"unavailable": _fill_report.PLAN_GONE}
@@ -5422,19 +5428,11 @@ class BSplineSolver(
         sizes = np.diff(seg_off)
         n_wires = int(sizes.size)
         pairs = np.outer(sizes, sizes)
-
-        def wire_of(start):
-            return int(np.searchsorted(seg_off, start, side="right") - 1)
-
         if detail["plan"] is not None:
             wire_of_seg = np.repeat(np.arange(n_wires, dtype=np.int32), sizes)
             counts = detail["plan"].wire_map(wire_of_seg, n_wires)
             if counts is None:
                 return {"unavailable": _fill_report.PLAN_GONE}
-            for sl in self._same_edge_slices(geom):
-                w, n = wire_of(sl.start), sl.stop - sl.start
-                counts[w, w, 2] -= n * n
-                counts[w, w, 0] += n * n
         else:
             counts = np.stack(
                 [pairs, np.zeros_like(pairs), np.zeros_like(pairs)], axis=2
@@ -5647,27 +5645,92 @@ class BSplineSolver(
                 ladder=ladder,
             )
             values[cls] = np.moveaxis(block.reshape(d1, d1, -1)[:, :, at], 2, 0)
+        self._same_edge_class_values(plan, geom, k, values)
         # Held for this k's image fill, which takes it (`_accumulate_Z_image_chunked`).
         self._held_reuse_values = (plan, k, values) if plan.image else None
         return values
 
+    def _same_edge_class_values(self, plan, geom, k, values):
+        """Each same-edge class's moments at `k` into `values` (momwire#2063
+        step 3), by the routine the fill without reuse gives every same-edge
+        pair: the analytic static moments plus the regularised smooth part
+        on the edge's arc (`_seg_seg_static_moments`, `_seg_seg_reg_moments`),
+        at the class's representative. A pair's moments are its own in any
+        call (each R entry, power and reduction is the square table's for
+        that pair, `_seg_seg_reg_geometry_pairs`), so they are formed in
+        windows of at most `_SAME_EDGE_VALUE_ROWS` consecutive observer rows
+        against the columns their representatives span (the exe's
+        `same_edge_class_values` cuts the same windows), the regularised part
+        always densely: `offset_reuse`'s Toeplitz form synthesises the
+        offsets, which is not the routine the fill without reuse runs. The
+        pairs the routine formed are kept in `_reuse_same_edge_formed`."""
+        cls, rep = plan.apart()
+        self._reuse_same_edge_formed = 0
+        if cls.size == 0:
+            return
+        n = int(geom["n_segs_total"])
+        d = self.degree
+        n_qp = self.n_qp_pair_same_edge
+        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
+        obs, src = np.divmod(rep, n)
+        ing = self._edge_ingredients(geom)
+        starts = np.fromiter((sl.start for _w, sl, _arc, _a in ing), dtype=np.int64)
+        edge = np.searchsorted(starts, obs, side="right") - 1
+        formed = 0
+        for e in np.unique(edge):
+            _w, sl, arc, a_w = ing[int(e)]
+            on = np.flatnonzero(edge == e)
+            rows = obs[on] - sl.start
+            cols = src[on] - sl.start
+            nodes = _seg_seg_reg_nodes(arc, d, n_qp)
+            t = 0
+            while t < on.size:
+                lo = int(rows[t])
+                u = int(np.searchsorted(rows, lo + _SAME_EDGE_VALUE_ROWS, side="left"))
+                hi = int(rows[u - 1]) + 1
+                c0, c1 = int(cols[t:u].min()), int(cols[t:u].max()) + 1
+                A_st = _seg_seg_static_moments(
+                    arc, a_w, max_d=d, ek=ek_se, rows=slice(lo, hi)
+                )[:, :, :, c0:c1]
+                A_reg = _seg_seg_reg_moments_from_geometry(
+                    _seg_seg_reg_geometry_pairs(
+                        nodes,
+                        a_w,
+                        n_qp,
+                        np.arange(lo, hi),
+                        np.arange(c0, c1),
+                        ek=ek_se,
+                    ),
+                    k,
+                )
+                J = A_st + A_reg
+                at = on[t:u]
+                values[cls[at]] = np.moveaxis(
+                    J[:, :, rows[t:u] - lo, cols[t:u] - c0], 2, 0
+                )
+                formed += (hi - lo) * (c1 - c0)
+                t = u
+        self._reuse_same_edge_formed = formed
+
     def _reuse_served(self, route, plan, n_segs):
         """The `pair_reuse_served` counts of a fill that read `plan`: each
         class evaluated once (its representative), every other pair of a
-        class between two edges copied, the near pairs evaluated alone.
-        The same-edge pairs (one sentinel class) are the fill's own."""
+        class copied, the near pairs evaluated alone. The same-edge pairs are
+        classes like the rest (momwire#2063 step 3), evaluated by the
+        same-edge routine; `kernel_evals` counts the off-edge kernel's pairs
+        here, and the fill adds the same-edge routine's."""
         st = plan.stats()
         # The direct block's: the classes whose representative is a direct
-        # pair, the sentinel among them (momwire#2063 step 2a).
-        same = int(st["same_edge_pairs"]) - int(st["image_sentinel_pairs"])
-        near = int(st["near_block"][0]) - (1 if same else 0)
-        far = int(st["classes_block"][0]) - int(st["near_block"][0])
+        # pair (momwire#2063 step 2a).
+        near = int(st["near_block"][0])
+        far = int(st["classes_block"][0]) - near
         pairs = int(n_segs) ** 2
         return {
             "route": route,
             "classes": far,
             "near_pairs": near,
-            "copied_pairs": pairs - same - far - near,
+            "copied_pairs": pairs - far - near,
+            "same_edge_classes": int(st["same_edge_classes"]),
             "pairs": pairs,
             "kernel_evals": int(st["evals_block"][0]),
         }
@@ -5771,10 +5834,10 @@ class BSplineSolver(
             else self._same_edge_slices(geom)
         )
         n_total = int(seg_l.shape[0])
-        # momwire#2063: the census's classes. Every pair between two edges is
-        # gathered from its class's value, each class evaluated once by the
-        # off-edge fill (its representative's bits); the same-edge blocks are
-        # overwritten below as without reuse.
+        # momwire#2063: the census's classes. Every pair is gathered from its
+        # class's value, each class evaluated once at its representative, by
+        # the off-edge fill or, a same-edge class (step 3), by the same-edge
+        # routine: nothing is overwritten.
         plan = self._reuse_plan(geom)
         if plan is not None and same_slices != self._same_edge_slices(geom):
             self._decline_unread_plan("the swept fill's edges are not the plan's")
@@ -5798,8 +5861,11 @@ class BSplineSolver(
             J = np.empty((d + 1, d + 1, n_total, n_total), dtype=complex)
             plan.gather(values, 0, n_total, J)
             del values
-            self.pair_reuse_served = self._reuse_served("tensor", plan, n_total)
-            self._reuse_fill_served(self.pair_reuse_served, plan)
+            served = self._reuse_served("tensor", plan, n_total)
+            served["kernel_evals"] += self._reuse_same_edge_formed
+            self.pair_reuse_served = served
+            self._reuse_fill_served(served, plan)
+            return J
         elif len(same_slices) == 1 and same_slices[0] == slice(0, n_total):
             J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
         elif len(same_slices) <= _OFFEDGE_SPLIT_MAX_EDGES:
@@ -6059,9 +6125,10 @@ class BSplineSolver(
 
         A `pair_reuse` plan is served here too (momwire#2020, #2063): each
         observer window is assembled from the plan's class values, tile by
-        tile without writing the window (momwire#2166), its own edge's
-        columns the sweep's own fill. A restricted fill reads no plan, and
-        says so in `pair_reuse_declined`.
+        tile without writing the window (momwire#2166), the same-edge pairs
+        among them (step 3: their classes are the same-edge routine's), so
+        no fixup follows. A restricted fill reads no plan, and says so in
+        `pair_reuse_declined`.
         """
         d = self.degree
         a_row = self._seg_radius(geom)
@@ -6168,50 +6235,61 @@ class BSplineSolver(
         if plan is not None:
             served = self._reuse_served("chunked", plan, n_segs)
             values = self._reuse_values(plan, geom, k, ladder, ek)
-            slices = self._same_edge_slices(geom)
-            edge_cuts = np.array([sl.start for sl in slices] + [n_segs], dtype=np.int64)
-        else:
-            served = {
-                "route": "chunked",
-                "classes": 0,
-                "near_pairs": 0,
-                "copied_pairs": 0,
-                "pairs": int(n_segs) ** 2,
-                "kernel_evals": 0,
-            }
+            served["kernel_evals"] += self._reuse_same_edge_formed
+            band_lo, band_hi = plan.same_edge_bands()
+            pieces = [(sl.start, sl.stop) for sl in self._same_edge_slices(geom)]
+
+        def _near_own(r0, r1):
+            """The near same-edge singles of rows [r0, r1) as the sweep forms
+            them, ``(own, b0, b1)``, or ``(None, 0, 0)`` for none: each edge's
+            rows against the band their singles span."""
+            has = band_hi[r0:r1] > band_lo[r0:r1]
+            if not has.any():
+                return None, 0, 0
+            b0 = int(band_lo[r0:r1][has].min())
+            b1 = int(band_hi[r0:r1][has].max())
+            own = np.zeros((d + 1, d + 1, r1 - r0, b1 - b0), dtype=np.complex128)
+            for e0, e1 in pieces:
+                p0, p1 = max(r0, e0), min(r1, e1)
+                if p0 >= p1:
+                    continue
+                h = band_hi[p0:p1] > band_lo[p0:p1]
+                if not h.any():
+                    continue
+                c0 = int(band_lo[p0:p1][h].min())
+                c1 = int(band_hi[p0:p1][h].max())
+                own[:, :, p0 - r0 : p1 - r0, c0 - b0 : c1 - b0] = _moments(
+                    p0, p1, c0, c1
+                )
+                served["kernel_evals"] += (p1 - p0) * (c1 - c0)
+            return own, b0, b1
 
         def _reuse_block(w0, w1, _j0, _j1):
-            """One observer window assembled from the class values, cut at
-            the edges: each piece's own-edge columns are the sweep's own fill
-            (the fixup below subtracts exactly them). The window is never
+            """One observer window assembled from the class values, never
             written whole (momwire#2166): `plan.assemble` adds to Z what
             `_accumulate` adds for the window `plan.gather` writes, bit for
-            bit, filling each tile of Z from the class values as it runs."""
-            inner = edge_cuts[(edge_cuts > w0) & (edge_cuts < w1)].tolist()
-            for r0, r1 in itertools.pairwise([w0, *inner, w1]):
-                e = int(np.searchsorted(edge_cuts, r0, side="right") - 1)
-                own = slices[e]
-                own_J = _moments(r0, r1, own.start, own.stop)
-                served["kernel_evals"] += (r1 - r0) * (own.stop - own.start)
-                plan.assemble(
-                    values,
-                    r0,
-                    r1,
-                    own.start,
-                    own.stop,
-                    own_J,
-                    supp_c,
-                    polys_c,
-                    tan_c,
-                    _bases_touching(r0, r1),
-                    all_n,
-                    float(self.omega),
-                    float(self.eps),
-                    float(self.mu),
-                    Z,
-                    self._cancel_flag,
-                )
-                del own_J
+            bit, filling each tile of Z from the class values as it runs; its
+            near same-edge singles the sweep's own moments, as without reuse
+            (the fixup below corrects them)."""
+            own, b0, b1 = _near_own(w0, w1)
+            plan.assemble(
+                values,
+                w0,
+                w1,
+                own,
+                b0,
+                b1,
+                supp_c,
+                polys_c,
+                tan_c,
+                _bases_touching(w0, w1),
+                all_n,
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                Z,
+                self._cancel_flag,
+            )
 
         def _sweep_block(w0, w1, j0, j1):
             J_chunk = _seg_seg_full_moments_offedge(
@@ -6240,6 +6318,23 @@ class BSplineSolver(
         )
         if plan is not None:
             del values
+            self._near_same_edge_fixup(
+                Z,
+                geom,
+                k,
+                plan,
+                band_lo,
+                band_hi,
+                _moments,
+                _accumulate,
+                _bases_touching,
+                served,
+            )
+            if restrict is None:
+                # What the fill report reads (momwire#2016).
+                self._reuse_fill_served(served, plan)
+                self.pair_reuse_served = served
+            return Z
 
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
@@ -6400,11 +6495,63 @@ class BSplineSolver(
             checkpoint=self._checkpoint,
             keep=None if restrict is None else (lambda e: restrict.covers(e[0])),
         )
-        if restrict is None and plan is not None:
-            # What the fill report reads (momwire#2016).
-            self._reuse_fill_served(served, plan)
-            self.pair_reuse_served = served
         return Z
+
+    def _near_same_edge_fixup(
+        self, Z, geom, k, plan, band_lo, band_hi, moments, accumulate, touching, served
+    ):
+        """The chunked fill's same-edge fixup under a plan (momwire#2063 step
+        3): the near same-edge singles' `(A_st + A_reg) - J`, each edge's
+        rows in the fixup's own windows against the band their singles span,
+        every other pair's correction zero (its class value is the routine's
+        already). A near single's sum is then the fill without reuse's: its
+        sweep moment in the window, its correction after, in the same
+        windows."""
+        d = self.degree
+        n_qp = self.n_qp_pair_same_edge
+        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
+        for _w, sl, arc, a_w in self._edge_ingredients(geom):
+            if not (band_hi[sl] > band_lo[sl]).any():
+                continue
+            self._checkpoint()
+            n_edge = sl.stop - sl.start
+            corr_row_bytes = (d + 1) ** 2 * n_edge * 16 + (
+                self._offedge_fallback_row_bytes(n_edge)
+            )
+            corr_chunk = _schedule.mb_rows(self.swept_mem_mb, corr_row_bytes)
+            if not _SAME_EDGE_CORR_CHUNKED:
+                corr_chunk = max(1, n_edge)
+            nodes = _seg_seg_reg_nodes(arc, d, n_qp)
+            for r0 in range(sl.start, sl.stop, corr_chunk):
+                r1 = min(r0 + corr_chunk, sl.stop)
+                has = band_hi[r0:r1] > band_lo[r0:r1]
+                if not has.any():
+                    continue
+                c0 = int(band_lo[r0:r1][has].min())
+                c1 = int(band_hi[r0:r1][has].max())
+                lo, hi = r0 - sl.start, r1 - sl.start
+                A_st = np.ascontiguousarray(
+                    _seg_seg_static_moments(
+                        arc, a_w, max_d=d, ek=ek_se, rows=slice(lo, hi)
+                    )[:, :, :, c0 - sl.start : c1 - sl.start]
+                )
+                A_reg = _seg_seg_reg_moments_from_geometry(
+                    _seg_seg_reg_geometry_pairs(
+                        nodes,
+                        a_w,
+                        n_qp,
+                        np.arange(lo, hi),
+                        np.arange(c0 - sl.start, c1 - sl.start),
+                        ek=ek_se,
+                    ),
+                    k,
+                )
+                J_win = moments(r0, r1, c0, c1)
+                corr = _same_edge_corr(A_st, A_reg, J_win)
+                corr[:, :, ~plan.near_same_edge_mask(r0, r1, c0, c1)] = 0.0
+                served["kernel_evals"] += 2 * (r1 - r0) * (c1 - c0)
+                del J_win, A_st, A_reg
+                accumulate(corr, r0, r1, c0, c1, touching(r0, r1), touching(c0, c1))
 
     def _decline_unread_plan(self, reason):
         """Name in `pair_reuse_declined` why this fill route reads no
@@ -10442,6 +10589,20 @@ class BSplineSolver(
         # reg-kernel moment blocks are batched over chunks of k sized to the
         # `swept_mem_mb` budget (one einsum per (edge, chunk) instead of one
         # per (edge, k); whole-sweep hoisting was issue #263).
+        #
+        # A sweep that reads the plan hoists nothing: its classes hold the
+        # same-edge pairs (momwire#2063 step 3), so no fill reads the prep.
+        if self._swept_reads_plan(geom):
+            _refuse_complex_k(k_array, "the swept B-spline same-edge fill")
+            with self._k_restored():
+                for kk in np.asarray(k_array, dtype=float):
+                    self._checkpoint()  # top of each frequency iteration
+                    self._set_k(kk)
+                    if extra_columns is None:
+                        yield self.compute_port_solution()
+                    else:
+                        yield self._port_solution_dense(extra_columns=extra_columns)
+            return
         prep = self._same_edge_prep(geom)
         with self._k_restored():
             for _ki, kk, same_edge_k in self._same_edge_prep_swept_chunks(
@@ -10815,6 +10976,17 @@ class BSplineSolver(
         # reg-kernel moment blocks are batched over chunks of k sized to the
         # `swept_mem_mb` budget (one einsum per (edge, chunk) instead of one
         # per (edge, k); whole-sweep hoisting was issue #263).
+        # A sweep that reads the plan hoists nothing: its classes hold the
+        # same-edge pairs (momwire#2063 step 3), so no fill reads the prep.
+        if self._swept_reads_plan(self._build_geometry()):
+            _refuse_complex_k(k_array, "the swept B-spline same-edge fill")
+            with self._k_restored():
+                for i, kk in enumerate(np.asarray(k_array, dtype=float)):
+                    self._checkpoint()  # top of each frequency iteration
+                    self._set_k(kk)
+                    z, _ = self.compute_impedance()
+                    z_out[i] = z
+            return z_out
         prep = self._same_edge_prep(self._build_geometry())
         with self._k_restored():
             for i, kk, same_edge_k in self._same_edge_prep_swept_chunks(prep, k_array):

@@ -54,15 +54,36 @@
 // (u -> h - u), arithmetic on every copy; it is left for when its drift is
 // measured (on the 10-element Yagi it would halve the classes again).
 //
-// EXCLUDED.
-// - SAME-EDGE pairs are not the off-edge kernel's: the fill overwrites them
-//   with the analytic static and regularised split (or the offset table), so
-//   they share one SENTINEL class (`Key::Near`, unlisted) the gather writes
-//   but nothing reads.
-// - NEAR pairs, |m| < NEAR_LENGTHS max(h_i, h_j, a_i) (touching segments at
-//   a kink or a junction, and their neighbours), are their own classes, as
+// SAME-EDGE PAIRS (momwire#2063 step 3) are not the off-edge kernel's: the
+// fill without reuse computes them by the same-edge routine, the analytic
+// static moments plus the regularised smooth part on the edge's 1-D arc
+// (`_seg_seg_static_moments`, `_seg_seg_reg_moments`). So they are keyed
+// APART (`Key::Apart`): each class is evaluated by that routine at its
+// representative (`_reuse_values`; the exe's `reuse_values`), and the key
+// carries a ROUTINE BIT (the top bit of w[0], which no general key sets), so a
+// class never holds pairs of both routines and every pair takes the value of
+// the routine its own fill uses. The words are the general key's, which for
+// two segments of one straight edge read (h_i, h_j) and the offset j - i
+// times h, except that D is floored at max(h_i, h_j) (the routine's own
+// scale: the static part is analytic in h and a, the regularised part smooth
+// on the arc, neither singular in a) and no near or tie rule applies (the
+// routine has no ladder). What the routine reads is the edge's segment
+// length h (the static table's, exact by type: one edge, one h), a (exact,
+// by type), the integer offset j - i (exact: a step of D^2 is under 2^-40 of
+// the offset's own) and the arcs' differences, here 2^-40 of D and 2^-44 of
+// h. Two pairs of one edge in a class so take the same static moments to the
+// bit, and the regularised part, whose slope in the arcs is bounded (the
+// kernel (e^{-jkR} - 1) / R), errs by the arcs' own rounding: the #1971
+// hairpin, whose bridge is one 21-segment edge of h = 95 um on a 1 mm
+// radius, moves |dZin|/|Zin| ~1e-12 on against off
+// (`test_bs2_census_same_edge_2063.py`), where razor2p's rounded near
+// pairs moved it 1.5e-5.
+//
+// EXCLUDED (their own classes, `Key::Own`).
+// - NEAR pairs of two edges, |m| < NEAR_LENGTHS max(h_i, h_j, a_i)
+//   (touching segments at a kink or a junction, and their neighbours), as
 //   razor's (`_razor_pair_reuse_core.h`, the hairpin): their values carry the
-//   near-singular part the basis sums cancel.
+//   near-singular part of the off-edge kernel the basis sums cancel.
 // - TIER TIES, a centre distance within TIE_REL of a ladder threshold, are
 //   their own classes: a member there could take the other tier from its
 //   representative (`_bspline_fill_core.cpp`'s TIE_REL, the same 1e-9).
@@ -166,23 +187,27 @@ struct Geometry {
 // at assembly (`image_tile`). A rigid key on WEIGHTED entries would be wrong
 // over refl-coef, whose weights read the pair's tilt to the plane.
 //
-// A segment against its own edge's image is keyed only on a straight edge
-// the image fill sweeps like any other (`Keyed`). An offset edge's own image
-// block is the offset route's (`OffsetRoute`): the sentinel class, which the
-// image tile writes as zero. A grazing edge's (`OwnPairs`) has the near-image
-// fixup subtract the sweep's own moments of it (momwire#631), so each pair is
-// its own class and its value its own fill's bits.
-enum ImageMode : int8_t { Keyed = 0, OffsetRoute = 1, OwnPairs = 2 };
+// A segment against its own edge's image is keyed like any other image pair
+// (`Keyed`): the image fill sweeps it with the off-edge kernel. A grazing
+// edge's (`OwnPairs`) has the near-image fixup subtract the sweep's own
+// moments of it (momwire#631), so each pair is its own class and its value
+// its own fill's bits.
+enum ImageMode : int8_t { Keyed = 0, OwnPairs = 2 };
 // TEST HOOK (the adversarial gate): 1 keys block 1 on the source's UNMIRRORED
 // direction (the image's z-flip dropped from the key only), which no correct
 // plan does. Plans are keyed on it.
 void set_image_key_probe(int probe);
-// Whether `p` has the image block, and the sentinel class (the same-edge
-// pairs', pair (0, 0)'s) the image tile writes as zero.
+// TEST HOOK (the adversarial gate, momwire#2063 step 3): 1 keys same-edge
+// pairs with the general key, near and tie rules included, and without the
+// routine bit, which no correct plan does: a same-edge pair and a pair of two
+// collinear edges at the same offset then share a class, whose routine is
+// its representative's. Plans are keyed on it.
+void set_routine_probe(int probe);
+// TEST HOOK: the same-edge near rule's lengths in place of NEAR_LENGTHS (< 0
+// restores). Plans are keyed on it.
+void set_same_edge_near_lengths(double lengths);
+// Whether `p` has the image block.
 bool has_image(const Plan &p);
-int32_t sentinel_class(const Plan &p);
-// Image pairs in the sentinel class (the offset edges' own image blocks).
-int64_t image_sentinel_pairs(const Plan &p);
 
 // The plan for `g`, from the process's cache or built: one family, "direct",
 // n x n, one code bit (reciprocity), over one block, or two with the image. Never null; a deck the census does not serve comes
@@ -194,9 +219,10 @@ std::shared_ptr<const Plan> plan_for(const Geometry &g, bool *built = nullptr);
 // with its groups. Not cached, not capped.
 std::shared_ptr<const Plan> plan_of_classes(const int32_t *cls, int64_t n);
 
-// Pairs of the plan in its sentinel class (the same-edge blocks), and the
+// The same-edge pairs of the plan (keyed apart) and their classes, and the
 // near pairs its key left their own classes.
 int64_t same_edge_pairs(const Plan &p);
+int64_t same_edge_classes(const Plan &p);
 int64_t near_pairs(const Plan &p);
 
 // The moment window of observer rows r0..r1 against every source:
@@ -204,27 +230,40 @@ int64_t near_pairs(const Plan &p);
 // for pair (r0 + i, s) of class c. Copies only.
 void gather(const Plan &p, int64_t r0, int64_t r1, const cd *values, int d1, cd *out);
 
+// THE NEAR SAME-EDGE SINGLES: the pairs of one edge nearer than
+// NEAR_LENGTHS max(h_i, h_j, a_i), each its own class of the same-edge
+// routine (`Key::OwnApart`). The tensor fill takes their class values, the
+// routine's own bits for the pair; the chunked fill keeps them as the fill
+// without reuse forms them, the sweep's off-edge moments in the window and
+// the same-edge fixup's correction after, so a basis whose pairs are all near
+// (the hairpin's bridge) is summed as without reuse, bit for bit: the order
+// of a near block's cancelling sums is what such a deck's Zin reads (the
+// hairpin's tensor and chunked fills without reuse differ by 2.3e-8).
+// Whether class c is one, each row's [lo, hi) band of them (lo == hi: none),
+// and out[(o - r0) * (c1 - c0) + (s - c0)] = 1 for the pairs of a window that
+// are.
+bool near_same_edge(const Plan &p, int32_t c);
+void same_edge_band(const Plan &p, int64_t o, int64_t &lo, int64_t &hi);
+void near_same_edge_mask(const Plan &p, int64_t r0, int64_t r1, int64_t c0, int64_t c1, uint8_t *out);
+
 // momwire#2166: the direct family's window as a source for the fused
 // assembly (`assemble_Z_bspline_windowed_tiles`, `_bspline_core.h`), so the
-// window is never written whole. Observer rows [r0, r1) lie on one edge,
-// whose own columns [o0, o1) are `own`, (d1^2, r1 - r0, o1 - o0)
-// C-contiguous (the fill's own moments of those pairs), or zero when `own`
-// is null (an offset edge, whose own block is added apart). Every other
-// source is its class's value, transposed under reciprocity: the window
-// `gather` writes with its own-edge columns overwritten, bit for bit. A
-// chopped window (rows off one edge) is not one of these; the fills cut
-// their windows at the edges.
+// window is never written whole: every pair (o, s), the same-edge pairs
+// among them, is its class's value, transposed under reciprocity, the
+// window `gather` writes, bit for bit; except, with `own`, a near same-edge
+// single in columns [b0, b1) of rows [r0, r1), which is own[(pq * (r1 - r0)
+// + o - r0) * (b1 - b0) + s - b0] (the sweep's own moments, the chunked fill's).
 struct Window {
     const Plan *plan = nullptr;
     const cd *values = nullptr;  // (classes, d1, d1)
     int d1 = 3;
-    int64_t r0 = 0, r1 = 0, o0 = 0, o1 = 0;
-    const cd *own = nullptr;
+    const cd *own = nullptr;     // (d1^2, r1 - r0, b1 - b0), or null
+    int64_t r0 = 0, r1 = 0, b0 = 0, b1 = 0;
 };
 // Throws unless `w` is one of the above (the tile source cannot: it runs
 // inside the assembly's parallel region).
 void check_window(const Window &w);
-// out[(pq * nr + io) * nc + is] for rows[io] in [r0, r1), cols[is] in [0, n).
+// out[(pq * nr + io) * nc + is] for rows[io] (in [r0, r1) with `own`), cols[is] in [0, n).
 void window_tile(const Window &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out);
 // TEST HOOK (the adversarial gate): 1 copies a reciprocal member as its
 // class's value untransposed, which no correct fill does, so a test can
@@ -234,13 +273,11 @@ int window_probe();
 
 // The image block's window as a source for the weighted fused assembly
 // (`assemble_Z_bspline_weighted_windowed_tiles`): every pair (o, s) is its
-// class's block-1 value, transposed under reciprocity, and the sentinel
-// class zero. Rows and columns are any segments: no own edge is cut out.
+// class's block-1 value, transposed under reciprocity.
 struct ImageWindow {
     const Plan *plan = nullptr;
     const cd *values = nullptr;  // (classes, d1, d1)
     int d1 = 3;
-    int32_t zero_class = -1;
 };
 void check_image_window(const ImageWindow &w);
 void image_tile(const ImageWindow &w, const int64_t *rows, size_t nr, const int64_t *cols, size_t nc, cd *out);
@@ -355,9 +392,9 @@ void remainder_wire_map(const Plan &p, const uint8_t *tied, const int32_t *wire_
                         int64_t *out);
 
 // The fill report's wire map (momwire#2016, `pair_reuse::wire_map`): block
-// `block`'s (W, W, 3) count of computed, reused and near pairs, the sentinel
-// class's pairs counted near. A class is computed at its first pair, block 0
-// first, so an image pair of a class a direct pair opened counts reused.
+// `block`'s (W, W, 3) count of computed, reused and near pairs. A class is
+// computed at its first pair, block 0 first, so an image pair of a class a
+// direct pair opened counts reused.
 void wire_map(const Plan &p, const int32_t *wire_of_seg, int64_t n_wires, int64_t *out, int block = 0);
 
 pair_reuse::Counters cache_counters();
